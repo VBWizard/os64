@@ -69,4 +69,16 @@ uint16_t tcp_window_field(uint32_t window, uint8_t shift);
 // count. A SYN's field is passed with shift 0.
 uint32_t tcp_window_scaled(uint16_t field, uint8_t shift);
 
+// The window the peer will READ if we advertise `window` at `shift`: the
+// field's value shifted back up. Smaller than `window` by up to one unit
+// of the shift (the bytes the field cannot express), and never more than
+// 65535 units. This is the number a silly-window floor must judge, since
+// the peer never sees the ring's own count.
+uint32_t tcp_window_told(uint32_t window, uint8_t shift);
+
+// The most a peer at `shift` can ever be told: 65535 units. A connection
+// whose peer sent no shift is bounded by 64KB whatever the ring holds,
+// and what arrives past that edge was never inside a window it was given.
+uint32_t tcp_window_ceiling(uint8_t shift);
+
 #endif

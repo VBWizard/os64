@@ -198,8 +198,11 @@ static void test_persist(void)
 
 static void test_wrap_fin_window(void)
 {
+	// The ring wraps under the three segments: the head sits 536 bytes
+	// before the end, sized from TCP_SND_BUF so the wrap survives the ring
+	// growing.
 	tcp_conn_t* c = init(); c->snd_una = c->snd_nxt = c->snd_max = 0xfffffff0u;
-	c->snd_head = 65000; c->snd_count = 3000;
+	c->snd_head = TCP_SND_BUF - 536; c->snd_count = 3000;
 	for (unsigned i = 0; i < c->snd_count; i++) c->snd_buf[(c->snd_head + i) % TCP_SND_BUF] = (uint8_t)i;
 	tcp_conn_close(c); assert(c->snd_fin_sent && npackets == 3);
 	for (unsigned i = 0; i < 3; i++)
@@ -207,7 +210,7 @@ static void test_wrap_fin_window(void)
 	uint32_t end = c->snd_max; deadline(c);
 	assert(seq_lt(c->snd_nxt, end) && c->snd_fin_sent);
 	ack(c, end, 65535);
-	assert(!c->snd_count && c->state == TCP_FIN_WAIT_2 && c->snd_head == (65000 + 3000) % TCP_SND_BUF);
+	assert(!c->snd_count && c->state == TCP_FIN_WAIT_2 && c->snd_head == (TCP_SND_BUF - 536 + 3000) % TCP_SND_BUF);
 	incoming(c, c->rcv_nxt, end, 65535, TCP_FIN | TCP_ACK); tcp_poll();
 	assert(c->state == TCP_TIME_WAIT && c->stripped); cleanup(c);
 	// FIN waits for its own receive-window sequence unit.
@@ -223,7 +226,10 @@ static void test_wrap_fin_window(void)
 // Independent data/ACK losses force both duplicate-ACK and timeout recovery.
 static void test_stream(void)
 {
-    const unsigned total = 150000;
+    // More than one whole ring, sized from TCP_SND_BUF: the point of the
+    // test is the wrapped copies, acks and resends, and a fixed count
+    // stopped wrapping the day the ring grew.
+    const unsigned total = TCP_SND_BUF + 150000;
     unsigned msses[] = {48, 536, 1460};
     unsigned windows[] = {100, 4000, 65535};
     for (unsigned m = 0; m < 3; m++)
@@ -236,8 +242,13 @@ static void test_stream(void)
             c->snd_wnd = windows[w];
             uint8_t* seen = calloc(total + 1, 1);
             unsigned produced = 0, received = 0, examined = 0, replies = 0;
-            for (unsigned round = 0; round < 30000 && received <= total; round++)
+            for (unsigned round = 0; round < 400000 && received <= total; round++)
             {
+                // The capture array is finite and a ring's worth of
+                // stream is thousands of segments: keep only what the
+                // examination below has not reached yet.
+                memmove(packets, packets + examined, (npackets - examined) * sizeof packets[0]);
+                npackets -= examined; examined = 0;
                 unsigned n = total - produced;
                 if (n > TCP_SND_BUF - c->snd_count) n = TCP_SND_BUF - c->snd_count;
                 for (unsigned j = 0; j < n; j++)

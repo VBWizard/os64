@@ -116,6 +116,20 @@ int main(void)
 	check(tcp_window_field(31, 5) == 0, "a window under one unit of shift reads as zero");
 	check(tcp_window_field(1460, 5) == 45, "1460 at shift 5 is 45 units (1440 bytes told)");
 
+	// What the peer will READ if we advertise a window: rounded down to the
+	// unit, which is what a silly-window floor must judge.
+	check(tcp_window_told(1465, 5) == 1440, "1465 free at shift 5 reads as 1440 on the wire, under one segment");
+	check(tcp_window_told(1472, 5) == 1472, "1472 at shift 5 is exact");
+	check(tcp_window_told(1024 * 1024, 5) == 1024 * 1024, "1MB at shift 5 is exact");
+	check(tcp_window_told(1024 * 1024, 0) == 65535, "1MB unscaled reads as 65535");
+	check(tcp_window_told(31, 5) == 0, "31 bytes at shift 5 reads as nothing");
+
+	// The most a peer can be told at its shift: the accept bound for a
+	// peer that did not scale is the 64KB its field can carry.
+	check(tcp_window_ceiling(0) == 65535, "unscaled ceiling is 65535");
+	check(tcp_window_ceiling(5) == 65535u << 5, "shift 5 ceiling is 2MB minus a unit");
+	check(tcp_window_ceiling(14) == 65535u << 14, "shift 14 ceiling fits 32 bits");
+
 	// And back: the field the peer sent, times its shift.
 	check(tcp_window_scaled(65535, 0) == 65535, "unscaled field is itself");
 	check(tcp_window_scaled(65535, 14) == 65535u << 14, "shift 14 reaches 1GB without overflow");

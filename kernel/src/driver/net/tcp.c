@@ -122,13 +122,37 @@ static uint32_t tcp_initial_seq(void)
 }
 
 // ── 2. SEGMENT CONSTRUCTION ─────────────────────────────────────────────────
-// How much room we still have for their bytes — this IS the flow control
-// the peer obeys. Advertising 0 stops them; we owe an update when drained.
-// The whole ring's worth: tcp_send_segment turns it into the header field
-// through our shift count, and a SYN carries it unscaled and clamped.
-static uint32_t tcp_window(tcp_conn_t* c)
+// How much of the ring this peer may fill: its free space, capped at the
+// most the peer can ever be TOLD at its shift (tcp_options.h). A peer that
+// sent no shift is bounded by the 64KB its field can carry, whatever the
+// ring holds behind it — the bytes past that edge were never inside a
+// window it was given, so a segment landing there is not ours to keep.
+// This is the bound for accepting and holding data. It is NOT rounded to
+// the shift's unit: the peer may send exactly what it was told, and what
+// it was told was a rounded-down value of THIS number, so rounding here
+// too could trim a byte the peer was promised.
+static uint32_t tcp_rcv_room(tcp_conn_t* c)
 {
 	uint32_t free_space = TCP_RCV_BUF - c->rcv_count;
+	uint32_t ceiling = tcp_window_ceiling(c->rcv_wscale);
+	return free_space < ceiling ? free_space : ceiling;
+}
+
+// How much room we still have for their bytes, AS THE PEER WILL READ IT —
+// this IS the flow control the peer obeys. Advertising 0 stops them; we
+// owe an update when drained. The value is the room above rounded down to
+// what the field can say at our shift, because the silly-window floor
+// below has to judge the number on the wire, not the ring's count: 1465
+// free bytes at shift 5 is a field of 45 units, 1440 bytes, and a peer
+// keeping its half of the rule waits for a full segment. Judged on the
+// ring, that would have cleared zero_window while the wire still said
+// "less than one segment", and nothing would have said more.
+// tcp_send_segment writes it through the same shift, so the field is
+// exact; a SYN carries it unscaled and clamped, which is what the shift
+// is at that moment anyway.
+static uint32_t tcp_window(tcp_conn_t* c)
+{
+	uint32_t free_space = tcp_window_told(tcp_rcv_room(c), c->rcv_wscale);
 
 	// SILLY WINDOW SYNDROME, RECEIVER SIDE (RFC 1122 4.2.3.3), and the
 	// single most expensive line in this file until 2026-08-16.
@@ -760,7 +784,7 @@ static void tcp_rcv_store(tcp_conn_t* c, const uint8_t* data, uint16_t len)
 // hold, and a segment for which no slot is free is dropped, counted.
 static void tcp_hold(tcp_conn_t* c, uint32_t seq, const uint8_t* data, uint32_t len)
 {
-	uint32_t room = TCP_RCV_BUF - c->rcv_count;    // exactly what tcp_window offers, before its SWS rounding
+	uint32_t room = tcp_rcv_room(c);    // the edge the peer could have been told, before tcp_window's rounding and SWS floor
 	uint32_t wnd_end = c->rcv_nxt + room;
 	if (!seq_lt(seq, wnd_end))
 	{
@@ -859,7 +883,7 @@ static void tcp_absorb_held(tcp_conn_t* c)
 		if (seq_gt(end, c->rcv_nxt))
 		{
 			uint32_t more = end - c->rcv_nxt;
-			uint32_t room = TCP_RCV_BUF - c->rcv_count;
+			uint32_t room = tcp_rcv_room(c);
 			if (more > room)
 			{
 				// Cannot happen: a held range was inside the window when it
@@ -1365,7 +1389,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			{
 				if (seq == c->rcv_nxt)
 				{
-					uint32_t room = TCP_RCV_BUF - c->rcv_count;   // up to the whole buffer, past 16 bits
+					uint32_t room = tcp_rcv_room(c);   // the ring, or the 64KB an unscaled peer was told
 					uint16_t take = data_len < room ? data_len : room;
 					tcp_rcv_store(c, data, take);
 					c->rcv_nxt += take;

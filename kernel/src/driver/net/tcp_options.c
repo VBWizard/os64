@@ -59,3 +59,13 @@ uint32_t tcp_window_scaled(uint16_t field, uint8_t shift)
 {
 	return (uint32_t)field << shift;
 }
+
+uint32_t tcp_window_told(uint32_t window, uint8_t shift)
+{
+	return (uint32_t)tcp_window_field(window, shift) << shift;
+}
+
+uint32_t tcp_window_ceiling(uint8_t shift)
+{
+	return 0xFFFFu << shift;
+}
