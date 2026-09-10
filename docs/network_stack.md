@@ -253,7 +253,8 @@ resolves twice).
 ## What speaks it
 
 Programs in `/bin`: `ping`, `whois`, `os64get` (HTTP/1.0 and 1.1, chunked
-bodies, redirects, gzip, a proxy for https through `tools/tlsproxy.py`),
+bodies, redirects, gzip, native HTTPS through libtls, and an optional
+terminating proxy through `tools/tlsproxy.py`),
 `gopher` (the arrow-key client), `ntp`. Fixtures in `/tests`: `netsend`
 (an upload with the sink's verdict as its clock), `netclose`, `dialtest`,
 `fetchtest`, `rngprobe`.
