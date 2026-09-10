@@ -167,6 +167,34 @@ int main(void) {
  assert(os64_tls_transport_write(t,"x",1).transferred==0);
  clock_value.ticks+=3000; assert(os64_tls_transport_step(t,0)==OS64_TLS_TIMEOUT); destroy(t);
 
+ // Engine authentication does not complete the transport handshake while
+ // its final flight is still engine-owned or waiting in the adapter buffer.
+ for(unsigned queued=0;queued<2;queued++) {
+  for(unsigned failure=0;failure<3;failure++) {
+   reset(); offered_end=4; engine.flags|=OS64_TLS_SEND_CIPHER; block_write=true; t=create(); authenticated();
+   if(queued) assert(os64_tls_transport_step(t,0)==OS64_TLS_OK);
+   assert(!(os64_tls_transport_state(t).flags&OS64_TLS_HANDSHAKE_DONE));
+   os64_tls_status_t expected=OS64_TLS_TIMEOUT;
+   if(failure==0) clock_value.ticks+=3000;
+   if(failure==1) { expected=OS64_TLS_CANCELLED; os64_tls_transport_abort(t,expected); }
+   if(failure==2) { expected=OS64_TLS_TRANSPORT; write_error=-1; }
+   assert(os64_tls_transport_step(t,0)==expected && closed==1);
+   for(unsigned repeat=0;repeat<2;repeat++) {
+    os64_tls_state_t state=os64_tls_transport_state(t);
+    assert(state.status==expected && !(state.flags&(OS64_TLS_HANDSHAKE_DONE|OS64_TLS_SEND_PLAIN)));
+   }
+   assert(sent_end==0); destroy(t);
+  }
+ }
+ // Once the final flight reaches TCP, terminal states retain that history.
+ reset(); offered_end=4; engine.flags|=OS64_TLS_SEND_CIPHER; block_write=true; t=create(); authenticated();
+ assert(os64_tls_transport_step(t,0)==OS64_TLS_OK);
+ block_write=false;
+ while(sent_end<offered_end) assert(os64_tls_transport_step(t,0)==OS64_TLS_OK);
+ assert(os64_tls_transport_state(t).flags&OS64_TLS_HANDSHAKE_DONE);
+ assert(os64_tls_transport_abort(t,OS64_TLS_CANCELLED)==OS64_TLS_CANCELLED);
+ assert(os64_tls_transport_state(t).flags&OS64_TLS_HANDSHAKE_DONE); destroy(t);
+
  reset(); t=create(); authenticated(); engine.status=OS64_TLS_CLEAN_EOF;
  offered_end=7; engine.flags|=OS64_TLS_SEND_CIPHER; clock_value.ticks+=3000;
  assert(os64_tls_transport_state(t).status==OS64_TLS_TIMEOUT); destroy(t);

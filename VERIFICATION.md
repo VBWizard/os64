@@ -352,6 +352,15 @@ serial log. The peer ran with `python3 -S`; post-shutdown `e2fsck -fn` passed.
 These correction results are host/QEMU evidence; the P5 results above cover
 the initial slice.
 
+**Codex round-one correction (2026-09-10):** a new regression reproduced
+HANDSHAKE_DONE leaking through a terminal state while the final flight had
+not reached TCP. Moving the completion gate before the terminal return passed
+the ASan/UBSan suite for timeout, cancellation and write failure, with flight
+bytes in either engine or adapter storage, including repeated state queries.
+A completed final flight still retains HANDSHAKE_DONE after a later error.
+The userland build, ELF audit, four QEMU transport cases, guest `tlslibtest`
+and copied-root `e2fsck -fn` passed with the correction.
+
 ## TCP write patience acceptance (2026-09-09)
 
 Write's contract is beside read's patience in

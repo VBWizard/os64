@@ -41,7 +41,8 @@ not delivered. Application calls inspect their transfer count even when a
 terminal status accompanies it.
 The adapter reports HANDSHAKE_DONE and accepts plaintext output after final
 handshake ciphertext has reached TCP, so a blocked final flight remains
-subject to the handshake deadline.
+subject to the handshake deadline. A terminal error does not expose the
+engine's completion flag if that final flight never reached TCP.
 
 Handshake/shutdown expiration is terminal TIMEOUT. Caught OS I/O interruption
 returns NEED_PROGRESS promptly, preserving the connection and pending bytes;

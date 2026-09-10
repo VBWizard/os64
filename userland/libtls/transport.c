@@ -89,13 +89,14 @@ static os64_tls_state_t inspect(os64_tls_transport *t)
             }
         }
     }
+    // A failure must not promote engine authentication to transport completion.
+    if (!t->handshake_done) state.flags &= ~(OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN);
     if (t->terminal != OS64_TLS_OK) {
         state.status = t->terminal;
         state.flags &= OS64_TLS_HANDSHAKE_DONE | OS64_TLS_CLOSING;
         return state;
     }
     if (t->output_at < t->output_end) state.flags |= OS64_TLS_SEND_CIPHER;
-    if (!t->handshake_done) state.flags &= ~(OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN);
     if (t->closing) state.flags |= OS64_TLS_CLOSING;
     if (state.status == OS64_TLS_CLEAN_EOF) {
         if (state.flags & OS64_TLS_SEND_CIPHER) state.status = OS64_TLS_OK;
