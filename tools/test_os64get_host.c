@@ -347,11 +347,15 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
     const os64_tls_transport_limits_t *limits, os64_tls_transport **out)
 {
     assert(!limits && c->trust == &host_trust && c->alpn_count == 1);
-    const char *hostname = is("url-tls-other") && tls_created ? "other" : "host";
+    const char *hostname = is("url-tls-ip") ? "10.0.2.2" :
+        is("url-tls-name") ? "bad_name" :
+        is("url-tls-other") && tls_created ? "other" : "host";
     assert(c->hostname.length == strlen(hostname) && !memcmp(c->hostname.data, hostname, strlen(hostname)));
     assert(c->alpn[0].length == 8 && !memcmp(c->alpn[0].data, "http/1.1", 8));
     *out = NULL;
     if (is("url-tls-cert")) return OS64_TLS_CERTIFICATE;
+    if (is("url-tls-ip")) return OS64_TLS_UNSUPPORTED;
+    if (is("url-tls-name")) return OS64_TLS_BAD_ARGUMENT;
     *out = calloc(1, sizeof **out); assert(*out); (*out)->h = h;
     tls_created++; return OS64_TLS_OK;
 }
@@ -546,6 +550,8 @@ int main(int argc, char **argv)
     char *noarchive[] = { "os64get", "-a", "-q", "-n", "host", NULL };
     char *url[] = { "os64get", "-q", "http://host/a", "/bin/a", NULL };
     if (is("url-https") || !strncmp(scenario, "url-tls-", 8)) url[2] = "https://host/a";
+    if (is("url-tls-ip")) url[2] = "https://10.0.2.2/a";
+    if (is("url-tls-name")) url[2] = "https://bad_name/a";
     if (is("url-archive-blocked")) put("/home/archive", "not a directory");
     bool url_mode = !strncmp(scenario, "url", 3);
     char *single[] = { "os64get", "-q", "host", "a", "/bin/a", NULL };
@@ -566,7 +572,7 @@ int main(int argc, char **argv)
     }
     if (is("url-tls-head-alert")) assert(rc == GET_BAD_HEADER && connections == 1);
     if (is("url-tls-redirect")) assert(connections == 2 && tls_created == 2);
-    if (is("url-tls-roots") || is("url-tls-cert")) assert(rc == GET_TLS_FAILED);
+    if (is("url-tls-roots") || is("url-tls-cert") || is("url-tls-ip") || is("url-tls-name")) assert(rc == GET_TLS_FAILED);
     if (is("url-tls-alert") || is("url-tls-cut")) assert(rc == GET_SHORT);
     bool published = success || is("cancel-commit") || is("cancel-cleanup") || is("publish");
     assert(!cancel || rc == GET_CANCELLED);

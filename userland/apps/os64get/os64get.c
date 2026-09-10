@@ -1768,6 +1768,11 @@ static int url_ask_with_trust(url_reply_t *answer, const http_url_t *start, cons
         if (!url_io_open(&answer->io, (int32_t)conn, encrypted ? &config : NULL))
         {
             url_io_report(&answer->io);
+            if (answer->io.error.status == OS64_TLS_BAD_ARGUMENT ||
+                answer->io.error.status == OS64_TLS_UNSUPPORTED)
+                os64_hprintf(OS64_STDERR,
+                    "os64get: check HTTPS target '%s': TLS requires a supported DNS name; IP literals are not supported\n",
+                    current.host);
             return install_cancelled() ? GET_CANCELLED : GET_TLS_FAILED;
         }
 

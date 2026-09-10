@@ -15,7 +15,11 @@ static bool live(os64_tls_status_t status)
 static void remember(url_io_t *io, os64_tls_status_t status)
 {
     if (!live(status) && live(io->error.status)) {
-        if (io->tls) io->error = os64_tls_transport_state(io->tls);
+        if (io->tls) {
+            os64_tls_state_t state = os64_tls_transport_state(io->tls);
+            io->error.policy_reason = state.policy_reason;
+            io->error.upstream_error = state.upstream_error;
+        }
         io->error.status = status;
     }
     if (status == OS64_TLS_TIMEOUT) io->silent = true;

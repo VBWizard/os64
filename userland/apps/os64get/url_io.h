@@ -9,7 +9,11 @@
 typedef struct {
     int32_t handle;
     os64_tls_transport *tls;
-    os64_tls_state_t error;
+    struct {
+        os64_tls_status_t status;
+        os64_tls_policy_reason_t policy_reason;
+        int upstream_error;
+    } error;
     bool encrypted, silent;
 } url_io_t;
 

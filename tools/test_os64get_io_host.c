@@ -42,7 +42,7 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c,int32_t h
     const os64_tls_transport_limits_t *limits,os64_tls_transport **out)
 { assert(c && h==7 && !limits);*out=create_fail?NULL:&transport;return create_fail?OS64_TLS_CERTIFICATE:OS64_TLS_OK; }
 os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
-{ return (os64_tls_state_t){.status=t->status,.flags=t->flags}; }
+{ return (os64_tls_state_t){.status=t->status,.flags=t->flags,.policy_reason=6,.upstream_error=54,.alpn="http/1.1"}; }
 os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t,uint64_t ms)
 {
     wait_for(ms);
@@ -85,6 +85,13 @@ static url_io_t open_io(bool tls)
 }
 int main(void)
 {
+    url_io_t failed = open_io(true);
+    transport.status = OS64_TLS_CERTIFICATE;
+    assert(!url_io_complete(&failed, true));
+    url_io_close(&failed, false);
+    assert(failed.error.status == OS64_TLS_CERTIFICATE);
+    assert(failed.error.policy_reason == 6 && failed.error.upstream_error == 54);
+    url_io_report(&failed);
     for(unsigned tls=0;tls<2;tls++) {
         url_io_t io=open_io(tls);
         interrupt_once=!tls;
