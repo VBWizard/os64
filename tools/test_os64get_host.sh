@@ -11,7 +11,7 @@ cc -std=c11 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
    userland/libfetch/{fetch,http,transport,proxy}.c \
    userland/libos64/{str,fmt,args,date,crc32,url}.c userland/libgzip/{gzip,inflate,deflate}.c \
    -Wl,--gc-sections,--wrap=os64_time -o "$work/os64get-test"
-scenarios=(success absent unchanged force-identical no-archive single url url-https url-archive-blocked url-short url-refused-coded url-cancel url-tls-good url-tls-close url-tls-framed-cut url-tls-alert url-tls-cut url-tls-roots url-tls-cert url-tls-ip url-tls-name url-tls-downgrade url-tls-redirect url-tls-bypass url-upgrade url-tls-other url-tls-head-alert short crc \
+scenarios=(success absent unchanged force-identical no-archive single url url-https url-archive-blocked url-short url-refused-coded url-cancel url-tls-good url-tls-close url-tls-framed-cut url-tls-alert url-tls-cut url-tls-roots url-tls-cert url-tls-ip url-tls-name url-tls-downgrade url-tls-downgrade-coded url-tls-redirect url-tls-bypass url-upgrade url-tls-other url-tls-head-alert short crc \
                 backup-read backup-write backup-corrupt sync close publish aliases appeared unsafe-name archive-overlap \
                 cancel-list cancel-download cancel-backup cancel-verify cancel-commit cancel-cleanup cancel-transition
                 review-empty-backup review-partial-backup review-ro review-full review-all-full

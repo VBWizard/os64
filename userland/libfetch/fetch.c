@@ -872,11 +872,19 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
     if (f->have_head) {
         // OK, REDIRECT_STOPPED, TOO_MANY_HOPS: a head and a positioned
         // connection. The body is prepared now so read() has nothing left
-        // to decide; a framing or coding refusal outranks the head's status
-        // because a page nobody can read is not a page.
+        // to decide. For an OK head a framing or coding refusal outranks
+        // the status, because a page nobody can read is not a page; for a
+        // STOPPED redirect the verdict stands — the courtesy body is
+        // merely unreadable (the coding is in detail.unsupported and read
+        // answers -1), and a caller that was told "the road was refused"
+        // must not be told "the envelope was" instead (Codex, PR #92 rd6).
         os64_fetch_status_t prepared = body_prepare(f);
         if (prepared != OS64_FETCH_OK) {
-            f->status = drop_connection(f, prepared);
+            os64_fetch_status_t dropped = drop_connection(f, prepared);
+            bool verdict = f->status == OS64_FETCH_REDIRECT_STOPPED ||
+                           f->status == OS64_FETCH_TOO_MANY_HOPS;
+            if (!verdict || dropped == OS64_FETCH_INTERRUPTED)
+                f->status = dropped;
             f->over = true;
             f->final_answer = -1;
         }

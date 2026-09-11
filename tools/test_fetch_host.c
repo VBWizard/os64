@@ -1008,6 +1008,28 @@ static void case_round5(void)
     CHECK(os64_url_absolute(&base, ref, whole, sizeof(whole)) && strcmp(whole, "http://h/") == 0);
 }
 
+// Codex round 6 on PR #92.
+static void case_round6(void)
+{
+    // A stopped redirect whose courtesy body is in a coding nobody decodes
+    // keeps its verdict; the body is unreadable and the coding is named.
+    reset();
+    peer_add("secure.test", 443, reply("HTTP/1.1 302 Found\r\nLocation: http://plain.test/\r\nContent-Encoding: br\r\nContent-Length: 3\r\n", "abc"));
+    os64_fetch_t *f = os64_fetch_open("https://secure.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_REDIRECT_STOPPED);
+    CHECK(os64_fetch_detail(f)->hop.kind == OS64_FETCH_HOP_DOWNGRADE);
+    CHECK(strcmp(os64_fetch_detail(f)->unsupported, "br") == 0);
+    uint8_t out[16];
+    CHECK(os64_fetch_read(f, out, sizeof(out)) == -1 && os64_fetch_status(f) == OS64_FETCH_REDIRECT_STOPPED);
+    os64_fetch_close(f);
+    // ...while an OK head with the same envelope is UNSUPPORTED, as before.
+    reset();
+    peer_add("br.test", 80, reply_len("200 OK", "Content-Encoding: br\r\n", page));
+    f = os64_fetch_open("http://br.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_UNSUPPORTED);
+    os64_fetch_close(f);
+}
+
 int main(int argc, char **argv)
 {
     unsigned seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 12345u;
@@ -1027,6 +1049,7 @@ int main(int argc, char **argv)
     case_round2();
     case_round4();
     case_round5();
+    case_round6();
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }

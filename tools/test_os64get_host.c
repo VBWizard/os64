@@ -261,10 +261,11 @@ int64_t os64_write(int32_t h, const void *buf, size_t n)
                 memcpy(network[i] + head, compressed, sizeof(compressed));
                 network_len[i] = (size_t)head + sizeof(compressed); return (int64_t)n;
             }
-            if ((is("url-tls-downgrade") || is("url-tls-redirect") || is("url-upgrade") || is("url-tls-other") || is("url-tls-head-alert")) && i == 0) {
-                snprintf(network[i], sizeof network[i], "HTTP/1.1 302 Found\r\nLocation: %s://%s/next\r\nContent-Length: 0\r\n\r\n",
-                         is("url-tls-downgrade") ? "http" : "https",
-                         is("url-tls-other") ? "other" : "host");
+            if ((is("url-tls-downgrade") || is("url-tls-downgrade-coded") || is("url-tls-redirect") || is("url-upgrade") || is("url-tls-other") || is("url-tls-head-alert")) && i == 0) {
+                snprintf(network[i], sizeof network[i], "HTTP/1.1 302 Found\r\nLocation: %s://%s/next\r\n%sContent-Length: 0\r\n\r\n",
+                         (is("url-tls-downgrade") || is("url-tls-downgrade-coded")) ? "http" : "https",
+                         is("url-tls-other") ? "other" : "host",
+                         is("url-tls-downgrade-coded") ? "Content-Encoding: br\r\n" : "");
                 network_len[i] = strlen(network[i]); return (int64_t)n;
             }
             if (is("url-tls-cut") || is("url-tls-close")) {
@@ -577,7 +578,7 @@ int main(int argc, char **argv)
         assert(rc == GET_REFUSED && connections == 1);
         assert(strstr(output_text, "404 Not Found"));
     }
-    if (is("url-tls-downgrade")) {
+    if (is("url-tls-downgrade") || is("url-tls-downgrade-coded")) {
         assert(rc == GET_REDIRECT && connections == 1);
         assert(strstr(output_text, "refusing HTTPS-to-HTTP downgrade"));
         assert(strstr(output_text, "os64get 'http://host/next'"));
