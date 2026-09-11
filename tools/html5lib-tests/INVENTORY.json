@@ -1,0 +1,379 @@
+{
+  "tokenizer/contentModelFlags.test": {
+    "run": 24,
+    "skip": {},
+    "total": 24
+  },
+  "tokenizer/domjs.test": {
+    "run": 59,
+    "skip": {},
+    "total": 59
+  },
+  "tokenizer/entities.test": {
+    "run": 80,
+    "skip": {},
+    "total": 80
+  },
+  "tokenizer/escapeFlag.test": {
+    "run": 9,
+    "skip": {},
+    "total": 9
+  },
+  "tokenizer/namedEntities.test": {
+    "run": 4210,
+    "skip": {},
+    "total": 4210
+  },
+  "tokenizer/numericEntities.test": {
+    "run": 336,
+    "skip": {},
+    "total": 336
+  },
+  "tokenizer/pendingSpecChanges.test": {
+    "run": 1,
+    "skip": {},
+    "total": 1
+  },
+  "tokenizer/test1.test": {
+    "run": 69,
+    "skip": {},
+    "total": 69
+  },
+  "tokenizer/test2.test": {
+    "run": 45,
+    "skip": {},
+    "total": 45
+  },
+  "tokenizer/test3.test": {
+    "run": 1786,
+    "skip": {},
+    "total": 1786
+  },
+  "tokenizer/test4.test": {
+    "run": 85,
+    "skip": {},
+    "total": 85
+  },
+  "tokenizer/unicodeChars.test": {
+    "run": 323,
+    "skip": {},
+    "total": 323
+  },
+  "tokenizer/unicodeCharsProblematic.test": {
+    "run": 5,
+    "skip": {},
+    "total": 5
+  },
+  "tokenizer/xmlViolation.test": {
+    "run": 0,
+    "skip": {
+      "xml-output-coercion": 4
+    },
+    "total": 4
+  },
+  "tree/adoption01.dat": {
+    "run": 17,
+    "skip": {
+      "fragment-parsing": 1
+    },
+    "total": 18
+  },
+  "tree/adoption02.dat": {
+    "run": 2,
+    "skip": {},
+    "total": 2
+  },
+  "tree/blocks.dat": {
+    "run": 48,
+    "skip": {},
+    "total": 48
+  },
+  "tree/comments01.dat": {
+    "run": 16,
+    "skip": {},
+    "total": 16
+  },
+  "tree/doctype01.dat": {
+    "run": 37,
+    "skip": {},
+    "total": 37
+  },
+  "tree/domjs-unsafe.dat": {
+    "run": 49,
+    "skip": {},
+    "total": 49
+  },
+  "tree/entities01.dat": {
+    "run": 75,
+    "skip": {},
+    "total": 75
+  },
+  "tree/entities02.dat": {
+    "run": 26,
+    "skip": {},
+    "total": 26
+  },
+  "tree/foreign-fragment.dat": {
+    "run": 0,
+    "skip": {
+      "fragment-parsing": 66
+    },
+    "total": 66
+  },
+  "tree/html5test-com.dat": {
+    "run": 24,
+    "skip": {},
+    "total": 24
+  },
+  "tree/inbody01.dat": {
+    "run": 4,
+    "skip": {},
+    "total": 4
+  },
+  "tree/isindex.dat": {
+    "run": 4,
+    "skip": {},
+    "total": 4
+  },
+  "tree/main-element.dat": {
+    "run": 3,
+    "skip": {},
+    "total": 3
+  },
+  "tree/math.dat": {
+    "run": 0,
+    "skip": {
+      "fragment-parsing": 8
+    },
+    "total": 8
+  },
+  "tree/menuitem-element.dat": {
+    "run": 20,
+    "skip": {},
+    "total": 20
+  },
+  "tree/namespace-sensitivity.dat": {
+    "run": 1,
+    "skip": {},
+    "total": 1
+  },
+  "tree/noscript01.dat": {
+    "run": 18,
+    "skip": {},
+    "total": 18
+  },
+  "tree/pending-spec-changes-plain-text-unsafe.dat": {
+    "run": 1,
+    "skip": {},
+    "total": 1
+  },
+  "tree/pending-spec-changes.dat": {
+    "run": 3,
+    "skip": {},
+    "total": 3
+  },
+  "tree/plain-text-unsafe.dat": {
+    "run": 33,
+    "skip": {},
+    "total": 33
+  },
+  "tree/quirks01.dat": {
+    "run": 4,
+    "skip": {},
+    "total": 4
+  },
+  "tree/ruby.dat": {
+    "run": 21,
+    "skip": {},
+    "total": 21
+  },
+  "tree/scriptdata01.dat": {
+    "run": 26,
+    "skip": {},
+    "total": 26
+  },
+  "tree/search-element.dat": {
+    "run": 3,
+    "skip": {},
+    "total": 3
+  },
+  "tree/svg.dat": {
+    "run": 0,
+    "skip": {
+      "fragment-parsing": 8
+    },
+    "total": 8
+  },
+  "tree/tables01.dat": {
+    "run": 19,
+    "skip": {},
+    "total": 19
+  },
+  "tree/template.dat": {
+    "run": 111,
+    "skip": {
+      "fragment-parsing": 1
+    },
+    "total": 112
+  },
+  "tree/tests1.dat": {
+    "run": 112,
+    "skip": {},
+    "total": 112
+  },
+  "tree/tests10.dat": {
+    "run": 54,
+    "skip": {},
+    "total": 54
+  },
+  "tree/tests11.dat": {
+    "run": 13,
+    "skip": {},
+    "total": 13
+  },
+  "tree/tests12.dat": {
+    "run": 2,
+    "skip": {},
+    "total": 2
+  },
+  "tree/tests14.dat": {
+    "run": 7,
+    "skip": {},
+    "total": 7
+  },
+  "tree/tests15.dat": {
+    "run": 14,
+    "skip": {},
+    "total": 14
+  },
+  "tree/tests16.dat": {
+    "run": 191,
+    "skip": {
+      "scripting-enabled": 6
+    },
+    "total": 197
+  },
+  "tree/tests17.dat": {
+    "run": 13,
+    "skip": {},
+    "total": 13
+  },
+  "tree/tests18.dat": {
+    "run": 36,
+    "skip": {},
+    "total": 36
+  },
+  "tree/tests19.dat": {
+    "run": 103,
+    "skip": {},
+    "total": 103
+  },
+  "tree/tests2.dat": {
+    "run": 63,
+    "skip": {},
+    "total": 63
+  },
+  "tree/tests20.dat": {
+    "run": 64,
+    "skip": {},
+    "total": 64
+  },
+  "tree/tests21.dat": {
+    "run": 23,
+    "skip": {},
+    "total": 23
+  },
+  "tree/tests22.dat": {
+    "run": 5,
+    "skip": {},
+    "total": 5
+  },
+  "tree/tests23.dat": {
+    "run": 5,
+    "skip": {},
+    "total": 5
+  },
+  "tree/tests24.dat": {
+    "run": 8,
+    "skip": {},
+    "total": 8
+  },
+  "tree/tests25.dat": {
+    "run": 26,
+    "skip": {},
+    "total": 26
+  },
+  "tree/tests26.dat": {
+    "run": 20,
+    "skip": {},
+    "total": 20
+  },
+  "tree/tests3.dat": {
+    "run": 24,
+    "skip": {},
+    "total": 24
+  },
+  "tree/tests4.dat": {
+    "run": 0,
+    "skip": {
+      "fragment-parsing": 9
+    },
+    "total": 9
+  },
+  "tree/tests5.dat": {
+    "run": 16,
+    "skip": {
+      "scripting-enabled": 1
+    },
+    "total": 17
+  },
+  "tree/tests6.dat": {
+    "run": 39,
+    "skip": {
+      "fragment-parsing": 13
+    },
+    "total": 52
+  },
+  "tree/tests7.dat": {
+    "run": 33,
+    "skip": {
+      "fragment-parsing": 1
+    },
+    "total": 34
+  },
+  "tree/tests8.dat": {
+    "run": 10,
+    "skip": {},
+    "total": 10
+  },
+  "tree/tests9.dat": {
+    "run": 27,
+    "skip": {},
+    "total": 27
+  },
+  "tree/tests_innerHTML_1.dat": {
+    "run": 0,
+    "skip": {
+      "fragment-parsing": 81
+    },
+    "total": 81
+  },
+  "tree/tricky01.dat": {
+    "run": 9,
+    "skip": {},
+    "total": 9
+  },
+  "tree/webkit01.dat": {
+    "run": 52,
+    "skip": {},
+    "total": 52
+  },
+  "tree/webkit02.dat": {
+    "run": 30,
+    "skip": {
+      "fragment-parsing": 4,
+      "scripting-enabled": 1
+    },
+    "total": 35
+  }
+}

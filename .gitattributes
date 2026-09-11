@@ -1,2 +1,8 @@
 userland/libtls/upstream/** linguist-vendored
 userland/libtls/test/vectors.h linguist-generated
+
+# Preserve upstream fixture bytes and saved pages, including significant spaces.
+tools/html5lib-tests/** -text -whitespace linguist-vendored
+tools/html_corpus/** -text -whitespace linguist-vendored
+userland/libhtml/*.inc linguist-generated
+userland/libhtml/include/html/tags.h linguist-generated

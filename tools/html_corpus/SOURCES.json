@@ -1,0 +1,62 @@
+{
+  "68k-news": {
+    "bytes": 98372,
+    "charset": "utf-8",
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_utc": "2026-09-11T14:26:45.667841+00:00",
+    "final_url": "http://68k.news/",
+    "requested_url": "http://68k.news/",
+    "sha256": "3f60a9cf4dc9a8fc86d2eae788bdc0b6d603c26577e3406fb192ce9806a87279",
+    "status": 200
+  },
+  "example": {
+    "bytes": 559,
+    "charset": null,
+    "content_type": "text/html",
+    "fetched_utc": "2026-09-11T14:26:44.677242+00:00",
+    "final_url": "https://example.com/",
+    "requested_url": "https://example.com/",
+    "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d",
+    "status": 200
+  },
+  "floodgap": {
+    "bytes": 19945,
+    "charset": null,
+    "content_type": "text/html",
+    "fetched_utc": "2026-09-11T14:26:48.000052+00:00",
+    "final_url": "https://gopher.floodgap.com/gopher/gw",
+    "requested_url": "https://gopher.floodgap.com/gopher/gw",
+    "sha256": "48fe361cc352bec716428d38e5427fa88ff629e48466954448b8097f6b4e7a55",
+    "status": 200
+  },
+  "hacker-news": {
+    "bytes": 34938,
+    "charset": "utf-8",
+    "content_type": "text/html; charset=utf-8",
+    "fetched_utc": "2026-09-11T14:26:45.384236+00:00",
+    "final_url": "https://news.ycombinator.com/",
+    "requested_url": "https://news.ycombinator.com/",
+    "sha256": "50fbe15472808bd8c447afe8fb2cd7b19ea849dc7976ae906770b03e1b79ee8e",
+    "status": 200
+  },
+  "textfiles-computers": {
+    "bytes": 70392,
+    "charset": null,
+    "content_type": "text/html",
+    "fetched_utc": "2026-09-11T14:26:45.897572+00:00",
+    "final_url": "http://textfiles.com/computers/",
+    "requested_url": "http://textfiles.com/computers/",
+    "sha256": "8a0e8414b27499c67978f9ab24d17528366dbd724cd35e707512cc4e83870782",
+    "status": 200
+  },
+  "wikipedia-html": {
+    "bytes": 797390,
+    "charset": "utf-8",
+    "content_type": "text/html; charset=UTF-8",
+    "fetched_utc": "2026-09-11T14:26:44.914909+00:00",
+    "final_url": "https://en.wikipedia.org/wiki/HTML",
+    "requested_url": "https://en.wikipedia.org/wiki/HTML",
+    "sha256": "697afe2198824c0a010455718e8213decfce1ddab3f09df9ca5c3c4a538346af",
+    "status": 200
+  }
+}
