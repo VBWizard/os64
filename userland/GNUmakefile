@@ -75,7 +75,7 @@ CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
            $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include \
-           -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libtls/include
+           -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libtls/include
 # -z noexecstack: bare-metal objects carry no .note.GNU-stack section (that
 # annotation is a Linux userspace convention), and without the flag ld warns
 # about one arbitrary object per link — noise with no meaning here, since
@@ -137,7 +137,7 @@ LAUNCH_OBJS := $(patsubst %,$(OBJ)/%.o,$(LAUNCH_SRCS))
 # the same day: a shared object's relocations resolve against itself and its
 # own dependencies (never against the executable that loaded it), so the
 # library has to carry every symbol the library uses.
-LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/env.c libos64/str.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_text.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/image.c libos64/menu.c libos64/thread_trampoline.S
+LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/env.c libos64/str.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_text.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/thread_trampoline.S
 # PIC objects live under obj/pic/ — a separate tree, because these are
 # compiled with different flags than everything else and an object built for
 # one world must never be picked up by the other.
@@ -205,7 +205,7 @@ LIBPNG_LDFLAGS  := $(SHARED_LIB_LDFLAGS) -soname libpng.so
 # isolation would miss a hash collision and prelink two objects into the same
 # slot. app_bases.py sorts before probing, so adding a library gives the build
 # one deterministic map independent of link order.
-LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so)
+LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so)
 LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
 LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
 LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
@@ -236,10 +236,10 @@ TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
 # engine into part of the foundational runtime by accident.
 LIBGZIP_PROGRAMS := gzip gunzip gziptest os64get
 
-# gview consumes PNG in the GUI; pngtest proves the same dependency in the
-# guest without requiring a GUI. libpng carries its own DT_NEEDED edge on
+# pngtest directly checks the codec; gview and desktop use libimage.
+# libpng carries its own DT_NEEDED edge on
 # libgzip, so consumers name the codec they asked for rather than its engine.
-LIBPNG_PROGRAMS := gview pngtest
+LIBPNG_PROGRAMS := pngtest
 
 # Every apps/<name>/ directory holding .c files is an app named <name>.
 # $(sort) both orders and DEDUPES — essential since apps went multi-file
@@ -310,9 +310,14 @@ $(foreach p,$(APP_BASE_PAIRS),\
 .DEFAULT_GOAL := all
 include libtls/foundation.mk
 include libtls/shared.mk
+include libjpeg/shared.mk
+include libimage/shared.mk
+
+# Source membership and the population used for prelink placement live here.
+$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO): GNUmakefile
 
 .PHONY: all
-all: $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
+all: $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
      $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
 
 $(BIN)/[: $(BIN)/test
@@ -399,7 +404,9 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
-APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
+APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),gview desktop jpegtest),$(LIBIMAGE_SO)) \
+                       $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
+                       $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe os64get),$(LIBTLS_SO)) \
                        $(if $(filter $(1),bearssltest tlstrusttest tlsinputtest),$(BEARSSL_ARCHIVE))
@@ -422,7 +429,7 @@ $(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
 # FIXTURES ARE IN HERE TOO, and that is the point of the line rather than an
 # afterthought: a fixture is the program you are most likely to be single-
 # stepping, because it is what you reach for when something is already broken.
-$(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO)
+$(BIN)/app_bases.gdb: $(LIBJPEG_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO)
 	@mkdir -p "$(BIN)"
 	@printf '# GENERATED by userland/GNUmakefile — do not edit.\n' > $@
 	@printf '# Every program at its own base, so GDB can hold all their symbols at once.\n' >> $@
@@ -444,6 +451,8 @@ $(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TES
 	@printf 'add-symbol-file %s\n' "$(LIBGZIP_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBPNG_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBTLS_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBJPEG_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBIMAGE_SO)" >> $@
 	@printf '# (symbols for %s + libos64.so + libgzip.so + libpng.so + libtls.so)\n' "$(APPS) $(TESTS)" >> $@
 
 # Every .d gcc emitted for the runtime and each app — self-maintaining: each
