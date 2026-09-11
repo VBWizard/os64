@@ -235,6 +235,7 @@ os64_tls_store_status_t os64_tls_trust_reload(os64_tls_trust **current, os64_tls
 }
 void os64_tls_trust_free(os64_tls_trust *store) { assert(store == fake_trust); trust_frees++; }
 const char *os64_tls_status_name(os64_tls_status_t s) { (void)s; return "tls-status"; }
+const char *os64_tls_error_description(os64_tls_status_t s, os64_tls_policy_reason_t p, int e) { (void)s; (void)p; (void)e; return "tls-explanation"; }
 const char *os64_tls_store_status_name(os64_tls_store_status_t s) { (void)s; return "store-status"; }
 
 // ── Helpers ─────────────────────────────────────────────────────────────

@@ -882,8 +882,10 @@ const char *os64_fetch_reason(os64_fetch_t *f)
                               (unsigned long)d->store_report.detail.line,
                               (unsigned)d->store_report.detail.policy_reason);
             else
-                os64_snprintf(out, cap, "TLS %s (policy %u, engine %d)",
-                              os64_tls_status_name(d->tls), (unsigned)d->tls_policy, d->tls_engine);
+                os64_snprintf(out, cap, "TLS %s: %s (policy %u, engine %d)",
+                              os64_tls_status_name(d->tls),
+                              os64_tls_error_description(d->tls, d->tls_policy, d->tls_engine),
+                              (unsigned)d->tls_policy, d->tls_engine);
             break;
         case OS64_FETCH_BAD_HEAD:
             if (d->head != HTTP_HEAD_OK)
@@ -991,8 +993,10 @@ const char *os64_fetch_reason(os64_fetch_t *f)
         fetch_transport_tls_failed(&f->io)) {
         size_t have = os64_strlen(out);
         if (have < cap)
-            os64_snprintf(out + have, cap - have, " (TLS %s, policy %u, engine %d)",
-                          os64_tls_status_name(d->tls), (unsigned)d->tls_policy, d->tls_engine);
+            os64_snprintf(out + have, cap - have, " (TLS %s: %s; policy %u, engine %d)",
+                          os64_tls_status_name(d->tls),
+                          os64_tls_error_description(d->tls, d->tls_policy, d->tls_engine),
+                          (unsigned)d->tls_policy, d->tls_engine);
     }
     return f->reason;
 }

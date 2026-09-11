@@ -349,6 +349,8 @@ os64_tls_store_status_t os64_tls_trust_reload(os64_tls_trust **out, os64_tls_sto
 void os64_tls_trust_free(os64_tls_trust *t) { assert(!t || t == &host_trust); }
 const char *os64_tls_store_status_name(os64_tls_store_status_t s) { (void)s; return "fixture store"; }
 const char *os64_tls_status_name(os64_tls_status_t s) { (void)s; return "fixture TLS"; }
+const char *os64_tls_error_description(os64_tls_status_t s, os64_tls_policy_reason_t p, int e)
+{ (void)s; (void)p; (void)e; return "fixture TLS explanation"; }
 os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t h,
     const os64_tls_transport_limits_t *limits, os64_tls_transport **out)
 {
