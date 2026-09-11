@@ -226,8 +226,11 @@ Disable TLS 1.0/1.1, static RSA/ECDH key exchange, CBC/RC4/3DES/NULL suites,
 renegotiation, session resumption, and client certificates for this slice.
 Client-auth-required peers fail without a retry that weakens policy.
 
-Accept SHA-256/384/512 peer certificate and handshake signatures supported by the
-pinned engine. Refuse SHA-1 signatures in the peer validation profile. Installed
+Accept SHA-256/384/512 certificate signatures on the authenticated path and
+handshake signatures supported by the pinned engine. Refuse SHA-1 on that
+path. After a complete certificate passes policy and its signature verifies
+against an installed anchor, later supplied certificates are outside the path;
+retain framing and resource bounds without inspecting their contents. Installed
 anchors supply a trusted name and key; their self-signature algorithm is not an
 import restriction
 (see [TLS_CERTIFICATE_POLICY.md](TLS_CERTIFICATE_POLICY.md)). Require
@@ -286,7 +289,7 @@ Required policy outcomes:
   certificate into a name/public-key pair must not silently discard a scope
   restriction. Initial anchors are explicit, unrestricted CA anchors, not
   direct-trust end-entity keys or arbitrary downloaded intermediates.
-- Keep unknown critical extensions fatal. Do not override upstream failure
+- Keep unknown critical extensions fatal on the authenticated path. Do not override upstream failure
   to improve compatibility. Test each advertised certificate-policy claim.
 
 No OCSP, CRL fetching, Certificate Transparency, or general path building is
