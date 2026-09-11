@@ -14,32 +14,19 @@
 // "does it look right?" glance reliably catches, because a symmetric test
 // pattern looks right upside down.
 //
-// Build & run (one line):
-//   gcc -fsanitize=address,undefined
-//       -I userland/libos64/include -I abi/include -masm=intel
-//       userland/libos64/image.c userland/libos64/draw.c
-//       tools/test_image_host.c -o /tmp/os64_image_test
-//   /tmp/os64_image_test
-//
-// RUN IT UNDER THE SANITIZERS. os64 itself cannot use them — a freestanding
-// kernel has no runtime to link — which makes this host harness the only
-// place in the project where they are available at all, so declining them
-// here costs everything. Codex #30 rd3 found a heap-buffer-overflow in THIS
-// FILE's own BMP builder that way: the fixture corrupted its own heap while
-// reporting PASS, and no amount of reading it had caught that.
+// Run through tools/test_jpeg_host.py, which links the codec dependencies.
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "os64/image.h"
+#include "image/image.h"
 #include "os64/draw.h"
 #include "os64/slurp.h"
 #include "os64/proc.h"
 
 // libimage allocates through libos64's heap; on the host these are the
-// system's. image.c never calls anything else, which is the whole reason it
-// can be tested here.
+// system's. Codec dependencies use the same allocation adapter.
 // Instrumented, because one of these tests is about what was ALLOCATED
 // rather than about what was returned. See the huge-dimension case: before
 // the fix, a hostile header allocated a gigabyte and then returned exactly
@@ -54,6 +41,8 @@ void *os64_malloc(size_t size)
     return malloc(size);
 }
 void  os64_free(void *ptr)     { free(ptr); }
+void *os64_memcpy(void *d, const void *s, size_t n) { return memcpy(d,s,n); }
+void *os64_memset(void *d, int c, size_t n) { return memset(d,c,n); }
 
 // ── stubs for the halves these tests deliberately do not reach ──────────────
 //

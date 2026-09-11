@@ -32,7 +32,7 @@
 #include "os64/os64.h"
 #include "os64/io.h"
 #include "os64/conf.h"
-#include "os64/image.h"
+#include "image/image.h"
 #include "os64/draw.h"
 #include "os64/gui.h"
 #include "os64/proc.h"

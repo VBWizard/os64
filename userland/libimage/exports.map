@@ -1,0 +1,1 @@
+{ global: os64_image_decode; os64_image_load; os64_image_free; os64_image_status_name; local: *; };

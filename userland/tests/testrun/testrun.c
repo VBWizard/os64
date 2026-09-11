@@ -121,6 +121,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/gziptest",        NULL, 0x621A0000,  0,          "standalone libgzip and safe gzip/gunzip command publication" },
     { "/tests/pngtest",         NULL, 0x90640000,  0,          "standalone libpng: filtered RGBA decode, alpha, CRC and pixel cap" },
     { "/tests/htmltest",        NULL, 0x48640000,  0,          "standalone libhtml: document recovery, namespaces, templates and heap lifetime" },
+    { "/tests/jpegtest",        NULL, 0x90650000,  0,          "JPEG: baseline/progressive, orientation, image dispatch, file load and cleanup" },
     { "/tests/bearssltest",     NULL, 0xBEA20000,  0,          "BearSSL foundation vectors and explicit entropy boundary" },
     { "/tests/tlstrusttest",    NULL, 0x71570000,  0,          "TLS trust parsing, certificate gate and snapshot replacement" },
     { "/tests/tlsinputtest",    NULL, 0x71580000,  0,          "TLS creation with OS randomness, UTC time and owned trust" },

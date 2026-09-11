@@ -68,40 +68,15 @@ reason before that machinery exists.
 
 ## Where the tree stands
 
-The older decoder is
-`userland/libos64/image.c`, with its public contract in
-`userland/libos64/include/os64/image.h`. It recognizes P6 PPM and uncompressed
-24/32-bit BMP and returns tightly packed `0xAARRGGBB` pixels. This placement is
-accepted transitional debt: moving working BMP/PPM code is not a prerequisite
-for proving PNG, but no new format is to be added there.
+`userland/libimage/image.c` owns BMP/PPM decoding, complete-file loading, magic
+selection and status mapping. Its public header is `image/image.h`.
+`gview` and `desktop` link libimage; no image symbols remain in libos64.
 
-The raw streaming DEFLATE engine was completed with the gzip work merged by
-PR #50. It deliberately exposes RFC 1951 rather than making gzip framing part
-of the inflater, so libpng reuses it beneath PNG's zlib container.
-
-`userland/libpng/png.c` supplies that PNG layer as `libpng.so`. gview consumes
-it, and `/tests/pngtest` proves the transitive shared-library edge in ring 3.
-The codec accepts every legal PNG color-type/bit-depth pairing
-without interlace, preserves palette and key transparency, and reverses all
-five scanline filters while holding two rows rather than a decompressed image
-copy. Adam7 is the remaining format gap and reports UNSUPPORTED.
-
-The migration may therefore happen without a flag day:
-
-1. **DONE:** build and prove `libpng.so` as an independent codec. PNG-aware
-   consumers link it explicitly; libos64 does not.
-2. When the common front door is extracted, create `libimage.so`, move the
-   format-neutral image/status contract and BMP/PPM implementation into it,
-   and make its magic dispatch call libpng.
-3. Add `libjpeg.so` behind that same boundary. Existing consumers continue to
-   receive the same pixel representation; JPEG does not leak into their code.
-4. Remove the retired image declarations and implementation from libos64 in
-   the same change that moves their callers. Run `tools/stale_refs.sh`; names
-   and prose are part of the migration.
-
-Until step 2, an application that supports both the old formats and PNG may
-perform the small magic-byte fork itself. That duplication is migration
-scaffolding, not the permanent public API.
+`libpng.so` supplies non-interlaced PNG through libgzip's raw inflater.
+`libjpeg.so` supplies the bounded libjpeg-turbo decoder and photo orientation
+recorded in [JPEG.md](JPEG.md). The four formats share the image result below.
+`pngtest` directly checks the PNG codec; `jpegtest` checks JPEG and the common
+image entry points through their shared-library dependencies in ring 3.
 
 ## The common result
 
@@ -175,15 +150,14 @@ JPEG support valuable. The useful os64 work is the freestanding adaptation,
 memory/error boundary, normalized pixel output, and hostile-file proof—not
 re-deriving decades of codec behavior.
 
-The first upstream candidate is
+The JPEG implementation uses a pinned decoder-only import of
 [libjpeg-turbo](https://libjpeg-turbo.org/). It supports baseline and
 progressive JPEG, has in-memory APIs, and retains the widely used libjpeg API
 alongside its simpler TurboJPEG API. Its code is covered by compatible
 BSD-style licenses, with attribution requirements recorded in its
 [license file](https://github.com/libjpeg-turbo/libjpeg-turbo/blob/main/LICENSE.md).
 
-That is a candidate, not permission to import the tree wholesale. The port
-starts with a compile-and-dependency spike:
+The port keeps an explicit source manifest and os64-owned adapters:
 
 - decoder and in-memory source path only;
 - scalar C first, with SIMD disabled until the ABI and CPU-feature boundary is
@@ -195,10 +169,10 @@ starts with a compile-and-dependency spike:
 - upstream license texts and modification notices shipped with the source and
   binary distribution.
 
-`stb_image` is not the architectural answer. Its convenience comes from
-putting many formats behind one single-header implementation, while this
-design intentionally gives large codecs independent ownership, dependencies,
-tests, and update histories.
+`stb_image` can be built with only its JPEG decoder and could fit this same
+library boundary. libjpeg-turbo was selected for its JPEG-specific controls
+and optimization options. Its public upstream API stays private to our codec;
+applications use os64-owned names and normalized pixels.
 
 ## Proof before integration
 
