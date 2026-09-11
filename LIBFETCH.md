@@ -112,7 +112,7 @@ void          os64_fetch_close(os64_fetch_t *f);
   whole file, which is the property os64get's publish step trusts.
 - **The head** carries what a consumer switches on: `status` and the
   server's reason; `content_type` (the media type, lowercased) and
-  `charset` (the parameter, verbatim — libhtml's `charset` option is fed
+  `charset` (the parameter, lowercased — libhtml's `charset` option is fed
   from this field, and it is the reason `Content-Type` is parsed at all,
   which os64get never needed); `has_length`/`length`; `encoding` (what
   the wire said, so a consumer knows gzip was undone); `url` — the FINAL
