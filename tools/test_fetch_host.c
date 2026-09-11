@@ -1030,6 +1030,25 @@ static void case_round6(void)
     os64_fetch_close(f);
 }
 
+// Codex round 7 on PR #92.
+static void case_round7(void)
+{
+    // The identity probe at the cap reads ONE byte: a body with many bytes
+    // past max_body and a caller buffer far larger than one must refuse by
+    // name without touching more than the probe (ASan is the witness).
+    for (int mode = 0; mode < 3; mode++) {
+        reset(); chunk_mode = mode;
+        peer_add("lim.test", 80, reply_len("200 OK", "", page));
+        os64_fetch_options_t opt = { .max_body = 5 };
+        os64_fetch_t *f = os64_fetch_open("http://lim.test/", &opt);
+        static uint8_t big[65536];
+        size_t n = slurp(f, big, sizeof(big), 0);
+        CHECK(n == 5 && os64_fetch_status(f) == OS64_FETCH_LIMIT);
+        CHECK(os64_fetch_progress(f)->produced == 5 && os64_fetch_progress(f)->wire <= 6 + 36);
+        os64_fetch_close(f);
+    }
+}
+
 int main(int argc, char **argv)
 {
     unsigned seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 12345u;
@@ -1050,6 +1069,7 @@ int main(int argc, char **argv)
     case_round4();
     case_round5();
     case_round6();
+    case_round7();
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }

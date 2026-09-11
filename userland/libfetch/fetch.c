@@ -685,8 +685,11 @@ static int64_t read_identity(os64_fetch_t *f, uint8_t *buf, size_t cap)
     if (want == 0) {
         // At the cap exactly. One more byte from the wire is the LIMIT; none
         // is a body that fit — the probe is never handed over either way.
+        // The READ is one byte too: the destination is a byte on the stack,
+        // and the first draft narrowed only the destination (Codex, PR #92
+        // rd7 — a body with many bytes past the cap would have overrun it).
         dst = &probe;
-        want = 1;
+        cap = 1;
     } else if (want < cap) {
         cap = want;
     }
