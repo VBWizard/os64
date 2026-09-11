@@ -437,13 +437,15 @@ static void case_cut_and_limits(void)
     os64_fetch_close(f);
 }
 
-typedef struct { int calls; os64_fetch_hop_kind_t kinds[8]; os64_fetch_verdict_t answer; char last[OS64_FETCH_URL_MAX]; } hops_t;
+typedef struct { int calls; os64_fetch_hop_kind_t kinds[8]; os64_fetch_verdict_t answer; char last[OS64_FETCH_URL_MAX]; bool from_via; char from_host[OS64_URL_HOST_MAX]; } hops_t;
 static os64_fetch_verdict_t record_hop(void *ctx, const os64_fetch_hop_t *hop)
 {
     hops_t *h = ctx;
     if (h->calls < 8) h->kinds[h->calls] = hop->kind;
     h->calls++;
     snprintf(h->last, sizeof(h->last), "%s", hop->whole);
+    h->from_via = hop->from_via_proxy;
+    snprintf(h->from_host, sizeof(h->from_host), "%s", hop->from_proxy_host);
     return h->answer;
 }
 
@@ -850,6 +852,18 @@ static void case_round1(void)
     os64_fetch_close(f);
     CHECK(trust_frees == 1);
     cancel_now = false; cancel_after_calls = 0;
+
+    // The hop names who carried the hop that ANSWERED, so a caller can warn
+    // about a proxied first leg even when the final head went direct.
+    reset();
+    set_env("http_proxy", "http://proxy.test:3128/");
+    peer_add("proxy.test", 3128, reply("HTTP/1.1 301 Moved\r\nLocation: https://secure.test/\r\nContent-Length: 0\r\n", ""));
+    peer_add("secure.test", 443, reply_len("200 OK", "", page));
+    hops = (hops_t){ .answer = OS64_FETCH_HOP_DEFAULT };
+    f = os64_fetch_open("http://plain.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && os64_fetch_head(f)->encrypted && !os64_fetch_head(f)->via_proxy);
+    CHECK(hops.calls == 1 && hops.from_via && strcmp(hops.from_host, "proxy.test") == 0);
+    os64_fetch_close(f);
 }
 
 int main(int argc, char **argv)

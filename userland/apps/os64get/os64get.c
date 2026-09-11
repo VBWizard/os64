@@ -1166,6 +1166,7 @@ typedef struct {
     bool  quiet;
     bool  toldAboutTls;
     const char *say;                        // the address to quote in a complaint
+    const char *firstScheme;                // the typed address's scheme, for its proxy notice
     char  last[OS64_FETCH_URL_MAX];         // the last hop's address, `say` past the first
 } narration_t;
 
@@ -1203,6 +1204,12 @@ static void proxy_notice(narration_t *n, const char *scheme, const char *host, u
 static os64_fetch_verdict_t narrate_hop(void *ctx, const os64_fetch_hop_t *hop)
 {
     narration_t *n = ctx;
+    // The TYPED address's own carrier is only visible here, on the first
+    // hop away from it: the final head names its own carrier, and a fetch
+    // that was proxied for its first leg and then sent somewhere direct
+    // would otherwise never say the first leg was in the clear.
+    if (hop->number == 1 && hop->from_via_proxy)
+        proxy_notice(n, n->firstScheme, hop->from_proxy_host, hop->from_proxy_port);
     if (hop->kind == OS64_FETCH_HOP_WHOLE && hop->number <= URL_REDIRECT_MAX)
     {
         if (!n->quiet)
@@ -1387,7 +1394,7 @@ static int fetch_url(const http_url_t *url, const char *urlText,
     // ── Ask, and keep asking wherever the answers point ─────────────────
     // The library dials, follows, and reads the head; os64get narrates the
     // hops, answers Ctrl+C, and says what the outcome means.
-    narration_t narr = { .quiet = quiet, .say = urlText };
+    narration_t narr = { .quiet = quiet, .say = urlText, .firstScheme = url->scheme };
     os64_fetch_options_t opt = {
         .user_agent = "os64get/1 (os64)",
         .max_hops   = URL_REDIRECT_MAX,

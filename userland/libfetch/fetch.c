@@ -144,6 +144,8 @@ static void hop_read(os64_fetch_t *f, os64_fetch_hop_t *hop, http_url_t *target,
     hop->status = f->reply.status;
     os64_strcopy(hop->reason, sizeof(hop->reason), f->reply.reason);
     hop->number = f->head.hops + 1;
+    proxy_facts(&f->proxy, &hop->from_via_proxy, hop->from_proxy_host,
+                sizeof(hop->from_proxy_host), &hop->from_proxy_port);
 
     const char *location = f->reply.location;
     if (location[0] == '\0') {
@@ -534,7 +536,7 @@ static int64_t framing_ended(os64_fetch_t *f, int64_t n)
             // plain HTTP has no way to tell a complete reply from a raw FIN.
             if (!fetch_transport_complete(&f->io, f->body.framing != HTTP_FRAMING_CLOSE)) {
                 tls_snapshot(f);
-                return finish(f, cancelled(f) ? OS64_FETCH_INTERRUPTED : OS64_FETCH_CUT, 0);
+                return cancelled(f) ? finish(f, OS64_FETCH_INTERRUPTED, -1) : finish(f, OS64_FETCH_CUT, 0);
             }
             return finish(f, OS64_FETCH_OK, 0);
         }
@@ -645,7 +647,7 @@ static int64_t read_gzip(os64_fetch_t *f, uint8_t *buf, size_t cap)
             if (st == OS64_GZIP_DONE) {
                 if (!fetch_transport_complete(&f->io, f->body.framing != HTTP_FRAMING_CLOSE)) {
                     tls_snapshot(f);
-                    return finish(f, cancelled(f) ? OS64_FETCH_INTERRUPTED : OS64_FETCH_CUT, 0);
+                    return cancelled(f) ? finish(f, OS64_FETCH_INTERRUPTED, -1) : finish(f, OS64_FETCH_CUT, 0);
                 }
                 return finish(f, OS64_FETCH_OK, 0);
             }

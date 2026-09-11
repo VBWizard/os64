@@ -100,6 +100,9 @@ typedef struct {
     bool     via_proxy;               // WHOLE: who carries the next hop
     char     proxy_host[OS64_URL_HOST_MAX];
     uint16_t proxy_port;
+    bool     from_via_proxy;          // ...and who carried the hop that answered: a caller
+    char     from_proxy_host[OS64_URL_HOST_MAX];   // warning about a proxied first leg needs
+    uint16_t from_proxy_port;         // it even when the final head went direct
     char     why[OS64_FETCH_WHY_MAX]; // PROXY: what is wrong with the setting
 } os64_fetch_hop_t;
 
