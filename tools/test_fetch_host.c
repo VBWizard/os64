@@ -880,6 +880,20 @@ static void case_round2(void)
     CHECK(os64_fetch_head(f)->has_length && os64_fetch_head(f)->length == 0);
     CHECK(os64_fetch_read(f, out, sizeof(out)) == 0 && os64_fetch_status(f) == OS64_FETCH_OK);
     os64_fetch_close(f);
+    // ...and a coding on one describes the representation that was not
+    // sent: no decoder, no refusal, the head keeps the word.
+    reset();
+    peer_add("nm.test", 80, reply("HTTP/1.1 304 Not Modified\r\nContent-Encoding: gzip\r\nContent-Length: 44\r\n", ""));
+    f = os64_fetch_open("http://nm.test/", &cond);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strcmp(os64_fetch_head(f)->encoding, "gzip") == 0);
+    CHECK(os64_fetch_read(f, out, sizeof(out)) == 0 && os64_fetch_status(f) == OS64_FETCH_OK);
+    os64_fetch_close(f);
+    reset();
+    peer_add("nm.test", 80, reply("HTTP/1.1 304 Not Modified\r\nContent-Encoding: br\r\n", ""));
+    f = os64_fetch_open("http://nm.test/", &cond);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK);
+    CHECK(os64_fetch_read(f, out, sizeof(out)) == 0 && os64_fetch_status(f) == OS64_FETCH_OK);
+    os64_fetch_close(f);
     reset();
     peer_add("nc.test", 80, reply("HTTP/1.1 204 No Content\r\nTransfer-Encoding: chunked\r\n", ""));
     f = os64_fetch_open("http://nc.test/", NULL);
