@@ -489,6 +489,22 @@ static uint64_t gzip_limit_for(const http_response_t *reply)
 // whatever it has not learned is refused by name.
 static os64_fetch_status_t body_prepare(os64_fetch_t *f)
 {
+    // A 204 and a 304 carry NO body whatever their headers say (RFC 9112
+    // §6.3: a Content-Length on a 304 describes the representation that was
+    // not sent), so the framing is forced to zero bytes before the body
+    // reader can wait for bytes that will never come (Codex, PR #92 rd2).
+    // A 304 is reachable: a caller may send If-Modified-Since in
+    // extra_headers. 1xx never reaches here — the head reader consumes
+    // interim replies and refuses 101.
+    if (f->reply.status == 204 || f->reply.status == 304) {
+        f->reply.hasLength = true;
+        f->reply.length = 0;
+        f->reply.transferEncoding[0] = '\0';
+        f->head.has_length = true;
+        f->head.length = 0;
+        f->progress.has_length = true;
+        f->progress.length = 0;
+    }
     if (!http_body_open(&f->body, &f->stream, &f->reply)) {
         os64_strcopy(f->detail.unsupported, sizeof(f->detail.unsupported),
                      f->reply.transferEncoding);

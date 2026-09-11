@@ -178,9 +178,13 @@ typedef struct {
   thing that cancels is a signal handler or a UI thread, and both already
   have a flag of their own (os64get's `install_cancelled`). The library
   asks it before every wait and after every interrupted one, and answers
-  `OS64_FETCH_INTERRUPTED`, which is also what an `OS64_INTERRUPTED` read
-  becomes — the caller checks its own flag to tell Ctrl+C from a stray
-  signal, exactly as it does today.
+  `OS64_FETCH_INTERRUPTED` when it says yes. A wait that a signal
+  interrupts is otherwise RETRIED under the same idle deadline: a caught
+  SIGWINCH must not abort a page load, and os64's signals are numbers a
+  handler sees, not a reason a library may act on. So the predicate is
+  the only way to say "stop", which is exactly why it exists, and a
+  caller that wants Ctrl+C to end a fetch installs the handler that sets
+  the flag the predicate reads — as os64get does today.
 - **Trust has one ownership rule: the library frees only what it
   loaded.** A caller that loads the store once (the browser, per process)
   passes it and keeps it. A caller that passes NULL (os64get, per
@@ -204,7 +208,7 @@ every script written against it stay true:
 | `TLS_FAILED` (+ status, policy reason, engine error, store report) | handshake, verification, or trust store | 16 |
 | `REQUEST_FAILED` | could not send, or it does not fit | 4 |
 | `BAD_HEAD` (+ `http_head_result_t`) | the reply is not HTTP | 6 |
-| `UNSUPPORTED` | a framing, coding, or 101 this code cannot honestly undo | 14 |
+| `UNSUPPORTED` | a framing, coding, or 101 this code cannot honestly undo | 14 — or 5 when the head is the server's refusal (a 404 in a coding nobody decodes is still a 404) |
 | `SILENT` | the idle deadline passed | 6 (head) / 7 (body) |
 | `REDIRECT_STOPPED` (+ the hop) | a verdict said stop | 15, or 2 for PROXY |
 | `TOO_MANY_HOPS` | past `max_hops` | 15 |

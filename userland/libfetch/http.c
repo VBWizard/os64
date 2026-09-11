@@ -541,14 +541,29 @@ static http_head_result_t header_take(char *line, http_response_t *out)
             p++;
             while (is_blank(*p))
                 p++;
+            // The value is a token or a quoted-string. A quoted one runs to
+            // its closing quote, backslash-escapes and all — a semicolon
+            // inside it is data, not the next parameter, or
+            // `note="x;charset=y"; charset=utf-8` would take the charset
+            // out of the note (Codex, PR #92 rd2). The label is kept
+            // verbatim inside the quotes (escapes are legal there but no
+            // charset label has ever needed one).
             bool quoted = (*p == '"');
             if (quoted)
                 p++;
             const char *cs = p;
-            while (*p != '\0' && *p != ';' && !(quoted && *p == '"'))
-                p++;
+            if (quoted) {
+                while (*p != '\0' && *p != '"') {
+                    if (*p == '\\' && p[1] != '\0')
+                        p++;
+                    p++;
+                }
+            } else {
+                while (*p != '\0' && *p != ';')
+                    p++;
+            }
             size_t clen = (size_t)(p - cs);
-            while (clen > 0 && is_blank(cs[clen - 1]))
+            while (!quoted && clen > 0 && is_blank(cs[clen - 1]))
                 clen--;
             if (quoted && *p == '"')
                 p++;

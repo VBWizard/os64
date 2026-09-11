@@ -1279,6 +1279,22 @@ static int open_verdict(os64_fetch_t *f, narration_t *n, const char *urlText)
         os64_hprintf(OS64_STDERR, "os64get: %s — %s\n", n->say, os64_fetch_reason(f));
         return GET_BAD_HEADER;
     case OS64_FETCH_UNSUPPORTED:
+    {
+        // THE SERVER'S VERDICT OUTRANKS THE ENVELOPE'S. A 404 whose body is
+        // coded in something nothing here decodes is still a 404 — the
+        // refusal is the server's, and a script reading 5 must keep reading
+        // 5 (the pre-libfetch order judged the status before the framing;
+        // Codex, PR #92 rd2). The head is readable whenever the library got
+        // as far as the body's framing.
+        const os64_fetch_head_t *head = os64_fetch_head(f);
+        if (head != NULL && head->status != 200)
+        {
+            os64_hprintf(OS64_STDERR, "os64get: %s — %ld %s\n", n->say,
+                         (long)head->status, reply_reason(head->reason));
+            if (head->status >= 300 && head->status < 400)
+                redirect_unfollowed(head);
+            return GET_REFUSED;
+        }
         // A framing header too long to read, or a 101 that hands the
         // connection to another protocol, or a framing or coding nothing
         // here undoes: not a MALFORMED reply but a legal one this program
@@ -1287,6 +1303,7 @@ static int open_verdict(os64_fetch_t *f, narration_t *n, const char *urlText)
         os64_hprintf(OS64_STDERR, "os64get: %s — %s — nothing written\n", n->say,
                      os64_fetch_reason(f));
         return GET_UNSUPPORTED;
+    }
     case OS64_FETCH_REDIRECT_STOPPED:
     {
         const os64_fetch_head_t *head = os64_fetch_head(f);

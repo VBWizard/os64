@@ -271,6 +271,12 @@ int64_t os64_write(int32_t h, const void *buf, size_t n)
                 strcpy(network[i], "HTTP/1.1 200 OK\r\n\r\nincoming A");
                 network_len[i] = strlen(network[i]); return (int64_t)n;
             }
+            if (is("url-refused-coded")) {
+                // A refusal whose body is coded in something nothing here
+                // decodes: the server's verdict outranks the envelope's.
+                strcpy(network[i], "HTTP/1.1 404 Not Found\r\nContent-Encoding: br\r\nContent-Length: 3\r\n\r\nabc");
+                network_len[i] = strlen(network[i]); return (int64_t)n;
+            }
             snprintf(network[i], sizeof(network[i]), "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n%s",
                      is("url-short") ? "cut" : "incoming A");
         } else {
@@ -565,6 +571,10 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < connections; i++) assert(network_closed[i]);
     if (!strncmp(scenario, "url-tls-", 8) || is("url-upgrade")) assert(trust_loads == 1);
     else assert(trust_loads == 0);
+    if (is("url-refused-coded")) {
+        assert(rc == GET_REFUSED && connections == 1);
+        assert(strstr(output_text, "404 Not Found"));
+    }
     if (is("url-tls-downgrade")) {
         assert(rc == GET_REDIRECT && connections == 1);
         assert(strstr(output_text, "refusing HTTPS-to-HTTP downgrade"));

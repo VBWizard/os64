@@ -866,6 +866,38 @@ static void case_round1(void)
     os64_fetch_close(f);
 }
 
+// Codex round 2 on PR #92.
+static void case_round2(void)
+{
+    // 304 and 204 carry no body whatever their headers claim: the read
+    // answers 0 with OK at once, and the connection is not waited on.
+    reset();
+    peer_add("nm.test", 80, reply("HTTP/1.1 304 Not Modified\r\nContent-Length: 1234\r\nETag: \"x\"\r\n", ""));
+    os64_fetch_options_t cond = { .extra_headers = "If-None-Match: \"x\"\r\n" };
+    os64_fetch_t *f = os64_fetch_open("http://nm.test/", &cond);
+    uint8_t out[64];
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && os64_fetch_head(f)->status == 304);
+    CHECK(os64_fetch_head(f)->has_length && os64_fetch_head(f)->length == 0);
+    CHECK(os64_fetch_read(f, out, sizeof(out)) == 0 && os64_fetch_status(f) == OS64_FETCH_OK);
+    os64_fetch_close(f);
+    reset();
+    peer_add("nc.test", 80, reply("HTTP/1.1 204 No Content\r\nTransfer-Encoding: chunked\r\n", ""));
+    f = os64_fetch_open("http://nc.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && os64_fetch_head(f)->status == 204);
+    CHECK(os64_fetch_read(f, out, sizeof(out)) == 0 && os64_fetch_status(f) == OS64_FETCH_OK);
+    os64_fetch_close(f);
+
+    // A semicolon inside an earlier quoted parameter is data, not a delimiter.
+    reset();
+    peer_add("ct.test", 80, reply_len("200 OK",
+             "Content-Type: text/html; note=\"x;charset=iso-8859-1;y\\\"z\"; charset=utf-8\r\n", page));
+    f = os64_fetch_open("http://ct.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK);
+    CHECK(strcmp(os64_fetch_head(f)->content_type, "text/html") == 0);
+    CHECK(strcmp(os64_fetch_head(f)->charset, "utf-8") == 0);
+    os64_fetch_close(f);
+}
+
 int main(int argc, char **argv)
 {
     unsigned seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 12345u;
@@ -882,6 +914,7 @@ int main(int argc, char **argv)
     case_failures();
     case_content_type();
     case_round1();
+    case_round2();
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }

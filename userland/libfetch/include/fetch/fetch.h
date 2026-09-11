@@ -51,7 +51,10 @@ typedef enum {
     OS64_FETCH_BROKE,              // the connection failed mid-body
     OS64_FETCH_CORRUPT,            // the gzip coding did not decode (detail.gzip)
     OS64_FETCH_LIMIT,              // max_body, or the gzip expansion caps
-    OS64_FETCH_INTERRUPTED,        // the caller's predicate said so, or a wait was interrupted
+    OS64_FETCH_INTERRUPTED,        // the caller's predicate said so. (A wait that a signal
+                                   // interrupts is RETRIED under the same deadline — a caught
+                                   // SIGWINCH must not abort a page load — so the predicate
+                                   // is the only way to say "stop"; that is why it exists.)
     OS64_FETCH_NO_MEMORY,
 } os64_fetch_status_t;
 
@@ -197,7 +200,8 @@ typedef struct {
     // Fires on EVERY hop, followed or not, with the facts worked out. NULL =
     // the default verdict throughout.
     os64_fetch_verdict_t (*on_hop)(void *ctx, const os64_fetch_hop_t *hop);
-    // Asked before every wait and after every interrupted one. NULL = never.
+    // Asked before every wait and after every interrupted one; a yes ends
+    // the fetch as INTERRUPTED. NULL = never (interrupted waits are retried).
     bool (*cancelled)(void *ctx);
     void *ctx;
 } os64_fetch_options_t;
