@@ -203,7 +203,9 @@ void url_io_close(url_io_t *io, bool normal)
 void url_io_report(const url_io_t *io)
 {
     if (io->encrypted && !live(io->error.status) && io->error.status != OS64_TLS_CLEAN_EOF)
-        os64_hprintf(OS64_STDERR, "os64get: TLS %s (policy %u, engine %d)\n",
+        os64_hprintf(OS64_STDERR, "os64get: TLS %s: %s (policy %u, engine %d)\n",
                      os64_tls_status_name(io->error.status),
+                     os64_tls_error_description(io->error.status, io->error.policy_reason,
+                                                io->error.upstream_error),
                      (unsigned)io->error.policy_reason, io->error.upstream_error);
 }

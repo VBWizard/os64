@@ -64,3 +64,17 @@ Both support the foundation archive reuse and sanitizer options documented
 in the foundation README. `tools/test_tls_engine_host.py` and
 `tools/test_tls_store_host.py` cover the shared value types through the
 existing engine and store regression suites.
+
+## Error display
+
+`os64_tls_error_description(status, policy_reason, upstream_error)` translates
+one state snapshot into static, allocation-free display text. It prioritizes a
+local certificate-policy refusal, otherwise explains recognized upstream
+certificate failures and received fatal alerts. Alert names follow
+[RFC 5246 appendix A.3](https://www.rfc-editor.org/rfc/rfc5246.html#appendix-A.3)
+and the pinned engine's extension alerts. Unknown diagnostics retain a bounded
+generic description. The wording is not a machine-readable ABI; applications
+keep using the status and policy enums for control flow. `os64get` prints this
+explanation alongside its existing numeric detail. A `protocol_version` alert
+means the peer rejected the offered version; it does not by itself establish
+which other versions the peer supports.

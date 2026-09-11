@@ -96,6 +96,11 @@ OS64_TLS_API os64_tls_status_t os64_tls_begin_close(os64_tls_client *client);
 OS64_TLS_API os64_tls_status_t os64_tls_input_eof(os64_tls_client *client);
 OS64_TLS_API os64_tls_status_t os64_tls_abort(os64_tls_client *client, os64_tls_status_t reason);
 OS64_TLS_API const char *os64_tls_status_name(os64_tls_status_t status);
+// Static diagnostic text; no allocation or peer-provided strings. Pass the
+// status, policy_reason and opaque upstream_error from the same state snapshot.
+// Wording is for display, not a machine-readable error classification.
+OS64_TLS_API const char *os64_tls_error_description(os64_tls_status_t status,
+                                                  os64_tls_policy_reason_t policy_reason, int upstream_error);
 OS64_TLS_API const char *os64_tls_license(void);
 
 // A builder has one serialized owner. Failed additions leave existing anchors

@@ -66,6 +66,8 @@ separate from the terminal status and upstream error and exposes no peer text.
 When that callback reports `TLS_POLICY_LIMIT`, terminal error classification
 returns `TLS_LIMIT` even if BearSSL reports an incomplete or invalid certificate.
 The upstream error remains available in state.
+`os64_tls_error_description` translates a public state snapshot into static
+display text, including certificate-policy reasons and named peer alerts.
 
 Close stops new plaintext writes, flushes accepted output, and waits for the
 caller to drain already buffered authenticated input before invoking upstream
