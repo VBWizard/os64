@@ -371,7 +371,10 @@ bool os64_url_absolute(const os64_url_t *base, const char *location,
     // inherited; the authority comes from the reference. (RFC 3986 §4.2, and
     // Codex review round 2, 2026-09-02.)
     if (location[0] == '/' && location[1] == '/') {
-        char whole[OS64_URL_REF_MAX];
+        // Room for the scheme, its colon, the whole reference and the NUL: a
+        // reference near the cap would otherwise be refused for not fitting a
+        // scratch buffer, when its resolved form fits `out` (Codex, PR #92).
+        char whole[OS64_URL_SCHEME_MAX + 1 + OS64_URL_REF_MAX];
         int32_t n = os64_snprintf(whole, sizeof(whole), "%s:%s", base->scheme, location);
         if (n <= 0 || (size_t)n >= sizeof(whole))
             return false;

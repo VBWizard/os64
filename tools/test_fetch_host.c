@@ -966,6 +966,48 @@ static void case_round4(void)
     os64_fetch_close(f);
 }
 
+// Codex round 5 on PR #92.
+static void case_round5(void)
+{
+    // Proxy-Authorization is the PROXY's: never on a direct request, kept
+    // across a cross-origin hop the same proxy carries.
+    const char *creds = "Proxy-Authorization: Basic cDpw\r\nCookie: c=1\r\nX-Keep: yes\r\n";
+    os64_fetch_options_t o = { .extra_headers = creds };
+    reset();
+    peer_add("direct.test", 80, reply_len("200 OK", "", page));
+    os64_fetch_t *f = os64_fetch_open("http://direct.test/", &o);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK);
+    CHECK(strstr(request_n(0), "Proxy-Authorization:") == NULL && strstr(request_n(0), "Cookie: c=1\r\n") != NULL);
+    os64_fetch_close(f);
+    reset();
+    set_env("http_proxy", "http://proxy.test:3128/");
+    peer_add("proxy.test", 3128, reply("HTTP/1.1 302 Found\r\nLocation: http://other.test/\r\nContent-Length: 0\r\n", ""));
+    f = os64_fetch_open("http://first.test/", &o);
+    // Both hops go through the same proxy; its second answer points at itself, which ends it.
+    CHECK(os64_fetch_status(f) == OS64_FETCH_REDIRECT_STOPPED && dials == 2);
+    CHECK(strstr(request_n(0), "Proxy-Authorization: Basic cDpw\r\n") != NULL && strstr(request_n(0), "Cookie: c=1\r\n") != NULL);
+    CHECK(strstr(request_n(1), "Proxy-Authorization: Basic cDpw\r\n") != NULL);   // the proxy still carries it
+    CHECK(strstr(request_n(1), "Cookie:") == NULL);                                 // the origin changed
+    os64_fetch_close(f);
+    // A no_proxy match makes the first hop direct: the proxy credential stays home.
+    reset();
+    set_env("http_proxy", "http://proxy.test:3128/");
+    set_env("no_proxy", "direct.test");
+    peer_add("direct.test", 80, reply_len("200 OK", "", page));
+    f = os64_fetch_open("http://direct.test/", &o);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strstr(request_n(0), "Proxy-Authorization:") == NULL);
+    os64_fetch_close(f);
+
+    // A scheme-relative reference near the cap, whose dot segments reduce to
+    // something short, resolves: the scratch buffer has room for the scheme.
+    os64_url_t base = { .scheme = "http", .host = "b.test", .path = "/" };
+    static char ref[OS64_URL_REF_MAX];
+    size_t n = (size_t)snprintf(ref, sizeof(ref), "//h/");
+    while (n + 5 < OS64_URL_REF_MAX - 1) n += (size_t)snprintf(ref + n, sizeof(ref) - n, "a/../");
+    char whole[OS64_URL_REF_MAX + 32];
+    CHECK(os64_url_absolute(&base, ref, whole, sizeof(whole)) && strcmp(whole, "http://h/") == 0);
+}
+
 int main(int argc, char **argv)
 {
     unsigned seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 12345u;
@@ -984,6 +1026,7 @@ int main(int argc, char **argv)
     case_round1();
     case_round2();
     case_round4();
+    case_round5();
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }

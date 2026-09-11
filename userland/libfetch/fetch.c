@@ -43,6 +43,7 @@ struct os64_fetch {
     http_url_t        current;      // the address being asked
     http_url_t        origin;       // the address the caller typed: what its credentials are FOR
     fetch_proxy_t     proxy;        // who is carrying it
+    fetch_proxy_t     origin_proxy; // who was chosen to carry the typed address: what a proxy credential is FOR
 
     os64_fetch_head_t     head;
     os64_fetch_progress_t progress;
@@ -265,48 +266,54 @@ static bool hop_followed(os64_fetch_t *f, os64_fetch_hop_t *hop, fetch_proxy_t *
     }
 }
 
-// A CREDENTIAL IS FOR THE ORIGIN THE CALLER TYPED, NOT FOR WHOEVER A
-// REDIRECT NAMES. `Cookie`, `Authorization` and `Proxy-Authorization` in
-// extra_headers are sent to the typed origin and to any hop that stays on
-// it (same scheme, host and port); a hop that leaves it gets the block
-// with those fields removed, which is curl's rule and the Fetch standard's
-// for Authorization. Without it a 302 from an attacker's page on the
-// origin — or an origin that has simply been taken over — would collect
-// the caller's session. Everything else in the block (Referer, Range,
-// Accept-Language) is not origin-bound and rides along. (Codex, PR #92
-// rd4.) The block is already validated line by line, so the walk below
-// can trust its shape.
-static bool origin_bound(const char *line, size_t nameLen)
+// A CREDENTIAL IS FOR WHOEVER IT WAS GIVEN FOR, NOT FOR WHOEVER A REDIRECT
+// NAMES — and extra_headers can carry two kinds. `Cookie` and
+// `Authorization` are the ORIGIN's: sent to the typed origin and to any
+// hop that stays on it (same scheme, host and port), stripped from a hop
+// that leaves it — curl's rule and the Fetch standard's for Authorization.
+// `Proxy-Authorization` is the PROXY's: sent on any hop the proxy chosen
+// for the typed address carries, whatever the origin, and never on a
+// direct request, where it would hand the proxy's credential to the
+// destination. Without the first rule a 302 off the origin would collect
+// the caller's session; without the second a `no_proxy` match would leak
+// the proxy password to the site. Everything else in the block (Referer,
+// Range, Accept-Language) is nobody's credential and rides along. (Codex,
+// PR #92 rd4 and rd5.) The block is already validated line by line, so
+// the walk below can trust its shape.
+typedef enum { HEADER_FREE, HEADER_ORIGINS, HEADER_PROXYS } header_owner_t;
+
+static bool name_is(const char *line, size_t nameLen, const char *want)
 {
-    static const char *const bound[] = { "cookie", "authorization", "proxy-authorization" };
-    for (size_t i = 0; i < sizeof(bound) / sizeof(bound[0]); i++) {
-        size_t n = os64_strlen(bound[i]);
-        if (n != nameLen)
-            continue;
-        size_t k = 0;
-        while (k < n) {
-            char c = line[k];
-            if (c >= 'A' && c <= 'Z')
-                c = (char)(c + ('a' - 'A'));
-            if (c != bound[i][k])
-                break;
-            k++;
-        }
-        if (k == n)
-            return true;
+    if (os64_strlen(want) != nameLen)
+        return false;
+    for (size_t k = 0; k < nameLen; k++) {
+        char c = line[k];
+        if (c >= 'A' && c <= 'Z')
+            c = (char)(c + ('a' - 'A'));
+        if (c != want[k])
+            return false;
     }
-    return false;
+    return true;
 }
 
-static void extras_for_origin(const os64_fetch_t *f, char *out, size_t cap)
+static header_owner_t header_owner(const char *line, size_t nameLen)
+{
+    if (name_is(line, nameLen, "cookie") || name_is(line, nameLen, "authorization"))
+        return HEADER_ORIGINS;
+    if (name_is(line, nameLen, "proxy-authorization"))
+        return HEADER_PROXYS;
+    return HEADER_FREE;
+}
+
+static void extras_for_hop(const os64_fetch_t *f, char *out, size_t cap)
 {
     out[0] = '\0';
     if (f->extra[0] == '\0')
         return;
-    if (same_address_origin(&f->origin, &f->current)) {
-        os64_strcopy(out, cap, f->extra);
-        return;
-    }
+    bool originOk = same_address_origin(&f->origin, &f->current);
+    bool proxyOk  = f->proxy.inUse && f->origin_proxy.inUse &&
+                    f->proxy.port == f->origin_proxy.port &&
+                    os64_streq(f->proxy.host, f->origin_proxy.host);
     size_t used = 0;
     const char *p = f->extra;
     while (*p != '\0') {
@@ -319,7 +326,11 @@ static void extras_for_origin(const os64_fetch_t *f, char *out, size_t cap)
             end++;
         end += 2;
         size_t len = (size_t)(end - line);
-        if (!origin_bound(line, (size_t)(colon - line)) && used + len < cap) {
+        header_owner_t owner = header_owner(line, (size_t)(colon - line));
+        bool keep = owner == HEADER_FREE ||
+                    (owner == HEADER_ORIGINS && originOk) ||
+                    (owner == HEADER_PROXYS && proxyOk);
+        if (keep && used + len < cap) {
             for (size_t i = 0; i < len; i++)
                 out[used + i] = line[i];
             used += len;
@@ -451,7 +462,7 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         // ── Ask ─────────────────────────────────────────────────────────
         char request[HTTP_LINE_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX + OS64_FETCH_EXTRA_MAX];
         char extraForHop[OS64_FETCH_EXTRA_MAX];
-        extras_for_origin(f, extraForHop, sizeof(extraForHop));
+        extras_for_hop(f, extraForHop, sizeof(extraForHop));
         http_request_extras_t extras = {
             .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
             .accept        = f->accept[0] ? f->accept : NULL,
@@ -855,6 +866,7 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
         f->status = OS64_FETCH_PROXY_BAD;
         return f;
     }
+    f->origin_proxy = f->proxy;      // and who was chosen to carry it: what a proxy credential is for
 
     f->status = ask(f);
     if (f->have_head) {

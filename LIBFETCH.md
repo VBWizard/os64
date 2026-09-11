@@ -157,12 +157,15 @@ typedef struct {
   the request-splitting shape, `is_field_byte` in http.c) is applied to
   all three and refuses by name, because a header the caller composes
   from page content is a header an attacker composes. **And a credential
-  is for the origin it was given for:** `Cookie`, `Authorization` and
-  `Proxy-Authorization` go to the typed origin and to hops that stay on
-  it (same scheme, host and port); a hop that leaves it gets the block
-  without them. curl's rule, and the Fetch standard's for Authorization
-  — without it, a redirect off the origin would hand the caller's session
-  to whoever the redirect names.
+  is for whoever it was given for.** `Cookie` and `Authorization` are the
+  origin's: they go to the typed origin and to hops that stay on it (same
+  scheme, host and port), and a hop that leaves it gets the block without
+  them — curl's rule, and the Fetch standard's for Authorization; without
+  it a redirect off the origin would hand the caller's session to whoever
+  the redirect names. `Proxy-Authorization` is the proxy's: it goes on
+  every hop the proxy chosen for the typed address carries, whatever the
+  origin, and never on a direct request — without that, a `no_proxy`
+  match would hand the proxy's password to the site.
 - **`on_hop` is the caller's say over redirects, and it fires on EVERY
   hop**, followed or not. The library does the arithmetic first — resolves
   the `Location` against the current address, parses it, and fills the
