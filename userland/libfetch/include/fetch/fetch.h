@@ -220,7 +220,9 @@ const os64_fetch_head_t *os64_fetch_head(const os64_fetch_t *f);
 // A close-framed body cannot tell ENDED from stopped and reports OK. Once
 // it has answered 0 or < 0 it answers the same thing again. Never hands
 // back a byte past max_body: the cap is refused BEFORE the byte that
-// would cross it is produced.
+// would cross it is produced. A zero `cap` is the one exception to "< 0
+// is final": it is refused with -1 and nothing changes — status, state,
+// the next read — because 0 would have read as a body that ended whole.
 int64_t os64_fetch_read(os64_fetch_t *f, void *buf, size_t cap);
 
 const os64_fetch_progress_t *os64_fetch_progress(const os64_fetch_t *f);

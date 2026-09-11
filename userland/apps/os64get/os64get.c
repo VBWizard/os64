@@ -1455,33 +1455,43 @@ static int fetch_url(const http_url_t *url, const char *urlText,
     uint64_t lastTick = 0;
     int status = GET_OK;
 
-    for (;;)
+    // FILL THE BUFFER BEFORE WRITING IT, for the disk's sake: a read answers
+    // with what has ARRIVED — a segment, or a scheduler pass's worth — and
+    // writing each of those hands ext2 a block or two at a time. Progress
+    // ticks from INSIDE the fill, every 4KB of arrival, so a slow link reads
+    // as slow rather than as hung. (The first libfetch draft wrote each
+    // read as it came and lost this — Codex, PR #92.)
+    bool over = false;
+    while (!over)
     {
-        int64_t n = os64_fetch_read(f, buf, GET_CHUNK);
-        if (n <= 0)
-            break;
-        if (os64_write((int32_t)out, buf, (size_t)n) != n)
+        size_t filled = 0;
+        while (filled < GET_CHUNK)
+        {
+            int64_t n = os64_fetch_read(f, buf + filled, GET_CHUNK - filled);
+            if (n <= 0) { over = true; break; }
+            filled += (size_t)n;
+
+            // The meter counts ARRIVAL, which for gzip is the wire's bytes
+            // even though the file being staged grows faster.
+            if (!quiet && (progress->wire / 4096 != lastTick ||
+                           (head->has_length && progress->wire == head->length)))
+            {
+                lastTick = progress->wire / 4096;
+                if (head->has_length)
+                    os64_printf("\r%s: %lu/%lu%s bytes", name,
+                                (unsigned long)progress->wire, (unsigned long)head->length, unit);
+                else
+                    os64_printf("\r%s: %lu%s bytes", name, (unsigned long)progress->wire, unit);
+            }
+        }
+        if (filled != 0 && os64_write((int32_t)out, buf, filled) != (int64_t)filled)
         {
             os64_hprintf(OS64_STDERR, "os64get: write to %s failed (disk full?)\n", partPath);
             status = GET_WRITE_FAILED;
             break;
         }
-        crc = os64_crc32_update(crc, buf, (size_t)n);
-        produced += (uint64_t)n;
-
-        // The meter counts ARRIVAL, which for gzip is the wire's bytes even
-        // though the file being staged grows faster, and ticks every 4KB of
-        // it so a slow link reads as slow rather than as hung.
-        if (!quiet && (progress->wire / 4096 != lastTick ||
-                       (head->has_length && progress->wire == head->length)))
-        {
-            lastTick = progress->wire / 4096;
-            if (head->has_length)
-                os64_printf("\r%s: %lu/%lu%s bytes", name,
-                            (unsigned long)progress->wire, (unsigned long)head->length, unit);
-            else
-                os64_printf("\r%s: %lu%s bytes", name, (unsigned long)progress->wire, unit);
-        }
+        crc = os64_crc32_update(crc, buf, filled);
+        produced += filled;
     }
     if (!quiet)
     {

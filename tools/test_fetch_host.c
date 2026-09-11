@@ -782,6 +782,76 @@ static void case_content_type(void)
     }
 }
 
+// Codex round 1 on PR #92: one case per finding, each of which failed
+// against the first push.
+static void case_round1(void)
+{
+    // A header string may not smuggle a request: an empty line, a line with
+    // no colon, a name that is not a token — refused before any dial.
+    const char *bad[] = { "\r\nGET /admin HTTP/1.1\r\n", "NoColon\r\n", "X A: 1\r\n", ": empty\r\n" };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        reset();
+        os64_fetch_options_t o = { .extra_headers = bad[i] };
+        os64_fetch_t *f = os64_fetch_open("http://x.test/", &o);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_REQUEST_FAILED && dials == 0);
+        os64_fetch_close(f);
+    }
+    reset();
+    peer_add("x.test", 80, reply_len("200 OK", "", page));
+    os64_fetch_options_t good = { .extra_headers = "X-A: 1\r\nX-B: two words\r\n" };
+    os64_fetch_t *f = os64_fetch_open("http://x.test/", &good);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strstr(request_of(0), "X-A: 1\r\nX-B: two words\r\n"));
+    os64_fetch_close(f);
+
+    // A sub-second idle budget is a budget, not a zero: a prompt peer is
+    // fine, a silent one is SILENT after about that long.
+    reset();
+    peer_add("q.test", 80, reply_len("200 OK", "", page));
+    os64_fetch_options_t quick = { .idle_ms = 500 };
+    f = os64_fetch_open("http://q.test/", &quick);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK);
+    uint8_t out[4096];
+    CHECK(slurp(f, out, sizeof(out), 0) == strlen(page) && os64_fetch_status(f) == OS64_FETCH_OK);
+    os64_fetch_close(f);
+    reset();
+    peer_t *p = peer_add("q.test", 80, reply_len("200 OK", "", page)); p->silent = true;
+    f = os64_fetch_open("http://q.test/", &quick);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_SILENT && now_ms >= 500 && now_ms < 2000);
+    os64_fetch_close(f);
+
+    // A zero-capacity read is refused and changes nothing.
+    reset();
+    peer_add("z.test", 80, reply_len("200 OK", "", page));
+    f = os64_fetch_open("http://z.test/", NULL);
+    CHECK(os64_fetch_read(f, out, 0) == -1 && os64_fetch_status(f) == OS64_FETCH_OK);
+    CHECK(slurp(f, out, sizeof(out), 0) == strlen(page) && os64_fetch_status(f) == OS64_FETCH_OK);
+    os64_fetch_close(f);
+
+    // A downgrade the caller allowed, whose target's proxy setting is
+    // unusable: the hop that stops the fetch says PROXY, not DOWNGRADE.
+    reset();
+    set_env("http_proxy", "https://proxy.test/");
+    peer_add("secure.test", 443, reply("HTTP/1.1 302 Found\r\nLocation: http://plain.test/\r\nContent-Length: 0\r\n", ""));
+    hops_t hops = { .answer = OS64_FETCH_HOP_FOLLOW };
+    os64_fetch_options_t opt = { .on_hop = record_hop, .ctx = &hops };
+    f = os64_fetch_open("https://secure.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_REDIRECT_STOPPED);
+    CHECK(os64_fetch_detail(f)->hop.kind == OS64_FETCH_HOP_PROXY);
+    CHECK(strstr(os64_fetch_reason(f), "$http_proxy") != NULL && dials == 1);
+    os64_fetch_close(f);
+
+    // A cancellation that lands while the trust store is loading must not
+    // leak the store: the predicate's second call (after the load) says yes.
+    reset(); cancel_now = false; cancel_after_calls = 2;
+    peer_add("secure.test", 443, reply_len("200 OK", "", page));
+    os64_fetch_options_t cancel = { .cancelled = cancelled_cb };
+    f = os64_fetch_open("https://secure.test/", &cancel);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_INTERRUPTED && trust_loads == 1);
+    os64_fetch_close(f);
+    CHECK(trust_frees == 1);
+    cancel_now = false; cancel_after_calls = 0;
+}
+
 int main(int argc, char **argv)
 {
     unsigned seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 12345u;
@@ -797,6 +867,7 @@ int main(int argc, char **argv)
     case_proxy();
     case_failures();
     case_content_type();
+    case_round1();
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }

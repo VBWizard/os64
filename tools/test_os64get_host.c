@@ -346,7 +346,7 @@ const char *os64_tls_status_name(os64_tls_status_t s) { (void)s; return "fixture
 os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t h,
     const os64_tls_transport_limits_t *limits, os64_tls_transport **out)
 {
-    assert(!limits && c->trust == &host_trust && c->alpn_count == 1);
+    assert(limits && limits->handshake_ms == FETCH_IDLE_MS_DEFAULT && c->trust == &host_trust && c->alpn_count == 1);
     const char *hostname = is("url-tls-ip") ? "10.0.2.2" :
         is("url-tls-name") ? "bad_name" :
         is("url-tls-other") && tls_created ? "other" : "host";

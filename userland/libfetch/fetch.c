@@ -216,7 +216,12 @@ static void hop_read(os64_fetch_t *f, os64_fetch_hop_t *hop, http_url_t *target,
 // The caller's verdict, or the policy's. A FOLLOW where there is nothing to
 // follow is a STOP (fetch.h says so), and a DOWNGRADE or SELF the caller
 // did not explicitly allow stops too.
-static bool hop_followed(os64_fetch_t *f, const os64_fetch_hop_t *hop, fetch_proxy_t *carrier)
+// The hop is the caller's to see and, past the verdict, the library's to
+// amend: a DOWNGRADE the caller allowed can still turn out to have no road
+// (a bad proxy setting for the target), and the hop that ends the fetch
+// must then SAY so rather than read as "your FOLLOW was not honoured"
+// (Codex, PR #92).
+static bool hop_followed(os64_fetch_t *f, os64_fetch_hop_t *hop, fetch_proxy_t *carrier)
 {
     os64_fetch_verdict_t verdict = OS64_FETCH_HOP_DEFAULT;
     if (f->opt.on_hop != NULL)
@@ -235,11 +240,16 @@ static bool hop_followed(os64_fetch_t *f, const os64_fetch_hop_t *hop, fetch_pro
             carrier->inUse = false;
             if (!f->opt.no_proxy) {
                 http_url_t target;
-                if (http_url_parse(hop->whole, &target) != HTTP_URL_OK)
+                if (http_url_parse(hop->whole, &target) != HTTP_URL_OK) {
+                    hop->kind = OS64_FETCH_HOP_UNUSABLE;   // cannot happen: hop_read parsed it
                     return false;
-                char why[OS64_FETCH_WHY_MAX];
-                if (!fetch_proxy_for(&target, carrier, why, sizeof(why)))
+                }
+                if (!fetch_proxy_for(&target, carrier, hop->why, sizeof(hop->why))) {
+                    hop->kind = OS64_FETCH_HOP_PROXY;
                     return false;
+                }
+                proxy_facts(carrier, &hop->via_proxy, hop->proxy_host,
+                            sizeof(hop->proxy_host), &hop->proxy_port);
             }
             return true;
         default:
@@ -305,6 +315,11 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         if (encrypted && f->trust == NULL) {
             os64_tls_store_status_t loaded =
                 os64_tls_trust_reload(&f->trust, &f->detail.store_report);
+            // Ownership is recorded the instant the load succeeds, BEFORE
+            // anything can return: a cancellation that lands during the
+            // load would otherwise leave a store nobody frees (Codex, #92).
+            if (loaded == OS64_TLS_STORE_OK)
+                f->trust_owned = true;
             if (cancelled(f))
                 return OS64_FETCH_INTERRUPTED;
             if (loaded != OS64_TLS_STORE_OK) {
@@ -312,7 +327,6 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
                 f->detail.store = loaded;
                 return OS64_FETCH_TLS_FAILED;
             }
-            f->trust_owned = true;
         }
 
         // ── Dial: the proxy if there is one, the origin if not ──────────
@@ -421,8 +435,9 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         http_url_t target;
         fetch_proxy_t carrier = {0};
         hop_read(f, &hop, &target, &carrier);
-        f->detail.hop = hop;
-        if (!hop_followed(f, &hop, &carrier))
+        bool followed = hop_followed(f, &hop, &carrier);
+        f->detail.hop = hop;                        // AFTER the verdict: it may have amended the kind
+        if (!followed)
             return OS64_FETCH_REDIRECT_STOPPED;     // the head stays readable
         if (hop.number > f->opt.max_hops)
             return OS64_FETCH_TOO_MANY_HOPS;        // so does this one
@@ -537,7 +552,10 @@ static int64_t framing_ended(os64_fetch_t *f, int64_t n)
             return finish(f, OS64_FETCH_BROKE, -1);
         default:
             // The server's chunk framing stopped being HTTP: "that was not
-            // speech", the same verdict a broken head earns.
+            // speech", the same verdict a broken head earns. The transport's
+            // verdict is snapshotted too: an authenticated prefix can arrive
+            // beside a terminal TLS status, and the reason's tail names it.
+            tls_snapshot(f);
             return finish(f, OS64_FETCH_BAD_HEAD, -1);
     }
 }
@@ -771,8 +789,11 @@ int64_t os64_fetch_read(os64_fetch_t *f, void *buf, size_t cap)
         return f->final_answer;
     if (!f->have_head || !f->connected)
         return finish(f, f->status == OS64_FETCH_OK ? OS64_FETCH_BROKE : f->status, -1);
+    // A zero-capacity read is a caller's mistake, refused without touching
+    // anything: answering 0 would read as "the body ended whole" to the
+    // loop that made it (Codex, PR #92). fetch.h says so.
     if (cap == 0)
-        return 0;
+        return -1;
     if (cancelled(f))
         return finish(f, OS64_FETCH_INTERRUPTED, -1);
     return f->gzip ? read_gzip(f, (uint8_t *)buf, cap)

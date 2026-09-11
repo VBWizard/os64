@@ -53,7 +53,9 @@ static uint64_t patience(fetch_transport_t *io, budget_t *budget)
     }
     budget->last = now.ticks;
     uint64_t elapsed = now.ticks - budget->start;
-    uint64_t limit = (uint64_t)budget->rate * (io->idle_ms / 1000u);
+    // Milliseconds to ticks, rounded UP: a budget under a second must not
+    // become zero and time out before the first read (Codex, PR #92).
+    uint64_t limit = ((uint64_t)budget->rate * io->idle_ms + 999u) / 1000u;
     if (elapsed >= limit) {
         remember(io, OS64_TLS_TIMEOUT); return 0;
     }
@@ -69,17 +71,27 @@ bool fetch_transport_open(fetch_transport_t *io, int32_t handle,
                               .cancelled = cancel_fn, .cancel_ctx = cancel_ctx};
     if (cancelled(io)) goto fail;
     if (!config) return true;
-    os64_tls_status_t status = os64_tls_transport_create(config, handle, NULL, &io->tls);
+    // The handshake runs under the SAME idle budget as every other wait:
+    // the transport's own deadline is told the number too, so a peer that
+    // accepts the connection and says nothing costs `idle_ms`, not the
+    // transport's default (Codex, PR #92).
+    const os64_tls_transport_limits_t limits = {
+        .handshake_ms = io->idle_ms, .shutdown_ms = OS64_TLS_TRANSPORT_SHUTDOWN_MS
+    };
+    os64_tls_status_t status = os64_tls_transport_create(config, handle, &limits, &io->tls);
     remember(io, status);
     if (status != OS64_TLS_OK) goto fail;
     io->handle = -1; // The transport adopted the handle.
+    budget_t budget;
+    if (!start_budget(io, &budget)) goto fail;
     for (;;) {
-        if (cancelled(io)) goto fail;
+        uint64_t wait = patience(io, &budget);
+        if (!wait) goto fail;
         os64_tls_state_t state = os64_tls_transport_state(io->tls);
         remember(io, state.status);
         if (!live(state.status)) goto fail;
         if (state.flags & OS64_TLS_HANDSHAKE_DONE) return true;
-        remember(io, os64_tls_transport_step(io->tls, io->idle_ms));
+        remember(io, os64_tls_transport_step(io->tls, wait));
         if (!live(io->error.status)) goto fail;
     }
 fail:

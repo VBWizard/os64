@@ -185,18 +185,35 @@ static bool extras_clean(const char *text, bool whole_lines)
 {
     if (text == NULL)
         return true;
-    for (const char *p = text; *p != '\0'; p++) {
-        if (whole_lines && p[0] == '\r' && p[1] == '\n') {
-            p++;
-            continue;
-        }
-        if (!is_field_byte(*p))
-            return false;
+    if (!whole_lines) {
+        for (const char *p = text; *p != '\0'; p++)
+            if (!is_field_byte(*p))
+                return false;
+        return true;
     }
-    if (whole_lines && text[0] != '\0') {
-        size_t n = os64_strlen(text);
-        if (n < 2 || text[n - 2] != '\r' || text[n - 1] != '\n')
-            return false;         // a last line with no ending would swallow the blank line
+    // Whole lines: each one is a FIELD — a token name, a colon, field bytes,
+    // CR LF — and nothing else is a line. An empty line is the head's
+    // terminator, so "\r\nGET /admin HTTP/1.1\r\n" would end the request
+    // and start a second one (Codex, PR #92); a line with no colon or a
+    // name that is not a token would be refused by any server and hides
+    // the same shape. Judged by the same is_token_byte / is_field_byte the
+    // reply parser judges the server by.
+    const char *p = text;
+    while (*p != '\0') {
+        const char *name = p;
+        while (is_token_byte(*p))
+            p++;
+        if (p == name || *p != ':')
+            return false;
+        p++;
+        while (*p != '\0' && *p != '\r' && *p != '\n') {
+            if (!is_field_byte(*p))
+                return false;
+            p++;
+        }
+        if (p[0] != '\r' || p[1] != '\n')
+            return false;         // a bare CR or LF, or a last line with no ending
+        p += 2;
     }
     return true;
 }

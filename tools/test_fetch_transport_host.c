@@ -40,7 +40,7 @@ int64_t os64_read_for(int32_t h,void *p,size_t n,uint64_t ms)
 }
 os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c,int32_t h,
     const os64_tls_transport_limits_t *limits,os64_tls_transport **out)
-{ assert(c && h==7 && !limits);*out=create_fail?NULL:&transport;return create_fail?OS64_TLS_CERTIFICATE:OS64_TLS_OK; }
+{ assert(c && h==7 && limits && limits->handshake_ms==FETCH_IDLE_MS_DEFAULT && limits->shutdown_ms==OS64_TLS_TRANSPORT_SHUTDOWN_MS);*out=create_fail?NULL:&transport;return create_fail?OS64_TLS_CERTIFICATE:OS64_TLS_OK; }
 os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
 { return (os64_tls_state_t){.status=t->status,.flags=t->flags,.policy_reason=6,.upstream_error=54,.alpn="http/1.1"}; }
 os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t,uint64_t ms)
