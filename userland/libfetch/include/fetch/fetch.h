@@ -188,7 +188,12 @@ typedef struct {
     // is judged by http.h's field-byte rule and a bad one is REQUEST_FAILED.
     const char *user_agent;
     const char *accept;
-    const char *extra_headers;     // "Name: value\r\n" lines, already terminated
+    const char *extra_headers;     // "Name: value\r\n" lines, already terminated. Cookie,
+                                   // Authorization and Proxy-Authorization are sent to the
+                                   // TYPED origin and to hops that stay on it (scheme, host,
+                                   // port); a hop that leaves it gets the rest of the block
+                                   // without them — a credential is for the origin it was
+                                   // given for, never for whoever a redirect names.
     // The trust store, for https. Caller-owned when given and never freed
     // here. NULL = the library loads the store on the first https hop and
     // frees it at close (the "trust once per invocation" rule of #89).

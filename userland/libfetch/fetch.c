@@ -41,6 +41,7 @@ struct os64_fetch {
     http_response_t   reply;
     http_body_t       body;
     http_url_t        current;      // the address being asked
+    http_url_t        origin;       // the address the caller typed: what its credentials are FOR
     fetch_proxy_t     proxy;        // who is carrying it
 
     os64_fetch_head_t     head;
@@ -90,12 +91,17 @@ static void proxy_facts(const fetch_proxy_t *p, bool *via, char *host, size_t ca
     }
 }
 
-static bool same_address(const http_url_t *a, const http_url_t *b)
+// The same ORIGIN: scheme, host and port — the web's unit of trust.
+static bool same_address_origin(const http_url_t *a, const http_url_t *b)
 {
     return a->port == b->port &&
            os64_streq(a->scheme, b->scheme) &&
-           os64_streq(a->host, b->host) &&
-           os64_streq(a->path, b->path);
+           os64_streq(a->host, b->host);
+}
+
+static bool same_address(const http_url_t *a, const http_url_t *b)
+{
+    return same_address_origin(a, b) && os64_streq(a->path, b->path);
 }
 
 // 301/302 and 307/308 differ only in what a client may do to the METHOD:
@@ -259,6 +265,70 @@ static bool hop_followed(os64_fetch_t *f, os64_fetch_hop_t *hop, fetch_proxy_t *
     }
 }
 
+// A CREDENTIAL IS FOR THE ORIGIN THE CALLER TYPED, NOT FOR WHOEVER A
+// REDIRECT NAMES. `Cookie`, `Authorization` and `Proxy-Authorization` in
+// extra_headers are sent to the typed origin and to any hop that stays on
+// it (same scheme, host and port); a hop that leaves it gets the block
+// with those fields removed, which is curl's rule and the Fetch standard's
+// for Authorization. Without it a 302 from an attacker's page on the
+// origin — or an origin that has simply been taken over — would collect
+// the caller's session. Everything else in the block (Referer, Range,
+// Accept-Language) is not origin-bound and rides along. (Codex, PR #92
+// rd4.) The block is already validated line by line, so the walk below
+// can trust its shape.
+static bool origin_bound(const char *line, size_t nameLen)
+{
+    static const char *const bound[] = { "cookie", "authorization", "proxy-authorization" };
+    for (size_t i = 0; i < sizeof(bound) / sizeof(bound[0]); i++) {
+        size_t n = os64_strlen(bound[i]);
+        if (n != nameLen)
+            continue;
+        size_t k = 0;
+        while (k < n) {
+            char c = line[k];
+            if (c >= 'A' && c <= 'Z')
+                c = (char)(c + ('a' - 'A'));
+            if (c != bound[i][k])
+                break;
+            k++;
+        }
+        if (k == n)
+            return true;
+    }
+    return false;
+}
+
+static void extras_for_origin(const os64_fetch_t *f, char *out, size_t cap)
+{
+    out[0] = '\0';
+    if (f->extra[0] == '\0')
+        return;
+    if (same_address_origin(&f->origin, &f->current)) {
+        os64_strcopy(out, cap, f->extra);
+        return;
+    }
+    size_t used = 0;
+    const char *p = f->extra;
+    while (*p != '\0') {
+        const char *line = p;
+        const char *colon = p;
+        while (*colon != ':')
+            colon++;
+        const char *end = colon;
+        while (!(end[0] == '\r' && end[1] == '\n'))
+            end++;
+        end += 2;
+        size_t len = (size_t)(end - line);
+        if (!origin_bound(line, (size_t)(colon - line)) && used + len < cap) {
+            for (size_t i = 0; i < len; i++)
+                out[used + i] = line[i];
+            used += len;
+            out[used] = '\0';
+        }
+        p = end;
+    }
+}
+
 // ── The head: dial, ask, read, and follow ───────────────────────────────
 
 static void head_fill(os64_fetch_t *f)
@@ -380,10 +450,12 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
 
         // ── Ask ─────────────────────────────────────────────────────────
         char request[HTTP_LINE_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX + OS64_FETCH_EXTRA_MAX];
+        char extraForHop[OS64_FETCH_EXTRA_MAX];
+        extras_for_origin(f, extraForHop, sizeof(extraForHop));
         http_request_extras_t extras = {
             .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
             .accept        = f->accept[0] ? f->accept : NULL,
-            .extra_headers = f->extra[0] ? f->extra : NULL,
+            .extra_headers = extraForHop[0] ? extraForHop : NULL,
         };
         if (!http_request(request, sizeof(request), &f->current, f->proxy.inUse, &extras)) {
             os64_strcopy(f->detail.why, sizeof(f->detail.why),
@@ -776,6 +848,8 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
         return f;
     }
 
+    f->origin = f->current;          // what the caller's credentials are for, whatever the hops do
+
     if (!f->opt.no_proxy &&
         !fetch_proxy_for(&f->current, &f->proxy, f->detail.why, sizeof(f->detail.why))) {
         f->status = OS64_FETCH_PROXY_BAD;
@@ -906,13 +980,23 @@ const char *os64_fetch_reason(os64_fetch_t *f)
                               d->unsupported);
             break;
         case OS64_FETCH_SILENT:
-            if (d->silent_after_body)
-                os64_snprintf(out, cap, "the server went silent for %u seconds after %lu bytes",
-                              f->io.idle_ms / 1000u, (unsigned long)f->progress.wire);
+        {
+            // The budget in the caller's own unit: whole seconds when it is
+            // whole seconds, milliseconds otherwise — "0 seconds" for a
+            // 500 ms budget was a false duration (Codex, PR #92 rd4).
+            char idle[32];
+            if (f->io.idle_ms % 1000u == 0)
+                os64_snprintf(idle, sizeof(idle), "%u seconds", f->io.idle_ms / 1000u);
             else
-                os64_snprintf(out, cap, "the server went silent for %u seconds before the reply was whole",
-                              f->io.idle_ms / 1000u);
+                os64_snprintf(idle, sizeof(idle), "%u ms", f->io.idle_ms);
+            if (d->silent_after_body)
+                os64_snprintf(out, cap, "the server went silent for %s after %lu bytes",
+                              idle, (unsigned long)f->progress.wire);
+            else
+                os64_snprintf(out, cap, "the server went silent for %s before the reply was whole",
+                              idle);
             break;
+        }
         case OS64_FETCH_REDIRECT_STOPPED:
             switch (d->hop.kind) {
                 case OS64_FETCH_HOP_WHOLE:

@@ -131,12 +131,24 @@ int64_t os64_dial(const char *dialstring)
     return -2;
 }
 const char *os64_dial_reason(int64_t err) { return err == -3 ? "connection refused" : "no such host"; }
+// Every request in the order it was sent, kept past its connection's close
+// (slots are reused hop to hop, so `conns[]` alone holds only the latest).
+static char history[16][8192];
 int64_t os64_close(int32_t h)
 {
     assert(h >= 100 && h < 116 && conns[h - 100].open);
     conns[h - 100].open = false;
+    if (closes < 16) memcpy(history[closes], conns[h - 100].request, sizeof(history[0]));
     closes++;
     return 0;
+}
+// The i-th request sent: a closed connection's from the history, the one
+// still open from its slot.
+static const char *request_n(int i)
+{
+    if (i < closes) return history[i];
+    for (int h = 0; h < 16; h++) if (conns[h].open) return conns[h].request;
+    return "";
 }
 static int64_t conn_read(conn_t *c, void *buf, size_t cap, uint64_t wait_ms, bool *timed_out)
 {
@@ -913,6 +925,47 @@ static void case_round2(void)
     os64_fetch_close(f);
 }
 
+// Codex round 4 on PR #92.
+static void case_round4(void)
+{
+    // A sub-second idle budget is named in its own unit, not as "0 seconds".
+    reset();
+    peer_t *p = peer_add("q.test", 80, reply_len("200 OK", "", page)); p->silent = true;
+    os64_fetch_options_t quick = { .idle_ms = 500 };
+    os64_fetch_t *f = os64_fetch_open("http://q.test/", &quick);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_SILENT && strstr(os64_fetch_reason(f), "500 ms") != NULL);
+    os64_fetch_close(f);
+
+    // Credentials follow a redirect that stays on the typed origin and stop
+    // at one that leaves it; the rest of the block rides along either way.
+    const char *creds = "Cookie: session=s3cret\r\nX-Keep: yes\r\nAuthorization: Bearer t\r\n";
+    reset();
+    peer_add("same.test", 80, reply("HTTP/1.1 302 Found\r\nLocation: /elsewhere\r\nContent-Length: 0\r\n", ""));
+    os64_fetch_options_t o = { .extra_headers = creds };
+    f = os64_fetch_open("http://same.test/start", &o);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK || os64_fetch_status(f) == OS64_FETCH_REDIRECT_STOPPED);
+    CHECK(dials >= 2);
+    CHECK(strstr(request_n(1), "Cookie: session=s3cret\r\n") && strstr(request_n(1), "Authorization: Bearer t\r\n"));
+    CHECK(strstr(request_n(1), "X-Keep: yes\r\n"));
+    os64_fetch_close(f);
+    reset();
+    peer_add("first.test", 80, reply("HTTP/1.1 302 Found\r\nLocation: http://other.test/\r\nContent-Length: 0\r\n", ""));
+    peer_add("other.test", 80, reply_len("200 OK", "", page));
+    f = os64_fetch_open("http://first.test/start", &o);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && dials == 2);
+    CHECK(strstr(request_n(0), "Cookie: session=s3cret\r\n") != NULL);          // the typed origin got it
+    CHECK(strstr(request_n(1), "Cookie:") == NULL && strstr(request_n(1), "Authorization:") == NULL);
+    CHECK(strstr(request_n(1), "X-Keep: yes\r\n") != NULL);
+    os64_fetch_close(f);
+    // A port change is a different origin too.
+    reset();
+    peer_add("first.test", 80, reply("HTTP/1.1 302 Found\r\nLocation: http://first.test:8080/\r\nContent-Length: 0\r\n", ""));
+    peer_add("first.test", 8080, reply_len("200 OK", "", page));
+    f = os64_fetch_open("http://first.test/start", &o);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strstr(request_n(1), "Cookie:") == NULL);
+    os64_fetch_close(f);
+}
+
 int main(int argc, char **argv)
 {
     unsigned seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 12345u;
@@ -930,6 +983,7 @@ int main(int argc, char **argv)
     case_content_type();
     case_round1();
     case_round2();
+    case_round4();
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }
