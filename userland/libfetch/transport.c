@@ -1,5 +1,4 @@
-#include "url_io.h"
-#include "install.h"
+#include "fetch/transport.h"
 #include "os64/os64.h"
 
 typedef struct {
@@ -12,7 +11,7 @@ static bool live(os64_tls_status_t status)
     return status == OS64_TLS_OK || status == OS64_TLS_NEED_PROGRESS;
 }
 
-static void remember(url_io_t *io, os64_tls_status_t status)
+static void remember(fetch_transport_t *io, os64_tls_status_t status)
 {
     if (!live(status) && live(io->error.status)) {
         if (io->tls) {
@@ -25,15 +24,15 @@ static void remember(url_io_t *io, os64_tls_status_t status)
     if (status == OS64_TLS_TIMEOUT) io->silent = true;
 }
 
-static bool cancelled(url_io_t *io)
+static bool cancelled(fetch_transport_t *io)
 {
-    if (!install_cancelled()) return false;
+    if (io->cancelled == NULL || !io->cancelled(io->cancel_ctx)) return false;
     if (io->tls) os64_tls_transport_abort(io->tls, OS64_TLS_CANCELLED);
     io->error.status = OS64_TLS_CANCELLED;
     return true;
 }
 
-static bool start_budget(url_io_t *io, budget_t *budget)
+static bool start_budget(fetch_transport_t *io, budget_t *budget)
 {
     os64_ticks_t now;
     if (os64_ticks(&now) < 0 || !now.per_second) {
@@ -45,7 +44,7 @@ static bool start_budget(url_io_t *io, budget_t *budget)
 
 // Fixed 30-second operations need no absolute tick addition (and therefore
 // no overflow near the end of the clock). Round remaining patience upward.
-static uint64_t patience(url_io_t *io, budget_t *budget)
+static uint64_t patience(fetch_transport_t *io, budget_t *budget)
 {
     os64_ticks_t now;
     if (cancelled(io)) return 0;
@@ -54,16 +53,20 @@ static uint64_t patience(url_io_t *io, budget_t *budget)
     }
     budget->last = now.ticks;
     uint64_t elapsed = now.ticks - budget->start;
-    uint64_t limit = (uint64_t)budget->rate * (URL_IDLE_MS / 1000u);
+    uint64_t limit = (uint64_t)budget->rate * (io->idle_ms / 1000u);
     if (elapsed >= limit) {
         remember(io, OS64_TLS_TIMEOUT); return 0;
     }
     return ((limit - elapsed) * 1000u + budget->rate - 1u) / budget->rate;
 }
 
-bool url_io_open(url_io_t *io, int32_t handle, const os64_tls_config_t *config)
+bool fetch_transport_open(fetch_transport_t *io, int32_t handle,
+                          const os64_tls_config_t *config, uint32_t idle_ms,
+                          bool (*cancel_fn)(void *ctx), void *cancel_ctx)
 {
-    *io = (url_io_t){.handle = handle, .encrypted = config != NULL};
+    *io = (fetch_transport_t){.handle = handle, .encrypted = config != NULL,
+                              .idle_ms = idle_ms ? idle_ms : FETCH_IDLE_MS_DEFAULT,
+                              .cancelled = cancel_fn, .cancel_ctx = cancel_ctx};
     if (cancelled(io)) goto fail;
     if (!config) return true;
     os64_tls_status_t status = os64_tls_transport_create(config, handle, NULL, &io->tls);
@@ -76,15 +79,15 @@ bool url_io_open(url_io_t *io, int32_t handle, const os64_tls_config_t *config)
         remember(io, state.status);
         if (!live(state.status)) goto fail;
         if (state.flags & OS64_TLS_HANDSHAKE_DONE) return true;
-        remember(io, os64_tls_transport_step(io->tls, URL_IDLE_MS));
+        remember(io, os64_tls_transport_step(io->tls, io->idle_ms));
         if (!live(io->error.status)) goto fail;
     }
 fail:
-    url_io_close(io, false);
+    fetch_transport_close(io, false);
     return false;
 }
 
-bool url_io_write(url_io_t *io, const void *data, size_t length)
+bool fetch_transport_write(fetch_transport_t *io, const void *data, size_t length)
 {
     budget_t budget;
     if (!start_budget(io, &budget)) return false;
@@ -129,9 +132,9 @@ bool url_io_write(url_io_t *io, const void *data, size_t length)
     }
 }
 
-int64_t url_io_read(void *context, void *data, size_t capacity)
+int64_t fetch_transport_read(void *context, void *data, size_t capacity)
 {
-    url_io_t *io = context;
+    fetch_transport_t *io = context;
     if (cancelled(io)) return OS64_INTERRUPTED;
     if (io->error.status == OS64_TLS_CLEAN_EOF) return 0;
     if (!live(io->error.status)) return -1;
@@ -164,7 +167,7 @@ int64_t url_io_read(void *context, void *data, size_t capacity)
     }
 }
 
-bool url_io_complete(url_io_t *io, bool independently_framed)
+bool fetch_transport_complete(fetch_transport_t *io, bool independently_framed)
 {
     if (cancelled(io)) return false;
     if (io->tls) remember(io, os64_tls_transport_state(io->tls).status);
@@ -175,7 +178,7 @@ bool url_io_complete(url_io_t *io, bool independently_framed)
     return live(status) || status == OS64_TLS_CLEAN_EOF;
 }
 
-void url_io_close(url_io_t *io, bool normal)
+void fetch_transport_close(fetch_transport_t *io, bool normal)
 {
     if (io->tls) {
         if (normal && !cancelled(io)) {
@@ -200,10 +203,7 @@ void url_io_close(url_io_t *io, bool normal)
     }
 }
 
-void url_io_report(const url_io_t *io)
+bool fetch_transport_tls_failed(const fetch_transport_t *io)
 {
-    if (io->encrypted && !live(io->error.status) && io->error.status != OS64_TLS_CLEAN_EOF)
-        os64_hprintf(OS64_STDERR, "os64get: TLS %s (policy %u, engine %d)\n",
-                     os64_tls_status_name(io->error.status),
-                     (unsigned)io->error.policy_reason, io->error.upstream_error);
+    return io->encrypted && !live(io->error.status) && io->error.status != OS64_TLS_CLEAN_EOF;
 }

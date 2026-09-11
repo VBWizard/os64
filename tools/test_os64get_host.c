@@ -26,8 +26,8 @@ uint64_t os64_syscall4(uint64_t n, uint64_t a, uint64_t b, uint64_t c, uint64_t 
 uint64_t os64_syscall6(uint64_t n, uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uint64_t f);
 #define main os64get_entry
 #include "../userland/apps/os64get/os64get.c"
+#include "fetch/transport.h"
 #undef main
-#include "../userland/apps/os64get/url_io.c"
 #include "os64/slurp.h"
 
 static char sandbox[512];
@@ -98,7 +98,7 @@ const char *os64_getenv(const char *key)
 int64_t os64_ticks(os64_ticks_t *out)
 { static uint64_t ticks; out->ticks = ticks++; out->per_second = 1000; return 0; }
 int64_t os64_write_for(int32_t h, const void *p, size_t n, uint64_t ms)
-{ assert(ms > 0 && ms <= URL_IDLE_MS); return os64_write(h, p, n); }
+{ assert(ms > 0 && ms <= FETCH_IDLE_MS_DEFAULT); return os64_write(h, p, n); }
 int64_t __wrap_os64_time(os64_time_t *out) { memset(out, 0, sizeof(*out)); out->epoch = 1788739200; return 0; }
 bool os64_parse_ipv4(const char *s, const char *end, uint32_t *ip)
 { (void)s; (void)end; *ip = 0x7f000001; return true; }

@@ -72,8 +72,9 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
    - (a) **DONE 2026-09-02.** URL parse + HTTP/1.0 GET: request line,
      `Host:` header, status line + headers parse, `Content-Length` read,
      read-until-close as the fallback the length-less server forces. The
-     machinery lives in `userland/apps/os64get/http.{c,h}` — the seam a libfetch
-     would eventually be sawn along, not the library. Two rulings the
+     machinery lived in `userland/apps/os64get/http.{c,h}` — the seam a libfetch
+     would eventually be sawn along — until it was, on 2026-09-11
+     (LIBFETCH.md; it is `userland/libfetch/http.c` now). Two rulings the
      increment forced, both written down where they bind: a URL fetch does
      not use the filename routing in `os64get.conf` (whose `* = /bin` rule
      would install a web page as a program); and a framing or coding os64get cannot undo is
@@ -112,7 +113,8 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      floor and 16 MiB absolute ceiling; a chunked or close-framed gzip body
      gets the ceiling, because its wire length is not known in advance.
      Identity downloads are unchanged. **The coding comes off DOWNSTREAM of
-     the framing** (`receive_url_body` reads through 3(b)'s body reader and
+     the framing** (os64get's body receiver — libfetch's `read_gzip` since
+     the extraction — reads through 3(b)'s body reader and
      decides only what the bytes ARE), so a gzip body may arrive chunked and
      the two envelopes come off in the order they went on — and the framing's
      verdict outranks the decoder's: a length-framed gzip reply that closes
@@ -164,7 +166,8 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      redirect is refused with its target displayed. And a new exit code, **15**, for a road that
      did not arrive (hop cap, a circle, an unreachable target) — distinct
      from 5, the server's final answer about the page, because the thing to
-     change is on a different side. `http_url_absolute` grew into RFC 3986
+     change is on a different side. `http_url_absolute` (libos64's
+     `os64_url_absolute` since 2026-09-11) grew into RFC 3986
      §5.2's full reference resolution to do it (relative refs, `.`/`..`,
      query-only refs), so there is no longer such a thing as a `Location`
      os64get cannot spell. Proof: `tools/test_http_host.sh` runs RFC 3986
@@ -180,11 +183,12 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      `301 -> https://...` through `$https_proxy` and landed 137582 bytes
      byte-identical to curl's copy.
    - (e) `Range:`/resume — later, wants a consumer first.
-   DESIGN CONSTRAINT: keep the HTTP machinery in cleanly separable
-   functions — the extraction into a shared library (FreeBSD libfetch's
-   shape; future customers: gopher client, the browser) is a LATER,
-   Fable-reviewed slice. Do not build the .so speculatively
-   (consumer-driven growth, the house rule).
+   DESIGN CONSTRAINT, and its payoff: the HTTP machinery was kept in
+   cleanly separable functions so that the extraction into a shared
+   library could wait for a consumer (the house rule). **The consumer
+   arrived with the browser arc and the extraction is DONE (2026-09-11):
+   `/lib/libfetch.so`, LIBFETCH.md is the record.** os64get is its first
+   customer, the line-mode browser its second.
    Verification: `tools/httptestd.py` behind the harness for deterministic
    tests (it grew out of the `python3 -m http.server` this line used to name —
    a well-behaved library will not produce a reply with no Content-Length or
@@ -262,8 +266,10 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      "`host:` with nothing after it is a refusal" each have a security
      edge, gopher needs every one of them, and two copies of an edged rule
      drift until the looser copy is the one somebody reaches. What did NOT
-     move is `http_url_absolute` — RFC 3986 §5.2 reference resolution has
-     exactly one customer, because gopher has no relative links. This is
+     move THEN was `http_url_absolute` — RFC 3986 §5.2 reference resolution
+     had exactly one customer, because gopher has no relative links. (It
+     moved on 2026-09-11, as `os64_url_absolute`, the day the browser's
+     navigator became its second: LIBFETCH.md.) This is
      the `os64_dial_reason` hoist, not the libfetch one: pure string
      arithmetic with a differential harness already in the tree, no
      streams, no buffer ownership across a read boundary. Bindings are lynx's, whose path this re-walks in the
@@ -380,9 +386,9 @@ flag someday — not this tool.
   Counter-driven, concurrency-heavy, and the review tier is Fable +
   Codex-by-Chris's-hand. The eyes exist so these are paid at the right
   moment, not speculatively.
-- **TLS integration** and the libfetch extraction (seams cross review
-  tiers). What libfetch means here is the FETCH machinery — streams,
-  heads, bodies, buffer ownership across a read boundary — which is where
+- **libfetch itself** (LIBFETCH.md). The extraction is done; what stays
+  Fable-tier is any change to the FETCH machinery — streams, heads,
+  bodies, buffer ownership across a read boundary — which is where
   lifetime bugs live. The URL parser was never that and has gone to
   libos64 already; see 4(b).
 - Anything touching park loops, the scheduler, or signal delivery.

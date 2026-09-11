@@ -329,6 +329,17 @@ how a worklist fills with things nobody intends to do.
 | **2.5GBASE-T is advertised** (`R8125_ADVERTISE_2500`, 2026-09-05) — the PHY's own default, left alone. The slice's first draft turned it OFF on the theory that older gigabit switch silicon fumbles the 802.3bz next pages and falls back to 100M; the P5's "as found" dump refuted it the same afternoon (2.5G advertised, partner offering 10/100/1000, link 1000/full, before the driver touched anything). ON means a firmware-default PHY matches the plan and a healthy boot never renegotiates. The remaining debt is what a REAL 2.5G partner would do to a receive path drained once per scheduler pass: the 256-descriptor ring already overruns on gigabit bursts, so the day a 2.5G switch arrives the bottom-half row above is what pays this one | Feature-gate | XS | with the bottom-half row, or the day a 2.5G switch arrives | r8125.h R8125_ADVERTISE_2500 |
 | **The r8125 leaves the PHY's pause advertisement as found — and as found it is ON.** The P5's 2026-09-05 dump read ANAR 0x1de1 (pause + asymmetric pause advertised by the PHY's default) and PHYstatus 0xf08000f3 (RxFlowCtrl and TxFlowCtrl both resolved), so flow control is negotiated on that link today. What is NOT known is whether the MAC acts on it: the vendor driver configures MAC-side flow control separately (`tp->fcpause`), and this driver has never touched that. If it does act, the NIC is already asking the switch to hold when the FIFO fills instead of dropping, and `isr_overrun_events` across an `os64get -a` is the instrument that says so; if it does not, enabling it is the cheapest throughput win available to a driver drained once per 10ms pass | Performance | S | a quiet P5 afternoon with the overrun counter in hand | r8125_phy_plan_advertisement's policy comment; vendor r8125_n.c fcpause |
 
+## libfetch (the fetch seam, 2026-09-11 — booked the day it was cut; LIBFETCH.md carries the arguments)
+
+| Debt | Class | Size | Trigger | Where |
+|---|---|---|---|---|
+| **`gopher://` as a libfetch scheme.** The gopher client's own wire code works and its menu parser is the UI's; moving the bytes buys nothing until a second program wants gopher bytes. The scheme table is the seam it joins at | Feature | S | the browser's first `gopher://` link | LIBFETCH.md § Booked |
+| **Keep-alive / a connection pool.** Not spoken; `Connection: close` on every request. The object is a FETCH, not a connection, so a pool slides underneath without an API change | Perf | M | `/sys/net/tcp` showing a page's image fetches paying a handshake apiece | LIBFETCH.md § Booked |
+| **`Range:` and resume** (BROWSER.md 3e). `extra_headers` can carry the header today; 206 semantics and the resume discipline want a consumer | Feature | S | a download worth resuming | LIBFETCH.md § Booked |
+| **Cookies.** A header the browser composes; the jar is the navigator's, not the fetch's | Feature | M | the first site that will not show a page without one | LIBFETCH.md § Booked |
+| **A `data:` scheme.** Inline images use it; it is a decoder, not a fetch | Feature | S | the graphical browser's first inline image | LIBFETCH.md § Booked |
+| **Progressive `open`** (head available before the body on a non-blocking loop). Every consumer today runs a fetch on a thread | Feature | M | a single-threaded UI that must not block | LIBFETCH.md § Booked |
+
 ## Explicitly NOT debts (recorded so they aren't re-litigated)
 
 - **`limine.conf` will NOT be delivered by `os64get`, and the boot menu is

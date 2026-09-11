@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "http.h"
+#include "fetch/http.h"
 #include "os64/str.h"
 
 // fmt.c's printf half writes through this; nothing under test calls it.
@@ -138,7 +138,7 @@ static int do_url(const char *text)
         printf("render=%s\n", rendered);
 
         char request[4096];
-        if (!http_request(request, sizeof(request), &url, false)) {
+        if (!http_request(request, sizeof(request), &url, false, NULL)) {
             fprintf(stderr, "request does not fit\n");
             return 3;
         }
@@ -148,7 +148,7 @@ static int do_url(const char *text)
 
         // The same ask, addressed to a proxy: whole URL in the request line,
         // Host still naming the origin.
-        if (!http_request(request, sizeof(request), &url, true)) {
+        if (!http_request(request, sizeof(request), &url, true, NULL)) {
             fprintf(stderr, "proxy request does not fit\n");
             return 3;
         }
@@ -258,8 +258,12 @@ static int do_absolute(const char *baseText, const char *location)
         return 2;
     }
 
+    // The resolver lives in libos64 and takes the library's URL, where a
+    // default port is spelled as 0 — http_url_to_os64 is the one conversion.
+    os64_url_t baseUrl;
+    http_url_to_os64(&base, &baseUrl);
     char whole[HTTP_URL_TEXT_MAX];
-    if (!http_url_absolute(&base, location, whole, sizeof(whole))) {
+    if (!os64_url_absolute(&baseUrl, location, whole, sizeof(whole))) {
         printf("declined\n");
         return 0;
     }
