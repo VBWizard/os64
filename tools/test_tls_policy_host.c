@@ -191,6 +191,36 @@ static void ownership_and_sequence(void)
     os64_tls_trust_free(s);
 }
 
+static void tail_framing(void)
+{
+    os64_tls_trust *s = trust(cases[0].root);
+    tls_validator_factory f = os64_tls_policy_factory(s);
+    for (unsigned test = 0; test < 6; test++) {
+        const br_x509_class **v;
+        assert(f.create(s, "example.test", 740232, 0, &v) == TLS_OK);
+        (*v)->start_chain(v, "example.test");
+        for (size_t i = 0; i < cases[0].count; i++) {
+            const blob *b = cases[0].chain[i];
+            (*v)->start_cert(v, b->length);
+            (*v)->append(v, b->data, b->length);
+            (*v)->end_cert(v);
+        }
+        // Trust has been reached, but the remaining message still needs valid
+        // framing and the public key stays gated until end_chain succeeds.
+        assert(!(*v)->get_pkey(v, NULL));
+        if (test == 0) { (*v)->start_cert(v, 2); (*v)->append(v, (const unsigned char *)"x", 1); (*v)->end_cert(v); }
+        if (test == 1) { (*v)->start_cert(v, 1); (*v)->append(v, (const unsigned char *)"xx", 2); (*v)->end_cert(v); }
+        if (test == 2) { (*v)->start_cert(v, 1); (*v)->append(v, (const unsigned char *)"x", 1); }
+        if (test == 3) { (*v)->start_cert(v, 0); (*v)->end_cert(v); }
+        if (test == 4) (*v)->append(v, (const unsigned char *)"x", 1);
+        if (test == 5) (*v)->end_cert(v);
+        assert((*v)->end_chain(v));
+        assert(!(*v)->get_pkey(v, NULL));
+        f.destroy(v);
+    }
+    os64_tls_trust_free(s);
+}
+
 static tls_status entropy(void *context, unsigned char *out, size_t length)
 {
     (void)context;
@@ -281,13 +311,21 @@ int main(void)
             !strcmp(cases[i].name, "tail-unrelated-ca") || !strcmp(cases[i].name, "chain-limit") ||
             !strcmp(cases[i].name, "chain-exact-limit") || !strcmp(cases[i].name, "certificate-limit") ||
             !strcmp(cases[i].name, "certificate-exact-limit") || !strcmp(cases[i].name, "certificate-over-limit") ||
-            !strcmp(cases[i].name, "eku-limit")) {
+            !strcmp(cases[i].name, "eku-limit") ||
+            !strcmp(cases[i].name, "trusted-tail-sha1") ||
+            !strcmp(cases[i].name, "path-sha1-at-anchor-boundary") ||
+            !strcmp(cases[i].name, "path-same-name-wrong-anchor-key") ||
+            !strcmp(cases[i].name, "path-bad-intermediate-signature") ||
+            !strcmp(cases[i].name, "path-restriction-at-anchor-boundary") ||
+            !strcmp(cases[i].name, "tail-certificate-limit") ||
+            !strcmp(cases[i].name, "tail-certificate-exact-limit")) {
             handshake(&cases[i]); handshakes++;
         }
         printf("policy: %s PASS\n", cases[i].name);
     }
     anchors_and_failures();
     ownership_and_sequence();
+    tail_framing();
     assert(allocated == freed);
     printf("TLS policy: %zu chain cases, %zu anchor cases, %zu TLS handshake gates, fragmented input, failure atomicity, owned snapshots, concurrent references PASS\n",
         sizeof cases / sizeof cases[0], sizeof anchor_cases / sizeof anchor_cases[0], handshakes);

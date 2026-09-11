@@ -35,7 +35,7 @@ Starfield G2 and Services G2, SECOM RootCA2, both HARICA 2015 roots, Certum
 Trusted Network CA 2, Certum Trusted Network CA, TWCA Root and ACCVRAIZ1.
 Key strength, CA/Key Usage and restrictive extension checks remain enforced.
 See [TLS_CERTIFICATE_POLICY.md](TLS_CERTIFICATE_POLICY.md) for the import
-contract and the stricter treatment of server-supplied redundant roots.
+contract and the boundary between the authenticated path and redundant tails.
 
 Default [roots.pem](trust/mozilla/2026-08-13/install/roots.pem): **114 roots**, 170633
 bytes, SHA-256:
@@ -68,7 +68,8 @@ LeakSanitizer is disabled for the host tracing environment.
 
 The host policy corpus exercises successful chains using zero/negative-serial,
 SHA-1-self-signed and early-GeneralizedTime anchors, plus matching refusals in
-peer certificates. Weak keys and restrictive anchor extensions remain covered.
+certificates on the authenticated path. Redundant tails after authentication
+do not veto that path. Weak keys and restrictive anchor extensions remain covered.
 
 A fresh ext2 image was built and its default bundle matched the pinned file
 byte for byte. In an isolated QEMU guest, the revised library and companion

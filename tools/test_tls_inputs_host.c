@@ -230,6 +230,20 @@ static void handshake(const tls_os_config *cfg, bool success, tls_policy_reason 
 }
 int main(void)
 {
+#ifdef TLS_TEST_PUBLIC
+    assert(strstr(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, 326), "protocol_version"));
+    assert(strstr(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, 326), "TLS 1.2"));
+    assert(strstr(os64_tls_error_description(OS64_TLS_CERTIFICATE, OS64_TLS_POLICY_SIGNATURE, 49), "signature algorithm"));
+    assert(strstr(os64_tls_error_description(OS64_TLS_CERTIFICATE, OS64_TLS_POLICY_EKU, 62), "server authentication"));
+    assert(strstr(os64_tls_error_description(OS64_TLS_CERTIFICATE, OS64_TLS_POLICY_OK, 62), "installed trust anchor"));
+    assert(strstr(os64_tls_error_description(OS64_TLS_CERTIFICATE, OS64_TLS_POLICY_OK, 54), "not yet valid"));
+    assert(strstr(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, 511), "unrecognized fatal"));
+    assert(strstr(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, 582), "client sent"));
+    assert(!strcmp(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, 768), "TLS protocol error"));
+    assert(!strcmp(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, INT_MAX), "TLS protocol error"));
+    assert(!strcmp(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, -1), "TLS protocol error"));
+    assert(!strcmp(os64_tls_error_description(OS64_TLS_TIMEOUT, OS64_TLS_POLICY_OK, 326), "TLS operation timed out"));
+#endif
     reset_io();
     os64_tls_trust *s = trust();
     tls_name alpn = {"http/1.1", 8};

@@ -1,6 +1,7 @@
 // Exercise production URL I/O with deterministic transport and clock seams.
 #include <assert.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include "../userland/apps/os64get/url_io.h"
 #include "os64/os64.h"
@@ -12,13 +13,16 @@ static unsigned closes, frees, steps, writes, reads;
 static bool cancel, fail_clock, create_fail, stall, interrupt_once, cancel_wait, drift, change_clock, rewind_clock;
 static os64_tls_status_t read_status;
 static size_t ready, sent;
-static char captured[128];
+static char captured[128], report[512];
 
 bool install_cancelled(void) { return cancel; }
 int64_t os64_ticks(os64_ticks_t *t)
 { *t=(os64_ticks_t){.ticks=now,.per_second=drift ? 2000 : 1000}; return fail_clock ? -1 : 0; }
 int64_t os64_close(int32_t h) { assert(h==7); closes++; return 0; }
-int32_t os64_hprintf(int32_t h,const char *f,...) { (void)h;(void)f;return 0; }
+int32_t os64_hprintf(int32_t h,const char *f,...)
+{ assert(h==OS64_STDERR); va_list args; va_start(args,f); int n=vsnprintf(report,sizeof report,f,args); va_end(args); return n; }
+const char *os64_tls_error_description(os64_tls_status_t s,os64_tls_policy_reason_t p,int e)
+{ assert(s==OS64_TLS_CERTIFICATE && p==6 && e==54); return "certificate explanation"; }
 const char *os64_tls_status_name(os64_tls_status_t s) { (void)s;return "test"; }
 static void wait_for(uint64_t ms)
 { assert(steps<128 && ms>0 && ms<=URL_IDLE_MS); waits[steps++]=ms; now+=1000; if(cancel_wait) cancel=true; if(change_clock) drift=true; if(rewind_clock) now=0; }
@@ -92,6 +96,7 @@ int main(void)
     assert(failed.error.status == OS64_TLS_CERTIFICATE);
     assert(failed.error.policy_reason == 6 && failed.error.upstream_error == 54);
     url_io_report(&failed);
+    assert(!strcmp(report,"os64get: TLS test: certificate explanation (policy 6, engine 54)\n"));
     for(unsigned tls=0;tls<2;tls++) {
         url_io_t io=open_io(tls);
         interrupt_once=!tls;

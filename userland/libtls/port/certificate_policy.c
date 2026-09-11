@@ -12,14 +12,12 @@ struct os64_tls_trust {
 typedef struct {
     const br_x509_class *vtable;
     br_x509_minimal_context minimal;
-    // No anchors: keep checking the supplied chain past the trusted prefix.
-    br_x509_minimal_context full_chain;
     os64_tls_trust *trust;
     char hostname[254];
     unsigned char certificate[TLS_CERTIFICATE_MAX];
     size_t expected, received, total, count;
     tls_policy_result result;
-    bool started, in_cert, ended, accepted;
+    bool started, in_cert, ended, accepted, trusted_prefix;
 } policy_validator;
 
 _Static_assert(__atomic_always_lock_free(sizeof(unsigned), 0), "trust references need inline atomics");
@@ -111,7 +109,6 @@ static void start_chain(const br_x509_class **ctx, const char *hostname)
             if (hostname[i] != v->hostname[i]) { reject(v, TLS_POLICY_SAN); break; }
     }
     v->minimal.vtable->start_chain(&v->minimal.vtable, v->hostname);
-    v->full_chain.vtable->start_chain(&v->full_chain.vtable, v->hostname);
 }
 static void start_cert(const br_x509_class **ctx, uint32_t length)
 {
@@ -123,7 +120,6 @@ static void start_cert(const br_x509_class **ctx, uint32_t length)
     else { v->count++; v->total += length; }
     if (!length) reject(v, TLS_POLICY_DER);
     v->minimal.vtable->start_cert(&v->minimal.vtable, length);
-    v->full_chain.vtable->start_cert(&v->full_chain.vtable, length);
 }
 static void append(const br_x509_class **ctx, const unsigned char *data, size_t length)
 {
@@ -131,10 +127,11 @@ static void append(const br_x509_class **ctx, const unsigned char *data, size_t 
     if (!v->in_cert || v->ended || (length && !data)) { reject(v, TLS_POLICY_SEQUENCE); return; }
     if (length > v->expected - v->received) { reject(v, TLS_POLICY_DER); return; }
     if (v->result.reason != TLS_POLICY_OK || !length) return;
-    os64_memcpy(v->certificate + v->received, data, length);
+    // After an authenticated prefix, consume the tail under the same framing
+    // and resource bounds without interpreting it as part of the trust path.
+    if (!v->trusted_prefix) os64_memcpy(v->certificate + v->received, data, length);
     v->received += length;
     v->minimal.vtable->append(&v->minimal.vtable, data, length);
-    v->full_chain.vtable->append(&v->full_chain.vtable, data, length);
 }
 static void end_cert(const br_x509_class **ctx)
 {
@@ -142,13 +139,18 @@ static void end_cert(const br_x509_class **ctx)
     if (!v->in_cert || v->ended) { reject(v, TLS_POLICY_SEQUENCE); return; }
     v->in_cert = false;
     if (v->received != v->expected) reject(v, TLS_POLICY_DER);
-    if (v->result.reason == TLS_POLICY_OK) {
+    if (v->result.reason == TLS_POLICY_OK && !v->trusted_prefix) {
         tls_certificate_view view;
         reject(v, os64_tls_certificate_inspect(v->certificate, v->received,
             v->count == 1 ? 0 : 1, v->hostname, &view));
     }
     v->minimal.vtable->end_cert(&v->minimal.vtable);
-    v->full_chain.vtable->end_cert(&v->full_chain.vtable);
+    // The pinned minimal validator sets OK after verifying a signature with
+    // an installed CA key, not merely matching its name. Latch this only at
+    // a complete certificate boundary, after that certificate passes policy.
+    // Calling end_chain here would finalize an incomplete, untrusted path.
+    if (v->result.reason == TLS_POLICY_OK && v->minimal.err == BR_ERR_X509_OK)
+        v->trusted_prefix = true;
 }
 static unsigned end_chain(const br_x509_class **ctx)
 {
@@ -156,11 +158,6 @@ static unsigned end_chain(const br_x509_class **ctx)
     if (!v->ended) {
         if (!v->started || v->in_cert || !v->count) reject(v, TLS_POLICY_SEQUENCE);
         v->result.upstream_error = v->minimal.vtable->end_chain(&v->minimal.vtable);
-        unsigned full_error = v->full_chain.vtable->end_chain(&v->full_chain.vtable);
-        // NOT_TRUSTED is the expected completion of the anchor-free check;
-        // authentication still requires success from the snapshot-backed one.
-        if (!v->result.upstream_error && full_error != BR_ERR_X509_NOT_TRUSTED)
-            v->result.upstream_error = full_error ? full_error : BR_ERR_X509_NOT_TRUSTED;
         v->ended = true;
     }
     v->accepted = v->result.reason == TLS_POLICY_OK && !v->result.upstream_error;
@@ -208,7 +205,6 @@ static tls_status create(void *context, const char *hostname, uint32_t days,
     v->trust = store; v->vtable = &policy_vtable;
     os64_memcpy(v->hostname, hostname, os64_strlen(hostname) + 1);
     minimal_init(&v->minimal, store->anchors, store->count, days, seconds);
-    minimal_init(&v->full_chain, NULL, 0, days, seconds);
     *out = &v->vtable;
     return TLS_OK;
 }
