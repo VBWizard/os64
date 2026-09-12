@@ -477,8 +477,10 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   lists — because a caption glued to the next paragraph reads as a
   rendering fault rather than as a shorter list of tags.
   `p` and the headings get a blank line before and after; `li` gets a
-  bullet (`* ` for `ul`, `1. ` counting for `ol`) and its nesting depth
-  as indent; `blockquote` and `dd` indent; `hr` is a row of `-`; a
+  bullet (`* ` for `ul`, `1. ` counting for `ol` — from `<ol start>`
+  where the page gives one, and `<li value>` moves the count and takes
+  the items after it along, which is how a numbered procedure carries on
+  across a paragraph) and its nesting depth as indent; `blockquote` and `dd` indent; `hr` is a row of `-`; a
   heading is drawn bold (SGR 1). A `table` is rows: `tr` is a line and
   `td`/`th` cells are separated by two spaces — no column alignment in
   the first cut, and the old web's table LAYOUT (a page that is one big
@@ -504,7 +506,9 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   numbered in the same sequence as the links: a box you type in as
   `[n][value___]` at the page's own `size`, a tick box as `[n][x]` or
   `[n][ ]`, one of a radio group as `[n](*)` or `[n]( )`, a list as
-  `[n][v the chosen option]`, a button as `[n][its words]` — an IMAGE
+  `[n][v the chosen option]` — and `+2` after it when the page has marked
+  more than one, since one row shows one option and a person who could not
+  tell that three were going has no reason to doubt what the row says — a button as `[n][its words]` — an IMAGE
   button by its `alt` text, since that is what it is called, and it sends
   where the pointer was rather than a value, which from a keyboard is the
   origin. A `textarea`
@@ -521,7 +525,16 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   attribute saying so. The words in its first `legend` are the exception,
   the standard's: a section's title was never a control. A HIDDEN
   field is neither drawn nor landed on: it is remembered against the
-  form, whose data it is. **READONLY is not DISABLED**: the page is
+  form, whose data it is — and so is every control inside a subtree the
+  page marked `hidden`, which is the same question with the same answer.
+  Such a subtree draws NOTHING: its prose and its links are on the screen
+  nowhere else, and showing them would put in front of a reader a menu's
+  worth of text the page had deliberately put away. A control may NAME
+  its form with `form=<id>` instead of sitting inside one, which is how a
+  page puts a search box in a masthead and its form in the footer; a name
+  matching no form leaves the control in NO form at all, the standard's
+  answer and the safe one, since submitting it with whatever it happens
+  to sit inside would send a value to an address the page never named. **READONLY is not DISABLED**: the page is
   keeping that value fixed rather than taking the control away, so it is
   landed on, refuses to open, and is still sent. A DISABLED OPTION inside
   a list is SHOWN when it is what the list holds — a first option nobody
@@ -598,8 +611,12 @@ the person pressing it there is one question: a link is followed, a box
 is opened to type in, a tick box is ticked, a list steps to its next
 option, a button sends its form. **A link into the page you are already
 on is a MOVE, not a fetch**: every element carrying an `id`, and every
-old-style `<a name>`, records the row its content opens on, so a `#name`
-is answered by scrolling there. `#` with nothing after it is the
+old-style `<a name>`, records the row its content lands on, so a `#name`
+is answered by scrolling there. A BLOCK's name takes the row that opens
+next, since the element is met before its first word is placed; an INLINE
+one — `<span id=x>` halfway through a sentence — is met with a row
+already open and takes THAT row, because waiting for the next would send
+a reader past the words they asked for. `#` with nothing after it is the
 document's top, and `#top` falls back to it when no element claims the
 name — the standard's own fallback, and what most "back to top" links
 rely on, since few of them define anything to match. A page that does not
@@ -640,27 +657,44 @@ Sending builds the address in `render.c` (`wend_form_url`) rather than in
 the session, because it is pure computation over the page and that is
 where the harness can check what would go on the wire. The form's action,
 or the page itself when it names none; the query REPLACED, not appended
-to, which is what a GET form does; the hidden fields first, then every
-successful control in document order — a box that is not ticked sends
-nothing, a ticked one with no value of its own sends `on`, a list sends
-its option's VALUE rather than the words shown for it, and of two buttons
-only the one pressed says so. The data set goes out in TREE ORDER, hidden
-fields interleaved where the page wrote them rather than all in front,
-because the order is visible to a server exactly when two controls share a
-name — and **the button that was pressed may
-overrule its form**, because the standard lets it carry its own action and
-its own method. The METHOD matters most to a browser that sends only one
-of them: a GET form with a `formmethod=post` button is a POST, and sending
-it as a GET would put whatever it collected into an address that servers
-and proxies write down. An action's `#name` is kept beside the address the
-same way a link's is, and applied once the answer arrives.
+to, which is what a GET form does; then every successful control **in
+TREE ORDER**, the values a form carries and never shows interleaved where
+the page wrote them rather than all in front, because the order is
+visible to a server exactly when two controls share a name. A box that is
+not ticked sends nothing, and a ticked one sends `on` only when the page
+spelled no `value` at all — `value=""` asked for an empty answer and gets
+one, which on the far side can be a different branch. A page that marks
+two radios of one group `checked` has still made ONE choice, the last, as
+leaving both would tell a server reading the first value the opposite of
+what the page said — and the group is settled FROM THE TREE before any of
+it is drawn, because a face that drew each control as it met it and applied
+the rule afterwards would leave a row showing two dots where one value
+goes. A group is every radio of one name in one form, so the same name in
+two forms is two groups. A list sends its option's VALUE rather than the words
+shown for it, and a `multiple` list sends EVERY option the page marked.
+Of two buttons only the one pressed says so — and **the button that was
+pressed may overrule its form**, because the standard lets it carry its
+own action and its own method. The METHOD matters most to a browser that
+sends only one of them: a GET form with a `formmethod=post` button is a
+POST, and sending it as a GET would put whatever it collected into an
+address that servers and proxies write down. NAMING an action is what
+puts the button in charge, not naming a usable one: `formaction=""` is
+the document's own address, and reading the empty string as "said
+nothing" would send the answers to the form's destination instead. An
+action's `#name` is kept beside the address the same way a link's is, and
+applied once the answer arrives.
 
 **A form with exactly ONE THING TO ANSWER
 sends itself when you finish that thing**, because there is nowhere else
 in it to go and stopping to hunt for a button is the step nobody expects.
 Anything else to fill in — a second box, a tick, a list — and it waits
 for its button, since sending early would send the rest at their defaults
-before a person working down the page ever reached them.
+before a person working down the page ever reached them. It is sent AS
+THOUGH ITS OWN BUTTON HAD BEEN PRESSED — the first one in the form, the
+standard's default submitter — so that button's name and value go along
+and so does anything it overrules, which is what keeps a GET form with a
+`formmethod=post` button refused by name here rather than sent as a query
+with a password in it.
 
 **A form off an HTTPS page whose action is plain `http` asks first.**
 libfetch's downgrade callback cannot see that one: it judges the
@@ -670,9 +704,15 @@ somebody typed, which makes it a stronger case for asking than an
 ordinary downgrade, not a weaker one. The question is asked of the
 address the PAGE came from and not of its base, because `<base href>` can
 move the base to http while the page that collected the values stays
-encrypted. And **a security question drops type-ahead**: keys struck
-while a page was loading are held for whoever asks next, and a `y` meant
-for something else must not answer a question it never saw.
+encrypted. And **a security question drops everything typed before it**: keys
+struck while a page was loading are held for whoever asks next, and a `y`
+meant for something else must not answer a question it never saw. BOTH
+queues go — the keys this program is holding and the ones still sitting
+in the terminal — because nothing polls the terminal continuously: the
+library asks whether to stop only between waits, so a key struck after
+the last of those and before the question is painted is in the tty and in
+no buffer of ours. A Ctrl+C among them is kept, and answers the question
+`no`: somebody asking this program to stop is not agreeing to anything.
 
 **Errors are the library's sentence, in the status row.** Every libfetch
 refusal has `os64_fetch_reason`; a TLS refusal now names the alert or the
@@ -703,9 +743,8 @@ Codex round is Chris's call.
 | What | Why deferred | Trigger |
 |---|---|---|
 | POST forms | libfetch sends no request body, and that is fetch machinery — Fable-tier by the campaign's own split. A form that posts is refused BY NAME rather than turned into a GET, because a login quietly sent as a query puts a password in somebody's server log | the first thing worth doing that only posts |
-| A list that takes more than one answer (`select multiple`) | one answer is what the keys can express — Enter steps a list, and there is no screen on which to hold several open. The one it shows is the one it sends | a page whose meaning needs two answers from one list |
-| A control bound to a form by `form=<id>` rather than by nesting | the association is HTML5's and the pages this face is aimed at do not use it; a control outside every form is drawn and says it belongs to none | the first page that puts its button outside its form |
-| A `text/plain` body in a charset that is neither UTF-8 nor Latin-1 | libhtml owns the encoding ladder and only markup goes through it; raw text takes the reply's label for UTF-8 and treats everything else as Latin-1, so a Shift-JIS `.txt` reads as mojibake rather than as a refusal | the first text file worth reading that says it is something else |
+| PICKING more than one answer from a `select multiple` | one answer is what the keys can express — Enter steps a list, and there is no screen on which to hold several open. What the page itself marked IS sent, every option of it; touching the list replaces the lot with the one thing a key can say | a page whose meaning needs two answers a person chose |
+| A `text/plain` body in a charset outside the UTF-8 and windows-1252 families | libhtml owns the encoding ladder and only markup goes through it. Raw text reads the reply's label for UTF-8 and takes everything else as windows-1252, which is the same answer libhtml gives the markup half — so both halves agree, and a Shift-JIS `.txt` reads as mojibake in a page and in a text file alike, rather than as a refusal in neither | the first text file worth reading that says it is something else |
 | A file-upload control | it is a POST with a body made of parts, so it waits on the row above and on a file picker this browser has no screen for | a page worth uploading to |
 | Editing longer than a status row | a box is edited on the bottom row, so a long value is a scrolling window onto itself; fine for a query, thin for a comment | the first time somebody writes prose into a page |
 | `gopher://` links | libfetch's gopher scheme is booked; the gopher client still owns the protocol | the browser's first gopher link |

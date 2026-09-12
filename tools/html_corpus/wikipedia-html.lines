@@ -7196,5 +7196,5 @@ incomplete: no
 2215 link https://en.wikipedia.org/wiki/HTML #
 2216 submit name=(none) label=140 languages value=
 2217 link https://en.wikipedia.org/wiki/HTML #
-form 1 get https://en.wikipedia.org/w/index.php title=Special:Search
-form 2 get https://en.wikipedia.org/w/index.php title=Special:Search
+form 1 get https://en.wikipedia.org/w/index.php id=searchform title=Special:Search@19
+form 2 get https://en.wikipedia.org/w/index.php id=vector-sticky-search-form title=Special:Search@2206

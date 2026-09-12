@@ -74,10 +74,16 @@ typedef enum {
 // ONE ENTRY OF A LIST. A DISABLED option is still SHOWN when the page marks
 // it — that is what a "choose one" placeholder is — but it is never cycled
 // onto and never sent, because disabled means the page took it away.
+//
+// `on` is the option's OWN answer to whether it is picked, which a single
+// index cannot hold: a list marked `multiple` may have several, and
+// collapsing them to the last one sends the server one choice where the page
+// made three.
 typedef struct {
     char *shown;         // the words
     char *value;         // what picking it sends
     bool  off;
+    bool  on;
 } wend_option_t;
 
 typedef struct {
@@ -106,15 +112,28 @@ typedef struct {
     // its own for the same reason a link's does.
     char   *form_action; // "" = the form's own
     char   *form_fragment;
+    // ...and whether the button NAMED an action at all, which the string
+    // cannot say: `formaction=""` is the document's own address, and reading
+    // that as "no action given" sends the form to the form's destination
+    // instead of to the page it is on.
+    bool    has_action;
     bool    has_method;  // whether `post` below means anything
     bool    post;
     // SUBMIT: an image button, which does not send its value. What it sends
     // is where you clicked, and a keyboard's answer to that is the origin.
     bool    image;
     bool    on;          // CHECK / RADIO: ticked
+    // CHECK / RADIO: whether the page spelled a `value` at all. A tick with
+    // none sends `on`, the standard's default — but one that says `value=""`
+    // asked for an empty answer, and sending `on` for it picks a different
+    // branch on the far side.
+    bool    has_value;
     bool    secret;      // TEXT: a password — never drawn, never echoed
     wend_option_t *options;   // CHOICE: what it offers
     int32_t noptions, chosen, optioncap;
+    // CHOICE: the page lets several be picked at once. `chosen` is then only
+    // what the row SHOWS; every option's own `on` is what goes on the wire.
+    bool    multiple;
     int32_t width;       // TEXT: how many cells the box is drawn as
     // TEXT: the page keeps this value fixed. Unlike a disabled control it IS
     // sent — readonly is about who may change it, not about whether it
@@ -128,18 +147,26 @@ typedef struct {
 typedef struct {
     char *action;        // resolved absolute address; "" = the page it is on
     char *fragment;      // the `#name` the action asked for, or ""
+    // The form's `id`, or "". A control OUTSIDE this form can name it and
+    // belong to it, which is the one way form membership is not nesting.
+    char *id;
     bool  post;
-    // The fields the form carries and never shows. They are the form's own
-    // data rather than places a person can land, so they live here instead
-    // of in the spot list, where they would take numbers nothing draws.
-    char **hidden_names, **hidden_values;
-    // ...and WHERE each one stood, as the number of spots that existed when
-    // it was met. The form data set goes out in TREE ORDER, and a hidden
-    // field is the one part of a form that is not a spot, so without this
-    // the query would put every hidden field first whatever the page said.
-    int32_t *hidden_after;
-    int32_t nhidden, hiddencap, hiddenvalcap, hiddenaftercap;
 } wend_form_t;
+
+// A VALUE THE FORM CARRIES AND NEVER SHOWS — a `type=hidden` field, or a
+// control inside a subtree the page marked `hidden`. A value you cannot see
+// is the form's DATA rather than a place a person can land, and putting one
+// in the spot list would take a number nothing draws.
+typedef struct {
+    char   *name;
+    char   *value;
+    int32_t form;        // 1-based into forms[]; 0 = carried by no form
+    // WHERE IT STOOD, as the number of spots that existed when it was met.
+    // The form data set goes out in TREE ORDER, and these are the parts of a
+    // form that are not spots, so without this the query would put every one
+    // of them in front whatever the page said.
+    int32_t after;
+} wend_hidden_t;
 
 // WHERE A `#name` LANDS. Every element carrying an `id`, and every old-style
 // `<a name>`, records the row it fell on — so a link into the same page is
@@ -160,6 +187,8 @@ typedef struct {
     int32_t        nanchors;
     wend_form_t   *forms;
     int32_t        nforms;
+    wend_hidden_t *hidden;
+    int32_t        nhidden;
     int32_t        cols;              // the width these lines were wrapped at
     char           title[WEND_TITLE_MAX];  // folded; "" when the page has none
     // The renderer ran out of memory partway. What is here is real and is
@@ -192,10 +221,15 @@ wend_page_t *wend_render_html(const os64_html_document_t *doc,
 
 // Render bytes that are not markup — a text/plain reply, or a message this
 // program is writing to itself. Shown as it is, the way `pre` is: line
-// breaks kept, tabs to the next stop, hard-wrapped at the margin. `utf8`
-// says how to read a byte over 0x7F, and it is the reply's own answer: the
-// old web's .txt files are Latin-1 and decoding them as UTF-8 turns every
-// accented name into a question mark.
+// breaks kept, tabs to the next stop, hard-wrapped at the margin.
+//
+// `utf8` says how to read a byte over 0x7F, and it is the reply's own
+// answer: the old web's .txt files are not UTF-8, and decoding them as UTF-8
+// turns every accented name into a question mark. FALSE MEANS
+// WINDOWS-1252, not ISO-8859-1, which is the same answer libhtml gives the
+// markup half for every label in that family — a browser whose two halves
+// disagreed about one byte would draw a smart quote as `?` in a `.txt` file
+// and as `'` in the page that linked to it.
 wend_page_t *wend_render_text(const char *text, size_t len, bool utf8, int32_t cols);
 
 void wend_page_free(wend_page_t *page);

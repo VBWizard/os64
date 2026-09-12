@@ -343,6 +343,43 @@ static key_t key_read(char *literal)
     return KEY_NONE;
 }
 
+// EVERYTHING TYPED BEFORE NOW, THROWN AWAY — both the keys this program is
+// holding and the ones still sitting in the terminal. Two queues, because
+// nothing polls the terminal continuously: libfetch asks whether to stop
+// only between waits, so a key struck after the last of those questions and
+// before the next paint is in the tty and in no buffer of ours.
+//
+// A Ctrl+C among them is not discarded but REPORTED, because it is an
+// answer to a different question and the person still means it. Reported
+// rather than left in `s_cancel` for the caller to read: that flag outlives
+// the fetch it stopped, and a question asked later would find it still set
+// and answer itself with a keystroke from minutes ago.
+//
+// Bounded, because this must end: a zero-patience read stops when the queue
+// is empty, and the count is what stops it if something is feeding the
+// terminal faster than it can be drained.
+#define WEND_DRAIN_MAX 4096
+
+static bool keys_drop_typeahead(void)
+{
+    bool stop = false;
+    s_npending = 0;
+    // An input that cannot be asked to wait a bounded time cannot be POLLED
+    // either, and blocking here would hang on a question nobody has read yet.
+    if (!s_timed_keys)
+        return false;
+    for (int32_t i = 0; i < WEND_DRAIN_MAX; i++) {
+        char c;
+        if (os64_read_for((int32_t)s_keys, &c, 1, 0) != 1)
+            break;
+        if (c == 0x03) {
+            stop = true;
+            s_cancel = 1;                // and the fetch it interrupts stops
+        }
+    }
+    return stop;
+}
+
 // Ask a yes/no question on the status row. Only `y` agrees: the dangerous
 // direction is always the one a stray keystroke should not pick.
 //
@@ -350,12 +387,15 @@ static key_t key_read(char *literal)
 // loading are held for whoever asks next (fetch_cancelled keeps them), and a
 // `y` meant for something else would otherwise answer a question it never
 // saw — including "shall I send this in clear?", which is the one question
-// in this program where a stale keystroke could do real harm. So the held
-// keys are dropped here, and only here: everywhere else, type-ahead is a
-// person working faster than the network.
+// in this program where a stale keystroke could do real harm. So everything
+// typed before the question is dropped here, and only here: everywhere else,
+// type-ahead is a person working faster than the network.
 static bool confirm(const char *question)
 {
-    s_npending = 0;
+    // A Ctrl+C that arrived before the question is an answer to it: somebody
+    // asking this program to stop is not agreeing to anything.
+    if (keys_drop_typeahead() || s_want_quit)
+        return false;
     cursor_to(s_rows, 1);
     bar_on();
     int32_t used = draw_text(question, s_cols - 1);
@@ -699,8 +739,12 @@ static char *read_body(os64_fetch_t *f, size_t cap, size_t *len, const char *url
 }
 
 // What the reply's own charset label says about a text/plain body. UTF-8 is
-// the modern answer and Latin-1 is the old web's; a server that says nothing
-// about a .txt file written in 1994 is not talking about UTF-8.
+// the modern answer, and everything else is read as windows-1252 — which is
+// what libhtml does with the markup half of the same web, so a smart quote
+// cannot draw as `"` in a page and as `?` in the text file beside it. A
+// server that says nothing about a .txt file written in 1994 is not talking
+// about UTF-8. A label naming an encoding in neither family is booked in
+// BROWSER.md; it reads as windows-1252 rather than as a refusal.
 static bool charset_is_utf8(const char *charset)
 {
     return os64_streq_nocase(charset, "utf-8") || os64_streq_nocase(charset, "utf8");
@@ -1162,11 +1206,30 @@ static void form_send(view_t *v, int32_t index)
         jump_to_anchor(v, fragment);     // the action asked for a section
 }
 
+// THE BUTTON A FORM WOULD HAVE PRESSED ITSELF: the first one in it, which is
+// the standard's default submitter and the one a browser clicks when Enter
+// finishes a box. -1 when the form has no button at all, which is a form
+// that can only ever be submitted implicitly.
+static int32_t form_default_submitter(const wend_page_t *p, int32_t form)
+{
+    for (int32_t i = 0; i < p->nspots; i++)
+        if (p->spots[i].kind == WEND_SPOT_SUBMIT && p->spots[i].form == form)
+            return i;
+    return -1;
+}
+
 // A form with ONE THING TO ANSWER has nowhere else for you to go, so
 // finishing that one thing finishes the form. Anything else to fill in —
 // another box, a tick, a list — and the value is kept while the form waits,
 // because sending early would send the rest at their defaults and a person
 // working down the page in order would never get to them.
+//
+// AND IT IS SENT AS THOUGH ITS OWN BUTTON HAD BEEN PRESSED, because that is
+// what happened: pressing Enter in the only box of a form is how a browser
+// clicks the default button. The button's name and value go with the form,
+// and so does anything it overrules — which is what keeps a GET form with a
+// `formmethod=post` button REFUSED here rather than sent as a query with
+// somebody's password in it.
 static void form_send_if_alone(view_t *v, int32_t index)
 {
     const wend_page_t *p = v->page;
@@ -1183,8 +1246,10 @@ static void form_send_if_alone(view_t *v, int32_t index)
             && !p->spots[i].readonly)
             answers++;
     }
-    if (answers == 1)
-        form_send(v, index);
+    if (answers != 1)
+        return;
+    int32_t button = form_default_submitter(p, p->spots[index].form);
+    form_send(v, button >= 0 ? button : index);
 }
 
 // ── Filling a form in ───────────────────────────────────────────────────

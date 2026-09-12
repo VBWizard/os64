@@ -512,7 +512,9 @@ static void form_checks(void)
             char url[256];
             CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url), NULL, 0)
                   == WEND_FORM_OK);
-            CHECK(strcmp(url, "http://host/s?note=two++spaces%0Aand+a+line") == 0);
+            // The wire spells a line break CRLF, whatever the page's own
+            // bytes were.
+            CHECK(strcmp(url, "http://host/s?note=two++spaces%0D%0Aand+a+line") == 0);
             wend_page_free(page);
         }
     }
@@ -703,6 +705,300 @@ static void form_checks(void)
 
 // An allocation failure anywhere leaves a page that is honest about being
 // partial, frees clean, and never hands back a line the painter cannot draw.
+// The raw-text path, which has its own answer to a byte over 0x7F and its
+// own idea of where a line ends.
+static void text_checks(void)
+{
+    {
+        // NOT UTF-8 MEANS WINDOWS-1252, the same answer libhtml gives the
+        // markup half: 0x93/0x94 are the quotation marks a word processor
+        // produces, which the fold spells `"`, and NOT the C1 controls
+        // Latin-1 keeps there, which would every one of them draw as `?`.
+        const char bytes[] = "he said \x93hello\x94 \x97 and \x85";
+        wend_page_t *page = wend_render_text(bytes, strlen(bytes), false, 80);
+        CHECK(page != NULL && page->nlines == 1);
+        if (page) {
+            CHECK(strcmp(page->lines[0].text, "he said \"hello\" - and ...") == 0);
+            check_printable(page);
+            wend_page_free(page);
+        }
+    }
+    {
+        // A byte the 1252 table does not move is still its own code point,
+        // which is what keeps an accented name readable.
+        const char bytes[] = "caf\xE9";
+        wend_page_t *page = wend_render_text(bytes, strlen(bytes), false, 80);
+        CHECK(page != NULL && page->nlines == 1);
+        if (page) {
+            CHECK(strcmp(page->lines[0].text, "caf\xE9") == 0);
+            wend_page_free(page);
+        }
+    }
+    {
+        // Every way a text file ends a line, and a CRLF pair counted once.
+        const char bytes[] = "a\rb\r\nc\nd";
+        wend_page_t *page = wend_render_text(bytes, strlen(bytes), true, 80);
+        CHECK(page != NULL && page->nlines == 4);
+        if (page && page->nlines == 4) {
+            CHECK(strcmp(page->lines[0].text, "a") == 0);
+            CHECK(strcmp(page->lines[1].text, "b") == 0);
+            CHECK(strcmp(page->lines[2].text, "c") == 0);
+            CHECK(strcmp(page->lines[3].text, "d") == 0);
+        }
+        wend_page_free(page);
+    }
+}
+
+// A list's numbers are the page's to choose, and an anchor names the row its
+// own words are on.
+static void list_and_anchor_checks(void)
+{
+    {
+        // `start` begins the count and `value` moves it, taking the items
+        // after it along — which is how a procedure carries on across a
+        // paragraph.
+        const char *want[] = { "  5. five", "  6. six", "  9. nine", "  10. ten" };
+        expect_lines("ol start", "<ol start=5><li>five<li>six"
+                     "<li value=9>nine<li>ten</ol>", 40, want, 4);
+    }
+    {
+        // A nested list counts on its own; the outer one carries on where it
+        // left off.
+        const char *want[] = { "  1. one", "       1. inner", "  2. two" };
+        expect_lines("ol nested", "<ol><li>one<ol><li>inner</ol><li>two</ol>",
+                     40, want, 3);
+    }
+    {
+        // A number longer than the type holds saturates rather than wraps,
+        // and a negative one is drawn as the page wrote it.
+        const char *want[] = { "  2147483647. big", "  2147483647. also" };
+        expect_lines("ol saturating start",
+                     "<ol start=99999999999999><li>big<li>also</ol>", 40, want, 2);
+    }
+    {
+        const char *want[] = { "  -3. minus", "  -2. next" };
+        expect_lines("ol negative start", "<ol start=-3><li>minus<li>next</ol>",
+                     40, want, 2);
+    }
+    {
+        // AN INLINE `id` NAMES THE ROW IT IS ON. It is met with the row
+        // already open, so waiting for the next row to open would send a
+        // reader past the words they asked for.
+        wend_page_t *page = render_html_text(
+            "<p>before <span id=target>here</span> after</p><p>next</p>",
+            40, "http://host/p");
+        CHECK(page != NULL);
+        if (page) {
+            int32_t at = wend_anchor_line(page, "target");
+            CHECK(at >= 0 && at < page->nlines
+                  && strstr(page->lines[at].text, "here") != NULL);
+            wend_page_free(page);
+        }
+    }
+}
+
+// The parts of a form that are not where they look, not what they look, or
+// not visible at all.
+static void form_edge_checks(void)
+{
+    // A CONTROL MAY NAME ITS FORM rather than sit inside it, and one that
+    // names a form nothing answers to belongs to NO form — never to whatever
+    // it happens to be written inside.
+    expect_url("form attribute", "<form id=f action=/s></form>"
+               "<input form=f name=q value=x><input type=submit form=f>",
+               1, WEND_FORM_OK, "http://host/s?q=x");
+    expect_url("form attribute hidden", "<form id=f action=/s></form>"
+               "<input type=hidden form=f name=h value=1>"
+               "<input type=submit form=f>",
+               0, WEND_FORM_OK, "http://host/s?h=1");
+    expect_url("form attribute unmatched", "<form action=/s>"
+               "<input form=nosuch name=q value=x><input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s");
+    {
+        wend_page_t *page = render_html_text(
+            "<form action=/s><input form=nosuch name=q value=x></form>", 80,
+            "http://host/p");
+        CHECK(page && page->nspots == 1 && page->spots[0].form == 0);
+        // A control in no form has nowhere to be sent.
+        if (page) {
+            char url[128];
+            CHECK(wend_form_url(page, 0, "http://host/p", url, sizeof(url), NULL, 0)
+                  == WEND_FORM_NONE);
+            wend_page_free(page);
+        }
+    }
+    // AN EMPTY `formaction` IS THE PAGE ITSELF, and an absent one is the
+    // form's — the string alone cannot tell them apart.
+    expect_url("formaction empty", "<form action=/other><input name=q value=x>"
+               "<input type=submit formaction=''></form>",
+               1, WEND_FORM_OK, "http://host/dir/page.html?q=x");
+    expect_url("formaction absent", "<form action=/other><input name=q value=x>"
+               "<input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/other?q=x");
+    // A TICK THAT SAYS `value=""` ASKED FOR AN EMPTY ANSWER; only one with
+    // no value at all takes the `on` the standard supplies.
+    expect_url("empty tick value", "<form action=/s>"
+               "<input type=checkbox name=a value='' checked>"
+               "<input type=checkbox name=b checked><input type=submit></form>",
+               2, WEND_FORM_OK, "http://host/s?a=&b=on");
+    // A PAGE THAT MARKS TWO OF A GROUP HAS PICKED THE LAST ONE. Leaving both
+    // would send a server the opposite of what it reads first.
+    expect_url("radio group", "<form action=/s><input type=radio name=x value=a checked>"
+               "<input type=radio name=x value=b checked>"
+               "<input type=radio name=y value=c checked><input type=submit></form>",
+               3, WEND_FORM_OK, "http://host/s?x=b&y=c");
+    {
+        // ...and the ROW agrees, because the group is settled before the
+        // control is drawn: a page showing two dots where one value goes is
+        // the same lie in a different place.
+        const char *want[] = { "[1]( )[2](*)[3](*)[4][Submit]" };
+        expect_lines("radio group drawn",
+                     "<form><input type=radio name=x value=a checked>"
+                     "<input type=radio name=x value=b checked>"
+                     "<input type=radio name=y value=c checked>"
+                     "<input type=submit></form>", 40, want, 1);
+    }
+    {
+        // A radio in no form is not in a group with radios inside one, and a
+        // disabled member counts toward which one the group ends on.
+        // The form is a block, so it takes its own row; the disabled one is
+        // drawn and is not a spot, and being LAST it is what the group ends
+        // on — so the enabled radio before it shows empty.
+        const char *want[] = { "[1](*)", "[2]( )(*)" };
+        expect_lines("radio groups apart",
+                     "<input type=radio name=x value=a checked>"
+                     "<form><input type=radio name=x value=b checked>"
+                     "<input type=radio name=x value=c checked disabled></form>",
+                     40, want, 2);
+    }
+    // A group is per FORM, so the same name in two forms is two groups.
+    expect_url("radio per form", "<form action=/s><input type=radio name=x value=a checked>"
+               "<input type=submit></form>"
+               "<form action=/t><input type=radio name=x value=b checked>"
+               "<input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s?x=a");
+    // A `multiple` list sends every option the page marked, in the page's
+    // own order.
+    expect_url("multi select", "<form action=/s><select name=p multiple>"
+               "<option value=1 selected>One<option value=2>Two"
+               "<option value=3 selected>Three</select>"
+               "<input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s?p=1&p=3");
+    {
+        // ...and says on the row that there is more than one.
+        const char *want[] = { "[1][v One +1][2][Submit]" };
+        expect_lines("multi select drawn", "<form><select name=p multiple>"
+                     "<option selected>One<option>Two<option selected>Three"
+                     "</select><input type=submit></form>", 40, want, 1);
+    }
+    {
+        // PICKING IS ONE THING EVEN ON A `multiple` LIST: the list cycles,
+        // so one key says "this one" and the page's several give way to it.
+        const char *html = "<form action=/s><select name=p multiple>"
+                           "<option value=1 selected>One<option value=2>Two"
+                           "<option value=3 selected>Three</select>"
+                           "<input type=submit></form>";
+        wend_edit_t edits[2] = { { NULL, -1, 1 }, { NULL, -1, -1 } };
+        os64_html_parser_t *p = os64_html_parser_new(NULL);
+        os64_url_t base;
+        CHECK(p != NULL && os64_url_parse("http://host/p", &base) == OS64_URL_OK);
+        if (p && os64_html_parser_feed(p, html, strlen(html)) >= 0) {
+            os64_html_document_t *doc = os64_html_parser_finish(p);
+            wend_page_t *page = doc ? wend_render_html(doc, &base, 80, edits, 2) : NULL;
+            CHECK(page != NULL);
+            if (page) {
+                char url[256];
+                CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url), NULL, 0)
+                      == WEND_FORM_OK);
+                CHECK(strcmp(url, "http://host/s?p=2") == 0);
+                wend_page_free(page);
+            }
+            if (doc)
+                os64_html_document_free(doc);
+        }
+    }
+    // A SUBTREE THE PAGE MARKED `hidden` DRAWS NOTHING AND IS NO PLACE TO
+    // LAND — and its values still go with the form, which is what a page
+    // that puts a section away relies on.
+    {
+        const char *want[] = { "shown[1][__________][2][Submit]" };
+        expect_lines("hidden subtree drawn",
+                     "<form><div hidden><p>secret prose<a href=/p>private</a>"
+                     "<input name=internal value=v></div>shown"
+                     "<input name=q size=10><input type=submit></form>",
+                     40, want, 1);
+    }
+    // A control may BE the hidden element, with no children at all.
+    expect_url("hidden control itself", "<form action=/s>"
+               "<input name=away value=v hidden><input name=q value=x>"
+               "<input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s?away=v&q=x");
+    // A disabled control is not sent whether it is on the screen or not.
+    expect_url("hidden and disabled", "<form action=/s>"
+               "<div hidden><input name=a value=1 disabled>"
+               "<fieldset disabled><input name=b value=2></fieldset>"
+               "<input name=c value=3></div>"
+               "<input type=submit></form>",
+               0, WEND_FORM_OK, "http://host/s?c=3");
+    expect_url("hidden subtree sent",
+               "<form action=/s><div hidden><input name=internal value=v>"
+               "<input type=checkbox name=t value=1 checked>"
+               "<input type=checkbox name=u value=1>"
+               "<select name=pick><option value=a><option value=b selected></select>"
+               "<textarea name=note>kept</textarea>"
+               "<input type=submit name=btn value=no></div>"
+               "<input name=q value=x><input type=submit></form>",
+               1, WEND_FORM_OK,
+               "http://host/s?internal=v&t=1&pick=b&note=kept&q=x");
+    {
+        // A `hidden` subtree is not a form's excuse to forget where things
+        // stood: the values go out where the page wrote them.
+        wend_page_t *page = render_html_text(
+            "<form action=/s><input name=q value=first>"
+            "<div hidden><input name=q value=second></div>"
+            "<input type=submit></form>", 80, "http://host/p");
+        CHECK(page != NULL);
+        if (page) {
+            char url[256];
+            CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url), NULL, 0)
+                  == WEND_FORM_OK);
+            CHECK(strcmp(url, "http://host/s?q=first&q=second") == 0);
+            wend_page_free(page);
+        }
+    }
+    // WHITESPACE AT AN ELEMENT BOUNDARY IS STILL WHITESPACE. An option's
+    // words are gathered as one sequence, so `A<b> B</b>` is two words in
+    // what is shown AND in what is sent.
+    expect_url("gather boundary", "<form action=/s><select name=p>"
+               "<option>A<b> B</b></select><input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s?p=A+B");
+    {
+        const char *want[] = { "[1][v A B][2][Submit]" };
+        expect_lines("gather boundary drawn", "<form><select name=p>"
+                     "<option>A<b> B</b></select><input type=submit></form>",
+                     40, want, 1);
+    }
+    {
+        // THE FIRST `base` CARRYING AN href WINS, empty or not: an empty one
+        // names the document, and skipping it would hand every relative link
+        // on the page to the later base's host.
+        char href[OS64_URL_REF_MAX];
+        os64_html_parser_t *p = os64_html_parser_new(NULL);
+        const char *html = "<head><base href=''><base href='http://other/'></head>"
+                           "<body><a href=x>link</a>";
+        CHECK(p != NULL);
+        if (p && os64_html_parser_feed(p, html, strlen(html)) >= 0) {
+            os64_html_document_t *doc = os64_html_parser_finish(p);
+            CHECK(doc != NULL);
+            if (doc) {
+                CHECK(wend_base_href(doc, href, sizeof(href)));
+                CHECK(strcmp(href, "") == 0);
+                os64_html_document_free(doc);
+            }
+        }
+    }
+}
+
 static void oom_checks(void)
 {
     // THE FORM MACHINERY UNDER FAILURE. Spots, options, anchors and hidden
@@ -710,15 +1006,19 @@ static void oom_checks(void)
     // a page half-built — and a NUMBER typed at the status row reaches any
     // spot, drawn or not. What comes back must be paintable, answerable and
     // free-clean at every one of those steps.
-    for (size_t n = 1; n < 500; n++) {
+    for (size_t n = 1; n < 700; n++) {
         allocations = 0;
         fail_at = n;
         wend_page_t *page = render_html_text(
-            "<h2 id=here>Form</h2><form action='/s#r'>"
+            "<h2 id=here>Form</h2><form id=f action='/s#r'>"
             "<input type=hidden name=h value=1><input name=q value=x size=4>"
-            "<select name=p><option disabled selected>Pick<option value=2>Two</select>"
+            "<select name=p multiple><option disabled selected>Pick"
+            "<option value=2 selected>Two<b> Deux</b></select>"
             "<input type=checkbox name=c checked><textarea name=t>a\nb</textarea>"
-            "<button formmethod=post name=go>Send</button></form>"
+            "<div hidden><input name=away value=1><select name=s>"
+            "<option value=z selected>Z</select><textarea name=n>hush</textarea></div>"
+            "<button formmethod=post name=go formaction=''>Send</button></form>"
+            "<input form=f name=outside value=o>"
             "<a href='#here'>back up</a>", 40, "http://host/p");
         if (page) {
             check_printable(page);
@@ -807,6 +1107,9 @@ static void dump(const wend_page_t *page, const char *name)
         printf("%d %s", i + 1, kinds[spot->kind]);
         if (spot->form)
             printf(" form=%d", spot->form);
+        if (spot->has_action)
+            printf(" formaction=%s", spot->form_action[0] ? spot->form_action
+                                                          : "(this page)");
         if (spot->kind == WEND_SPOT_LINK) {
             printf(" %s", spot->url[0] ? spot->url : "(unresolved)");
             // A fragment that was ASKED for prints even when it is empty:
@@ -830,10 +1133,12 @@ static void dump(const wend_page_t *page, const char *name)
                 printf(" %s value=%s", spot->on ? "on" : "off", spot->value);
                 break;
             case WEND_SPOT_CHOICE:
-                printf(" chosen=%d of %d", spot->chosen, spot->noptions);
+                printf(" chosen=%d of %d%s", spot->chosen, spot->noptions,
+                       spot->multiple ? " multiple" : "");
                 for (int32_t j = 0; j < spot->noptions; j++)
-                    printf(" [%s=%s%s]", spot->options[j].shown,
+                    printf(" [%s=%s%s%s]", spot->options[j].shown,
                            spot->options[j].value,
+                           spot->options[j].on ? " on" : "",
                            spot->options[j].off ? " off" : "");
                 break;
             case WEND_SPOT_SUBMIT:
@@ -849,8 +1154,14 @@ static void dump(const wend_page_t *page, const char *name)
         const wend_form_t *form = &page->forms[i];
         printf("form %d %s %s", i + 1, form->post ? "post" : "get",
                form->action[0] ? form->action : "(this page)");
-        for (int32_t j = 0; j < form->nhidden; j++)
-            printf(" %s=%s", form->hidden_names[j], form->hidden_values[j]);
+        if (form->id[0])
+            printf(" id=%s", form->id);
+        // The values it carries and never shows, each where the page wrote
+        // it — the position is what keeps the query in tree order.
+        for (int32_t j = 0; j < page->nhidden; j++)
+            if (page->hidden[j].form == i + 1)
+                printf(" %s=%s@%d", page->hidden[j].name, page->hidden[j].value,
+                       page->hidden[j].after);
         printf("\n");
     }
     // The anchors are a page's own index. Only the count goes in the dump
@@ -921,7 +1232,10 @@ int main(int argc, char **argv)
     if (do_checks) {
         fold_checks();
         render_checks();
+        text_checks();
+        list_and_anchor_checks();
         form_checks();
+        form_edge_checks();
         anchor_checks();
         oom_checks();
         printf("renderer: %d checks, %d failures, %zu blocks live\n",

@@ -642,13 +642,15 @@ what follows is what was run.
 
 **The host suite** is `tools/test_wend_host.sh` — plain `cc` under ASan and
 UBSan, driving the renderer (`userland/apps/wend/render.c`) with no kernel
-under it, because a tree in and lines out is pure computation. It has four
-parts. The FOLD gets its table checked entry by entry and then every code
-point below U+11000 swept to prove each one folds to printable Latin-1 or to
-nothing. The WRAPPER gets cases written as "this markup, at this width, is
-these rows". And an ALLOCATION FAILURE is injected at each of the first four
-hundred allocations of one page, proving that what comes back is always a
-page you can paint and always frees clean.
+under it, because a tree in and lines out is pure computation. The FOLD gets
+its table checked entry by entry and then every code point below U+11000
+swept to prove each one folds to printable Latin-1 or to nothing. The
+WRAPPER gets cases written as "this markup, at this width, is these rows".
+The RAW-TEXT path gets the windows-1252 high range and every spelling of a
+line ending. LISTS AND ANCHORS get the page's own numbering and the row a
+`#name` lands on. And an ALLOCATION FAILURE is injected at each of the first
+seven hundred allocations of one deliberately awkward page, proving that
+what comes back is always a page you can paint and always frees clean.
 
 **The corpus is the regression test, and it is a diff to a PAGE.** The six
 saved pages libhtml keeps (`tools/html_corpus/*.html` — example.com,
@@ -677,13 +679,19 @@ before the rows it governs are down**:
 | A `pre` block lost the author's trailing spaces on its last row | Same shape: the block left preformatted mode before its final row was committed, and the trim for flowed rows took them |
 | A row could reach the painter unterminated | ASan, on the allocation-failure sweep: fresh storage plus a refused run reservation left bytes nobody wrote and no end marker. The buffer is terminated the moment it is reserved |
 
-**Forms** are the fourth part, because what a form would ASK FOR is a
+**Forms are the largest part**, because what a form would ASK FOR is a
 string built from a page and is checkable without a wire:
 `wend_form_url` is driven over a search box with a hidden field, a query
 the action already carried (replaced, as a GET form does), spaces and
 UTF-8 through the encoder, ticked and unticked boxes, a list's value
 rather than its words, two buttons where only the pressed one says so, a
-POST refused by name, and a control in no form at all. One case renders a
+POST refused by name, and a control in no form at all. Then the edges the
+review rounds named: a control bound to its form by `form=<id>` and one
+naming a form that does not exist, an empty `formaction` against an absent
+one, `value=""` on a tick against no value at all, a group with two radios
+`checked`, a `multiple` list's several sent and then replaced by one pick,
+a `hidden` subtree drawn as nothing and sent in full and in TREE ORDER, and
+whitespace across a nested element inside an option. One case renders a
 page twice at two widths with an edit in hand, proving that what was typed
 survives a re-wrap and reaches the query.
 
@@ -745,11 +753,69 @@ as an unresolvable address; and once sixty-four keys of type-ahead had
 filled the buffer, the cancel predicate stopped reading the terminal, so a
 later Ctrl+C could not end a slow fetch.
 
-**Rounds four and five both came back CLEAN** — each completed on the whole
-commit with no review submitted, which is the strongest verdict this
-reviewer gives. Five rounds in all: 12 findings, then 9, then 6, then
-nothing, then nothing. Every finding in every round was real and none was
-declined.
+**Rounds four and five were recorded here as CLEAN and were not.** Both had
+landed with findings while the truth passes below were being written, and
+neither was read before the note claiming otherwise was committed. The
+record is corrected rather than removed: a verdict written without looking
+is the failure worth remembering, and the fix is to read the PR's unresolved
+threads before writing down what a round said.
+
+**Round four found twelve.** Every one was a page's own words reaching the
+wire as something else: a control naming its form with `form=<id>` was put
+in whatever form it sat inside; `formaction=""` — the document's own address
+— read as no action at all; whitespace at an element boundary dropped from
+an option's words and its value, so `A<b> B</b>` was shown and SENT as `AB`;
+two unchecked appends inside that same gather leaving a silently truncated
+value on a page claiming to be whole; a `multiple` list collapsed to its
+last selected option, dropping the rest; an inline `id` bound to the row
+AFTER the words it names, so a fragment landed below its target; `<ol
+start=5>` shown as `1.`; and — twice, from two directions — a `text/plain`
+body in windows-1252 read as ISO-8859-1, so every smart quote became `?` in
+a text file while the markup half of the same browser drew it correctly.
+Two of the twelve were already fixed by the truth passes between the rounds
+(the hidden-field tree order and the image button's coordinates).
+
+**Round five found seven, two P1.** A `y` still sitting in the TERMINAL — as
+opposed to in this program's own type-ahead buffer, which round two taught
+the confirm to drop — answered a downgrade question it was never shown,
+because nothing polls the terminal between the library's cancel checks. And
+pressing Enter in a one-box form submitted the BOX rather than the form's
+default button, so a `<button formmethod=post>` was bypassed and the
+password in the box went out as a query — the exact hazard round three's
+formmethod fix existed to prevent, reached by the other door. The rest:
+`<base href="">` skipped so a later base won; a `hidden` subtree drawn in
+full, its links followable and its controls editable; two radios of one
+group both `checked` both sent; `value=""` on a tick replaced with `on`; and
+a textarea's line breaks sent as `%0A` where a form spells them `%0D%0A`.
+
+**Round six is this one**, and both halves of the record were repaired with
+it: nineteen findings fixed, and the false "clean" claim above rewritten.
+Two of the nineteen were already gone, fixed by earlier truth passes. The
+host suite grew a case for each of the rest.
+
+**The guest found what the host suite could not see about the radio fix.**
+The query was right — one value — and the ROW still drew two dots, because
+the renderer draws each control as it meets it and the rule was being
+applied to the finished page. A group is settled from the TREE now, before
+anything is drawn. That is the round's own reminder that a pure-computation
+harness checks the answer and not the picture.
+
+**In the guest** (headless QEMU, slirp, a page served from the host at
+10.0.2.2 and the real internet beside it), with the server's access log as
+the record of what actually went on the wire:
+
+| Case | What the wire or the glass said |
+|---|---|
+| A one-box form whose only button is `formmethod=post` | `this form posts, and wend sends only forms that ask by address` — and NO request in the server log. Before, the password in the box went out as a query |
+| A one-box form with an ordinary named button | `GET /sent2?q=cats&go=now` — the default submitter's own name and value carried |
+| `select multiple`, an empty tick value, a doubled radio group | `GET /sent3?pick=1&pick=3&empty=&plain=on&r=b` — every one of those a separate finding, all on one line |
+| A control and a button bound by `form=<id>` from outside the form | `GET /A?named=yes` |
+| A `hidden` section inside a form, and a textarea | `GET /B?carried=kept&tick=on&note=line+one%0D%0Aline+two` — the hidden section's prose and link drawn nowhere, its values carried, and the break spelled CRLF |
+| `formaction=""` on a second button of that form | `GET /two.html?...` — the document's own address, not the form's `/B` |
+| `<ol start=5>` with a `<li value=9>` | `5. 6. 9. 10.` |
+| A windows-1252 `.txt` | `A "smart quote" and a dash - plus café.` Every one of those was `?` before |
+| ARPANET on Wikipedia over HTTPS, then a search typed into its box | 1447 lines, then `https://en.wikipedia.org/wiki/Packet_switching` — the real page, the real search, the redirect followed |
+| Both guest filesystems afterwards | `e2fsck -fn` clean on root and `/home` |
 
 **What the truth passes BETWEEN rounds found is worth as much as the
 rounds.** Reading the diff before each submit, and putting a deliberately
