@@ -5009,7 +5009,7 @@ incomplete: no
 28 link https://en.wikipedia.org/w/index.php?title=Special:UserLogin&returnto=HTML
 29 submit name=(none) label=move to sidebar value=
 30 submit name=(none) label=hide value=
-31 link https://en.wikipedia.org/wiki/HTML
+31 link https://en.wikipedia.org/wiki/HTML #
 32 link https://en.wikipedia.org/wiki/HTML #History
 33 submit name=(none) label=Toggle History subsection value=
 34 link https://en.wikipedia.org/wiki/HTML #Development
@@ -5653,7 +5653,7 @@ incomplete: no
 672 link https://en.wikipedia.org/wiki/HTML #Transition_of_HTML_publication_to_WHATWG
 673 link https://en.wikipedia.org/wiki/File:Wiki_letter_w.svg
 674 link https://en.wikipedia.org/w/index.php?title=Talk%3AHTML&preload=Template%3ASubmit+an+edit+request%2Fpreload&action=edit&section=new&editintro=Template%3AEdit+fully-protected%2Feditintro&preloadtitle=Protected+edit+request+on+11+September+2026&preloadparams%5B%5D=edit+fully-protected&preloadparams%5B%5D=HTML
-675 link https://en.wikipedia.org/wiki/Talk:HTML
+675 link https://en.wikipedia.org/wiki/Talk:HTML #
 676 link https://en.wikipedia.org/wiki/WYSIWYG
 677 link https://en.wikipedia.org/wiki/Graphical_user_interface
 678 link https://en.wikipedia.org/wiki/Microsoft_FrontPage
@@ -7187,14 +7187,14 @@ incomplete: no
 2206 text form=2 name=search value= width=16
 2207 submit form=2 name=(none) label=Search value=
 2208 check name=(none) off value=
-2209 link https://en.wikipedia.org/wiki/HTML
-2210 link https://en.wikipedia.org/wiki/HTML
-2211 link https://en.wikipedia.org/wiki/HTML
-2212 link https://en.wikipedia.org/wiki/HTML
-2213 link https://en.wikipedia.org/wiki/HTML
-2214 link https://en.wikipedia.org/wiki/HTML
-2215 link https://en.wikipedia.org/wiki/HTML
+2209 link https://en.wikipedia.org/wiki/HTML #
+2210 link https://en.wikipedia.org/wiki/HTML #
+2211 link https://en.wikipedia.org/wiki/HTML #
+2212 link https://en.wikipedia.org/wiki/HTML #
+2213 link https://en.wikipedia.org/wiki/HTML #
+2214 link https://en.wikipedia.org/wiki/HTML #
+2215 link https://en.wikipedia.org/wiki/HTML #
 2216 submit name=(none) label=140 languages value=
-2217 link https://en.wikipedia.org/wiki/HTML
+2217 link https://en.wikipedia.org/wiki/HTML #
 form 1 get https://en.wikipedia.org/w/index.php title=Special:Search
 form 2 get https://en.wikipedia.org/w/index.php title=Special:Search

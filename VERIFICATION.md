@@ -745,9 +745,11 @@ as an unresolvable address; and once sixty-four keys of type-ahead had
 filled the buffer, the cancel predicate stopped reading the terminal, so a
 later Ctrl+C could not end a slow fetch.
 
-**Round four came back CLEAN** — completed on the whole commit with no
-review submitted, which is the strongest verdict this reviewer gives and,
-by CLAUDE.md's rule, the end of the matter for that commit.
+**Rounds four and five both came back CLEAN** — each completed on the whole
+commit with no review submitted, which is the strongest verdict this
+reviewer gives. Five rounds in all: 12 findings, then 9, then 6, then
+nothing, then nothing. Every finding in every round was real and none was
+declined.
 
 **What the truth passes BETWEEN rounds found is worth as much as the
 rounds.** Reading the diff before each submit, and putting a deliberately

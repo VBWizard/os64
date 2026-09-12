@@ -809,13 +809,18 @@ static void dump(const wend_page_t *page, const char *name)
             printf(" form=%d", spot->form);
         if (spot->kind == WEND_SPOT_LINK) {
             printf(" %s", spot->url[0] ? spot->url : "(unresolved)");
-            if (spot->fragment[0])
+            // A fragment that was ASKED for prints even when it is empty:
+            // `#` alone means the top, and it is a different behaviour from
+            // no fragment at all.
+            if (spot->has_fragment)
                 printf(" #%s", spot->fragment);
             printf("\n");
             continue;
         }
         if (spot->secret)
             printf(" secret");
+        if (spot->image)
+            printf(" image");
         printf(" name=%s", spot->name[0] ? spot->name : "(none)");
         if (spot->readonly)
             printf(" readonly");
