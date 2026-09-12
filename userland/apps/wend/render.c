@@ -600,11 +600,11 @@ static const wend_edit_t *edit_for(const render_t *r)
 static const char *reference_fragment(const char *href)
 {
     if (!href)
-        return "";
+        return NULL;
     for (const char *p = href; *p != '\0'; p++)
         if (*p == '#')
-            return p + 1;
-    return "";
+            return p + 1;            // may be "" — `#` alone is the top
+    return NULL;
 }
 
 static int32_t link_add(render_t *r, const char *href)
@@ -622,8 +622,10 @@ static int32_t link_add(render_t *r, const char *href)
     const char *reference = (href && href[0]) ? href : "#";
     if (r->base)
         (void)os64_url_absolute(r->base, reference, resolved, sizeof(resolved));
+    const char *hash = reference_fragment(href);
     spot->url = dup_text(r, resolved);
-    spot->fragment = dup_text(r, reference_fragment(href));
+    spot->fragment = dup_text(r, hash ? hash : "");
+    spot->has_fragment = hash != NULL;
     return (spot->url && spot->fragment) ? r->page->nspots : 0;
 }
 
@@ -903,8 +905,14 @@ static void hidden_add(render_t *r, const os64_html_node_t *n)
         r->oom = true;
         return;
     }
+    if (!reserve((void **)&form->hidden_after, &form->hiddenaftercap,
+                 form->nhidden + 1, sizeof(*form->hidden_after))) {
+        r->oom = true;
+        return;
+    }
     form->hidden_names[form->nhidden] = dup_text(r, attr_value(n, "name"));
     form->hidden_values[form->nhidden] = dup_text(r, attr_value(n, "value"));
+    form->hidden_after[form->nhidden] = r->page->nspots;
     form->nhidden++;
 }
 
@@ -928,7 +936,7 @@ static void submit_overrides(render_t *r, const os64_html_node_t *n,
     if (formaction && formaction[0] && r->base)
         (void)os64_url_absolute(r->base, formaction, over, sizeof(over));
     spot->form_action = dup_text(r, over);
-    spot->form_fragment = dup_text(r, reference_fragment(formaction));
+    spot->form_fragment = dup_text(r, some(reference_fragment(formaction)));
     spot->has_method = formmethod != NULL && formmethod[0] != '\0';
     spot->post = spot->has_method && os64_streq_nocase(formmethod, "post");
 }
@@ -950,7 +958,8 @@ static void field_input(render_t *r, const os64_html_node_t *n)
 
     bool readonly = os64_html_attr(n, "readonly") != NULL;
     wend_spot_kind_t kind = WEND_SPOT_TEXT;
-    if (type_is_nocase(type, "submit") || type_is_nocase(type, "image"))
+    bool image = type_is_nocase(type, "image");
+    if (type_is_nocase(type, "submit") || image)
         kind = WEND_SPOT_SUBMIT;
     else if (type_is_nocase(type, "checkbox"))
         kind = WEND_SPOT_CHECK;
@@ -993,7 +1002,10 @@ static void field_input(render_t *r, const os64_html_node_t *n)
     switch (kind) {
         case WEND_SPOT_SUBMIT: {
             submit_overrides(r, n, spot);
-            spot->label = dup_text(r, value && value[0] ? value : "Submit");
+            spot->image = image;
+            const char *alt = image ? attr_value(n, "alt") : NULL;
+            spot->label = dup_text(r, alt && alt[0] ? alt
+                                      : (value && value[0] ? value : "Submit"));
             word_text(r, "[", 1);
             word_folded(r, spot->label);
             word_text(r, "]", 1);
@@ -1220,7 +1232,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             if (action && action[0] && r->base)
                 (void)os64_url_absolute(r->base, action, resolved, sizeof(resolved));
             form->action = dup_text(r, resolved);
-            form->fragment = dup_text(r, reference_fragment(action));
+            form->fragment = dup_text(r, some(reference_fragment(action)));
             form->post = method && os64_streq_nocase(method, "post");
             p->nforms++;
             r->form = p->nforms;
@@ -1709,12 +1721,23 @@ wend_form_result_t wend_form_url(const wend_page_t *page, int32_t index,
     }
     out[at] = '\0';
 
+    // IN TREE ORDER, which means merging the two lists a form's controls are
+    // split across: a hidden field remembers how many spots stood before it,
+    // so each one goes out where the page wrote it rather than all of them
+    // in front. Order is only visible to a server when two controls share a
+    // name — which is exactly when it is load-bearing.
     bool first = true;
-    for (int32_t i = 0; i < form->nhidden; i++)
-        if (!pair_append(out, cap, &at, &first,
-                         form->hidden_names[i], form->hidden_values[i]))
-            return WEND_FORM_TOO_LONG;
-    for (int32_t i = 0; i < page->nspots; i++) {
+    int32_t hidden_at = 0;
+    for (int32_t i = 0; i <= page->nspots; i++) {
+        while (hidden_at < form->nhidden && form->hidden_after[hidden_at] <= i) {
+            if (!pair_append(out, cap, &at, &first,
+                             some(form->hidden_names[hidden_at]),
+                             some(form->hidden_values[hidden_at])))
+                return WEND_FORM_TOO_LONG;
+            hidden_at++;
+        }
+        if (i == page->nspots)
+            break;
         const wend_spot_t *spot = &page->spots[i];
         bool room = true;
         if (spot->form != from->form)
@@ -1742,10 +1765,34 @@ wend_form_result_t wend_form_url(const wend_page_t *page, int32_t index,
                                        some(spot->options[spot->chosen].value));
                 break;
             case WEND_SPOT_SUBMIT:
-                // Only the button that was pressed says so.
-                if (i == index)
-                    room = pair_append(out, cap, &at, &first, some(spot->name),
-                                       some(spot->value));
+                // Only the button that was pressed says so — and an IMAGE
+                // button says it differently: the standard sends where the
+                // pointer was, which for a keyboard is the origin, and
+                // never the button's value. A server written for one is
+                // looking for `name.x` and would not see a `name=`.
+                if (i != index)
+                    break;
+                if (spot->image) {
+                    char field[OS64_URL_PATH_MAX];
+                    const char *base_name = some(spot->name);
+                    if (base_name[0] == '\0')
+                        base_name = "";
+                    for (int32_t axis = 0; axis < 2 && room; axis++) {
+                        size_t at_name = 0;
+                        field[0] = '\0';
+                        if (!append_raw(field, sizeof(field), &at_name, base_name)
+                            || !append_raw(field, sizeof(field), &at_name,
+                                           axis == 0 ? ".x" : ".y")) {
+                            room = false;
+                            break;
+                        }
+                        room = pair_append(out, cap, &at, &first,
+                                           base_name[0] ? field : "", "0");
+                    }
+                    break;
+                }
+                room = pair_append(out, cap, &at, &first, some(spot->name),
+                                   some(spot->value));
                 break;
             default:
                 break;
@@ -1792,6 +1839,7 @@ void wend_page_free(wend_page_t *page)
         }
         os64_free(form->hidden_names);
         os64_free(form->hidden_values);
+        os64_free(form->hidden_after);
     }
     for (int32_t i = 0; i < page->nanchors; i++)
         os64_free(page->anchors[i].name);

@@ -430,6 +430,9 @@ static void anchor_checks(void)
     CHECK(wend_anchor_line(page, "two") > wend_anchor_line(page, "one"));
     CHECK(wend_anchor_line(page, "old") >= 0);      // the 1994 spelling
     CHECK(wend_anchor_line(page, "nothing") == -1);
+    // `#` alone and `#top` both mean the document's top; the navigator
+    // answers them, but the renderer has to say that one was ASKED for.
+    CHECK(page->nspots == 2 && page->spots[0].has_fragment);
     // The row an anchor names is the row its element begins on, so a reader
     // sent there finds the heading at the top rather than above the screen.
     int32_t at = wend_anchor_line(page, "two");
@@ -522,6 +525,24 @@ static void form_checks(void)
     expect_url("formaction", "<form action=/s method=get><input name=q value=x>"
                "<input type=submit formaction=/other></form>",
                1, WEND_FORM_OK, "http://host/other?q=x");
+    // An IMAGE button sends where you clicked, which from a keyboard is the
+    // origin — and never its value, which is what a server expecting
+    // `name.x` is written against.
+    expect_url("image button", "<form action=/s><input name=q value=x>"
+               "<input type=image name=go src=go.gif value=ignored></form>",
+               1, WEND_FORM_OK, "http://host/s?q=x&go.x=0&go.y=0");
+    expect_url("image nameless", "<form action=/s><input name=q value=x>"
+               "<input type=image src=go.gif></form>",
+               1, WEND_FORM_OK, "http://host/s?q=x");
+
+    // THE FORM DATA SET GOES OUT IN TREE ORDER, hidden fields included —
+    // visible only when two controls share a name, which is exactly when a
+    // server is counting on it.
+    expect_url("tree order", "<form action=/s><input name=k value=1>"
+               "<input type=hidden name=k value=2><input name=k value=3>"
+               "<input type=hidden name=k value=4><input type=submit></form>",
+               2, WEND_FORM_OK, "http://host/s?k=1&k=2&k=3&k=4");
+
     // A DISABLED OPTION is shown, never stepped onto, and never sent — which
     // is exactly what a "choose one" placeholder needs.
     expect_url("placeholder", "<form action=/s><select name=pick>"
@@ -559,6 +580,19 @@ static void form_checks(void)
             wend_page_free(page);
         }
     }
+    // `#` with nothing after it asked for a fragment; an empty href did not.
+    {
+        wend_page_t *page = render_html_text("<a href='#'>top</a><a href=''>again</a>",
+                                             40, "http://host/p");
+        CHECK(page && page->nspots == 2);
+        if (page && page->nspots == 2) {
+            CHECK(page->spots[0].has_fragment && page->spots[0].fragment[0] == '\0');
+            CHECK(!page->spots[1].has_fragment);
+            CHECK(strcmp(page->spots[0].url, "http://host/p") == 0);
+        }
+        wend_page_free(page);
+    }
+
     // An empty href names the page it is on, which is what a reload link is.
     {
         wend_page_t *page = render_html_text("<a href=''>again</a>", 40,
@@ -648,6 +682,35 @@ static void form_checks(void)
 // partial, frees clean, and never hands back a line the painter cannot draw.
 static void oom_checks(void)
 {
+    // THE FORM MACHINERY UNDER FAILURE. Spots, options, anchors and hidden
+    // fields are all allocated mid-walk, so a refusal at any step can leave
+    // a page half-built — and a NUMBER typed at the status row reaches any
+    // spot, drawn or not. What comes back must be paintable, answerable and
+    // free-clean at every one of those steps.
+    for (size_t n = 1; n < 500; n++) {
+        allocations = 0;
+        fail_at = n;
+        wend_page_t *page = render_html_text(
+            "<h2 id=here>Form</h2><form action='/s#r'>"
+            "<input type=hidden name=h value=1><input name=q value=x size=4>"
+            "<select name=p><option disabled selected>Pick<option value=2>Two</select>"
+            "<input type=checkbox name=c checked><textarea name=t>a\nb</textarea>"
+            "<button formmethod=post name=go>Send</button></form>"
+            "<a href='#here'>back up</a>", 40, "http://host/p");
+        if (page) {
+            check_printable(page);
+            char url[512], frag[64];
+            // Every spot is asked what it would send; none may fault.
+            for (int32_t i = 0; i < page->nspots; i++)
+                (void)wend_form_url(page, i, "http://host/p", url, sizeof(url),
+                                    frag, sizeof(frag));
+            (void)wend_anchor_line(page, "here");
+            wend_page_free(page);
+        }
+        fail_at = 0;
+    }
+    CHECK(live == 0);
+
     for (size_t n = 1; n < 400; n++) {
         allocations = 0;
         fail_at = n;

@@ -91,6 +91,10 @@ typedef struct {
     // table-of-contents link, which the navigator answers by moving rather
     // than by fetching.
     char   *fragment;
+    // ...and whether the href ASKED for one at all. `#` with nothing after
+    // it is the document's top, which is a move; no `#` is an address,
+    // which is a fetch. The fragment text cannot tell those apart.
+    bool    has_fragment;
     char   *name;        // a control's name; "" is a control nothing sends
     char   *value;       // what it holds NOW — typed text, or the value attribute
     char   *label;       // SUBMIT: the words on it
@@ -104,6 +108,9 @@ typedef struct {
     char   *form_fragment;
     bool    has_method;  // whether `post` below means anything
     bool    post;
+    // SUBMIT: an image button, which does not send its value. What it sends
+    // is where you clicked, and a keyboard's answer to that is the origin.
+    bool    image;
     bool    on;          // CHECK / RADIO: ticked
     bool    secret;      // TEXT: a password — never drawn, never echoed
     wend_option_t *options;   // CHOICE: what it offers
@@ -126,7 +133,12 @@ typedef struct {
     // data rather than places a person can land, so they live here instead
     // of in the spot list, where they would take numbers nothing draws.
     char **hidden_names, **hidden_values;
-    int32_t nhidden, hiddencap, hiddenvalcap;
+    // ...and WHERE each one stood, as the number of spots that existed when
+    // it was met. The form data set goes out in TREE ORDER, and a hidden
+    // field is the one part of a form that is not a spot, so without this
+    // the query would put every hidden field first whatever the page said.
+    int32_t *hidden_after;
+    int32_t nhidden, hiddencap, hiddenvalcap, hiddenaftercap;
 } wend_form_t;
 
 // WHERE A `#name` LANDS. Every element carrying an `id`, and every old-style

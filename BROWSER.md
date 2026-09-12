@@ -504,7 +504,10 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   numbered in the same sequence as the links: a box you type in as
   `[n][value___]` at the page's own `size`, a tick box as `[n][x]` or
   `[n][ ]`, one of a radio group as `[n](*)` or `[n]( )`, a list as
-  `[n][v the chosen option]`, a button as `[n][its words]`. A `textarea`
+  `[n][v the chosen option]`, a button as `[n][its words]` — an IMAGE
+  button by its `alt` text, since that is what it is called, and it sends
+  where the pointer was rather than a value, which from a keyboard is the
+  origin. A `textarea`
   is a box with its text as the starting value — kept VERBATIM, because
   that text is the field's value and collapsing its spacing would send
   the server something the page did not put there — shown on one row,
@@ -596,8 +599,11 @@ is opened to type in, a tick box is ticked, a list steps to its next
 option, a button sends its form. **A link into the page you are already
 on is a MOVE, not a fetch**: every element carrying an `id`, and every
 old-style `<a name>`, records the row its content opens on, so a `#name`
-is answered by scrolling there. A page that does not carry the name says
-so and stays where it is. A move leaves NO crumb, deliberately: `b`
+is answered by scrolling there. `#` with nothing after it is the
+document's top, and `#top` falls back to it when no element claims the
+name — the standard's own fallback, and what most "back to top" links
+rely on, since few of them define anything to match. A page that does not
+carry the name says so and stays where it is. A move leaves NO crumb, deliberately: `b`
 refetches, so a history entry per section would make going back a
 download of the page you are already reading. Typing a number then Enter does the same
 to the spot wearing that number. `g` prompts for an address (a bare
@@ -638,7 +644,10 @@ to, which is what a GET form does; the hidden fields first, then every
 successful control in document order — a box that is not ticked sends
 nothing, a ticked one with no value of its own sends `on`, a list sends
 its option's VALUE rather than the words shown for it, and of two buttons
-only the one pressed says so — and **the button that was pressed may
+only the one pressed says so. The data set goes out in TREE ORDER, hidden
+fields interleaved where the page wrote them rather than all in front,
+because the order is visible to a server exactly when two controls share a
+name — and **the button that was pressed may
 overrule its form**, because the standard lets it carry its own action and
 its own method. The METHOD matters most to a browser that sends only one
 of them: a GET form with a `formmethod=post` button is a POST, and sending
@@ -694,6 +703,9 @@ Codex round is Chris's call.
 | What | Why deferred | Trigger |
 |---|---|---|
 | POST forms | libfetch sends no request body, and that is fetch machinery — Fable-tier by the campaign's own split. A form that posts is refused BY NAME rather than turned into a GET, because a login quietly sent as a query puts a password in somebody's server log | the first thing worth doing that only posts |
+| A list that takes more than one answer (`select multiple`) | one answer is what the keys can express — Enter steps a list, and there is no screen on which to hold several open. The one it shows is the one it sends | a page whose meaning needs two answers from one list |
+| A control bound to a form by `form=<id>` rather than by nesting | the association is HTML5's and the pages this face is aimed at do not use it; a control outside every form is drawn and says it belongs to none | the first page that puts its button outside its form |
+| A `text/plain` body in a charset that is neither UTF-8 nor Latin-1 | libhtml owns the encoding ladder and only markup goes through it; raw text takes the reply's label for UTF-8 and treats everything else as Latin-1, so a Shift-JIS `.txt` reads as mojibake rather than as a refusal | the first text file worth reading that says it is something else |
 | A file-upload control | it is a POST with a body made of parts, so it waits on the row above and on a file picker this browser has no screen for | a page worth uploading to |
 | Editing longer than a status row | a box is edited on the bottom row, so a long value is a scrolling window onto itself; fine for a query, thin for a comment | the first time somebody writes prose into a page |
 | `gopher://` links | libfetch's gopher scheme is booked; the gopher client still owns the protocol | the browser's first gopher link |

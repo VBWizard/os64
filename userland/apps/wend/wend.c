@@ -360,10 +360,21 @@ static bool confirm(const char *question)
     sgr_reset();
     cursor_to(s_rows, used + 1);
 
-    char c;
-    if (key_byte(&c, OS64_WAIT_FOREVER) != KEY_BYTE_GOT)
-        return false;                    // nobody is there to ask
-    return c == 'y' || c == 'Y';
+    for (;;) {
+        char c;
+        int got = key_byte(&c, OS64_WAIT_FOREVER);
+        // A CAUGHT SIGNAL IS NOT AN ANSWER. A resize while this is up would
+        // otherwise be read as "no" and take the question off the screen
+        // with it — the safe direction, but not one anybody chose.
+        if (got == KEY_BYTE_INTERRUPT) {
+            if (s_want_quit)
+                return false;
+            continue;
+        }
+        if (got != KEY_BYTE_GOT)
+            return false;                // nobody is there to ask
+        return c == 'y' || c == 'Y';
+    }
 }
 
 // WHAT A PROMPT CAME BACK WITH takes three words rather than two: "nothing
@@ -1043,7 +1054,12 @@ static bool starts_with_nocase(const char *s, const char *prefix)
 // throwing away the reader's place would punish them for the page's mistake.
 static void jump_to_anchor(view_t *v, const char *name)
 {
-    int32_t line = wend_anchor_line(v->page, name);
+    int32_t line = name[0] == '\0' ? 0 : wend_anchor_line(v->page, name);
+    // `#top` NAMES THE TOP when nothing else claims it, which is the
+    // standard's own fallback and what a page's "back to top" link relies
+    // on — most of them never define an element to match.
+    if (line < 0 && os64_streq_nocase(name, "top"))
+        line = 0;
     if (line < 0) {
         status_set(" this page has nothing named #%s", name);
         return;
@@ -1066,9 +1082,9 @@ static void follow_link(view_t *v, int32_t index)
     // A LINK INTO THE PAGE YOU ARE ON IS A MOVE, NOT A FETCH. Asking the
     // server for the article again to show its top is what a table of
     // contents would otherwise do to you, once per entry.
-    if (fragment[0] != '\0' && os64_streq(url, v->url)) {
+    if (v->page->spots[index].has_fragment && os64_streq(url, v->url)) {
         v->sel = index;
-        jump_to_anchor(v, fragment);
+        jump_to_anchor(v, fragment);     // "" is the top of the document
         return;
     }
     if (url[0] == '\0') {
@@ -1152,8 +1168,10 @@ static void form_send_if_alone(view_t *v, int32_t index)
         if (p->spots[i].form != p->spots[index].form)
             continue;
         // A button is not something to answer: it is how you say you are
-        // done, which is exactly what finishing the box already said.
-        if (p->spots[i].kind != WEND_SPOT_LINK && p->spots[i].kind != WEND_SPOT_SUBMIT)
+        // done, which is exactly what finishing the box already said. Nor is
+        // a box the page keeps fixed — there is nothing to do to it.
+        if (p->spots[i].kind != WEND_SPOT_LINK && p->spots[i].kind != WEND_SPOT_SUBMIT
+            && !p->spots[i].readonly)
             answers++;
     }
     if (answers == 1)
