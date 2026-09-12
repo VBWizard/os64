@@ -1,0 +1,1886 @@
+page: textfiles-computers
+title: T E X T F I L E S
+width: 80
+lines: 982
+spots: 446
+forms: 0
+incomplete: no
+--
+|General Computer Textfiles
+|~ B:0-26
+|
+|Your one-stop shop for all files of a "computery" nature, that cover how to
+|rebuild a piece of computer hardware to do something it was never meant to do,
+|or to see someone go really deeply into a computing subject that would cause
+|most people to yawn and look for the snack table. Since BBSes were on computers,
+|it was natural for people who used BBSes to focus on all aspects of these
+|wonderful machines. The evidence of their interest and their experimentation
+|resides below.
+|
+|Of course, nearly ALL textfiles are computer-related in some fashion, and some
+|subjects might fit here but fit even better in another section. For example, you
+|should most definitely check out the [1]programming and [2]apple sections as
+|~ L1:37-51 L2:56-64
+|well, as you might not agree with what I decided should go where.
+|
+|
+|Filename
+|~ B:0-8
+|Size
+|~ B:0-4
+|Description of the Textfile
+|~ B:0-27
+|[3]ASTRESEARCH    Technical Bulletins from AST Research
+|~ BL3:0-14 B:18-55
+|[4]CYBERSPACE    Files Concering the Idea of "Cyberspace"
+|~ BL4:0-13 B:17-57
+|[5]DOCUMENTATION    Documentation Files and Instruction Sets
+|~ BL5:0-16 B:20-60
+|[6]HARDDRIVES    Hard Drive Technical Information
+|~ BL6:0-13 B:17-49
+|[7]PRESSRELEASE    Press Releases by Companies Long Forgotten
+|~ BL7:0-15 B:19-61
+|
+|[8]1003v-mm   4347
+|~ L8:0-11
+|Information on the Western Digital 1000v-MMx Series
+|[9]1006v-sr   4347
+|~ L9:0-11
+|Information on the Western Digital WD1006V-SR1 and 2
+|[10]1080mods   3610
+|~ L10:0-12
+|Amiga 1080 Monitor Modifications
+|[11]1105.txt   2468
+|~ L11:0-12
+|How to Boot with DR DOS (October 31, 1991)
+|[12]144_ctrl.txt   6819
+|~ L12:0-16
+|Zaphod Beeblebrox' Notes on using PC 1.44mb 3.5" Drives with Atari STs and STEs
+|[13]144disk.txt   6178
+|~ L13:0-15
+|Edited Textfile about 3.5" Diskette Formats, from Kevin Maier of IBM Corporation
+|(May 10, 1989)
+|[14]144meg.txt   13288
+|~ L14:0-14
+|How to Upgrade your Atari ST Floppies to 1.44mb 3.5" Drives, by Robert B. Pegram
+|[15]1541.tri   12170
+|~ L15:0-12
+|Two Rarely Used 1541 Disk Drive Functions, by Peter Weighill (September 1993)
+|[16]154xb   8693
+|~ L16:0-9
+|JUMPERS: Adaptec AHA-1540B
+|[17]16550a_n   5842
+|~ L17:0-12
+|Information on the 16550a UART
+|[18]1991-12   42275
+|~ L18:0-11
+|What is ISDN Good for? By Mitch Kapor of the EFF (December 10, 1991)
+|[19]1pt4mb.inf   5035
+|~ L19:0-14
+|Notes on the Use of 1.4mb Drives in AT Compatibles
+|[20]2310-12   4347
+|~ L20:0-11
+|JUMPERS: Adaptec ACB-2310,12
+|[21]2496   4891
+|~ L21:0-8
+|How to upgrade your US Robotics 2400 Baud Modem into a 9600 Baud Modem by Death
+|Bringer 06/07/1991
+|[22]24to96x.txt   7424
+|~ L22:0-15
+|Complaint about a file purporting to convert a 2400bd Modem to 9600 baud; claims
+|it's a Hoax
+|[23]25mgupgd.txt   13929
+|~ L23:0-16
+|A 2.5 Meg Socketed RAM Upgrade for the 1040ST by Barry Orlando (Decmber 28,
+|1988)
+|[24]286   6326
+|~ L24:0-7
+|A Review of Compaq DeskPro 286 by Bob McDuffee
+|[25]286-2   2828
+|~ L25:0-9
+|Part 2 of the Review of the Compaq DeskPro 286 by Bob McDuffee
+|[26]28_8khst.txt   9335
+|~ L26:0-16
+|US Robotics Announces the Last Modem You'll Ever Buy (Press Release, June 8,
+|1992)
+|[27]2ndrs232.txt   7725
+|~ L27:0-16
+|How to Get a Second RS232 Port For Your Atari (July 15, 1987)
+|[28]2w93358a.txt   4445
+|~ L28:0-16
+|Guide to PGP Operations in a Secure Environment
+|[29]386486.txt   5589
+|~ L29:0-14
+|A Low Cost Performance Boost for Your 386 PC
+|[30]400top.txt   12870
+|~ L30:0-14
+|The SatisFAXtion Modem/400: Solutions to Common Problems
+|[31]401bugs.txt   7387
+|~ L31:0-15
+|Two Suspected Bugs in MS-DOS v4.01 by William S. Ataras III (June 5, 1991)
+|[32]450baud.txt   7296
+|~ L32:0-15
+|On the Topic of 450 Baud, by Scott Loftesness, May 28, 1983
+|[33]486vs040.txt   15981
+|~ L33:0-16
+|CISC: The Intel 80486 vs. The Motorola MC68040 from Advanced Microprocessors by
+|Daniel Tabak (Scribed by Mike, July 1992)
+|[34]4chan8bi.asc   8688
+|~ L34:0-16
+|Plans for a 4-Channel 8-Bit Analog-to-Digital Converter for PC from Francis J.
+|Deck
+|[35]4dostips.txt   3297
+|~ L35:0-16
+|4DOS Specific Information and Tips
+|[36]500hacks.txt   46075
+|~ L36:0-16
+|A Do It Yourself Guide to Computer Repair and Modification of the PC and Amiga
+|500 from Lewin Edwards
+|[37]500mm.txt   6983
+|~ L37:0-13
+|Disk Storage Reaches Molecular Level, from Video Computing November/December
+|1988 Issue
+|[38]68040.txt   12653
+|~ L38:0-13
+|The New CISC Micorporcessor offers RISC Performance
+|[39]86bugs.lst   13776
+|~ L39:0-14
+|Harald Feldmann's 86BUGS List (November 3, 1994)
+|[40]87.set   15313
+|~ L40:0-10
+|Information about the 8087 and 287 Coprocessors
+|[41]8bitcomp.txt   24445
+|~ L41:0-16
+|The Designing and Building of an 8-Bit Computer: A Personal Story, by Mark Balch
+|(1990)
+|[42]8chan12b.asc   6047
+|~ L42:0-16
+|Chap 12-Bit ADC for IBM PC by Francis J. Deck
+|[43]8meg_exp.txt   8158
+|~ L43:0-16
+|An Amiga 8meg RAM Expander, by John Kamchen (1991)
+|[44]9600.inf   19072
+|~ L44:0-12
+|The Long, Painful Road to a 9600 Baud Standard
+|[45]9600data.txt   30848
+|~ L45:0-16
+|A Comparison of High Speed Modems Compatibility/Features/Differences/Prices
+|(March 3, 1991)
+|[46]9600info.inf   19119
+|~ L46:0-16
+|9600 Baud Modems: An Overview
+|[47]a4000   6725
+|~ L47:0-9
+|A Scared Amiga Beta Tester lets the Cat out of the Bag about the Amiga 4000
+|[48]a5000.txt   11864
+|~ L48:0-13
+|The First Reports of the Amiga 5000
+|[49]a500_1mb   8312
+|~ L49:0-12
+|Directions on How to Convert your Amiga 501 Cartridge to Chip RAM
+|[50]aboutems.txt   27370
+|~ L50:0-16
+|Memory Expansion in80x86-Based Computers Under MS-DOS by John Wilson of
+|Hyperdyne
+|[51]abrash.lst   20429
+|~ L51:0-14
+|Roll Your Own Minilanguages with Mini-Interpreters, by Michael Abrash and Dan
+|Illowsky (1989)
+|[52]accel.txt   3948
+|~ L52:0-13
+|An Amiga 500 Processor Accellerator Project, by Leslie Ayling
+|[53]act-13.txt   63155
+|~ L53:0-14
+|The Amateur Crackist Tutorial Version 1.3 by Specular Vision
+|[54]adapter.txt   18556
+|~ L54:0-15
+|How to Connect a PC to a VideoCrypt Decoder, by Markus Kuhn (June 19, 1994)
+|[55]add5.25drive.txt   3576
+|~ L55:0-20
+|How to Hook a 5.25" Drive to your Amiga, by Les Ayling
+|[56]add512kb   2438
+|~ L56:0-12
+|How to install a 1mb Chip into an Amiga 500 on the Mothercard
+|[57]addcard.txt   2291
+|~ L57:0-15
+|Hack to Allow an Amiga 1000 or Amiga 500 to expand its 86-pin slot to 100pin
+|[58]addictio.txt   7589
+|~ L58:0-16
+|The Tragedy of Online Addiction, by Steve King
+|[59]addrive.txt   8357
+|~ L59:0-15
+|Generic 3.5 Inch Double Sided Disk Drive for the Atari 520/1040 Series
+|[60]aids.txt   1571
+|~ L60:0-12
+|The AIDS Trojan Horse Program Marches On (March 1990)
+|[61]all-help.tec   36845
+|~ L61:0-16
+|All the Help Scripts from the DESQview 2.26, QEMM 5.0, Manifest 1.0, QRAM 1.0,
+|etc.
+|[62]alsnutt1   2182
+|~ L62:0-12
+|Big Al's Norton Utilities Tech Tips Volume 1 Number 1 by Al Hansen (1990)
+|[63]alt-bin.txt   49521
+|~ L63:0-15
+|Notes on Decoduing UUENCODEd .GIF Files
+|[64]ami-chts.txt   182700
+|~ L64:0-16
+|Large Collection of Amiga Video Game Cheats
+|[65]ami-init.txt   4080
+|~ L65:0-16
+|The Amiga Boot Sequence and Errors
+|[66]amiga_technical_info.txt   43685
+|~ L66:0-28
+|USENET Postings: Amiga Technical Information (1989)
+|[67]amihist.txt   19261
+|~ L67:0-15
+|Notes of RJ Mical Speaking about the Rise and Fall of Amiga Computer
+|[68]amiport.txt   10617
+|~ L68:0-15
+|More Ports for your Amiga: An I/O Expansion Board
+|[69]amscsi.txt   6497
+|~ L69:0-14
+|Building a SCSI COntroller for the Amiga
+|[70]anderson.asc   130304
+|~ L70:0-16
+|Kermit for OS/2 by Brian R. Anderson (1990)
+|[71]anderson.lst   5622
+|~ L71:0-16
+|C Customized Memory Allocators by Paul ANderson
+|[72]andrson2.asc   135168
+|~ L72:0-16
+|Kermit for OS/2 by Brian R. ANderson (1990)
+|[73]anetwork.txt   3363
+|~ L73:0-16
+|Making a Simple Atari ST to Atari ST Link
+|[74]anonymit   34657
+|~ L74:0-12
+|The Joy of Handles, or Everything You Always Wanted to Know About Me But Have No
+|Right to Ask, 1992
+|[75]antiarq.txt   1257
+|~ L75:0-15
+|Getting Rid of the ARQ Flashing by Mr. Fone
+|[76]anywhere.txt   4142
+|~ L76:0-16
+|DOCUMENTATION: The Anywhere Scroller Version 1.00
+|[77]appendix.txt   3866
+|~ L77:0-16
+|A Listing of Modem And Information Standards
+|[78]apple.txt   7253
+|~ L78:0-13
+|The Text of the Apple-Microsoft Agreement
+|[79]arcsuit.txt   56430
+|~ L79:0-15
+|Court Complaint from System Enhancement Associates and PKWARE (July 6, 1988)
+|[80]arthayes.txt   30471
+|~ L80:0-16
+|General Introduction to HAYES Modems and Compatabiles by Ignaat Simons
+|[81]ascii   7504
+|~ L81:0-9
+|Folklore: The Original Uses of the Unusual ASCII Codes, by Douglas Jones (June
+|2, 1994)
+|[82]ascii.inc   1040
+|~ L82:0-13
+|A Short List of ASCII Character Set Definitions
+|[83]asm.txt   101753
+|~ L83:0-11
+|The 8086 Family Architecture
+|[84]asmstr.asc   23451
+|~ L84:0-14
+|Structured Programming Column by Jeff Duntemann (February 3, 1989)
+|[85]asp3404.txt   274371
+|~ L85:0-15
+|Catalog of Products from the Association of Software Professionals (October 4,
+|1990)
+|[86]asp5202.txt   1219432
+|~ L86:0-15
+|Catalog of Products from the Association of Software Professionals
+|[87]asp5301.txt   1292374
+|~ L87:0-15
+|Official Catalog of Products by Association of Shareware Professionals
+|(Contents)
+|[88]asp804.txt   1933029
+|~ L88:0-14
+|Official Catalog of Products by Association of Shareware Professionals
+|(Contents)
+|[89]asp9301.txt   2212930
+|~ L89:0-15
+|Official Catalog of Products by Association of Shareware Professionals
+|(Contents)
+|[90]asp9501.txt   1978185
+|~ L90:0-15
+|Official Catalog of Products by Association of Shareware Professionals
+|(Contents)
+|[91]aspbbs.dlm   42717
+|~ L91:0-14
+|List of Association of Software Professionals Directory
+|[92]atamnesa.txt   2595
+|~ L92:0-16
+|Hey, These IBM ATs have batteries inside and they're failing
+|[93]auping.asc   15046
+|~ L93:0-14
+|Making the move to Modula 2 by J.V. Auping and Chis Johnston
+|[94]author.lst   96222
+|~ L94:0-14
+|A List of Email addresses of 255 Reachable MS-DOS shareware and PD authors
+|(December 17, 1995)
+|[95]autpub.frm   5138
+|~ L95:0-14
+|Application to Join the Association of Software Professionals
+|[96]autstd.txt   13029
+|~ L96:0-14
+|Association of Software Professionals Membership Requirements
+|[97]award.txt   2346
+|~ L97:0-13
+|Award BIOS Drive Type Table
+|[98]ayers.lst   29009
+|~ L98:0-13
+|An Object-Oriented Logic Simulator by Kenneth E. Ayers
+|[99]babel92a.txt   79153
+|~ L99:0-16
+|Babel: A Listing of Computer Oriented Abbreviations and Acronyms by Irving Kind,
+|1989-1992
+|[100]babel94a.txt   105377
+|~ L100:0-17
+|BABEL: A Glossary of Computer Oriented Abbreviations and Acronyms by Irving Kind
+|Version 94A (1994)
+|[101]backdoor.txt   12384
+|~ L101:0-17
+|Collection of Back Doors to computer games, by George Knochel
+|[102]bartle-m   450025
+|~ L102:0-13
+|Interactive Multi-User Computer Games, a Report by Richard Bartle, 1990
+|[103]basunix.hac   15360
+|~ L103:0-16
+|Basic UNIX Use by Lord Lawless
+|[104]bat&conf.txt   7401
+|~ L104:0-17
+|Tricks to Use with Batch Files
+|[105]batch.txt   51183
+|~ L105:0-14
+|Batch Files for Efficiency: Getting Real Work Done
+|[106]battery.txt   26055
+|~ L106:0-16
+|Rechargeable Batteries and Laptop Computers
+|[107]bauer.lst   10217
+|~ L107:0-14
+|Optimizing in a Parallel Environment by Barr E. Bauer (199)
+|[108]bb   12057
+|~ L108:0-7
+|Beta Bits by Tim Conner, Jr. (1986)
+|[109]bbsnoise.txt   3251
+|~ L109:0-17
+|Your System Has Noise, by Bill Noel
+|[110]begunix.txt   337256
+|~ L110:0-16
+|A Beginner's Guide to UNIX, from the Denver Office (September 16, 1991)
+|[111]being.txt   38959
+|~ L111:0-14
+|Being in Nothingness: Virtual Reality and the Pioneers of Cyberspace, by John
+|Perry Barlow
+|[112]best.cps   11430
+|~ L112:0-13
+|Get the Best out of JRCOMM and your DUALST 14.4kbps on your Amiga, from The
+|Spirit (May 19, 1991)
+|[113]bev105.res   10421
+|~ L113:0-15
+|The Hack Report Volume 2, Number 3 (March 7, 1993)
+|[114]biblio.lst   28958
+|~ L114:0-15
+|Bibliography of PC Interrupt Fuctions by Ralf Brown (February 11, 1996)
+|[115]bibliog.txt   24448
+|~ L115:0-16
+|Laptop and Portable Computer Books
+|[116]bill   8784
+|~ L116:0-9
+|Bill Gates Interview from PC Magazine
+|[117]bill1035.pro   16647
+|~ L117:0-17
+|Description and Call to Arms on H.R. 1035
+|[118]bios1215.man   4123
+|~ L118:0-17
+|AMI 286 and 386 BIOS New Release Notes (December 15, 1988)
+|[119]bios225.man   6288
+|~ L119:0-16
+|AMI 286 and 386 BIOS Release Notes (February 25, 1989)
+|[120]bios330.man   4264
+|~ L120:0-16
+|AMI 286 and 386 BIOS Release Notes (March 30, 1989)
+|[121]biprint.txt   9485
+|~ L121:0-16
+|Making your PC Parallel Port Bi-Directional by Mark F. Bower (IBM PC) ((July
+|1991)
+|[122]bitsbaud.txt   10112
+|~ L122:0-17
+|Bits, Baud Rate, and BPS: Taking the Mystery Out of Modem Speeds, by Michael A.
+|Banks
+|[123]blt6   21816
+|~ L123:0-9
+|Techniques for Off-Line Mail Reading, by Robert Dionne (May 6, 1990)
+|[124]blum.lst   18024
+|~ L124:0-13
+|Bidirectional Associative Memory Systems in C++, by Adam Blum
+|[125]boost.txt   1670
+|~ L125:0-14
+|An Audio Booster on the Amiga 500, by Chucky of Sargon
+|[126]bootfromdf1.txt   6757
+|~ L126:0-20
+|Saving DF0: by Booting up from DF1: by Les Ayling
+|[127]bowling.asc   11641
+|~ L127:0-16
+|Real-Time Modeling with MS-DOS by David Bowling
+|[128]bradbery.asc   12901
+|~ L128:0-17
+|Porting Fortran Programs from Minis to PCS, by John L. Bradberry
+|[129]bright.lst   3200
+|~ L129:0-15
+|Getting a Handle on Virtual Memory, by Walter Bright
+|[130]bugrep.txt   1582
+|~ L130:0-15
+|Bug Report Form for PKWARE
+|[131]buildit.doc   59591
+|~ L131:0-16
+|Building an IBM Compatible, or How to be a Real Clone, by DJ Elliott (January
+|1991)
+|[132]buildit.txt   33024
+|~ L132:0-16
+|The Obese Agnus: The New 500 Board and Other Recent Experiences by Andrew WIlson
+|(July 23, 1989)
+|[133]buy386   7996
+|~ L133:0-11
+|The Developer's Guide to Buying a 386
+|[134]buyguide.txt   25636
+|~ L134:0-17
+|PC Gaming Sound Cards: A Buyer's Guide v0.34 by Dave Masten (November 4, 1994)
+|[135]c64topc.txt   5646
+|~ L135:0-16
+|How to Connect a Commodore 64 Compatible Printer to an IBM PC Compatible
+|Computer (March, 1995)
+|[136]cache.txt   5795
+|~ L136:0-14
+|Disabling Write Caching in DOS 6
+|[137]carriers.pro   6100
+|~ L137:0-17
+|Comparison of different Long Distance Carrier performance
+|[138]cart.txt   8192
+|~ L138:0-13
+|Turning an Atari ST's Cartridge Port into a Read/Write Port
+|[139]cascade.txt   6784
+|~ L139:0-16
+|Information from Cascade Electronics about Being Ripped Off
+|[140]caution.txt   4613
+|~ L140:0-16
+|Doublespace in DOS 6
+|[141]cbm_dead.txt   2610
+|~ L141:0-17
+|Eulogy on Commodore as it Goes Under (From Down Under)
+|[142]cd-rom   93046
+|~ L142:0-11
+|An Introduction to CD-ROM Technolgy by Andy Poggio (March 1988)
+|[143]chaos.txt   2432
+|~ L143:0-14
+|Chaos, Strange Attractors and BrainMaker Plots
+|[144]cheap144disk.txt   2996
+|~ L144:0-21
+|Making a Cheap 1.44mb Disk!
+|[145]cheats   40275
+|~ L145:0-11
+|A Very Large Collection of Amiga Cheat Codes
+|[146]cleankey.txt   9856
+|~ L146:0-17
+|How to Clean the IBM PC Keyboard by David R. Bivens
+|[147]clinton.sgi   38608
+|~ L147:0-16
+|Remarks by the President and Vice President to Silicon Graphics Employees, Feb.
+|22, 1993
+|[148]coemail   12431
+|~ L148:0-12
+|Formulating A Company Policy on Access to and Use and Disclosure of Electronic
+|Mail on Company Computer Systems, by the Electronic Mail Association, October
+|22, 1990
+|[149]colors.32k   9679
+|~ L149:0-15
+|Getting an Atari ST to Display 32,768 Colors by Barry orlando (September 9,
+|1989)
+|[150]colr.txt   8448
+|~ L150:0-13
+|Guidelines for Effective Color Terminal Usage, from Tektronix
+|[151]comdefs.hum   5121
+|~ L151:0-16
+|Grab-Bag of Geeky and General Humor
+|[152]comlpt.pro   4175
+|~ L152:0-15
+|An Overview of PC Hardware's LPT/COM/IRQs
+|[153]compdev.txt   12301
+|~ L153:0-16
+|Some Thoughts on the Development of Personal Computers by Duane Bristow
+|[154]comphorror.hum   164912
+|~ L154:0-19
+|A Fantastic Collection of Computer Horror Stories
+|[155]compiler.tut   8576
+|~ L155:0-17
+|Compilers and How They Work: An Overview, by Lou Morgan
+|[156]compuser   9572
+|~ L156:0-13
+|The Gospel according to CompuServe! (Their position)
+|[157]conclus.txt   17859
+|~ L157:0-16
+|The Conclusion of the Courts in the INSLAW Software Case, January, 1992
+|[158]config.txt   34499
+|~ L158:0-15
+|Your CONFIG.SYS and AUTOEXEC.BAT by Barry Simon, 1986
+|[159]convmem.txt   1078
+|~ L159:0-16
+|JZig's Guide to Freeing Conventional Memory (On a PC)
+|[160]copyprot.pro   11392
+|~ L160:0-17
+|Copy Protection: A History and Outlook
+|[161]copyrigh.pro   10880
+|~ L161:0-17
+|Copyrighting Public Domain Programs
+|[162]courierv34man.txt   346655
+|~ L162:0-22
+|The Courier V.34 Manual, by U.S. Robotics (1994)
+|[163]cpsranno   2259
+|~ L163:0-13
+|Upcoming Conventions of Computers, privacy and Freedom (1994)
+|[164]cpucmp14.txt   31839
+|~ L164:0-17
+|Performance Comparison: Intel 386DX, Intel RapidCAD, C&T 38600DX, Cyrix 486DLC
+|by Norbert Juffa
+|[165]crtstuff.txt   51493
+|~ L165:0-17
+|The Quest for the Ultimate Display System by Steve Gibson
+|[166]defrag.txt   2291
+|~ L166:0-15
+|Defragmenting a Doublespace Drive in DOS 6
+|[167]designer.txt   9653
+|~ L167:0-17
+|Sapphire Designer Notes, by Tim Campbell
+|[168]dhalf.txt   63489
+|~ L168:0-14
+|All You Need to Know about Digital Halftoning/Dithering, by Lee Daniel Crocker
+|(June 20, 1991)
+|[169]diagnose.txt   18306
+|~ L169:0-17
+|An introduction to Troubleshooting your IBM PC by Jerry Schneider of the Capital
+|PC User Group
+|[170]diagrams.txt   36835
+|~ L170:0-17
+|Listing of Different Drives and Controllers for TheRef
+|[171]disks1   15882
+|~ L171:0-11
+|The Technology of Magnetic Disk Storage by Steve Gibson
+|[172]disks2   16889
+|~ L172:0-11
+|A Hard Disk Drive for Steve's Dream Machine by Steve Gibson
+|[173]disks3   28492
+|~ L173:0-11
+|The Logical Structure, Organization and Management of Hard Disk Drives by Steve
+|Gibson
+|[174]dma.asc   18432
+|~ L174:0-12
+|DMA Techniques for Personal Computer Data Acquisition
+|[175]docwaste.txt   1033
+|~ L175:0-17
+|George Gutman's Call for lack of spaces in DOC files
+|[176]dodont.txt   12638
+|~ L176:0-15
+|How To Get The Most Out of Your New PC
+|[177]dos-user.s-g   3605
+|~ L177:0-17
+|The PC User's Guide to UNIX
+|[178]dos6tips.txt   1957
+|~ L178:0-17
+|DOS 6 Tips and Tricks: Review
+|[179]dos_err.txt   3456
+|~ L179:0-16
+|Dos 2.0 Has Problems with Redirection of I/O
+|[180]doshist.txt   41430
+|~ L180:0-16
+|The Development of DOS
+|[181]dosmem.txt   13205
+|~ L181:0-15
+|The PC Memory Management Overview
+|[182]dosmnual.txt   42543
+|~ L182:0-17
+|PC/MS-DOS: The Essentials, by George Campbell
+|[183]drives.txt   5060
+|~ L183:0-15
+|Driving Us Crazy, but For a Reason (Hard Drive Overview) by Alan Brenden
+|[184]dvinter.1st   8430
+|~ L184:0-16
+|The DESQview Interrupt List, Release 90.3, 07/15/90
+|[185]dvscript.txt   2432
+|~ L185:0-17
+|Creating and Using Scripts with DESQview
+|[186]ea.iff.85   63215
+|~ L186:0-14
+|EA IFF 85: The Standard for Interchange Format Files by Jerry Morrison of
+|Electronic Arts (January 14, 1985)
+|[187]earlybst.txt   6529
+|~ L187:0-17
+|Timo's Subjective Choices of the Best Public Domain and Shareware MS-DOS Early
+|Material (September 13, 1995)
+|[188]echtutor.txt   17437
+|~ L188:0-17
+|A Tutorial on the New Phenomenon of Fido Echomail
+|[189]eight.lws   14297
+|~ L189:0-14
+|The Adventures of Lone Wolf Scientific: The House Where Andrew.BAS lived, by
+|Michy Peshota
+|[190]email   21201
+|~ L190:0-10
+|A Large Suggested Summary of Policies on Electronic Mail
+|[191]equip.txt   45113
+|~ L191:0-14
+|Hints on Purchasing a Laptop Computer
+|[192]errors.txt   8182
+|~ L192:0-15
+|A List of Errors by Hard Drives Under DOS
+|[193]esdi.txt   8326
+|~ L193:0-13
+|Basic Installation Procedure for ESDI Drives by Ruan Ramsey (July 3, 1992)
+|[194]essays.txt   263347
+|~ L194:0-15
+|Art in the Age of Digital Dissemination: Class Essays from an Art and Technology
+|Course, 1993
+|[195]execnois.txt   3889
+|~ L195:0-17
+|If You Are Getting Garbage On the Screen (Modem Diagnostics)
+|[196]ext-ram.txt   14198
+|~ L196:0-16
+|An Extended RAM Tutorial for MS-DOS by Raymond Dunn
+|[197]fangrev3a500   3372
+|~ L197:0-17
+|Making a Faster Agnus Chip, by Hans Van Der Werf (October 30, 1989)
+|[198]faq.txt   52582
+|~ L198:0-12
+|FAQ: OS/2 Frequently Asked Questions List: User's Edition Verison 2.0 (April 25,
+|1992)
+|[199]fbi.sys   5192
+|~ L199:0-12
+|Summary of FBI Computer Systems, by Ralph Harvey of Full Disclosure
+|[200]fcc.txt   12545
+|~ L200:0-12
+|Computer and Software News Part 1 by Tim Elmer
+|[201]fd_ref42.lan   36874
+|~ L201:0-17
+|A Large Floppy Drive Directory Version 4.2 (October 1, 1991)
+|[202]fd_ref42.por   23264
+|~ L202:0-17
+|Floppy Drive Directory by TheRef Version 4.2 (October 1, 1991)
+|[203]fdd   11750
+|~ L203:0-8
+|teria, by Bud Leroy
+|[204]fileid.txt   18022
+|~ L204:0-15
+|Information on Why You Should Use FILE_ID.DIZ
+|[205]filename.txt   21870
+|~ L205:0-17
+|File Names and Extensions: The Keys to the Kingdom
+|[206]flop.txt   3194
+|~ L206:0-13
+|Using Doublespace on Floppy Disks in DOS 6
+|[207]floppies.txt   15744
+|~ L207:0-17
+|Everything You've Ever Wanted to Know Abut Floppy Disks by Ted Jensen
+|[208]format.txt   2510
+|~ L208:0-15
+|Photo/Digital Specifications for GIF Files
+|[209]forums.lst   20327
+|~ L209:0-15
+|A Complete List of Public Forums on Online Services by Ed Girou of the
+|CompuServe Practice Forum (June 1, 1993)
+|[210]freedom.pro   6068
+|~ L210:0-16
+|Must We Declare an Electronic Declaration of Independence
+|[211]freenet.cap   13691
+|~ L211:0-16
+|The Concept of Community Computing
+|[212]fricc   2296
+|~ L212:0-10
+|The FRICC Policy on Interocnnectivity and Resource Sharing
+|[213]ftp2uk23.inf   71087
+|~ L213:0-17
+|Notes for PC/MSDOS users at UK JANET sites (April 27, 1992)
+|[214]ftxt   19014
+|~ L214:0-9
+|Information on FTXT: A Text Standard for IFF Files from Steve Shaw and Jerry
+|Morrison, Electronic Arts (November 15, 1985)
+|[215]fyi-8   253367
+|~ L215:0-10
+|The Site Security Handbook, a guideline for computer systems, July 1991
+|[216]galileo.txt   93697
+|~ L216:0-16
+|The STS-34 Press Kit (Exploratory Spacecraft)
+|[217]gameport.inf   3231
+|~ L217:0-17
+|Specifications for the IBM/PC Game Port Connector (April 6, 1990)
+|[218]genderol   25452
+|~ L218:0-13
+|Gender Issues in Online Communications by Hoai-An Truong, 1993
+|[219]genlock.txt   19649
+|~ L219:0-16
+|The Genlock Circuit Operation Description
+|[220]gfxhints.txt   30197
+|~ L220:0-17
+|Some Hints on Improving your Computer Graphics
+|[221]gifstd.txt   31874
+|~ L221:0-15
+|The GIF Specification
+|[222]glossary.lst   35647
+|~ L222:0-17
+|Glossary of Computer Terms
+|[223]glossary.txt   3311
+|~ L223:0-17
+|Yet Another Computer Glossary
+|[224]gnu   23949
+|~ L224:0-8
+|The GNU Manifesto by Richard Stallman (1985)
+|[225]hack_pom.txt   2215
+|~ L225:0-17
+|Casey at the Byte (Parody of Casey at the Bat)
+|[226]hacktest.txt   8497
+|~ L226:0-17
+|The Hacker Test Version 3.0: Another 'Adventure in Software' from SuperNova
+|Software by Rich 'Crash' Lewis, Jr. (1992)
+|[227]hallfame.txt   100594
+|~ L227:0-17
+|The Freeware Hall of Fame by Rey Barry (June, 1992)
+|[228]handles.txt   33215
+|~ L228:0-16
+|The Joy of Handles (or, Everything You Always Wanted to Know About Me but Have
+|No Right to Ask)
+|[229]hayes.txt   322645
+|~ L229:0-14
+|Technical Reference for Hayes Modem Users, Version 1.0, November 1990
+|[230]hd.txt   28948
+|~ L230:0-11
+|Hard Disks: The Essential Accessory
+|[231]hd_mfr41.dir   23897
+|~ L231:0-17
+|Hard Disk Drive Manufacturer Directory (January 3, 1991)
+|[232]hd_ref41.lan   404370
+|~ L232:0-17
+|Hard Disk Drive Directory Version 4.1 (January 3, 1991)
+|[233]hd_ref41.por   309167
+|~ L233:0-17
+|Hard Disk Drive Directory Version 4.1 (January 3, 1991)
+|[234]hd_ref43.lan   692412
+|~ L234:0-17
+|Hard Disk Drive Directory Version 4.30 (May 1, 1993)
+|[235]hd_ref43.por   587412
+|~ L235:0-17
+|Hard Disk Drive Directory (May 1, 1993)
+|[236]help.txt   3737
+|~ L236:0-13
+|The DOS 6 Help File
+|[237]hint89.txt   2945
+|~ L237:0-15
+|Configuring Autoexec.bat and Config.Sys Files (December 1, 1991)
+|[238]history.txt   17081
+|~ L238:0-16
+|A Little PC History: Where We've Been with No Idea Where We're Going!
+|[239]hoagco.cis   37883
+|~ L239:0-15
+|Transcription from Compuserve of Various Information by Hoagland Mars Mission
+|[240]hoagland.let   29828
+|~ L240:0-17
+|Letter from Richard Hoagland (December 1, 1989)
+|[241]honey.txt   4144
+|~ L241:0-14
+|Honey, Can the Computer Do This? By Wayne Garrison
+|[242]how2mnp.txt   30321
+|~ L242:0-16
+|How to do MNP Modem Protocol
+|[243]hsdiag.res   6557
+|~ L243:0-15
+|The Hack Report Volume 2, Number 5 by Lee Jackson (April 10, 1993)
+|[244]i4004.txt   3213
+|~ L244:0-14
+|Before the Great Dark Cloud: Information on the Intel 4004
+|[245]ibm.fu   6757
+|~ L245:0-11
+|OS/2 Is Still Vaporware (June 4, 1988)
+|[246]ibmindust.txt   2408
+|~ L246:0-18
+|Connect IBM Industrial Keyboard to a AT Type Computer
+|[247]ibmkeyboard.txt   708
+|~ L247:0-20
+|IBM Keyboard Cable Pin Assignments
+|[248]itcfree.800   3563
+|~ L248:0-16
+|Information on the ITCnet Toll Free Communications Network by Jack Reece
+|[249]jadu13.rvw   3983
+|~ L249:0-15
+|REVIEW: Just Another Disk Utility Version 1.3 (October, 1989)
+|[250]jargn10.txt   1128344
+|~ L250:0-16
+|Eric Raymond's Jargon File, Version 2.9.10, July 1992
+|[251]jrquiet.txt   468
+|~ L251:0-16
+|Silencing the pesky IBM PCJr hard drive
+|[252]karpov.pro   6120
+|~ L252:0-15
+|Karpov vs. DEEP THOUGHT: The Overview, by Darren Bedwell
+|[253]kcah-1   32102
+|~ L253:0-11
+|KCAH Volume 1
+|[254]kcah-2   17440
+|~ L254:0-11
+|KCAH Volume 2
+|[255]kildall.txt   11552
+|~ L255:0-16
+|The Gary Kildall Legacy, by Sol Libes (1996)
+|[256]killer.pro   3056
+|~ L256:0-15
+|Killer DOS Stalks Software
+|[257]language.lis   390367
+|~ L257:0-17
+|The Language List, Version 1.9, Jan. 13, 1993: Collected information on about
+|2000 computer languages, past and present
+|[258]licence   12488
+|~ L258:0-12
+|The GNU General Public License Version 1 (February 1989)
+|[259]lrplan.txt   2924
+|~ L259:0-15
+|The Long Range Plans of the University of Pittsburgh for their Computing
+|Facilities
+|[260]mac2tel.v2.txt   8864
+|~ L260:0-19
+|How to Get Digitized Macintosh Sounds Into a Modem
+|[261]mac_oscillators.txt   28179
+|~ L261:0-24
+|A Macintosh Crystal Oscillator Speedup, by Marc Schrier (April, 1994)
+|[262]maccrack.txt   7038
+|~ L262:0-17
+|A Collection of Macintosh Unprotect Schemes
+|[263]macemulate.txt   28236
+|~ L263:0-19
+|The Spectre of Macintosh Emulation: Eating the Forbidden Apple by Wm. Price
+|(1989)
+|[264]mactricks.txt   5942
+|~ L264:0-18
+|Some Mac Tricks for Novices by Steve J. McAllister (February 28, 1995)
+|[265]mailordr.pro   2825
+|~ L265:0-17
+|Really Angry Complaining Letter
+|[266]manners.txt   7464
+|~ L266:0-16
+|Computer Etiquitte, by Mel North
+|[267]manyhint.txt   15640
+|~ L267:0-17
+|ATARI ST Guaranteed Cheat Codes and Strategies
+|[268]may-bust.txt   6617
+|~ L268:0-17
+|Busted! By the Leviathan
+|[269]mdic150.txt   136696
+|~ L269:0-16
+|The Modem Dictionary, by R. Scottt Perry, 1993
+|[270]mdic200.txt   155549
+|~ L270:0-16
+|The Modem Dictionary Version 2.0 by R. Scott Perry (1993)
+|[271]mism16.hac   28288
+|~ L271:0-15
+|The Kromery Converter/Free Electricity by John Bedini, Eike Mueller, and Tom
+|Bearden
+|[272]mism18.hac   42496
+|~ L272:0-15
+|The New Tesla Electromagnetics and The Secrets of Free Electrical Energy (Part
+|1) by T. E. Bearden
+|[273]mnemonic.txt   6705
+|~ L273:0-17
+|An interesting Collection of Helpful Mnemonics
+|[274]modem.txt   2016
+|~ L274:0-14
+|Some Modem Specific Information: AT Command List
+|[275]modemlif.hac   11074
+|~ L275:0-17
+|The Modem Life: Is it Really Worth it? By The Nomad
+|[276]modprobs.txt   13312
+|~ L276:0-17
+|Modem Communication Problems by Graham Newton
+|[277]morph.txt   9597
+|~ L277:0-14
+|Several People Discuss that new Morphing Technology, 1991
+|[278]mrdos1.txt   9381
+|~ L278:0-15
+|If You Have Never Used Computers Before... An Introduction
+|[279]mrdos2.txt   5753
+|~ L279:0-15
+|If You Have Never Used Computers Before... An Introduction (Part II)
+|[280]mrdos3.txt   8562
+|~ L280:0-15
+|If You Have Never Used Computers Before... An Introduction (Part III)
+|[281]mrdos4.txt   5527
+|~ L281:0-15
+|If You Have Never Used Computers Before... An Introduction (Part IV)
+|[282]mrdos5.txt   8148
+|~ L282:0-15
+|If You Have Never Used Computers Before... An Introduction (Part V)
+|[283]mrdos6.txt   11242
+|~ L283:0-15
+|If You Have Never Used Computers Before... An Introduction (Part VI)
+|[284]mrdos7.txt   10060
+|~ L284:0-15
+|If You Have Never Used Computers Before... An Introduction (Part VII)
+|[285]msbbs.txt   35293
+|~ L285:0-14
+|Microsoft Windows Version 3.1 Windows Driver Library (December 9, 1992)
+|[286]msdos.txt   8827
+|~ L286:0-14
+|Some MS-DOS Specific Information
+|[287]muck.txt   12965
+|~ L287:0-13
+|The MUCK (Multi User Coding Kludge) Commands List
+|[288]muck_edi.hel   1457
+|~ L288:0-17
+|The MUCK MUF (Programming Language) Reference
+|[289]muf161.txt   3044
+|~ L289:0-15
+|The Fabulous Microsoft Undocumented Features Volume 1 Number 6
+|[290]net_horm.txt   19189
+|~ L290:0-17
+|Net Hormones: Infection Control assuming Cooperation among Computers by David
+|Stodolsky
+|[291]newkbdhack   18258
+|~ L291:0-15
+|A New Keyboard Hack for the Amiga, by Dana Peters
+|[292]newstu.pro   4117
+|~ L292:0-15
+|PC New Technology Digest
+|[293]noise.txt   7717
+|~ L293:0-14
+|The Modem Noise Killer, Alpha Version
+|[294]noise_1.txt   6020
+|~ L294:0-16
+|Creating a Modem Noise Killer
+|[295]ohs-rcs.txt   58850
+|~ L295:0-16
+|Information on the Orbital Manuvering System
+|[296]opcodes.lst   32788
+|~ L296:0-16
+|Undocumented Instructions and Documented Instruction of Processors, by
+|Potemkin's Hackers Group (October 23, 1994)
+|[297]opt_wagr.txt   8561
+|~ L297:0-17
+|Mathematic Formulas: Optimal Wagering by Michael Hall, 1991
+|[298]org-anal   67829
+|~ L298:0-13
+|Organizational Analysis in Computer Science by Rob Kling (June, 1993)
+|[299]p6fact.txt   1921
+|~ L299:0-15
+|An overview of the P6 Processor
+|[300]paging_g.ame   4275
+|~ L300:0-17
+|The Paging Game, by Jeff Berryman describing how Memory Paging Works
+|[301]paranoia.pro   4499
+|~ L301:0-17
+|Paranoia Runs Through Computer Community, by John Dvorak
+|[302]password.txt   11460
+|~ L302:0-17
+|Some Very Good Advice about Choosing a Password
+|[303]pause.txt   1858
+|~ L303:0-14
+|Making a pause on the 68000, by Chucky of Sargon
+|[304]pc1hrdsk.add   4388
+|~ L304:0-17
+|Some Solutions for Old PC's and Hard Disks by Paul Vojta (February 28, 1988)
+|[305]pc869kb.txt   9847
+|~ L305:0-16
+|What is High Memory, and Why do I care, and How Can I Use It? By Cy Atkinson
+|[306]pcg102b.txt   15745
+|~ L306:0-16
+|The PC Gazette Volume 1.02 (Section b) (April, 1986)
+|[307]pcgnet   20716
+|~ L307:0-11
+|The I/O Port: Communications with the PC Gazette (August 21, 1986)
+|[308]pcjr_display.txt   4244
+|~ L308:0-21
+|PCjr Display Cable Specifications: PCjr to CGA Monitor
+|[309]pcjr_qmodem.txt   1169
+|~ L309:0-20
+|QMODEM Jr. Command Keys
+|[310]pcjr_serial.txt   1336
+|~ L310:0-20
+|Serial Port Pins for the PCjr
+|[311]pcjrcga.txt   9745
+|~ L311:0-16
+|PCjr Display Cable Specifications: PCjr to CGA Monitor
+|[312]pcjrmem.txt   4224
+|~ L312:0-16
+|Altering the IBM PC-JR 128 Memory Module to 512K by David James (July 20, 1986)
+|[313]pcjrtopc.txt   3712
+|~ L313:0-17
+|Instructions to Convert an IBM PCjr Color Monitor to a Standard DB 9 Connector
+|[314]pcl100.txt   20296
+|~ L314:0-15
+|List of HP Printer Escape Sequences (1988)
+|[315]pentium.txt   15939
+|~ L315:0-16
+|Intel Pentium(TM) Processor Technical Backgrounder
+|[316]perstest.txt   9361
+|~ L316:0-17
+|Mind Reader: Do Personality Tests Pick Out Bad Apples?
+|[317]phoenix.txt   2377
+|~ L317:0-16
+|Phoenix BIOS Drive Type Table
+|[318]photoscn.txt   6901
+|~ L318:0-17
+|Photographing TV and Computer Screen Images
+|[319]piracy.txt   8451
+|~ L319:0-15
+|Software Piracy: An Alternate View, by Jim Thomas and Gordon Meyer (March 5,
+|199)
+|[320]pntq&a.txt   10377
+|~ L320:0-15
+|The Pentium Processor Q&A, March 22, 1993
+|[321]ports.lst   128622
+|~ L321:0-14
+|XT, AT and PS/2 I/O port addresses (November 6, 1994)
+|[322]presizer.faq   5860
+|~ L322:0-17
+|FAQ: The Partition Resizer
+|[323]privacy.txt   5474
+|~ L323:0-16
+|The Rise of the CPSR (Computer Professionals for Social Responsibility)
+|[324]qf921124.txt   8101
+|~ L324:0-17
+|QFACTS: The Representation of Facts and Information
+|[325]r4300i.txt   24340
+|~ L325:0-15
+|R4300i Microprocessor Technical Backgrounder
+|[326]raspeed.res   4949
+|~ L326:0-16
+|The Hack Report, File Test Results, Volume 2, Number 6, May 29, 1993
+|[327]rbrown.txt   22307
+|~ L327:0-15
+|A List of Public Domain/Freeware/Shareware by Ralf Brown (1994)
+|[328]reagen.asc   7936
+|~ L328:0-15
+|Ram Disk Driver for UNIX by Jeff Reagen (May 2, 1990)
+|[329]realaq.asc   8351
+|~ L329:0-15
+|Real-Time Data Acquisition by Mike Bunnell and Mitch Bunnell
+|[330]realhack.txt   11485
+|~ L330:0-17
+|The Meaning of "Hack" from the Jargon File
+|[331]regan.lst   11153
+|~ L331:0-14
+|LZW Revisited by SHawn M. Regan (January, 1990)
+|[332]rehabots.txt   3290
+|~ L332:0-17
+|Robotics for Rehabilitation from Epitomes-Physical Medicine and Rehabilitation
+|[333]remote.asc   11486
+|~ L333:0-15
+|Remote Connectivity for Portable Terminals Part I by Dan Troy
+|[334]remove.ada   20668
+|~ L334:0-15
+|One Man's Crusade to Remove Ada From the Planet
+|[335]renaissance.txt   22619
+|~ L335:0-20
+|The Electronic Renaissance: A Course in the Ether, by Ellis L. "Skip" Knox
+|(1990)
+|[336]replies   79819
+|~ L336:0-12
+|Why Do Fans Blow Out? A List of Replies (April, 1993)
+|[337]requiem.pro   9508
+|~ L337:0-16
+|A really whiny complaint about how users suck
+|[338]response.txt   5623
+|~ L338:0-17
+|Why Live in the Past? (The ARC and ZIP Fight)
+|[339]rights.pro   5120
+|~ L339:0-15
+|Copyright Information for Computer Software Hacks
+|[340]ripscrip.txt   166212
+|~ L340:0-17
+|The RIPscrip Graphics Protocol Specification (May 12, 1993)
+|[341]rm-rf   8879
+|~ L341:0-10
+|The RM -RF Story, by Mario Wolczko (The Recovery of a UNIX System)
+|[342]rogue.man   28003
+|~ L342:0-14
+|A Guide to the Dungeons of Doom by Michael C. Toy and Kenneth C. R. C. Arnold
+|[343]rpgrules.txt   3230
+|~ L343:0-17
+|The Rules of Role-Playing on the Galactic Net
+|[344]rs232.txt   21260
+|~ L344:0-14
+|A Practical Guide to RS-232 Interfacing, by Lawrence E. Hughes
+|[345]scavenge.txt   38319
+|~ L345:0-17
+|DOCUMENTATION: Scavenger-Dialer Version 0.61
+|[346]script.txt   12079
+|~ L346:0-15
+|How to use uSu Script Formats, by Cyberglitch
+|[347]scsi.txt   9003
+|~ L347:0-13
+|Basical installation Procedure for SCSI Drives by Ryan Ramsey (June 22, 1993)
+|[348]scsidefs.txt   113040
+|~ L348:0-17
+|An Introduction to SCSI Definitions
+|[349]sea.txt   12928
+|~ L349:0-12
+|SEA vs. PKWARE: Shareware Company Threatens BBS World that Gave it Life
+|[350]secret.txt   1217
+|~ L350:0-15
+|A Windows 3.1 Secret
+|[351]secrets.jok   2167
+|~ L351:0-16
+|Users' Guide to Little-Known Facts About Computers (Humor)
+|[352]serial.txt   5207
+|~ L352:0-15
+|Programming the Serial Port
+|[353]share.txt   55380
+|~ L353:0-14
+|The Shareware User's Guide to Shareware, Public Domain, Freeware and Commercial
+|Software
+|[354]sharew.txt   4373
+|~ L354:0-15
+|The Definition of Shareware, by Paul Mayer, Author of GRAB Plus
+|[355]sharewr.inf   5813
+|~ L355:0-16
+|What is Shareware? By Richard Martin (January 1994)
+|[356]smus   47165
+|~ L356:0-9
+|SMUS IFF Simple Musical Score by Jerry Morrison of Electronic Arts (February 5,
+|1986)
+|[357]softshop.txt   63378
+|~ L357:0-17
+|Software Shopper Online Volume 5 Number 11 (March 1995)
+|[358]software.txt   16512
+|~ L358:0-17
+|Software for Laptop Needs: A Listing of Shareware Vendors
+|[359]stereo.txt   8320
+|~ L359:0-15
+|The Atari ST 520/1040 Stereo Modification
+|[360]stips.txt   9714
+|~ L360:0-14
+|Submissions and Tips and Tricks for DOS Booting v1.23 by Scorpio
+|[361]stratari   29583
+|~ L361:0-13
+|People Are Talking (About Atari ST Stuff) by Joe Mirando
+|[362]supdev.txt   5654
+|~ L362:0-15
+|Supported Devices for Various DPT Drivers (November 21, 1991)
+|[363]support   7873
+|~ L363:0-12
+|Programmer's Technical Reference for MSDOS and the IBM PC Version 2.2a
+|[364]taeis.lng   63557
+|~ L364:0-14
+|A Collection of Artifical Languages from the Taeis Worlds
+|[365]taoprog.pro   18515
+|~ L365:0-16
+|The Tao Of Programming, Short Version.
+|[366]taoprogram.pro   27266
+|~ L366:0-19
+|The Tao of Programming, Translated by Geoffrey James (Formatted)
+|[367]tcad   11547
+|~ L367:0-9
+|Computer-Aided Design of Tesla Coils, by Toby Grotz
+|[368]tec001.txt   1803
+|~ L368:0-15
+|STAC Technical Note: Third party defragmentation programs and STACKER 2.0 and
+|1.x (February 20, 1992)
+|[369]tec002.txt   4131
+|~ L369:0-15
+|STAC Technical Note: QEMM386 and OPTIMIZE (September 18, 1991)
+|[370]tec004.txt   1396
+|~ L370:0-15
+|STAC Technical Note: Backing up STACKER drives (February 20, 1992)
+|[371]tec005.txt   2564
+|~ L371:0-15
+|STAC Technical Note: Miscellaneous STACKER Notes (May 24, 1991)
+|[372]tec006.txt   2403
+|~ L372:0-15
+|STAC Technical Note: LoadHI Information with Stacker (July 9, 1991)
+|[373]tec007.txt   1886
+|~ L373:0-15
+|STAC Technical Note: Removing STACKER (May 24, 1991)
+|[374]tec008.txt   3285
+|~ L374:0-15
+|STAC Technical Note: Stacker Coprocessor Installation Checklist (February 20,
+|1992)
+|[375]tec009.txt   1572
+|~ L375:0-15
+|STAC Technical Note: Stacker and Disk Cache Programs (May 24, 1991)
+|[376]tec010.txt   2476
+|~ L376:0-15
+|STAC Technical Note: Performance Differences Between Stacker Software and
+|CoProcessor Versions (February 20, 1992)
+|[377]tec011.txt   2355
+|~ L377:0-15
+|STAC Technical Note: Scheck and Stacker Space Reporting (February 20, 1992)
+|[378]tec012.txt   2073
+|~ L378:0-15
+|STAC Technical Note: DR DOS and STACKER (February 20, 1992)
+|[379]tec013.txt   2131
+|~ L379:0-15
+|STAC Technical Note: Miscellaneous DOS and BOOT Issues with STACKER (June 26,
+|1991)
+|[380]tec014.txt   4864
+|~ L380:0-15
+|STAC Technical Note: DOS5 Information (June 18, 1991)
+|[381]tec015.txt   2674
+|~ L381:0-15
+|STAC Technical Note: DOS 5.0 Information (June 28, 1991)
+|[382]tec016.txt   4129
+|~ L382:0-15
+|STAC Technical Note: QEMM386 OPTIMIZE and STACKER Version 1.x (February 20,
+|1992)
+|[383]tec017.txt   3907
+|~ L383:0-15
+|STAC Technical Note: MAXIMIZE by Qualitas Corporation (September 6, 1991)
+|[384]tec018.txt   3214
+|~ L384:0-15
+|STAC Technical Note: Windows 3.0 in Enhanced Mode and Stacker (September 18,
+|1991)
+|[385]tec019.txt   1266
+|~ L385:0-15
+|STAC Technical Note: Finding SSWAPed Drives in C
+|[386]tec020.txt   2002
+|~ L386:0-15
+|STAC Technical Note: Installing STACKER on an IBM PS/1 (February 20, 1992)
+|[387]tec021.txt   5550
+|~ L387:0-15
+|STAC Technical Note: Installing 386MAX and BlueMAX on a STACKER System
+|[388]tec022.txt   5341
+|~ L388:0-15
+|STAC Technical Note: Using Stacker and QEMM by Robert Ngan
+|[389]tec023.txt   9441
+|~ L389:0-15
+|STAC Technical Note: Upgrading to DR DOS 6.0 with STACKER Installed (February
+|20, 1992)
+|[390]tec024.txt   2383
+|~ L390:0-15
+|STAC Technical Note: STACKER 2.0 Device Driver Memory Requirements (February 20,
+|1992)
+|[391]tec026.txt   1818
+|~ L391:0-15
+|STAC Technical Note: Stacking the Harddrive on a Floppyless Notebook Computer
+|(February 20, 1992)
+|[392]tec027.txt   2932
+|~ L392:0-15
+|STAC Technical Note: I Stacked my PS/1 Before I reconfigured the Way It Starts,
+|Now What? (February 20, 1992)
+|[393]tec028.txt   1812
+|~ L393:0-15
+|STAC Technical Note: Stacking the Hard RAM Drive of a Palmtop (February 20,
+|1992)
+|[394]tec029.txt   3861
+|~ L394:0-15
+|STAC Technical Note: Stacking Up the HP 95LX Palmtop Computer (March 6, 1992)
+|[395]tec030.txt   2963
+|~ L395:0-15
+|STAC Technical Note: QEMM386 Optimize and Stacker 2.0 (March 6, 1992)
+|[396]technom.ads   3145
+|~ L396:0-16
+|An Archive of Writings and Files Related to Steven K. Roberts, the Techno-Nomad
+|[397]techtip.txt   4090
+|~ L397:0-16
+|Some Tech Tips from the Micropolis BBS
+|[398]teletype.his   28523
+|~ L398:0-17
+|History of Morkrum Company - Ancestor of Teletype Corporation
+|[399]the_dark.er_   448695
+|~ L399:0-17
+|Extremely Large Ranma 1/2 Fan Fiction Story
+|[400]theory1.hac   28850
+|~ L400:0-16
+|Wireless Transmission of Power: Resonating Planet Earth by Toby Grotz
+|[401]theory2.hac   3560
+|~ L401:0-16
+|Tesla Coil Theory Information
+|[402]tips.txt   42380
+|~ L402:0-13
+|Computing Tips, Tricks and Traps plus Comments Regarding Environmentally Safe
+|Computing
+|[403]tips0792.asc   25771
+|~ L403:0-17
+|TIPS by Craig S. Stevenson of The Bertha BBS (July 1, 1992)
+|[404]tjhelp.txt   7637
+|~ L404:0-15
+|Tips and Tricks fromT & J Software (August 7, 1994)
+|[405]travel.txt   18107
+|~ L405:0-15
+|Information on Travelling with a Laptop Computer
+|[406]trivia.1   13294
+|~ L406:0-13
+|Questions and Answers from the Second Computer Bowl, at the Boston Computer
+|Museum (April 1990)
+|[407]trivia.2   14616
+|~ L407:0-13
+|Questions from the Third Annual Computer Bowl in San Jose (April 26, 1991)
+|[408]trojan.pro   13312
+|~ L408:0-15
+|Mark Garvin explains how a trojan horse got him
+|[409]tsprog.inf   10957
+|~ L409:0-15
+|A List of Program and Other Packages by Timo Salmi (February 25, 1996)
+|[410]twxhist.txt   16883
+|~ L410:0-16
+|A History of Telex and Fax (Very Complete)
+|[411]udcnew.txt   46480
+|~ L411:0-15
+|The Universal Data Converter, by Hannibal Lecter of Delamo Labs, Inc.
+|[412]udp.txt   2887
+|~ L412:0-12
+|Installing a DPT Controller with User-Definable Parameters
+|[413]ultra.txt   10212
+|~ L413:0-14
+|Gravis Ultrasound Tech Specs: The Unofficial Dox, by Tran of Renaissance and
+|Joshua Jensen (December 1992)
+|[414]unix.fun   4401
+|~ L414:0-13
+|Collection of Funny Commands You can Enter in UNIX
+|[415]unixsec.txt   157190
+|~ L415:0-16
+|Improving the Security of your UNIX System by David Curry (April 1990)
+|[416]unravel.txt   27343
+|~ L416:0-16
+|The Unraveling Universe from Time Magazine
+|[417]ut.sof   7939
+|~ L417:0-11
+|The University of Toronto Acceptable Use Policy on Computer Software
+|[418]v42bis.txt   12106
+|~ L418:0-15
+|A Layman's Explanation of High Speed Modems, by Stan Simmons April 4, 1991
+|[419]vcbackup.txt   8064
+|~ L419:0-17
+|How to Back-up your PC VisiCalc disk
+|[420]vendlist.txt   3703229
+|~ L420:0-17
+|The Vendor Phone List and Other Miscellaneous Info by Dan Kyburz (July 18, 1996)
+|[421]vendors   3275
+|~ L421:0-12
+|VENDORS: Mapping of the First Three Bytes of an IEEE Mac Address Into Venfor's
+|Name
+|[422]vguide.txt   118853
+|~ L422:0-15
+|A Disk Vendor's Guide, by the Association of Shareware Professionals (March 15,
+|1993)
+|[423]vidtrix.txt   3800
+|~ L423:0-16
+|Tricks You Can Do With Your Video Camera
+|[424]viewers.txt   11245
+|~ L424:0-16
+|Information on Different Picture Viewing Programs (October 5, 1991)
+|[425]visio.txt   8234
+|~ L425:0-14
+|Visiophones: French High Tech Security by Pierre Marie Bourniquel
+|[426]vrthea.art   10306
+|~ L426:0-15
+|Bringing Theatre into Virtual Worlds
+|[427]wacky   3042
+|~ L427:0-10
+|Introduction File for the FidoNet WackyNet Network
+|[428]weird2_1.txt   101705
+|~ L428:0-17
+|The high weirdness by email v2.1
+|[429]weirdstf.ans   33410
+|~ L429:0-17
+|The Weird Stuff Source List, 08/01/1993
+|[430]weiskamp.lst   15441
+|~ L430:0-17
+|An Icon Editor by Keith Weiskamp and Loren Heiny
+|[431]wellman.hac   77936
+|~ L431:0-16
+|The Complete Guide to the WELL (Whole Earth 'Lectronic Link)
+|[432]whatis.txt   4274
+|~ L432:0-15
+|What Is a Modem? (Introduction File)
+|[433]win31.txt   19333
+|~ L433:0-14
+|General Compatibility Issues with Windows 3.1
+|[434]winthere.asc   3537
+|~ L434:0-17
+|Winthere, a Program to Test for the Presence of Windows 3.0 by Ben Meyers (1990)
+|[435]xdi.tec   8904
+|~ L435:0-12
+|XDI Specification for DESQview: Quarterdeck Technical Note by Daniel Travison
+|[436]xga.doc   6887
+|~ L436:0-12
+|How the XGA Graphics Settings are Achieved
+|[437]xmodem.txt   6005
+|~ L437:0-15
+|The Xmodem Protocol in General, by Lightning House Software
+|[438]xt-640k.upd   6940
+|~ L438:0-16
+|Upgrading an Old IBM PC/XT to 640k, by Tony Movshon (March 2, 1988)
+|[439]xt286.txt   7296
+|~ L439:0-14
+|Some Highlights of the New PC XT Model 286
+|[440]xtformat.txt   3456
+|~ L440:0-17
+|Modifying the FORMAT Utility on an IBM-XT running Dos 2.0
+|[441]yapnet   4532
+|~ L441:0-11
+|Overview of the Yapnet Echomail
+|[442]youth   2468
+|~ L442:0-10
+|Introduction to YouthNet: A Communications Network for the Young and
+|Young-At-heart
+|[443]zoom   14561
+|~ L443:0-9
+|Overview of the Hayes AT Command Set for the Zoom Modem
+|[444]zork3.txt   1549
+|~ L444:0-14
+|How to Backup and Unprotect Infocom's Zork III Game for IBM PC
+|
+|There are 437 files for a total of 26,493,483 bytes.
+|There are 5 directories.
+|
+|If you wish to have the entire directory conveniently archived and compressed
+|into one file, please download either [445]computers.tar.gz (9988380 bytes) or
+|~ L445:38-43 BL445:43-59
+|[446]computers.zip (10983546 bytes) instead of all the files separately.
+|~ L446:0-5 BL446:5-18
+--
+1 link http://textfiles.com/programming
+2 link http://textfiles.com/apple
+3 link http://textfiles.com/computers/ASTRESEARCH
+4 link http://textfiles.com/computers/CYBERSPACE
+5 link http://textfiles.com/computers/DOCUMENTATION
+6 link http://textfiles.com/computers/HARDDRIVES
+7 link http://textfiles.com/computers/PRESSRELEASE
+8 link http://textfiles.com/computers/1003v-mm
+9 link http://textfiles.com/computers/1006v-sr
+10 link http://textfiles.com/computers/1080mods
+11 link http://textfiles.com/computers/1105.txt
+12 link http://textfiles.com/computers/144_ctrl.txt
+13 link http://textfiles.com/computers/144disk.txt
+14 link http://textfiles.com/computers/144meg.txt
+15 link http://textfiles.com/computers/1541.tri
+16 link http://textfiles.com/computers/154xb
+17 link http://textfiles.com/computers/16550a_n
+18 link http://textfiles.com/computers/1991-12
+19 link http://textfiles.com/computers/1pt4mb.inf
+20 link http://textfiles.com/computers/2310-12
+21 link http://textfiles.com/computers/2496
+22 link http://textfiles.com/computers/24to96x.txt
+23 link http://textfiles.com/computers/25mgupgd.txt
+24 link http://textfiles.com/computers/286
+25 link http://textfiles.com/computers/286-2
+26 link http://textfiles.com/computers/28_8khst.txt
+27 link http://textfiles.com/computers/2ndrs232.txt
+28 link http://textfiles.com/computers/2w93358a.txt
+29 link http://textfiles.com/computers/386486.txt
+30 link http://textfiles.com/computers/400top.txt
+31 link http://textfiles.com/computers/401bugs.txt
+32 link http://textfiles.com/computers/450baud.txt
+33 link http://textfiles.com/computers/486vs040.txt
+34 link http://textfiles.com/computers/4chan8bi.asc
+35 link http://textfiles.com/computers/4dostips.txt
+36 link http://textfiles.com/computers/500hacks.txt
+37 link http://textfiles.com/computers/500mm.txt
+38 link http://textfiles.com/computers/68040.txt
+39 link http://textfiles.com/computers/86bugs.lst
+40 link http://textfiles.com/computers/87.set
+41 link http://textfiles.com/computers/8bitcomp.txt
+42 link http://textfiles.com/computers/8chan12b.asc
+43 link http://textfiles.com/computers/8meg_exp.txt
+44 link http://textfiles.com/computers/9600.inf
+45 link http://textfiles.com/computers/9600data.txt
+46 link http://textfiles.com/computers/9600info.inf
+47 link http://textfiles.com/computers/a4000
+48 link http://textfiles.com/computers/a5000.txt
+49 link http://textfiles.com/computers/a500_1mb
+50 link http://textfiles.com/computers/aboutems.txt
+51 link http://textfiles.com/computers/abrash.lst
+52 link http://textfiles.com/computers/accel.txt
+53 link http://textfiles.com/computers/act-13.txt
+54 link http://textfiles.com/computers/adapter.txt
+55 link http://textfiles.com/computers/add5.25drive.txt
+56 link http://textfiles.com/computers/add512kb
+57 link http://textfiles.com/computers/addcard.txt
+58 link http://textfiles.com/computers/addictio.txt
+59 link http://textfiles.com/computers/addrive.txt
+60 link http://textfiles.com/computers/aids.txt
+61 link http://textfiles.com/computers/all-help.tec
+62 link http://textfiles.com/computers/alsnutt1
+63 link http://textfiles.com/computers/alt-bin.txt
+64 link http://textfiles.com/computers/ami-chts.txt
+65 link http://textfiles.com/computers/ami-init.txt
+66 link http://textfiles.com/computers/amiga_technical_info.txt
+67 link http://textfiles.com/computers/amihist.txt
+68 link http://textfiles.com/computers/amiport.txt
+69 link http://textfiles.com/computers/amscsi.txt
+70 link http://textfiles.com/computers/anderson.asc
+71 link http://textfiles.com/computers/anderson.lst
+72 link http://textfiles.com/computers/andrson2.asc
+73 link http://textfiles.com/computers/anetwork.txt
+74 link http://textfiles.com/computers/anonymit
+75 link http://textfiles.com/computers/antiarq.txt
+76 link http://textfiles.com/computers/anywhere.txt
+77 link http://textfiles.com/computers/appendix.txt
+78 link http://textfiles.com/computers/apple.txt
+79 link http://textfiles.com/computers/arcsuit.txt
+80 link http://textfiles.com/computers/arthayes.txt
+81 link http://textfiles.com/computers/ascii
+82 link http://textfiles.com/computers/ascii.inc
+83 link http://textfiles.com/computers/asm.txt
+84 link http://textfiles.com/computers/asmstr.asc
+85 link http://textfiles.com/computers/asp3404.txt
+86 link http://textfiles.com/computers/asp5202.txt
+87 link http://textfiles.com/computers/asp5301.txt
+88 link http://textfiles.com/computers/asp804.txt
+89 link http://textfiles.com/computers/asp9301.txt
+90 link http://textfiles.com/computers/asp9501.txt
+91 link http://textfiles.com/computers/aspbbs.dlm
+92 link http://textfiles.com/computers/atamnesa.txt
+93 link http://textfiles.com/computers/auping.asc
+94 link http://textfiles.com/computers/author.lst
+95 link http://textfiles.com/computers/autpub.frm
+96 link http://textfiles.com/computers/autstd.txt
+97 link http://textfiles.com/computers/award.txt
+98 link http://textfiles.com/computers/ayers.lst
+99 link http://textfiles.com/computers/babel92a.txt
+100 link http://textfiles.com/computers/babel94a.txt
+101 link http://textfiles.com/computers/backdoor.txt
+102 link http://textfiles.com/computers/bartle-m
+103 link http://textfiles.com/computers/basunix.hac
+104 link http://textfiles.com/computers/bat&conf.txt
+105 link http://textfiles.com/computers/batch.txt
+106 link http://textfiles.com/computers/battery.txt
+107 link http://textfiles.com/computers/bauer.lst
+108 link http://textfiles.com/computers/bb
+109 link http://textfiles.com/computers/bbsnoise.txt
+110 link http://textfiles.com/computers/begunix.txt
+111 link http://textfiles.com/computers/being.txt
+112 link http://textfiles.com/computers/best.cps
+113 link http://textfiles.com/computers/bev105.res
+114 link http://textfiles.com/computers/biblio.lst
+115 link http://textfiles.com/computers/bibliog.txt
+116 link http://textfiles.com/computers/bill
+117 link http://textfiles.com/computers/bill1035.pro
+118 link http://textfiles.com/computers/bios1215.man
+119 link http://textfiles.com/computers/bios225.man
+120 link http://textfiles.com/computers/bios330.man
+121 link http://textfiles.com/computers/biprint.txt
+122 link http://textfiles.com/computers/bitsbaud.txt
+123 link http://textfiles.com/computers/blt6
+124 link http://textfiles.com/computers/blum.lst
+125 link http://textfiles.com/computers/boost.txt
+126 link http://textfiles.com/computers/bootfromdf1.txt
+127 link http://textfiles.com/computers/bowling.asc
+128 link http://textfiles.com/computers/bradbery.asc
+129 link http://textfiles.com/computers/bright.lst
+130 link http://textfiles.com/computers/bugrep.txt
+131 link http://textfiles.com/computers/buildit.doc
+132 link http://textfiles.com/computers/buildit.txt
+133 link http://textfiles.com/computers/buy386
+134 link http://textfiles.com/computers/buyguide.txt
+135 link http://textfiles.com/computers/c64topc.txt
+136 link http://textfiles.com/computers/cache.txt
+137 link http://textfiles.com/computers/carriers.pro
+138 link http://textfiles.com/computers/cart.txt
+139 link http://textfiles.com/computers/cascade.txt
+140 link http://textfiles.com/computers/caution.txt
+141 link http://textfiles.com/computers/cbm_dead.txt
+142 link http://textfiles.com/computers/cd-rom
+143 link http://textfiles.com/computers/chaos.txt
+144 link http://textfiles.com/computers/cheap144disk.txt
+145 link http://textfiles.com/computers/cheats
+146 link http://textfiles.com/computers/cleankey.txt
+147 link http://textfiles.com/computers/clinton.sgi
+148 link http://textfiles.com/computers/coemail
+149 link http://textfiles.com/computers/colors.32k
+150 link http://textfiles.com/computers/colr.txt
+151 link http://textfiles.com/computers/comdefs.hum
+152 link http://textfiles.com/computers/comlpt.pro
+153 link http://textfiles.com/computers/compdev.txt
+154 link http://textfiles.com/computers/comphorror.hum
+155 link http://textfiles.com/computers/compiler.tut
+156 link http://textfiles.com/computers/compuser
+157 link http://textfiles.com/computers/conclus.txt
+158 link http://textfiles.com/computers/config.txt
+159 link http://textfiles.com/computers/convmem.txt
+160 link http://textfiles.com/computers/copyprot.pro
+161 link http://textfiles.com/computers/copyrigh.pro
+162 link http://textfiles.com/computers/courierv34man.txt
+163 link http://textfiles.com/computers/cpsranno
+164 link http://textfiles.com/computers/cpucmp14.txt
+165 link http://textfiles.com/computers/crtstuff.txt
+166 link http://textfiles.com/computers/defrag.txt
+167 link http://textfiles.com/computers/designer.txt
+168 link http://textfiles.com/computers/dhalf.txt
+169 link http://textfiles.com/computers/diagnose.txt
+170 link http://textfiles.com/computers/diagrams.txt
+171 link http://textfiles.com/computers/disks1
+172 link http://textfiles.com/computers/disks2
+173 link http://textfiles.com/computers/disks3
+174 link http://textfiles.com/computers/dma.asc
+175 link http://textfiles.com/computers/docwaste.txt
+176 link http://textfiles.com/computers/dodont.txt
+177 link http://textfiles.com/computers/dos-user.s-g
+178 link http://textfiles.com/computers/dos6tips.txt
+179 link http://textfiles.com/computers/dos_err.txt
+180 link http://textfiles.com/computers/doshist.txt
+181 link http://textfiles.com/computers/dosmem.txt
+182 link http://textfiles.com/computers/dosmnual.txt
+183 link http://textfiles.com/computers/drives.txt
+184 link http://textfiles.com/computers/dvinter.1st
+185 link http://textfiles.com/computers/dvscript.txt
+186 link http://textfiles.com/computers/ea.iff.85
+187 link http://textfiles.com/computers/earlybst.txt
+188 link http://textfiles.com/computers/echtutor.txt
+189 link http://textfiles.com/computers/eight.lws
+190 link http://textfiles.com/computers/email
+191 link http://textfiles.com/computers/equip.txt
+192 link http://textfiles.com/computers/errors.txt
+193 link http://textfiles.com/computers/esdi.txt
+194 link http://textfiles.com/computers/essays.txt
+195 link http://textfiles.com/computers/execnois.txt
+196 link http://textfiles.com/computers/ext-ram.txt
+197 link http://textfiles.com/computers/fangrev3a500
+198 link http://textfiles.com/computers/faq.txt
+199 link http://textfiles.com/computers/fbi.sys
+200 link http://textfiles.com/computers/fcc.txt
+201 link http://textfiles.com/computers/fd_ref42.lan
+202 link http://textfiles.com/computers/fd_ref42.por
+203 link http://textfiles.com/computers/fdd
+204 link http://textfiles.com/computers/fileid.txt
+205 link http://textfiles.com/computers/filename.txt
+206 link http://textfiles.com/computers/flop.txt
+207 link http://textfiles.com/computers/floppies.txt
+208 link http://textfiles.com/computers/format.txt
+209 link http://textfiles.com/computers/forums.lst
+210 link http://textfiles.com/computers/freedom.pro
+211 link http://textfiles.com/computers/freenet.cap
+212 link http://textfiles.com/computers/fricc
+213 link http://textfiles.com/computers/ftp2uk23.inf
+214 link http://textfiles.com/computers/ftxt
+215 link http://textfiles.com/computers/fyi-8
+216 link http://textfiles.com/computers/galileo.txt
+217 link http://textfiles.com/computers/gameport.inf
+218 link http://textfiles.com/computers/genderol
+219 link http://textfiles.com/computers/genlock.txt
+220 link http://textfiles.com/computers/gfxhints.txt
+221 link http://textfiles.com/computers/gifstd.txt
+222 link http://textfiles.com/computers/glossary.lst
+223 link http://textfiles.com/computers/glossary.txt
+224 link http://textfiles.com/computers/gnu
+225 link http://textfiles.com/computers/hack_pom.txt
+226 link http://textfiles.com/computers/hacktest.txt
+227 link http://textfiles.com/computers/hallfame.txt
+228 link http://textfiles.com/computers/handles.txt
+229 link http://textfiles.com/computers/hayes.txt
+230 link http://textfiles.com/computers/hd.txt
+231 link http://textfiles.com/computers/hd_mfr41.dir
+232 link http://textfiles.com/computers/hd_ref41.lan
+233 link http://textfiles.com/computers/hd_ref41.por
+234 link http://textfiles.com/computers/hd_ref43.lan
+235 link http://textfiles.com/computers/hd_ref43.por
+236 link http://textfiles.com/computers/help.txt
+237 link http://textfiles.com/computers/hint89.txt
+238 link http://textfiles.com/computers/history.txt
+239 link http://textfiles.com/computers/hoagco.cis
+240 link http://textfiles.com/computers/hoagland.let
+241 link http://textfiles.com/computers/honey.txt
+242 link http://textfiles.com/computers/how2mnp.txt
+243 link http://textfiles.com/computers/hsdiag.res
+244 link http://textfiles.com/computers/i4004.txt
+245 link http://textfiles.com/computers/ibm.fu
+246 link http://textfiles.com/computers/ibmindust.txt
+247 link http://textfiles.com/computers/ibmkeyboard.txt
+248 link http://textfiles.com/computers/itcfree.800
+249 link http://textfiles.com/computers/jadu13.rvw
+250 link http://textfiles.com/computers/jargn10.txt
+251 link http://textfiles.com/computers/jrquiet.txt
+252 link http://textfiles.com/computers/karpov.pro
+253 link http://textfiles.com/computers/kcah-1
+254 link http://textfiles.com/computers/kcah-2
+255 link http://textfiles.com/computers/kildall.txt
+256 link http://textfiles.com/computers/killer.pro
+257 link http://textfiles.com/computers/language.lis
+258 link http://textfiles.com/computers/licence
+259 link http://textfiles.com/computers/lrplan.txt
+260 link http://textfiles.com/computers/mac2tel.v2.txt
+261 link http://textfiles.com/computers/mac_oscillators.txt
+262 link http://textfiles.com/computers/maccrack.txt
+263 link http://textfiles.com/computers/macemulate.txt
+264 link http://textfiles.com/computers/mactricks.txt
+265 link http://textfiles.com/computers/mailordr.pro
+266 link http://textfiles.com/computers/manners.txt
+267 link http://textfiles.com/computers/manyhint.txt
+268 link http://textfiles.com/computers/may-bust.txt
+269 link http://textfiles.com/computers/mdic150.txt
+270 link http://textfiles.com/computers/mdic200.txt
+271 link http://textfiles.com/computers/mism16.hac
+272 link http://textfiles.com/computers/mism18.hac
+273 link http://textfiles.com/computers/mnemonic.txt
+274 link http://textfiles.com/computers/modem.txt
+275 link http://textfiles.com/computers/modemlif.hac
+276 link http://textfiles.com/computers/modprobs.txt
+277 link http://textfiles.com/computers/morph.txt
+278 link http://textfiles.com/computers/mrdos1.txt
+279 link http://textfiles.com/computers/mrdos2.txt
+280 link http://textfiles.com/computers/mrdos3.txt
+281 link http://textfiles.com/computers/mrdos4.txt
+282 link http://textfiles.com/computers/mrdos5.txt
+283 link http://textfiles.com/computers/mrdos6.txt
+284 link http://textfiles.com/computers/mrdos7.txt
+285 link http://textfiles.com/computers/msbbs.txt
+286 link http://textfiles.com/computers/msdos.txt
+287 link http://textfiles.com/computers/muck.txt
+288 link http://textfiles.com/computers/muck_edi.hel
+289 link http://textfiles.com/computers/muf161.txt
+290 link http://textfiles.com/computers/net_horm.txt
+291 link http://textfiles.com/computers/newkbdhack
+292 link http://textfiles.com/computers/newstu.pro
+293 link http://textfiles.com/computers/noise.txt
+294 link http://textfiles.com/computers/noise_1.txt
+295 link http://textfiles.com/computers/ohs-rcs.txt
+296 link http://textfiles.com/computers/opcodes.lst
+297 link http://textfiles.com/computers/opt_wagr.txt
+298 link http://textfiles.com/computers/org-anal
+299 link http://textfiles.com/computers/p6fact.txt
+300 link http://textfiles.com/computers/paging_g.ame
+301 link http://textfiles.com/computers/paranoia.pro
+302 link http://textfiles.com/computers/password.txt
+303 link http://textfiles.com/computers/pause.txt
+304 link http://textfiles.com/computers/pc1hrdsk.add
+305 link http://textfiles.com/computers/pc869kb.txt
+306 link http://textfiles.com/computers/pcg102b.txt
+307 link http://textfiles.com/computers/pcgnet
+308 link http://textfiles.com/computers/pcjr_display.txt
+309 link http://textfiles.com/computers/pcjr_qmodem.txt
+310 link http://textfiles.com/computers/pcjr_serial.txt
+311 link http://textfiles.com/computers/pcjrcga.txt
+312 link http://textfiles.com/computers/pcjrmem.txt
+313 link http://textfiles.com/computers/pcjrtopc.txt
+314 link http://textfiles.com/computers/pcl100.txt
+315 link http://textfiles.com/computers/pentium.txt
+316 link http://textfiles.com/computers/perstest.txt
+317 link http://textfiles.com/computers/phoenix.txt
+318 link http://textfiles.com/computers/photoscn.txt
+319 link http://textfiles.com/computers/piracy.txt
+320 link http://textfiles.com/computers/pntq&a.txt
+321 link http://textfiles.com/computers/ports.lst
+322 link http://textfiles.com/computers/presizer.faq
+323 link http://textfiles.com/computers/privacy.txt
+324 link http://textfiles.com/computers/qf921124.txt
+325 link http://textfiles.com/computers/r4300i.txt
+326 link http://textfiles.com/computers/raspeed.res
+327 link http://textfiles.com/computers/rbrown.txt
+328 link http://textfiles.com/computers/reagen.asc
+329 link http://textfiles.com/computers/realaq.asc
+330 link http://textfiles.com/computers/realhack.txt
+331 link http://textfiles.com/computers/regan.lst
+332 link http://textfiles.com/computers/rehabots.txt
+333 link http://textfiles.com/computers/remote.asc
+334 link http://textfiles.com/computers/remove.ada
+335 link http://textfiles.com/computers/renaissance.txt
+336 link http://textfiles.com/computers/replies
+337 link http://textfiles.com/computers/requiem.pro
+338 link http://textfiles.com/computers/response.txt
+339 link http://textfiles.com/computers/rights.pro
+340 link http://textfiles.com/computers/ripscrip.txt
+341 link http://textfiles.com/computers/rm-rf
+342 link http://textfiles.com/computers/rogue.man
+343 link http://textfiles.com/computers/rpgrules.txt
+344 link http://textfiles.com/computers/rs232.txt
+345 link http://textfiles.com/computers/scavenge.txt
+346 link http://textfiles.com/computers/script.txt
+347 link http://textfiles.com/computers/scsi.txt
+348 link http://textfiles.com/computers/scsidefs.txt
+349 link http://textfiles.com/computers/sea.txt
+350 link http://textfiles.com/computers/secret.txt
+351 link http://textfiles.com/computers/secrets.jok
+352 link http://textfiles.com/computers/serial.txt
+353 link http://textfiles.com/computers/share.txt
+354 link http://textfiles.com/computers/sharew.txt
+355 link http://textfiles.com/computers/sharewr.inf
+356 link http://textfiles.com/computers/smus
+357 link http://textfiles.com/computers/softshop.txt
+358 link http://textfiles.com/computers/software.txt
+359 link http://textfiles.com/computers/stereo.txt
+360 link http://textfiles.com/computers/stips.txt
+361 link http://textfiles.com/computers/stratari
+362 link http://textfiles.com/computers/supdev.txt
+363 link http://textfiles.com/computers/support
+364 link http://textfiles.com/computers/taeis.lng
+365 link http://textfiles.com/computers/taoprog.pro
+366 link http://textfiles.com/computers/taoprogram.pro
+367 link http://textfiles.com/computers/tcad
+368 link http://textfiles.com/computers/tec001.txt
+369 link http://textfiles.com/computers/tec002.txt
+370 link http://textfiles.com/computers/tec004.txt
+371 link http://textfiles.com/computers/tec005.txt
+372 link http://textfiles.com/computers/tec006.txt
+373 link http://textfiles.com/computers/tec007.txt
+374 link http://textfiles.com/computers/tec008.txt
+375 link http://textfiles.com/computers/tec009.txt
+376 link http://textfiles.com/computers/tec010.txt
+377 link http://textfiles.com/computers/tec011.txt
+378 link http://textfiles.com/computers/tec012.txt
+379 link http://textfiles.com/computers/tec013.txt
+380 link http://textfiles.com/computers/tec014.txt
+381 link http://textfiles.com/computers/tec015.txt
+382 link http://textfiles.com/computers/tec016.txt
+383 link http://textfiles.com/computers/tec017.txt
+384 link http://textfiles.com/computers/tec018.txt
+385 link http://textfiles.com/computers/tec019.txt
+386 link http://textfiles.com/computers/tec020.txt
+387 link http://textfiles.com/computers/tec021.txt
+388 link http://textfiles.com/computers/tec022.txt
+389 link http://textfiles.com/computers/tec023.txt
+390 link http://textfiles.com/computers/tec024.txt
+391 link http://textfiles.com/computers/tec026.txt
+392 link http://textfiles.com/computers/tec027.txt
+393 link http://textfiles.com/computers/tec028.txt
+394 link http://textfiles.com/computers/tec029.txt
+395 link http://textfiles.com/computers/tec030.txt
+396 link http://textfiles.com/computers/technom.ads
+397 link http://textfiles.com/computers/techtip.txt
+398 link http://textfiles.com/computers/teletype.his
+399 link http://textfiles.com/computers/the_dark.er_
+400 link http://textfiles.com/computers/theory1.hac
+401 link http://textfiles.com/computers/theory2.hac
+402 link http://textfiles.com/computers/tips.txt
+403 link http://textfiles.com/computers/tips0792.asc
+404 link http://textfiles.com/computers/tjhelp.txt
+405 link http://textfiles.com/computers/travel.txt
+406 link http://textfiles.com/computers/trivia.1
+407 link http://textfiles.com/computers/trivia.2
+408 link http://textfiles.com/computers/trojan.pro
+409 link http://textfiles.com/computers/tsprog.inf
+410 link http://textfiles.com/computers/twxhist.txt
+411 link http://textfiles.com/computers/udcnew.txt
+412 link http://textfiles.com/computers/udp.txt
+413 link http://textfiles.com/computers/ultra.txt
+414 link http://textfiles.com/computers/unix.fun
+415 link http://textfiles.com/computers/unixsec.txt
+416 link http://textfiles.com/computers/unravel.txt
+417 link http://textfiles.com/computers/ut.sof
+418 link http://textfiles.com/computers/v42bis.txt
+419 link http://textfiles.com/computers/vcbackup.txt
+420 link http://textfiles.com/computers/vendlist.txt
+421 link http://textfiles.com/computers/vendors
+422 link http://textfiles.com/computers/vguide.txt
+423 link http://textfiles.com/computers/vidtrix.txt
+424 link http://textfiles.com/computers/viewers.txt
+425 link http://textfiles.com/computers/visio.txt
+426 link http://textfiles.com/computers/vrthea.art
+427 link http://textfiles.com/computers/wacky
+428 link http://textfiles.com/computers/weird2_1.txt
+429 link http://textfiles.com/computers/weirdstf.ans
+430 link http://textfiles.com/computers/weiskamp.lst
+431 link http://textfiles.com/computers/wellman.hac
+432 link http://textfiles.com/computers/whatis.txt
+433 link http://textfiles.com/computers/win31.txt
+434 link http://textfiles.com/computers/winthere.asc
+435 link http://textfiles.com/computers/xdi.tec
+436 link http://textfiles.com/computers/xga.doc
+437 link http://textfiles.com/computers/xmodem.txt
+438 link http://textfiles.com/computers/xt-640k.upd
+439 link http://textfiles.com/computers/xt286.txt
+440 link http://textfiles.com/computers/xtformat.txt
+441 link http://textfiles.com/computers/yapnet
+442 link http://textfiles.com/computers/youth
+443 link http://textfiles.com/computers/zoom
+444 link http://textfiles.com/computers/zork3.txt
+445 link http://archives.textfiles.com/computers.tar.gz
+446 link http://archives.textfiles.com/computers.zip

@@ -379,17 +379,23 @@ same counters. Stream-level nastiness for HTTP (slow dribbles, truncated
 bodies, RST mid-body) is the HTTP lane's own fixture — an os64serve.py
 flag someday — not this tool.
 
-## The face: the line-mode browser (spec written 2026-09-11 for Opus's slice)
+## The face: the line-mode browser
 
 The ladder is climbed and the two shared libraries exist: `libfetch`
 (LIBFETCH.md — a URL in, decoded body bytes out) and `libhtml`
 (LIBHTML.md — bytes in, the standard's tree out). The face is the first
 program that puts them together, and its job is the ladder's stance one
 more time: point the whole stack at REAL PAGES and find out what breaks.
-It is Opus's slice under the ratified split; the seams below are Fable's;
-the name is Chris's, by a method he is keeping to himself — build it under
-a working directory name, and renaming `userland/apps/<name>/` is one
-`git mv` when the name lands.
+**It is called `wend`**, chosen 2026-09-11 by Chris's own method from the
+names three models offered. To wend is to go somewhere by an indirect and
+curious route, and it is old enough that its past tense wandered off to
+become the "went" everybody uses for a verb that now has no present tense of
+its own. Nobody marches through the web. It lives in `userland/apps/wend/` —
+`wend.c` is the session, `render.c` the tree walk.
+
+What follows is what it does. Where the build departed from the spec this
+section began as, the departure is marked **(departure)** and argued where
+it is.
 
 **What it is.** A full-screen text program in the gopher client's shape
 (`userland/apps/gopher/gopher.c` is the model: a title row, content rows,
@@ -416,9 +422,9 @@ exit. Colour and attributes are the SGR subset the terminal draws
 
 **The pipeline, per page.**
 
-1. `os64_fetch_open(url, &opt)` with `user_agent` set (a meaningful part
-   of the web refuses a request without one — pick a string with the
-   browser's name once it has one), `accept = "text/html, text/plain"`,
+1. `os64_fetch_open(url, &opt)` with `user_agent` set — a meaningful part
+   of the web refuses a request without one, and this one says
+   `wend/1.0 (os64)` — `accept = "text/html, text/plain"`,
    `max_body` = libhtml's `max_bytes` (8 MB — the same page, the same
    cap), `cancelled` = the Ctrl+C flag, and an `on_hop` that ASKS for a
    DOWNGRADE (https → http) with `confirm` and returns FOLLOW or STOP —
@@ -426,17 +432,24 @@ exit. Colour and attributes are the SGR subset the terminal draws
    exists. Every other hop takes the default verdict.
 2. Read the head. `status` is shown in the status row whatever it is; a
    404 is a page and is shown as one. `content_type` decides the path:
-   `text/html` (and `application/xhtml+xml`) → libhtml; `text/plain` →
-   shown preformatted as it is; anything else is not a page — say what it
-   is and offer `os64get '<url>'` to save it, quoted the way os64get's
-   `print_by_hand` quotes an address (husk splits at `;`).
+   `text/html`, `application/xhtml+xml`, and a reply that names no type
+   at all → libhtml; any other `text/*` → shown preformatted as it is
+   **(departure: the spec said `text/plain`, and every other `text/*` is
+   a document a person can read — markdown, a stylesheet, a CSV — where
+   the alternative was refusing it as "not a page")**; anything else is
+   not a page — say what it is and offer `os64get '<url>'` to save it,
+   quoted the way os64get's `print_by_hand` quotes an address (husk
+   splits at `;`). **A text body's high bytes are read as UTF-8 only
+   when the reply's charset says so (departure)**: the old web's `.txt`
+   files are Latin-1, and decoding those as UTF-8 turns every accented
+   name into a question mark.
 3. `os64_html_parser_new` with `charset = head->charset` (the transport's
    label, which outranks the page's own — libhtml applies the ladder),
    then `feed` every read, then `finish`. A refusal by name (too large,
    too deep, work exhausted) still yields a tree; show what there is and
    say why it stopped.
-4. Render the tree to LINES (below), wrapped at `cols`; keep the lines and
-   the link table; paint the visible window.
+4. Render the tree to LINES (below), wrapped at `cols`; keep the lines,
+   the spots and the forms; paint the visible window.
 5. The final address is `head->url_text`, and it — not what was typed —
    is the base every `href` resolves against, with `os64_url_absolute`
    (libos64 `url.h`), unless the page carries `<base href>`, which wins.
@@ -450,6 +463,11 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   `li`, `dl`, `dt`, `dd`, `blockquote`, `pre`, `hr`, `table`, `tr`,
   `form`, `fieldset`, `address`, `center`, `section`/`article`/`nav`/
   `aside`/`header`/`footer`/`main`, and `br` breaks without a blank.
+  The same-family elements a modern page is built from join them
+  **(departure)** — `figure`/`figcaption`/`caption`/`summary`/`details`,
+  the table's own `thead`/`tbody`/`tfoot`, and `menu`/`dir`, which are
+  lists — because a caption glued to the next paragraph reads as a
+  rendering fault rather than as a shorter list of tags.
   `p` and the headings get a blank line before and after; `li` gets a
   bullet (`* ` for `ul`, `1. ` counting for `ol`) and its nesting depth
   as indent; `blockquote` and `dd` indent; `hr` is a row of `-`; a
@@ -460,21 +478,44 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
 - **Inline elements** change the pen: `b`/`strong` bold, `i`/`em`/`u`
   underline (SGR 4), `code`/`tt`/`kbd` plain (there is one font), `a`
   with an `href` is a LINK: numbered in document order, drawn as
-  `[n]text` with the link colour, and entered in the link table with its
+  `[n]text` with the link colour, and entered in the spot table with its
   resolved address. `img` draws `[alt]` when there is alt text and
   `[image]` when there is not; an `img` inside an `a` is the link's text.
-  `input`/`button`/`select`/`textarea` draw as `[____]`, `[label]`,
-  `[v]`, `[    ]` — visible, not operable, in the first cut (forms are
-  booked below).
+- **A form's controls are SPOTS TOO**, drawn in their own colour and
+  numbered in the same sequence as the links: a box you type in as
+  `[n][value___]` at the page's own `size`, a tick box as `[n][x]` or
+  `[n][ ]`, one of a radio group as `[n](*)` or `[n]( )`, a list as
+  `[n][v the chosen option]`, a button as `[n][its words]`. A `textarea`
+  is a box with its text as the starting value, one row's worth, because
+  a line-mode browser has no second row to give it. A control that does
+  nothing this browser can honour — a reset, a plain button — is drawn
+  and is NOT a spot, because landing on it would promise something. A
+  HIDDEN field is neither drawn nor landed on: it is remembered against
+  the form, whose data it is.
 - **Skipped whole:** `head` and everything in it (`title` goes to the
-  title row), `script`, `style`, `noscript`'s CONTENTS are shown (we run
+  title row), `script`, `style`, `iframe` (a different document, which
+  showing would mean fetching), `noscript`'s CONTENTS are shown (we run
   no script, so the standard parsed them as markup — that is the point),
   `template` contents (the fragment branch), comments, and every subtree
   whose `ns` is not HTML (SVG and MathML draw nothing in this face).
+  **A `frame` is the exception (departure):** a frameset page has no
+  body and no prose anywhere, so skipping it paints an empty screen for
+  a whole era of the web. Each frame becomes a link to the document it
+  names, which is what the page was going to show you anyway.
 - **Wrapping** is by words at `cols`; a word longer than the row is broken
-  at the row. A line is runs of `{text, attrs, link-or-0}` so the painter
-  can start and stop SGR at run boundaries and the link table can map a
-  row back to its links.
+  at the row. A line is runs of `{text, attrs, spot-or-0}` so the painter
+  can start and stop SGR at run boundaries and the spot table can map a
+  row back to what is on it. **A flowed row is trimmed of the trailing spaces
+  the renderer itself left** — a cell separator that turned out to end a
+  row, an indent under nothing — which paint as nothing and would widen a
+  selection over nothing. Inside `pre` they are the author's and they
+  stay.
+- **An indent, a pen or `pre` is given back only after the rows it governs
+  are down.** A word and a row are both still held when an element's
+  children are finished, so restoring first wraps that last word at the
+  outer margin, or paints the space before it in the wrong ink, or trims
+  spacing the author typed. This is the renderer's one recurring trap and
+  the harness has a case for each shape of it.
 
 **The fold: UTF-8 → the glass.** The terminal draws Latin-1 by default
 (`ESC ( U` selects CP437 for art; the face stays in Latin-1). The rule,
@@ -486,21 +527,81 @@ en/em dash → `-`, ellipsis → `...`, non-breaking space → space, bullet →
 `(c)` when Latin-1 lacks them — it has `©`); anything else draws `?`.
 `?` and not a blank, because a blank hides that something was there
 (LIBHTML.md's "reads as missing rather than as corruption", the other way
-round). This table is the FACE's and lives beside its renderer; the
-decode helpers are libos64's (`os64_utf8_decode` / `os64_utf8_encode`,
-`str.h`), because every future consumer of the tree needs them.
+round). **Two kinds of code point are the exception to "below 256 is its
+byte" (departure).** The C0 and C1 control ranges draw `?` like anything
+else undrawable: a control byte reaching the terminal is a stranger
+steering the glass rather than writing on it. And the code points that
+are invisible BY DEFINITION — a soft hyphen, the zero-width joiners, a
+word joiner, a byte-order mark — draw nothing at all, because they mark
+where a word MAY break, and Latin-1's soft hyphen at 0xAD would put a
+dash in the middle of a word that has none. This table is the FACE's and
+lives beside its renderer; the decode helpers are libos64's
+(`os64_utf8_decode` / `os64_utf8_encode`, `str.h`), because every future
+consumer of the tree needs them.
 
 **The navigator.** A history stack of addresses with the scroll position
-and selected link at the time of leaving, exactly `history_push`'s shape;
+and selection at the time of leaving, exactly `history_push`'s shape;
 `b` (and Backspace) pops it and refetches — a cache is the graphical
-browser's problem. Keys, kept to the gopher client's plus numbers:
-arrows and `PgUp`/`PgDn`/space scroll; `n`/`p` (and Tab/Shift-Tab where
-the terminal sends them) move the selected link; Enter follows the
-selected link; typing a number then Enter follows link `n`; `g` prompts
-for an address (a bare `host/path` gets `http://` in front, the way
-gopher reads a bare host); `r` refetches; `?` shows the keys; `q` quits.
+browser's problem.
+
+**THE ARROWS WALK THE SPOTS** (Chris, 2026-09-11, on seeing the first cut
+do it the other way): a browser picks a link by pointing at it, which is
+the gopher client's ruling and the one a person's fingers arrive with.
+Up and Down move the selection to the previous or next spot; `n`/`p` and
+Tab/Shift-Tab are the same move under other names; PAST the last spot in
+that direction the same key SCROLLS, which is what keeps the arrows
+useful on the prose below the last link and on a page with no links at
+all. `PgUp`/`PgDn`/space/`Home`/`End` move the page by screenfuls and
+take the selection with them — a choice left off the screen would make
+the next arrow jump backwards, so it is replaced by the first spot on the
+new screen or by nothing.
+
+Enter (and Right) DOES THE SELECTED THING, which is one key because to
+the person pressing it there is one question: a link is followed, a box
+is opened to type in, a tick box is ticked, a list steps to its next
+option, a button sends its form. Typing a number then Enter does the same
+to the spot wearing that number. `g` prompts for an address (a bare
+`host/path` gets `http://` in front, the way gopher reads a bare host);
+`r` refetches; `?` shows the keys; `q` quits, after asking, because
+leaving throws away the session and its history and `q` sits one key from
+the arrows. Left goes back, lynx's arrangement and the gopher client's.
 A `gopher://` link is not the face's in the first cut (libfetch's gopher
 scheme is booked); say so in the status row rather than failing quietly.
+
+**Four pens, and each answers a different question.** A link is cyan —
+"you can go there". A form control is green — "you can put something
+here", a different promise. The selection is black on cyan, where a text
+interface has kept its highlight since Turbo Vision, and deliberately not
+the black-on-white the title and status bars wear, or it reads as a third
+piece of furniture instead of as the cursor. Everything else is the
+terminal's own ink, because a page is mostly prose and painted prose is
+harder to read. Underline is asked for where a page says italic, which is
+what italic means on a terminal; this glass has no underline and consumes
+the request.
+
+**Filling something in, and sending it.** A box is opened with Enter and
+edited on the status row, starting from whatever it already holds; Enter
+again keeps the text and Escape leaves it as it was. **A value is stored
+as UTF-8** — which is what the page put there and what a server that sent
+a UTF-8 page expects back — and converted at each end: folded to Latin-1
+to be shown, encoded again as the typed bytes are taken. **The values
+live BESIDE the page, indexed by spot number**, because a re-wrap throws
+the page away and builds another, and what was typed into a search box
+has to survive the window changing width; the walk is deterministic for
+one tree, so the same number carries the same value into the next render.
+
+Sending builds the address in `render.c` (`wend_form_url`) rather than in
+the session, because it is pure computation over the page and that is
+where the harness can check what would go on the wire. The form's action,
+or the page itself when it names none; the query REPLACED, not appended
+to, which is what a GET form does; the hidden fields first, then every
+successful control in document order — a box that is not ticked sends
+nothing, a ticked one with no value of its own sends `on`, a list sends
+its option's VALUE rather than the words shown for it, and of two buttons
+only the one pressed says so. **A form with exactly one box to type in
+sends itself when you finish the box**, because there is nowhere else in
+it to go and stopping to hunt for a button is the step nobody expects; one
+with more waits for its button.
 
 **Errors are the library's sentence, in the status row.** Every libfetch
 refusal has `os64_fetch_reason`; a TLS refusal now names the alert or the
@@ -509,15 +610,17 @@ previous page on screen with the reason under it; nothing clears a page
 to show an error.
 
 **Proof.** The renderer is pure computation — a tree in, lines out — so
-it gets the host harness the two libraries got: `tools/test_<name>_host.sh`
+it gets the host harness the two libraries got: `tools/test_wend_host.sh`
 feeds the saved corpus pages (`tools/html_corpus/*.html`) through libhtml
-and the renderer at a fixed width and diffs the lines against checked-in
-text dumps, so a rendering change is a reviewable diff to a page and not
-"it looks different". The fold gets its own cases (each table entry, a
-four-byte code point, an invalid sequence). QEMU proves the rest with
-screendumps: example.com, the Floodgap gopher-HTML page, Hacker News,
-textfiles.com, a 404, a downgrade prompt, a resize mid-page, Ctrl+C
-mid-fetch, on a text VT and in a gterm both.
+and the renderer and diffs against checked-in dumps beside them, so a
+rendering change is a reviewable diff to a page and not "it looks
+different". The fold gets its own cases and a sweep of the whole code
+space, the wrapper gets its edges written down as markup-in/rows-out, and
+an allocation failure is injected at every step of one page. What a FORM
+would ask for is pure computation too, so the suite checks the address
+before any wire carries it. VERIFICATION.md § wend acceptance carries the
+run commands, what the guest was driven through, and the four defects the
+harness caught before the OS ran a byte.
 
 **Review tier.** The parser and the fetch have been through the
 gauntlet; the face is app code and is reviewed here (Fable) and merged
@@ -528,7 +631,9 @@ Codex round is Chris's call.
 
 | What | Why deferred | Trigger |
 |---|---|---|
-| GET forms (a search box) | the tree has them and libfetch's URL grammar can carry a query; the first cut proves the page path first | the first site whose front page is a search box (DuckDuckGo lite, FrogFind) |
+| POST forms | libfetch sends no request body, and that is fetch machinery — Fable-tier by the campaign's own split. A form that posts is refused BY NAME rather than turned into a GET, because a login quietly sent as a query puts a password in somebody's server log | the first thing worth doing that only posts |
+| A file-upload control | it is a POST with a body made of parts, so it waits on the row above and on a file picker this browser has no screen for | a page worth uploading to |
+| Editing longer than a status row | a box is edited on the bottom row, so a long value is a scrolling window onto itself; fine for a query, thin for a comment | the first time somebody writes prose into a page |
 | `gopher://` links | libfetch's gopher scheme is booked; the gopher client still owns the protocol | the browser's first gopher link |
 | Column-aligned tables | rows read fine for the old web's layout tables; alignment is layout, the graphical browser's boss | a data table that is unreadable as rows |
 | CP437 / a second charset on the glass | the face is Latin-1; art pages are the gopher client's | a page whose meaning needs box drawing |

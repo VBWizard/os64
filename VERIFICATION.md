@@ -634,6 +634,85 @@ and the server, for a guest to point at, with:
 python3 -u tools/ftptestd.py --port 2121 --root /tmp/uploads
 ```
 
+## wend acceptance — the line-mode browser (2026-09-11)
+
+BROWSER.md's face: the first program that puts libfetch and libhtml together
+and points them at real pages. BROWSER.md § The face is the design record;
+what follows is what was run.
+
+**The host suite** is `tools/test_wend_host.sh` — plain `cc` under ASan and
+UBSan, driving the renderer (`userland/apps/wend/render.c`) with no kernel
+under it, because a tree in and lines out is pure computation. It has four
+parts. The FOLD gets its table checked entry by entry and then every code
+point below U+11000 swept to prove each one folds to printable Latin-1 or to
+nothing. The WRAPPER gets cases written as "this markup, at this width, is
+these rows". And an ALLOCATION FAILURE is injected at each of the first four
+hundred allocations of one page, proving that what comes back is always a
+page you can paint and always frees clean.
+
+**The corpus is the regression test, and it is a diff to a PAGE.** The six
+saved pages libhtml keeps (`tools/html_corpus/*.html` — example.com,
+Floodgap's gopher gateway, Hacker News, textfiles.com, 68k.news, a Wikipedia
+article) are rendered at 80 columns and diffed against checked-in dumps
+beside them, with example.com rendered at 40 as well because wrapping is
+where a renderer goes wrong. The dump carries the rows, the attribute and
+spot spans under each row that has any, every spot with where it goes or
+what it would send, and every form — so a change in how a page reads
+arrives as a reviewable diff rather than as "it looks different on my
+screen". Refresh them deliberately:
+
+```sh
+tools/test_wend_host.sh            # check
+tools/test_wend_host.sh --refresh  # adopt the new rendering
+```
+
+Four defects came out of the harness before the OS ran a byte, and three of
+them are the same mistake in different clothes — **giving something back
+before the rows it governs are down**:
+
+| Found | What it was |
+|---|---|
+| A list item's second row lined up under its bullet | The indent was restored when the item's children were done, and the item's LAST word was still held: it wrapped at the outer margin |
+| Bold, underline and links broke at every space | The owed space between two words wore the pen of wherever the WALK had reached, which is past the closing tag. It now wears the pen from where the whitespace was, so a two-word link is one run and highlights as one thing |
+| A `pre` block lost the author's trailing spaces on its last row | Same shape: the block left preformatted mode before its final row was committed, and the trim for flowed rows took them |
+| A row could reach the painter unterminated | ASan, on the allocation-failure sweep: fresh storage plus a refused run reservation left bytes nobody wrote and no end marker. The buffer is terminated the moment it is reserved |
+
+**Forms** are the fourth part, because what a form would ASK FOR is a
+string built from a page and is checkable without a wire:
+`wend_form_url` is driven over a search box with a hidden field, a query
+the action already carried (replaced, as a GET form does), spaces and
+UTF-8 through the encoder, ticked and unticked boxes, a list's value
+rather than its words, two buttons where only the pressed one says so, a
+POST refused by name, and a control in no form at all. One case renders a
+page twice at two widths with an edit in hand, proving that what was typed
+survives a re-wrap and reaches the query.
+
+**In the guest** (headless QEMU, `-netdev user` with slirp to the real
+internet, screendumps read as images): example.com and its link followed to
+iana.org — which answers the downgrade prompt question, because that hop
+leaves https for http and the browser asks; Hacker News over **HTTPS** on an
+ext2 root; 68k.news and textfiles.com over http; a `text/plain` file with a
+tab and a Latin-1 byte; a 404 shown as the page it is; an `image/png` refused
+as not a page with the `os64get` command to save it instead; **Ctrl+C partway
+through a slow reply**, which leaves what arrived on screen and says
+`interrupted` in the status row; and a **resize**, by running the browser in
+a gterm and pressing Ctrl+Alt+M, which re-wraps from the parse tree without
+asking the network for a page it already has.
+
+**And two real searches, typed into real pages.** The Floodgap gateway's
+box, reached by typing its number, edited from the value it came with, and
+sent — the gateway answered with the gopher menu that was asked for. Then
+Wikipedia over HTTPS: arrow to the box, type, Enter, and the address that
+went out was
+`https://en.wikipedia.org/w/index.php?title=Special%3ASearch&search=ARPANET+history`
+— the hidden field carried, the colon encoded, the space a plus, and the
+results page came back with its own title.
+
+**A FAT root has no trust store**, so `https` there fails at
+`/etc/certs/roots.pem` for the browser and for os64get alike — the bundle is
+written to the ext2 root only. Boot an ext2-root entry when TLS is what you
+are testing.
+
 ## Reading the serial log
 
 **WHERE these lines live depends on the boot entry.** Every one of them is a

@@ -1,0 +1,225 @@
+page: floodgap
+title: Floodgap Gopher-HTTP gateway gopher://gopher.floodgap.com/
+width: 80
+lines: 108
+spots: 68
+forms: 3
+incomplete: no
+--
+|
+|[1][<< Back]
+|~ F1:0-12
+|[2][Floodgap Gopher]
+|~ F2:0-20
+|[3][gopher://gopher.floodgap.com/___________] [4][GO!]
+|~ F3:0-45 F4:46-54
+|[5]View in Gopher client | [6]HELP! with proxy | [7]www.floodgap.com
+|~ L5:0-24 L6:27-46 BL7:49-68
+|--------------------------------------------------------------------------------
+|Welcome to Floodgap Systems' official gopher server.
+|Floodgap has served the gopher community since 1999
+|(formerly gopher.ptloma.edu).
+|
+|We run Bucktooth 0.2.9 on xinetd as our server system.
+|gopher.floodgap.com is an IBM Power 520 Express with a 2-way
+|4.2GHz POWER6 CPU and 8GB of RAM, running AIX 6.1 +patches.
+|Send gopher@floodgap.com your questions and suggestions.
+|
+|***********************************************************
+|**              OVER 20 YEARS SERVING YOU!               **
+|**               Plain text is beautiful!                **
+|***********************************************************
+|
+|[8][image]  [9]Does this gopher menu look correct?
+|~ L8:0-10 L9:12-50
+|(plus using the Floodgap Public Gopher Proxy)
+|[10][image]  [11]Are you running a bot? Are we blocking you?
+|~ L10:0-11 L11:13-60
+|Please read this document. Please don't cost us money.
+|(blocklist updated 27 April 2026)
+|[12][image]  [13]Super-Dimensional Fortress: SDF Gopherspace
+|~ L12:0-11 L13:13-60
+|Get your own Gopherspace and shell account!
+|
+|--- Getting started with Gopher -------------------------------
+|[14][image]  [15]Getting started with gopher, software, more
+|~ L14:0-11 L15:13-60
+|(what is Gopherspace? We tell you! And find out how
+|to create your own Gopher world!)
+|
+|[16][image]  [17]Using your web browser to explore Gopherspace
+|~ L16:0-11 L17:13-62
+|(READ IT! LEARN IT! LOVE IT!)
+|(useful tips for gopher newbies, updated 17 November 2018)
+|
+|[18][image]  [19]The Overbite Project: Gopher clients for mobile and desktop
+|~ L18:0-11 L19:13-76
+|(OverbiteWX, OverbiteNX, Overbite Android)
+|~ L19:0-42
+|(download gopher add-ons for Mozilla Firefox/SeaMonkey,
+|mobile clients for Android and more! Put Gopherspace on
+|your mobile phone or desktop computer!)
+|[20][image]  [21]Other Gopher clients for various platforms
+|~ L20:0-11 L21:13-59
+|
+|--- Find and search for other Gopher sites on the Internet ----
+|[22][image]  [23]Search Gopherspace with Veronica-2
+|~ L22:0-11 L23:13-51
+|or search all known titles in Gopherspace with V-2 from here:
+|[24][image]  [25]Search Veronica-2
+|~ L24:0-11 L25:13-34
+|
+|[26][image]  [27]All the gopher servers in the world (that we know of)
+|~ L26:0-11 L27:13-70
+|(updated with robot updates)
+|[28][image]  [29]New Gopher servers since 1999
+|~ L28:0-11 L29:13-46
+|(updated 18 August 2026)
+|
+|--- Get news, weather and more through Gopherspace ------------
+|[30][image]  [31]Weather maps and forecasts via Floodgap Groundhog
+|~ L30:0-11 L31:13-66
+|(USA and Australia; updates occur throughout the day)
+|[32][image]  [33]News and headline feeds via Flood Feeds
+|~ L32:0-11 L33:13-56
+|(updates occur daily/regularly)
+|[34][image]  [35]Most current Floodgap news feeds
+|~ L34:0-11 L35:13-49
+|(today's most updated news and headlines)
+|
+|--- File archives and downloads -------------------------------
+|[36][image]  [37]Floodgap File Archives and Mirrors
+|~ L36:0-11 L37:13-51
+|(includes external archives and historical files,
+|Walnut Creek CP/M-Osborne-Commodore-Beehive archives,
+|Info-Mac, classic Mac software and more)
+|
+|--- Fun, games, and other neat things -------------------------
+|[38][image]  [39]Floodgap Gopher Fun and Games
+|~ L38:0-11 L39:13-46
+|(with xkcd, the Gopher Figlet gateway and the fld.gp Gopher
+| Shortener Service)
+|[40][image]  [41]Floodgap users and staff gopher pages
+|~ L40:0-11 L41:13-54
+|(the usual gang of idiots)
+|[42][image]  [43]The New GopherVR: A Virtual Reality View of Gopherspace
+|~ L42:0-11 L43:13-72
+|(version 0.5.1 released 24 October 2015)
+|
+|--- Server software behind the scenes -------------------------
+|[44][image]  [45]The Bucktooth gopher server
+|~ L44:0-11 L45:13-44
+|(version 0.2.10 released 17 February 2024)
+|
+|--- Gopherspace advocacy and activism -------------------------
+|[46][image]  [47]Floodgap Gopher Statistics Project
+|~ L46:0-11 L47:13-51
+|(monthly traffic analysis of the Floodgap Public Gopher Proxy
+|for community advocacy purposes; updates monthly)
+|
+|--- Floodgap specific -----------------------------------------
+|[48][image]  [49]Floodgap CSO/ph phonebook server
+|~ L48:0-11 L49:13-49
+|[50][image]  [51]Yes, gopher.floodgap.com is the same as gopher.ptloma.edu
+|~ L50:0-11 L51:13-74
+|[52][image]  [53]The Floodgap Free Software License
+|~ L52:0-11 L53:13-51
+|[54][image]  [55]Where's Floodgap? (not for hatemail ;-)
+|~ L54:0-11 L55:13-56
+|[56][image]  [57]What's the temperature in the Floodgap server room?
+|~ L56:0-11 L57:13-68
+|[58][image]  [59]"/usr/bin/tail" our gopher server log
+|~ L58:0-11 L59:13-54
+|[60][image]  [61]RIP, Master gopher at University of Minnesota
+|~ L60:0-11 L61:13-62
+|[62][image]  [63]Floodgap.com (Web pages)
+|~ L62:0-11 L63:13-41
+|
+|Please note that this gopher is no longer affiliated with
+|Point Loma Nazarene University. Some areas are rate-limited due
+|to spidering.
+|--------------------------------------------------------------------------------
+|[64]Top of page | [65]Gopher proxy home | [66]Floodgap home gopher   version 645
+|~ L64:0-4 BL64:4-15 L65:18-22 BL65:22-39 L66:42-66
+|port 2   All access must be in accordance with [67]Floodgap Terms of Service.
+|~ U:9-47 UL67:47-76 U:76-77
+|
+|Proxy too slow? Get free clients and plugins for your favorite mobile and
+|~ U:0-15
+|desktop browsers. Visit the [68]Overbite Project.
+|~ L68:28-32 BL68:32-48
+|Simultaneous clients: 1 (capped at 8)
+|Access to the proxy is limited to 16K/sec and maximum 4MB per access. Please use
+|a full client for larger files.
+--
+1 submit form=1 name=(none) label=<< Back value=<< Back
+2 submit form=2 name=(none) label=Floodgap Gopher value=Floodgap Gopher
+3 text form=3 name=a value=gopher://gopher.floodgap.com/ width=40
+4 submit form=3 name=(none) label=GO! value=GO!
+5 link gopher://gopher.floodgap.com/
+6 link https://gopher.floodgap.com/gopher/
+7 link https://www.floodgap.com/
+8 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f676f706865722f70726f7879
+9 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f676f706865722f70726f7879
+10 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f726573706f6e7369626c652d626f74
+11 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f726573706f6e7369626c652d626f74
+12 link https://gopher.floodgap.com/gopher/gw?=sdf.org+70+31
+13 link https://gopher.floodgap.com/gopher/gw?=sdf.org+70+31
+14 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f676f70686572
+15 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f676f70686572
+16 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f676f706865722f7762676f70686572
+17 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f676f706865722f7762676f70686572
+18 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f6f76657262697465
+19 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f6f76657262697465
+20 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f676f706865722f636c69656e7473
+21 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f676f706865722f636c69656e7473
+22 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f7632
+23 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f7632
+24 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+372f76322f7673
+25 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+372f76322f7673
+26 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f776f726c64
+27 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f776f726c64
+28 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f6e6577
+29 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f6e6577
+30 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f67726f756e64686f67
+31 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f67726f756e64686f67
+32 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f6665656473
+33 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f6665656473
+34 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f66656564732f6c6174657374
+35 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f66656564732f6c6174657374
+36 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f61726368697665
+37 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f61726368697665
+38 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f66756e
+39 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f66756e
+40 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f7573657273
+41 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f7573657273
+42 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f676f706865727672
+43 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f676f706865727672
+44 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f6275636b
+45 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f6275636b
+46 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f677374617473
+47 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f677374617473
+48 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+105+32
+49 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+105+32
+50 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f70746c6f6d61
+51 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f70746c6f6d61
+52 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f6666736c
+53 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+312f6666736c
+54 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f77686572656973
+55 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f77686572656973
+56 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f73657276657274656d70732e747874
+57 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f73657276657274656d70732e747874
+58 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f726563656e74
+59 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f726563656e74
+60 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f756d6e676f6e65
+61 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f756d6e676f6e65
+62 link http://www.floodgap.com/
+63 link http://www.floodgap.com/
+64 link https://gopher.floodgap.com/gopher/gw
+65 link https://gopher.floodgap.com/gopher/
+66 link https://gopher.floodgap.com/gopher/gw
+67 link https://www.floodgap.com/etc/tos.html
+68 link https://gopher.floodgap.com/overbite/
+form 1 post (this page)
+form 2 get https://gopher.floodgap.com/gopher/gw
+form 3 get https://gopher.floodgap.com/gopher/gw
