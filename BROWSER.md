@@ -1,5 +1,15 @@
 # BROWSER.md — the campaign constitution
 
+> **Under review (2026-09-12).** The boss fight below is right and the
+> ladder worked. What is missing is the word CONFORMANT, any mention of
+> JavaScript, and a rung between parsing and layout for what a parsed page
+> MEANS — which is where all 62 findings on the `wend` slice landed. The
+> record and the case for a second draft are in
+> [`docs/browser_second_draft.md`](docs/browser_second_draft.md). Read that
+> before starting new work from this file — in particular its stance on
+> "implement a thing when something asks for one", which is right for a
+> line-mode face and wrong for a daily driver.
+
 *2026-08-31/09-01, the insomnia session. Chris named the boss fight — a
 graphical browser, os64 as daily driver — and ratified the shape: tiny
 steps, each a small PR off `userland`, each testable and standalone, each
