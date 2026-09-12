@@ -76,10 +76,17 @@ typedef struct {
     int32_t line;        // the first row it appears on
     int32_t form;        // 1-based into forms[]; 0 = in no form at all
     char   *url;         // LINK: resolved; "" when the href will not resolve
+    // LINK: the `#name` the href asked for, without its `#`, or "". Kept
+    // SEPARATELY because a fragment never crosses the wire — the resolver
+    // drops it for that reason — and yet it is the whole meaning of a
+    // table-of-contents link, which the navigator answers by moving rather
+    // than by fetching.
+    char   *fragment;
     char   *name;        // a control's name; "" is a control nothing sends
     char   *value;       // what it holds NOW — typed text, or the value attribute
     char   *label;       // SUBMIT: the words on it
     bool    on;          // CHECK / RADIO: ticked
+    bool    secret;      // TEXT: a password — never drawn, never echoed
     char  **options;     // CHOICE: what is shown for each option, and
     char  **option_values;  //       what each one sends
     int32_t noptions, chosen;
@@ -100,11 +107,23 @@ typedef struct {
     int32_t nhidden, hiddencap, hiddenvalcap;
 } wend_form_t;
 
+// WHERE A `#name` LANDS. Every element carrying an `id`, and every old-style
+// `<a name>`, records the row it fell on — so a link into the same page is
+// answered by scrolling to the row rather than by fetching the document
+// again and showing its top, which is what a table of contents on a long
+// article is entirely made of.
+typedef struct {
+    char   *name;
+    int32_t line;
+} wend_anchor_t;
+
 typedef struct {
     wend_line_t   *lines;
     int32_t        nlines;
     wend_spot_t   *spots;
     int32_t        nspots;
+    wend_anchor_t *anchors;
+    int32_t        nanchors;
     wend_form_t   *forms;
     int32_t        nforms;
     int32_t        cols;              // the width these lines were wrapped at
@@ -165,6 +184,9 @@ wend_form_result_t wend_form_url(const wend_page_t *page, int32_t spot,
 // The page's own idea of where it lives. False when it has no <base href>,
 // or the element carries no usable href.
 bool wend_base_href(const os64_html_document_t *doc, char *out, size_t cap);
+
+// The row a `#name` names, or -1 when the page has no such anchor.
+int32_t wend_anchor_line(const wend_page_t *page, const char *name);
 
 // ONE CODE POINT ONTO THE GLASS. Writes at most WEND_FOLD_MAX bytes and
 // returns how many: 0 for a code point that is invisible by definition (a

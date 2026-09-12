@@ -479,19 +479,32 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   underline (SGR 4), `code`/`tt`/`kbd` plain (there is one font), `a`
   with an `href` is a LINK: numbered in document order, drawn as
   `[n]text` with the link colour, and entered in the spot table with its
-  resolved address. `img` draws `[alt]` when there is alt text and
-  `[image]` when there is not; an `img` inside an `a` is the link's text.
+  resolved address AND, kept beside it, the `#name` the href asked for —
+  the resolver drops a fragment because a fragment never crosses the
+  wire, and dropping it here too would turn a table of contents into a
+  row of links that each refetch the article and show its top. `img`
+  draws `[alt]` when there is alt text and `[image]` when the attribute
+  is ABSENT; `alt=""` draws nothing at all, because an empty alt is the
+  page saying the picture is decoration and has no words — a modern
+  article's icons and tracking pixels all say it. An `img` inside an `a`
+  is the link's text.
 - **A form's controls are SPOTS TOO**, drawn in their own colour and
   numbered in the same sequence as the links: a box you type in as
   `[n][value___]` at the page's own `size`, a tick box as `[n][x]` or
   `[n][ ]`, one of a radio group as `[n](*)` or `[n]( )`, a list as
   `[n][v the chosen option]`, a button as `[n][its words]`. A `textarea`
-  is a box with its text as the starting value, one row's worth, because
-  a line-mode browser has no second row to give it. A control that does
-  nothing this browser can honour — a reset, a plain button — is drawn
-  and is NOT a spot, because landing on it would promise something. A
-  HIDDEN field is neither drawn nor landed on: it is remembered against
-  the form, whose data it is.
+  is a box with its text as the starting value — kept VERBATIM, because
+  that text is the field's value and collapsing its spacing would send
+  the server something the page did not put there — shown on one row,
+  because a line-mode browser has no second row to give it. A control
+  that does nothing this browser can honour — a reset, a plain button —
+  is drawn and is NOT a spot, because landing on it would promise
+  something. A DISABLED control is the same: drawn, not landed on, and
+  never sent, which is what the page disabled it to arrange. A HIDDEN
+  field is neither drawn nor landed on: it is remembered against the
+  form, whose data it is. **A PASSWORD is drawn as its length**, never
+  its value, and echoes stars while it is typed — a page that prefills
+  one is not a reason to put it on a screen somebody is standing behind.
 - **Skipped whole:** `head` and everything in it (`title` goes to the
   title row), `script`, `style`, `iframe` (a different document, which
   showing would mean fetching), `noscript`'s CONTENTS are shown (we run
@@ -559,7 +572,11 @@ new screen or by nothing.
 Enter (and Right) DOES THE SELECTED THING, which is one key because to
 the person pressing it there is one question: a link is followed, a box
 is opened to type in, a tick box is ticked, a list steps to its next
-option, a button sends its form. Typing a number then Enter does the same
+option, a button sends its form. **A link into the page you are already
+on is a MOVE, not a fetch**: every element carrying an `id`, and every
+old-style `<a name>`, records the row its content opens on, so a `#name`
+is answered by scrolling there. A page that does not carry the name says
+so and stays where it is. Typing a number then Enter does the same
 to the spot wearing that number. `g` prompts for an address (a bare
 `host/path` gets `http://` in front, the way gopher reads a bare host);
 `r` refetches; `?` shows the keys; `q` quits, after asking, because
@@ -598,10 +615,19 @@ to, which is what a GET form does; the hidden fields first, then every
 successful control in document order — a box that is not ticked sends
 nothing, a ticked one with no value of its own sends `on`, a list sends
 its option's VALUE rather than the words shown for it, and of two buttons
-only the one pressed says so. **A form with exactly one box to type in
-sends itself when you finish the box**, because there is nowhere else in
-it to go and stopping to hunt for a button is the step nobody expects; one
-with more waits for its button.
+only the one pressed says so. **A form with exactly ONE THING TO ANSWER
+sends itself when you finish that thing**, because there is nowhere else
+in it to go and stopping to hunt for a button is the step nobody expects.
+Anything else to fill in — a second box, a tick, a list — and it waits
+for its button, since sending early would send the rest at their defaults
+before a person working down the page ever reached them.
+
+**A form off an HTTPS page whose action is plain `http` asks first.**
+libfetch's downgrade callback cannot see that one: it judges the
+redirects INSIDE a fetch, and this fetch begins at http, so nothing in
+the library learns where the values came from. What is being sent is what
+somebody typed, which makes it a stronger case for asking than an
+ordinary downgrade, not a weaker one.
 
 **Errors are the library's sentence, in the status row.** Every libfetch
 refusal has `os64_fetch_reason`; a TLS refusal now names the alert or the

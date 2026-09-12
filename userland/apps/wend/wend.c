@@ -368,7 +368,7 @@ typedef enum {
 // everywhere except here. WHATEVER IS IN THE BUFFER IS WHAT THE ANSWER
 // STARTS AS, so a form field is edited rather than retyped; a caller wanting
 // a blank line passes a blank buffer.
-static prompt_result_t prompt(const char *label, char *out_text, size_t cap)
+static prompt_result_t prompt(const char *label, char *out_text, size_t cap, bool mask)
 {
     size_t n = os64_strlen(out_text);
     if (n + 1 > cap)
@@ -378,13 +378,27 @@ static prompt_result_t prompt(const char *label, char *out_text, size_t cap)
         cursor_to(s_rows, 1);
         bar_on();
         int32_t used = draw_text(label, s_cols - 1);
-        used += draw_cells(out_text, n, s_cols - 1 - used);
+        if (mask) {
+            // A PASSWORD IS NOT ECHOED, here or anywhere. The row is a
+            // shoulder away from whoever is walking past, and this is the
+            // one field whose whole point is that it is not read aloud.
+            for (size_t i = 0; i < n && used < s_cols - 1; i++)
+                used += draw_cells("*", 1, s_cols - 1 - used);
+        } else {
+            used += draw_cells(out_text, n, s_cols - 1 - used);
+        }
         erase_to_eol();
         sgr_reset();
         cursor_to(s_rows, used + 1);
 
         char c;
         int got = key_byte(&c, OS64_WAIT_FOREVER);
+        // A TERMINATION ASKED FOR OUTSIDE IS ANSWERED INSIDE. The handler
+        // sets the flag and interrupts this read; resuming the loop would
+        // hold the whole session at a half-typed line until somebody
+        // pressed a key, which is not what "end the session" means.
+        if (s_want_quit)
+            return PROMPT_CANCELLED;
         if (got == KEY_BYTE_INTERRUPT)
             continue;                            // a resize; the question stands
         if (got != KEY_BYTE_GOT)
@@ -482,6 +496,10 @@ static bool fetch_cancelled(void *ctx)
     // An input that cannot be asked to wait a bounded time cannot be POLLED
     // either: the read would block, and blocking here would hang the fetch
     // it was called to supervise. A signal still reaches the flag.
+    // A hangup ends the fetch as surely as a Ctrl+C: the session it belongs
+    // to is going away, and waiting out a slow server first helps nobody.
+    if (s_want_quit)
+        return true;
     if (!s_timed_keys)
         return s_cancel != 0;
     for (;;) {
@@ -615,8 +633,16 @@ static char *read_body(os64_fetch_t *f, size_t cap, size_t *len, const char *url
     uint64_t shown = 0;
     for (;;) {
         if (at == size) {
-            if (size >= cap)
+            if (size >= cap) {
+                // ASK FOR THE BYTE THAT WOULD CROSS THE CAP. libfetch refuses
+                // a body at `max_body` on the read that would pass it, not
+                // before, so stopping at a full buffer leaves the fetch
+                // reporting OK and this page claiming to be whole when it is
+                // the first 8 MB of something longer.
+                char probe;
+                (void)os64_fetch_read(f, &probe, 1);
                 break;
+            }
             size_t want = size * 2 > cap ? cap : size * 2;
             char *grown = os64_realloc(text, want);
             if (!grown)
@@ -649,8 +675,12 @@ static bool charset_is_utf8(const char *charset)
 // screen and only replaces it when there is something to show — a page that
 // will not load leaves the previous page where it is, with the reason under
 // it (BROWSER.md § The face).
-static bool load(const char *url, view_t *out)
+// `why` is the fetch's own verdict when there was one, for the caller that
+// has to turn it into an exit code. NULL when nobody is asking.
+static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
 {
+    if (why)
+        *why = OS64_FETCH_OK;
     status_show(" fetching %s", url);
     s_cancel = 0;
 
@@ -669,6 +699,8 @@ static bool load(const char *url, view_t *out)
     }
     const os64_fetch_head_t *head = os64_fetch_head(f);
     if (!head) {
+        if (why)
+            *why = os64_fetch_status(f);
         status_set(" %s", os64_fetch_reason(f));
         os64_fetch_close(f);
         return false;
@@ -732,16 +764,19 @@ static bool load(const char *url, view_t *out)
     // EVERY WAY A PAGE CAN BE INCOMPLETE GETS A SENTENCE, because half a
     // page that says so is worth reading and half a page that pretends to be
     // whole is not.
-    char why[WEND_STATUS_MAX];
-    why[0] = '\0';
+    char trouble[WEND_STATUS_MAX];
+    trouble[0] = '\0';
     os64_fetch_status_t st = os64_fetch_status(f);
+    if (why)
+        *why = st;
     if (st != OS64_FETCH_OK)
-        os64_snprintf(why, sizeof(why), " - %s", os64_fetch_reason(f));
+        os64_snprintf(trouble, sizeof(trouble), " - %s", os64_fetch_reason(f));
     else if (out->doc && out->doc->refusal)
-        os64_snprintf(why, sizeof(why), " - the page is bigger than this browser"
-                      " will parse (%s)", os64_html_status_name(out->doc->refusal));
+        os64_snprintf(trouble, sizeof(trouble), " - the page is bigger than this"
+                      " browser will parse (%s)",
+                      os64_html_status_name(out->doc->refusal));
     os64_snprintf(out->note, sizeof(out->note), "%ld%s%s%s", (long)head->status,
-                  head->reason[0] ? " " : "", head->reason, why);
+                  head->reason[0] ? " " : "", head->reason, trouble);
     os64_fetch_close(f);
 
     view_layout(out);
@@ -889,8 +924,14 @@ static int32_t spot_near(const view_t *v, int32_t row, int32_t direction)
 // when the new screen has none.
 static void selection_reanchor(view_t *v)
 {
-    if (!v->page || v->sel < 0)
+    // The bound is checked here and not only where a selection is set: this
+    // runs after every scroll, so it is the one place every stale selection
+    // passes through.
+    if (!v->page || v->sel < 0 || v->sel >= v->page->nspots) {
+        if (v->page && v->sel >= v->page->nspots)
+            v->sel = -1;
         return;
+    }
     int32_t rows = content_rows();
     int32_t line = v->page->spots[v->sel].line;
     if (line >= v->top && line < v->top + rows)
@@ -947,7 +988,7 @@ static bool go(view_t *v, const char *url, bool remember)
 {
     view_t next = { 0 };
     next.sel = -1;
-    if (!load(url, &next))
+    if (!load(url, &next, NULL))
         return false;
     if (remember)
         history_push(v);
@@ -968,9 +1009,36 @@ static bool starts_with_nocase(const char *s, const char *prefix)
     return true;
 }
 
+// Move to a `#name` on the page that is showing. A page that does not carry
+// the name says so and stays where it is: the link was still a link, and
+// throwing away the reader's place would punish them for the page's mistake.
+static void jump_to_anchor(view_t *v, const char *name)
+{
+    int32_t line = wend_anchor_line(v->page, name);
+    if (line < 0) {
+        status_set(" this page has nothing named #%s", name);
+        return;
+    }
+    v->top = line;
+    scroll_clamp(v);
+    selection_reanchor(v);
+}
+
 static void follow_link(view_t *v, int32_t index)
 {
-    const char *url = v->page->spots[index].url;
+    // Both are copied out first: following frees the page these point into.
+    char url[OS64_FETCH_URL_MAX], fragment[OS64_URL_PATH_MAX];
+    os64_strcopy(url, sizeof(url), v->page->spots[index].url);
+    os64_strcopy(fragment, sizeof(fragment), v->page->spots[index].fragment);
+
+    // A LINK INTO THE PAGE YOU ARE ON IS A MOVE, NOT A FETCH. Asking the
+    // server for the article again to show its top is what a table of
+    // contents would otherwise do to you, once per entry.
+    if (fragment[0] != '\0' && os64_streq(url, v->url)) {
+        v->sel = index;
+        jump_to_anchor(v, fragment);
+        return;
+    }
     if (url[0] == '\0') {
         status_set(" link %d does not spell an address this browser can resolve",
                    index + 1);
@@ -984,7 +1052,9 @@ static void follow_link(view_t *v, int32_t index)
         return;
     }
     v->sel = index;
-    go(v, url, true);
+    // A fragment on another page is answered once that page is here.
+    if (go(v, url, true) && fragment[0] != '\0')
+        jump_to_anchor(v, fragment);
 }
 
 // ── Sending a form ──────────────────────────────────────────────────────
@@ -1009,23 +1079,47 @@ static void form_send(view_t *v, int32_t index)
         case WEND_FORM_OK:
             break;
     }
+    // A FORM OFF AN ENCRYPTED PAGE THAT POSTS ITS ANSWERS IN CLEAR IS THE
+    // PERSON'S DECISION TOO. libfetch's downgrade callback cannot see this
+    // one: it judges the REDIRECTS inside a fetch, and this fetch starts at
+    // http, so nothing in the library ever learns that the values came off
+    // an https page. What is being sent is what somebody typed, which makes
+    // it worse than an ordinary downgrade, not better.
+    if (os64_streq(v->base.scheme, "https") && starts_with_nocase(url, "http://")) {
+        os64_url_t target;
+        char question[WEND_STATUS_MAX];
+        os64_snprintf(question, sizeof(question),
+                      " %s would get this unencrypted - send it? (y/n) ",
+                      os64_url_parse(url, &target) == OS64_URL_OK ? target.host
+                                                                 : "that address");
+        if (!confirm(question)) {
+            status_set(" not sent");
+            return;
+        }
+    }
     go(v, url, true);
 }
 
-// A form with exactly one box to type in has nowhere else for you to go, so
-// finishing the box finishes the form. One with more than one keeps the
-// value and waits: the next thing to fill in is the next thing you meant.
+// A form with ONE THING TO ANSWER has nowhere else for you to go, so
+// finishing that one thing finishes the form. Anything else to fill in —
+// another box, a tick, a list — and the value is kept while the form waits,
+// because sending early would send the rest at their defaults and a person
+// working down the page in order would never get to them.
 static void form_send_if_alone(view_t *v, int32_t index)
 {
     const wend_page_t *p = v->page;
     if (index < 0 || index >= p->nspots || p->spots[index].form <= 0)
         return;
-    int32_t boxes = 0;
-    for (int32_t i = 0; i < p->nspots; i++)
-        if (p->spots[i].form == p->spots[index].form
-            && p->spots[i].kind == WEND_SPOT_TEXT)
-            boxes++;
-    if (boxes == 1)
+    int32_t answers = 0;
+    for (int32_t i = 0; i < p->nspots; i++) {
+        if (p->spots[i].form != p->spots[index].form)
+            continue;
+        // A button is not something to answer: it is how you say you are
+        // done, which is exactly what finishing the box already said.
+        if (p->spots[i].kind != WEND_SPOT_LINK && p->spots[i].kind != WEND_SPOT_SUBMIT)
+            answers++;
+    }
+    if (answers == 1)
         form_send(v, index);
 }
 
@@ -1083,13 +1177,25 @@ static void field_type(view_t *v, int32_t index)
     wend_spot_t *spot = &v->page->spots[index];
     if (!edits_room(v))
         return;
-    char shown[WEND_STATUS_MAX];
+    char shown[WEND_STATUS_MAX], before[WEND_STATUS_MAX];
     char label[64];
     value_to_typed(spot->value, shown, sizeof(shown));
+    os64_strcopy(before, sizeof(before), shown);
     os64_snprintf(label, sizeof(label), " %s: ",
                   spot->name[0] ? spot->name : "type");
-    if (prompt(label, shown, sizeof(shown)) == PROMPT_CANCELLED) {
+    if (prompt(label, shown, sizeof(shown), spot->secret) == PROMPT_CANCELLED) {
         status_set(" left as it was");
+        return;
+    }
+    // AN UNTOUCHED VALUE IS LEFT ALONE, not re-typed back over itself. What
+    // was shown came through the fold, so storing it would replace the
+    // page's own bytes with their Latin-1 shadow — a curly quote becomes a
+    // straight one, a character with no glyph becomes `?`, and anything past
+    // the prompt's buffer is gone. Only a CHANGE is worth keeping.
+    if (os64_streq(shown, before)) {
+        status_set(" left as it was");
+        if (v->sel >= 0 && v->sel < v->page->nspots)
+            form_send_if_alone(v, v->sel);
         return;
     }
     char stored[WEND_STATUS_MAX * 2];
@@ -1191,16 +1297,19 @@ static void back(view_t *v)
     crumb_t crumb = s_history[s_depth - 1];
     view_t next = { 0 };
     next.sel = -1;
-    if (!load(crumb.url, &next))
+    if (!load(crumb.url, &next, NULL))
         return;                          // the history is untouched; the row says why
     s_depth--;
     view_clear(v);
     *v = next;
-    // Where you were on that page, as near as a re-wrap allows. There is no
-    // page cache (BROWSER.md books one), so going back is a fetch — honest,
-    // and the same rules as any other.
+    // Where you were on that page, as near as the page you get back allows.
+    // There is no page cache (BROWSER.md books one), so going back is a
+    // FETCH: the same address, and not necessarily the same page — a front
+    // page loses a story, a search reruns. So the remembered selection is a
+    // hint that has to be checked against what actually came back, not a
+    // position that can be trusted into an array.
     v->top = crumb.top;
-    v->sel = crumb.sel;
+    v->sel = crumb.sel < v->page->nspots ? crumb.sel : -1;
     scroll_clamp(v);
 }
 
@@ -1288,9 +1397,11 @@ static void help_show(void)
         else if (k == KEY_HOME) { help.top = 0; }
         else if (k == KEY_END)  { help.top = help.page ? help.page->nlines : 0;
                                   scroll_clamp(&help); }
-        else if (k == KEY_NONE) continue;
+        else if (k == KEY_NONE) { if (s_want_quit) break; continue; }
         else if (k == KEY_OTHER && literal == ' ') scroll_by(&help, content_rows());
         else break;
+        if (s_want_quit)
+            break;                       // a hangup ends the session from in here too
     }
     wend_page_free(help.page);         // the text is static; only the lines are ours
 }
@@ -1301,13 +1412,16 @@ static int32_t session(const char *start)
 {
     view_t view = { 0 };
     view.sel = -1;
-    if (!load(start, &view)) {
+    os64_fetch_status_t why = OS64_FETCH_OK;
+    if (!load(start, &view, &why)) {
         // THE FIRST PAGE IS THE COMMAND, and a command that failed owes an
-        // exit code. Inside the session the same failure is a sentence and
-        // the session goes on.
+        // exit code that says which thing to go and fix. An address nobody
+        // could parse is the typist's to mend; everything else is the
+        // network's, the server's or this machine's.
         screen_restore();
         os64_hprintf(OS64_STDERR, "wend:%s\n", s_status);
-        return WEND_FAILED;
+        return (why == OS64_FETCH_BAD_URL || why == OS64_FETCH_UNSUPPORTED_SCHEME)
+               ? WEND_BAD_URL : WEND_FAILED;
     }
 
     screen_clear();
@@ -1392,7 +1506,7 @@ static int32_t session(const char *start)
                     case 'g': {
                         char typed[OS64_FETCH_URL_MAX];
                         typed[0] = '\0';         // an address is typed fresh
-                        if (prompt(" go to: ", typed, sizeof(typed)) != PROMPT_TYPED) {
+                        if (prompt(" go to: ", typed, sizeof(typed), false) != PROMPT_TYPED) {
                             status_set(" stayed here");
                             break;
                         }

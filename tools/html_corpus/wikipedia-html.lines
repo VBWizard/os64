@@ -1,9 +1,10 @@
 page: wikipedia-html
 title: HTML - Wikipedia
 width: 80
-lines: 2919
+lines: 2914
 spots: 2217
 forms: 2
+anchors: 3649
 incomplete: no
 --
 |[1]Jump to content
@@ -39,8 +40,8 @@ incomplete: no
 |~ L15:4-19
 |  * [16]Special pages
 |~ L16:4-21
-|[17] [image] [Wikipedia] [The Free Encyclopedia]
-|~ L17:0-48
+|[17] [Wikipedia] [The Free Encyclopedia]
+|~ L17:0-40
 |[18] Search
 |~ L18:0-11
 |[19][________________]
@@ -596,12 +597,10 @@ incomplete: no
 |".htm" and ".html" redirect here. For other uses, see [249]HTM.
 |~ L249:54-62
 |
-|[image]
 |This article has multiple issues. Please help [250]improve it or discuss these
 |~ B:0-33 BL250:46-61
 |issues on the [251]talk page. ([252]Learn how and when to remove these messages)
 |~ BL251:14-28 U:30-31 UL252:31-79 U:79-80
-|[image]
 |This article contains [253]instructions or advice. Wikipedia is not a guidebook;
 |~ B:13-22 BL253:22-49
 |please help [254]rewrite such content to be encyclopedic or move it to
@@ -624,7 +623,6 @@ incomplete: no
 |~ L268:0-12 B:13-14 L269:15-25 U:26-38 UL270:38-76
 |message)
 |~ UL270:0-7 U:7-8
-|[image]
 |This article may require [271]copy editing for spelling, grammar, style,
 |~ B:13-25 BL271:25-42 B:42-72
 |cohesion, or tone. You can assist by [272]editing it. (September 2026)
@@ -939,7 +937,6 @@ incomplete: no
 |HTML version timeline
 |~ B:0-21
 |
-|[image]
 |This section is in [414]list format but may read better as [415]prose. You can
 |~ B:13-19 BL414:19-28 B:28-59 BL415:59-69
 |help by [416]converting this section, if appropriate. [417]Editing help is
@@ -2688,10 +2685,10 @@ incomplete: no
 |~ L1075:4-26 L1076:26-41
 |  * [1077][Wikiversity logo][1078]Resources from Wikiversity
 |~ L1077:4-28 L1078:28-43
-|  * [image][1079]Data from Wikidata
-|~ L1079:11-21
-|  * [image][1080]Discussions from Meta-Wiki
-|~ L1080:11-28
+|  * [1079]Data from Wikidata
+|~ L1079:4-14
+|  * [1080]Discussions from Meta-Wiki
+|~ L1080:4-21
 |  * [1081][MediaWiki logo][1082]Documentation from MediaWiki
 |~ L1081:4-26 L1082:26-45
 |  * [1083]WHATWG's [1084]HTML Living Standard
@@ -4483,8 +4480,8 @@ incomplete: no
 |~ L1965:4-15
 |  * [1966]80000
 |~ L1966:4-15
-|  * [image] [1967]Category
-|~ L1967:12-26
+|  *  [1967]Category
+|~ L1967:5-19
 |  * [1968]v
 |~ L1968:4-11
 |  * [1969]t
@@ -4852,7 +4849,6 @@ incomplete: no
 |~ L2147:0-12
 |  * [2148][icon] [2149]Computer programming
 |~ L2148:4-16 L2149:17-43
-|[image]
 |Retrieved from
 |"[2150]https://en.wikipedia.org/w/index.php?title=HTML&oldid=1373233202"
 |~ L2150:1-71
@@ -4983,7 +4979,7 @@ incomplete: no
 |[2216][ 140 languages ] [2217] Add topic
 |~ F2216:0-23 L2217:24-40
 --
-1 link https://en.wikipedia.org/wiki/HTML
+1 link https://en.wikipedia.org/wiki/HTML #bodyContent
 2 check name=(none) off value=
 3 submit name=(none) label=move to sidebar value=
 4 submit name=(none) label=hide value=
@@ -5014,49 +5010,49 @@ incomplete: no
 29 submit name=(none) label=move to sidebar value=
 30 submit name=(none) label=hide value=
 31 link https://en.wikipedia.org/wiki/HTML
-32 link https://en.wikipedia.org/wiki/HTML
+32 link https://en.wikipedia.org/wiki/HTML #History
 33 submit name=(none) label=Toggle History subsection value=
-34 link https://en.wikipedia.org/wiki/HTML
-35 link https://en.wikipedia.org/wiki/HTML
-36 link https://en.wikipedia.org/wiki/HTML
-37 link https://en.wikipedia.org/wiki/HTML
-38 link https://en.wikipedia.org/wiki/HTML
-39 link https://en.wikipedia.org/wiki/HTML
-40 link https://en.wikipedia.org/wiki/HTML
-41 link https://en.wikipedia.org/wiki/HTML
-42 link https://en.wikipedia.org/wiki/HTML
-43 link https://en.wikipedia.org/wiki/HTML
+34 link https://en.wikipedia.org/wiki/HTML #Development
+35 link https://en.wikipedia.org/wiki/HTML #HTML_version_timeline
+36 link https://en.wikipedia.org/wiki/HTML #HTML_2
+37 link https://en.wikipedia.org/wiki/HTML #HTML_3
+38 link https://en.wikipedia.org/wiki/HTML #HTML_4
+39 link https://en.wikipedia.org/wiki/HTML #HTML_5
+40 link https://en.wikipedia.org/wiki/HTML #HTML_draft_version_timeline
+41 link https://en.wikipedia.org/wiki/HTML #XHTML_versions
+42 link https://en.wikipedia.org/wiki/HTML #Transition_of_HTML_publication_to_WHATWG
+43 link https://en.wikipedia.org/wiki/HTML #Markup
 44 submit name=(none) label=Toggle Markup subsection value=
-45 link https://en.wikipedia.org/wiki/HTML
-46 link https://en.wikipedia.org/wiki/HTML
-47 link https://en.wikipedia.org/wiki/HTML
-48 link https://en.wikipedia.org/wiki/HTML
-49 link https://en.wikipedia.org/wiki/HTML
-50 link https://en.wikipedia.org/wiki/HTML
-51 link https://en.wikipedia.org/wiki/HTML
-52 link https://en.wikipedia.org/wiki/HTML
-53 link https://en.wikipedia.org/wiki/HTML
-54 link https://en.wikipedia.org/wiki/HTML
-55 link https://en.wikipedia.org/wiki/HTML
-56 link https://en.wikipedia.org/wiki/HTML
-57 link https://en.wikipedia.org/wiki/HTML
+45 link https://en.wikipedia.org/wiki/HTML #Elements
+46 link https://en.wikipedia.org/wiki/HTML #Element_examples
+47 link https://en.wikipedia.org/wiki/HTML #Headings
+48 link https://en.wikipedia.org/wiki/HTML #Line_breaks
+49 link https://en.wikipedia.org/wiki/HTML #Links
+50 link https://en.wikipedia.org/wiki/HTML #Inputs
+51 link https://en.wikipedia.org/wiki/HTML #Comments
+52 link https://en.wikipedia.org/wiki/HTML #Attributes
+53 link https://en.wikipedia.org/wiki/HTML #Character_and_entity_references
+54 link https://en.wikipedia.org/wiki/HTML #Data_types
+55 link https://en.wikipedia.org/wiki/HTML #Document_type_declaration
+56 link https://en.wikipedia.org/wiki/HTML #Semantic_HTML
+57 link https://en.wikipedia.org/wiki/HTML #Delivery
 58 submit name=(none) label=Toggle Delivery subsection value=
-59 link https://en.wikipedia.org/wiki/HTML
-60 link https://en.wikipedia.org/wiki/HTML
-61 link https://en.wikipedia.org/wiki/HTML
-62 link https://en.wikipedia.org/wiki/HTML
-63 link https://en.wikipedia.org/wiki/HTML
+59 link https://en.wikipedia.org/wiki/HTML #HTTP
+60 link https://en.wikipedia.org/wiki/HTML #HTML_e-mail
+61 link https://en.wikipedia.org/wiki/HTML #Naming_conventions
+62 link https://en.wikipedia.org/wiki/HTML #HTML_Application
+63 link https://en.wikipedia.org/wiki/HTML #HTML4_variations
 64 submit name=(none) label=Toggle HTML4 variations subsection value=
-65 link https://en.wikipedia.org/wiki/HTML
-66 link https://en.wikipedia.org/wiki/HTML
-67 link https://en.wikipedia.org/wiki/HTML
-68 link https://en.wikipedia.org/wiki/HTML
-69 link https://en.wikipedia.org/wiki/HTML
-70 link https://en.wikipedia.org/wiki/HTML
-71 link https://en.wikipedia.org/wiki/HTML
-72 link https://en.wikipedia.org/wiki/HTML
-73 link https://en.wikipedia.org/wiki/HTML
-74 link https://en.wikipedia.org/wiki/HTML
+65 link https://en.wikipedia.org/wiki/HTML #SGML-based_versus_XML-based_HTML
+66 link https://en.wikipedia.org/wiki/HTML #Transitional_versus_strict
+67 link https://en.wikipedia.org/wiki/HTML #Frameset_versus_transitional
+68 link https://en.wikipedia.org/wiki/HTML #Summary_of_specification_versions
+69 link https://en.wikipedia.org/wiki/HTML #WHATWG_HTML_versus_HTML5
+70 link https://en.wikipedia.org/wiki/HTML #WYSIWYG_editors
+71 link https://en.wikipedia.org/wiki/HTML #See_also
+72 link https://en.wikipedia.org/wiki/HTML #Notes
+73 link https://en.wikipedia.org/wiki/HTML #References
+74 link https://en.wikipedia.org/wiki/HTML #External_links
 75 check name=(none) off value=
 76 check name=(none) off value=
 77 link https://af.wikipedia.org/wiki/HTML
@@ -5199,7 +5195,7 @@ incomplete: no
 214 link https://zh-min-nan.wikipedia.org/wiki/HTML
 215 link https://zh-yue.wikipedia.org/wiki/HTML
 216 link https://zh.wikipedia.org/wiki/HTML
-217 link https://www.wikidata.org/wiki/Special:EntityPage/Q8811
+217 link https://www.wikidata.org/wiki/Special:EntityPage/Q8811 #sitelinks-wikipedia
 218 link https://en.wikipedia.org/wiki/HTML
 219 link https://en.wikipedia.org/wiki/Talk:HTML
 220 check name=(none) off value=
@@ -5230,12 +5226,12 @@ incomplete: no
 245 link https://www.wikidata.org/wiki/Special:EntityPage/Q8811
 246 submit name=(none) label=move to sidebar value=
 247 submit name=(none) label=hide value=
-248 link https://en.wikipedia.org/wiki/Wikipedia:Protection_policy
+248 link https://en.wikipedia.org/wiki/Wikipedia:Protection_policy #semi
 249 link https://en.wikipedia.org/wiki/HTM_(disambiguation)
 250 link https://en.wikipedia.org/wiki/Special:EditPage/HTML
 251 link https://en.wikipedia.org/wiki/Talk:HTML
 252 link https://en.wikipedia.org/wiki/Help:Maintenance_template_removal
-253 link https://en.wikipedia.org/wiki/Wikipedia:What_Wikipedia_is_not
+253 link https://en.wikipedia.org/wiki/Wikipedia:What_Wikipedia_is_not #GUIDE
 254 link https://en.wikipedia.org/w/index.php?title=HTML&action=edit
 255 link https://en.wikiversity.org/wiki/
 256 link https://en.wikibooks.org/wiki/
@@ -5245,7 +5241,7 @@ incomplete: no
 260 link https://en.wikipedia.org/wiki/Wikipedia:Verifiability
 261 link https://en.wikipedia.org/wiki/Special:EditPage/HTML
 262 link https://en.wikipedia.org/wiki/Help:Referencing_for_beginners
-263 link https://en.wikipedia.org/wiki/Wikipedia:Verifiability
+263 link https://en.wikipedia.org/wiki/Wikipedia:Verifiability #Burden_of_evidence
 264 link https://www.google.com/search?as_eq=wikipedia&q=%22HTML%22
 265 link https://www.google.com/search?tbm=nws&q=%22HTML%22+-wikipedia&tbs=ar:1
 266 link https://www.google.com/search?&q=%22HTML%22&tbs=bkt:s&tbm=bks
@@ -5259,10 +5255,10 @@ incomplete: no
 274 link https://en.wikipedia.org/wiki/Help:Maintenance_template_removal
 275 link https://en.wikipedia.org/wiki/File:HTML5_logo_and_wordmark.svg
 276 link https://en.wikipedia.org/wiki/HTML5
-277 link https://en.wikipedia.org/wiki/HTML
+277 link https://en.wikipedia.org/wiki/HTML #cite_note-1
 278 link https://en.wikipedia.org/wiki/Filename_extension
 279 link https://en.wikipedia.org/wiki/Media_type
-280 link https://en.wikipedia.org/wiki/Resource_fork
+280 link https://en.wikipedia.org/wiki/Resource_fork #Types
 281 link https://en.wikipedia.org/wiki/Uniform_Type_Identifier
 282 link https://en.wikipedia.org/wiki/WHATWG
 283 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium
@@ -5328,7 +5324,7 @@ incomplete: no
 343 link https://en.wikipedia.org/wiki/Template_talk:HTML
 344 link https://en.wikipedia.org/wiki/Special:EditPage/Template:HTML
 345 link https://en.wikipedia.org/wiki/Markup_language
-346 link https://en.wikipedia.org/wiki/HTML
+346 link https://en.wikipedia.org/wiki/HTML #cite_note-3
 347 link https://en.wikipedia.org/wiki/Web_browser
 348 link https://en.wikipedia.org/wiki/Web_content
 349 link https://en.wikipedia.org/wiki/Cascading_Style_Sheets
@@ -5341,19 +5337,19 @@ incomplete: no
 356 link https://en.wikipedia.org/wiki/Web_page
 357 link https://en.wikipedia.org/wiki/Semantic_Web
 358 link https://en.wikipedia.org/wiki/HTML_element
-359 link https://en.wikipedia.org/wiki/HTML_element
+359 link https://en.wikipedia.org/wiki/HTML_element #Images_and_objects
 360 link https://en.wikipedia.org/wiki/Fieldset
 361 link https://en.wikipedia.org/wiki/Structured_document
 362 link https://en.wikipedia.org/wiki/Semantics
 363 link https://en.wikipedia.org/wiki/Hyperlink
-364 link https://en.wikipedia.org/wiki/Bracket
+364 link https://en.wikipedia.org/wiki/Bracket #Angle_brackets
 365 link https://en.wikipedia.org/wiki/Web_browser
 366 link https://en.wikipedia.org/wiki/Scripting_language
 367 link https://en.wikipedia.org/wiki/JavaScript
 368 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium
 369 link https://en.wikipedia.org/wiki/CSS
 370 link https://en.wikipedia.org/w/index.php?title=HTML&action=edit
-371 link https://en.wikipedia.org/wiki/HTML
+371 link https://en.wikipedia.org/wiki/HTML #cite_note-deprecated-4
 372 link https://en.wikipedia.org/wiki/File:Tim_Berners-Lee_April_2009.jpg
 373 link https://en.wikipedia.org/wiki/Tim_Berners-Lee
 374 link https://en.wikipedia.org/wiki/Physicist
@@ -5362,17 +5358,17 @@ incomplete: no
 377 link https://en.wikipedia.org/wiki/ENQUIRE
 378 link https://en.wikipedia.org/wiki/Internet
 379 link https://en.wikipedia.org/wiki/Hypertext
-380 link https://en.wikipedia.org/wiki/HTML
+380 link https://en.wikipedia.org/wiki/HTML #cite_note-5
 381 link https://en.wikipedia.org/wiki/Data_system
 382 link https://en.wikipedia.org/wiki/Robert_Cailliau
 383 link https://en.wikipedia.org/wiki/Encyclopedia
-384 link https://en.wikipedia.org/wiki/HTML
-385 link https://en.wikipedia.org/wiki/HTML
-386 link https://en.wikipedia.org/wiki/HTML
-387 link https://en.wikipedia.org/wiki/HTML
+384 link https://en.wikipedia.org/wiki/HTML #cite_note-6
+385 link https://en.wikipedia.org/wiki/HTML #cite_note-7
+386 link https://en.wikipedia.org/wiki/HTML #cite_note-tagshtml-8
+387 link https://en.wikipedia.org/wiki/HTML #cite_note-9
 388 link https://en.wikipedia.org/wiki/CERN_SGML
 389 link https://en.wikipedia.org/wiki/Standard_Generalized_Markup_Language
-390 link https://en.wikipedia.org/wiki/HTML
+390 link https://en.wikipedia.org/wiki/HTML #cite_note-10
 391 link https://en.wikipedia.org/wiki/Markup_language
 392 link https://en.wikipedia.org/wiki/Web_browser
 393 link https://en.wikipedia.org/wiki/Typesetting
@@ -5383,19 +5379,19 @@ incomplete: no
 398 link https://en.wikipedia.org/wiki/Internet_Draft
 399 link https://en.wikipedia.org/wiki/Dan_Connolly_(computer_scientist)
 400 link https://en.wikipedia.org/wiki/Document_type_definition
-401 link https://en.wikipedia.org/wiki/HTML
-402 link https://en.wikipedia.org/wiki/HTML
+401 link https://en.wikipedia.org/wiki/HTML #cite_note-11
+402 link https://en.wikipedia.org/wiki/HTML #cite_note-12
 403 link https://en.wikipedia.org/wiki/Mosaic_(web_browser)
 404 link https://en.wikipedia.org/wiki/Dave_Raggett
-405 link https://en.wikipedia.org/wiki/HTML
-406 link https://en.wikipedia.org/wiki/HTML
+405 link https://en.wikipedia.org/wiki/HTML #cite_note-html+-13
+406 link https://en.wikipedia.org/wiki/HTML #cite_note-14
 407 link https://en.wikipedia.org/w/index.php?title=HTML&action=edit
 408 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium
-409 link https://en.wikipedia.org/wiki/HTML
+409 link https://en.wikipedia.org/wiki/HTML #cite_note-raggett-15
 410 link https://en.wikipedia.org/wiki/International_Organization_for_Standardization
 411 link https://en.wikipedia.org/wiki/International_Electrotechnical_Commission
 412 link https://en.wikipedia.org/wiki/Web_Hypertext_Application_Technology_Working_Group
-413 link https://en.wikipedia.org/wiki/HTML
+413 link https://en.wikipedia.org/wiki/HTML #cite_note-16
 414 link https://en.wikipedia.org/wiki/MOS:LIST
 415 link https://en.wikipedia.org/wiki/MOS:PROSE
 416 link https://en.wikipedia.org/w/index.php?title=HTML&action=edit
@@ -5412,122 +5408,122 @@ incomplete: no
 427 link https://en.wikipedia.org/wiki/RFC_(identifier)
 428 link https://www.rfc-editor.org/rfc/rfc2070
 429 link https://en.wikipedia.org/wiki/Internationalization_and_localization
-430 link https://en.wikipedia.org/wiki/HTML
+430 link https://en.wikipedia.org/wiki/HTML #cite_note-17
 431 link https://en.wikipedia.org/wiki/W3C_Recommendation
-432 link https://en.wikipedia.org/wiki/HTML
-433 link https://en.wikipedia.org/wiki/HTML
+432 link https://en.wikipedia.org/wiki/HTML #cite_note-18
+433 link https://en.wikipedia.org/wiki/HTML #cite_note-engelfriet-19
 434 link https://en.wikipedia.org/wiki/Netscape
 435 link https://en.wikipedia.org/wiki/Blink_element
 436 link https://en.wikipedia.org/wiki/Microsoft
 437 link https://en.wikipedia.org/wiki/Marquee_element
-438 link https://en.wikipedia.org/wiki/HTML
+438 link https://en.wikipedia.org/wiki/HTML #cite_note-raggett-15
 439 link https://en.wikipedia.org/wiki/MathML
-440 link https://en.wikipedia.org/wiki/HTML
+440 link https://en.wikipedia.org/wiki/HTML #cite_note-20
 441 link https://en.wikipedia.org/wiki/Framing_(World_Wide_Web)
-442 link https://en.wikipedia.org/wiki/HTML
+442 link https://en.wikipedia.org/wiki/HTML #cite_note-engelfriet-19
 443 link https://en.wikipedia.org/wiki/Deprecation
-444 link https://en.wikipedia.org/wiki/HTML
-445 link https://en.wikipedia.org/wiki/HTML
-446 link https://en.wikipedia.org/wiki/HTML
-447 link https://en.wikipedia.org/wiki/HTML
-448 link https://en.wikipedia.org/wiki/HTML
+444 link https://en.wikipedia.org/wiki/HTML #cite_note-21
+445 link https://en.wikipedia.org/wiki/HTML #cite_note-22
+446 link https://en.wikipedia.org/wiki/HTML #cite_note-23
+447 link https://en.wikipedia.org/wiki/HTML #cite_note-24
+448 link https://en.wikipedia.org/wiki/HTML #cite_note-iso-html-25
 449 link https://en.wikipedia.org/wiki/International_Organization_for_Standardization
-450 link https://en.wikipedia.org/wiki/HTML
+450 link https://en.wikipedia.org/wiki/HTML #cite_note-26
 451 link https://en.wikipedia.org/wiki/ISO/IEC_JTC_1/SC_34
-452 link https://en.wikipedia.org/wiki/HTML
+452 link https://en.wikipedia.org/wiki/HTML #cite_note-iso-html-25
 453 link https://en.wikipedia.org/wiki/HTML5
-454 link https://en.wikipedia.org/wiki/HTML
-455 link https://en.wikipedia.org/wiki/HTML
-456 link https://en.wikipedia.org/wiki/HTML
-457 link https://en.wikipedia.org/wiki/HTML
-458 link https://en.wikipedia.org/wiki/HTML
-459 link https://en.wikipedia.org/wiki/HTML
-460 link https://en.wikipedia.org/wiki/HTML
-461 link https://en.wikipedia.org/wiki/HTML
-462 link https://en.wikipedia.org/wiki/HTML
-463 link https://en.wikipedia.org/wiki/HTML
-464 link https://en.wikipedia.org/wiki/HTML
-465 link https://en.wikipedia.org/wiki/HTML
-466 link https://en.wikipedia.org/wiki/HTML
-467 link https://en.wikipedia.org/wiki/HTML
-468 link https://en.wikipedia.org/wiki/HTML
+454 link https://en.wikipedia.org/wiki/HTML #cite_note-27
+455 link https://en.wikipedia.org/wiki/HTML #cite_note-28
+456 link https://en.wikipedia.org/wiki/HTML #cite_note-29
+457 link https://en.wikipedia.org/wiki/HTML #cite_note-30
+458 link https://en.wikipedia.org/wiki/HTML #cite_note-31
+459 link https://en.wikipedia.org/wiki/HTML #cite_note-32
+460 link https://en.wikipedia.org/wiki/HTML #cite_note-33
+461 link https://en.wikipedia.org/wiki/HTML #cite_note-34
+462 link https://en.wikipedia.org/wiki/HTML #cite_note-tagshtml-8
+463 link https://en.wikipedia.org/wiki/HTML #cite_note-35
+464 link https://en.wikipedia.org/wiki/HTML #cite_note-36
+465 link https://en.wikipedia.org/wiki/HTML #cite_note-37
+466 link https://en.wikipedia.org/wiki/HTML #cite_note-html11-38
+467 link https://en.wikipedia.org/wiki/HTML #cite_note-html11-38
+468 link https://en.wikipedia.org/wiki/HTML #cite_note-39
 469 link https://en.wikipedia.org/wiki/Internet_Engineering_Task_Force
-470 link https://en.wikipedia.org/wiki/HTML
-471 link https://en.wikipedia.org/wiki/HTML
-472 link https://en.wikipedia.org/wiki/HTML
-473 link https://en.wikipedia.org/wiki/HTML
+470 link https://en.wikipedia.org/wiki/HTML #cite_note-ietfiiir-40
+471 link https://en.wikipedia.org/wiki/HTML #cite_note-41
+472 link https://en.wikipedia.org/wiki/HTML #cite_note-42
+473 link https://en.wikipedia.org/wiki/HTML #cite_note-43
 474 link https://en.wikipedia.org/wiki/RFC_(identifier)
 475 link https://www.rfc-editor.org/rfc/rfc1866
-476 link https://en.wikipedia.org/wiki/HTML
-477 link https://en.wikipedia.org/wiki/HTML
-478 link https://en.wikipedia.org/wiki/HTML
-479 link https://en.wikipedia.org/wiki/HTML
+476 link https://en.wikipedia.org/wiki/HTML #cite_note-rfc1866-44
+477 link https://en.wikipedia.org/wiki/HTML #cite_note-45
+478 link https://en.wikipedia.org/wiki/HTML #cite_note-html30cover-46
+479 link https://en.wikipedia.org/wiki/HTML #cite_note-html30cover-46
 480 link https://en.wikipedia.org/wiki/Arena_(web_browser)
 481 link https://en.wikipedia.org/wiki/Test_bed
-482 link https://en.wikipedia.org/wiki/HTML
-483 link https://en.wikipedia.org/wiki/HTML
-484 link https://en.wikipedia.org/wiki/HTML
-485 link https://en.wikipedia.org/wiki/HTML
-486 link https://en.wikipedia.org/wiki/HTML
+482 link https://en.wikipedia.org/wiki/HTML #cite_note-47
+483 link https://en.wikipedia.org/wiki/HTML #cite_note-48
+484 link https://en.wikipedia.org/wiki/HTML #cite_note-49
+485 link https://en.wikipedia.org/wiki/HTML #cite_note-raggett-15
+486 link https://en.wikipedia.org/wiki/HTML #cite_note-raggett-15
 487 link https://en.wikipedia.org/wiki/Browser_wars
-488 link https://en.wikipedia.org/wiki/HTML
-489 link https://en.wikipedia.org/wiki/HTML
+488 link https://en.wikipedia.org/wiki/HTML #cite_note-raggett-15
+489 link https://en.wikipedia.org/wiki/HTML #cite_note-raggett-15
 490 link https://en.wikipedia.org/wiki/File:HTML5-logo.svg
 491 link https://en.wikipedia.org/wiki/HTML5
-492 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium
-493 link https://en.wikipedia.org/wiki/HTML
+492 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium #Certification
+493 link https://en.wikipedia.org/wiki/HTML #cite_note-50
 494 link https://en.wikipedia.org/wiki/SGML
 495 link https://en.wikipedia.org/wiki/HTML5
-496 link https://en.wikipedia.org/wiki/HTML
-497 link https://en.wikipedia.org/wiki/HTML
-498 link https://en.wikipedia.org/wiki/HTML
+496 link https://en.wikipedia.org/wiki/HTML #cite_note-51
+497 link https://en.wikipedia.org/wiki/HTML #cite_note-w3c2014-52
+498 link https://en.wikipedia.org/wiki/HTML #cite_note-53
 499 link https://en.wikipedia.org/wiki/W3C
-500 link https://en.wikipedia.org/wiki/HTML
-501 link https://en.wikipedia.org/wiki/HTML
-502 link https://en.wikipedia.org/wiki/W3C_recommendation
-503 link https://en.wikipedia.org/wiki/HTML
-504 link https://en.wikipedia.org/wiki/HTML
-505 link https://en.wikipedia.org/wiki/HTML
-506 link https://en.wikipedia.org/wiki/HTML
+500 link https://en.wikipedia.org/wiki/HTML #cite_note-54
+501 link https://en.wikipedia.org/wiki/HTML #cite_note-55
+502 link https://en.wikipedia.org/wiki/W3C_recommendation #W3C_recommendation_(REC)
+503 link https://en.wikipedia.org/wiki/HTML #cite_note-W3Crec-56
+504 link https://en.wikipedia.org/wiki/HTML #cite_note-57
+505 link https://en.wikipedia.org/wiki/HTML #cite_note-58
+506 link https://en.wikipedia.org/wiki/HTML #cite_note-finalars-59
 507 link https://en.wikipedia.org/wiki/XHTML
 508 link https://en.wikipedia.org/wiki/XML
-509 link https://en.wikipedia.org/wiki/HTML
-510 link https://en.wikipedia.org/wiki/HTML
-511 link https://en.wikipedia.org/wiki/HTML
-512 link https://en.wikipedia.org/wiki/HTML
+509 link https://en.wikipedia.org/wiki/HTML #cite_note-60
+510 link https://en.wikipedia.org/wiki/HTML #cite_note-61
+511 link https://en.wikipedia.org/wiki/HTML #cite_note-62
+512 link https://en.wikipedia.org/wiki/HTML #cite_note-63
 513 link https://en.wikipedia.org/wiki/HTML5
-514 link https://en.wikipedia.org/wiki/XHTML
-515 link https://en.wikipedia.org/wiki/HTML
-516 link https://en.wikipedia.org/wiki/HTML
-517 link https://en.wikipedia.org/wiki/HTML
-518 link https://en.wikipedia.org/wiki/HTML5
-519 link https://en.wikipedia.org/wiki/HTML
-520 link https://en.wikipedia.org/wiki/HTML
-521 link https://en.wikipedia.org/wiki/HTML
-522 link https://en.wikipedia.org/wiki/HTML
-523 link https://en.wikipedia.org/wiki/HTML
-524 link https://en.wikipedia.org/wiki/HTML
-525 link https://en.wikipedia.org/wiki/HTML
+514 link https://en.wikipedia.org/wiki/XHTML #XHTML5
+515 link https://en.wikipedia.org/wiki/HTML #cite_note-64
+516 link https://en.wikipedia.org/wiki/HTML #cite_note-65
+517 link https://en.wikipedia.org/wiki/HTML #cite_note-66
+518 link https://en.wikipedia.org/wiki/HTML5 #W3C_and_WHATWG_conflict
+519 link https://en.wikipedia.org/wiki/HTML #cite_note-W3C_transfer_blog-67
+520 link https://en.wikipedia.org/wiki/HTML #cite_note-W3C_transfer_HTML-68
+521 link https://en.wikipedia.org/wiki/HTML #cite_note-W3C_transfer_memo-69
+522 link https://en.wikipedia.org/wiki/HTML #cite_note-W3C_transfer_ZDNet-70
+523 link https://en.wikipedia.org/wiki/HTML #cite_note-W3C_forks-71
+524 link https://en.wikipedia.org/wiki/HTML #cite_note-72
+525 link https://en.wikipedia.org/wiki/HTML #cite_note-73
 526 link https://en.wikipedia.org/wiki/Document_type_declaration
 527 link https://en.wikipedia.org/wiki/Standards_mode
 528 link https://en.wikipedia.org/wiki/"Hello,_World!"_program
 529 link https://en.wikipedia.org/wiki/Browser_tab
 530 link https://en.wikipedia.org/wiki/Window_(computing)
 531 link https://en.wikipedia.org/wiki/Quirks_mode
-532 link https://en.wikipedia.org/wiki/HTML
+532 link https://en.wikipedia.org/wiki/HTML #cite_note-hsivonen-74
 533 link https://en.wikipedia.org/wiki/HTML_element
 534 link https://en.wikipedia.org/wiki/File:HTML_element_content_categories.svg
 535 link https://en.wikipedia.org/wiki/HTML_element
-536 link https://en.wikipedia.org/wiki/HTML
-537 link https://en.wikipedia.org/wiki/Wikipedia:Verifiability
+536 link https://en.wikipedia.org/wiki/HTML #cite_note-75
+537 link https://en.wikipedia.org/wiki/Wikipedia:Verifiability #Questionable_sources
 538 link https://en.wikipedia.org/wiki/Line_breaking_character
 539 link https://en.wikipedia.org/wiki/HTML_element
 540 link https://en.wikipedia.org/wiki/Line_breaking_character
 541 link https://en.wikipedia.org/wiki/Paragraph
 542 link https://en.wikipedia.org/wiki/URL
-543 link https://en.wikipedia.org/wiki/HTML_element
+543 link https://en.wikipedia.org/wiki/HTML_element #Basic_text
 544 link https://en.wikipedia.org/wiki/Cascading_Style_Sheets
-545 link https://en.wikipedia.org/wiki/HTML
+545 link https://en.wikipedia.org/wiki/HTML #cite_note-76
 546 link https://en.wikipedia.org/wiki/Deprecation
 547 link https://en.wikipedia.org/wiki/CSS
 548 link https://en.wikipedia.org/wiki/Hyperlink
@@ -5535,11 +5531,11 @@ incomplete: no
 550 link https://en.wikipedia.org/wiki/Main_Page
 551 link https://en.wikipedia.org/wiki/HTML_attribute
 552 link https://en.wikipedia.org/wiki/Name–value_pair
-553 link https://en.wikipedia.org/wiki/HTML
-554 link https://en.wikipedia.org/wiki/HTML
-555 link https://en.wikipedia.org/wiki/HTML
-556 link https://en.wikipedia.org/wiki/HTML
-557 link https://en.wikipedia.org/wiki/HTML
+553 link https://en.wikipedia.org/wiki/HTML #cite_note-77
+554 link https://en.wikipedia.org/wiki/HTML #cite_note-78
+555 link https://en.wikipedia.org/wiki/HTML #cite_note-79
+556 link https://en.wikipedia.org/wiki/HTML #cite_note-tagshtml-8
+557 link https://en.wikipedia.org/wiki/HTML #cite_note-80
 558 link https://en.wikipedia.org/wiki/Semantics
 559 link https://en.wikipedia.org/wiki/Microformat
 560 link https://en.wikipedia.org/wiki/Cascading_Style_Sheets
@@ -5548,20 +5544,20 @@ incomplete: no
 563 link https://en.wikipedia.org/wiki/Arabic_language
 564 link https://en.wikipedia.org/wiki/Persian_language
 565 link https://en.wikipedia.org/wiki/Hebrew_language
-566 link https://en.wikipedia.org/wiki/HTML
+566 link https://en.wikipedia.org/wiki/HTML #cite_note-81
 567 link https://en.wikipedia.org/wiki/List_of_XML_and_HTML_character_entity_references
 568 link https://en.wikipedia.org/wiki/Unicode_and_HTML
 569 link https://en.wikipedia.org/wiki/Character_entity_reference
 570 link https://en.wikipedia.org/wiki/Numeric_character_reference
 571 link https://en.wikipedia.org/wiki/Escape_character
-572 link https://en.wikipedia.org/wiki/HTML
-573 link https://en.wikipedia.org/wiki/HTML
+572 link https://en.wikipedia.org/wiki/HTML #cite_note-82
+573 link https://en.wikipedia.org/wiki/HTML #cite_note-aposhtml-83
 574 link https://en.wikipedia.org/wiki/User_agent
 575 link https://en.wikipedia.org/wiki/Web_crawler
 576 link https://en.wikipedia.org/wiki/Character_encoding
 577 link https://en.wikipedia.org/wiki/Unicode
 578 link https://en.wikipedia.org/wiki/UTF-8
-579 link https://en.wikipedia.org/wiki/HTML
+579 link https://en.wikipedia.org/wiki/HTML #cite_note-84
 580 link https://en.wikipedia.org/wiki/Ampersand
 581 link https://en.wikipedia.org/wiki/Less-than_sign
 582 link https://en.wikipedia.org/wiki/Greater-than_sign
@@ -5579,20 +5575,20 @@ incomplete: no
 594 link https://en.wikipedia.org/wiki/Quirks_mode
 595 link https://en.wikipedia.org/wiki/Document_type_definition
 596 link https://en.wikipedia.org/wiki/HTML5
-597 link https://en.wikipedia.org/wiki/HTML
+597 link https://en.wikipedia.org/wiki/HTML #cite_note-85
 598 link https://en.wikipedia.org/wiki/Quirks_mode
-599 link https://en.wikipedia.org/wiki/HTML
-600 link https://en.wikipedia.org/wiki/HTML
+599 link https://en.wikipedia.org/wiki/HTML #Transitional_versus_strict
+600 link https://en.wikipedia.org/wiki/HTML #cite_note-86
 601 link https://en.wikipedia.org/wiki/Semantic_HTML
-602 link https://en.wikipedia.org/wiki/HTML
+602 link https://en.wikipedia.org/wiki/HTML #cite_note-87
 603 link https://en.wikipedia.org/wiki/Div_and_span
 604 link https://en.wikipedia.org/wiki/Cascading_Style_Sheets
 605 link https://en.wikipedia.org/wiki/Separation_of_content_and_presentation
-606 link https://en.wikipedia.org/wiki/HTML
+606 link https://en.wikipedia.org/wiki/HTML #cite_note-88
 607 link https://en.wikipedia.org/wiki/Semantic_Web
 608 link https://en.wikipedia.org/wiki/Tim_Berners-Lee
-609 link https://en.wikipedia.org/wiki/HTML
-610 link https://en.wikipedia.org/wiki/Wikipedia:Manual_of_Style/Dates_and_numbers
+609 link https://en.wikipedia.org/wiki/HTML #cite_note-89
+610 link https://en.wikipedia.org/wiki/Wikipedia:Manual_of_Style/Dates_and_numbers #Chronological_items
 611 link https://en.wikipedia.org/wiki/Web_2.0
 612 link https://en.wikipedia.org/wiki/Mashup_(web_application_hybrid)
 613 link https://en.wikipedia.org/wiki/Price_comparison_service
@@ -5603,10 +5599,10 @@ incomplete: no
 618 link https://en.wikipedia.org/wiki/Web_crawler
 619 link https://en.wikipedia.org/wiki/Algorithm
 620 link https://en.wikipedia.org/wiki/Web_search_engine
-621 link https://en.wikipedia.org/wiki/HTML
+621 link https://en.wikipedia.org/wiki/HTML #cite_note-Semantic_Web_Revisted-90
 622 link https://en.wikipedia.org/wiki/Deprecation
 623 link https://en.wikipedia.org/wiki/XHTML
-624 link https://en.wikipedia.org/wiki/HTML
+624 link https://en.wikipedia.org/wiki/HTML #cite_note-91
 625 link https://en.wikipedia.org/wiki/Accessibility
 626 link https://en.wikipedia.org/wiki/Web_Content_Accessibility_Guidelines
 627 link https://en.wikipedia.org/wiki/HTTP
@@ -5619,9 +5615,9 @@ incomplete: no
 634 link https://en.wikipedia.org/wiki/MIME_type
 635 link https://en.wikipedia.org/wiki/Character_encodings_in_HTML
 636 link https://en.wikipedia.org/wiki/Well-formed_document
-637 link https://en.wikipedia.org/wiki/HTML
-638 link https://en.wikipedia.org/wiki/HTML
-639 link https://en.wikipedia.org/wiki/HTML
+637 link https://en.wikipedia.org/wiki/HTML #cite_note-92
+638 link https://en.wikipedia.org/wiki/HTML #cite_note-93
+639 link https://en.wikipedia.org/wiki/HTML #cite_note-94
 640 link https://en.wikipedia.org/wiki/HTML_email
 641 link https://en.wikipedia.org/wiki/Semantic_web
 642 link https://en.wikipedia.org/wiki/Plain_text
@@ -5631,7 +5627,7 @@ incomplete: no
 646 link https://en.wikipedia.org/wiki/Filename_extension
 647 link https://en.wikipedia.org/wiki/Computer_file
 648 link https://en.wikipedia.org/wiki/8.3_filename
-649 link https://en.wikipedia.org/wiki/HTML
+649 link https://en.wikipedia.org/wiki/HTML #cite_note-95
 650 link https://en.wikipedia.org/wiki/HTML_Application
 651 link https://en.wikipedia.org/wiki/Microsoft_Windows
 652 link https://en.wikipedia.org/wiki/Web_browser
@@ -5639,22 +5635,22 @@ incomplete: no
 654 link https://en.wikipedia.org/wiki/HTTP_cookie
 655 link https://en.wikipedia.org/wiki/Windows_Registry
 656 link https://en.wikipedia.org/wiki/EXE
-657 link https://en.wikipedia.org/wiki/HTML
-658 link https://en.wikipedia.org/wiki/HTML
+657 link https://en.wikipedia.org/wiki/HTML #cite_note-96
+658 link https://en.wikipedia.org/wiki/HTML #cite_note-97
 659 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium
 660 link https://en.wikipedia.org/wiki/Cascading_Style_Sheets
 661 link https://en.wikipedia.org/wiki/XSL
-662 link https://en.wikipedia.org/wiki/Wikipedia:Manual_of_Style/Dates_and_numbers
+662 link https://en.wikipedia.org/wiki/Wikipedia:Manual_of_Style/Dates_and_numbers #Chronological_items
 663 link https://en.wikipedia.org/wiki/XHTML
 664 link https://en.wikipedia.org/wiki/(X)HTML
-665 link https://en.wikipedia.org/wiki/HTML
-666 link https://en.wikipedia.org/wiki/HTML
+665 link https://en.wikipedia.org/wiki/HTML #cite_note-98
+666 link https://en.wikipedia.org/wiki/HTML #cite_note-99
 667 link https://en.wikipedia.org/wiki/MIME_type
 668 link https://en.wikipedia.org/wiki/Cascading_style_sheets
 669 link https://en.wikipedia.org/wiki/MathML
 670 link https://en.wikipedia.org/wiki/XForms
 671 link https://en.wikipedia.org/wiki/Wikipedia:Large_language_models
-672 link https://en.wikipedia.org/wiki/HTML
+672 link https://en.wikipedia.org/wiki/HTML #Transition_of_HTML_publication_to_WHATWG
 673 link https://en.wikipedia.org/wiki/File:Wiki_letter_w.svg
 674 link https://en.wikipedia.org/w/index.php?title=Talk%3AHTML&preload=Template%3ASubmit+an+edit+request%2Fpreload&action=edit&section=new&editintro=Template%3AEdit+fully-protected%2Feditintro&preloadtitle=Protected+edit+request+on+11+September+2026&preloadparams%5B%5D=edit+fully-protected&preloadparams%5B%5D=HTML
 675 link https://en.wikipedia.org/wiki/Talk:HTML
@@ -5662,14 +5658,14 @@ incomplete: no
 677 link https://en.wikipedia.org/wiki/Graphical_user_interface
 678 link https://en.wikipedia.org/wiki/Microsoft_FrontPage
 679 link https://en.wikipedia.org/wiki/Word_processor
-680 link https://en.wikipedia.org/wiki/HTML
-681 link https://en.wikipedia.org/wiki/HTML
+680 link https://en.wikipedia.org/wiki/HTML #cite_note-100
+681 link https://en.wikipedia.org/wiki/HTML #cite_note-101
 682 link https://en.wikipedia.org/wiki/WYSIWYM
-683 link https://en.wikipedia.org/wiki/HTML
-684 link https://en.wikipedia.org/wiki/HTML
+683 link https://en.wikipedia.org/wiki/HTML #cite_note-102
+684 link https://en.wikipedia.org/wiki/HTML #cite_note-103
 685 link https://en.wikipedia.org/wiki/CSS
 686 link https://en.wikipedia.org/wiki/Tag_soup
-687 link https://en.wikipedia.org/wiki/HTML
+687 link https://en.wikipedia.org/wiki/HTML #cite_note-104
 688 link https://en.wikipedia.org/wiki/Breadcrumb_navigation
 689 link https://en.wikipedia.org/wiki/Cellpadding
 690 link https://en.wikipedia.org/wiki/Comparison_of_HTML_parsers
@@ -5684,53 +5680,53 @@ incomplete: no
 699 link https://en.wikipedia.org/wiki/Semantic_HTML
 700 link https://en.wikipedia.org/wiki/W3C_Markup_Validation_Service
 701 link https://en.wikipedia.org/wiki/Web_colors
-702 link https://en.wikipedia.org/wiki/HTML
-703 link https://en.wikipedia.org/wiki/HTML
-704 link https://en.wikipedia.org/wiki/HTML
+702 link https://en.wikipedia.org/wiki/HTML #cite_ref-3
+703 link https://en.wikipedia.org/wiki/HTML #cite_note-2
+704 link https://en.wikipedia.org/wiki/HTML #cite_ref-1
 705 link https://www.w3.org/html/
 706 link https://web.archive.org/web/20090221115704/http://www.w3.org/html/
-707 link https://en.wikipedia.org/wiki/HTML
+707 link https://en.wikipedia.org/wiki/HTML #cite_ref-2
 708 link https://en.wikipedia.org/wiki/Felienne_Hermans
 709 link https://research.vu.nl/en/publications/a2c62236-5bd4-4351-b492-8a7b0d728ea5
 710 link https://en.wikipedia.org/wiki/Doi_(identifier)
 711 link https://doi.org/10.1145%2F3689492.3689809
 712 link https://en.wikipedia.org/wiki/ISBN_(identifier)
 713 link https://en.wikipedia.org/wiki/Special:BookSources/979-8-4007-1215-9
-714 link https://en.wikipedia.org/wiki/HTML
-715 link https://www.w3.org/TR/REC-html40-971218/conform.html
+714 link https://en.wikipedia.org/wiki/HTML #cite_ref-deprecated_4-0
+715 link https://www.w3.org/TR/REC-html40-971218/conform.html #deprecated
 716 link https://web.archive.org/web/20150705040855/http://www.w3.org/TR/REC-html40-971218/conform.html
-717 link https://en.wikipedia.org/wiki/HTML
+717 link https://en.wikipedia.org/wiki/HTML #cite_ref-5
 718 link https://www.w3.org/History/1989/proposal.html
 719 link https://web.archive.org/web/20100401051011/https://www.w3.org/History/1989/proposal.html
 720 link https://en.wikipedia.org/wiki/Wayback_Machine
-721 link https://en.wikipedia.org/wiki/HTML
+721 link https://en.wikipedia.org/wiki/HTML #cite_ref-6
 722 link https://www.w3.org/DesignIssues/Uses.html
 723 link https://web.archive.org/web/20171014055031/http://www.w3.org/DesignIssues/Uses.html
-724 link https://en.wikipedia.org/wiki/HTML
+724 link https://en.wikipedia.org/wiki/HTML #cite_ref-7
 725 link http://info.cern.ch/hypertext/WWW/MarkUp/Tags.html
 726 link https://web.archive.org/web/20191116160051/http://info.cern.ch/hypertext/WWW/MarkUp/Tags.html
-727 link https://en.wikipedia.org/wiki/HTML
-728 link https://en.wikipedia.org/wiki/HTML
-729 link https://en.wikipedia.org/wiki/HTML
+727 link https://en.wikipedia.org/wiki/HTML #cite_ref-tagshtml_8-0
+728 link https://en.wikipedia.org/wiki/HTML #cite_ref-tagshtml_8-1
+729 link https://en.wikipedia.org/wiki/HTML #cite_ref-tagshtml_8-2
 730 link https://www.w3.org/History/19921103-hypertext/hypertext/WWW/MarkUp/Tags.html
 731 link https://web.archive.org/web/20100131184344/http://www.w3.org/History/19921103-hypertext/hypertext/WWW/MarkUp/Tags.html
-732 link https://en.wikipedia.org/wiki/HTML
+732 link https://en.wikipedia.org/wiki/HTML #cite_ref-9
 733 link http://lists.w3.org/Archives/Public/www-talk/1991SepOct/0003.html
 734 link https://web.archive.org/web/20070524045009/http://lists.w3.org/Archives/Public/www-talk/1991SepOct/0003.html
-735 link https://en.wikipedia.org/wiki/HTML
+735 link https://en.wikipedia.org/wiki/HTML #cite_ref-10
 736 link https://www.w3.org/TR/1999/REC-html401-19991224/index/elements
 737 link https://web.archive.org/web/20070505172415/https://www.w3.org/TR/1999/REC-html401-19991224/index/elements
-738 link https://en.wikipedia.org/wiki/HTML
+738 link https://en.wikipedia.org/wiki/HTML #cite_ref-11
 739 link http://lists.w3.org/Archives/Public/www-talk/1991NovDec/0020.html
 740 link https://web.archive.org/web/20071222060359/http://lists.w3.org/Archives/Public/www-talk/1991NovDec/0020.html
-741 link https://en.wikipedia.org/wiki/HTML
+741 link https://en.wikipedia.org/wiki/HTML #cite_ref-12
 742 link https://www.w3.org/MarkUp/draft-ietf-iiir-html-01.txt
 743 link https://web.archive.org/web/20170103041713/https://www.w3.org/MarkUp/draft-ietf-iiir-html-01.txt
-744 link https://en.wikipedia.org/wiki/HTML
+744 link https://en.wikipedia.org/wiki/HTML #cite_ref-html+_13-0
 745 link https://en.wikipedia.org/wiki/Dave_Raggett
 746 link http://www.w3.org/MarkUp/htmlplus_paper/htmlplus.html
 747 link https://web.archive.org/web/20000229205146/http://www.w3.org/MarkUp/htmlplus_paper/htmlplus.html
-748 link https://en.wikipedia.org/wiki/HTML
+748 link https://en.wikipedia.org/wiki/HTML #cite_ref-14
 749 link https://en.wikipedia.org/wiki/Tim_Berners-Lee
 750 link https://en.wikipedia.org/wiki/Daniel_Connolly_(computer_scientist)
 751 link https://www.rfc-editor.org/rfc/rfc1866
@@ -5739,113 +5735,113 @@ incomplete: no
 754 link https://en.wikipedia.org/wiki/Request_for_Comments
 755 link https://datatracker.ietf.org/doc/html/rfc1866
 756 link https://www.rfc-editor.org/rfc/rfc2854
-757 link https://en.wikipedia.org/wiki/HTML
-758 link https://en.wikipedia.org/wiki/HTML
-759 link https://en.wikipedia.org/wiki/HTML
-760 link https://en.wikipedia.org/wiki/HTML
-761 link https://en.wikipedia.org/wiki/HTML
-762 link https://en.wikipedia.org/wiki/HTML
+757 link https://en.wikipedia.org/wiki/HTML #cite_ref-raggett_15-0
+758 link https://en.wikipedia.org/wiki/HTML #cite_ref-raggett_15-1
+759 link https://en.wikipedia.org/wiki/HTML #cite_ref-raggett_15-2
+760 link https://en.wikipedia.org/wiki/HTML #cite_ref-raggett_15-3
+761 link https://en.wikipedia.org/wiki/HTML #cite_ref-raggett_15-4
+762 link https://en.wikipedia.org/wiki/HTML #cite_ref-raggett_15-5
 763 link https://web.archive.org/web/20070809234115/https://www.w3.org/People/Raggett/book4/ch02.html
 764 link https://www.w3.org/People/Raggett/book4/ch02.html
-765 link https://en.wikipedia.org/wiki/HTML
+765 link https://en.wikipedia.org/wiki/HTML #cite_ref-16
 766 link https://www.w3.org/2014/10/html5-rec.html.en
 767 link https://web.archive.org/web/20141028233921/https://www.w3.org/2014/10/html5-rec.html.en
-768 link https://en.wikipedia.org/wiki/HTML
+768 link https://en.wikipedia.org/wiki/HTML #cite_ref-17
 769 link https://www.w3.org/TR/REC-html32
 770 link https://web.archive.org/web/20180203032629/http://www.w3.org/TR/REC-html32
-771 link https://en.wikipedia.org/wiki/HTML
+771 link https://en.wikipedia.org/wiki/HTML #cite_ref-18
 772 link https://www.w3.org/MarkUp/HTML-WG/
 773 link https://web.archive.org/web/20180913112737/https://www.w3.org/MarkUp/HTML-WG/
-774 link https://en.wikipedia.org/wiki/HTML
-775 link https://en.wikipedia.org/wiki/HTML
+774 link https://en.wikipedia.org/wiki/HTML #cite_ref-engelfriet_19-0
+775 link https://en.wikipedia.org/wiki/HTML #cite_ref-engelfriet_19-1
 776 link https://en.wikipedia.org/wiki/Arnoud_Engelfriet?action=edit&redlink=1
 777 link http://htmlhelp.com/reference/wilbur/intro.html
 778 link https://web.archive.org/web/20070705143719/http://www.htmlhelp.com/reference/wilbur/intro.html
-779 link https://en.wikipedia.org/wiki/HTML
+779 link https://en.wikipedia.org/wiki/HTML #cite_ref-20
 780 link https://www.w3.org/TR/REC-html40-971218/
 781 link https://web.archive.org/web/20190830045927/http://www.w3.org/TR/REC-html40-971218/
-782 link https://en.wikipedia.org/wiki/HTML
-783 link https://www.w3.org/TR/html4/conform.html
-784 link https://web.archive.org/web/20190216101822/http://www.w3.org/TR/html4/conform.html
-785 link https://en.wikipedia.org/wiki/HTML
+782 link https://en.wikipedia.org/wiki/HTML #cite_ref-21
+783 link https://www.w3.org/TR/html4/conform.html #h-4.2
+784 link https://web.archive.org/web/20190216101822/http://www.w3.org/TR/html4/conform.html #h-4.2
+785 link https://en.wikipedia.org/wiki/HTML #cite_ref-22
 786 link https://www.w3.org/TR/1998/REC-html40-19980424/
 787 link https://web.archive.org/web/20190904001912/http://www.w3.org/TR/1998/REC-html40-19980424/
-788 link https://en.wikipedia.org/wiki/HTML
+788 link https://en.wikipedia.org/wiki/HTML #cite_ref-23
 789 link https://www.w3.org/TR/html401/
 790 link https://web.archive.org/web/20190830045906/http://www.w3.org/TR/html401/
-791 link https://en.wikipedia.org/wiki/HTML
+791 link https://en.wikipedia.org/wiki/HTML #cite_ref-24
 792 link https://www.w3.org/MarkUp/html4-updates/errata
 793 link https://web.archive.org/web/20230223172543/https://www.w3.org/MarkUp/html4-updates/errata
-794 link https://en.wikipedia.org/wiki/HTML
-795 link https://en.wikipedia.org/wiki/HTML
+794 link https://en.wikipedia.org/wiki/HTML #cite_ref-iso-html_25-0
+795 link https://en.wikipedia.org/wiki/HTML #cite_ref-iso-html_25-1
 796 link https://www.iso.org/standard/27688.html
 797 link https://web.archive.org/web/20160829214302/http://www.iso.org/iso/iso_catalogue/catalogue_tc/catalogue_detail.htm?csnumber=27688
-798 link https://en.wikipedia.org/wiki/HTML
+798 link https://en.wikipedia.org/wiki/HTML #cite_ref-26
 799 link https://www.scss.tcd.ie/misc/15445/15445.HTML
 800 link https://web.archive.org/web/20071202175102/https://www.cs.tcd.ie/15445/15445.HTML
-801 link https://en.wikipedia.org/wiki/HTML
+801 link https://en.wikipedia.org/wiki/HTML #cite_ref-27
 802 link https://www.w3.org/TR/2014/REC-html5-20141028/
 803 link https://web.archive.org/web/20201114125651/http://www.w3.org/TR/2014/REC-html5-20141028/
-804 link https://en.wikipedia.org/wiki/HTML
+804 link https://en.wikipedia.org/wiki/HTML #cite_ref-28
 805 link https://www.w3.org/2014/10/html5-rec.html.en
 806 link https://web.archive.org/web/20141028233921/https://www.w3.org/2014/10/html5-rec.html.en
-807 link https://en.wikipedia.org/wiki/HTML
+807 link https://en.wikipedia.org/wiki/HTML #cite_ref-29
 808 link https://www.w3.org/TR/2016/REC-html51-20161101/
 809 link https://web.archive.org/web/20161109064832/http://www.w3.org/TR/2016/REC-html51-20161101/
-810 link https://en.wikipedia.org/wiki/HTML
+810 link https://en.wikipedia.org/wiki/HTML #cite_ref-30
 811 link https://www.w3.org/blog/news/archives/5932
 812 link https://web.archive.org/web/20201108103720/https://www.w3.org/blog/news/archives/5932
-813 link https://en.wikipedia.org/wiki/HTML
+813 link https://en.wikipedia.org/wiki/HTML #cite_ref-31
 814 link https://www.w3.org/blog/2016/11/html-5-1-is-the-gold-standard/
 815 link https://web.archive.org/web/20201108101419/https://www.w3.org/blog/2016/11/html-5-1-is-the-gold-standard/
-816 link https://en.wikipedia.org/wiki/HTML
+816 link https://en.wikipedia.org/wiki/HTML #cite_ref-32
 817 link https://www.w3.org/TR/2017/REC-html52-20171214/
 818 link https://web.archive.org/web/20201029182647/https://www.w3.org/TR/2017/REC-html52-20171214/
-819 link https://en.wikipedia.org/wiki/HTML
+819 link https://en.wikipedia.org/wiki/HTML #cite_ref-33
 820 link https://www.w3.org/blog/news/archives/6696
 821 link https://web.archive.org/web/20201107052342/https://www.w3.org/blog/news/archives/6696
-822 link https://en.wikipedia.org/wiki/HTML
+822 link https://en.wikipedia.org/wiki/HTML #cite_ref-34
 823 link https://www.w3.org/blog/2017/12/html-5-2-is-done-html-5-3-is-coming/
 824 link https://web.archive.org/web/20201109042116/https://www.w3.org/blog/2017/12/html-5-2-is-done-html-5-3-is-coming/
-825 link https://en.wikipedia.org/wiki/HTML
+825 link https://en.wikipedia.org/wiki/HTML #cite_ref-35
 826 link https://en.wikipedia.org/wiki/Dan_Connolly_(computer_scientist)
 827 link http://lists.w3.org/Archives/Public/www-talk/1992MayJun/0020.html
 828 link https://web.archive.org/web/20101226014254/http://lists.w3.org/Archives/Public/www-talk/1992MayJun/0020.html
-829 link https://en.wikipedia.org/wiki/HTML
+829 link https://en.wikipedia.org/wiki/HTML #cite_ref-36
 830 link https://en.wikipedia.org/wiki/Dan_Connolly_(computer_scientist)
 831 link http://lists.w3.org/Archives/Public/www-talk/1992JulAug/0020.html
 832 link https://web.archive.org/web/20101120101957/http://lists.w3.org/Archives/Public/www-talk/1992JulAug/0020.html
-833 link https://en.wikipedia.org/wiki/HTML
+833 link https://en.wikipedia.org/wiki/HTML #cite_ref-37
 834 link https://en.wikipedia.org/wiki/Dan_Connolly_(computer_scientist)
 835 link https://web.archive.org/web/20120314055308/http://lost-contact.mit.edu/afs/cern.ch/w3.org/www/Frame/fminit2.0/html.dtd
 836 link http://lost-contact.mit.edu/afs/cern.ch/w3.org/www/Frame/fminit2.0/html.dtd
-837 link https://en.wikipedia.org/wiki/HTML
-838 link https://en.wikipedia.org/wiki/HTML
+837 link https://en.wikipedia.org/wiki/HTML #cite_ref-html11_38-0
+838 link https://en.wikipedia.org/wiki/HTML #cite_ref-html11_38-1
 839 link https://en.wikipedia.org/wiki/Dan_Connolly_(computer_scientist)
-840 link https://web.archive.org/web/20120118155040/http://lost-contact.mit.edu/afs/cern.ch/w3.org/www/MarkUp/Connolly/921125/archive.sh
-841 link http://lost-contact.mit.edu/afs/cern.ch/w3.org/www/MarkUp/Connolly/921125/archive.sh
-842 link https://en.wikipedia.org/wiki/HTML
+840 link https://web.archive.org/web/20120118155040/http://lost-contact.mit.edu/afs/cern.ch/w3.org/www/MarkUp/Connolly/921125/archive.sh #html.dtd
+841 link http://lost-contact.mit.edu/afs/cern.ch/w3.org/www/MarkUp/Connolly/921125/archive.sh #html.dtd
+842 link https://en.wikipedia.org/wiki/HTML #cite_ref-39
 843 link https://en.wikipedia.org/wiki/Tim_Berners-Lee
 844 link https://en.wikipedia.org/wiki/Dan_Connolly_(computer_scientist)
 845 link http://tools.ietf.org/html/draft-ietf-iiir-html-00
 846 link https://web.archive.org/web/20101116041530/http://tools.ietf.org/html/draft-ietf-iiir-html-00
-847 link https://en.wikipedia.org/wiki/HTML
+847 link https://en.wikipedia.org/wiki/HTML #cite_ref-ietfiiir_40-0
 848 link https://en.wikipedia.org/wiki/Tim_Berners-Lee
 849 link https://en.wikipedia.org/wiki/Dan_Connolly_(computer_scientist)
 850 link https://www.w3.org/MarkUp/draft-ietf-iiir-html-01.txt
 851 link https://web.archive.org/web/20170103041713/https://www.w3.org/MarkUp/draft-ietf-iiir-html-01.txt
-852 link https://en.wikipedia.org/wiki/HTML
+852 link https://en.wikipedia.org/wiki/HTML #cite_ref-41
 853 link https://datatracker.ietf.org/doc/draft-raggett-www-html/history/
 854 link https://web.archive.org/web/20200801180903/https://datatracker.ietf.org/doc/draft-raggett-www-html/history/
-855 link https://en.wikipedia.org/wiki/HTML
+855 link https://en.wikipedia.org/wiki/HTML #cite_ref-42
 856 link https://en.wikipedia.org/wiki/Tim_Berners-Lee
 857 link https://en.wikipedia.org/wiki/Dan_Connolly_(computer_scientist)
 858 link http://tools.ietf.org/html/draft-ietf-html-spec-00
 859 link https://web.archive.org/web/20100819085023/http://tools.ietf.org/html/draft-ietf-html-spec-00
-860 link https://en.wikipedia.org/wiki/HTML
-861 link https://tools.ietf.org/html/draft-ietf-html-spec-02
-862 link https://web.archive.org/web/20200801180030/https://tools.ietf.org/html/draft-ietf-html-spec-02
-863 link https://en.wikipedia.org/wiki/HTML
+860 link https://en.wikipedia.org/wiki/HTML #cite_ref-43
+861 link https://tools.ietf.org/html/draft-ietf-html-spec-02 #section-1.1
+862 link https://web.archive.org/web/20200801180030/https://tools.ietf.org/html/draft-ietf-html-spec-02 #section-1.1
+863 link https://en.wikipedia.org/wiki/HTML #cite_ref-rfc1866_44-0
 864 link https://en.wikipedia.org/wiki/Tim_Berners-Lee
 865 link https://en.wikipedia.org/wiki/Daniel_Connolly_(computer_scientist)
 866 link https://www.rfc-editor.org/rfc/rfc1866
@@ -5854,160 +5850,160 @@ incomplete: no
 869 link https://en.wikipedia.org/wiki/Request_for_Comments
 870 link https://datatracker.ietf.org/doc/html/rfc1866
 871 link https://www.rfc-editor.org/rfc/rfc2854
-872 link https://en.wikipedia.org/wiki/HTML
+872 link https://en.wikipedia.org/wiki/HTML #cite_ref-45
 873 link https://www.w3.org/MarkUp/html3/
 874 link https://web.archive.org/web/20081025145023/http://www.w3.org/MarkUp/html3/
-875 link https://en.wikipedia.org/wiki/HTML
-876 link https://en.wikipedia.org/wiki/HTML
+875 link https://en.wikipedia.org/wiki/HTML #cite_ref-html30cover_46-0
+876 link https://en.wikipedia.org/wiki/HTML #cite_ref-html30cover_46-1
 877 link https://www.w3.org/MarkUp/html3/CoverPage
 878 link https://web.archive.org/web/20070706204926/http://www.w3.org/MarkUp/html3/CoverPage
-879 link https://en.wikipedia.org/wiki/HTML
+879 link https://en.wikipedia.org/wiki/HTML #cite_ref-47
 880 link https://www.w3.org/People/Raggett/html3/html3.txt
 881 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium
 882 link https://web.archive.org/web/20100314093738/http://www.w3.org/People/Raggett/html3/html3.txt
-883 link https://en.wikipedia.org/wiki/HTML
+883 link https://en.wikipedia.org/wiki/HTML #cite_ref-48
 884 link https://www.usenix.org/publications/library/proceedings/usenix98/freenix/bowers.pdf
-885 link https://en.wikipedia.org/wiki/HTML
+885 link https://en.wikipedia.org/wiki/HTML #cite_ref-49
 886 link https://en.wikipedia.org/wiki/Håkon_Wium_Lie
 887 link https://en.wikipedia.org/wiki/Bert_Bos
 888 link https://archive.org/details/cascadingstylesh00lieh
 889 link https://archive.org/details/cascadingstylesh00lieh/page/263
 890 link https://en.wikipedia.org/wiki/ISBN_(identifier)
 891 link https://en.wikipedia.org/wiki/Special:BookSources/978-0-201-41998-6
-892 link https://en.wikipedia.org/wiki/HTML
+892 link https://en.wikipedia.org/wiki/HTML #cite_ref-50
 893 link https://www.w3.org/TR/html5/
 894 link https://web.archive.org/web/20190707113111/http://www.w3.org/TR/html5/
-895 link https://en.wikipedia.org/wiki/HTML
+895 link https://en.wikipedia.org/wiki/HTML #cite_ref-51
 896 link https://www.w3.org/blog/2008/01/html5-is-html-and-xml/
 897 link https://web.archive.org/web/20130921211747/http://www.w3.org/blog/2008/01/html5-is-html-and-xml/
-898 link https://en.wikipedia.org/wiki/HTML
+898 link https://en.wikipedia.org/wiki/HTML #cite_ref-w3c2014_52-0
 899 link https://www.w3.org/2011/02/htmlwg-pr.html
 900 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium
 901 link https://web.archive.org/web/20110218230211/http://www.w3.org/2011/02/htmlwg-pr.html
-902 link https://en.wikipedia.org/wiki/HTML
+902 link https://en.wikipedia.org/wiki/HTML #cite_ref-53
 903 link https://web.archive.org/web/20191006023430/https://blog.whatwg.org/html-is-the-new-html5
 904 link https://blog.whatwg.org/html-is-the-new-html5
-905 link https://en.wikipedia.org/wiki/HTML
+905 link https://en.wikipedia.org/wiki/HTML #cite_ref-54
 906 link https://web.archive.org/web/20120725214739/http://www.netmagazine.com/news/html5-gets-splits-122102
 907 link http://www.netmagazine.com/news/html5-gets-splits-122102
-908 link https://en.wikipedia.org/wiki/HTML
+908 link https://en.wikipedia.org/wiki/HTML #cite_ref-55
 909 link https://www.w3.org/TR/2012/CR-html5-20121217/
 910 link https://web.archive.org/web/20130620165943/http://www.w3.org/TR/2012/CR-html5-20121217/
-911 link https://en.wikipedia.org/wiki/HTML
-912 link https://wiki.whatwg.org/wiki/FAQ
-913 link https://web.archive.org/web/20170626235445/https://wiki.whatwg.org/wiki/FAQ
-914 link https://en.wikipedia.org/wiki/HTML
+911 link https://en.wikipedia.org/wiki/HTML #cite_ref-W3Crec_56-0
+912 link https://wiki.whatwg.org/wiki/FAQ #What.27s_this_I_hear_about_2022.3F
+913 link https://web.archive.org/web/20170626235445/https://wiki.whatwg.org/wiki/FAQ #What.27s_this_I_hear_about_2022.3F
+914 link https://en.wikipedia.org/wiki/HTML #cite_ref-57
 915 link https://www.w3.org/blog/news/archives/4074
 916 link https://web.archive.org/web/20140926121538/http://www.w3.org/blog/news/archives/4074
-917 link https://en.wikipedia.org/wiki/HTML
+917 link https://en.wikipedia.org/wiki/HTML #cite_ref-58
 918 link https://www.w3.org/2014/10/html5-rec.html.en
 919 link https://web.archive.org/web/20141028233921/https://www.w3.org/2014/10/html5-rec.html.en
-920 link https://en.wikipedia.org/wiki/HTML
+920 link https://en.wikipedia.org/wiki/HTML #cite_ref-finalars_59-0
 921 link https://arstechnica.com/information-technology/2014/10/html5-specification-finalized-squabbling-over-who-writes-the-specs-continues/
 922 link https://web.archive.org/web/20141029101012/https://arstechnica.com/information-technology/2014/10/html5-specification-finalized-squabbling-over-who-writes-the-specs-continues/
-923 link https://en.wikipedia.org/wiki/HTML
-924 link https://html.spec.whatwg.org/multipage/introduction.html
-925 link https://web.archive.org/web/20230322120338/https://html.spec.whatwg.org/multipage/introduction.html
-926 link https://en.wikipedia.org/wiki/HTML
+923 link https://en.wikipedia.org/wiki/HTML #cite_ref-60
+924 link https://html.spec.whatwg.org/multipage/introduction.html #html-vs-xhtml
+925 link https://web.archive.org/web/20230322120338/https://html.spec.whatwg.org/multipage/introduction.html #html-vs-xhtml
+926 link https://en.wikipedia.org/wiki/HTML #cite_ref-61
 927 link https://www.w3.org/TR/xhtml1/
 928 link https://web.archive.org/web/20081114183154/http://www.w3.org/TR/xhtml1/
-929 link https://en.wikipedia.org/wiki/HTML
+929 link https://en.wikipedia.org/wiki/HTML #cite_ref-62
 930 link https://www.w3.org/TR/xhtml11/
 931 link https://web.archive.org/web/20081114232914/http://www.w3.org/TR/xhtml11/
-932 link https://en.wikipedia.org/wiki/HTML
+932 link https://en.wikipedia.org/wiki/HTML #cite_ref-63
 933 link https://www.w3.org/TR/2001/REC-xhtml-modularization-20010410/
 934 link https://web.archive.org/web/20170125081055/http://www.w3.org/TR/2001/REC-xhtml-modularization-20010410/
-935 link https://en.wikipedia.org/wiki/HTML
+935 link https://en.wikipedia.org/wiki/HTML #cite_ref-64
 936 link https://www.w3.org/TR/xhtml2/
 937 link https://web.archive.org/web/20081115225713/http://www.w3.org/TR/xhtml2/
-938 link https://en.wikipedia.org/wiki/HTML
-939 link https://www.w3.org/News/2009
-940 link https://web.archive.org/web/20090117002953/http://www.w3.org/News/2009
-941 link https://en.wikipedia.org/wiki/HTML
+938 link https://en.wikipedia.org/wiki/HTML #cite_ref-65
+939 link https://www.w3.org/News/2009 #item119
+940 link https://web.archive.org/web/20090117002953/http://www.w3.org/News/2009 #item119
+941 link https://en.wikipedia.org/wiki/HTML #cite_ref-66
 942 link https://www.w3.org/2009/06/xhtml-faq.html
 943 link https://web.archive.org/web/20180218060054/http://www.w3.org/2009/06/xhtml-faq.html
-944 link https://en.wikipedia.org/wiki/HTML
+944 link https://en.wikipedia.org/wiki/HTML #cite_ref-W3C_transfer_blog_67-0
 945 link https://www.w3.org/blog/2019/05/w3c-and-whatwg-to-work-together-to-advance-the-open-web-platform/
 946 link https://web.archive.org/web/20190529021122/https://www.w3.org/blog/2019/05/w3c-and-whatwg-to-work-together-to-advance-the-open-web-platform/
-947 link https://en.wikipedia.org/wiki/HTML
+947 link https://en.wikipedia.org/wiki/HTML #cite_ref-W3C_transfer_HTML_68-0
 948 link https://www.w3.org/html/
 949 link https://web.archive.org/web/20190529012655/https://www.w3.org/html/
-950 link https://en.wikipedia.org/wiki/HTML
+950 link https://en.wikipedia.org/wiki/HTML #cite_ref-W3C_transfer_memo_69-0
 951 link https://www.w3.org/2019/04/WHATWG-W3C-MOU.html
 952 link https://web.archive.org/web/20190529012854/https://www.w3.org/2019/04/WHATWG-W3C-MOU.html
-953 link https://en.wikipedia.org/wiki/HTML
+953 link https://en.wikipedia.org/wiki/HTML #cite_ref-W3C_transfer_ZDNet_70-0
 954 link https://web.archive.org/web/20190529021959/https://www.zdnet.com/article/browser-vendors-win-war-with-w3c-over-html-and-dom-standards/
 955 link https://www.zdnet.com/article/browser-vendors-win-war-with-w3c-over-html-and-dom-standards/
-956 link https://en.wikipedia.org/wiki/HTML
+956 link https://en.wikipedia.org/wiki/HTML #cite_ref-W3C_forks_71-0
 957 link https://web.archive.org/web/20190529013834/https://wiki.whatwg.org/wiki/W3C
 958 link https://wiki.whatwg.org/wiki/W3C
-959 link https://en.wikipedia.org/wiki/HTML
+959 link https://en.wikipedia.org/wiki/HTML #cite_ref-72
 960 link https://www.cnet.com/news/an-epitaph-for-the-web-standard-xhtml-2/
 961 link https://web.archive.org/web/20200113121213/https://www.cnet.com/news/an-epitaph-for-the-web-standard-xhtml-2/
-962 link https://en.wikipedia.org/wiki/HTML
+962 link https://en.wikipedia.org/wiki/HTML #cite_ref-73
 963 link https://www.w3.org/standards/history/html/
 964 link https://web.archive.org/web/20251230041954/https://www.w3.org/standards/history/html/
-965 link https://en.wikipedia.org/wiki/HTML
+965 link https://en.wikipedia.org/wiki/HTML #cite_ref-hsivonen_74-0
 966 link https://hsivonen.iki.fi/doctype/
 967 link https://web.archive.org/web/20110314043705/http://hsivonen.iki.fi/doctype/
 968 link https://en.wikipedia.org/wiki/Wayback_Machine
-969 link https://en.wikipedia.org/wiki/HTML
+969 link https://en.wikipedia.org/wiki/HTML #cite_ref-75
 970 link https://www.w3schools.com/html/html_elements.asp
 971 link https://web.archive.org/web/20150315220155/http://www.w3schools.com/html/html_elements.asp
-972 link https://en.wikipedia.org/wiki/HTML
+972 link https://en.wikipedia.org/wiki/HTML #cite_ref-76
 973 link https://www.w3schools.com/css/css_intro.asp
 974 link https://web.archive.org/web/20200214104600/https://www.w3schools.com/css/css_intro.asp
-975 link https://en.wikipedia.org/wiki/HTML
-976 link https://www.w3.org/TR/html401/intro/sgmltut.html
-977 link https://web.archive.org/web/20081117020326/http://www.w3.org/TR/html401/intro/sgmltut.html
-978 link https://en.wikipedia.org/wiki/HTML
-979 link https://www.w3.org/TR/xhtml1/diffs.html
-980 link https://web.archive.org/web/20081221215736/http://www.w3.org/TR/xhtml1/diffs.html
-981 link https://en.wikipedia.org/wiki/HTML
+975 link https://en.wikipedia.org/wiki/HTML #cite_ref-77
+976 link https://www.w3.org/TR/html401/intro/sgmltut.html #h-3.2.2
+977 link https://web.archive.org/web/20081117020326/http://www.w3.org/TR/html401/intro/sgmltut.html #h-3.2.2
+978 link https://en.wikipedia.org/wiki/HTML #cite_ref-78
+979 link https://www.w3.org/TR/xhtml1/diffs.html #h-4.4
+980 link https://web.archive.org/web/20081221215736/http://www.w3.org/TR/xhtml1/diffs.html #h-4.4
+981 link https://en.wikipedia.org/wiki/HTML #cite_ref-79
 982 link https://jkorpela.fi/qattr.html
 983 link https://web.archive.org/web/20171014054636/http://jkorpela.fi/qattr.html
-984 link https://en.wikipedia.org/wiki/HTML
-985 link https://www.w3.org/TR/1999/REC-html401-19991224/struct/objects.html
-986 link https://web.archive.org/web/20230802095950/https://www.w3.org/TR/1999/REC-html401-19991224/struct/objects.html
-987 link https://en.wikipedia.org/wiki/HTML
+984 link https://en.wikipedia.org/wiki/HTML #cite_ref-80
+985 link https://www.w3.org/TR/1999/REC-html401-19991224/struct/objects.html #adef-ismap
+986 link https://web.archive.org/web/20230802095950/https://www.w3.org/TR/1999/REC-html401-19991224/struct/objects.html #adef-ismap
+987 link https://en.wikipedia.org/wiki/HTML #cite_ref-81
 988 link https://www.w3.org/TR/WCAG-TECHS/H56.html
 989 link https://web.archive.org/web/20101109092251/http://www.w3.org/TR/WCAG-TECHS/H56.html
-990 link https://en.wikipedia.org/wiki/HTML
+990 link https://en.wikipedia.org/wiki/HTML #cite_ref-82
 991 link https://dev.w3.org/html5/html-author/charref
 992 link https://web.archive.org/web/20210227130216/https://dev.w3.org/html5/html-author/charref
-993 link https://en.wikipedia.org/wiki/HTML
-994 link https://www.w3.org/TR/xhtml1/
-995 link https://web.archive.org/web/20180301073914/http://www.w3.org/TR/xhtml1/
-996 link https://en.wikipedia.org/wiki/HTML
+993 link https://en.wikipedia.org/wiki/HTML #cite_ref-aposhtml_83-0
+994 link https://www.w3.org/TR/xhtml1/ #C_16
+995 link https://web.archive.org/web/20180301073914/http://www.w3.org/TR/xhtml1/ #C_16
+996 link https://en.wikipedia.org/wiki/HTML #cite_ref-84
 997 link https://www.unicode.org/standard/principles.html
 998 link https://web.archive.org/web/20220423172421/http://www.unicode.org/standard/principles.html
-999 link https://en.wikipedia.org/wiki/HTML
-1000 link https://www.w3.org/TR/html/syntax.html
-1001 link https://web.archive.org/web/20130907141008/http://www.w3.org/TR/html/syntax.html
-1002 link https://en.wikipedia.org/wiki/HTML
+999 link https://en.wikipedia.org/wiki/HTML #cite_ref-85
+1000 link https://www.w3.org/TR/html/syntax.html #doctype-syntax
+1001 link https://web.archive.org/web/20130907141008/http://www.w3.org/TR/html/syntax.html #doctype-syntax
+1002 link https://en.wikipedia.org/wiki/HTML #cite_ref-86
 1003 link https://www.w3.org/TR/html401/sgml/framesetdtd.html
 1004 link https://web.archive.org/web/20211225063147/https://www.w3.org/TR/html401/sgml/framesetdtd.html
-1005 link https://en.wikipedia.org/wiki/HTML
+1005 link https://en.wikipedia.org/wiki/HTML #cite_ref-87
 1006 link https://archive.org/details/weavingweborigin00bern_0
 1007 link https://en.wikipedia.org/wiki/ISBN_(identifier)
 1008 link https://en.wikipedia.org/wiki/Special:BookSources/978-0-06-251587-2
-1009 link https://en.wikipedia.org/wiki/HTML
+1009 link https://en.wikipedia.org/wiki/HTML #cite_ref-88
 1010 link https://www.w3.org/MarkUp/Guide/Style.html
 1011 link https://web.archive.org/web/20091006204250/http://www.w3.org/MarkUp/Guide/Style.html
 1012 link https://en.wikipedia.org/wiki/List_of_web_browsers
-1013 link https://en.wikipedia.org/wiki/HTML
+1013 link https://en.wikipedia.org/wiki/HTML #cite_ref-89
 1014 link http://www.scientificamerican.com/article.cfm?id=the-semantic-web
 1015 link https://web.archive.org/web/20130510194910/http://www.scientificamerican.com/article.cfm?id=the-semantic-web
-1016 link https://en.wikipedia.org/wiki/HTML
+1016 link https://en.wikipedia.org/wiki/HTML #cite_ref-Semantic_Web_Revisted_90-0
 1017 link https://web.archive.org/web/20130320130521/http://eprints.soton.ac.uk/262614/1/Semantic_Web_Revisted.pdf
 1018 link http://eprints.ecs.soton.ac.uk/12614/1/Semantic_Web_Revisted.pdf
-1019 link https://en.wikipedia.org/wiki/HTML
-1020 link https://html.spec.whatwg.org/dev/introduction.html
-1021 link https://web.archive.org/web/20180927165059/https://html.spec.whatwg.org/dev/introduction.html
-1022 link https://en.wikipedia.org/wiki/HTML
-1023 link https://www.w3.org/TR/xhtml1/
-1024 link https://web.archive.org/web/20081204052042/http://www.w3.org/TR/xhtml1/
-1025 link https://en.wikipedia.org/wiki/HTML
+1019 link https://en.wikipedia.org/wiki/HTML #cite_ref-91
+1020 link https://html.spec.whatwg.org/dev/introduction.html #restrictions-on-content-models-and-on-attribute-values
+1021 link https://web.archive.org/web/20180927165059/https://html.spec.whatwg.org/dev/introduction.html #restrictions-on-content-models-and-on-attribute-values
+1022 link https://en.wikipedia.org/wiki/HTML #cite_ref-92
+1023 link https://www.w3.org/TR/xhtml1/ #media
+1024 link https://web.archive.org/web/20081204052042/http://www.w3.org/TR/xhtml1/ #media
+1025 link https://en.wikipedia.org/wiki/HTML #cite_ref-93
 1026 link https://en.wikipedia.org/wiki/Scott_Bradner
 1027 link https://www.rfc-editor.org/rfc/rfc2119
 1028 link https://en.wikipedia.org/wiki/Internet_Engineering_Task_Force
@@ -6016,37 +6012,37 @@ incomplete: no
 1031 link https://en.wikipedia.org/wiki/Request_for_Comments
 1032 link https://datatracker.ietf.org/doc/html/rfc2119
 1033 link https://www.rfc-editor.org/rfc/rfc8174
-1034 link https://en.wikipedia.org/wiki/HTML
-1035 link https://www.w3.org/TR/xhtml11/conformance.html
-1036 link https://web.archive.org/web/20240210155531/https://www.w3.org/TR/xhtml11/conformance.html
-1037 link https://en.wikipedia.org/wiki/HTML
+1034 link https://en.wikipedia.org/wiki/HTML #cite_ref-94
+1035 link https://www.w3.org/TR/xhtml11/conformance.html #strict
+1036 link https://web.archive.org/web/20240210155531/https://www.w3.org/TR/xhtml11/conformance.html #strict
+1037 link https://en.wikipedia.org/wiki/HTML #cite_ref-95
 1038 link https://msdn.microsoft.com/en-us/library/windows/desktop/aa365247%28v=vs.85%29.aspx?f=255&MSPPError=-2147217396
 1039 link https://web.archive.org/web/20150402155855/https://msdn.microsoft.com/en-us/library/windows/desktop/aa365247%28v=vs.85%29.aspx?f=255&MSPPError=-2147217396
-1040 link https://en.wikipedia.org/wiki/HTML
+1040 link https://en.wikipedia.org/wiki/HTML #cite_ref-96
 1041 link https://www.w3.org/History/19921103-hypertext/hypertext/WWW/MarkUp/HTMLConstraints.html
 1042 link https://web.archive.org/web/20171014061803/http://www.w3.org/History/19921103-hypertext/hypertext/WWW/MarkUp/HTMLConstraints.html
 1043 link https://en.wikipedia.org/wiki/Wayback_Machine
-1044 link https://en.wikipedia.org/wiki/HTML
+1044 link https://en.wikipedia.org/wiki/HTML #cite_ref-97
 1045 link http://ei.cs.vt.edu/~wwwbtb/book/chap13/who.html
 1046 link https://web.archive.org/web/20130624190132/http://ei.cs.vt.edu/~wwwbtb/book/chap13/who.html
 1047 link https://en.wikipedia.org/wiki/Wayback_Machine
-1048 link https://en.wikipedia.org/wiki/HTML
-1049 link https://html.spec.whatwg.org/multipage/text-level-semantics.html
-1050 link https://web.archive.org/web/20250124222300/https://html.spec.whatwg.org/multipage/text-level-semantics.html
-1051 link https://en.wikipedia.org/wiki/HTML
-1052 link https://www.w3.org/TR/xhtml1/
+1048 link https://en.wikipedia.org/wiki/HTML #cite_ref-98
+1049 link https://html.spec.whatwg.org/multipage/text-level-semantics.html #the-br-element
+1050 link https://web.archive.org/web/20250124222300/https://html.spec.whatwg.org/multipage/text-level-semantics.html #the-br-element
+1051 link https://en.wikipedia.org/wiki/HTML #cite_ref-99
+1052 link https://www.w3.org/TR/xhtml1/ #guidelines
 1053 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium
-1054 link https://web.archive.org/web/20060720043602/http://www.w3.org/TR/xhtml1/
-1055 link https://en.wikipedia.org/wiki/HTML
-1056 link https://en.wikipedia.org/wiki/HTML
-1057 link https://en.wikipedia.org/wiki/HTML
+1054 link https://web.archive.org/web/20060720043602/http://www.w3.org/TR/xhtml1/ #guidelines
+1055 link https://en.wikipedia.org/wiki/HTML #cite_ref-100
+1056 link https://en.wikipedia.org/wiki/HTML #cite_ref-101
+1057 link https://en.wikipedia.org/wiki/HTML #cite_ref-102
 1058 link https://www.linuxjournal.com/article/5770
 1059 link https://web.archive.org/web/20260102111108/https://www.linuxjournal.com/article/5770
-1060 link https://en.wikipedia.org/wiki/HTML
+1060 link https://en.wikipedia.org/wiki/HTML #cite_ref-103
 1061 link http://xhtml.com/en/xhtml/reference/blockquote/
 1062 link https://web.archive.org/web/20100325160356/http://xhtml.com/en/xhtml/reference/blockquote/
 1063 link https://en.wikipedia.org/wiki/Wayback_Machine
-1064 link https://en.wikipedia.org/wiki/HTML
+1064 link https://en.wikipedia.org/wiki/HTML #cite_ref-104
 1065 link http://www.invisiblerevolution.net/
 1066 link https://web.archive.org/web/20231030051958/http://www.invisiblerevolution.net/
 1067 link https://en.wikipedia.org/wiki/Wayback_Machine
@@ -6105,9 +6101,9 @@ incomplete: no
 1120 link https://en.wikipedia.org/wiki/ChatGPT_Atlas
 1121 link https://en.wikipedia.org/wiki/Avast_Secure_Browser
 1122 link https://en.wikipedia.org/wiki/Cốc_Cốc
-1123 link https://en.wikipedia.org/wiki/Perplexity_AI
+1123 link https://en.wikipedia.org/wiki/Perplexity_AI #Comet
 1124 link https://en.wikipedia.org/wiki/Comodo_Dragon
-1125 link https://en.wikipedia.org/wiki/Ecosia
+1125 link https://en.wikipedia.org/wiki/Ecosia #Ecosia_Browser
 1126 link https://en.wikipedia.org/wiki/Epic_(web_browser)
 1127 link https://en.wikipedia.org/wiki/Huawei_Mobile_Services
 1128 link https://en.wikipedia.org/wiki/Maxthon
@@ -6152,7 +6148,7 @@ incomplete: no
 1167 link https://en.wikipedia.org/wiki/Safari_(web_browser)
 1168 link https://en.wikipedia.org/wiki/GNOME_Web
 1169 link https://en.wikipedia.org/wiki/ICab
-1170 link https://en.wikipedia.org/wiki/Kagi_(search_engine)
+1170 link https://en.wikipedia.org/wiki/Kagi_(search_engine) #Orion_Browser
 1171 link https://en.wikipedia.org/wiki/Browser_engine
 1172 link https://en.wikipedia.org/wiki/360_Secure_Browser
 1173 link https://en.wikipedia.org/wiki/DuckDuckGo_Private_Browser
@@ -6176,7 +6172,7 @@ incomplete: no
 1191 link https://en.wikipedia.org/wiki/Redcore
 1192 link https://en.wikipedia.org/wiki/Rockmelt
 1193 link https://en.wikipedia.org/wiki/SalamWeb
-1194 link https://en.wikipedia.org/wiki/Sputnik_(search_engine)
+1194 link https://en.wikipedia.org/wiki/Sputnik_(search_engine) #Browser
 1195 link https://en.wikipedia.org/wiki/Torch_(web_browser)
 1196 link https://en.wikipedia.org/wiki/Gecko_(software)
 1197 link https://en.wikipedia.org/wiki/Beonex_Communicator
@@ -6207,8 +6203,8 @@ incomplete: no
 1222 link https://en.wikipedia.org/wiki/Deepnet_Explorer
 1223 link https://en.wikipedia.org/wiki/GreenBrowser
 1224 link https://en.wikipedia.org/wiki/MediaBrowser
-1225 link https://en.wikipedia.org/wiki/MSN_Dial-Up_Internet_Access
-1226 link https://en.wikipedia.org/wiki/MSN_Dial-Up_Internet_Access
+1225 link https://en.wikipedia.org/wiki/MSN_Dial-Up_Internet_Access #MSN_Explorer
+1226 link https://en.wikipedia.org/wiki/MSN_Dial-Up_Internet_Access #MSN_2.0
 1227 link https://en.wikipedia.org/wiki/NeoPlanet
 1228 link https://en.wikipedia.org/wiki/NetCaptor
 1229 link https://en.wikipedia.org/wiki/SpaceTime_(software)
@@ -6267,7 +6263,7 @@ incomplete: no
 1282 link https://en.wikipedia.org/wiki/Template_talk:W3C_standards
 1283 link https://en.wikipedia.org/wiki/Special:EditPage/Template:W3C_standards
 1284 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium
-1285 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium
+1285 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium #W3C_recommendation_(REC)
 1286 link https://en.wikipedia.org/wiki/ActivityPub
 1287 link https://en.wikipedia.org/wiki/Activity_Streams_(format)
 1288 link https://en.wikipedia.org/wiki/WAI-ARIA
@@ -6352,7 +6348,7 @@ incomplete: no
 1367 link https://en.wikipedia.org/wiki/XBL
 1368 link https://en.wikipedia.org/wiki/XHTML+SMIL?action=edit&redlink=1
 1369 link https://en.wikipedia.org/wiki/Extensible_User_Interface_Protocol
-1370 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium
+1370 link https://en.wikipedia.org/wiki/World_Wide_Web_Consortium #Working_draft_(WD)
 1371 link https://en.wikipedia.org/wiki/Call_Control_eXtensible_Markup_Language
 1372 link https://en.wikipedia.org/wiki/CURIE?action=edit&redlink=1
 1373 link https://en.wikipedia.org/wiki/Encrypted_Media_Extensions
@@ -6431,7 +6427,7 @@ incomplete: no
 1446 link https://en.wikipedia.org/wiki/Encoded_Archival_Description
 1447 link https://en.wikipedia.org/wiki/Enriched_text
 1448 link https://en.wikipedia.org/wiki/FHTML
-1449 link https://en.wikipedia.org/wiki/List_of_document_markup_languages
+1449 link https://en.wikipedia.org/wiki/List_of_document_markup_languages #GML_Disambiguation
 1450 link https://en.wikipedia.org/wiki/GuideML
 1451 link https://en.wikipedia.org/wiki/Handheld_Device_Markup_Language
 1452 link https://en.wikipedia.org/wiki/HyTime
@@ -6456,7 +6452,7 @@ incomplete: no
 1471 link https://en.wikipedia.org/wiki/Troff
 1472 link https://en.wikipedia.org/wiki/Typst
 1473 link https://en.wikipedia.org/wiki/Uniform_Office_Format
-1474 link https://en.wikipedia.org/wiki/Wiki
+1474 link https://en.wikipedia.org/wiki/Wiki #Editing
 1475 link https://en.wikipedia.org/wiki/Wireless_Markup_Language
 1476 link https://en.wikipedia.org/wiki/WapTV
 1477 link https://en.wikipedia.org/wiki/Extensible_Application_Markup_Language
@@ -6503,7 +6499,7 @@ incomplete: no
 1518 link https://en.wikipedia.org/wiki/ISO_metric_screw_thread
 1519 link https://en.wikipedia.org/wiki/Kappa_number
 1520 link https://en.wikipedia.org/wiki/Vicat_softening_point
-1521 link https://en.wikipedia.org/wiki/Hazard_symbol
+1521 link https://en.wikipedia.org/wiki/Hazard_symbol #Ionizing_radiation_symbol
 1522 link https://en.wikipedia.org/wiki/Power_take-off
 1523 link https://en.wikipedia.org/wiki/Hot_shoe
 1524 link https://en.wikipedia.org/wiki/Prontor-Compur
@@ -6532,7 +6528,7 @@ incomplete: no
 1547 link https://en.wikipedia.org/wiki/OCR-A
 1548 link https://en.wikipedia.org/wiki/OCR-B
 1549 link https://en.wikipedia.org/wiki/Longitudinal_redundancy_check
-1550 link https://en.wikipedia.org/wiki/Shock-resistant_watch
+1550 link https://en.wikipedia.org/wiki/Shock-resistant_watch #ISO_1413_shock-resistant_standard
 1551 link https://en.wikipedia.org/wiki/ALGOL_60
 1552 link https://en.wikipedia.org/wiki/ISO_1629
 1553 link https://en.wikipedia.org/wiki/ISO_1745
@@ -6685,7 +6681,7 @@ incomplete: no
 1700 link https://en.wikipedia.org/wiki/ISO_10161
 1701 link https://en.wikipedia.org/wiki/Guidelines_for_the_Definition_of_Managed_Objects
 1702 link https://en.wikipedia.org/wiki/Document_Style_Semantics_and_Specification_Language
-1703 link https://en.wikipedia.org/wiki/Pascal_(programming_language)
+1703 link https://en.wikipedia.org/wiki/Pascal_(programming_language) #ISO/IEC_10206:1990_Extended_Pascal
 1704 link https://en.wikipedia.org/wiki/ISO_10218
 1705 link https://en.wikipedia.org/wiki/Full_BASIC
 1706 link https://en.wikipedia.org/wiki/ISO_10303
@@ -6717,7 +6713,7 @@ incomplete: no
 1732 link https://en.wikipedia.org/wiki/ISO_11784_and_ISO_11785
 1733 link https://en.wikipedia.org/wiki/ISO/IEC_11801
 1734 link https://en.wikipedia.org/wiki/Trusted_Platform_Module
-1735 link https://en.wikipedia.org/wiki/CAN_bus
+1735 link https://en.wikipedia.org/wiki/CAN_bus #CAN_lower-layer_standards
 1736 link https://en.wikipedia.org/wiki/ISO_11940
 1737 link https://en.wikipedia.org/wiki/ISO_11940-2
 1738 link https://en.wikipedia.org/wiki/ISO/TR_11941
@@ -6728,7 +6724,7 @@ incomplete: no
 1743 link https://en.wikipedia.org/wiki/ISO/IEC_TR_12182
 1744 link https://en.wikipedia.org/wiki/ISO/IEC_12207
 1745 link https://en.wikipedia.org/wiki/TIFF/EP
-1746 link https://en.wikipedia.org/wiki/Linguistic_categories
+1746 link https://en.wikipedia.org/wiki/Linguistic_categories #ISO_12620_(ISO_TC37_Data_Category_Registry,_ISOcat)
 1747 link https://en.wikipedia.org/wiki/ISO_12944
 1748 link https://en.wikipedia.org/wiki/Prolog
 1749 link https://en.wikipedia.org/wiki/Prolog
@@ -6833,9 +6829,9 @@ incomplete: no
 1848 link https://en.wikipedia.org/wiki/ISO_19092-1
 1849 link https://en.wikipedia.org/wiki/ISO_19092-2
 1850 link https://en.wikipedia.org/wiki/ISO_19114
-1851 link https://en.wikipedia.org/wiki/Geospatial_metadata
+1851 link https://en.wikipedia.org/wiki/Geospatial_metadata #ISO_19115:_Geographic_information_–_Metadata
 1852 link https://en.wikipedia.org/wiki/Simple_Features
-1853 link https://en.wikipedia.org/wiki/Geography_Markup_Language
+1853 link https://en.wikipedia.org/wiki/Geography_Markup_Language #ISO_19136
 1854 link https://en.wikipedia.org/wiki/Shoe_size
 1855 link https://en.wikipedia.org/wiki/ISO_19439
 1856 link https://en.wikipedia.org/wiki/Common_Object_Request_Broker_Architecture
@@ -7119,7 +7115,7 @@ incomplete: no
 2134 link https://en.wikipedia.org/wiki/IEC_81346
 2135 link https://en.wikipedia.org/wiki/International_Electrotechnical_Commission
 2136 link https://en.wikipedia.org/wiki/Help:Authority_control
-2137 link https://www.wikidata.org/wiki/Q8811
+2137 link https://www.wikidata.org/wiki/Q8811 #identifiers
 2138 link https://d-nb.info/gnd/4373477-7
 2139 link https://id.loc.gov/authorities/sh95002791
 2140 link https://catalogue.bnf.fr/ark:/12148/cb12493600c
@@ -7182,7 +7178,7 @@ incomplete: no
 2197 link https://foundation.wikimedia.org/wiki/Special:MyLanguage/Legal:Wikimedia_Foundation_Legal_and_Safety_Contact_Information
 2198 link https://foundation.wikimedia.org/wiki/Special:MyLanguage/Policy:Universal_Code_of_Conduct
 2199 link https://developer.wikimedia.org
-2200 link https://stats.wikimedia.org/
+2200 link https://stats.wikimedia.org/ #/en.wikipedia.org
 2201 link https://foundation.wikimedia.org/wiki/Special:MyLanguage/Policy:Cookie_statement
 2202 link https://en.wikipedia.org/w/index.php?title=HTML&mobileaction=toggle_view_mobile
 2203 link https://www.wikimedia.org/

@@ -4,6 +4,7 @@ width: 80
 lines: 108
 spots: 68
 forms: 3
+anchors: 1
 incomplete: no
 --
 |
@@ -215,7 +216,7 @@ incomplete: no
 61 link https://gopher.floodgap.com/gopher/gw?=gopher.floodgap.com+70+302f756d6e676f6e65
 62 link http://www.floodgap.com/
 63 link http://www.floodgap.com/
-64 link https://gopher.floodgap.com/gopher/gw
+64 link https://gopher.floodgap.com/gopher/gw #top
 65 link https://gopher.floodgap.com/gopher/
 66 link https://gopher.floodgap.com/gopher/gw
 67 link https://www.floodgap.com/etc/tos.html
@@ -223,3 +224,4 @@ incomplete: no
 form 1 post (this page)
 form 2 get https://gopher.floodgap.com/gopher/gw
 form 3 get https://gopher.floodgap.com/gopher/gw
+anchor #top line 0

@@ -277,6 +277,12 @@ static void render_checks(void)
         expect_lines("images", "<img alt='alt text'><img>", 40, want, 1);
     }
     {
+        // An EMPTY alt is the page saying "this one is decoration": it draws
+        // nothing at all, where an absent alt draws that a picture is there.
+        const char *want[] = { "before after" };
+        expect_lines("decorative", "before <img alt=''> after", 40, want, 1);
+    }
+    {
         const char *want[] = { "shown" };
         expect_lines("noscript", "<noscript>shown</noscript><script>hidden</script>"
                      "<style>hidden</style>", 40, want, 1);
@@ -388,6 +394,38 @@ static void expect_url(const char *what, const char *html, int32_t spot,
     wend_page_free(page);
 }
 
+// A `#name` is kept beside the address and answered by moving. These are the
+// two halves: the fragment survives resolution, and the page knows which row
+// each name fell on.
+static void anchor_checks(void)
+{
+    wend_page_t *page = render_html_text(
+        "<p><a href='#two'>to two</a><h2 id=one>One</h2><p>text"
+        "<h2 id=two>Two</h2><p>more<p><a name=old></a>after"
+        "<p><a href='other.html#frag'>elsewhere</a>",
+        40, "http://host/dir/page.html");
+    CHECK(page != NULL);
+    if (!page)
+        return;
+    CHECK(page->nspots == 2);
+    if (page->nspots == 2) {
+        // The resolver drops a fragment, correctly; the spot keeps it.
+        CHECK(strcmp(page->spots[0].url, "http://host/dir/page.html") == 0);
+        CHECK(strcmp(page->spots[0].fragment, "two") == 0);
+        CHECK(strcmp(page->spots[1].url, "http://host/dir/other.html") == 0);
+        CHECK(strcmp(page->spots[1].fragment, "frag") == 0);
+    }
+    CHECK(wend_anchor_line(page, "one") >= 0);
+    CHECK(wend_anchor_line(page, "two") > wend_anchor_line(page, "one"));
+    CHECK(wend_anchor_line(page, "old") >= 0);      // the 1994 spelling
+    CHECK(wend_anchor_line(page, "nothing") == -1);
+    // The row an anchor names is the row its element begins on, so a reader
+    // sent there finds the heading at the top rather than above the screen.
+    int32_t at = wend_anchor_line(page, "two");
+    CHECK(at >= 0 && at < page->nlines && strcmp(page->lines[at].text, "Two") == 0);
+    wend_page_free(page);
+}
+
 static void form_checks(void)
 {
     // The plain search box: the action resolved, the hidden field carried,
@@ -427,6 +465,43 @@ static void form_checks(void)
                "<input type=submit></form>", 1, WEND_FORM_POST, NULL);
     expect_url("no form", "<a href=/x>link</a>", 0, WEND_FORM_NONE, NULL);
     expect_url("no form either", "<input name=loose>", 0, WEND_FORM_NONE, NULL);
+
+    // A DISABLED CONTROL IS DRAWN, IS NOT LANDED ON, AND IS NOT SENT. The
+    // only spot on this page is the button, so the query carries nothing of
+    // the two controls the page took away.
+    expect_url("disabled", "<form action=/s><input name=a value=1 disabled>"
+               "<input type=hidden name=h value=2 disabled>"
+               "<input name=b value=3><input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s?b=3");
+    {
+        const char *want[] = { "[1___][1][___][2][Go]" };
+        expect_lines("disabled drawn", "<form><input name=a value=1 size=4 disabled>"
+                     "<input name=b size=3><input type=submit value=Go></form>",
+                     40, want, 1);
+    }
+    {
+        // A password is a length and nothing else, on the page and in the
+        // prompt both.
+        const char *want[] = { "[1][****______]" };
+        expect_lines("password", "<input type=password value=hunt size=10>",
+                     40, want, 1);
+    }
+    {
+        // A textarea's contents are its VALUE: collapsed for the one row it
+        // is drawn on, kept whole for the wire.
+        wend_page_t *page = render_html_text(
+            "<form action=/s><textarea name=note cols=10>two  spaces\nand a line"
+            "</textarea><input type=submit></form>", 80, "http://host/p");
+        CHECK(page && page->nspots == 2);
+        if (page) {
+            CHECK(strcmp(page->spots[0].value, "two  spaces\nand a line") == 0);
+            char url[256];
+            CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url))
+                  == WEND_FORM_OK);
+            CHECK(strcmp(url, "http://host/s?note=two++spaces%0Aand+a+line") == 0);
+            wend_page_free(page);
+        }
+    }
 
     // WHAT A PERSON TYPED SURVIVES A RE-WRAP, which is the whole reason the
     // edits live outside the page: the same spot number carries the value
@@ -491,6 +566,7 @@ static void dump(const wend_page_t *page, const char *name)
     printf("lines: %d\n", page->nlines);
     printf("spots: %d\n", page->nspots);
     printf("forms: %d\n", page->nforms);
+    printf("anchors: %d\n", page->nanchors);
     printf("incomplete: %s\n", page->incomplete ? "yes" : "no");
     printf("--\n");
     for (int32_t i = 0; i < page->nlines; i++) {
@@ -538,9 +614,14 @@ static void dump(const wend_page_t *page, const char *name)
         if (spot->form)
             printf(" form=%d", spot->form);
         if (spot->kind == WEND_SPOT_LINK) {
-            printf(" %s\n", spot->url[0] ? spot->url : "(unresolved)");
+            printf(" %s", spot->url[0] ? spot->url : "(unresolved)");
+            if (spot->fragment[0])
+                printf(" #%s", spot->fragment);
+            printf("\n");
             continue;
         }
+        if (spot->secret)
+            printf(" secret");
         printf(" name=%s", spot->name[0] ? spot->name : "(none)");
         switch (spot->kind) {
             case WEND_SPOT_CHECK:
@@ -569,6 +650,13 @@ static void dump(const wend_page_t *page, const char *name)
             printf(" %s=%s", form->hidden_names[j], form->hidden_values[j]);
         printf("\n");
     }
+    // The anchors are a page's own index. Only the count goes in the dump
+    // for a big page — the names are the document's own and would double
+    // its size — but a small one lists them, which is what the fixtures use.
+    if (page->nanchors <= 40)
+        for (int32_t i = 0; i < page->nanchors; i++)
+            printf("anchor #%s line %d\n", page->anchors[i].name,
+                   page->anchors[i].line);
 }
 
 static char *slurp(const char *path, size_t *len)
@@ -631,6 +719,7 @@ int main(int argc, char **argv)
         fold_checks();
         render_checks();
         form_checks();
+        anchor_checks();
         oom_checks();
         printf("renderer: %d checks, %d failures, %zu blocks live\n",
                checks, failures, live);

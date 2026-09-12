@@ -4,6 +4,7 @@ width: 80
 lines: 982
 spots: 446
 forms: 0
+anchors: 1
 incomplete: no
 --
 |General Computer Textfiles
@@ -1884,3 +1885,4 @@ incomplete: no
 444 link http://textfiles.com/computers/zork3.txt
 445 link http://archives.textfiles.com/computers.tar.gz
 446 link http://archives.textfiles.com/computers.zip
+anchor #T line 16

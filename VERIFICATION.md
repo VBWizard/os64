@@ -699,6 +699,22 @@ through a slow reply**, which leaves what arrived on screen and says
 a gterm and pressing Ctrl+Alt+M, which re-wraps from the parse tree without
 asking the network for a page it already has.
 
+**The Codex round (PR #98) added twelve cases' worth of ground.** Its two
+P1s were both reachable: a selection restored from the history into a page
+that came back SHORTER indexed past the spot table on the next arrow, and a
+form on an https page whose action was plain http sent what somebody typed
+in clear without asking. The rest were a page's own words being altered —
+`alt=""` drawn as `[image]`, a textarea's spacing collapsed before it was
+sent, a prefilled value replaced by its Latin-1 shadow when a field was
+opened and closed unchanged — plus a disabled control that could be
+operated and submitted, a password echoed to the glass, an 8 MB text body
+reported as whole because nothing asked for the byte past the cap, a form
+auto-sent while its checkboxes were still at their defaults, a hangup that
+waited for a keystroke inside a nested prompt, and `WEND_BAD_URL` declared
+but never returned. The fragment finding is the one that changed how the
+browser FEELS: a table of contents was twelve links that each refetched the
+article and showed its top.
+
 **And two real searches, typed into real pages.** The Floodgap gateway's
 box, reached by typing its number, edited from the value it came with, and
 sent — the gateway answered with the gopher menu that was asked for. Then

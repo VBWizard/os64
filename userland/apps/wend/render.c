@@ -181,7 +181,7 @@ static bool buf_append(buf_t *b, const char *s, size_t n, uint8_t attrs, int32_t
 
 typedef struct {
     wend_page_t *page;
-    int32_t        linecap, spotcap, formcap;
+    int32_t        linecap, spotcap, formcap, anchorcap;
     int32_t        cols;
     const os64_url_t *base;
 
@@ -242,6 +242,8 @@ static void line_trim(buf_t *b)
     }
 }
 
+static void anchors_bind(render_t *r, int32_t line);
+
 // Commit the row under construction. `force` is the preformatted path's:
 // inside `pre` an empty row is a blank line the author typed, while in
 // flowing text it is the artefact of a block that turned out to hold nothing.
@@ -299,6 +301,7 @@ static void line_open(render_t *r)
         if (r->page->nlines > 0)
             line_end(r, true);          // an empty row, deliberately
     }
+    anchors_bind(r, line_index(r));
     int32_t ind = indent_now(r);
     for (int32_t i = 0; i < ind; i++)
         if (!buf_append(&r->line, " ", 1, 0, 0)) {
@@ -567,6 +570,12 @@ static const wend_edit_t *edit_for(const render_t *r)
 // still gets a number and an EMPTY address: the page said this was a link,
 // and hiding that would be editing the page. Following it is what fails, and
 // it fails with a sentence.
+//
+// THE FRAGMENT IS KEPT ASIDE. `os64_url_absolute` drops it, correctly — a
+// `#name` is never sent to a server — but dropping it here as well would
+// turn every entry in a table of contents into "fetch this page again and
+// show me the top of it", which on a long article is worse than doing
+// nothing.
 static int32_t link_add(render_t *r, const char *href)
 {
     wend_spot_t *spot = spot_new(r, WEND_SPOT_LINK);
@@ -574,10 +583,61 @@ static int32_t link_add(render_t *r, const char *href)
         return 0;
     char resolved[OS64_URL_REF_MAX];
     resolved[0] = '\0';
+    const char *hash = NULL;
+    if (href)
+        for (const char *p = href; *p != '\0'; p++)
+            if (*p == '#') {
+                hash = p + 1;
+                break;
+            }
     if (href && r->base)
         (void)os64_url_absolute(r->base, href, resolved, sizeof(resolved));
     spot->url = dup_text(r, resolved);
-    return spot->url ? r->page->nspots : 0;
+    spot->fragment = dup_text(r, hash ? hash : "");
+    return (spot->url && spot->fragment) ? r->page->nspots : 0;
+}
+
+// Remember a `#name`, for anything carrying an `id` and for the old-style
+// `<a name>`. The ROW is not known yet: an element is met before its first
+// word is placed, and between the two lies a block break and possibly a
+// blank line. So the anchor is left UNBOUND and takes the row that opens
+// next — the row its content actually lands on, which is what a reader
+// jumping to a section wants at the top of the screen.
+static void anchor_add(render_t *r, const char *name)
+{
+    if (!name || name[0] == '\0')
+        return;
+    wend_page_t *p = r->page;
+    if (!reserve((void **)&p->anchors, &r->anchorcap, p->nanchors + 1,
+                 sizeof(*p->anchors))) {
+        r->oom = true;
+        return;
+    }
+    p->anchors[p->nanchors].name = dup_text(r, name);
+    p->anchors[p->nanchors].line = -1;
+    if (p->anchors[p->nanchors].name)
+        p->nanchors++;
+}
+
+// Give every anchor still waiting the row that is opening. They were added
+// in document order, so the unbound ones are the tail.
+static void anchors_bind(render_t *r, int32_t line)
+{
+    for (int32_t i = r->page->nanchors - 1; i >= 0; i--) {
+        if (r->page->anchors[i].line >= 0)
+            return;
+        r->page->anchors[i].line = line;
+    }
+}
+
+int32_t wend_anchor_line(const wend_page_t *page, const char *name)
+{
+    if (!page || !name || name[0] == '\0')
+        return -1;
+    for (int32_t i = 0; i < page->nanchors; i++)
+        if (os64_streq(page->anchors[i].name, name))
+            return page->anchors[i].line;
+    return -1;
 }
 
 static const char *attr_value(const os64_html_node_t *el, const char *name)
@@ -635,17 +695,23 @@ static void spot_mark(render_t *r, int32_t index)
     word_text(r, mark, n);
 }
 
-// Every descendant text node of an element, run together, whitespace
-// collapsed, as UTF-8 — an option's words, a button's words. Owned by the
+// Every descendant text node of an element, run together, as UTF-8 — an
+// option's words, a button's words, a textarea's contents. Owned by the
 // page; folded to Latin-1 only when it is drawn, because what is SENT must
 // stay the bytes the page wrote.
-static char *gather_text(render_t *r, const os64_html_node_t *el)
+//
+// `verbatim` is the difference between WORDS and a VALUE. An option's words
+// are prose: the runs of whitespace in the markup are indentation and are
+// collapsed, the way they would be anywhere else on the page. A textarea's
+// contents are the field's value, and collapsing them would send the server
+// something other than what the page put in the box.
+static char *gather(render_t *r, const os64_html_node_t *el, bool verbatim)
 {
     buf_t got = { 0 };
     bool space_owed = false;
     for (const os64_html_node_t *c = el->first_child; c && !r->oom; c = c->next) {
         if (c->kind == OS64_HTML_ELEMENT) {
-            char *inner = gather_text(r, c);
+            char *inner = gather(r, c, verbatim);
             if (inner && inner[0]) {
                 if (space_owed && got.len)
                     buf_append(&got, " ", 1, 0, 0);
@@ -659,7 +725,8 @@ static char *gather_text(render_t *r, const os64_html_node_t *el)
             continue;
         for (size_t i = 0; i < c->text_len; i++) {
             unsigned char b = (unsigned char)c->text[i];
-            if (b == ' ' || b == '\t' || b == '\n' || b == '\f' || b == '\r') {
+            if (!verbatim && (b == ' ' || b == '\t' || b == '\n' || b == '\f'
+                              || b == '\r')) {
                 space_owed = got.len > 0;
                 continue;
             }
@@ -675,6 +742,11 @@ static char *gather_text(render_t *r, const os64_html_node_t *el)
     char *out = dup_text(r, got.text ? got.text : "");
     buf_free(&got);
     return out;
+}
+
+static char *gather_text(render_t *r, const os64_html_node_t *el)
+{
+    return gather(r, el, false);
 }
 
 // UTF-8 in, cells out, no collapsing: a value is what somebody typed or what
@@ -716,20 +788,36 @@ static int32_t box_width(render_t *r, const os64_html_node_t *n)
 
 // A text box with what is in it. The TAIL is what shows when the value
 // outgrows the box, because the tail is what you just typed.
-static void draw_box(render_t *r, const wend_spot_t *spot)
+//
+// A SECRET IS DRAWN AS ITS LENGTH AND NOTHING ELSE. A password field's
+// value is on the glass in front of whoever is standing behind you, and a
+// page that prefills one is not a reason to publish it.
+//
+// A line break inside a value — a textarea's, mostly — is shown as a space
+// rather than as the `?` an unprintable code point earns. The VALUE keeps
+// its bytes; this is one row's account of text that has more than one.
+static void draw_box(render_t *r, const char *value, int32_t width, bool secret)
 {
     char cells[128];
-    int32_t width = spot->width;
     if (width > (int32_t)sizeof(cells))
         width = (int32_t)sizeof(cells);
     int32_t have = 0;
-    size_t at = 0, len = os64_strlen(spot->value);
+    size_t at = 0, len = os64_strlen(value);
     while (at < len) {
         uint32_t cp = 0;
-        size_t took = os64_utf8_decode(spot->value + at, len - at, &cp);
+        size_t took = os64_utf8_decode(value + at, len - at, &cp);
         at += took ? took : 1;
         char folded[WEND_FOLD_MAX];
-        size_t n = wend_fold(cp, folded);
+        size_t n;
+        if (secret) {
+            folded[0] = '*';
+            n = 1;
+        } else if (cp == 0x0A || cp == 0x0D || cp == 0x09) {
+            folded[0] = ' ';
+            n = 1;
+        } else {
+            n = wend_fold(cp, folded);
+        }
         for (size_t i = 0; i < n; i++) {
             if (have == width) {
                 for (int32_t j = 1; j < width; j++)
@@ -761,12 +849,22 @@ static void draw_dead_control(render_t *r, const char *label, const char *fallba
     word_text(r, "]", 1);
 }
 
+// A DISABLED CONTROL IS DRAWN AND IS NOT A SPOT. The standard says it is not
+// a successful control — it is not sent — and a page disables a control to
+// take it away from you. Letting the keyboard land on one would offer
+// something the page refused, and putting its value in the query would ask
+// the server for what the page was built to prevent.
+static bool control_disabled(const os64_html_node_t *n)
+{
+    return os64_html_attr(n, "disabled") != NULL;
+}
+
 // A hidden field is the FORM's data and no part of what the form shows, so
 // it is remembered against the form rather than made a place you can land.
 static void hidden_add(render_t *r, const os64_html_node_t *n)
 {
-    if (r->form <= 0)
-        return;                          // nothing to carry it
+    if (r->form <= 0 || control_disabled(n))
+        return;                          // nothing to carry it, or not sent at all
     wend_form_t *form = &r->page->forms[r->form - 1];
     if (!reserve((void **)&form->hidden_names, &form->hiddencap, form->nhidden + 1,
                  sizeof(*form->hidden_names))
@@ -784,6 +882,7 @@ static bool type_is_nocase(const char *type, const char *want)
 {
     return type && os64_streq_nocase(type, want);
 }
+
 
 // One `input`, which is six different controls wearing one tag name.
 static void field_input(render_t *r, const os64_html_node_t *n)
@@ -807,6 +906,18 @@ static void field_input(render_t *r, const os64_html_node_t *n)
         kind = WEND_SPOT_CHECK;
     else if (type_is_nocase(type, "radio"))
         kind = WEND_SPOT_RADIO;
+    bool secret = type_is_nocase(type, "password");
+
+    if (control_disabled(n)) {
+        bool checked = os64_html_attr(n, "checked") != NULL;
+        switch (kind) {
+            case WEND_SPOT_SUBMIT: draw_dead_control(r, value, "Submit"); break;
+            case WEND_SPOT_CHECK:  word_text(r, checked ? "[x]" : "[ ]", 3); break;
+            case WEND_SPOT_RADIO:  word_text(r, checked ? "(*)" : "( )", 3); break;
+            default: draw_box(r, value ? value : "", box_width(r, n), secret); break;
+        }
+        return;
+    }
 
     wend_spot_t *spot = spot_new(r, kind);
     if (!spot)
@@ -814,6 +925,7 @@ static void field_input(render_t *r, const os64_html_node_t *n)
     int32_t index = r->page->nspots;
     spot->name = dup_text(r, attr_value(n, "name"));
     spot->value = dup_text(r, value);
+    spot->secret = secret;
     spot->on = os64_html_attr(n, "checked") != NULL;
     const wend_edit_t *edit = edit_for(r);
     if (edit && edit->on >= 0)
@@ -842,7 +954,7 @@ static void field_input(render_t *r, const os64_html_node_t *n)
             break;
         default:
             spot->width = box_width(r, n);
-            draw_box(r, spot);
+            draw_box(r, spot->value, spot->width, spot->secret);
             break;
     }
     r->spot = 0;
@@ -881,6 +993,12 @@ static void collect_options(render_t *r, const os64_html_node_t *el, wend_spot_t
 
 static void field_select(render_t *r, const os64_html_node_t *n)
 {
+    if (control_disabled(n)) {
+        // Its options are the page's business and it is not yours to open,
+        // so what is drawn is that a list is there.
+        word_text(r, "[v]", 3);
+        return;
+    }
     wend_spot_t *spot = spot_new(r, WEND_SPOT_CHOICE);
     if (!spot)
         return;
@@ -932,6 +1050,19 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
     int32_t saved_spot = r->spot;
     int32_t saved_indent = r->indent;
     int32_t saved_form = r->form;
+
+    // WHERE A `#name` LANDS is decided before the element draws anything:
+    // the row it is ABOUT to fall on is the row a reader jumping here wants
+    // at the top of the screen. `id` is every element's; `name` is only the
+    // old anchor's, where it meant the same thing.
+    const os64_html_attr_t *id = os64_html_attr(n, "id");
+    if (id && id->value)
+        anchor_add(r, id->value);
+    if (n->tag == OS64_HTML_TAG_A && !os64_html_attr(n, "href")) {
+        const os64_html_attr_t *anchor = os64_html_attr(n, "name");
+        if (anchor && anchor->value)
+            anchor_add(r, anchor->value);
+    }
 
     switch (n->tag) {
         // ── Never shown ──
@@ -1112,12 +1243,22 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         // you can type. One row's worth: a line-mode browser has no second
         // row to give it.
         case OS64_HTML_TAG_TEXTAREA: {
+            if (control_disabled(n)) {
+                char *shown = gather(r, n, true);
+                if (shown)
+                    draw_box(r, shown, box_width(r, n), false);
+                os64_free(shown);
+                goto done;
+            }
             wend_spot_t *spot = spot_new(r, WEND_SPOT_TEXT);
             if (!spot)
                 goto done;
             int32_t index = r->page->nspots;
             spot->name = dup_text(r, attr_value(n, "name"));
-            spot->value = gather_text(r, n);
+            // VERBATIM: this is the field's VALUE, not the page's prose, so
+            // the newlines and runs of spaces in it are the author's and go
+            // back to the server as they came.
+            spot->value = gather(r, n, true);
             const wend_edit_t *edit = edit_for(r);
             if (edit && edit->text) {
                 os64_free(spot->value);
@@ -1128,7 +1269,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
                 goto done;
             r->spot = index;
             spot_mark(r, index);
-            draw_box(r, spot);
+            draw_box(r, spot->value, spot->width, spot->secret);
             r->spot = 0;
             goto done;
         }
@@ -1147,7 +1288,8 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         // on, like a reset.
         case OS64_HTML_TAG_BUTTON: {
             const char *type = attr_value(n, "type");
-            if (type_is_nocase(type, "reset") || type_is_nocase(type, "button")) {
+            if (control_disabled(n) || type_is_nocase(type, "reset")
+                || type_is_nocase(type, "button")) {
                 word_text(r, "[", 1);
                 walk_children(r, n, list);
                 word_text(r, "]", 1);
@@ -1223,12 +1365,17 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         // no words should say so rather than look empty. Inside a link, both
         // are the link's text, which is how a masthead stays followable.
         case OS64_HTML_TAG_IMG: {
-            const char *alt = attr_value(n, "alt");
-            if (alt && alt[0]) {
+            // AN EMPTY `alt` IS AN ANSWER, not a missing one: it is the page
+            // saying this picture is decoration and carries no words. Drawing
+            // `[image]` for it fills a page with prose its author deliberately
+            // did not write — a modern article's logos, icons and tracking
+            // pixels all say `alt=""`.
+            const os64_html_attr_t *alt = os64_html_attr(n, "alt");
+            if (alt && alt->value && alt->value[0]) {
                 word_text(r, "[", 1);
-                flow_text(r, alt, os64_strlen(alt));
+                flow_text(r, alt->value, os64_strlen(alt->value));
                 word_text(r, "]", 1);
-            } else {
+            } else if (!alt) {
                 word_text(r, "[image]", 7);
             }
             goto done;
@@ -1342,6 +1489,9 @@ wend_page_t *wend_render_html(const os64_html_document_t *doc,
             walk(&r, root, NULL);
     }
     block_break(&r);
+    // An anchor at the very foot of a document has no row opening after it;
+    // it belongs to the last one there is.
+    anchors_bind(&r, page->nlines > 0 ? page->nlines - 1 : 0);
     buf_free(&r.line);
     buf_free(&r.word);
     page->incomplete = r.oom;
@@ -1505,6 +1655,7 @@ void wend_page_free(wend_page_t *page)
     for (int32_t i = 0; i < page->nspots; i++) {
         wend_spot_t *spot = &page->spots[i];
         os64_free(spot->url);
+        os64_free(spot->fragment);
         os64_free(spot->name);
         os64_free(spot->value);
         os64_free(spot->label);
@@ -1525,7 +1676,10 @@ void wend_page_free(wend_page_t *page)
         os64_free(form->hidden_names);
         os64_free(form->hidden_values);
     }
+    for (int32_t i = 0; i < page->nanchors; i++)
+        os64_free(page->anchors[i].name);
     os64_free(page->lines);
+    os64_free(page->anchors);
     os64_free(page->spots);
     os64_free(page->forms);
     os64_free(page);
