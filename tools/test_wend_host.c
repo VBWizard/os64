@@ -580,6 +580,29 @@ static void form_checks(void)
             wend_page_free(page);
         }
     }
+    // A BASE WHOSE PORT IS ITS SCHEME'S DEFAULT resolves as if it named no
+    // port — the shape a fetch hands over, and the one that would otherwise
+    // spell `host:443` into every relative link on the page.
+    {
+        os64_url_t base;
+        CHECK(os64_url_parse("https://host/dir/page.html", &base) == OS64_URL_OK);
+        base.port = 443;                 // as a fetch fills it in
+        os64_html_parser_t *p = os64_html_parser_new(NULL);
+        const char *html = "<a href='rel.html'>r</a><a href='#x'>f</a>";
+        if (p && os64_html_parser_feed(p, html, strlen(html)) >= 0) {
+            os64_html_document_t *doc = os64_html_parser_finish(p);
+            wend_page_t *page = doc ? wend_render_html(doc, &base, 40, NULL, 0) : NULL;
+            CHECK(page && page->nspots == 2);
+            if (page && page->nspots == 2) {
+                CHECK(strcmp(page->spots[0].url, "https://host/dir/rel.html") == 0);
+                CHECK(strcmp(page->spots[1].url, "https://host/dir/page.html") == 0);
+            }
+            wend_page_free(page);
+            if (doc)
+                os64_html_document_free(doc);
+        }
+    }
+
     // `#` with nothing after it asked for a fragment; an empty href did not.
     {
         wend_page_t *page = render_html_text("<a href='#'>top</a><a href=''>again</a>",

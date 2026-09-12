@@ -220,8 +220,11 @@ typedef enum {
 
 // Bytes that arrived while nobody was asking for them: typed ahead during a
 // fetch, or read while looking for the rest of a sequence that turned out
-// not to be one. They belong to whoever asks next — throwing them away would
-// lose keystrokes a person actually meant.
+// not to be one. They belong to whoever asks next, because throwing them
+// away would lose keystrokes a person actually meant — with one exception,
+// which `confirm` argues: a question about safety must be answered after it
+// is asked. Room is finite and the overflow is dropped; holding keys is a
+// courtesy, and the fetch that drops them is still watching for Ctrl+C.
 static unsigned char s_pending[64];
 static int32_t s_npending;
 

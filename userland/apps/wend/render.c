@@ -1577,7 +1577,20 @@ wend_page_t *wend_render_html(const os64_html_document_t *doc,
     render_t r = { 0 };
     r.page = page;
     r.cols = page->cols;
-    r.base = base;
+    // A PORT THE SCHEME ALREADY IMPLIES IS NOT SPELLED. A fetch fills the
+    // default in for its own dialling, and os64/url.h asks a caller holding
+    // such a filled-in default to hand over 0 — otherwise every relative
+    // link on the page resolves to `host:443/…`, an address nobody wrote,
+    // and one that no longer matches the page it is on when a `#name` asks
+    // whether this is the same document.
+    os64_url_t here;
+    if (base) {
+        here = *base;
+        if ((here.port == 443 && os64_streq(here.scheme, "https"))
+            || (here.port == 80 && os64_streq(here.scheme, "http")))
+            here.port = 0;
+        r.base = &here;
+    }
     r.edits = edits;
     r.nedits = edits ? nedits : 0;
     if (doc) {

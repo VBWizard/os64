@@ -181,7 +181,9 @@ typedef struct {
 
 // Render a parsed document at `cols` columns. `base` is the address every
 // href resolves against: the page's own final URL, unless it carries a
-// <base href>, which wins (wend_base_href finds it). `edits` may be NULL,
+// <base href>, which wins (wend_base_href finds it). A port that is its
+// scheme's default is dropped from that base before anything resolves
+// against it, which is what os64/url.h asks of a caller holding one. `edits` may be NULL,
 // and is read only for the spots it has room for. NULL on no memory, which
 // is different from `incomplete` — nothing at all came out.
 wend_page_t *wend_render_html(const os64_html_document_t *doc,
