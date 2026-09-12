@@ -45,7 +45,10 @@
 // WHO THIS SAYS IT IS. A meaningful part of the web answers a request with
 // no user agent with a refusal, so the browser names itself and its OS.
 #define WEND_AGENT  "wend/1.0 (os64)"
-#define WEND_ACCEPT "text/html, text/plain"
+// What the loader will actually render, said out loud: a server choosing
+// between representations should know that any text one will do, and a
+// server that would answer 406 to a narrower list should not.
+#define WEND_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
 
 #define WEND_HISTORY_MAX 64
 #define WEND_STATUS_MAX  512
@@ -339,8 +342,17 @@ static key_t key_read(char *literal)
 
 // Ask a yes/no question on the status row. Only `y` agrees: the dangerous
 // direction is always the one a stray keystroke should not pick.
+//
+// AND THE ANSWER MUST COME AFTER THE QUESTION. Keys typed while a page was
+// loading are held for whoever asks next (fetch_cancelled keeps them), and a
+// `y` meant for something else would otherwise answer a question it never
+// saw — including "shall I send this in clear?", which is the one question
+// in this program where a stale keystroke could do real harm. So the held
+// keys are dropped here, and only here: everywhere else, type-ahead is a
+// person working faster than the network.
 static bool confirm(const char *question)
 {
+    s_npending = 0;
     cursor_to(s_rows, 1);
     bar_on();
     int32_t used = draw_text(question, s_cols - 1);
@@ -623,10 +635,12 @@ static os64_html_document_t *parse_body(os64_fetch_t *f, const char *charset,
 
 // Read the body as bytes. The cap is the parser's, because a page is a page
 // whichever way it is written.
-static char *read_body(os64_fetch_t *f, size_t cap, size_t *len, const char *url)
+static char *read_body(os64_fetch_t *f, size_t cap, size_t *len, const char *url,
+                       bool *whole)
 {
     size_t at = 0, size = 16u * 1024u;
     *len = 0;
+    *whole = true;
     char *text = os64_malloc(size);
     if (!text)
         return NULL;
@@ -645,8 +659,13 @@ static char *read_body(os64_fetch_t *f, size_t cap, size_t *len, const char *url
             }
             size_t want = size * 2 > cap ? cap : size * 2;
             char *grown = os64_realloc(text, want);
-            if (!grown)
+            if (!grown) {
+                // OUR failure, not the server's: libfetch will report OK
+                // because no read of ours ever failed, so the truncation has
+                // to be carried out of here by hand.
+                *whole = false;
                 break;
+            }
             text = grown;
             size = want;
         }
@@ -679,6 +698,7 @@ static bool charset_is_utf8(const char *charset)
 // has to turn it into an exit code. NULL when nobody is asking.
 static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
 {
+    bool short_of_memory = false;        // a truncation of OURS, not the wire's
     if (why)
         *why = OS64_FETCH_OK;
     status_show(" fetching %s", url);
@@ -752,7 +772,10 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
             && os64_url_parse(absolute, &from_page) == OS64_URL_OK)
             out->base = from_page;
     } else {
-        out->text = read_body(f, limits.max_bytes, &out->textlen, url);
+        bool whole = true;
+        out->text = read_body(f, limits.max_bytes, &out->textlen, url, &whole);
+        if (!whole)
+            short_of_memory = true;
         out->text_utf8 = charset_is_utf8(head->charset);
         if (!out->text) {
             status_set(" out of memory reading %s", url);
@@ -769,7 +792,11 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
     os64_fetch_status_t st = os64_fetch_status(f);
     if (why)
         *why = st;
-    if (st != OS64_FETCH_OK)
+    if (short_of_memory)
+        os64_strcopy(trouble, sizeof(trouble),
+                     " - this machine ran out of memory partway, so the page"
+                     " stops where it does");
+    else if (st != OS64_FETCH_OK)
         os64_snprintf(trouble, sizeof(trouble), " - %s", os64_fetch_reason(f));
     else if (out->doc && out->doc->refusal)
         os64_snprintf(trouble, sizeof(trouble), " - the page is bigger than this"
@@ -1065,8 +1092,9 @@ static void follow_link(view_t *v, int32_t index)
 // each way it can refuse.
 static void form_send(view_t *v, int32_t index)
 {
-    char url[OS64_FETCH_URL_MAX];
-    switch (wend_form_url(v->page, index, v->url, url, sizeof(url))) {
+    char url[OS64_FETCH_URL_MAX], fragment[OS64_URL_PATH_MAX];
+    switch (wend_form_url(v->page, index, v->url, url, sizeof(url),
+                          fragment, sizeof(fragment))) {
         case WEND_FORM_NONE:
             status_set(" that control is in no form, so there is nowhere to send it");
             return;
@@ -1085,7 +1113,10 @@ static void form_send(view_t *v, int32_t index)
     // http, so nothing in the library ever learns that the values came off
     // an https page. What is being sent is what somebody typed, which makes
     // it worse than an ordinary downgrade, not better.
-    if (os64_streq(v->base.scheme, "https") && starts_with_nocase(url, "http://")) {
+    // THE PAGE THAT COLLECTED THE VALUES IS `url`, NOT `base`. A page can
+    // move its own base with <base href>, and one that moves it to http
+    // would otherwise answer this question on the encrypted page's behalf.
+    if (starts_with_nocase(v->url, "https://") && starts_with_nocase(url, "http://")) {
         os64_url_t target;
         char question[WEND_STATUS_MAX];
         os64_snprintf(question, sizeof(question),
@@ -1097,7 +1128,8 @@ static void form_send(view_t *v, int32_t index)
             return;
         }
     }
-    go(v, url, true);
+    if (go(v, url, true) && fragment[0] != '\0')
+        jump_to_anchor(v, fragment);     // the action asked for a section
 }
 
 // A form with ONE THING TO ANSWER has nowhere else for you to go, so
@@ -1194,7 +1226,7 @@ static void field_type(view_t *v, int32_t index)
     // the prompt's buffer is gone. Only a CHANGE is worth keeping.
     if (os64_streq(shown, before)) {
         status_set(" left as it was");
-        if (v->sel >= 0 && v->sel < v->page->nspots)
+        if (v->page && v->sel >= 0 && v->sel < v->page->nspots)
             form_send_if_alone(v, v->sel);
         return;
     }
@@ -1213,7 +1245,9 @@ static void field_type(view_t *v, int32_t index)
     // ENTER IN A SEARCH BOX SENDS IT: a form whose only box you can type in
     // has nowhere else for you to go, and stopping there to hunt for a
     // button is the step nobody expects.
-    if (v->sel >= 0 && v->sel < v->page->nspots)
+    // The re-layout can fail for want of memory, and an edited field always
+    // has a selection — so the page has to be checked before it is walked.
+    if (v->page && v->sel >= 0 && v->sel < v->page->nspots)
         form_send_if_alone(v, v->sel);
 }
 

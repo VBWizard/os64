@@ -362,6 +362,17 @@ static void render_checks(void)
     wend_page_t *t2 = wend_render_text("caf\xC3\xA9\n", 6, true, 40);
     CHECK(t2 && t2->nlines == 1 && strcmp(t2->lines[0].text, "caf\xE9") == 0);
     wend_page_free(t2);
+    // A text file whose lines end in carriage returns still has lines, and a
+    // CRLF pair is one ending rather than two.
+    wend_page_t *cr = wend_render_text("a\rb\r\nc\n", 7, false, 40);
+    CHECK(cr && cr->nlines == 3);
+    if (cr && cr->nlines == 3) {
+        CHECK(strcmp(cr->lines[0].text, "a") == 0);
+        CHECK(strcmp(cr->lines[1].text, "b") == 0);
+        CHECK(strcmp(cr->lines[2].text, "c") == 0);
+    }
+    wend_page_free(cr);
+
     // An invalid sequence is one mark per bad byte, never a dropped byte.
     wend_page_t *t3 = wend_render_text("a\xC3\x28" "b", 4, true, 40);
     CHECK(t3 && t3->nlines == 1 && strcmp(t3->lines[0].text, "a?(b") == 0);
@@ -383,9 +394,9 @@ static void expect_url(const char *what, const char *html, int32_t spot,
         fprintf(stderr, "FAIL %s: no page\n", what);
         return;
     }
-    char url[2048];
+    char url[2048], frag[256];
     url[0] = '\0';
-    wend_form_result_t got = wend_form_url(page, spot, page_url, url, sizeof(url));
+    wend_form_result_t got = wend_form_url(page, spot, page_url, url, sizeof(url), frag, sizeof(frag));
     if (got != want_result || (want_url && strcmp(url, want_url) != 0)) {
         failures++;
         fprintf(stderr, "FAIL %s: result %d url |%s|\n            want %d |%s|\n",
@@ -496,9 +507,47 @@ static void form_checks(void)
         if (page) {
             CHECK(strcmp(page->spots[0].value, "two  spaces\nand a line") == 0);
             char url[256];
-            CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url))
+            CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url), NULL, 0)
                   == WEND_FORM_OK);
             CHECK(strcmp(url, "http://host/s?note=two++spaces%0Aand+a+line") == 0);
+            wend_page_free(page);
+        }
+    }
+
+    // A BUTTON MAY OVERRULE ITS FORM. The method decides whether this is a
+    // submission wend performs at all, and the action decides where.
+    expect_url("formmethod", "<form action=/s><input name=pw value=secret>"
+               "<input type=submit formmethod=post></form>",
+               1, WEND_FORM_POST, NULL);
+    expect_url("formaction", "<form action=/s method=get><input name=q value=x>"
+               "<input type=submit formaction=/other></form>",
+               1, WEND_FORM_OK, "http://host/other?q=x");
+    // A fieldset disables everything under it — except the words in its
+    // first legend, which were never a control.
+    expect_url("fieldset off", "<form action=/s><fieldset disabled>"
+               "<legend>Title</legend><input name=a value=1></fieldset>"
+               "<input name=b value=2><input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s?b=2");
+    {
+        // The fieldset is a block, so its row ends with it; the box inside
+        // is drawn and unnumbered, the ones after it are spots.
+        const char *want[] = { "Title[___]", "[1][___][2][Submit]" };
+        expect_lines("fieldset drawn", "<form><fieldset disabled><legend>Title</legend>"
+                     "<input name=a size=3></fieldset><input name=b size=3>"
+                     "<input type=submit></form>", 40, want, 2);
+    }
+    // A form action can name a section, which the address cannot carry.
+    {
+        wend_page_t *page = render_html_text(
+            "<form action='/s#results'><input name=q value=x>"
+            "<input type=submit></form>", 80, "http://host/p");
+        CHECK(page && page->nforms == 1);
+        if (page) {
+            char url[256], frag[64];
+            CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url),
+                                frag, sizeof(frag)) == WEND_FORM_OK);
+            CHECK(strcmp(url, "http://host/s?q=x") == 0);
+            CHECK(strcmp(frag, "results") == 0);
             wend_page_free(page);
         }
     }
@@ -524,7 +573,7 @@ static void form_checks(void)
                 CHECK(strcmp(again->spots[0].value, "new cat") == 0);
                 CHECK(again->nlines > 0 && strstr(again->lines[0].text, "[ew cat]") != NULL);
                 char url[256];
-                CHECK(wend_form_url(again, 1, "http://host/p", url, sizeof(url))
+                CHECK(wend_form_url(again, 1, "http://host/p", url, sizeof(url), NULL, 0)
                       == WEND_FORM_OK);
                 CHECK(strcmp(url, "http://host/s?q=new+cat") == 0);
                 wend_page_free(again);

@@ -200,6 +200,10 @@ typedef struct {
     int32_t space_spot;
 
     int32_t form;           // 1-based into the page's forms; 0 = outside any
+    // >0 inside a fieldset the page disabled. A fieldset disables every
+    // control under it, which is how a page greys out a whole section, and
+    // the controls themselves carry no attribute saying so.
+    int32_t disabled;
     const wend_edit_t *edits;   // what a person has filled in, by spot index
     int32_t nedits;
 
@@ -488,8 +492,17 @@ static void pre_bytes(render_t *r, const char *s, size_t n, bool utf8)
             line_end(r, true);
             continue;
         }
-        if (cp == 0x0D)
-            continue;                   // a lone carriage return moves nothing
+        // A CARRIAGE RETURN ENDS A ROW TOO, because a text file written on a
+        // machine that ended its lines that way is still a text file with
+        // lines. A CRLF pair is ONE ending: the newline that follows is
+        // swallowed rather than counted again. (libhtml normalises both
+        // before the tree, so this is the raw-text path's business.)
+        if (cp == 0x0D) {
+            line_end(r, true);
+            if (at < n && (utf8 ? s[at] == '\n' : (unsigned char)s[at] == 0x0A))
+                at++;
+            continue;
+        }
         if (cp == 0x09) {
             line_open(r);
             if (r->oom)
@@ -576,6 +589,18 @@ static const wend_edit_t *edit_for(const render_t *r)
 // turn every entry in a table of contents into "fetch this page again and
 // show me the top of it", which on a long article is worse than doing
 // nothing.
+// The `#name` a reference asks for, or "" — the half `os64_url_absolute`
+// drops, because it is the half no server is ever told about.
+static const char *reference_fragment(const char *href)
+{
+    if (!href)
+        return "";
+    for (const char *p = href; *p != '\0'; p++)
+        if (*p == '#')
+            return p + 1;
+    return "";
+}
+
 static int32_t link_add(render_t *r, const char *href)
 {
     wend_spot_t *spot = spot_new(r, WEND_SPOT_LINK);
@@ -583,17 +608,10 @@ static int32_t link_add(render_t *r, const char *href)
         return 0;
     char resolved[OS64_URL_REF_MAX];
     resolved[0] = '\0';
-    const char *hash = NULL;
-    if (href)
-        for (const char *p = href; *p != '\0'; p++)
-            if (*p == '#') {
-                hash = p + 1;
-                break;
-            }
     if (href && r->base)
         (void)os64_url_absolute(r->base, href, resolved, sizeof(resolved));
     spot->url = dup_text(r, resolved);
-    spot->fragment = dup_text(r, hash ? hash : "");
+    spot->fragment = dup_text(r, reference_fragment(href));
     return (spot->url && spot->fragment) ? r->page->nspots : 0;
 }
 
@@ -854,16 +872,16 @@ static void draw_dead_control(render_t *r, const char *label, const char *fallba
 // take it away from you. Letting the keyboard land on one would offer
 // something the page refused, and putting its value in the query would ask
 // the server for what the page was built to prevent.
-static bool control_disabled(const os64_html_node_t *n)
+static bool control_disabled(const render_t *r, const os64_html_node_t *n)
 {
-    return os64_html_attr(n, "disabled") != NULL;
+    return r->disabled > 0 || os64_html_attr(n, "disabled") != NULL;
 }
 
 // A hidden field is the FORM's data and no part of what the form shows, so
 // it is remembered against the form rather than made a place you can land.
 static void hidden_add(render_t *r, const os64_html_node_t *n)
 {
-    if (r->form <= 0 || control_disabled(n))
+    if (r->form <= 0 || control_disabled(r, n))
         return;                          // nothing to carry it, or not sent at all
     wend_form_t *form = &r->page->forms[r->form - 1];
     if (!reserve((void **)&form->hidden_names, &form->hiddencap, form->nhidden + 1,
@@ -908,7 +926,7 @@ static void field_input(render_t *r, const os64_html_node_t *n)
         kind = WEND_SPOT_RADIO;
     bool secret = type_is_nocase(type, "password");
 
-    if (control_disabled(n)) {
+    if (control_disabled(r, n)) {
         bool checked = os64_html_attr(n, "checked") != NULL;
         switch (kind) {
             case WEND_SPOT_SUBMIT: draw_dead_control(r, value, "Submit"); break;
@@ -940,12 +958,24 @@ static void field_input(render_t *r, const os64_html_node_t *n)
     r->spot = index;
     spot_mark(r, index);
     switch (kind) {
-        case WEND_SPOT_SUBMIT:
+        case WEND_SPOT_SUBMIT: {
+            // THE BUTTON MAY OVERRULE ITS FORM, and the method it names
+            // decides whether this submission is one wend performs at all.
+            const char *formaction = attr_value(n, "formaction");
+            const char *formmethod = attr_value(n, "formmethod");
+            char over[OS64_URL_REF_MAX];
+            over[0] = '\0';
+            if (formaction && formaction[0] && r->base)
+                (void)os64_url_absolute(r->base, formaction, over, sizeof(over));
+            spot->form_action = dup_text(r, over);
+            spot->has_method = formmethod != NULL && formmethod[0] != '\0';
+            spot->post = spot->has_method && os64_streq_nocase(formmethod, "post");
             spot->label = dup_text(r, value && value[0] ? value : "Submit");
             word_text(r, "[", 1);
             word_folded(r, spot->label);
             word_text(r, "]", 1);
             break;
+        }
         case WEND_SPOT_CHECK:
             word_text(r, spot->on ? "[x]" : "[ ]", 3);
             break;
@@ -993,7 +1023,7 @@ static void collect_options(render_t *r, const os64_html_node_t *el, wend_spot_t
 
 static void field_select(render_t *r, const os64_html_node_t *n)
 {
-    if (control_disabled(n)) {
+    if (control_disabled(r, n)) {
         // Its options are the page's business and it is not yours to open,
         // so what is drawn is that a list is there.
         word_text(r, "[v]", 3);
@@ -1160,6 +1190,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             if (action && action[0] && r->base)
                 (void)os64_url_absolute(r->base, action, resolved, sizeof(resolved));
             form->action = dup_text(r, resolved);
+            form->fragment = dup_text(r, reference_fragment(action));
             form->post = method && os64_streq_nocase(method, "post");
             p->nforms++;
             r->form = p->nforms;
@@ -1170,8 +1201,36 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         }
 
         // ── Blocks that only want their own row ──
+        // A DISABLED FIELDSET DISABLES WHAT IS INSIDE IT — except the words
+        // in its first `legend`, which are the section's title and were
+        // never a control. That exception is the standard's, and it is the
+        // reason this is a case of its own rather than a plain block.
+        case OS64_HTML_TAG_FIELDSET: {
+            bool off = os64_html_attr(n, "disabled") != NULL;
+            bool legend_seen = false;
+            block_break(r);
+            if (off)
+                r->disabled++;
+            for (const os64_html_node_t *c = n->first_child; c && !r->oom; c = c->next) {
+                bool legend = !legend_seen && c->kind == OS64_HTML_ELEMENT
+                              && c->ns == OS64_HTML_NS_HTML
+                              && c->tag == OS64_HTML_TAG_LEGEND;
+                if (legend) {
+                    legend_seen = true;
+                    if (off)
+                        r->disabled--;
+                }
+                walk(r, c, list);
+                if (legend && off)
+                    r->disabled++;
+            }
+            if (off)
+                r->disabled--;
+            block_break(r);
+            goto done;
+        }
+
         case OS64_HTML_TAG_DIV: case OS64_HTML_TAG_DL: case OS64_HTML_TAG_DT:
-        case OS64_HTML_TAG_FIELDSET:
         case OS64_HTML_TAG_ADDRESS: case OS64_HTML_TAG_CENTER:
         case OS64_HTML_TAG_SECTION: case OS64_HTML_TAG_ARTICLE:
         case OS64_HTML_TAG_NAV: case OS64_HTML_TAG_ASIDE:
@@ -1243,7 +1302,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         // you can type. One row's worth: a line-mode browser has no second
         // row to give it.
         case OS64_HTML_TAG_TEXTAREA: {
-            if (control_disabled(n)) {
+            if (control_disabled(r, n)) {
                 char *shown = gather(r, n, true);
                 if (shown)
                     draw_box(r, shown, box_width(r, n), false);
@@ -1288,7 +1347,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         // on, like a reset.
         case OS64_HTML_TAG_BUTTON: {
             const char *type = attr_value(n, "type");
-            if (control_disabled(n) || type_is_nocase(type, "reset")
+            if (control_disabled(r, n) || type_is_nocase(type, "reset")
                 || type_is_nocase(type, "button")) {
                 word_text(r, "[", 1);
                 walk_children(r, n, list);
@@ -1577,20 +1636,34 @@ static bool pair_append(char *out, size_t cap, size_t *at, bool *first,
 }
 
 wend_form_result_t wend_form_url(const wend_page_t *page, int32_t index,
-                                 const char *page_url, char *out, size_t cap)
+                                 const char *page_url, char *out, size_t cap,
+                                 char *fragment, size_t fragment_cap)
 {
+    if (fragment && fragment_cap)
+        fragment[0] = '\0';
     if (!page || !out || cap == 0 || index < 0 || index >= page->nspots)
         return WEND_FORM_NONE;
     const wend_spot_t *from = &page->spots[index];
     if (from->form <= 0 || from->form > page->nforms)
         return WEND_FORM_NONE;
     const wend_form_t *form = &page->forms[from->form - 1];
-    if (form->post)
+    // THE BUTTON'S OWN METHOD WINS WHERE IT NAMES ONE. A GET form with a
+    // `formmethod=post` button is a POST, and sending it as a GET would put
+    // whatever it collected — a password, most of the time — into an address
+    // that servers and proxies write down.
+    bool post = (from->kind == WEND_SPOT_SUBMIT && from->has_method) ? from->post
+                                                                    : form->post;
+    if (post)
         return WEND_FORM_POST;
 
-    // The form's own destination, or the page it sits on when it names none.
-    // A GET form REPLACES whatever query that address already carries.
+    // The form's own destination, the button's if it names one, or the page
+    // it all sits on. A GET form REPLACES whatever query that address
+    // already carries.
     const char *action = form->action[0] ? form->action : (page_url ? page_url : "");
+    if (from->kind == WEND_SPOT_SUBMIT && from->form_action[0])
+        action = from->form_action;
+    if (fragment && fragment_cap)
+        (void)os64_strcopy(fragment, fragment_cap, form->fragment);
     size_t at = 0;
     for (const char *q = action; *q != '\0' && *q != '?' && *q != '#'; q++) {
         if (at + 2 > cap)
@@ -1659,6 +1732,7 @@ void wend_page_free(wend_page_t *page)
         os64_free(spot->name);
         os64_free(spot->value);
         os64_free(spot->label);
+        os64_free(spot->form_action);
         for (int32_t j = 0; j < spot->noptions; j++) {
             os64_free(spot->options[j]);
             os64_free(spot->option_values[j]);
@@ -1669,6 +1743,7 @@ void wend_page_free(wend_page_t *page)
     for (int32_t i = 0; i < page->nforms; i++) {
         wend_form_t *form = &page->forms[i];
         os64_free(form->action);
+        os64_free(form->fragment);
         for (int32_t j = 0; j < form->nhidden; j++) {
             os64_free(form->hidden_names[j]);
             os64_free(form->hidden_values[j]);

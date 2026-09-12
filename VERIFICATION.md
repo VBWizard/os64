@@ -715,6 +715,20 @@ but never returned. The fragment finding is the one that changed how the
 browser FEELS: a table of contents was twelve links that each refetched the
 article and showed its top.
 
+**Round two found nine more, three P1, and most of them were the next layer
+under a round-one fix** — the reviewer checking the repair rather than the
+original. A `y` typed while a page was loading was held as type-ahead and
+then answered the downgrade prompt it was never shown; the downgrade check
+read the page's BASE, which `<base href>` can move to http while the page
+that collected the values stays encrypted; and a `formmethod=post` button
+on a GET form would have sent a password as a query string. Then: a
+`fieldset disabled` disables its contents and wend honoured only each
+control's own attribute; a form action's `#name` was dropped where a link's
+was now kept; a text body truncated by OUR allocation failure reported
+itself whole; a re-layout that failed for memory left a NULL page that the
+edit path walked; a text file with classic-Mac carriage returns rendered as
+one line; and `Accept` advertised less than the loader would render.
+
 **And two real searches, typed into real pages.** The Floodgap gateway's
 box, reached by typing its number, edited from the value it came with, and
 sent — the gateway answered with the gopher menu that was asked for. Then

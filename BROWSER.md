@@ -431,7 +431,10 @@ exit. Colour and attributes are the SGR subset the terminal draws
    a person may choose what a script may not, which is why the callback
    exists. Every other hop takes the default verdict.
 2. Read the head. `status` is shown in the status row whatever it is; a
-   404 is a page and is shown as one. `content_type` decides the path:
+   404 is a page and is shown as one. The request's `Accept` names every
+   media type this step will render, so a server choosing between
+   representations is told the truth rather than a narrower list it might
+   answer 406 to. `content_type` decides the path:
    `text/html`, `application/xhtml+xml`, and a reply that names no type
    at all → libhtml; any other `text/*` → shown preformatted as it is
    **(departure: the spec said `text/plain`, and every other `text/*` is
@@ -442,7 +445,12 @@ exit. Colour and attributes are the SGR subset the terminal draws
    splits at `;`). **A text body's high bytes are read as UTF-8 only
    when the reply's charset says so (departure)**: the old web's `.txt`
    files are Latin-1, and decoding those as UTF-8 turns every accented
-   name into a question mark.
+   name into a question mark. **Its line endings may be any of the three**:
+   a carriage return ends a row as surely as a newline does, and a CRLF
+   pair is one ending rather than two, so a file written on a machine that
+   ended its lines the other way is still a file with lines. (libhtml
+   normalises both before a tree exists, so this is the raw-text path's
+   business alone.)
 3. `os64_html_parser_new` with `charset = head->charset` (the transport's
    label, which outranks the page's own — libhtml applies the ladder),
    then `feed` every read, then `finish`. A refusal by name (too large,
@@ -500,7 +508,11 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   that does nothing this browser can honour — a reset, a plain button —
   is drawn and is NOT a spot, because landing on it would promise
   something. A DISABLED control is the same: drawn, not landed on, and
-  never sent, which is what the page disabled it to arrange. A HIDDEN
+  never sent, which is what the page disabled it to arrange — and a
+  `fieldset` that is disabled disables everything under it, since that is
+  how a page greys out a whole section and the controls inside carry no
+  attribute saying so. The words in its first `legend` are the exception,
+  the standard's: a section's title was never a control. A HIDDEN
   field is neither drawn nor landed on: it is remembered against the
   form, whose data it is. **A PASSWORD is drawn as its length**, never
   its value, and echoes stars while it is typed — a page that prefills
@@ -615,7 +627,15 @@ to, which is what a GET form does; the hidden fields first, then every
 successful control in document order — a box that is not ticked sends
 nothing, a ticked one with no value of its own sends `on`, a list sends
 its option's VALUE rather than the words shown for it, and of two buttons
-only the one pressed says so. **A form with exactly ONE THING TO ANSWER
+only the one pressed says so — and **the button that was pressed may
+overrule its form**, because the standard lets it carry its own action and
+its own method. The METHOD matters most to a browser that sends only one
+of them: a GET form with a `formmethod=post` button is a POST, and sending
+it as a GET would put whatever it collected into an address that servers
+and proxies write down. An action's `#name` is kept beside the address the
+same way a link's is, and applied once the answer arrives.
+
+**A form with exactly ONE THING TO ANSWER
 sends itself when you finish that thing**, because there is nowhere else
 in it to go and stopping to hunt for a button is the step nobody expects.
 Anything else to fill in — a second box, a tick, a list — and it waits
@@ -627,7 +647,12 @@ libfetch's downgrade callback cannot see that one: it judges the
 redirects INSIDE a fetch, and this fetch begins at http, so nothing in
 the library learns where the values came from. What is being sent is what
 somebody typed, which makes it a stronger case for asking than an
-ordinary downgrade, not a weaker one.
+ordinary downgrade, not a weaker one. The question is asked of the
+address the PAGE came from and not of its base, because `<base href>` can
+move the base to http while the page that collected the values stays
+encrypted. And **a security question drops type-ahead**: keys struck
+while a page was loading are held for whoever asks next, and a `y` meant
+for something else must not answer a question it never saw.
 
 **Errors are the library's sentence, in the status row.** Every libfetch
 refusal has `os64_fetch_reason`; a TLS refusal now names the alert or the

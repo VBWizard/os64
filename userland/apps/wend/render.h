@@ -85,6 +85,14 @@ typedef struct {
     char   *name;        // a control's name; "" is a control nothing sends
     char   *value;       // what it holds NOW — typed text, or the value attribute
     char   *label;       // SUBMIT: the words on it
+    // SUBMIT: what this particular button overrules about its form. The
+    // standard lets the button carry its own action and method, and the
+    // method matters to a browser that sends only one of them: a GET form
+    // with a `formmethod=post` button is a POST, and sending it as a GET
+    // would put a password in an address.
+    char   *form_action; // "" = the form's own
+    bool    has_method;  // whether `post` below means anything
+    bool    post;
     bool    on;          // CHECK / RADIO: ticked
     bool    secret;      // TEXT: a password — never drawn, never echoed
     char  **options;     // CHOICE: what is shown for each option, and
@@ -99,6 +107,7 @@ typedef struct {
 // naming that beats sending the wrong thing to somebody's server.
 typedef struct {
     char *action;        // resolved absolute address; "" = the page it is on
+    char *fragment;      // the `#name` the action asked for, or ""
     bool  post;
     // The fields the form carries and never shows. They are the form's own
     // data rather than places a person can land, so they live here instead
@@ -176,10 +185,13 @@ typedef enum {
 // The address that activating `spot` asks for: the form's action with a
 // query built from every successful control in it, percent-encoded the way a
 // form encodes. `page_url` is where the page came from, used when the form
-// names no action of its own. Pure computation, so the harness can check
+// names no action of its own. `fragment` (optional, at least
+// OS64_URL_PATH_MAX) takes the `#name` the action asked for, which the
+// address itself cannot carry. Pure computation, so the harness can check
 // what would go on the wire without a wire.
 wend_form_result_t wend_form_url(const wend_page_t *page, int32_t spot,
-                                 const char *page_url, char *out, size_t cap);
+                                 const char *page_url, char *out, size_t cap,
+                                 char *fragment, size_t fragment_cap);
 
 // The page's own idea of where it lives. False when it has no <base href>,
 // or the element carries no usable href.
