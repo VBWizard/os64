@@ -26,8 +26,8 @@ uint64_t os64_syscall4(uint64_t n, uint64_t a, uint64_t b, uint64_t c, uint64_t 
 uint64_t os64_syscall6(uint64_t n, uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uint64_t f);
 #define main os64get_entry
 #include "../userland/apps/os64get/os64get.c"
+#include "fetch/transport.h"
 #undef main
-#include "../userland/apps/os64get/url_io.c"
 #include "os64/slurp.h"
 
 static char sandbox[512];
@@ -98,7 +98,7 @@ const char *os64_getenv(const char *key)
 int64_t os64_ticks(os64_ticks_t *out)
 { static uint64_t ticks; out->ticks = ticks++; out->per_second = 1000; return 0; }
 int64_t os64_write_for(int32_t h, const void *p, size_t n, uint64_t ms)
-{ assert(ms > 0 && ms <= URL_IDLE_MS); return os64_write(h, p, n); }
+{ assert(ms > 0 && ms <= FETCH_IDLE_MS_DEFAULT); return os64_write(h, p, n); }
 int64_t __wrap_os64_time(os64_time_t *out) { memset(out, 0, sizeof(*out)); out->epoch = 1788739200; return 0; }
 bool os64_parse_ipv4(const char *s, const char *end, uint32_t *ip)
 { (void)s; (void)end; *ip = 0x7f000001; return true; }
@@ -261,14 +261,21 @@ int64_t os64_write(int32_t h, const void *buf, size_t n)
                 memcpy(network[i] + head, compressed, sizeof(compressed));
                 network_len[i] = (size_t)head + sizeof(compressed); return (int64_t)n;
             }
-            if ((is("url-tls-downgrade") || is("url-tls-redirect") || is("url-upgrade") || is("url-tls-other") || is("url-tls-head-alert")) && i == 0) {
-                snprintf(network[i], sizeof network[i], "HTTP/1.1 302 Found\r\nLocation: %s://%s/next\r\nContent-Length: 0\r\n\r\n",
-                         is("url-tls-downgrade") ? "http" : "https",
-                         is("url-tls-other") ? "other" : "host");
+            if ((is("url-tls-downgrade") || is("url-tls-downgrade-coded") || is("url-tls-redirect") || is("url-upgrade") || is("url-tls-other") || is("url-tls-head-alert")) && i == 0) {
+                snprintf(network[i], sizeof network[i], "HTTP/1.1 302 Found\r\nLocation: %s://%s/next\r\n%sContent-Length: 0\r\n\r\n",
+                         (is("url-tls-downgrade") || is("url-tls-downgrade-coded")) ? "http" : "https",
+                         is("url-tls-other") ? "other" : "host",
+                         is("url-tls-downgrade-coded") ? "Content-Encoding: br\r\n" : "");
                 network_len[i] = strlen(network[i]); return (int64_t)n;
             }
             if (is("url-tls-cut") || is("url-tls-close")) {
                 strcpy(network[i], "HTTP/1.1 200 OK\r\n\r\nincoming A");
+                network_len[i] = strlen(network[i]); return (int64_t)n;
+            }
+            if (is("url-refused-coded")) {
+                // A refusal whose body is coded in something nothing here
+                // decodes: the server's verdict outranks the envelope's.
+                strcpy(network[i], "HTTP/1.1 404 Not Found\r\nContent-Encoding: br\r\nContent-Length: 3\r\n\r\nabc");
                 network_len[i] = strlen(network[i]); return (int64_t)n;
             }
             snprintf(network[i], sizeof(network[i]), "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n%s",
@@ -343,10 +350,12 @@ os64_tls_store_status_t os64_tls_trust_reload(os64_tls_trust **out, os64_tls_sto
 void os64_tls_trust_free(os64_tls_trust *t) { assert(!t || t == &host_trust); }
 const char *os64_tls_store_status_name(os64_tls_store_status_t s) { (void)s; return "fixture store"; }
 const char *os64_tls_status_name(os64_tls_status_t s) { (void)s; return "fixture TLS"; }
+const char *os64_tls_error_description(os64_tls_status_t s, os64_tls_policy_reason_t p, int e)
+{ (void)s; (void)p; (void)e; return "fixture TLS explanation"; }
 os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t h,
     const os64_tls_transport_limits_t *limits, os64_tls_transport **out)
 {
-    assert(!limits && c->trust == &host_trust && c->alpn_count == 1);
+    assert(limits && limits->handshake_ms == FETCH_IDLE_MS_DEFAULT && c->trust == &host_trust && c->alpn_count == 1);
     const char *hostname = is("url-tls-ip") ? "10.0.2.2" :
         is("url-tls-name") ? "bad_name" :
         is("url-tls-other") && tls_created ? "other" : "host";
@@ -565,7 +574,11 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < connections; i++) assert(network_closed[i]);
     if (!strncmp(scenario, "url-tls-", 8) || is("url-upgrade")) assert(trust_loads == 1);
     else assert(trust_loads == 0);
-    if (is("url-tls-downgrade")) {
+    if (is("url-refused-coded")) {
+        assert(rc == GET_REFUSED && connections == 1);
+        assert(strstr(output_text, "404 Not Found"));
+    }
+    if (is("url-tls-downgrade") || is("url-tls-downgrade-coded")) {
         assert(rc == GET_REDIRECT && connections == 1);
         assert(strstr(output_text, "refusing HTTPS-to-HTTP downgrade"));
         assert(strstr(output_text, "os64get 'http://host/next'"));

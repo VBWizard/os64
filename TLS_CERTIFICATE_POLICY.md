@@ -9,19 +9,27 @@ consume this interface. Transport and HTTPS integration remain separate slices i
 
 ## Acceptance gate
 
-The wrapper forwards the original certificate stream to two BearSSL minimal
-X.509 contexts until policy refusal and inspects each complete certificate in
-a fixed heap buffer. One context establishes trust against the configured
-snapshot. The other has no anchors, so it checks adjacent issuer/signature
-links, validity periods and path constraints through the supplied list without
-stopping at a trusted prefix. Its expected final NOT_TRUSTED result supplies
-no authentication; the snapshot-backed context must independently succeed.
-`end_chain` requires both checks and policy success; `get_pkey` returns NULL
-until that gate succeeds. A malformed, restricted or unrelated trailing
-certificate therefore refuses the connection. Valid included roots and
-cross-signed tails remain accepted. The full-chain context checks each
-certificate against the next one; it does not validate the final certificate's
-signature. Trust comes from the separate snapshot-backed context.
+The wrapper forwards the certificate stream to a BearSSL minimal X.509
+context backed by the installed trust snapshot. It inspects each complete
+certificate on the path in a fixed heap buffer. After a complete certificate
+passes local policy and BearSSL verifies its signature with an installed CA
+key, the authenticated prefix is complete. An issuer-name match alone cannot
+establish that boundary. The private adapter reads the pinned validator's
+`BR_ERR_X509_OK` state at certificate boundaries; it does not call `end_chain`
+early, which would finalize a path that still needs another certificate.
+
+Certificates supplied after this prefix are outside the authenticated path.
+Their contents, signatures, validity and extensions cannot veto it. The wrapper
+still consumes their declared lengths and enforces the message's sequencing,
+nonempty certificate, per-certificate size, chain-count and total-byte limits.
+This permits redundant roots, SHA-1 self-signatures and cross-signs without
+allowing SHA-1 on the authenticated path or importing peer certificates as
+anchors. The complete certificate that reaches trust still receives policy
+inspection even if BearSSL reaches its success state during an earlier fragment.
+
+`end_chain` requires local policy success and upstream trust success;
+`get_pkey` returns NULL until that final gate succeeds. BearSSL's TLS handshake
+then verifies proof of possession before releasing application plaintext.
 
 The factory copies the expected DNS hostname and uses explicit validation time.
 It configures the same SHA-256/384/512, RSA i31, and EC m31 algorithms as the
@@ -29,12 +37,12 @@ client profile. RSA moduli must have 2048 through 4096 actual bits, including
 anchors; exponents must fit the upstream key buffer, be odd, and be at least 3.
 EC keys use uncompressed, valid P-256/P-384/P-521 points. Peer certificate signature
 identifiers must be SHA-256/384/512 with RSA PKCS#1 v1.5 or ECDSA, with matching
-inner/outer identifiers. This conservatively also applies to supplied roots.
+inner/outer identifiers. These checks apply through the authenticated prefix.
 RSA `rsaEncryption` public-key identifiers require an explicit empty NULL
 parameter. SHA-2/RSA signature identifiers accept absent or NULL parameters,
 as required for verification by [RFC 4055 section 5](https://www.rfc-editor.org/rfc/rfc4055.html#section-5).
-The profile requires strictly positive serial numbers in peer certificates,
-including trailing certificates; zero and negative peer serials are refused.
+The profile requires strictly positive serial numbers in peer certificates
+on the authenticated path; zero and negative serials there are refused.
 Installed anchors accept minimally encoded INTEGER serials of either sign,
 including zero, because the serial is not part of the trusted name/key input.
 Serials longer than 20 encoded content octets remain accepted within the
@@ -51,8 +59,8 @@ IP names require 4 or 16 bytes, and registered IDs require a valid OID encoding.
 Constructed alternatives (`otherName`, `x400Address`, `directoryName`, and
 `ediPartyName`) are refused, including well-formed ones: this DNS profile does
 not implement their schemas. This restriction applies to leaves, intermediates,
-anchors and certificates supplied after upstream reaches trust. A matching DNS
-name cannot rescue a malformed DNS name or an unsupported alternative.
+and installed anchors. A matching DNS name cannot rescue a malformed DNS name
+or an unsupported alternative.
 The leaf cannot be a CA; intermediates must be CAs. Key Usage,
 when present, requires digitalSignature and forbids keyCertSign in the leaf;
 it requires keyCertSign in CAs.
@@ -86,7 +94,7 @@ four-byte big-endian Unicode scalars; BMPString uses two-byte big-endian BMP
 characters without surrogates. TeletexString and other value tags are refused;
 this profile does not implement T.61 decoding. These checks apply to issuer and
 subject attributes, including attributes unused for DNS identity, and to
-anchors and trailing certificates after upstream trust success.
+installed anchors and certificates on the authenticated path.
 The parser checks the schema of policy-bearing fields; it is not a general
 ASN.1 schema validator for every informational extension.
 
@@ -143,9 +151,8 @@ from the certificates in the path. Key strength, critical CA Basic Constraints,
 Key Usage and restrictive/unsupported extension refusals still apply at import.
 
 This import exception does not promote a server-supplied certificate into an
-anchor. The supplied-chain policy also checks redundant roots after trust has
-been reached, so a peer that sends one of these out-of-profile roots may still
-be refused even when its name/key is installed.
+anchor. Redundant roots supplied after the authenticated prefix do not undergo
+peer policy inspection; the configured snapshot establishes trust.
 
 Addition copies the subject DN and public key after policy checks. A failed
 addition leaves the builder unchanged. Sealing requires a nonempty store and
@@ -182,8 +189,8 @@ matching adapted archive. Python cryptography and the OpenSSL command-line
 tool are host test dependencies; generation and validation need no network.
 Use `--output /tmp/new-directory` to retain the generated corpus and executable.
 
-The corpus covers 354 chain cases and 61 anchor cases, with one-byte,
-37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
+The corpus covers generated and captured chain cases and anchor import, with
+one-byte, 37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
 RDN ordering and string encodings, canonical ECDSA signatures,
 positive peer serials and zero/negative anchor serials, SAN/CA Basic Constraints
 criticality, ENUMERATED minimality,
@@ -191,10 +198,10 @@ RSA parameter rules and leaf Key Usage restrictions,
 signature-use compatibility for key-agreement bits and serials over 20 octets,
 OID/RELATIVE-OID component minimality and termination,
 primitive/constructed DER tags and unsupported universal types,
-adjacent links and validity through supplied tails,
+adjacent links and validity within the authenticated path,
 SAN/CN/wildcard boundaries, constructed SAN refusals,
 leaf/intermediate EKU,
-critical-extension refusals, restrictions after upstream trust success,
+critical-extension refusals, policy restrictions at the trust boundary,
 signature/date/pathLen failures,
 RSA sizes from 1024 to 4097 bits, invalid EC points, malformed DER, duplicate
 extensions, and resource limits. Each proper prefix of a valid leaf is refused.
@@ -204,13 +211,16 @@ negatives accompany two captured public leaf certificates. Those leaves pass
 the local policy inspection but remain untrusted under the generated test root;
 they establish metadata compatibility, not public-chain validation. Capture
 provenance and fingerprints are in `userland/libtls/test/public-certs/README.md`.
-OpenSSL independently validates the positive chain with server purpose and DNS
-identity enabled.
+The captured Princeton chain from issue #93 passes with the shipped USERTrust
+anchor, with and without its cross-sign and SHA-1 tail, at a fixed fixture date.
+It fails under an unrelated store. OpenSSL independently validates the generated
+positive chain with server purpose and DNS identity enabled.
 
-Twelve complete or rejected TLS handshake probes use the policy factory and
+Complete or rejected TLS handshake probes use the policy factory and
 the pinned BearSSL server. They verify successful authentication and refusal
-before plaintext access for CN-only, unsuitable EKU, critical EKU, and a
-restricted or unrelated trailing certificate. Certificate-size and chain-count
+before plaintext access for CN-only, unsuitable EKU, critical EKU, bad path
+signatures, wrong anchor keys, and restrictions or SHA-1 at the trust boundary.
+Redundant restricted, unrelated and SHA-1 tails succeed after authentication. Certificate-size and chain-count
 boundaries and an EKU-count refusal check caller-visible `TLS_LIMIT` reporting,
 with upstream diagnostics and sticky status preserved after abort.
 This is not independent-peer TLS interoperability. Allocation-failure injection,
@@ -222,10 +232,9 @@ separately from its status and upstream error. Handshake probes check this
 diagnostic for policy refusals, upstream-only failures and success, including
 preservation after a later abort.
 
-The x86-64 validator allocation is 39,440 bytes; a trust builder/snapshot is
-18,456 bytes plus copied DN/key bytes. The second validator context adds
-3,176 fixed bytes and repeats validation of the trusted prefix to check the
-full supplied chain without another certificate buffer. The private sources
+The validator owns one minimal context and one 32 KiB certificate buffer.
+A trust builder/snapshot contains bounded anchor arrays plus copied DN/key
+bytes. The private sources
 compile with the normal userland build through the freestanding PIC rule and `-Werror`.
 They are members of the private foundation archive with generated header
 dependencies; unused objects are not linked into `bearssltest`. Compiler stack

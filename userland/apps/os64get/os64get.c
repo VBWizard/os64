@@ -16,10 +16,8 @@
 #include "os64/conf.h"
 #include "os64/date.h"
 
-#include "gzip/gzip.h"
-#include "http.h"
+#include "fetch/fetch.h"
 #include "install.h"
-#include "url_io.h"
 
 #define GET_OK             0
 #define GET_USAGE          2
@@ -70,17 +68,6 @@
 // disk, not the wire.
 #define GET_CHUNK     65536
 #define GET_PATH_MAX  256
-
-// A compressed response cannot spend the destination filesystem without a
-// bound merely by describing the same byte millions of times. Content-Length
-// counts wire bytes, so a length-framed response may expand at most 100x, with
-// a 1 MiB floor that keeps small ordinary pages useful. Sixteen MiB is the
-// ceiling in every case, and the only available bound when close frames the
-// body and its wire length is unknowable in advance. Identity is unaffected:
-// these limits pay specifically for compression's amplification hazard.
-#define URL_GZIP_OUTPUT_FLOOR (1ull * 1024ull * 1024ull)
-#define URL_GZIP_OUTPUT_MAX   (16ull * 1024ull * 1024ull)
-#define URL_GZIP_RATIO_MAX    100ull
 
 // Hold the manifest before receiving payloads, refusing an oversized list
 // before publication. Batch metadata uses static storage to keep it off the
@@ -995,7 +982,7 @@ static void lookup_lot(const char *host, const char *name, const conf_t *c,
 //     verified before publish; neither is authentication, so the server
 //     still owns what the bytes mean.
 //   - IT DOES NOT LET A REDIRECT NAME THE FILE. Following one is ordinary
-//     (see url_ask); letting the far end choose what appears in somebody's
+//     (see fetch_url); letting the far end choose what appears in somebody's
 //     directory is not, so the name is settled from the typed address before
 //     the first request goes out.
 //
@@ -1004,208 +991,6 @@ static void lookup_lot(const char *host, const char *name, const conf_t *c,
 // ext2 that final replacement is atomic, so a transfer that dies halfway
 // leaves the file that was there exactly where it was. A FAT destination has
 // syscall 43's documented remove-first publication window.
-
-// URL fetches are sequential, so one pair of BSS buffers serves every one.
-// Keeping 128 KiB off the stack matters even though the current user stack is
-// larger: the buffers are transfer state, not call state, and gzip needs an
-// input chunk and a decoded-output chunk alive at the same time.
-static uint8_t urlWire[GET_CHUNK];
-static uint8_t urlPlain[GET_CHUNK];
-
-typedef struct {
-    uint64_t received;       // body bytes the framing handed over: the wire's count
-    uint64_t produced;       // representation bytes staged in the temporary file
-    uint32_t crc;            // fingerprint of the identity/decoded receive buffers
-} url_body_result_t;
-
-static int gzip_body_result(os64_gzip_status_t status)
-{
-    // An unsupported method and a local expansion policy are both honest
-    // "this reply cannot be decoded here" answers. Every other terminal gzip
-    // result says the bytes claimed to be gzip but did not form one complete,
-    // verified gzip stream, which is corruption rather than missing support.
-    if (status == OS64_GZIP_UNSUPPORTED || status == OS64_GZIP_LIMIT)
-        return GET_UNSUPPORTED;
-    return GET_CORRUPT;
-}
-
-// The wire length is only known in advance under a Content-Length; a chunked
-// or close-framed gzip body gets the ceiling and nothing finer.
-static uint64_t gzip_body_limit(const http_response_t *reply)
-{
-    if (!reply->hasLength)
-        return URL_GZIP_OUTPUT_MAX;
-
-    uint64_t limit;
-    if (reply->length > URL_GZIP_OUTPUT_MAX / URL_GZIP_RATIO_MAX)
-        limit = URL_GZIP_OUTPUT_MAX;
-    else
-        limit = reply->length * URL_GZIP_RATIO_MAX;
-    if (limit < URL_GZIP_OUTPUT_FLOOR)
-        limit = URL_GZIP_OUTPUT_FLOOR;
-    if (limit > URL_GZIP_OUTPUT_MAX)
-        limit = URL_GZIP_OUTPUT_MAX;
-    return limit;
-}
-
-// Read one HTTP message body into an already-open temporary file.
-//
-// THE FRAMING IS THE BODY READER'S BUSINESS (http.h): what comes out of it is
-// the body's bytes and nothing else — a length, chunks, or the close, taken
-// off — and when it answers 0 its `result` says whether the body ENDED or
-// was merely STOPPED. This function decides only what those bytes ARE: the
-// file itself, or a gzip stream the file is inside. The decoder's output is
-// written as it streams but stays provisional by construction: the caller
-// publishes the temporary file only after this returns OK, and for gzip that takes
-// the framing satisfied AND OS64_GZIP_DONE — every member trailer verified,
-// no trailing data.
-//
-// A body the framing calls CUT or BROKE is NOT this function's verdict to
-// give. The decoder is told the input is final only when the body is WHOLE,
-// so a truncated transfer reaches it as "no more for now" and this returns
-// OK with the decoder's work unfinished; the caller reads `body->result` and
-// says "cut short", the same as it would for an identity body. (The earlier
-// shape, which framed the body itself, looped forever on a length-framed
-// gzip reply that closed early — Codex review of PR #54.)
-static int receive_url_body(http_body_t *body, const http_response_t *reply,
-                            int32_t out, const char *partPath, const char *name,
-                            bool quiet, bool gzipEncoded,
-                            url_body_result_t *result)
-{
-    // The counters are the caller's to read on EVERY return — a refused
-    // allocation included, since the meter's last tick reports them — so
-    // they are set before anything can fail.
-    result->received = 0;
-    result->produced = 0;
-    result->crc = 0;
-    uint32_t crc = os64_crc32_begin();
-
-    os64_gzip_t *decoder = NULL;
-    uint64_t gzipLimit = 0;
-    if (gzipEncoded) {
-        gzipLimit = gzip_body_limit(reply);
-        decoder = os64_gzip_create(gzipLimit);
-        if (decoder == NULL) {
-            os64_hprintf(OS64_STDERR, "os64get: cannot allocate the gzip decoder\n");
-            return GET_WRITE_FAILED;
-        }
-    }
-
-    int status = GET_OK;
-    os64_gzip_status_t gzipStatus = OS64_GZIP_NEED_INPUT;
-    const char *unit = gzipEncoded ? " wire" : "";
-    bool over = false;
-
-    while (!over && !install_cancelled()) {
-        // Fill the buffer before writing it, for the disk's sake: a socket
-        // read answers with what has ARRIVED — a segment, or a scheduler
-        // pass's worth — and writing each of those hands ext2 a block or two
-        // at a time. Progress ticks from INSIDE the fill, every 4KB of
-        // arrival, so a slow link reads as slow rather than as hung. The
-        // meter counts arrival, which for gzip is the wire's bytes even
-        // though the file being staged grows faster.
-        size_t filled = 0;
-        while (filled < sizeof(urlWire) && !install_cancelled()) {
-            int64_t n = http_body_read(body, urlWire + filled, sizeof(urlWire) - filled);
-            if (n <= 0) { over = true; break; }
-            filled += (size_t)n;
-            uint64_t staged = result->received + filled;
-            if (!quiet && (staged % 4096 < (uint64_t)n ||
-                           (reply->hasLength && staged == reply->length))) {
-                if (reply->hasLength)
-                    os64_printf("\r%s: %lu/%lu%s bytes", name,
-                                (unsigned long)staged, (unsigned long)reply->length, unit);
-                else
-                    os64_printf("\r%s: %lu%s bytes", name, (unsigned long)staged, unit);
-            }
-        }
-        result->received += filled;
-
-        bool finalInput = over && body->result == HTTP_BODY_DONE;
-
-        if (!gzipEncoded) {
-            if (filled != 0 &&
-                os64_write(out, urlWire, filled) != (int64_t)filled) {
-                os64_hprintf(OS64_STDERR,
-                             "os64get: write to %s failed (disk full?)\n",
-                             partPath);
-                status = GET_WRITE_FAILED;
-                break;
-            }
-            result->produced += filled;
-            crc = os64_crc32_update(crc, urlWire, filled);
-        } else if (filled != 0 || finalInput) {
-            const uint8_t *input = urlWire;
-            size_t inputLeft = filled;
-
-            for (;;) {
-                if (install_cancelled()) { status = GET_CANCELLED; break; }
-                uint8_t *output = urlPlain;
-                size_t outputLeft = sizeof(urlPlain);
-                gzipStatus = os64_gzip_process(decoder, &input, &inputLeft,
-                                                &output, &outputLeft,
-                                                finalInput);
-                size_t produced = sizeof(urlPlain) - outputLeft;
-                if (produced != 0 &&
-                    os64_write(out, urlPlain, produced) != (int64_t)produced) {
-                    os64_hprintf(OS64_STDERR,
-                                 "os64get: write to %s failed (disk full?)\n",
-                                 partPath);
-                    status = GET_WRITE_FAILED;
-                    break;
-                }
-                result->produced += produced;
-                crc = os64_crc32_update(crc, urlPlain, produced);
-
-                if (gzipStatus == OS64_GZIP_NEED_OUTPUT)
-                    continue;
-                if (gzipStatus == OS64_GZIP_NEED_INPUT) {
-                    // Asked for more with the whole body already given is a
-                    // stream that ends before its trailer; asked for more
-                    // while holding some is the decoder breaking its word.
-                    if (finalInput) {
-                        gzipStatus = OS64_GZIP_TRUNCATED;
-                        status = GET_CORRUPT;
-                    } else if (inputLeft != 0) {
-                        gzipStatus = OS64_GZIP_BAD_ARGUMENT;
-                        status = GET_CORRUPT;
-                    }
-                    break;
-                }
-                if (gzipStatus == OS64_GZIP_DONE)
-                    break;
-
-                status = gzip_body_result(gzipStatus);
-                break;
-            }
-        }
-
-        if (status != GET_OK)
-            break;
-        if (finalInput && gzipEncoded && gzipStatus != OS64_GZIP_DONE)
-            status = gzip_body_result(gzipStatus);
-    }
-
-    if (install_cancelled()) status = GET_CANCELLED;
-    if (gzipEncoded && status != GET_OK && status != GET_CANCELLED) {
-        if (gzipStatus == OS64_GZIP_LIMIT)
-            os64_hprintf(OS64_STDERR,
-                         "os64get: gzip response expands past its %lu-byte safety limit"
-                         " (at most %lux wire size and %lu MiB overall)"
-                         " — %s NOT written\n",
-                         (unsigned long)gzipLimit,
-                         (unsigned long)URL_GZIP_RATIO_MAX,
-                         (unsigned long)(URL_GZIP_OUTPUT_MAX / 1024 / 1024),
-                         partPath);
-        else if (status != GET_WRITE_FAILED)
-            os64_hprintf(OS64_STDERR, "os64get: bad gzip response: %s"
-                         " — %s NOT written\n",
-                         os64_gzip_status_name(gzipStatus), partPath);
-    }
-    result->crc = os64_crc32_end(crc);
-    os64_gzip_destroy(decoder);
-    return status;
-}
 
 // The name a URL suggests for the thing it points at: the last path segment,
 // query dropped. A path ending in '/' names a directory, and the web has
@@ -1239,158 +1024,6 @@ static bool url_basename(const http_url_t *url, char *out, size_t cap)
     return true;
 }
 
-// Explicit proxies use absolute-form HTTP requests. The HTTPS helper
-// terminates TLS itself, so its cleartext leg is disclosed even with -q.
-// Without a selected proxy, HTTPS uses libtls directly. Scheme-specific
-// environment variables keep HTTP and HTTPS routes independently selectable.
-typedef struct {
-    bool     inUse;
-    char     host[HTTP_HOST_MAX];
-    uint16_t port;
-} proxy_t;
-
-// ASCII case folding for one byte. A host out of http_url_parse is already
-// lowercased (a DNS name is case-insensitive by definition); a `$no_proxy`
-// entry is whatever somebody typed, so only that side needs folding.
-static char lower_ascii(char c)
-{
-    return (c >= 'A' && c <= 'Z') ? (char)(c + ('a' - 'A')) : c;
-}
-
-// A proxy setting's value, in either spelling people actually use: the full
-// URL everyone writes ("http://host:8888/") and the bare "host:port" that
-// gets typed in a hurry. A value that is neither is refused BY NAME rather
-// than silently bypassed: an explicit route must not change without notice.
-static bool proxy_take(const char *value, const char *variable, proxy_t *out)
-{
-    http_url_t url;
-    http_url_result_t rc = http_url_parse(value, &url);
-
-    if (rc == HTTP_URL_OK)
-    {
-        if (!os64_streq(url.scheme, "http"))
-        {
-            os64_hprintf(OS64_STDERR,
-                         "os64get: $%s is %s, and the road TO a proxy is the plain one"
-                         " — encrypted proxy connections are not supported\n", variable, url.scheme);
-            return false;
-        }
-        os64_strcopy(out->host, sizeof(out->host), url.host);
-        out->port = url.port;
-        out->inUse = true;
-        return true;
-    }
-
-    if (rc != HTTP_URL_NOT_A_URL)
-    {
-        os64_hprintf(OS64_STDERR, "os64get: $%s is not a proxy address (%s): %s\n",
-                     variable, http_url_reason(rc), value);
-        return false;
-    }
-
-    // "host:port", or a bare "host" meaning the customary 8080.
-    const char *colon = NULL;
-    for (const char *p = value; *p != '\0'; p++)
-        if (*p == ':')
-            colon = p;
-
-    size_t hostLen = colon != NULL ? (size_t)(colon - value) : os64_strlen(value);
-    if (hostLen == 0 || hostLen >= sizeof(out->host))
-    {
-        os64_hprintf(OS64_STDERR, "os64get: $%s names no usable host: %s\n", variable, value);
-        return false;
-    }
-    for (size_t i = 0; i < hostLen; i++)
-        out->host[i] = value[i];
-    out->host[hostLen] = '\0';
-
-    out->port = 8080;
-    if (colon != NULL)
-    {
-        uint64_t port = 0;
-        if (!os64_parse_u64(colon + 1, &port) || port == 0 || port > 65535)
-        {
-            os64_hprintf(OS64_STDERR, "os64get: $%s has no usable port: %s\n", variable, value);
-            return false;
-        }
-        out->port = (uint16_t)port;
-    }
-    out->inUse = true;
-    return true;
-}
-
-// `$no_proxy`: the hosts to reach DIRECTLY even when a proxy is set. Entries
-// are separated by commas or spaces; `*` means every host; a bare name
-// matches that host and anything under it, so "example.com" also covers
-// "www.example.com" but never "notexample.com", and a leading dot is accepted
-// because half the world writes ".example.com" for the same thing.
-//
-// THIS IS NOT DECORATION HERE, it is the difference between a working harness
-// and a baffling one. QEMU's guest reaches the host at 10.0.2.2, an address
-// that means nothing anywhere else — so a proxy running ON the host, asked to
-// fetch `http://10.0.2.2:8080/`, dials into the void and times out. Every
-// address that is only meaningful from where os64 is sitting has that shape.
-static bool no_proxy_covers(const char *host)
-{
-    const char *list = os64_getenv("no_proxy");
-    if (list == NULL || list[0] == '\0')
-        return false;
-
-    size_t hostLen = os64_strlen(host);
-    const char *p = list;
-    while (*p != '\0')
-    {
-        while (*p == ',' || *p == ' ' || *p == '\t')
-            p++;
-        const char *start = p;
-        while (*p != '\0' && *p != ',' && *p != ' ' && *p != '\t')
-            p++;
-
-        size_t len = (size_t)(p - start);
-        if (len == 0)
-            continue;
-        if (len == 1 && start[0] == '*')
-            return true;
-        if (start[0] == '.')
-        {
-            start++;
-            len--;
-        }
-        if (len == 0 || len > hostLen)
-            continue;
-
-        // Match the whole host, or a dot-bounded tail of it. The dot is what
-        // keeps "example.com" from covering "notexample.com".
-        const char *tail = host + (hostLen - len);
-        if (len != hostLen && tail[-1] != '.')
-            continue;
-
-        size_t i = 0;
-        while (i < len && tail[i] == lower_ascii(start[i]))
-            i++;
-        if (i == len)
-            return true;
-    }
-    return false;
-}
-
-// Select the scheme-specific proxy, with no fallback between variables.
-// no_proxy bypasses an explicitly configured route for matching hosts.
-static bool proxy_for(const http_url_t *url, proxy_t *out)
-{
-    out->inUse = false;
-
-    const char *variable = os64_streq(url->scheme, "https") ? "https_proxy" : "http_proxy";
-    const char *value = os64_getenv(variable);
-    if (value == NULL || value[0] == '\0')
-        return true;
-
-    if (no_proxy_covers(url->host))
-        return true;
-
-    return proxy_take(value, variable, out);
-}
-
 // A DEST names a place on THIS machine, so an operand shaped like a URL in
 // that slot is somebody meaning "fetch this" and being understood as "write
 // it there". Refuse rather than obey: os64 paths are '/'-separated, so
@@ -1419,14 +1052,13 @@ static bool dest_is_a_url(const char *dest)
 // announced, every hop is judged by the same rules the typed address was,
 // and the file's name is settled before the first one (see fetch_url).
 //
-// ONE FUNCTION DECIDES. The loop that follows a redirect and the sentence
-// that explains an unfollowed one read the same verdict out of the same
-// call, because two pieces of code answering "is this followable" separately
-// is how a program ends up explaining a refusal it did not make. http.c
-// carries the scar from the last time one rule was spelled twice in this
-// program: a field name judged by two rules let the malformed LONG form
-// through while the short one was refused, and chunk markers were published
-// as a file.
+// THE JUDGING IS libfetch's (LIBFETCH.md: what a Location points at and
+// which hops are safe to follow are policy about the WIRE, the same for
+// every fetcher on the machine). What is here is os64get's SAY: the hop
+// callback narrates each followed hop, and the sentences below explain the
+// ones the library stopped at, reading the library's verdict rather than
+// re-deciding it — two pieces of code answering "is this followable"
+// separately is how a program ends up explaining a refusal it did not make.
 
 // HOW FAR A FETCH IS WILLING TO BE SENT. Five is RFC 2068 §10.3's own
 // recommendation from 1997, and the number matters far less than the fact
@@ -1436,191 +1068,69 @@ static bool dest_is_a_url(const char *dest)
 // address it stopped at, so the trail can be picked up by hand.
 #define URL_REDIRECT_MAX 5
 
-// WHICH REDIRECTS ARE FOLLOWED, and why the famous distinction between them
-// does not arise here. 301/302 and 307/308 differ only in what a client may
-// do to the METHOD: the older pair were so widely implemented as "retry it
-// as a GET" that the newer pair had to be invented to mean "and keep the
-// method you had". os64get only ever sends GET, so all four say the same
-// thing to it — and 303 (See Other), whose entire meaning is "GET this other
-// thing instead", says it too.
-//
-// The 3xx codes deliberately NOT here:
-//   300 Multiple Choices — a list for a person to pick from; its Location is
-//       a hint, and choosing on somebody's behalf is not a fetcher's job.
-//   304 Not Modified — an answer to a conditional request os64get never makes.
-//   305 Use Proxy — a stranger telling this machine to route its traffic
-//       through a machine of the stranger's choosing. Every browser dropped
-//       it for that reason; so does this.
-static bool redirect_is_followed(int32_t status)
-{
-    return status == 301 || status == 302 || status == 303 ||
-           status == 307 || status == 308;
-}
-
-typedef enum {
-    HOP_FOLLOW = 0,   // a whole address, and a road from here to it
-    HOP_NONE,         // a redirect that does not say where to
-    HOP_TOO_LONG,     // the address it spells is longer than this will hold
-    HOP_UNUSABLE,     // it spells something that is not a usable address
-    HOP_SCHEME,       // an address of a kind os64get does not fetch
-    HOP_DOWNGRADE,    // an HTTPS origin redirected to unencrypted HTTP
-    HOP_PROXY,        // the proxy setting that would carry it is unusable
-    HOP_SELF          // it points back at the address that just answered
-} hop_t;
-
-typedef struct {
-    hop_t             verdict;
-    char              whole[HTTP_URL_TEXT_MAX];   // the address, spelled out
-    http_url_t        target;
-    http_url_result_t parse;    // HOP_UNUSABLE: what the parser objected to
-    proxy_t           proxy;    // HOP_FOLLOW: who carries the next hop
-} redirect_t;
-
-// The same place, twice. Compared by the PIECES rather than the spelling,
-// because the parse has already folded the host's case and filled in the
-// scheme's default port — so `http://HOST/x` and `http://host:80/x` are one
-// address here, exactly as they are on the wire.
-static bool same_address(const http_url_t *a, const http_url_t *b)
-{
-    return a->port == b->port &&
-           os64_streq(a->scheme, b->scheme) &&
-           os64_streq(a->host, b->host) &&
-           os64_streq(a->path, b->path);
-}
-
-// THE WHOLE ADDRESS FIRST, AND EVERY QUESTION IS ASKED OF THAT. A Location
-// may be root-relative (`/login`), scheme-relative (`//cdn.example/x`) or
-// relative to the page (`index.html`), and none of those parses as a URL on
-// its own — so a judgement made on the raw header judged an empty host,
-// asked the proxy policy about nothing, and let a malformed relative path
-// through to be offered as a command os64get itself would refuse. Resolve,
-// then parse, then decide. (Codex review round 6, 2026-09-03.)
-static void redirect_read(const http_url_t *from, const char *location, redirect_t *out)
-{
-    os64_memset(out, 0, sizeof(*out));
-
-    if (location[0] == '\0')
-    {
-        out->verdict = HOP_NONE;
-        return;
-    }
-    if (!http_url_absolute(from, location, out->whole, sizeof(out->whole)))
-    {
-        out->verdict = HOP_TOO_LONG;
-        return;
-    }
-
-    out->parse = http_url_parse(out->whole, &out->target);
-    if (out->parse == HTTP_URL_SCHEME || out->parse == HTTP_URL_NOT_A_URL)
-    {
-        // HTTP_URL_NOT_A_URL does not mean here what it means on the command
-        // line. What resolution hands back is either `scheme://...` or a
-        // reference that named its own scheme and was copied through
-        // untouched, so a refusal at this point is the second kind —
-        // `mailto:`, `data:`, `tel:` — an address of a sort this program
-        // does not fetch, rather than a bare word meant for the valet.
-        out->verdict = HOP_SCHEME;
-        return;
-    }
-    if (out->parse != HTTP_URL_OK)
-    {
-        out->verdict = HOP_UNUSABLE;
-        return;
-    }
-
-    // A REDIRECT TO THE ADDRESS THAT JUST ANSWERED is a server that has lost
-    // its place, and the hop limit would eventually say so — five requests
-    // later, in words about counting rather than about what happened.
-    if (same_address(from, &out->target))
-    {
-        out->verdict = HOP_SELF;
-        return;
-    }
-
-    if (os64_streq(from->scheme, "https") && os64_streq(out->target.scheme, "http"))
-    {
-        out->verdict = HOP_DOWNGRADE;
-        return;
-    }
-
-    // THE PROXY ASKED ABOUT IS THE TARGET'S, NOT THIS FETCH'S. They are
-    // different questions and the scheme decides each one separately — a
-    // redirect from http to https is carried by $https_proxy no matter what
-    // carried the request that produced it. Passing the current fetch's proxy
-    // in here looked obviously right and was obviously wrong the first time a
-    // plain-HTTP page redirected to https with $https_proxy set: the answer
-    // said "out of reach" about an address one hop away.
-    if (!proxy_for(&out->target, &out->proxy))
-    {
-        out->verdict = HOP_PROXY;
-        return;
-    }
-
-    out->verdict = HOP_FOLLOW;
-}
-
-// The redirect in words, for the ones this fetch will not follow. Every
+// The redirect in words, for the ones the library will not follow. Every
 // sentence names the ADDRESS: somebody told "cannot follow that" and not
 // told where "that" was has to go and read the headers themselves, which is
 // the position they were in before they had a fetcher.
-static void redirect_explain(const redirect_t *hop)
+static void redirect_explain(const os64_fetch_hop_t *hop)
 {
-    switch (hop->verdict)
+    switch (hop->kind)
     {
-    case HOP_FOLLOW:
+    case OS64_FETCH_HOP_WHOLE:
         return;
-    case HOP_NONE:
+    case OS64_FETCH_HOP_NONE:
         os64_hprintf(OS64_STDERR, "os64get: ...and does not say where to\n");
         return;
-    case HOP_TOO_LONG:
+    case OS64_FETCH_HOP_TOO_LONG:
         os64_hprintf(OS64_STDERR, "os64get: ...and the address it points at is longer"
                                   " than os64get will hold\n");
         return;
-    case HOP_UNUSABLE:
+    case OS64_FETCH_HOP_UNUSABLE:
         os64_hprintf(OS64_STDERR, "os64get: it points at %s, which is not a usable"
-                                  " address — %s\n", hop->whole, http_url_reason(hop->parse));
+                                  " address — %s\n", hop->whole, os64_url_reason(hop->parse));
         return;
-    case HOP_SCHEME:
+    case OS64_FETCH_HOP_SCHEME:
         os64_hprintf(OS64_STDERR, "os64get: it points at %s, and os64get fetches http"
                                   " and https addresses\n", hop->whole);
         return;
-    case HOP_DOWNGRADE:
+    case OS64_FETCH_HOP_DOWNGRADE:
         os64_hprintf(OS64_STDERR,
                      "os64get: refusing HTTPS-to-HTTP downgrade to %s — the target is unencrypted.\n",
                      hop->whole);
         return;
-    case HOP_PROXY:
+    case OS64_FETCH_HOP_PROXY:
         os64_hprintf(OS64_STDERR, "os64get: it points at %s, and the proxy setting that"
-                                  " would carry it is unusable (above)\n", hop->whole);
+                                  " would carry it is unusable: %s\n", hop->whole, hop->why);
         return;
-    case HOP_SELF:
+    case OS64_FETCH_HOP_SELF:
         os64_hprintf(OS64_STDERR, "os64get: it points back at %s, the address that just"
                                   " answered — the server is going in a circle\n", hop->whole);
         return;
     }
 }
 
-// A 3xx that is not one of the five. Each of them means something a fetch
-// cannot act on by itself, and naming which is the difference between "the
-// server said no" and "the server said something os64get chose not to obey".
+// A 3xx that is not one of the five the library follows. Each of them means
+// something a fetch cannot act on by itself, and naming which is the
+// difference between "the server said no" and "the server said something
+// os64get chose not to obey".
 //
 // THESE EARN GET_REFUSED, NOT GET_REDIRECT, and the split is about what
 // happened rather than about the first digit: none of them SENT this fetch
 // anywhere. The server answered with a list, or with an instruction about
 // routing, and that is its final word on the page — the same shape as a 404.
 // GET_REDIRECT is for a road that was taken and did not arrive.
-static void redirect_unfollowed(const http_response_t *reply)
+static void redirect_unfollowed(const os64_fetch_head_t *head)
 {
     const char *why;
-    switch (reply->status)
+    switch (head->status)
     {
     case 300: why = "a list of choices is for a person to pick from";                 break;
     case 304: why = "nothing was asked conditionally, so 'not modified' answers nothing"; break;
     case 305: why = "'use this proxy' is a stranger choosing this machine's route";   break;
     default:  why = "os64get does not know what that one means";                      break;
     }
-    if (reply->location[0] != '\0')
-        os64_hprintf(OS64_STDERR, "os64get: it names %s, and %s\n", reply->location, why);
+    if (head->has_location && head->location[0] != '\0')
+        os64_hprintf(OS64_STDERR, "os64get: it names %s, and %s\n", head->location, why);
     else
         os64_hprintf(OS64_STDERR, "os64get: %s\n", why);
 }
@@ -1645,272 +1155,190 @@ static void print_by_hand(const char *whole)
 }
 
 // The server's own words for its own decision, or ours saying it had none.
-static const char *reply_reason(const http_response_t *reply)
+static const char *reply_reason(const char *reason)
 {
-    return reply->reason[0] != '\0' ? reply->reason : "(no reason given)";
+    return reason[0] != '\0' ? reason : "(no reason given)";
 }
 
-// One conversation with the world: the connection, the stream reading it,
-// and the head that came back. They are held together because a redirect
-// throws all three away and starts another, and the body that finally
-// arrives has to be read from the LAST one. The stream holds a pointer to
-// `io`, so one of these is initialised where it lives and never copied.
+// What os64get says while the library works: the hop callback and the
+// cancel predicate, and what they need to remember.
 typedef struct {
-    url_io_t        io;
-    http_stream_t   stream;
-    http_response_t reply;
-    http_url_t      answered;    // the address that served the body
-} url_reply_t;
+    bool  quiet;
+    bool  toldAboutTls;
+    const char *say;                        // the address to quote in a complaint
+    const char *firstScheme;                // the typed address's scheme, for its proxy notice
+    char  last[OS64_FETCH_URL_MAX];         // the last hop's address, `say` past the first
+} narration_t;
 
-// Ask, and keep asking wherever the answers point, until an answer is the
-// thing itself. On GET_OK the connection is open and positioned at the first
-// byte of the body and `answered` names who served it; on anything else the
-// connection is closed and the reason has been printed.
+// THE PROXY NOTICE IS NOT BEHIND -q, deliberately, and the precedent is this
+// program's own: warn_if_server_has_no_lots prints regardless, because a
+// warning you silenced along with the progress is a warning you will not
+// see on the run that mattered. What the reader needs is different for the
+// two schemes — an http fetch through a proxy was never encrypted and the
+// proxy is merely another hop, while an https fetch through one LOOKS like
+// the encrypted thing it is not.
 //
-// `urlText` is what the PERSON typed and is what the first hop's complaints
-// quote — a complaint about a URL should quote the URL, not a reassembled
-// version differing in some way the reader then has to account for. Every
-// hop after that quotes the address os64get went to instead, since that is
-// the one the answer came from and the one nobody has seen yet.
-static int url_ask_with_trust(url_reply_t *answer, const http_url_t *start, const char *urlText,
-                   const proxy_t *startProxy, bool quiet, os64_tls_trust **trust)
+// The long version is printed ONCE, at the first https hop that needs it:
+// what it warns about is true of the whole fetch, and a trail of redirects
+// would otherwise repeat three lines of prose at every step until the
+// warning became the thing you scroll past.
+static void proxy_notice(narration_t *n, const char *scheme, const char *host, uint16_t port)
 {
-    http_url_t  current = *start;
-    proxy_t     proxy   = *startProxy;
-    char        currentText[HTTP_URL_TEXT_MAX];
-    const char *say = urlText;
-    bool        toldAboutTls = false;
-    int         hops = 0;
-
-    for (;;)
+    if (os64_streq(scheme, "https") && !n->toldAboutTls)
     {
-        if (install_cancelled()) return GET_CANCELLED;
-        // THE PROXY NOTICE IS NOT BEHIND -q, deliberately, and the precedent
-        // is this program's own: warn_if_server_has_no_lots prints
-        // regardless, because a warning you silenced along with the progress
-        // is a warning you will not see on the run that mattered. What the
-        // reader needs is different for the two schemes — an http fetch
-        // through a proxy was never encrypted and the proxy is merely
-        // another hop, while an https fetch through one LOOKS like the
-        // encrypted thing it is not.
-        //
-        // The long version is printed ONCE, at the first https hop that
-        // needs it: what it warns about is true of the whole fetch, and a
-        // trail of redirects would otherwise repeat three lines of prose at
-        // every step until the warning became the thing you scroll past.
-        if (proxy.inUse)
+        os64_hprintf(OS64_STDERR,
+                     "os64get: via the proxy at %s:%u, which TERMINATES the TLS — it holds this"
+                     " page in the clear, and the leg from here to it is plain text."
+                     " This is not end-to-end encryption.\n", host, (unsigned)port);
+        n->toldAboutTls = true;
+    }
+    else
+        os64_hprintf(OS64_STDERR, "os64get: via the proxy at %s:%u\n", host, (unsigned)port);
+}
+
+// EVERY HOP IS ANNOUNCED, because the bytes are about to come from a machine
+// whose name nobody typed. It is narration and not a warning, so -q silences
+// it — unlike the proxy notice, which is a warning and does not go quiet.
+// The verdict is always the library's: os64get has no opinion a script
+// should not share.
+static os64_fetch_verdict_t narrate_hop(void *ctx, const os64_fetch_hop_t *hop)
+{
+    narration_t *n = ctx;
+    // The TYPED address's own carrier is only visible here, on the first
+    // hop away from it: the final head names its own carrier, and a fetch
+    // that was proxied for its first leg and then sent somewhere direct
+    // would otherwise never say the first leg was in the clear.
+    if (hop->number == 1 && hop->from_via_proxy)
+        proxy_notice(n, n->firstScheme, hop->from_proxy_host, hop->from_proxy_port);
+    if (hop->kind == OS64_FETCH_HOP_WHOLE && hop->number <= URL_REDIRECT_MAX)
+    {
+        if (!n->quiet)
+            os64_hprintf(OS64_STDERR, "os64get: %ld %s -> %s\n", (long)hop->status,
+                         reply_reason(hop->reason), hop->whole);
+        os64_strcopy(n->last, sizeof(n->last), hop->whole);
+        n->say = n->last;
+        if (hop->via_proxy)
+            proxy_notice(n, hop->target.scheme, hop->proxy_host, hop->proxy_port);
+    }
+    return OS64_FETCH_HOP_DEFAULT;
+}
+
+static bool fetch_cancelled(void *ctx)
+{
+    (void)ctx;
+    return install_cancelled();
+}
+
+// What open's outcome means to os64get: the exit code, and the sentence. The
+// codes are the ones this program has always answered with (OS64GET.md's
+// table is a contract with every script written against it); the sentences
+// are the library's where the library knows more, and os64get's where the
+// answer is about this machine.
+static int open_verdict(os64_fetch_t *f, narration_t *n, const char *urlText)
+{
+    const os64_fetch_detail_t *d = os64_fetch_detail(f);
+    os64_fetch_status_t st = os64_fetch_status(f);
+    switch (st)
+    {
+    case OS64_FETCH_OK:
+        return GET_OK;
+    case OS64_FETCH_INTERRUPTED:
+        return GET_CANCELLED;
+    case OS64_FETCH_BAD_URL:
+    case OS64_FETCH_UNSUPPORTED_SCHEME:
+        os64_hprintf(OS64_STDERR, "os64get: %s — %s\n", urlText, os64_fetch_reason(f));
+        return GET_BAD_URL;
+    case OS64_FETCH_PROXY_BAD:
+        // A PROXY SETTING THIS PROGRAM CANNOT READ IS THIS MACHINE'S DEFECT,
+        // not the server's, and GET_USAGE says so.
+        os64_hprintf(OS64_STDERR, "os64get: %s\n", os64_fetch_reason(f));
+        return GET_USAGE;
+    case OS64_FETCH_DIAL_FAILED:
+        os64_hprintf(OS64_STDERR, "os64get: %s\n", os64_fetch_reason(f));
+        // At the FIRST hop this is the address that was typed, and 3 says
+        // so. Past it, a SERVER that cannot be reached is one another server
+        // chose, and a script must be able to tell those apart: the road
+        // did not arrive, which is what 15 means (Codex review of PR #60).
+        // A PROXY that cannot be reached is neither — it is this machine's
+        // own setting, the same defect at whichever hop it is noticed, and
+        // it keeps the answer the first hop gives.
+        return (d->dial_hop > 0 && !d->dial_was_proxy) ? GET_REDIRECT : GET_DIAL_FAILED;
+    case OS64_FETCH_TLS_FAILED:
+        os64_hprintf(OS64_STDERR, "os64get: %s\n", os64_fetch_reason(f));
+        if (!d->store_failed &&
+            (d->tls == OS64_TLS_BAD_ARGUMENT || d->tls == OS64_TLS_UNSUPPORTED))
+            os64_hprintf(OS64_STDERR,
+                "os64get: check HTTPS target '%s': TLS requires a supported DNS name; IP literals are not supported\n",
+                d->dial_host);
+        return GET_TLS_FAILED;
+    case OS64_FETCH_REQUEST_FAILED:
+        os64_hprintf(OS64_STDERR, "os64get: %s\n", os64_fetch_reason(f));
+        return GET_REQUEST_FAILED;
+    case OS64_FETCH_BAD_HEAD:
+    case OS64_FETCH_SILENT:
+        os64_hprintf(OS64_STDERR, "os64get: %s — %s\n", n->say, os64_fetch_reason(f));
+        return GET_BAD_HEADER;
+    case OS64_FETCH_UNSUPPORTED:
+    {
+        // THE SERVER'S VERDICT OUTRANKS THE ENVELOPE'S. A 404 whose body is
+        // coded in something nothing here decodes is still a 404 — the
+        // refusal is the server's, and a script reading 5 must keep reading
+        // 5 (the pre-libfetch order judged the status before the framing;
+        // Codex, PR #92 rd2). The head is readable whenever the library got
+        // as far as the body's framing.
+        const os64_fetch_head_t *head = os64_fetch_head(f);
+        if (head != NULL && head->status != 200)
         {
-            if (os64_streq(current.scheme, "https") && !toldAboutTls)
-            {
-                os64_hprintf(OS64_STDERR,
-                             "os64get: via the proxy at %s:%u, which TERMINATES the TLS — it holds this"
-                             " page in the clear, and the leg from here to it is plain text."
-                             " This is not end-to-end encryption.\n",
-                             proxy.host, (unsigned)proxy.port);
-                toldAboutTls = true;
-            }
-            else
-            {
-                os64_hprintf(OS64_STDERR, "os64get: via the proxy at %s:%u\n",
-                             proxy.host, (unsigned)proxy.port);
-            }
-        }
-
-        bool encrypted = os64_streq(current.scheme, "https") && !proxy.inUse;
-        if (encrypted && !*trust)
-        {
-            os64_tls_store_report_t report;
-            os64_tls_store_status_t loaded = os64_tls_trust_reload(trust, &report);
-            if (install_cancelled()) return GET_CANCELLED;
-            if (loaded != OS64_TLS_STORE_OK)
-            {
-                os64_hprintf(OS64_STDERR,
-                             "os64get: TLS trust %s (%s: %s, line %lu, policy %u)\n",
-                             os64_tls_store_status_name(loaded),
-                             report.config_stage ? "config" : "bundle",
-                             report.config_stage ? report.config_path : report.bundle_path,
-                             (unsigned long)report.detail.line, (unsigned)report.detail.policy_reason);
-                return GET_TLS_FAILED;
-            }
-        }
-
-        // ── Dial: the proxy if there is one, the origin if not ──────────
-        // The CONNECTION goes to whoever is answering; the ADDRESS stays in
-        // the request line. That split is the whole of proxying.
-        const char *peerHost = proxy.inUse ? proxy.host : current.host;
-        uint16_t    peerPort = proxy.inUse ? proxy.port : current.port;
-
-        char dialstring[GET_DIAL_MAX];
-        if (!build_dialstring(dialstring, sizeof(dialstring), peerHost, peerPort))
-            return GET_USAGE;
-
-        int64_t conn = os64_dial(dialstring);
-        if (conn < 0)
-        {
-            os64_hprintf(OS64_STDERR, "os64get: cannot reach %s%s:%u — %s\n",
-                         proxy.inUse ? "the proxy at " : "", peerHost,
-                         (unsigned)peerPort, os64_dial_reason(conn));
-            // At the FIRST hop this is the address that was typed, and 3
-            // says so. Past it, a SERVER that cannot be reached is one
-            // another server chose, and a script must be able to tell those
-            // apart: the road did not arrive, which is what 15 means (Codex
-            // review of PR #60). A PROXY that cannot be reached is neither —
-            // it is this machine's own setting, the same defect at whichever
-            // hop it is noticed, and it keeps the answer the first hop gives.
-            return (hops > 0 && !proxy.inUse) ? GET_REDIRECT : GET_DIAL_FAILED;
-        }
-
-        const os64_tls_name_t alpn = {"http/1.1", 8};
-        os64_tls_config_t config = {
-            .hostname = {current.host, os64_strlen(current.host)},
-            .alpn = &alpn, .alpn_count = 1, .trust = *trust
-        };
-        if (!url_io_open(&answer->io, (int32_t)conn, encrypted ? &config : NULL))
-        {
-            url_io_report(&answer->io);
-            if (answer->io.error.status == OS64_TLS_BAD_ARGUMENT ||
-                answer->io.error.status == OS64_TLS_UNSUPPORTED)
-                os64_hprintf(OS64_STDERR,
-                    "os64get: check HTTPS target '%s': TLS requires a supported DNS name; IP literals are not supported\n",
-                    current.host);
-            return install_cancelled() ? GET_CANCELLED : GET_TLS_FAILED;
-        }
-
-        // ── Ask ─────────────────────────────────────────────────────────
-        char request[HTTP_LINE_MAX];
-        if (!http_request(request, sizeof(request), &current, proxy.inUse))
-        {
-            os64_hprintf(OS64_STDERR, "os64get: the request does not fit — the path is too long\n");
-            url_io_close(&answer->io, false);
-            return GET_REQUEST_FAILED;
-        }
-        size_t reqlen = os64_strlen(request);
-        if (!url_io_write(&answer->io, request, reqlen))
-        {
-            os64_hprintf(OS64_STDERR, "os64get: could not send the request\n");
-            url_io_report(&answer->io);
-            url_io_close(&answer->io, false);
-            return install_cancelled() ? GET_CANCELLED : GET_REQUEST_FAILED;
-        }
-
-        // ── The reply's head ────────────────────────────────────────────
-        http_stream_init(&answer->stream, url_io_read, &answer->io);
-
-        http_head_result_t hrc = http_head_read(&answer->stream, &answer->reply);
-        if (hrc != HTTP_HEAD_OK)
-        {
-            if (hrc == HTTP_HEAD_SOURCE && answer->io.silent)
-                os64_hprintf(OS64_STDERR, "os64get: %s — the server went silent for %u seconds"
-                             " before the reply was whole\n", say, URL_IDLE_MS / 1000);
-            else
-                os64_hprintf(OS64_STDERR, "os64get: %s — %s\n", say, http_head_reason(hrc));
-            url_io_close(&answer->io, false);
-            url_io_report(&answer->io);
-            if (install_cancelled()) return GET_CANCELLED;
-            // A framing header too long to read, or a 101 that hands the
-            // connection to another protocol, is not a MALFORMED reply — it
-            // is a legal one this program cannot honestly act on, the same
-            // answer the coding refusals give, reached a different way, and
-            // it earns the same exit code so a script cannot tell them apart
-            // by accident.
-            return (hrc == HTTP_HEAD_FRAMING || hrc == HTTP_HEAD_SWITCHED)
-                       ? GET_UNSUPPORTED : GET_BAD_HEADER;
-        }
-
-        // A final authenticated prefix can accompany a terminal TLS error.
-        // Check it before acting on headers, including redirect destinations.
-        if (!url_io_complete(&answer->io, true))
-        {
-            url_io_report(&answer->io);
-            url_io_close(&answer->io, false);
-            return install_cancelled() ? GET_CANCELLED : GET_BAD_HEADER;
-        }
-
-        if (redirect_is_followed(answer->reply.status))
-        {
-            // The redirect's own body is a courtesy page for a browser to
-            // display, and it goes with the connection: keep-alive is not
-            // spoken here, so the next hop is a fresh dial whatever is left
-            // unread on this one.
-            url_io_close(&answer->io, false);
-
-            redirect_t hop;
-            redirect_read(&current, answer->reply.location, &hop);
-            if (hop.verdict != HOP_FOLLOW)
-            {
-                os64_hprintf(OS64_STDERR, "os64get: %s — %ld %s\n", say,
-                             (long)answer->reply.status, reply_reason(&answer->reply));
-                redirect_explain(&hop);
-                if (hop.verdict == HOP_DOWNGRADE) print_by_hand(hop.whole);
-                // A PROXY SETTING THIS PROGRAM CANNOT READ IS THE SAME
-                // DEFECT WHEREVER IT IS NOTICED. A typed https address
-                // refuses the whole command with GET_USAGE before dialling
-                // anything; a setting that only the second hop needed is no
-                // different in kind, and answering "the redirect failed"
-                // would send the reader to the server for a fault that is
-                // in the environment.
-                return hop.verdict == HOP_PROXY ? GET_USAGE : GET_REDIRECT;
-            }
-            if (++hops > URL_REDIRECT_MAX)
-            {
-                os64_hprintf(OS64_STDERR,
-                             "os64get: %s — sent somewhere else %d times and still going;"
-                             " os64get stops here\n", urlText, URL_REDIRECT_MAX);
-                print_by_hand(hop.whole);
-                return GET_REDIRECT;
-            }
-
-            // EVERY HOP IS ANNOUNCED, because the bytes are about to come
-            // from a machine whose name nobody typed. It is narration and
-            // not a warning, so -q silences it — unlike the proxy notice
-            // above, which is a warning and does not go quiet.
-            if (!quiet)
-                os64_hprintf(OS64_STDERR, "os64get: %ld %s -> %s\n", (long)answer->reply.status,
-                             reply_reason(&answer->reply), hop.whole);
-
-            current = hop.target;
-            proxy   = hop.proxy;
-            os64_strcopy(currentText, sizeof(currentText), hop.whole);
-            say = currentText;
-            continue;
-        }
-
-        if (answer->reply.status != 200)
-        {
-            // The server's own words for its own decision. A 404 is a
-            // refusal in the same sense the valet's "NO" is, and gets the
-            // same exit code.
-            os64_hprintf(OS64_STDERR, "os64get: %s — %ld %s\n", say,
-                         (long)answer->reply.status, reply_reason(&answer->reply));
-            if (answer->reply.status >= 300 && answer->reply.status < 400)
-                redirect_unfollowed(&answer->reply);
-            url_io_close(&answer->io, false);
+            os64_hprintf(OS64_STDERR, "os64get: %s — %ld %s\n", n->say,
+                         (long)head->status, reply_reason(head->reason));
+            if (head->status >= 300 && head->status < 400)
+                redirect_unfollowed(head);
             return GET_REFUSED;
         }
-
-        answer->answered = current;
-        return GET_OK;
+        // A framing header too long to read, or a 101 that hands the
+        // connection to another protocol, or a framing or coding nothing
+        // here undoes: not a MALFORMED reply but a legal one this program
+        // cannot honestly act on, and it earns one exit code however it was
+        // reached so a script cannot tell them apart by accident.
+        os64_hprintf(OS64_STDERR, "os64get: %s — %s — nothing written\n", n->say,
+                     os64_fetch_reason(f));
+        return GET_UNSUPPORTED;
     }
-}
-
-static int url_ask(url_reply_t *answer, const http_url_t *start, const char *urlText,
-                   const proxy_t *startProxy, bool quiet)
-{
-    os64_tls_trust *trust = NULL;
-    int result = url_ask_with_trust(answer, start, urlText, startProxy, quiet, &trust);
-    os64_tls_trust_free(trust);
-    if (install_cancelled()) {
-        if (result == GET_OK) url_io_close(&answer->io, false);
-        return GET_CANCELLED;
+    case OS64_FETCH_REDIRECT_STOPPED:
+    {
+        const os64_fetch_head_t *head = os64_fetch_head(f);
+        os64_hprintf(OS64_STDERR, "os64get: %s — %ld %s\n", n->say,
+                     (long)head->status, reply_reason(head->reason));
+        redirect_explain(&d->hop);
+        if (d->hop.kind == OS64_FETCH_HOP_DOWNGRADE) print_by_hand(d->hop.whole);
+        // A proxy setting that only the second hop needed is the same defect
+        // as one the typed address needed, and answering "the redirect
+        // failed" would send the reader to the server for a fault that is
+        // in the environment.
+        return d->hop.kind == OS64_FETCH_HOP_PROXY ? GET_USAGE : GET_REDIRECT;
     }
-    return result;
+    case OS64_FETCH_TOO_MANY_HOPS:
+        os64_hprintf(OS64_STDERR,
+                     "os64get: %s — sent somewhere else %d times and still going;"
+                     " os64get stops here\n", urlText, URL_REDIRECT_MAX);
+        print_by_hand(d->hop.whole);
+        return GET_REDIRECT;
+    case OS64_FETCH_NO_MEMORY:
+        os64_hprintf(OS64_STDERR, "os64get: out of memory\n");
+        return GET_WRITE_FAILED;
+    default:
+        os64_hprintf(OS64_STDERR, "os64get: %s — %s\n", n->say, os64_fetch_reason(f));
+        return GET_BAD_HEADER;
+    }
 }
 
 // Fetch one URL into one file, staged and published exactly as the valet's
 // files are. `urlText` is what the person typed, kept for the diagnostics —
 // a complaint about a URL should quote the URL, not a reassembled version of
-// it that differs in some way the reader then has to account for.
-static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *proxy,
+// it that differs in some way the reader then has to account for. Every hop
+// after the first quotes the address os64get went to instead, since that is
+// the one the answer came from and the one nobody has seen yet.
+static int fetch_url(const http_url_t *url, const char *urlText,
                      const char *destOverride, bool quiet)
 {
     // WHERE THE FILE GOES, and the basename is only needed for some of the
@@ -1980,107 +1408,174 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
     if (!install_plan(&stages[0], dest)) return GET_WRITE_FAILED;
     const char *partPath = stages[0].part;
 
-    url_reply_t answer;
-    int rc = url_ask(&answer, url, urlText, proxy, quiet);
+    // ── Ask, and keep asking wherever the answers point ─────────────────
+    // The library dials, follows, and reads the head; os64get narrates the
+    // hops, answers Ctrl+C, and says what the outcome means.
+    narration_t narr = { .quiet = quiet, .say = urlText, .firstScheme = url->scheme };
+    os64_fetch_options_t opt = {
+        .user_agent = "os64get/1 (os64)",
+        .max_hops   = URL_REDIRECT_MAX,
+        .on_hop     = narrate_hop,
+        .cancelled  = fetch_cancelled,
+        .ctx        = &narr,
+    };
+    os64_fetch_t *f = os64_fetch_open(urlText, &opt);
+    if (f == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: out of memory\n");
+        return GET_WRITE_FAILED;
+    }
+    int rc = open_verdict(f, &narr, urlText);
     if (rc != GET_OK)
-        return rc;
-
-    // A FRAMING OR A CODING THIS PROGRAM CANNOT UNDO MUST NEVER BECOME A
-    // FILE. What would land is the envelope wearing the letter's name, and a
-    // `.html` full of chunk lengths or of a compression nothing here speaks
-    // is worse than no file at all, because it looks like a successful
-    // download. The rule outlives the list: whatever this program learns to
-    // read moves out of these branches by being handled (chunked and gzip
-    // did), and whatever it has not learned is refused by name.
-    http_body_t body;
-    if (!http_body_open(&body, &answer.stream, &answer.reply))
     {
-        os64_hprintf(OS64_STDERR,
-                     "os64get: the reply is framed as '%s', which os64get does not read"
-                     " — nothing written\n", answer.reply.transferEncoding);
-        url_io_close(&answer.io, false);
-        return GET_UNSUPPORTED;
+        os64_fetch_close(f);
+        return install_cancelled() ? GET_CANCELLED : rc;
     }
-    // gzip is the one content coding this program undoes (BROWSER.md 3(d)),
-    // and it is undone in receive_url_body, DOWNSTREAM of the framing: a
-    // gzip body may arrive chunked, and the two envelopes come off in the
-    // order they went on.
-    bool gzipEncoded = os64_streq(answer.reply.contentEncoding, "gzip");
-    if (answer.reply.contentEncoding[0] != '\0' &&
-        !os64_streq(answer.reply.contentEncoding, "identity") && !gzipEncoded)
+    const os64_fetch_head_t *head = os64_fetch_head(f);
+    if (head->via_proxy && head->hops == 0)
+        proxy_notice(&narr, head->url.scheme, head->proxy_host, head->proxy_port);
+
+    if (head->status != 200)
     {
-        os64_hprintf(OS64_STDERR,
-                     "os64get: the reply is encoded as '%s', which os64get does not decode"
-                     " — nothing written\n", answer.reply.contentEncoding);
-        url_io_close(&answer.io, false);
-        return GET_UNSUPPORTED;
+        // The server's own words for its own decision. A 404 is a
+        // refusal in the same sense the valet's "NO" is, and gets the
+        // same exit code.
+        os64_hprintf(OS64_STDERR, "os64get: %s — %ld %s\n", narr.say,
+                     (long)head->status, reply_reason(head->reason));
+        if (head->status >= 300 && head->status < 400)
+            redirect_unfollowed(head);
+        os64_fetch_close(f);
+        return GET_REFUSED;
     }
 
-    // ── Receive into managed scratch ────────────────────────────────────────
+    // ── Receive into managed scratch ────────────────────────────────────
+    // The bytes land here and only a validated body reaches the real name;
+    // on ext2 that final replacement is atomic. The library has already
+    // refused any framing or coding it cannot undo (its UNSUPPORTED, above),
+    // so what arrives is the file — identity, or gzip already undone — and
+    // stays provisional until the framing says WHOLE and, for gzip, every
+    // member trailer verified.
     int64_t out = os64_open(partPath, "w");
     if (out < 0)
     {
         os64_hprintf(OS64_STDERR, "os64get: cannot create %s\n", partPath);
-        url_io_close(&answer.io, false);
+        os64_fetch_close(f);
+        return GET_WRITE_FAILED;
+    }
+    uint8_t *buf = (uint8_t *)os64_malloc(GET_CHUNK);
+    if (buf == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: out of memory\n");
+        os64_close((int32_t)out);
+        os64_fetch_close(f);
         return GET_WRITE_FAILED;
     }
 
-    // HTTP removes framing before gzip decoding. For a close-framed HTTPS
-    // body, the source requires authenticated TLS closure; plain HTTP has no
-    // equivalent way to distinguish a complete response from a raw FIN.
-    // Content-Length counts encoded body bytes, not decoded output.
-    url_body_result_t staged;
-    int status = receive_url_body(&body, &answer.reply, (int32_t)out, partPath,
-                                  name, quiet, gzipEncoded, &staged);
+    const bool gzipEncoded = os64_streq(head->encoding, "gzip");
+    const char *unit = gzipEncoded ? " wire" : "";
+    const os64_fetch_progress_t *progress = os64_fetch_progress(f);
+    uint32_t crc = os64_crc32_begin();
+    uint64_t produced = 0;
+    uint64_t lastTick = 0;
+    int status = GET_OK;
+
+    // FILL THE BUFFER BEFORE WRITING IT, for the disk's sake: a read answers
+    // with what has ARRIVED — a segment, or a scheduler pass's worth — and
+    // writing each of those hands ext2 a block or two at a time. Progress
+    // ticks from INSIDE the fill, every 4KB of arrival, so a slow link reads
+    // as slow rather than as hung. (The first libfetch draft wrote each
+    // read as it came and lost this — Codex, PR #92.)
+    bool over = false;
+    while (!over)
+    {
+        size_t filled = 0;
+        while (filled < GET_CHUNK)
+        {
+            int64_t n = os64_fetch_read(f, buf + filled, GET_CHUNK - filled);
+            if (n <= 0) { over = true; break; }
+            filled += (size_t)n;
+
+            // The meter counts ARRIVAL, which for gzip is the wire's bytes
+            // even though the file being staged grows faster.
+            if (!quiet && (progress->wire / 4096 != lastTick ||
+                           (head->has_length && progress->wire == head->length)))
+            {
+                lastTick = progress->wire / 4096;
+                if (head->has_length)
+                    os64_printf("\r%s: %lu/%lu%s bytes", name,
+                                (unsigned long)progress->wire, (unsigned long)head->length, unit);
+                else
+                    os64_printf("\r%s: %lu%s bytes", name, (unsigned long)progress->wire, unit);
+            }
+        }
+        if (filled != 0 && os64_write((int32_t)out, buf, filled) != (int64_t)filled)
+        {
+            os64_hprintf(OS64_STDERR, "os64get: write to %s failed (disk full?)\n", partPath);
+            status = GET_WRITE_FAILED;
+            break;
+        }
+        crc = os64_crc32_update(crc, buf, filled);
+        produced += filled;
+    }
     if (!quiet)
     {
         // The meter's last tick: a length-framed body printed it when the
         // count came due, but a chunked or close-delimited body learns its
         // total only now, and a meter that stops at the last 4KB boundary
         // reads as a transfer that stopped short.
-        if (!answer.reply.hasLength)
-            os64_printf("\r%s: %lu%s bytes", name, (unsigned long)staged.received,
-                        gzipEncoded ? " wire" : "");
+        if (!head->has_length)
+            os64_printf("\r%s: %lu%s bytes", name, (unsigned long)progress->wire, unit);
         os64_printf("\n");
     }
 
-    if (status == GET_OK && body.result != HTTP_BODY_DONE)
+    if (status == GET_OK)
     {
-        switch (body.result)
+        switch (os64_fetch_status(f))
         {
-        case HTTP_BODY_BROKE:
-            if (answer.io.silent)
-                os64_hprintf(OS64_STDERR, "os64get: the server went silent for %u seconds"
-                             " after %lu bytes\n", URL_IDLE_MS / 1000,
-                             (unsigned long)staged.received);
-            else
-                os64_hprintf(OS64_STDERR, "os64get: the connection broke after %lu bytes\n",
-                             (unsigned long)staged.received);
+        case OS64_FETCH_OK:
+            break;
+        case OS64_FETCH_INTERRUPTED:
+            status = GET_CANCELLED;
+            break;
+        case OS64_FETCH_CUT:
+        case OS64_FETCH_BROKE:
+        case OS64_FETCH_SILENT:
+            os64_hprintf(OS64_STDERR, "os64get: %s\n", os64_fetch_reason(f));
             status = GET_SHORT;
             break;
-        case HTTP_BODY_CUT:
-            if (answer.reply.hasLength)
-                os64_hprintf(OS64_STDERR, "os64get: the reply ended after %lu of %lu bytes\n",
-                             (unsigned long)staged.received,
-                             (unsigned long)answer.reply.length);
-            else
-                os64_hprintf(OS64_STDERR, "os64get: the reply ended after %lu bytes,"
-                             " before its last chunk\n", (unsigned long)staged.received);
-            status = GET_SHORT;
-            break;
-        default:
+        case OS64_FETCH_BAD_HEAD:
             // The server's chunk framing stopped being HTTP: "that was not
             // speech", the same verdict a broken head earns.
-            os64_hprintf(OS64_STDERR, "os64get: after %lu bytes, %s\n",
-                         (unsigned long)staged.received, http_body_reason(body.result));
+            os64_hprintf(OS64_STDERR, "os64get: %s\n", os64_fetch_reason(f));
             status = GET_BAD_HEADER;
+            break;
+        case OS64_FETCH_CORRUPT:
+            os64_hprintf(OS64_STDERR, "os64get: %s — %s NOT written\n",
+                         os64_fetch_reason(f), partPath);
+            status = GET_CORRUPT;
+            break;
+        case OS64_FETCH_LIMIT:
+        case OS64_FETCH_UNSUPPORTED:
+            os64_hprintf(OS64_STDERR, "os64get: %s — %s NOT written\n",
+                         os64_fetch_reason(f), partPath);
+            status = GET_UNSUPPORTED;
+            break;
+        case OS64_FETCH_NO_MEMORY:
+            os64_hprintf(OS64_STDERR, "os64get: out of memory — %s NOT written\n", partPath);
+            status = GET_WRITE_FAILED;
+            break;
+        default:
+            os64_hprintf(OS64_STDERR, "os64get: %s\n", os64_fetch_reason(f));
+            status = GET_SHORT;
             break;
         }
     }
-    if (status == GET_OK && !url_io_complete(&answer.io,
-            body.framing != HTTP_FRAMING_CLOSE)) status = GET_SHORT;
-    if (status != GET_OK) url_io_report(&answer.io);
-    url_io_close(&answer.io, status == GET_OK);
+    uint64_t wireBytes = progress->wire;
+    char servedBy[OS64_URL_HOST_MAX];
+    os64_strcopy(servedBy, sizeof(servedBy), head->url.host);
+    os64_fetch_close(f);
+    os64_free(buf);
+
     if (status == GET_OK && os64_sync((int32_t)out) < 0)
     {
         os64_hprintf(OS64_STDERR, "os64get: could not commit %s; %s NOT written\n",
@@ -2088,11 +1583,9 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
         status = GET_WRITE_FAILED;
     }
     if (os64_close((int32_t)out) < 0) status = GET_WRITE_FAILED;
-    if (install_cancelled()) status = GET_CANCELLED;
-
     if (install_cancelled()) return GET_CANCELLED;
     if (status != GET_OK) return status;
-    install_received(&stages[0], staged.produced, staged.crc);
+    install_received(&stages[0], produced, os64_crc32_end(crc));
     const bool downloaded[] = { true };
     rc = publish_run(downloaded, 1, quiet, 0, false);
     if (rc != GET_OK) return rc;
@@ -2104,11 +1597,9 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
     {
         if (gzipEncoded)
             os64_printf("%s: %lu bytes (gzip, %lu on the wire) from %s\n", dest,
-                        (unsigned long)staged.produced, (unsigned long)staged.received,
-                        answer.answered.host);
+                        (unsigned long)produced, (unsigned long)wireBytes, servedBy);
         else
-            os64_printf("%s: %lu bytes from %s\n", dest, (unsigned long)staged.produced,
-                        answer.answered.host);
+            os64_printf("%s: %lu bytes from %s\n", dest, (unsigned long)produced, servedBy);
     }
     return GET_OK;
 }
@@ -2206,11 +1697,8 @@ static int get_main(int argc, char **argv)
             return GET_BAD_URL;
         }
 
-        proxy_t proxy;
-        if (!proxy_for(&url, &proxy))
-            return GET_USAGE;
-
         // Validate the local destination before starting a network request.
+        // (The proxy settings are the library's to read, at open.)
         const char *dest = count >= 2 ? operands[1] : NULL;
         if (dest_is_a_url(dest))
         {
@@ -2221,7 +1709,7 @@ static int get_main(int argc, char **argv)
                          dest, dest, operands[0]);
             return GET_USAGE;
         }
-        return fetch_url(&url, operands[0], &proxy, dest, quiet);
+        return fetch_url(&url, operands[0], dest, quiet);
     }
 
     if (!all && count < 2)

@@ -3,6 +3,7 @@
 import argparse
 import datetime as dt
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -110,6 +111,22 @@ def corpus(work):
         anchors.append((name, blob(data), reason))
 
     case("valid", success=True, upstream=1)
+    # The issue #93 chain must authenticate with the shipped USERTrust anchor,
+    # whether or not the server includes the redundant cross-sign and SHA-1 root.
+    def pem_certs(path):
+        return [x509.load_pem_x509_certificate(p).public_bytes(serialization.Encoding.DER)
+                for p in re.findall(rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+                                    path.read_bytes(), re.S)]
+    public_chain = pem_certs(BASE / "test/public-certs/princeton-chain.pem")
+    public_roots = pem_certs(ROOT / "trust/mozilla/2026-08-13/install/roots.pem")
+    public_root = next(c for c in public_roots if x509.load_der_x509_certificate(c).subject ==
+                       x509.load_der_x509_certificate(public_chain[2]).subject)
+    for count in (2, 3, 4):
+        case(f"princeton-chain-{count}", chain=public_chain[:count], trust=public_root,
+             host="mirror.math.princeton.edu", success=True, upstream=1,
+             days=719528 + (dt.date(2026, 9, 11) - dt.date(1970, 1, 1)).days)
+    case("princeton-untrusted", chain=public_chain, host="mirror.math.princeton.edu", reason="SIGNATURE", upstream=0,
+         days=719528 + (dt.date(2026, 9, 11) - dt.date(1970, 1, 1)).days)
     for kind, name in [(6, "oid"), (13, "relative-oid")]:
         for label, value, valid in [
                 ("zero", b"\0", True), ("single-octet", b"\x7f", True),
@@ -124,7 +141,7 @@ def corpus(work):
              reason="DER", upstream=1)
         bad_root = replace_extension(root, root_key, 14, tlv(kind, b"\x81"))
         anchor(f"anchor-{name}-unterminated", bad_root, "DER")
-        case(f"trailing-{name}-unterminated", chain=[leaf, intermediate, bad_root], reason="DER", upstream=1)
+        case(f"trailing-{name}-unterminated", chain=[leaf, intermediate, bad_root], reason="OK", upstream=1, success=True)
     for kind in (0, 8, 11, 14, 15, 29):
         for constructed in (False, True):
             value = tlv(kind | (32 if constructed else 0), b"")
@@ -132,7 +149,7 @@ def corpus(work):
                  replace_extension(leaf, int_key, 14, value), reason="DER", upstream=1)
         bad_root = replace_extension(root, root_key, 14, tlv(kind, b""))
         anchor(f"anchor-unsupported-universal-{kind}", bad_root, "DER")
-        case(f"trailing-unsupported-universal-{kind}", chain=[leaf, intermediate, bad_root], reason="DER", upstream=1)
+        case(f"trailing-unsupported-universal-{kind}", chain=[leaf, intermediate, bad_root], reason="OK", upstream=1, success=True)
     for label, value, valid in [("zero", b"\0", True), ("one", b"\x01", True),
                                 ("sign-padding", b"\0\x80", True), ("negative", b"\xff", True),
                                 ("empty", b"", False), ("redundant-zero", b"\0\x01", False),
@@ -141,7 +158,7 @@ def corpus(work):
              success=valid, reason="OK" if valid else "DER", upstream=1)
     bad_enum_root = replace_extension(root, root_key, 14, tlv(10, b"\0\x01"))
     anchor("anchor-enumerated-padding", bad_enum_root, "DER")
-    case("trailing-enumerated-padding", chain=[leaf, intermediate, bad_enum_root], reason="DER", upstream=1)
+    case("trailing-enumerated-padding", chain=[leaf, intermediate, bad_enum_root], reason="OK", upstream=1, success=True)
     ca_basic = tlv(0x30, b"\x01\x01\xff")
     for critical in (False, True):
         ca_cert = replace_extension(intermediate, root_key, 19, ca_basic, critical)
@@ -150,7 +167,7 @@ def corpus(work):
         ca_root = replace_extension(root, root_key, 19, ca_basic, critical)
         anchor(f"anchor-basic-critical-{critical}", ca_root, "OK" if critical else "CA")
         case(f"trailing-basic-critical-{critical}", chain=[leaf, intermediate, ca_root],
-             success=critical, reason="OK" if critical else "CA", upstream=1)
+             success=True, reason="OK", upstream=1)
         case(f"leaf-basic-critical-{critical}", replace_extension(leaf, int_key, 19, b"\x30\0", critical),
              success=True, upstream=1)
     # Metadata is skipped by BearSSL, but its inner DER still crosses our gate.
@@ -162,7 +179,7 @@ def corpus(work):
         case("metadata-" + label, replace_extension(leaf, int_key, 14, value), reason="DER", upstream=1)
     constructed_root = replace_extension(root, root_key, 14, bytes.fromhex("2303030100"))
     anchor("anchor-constructed-bits", constructed_root, "DER")
-    case("trailing-constructed-bits", chain=[leaf, intermediate, constructed_root], reason="DER", upstream=1)
+    case("trailing-constructed-bits", chain=[leaf, intermediate, constructed_root], reason="OK", upstream=1, success=True)
     for label, value in [("bits", bytes.fromhex("030100")), ("octets", bytes.fromhex("0400"))]:
         case("metadata-primitive-" + label, replace_extension(leaf, int_key, 14, value), success=True, upstream=1)
     def with_serial(cert, signer, value):
@@ -184,10 +201,10 @@ def corpus(work):
     anchor("anchor-serial-negative", negative_root, "OK")
     case("trusted-serial-negative", trust=negative_root, success=True, upstream=1)
     case("serial-negative-intermediate", chain=[leaf, with_serial(intermediate, root_key, b"\xff")], reason="DER")
-    case("serial-negative-trailing", chain=[leaf, intermediate, negative_root], reason="DER", upstream=1)
+    case("serial-negative-trailing", chain=[leaf, intermediate, negative_root], reason="OK", upstream=1, success=True)
     for label, value in [("empty", b""), ("nonminimal-zero", b"\0\0"), ("nonminimal-negative", b"\xff\xff")]:
         anchor("anchor-serial-" + label, with_serial(root, root_key, value), "DER")
-    case("serial-zero-trailing", chain=[leaf, intermediate, zero_root], reason="DER", upstream=1)
+    case("serial-zero-trailing", chain=[leaf, intermediate, zero_root], reason="OK", upstream=1, success=True)
     for label, value in [("one", b"\x01"), ("sign-padding", b"\0\x80")]:
         case("serial-" + label, with_serial(leaf, int_key, value), success=True, upstream=1)
     for label, value in [("negative", b"\xff"), ("empty", b""), ("nonminimal-zero", b"\0\0")]:
@@ -235,7 +252,7 @@ def corpus(work):
         ordered_root = with_name(with_name(root, root_key, 3, ordered), root_key, 5, ordered)
         ordered_issuer = with_name(intermediate, root_key, 3, ordered)
         case(f"rdn-trailing-after-trust-descending-{backwards}", chain=[leaf, ordered_issuer, changed_root],
-             trust=ordered_root, success=not backwards, reason="DER" if backwards else "OK", upstream=1)
+             trust=ordered_root, success=True, reason="OK", upstream=1)
     # Separate RDNs are a SEQUENCE, so their relative order must not be sorted.
     reverse_rdns = b"".join(tlv(0x31, value) for value in ordered[::-1])
     sequence_name = mutate(leaf, int_key, lambda t: t.__setitem__(5, (0x30, reverse_rdns)))
@@ -263,7 +280,7 @@ def corpus(work):
         changed_root = signature_value(root, lambda v: padded_signature(v, index))
         anchor(f"anchor-ecdsa-redundant-zero-{index}", changed_root, "OK")
         case(f"trusted-ecdsa-redundant-zero-{index}", trust=changed_root, success=True, upstream=1)
-        case(f"ecdsa-trailing-root-padding-{index}", chain=[leaf, intermediate, changed_root], reason="DER", upstream=1)
+        case(f"ecdsa-trailing-root-padding-{index}", chain=[leaf, intermediate, changed_root], reason="OK", upstream=1, success=True)
     case("ecdsa-long-form-short-length", signature_value(leaf, lambda v: b"\x30\x81" + v[1:]), reason="DER", upstream=1)
     for label, value in [("empty-sequence", b"\x30\0"), ("zero-r", b"\x30\x06\x02\x01\0\x02\x01\x01"),
                          ("zero-s", b"\x30\x06\x02\x01\x01\x02\x01\0"),
@@ -306,22 +323,31 @@ def corpus(work):
     case("dn-bad-matching-issuer", chain=[bad_leaf, bad_int], reason="DER", upstream=1)
     bad_root = string_name(string_name(root, root_key, 3, *bad_name), root_key, 5, *bad_name)
     anchor("anchor-bad-string", bad_root, "DER")
-    case("dn-bad-trailing-root", chain=[leaf, intermediate, bad_root], reason="DER", upstream=1)
+    case("dn-bad-trailing-root", chain=[leaf, intermediate, bad_root], reason="OK", upstream=1, success=True)
     case("included-root", chain=[leaf, intermediate, root], success=True)
     other_key = ec.generate_private_key(ec.SECP256R1())
     unrelated = certificate(other_key, "unrelated root", None, other_key, ca=True, san=None, eku=False)
-    case("tail-unrelated-ca", chain=[leaf, intermediate, unrelated], upstream=1)
+    case("tail-unrelated-ca", chain=[leaf, intermediate, unrelated], upstream=1, success=True)
     same_name_other_key = certificate(other_key, "policy root", None, other_key, ca=True, san=None, eku=False)
-    case("tail-same-name-wrong-key", chain=[leaf, intermediate, same_name_other_key], upstream=1)
+    case("tail-same-name-wrong-key", chain=[leaf, intermediate, same_name_other_key], upstream=1, success=True)
     wrongly_signed = mutate(root, other_key, lambda t: None)
-    case("tail-bad-adjacent-signature", chain=[leaf, intermediate, wrongly_signed, root], upstream=1)
+    case("tail-bad-adjacent-signature", chain=[leaf, intermediate, wrongly_signed, root], upstream=1, success=True)
     case("tail-repeated-valid-root", chain=[leaf, intermediate, root, root], success=True, upstream=1)
     cross_root = certificate(root_key, "policy root", x509.load_der_x509_certificate(unrelated).subject,
                              other_key, ca=True, san=None, eku=False)
     case("tail-cross-signed", chain=[leaf, intermediate, cross_root, unrelated], success=True, upstream=1)
     expired_upper = certificate(other_key, "unrelated root", None, other_key, ca=True, san=None, eku=False,
                                 dates=(dt.datetime(2020, 1, 1), dt.datetime(2021, 1, 1)))
-    case("tail-expired-ca", chain=[leaf, intermediate, cross_root, expired_upper], upstream=1)
+    # Issuer names alone never establish the trusted boundary.
+    case("path-same-name-wrong-anchor-key", chain=[leaf, intermediate, root],
+         trust=same_name_other_key, upstream=0)
+    expired_intermediate = certificate(int_key, "policy intermediate", root_name, root_key, ca=True, san=None,
+                                       dates=(dt.datetime(2020, 1, 1), dt.datetime(2021, 1, 1)))
+    case("path-expired-intermediate", chain=[leaf, expired_intermediate, root], upstream=0)
+    case("path-bad-intermediate-signature", chain=[leaf, mutate(intermediate, other_key, lambda t: None), root], upstream=0)
+    case("path-restriction-at-anchor-boundary", chain=[leaf, replace_extension(intermediate, root_key, 30, b"\x30\0"), root],
+         reason="EXTENSION", upstream=1)
+    case("tail-expired-ca", chain=[leaf, intermediate, cross_root, expired_upper], upstream=1, success=True)
     case("mixed-case-san", certificate(leaf_key, "ignored", int_name, int_key, san="EXAMPLE.TEST"), success=True)
     case("wildcard", certificate(leaf_key, "ignored", int_name, int_key, san="*.example.test"), host="www.example.test", success=True)
     wildcard = certificate(leaf_key, "ignored", int_name, int_key, san="*.example.test")
@@ -406,7 +432,7 @@ def corpus(work):
         case("san-unsupported-" + label, replace_extension(leaf, int_key, 17,
              tlv(0x30, dns_name + tlv(tag, encoded))), reason="SAN", upstream=1)
         restricted_root = replace_extension(root, root_key, 17, tlv(0x30, tlv(tag, b"")))
-        case("san-trailing-after-trust-" + label, chain=[leaf, intermediate, restricted_root], reason="SAN", upstream=1)
+        case("san-trailing-after-trust-" + label, chain=[leaf, intermediate, restricted_root], reason="OK", upstream=1, success=True)
         anchor("anchor-san-" + label, restricted_root, "SAN")
     for label, alternative in [("email", tlv(0x81, b"user@example.test")),
                                ("ip", tlv(0x87, bytes([127, 0, 0, 1]))),
@@ -440,10 +466,13 @@ def corpus(work):
     case("untrusted", chain=[leaf])
     corrupt = leaf[:-1] + bytes([leaf[-1] ^ 1])
     case("bad-signature", corrupt)
-    case("trailing-restriction-after-trust", chain=[leaf, intermediate, replace_extension(root, root_key, 30, b"\x30\0")], reason="EXTENSION", upstream=1)
-    case("trailing-malformed-after-trust", chain=[leaf, intermediate, root + b"\0"], reason="DER", upstream=1)
+    case("trailing-restriction-after-trust", chain=[leaf, intermediate, replace_extension(root, root_key, 30, b"\x30\0")], reason="OK", upstream=1, success=True)
+    case("trailing-malformed-after-trust", chain=[leaf, intermediate, root + b"\0"], reason="OK", upstream=1, success=True)
     case("chain-limit", chain=[leaf, intermediate] + [root] * 7, reason="LIMIT")
     case("chain-exact-limit", chain=[leaf, intermediate] + [root] * 6, success=True)
+    case("tail-certificate-limit", chain=[leaf, intermediate, b"\0" * 32769], reason="LIMIT", upstream=1)
+    case("tail-certificate-exact-limit", chain=[leaf, intermediate, b"\0" * 32768], success=True, upstream=1)
+    case("tail-empty-certificate", chain=[leaf, intermediate, b""], reason="DER", upstream=1)
     case("certificate-limit", cert=b"\0" * 32769, chain=[b"\0" * 32769], reason="LIMIT")
     for label, data in [("truncated", leaf[:-1]), ("trailing", leaf + b"\0"), ("indefinite", b"\x30\x80" + leaf[4:] + b"\0\0"),
                         ("nonminimal-length", b"\x30\x83\0" + leaf[2:])]:
@@ -501,7 +530,7 @@ def corpus(work):
     case("rsa-spki-absent-parameters", rsa_spki_parameters(rsa_leaf, int_key, b""), reason="DER", upstream=1)
     bad_rsa_root = rsa_spki_parameters(rsa_root, rsa_key, b"")
     anchor("anchor-rsa-spki-absent-parameters", bad_rsa_root, "DER")
-    case("tail-rsa-spki-absent-parameters", chain=[rsa_issued, bad_rsa_root], trust=rsa_root, reason="DER", upstream=1)
+    case("tail-rsa-spki-absent-parameters", chain=[rsa_issued, bad_rsa_root], trust=rsa_root, reason="OK", upstream=1, success=True)
     for code, digest in [(11, hashes.SHA256()), (12, hashes.SHA384()), (13, hashes.SHA512())]:
         for label, parameters, reason in [("absent", b"", "OK"), ("null", b"\x05\0", "OK"),
                                           ("octets", b"\x04\0", "SIGNATURE"),
@@ -553,7 +582,8 @@ def corpus(work):
     case("sha1-signature", tlv(0x30, join(outer)), reason="SIGNATURE")
 
     # Trust is the installed name/key; the anchor's self-signature hash and
-    # time choice are metadata. The same encodings in peers keep their policy.
+    # time choice are metadata. Certificates on the authenticated path retain
+    # the peer signature policy; redundant tails are outside that path.
     def sha1_root(cert):
         fields = split(split(cert)[0][1])
         tbs = split(fields[0][1])
@@ -566,7 +596,12 @@ def corpus(work):
     legacy_root = sha1_root(rsa_root)
     anchor("anchor-sha1", legacy_root, "OK")
     case("trusted-sha1-root", chain=[rsa_issued], trust=legacy_root, success=True)
-    case("peer-sha1-root", chain=[rsa_issued, legacy_root], trust=legacy_root, reason="SIGNATURE", upstream=1)
+    case("peer-sha1-root", chain=[rsa_issued, legacy_root], trust=legacy_root, reason="OK", upstream=1, success=True)
+    rsa_intermediate = certificate(int_key, "policy intermediate", x509.load_der_x509_certificate(rsa_root).subject,
+                                   rsa_key, ca=True, san=None, eku=False)
+    case("trusted-tail-sha1", chain=[leaf, rsa_intermediate, legacy_root], trust=legacy_root, success=True, upstream=1)
+    case("path-sha1-at-anchor-boundary", chain=[leaf, sha1_root(rsa_intermediate), legacy_root],
+         trust=legacy_root, reason="SIGNATURE", upstream=1)
     def generalized(tbs):
         values = split(tbs[4][1])
         values = [(24, b"20" + value) if tag == 23 else (tag, value) for tag, value in values]
@@ -574,7 +609,7 @@ def corpus(work):
     early_generalized = mutate(root, root_key, generalized)
     anchor("anchor-generalized-before-2050", early_generalized, "OK")
     case("trusted-generalized-before-2050", trust=early_generalized, success=True, upstream=1)
-    case("peer-generalized-before-2050", chain=[leaf, intermediate, early_generalized], reason="DER", upstream=1)
+    case("peer-generalized-before-2050", chain=[leaf, intermediate, early_generalized], reason="OK", upstream=1, success=True)
 
     # A large encoded DN reaches the aggregate anchor-byte limit before count.
     def large_name(tbs):

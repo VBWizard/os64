@@ -12,9 +12,17 @@ It verifies the requested hostname and certificate chain before sending HTTP,
 then uses the existing HTTP framing, gzip decoder and staged publication.
 Each redirect creates a new connection and validates the new origin.
 
-The connection implementation is private to `userland/apps/os64get`.
-Gopher's os64get status translation also recognizes TLS failures. No kernel changes,
-new syscalls or libfetch extraction are needed. Valet GET/LIST, replacement
+**Superseded in part on 2026-09-11 (LIBFETCH.md):** the connection
+implementation this slice built as os64get's private `url_io.c`, and the
+redirect and body machinery around it, moved into `/lib/libfetch.so` when
+the browser arc gave the fetch machinery a second customer. The names
+below are this slice's, kept as the record of what was built and why; the
+routing decisions and the acceptance results still hold, now for the
+library's code.
+
+The connection implementation was private to `userland/apps/os64get`.
+Gopher's os64get status translation also recognizes TLS failures. No kernel changes
+or new syscalls were needed. Valet GET/LIST, replacement
 backups, URL destination selection and filesystem publication stay with their
 existing owners. Public root installation is not part of this slice.
 
@@ -197,7 +205,7 @@ rebuilt os64get, Gopher, and changed libraries together using the normal deploym
 workflow. Host validation commands:
 
 ```sh
-bash tools/test_os64get_io_host.sh
+bash tools/test_fetch_transport_host.sh
 bash tools/test_os64get_host.sh
 ASAN_OPTIONS=detect_leaks=0 bash tools/test_http_host.sh
 ASAN_OPTIONS=detect_leaks=0 bash tools/test_gzip_host.sh

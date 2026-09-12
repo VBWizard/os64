@@ -75,7 +75,7 @@ CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
            $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include \
-           -I$(CURDIR)/libhtml/include -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libtls/include
+           -I$(CURDIR)/libhtml/include -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libtls/include -I$(CURDIR)/libfetch/include
 # -z noexecstack: bare-metal objects carry no .note.GNU-stack section (that
 # annotation is a Linux userspace convention), and without the flag ld warns
 # about one arbitrary object per link — noise with no meaning here, since
@@ -161,6 +161,15 @@ LIBPNG_SRCS := libpng/png.c
 LIBPNG_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBPNG_SRCS))
 LIBPNG_SO   := $(BIN)/libpng.so
 
+# libfetch is the fetch machinery every program that downloads shares
+# (LIBFETCH.md): the HTTP parser, the plain-or-TLS transport, the redirect
+# and proxy rules, gzip undone downstream of the framing. It records real
+# DT_NEEDED edges on libtls, libgzip and libos64; none of those knows a
+# URL exists.
+LIBFETCH_SRCS := libfetch/fetch.c libfetch/http.c libfetch/transport.c libfetch/proxy.c
+LIBFETCH_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBFETCH_SRCS))
+LIBFETCH_SO   := $(BIN)/libfetch.so
+
 # Shared-library code is position-independent; the apps are not. That is the
 # whole design (see kernel/include/shared_object.h): apps keep their fixed
 # per-app link bases — which is what lets a host debugger tell two running
@@ -168,6 +177,7 @@ LIBPNG_SO   := $(BIN)/libpng.so
 LIBOS64_CFLAGS := $(filter-out -fno-pic -fno-pie,$(CFLAGS)) -fPIC
 LIBGZIP_CFLAGS := $(LIBOS64_CFLAGS)
 LIBPNG_CFLAGS  := $(LIBOS64_CFLAGS)
+LIBFETCH_CFLAGS := $(LIBOS64_CFLAGS)
 
 # --hash-style=sysv: the kernel derives the dynamic symbol COUNT from
 #   DT_HASH's nchain word (there is no DT_SYMTABSZ in ELF), so a GNU-only
@@ -195,6 +205,7 @@ SHARED_LIB_LDFLAGS := -shared --hash-style=sysv -Bsymbolic-functions \
 LIBOS64_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libos64.so
 LIBGZIP_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libgzip.so
 LIBPNG_LDFLAGS  := $(SHARED_LIB_LDFLAGS) -soname libpng.so
+LIBFETCH_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libfetch.so
 
 # Each library's PRELINKED base, from the same assigner that places the apps
 # (--libs switches it to the shared-library window). Libraries are placed at
@@ -205,11 +216,12 @@ LIBPNG_LDFLAGS  := $(SHARED_LIB_LDFLAGS) -soname libpng.so
 # isolation would miss a hash collision and prelink two objects into the same
 # slot. app_bases.py sorts before probing, so adding a library gives the build
 # one deterministic map independent of link order.
-LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libhtml.so)
+LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so)
 LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
 LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
 LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
 LIBPNG_BASE    := $(patsubst libpng.so=%,%,$(filter libpng.so=%,$(LIB_BASE_PAIRS)))
+LIBFETCH_BASE  := $(patsubst libfetch.so=%,%,$(filter libfetch.so=%,$(LIB_BASE_PAIRS)))
 
 # more and less are two policies over one file-pager engine.  Keeping that
 # engine outside either app directory prevents the first useful slices from
@@ -233,8 +245,12 @@ TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
 
 # These programs consume the standalone gzip module. Keep the dependency
 # selective: linking libgzip into every app would turn an optional format
-# engine into part of the foundational runtime by accident.
-LIBGZIP_PROGRAMS := gzip gunzip gziptest os64get
+# engine into part of the foundational runtime by accident. (os64get is not
+# here: it names libfetch, which carries its own edges on libgzip and libtls.)
+LIBGZIP_PROGRAMS := gzip gunzip gziptest
+
+# Programs that download: they name libfetch and get its whole closure.
+LIBFETCH_PROGRAMS := os64get
 
 # pngtest directly checks the codec; gview and desktop use libimage.
 # libpng carries its own DT_NEEDED edge on
@@ -315,10 +331,10 @@ include libimage/shared.mk
 include libhtml/library.mk
 
 # Source membership and the population used for prelink placement live here.
-$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBHTML_SO): GNUmakefile
+$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO): GNUmakefile
 
 .PHONY: all
-all: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
+all: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
      $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
 
 $(BIN)/[: $(BIN)/test
@@ -361,6 +377,16 @@ $(LIBPNG_SO): $(LIBPNG_OBJS) $(LIBGZIP_SO) $(LIBOS64_SO) $(CURDIR)/link/lib.ld $
 	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBPNG_LDFLAGS) --no-as-needed \
 	      -o $@ $(LIBPNG_OBJS) $(LIBGZIP_SO) $(LIBOS64_SO)
 	@printf '  %-10s prelinked at %s\n' "libpng.so" "$(LIBPNG_BASE)"
+
+# libfetch calls all three directly: libtls for the encrypted transport,
+# libgzip for content coding, libos64 for everything else. --no-as-needed
+# records every edge even if a future optimizer hides a call from the linker.
+$(LIBFETCH_SO): $(LIBFETCH_OBJS) $(LIBTLS_SO) $(LIBGZIP_SO) $(LIBOS64_SO) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
+	@mkdir -p "$(BIN)"
+	$(LD) --defsym LIB_BASE=$(LIBFETCH_BASE) \
+	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBFETCH_LDFLAGS) --no-as-needed \
+	      -o $@ $(LIBFETCH_OBJS) $(LIBTLS_SO) $(LIBGZIP_SO) $(LIBOS64_SO)
+	@printf '  %-10s prelinked at %s\n' "libfetch.so" "$(LIBFETCH_BASE)"
 
 # The link rule, generated once per program — apps and fixtures alike: the
 # name appears in BOTH the directory and the filename, and a make pattern
@@ -410,7 +436,8 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest),$(LIBHTML_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
-                       $(if $(filter $(1),tlslibtest tlstransportprobe os64get),$(LIBTLS_SO)) \
+                       $(if $(filter $(1),$(LIBFETCH_PROGRAMS)),$(LIBFETCH_SO)) \
+                       $(if $(filter $(1),tlslibtest tlstransportprobe),$(LIBTLS_SO)) \
                        $(if $(filter $(1),bearssltest tlstrusttest tlsinputtest),$(BEARSSL_ARCHIVE))
 APP_BASE_STAMP_$(1) := $(OBJ)/$(2)/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
@@ -431,7 +458,7 @@ $(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
 # FIXTURES ARE IN HERE TOO, and that is the point of the line rather than an
 # afterthought: a fixture is the program you are most likely to be single-
 # stepping, because it is what you reach for when something is already broken.
-$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO)
+$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
 	@mkdir -p "$(BIN)"
 	@printf '# GENERATED by userland/GNUmakefile — do not edit.\n' > $@
 	@printf '# Every program at its own base, so GDB can hold all their symbols at once.\n' >> $@
@@ -455,8 +482,9 @@ $(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(addprefix $(B
 	@printf 'add-symbol-file %s\n' "$(LIBTLS_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBJPEG_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBIMAGE_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBFETCH_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBHTML_SO)" >> $@
-	@printf '# (symbols for %s + libos64.so + libgzip.so + libpng.so + libtls.so + libjpeg.so + libimage.so + libhtml.so)\n' "$(APPS) $(TESTS)" >> $@
+	@printf '# (symbols for %s + every shared library above)\n' "$(APPS) $(TESTS)" >> $@
 
 # Every .d gcc emitted for the runtime and each app — self-maintaining: each
 # compile regenerates its .d with the current include list, so it cannot drift.
@@ -464,7 +492,7 @@ $(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(addprefix $(B
 # per-app form covered only <name>.c.d, which would have left topMain.c.o
 # stale against topMain.h edits — the EXACT bug class this makefile's -MMD
 # comment block memorializes, sneaking back through a side door.
-HEADER_DEPS := $(LAUNCH_OBJS:.o=.d) $(LIBOS64_OBJS:.o=.d) $(LIBGZIP_OBJS:.o=.d) $(LIBPNG_OBJS:.o=.d) \
+HEADER_DEPS := $(LAUNCH_OBJS:.o=.d) $(LIBOS64_OBJS:.o=.d) $(LIBGZIP_OBJS:.o=.d) $(LIBPNG_OBJS:.o=.d) $(LIBFETCH_OBJS:.o=.d) \
                $(patsubst %.c,$(OBJ)/%.c.d,$(wildcard apps/*/*.c tests/*/*.c)) \
                $(PAGER_OBJ:.o=.d) $(HEX_BUFFER_OBJ:.o=.d)
 -include $(HEADER_DEPS)
