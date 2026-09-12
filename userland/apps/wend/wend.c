@@ -48,6 +48,14 @@
 // What the loader will actually render, said out loud: a server choosing
 // between representations should know that any text one will do, and a
 // server that would answer 406 to a narrower list should not.
+//
+// XHTML IS ACCEPTED AND PARSED AS HTML, which is a divergence and not an
+// oversight. There is no XML parser here, and the HTML tree builder reads
+// all but the constructs XML spells differently — a self-closing `<script/>`
+// ends where XML says and not where HTML does, so the text after it is
+// swallowed. Refusing the type outright would turn every XHTML page into
+// "that is not a page", which is worse for a reader than a rare page with a
+// swallowed tail. Booked in BROWSER.md.
 #define WEND_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
 
 #define WEND_HISTORY_MAX 64
@@ -743,9 +751,22 @@ static char *read_body(os64_fetch_t *f, size_t cap, size_t *len, const char *url
 // server that says nothing about a .txt file written in 1994 is not talking
 // about UTF-8. A label naming an encoding in neither family is booked in
 // BROWSER.md; it reads as windows-1252 rather than as a refusal.
+//
+// BUT A FILE MAY SAY IT ITSELF. The three bytes `EF BB BF` are a UTF-8 byte
+// order mark, put there to be read by whatever opens the file, and a server
+// that mentioned no charset has not contradicted them. Taken as
+// windows-1252 they draw as `ï»¿` and every accented character after them
+// breaks into pieces. The mark itself needs no skipping: the fold spells
+// U+FEFF as nothing.
 static bool charset_is_utf8(const char *charset)
 {
     return os64_streq_nocase(charset, "utf-8") || os64_streq_nocase(charset, "utf8");
+}
+
+static bool bytes_begin_utf8(const char *text, size_t len)
+{
+    return text && len >= 3 && (unsigned char)text[0] == 0xEF
+           && (unsigned char)text[1] == 0xBB && (unsigned char)text[2] == 0xBF;
 }
 
 // Fetch, parse and lay out one address. The view is built beside the one on
@@ -834,7 +855,9 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
         out->text = read_body(f, limits.max_bytes, &out->textlen, url, &whole);
         if (!whole)
             short_of_memory = true;
-        out->text_utf8 = charset_is_utf8(head->charset);
+        out->text_utf8 = head->charset[0] != '\0'
+                             ? charset_is_utf8(head->charset)
+                             : bytes_begin_utf8(out->text, out->textlen);
         if (!out->text) {
             status_set(" out of memory reading %s", url);
             os64_fetch_close(f);
@@ -1176,6 +1199,10 @@ static void form_send(view_t *v, int32_t index)
         case WEND_FORM_TOO_LONG:
             status_set(" what this form would send is longer than an address may be");
             return;
+        case WEND_FORM_BAD_ACTION:
+            status_set(" this form names a destination that is not an address"
+                       " this browser can resolve");
+            return;
         case WEND_FORM_OK:
             break;
     }
@@ -1239,7 +1266,10 @@ static void form_send_if_alone(view_t *v, int32_t index)
             continue;
         // A button is not something to answer: it is how you say you are
         // done, which is exactly what finishing the box already said. Nor is
-        // a box the page keeps fixed — there is nothing to do to it.
+        // a BOX the page keeps fixed — there is nothing to do to it. A tick
+        // carrying `readonly` is still something to answer, since the
+        // standard gives that word no meaning on one and the renderer
+        // records it only where it has some.
         if (p->spots[i].kind != WEND_SPOT_LINK && p->spots[i].kind != WEND_SPOT_SUBMIT
             && !p->spots[i].readonly)
             answers++;
@@ -1373,20 +1403,35 @@ static void check_toggle(view_t *v, int32_t index)
     edit_commit(v);
 }
 
+// A control's name, or "" when a page that ran out of memory partway never
+// got to store one.
+static const char *some_name(const wend_spot_t *spot)
+{
+    return spot->name ? spot->name : "";
+}
+
 // TICKING ONE OF A GROUP UNTICKS THE REST, which is what makes a radio a
-// radio: the group is every control of that kind sharing a name inside one
-// form.
+// radio: the group is every control of that kind sharing a NAME with one
+// form owner.
 static void radio_pick(view_t *v, int32_t index)
 {
     if (!edits_room(v))
         return;
     const wend_spot_t *picked = &v->page->spots[index];
+    // A RADIO WITH NO NAME IS IN NO GROUP, so picking it unticks nothing:
+    // two absent names are not the same name, and clearing every other
+    // nameless radio would put out dots the page had lit for reasons of its
+    // own. It sends nothing either way.
+    if (some_name(picked)[0] == '\0') {
+        v->edits[index].on = 1;
+        edit_commit(v);
+        return;
+    }
     for (int32_t i = 0; i < v->page->nspots; i++) {
         const wend_spot_t *other = &v->page->spots[i];
         if (other->kind != WEND_SPOT_RADIO || other->form != picked->form)
             continue;
-        if (!os64_streq(other->name ? other->name : "",
-                        picked->name ? picked->name : ""))
+        if (!os64_streq(some_name(other), some_name(picked)))
             continue;
         v->edits[i].on = (i == index) ? 1 : 0;
     }

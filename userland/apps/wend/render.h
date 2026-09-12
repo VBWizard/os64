@@ -117,6 +117,7 @@ typedef struct {
     // that as "no action given" sends the form to the form's destination
     // instead of to the page it is on.
     bool    has_action;
+    bool    bad_action;  // ...and it would not resolve; see wend_form_t
     bool    has_method;  // whether `post` below means anything
     bool    post;
     // SUBMIT: an image button, which does not send its value. What it sends
@@ -151,6 +152,11 @@ typedef struct {
     // belong to it, which is the one way form membership is not nesting.
     char *id;
     bool  post;
+    // The page NAMED a destination and it would not resolve — too long for
+    // an address, or not an address at all. Different from naming none: a
+    // form that names nothing means "the page I am on", and one whose stated
+    // destination cannot be represented must not quietly become that.
+    bool  bad_action;
     // WHERE THE FIRST SUBMIT CONTROL NOBODY CAN PRESS STOOD, as the number
     // of spots that existed when it was met; -1 when there is none. A
     // control inside a subtree the page marked `hidden` is drawn nowhere and
@@ -248,6 +254,7 @@ typedef enum {
     WEND_FORM_NONE,      // that control belongs to no form
     WEND_FORM_POST,      // it posts, and this browser asks only by address
     WEND_FORM_TOO_LONG,  // what it would send is longer than an address may be
+    WEND_FORM_BAD_ACTION,// the destination it names is not one that resolves
 } wend_form_result_t;
 
 // The address that activating `spot` asks for: the form's action with a

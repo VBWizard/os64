@@ -190,12 +190,25 @@ static bool buf_append(buf_t *b, const char *s, size_t n, uint8_t attrs, int32_t
 // ── The renderer's state ────────────────────────────────────────────────
 
 // A control that named its form by `id` rather than by sitting inside one,
-// waiting for the walk to finish so every form's name is known.
+// waiting for the walk to finish so every form's INDEX is known.
+typedef enum {
+    OWNER_SPOT = 0,      // index is into spots[]
+    OWNER_HIDDEN,        // index is into hidden[]
+    OWNER_SUBMIT_AWAY,   // index is how many spots stood before it
+} owner_kind_t;
+
 typedef struct {
     char   *id;
-    int32_t index;       // into spots[], or into hidden[] when `hidden`
-    bool    hidden;
+    int32_t index;
+    owner_kind_t what;
 } owner_t;
+
+// A form element and the `id` it answers to. The id points into the tree,
+// which outlives the render.
+typedef struct {
+    const char *id;
+    const os64_html_node_t *node;
+} named_form_t;
 
 typedef struct {
     wend_page_t *page;
@@ -224,6 +237,9 @@ typedef struct {
     int32_t disabled;
     owner_t *owners;            // controls that named their form by id
     int32_t nowners, ownercap;
+    named_form_t *named_forms;  // every form carrying an id, swept once
+    int32_t nnamed, namedcap;
+    bool    named_ready;
     // The element a radio's group is searched in: the form it is inside, or
     // the whole document when it is inside none. `radio_budget` is what a
     // page may spend this render on those searches.
@@ -640,6 +656,38 @@ static const char *reference_fragment(const char *href)
     return NULL;
 }
 
+// A FRAGMENT IS PERCENT-ENCODED ON ITS WAY INTO AN ADDRESS AND THE NAME IT
+// POINTS AT IS NOT. `id="section 2"` is written `href="#section%202"`,
+// because a space cannot travel in a URL, and comparing the two verbatim
+// finds nothing — which is every heading with a space or an accent in its
+// id. Decoded in place over BYTES, so a `%C3%A9` becomes the same UTF-8 the
+// `id` attribute carries. A `+` is NOT a space here: that is a form's
+// dialect, not a fragment's.
+static int32_t hex_digit(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static void fragment_unescape(char *s)
+{
+    size_t at = 0, put = 0;
+    while (s[at] != '\0') {
+        int32_t hi, lo;
+        if (s[at] == '%' && s[at + 1] != '\0'
+            && (hi = hex_digit(s[at + 1])) >= 0
+            && (lo = hex_digit(s[at + 2])) >= 0) {
+            s[put++] = (char)(hi * 16 + lo);
+            at += 3;
+            continue;
+        }
+        s[put++] = s[at++];
+    }
+    s[put] = '\0';
+}
+
 static int32_t link_add(render_t *r, const char *href)
 {
     wend_spot_t *spot = spot_new(r, WEND_SPOT_LINK);
@@ -658,6 +706,8 @@ static int32_t link_add(render_t *r, const char *href)
     const char *hash = reference_fragment(href);
     spot->url = dup_text(r, resolved);
     spot->fragment = dup_text(r, hash ? hash : "");
+    if (spot->fragment)
+        fragment_unescape(spot->fragment);
     spot->has_fragment = hash != NULL;
     return (spot->url && spot->fragment) ? r->page->nspots : 0;
 }
@@ -764,6 +814,7 @@ static bool attr_int(const os64_html_node_t *el, const char *name, int32_t *out)
 // that restarted at 1 would show numbers its own prose contradicts.
 typedef struct {
     bool    ordered;
+    bool    down;        // `<ol reversed>`: the count runs the other way
     int32_t next;        // the number the next item wears
 } list_t;
 
@@ -783,8 +834,12 @@ static void list_marker(render_t *r, list_t *list)
     size_t n = 0;
     if (list && list->ordered) {
         n = num_text(list->next, mark);
-        if (list->next < 0x7FFFFFFF)
+        if (list->down) {
+            if (list->next > -0x7FFFFFFF)
+                list->next--;
+        } else if (list->next < 0x7FFFFFFF) {
             list->next++;                // a list this long has other problems
+        }
         mark[n++] = '.';
         mark[n++] = ' ';
     } else {
@@ -1007,19 +1062,66 @@ static int32_t hidden_add(render_t *r, const char *name, const char *value)
     return p->nhidden;
 }
 
+// THE FORMS THAT CARRY AN `id`, and the id each answers to, collected in one
+// sweep the first time anything asks. A control may name its form by id from
+// anywhere on the page, and the walk needs to know which form it means
+// BEFORE it is over — a radio's group and an unreachable button's owner are
+// both decided while the control is being drawn. A page carries a handful of
+// forms, so the table is small and searching it is a handful of compares.
+// A form with no id is not in it: nothing can name one.
+static void forms_collect(render_t *r, const os64_html_node_t *n)
+{
+    for (const os64_html_node_t *c = n->first_child; c && !r->oom; c = c->next) {
+        if (c->kind != OS64_HTML_ELEMENT || c->ns != OS64_HTML_NS_HTML)
+            continue;
+        if (c->tag == OS64_HTML_TAG_FORM) {
+            const char *id = attr_value(c, "id");
+            if (id && id[0]) {
+                if (!reserve((void **)&r->named_forms, &r->namedcap,
+                             r->nnamed + 1, sizeof(*r->named_forms))) {
+                    r->oom = true;
+                    return;
+                }
+                r->named_forms[r->nnamed].id = id;
+                r->named_forms[r->nnamed].node = c;
+                r->nnamed++;
+            }
+        }
+        forms_collect(r, c);
+    }
+}
+
+// THE FORM A CONTROL BELONGS TO, as an element. Usually the one it sits
+// inside; where it names one by `id`, THAT one — and a name matching nothing
+// leaves it in NO form, which is the standard's answer and the safe one,
+// since submitting it with whichever form it happens to sit inside would
+// send somebody's value to an address the page did not name.
+static const os64_html_node_t *form_owner(render_t *r, const os64_html_node_t *n)
+{
+    const char *id = attr_value(n, "form");
+    if (!id)
+        return r->form_node;
+    if (!r->named_ready) {
+        r->named_ready = true;
+        if (r->root)
+            forms_collect(r, r->root);
+    }
+    for (int32_t i = 0; i < r->nnamed; i++)
+        if (os64_streq(r->named_forms[i].id, id))
+            return r->named_forms[i].node;
+    return NULL;
+}
+
 // WHICH FORM A CONTROL BELONGS TO IS USUALLY WHICH FORM IT IS INSIDE — and
-// once in a while it is not. A control may name a form by its `id` and be
-// written anywhere on the page, which is how a page puts a search box in a
-// masthead and its form in the footer. The form's `id` may not have been met
-// yet when the control is, so the claim is remembered and settled after the
-// walk, when every form on the page is known.
+// once in a while it is not. What the table above answers as an ELEMENT this
+// answers as an INDEX, which is what the page records; a form's index is
+// assigned when the walk reaches it, so a control naming a form the walk has
+// not met yet leaves its claim to be settled once the walk is over.
 //
-// A NAME THAT MATCHES NOTHING LEAVES THE CONTROL IN NO FORM AT ALL. That is
-// the standard's answer and the safe one: the page said which form this
-// belongs to, and quietly submitting it with whichever form it happens to sit
-// inside would send somebody's value to an address the page did not name.
+// A NAME THAT MATCHES NOTHING LEAVES THE CONTROL IN NO FORM AT ALL, for the
+// reason `form_owner` gives.
 static void owner_claim(render_t *r, const os64_html_node_t *n, int32_t index,
-                        bool hidden)
+                        owner_kind_t what)
 {
     const char *id = attr_value(n, "form");
     if (!id || index <= 0)
@@ -1031,7 +1133,7 @@ static void owner_claim(render_t *r, const os64_html_node_t *n, int32_t index,
     }
     r->owners[r->nowners].id = dup_text(r, id);
     r->owners[r->nowners].index = index - 1;
-    r->owners[r->nowners].hidden = hidden;
+    r->owners[r->nowners].what = what;
     if (r->owners[r->nowners].id)
         r->nowners++;
 }
@@ -1046,16 +1148,34 @@ static void owners_settle(render_t *r)
                 form = f + 1;
                 break;
             }
-        if (r->owners[i].hidden)
-            p->hidden[r->owners[i].index].form = form;
-        else
-            p->spots[r->owners[i].index].form = form;
+        switch (r->owners[i].what) {
+            case OWNER_HIDDEN:
+                p->hidden[r->owners[i].index].form = form;
+                break;
+            case OWNER_SPOT:
+                p->spots[r->owners[i].index].form = form;
+                break;
+            case OWNER_SUBMIT_AWAY:
+                // A submit control nobody can press, which is still its
+                // form's default button when it comes first. The index here
+                // is where it STOOD, not a spot.
+                if (form > 0 && (p->forms[form - 1].unreachable_submit < 0
+                                 || p->forms[form - 1].unreachable_submit
+                                        > r->owners[i].index))
+                    p->forms[form - 1].unreachable_submit = r->owners[i].index;
+                break;
+        }
     }
     for (int32_t i = 0; i < r->nowners; i++)
         os64_free(r->owners[i].id);
     os64_free(r->owners);
     r->owners = NULL;
     r->nowners = r->ownercap = 0;
+    // The form table goes with them. Its ids point INTO the tree and are not
+    // ours to free; the array holding them is.
+    os64_free(r->named_forms);
+    r->named_forms = NULL;
+    r->nnamed = r->namedcap = 0;
 }
 
 // TICKING ONE OF A GROUP UNTICKS THE REST, and a page that marks two of them
@@ -1069,12 +1189,13 @@ static void owners_settle(render_t *r)
 // the wire. So the group is searched for its last marked member and this
 // radio is on only if it IS that one.
 //
-// The group searched is the form's subtree, or the document when the control
-// is in no form — and a FORM inside that search is not descended into,
-// because a radio in one form and a radio in another are two groups however
-// their names match. A radio that names a different form with `form=<id>` is
-// grouped by where it SITS, which can only matter to a page that both does
-// that and marks two of one name.
+// A GROUP IS EVERY RADIO OF ONE NAME WITH ONE FORM OWNER, so the search is
+// of the whole DOCUMENT and each candidate is asked who owns it. Searching
+// only the enclosing form would be the same answer for a page that writes
+// its controls inside their forms, and the wrong one wherever a radio names
+// its owner by `id` — two root-level radios named `x` owned by `form=a` and
+// `form=b` are two groups, and cancelling one against the other drops a
+// value the page had chosen.
 //
 // DISABLED MEMBERS COUNT. The page marked them in order like any other, and
 // which one the group ends on is a question about the markup rather than
@@ -1082,19 +1203,21 @@ static void owners_settle(render_t *r)
 // showing its dot and sending nothing, which is what the page wrote.
 //
 // ONE SEARCH PER MARKED RADIO IS A PAGE'S LEVER ON THIS PROGRAM, so the
-// searching a whole render may do is BUDGETED. A form of N marked radios
-// costs N searches of the form, and a page well inside libhtml's own limits
-// can make that minutes of spinning in a program a person cannot interrupt
-// — 40,000 of them, a megabyte and a half of markup, ran past two minutes on
-// a host far faster than the guest. Past the budget a marked radio keeps the
-// page's own answer, which leaves the row and the wire AGREEING on what the
-// page wrote; and a form with that many controls is longer than an address
-// may be, so it was never going to be sent whatever this decided.
+// searching a whole render may do is BUDGETED. A page of N marked radios
+// costs N searches of it, and one well inside libhtml's own limits can make
+// that minutes of spinning in a program a person cannot interrupt — 40,000
+// of them, a megabyte and a half of markup, ran past two minutes on a host
+// far faster than the guest. Past the budget a marked radio keeps the page's
+// own answer, which leaves the row and the wire AGREEING on what the page
+// wrote; and a form with that many controls is longer than an address may
+// be, so it was never going to be sent whatever this decided.
 #define WEND_RADIO_SEARCH_BUDGET 250000
 
 static const os64_html_node_t *radio_last_marked(render_t *r,
                                                  const os64_html_node_t *n,
-                                                 const char *name)
+                                                 const os64_html_node_t *inside,
+                                                 const char *name,
+                                                 const os64_html_node_t *owner)
 {
     const os64_html_node_t *found = NULL;
     for (const os64_html_node_t *c = n->first_child; c; c = c->next) {
@@ -1106,13 +1229,18 @@ static const os64_html_node_t *radio_last_marked(render_t *r,
         if (c->tag == OS64_HTML_TAG_INPUT) {
             if (type_is_nocase(attr_value(c, "type"), "radio")
                 && os64_html_attr(c, "checked") != NULL
-                && os64_streq(some(attr_value(c, "name")), name))
-                found = c;
+                && os64_streq(some(attr_value(c, "name")), name)) {
+                // Its own owner, which is the form it NAMES where it names
+                // one and the form it sits in otherwise.
+                const os64_html_node_t *mine =
+                    attr_value(c, "form") ? form_owner(r, c) : inside;
+                if (mine == owner)
+                    found = c;
+            }
             continue;
         }
-        if (c->tag == OS64_HTML_TAG_FORM)
-            continue;
-        const os64_html_node_t *deeper = radio_last_marked(r, c, name);
+        const os64_html_node_t *deeper = radio_last_marked(
+            r, c, c->tag == OS64_HTML_TAG_FORM ? c : inside, name, owner);
         if (deeper)
             found = deeper;
     }
@@ -1128,20 +1256,28 @@ static bool radio_is_on(render_t *r, const os64_html_node_t *n)
     // own answer rather than cancelling the other nameless radios, which are
     // not its group either.
     const char *name = some(attr_value(n, "name"));
-    const os64_html_node_t *group = r->form_node ? r->form_node : r->root;
-    if (name[0] == '\0' || !group || r->radio_budget <= 0)
+    if (name[0] == '\0' || !r->root || r->radio_budget <= 0)
         return true;                     // its own answer, drawn and sent alike
-    const os64_html_node_t *last = radio_last_marked(r, group, name);
+    const os64_html_node_t *last =
+        radio_last_marked(r, r->root, NULL, name, form_owner(r, n));
     return last == NULL || last == n;
 }
 
 // A SUBMIT CONTROL NOBODY CAN PRESS IS STILL A BUTTON. Remember where the
-// first one in this form stood, so a form whose DEFAULT button is out of
+// first one in its form stood, so a form whose DEFAULT button is out of
 // sight is not sent as though it had no button — its method and action are
 // the ones a submission would take, and this browser refuses rather than
 // guess them away.
-static void submit_out_of_reach(render_t *r)
+//
+// ITS FORM, not the form it happens to sit inside: a button out of reach may
+// name its owner by `id` from anywhere, and a claim recorded against the
+// wrong form leaves the right one thinking it has no button at all.
+static void submit_out_of_reach(render_t *r, const os64_html_node_t *n)
 {
+    if (attr_value(n, "form")) {
+        owner_claim(r, n, r->page->nspots + 1, OWNER_SUBMIT_AWAY);
+        return;
+    }
     if (r->form <= 0)
         return;
     wend_form_t *form = &r->page->forms[r->form - 1];
@@ -1158,6 +1294,14 @@ static void hidden_input(render_t *r, const os64_html_node_t *n)
         return;                          // not sent at all
     const char *type = attr_value(n, "type");
     const char *value = attr_value(n, "value");
+    // `_charset_` IS THE FORM'S OWN ANSWER, NOT THE PAGE'S. A hidden field
+    // of that name is filled in with the encoding the values go out in, so a
+    // server can decode the rest of the query — and this encoder writes the
+    // page's UTF-8 bytes whatever the page itself was written in. Sending
+    // back the empty string the page left there tells the server nothing.
+    if (type_is_nocase(type, "hidden")
+        && os64_streq(some(attr_value(n, "name")), "_charset_"))
+        value = "UTF-8";
     if (type_is_nocase(type, "checkbox")) {
         if (os64_html_attr(n, "checked") == NULL)
             return;
@@ -1169,12 +1313,12 @@ static void hidden_input(render_t *r, const os64_html_node_t *n)
         if (!value)
             value = "on";
     } else if (type_is_nocase(type, "submit") || type_is_nocase(type, "image")) {
-        submit_out_of_reach(r);
+        submit_out_of_reach(r, n);
         return;                          // only the button PRESSED says so
     } else if (type_is_nocase(type, "reset") || type_is_nocase(type, "button")) {
         return;                          // neither of these submits anything
     }
-    owner_claim(r, n, hidden_add(r, attr_value(n, "name"), value), true);
+    owner_claim(r, n, hidden_add(r, attr_value(n, "name"), value), OWNER_HIDDEN);
 }
 
 // WHAT A SUBMIT BUTTON OVERRULES ABOUT ITS FORM. The standard lets the
@@ -1195,10 +1339,13 @@ static void submit_overrides(render_t *r, const os64_html_node_t *n,
     char over[OS64_URL_REF_MAX];
     over[0] = '\0';
     if (formaction && r->base)
-        (void)os64_url_absolute(r->base, formaction[0] ? formaction : "#",
-                                over, sizeof(over));
+        spot->bad_action = !os64_url_absolute(r->base,
+                                              formaction[0] ? formaction : "#",
+                                              over, sizeof(over));
     spot->form_action = dup_text(r, over);
     spot->form_fragment = dup_text(r, some(reference_fragment(formaction)));
+    if (spot->form_fragment)
+        fragment_unescape(spot->form_fragment);
     spot->has_action = formaction != NULL;
     spot->has_method = formmethod != NULL && formmethod[0] != '\0';
     spot->post = spot->has_method && os64_streq_nocase(formmethod, "post");
@@ -1219,7 +1366,6 @@ static void field_input(render_t *r, const os64_html_node_t *n)
         return;
     }
 
-    bool readonly = os64_html_attr(n, "readonly") != NULL;
     wend_spot_kind_t kind = WEND_SPOT_TEXT;
     bool image = type_is_nocase(type, "image");
     if (type_is_nocase(type, "submit") || image)
@@ -1229,6 +1375,12 @@ static void field_input(render_t *r, const os64_html_node_t *n)
     else if (type_is_nocase(type, "radio"))
         kind = WEND_SPOT_RADIO;
     bool secret = type_is_nocase(type, "password");
+    // READONLY IS A TEXT CONTROL'S WORD. The standard gives it no meaning on
+    // a tick, a list or a button — a `readonly` checkbox is operated like any
+    // other — and honouring it on one would take away a control the page did
+    // not take away.
+    bool readonly = kind == WEND_SPOT_TEXT
+                    && os64_html_attr(n, "readonly") != NULL;
 
     if (control_disabled(r, n)) {
         bool checked = os64_html_attr(n, "checked") != NULL;
@@ -1255,7 +1407,7 @@ static void field_input(render_t *r, const os64_html_node_t *n)
     spot->readonly = readonly;
     spot->on = kind == WEND_SPOT_RADIO ? radio_is_on(r, n)
                                       : os64_html_attr(n, "checked") != NULL;
-    owner_claim(r, n, index, false);
+    owner_claim(r, n, index, OWNER_SPOT);
     const wend_edit_t *edit = edit_for(r);
     if (edit && edit->on >= 0)
         spot->on = edit->on != 0;
@@ -1317,9 +1469,17 @@ static void collect_options(render_t *r, const os64_html_node_t *el,
             return;
         }
         wend_option_t *option = &spot->options[spot->noptions];
-        option->shown = gather_text(r, c);
+        // WHAT IT SHOWS AND WHAT IT SENDS COME FROM DIFFERENT PLACES. A
+        // `label` attribute IS the words, and the element's text is only
+        // their fallback; the VALUE falls back to that text and never to the
+        // label, so a page that gives both keeps saying what it meant.
+        char *text = gather_text(r, c);
+        const char *label = attr_value(c, "label");
+        option->shown = label ? dup_text(r, label) : text;
         const char *value = attr_value(c, "value");
-        option->value = dup_text(r, value ? value : some(option->shown));
+        option->value = dup_text(r, value ? value : some(text));
+        if (label)
+            os64_free(text);
         option->off = off;
         // EVERY OPTION ANSWERS FOR ITSELF, because a `multiple` list may have
         // several picked and one index can only hold the last of them. A
@@ -1334,6 +1494,18 @@ static void collect_options(render_t *r, const os64_html_node_t *el,
     }
 }
 
+// HOW MANY ROWS A LIST IS DRAWN AS on a graphical screen, which is what
+// decides whether it is a drop-down. This face draws every list on one row
+// and the distinction survives anyway: a drop-down always holds one option,
+// a multi-row list holds only what the page marked.
+static int32_t rows_shown(const os64_html_node_t *n)
+{
+    int32_t size = 0;
+    if (!attr_int(n, "size", &size) || size < 1)
+        size = os64_html_attr(n, "multiple") != NULL ? 4 : 1;
+    return size;
+}
+
 // A list the page put out of sight. Its answer is still the form's — every
 // option the page marked, which for a `multiple` list may be several.
 static void hidden_select(render_t *r, const os64_html_node_t *n)
@@ -1345,12 +1517,13 @@ static void hidden_select(render_t *r, const os64_html_node_t *n)
     scratch.multiple = os64_html_attr(n, "multiple") != NULL;
     collect_options(r, n, &scratch, false);
     const char *name = attr_value(n, "name");
-    if (scratch.chosen < 0 && scratch.noptions > 0 && !scratch.multiple)
-        scratch.chosen = 0;              // a list of one answer always holds one
+    if (scratch.chosen < 0 && scratch.noptions > 0 && !scratch.multiple
+        && rows_shown(n) == 1)
+        scratch.chosen = 0;              // a drop-down always holds one
     for (int32_t i = 0; i < scratch.noptions && !r->oom; i++) {
         bool picked = scratch.multiple ? scratch.options[i].on : i == scratch.chosen;
         if (picked && !scratch.options[i].off)
-            owner_claim(r, n, hidden_add(r, name, some(scratch.options[i].value)), true);
+            owner_claim(r, n, hidden_add(r, name, some(scratch.options[i].value)), OWNER_HIDDEN);
     }
     for (int32_t i = 0; i < scratch.noptions; i++) {
         os64_free(scratch.options[i].shown);
@@ -1367,7 +1540,7 @@ static void hidden_textarea(render_t *r, const os64_html_node_t *n)
     if (control_disabled(r, n))
         return;
     char *value = gather(r, n, true);
-    owner_claim(r, n, hidden_add(r, attr_value(n, "name"), some(value)), true);
+    owner_claim(r, n, hidden_add(r, attr_value(n, "name"), some(value)), OWNER_HIDDEN);
     os64_free(value);
 }
 
@@ -1386,15 +1559,17 @@ static void field_select(render_t *r, const os64_html_node_t *n)
     spot->name = dup_text(r, attr_value(n, "name"));
     spot->multiple = os64_html_attr(n, "multiple") != NULL;
     collect_options(r, n, spot, false);
-    owner_claim(r, n, index, false);
+    owner_claim(r, n, index, OWNER_SPOT);
     // WHAT THE ROW SHOWS MUST BE SOMETHING THAT GOES. The two kinds of list
     // reach that differently.
     //
-    // A list that takes ONE answer always holds one, so with nothing marked
-    // it shows its FIRST — even a disabled one, because a disabled first
-    // option is how a page writes "choose one" and showing it is the honest
-    // answer to what the list holds. That one sends nothing, and the row
-    // saying "choose one" is why.
+    // A DROP-DOWN always holds one, so with nothing marked it shows its
+    // FIRST — even a disabled one, because a disabled first option is how a
+    // page writes "choose one" and showing it is the honest answer to what
+    // the list holds. That one sends nothing, and the row saying "choose
+    // one" is why. A list drawn as several ROWS is not a drop-down and holds
+    // nothing until something is marked, so inventing its first option would
+    // send an answer nobody gave.
     //
     // A `multiple` list holds exactly what the page marked, which may be
     // NOTHING — so it shows the first option that will actually be sent, and
@@ -1407,7 +1582,7 @@ static void field_select(render_t *r, const os64_html_node_t *n)
                 spot->chosen = i;
                 break;
             }
-    } else if (spot->chosen < 0 && spot->noptions > 0) {
+    } else if (spot->chosen < 0 && spot->noptions > 0 && rows_shown(n) == 1) {
         spot->chosen = 0;
     }
     // WHAT A PERSON PICKS IS EXACTLY ONE THING, on a `multiple` list too.
@@ -1472,9 +1647,12 @@ static bool form_open(render_t *r, const os64_html_node_t *n)
     char resolved[OS64_URL_REF_MAX];
     resolved[0] = '\0';
     if (action && action[0] && r->base)
-        (void)os64_url_absolute(r->base, action, resolved, sizeof(resolved));
+        form->bad_action = !os64_url_absolute(r->base, action, resolved,
+                                              sizeof(resolved));
     form->action = dup_text(r, resolved);
     form->fragment = dup_text(r, some(reference_fragment(action)));
+    if (form->fragment)
+        fragment_unescape(form->fragment);
     form->id = dup_text(r, attr_value(n, "id"));
     form->post = method && os64_streq_nocase(method, "post");
     form->unreachable_submit = -1;
@@ -1509,7 +1687,7 @@ static void hidden_subtree(render_t *r, const os64_html_node_t *n)
             const char *type = attr_value(n, "type");
             if (!control_disabled(r, n) && !type_is_nocase(type, "reset")
                 && !type_is_nocase(type, "button"))
-                submit_out_of_reach(r);
+                submit_out_of_reach(r, n);
             return;
         }
         // A script, a stylesheet, a template's unused fragment and another
@@ -1524,13 +1702,30 @@ static void hidden_subtree(render_t *r, const os64_html_node_t *n)
     int32_t saved_disabled = r->disabled;
     const os64_html_node_t *saved_form_node = r->form_node;
     // A disabled fieldset still disables what is under it, and a disabled
-    // control is not sent whether it is on the screen or not.
-    if (n->tag == OS64_HTML_TAG_FIELDSET && os64_html_attr(n, "disabled") != NULL)
-        r->disabled++;
+    // control is not sent whether it is on the screen or not — EXCEPT inside
+    // the first `legend`, the standard's own exception and the visible
+    // walk's. A control there is live wherever the section is drawn, which
+    // includes not being drawn at all.
+    bool off = n->tag == OS64_HTML_TAG_FIELDSET
+               && os64_html_attr(n, "disabled") != NULL;
+    bool legend_seen = false;
     if (n->tag == OS64_HTML_TAG_FORM)
         (void)form_open(r, n);
-    for (const os64_html_node_t *c = n->first_child; c && !r->oom; c = c->next)
+    if (off)
+        r->disabled++;
+    for (const os64_html_node_t *c = n->first_child; c && !r->oom; c = c->next) {
+        bool legend = !legend_seen && c->kind == OS64_HTML_ELEMENT
+                      && c->ns == OS64_HTML_NS_HTML
+                      && c->tag == OS64_HTML_TAG_LEGEND;
+        if (legend) {
+            legend_seen = true;
+            if (off)
+                r->disabled--;
+        }
         hidden_subtree(r, c);
+        if (legend && off)
+            r->disabled++;
+    }
     r->form = saved_form;
     r->disabled = saved_disabled;
     r->form_node = saved_form_node;
@@ -1744,9 +1939,21 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
 
         case OS64_HTML_TAG_UL: case OS64_HTML_TAG_OL:
         case OS64_HTML_TAG_MENU: case OS64_HTML_TAG_DIR: {
-            list_t inner = { n->tag == OS64_HTML_TAG_OL, 1 };
-            if (inner.ordered)
+            list_t inner = { n->tag == OS64_HTML_TAG_OL, false, 1 };
+            if (inner.ordered) {
+                // A COUNTDOWN COUNTS DOWN, and starts at as many as it has:
+                // `<ol reversed>` is how a page writes a top-ten backwards,
+                // and showing it 1, 2, 3 says the opposite of what it means.
+                inner.down = os64_html_attr(n, "reversed") != NULL;
+                if (inner.down) {
+                    inner.next = 0;
+                    for (const os64_html_node_t *c = n->first_child; c; c = c->next)
+                        if (c->kind == OS64_HTML_ELEMENT && c->ns == OS64_HTML_NS_HTML
+                            && c->tag == OS64_HTML_TAG_LI && inner.next < 0x7FFFFFFF)
+                            inner.next++;
+                }
                 (void)attr_int(n, "start", &inner.next);
+            }
             block_break(r);
             r->indent += 2;
             walk_children(r, n, &inner);
@@ -1775,7 +1982,11 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             r->indent = saved_indent;
             goto done;
 
+        // `xmp` and `plaintext` are the 1993 spellings of `pre`, and the
+        // pages that still use them are exactly the ones whose columns are
+        // the meaning.
         case OS64_HTML_TAG_PRE: case OS64_HTML_TAG_LISTING:
+        case OS64_HTML_TAG_XMP: case OS64_HTML_TAG_PLAINTEXT:
             blank_break(r);
             r->pre++;
             walk_children(r, n, list);
@@ -1813,7 +2024,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             }
             spot->readonly = os64_html_attr(n, "readonly") != NULL;
             spot->width = box_width(r, n);
-            owner_claim(r, n, index, false);
+            owner_claim(r, n, index, OWNER_SPOT);
             if (r->oom)
                 goto done;
             r->spot = index;
@@ -1851,7 +2062,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             spot->name = dup_text(r, attr_value(n, "name"));
             spot->value = dup_text(r, attr_value(n, "value"));
             submit_overrides(r, n, spot);
-            owner_claim(r, n, index, false);
+            owner_claim(r, n, index, OWNER_SPOT);
             spot->label = gather_text(r, n);
             if (r->oom)
                 goto done;
@@ -1981,9 +2192,24 @@ static void title_text(wend_page_t *page, const os64_html_node_t *title)
     }
 }
 
+// The first HTML `base` carrying an href, wherever the tree builder put it.
+static const os64_html_node_t *base_element(const os64_html_node_t *n)
+{
+    for (const os64_html_node_t *c = n->first_child; c; c = c->next) {
+        if (c->kind != OS64_HTML_ELEMENT || c->ns != OS64_HTML_NS_HTML)
+            continue;
+        if (c->tag == OS64_HTML_TAG_BASE && os64_html_attr(c, "href"))
+            return c;
+        const os64_html_node_t *deeper = base_element(c);
+        if (deeper)
+            return deeper;
+    }
+    return NULL;
+}
+
 bool wend_base_href(const os64_html_document_t *doc, char *out, size_t cap)
 {
-    if (!doc || !doc->head || cap == 0)
+    if (!doc || cap == 0)
         return false;
     // THE FIRST `base` CARRYING AN href WINS, which is the standard's rule
     // and the one that matters: a page with two of them is telling you it
@@ -1996,15 +2222,17 @@ bool wend_base_href(const os64_html_document_t *doc, char *out, size_t cap)
     // relative link on the page to somebody else's host. The caller resolves
     // what comes back, and the resolver's refusal of an empty reference is
     // what leaves the fetched address in place.
-    for (const os64_html_node_t *c = doc->head->first_child; c; c = c->next) {
-        if (c->kind != OS64_HTML_ELEMENT || c->tag != OS64_HTML_TAG_BASE)
-            continue;
-        const os64_html_attr_t *href = os64_html_attr(c, "href");
-        if (!href)
-            continue;
-        return os64_strcopy(out, cap, href->value ? href->value : "") < cap;
-    }
-    return false;
+    //
+    // AND WHEREVER THE PARSER PUT IT. A `base` written in the body is
+    // misplaced markup that the tree builder keeps where it found it, so a
+    // search of `head` alone misses it — and a page that moves its own base
+    // halfway down is exactly the page that needs it honoured.
+    const os64_html_node_t *root = doc->document ? doc->document : doc->html;
+    const os64_html_node_t *base = root ? base_element(root) : NULL;
+    if (!base)
+        return false;
+    const os64_html_attr_t *href = os64_html_attr(base, "href");
+    return os64_strcopy(out, cap, href->value ? href->value : "") < cap;
 }
 
 // ── Entry points ────────────────────────────────────────────────────────
@@ -2190,14 +2418,22 @@ wend_form_result_t wend_form_url(const wend_page_t *page, int32_t index,
     // already carries.
     //
     // NAMING an action is what puts the button in charge, not naming a
-    // USABLE one: `formaction=""` is the document's own address and
-    // `formaction="::"` is an address nothing can resolve, and in both the
-    // page has said "not the form's destination". The empty one already
-    // resolved to the document; the unresolvable one falls back the way an
-    // unresolvable form action does, to the page it is all on.
+    // USABLE one: `formaction=""` is the document's own address and the page
+    // has said "not the form's destination". The empty one resolves to the
+    // document, so it arrives here as an address like any other.
+    //
+    // A STATED DESTINATION THAT WILL NOT RESOLVE IS A REFUSAL, not a
+    // fallback. A form naming nothing means "the page I am on" — that is the
+    // standard's rule — but one whose action is too long for an address, or
+    // is not an address at all, has named somewhere ELSE, and sending what a
+    // person typed to the page they are on instead is the wrong host to be
+    // wrong about.
+    bool button = from->kind == WEND_SPOT_SUBMIT && from->has_action;
+    if (button ? from->bad_action : form->bad_action)
+        return WEND_FORM_BAD_ACTION;
     const char *action = some(form->action)[0] ? form->action : some(page_url);
     const char *want = some(form->fragment);
-    if (from->kind == WEND_SPOT_SUBMIT && from->has_action) {
+    if (button) {
         // The button's action brings its own `#name`: it is a different
         // destination, so the form's section does not travel to it.
         action = some(from->form_action)[0] ? from->form_action : some(page_url);
@@ -2272,21 +2508,24 @@ wend_form_result_t wend_form_url(const wend_page_t *page, int32_t index,
                 if (i != index)
                     break;
                 if (spot->image) {
+                    // A NAMELESS IMAGE BUTTON STILL SAYS WHERE IT WAS
+                    // PRESSED. With a name the fields are `name.x` and
+                    // `name.y`; with none they are plain `x` and `y`, and a
+                    // handler reading those to tell which picture was
+                    // pressed would otherwise be told nothing at all.
                     char field[OS64_URL_PATH_MAX];
                     const char *base_name = some(spot->name);
-                    if (base_name[0] == '\0')
-                        base_name = "";
                     for (int32_t axis = 0; axis < 2 && room; axis++) {
                         size_t at_name = 0;
                         field[0] = '\0';
                         if (!append_raw(field, sizeof(field), &at_name, base_name)
                             || !append_raw(field, sizeof(field), &at_name,
-                                           axis == 0 ? ".x" : ".y")) {
+                                           base_name[0] ? (axis == 0 ? ".x" : ".y")
+                                                        : (axis == 0 ? "x" : "y"))) {
                             room = false;
                             break;
                         }
-                        room = pair_append(out, cap, &at, &first,
-                                           base_name[0] ? field : "", "0");
+                        room = pair_append(out, cap, &at, &first, field, "0");
                     }
                     break;
                 }

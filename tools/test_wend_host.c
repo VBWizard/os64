@@ -529,13 +529,15 @@ static void form_checks(void)
                1, WEND_FORM_OK, "http://host/other?q=x");
     // An IMAGE button sends where you clicked, which from a keyboard is the
     // origin — and never its value, which is what a server expecting
-    // `name.x` is written against.
+    // `name.x` is written against. With no name the fields are plain `x` and
+    // `y`: the coordinates are how the button says it was the one pressed,
+    // so a nameless one saying nothing would say nothing AT ALL.
     expect_url("image button", "<form action=/s><input name=q value=x>"
                "<input type=image name=go src=go.gif value=ignored></form>",
                1, WEND_FORM_OK, "http://host/s?q=x&go.x=0&go.y=0");
     expect_url("image nameless", "<form action=/s><input name=q value=x>"
                "<input type=image src=go.gif></form>",
-               1, WEND_FORM_OK, "http://host/s?q=x");
+               1, WEND_FORM_OK, "http://host/s?q=x&x=0&y=0");
 
     // THE FORM DATA SET GOES OUT IN TREE ORDER, hidden fields included —
     // visible only when two controls share a name, which is exactly when a
@@ -872,6 +874,38 @@ static void form_edge_checks(void)
                      40, want, 2);
     }
     {
+        // A FRAGMENT IS PERCENT-ENCODED AND THE `id` IT NAMES IS NOT, so the
+        // one stored is decoded — every heading with a space in its id
+        // depends on it.
+        wend_page_t *page = render_html_text(
+            "<p><a href='#section%202'>go</a><h2 id='section 2'>Two</h2>",
+            40, "http://host/p");
+        CHECK(page != NULL && page && page->nspots == 1);
+        if (page && page->nspots == 1) {
+            CHECK(strcmp(page->spots[0].fragment, "section 2") == 0);
+            CHECK(wend_anchor_line(page, page->spots[0].fragment) >= 0);
+            wend_page_free(page);
+        }
+    }
+    {
+        // A COUNTDOWN COUNTS DOWN, starting at as many items as it has.
+        const char *want[] = { "  3. C", "  2. B", "  1. A" };
+        expect_lines("ol reversed", "<ol reversed><li>C<li>B<li>A</ol>",
+                     40, want, 3);
+    }
+    {
+        // ...and an explicit `start` still outranks the item count.
+        const char *want[] = { "  9. C", "  8. B" };
+        expect_lines("ol reversed start", "<ol reversed start=9><li>C<li>B</ol>",
+                     40, want, 2);
+    }
+    {
+        // `xmp` is the 1993 spelling of `pre`, and the pages still using it
+        // are the ones whose columns are the meaning.
+        const char *want[] = { "first", "  second" };
+        expect_lines("xmp preformatted", "<xmp>first\n  second</xmp>", 40, want, 2);
+    }
+    {
         // A nameless radio is in no group: it sends nothing and cancels
         // nothing, so the page's own marks all stand.
         const char *want[] = { "[1](*)[2](*)" };
@@ -982,6 +1016,76 @@ static void form_edge_checks(void)
             wend_page_free(page);
         }
     }
+    // A GROUP IS EVERY RADIO OF ONE NAME WITH ONE FORM OWNER, so two
+    // root-level radios naming different forms are two groups and neither
+    // cancels the other.
+    expect_url("radio by owner", "<form id=a action=/s></form><form id=b action=/t></form>"
+               "<input type=radio form=a name=x value=1 checked>"
+               "<input type=radio form=b name=x value=2 checked>"
+               "<input type=submit form=a>",
+               2, WEND_FORM_OK, "http://host/s?x=1");
+    // A SUBMIT CONTROL OUT OF REACH BELONGS TO THE FORM IT NAMES, not to the
+    // document it happens to sit in — a claim against the wrong form leaves
+    // the right one thinking it has no button at all.
+    {
+        wend_page_t *page = render_html_text(
+            "<form id=a action=/s></form>"
+            "<div hidden><button form=a formmethod=post>Go</button></div>"
+            "<input form=a name=pw value=secret>", 80, "http://host/p");
+        CHECK(page != NULL && page->nforms == 1);
+        if (page && page->nforms == 1) {
+            CHECK(page->forms[0].unreachable_submit == 0);
+            wend_page_free(page);
+        }
+    }
+    // A DISABLED FIELDSET'S FIRST `legend` IS LIVE wherever the section is
+    // drawn, which includes not being drawn at all.
+    expect_url("hidden legend", "<form action=/s><div hidden>"
+               "<fieldset disabled><legend><input name=x value=y></legend>"
+               "<input name=off value=1></fieldset></div>"
+               "<input type=submit></form>",
+               0, WEND_FORM_OK, "http://host/s?x=y");
+    {
+        // A STATED DESTINATION THAT WILL NOT RESOLVE IS A REFUSAL, never the
+        // page it is on: that is a different host to be wrong about. An
+        // address longer than one may be is how a page reaches this.
+        char html[OS64_URL_REF_MAX + 256], huge[OS64_URL_REF_MAX + 64];
+        memset(huge, 'a', sizeof(huge) - 1);
+        huge[sizeof(huge) - 1] = '\0';
+        snprintf(html, sizeof(html), "<form action=/%s><input name=q value=x>"
+                 "<input type=submit></form>", huge);
+        expect_url("bad form action", html, 1, WEND_FORM_BAD_ACTION, NULL);
+        snprintf(html, sizeof(html), "<form action=/s><input name=q value=x>"
+                 "<input type=submit formaction=/%s></form>", huge);
+        expect_url("bad button action", html, 1, WEND_FORM_BAD_ACTION, NULL);
+    }
+    // A `_charset_` field is the FORM's answer, not the page's.
+    expect_url("charset field", "<form action=/s>"
+               "<input type=hidden name=_charset_><input name=q value=x>"
+               "<input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s?_charset_=UTF-8&q=x");
+    // An option's `label` is its words; its VALUE still falls back to the
+    // element's text, never to the label.
+    {
+        const char *want[] = { "[1][v Short]" };
+        expect_lines("option label", "<form><select name=p>"
+                     "<option label=Short>Long fallback</select></form>",
+                     40, want, 1);
+    }
+    expect_url("option label value", "<form action=/s><select name=p>"
+               "<option label=Short>Long fallback</select>"
+               "<input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s?p=Long+fallback");
+    // A list drawn as several ROWS is not a drop-down: it holds nothing
+    // until the page marks something, so nothing is invented for it.
+    expect_url("select sized", "<form action=/s><select name=x size=2>"
+               "<option value=a>A<option value=b>B</select>"
+               "<input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s");
+    expect_url("select dropdown", "<form action=/s><select name=x>"
+               "<option value=a>A<option value=b>B</select>"
+               "<input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s?x=a");
     // A SUBTREE THE PAGE MARKED `hidden` DRAWS NOTHING AND IS NO PLACE TO
     // LAND — and its values still go with the form, which is what a page
     // that puts a section away relies on.
@@ -1121,7 +1225,10 @@ static void oom_checks(void)
             "<option value=z selected>Z</select><textarea name=n>hush</textarea></div>"
             "<button formmethod=post name=go formaction=''>Send</button></form>"
             "<input form=f name=outside value=o>"
-            "<a href='#here'>back up</a>", 40, "http://host/p");
+            "<input type=radio form=f name=r value=1 checked>"
+            "<select name=lab size=2><option label=Short>Long</select>"
+            "<ol reversed><li>one<li>two</ol>"
+            "<a href='#he%72e'>back up</a>", 40, "http://host/p");
         if (page) {
             check_printable(page);
             char url[512], frag[64];

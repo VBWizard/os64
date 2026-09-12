@@ -828,6 +828,62 @@ more, four of them mine to have made:
 | A radio with NO name cancelled the other nameless radios | It is in no group, sends nothing whatever it shows, and has nothing to untick |
 | A Ctrl+C drained before a question answered it `no` | My own addition, not the finding: `q` then silently did nothing, a question asked with no visible reply. Draining is already enough, since only `y` ever agrees. The stop still reaches a running fetch |
 
+**Round seven found sixteen, one P1, and four were siblings of the round
+before it** — which is this PR's recurring shape and the reason a fixed rule
+sends you looking for its relatives.
+
+The P1 and the P2 beside it were one structural miss: **form ownership was
+settled only AFTER the walk**, and three questions during the walk need it.
+A submit control out of reach that named its form with `form=<id>` marked no
+form at all, so a `formmethod=post` button led straight back to a password in
+a query. And two root-level checked radios named `x`, owned by `form=a` and
+`form=b`, were one group, so the second cleared the first and form A sent
+nothing. The forms carrying an `id` are swept once now and ownership is
+answerable while the walk runs; the radio search is of the whole document,
+asking each candidate who owns it.
+
+The other two siblings: a disabled `fieldset` on the hidden-data path lost
+the first-`legend` exception the visible walk has, and `radio_pick` compared
+two ABSENT names as equal, so picking one nameless radio put out every other
+one's dot — the interactive half of a fix made a round earlier for the
+initial state.
+
+The rest were the standard read against the code: an action too long to
+resolve fell back to the page it was on rather than being refused (a
+different host to be wrong about); `readonly` was honoured on ticks and
+lists, where the standard gives it no meaning, so a form with a box and a
+`readonly` checkbox auto-sent before the checkbox could be reached; a
+nameless image button sent nothing where it must send `x=0&y=0`; a fragment
+was matched percent-encoded against an `id` that is not; `<ol reversed>`
+counted up; `_charset_` went out empty; an option's `label` was ignored in
+favour of its text; a `size=2` list invented its first option; `xmp` and
+`plaintext` were flowed rather than kept; a UTF-8 byte order mark on an
+unlabelled text file was read as windows-1252; and `<base>` was looked for
+only among `head`'s children, though libhtml keeps a misplaced one in the
+body exactly where it found it. XHTML parsed by the HTML parser is the one
+answered with a booking rather than a change: there is no XML parser here,
+and refusing the type outright would turn every XHTML page into "that is not
+a page".
+
+**One leak of my own**, caught by the suite's allocation sweep as it was
+written: the new form table was never freed.
+
+**In the guest**, every fix that reaches the wire or the glass, read off a
+local server's access log:
+
+| Case | What the wire or the glass said |
+|---|---|
+| Two root radios named `x` owned by different forms, both checked | `GET /A?x=1` and `GET /B?x=2` — each form sent its own; before, A sent nothing |
+| A nameless image button, `_charset_`, a `size=2` list | `GET /C?_charset_=UTF-8&x=0&y=0&lab=` |
+| The P1: a hidden `formmethod=post` button naming its form by id | `this form's button is not one this browser can reach`, and no request |
+| A box beside a `readonly` checkbox | Enter kept the value and sent NOTHING, the checkbox still a tick to answer |
+| Two nameless radios, one picked | both keep their dots |
+| A form action too long to be an address | `this form names a destination that is not an address this browser can resolve`, and no request |
+| `<ol reversed>`, `xmp`, an option `label`, a `size=2` list | `3. 2. 1.`, columns kept, `[v Short]`, `[v ]` |
+| `href="#the%20deep%20bit"` into `id="the deep bit"` | moved, with no "nothing named" refusal |
+| A `.txt` with a UTF-8 BOM and no charset | `A BOM then café and a "quote".` — before, `ï»¿A BOM then cafÃ©…` |
+| Both guest filesystems afterwards | `e2fsck -fn` clean on root and `/home` |
+
 **What the truth passes BETWEEN rounds found is worth as much as the
 rounds.** Reading the diff before each submit, and putting a deliberately
 pathological page through the host driver under the sanitizers, turned up:

@@ -461,6 +461,11 @@ exit. Colour and attributes are the SGR subset the terminal draws
 5. The final address is `head->url_text`, and it — not what was typed —
    is the base every `href` resolves against, with `os64_url_absolute`
    (libos64 `url.h`), unless the page carries `<base href>`, which wins.
+   The FIRST `base` carrying an href wins, wherever the tree builder put
+   it: one written in the body is misplaced markup the parser keeps where
+   it found it, and a page that moves its own base halfway down is
+   exactly the page that needs it honoured. An empty `href` on it names
+   the document, so a later base cannot take the page somewhere else.
 
 **The renderer: tree → lines.** Text is UTF-8 in the tree and Latin-1 on
 the glass, so every character passes through the fold (below) on its way
@@ -480,7 +485,9 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   bullet (`* ` for `ul`, `1. ` counting for `ol` — from `<ol start>`
   where the page gives one, and `<li value>` moves the count and takes
   the items after it along, which is how a numbered procedure carries on
-  across a paragraph) and its nesting depth as indent; `blockquote` and `dd` indent; `hr` is a row of `-`; a
+  across a paragraph; `<ol reversed>` counts DOWN from as many items as
+  it has, because showing a countdown as 1, 2, 3 says the opposite of
+  what it means) and its nesting depth as indent; `blockquote` and `dd` indent; `hr` is a row of `-`; a
   heading is drawn bold (SGR 1). A `table` is rows: `tr` is a line and
   `td`/`th` cells are separated by two spaces — no column alignment in
   the first cut, and the old web's table LAYOUT (a page that is one big
@@ -492,8 +499,11 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   resolved address AND, kept beside it, the `#name` the href asked for —
   the resolver drops a fragment because a fragment never crosses the
   wire, and dropping it here too would turn a table of contents into a
-  row of links that each refetch the article and show its top. An EMPTY
-  href names the page it is on, the standard's rule and what a page's own
+  row of links that each refetch the article and show its top. The
+  `#name` is kept DECODED, because a fragment travels percent-encoded and
+  the `id` it points at does not — `href="#section%202"` names
+  `id="section 2"`, which is every heading with a space in its name. An
+  EMPTY href names the page it is on, the standard's rule and what a page's own
   reload and back-to-the-top links are made of — the resolver refuses an
   empty reference by contract, so the renderer asks it the question it
   does answer. `img`
@@ -508,11 +518,14 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   `[n][ ]`, one of a radio group as `[n](*)` or `[n]( )`, a list as
   `[n][v the chosen option]` — and `+2` after it when the page has marked
   more than one, since one row shows one option and a person who could not
-  tell that three were going has no reason to doubt what the row says. What
-  the row shows is always something that will actually GO: a list taking one
-  answer always holds one, so with nothing marked it shows its first, while
-  a `multiple` list holds exactly what the page marked and is drawn EMPTY
-  when that is nothing — a button as `[n][its words]` — an IMAGE
+  tell that three were going has no reason to doubt what the row says. An
+  option's words are its `label` attribute where it has one and its text
+  otherwise, while the VALUE it sends falls back to that text and never to
+  the label. What the row shows is always something that will actually GO:
+  a DROP-DOWN always holds one, so with nothing marked it shows its first,
+  while a `multiple` list and a list drawn as several ROWS (`size` above
+  one) hold exactly what the page marked and are drawn EMPTY when that is
+  nothing — a button as `[n][its words]` — an IMAGE
   button by its `alt` text, since that is what it is called, and it sends
   where the pointer was rather than a value, which from a keyboard is the
   origin. A `textarea`
@@ -530,7 +543,9 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   the standard's: a section's title was never a control. A HIDDEN
   field is neither drawn nor landed on: it is remembered against the
   form, whose data it is — and so is every control inside a subtree the
-  page marked `hidden`, which is the same question with the same answer.
+  page marked `hidden`, which is the same question with the same answer —
+  down to the disabled-`fieldset` rule and its first-`legend` exception,
+  which hold wherever a section is drawn, including not being drawn.
   Such a subtree draws NOTHING: its prose and its links are on the screen
   nowhere else, and showing them would put in front of a reader a menu's
   worth of text the page had deliberately put away. A control may NAME
@@ -540,12 +555,17 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   answer and the safe one, since submitting it with whatever it happens
   to sit inside would send a value to an address the page never named. **READONLY is not DISABLED**: the page is
   keeping that value fixed rather than taking the control away, so it is
-  landed on, refuses to open, and is still sent. A DISABLED OPTION inside
+  landed on, refuses to open, and is still sent. It is a BOX's word only —
+  the standard gives it no meaning on a tick, a list or a button, and
+  honouring it there would take away a control the page did not. A DISABLED OPTION inside
   a list is SHOWN when it is what the list holds — a first option nobody
   can pick is how a page writes "choose one" — and is never stepped onto
   and never sent. **A PASSWORD is drawn as its length**, never
   its value, and echoes stars while it is typed — a page that prefills
   one is not a reason to put it on a screen somebody is standing behind.
+- **`pre`, `listing`, `xmp` and `plaintext`** are preformatted: the
+  author's line breaks and columns are the meaning, and the last two are
+  the 1993 spellings still found on exactly the pages that rely on it.
 - **Skipped whole:** `head` and everything in it (`title` goes to the
   title row), `script`, `style`, `iframe` (a different document, which
   showing would mean fetching), `noscript`'s CONTENTS are shown (we run
@@ -673,16 +693,28 @@ leaving both would tell a server reading the first value the opposite of
 what the page said — and the group is settled FROM THE TREE before any of
 it is drawn, because a face that drew each control as it met it and applied
 the rule afterwards would leave a row showing two dots where one value
-goes. A group is every radio of one name in one form, so the same name in
-two forms is two groups, and a radio with no name is in none. **That search
-is BUDGETED**: it is one search of a form per marked radio in it, and a page
-well inside libhtml's own limits could otherwise spin this program for
-minutes with no way to interrupt it. Past the budget a marked radio keeps
+goes. A group is every radio of one name with one form
+OWNER — so the same name in two forms is two groups, two root-level radios
+naming different forms with `form=<id>` are two groups, and a radio with no
+name is in none. The search is therefore of the whole DOCUMENT, asking each
+candidate who owns it. **And it is BUDGETED**: it is one search per marked
+radio, and a page well inside libhtml's own limits could otherwise spin this
+program for minutes with no way to interrupt it. Past the budget a marked radio keeps
 the page's own answer, which leaves the row and the wire agreeing on what
 the page wrote — and a form with that many controls is longer than an
 address may be, so it was never going to be sent whatever this decided. A list sends its option's VALUE rather than the words
 shown for it, and a `multiple` list sends EVERY option the page marked.
-Of two buttons only the one pressed says so — and **the button that was
+Of two buttons only the one pressed says so, and an IMAGE button says it
+with COORDINATES rather than a value — `name.x=0&name.y=0` from a keyboard,
+or plain `x=0&y=0` where it has no name, since those fields are how such a
+button says it was the one pressed. A hidden `_charset_` field is the FORM's
+answer and not the page's: it goes out naming the encoding the values are
+written in, which here is always UTF-8. **A STATED DESTINATION THAT WILL NOT
+RESOLVE IS A REFUSAL**, never the page it is on — a form that names nothing
+means "the page I am on", which is the standard's rule, but one whose action
+is too long for an address or is not an address at all has named somewhere
+ELSE, and sending what a person typed to the page they are on instead is the
+wrong host to be wrong about. And **the button that was
 pressed may overrule its form**, because the standard lets it carry its
 own action and its own method. The METHOD matters most to a browser that
 sends only one of them: a GET form with a `formmethod=post` button is a
@@ -760,9 +792,10 @@ Codex round is Chris's call.
 |---|---|---|
 | POST forms | libfetch sends no request body, and that is fetch machinery — Fable-tier by the campaign's own split. A form that posts is refused BY NAME rather than turned into a GET, because a login quietly sent as a query puts a password in somebody's server log | the first thing worth doing that only posts |
 | PICKING more than one answer from a `select multiple` | one answer is what the keys can express — Enter steps a list, and there is no screen on which to hold several open. What the page itself marked IS sent, every option of it; touching the list replaces the lot with the one thing a key can say | a page whose meaning needs two answers a person chose |
-| A `text/plain` body in a charset outside the UTF-8 and windows-1252 families | libhtml owns the encoding ladder and only markup goes through it. Raw text reads the reply's label for UTF-8 and takes everything else as windows-1252, which is the same answer libhtml gives the markup half — so both halves agree, and a Shift-JIS `.txt` reads as mojibake in a page and in a text file alike, rather than as a refusal in neither | the first text file worth reading that says it is something else |
+| A `text/plain` body in a charset outside the UTF-8 and windows-1252 families | libhtml owns the encoding ladder and only markup goes through it. Raw text reads the reply's label for UTF-8 — or, where the reply named no charset at all, a leading UTF-8 byte order mark, which is the file saying it itself — and takes everything else as windows-1252, which is the same answer libhtml gives the markup half — so both halves agree, and a Shift-JIS `.txt` reads as mojibake in a page and in a text file alike, rather than as a refusal in neither | the first text file worth reading that says it is something else |
 | A file-upload control | it is a POST with a body made of parts, so it waits on the row above and on a file picker this browser has no screen for | a page worth uploading to |
 | Editing longer than a status row | a box is edited on the bottom row, so a long value is a scrolling window onto itself; fine for a query, thin for a comment | the first time somebody writes prose into a page |
+| XHTML parsed by the HTML parser | there is no XML parser here, and the HTML tree builder reads all but the constructs XML spells differently — a self-closing `<script/>` ends where XML says and not where HTML does, so the text after it is swallowed. Refusing `application/xhtml+xml` outright would turn every XHTML page into "that is not a page", which is worse for a reader than a rare page with a swallowed tail | an XHTML page worth reading that the HTML rules mangle |
 | `gopher://` links | libfetch's gopher scheme is booked; the gopher client still owns the protocol | the browser's first gopher link |
 | Column-aligned tables | rows read fine for the old web's layout tables; alignment is layout, the graphical browser's boss | a data table that is unreadable as rows |
 | CP437 / a second charset on the glass | the face is Latin-1; art pages are the gopher client's | a page whose meaning needs box drawing |
