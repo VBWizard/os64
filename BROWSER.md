@@ -490,7 +490,11 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   resolved address AND, kept beside it, the `#name` the href asked for —
   the resolver drops a fragment because a fragment never crosses the
   wire, and dropping it here too would turn a table of contents into a
-  row of links that each refetch the article and show its top. `img`
+  row of links that each refetch the article and show its top. An EMPTY
+  href names the page it is on, the standard's rule and what a page's own
+  reload and back-to-the-top links are made of — the resolver refuses an
+  empty reference by contract, so the renderer asks it the question it
+  does answer. `img`
   draws `[alt]` when there is alt text and `[image]` when the attribute
   is ABSENT; `alt=""` draws nothing at all, because an empty alt is the
   page saying the picture is decoration and has no words — a modern
@@ -514,7 +518,12 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   attribute saying so. The words in its first `legend` are the exception,
   the standard's: a section's title was never a control. A HIDDEN
   field is neither drawn nor landed on: it is remembered against the
-  form, whose data it is. **A PASSWORD is drawn as its length**, never
+  form, whose data it is. **READONLY is not DISABLED**: the page is
+  keeping that value fixed rather than taking the control away, so it is
+  landed on, refuses to open, and is still sent. A DISABLED OPTION inside
+  a list is SHOWN when it is what the list holds — a first option nobody
+  can pick is how a page writes "choose one" — and is never stepped onto
+  and never sent. **A PASSWORD is drawn as its length**, never
   its value, and echoes stars while it is typed — a page that prefills
   one is not a reason to put it on a screen somebody is standing behind.
 - **Skipped whole:** `head` and everything in it (`title` goes to the
@@ -588,7 +597,9 @@ option, a button sends its form. **A link into the page you are already
 on is a MOVE, not a fetch**: every element carrying an `id`, and every
 old-style `<a name>`, records the row its content opens on, so a `#name`
 is answered by scrolling there. A page that does not carry the name says
-so and stays where it is. Typing a number then Enter does the same
+so and stays where it is. A move leaves NO crumb, deliberately: `b`
+refetches, so a history entry per section would make going back a
+download of the page you are already reading. Typing a number then Enter does the same
 to the spot wearing that number. `g` prompts for an address (a bare
 `host/path` gets `http://` in front, the way gopher reads a bare host);
 `r` refetches; `?` shows the keys; `q` quits, after asking, because

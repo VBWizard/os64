@@ -514,10 +514,12 @@ static bool fetch_cancelled(void *ctx)
         return true;
     if (!s_timed_keys)
         return s_cancel != 0;
+    // KEEP LOOKING EVEN WHEN THERE IS NOWHERE LEFT TO PUT IT. The held keys
+    // are a courtesy; finding Ctrl+C is the job. A full buffer that stopped
+    // reading would leave the one key that ends a slow fetch sitting unread
+    // in the terminal until the fetch ended by itself.
     for (;;) {
         char c;
-        if (s_npending >= (int32_t)sizeof(s_pending))
-            break;
         int64_t n = os64_read_for((int32_t)s_keys, &c, 1, 0);
         if (n != 1)
             break;
@@ -525,7 +527,7 @@ static bool fetch_cancelled(void *ctx)
             s_cancel = 1;
             break;
         }
-        pending_push((unsigned char)c);
+        pending_push((unsigned char)c);   // drops it when there is no room
     }
     return s_cancel != 0;
 }
@@ -1054,9 +1056,12 @@ static void jump_to_anchor(view_t *v, const char *name)
 static void follow_link(view_t *v, int32_t index)
 {
     // Both are copied out first: following frees the page these point into.
+    // A page that ran out of memory partway can be missing a string, and a
+    // number typed at the status row reaches any spot, built or not.
+    const wend_spot_t *spot = &v->page->spots[index];
     char url[OS64_FETCH_URL_MAX], fragment[OS64_URL_PATH_MAX];
-    os64_strcopy(url, sizeof(url), v->page->spots[index].url);
-    os64_strcopy(fragment, sizeof(fragment), v->page->spots[index].fragment);
+    os64_strcopy(url, sizeof(url), spot->url ? spot->url : "");
+    os64_strcopy(fragment, sizeof(fragment), spot->fragment ? spot->fragment : "");
 
     // A LINK INTO THE PAGE YOU ARE ON IS A MOVE, NOT A FETCH. Asking the
     // server for the article again to show its top is what a table of
@@ -1207,14 +1212,18 @@ static void edit_commit(view_t *v)
 static void field_type(view_t *v, int32_t index)
 {
     wend_spot_t *spot = &v->page->spots[index];
+    if (spot->readonly) {
+        status_set(" the page keeps that one as it is");
+        return;
+    }
     if (!edits_room(v))
         return;
     char shown[WEND_STATUS_MAX], before[WEND_STATUS_MAX];
     char label[64];
-    value_to_typed(spot->value, shown, sizeof(shown));
+    const char *name = spot->name ? spot->name : "";
+    value_to_typed(spot->value ? spot->value : "", shown, sizeof(shown));
     os64_strcopy(before, sizeof(before), shown);
-    os64_snprintf(label, sizeof(label), " %s: ",
-                  spot->name[0] ? spot->name : "type");
+    os64_snprintf(label, sizeof(label), " %s: ", name[0] ? name : "type");
     if (prompt(label, shown, sizeof(shown), spot->secret) == PROMPT_CANCELLED) {
         status_set(" left as it was");
         return;
@@ -1271,7 +1280,8 @@ static void radio_pick(view_t *v, int32_t index)
         const wend_spot_t *other = &v->page->spots[i];
         if (other->kind != WEND_SPOT_RADIO || other->form != picked->form)
             continue;
-        if (!os64_streq(other->name, picked->name))
+        if (!os64_streq(other->name ? other->name : "",
+                        picked->name ? picked->name : ""))
             continue;
         v->edits[i].on = (i == index) ? 1 : 0;
     }
@@ -1284,15 +1294,23 @@ static void radio_pick(view_t *v, int32_t index)
 static void choice_cycle(view_t *v, int32_t index)
 {
     wend_spot_t *spot = &v->page->spots[index];
-    if (spot->noptions <= 1) {
+    // Step to the next option the page will actually take. A disabled one is
+    // shown when it is what the list holds — the "choose one" placeholder —
+    // and is never stepped ONTO.
+    int32_t next = -1;
+    for (int32_t i = 1; i <= spot->noptions; i++) {
+        int32_t try = (spot->chosen + i) % (spot->noptions > 0 ? spot->noptions : 1);
+        if (try != spot->chosen && !spot->options[try].off) {
+            next = try;
+            break;
+        }
+    }
+    if (next < 0) {
         status_set(" that list offers nothing else");
         return;
     }
     if (!edits_room(v))
         return;
-    int32_t next = spot->chosen + 1;
-    if (next >= spot->noptions || next < 0)
-        next = 0;
     v->edits[index].chosen = next;
     edit_commit(v);
 }
@@ -1350,14 +1368,15 @@ static void back(view_t *v)
 // An address a person typed. A bare `host/path` means http, the way a bare
 // host means gopher to the gopher client: guessing what a word means belongs
 // to whoever is entitled to guess, and here that is the browser.
-static void typed_address(const char *typed, char *out, size_t cap)
+// AN ADDRESS THAT DOES NOT FIT IS REFUSED, NOT TRIMMED. A truncated URL is
+// not a shorter way of saying the same thing — it is a different address,
+// and one nobody typed.
+static bool typed_address(const char *typed, char *out, size_t cap)
 {
     for (const char *p = typed; *p != '\0' && *p != '/'; p++)
-        if (p[0] == ':' && p[1] == '/' && p[2] == '/') {
-            os64_strcopy(out, cap, typed);
-            return;
-        }
-    os64_snprintf(out, cap, "http://%s", typed);
+        if (p[0] == ':' && p[1] == '/' && p[2] == '/')
+            return os64_strcopy(out, cap, typed) < cap;
+    return (size_t)os64_snprintf(out, cap, "http://%s", typed) < cap;
 }
 
 // ── The keys, written down ──────────────────────────────────────────────
@@ -1545,7 +1564,10 @@ static int32_t session(const char *start)
                             break;
                         }
                         char whole[OS64_FETCH_URL_MAX];
-                        typed_address(typed, whole, sizeof(whole));
+                        if (!typed_address(typed, whole, sizeof(whole))) {
+                            status_set(" that address is longer than one may be");
+                            break;
+                        }
                         go(&view, whole, true);
                         break;
                     }
@@ -1624,7 +1646,10 @@ int main(int argc, char **argv)
         where = "example.com";           // the page that is always there
 
     char start[OS64_FETCH_URL_MAX];
-    typed_address(where, start, sizeof(start));
+    if (!typed_address(where, start, sizeof(start))) {
+        os64_hprintf(OS64_STDERR, "wend: that address is longer than one may be\n");
+        return WEND_BAD_URL;
+    }
 
     // Keys come from the TERMINAL, not from handle 0, so `wend < file` and
     // a browser in a pipeline still read the person's arrows.

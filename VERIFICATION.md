@@ -729,6 +729,22 @@ itself whole; a re-layout that failed for memory left a NULL page that the
 edit path walked; a text file with classic-Mac carriage returns rendered as
 one line; and `Accept` advertised less than the loader would render.
 
+**Round three found six, one P1, and the P1 was a live crash on the most
+ordinary page in the corpus**: Wikipedia's Search is a `<button>`, and the
+round-two fix that taught a submit button to carry its own method had gone
+into only one of the two element types that can BE a submit — so activating
+that button read a pointer the renderer never set. (This one was found
+twice: the truth pass before submitting caught it, and the round named it
+from the other direction.) The rest were the same shape of unfinished
+rule: the submitter's action brought its own `#name` and the form's was
+used instead; a disabled `option` could be the active choice, be cycled
+onto and be sent; `readonly` was treated as ordinary and editable, when it
+means the page keeps the value and still sends it; an empty `href` — the
+standard's "this page", and what every reload link is made of — was stored
+as an unresolvable address; and once sixty-four keys of type-ahead had
+filled the buffer, the cancel predicate stopped reading the terminal, so a
+later Ctrl+C could not end a slow fetch.
+
 **And two real searches, typed into real pages.** The Floodgap gateway's
 box, reached by typing its number, edited from the value it came with, and
 sent — the gateway answered with the gopher menu that was asked for. Then

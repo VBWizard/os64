@@ -71,6 +71,15 @@ typedef enum {
     WEND_SPOT_SUBMIT,     // the control that sends the form
 } wend_spot_kind_t;
 
+// ONE ENTRY OF A LIST. A DISABLED option is still SHOWN when the page marks
+// it — that is what a "choose one" placeholder is — but it is never cycled
+// onto and never sent, because disabled means the page took it away.
+typedef struct {
+    char *shown;         // the words
+    char *value;         // what picking it sends
+    bool  off;
+} wend_option_t;
+
 typedef struct {
     wend_spot_kind_t kind;
     int32_t line;        // the first row it appears on
@@ -89,17 +98,21 @@ typedef struct {
     // standard lets the button carry its own action and method, and the
     // method matters to a browser that sends only one of them: a GET form
     // with a `formmethod=post` button is a POST, and sending it as a GET
-    // would put a password in an address.
+    // would put a password in an address. Its action carries a `#name` of
+    // its own for the same reason a link's does.
     char   *form_action; // "" = the form's own
+    char   *form_fragment;
     bool    has_method;  // whether `post` below means anything
     bool    post;
     bool    on;          // CHECK / RADIO: ticked
     bool    secret;      // TEXT: a password — never drawn, never echoed
-    char  **options;     // CHOICE: what is shown for each option, and
-    char  **option_values;  //       what each one sends
-    int32_t noptions, chosen;
-    int32_t optioncap, optionvalcap;    // how much room those two arrays have
+    wend_option_t *options;   // CHOICE: what it offers
+    int32_t noptions, chosen, optioncap;
     int32_t width;       // TEXT: how many cells the box is drawn as
+    // TEXT: the page keeps this value fixed. Unlike a disabled control it IS
+    // sent — readonly is about who may change it, not about whether it
+    // counts — so it stays a spot you can land on and cannot type into.
+    bool    readonly;
 } wend_spot_t;
 
 // A FORM IS ITS DESTINATION AND HOW IT INSISTS ON GETTING THERE. `post` is

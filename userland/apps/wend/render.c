@@ -108,6 +108,12 @@ static size_t num_text(int32_t v, char *out)
     return n;
 }
 
+// A PAGE THAT RAN OUT OF MEMORY PARTWAY CAN BE MISSING A STRING. Its
+// `incomplete` flag says so and what is there is still worth showing, so
+// every reader below treats an absent string as an empty one rather than
+// trusting a pointer the renderer never got to fill.
+static const char *some(const char *s) { return s ? s : ""; }
+
 // ── Growing arrays ──────────────────────────────────────────────────────
 
 static bool reserve(void **items, int32_t *cap, int32_t want, size_t elem)
@@ -499,8 +505,8 @@ static void pre_bytes(render_t *r, const char *s, size_t n, bool utf8)
         // before the tree, so this is the raw-text path's business.)
         if (cp == 0x0D) {
             line_end(r, true);
-            if (at < n && (utf8 ? s[at] == '\n' : (unsigned char)s[at] == 0x0A))
-                at++;
+            if (at < n && s[at] == '\n')
+                at++;                   // CRLF is one ending, not two
             continue;
         }
         if (cp == 0x09) {
@@ -608,8 +614,14 @@ static int32_t link_add(render_t *r, const char *href)
         return 0;
     char resolved[OS64_URL_REF_MAX];
     resolved[0] = '\0';
-    if (href && r->base)
-        (void)os64_url_absolute(r->base, href, resolved, sizeof(resolved));
+    // AN EMPTY href NAMES THE PAGE IT IS ON — the standard's rule, and what
+    // every "reload" and "back to the top" link on the old web is made of.
+    // The resolver refuses an empty reference by contract, so ask it the
+    // question it does answer: a fragment-only reference names the same
+    // page.
+    const char *reference = (href && href[0]) ? href : "#";
+    if (r->base)
+        (void)os64_url_absolute(r->base, reference, resolved, sizeof(resolved));
     spot->url = dup_text(r, resolved);
     spot->fragment = dup_text(r, reference_fragment(href));
     return (spot->url && spot->fragment) ? r->page->nspots : 0;
@@ -653,7 +665,7 @@ int32_t wend_anchor_line(const wend_page_t *page, const char *name)
     if (!page || !name || name[0] == '\0')
         return -1;
     for (int32_t i = 0; i < page->nanchors; i++)
-        if (os64_streq(page->anchors[i].name, name))
+        if (os64_streq(some(page->anchors[i].name), name))
             return page->anchors[i].line;
     return -1;
 }
@@ -902,6 +914,25 @@ static bool type_is_nocase(const char *type, const char *want)
 }
 
 
+// WHAT A SUBMIT BUTTON OVERRULES ABOUT ITS FORM. The standard lets the
+// button carry its own action and its own method, and BOTH element types
+// that can be one — `input type=submit` and `button` — must record them or
+// the form is sent somewhere, or in a way, the page did not ask for.
+static void submit_overrides(render_t *r, const os64_html_node_t *n,
+                             wend_spot_t *spot)
+{
+    const char *formaction = attr_value(n, "formaction");
+    const char *formmethod = attr_value(n, "formmethod");
+    char over[OS64_URL_REF_MAX];
+    over[0] = '\0';
+    if (formaction && formaction[0] && r->base)
+        (void)os64_url_absolute(r->base, formaction, over, sizeof(over));
+    spot->form_action = dup_text(r, over);
+    spot->form_fragment = dup_text(r, reference_fragment(formaction));
+    spot->has_method = formmethod != NULL && formmethod[0] != '\0';
+    spot->post = spot->has_method && os64_streq_nocase(formmethod, "post");
+}
+
 // One `input`, which is six different controls wearing one tag name.
 static void field_input(render_t *r, const os64_html_node_t *n)
 {
@@ -917,6 +948,7 @@ static void field_input(render_t *r, const os64_html_node_t *n)
         return;
     }
 
+    bool readonly = os64_html_attr(n, "readonly") != NULL;
     wend_spot_kind_t kind = WEND_SPOT_TEXT;
     if (type_is_nocase(type, "submit") || type_is_nocase(type, "image"))
         kind = WEND_SPOT_SUBMIT;
@@ -944,11 +976,12 @@ static void field_input(render_t *r, const os64_html_node_t *n)
     spot->name = dup_text(r, attr_value(n, "name"));
     spot->value = dup_text(r, value);
     spot->secret = secret;
+    spot->readonly = readonly;
     spot->on = os64_html_attr(n, "checked") != NULL;
     const wend_edit_t *edit = edit_for(r);
     if (edit && edit->on >= 0)
         spot->on = edit->on != 0;
-    if (edit && edit->text && kind == WEND_SPOT_TEXT) {
+    if (edit && edit->text && kind == WEND_SPOT_TEXT && !readonly) {
         os64_free(spot->value);
         spot->value = dup_text(r, edit->text);
     }
@@ -959,17 +992,7 @@ static void field_input(render_t *r, const os64_html_node_t *n)
     spot_mark(r, index);
     switch (kind) {
         case WEND_SPOT_SUBMIT: {
-            // THE BUTTON MAY OVERRULE ITS FORM, and the method it names
-            // decides whether this submission is one wend performs at all.
-            const char *formaction = attr_value(n, "formaction");
-            const char *formmethod = attr_value(n, "formmethod");
-            char over[OS64_URL_REF_MAX];
-            over[0] = '\0';
-            if (formaction && formaction[0] && r->base)
-                (void)os64_url_absolute(r->base, formaction, over, sizeof(over));
-            spot->form_action = dup_text(r, over);
-            spot->has_method = formmethod != NULL && formmethod[0] != '\0';
-            spot->post = spot->has_method && os64_streq_nocase(formmethod, "post");
+            submit_overrides(r, n, spot);
             spot->label = dup_text(r, value && value[0] ? value : "Submit");
             word_text(r, "[", 1);
             word_folded(r, spot->label);
@@ -993,28 +1016,30 @@ static void field_input(render_t *r, const os64_html_node_t *n)
 // A `select` is its chosen option. The list is collected so the choice can
 // be cycled without going back to the tree, and so what is SENT is the
 // option's value rather than the words shown for it.
-static void collect_options(render_t *r, const os64_html_node_t *el, wend_spot_t *spot)
+static void collect_options(render_t *r, const os64_html_node_t *el,
+                            wend_spot_t *spot, bool group_off)
 {
     for (const os64_html_node_t *c = el->first_child; c && !r->oom; c = c->next) {
         if (c->kind != OS64_HTML_ELEMENT)
             continue;
+        bool off = group_off || os64_html_attr(c, "disabled") != NULL;
         if (c->tag == OS64_HTML_TAG_OPTGROUP) {
-            collect_options(r, c, spot);
+            // A disabled group disables every option under it.
+            collect_options(r, c, spot, off);
             continue;
         }
         if (c->tag != OS64_HTML_TAG_OPTION)
             continue;
         if (!reserve((void **)&spot->options, &spot->optioncap, spot->noptions + 1,
-                     sizeof(*spot->options))
-            || !reserve((void **)&spot->option_values, &spot->optionvalcap,
-                        spot->noptions + 1, sizeof(*spot->option_values))) {
+                     sizeof(*spot->options))) {
             r->oom = true;
             return;
         }
-        char *shown = gather_text(r, c);
+        wend_option_t *option = &spot->options[spot->noptions];
+        option->shown = gather_text(r, c);
         const char *value = attr_value(c, "value");
-        spot->options[spot->noptions] = shown;
-        spot->option_values[spot->noptions] = dup_text(r, value ? value : (shown ? shown : ""));
+        option->value = dup_text(r, value ? value : some(option->shown));
+        option->off = off;
         if (os64_html_attr(c, "selected") != NULL)
             spot->chosen = spot->noptions;
         spot->noptions++;
@@ -1034,11 +1059,16 @@ static void field_select(render_t *r, const os64_html_node_t *n)
         return;
     int32_t index = r->page->nspots;
     spot->name = dup_text(r, attr_value(n, "name"));
-    collect_options(r, n, spot);
+    collect_options(r, n, spot, false);
+    // A list with no marked option shows its first — even a disabled one,
+    // because a disabled first option is how a page writes "choose one", and
+    // showing it is the honest answer to what the list currently holds. It
+    // still sends nothing.
     if (spot->chosen < 0 && spot->noptions > 0)
-        spot->chosen = 0;                // a list with no marked option shows its first
+        spot->chosen = 0;
     const wend_edit_t *edit = edit_for(r);
-    if (edit && edit->chosen >= 0 && edit->chosen < spot->noptions)
+    if (edit && edit->chosen >= 0 && edit->chosen < spot->noptions
+        && !spot->options[edit->chosen].off)
         spot->chosen = edit->chosen;
     if (r->oom)
         return;
@@ -1047,7 +1077,7 @@ static void field_select(render_t *r, const os64_html_node_t *n)
     spot_mark(r, index);
     word_text(r, "[v ", 3);
     if (spot->chosen >= 0)
-        word_folded(r, spot->options[spot->chosen]);
+        word_folded(r, some(spot->options[spot->chosen].shown));
     word_text(r, "]", 1);
     r->spot = 0;
 }
@@ -1319,10 +1349,11 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             // back to the server as they came.
             spot->value = gather(r, n, true);
             const wend_edit_t *edit = edit_for(r);
-            if (edit && edit->text) {
+            if (edit && edit->text && os64_html_attr(n, "readonly") == NULL) {
                 os64_free(spot->value);
                 spot->value = dup_text(r, edit->text);
             }
+            spot->readonly = os64_html_attr(n, "readonly") != NULL;
             spot->width = box_width(r, n);
             if (r->oom)
                 goto done;
@@ -1360,6 +1391,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             int32_t index = r->page->nspots;
             spot->name = dup_text(r, attr_value(n, "name"));
             spot->value = dup_text(r, attr_value(n, "value"));
+            submit_overrides(r, n, spot);
             spot->label = gather_text(r, n);
             if (r->oom)
                 goto done;
@@ -1659,11 +1691,16 @@ wend_form_result_t wend_form_url(const wend_page_t *page, int32_t index,
     // The form's own destination, the button's if it names one, or the page
     // it all sits on. A GET form REPLACES whatever query that address
     // already carries.
-    const char *action = form->action[0] ? form->action : (page_url ? page_url : "");
-    if (from->kind == WEND_SPOT_SUBMIT && from->form_action[0])
+    const char *action = some(form->action)[0] ? form->action : some(page_url);
+    const char *want = some(form->fragment);
+    if (from->kind == WEND_SPOT_SUBMIT && some(from->form_action)[0]) {
+        // The button's action brings its own `#name`: it is a different
+        // destination, so the form's section does not travel to it.
         action = from->form_action;
+        want = some(from->form_fragment);
+    }
     if (fragment && fragment_cap)
-        (void)os64_strcopy(fragment, fragment_cap, form->fragment);
+        (void)os64_strcopy(fragment, fragment_cap, want);
     size_t at = 0;
     for (const char *q = action; *q != '\0' && *q != '?' && *q != '#'; q++) {
         if (at + 2 > cap)
@@ -1684,7 +1721,8 @@ wend_form_result_t wend_form_url(const wend_page_t *page, int32_t index,
             continue;
         switch (spot->kind) {
             case WEND_SPOT_TEXT:
-                room = pair_append(out, cap, &at, &first, spot->name, spot->value);
+                room = pair_append(out, cap, &at, &first, some(spot->name),
+                                   some(spot->value));
                 break;
             case WEND_SPOT_CHECK:
             case WEND_SPOT_RADIO:
@@ -1692,18 +1730,22 @@ wend_form_result_t wend_form_url(const wend_page_t *page, int32_t index,
                 // with no value of its own sends `on` — both the standard's,
                 // and both what a server is written against.
                 if (spot->on)
-                    room = pair_append(out, cap, &at, &first, spot->name,
-                                       spot->value[0] ? spot->value : "on");
+                    room = pair_append(out, cap, &at, &first, some(spot->name),
+                                       some(spot->value)[0] ? spot->value : "on");
                 break;
             case WEND_SPOT_CHOICE:
-                if (spot->chosen >= 0 && spot->chosen < spot->noptions)
-                    room = pair_append(out, cap, &at, &first, spot->name,
-                                       spot->option_values[spot->chosen]);
+                // A disabled option — a "choose one" placeholder, usually —
+                // is not a successful control and sends nothing at all.
+                if (spot->chosen >= 0 && spot->chosen < spot->noptions
+                    && !spot->options[spot->chosen].off)
+                    room = pair_append(out, cap, &at, &first, some(spot->name),
+                                       some(spot->options[spot->chosen].value));
                 break;
             case WEND_SPOT_SUBMIT:
                 // Only the button that was pressed says so.
                 if (i == index)
-                    room = pair_append(out, cap, &at, &first, spot->name, spot->value);
+                    room = pair_append(out, cap, &at, &first, some(spot->name),
+                                       some(spot->value));
                 break;
             default:
                 break;
@@ -1733,12 +1775,12 @@ void wend_page_free(wend_page_t *page)
         os64_free(spot->value);
         os64_free(spot->label);
         os64_free(spot->form_action);
+        os64_free(spot->form_fragment);
         for (int32_t j = 0; j < spot->noptions; j++) {
-            os64_free(spot->options[j]);
-            os64_free(spot->option_values[j]);
+            os64_free(spot->options[j].shown);
+            os64_free(spot->options[j].value);
         }
         os64_free(spot->options);
-        os64_free(spot->option_values);
     }
     for (int32_t i = 0; i < page->nforms; i++) {
         wend_form_t *form = &page->forms[i];

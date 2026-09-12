@@ -522,6 +522,65 @@ static void form_checks(void)
     expect_url("formaction", "<form action=/s method=get><input name=q value=x>"
                "<input type=submit formaction=/other></form>",
                1, WEND_FORM_OK, "http://host/other?q=x");
+    // A DISABLED OPTION is shown, never stepped onto, and never sent — which
+    // is exactly what a "choose one" placeholder needs.
+    expect_url("placeholder", "<form action=/s><select name=pick>"
+               "<option disabled selected value=none>Choose one"
+               "<option value=1>One</select><input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s");
+    expect_url("optgroup off", "<form action=/s><select name=pick>"
+               "<optgroup disabled><option value=1 selected>One</optgroup>"
+               "<option value=2>Two</select><input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s");
+    {
+        // The placeholder is what the list SHOWS, all the same.
+        const char *want[] = { "[1][v Choose one][2][Submit]" };
+        expect_lines("placeholder drawn", "<form><select name=p>"
+                     "<option disabled selected>Choose one<option>One</select>"
+                     "<input type=submit></form>", 40, want, 1);
+    }
+    // READONLY is not DISABLED: the page keeps the value fixed and the value
+    // still goes.
+    expect_url("readonly sent", "<form action=/s><input name=a value=1 readonly>"
+               "<input type=submit></form>", 1, WEND_FORM_OK, "http://host/s?a=1");
+    // A button's own action brings its own section with it.
+    {
+        wend_page_t *page = render_html_text(
+            "<form action='/s#form'><input name=q value=x>"
+            "<input type=submit formaction='/other#results'></form>",
+            80, "http://host/p");
+        CHECK(page && page->nspots == 2);
+        if (page) {
+            char url[256], frag[64];
+            CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url),
+                                frag, sizeof(frag)) == WEND_FORM_OK);
+            CHECK(strcmp(url, "http://host/other?q=x") == 0);
+            CHECK(strcmp(frag, "results") == 0);
+            wend_page_free(page);
+        }
+    }
+    // An empty href names the page it is on, which is what a reload link is.
+    {
+        wend_page_t *page = render_html_text("<a href=''>again</a>", 40,
+                                             "http://host/dir/page.html?q=1");
+        CHECK(page && page->nspots == 1);
+        if (page && page->nspots == 1)
+            CHECK(strcmp(page->spots[0].url, "http://host/dir/page.html?q=1") == 0);
+        wend_page_free(page);
+    }
+
+    // A `button` is a submit too, and carries the same overrules. Before
+    // this was true, activating one read a pointer the renderer never set.
+    expect_url("button method", "<form action=/s><input name=pw value=x>"
+               "<button formmethod=post>Log in</button></form>",
+               1, WEND_FORM_POST, NULL);
+    expect_url("button action", "<form action=/s><input name=q value=x>"
+               "<button formaction=/other>Go</button></form>",
+               1, WEND_FORM_OK, "http://host/other?q=x");
+    expect_url("button plain", "<form action=/s><input name=q value=x>"
+               "<button name=go value=now>Go</button></form>",
+               1, WEND_FORM_OK, "http://host/s?q=x&go=now");
+
     // A fieldset disables everything under it — except the words in its
     // first legend, which were never a control.
     expect_url("fieldset off", "<form action=/s><fieldset disabled>"
@@ -672,6 +731,8 @@ static void dump(const wend_page_t *page, const char *name)
         if (spot->secret)
             printf(" secret");
         printf(" name=%s", spot->name[0] ? spot->name : "(none)");
+        if (spot->readonly)
+            printf(" readonly");
         switch (spot->kind) {
             case WEND_SPOT_CHECK:
             case WEND_SPOT_RADIO:
@@ -680,7 +741,9 @@ static void dump(const wend_page_t *page, const char *name)
             case WEND_SPOT_CHOICE:
                 printf(" chosen=%d of %d", spot->chosen, spot->noptions);
                 for (int32_t j = 0; j < spot->noptions; j++)
-                    printf(" [%s=%s]", spot->options[j], spot->option_values[j]);
+                    printf(" [%s=%s%s]", spot->options[j].shown,
+                           spot->options[j].value,
+                           spot->options[j].off ? " off" : "");
                 break;
             case WEND_SPOT_SUBMIT:
                 printf(" label=%s value=%s", spot->label, spot->value);
