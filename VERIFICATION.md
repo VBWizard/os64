@@ -745,6 +745,26 @@ as an unresolvable address; and once sixty-four keys of type-ahead had
 filled the buffer, the cancel predicate stopped reading the terminal, so a
 later Ctrl+C could not end a slow fetch.
 
+**Round four came back CLEAN** — completed on the whole commit with no
+review submitted, which is the strongest verdict this reviewer gives and,
+by CLAUDE.md's rule, the end of the matter for that commit.
+
+**What the truth passes BETWEEN rounds found is worth as much as the
+rounds.** Reading the diff before each submit, and putting a deliberately
+pathological page through the host driver under the sanitizers, turned up:
+the same button-submit crash round three later named, from the other
+direction; a form data set that put every hidden field in front instead of
+in tree order; an image button sending its value where the standard sends
+coordinates; a caught signal answering a confirm as "no"; `#` and `#top`
+fetching the page again to show its own top; a readonly box counting as
+something to answer; a page that rendered to nothing showing a blank
+screen with a 200 on it; and a default port that url.h asks a caller to
+drop before resolving, which would otherwise spell `host:443` into every
+relative link. The pathological page — lists nested five deep around a
+`pre`, a form inside a table inside a form, unclosed inline tags, an empty
+`select`, a readonly textarea, a disabled fieldset with a bold legend —
+is worth keeping in a scratch file when working on the renderer.
+
 **And two real searches, typed into real pages.** The Floodgap gateway's
 box, reached by typing its number, edited from the value it came with, and
 sent — the gateway answered with the gopher menu that was asked for. Then
