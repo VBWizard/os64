@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../userland/libhtml/internal.h"
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -442,6 +443,184 @@ static void bounded_case(const unsigned char *data, size_t len, os64_html_option
             safety_fail("bounded leak");
     }
 }
+/* ── The encoding table's two readers ────────────────────────────────────
+ *
+ * index single-byte windows-1252, transcribed from the Encoding Standard. A
+ * test that borrowed the table under test could not catch a wrong table, so
+ * these 32 pointers are written out here and BOTH directions are asked to
+ * agree with them: the encoder directly, the decoder through a document. */
+static const struct {
+    unsigned char byte;
+    uint32_t cp;
+} windows_1252_index[] = {
+    {0x80, 0x20ac}, {0x81, 0x0081}, {0x82, 0x201a}, {0x83, 0x0192}, {0x84, 0x201e}, {0x85, 0x2026},
+    {0x86, 0x2020}, {0x87, 0x2021}, {0x88, 0x02c6}, {0x89, 0x2030}, {0x8a, 0x0160}, {0x8b, 0x2039},
+    {0x8c, 0x0152}, {0x8d, 0x008d}, {0x8e, 0x017d}, {0x8f, 0x008f}, {0x90, 0x0090}, {0x91, 0x2018},
+    {0x92, 0x2019}, {0x93, 0x201c}, {0x94, 0x201d}, {0x95, 0x2022}, {0x96, 0x2013}, {0x97, 0x2014},
+    {0x98, 0x02dc}, {0x99, 0x2122}, {0x9a, 0x0161}, {0x9b, 0x203a}, {0x9c, 0x0153}, {0x9d, 0x009d},
+    {0x9e, 0x017e}, {0x9f, 0x0178}};
+static size_t checks_run, checks_failed;
+static void check(bool ok, const char *fmt, ...)
+{
+    checks_run++;
+    if (ok)
+        return;
+    checks_failed++;
+    va_list ap;
+    va_start(ap, fmt);
+    fputs("FAIL ", stderr);
+    vfprintf(stderr, fmt, ap);
+    fputc('\n', stderr);
+    va_end(ap);
+}
+static size_t utf8_put(uint32_t cp, char *out)
+{
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = (char)(0xc0 | cp >> 6);
+        out[1] = (char)(0x80 | (cp & 0x3f));
+        return 2;
+    }
+    out[0] = (char)(0xe0 | cp >> 12);
+    out[1] = (char)(0x80 | (cp >> 6 & 0x3f));
+    out[2] = (char)(0x80 | (cp & 0x3f));
+    return 3;
+}
+static void collect_text(const HNode *n, char *out, size_t cap, size_t *len)
+{
+    for (; n; n = n->next) {
+        if (n->kind == OS64_HTML_TEXT && n->text) {
+            size_t take = n->text_len < cap - *len ? n->text_len : cap - *len;
+            memcpy(out + *len, n->text, take);
+            *len += take;
+        }
+        collect_text(n->first_child, out, cap, len);
+    }
+}
+static bool index_holds(uint32_t cp)
+{
+    for (size_t i = 0; i < H_ARRAY(windows_1252_index); i++)
+        if (windows_1252_index[i].cp == cp)
+            return true;
+    return false;
+}
+static void encoding_exports(void)
+{
+    static const struct {
+        const char *label, *want;
+    } labels[] = {{"utf-8", "utf-8"},
+                  {"UTF-8", "utf-8"},
+                  {"utf8", "utf-8"},
+                  {"unicode-1-1-utf-8", "utf-8"},
+                  {"unicode11utf8", "utf-8"},
+                  {"unicode20utf8", "utf-8"},
+                  {"x-unicode20utf8", "utf-8"},
+                  {"ansi_x3.4-1968", "windows-1252"},
+                  {"ascii", "windows-1252"},
+                  {"cp1252", "windows-1252"},
+                  {"cp819", "windows-1252"},
+                  {"csisolatin1", "windows-1252"},
+                  {"ibm819", "windows-1252"},
+                  {"iso-8859-1", "windows-1252"},
+                  {"iso-ir-100", "windows-1252"},
+                  {"iso8859-1", "windows-1252"},
+                  {"iso88591", "windows-1252"},
+                  {"iso_8859-1", "windows-1252"},
+                  {"iso_8859-1:1987", "windows-1252"},
+                  {"l1", "windows-1252"},
+                  {"latin1", "windows-1252"},
+                  {"LATIN1", "windows-1252"},
+                  {"us-ascii", "windows-1252"},
+                  {"windows-1252", "windows-1252"},
+                  {"x-cp1252", "windows-1252"},
+                  {"utf-16", "utf-16le"},
+                  {"utf-16le", "utf-16le"},
+                  {"UTF-16BE", "utf-16be"},
+                  /* ASCII whitespace at either end is not part of a label. */
+                  {" \t\r\n\futf-8 \t\r\n\f", "utf-8"},
+                  /* Nothing else names an encoding this parser decodes. */
+                  {"", NULL},
+                  {"shift_jis", NULL},
+                  {"euc-jp", NULL},
+                  {"utf-32", NULL},
+                  {"latin", NULL},
+                  {"latin12", NULL},
+                  {"iso-8859-2", NULL},
+                  {"utf-8 or else", NULL}};
+    for (size_t i = 0; i < H_ARRAY(labels); i++) {
+        const char *got = os64_html_encoding_for_label(labels[i].label, strlen(labels[i].label));
+        check(labels[i].want ? got && strcmp(got, labels[i].want) == 0 : got == NULL,
+              "label |%s| named %s, want %s", labels[i].label, got ? got : "(nothing)",
+              labels[i].want ? labels[i].want : "(nothing)");
+    }
+    /* A label is a span of bytes and not a C string: the caller splitting an
+     * accept-charset list hands over one name out of the middle of one. */
+    const char *spanned = os64_html_encoding_for_label("utf-8 or else", 5);
+    check(spanned && strcmp(spanned, "utf-8") == 0, "label by length named %s",
+          spanned ? spanned : "(nothing)");
+    check(os64_html_encoding_for_label(NULL, 0) == NULL, "no label at all");
+
+    /* The encoder, over the transcribed index. */
+    for (size_t i = 0; i < H_ARRAY(windows_1252_index); i++) {
+        uint8_t b = 0;
+        bool got = os64_html_encode_windows_1252(windows_1252_index[i].cp, &b);
+        check(got && b == windows_1252_index[i].byte, "encode U+%04X gave %s0x%02X, want 0x%02X",
+              windows_1252_index[i].cp, got ? "" : "nothing, ", b, windows_1252_index[i].byte);
+    }
+    for (uint32_t cp = 0; cp < 0x80; cp++) {
+        uint8_t b = 0;
+        check(os64_html_encode_windows_1252(cp, &b) && b == cp, "encode ASCII U+%04X", cp);
+    }
+    for (uint32_t cp = 0xa0; cp <= 0xff; cp++) {
+        uint8_t b = 0;
+        check(os64_html_encode_windows_1252(cp, &b) && b == cp, "encode Latin-1 U+%04X", cp);
+    }
+    /* The C1 block is where the index is SPARSE, and a code point it has no
+     * pointer for has no byte — the five it does hold are the ones the
+     * decoder maps to themselves. */
+    for (uint32_t cp = 0x80; cp <= 0x9f; cp++) {
+        uint8_t b = 0;
+        bool got = os64_html_encode_windows_1252(cp, &b);
+        check(got == index_holds(cp), "encode C1 U+%04X %s", cp, got ? "gave a byte" : "refused");
+    }
+    static const uint32_t absent[] = {0x100, 0x2028, 0x20a0, 0x1f600, 0x10ffff};
+    for (size_t i = 0; i < H_ARRAY(absent); i++) {
+        uint8_t b = 0;
+        check(!os64_html_encode_windows_1252(absent[i], &b), "encode U+%04X refused", absent[i]);
+    }
+
+    /* And the decoder, asked the same question the other way round: the 32
+     * high bytes through a windows-1252 document come out as those 32 code
+     * points, so the two readers of one table cannot drift apart. */
+    unsigned char markup[3 + H_ARRAY(windows_1252_index)];
+    memcpy(markup, "<p>", 3);
+    for (size_t i = 0; i < H_ARRAY(windows_1252_index); i++)
+        markup[3 + i] = windows_1252_index[i].byte;
+    char want[4 * H_ARRAY(windows_1252_index)];
+    size_t want_len = 0;
+    for (size_t i = 0; i < H_ARRAY(windows_1252_index); i++)
+        want_len += utf8_put(windows_1252_index[i].cp, want + want_len);
+    os64_html_options_t opt = os64_html_options_default();
+    opt.charset = "windows-1252";
+    allocations = 0;
+    fail_at = 0;
+    os64_html_document_t *doc = parse_raw(markup, sizeof(markup), 0, &opt);
+    if (!doc || doc->refusal) {
+        check(false, "windows-1252 document refused");
+    } else {
+        char got[sizeof(want)];
+        size_t got_len = 0;
+        collect_text(doc->document, got, sizeof(got), &got_len);
+        check(got_len == want_len && memcmp(got, want, want_len) == 0,
+              "windows-1252 text decoded to %zu bytes, want %zu", got_len, want_len);
+        check(doc->charset && strcmp(doc->charset, "windows-1252") == 0,
+              "document charset %s", doc->charset ? doc->charset : "(none)");
+    }
+    os64_html_document_free(doc);
+}
 static void stress(void)
 {
     char *data = malloc(1024 * 1024);
@@ -518,6 +697,11 @@ int main(int argc, char **argv)
     if (argc > 1 && strcmp(argv[1], "--stress") == 0) {
         stress();
         return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "--checks") == 0) {
+        encoding_exports();
+        printf("html checks: %zu run, %zu failed\n", checks_run, checks_failed);
+        return checks_failed ? 1 : 0;
     }
     uint32_t fuzz_seed = 0x64f022u;
     size_t fuzz_cases = 0;
