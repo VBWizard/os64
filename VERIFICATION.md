@@ -634,6 +634,112 @@ and the server, for a guest to point at, with:
 python3 -u tools/ftptestd.py --port 2121 --root /tmp/uploads
 ```
 
+## libpage acceptance — what a page MEANS (2026-09-12)
+
+LIBPAGE.md's rung between parsing and layout: form ownership, the submitter,
+the entry list, the encodings, reference resolution. It is pure computation
+over libhtml's tree — no syscalls, no terminal, no wire — so the whole of it
+is provable on the host, and that is where it is proved.
+
+**The suite is `tools/test_libpage_host.sh`**, plain `cc` under ASan and
+UBSan with `-fno-sanitize-recover`. Markup in, the REQUEST out: the address,
+the method, the body, the content type, the fragment, and the two facts a
+face needs before it sends. Each case names the STEPS of the standard it
+exercises, against a step list checked into the driver — so coverage is a
+number with an auditable denominator rather than a verdict to be argued, and
+adding a step without a case lowers it on purpose. The run prints it:
+
+```
+libpage: 158 cases, 0 failed
+libpage coverage: A 16/16 B 6/7 C 19/19 D 25/25 E 12/12 F 15/15 G 8/8 H 14/14 I 9/9 J 5/5 K 18/18
+  B7 has no case: a parser-inserted owner (booked: libhtml, issue #99)
+libpage sweep: each of 279 allocations failed in turn, nothing leaked
+```
+
+**The corpus is the durable artefact, which is the whole reason it exists.**
+Sixty-two findings' worth of specification reading lived inside a renderer
+marked throwaway; a case here outlives every front end written over the
+library, because the same markup must produce the same bytes whether a page
+is drawn in cells or in pixels. Every review finding of the first draft is a
+named case, marked with its round, so a fix that was only a line of code
+cannot come back.
+
+**The allocation sweep needs pages that SUCCEED.** The pathological page is
+mostly refusals, and a page that refuses allocates almost nothing — sweeping
+it alone reached a few dozen allocations and called itself done. The sweep
+drives six pages: the pathological one, a multipart POST with a value that
+has to be transcoded, a `mailto:` in both methods, a `data:` GET, and a page
+of links including a fragment that nothing claims. The count comes from a
+pass with nothing failing, because reading the ceiling off a pass that
+failed early reads a ceiling that is not there.
+
+**The two data tables are proved against their sources, not against
+themselves.** `tools/test_bidi_host.sh` digests every one of the 1,114,112
+code points through `os64_bidi_strong` and compares the hash with an
+independent parse of the pinned Unicode file — so a generator that mis-read
+the file, a binary search that walked off a range edge, and a stale `.inc`
+are three different failures instead of one silent agreement. libhtml's
+`--checks` mode does the same for windows-1252 both ways: the index is
+transcribed into the test, the encoder is asked to agree with it, and the
+DECODER is asked through an actual document, so a one-sided table edit
+fails.
+
+Refresh the generated tables deliberately, never by accident:
+
+```sh
+tools/gen_bidi_table.py --check    # is the checked-in table current?
+tools/gen_bidi_table.py --fetch    # re-download the pinned Unicode file
+```
+
+**What the guest proves at this rung is that the library LOADS**, since
+nothing calls it yet. `wend` declares the edge before it uses it for exactly
+this reason, so `wend example.com` on a boot with no network is the test:
+reaching "cannot reach example.com" means the program started, which means
+the loader resolved `/lib/libpage.so`, honoured its prelink slot, and bound
+its dependency edges on libhtml and libos64 — and a slot that collided or a
+`.so` that would not resolve refuses the spawn by name instead.
+
+Do NOT expect `/sys/shlib` to list it afterwards: unload-at-refcount-zero
+reclaims a library the moment nothing holds it, and wend has exited. That is
+the shared-object arc working, not the library missing. The first thing that
+adds `/lib/libpage.so` to a running system's list is a face that stays up.
+
+A local server's access log is the last word on a submission, and that
+arrives with the face that consumes the library.
+
+**The refresh family IS driven end to end in the guest**, because a real
+page needed it. Boot with `-netdev user`, then:
+
+```sh
+wend 'https://html.duckduckgo.com/html/?q=hobby+os+development'
+```
+
+Type a result's number and press Enter. The status row must show the
+RESULT'S address with `200 OK`, not DuckDuckGo's. Every link on that page
+goes through a click logger that answers 200 with no redirect, a script for
+a browser that runs one and a `noscript` refresh for a browser that does
+not, so before family K the answer was a blank page and an accurate sentence
+about having nothing to show. Then press `b` once: it must land back on the
+results. Twice means the redirector went into the history, which puts a page
+nobody meant to visit between a reader and where they were.
+
+Type that address WITHOUT quotes, because unquoted is how anyone types one
+and it is its own test: a `?` is a glob metacharacter, so husk used to read
+the whole word as a filename pattern, split it at its last slash, and answer
+with a complaint about a directory called `https://host`. An address is not
+a pattern and husk knows it now.
+
+Notes for the harness: `tools/vmtype` cannot type a `%` or a `+`, so use a
+query whose words are joined with `-`.
+
+**The one thing this rung cannot check is the IMAGE list.** A library that
+builds, links and passes every host case still leaves `husk: cannot run
+wend` on the glass if it is missing from `USERLAND_LIBS` in the root
+makefile — which is exactly what the first boot of this slice printed. The
+list is iterated so a new library cannot be forgotten in the COPY, but
+nothing adds it to the list for you, and the failure arrives as the CONSUMER
+refusing to start rather than as anything naming the library.
+
 ## wend acceptance — the line-mode browser (2026-09-11)
 
 BROWSER.md's face: the first program that puts libfetch and libhtml together

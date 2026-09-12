@@ -32,6 +32,7 @@
 
 #include "fetch/fetch.h"
 #include "html/html.h"
+#include "page/page.h"
 #include "os64/args.h"
 #include "os64/fmt.h"
 #include "os64/io.h"
@@ -83,6 +84,12 @@ typedef struct {
     size_t   textlen;
     bool     text_utf8;
     wend_page_t *page;                  // the lines, at the current width
+    // WHAT THE PAGE MEANS, as opposed to how it reads (LIBPAGE.md). Built
+    // once per page because it does not depend on the width: a re-wrap
+    // rebuilds the lines and never this. Today it answers one question —
+    // whether the document declares a refresh — and the rest of the wire
+    // semantics move onto it with the renderer's lift.
+    os64_page_t *model;
     // WHAT A PERSON FILLED IN, kept beside the page rather than in it: a
     // re-wrap throws the page away and builds another, and what was typed
     // into a search box must survive that.
@@ -613,6 +620,8 @@ static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
 
 static void view_clear(view_t *v)
 {
+    // The model points into the tree, so it goes first.
+    os64_page_free(v->model);
     if (v->doc)
         os64_html_document_free(v->doc);
     os64_free(v->text);
@@ -620,6 +629,7 @@ static void view_clear(view_t *v)
     for (int32_t i = 0; i < v->nedits; i++)
         os64_free(v->edits[i].text);
     os64_free(v->edits);
+    v->model = NULL;
     v->doc = NULL;
     v->text = NULL;
     v->page = NULL;
@@ -841,6 +851,11 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
             os64_fetch_close(f);
             return false;
         }
+        // WHAT THE PAGE MEANS, from the tree and the address it came from.
+        // A page libpage cannot build a model of is still a page worth
+        // reading, so this is not a failure to return: what it costs is the
+        // one question the model answers.
+        out->model = os64_page_build(out->doc, head->url_text, NULL);
         // THE PAGE'S OWN WORD ABOUT WHERE IT LIVES OUTRANKS THE ADDRESS IT
         // CAME FROM, which is what <base href> is for and what a page
         // assembled from a template relies on.
@@ -1141,6 +1156,109 @@ static void jump_to_anchor(view_t *v, const char *name)
     v->top = line;
     scroll_clamp(v);
     selection_reanchor(v);
+}
+
+// ── A page that asks to send you somewhere ──────────────────────────────
+//
+// `<meta http-equiv="refresh">` is a navigation the DOCUMENT declares, and
+// following it is what makes a search engine's result links work: the HTML
+// endpoints wrap every link in a click logger that answers 200 with no
+// redirect, a script for a browser that runs one, and this for a browser
+// that does not. libpage says whether one is declared and where to; the
+// three rules about whether to OBEY are here, because they are about a
+// person reading rather than about a page.
+// A chain of these can go on forever, so it is capped the way a chain of
+// redirects is — and for the same reason, which is that nobody reading can
+// tell the difference between a slow one and a stuck one.
+#define WEND_REFRESH_MAX 5
+
+// ONE HOP OF A CHAIN. True means the view moved and the page it moved to has
+// not been looked at yet, so the caller asks again: a redirector that lands
+// on another redirector must not need a keypress between them, which is
+// what following only one per trip through the key loop would have meant.
+static bool refresh_once(view_t *v, int32_t *chain)
+{
+    const os64_page_refresh_t *refresh = v->model ? os64_page_refresh(v->model) : NULL;
+    if (refresh == NULL)
+        return false;                    // an ordinary page ends the chain
+    // A DELAY IS A PERSON'S PATIENCE TO SPEND. wend has no timer in its key
+    // loop and a page that moves under a reader mid-sentence is hostile, so
+    // a delayed refresh is reported and left for them to act on. The "you
+    // will be redirected in five seconds" page always carries a link too.
+    if (refresh->seconds != 0) {
+        if (refresh->names_this_document)
+            status_set(" this page asks to reload itself every %u seconds",
+                       (unsigned)refresh->seconds);
+        else
+            status_set(" this page asks to send you to %s in %u seconds - press g to go",
+                       refresh->url.url, (unsigned)refresh->seconds);
+        return false;
+    }
+    // A refresh naming the page it is on is a reload, and following one with
+    // no delay is a loop with no exit. The page gets to say so and nothing
+    // else happens.
+    if (refresh->names_this_document) {
+        status_set(" this page asks to reload itself immediately, which wend does not do");
+        return false;
+    }
+    if (++*chain > WEND_REFRESH_MAX) {
+        status_set(" this page is the end of a chain of redirects too long to follow");
+        return false;
+    }
+    os64_page_what_t what = { OS64_PAGE_ACTIVATE_REFRESH, 0, 0, 0 };
+    os64_page_request_t request;
+    if (os64_page_activate(v->model, what, &request) != OS64_PAGE_NAVIGATE) {
+        status_set(" this page asks to send you somewhere it does not name properly");
+        os64_page_request_free(&request);
+        return false;
+    }
+    // WHICH SCHEMES THIS BROWSER FOLLOWS IS ITS OWN LIST, which is why
+    // libpage states the scheme instead of keeping one.
+    bool fetchable = os64_streq(request.scheme, "http") || os64_streq(request.scheme, "https");
+    if (!fetchable) {
+        status_set(" this page asks to send you to %s, which wend does not fetch",
+                   request.url);
+        os64_page_request_free(&request);
+        return false;
+    }
+    // THE HOP NO FETCH CAN SEE. libfetch's downgrade callback judges the
+    // redirects inside one fetch, and this is a new fetch that starts where
+    // the page said — so an encrypted page handing over a plain address is
+    // a question only this side can ask.
+    if (request.downgrade) {
+        char question[WEND_STATUS_MAX];
+        os64_url_t target;
+        os64_snprintf(question, sizeof(question),
+                      " this encrypted page sends you to %s unencrypted - go? (y/n) ",
+                      os64_url_parse(request.url, &target) == OS64_URL_OK ? target.host
+                                                                         : "another address");
+        if (!confirm(question)) {
+            status_set(" stayed here");
+            os64_page_request_free(&request);
+            return false;
+        }
+    }
+    char where[OS64_FETCH_URL_MAX];
+    char name[OS64_URL_PATH_MAX];
+    os64_strcopy(where, sizeof(where), request.url);
+    os64_strcopy(name, sizeof(name), request.has_fragment && request.fragment ? request.fragment
+                                                                             : "");
+    os64_page_request_free(&request);
+    // NOT REMEMBERED IN THE HISTORY. A redirector is not a page anybody
+    // meant to visit, and putting it on the stack makes `b` bounce straight
+    // back off it into the page it was sending you away from.
+    if (!go(v, where, false))
+        return false;
+    if (name[0] != '\0')
+        jump_to_anchor(v, name);
+    return true;
+}
+
+static void refresh_if_declared(view_t *v)
+{
+    int32_t chain = 0;
+    while (refresh_once(v, &chain))
+        ;
 }
 
 static void follow_link(view_t *v, int32_t index)
@@ -1640,6 +1758,12 @@ static int32_t session(const char *start)
                 scroll_to_spot(&view);
             scroll_clamp(&view);
         }
+        if (s_want_quit)
+            break;
+        // After any navigation has settled and before anything is painted:
+        // a redirector is a page nobody wants to see, and the reader's own
+        // `#name` jump has already happened.
+        refresh_if_declared(&view);
         if (s_want_quit)
             break;
 
