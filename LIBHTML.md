@@ -129,7 +129,7 @@ written, because the graphical browser needs Unicode text and every table
 built for Latin-1 would be rebuilt the week it arrives. The line-mode face
 folds UTF-8 to its terminal's Latin-1 or CP437 at its own edge (that
 transliteration table is the FACE's, and the `os64_utf8_*` decode helpers
-it will want belong in libos64's str.h — booked below, not libhtml's).
+it wants live in libos64's str.h, not libhtml's).
 
 The input encoding is decided once, before tokenizing, by the standard's
 own precedence:
@@ -447,7 +447,7 @@ frees in ring 3.
 | Reading the tree DURING `feed` (progressive rendering) | v1 consumers render after `finish`; the push API already admits it without a signature change | the graphical browser wants first paint before last byte |
 | More encodings (Shift_JIS, GBK, KOI8-R, ISO-8859-2..16) | consumer-driven; the ladder and the refusal are built so adding a decoder is one table | the first page that refuses by name |
 | RENDERING foreign content and template contents | the tree carries them exactly; no face draws SVG yet | a page whose SVG must render |
-| `os64_utf8_*` helpers in libos64 str.h (decode one code point, encode one, validate) | they are the FACE's need, and libos64 grows by consumer | the line-mode face's Latin-1/CP437 fold, the first customer |
+| ~~`os64_utf8_*` helpers in libos64 str.h~~ **PAID 2026-09-11** (`os64_utf8_decode` / `os64_utf8_encode`, `tools/test_utf8_host.sh` round-trips the whole code space) the day the face's spec was written | — | — |
 | The line-mode face's transliteration table (UTF-8 → Latin-1 → CP437 fallback glyphs) | belongs to the face, not the parser | same slice as the face |
 | Current WHATWG/WPT parser baseline | current processing-instruction semantics conflict with the legacy tokenizer fixtures; v1 uses the approved historical baseline | a separately reviewed migration with aligned token and tree expectations |
 | The "change the encoding" restart | a browser re-navigates; we have no navigator inside the parser and the case is rare and recorded | a real page whose late meta matters, found via `charset_late_meta` |

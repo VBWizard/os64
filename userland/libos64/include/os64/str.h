@@ -149,4 +149,33 @@ void *os64_memmove(void *dst, const void *src, size_t n);
 // Fill `n` bytes with `c`.
 void *os64_memset(void *dst, int c, size_t n);
 
+// ── UTF-8 ───────────────────────────────────────────────────────────────
+//
+// libhtml's tree is UTF-8 and the glass is Latin-1 (or CP437), so every
+// consumer of a page folds code points on their way to a cell. The DECODE
+// is the same for all of them and lives here; the FOLD (what a curly quote
+// becomes) is each face's own table. First consumer: the line-mode browser
+// (BROWSER.md § The face).
+
+// The replacement character, what a decode answers for bytes that are not
+// UTF-8. Never silently dropped: a page with a broken byte shows a mark
+// where it was, not nothing.
+#define OS64_UTF8_REPLACEMENT 0xFFFDu
+
+// Decode ONE code point from `s` (at most `n` bytes). Writes it to `*cp`
+// and returns how many bytes it took, always at least 1 when `n` is not 0
+// — an invalid lead byte, a truncated sequence, an overlong form, a
+// surrogate or a value past U+10FFFF answers OS64_UTF8_REPLACEMENT and
+// consumes ONE byte, so a walk over a corrupt string still ends and still
+// shows every bad byte as one mark. The valid ranges are the Unicode
+// standard's (Table 3-7), the same ones libhtml's decoder honours, so a
+// string that came out of the tree decodes byte for byte as it went in.
+// Returns 0 only for `n == 0`.
+size_t os64_utf8_decode(const char *s, size_t n, uint32_t *cp);
+
+// Encode ONE code point into `out` (at least 4 bytes) and return how many
+// bytes it wrote: 1..4. A surrogate or a value past U+10FFFF is encoded as
+// OS64_UTF8_REPLACEMENT (3 bytes), never as an invalid sequence.
+size_t os64_utf8_encode(uint32_t cp, char *out);
+
 #endif // OS64_STR_H
