@@ -1,0 +1,7203 @@
+| <html>
+|   <head>
+|     <title>
+|       "T E X T F I L E S"
+|     "
+"
+|   <body>
+|     alink="#00AA00"
+|     bgcolor="#000000"
+|     link="#00FF00"
+|     text="#00FF00"
+|     vlink="#00AA00"
+|     "
+"
+|     <h1>
+|       "General Computer Textfiles"
+|     "
+"
+|     <p>
+|       "
+Your one-stop shop for all files of a "computery" nature, that cover how to
+rebuild a piece of computer hardware to do something it was 
+never meant to do, or to see someone go really deeply into a computing
+subject that would cause most people to yawn and look for the snack table.
+Since BBSes were on computers, it was natural for people who used BBSes
+to focus on all aspects of these wonderful machines.  The evidence of
+their interest and their experimentation resides below.
+"
+|     <p>
+|       "
+Of course, nearly ALL textfiles are computer-related in some fashion, and
+some subjects might fit here but fit even better in another section. For
+example, you should most definitely check out the
+"
+|       <a>
+|         href="/programming"
+|         "programming"
+|       "
+and "
+|       <a>
+|         href="/apple"
+|         "apple"
+|       " sections as well, as you might not agree with
+what I decided should go where.
+"
+|     <p>
+|       "
+"
+|       <tab>
+|         id="T"
+|         indent="60"
+|         <br>
+|         "
+"
+|       <table>
+|         width="100%"
+|         "
+"
+|         <tbody>
+|           <tr>
+|             <td>
+|               bgcolor="#00FF00"
+|               <font>
+|                 color="#000000"
+|                 <b>
+|                   "Filename"
+|                 <br>
+|             "
+"
+|             <td>
+|               bgcolor="#00DD00"
+|               <font>
+|                 color="#000000"
+|                 <b>
+|                   "Size"
+|                 <br>
+|             "
+"
+|             <td>
+|               bgcolor="#00AA00"
+|               <font>
+|                 color="#000000"
+|                 <b>
+|                   "Description of the Textfile"
+|                 <br>
+|           "
+
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               valign="TOP"
+|               <b>
+|                 <a>
+|                   href="ASTRESEARCH"
+|                   "ASTRESEARCH"
+|               <tab>
+|                 to="T"
+|             <td>
+|               width="20"
+|             <td>
+|               <b>
+|                 "Technical Bulletins from AST Research"
+|           "
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               valign="TOP"
+|               <b>
+|                 <a>
+|                   href="CYBERSPACE"
+|                   "CYBERSPACE"
+|               <tab>
+|                 to="T"
+|             <td>
+|               width="20"
+|             <td>
+|               <b>
+|                 "Files Concering the Idea of "Cyberspace""
+|           "
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               valign="TOP"
+|               <b>
+|                 <a>
+|                   href="DOCUMENTATION"
+|                   "DOCUMENTATION"
+|               <tab>
+|                 to="T"
+|             <td>
+|               width="20"
+|             <td>
+|               <b>
+|                 "Documentation Files and Instruction Sets"
+|           "
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               valign="TOP"
+|               <b>
+|                 <a>
+|                   href="HARDDRIVES"
+|                   "HARDDRIVES"
+|               <tab>
+|                 to="T"
+|             <td>
+|               width="20"
+|             <td>
+|               <b>
+|                 "Hard Drive Technical Information"
+|           "
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               valign="TOP"
+|               <b>
+|                 <a>
+|                   href="PRESSRELEASE"
+|                   "PRESSRELEASE"
+|               <tab>
+|                 to="T"
+|             <td>
+|               width="20"
+|             <td>
+|               <b>
+|                 "Press Releases by Companies Long Forgotten"
+|           "
+"
+|           <tr>
+|             <td>
+|               " "
+|           "
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="1003v-mm"
+|                 "1003v-mm"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4347"
+|               <br>
+|             <td>
+|               " Information on the Western Digital 1000v-MMx Series
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="1006v-sr"
+|                 "1006v-sr"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4347"
+|               <br>
+|             <td>
+|               " Information on the Western Digital WD1006V-SR1 and 2
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="1080mods"
+|                 "1080mods"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3610"
+|               <br>
+|             <td>
+|               " Amiga 1080 Monitor Modifications
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="1105.txt"
+|                 "1105.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2468"
+|               <br>
+|             <td>
+|               " How to Boot with DR DOS (October 31, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="144_ctrl.txt"
+|                 "144_ctrl.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6819"
+|               <br>
+|             <td>
+|               " Zaphod Beeblebrox' Notes on using PC 1.44mb 3.5" Drives with Atari STs and STEs
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="144disk.txt"
+|                 "144disk.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6178"
+|               <br>
+|             <td>
+|               " Edited Textfile about 3.5" Diskette Formats, from Kevin Maier of IBM Corporation (May 10, 1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="144meg.txt"
+|                 "144meg.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 13288"
+|               <br>
+|             <td>
+|               " How to Upgrade your Atari ST Floppies to 1.44mb 3.5" Drives, by Robert B. Pegram
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="1541.tri"
+|                 "1541.tri"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12170"
+|               <br>
+|             <td>
+|               " Two Rarely Used 1541 Disk Drive Functions, by Peter Weighill (September 1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="154xb"
+|                 "154xb"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8693"
+|               <br>
+|             <td>
+|               " JUMPERS: Adaptec AHA-1540B
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="16550a_n"
+|                 "16550a_n"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5842"
+|               <br>
+|             <td>
+|               " Information on the 16550a UART
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="1991-12"
+|                 "1991-12"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 42275"
+|               <br>
+|             <td>
+|               " What is ISDN Good for? By Mitch Kapor of the EFF (December 10, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="1pt4mb.inf"
+|                 "1pt4mb.inf"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5035"
+|               <br>
+|             <td>
+|               " Notes on the Use of 1.4mb Drives in AT Compatibles
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="2310-12"
+|                 "2310-12"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4347"
+|               <br>
+|             <td>
+|               " JUMPERS: Adaptec ACB-2310,12
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="2496"
+|                 "2496"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4891"
+|               <br>
+|             <td>
+|               " How to upgrade your US Robotics 2400 Baud Modem into a 9600 Baud Modem by Death Bringer 06/07/1991
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="24to96x.txt"
+|                 "24to96x.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7424"
+|               <br>
+|             <td>
+|               " Complaint about a file purporting to convert a 2400bd Modem to 9600 baud; claims it's a Hoax
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="25mgupgd.txt"
+|                 "25mgupgd.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 13929"
+|               <br>
+|             <td>
+|               " A 2.5 Meg Socketed RAM Upgrade for the 1040ST by Barry Orlando (Decmber 28, 1988)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="286"
+|                 "286"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6326"
+|               <br>
+|             <td>
+|               " A Review of Compaq DeskPro 286 by Bob McDuffee
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="286-2"
+|                 "286-2"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2828"
+|               <br>
+|             <td>
+|               " Part 2 of the Review of the Compaq DeskPro 286 by Bob McDuffee
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="28_8khst.txt"
+|                 "28_8khst.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9335"
+|               <br>
+|             <td>
+|               " US Robotics Announces the Last Modem You'll Ever Buy (Press Release, June 8, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="2ndrs232.txt"
+|                 "2ndrs232.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7725"
+|               <br>
+|             <td>
+|               " How to Get a Second RS232 Port For Your Atari (July 15, 1987)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="2w93358a.txt"
+|                 "2w93358a.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4445"
+|               <br>
+|             <td>
+|               " Guide to PGP Operations in a Secure Environment
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="386486.txt"
+|                 "386486.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5589"
+|               <br>
+|             <td>
+|               " A Low Cost Performance Boost for Your 386 PC
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="400top.txt"
+|                 "400top.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12870"
+|               <br>
+|             <td>
+|               " The SatisFAXtion Modem/400: Solutions to Common Problems
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="401bugs.txt"
+|                 "401bugs.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7387"
+|               <br>
+|             <td>
+|               " Two Suspected Bugs in MS-DOS v4.01 by William S. Ataras III (June 5, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="450baud.txt"
+|                 "450baud.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7296"
+|               <br>
+|             <td>
+|               " On the Topic of 450 Baud, by Scott Loftesness, May 28, 1983
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="486vs040.txt"
+|                 "486vs040.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 15981"
+|               <br>
+|             <td>
+|               " CISC: The Intel 80486 vs. The Motorola MC68040 from Advanced Microprocessors by Daniel Tabak (Scribed by Mike, July 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="4chan8bi.asc"
+|                 "4chan8bi.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8688"
+|               <br>
+|             <td>
+|               " Plans for a 4-Channel 8-Bit Analog-to-Digital Converter for PC from Francis J. Deck
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="4dostips.txt"
+|                 "4dostips.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3297"
+|               <br>
+|             <td>
+|               " 4DOS Specific Information and Tips
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="500hacks.txt"
+|                 "500hacks.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 46075"
+|               <br>
+|             <td>
+|               " A Do It Yourself Guide to Computer Repair and Modification of the PC and Amiga 500 from Lewin Edwards
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="500mm.txt"
+|                 "500mm.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6983"
+|               <br>
+|             <td>
+|               " Disk Storage Reaches Molecular Level, from Video Computing November/December 1988 Issue
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="68040.txt"
+|                 "68040.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12653"
+|               <br>
+|             <td>
+|               " The New CISC Micorporcessor offers RISC Performance
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="86bugs.lst"
+|                 "86bugs.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 13776"
+|               <br>
+|             <td>
+|               " Harald Feldmann's 86BUGS List (November 3, 1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="87.set"
+|                 "87.set"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 15313"
+|               <br>
+|             <td>
+|               " Information about the 8087 and 287 Coprocessors
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="8bitcomp.txt"
+|                 "8bitcomp.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 24445"
+|               <br>
+|             <td>
+|               " The Designing and Building of an 8-Bit Computer: A Personal Story, by Mark Balch (1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="8chan12b.asc"
+|                 "8chan12b.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6047"
+|               <br>
+|             <td>
+|               " Chap 12-Bit ADC for IBM PC by Francis J. Deck
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="8meg_exp.txt"
+|                 "8meg_exp.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8158"
+|               <br>
+|             <td>
+|               " An Amiga 8meg RAM Expander, by John Kamchen (1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="9600.inf"
+|                 "9600.inf"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 19072"
+|               <br>
+|             <td>
+|               " The Long, Painful Road to a 9600 Baud Standard
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="9600data.txt"
+|                 "9600data.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 30848"
+|               <br>
+|             <td>
+|               " A Comparison of High Speed Modems Compatibility/Features/Differences/Prices (March 3, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="9600info.inf"
+|                 "9600info.inf"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 19119"
+|               <br>
+|             <td>
+|               " 9600 Baud Modems: An Overview
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="a4000"
+|                 "a4000"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6725"
+|               <br>
+|             <td>
+|               " A Scared Amiga Beta Tester lets the Cat out of the Bag about the Amiga 4000
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="a5000.txt"
+|                 "a5000.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11864"
+|               <br>
+|             <td>
+|               " The First Reports of the Amiga 5000
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="a500_1mb"
+|                 "a500_1mb"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8312"
+|               <br>
+|             <td>
+|               " Directions on How to Convert your Amiga 501 Cartridge to Chip RAM
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="aboutems.txt"
+|                 "aboutems.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 27370"
+|               <br>
+|             <td>
+|               " Memory Expansion in80x86-Based Computers Under MS-DOS by John Wilson of Hyperdyne
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="abrash.lst"
+|                 "abrash.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 20429"
+|               <br>
+|             <td>
+|               " Roll Your Own Minilanguages with Mini-Interpreters, by Michael Abrash and Dan Illowsky (1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="accel.txt"
+|                 "accel.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3948"
+|               <br>
+|             <td>
+|               " An Amiga 500 Processor Accellerator Project, by Leslie Ayling
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="act-13.txt"
+|                 "act-13.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 63155"
+|               <br>
+|             <td>
+|               " The Amateur Crackist Tutorial Version 1.3 by Specular Vision
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="adapter.txt"
+|                 "adapter.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 18556"
+|               <br>
+|             <td>
+|               " How to Connect a PC to a VideoCrypt Decoder, by Markus Kuhn (June 19, 1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="add5.25drive.txt"
+|                 "add5.25drive.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3576"
+|               <br>
+|             <td>
+|               " How to Hook a 5.25" Drive to your Amiga, by Les Ayling
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="add512kb"
+|                 "add512kb"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2438"
+|               <br>
+|             <td>
+|               " How to install a 1mb Chip into an Amiga 500 on the Mothercard
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="addcard.txt"
+|                 "addcard.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2291"
+|               <br>
+|             <td>
+|               " Hack to Allow an Amiga 1000 or Amiga 500 to expand its 86-pin slot to 100pin
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="addictio.txt"
+|                 "addictio.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7589"
+|               <br>
+|             <td>
+|               " The Tragedy of Online Addiction, by Steve King
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="addrive.txt"
+|                 "addrive.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8357"
+|               <br>
+|             <td>
+|               " Generic 3.5 Inch Double Sided Disk Drive for the Atari 520/1040 Series
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="aids.txt"
+|                 "aids.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1571"
+|               <br>
+|             <td>
+|               " The AIDS Trojan Horse Program Marches On (March 1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="all-help.tec"
+|                 "all-help.tec"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 36845"
+|               <br>
+|             <td>
+|               " All the Help Scripts from the DESQview 2.26, QEMM 5.0, Manifest 1.0, QRAM 1.0, etc.
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="alsnutt1"
+|                 "alsnutt1"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2182"
+|               <br>
+|             <td>
+|               " Big Al's Norton Utilities Tech Tips Volume 1 Number 1 by Al Hansen (1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="alt-bin.txt"
+|                 "alt-bin.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 49521"
+|               <br>
+|             <td>
+|               " Notes on Decoduing UUENCODEd .GIF Files
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ami-chts.txt"
+|                 "ami-chts.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 182700"
+|               <br>
+|             <td>
+|               " Large Collection of Amiga Video Game Cheats
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ami-init.txt"
+|                 "ami-init.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4080"
+|               <br>
+|             <td>
+|               " The Amiga Boot Sequence and Errors
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="amiga_technical_info.txt"
+|                 "amiga_technical_info.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 43685"
+|               <br>
+|             <td>
+|               " USENET Postings: Amiga Technical Information (1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="amihist.txt"
+|                 "amihist.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 19261"
+|               <br>
+|             <td>
+|               " Notes of RJ Mical Speaking about the Rise and Fall of Amiga Computer
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="amiport.txt"
+|                 "amiport.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 10617"
+|               <br>
+|             <td>
+|               " More Ports for your Amiga: An I/O Expansion Board
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="amscsi.txt"
+|                 "amscsi.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6497"
+|               <br>
+|             <td>
+|               " Building a SCSI COntroller for the Amiga
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="anderson.asc"
+|                 "anderson.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 130304"
+|               <br>
+|             <td>
+|               " Kermit for OS/2 by Brian R. Anderson (1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="anderson.lst"
+|                 "anderson.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5622"
+|               <br>
+|             <td>
+|               " C Customized Memory Allocators by Paul ANderson
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="andrson2.asc"
+|                 "andrson2.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 135168"
+|               <br>
+|             <td>
+|               " Kermit for OS/2 by Brian R. ANderson (1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="anetwork.txt"
+|                 "anetwork.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3363"
+|               <br>
+|             <td>
+|               " Making a Simple Atari ST to Atari ST Link
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="anonymit"
+|                 "anonymit"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 34657"
+|               <br>
+|             <td>
+|               " The Joy of Handles, or Everything You Always Wanted to Know About Me But Have No Right to Ask, 1992
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="antiarq.txt"
+|                 "antiarq.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1257"
+|               <br>
+|             <td>
+|               " Getting Rid of the ARQ Flashing by Mr. Fone
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="anywhere.txt"
+|                 "anywhere.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4142"
+|               <br>
+|             <td>
+|               " DOCUMENTATION: The Anywhere Scroller Version 1.00
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="appendix.txt"
+|                 "appendix.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3866"
+|               <br>
+|             <td>
+|               " A Listing of Modem And Information Standards
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="apple.txt"
+|                 "apple.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7253"
+|               <br>
+|             <td>
+|               " The Text of the Apple-Microsoft Agreement
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="arcsuit.txt"
+|                 "arcsuit.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 56430"
+|               <br>
+|             <td>
+|               " Court Complaint from System Enhancement Associates and PKWARE (July 6, 1988)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="arthayes.txt"
+|                 "arthayes.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 30471"
+|               <br>
+|             <td>
+|               " General Introduction to HAYES Modems and Compatabiles by Ignaat Simons
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ascii"
+|                 "ascii"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7504"
+|               <br>
+|             <td>
+|               " Folklore: The Original Uses of the Unusual ASCII Codes, by Douglas Jones (June 2, 1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ascii.inc"
+|                 "ascii.inc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1040"
+|               <br>
+|             <td>
+|               " A Short List of ASCII Character Set Definitions
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="asm.txt"
+|                 "asm.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 101753"
+|               <br>
+|             <td>
+|               " The 8086 Family Architecture
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="asmstr.asc"
+|                 "asmstr.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 23451"
+|               <br>
+|             <td>
+|               " Structured Programming Column by Jeff Duntemann (February 3, 1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="asp3404.txt"
+|                 "asp3404.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 274371"
+|               <br>
+|             <td>
+|               " Catalog of Products from the Association of Software Professionals (October 4, 1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="asp5202.txt"
+|                 "asp5202.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1219432"
+|               <br>
+|             <td>
+|               " Catalog of Products from the Association of Software Professionals
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="asp5301.txt"
+|                 "asp5301.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1292374"
+|               <br>
+|             <td>
+|               " Official Catalog of Products by Association of Shareware Professionals (Contents)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="asp804.txt"
+|                 "asp804.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1933029"
+|               <br>
+|             <td>
+|               " Official Catalog of Products by Association of Shareware Professionals (Contents)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="asp9301.txt"
+|                 "asp9301.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2212930"
+|               <br>
+|             <td>
+|               " Official Catalog of Products by Association of Shareware Professionals (Contents)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="asp9501.txt"
+|                 "asp9501.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1978185"
+|               <br>
+|             <td>
+|               " Official Catalog of Products by Association of Shareware Professionals (Contents)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="aspbbs.dlm"
+|                 "aspbbs.dlm"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 42717"
+|               <br>
+|             <td>
+|               " List of Association of Software Professionals Directory
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="atamnesa.txt"
+|                 "atamnesa.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2595"
+|               <br>
+|             <td>
+|               " Hey, These IBM ATs have batteries inside and they're failing
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="auping.asc"
+|                 "auping.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 15046"
+|               <br>
+|             <td>
+|               " Making the move to Modula 2 by J.V. Auping and Chis Johnston
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="author.lst"
+|                 "author.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 96222"
+|               <br>
+|             <td>
+|               " A List of Email addresses of 255 Reachable MS-DOS shareware and PD authors (December 17, 1995)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="autpub.frm"
+|                 "autpub.frm"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5138"
+|               <br>
+|             <td>
+|               " Application to Join the Association of Software Professionals
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="autstd.txt"
+|                 "autstd.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 13029"
+|               <br>
+|             <td>
+|               " Association of Software Professionals Membership Requirements
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="award.txt"
+|                 "award.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2346"
+|               <br>
+|             <td>
+|               " Award BIOS Drive Type Table
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ayers.lst"
+|                 "ayers.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 29009"
+|               <br>
+|             <td>
+|               " An Object-Oriented Logic Simulator by Kenneth E. Ayers
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="babel92a.txt"
+|                 "babel92a.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 79153"
+|               <br>
+|             <td>
+|               " Babel: A Listing of Computer Oriented Abbreviations and Acronyms by Irving Kind, 1989-1992
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="babel94a.txt"
+|                 "babel94a.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 105377"
+|               <br>
+|             <td>
+|               " BABEL: A Glossary of Computer Oriented Abbreviations and Acronyms by Irving Kind Version 94A (1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="backdoor.txt"
+|                 "backdoor.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12384"
+|               <br>
+|             <td>
+|               " Collection of Back Doors to computer games, by George Knochel
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bartle-m"
+|                 "bartle-m"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 450025"
+|               <br>
+|             <td>
+|               " Interactive Multi-User Computer Games, a Report by Richard Bartle, 1990
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="basunix.hac"
+|                 "basunix.hac"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 15360"
+|               <br>
+|             <td>
+|               " Basic UNIX Use by Lord Lawless
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bat&conf.txt"
+|                 "bat&conf.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7401"
+|               <br>
+|             <td>
+|               " Tricks to Use with Batch Files
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="batch.txt"
+|                 "batch.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 51183"
+|               <br>
+|             <td>
+|               " Batch Files for Efficiency: Getting Real Work Done
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="battery.txt"
+|                 "battery.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 26055"
+|               <br>
+|             <td>
+|               " Rechargeable Batteries and Laptop Computers
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bauer.lst"
+|                 "bauer.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 10217"
+|               <br>
+|             <td>
+|               " Optimizing in a Parallel Environment by Barr E. Bauer (199)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bb"
+|                 "bb"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12057"
+|               <br>
+|             <td>
+|               " Beta Bits by Tim Conner, Jr. (1986)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bbsnoise.txt"
+|                 "bbsnoise.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3251"
+|               <br>
+|             <td>
+|               " Your System Has Noise, by Bill Noel
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="begunix.txt"
+|                 "begunix.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 337256"
+|               <br>
+|             <td>
+|               " A Beginner's Guide to UNIX, from the Denver Office (September 16, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="being.txt"
+|                 "being.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 38959"
+|               <br>
+|             <td>
+|               " Being in Nothingness: Virtual Reality and the Pioneers of Cyberspace, by John Perry Barlow
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="best.cps"
+|                 "best.cps"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11430"
+|               <br>
+|             <td>
+|               " Get the Best out of JRCOMM and your DUALST 14.4kbps on your Amiga, from The Spirit (May 19, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bev105.res"
+|                 "bev105.res"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 10421"
+|               <br>
+|             <td>
+|               " The Hack Report Volume 2, Number 3 (March 7, 1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="biblio.lst"
+|                 "biblio.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 28958"
+|               <br>
+|             <td>
+|               " Bibliography of PC Interrupt Fuctions by Ralf Brown (February 11, 1996)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bibliog.txt"
+|                 "bibliog.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 24448"
+|               <br>
+|             <td>
+|               " Laptop and Portable Computer Books
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bill"
+|                 "bill"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8784"
+|               <br>
+|             <td>
+|               " Bill Gates Interview from PC Magazine
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bill1035.pro"
+|                 "bill1035.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 16647"
+|               <br>
+|             <td>
+|               " Description and Call to Arms on H.R. 1035
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bios1215.man"
+|                 "bios1215.man"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4123"
+|               <br>
+|             <td>
+|               " AMI 286 and 386 BIOS New Release Notes (December 15, 1988)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bios225.man"
+|                 "bios225.man"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6288"
+|               <br>
+|             <td>
+|               " AMI 286 and 386 BIOS Release Notes (February 25, 1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bios330.man"
+|                 "bios330.man"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4264"
+|               <br>
+|             <td>
+|               " AMI 286 and 386 BIOS Release Notes (March 30, 1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="biprint.txt"
+|                 "biprint.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9485"
+|               <br>
+|             <td>
+|               " Making your PC Parallel Port Bi-Directional by Mark F. Bower (IBM PC) ((July 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bitsbaud.txt"
+|                 "bitsbaud.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 10112"
+|               <br>
+|             <td>
+|               "  Bits, Baud Rate, and BPS: Taking the Mystery Out of Modem Speeds, by Michael A. Banks
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="blt6"
+|                 "blt6"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 21816"
+|               <br>
+|             <td>
+|               " Techniques for Off-Line Mail Reading, by Robert Dionne (May 6, 1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="blum.lst"
+|                 "blum.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 18024"
+|               <br>
+|             <td>
+|               " Bidirectional Associative Memory Systems in C++, by Adam Blum
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="boost.txt"
+|                 "boost.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1670"
+|               <br>
+|             <td>
+|               " An Audio Booster on the Amiga 500, by Chucky of Sargon
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bootfromdf1.txt"
+|                 "bootfromdf1.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6757"
+|               <br>
+|             <td>
+|               " Saving DF0: by Booting up from DF1: by Les Ayling
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bowling.asc"
+|                 "bowling.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11641"
+|               <br>
+|             <td>
+|               " Real-Time Modeling with MS-DOS by David Bowling
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bradbery.asc"
+|                 "bradbery.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12901"
+|               <br>
+|             <td>
+|               " Porting Fortran Programs from Minis to PCS, by John L. Bradberry
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bright.lst"
+|                 "bright.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3200"
+|               <br>
+|             <td>
+|               " Getting a Handle on Virtual Memory, by Walter Bright
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="bugrep.txt"
+|                 "bugrep.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1582"
+|               <br>
+|             <td>
+|               " Bug Report Form for PKWARE
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="buildit.doc"
+|                 "buildit.doc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 59591"
+|               <br>
+|             <td>
+|               " Building an IBM Compatible, or How to be a Real Clone, by DJ Elliott (January 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="buildit.txt"
+|                 "buildit.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 33024"
+|               <br>
+|             <td>
+|               " The Obese Agnus: The New 500 Board and Other Recent Experiences by Andrew WIlson (July 23, 1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="buy386"
+|                 "buy386"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7996"
+|               <br>
+|             <td>
+|               " The Developer's Guide to Buying a 386
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="buyguide.txt"
+|                 "buyguide.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 25636"
+|               <br>
+|             <td>
+|               " PC Gaming Sound Cards: A Buyer's Guide v0.34 by Dave Masten (November 4, 1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="c64topc.txt"
+|                 "c64topc.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5646"
+|               <br>
+|             <td>
+|               " How to Connect a Commodore 64 Compatible Printer to an IBM PC Compatible Computer (March, 1995)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="cache.txt"
+|                 "cache.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5795"
+|               <br>
+|             <td>
+|               " Disabling Write Caching in DOS 6
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="carriers.pro"
+|                 "carriers.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6100"
+|               <br>
+|             <td>
+|               " Comparison of different Long Distance Carrier performance
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="cart.txt"
+|                 "cart.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8192"
+|               <br>
+|             <td>
+|               " Turning an Atari ST's Cartridge Port into a Read/Write Port
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="cascade.txt"
+|                 "cascade.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6784"
+|               <br>
+|             <td>
+|               " Information from Cascade Electronics about Being Ripped Off
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="caution.txt"
+|                 "caution.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4613"
+|               <br>
+|             <td>
+|               " Doublespace in DOS 6
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="cbm_dead.txt"
+|                 "cbm_dead.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2610"
+|               <br>
+|             <td>
+|               " Eulogy on Commodore as it Goes Under (From Down Under)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="cd-rom"
+|                 "cd-rom"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 93046"
+|               <br>
+|             <td>
+|               " An Introduction to CD-ROM Technolgy by Andy Poggio (March 1988)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="chaos.txt"
+|                 "chaos.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2432"
+|               <br>
+|             <td>
+|               " Chaos, Strange Attractors and BrainMaker Plots
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="cheap144disk.txt"
+|                 "cheap144disk.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2996"
+|               <br>
+|             <td>
+|               " Making a Cheap 1.44mb Disk!
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="cheats"
+|                 "cheats"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 40275"
+|               <br>
+|             <td>
+|               " A Very Large Collection of Amiga Cheat Codes
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="cleankey.txt"
+|                 "cleankey.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9856"
+|               <br>
+|             <td>
+|               " How to Clean the IBM PC Keyboard by David R. Bivens
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="clinton.sgi"
+|                 "clinton.sgi"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 38608"
+|               <br>
+|             <td>
+|               " Remarks by the President and Vice President to Silicon Graphics Employees, Feb. 22, 1993
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="coemail"
+|                 "coemail"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12431"
+|               <br>
+|             <td>
+|               " Formulating A Company Policy on Access to and Use and Disclosure of Electronic Mail on Company Computer Systems, by the Electronic Mail Association, October 22, 1990
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="colors.32k"
+|                 "colors.32k"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9679"
+|               <br>
+|             <td>
+|               " Getting an Atari ST to Display 32,768 Colors by Barry orlando (September 9, 1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="colr.txt"
+|                 "colr.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8448"
+|               <br>
+|             <td>
+|               " Guidelines for Effective Color Terminal Usage, from Tektronix
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="comdefs.hum"
+|                 "comdefs.hum"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5121"
+|               <br>
+|             <td>
+|               " Grab-Bag of Geeky and General Humor
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="comlpt.pro"
+|                 "comlpt.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4175"
+|               <br>
+|             <td>
+|               " An Overview of PC Hardware's LPT/COM/IRQs
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="compdev.txt"
+|                 "compdev.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12301"
+|               <br>
+|             <td>
+|               " Some Thoughts on the Development of Personal Computers by Duane Bristow
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="comphorror.hum"
+|                 "comphorror.hum"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 164912"
+|               <br>
+|             <td>
+|               " A Fantastic Collection of Computer Horror Stories
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="compiler.tut"
+|                 "compiler.tut"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8576"
+|               <br>
+|             <td>
+|               " Compilers and How They Work: An Overview, by Lou Morgan
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="compuser"
+|                 "compuser"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9572"
+|               <br>
+|             <td>
+|               " The Gospel according to CompuServe! (Their position)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="conclus.txt"
+|                 "conclus.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 17859"
+|               <br>
+|             <td>
+|               " The Conclusion of the Courts in the INSLAW Software Case, January, 1992
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="config.txt"
+|                 "config.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 34499"
+|               <br>
+|             <td>
+|               " Your CONFIG.SYS and AUTOEXEC.BAT by Barry Simon, 1986
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="convmem.txt"
+|                 "convmem.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1078"
+|               <br>
+|             <td>
+|               " JZig's Guide to Freeing Conventional Memory (On a PC)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="copyprot.pro"
+|                 "copyprot.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11392"
+|               <br>
+|             <td>
+|               " Copy Protection: A History and Outlook
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="copyrigh.pro"
+|                 "copyrigh.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 10880"
+|               <br>
+|             <td>
+|               " Copyrighting Public Domain Programs
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="courierv34man.txt"
+|                 "courierv34man.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 346655"
+|               <br>
+|             <td>
+|               " The Courier V.34 Manual, by U.S. Robotics (1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="cpsranno"
+|                 "cpsranno"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2259"
+|               <br>
+|             <td>
+|               " Upcoming Conventions of Computers, privacy and Freedom (1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="cpucmp14.txt"
+|                 "cpucmp14.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 31839"
+|               <br>
+|             <td>
+|               " Performance Comparison: Intel 386DX, Intel RapidCAD, C&T 38600DX, Cyrix 486DLC by Norbert Juffa
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="crtstuff.txt"
+|                 "crtstuff.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 51493"
+|               <br>
+|             <td>
+|               " The Quest for the Ultimate Display System by Steve Gibson
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="defrag.txt"
+|                 "defrag.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2291"
+|               <br>
+|             <td>
+|               " Defragmenting a Doublespace Drive in DOS 6
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="designer.txt"
+|                 "designer.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9653"
+|               <br>
+|             <td>
+|               " Sapphire Designer Notes, by Tim Campbell
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="dhalf.txt"
+|                 "dhalf.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 63489"
+|               <br>
+|             <td>
+|               " All You Need to Know about Digital Halftoning/Dithering, by Lee Daniel Crocker (June 20, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="diagnose.txt"
+|                 "diagnose.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 18306"
+|               <br>
+|             <td>
+|               " An introduction to Troubleshooting your IBM PC by Jerry Schneider of the Capital PC User Group
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="diagrams.txt"
+|                 "diagrams.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 36835"
+|               <br>
+|             <td>
+|               " Listing of Different Drives and Controllers for TheRef
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="disks1"
+|                 "disks1"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 15882"
+|               <br>
+|             <td>
+|               " The Technology of Magnetic Disk Storage by Steve Gibson
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="disks2"
+|                 "disks2"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 16889"
+|               <br>
+|             <td>
+|               " A Hard Disk Drive for Steve's Dream Machine by Steve Gibson
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="disks3"
+|                 "disks3"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 28492"
+|               <br>
+|             <td>
+|               " The Logical Structure, Organization and Management of Hard Disk Drives by Steve Gibson
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="dma.asc"
+|                 "dma.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 18432"
+|               <br>
+|             <td>
+|               " DMA Techniques for Personal Computer Data Acquisition
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="docwaste.txt"
+|                 "docwaste.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1033"
+|               <br>
+|             <td>
+|               " George Gutman's Call for lack of spaces in DOC files
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="dodont.txt"
+|                 "dodont.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12638"
+|               <br>
+|             <td>
+|               " How To Get The Most Out of Your New PC
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="dos-user.s-g"
+|                 "dos-user.s-g"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3605"
+|               <br>
+|             <td>
+|               " The PC User's Guide to UNIX
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="dos6tips.txt"
+|                 "dos6tips.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1957"
+|               <br>
+|             <td>
+|               " DOS 6 Tips and Tricks: Review
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="dos_err.txt"
+|                 "dos_err.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3456"
+|               <br>
+|             <td>
+|               " Dos 2.0 Has Problems with Redirection of I/O
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="doshist.txt"
+|                 "doshist.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 41430"
+|               <br>
+|             <td>
+|               " The Development of DOS
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="dosmem.txt"
+|                 "dosmem.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 13205"
+|               <br>
+|             <td>
+|               " The PC Memory Management Overview
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="dosmnual.txt"
+|                 "dosmnual.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 42543"
+|               <br>
+|             <td>
+|               " PC/MS-DOS: The Essentials, by George Campbell
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="drives.txt"
+|                 "drives.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5060"
+|               <br>
+|             <td>
+|               " Driving Us Crazy, but For a Reason (Hard Drive Overview) by Alan Brenden
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="dvinter.1st"
+|                 "dvinter.1st"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8430"
+|               <br>
+|             <td>
+|               " The DESQview Interrupt List, Release 90.3, 07/15/90
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="dvscript.txt"
+|                 "dvscript.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2432"
+|               <br>
+|             <td>
+|               " Creating and Using Scripts with DESQview
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ea.iff.85"
+|                 "ea.iff.85"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 63215"
+|               <br>
+|             <td>
+|               " EA IFF 85: The Standard for Interchange Format Files by Jerry Morrison of Electronic Arts (January 14, 1985)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="earlybst.txt"
+|                 "earlybst.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6529"
+|               <br>
+|             <td>
+|               " Timo's Subjective Choices of the Best Public Domain and Shareware MS-DOS Early Material (September 13, 1995)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="echtutor.txt"
+|                 "echtutor.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 17437"
+|               <br>
+|             <td>
+|               " A Tutorial on the New Phenomenon of Fido Echomail
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="eight.lws"
+|                 "eight.lws"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 14297"
+|               <br>
+|             <td>
+|               " The Adventures of Lone Wolf Scientific: The House Where Andrew.BAS lived, by Michy Peshota
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="email"
+|                 "email"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 21201"
+|               <br>
+|             <td>
+|               " A Large Suggested Summary of Policies on Electronic Mail
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="equip.txt"
+|                 "equip.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 45113"
+|               <br>
+|             <td>
+|               " Hints on Purchasing a Laptop Computer
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="errors.txt"
+|                 "errors.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8182"
+|               <br>
+|             <td>
+|               " A List of Errors by Hard Drives Under DOS
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="esdi.txt"
+|                 "esdi.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8326"
+|               <br>
+|             <td>
+|               " Basic Installation Procedure for ESDI Drives by Ruan Ramsey (July 3, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="essays.txt"
+|                 "essays.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 263347"
+|               <br>
+|             <td>
+|               " Art in the Age of Digital Dissemination: Class Essays from an Art and Technology Course, 1993
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="execnois.txt"
+|                 "execnois.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3889"
+|               <br>
+|             <td>
+|               " If You Are Getting Garbage On the Screen (Modem Diagnostics)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ext-ram.txt"
+|                 "ext-ram.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 14198"
+|               <br>
+|             <td>
+|               " An Extended RAM Tutorial for MS-DOS by Raymond Dunn
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="fangrev3a500"
+|                 "fangrev3a500"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3372"
+|               <br>
+|             <td>
+|               " Making a Faster Agnus Chip, by Hans Van Der Werf (October 30, 1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="faq.txt"
+|                 "faq.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 52582"
+|               <br>
+|             <td>
+|               " FAQ: OS/2 Frequently Asked Questions List: User's Edition Verison 2.0 (April 25, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="fbi.sys"
+|                 "fbi.sys"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5192"
+|               <br>
+|             <td>
+|               " Summary of FBI Computer Systems, by Ralph Harvey of Full Disclosure
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="fcc.txt"
+|                 "fcc.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12545"
+|               <br>
+|             <td>
+|               " Computer and Software News Part 1 by Tim Elmer
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="fd_ref42.lan"
+|                 "fd_ref42.lan"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 36874"
+|               <br>
+|             <td>
+|               " A Large Floppy Drive Directory Version 4.2 (October 1, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="fd_ref42.por"
+|                 "fd_ref42.por"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 23264"
+|               <br>
+|             <td>
+|               " Floppy Drive Directory by TheRef Version 4.2 (October 1, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="fdd"
+|                 "fdd"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11750"
+|               <br>
+|             <td>
+|               " teria, by Bud Leroy
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="fileid.txt"
+|                 "fileid.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 18022"
+|               <br>
+|             <td>
+|               " Information on Why You Should Use FILE_ID.DIZ
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="filename.txt"
+|                 "filename.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 21870"
+|               <br>
+|             <td>
+|               " File Names and Extensions: The Keys to the Kingdom
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="flop.txt"
+|                 "flop.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3194"
+|               <br>
+|             <td>
+|               " Using Doublespace on Floppy Disks in DOS 6
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="floppies.txt"
+|                 "floppies.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 15744"
+|               <br>
+|             <td>
+|               " Everything You've Ever Wanted to Know Abut Floppy Disks by Ted Jensen
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="format.txt"
+|                 "format.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2510"
+|               <br>
+|             <td>
+|               " Photo/Digital Specifications for GIF Files
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="forums.lst"
+|                 "forums.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 20327"
+|               <br>
+|             <td>
+|               " A Complete List of Public Forums on Online Services by Ed Girou of the CompuServe Practice Forum (June 1, 1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="freedom.pro"
+|                 "freedom.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6068"
+|               <br>
+|             <td>
+|               " Must We Declare an Electronic Declaration of Independence
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="freenet.cap"
+|                 "freenet.cap"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 13691"
+|               <br>
+|             <td>
+|               " The Concept of Community Computing
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="fricc"
+|                 "fricc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2296"
+|               <br>
+|             <td>
+|               " The FRICC Policy on Interocnnectivity and Resource Sharing
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ftp2uk23.inf"
+|                 "ftp2uk23.inf"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 71087"
+|               <br>
+|             <td>
+|               " Notes for PC/MSDOS users at UK JANET sites (April 27, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ftxt"
+|                 "ftxt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 19014"
+|               <br>
+|             <td>
+|               " Information on FTXT: A Text Standard for IFF Files from Steve Shaw and Jerry Morrison, Electronic Arts (November 15, 1985)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="fyi-8"
+|                 "fyi-8"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 253367"
+|               <br>
+|             <td>
+|               " The Site Security Handbook, a guideline for computer systems, July 1991
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="galileo.txt"
+|                 "galileo.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 93697"
+|               <br>
+|             <td>
+|               " The STS-34 Press Kit (Exploratory Spacecraft)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="gameport.inf"
+|                 "gameport.inf"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3231"
+|               <br>
+|             <td>
+|               " Specifications for the IBM/PC Game Port Connector (April 6, 1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="genderol"
+|                 "genderol"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 25452"
+|               <br>
+|             <td>
+|               " Gender Issues in Online Communications by Hoai-An Truong, 1993
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="genlock.txt"
+|                 "genlock.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 19649"
+|               <br>
+|             <td>
+|               " The Genlock Circuit Operation Description
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="gfxhints.txt"
+|                 "gfxhints.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 30197"
+|               <br>
+|             <td>
+|               " Some Hints on Improving your Computer Graphics
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="gifstd.txt"
+|                 "gifstd.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 31874"
+|               <br>
+|             <td>
+|               " The GIF Specification
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="glossary.lst"
+|                 "glossary.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 35647"
+|               <br>
+|             <td>
+|               " Glossary of Computer Terms
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="glossary.txt"
+|                 "glossary.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3311"
+|               <br>
+|             <td>
+|               " Yet Another Computer Glossary
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="gnu"
+|                 "gnu"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 23949"
+|               <br>
+|             <td>
+|               " The GNU Manifesto by Richard Stallman (1985)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hack_pom.txt"
+|                 "hack_pom.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2215"
+|               <br>
+|             <td>
+|               " Casey at the Byte (Parody of Casey at the Bat)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hacktest.txt"
+|                 "hacktest.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8497"
+|               <br>
+|             <td>
+|               " The Hacker Test Version 3.0:  Another 'Adventure in Software' from SuperNova Software by Rich 'Crash' Lewis, Jr. (1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hallfame.txt"
+|                 "hallfame.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 100594"
+|               <br>
+|             <td>
+|               " The Freeware Hall of Fame by Rey Barry (June, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="handles.txt"
+|                 "handles.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 33215"
+|               <br>
+|             <td>
+|               " The Joy of Handles (or, Everything You Always Wanted to Know About Me but Have No Right to Ask)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hayes.txt"
+|                 "hayes.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 322645"
+|               <br>
+|             <td>
+|               " Technical Reference for Hayes Modem Users, Version 1.0, November 1990
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hd.txt"
+|                 "hd.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 28948"
+|               <br>
+|             <td>
+|               " Hard Disks: The Essential Accessory
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hd_mfr41.dir"
+|                 "hd_mfr41.dir"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 23897"
+|               <br>
+|             <td>
+|               " Hard Disk Drive Manufacturer Directory (January 3, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hd_ref41.lan"
+|                 "hd_ref41.lan"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 404370"
+|               <br>
+|             <td>
+|               " Hard Disk Drive Directory Version 4.1 (January 3, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hd_ref41.por"
+|                 "hd_ref41.por"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 309167"
+|               <br>
+|             <td>
+|               " Hard Disk Drive Directory Version 4.1 (January 3, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hd_ref43.lan"
+|                 "hd_ref43.lan"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 692412"
+|               <br>
+|             <td>
+|               " Hard Disk Drive Directory Version 4.30 (May 1, 1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hd_ref43.por"
+|                 "hd_ref43.por"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 587412"
+|               <br>
+|             <td>
+|               " Hard Disk Drive Directory (May 1, 1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="help.txt"
+|                 "help.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3737"
+|               <br>
+|             <td>
+|               " The DOS 6 Help File
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hint89.txt"
+|                 "hint89.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2945"
+|               <br>
+|             <td>
+|               " Configuring Autoexec.bat and Config.Sys Files (December 1, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="history.txt"
+|                 "history.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 17081"
+|               <br>
+|             <td>
+|               " A Little PC History: Where We've Been with No Idea Where We're Going!
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hoagco.cis"
+|                 "hoagco.cis"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 37883"
+|               <br>
+|             <td>
+|               " Transcription from Compuserve of Various Information by Hoagland Mars Mission
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hoagland.let"
+|                 "hoagland.let"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 29828"
+|               <br>
+|             <td>
+|               " Letter from Richard Hoagland (December 1, 1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="honey.txt"
+|                 "honey.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4144"
+|               <br>
+|             <td>
+|               " Honey, Can the Computer Do This? By Wayne Garrison
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="how2mnp.txt"
+|                 "how2mnp.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 30321"
+|               <br>
+|             <td>
+|               " How to do MNP Modem Protocol
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="hsdiag.res"
+|                 "hsdiag.res"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6557"
+|               <br>
+|             <td>
+|               " The Hack Report Volume 2, Number 5 by Lee Jackson (April 10, 1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="i4004.txt"
+|                 "i4004.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3213"
+|               <br>
+|             <td>
+|               " Before the Great Dark Cloud: Information on the Intel 4004
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ibm.fu"
+|                 "ibm.fu"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6757"
+|               <br>
+|             <td>
+|               " OS/2 Is Still Vaporware (June 4, 1988)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ibmindust.txt"
+|                 "ibmindust.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2408"
+|               <br>
+|             <td>
+|               " Connect IBM Industrial Keyboard to a AT Type Computer
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ibmkeyboard.txt"
+|                 "ibmkeyboard.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 708"
+|               <br>
+|             <td>
+|               " IBM Keyboard Cable Pin Assignments
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="itcfree.800"
+|                 "itcfree.800"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3563"
+|               <br>
+|             <td>
+|               " Information on the ITCnet Toll Free Communications Network by Jack Reece
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="jadu13.rvw"
+|                 "jadu13.rvw"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3983"
+|               <br>
+|             <td>
+|               " REVIEW: Just Another Disk Utility Version 1.3 (October, 1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="jargn10.txt"
+|                 "jargn10.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1128344"
+|               <br>
+|             <td>
+|               " Eric Raymond's Jargon File, Version 2.9.10, July 1992
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="jrquiet.txt"
+|                 "jrquiet.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 468"
+|               <br>
+|             <td>
+|               " Silencing the pesky IBM PCJr hard drive
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="karpov.pro"
+|                 "karpov.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6120"
+|               <br>
+|             <td>
+|               " Karpov vs. DEEP THOUGHT: The Overview, by Darren Bedwell
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="kcah-1"
+|                 "kcah-1"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 32102"
+|               <br>
+|             <td>
+|               " KCAH Volume 1
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="kcah-2"
+|                 "kcah-2"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 17440"
+|               <br>
+|             <td>
+|               " KCAH Volume 2
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="kildall.txt"
+|                 "kildall.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11552"
+|               <br>
+|             <td>
+|               " The Gary Kildall Legacy, by Sol Libes (1996)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="killer.pro"
+|                 "killer.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3056"
+|               <br>
+|             <td>
+|               " Killer DOS Stalks Software
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="language.lis"
+|                 "language.lis"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 390367"
+|               <br>
+|             <td>
+|               " The Language List, Version 1.9, Jan. 13, 1993: Collected information on about 2000 computer languages, past and present
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="licence"
+|                 "licence"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12488"
+|               <br>
+|             <td>
+|               " The GNU General Public License Version 1 (February 1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="lrplan.txt"
+|                 "lrplan.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2924"
+|               <br>
+|             <td>
+|               " The Long Range Plans of the University of Pittsburgh for their Computing Facilities
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mac2tel.v2.txt"
+|                 "mac2tel.v2.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8864"
+|               <br>
+|             <td>
+|               " How to Get Digitized Macintosh Sounds Into a Modem
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mac_oscillators.txt"
+|                 "mac_oscillators.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 28179"
+|               <br>
+|             <td>
+|               " A Macintosh Crystal Oscillator Speedup, by Marc Schrier (April, 1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="maccrack.txt"
+|                 "maccrack.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7038"
+|               <br>
+|             <td>
+|               " A Collection of Macintosh Unprotect Schemes
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="macemulate.txt"
+|                 "macemulate.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 28236"
+|               <br>
+|             <td>
+|               " The Spectre of Macintosh Emulation: Eating the Forbidden Apple by Wm. Price (1989)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mactricks.txt"
+|                 "mactricks.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5942"
+|               <br>
+|             <td>
+|               " Some Mac Tricks for Novices by Steve J. McAllister (February 28, 1995)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mailordr.pro"
+|                 "mailordr.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2825"
+|               <br>
+|             <td>
+|               " Really Angry Complaining Letter
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="manners.txt"
+|                 "manners.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7464"
+|               <br>
+|             <td>
+|               " Computer Etiquitte, by Mel North
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="manyhint.txt"
+|                 "manyhint.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 15640"
+|               <br>
+|             <td>
+|               " ATARI ST Guaranteed Cheat Codes and Strategies
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="may-bust.txt"
+|                 "may-bust.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6617"
+|               <br>
+|             <td>
+|               " Busted! By the Leviathan
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mdic150.txt"
+|                 "mdic150.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 136696"
+|               <br>
+|             <td>
+|               " The Modem Dictionary, by R. Scottt Perry, 1993
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mdic200.txt"
+|                 "mdic200.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 155549"
+|               <br>
+|             <td>
+|               " The Modem Dictionary Version 2.0 by R. Scott Perry (1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mism16.hac"
+|                 "mism16.hac"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 28288"
+|               <br>
+|             <td>
+|               " The Kromery Converter/Free Electricity by John Bedini, Eike Mueller, and Tom Bearden
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mism18.hac"
+|                 "mism18.hac"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 42496"
+|               <br>
+|             <td>
+|               " The New Tesla Electromagnetics and The Secrets of Free Electrical Energy (Part 1) by T. E. Bearden
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mnemonic.txt"
+|                 "mnemonic.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6705"
+|               <br>
+|             <td>
+|               " An interesting Collection of Helpful Mnemonics
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="modem.txt"
+|                 "modem.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2016"
+|               <br>
+|             <td>
+|               " Some Modem Specific Information: AT Command List
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="modemlif.hac"
+|                 "modemlif.hac"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11074"
+|               <br>
+|             <td>
+|               " The Modem Life: Is it Really Worth it? By The Nomad
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="modprobs.txt"
+|                 "modprobs.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 13312"
+|               <br>
+|             <td>
+|               " Modem Communication Problems by Graham Newton
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="morph.txt"
+|                 "morph.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9597"
+|               <br>
+|             <td>
+|               " Several People Discuss that new Morphing Technology, 1991
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mrdos1.txt"
+|                 "mrdos1.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9381"
+|               <br>
+|             <td>
+|               " If You Have Never Used Computers Before...  An Introduction
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mrdos2.txt"
+|                 "mrdos2.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5753"
+|               <br>
+|             <td>
+|               " If You Have Never Used Computers Before...  An Introduction (Part II)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mrdos3.txt"
+|                 "mrdos3.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8562"
+|               <br>
+|             <td>
+|               " If You Have Never Used Computers Before...  An Introduction (Part III)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mrdos4.txt"
+|                 "mrdos4.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5527"
+|               <br>
+|             <td>
+|               " If You Have Never Used Computers Before...  An Introduction (Part IV)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mrdos5.txt"
+|                 "mrdos5.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8148"
+|               <br>
+|             <td>
+|               " If You Have Never Used Computers Before...  An Introduction (Part V)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mrdos6.txt"
+|                 "mrdos6.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11242"
+|               <br>
+|             <td>
+|               " If You Have Never Used Computers Before...  An Introduction (Part VI)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="mrdos7.txt"
+|                 "mrdos7.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 10060"
+|               <br>
+|             <td>
+|               " If You Have Never Used Computers Before...  An Introduction (Part VII)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="msbbs.txt"
+|                 "msbbs.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 35293"
+|               <br>
+|             <td>
+|               " Microsoft Windows Version 3.1 Windows Driver Library (December 9, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="msdos.txt"
+|                 "msdos.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8827"
+|               <br>
+|             <td>
+|               " Some MS-DOS Specific Information
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="muck.txt"
+|                 "muck.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12965"
+|               <br>
+|             <td>
+|               " The MUCK (Multi User Coding Kludge) Commands List
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="muck_edi.hel"
+|                 "muck_edi.hel"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1457"
+|               <br>
+|             <td>
+|               " The MUCK MUF (Programming Language) Reference
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="muf161.txt"
+|                 "muf161.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3044"
+|               <br>
+|             <td>
+|               " The Fabulous Microsoft Undocumented Features Volume 1 Number 6
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="net_horm.txt"
+|                 "net_horm.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 19189"
+|               <br>
+|             <td>
+|               " Net Hormones: Infection Control assuming Cooperation among Computers by David Stodolsky
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="newkbdhack"
+|                 "newkbdhack"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 18258"
+|               <br>
+|             <td>
+|               " A New Keyboard Hack for the Amiga, by Dana Peters
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="newstu.pro"
+|                 "newstu.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4117"
+|               <br>
+|             <td>
+|               " PC New Technology Digest
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="noise.txt"
+|                 "noise.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7717"
+|               <br>
+|             <td>
+|               " The Modem Noise Killer, Alpha Version
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="noise_1.txt"
+|                 "noise_1.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6020"
+|               <br>
+|             <td>
+|               " Creating a Modem Noise Killer
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ohs-rcs.txt"
+|                 "ohs-rcs.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 58850"
+|               <br>
+|             <td>
+|               " Information on the Orbital Manuvering System
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="opcodes.lst"
+|                 "opcodes.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 32788"
+|               <br>
+|             <td>
+|               " Undocumented Instructions and Documented Instruction of Processors, by Potemkin's Hackers Group (October 23, 1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="opt_wagr.txt"
+|                 "opt_wagr.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8561"
+|               <br>
+|             <td>
+|               " Mathematic Formulas: Optimal Wagering by Michael Hall, 1991
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="org-anal"
+|                 "org-anal"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 67829"
+|               <br>
+|             <td>
+|               " Organizational Analysis in Computer Science by Rob Kling (June, 1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="p6fact.txt"
+|                 "p6fact.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1921"
+|               <br>
+|             <td>
+|               " An overview of the P6 Processor
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="paging_g.ame"
+|                 "paging_g.ame"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4275"
+|               <br>
+|             <td>
+|               " The Paging Game, by Jeff Berryman describing how Memory Paging Works
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="paranoia.pro"
+|                 "paranoia.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4499"
+|               <br>
+|             <td>
+|               " Paranoia Runs Through Computer Community, by John Dvorak
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="password.txt"
+|                 "password.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11460"
+|               <br>
+|             <td>
+|               " Some Very Good Advice about Choosing a Password
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pause.txt"
+|                 "pause.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1858"
+|               <br>
+|             <td>
+|               " Making a pause on the 68000, by Chucky of Sargon
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pc1hrdsk.add"
+|                 "pc1hrdsk.add"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4388"
+|               <br>
+|             <td>
+|               " Some Solutions for Old PC's and Hard Disks by Paul Vojta (February 28, 1988)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pc869kb.txt"
+|                 "pc869kb.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9847"
+|               <br>
+|             <td>
+|               " What is High Memory, and Why do I care, and How Can I Use It? By Cy Atkinson
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pcg102b.txt"
+|                 "pcg102b.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 15745"
+|               <br>
+|             <td>
+|               " The PC Gazette Volume 1.02 (Section b) (April, 1986)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pcgnet"
+|                 "pcgnet"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 20716"
+|               <br>
+|             <td>
+|               " The I/O Port: Communications with the PC Gazette (August 21, 1986)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pcjr_display.txt"
+|                 "pcjr_display.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4244"
+|               <br>
+|             <td>
+|               " PCjr Display Cable Specifications: PCjr to CGA Monitor
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pcjr_qmodem.txt"
+|                 "pcjr_qmodem.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1169"
+|               <br>
+|             <td>
+|               " QMODEM Jr. Command Keys
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pcjr_serial.txt"
+|                 "pcjr_serial.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1336"
+|               <br>
+|             <td>
+|               " Serial Port Pins for the PCjr
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pcjrcga.txt"
+|                 "pcjrcga.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9745"
+|               <br>
+|             <td>
+|               " PCjr Display Cable Specifications: PCjr to CGA Monitor
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pcjrmem.txt"
+|                 "pcjrmem.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4224"
+|               <br>
+|             <td>
+|               " Altering the IBM PC-JR 128 Memory Module to 512K by David James (July 20, 1986)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pcjrtopc.txt"
+|                 "pcjrtopc.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3712"
+|               <br>
+|             <td>
+|               " Instructions to Convert an IBM PCjr Color Monitor to a Standard DB 9 Connector
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pcl100.txt"
+|                 "pcl100.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 20296"
+|               <br>
+|             <td>
+|               " List of HP Printer Escape Sequences (1988)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pentium.txt"
+|                 "pentium.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 15939"
+|               <br>
+|             <td>
+|               " Intel Pentium(TM) Processor Technical Backgrounder
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="perstest.txt"
+|                 "perstest.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9361"
+|               <br>
+|             <td>
+|               " Mind Reader: Do Personality Tests Pick Out Bad Apples?
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="phoenix.txt"
+|                 "phoenix.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2377"
+|               <br>
+|             <td>
+|               " Phoenix BIOS Drive Type Table
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="photoscn.txt"
+|                 "photoscn.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6901"
+|               <br>
+|             <td>
+|               " Photographing TV and Computer Screen Images
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="piracy.txt"
+|                 "piracy.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8451"
+|               <br>
+|             <td>
+|               " Software Piracy: An Alternate View, by Jim Thomas and Gordon Meyer (March 5, 199)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="pntq&a.txt"
+|                 "pntq&a.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 10377"
+|               <br>
+|             <td>
+|               " The Pentium Processor Q&A, March 22, 1993
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ports.lst"
+|                 "ports.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 128622"
+|               <br>
+|             <td>
+|               " XT, AT and PS/2  I/O port addresses (November 6, 1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="presizer.faq"
+|                 "presizer.faq"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5860"
+|               <br>
+|             <td>
+|               " FAQ: The Partition Resizer
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="privacy.txt"
+|                 "privacy.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5474"
+|               <br>
+|             <td>
+|               " The Rise of the CPSR (Computer Professionals for Social Responsibility)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="qf921124.txt"
+|                 "qf921124.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8101"
+|               <br>
+|             <td>
+|               " QFACTS: The Representation of Facts and Information
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="r4300i.txt"
+|                 "r4300i.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 24340"
+|               <br>
+|             <td>
+|               " R4300i Microprocessor Technical Backgrounder
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="raspeed.res"
+|                 "raspeed.res"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4949"
+|               <br>
+|             <td>
+|               " The Hack Report, File Test Results, Volume 2, Number 6, May 29, 1993
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="rbrown.txt"
+|                 "rbrown.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 22307"
+|               <br>
+|             <td>
+|               " A List of Public Domain/Freeware/Shareware by Ralf Brown (1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="reagen.asc"
+|                 "reagen.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7936"
+|               <br>
+|             <td>
+|               " Ram Disk Driver for UNIX by Jeff Reagen (May 2, 1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="realaq.asc"
+|                 "realaq.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8351"
+|               <br>
+|             <td>
+|               " Real-Time Data Acquisition by Mike Bunnell and Mitch Bunnell
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="realhack.txt"
+|                 "realhack.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11485"
+|               <br>
+|             <td>
+|               " The Meaning of "Hack" from the Jargon File
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="regan.lst"
+|                 "regan.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11153"
+|               <br>
+|             <td>
+|               " LZW Revisited by SHawn M. Regan (January, 1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="rehabots.txt"
+|                 "rehabots.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3290"
+|               <br>
+|             <td>
+|               " Robotics for Rehabilitation from Epitomes-Physical Medicine and Rehabilitation
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="remote.asc"
+|                 "remote.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11486"
+|               <br>
+|             <td>
+|               " Remote Connectivity for Portable Terminals Part I by Dan Troy
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="remove.ada"
+|                 "remove.ada"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 20668"
+|               <br>
+|             <td>
+|               " One Man's Crusade to Remove Ada From the Planet
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="renaissance.txt"
+|                 "renaissance.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 22619"
+|               <br>
+|             <td>
+|               " The Electronic Renaissance: A Course in the Ether, by Ellis L. "Skip" Knox (1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="replies"
+|                 "replies"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 79819"
+|               <br>
+|             <td>
+|               " Why Do Fans Blow Out? A List of Replies (April, 1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="requiem.pro"
+|                 "requiem.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9508"
+|               <br>
+|             <td>
+|               " A really whiny complaint about how users suck
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="response.txt"
+|                 "response.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5623"
+|               <br>
+|             <td>
+|               " Why Live in the Past? (The ARC and ZIP Fight)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="rights.pro"
+|                 "rights.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5120"
+|               <br>
+|             <td>
+|               " Copyright Information for Computer Software Hacks
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ripscrip.txt"
+|                 "ripscrip.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 166212"
+|               <br>
+|             <td>
+|               " The RIPscrip Graphics Protocol Specification (May 12, 1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="rm-rf"
+|                 "rm-rf"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8879"
+|               <br>
+|             <td>
+|               " The RM -RF Story, by Mario Wolczko (The Recovery of a UNIX System)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="rogue.man"
+|                 "rogue.man"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 28003"
+|               <br>
+|             <td>
+|               " A Guide to the Dungeons of Doom by Michael C. Toy and Kenneth C. R. C. Arnold
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="rpgrules.txt"
+|                 "rpgrules.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3230"
+|               <br>
+|             <td>
+|               " The Rules of Role-Playing on the Galactic Net
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="rs232.txt"
+|                 "rs232.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 21260"
+|               <br>
+|             <td>
+|               " A Practical Guide to RS-232 Interfacing, by Lawrence E. Hughes
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="scavenge.txt"
+|                 "scavenge.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 38319"
+|               <br>
+|             <td>
+|               " DOCUMENTATION: Scavenger-Dialer Version 0.61
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="script.txt"
+|                 "script.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12079"
+|               <br>
+|             <td>
+|               " How to use uSu Script Formats, by Cyberglitch
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="scsi.txt"
+|                 "scsi.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9003"
+|               <br>
+|             <td>
+|               " Basical installation Procedure for SCSI Drives by Ryan Ramsey (June 22, 1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="scsidefs.txt"
+|                 "scsidefs.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 113040"
+|               <br>
+|             <td>
+|               " An Introduction to SCSI Definitions
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="sea.txt"
+|                 "sea.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12928"
+|               <br>
+|             <td>
+|               " SEA vs. PKWARE: Shareware Company Threatens BBS World that Gave it Life
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="secret.txt"
+|                 "secret.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1217"
+|               <br>
+|             <td>
+|               " A Windows 3.1 Secret
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="secrets.jok"
+|                 "secrets.jok"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2167"
+|               <br>
+|             <td>
+|               " Users' Guide to Little-Known Facts About Computers (Humor)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="serial.txt"
+|                 "serial.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5207"
+|               <br>
+|             <td>
+|               " Programming the Serial Port
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="share.txt"
+|                 "share.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 55380"
+|               <br>
+|             <td>
+|               " The Shareware User's Guide to Shareware, Public Domain, Freeware and Commercial Software
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="sharew.txt"
+|                 "sharew.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4373"
+|               <br>
+|             <td>
+|               " The Definition of Shareware, by Paul Mayer, Author of GRAB Plus
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="sharewr.inf"
+|                 "sharewr.inf"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5813"
+|               <br>
+|             <td>
+|               " What is Shareware? By Richard Martin (January 1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="smus"
+|                 "smus"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 47165"
+|               <br>
+|             <td>
+|               " SMUS IFF Simple Musical Score by Jerry Morrison of Electronic Arts (February 5, 1986)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="softshop.txt"
+|                 "softshop.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 63378"
+|               <br>
+|             <td>
+|               " Software Shopper Online Volume 5 Number 11 (March 1995)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="software.txt"
+|                 "software.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 16512"
+|               <br>
+|             <td>
+|               " Software for Laptop Needs: A Listing of Shareware Vendors
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="stereo.txt"
+|                 "stereo.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8320"
+|               <br>
+|             <td>
+|               " The Atari ST 520/1040 Stereo Modification
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="stips.txt"
+|                 "stips.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9714"
+|               <br>
+|             <td>
+|               " Submissions and Tips and Tricks for DOS Booting v1.23 by Scorpio
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="stratari"
+|                 "stratari"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 29583"
+|               <br>
+|             <td>
+|               " People Are Talking (About Atari ST Stuff) by Joe Mirando
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="supdev.txt"
+|                 "supdev.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5654"
+|               <br>
+|             <td>
+|               " Supported Devices for Various DPT Drivers (November 21, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="support"
+|                 "support"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7873"
+|               <br>
+|             <td>
+|               " Programmer's Technical Reference for MSDOS and the IBM PC Version 2.2a
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="taeis.lng"
+|                 "taeis.lng"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 63557"
+|               <br>
+|             <td>
+|               " A Collection of Artifical Languages from the Taeis Worlds
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="taoprog.pro"
+|                 "taoprog.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 18515"
+|               <br>
+|             <td>
+|               " The Tao Of Programming, Short Version.
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="taoprogram.pro"
+|                 "taoprogram.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 27266"
+|               <br>
+|             <td>
+|               " The Tao of Programming, Translated by Geoffrey James (Formatted)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tcad"
+|                 "tcad"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11547"
+|               <br>
+|             <td>
+|               " Computer-Aided Design of Tesla Coils, by Toby Grotz
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec001.txt"
+|                 "tec001.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1803"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Third party defragmentation programs and STACKER 2.0 and 1.x (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec002.txt"
+|                 "tec002.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4131"
+|               <br>
+|             <td>
+|               " STAC Technical Note: QEMM386 and OPTIMIZE (September 18, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec004.txt"
+|                 "tec004.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1396"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Backing up STACKER drives (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec005.txt"
+|                 "tec005.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2564"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Miscellaneous STACKER Notes (May 24, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec006.txt"
+|                 "tec006.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2403"
+|               <br>
+|             <td>
+|               " STAC Technical Note: LoadHI Information with Stacker (July 9, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec007.txt"
+|                 "tec007.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1886"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Removing STACKER (May 24, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec008.txt"
+|                 "tec008.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3285"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Stacker Coprocessor Installation Checklist (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec009.txt"
+|                 "tec009.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1572"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Stacker and Disk Cache Programs (May 24, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec010.txt"
+|                 "tec010.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2476"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Performance Differences Between Stacker Software and CoProcessor Versions (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec011.txt"
+|                 "tec011.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2355"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Scheck and Stacker Space Reporting (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec012.txt"
+|                 "tec012.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2073"
+|               <br>
+|             <td>
+|               " STAC Technical Note: DR DOS and STACKER (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec013.txt"
+|                 "tec013.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2131"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Miscellaneous DOS and BOOT Issues with STACKER (June 26, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec014.txt"
+|                 "tec014.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4864"
+|               <br>
+|             <td>
+|               " STAC Technical Note: DOS5 Information (June 18, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec015.txt"
+|                 "tec015.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2674"
+|               <br>
+|             <td>
+|               " STAC Technical Note: DOS 5.0 Information (June 28, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec016.txt"
+|                 "tec016.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4129"
+|               <br>
+|             <td>
+|               " STAC Technical Note: QEMM386 OPTIMIZE and STACKER Version 1.x (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec017.txt"
+|                 "tec017.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3907"
+|               <br>
+|             <td>
+|               " STAC Technical Note: MAXIMIZE by Qualitas Corporation (September 6, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec018.txt"
+|                 "tec018.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3214"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Windows 3.0 in Enhanced Mode and Stacker (September 18, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec019.txt"
+|                 "tec019.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1266"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Finding SSWAPed Drives in C
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec020.txt"
+|                 "tec020.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2002"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Installing STACKER on an IBM PS/1 (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec021.txt"
+|                 "tec021.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5550"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Installing 386MAX and BlueMAX on a STACKER System
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec022.txt"
+|                 "tec022.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 5341"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Using Stacker and QEMM by Robert Ngan
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec023.txt"
+|                 "tec023.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 9441"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Upgrading to DR DOS 6.0 with STACKER Installed (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec024.txt"
+|                 "tec024.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2383"
+|               <br>
+|             <td>
+|               " STAC Technical Note: STACKER 2.0 Device Driver Memory Requirements (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec026.txt"
+|                 "tec026.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1818"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Stacking the Harddrive on a Floppyless Notebook Computer (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec027.txt"
+|                 "tec027.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2932"
+|               <br>
+|             <td>
+|               " STAC Technical Note: I Stacked my PS/1 Before I reconfigured the Way It Starts, Now What? (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec028.txt"
+|                 "tec028.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1812"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Stacking the Hard RAM Drive of a Palmtop (February 20, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec029.txt"
+|                 "tec029.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3861"
+|               <br>
+|             <td>
+|               " STAC Technical Note: Stacking Up the HP 95LX Palmtop Computer (March 6, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tec030.txt"
+|                 "tec030.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2963"
+|               <br>
+|             <td>
+|               " STAC Technical Note: QEMM386 Optimize and Stacker 2.0 (March 6, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="technom.ads"
+|                 "technom.ads"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3145"
+|               <br>
+|             <td>
+|               " An Archive of Writings and Files Related to Steven K. Roberts, the Techno-Nomad
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="techtip.txt"
+|                 "techtip.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4090"
+|               <br>
+|             <td>
+|               " Some Tech Tips from the Micropolis BBS
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="teletype.his"
+|                 "teletype.his"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 28523"
+|               <br>
+|             <td>
+|               " History of Morkrum Company - Ancestor of Teletype Corporation
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="the_dark.er_"
+|                 "the_dark.er_"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 448695"
+|               <br>
+|             <td>
+|               " Extremely Large Ranma 1/2 Fan Fiction Story
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="theory1.hac"
+|                 "theory1.hac"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 28850"
+|               <br>
+|             <td>
+|               " Wireless Transmission of Power: Resonating Planet Earth by Toby Grotz
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="theory2.hac"
+|                 "theory2.hac"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3560"
+|               <br>
+|             <td>
+|               " Tesla Coil Theory Information
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tips.txt"
+|                 "tips.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 42380"
+|               <br>
+|             <td>
+|               " Computing Tips, Tricks and Traps plus Comments Regarding Environmentally Safe Computing
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tips0792.asc"
+|                 "tips0792.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 25771"
+|               <br>
+|             <td>
+|               " TIPS by Craig S. Stevenson of The Bertha BBS (July 1, 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tjhelp.txt"
+|                 "tjhelp.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7637"
+|               <br>
+|             <td>
+|               " Tips and Tricks fromT & J Software (August 7, 1994)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="travel.txt"
+|                 "travel.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 18107"
+|               <br>
+|             <td>
+|               " Information on Travelling with a Laptop Computer
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="trivia.1"
+|                 "trivia.1"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 13294"
+|               <br>
+|             <td>
+|               " Questions and Answers from the Second Computer Bowl, at the Boston Computer Museum (April 1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="trivia.2"
+|                 "trivia.2"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 14616"
+|               <br>
+|             <td>
+|               " Questions from the Third Annual Computer Bowl in San Jose (April 26, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="trojan.pro"
+|                 "trojan.pro"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 13312"
+|               <br>
+|             <td>
+|               " Mark Garvin explains how a trojan horse got him
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="tsprog.inf"
+|                 "tsprog.inf"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 10957"
+|               <br>
+|             <td>
+|               " A List of Program and Other Packages by Timo Salmi (February 25, 1996)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="twxhist.txt"
+|                 "twxhist.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 16883"
+|               <br>
+|             <td>
+|               " A History of Telex and Fax (Very Complete)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="udcnew.txt"
+|                 "udcnew.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 46480"
+|               <br>
+|             <td>
+|               " The Universal Data Converter, by Hannibal Lecter of Delamo Labs, Inc.
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="udp.txt"
+|                 "udp.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2887"
+|               <br>
+|             <td>
+|               " Installing a DPT Controller with User-Definable Parameters
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ultra.txt"
+|                 "ultra.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 10212"
+|               <br>
+|             <td>
+|               " Gravis Ultrasound Tech Specs: The Unofficial Dox, by Tran of Renaissance and Joshua Jensen (December 1992)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="unix.fun"
+|                 "unix.fun"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4401"
+|               <br>
+|             <td>
+|               " Collection of Funny Commands You can Enter in UNIX
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="unixsec.txt"
+|                 "unixsec.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 157190"
+|               <br>
+|             <td>
+|               " Improving the Security of your UNIX System by David Curry (April 1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="unravel.txt"
+|                 "unravel.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 27343"
+|               <br>
+|             <td>
+|               " The Unraveling Universe from Time Magazine
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="ut.sof"
+|                 "ut.sof"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7939"
+|               <br>
+|             <td>
+|               " The University of Toronto Acceptable Use Policy on Computer Software
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="v42bis.txt"
+|                 "v42bis.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 12106"
+|               <br>
+|             <td>
+|               " A Layman's Explanation of High Speed Modems, by Stan Simmons April 4, 1991
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="vcbackup.txt"
+|                 "vcbackup.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8064"
+|               <br>
+|             <td>
+|               " How to Back-up your PC VisiCalc disk
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="vendlist.txt"
+|                 "vendlist.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3703229"
+|               <br>
+|             <td>
+|               " The Vendor Phone List and Other Miscellaneous Info by Dan Kyburz (July 18, 1996)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="vendors"
+|                 "vendors"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3275"
+|               <br>
+|             <td>
+|               " VENDORS: Mapping of the First Three Bytes of an IEEE Mac Address Into Venfor's Name
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="vguide.txt"
+|                 "vguide.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 118853"
+|               <br>
+|             <td>
+|               " A Disk Vendor's Guide, by the Association of Shareware Professionals (March 15, 1993)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="vidtrix.txt"
+|                 "vidtrix.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3800"
+|               <br>
+|             <td>
+|               " Tricks You Can Do With Your Video Camera
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="viewers.txt"
+|                 "viewers.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 11245"
+|               <br>
+|             <td>
+|               " Information on Different Picture Viewing Programs (October 5, 1991)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="visio.txt"
+|                 "visio.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8234"
+|               <br>
+|             <td>
+|               " Visiophones: French High Tech Security by Pierre Marie Bourniquel
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="vrthea.art"
+|                 "vrthea.art"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 10306"
+|               <br>
+|             <td>
+|               " Bringing Theatre into Virtual Worlds
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="wacky"
+|                 "wacky"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3042"
+|               <br>
+|             <td>
+|               " Introduction File for the FidoNet WackyNet Network
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="weird2_1.txt"
+|                 "weird2_1.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 101705"
+|               <br>
+|             <td>
+|               " The high weirdness by email v2.1
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="weirdstf.ans"
+|                 "weirdstf.ans"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 33410"
+|               <br>
+|             <td>
+|               " The Weird Stuff Source List, 08/01/1993
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="weiskamp.lst"
+|                 "weiskamp.lst"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 15441"
+|               <br>
+|             <td>
+|               " An Icon Editor by Keith Weiskamp and Loren Heiny
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="wellman.hac"
+|                 "wellman.hac"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 77936"
+|               <br>
+|             <td>
+|               " The Complete Guide to the WELL (Whole Earth 'Lectronic Link)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="whatis.txt"
+|                 "whatis.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4274"
+|               <br>
+|             <td>
+|               " What Is a Modem? (Introduction File)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="win31.txt"
+|                 "win31.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 19333"
+|               <br>
+|             <td>
+|               " General Compatibility Issues with Windows 3.1
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="winthere.asc"
+|                 "winthere.asc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3537"
+|               <br>
+|             <td>
+|               " Winthere, a Program to Test for the Presence of Windows 3.0 by Ben Meyers (1990)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="xdi.tec"
+|                 "xdi.tec"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 8904"
+|               <br>
+|             <td>
+|               " XDI Specification for DESQview: Quarterdeck Technical Note by Daniel Travison
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="xga.doc"
+|                 "xga.doc"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6887"
+|               <br>
+|             <td>
+|               " How the XGA Graphics Settings are Achieved
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="xmodem.txt"
+|                 "xmodem.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6005"
+|               <br>
+|             <td>
+|               " The Xmodem Protocol in General, by Lightning House Software
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="xt-640k.upd"
+|                 "xt-640k.upd"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 6940"
+|               <br>
+|             <td>
+|               " Upgrading an Old IBM PC/XT to 640k, by Tony Movshon (March 2, 1988)
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="xt286.txt"
+|                 "xt286.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 7296"
+|               <br>
+|             <td>
+|               " Some Highlights of the New PC XT Model 286
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="xtformat.txt"
+|                 "xtformat.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 3456"
+|               <br>
+|             <td>
+|               " Modifying the FORMAT Utility on an IBM-XT running Dos 2.0
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="yapnet"
+|                 "yapnet"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 4532"
+|               <br>
+|             <td>
+|               " Overview of the Yapnet Echomail
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="youth"
+|                 "youth"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 2468"
+|               <br>
+|             <td>
+|               " Introduction to YouthNet: A Communications Network for the Young and Young-At-heart
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="zoom"
+|                 "zoom"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 14561"
+|               <br>
+|             <td>
+|               " Overview of the Hayes AT Command Set for the Zoom Modem
+"
+|           <tr>
+|             valign="TOP"
+|             <td>
+|               align="TOP"
+|               <a>
+|                 href="zork3.txt"
+|                 "zork3.txt"
+|               "  "
+|               <tab>
+|                 to="T"
+|             <td>
+|               " 1549"
+|               <br>
+|             <td>
+|               " How to Backup and Unprotect Infocom's Zork III Game for IBM PC
+"
+|     <p>
+|       <table>
+|         width="100%"
+|         <tbody>
+|           <tr>
+|             <td>
+|               align="RIGHT"
+|               <small>
+|                 "There are 437 files for a total of 26,493,483 bytes."
+|           <tr>
+|             <td>
+|               align="RIGHT"
+|               <small>
+|                 "There are 5 directories."
+|       "
+
+"
+|     <p>
+|       "If you wish to have the entire directory conveniently archived and compressed into one file, please download
+either "
+|       <a>
+|         href="http://archives.textfiles.com/computers.tar.gz"
+|         <b>
+|           "computers.tar.gz"
+|       " (9988380 bytes) or "
+|       <a>
+|         href="http://archives.textfiles.com/computers.zip"
+|         <b>
+|           "computers.zip"
+|       " (10983546 bytes) instead of all the files separately. "
+|     <p>
+|       "
+"
