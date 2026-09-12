@@ -158,6 +158,8 @@ static uint64_t syscall_thread_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_sync_all(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_shutdown(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -260,6 +262,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_MOUNT,   "mount",   syscall_mount,   false, 0x03),  // arg0 = partition name/GUID, arg1 = mount point, arg2 = OS64_MOUNT_* flags
 	SYSCALL_DEFINE(SYSCALL_UNMOUNT, "unmount", syscall_unmount, false, 0x01),  // arg0 = mount point
 	SYSCALL_DEFINE(SYSCALL_RENAME_WITH_FLAGS, "rename_with_flags", syscall_rename_with_flags, false, 0x03),  // arg0/1 = paths, arg2 = OS64_RENAME_*
+	SYSCALL_DEFINE(SYSCALL_NET_ANNOUNCE, "net_announce", syscall_net_announce, false, 0x01),  // arg0 = os64_netdest_t in ptr (ip 0)
 	// ── GUI (16-21): GRAPHICS.md's userland boundary, live 2026-08-17.
 	// Ownership (migration step 1) went in BEFORE these doors opened: every
 	// handle below is checked against its owner inside gui_client.c, so a
@@ -1310,6 +1313,17 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// program still just writes handle 1 and never asks what's
 			// behind it; the routing grew, the contract didn't move.
 			tty_t *tty = task_tty(task);
+			// A STREAM pty's output is its pipe, and a seated task's write
+			// must BLOCK when it fills (backpressure — a remote terminal
+			// reading slowly is the reader being slow, never a reason to
+			// drop the program's output). So it goes through pipe_write,
+			// not tty_write, whose STREAM branch is the NON-blocking path
+			// for kernel text that may not park. A closed pipe means the
+			// remote terminal hung up: the bytes are absorbed and the task
+			// proceeds toward the SIGHUP it also received, exactly as a
+			// write to an orphaned GRID slave is benign.
+			bool stream_pty = (tty != NULL && tty->is_pty &&
+			                   tty->pty_mode == PTY_MODE_STREAM);
 			char chunk[WRITE_CHUNK_SIZE];
 			size_t copied = 0;
 			while (copied < length)
@@ -1323,6 +1337,28 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 					// Report progress if some bytes already made it to the
 					// console; only fail outright when nothing was written.
 					return copied ? copied : SYSCALL_RESULT_BAD_USER_DATA;
+				}
+
+				if (stream_pty)
+				{
+					long w = pipe_write(tty->stream, chunk, this_chunk);
+					if (w == PIPE_ERR_INTERRUPTED)
+					{
+						// A signal ended the wait — the same rail as a pipe
+						// write, and the same answer: caught means the call
+						// was interrupted (return progress, or the sentinel),
+						// uncaught means terminate.
+						if (current_thread_will_catch())
+							return copied ? copied : (uint64_t)(int64_t)OS64_INTERRUPTED;
+						raise_terminating_signal_and_die(task, NULL);
+						__builtin_unreachable();
+					}
+					if (w == PIPE_ERR_CLOSED)
+						return copied + this_chunk;  // terminal hung up: benign, absorbed
+					if (w < 0)
+						return copied ? copied : SYSCALL_RESULT_INVALID;
+					copied += (size_t)w;
+					continue;
 				}
 
 				tty_write(tty, chunk, this_chunk);
@@ -1707,7 +1743,7 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	{
 		if (h->type != HANDLE_CONSOLE_IN &&
 		    h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
-		    h->type != HANDLE_NET_ICMP)
+		    h->type != HANDLE_NET_ICMP && h->type != HANDLE_NET_LISTENER)
 			return SYSCALL_RESULT_INVALID;
 		deadline = syscall_io_deadline(timeout_ms);
 	}
@@ -1756,13 +1792,76 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			break;
 
 		case HANDLE_PTY_MASTER:
-			// The teaching error PTY.md promised: GRID mode has no byte
-			// stream — the screen comes out through pty_snapshot. read()
-			// takes on meaning when the STREAM flavor arrives (its gate is
-			// TCP listen(); its customer is telnetd).
-			printd(DEBUG_SYSCALL,
-			       "read(pty master): GRID mode has no byte stream — use pty_snapshot\n");
-			return SYSCALL_RESULT_INVALID;
+		{
+			// STREAM: the child's bytes, out of the slave's pipe, with the
+			// pipe read's whole contract — blocks for one byte, returns
+			// short, 0 once the seats have emptied (the session ended).
+			// GRID: the teaching error PTY.md promised — a grid has no
+			// byte stream; the screen comes out through pty_snapshot.
+			tty_t *slave = (tty_t *)h->object;
+			if (slave->pty_mode != PTY_MODE_STREAM)
+			{
+				printd(DEBUG_SYSCALL,
+				       "read(pty master): GRID mode has no byte stream — use pty_snapshot\n");
+				return SYSCALL_RESULT_INVALID;
+			}
+			got = pipe_read(slave->stream, kbuf, want);
+			if (got == PIPE_ERR_INTERRUPTED)
+			{
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall — if still
+				// installed; a sibling can uninstall it first, and then nothing
+				// runs and INTERRUPTED is still true (the wait DID end early).
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
+				raise_terminating_signal_and_die(task, NULL);
+				__builtin_unreachable();
+			}
+			break;
+		}
+
+		case HANDLE_NET_LISTENER:
+		{
+			// Accept IS a read (ruling #3): block until a handshake has
+			// completed, then hand back one os64_netconn_t — the new
+			// stream's handle, allocated in THIS task's table, plus the
+			// peer's identity. A buffer too small for the struct is a
+			// caller bug (half an answer names half a peer), not a short
+			// read.
+			if (want < sizeof(os64_netconn_t))
+				return SYSCALL_RESULT_INVALID;
+			long why = 0;
+			tcp_conn_t *conn = tcp_listener_accept((tcp_listener_t *)h->object,
+			                                       deadline, &why);
+			if (conn == NULL)
+			{
+				if (why == TCP_ERR_INTERRUPTED)
+				{
+					if (current_thread_will_catch())
+						return (uint64_t)(int64_t)OS64_INTERRUPTED;
+					raise_terminating_signal_and_die(task, NULL);
+					__builtin_unreachable();
+				}
+				if (why == TCP_ERR_TIMEOUT)
+					return (uint64_t)(int64_t)OS64_NET_ERR_TIMEOUT;
+				return SYSCALL_RESULT_INVALID;   // the listener was closed under us
+			}
+			int ch = handle_alloc(task, HANDLE_NET_TCP, conn);
+			if (ch < 0)
+			{
+				// No slot for the accepted stream: hang it up cleanly (the
+				// peer gets a FIN) rather than leaking it. The accept already
+				// spent its handshake; the peer will not retry.
+				tcp_conn_release(conn);
+				return (uint64_t)(int64_t)OS64_NET_ERR_NO_RESOURCES;
+			}
+			os64_netconn_t nc = { .handle = ch, .peer_ip = conn->peer_ip,
+			                      .peer_port = conn->peer_port, ._reserved = 0 };
+			memcpy(kbuf, &nc, sizeof(nc));
+			got = (long)sizeof(nc);
+			break;
+		}
 
 		case HANDLE_PIPE_READ:
 			// Blocks until >=1 byte is available, OR the last writer closes —
@@ -2046,14 +2145,18 @@ _Static_assert(__builtin_offsetof(tty_cell_t, color) ==
 static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	(void)arg3; (void)arg4; (void)arg5;
 
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
 	if (task == NULL)
 		return SYSCALL_RESULT_INVALID;
 
-	tty_t *slave = pty_create_slave((uint32_t)arg0, (uint32_t)arg1);
+	// arg2 is the flavor (os64/pty.h OS64_PTY_MODE_*, the same numbers as
+	// tty.h's PTY_MODE_*); pty_create_slave refuses one it does not know.
+	if (arg2 > 0xFF)
+		return SYSCALL_RESULT_INVALID;
+	tty_t *slave = pty_create_slave((uint32_t)arg0, (uint32_t)arg1, (uint8_t)arg2);
 	if (slave == NULL)
 		return SYSCALL_RESULT_INVALID;
 
@@ -2092,6 +2195,13 @@ static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2
 	if (h == NULL || h->type != HANDLE_PTY_MASTER)
 		return SYSCALL_RESULT_INVALID;
 	tty_t *t = (tty_t *)h->object;
+	// A STREAM slave's grid is never fed: a snapshot of it would be a blank
+	// screen presented as the truth. Its output is read(master).
+	if (t->pty_mode == PTY_MODE_STREAM)
+	{
+		printd(DEBUG_SYSCALL, "pty_snapshot: a STREAM pty has no screen — read(master) instead\n");
+		return SYSCALL_RESULT_INVALID;
+	}
 
 	uint32_t maxCells = (uint32_t)arg3;
 	uint32_t want = t->cols * t->rows;
@@ -2296,6 +2406,48 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	                         (dest.protocol == OS64_NET_ICMP) ? "icmp" : "udp";
 	printd(DEBUG_NET, "net_dial: task %s -> %s!%u.%u.%u.%u!%u = handle %d\n",
 	       task->exename, proto_name, NET_IPV4_OCTETS(dest.ip), dest.port, h);
+	return (uint64_t)h;
+}
+
+// net_announce(local): the inbound door (SERVERS.md § 1). The same struct
+// as dial, read as WHERE I AM — and the refusals are as specific as dial's,
+// for the same reason: "that port is taken" and "there is no network" are
+// different next moves.
+static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	os64_netdest_t local;
+	if (!copy_user_buffer((const void *)arg0, &local, sizeof(local)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	// ip must be 0 — "every address this machine has" — because there is
+	// one NIC and a per-address announce has no consumer (DEBTS). TCP
+	// only, for the same reason. A port of 0 names no door.
+	if (local.ip != 0 || local.protocol != OS64_NET_TCP || local.port == 0)
+		return (uint64_t)(int64_t)OS64_NET_ERR_BAD_DEST;
+	if (kNetDeviceCount == 0)
+		return (uint64_t)(int64_t)OS64_NET_ERR_NO_NIC;
+
+	int64_t why = OS64_NET_ERR_NO_RESOURCES;
+	tcp_listener_t *l = tcp_listener_announce(kNetDevices[0], local.port, &why);
+	if (l == NULL)
+		return (uint64_t)why;
+
+	int h = handle_alloc(task, HANDLE_NET_LISTENER, l);
+	if (h < 0)
+	{
+		tcp_listener_close(l);
+		return (uint64_t)(int64_t)OS64_NET_ERR_NO_RESOURCES;
+	}
+	printd(DEBUG_NET, "net_announce: task %s <- tcp!*!%u = handle %d\n",
+	       task->exename, local.port, h);
 	return (uint64_t)h;
 }
 
@@ -3623,6 +3775,10 @@ static void spawn_do_create(void *arg)
 		// which for a just-opened redirect file is position 0, as intended.)
 		else if (p->redirType[slot] == HANDLE_FILE)
 			__sync_add_and_fetch(&((vfs_file_t *)p->redirObject[slot])->handleRefCount, 1);
+		// A TCP connection by the same rule: two handles name it now, and
+		// only the last close sends the FIN (tcp_conn_release).
+		else if (p->redirType[slot] == HANDLE_NET_TCP)
+			tcp_conn_ref((tcp_conn_t *)p->redirObject[slot]);
 
 		handle_install(child, slot, p->redirType[slot], p->redirObject[slot]);
 	}
@@ -3776,11 +3932,12 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		// pipe ends, vfs_directory_t has no refcount, so sharing one would
 		// dangle the child's copy the moment the parent closes. Reject here,
 		// where the caller gets a clean error instead of a haunted handle.
-		// Net handles are refused for the same refcount reason (udp_conn_t
-		// has a single owner by design) — a "hand the child my connection"
-		// story arrives with a refcount when a real consumer wants it.
+		// A TCP connection is handed over with a reference (tcp.h handles —
+		// telnetd's session child is inetd's shape, its 0 and 1 the
+		// connection). UDP and ICMP conns are still single-owner and a
+		// listener is a door, not a stream; all three are refused here.
 		if (h->type == HANDLE_DIR || h->type == HANDLE_NET_UDP ||
-		    h->type == HANDLE_NET_TCP || h->type == HANDLE_NET_ICMP)
+		    h->type == HANDLE_NET_ICMP || h->type == HANDLE_NET_LISTENER)
 		{
 			kfree(p);
 			return SYSCALL_RESULT_INVALID;

@@ -243,6 +243,14 @@ HEX_BUFFER_OBJ  := $(OBJ)/$(HEX_BUFFER_SRC).o
 TAR_FORMAT_PROGRAMS := tartest
 TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
 
+# The telnet protocol engine (RFC 854 + RFC 1143) is bytes in, bytes out and
+# host-tested at every chunk size. The telnet CLIENT and telnetd both drive
+# it — the client role and the server role are one file, so the negotiation
+# has one implementation to be right. telnetd links the object the client
+# app already builds.
+TELNET_ENGINE_PROGRAMS := telnetd
+TELNET_ENGINE_OBJ      := $(OBJ)/apps/telnet/telnet_protocol.c.o
+
 # These programs consume the standalone gzip module. Keep the dependency
 # selective: linking libgzip into every app would turn an optional format
 # engine into part of the foundational runtime by accident. (os64get is not
@@ -427,6 +435,7 @@ APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard $(2)/$(1)/*.c))
 APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ)) \
                        $(if $(filter $(1),$(TAR_FORMAT_PROGRAMS)),$(TAR_FORMAT_OBJ)) \
+                       $(if $(filter $(1),$(TELNET_ENGINE_PROGRAMS)),$(TELNET_ENGINE_OBJ)) \
                        $(if $(filter $(1),bearssltest),$(BEARSSL_TEST_OBJ)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \

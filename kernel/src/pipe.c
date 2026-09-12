@@ -429,6 +429,32 @@ long pipe_write(pipe_t *p, const char *buf, size_t len)
 	return (long)written;
 }
 
+long pipe_write_if_room(pipe_t *p, const char *buf, size_t len)
+{
+	if (len == 0)
+		return 0;
+
+	uint64_t flags = spinlock_acquire_irqsave(&p->lock);
+	if (p->readers == 0)
+	{
+		spinlock_release_irqrestore(&p->lock, flags);
+		return (long)PIPE_ERR_CLOSED;
+	}
+	size_t space = PIPE_CAPACITY - p->count;
+	size_t n = len < space ? len : space;
+	for (size_t i = 0; i < n; i++)
+	{
+		p->buffer[p->head] = (uint8_t)buf[i];
+		p->head = (p->head + 1) % PIPE_CAPACITY;
+	}
+	p->count += n;
+	thread_t *r = (n > 0) ? pipe_claim_parked_waiter(&p->readWaiter) : NULL;
+	spinlock_release_irqrestore(&p->lock, flags);
+
+	pipe_wake_thread(r);
+	return (long)n;
+}
+
 // Dump every live pipe: buffered bytes, both refcounts, and who is parked.
 //
 // Meant to be called FROM THE DEBUGGER when a pipeline is wedged:

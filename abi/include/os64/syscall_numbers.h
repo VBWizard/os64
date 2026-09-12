@@ -293,6 +293,15 @@
 // renumbering the incumbent costs every binary ever built.
 #define SYSCALL_NET_DIAL   37
 
+// net_announce(local) — open the INBOUND door (SERVERS.md, 2026-09-12).
+// arg0 = const os64_netdest_t* read as "where I am": ip 0, the port to
+// answer on, protocol TCP. Returns a LISTENER handle whose read() yields
+// one os64_netconn_t per completed handshake (os64/net.h) — accept is a
+// read, NETWORK.md ruling #3 — or negative: the dial table's codes, plus
+// OS64_NET_ERR_PORT_TAKEN when the port is already spoken for. The verb
+// is Plan 9's `announce`, kept for the reason `dial` was.
+#define SYSCALL_NET_ANNOUNCE 55
+
 // sync(1)'s engine (2026-08-06): walk the kernel's open-file registry and
 // run every open file's fops->sync. No arguments — the broom sweeps the
 // whole floor. Returns the count of files synced (0 is a legal, honest
@@ -591,12 +600,15 @@ typedef enum os64_shutdown_mode
 #define OS64_SPAWN_SET_TTY     0x2
 #define OS64_SPAWN_TTY_SHIFT   32
 
-// The pty family (PTY.md — ratified 2026-08-19). pty_create(cols, rows)
-// returns a MASTER handle; the slave is a kernel tty the master names at
-// spawn (above) and tasks name as their controlling terminal. GRID mode:
-// write(master) injects keystrokes (0x03 runs the slave's Ctrl+C intercept),
-// pty_snapshot copies the interpreted screen out; read(master) is reserved
-// for the STREAM mode whose customer (telnetd) waits on TCP listen().
+// The pty family (PTY.md — ratified 2026-08-19). pty_create(cols, rows,
+// mode) returns a MASTER handle; the slave is a kernel tty the master names
+// at spawn (above) and tasks name as their controlling terminal. In BOTH
+// modes write(master) injects keystrokes (0x03 runs the slave's Ctrl+C
+// intercept). What differs is the way OUT (os64/pty.h OS64_PTY_MODE_*):
+// GRID interprets the child's output into a screen that pty_snapshot copies
+// out and read(master) refuses; STREAM (SERVERS.md, 2026-09-12) hands the
+// child's bytes to read(master) uninterpreted and pty_snapshot refuses —
+// what a remote terminal wants, since the rendering happens at its end.
 #define SYSCALL_PTY_CREATE   44
 #define SYSCALL_PTY_SNAPSHOT 45
 // pty_resize(master, cols, rows): the grid follows the window and every

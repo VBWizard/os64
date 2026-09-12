@@ -8,6 +8,7 @@
 #include "tty.h"
 #include "BasicRenderer.h"     // the glass: renderer_glass_* primitives
 #include "console.h"           // console_intr_intercept_tty — the master's 0x03
+#include "pipe.h"              // a STREAM slave's way out is a pipe
 #include "gui/compositor.h"    // gui_vt8_seated/gui_vt8_focus_gained — the
                                // VT8 handoff (policy stays HERE, per the
                                // keyboard driver's doctrine; the compositor
@@ -563,6 +564,21 @@ void tty_write(tty_t *t, const char *bytes, size_t length)
 	if (t == NULL || bytes == NULL || length == 0)
 		return;
 
+	// A STREAM slave has no interpreter and no glass: its output is the
+	// pipe. What arrives HERE is kernel text (a seated task's own writes
+	// come through the syscall layer as blocking pipe writes), and the
+	// caller may be the exception path, which cannot park — so this pushes
+	// what fits and counts what did not (tty.h stream_dropped).
+	if (t->is_pty && t->pty_mode == PTY_MODE_STREAM)
+	{
+		long n = pipe_write_if_room(t->stream, bytes, length);
+		if (n < 0)
+			n = 0;
+		if ((size_t)n < length)
+			t->stream_dropped += length - (size_t)n;
+		return;
+	}
+
 	// (The kConsoleSink diversion stood here until the VT8 chapter,
 	// 2026-08-19 — and note what it did: it caught bytes BEFORE the grid, so
 	// during GUI mode a tty's own history was never written. Retiring it is
@@ -993,9 +1009,21 @@ void tty_task_departed(struct task *task)
 announce:
 	// The 1971 logout, os64 dialect: the shell is gone, the line is quiet,
 	// and the next knock summons a fresh one (getty, on demand).
-	static const char msg[] =
-		"\n[shell departed -- press any key to summon another]\n";
-	tty_write(t, msg, sizeof(msg) - 1);
+	//
+	// A VIRTUAL TERMINAL ONLY. getty-on-demand is the physical console's
+	// life — it persists, goes dormant, and the summon sweep below walks
+	// kTTY[] to respawn a shell on the next keypress. A pty has no such
+	// afterlife: when its seated shell departs, the terminal's HOLDER
+	// decides what "session over" means (gterm closes the window, telnetd
+	// FINs the connection), and there is no key to press to summon anything.
+	// Writing this line to a pty only leaks getty's prompt down a telnet
+	// session or into a closing gterm grid.
+	if (!t->is_pty)
+	{
+		static const char msg[] =
+			"\n[shell departed -- press any key to summon another]\n";
+		tty_write(t, msg, sizeof(msg) - 1);
+	}
 }
 
 bool tty_summon_pending(void)
@@ -1083,11 +1111,13 @@ tty_t * volatile kPtyList = NULL;
 static spinlock_t kPtyListLock = 0;
 static uint32_t kPtyNextIndex = 0;
 
-tty_t *pty_create_slave(uint32_t cols, uint32_t rows)
+tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 {
 	// Bounds are sanity, not policy: a 1-cell terminal is a caller bug, and
 	// a giant one is a kmalloc grenade. 512x256 is far past any real window.
 	if (cols < 2 || rows < 2 || cols > 512 || rows > 256)
+		return NULL;
+	if (mode != PTY_MODE_GRID && mode != PTY_MODE_STREAM)
 		return NULL;
 
 	// Zeroed at the allocator choke point, and never NULL: the allocator
@@ -1106,7 +1136,12 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows)
 	t->fg_index = TTY_FG_NOT_INDEXED;
 	t->glass_bg = kFrameBufferBackgroundColor;
 	t->is_pty  = true;
-	t->pty_mode = PTY_MODE_GRID;
+	t->pty_mode = mode;
+	// STREAM's way out. The pipe is born with one reader (the master) and
+	// one writer (the seats, counted as one: the write end closes when
+	// they empty), so pipe.c's own EOF and EPIPE rules apply unchanged.
+	if (mode == PTY_MODE_STREAM)
+		t->stream = pipe_create();
 	t->state   = TTY_LIVE;   // born attended — its master IS the human
 
 	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
@@ -1296,7 +1331,16 @@ void tty_pty_unref(tty_t *t)
 	if (t == NULL || !t->is_pty)
 		return;
 	if (__sync_sub_and_fetch(&t->seats, 1) <= 0)
+	{
+		// The seats emptied: a STREAM slave's writers are gone, and the
+		// pipe's last-writer rule turns that into the master's EOF — THE
+		// SESSION ENDED, in the stream flavor's spelling. Once only: a
+		// pty_master_close sweep's guard seat also passes through here.
+		if (t->stream != NULL && t->everSeated &&
+		    __sync_bool_compare_and_swap(&t->stream_writer_closed, false, true))
+			pipe_close_write_end(t->stream);
 		pty_maybe_bury(t);
+	}
 }
 
 void pty_master_close(tty_t *slave)
@@ -1319,6 +1363,19 @@ void pty_master_close(tty_t *slave)
 	// hangup is being dispatched, so it has not completed.
 	__sync_fetch_and_add(&slave->seats, 1);
 	slave->masterClosed = true;
+
+	// A STREAM slave's reader is gone with the master: a child that writes
+	// after this gets the pipe's EPIPE instead of parking forever on a ring
+	// nobody will drain (SERVERS.md § 2). A slave never seated never had a
+	// writer, so its write end goes here too, and the pipe frees itself.
+	if (slave->stream != NULL)
+	{
+		if (__sync_bool_compare_and_swap(&slave->stream_reader_closed, false, true))
+			pipe_close_read_end(slave->stream);
+		if (!slave->everSeated &&
+		    __sync_bool_compare_and_swap(&slave->stream_writer_closed, false, true))
+			pipe_close_write_end(slave->stream);
+	}
 
 	// ── THE OTHER HANGUP (2026-08-31; booked in PTY.md § SIGHUP on master
 	// close). tty_task_departed's sweep is the SHELL-side carrier drop; this

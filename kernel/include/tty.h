@@ -177,7 +177,22 @@ typedef struct tty
 	// never see them — they walk kTTY[] only — and repaint can't happen: a
 	// pty is never kTTYFocused).
 	bool is_pty;
-	uint8_t pty_mode;                  // PTY_MODE_* — GRID today, STREAM reserved
+	uint8_t pty_mode;                  // PTY_MODE_*
+	// STREAM mode's way out: a pipe. A seated task's console write is a
+	// pipe_write into it (the syscall layer does that, so the write blocks
+	// and ends like any pipe write); the master's read is a pipe_read. Its
+	// write end closes when the seats empty (EOF to the master: the session
+	// ended), its read end when the master closes (EPIPE to a child that
+	// writes after). KERNEL text aimed at a STREAM slave — a death headline
+	// from the exception path — may not park, so tty_write pushes what fits
+	// and counts the rest here: the one byte this design chooses to lose.
+	struct pipe *stream;
+	uint64_t stream_dropped;
+	// Each end of `stream` is closed exactly once: the write end when the
+	// seats empty (tty_pty_unref), the read end when the master closes
+	// (pty_master_close). The pipe frees itself when both are gone.
+	volatile bool stream_writer_closed;
+	volatile bool stream_reader_closed;
 	// Seats = tasks whose ->tty this is (the child and everything it spawns,
 	// via task_create's inheritance). everSeated arms HUNGUP: a slave that
 	// EMPTIED is hung up; one nothing has sat on yet is merely young.
@@ -188,10 +203,13 @@ typedef struct tty
 } tty_t;
 
 // PTY.md's mode seam: the flavor is decided at ONE choke point (tty_write),
-// which is what makes STREAM an addition and never a rewrite. GRID is v1;
-// STREAM's gate is TCP listen() and its customer is telnetd.
+// which is what makes STREAM an addition and never a rewrite. GRID feeds
+// the interpreter and the grid; STREAM (SERVERS.md § 2) hands the child's
+// bytes to `stream`, a pipe the master reads — a pipe wearing a tty's
+// identity, so the blocking, the EOF and the EPIPE rules are pipe.c's.
+// The values are the ABI's (os64/pty.h OS64_PTY_MODE_*).
 #define PTY_MODE_GRID   0
-#define PTY_MODE_STREAM 1   // reserved — bytes to a ring instead of the grid
+#define PTY_MODE_STREAM 1
 
 extern tty_t kTTY[TTY_COUNT];
 extern tty_t * volatile kTTYFocused;   // whose grid the glass is showing
@@ -291,11 +309,13 @@ void tty_emergency_direct(void);
 extern volatile bool kTTYDirect;
 
 // ── The pty family (PTY.md; mechanism here, the syscall skin in syscall.c) ──
-// Create a GRID-mode slave: a live tty_t with its own grid + scrollback
-// ring, registered on kPtyList (NEVER in kTTY[] — the VT iterators stay
-// blind to ptys by construction). Returns NULL on a bad geometry — the
-// only refusal (the allocator panics on exhaustion, never returns NULL).
-tty_t *pty_create_slave(uint32_t cols, uint32_t rows);
+// Create a slave in the given PTY_MODE_*: a live tty_t with its own grid +
+// scrollback ring (STREAM keeps the grid for its geometry and never feeds
+// it — it gets the pipe instead), registered on kPtyList (NEVER in kTTY[]
+// — the VT iterators stay blind to ptys by construction). Returns NULL on
+// a bad geometry or an unknown mode — the only refusals (the allocator
+// panics on exhaustion, never returns NULL).
+tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode);
 
 // Resize a grid IN PLACE (the SIGWINCH slice, PTY.md § Resize). The ring is
 // reallocated at the new geometry and the old text carried across, then the

@@ -29,7 +29,7 @@
 #include "memory/vma.h"       // call_in_kernel_context
 #include "thread_join.h"           // thread_join_close — HANDLE_THREAD's release
 #include "driver/net/udp_conn.h"   // udp_conn_close — HANDLE_NET_UDP's release
-#include "driver/net/tcp.h"        // tcp_conn_close — HANDLE_NET_TCP's release
+#include "driver/net/tcp.h"        // tcp_conn_release / tcp_listener_close — the TCP kinds' releases
 #include "driver/net/icmp_conn.h"  // icmp_conn_close — HANDLE_NET_ICMP's release
 
 void handle_table_init(struct task *t)
@@ -411,10 +411,17 @@ bool handle_close(struct task *t, int h)
 			thread_join_close((thread_join_t *)object);
 			break;
 		case HANDLE_NET_TCP:
-			// Orderly shutdown: sends FIN and DETACHES — the closing
-			// dance and TIME_WAIT finish in the background (tcp_poll),
-			// so closing a handle never blocks the program.
-			tcp_conn_close((tcp_conn_t *)object);
+			// One handle fewer names the conn; the LAST one's close is the
+			// orderly shutdown — FIN, then DETACH, the closing dance and
+			// TIME_WAIT finishing in the background (tcp_poll), so closing
+			// a handle never blocks the program. An earlier close is a
+			// parent stepping away from a session it handed to a child.
+			tcp_conn_release((tcp_conn_t *)object);
+			break;
+		case HANDLE_NET_LISTENER:
+			// The door shuts: no new SYN finds it, what was queued is
+			// reset, and tcp_poll frees the row once nobody is inside it.
+			tcp_listener_close((tcp_listener_t *)object);
 			break;
 		case HANDLE_NET_ICMP:
 			icmp_conn_close((icmp_conn_t *)object);

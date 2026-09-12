@@ -36,9 +36,13 @@
 //      collapse, and Van Jacobson's answer to it).
 //
 // V1 SCOPE, stated plainly so the omissions are decisions:
-//   - ACTIVE open only (we dial out). Listeners — ruling #3's "read a
-//     listener handle to accept" — are the next slice, and the state
-//     machine below already carries their states.
+//   - ACTIVE open (we dial out) and PASSIVE open (an announced port,
+//     SERVERS.md): a listener is a row of its own (tcp_listener_t below),
+//     a SYN that finds one becomes an ordinary conn born in SYN_RECEIVED,
+//     and accept is a read on the listener handle (ruling #3). What is NOT
+//     offered: SYN cookies (a full backlog drops SYNs and counts them —
+//     the threat model is a LAN), and announce on one of several
+//     addresses (there is one NIC). Both in DEBTS.md.
 //   - A SEND WINDOW (tcp.c § the sender): write() queues into a ring and
 //     returns; as many segments as the peer's window and our congestion
 //     window allow are in flight at once; the oldest is what the timer
@@ -57,8 +61,10 @@
 //     connection is bounded by the rings below and the round trip, not by
 //     the sixteen bits of the header field. A peer that does not send the
 //     option gets the unscaled field, which is the 64KB the field can say.
-//     We dial only, so the SYN-ACK is what gets parsed; the parser reads
-//     a SYN's options the same way, which is what a listener needs.
+//     A dial parses the SYN-ACK's options; a listener parses the SYN's,
+//     and its SYN-ACK offers a shift ONLY if the SYN did (RFC 7323 §2.2 —
+//     a shift the peer is not applying would have every window it sends
+//     read 32× too large).
 //   - Out-of-order arrivals are HELD, not dropped, since 2026-09-04: a
 //     segment inside the window is written into the receive ring at its
 //     own offset and absorbed when the gap closes (tcp_hold / tcp_absorb
@@ -89,9 +95,11 @@
 typedef enum tcp_state
 {
 	TCP_CLOSED = 0,
-	TCP_LISTEN,        // (next slice: the listener handle, ruling #3)
+	TCP_LISTEN,        // never a conn's state: a listener is its own row
+	                   // (tcp_listener_t), and /sys/net/tcp names it so
 	TCP_SYN_SENT,      // we dialed; waiting for SYN+ACK
-	TCP_SYN_RECEIVED,  // (next slice)
+	TCP_SYN_RECEIVED,  // they dialed an announced port; our SYN+ACK is out,
+	                   // waiting for the ACK that completes the handshake
 	TCP_ESTABLISHED,   // the stream is open in both directions
 	TCP_FIN_WAIT_1,    // we closed; waiting for our FIN to be acknowledged
 	TCP_FIN_WAIT_2,    //   ...acknowledged; waiting for THEIR FIN
@@ -402,6 +410,31 @@ typedef struct tcp_conn
 	thread_t* volatile reader;   // parked in tcp_conn_read
 	thread_t* volatile writer;   // parked in tcp_conn_write
 	bool detached;               // handle closed; poll may reap after TIME_WAIT
+	// HOW MANY HANDLES NAME THIS CONN. One at dial or accept; spawn's
+	// redirection takes another for the child (the inetd shape: a session
+	// program whose 0 and 1 ARE the connection); every handle close drops
+	// one, and the LAST drop is what sends the FIN (tcp_conn_release). The
+	// reader/writer slots above are still single: two holders reading at
+	// once contend for the slot exactly as two threads of one task do.
+	uint32_t handles;
+	// OWNERSHIP, because it is where lifetime bugs live: a conn belongs to
+	// exactly one of a listener (this is set — born of its SYN, not yet
+	// read out of its accept queue), a handle, or nobody (detached). Accept
+	// moves it from the first to the second. The reaper frees a CLOSED row
+	// that is listener-owned as it would a detached one, but the
+	// no-progress abort a closed HANDLE earns does not apply: a queued conn
+	// nobody has read yet is not making progress, and that is fine. Both
+	// under kTcpListLock (the listener's queue links ride `accept_next`).
+	struct tcp_listener* listener;
+	struct tcp_conn* accept_next;
+	// Born of a SYN to an announced port. Its local port is the LISTENER's,
+	// never drawn from the ephemeral bitmap, so its funeral must not give
+	// that port back — the listener still holds it.
+	bool passive;
+	// Whether our SYN (a dial's) or SYN-ACK (a passive conn's) carries a
+	// window-scale option: always for a dial, and for a passive conn only
+	// if the peer's SYN did (tcp.h's V1 scope says why).
+	bool syn_offers_wscale;
 	bool stripped;               // buffers freed; the row and (in TIME_WAIT) the port remain
 	bool tombstone;              // a morgue row: stripped, port returned, in the capped queue
 
@@ -456,6 +489,13 @@ typedef struct tcp_stats
 	uint64_t bad_checksum;
 	uint64_t no_connection;         // segment for a 4-tuple we don't know (we RST it)
 	uint64_t resets_received;
+	// The inbound door's tally, machine-wide (a listener's own row carries
+	// its share and takes it to the grave when closed): handshakes an
+	// announced port completed, and SYNs turned away because a listener's
+	// backlog was full — the number that says "you are being flooded, or
+	// nobody is reading the accept queue".
+	uint64_t connections_accepted;
+	uint64_t syns_dropped_full;
 	// The machine-wide twins of the per-conn counters, because a reaped
 	// connection takes its copy to the grave: "has this stack EVER seen
 	// reordering" has to survive the connections that answered it. HELD is
@@ -480,6 +520,57 @@ extern tcp_stats_t kTcpStats;
 // observe; they never unlink, retire, or wake anything.
 extern tcp_conn_t* kTcpConnList;
 extern spinlock_t kTcpListLock;
+
+// ── The listener (SERVERS.md § 1; NETWORK.md ruling #3) ─────────────────────
+// An announced port. A row on kTcpListenerList under kTcpListLock — the same
+// lock the demux already holds when it finds no conn for a SYN, which is the
+// only moment a listener is consulted. Its accept queue is a FIFO of
+// ESTABLISHED conns threaded through their accept_next; `pending` counts
+// those AND the half-open ones still in SYN_RECEIVED, because both are
+// promises this port has made and the backlog bounds the promises.
+//
+// LIFETIME is the tombstone discipline: close marks the row `closed`,
+// unlinks it (no new SYN can find it), resets what it still owns and wakes
+// its parked reader — and does NOT free it. `busy` counts accept calls
+// inside the row; tcp_poll frees a closed row once that reaches zero, so a
+// reader woken by the close is never handed freed memory.
+#define TCP_LISTEN_BACKLOG 16
+
+typedef struct tcp_listener
+{
+	spinlock_t lock;
+	uint16_t port;
+	bool closed;
+	uint32_t busy;                   // accept calls inside this row
+	uint32_t pending;                // half-open + queued, bounded by the backlog
+	tcp_conn_t* queue_head;          // ESTABLISHED, waiting to be read out
+	tcp_conn_t* queue_tail;
+	thread_t* volatile waiter;       // parked in tcp_listener_accept
+	uint64_t accepted;               // handshakes completed on this port
+	uint64_t syns_dropped;           // turned away, backlog full
+	uint64_t closed_at;              // the morgue clock, once closed
+	struct tcp_listener* next;       // kTcpListenerList, or the closed rows
+	                                 // awaiting tcp_poll; under kTcpListLock
+} tcp_listener_t;
+
+extern tcp_listener_t* kTcpListenerList;
+
+// Open the door. Refusals in `why` (OS64_NET_ERR_*): PORT_TAKEN when a
+// listener or a dialed conn holds the port, NO_RESOURCES otherwise.
+tcp_listener_t* tcp_listener_announce(net_device_t* dev, uint16_t port, int64_t* why);
+// ACCEPT: block until a handshake has completed on this port, hand its conn
+// out. NULL with TCP_ERR_INTERRUPTED / TCP_ERR_TIMEOUT / TCP_ERR_RESET (the
+// listener was closed under us) in `why`. Task context only.
+tcp_conn_t* tcp_listener_accept(tcp_listener_t* l, uint64_t deadline, long* why);
+// The handle-table close hook: stop answering, reset what is queued, let
+// tcp_poll free the row once nobody is inside it.
+void tcp_listener_close(tcp_listener_t* l);
+
+// Another handle names the conn (spawn hands one to a child); a handle
+// stops naming it (the handle-table close hook) — the last release is the
+// orderly close above.
+void tcp_conn_ref(tcp_conn_t* c);
+void tcp_conn_release(tcp_conn_t* c);
 
 // ── The API behind HANDLE_NET_TCP ───────────────────────────────────────────
 // Active open. BLOCKS until the handshake completes (task context only);

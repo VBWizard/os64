@@ -40,9 +40,13 @@ typedef enum handle_type
 	HANDLE_NET_ICMP,       // object = icmp_conn_t*, a dialed echo conversation
 	                       // (net_dial; write asks, read hears the answer)
 	HANDLE_PTY_MASTER,     // object = tty_t*, the SLAVE this master fronts
-	                       // (PTY.md: write = keystrokes in, pty_snapshot =
-	                       // the interpreted screen out; read is reserved
-	                       // for the STREAM flavor)
+	                       // (PTY.md: write = keystrokes in; the way out is
+	                       // the slave's mode — GRID: pty_snapshot, STREAM:
+	                       // read yields the child's bytes)
+	HANDLE_NET_LISTENER,   // object = tcp_listener_t*, an announced port
+	                       // (net_announce; read = ACCEPT, one
+	                       // os64_netconn_t per completed handshake; write
+	                       // is refused — a door is not a stream)
 
 	// A slot reserved before an operation that may publish external state.
 	// Exclusive file creation uses it so a full handle table is discovered

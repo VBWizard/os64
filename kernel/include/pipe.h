@@ -107,6 +107,13 @@ long pipe_read(pipe_t *p, char *buf, size_t len);
 // is what makes `yes | head` terminate instead of spinning forever).
 long pipe_write(pipe_t *p, const char *buf, size_t len);
 
+// The write that NEVER PARKS: as many of `len` bytes as the ring has room
+// for, right now, and the count back — short or zero when it is full,
+// PIPE_ERR_CLOSED when nobody reads. For a caller that may not sleep
+// (kernel text aimed at a STREAM pty from the exception path — tty.c says
+// what it does with the shortfall). Wakes a parked reader like any write.
+long pipe_write_if_room(pipe_t *p, const char *buf, size_t len);
+
 // Level-triggered wake sweep, called once per scheduler pass from
 // processSignals — the same discipline as console_wake_if_ready(). The fast
 // path (a reader/writer waking its counterpart directly) covers the common

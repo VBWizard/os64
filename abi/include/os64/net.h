@@ -36,7 +36,7 @@ typedef struct os64_netdest
 // without a debugger. The first two are the syscall boundary's house-wide
 // verdicts, named here so a dialer can read them; the rest are dial's own.
 // Codes -3..-5 are the LIBRARY parser's (the kernel never sees text);
-// -6..-10 come up from the kernel.
+// -6..-10 and -13 come up from the kernel; -11..-12 are the resolver's.
 #define OS64_NET_ERR_INVALID       (-1)  // generic refusal (boundary-owned;
                                          //  dial itself always says more below)
 #define OS64_NET_ERR_BAD_POINTER   (-2)  // the netdest pointer wasn't yours
@@ -81,6 +81,32 @@ typedef struct os64_netdest
                                          //  server were all asked, and the
                                          //  answer was no (NXDOMAIN, or an
                                          //  answer with no A record)
+#define OS64_NET_ERR_PORT_TAKEN    (-13) // kernel: announce — another
+                                         //  listener already answers that
+                                         //  port, or a dialed connection
+                                         //  holds it
+
+// ── Announce: the inbound door (NETWORK.md ruling #3, SERVERS.md) ──────
+// announce(local) takes the SAME struct as dial and reads it as WHERE I
+// AM: ip must be 0 ("every address this machine has" — the dial string
+// spells it `tcp!*!23`, `*` being how every dialer since Plan 9 has said
+// "any of mine"), port is the door to open, protocol must be TCP (a UDP
+// announce waits for its consumer — DEBTS). It returns a LISTENER handle,
+// and ACCEPT IS A READ ON IT: each read blocks until a connection has
+// completed its handshake, then yields exactly one of these —
+typedef struct os64_netconn
+{
+	int32_t  handle;     // the new stream, in the reader's own table:
+	                     //  read/write/close it like any dialed connection
+	uint32_t peer_ip;    // host order, like everything else in this file
+	uint16_t peer_port;
+	uint16_t _reserved;
+} os64_netconn_t;
+// — and returns sizeof(os64_netconn_t). A buffer shorter than that is
+// refused, never half-filled. os64_read_for's patience works on a listener
+// (OS64_ERR_TIMEOUT when nobody came), and a signal ends the wait like any
+// other park. Closing the listener stops answering the port; connections
+// already accepted are unaffected, ones still queued are reset.
 
 // The handle net_dial returns obeys the house read/write contract:
 //   write(h, buf, len)  — one call = ONE datagram (atomic; oversize is an
