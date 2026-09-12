@@ -826,6 +826,12 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
     }
     if (out->page->incomplete)
         status_set(" out of memory partway through the page - what is here is real");
+    else if (out->page->nlines == 0)
+        // A BLANK SCREEN IS AMBIGUOUS AND THIS IS NOT. A reply that parsed
+        // to nothing — a page that is all script, a body of zero bytes — is
+        // a real answer, and saying so is the difference between "the server
+        // sent nothing" and "this browser is broken".
+        status_set(" that answer has nothing in it this browser can show");
     else
         s_status[0] = '\0';
     return true;
