@@ -379,6 +379,162 @@ same counters. Stream-level nastiness for HTTP (slow dribbles, truncated
 bodies, RST mid-body) is the HTTP lane's own fixture — an os64serve.py
 flag someday — not this tool.
 
+## The face: the line-mode browser (spec written 2026-09-11 for Opus's slice)
+
+The ladder is climbed and the two shared libraries exist: `libfetch`
+(LIBFETCH.md — a URL in, decoded body bytes out) and `libhtml`
+(LIBHTML.md — bytes in, the standard's tree out). The face is the first
+program that puts them together, and its job is the ladder's stance one
+more time: point the whole stack at REAL PAGES and find out what breaks.
+It is Opus's slice under the ratified split; the seams below are Fable's;
+the name is Chris's, by a method he is keeping to himself — build it under
+a working directory name, and renaming `userland/apps/<name>/` is one
+`git mv` when the name lands.
+
+**What it is.** A full-screen text program in the gopher client's shape
+(`userland/apps/gopher/gopher.c` is the model: a title row, content rows,
+a status row, `key_read` with patience for the `ESC [ A` arrows, `confirm`
+and `prompt` for questions, `history_push` for back). Lynx-shaped on
+purpose and DELIBERATELY THROWAWAY as a renderer: it walks the tree and
+prints, it does not lay out. BROWSER.md's second boss (layout) is the
+graphical browser's, and a cell-based layout engine would be a rough
+draft of the wrong thing. What is NOT throwaway is everything the
+renderer sits on — the fetch, the parse, and the navigator — which the
+graphical browser inherits whole.
+
+**Where it runs: anywhere there is a tty.** The text VTs and a gterm
+both, with no code that knows which. The size comes from
+`/proc/self/tty` (`rows`/`cols`, the way `/tests/winchtest` reads them);
+SIGWINCH (signal 28) says it changed, so install a handler and re-wrap.
+Raw mode (`raw` written to `/proc/self/tty`, SIGINT.md § Raw mode) is
+what telnet uses so that Ctrl+C reaches the program; the face wants it
+too, so a page fetch can be cancelled with the key everybody presses,
+through libfetch's `cancelled` predicate. The kernel restores cooked at
+exit. Colour and attributes are the SGR subset the terminal draws
+(CLAUDE.md § The terminal's escape sequences); `ESC[2J`/`ESC[H` to paint,
+`ESC[K` to erase a row.
+
+**The pipeline, per page.**
+
+1. `os64_fetch_open(url, &opt)` with `user_agent` set (a meaningful part
+   of the web refuses a request without one — pick a string with the
+   browser's name once it has one), `accept = "text/html, text/plain"`,
+   `max_body` = libhtml's `max_bytes` (8 MB — the same page, the same
+   cap), `cancelled` = the Ctrl+C flag, and an `on_hop` that ASKS for a
+   DOWNGRADE (https → http) with `confirm` and returns FOLLOW or STOP —
+   a person may choose what a script may not, which is why the callback
+   exists. Every other hop takes the default verdict.
+2. Read the head. `status` is shown in the status row whatever it is; a
+   404 is a page and is shown as one. `content_type` decides the path:
+   `text/html` (and `application/xhtml+xml`) → libhtml; `text/plain` →
+   shown preformatted as it is; anything else is not a page — say what it
+   is and offer `os64get '<url>'` to save it, quoted the way os64get's
+   `print_by_hand` quotes an address (husk splits at `;`).
+3. `os64_html_parser_new` with `charset = head->charset` (the transport's
+   label, which outranks the page's own — libhtml applies the ladder),
+   then `feed` every read, then `finish`. A refusal by name (too large,
+   too deep, work exhausted) still yields a tree; show what there is and
+   say why it stopped.
+4. Render the tree to LINES (below), wrapped at `cols`; keep the lines and
+   the link table; paint the visible window.
+5. The final address is `head->url_text`, and it — not what was typed —
+   is the base every `href` resolves against, with `os64_url_absolute`
+   (libos64 `url.h`), unless the page carries `<base href>`, which wins.
+
+**The renderer: tree → lines.** Text is UTF-8 in the tree and Latin-1 on
+the glass, so every character passes through the fold (below) on its way
+to a cell. Whitespace collapses to one space except inside `pre` (and
+`textarea`, `listing`), which is why libhtml kept it verbatim.
+
+- **Block elements** start a new line: `p`, `div`, `h1`–`h6`, `ul`, `ol`,
+  `li`, `dl`, `dt`, `dd`, `blockquote`, `pre`, `hr`, `table`, `tr`,
+  `form`, `fieldset`, `address`, `center`, `section`/`article`/`nav`/
+  `aside`/`header`/`footer`/`main`, and `br` breaks without a blank.
+  `p` and the headings get a blank line before and after; `li` gets a
+  bullet (`* ` for `ul`, `1. ` counting for `ol`) and its nesting depth
+  as indent; `blockquote` and `dd` indent; `hr` is a row of `-`; a
+  heading is drawn bold (SGR 1). A `table` is rows: `tr` is a line and
+  `td`/`th` cells are separated by two spaces — no column alignment in
+  the first cut, and the old web's table LAYOUT (a page that is one big
+  table) reads acceptably as a sequence of rows, which is what lynx shows.
+- **Inline elements** change the pen: `b`/`strong` bold, `i`/`em`/`u`
+  underline (SGR 4), `code`/`tt`/`kbd` plain (there is one font), `a`
+  with an `href` is a LINK: numbered in document order, drawn as
+  `[n]text` with the link colour, and entered in the link table with its
+  resolved address. `img` draws `[alt]` when there is alt text and
+  `[image]` when there is not; an `img` inside an `a` is the link's text.
+  `input`/`button`/`select`/`textarea` draw as `[____]`, `[label]`,
+  `[v]`, `[    ]` — visible, not operable, in the first cut (forms are
+  booked below).
+- **Skipped whole:** `head` and everything in it (`title` goes to the
+  title row), `script`, `style`, `noscript`'s CONTENTS are shown (we run
+  no script, so the standard parsed them as markup — that is the point),
+  `template` contents (the fragment branch), comments, and every subtree
+  whose `ns` is not HTML (SVG and MathML draw nothing in this face).
+- **Wrapping** is by words at `cols`; a word longer than the row is broken
+  at the row. A line is runs of `{text, attrs, link-or-0}` so the painter
+  can start and stop SGR at run boundaries and the link table can map a
+  row back to its links.
+
+**The fold: UTF-8 → the glass.** The terminal draws Latin-1 by default
+(`ESC ( U` selects CP437 for art; the face stays in Latin-1). The rule,
+applied per code point with `os64_utf8_decode`:
+a code point below 256 is its byte; a short table of the punctuation the
+web is full of maps to a byte that reads right (curly quotes → `'`/`"`,
+en/em dash → `-`, ellipsis → `...`, non-breaking space → space, bullet →
+`*`, the arrows → `<`/`>`/`^`/`v`, the trademark/copyright to `(tm)`/
+`(c)` when Latin-1 lacks them — it has `©`); anything else draws `?`.
+`?` and not a blank, because a blank hides that something was there
+(LIBHTML.md's "reads as missing rather than as corruption", the other way
+round). This table is the FACE's and lives beside its renderer; the
+decode helpers are libos64's (`os64_utf8_decode` / `os64_utf8_encode`,
+`str.h`), because every future consumer of the tree needs them.
+
+**The navigator.** A history stack of addresses with the scroll position
+and selected link at the time of leaving, exactly `history_push`'s shape;
+`b` (and Backspace) pops it and refetches — a cache is the graphical
+browser's problem. Keys, kept to the gopher client's plus numbers:
+arrows and `PgUp`/`PgDn`/space scroll; `n`/`p` (and Tab/Shift-Tab where
+the terminal sends them) move the selected link; Enter follows the
+selected link; typing a number then Enter follows link `n`; `g` prompts
+for an address (a bare `host/path` gets `http://` in front, the way
+gopher reads a bare host); `r` refetches; `?` shows the keys; `q` quits.
+A `gopher://` link is not the face's in the first cut (libfetch's gopher
+scheme is booked); say so in the status row rather than failing quietly.
+
+**Errors are the library's sentence, in the status row.** Every libfetch
+refusal has `os64_fetch_reason`; a TLS refusal now names the alert or the
+certificate problem (Quinn's #96). A page that will not fetch leaves the
+previous page on screen with the reason under it; nothing clears a page
+to show an error.
+
+**Proof.** The renderer is pure computation — a tree in, lines out — so
+it gets the host harness the two libraries got: `tools/test_<name>_host.sh`
+feeds the saved corpus pages (`tools/html_corpus/*.html`) through libhtml
+and the renderer at a fixed width and diffs the lines against checked-in
+text dumps, so a rendering change is a reviewable diff to a page and not
+"it looks different". The fold gets its own cases (each table entry, a
+four-byte code point, an invalid sequence). QEMU proves the rest with
+screendumps: example.com, the Floodgap gopher-HTML page, Hacker News,
+textfiles.com, a 404, a downgrade prompt, a resize mid-page, Ctrl+C
+mid-fetch, on a text VT and in a gterm both.
+
+**Review tier.** The parser and the fetch have been through the
+gauntlet; the face is app code and is reviewed here (Fable) and merged
+after Chris's test, per CLAUDE.md's "match the reviewer to the risk". A
+Codex round is Chris's call.
+
+**Booked before the first line:**
+
+| What | Why deferred | Trigger |
+|---|---|---|
+| GET forms (a search box) | the tree has them and libfetch's URL grammar can carry a query; the first cut proves the page path first | the first site whose front page is a search box (DuckDuckGo lite, FrogFind) |
+| `gopher://` links | libfetch's gopher scheme is booked; the gopher client still owns the protocol | the browser's first gopher link |
+| Column-aligned tables | rows read fine for the old web's layout tables; alignment is layout, the graphical browser's boss | a data table that is unreadable as rows |
+| CP437 / a second charset on the glass | the face is Latin-1; art pages are the gopher client's | a page whose meaning needs box drawing |
+| A page cache for `b` | refetching is honest and simple; a cache is a lifetime problem for later | when back-and-forth on a slow link hurts |
+| Cookies | libfetch's row; the jar is the navigator's when it comes | the first site that will not show a page without one |
+
 ## NOT in the ladder's lane (Fable-tier — do not start these)
 
 - **Any change to tcp.c's protocol behavior**: window
