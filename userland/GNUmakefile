@@ -75,7 +75,7 @@ CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
            $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include \
-           -I$(CURDIR)/libhtml/include -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libtls/include -I$(CURDIR)/libfetch/include
+           -I$(CURDIR)/libhtml/include -I$(CURDIR)/libpage/include -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libtls/include -I$(CURDIR)/libfetch/include
 # -z noexecstack: bare-metal objects carry no .note.GNU-stack section (that
 # annotation is a Linux userspace convention), and without the flag ld warns
 # about one arbitrary object per link — noise with no meaning here, since
@@ -216,7 +216,7 @@ LIBFETCH_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libfetch.so
 # isolation would miss a hash collision and prelink two objects into the same
 # slot. app_bases.py sorts before probing, so adding a library gives the build
 # one deterministic map independent of link order.
-LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so)
+LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so libpage.so)
 LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
 LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
 LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
@@ -251,6 +251,13 @@ LIBGZIP_PROGRAMS := gzip gunzip gziptest
 
 # Programs that download: they name libfetch and get its whole closure.
 LIBFETCH_PROGRAMS := os64get wend
+# What a page MEANS is a browser's edge and nobody else's (LIBPAGE.md).
+# `wend` declares the edge before it CALLS anything through it, which is
+# deliberate: the library is otherwise on the image with nothing loading it,
+# and a prelink slot that collides or a `.so` that will not resolve is worth
+# finding on the boot that ships the library rather than on the one that
+# starts using it. The calls arrive with the renderer's lift.
+LIBPAGE_PROGRAMS := wend
 
 # pngtest directly checks the codec; gview and desktop use libimage.
 # libpng carries its own DT_NEEDED edge on
@@ -329,12 +336,13 @@ include libtls/shared.mk
 include libjpeg/shared.mk
 include libimage/shared.mk
 include libhtml/library.mk
+include libpage/library.mk
 
 # Source membership and the population used for prelink placement live here.
-$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO): GNUmakefile
+$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO) $(LIBPAGE_SO): GNUmakefile
 
 .PHONY: all
-all: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
+all: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
      $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
 
 $(BIN)/[: $(BIN)/test
@@ -432,6 +440,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
 APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend),$(LIBHTML_SO)) \
+                       $(if $(filter $(1),$(LIBPAGE_PROGRAMS)),$(LIBPAGE_SO)) \
                        $(if $(filter $(1),gview desktop jpegtest),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
@@ -458,7 +467,7 @@ $(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
 # FIXTURES ARE IN HERE TOO, and that is the point of the line rather than an
 # afterthought: a fixture is the program you are most likely to be single-
 # stepping, because it is what you reach for when something is already broken.
-$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
+$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
 	@mkdir -p "$(BIN)"
 	@printf '# GENERATED by userland/GNUmakefile — do not edit.\n' > $@
 	@printf '# Every program at its own base, so GDB can hold all their symbols at once.\n' >> $@
@@ -484,6 +493,7 @@ $(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(addprefix $(B
 	@printf 'add-symbol-file %s\n' "$(LIBIMAGE_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBFETCH_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBHTML_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBPAGE_SO)" >> $@
 	@printf '# (symbols for %s + every shared library above)\n' "$(APPS) $(TESTS)" >> $@
 
 # Every .d gcc emitted for the runtime and each app — self-maintaining: each
