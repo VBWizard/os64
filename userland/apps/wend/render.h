@@ -151,6 +151,13 @@ typedef struct {
     // belong to it, which is the one way form membership is not nesting.
     char *id;
     bool  post;
+    // WHERE THE FIRST SUBMIT CONTROL NOBODY CAN PRESS STOOD, as the number
+    // of spots that existed when it was met; -1 when there is none. A
+    // control inside a subtree the page marked `hidden` is drawn nowhere and
+    // is no spot, and yet it is still this form's DEFAULT BUTTON when it
+    // comes first — the one whose method and action a submission takes. A
+    // browser that cannot press it must not send the form as though it had.
+    int32_t unreachable_submit;
 } wend_form_t;
 
 // A VALUE THE FORM CARRIES AND NEVER SHOWS — a `type=hidden` field, or a

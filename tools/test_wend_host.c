@@ -871,6 +871,14 @@ static void form_edge_checks(void)
                      "<input type=radio name=x value=c checked disabled></form>",
                      40, want, 2);
     }
+    {
+        // A nameless radio is in no group: it sends nothing and cancels
+        // nothing, so the page's own marks all stand.
+        const char *want[] = { "[1](*)[2](*)" };
+        expect_lines("radio no name",
+                     "<form><input type=radio checked><input type=radio checked></form>",
+                     40, want, 1);
+    }
     // A group is per FORM, so the same name in two forms is two groups.
     expect_url("radio per form", "<form action=/s><input type=radio name=x value=a checked>"
                "<input type=submit></form>"
@@ -915,6 +923,63 @@ static void form_edge_checks(void)
             }
             if (doc)
                 os64_html_document_free(doc);
+        }
+    }
+    {
+        // A `multiple` list shows an option that will actually GO. With
+        // nothing marked it holds nothing and is drawn empty; showing its
+        // first would read exactly like a list sending that option.
+        const char *want[] = { "[1][v ][2][Submit]" };
+        expect_lines("multi select empty", "<form><select name=p multiple>"
+                     "<option value=1>One<option value=2>Two</select>"
+                     "<input type=submit></form>", 40, want, 1);
+    }
+    expect_url("multi select empty sends", "<form action=/s><select name=p multiple>"
+               "<option value=1>One<option value=2>Two</select>"
+               "<input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s");
+    {
+        // ...and a disabled first choice is not what the row shows either,
+        // because it is not what goes.
+        const char *want[] = { "[1][v B][2][Submit]" };
+        expect_lines("multi select disabled first", "<form><select name=p multiple>"
+                     "<option value=x selected disabled>X<option value=b selected>B"
+                     "</select><input type=submit></form>", 40, want, 1);
+    }
+    expect_url("multi select disabled first sends",
+               "<form action=/s><select name=p multiple>"
+               "<option value=x selected disabled>X<option value=b selected>B"
+               "</select><input type=submit></form>",
+               1, WEND_FORM_OK, "http://host/s?p=b");
+    {
+        // A SUBMIT CONTROL NOBODY CAN PRESS IS STILL THE FORM'S DEFAULT
+        // BUTTON. The renderer records where the first one stood, so the
+        // session can refuse the Enter-in-one-box shortcut rather than send
+        // the form as though it had no button at all.
+        wend_page_t *page = render_html_text(
+            "<form action=/s><div hidden><button formmethod=post>Go</button></div>"
+            "<input name=q value=x></form>"
+            "<form action=/t><input name=q value=x>"
+            "<div hidden><input type=submit></div></form>", 80, "http://host/p");
+        CHECK(page != NULL && page->nforms == 2);
+        if (page && page->nforms == 2) {
+            // The first form's button comes before its only spot...
+            CHECK(page->forms[0].unreachable_submit == 0);
+            // ...and the second form's comes after it.
+            CHECK(page->forms[1].unreachable_submit == 2);
+            wend_page_free(page);
+        }
+    }
+    {
+        // A form with no hidden button at all says so, so the shortcut is
+        // not refused on a page that never had one.
+        wend_page_t *page = render_html_text(
+            "<form action=/s><input name=q value=x><input type=submit></form>",
+            80, "http://host/p");
+        CHECK(page != NULL && page->nforms == 1);
+        if (page) {
+            CHECK(page->forms[0].unreachable_submit == -1);
+            wend_page_free(page);
         }
     }
     // A SUBTREE THE PAGE MARKED `hidden` DRAWS NOTHING AND IS NO PLACE TO
@@ -997,6 +1062,43 @@ static void form_edge_checks(void)
             }
         }
     }
+}
+
+// A PAGE IS A LEVER, and the searching one may make this program do is
+// budgeted. Without that, forty thousand marked radios in one form ran past
+// two minutes on a host far faster than the guest — in a program a person
+// cannot interrupt while it renders.
+static void budget_checks(void)
+{
+    size_t n = 20000, cap = n * 48 + 64, at = 0;
+    char *html = malloc(cap);
+    CHECK(html != NULL);
+    if (!html)
+        return;
+    at += (size_t)snprintf(html + at, cap - at, "<form>");
+    for (size_t i = 0; i < n; i++)
+        at += (size_t)snprintf(html + at, cap - at,
+                               "<input type=radio name=x value=%zu checked>", i);
+    snprintf(html + at, cap - at, "</form>");
+    wend_page_t *page = render_html_text(html, 80, "http://host/p");
+    CHECK(page != NULL);
+    if (page) {
+        CHECK(page->nspots == (int32_t)n);
+        // Past the budget a radio keeps the page's own answer, so the row and
+        // the wire agree on what the page wrote — and this form is far longer
+        // than an address may be, which is what it would have been refused
+        // for whatever the group rule decided.
+        int32_t on = 0;
+        for (int32_t i = 0; i < page->nspots; i++)
+            if (page->spots[i].on)
+                on++;
+        CHECK(on > 1);
+        char url[2048];
+        CHECK(wend_form_url(page, 0, "http://host/p", url, sizeof(url), NULL, 0)
+              == WEND_FORM_TOO_LONG);
+        wend_page_free(page);
+    }
+    free(html);
 }
 
 static void oom_checks(void)
@@ -1156,6 +1258,10 @@ static void dump(const wend_page_t *page, const char *name)
                form->action[0] ? form->action : "(this page)");
         if (form->id[0])
             printf(" id=%s", form->id);
+        // Only when there is one, so a page without a button out of reach
+        // reads exactly as it did.
+        if (form->unreachable_submit >= 0)
+            printf(" unreachable-submit@%d", form->unreachable_submit);
         // The values it carries and never shows, each where the page wrote
         // it — the position is what keeps the query in tree order.
         for (int32_t j = 0; j < page->nhidden; j++)
@@ -1236,6 +1342,7 @@ int main(int argc, char **argv)
         list_and_anchor_checks();
         form_checks();
         form_edge_checks();
+        budget_checks();
         anchor_checks();
         oom_checks();
         printf("renderer: %d checks, %d failures, %zu blocks live\n",

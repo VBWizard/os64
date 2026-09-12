@@ -508,7 +508,11 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   `[n][ ]`, one of a radio group as `[n](*)` or `[n]( )`, a list as
   `[n][v the chosen option]` — and `+2` after it when the page has marked
   more than one, since one row shows one option and a person who could not
-  tell that three were going has no reason to doubt what the row says — a button as `[n][its words]` — an IMAGE
+  tell that three were going has no reason to doubt what the row says. What
+  the row shows is always something that will actually GO: a list taking one
+  answer always holds one, so with nothing marked it shows its first, while
+  a `multiple` list holds exactly what the page marked and is drawn EMPTY
+  when that is nothing — a button as `[n][its words]` — an IMAGE
   button by its `alt` text, since that is what it is called, and it sends
   where the pointer was rather than a value, which from a keyboard is the
   origin. A `textarea`
@@ -670,7 +674,13 @@ what the page said — and the group is settled FROM THE TREE before any of
 it is drawn, because a face that drew each control as it met it and applied
 the rule afterwards would leave a row showing two dots where one value
 goes. A group is every radio of one name in one form, so the same name in
-two forms is two groups. A list sends its option's VALUE rather than the words
+two forms is two groups, and a radio with no name is in none. **That search
+is BUDGETED**: it is one search of a form per marked radio in it, and a page
+well inside libhtml's own limits could otherwise spin this program for
+minutes with no way to interrupt it. Past the budget a marked radio keeps
+the page's own answer, which leaves the row and the wire agreeing on what
+the page wrote — and a form with that many controls is longer than an
+address may be, so it was never going to be sent whatever this decided. A list sends its option's VALUE rather than the words
 shown for it, and a `multiple` list sends EVERY option the page marked.
 Of two buttons only the one pressed says so — and **the button that was
 pressed may overrule its form**, because the standard lets it carry its
@@ -694,7 +704,11 @@ THOUGH ITS OWN BUTTON HAD BEEN PRESSED — the first one in the form, the
 standard's default submitter — so that button's name and value go along
 and so does anything it overrules, which is what keeps a GET form with a
 `formmethod=post` button refused by name here rather than sent as a query
-with a password in it.
+with a password in it. **And a default button this browser cannot PRESS
+stops the shortcut**: a submit control inside a `hidden` subtree is drawn
+nowhere and is no spot, and is still the button whose method and action a
+submission would take — so a form led by one is refused rather than sent
+as though it had no button at all.
 
 **A form off an HTTPS page whose action is plain `http` asks first.**
 libfetch's downgrade callback cannot see that one: it judges the
@@ -711,8 +725,10 @@ queues go — the keys this program is holding and the ones still sitting
 in the terminal — because nothing polls the terminal continuously: the
 library asks whether to stop only between waits, so a key struck after
 the last of those and before the question is painted is in the tty and in
-no buffer of ours. A Ctrl+C among them is kept, and answers the question
-`no`: somebody asking this program to stop is not agreeing to anything.
+no buffer of ours. A Ctrl+C among them still stops a fetch that is
+running, which is what it was struck for; it does not answer the question,
+because only `y` ever agrees and a question that answered itself would be
+one asked with no visible reply.
 
 **Errors are the library's sentence, in the status row.** Every libfetch
 refusal has `os64_fetch_reason`; a TLS refusal now names the alert or the

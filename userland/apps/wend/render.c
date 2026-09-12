@@ -225,8 +225,10 @@ typedef struct {
     owner_t *owners;            // controls that named their form by id
     int32_t nowners, ownercap;
     // The element a radio's group is searched in: the form it is inside, or
-    // the whole document when it is inside none.
+    // the whole document when it is inside none. `radio_budget` is what a
+    // page may spend this render on those searches.
     const os64_html_node_t *form_node, *root;
+    int64_t radio_budget;
     const wend_edit_t *edits;   // what a person has filled in, by spot index
     int32_t nedits;
 
@@ -1078,11 +1080,27 @@ static void owners_settle(render_t *r)
 // which one the group ends on is a question about the markup rather than
 // about what may be sent — a disabled last-marked radio leaves the group
 // showing its dot and sending nothing, which is what the page wrote.
-static const os64_html_node_t *radio_last_marked(const os64_html_node_t *n,
+//
+// ONE SEARCH PER MARKED RADIO IS A PAGE'S LEVER ON THIS PROGRAM, so the
+// searching a whole render may do is BUDGETED. A form of N marked radios
+// costs N searches of the form, and a page well inside libhtml's own limits
+// can make that minutes of spinning in a program a person cannot interrupt
+// — 40,000 of them, a megabyte and a half of markup, ran past two minutes on
+// a host far faster than the guest. Past the budget a marked radio keeps the
+// page's own answer, which leaves the row and the wire AGREEING on what the
+// page wrote; and a form with that many controls is longer than an address
+// may be, so it was never going to be sent whatever this decided.
+#define WEND_RADIO_SEARCH_BUDGET 250000
+
+static const os64_html_node_t *radio_last_marked(render_t *r,
+                                                 const os64_html_node_t *n,
                                                  const char *name)
 {
     const os64_html_node_t *found = NULL;
     for (const os64_html_node_t *c = n->first_child; c; c = c->next) {
+        if (r->radio_budget <= 0)
+            return found;
+        r->radio_budget--;
         if (c->kind != OS64_HTML_ELEMENT || c->ns != OS64_HTML_NS_HTML)
             continue;
         if (c->tag == OS64_HTML_TAG_INPUT) {
@@ -1094,23 +1112,41 @@ static const os64_html_node_t *radio_last_marked(const os64_html_node_t *n,
         }
         if (c->tag == OS64_HTML_TAG_FORM)
             continue;
-        const os64_html_node_t *deeper = radio_last_marked(c, name);
+        const os64_html_node_t *deeper = radio_last_marked(r, c, name);
         if (deeper)
             found = deeper;
     }
     return found;
 }
 
-static bool radio_is_on(const render_t *r, const os64_html_node_t *n)
+static bool radio_is_on(render_t *r, const os64_html_node_t *n)
 {
     if (os64_html_attr(n, "checked") == NULL)
         return false;
+    // A RADIO WITH NO NAME IS IN NO GROUP. It sends nothing whatever it
+    // shows, and there is nothing for it to untick — so it keeps the page's
+    // own answer rather than cancelling the other nameless radios, which are
+    // not its group either.
+    const char *name = some(attr_value(n, "name"));
     const os64_html_node_t *group = r->form_node ? r->form_node : r->root;
-    if (!group)
-        return true;                     // nothing to compare it against
-    const os64_html_node_t *last =
-        radio_last_marked(group, some(attr_value(n, "name")));
+    if (name[0] == '\0' || !group || r->radio_budget <= 0)
+        return true;                     // its own answer, drawn and sent alike
+    const os64_html_node_t *last = radio_last_marked(r, group, name);
     return last == NULL || last == n;
+}
+
+// A SUBMIT CONTROL NOBODY CAN PRESS IS STILL A BUTTON. Remember where the
+// first one in this form stood, so a form whose DEFAULT button is out of
+// sight is not sent as though it had no button — its method and action are
+// the ones a submission would take, and this browser refuses rather than
+// guess them away.
+static void submit_out_of_reach(render_t *r)
+{
+    if (r->form <= 0)
+        return;
+    wend_form_t *form = &r->page->forms[r->form - 1];
+    if (form->unreachable_submit < 0)
+        form->unreachable_submit = r->page->nspots;
 }
 
 // The successful value of a control the page put out of sight, which is the
@@ -1132,9 +1168,11 @@ static void hidden_input(render_t *r, const os64_html_node_t *n)
             return;
         if (!value)
             value = "on";
-    } else if (type_is_nocase(type, "submit") || type_is_nocase(type, "image")
-               || type_is_nocase(type, "reset") || type_is_nocase(type, "button")) {
+    } else if (type_is_nocase(type, "submit") || type_is_nocase(type, "image")) {
+        submit_out_of_reach(r);
         return;                          // only the button PRESSED says so
+    } else if (type_is_nocase(type, "reset") || type_is_nocase(type, "button")) {
+        return;                          // neither of these submits anything
     }
     owner_claim(r, n, hidden_add(r, attr_value(n, "name"), value), true);
 }
@@ -1284,11 +1322,13 @@ static void collect_options(render_t *r, const os64_html_node_t *el,
         option->value = dup_text(r, value ? value : some(option->shown));
         option->off = off;
         // EVERY OPTION ANSWERS FOR ITSELF, because a `multiple` list may have
-        // several picked and one index can only hold the last of them.
-        // `chosen` is what the row shows, and a list that shows one thing
-        // shows the FIRST of its answers.
+        // several picked and one index can only hold the last of them. A
+        // list that takes ONE answer keeps that index here — the last
+        // `selected` wins, as the standard applies them in order; a
+        // `multiple` list's row is chosen by its caller, from what will
+        // actually go.
         option->on = os64_html_attr(c, "selected") != NULL;
-        if (option->on && (spot->chosen < 0 || !spot->multiple))
+        if (option->on && !spot->multiple)
             spot->chosen = spot->noptions;
         spot->noptions++;
     }
@@ -1306,7 +1346,7 @@ static void hidden_select(render_t *r, const os64_html_node_t *n)
     collect_options(r, n, &scratch, false);
     const char *name = attr_value(n, "name");
     if (scratch.chosen < 0 && scratch.noptions > 0 && !scratch.multiple)
-        scratch.chosen = 0;              // a single list always holds one
+        scratch.chosen = 0;              // a list of one answer always holds one
     for (int32_t i = 0; i < scratch.noptions && !r->oom; i++) {
         bool picked = scratch.multiple ? scratch.options[i].on : i == scratch.chosen;
         if (picked && !scratch.options[i].off)
@@ -1347,14 +1387,29 @@ static void field_select(render_t *r, const os64_html_node_t *n)
     spot->multiple = os64_html_attr(n, "multiple") != NULL;
     collect_options(r, n, spot, false);
     owner_claim(r, n, index, false);
-    // A list with no marked option shows its first — even a disabled one,
-    // because a disabled first option is how a page writes "choose one", and
-    // showing it is the honest answer to what the list currently holds. It
-    // still sends nothing, and on a `multiple` list that is true of the
-    // shown option however it got there: what goes is what the page MARKED,
-    // and `chosen` is only what the row has room to draw.
-    if (spot->chosen < 0 && spot->noptions > 0)
+    // WHAT THE ROW SHOWS MUST BE SOMETHING THAT GOES. The two kinds of list
+    // reach that differently.
+    //
+    // A list that takes ONE answer always holds one, so with nothing marked
+    // it shows its FIRST — even a disabled one, because a disabled first
+    // option is how a page writes "choose one" and showing it is the honest
+    // answer to what the list holds. That one sends nothing, and the row
+    // saying "choose one" is why.
+    //
+    // A `multiple` list holds exactly what the page marked, which may be
+    // NOTHING — so it shows the first option that will actually be sent, and
+    // an empty list is drawn empty. Showing its first option instead would
+    // read identically to a list that is sending that option.
+    if (spot->multiple) {
+        spot->chosen = -1;
+        for (int32_t i = 0; i < spot->noptions; i++)
+            if (spot->options[i].on && !spot->options[i].off) {
+                spot->chosen = i;
+                break;
+            }
+    } else if (spot->chosen < 0 && spot->noptions > 0) {
         spot->chosen = 0;
+    }
     // WHAT A PERSON PICKS IS EXACTLY ONE THING, on a `multiple` list too.
     // The list CYCLES rather than opening a menu, so one key can say "this
     // one" and has no way to say "these three" — and until it is touched the
@@ -1422,6 +1477,7 @@ static bool form_open(render_t *r, const os64_html_node_t *n)
     form->fragment = dup_text(r, some(reference_fragment(action)));
     form->id = dup_text(r, attr_value(n, "id"));
     form->post = method && os64_streq_nocase(method, "post");
+    form->unreachable_submit = -1;
     p->nforms++;
     r->form = p->nforms;
     r->form_node = n;
@@ -1446,10 +1502,18 @@ static void hidden_subtree(render_t *r, const os64_html_node_t *n)
         case OS64_HTML_TAG_INPUT:    hidden_input(r, n); return;
         case OS64_HTML_TAG_SELECT:   hidden_select(r, n); return;
         case OS64_HTML_TAG_TEXTAREA: hidden_textarea(r, n); return;
-        // A button contributes nothing: only the one PRESSED does, and none
-        // of these can be. A script, a stylesheet, a template's unused
-        // fragment and another document hold no controls of this one's.
-        case OS64_HTML_TAG_BUTTON:
+        // A button sends no value of its own — only the one PRESSED does,
+        // and none of these can be — but one that would SUBMIT is still its
+        // form's default button, so the form remembers it is out of reach.
+        case OS64_HTML_TAG_BUTTON: {
+            const char *type = attr_value(n, "type");
+            if (!control_disabled(r, n) && !type_is_nocase(type, "reset")
+                && !type_is_nocase(type, "button"))
+                submit_out_of_reach(r);
+            return;
+        }
+        // A script, a stylesheet, a template's unused fragment and another
+        // document hold no controls of this one's.
         case OS64_HTML_TAG_SCRIPT: case OS64_HTML_TAG_STYLE:
         case OS64_HTML_TAG_TEMPLATE: case OS64_HTML_TAG_IFRAME:
             return;
@@ -1985,6 +2049,7 @@ wend_page_t *wend_render_html(const os64_html_document_t *doc,
     }
     r.edits = edits;
     r.nedits = edits ? nedits : 0;
+    r.radio_budget = WEND_RADIO_SEARCH_BUDGET;
     if (doc) {
         if (doc->head)
             for (const os64_html_node_t *c = doc->head->first_child; c; c = c->next)

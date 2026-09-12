@@ -349,35 +349,31 @@ static key_t key_read(char *literal)
 // only between waits, so a key struck after the last of those questions and
 // before the next paint is in the tty and in no buffer of ours.
 //
-// A Ctrl+C among them is not discarded but REPORTED, because it is an
-// answer to a different question and the person still means it. Reported
-// rather than left in `s_cancel` for the caller to read: that flag outlives
-// the fetch it stopped, and a question asked later would find it still set
-// and answer itself with a keystroke from minutes ago.
+// A Ctrl+C among them still STOPS a fetch that is running, which is what it
+// was struck for. It does not answer the question: only `y` ever agrees, so
+// dropping the keys is already enough to keep a stale one from approving
+// anything, and a question that answered itself would be a question asked
+// with no visible reply.
 //
 // Bounded, because this must end: a zero-patience read stops when the queue
 // is empty, and the count is what stops it if something is feeding the
 // terminal faster than it can be drained.
 #define WEND_DRAIN_MAX 4096
 
-static bool keys_drop_typeahead(void)
+static void keys_drop_typeahead(void)
 {
-    bool stop = false;
     s_npending = 0;
     // An input that cannot be asked to wait a bounded time cannot be POLLED
     // either, and blocking here would hang on a question nobody has read yet.
     if (!s_timed_keys)
-        return false;
+        return;
     for (int32_t i = 0; i < WEND_DRAIN_MAX; i++) {
         char c;
         if (os64_read_for((int32_t)s_keys, &c, 1, 0) != 1)
-            break;
-        if (c == 0x03) {
-            stop = true;
-            s_cancel = 1;                // and the fetch it interrupts stops
-        }
+            return;
+        if (c == 0x03)
+            s_cancel = 1;                // the fetch it interrupts still stops
     }
-    return stop;
 }
 
 // Ask a yes/no question on the status row. Only `y` agrees: the dangerous
@@ -392,9 +388,11 @@ static bool keys_drop_typeahead(void)
 // type-ahead is a person working faster than the network.
 static bool confirm(const char *question)
 {
-    // A Ctrl+C that arrived before the question is an answer to it: somebody
-    // asking this program to stop is not agreeing to anything.
-    if (keys_drop_typeahead() || s_want_quit)
+    keys_drop_typeahead();
+    // A HANGUP DOES NOT WAIT TO BE ASKED. The loop below ends on one, but
+    // only once a signal interrupts the read it is already sitting in — and
+    // a session already told to go has nobody left to answer.
+    if (s_want_quit)
         return false;
     cursor_to(s_rows, 1);
     bar_on();
@@ -1248,7 +1246,22 @@ static void form_send_if_alone(view_t *v, int32_t index)
     }
     if (answers != 1)
         return;
-    int32_t button = form_default_submitter(p, p->spots[index].form);
+    int32_t form = p->spots[index].form;
+    if (form > p->nforms)
+        return;                          // a page that ran out of memory partway
+    int32_t button = form_default_submitter(p, form);
+    // A DEFAULT BUTTON THIS BROWSER CANNOT PRESS STOPS THE SHORTCUT. A
+    // submit control inside a subtree the page marked `hidden` is drawn
+    // nowhere and is no spot, and it is still the button a submission would
+    // take its method and action from — so a form led by one is not sent as
+    // though it had none. Refusing costs a page that would have worked; not
+    // refusing sends a form the way the page did not ask, which on a
+    // `formmethod=post` button is a password in an address.
+    int32_t away = p->forms[form - 1].unreachable_submit;
+    if (away >= 0 && (button < 0 || away <= button)) {
+        status_set(" this form's button is not one this browser can reach");
+        return;
+    }
     form_send(v, button >= 0 ? button : index);
 }
 

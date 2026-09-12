@@ -817,6 +817,17 @@ the record of what actually went on the wire:
 | ARPANET on Wikipedia over HTTPS, then a search typed into its box | 1447 lines, then `https://en.wikipedia.org/wiki/Packet_switching` — the real page, the real search, the redirect followed |
 | Both guest filesystems afterwards | `e2fsck -fn` clean on root and `/home` |
 
+**Then the reviewer's hat, before the button, and it earned its keep.** Five
+more, four of them mine to have made:
+
+| Found | What it was |
+|---|---|
+| A page could WEDGE the browser | The radio-group rule searches the form once per marked radio. Forty thousand of them — a megabyte and a half, well inside libhtml's own limits — ran past two minutes on a host far faster than the guest, in a program a person cannot interrupt while it renders. The searching one render may do is budgeted now; past it a marked radio keeps the page's own answer, so the row and the wire still agree, and a form that large is longer than an address may be anyway. The same page renders in 0.4s on the host, and in the guest costs no more than an equivalent page of CHECKBOXES, which does no searching at all |
+| A `multiple` list drew an option it was not sending | With nothing marked it showed its first, exactly as a list that WAS sending that option; with a disabled first choice it showed the disabled one while sending the enabled one. The row shows an option that will actually go, and an empty list is drawn empty |
+| A default button inside a `hidden` subtree was invisible to the submitter | The same P1 round five named, through the door the `hidden` fix had just opened: the button is drawn nowhere and is no spot, and is still the one whose method and action a submission takes. The form records where the first unreachable submit control stood, and the Enter-in-one-box shortcut refuses rather than send the form as though it had no button |
+| A radio with NO name cancelled the other nameless radios | It is in no group, sends nothing whatever it shows, and has nothing to untick |
+| A Ctrl+C drained before a question answered it `no` | My own addition, not the finding: `q` then silently did nothing, a question asked with no visible reply. Draining is already enough, since only `y` ever agrees. The stop still reaches a running fetch |
+
 **What the truth passes BETWEEN rounds found is worth as much as the
 rounds.** Reading the diff before each submit, and putting a deliberately
 pathological page through the host driver under the sanitizers, turned up:
