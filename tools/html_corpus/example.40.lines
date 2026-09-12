@@ -1,0 +1,20 @@
+page: example
+title: Example Domain
+width: 40
+lines: 7
+spots: 1
+forms: 0
+anchors: 0
+incomplete: no
+--
+|Example Domain
+|~ B:0-14
+|
+|This domain is for use in documentation
+|examples without needing permission.
+|Avoid use in operations.
+|
+|[1]Learn more
+|~ L1:0-13
+--
+1 link https://iana.org/domains/example

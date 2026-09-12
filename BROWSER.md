@@ -1,5 +1,15 @@
 # BROWSER.md — the campaign constitution
 
+> **Under review (2026-09-12).** The boss fight below is right and the
+> ladder worked. What is missing is the word CONFORMANT, any mention of
+> JavaScript, and a rung between parsing and layout for what a parsed page
+> MEANS — which is where all 62 findings on the `wend` slice landed. The
+> record and the case for a second draft are in
+> [`docs/browser_second_draft.md`](docs/browser_second_draft.md). Read that
+> before starting new work from this file — in particular its stance on
+> "implement a thing when something asks for one", which is right for a
+> line-mode face and wrong for a daily driver.
+
 *2026-08-31/09-01, the insomnia session. Chris named the boss fight — a
 graphical browser, os64 as daily driver — and ratified the shape: tiny
 steps, each a small PR off `userland`, each testable and standalone, each
@@ -379,17 +389,23 @@ same counters. Stream-level nastiness for HTTP (slow dribbles, truncated
 bodies, RST mid-body) is the HTTP lane's own fixture — an os64serve.py
 flag someday — not this tool.
 
-## The face: the line-mode browser (spec written 2026-09-11 for Opus's slice)
+## The face: the line-mode browser
 
 The ladder is climbed and the two shared libraries exist: `libfetch`
 (LIBFETCH.md — a URL in, decoded body bytes out) and `libhtml`
 (LIBHTML.md — bytes in, the standard's tree out). The face is the first
 program that puts them together, and its job is the ladder's stance one
 more time: point the whole stack at REAL PAGES and find out what breaks.
-It is Opus's slice under the ratified split; the seams below are Fable's;
-the name is Chris's, by a method he is keeping to himself — build it under
-a working directory name, and renaming `userland/apps/<name>/` is one
-`git mv` when the name lands.
+**It is called `wend`**, chosen 2026-09-11 by Chris's own method from the
+names three models offered. To wend is to go somewhere by an indirect and
+curious route, and it is old enough that its past tense wandered off to
+become the "went" everybody uses for a verb that now has no present tense of
+its own. Nobody marches through the web. It lives in `userland/apps/wend/` —
+`wend.c` is the session, `render.c` the tree walk.
+
+What follows is what it does. Where the build departed from the spec this
+section began as, the departure is marked **(departure)** and argued where
+it is.
 
 **What it is.** A full-screen text program in the gopher client's shape
 (`userland/apps/gopher/gopher.c` is the model: a title row, content rows,
@@ -416,30 +432,50 @@ exit. Colour and attributes are the SGR subset the terminal draws
 
 **The pipeline, per page.**
 
-1. `os64_fetch_open(url, &opt)` with `user_agent` set (a meaningful part
-   of the web refuses a request without one — pick a string with the
-   browser's name once it has one), `accept = "text/html, text/plain"`,
+1. `os64_fetch_open(url, &opt)` with `user_agent` set — a meaningful part
+   of the web refuses a request without one, and this one says
+   `wend/1.0 (os64)` — `accept = "text/html, text/plain"`,
    `max_body` = libhtml's `max_bytes` (8 MB — the same page, the same
    cap), `cancelled` = the Ctrl+C flag, and an `on_hop` that ASKS for a
    DOWNGRADE (https → http) with `confirm` and returns FOLLOW or STOP —
    a person may choose what a script may not, which is why the callback
    exists. Every other hop takes the default verdict.
 2. Read the head. `status` is shown in the status row whatever it is; a
-   404 is a page and is shown as one. `content_type` decides the path:
-   `text/html` (and `application/xhtml+xml`) → libhtml; `text/plain` →
-   shown preformatted as it is; anything else is not a page — say what it
-   is and offer `os64get '<url>'` to save it, quoted the way os64get's
-   `print_by_hand` quotes an address (husk splits at `;`).
+   404 is a page and is shown as one. The request's `Accept` names every
+   media type this step will render, so a server choosing between
+   representations is told the truth rather than a narrower list it might
+   answer 406 to. `content_type` decides the path:
+   `text/html`, `application/xhtml+xml`, and a reply that names no type
+   at all → libhtml; any other `text/*` → shown preformatted as it is
+   **(departure: the spec said `text/plain`, and every other `text/*` is
+   a document a person can read — markdown, a stylesheet, a CSV — where
+   the alternative was refusing it as "not a page")**; anything else is
+   not a page — say what it is and offer `os64get '<url>'` to save it,
+   quoted the way os64get's `print_by_hand` quotes an address (husk
+   splits at `;`). **A text body's high bytes are read as UTF-8 only
+   when the reply's charset says so (departure)**: the old web's `.txt`
+   files are Latin-1, and decoding those as UTF-8 turns every accented
+   name into a question mark. **Its line endings may be any of the three**:
+   a carriage return ends a row as surely as a newline does, and a CRLF
+   pair is one ending rather than two, so a file written on a machine that
+   ended its lines the other way is still a file with lines. (libhtml
+   normalises both before a tree exists, so this is the raw-text path's
+   business alone.)
 3. `os64_html_parser_new` with `charset = head->charset` (the transport's
    label, which outranks the page's own — libhtml applies the ladder),
    then `feed` every read, then `finish`. A refusal by name (too large,
    too deep, work exhausted) still yields a tree; show what there is and
    say why it stopped.
-4. Render the tree to LINES (below), wrapped at `cols`; keep the lines and
-   the link table; paint the visible window.
+4. Render the tree to LINES (below), wrapped at `cols`; keep the lines,
+   the spots and the forms; paint the visible window.
 5. The final address is `head->url_text`, and it — not what was typed —
    is the base every `href` resolves against, with `os64_url_absolute`
    (libos64 `url.h`), unless the page carries `<base href>`, which wins.
+   The FIRST `base` carrying an href wins, wherever the tree builder put
+   it: one written in the body is misplaced markup the parser keeps where
+   it found it, and a page that moves its own base halfway down is
+   exactly the page that needs it honoured. An empty `href` on it names
+   the document, so a later base cannot take the page somewhere else.
 
 **The renderer: tree → lines.** Text is UTF-8 in the tree and Latin-1 on
 the glass, so every character passes through the fold (below) on its way
@@ -450,9 +486,18 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   `li`, `dl`, `dt`, `dd`, `blockquote`, `pre`, `hr`, `table`, `tr`,
   `form`, `fieldset`, `address`, `center`, `section`/`article`/`nav`/
   `aside`/`header`/`footer`/`main`, and `br` breaks without a blank.
+  The same-family elements a modern page is built from join them
+  **(departure)** — `figure`/`figcaption`/`caption`/`summary`/`details`,
+  the table's own `thead`/`tbody`/`tfoot`, and `menu`/`dir`, which are
+  lists — because a caption glued to the next paragraph reads as a
+  rendering fault rather than as a shorter list of tags.
   `p` and the headings get a blank line before and after; `li` gets a
-  bullet (`* ` for `ul`, `1. ` counting for `ol`) and its nesting depth
-  as indent; `blockquote` and `dd` indent; `hr` is a row of `-`; a
+  bullet (`* ` for `ul`, `1. ` counting for `ol` — from `<ol start>`
+  where the page gives one, and `<li value>` moves the count and takes
+  the items after it along, which is how a numbered procedure carries on
+  across a paragraph; `<ol reversed>` counts DOWN from as many items as
+  it has, because showing a countdown as 1, 2, 3 says the opposite of
+  what it means) and its nesting depth as indent; `blockquote` and `dd` indent; `hr` is a row of `-`; a
   heading is drawn bold (SGR 1). A `table` is rows: `tr` is a line and
   `td`/`th` cells are separated by two spaces — no column alignment in
   the first cut, and the old web's table LAYOUT (a page that is one big
@@ -460,21 +505,101 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
 - **Inline elements** change the pen: `b`/`strong` bold, `i`/`em`/`u`
   underline (SGR 4), `code`/`tt`/`kbd` plain (there is one font), `a`
   with an `href` is a LINK: numbered in document order, drawn as
-  `[n]text` with the link colour, and entered in the link table with its
-  resolved address. `img` draws `[alt]` when there is alt text and
-  `[image]` when there is not; an `img` inside an `a` is the link's text.
-  `input`/`button`/`select`/`textarea` draw as `[____]`, `[label]`,
-  `[v]`, `[    ]` — visible, not operable, in the first cut (forms are
-  booked below).
+  `[n]text` with the link colour, and entered in the spot table with its
+  resolved address AND, kept beside it, the `#name` the href asked for —
+  the resolver drops a fragment because a fragment never crosses the
+  wire, and dropping it here too would turn a table of contents into a
+  row of links that each refetch the article and show its top. The
+  `#name` is kept DECODED, because a fragment travels percent-encoded and
+  the `id` it points at does not — `href="#section%202"` names
+  `id="section 2"`, which is every heading with a space in its name. An
+  EMPTY href names the page it is on, the standard's rule and what a page's own
+  reload and back-to-the-top links are made of — the resolver refuses an
+  empty reference by contract, so the renderer asks it the question it
+  does answer. `img`
+  draws `[alt]` when there is alt text and `[image]` when the attribute
+  is ABSENT; `alt=""` draws nothing at all, because an empty alt is the
+  page saying the picture is decoration and has no words — a modern
+  article's icons and tracking pixels all say it. An `img` inside an `a`
+  is the link's text.
+- **A form's controls are SPOTS TOO**, drawn in their own colour and
+  numbered in the same sequence as the links: a box you type in as
+  `[n][value___]` at the page's own `size`, a tick box as `[n][x]` or
+  `[n][ ]`, one of a radio group as `[n](*)` or `[n]( )`, a list as
+  `[n][v the chosen option]` — and `+2` after it when the page has marked
+  more than one, since one row shows one option and a person who could not
+  tell that three were going has no reason to doubt what the row says. An
+  option's words are its `label` attribute where it has one and its text
+  otherwise, while the VALUE it sends falls back to that text and never to
+  the label. What the row shows is always something that will actually GO:
+  a DROP-DOWN always holds one, so with nothing marked it shows its first,
+  while a `multiple` list and a list drawn as several ROWS (`size` above
+  one) hold exactly what the page marked and are drawn EMPTY when that is
+  nothing — a button as `[n][its words]` — an IMAGE
+  button by its `alt` text, since that is what it is called, and it sends
+  where the pointer was rather than a value, which from a keyboard is the
+  origin. A `textarea`
+  is a box with its text as the starting value — kept VERBATIM, because
+  that text is the field's value and collapsing its spacing would send
+  the server something the page did not put there — shown on one row,
+  because a line-mode browser has no second row to give it. A control
+  that does nothing this browser can honour — a reset, a plain button —
+  is drawn and is NOT a spot, because landing on it would promise
+  something. A DISABLED control is the same: drawn, not landed on, and
+  never sent, which is what the page disabled it to arrange — and a
+  `fieldset` that is disabled disables everything under it, since that is
+  how a page greys out a whole section and the controls inside carry no
+  attribute saying so. The words in its first `legend` are the exception,
+  the standard's: a section's title was never a control. A HIDDEN
+  field is neither drawn nor landed on: it is remembered against the
+  form, whose data it is — and so is every control inside a subtree the
+  page marked `hidden`, which is the same question with the same answer —
+  down to the disabled-`fieldset` rule and its first-`legend` exception,
+  which hold wherever a section is drawn, including not being drawn.
+  Such a subtree draws NOTHING: its prose and its links are on the screen
+  nowhere else, and showing them would put in front of a reader a menu's
+  worth of text the page had deliberately put away. A control may NAME
+  its form with `form=<id>` instead of sitting inside one, which is how a
+  page puts a search box in a masthead and its form in the footer; a name
+  matching no form leaves the control in NO form at all, the standard's
+  answer and the safe one, since submitting it with whatever it happens
+  to sit inside would send a value to an address the page never named. **READONLY is not DISABLED**: the page is
+  keeping that value fixed rather than taking the control away, so it is
+  landed on, refuses to open, and is still sent. It is a BOX's word only —
+  the standard gives it no meaning on a tick, a list or a button, and
+  honouring it there would take away a control the page did not. A DISABLED OPTION inside
+  a list is SHOWN when it is what the list holds — a first option nobody
+  can pick is how a page writes "choose one" — and is never stepped onto
+  and never sent. **A PASSWORD is drawn as its length**, never
+  its value, and echoes stars while it is typed — a page that prefills
+  one is not a reason to put it on a screen somebody is standing behind.
+- **`pre`, `listing`, `xmp` and `plaintext`** are preformatted: the
+  author's line breaks and columns are the meaning, and the last two are
+  the 1993 spellings still found on exactly the pages that rely on it.
 - **Skipped whole:** `head` and everything in it (`title` goes to the
-  title row), `script`, `style`, `noscript`'s CONTENTS are shown (we run
+  title row), `script`, `style`, `iframe` (a different document, which
+  showing would mean fetching), `noscript`'s CONTENTS are shown (we run
   no script, so the standard parsed them as markup — that is the point),
   `template` contents (the fragment branch), comments, and every subtree
   whose `ns` is not HTML (SVG and MathML draw nothing in this face).
+  **A `frame` is the exception (departure):** a frameset page has no
+  body and no prose anywhere, so skipping it paints an empty screen for
+  a whole era of the web. Each frame becomes a link to the document it
+  names, which is what the page was going to show you anyway.
 - **Wrapping** is by words at `cols`; a word longer than the row is broken
-  at the row. A line is runs of `{text, attrs, link-or-0}` so the painter
-  can start and stop SGR at run boundaries and the link table can map a
-  row back to its links.
+  at the row. A line is runs of `{text, attrs, spot-or-0}` so the painter
+  can start and stop SGR at run boundaries and the spot table can map a
+  row back to what is on it. **A flowed row is trimmed of the trailing spaces
+  the renderer itself left** — a cell separator that turned out to end a
+  row, an indent under nothing — which paint as nothing and would widen a
+  selection over nothing. Inside `pre` they are the author's and they
+  stay.
+- **An indent, a pen or `pre` is given back only after the rows it governs
+  are down.** A word and a row are both still held when an element's
+  children are finished, so restoring first wraps that last word at the
+  outer margin, or paints the space before it in the wrong ink, or trims
+  spacing the author typed. This is the renderer's one recurring trap and
+  the harness has a case for each shape of it.
 
 **The fold: UTF-8 → the glass.** The terminal draws Latin-1 by default
 (`ESC ( U` selects CP437 for art; the face stays in Latin-1). The rule,
@@ -486,21 +611,166 @@ en/em dash → `-`, ellipsis → `...`, non-breaking space → space, bullet →
 `(c)` when Latin-1 lacks them — it has `©`); anything else draws `?`.
 `?` and not a blank, because a blank hides that something was there
 (LIBHTML.md's "reads as missing rather than as corruption", the other way
-round). This table is the FACE's and lives beside its renderer; the
-decode helpers are libos64's (`os64_utf8_decode` / `os64_utf8_encode`,
-`str.h`), because every future consumer of the tree needs them.
+round). **Two kinds of code point are the exception to "below 256 is its
+byte" (departure).** The C0 and C1 control ranges draw `?` like anything
+else undrawable: a control byte reaching the terminal is a stranger
+steering the glass rather than writing on it. And the code points that
+are invisible BY DEFINITION — a soft hyphen, the zero-width joiners, a
+word joiner, a byte-order mark — draw nothing at all, because they mark
+where a word MAY break, and Latin-1's soft hyphen at 0xAD would put a
+dash in the middle of a word that has none. This table is the FACE's and
+lives beside its renderer; the decode helpers are libos64's
+(`os64_utf8_decode` / `os64_utf8_encode`, `str.h`), because every future
+consumer of the tree needs them.
 
 **The navigator.** A history stack of addresses with the scroll position
-and selected link at the time of leaving, exactly `history_push`'s shape;
+and selection at the time of leaving, exactly `history_push`'s shape;
 `b` (and Backspace) pops it and refetches — a cache is the graphical
-browser's problem. Keys, kept to the gopher client's plus numbers:
-arrows and `PgUp`/`PgDn`/space scroll; `n`/`p` (and Tab/Shift-Tab where
-the terminal sends them) move the selected link; Enter follows the
-selected link; typing a number then Enter follows link `n`; `g` prompts
-for an address (a bare `host/path` gets `http://` in front, the way
-gopher reads a bare host); `r` refetches; `?` shows the keys; `q` quits.
+browser's problem.
+
+**THE ARROWS WALK THE SPOTS** (Chris, 2026-09-11, on seeing the first cut
+do it the other way): a browser picks a link by pointing at it, which is
+the gopher client's ruling and the one a person's fingers arrive with.
+Up and Down move the selection to the previous or next spot; `n`/`p` and
+Tab/Shift-Tab are the same move under other names; PAST the last spot in
+that direction the same key SCROLLS, which is what keeps the arrows
+useful on the prose below the last link and on a page with no links at
+all. `PgUp`/`PgDn`/space/`Home`/`End` move the page by screenfuls and
+take the selection with them — a choice left off the screen would make
+the next arrow jump backwards, so it is replaced by the first spot on the
+new screen or by nothing.
+
+Enter (and Right) DOES THE SELECTED THING, which is one key because to
+the person pressing it there is one question: a link is followed, a box
+is opened to type in, a tick box is ticked, a list steps to its next
+option, a button sends its form. **A link into the page you are already
+on is a MOVE, not a fetch**: every element carrying an `id`, and every
+old-style `<a name>`, records the row its content lands on, so a `#name`
+is answered by scrolling there. A BLOCK's name takes the row that opens
+next, since the element is met before its first word is placed; an INLINE
+one — `<span id=x>` halfway through a sentence — is met with a row
+already open and takes THAT row, because waiting for the next would send
+a reader past the words they asked for. `#` with nothing after it is the
+document's top, and `#top` falls back to it when no element claims the
+name — the standard's own fallback, and what most "back to top" links
+rely on, since few of them define anything to match. A page that does not
+carry the name says so and stays where it is. A move leaves NO crumb, deliberately: `b`
+refetches, so a history entry per section would make going back a
+download of the page you are already reading. Typing a number then Enter does the same
+to the spot wearing that number. `g` prompts for an address (a bare
+`host/path` gets `http://` in front, the way gopher reads a bare host);
+`r` refetches; `?` shows the keys; `q` quits, after asking, because
+leaving throws away the session and its history and `q` sits one key from
+the arrows. Left goes back, lynx's arrangement and the gopher client's.
 A `gopher://` link is not the face's in the first cut (libfetch's gopher
 scheme is booked); say so in the status row rather than failing quietly.
+
+**Four pens, and each answers a different question.** A link is cyan —
+"you can go there". A form control is green — "you can put something
+here", a different promise. The selection is black on cyan, where a text
+interface has kept its highlight since Turbo Vision, and deliberately not
+the black-on-white the title and status bars wear, or it reads as a third
+piece of furniture instead of as the cursor. Everything else is the
+terminal's own ink, because a page is mostly prose and painted prose is
+harder to read. Underline is asked for where a page says italic, which is
+what italic means on a terminal; this glass has no underline and consumes
+the request.
+
+**Filling something in, and sending it.** A box is opened with Enter and
+edited on the status row, starting from whatever it already holds; Enter
+again keeps the text and Escape leaves it as it was. **A value is stored
+as UTF-8** — which is what the page put there and what a server that sent
+a UTF-8 page expects back — and converted at each end: folded to Latin-1
+to be shown, encoded again as the typed bytes are taken. **The values
+live BESIDE the page, indexed by spot number**, because a re-wrap throws
+the page away and builds another, and what was typed into a search box
+has to survive the window changing width; the walk is deterministic for
+one tree, so the same number carries the same value into the next render.
+
+Sending builds the address in `render.c` (`wend_form_url`) rather than in
+the session, because it is pure computation over the page and that is
+where the harness can check what would go on the wire. The form's action,
+or the page itself when it names none; the query REPLACED, not appended
+to, which is what a GET form does; then every successful control **in
+TREE ORDER**, the values a form carries and never shows interleaved where
+the page wrote them rather than all in front, because the order is
+visible to a server exactly when two controls share a name. A box that is
+not ticked sends nothing, and a ticked one sends `on` only when the page
+spelled no `value` at all — `value=""` asked for an empty answer and gets
+one, which on the far side can be a different branch. A page that marks
+two radios of one group `checked` has still made ONE choice, the last, as
+leaving both would tell a server reading the first value the opposite of
+what the page said — and the group is settled FROM THE TREE before any of
+it is drawn, because a face that drew each control as it met it and applied
+the rule afterwards would leave a row showing two dots where one value
+goes. A group is every radio of one name with one form
+OWNER — so the same name in two forms is two groups, two root-level radios
+naming different forms with `form=<id>` are two groups, and a radio with no
+name is in none. The search is therefore of the whole DOCUMENT, asking each
+candidate who owns it. **And it is BUDGETED**: it is one search per marked
+radio, and a page well inside libhtml's own limits could otherwise spin this
+program for minutes with no way to interrupt it. Past the budget a marked radio keeps
+the page's own answer, which leaves the row and the wire agreeing on what
+the page wrote — and a form with that many controls is longer than an
+address may be, so it was never going to be sent whatever this decided. A list sends its option's VALUE rather than the words
+shown for it, and a `multiple` list sends EVERY option the page marked.
+Of two buttons only the one pressed says so, and an IMAGE button says it
+with COORDINATES rather than a value — `name.x=0&name.y=0` from a keyboard,
+or plain `x=0&y=0` where it has no name, since those fields are how such a
+button says it was the one pressed. A hidden `_charset_` field is the FORM's
+answer and not the page's: it goes out naming the encoding the values are
+written in, which here is always UTF-8. **A STATED DESTINATION THAT WILL NOT
+RESOLVE IS A REFUSAL**, never the page it is on — a form that names nothing
+means "the page I am on", which is the standard's rule, but one whose action
+is too long for an address or is not an address at all has named somewhere
+ELSE, and sending what a person typed to the page they are on instead is the
+wrong host to be wrong about. And **the button that was
+pressed may overrule its form**, because the standard lets it carry its
+own action and its own method. The METHOD matters most to a browser that
+sends only one of them: a GET form with a `formmethod=post` button is a
+POST, and sending it as a GET would put whatever it collected into an
+address that servers and proxies write down. NAMING an action is what
+puts the button in charge, not naming a usable one: `formaction=""` is
+the document's own address, and reading the empty string as "said
+nothing" would send the answers to the form's destination instead. An
+action's `#name` is kept beside the address the same way a link's is, and
+applied once the answer arrives.
+
+**A form with exactly ONE THING TO ANSWER
+sends itself when you finish that thing**, because there is nowhere else
+in it to go and stopping to hunt for a button is the step nobody expects.
+Anything else to fill in — a second box, a tick, a list — and it waits
+for its button, since sending early would send the rest at their defaults
+before a person working down the page ever reached them. It is sent AS
+THOUGH ITS OWN BUTTON HAD BEEN PRESSED — the first one in the form, the
+standard's default submitter — so that button's name and value go along
+and so does anything it overrules, which is what keeps a GET form with a
+`formmethod=post` button refused by name here rather than sent as a query
+with a password in it. **And a default button this browser cannot PRESS
+stops the shortcut**: a submit control inside a `hidden` subtree is drawn
+nowhere and is no spot, and is still the button whose method and action a
+submission would take — so a form led by one is refused rather than sent
+as though it had no button at all.
+
+**A form off an HTTPS page whose action is plain `http` asks first.**
+libfetch's downgrade callback cannot see that one: it judges the
+redirects INSIDE a fetch, and this fetch begins at http, so nothing in
+the library learns where the values came from. What is being sent is what
+somebody typed, which makes it a stronger case for asking than an
+ordinary downgrade, not a weaker one. The question is asked of the
+address the PAGE came from and not of its base, because `<base href>` can
+move the base to http while the page that collected the values stays
+encrypted. And **a security question drops everything typed before it**: keys
+struck while a page was loading are held for whoever asks next, and a `y`
+meant for something else must not answer a question it never saw. BOTH
+queues go — the keys this program is holding and the ones still sitting
+in the terminal — because nothing polls the terminal continuously: the
+library asks whether to stop only between waits, so a key struck after
+the last of those and before the question is painted is in the tty and in
+no buffer of ours. A Ctrl+C among them still stops a fetch that is
+running, which is what it was struck for; it does not answer the question,
+because only `y` ever agrees and a question that answered itself would be
+one asked with no visible reply.
 
 **Errors are the library's sentence, in the status row.** Every libfetch
 refusal has `os64_fetch_reason`; a TLS refusal now names the alert or the
@@ -509,15 +779,17 @@ previous page on screen with the reason under it; nothing clears a page
 to show an error.
 
 **Proof.** The renderer is pure computation — a tree in, lines out — so
-it gets the host harness the two libraries got: `tools/test_<name>_host.sh`
+it gets the host harness the two libraries got: `tools/test_wend_host.sh`
 feeds the saved corpus pages (`tools/html_corpus/*.html`) through libhtml
-and the renderer at a fixed width and diffs the lines against checked-in
-text dumps, so a rendering change is a reviewable diff to a page and not
-"it looks different". The fold gets its own cases (each table entry, a
-four-byte code point, an invalid sequence). QEMU proves the rest with
-screendumps: example.com, the Floodgap gopher-HTML page, Hacker News,
-textfiles.com, a 404, a downgrade prompt, a resize mid-page, Ctrl+C
-mid-fetch, on a text VT and in a gterm both.
+and the renderer and diffs against checked-in dumps beside them, so a
+rendering change is a reviewable diff to a page and not "it looks
+different". The fold gets its own cases and a sweep of the whole code
+space, the wrapper gets its edges written down as markup-in/rows-out, and
+an allocation failure is injected at every step of one page. What a FORM
+would ask for is pure computation too, so the suite checks the address
+before any wire carries it. VERIFICATION.md § wend acceptance carries the
+run commands, what the guest was driven through, and the four defects the
+harness caught before the OS ran a byte.
 
 **Review tier.** The parser and the fetch have been through the
 gauntlet; the face is app code and is reviewed here (Fable) and merged
@@ -528,7 +800,12 @@ Codex round is Chris's call.
 
 | What | Why deferred | Trigger |
 |---|---|---|
-| GET forms (a search box) | the tree has them and libfetch's URL grammar can carry a query; the first cut proves the page path first | the first site whose front page is a search box (DuckDuckGo lite, FrogFind) |
+| POST forms | libfetch sends no request body, and that is fetch machinery — Fable-tier by the campaign's own split. A form that posts is refused BY NAME rather than turned into a GET, because a login quietly sent as a query puts a password in somebody's server log | the first thing worth doing that only posts |
+| PICKING more than one answer from a `select multiple` | one answer is what the keys can express — Enter steps a list, and there is no screen on which to hold several open. What the page itself marked IS sent, every option of it; touching the list replaces the lot with the one thing a key can say | a page whose meaning needs two answers a person chose |
+| A `text/plain` body in a charset outside the UTF-8 and windows-1252 families | libhtml owns the encoding ladder and only markup goes through it. Raw text reads the reply's label for UTF-8 — or, where the reply named no charset at all, a leading UTF-8 byte order mark, which is the file saying it itself — and takes everything else as windows-1252, which is the same answer libhtml gives the markup half — so both halves agree, and a Shift-JIS `.txt` reads as mojibake in a page and in a text file alike, rather than as a refusal in neither | the first text file worth reading that says it is something else |
+| A file-upload control | it is a POST with a body made of parts, so it waits on the row above and on a file picker this browser has no screen for | a page worth uploading to |
+| Editing longer than a status row | a box is edited on the bottom row, so a long value is a scrolling window onto itself; fine for a query, thin for a comment | the first time somebody writes prose into a page |
+| XHTML parsed by the HTML parser | there is no XML parser here, and the HTML tree builder reads all but the constructs XML spells differently — a self-closing `<script/>` ends where XML says and not where HTML does, so the text after it is swallowed. Refusing `application/xhtml+xml` outright would turn every XHTML page into "that is not a page", which is worse for a reader than a rare page with a swallowed tail | an XHTML page worth reading that the HTML rules mangle |
 | `gopher://` links | libfetch's gopher scheme is booked; the gopher client still owns the protocol | the browser's first gopher link |
 | Column-aligned tables | rows read fine for the old web's layout tables; alignment is layout, the graphical browser's boss | a data table that is unreadable as rows |
 | CP437 / a second charset on the glass | the face is Latin-1; art pages are the gopher client's | a page whose meaning needs box drawing |

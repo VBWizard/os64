@@ -250,7 +250,7 @@ TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
 LIBGZIP_PROGRAMS := gzip gunzip gziptest
 
 # Programs that download: they name libfetch and get its whole closure.
-LIBFETCH_PROGRAMS := os64get
+LIBFETCH_PROGRAMS := os64get wend
 
 # pngtest directly checks the codec; gview and desktop use libimage.
 # libpng carries its own DT_NEEDED edge on
@@ -431,7 +431,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
-APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest),$(LIBHTML_SO)) \
+APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend),$(LIBHTML_SO)) \
                        $(if $(filter $(1),gview desktop jpegtest),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \

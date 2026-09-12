@@ -634,6 +634,286 @@ and the server, for a guest to point at, with:
 python3 -u tools/ftptestd.py --port 2121 --root /tmp/uploads
 ```
 
+## wend acceptance — the line-mode browser (2026-09-11)
+
+BROWSER.md's face: the first program that puts libfetch and libhtml together
+and points them at real pages. BROWSER.md § The face is the design record;
+what follows is what was run.
+
+**The host suite** is `tools/test_wend_host.sh` — plain `cc` under ASan and
+UBSan, driving the renderer (`userland/apps/wend/render.c`) with no kernel
+under it, because a tree in and lines out is pure computation. The FOLD gets
+its table checked entry by entry and then every code point below U+11000
+swept to prove each one folds to printable Latin-1 or to nothing. The
+WRAPPER gets cases written as "this markup, at this width, is these rows".
+The RAW-TEXT path gets the windows-1252 high range and every spelling of a
+line ending. LISTS AND ANCHORS get the page's own numbering and the row a
+`#name` lands on. And an ALLOCATION FAILURE is injected at each of the first
+seven hundred allocations of one deliberately awkward page, proving that
+what comes back is always a page you can paint and always frees clean.
+
+**The corpus is the regression test, and it is a diff to a PAGE.** The six
+saved pages libhtml keeps (`tools/html_corpus/*.html` — example.com,
+Floodgap's gopher gateway, Hacker News, textfiles.com, 68k.news, a Wikipedia
+article) are rendered at 80 columns and diffed against checked-in dumps
+beside them, with example.com rendered at 40 as well because wrapping is
+where a renderer goes wrong. The dump carries the rows, the attribute and
+spot spans under each row that has any, every spot with where it goes or
+what it would send, and every form — so a change in how a page reads
+arrives as a reviewable diff rather than as "it looks different on my
+screen". Refresh them deliberately:
+
+```sh
+tools/test_wend_host.sh            # check
+tools/test_wend_host.sh --refresh  # adopt the new rendering
+```
+
+Four defects came out of the harness before the OS ran a byte, and three of
+them are the same mistake in different clothes — **giving something back
+before the rows it governs are down**:
+
+| Found | What it was |
+|---|---|
+| A list item's second row lined up under its bullet | The indent was restored when the item's children were done, and the item's LAST word was still held: it wrapped at the outer margin |
+| Bold, underline and links broke at every space | The owed space between two words wore the pen of wherever the WALK had reached, which is past the closing tag. It now wears the pen from where the whitespace was, so a two-word link is one run and highlights as one thing |
+| A `pre` block lost the author's trailing spaces on its last row | Same shape: the block left preformatted mode before its final row was committed, and the trim for flowed rows took them |
+| A row could reach the painter unterminated | ASan, on the allocation-failure sweep: fresh storage plus a refused run reservation left bytes nobody wrote and no end marker. The buffer is terminated the moment it is reserved |
+
+**Forms are the largest part**, because what a form would ASK FOR is a
+string built from a page and is checkable without a wire:
+`wend_form_url` is driven over a search box with a hidden field, a query
+the action already carried (replaced, as a GET form does), spaces and
+UTF-8 through the encoder, ticked and unticked boxes, a list's value
+rather than its words, two buttons where only the pressed one says so, a
+POST refused by name, and a control in no form at all. Then the edges the
+review rounds named: a control bound to its form by `form=<id>` and one
+naming a form that does not exist, an empty `formaction` against an absent
+one, `value=""` on a tick against no value at all, a group with two radios
+`checked`, a `multiple` list's several sent and then replaced by one pick,
+a `hidden` subtree drawn as nothing and sent in full and in TREE ORDER, and
+whitespace across a nested element inside an option. One case renders a
+page twice at two widths with an edit in hand, proving that what was typed
+survives a re-wrap and reaches the query.
+
+**In the guest** (headless QEMU, `-netdev user` with slirp to the real
+internet, screendumps read as images): example.com and its link followed to
+iana.org — which answers the downgrade prompt question, because that hop
+leaves https for http and the browser asks; Hacker News over **HTTPS** on an
+ext2 root; 68k.news and textfiles.com over http; a `text/plain` file with a
+tab and a Latin-1 byte; a 404 shown as the page it is; an `image/png` refused
+as not a page with the `os64get` command to save it instead; **Ctrl+C partway
+through a slow reply**, which leaves what arrived on screen and says
+`interrupted` in the status row; and a **resize**, by running the browser in
+a gterm and pressing Ctrl+Alt+M, which re-wraps from the parse tree without
+asking the network for a page it already has.
+
+**The Codex round (PR #98) added twelve cases' worth of ground.** Its two
+P1s were both reachable: a selection restored from the history into a page
+that came back SHORTER indexed past the spot table on the next arrow, and a
+form on an https page whose action was plain http sent what somebody typed
+in clear without asking. The rest were a page's own words being altered —
+`alt=""` drawn as `[image]`, a textarea's spacing collapsed before it was
+sent, a prefilled value replaced by its Latin-1 shadow when a field was
+opened and closed unchanged — plus a disabled control that could be
+operated and submitted, a password echoed to the glass, an 8 MB text body
+reported as whole because nothing asked for the byte past the cap, a form
+auto-sent while its checkboxes were still at their defaults, a hangup that
+waited for a keystroke inside a nested prompt, and `WEND_BAD_URL` declared
+but never returned. The fragment finding is the one that changed how the
+browser FEELS: a table of contents was twelve links that each refetched the
+article and showed its top.
+
+**Round two found nine more, three P1, and most of them were the next layer
+under a round-one fix** — the reviewer checking the repair rather than the
+original. A `y` typed while a page was loading was held as type-ahead and
+then answered the downgrade prompt it was never shown; the downgrade check
+read the page's BASE, which `<base href>` can move to http while the page
+that collected the values stays encrypted; and a `formmethod=post` button
+on a GET form would have sent a password as a query string. Then: a
+`fieldset disabled` disables its contents and wend honoured only each
+control's own attribute; a form action's `#name` was dropped where a link's
+was now kept; a text body truncated by OUR allocation failure reported
+itself whole; a re-layout that failed for memory left a NULL page that the
+edit path walked; a text file with classic-Mac carriage returns rendered as
+one line; and `Accept` advertised less than the loader would render.
+
+**Round three found six, one P1, and the P1 was a live crash on the most
+ordinary page in the corpus**: Wikipedia's Search is a `<button>`, and the
+round-two fix that taught a submit button to carry its own method had gone
+into only one of the two element types that can BE a submit — so activating
+that button read a pointer the renderer never set. (This one was found
+twice: the truth pass before submitting caught it, and the round named it
+from the other direction.) The rest were the same shape of unfinished
+rule: the submitter's action brought its own `#name` and the form's was
+used instead; a disabled `option` could be the active choice, be cycled
+onto and be sent; `readonly` was treated as ordinary and editable, when it
+means the page keeps the value and still sends it; an empty `href` — the
+standard's "this page", and what every reload link is made of — was stored
+as an unresolvable address; and once sixty-four keys of type-ahead had
+filled the buffer, the cancel predicate stopped reading the terminal, so a
+later Ctrl+C could not end a slow fetch.
+
+**Rounds four and five were recorded here as CLEAN and were not.** Both had
+landed with findings while the truth passes below were being written, and
+neither was read before the note claiming otherwise was committed. The
+record is corrected rather than removed: a verdict written without looking
+is the failure worth remembering, and the fix is to read the PR's unresolved
+threads before writing down what a round said.
+
+**Round four found twelve.** Every one was a page's own words reaching the
+wire as something else: a control naming its form with `form=<id>` was put
+in whatever form it sat inside; `formaction=""` — the document's own address
+— read as no action at all; whitespace at an element boundary dropped from
+an option's words and its value, so `A<b> B</b>` was shown and SENT as `AB`;
+two unchecked appends inside that same gather leaving a silently truncated
+value on a page claiming to be whole; a `multiple` list collapsed to its
+last selected option, dropping the rest; an inline `id` bound to the row
+AFTER the words it names, so a fragment landed below its target; `<ol
+start=5>` shown as `1.`; and — twice, from two directions — a `text/plain`
+body in windows-1252 read as ISO-8859-1, so every smart quote became `?` in
+a text file while the markup half of the same browser drew it correctly.
+Two of the twelve were already fixed by the truth passes between the rounds
+(the hidden-field tree order and the image button's coordinates).
+
+**Round five found seven, two P1.** A `y` still sitting in the TERMINAL — as
+opposed to in this program's own type-ahead buffer, which round two taught
+the confirm to drop — answered a downgrade question it was never shown,
+because nothing polls the terminal between the library's cancel checks. And
+pressing Enter in a one-box form submitted the BOX rather than the form's
+default button, so a `<button formmethod=post>` was bypassed and the
+password in the box went out as a query — the exact hazard round three's
+formmethod fix existed to prevent, reached by the other door. The rest:
+`<base href="">` skipped so a later base won; a `hidden` subtree drawn in
+full, its links followable and its controls editable; two radios of one
+group both `checked` both sent; `value=""` on a tick replaced with `on`; and
+a textarea's line breaks sent as `%0A` where a form spells them `%0D%0A`.
+
+**Round six is this one**, and both halves of the record were repaired with
+it: nineteen findings fixed, and the false "clean" claim above rewritten.
+Two of the nineteen were already gone, fixed by earlier truth passes. The
+host suite grew a case for each of the rest.
+
+**The guest found what the host suite could not see about the radio fix.**
+The query was right — one value — and the ROW still drew two dots, because
+the renderer draws each control as it meets it and the rule was being
+applied to the finished page. A group is settled from the TREE now, before
+anything is drawn. That is the round's own reminder that a pure-computation
+harness checks the answer and not the picture.
+
+**In the guest** (headless QEMU, slirp, a page served from the host at
+10.0.2.2 and the real internet beside it), with the server's access log as
+the record of what actually went on the wire:
+
+| Case | What the wire or the glass said |
+|---|---|
+| A one-box form whose only button is `formmethod=post` | `this form posts, and wend sends only forms that ask by address` — and NO request in the server log. Before, the password in the box went out as a query |
+| A one-box form with an ordinary named button | `GET /sent2?q=cats&go=now` — the default submitter's own name and value carried |
+| `select multiple`, an empty tick value, a doubled radio group | `GET /sent3?pick=1&pick=3&empty=&plain=on&r=b` — every one of those a separate finding, all on one line |
+| A control and a button bound by `form=<id>` from outside the form | `GET /A?named=yes` |
+| A `hidden` section inside a form, and a textarea | `GET /B?carried=kept&tick=on&note=line+one%0D%0Aline+two` — the hidden section's prose and link drawn nowhere, its values carried, and the break spelled CRLF |
+| `formaction=""` on a second button of that form | `GET /two.html?...` — the document's own address, not the form's `/B` |
+| `<ol start=5>` with a `<li value=9>` | `5. 6. 9. 10.` |
+| A windows-1252 `.txt` | `A "smart quote" and a dash - plus café.` Every one of those was `?` before |
+| ARPANET on Wikipedia over HTTPS, then a search typed into its box | 1447 lines, then `https://en.wikipedia.org/wiki/Packet_switching` — the real page, the real search, the redirect followed |
+| Both guest filesystems afterwards | `e2fsck -fn` clean on root and `/home` |
+
+**Then the reviewer's hat, before the button, and it earned its keep.** Five
+more, four of them mine to have made:
+
+| Found | What it was |
+|---|---|
+| A page could WEDGE the browser | The radio-group rule searches the form once per marked radio. Forty thousand of them — a megabyte and a half, well inside libhtml's own limits — ran past two minutes on a host far faster than the guest, in a program a person cannot interrupt while it renders. The searching one render may do is budgeted now; past it a marked radio keeps the page's own answer, so the row and the wire still agree, and a form that large is longer than an address may be anyway. The same page renders in 0.4s on the host, and in the guest costs no more than an equivalent page of CHECKBOXES, which does no searching at all |
+| A `multiple` list drew an option it was not sending | With nothing marked it showed its first, exactly as a list that WAS sending that option; with a disabled first choice it showed the disabled one while sending the enabled one. The row shows an option that will actually go, and an empty list is drawn empty |
+| A default button inside a `hidden` subtree was invisible to the submitter | The same P1 round five named, through the door the `hidden` fix had just opened: the button is drawn nowhere and is no spot, and is still the one whose method and action a submission takes. The form records where the first unreachable submit control stood, and the Enter-in-one-box shortcut refuses rather than send the form as though it had no button |
+| A radio with NO name cancelled the other nameless radios | It is in no group, sends nothing whatever it shows, and has nothing to untick |
+| A Ctrl+C drained before a question answered it `no` | My own addition, not the finding: `q` then silently did nothing, a question asked with no visible reply. Draining is already enough, since only `y` ever agrees. The stop still reaches a running fetch |
+
+**Round seven found sixteen, one P1, and four were siblings of the round
+before it** — which is this PR's recurring shape and the reason a fixed rule
+sends you looking for its relatives.
+
+The P1 and the P2 beside it were one structural miss: **form ownership was
+settled only AFTER the walk**, and three questions during the walk need it.
+A submit control out of reach that named its form with `form=<id>` marked no
+form at all, so a `formmethod=post` button led straight back to a password in
+a query. And two root-level checked radios named `x`, owned by `form=a` and
+`form=b`, were one group, so the second cleared the first and form A sent
+nothing. The forms carrying an `id` are swept once now and ownership is
+answerable while the walk runs; the radio search is of the whole document,
+asking each candidate who owns it.
+
+The other two siblings: a disabled `fieldset` on the hidden-data path lost
+the first-`legend` exception the visible walk has, and `radio_pick` compared
+two ABSENT names as equal, so picking one nameless radio put out every other
+one's dot — the interactive half of a fix made a round earlier for the
+initial state.
+
+The rest were the standard read against the code: an action too long to
+resolve fell back to the page it was on rather than being refused (a
+different host to be wrong about); `readonly` was honoured on ticks and
+lists, where the standard gives it no meaning, so a form with a box and a
+`readonly` checkbox auto-sent before the checkbox could be reached; a
+nameless image button sent nothing where it must send `x=0&y=0`; a fragment
+was matched percent-encoded against an `id` that is not; `<ol reversed>`
+counted up; `_charset_` went out empty; an option's `label` was ignored in
+favour of its text; a `size=2` list invented its first option; `xmp` and
+`plaintext` were flowed rather than kept; a UTF-8 byte order mark on an
+unlabelled text file was read as windows-1252; and `<base>` was looked for
+only among `head`'s children, though libhtml keeps a misplaced one in the
+body exactly where it found it. XHTML parsed by the HTML parser is the one
+answered with a booking rather than a change: there is no XML parser here,
+and refusing the type outright would turn every XHTML page into "that is not
+a page".
+
+**One leak of my own**, caught by the suite's allocation sweep as it was
+written: the new form table was never freed.
+
+**In the guest**, every fix that reaches the wire or the glass, read off a
+local server's access log:
+
+| Case | What the wire or the glass said |
+|---|---|
+| Two root radios named `x` owned by different forms, both checked | `GET /A?x=1` and `GET /B?x=2` — each form sent its own; before, A sent nothing |
+| A nameless image button, `_charset_`, a `size=2` list | `GET /C?_charset_=UTF-8&x=0&y=0&lab=` |
+| The P1: a hidden `formmethod=post` button naming its form by id | `this form's button is not one this browser can reach`, and no request |
+| A box beside a `readonly` checkbox | Enter kept the value and sent NOTHING, the checkbox still a tick to answer |
+| Two nameless radios, one picked | both keep their dots |
+| A form action too long to be an address | `this form names a destination that is not an address this browser can resolve`, and no request |
+| `<ol reversed>`, `xmp`, an option `label`, a `size=2` list | `3. 2. 1.`, columns kept, `[v Short]`, `[v ]` |
+| `href="#the%20deep%20bit"` into `id="the deep bit"` | moved, with no "nothing named" refusal |
+| A `.txt` with a UTF-8 BOM and no charset | `A BOM then café and a "quote".` — before, `ï»¿A BOM then cafÃ©…` |
+| Both guest filesystems afterwards | `e2fsck -fn` clean on root and `/home` |
+
+**What the truth passes BETWEEN rounds found is worth as much as the
+rounds.** Reading the diff before each submit, and putting a deliberately
+pathological page through the host driver under the sanitizers, turned up:
+the same button-submit crash round three later named, from the other
+direction; a form data set that put every hidden field in front instead of
+in tree order; an image button sending its value where the standard sends
+coordinates; a caught signal answering a confirm as "no"; `#` and `#top`
+fetching the page again to show its own top; a readonly box counting as
+something to answer; a page that rendered to nothing showing a blank
+screen with a 200 on it; and a default port that url.h asks a caller to
+drop before resolving, which would otherwise spell `host:443` into every
+relative link. The pathological page — lists nested five deep around a
+`pre`, a form inside a table inside a form, unclosed inline tags, an empty
+`select`, a readonly textarea, a disabled fieldset with a bold legend —
+is worth keeping in a scratch file when working on the renderer.
+
+**And two real searches, typed into real pages.** The Floodgap gateway's
+box, reached by typing its number, edited from the value it came with, and
+sent — the gateway answered with the gopher menu that was asked for. Then
+Wikipedia over HTTPS: arrow to the box, type, Enter, and the address that
+went out was
+`https://en.wikipedia.org/w/index.php?title=Special%3ASearch&search=ARPANET+history`
+— the hidden field carried, the colon encoded, the space a plus, and the
+results page came back with its own title.
+
+**A FAT root has no trust store**, so `https` there fails at
+`/etc/certs/roots.pem` for the browser and for os64get alike — the bundle is
+written to the ext2 root only. Boot an ext2-root entry when TLS is what you
+are testing.
+
 ## Reading the serial log
 
 **WHERE these lines live depends on the boot entry.** Every one of them is a
