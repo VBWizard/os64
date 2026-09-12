@@ -2,46 +2,43 @@
 #define OS64GET_HTTP_H
 
 // http.h — enough of HTTP/1.1 (RFC 9112) to ask a stranger on port 80 for a
-// file and know whether what came back is one.
-//
-// WHY IT IS ITS OWN FILE. os64get speaks two dialects now: the valet's
-// (`GET <name>\n`, one length, one CRC, RTL8125.md's 1971 shape) and the
-// world's. They share the .part-then-rename discipline and nothing else, so
-// they are kept apart here rather than braided through one function.
+// file and know whether what came back is one. libfetch's parser (LIBFETCH.md);
+// fetch.c is its one caller, and the host harness its other driver.
 //
 // WHAT AN ADDRESS IS LIVES IN libos64, NOT HERE. `os64_url_parse`
 // (os64/url.h) owns the scheme/host/port/path grammar, because gopher needs
-// every rule of it and a security-edged rule kept in two places drifts.
-// What stays here is everything that is HTTP's alone: which schemes this
-// program serves and what port each implies, the request line and the Host
-// header, and `http_url_absolute` — RFC 3986 §5.2 reference resolution,
-// which exists because a Location may be relative. Gopher has no relative
-// links at all, so §5.2 has exactly one customer and belongs beside it.
+// every rule of it and a security-edged rule kept in two places drifts, and
+// `os64_url_absolute` (RFC 3986 §5.2 reference resolution) lives beside the
+// grammar because a redirect's Location and every href on a page are
+// written in it. What stays here is everything that is HTTP's alone: which
+// schemes are HTTP and what port each implies, the request line and the
+// Host header, the head, and the body's framing.
 //
 // WHY PARSING IS SEPARATE FROM THE SOCKET. Every function below that reads
 // takes its bytes from an `http_source_fn`, never from a handle. On os64 the
-// source supplies plain TCP or authenticated TLS bytes; in tools/test_http_host.sh
-// it is a memory buffer handing out one byte at a time, then two, then
-// seventeen — because a stream parser's bugs live exactly where a token
-// straddles two reads, and a parser that can only be driven by a real
-// network is a parser nobody drives across those boundaries.
+// source supplies plain TCP or authenticated TLS bytes (transport.c); in
+// tools/test_http_host.sh it is a memory buffer handing out one byte at a
+// time, then two, then seventeen — because a stream parser's bugs live
+// exactly where a token straddles two reads, and a parser that can only be
+// driven by a real network is a parser nobody drives across those boundaries.
 //
 // DELIBERATELY NOT HERE, each a rung of BROWSER.md's ladder or a ruling of
 // its own: content codings beyond gzip, transfer codings other than chunked,
 // authentication, cookies, keep-alive, IPv6 literals. What is missing is
 // REFUSED BY NAME rather than mis-read: a response this code cannot honestly
-// turn into a file must never become a file. gzip decoding stays in the
-// caller because http.c is the transport parser; libgzip owns that format.
+// turn into bytes for a consumer must never become those bytes. gzip
+// decoding stays in fetch.c because http.c is the transport parser; libgzip
+// owns that format.
 //
 // WHAT A REDIRECT MEANS IS NOT HERE EITHER, and that split is on purpose:
-// this file answers "where does that Location point", which is arithmetic on
-// addresses (http_url_absolute), and the caller answers "and may I go
-// there", which depends on the machine — whether a proxy is configured, how
-// many hops have been spent, whether the answer points back at itself.
+// the head says where the Location points, and fetch.c answers "and may I
+// go there", which depends on the machine — whether a proxy is configured,
+// how many hops have been spent, whether the answer points back at itself —
+// and on the caller, through its hop verdict.
 //
-// TLS belongs to the caller's byte source. This parser receives HTTP
-// plaintext on both direct and proxied routes; routing and certificate
-// verification do not change HTTP framing.
+// TLS belongs to the byte source. This parser receives HTTP plaintext on
+// both direct and proxied routes; routing and certificate verification do
+// not change HTTP framing.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -76,6 +73,8 @@
 #define HTTP_SCHEME_MAX    OS64_URL_SCHEME_MAX
 #define HTTP_REASON_MAX    64
 #define HTTP_TOKEN_MAX     32     // a coding name: "chunked", "gzip", "identity"
+#define HTTP_TYPE_MAX      64     // a media type: "text/html", "image/svg+xml"
+#define HTTP_CHARSET_MAX   32     // its charset parameter: "utf-8", "windows-1252"
 
 // The longest address http_url_absolute can spell: a base's scheme and host,
 // with a whole Location header joined onto its path. Every buffer an
@@ -132,36 +131,42 @@ const char *http_url_reason(http_url_result_t rc);
 //
 // `absoluteForm` puts the WHOLE URL in the request line instead of the path,
 // which is what a proxy needs to know which origin the request is for (RFC
-// 7230 §5.3.2, and the CERN proxy's shape since 1994). Returns false only if
-// the request will not fit.
-bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm);
+// 7230 §5.3.2, and the CERN proxy's shape since 1994).
+//
+// The caller's headers ride in `extras`, every one optional (NULL = not
+// sent): `User-Agent` because a meaningful fraction of the web refuses a
+// request without one; `Accept` because content negotiation is how a server
+// chooses HTML over JSON; `extra_headers` as whole "Name: value\r\n" lines
+// for Referer, Range, Cookie — headers, not machinery. Every byte of all
+// three is judged by the field-byte rule (`is_field_byte`: no CR, LF or
+// control byte), and a bad one refuses the request — a header a caller
+// composes from page content is a header an attacker composes, and a bare
+// LF in one is the request-splitting shape. Returns false if the request
+// will not fit or a header fails that rule; the caller cannot tell the two
+// apart and does not need to, since neither is the server's doing.
+typedef struct {
+    const char *user_agent;
+    const char *accept;
+    const char *extra_headers;   // "Name: value\r\n" lines, already terminated
+} http_request_extras_t;
+
+bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm,
+                  const http_request_extras_t *extras);
+
+// The field-byte judgement on its own, so a caller can refuse a bad header
+// BEFORE dialling anybody about it. http_request applies it again.
+bool http_request_extras_ok(const http_request_extras_t *extras);
 
 // Write a parsed URL back out as text — the inverse of http_url_parse for
 // everything the parse kept, so a fragment and a redundant default port are
 // gone by construction.
 bool http_url_render(const http_url_t *url, char *out, size_t cap);
 
+// The same address in the library's spelling, for os64_url_absolute: a port
+// that is the scheme's default becomes 0 ("none spelled"), which is what
+// keeps a resolved `/login` from reading `https://host:443/login`.
+void http_url_to_os64(const http_url_t *url, os64_url_t *out);
 
-// Spell a `Location:` as a WHOLE address, given the URL it arrived from —
-// RFC 3986 §5.2's reference resolution, which is what a redirect header is
-// written in. Every form a server actually sends resolves: an absolute URL
-// (`http://other/x`), a scheme-relative one (`//cdn/x`), an absolute path
-// (`/login`), a path relative to the page (`page.html`, `../up/`), a
-// query-only reference (`?page=2`) and a fragment-only one (which names the
-// page it came from). `.` and `..` are resolved away where a merge with the
-// base's path created them.
-//
-// A reference that names its OWN scheme is copied through untouched, even
-// one this program could never fetch (`mailto:`, `ftp://`) — what the
-// address IS and whether to go there are different questions, and the second
-// belongs to the caller.
-//
-// Returns false only when the answer will not fit in `cap` or the reference
-// is empty. An empty `Location` names no address at all: RFC 3986 would read
-// it as "the page you already have", and a redirect to the page you already
-// have is a server that has lost its place.
-bool http_url_absolute(const http_url_t *base, const char *location,
-                       char *out, size_t cap);
 // ── A stream of bytes that arrives in whatever pieces it likes ──────────
 
 // Fill `buf` with up to `cap` bytes: > 0 got some, 0 the peer is done, < 0
@@ -190,6 +195,13 @@ typedef struct {
     uint64_t length;                          // valid only when hasLength
     char     transferEncoding[HTTP_TOKEN_MAX];// "" = none said
     char     contentEncoding[HTTP_TOKEN_MAX]; // "" = identity; caller also accepts gzip
+    // The media type and its charset parameter, for the consumer that has to
+    // decide what the bytes ARE (a page to parse, an image to decode) and how
+    // its text is encoded. Both lowercased; "" = not said.
+    // A Content-Type this cannot hold is dropped, not refused: nothing about
+    // the FRAMING depends on it, so the fetch stays honest without it.
+    char     contentType[HTTP_TYPE_MAX];
+    char     charset[HTTP_CHARSET_MAX];
     bool     hasLocation;                     // a Location line was seen, even an empty one
     char     location[HTTP_LINE_MAX];         // valid only when hasLocation; "" = it named nowhere
 } http_response_t;

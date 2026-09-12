@@ -1,9 +1,8 @@
 // Exercise production URL I/O with deterministic transport and clock seams.
 #include <assert.h>
 #include <stdio.h>
-#include <stdarg.h>
 #include <string.h>
-#include "../userland/apps/os64get/url_io.h"
+#include "fetch/transport.h"
 #include "os64/os64.h"
 
 struct os64_tls_transport { unsigned flags; os64_tls_status_t status; bool closing; };
@@ -13,19 +12,16 @@ static unsigned closes, frees, steps, writes, reads;
 static bool cancel, fail_clock, create_fail, stall, interrupt_once, cancel_wait, drift, change_clock, rewind_clock;
 static os64_tls_status_t read_status;
 static size_t ready, sent;
-static char captured[128], report[512];
+static char captured[128];
 
-bool install_cancelled(void) { return cancel; }
+static bool cancelled_p(void *ctx) { (void)ctx; return cancel; }
 int64_t os64_ticks(os64_ticks_t *t)
 { *t=(os64_ticks_t){.ticks=now,.per_second=drift ? 2000 : 1000}; return fail_clock ? -1 : 0; }
 int64_t os64_close(int32_t h) { assert(h==7); closes++; return 0; }
-int32_t os64_hprintf(int32_t h,const char *f,...)
-{ assert(h==OS64_STDERR); va_list args; va_start(args,f); int n=vsnprintf(report,sizeof report,f,args); va_end(args); return n; }
-const char *os64_tls_error_description(os64_tls_status_t s,os64_tls_policy_reason_t p,int e)
-{ assert(s==OS64_TLS_CERTIFICATE && p==6 && e==54); return "certificate explanation"; }
+int32_t os64_hprintf(int32_t h,const char *f,...) { (void)h;(void)f;return 0; }
 const char *os64_tls_status_name(os64_tls_status_t s) { (void)s;return "test"; }
 static void wait_for(uint64_t ms)
-{ assert(steps<128 && ms>0 && ms<=URL_IDLE_MS); waits[steps++]=ms; now+=1000; if(cancel_wait) cancel=true; if(change_clock) drift=true; if(rewind_clock) now=0; }
+{ assert(steps<128 && ms>0 && ms<=FETCH_IDLE_MS_DEFAULT); waits[steps++]=ms; now+=1000; if(cancel_wait) cancel=true; if(change_clock) drift=true; if(rewind_clock) now=0; }
 int64_t os64_write_for(int32_t h,const void *p,size_t n,uint64_t ms)
 {
     assert(h==7); writes++;
@@ -44,7 +40,7 @@ int64_t os64_read_for(int32_t h,void *p,size_t n,uint64_t ms)
 }
 os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c,int32_t h,
     const os64_tls_transport_limits_t *limits,os64_tls_transport **out)
-{ assert(c && h==7 && !limits);*out=create_fail?NULL:&transport;return create_fail?OS64_TLS_CERTIFICATE:OS64_TLS_OK; }
+{ assert(c && h==7 && limits && limits->handshake_ms==FETCH_IDLE_MS_DEFAULT && limits->shutdown_ms==OS64_TLS_TRANSPORT_SHUTDOWN_MS);*out=create_fail?NULL:&transport;return create_fail?OS64_TLS_CERTIFICATE:OS64_TLS_OK; }
 os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
 { return (os64_tls_state_t){.status=t->status,.flags=t->flags,.policy_reason=6,.upstream_error=54,.alpn="http/1.1"}; }
 os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t,uint64_t ms)
@@ -79,72 +75,71 @@ os64_tls_status_t os64_tls_transport_begin_close(os64_tls_transport *t) {t->clos
 os64_tls_status_t os64_tls_transport_abort(os64_tls_transport *t,os64_tls_status_t s) {return t->status=s;}
 void os64_tls_transport_free(os64_tls_transport *t) {assert(t==&transport);frees++;os64_close(7);}
 
-static url_io_t open_io(bool tls)
+static fetch_transport_t open_io(bool tls)
 {
     now=0;closes=frees=steps=writes=reads=0;sent=ready=0;
     cancel=fail_clock=create_fail=stall=interrupt_once=cancel_wait=drift=change_clock=rewind_clock=false;
     read_status=OS64_TLS_OK;
     transport=(struct os64_tls_transport){.flags=OS64_TLS_HANDSHAKE_DONE|OS64_TLS_SEND_PLAIN};
-    url_io_t io;os64_tls_config_t c={0};assert(url_io_open(&io,7,tls?&c:NULL));return io;
+    fetch_transport_t io;os64_tls_config_t c={0};assert(fetch_transport_open(&io,7,tls?&c:NULL,0,cancelled_p,NULL));return io;
 }
 int main(void)
 {
-    url_io_t failed = open_io(true);
+    fetch_transport_t failed = open_io(true);
     transport.status = OS64_TLS_CERTIFICATE;
-    assert(!url_io_complete(&failed, true));
-    url_io_close(&failed, false);
+    assert(!fetch_transport_complete(&failed, true));
+    fetch_transport_close(&failed, false);
     assert(failed.error.status == OS64_TLS_CERTIFICATE);
     assert(failed.error.policy_reason == 6 && failed.error.upstream_error == 54);
-    url_io_report(&failed);
-    assert(!strcmp(report,"os64get: TLS test: certificate explanation (policy 6, engine 54)\n"));
+    assert(fetch_transport_tls_failed(&failed));
     for(unsigned tls=0;tls<2;tls++) {
-        url_io_t io=open_io(tls);
+        fetch_transport_t io=open_io(tls);
         interrupt_once=!tls;
-        assert(url_io_write(&io,"abcdef",6));assert(sent==6 && !memcmp(captured,"abcdef",6));
-        url_io_close(&io,true);url_io_close(&io,false);assert(closes==1 && frees==tls);
+        assert(fetch_transport_write(&io,"abcdef",6));assert(sent==6 && !memcmp(captured,"abcdef",6));
+        fetch_transport_close(&io,true);fetch_transport_close(&io,false);assert(closes==1 && frees==tls);
 
         io=open_io(tls);stall=true;
-        assert(!url_io_write(&io,"abc",3));assert(io.silent && now==URL_IDLE_MS && steps==30);
-        assert(waits[0]==30000 && waits[29]==1000);url_io_close(&io,false);assert(closes==1);
+        assert(!fetch_transport_write(&io,"abc",3));assert(io.silent && now==FETCH_IDLE_MS_DEFAULT && steps==30);
+        assert(waits[0]==30000 && waits[29]==1000);fetch_transport_close(&io,false);assert(closes==1);
 
         io=open_io(tls);stall=true;char buf[8];
-        assert(url_io_read(&io,buf,sizeof buf)<0);assert(io.silent && now==URL_IDLE_MS);
-        assert(waits[0]==30000 && waits[29]==1000);url_io_close(&io,false);
+        assert(fetch_transport_read(&io,buf,sizeof buf)<0);assert(io.silent && now==FETCH_IDLE_MS_DEFAULT);
+        assert(waits[0]==30000 && waits[29]==1000);fetch_transport_close(&io,false);
 
         io=open_io(tls);stall=true;cancel_wait=true;
-        assert(url_io_read(&io,buf,sizeof buf)<0);assert(io.error.status==OS64_TLS_CANCELLED && steps==1);
-        url_io_close(&io,false);assert(closes==1);
+        assert(fetch_transport_read(&io,buf,sizeof buf)<0);assert(io.error.status==OS64_TLS_CANCELLED && steps==1);
+        fetch_transport_close(&io,false);assert(closes==1);
 
         io=open_io(tls);stall=true;change_clock=true;
-        assert(url_io_read(&io,buf,sizeof buf)<0);assert(io.error.status==OS64_TLS_BAD_TIME);
-        url_io_close(&io,false);
+        assert(fetch_transport_read(&io,buf,sizeof buf)<0);assert(io.error.status==OS64_TLS_BAD_TIME);
+        fetch_transport_close(&io,false);
 
         io=open_io(tls);now=1000;stall=true;rewind_clock=true;
-        assert(url_io_read(&io,buf,sizeof buf)<0);assert(io.error.status==OS64_TLS_BAD_TIME);
-        url_io_close(&io,false);
+        assert(fetch_transport_read(&io,buf,sizeof buf)<0);assert(io.error.status==OS64_TLS_BAD_TIME);
+        fetch_transport_close(&io,false);
 
         io=open_io(tls);fail_clock=true;
-        assert(!url_io_write(&io,"a",1));assert(io.error.status==OS64_TLS_BAD_TIME);url_io_close(&io,false);
+        assert(!fetch_transport_write(&io,"a",1));assert(io.error.status==OS64_TLS_BAD_TIME);fetch_transport_close(&io,false);
     }
-    url_io_t io=open_io(false);char buf[8];ready=3;interrupt_once=true;
-    assert(url_io_read(&io,buf,sizeof buf)==3 && steps==1 && io.error.status==OS64_TLS_OK);
-    url_io_close(&io,false);
+    fetch_transport_t io=open_io(false);char buf[8];ready=3;interrupt_once=true;
+    assert(fetch_transport_read(&io,buf,sizeof buf)==3 && steps==1 && io.error.status==OS64_TLS_OK);
+    fetch_transport_close(&io,false);
 
     io=open_io(true);ready=3;read_status=OS64_TLS_PROTOCOL;
-    assert(url_io_read(&io,buf,sizeof buf)==3);assert(url_io_read(&io,buf,sizeof buf)<0);
-    assert(!url_io_complete(&io,true));url_io_close(&io,false);
+    assert(fetch_transport_read(&io,buf,sizeof buf)==3);assert(fetch_transport_read(&io,buf,sizeof buf)<0);
+    assert(!fetch_transport_complete(&io,true));fetch_transport_close(&io,false);
 
     io=open_io(true);ready=3;read_status=OS64_TLS_TRUNCATED;
-    assert(url_io_read(&io,buf,sizeof buf)==3);assert(url_io_complete(&io,true));
-    assert(!url_io_complete(&io,false));url_io_close(&io,false);
+    assert(fetch_transport_read(&io,buf,sizeof buf)==3);assert(fetch_transport_complete(&io,true));
+    assert(!fetch_transport_complete(&io,false));fetch_transport_close(&io,false);
 
     io=open_io(true);read_status=OS64_TLS_CLEAN_EOF;
-    assert(url_io_read(&io,buf,sizeof buf)==0);assert(url_io_complete(&io,false));url_io_close(&io,true);
+    assert(fetch_transport_read(&io,buf,sizeof buf)==0);assert(fetch_transport_complete(&io,false));fetch_transport_close(&io,true);
 
     io=open_io(true);transport.flags|=OS64_TLS_RECV_PLAIN;
-    assert(!url_io_write(&io,"abc",3));assert(io.error.status==OS64_TLS_LIMIT);url_io_close(&io,false);
+    assert(!fetch_transport_write(&io,"abc",3));assert(io.error.status==OS64_TLS_LIMIT);fetch_transport_close(&io,false);
 
-    io=open_io(false);url_io_close(&io,false);closes=0;create_fail=true;os64_tls_config_t c={0};
-    assert(!url_io_open(&io,7,&c));url_io_close(&io,false);assert(closes==1 && frees==0);
+    io=open_io(false);fetch_transport_close(&io,false);closes=0;create_fail=true;os64_tls_config_t c={0};
+    assert(!fetch_transport_open(&io,7,&c,0,cancelled_p,NULL));fetch_transport_close(&io,false);assert(closes==1 && frees==0);
     puts("PASS URL I/O budgets, prefixes, interruption, cancellation, closure and ownership");
 }

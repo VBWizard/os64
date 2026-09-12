@@ -90,4 +90,33 @@ os64_url_result_t os64_url_parse(const char *text, os64_url_t *out);
 // schemes it serves.
 const char *os64_url_reason(os64_url_result_t rc);
 
+// The longest reference os64_url_absolute will resolve — a whole HTTP header
+// line's worth, since a `Location:` is where the longest ones come from.
+#define OS64_URL_REF_MAX 2048
+
+// Spell a reference as a WHOLE address, given the page it appeared on — RFC
+// 3986 §5.2's reference resolution, which is what a redirect's `Location:`
+// and every `href` on a page are written in. Every form a server actually
+// sends resolves: an absolute URL (`http://other/x`), a scheme-relative one
+// (`//cdn/x`), an absolute path (`/login`), a path relative to the page
+// (`page.html`, `../up/`), a query-only reference (`?page=2`) and a
+// fragment-only one (which names the page it came from). `.` and `..` are
+// resolved away where a merge with the base's path created them.
+//
+// `base->port` follows this struct's rule: 0 means the base spelled no port
+// and none is written; anything else rides along. A caller holding a URL
+// whose port was filled in from a scheme default hands over 0 for it.
+//
+// A reference that names its OWN scheme is copied through untouched, even
+// one the caller could never fetch (`mailto:`, `ftp://`) — what the address
+// IS and whether to go there are different questions, and the second belongs
+// to the caller.
+//
+// Returns false only when the answer will not fit in `cap` or the reference
+// is empty. An empty reference names no address at all: RFC 3986 would read
+// it as "the page you already have", and a redirect to the page you already
+// have is a server that has lost its place.
+bool os64_url_absolute(const os64_url_t *base, const char *reference,
+                       char *out, size_t cap);
+
 #endif // OS64_URL_H

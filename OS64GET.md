@@ -463,9 +463,13 @@ and a cleanup error can follow successful installation.
 - [`install.c`](userland/apps/os64get/install.c) and
   [`install.h`](userland/apps/os64get/install.h): path planning, filesystem
   scratch selection, backups, destination checks, publication, and cleanup.
-- [`http.c`](userland/apps/os64get/http.c): HTTP parsing and body framing.
+- [`libfetch`](LIBFETCH.md): the fetch machinery os64get's URL half runs
+  on — HTTP parsing and body framing (`userland/libfetch/http.c`), the
+  plain-or-TLS transport, redirects, proxies, gzip. os64get keeps the
+  destination, the staging, the exit codes and the prose.
 - [`OS64GET_ARCHIVE_PLAN.md`](OS64GET_ARCHIVE_PLAN.md): installation design,
   failure analysis, and recorded host/guest validation.
-- [`tools/test_os64get_host.sh`](tools/test_os64get_host.sh) and
-  [`tools/test_http_host.sh`](tools/test_http_host.sh): installer and HTTP
-  regression suites.
+- [`tools/test_os64get_host.sh`](tools/test_os64get_host.sh),
+  [`tools/test_http_host.sh`](tools/test_http_host.sh) and
+  [`tools/test_fetch_host.sh`](tools/test_fetch_host.sh): the installer,
+  HTTP-parser and fetch-driver regression suites.
