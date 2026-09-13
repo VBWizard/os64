@@ -371,8 +371,22 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length);
 // task teardown). The slave frees itself when the master is closed AND the
 // seats are empty AND no operation is inside it from either side (holds)
 // — whichever of the three happens last does the burial.
-void tty_pty_ref(tty_t *t);          // no-op unless t->is_pty
+// tty_pty_ref takes the seat BY POINTER against the registry, under its
+// lock, and answers false for a slave that is no longer listed: the parent
+// whose terminal a child inherits can be torn down by a sibling thread
+// while the spawn is in flight, and its slave buried. A VT is always true.
+bool tty_pty_ref(tty_t *t);          // no-op (true) unless t is a pty
 void tty_pty_unref(tty_t *t);        // no-op unless t->is_pty
+
+// A task's terminal of record, HELD: the VT fleet needs no hold, a pty
+// slave gets the seat hold (pty_seat_hold below) — or NULL when the slave is
+// already buried, which a caller reads as "the line is dead". Every reader
+// of a task's terminal that is not already holding it goes through this
+// pair, because a task's own seat stops protecting the slave the moment a
+// sibling thread's teardown drops it (handle.c § The pin, met on the
+// terminal). Release with task_tty_release; both are no-ops for a VT.
+tty_t *task_tty_hold(struct task *t);
+void task_tty_release(tty_t *tty);
 void pty_master_close(tty_t *slave); // the handle-table close hook
 // The pin's hold on a master (handle.c § The pin): the slave stays unburied
 // and its stream keeps its read end while a master-side operation is inside

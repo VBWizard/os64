@@ -1353,7 +1353,7 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 			// focused. This is the seam the handle contract promised — the
 			// program still just writes handle 1 and never asks what's
 			// behind it; the routing grew, the contract didn't move.
-			tty_t *tty = task_tty(task);
+			tty_t *tty = task_tty_hold(task);
 			// A STREAM pty's output is its pipe, and a seated task's write
 			// must BLOCK when it fills (backpressure — a remote terminal
 			// reading slowly is the reader being slow, never a reason to
@@ -1363,30 +1363,26 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 			// remote terminal hung up: the bytes are absorbed and the task
 			// proceeds toward the SIGHUP it also received, exactly as a
 			// write to an orphaned GRID slave is benign.
-			// A pty slave is HELD across the write (tty.h pty_seat_hold),
-			// for the reason console_read gives: the seat keeps it alive
-			// only until this task's own teardown, and a sibling parked in
-			// a full ring can outlive that. A slave already buried is a
-			// terminal that hung up: the bytes are absorbed, as they would
-			// be a moment later. VT-or-slave is decided by pointer range
-			// BEFORE any field is read (tty_is_vt — a buried slave must not
-			// be dereferenced to learn what it was, Codex #101 rd6), and
-			// the mode only after the hold. The STREAM pipe gets a writer's
-			// reference too — an in-flight write IS a writer (pipe.h), so
-			// the master's EOF waits for it, and the pty's own hold on the
-			// pipe is what makes the reference safe to take whatever the
-			// ends have done.
-			bool held = !tty_is_vt(tty);
-			if (held && !pty_seat_hold(tty))
+			// The terminal is HELD across the write (tty.h task_tty_hold),
+			// for the reason console_read gives: a pty slave's seat keeps
+			// it alive only until this task's own teardown, and a sibling
+			// parked in a full ring can outlive that. A slave already
+			// buried (NULL) is a terminal that hung up: the bytes are
+			// absorbed, as they would be a moment later. The mode is read
+			// only after the hold (Codex #101 rd6). The STREAM pipe gets a
+			// writer's reference too — an in-flight write IS a writer
+			// (pipe.h), so the master's EOF waits for it, and the pty's own
+			// hold on the pipe is what makes the reference safe to take
+			// whatever the ends have done.
+			if (tty == NULL)
 				return length;
-			bool stream_pty = held && tty->pty_mode == PTY_MODE_STREAM;
+			bool stream_pty = tty->is_pty && tty->pty_mode == PTY_MODE_STREAM;
 			if (stream_pty)
 				pipe_ref_write_end(tty->stream);
 			uint64_t r = syscall_write_console(tty, stream_pty, user_buffer, length, die);
 			if (stream_pty)
 				pipe_close_write_end(tty->stream);
-			if (held)
-				pty_seat_unhold(tty);
+			task_tty_release(tty);
 			return r;
 		}
 
@@ -3891,11 +3887,18 @@ static void spawn_do_create(void *arg)
 	// only at its submission below.
 	if (p->ttySlave == NULL && !child->backgroundJob && p->parent != NULL)
 	{
-		tty_t *console = task_tty(p->parent);
-		uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
-		if (p->parent->controllingShell || console->fgTask == p->parent)
-			console->fgTask = child;
-		spinlock_release_irqrestore(&console->fg_lock, fgFlags);
+		// Held (tty.h task_tty_hold): the parent's slave can be buried by a
+		// sibling's teardown under this spawn; a buried terminal has no
+		// foreground to hand over.
+		tty_t *console = task_tty_hold(p->parent);
+		if (console != NULL)
+		{
+			uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+			if (p->parent->controllingShell || console->fgTask == p->parent)
+				console->fgTask = child;
+			spinlock_release_irqrestore(&console->fg_lock, fgFlags);
+			task_tty_release(console);
+		}
 	}
 
 	// Seat on a pty slave (PTY.md), BEFORE submission like everything else
@@ -4907,8 +4910,8 @@ static uint64_t syscall_tty_handle(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (h < 0)
 		return SYSCALL_RESULT_INVALID;   // table full — the only failure there is
 
-	printd(DEBUG_SYSCALL, "tty_handle: task %s got handle %d on tty %u\n",
-	       task->exename, h, task_tty(task) ? task_tty(task)->index + 1 : 1);
+	printd(DEBUG_SYSCALL, "tty_handle: task %s got handle %d on its terminal\n",
+	       task->exename, h);   // not named: naming a pty means holding it (tty.h)
 	return (uint64_t)h;
 }
 

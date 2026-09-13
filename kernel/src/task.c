@@ -1635,16 +1635,24 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// under the terminal's foreground lock (tty.h): a sibling thread's
 	// spawn publishes its child under the same lock, so the finish's "not
 	// a live child" and "then store" cannot be split by a publication.
-	tty_t *console = task_tty(parent);
-	uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
-	bool movesConsole = parent->controllingShell || console->fgTask == parent ||
-	                    task_is_live_child(parent, (task_t *)console->fgTask);
-	if (movesConsole && targetPid != 0) {
-		task_t *fg = task_find_live_child(parent, targetPid);
-		if (fg != NULL)
-			console->fgTask = fg;
+	//
+	// The terminal is HELD for the whole wait (tty.h task_tty_hold), park
+	// included: the finish hands the console back through this pointer,
+	// and a sibling thread's teardown can bury a pty slave while we sleep.
+	// A terminal already gone (NULL) moves nothing, at entry or at finish.
+	tty_t *console = task_tty_hold(parent);
+	bool movesConsole = false;
+	if (console != NULL) {
+		uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+		movesConsole = parent->controllingShell || console->fgTask == parent ||
+		               task_is_live_child(parent, (task_t *)console->fgTask);
+		if (movesConsole && targetPid != 0) {
+			task_t *fg = task_find_live_child(parent, targetPid);
+			if (fg != NULL)
+				console->fgTask = fg;
+		}
+		spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 	}
-	spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 
 	while (1==1)
 	{
@@ -1660,8 +1668,10 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// must keep Ctrl+C aimed at the job. Handing the console back here
 		// would aim the next Ctrl+C at the shell, the one party that did
 		// not ask for it. The other returns below are the wait FINISHING.
-		if (signal_park_must_end(get_core_local_storage()->currentThread))
+		if (signal_park_must_end(get_core_local_storage()->currentThread)) {
+			task_tty_release(console);
 			return TASK_WAIT_INTERRUPTED;
+		}
 
 		// Check FIRST: an already-dead matching child returns immediately, no
 		// sleep (the "don't wait if the child already ended" rule).
@@ -1702,11 +1712,12 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			// older wait's restore. Under the foreground lock, so that
 			// check and this store are one transition against that spawn.
 			if (movesConsole) {
-				fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+				uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
 				if (!task_is_live_child(parent, (task_t *)console->fgTask))
 					console->fgTask = parent;
 				spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 			}
+			task_tty_release(console);
 			return endedPid;
 		}
 
@@ -1716,11 +1727,12 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			// Take the console back — same rule and same lock as the
 			// collected-corpse return above.
 			if (movesConsole) {
-				fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+				uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
 				if (!task_is_live_child(parent, (task_t *)console->fgTask))
 					console->fgTask = parent;
 				spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 			}
+			task_tty_release(console);
 			return 0;
 		}
 
@@ -2625,7 +2637,12 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
        // A pty terminal is COUNTED (PTY.md's seats): inheritance takes one,
        // teardown returns it, and the slave is buried only when the master
        // is closed AND the last seat empties. No-op for the kTTY[] fleet.
-       tty_pty_ref((tty_t *)newTask->tty);
+       // The seat is taken by pointer against the registry (tty.h): the
+       // parent's slave can be buried by a sibling's teardown while this
+       // spawn is in flight, and a child of a dead line gets the system
+       // console rather than a pointer to freed memory.
+       if (!tty_pty_ref((tty_t *)newTask->tty))
+           newTask->tty = NULL;
        //Initialize the current working directory to parentTask's cwd
        newTask->cwd=(char*)kmalloc(PAGE_SIZE);
        if (parentTaskPtr!=NULL && parentTaskPtr->cwd)

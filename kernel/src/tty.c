@@ -1335,12 +1335,39 @@ static void pty_maybe_bury(tty_t *t)
 	}
 }
 
-void tty_pty_ref(tty_t *t)
+bool tty_pty_ref(tty_t *t)
 {
-	if (t == NULL || !t->is_pty)
-		return;
-	__sync_fetch_and_add(&t->seats, 1);
-	t->everSeated = true;   // arms HUNGUP: emptied is hung up, young is not
+	if (t == NULL || tty_is_vt(t))
+		return true;
+	// By pointer against the registry (tty.h): the seat is taken under the
+	// lock burial unlinks under, so a slave found here is alive and stays
+	// so — and a slave not found is buried, and no seat can be taken on it.
+	bool found = false;
+	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
+	for (tty_t *p = kPtyList; p != NULL; p = p->next_pty)
+		if (p == t)
+		{
+			__sync_fetch_and_add(&t->seats, 1);
+			t->everSeated = true;   // arms HUNGUP: emptied is hung up, young is not
+			found = true;
+			break;
+		}
+	spinlock_release_irqrestore(&kPtyListLock, flags);
+	return found;
+}
+
+tty_t *task_tty_hold(struct task *t)
+{
+	tty_t *tty = task_tty(t);
+	if (tty_is_vt(tty))
+		return tty;
+	return pty_seat_hold(tty) ? tty : NULL;
+}
+
+void task_tty_release(tty_t *tty)
+{
+	if (tty != NULL && !tty_is_vt(tty))
+		pty_seat_unhold(tty);
 }
 
 void tty_pty_unref(tty_t *t)

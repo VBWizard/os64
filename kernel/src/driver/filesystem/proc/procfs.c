@@ -465,12 +465,25 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	// A pty says so by name — "pty0", 0-based, its own namespace (PTY.md):
 	// there is no Alt+F key to agree with, and the master's holder knows
 	// its ptys by creation order.
-	if (task_tty(task)->is_pty)
-		synth_text_addf(t, "tty\tpty%u\n", task_tty(task)->index);
+	// HELD (tty.h task_tty_hold): this task is somebody else's — a session
+	// child that has exited, say — and its pty may be buried already while
+	// its pointer still says where it was. A buried terminal reports as
+	// gone rather than being read.
+	tty_t *tty = task_tty_hold(task);
+	if (tty == NULL)
+	{
+		synth_text_addf(t, "tty\tgone\n");
+		synth_text_addf(t, "foreground\tno\n");
+	}
 	else
-		synth_text_addf(t, "tty\t%u\n", task_tty(task)->index + 1);
-	synth_text_addf(t, "foreground\t%s\n",
-	           (task_tty(task)->fgTask == task) ? "yes" : "no");
+	{
+		if (tty->is_pty)
+			synth_text_addf(t, "tty\tpty%u\n", tty->index);
+		else
+			synth_text_addf(t, "tty\t%u\n", tty->index + 1);
+		synth_text_addf(t, "foreground\t%s\n", (tty->fgTask == task) ? "yes" : "no");
+		task_tty_release(tty);
+	}
 	synth_text_addf(t, "shell\t%s\n", task->controllingShell ? "yes" : "no");
 	synth_text_addf(t, "threads\t%u\n", proc_task_thread_count(task));
 	synth_text_addf(t, "heap\t%p-%p\n", (void *)task->heapStart, (void *)task->heapEnd);
@@ -540,7 +553,15 @@ static void proc_gen_cwd(synth_text_t *t, task_t *task)
 // per open: the day GUI terminal windows resize, this file is already right.
 static void proc_gen_tty(synth_text_t *t, task_t *task)
 {
-	tty_t *tty = task_tty(task);
+	// HELD (tty.h task_tty_hold): the task whose file this is may be one
+	// whose pty a sibling's teardown has buried; a buried terminal has no
+	// geometry to report and the file says so in one line.
+	tty_t *tty = task_tty_hold(task);
+	if (tty == NULL)
+	{
+		synth_text_addf(t, "tty\tgone\n");
+		return;
+	}
 
 	// The geometry is ONE fact read under the grid lock, because tty_resize_grid
 	// stores rows and cols as two words under that same lock: a handler that
@@ -580,6 +601,7 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 	bool raw = fg != NULL && fg->wantsRaw;
 	synth_text_addf(t, "mode\t%s\n", raw ? "raw" : "cooked");
 	synth_text_addf(t, "raw_task\t%lu\n", raw ? fg->taskID : 0);
+	task_tty_release(tty);
 }
 
 // A write to /proc/self/tty is a COMMAND, the ctl file's rule: the first
@@ -595,7 +617,13 @@ static int proc_tty_command(task_t *task, const char *word, size_t consumed)
 		raw = false;
 	else
 		return -1;
-	if (tty_set_raw(task_tty(task), task, raw) != 0)
+	// Held (tty.h task_tty_hold): a buried terminal takes no mode.
+	tty_t *tty = task_tty_hold(task);
+	if (tty == NULL)
+		return -1;
+	int rc = tty_set_raw(tty, task, raw);
+	task_tty_release(tty);
+	if (rc != 0)
 		return -1;
 	printd(DEBUG_SYSCALL, "proc: tty '%s' by task %lu (%s)\n", word, task->taskID, task->exename);
 	return (int)consumed;

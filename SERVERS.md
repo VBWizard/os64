@@ -136,9 +136,12 @@ was built flavor-independent; the flavor is one branch at one choke point.
 - **`pty_snapshot` on a STREAM pty is refused**, the mirror of `read()` on
   a GRID one: a grid nobody fed is not a screen. `pty_resize` works on
   both (SIGWINCH is about geometry, not rendering).
-- **The master's `read_for` patience stays refused** — pipes carry no
-  deadline and a lie with a delay is the thing the tripwire doctrine
-  forbids. telnetd needs none: it runs one thread per direction.
+- **The master's read takes a `read_for` patience** — `pipe_read` carries a
+  deadline, and a STREAM master is on read's honor roll beside the net
+  handles and the console. telnetd's outbound thread reads the master with a
+  short one so a reply the inbound thread queued reaches the wire while husk
+  is idle. A plain pipe handle's read still refuses a patience: no consumer
+  has asked, and a patience accepted and not kept is a lie with a delay.
 
 **A handle a thread is inside is PINNED** (handle.c § The pin — Codex #101
 rd4, and the reason this section exists). telnetd is the first program in
@@ -281,6 +284,6 @@ Still owed:
 ## Booked (DEBTS.md rows follow the code)
 
 UDP announce; announce on one address of several; SYN cookies; loopback
-(and with it an in-OS listener fixture); a deadline on pipe reads (and so
-on a STREAM master's read); `/sys` rows for ptys; the STREAM slave's
-kernel-text drop counter surfacing somewhere readable.
+(and with it an in-OS listener fixture); a deadline on plain pipe-handle
+reads (the STREAM master's has one); `/sys` rows for ptys; the STREAM
+slave's kernel-text drop counter surfacing somewhere readable.

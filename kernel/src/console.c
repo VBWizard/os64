@@ -47,11 +47,20 @@ extern volatile uint64_t kTicksSinceStart;
 bool console_unread(char c)
 {
 	core_local_storage_t *cls = get_core_local_storage();
-	tty_t *tty = task_tty(cls ? cls->task : NULL);
-	if (tty->pushbackCount >= CONSOLE_PUSHBACK_MAX)
+	// Held like every touch of a task's terminal (tty.h task_tty_hold): a
+	// pty slave already buried by a sibling's teardown has no slot to push
+	// into, and the byte is refused the way a full slot is.
+	tty_t *tty = task_tty_hold(cls ? cls->task : NULL);
+	if (tty == NULL)
 		return false;
-	tty->pushback[tty->pushbackCount++] = c;
-	return true;
+	bool ok = false;
+	if (tty->pushbackCount < CONSOLE_PUSHBACK_MAX)
+	{
+		tty->pushback[tty->pushbackCount++] = c;
+		ok = true;
+	}
+	task_tty_release(tty);
+	return ok;
 }
 
 // How long the reader sleeps before waking to re-check, as a BACKSTOP only.
@@ -155,25 +164,19 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		return 0;
 
 	core_local_storage_t *cls = get_core_local_storage();
-	// The terminal this reader answers to. NULL-safe all the way down —
-	// early-boot probes and kernel threads read the system console, VT1.
-	tty_t *tty = task_tty(cls->task);
-
-	// A pty slave is HELD across the read (tty.h pty_seat_hold). The task's
-	// seat keeps the slave alive only until the task's own teardown drops
-	// it, and a sibling thread parked here can outlive that by a scheduler
-	// pass — the shape handle.c § The pin closes for handles, met here on
-	// the terminal instead. A slave already buried is a line that is dead,
-	// and an empty read on a dead line has always been EOF. VT-or-slave is
-	// decided by pointer range (tty_is_vt), because a slave that is already
-	// buried must not be READ to find out what it is — the hold comes
-	// first, and every field after it (Codex #101 rd6).
-	bool held = !tty_is_vt(tty);
-	if (held && !pty_seat_hold(tty))
+	// The terminal this reader answers to, HELD across the read (tty.h
+	// task_tty_hold). NULL-safe all the way down — early-boot probes and
+	// kernel threads read the system console, VT1, which needs no hold. A
+	// pty slave's seat keeps it alive only until the task's own teardown
+	// drops that seat, and a sibling thread parked here can outlive that by
+	// a scheduler pass — the shape handle.c § The pin closes for handles,
+	// met here on the terminal instead. A slave already buried is a line
+	// that is dead, and an empty read on a dead line has always been EOF.
+	tty_t *tty = task_tty_hold(cls->task);
+	if (tty == NULL)
 		return 0;
 	long r = console_read_held(tty, buf, len, deadline);
-	if (held)
-		pty_seat_unhold(tty);
+	task_tty_release(tty);
 	return r;
 }
 
