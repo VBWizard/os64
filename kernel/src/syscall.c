@@ -3974,6 +3974,21 @@ static void spawn_do_create(void *arg)
 	}
 
 	scheduler_submit_new_task(child);
+
+	// THE HANGUP A CHILD SEATED LATE WOULD HAVE MISSED. The caller's pin
+	// keeps a SET_TTY slave's memory through the load, not its line: a
+	// sibling closing the master meanwhile has already marked it closed,
+	// closed the stream's ends and swept SIGHUP over the seats that existed
+	// THEN — and that sweep walks kTaskList, which this child joined only at
+	// the submission above. So the master's state is read here, after the
+	// child is where a sweep can find it: a close that landed before this
+	// line missed the child and we hang it up ourselves; one that lands
+	// after finds it on the list like any seat. A child hung up twice dies
+	// once. It dies as its siblings did instead of reading EOF from a line
+	// nobody holds and wondering why (Codex #101 rd9).
+	if (p->ttySlave != NULL && p->ttySlave->masterClosed)
+		task_signal_and_nudge(child, SIGHUP);
+
 	p->result = (long)child->taskID;
 }
 

@@ -56,6 +56,11 @@ typedef struct icmp_conn
 	// still reach that reader, and delivery skips a closed conn.
 	volatile uint32_t holders;
 	volatile bool closed;
+	// Writers between "not closed" and the request leaving (the udp_conn.h
+	// rule): the close waits this out, so no request can be sent after the
+	// conversation is hung up — a request whose reply delivery would
+	// discard. Under `lock`, like `closed`.
+	uint32_t sending;
 
 	uint64_t requests_sent, replies_delivered;
 	uint64_t dropped_full;   // replies arriving faster than they're read
