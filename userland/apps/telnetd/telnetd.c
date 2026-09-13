@@ -262,21 +262,30 @@ static int run_listener(int argc, char **argv)
 	char *const session_argv[] = { "/bin/telnetd", "-session", 0 };
 	for (;;)
 	{
-		// Reap finished sessions before blocking again — reporting a
-		// finished child and collecting it are the same act, so nothing
-		// accumulates and no sweeper is needed (os64_reap never blocks).
+		// Reap every finished session, then accept with a PATIENCE so this
+		// runs again on its own. os64 has no SIGCHLD to interrupt a blocking
+		// accept when a session exits, and a plain blocking accept would
+		// leave a departed session a zombie until the NEXT connection woke
+		// the loop — which, if nobody connects again, is forever (a bug
+		// Chris caught by exiting one telnet session and finding its corpse
+		// still listed). A 2-second accept means the reap runs at least that
+		// often even while idle, so a session is collected within a couple
+		// of seconds of its exit. os64_reap never blocks; the wait lives in
+		// the accept.
 		while (os64_reap(0) > 0)
 			;
 
 		os64_netconn_t peer;
-		int64_t r = os64_accept((int32_t)listener, &peer);
+		int64_t r = os64_read_for((int32_t)listener, &peer, sizeof(peer), 2000);
+		if (r == OS64_ERR_TIMEOUT || r == OS64_INTERRUPTED)
+			continue;   // idle tick, or a signal — loop back to the reap and re-accept
 		if (r < 0)
 		{
-			if (r == OS64_INTERRUPTED)
-				continue;   // a signal ended the wait; ask again
 			os64_printf("telnetd: accept failed (%ld) — stopping\n", (long)r);
 			break;
 		}
+		if (r != (int64_t)sizeof(peer))
+			continue;   // a refusal short of the whole struct — never half a peer
 
 		// The child's stdin AND stdout are the connection; the kernel takes
 		// a reference for each slot, so the FIN waits for the child's own
