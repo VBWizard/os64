@@ -582,7 +582,8 @@ static int run_listener(int argc, char **argv)
 
 		// The backlog bounds connections awaiting accept, not seated shells.
 		// This listener's children are session processes; count until reaped
-		// so idle peers cannot keep spawning tasks and their TCP/PTY storage.
+		// to bound session processes and PTYs. TCP separately caps passive
+		// ring storage through detached closes, which can outlive a child.
 		if (sessions == TELNETD_MAX_SESSIONS)
 		{
 			os64_close(peer.handle);

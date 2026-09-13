@@ -87,9 +87,23 @@ counted (`syns_dropped`), which is what every stack did before SYN cookies
 and what a LAN-facing listener needs. SYN cookies are booked, not built:
 the threat model is a home network.
 
+**Passive ring storage** has a separate machine-wide limit of
+`TCP_PASSIVE_BUFFER_LIMIT` = 32 connections: 64 MiB for their 1 MiB receive
+and send rings, plus connection metadata. Half-open, queued, accepted and
+detached closing connections share this limit across listeners. A full
+limit drops new SYNs before allocation; capacity returns when TCP frees
+the rings, including normal close, reset and detached timeout paths.
+Accept, child exit and listener replacement do not return this capacity.
+Outbound dials use their existing policy. There are no reserved slots per
+service: a saturated listener can temporarily prevent another listener
+from admitting peers.
+
 **`/sys/net/tcp`** grows a `# listeners` section — port, queued,
 half_open, accepted, dropped — and passive connections appear as ordinary
-rows (they are ordinary rows).
+rows (they are ordinary rows). `passive_buffered` and `passive_buffer_limit`
+show ring usage and its bound; `syns_dropped_storage` counts storage refusals
+separately from `syns_dropped_full` backlog refusals. Each listener's dropped
+count includes both reasons.
 
 ## 2. The stream pty — `PTY_MODE_STREAM`
 
@@ -179,8 +193,9 @@ take a writer's reference on it whatever the ends have done.
 
 `/bin/telnetd [port]` announces (23 by default) and loops on accept. At most
 16 session children run concurrently; excess accepted connections
-are closed. Reaping a child releases its slot, including while the listener
-is idle. For each admitted connection it spawns **`/bin/telnetd -session`**
+are closed. Reaping a child releases its process slot, including while the
+listener is idle; the TCP storage charge remains until its rings are freed.
+For each admitted connection it spawns **`/bin/telnetd -session`**
 with handles 0 and 1
 = the connection and 2 inherited, which is inetd's 1986 model and
 Bernstein's tcpserver's after it: the socket IS stdin and stdout, and the
@@ -269,6 +284,9 @@ Still owed:
 `tools/test_telnetd_limits.py` adds a bounded acceptance run for an idle
 guest: 16 live sessions, eight excess peers refused, reuse after a child is
 reaped, negotiated resize, a 5,001-frame resize burst, and EC/EL at husk.
+`tools/test_telnetd_storage.py` holds 31 closing connections after their
+session children exit, checks storage refusal with one observer connection,
+and verifies admission resumes after a peer completes its FIN exchange.
 
 **The pin, proven 2026-09-13** (the Codex #101 rd4 P1s — § 2 above):
 
@@ -338,6 +356,40 @@ Evidence is in `/tmp/pr101-rd11/`, with the strict build in
 `/tmp/pr101-rd11-build.log` and protocol before/after runs in
 `/tmp/pr101-telnet-before.log` and `/tmp/pr101-telnet-after.log`. These are
 private QEMU results; the fixes have not been deployed to the P5.
+
+## Round 12 validation — 2026-09-13
+
+At `7beacea`, the 48th review thread identified a gap in the process cap:
+reaping a Telnet child leaves TCP rings allocated while its detached close
+waits for the peer. The Telnet comment claiming the child count bounded TCP
+storage was wrong. The separate passive storage limit in section 1 follows
+the ring lifetime, including across listener replacement.
+
+- The new host regression failed against the previous TCP implementation:
+  a SYN allocated another pair of rings after 32 detached connections.
+  With the fix, the full TCP host suite passed under ASan/UBSan with leak
+  detection disabled for tracing. It covers withheld FIN ACKs, listener
+  replacement, shared half-open capacity across ports, normal FIN completion,
+  reset after stripping without double release, and timeout recovery.
+  The harness also gained the missing port-refusal ABI constant and a live
+  handle count for fixtures that exercise handle-aware writes.
+- Full strict `make -j8` and `git diff --check` passed.
+- Private q35 QEMU, 8 cores, 2 GiB: **30 pre-boot + 31 post-boot + 3 late
+  kernel tests passed**, and `/tests/testrun` reported **46 passed, 0 failed,
+  2 skipped**. No kernel panic occurred.
+- `tools/test_telnetd_storage.py` ended 31 sessions in 8.8 seconds while
+  withholding the clients' FINs. Together with the observer, their rings
+  filled the 32-connection limit; an excess SYN was counted and received no
+  Telnet session. Completing one peer's FIN exchange freed capacity and a
+  replacement shell ran a command. These real guest connections reached
+  FIN_WAIT_2; the host regression separately withholds the server-FIN ACK.
+- `tools/test_telnetd_limits.py` passed its existing session-cap, resize,
+  erase and reuse checks. The final TCP snapshot contained one observer,
+  `passive_buffered: 1`, and no leftover test connections.
+
+Evidence is in `/tmp/pr101-rd12/`, `/tmp/pr101-rd12-before.log`,
+`/tmp/pr101-rd12-after.log` and `/tmp/pr101-rd12-build.log`. These fixes
+have been validated in private QEMU, not deployed to the P5.
 
 ## Booked (DEBTS.md rows follow the code)
 

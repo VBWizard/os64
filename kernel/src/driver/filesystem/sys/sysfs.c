@@ -1293,6 +1293,9 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "resets_received: %lu\n", kTcpStats.resets_received);
 	synth_text_addf(t, "connections_accepted: %lu\n", kTcpStats.connections_accepted);
 	synth_text_addf(t, "syns_dropped_full: %lu\n", kTcpStats.syns_dropped_full);
+	synth_text_addf(t, "passive_buffered: %lu\n", kTcpStats.passive_buffered);
+	synth_text_addf(t, "passive_buffer_limit: %u\n", TCP_PASSIVE_BUFFER_LIMIT);
+	synth_text_addf(t, "syns_dropped_storage: %lu\n", kTcpStats.syns_dropped_storage);
 	synth_text_addf(t, "segments_in: %lu\n", kTcpStats.segments_in);
 	synth_text_addf(t, "segments_out: %lu\n", kTcpStats.segments_out);
 	synth_text_addf(t, "retransmits: %lu\n", kTcpStats.retransmits);
