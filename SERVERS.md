@@ -159,7 +159,11 @@ reader and frees it on the way out, a pty stays unburied while an operation
 is inside it from either side (`holds` — the pin's `pty_master_hold`, and
 `pty_seat_hold` for a seated task's own console read or write, whose seat
 would otherwise stop protecting it the moment a sibling's teardown dropped
-it), a spawn's four handles stay pinned across the whole ELF load. Every
+it), a spawn's SET_TTY master stays pinned across the whole ELF load while
+its three redirections are SHARED — the child's own reference on each,
+taken in the same critical section that finds the parent's slot live
+(`handle_share`), because a pin keeps a net conn's row but not its line
+and the child needs the line. Every
 handle type has its currency — pipe ends, file and directory
 `handleRefCount`, a listener's `busy`, a join object's `refcount`, a TCP
 conn's `pins` and a UDP or ICMP conn's `holders` — and the console tags

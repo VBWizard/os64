@@ -107,6 +107,20 @@ bool handle_install(struct task *t, int slot, handle_type_t type, void *object);
 bool handle_pin(struct task *t, int h, handle_t *out);
 void handle_unpin(const handle_t *pinned);
 
+// SHARE a handle with a child being born — spawn's redirections. Under the
+// same lock and liveness check as a pin, but the reference taken is in the
+// handle's OWN currency, the child's: from this instant the object has one
+// more table holder, exactly as if the child's slot already existed, so
+// nothing a sibling closes between the resolve and the child's first
+// instruction can hang the object up or free it (a pin only keeps a net
+// conn's row, never its line — tcp.h pins). Only what a child's 0/1/2 can
+// be is shareable: the console tags (nothing to take), pipe ends, open
+// files, TCP conns; anything else answers false and touches nothing.
+// handle_unshare gives the reference back when no child comes to own it —
+// the same release handle_close would run.
+bool handle_share(struct task *t, int h, handle_t *out);
+void handle_unshare(const handle_t *shared);
+
 // Close one handle: drops the task's reference on the underlying object (for a
 // pipe, that is the refcount that decides EOF/EPIPE) and frees the slot.
 bool handle_close(struct task *t, int h);

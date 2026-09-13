@@ -4,6 +4,7 @@ verification did (handle.c § The pin; SERVERS.md § Verification).
 
     python3 tools/telnetd_probe.py <port> session <n>
     python3 tools/telnetd_probe.py <port> dontecho
+    python3 tools/telnetd_probe.py <port> flood
 
 `session n` runs n logins in a row: connect, negotiate, type `ls /`, read the
 answer, then DROP the socket with husk still seated. That is the teardown
@@ -16,6 +17,11 @@ leftover sessions) and `cat /sys/net/tcp` (accepted == reaped).
 client does, and prints what comes back: the server's one-line explanation
 and then EOF (Codex #101 rd5 — a session that cannot honour the refusal ends
 instead of showing every keystroke twice).
+
+`flood` types 4000 bytes into a `sleep` that reads nothing and hangs up:
+the session must end when the client does (rd10) — check `ps` in the guest
+a few seconds later for a lingering husk or sleep, and the listener's
+console for the one-line typeahead report.
 
 Port 2323 is the usual QEMU forward (`hostfwd=tcp::2323-:23`); on the P5 it
 is 23 on its own address.
@@ -134,6 +140,19 @@ def main():
         s = fresh_connection(port)
         show("dontecho", read_for(s, 4.0, refuse_echo=True))
         s.close()
+    elif mode == "flood":
+        # A program that does not read its input, and a client that types
+        # into it anyway and hangs up: the session must end when the client
+        # does, not when the program does (Codex #101 rd10). Check `ps` in
+        # the guest a few seconds later — no husk, no sleep, no session.
+        s = fresh_connection(port)
+        read_for(s, 2.5)
+        s.sendall(b"sleep 30\r\n")
+        read_for(s, 1.0)
+        s.sendall(b"x" * 4000)
+        time.sleep(1.0)
+        s.close()
+        print("flood: sent 4000 bytes into a sleeping shell and hung up")
     else:
         print(__doc__)
         sys.exit(2)

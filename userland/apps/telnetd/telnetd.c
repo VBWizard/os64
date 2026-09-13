@@ -306,13 +306,39 @@ static void queue_word(const char *word, size_t len, int ends)
 	g_word_ends = ends;
 }
 
-// Push keystrokes into the pty master, ALL of them — a full input ring
-// returns a short count and then 0, and dropping the tail there loses part of
-// an ordinary large paste (Codex #101 P2). On 0, nap and retry until husk
-// drains room or the master actually fails.
+// Push keystrokes into the pty master — a full input ring returns a short
+// count and then 0, and dropping the tail at the first 0 lost part of an
+// ordinary large paste (Codex #101 P2), so on 0 the push naps and retries
+// while husk drains room. BUT ONLY FOR SO LONG. A ring that stays full for
+// half a second is a program that is not reading its input, and the loop
+// that waits on it is the only reader of the socket: it would never see
+// the client hang up, and a client that typed into a `sleep` and left
+// would hold the session, the shell, the command and the connection until
+// the command ended — repeatable until the kernel ran out of memory (Codex
+// #101 rd10). A terminal drops typeahead when its buffer is full, and so
+// does this one: what could not be delivered by the deadline is counted in
+// g_keys_dropped and let go, and the loop returns to the socket. The
+// patience is real time off the monotonic clock — a nap of 2 ms is a whole
+// tick, so counting naps would wait five times longer than it says — and it
+// is charged ONCE PER STALL: after a ring has stayed full for the whole
+// patience, every further push drops at once until a write lands again, so
+// a 4 KB flood costs one patience, not one per 512-byte read.
+static uint64_t g_keys_dropped = 0;
+static int g_keys_stalled = 0;
+#define KEYS_PATIENCE_MS 500
+
+static uint64_t now_ms(void)
+{
+	os64_ticks_t t;
+	if (os64_ticks(&t) < 0 || t.per_second == 0)
+		return 1;   // no clock: never 0, which the caller reads as "not started"
+	return 1 + t.ticks * 1000 / t.per_second;
+}
+
 static void keys_to_master(const uint8_t *buf, size_t len)
 {
 	size_t off = 0;
+	uint64_t started = 0;
 	while (off < len)
 	{
 		int64_t n = os64_write((int32_t)g_master, buf + off, len - off);
@@ -324,12 +350,23 @@ static void keys_to_master(const uint8_t *buf, size_t len)
 			// slave still accepts writes and never fails just because its
 			// seats emptied, so with nobody draining the ring the retry
 			// would spin forever and never reach the session-over check
-			// (Codex #101 rd2, a hole in round 1's retry fix).
-			if (g_session_over)
+			// (Codex #101 rd2, a hole in round 1's retry fix). And unless
+			// the ring is already known stuck, or the patience is spent:
+			// then the rest is typeahead a program did not want, dropped
+			// the way a terminal drops it.
+			uint64_t now = now_ms();
+			if (started == 0)
+				started = now;
+			if (g_session_over || g_keys_stalled || now - started >= KEYS_PATIENCE_MS)
+			{
+				g_keys_stalled = 1;
+				g_keys_dropped += len - off;
 				break;
+			}
 			os64_sleep(2);         // let husk read, then retry
 			continue;
 		}
+		g_keys_stalled = 0;        // it read: the ring moves again
 		off += (size_t)n;
 	}
 }
@@ -465,6 +502,19 @@ static int run_session(void)
 		// (Codex #101 P2), leaving a dead shell unreaped and the session held.
 		if (g_session_over)
 			break;
+	}
+
+	// Typeahead the session had to drop (keys_to_master) is said once, on
+	// the LISTENER's console — handle 2 stays the listener's — never down
+	// the wire, which the client may already have hung up.
+	if (g_keys_dropped)
+	{
+		char line[96];
+		int32_t n = os64_snprintf(line, sizeof(line),
+		                          "telnetd: session dropped %lu bytes of typeahead a program did not read\n",
+		                          (unsigned long)g_keys_dropped);
+		if (n > 0)
+			os64_write(2, line, (size_t)n);
 	}
 
 	// Returning ends the task: the master closes (husk hears SIGHUP and
