@@ -25,15 +25,15 @@
 //              program in the window), never at the master's holder
 //   screen   — SYSCALL_PTY_SNAPSHOT, GRID only: header + interpreted cells,
 //              gated by a generation counter so a frame-cadence poll is
-//              near-free. A STREAM pty refuses it (a grid nobody fed is not
-//              a screen)
+//              near-free. A STREAM pty refuses it (a byte stream has no
+//              screen)
 //   read()   — STREAM only: the child's output, bytes, blocking like a pipe
 //              read; 0 once the slave's seats have emptied — THE SESSION
 //              ENDED, the stream spelling of OS64_PTY_HUNGUP. A GRID pty
 //              refuses it (a grid is not a stream, and pretending would
 //              teach the wrong lesson)
 //   resize   — SYSCALL_PTY_RESIZE(master, cols, rows), BOTH modes: the
-//              geometry follows the window, and every task seated on the
+//              geometry follows the window. When it changes, each task on the
 //              slave that installed a SIGWINCH handler gets the signal (the
 //              rest are not disturbed). The program inside asks
 //              /proc/self/tty what the size is now

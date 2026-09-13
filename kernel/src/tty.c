@@ -15,7 +15,7 @@
                                // only answers "am I seated?")
 #include "kmalloc.h"
 #include "memset.h"
-#include "memcpy.h"            // tty_resize_grid carries rows into the new ring
+#include "memcpy.h"            // tty_resize carries rows into the new ring
 #include "strings/sprintf.h"
 #include "strings/strlen.h"
 #include "task.h"
@@ -1102,10 +1102,9 @@ bool tty_summon_sweep(void)
 // kTTY[] — the focus walker, the knock-summon sweep, and Alt+F's bounds
 // check stay blind to ptys by construction, and a pty can never become
 // kTTYFocused, which is what makes every repaint door irrelevant to it.
-// What a slave DOES share is everything that matters: the grid and the one
-// terminal interpreter (tty_write neither knows nor cares), the input ring
-// console_read drains, and the multiplied singletons — fgTask so Ctrl+C
-// aims correctly, EOF, the waiter, the seat.
+// Both modes share the input ring, geometry, foreground task, EOF, waiter
+// and seat. GRID uses the terminal interpreter; STREAM sends output bytes
+// through its pipe to the master.
 
 tty_t * volatile kPtyList = NULL;
 static spinlock_t kPtyListLock = 0;
@@ -1122,12 +1121,15 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 
 	// Zeroed at the allocator choke point, and never NULL: the allocator
 	// panics by name on exhaustion (allocator.c), so the fence above is this
-	// function's only refusal — same as tty_resize_grid.
+	// function's only refusal — same as tty_resize.
 	tty_t *t = kmalloc(sizeof(tty_t));
 	t->cols = cols;
 	t->rows = rows;
-	t->total_lines = rows * TTY_SCROLLBACK_SCREENS;
-	t->cells = kmalloc((size_t)t->total_lines * cols * sizeof(tty_cell_t));
+	if (mode == PTY_MODE_GRID)
+	{
+		t->total_lines = rows * TTY_SCROLLBACK_SCREENS;
+		t->cells = kmalloc((size_t)t->total_lines * cols * sizeof(tty_cell_t));
+	}
 	// kmalloc zeroes, which is already right for the attributes, the
 	// background and the escape reader. The two that are NOT zero say so:
 	// the pen's colour did not come from the palette, and the paper starts
@@ -1160,7 +1162,8 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 	return t;
 }
 
-// The grid follows the window (see tty.h for the policy this implements).
+// Geometry follows the window; STREAM has no cells to rebuild. A GRID
+// resize preserves text under the policy in tty.h.
 //
 // The ring is a LOGICAL LIST of lines — hist_lines of history, oldest first,
 // then the rows of the live screen — and the copy walks that list rather
@@ -1169,11 +1172,27 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 // contiguously in the fresh ring, and set screen_top to where the screen
 // landed. Cells are copied row by row, min(old cols, new cols) each, so
 // the left edge is what every line keeps.
-bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows)
+int tty_resize(tty_t *t, uint32_t cols, uint32_t rows)
 {
 	// Same fence as pty_create_slave: sanity, not policy.
 	if (t == NULL || cols < 2 || rows < 2 || cols > 512 || rows > 256)
-		return false;
+		return -1;
+
+	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+	if (t->cols == cols && t->rows == rows)
+	{
+		spinlock_release_irqrestore(&t->lock, flags);
+		return 0;
+	}
+	if (t->is_pty && t->pty_mode == PTY_MODE_STREAM)
+	{
+		t->cols = cols;
+		t->rows = rows;
+		t->generation++;
+		spinlock_release_irqrestore(&t->lock, flags);
+		return 1;
+	}
+	spinlock_release_irqrestore(&t->lock, flags);
 
 	uint32_t new_total = rows * TTY_SCROLLBACK_SCREENS;
 	// Allocate OUTSIDE the grid lock: kmalloc takes the allocator's own
@@ -1185,7 +1204,15 @@ bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows)
 	// above is this function's only refusal.
 	tty_cell_t *fresh = kmalloc((size_t)new_total * cols * sizeof(tty_cell_t));
 
-	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+	flags = spinlock_acquire_irqsave(&t->lock);
+	// A concurrent resize may have installed the requested geometry while
+	// this caller allocated. Leave its cells and generation intact.
+	if (t->cols == cols && t->rows == rows)
+	{
+		spinlock_release_irqrestore(&t->lock, flags);
+		kfree(fresh);
+		return 0;
+	}
 
 	// If the cursor would fall off the bottom of a shorter screen, the top
 	// `shift` rows of the old screen become history so the cursor's row is
@@ -1232,7 +1259,7 @@ bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows)
 
 	spinlock_release_irqrestore(&t->lock, flags);
 	kfree(old);
-	return true;
+	return 1;
 }
 
 int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
@@ -1467,10 +1494,9 @@ void pty_master_close(tty_t *slave)
 	tty_pty_unref(slave);
 }
 
-// The pin's hold (tty.h). Taken under the holder's handleLock while the
-// master handle is provably live, which is what makes the stream's read end
-// safe to reference here: pty_master_close — the only closer of that end —
-// runs after a claim this hold cannot straddle. Released in the reverse
+// The master's hold (tty.h). Taken before publishing a new master, or under
+// the holder's handleLock while its handle is live. In both cases the
+// stream's read end is still owned when we reference it. Released in reverse
 // order: the pipe end first (its last-out rule may destroy the pipe), then
 // the hold, whose zero is a burial condition like an emptied seat count.
 void pty_master_hold(tty_t *slave)

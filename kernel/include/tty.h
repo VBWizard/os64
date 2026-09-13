@@ -89,9 +89,9 @@ typedef struct tty
 	uint32_t index;                    // 0-based; humans say "tty1" = index 0
 
 	// ── The grid (guarded by `lock`) ────────────────────────────────────────
-	tty_cell_t *cells;                 // total_lines * cols, kmalloc'd at init
+	tty_cell_t *cells;                 // GRID cell ring; NULL for STREAM
 	uint32_t cols, rows;               // live-screen geometry (glass cells)
-	uint32_t total_lines;              // rows * TTY_SCROLLBACK_SCREENS (ring)
+	uint32_t total_lines;              // GRID ring height; zero for STREAM
 	uint32_t screen_top;               // ring index of live row 0
 	uint32_t hist_lines;               // valid history lines above screen_top
 	uint32_t view_offset;              // >0 = viewing history, this many lines up
@@ -164,7 +164,7 @@ typedef struct tty
 	volatile bool spawnRequested;      // set by a keystroke, served by kworker
 
 	// ── Change tracking (all ttys; PTY.md's snapshot poll reads it) ─────────
-	// Bumped on every grid mutation. A pty master's holder polls this at
+	// Bumped on grid mutations and geometry changes. A GRID master polls at
 	// frame cadence and copies cells only when it moved; VTs carry it too
 	// because the counter is free and a future dirty-aware consumer (the
 	// client-notification seam) will want it everywhere.
@@ -330,32 +330,18 @@ void tty_emergency_direct(void);
 extern volatile bool kTTYDirect;
 
 // ── The pty family (PTY.md; mechanism here, the syscall skin in syscall.c) ──
-// Create a slave in the given PTY_MODE_*: a live tty_t with its own grid +
-// scrollback ring (STREAM keeps the grid for its geometry and never feeds
-// it — it gets the pipe instead), registered on kPtyList (NEVER in kTTY[]
-// — the VT iterators stay blind to ptys by construction). Returns NULL on
-// a bad geometry or an unknown mode — the only refusals (the allocator
-// panics on exhaustion, never returns NULL).
+// Create a registered slave with input and geometry. GRID owns a cell ring;
+// STREAM owns an output pipe and has no cells. Returns NULL for an invalid
+// geometry or mode. The allocator panics on exhaustion.
 tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode);
 
-// Resize a grid IN PLACE (the SIGWINCH slice, PTY.md § Resize). The ring is
-// reallocated at the new geometry and the old text carried across, then the
-// generation bumps so a snapshot poller repaints. Policy, stated so nobody
-// files it as a bug: NO REFLOW. Rows keep their left edge (a narrower grid
-// clips each line's tail, a wider one blanks the new cells), the cursor is
-// clamped into the new bounds, and the view snaps back to the live screen.
-// ONE refinement over "preserve the origin": when fewer rows would leave
-// the cursor below the glass, the top rows roll into scrollback instead so
-// the line being typed stays visible — what xterm does, and the difference
-// between a shrink that keeps your prompt and one that eats it. Rewrapping
-// logical lines is a scrollback feature and waits for that row.
-//
-// Grid-only: it never touches the glass, so it is a PTY verb today (the
-// syscall gates on is_pty). A VT could use it the day the renderer's cell
-// geometry can change underneath one. Returns false on a bad geometry —
-// the only refusal there is (the allocator panics on exhaustion rather
-// than returning NULL) — and then the grid is untouched.
-bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows);
+// Resize geometry without touching the glass. STREAM updates dimensions;
+// GRID carries text without reflow, keeps each line's left edge, clamps the
+// cursor and returns to the live view. Shrinking below the cursor rolls the
+// top rows into history so the current line stays visible.
+// Returns 1 for a change (generation bumped), 0 for unchanged dimensions,
+// or -1 for invalid geometry (no mutation). Caller must keep t alive.
+int tty_resize(tty_t *t, uint32_t cols, uint32_t rows);
 
 // The master's write half: bytes become synthesized key events into the
 // slave's input ring — after 0x03 runs the per-tty interrupt intercept
@@ -392,7 +378,7 @@ void pty_master_close(tty_t *slave); // the handle-table close hook
 // and its stream keeps its read end while a master-side operation is inside
 // it. The stream's read end is held because the master's read IS a
 // pipe_read on it, and the master's close may close that end underneath.
-// Taken while the master handle is provably live, so the slave is too.
+// Taken before publishing a new master, or while its handle is locked live.
 void pty_master_hold(tty_t *slave);
 void pty_master_unhold(tty_t *slave);
 // The SEAT side's hold, for a seated task's console read or write on the

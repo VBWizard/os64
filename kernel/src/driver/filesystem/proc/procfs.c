@@ -563,7 +563,7 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 		return;
 	}
 
-	// The geometry is ONE fact read under the grid lock, because tty_resize_grid
+	// The geometry is ONE fact read under the grid lock, because tty_resize
 	// stores rows and cols as two words under that same lock: a handler that
 	// opens this file during back-to-back resizes must never see the old row
 	// count paired with the new column count — a shape no grid ever had, and

@@ -99,17 +99,16 @@ shell, and the rendering happens on the far end, so it wants the child's
 output *before* the terminal interpreter. Everything expensive about a pty
 was built flavor-independent; the flavor is one branch at one choke point.
 
-- **`pty_create(cols, rows, mode)`** — the syscall's third register, 0 =
-  GRID (what every existing caller passes), 1 = STREAM, anything else
-  refused. libos64: `os64_pty_create` stays GRID, `os64_pty_create_stream`
-  is the other door.
-- **A STREAM slave's output is a pipe wearing a tty's identity** — PTY.md's
-  own phrase, taken literally: the slave owns a `pipe_t`, and the master's
-  `read()` is a `pipe_read`. os64 already owns every rule the pipe has; the
-  pty borrows them rather than restating them. The grid stays allocated and
-  is never fed: it is what `/proc/self/tty` and `pty_resize` measure, and a
-  pty with no cells is the "not ready" glass path in `tty_write`, which must
-  never be where a stream lands.
+- **`pty_create(cols, rows)`** stays syscall 44 and creates GRID; syscall
+  56 creates STREAM with the same two arguments. Old binaries do not pass
+  a mode register. libos64 exposes `os64_pty_create` and
+  `os64_pty_create_stream`.
+- **A STREAM slave's output is a pipe wearing a tty's identity.** The slave
+  owns a `pipe_t`, and the master's `read()` is a `pipe_read`. Geometry lives
+  in the tty's dimensions; STREAM allocates no cell or scrollback ring.
+  `tty_write` selects the stream before the direct-to-glass fallback.
+  Resize updates dimensions without allocation, and unchanged dimensions
+  neither bump the generation nor send SIGWINCH in either mode.
 - **TWO WRITE PATHS INTO THAT PIPE, because one may block and the other may
   not.** A seated task writing its console handle reaches the console-out
   syscall, which for a STREAM slave calls `pipe_write` — it BLOCKS on a full
@@ -134,7 +133,7 @@ was built flavor-independent; the flavor is one branch at one choke point.
   that writes after the terminal left gets `PIPE_ERR_CLOSED` instead of
   parking forever on a ring nobody will drain.
 - **`pty_snapshot` on a STREAM pty is refused**, the mirror of `read()` on
-  a GRID one: a grid nobody fed is not a screen. `pty_resize` works on
+  a GRID one: a byte stream has no screen. `pty_resize` works on
   both (SIGWINCH is about geometry, not rendering).
 - **The master's read takes a `read_for` patience** — `pipe_read` carries a
   deadline, and a STREAM master is on read's honor roll beside the net
@@ -178,8 +177,11 @@ take a writer's reference on it whatever the ends have done.
 
 ## 3. telnetd — the 1969 protocol on the 2026 seams
 
-`/bin/telnetd [port]` announces (23 by default) and loops on accept. For
-each connection it spawns **`/bin/telnetd -session`** with handles 0 and 1
+`/bin/telnetd [port]` announces (23 by default) and loops on accept. At most
+16 session children run concurrently; excess accepted connections
+are closed. Reaping a child releases its slot, including while the listener
+is idle. For each admitted connection it spawns **`/bin/telnetd -session`**
+with handles 0 and 1
 = the connection and 2 inherited, which is inetd's 1986 model and
 Bernstein's tcpserver's after it: the socket IS stdin and stdout, and the
 session program never learns it is on a network. os64's rule that a child
@@ -209,8 +211,8 @@ here needs a select.
 |---|---|
 | CR LF and CR NUL become LF; a lone NUL is dropped (the engine already does this) | LF becomes CR LF |
 | IAC IP becomes 0x03 — the Ctrl+C intercept fires on the slave | 0xFF is doubled |
-| IAC AYT is answered; AO, EC, EL, BRK are consumed | |
-| SB NAWS becomes `os64_pty_resize` — SIGWINCH reaches the shell | |
+| IAC EC / EL become Backspace / Ctrl+U; AYT is answered; AO and BRK are consumed | |
+| Negotiated SB NAWS changes geometry; changed dimensions send SIGWINCH | |
 
 **Negotiation reuses the client's engine** (`apps/telnet/telnet_protocol.c`,
 host-tested at every chunk size) with a SERVER ROLE (`telnet_init_server`,
@@ -218,7 +220,8 @@ host-tested at every chunk size) with a SERVER ROLE (`telnet_init_server`,
 NAWS; `we_agree`/`he_may` become role-aware so it agrees to ECHO and SGA as
 ours and NAWS and SGA as his, and refuses the rest by name. The RFC 1143
 machinery is symmetric and stays one copy. What the role adds to the engine:
-an inbound NAWS subnegotiation is PARSED (cols, rows, IAC-doubled dimensions
+an inbound NAWS subnegotiation, while the peer's option is enabled, is
+PARSED (cols, rows, IAC-doubled dimensions
 and all) into `telnet_peer_size` and a `TELNET_NOTE_RESIZE` notice, where
 the client engine only ever skipped a subnegotiation to throw it away. ECHO
 is offered by the server because echo is the reader's job in os64 — husk
@@ -255,18 +258,17 @@ it to the P5's own limine.conf, or types `telnetd &` at a prompt.
 
 Still owed:
 
-- **The engine's host test** should gain the server role: WILL/DO/WONT/DONT
-  from a server's point of view and an inbound NAWS with a 255 in it, at
-  every chunk size the harness already runs. The client role's cases still
-  pass unchanged.
-- **A scripted acceptance test** (`tools/test_telnetd_host.py`) folding the
-  hand-run round trip above into the harness, so a later slice can be driven
-  by bytes instead of screendumps. On the P5 the same script, or a Windows
-  or WSL2 `telnet`, against its own address.
 - **Kernel self-test:** none for the listener yet — the stack has no
   loopback (a dial to our own address goes to the wire and is not looped
   back), so the machine cannot accept its own connection. Booked; the host
   script is the fixture until then.
+
+`tools/test_telnet_host.sh` covers both roles, including NAWS with escaped
+255, refusal/withdrawal, and command delivery with a full decoded buffer.
+`tools/telnetd_probe.py` drives dropped sessions, DONT ECHO, and input floods.
+`tools/test_telnetd_limits.py` adds a bounded acceptance run for an idle
+guest: 16 live sessions, eight excess peers refused, reuse after a child is
+reaped, negotiated resize, a 5,001-frame resize burst, and EC/EL at husk.
 
 **The pin, proven 2026-09-13** (the Codex #101 rd4 P1s — § 2 above):
 
@@ -288,6 +290,54 @@ Still owed:
 - `tools/test_telnet_host.sh` gained the server role: the opening offers,
   ECHO taken and refused (the notice), NAWS as a resize notice, Enter's
   three spellings and IAC IP at every chunk size.
+
+## Round 11 validation — 2026-09-13
+
+This follow-up starts at `0f65199`. All 47 review threads were read: 42
+previously resolved (including the explicitly declined STREAM re-seat race
+in DECLINED.md), and five current findings accepted against that head.
+
+- PTY creation holds the slave before publishing the master and releases
+  the hold after its diagnostic. A commit that closes itself, a cancelled
+  reservation, and a later table sweep all preserve that hold. The sibling
+  accept path captures peer identity before publishing its TCP handle.
+- The listener caps session children at 16 and releases capacity on reap.
+- NAWS is consumed as geometry only while the peer's option is enabled.
+- STREAM has no cell allocation; resize changes geometry without rebuilding
+  cells. Repeating the current size leaves generation and SIGWINCH alone.
+  GRID continues to preserve text, cursor and scrollback on a changed size.
+- IAC EC and EL deliver Backspace and Ctrl+U in the server role, retaining
+  the command when the decoded output buffer is full.
+
+Validation on the follow-up tree:
+
+- Full strict `make -j8` passed. `git diff --check` passed. The retirement
+  scan found only the intentional `PTY_MODE_*` enum-family comment.
+- The added NAWS/erase regressions produced 70 failures before the protocol
+  fixes. Afterwards `tools/test_telnet_host.sh` passed, including 1,600
+  differential comparisons and five localhost scenarios. ASan/UBSan were
+  enabled; leak detection was disabled because LSan cannot run under this
+  environment's tracing. The TCP-options host suite also passed.
+- Private q35 QEMU, 8 cores, 2 GiB, virtio networking and localhost port
+  2323: kernel tests **30 pre-boot + 31 post-boot + 3 late, zero failures**.
+  New `pty_publication_hold` covers both PTY modes and the three publication
+  outcomes; `pty_resize_modes` covers 1,024 alternating STREAM resizes with
+  repeated unchanged requests, preserved pipe output and GRID text retention.
+- `/tests/testrun`: **46 passed, 0 failed, 2 skipped**, including winchtest.
+  `/tests/pintest` passed; `/tests/ptyprobe` reported **16 passed, 0 failed**.
+- `tools/test_telnetd_limits.py`: 16 concurrent shells, eight excess peers
+  closed, capacity reused after reap, NAWS before WILL and after WONT
+  ignored, enabled NAWS applied, 5,001 resize frames followed by correct
+  geometry, and EC/EL verified against husk.
+- Existing `telnetd_probe.py` DONT-ECHO, flooded-input disconnect and five
+  dropped-session runs passed. The final TCP snapshot contained the observer
+  connection and no leftover test connections. Faults in the guest suite's
+  intentional protection tests are expected; no kernel panic occurred.
+
+Evidence is in `/tmp/pr101-rd11/`, with the strict build in
+`/tmp/pr101-rd11-build.log` and protocol before/after runs in
+`/tmp/pr101-telnet-before.log` and `/tmp/pr101-telnet-after.log`. These are
+private QEMU results; the fixes have not been deployed to the P5.
 
 ## Booked (DEBTS.md rows follow the code)
 

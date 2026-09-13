@@ -524,6 +524,8 @@ static int run_session(void)
 }
 
 // ── The listener ────────────────────────────────────────────────────────────
+#define TELNETD_MAX_SESSIONS 16
+
 static int run_listener(int argc, char **argv)
 {
 	uint16_t port = 23;
@@ -549,6 +551,7 @@ static int run_listener(int argc, char **argv)
 	os64_printf("telnetd: listening on port %u\n", (unsigned)port);
 
 	char *const session_argv[] = { "/bin/telnetd", "-session", 0 };
+	unsigned sessions = 0;
 	for (;;)
 	{
 		// Reap every finished session, then accept with a PATIENCE so this
@@ -562,7 +565,8 @@ static int run_listener(int argc, char **argv)
 		// of seconds of its exit. os64_reap never blocks; the wait lives in
 		// the accept.
 		while (os64_reap(0) > 0)
-			;
+			if (sessions > 0)
+				sessions--;
 
 		os64_netconn_t peer;
 		int64_t r = os64_read_for((int32_t)listener, &peer, sizeof(peer), 2000);
@@ -576,6 +580,15 @@ static int run_listener(int argc, char **argv)
 		if (r != (int64_t)sizeof(peer))
 			continue;   // a refusal short of the whole struct — never half a peer
 
+		// The backlog bounds connections awaiting accept, not seated shells.
+		// This listener's children are session processes; count until reaped
+		// so idle peers cannot keep spawning tasks and their TCP/PTY storage.
+		if (sessions == TELNETD_MAX_SESSIONS)
+		{
+			os64_close(peer.handle);
+			continue;
+		}
+
 		// The child's stdin AND stdout are the connection; the kernel takes
 		// a reference for each slot, so the FIN waits for the child's own
 		// closes (SERVERS.md). stderr (-1) stays this listener's — a
@@ -584,6 +597,8 @@ static int run_listener(int argc, char **argv)
 		                                      peer.handle, peer.handle, -1, 0);
 		if (child < 0)
 			os64_printf("telnetd: could not spawn a session (%ld)\n", (long)child);
+		else
+			sessions++;
 		os64_close(peer.handle);   // the listener's own copy; the child holds its two
 	}
 

@@ -1902,6 +1902,10 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 					return (uint64_t)(int64_t)OS64_NET_ERR_TIMEOUT;
 				return SYSCALL_RESULT_INVALID;   // the listener was closed under us
 			}
+			// Capture the peer while this accept still owns the reference;
+			// publication lets teardown close it and the reaper reclaim it.
+			os64_netconn_t nc = { .handle = ch, .peer_ip = conn->peer_ip,
+			                      .peer_port = conn->peer_port, ._reserved = 0 };
 			if (!handle_commit_reserved(task, ch, HANDLE_NET_TCP, conn))
 			{
 				// Teardown cancelled the reservation first: the task is
@@ -1910,8 +1914,6 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 				tcp_conn_release(conn);
 				return SYSCALL_RESULT_INVALID;
 			}
-			os64_netconn_t nc = { .handle = ch, .peer_ip = conn->peer_ip,
-			                      .peer_port = conn->peer_port, ._reserved = 0 };
 			// Copy out HERE, not through the common tail, so a faulting
 			// destination does not strand the handle we just installed
 			// (Codex #101 P2): the connection is already off the accept
@@ -2268,18 +2270,23 @@ static uint64_t syscall_pty_create_common(uint32_t cols, uint32_t rows, uint8_t 
 		return SYSCALL_RESULT_INVALID;
 	}
 
+	// Publishing transfers ownership to the table, which may immediately
+	// close the master during teardown. Keep the allocation through the
+	// diagnostic even when a successful commit has already closed it.
+	pty_master_hold(slave);
 	if (!handle_commit_reserved(task, mh, HANDLE_PTY_MASTER, slave))
 	{
-		// Teardown cancelled the slot first: a never-seated slave with a
-		// closed master is exactly the burial condition — close does the
-		// whole unwind.
+		// Teardown cancelled the slot first: release the master's ownership
+		// and then our hold, which permits the never-seated slave's burial.
 		pty_master_close(slave);
+		pty_master_unhold(slave);
 		return SYSCALL_RESULT_INVALID;
 	}
 
 	printd(DEBUG_SYSCALL, "pty_create: task %s got master %d (pty%u, %ux%u, %s)\n",
 	       task->exename, mh, slave->index, slave->cols, slave->rows,
 	       mode == PTY_MODE_STREAM ? "stream" : "grid");
+	pty_master_unhold(slave);
 	return (uint64_t)mh;
 }
 
@@ -2309,8 +2316,7 @@ static uint64_t syscall_pty_create_stream(uint64_t arg0, uint64_t arg1, uint64_t
 static uint64_t syscall_pty_snapshot_pinned(tty_t *t, uint64_t arg1, uint64_t arg2,
     uint64_t arg3)
 {
-	// A STREAM slave's grid is never fed: a snapshot of it would be a blank
-	// screen presented as the truth. Its output is read(master).
+	// A STREAM slave has no grid. Its output is read(master), not a snapshot.
 	if (t->pty_mode == PTY_MODE_STREAM)
 	{
 		printd(DEBUG_SYSCALL, "pty_snapshot: a STREAM pty has no screen — read(master) instead\n");
@@ -2401,9 +2407,9 @@ static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2
 // pty_resize(master, cols, rows) -> 0. The SIGWINCH slice (PTY.md § Resize).
 // The MASTER's verb, because the master owns the geometry: a terminal window
 // that grew tells its slave the new size, and the slave learns — it does not
-// decide. Three things, in this order: the grid follows (tty_resize_grid —
-// realloc, carry the text, clamp the cursor, bump the generation so the
-// master's own snapshot poll repaints), then SIGWINCH at every task SEATED
+// decide. tty_resize changes geometry and generation, carrying text and
+// clamping the cursor for GRID; STREAM has no cells to rebuild. Unchanged
+// dimensions return without a signal. A change sends SIGWINCH at each task SEATED
 // on the slave — of which only those with a handler installed get a bit
 // (task_signal_and_nudge drops an ignored signal at the raise). Not at the
 // caller: gterm is doing the telling, and it already
@@ -2440,10 +2446,11 @@ static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	tty_t *t = (tty_t *)pinned.object;
 
 	uint32_t cols = (uint32_t)arg1, rows = (uint32_t)arg2;
-	if (!tty_resize_grid(t, cols, rows))
+	int changed = tty_resize(t, cols, rows);
+	if (changed <= 0)
 	{
 		handle_unpin(&pinned);
-		return SYSCALL_RESULT_INVALID;   // geometry outside the fence — the only refusal (the allocator never says "no memory", it panics)
+		return changed < 0 ? SYSCALL_RESULT_INVALID : 0;
 	}
 
 	uint32_t seats = 0, told = 0;
