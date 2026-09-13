@@ -1350,6 +1350,21 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			}
 			if (!(flags & TCP_ACK))
 				break;
+			// The segment must be ACCEPTABLE before its ACK completes the
+			// handshake (RFC 793 §3.9 checks the sequence first): the ACK
+			// that finishes a passive open sits at exactly rcv_nxt — the byte
+			// after their SYN. A stale or forged packet carrying the right
+			// ack number but a sequence outside our window must NOT establish
+			// the connection and make accept hand out a stream that never
+			// validly shook hands (Codex #101 rd4). Re-announce and stay put.
+			if (seq != c->rcv_nxt)
+			{
+				printd(DEBUG_NET, "tcp: SYN_RECEIVED ack at seq 0x%x, expected 0x%x — out of window, dropped\n",
+				       seq, c->rcv_nxt);
+				tcp_ack(c);
+				spinlock_release_irqrestore(&c->lock, irqflags);
+				return;
+			}
 			// The ACK must be EXACTLY our SYN-ACK's successor — the same
 			// rule SYN_SENT applies to its answer, for the same reason: an
 			// incarnation of this tuple whose replies still roam the wire
@@ -2632,6 +2647,20 @@ tcp_conn_t* tcp_listener_accept(tcp_listener_t* l, uint64_t deadline, long* why)
 		}
 
 		irqflags = spinlock_acquire_irqsave(&l->lock);
+		// CLOSED IS CHECKED BEFORE THE QUEUE (Codex #101 rd4): tcp_listener_close
+		// sets `closed` under this lock and then resets every queued row, so an
+		// accept that dequeued first would smuggle out a connection the close
+		// is in the middle of tearing down. Both writers hold l->lock, so once
+		// close has stamped `closed` no accept takes a row; the queue it leaves
+		// behind is the close's to reset.
+		if (l->closed)
+		{
+			// A sibling closed the door under us; the pipe's spelling for
+			// "the other end is gone" is the nearest verdict.
+			spinlock_release_irqrestore(&l->lock, irqflags);
+			verdict = TCP_ERR_RESET;
+			break;
+		}
 		if (l->queue_head != NULL)
 		{
 			// Hand the oldest completed handshake out. It leaves the
@@ -2648,14 +2677,6 @@ tcp_conn_t* tcp_listener_accept(tcp_listener_t* l, uint64_t deadline, long* why)
 			if (l->pending > 0)
 				l->pending--;
 			spinlock_release_irqrestore(&l->lock, irqflags);
-			break;
-		}
-		if (l->closed)
-		{
-			// A sibling closed the door under us; the pipe's spelling for
-			// "the other end is gone" is the nearest verdict.
-			spinlock_release_irqrestore(&l->lock, irqflags);
-			verdict = TCP_ERR_RESET;
 			break;
 		}
 		if (deadline != 0 && kTicksSinceStart >= deadline)
