@@ -106,21 +106,23 @@ static int write_all(int32_t h, const uint8_t *buf, size_t len)
 
 // ── husk -> client (the outbound bridge thread, and the SOLE g_conn writer) ──
 // Every iteration first drains the reply mailbox (bytes the inbound thread
-// queued), then reads husk's output and encodes it: a lone LF becomes CR LF
-// (an existing CR is left alone, so husk's own "\r\n" does not become
-// "\r\r\n") and a 0xFF is doubled so a byte of output can never be read as
-// IAC. last_cr carries the CR-then-LF decision across reads. Ends when the
-// pipe does — husk exited and the slave's seats emptied, the STREAM pty's EOF.
-// A reply queued while this thread is blocked on the master read goes out on
-// the next husk output; mid-session replies are rare, and husk's prompt is
-// output, so nothing is stranded in practice.
+// queued), then reads husk's output with a SHORT DEADLINE and encodes it. The
+// deadline is what lets a mailbox reply reach the wire while husk is idle: the
+// read times out, the loop drains the mailbox, and re-reads — so a client
+// that waits for a mid-session negotiation reply no longer stalls on future
+// shell output (Codex #101 rd2). Encoding: a bare CR is held (`pending_cr`)
+// until the next byte is known — CR LF for a newline, CR NUL for a standalone
+// CR, as the NVT requires (a lone CR misrenders a strict client's line
+// redraw) — and a 0xFF is doubled so output can never be read as IAC. Ends
+// when the pipe does: husk exited and the slave's seats emptied, the STREAM
+// pty's EOF.
 static int64_t outbound_thread(void *arg)
 {
 	(void)arg;
 	uint8_t in[512];
-	uint8_t out[1200];   // worst case is 2x plus the odd split CR — 1200 > 2*512
+	uint8_t out[2100];   // up to 4 bytes per input byte (a resolved CR NUL + a doubled 0xFF)
 	uint8_t mb[256];
-	int last_cr = 0;
+	int pending_cr = 0;
 
 	for (;;)
 	{
@@ -129,33 +131,47 @@ static int64_t outbound_thread(void *arg)
 			if (write_all((int32_t)g_conn, mb, m) < 0)
 				goto done;
 
-		int64_t n = os64_read((int32_t)g_master, in, sizeof(in));
+		int64_t n = os64_read_for((int32_t)g_master, in, sizeof(in), 100);
+		if (n == OS64_ERR_TIMEOUT)
+			continue;                 // no husk output; loop back to drain the mailbox
 		if (n <= 0)
-			break;
+			break;                    // EOF (husk gone) or a read error
+
 		size_t o = 0;
 		for (size_t i = 0; i < (size_t)n; i++)
 		{
 			uint8_t b = in[i];
+			if (pending_cr)
+			{
+				pending_cr = 0;
+				if (b == '\n')        // CR LF — a newline
+				{
+					out[o++] = '\r';
+					out[o++] = '\n';
+					if (o > sizeof(out) - 4)
+					{
+						if (write_all((int32_t)g_conn, out, o) < 0) goto done;
+						o = 0;
+					}
+					continue;         // both bytes consumed
+				}
+				out[o++] = '\r';      // a standalone CR — CR NUL, then process b
+				out[o++] = 0;
+			}
 			if (b == '\r')
+				pending_cr = 1;       // hold it: the next byte decides CR LF vs CR NUL
+			else if (b == '\n')       // a lone LF is a newline
 			{
 				out[o++] = '\r';
-				last_cr = 1;
-			}
-			else if (b == '\n')
-			{
-				if (!last_cr)
-					out[o++] = '\r';
 				out[o++] = '\n';
-				last_cr = 0;
 			}
 			else
 			{
 				if (b == 0xFF)
 					out[o++] = 0xFF;
 				out[o++] = b;
-				last_cr = 0;
 			}
-			if (o > sizeof(out) - 3)
+			if (o > sizeof(out) - 4)
 			{
 				if (write_all((int32_t)g_conn, out, o) < 0)
 					goto done;
@@ -164,6 +180,11 @@ static int64_t outbound_thread(void *arg)
 		}
 		if (o && write_all((int32_t)g_conn, out, o) < 0)
 			break;
+	}
+	if (pending_cr)                   // a trailing CR at EOF is a standalone CR
+	{
+		uint8_t crnul[2] = { '\r', 0 };
+		write_all((int32_t)g_conn, crnul, 2);
 	}
 done:
 	g_session_over = 1;   // husk is gone; wake the inbound loop off its poll
@@ -211,7 +232,14 @@ static void keys_to_master(const uint8_t *buf, size_t len)
 			break;                 // the master failed
 		if (n == 0)
 		{
-			os64_sleep(2);         // ring full — let husk read, then retry
+			// Ring full. Retry — UNLESS husk has exited: an empty STREAM
+			// slave still accepts writes and never fails just because its
+			// seats emptied, so with nobody draining the ring the retry
+			// would spin forever and never reach the session-over check
+			// (Codex #101 rd2, a hole in round 1's retry fix).
+			if (g_session_over)
+				break;
+			os64_sleep(2);         // let husk read, then retry
 			continue;
 		}
 		off += (size_t)n;
@@ -281,8 +309,9 @@ static int run_session(void)
 			off += used;
 			if (dlen)
 				keys_to_master(data, dlen);
-			engine_to_mailbox(&eng);   // the outbound thread sends these
 
+			// Notices BEFORE the flush, so an AYT answer queued here rides
+			// out with the negotiation replies in the same drain.
 			uint32_t notes = telnet_notices(&eng);
 			if (notes & TELNET_NOTE_RESIZE)
 			{
@@ -290,6 +319,16 @@ static int run_session(void)
 				if (telnet_peer_size(&eng, &cols, &rows) && cols && rows)
 					os64_pty_resize(g_master, cols, rows);
 			}
+			if (notes & TELNET_NOTE_AYT)
+			{
+				// "Are you there?" wants visible evidence (RFC 854), or a
+				// client probing an idle-but-live session concludes it is
+				// dead (Codex #101 rd2). telnet_send_text queues it; the
+				// outbound thread is the one that writes the socket.
+				static const char yes[] = "\r\n[telnetd: yes]\r\n";
+				telnet_send_text(&eng, yes, sizeof(yes) - 1);
+			}
+			engine_to_mailbox(&eng);   // the outbound thread sends these
 
 			// used == 0 means the data buffer filled with no room to make
 			// progress; it was just drained to the master, so the next pass

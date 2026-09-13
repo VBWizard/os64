@@ -258,7 +258,7 @@ void pipe_close_write_end(pipe_t *p)
 		pipe_destroy(p);
 }
 
-long pipe_read(pipe_t *p, char *buf, size_t len)
+long pipe_read(pipe_t *p, char *buf, size_t len, uint64_t deadline)
 {
 	if (len == 0)
 		return 0;
@@ -321,6 +321,14 @@ long pipe_read(pipe_t *p, char *buf, size_t len)
 			return 0;
 		}
 
+		// Empty, a writer still exists, but the caller's patience is spent:
+		// bytes and EOF are handled above, so only pure waiting times out.
+		if (deadline != 0 && kTicksSinceStart >= deadline)
+		{
+			spinlock_release_irqrestore(&p->lock, flags);
+			return PIPE_ERR_TIMEOUT;
+		}
+
 		// Empty, but a writer still exists: park until one shows up.
 		p->readWaiter = self;
 		uint32_t nw = p->writers;
@@ -333,9 +341,13 @@ long pipe_read(pipe_t *p, char *buf, size_t len)
 		printd(DEBUG_PIPE, "pipe_read: pipe 0x%016lx PARKING reader (empty, writers=%u still open)\n",
 			(uintptr_t)p, nw);
 
-		signal_raise(SIGSLEEP, kTicksSinceStart + PIPE_BACKSTOP_TICKS, self);
-		// Woken (by a writer, the sweep, or the backstop) — loop and RE-TEST.
-		// The wake was a hint; another reader may have taken the bytes.
+		uint64_t wake = kTicksSinceStart + PIPE_BACKSTOP_TICKS;
+		if (deadline != 0 && deadline < wake)
+			wake = deadline;
+		signal_raise(SIGSLEEP, wake, self);
+		// Woken (by a writer, the sweep, the backstop, or the deadline) —
+		// loop and RE-TEST. The wake was a hint; another reader may have
+		// taken the bytes, and the deadline is re-checked above.
 	}
 }
 

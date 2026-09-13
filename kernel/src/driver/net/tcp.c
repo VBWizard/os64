@@ -1712,9 +1712,33 @@ static void tcp_port_release_locked(uint16_t port)
 // A conn's funeral gives its port back only if the conn drew it: a passive
 // conn wears its LISTENER's port, and the listener holds that bit (when it
 // is in the range at all) until its own row is freed.
+// Is `port` still spoken for by a live listener or a live connection other
+// than `except`? Caller holds kTcpListLock. Only the SHARED-port paths ask
+// this (a listener's port, borrowed by every conn it accepts) — a dial owns
+// its drawn port alone, so it never needs the walk.
+static bool tcp_port_in_use_locked(uint16_t port, const tcp_conn_t* except)
+{
+	for (tcp_listener_t* l = kTcpListenerList; l != NULL; l = l->next)
+		if (l->port == port)
+			return true;
+	for (tcp_conn_t* c = kTcpConnList; c != NULL; c = c->next)
+		if (c != except && !c->tombstone && c->local_port == port)
+			return true;
+	return false;
+}
+
 static void tcp_conn_port_release_locked(const tcp_conn_t* c)
 {
+	// A dial drew a free port for itself alone — release it directly. A
+	// PASSIVE conn borrowed its listener's port, which other accepted conns
+	// (and, until it closes, the listener) may still hold, so its port bit
+	// is released only by the LAST user's funeral — otherwise a dial could
+	// draw a port a surviving passive stream is still using and forge its
+	// four-tuple (Codex #101 rd2). tcp_port_release_locked ignores a
+	// non-ephemeral port either way.
 	if (!c->passive)
+		tcp_port_release_locked(c->local_port);
+	else if (!tcp_port_in_use_locked(c->local_port, c))
 		tcp_port_release_locked(c->local_port);
 }
 
@@ -2161,7 +2185,12 @@ void tcp_poll(void)
 			continue;
 		}
 		*lp = l->next;
-		tcp_port_release_locked(l->port);
+		// Give the port back only if no accepted connection still uses it —
+		// a passive stream that outlived its listener holds the reservation
+		// until its own funeral (Codex #101 rd2). The row is already off
+		// kTcpListenerList, so it does not count itself.
+		if (!tcp_port_in_use_locked(l->port, NULL))
+			tcp_port_release_locked(l->port);
 		printd(DEBUG_NET, "tcp: listener on port %u freed (%lu accepted, %lu dropped)\n",
 		       l->port, l->accepted, l->syns_dropped);
 		tcp_heap_free_locked(l);

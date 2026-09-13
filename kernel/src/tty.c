@@ -1336,6 +1336,11 @@ void tty_pty_unref(tty_t *t)
 		// pipe's last-writer rule turns that into the master's EOF — THE
 		// SESSION ENDED, in the stream flavor's spelling. Once only: a
 		// pty_master_close sweep's guard seat also passes through here.
+		// This zero-seat close is NOT serialized against a concurrent
+		// re-seat — a task seated between the decrement reaching zero and
+		// this close would run past a master that already saw EOF. Nothing
+		// re-seats a stream pty, so the window is unreachable; the full
+		// argument and what would reverse it are in DECLINED.md.
 		if (t->stream != NULL && t->everSeated &&
 		    __sync_bool_compare_and_swap(&t->stream_writer_closed, false, true))
 			pipe_close_write_end(t->stream);

@@ -1746,7 +1746,8 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	{
 		if (h->type != HANDLE_CONSOLE_IN &&
 		    h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
-		    h->type != HANDLE_NET_ICMP && h->type != HANDLE_NET_LISTENER)
+		    h->type != HANDLE_NET_ICMP && h->type != HANDLE_NET_LISTENER &&
+		    h->type != HANDLE_PTY_MASTER)   // a STREAM master; GRID refuses the read itself
 			return SYSCALL_RESULT_INVALID;
 		deadline = syscall_io_deadline(timeout_ms);
 	}
@@ -1808,7 +1809,9 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				       "read(pty master): GRID mode has no byte stream — use pty_snapshot\n");
 				return SYSCALL_RESULT_INVALID;
 			}
-			got = pipe_read(slave->stream, kbuf, want);
+			got = pipe_read(slave->stream, kbuf, want, deadline);
+			if (got == PIPE_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
 			if (got == PIPE_ERR_INTERRUPTED)
 			{
 				// Caught? Then the wait was INTERRUPTED, not fatal — and
@@ -1882,7 +1885,7 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// same reason write() does the reverse: pipe_read copies under the
 			// pipe spinlock with interrupts off, and touching user memory there
 			// could demand-page into a deadlock.
-			got = pipe_read((pipe_t *)h->object, kbuf, want);
+			got = pipe_read((pipe_t *)h->object, kbuf, want, 0);   // no deadline: a plain pipe read blocks
 			if (got == PIPE_ERR_INTERRUPTED)
 			{
 				// A signal ended the wait on (or the way into) a pipe read:

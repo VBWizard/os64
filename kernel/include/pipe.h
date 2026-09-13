@@ -77,6 +77,7 @@ typedef struct pipe
 #define PIPE_ERR_CLOSED      (-1) // all readers gone: writing into the void (EPIPE)
 #define PIPE_ERR_NOMEM       (-2)
 #define PIPE_ERR_INTERRUPTED (-3) // the CALLER has a signal pending that ends
+#define PIPE_ERR_TIMEOUT     (-4) // pipe_read's deadline passed with no bytes
                                   // the wait (signal_park_must_end): a terminate,
                                   // or one a handler will catch. The syscall
                                   // boundary kills or answers OS64_INTERRUPTED;
@@ -95,7 +96,13 @@ void pipe_close_write_end(pipe_t *p);
 // 4096 when 10 bytes are there gets 10. (Waiting to fill the caller's buffer
 // deadlocks every interactive pipeline.) Blocks only when the pipe is EMPTY and
 // a writer still exists. Returns 0 = EOF once the last writer is gone.
-long pipe_read(pipe_t *p, char *buf, size_t len);
+//
+// `deadline` is a kTicksSinceStart value, or 0 for "block forever" (the
+// classic pipe read). A non-zero deadline that passes while the pipe is empty
+// returns PIPE_ERR_TIMEOUT — bytes and EOF still outrank the clock. It exists
+// for a caller that must wait on the pipe AND another source at once: a STREAM
+// pty master read carries it, so its holder can poll both (SERVERS.md).
+long pipe_read(pipe_t *p, char *buf, size_t len, uint64_t deadline);
 
 // Writes land WHOLE: a write of <= PIPE_CAPACITY is atomic — nothing is copied
 // until there is room for all of it, so two writers can never interleave. (Our
