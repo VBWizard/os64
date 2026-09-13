@@ -28,15 +28,30 @@ IAC, DONT, DO, WONT, WILL, SB, SE = 255, 254, 253, 252, 251, 250, 240
 O_ECHO, O_SGA, O_NAWS = 1, 3, 31
 
 
+_carry = bytearray()   # an IAC sequence TCP split across two recv()s
+
+
 def negotiate(sock, data, refuse_echo=False):
     """Answer the server's options the way a plain client would (SGA yes,
-    ECHO yes unless refuse_echo, everything else no); return the data bytes."""
+    ECHO yes unless refuse_echo, everything else no); return the data bytes.
+    A sequence cut at a recv() boundary is CARRIED to the next call, never
+    read as text — a probe that dropped a split WILL ECHO would never send
+    its DONT and still print something that looked like a pass."""
+    global _carry
+    data = bytes(_carry) + bytes(data)
+    _carry = bytearray()
     reply, text, i = bytearray(), bytearray(), 0
     while i < len(data):
         c = data[i]
-        if c == IAC and i + 1 < len(data):
+        if c == IAC:
+            if i + 1 >= len(data):
+                _carry = bytearray(data[i:])   # a lone IAC: wait for its verb
+                break
             n = data[i + 1]
-            if n in (WILL, WONT, DO, DONT) and i + 2 < len(data):
+            if n in (WILL, WONT, DO, DONT):
+                if i + 2 >= len(data):
+                    _carry = bytearray(data[i:])   # verb without its option
+                    break
                 opt = data[i + 2]
                 if n == WILL:
                     if opt == O_ECHO and refuse_echo:
@@ -49,7 +64,10 @@ def negotiate(sock, data, refuse_echo=False):
                 continue
             if n == SB:
                 end = data.find(bytes([IAC, SE]), i)
-                i = len(data) if end < 0 else end + 2
+                if end < 0:
+                    _carry = bytearray(data[i:])   # subnegotiation still open
+                    break
+                i = end + 2
                 continue
             if n == IAC:
                 text.append(255)

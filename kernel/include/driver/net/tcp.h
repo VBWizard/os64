@@ -263,6 +263,7 @@ typedef enum
 #define TCP_ERR_INTERRUPTED (-3L)   // a signal ended the wait (signal_park_must_end)
 #define TCP_ERR_RESET       (-4L)   // peer sent RST, or the connection died
 #define TCP_ERR_TIMEOUT     (-5L)   // caller's read/write wait expired, no bytes
+#define TCP_ERR_CLOSED      (-6L)   // the last handle was closed under the wait (a sibling thread's close)
 
 // One ahead-of-sequence range held in the receive ring (tcp_conn_t.held).
 #define TCP_HELD_MAX 16
@@ -417,6 +418,14 @@ typedef struct tcp_conn
 	// reader/writer slots above are still single: two holders reading at
 	// once contend for the slot exactly as two threads of one task do.
 	uint32_t handles;
+	// OPERATIONS INSIDE THE CONN — the pin's count (handle.c § The pin),
+	// kept apart from `handles` on purpose: a pin keeps the ROW from being
+	// reaped while a read or write is inside it, and says nothing about
+	// hanging up. So a sibling thread closing the last handle still sends
+	// the FIN and detaches, and a reader or writer parked on the conn is
+	// woken to TCP_ERR_CLOSED rather than left waiting on a silent peer
+	// (Codex #101 rd7). The reaper frees only at zero.
+	uint32_t pins;
 	// OWNERSHIP, because it is where lifetime bugs live: a conn belongs to
 	// exactly one of a listener (this is set — born of its SYN, not yet
 	// read out of its accept queue), a handle, or nobody (detached). Accept
@@ -576,6 +585,11 @@ void tcp_listener_release(tcp_listener_t* l);
 // orderly close above.
 void tcp_conn_ref(tcp_conn_t* c);
 void tcp_conn_release(tcp_conn_t* c);
+// The pin's hold on a conn (`pins` in the struct): the row stays out of the
+// reaper's hands while an operation is inside it; hanging up is `handles`'
+// business alone.
+void tcp_conn_pin(tcp_conn_t* c);
+void tcp_conn_unpin(tcp_conn_t* c);
 
 // ── The API behind HANDLE_NET_TCP ───────────────────────────────────────────
 // Active open. BLOCKS until the handshake completes (task context only);

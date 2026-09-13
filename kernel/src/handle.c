@@ -30,7 +30,7 @@
 // So a handle is now resolved PINNED. handle_pin does two things in one
 // critical section under the task's handleLock: it checks the slot is live,
 // and it takes a reference ON THE OBJECT in the object's own currency (a pipe
-// end's readers/writers, a file's handleRefCount, a TCP conn's handles, a
+// end's readers/writers, a file's handleRefCount, a TCP conn's pins, a
 // listener's busy, a directory's handleRefCount, a join object's refcount, a
 // pty's holds, a UDP or ICMP conn's holders). handle_close claims the slot
 // under the same lock and only then releases the table's reference — outside
@@ -228,7 +228,7 @@ static void handle_object_ref(handle_type_t type, void *object)
 			break;
 		case HANDLE_THREAD:        thread_join_ref((thread_join_t *)object); break;
 		case HANDLE_NET_UDP:       udp_conn_ref((udp_conn_t *)object); break;
-		case HANDLE_NET_TCP:       tcp_conn_ref((tcp_conn_t *)object); break;
+		case HANDLE_NET_TCP:       tcp_conn_pin((tcp_conn_t *)object); break;   // NOT a handle: the last handle's close still hangs up (tcp.h pins)
 		case HANDLE_NET_ICMP:      icmp_conn_ref((icmp_conn_t *)object); break;
 		case HANDLE_NET_LISTENER:  tcp_listener_hold((tcp_listener_t *)object); break;
 		case HANDLE_PTY_MASTER:    pty_master_hold((tty_t *)object); break;
@@ -265,10 +265,12 @@ bool handle_pin(struct task *t, int h, handle_t *out)
 
 void handle_unpin(const handle_t *pinned)
 {
-	// The same releases handle_close runs for the table's reference — an
-	// in-flight operation is a holder like any other, and whichever holder
-	// goes last does the real close (EOF/EPIPE for a pipe end, the VFS
-	// close for a file, the FIN for a TCP conn, burial for a pty).
+	// The same releases handle_close runs for the table's reference where
+	// the object's currency is one count — an in-flight operation is a
+	// holder like any other, and whichever holder goes last does the real
+	// close (EOF/EPIPE for a pipe end, the VFS close for a file, burial for
+	// a pty). The net conns keep hanging up and freeing apart: their close
+	// is the handle count's alone, and a pin only keeps the memory.
 	switch (pinned->type)
 	{
 		case HANDLE_PIPE_READ:     pipe_close_read_end((pipe_t *)pinned->object); break;
@@ -277,7 +279,7 @@ void handle_unpin(const handle_t *pinned)
 		case HANDLE_DIR:           handle_dir_object_close(pinned->object); break;
 		case HANDLE_THREAD:        thread_join_close((thread_join_t *)pinned->object); break;
 		case HANDLE_NET_UDP:       udp_conn_release((udp_conn_t *)pinned->object); break;
-		case HANDLE_NET_TCP:       tcp_conn_release((tcp_conn_t *)pinned->object); break;
+		case HANDLE_NET_TCP:       tcp_conn_unpin((tcp_conn_t *)pinned->object); break;
 		case HANDLE_NET_ICMP:      icmp_conn_release((icmp_conn_t *)pinned->object); break;
 		case HANDLE_NET_LISTENER:  tcp_listener_release((tcp_listener_t *)pinned->object); break;
 		case HANDLE_PTY_MASTER:    pty_master_unhold((tty_t *)pinned->object); break;

@@ -2567,16 +2567,26 @@ static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2
 	if (kNetDeviceCount == 0)
 		return (uint64_t)(int64_t)OS64_NET_ERR_NO_NIC;
 
+	// The slot is RESERVED before the listener is published and COMMITTED
+	// after — accept's rule (Codex #101 rd7): a sibling's teardown between
+	// the announce and a fresh alloc would sweep the table first and leave
+	// a live listener, its port and its queue owned by nobody. A full table
+	// is also refused before a port is claimed.
+	int h = handle_reserve(task);
+	if (h < 0)
+		return (uint64_t)(int64_t)OS64_NET_ERR_NO_RESOURCES;
+
 	int64_t why = OS64_NET_ERR_NO_RESOURCES;
 	tcp_listener_t *l = tcp_listener_announce(kNetDevices[0], local.port, &why);
 	if (l == NULL)
-		return (uint64_t)why;
-
-	int h = handle_alloc(task, HANDLE_NET_LISTENER, l);
-	if (h < 0)
 	{
-		tcp_listener_close(l);
-		return (uint64_t)(int64_t)OS64_NET_ERR_NO_RESOURCES;
+		(void)handle_cancel_reserved(task, h);
+		return (uint64_t)why;
+	}
+	if (!handle_commit_reserved(task, h, HANDLE_NET_LISTENER, l))
+	{
+		tcp_listener_close(l);   // teardown cancelled the slot first: the task is dying
+		return SYSCALL_RESULT_INVALID;
 	}
 	printd(DEBUG_NET, "net_announce: task %s <- tcp!*!%u = handle %d\n",
 	       task->exename, local.port, h);

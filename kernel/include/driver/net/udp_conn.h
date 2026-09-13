@@ -64,6 +64,11 @@ typedef struct udp_conn
 	// sweep can still reach that reader.
 	volatile uint32_t holders;
 	volatile bool closed;
+	// Writers between "not closed" and the datagram leaving. The close
+	// waits this out before unbinding the port, so no datagram can go out
+	// from a port a later dial may already own (Codex #101 rd7). Under
+	// `lock`, like `closed`.
+	uint32_t sending;
 
 	// No silent anything.
 	uint64_t rx_delivered;        // datagrams handed to read()

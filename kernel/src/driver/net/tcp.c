@@ -987,9 +987,12 @@ static void tcp_absorb_held(tcp_conn_t* c)
 // caller once the lock is gone. Caller holds c->lock.
 static thread_t* tcp_claim_reader_if_ready(tcp_conn_t* c)
 {
+	// `handles == 0` is a condition too: the last handle closed under a
+	// pinned sibling's park, and it wakes to TCP_ERR_CLOSED (tcp.h pins).
 	thread_t* r = c->reader;
 	if (r == NULL || r->threadState != THREAD_STATE_ISLEEP ||
-	    !(c->rcv_count > 0 || c->rcv_fin || c->reset || c->state == TCP_CLOSED))
+	    !(c->rcv_count > 0 || c->rcv_fin || c->reset || c->state == TCP_CLOSED ||
+	      c->handles == 0))
 		return NULL;
 	c->reader = NULL;
 	return r;
@@ -999,7 +1002,8 @@ static thread_t* tcp_claim_writer_if_ready(tcp_conn_t* c)
 {
 	thread_t* w = c->writer;
 	if (w == NULL || w->threadState != THREAD_STATE_ISLEEP ||
-	    !(c->snd_count < TCP_SND_BUF || c->reset || c->state == TCP_CLOSED))
+	    !(c->snd_count < TCP_SND_BUF || c->reset || c->state == TCP_CLOSED ||
+	      c->handles == 0))
 		return NULL;
 	c->writer = NULL;
 	return w;
@@ -1881,6 +1885,11 @@ static void tcp_tomb_evict_over_cap_locked(void)
 	while (s_tomb_count > TCP_MORGUE_TOMBSTONES)
 	{
 		tcp_conn_t* evicted = s_tomb_head;
+		// A tombstone with an operation still inside it (tcp.h pins) is
+		// not freed under that operation; the cap is a soft one and the
+		// operation leaves within its backstop, having found handles == 0.
+		if (evicted->pins != 0)
+			break;
 		tcp_tomb_remove_locked(evicted);
 		tcp_list_unlink_locked(evicted);
 		spinlock_acquire(&evicted->lock);
@@ -2151,18 +2160,21 @@ void tcp_poll(void)
 		// find one CLOSED and detached entombs it — buffers, port, the
 		// morgue clock starts (tcp.h § the morgue). A dial that failed
 		// entombed itself before this sweep could.
+		// Never while an operation is inside the row (tcp.h pins): a
+		// pinned reader or writer has been woken to its CLOSED verdict
+		// and leaves within its backstop; the reap waits for it.
 		bool reap = false;
 		if (c->state == TCP_TIME_WAIT && c->detached)
 		{
 			if (!c->stripped)
 				tcp_conn_strip_locked(c);
-			reap = now >= c->time_wait_until;
+			reap = now >= c->time_wait_until && c->pins == 0;
 		}
 		else if (c->state == TCP_CLOSED && c->detached)
 		{
 			if (!c->tombstone)
 				tcp_conn_entomb_locked(c, now);
-			reap = (now >= c->closed_at + TCP_MORGUE_TICKS);
+			reap = (now >= c->closed_at + TCP_MORGUE_TICKS) && c->pins == 0;
 		}
 
 		spinlock_release_irqrestore(&c->lock, irqflags);
@@ -2406,6 +2418,13 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 			return TCP_ERR_INTERRUPTED;
 
 		irqflags = spinlock_acquire_irqsave(&c->lock);
+		// Hung up under us: a sibling thread closed the last handle while
+		// we waited. Our pin kept the row; the conversation is over.
+		if (c->handles == 0)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return TCP_ERR_CLOSED;
+		}
 		if (c->rcv_count > 0)
 		{
 			// Short reads are the contract (every os64 read returns what
@@ -2485,6 +2504,13 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len, uint64_t deadlin
 			return sent ? (long)sent : TCP_ERR_INTERRUPTED;
 
 		irqflags = spinlock_acquire_irqsave(&c->lock);
+		// Hung up under us (the read's rule): the last handle closed while
+		// we waited for room; what landed, landed.
+		if (c->handles == 0)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return sent ? (long)sent : TCP_ERR_CLOSED;
+		}
 		if (c->reset || !(c->state == TCP_ESTABLISHED || c->state == TCP_CLOSE_WAIT))
 		{
 			spinlock_release_irqrestore(&c->lock, irqflags);
@@ -2562,14 +2588,35 @@ void tcp_conn_close(tcp_conn_t* c)
 	// A program should not wait 30 seconds for protocol politeness.
 	c->detached = true;
 	c->detached_deadline = kTicksSinceStart + TCP_DETACHED_IDLE_TICKS;
-	c->reader = NULL;
-	c->writer = NULL;
+	// A parked reader or writer here belongs to a SIBLING THREAD holding
+	// the conn through its pin (tcp.h pins) — the last handle closed under
+	// it. Woken to find handles == 0 and answer TCP_ERR_CLOSED; one still
+	// mid-park stays registered for the sweep, whose condition includes
+	// handles == 0 for the same reason (the pipe.c claim discipline).
+	thread_t* r = (c->reader != NULL && c->reader->threadState == THREAD_STATE_ISLEEP)
+	              ? c->reader : NULL;
+	thread_t* w = (c->writer != NULL && c->writer->threadState == THREAD_STATE_ISLEEP)
+	              ? c->writer : NULL;
+	if (r) c->reader = NULL;
+	if (w) c->writer = NULL;
 	spinlock_release_irqrestore(&c->lock, irqflags);
+	if (r) scheduler_wake_isleep_thread(r);
+	if (w) scheduler_wake_isleep_thread(w);
 }
 
 void tcp_conn_ref(tcp_conn_t* c)
 {
 	__sync_fetch_and_add(&c->handles, 1);
+}
+
+void tcp_conn_pin(tcp_conn_t* c)
+{
+	__sync_fetch_and_add(&c->pins, 1);
+}
+
+void tcp_conn_unpin(tcp_conn_t* c)
+{
+	__sync_fetch_and_sub(&c->pins, 1);
 }
 
 void tcp_conn_release(tcp_conn_t* c)

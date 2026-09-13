@@ -59,10 +59,16 @@ static volatile int g_session_over = 0;
 // outbound thread, the sole socket writer, which then drains the mailbox one
 // final time and ends. So the word reaches the wire before the FIN does, and
 // no interleaving can show the flag with the word still in the engine
-// (Codex #101 rd6). g_end_requested is the inbound thread's own note that
-// the word has been queued and the flag is owed.
+// (Codex #101 rd6). g_end_word below is the inbound thread's own note of
+// the word still owed to the engine, and so of the flag owed after it.
 static volatile int g_end_after_drain = 0;
-static int g_end_requested = 0;
+// The last word itself, and how much of it the engine has taken so far:
+// telnet_send_text accepts SHORT when its queue is full, so under reply
+// backpressure the notice enters the engine in pieces across flushes, and
+// the end is owed only once the whole of it has (Codex #101 rd7).
+static const char *g_end_word = 0;
+static size_t g_end_word_len = 0;
+static size_t g_end_word_off = 0;
 
 // The reply mailbox: a lock-free single-producer/single-consumer byte ring.
 // The inbound thread (producer) enqueues the engine's negotiation replies;
@@ -263,10 +269,16 @@ static void engine_to_mailbox(telnet_t *eng)
 // (Codex #101 rd6).
 static void flush_engine(telnet_t *eng)
 {
+	// The rest of a last word the engine could only take part of: offered
+	// again on every flush until all of it is in. Only then is the end
+	// owed, and only once the engine has drained to empty.
+	if (g_end_word != 0 && g_end_word_off < g_end_word_len)
+		g_end_word_off += telnet_send_text(eng, g_end_word + g_end_word_off,
+		                                   g_end_word_len - g_end_word_off);
 	engine_to_mailbox(eng);
 	size_t left = 0;
 	(void)telnet_pending(eng, &left);
-	if (g_end_requested && left == 0)
+	if (g_end_word != 0 && g_end_word_off == g_end_word_len && left == 0)
 		__atomic_store_n(&g_end_after_drain, 1, __ATOMIC_RELEASE);
 }
 
@@ -396,8 +408,12 @@ static int run_session(void)
 				static const char sorry[] =
 					"\r\n[telnetd: this server echoes (RFC 857); a client that"
 					" declines it would see every keystroke twice -- closing]\r\n";
-				telnet_send_text(&eng, sorry, sizeof(sorry) - 1);
-				g_end_requested = 1;
+				if (g_end_word == 0)
+				{
+					g_end_word = sorry;
+					g_end_word_len = sizeof(sorry) - 1;
+					g_end_word_off = 0;   // flush_engine feeds it in, whole, before the end
+				}
 			}
 			flush_engine(&eng);   // the outbound thread sends these
 

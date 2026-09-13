@@ -161,9 +161,13 @@ is inside it from either side (`holds` — the pin's `pty_master_hold`, and
 would otherwise stop protecting it the moment a sibling's teardown dropped
 it), a spawn's four handles stay pinned across the whole ELF load. Every
 handle type has its currency — pipe ends, file and directory
-`handleRefCount`, a TCP conn's `handles`, a listener's `busy`, a join
-object's `refcount`, a UDP or ICMP conn's `holders` — and the console tags
-reference nothing. The STREAM pipe itself is held side-lessly by its pty
+`handleRefCount`, a listener's `busy`, a join object's `refcount`, a TCP
+conn's `pins` and a UDP or ICMP conn's `holders` — and the console tags
+reference nothing. The net conns keep their pin apart from their handle
+count on purpose: a sibling closing the last handle still hangs up (FIN,
+unbind), and a reader or writer parked on the conn is woken to a CLOSED
+verdict rather than left waiting on a silent peer; the pin only keeps the
+row from the reaper until the operation leaves. The STREAM pipe itself is held side-lessly by its pty
 from birth to burial (pipe.h `holds`), which is what lets a seated writer
 take a writer's reference on it whatever the ends have done.
 `/tests/pintest` drives the three shapes without a network.
