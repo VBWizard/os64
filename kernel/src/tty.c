@@ -872,6 +872,8 @@ void tty_seat_shell(tty_t *t, struct task *shell)
 	// inherit it), foreground (who Ctrl+C aims at HERE), and the lights on.
 	shell->controllingShell = true;
 	shell->tty = t;
+	if (t->is_pty)
+		t->everSeated = true;   // commits the seat reserved before the ELF load
 	uint64_t flags = spinlock_acquire_irqsave(&t->fg_lock);
 	t->shell = shell;
 	t->fgTask = shell;
@@ -1362,25 +1364,40 @@ static void pty_maybe_bury(tty_t *t)
 	}
 }
 
-bool tty_pty_ref(tty_t *t)
+static bool pty_take_seat(tty_t *t, bool committed)
 {
 	if (t == NULL || tty_is_vt(t))
 		return true;
 	// By pointer against the registry (tty.h): the seat is taken under the
 	// lock burial unlinks under, so a slave found here is alive and stays
 	// so — and a slave not found is buried, and no seat can be taken on it.
+	// STREAM closure shares this lock with the last-seat decrement: an
+	// admitted reservation keeps the writer open until committed or cancelled.
 	bool found = false;
 	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
 	for (tty_t *p = kPtyList; p != NULL; p = p->next_pty)
 		if (p == t)
 		{
+			if (t->masterClosed || t->stream_writer_closed)
+				break;
 			__sync_fetch_and_add(&t->seats, 1);
-			t->everSeated = true;   // arms HUNGUP: emptied is hung up, young is not
+			if (committed)
+				t->everSeated = true;
 			found = true;
 			break;
 		}
 	spinlock_release_irqrestore(&kPtyListLock, flags);
 	return found;
+}
+
+bool tty_pty_ref(tty_t *t)
+{
+	return pty_take_seat(t, true);
+}
+
+bool tty_pty_reserve_seat(tty_t *t)
+{
+	return pty_take_seat(t, false);
 }
 
 tty_t *task_tty_hold(struct task *t)
@@ -1401,22 +1418,25 @@ void tty_pty_unref(tty_t *t)
 {
 	if (t == NULL || !t->is_pty)
 		return;
-	if (__sync_sub_and_fetch(&t->seats, 1) <= 0)
+	// Serialize the last-seat decision with new seats. Mark closure before
+	// unlocking so EOF cannot be followed by an accepted re-seat. Keep an
+	// operation hold through the pipe close: a concurrent master close can
+	// drop its guard seat and attempt burial while the pipe wakes its reader.
+	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
+	bool emptied = __sync_sub_and_fetch(&t->seats, 1) <= 0;
+	bool close_writer = false;
+	if (emptied)
 	{
-		// The seats emptied: a STREAM slave's writers are gone, and the
-		// pipe's last-writer rule turns that into the master's EOF — THE
-		// SESSION ENDED, in the stream flavor's spelling. Once only: a
-		// pty_master_close sweep's guard seat also passes through here.
-		// This zero-seat close is NOT serialized against a concurrent
-		// re-seat — a task seated between the decrement reaching zero and
-		// this close would run past a master that already saw EOF. Nothing
-		// re-seats a stream pty, so the window is unreachable; the full
-		// argument and what would reverse it are in DECLINED.md.
-		if (t->stream != NULL && t->everSeated &&
-		    __sync_bool_compare_and_swap(&t->stream_writer_closed, false, true))
-			pipe_close_write_end(t->stream);
-		pty_maybe_bury(t);
+		__sync_fetch_and_add(&t->holds, 1);
+		close_writer = t->stream != NULL && t->everSeated &&
+		    __sync_bool_compare_and_swap(&t->stream_writer_closed, false, true);
 	}
+	spinlock_release_irqrestore(&kPtyListLock, flags);
+	// Pipe close can wake the scheduler; queue lock precedes kPtyListLock.
+	if (close_writer)
+		pipe_close_write_end(t->stream);
+	if (emptied)
+		pty_seat_unhold(t);
 }
 
 void pty_master_close(tty_t *slave)
@@ -1429,8 +1449,8 @@ void pty_master_close(tty_t *slave)
 	// freed — and the sweep below is what makes them depart: a task takes
 	// its SIGHUP, dies on another core, and reaches tty_pty_unref while we
 	// are still walking the list, reading slave->index for the diagnostic,
-	// and calling the burial at the bottom. The seat count is the only thing
-	// burial consults, so holding one is how the sweep says "still in use".
+	// and calling the burial at the bottom. The guard keeps the seat count
+	// nonzero while this sweep still needs the slave.
 	//
 	// Bumped directly rather than through tty_pty_ref because this is NOT a
 	// seat: everSeated must stay off, or closing the master of a pty nobody

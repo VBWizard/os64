@@ -3854,10 +3854,21 @@ static void spawn_unshare_all(spawn_params_t *p)
 static void spawn_do_create(void *arg)
 {
 	spawn_params_t *p = (spawn_params_t *)arg;
+	// Reserve the seat before loading: a STREAM's last-seat close may win
+	// this race, in which case no child is created. A reservation keeps the
+	// writer open but does not arm EOF on an unused pty if the load fails.
+	if (p->ttySlave != NULL && !tty_pty_reserve_seat(p->ttySlave))
+	{
+		spawn_unshare_all(p);
+		p->result = -1;
+		return;
+	}
 	task_t *child = task_create(p->path, p->argc, p->argv, p->parent,
 	                            false, THREAD_NO_AFFINITY);
 	if (child == NULL)
 	{
+		if (p->ttySlave != NULL)
+			tty_pty_unref(p->ttySlave);
 		spawn_unshare_all(p);   // the child never happened; its references go back
 		p->result = -1;         // (the master's pin goes back in syscall_spawn)
 		return;
@@ -3943,12 +3954,11 @@ static void spawn_do_create(void *arg)
 	// — controlling shell, terminal of record, foreground, lights on — which
 	// is deliberate: the seated child is the session, that is what seating
 	// means, so seat a shell. The seat bookkeeping swaps the inherited
-	// terminal's pty reference (taken in task_create) for the slave's.
+	// terminal's pty reference (taken in task_create) for the reserved seat.
 	if (p->ttySlave != NULL)
 	{
 		tty_pty_unref((tty_t *)child->tty);
 		tty_seat_shell(p->ttySlave, child);
-		tty_pty_ref(p->ttySlave);
 	}
 
 	// Apply redirection BEFORE the child is submitted to the scheduler — the
@@ -4089,7 +4099,8 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// rd3 took the reference late, rd4 pinned, rd8 moved the reference
 	// early but outside the lock). The SET_TTY master is different: the
 	// child takes a SEAT on its slave, not a handle, so it is PINNED across
-	// the load and the seat is taken in spawn_do_create.
+	// the load; spawn_do_create reserves its seat before loading and transfers
+	// that seat to the child on success, or releases it on failure.
 	handle_t ttyPin;
 	bool ttyPinned = false;
 

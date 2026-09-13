@@ -142,7 +142,13 @@ was built flavor-independent; the flavor is one branch at one choke point.
 - **EOF has one meaning in each direction.** When the slave's seats empty
   (after it has ever been seated — a young pty is not a finished one) the
   pipe's write end closes and the master's read returns 0: THE SESSION
-  ENDED, the STREAM spelling of `OS64_PTY_HUNGUP`. When the master closes,
+  ENDED, the STREAM spelling of `OS64_PTY_HUNGUP`. New seats are refused
+  after this transition, including through `os64_spawn_seated`; start a new
+  session on a fresh master. A spawn reserves its seat before the ELF load,
+  serializing with the last-seat departure. Failed loads return that seat
+  without making an unused pty appear previously occupied. The pipe close
+  runs outside the pty list lock, with a hold protecting the slave while its
+  reader wakes. GRID ptys still permit re-seating. When the master closes,
   the seats get SIGHUP as before AND the pipe's read end closes, so a child
   that writes after the terminal left gets `PIPE_ERR_CLOSED` instead of
   parking forever on a ring nobody will drain.
@@ -172,7 +178,8 @@ reader and frees it on the way out, a pty stays unburied while an operation
 is inside it from either side (`holds` — the pin's `pty_master_hold`, and
 `pty_seat_hold` for a seated task's own console read or write, whose seat
 would otherwise stop protecting it the moment a sibling's teardown dropped
-it), a spawn's SET_TTY master stays pinned across the whole ELF load while
+it), a spawn's SET_TTY master stays pinned across the whole ELF load and
+its seat is reserved before loading, while
 its three redirections are SHARED — the child's own reference on each,
 taken in the same critical section that finds the parent's slot live
 (`handle_share`), because a pin keeps a net conn's row but not its line
@@ -312,8 +319,9 @@ and verifies admission resumes after a peer completes its FIN exchange.
 ## Round 11 validation — 2026-09-13
 
 This follow-up starts at `0f65199`. All 47 review threads were read: 42
-previously resolved (including the explicitly declined STREAM re-seat race
-in DECLINED.md), and five current findings accepted against that head.
+previously resolved (including the STREAM re-seat race then recorded in
+DECLINED.md, addressed in round 13 below), and five current findings accepted
+against that head.
 
 - PTY creation holds the slave before publishing the master and releases
   the hold after its diagnostic. A commit that closes itself, a cancelled
@@ -390,6 +398,43 @@ the ring lifetime, including across listener replacement.
 Evidence is in `/tmp/pr101-rd12/`, `/tmp/pr101-rd12-before.log`,
 `/tmp/pr101-rd12-after.log` and `/tmp/pr101-rd12-build.log`. These fixes
 have been validated in private QEMU, not deployed to the P5.
+
+## Round 13 validation — 2026-09-13
+
+The 49th review thread, against `fea1fb1`, demonstrated sequential re-seating
+through the public API after STREAM EOF. The claim that nothing could
+re-seat a stream was wrong. The EOF transition now refuses further seats;
+the reservation and last-seat decrement share the pty list lock. This also
+addresses the concurrent re-seat case previously declined, so that entry
+has been removed from DECLINED.md. A failed first ELF load returns its
+reservation without closing a previously unused stream. GRID reuse remains
+supported.
+
+- `/tests/streamseat` failed on the previous kernel with "spawn accepted
+  after STREAM EOF". It now passes failed-load retry, output draining to
+  EOF, rejection after EOF, and two successive GRID seats. It is included
+  in `/tests/testrun`, which passed **47 tests, 0 failures, 2 skips**.
+- The `pty_stream_seats` kernel regression checks cancellation on an unused
+  stream, reservation before last-seat departure, cancellation after the
+  occupied seat leaves, refusal after EOF, and refusal after master close.
+  Its initial polling fixture used the wrong kernel deadline; the corrected
+  check uses an expired absolute tick, not the public API's zero-timeout
+  convention.
+- The test registry capacity increased from 64 to 128: the new test must
+  not displace `backstop_preemption`. The final private q35 QEMU boot,
+  8 cores and 2 GiB, passed **30 pre-boot + 32 post-boot + 3 late tests**,
+  including both tests. No kernel panic occurred.
+- The existing Telnet limits, resize, erase and capacity-reuse probe passed.
+  Five final login/`ls /`/disconnect sessions passed with time for child reap
+  between sessions. Final `ps -ef` had only the observer session; TCP showed
+  its one buffered connection plus three stripped CLOSED diagnostic rows.
+- Full strict `make -j8` and `git diff --check` passed. The stale-reference
+  scan's `SET_TTY` hits are intentional shorthand for `OS64_SPAWN_SET_TTY`;
+  the flag remains live and those descriptions still apply.
+
+Evidence is in `/tmp/pr101-rd13/`, including `before-test.log`, `testrun.log`,
+`final-boot.log`, `final-probe.log`, `cleanup.log` and `final-build.log`.
+These are private QEMU results; the fix has not been deployed to the P5.
 
 ## Booked (DEBTS.md rows follow the code)
 

@@ -76,6 +76,7 @@ bool test_vma_file_backed_page_fault_resolved(void);
 bool test_vma_partial_page_bss_zero_filled(void);
 bool test_pty_publication_hold(void);
 bool test_pty_resize_modes(void);
+bool test_pty_stream_seats(void);
 
 bool test_register_policy(const char *name, bool (*func)(void), int phase,
                           test_policy_t policy)
@@ -5756,6 +5757,7 @@ static void register_builtin_tests(void)
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
     test_register("pty_publication_hold", test_pty_publication_hold, TEST_PHASE_POSTBOOT);
     test_register("pty_resize_modes", test_pty_resize_modes, TEST_PHASE_POSTBOOT);
+    test_register("pty_stream_seats", test_pty_stream_seats, TEST_PHASE_POSTBOOT);
     test_register("task_args", test_task_args, TEST_PHASE_POSTBOOT);
     test_register("env_growth", test_env_growth, TEST_PHASE_POSTBOOT);
     // LATE, both of them, and they are the two that bought the phase: on a

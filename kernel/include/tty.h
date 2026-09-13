@@ -189,12 +189,13 @@ typedef struct tty
 	struct pipe *stream;
 	uint64_t stream_dropped;
 	// Each end of `stream` is closed exactly once: the write end when the
-	// seats empty (tty_pty_unref), the read end when the master closes
-	// (pty_master_close). The pipe frees itself when both are gone.
+	// occupied seats and reservations empty (tty_pty_unref), or an unused
+	// master's close; the read end closes with the master. The pipe's holds
+	// keep it alive after its ends close while operations finish.
 	volatile bool stream_writer_closed;
 	volatile bool stream_reader_closed;
-	// Seats = tasks whose ->tty this is (the child and everything it spawns,
-	// via task_create's inheritance). everSeated arms HUNGUP: a slave that
+	// Seats count tasks, pending spawn reservations and the master-close
+	// guard. everSeated arms HUNGUP: a slave that
 	// EMPTIED is hung up; one nothing has sat on yet is merely young.
 	volatile int32_t seats;
 	volatile bool everSeated;
@@ -307,6 +308,7 @@ void tty_view_scroll(int dir);         // Shift+PgUp(+1)/PgDn(-1) — half scree
 
 // ── Shells and the summons ──────────────────────────────────────────────────
 // Seat a controlling shell on a tty (LIVE, foreground, the works).
+// For a pty, the caller transfers an owned seat reservation to the shell.
 void tty_seat_shell(tty_t *t, struct task *shell);
 // Called from the exit path: if the dying task was a tty's seated shell, the
 // tty goes dormant and announces how to summon a new one; if it was the
@@ -353,15 +355,20 @@ int tty_resize(tty_t *t, uint32_t cols, uint32_t rows);
 int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length);
 
 // Seat references: every task whose ->tty is this pty holds one (taken at
-// inheritance in task_create and at spawn's explicit seating; dropped in
-// task teardown). The slave frees itself when the master is closed AND the
-// seats are empty AND no operation is inside it from either side (holds)
+// inheritance in task_create or reserved before spawn's explicit seating;
+// dropped in task teardown). The slave frees itself when the master is
+// closed AND the seats are empty AND no operation is inside it (holds)
 // — whichever of the three happens last does the burial.
 // tty_pty_ref takes the seat BY POINTER against the registry, under its
-// lock, and answers false for a slave that is no longer listed: the parent
-// whose terminal a child inherits can be torn down by a sibling thread
-// while the spawn is in flight, and its slave buried. A VT is always true.
+// lock, and answers false for an unlisted slave, a closed master or a STREAM
+// whose writer has closed. A parent whose terminal a child inherits can be
+// torn down by a sibling while the spawn is in flight, and its slave buried.
+// A VT is always true.
 bool tty_pty_ref(tty_t *t);          // no-op (true) unless t is a pty
+// Counts a future seat without marking the pty as previously occupied.
+// Commit with tty_seat_shell after loading, or cancel with tty_pty_unref.
+// A failed first load leaves the STREAM writer open for a later attempt.
+bool tty_pty_reserve_seat(tty_t *t);
 void tty_pty_unref(tty_t *t);        // no-op unless t->is_pty
 
 // A task's terminal of record, HELD: the VT fleet needs no hold, a pty

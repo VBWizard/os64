@@ -96,8 +96,10 @@ static inline int64_t os64_pty_create(uint32_t cols, uint32_t rows)
 
 // Create a STREAM-mode pty: same handle, same seating, same keystrokes in —
 // but the child's output comes back out of os64_read on the master as the
-// bytes it wrote, uninterpreted, and pty_snapshot is refused. The geometry
-// is still real: it is what /proc/self/tty reports to the child and what
+// bytes it wrote, uninterpreted, and pty_snapshot is refused.
+// After its seated tasks and pending seats empty, output drains to EOF;
+// spawn_seated then refuses that master. Create a fresh pty for a new session.
+// Geometry is what /proc/self/tty reports to the child and what
 // os64_pty_resize changes. The FLAVOR is a SEPARATE SYSCALL, not an argument
 // on pty_create, so the two-argument GRID call never had its ABI widened.
 static inline int64_t os64_pty_create_stream(uint32_t cols, uint32_t rows)

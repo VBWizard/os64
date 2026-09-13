@@ -83,3 +83,45 @@ bool test_pty_resize_modes(void)
     pty_master_close(grid);
     return ok;
 }
+
+// Both orderings of seat reservation versus last-seat departure. Pipe
+// closure is irreversible, while an unused reservation may be cancelled.
+bool test_pty_stream_seats(void)
+{
+    tty_t *t = pty_create_slave(80, 24, PTY_MODE_STREAM);
+    if (t == NULL)
+        return false;
+    bool reserved = tty_pty_reserve_seat(t);
+    bool ok = reserved && !t->everSeated;
+    if (reserved)
+        tty_pty_unref(t);
+    char byte;
+    // Kernel pipe reads take an absolute tick deadline; 1 has passed at post-boot.
+    ok &= !t->stream_writer_closed && pipe_read(t->stream, &byte, 1, 1) == PIPE_ERR_TIMEOUT;
+
+    bool seated = tty_pty_ref(t);
+    reserved = tty_pty_reserve_seat(t);
+    ok &= seated && reserved;
+    if (seated)
+        tty_pty_unref(t);
+    ok &= !t->stream_writer_closed && pipe_read(t->stream, &byte, 1, 1) == PIPE_ERR_TIMEOUT;
+    if (reserved)
+        tty_pty_unref(t);
+    ok &= t->stream_writer_closed && pipe_read(t->stream, &byte, 1, 1) == 0;
+    seated = tty_pty_ref(t);
+    reserved = tty_pty_reserve_seat(t);
+    ok &= !seated && !reserved;
+    if (seated)
+        tty_pty_unref(t);
+    if (reserved)
+        tty_pty_unref(t);
+
+    pty_master_hold(t);
+    pty_master_close(t);
+    seated = tty_pty_ref(t);
+    ok &= !seated;
+    if (seated)
+        tty_pty_unref(t);
+    pty_master_unhold(t);
+    return ok;
+}
