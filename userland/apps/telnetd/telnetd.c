@@ -39,14 +39,54 @@
 // ── The one session this process serves ─────────────────────────────────────
 // A -session process serves exactly one login, so these are its whole world.
 // g_conn is handles 0 AND 1 (the connection, from the listener's spawn);
-// g_master is the STREAM pty whose slave husk sits on. Both bridge threads
-// write g_conn — the kernel serializes concurrent writes to one TCP handle
-// (tcp_conn_write copies under the connection lock), so the shared writer is
-// safe against corruption; only the telnet ENGINE is single-threaded, owned
-// by the inbound loop.
+// g_master is the STREAM pty whose slave husk sits on.
+//
+// EXACTLY ONE THREAD WRITES g_conn: the outbound bridge. The kernel's
+// per-connection lock stops two writers corrupting memory, but it does NOT
+// make a write atomic — under backpressure tcp_conn_write copies what fits,
+// drops the lock, and resumes, so a second writer could split an outbound
+// doubled-IAC and produce an invalid Telnet stream (Codex #101 P2). So the
+// inbound thread never touches g_conn; the negotiation replies it produces go
+// through the mailbox below to the outbound thread, which serializes them
+// with husk's bytes.
 static int32_t g_conn = 1;
 static int64_t g_master = -1;
 static volatile int g_session_over = 0;
+
+// The reply mailbox: a lock-free single-producer/single-consumer byte ring.
+// The inbound thread (producer) enqueues the engine's negotiation replies;
+// the outbound thread (consumer) drains them to g_conn. Power-of-two size so
+// the indices mask cleanly; the monotonic counters are published with
+// release / read with acquire, the standard SPSC handshake. Replies are a
+// few bytes and rare, so 1KB never fills in practice.
+#define MBOX_CAP 1024u
+static uint8_t g_mbox[MBOX_CAP];
+static volatile uint32_t g_mbox_head;   // consumer advances this
+static volatile uint32_t g_mbox_tail;   // producer advances this
+
+static size_t mbox_put(const uint8_t *buf, size_t len)
+{
+	uint32_t tail = g_mbox_tail;
+	uint32_t head = __atomic_load_n(&g_mbox_head, __ATOMIC_ACQUIRE);
+	size_t space = MBOX_CAP - (uint32_t)(tail - head);
+	size_t n = len < space ? len : space;
+	for (size_t i = 0; i < n; i++)
+		g_mbox[(tail + (uint32_t)i) & (MBOX_CAP - 1)] = buf[i];
+	__atomic_store_n(&g_mbox_tail, tail + (uint32_t)n, __ATOMIC_RELEASE);
+	return n;
+}
+
+static size_t mbox_get(uint8_t *buf, size_t cap)
+{
+	uint32_t head = g_mbox_head;
+	uint32_t tail = __atomic_load_n(&g_mbox_tail, __ATOMIC_ACQUIRE);
+	size_t avail = (uint32_t)(tail - head);
+	size_t n = avail < cap ? avail : cap;
+	for (size_t i = 0; i < n; i++)
+		buf[i] = g_mbox[(head + (uint32_t)i) & (MBOX_CAP - 1)];
+	__atomic_store_n(&g_mbox_head, head + (uint32_t)n, __ATOMIC_RELEASE);
+	return n;
+}
 
 // Write every byte or give up — a short write on a live connection means the
 // send ring was full and the kernel took what it could; loop until it all
@@ -64,21 +104,31 @@ static int write_all(int32_t h, const uint8_t *buf, size_t len)
 	return 0;
 }
 
-// ── husk -> client (the outbound bridge thread) ─────────────────────────────
-// Stateless NVT encoding: a lone LF becomes CR LF (an existing CR is left
-// alone, so husk's own "\r\n" does not become "\r\r\n"), and a 0xFF is
-// doubled so a byte of output can never be read as IAC. last_cr carries the
-// CR-then-LF decision across reads. Ends when the pipe does — husk exited and
-// the slave's seats emptied, which is the STREAM pty's EOF.
+// ── husk -> client (the outbound bridge thread, and the SOLE g_conn writer) ──
+// Every iteration first drains the reply mailbox (bytes the inbound thread
+// queued), then reads husk's output and encodes it: a lone LF becomes CR LF
+// (an existing CR is left alone, so husk's own "\r\n" does not become
+// "\r\r\n") and a 0xFF is doubled so a byte of output can never be read as
+// IAC. last_cr carries the CR-then-LF decision across reads. Ends when the
+// pipe does — husk exited and the slave's seats emptied, the STREAM pty's EOF.
+// A reply queued while this thread is blocked on the master read goes out on
+// the next husk output; mid-session replies are rare, and husk's prompt is
+// output, so nothing is stranded in practice.
 static int64_t outbound_thread(void *arg)
 {
 	(void)arg;
 	uint8_t in[512];
 	uint8_t out[1200];   // worst case is 2x plus the odd split CR — 1200 > 2*512
+	uint8_t mb[256];
 	int last_cr = 0;
 
 	for (;;)
 	{
+		size_t m;
+		while ((m = mbox_get(mb, sizeof(mb))) > 0)
+			if (write_all((int32_t)g_conn, mb, m) < 0)
+				goto done;
+
 		int64_t n = os64_read((int32_t)g_master, in, sizeof(in));
 		if (n <= 0)
 			break;
@@ -120,29 +170,50 @@ done:
 	return 0;
 }
 
-// Flush whatever the engine has queued for the peer, reporting back how much
-// actually went so a partial write is not re-sent.
-static void flush_engine(telnet_t *eng)
+// The engine's queued replies straight to the socket — the STARTUP flush,
+// while the main thread is still the only writer (the outbound thread has not
+// started). Reports how much went so a partial write is not re-sent.
+static void engine_to_socket_direct(telnet_t *eng)
 {
 	size_t len = 0;
 	const uint8_t *p = telnet_pending(eng, &len);
 	if (len == 0)
 		return;
-	int64_t w = os64_write((int32_t)g_conn, p, len);
-	if (w > 0)
-		telnet_sent(eng, (size_t)w);
+	if (write_all((int32_t)g_conn, p, len) == 0)
+		telnet_sent(eng, len);
 }
 
-// Push keystrokes into the pty master, all of them (a short write drops the
-// tail otherwise). Human typing is far below the ring, but a paste is not.
+// The engine's queued replies into the mailbox — the STEADY-STATE flush, from
+// the inbound thread, which must not write the socket. Whatever does not fit
+// stays queued in the engine for the next call.
+static void engine_to_mailbox(telnet_t *eng)
+{
+	size_t len = 0;
+	const uint8_t *p = telnet_pending(eng, &len);
+	if (len == 0)
+		return;
+	size_t q = mbox_put(p, len);
+	if (q)
+		telnet_sent(eng, q);
+}
+
+// Push keystrokes into the pty master, ALL of them — a full input ring
+// returns a short count and then 0, and dropping the tail there loses part of
+// an ordinary large paste (Codex #101 P2). On 0, nap and retry until husk
+// drains room or the master actually fails.
 static void keys_to_master(const uint8_t *buf, size_t len)
 {
 	size_t off = 0;
 	while (off < len)
 	{
 		int64_t n = os64_write((int32_t)g_master, buf + off, len - off);
-		if (n <= 0)
-			break;
+		if (n < 0)
+			break;                 // the master failed
+		if (n == 0)
+		{
+			os64_sleep(2);         // ring full — let husk read, then retry
+			continue;
+		}
 		off += (size_t)n;
 	}
 }
@@ -170,10 +241,12 @@ static int run_session(void)
 	telnet_t eng;
 	telnet_init_server(&eng);
 	telnet_offer_server(&eng);
-	flush_engine(&eng);   // the server speaks first: WILL ECHO/SGA, DO NAWS
+	engine_to_socket_direct(&eng);   // server speaks first: WILL ECHO/SGA, DO
+	                                 // NAWS — written directly, no other writer yet
 
 	// Husk's output goes out on its own thread, because it and the inbound
 	// read each block on one source and os64 has threads for exactly this.
+	// From here on that thread is the ONLY g_conn writer.
 	int64_t ob = os64_thread(outbound_thread, 0);
 	if (ob < 0)
 	{
@@ -208,7 +281,7 @@ static int run_session(void)
 			off += used;
 			if (dlen)
 				keys_to_master(data, dlen);
-			flush_engine(&eng);
+			engine_to_mailbox(&eng);   // the outbound thread sends these
 
 			uint32_t notes = telnet_notices(&eng);
 			if (notes & TELNET_NOTE_RESIZE)
@@ -226,6 +299,13 @@ static int run_session(void)
 			if (used == 0 && dlen == 0)
 				break;
 		}
+
+		// End the session even while input keeps arriving: if husk has exited
+		// (the outbound thread set this), a client still typing would keep
+		// every read succeeding and never let the timeout branch above notice
+		// (Codex #101 P2), leaving a dead shell unreaped and the session held.
+		if (g_session_over)
+			break;
 	}
 
 	// Returning ends the task: the master closes (husk hears SIGHUP and

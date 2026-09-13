@@ -16,7 +16,8 @@
 // this, never a redesign.
 //
 // The verbs:
-//   create   — SYSCALL_PTY_CREATE(cols, rows, mode) -> master handle
+//   create   — SYSCALL_PTY_CREATE(cols, rows) -> a GRID master handle;
+//              SYSCALL_PTY_CREATE_STREAM(cols, rows) -> a STREAM one
 //   seat     — spawn with OS64_SPAWN_SET_TTY | (master << OS64_SPAWN_TTY_SHIFT)
 //   keys in  — plain write(master, bytes), BOTH modes: each byte becomes a
 //              keystroke on the slave; 0x03 runs the slave's Ctrl+C
@@ -85,27 +86,23 @@ _Static_assert(sizeof(os64_pty_header_t) == 32, "pty header ABI: 32 bytes");
 
 // ── the calls ───────────────────────────────────────────────────────────────
 
-// The flavor, pty_create's third argument (the header comment says what
-// each one is for).
-#define OS64_PTY_MODE_GRID   0
-#define OS64_PTY_MODE_STREAM 1
-
 // Create a GRID-mode pty sized cols x rows. Returns the master handle
 // (>= 0), or a negative syscall error. Close it with os64_close like any
 // handle; keystrokes go in with plain os64_write on it.
 static inline int64_t os64_pty_create(uint32_t cols, uint32_t rows)
 {
-	return (int64_t)os64_syscall3(SYSCALL_PTY_CREATE, cols, rows, OS64_PTY_MODE_GRID);
+	return (int64_t)os64_syscall2(SYSCALL_PTY_CREATE, cols, rows);
 }
 
 // Create a STREAM-mode pty: same handle, same seating, same keystrokes in —
 // but the child's output comes back out of os64_read on the master as the
 // bytes it wrote, uninterpreted, and pty_snapshot is refused. The geometry
 // is still real: it is what /proc/self/tty reports to the child and what
-// os64_pty_resize changes.
+// os64_pty_resize changes. The FLAVOR is a SEPARATE SYSCALL, not an argument
+// on pty_create, so the two-argument GRID call never had its ABI widened.
 static inline int64_t os64_pty_create_stream(uint32_t cols, uint32_t rows)
 {
-	return (int64_t)os64_syscall3(SYSCALL_PTY_CREATE, cols, rows, OS64_PTY_MODE_STREAM);
+	return (int64_t)os64_syscall2(SYSCALL_PTY_CREATE_STREAM, cols, rows);
 }
 
 // Copy the slave's live screen: header always, cells up to max_cells (size

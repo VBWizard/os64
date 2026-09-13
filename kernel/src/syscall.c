@@ -98,6 +98,8 @@ static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_pty_create_stream(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -248,7 +250,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
 	SYSCALL_DEFINE(SYSCALL_RENAME,      "rename",      syscall_rename,      false, 0x03),  // legacy arg0/1 = paths; every trailing register is ignored
-	SYSCALL_DEFINE(SYSCALL_PTY_CREATE,   "pty_create",   syscall_pty_create,   false, 0x00),  // args: cols, rows — values, no pointers
+	SYSCALL_DEFINE(SYSCALL_PTY_CREATE,   "pty_create",   syscall_pty_create,   false, 0x00),  // args: cols, rows — values, no pointers (GRID)
+	SYSCALL_DEFINE(SYSCALL_PTY_CREATE_STREAM, "pty_create_stream", syscall_pty_create_stream, false, 0x00),  // args: cols, rows (STREAM)
 	SYSCALL_DEFINE(SYSCALL_PTY_SNAPSHOT, "pty_snapshot", syscall_pty_snapshot, false, 0x02),  // arg1 = header out; arg2 = cells out, NULLABLE (max_cells 0 = header-only probe — handler validates)
 	SYSCALL_DEFINE(SYSCALL_PTY_RESIZE,   "pty_resize",   syscall_pty_resize,   false, 0x00),  // args: master handle, cols, rows — values, no pointers
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
@@ -1858,9 +1861,18 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			}
 			os64_netconn_t nc = { .handle = ch, .peer_ip = conn->peer_ip,
 			                      .peer_port = conn->peer_port, ._reserved = 0 };
-			memcpy(kbuf, &nc, sizeof(nc));
-			got = (long)sizeof(nc);
-			break;
+			// Copy out HERE, not through the common tail, so a faulting
+			// destination does not strand the handle we just installed
+			// (Codex #101 P2): the connection is already off the accept
+			// queue and owns only this handle, so a copyout failure that
+			// returned without closing it would leak the conn and the slot,
+			// and repeated failures would exhaust both.
+			if (!copy_to_user_buffer(user_buffer, &nc, sizeof(nc)))
+			{
+				handle_close(task, ch);
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			}
+			return (uint64_t)sizeof(nc);
 		}
 
 		case HANDLE_PIPE_READ:
@@ -2142,21 +2154,18 @@ _Static_assert(__builtin_offsetof(tty_cell_t, color) ==
 // function's template; the difference is one object and one end — a pty has
 // no slave handle at all (PTY.md: the slave is named THROUGH the master at
 // spawn, and by task->tty everywhere else).
-static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
-    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+// The shared body of pty_create (44) and pty_create_stream (56). The flavor
+// is the SYSCALL NUMBER, never an argument — 44 stays two-argument so an
+// old GRID caller (RDX unspecified through os64_syscall2) is never re-read
+// as a mode (Codex #101 P1).
+static uint64_t syscall_pty_create_common(uint32_t cols, uint32_t rows, uint8_t mode)
 {
-	(void)arg3; (void)arg4; (void)arg5;
-
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
 	if (task == NULL)
 		return SYSCALL_RESULT_INVALID;
 
-	// arg2 is the flavor (os64/pty.h OS64_PTY_MODE_*, the same numbers as
-	// tty.h's PTY_MODE_*); pty_create_slave refuses one it does not know.
-	if (arg2 > 0xFF)
-		return SYSCALL_RESULT_INVALID;
-	tty_t *slave = pty_create_slave((uint32_t)arg0, (uint32_t)arg1, (uint8_t)arg2);
+	tty_t *slave = pty_create_slave(cols, rows, mode);
 	if (slave == NULL)
 		return SYSCALL_RESULT_INVALID;
 
@@ -2169,9 +2178,24 @@ static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_INVALID;
 	}
 
-	printd(DEBUG_SYSCALL, "pty_create: task %s got master %d (pty%u, %ux%u)\n",
-	       task->exename, mh, slave->index, slave->cols, slave->rows);
+	printd(DEBUG_SYSCALL, "pty_create: task %s got master %d (pty%u, %ux%u, %s)\n",
+	       task->exename, mh, slave->index, slave->cols, slave->rows,
+	       mode == PTY_MODE_STREAM ? "stream" : "grid");
 	return (uint64_t)mh;
+}
+
+static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	return syscall_pty_create_common((uint32_t)arg0, (uint32_t)arg1, PTY_MODE_GRID);
+}
+
+static uint64_t syscall_pty_create_stream(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	return syscall_pty_create_common((uint32_t)arg0, (uint32_t)arg1, PTY_MODE_STREAM);
 }
 
 // pty_snapshot(master, header out, cells out, max_cells) -> cells copied.

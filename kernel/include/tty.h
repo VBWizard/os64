@@ -207,7 +207,10 @@ typedef struct tty
 // the interpreter and the grid; STREAM (SERVERS.md § 2) hands the child's
 // bytes to `stream`, a pipe the master reads — a pipe wearing a tty's
 // identity, so the blocking, the EOF and the EPIPE rules are pipe.c's.
-// The values are the ABI's (os64/pty.h OS64_PTY_MODE_*).
+// The flavor is NOT an ABI value: it is the syscall number — pty_create (44)
+// for GRID, pty_create_stream (56) for STREAM — so 44 never widened its
+// two-argument contract for a mode (Codex #101 P1). These are the kernel's
+// internal names for what each syscall passes to pty_create_slave.
 #define PTY_MODE_GRID   0
 #define PTY_MODE_STREAM 1
 

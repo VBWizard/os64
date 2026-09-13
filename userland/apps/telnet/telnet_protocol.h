@@ -189,6 +189,8 @@ typedef struct {
     uint8_t  sb_opt;          // which option's subnegotiation we are inside
     uint8_t  sb_len;          // bytes gathered into sb_buf (server, NAWS)
     uint8_t  sb_buf[8];       // NAWS is four bytes; the cap discards the rest
+    bool     saw_cr;          // (SERVER) last data byte was CR — collapse a
+                              //  following LF/NUL so CR LF becomes one Enter
 
     // Outbound, a CR is only half a decision: the LF that may or may not
     // follow it belongs to the same newline, and can arrive in the next call.

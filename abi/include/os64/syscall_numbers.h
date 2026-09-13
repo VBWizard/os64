@@ -293,6 +293,11 @@
 // renumbering the incumbent costs every binary ever built.
 #define SYSCALL_NET_DIAL   37
 
+// pty_create_stream(cols, rows) — a STREAM-flavor pty (SERVERS.md). Its own
+// syscall rather than a mode argument on 44, so 44's two-argument ABI is
+// untouched for the GRID callers already compiled against it.
+#define SYSCALL_PTY_CREATE_STREAM 56
+
 // net_announce(local) — open the INBOUND door (SERVERS.md, 2026-09-12).
 // arg0 = const os64_netdest_t* read as "where I am": ip 0, the port to
 // answer on, protocol TCP. Returns a LISTENER handle whose read() yields
@@ -600,16 +605,19 @@ typedef enum os64_shutdown_mode
 #define OS64_SPAWN_SET_TTY     0x2
 #define OS64_SPAWN_TTY_SHIFT   32
 
-// The pty family (PTY.md — ratified 2026-08-19). pty_create(cols, rows,
-// mode) returns a MASTER handle; the slave is a kernel tty the master names
-// at spawn (above) and tasks name as their controlling terminal. In BOTH
-// modes write(master) injects keystrokes (0x03 runs the slave's Ctrl+C
-// intercept). What differs is the way OUT (os64/pty.h OS64_PTY_MODE_*):
-// GRID interprets the child's output into a screen that pty_snapshot copies
-// out and read(master) refuses; STREAM (SERVERS.md, 2026-09-12) hands the
-// child's bytes to read(master) uninterpreted and pty_snapshot refuses —
-// what a remote terminal wants, since the rendering happens at its end.
-#define SYSCALL_PTY_CREATE   44
+// The pty family (PTY.md — ratified 2026-08-19). pty_create(cols, rows)
+// returns a MASTER handle; the slave is a kernel tty the master names at
+// spawn (above) and tasks name as their controlling terminal. In BOTH pty
+// flavors write(master) injects keystrokes (0x03 runs the slave's Ctrl+C
+// intercept). What differs is the way OUT, and the FLAVOR IS THE SYSCALL
+// NUMBER, not an argument — 44 stays exactly two-argument so an already-built
+// GRID caller (which passes RDX unspecified through os64_syscall2) is never
+// re-read as a mode. GRID (44) interprets the child's output into a screen
+// that pty_snapshot copies out and read(master) refuses; STREAM (56, SERVERS.md
+// 2026-09-12) hands the child's bytes to read(master) uninterpreted and
+// pty_snapshot refuses — what a remote terminal wants, the rendering happening
+// at its end.
+#define SYSCALL_PTY_CREATE        44
 #define SYSCALL_PTY_SNAPSHOT 45
 // pty_resize(master, cols, rows): the grid follows the window and every
 // task seated on the slave that installed a SIGWINCH handler hears it; the

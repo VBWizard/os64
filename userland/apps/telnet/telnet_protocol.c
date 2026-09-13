@@ -375,14 +375,47 @@ size_t telnet_receive(telnet_t *t, const void *in, size_t len,
                 t->parse = P_IAC;
                 break;
             }
-            // NUL IS THE NVT'S NO-OP, and dropping it here is what makes the
-            // two-byte newline take care of itself. RFC 854 gives NUL no
-            // meaning at the printer; CR NUL is how the protocol spells a
-            // bare carriage return, the NUL being there only so that a CR is
-            // never the last byte of a line; and a NUL on its own is the PAD
-            // character terminfo has been sending to slow terminals since the
-            // 1970s. Drop it, and CR NUL arrives at the screen as the CR it
-            // means while CR LF arrives as both bytes, with no state to carry
+            if (t->role == TELNET_SERVER) {
+                // NORMALIZE A LINE ENDING TO ONE '\n' — husk's Enter. A
+                // client's CR LF, CR NUL, lone CR or lone LF all become a
+                // single '\n'; without this the CLIENT parser's verbatim CR
+                // LF reaches husk as TWO Enters, a command followed by an
+                // empty line and an extra prompt (Codex #101 P2). saw_cr
+                // carries the CR across the byte — and across reads — so the
+                // LF or NUL that completes it is swallowed.
+                if (c == '\r') {
+                    if (used == cap) { stalled = true; break; }  // don't consume; retry
+                    out[used++] = '\n';
+                    t->saw_cr = true;
+                    break;
+                }
+                if (c == '\n') {
+                    bool swallow = t->saw_cr;   // the LF of a CR LF
+                    t->saw_cr = false;
+                    if (swallow)
+                        break;                  // the CR already produced the Enter
+                    if (used == cap) { stalled = true; break; }
+                    out[used++] = '\n';
+                    break;
+                }
+                if (c == 0) {                   // CR NUL's NUL, or a lone NVT NUL
+                    t->saw_cr = false;
+                    break;
+                }
+                t->saw_cr = false;
+                if (used == cap) { stalled = true; break; }
+                out[used++] = c;
+                break;
+            }
+            // CLIENT role: the remote program's output, verbatim. NUL IS THE
+            // NVT'S NO-OP, and dropping it here is what makes the two-byte
+            // newline take care of itself. RFC 854 gives NUL no meaning at
+            // the printer; CR NUL is how the protocol spells a bare carriage
+            // return, the NUL being there only so that a CR is never the last
+            // byte of a line; and a NUL on its own is the PAD character
+            // terminfo has been sending to slow terminals since the 1970s.
+            // Drop it, and CR NUL arrives at the screen as the CR it means
+            // while CR LF arrives as both bytes, with no state to carry
             // between reads. os64's renderer would otherwise draw a glyph for
             // all three.
             if (c == 0)
@@ -421,6 +454,21 @@ size_t telnet_receive(telnet_t *t, const void *in, size_t len,
                 // about. Answering is the caller's decision, not ours.
                 t->notices |= TELNET_NOTE_AYT;
                 t->parse = P_DATA;
+                break;
+            case TELNET_IP:
+                if (t->role == TELNET_SERVER) {
+                    // "Interrupt process" is the remote Ctrl+C. Inject it as
+                    // 0x03 into the keystroke stream; on the master that runs
+                    // the slave's interrupt intercept and aims SIGINT at the
+                    // foreground job, exactly as a local Ctrl+C does (Codex
+                    // #101 P2). Room-checked so the IAC IP is reprocessed
+                    // rather than the interrupt dropped.
+                    if (used == cap) { stalled = true; break; }
+                    out[used++] = 0x03;
+                    t->parse = P_DATA;
+                    break;
+                }
+                t->parse = P_DATA;   // CLIENT: consumed like the rest
                 break;
             default:
                 // NOP, GA, DM, BRK, IP, AO, EC, EL, a stray SE, and every

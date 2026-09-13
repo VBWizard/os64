@@ -150,12 +150,22 @@ session program never learns it is on a network. os64's rule that a child
 gets 0/1/2 plus exactly what was asked for is that model already.
 
 The session: `os64_pty_create_stream(80, 24)`, `os64_spawn_seated("/bin/
-husk")`, then two threads — the main thread reads the connection and
-feeds the master, the second reads the master and feeds the connection —
-because each side blocks on one source and os64 has threads. Whichever
-direction ends first exits the task; the kernel's close-all then hangs up
-the shell (master close → SIGHUP) and sends the FIN (connection close),
-in whichever order the table holds them. Nothing here needs a select.
+husk")`, then two threads — the main thread reads the connection and feeds
+the master, the second reads the master and feeds the connection — because
+each side blocks on one source and os64 has threads. **The second thread is
+the SOLE connection writer.** The kernel's per-connection lock stops two
+writers corrupting memory, but a write is not atomic under backpressure
+(`tcp_conn_write` copies what fits, drops the lock, resumes), so a second
+writer could split an outbound doubled-IAC and produce an invalid stream.
+So the inbound thread never writes the connection: the negotiation replies
+it produces go into a lock-free single-producer mailbox, and the outbound
+thread drains that mailbox to the socket alongside husk's bytes. The initial
+offers are written directly by the main thread before the outbound thread
+starts, so the handshake races nothing; a rare mid-session reply flushes on
+the next husk output. Whichever direction ends first exits the task; the
+kernel's close-all then hangs up the shell (master close → SIGHUP) and sends
+the FIN (connection close), in whichever order the table holds them. Nothing
+here needs a select.
 
 **The NVT translation** (RFC 854, both directions):
 
@@ -177,10 +187,12 @@ and all) into `telnet_peer_size` and a `TELNET_NOTE_RESIZE` notice, where
 the client engine only ever skipped a subnegotiation to throw it away. ECHO
 is offered by the server because echo is the reader's job in os64 — husk
 echoes what it reads — and a client that echoed locally as well would show
-every key twice. The outbound half (husk's bytes → client) needs no
-negotiation state — a bare LF becomes CR LF, a 0xFF is doubled — so telnetd
-does it inline rather than through the shared engine's queue, which the two
-bridge threads would otherwise race over with no lock to hold.
+every key twice. Inbound line endings are the engine's job too in the server
+role: CR LF, CR NUL and a lone CR all collapse to one `\n`, or husk reads a
+client's newline as two Enters and answers with a second empty prompt. The
+outbound half (husk's bytes → client) needs no negotiation state — a bare LF
+becomes CR LF, a 0xFF is doubled — so telnetd does it inline, in the sole
+connection-writer thread described above.
 
 **Launch:** the `TELNETD` cmdline token, the CRON precedent — the kernel
 starts it once userland is up, NOT husk.rc, because husk.rc runs in every
