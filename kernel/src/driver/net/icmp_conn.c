@@ -105,8 +105,16 @@ long icmp_conn_write(icmp_conn_t* c, const void* buf, size_t len)
 	// MINUTE: the ARP cache's 60s lazy TTL expired the gateway entry, the
 	// next echo ate the first-packet drop, and write() failed for one
 	// beat. 500ms of retries is geological time for an ARP round trip.)
+	// EVERY attempt re-asks whether a sibling has hung up meanwhile (the
+	// UDP writer's rule): a request sent after the close would be a success
+	// whose reply is guaranteed to be discarded (Codex #101 rd8).
 	for (int tries = 0; tries < 50; tries++)
 	{
+		irqflags = spinlock_acquire_irqsave(&c->lock);
+		bool closed = c->closed;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+		if (closed)
+			return ICMP_CONN_ERR_CLOSED;   // hung up under us
 		int32_t rc = icmp_send_echo(c->dev, c->peer_ip, c->identifier, seq,
 		                            buf, (uint16_t)len);
 		if (rc == 0)

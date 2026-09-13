@@ -3826,6 +3826,16 @@ static void spawn_unpin(const handle_t *pin, const bool *pinnedSlot)
 			handle_unpin(&pin[i]);
 }
 
+// Give back the CHILD's TCP references (taken at resolve — see the loop in
+// syscall_spawn) when no child comes to own them. Slots not yet resolved are
+// HANDLE_NONE, so every failure path may call this for all three.
+static void spawn_release_child_tcp(spawn_params_t *p)
+{
+	for (int slot = 0; slot < 3; slot++)
+		if (p->redirType[slot] == HANDLE_NET_TCP && p->redirObject[slot] != NULL)
+			tcp_conn_release((tcp_conn_t *)p->redirObject[slot]);
+}
+
 static void spawn_do_create(void *arg)
 {
 	spawn_params_t *p = (spawn_params_t *)arg;
@@ -3833,7 +3843,8 @@ static void spawn_do_create(void *arg)
 	                            false, THREAD_NO_AFFINITY);
 	if (child == NULL)
 	{
-		p->result = -1;   // the child never happened; the caller's pins go back
+		spawn_release_child_tcp(p);   // the child never happened; its references go back
+		p->result = -1;               // (the caller's pins go back in syscall_spawn)
 		return;
 	}
 
@@ -3952,12 +3963,12 @@ static void spawn_do_create(void *arg)
 		// which for a just-opened redirect file is position 0, as intended.)
 		else if (p->redirType[slot] == HANDLE_FILE)
 			__sync_add_and_fetch(&((vfs_file_t *)p->redirObject[slot])->handleRefCount, 1);
-		// And a TCP connection by the same rule (tcp.h handles): the child's
-		// handle is one more holder, and the last release sends the FIN.
-		// Safe to take here, after the blocking load, because the caller's
-		// pin (syscall_spawn) has held the conn alive throughout.
-		else if (p->redirType[slot] == HANDLE_NET_TCP)
-			tcp_conn_ref((tcp_conn_t *)p->redirObject[slot]);
+		// A TCP connection's reference for the child was taken at RESOLVE,
+		// in syscall_spawn, NOT here: the caller's pin keeps only the ROW
+		// alive (tcp.h pins), so a sibling closing the parent's last handle
+		// during the load would hang the conn up, and a reference taken now
+		// would resurrect a closing stream into the child (Codex #101 rd8).
+		// handle_install hands that already-held reference over.
 
 		handle_install(child, slot, p->redirType[slot], p->redirObject[slot]);
 	}
@@ -4120,6 +4131,7 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		{
 			if (defaulted)
 				continue;   // the caller closed its own slot: the built-in default
+			spawn_release_child_tcp(p);
 			spawn_unpin(pin, pinnedSlot);
 			kfree(p);
 			return SYSCALL_RESULT_INVALID;   // caller passed a bogus handle
@@ -4140,6 +4152,7 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		    pin[slot].type != HANDLE_PIPE_WRITE && pin[slot].type != HANDLE_FILE &&
 		    pin[slot].type != HANDLE_NET_TCP)
 		{
+			spawn_release_child_tcp(p);
 			spawn_unpin(pin, pinnedSlot);
 			kfree(p);
 			return SYSCALL_RESULT_INVALID;
@@ -4147,6 +4160,15 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 		p->redirType[slot] = pin[slot].type;
 		p->redirObject[slot] = pin[slot].object;
+		// THE CHILD'S TCP REFERENCE, TAKEN NOW, while the handle is provably
+		// live under our pin: a pin keeps the row alive but not the line
+		// (tcp.h pins), so a sibling closing the parent's last handle during
+		// the load below would hang the conn up, and a reference taken after
+		// the load would resurrect a closing stream into the child (Codex
+		// #101 rd8). Given back by spawn_release_child_tcp if no child comes
+		// to own it; handed over by handle_install if one does.
+		if (pin[slot].type == HANDLE_NET_TCP)
+			tcp_conn_ref((tcp_conn_t *)pin[slot].object);
 	}
 
 	// task_create runs under kKernelPML4 so its disk I/O sees the DMA mappings.

@@ -59,16 +59,23 @@ static volatile int g_session_over = 0;
 // outbound thread, the sole socket writer, which then drains the mailbox one
 // final time and ends. So the word reaches the wire before the FIN does, and
 // no interleaving can show the flag with the word still in the engine
-// (Codex #101 rd6). g_end_word below is the inbound thread's own note of
-// the word still owed to the engine, and so of the flag owed after it.
+// (Codex #101 rd6). g_word below, with g_word_ends set, is the inbound
+// thread's own note of the word still owed to the engine, and so of the
+// flag owed after it.
 static volatile int g_end_after_drain = 0;
-// The last word itself, and how much of it the engine has taken so far:
-// telnet_send_text accepts SHORT when its queue is full, so under reply
-// backpressure the notice enters the engine in pieces across flushes, and
-// the end is owed only once the whole of it has (Codex #101 rd7).
-static const char *g_end_word = 0;
-static size_t g_end_word_len = 0;
-static size_t g_end_word_off = 0;
+// A notice of ours on its way into the engine — the AYT answer, or the last
+// word — and how much of it the engine has taken so far: telnet_send_text
+// accepts SHORT when its queue is full, so under reply backpressure a notice
+// enters the engine in pieces across flushes (Codex #101 rd7, rd8). One slot:
+// a second AYT while the first answer is still going in is not answered
+// again (one answer in a backpressured window is evidence enough), and the
+// last word REPLACES whatever is pending, since nothing after it matters.
+// g_word_ends says the pending word is the last one and the end is owed once
+// the whole of it is in.
+static const char *g_word = 0;
+static size_t g_word_len = 0;
+static size_t g_word_off = 0;
+static int g_word_ends = 0;
 
 // The reply mailbox: a lock-free single-producer/single-consumer byte ring.
 // The inbound thread (producer) enqueues the engine's negotiation replies;
@@ -269,17 +276,34 @@ static void engine_to_mailbox(telnet_t *eng)
 // (Codex #101 rd6).
 static void flush_engine(telnet_t *eng)
 {
-	// The rest of a last word the engine could only take part of: offered
-	// again on every flush until all of it is in. Only then is the end
-	// owed, and only once the engine has drained to empty.
-	if (g_end_word != 0 && g_end_word_off < g_end_word_len)
-		g_end_word_off += telnet_send_text(eng, g_end_word + g_end_word_off,
-		                                   g_end_word_len - g_end_word_off);
+	// The rest of a notice the engine could only take part of: offered
+	// again on every flush until all of it is in. A finished notice frees
+	// the slot; a finished LAST word owes the end, once the engine has
+	// drained to empty.
+	if (g_word != 0 && g_word_off < g_word_len)
+		g_word_off += telnet_send_text(eng, g_word + g_word_off, g_word_len - g_word_off);
+	if (g_word != 0 && g_word_off == g_word_len && !g_word_ends)
+		g_word = 0;
 	engine_to_mailbox(eng);
 	size_t left = 0;
 	(void)telnet_pending(eng, &left);
-	if (g_end_word != 0 && g_end_word_off == g_end_word_len && left == 0)
+	if (g_word != 0 && g_word_ends && g_word_off == g_word_len && left == 0)
 		__atomic_store_n(&g_end_after_drain, 1, __ATOMIC_RELEASE);
+}
+
+// Queue a notice of ours (see g_word). `ends` marks the last word, which
+// takes the slot from anything pending; an ordinary notice waits its turn
+// or, if one is already going in, is dropped.
+static void queue_word(const char *word, size_t len, int ends)
+{
+	if (g_word != 0 && !ends)
+		return;
+	if (g_word != 0 && g_word_ends)
+		return;   // the end is already on its way; nothing outranks it
+	g_word = word;
+	g_word_len = len;
+	g_word_off = 0;
+	g_word_ends = ends;
 }
 
 // Push keystrokes into the pty master, ALL of them — a full input ring
@@ -332,6 +356,12 @@ static int run_session(void)
 
 	telnet_t eng;
 	telnet_init_server(&eng);
+	// The server's own notices are LINES: their `\r\n` must reach the
+	// client as CR LF (a new line), not the engine's default CR NUL (a bare
+	// carriage return, which would overprint the line the notice landed
+	// on). husk's bytes never pass through this setting — the outbound
+	// thread encodes those itself (Codex #101 rd8).
+	telnet_set_eol_crlf(&eng, true);
 	telnet_offer_server(&eng);
 	engine_to_socket_direct(&eng);   // server speaks first: WILL ECHO/SGA, DO
 	                                 // NAWS — written directly, no other writer yet
@@ -391,7 +421,7 @@ static int run_session(void)
 				// dead (Codex #101 rd2). telnet_send_text queues it; the
 				// outbound thread is the one that writes the socket.
 				static const char yes[] = "\r\n[telnetd: yes]\r\n";
-				telnet_send_text(&eng, yes, sizeof(yes) - 1);
+				queue_word(yes, sizeof(yes) - 1, 0);   // fed in whole across flushes (rd8)
 			}
 			if ((notes & TELNET_NOTE_ECHO) && !telnet_option_ours(&eng, TELNET_OPT_ECHO))
 			{
@@ -408,12 +438,7 @@ static int run_session(void)
 				static const char sorry[] =
 					"\r\n[telnetd: this server echoes (RFC 857); a client that"
 					" declines it would see every keystroke twice -- closing]\r\n";
-				if (g_end_word == 0)
-				{
-					g_end_word = sorry;
-					g_end_word_len = sizeof(sorry) - 1;
-					g_end_word_off = 0;   // flush_engine feeds it in, whole, before the end
-				}
+				queue_word(sorry, sizeof(sorry) - 1, 1);   // flush_engine feeds it in, whole, before the end
 			}
 			flush_engine(&eng);   // the outbound thread sends these
 

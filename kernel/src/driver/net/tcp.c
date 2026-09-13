@@ -2654,9 +2654,20 @@ tcp_listener_t* tcp_listener_announce(net_device_t* dev, uint16_t port, int64_t*
 		uint32_t bit = port - TCP_EPHEMERAL_BASE;
 		if (s_ephemeral_used[bit / 64] & (1ULL << (bit % 64)))
 		{
-			spinlock_release_irqrestore(&kTcpListLock, lf);
-			if (why) *why = OS64_NET_ERR_PORT_TAKEN;
-			return NULL;
+			// The bit is set. A DIAL's port is its own and the answer is
+			// no; a bit kept only by PASSIVE streams that outlived their
+			// listener (tcp_conn_port_release_locked) is a reservation
+			// against dials, not against a replacement listener — accepted
+			// streams have their own four-tuples, and a server restarted
+			// while old sessions linger must be able to reopen its door
+			// (Codex #101 rd8). No listener holds it: checked above.
+			for (tcp_conn_t* c = kTcpConnList; c != NULL; c = c->next)
+				if (!c->tombstone && c->local_port == port && !c->passive)
+				{
+					spinlock_release_irqrestore(&kTcpListLock, lf);
+					if (why) *why = OS64_NET_ERR_PORT_TAKEN;
+					return NULL;
+				}
 		}
 		s_ephemeral_used[bit / 64] |= (1ULL << (bit % 64));
 	}

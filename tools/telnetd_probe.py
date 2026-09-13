@@ -98,6 +98,15 @@ def read_for(sock, secs, refuse_echo=False):
     return bytes(got)
 
 
+def fresh_connection(port):
+    """A new socket AND a fresh parser: a sequence cut short by the previous
+    session's deadline or hang-up must not be prepended to the next
+    session's opening negotiation."""
+    global _carry
+    _carry = bytearray()
+    return socket.create_connection(("127.0.0.1", port), timeout=10)
+
+
 def show(label, data):
     print(f"--- {label} ({len(data)} bytes) ---")
     print(data.decode("latin-1").replace("\r", "\\r"))
@@ -112,7 +121,7 @@ def main():
     if mode == "session":
         n = int(sys.argv[3]) if len(sys.argv) > 3 else 1
         for k in range(n):
-            s = socket.create_connection(("127.0.0.1", port), timeout=10)
+            s = fresh_connection(port)
             banner = read_for(s, 2.5)
             s.sendall(b"ls /\r\n")
             answer = read_for(s, 2.5)
@@ -122,7 +131,7 @@ def main():
             time.sleep(1.0)
         print("sessions: done")
     elif mode == "dontecho":
-        s = socket.create_connection(("127.0.0.1", port), timeout=10)
+        s = fresh_connection(port)
         show("dontecho", read_for(s, 4.0, refuse_echo=True))
         s.close()
     else:
