@@ -3683,6 +3683,16 @@ typedef struct {
 // in the kernel tables but NOT in a user task's CR3 (which is why calling
 // task_create directly from the syscall faulted in nvme_submit_command). Same
 // discipline the demand-pager uses for kernel_read_file.
+// Release every TCP reference taken while resolving the redirection handles.
+// Called on the spawn's failure paths so a connection ref'd for a child that
+// never comes to exist is not leaked (Codex #101 rd3).
+static void spawn_release_redir_tcp(spawn_params_t *p)
+{
+	for (int slot = 0; slot < 3; slot++)
+		if (p->redirType[slot] == HANDLE_NET_TCP && p->redirObject[slot] != NULL)
+			tcp_conn_release((tcp_conn_t *)p->redirObject[slot]);
+}
+
 static void spawn_do_create(void *arg)
 {
 	spawn_params_t *p = (spawn_params_t *)arg;
@@ -3690,6 +3700,7 @@ static void spawn_do_create(void *arg)
 	                            false, THREAD_NO_AFFINITY);
 	if (child == NULL)
 	{
+		spawn_release_redir_tcp(p);   // the child never happened; give the refs back
 		p->result = -1;
 		return;
 	}
@@ -3802,10 +3813,12 @@ static void spawn_do_create(void *arg)
 		// which for a just-opened redirect file is position 0, as intended.)
 		else if (p->redirType[slot] == HANDLE_FILE)
 			__sync_add_and_fetch(&((vfs_file_t *)p->redirObject[slot])->handleRefCount, 1);
-		// A TCP connection by the same rule: two handles name it now, and
-		// only the last close sends the FIN (tcp_conn_release).
-		else if (p->redirType[slot] == HANDLE_NET_TCP)
-			tcp_conn_ref((tcp_conn_t *)p->redirObject[slot]);
+		// A TCP connection's reference was taken at RESOLUTION, in the
+		// caller's context before this blocking load — NOT here (Codex #101
+		// rd3): taking it after task_create let a sibling close the parent's
+		// last handle during the load, detaching the conn and, past the
+		// morgue interval, freeing it under a would-be increment. handle_install
+		// hands that already-held reference to the child.
 
 		handle_install(child, slot, p->redirType[slot], p->redirObject[slot]);
 	}
@@ -3950,6 +3963,7 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		handle_t *h = (p->parent != NULL) ? handle_get(p->parent, (int)redir[slot]) : NULL;
 		if (h == NULL)
 		{
+			spawn_release_redir_tcp(p);   // undo refs taken for earlier slots
 			kfree(p);
 			return SYSCALL_RESULT_INVALID;   // caller passed a bogus handle
 		}
@@ -3966,12 +3980,21 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		if (h->type == HANDLE_DIR || h->type == HANDLE_NET_UDP ||
 		    h->type == HANDLE_NET_ICMP || h->type == HANDLE_NET_LISTENER)
 		{
+			spawn_release_redir_tcp(p);   // undo refs taken for earlier slots
 			kfree(p);
 			return SYSCALL_RESULT_INVALID;
 		}
 
 		p->redirType[slot] = h->type;
 		p->redirObject[slot] = h->object;
+		// PIN A TCP CONNECTION NOW, in the caller's context where the handle
+		// still holds it live — before the blocking task_create, so a sibling
+		// closing the parent's last handle during the load cannot free it
+		// under us (Codex #101 rd3). The reference transfers to the child at
+		// handle_install; the failure paths above and in spawn_do_create give
+		// it back if no child comes to own it.
+		if (h->type == HANDLE_NET_TCP)
+			tcp_conn_ref((tcp_conn_t *)h->object);
 	}
 
 	// task_create runs under kKernelPML4 so its disk I/O sees the DMA mappings.

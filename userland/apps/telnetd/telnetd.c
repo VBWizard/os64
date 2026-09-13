@@ -330,13 +330,21 @@ static int run_session(void)
 			}
 			engine_to_mailbox(&eng);   // the outbound thread sends these
 
-			// used == 0 means the data buffer filled with no room to make
-			// progress; it was just drained to the master, so the next pass
-			// of this same loop consumes more. A used of 0 with a full input
-			// still un-consumed would spin, so break to read afresh only when
-			// nothing at all moved.
+			// used == 0 && dlen == 0 means telnet_receive could neither emit
+			// data nor answer the next byte — BACKPRESSURE: the client stopped
+			// reading, so the mailbox and the engine's reply queue are full.
+			// Do NOT break to a fresh socket read — the unconsumed suffix
+			// (net[off..n]) is not lost, it is retried once the outbound
+			// thread drains space (Codex #101 rd3; the old comment here
+			// claimed the reread was safe, and it was not). off stays put, so
+			// the while loop re-runs telnet_receive on the same bytes. End if
+			// husk exited meanwhile.
 			if (used == 0 && dlen == 0)
-				break;
+			{
+				if (g_session_over)
+					break;
+				os64_sleep(2);
+			}
 		}
 
 		// End the session even while input keeps arriving: if husk has exited
