@@ -1139,9 +1139,17 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 	t->pty_mode = mode;
 	// STREAM's way out. The pipe is born with one reader (the master) and
 	// one writer (the seats, counted as one: the write end closes when
-	// they empty), so pipe.c's own EOF and EPIPE rules apply unchanged.
+	// they empty), so pipe.c's own EOF and EPIPE rules apply unchanged —
+	// and with the pty's own side-less hold (pipe.h holds), dropped at
+	// burial, so the pipe is there for as long as the pty is whatever the
+	// ends have done: a seated task's write can take a writer's reference
+	// on it under its seat hold without racing the last end close.
 	if (mode == PTY_MODE_STREAM)
+	{
 		t->stream = pipe_create();
+		if (t->stream != NULL)
+			pipe_hold(t->stream);
+	}
 	t->state   = TTY_LIVE;   // born attended — its master IS the human
 
 	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
@@ -1278,21 +1286,25 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
 // The count doubles as a LIFETIME GUARD for kernel code that must survive its
 // own hangup sweep (pty_master_close) — a holder is a holder, whether it is a
 // task sitting at the terminal or the code taking the terminal away.
-// The slave is buried when the master is CLOSED and the seats are EMPTY —
-// whichever happens last does it. The race between a last unref and a
-// master close is settled by the unlink: burial happens inside the list
-// lock, and only the caller who actually finds the node on the list frees
-// it — the loser finds it already gone and walks away.
+// The slave is buried when the master is CLOSED, the seats are EMPTY, and
+// no operation is still inside it from either side (holds) — whichever of
+// the three happens last does it. The race between them is
+// settled by the unlink: burial happens inside the list lock, and only the
+// caller who actually finds the node on the list frees it — the loser finds
+// it already gone and walks away.
 
 static void pty_maybe_bury(tty_t *t)
 {
-	if (!t->masterClosed || t->seats > 0)
+	if (!t->masterClosed || t->seats > 0 || t->holds > 0)
 		return;
 
 	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
 	// Re-check under the lock (the flags may have moved), then unlink; a
-	// node not found was buried by the racing caller.
-	if (!t->masterClosed || t->seats > 0)
+	// node not found was buried by the racing caller. holds is the third
+	// condition: an operation still inside the slave (pty_master_hold,
+	// pty_seat_hold) buries it itself when it leaves — and a seat hold is
+	// taken under this same lock, so one cannot arrive after the unlink.
+	if (!t->masterClosed || t->seats > 0 || t->holds > 0)
 	{
 		spinlock_release_irqrestore(&kPtyListLock, flags);
 		return;
@@ -1313,6 +1325,11 @@ static void pty_maybe_bury(tty_t *t)
 
 	if (found)
 	{
+		// The pty's own side-less hold on its stream (pipe.h holds): the
+		// ends have closed by now, so this is normally the free itself; an
+		// operation that still references an end keeps the pipe past it.
+		if (t->stream != NULL)
+			pipe_unhold(t->stream);
 		kfree(t->cells);
 		kfree(t);
 	}
@@ -1418,8 +1435,57 @@ void pty_master_close(tty_t *slave)
 	}
 
 	// Drop the guard, which IS the burial call: whoever holds the last seat
-	// buries, and after the sweep that is us or it is the task still seated.
+	// buries, and after the sweep that is us or it is the task still seated
+	// — or the operation still inside (pty_master_unhold, pty_seat_unhold).
 	tty_pty_unref(slave);
+}
+
+// The pin's hold (tty.h). Taken under the holder's handleLock while the
+// master handle is provably live, which is what makes the stream's read end
+// safe to reference here: pty_master_close — the only closer of that end —
+// runs after a claim this hold cannot straddle. Released in the reverse
+// order: the pipe end first (its last-out rule may destroy the pipe), then
+// the hold, whose zero is a burial condition like an emptied seat count.
+void pty_master_hold(tty_t *slave)
+{
+	__sync_fetch_and_add(&slave->holds, 1);
+	if (slave->stream != NULL)
+		pipe_ref_read_end(slave->stream);
+}
+
+void pty_master_unhold(tty_t *slave)
+{
+	if (slave->stream != NULL)
+		pipe_close_read_end(slave->stream);
+	if (__sync_sub_and_fetch(&slave->holds, 1) <= 0)
+		pty_maybe_bury(slave);
+}
+
+// The seat side's hold (tty.h). The pointer is matched against the registry
+// WITHOUT being dereferenced first: a slave the caller's task was seated on
+// may already be buried — its own teardown drops the seat while a sibling
+// thread is still entering a console read — and the list lock is what
+// burial unlinks under, so a node found here is alive for as long as the
+// hold is held.
+bool pty_seat_hold(tty_t *slave)
+{
+	bool found = false;
+	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
+	for (tty_t *t = kPtyList; t != NULL; t = t->next_pty)
+		if (t == slave)
+		{
+			__sync_fetch_and_add(&t->holds, 1);
+			found = true;
+			break;
+		}
+	spinlock_release_irqrestore(&kPtyListLock, flags);
+	return found;
+}
+
+void pty_seat_unhold(tty_t *slave)
+{
+	if (__sync_sub_and_fetch(&slave->holds, 1) <= 0)
+		pty_maybe_bury(slave);
 }
 
 // console_wake_if_ready's pty leg — the same wake idiom as its VT loop,

@@ -345,6 +345,11 @@
 		// stderr fields above are the OLD (unused) placeholders from the first
 		// OS — this array is the real thing.
 		handle_t handles[TASK_MAX_HANDLES];
+		// Makes a handle's resolve-and-reference one operation against a
+		// sibling's close (handle.c § The pin). Held for a few instructions
+		// by handle_pin and by handle_close's claim, never across a park or
+		// a release; the object's own lock nests INSIDE it, never outside.
+		spinlock_t handleLock;
 		// The controlling terminal (tty.h): which virtual terminal this task
 		// reads, writes, and answers Ctrl+C on. Inherited from the parent at
 		// task_create — a shell's children work its terminal, which is the

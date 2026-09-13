@@ -140,6 +140,31 @@ was built flavor-independent; the flavor is one branch at one choke point.
   deadline and a lie with a delay is the thing the tripwire doctrine
   forbids. telnetd needs none: it runs one thread per direction.
 
+**A handle a thread is inside is PINNED** (handle.c § The pin — Codex #101
+rd4, and the reason this section exists). telnetd is the first program in
+os64 that shares handles between threads and parks in a syscall while its
+task tears down, and it found what that exposes: a syscall used to resolve a
+handle to a bare pointer, and a sibling's close could free the object while
+the first thread was still inside it — the outbound thread parked in
+`read(master)` woke into a freed pipe once teardown closed the master and
+husk's SIGHUP closed the last writer; spawn's TCP reference raced the same
+close. Now `handle_pin` checks the slot and takes the object's OWN reference
+in one critical section under the task's `handleLock`, and `handle_close`
+claims the slot under the same lock before releasing the table's reference.
+An operation in flight is a holder: the parked reader is the pipe's last
+reader and frees it on the way out, a pty stays unburied while an operation
+is inside it from either side (`holds` — the pin's `pty_master_hold`, and
+`pty_seat_hold` for a seated task's own console read or write, whose seat
+would otherwise stop protecting it the moment a sibling's teardown dropped
+it), a spawn's four handles stay pinned across the whole ELF load. Every
+handle type has its currency — pipe ends, file and directory
+`handleRefCount`, a TCP conn's `handles`, a listener's `busy`, a join
+object's `refcount`, a UDP or ICMP conn's `holders` — and the console tags
+reference nothing. The STREAM pipe itself is held side-lessly by its pty
+from birth to burial (pipe.h `holds`), which is what lets a seated writer
+take a writer's reference on it whatever the ends have done.
+`/tests/pintest` drives the three shapes without a network.
+
 ## 3. telnetd — the 1969 protocol on the 2026 seams
 
 `/bin/telnetd [port]` announces (23 by default) and loops on accept. For
@@ -231,6 +256,27 @@ Still owed:
   loopback (a dial to our own address goes to the wire and is not looped
   back), so the machine cannot accept its own connection. Booked; the host
   script is the fixture until then.
+
+**The pin, proven 2026-09-13** (the Codex #101 rd4 P1s — § 2 above):
+
+- `/tests/pintest` in the ring-3 suite: a thread parks reading a pipe, a
+  stream pty master, and a thread handle while its sibling closes the handle
+  under it. Before the pin each shape was a tripwired ring-0 use-after-free;
+  now each reader gets the ordinary answer (EOF, EOF, the worker's value).
+  The suite: 46 passed, 0 failed, 2 skipped; the kernel's own 30 + 29 + 3.
+- `tools/telnetd_probe.py 2323 session N` — N logins that each run `ls /`
+  and then DROP the socket with husk still seated, the teardown-under-a-
+  parked-reader shape itself. 60 in a row: no panic, `ps` clean after each
+  batch, `/sys/net/tcp` accepted == reaped, and `free` moved by 3–4KB per
+  batch of twenty, not per session (a 64KB step once, a block-cache line).
+  The LATE-phase `task_teardown_leak` passes on an idle machine; it fails
+  if the probe is run DURING it, by design — it measures the whole
+  machine's free-page count and says so.
+- `tools/telnetd_probe.py 2323 dontecho`: the server's explanation arrives
+  before the FIN, then EOF.
+- `tools/test_telnet_host.sh` gained the server role: the opening offers,
+  ECHO taken and refused (the notice), NAWS as a resize notice, Enter's
+  three spellings and IAC IP at every chunk size.
 
 ## Booked (DEBTS.md rows follow the code)
 

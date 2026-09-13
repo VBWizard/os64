@@ -1103,7 +1103,15 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		// with nobody home is answered below. A full backlog drops the
 		// SYN silently and counts it; the peer's own retry will find the
 		// door again if it has opened up by then.
-		if ((flags & (TCP_SYN | TCP_ACK | TCP_RST)) == TCP_SYN)
+		//
+		// ONLY FOR A SYN ADDRESSED TO US BY NAME: ipv4_input also delivers
+		// the limited and the subnet broadcast, and a SYN to either would
+		// otherwise open a half-open conn on every machine listening on
+		// the port — one whose handshake can never complete, since the
+		// SYN-ACK comes back from a unicast address the peer never dialed.
+		// Sixteen such packets fill a backlog (Codex #101 rd5).
+		if ((flags & (TCP_SYN | TCP_ACK | TCP_RST)) == TCP_SYN &&
+		    dst_ip == kNetIPv4Address)
 		{
 			tcp_listener_t* l = kTcpListenerList;
 			while (l != NULL && (l->port != dst_port || l->closed))
@@ -2698,6 +2706,20 @@ tcp_conn_t* tcp_listener_accept(tcp_listener_t* l, uint64_t deadline, long* why)
 	spinlock_release_irqrestore(&l->lock, irqflags);
 	if (why) *why = verdict;
 	return got;
+}
+
+void tcp_listener_hold(tcp_listener_t* l)
+{
+	uint64_t irqflags = spinlock_acquire_irqsave(&l->lock);
+	l->busy++;
+	spinlock_release_irqrestore(&l->lock, irqflags);
+}
+
+void tcp_listener_release(tcp_listener_t* l)
+{
+	uint64_t irqflags = spinlock_acquire_irqsave(&l->lock);
+	l->busy--;
+	spinlock_release_irqrestore(&l->lock, irqflags);
 }
 
 void tcp_listener_close(tcp_listener_t* l)

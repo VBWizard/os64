@@ -199,6 +199,13 @@ typedef struct tty
 	volatile int32_t seats;
 	volatile bool everSeated;
 	volatile bool masterClosed;        // the terminal side hung up its handle
+	// Operations INSIDE the slave, from either side: a master-side read
+	// parked on the stream, a resize, a snapshot (pty_master_hold, the
+	// pin's — handle.c § The pin), and a seated task's console read or
+	// write (pty_seat_hold). Burial waits for zero. NOT a seat: a seat held
+	// by the very reader waiting for the seats to empty would defer the EOF
+	// it is waiting for, forever.
+	volatile int32_t holds;
 	struct tty *next_pty;              // the registry chain (kPtyList)
 } tty_t;
 
@@ -351,10 +358,26 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length);
 // Seat references: every task whose ->tty is this pty holds one (taken at
 // inheritance in task_create and at spawn's explicit seating; dropped in
 // task teardown). The slave frees itself when the master is closed AND the
-// seats are empty — whichever happens last does the burial.
+// seats are empty AND no operation is inside it from either side (holds)
+// — whichever of the three happens last does the burial.
 void tty_pty_ref(tty_t *t);          // no-op unless t->is_pty
 void tty_pty_unref(tty_t *t);        // no-op unless t->is_pty
 void pty_master_close(tty_t *slave); // the handle-table close hook
+// The pin's hold on a master (handle.c § The pin): the slave stays unburied
+// and its stream keeps its read end while a master-side operation is inside
+// it. The stream's read end is held because the master's read IS a
+// pipe_read on it, and the master's close may close that end underneath.
+// Taken while the master handle is provably live, so the slave is too.
+void pty_master_hold(tty_t *slave);
+void pty_master_unhold(tty_t *slave);
+// The SEAT side's hold, for a seated task's console read or write on the
+// slave: the task's seat keeps the slave alive only until the task's own
+// teardown drops it, and a sibling thread parked in the read can outlive
+// that by a scheduler pass. Taken by pointer against the registry under its
+// lock — burial unlinks under the same lock — so a slave already buried is
+// simply not found, and the answer is false: the line is dead.
+bool pty_seat_hold(tty_t *slave);
+void pty_seat_unhold(tty_t *slave);
 
 // console_wake_if_ready's pty leg: wake any slave's parked reader whose ring
 // has input. Lives here because the registry walk needs the (private) list

@@ -52,6 +52,11 @@
 static int32_t g_conn = 1;
 static int64_t g_master = -1;
 static volatile int g_session_over = 0;
+// Set by the inbound thread when the session must END ON OUR SAY-SO with a
+// last word to the client already in the mailbox (a client that refused our
+// echo). The outbound thread, the sole socket writer, drains the mailbox and
+// then ends — so the word reaches the wire before the FIN does.
+static volatile int g_end_after_drain = 0;
 
 // The reply mailbox: a lock-free single-producer/single-consumer byte ring.
 // The inbound thread (producer) enqueues the engine's negotiation replies;
@@ -130,10 +135,26 @@ static int64_t outbound_thread(void *arg)
 		while ((m = mbox_get(mb, sizeof(mb))) > 0)
 			if (write_all((int32_t)g_conn, mb, m) < 0)
 				goto done;
+		if (g_end_after_drain)
+			goto done;   // the inbound thread's last word is on the wire; end here
 
 		int64_t n = os64_read_for((int32_t)g_master, in, sizeof(in), 100);
 		if (n == OS64_ERR_TIMEOUT)
-			continue;                 // no husk output; loop back to drain the mailbox
+		{
+			// No husk output. A CR held for its lookahead has now waited a
+			// whole tick of silence: the program wrote a bare CR to redraw
+			// its line and is waiting for input, so it was a standalone CR
+			// — send it as CR NUL now rather than when the next byte
+			// happens to arrive (Codex #101 rd5).
+			if (pending_cr)
+			{
+				pending_cr = 0;
+				uint8_t crnul[2] = { '\r', 0 };
+				if (write_all((int32_t)g_conn, crnul, 2) < 0)
+					goto done;
+			}
+			continue;                 // loop back to drain the mailbox
+		}
 		if (n <= 0)
 			break;                    // EOF (husk gone) or a read error
 
@@ -327,6 +348,23 @@ static int run_session(void)
 				// outbound thread is the one that writes the socket.
 				static const char yes[] = "\r\n[telnetd: yes]\r\n";
 				telnet_send_text(&eng, yes, sizeof(yes) - 1);
+			}
+			if ((notes & TELNET_NOTE_ECHO) && !telnet_option_ours(&eng, TELNET_OPT_ECHO))
+			{
+				// The client REFUSED our echo (DONT ECHO: a line-mode client
+				// that echoes for itself). The shell behind the pty echoes
+				// through the kernel's line discipline and os64 has no
+				// master-side switch to turn that off, so honouring the
+				// refusal is impossible and ignoring it shows every
+				// keystroke twice. Say so and end the session, rather than
+				// run one that misbehaves (Codex #101 rd5). The word goes
+				// through the mailbox like every reply; the outbound thread
+				// sends it and then ends the session.
+				static const char sorry[] =
+					"\r\n[telnetd: this server echoes (RFC 857); a client that"
+					" declines it would see every keystroke twice -- closing]\r\n";
+				telnet_send_text(&eng, sorry, sizeof(sorry) - 1);
+				g_end_after_drain = 1;
 			}
 			engine_to_mailbox(&eng);   // the outbound thread sends these
 

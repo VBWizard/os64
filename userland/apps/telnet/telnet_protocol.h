@@ -156,7 +156,10 @@ typedef enum {
 // What the caller has to ACT on, as opposed to what it can read whenever it
 // likes. Latched by the engine, read and cleared by telnet_notices.
 
-#define TELNET_NOTE_ECHO       (1u << 0)  // local echo policy just changed
+#define TELNET_NOTE_ECHO       (1u << 0)  // (CLIENT) local echo policy just
+                                          //  changed; (SERVER) the client
+                                          //  answered our ECHO — on, or OFF
+                                          //  (DONT): telnet_option_ours says
 #define TELNET_NOTE_SIZE       (1u << 1)  // the peer takes NAWS now — send it
 #define TELNET_NOTE_AYT        (1u << 2)  // the peer asked "are you there?"
 #define TELNET_NOTE_CONTRADICT (1u << 3)  // RFC 1143 caught an answer that

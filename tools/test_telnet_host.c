@@ -256,8 +256,17 @@ int main(int argc, char **argv)
             if (g_cap == 0 || g_cap > ACC_MAX) die("--cap out of range");
         } else if (strcmp(step, "--nodrain") == 0) {
             g_drain = false;
+        } else if (strcmp(step, "--server") == 0) {
+            // telnetd's half of the engine: a fresh engine in the SERVER
+            // role, before any step feeds it. Given first or not at all.
+            telnet_init_server(&engine);
         } else if (strcmp(step, "offer") == 0) {
             g_offer_ok = telnet_offer(&engine);
+            collect(&engine);
+            if (g_drain)
+                drain(&engine);
+        } else if (strcmp(step, "offer-server") == 0) {
+            g_offer_ok = telnet_offer_server(&engine);
             collect(&engine);
             if (g_drain)
                 drain(&engine);

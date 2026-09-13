@@ -192,6 +192,12 @@ struct directory
 	const char *mount_prefix;
 	size_t mount_prefix_len;
 	int mount_scan;
+	// How many holders reference this open directory: its one task handle
+	// (syscall_open sets 1; spawn never shares a directory) plus every
+	// pinned readdir in flight (handle.c § The pin). Only the LAST
+	// handle_dir_object_close runs dops->close — a sibling thread closing
+	// the handle under a readdir must not free the object out from under it.
+	int handleRefCount;
 	//arena_t* arena;
 };
 

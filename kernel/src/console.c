@@ -147,16 +147,38 @@ long console_read(char *buf, size_t len)
 	return console_read_deadline(buf, len, 0);
 }
 
+static long console_read_held(tty_t *tty, char *buf, size_t len, uint64_t deadline);
+
 long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 {
 	if (len == 0)
 		return 0;
 
 	core_local_storage_t *cls = get_core_local_storage();
-	thread_t *self = cls->currentThread;
 	// The terminal this reader answers to. NULL-safe all the way down —
 	// early-boot probes and kernel threads read the system console, VT1.
 	tty_t *tty = task_tty(cls->task);
+
+	// A pty slave is HELD across the read (tty.h pty_seat_hold). The task's
+	// seat keeps the slave alive only until the task's own teardown drops
+	// it, and a sibling thread parked here can outlive that by a scheduler
+	// pass — the shape handle.c § The pin closes for handles, met here on
+	// the terminal instead. A slave already buried is a line that is dead,
+	// and an empty read on a dead line has always been EOF.
+	bool held = tty->is_pty;
+	if (held && !pty_seat_hold(tty))
+		return 0;
+	long r = console_read_held(tty, buf, len, deadline);
+	if (held)
+		pty_seat_unhold(tty);
+	return r;
+}
+
+// The body of the read, on a terminal the wrapper above holds.
+static long console_read_held(tty_t *tty, char *buf, size_t len, uint64_t deadline)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *self = cls->currentThread;
 
 	// An EOT from a previous drain is a promised EOF — deliver it first.
 	if (tty->eofPending)

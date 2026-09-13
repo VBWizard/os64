@@ -1369,12 +1369,15 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	if (task) {
 		// SIBLINGS FIRST, before the handles go. "Exit means exit" (Chris's
 		// ruling, 2026-08-02): when a task dies its threads die with it, and
-		// they must be TOLD before their handles are pulled out from under
-		// them — a worker mid-read on a pipe whose end just closed underneath
-		// it is a race, and telling it to die first makes the ordering
-		// honest. They will not all be gone by the time we return; each dies
-		// at its own next boundary, in its own context, which is the whole
-		// design (see task_terminate_sibling_threads).
+		// they are TOLD before their handles are closed so that a worker
+		// parked in a read wakes to its death promptly rather than at its
+		// backstop. They will not all be gone by the time we return; each
+		// dies at its own next boundary, in its own context, which is the
+		// whole design (see task_terminate_sibling_threads). The ordering is
+		// for promptness, not for safety: a sibling still inside a syscall
+		// on one of these handles holds its own pinned reference on the
+		// object (handle.c § The pin), so handle_close_all below only drops
+		// the table's, and the object outlives the sleeper.
 		task_terminate_sibling_threads(task, thread);
 
 		// Windows first, then handles, both before pages: any window this

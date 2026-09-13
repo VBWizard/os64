@@ -93,10 +93,17 @@ static void changed(telnet_t *t, uint8_t option, bool ours)
 {
     if (t->role == TELNET_SERVER) {
         // A SERVER cares that HIS NAWS came on — now the subnegotiations it
-        // carries are worth reading. (ECHO and SGA are the server's own and
-        // need no notice: it decided them.)
+        // carries are worth reading. (SGA is the server's own and needs no
+        // notice: it decided it.)
         if (!ours && option == TELNET_OPT_NAWS && t->him[option] == TELNET_OPT_YES)
             t->notices |= TELNET_NOTE_SIZE;
+        // ECHO is the server's own too, but the CLIENT can refuse it (DONT
+        // ECHO — a line-mode client that echoes for itself), and a server
+        // that goes on echoing after agreeing not to shows every keystroke
+        // twice. The caller is told either way and reads the direction
+        // with telnet_option_ours; what it does about it is its decision.
+        if (ours && option == TELNET_OPT_ECHO)
+            t->notices |= TELNET_NOTE_ECHO;
         return;
     }
     // CLIENT: ECHO is HIS and decides whether we echo what is typed; NAWS is

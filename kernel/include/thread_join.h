@@ -60,6 +60,11 @@ long thread_join_read(thread_join_t* j, int64_t* out);
 // Drop the handle's reference ("I don't care about your answer").
 void thread_join_close(thread_join_t* j);
 
+// One more reference — the pin's (handle.c § The pin): a reader parked in
+// thread_join_read holds the object through a sibling's close of the handle
+// AND the thread's own finish, and drops it with thread_join_close.
+void thread_join_ref(thread_join_t* j);
+
 // Level-triggered wake sweep, from processSignals beside its siblings.
 void thread_join_wake_if_ready(void);
 

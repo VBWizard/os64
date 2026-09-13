@@ -565,6 +565,11 @@ tcp_conn_t* tcp_listener_accept(tcp_listener_t* l, uint64_t deadline, long* why)
 // The handle-table close hook: stop answering, reset what is queued, let
 // tcp_poll free the row once nobody is inside it.
 void tcp_listener_close(tcp_listener_t* l);
+// The pin's hold on a listener (handle.c § The pin): `busy` up for the whole
+// of an operation resolved through the handle, so a sibling's close cannot
+// have the row freed between the resolve and accept's own busy count.
+void tcp_listener_hold(tcp_listener_t* l);
+void tcp_listener_release(tcp_listener_t* l);
 
 // Another handle names the conn (spawn hands one to a child); a handle
 // stops naming it (the handle-table close hook) — the last release is the

@@ -34,6 +34,7 @@
 
 #define ICMP_CONN_ERR_INTERRUPTED (-3L)
 #define ICMP_CONN_ERR_TIMEOUT     (-4L)   // read deadline expired; the reply is not coming
+#define ICMP_CONN_ERR_CLOSED      (-5L)   // the handle was closed under the wait (a sibling thread's close)
 
 typedef struct icmp_conn
 {
@@ -47,6 +48,14 @@ typedef struct icmp_conn
 	uint16_t lens[ICMP_CONN_QUEUE_SLOTS];
 	uint8_t (*slots)[ICMP_CONN_MAX_PAYLOAD];
 	thread_t* volatile waiter;
+
+	// LIFETIME, the udp_conn.h shape (handle.c § The pin): `holders` is
+	// the task handle plus every pinned operation in flight; the handle's
+	// close sets `closed` and wakes a parked reader to ICMP_CONN_ERR_CLOSED;
+	// the last holder's release frees. Listed until freed — the sweep must
+	// still reach that reader, and delivery skips a closed conn.
+	volatile uint32_t holders;
+	volatile bool closed;
 
 	uint64_t requests_sent, replies_delivered;
 	uint64_t dropped_full;   // replies arriving faster than they're read
@@ -69,7 +78,12 @@ long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline);
 // negative (oversize, or the wire refused after ARP retries).
 long icmp_conn_write(icmp_conn_t* c, const void* buf, size_t len);
 
+// Hang up (the handle-table close hook): mark closed, wake a parked
+// reader, drop the handle's hold. The pin's hold and release beside it;
+// a release at zero leaves the list and frees.
 void icmp_conn_close(icmp_conn_t* c);
+void icmp_conn_ref(icmp_conn_t* c);
+void icmp_conn_release(icmp_conn_t* c);
 
 // Called by icmp.c when an echo REPLY arrives: routes it to the handle
 // whose identifier matches, or nowhere. RX context.

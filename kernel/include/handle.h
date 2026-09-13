@@ -91,10 +91,21 @@ bool handle_cancel_reserved(struct task *t, int slot);
 // pipe end sitting in slot 0 or 1, and it never knows the difference.
 bool handle_install(struct task *t, int slot, handle_type_t type, void *object);
 
-// Resolve a handle. Returns NULL for out-of-range or free slots — every
-// syscall that takes a handle must treat NULL as "invalid handle", which is
-// also the range check (ring 3 hands us whatever integer it likes).
-handle_t *handle_get(struct task *t, int h);
+// Resolve a handle AND take a reference on the object behind it, as ONE
+// operation against a concurrent close (handle.c § The pin). On success *out
+// is a private copy of the slot — type and object — and the object cannot be
+// freed until handle_unpin(out): a sibling thread closing the same handle
+// meanwhile only drops the TABLE's reference, and whichever reference goes
+// last does the real release. Returns false for out-of-range, free, reserved
+// or mid-close slots — every syscall that takes a handle treats false as
+// "invalid handle", which is also the range check (ring 3 hands us whatever
+// integer it likes).
+//
+// The caller MUST unpin on EVERY path out, including the ones that end in
+// raise_terminating_signal_and_die: that call never returns, and a pin it
+// carries into the grave keeps the object alive forever.
+bool handle_pin(struct task *t, int h, handle_t *out);
+void handle_unpin(const handle_t *pinned);
 
 // Close one handle: drops the task's reference on the underlying object (for a
 // pipe, that is the refcount that decides EOF/EPIPE) and frees the slot.
@@ -122,10 +133,12 @@ void handle_close_all(struct task *t);
 // the original defect: on FAT the commit happens inside close.
 int handle_file_object_close(void *vfs_file);
 
-// The directory sibling: closes a HANDLE_DIR's vfs_directory_t from any
-// context (same CR3-check discipline as files) and frees its f_path copy.
-// No refcount — directories can't be passed through spawn redirection (the
-// spawn boundary rejects them), so exactly one handle ever references one.
+// The directory sibling: drops one reference on a HANDLE_DIR's
+// vfs_directory_t (handleRefCount, vfs.h — the table's one, or a pin's), and
+// on the last closes it from any context (same CR3-check discipline as files)
+// and frees its f_path copy. Spawn redirection still rejects directories, so
+// the only references a directory ever has are its one handle and the pins
+// of operations in flight on it.
 void handle_dir_object_close(void *vfs_dir);
 
 #endif // HANDLE_H

@@ -61,8 +61,19 @@ typedef struct pipe
 	// The classic hang — `cat foo | grep x` never finishing — is a shell that
 	// forgot to close ITS copy of the write end: writers never reaches 0, so
 	// the reader waits forever for an EOF that can never come.
+	// A HOLDER of an end is a task handle on it, a spawn carrying it to a
+	// child, or a thread INSIDE a read or write on it (handle.c § The pin):
+	// a read in flight counts as a reader until it returns, so a sibling
+	// closing the handle under a parked reader cannot free the pipe, and
+	// EOF/EPIPE fire only when the last of all of those is gone.
 	uint32_t readers;
 	uint32_t writers;
+	// A holder with NO side: keeps the memory, says nothing about EOF or
+	// EPIPE. A STREAM pty holds its pipe this way from birth to burial, so
+	// that a task holding the pty (tty.h pty_seat_hold) can take a writer's
+	// reference on a pipe both sides may already have closed — the pipe is
+	// still there because the pty is. Freed when all three are zero.
+	uint32_t holds;
 
 	// Parked threads (NULL = nobody waiting). One slot each: a second waiter
 	// simply falls back on its SIGSLEEP backstop and retries — correct, just
@@ -91,6 +102,10 @@ void pipe_ref_read_end(pipe_t *p);
 void pipe_ref_write_end(pipe_t *p);
 void pipe_close_read_end(pipe_t *p);
 void pipe_close_write_end(pipe_t *p);
+// The side-less hold (`holds` above): the memory stays, the ends decide
+// EOF and EPIPE among themselves. The last of any kind of holder frees.
+void pipe_hold(pipe_t *p);
+void pipe_unhold(pipe_t *p);
 
 // Reads return SHORT: whatever is available, immediately — a reader asking for
 // 4096 when 10 bytes are there gets 10. (Waiting to fill the caller's buffer

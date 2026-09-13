@@ -35,6 +35,7 @@
 // In-band sentinels for udp_conn_read (the pipe.c convention).
 #define UDP_CONN_ERR_INTERRUPTED (-3L)   // a signal ended the wait (signal_park_must_end); the boundary kills or answers INTERRUPTED
 #define UDP_CONN_ERR_TIMEOUT     (-4L)   // caller's read deadline expired with no datagram
+#define UDP_CONN_ERR_CLOSED      (-5L)   // the handle was closed under the wait (a sibling thread's close)
 
 typedef struct udp_conn
 {
@@ -53,6 +54,16 @@ typedef struct udp_conn
 	// The parked reader (pipe.c's single-waiter shape — one task owns a
 	// handle, so one blocked reader is the whole population).
 	thread_t* volatile waiter;
+
+	// LIFETIME (handle.c § The pin): `holders` counts the task handle plus
+	// every pinned operation in flight on it. The handle's close hangs up
+	// — unbinds the port, sets `closed`, wakes a parked reader to its
+	// UDP_CONN_ERR_CLOSED — and the memory goes when the LAST holder
+	// releases, so a sibling thread's close cannot free the conn under a
+	// reader that is still inside it. Listed until freed, so the wake
+	// sweep can still reach that reader.
+	volatile uint32_t holders;
+	volatile bool closed;
 
 	// No silent anything.
 	uint64_t rx_delivered;        // datagrams handed to read()
@@ -81,8 +92,14 @@ long udp_conn_read(udp_conn_t* c, void* buf, size_t len, uint64_t deadline);
 // (may sleep briefly waiting out ARP resolution).
 long udp_conn_write(udp_conn_t* c, const void* buf, size_t len);
 
-// Hang up: unbind the port, leave the sweep list, free everything.
+// Hang up (the handle-table close hook): unbind the port, mark the conn
+// closed, wake a parked reader, and drop the handle's hold — the memory
+// goes when the last holder is gone.
 void udp_conn_close(udp_conn_t* c);
+// The pin's hold and its release (handle.c § The pin): a release at zero
+// leaves the sweep list and frees everything.
+void udp_conn_ref(udp_conn_t* c);
+void udp_conn_release(udp_conn_t* c);
 
 // The level-triggered wake sweep — called from processSignals beside
 // pipe_wake_if_ready, under the scheduler lock, AFTER the NIC poll (so a
