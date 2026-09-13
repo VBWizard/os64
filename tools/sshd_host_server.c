@@ -1,0 +1,127 @@
+/* Loopback-only OpenSSH interoperability harness for the production engine.
+ * Fixed host key and DRBG seed are test fixtures; this is not a deployable daemon. */
+#define _GNU_SOURCE
+#include "../userland/apps/sshd/ssh_engine.h"
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <pty.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+static ssh_engine s;
+static uint8_t pending[SSH_WINDOW];
+static size_t pending_len;
+static uint64_t rekey_bytes;
+static void nonblock(int fd) { if (fd >= 0) fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK); }
+static int spawn(int *input, int out[2], int shell)
+{
+    pid_t pid;
+    if (shell) {
+        struct winsize size = {.ws_row=s.rows, .ws_col=s.cols};
+        pid = forkpty(input, NULL, NULL, &size);
+        if (!pid) { execl("/bin/sh", "sh", "-i", (char *)NULL); _exit(127); }
+        out[0] = *input; out[1] = -1;
+    } else {
+        int in[2], stdout_pipe[2], stderr_pipe[2];
+        if (pipe(in) || pipe(stdout_pipe) || pipe(stderr_pipe)) return -1;
+        pid = fork();
+        if (!pid) {
+            setpgid(0, 0); dup2(in[0], 0); dup2(stdout_pipe[1], 1); dup2(stderr_pipe[1], 2);
+            close(in[0]); close(in[1]); close(stdout_pipe[0]); close(stdout_pipe[1]); close(stderr_pipe[0]); close(stderr_pipe[1]);
+            execl("/bin/sh", "sh", "-c", s.command, (char *)NULL); _exit(127);
+        }
+        close(in[0]); close(stdout_pipe[1]); close(stderr_pipe[1]);
+        *input=in[1]; out[0]=stdout_pipe[0]; out[1]=stderr_pipe[0];
+    }
+    nonblock(*input); nonblock(out[0]); nonblock(out[1]); return pid;
+}
+static void serve(int sock, const char *pubfile)
+{
+    uint8_t seed[32]={7}, key[32]={0}; key[31]=1;
+    if (!ssh_init(&s, seed, key)) exit(1);
+    FILE *f=fopen(pubfile,"r"); if (!f) exit(2);
+    char line[2048]; while (fgets(line,sizeof(line),f)) {
+        size_t n=strcspn(line,"\r\n");
+        if (ssh_authorized_line(&s,line,n)<0) exit(3);
+    }
+    fclose(f); nonblock(sock);
+    int input=-1, out[2]={-1,-1}, child=-1, eof=0, ended=0, status=0, closing=0;
+    uint8_t net[32768], output[4096]; size_t net_len=0, net_off=0;
+    for (int turns=0; turns<120000; turns++) {
+        const uint8_t *wire; size_t n=ssh_output(&s,&wire);
+        if (n) {
+            ssize_t wrote=send(sock,wire,n,MSG_NOSIGNAL);
+            if (wrote>0) ssh_output_consume(&s,(size_t)wrote);
+            else if (errno!=EAGAIN && errno!=EINTR) break;
+        }
+        if (s.closed || closing) { if (!s.out_len) break; usleep(1000); continue; }
+        if (net_off==net_len) {
+            ssize_t got=recv(sock,net,sizeof(net),0);
+            if (!got) break;
+            if (got<0 && errno!=EAGAIN && errno!=EINTR) break;
+            net_off=net_len=0; if (got>0) net_len=(size_t)got;
+        }
+        if (net_off<net_len) {
+            net_off+=ssh_receive(&s,net+net_off,net_len-net_off);
+            switch (s.event) {
+            case SSH_EVENT_EXEC: case SSH_EVENT_SHELL:
+                child=spawn(&input,out,s.event==SSH_EVENT_SHELL); ssh_start_result(&s,child>0); break;
+            case SSH_EVENT_INPUT:
+                if (s.event_len>sizeof(pending)-pending_len) abort();
+                memcpy(pending+pending_len,s.event_data,s.event_len); pending_len+=s.event_len; break;
+            case SSH_EVENT_EOF: eof=1; break;
+            case SSH_EVENT_CLOSE: closing=1; break;
+            case SSH_EVENT_RESIZE: {
+                struct winsize size={.ws_row=s.rows,.ws_col=s.cols};
+                if (input>=0) ioctl(input,TIOCSWINSZ,&size);
+                break;
+            }
+            default: break;
+            }
+        }
+        if (pending_len && input>=0) {
+            ssize_t wrote=write(input,pending,pending_len);
+            if (wrote>0) {
+                pending_len-=(size_t)wrote; memmove(pending,pending+wrote,pending_len); ssh_input_consumed(&s,(uint32_t)wrote);
+            } else if (errno!=EAGAIN && errno!=EINTR) { close(input); input=-1; }
+        }
+        if (eof && !pending_len && input>=0 && !s.pty) { close(input); input=-1; }
+        for (int i=0;i<2;i++) {
+            size_t cap=sizeof(output); if (cap>s.peer_window) cap=s.peer_window;
+            if (cap>s.peer_packet) cap=s.peer_packet;
+            if (out[i]<0 || !s.started || s.kex || !cap || SSH_OUTPUT_CAP-s.out_len<cap+128) continue;
+            ssize_t got=read(out[i],output,cap);
+            if (!got || (got<0 && errno==EIO && s.pty)) { close(out[i]); out[i]=-1; }
+            else if (got>0 && ssh_send_data(&s,output,(size_t)got,i)!=(size_t)got) abort();
+        }
+        if (rekey_bytes && s.established && !s.kex && (s.tx.bytes >= rekey_bytes || s.rx.bytes >= rekey_bytes)) ssh_rekey(&s);
+        if (child>0 && !ended && waitpid(child,&status,WNOHANG)==child) ended=1;
+        if (ended && out[0]<0 && out[1]<0) ssh_send_exit(&s,WIFEXITED(status)?WEXITSTATUS(status):128+WTERMSIG(status));
+        usleep(1000);
+    }
+    fprintf(stderr,"session: %s; auth=%d rx=%u tx=%u\n",s.error,s.authenticated,s.rx.seq,s.tx.seq);
+    if (child>0 && !ended) { kill(-child,SIGKILL); kill(child,SIGKILL); waitpid(child,NULL,0); }
+    close(sock);
+}
+int main(int argc,char **argv)
+{
+    if(argc!=3 && argc!=4) return 2;
+    if(argc==4) rekey_bytes=strtoull(argv[3],NULL,10);
+    signal(SIGPIPE,SIG_IGN);
+    int listener=socket(AF_INET,SOCK_STREAM,0), one=1;
+    setsockopt(listener,SOL_SOCKET,SO_REUSEADDR,&one,sizeof(one));
+    struct sockaddr_in addr={.sin_family=AF_INET,.sin_port=htons((uint16_t)atoi(argv[1])),.sin_addr.s_addr=htonl(INADDR_LOOPBACK)};
+    if(bind(listener,(void *)&addr,sizeof(addr)) || listen(listener,4)) { perror("listen"); return 1; }
+    socklen_t len=sizeof(addr); getsockname(listener,(void *)&addr,&len);
+    printf("%u\n",ntohs(addr.sin_port)); fflush(stdout);
+    int sock=accept(listener,NULL,NULL); close(listener);
+    if(sock<0) return 1;
+    serve(sock,argv[2]); return 0;
+}

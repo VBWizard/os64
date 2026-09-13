@@ -77,6 +77,7 @@ extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
 extern bool kRunTestrun; // launch /tests/testrun, the ring-3 half of the suite
 extern bool kRunCron;    // launch /bin/cron, the scheduler; the crontab says what it runs
+extern bool kRunSshd;
 extern bool kRunTelnetd; // launch /bin/telnetd, the inbound shell (SERVERS.md)
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
@@ -971,6 +972,21 @@ void kernel_init()
         }
         else
             printf("  /bin/telnetd launch failed (not on the image?)\n");
+    }
+
+    // The boot token selects the service; authentication and transport stay
+    // inside /bin/sshd, whose children own individual connections.
+    if (kRunSshd && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/sshd ...\n");
+        task_t *sshdTask = task_create("/bin/sshd", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (sshdTask)
+        {
+            sshdTask->autoReap = true;
+            scheduler_submit_new_task(sshdTask);
+        }
+        else
+            printf("  /bin/sshd launch failed (not on the image?)\n");
     }
 
     // THE LATE PHASE (2026-08-29). The slow post-boot tests, moved off the
