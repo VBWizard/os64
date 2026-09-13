@@ -1363,20 +1363,23 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 			// remote terminal hung up: the bytes are absorbed and the task
 			// proceeds toward the SIGHUP it also received, exactly as a
 			// write to an orphaned GRID slave is benign.
-			bool stream_pty = (tty != NULL && tty->is_pty &&
-			                   tty->pty_mode == PTY_MODE_STREAM);
 			// A pty slave is HELD across the write (tty.h pty_seat_hold),
 			// for the reason console_read gives: the seat keeps it alive
 			// only until this task's own teardown, and a sibling parked in
 			// a full ring can outlive that. A slave already buried is a
 			// terminal that hung up: the bytes are absorbed, as they would
-			// be a moment later. The STREAM pipe gets a writer's reference
-			// too — an in-flight write IS a writer (pipe.h), so the master's
-			// EOF waits for it, and the pty's own hold on the pipe is what
-			// makes the reference safe to take whatever the ends have done.
-			bool held = (tty != NULL && tty->is_pty);
+			// be a moment later. VT-or-slave is decided by pointer range
+			// BEFORE any field is read (tty_is_vt — a buried slave must not
+			// be dereferenced to learn what it was, Codex #101 rd6), and
+			// the mode only after the hold. The STREAM pipe gets a writer's
+			// reference too — an in-flight write IS a writer (pipe.h), so
+			// the master's EOF waits for it, and the pty's own hold on the
+			// pipe is what makes the reference safe to take whatever the
+			// ends have done.
+			bool held = !tty_is_vt(tty);
 			if (held && !pty_seat_hold(tty))
 				return length;
+			bool stream_pty = held && tty->pty_mode == PTY_MODE_STREAM;
 			if (stream_pty)
 				pipe_ref_write_end(tty->stream);
 			uint64_t r = syscall_write_console(tty, stream_pty, user_buffer, length, die);
@@ -1871,11 +1874,27 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			// read.
 			if (want < sizeof(os64_netconn_t))
 				return SYSCALL_RESULT_INVALID;
+			// The return slot is RESERVED before the wait and COMMITTED
+			// after it — the two-phase claim exclusive create uses, for a
+			// sibling of the same hazard: a task table can be torn down by
+			// a sibling thread while this thread is parked. A handle
+			// allocated fresh after the park could be published into a
+			// table handle_close_all had already swept, and a conn that is
+			// no longer the listener's and never closed by anyone stays
+			// listed with its buffers and its port forever (Codex #101
+			// rd6). A reservation is what teardown cancels, and a commit
+			// that lands after teardown passed the slot closes the handle
+			// itself. A full table is also discovered before the handshake
+			// is spent, which the alloc-after could not do.
+			int ch = handle_reserve(task);
+			if (ch < 0)
+				return (uint64_t)(int64_t)OS64_NET_ERR_NO_RESOURCES;
 			long why = 0;
 			tcp_conn_t *conn = tcp_listener_accept((tcp_listener_t *)h->object,
 			                                       deadline, &why);
 			if (conn == NULL)
 			{
+				(void)handle_cancel_reserved(task, ch);
 				if (why == TCP_ERR_INTERRUPTED)
 				{
 					if (current_thread_will_catch())
@@ -1887,14 +1906,13 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 					return (uint64_t)(int64_t)OS64_NET_ERR_TIMEOUT;
 				return SYSCALL_RESULT_INVALID;   // the listener was closed under us
 			}
-			int ch = handle_alloc(task, HANDLE_NET_TCP, conn);
-			if (ch < 0)
+			if (!handle_commit_reserved(task, ch, HANDLE_NET_TCP, conn))
 			{
-				// No slot for the accepted stream: hang it up cleanly (the
-				// peer gets a FIN) rather than leaking it. The accept already
-				// spent its handshake; the peer will not retry.
+				// Teardown cancelled the reservation first: the task is
+				// dying, and this conn has no owner but us. Hang it up
+				// cleanly (the peer gets a FIN) rather than strand it.
 				tcp_conn_release(conn);
-				return (uint64_t)(int64_t)OS64_NET_ERR_NO_RESOURCES;
+				return SYSCALL_RESULT_INVALID;
 			}
 			os64_netconn_t nc = { .handle = ch, .peer_ip = conn->peer_ip,
 			                      .peer_port = conn->peer_port, ._reserved = 0 };

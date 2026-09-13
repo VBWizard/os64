@@ -223,6 +223,17 @@ typedef struct tty
 
 extern tty_t kTTY[TTY_COUNT];
 extern tty_t * volatile kTTYFocused;   // whose grid the glass is showing
+
+// Is this one of the VT fleet? Answered by POINTER RANGE, not by reading a
+// field: the fleet is a static array that is never freed, and anything else
+// is a pty slave that may already be buried — a terminal of record can be
+// freed by its task's own teardown while a sibling thread is still entering
+// a console read. A caller that wants to know must ask this first, take the
+// seat hold if the answer is no, and only then read the slave's fields.
+static inline bool tty_is_vt(const tty_t *t)
+{
+	return t >= &kTTY[0] && t < &kTTY[TTY_COUNT];
+}
 extern volatile bool kTTYReady;        // false until tty_init: printf paints
                                        // direct (legacy) before, VT1 grid after
 

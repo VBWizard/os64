@@ -53,10 +53,16 @@ static int32_t g_conn = 1;
 static int64_t g_master = -1;
 static volatile int g_session_over = 0;
 // Set by the inbound thread when the session must END ON OUR SAY-SO with a
-// last word to the client already in the mailbox (a client that refused our
-// echo). The outbound thread, the sole socket writer, drains the mailbox and
-// then ends — so the word reaches the wire before the FIN does.
+// last word to the client (a client that refused our echo). Published ONLY
+// once that word is entirely in the mailbox — the engine's queue drained to
+// the last byte — with release ordering, and read with acquire by the
+// outbound thread, the sole socket writer, which then drains the mailbox one
+// final time and ends. So the word reaches the wire before the FIN does, and
+// no interleaving can show the flag with the word still in the engine
+// (Codex #101 rd6). g_end_requested is the inbound thread's own note that
+// the word has been queued and the flag is owed.
 static volatile int g_end_after_drain = 0;
+static int g_end_requested = 0;
 
 // The reply mailbox: a lock-free single-producer/single-consumer byte ring.
 // The inbound thread (producer) enqueues the engine's negotiation replies;
@@ -135,8 +141,17 @@ static int64_t outbound_thread(void *arg)
 		while ((m = mbox_get(mb, sizeof(mb))) > 0)
 			if (write_all((int32_t)g_conn, mb, m) < 0)
 				goto done;
-		if (g_end_after_drain)
-			goto done;   // the inbound thread's last word is on the wire; end here
+		if (__atomic_load_n(&g_end_after_drain, __ATOMIC_ACQUIRE))
+		{
+			// The inbound thread published the end AFTER its last word
+			// went into the mailbox, so the word is there by now — but the
+			// drain above may have run before it arrived. Drain once more,
+			// then end.
+			while ((m = mbox_get(mb, sizeof(mb))) > 0)
+				if (write_all((int32_t)g_conn, mb, m) < 0)
+					goto done;
+			goto done;
+		}
 
 		int64_t n = os64_read_for((int32_t)g_master, in, sizeof(in), 100);
 		if (n == OS64_ERR_TIMEOUT)
@@ -239,6 +254,22 @@ static void engine_to_mailbox(telnet_t *eng)
 		telnet_sent(eng, q);
 }
 
+// The inbound thread's whole flush: everything the engine has queued goes
+// to the mailbox as far as it fits, and if the session's last word has been
+// queued and the engine is now EMPTY, the end is published — after the
+// bytes, never before. Called after every receive AND on every poll timeout,
+// because under reply backpressure a flush transfers only part of the queue,
+// and the rest must not wait for the client's next keystroke to move
+// (Codex #101 rd6).
+static void flush_engine(telnet_t *eng)
+{
+	engine_to_mailbox(eng);
+	size_t left = 0;
+	(void)telnet_pending(eng, &left);
+	if (g_end_requested && left == 0)
+		__atomic_store_n(&g_end_after_drain, 1, __ATOMIC_RELEASE);
+}
+
 // Push keystrokes into the pty master, ALL of them — a full input ring
 // returns a short count and then 0, and dropping the tail there loses part of
 // an ordinary large paste (Codex #101 P2). On 0, nap and retry until husk
@@ -316,6 +347,7 @@ static int run_session(void)
 		{
 			if (g_session_over)
 				break;
+			flush_engine(&eng);   // replies a full mailbox held back move now, not at the next key
 			continue;
 		}
 		if (n <= 0)
@@ -358,15 +390,16 @@ static int run_session(void)
 				// refusal is impossible and ignoring it shows every
 				// keystroke twice. Say so and end the session, rather than
 				// run one that misbehaves (Codex #101 rd5). The word goes
-				// through the mailbox like every reply; the outbound thread
-				// sends it and then ends the session.
+				// through the mailbox like every reply; flush_engine
+				// publishes the end once the word has left the engine, and
+				// the outbound thread sends it and then ends the session.
 				static const char sorry[] =
 					"\r\n[telnetd: this server echoes (RFC 857); a client that"
 					" declines it would see every keystroke twice -- closing]\r\n";
 				telnet_send_text(&eng, sorry, sizeof(sorry) - 1);
-				g_end_after_drain = 1;
+				g_end_requested = 1;
 			}
-			engine_to_mailbox(&eng);   // the outbound thread sends these
+			flush_engine(&eng);   // the outbound thread sends these
 
 			// used == 0 && dlen == 0 means telnet_receive could neither emit
 			// data nor answer the next byte — BACKPRESSURE: the client stopped

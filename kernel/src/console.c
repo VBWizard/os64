@@ -164,8 +164,11 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 	// it, and a sibling thread parked here can outlive that by a scheduler
 	// pass — the shape handle.c § The pin closes for handles, met here on
 	// the terminal instead. A slave already buried is a line that is dead,
-	// and an empty read on a dead line has always been EOF.
-	bool held = tty->is_pty;
+	// and an empty read on a dead line has always been EOF. VT-or-slave is
+	// decided by pointer range (tty_is_vt), because a slave that is already
+	// buried must not be READ to find out what it is — the hold comes
+	// first, and every field after it (Codex #101 rd6).
+	bool held = !tty_is_vt(tty);
 	if (held && !pty_seat_hold(tty))
 		return 0;
 	long r = console_read_held(tty, buf, len, deadline);
