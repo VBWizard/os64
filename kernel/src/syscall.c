@@ -1270,13 +1270,19 @@ static uint64_t syscall_io_deadline(uint64_t timeout_ms)
 // Runs on the calling task's CR3 (user buffer in the lower half, console and
 // pipe rings in the shared upper half — see the table comment).
 #define WRITE_CHUNK_SIZE 512
+typedef enum {
+	WRITE_ALIVE,
+	WRITE_TERMINATING,
+	WRITE_SIGPIPE
+} write_death_t;
+
 // The console-out half of write, on a terminal the caller HOLDS when it is a
 // pty slave (tty.h pty_seat_hold) and whose STREAM pipe the caller holds a
 // writer's reference on — so neither can go away under the park a full ring
 // costs. Ferries through a bounded kernel chunk so an arbitrary user length
 // never maps to unbounded kernel stack use.
 static uint64_t syscall_write_console(tty_t *tty, bool stream_pty,
-    const char *user_buffer, size_t length, bool *die)
+    const char *user_buffer, size_t length, write_death_t *die)
 {
 	char chunk[WRITE_CHUNK_SIZE];
 	size_t copied = 0;
@@ -1304,7 +1310,7 @@ static uint64_t syscall_write_console(tty_t *tty, bool stream_pty,
 				// uncaught means terminate.
 				if (current_thread_will_catch())
 					return copied ? copied : (uint64_t)(int64_t)OS64_INTERRUPTED;
-				*die = true;   // unpin first, then the death: the wrapper does both
+				*die = WRITE_TERMINATING;   // unpin first, then the death: the wrapper does both
 				return 0;
 			}
 			if (w == PIPE_ERR_CLOSED)
@@ -1328,7 +1334,7 @@ static uint64_t syscall_write_console(tty_t *tty, bool stream_pty,
 // returns, and a pin carried into the grave would keep the object alive
 // forever (a pipe never destroyed, a pty never buried).
 static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
-    const char *user_buffer, size_t length, uint64_t timeout_ms, bool *die)
+    const char *user_buffer, size_t length, uint64_t timeout_ms, write_death_t *die)
 {
 	if (length == 0)
 		return 0;
@@ -1511,11 +1517,12 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
 					}
 					spinlock_release_irqrestore(&task->signalLock, spf);
-					// No handler: the default action is death, applied HERE in
-					// our own context. Nothing is left pending, so nothing can
-					// get stuck — and this is what `yes | head` needs.
-					raise_sigpipe_and_die(task);
-					__builtin_unreachable();
+					// Default disposition is decided here, but the wrapper
+					// must release its writer pin before the non-returning
+					// SIGPIPE death. Keep its identity separate from a pending
+					// terminating signal so the exit status remains 141.
+					*die = WRITE_SIGPIPE;
+					return 0;
 				}
 				if (n == PIPE_ERR_INTERRUPTED)
 				{
@@ -1532,7 +1539,7 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 					// only the truth when written is 0.
 					if (current_thread_will_catch())
 						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
-					*die = true;   // unpin first, then the death: the wrapper does both
+					*die = WRITE_TERMINATING;   // unpin first, then the death: the wrapper does both
 					return 0;
 				}
 				if (n < 0)
@@ -1582,7 +1589,7 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 					// chunks the same honesty.
 					if (current_thread_will_catch())
 						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
-					*die = true;   // unpin first, then the death: the wrapper does both
+					*die = WRITE_TERMINATING;   // unpin first, then the death: the wrapper does both
 					return 0;
 				}
 				if (n == TCP_ERR_TIMEOUT)
@@ -1714,11 +1721,16 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!handle_pin(task, (int)(int64_t)arg0, &pinned))
 		return SYSCALL_RESULT_INVALID;
 
-	bool die = false;
+	write_death_t die = WRITE_ALIVE;
 	uint64_t r = syscall_write_pinned(task, &pinned, (const char *)arg1,
 	                                  (size_t)arg2, arg3, &die);
 	handle_unpin(&pinned);
-	if (die)
+	if (die == WRITE_SIGPIPE)
+	{
+		raise_sigpipe_and_die(task);
+		__builtin_unreachable();
+	}
+	if (die == WRITE_TERMINATING)
 	{
 		raise_terminating_signal_and_die(task, NULL);
 		__builtin_unreachable();
@@ -3987,19 +3999,19 @@ static void spawn_do_create(void *arg)
 
 	scheduler_submit_new_task(child);
 
-	// THE HANGUP A CHILD SEATED LATE WOULD HAVE MISSED. The caller's pin
-	// keeps a SET_TTY slave's memory through the load, not its line: a
-	// sibling closing the master meanwhile has already marked it closed,
-	// closed the stream's ends and swept SIGHUP over the seats that existed
-	// THEN — and that sweep walks kTaskList, which this child joined only at
-	// the submission above. So the master's state is read here, after the
-	// child is where a sweep can find it: a close that landed before this
-	// line missed the child and we hang it up ourselves; one that lands
-	// after finds it on the list like any seat. A child hung up twice dies
-	// once. It dies as its siblings did instead of reading EOF from a line
-	// nobody holds and wondering why (Codex #101 rd9).
-	if (p->ttySlave != NULL && p->ttySlave->masterClosed)
-		task_signal_and_nudge(child, SIGHUP);
+	// Both inherited and explicit PTY seats exist before the child is
+	// published. A master-close sweep in that interval misses the child.
+	// Check its actual terminal after publication: an earlier close is
+	// handled here, and a later sweep can find it in kTaskList. The child
+	// may already have exited on another core, so hold by registry lookup
+	// before inspecting the slave; its own seat may already be gone.
+	tty_t *seat = task_tty_hold(child);
+	if (seat != NULL)
+	{
+		if (seat->is_pty && seat->masterClosed)
+			task_signal_and_nudge(child, SIGHUP);
+		task_tty_release(seat);
+	}
 
 	p->result = (long)child->taskID;
 }

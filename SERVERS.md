@@ -196,6 +196,13 @@ from birth to burial (pipe.h `holds`), which is what lets a seated writer
 take a writer's reference on it whatever the ends have done.
 `/tests/pintest` drives the three shapes without a network.
 
+Fatal writes return their death reason to the syscall wrapper, which drops
+the pin before terminating. Default SIGPIPE keeps its exit status of 141;
+caught SIGPIPE still returns progress or `OS64_INTERRUPTED`. After a child
+is published, spawn checks its actual terminal under a lifetime hold for a
+master close that preceded publication. This covers inherited PTYs as well
+as explicit seating; a later close finds the child in the ordinary sweep.
+
 ## 3. telnetd — the 1969 protocol on the 2026 seams
 
 `/bin/telnetd [port]` announces (23 by default) and loops on accept. At most
@@ -435,6 +442,44 @@ supported.
 Evidence is in `/tmp/pr101-rd13/`, including `before-test.log`, `testrun.log`,
 `final-boot.log`, `final-probe.log`, `cleanup.log` and `final-build.log`.
 These are private QEMU results; the fix has not been deployed to the P5.
+
+## Round 14 validation — 2026-09-13
+
+Two findings against `2f77993` exposed sibling paths omitted by the earlier
+fixes. The claim that fatal writes unpinned before death was false for
+default SIGPIPE; the explicit-seat hangup recheck did not cover inheritance.
+
+- Write returns a named death reason to its wrapper. The wrapper unpins
+  first, then applies default SIGPIPE or the pending terminating signal.
+  Default SIGPIPE still exits 141; catchable SIGPIPE and partial progress
+  keep their existing behavior.
+- After scheduler publication, spawn holds the child's actual terminal by
+  registry lookup and checks master closure for inherited and explicit
+  PTYs. A child that has already exited cannot leave this check dereferencing
+  a buried slave. The hold is released after the check.
+- `tools/test_syscall_lifetime_host.py` compiles the actual pipe-write case,
+  pin wrapper and spawn publication tail with controlled lifetime seams.
+  Both regressions failed before the fix: a live pin at death, and no hangup
+  for an inherited seat closed before publication. ASan/UBSan now pass
+  default death, interrupted death, handled SIGPIPE, partial progress,
+  failed copying, explicit/inherited hangup, and open/buried/VT terminals.
+  Leak detection is disabled for the host environment's tracing.
+- Private q35 QEMU, 8 cores and 2 GiB: **30 pre-boot + 32 post-boot + 3 late
+  kernel tests passed**; `/tests/testrun` passed **48 tests, 0 failures,
+  2 skips**. `/tests/pipeexit` adds 32 default-SIGPIPE deaths with status 141.
+  Read-only GDB inspection of the live pipe list before and after a separate
+  32-death batch found **one pipe both times**, the observer's STREAM pty.
+- Five Telnet disconnects during `/bin/sleep 60` startup left no surviving
+  sleep process. After reaping settled, `ps -ef` showed only the observer
+  session and TCP reported one buffered connection. The host publication
+  seam, rather than timing these guest runs, proves the exact missed-sweep
+  ordering.
+- Full strict `make -j8` and `git diff --check` passed. The stale-reference
+  scan reports the live flag's intentional `SET_TTY` shorthand.
+
+Evidence is in `/tmp/pr101-rd14/`, including before/after host logs, the
+strict build, guest suite, kernel log, pipe-count GDB script and snapshots.
+These fixes have not been deployed to the P5.
 
 ## Booked (DEBTS.md rows follow the code)
 
