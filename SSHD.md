@@ -125,12 +125,17 @@ Client-initiated rekeys are supported while a command or shell is running.
 The server also initiates after 512 MiB in either direction or one hour.
 A KEX has a separate 120-second completion deadline. Connection replies
 received in flight before the client's KEXINIT are deferred until NEWKEYS;
-application output pauses during KEX. The deferred reply budget is 8 KiB.
+application output pauses during KEX. A channel close during that exchange
+keeps the transport running until NEWKEYS releases the deferred close reply
+or the KEX deadline expires. Closing does not initiate another server rekey.
+The deferred reply budget is 8 KiB.
 
 ## Commands, channels, and backpressure
 
 The server advertises a 2 MiB receive window and 32768-byte data packets.
-Peer window and maximum-packet limits constrain outgoing data. Window
+Peer window and maximum-packet limits constrain outgoing data. stdout and
+stderr take turns spending shared credit; priority advances when a stream
+sends bytes, so sparse window updates cannot starve the other stream. Window
 addition overflow, data exceeding the advertised window, invalid channel
 numbers, malformed lengths, and invalid protocol transitions are refused.
 Transport packet length is capped at 35000 bytes. KEX name-lists are capped
@@ -166,7 +171,8 @@ wait. Backpressured network output also has a finite no-progress deadline.
 - An exec request with an allocated PTY is refused; the interactive path is
   `pty-req` followed by `shell`. Shell requests without a PTY are refused.
   `pty-req` records TERM and dimensions; `window-change` resizes the STREAM
-  PTY. Terminal-mode opcode framing is checked, while os64 owns the line
+  PTY. Dimensions commit only after request acceptance; a zero component
+  preserves the last accepted value (or the initial default). Terminal-mode opcode framing is checked, while os64 owns the line
   discipline. Interactive EOF uses Ctrl-D; a STREAM master lacks an
   independent write-half close.
 - Disconnect closes command pipes. A non-PTY command that does not interact
@@ -285,6 +291,40 @@ Evidence: `/tmp/sshd-merge/`, `/tmp/sshd-merge-build.log` and
 `/tmp/sshd-merge-host.log`. The P5 results above cover the earlier branch;
 this merged build has not been deployed there. SSH implementation review
 and its production merge remain pending.
+
+## Review round 1 — 2026-09-13
+
+Four findings against `7d177ea` are addressed:
+
+- Both daemon close paths wait for an active KEX before ending the channel
+  handshake. A deferred reciprocal close is sent after NEWKEYS; a stalled
+  exchange still reaches its 120-second deadline. Server rekey initiation
+  stops after channel closing begins. The host adapter follows the same rule.
+- PTY dimensions parse into locals and commit after the enclosing request
+  is accepted. Pre-PTY window changes and invalid terminal modes cannot
+  contaminate a later zero/unspecified size.
+- Output stream priority advances after bytes are sent, not on idle loop
+  iterations. One-byte window replenishments at different phases give both
+  pending streams progress. The host adapter uses the same rotation rule.
+- A socket flush interrupted by a caught signal retains the queued bytes
+  for retry, like a timeout. Positive short writes consume only those bytes;
+  EOF and other errors still end the connection.
+
+The pre-fix dimension regression reported four failed checks. Each of the
+new production-loop regressions (interrupted flush, close during KEX and
+sparse-credit fairness) failed independently before the fix. The host loop
+harness controls I/O and engine events; it does not simulate cryptography.
+A separate real-engine fixture checks deferred CLOSE release by NEWKEYS.
+The ordinary host runner now includes the loop harness automatically.
+
+Host validation passes **704 engine checks** plus all three loop groups
+under ASan/UBSan, and the full OpenSSH interoperability suite. Private
+8-core QEMU passes **704 guest SSH checks** and the full 3 MiB/rekey/PTY
+probe. Eight early-exit commands, each given 1 MiB of unread stdin, retain
+complete output and status 0. The kernel boot suite passes **65 tests**.
+Strict build, whitespace/stale-reference checks and read-only root/home
+ext2 checks pass. Evidence and before/after logs are under
+`/tmp/pr102-rd1/`. These fixes have not been deployed to the P5.
 
 ## References
 

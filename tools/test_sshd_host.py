@@ -8,6 +8,7 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +46,7 @@ def build(work):
                            (ROOT / 'tools/sshd_host_server.c', 'server')]:
         run(['cc', *FLAGS, '-DSSH_HOST', driver, *SOURCES, archive, '-lutil', '-o', work / output])
     run([work / 'unit'])
+    run([sys.executable, ROOT / 'tools/test_sshd_session_host.py'])
 
 
 def interop(work):

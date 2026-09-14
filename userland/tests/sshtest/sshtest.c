@@ -147,6 +147,50 @@ static void channels(void)
     w.n=0; ssh_put_byte(&w,94); ssh_put_u32(&w,0); ssh_put_text(&w,"unauthorized");
     n=frame(wire,payload,w.n); ssh_receive(&engine,wire,n); CHECK(engine.closed);
 }
+static void request_dimensions(const char *name, uint32_t cols, uint32_t rows, int bad_modes)
+{
+    ssh_writer w={payload,0,sizeof(payload),0};
+    ssh_put_byte(&w,98); ssh_put_u32(&w,0); ssh_put_text(&w,name); ssh_put_byte(&w,1);
+    int pty=ssh_equal((ssh_reader){(const uint8_t *)name,strlen(name),0},"pty-req");
+    if(pty) ssh_put_text(&w,"xterm");
+    ssh_put_u32(&w,cols); ssh_put_u32(&w,rows); ssh_put_u32(&w,0); ssh_put_u32(&w,0);
+    if(pty) { uint8_t modes=bad_modes?1:0; ssh_put_string(&w,&modes,1); }
+    size_t n=frame(wire,payload,w.n); CHECK(ssh_receive(&engine,wire,n)==n);
+}
+static void refused_dimensions(void)
+{
+    reset_connection(); engine.channel=1;
+    uint32_t cols=engine.cols, rows=engine.rows;
+    request_dimensions("window-change",111,37,0);
+    CHECK(!engine.closed && !engine.pty && engine.event!=SSH_EVENT_RESIZE);
+    CHECK(engine.cols==cols && engine.rows==rows);
+    request_dimensions("pty-req",123,45,1);
+    CHECK(!engine.closed && !engine.pty);
+    CHECK(engine.cols==cols && engine.rows==rows);
+    request_dimensions("pty-req",0,0,0);
+    CHECK(engine.pty && engine.cols==cols && engine.rows==rows);
+    request_dimensions("window-change",101,0,0);
+    CHECK(engine.event==SSH_EVENT_RESIZE && engine.cols==101 && engine.rows==rows);
+    request_dimensions("window-change",0,43,0);
+    CHECK(engine.event==SSH_EVENT_RESIZE && engine.cols==101 && engine.rows==43);
+    request_dimensions("window-change",222,65536,0);
+    CHECK(!engine.closed && engine.cols==101 && engine.rows==43);
+}
+static void deferred_close(void)
+{
+    reset_connection(); engine.channel=1; engine.peer_channel=17; engine.kex=1;
+    ssh_writer w={payload,0,sizeof(payload),0};
+    ssh_put_byte(&w,97); ssh_put_u32(&w,0);
+    size_t n=frame(wire,payload,w.n);
+    CHECK(ssh_receive(&engine,wire,n)==n);
+    CHECK(engine.event==SSH_EVENT_CLOSE && engine.sent_close && engine.deferred_len && !engine.out_len);
+    /* Stand at the post-ECDH seam with fixture pending keys. NEWKEYS must
+     * release the real connection layer's deferred reciprocal close. */
+    engine.kex=3; payload[0]=21; n=frame(wire,payload,1);
+    CHECK(ssh_receive(&engine,wire,n)==n);
+    CHECK(!engine.closed && !engine.kex && !engine.deferred_len && engine.rx.active);
+    CHECK(engine.out_len>=10 && engine.output[5]==97 && engine.output[9]==17);
+}
 static void authentication(void)
 {
     uint8_t point[65], blob[104], digest[32], raw[64], pair[80], sig[128], sid[36];
@@ -218,7 +262,7 @@ int main(int argc, char **argv)
 #else
     (void)argc; (void)argv;
 #endif
-    primitives(); codecs(); framing(); channels(); authentication(); exchange_refusals();
+    primitives(); codecs(); framing(); channels(); refused_dimensions(); deferred_close(); authentication(); exchange_refusals();
     report("sshtest: %d checks, %d failures\n",checks,failed);
     return failed?1:0;
 }

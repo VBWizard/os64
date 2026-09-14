@@ -271,7 +271,8 @@ static int flush(void)
     const uint8_t *p; size_t n = ssh_output(&engine, &p);
     if (!n) return 1;
     int64_t wrote = os64_write_for(1, p, n, 0);
-    if (wrote == OS64_ERR_TIMEOUT) return 1;
+    /* Caught signals leave the queued bytes intact for the next turn. */
+    if (wrote == OS64_ERR_TIMEOUT || wrote == OS64_INTERRUPTED) return 1;
     if (wrote <= 0) return 0;
     ssh_output_consume(&engine, (size_t)wrote); return 1;
 }
@@ -301,12 +302,15 @@ static int session(void)
     int eof[2] = {0,0}, exited = 0, close_received = 0; int32_t status = 0;
     uint64_t begin = now_ms(), last_progress = begin, key_time = begin, kex_begin = begin, close_time = 0;
     int had_kex = engine.kex;
+    unsigned next_stream = 0;
     for (;;) {
         size_t queued = engine.out_len;
         if (!flush()) break;
         uint64_t now = now_ms();
         if (!queued || engine.out_len < queued) last_progress = now;
-        if (engine.closed || close_received) {
+        /* An in-flight channel close can owe a deferred reply. Keep reading
+         * the active KEX until NEWKEYS releases it, or its deadline expires. */
+        if (engine.closed || (close_received && !engine.kex)) {
             if (!engine.out_len || now - last_progress > 5000) break;
             os64_sleep(10); continue;
         }
@@ -316,7 +320,7 @@ static int session(void)
         if (had_kex && !engine.kex) key_time = now;
         had_kex = engine.kex;
         if (engine.kex && now - kex_begin > 120000) ssh_disconnect(&engine, 3, "key exchange timeout");
-        if (!engine.kex && (now-key_time >= 3600000 || engine.tx.bytes >= 536870912 || engine.rx.bytes >= 536870912)) {
+        if (!close_received && !engine.sent_close && !engine.kex && (now-key_time >= 3600000 || engine.tx.bytes >= 536870912 || engine.rx.bytes >= 536870912)) {
             ssh_rekey(&engine); kex_begin = now; had_kex = engine.kex;
         }
         if (net_off == net_len) {
@@ -334,7 +338,9 @@ static int session(void)
             if (head != credited && SSH_OUTPUT_CAP-engine.out_len > 256) {
                 ssh_input_consumed(&engine, head-credited); credited = head;
             }
-            for (int i = 0; i < 2; i++) {
+            unsigned first_stream = next_stream;
+            for (unsigned pass = 0; pass < 2; pass++) {
+                unsigned i = (first_stream + pass) % 2;
                 child_stream *stream = &streams[i];
                 if (!out_len[i]) {
                     uint32_t head = stream->head;
@@ -348,6 +354,9 @@ static int session(void)
                 }
                 if (out_len[i]) {
                     size_t n = ssh_send_data(&engine, out[i], out_len[i], i);
+                    /* Rotate on credit spent, not idle turns: sparse window
+                     * updates must not repeatedly favor the same stream. */
+                    if (n) next_stream = i ^ 1u;
                     out_len[i] -= n; memmove(out[i], out[i]+n, out_len[i]);
                 }
             }
@@ -356,7 +365,7 @@ static int session(void)
                 if (done == child) exited = 1;
             }
             if (exited && eof[0] && eof[1] && !out_len[0] && !out_len[1]) ssh_send_exit(&engine, (uint32_t)status);
-            if (engine.sent_close) {
+            if (engine.sent_close && !engine.kex) {
                 if (!close_time) close_time = now;
                 if (!engine.out_len && now-close_time > 5000) break;
             }

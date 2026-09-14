@@ -70,14 +70,11 @@ void ssh_start_result(ssh_engine *s, int success)
 {
     s->started = success; reply(s, success);
 }
-static int dimensions(ssh_engine *s, ssh_reader *r)
+static int dimensions(ssh_reader *r, uint32_t *cols, uint32_t *rows)
 {
-    uint32_t cols = ssh_u32(r), rows = ssh_u32(r);
+    *cols = ssh_u32(r); *rows = ssh_u32(r);
     (void)ssh_u32(r); (void)ssh_u32(r);
-    if (r->bad || cols > 65535 || rows > 65535) return 0;
-    if (cols) s->cols = cols;
-    if (rows) s->rows = rows;
-    return 1;
+    return !r->bad && *cols <= 65535 && *rows <= 65535;
 }
 static int modes_ok(ssh_reader r)
 {
@@ -98,15 +95,24 @@ static void channel_request(ssh_engine *s, ssh_reader r)
     if (ssh_equal(name, "pty-req")) {
         if (s->started || s->pty) { reply(s, 0); return; }
         ssh_reader term = ssh_string(&r);
-        int good = dimensions(s, &r); ssh_reader modes = ssh_string(&r);
+        uint32_t cols, rows;
+        int good = dimensions(&r, &cols, &rows); ssh_reader modes = ssh_string(&r);
         if (r.bad || r.n) goto malformed;
         if (!good || term.bad || term.n >= sizeof(s->term) || !modes_ok(modes)) { reply(s, 0); return; }
+        /* Zero keeps the last accepted size; a refused request changes none. */
+        if (cols) s->cols = cols;
+        if (rows) s->rows = rows;
         memcpy(s->term, term.p, term.n); s->term[term.n] = 0; s->pty = 1; reply(s, 1); return;
     }
     if (ssh_equal(name, "window-change")) {
-        int good = dimensions(s, &r);
+        uint32_t cols, rows;
+        int good = dimensions(&r, &cols, &rows);
         if (r.bad || r.n) goto malformed;
-        if (s->pty && good) { s->event = SSH_EVENT_RESIZE; reply(s, 1); }
+        if (s->pty && good) {
+            if (cols) s->cols = cols;
+            if (rows) s->rows = rows;
+            s->event = SSH_EVENT_RESIZE; reply(s, 1);
+        }
         else reply(s, 0);
         return;
     }

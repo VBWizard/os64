@@ -54,6 +54,7 @@ static void serve(int sock, const char *pubfile)
     fclose(f); nonblock(sock);
     int input=-1, out[2]={-1,-1}, child=-1, eof=0, ended=0, status=0, closing=0;
     uint8_t net[32768], output[4096]; size_t net_len=0, net_off=0;
+    unsigned next_stream=0;
     for (int turns=0; turns<120000; turns++) {
         const uint8_t *wire; size_t n=ssh_output(&s,&wire);
         if (n) {
@@ -61,7 +62,7 @@ static void serve(int sock, const char *pubfile)
             if (wrote>0) ssh_output_consume(&s,(size_t)wrote);
             else if (errno!=EAGAIN && errno!=EINTR) break;
         }
-        if (s.closed || closing) { if (!s.out_len) break; usleep(1000); continue; }
+        if (s.closed || (closing && !s.kex)) { if (!s.out_len) break; usleep(1000); continue; }
         if (net_off==net_len) {
             ssize_t got=recv(sock,net,sizeof(net),0);
             if (!got) break;
@@ -93,15 +94,20 @@ static void serve(int sock, const char *pubfile)
             } else if (errno!=EAGAIN && errno!=EINTR) { close(input); input=-1; }
         }
         if (eof && !pending_len && input>=0 && !s.pty) { close(input); input=-1; }
-        for (int i=0;i<2;i++) {
+        unsigned first_stream=next_stream;
+        for (unsigned pass=0;pass<2;pass++) {
+            unsigned i=(first_stream+pass)%2;
             size_t cap=sizeof(output); if (cap>s.peer_window) cap=s.peer_window;
             if (cap>s.peer_packet) cap=s.peer_packet;
             if (out[i]<0 || !s.started || s.kex || !cap || SSH_OUTPUT_CAP-s.out_len<cap+128) continue;
             ssize_t got=read(out[i],output,cap);
             if (!got || (got<0 && errno==EIO && s.pty)) { close(out[i]); out[i]=-1; }
-            else if (got>0 && ssh_send_data(&s,output,(size_t)got,i)!=(size_t)got) abort();
+            else if (got>0) {
+                if (ssh_send_data(&s,output,(size_t)got,i)!=(size_t)got) abort();
+                next_stream=i^1u;
+            }
         }
-        if (rekey_bytes && s.established && !s.kex && (s.tx.bytes >= rekey_bytes || s.rx.bytes >= rekey_bytes)) ssh_rekey(&s);
+        if (!closing && !s.sent_close && rekey_bytes && s.established && !s.kex && (s.tx.bytes >= rekey_bytes || s.rx.bytes >= rekey_bytes)) ssh_rekey(&s);
         if (child>0 && !ended && waitpid(child,&status,WNOHANG)==child) ended=1;
         if (ended && out[0]<0 && out[1]<0) ssh_send_exit(&s,WIFEXITED(status)?WEXITSTATUS(status):128+WTERMSIG(status));
         usleep(1000);
