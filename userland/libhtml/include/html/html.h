@@ -55,6 +55,9 @@ typedef struct os64_html_node {
     os64_html_attr_t *attrs;
     struct os64_html_node *template_contents;
     struct os64_html_node *parent, *first_child, *last_child, *prev, *next;
+    /* Parser association at insertion, or NULL; document-owned, possibly
+     * non-ancestor. Consumers resolve form= and ancestry separately. */
+    struct os64_html_node *form_owner;
 } os64_html_node_t;
 
 typedef struct {

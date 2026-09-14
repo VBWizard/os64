@@ -306,6 +306,14 @@ static uint64_t validate(os64_html_document_t *doc)
             safety_fail("first/last child disagree");
         /* Preorder payload alone cannot distinguish siblings from nesting. */
         hash = hash_bytes(hash, (const char *)&children, sizeof(children));
+        unsigned char associated = n->form_owner != NULL;
+        hash = hash_bytes(hash, (const char *)&associated, 1);
+        if (n->form_owner &&
+            (n->kind != OS64_HTML_ELEMENT || n->ns != OS64_HTML_NS_HTML ||
+             n->form_owner->kind != OS64_HTML_ELEMENT ||
+             n->form_owner->ns != OS64_HTML_NS_HTML ||
+             n->form_owner->tag != OS64_HTML_TAG_FORM))
+            safety_fail("invalid parser form owner");
         unsigned char fragment = n->template_contents != NULL;
         hash = hash_bytes(hash, (const char *)&fragment, 1);
         if (n->template_contents) {
@@ -430,7 +438,7 @@ static void bounded_case(const unsigned char *data, size_t len, os64_html_option
             work = doc->work;
             refusal = doc->refusal;
             if (expected != INT64_MAX && refusal != expected)
-                safety_fail(name);
+                safety_fail(name ? name : "unexpected bounded refusal");
             if (name)
                 printf(
                     "Adversarial %s: bytes=%zu work=%llu peak_arena=%zu refusal=%s seconds=%.4f\n",
@@ -621,6 +629,117 @@ static void encoding_exports(void)
     }
     os64_html_document_free(doc);
 }
+/* These small ownership fixtures include template fragments in their walk. */
+static HNode *node_with_id(HNode *n, const char *id)
+{
+    for (; n; n = n->next) {
+        const HAttr *a = os64_html_attr(n, "id");
+        if (a && strcmp(a->value, id) == 0)
+            return n;
+        HNode *found = node_with_id(n->first_child, id);
+        if (!found && n->template_contents)
+            found = node_with_id(n->template_contents->first_child, id);
+        if (found)
+            return found;
+    }
+    return NULL;
+}
+static void ownership_case(const char *markup, bool associated, bool empty_form)
+{
+    os64_html_options_t opt = os64_html_options_default();
+    opt.charset = "utf-8";
+    for (unsigned chunk = 0; chunk < 3; chunk++) {
+        os64_html_document_t *doc = parse_raw((const unsigned char *)markup, strlen(markup),
+                                             chunk == 0 ? 0 : chunk == 1 ? 1 : SIZE_MAX, &opt);
+        check(doc && !doc->refusal, "owner fixture parsed, chunk %u: %s", chunk, markup);
+        if (doc && !doc->refusal) {
+            HNode *control = node_with_id(doc->document, "q");
+            HNode *form = node_with_id(doc->document, "f");
+            check(control && (associated ? form && control->form_owner == form
+                                         : control->form_owner == NULL),
+                  "parser association, chunk %u: %s", chunk, markup);
+            if (empty_form)
+                check(form && !form->first_child, "table form stays empty: %s", markup);
+            validate(doc);
+        }
+        os64_html_document_free(doc);
+        check(live == 0, "ownership fixture freed");
+    }
+    safety_case((const unsigned char *)markup, strlen(markup));
+}
+static void form_owners(void)
+{
+    ownership_case("<table><form id=f action=/s><tr><td><input id=q name=q>"
+                   "</td></tr></form></table>", true, true);
+    ownership_case("<form id=f><input id=q>", true, false);
+    ownership_case("<form id=f></form><input id=q form=f>", false, false);
+    ownership_case("<input id=q>", false, false);
+    ownership_case("<form id=f></form><input id=q>", false, false);
+    ownership_case("<form id=f><form id=ignored><input id=q>", true, false);
+    ownership_case("<form id=f><div id=q></div>", false, false);
+    ownership_case("<form id=f><template><input id=q></template>", false, false);
+    ownership_case("<template><form id=f><input id=q></form></template>", false, false);
+    ownership_case("<form id=f><template><template></template></template><input id=q>",
+                   true, false);
+    ownership_case("<form id=f><svg><output id=q /></svg>", false, false);
+    ownership_case("<form id=f><math><output id=q /></math>", false, false);
+    ownership_case("<form id=f><svg><foreignObject><input id=q></foreignObject></svg>",
+                   true, false);
+    ownership_case("<table><form id=f><input id=q></table>", true, true);
+    ownership_case("<table><form id=f><input type=hidden id=q></table>", true, true);
+    /* The adoption algorithm changes ancestry without changing this insertion record. */
+    ownership_case("<b><form id=f></b><input id=q>", true, false);
+    static const char tags[][9] = {
+        "button", "fieldset", "input", "object", "output", "select", "textarea", "img"};
+    for (size_t i = 0; i < H_ARRAY(tags); i++) {
+        char markup[160];
+        snprintf(markup, sizeof(markup), "<form id=f><%s id=q>", tags[i]);
+        ownership_case(markup, true, false);
+        snprintf(markup, sizeof(markup), "<form id=f><%s id=q form=f>", tags[i]);
+        ownership_case(markup, strcmp(tags[i], "img") == 0, false);
+        snprintf(markup, sizeof(markup), "<form id=f><%s id=q form=''>", tags[i]);
+        ownership_case(markup, strcmp(tags[i], "img") == 0, false);
+    }
+    /* A detached form exercises the same-tree gate independently of templates.
+     * The public parser cannot run scripts that detach nodes during a feed. */
+    os64_html_options_t opt = os64_html_options_default();
+    opt.charset = "utf-8";
+    os64_html_parser_t *p = os64_html_parser_new(&opt);
+    if (!p) {
+        check(false, "detached-form parser allocation");
+        return;
+    }
+    const char *prefix = "<form id=f></form>";
+    os64_html_parser_feed(p, prefix, strlen(prefix));
+    h_encoding_start(p);
+    HNode *form = node_with_id(p->d->pub.document, "f");
+    check(form != NULL, "detached form fixture created");
+    if (form) {
+        h_detach(form);
+        p->form = form;
+        const char *input = "<input id=q>";
+        os64_html_parser_feed(p, input, strlen(input));
+    }
+    os64_html_document_t *doc = os64_html_parser_finish(p);
+    HNode *control = node_with_id(doc->document, "q");
+    check(!doc->refusal && control && !control->form_owner, "different trees exclude owner");
+    os64_html_document_free(doc);
+    check(live == 0, "detached form freed with document");
+
+    /* Interrupt at each charged step, including the association's stack,
+     * attribute and root walks; refusal must leave a freeable partial tree. */
+    const char *markup = "<form id=f><div><span><input id=q a=1 b=2 c=3>";
+    doc = parse_raw((const unsigned char *)markup, strlen(markup), 0, &opt);
+    check(doc && !doc->refusal, "work sweep baseline");
+    uint64_t work = doc ? doc->work : 0;
+    os64_html_document_free(doc);
+    for (uint64_t budget = 0; budget <= work; budget++) {
+        opt.max_work = budget;
+        bounded_case((const unsigned char *)markup, strlen(markup), &opt,
+                     budget < work ? OS64_HTML_WORK_EXHAUSTED : OS64_HTML_OK,
+                     NULL);
+    }
+}
 static void stress(void)
 {
     char *data = malloc(1024 * 1024);
@@ -700,6 +819,7 @@ int main(int argc, char **argv)
     }
     if (argc > 1 && strcmp(argv[1], "--checks") == 0) {
         encoding_exports();
+        form_owners();
         printf("html checks: %zu run, %zu failed\n", checks_run, checks_failed);
         return checks_failed ? 1 : 0;
     }

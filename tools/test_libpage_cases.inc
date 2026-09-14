@@ -180,6 +180,26 @@ static void check_no_form(const char *name, const os64_page_t *page)
 
 static void family_b(void)
 {
+    run((PCase){.steps = "B7",
+                .name = "B: a table-layout control submits through its parser owner",
+                .html = "<table><form action=/s><tr><td><input name=q value=cat>"
+                        "<button>Go</button></td></tr></form></table>",
+                .index = 1,
+                .url = "http://host/s?q=cat"});
+    run((PCase){.steps = "B7,C6",
+                .name = "B: implicit submission uses a parser-associated button",
+                .html = "<table><form action=/s><tr><td><input name=q value=cat>"
+                        "<button name=go value=yes>Go</button></td></tr></form></table>",
+                .implicit = true,
+                .index = 0,
+                .url = "http://host/s?q=cat&go=yes"});
+    run((PCase){.steps = "B7,B4",
+                .name = "B: explicit form excludes a table parser association",
+                .html = "<form id=other action=/other></form><table><form action=/s>"
+                        "<tr><td><input name=q value=cat form=other>"
+                        "<button form=other>Go</button></td></tr></form></table>",
+                .index = 1,
+                .url = "http://host/other?q=cat"});
     model("B1", "B: the nearest form ancestor", "<form><div><input name=q></div></form>",
           check_nearest);
     model("B2", "B: form= names a form anywhere", "<form id=f action=/s></form><input form=f name=q>",

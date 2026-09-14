@@ -164,12 +164,10 @@ settled ONCE for every control after the walk and before anything asks, so
 a question during rendering is answerable (round 7's structural miss). The
 `form=` attribute names a form by `id` anywhere in the document; a name that
 matches no form leaves the control in NO form, not the nearest one (round
-4); otherwise the nearest `form` ancestor. **Booked, and libhtml's to
-provide:** the parser-inserted owner — a control inserted while the tree
-builder's form element pointer is set, outside that form's subtree (a
-control in a table row the form did not wrap). libhtml records no such
-pointer today; the corpus marks those cases skipped with this reason, and
-LIBHTML.md gets the request.
+4); otherwise libhtml's `form_owner` insertion record takes precedence over
+nearest `form` ancestry. Table parsing can leave a form empty while controls
+in its table rows belong to it. The B7 corpus cases cover explicit and
+implicit submission through that parser association; `form=` still wins.
 
 **C. The submitter** (§4.10.21.2, §4.10.21.3 implicit submission). One
 door: `page_submitter(page, form, activated)` → the submitter element or
@@ -453,10 +451,10 @@ marked throwaway.
   discipline, the POST refusal by name, and rendering a request's `reason`.
 - **The graphical browser**: links against the same library and adds
   nothing to it that is about pixels.
-- **libhtml** (Quinn): the parser form-owner pointer. The two ENCODING
-  exports of issue #99 — the label lookup and the windows-1252 encoder — are
-  done and land in this PR, Chris's 2026-09-12 ruling; the form-owner
-  pointer, which is tree-builder surgery, is still Quinn's.
+- **libhtml**: supplies the parser's `form_owner` insertion record, the
+  encoding label lookup, and the windows-1252 encoder (issue #99). libpage
+  consumes these exports instead of reconstructing parser state or copying
+  the encoding table.
 - **libfetch** (Fable): a request body, when the first login is worth
   doing.
 

@@ -110,14 +110,7 @@ static PStep steps[] = {
     {"B4", "form= outranks the nearest ancestor", false},
     {"B5", "an id that names a non-form leaves the control in no form", false},
     {"B6", "a control outside every form belongs to none", false},
-    // BOOKED, AND libhtml's TO MAKE COVERABLE (issue #99): a control the
-    // parser associated with a form that is not its ancestor — the old web's
-    // `<table><form><tr><td><input>`, where the form node ends up with no
-    // children and the input still belongs to it. libhtml records nothing on
-    // the elements its form element pointer associated, so there is no way to
-    // ask. It is listed here rather than left out, because a family that
-    // counts 6/6 while missing a rule is a number that lies.
-    {"B7", "a parser-inserted owner (booked: libhtml, issue #99)", false},
+    {"B7", "a parser-inserted owner can be outside the ancestor chain", false},
 
     // C. The submitter (§4.10.21.2, §4.10.21.3)
     {"C1", "input type=submit is a submitter", false},

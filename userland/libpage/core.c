@@ -451,6 +451,8 @@ static bool element_kind(const os64_html_node_t *n, os64_page_element_t *out)
 // found is a form second — so `<div id=f></div><form id=f>` leaves the
 // control in NO form, because the div is what that id names. A name matching
 // nothing leaves it in no form as well, and NOT in the nearest ancestor.
+// Without form=, the parser's insertion association precedes ancestry: table
+// parsing can leave a form empty while its controls still belong to it.
 static int32_t form_owner(const os64_page_t *page, const os64_html_node_t *n)
 {
     const char *named = p_attr(n, "form");
@@ -458,8 +460,8 @@ static int32_t form_owner(const os64_page_t *page, const os64_html_node_t *n)
         const void *node = p_strmap_get(&page->id_map, named);
         return node != NULL ? p_ptrmap_get(&page->form_map, node) : -1;
     }
-    const os64_html_node_t *up = p_ancestor(n, OS64_HTML_TAG_FORM);
-    return up != NULL ? p_ptrmap_get(&page->form_map, up) : -1;
+    const os64_html_node_t *owner = n->form_owner ? n->form_owner : p_ancestor(n, OS64_HTML_TAG_FORM);
+    return owner != NULL ? p_ptrmap_get(&page->form_map, owner) : -1;
 }
 
 // WHAT PRESSING A CONTROL DOES. A `button` element defaults to type submit,
