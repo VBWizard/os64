@@ -3,8 +3,8 @@
 
 The write test retains the real dispatch prelude, pipe case and pin wrapper;
 unrelated device cases are excluded. The spawn test retains the actual code
-from scheduler submission through the returned PID. Stubs control death and
-publication timing, and assert references are released before either death.
+from the storage hold through PID capture and release. Stubs control death
+and publication timing, checking pin cleanup and task/terminal lifetimes.
 """
 from pathlib import Path
 import re
@@ -123,19 +123,28 @@ int main(void) {
 '''
 
 tail = function('spawn_do_create')
-tail = tail[tail.index('scheduler_submit_new_task(child);'):]
+publication_start = 'task_hold(child);' if 'task_hold(child);' in tail else 'scheduler_submit_new_task(child);'
+tail = tail[tail.index(publication_start):]
 spawn_program = header + r'''
 typedef struct { tty_t *ttySlave; long result; } spawn_params_t;
 static tty_t terminal;
 static unsigned hangups;
 static bool published, close_on_publish;
+static unsigned task_holds;
+static bool reap_on_publish, task_freed;
+static void task_hold(task_t *t) {assert(t==&task && !task_freed);task_holds++;}
+static void task_release(task_t *t) {
+ assert(t==&task && task_holds);task_holds--;
+ if(reap_on_publish && !task_holds) {task_freed=true;t->taskID=99;}
+}
 static void scheduler_submit_new_task(task_t *t) {
  assert(t==&task); if(close_on_publish) terminal.masterClosed=true;
  // The master's earlier sweep cannot see this child until publication.
  published=true;
+ if(reap_on_publish && !task_holds) task_freed=true;
 }
 static tty_t *task_tty_hold(task_t *t) {
- assert(published && t==&task);tty_t *tty=t->tty;
+ assert(published && t==&task && !task_freed);tty_t *tty=t->tty;
  if(!tty || tty->buried)return NULL;
  tty->holds++;return tty;
 }
@@ -155,7 +164,9 @@ int main(void) {
  terminal=(tty_t){.is_pty=true,.buried=true,.masterClosed=true};close_on_publish=false;hangups=0;
  spawn_params_t p={0};publication(&p);assert(!hangups && !terminal.holds);
  terminal=(tty_t){0};publication(&p);assert(!hangups && !terminal.holds);
- puts("spawn publication: inherited and explicit PTYs see prior hangup; open, buried and VT terminals release holds PASS");
+ terminal=(tty_t){.is_pty=true,.buried=true};reap_on_publish=true;task_freed=false;
+ publication(&p);assert(task_freed && !task_holds && p.result==42);
+ puts("spawn publication: inherited and explicit PTYs see prior hangup; open, buried and VT terminals release holds; task storage survives through PID capture PASS");
 }
 '''
 

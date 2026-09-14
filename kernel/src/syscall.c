@@ -3997,6 +3997,10 @@ static void spawn_do_create(void *arg)
 		handle_install(child, slot, p->redirType[slot], p->redirObject[slot]);
 	}
 
+	// Submission lets the child exit and a sibling reap it before this
+	// thread resumes. Hold its storage through the terminal check and PID
+	// capture; a terminal hold alone cannot protect the task pointer.
+	task_hold(child);
 	scheduler_submit_new_task(child);
 
 	// Both inherited and explicit PTY seats exist before the child is
@@ -4014,6 +4018,7 @@ static void spawn_do_create(void *arg)
 	}
 
 	p->result = (long)child->taskID;
+	task_release(child);
 }
 
 // spawn(path, argv, in, out, err) — launch `path` as a child of the calling

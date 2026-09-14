@@ -128,6 +128,31 @@ static int write_all(int32_t h, const uint8_t *buf, size_t len)
 	return 0;
 }
 
+static int flush_pending_cr(int *pending_cr)
+{
+	if (!*pending_cr)
+		return 0;
+	*pending_cr = 0;
+	const uint8_t crnul[2] = { '\r', 0 };
+	return write_all((int32_t)g_conn, crnul, sizeof(crnul));
+}
+
+static int drain_mailbox(int *pending_cr)
+{
+	uint8_t mb[256];
+	size_t m;
+	while ((m = mbox_get(mb, sizeof(mb))) > 0)
+	{
+		// Mailbox data may be a closing notice. Resolve earlier shell
+		// output before it reaches the wire, even if the producer has not
+		// published the end flag yet.
+		if (flush_pending_cr(pending_cr) < 0 ||
+		    write_all((int32_t)g_conn, mb, m) < 0)
+			return -1;
+	}
+	return 0;
+}
+
 // ── husk -> client (the outbound bridge thread, and the SOLE g_conn writer) ──
 // Every iteration first drains the reply mailbox (bytes the inbound thread
 // queued), then reads husk's output with a SHORT DEADLINE and encodes it. The
@@ -135,7 +160,8 @@ static int write_all(int32_t h, const uint8_t *buf, size_t len)
 // read times out, the loop drains the mailbox, and re-reads — so a client
 // that waits for a mid-session negotiation reply no longer stalls on future
 // shell output (Codex #101 rd2). Encoding: a bare CR is held (`pending_cr`)
-// until the next byte is known — CR LF for a newline, CR NUL for a standalone
+// until the next byte, idle timeout or mailbox boundary resolves it — CR LF
+// for a newline, CR NUL for a standalone
 // CR, as the NVT requires (a lone CR misrenders a strict client's line
 // redraw) — and a 0xFF is doubled so output can never be read as IAC. Ends
 // when the pipe does: husk exited and the slave's seats emptied, the STREAM
@@ -145,24 +171,21 @@ static int64_t outbound_thread(void *arg)
 	(void)arg;
 	uint8_t in[512];
 	uint8_t out[2100];   // up to 4 bytes per input byte (a resolved CR NUL + a doubled 0xFF)
-	uint8_t mb[256];
 	int pending_cr = 0;
 
 	for (;;)
 	{
-		size_t m;
-		while ((m = mbox_get(mb, sizeof(mb))) > 0)
-			if (write_all((int32_t)g_conn, mb, m) < 0)
-				goto done;
+		if (drain_mailbox(&pending_cr) < 0)
+			goto done;
 		if (__atomic_load_n(&g_end_after_drain, __ATOMIC_ACQUIRE))
 		{
 			// The inbound thread published the end AFTER its last word
 			// went into the mailbox, so the word is there by now — but the
 			// drain above may have run before it arrived. Drain once more,
-			// then end.
-			while ((m = mbox_get(mb, sizeof(mb))) > 0)
-				if (write_all((int32_t)g_conn, mb, m) < 0)
-					goto done;
+			// then end, resolving any held CR even if the mailbox is empty.
+			if (flush_pending_cr(&pending_cr) < 0 ||
+			    drain_mailbox(&pending_cr) < 0)
+				goto done;
 			goto done;
 		}
 
@@ -174,13 +197,8 @@ static int64_t outbound_thread(void *arg)
 			// its line and is waiting for input, so it was a standalone CR
 			// — send it as CR NUL now rather than when the next byte
 			// happens to arrive (Codex #101 rd5).
-			if (pending_cr)
-			{
-				pending_cr = 0;
-				uint8_t crnul[2] = { '\r', 0 };
-				if (write_all((int32_t)g_conn, crnul, 2) < 0)
-					goto done;
-			}
+			if (flush_pending_cr(&pending_cr) < 0)
+				goto done;
 			continue;                 // loop back to drain the mailbox
 		}
 		if (n <= 0)
@@ -230,13 +248,9 @@ static int64_t outbound_thread(void *arg)
 		if (o && write_all((int32_t)g_conn, out, o) < 0)
 			break;
 	}
-	if (pending_cr)                   // a trailing CR at EOF is a standalone CR
-	{
-		uint8_t crnul[2] = { '\r', 0 };
-		write_all((int32_t)g_conn, crnul, 2);
-	}
+	flush_pending_cr(&pending_cr);    // a trailing CR at EOF is standalone
 done:
-	g_session_over = 1;   // husk is gone; wake the inbound loop off its poll
+	g_session_over = 1;   // outbound finished; end the inbound loop's poll
 	return 0;
 }
 

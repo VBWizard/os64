@@ -13,7 +13,12 @@ static int64_t seat(int64_t master)
 static bool wait_child(int64_t pid)
 {
     int32_t code = -1;
-    return pid > 0 && os64_wait(pid, &code) == pid && code == 0;
+    int64_t waited = pid > 0 ? os64_wait(pid, &code) : -1;
+    if (pid > 0 && waited == pid && code == 0)
+        return true;
+    os64_printf("streamseat: child pid=%ld wait=%ld code=%d\n",
+                (long)pid, (long)waited, code);
+    return false;
 }
 
 int main(int argc, char **argv)

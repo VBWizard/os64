@@ -481,6 +481,58 @@ Evidence is in `/tmp/pr101-rd14/`, including before/after host logs, the
 strict build, guest suite, kernel log, pipe-count GDB script and snapshots.
 These fixes have not been deployed to the P5.
 
+## Round 15 validation — 2026-09-13
+
+Two findings against `b9bf056` concern task storage after spawn publication
+and a held carriage return during Telnet's negotiated shutdown.
+
+- Spawn takes a task lifetime hold before scheduler submission and releases
+  it after the terminal check and PID capture. Collection can proceed, but
+  the undertaker cannot unlink or bury a held task. This hold protects task
+  storage; terminal lifetime still requires its separate registry hold.
+  The old comments claiming one worker pass guaranteed a full sleep interval
+  were wrong and are corrected in the task code and teardown debt entry.
+- The outbound Telnet bridge resolves a held CR as CR NUL before mailbox
+  bytes reach the wire and before negotiated shutdown with an empty mailbox.
+  This also covers a notice drained before its producer publishes the end
+  flag. Idle-timeout and EOF flushing share the same helper.
+- The production spawn-tail regression fails on the old code when a child
+  is collected and buried at publication. It now checks storage survival
+  through terminal access and PID capture, including burial at final release.
+  A second host harness compiles the actual task hold/release and two-phase
+  reaper: collected, auto-reaped and orphaned held tasks survive repeated
+  passes while unrelated burial proceeds; final release permits burial.
+- The production outbound-loop regression failed on the old code's missing
+  CR. Six deterministic cases now pass: notice plus end flag, notice before
+  flag, idle timeout, split CRLF, EOF and shutdown with an empty mailbox.
+  Every socket write is forced short. All three focused harnesses pass
+  ASan/UBSan with leak detection disabled for the host tracing environment.
+- The existing Telnet host suite passes its 1,600 differential schedules
+  and five local socket scenarios. New ring-3 fixture `/tests/spawnreap`
+  verifies 128 returned child PIDs against concurrent sibling reap results.
+
+The full guest run also exposed an existing `wait()` race: a child can set
+`exited` before it enters the dead-child list, or exit between separate dead
+and live probes. Both can falsely report "no such child". Wait now checks
+for an uncollected child under the same graveyard lock as the dead-status
+probe, retaining an exiting child as a valid target until collection.
+`tools/test_task_wait_host.py` fails against the pre-round-15 kernel source
+and passes both transition orders plus missing/already-collected refusals
+with the fix. STREAM-seat and TAR pipeline fixtures now print the PID, wait
+result and status on failure; no retry masks a failed wait.
+
+Final validation on private q35 QEMU with 8 cores and 2 GiB passed **30
+pre-boot + 32 post-boot + 3 late kernel tests** and **49 userland tests,
+0 failures, 2 skips**. A real DONT ECHO peer received the closing notice and
+EOF; settled process/TCP snapshots showed just the observer session and one
+buffered connection. Full strict `make -j8`, `git diff --check`, the
+stale-reference scan and read-only `make fsck-ext2` checks of root and home
+passed. The initial failing guest runs and the before/after wait regression
+are retained alongside the final passing results.
+
+Evidence is in `/tmp/pr101-rd15/`. These changes have not been deployed to
+the P5.
+
 ## Booked (DEBTS.md rows follow the code)
 
 UDP announce; announce on one address of several; SYN cookies; loopback

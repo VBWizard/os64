@@ -520,16 +520,12 @@ static void task_remove_dead_child_locked(task_t *parent, task_t *child)
 // Burial is TWO-PHASE, one kworker pass apart:
 //   pass N:   unlink the corpse from the deadChild list AND the kTaskList
 //             spine (scheduler_remove_task) and park it on kBurialList.
-//             From this instant no walker can newly reach it.
+//             From this instant a fresh walk cannot reach it by the lists.
 //   pass N+1: task_destroy() actually frees everything.
-// The gap is a grace period for LOCKLESS kTaskList walkers (procfs follows
-// ->next with no lock, by design — see scheduler_submit_new_task's publish
-// comment): a walker standing ON the corpse when it is unlinked can still
-// follow its intact ->next out; by the time the memory is freed a full
-// kworker period later, any such walk has long finished. A reader parked
-// mid-walk for 2+ seconds is already a wedged reader with bigger problems.
-// (The grown-up fix — snapshot-under-lock or generation counts — is booked
-// in DEBTS.md; this discipline is correct until /proc grows teeth.)
+// Consecutive passes need not sleep, so this deferral is not a guaranteed
+// elapsed-time grace period. Lockless list-walker lifetime remains booked
+// in DEBTS.md. A publisher retaining a task pointer takes a lifetime hold
+// before submission; held tasks cannot enter phase 1, even after collection.
 
 // Corpses between phase 1 and phase 2, linked through task->burialNext.
 // kworker-only (single consumer, single producer, same thread) — no lock.
@@ -1134,12 +1130,21 @@ static void task_destroy(task_t *t)
 	kTaskBurialCount++;
 }
 
+void task_hold(task_t *task)
+{
+	__sync_fetch_and_add(&task->lifetimeHolds, 1);
+}
+
+void task_release(task_t *task)
+{
+	__sync_fetch_and_sub(&task->lifetimeHolds, 1);
+}
+
 int task_reap_eligible_zombies(size_t max_to_reap)
 {
 	size_t reaped = 0;
 
-	// Phase 2 FIRST: bury whatever last pass unlinked. These corpses have
-	// been invisible to every walker for a full kworker period.
+	// Phase 2 FIRST: bury whatever the previous pass unlinked.
 	task_t *corpse = kBurialList;
 	kBurialList = NULL;
 	while (corpse != NULL) {
@@ -1200,7 +1205,11 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 				}
 			}
 
-			if (collected && task_threads_all_retired(child)) {
+			// A publisher may still need the task after a sibling collects
+			// its exit status. Holds are taken before publication (or under
+			// another hold), so zero permits unlinking without resurrection.
+			if (collected && task_threads_all_retired(child) &&
+			    __atomic_load_n(&child->lifetimeHolds, __ATOMIC_ACQUIRE) == 0) {
 				printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 					"task_reap_eligible_zombies: unlinking child task 0x%08x (%s), parent=0x%08x (%s), collected=%u autoReap=%u parentExited=%u\n",
 					child->taskID,
@@ -1540,10 +1549,8 @@ static task_t *task_find_dead_child(task_t *parent, uint64_t targetPid)
 	return NULL;
 }
 
-// Find a LIVE child matching targetPid (0 = any), or NULL. Two callers, two
-// jobs: task_wait uses NULL-ness to fail fast when the caller asks for a child
-// that doesn't exist / was already reaped, and uses the task itself to hand
-// the console over (the child being waited on IS the foreground task).
+// Find a live child for task_wait's foreground hand-off. The caller holds
+// the terminal's foreground lock while choosing and publishing the pointer.
 static task_t *task_find_live_child(task_t *parent, uint64_t targetPid)
 {
 	for (task_t *t = kTaskList; t != NULL && t != (task_t*)NO_TASK; t = t->next)
@@ -1551,6 +1558,19 @@ static task_t *task_find_live_child(task_t *parent, uint64_t targetPid)
 			if (targetPid == 0 || t->taskID == targetPid)
 				return t;
 	return NULL;
+}
+
+// Called under kDeadChildLock alongside the dead-child probe. A task can
+// have exited without reaching its parent's dead list yet; it remains a
+// wait target until collection. This lock excludes collection and unlinking
+// during the walk, so neither transition can fall between the two probes.
+static bool task_has_uncollected_child_locked(task_t *parent, uint64_t targetPid)
+{
+	for (task_t *t = kTaskList; t != NULL && t != (task_t *)NO_TASK; t = t->next)
+		if (t->parentTask == parent && !t->retValCollected &&
+		    (targetPid == 0 || t->taskID == targetPid))
+			return true;
+	return false;
 }
 
 // Is `candidate` — a value read from a terminal's fgTask — a live child of
@@ -1696,6 +1716,8 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			endedRetVal = child->retVal;
 			child->retValCollected = true;
 		}
+		bool childPending = endedPid == 0 &&
+		    task_has_uncollected_child_locked(parent, targetPid);
 		spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
 
 		if (endedPid != 0) {
@@ -1721,9 +1743,9 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			return endedPid;
 		}
 
-		// No dead match. If there is no matching LIVE child either, there is
-		// nothing to wait for — fail rather than sleep forever.
-		if (task_find_live_child(parent, targetPid) == NULL) {
+		// Neither a collectible status nor an uncollected child existed
+		// under the graveyard lock: fail rather than sleep forever.
+		if (!childPending) {
 			// Take the console back — same rule and same lock as the
 			// collected-corpse return above.
 			if (movesConsole) {

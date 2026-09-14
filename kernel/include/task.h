@@ -257,12 +257,15 @@
         // which is not a leak, it is the 1971 contract: a zombie IS an exit
         // status nobody has claimed yet.
         volatile bool retValCollected;
+        // Storage lifetime across publication: even a collected task stays
+        // linked and unburied while held. This does not prevent task exit
+        // or keep its handles/terminal seat open. Changed atomically.
+        volatile uint32_t lifetimeHolds;
         // Private link for the undertaker's two-phase burial list (task.c).
         // NOT the deadChild chain and NOT the kTaskList spine: a corpse on
         // THIS list has already been unlinked from both and is invisible to
-        // every walker; it waits here exactly one kworker pass (the grace
-        // period that protects lockless /proc walkers standing on it) before
-        // task_destroy frees it for real.
+        // new list walks; the next kworker pass frees it. Passes need not
+        // sleep, so this is not a storage-lifetime guarantee for a reader.
         struct task* burialNext;
         // The one task Ctrl+C must never kill: husk sitting at its prompt.
         // Tagged by the kernel when it launches the shell (kernel.c). When the
@@ -403,6 +406,12 @@
     // for a caller holding one it did not take a reference on — the walk
     // compares addresses and never dereferences the candidate.
     bool task_is_live(const task_t *candidate);
+
+    // Caller already owns the storage lifetime: the task is unpublished or
+    // protected by an existing hold. These do not validate a stale pointer.
+    // Release is the caller's last access; burial may follow immediately.
+    void task_hold(task_t *task);
+    void task_release(task_t *task);
 
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);
