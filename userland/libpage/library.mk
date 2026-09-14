@@ -2,14 +2,16 @@
 # submitter, the entry list, the encodings, reference resolution. It records
 # real DT_NEEDED edges on libhtml (the tree it reads) and libos64 (the URL
 # grammar and the Unicode table `dir=auto` needs); neither of those knows a
-# form exists. Only a browser acquires this edge.
+# form exists. Browsers and the focused guest test acquire this edge.
 LIBPAGE_SRCS := libpage/core.c libpage/resolve.c libpage/value.c libpage/submit.c \
-                libpage/encode.c libpage/refresh.c libpage/activate.c
+                libpage/encode.c libpage/refresh.c libpage/activate.c libpage/number.c libpage/range.c \
+                libpage/upstream/ryu/ryu/d2s.c
 LIBPAGE_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBPAGE_SRCS))
 LIBPAGE_SO := $(BIN)/libpage.so
 # -O2 and the sanitizer suite at the same optimization, libhtml's reasoning:
 # a page's forms are walked once per page and the walk is all pointer chasing.
-LIBPAGE_CFLAGS = $(LIBOS64_CFLAGS) -O2 -fvisibility=hidden
+LIBPAGE_CFLAGS = $(LIBOS64_CFLAGS) -O2 -fvisibility=hidden \
+                -I$(CURDIR)/libpage/upstream/ryu/compat -I$(CURDIR)/libpage/upstream/ryu
 LIBPAGE_BASE = $(patsubst libpage.so=%,%,$(filter libpage.so=%,$(LIB_BASE_PAIRS)))
 LIBPAGE_LDFLAGS = $(SHARED_LIB_LDFLAGS) -soname libpage.so
 

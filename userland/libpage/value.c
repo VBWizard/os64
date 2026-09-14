@@ -1,13 +1,9 @@
 // value.c — family H: what a control HOLDS, sanitized for its type.
 //
-// ONE DOOR, and nothing outside it reads the attribute behind a value. Every
-// other family asks here, so "what does this box contain" has one answer
-// whether it is being drawn, validated, or put on a wire.
-//
-// The sanitization is the standard's, per type (§4.10.5.1). It is not
-// cosmetic: a newline inside a single-line field would become `%0A` in a
-// query nobody meant to send, and a `number` holding letters would be sent
-// as letters to a server that asked for a number.
+// Initial values and edits share p_sanitize_value. The caller supplies the
+// arena so a failed edit can discard temporary storage without changing
+// the published value. Range arithmetic and numeric conversion are private
+// helpers with their contracts recorded in LIBPAGE_REVIEW.md.
 
 #include "internal.h"
 
@@ -65,7 +61,8 @@ static bool digits(const char **at, int32_t least, int32_t most, int32_t *value)
 {
     int32_t n = 0, got = 0;
     while (digit(**at) && got < most) {
-        n = n * 10 + (**at - '0');
+        if (value != NULL)
+            n = n * 10 + (**at - '0');
         (*at)++;
         got++;
     }
@@ -74,35 +71,6 @@ static bool digits(const char **at, int32_t least, int32_t most, int32_t *value)
     if (value != NULL)
         *value = n;
     return true;
-}
-
-// The standard's VALID FLOATING-POINT NUMBER: digits, then an optional
-// fraction, then an optional exponent. The grammar says nothing about how
-// big the number may be, so neither does this.
-static bool valid_float(const char *s)
-{
-    if (*s == '-' || *s == '+') {
-        // A leading '+' is NOT part of a valid floating-point number, only
-        // of a valid number for an exponent.
-        if (*s == '+')
-            return false;
-        s++;
-    }
-    if (!digits(&s, 1, 20, NULL))
-        return false;
-    if (*s == '.') {
-        s++;
-        if (!digits(&s, 1, 20, NULL))
-            return false;
-    }
-    if (*s == 'e' || *s == 'E') {
-        s++;
-        if (*s == '+' || *s == '-')
-            s++;
-        if (!digits(&s, 1, 10, NULL))
-            return false;
-    }
-    return *s == '\0';
 }
 
 static bool leap(int32_t year)
@@ -120,20 +88,32 @@ static int32_t days_in(int32_t year, int32_t month)
     return days[month - 1];
 }
 
-// The standard's VALID DATE STRING: four or more digits for the year, and a
-// year of zero is not a year.
+// Calendar rules repeat every 400 years. Keep that residue while scanning
+// an arbitrarily long positive year, so syntax checks cannot overflow.
+static bool year_part(const char **at, int32_t *year)
+{
+    const char *s = *at;
+    int32_t residue = 0;
+    size_t digits_seen = 0;
+    bool nonzero = false;
+    while (digit(*s)) {
+        nonzero |= *s != '0';
+        residue = (residue * 10 + *s - '0') % 400;
+        s++;
+        digits_seen++;
+    }
+    if (digits_seen < 4 || !nonzero)
+        return false;
+    *year = residue != 0 ? residue : 400;
+    *at = s;
+    return true;
+}
+
 static bool date_part(const char **at, int32_t *year, int32_t *month, int32_t *day)
 {
     const char *s = *at;
-    int32_t y = 0, m = 0, d = 0, got = 0;
-    while (digit(*s)) {
-        y = y * 10 + (*s - '0');
-        s++;
-        got++;
-        if (got > 6)
-            return false;
-    }
-    if (got < 4 || y == 0)
+    int32_t y = 0, m = 0, d = 0;
+    if (!year_part(&s, &y))
         return false;
     if (*s++ != '-' || !digits(&s, 2, 2, &m) || m < 1 || m > 12)
         return false;
@@ -152,12 +132,11 @@ static bool date_part(const char **at, int32_t *year, int32_t *month, int32_t *d
 // Thursday, or is a leap year beginning on a Wednesday.
 static int32_t weeks_in(int32_t year)
 {
-    // Zeller's congruence for 1 January, 0 = Saturday.
-    int32_t y = year - 1, doomsday = (1 + 5 * (y % 4) + 4 * (y % 100) + 6 * (y % 400)) % 7;
-    if (doomsday == 5)
-        return 53;   // a Thursday
-    if (doomsday == 4 && leap(year))
-        return 53;   // a Wednesday, in a leap year
+    // Gregorian weekday for January 1, Sunday = 0.
+    int32_t y = year - 1;
+    int32_t weekday = (1 + y + y/4 - y/100 + y/400) % 7;
+    if (weekday == 4 || (weekday == 3 && leap(year)))
+        return 53;
     return 52;
 }
 
@@ -192,15 +171,7 @@ static bool valid_for(os64_page_input_t input, const char *s)
     case OS64_PAGE_INPUT_MONTH:
         return date_part(&s, &year, &month, NULL) && *s == '\0';
     case OS64_PAGE_INPUT_WEEK: {
-        int32_t got = 0;
-        while (digit(*s)) {
-            year = year * 10 + (*s - '0');
-            s++;
-            got++;
-            if (got > 6)
-                return false;
-        }
-        if (got < 4 || year == 0 || *s++ != '-' || *s++ != 'W')
+        if (!year_part(&s, &year) || *s++ != '-' || *s++ != 'W')
             return false;
         if (!digits(&s, 2, 2, &week) || week < 1 || week > weeks_in(year))
             return false;
@@ -220,167 +191,12 @@ static bool valid_for(os64_page_input_t input, const char *s)
     }
 }
 
-// ── A decimal, exactly, for the one value that has to be computed ───────
-//
-// A range with no value holds the MIDDLE of its span, so that number has to
-// be worked out and spelled — and there is no floating point to be had here
-// (the kernel is built without it and userland's formatter has no `%f`), so
-// a decimal is carried as an integer and a power of ten and the arithmetic
-// is exact. A span too wide to hold that way is a refusal rather than a
-// rounded answer nobody asked for.
-
-typedef struct {
-    int64_t mantissa;
-    int32_t exp10;
-} PDecimal;
-
-#define P_DECIMAL_MAX 999999999999999ll   // room to add two and multiply by five
-
-static bool decimal_parse(const char *s, PDecimal *out)
-{
-    if (s == NULL || !valid_float(s))
-        return false;
-    bool negative = *s == '-';
-    if (negative)
-        s++;
-    int64_t mantissa = 0;
-    int32_t exp10 = 0;
-    for (; digit(*s); s++) {
-        if (mantissa > P_DECIMAL_MAX / 10)
-            return false;
-        mantissa = mantissa * 10 + (*s - '0');
-    }
-    if (*s == '.') {
-        for (s++; digit(*s); s++) {
-            if (mantissa > P_DECIMAL_MAX / 10)
-                return false;
-            mantissa = mantissa * 10 + (*s - '0');
-            exp10--;
-        }
-    }
-    if (*s == 'e' || *s == 'E') {
-        s++;
-        bool down = *s == '-';
-        if (*s == '+' || *s == '-')
-            s++;
-        int32_t power = 0;
-        for (; digit(*s); s++) {
-            power = power * 10 + (*s - '0');
-            if (power > 40)
-                return false;   // wider than an exact decimal can be carried
-        }
-        exp10 += down ? -power : power;
-    }
-    out->mantissa = negative ? -mantissa : mantissa;
-    out->exp10 = exp10;
-    return true;
-}
-
-// Scale a decimal down to a smaller power of ten, exactly or not at all.
-static bool decimal_at(PDecimal *d, int32_t exp10)
-{
-    while (d->exp10 > exp10) {
-        if (d->mantissa > P_DECIMAL_MAX / 10 || d->mantissa < -(P_DECIMAL_MAX / 10))
-            return false;
-        d->mantissa *= 10;
-        d->exp10--;
-    }
-    return d->exp10 == exp10;
-}
-
-static bool decimal_spell(PDecimal d, char *out, size_t cap)
-{
-    // Trailing zeros in the mantissa are a power of ten, not digits: they
-    // are what turns 5.0 into 5.
-    while (d.mantissa != 0 && d.mantissa % 10 == 0 && d.exp10 < 0) {
-        d.mantissa /= 10;
-        d.exp10++;
-    }
-    char digits_out[24];
-    int32_t n = 0;
-    int64_t value = d.mantissa < 0 ? -d.mantissa : d.mantissa;
-    do {
-        digits_out[n++] = (char)('0' + value % 10);
-        value /= 10;
-    } while (value != 0 && n < (int32_t)sizeof(digits_out));
-    // A power of ten this far from the digits would be spelled as a field of
-    // zeros; refuse rather than write one.
-    if (d.exp10 > 24 || d.exp10 < -24)
-        return false;
-    size_t at = 0;
-    if (d.mantissa < 0 && at + 1 < cap)
-        out[at++] = '-';
-    if (d.exp10 >= 0) {
-        for (int32_t i = n - 1; i >= 0; i--)
-            if (at + 1 < cap)
-                out[at++] = digits_out[i];
-        for (int32_t i = 0; i < d.exp10; i++)
-            if (at + 1 < cap)
-                out[at++] = '0';
-    } else {
-        int32_t whole = n + d.exp10;
-        if (whole <= 0) {
-            if (at + 1 < cap)
-                out[at++] = '0';
-            if (at + 1 < cap)
-                out[at++] = '.';
-            for (int32_t i = 0; i < -whole; i++)
-                if (at + 1 < cap)
-                    out[at++] = '0';
-            for (int32_t i = n - 1; i >= 0; i--)
-                if (at + 1 < cap)
-                    out[at++] = digits_out[i];
-        } else {
-            for (int32_t i = n - 1; i >= 0; i--) {
-                if (i == n - whole - 1 && at + 1 < cap)
-                    out[at++] = '.';
-                if (at + 1 < cap)
-                    out[at++] = digits_out[i];
-            }
-        }
-    }
-    out[at] = '\0';
-    return at + 1 < cap;
-}
-
-// The Range state's value sanitization: it holds the middle of its span when
-// it holds nothing usable — the minimum plus half the difference, or the
-// minimum when the maximum is below it. An absent or invalid bound is 0
-// and 100.
-static const char *range_default(os64_page_t *page, const os64_html_node_t *n, size_t *len)
-{
-    PDecimal low = {0, 0}, high = {100, 0}, bound;
-    if (decimal_parse(p_attr(n, "min"), &bound))
-        low = bound;
-    if (decimal_parse(p_attr(n, "max"), &bound))
-        high = bound;
-    int32_t exp10 = low.exp10 < high.exp10 ? low.exp10 : high.exp10;
-    if (!decimal_at(&low, exp10) || !decimal_at(&high, exp10))
-        return NULL;
-    if (high.mantissa < low.mantissa)
-        high = low;
-    // (low + high) / 2, kept exact by taking it as (low + high) * 5 one
-    // power of ten further down, so an odd sum does not round.
-    if (low.mantissa > P_DECIMAL_MAX - high.mantissa ||
-        low.mantissa < -P_DECIMAL_MAX - high.mantissa)
-        return NULL;
-    PDecimal middle = {(low.mantissa + high.mantissa) * 5, exp10 - 1};
-    char spelled[48];
-    if (!decimal_spell(middle, spelled, sizeof(spelled)))
-        return NULL;
-    size_t n2 = os64_strlen(spelled);
-    char *copy = p_copy(page, spelled, n2);
-    if (copy != NULL)
-        *len = n2;
-    return copy;
-}
-
 // ── The sanitizers ──────────────────────────────────────────────────────
 
-static char *strip_breaks(os64_page_t *page, const char *s, size_t *len)
+static char *strip_breaks(PArena *arena, const char *s, size_t *len)
 {
     size_t n = os64_strlen(s);
-    char *out = p_alloc(page, n + 1);
+    char *out = p_arena_alloc(arena, n + 1);
     if (out == NULL)
         return NULL;
     size_t at = 0;
@@ -438,7 +254,7 @@ static bool hex(char c)
     return digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
-static char *color_value(os64_page_t *page, const char *s, size_t *len)
+static char *color_value(PArena *arena, const char *s, size_t *len)
 {
     bool simple = s[0] == '#';
     for (int32_t i = 1; simple && i <= 6; i++)
@@ -447,9 +263,9 @@ static char *color_value(os64_page_t *page, const char *s, size_t *len)
         simple = false;
     if (!simple) {
         *len = 7;
-        return p_copy(page, "#000000", 7);
+        return p_arena_copy(arena, "#000000", 7);
     }
-    char *out = p_copy(page, s, 7);
+    char *out = p_arena_copy(arena, s, 7);
     if (out == NULL)
         return NULL;
     for (int32_t i = 1; i <= 6; i++)
@@ -459,39 +275,63 @@ static char *color_value(os64_page_t *page, const char *s, size_t *len)
     return out;
 }
 
+static const char *datetime_value(PArena *arena, const char *raw, size_t *len)
+{
+    char *out=p_arena_copy(arena,raw,os64_strlen(raw));
+    if (out == NULL)
+        return NULL;
+    size_t time=0;
+    while (out[time] != 'T' && out[time] != ' ')
+        time++;
+    out[time++]='T';
+    size_t end=os64_strlen(out);
+    if (end>time+8 && out[time+8]=='.') {
+        while (out[end-1]=='0') end--;
+        if (out[end-1]=='.') end--;
+    }
+    if (end==time+8 && out[time+5]==':' && out[time+6]=='0' && out[time+7]=='0')
+        end-=3;
+    out[end]='\0';*len=end;
+    return out;
+}
+
 const char *p_page_value(os64_page_t *page, const os64_html_node_t *n,
                          os64_page_element_t element, os64_page_input_t input, size_t *len)
 {
+    const char *raw = element == OS64_PAGE_EL_TEXTAREA ?
+        p_subtree_text(page, n, false, len) : p_attr(n, "value");
+    if (raw == NULL && element == OS64_PAGE_EL_TEXTAREA)
+        return NULL;
+    if (raw == NULL && (input == OS64_PAGE_INPUT_CHECKBOX || input == OS64_PAGE_INPUT_RADIO))
+        raw = "on";
+    return p_sanitize_value(&page->arena, n, element, input, raw != NULL ? raw : "", len);
+}
+
+const char *p_sanitize_value(PArena *arena, const os64_html_node_t *n,
+                            os64_page_element_t element, os64_page_input_t input,
+                            const char *raw, size_t *len)
+{
     *len = 0;
     if (element == OS64_PAGE_EL_TEXTAREA) {
-        // Its child text, verbatim: the whitespace inside a textarea IS the
-        // value, which is why libhtml kept it. Line endings become LF here
-        // and CRLF again at submission, per the standard's two steps.
-        char *text = p_subtree_text(page, n, false, len);
+        char *text = p_arena_copy(arena, raw, os64_strlen(raw));
         if (text == NULL)
             return NULL;
         size_t write = 0;
-        for (size_t read = 0; read < *len; read++) {
+        for (size_t read = 0; text[read] != '\0'; read++) {
             if (text[read] == '\r') {
                 text[write++] = '\n';
-                if (read + 1 < *len && text[read + 1] == '\n')
+                if (text[read + 1] == '\n')
                     read++;
-                continue;
+            } else {
+                text[write++] = text[read];
             }
-            text[write++] = text[read];
         }
         text[write] = '\0';
         *len = write;
         return text;
     }
-    // A SELECT holds whichever of its options is picked, and those are read
-    // after this; the walk fills it in once it knows them.
-    if (element == OS64_PAGE_EL_SELECT)
+    if (element == OS64_PAGE_EL_SELECT || input == OS64_PAGE_INPUT_FILE)
         return "";
-
-    const char *raw = p_attr(n, "value");
-    if (raw == NULL)
-        raw = "";
     if (element == OS64_PAGE_EL_BUTTON) {
         *len = os64_strlen(raw);
         return raw;
@@ -501,15 +341,15 @@ const char *p_page_value(os64_page_t *page, const os64_html_node_t *n,
     case OS64_PAGE_INPUT_SEARCH:
     case OS64_PAGE_INPUT_TEL:
     case OS64_PAGE_INPUT_PASSWORD:
-        return strip_breaks(page, raw, len);
+        return strip_breaks(arena, raw, len);
     case OS64_PAGE_INPUT_URL: {
-        char *out = strip_breaks(page, raw, len);
+        char *out = strip_breaks(arena, raw, len);
         if (out != NULL)
             strip_ends(out, len);
         return out;
     }
     case OS64_PAGE_INPUT_EMAIL: {
-        char *out = strip_breaks(page, raw, len);
+        char *out = strip_breaks(arena, raw, len);
         if (out == NULL)
             return NULL;
         if (p_has_attr(n, "multiple"))
@@ -518,13 +358,13 @@ const char *p_page_value(os64_page_t *page, const os64_html_node_t *n,
             strip_ends(out, len);
         return out;
     }
-    case OS64_PAGE_INPUT_NUMBER:
-        // Letters in a number field are not a number, and the standard says
-        // a browser holds nothing rather than sending them.
-        if (!valid_float(raw))
+    case OS64_PAGE_INPUT_NUMBER: {
+        double value;
+        if (!p_number_parse(raw, true, &value))
             return "";
         *len = os64_strlen(raw);
         return raw;
+    }
     case OS64_PAGE_INPUT_DATE:
     case OS64_PAGE_INPUT_MONTH:
     case OS64_PAGE_INPUT_WEEK:
@@ -532,20 +372,16 @@ const char *p_page_value(os64_page_t *page, const os64_html_node_t *n,
     case OS64_PAGE_INPUT_DATETIME_LOCAL:
         if (!valid_for(input, raw))
             return "";
+        if (input == OS64_PAGE_INPUT_DATETIME_LOCAL)
+            return datetime_value(arena,raw,len);
         *len = os64_strlen(raw);
         return raw;
-    case OS64_PAGE_INPUT_RANGE: {
-        if (valid_float(raw)) {
-            *len = os64_strlen(raw);
-            return raw;
-        }
-        const char *middle = range_default(page, n, len);
-        return middle != NULL ? middle : "";
-    }
+    case OS64_PAGE_INPUT_RANGE:
+        return p_range_value(arena, n, raw, len);
     case OS64_PAGE_INPUT_COLOR:
-        return color_value(page, raw, len);
+        return color_value(arena, raw, len);
     default:
-        // HIDDEN, the ticks, the buttons and a file's name go through
+        // Hidden values, ticks and buttons go through
         // verbatim; what each of them SENDS is family D's answer, not this
         // one's.
         *len = os64_strlen(raw);

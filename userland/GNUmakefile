@@ -257,7 +257,7 @@ LIBFETCH_PROGRAMS := os64get wend
 # and a prelink slot that collides or a `.so` that will not resolve is worth
 # finding on the boot that ships the library rather than on the one that
 # starts using it. The calls arrive with the renderer's lift.
-LIBPAGE_PROGRAMS := wend
+LIBPAGE_PROGRAMS := wend pagetest
 
 # pngtest directly checks the codec; gview and desktop use libimage.
 # libpng carries its own DT_NEEDED edge on
@@ -439,7 +439,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
-APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend),$(LIBHTML_SO)) \
+APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest),$(LIBHTML_SO)) \
                        $(if $(filter $(1),$(LIBPAGE_PROGRAMS)),$(LIBPAGE_SO)) \
                        $(if $(filter $(1),gview desktop jpegtest),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \

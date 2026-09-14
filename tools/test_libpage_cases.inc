@@ -903,11 +903,11 @@ static void family_h(void)
     value_case("H8", "H: and not in a common year", "<input type=date name=q value='2025-02-29'>",
                0, "");
     value_case("H9", "H: a week is checked against the year",
-               "<input type=week name=q value='2026-W53'>", 0, "");
+               "<input type=week name=q value='2021-W53'>", 0, "");
     value_case("H9", "H: a year with 53 weeks has one",
-               "<input type=week name=q value='2026-W52'>", 0, "2026-W52");
-    value_case("H10", "H: a range with no value holds the middle",
-               "<input type=range name=q min=1 max=10>", 0, "5.5");
+               "<input type=week name=q value='2026-W53'>", 0, "2026-W53");
+    value_case("H10", "H: a continuous range holds the midpoint",
+               "<input type=range name=q min=1 max=10 step=any>", 0, "5.5");
     value_case("H10", "H: a range's default span",
                "<input type=range name=q>", 0, "50");
     value_case("H10", "H: a range whose max is below its min",

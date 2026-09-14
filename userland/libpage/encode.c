@@ -71,15 +71,22 @@ static bool buf_room(PBuf *buf, size_t more)
 {
     if (buf->too_long || buf->no_memory)
         return false;
-    if (buf->len + more > buf->ceiling) {
+    if (more > buf->ceiling - buf->len || more >= SIZE_MAX - buf->len) {
         buf->too_long = true;
         return false;
     }
     if (buf->len + more + 1 <= buf->cap)
         return true;
     size_t want = buf->cap != 0 ? buf->cap * 2 : 256;
-    while (want < buf->len + more + 1)
+    if (want < buf->cap)
+        want = buf->len + more + 1;
+    while (want < buf->len + more + 1) {
+        if (want > SIZE_MAX / 2) {
+            want = buf->len + more + 1;
+            break;
+        }
         want *= 2;
+    }
     char *bigger = os64_realloc(buf->bytes, want);
     if (bigger == NULL) {
         buf->no_memory = true;
@@ -337,7 +344,7 @@ bool p_serialise(const PEntries *entries, os64_page_enctype_t enctype, const cha
     }
     // An empty entry list is an empty body, and a body of nothing still has
     // to be a pointer a caller can free.
-    if (!buf_room(&buf, 1)) {
+    if (!buf_room(&buf, 0)) {
         os64_free(buf.bytes);
         *refused = OS64_PAGE_REASON_NO_MEMORY;
         return false;

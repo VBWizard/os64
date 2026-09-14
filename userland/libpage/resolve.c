@@ -106,6 +106,26 @@ bool p_canonical(os64_page_t *page, const char *text, const char **out,
     return false;
 }
 
+// URL input preprocessing: strip surrounding C0 controls and spaces, and
+// remove ASCII tab/newline bytes throughout, before splitting fragments.
+static char *url_input(os64_page_t *page, const char *text)
+{
+    size_t first = 0, end = os64_strlen(text);
+    while (first < end && (unsigned char)text[first] <= 0x20)
+        first++;
+    while (end > first && (unsigned char)text[end-1] <= 0x20)
+        end--;
+    char *out = p_alloc(page, end-first+1);
+    if (out == NULL)
+        return NULL;
+    size_t at = 0;
+    for (size_t i = first; i < end; i++)
+        if (text[i] != '\t' && text[i] != '\r' && text[i] != '\n')
+            out[at++] = text[i];
+    out[at] = '\0';
+    return out;
+}
+
 // An address for COMPARING and for resolving against carries no fragment:
 // `#name` names a place inside a document, and the document is the same one
 // either way.
@@ -119,7 +139,8 @@ static char *without_fragment(os64_page_t *page, const char *text)
 
 bool p_document_url(os64_page_t *page, const char *text)
 {
-    char *raw = without_fragment(page, text != NULL ? text : "");
+    char *clean = url_input(page, text != NULL ? text : "");
+    char *raw = clean != NULL ? without_fragment(page, clean) : NULL;
     if (raw == NULL)
         return false;
     page->document_url = raw;
@@ -173,7 +194,8 @@ bool p_base(os64_page_t *page)
     if (href == NULL)
         return true;
 
-    char *head = without_fragment(page, href);
+    char *clean = url_input(page, href);
+    char *head = clean != NULL ? without_fragment(page, clean) : NULL;
     if (head == NULL)
         return false;
     if (head[0] == '\0')
@@ -211,6 +233,12 @@ void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
         // an `a` with no href is not a link.
         return;
     out->spelled = true;
+    ref = url_input(page, ref);
+    if (ref == NULL) {
+        out->refused = OS64_PAGE_REASON_NO_MEMORY;
+        return;
+    }
+
 
     size_t head = 0;
     while (ref[head] != '\0' && ref[head] != '#')
@@ -229,9 +257,9 @@ void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
     }
 
     if (head == 0) {
-        // An EMPTY reference names the document it appeared on — every
-        // reload link on the old web — and so does a fragment-only one.
-        out->url = page->document_url;
+        // Empty and fragment-only URL references resolve against the base.
+        // Form actions apply their separate empty-string rule below.
+        out->url = page->base_url;
         return;
     }
     if (head >= OS64_URL_REF_MAX) {
@@ -261,4 +289,11 @@ void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
         return;
     }
     out->refused = OS64_PAGE_REASON_BAD_ACTION;
+}
+
+void p_resolve_action(os64_page_t *page, const char *ref, os64_page_ref_t *out)
+{
+    p_resolve(page, ref, out);
+    if (ref != NULL && ref[0] == '\0' && out->refused == OS64_PAGE_REASON_OK)
+        out->url = page->document_url;
 }

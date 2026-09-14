@@ -8,6 +8,8 @@
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
+python3 tools/gen_libpage_range.py --check
+
 work=$(mktemp -d)
 cleanup() {
     status=$?
@@ -18,13 +20,15 @@ trap cleanup EXIT
 cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    -fno-sanitize-recover=all \
    -I userland/libpage/include -I userland/libhtml/include -I userland/libos64/include \
-   -I abi/include -I tools \
+   -I abi/include -I tools -I userland/libpage/upstream/ryu \
    tools/test_libpage_host.c \
    userland/libpage/core.c userland/libpage/resolve.c userland/libpage/value.c \
+   userland/libpage/number.c userland/libpage/range.c userland/libpage/upstream/ryu/ryu/d2s.c \
    userland/libpage/submit.c userland/libpage/encode.c userland/libpage/refresh.c userland/libpage/activate.c \
    userland/libhtml/core.c userland/libhtml/encoding.c userland/libhtml/tokenizer.c \
    userland/libhtml/tree.c \
    userland/libos64/str.c userland/libos64/bidi.c userland/libos64/url.c userland/libos64/fmt.c \
    -o "$work/libpage_driver"
 
-"$work/libpage_driver" --sweep
+if [ "$#" -eq 0 ]; then set -- --sweep; fi
+"$work/libpage_driver" "$@"

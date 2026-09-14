@@ -328,15 +328,18 @@ const os64_html_node_t *os64_page_anchor(const os64_page_t *page, const char *de
 //
 // A PERSON'S EDIT IS KEPT APART FROM THE MODEL, keyed by the node it belongs
 // to and never by an index, so the model can be rebuilt from the tree
-// without losing what was typed. An untouched control goes out as the page's
-// own bytes; only a change is stored, which is a rule about what leaves the
-// machine rather than about drawing.
+// without losing its value. Initial and edited text use the same type
+// sanitizer. Front ends needing intermediate invalid input retain their
+// editing buffer separately from this normalized value.
 //
 // The model does not depend on how wide anything is, so a face builds it
 // ONCE per page: a window that changes size re-draws and never rebuilds.
 //
 // Each returns 0, or a negative OS64_PAGE_REASON_* for an index that names
 // no control, a control of the wrong kind, or memory it could not get.
+// Failure preserves published values and selections. Incomplete models
+// reject edits and form submission with NO_MEMORY. File selection has no
+// text setter; set_text returns WRONG_KIND for a file input.
 int64_t os64_page_set_text(os64_page_t *page, int32_t control, const char *utf8, size_t len);
 int64_t os64_page_set_checked(os64_page_t *page, int32_t control, bool on);
 int64_t os64_page_set_chosen(os64_page_t *page, int32_t control, int32_t option, bool on);
@@ -346,6 +349,8 @@ int64_t os64_page_set_chosen(os64_page_t *page, int32_t control, int32_t option,
 // answered with OS64_PAGE_NOTHING and OS64_PAGE_REASON_RESET, because
 // libpage states facts and a face decides — so a face that draws the button
 // calls this. `form` -1 resets the controls that belong to no form.
+// Normalized defaults are retained at build time; reset allocates nothing.
+// An incomplete model is refused without discarding edits.
 int64_t os64_page_reset(os64_page_t *page, int32_t form);
 
 // ── The door ────────────────────────────────────────────────────────────

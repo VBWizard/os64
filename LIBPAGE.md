@@ -91,7 +91,7 @@ is drawn in cells or in pixels.
 
 ## What comes out
 
-**The page model**, built by one walk of the tree, in tree order, every item
+**The page model**, built in tree order through dependency-ordered passes, each item
 carrying the `os64_html_node_t *` it came from so a face can find its own
 geometry for it. Faces render nodes; libpage never learns about rows,
 cells or pixels.
@@ -390,6 +390,25 @@ sweep runs here as it runs in libhtml).
 - **Nothing here blocks.** A face that wants to cancel cancels its fetch;
   libpage has nothing to cancel.
 
+## Control state and allocation failure
+
+Construction sanitizes values, settles radio groups by name and owner, and
+normalizes select selectedness before capturing immutable defaults. Option
+labels and fallback submission text occupy separate fields. A file input
+holds no selected file; markup cannot supply one.
+
+Text edits use the same sanitizer with temporary storage. Checked-radio
+edits reserve records for the group before publishing checkedness. Failed
+edits preserve published values and selections. Record presence alone does
+not mean a value is dirty. Select publication updates both selectedness and
+the control's current value.
+
+Reset clears edits and restores retained normalized defaults, without
+allocating. An incomplete model can be inspected, but edits, reset and form
+submission return NO_MEMORY. Link and refresh requests retain their own
+resolution refusals. Numeric contracts, independent checks and compatibility
+limits are recorded in [LIBPAGE_REVIEW.md](LIBPAGE_REVIEW.md).
+
 ## Proof before integration
 
 **The corpus is the durable artefact.** Markup in, expected request out,
@@ -398,19 +417,16 @@ It outlives every renderer written over it, which is the property the
 first draft lacked: 62 findings of specification reading stored in a file
 marked throwaway.
 
-- **The 45 `expect_url` cases move in as KNOWLEDGE, not as code.** Each of
-  them is a rule of families C to F, and every rule they were checking has a
-  case here written from the standard's own step instead — which is what
-  makes the coverage number mean something, since a ported case proves what
-  the old code did and a case written from the step proves what the standard
-  says. Every round-N finding they carried is a named case. The 42
-  `expect_lines` cases stay with `wend`, because they test drawing.
-- **A case per step.** Each family lists the standard's steps; each step
-  has at least one case, and each round-N finding above is a named case
-  (`R5: hidden subtree submits`). Coverage per family = steps with a case /
-  steps, and that number is printed by the harness and written into
-  VERIFICATION.md. "Are we conformant" becomes a number that moves rather
-  than a verdict that is argued.
+- **Preserve the review knowledge from wend.** The request cases and the
+  state regressions retain rules independently of terminal rendering.
+  `tools/test_libpage_state.inc` checks construction, edits, reset, submission,
+  and isolated allocation failures with recovery.
+- **The printed step ratio is an inventory.** A case referencing a step
+  establishes neither complete branch coverage nor an exhaustive list of
+  standard requirements. Expected results must also be checked against the
+  supported standard. The default suite checks numeric conversion against
+  libc and range normalization against an independent Decimal oracle;
+  `tools/test_libpage_host.sh --numeric-boundary` runs four focused range checks.
 - **URL resolution can run the web platform's own data.** `urltestdata.json`
   is pure data; a host case can feed it to `os64/url.h` through family A,
   and whatever fails there is a libos64 finding, not a libpage one. The form
@@ -424,20 +440,18 @@ marked throwaway.
   every failure point, as the `wend` sweep does at 700 deep today.
 - **In the guest**, a local server's access log is the last word — `GET
   /A?x=1` and `GET /B?x=2` from two radio groups proved round seven on the
-  wire, and every family with a wire has one such probe.
+  wire, and runtime claims require a corresponding guest probe.
 
 ## Booked before the first line (the known-debt rule)
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| Parser-inserted form owner | libhtml records no form element pointer | LIBHTML.md request; the corpus skips those cases by name |
 | POST on the wire | libfetch sends no body (Fable-tier slice) | the body exists and is checked; the first login worth doing |
 | `file` inputs with a file | no face can pick one | the graphical browser's file dialog |
 | Constraint validation beyond `required`/length | typed-value families are their own table | the first page whose `pattern` matters |
 | Cookies, `Referer` | libfetch's, not the page's | the first site that needs a session |
 | `os64_page_rebuild` — re-walk a changed tree, re-key the edits that survive | nothing can change a tree yet (ruling 2); a verb with no caller is speculative | the engine — the edit table is already keyed by node so the verb costs a walk, not a redesign |
 | An SVG or MathML `a` is not a link | a foreign element is not an HTML one however it is spelled, and no text face draws SVG. The walk DESCENDS into foreign subtrees, so HTML inside a `foreignObject` is still seen; it is the foreign element itself that is passed over | the graphical browser, which draws SVG and will meet a link inside one |
-| A `range` whose span is too wide to hold exactly holds nothing | its default value is the middle of the span, and there is no floating point here — the decimal is carried as an integer and a power of ten, which is exact for every span a page actually writes. Past that it refuses rather than rounding | a real page whose `min`/`max` need an exponent |
 | `pattern`, `min`/`max`/`step`, and the typed-value checks | family I's draft one, as this document booked it | the first page whose `pattern` matters |
 
 ## What the consumers owe
@@ -568,11 +582,11 @@ the text either wrong or under-specified. Nothing here changes a RULING.
    joined the enum for rules that can say no and had no name: `RESET`,
    `NO_SUBMISSION`, `NO_ANCHOR`, and the edit door's `NO_CONTROL` /
    `WRONG_KIND`.
-8. **`range` is built whole** rather than falling through to `text`, because
-   a range with no value attribute — the common case — HOLDS the middle of
-   its span, and a form that sent nothing for it would be wrong on most
-   pages that have one. The arithmetic is exact decimal in integers; see the
-   booked row for what it refuses.
+8. **Range normalization uses bounded decimal grid arithmetic.** Finite
+   binary64 conversion uses private musl and Ryū adapters. Bounds, midpoint,
+   step base and upward tie-breaking share one path for construction and
+   edits. LIBPAGE_REVIEW.md records the numeric contract and browser
+   precision-edge differences.
 9. **The multipart boundary is DERIVED FROM THE CONTENT**, so the option for
    pinning one is gone. A library that does no I/O has no randomness to draw
    on and needs none: a boundary must be ABSENT from the content, so it is
@@ -586,8 +600,9 @@ the text either wrong or under-specified. Nothing here changes a RULING.
     of scrolling to a fragment), rather than falling back to the top of the document: guessing
     would throw away the place a person was reading.
 12. **The build is three passes, not one walk** — ids, then forms, then the
-    model — because each needs what the last one found. Nothing walks the
-    tree again afterwards, which is the property that mattered.
+    model — because each needs what the last one found. Ownership and lookup
+    indexes remain stable during edits; submission may inspect source
+    attributes and subtree directionality.
 
 ### 2026-09-12: Opus's read — seven questions, seven rulings
 

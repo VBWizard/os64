@@ -24,6 +24,8 @@ struct PBlock {
 
 void *p_arena_alloc(PArena *arena, size_t size)
 {
+    if (size > SIZE_MAX - 15u - sizeof(PBlock))
+        return NULL;
     size = (size + 15u) & ~(size_t)15u;
     if (size == 0)
         size = 16;
@@ -44,6 +46,8 @@ void *p_arena_alloc(PArena *arena, size_t size)
 
 char *p_arena_copy(PArena *arena, const char *s, size_t n)
 {
+    if (n == SIZE_MAX)
+        return NULL;
     char *out = p_arena_alloc(arena, n + 1);
     if (out == NULL)
         return NULL;
@@ -66,19 +70,29 @@ void p_arena_free(PArena *arena)
 
 void *p_alloc(os64_page_t *page, size_t size)
 {
-    return p_arena_alloc(&page->arena, size);
+    void *out = p_arena_alloc(&page->arena, size);
+    if (out == NULL)
+        page->incomplete = true;
+    return out;
 }
 
 char *p_copy(os64_page_t *page, const char *s, size_t n)
 {
-    return p_arena_copy(&page->arena, s, n);
+    char *out = p_arena_copy(&page->arena, s, n);
+    if (out == NULL)
+        page->incomplete = true;
+    return out;
 }
 
 bool p_grow(void **items, int32_t *cap, int32_t count, size_t size)
 {
     if (count < *cap)
         return true;
+    if (*cap > INT32_MAX / 2)
+        return false;
     int32_t want = *cap != 0 ? *cap * 2 : 16;
+    if (size != 0 && (size_t)want > SIZE_MAX / size)
+        return false;
     void *bigger = os64_realloc(*items, (size_t)want * size);
     if (bigger == NULL)
         return false;
@@ -534,7 +548,7 @@ static bool barred(const os64_page_control_t *c)
 static void read_overrides(os64_page_t *page, const os64_html_node_t *n,
                            os64_page_overrides_t *out)
 {
-    p_resolve(page, p_attr(n, "formaction"), &out->action);
+    p_resolve_action(page, p_attr(n, "formaction"), &out->action);
     const char *method = p_attr(n, "formmethod");
     out->has_method = method != NULL;
     out->method = method_of(method);
@@ -542,6 +556,35 @@ static void read_overrides(os64_page_t *page, const os64_html_node_t *n,
     out->has_enctype = enctype != NULL;
     out->enctype = enctype_of(enctype);
     out->novalidate = p_has_attr(n, "formnovalidate");
+}
+
+bool p_nonnegative(const char *s, uint64_t *out)
+{
+    if (s == NULL)
+        return false;
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r' || *s == '\f')
+        s++;
+    if (*s == '+')
+        s++;
+    if (*s < '0' || *s > '9')
+        return false;
+    uint64_t value=0;
+    while (*s >= '0' && *s <= '9') {
+        unsigned digit=(unsigned)(*s++-'0');
+        if (value > (UINT64_MAX-digit)/10)
+            value=UINT64_MAX;
+        else value=value*10+digit;
+    }
+    *out=value;
+    return true;
+}
+
+bool p_select_one_line(const os64_page_control_t *c)
+{
+    uint64_t size=0;
+    if (!p_nonnegative(p_attr(c->node,"size"),&size))
+        size=0;
+    return !c->multiple && size<=1;
 }
 
 // A `select`'s options in tree order, `optgroup` included. A DISABLED option
@@ -559,21 +602,26 @@ static void read_options(os64_page_t *page, const os64_html_node_t *n, os64_page
             read_options(page, n->first_child, items, count, cap, group_disabled);
             continue;
         }
-        if (!p_grow((void **)items, cap, *count, sizeof(**items)))
+        if (!p_grow((void **)items, cap, *count, sizeof(**items))) {
+            page->incomplete = true;
             return;
+        }
         os64_page_option_t *option = &(*items)[*count];
         os64_memset(option, 0, sizeof(*option));
         option->node = n;
-        option->label = p_subtree_text(page, n, true, NULL);
-        if (option->label == NULL)
-            option->label = "";
+        const char *text = p_subtree_text(page, n, true, NULL);
+        if (text == NULL) {
+            page->incomplete = true;
+            text = "";
+        }
+        option->label = text;
         const char *label = p_attr(n, "label");
         if (label != NULL && label[0] != '\0')
             option->label = label;
         const char *value = p_attr(n, "value");
         // Without a `value` an option sends its own words, which is how
         // every hand-written menu on the old web is spelled.
-        option->value = value != NULL ? value : option->label;
+        option->value = value != NULL ? value : text;
         option->disabled = group_disabled || p_has_attr(n, "disabled");
         option->selected = p_has_attr(n, "selected");
         (*count)++;
@@ -662,11 +710,21 @@ static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_
         read_options(page, n->first_child, &items, &count, &cap, false);
         c->options = items;
         c->noptions = count;
-        // A list HOLDS whichever option is picked, which is only knowable
-        // once they have all been read. The first selected one is the value,
-        // the same answer a script would get; a `multiple` list sends every
-        // one of them, and that is family D's business rather than this
-        // field's.
+        // The last selected option wins in a single select. A size-one
+        // select with no selection chooses its first enabled option.
+        int32_t last = -1;
+        for (int32_t i = 0; i < count; i++)
+            if (items[i].selected) {
+                if (!c->multiple && last >= 0)
+                    items[last].selected = false;
+                last = i;
+            }
+        if (last < 0 && p_select_one_line(c))
+            for (int32_t i = 0; i < count; i++)
+                if (!items[i].disabled) {
+                    items[i].selected = true;
+                    break;
+                }
         for (int32_t i = 0; i < count; i++)
             if (items[i].selected) {
                 c->value = items[i].value;
@@ -696,7 +754,7 @@ static void collect_forms(os64_page_t *page, const os64_html_node_t *n)
             form->enctype = enctype_of(p_attr(n, "enctype"));
             form->accept_charset = p_attr(n, "accept-charset");
             form->novalidate = p_has_attr(n, "novalidate");
-            p_resolve(page, p_attr(n, "action"), &form->action);
+            p_resolve_action(page, p_attr(n, "action"), &form->action);
             if (!p_ptrmap_put(&page->form_map, n, page->nforms))
                 page->incomplete = true;
             page->nforms++;
@@ -770,6 +828,53 @@ static bool chain_radios(os64_page_t *page)
     return true;
 }
 
+// Visit each name chain once, with the owner as the second group key.
+// Later checked members replace earlier ones, including hidden controls.
+static bool capture_initial(os64_page_t *page)
+{
+    size_t owners = (size_t)page->nforms + 1;
+    int32_t *last = os64_malloc(owners * sizeof(*last));
+    if (last == NULL)
+        return false;
+    for (size_t i = 0; i < owners; i++)
+        last[i] = -1;
+    for (size_t slot = 0; slot < page->radio_map.cap; slot++) {
+        const void *head = page->radio_map.vals[slot];
+        if (head == NULL)
+            continue;
+        int32_t first = p_ptrmap_get(&page->control_map, head);
+        for (int32_t i = first; i >= 0; i = page->radio_next[i]) {
+            os64_page_control_t *c = &page->controls[i];
+            if (c->checked) {
+                if (last[c->form + 1] >= 0)
+                    page->controls[last[c->form + 1]].checked = false;
+                last[c->form + 1] = i;
+            }
+        }
+        for (int32_t i = first; i >= 0; i = page->radio_next[i])
+            last[page->controls[i].form + 1] = -1;
+    }
+    os64_free(last);
+    page->initial = os64_calloc((size_t)page->ncontrols, sizeof(*page->initial));
+    if (page->initial == NULL && page->ncontrols != 0)
+        return false;
+    for (int32_t i = 0; i < page->ncontrols; i++) {
+        const os64_page_control_t *c = &page->controls[i];
+        PInitial *initial = &page->initial[i];
+        initial->value = c->value;
+        initial->value_len = c->value_len;
+        initial->checked = c->checked;
+        if (c->noptions != 0) {
+            initial->selected = os64_malloc((size_t)c->noptions);
+            if (initial->selected == NULL)
+                return false;
+            for (int32_t o = 0; o < c->noptions; o++)
+                initial->selected[o] = c->options[o].selected;
+        }
+    }
+    return true;
+}
+
 os64_page_t *os64_page_build(const os64_html_document_t *doc, const char *document_url,
                              const os64_page_options_t *opt)
 {
@@ -795,6 +900,8 @@ os64_page_t *os64_page_build(const os64_html_document_t *doc, const char *docume
     collect_model(page, root);
     if (!chain_radios(page))
         page->incomplete = true;
+    if (!page->incomplete && !capture_initial(page))
+        page->incomplete = true;
     return page;
 }
 
@@ -808,6 +915,10 @@ void os64_page_free(os64_page_t *page)
         os64_free(page->edits[i].text);
         os64_free(page->edits[i].chosen);
     }
+    if (page->initial != NULL)
+        for (int32_t i = 0; i < page->ncontrols; i++)
+            os64_free(page->initial[i].selected);
+    os64_free(page->initial);
     os64_free(page->edits);
     os64_free(page->links);
     os64_free(page->forms);
@@ -933,26 +1044,38 @@ PEdit *p_edit_for(os64_page_t *page, int32_t control)
     return &page->edits[page->nedits - 1];
 }
 
-// The options array is the PAGE's storage and the model publishes it as
-// const, so the writes below cast that away. It is the same memory either
-// way; what the const buys is a face that cannot change a choice behind
-// os64_page_set_chosen's back, which is where the radio and one-line-list
-// rules live.
+// The public options pointer is const, but the page owns mutable storage.
+// Publication restores retained defaults, then overlays the explicit edits.
 void p_publish(os64_page_t *page, int32_t control)
 {
     os64_page_control_t *c = &page->controls[control];
     const PEdit *edit = p_edit_find(page, control);
-    if (edit == NULL)
-        return;
-    if (edit->text != NULL) {
+    const PInitial *initial = &page->initial[control];
+    c->value = initial->value;
+    c->value_len = initial->value_len;
+    c->checked = initial->checked;
+    if (edit != NULL && edit->text != NULL) {
         c->value = edit->text;
         c->value_len = edit->text_len;
     }
-    if (edit->on >= 0)
+    if (edit != NULL && edit->on >= 0)
         c->checked = edit->on != 0;
-    for (int32_t i = 0; i < c->noptions && i < edit->nchosen; i++)
-        if (edit->chosen != NULL && edit->chosen[i] != 2)
-            ((os64_page_option_t *)c->options)[i].selected = edit->chosen[i] != 0;
+    for (int32_t i = 0; i < c->noptions; i++) {
+        bool selected = initial->selected[i];
+        if (edit != NULL && edit->chosen != NULL && i < edit->nchosen && edit->chosen[i] != 2)
+            selected = edit->chosen[i] != 0;
+        ((os64_page_option_t *)c->options)[i].selected = selected;
+    }
+    if (c->element == OS64_PAGE_EL_SELECT) {
+        c->value = "";
+        c->value_len = 0;
+        for (int32_t i = 0; i < c->noptions; i++)
+            if (c->options[i].selected) {
+                c->value = c->options[i].value;
+                c->value_len = os64_strlen(c->value);
+                break;
+            }
+    }
 }
 
 int64_t os64_page_set_text(os64_page_t *page, int32_t control, const char *utf8, size_t len)
@@ -962,18 +1085,32 @@ int64_t os64_page_set_text(os64_page_t *page, int32_t control, const char *utf8,
         return -OS64_PAGE_REASON_NO_CONTROL;
     if (c->element == OS64_PAGE_EL_SELECT)
         return -OS64_PAGE_REASON_WRONG_KIND;
+    if (page->incomplete)
+        return -OS64_PAGE_REASON_NO_MEMORY;
+    if (c->input == OS64_PAGE_INPUT_FILE)
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    if (len == SIZE_MAX || (utf8 == NULL && len != 0))
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    PArena temporary = {0};
+    char *raw = p_arena_copy(&temporary, utf8 != NULL ? utf8 : "", len);
+    size_t value_len = 0;
+    const char *value = raw != NULL ? p_sanitize_value(&temporary, c->node, c->element,
+                                                       c->input, raw, &value_len) : NULL;
+    char *text = value != NULL ? os64_malloc(value_len + 1) : NULL;
+    if (text == NULL) {
+        p_arena_free(&temporary);
+        return -OS64_PAGE_REASON_NO_MEMORY;
+    }
+    os64_memcpy(text, value, value_len + 1);
+    p_arena_free(&temporary);
     PEdit *edit = p_edit_for(page, control);
-    if (edit == NULL)
+    if (edit == NULL) {
+        os64_free(text);
         return -OS64_PAGE_REASON_NO_MEMORY;
-    char *text = os64_malloc(len + 1);
-    if (text == NULL)
-        return -OS64_PAGE_REASON_NO_MEMORY;
-    if (len != 0)
-        os64_memcpy(text, utf8, len);
-    text[len] = '\0';
+    }
     os64_free(edit->text);
     edit->text = text;
-    edit->text_len = len;
+    edit->text_len = value_len;
     p_publish(page, control);
     return 0;
 }
@@ -985,27 +1122,26 @@ int64_t os64_page_set_checked(os64_page_t *page, int32_t control, bool on)
         return -OS64_PAGE_REASON_NO_CONTROL;
     if (c->input != OS64_PAGE_INPUT_CHECKBOX && c->input != OS64_PAGE_INPUT_RADIO)
         return -OS64_PAGE_REASON_WRONG_KIND;
-    PEdit *edit = p_edit_for(page, control);
-    if (edit == NULL)
+    if (page->incomplete)
         return -OS64_PAGE_REASON_NO_MEMORY;
-    edit->on = on ? 1 : 0;
-    p_publish(page, control);
-    // TICKING ONE RADIO UNTICKS ITS GROUP, which is one name under one
-    // owner. Nothing else in the group is touched when a tick is cleared:
-    // the standard has no rule that puts a tick back.
-    if (on && c->input == OS64_PAGE_INPUT_RADIO && c->name != NULL && c->name[0] != '\0') {
-        const void *head = p_strmap_get(&page->radio_map, c->name);
-        for (int32_t at = head != NULL ? p_ptrmap_get(&page->control_map, head) : -1; at >= 0;
-             at = page->radio_next[at]) {
-            if (at == control || page->controls[at].form != c->form)
-                continue;
-            PEdit *other = p_edit_for(page, at);
-            if (other == NULL)
-                return -OS64_PAGE_REASON_NO_MEMORY;
-            other->on = 0;
+    if (p_edit_for(page, control) == NULL)
+        return -OS64_PAGE_REASON_NO_MEMORY;
+    bool group = on && c->input == OS64_PAGE_INPUT_RADIO &&
+                 c->name != NULL && c->name[0] != '\0';
+    const void *head = group ? p_strmap_get(&page->radio_map, c->name) : NULL;
+    int32_t first = head != NULL ? p_ptrmap_get(&page->control_map, head) : -1;
+    // Reserve every edit before changing checkedness. Empty edit records
+    // left by a failed reservation carry no dirty state.
+    for (int32_t at = first; at >= 0; at = page->radio_next[at])
+        if (page->controls[at].form == c->form && p_edit_for(page, at) == NULL)
+            return -OS64_PAGE_REASON_NO_MEMORY;
+    for (int32_t at = first; at >= 0; at = page->radio_next[at])
+        if (page->controls[at].form == c->form) {
+            p_edit_find(page, at)->on = 0;
             p_publish(page, at);
         }
-    }
+    p_edit_find(page, control)->on = on ? 1 : 0;
+    p_publish(page, control);
     return 0;
 }
 
@@ -1016,6 +1152,8 @@ int64_t os64_page_set_chosen(os64_page_t *page, int32_t control, int32_t option,
         return -OS64_PAGE_REASON_NO_CONTROL;
     if (c->element != OS64_PAGE_EL_SELECT || option < 0 || option >= c->noptions)
         return -OS64_PAGE_REASON_WRONG_KIND;
+    if (page->incomplete)
+        return -OS64_PAGE_REASON_NO_MEMORY;
     PEdit *edit = p_edit_for(page, control);
     if (edit == NULL)
         return -OS64_PAGE_REASON_NO_MEMORY;
@@ -1041,40 +1179,26 @@ int64_t os64_page_reset(os64_page_t *page, int32_t form)
 {
     if (page == NULL)
         return -OS64_PAGE_REASON_NO_CONTROL;
-    // FORGETTING AN EDIT IS THE WHOLE OF A RESET, because the model's values
-    // are the page's own until somebody changes them. What is dropped here
-    // is the change, and what is left is what the page wrote.
+    if (page->incomplete)
+        return -OS64_PAGE_REASON_NO_MEMORY;
+    if (form < -1 || form >= page->nforms)
+        return -OS64_PAGE_REASON_NO_FORM;
+    // Defaults are already normalized, including radio and select groups.
+    // Restoring them requires no allocation and cannot partially fail.
     for (int32_t i = 0; i < page->ncontrols; i++) {
         if (page->controls[i].form != form)
             continue;
         PEdit *edit = p_edit_find(page, i);
-        if (edit == NULL)
-            continue;
-        os64_free(edit->text);
-        os64_free(edit->chosen);
-        edit->text = NULL;
-        edit->text_len = 0;
-        edit->chosen = NULL;
-        edit->nchosen = 0;
-        edit->on = -1;
-        os64_page_control_t *c = &page->controls[i];
-        c->value = p_page_value(page, c->node, c->element, c->input, &c->value_len);
-        if (c->value == NULL) {
-            page->incomplete = true;
-            c->value = "";
-            c->value_len = 0;
+        if (edit != NULL) {
+            os64_free(edit->text);
+            os64_free(edit->chosen);
+            edit->text = NULL;
+            edit->text_len = 0;
+            edit->chosen = NULL;
+            edit->nchosen = 0;
+            edit->on = -1;
         }
-        c->checked = p_has_attr(c->node, "checked");
-        for (int32_t o = 0; o < c->noptions; o++)
-            ((os64_page_option_t *)c->options)[o].selected =
-                p_has_attr(c->options[o].node, "selected");
-        if (c->element == OS64_PAGE_EL_SELECT)
-            for (int32_t o = 0; o < c->noptions; o++)
-                if (c->options[o].selected) {
-                    c->value = c->options[o].value;
-                    c->value_len = os64_strlen(c->options[o].value);
-                    break;
-                }
+        p_publish(page, i);
     }
     return 0;
 }
