@@ -460,6 +460,24 @@ boot's log carries no fault, and read-only ext2 checks of the copied root
 and home partitions pass. Strict build and diff checks pass. Not deployed
 to the P5.
 
+## Review round 7 — 2026-09-14
+
+One finding against `1483128`: the gate's "known" predicate read `>= 30`,
+which swept the userauth method range, the client-reserved range and the
+locally assigned range (192–255) into the disconnect. It now names the
+ranges this server speaks — 30–50 and 80–100 beside service, ext-info and
+NEWKEYS — matching the pre-auth rule, so a vendor-extension type during an
+exchange reaches UNIMPLEMENTED. The fixture's unknown set grew to 51, 79,
+101, 127, 192 and 255; the round-6 engine fails 36 of those checks.
+
+Host ASan/UBSan passes **2003 engine checks**, the four daemon regression
+groups and the full OpenSSH interoperability suite. Private 8-core QEMU
+passes **2003 guest SSH checks**, the full 3 MiB/rekey/PTY probe and a
+second pass with `--skip-fixture`; the kernel suite passes 30 + 32 + 3, the
+boot's log carries no fault, and read-only ext2 checks of the copied root
+and home partitions pass. Strict build and diff checks pass. Not deployed
+to the P5.
+
 ## References
 
 - [RFC 4251](https://www.rfc-editor.org/rfc/rfc4251.html): SSH types and mpints.

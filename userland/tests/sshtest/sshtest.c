@@ -359,7 +359,7 @@ static void unknown_during_kex(void)
     /* RFC 4253 section 11.4 during an exchange: an unknown type earns
      * UNIMPLEMENTED unless strict KEX is guarding the initial exchange; a
      * known message out of order still disconnects. */
-    const uint8_t unknown[]={8,19,25,29};
+    const uint8_t unknown[]={8,19,25,29,51,79,101,127,192,255};
     for(size_t i=0;i<sizeof(unknown);i++) {
         fresh_client(); client_kexinit(0); engine.out_len=0; engine.rx.seq=9;
         payload[0]=unknown[i]; size_t n=frame(wire,payload,1);
@@ -373,7 +373,7 @@ static void unknown_during_kex(void)
             CHECK(engine.out_len==16 && engine.output[5]==3 && engine.output[9]==9);
         }
     }
-    const uint8_t known[]={5,6,7,21,31,49,90};
+    const uint8_t known[]={5,6,7,21,30,49,50,80,90,100};
     for(size_t i=0;i<sizeof(known);i++) {
         fresh_client(); client_kexinit(0);
         payload[0]=known[i]; size_t n=frame(wire,payload,1);
