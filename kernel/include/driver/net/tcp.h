@@ -505,6 +505,10 @@ typedef struct tcp_stats
 	// nobody is reading the accept queue".
 	uint64_t connections_accepted;
 	uint64_t syns_dropped_full;
+	// Current passive connections whose rings remain allocated, and SYNs
+	// refused by their storage cap. Both change under kTcpListLock.
+	uint64_t passive_buffered;
+	uint64_t syns_dropped_storage;
 	// The machine-wide twins of the per-conn counters, because a reaped
 	// connection takes its copy to the grave: "has this stack EVER seen
 	// reordering" has to survive the connections that answered it. HELD is
@@ -544,6 +548,10 @@ extern spinlock_t kTcpListLock;
 // inside the row; tcp_poll frees a closed row once that reaches zero, so a
 // reader woken by the close is never handed freed memory.
 #define TCP_LISTEN_BACKLOG 16
+// Machine-wide across listeners, accepted sessions and detached closes:
+// 32 pairs of 1 MiB rings = 64 MiB. Capacity returns at buffer stripping,
+// not when accept dequeues a connection or a server child exits.
+#define TCP_PASSIVE_BUFFER_LIMIT 32
 
 typedef struct tcp_listener
 {
@@ -556,7 +564,7 @@ typedef struct tcp_listener
 	tcp_conn_t* queue_tail;
 	thread_t* volatile waiter;       // parked in tcp_listener_accept
 	uint64_t accepted;               // handshakes completed on this port
-	uint64_t syns_dropped;           // turned away, backlog full
+	uint64_t syns_dropped;           // turned away by backlog or passive storage cap
 	uint64_t closed_at;              // the morgue clock, once closed
 	struct tcp_listener* next;       // kTcpListenerList, or the closed rows
 	                                 // awaiting tcp_poll; under kTcpListLock

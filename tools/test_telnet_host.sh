@@ -259,6 +259,31 @@ _, wire, got = server("in:" + hx([IAC, WILL, O_NAWS, IAC, SB, O_NAWS, 0, 80, 0, 
 check("the client's NAWS is accepted", got["him.naws"], "1")
 check("and a size subnegotiation is a resize notice", int(got["notes"]) & NOTE_RESIZE, NOTE_RESIZE)
 
+# NAWS is meaningful after WILL, and stops being meaningful after WONT.
+# Escaped 255 also exercises the subnegotiation's IAC state at each boundary.
+size_frame = bytes([IAC, SB, O_NAWS, 0, IAC, IAC, 0, 24, IAC, SE])
+for chunk in CHUNKS:
+    for prefix in ([], ["offer-server"],
+                   ["offer-server", "in:" + hx([IAC, WONT, O_NAWS])],
+                   ["offer-server", "in:" + hx([IAC, WILL, O_NAWS]),
+                    "in:" + hx([IAC, WONT, O_NAWS])]):
+        got = run("--server", "--chunk", chunk, *prefix, "in:" + hx(size_frame))
+        check(f"unnegotiated NAWS ignored @{chunk} {prefix}",
+              int(got["notes_last"]) & NOTE_RESIZE, 0)
+    _, _, got = server("--chunk", chunk, "in:" + hx([IAC, WILL, O_NAWS]),
+                       "in:" + hx(size_frame))
+    check(f"enabled escaped NAWS accepted @{chunk}",
+          int(got["notes_last"]) & NOTE_RESIZE, NOTE_RESIZE)
+
+# A full decoded buffer must retain the erase command for the next call.
+for chunk in CHUNKS:
+    for cap in (1, 2, 32):
+        for command, control in ((EC, 0x08), (EL, 0x15)):
+            data, _, _ = server("--chunk", chunk, "--cap", cap,
+                                 "in:" + hx([ord('x'), IAC, command, ord('y')]))
+            check(f"server erase {command} @{chunk} cap {cap}",
+                  data, bytes([ord('x'), control, ord('y')]))
+
 # What a keyboard's Enter arrives as — CR LF, CR NUL, or a bare CR — is ONE
 # newline to the shell behind the pty, never two (the double prompt of Codex
 # #101 rd1), and a remote interrupt is the Ctrl+C byte.

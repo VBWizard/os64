@@ -1104,8 +1104,8 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		// A bare SYN — no ACK, no RST — at an announced port opens a door:
 		// it becomes a passive conn born in SYN_RECEIVED, listed like any
 		// other, and our SYN-ACK goes out under its lock. Anything else
-		// with nobody home is answered below. A full backlog drops the
-		// SYN silently and counts it; the peer's own retry will find the
+		// with nobody home is answered below. A full backlog or passive
+		// storage cap drops and counts the SYN; the peer's retry finds the
 		// door again if it has opened up by then.
 		//
 		// ONLY FOR A SYN ADDRESSED TO US BY NAME: ipv4_input also delivers
@@ -1850,6 +1850,8 @@ static void tcp_heap_free_locked(void* p)
 // demux finds the state under the conn lock and answers with headers only.
 static void tcp_conn_strip_locked(tcp_conn_t* c)
 {
+	if (c->stripped)
+		return;
 	tcp_heap_free_locked(c->rcv_buf);
 	tcp_heap_free_locked(c->snd_buf);
 	c->rcv_buf = NULL;
@@ -1858,6 +1860,12 @@ static void tcp_conn_strip_locked(tcp_conn_t* c)
 	c->snd_count = 0;
 	c->snd_head = 0;
 	c->stripped = true;
+	if (c->passive)
+	{
+		if (kTcpStats.passive_buffered == 0)
+			panic("tcp: passive storage accounting underflow\n");
+		kTcpStats.passive_buffered--;
+	}
 }
 
 // CLOSED and detached: strip, give the port back, join the morgue queue,
@@ -1903,7 +1911,7 @@ static void tcp_tomb_evict_over_cap_locked(void)
 // A SYN has arrived at an announced port and nobody holds its four-tuple.
 // Caller holds kTcpListLock — the allocation, the listing and the backlog
 // claim are one critical section, exactly as a dial's are. Returns NULL
-// when the listener's backlog is full (the SYN is dropped and counted; the
+// when the backlog or passive storage cap is full (the SYN is dropped; the
 // peer's retry will ask again). The conn is born in SYN_RECEIVED, owned by
 // the listener, its local port the listener's, with THEIR options parsed
 // by the same rules a dial applies to a SYN-ACK — and one rule of its own:
@@ -1914,13 +1922,18 @@ static tcp_conn_t* tcp_passive_open_locked(net_device_t* dev, tcp_listener_t* l,
                                            const uint8_t* opts, size_t opts_len)
 {
 	spinlock_acquire(&l->lock);
-	if (l->pending >= TCP_LISTEN_BACKLOG)
+	bool storage_full = kTcpStats.passive_buffered >= TCP_PASSIVE_BUFFER_LIMIT;
+	if (l->pending >= TCP_LISTEN_BACKLOG || storage_full)
 	{
 		l->syns_dropped++;
-		kTcpStats.syns_dropped_full++;
+		if (storage_full)
+			kTcpStats.syns_dropped_storage++;
+		else
+			kTcpStats.syns_dropped_full++;
 		spinlock_release(&l->lock);
-		printd(DEBUG_NET, "tcp: SYN from %u.%u.%u.%u:%u to port %u dropped — backlog full\n",
-		       NET_IPV4_OCTETS(peer_ip), peer_port, l->port);
+		printd(DEBUG_NET, "tcp: SYN from %u.%u.%u.%u:%u to port %u dropped — %s\n",
+		       NET_IPV4_OCTETS(peer_ip), peer_port, l->port,
+		       storage_full ? "passive storage full" : "backlog full");
 		return NULL;
 	}
 	l->pending++;
@@ -1934,6 +1947,7 @@ static tcp_conn_t* tcp_passive_open_locked(net_device_t* dev, tcp_listener_t* l,
 	c->peer_port = peer_port;
 	c->local_port = l->port;
 	c->passive = true;
+	kTcpStats.passive_buffered++;
 	c->listener = l;
 
 	tcp_syn_options_t said;

@@ -263,7 +263,7 @@ land on opposite sides of it:
   **One refinement, found while building:** "clamp the cursor" alone would
   have eaten husk's prompt — a shell sits on the LAST row, so shrinking by
   five rows would have clipped the five rows that contain it and left the
-  cursor clamped onto unrelated text. `tty_resize_grid` therefore rolls the
+  cursor clamped onto unrelated text. `tty_resize` therefore rolls the
   top rows into scrollback when the cursor would otherwise fall off the
   bottom, which is what xterm does and what a fixed-glass VT100 never had to
   think about. The origin is preserved whenever preserving it is possible.
@@ -353,7 +353,7 @@ call in the resize arm, verified on glass by dragging a gterm and watching
 
 ### Order of work (each lands green before the next)
 
-1. ~~`pty_resize` + grid realloc + generation bump~~ — `tty_resize_grid`
+1. ~~`pty_resize` + grid realloc + generation bump~~ — `tty_resize`
    (tty.c) + syscall 51 (syscall.c). **BUILT.**
 2. ~~Admit 28, raise it, fixture with its broken-kernel control.~~ **BUILT:
    `/tests/winchtest`** (in testrun's table, exit 0x0A1D0000). Its control
@@ -394,7 +394,7 @@ call in the resize arm, verified on glass by dragging a gterm and watching
   after every signal.
 - **The prompt vanishes when a window is made shorter**: the shrink is
   clamping the cursor instead of rolling the top rows into history
-  (`shift` in `tty_resize_grid`).
+  (`shift` in `tty_resize`).
 
 - **Terminal shows a frozen grid, child alive**: generation not bumping on
   some grid mutation path — every `tty_write` door must touch it.

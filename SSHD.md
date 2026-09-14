@@ -1,6 +1,6 @@
 # SSHD — remote commands and interactive shells
 
-Design: Fable, 2026-09-13. Implementation: Quinn, stacked on
+Design: Fable, 2026-09-13. Implementation: Quinn, originally stacked on
 `fable/servers` at `8b5e974` in `.worktrees/sshd`, branch `codex/sshd`.
 This record incorporates the server-branch API audit into Fable's design.
 
@@ -214,12 +214,14 @@ kernel-scope follow-up.
 
 External crypto/implementation review is still required before a production
 merge. Host/QEMU checks and user-reported P5 results are recorded separately
-below. Implementation review is deferred until the parent server branch is
-ready.
+below. Parent server PR #101 is merged; this branch includes its reviewed
+implementation through `userland` at `893efea`. SSH implementation review
+can now proceed against that base.
 
 ## Recorded validation — 2026-09-13
 
-Final parent: `fable/servers` at `8b5e974`. Full strict `make -j8` passed.
+Original validation parent: `fable/servers` at `8b5e974`. Full strict
+`make -j8` passed.
 The complete staged diff passes `git diff --cached --check`. GCC's analyzer
 reported no diagnostics for the transport and connection engines.
 
@@ -252,6 +254,37 @@ reported no diagnostics for the transport and connection engines.
 The earlier fixture-address collision is recorded above and in DEBTS.md;
 the final guest serial log contains no panic or segmentation-fault report.
 External review and a production merge remain pending.
+
+## Merge-forward validation — 2026-09-13
+
+Server PR #101 merged into `userland` at `893efea` after Codex's clean
+review of `46a2ccc`. Merging that base into `codex/sshd` required no conflict
+resolution. It brings the reviewed TCP storage limits, PTY and handle
+lifetimes, task publication holds, wait-race fix and server regressions into
+the SSH branch. The SSH implementation required no code changes.
+
+- Full strict `make -j8` passed. The SSH fixture remains linked at
+  `0x22000000`; its separate app-base collision debt remains open.
+- Host ASan/UBSan: **683 checks, 0 failures**, followed by the complete
+  OpenSSH interoperability suite, including 3 MiB transfers, client/server
+  rekeys, stream separation, status and refusal cases.
+- Private q35 QEMU with 8 vCPUs, 2 GiB and copied root/home disks:
+  **30 pre-boot + 32 post-boot + 3 late kernel tests passed**. The complete
+  userland suite, invoked through SSH, passed **49 tests, 0 failures,
+  2 skips**. The SSH guest fixture passed **683 checks, 0 failures**.
+- The OpenSSH guest probe passed 3 MiB binary stdin/stdout with forced
+  rekeys, 3 MiB binary stderr, stream markers/status 7, overlong-command
+  refusal, interactive shell/CRLF/live resize and a fresh command after an
+  abruptly dropped interactive client. Strict host-key checking used the
+  retained test guest identity.
+- Read-only ext2 checks passed for both copied root and home disks.
+  Diff whitespace checks passed. The stale-reference scan's imported
+  `PTY_MODE_*`/`SET_TTY` shorthand and bounded-loop comments remain current.
+
+Evidence: `/tmp/sshd-merge/`, `/tmp/sshd-merge-build.log` and
+`/tmp/sshd-merge-host.log`. The P5 results above cover the earlier branch;
+this merged build has not been deployed there. SSH implementation review
+and its production merge remain pending.
 
 ## References
 

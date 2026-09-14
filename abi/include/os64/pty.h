@@ -25,15 +25,15 @@
 //              program in the window), never at the master's holder
 //   screen   — SYSCALL_PTY_SNAPSHOT, GRID only: header + interpreted cells,
 //              gated by a generation counter so a frame-cadence poll is
-//              near-free. A STREAM pty refuses it (a grid nobody fed is not
-//              a screen)
+//              near-free. A STREAM pty refuses it (a byte stream has no
+//              screen)
 //   read()   — STREAM only: the child's output, bytes, blocking like a pipe
 //              read; 0 once the slave's seats have emptied — THE SESSION
 //              ENDED, the stream spelling of OS64_PTY_HUNGUP. A GRID pty
 //              refuses it (a grid is not a stream, and pretending would
 //              teach the wrong lesson)
 //   resize   — SYSCALL_PTY_RESIZE(master, cols, rows), BOTH modes: the
-//              geometry follows the window, and every task seated on the
+//              geometry follows the window. When it changes, each task on the
 //              slave that installed a SIGWINCH handler gets the signal (the
 //              rest are not disturbed). The program inside asks
 //              /proc/self/tty what the size is now
@@ -96,8 +96,10 @@ static inline int64_t os64_pty_create(uint32_t cols, uint32_t rows)
 
 // Create a STREAM-mode pty: same handle, same seating, same keystrokes in —
 // but the child's output comes back out of os64_read on the master as the
-// bytes it wrote, uninterpreted, and pty_snapshot is refused. The geometry
-// is still real: it is what /proc/self/tty reports to the child and what
+// bytes it wrote, uninterpreted, and pty_snapshot is refused.
+// After its seated tasks and pending seats empty, output drains to EOF;
+// spawn_seated then refuses that master. Create a fresh pty for a new session.
+// Geometry is what /proc/self/tty reports to the child and what
 // os64_pty_resize changes. The FLAVOR is a SEPARATE SYSCALL, not an argument
 // on pty_create, so the two-argument GRID call never had its ABI widened.
 static inline int64_t os64_pty_create_stream(uint32_t cols, uint32_t rows)

@@ -105,18 +105,30 @@ long icmp_conn_write(icmp_conn_t* c, const void* buf, size_t len)
 	// MINUTE: the ARP cache's 60s lazy TTL expired the gateway entry, the
 	// next echo ate the first-packet drop, and write() failed for one
 	// beat. 500ms of retries is geological time for an ARP round trip.)
-	// EVERY attempt re-asks whether a sibling has hung up meanwhile (the
-	// UDP writer's rule): a request sent after the close would be a success
-	// whose reply is guaranteed to be discarded (Codex #101 rd8).
+	// EVERY attempt re-asks whether a sibling has hung up meanwhile, and
+	// counts itself in `sending` while the request is on its way out (the
+	// UDP writer's rule): the close waits that count out, so the check and
+	// the send are one interval as far as a close can tell, and no request
+	// leaves after the conversation is hung up — a success whose reply
+	// delivery would discard (Codex #101 rd8, rd9).
 	for (int tries = 0; tries < 50; tries++)
 	{
 		irqflags = spinlock_acquire_irqsave(&c->lock);
-		bool closed = c->closed;
-		spinlock_release_irqrestore(&c->lock, irqflags);
-		if (closed)
+		if (c->closed)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
 			return ICMP_CONN_ERR_CLOSED;   // hung up under us
+		}
+		c->sending++;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		int32_t rc = icmp_send_echo(c->dev, c->peer_ip, c->identifier, seq,
 		                            buf, (uint16_t)len);
+
+		irqflags = spinlock_acquire_irqsave(&c->lock);
+		c->sending--;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		if (rc == 0)
 		{
 			c->requests_sent++;
@@ -285,6 +297,15 @@ void icmp_conn_close(icmp_conn_t* c)
 	{
 		w = c->waiter;
 		c->waiter = NULL;
+	}
+	// A writer already past its own "not closed" check is mid-send: wait it
+	// out (icmp_conn.h sending) so the close returns with no request in
+	// flight — a send is microseconds, the wait a few spins.
+	while (c->sending != 0)
+	{
+		spinlock_release_irqrestore(&c->lock, irqflags);
+		wait(1);
+		irqflags = spinlock_acquire_irqsave(&c->lock);
 	}
 	spinlock_release_irqrestore(&c->lock, irqflags);
 	if (w != NULL)

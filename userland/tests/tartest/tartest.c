@@ -207,12 +207,17 @@ int main(void)
     os64_close(pipe_listing);
     int32_t writer_code = -1;
     int32_t reader_code = -1;
-    if (writer < 0 || reader < 0 ||
-        os64_wait(writer, &writer_code) < 0 ||
-        os64_wait(reader, &reader_code) < 0 ||
-        writer_code != 0 || reader_code != 0 ||
-        !file_contains("pipe-list.txt", "source/sub/beta.txt\n"))
+    int64_t writer_wait = writer > 0 ? os64_wait(writer, &writer_code) : -1;
+    int64_t reader_wait = reader > 0 ? os64_wait(reader, &reader_code) : -1;
+    bool listed = file_contains("pipe-list.txt", "source/sub/beta.txt\n");
+    if (writer < 0 || reader < 0 || writer_wait < 0 || reader_wait < 0 ||
+        writer_code != 0 || reader_code != 0 || !listed)
+    {
+        os64_printf("tartest: writer=%ld wait=%ld code=%d reader=%ld wait=%ld code=%d listed=%d\n",
+                    (long)writer, (long)writer_wait, writer_code,
+                    (long)reader, (long)reader_wait, reader_code, listed);
         die(6, "create-to-pipe/list-from-pipe failed");
+    }
 
     char *const self_create[] = {
         "/bin/tar", "-cf", "source/inside.tar", "source", NULL

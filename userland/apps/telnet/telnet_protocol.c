@@ -120,7 +120,8 @@ static void changed(telnet_t *t, uint8_t option, bool ours)
 // discarded (a well-formed NAWS is four bytes). A client keeps nothing.
 static void sb_gather(telnet_t *t, uint8_t c)
 {
-    if (t->role != TELNET_SERVER || t->sb_opt != TELNET_OPT_NAWS)
+    if (t->role != TELNET_SERVER || t->sb_opt != TELNET_OPT_NAWS ||
+        t->him[TELNET_OPT_NAWS] != TELNET_OPT_YES)
         return;
     if (t->sb_len < sizeof(t->sb_buf))
         t->sb_buf[t->sb_len++] = c;
@@ -132,7 +133,8 @@ static void sb_gather(telnet_t *t, uint8_t c)
 // good one.
 static void sb_finish(telnet_t *t)
 {
-    if (t->role != TELNET_SERVER || t->sb_opt != TELNET_OPT_NAWS || t->sb_len < 4)
+    if (t->role != TELNET_SERVER || t->sb_opt != TELNET_OPT_NAWS ||
+        t->him[TELNET_OPT_NAWS] != TELNET_OPT_YES || t->sb_len < 4)
         return;
     t->peer_cols = (uint16_t)((t->sb_buf[0] << 8) | t->sb_buf[1]);
     t->peer_rows = (uint16_t)((t->sb_buf[2] << 8) | t->sb_buf[3]);
@@ -463,23 +465,22 @@ size_t telnet_receive(telnet_t *t, const void *in, size_t len,
                 t->parse = P_DATA;
                 break;
             case TELNET_IP:
+            case TELNET_EC:
+            case TELNET_EL:
                 if (t->role == TELNET_SERVER) {
-                    // "Interrupt process" is the remote Ctrl+C. Inject it as
-                    // 0x03 into the keystroke stream; on the master that runs
-                    // the slave's interrupt intercept and aims SIGINT at the
-                    // foreground job, exactly as a local Ctrl+C does (Codex
-                    // #101 P2). Room-checked so the IAC IP is reprocessed
-                    // rather than the interrupt dropped.
+                    // Server commands become the terminal's Ctrl+C,
+                    // Backspace and Ctrl+U bytes. Retain the command when
+                    // the decoded buffer is full so a retry delivers it.
                     if (used == cap) { stalled = true; break; }
-                    out[used++] = 0x03;
+                    out[used++] = c == TELNET_IP ? 0x03 : c == TELNET_EC ? 0x08 : 0x15;
                     t->parse = P_DATA;
                     break;
                 }
                 t->parse = P_DATA;   // CLIENT: consumed like the rest
                 break;
             default:
-                // NOP, GA, DM, BRK, IP, AO, EC, EL, a stray SE, and every
-                // command nobody has defined. Consumed, never printed — a
+                // Unhandled controls (NOP, GA, DM, BRK, AO, a stray SE)
+                // and unknown commands are consumed, never printed — a
                 // client that prints an unknown command has just let the peer
                 // write a byte of its choosing onto the glass, and a client
                 // that prints GA collects one per line from every half-duplex

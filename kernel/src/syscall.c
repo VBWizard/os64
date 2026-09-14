@@ -1270,13 +1270,19 @@ static uint64_t syscall_io_deadline(uint64_t timeout_ms)
 // Runs on the calling task's CR3 (user buffer in the lower half, console and
 // pipe rings in the shared upper half — see the table comment).
 #define WRITE_CHUNK_SIZE 512
+typedef enum {
+	WRITE_ALIVE,
+	WRITE_TERMINATING,
+	WRITE_SIGPIPE
+} write_death_t;
+
 // The console-out half of write, on a terminal the caller HOLDS when it is a
 // pty slave (tty.h pty_seat_hold) and whose STREAM pipe the caller holds a
 // writer's reference on — so neither can go away under the park a full ring
 // costs. Ferries through a bounded kernel chunk so an arbitrary user length
 // never maps to unbounded kernel stack use.
 static uint64_t syscall_write_console(tty_t *tty, bool stream_pty,
-    const char *user_buffer, size_t length, bool *die)
+    const char *user_buffer, size_t length, write_death_t *die)
 {
 	char chunk[WRITE_CHUNK_SIZE];
 	size_t copied = 0;
@@ -1304,7 +1310,7 @@ static uint64_t syscall_write_console(tty_t *tty, bool stream_pty,
 				// uncaught means terminate.
 				if (current_thread_will_catch())
 					return copied ? copied : (uint64_t)(int64_t)OS64_INTERRUPTED;
-				*die = true;   // unpin first, then the death: the wrapper does both
+				*die = WRITE_TERMINATING;   // unpin first, then the death: the wrapper does both
 				return 0;
 			}
 			if (w == PIPE_ERR_CLOSED)
@@ -1328,7 +1334,7 @@ static uint64_t syscall_write_console(tty_t *tty, bool stream_pty,
 // returns, and a pin carried into the grave would keep the object alive
 // forever (a pipe never destroyed, a pty never buried).
 static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
-    const char *user_buffer, size_t length, uint64_t timeout_ms, bool *die)
+    const char *user_buffer, size_t length, uint64_t timeout_ms, write_death_t *die)
 {
 	if (length == 0)
 		return 0;
@@ -1511,11 +1517,12 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
 					}
 					spinlock_release_irqrestore(&task->signalLock, spf);
-					// No handler: the default action is death, applied HERE in
-					// our own context. Nothing is left pending, so nothing can
-					// get stuck — and this is what `yes | head` needs.
-					raise_sigpipe_and_die(task);
-					__builtin_unreachable();
+					// Default disposition is decided here, but the wrapper
+					// must release its writer pin before the non-returning
+					// SIGPIPE death. Keep its identity separate from a pending
+					// terminating signal so the exit status remains 141.
+					*die = WRITE_SIGPIPE;
+					return 0;
 				}
 				if (n == PIPE_ERR_INTERRUPTED)
 				{
@@ -1532,7 +1539,7 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 					// only the truth when written is 0.
 					if (current_thread_will_catch())
 						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
-					*die = true;   // unpin first, then the death: the wrapper does both
+					*die = WRITE_TERMINATING;   // unpin first, then the death: the wrapper does both
 					return 0;
 				}
 				if (n < 0)
@@ -1582,7 +1589,7 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 					// chunks the same honesty.
 					if (current_thread_will_catch())
 						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
-					*die = true;   // unpin first, then the death: the wrapper does both
+					*die = WRITE_TERMINATING;   // unpin first, then the death: the wrapper does both
 					return 0;
 				}
 				if (n == TCP_ERR_TIMEOUT)
@@ -1714,11 +1721,16 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!handle_pin(task, (int)(int64_t)arg0, &pinned))
 		return SYSCALL_RESULT_INVALID;
 
-	bool die = false;
+	write_death_t die = WRITE_ALIVE;
 	uint64_t r = syscall_write_pinned(task, &pinned, (const char *)arg1,
 	                                  (size_t)arg2, arg3, &die);
 	handle_unpin(&pinned);
-	if (die)
+	if (die == WRITE_SIGPIPE)
+	{
+		raise_sigpipe_and_die(task);
+		__builtin_unreachable();
+	}
+	if (die == WRITE_TERMINATING)
 	{
 		raise_terminating_signal_and_die(task, NULL);
 		__builtin_unreachable();
@@ -1902,6 +1914,10 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 					return (uint64_t)(int64_t)OS64_NET_ERR_TIMEOUT;
 				return SYSCALL_RESULT_INVALID;   // the listener was closed under us
 			}
+			// Capture the peer while this accept still owns the reference;
+			// publication lets teardown close it and the reaper reclaim it.
+			os64_netconn_t nc = { .handle = ch, .peer_ip = conn->peer_ip,
+			                      .peer_port = conn->peer_port, ._reserved = 0 };
 			if (!handle_commit_reserved(task, ch, HANDLE_NET_TCP, conn))
 			{
 				// Teardown cancelled the reservation first: the task is
@@ -1910,8 +1926,6 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 				tcp_conn_release(conn);
 				return SYSCALL_RESULT_INVALID;
 			}
-			os64_netconn_t nc = { .handle = ch, .peer_ip = conn->peer_ip,
-			                      .peer_port = conn->peer_port, ._reserved = 0 };
 			// Copy out HERE, not through the common tail, so a faulting
 			// destination does not strand the handle we just installed
 			// (Codex #101 P2): the connection is already off the accept
@@ -2251,22 +2265,40 @@ static uint64_t syscall_pty_create_common(uint32_t cols, uint32_t rows, uint8_t 
 	if (task == NULL)
 		return SYSCALL_RESULT_INVALID;
 
-	tty_t *slave = pty_create_slave(cols, rows, mode);
-	if (slave == NULL)
+	// The master's slot is RESERVED before the slave exists and COMMITTED
+	// after — announce's and accept's rule (Codex #101 rd10): a sibling's
+	// teardown between the create and a fresh alloc would sweep the table
+	// first, and a master published into a swept table is a pty (grid,
+	// stream pipe, registry row) nobody ever closes. A full table is also
+	// discovered before anything is created.
+	int mh = handle_reserve(task);
+	if (mh < 0)
 		return SYSCALL_RESULT_INVALID;
 
-	int mh = handle_alloc(task, HANDLE_PTY_MASTER, slave);
-	if (mh < 0)
+	tty_t *slave = pty_create_slave(cols, rows, mode);
+	if (slave == NULL)
 	{
-		// Out of handles: a never-seated slave with a closed master is
-		// exactly the burial condition — close does the whole unwind.
+		(void)handle_cancel_reserved(task, mh);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	// Publishing transfers ownership to the table, which may immediately
+	// close the master during teardown. Keep the allocation through the
+	// diagnostic even when a successful commit has already closed it.
+	pty_master_hold(slave);
+	if (!handle_commit_reserved(task, mh, HANDLE_PTY_MASTER, slave))
+	{
+		// Teardown cancelled the slot first: release the master's ownership
+		// and then our hold, which permits the never-seated slave's burial.
 		pty_master_close(slave);
+		pty_master_unhold(slave);
 		return SYSCALL_RESULT_INVALID;
 	}
 
 	printd(DEBUG_SYSCALL, "pty_create: task %s got master %d (pty%u, %ux%u, %s)\n",
 	       task->exename, mh, slave->index, slave->cols, slave->rows,
 	       mode == PTY_MODE_STREAM ? "stream" : "grid");
+	pty_master_unhold(slave);
 	return (uint64_t)mh;
 }
 
@@ -2296,8 +2328,7 @@ static uint64_t syscall_pty_create_stream(uint64_t arg0, uint64_t arg1, uint64_t
 static uint64_t syscall_pty_snapshot_pinned(tty_t *t, uint64_t arg1, uint64_t arg2,
     uint64_t arg3)
 {
-	// A STREAM slave's grid is never fed: a snapshot of it would be a blank
-	// screen presented as the truth. Its output is read(master).
+	// A STREAM slave has no grid. Its output is read(master), not a snapshot.
 	if (t->pty_mode == PTY_MODE_STREAM)
 	{
 		printd(DEBUG_SYSCALL, "pty_snapshot: a STREAM pty has no screen — read(master) instead\n");
@@ -2388,9 +2419,9 @@ static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2
 // pty_resize(master, cols, rows) -> 0. The SIGWINCH slice (PTY.md § Resize).
 // The MASTER's verb, because the master owns the geometry: a terminal window
 // that grew tells its slave the new size, and the slave learns — it does not
-// decide. Three things, in this order: the grid follows (tty_resize_grid —
-// realloc, carry the text, clamp the cursor, bump the generation so the
-// master's own snapshot poll repaints), then SIGWINCH at every task SEATED
+// decide. tty_resize changes geometry and generation, carrying text and
+// clamping the cursor for GRID; STREAM has no cells to rebuild. Unchanged
+// dimensions return without a signal. A change sends SIGWINCH at each task SEATED
 // on the slave — of which only those with a handler installed get a bit
 // (task_signal_and_nudge drops an ignored signal at the raise). Not at the
 // caller: gterm is doing the telling, and it already
@@ -2427,10 +2458,11 @@ static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	tty_t *t = (tty_t *)pinned.object;
 
 	uint32_t cols = (uint32_t)arg1, rows = (uint32_t)arg2;
-	if (!tty_resize_grid(t, cols, rows))
+	int changed = tty_resize(t, cols, rows);
+	if (changed <= 0)
 	{
 		handle_unpin(&pinned);
-		return SYSCALL_RESULT_INVALID;   // geometry outside the fence — the only refusal (the allocator never says "no memory", it panics)
+		return changed < 0 ? SYSCALL_RESULT_INVALID : 0;
 	}
 
 	uint32_t seats = 0, told = 0;
@@ -3816,35 +3848,41 @@ typedef struct {
 // in the kernel tables but NOT in a user task's CR3 (which is why calling
 // task_create directly from the syscall faulted in nvme_submit_command). Same
 // discipline the demand-pager uses for kernel_read_file.
-// Give back every handle syscall_spawn pinned (the three redirections and
-// the SET_TTY master) — on success, once the child holds its own references;
-// on any refusal, so nothing is left pinned for a child that never came.
-static void spawn_unpin(const handle_t *pin, const bool *pinnedSlot)
-{
-	for (int i = 0; i < 4; i++)
-		if (pinnedSlot[i])
-			handle_unpin(&pin[i]);
-}
-
-// Give back the CHILD's TCP references (taken at resolve — see the loop in
-// syscall_spawn) when no child comes to own them. Slots not yet resolved are
-// HANDLE_NONE, so every failure path may call this for all three.
-static void spawn_release_child_tcp(spawn_params_t *p)
+// Give back the CHILD's references on the redirections (handle_share, taken
+// at resolve in syscall_spawn) when no child comes to own them. Slots not
+// yet resolved are HANDLE_NONE, so every failure path may call this for all
+// three; the console tags hold nothing and unshare as nothing.
+static void spawn_unshare_all(spawn_params_t *p)
 {
 	for (int slot = 0; slot < 3; slot++)
-		if (p->redirType[slot] == HANDLE_NET_TCP && p->redirObject[slot] != NULL)
-			tcp_conn_release((tcp_conn_t *)p->redirObject[slot]);
+	{
+		if (p->redirType[slot] == HANDLE_NONE)
+			continue;
+		handle_t shared = { .type = p->redirType[slot], .object = p->redirObject[slot] };
+		handle_unshare(&shared);
+	}
 }
 
 static void spawn_do_create(void *arg)
 {
 	spawn_params_t *p = (spawn_params_t *)arg;
+	// Reserve the seat before loading: a STREAM's last-seat close may win
+	// this race, in which case no child is created. A reservation keeps the
+	// writer open but does not arm EOF on an unused pty if the load fails.
+	if (p->ttySlave != NULL && !tty_pty_reserve_seat(p->ttySlave))
+	{
+		spawn_unshare_all(p);
+		p->result = -1;
+		return;
+	}
 	task_t *child = task_create(p->path, p->argc, p->argv, p->parent,
 	                            false, THREAD_NO_AFFINITY);
 	if (child == NULL)
 	{
-		spawn_release_child_tcp(p);   // the child never happened; its references go back
-		p->result = -1;               // (the caller's pins go back in syscall_spawn)
+		if (p->ttySlave != NULL)
+			tty_pty_unref(p->ttySlave);
+		spawn_unshare_all(p);   // the child never happened; its references go back
+		p->result = -1;         // (the master's pin goes back in syscall_spawn)
 		return;
 	}
 
@@ -3928,12 +3966,11 @@ static void spawn_do_create(void *arg)
 	// — controlling shell, terminal of record, foreground, lights on — which
 	// is deliberate: the seated child is the session, that is what seating
 	// means, so seat a shell. The seat bookkeeping swaps the inherited
-	// terminal's pty reference (taken in task_create) for the slave's.
+	// terminal's pty reference (taken in task_create) for the reserved seat.
 	if (p->ttySlave != NULL)
 	{
 		tty_pty_unref((tty_t *)child->tty);
 		tty_seat_shell(p->ttySlave, child);
-		tty_pty_ref(p->ttySlave);
 	}
 
 	// Apply redirection BEFORE the child is submitted to the scheduler — the
@@ -3946,35 +3983,42 @@ static void spawn_do_create(void *arg)
 		if (p->redirType[slot] == HANDLE_NONE)
 			continue;   // the caller had closed that slot: keep the built-in default (console)
 
-		// The child gets its OWN reference on the pipe end. Two tasks now hold
-		// this end; both must close it before the refcount reaches zero and the
-		// EOF/EPIPE fires. (This ref is why the shell closing its copy does not
-		// yank the pipe out from under the child.)
-		if (p->redirType[slot] == HANDLE_PIPE_READ)
-			pipe_ref_read_end((pipe_t *)p->redirObject[slot]);
-		else if (p->redirType[slot] == HANDLE_PIPE_WRITE)
-			pipe_ref_write_end((pipe_t *)p->redirObject[slot]);
-		// Files share by the same rule (handleRefCount, vfs.h): the child's
-		// slot is a second reference on ONE open file, and only the last
-		// close runs the VFS close. This is what makes `upper < file` safe:
-		// the shell opens, spawns, and immediately closes its copy — the
-		// child's handle survives because the refcount says so. (Note the
-		// child inherits the file POSITION too — shared FIL, dup semantics —
-		// which for a just-opened redirect file is position 0, as intended.)
-		else if (p->redirType[slot] == HANDLE_FILE)
-			__sync_add_and_fetch(&((vfs_file_t *)p->redirObject[slot])->handleRefCount, 1);
-		// A TCP connection's reference for the child was taken at RESOLVE,
-		// in syscall_spawn, NOT here: the caller's pin keeps only the ROW
-		// alive (tcp.h pins), so a sibling closing the parent's last handle
-		// during the load would hang the conn up, and a reference taken now
-		// would resurrect a closing stream into the child (Codex #101 rd8).
-		// handle_install hands that already-held reference over.
-
+		// The child's OWN reference on the object — a pipe end's count, a
+		// file's handleRefCount, a TCP conn's handle count — was taken at
+		// RESOLVE by handle_share, in the same critical section that found
+		// the parent's slot live (syscall_spawn says why nothing later is
+		// early enough). Two tasks hold the object from that instant: the
+		// shell closing its copy does not yank the pipe out from under the
+		// child, `upper < file` survives the shell's immediate close of its
+		// own handle (and the child inherits the file POSITION — shared FIL,
+		// dup semantics — position 0 for a just-opened redirect, as
+		// intended), and the FIN waits for the child's close. handle_install
+		// hands that already-held reference over.
 		handle_install(child, slot, p->redirType[slot], p->redirObject[slot]);
 	}
 
+	// Submission lets the child exit and a sibling reap it before this
+	// thread resumes. Hold its storage through the terminal check and PID
+	// capture; a terminal hold alone cannot protect the task pointer.
+	task_hold(child);
 	scheduler_submit_new_task(child);
+
+	// Both inherited and explicit PTY seats exist before the child is
+	// published. A master-close sweep in that interval misses the child.
+	// Check its actual terminal after publication: an earlier close is
+	// handled here, and a later sweep can find it in kTaskList. The child
+	// may already have exited on another core, so hold by registry lookup
+	// before inspecting the slave; its own seat may already be gone.
+	tty_t *seat = task_tty_hold(child);
+	if (seat != NULL)
+	{
+		if (seat->is_pty && seat->masterClosed)
+			task_signal_and_nudge(child, SIGHUP);
+		task_tty_release(seat);
+	}
+
 	p->result = (long)child->taskID;
+	task_release(child);
 }
 
 // spawn(path, argv, in, out, err) — launch `path` as a child of the calling
@@ -4058,17 +4102,24 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		memcpy(p->path, canon, sizeof(canon));
 	}
 
-	// EVERY HANDLE THIS SPAWN RESOLVES STAYS PINNED UNTIL THE CHILD EXISTS
-	// (handle.c § The pin). The load below blocks on the disk, and a sibling
-	// thread can close any of the parent's handles while it does — a pipe
-	// end, the redirect file, the TCP connection, the pty master the child
-	// is to be seated on. The pin keeps each object alive from the resolve
-	// through spawn_do_create's own references on the child's behalf, and
-	// the unpins at the bottom (and on every refusal path) give it back.
-	// Rd3 of Codex #101 closed this window for TCP alone by taking the
-	// child's reference early; the pin closes it for every type at once.
-	handle_t pin[4];        // [0..2] the redirections, [3] the SET_TTY master
-	bool pinnedSlot[4] = { false, false, false, false };
+	// WHAT THE CHILD INHERITS IS TAKEN FOR IT AT THE RESOLVE, ATOMICALLY.
+	// The load below blocks on the disk, and a sibling thread can close any
+	// of the parent's handles while it does. For the three redirections the
+	// answer is handle_share (handle.h): the CHILD's own reference — a pipe
+	// end, a file's handleRefCount, a TCP conn's handle count — taken in the
+	// same critical section that finds the slot live, so from that instant
+	// the object has one more table holder and nothing a sibling closes can
+	// hang it up or free it under the load. A pin was the wrong instrument
+	// here: it keeps a net conn's row alive but not its line (tcp.h pins),
+	// and a reference taken after the pin's lock dropped could land on a
+	// conn already hung up (Codex #101 rd10, the third try at this window —
+	// rd3 took the reference late, rd4 pinned, rd8 moved the reference
+	// early but outside the lock). The SET_TTY master is different: the
+	// child takes a SEAT on its slave, not a handle, so it is PINNED across
+	// the load; spawn_do_create reserves its seat before loading and transfers
+	// that seat to the child on success, or releases it on failure.
+	handle_t ttyPin;
+	bool ttyPinned = false;
 
 	// Resolve the SET_TTY master FIRST, in the caller's context, where the
 	// caller's handle table is in scope (PTY.md's seat) — first because the
@@ -4077,19 +4128,19 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (flags & OS64_SPAWN_SET_TTY)
 	{
 		int mh = (int)(flags >> OS64_SPAWN_TTY_SHIFT);
-		if (p->parent == NULL || !handle_pin(p->parent, mh, &pin[3]))
+		if (p->parent == NULL || !handle_pin(p->parent, mh, &ttyPin))
 		{
 			kfree(p);
 			return SYSCALL_RESULT_INVALID;   // not a handle you hold
 		}
-		pinnedSlot[3] = true;
-		if (pin[3].type != HANDLE_PTY_MASTER)
+		ttyPinned = true;
+		if (ttyPin.type != HANDLE_PTY_MASTER)
 		{
-			spawn_unpin(pin, pinnedSlot);
+			handle_unpin(&ttyPin);
 			kfree(p);
 			return SYSCALL_RESULT_INVALID;   // not a master
 		}
-		p->ttySlave = (tty_t *)pin[3].object;
+		p->ttySlave = (tty_t *)ttyPin.object;
 	}
 
 	// Resolve the redirection handles HERE, in the caller's context, where the
@@ -4127,55 +4178,35 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			want = slot;
 		}
 
-		if (p->parent == NULL || !handle_pin(p->parent, want, &pin[slot]))
+		// WHAT CROSSES THE SPAWN BOUNDARY is what handle_share will share: a
+		// child's 0/1/2 are byte streams two tasks can hold — the console
+		// tags, pipe ends, open files and TCP connections. Everything else
+		// (a directory, a listener, a UDP or ICMP conversation, a thread's
+		// join object, a pty master — one holder each by design, and two
+		// closers of a master would hang up twice) is refused by the share
+		// itself, and the caller gets a clean error instead of a haunted
+		// handle. A caller's OWN slot that cannot be shared reads as closed.
+		handle_t shared;
+		if (p->parent == NULL || !handle_share(p->parent, want, &shared))
 		{
 			if (defaulted)
 				continue;   // the caller closed its own slot: the built-in default
-			spawn_release_child_tcp(p);
-			spawn_unpin(pin, pinnedSlot);
+			spawn_unshare_all(p);
+			if (ttyPinned)
+				handle_unpin(&ttyPin);
 			kfree(p);
-			return SYSCALL_RESULT_INVALID;   // caller passed a bogus handle
+			return SYSCALL_RESULT_INVALID;   // a bogus handle, or one a child cannot inherit
 		}
-		pinnedSlot[slot] = true;
-
-		// WHAT CROSSES THE SPAWN BOUNDARY: a child's 0/1/2 are byte streams
-		// that two tasks can share — the console tags, pipe ends, open files
-		// and TCP connections, each with a reference count the child's own
-		// reference is taken on (spawn_do_create). Everything else is
-		// refused here, where the caller gets a clean error instead of a
-		// haunted handle: a directory is not a stream; a listener is a door;
-		// a UDP or ICMP conversation is single-owner; a thread's join
-		// object and a pty master have one holder by design (closing a
-		// master is the hangup, and two closers would hang up twice).
-		if (pin[slot].type != HANDLE_CONSOLE_IN && pin[slot].type != HANDLE_CONSOLE_OUT &&
-		    pin[slot].type != HANDLE_CONSOLE_ERR && pin[slot].type != HANDLE_PIPE_READ &&
-		    pin[slot].type != HANDLE_PIPE_WRITE && pin[slot].type != HANDLE_FILE &&
-		    pin[slot].type != HANDLE_NET_TCP)
-		{
-			spawn_release_child_tcp(p);
-			spawn_unpin(pin, pinnedSlot);
-			kfree(p);
-			return SYSCALL_RESULT_INVALID;
-		}
-
-		p->redirType[slot] = pin[slot].type;
-		p->redirObject[slot] = pin[slot].object;
-		// THE CHILD'S TCP REFERENCE, TAKEN NOW, while the handle is provably
-		// live under our pin: a pin keeps the row alive but not the line
-		// (tcp.h pins), so a sibling closing the parent's last handle during
-		// the load below would hang the conn up, and a reference taken after
-		// the load would resurrect a closing stream into the child (Codex
-		// #101 rd8). Given back by spawn_release_child_tcp if no child comes
-		// to own it; handed over by handle_install if one does.
-		if (pin[slot].type == HANDLE_NET_TCP)
-			tcp_conn_ref((tcp_conn_t *)pin[slot].object);
+		p->redirType[slot] = shared.type;
+		p->redirObject[slot] = shared.object;   // the child's reference rides with it
 	}
 
 	// task_create runs under kKernelPML4 so its disk I/O sees the DMA mappings.
 	call_in_kernel_context(spawn_do_create, p);
 
 	long r = p->result;
-	spawn_unpin(pin, pinnedSlot);   // the child holds its own references now, or never came to be
+	if (ttyPinned)
+		handle_unpin(&ttyPin);   // the child holds its seat now, or never came to be
 	kfree(p);
 	if (r < 0)
 		return SYSCALL_RESULT_INVALID;   // bad path / load failure

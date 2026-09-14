@@ -42,11 +42,13 @@
 //
 // The consequence worth stating: an operation in flight IS a holder. A parked
 // reader whose handle a sibling closed is the one who frees the pipe when it
-// leaves; a spawn's pin keeps a redirection object alive across the whole
-// ELF load; a file whose last table handle closed mid-read gets its real
-// close from the reader's unpin. Lock order: handleLock, then the object's own
-// lock (pipe, listener) inside it — never the reverse, because no object code
-// ever touches a handle table.
+// leaves; a file whose last table handle closed mid-read gets its real close
+// from the reader's unpin. Spawn's redirections are the other use of the
+// lock: handle_share takes the CHILD's own reference in the same critical
+// section, so the object is the child's before the load begins (a pin would
+// keep a net conn's row but not its line). Lock order: handleLock, then the
+// object's own lock (pipe, listener) inside it — never the reverse, because
+// no object code ever touches a handle table.
 
 #include "handle.h"
 #include "task.h"
@@ -283,6 +285,53 @@ void handle_unpin(const handle_t *pinned)
 		case HANDLE_NET_ICMP:      icmp_conn_release((icmp_conn_t *)pinned->object); break;
 		case HANDLE_NET_LISTENER:  tcp_listener_release((tcp_listener_t *)pinned->object); break;
 		case HANDLE_PTY_MASTER:    pty_master_unhold((tty_t *)pinned->object); break;
+		default: break;
+	}
+}
+
+bool handle_share(struct task *t, int h, handle_t *out)
+{
+	task_t *task = (task_t *)t;
+
+	if (h < 0 || h >= TASK_MAX_HANDLES)
+		return false;
+
+	uint64_t flags = spinlock_acquire_irqsave(&task->handleLock);
+	handle_type_t type = __atomic_load_n(&task->handles[h].type, __ATOMIC_ACQUIRE);
+	void *object = task->handles[h].object;
+	// The child's reference, in the handle's own currency, taken while the
+	// slot is provably live — the closer's claim cannot straddle this lock.
+	bool shareable = true;
+	switch (type)
+	{
+		case HANDLE_CONSOLE_IN:
+		case HANDLE_CONSOLE_OUT:
+		case HANDLE_CONSOLE_ERR:  break;   // a tag, not an object: nothing to hold
+		case HANDLE_PIPE_READ:    pipe_ref_read_end((pipe_t *)object); break;
+		case HANDLE_PIPE_WRITE:   pipe_ref_write_end((pipe_t *)object); break;
+		case HANDLE_FILE:
+			__sync_fetch_and_add(&((vfs_file_t *)object)->handleRefCount, 1);
+			break;
+		case HANDLE_NET_TCP:      tcp_conn_ref((tcp_conn_t *)object); break;
+		default:                  shareable = false; break;   // free, mid-close, or not a stream
+	}
+	spinlock_release_irqrestore(&task->handleLock, flags);
+
+	if (!shareable)
+		return false;
+	out->type = type;
+	out->object = object;
+	return true;
+}
+
+void handle_unshare(const handle_t *shared)
+{
+	switch (shared->type)
+	{
+		case HANDLE_PIPE_READ:    pipe_close_read_end((pipe_t *)shared->object); break;
+		case HANDLE_PIPE_WRITE:   pipe_close_write_end((pipe_t *)shared->object); break;
+		case HANDLE_FILE:         handle_file_object_close(shared->object); break;
+		case HANDLE_NET_TCP:      tcp_conn_release((tcp_conn_t *)shared->object); break;
 		default: break;
 	}
 }
