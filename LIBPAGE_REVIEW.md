@@ -1,9 +1,9 @@
 # libpage independent repair and validation — 2026-09-14
 
 Branch: `codex/libpage-review`, based on `d40373b` (`codex/html-form-owner`),
-retaining the `opus/libpage` and `opus/wend` stack. The repair is retained locally; no push, PR-thread replies or new model
-review has been requested. The numeric repair proceeded after Chris authorized
-resolving the design boundary and finding defects independently.
+retaining the `opus/libpage` and `opus/wend` stack. The repair addresses the
+PR #100 findings and additional independently reproduced defects. The numeric
+repair proceeded after Chris authorized resolving the design boundary.
 
 ## Contracts repaired
 
