@@ -60,9 +60,10 @@ def main():
     data = (bytes(range(256)) * ((args.bytes + 255) // 256))[:args.bytes]
     require(command('cat', data, ['-o', 'RekeyLimit=16K']), stdout=data, stderr=b'')
     print(f'guest: {len(data)} binary bytes echoed across forced rekeys PASS', flush=True)
-    require(command(args.fixture + ' -streams'), status=7, stdout=b'stdout-marker\n', stderr=b'stderr-marker\n')
-    require(command(args.fixture + ' -stderr', data), stdout=b'', stderr=data)
-    print(f'guest: {len(data)} binary stderr bytes PASS', flush=True)
+    if not args.skip_fixture:
+        require(command(args.fixture + ' -streams'), status=7, stdout=b'stdout-marker\n', stderr=b'stderr-marker\n')
+        require(command(args.fixture + ' -stderr', data), stdout=b'', stderr=data)
+        print(f'guest: {len(data)} binary stderr bytes PASS', flush=True)
     long = command('x' * 256)
     require(long, status=255, stdout=b'')
     assert b'exec request failed' in long.stderr, long

@@ -59,7 +59,9 @@ public point is recomputed, and its OpenSSH `SHA256:` fingerprint is printed
 at startup. Compare that fingerprint with the client's first-connect result.
 The key is not an OpenSSH private-key file.
 
-`sshd.conf` uses the ordinary configuration ladder:
+`sshd.conf` uses the ordinary configuration ladder; the shipped copy is
+written to the ext2 root's `/etc` by the image build, and the FAT lifeboat
+carries none, since it runs no services:
 
 ```text
 port = 22
@@ -412,6 +414,29 @@ passes **1776 guest SSH checks**, the full 3 MiB/rekey/PTY probe and the
 kernel suite (30 + 32 + 3), with no fault in the boot's log and clean
 read-only ext2 checks of the copied root and home partitions. Strict build
 and diff checks pass. Not deployed to the P5.
+
+## Review round 5 — 2026-09-14
+
+Three findings against `e8f659f`, none in the transport:
+
+- An unknown message before authentication is answered with UNIMPLEMENTED
+  naming its sequence number (RFC 4253 section 11.4); a connection-protocol
+  message there is still a state violation and disconnects. The fixture
+  checks five unknown types and one channel open before authentication; the
+  old connection layer fails ten of those checks.
+- `etc/sshd.conf` is written to the ext2 root's `/etc` by the image build,
+  as a dependency and a copy. The FAT lifeboat deliberately carries none.
+- `tools/sshd_probe.py --skip-fixture` now skips every fixture-dependent
+  stage, so a production-only image can be probed.
+
+Host ASan/UBSan passes **1793 engine checks**, the four daemon regression
+groups and the full OpenSSH interoperability suite. Private 8-core QEMU
+passes **1793 guest SSH checks** and the full 3 MiB/rekey/PTY probe, and a
+second boot passes the probe with `--skip-fixture`; the kernel suite passes
+its pre-boot and post-boot phases, the boot's log carries no fault, the
+root image carries `/etc/sshd.conf`, and read-only ext2 checks of the copied
+root and home partitions pass. Strict build and diff checks pass. Not
+deployed to the P5.
 
 ## References
 

@@ -142,12 +142,23 @@ static void channel_request(ssh_engine *s, ssh_reader r)
 malformed:
     ssh_disconnect(s, 2, "malformed channel request");
 }
+/* RFC 4253 section 11.4: every unrecognized message is answered with
+ * UNIMPLEMENTED naming its sequence number, never with a disconnect. */
+static void unimplemented(ssh_engine *s)
+{
+    uint8_t response[5]; ssh_writer w = {response, 0, sizeof(response), 0};
+    ssh_put_byte(&w, 3); ssh_put_u32(&w, s->rx.seq - 1); ssh_packet_send(s, response, w.n);
+}
 void ssh_connection_packet(ssh_engine *s, const uint8_t *p, size_t n)
 {
     uint8_t type = p[0];
     if (!s->authenticated) {
+        /* A connection-protocol message before authentication is a state
+         * violation by a peer that knows the message; anything else is a
+         * message this server does not know. */
         if (type == 50) auth(s, p, n);
-        else ssh_disconnect(s, 2, "authentication required");
+        else if (type >= 80 && type <= 100) ssh_disconnect(s, 2, "authentication required");
+        else unimplemented(s);
         return;
     }
     /* RFC 4252: authentication requests after success are ignored. */
@@ -209,9 +220,7 @@ void ssh_connection_packet(ssh_engine *s, const uint8_t *p, size_t n)
         if (type == 98) { if (n > 8192) goto malformed; channel_request(s, r); return; }
         if (type == 99 || type == 100) { if (r.n) goto malformed; return; }
     }
-    { uint8_t response[5]; ssh_writer w = {response, 0, sizeof(response), 0};
-      ssh_put_byte(&w, 3); ssh_put_u32(&w, s->rx.seq - 1); ssh_packet_send(s, response, w.n); }
-    return;
+    unimplemented(s); return;
 malformed:
     ssh_disconnect(s, 2, "invalid channel message, state or window");
 }

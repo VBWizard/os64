@@ -268,6 +268,22 @@ static void authentication(void)
     for(int i=0;i<5;i++) ssh_receive(&engine,wire,n);
     CHECK(engine.closed && engine.failures==5);
 }
+static void preauth_messages(void)
+{
+    /* RFC 4253 section 11.4: an unknown message before authentication earns
+     * UNIMPLEMENTED with its sequence number; a connection-protocol message
+     * there is a state violation and still disconnects. */
+    const uint8_t unknown[]={60,61,79,192,255};
+    for(size_t i=0;i<sizeof(unknown);i++) {
+        reset_connection(); engine.authenticated=0; engine.rx.seq=6;
+        payload[0]=unknown[i]; payload[1]=0; size_t n=frame(wire,payload,2);
+        CHECK(ssh_receive(&engine,wire,n)==n && !engine.closed && !engine.authenticated);
+        CHECK(engine.out_len==16 && engine.output[5]==3 && engine.output[9]==6);
+    }
+    reset_connection(); engine.authenticated=0;
+    payload[0]=90; size_t n=frame(wire,payload,1);
+    ssh_receive(&engine,wire,n); CHECK(engine.closed);
+}
 static void exchange_refusals(void)
 {
     for(size_t len=31;len<=33;len++) {
@@ -400,7 +416,7 @@ int main(int argc, char **argv)
 #else
     (void)argc; (void)argv;
 #endif
-    primitives(); codecs(); framing(); channels(); refused_dimensions(); dimension_bounds(); resize_results(); deferred_close(); deferred_reservation(); authentication(); exchange_refusals(); transport_messages(); identification();
+    primitives(); codecs(); framing(); channels(); refused_dimensions(); dimension_bounds(); resize_results(); deferred_close(); deferred_reservation(); authentication(); preauth_messages(); exchange_refusals(); transport_messages(); identification();
     report("sshtest: %d checks, %d failures\n",checks,failed);
     return failed?1:0;
 }
