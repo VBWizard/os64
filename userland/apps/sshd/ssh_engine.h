@@ -60,6 +60,7 @@ typedef struct {
     int channel, started, pty, request_reply, input_eof, sent_close;
     uint32_t peer_channel, peer_window, peer_packet, receive_window;
     uint32_t cols, rows;
+    uint32_t resize_cols, resize_rows; // proposal exposed by SSH_EVENT_RESIZE
     char term[128];
     enum ssh_event event;
     const uint8_t *event_data;
@@ -90,6 +91,9 @@ size_t ssh_output(ssh_engine *s, const uint8_t **data);
 void ssh_output_consume(ssh_engine *s, size_t n);
 void ssh_disconnect(ssh_engine *s, uint32_t reason, const char *description);
 void ssh_start_result(ssh_engine *s, int success);
+/* Complete SSH_EVENT_RESIZE before receiving another packet. Success commits
+ * the proposed geometry; either result sends the requested channel reply. */
+void ssh_resize_result(ssh_engine *s, int success);
 size_t ssh_send_data(ssh_engine *s, const uint8_t *p, size_t n, int stderr_stream);
 void ssh_input_consumed(ssh_engine *s, uint32_t n);
 void ssh_send_exit(ssh_engine *s, uint32_t status);

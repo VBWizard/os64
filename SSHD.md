@@ -171,8 +171,10 @@ wait. Backpressured network output also has a finite no-progress deadline.
 - An exec request with an allocated PTY is refused; the interactive path is
   `pty-req` followed by `shell`. Shell requests without a PTY are refused.
   `pty-req` records TERM and dimensions; `window-change` resizes the STREAM
-  PTY. Dimensions commit only after request acceptance; a zero component
-  preserves the last accepted value (or the initial default). Terminal-mode opcode framing is checked, while os64 owns the line
+  PTY. Nonzero dimensions must fit the kernel's 2–512 columns and 2–256
+  rows; zero preserves the last accepted component (or initial default).
+  A live resize commits geometry and reports success only after the PTY
+  accepts it. Before shell startup, a valid resize updates its initial size. Terminal-mode opcode framing is checked, while os64 owns the line
   discipline. Interactive EOF uses Ctrl-D; a STREAM master lacks an
   independent write-half close.
 - Disconnect closes command pipes. A non-PTY command that does not interact
@@ -325,6 +327,33 @@ complete output and status 0. The kernel boot suite passes **65 tests**.
 Strict build, whitespace/stale-reference checks and read-only root/home
 ext2 checks pass. Evidence and before/after logs are under
 `/tmp/pr102-rd1/`. These fixes have not been deployed to the P5.
+
+## Review round 2 — 2026-09-13
+
+The finding against `b3a7ac0` exposed a mismatch between SSH's accepted
+geometry and the kernel PTY bounds, plus an ignored resize result.
+
+- PTY allocation requests and window changes refuse nonzero columns outside
+  2–512 or rows outside 2–256. Zero retains its unspecified-component meaning.
+- Window changes expose a proposal to the adapter. `ssh_resize_result()`
+  commits it and sends a requested success reply only after the adapter
+  succeeds; failure retains the last accepted geometry and sends failure
+  when requested. A proposal before shell startup supplies its initial size.
+  Both the os64 daemon and POSIX test adapter report their resize result.
+- The bounds regression failed 36 checks on the old code, and the extracted
+  daemon adapter regression separately failed to report syscall failure.
+  Tests cover both size limits, zero components, reply suppression, failed
+  resize preserving state, and completion being consumed once. The host
+  runner includes the adapter regression with its prior loop tests.
+
+Host ASan/UBSan passes **798 engine checks**, four daemon regression groups,
+and the full OpenSSH interoperability suite. Private 8-core QEMU passes
+**798 guest SSH checks**, the full 3 MiB/rekey/PTY probe, and **65 kernel
+tests**. The extended live probe verifies that 600x300 and 1x1 are refused
+without changing the PTY, 512x256 is applied, and 0x0 preserves that size.
+Strict build, diff/stale-reference checks and read-only root/home ext2
+checks pass. Evidence and before/after logs are under `/tmp/pr102-rd2/`.
+These fixes have not been deployed to the P5.
 
 ## References
 

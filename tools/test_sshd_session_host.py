@@ -3,18 +3,20 @@
 
 The real loop and flush function are compiled unchanged. Engine stubs isolate
 adapter scheduling: close before rekey completion, sparse shared credit and
-interrupted writes. The separate SSH suite tests the real transport engine.
+interrupted writes, and PTY resize results. The separate SSH suite tests the
+real transport engine. An optional source path can check an earlier daemon.
 """
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+import sys
 
 root = Path(__file__).resolve().parents[1]
-source = (root / 'userland/apps/sshd/sshd.c').read_text()
+source = Path(sys.argv[1]).read_text() if len(sys.argv)>1 else (root / 'userland/apps/sshd/sshd.c').read_text()
 
 def function(name):
-    m = re.search(r'static int ' + name + r'\(void\)\s*\{', source)
+    m = re.search(r'static (?:int|void) ' + name + r'\(void\)\s*\{', source)
     assert m, name
     end, depth = m.end(), 1
     while depth:
@@ -24,6 +26,13 @@ def function(name):
 
 body = function('session')
 body = body[body.index('    uint8_t net[8192]'):body.index('    if (engine.error[0])')]
+if 'static void resize_terminal(' in source:
+    resize = function('resize_terminal')
+else:
+    event_body = function('event')
+    start = event_body.index('case SSH_EVENT_RESIZE:') + len('case SSH_EVENT_RESIZE:')
+    resize = 'static void resize_terminal(void) {' + event_body[start:event_body.index('break;', start)] + '}'
+
 program = r'''
 #include "ssh_engine.h"
 #include <assert.h>
@@ -34,7 +43,9 @@ program = r'''
 #define CHILD_RING_CAP 65536u
 static ssh_engine engine;
 static uint32_t input_head,credited;
-static int64_t child=7;
+static int64_t child=7,master;
+static int resize_calls,resize_completed,resize_success;
+static int64_t resize_return;
 typedef struct {uint8_t bytes[CHILD_RING_CAP];uint32_t head,tail;int eof,error,fd;} child_stream;
 static child_stream streams[2];
 static unsigned scenario,reads,turn,period,phase,sends[2],disconnected;
@@ -71,6 +82,12 @@ size_t ssh_receive(ssh_engine *s,const uint8_t *p,size_t n) {
  }
  return n;
 }
+static int64_t os64_pty_resize(int32_t fd,uint16_t cols,uint16_t rows) {
+ assert(fd==master && cols==103 && rows==41);resize_calls++;return resize_return;
+}
+void ssh_resize_result(ssh_engine *s,int success) {
+ assert(s==&engine);resize_completed++;resize_success=success;
+}
 static void event(void) {}
 void ssh_disconnect(ssh_engine *s,uint32_t reason,const char *text) {
  (void)text;disconnected=reason;s->closed=1;
@@ -85,12 +102,13 @@ size_t ssh_send_data(ssh_engine *s,const uint8_t *p,size_t n,int stream) {
 static int64_t os64_reap(int32_t *status) {(void)status;return 0;}
 void ssh_send_exit(ssh_engine *s,uint32_t status) {(void)s;(void)status;assert(0);}
 '''
-program += function('flush') + '\nstatic void loop(void) {\n' + body + '\n}\n'
+program += resize + '\n' + function('flush') + '\nstatic void loop(void) {\n' + body + '\n}\n'
 program += r'''
 static void reset(void) {
  memset(&engine,0,sizeof(engine));memset(streams,0,sizeof(streams));
  engine.authenticated=engine.started=1;reads=turn=disconnected=0;
  clock_ms=1;wire_len=0;write_result=2;sends[0]=sends[1]=0;
+ master=3;resize_calls=resize_completed=resize_success=0;resize_return=0;
 }
 int main(int argc,char **argv) {
  assert(argc==2);
@@ -114,6 +132,13 @@ int main(int argc,char **argv) {
    loop();assert(sends[0]>0 && sends[1]>0);
    assert(sends[0]<=sends[1]+1 && sends[1]<=sends[0]+1);
   }
+ } else if(!strcmp(argv[1],"resize")) {
+  reset();engine.cols=engine.resize_cols=103;engine.rows=engine.resize_rows=41;
+  resize_return=-1;resize_terminal();assert(resize_calls==1 && resize_completed==1 && !resize_success);
+  resize_return=0;resize_terminal();assert(resize_calls==2 && resize_completed==2 && resize_success);
+  reset();master=-1;engine.started=0;resize_terminal();
+  assert(!resize_calls && resize_completed==1 && resize_success);
+  engine.started=1;resize_terminal();assert(!resize_calls && resize_completed==2 && !resize_success);
  } else assert(0);
  printf("sshd session %s PASS\n",argv[1]);
 }
@@ -126,5 +151,5 @@ with tempfile.TemporaryDirectory(prefix='sshd-session-') as directory:
                     '-I'+str(root / 'userland/apps/sshd'), '-I'+str(root / 'abi/include'),
                     str(work / 'test.c'),
                     '-o', str(work / 'test')], check=True)
-    results = [subprocess.run([str(work / 'test'), case]).returncode for case in ('flush','close','fair')]
+    results = [subprocess.run([str(work / 'test'), case]).returncode for case in ('flush','close','fair','resize')]
     raise SystemExit(any(results))

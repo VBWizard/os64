@@ -80,8 +80,9 @@ static void serve(int sock, const char *pubfile)
             case SSH_EVENT_EOF: eof=1; break;
             case SSH_EVENT_CLOSE: closing=1; break;
             case SSH_EVENT_RESIZE: {
-                struct winsize size={.ws_row=s.rows,.ws_col=s.cols};
-                if (input>=0) ioctl(input,TIOCSWINSZ,&size);
+                struct winsize size={.ws_row=s.resize_rows,.ws_col=s.resize_cols};
+                int good=input<0 ? !s.started : ioctl(input,TIOCSWINSZ,&size)==0;
+                ssh_resize_result(&s,good);
                 break;
             }
             default: break;

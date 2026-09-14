@@ -240,6 +240,15 @@ spawned:
     }
     return 1;
 }
+static void resize_terminal(void)
+{
+    /* Before shell startup the accepted proposal supplies its initial size.
+     * A live terminal must apply it before the engine acknowledges success. */
+    int good = master < 0 ? !engine.started :
+        os64_pty_resize((int32_t)master, (uint16_t)engine.resize_cols,
+                        (uint16_t)engine.resize_rows) >= 0;
+    ssh_resize_result(&engine, good);
+}
 static void event(void)
 {
     switch (engine.event) {
@@ -249,7 +258,7 @@ static void event(void)
     case SSH_EVENT_EXEC: ssh_start_result(&engine, spawn_command(0)); break;
     case SSH_EVENT_SHELL: ssh_start_result(&engine, spawn_command(1)); break;
     case SSH_EVENT_RESIZE:
-        if (master >= 0) os64_pty_resize(master, (uint16_t)engine.cols, (uint16_t)engine.rows);
+        resize_terminal();
         break;
     case SSH_EVENT_INPUT: {
         if (__atomic_load_n(&input_broken, __ATOMIC_ACQUIRE)) {

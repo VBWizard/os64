@@ -70,11 +70,20 @@ void ssh_start_result(ssh_engine *s, int success)
 {
     s->started = success; reply(s, success);
 }
+void ssh_resize_result(ssh_engine *s, int success)
+{
+    if (s->event != SSH_EVENT_RESIZE) return;
+    if (success) { s->cols = s->resize_cols; s->rows = s->resize_rows; }
+    s->event = SSH_EVENT_NONE;
+    reply(s, success);
+}
 static int dimensions(ssh_reader *r, uint32_t *cols, uint32_t *rows)
 {
     *cols = ssh_u32(r); *rows = ssh_u32(r);
     (void)ssh_u32(r); (void)ssh_u32(r);
-    return !r->bad && *cols <= 65535 && *rows <= 65535;
+    /* Match pty_create_slave/tty_resize; SSH zero means unspecified. */
+    return !r->bad && (!*cols || (*cols >= 2 && *cols <= 512)) &&
+           (!*rows || (*rows >= 2 && *rows <= 256));
 }
 static int modes_ok(ssh_reader r)
 {
@@ -109,9 +118,9 @@ static void channel_request(ssh_engine *s, ssh_reader r)
         int good = dimensions(&r, &cols, &rows);
         if (r.bad || r.n) goto malformed;
         if (s->pty && good) {
-            if (cols) s->cols = cols;
-            if (rows) s->rows = rows;
-            s->event = SSH_EVENT_RESIZE; reply(s, 1);
+            s->resize_cols = cols ? cols : s->cols;
+            s->resize_rows = rows ? rows : s->rows;
+            s->event = SSH_EVENT_RESIZE;
         }
         else reply(s, 0);
         return;

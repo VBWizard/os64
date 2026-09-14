@@ -170,11 +170,59 @@ static void refused_dimensions(void)
     request_dimensions("pty-req",0,0,0);
     CHECK(engine.pty && engine.cols==cols && engine.rows==rows);
     request_dimensions("window-change",101,0,0);
-    CHECK(engine.event==SSH_EVENT_RESIZE && engine.cols==101 && engine.rows==rows);
+    CHECK(engine.event==SSH_EVENT_RESIZE && engine.cols==cols && engine.rows==rows);
+    ssh_resize_result(&engine,1);
+    CHECK(engine.cols==101 && engine.rows==rows);
     request_dimensions("window-change",0,43,0);
-    CHECK(engine.event==SSH_EVENT_RESIZE && engine.cols==101 && engine.rows==43);
+    CHECK(engine.event==SSH_EVENT_RESIZE && engine.rows==rows);
+    ssh_resize_result(&engine,1);
+    CHECK(engine.cols==101 && engine.rows==43);
     request_dimensions("window-change",222,65536,0);
     CHECK(!engine.closed && engine.cols==101 && engine.rows==43);
+}
+static void dimension_bounds(void)
+{
+    const uint32_t invalid[][2]={{1,24},{80,1},{513,24},{80,257},{600,300},{65535,65535},{UINT32_MAX,24}};
+    for(unsigned live=0;live<2;live++) for(size_t i=0;i<sizeof(invalid)/sizeof(invalid[0]);i++) {
+        reset_connection(); engine.channel=1; engine.pty=live;
+        uint32_t cols=engine.cols,rows=engine.rows;
+        request_dimensions(live?"window-change":"pty-req",invalid[i][0],invalid[i][1],0);
+        CHECK(!engine.closed && engine.pty==(int)live && engine.event!=SSH_EVENT_RESIZE);
+        CHECK(engine.cols==cols && engine.rows==rows);
+        CHECK(engine.out_len>=6 && engine.output[5]==100);
+    }
+    reset_connection(); engine.channel=1;
+    request_dimensions("pty-req",2,2,0);
+    CHECK(engine.pty && engine.cols==2 && engine.rows==2);
+    reset_connection(); engine.channel=1;
+    request_dimensions("pty-req",512,256,0);
+    CHECK(engine.pty && engine.cols==512 && engine.rows==256);
+}
+static void resize_results(void)
+{
+    reset_connection(); engine.channel=engine.pty=1;
+    uint32_t cols=engine.cols,rows=engine.rows;
+    request_dimensions("window-change",103,41,0);
+    CHECK(engine.event==SSH_EVENT_RESIZE && !engine.out_len);
+    CHECK(engine.cols==cols && engine.rows==rows && engine.resize_cols==103 && engine.resize_rows==41);
+    ssh_resize_result(&engine,0);
+    CHECK(engine.event==SSH_EVENT_NONE && engine.cols==cols && engine.rows==rows);
+    CHECK(engine.out_len>=6 && engine.output[5]==100);
+    size_t replied=engine.out_len; ssh_resize_result(&engine,1);
+    CHECK(engine.out_len==replied && engine.cols==cols && engine.rows==rows);
+    engine.out_len=0;
+    request_dimensions("window-change",0,0,0);
+    CHECK(!engine.out_len && engine.resize_cols==cols && engine.resize_rows==rows);
+    ssh_resize_result(&engine,1);
+    CHECK(engine.cols==cols && engine.rows==rows && engine.output[5]==99);
+    engine.out_len=0;
+    request_dimensions("window-change",512,256,0);
+    engine.request_reply=0; ssh_resize_result(&engine,0);
+    CHECK(!engine.out_len && engine.cols==cols && engine.rows==rows);
+    request_dimensions("window-change",2,2,0); ssh_resize_result(&engine,1);
+    CHECK(engine.cols==2 && engine.rows==2);
+    request_dimensions("window-change",512,256,0); ssh_resize_result(&engine,1);
+    CHECK(engine.cols==512 && engine.rows==256);
 }
 static void deferred_close(void)
 {
@@ -262,7 +310,7 @@ int main(int argc, char **argv)
 #else
     (void)argc; (void)argv;
 #endif
-    primitives(); codecs(); framing(); channels(); refused_dimensions(); deferred_close(); authentication(); exchange_refusals();
+    primitives(); codecs(); framing(); channels(); refused_dimensions(); dimension_bounds(); resize_results(); deferred_close(); authentication(); exchange_refusals();
     report("sshtest: %d checks, %d failures\n",checks,failed);
     return failed?1:0;
 }

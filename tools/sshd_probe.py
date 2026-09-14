@@ -75,10 +75,10 @@ def main():
                             env={**os.environ, 'TERM': 'xterm'})
     os.close(slave)
     transcript = bytearray()
-    def until(needle, timeout=15):
+    def until(needle, timeout=15, start=0):
         end = time.monotonic() + timeout
         while time.monotonic() < end:
-            if needle in transcript:
+            if needle in transcript[start:]:
                 return
             ready, _, _ = select.select([proc.stdout], [], [], .2)
             if ready:
@@ -102,6 +102,22 @@ def main():
         assert re.search(rb'rows\s+41', transcript), transcript
         assert b'\r\n' in transcript, transcript
         assert b'\n' not in bytes(transcript).replace(b'\r\n', b''), transcript
+        # Refused dimensions must leave the real guest PTY unchanged;
+        # accepted limits and unspecified zero components must agree with it.
+        for case, (cols, rows, expected_cols, expected_rows) in enumerate([
+                (600, 300, 103, 41), (1, 1, 103, 41),
+                (512, 256, 512, 256), (0, 0, 512, 256), (103, 41, 103, 41)]):
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+            os.kill(proc.pid, signal.SIGWINCH)
+            time.sleep(.3)
+            start = len(transcript)
+            marker = f'SSHD_GEOMETRY_{case}'.encode()
+            os.write(master, b'cat /proc/self/tty\recho ' + marker + b'\r')
+            until(b'\r\n' + marker + b'\r\n', start=start)
+            part = transcript[start:]
+            assert re.search(rb'cols\s+' + str(expected_cols).encode() + rb'\s', part), part
+            assert re.search(rb'rows\s+' + str(expected_rows).encode() + rb'\s', part), part
+        print('guest: refused resize preserves geometry; maximum and zero dimensions agree PASS', flush=True)
         os.write(master, b'exit\r')
         proc.wait(timeout=15)
         assert proc.returncode == 0, proc.returncode
