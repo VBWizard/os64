@@ -12,5 +12,6 @@
 int memcmp(const void *, const void *, size_t);
 #endif
 int ssh_packet_send(ssh_engine *s, const uint8_t *p, size_t n);
+void ssh_unimplemented(ssh_engine *s);
 void ssh_connection_packet(ssh_engine *s, const uint8_t *p, size_t n);
 #endif

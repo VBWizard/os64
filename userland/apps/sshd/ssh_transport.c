@@ -72,6 +72,13 @@ int ssh_packet_send(ssh_engine *s, const uint8_t *p, size_t n)
     queue(s, s->scratch, wire); s->tx.seq++; s->tx.bytes += wire;
     return 1;
 }
+/* RFC 4253 section 11.4: every unrecognized message is answered with
+ * UNIMPLEMENTED naming its sequence number, never with a disconnect. */
+void ssh_unimplemented(ssh_engine *s)
+{
+    uint8_t response[5]; ssh_writer w = {response, 0, sizeof(response), 0};
+    ssh_put_byte(&w, 3); ssh_put_u32(&w, s->rx.seq - 1); ssh_packet_send(s, response, w.n);
+}
 void ssh_disconnect(ssh_engine *s, uint32_t reason, const char *description)
 {
     if (s->closed) return;
@@ -267,7 +274,14 @@ static void packet(ssh_engine *s, const uint8_t *p, size_t n)
         if (s->established && s->kex == 1 && type >= 50) {
             ssh_connection_packet(s, p, n); return;
         }
-        ssh_disconnect(s, 2, "unexpected packet during key exchange"); return;
+        /* Strict KEX ends the initial exchange on any unexpected packet.
+         * Otherwise a message this server knows, arriving out of order, is
+         * a protocol error, while one it does not know earns UNIMPLEMENTED
+         * (RFC 4253 section 11.4), as OpenSSH's kex_protocol_error does. */
+        int known = type == 5 || type == 6 || type == 7 || type == 21 || type >= 30;
+        if ((s->strict && !s->established) || known) ssh_disconnect(s, 2, "unexpected packet during key exchange");
+        else ssh_unimplemented(s);
+        return;
     }
     if (type == 5) {
         ssh_reader r = {p + 1, n - 1, 0}, service = ssh_string(&r);

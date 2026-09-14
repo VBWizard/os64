@@ -96,7 +96,10 @@ counterpart there, and resets each direction's packet sequence at NEWKEYS
 when strict KEX is negotiated. Under strict KEX the initial exchange refuses
 IGNORE, DEBUG and UNIMPLEMENTED, as OpenSSH does; a rekey, and a peer that
 did not negotiate strict KEX, accept them at any time after identification
-(RFC 4253 section 11). The client identification line may be the RFC's full
+(RFC 4253 section 11). An unknown message type is answered with
+UNIMPLEMENTED wherever it arrives, before authentication or during an
+exchange, except that strict KEX ends the initial exchange on any unexpected
+packet; a known message out of order disconnects. The client identification line may be the RFC's full
 255 bytes including CRLF. Extension-info is not advertised. Cipher and
 MAC state belong to separate receive/transmit contexts.
 
@@ -437,6 +440,25 @@ its pre-boot and post-boot phases, the boot's log carries no fault, the
 root image carries `/etc/sshd.conf`, and read-only ext2 checks of the copied
 root and home partitions pass. Strict build and diff checks pass. Not
 deployed to the P5.
+
+## Review round 6 — 2026-09-14
+
+One finding against `c1d4d57`, the sibling of round 5's: the key-exchange
+gate still disconnected on an unknown type. An unknown message during a
+non-strict exchange or any rekey now earns UNIMPLEMENTED, as OpenSSH's
+`kex_protocol_error` answers; strict KEX still ends the initial exchange on
+any unexpected packet, and a known message out of order still disconnects.
+The helper is the transport's, shared with the connection layer. The
+fixture checks four unknown types in each of those states and seven known
+types out of order; the old engine fails 24 of those checks.
+
+Host ASan/UBSan passes **1895 engine checks**, the four daemon regression
+groups and the full OpenSSH interoperability suite. Private 8-core QEMU
+passes **1895 guest SSH checks**, the full 3 MiB/rekey/PTY probe and a
+second pass with `--skip-fixture`; the kernel suite passes 30 + 32 + 3, the
+boot's log carries no fault, and read-only ext2 checks of the copied root
+and home partitions pass. Strict build and diff checks pass. Not deployed
+to the P5.
 
 ## References
 

@@ -354,6 +354,34 @@ static void transport_messages(void)
         transport_message(2,0); transport_message(3,0); CHECK(!engine.closed && engine.kex==2);
     }
 }
+static void unknown_during_kex(void)
+{
+    /* RFC 4253 section 11.4 during an exchange: an unknown type earns
+     * UNIMPLEMENTED unless strict KEX is guarding the initial exchange; a
+     * known message out of order still disconnects. */
+    const uint8_t unknown[]={8,19,25,29};
+    for(size_t i=0;i<sizeof(unknown);i++) {
+        fresh_client(); client_kexinit(0); engine.out_len=0; engine.rx.seq=9;
+        payload[0]=unknown[i]; size_t n=frame(wire,payload,1);
+        CHECK(ssh_receive(&engine,wire,n)==n && !engine.closed && engine.kex==2);
+        CHECK(engine.out_len==16 && engine.output[5]==3 && engine.output[9]==9);
+        fresh_client(); client_kexinit(1); payload[0]=unknown[i]; n=frame(wire,payload,1);
+        ssh_receive(&engine,wire,n); CHECK(engine.closed && engine.output[5]==1);
+        for(int strict=0;strict<2;strict++) {
+            reset_connection(); engine.strict=strict; engine.kex=2; engine.rx.seq=9;
+            CHECK(ssh_receive(&engine,wire,n)==n && !engine.closed && engine.kex==2);
+            CHECK(engine.out_len==16 && engine.output[5]==3 && engine.output[9]==9);
+        }
+    }
+    const uint8_t known[]={5,6,7,21,31,49,90};
+    for(size_t i=0;i<sizeof(known);i++) {
+        fresh_client(); client_kexinit(0);
+        payload[0]=known[i]; size_t n=frame(wire,payload,1);
+        ssh_receive(&engine,wire,n); CHECK(engine.closed);
+        reset_connection(); engine.kex=2;
+        ssh_receive(&engine,wire,n); CHECK(engine.closed);
+    }
+}
 static void identification(void)
 {
     /* RFC 4253 section 4.2: 255 bytes including CRLF, so 253 of content. */
@@ -416,7 +444,7 @@ int main(int argc, char **argv)
 #else
     (void)argc; (void)argv;
 #endif
-    primitives(); codecs(); framing(); channels(); refused_dimensions(); dimension_bounds(); resize_results(); deferred_close(); deferred_reservation(); authentication(); preauth_messages(); exchange_refusals(); transport_messages(); identification();
+    primitives(); codecs(); framing(); channels(); refused_dimensions(); dimension_bounds(); resize_results(); deferred_close(); deferred_reservation(); authentication(); preauth_messages(); exchange_refusals(); transport_messages(); unknown_during_kex(); identification();
     report("sshtest: %d checks, %d failures\n",checks,failed);
     return failed?1:0;
 }
