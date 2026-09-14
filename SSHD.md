@@ -91,7 +91,11 @@ needed for an ECDSA P-256 client key.
 The server identifies as `SSH-2.0-os64sshd_1.0`. It advertises
 `kex-strict-s-v00@openssh.com` in the initial exchange, recognizes the client
 counterpart there, and resets each direction's packet sequence at NEWKEYS
-when strict KEX is negotiated. Extension-info is not advertised. Cipher and
+when strict KEX is negotiated. Under strict KEX the initial exchange refuses
+IGNORE, DEBUG and UNIMPLEMENTED, as OpenSSH does; a rekey, and a peer that
+did not negotiate strict KEX, accept them at any time after identification
+(RFC 4253 section 11). The client identification line may be the RFC's full
+255 bytes including CRLF. Extension-info is not advertised. Cipher and
 MAC state belong to separate receive/transmit contexts.
 
 BearSSL is linked through the private foundation archive. AES uses
@@ -128,7 +132,10 @@ received in flight before the client's KEXINIT are deferred until NEWKEYS;
 application output pauses during KEX. A channel close during that exchange
 keeps the transport running until NEWKEYS releases the deferred close reply
 or the KEX deadline expires. Closing does not initiate another server rekey.
-The deferred reply budget is 8 KiB.
+The deferred reply budget is 8 KiB of stored replies. Their framed wire cost
+is tracked alongside, and receive takes no further packet until the output
+queue has room for one maximum packet plus that whole replay, so NEWKEYS can
+always release it; the budget's worst case fits the queue with room to spare.
 
 ## Commands, channels, and backpressure
 
@@ -354,6 +361,38 @@ without changing the PTY, 512x256 is applied, and 0x0 preserves that size.
 Strict build, diff/stale-reference checks and read-only root/home ext2
 checks pass. Evidence and before/after logs are under `/tmp/pr102-rd2/`.
 These fixes have not been deployed to the P5.
+
+## Review round 3 — 2026-09-14
+
+Three findings against `ce55515`, all in the transport:
+
+- IGNORE, DEBUG and UNIMPLEMENTED are handled ahead of the key-exchange
+  gate. Strict KEX refuses them during the initial exchange only, which is
+  OpenSSH's `KEX_INITIAL` rule; a rekey, and a peer that never negotiated
+  strict KEX, accept them at any time, as RFC 4253 section 11 requires. The
+  comment claiming the peer must send the exchange message next was false
+  and is gone.
+- Every deferred reply's framed wire cost is tracked, and receive takes no
+  packet until the output queue has room for one maximum packet plus that
+  replay, so NEWKEYS can never fail to release what the budget accepted. A
+  static assertion holds the budget's worst case (one-byte replies at 48
+  wire bytes each) plus one packet inside the queue.
+- A 255-byte identification line, 253 characters plus CRLF, is accepted.
+
+The engine fixture grew a transport-message matrix (non-strict initial
+exchange, strict initial exchange, strict client sending IGNORE before
+KEXINIT, strict and non-strict rekeys, malformed messages), the
+identification bounds in both directions, and a 910-reply deferred replay
+that is refused at the old output threshold and released at the reserved
+one. Against the old transport those checks fail 31 times.
+
+Host ASan/UBSan passes **1776 engine checks**, the four daemon regression
+groups, and the full OpenSSH interoperability suite. Private 8-core QEMU
+passes **1776 guest SSH checks** and the full 3 MiB/rekey/PTY probe; the
+kernel suite passes 30 pre-boot and 32 post-boot tests, and the boot's log
+carries no fault. Strict build, diff/stale-reference checks and read-only
+ext2 checks of the copied root and home partitions pass. These fixes have
+not been deployed to the P5.
 
 ## References
 

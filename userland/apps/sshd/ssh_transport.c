@@ -32,6 +32,17 @@ static void mac(ssh_direction *d, const uint8_t *p, size_t n, uint8_t out[32])
     br_hmac_context h; br_hmac_init(&h, &d->mac, 32);
     br_hmac_update(&h, seq, 4); br_hmac_update(&h, p, n); br_hmac_out(&h, out);
 }
+static size_t padding_for(size_t n, size_t block)
+{
+    size_t padding = block - ((n + 5) % block);
+    return padding < 4 ? padding + block : padding;
+}
+/* Wire bytes an n-byte payload costs once framed, padded and, under live
+ * transmit keys, authenticated. */
+static size_t framed(size_t n, int keyed)
+{
+    return n + 5 + padding_for(n, keyed ? 16 : 8) + (keyed ? 32 : 0);
+}
 int ssh_packet_send(ssh_engine *s, const uint8_t *p, size_t n)
 {
     if (s->closed) return 0;
@@ -40,12 +51,15 @@ int ssh_packet_send(ssh_engine *s, const uint8_t *p, size_t n)
             ssh_disconnect(s, 11, "rekey deferred reply limit"); return 0;
         }
         ssh_writer w = {s->deferred, s->deferred_len, sizeof(s->deferred), 0};
-        ssh_put_string(&w, p, n); s->deferred_len = w.n; return 1;
+        ssh_put_string(&w, p, n); s->deferred_len = w.n;
+        /* A reply is replayed after NEWKEYS, so it goes out under the new
+         * keys whatever the transmit state is now. ssh_receive reserves
+         * this much output room before it takes another packet. */
+        s->deferred_wire += framed(n, 1); return 1;
     }
     size_t block = s->tx.active ? 16 : 8;
-    size_t padding = block - ((n + 5) % block);
-    if (padding < 4) padding += block;
-    size_t total = n + padding + 5, wire = total + (s->tx.active ? 32 : 0);
+    size_t padding = padding_for(n, block);
+    size_t total = n + padding + 5, wire = framed(n, s->tx.active);
     if (s->closed || total > SSH_PACKET_MAX + 4 || wire > SSH_OUTPUT_CAP - s->out_len) return 0;
     ssh_writer w = {s->scratch, 0, sizeof(s->scratch), 0};
     ssh_put_u32(&w, (uint32_t)total - 4); ssh_put_byte(&w, (uint8_t)padding);
@@ -211,28 +225,15 @@ static void packet(ssh_engine *s, const uint8_t *p, size_t n)
     }
     if (s->skip_guess) { s->skip_guess = 0; return; }
     if (type == 20) { kex_client(s, p, n); return; }
-    if (s->kex) {
-        if (type == 30 && s->kex == 2) { kex_ecdh(s, p, n); return; }
-        if (type == 21 && s->kex == 3 && n == 1) {
-            install(s, &s->rx, 0); ssh_wipe(s->pending_keys, sizeof(s->pending_keys));
-            s->kex = 0; s->established = 1;
-            ssh_reader replies = {s->deferred, s->deferred_len, 0};
-            while (replies.n && !s->closed) {
-                ssh_reader reply = ssh_string(&replies);
-                if (replies.bad || !ssh_packet_send(s, reply.p, reply.n)) {
-                    ssh_disconnect(s, 11, "rekey reply output limit"); break;
-                }
-            }
-            s->deferred_len = 0; return;
-        }
-        /* During rekey, connection messages already in flight precede peer
-         * KEXINIT. Once it arrives, the peer must send the negotiated KEX. */
-        if (s->established && s->kex == 1 && type >= 50) {
-            ssh_connection_packet(s, p, n); return;
-        }
-        ssh_disconnect(s, 2, "unexpected packet during key exchange"); return;
-    }
     if (type == 2 || type == 4 || type == 3) {
+        /* IGNORE, DEBUG and UNIMPLEMENTED are legal at any time after
+         * identification (RFC 4253 section 11). Strict KEX refuses them
+         * during the initial exchange alone, where nothing is authenticated
+         * yet, which is OpenSSH's own rule; a rekey runs under live keys
+         * and keeps accepting them, as does a peer without strict KEX. */
+        if (s->strict && !s->established) {
+            ssh_disconnect(s, 2, "transport message during strict key exchange"); return;
+        }
         ssh_reader r = {p + 1, n - 1, 0};
         if (type == 3) (void)ssh_u32(&r);
         else {
@@ -242,6 +243,31 @@ static void packet(ssh_engine *s, const uint8_t *p, size_t n)
         }
         if (r.bad || r.n) ssh_disconnect(s, 2, "malformed transport message");
         return;
+    }
+    if (s->kex) {
+        if (type == 30 && s->kex == 2) { kex_ecdh(s, p, n); return; }
+        if (type == 21 && s->kex == 3 && n == 1) {
+            install(s, &s->rx, 0); ssh_wipe(s->pending_keys, sizeof(s->pending_keys));
+            s->kex = 0; s->established = 1;
+            /* The output room for every deferred reply was reserved before
+             * this packet was taken, so a refusal here is a tripwire. */
+            ssh_reader replies = {s->deferred, s->deferred_len, 0};
+            while (replies.n && !s->closed) {
+                ssh_reader reply = ssh_string(&replies);
+                if (replies.bad || !ssh_packet_send(s, reply.p, reply.n)) {
+                    ssh_disconnect(s, 11, "rekey reply output limit"); break;
+                }
+            }
+            s->deferred_len = s->deferred_wire = 0; return;
+        }
+        /* A rekey's KEXINIT can cross connection messages the peer had
+         * already sent; they are honoured until the peer's own KEXINIT
+         * arrives. After that, the transport messages above aside, only
+         * the exchange's own messages are legal. */
+        if (s->established && s->kex == 1 && type >= 50) {
+            ssh_connection_packet(s, p, n); return;
+        }
+        ssh_disconnect(s, 2, "unexpected packet during key exchange"); return;
     }
     if (type == 5) {
         ssh_reader r = {p + 1, n - 1, 0}, service = ssh_string(&r);
@@ -257,7 +283,13 @@ static void packet(ssh_engine *s, const uint8_t *p, size_t n)
 size_t ssh_receive(ssh_engine *s, const uint8_t *data, size_t len)
 {
     size_t used = 0; s->event = SSH_EVENT_NONE;
-    if (s->closed || SSH_OUTPUT_CAP - s->out_len < SSH_PACKET_MAX + 1024) return 0;
+    /* Room for the largest reply one packet can draw, plus every deferred
+     * reply NEWKEYS will replay. The budget's worst case is one-byte
+     * replies, 5 deferred bytes and 48 wire bytes each; with one packet it
+     * fits the queue, so draining always clears this. */
+    _Static_assert(SSH_OUTPUT_CAP >= SSH_PACKET_MAX + 1024 + sizeof(((ssh_engine *)0)->deferred) / 5 * 48,
+                   "deferred replay must fit the output queue");
+    if (s->closed || SSH_OUTPUT_CAP - s->out_len < SSH_PACKET_MAX + 1024 + s->deferred_wire) return 0;
     while (used < len && !s->closed) {
         if (!s->identified) {
             uint8_t c = data[used++];
@@ -272,7 +304,9 @@ size_t ssh_receive(ssh_engine *s, const uint8_t *data, size_t len)
             if ((!c || c < 32 || c > 126) && c != '\r') {
                 ssh_disconnect(s, 2, "invalid identification"); break;
             }
-            if (s->ident_len >= 253 || (s->ident_len && s->client_ident[s->ident_len - 1] == '\r')) {
+            /* RFC 4253 section 4.2 allows 255 bytes including CRLF: 253 of
+             * content, then the CR may stand at index 253. */
+            if (s->ident_len >= (c == '\r' ? 254u : 253u) || (s->ident_len && s->client_ident[s->ident_len - 1] == '\r')) {
                 ssh_disconnect(s, 2, "invalid identification length or CR"); break;
             }
             s->client_ident[s->ident_len++] = (char)c; continue;

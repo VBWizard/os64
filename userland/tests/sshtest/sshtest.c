@@ -283,11 +283,101 @@ static void exchange_refusals(void)
         n=frame(wire,payload,w.n); ssh_receive(&engine,wire,n);
         CHECK(engine.closed && !engine.established);
     }
+}
+static void fresh_client(void)
+{
     CHECK(ssh_init(&engine,seed,private_key)); engine.out_len=0;
     const uint8_t ident[]="SSH-2.0-fixture\r\n";
-    ssh_receive(&engine,ident,sizeof(ident)-1);
-    uint8_t ignore[5]={2,0,0,0,0}; size_t n=frame(wire,ignore,sizeof(ignore));
-    ssh_receive(&engine,wire,n); CHECK(engine.closed);
+    CHECK(ssh_receive(&engine,ident,sizeof(ident)-1)==sizeof(ident)-1 && engine.identified);
+}
+static void client_kexinit(int strict)
+{
+    ssh_writer w={payload,0,sizeof(payload),0}; uint8_t cookie[16]={0};
+    ssh_put_byte(&w,20); ssh_put_bytes(&w,cookie,16);
+    ssh_put_text(&w,strict?"curve25519-sha256,kex-strict-c-v00@openssh.com":"curve25519-sha256");
+    ssh_put_text(&w,SSH_KEY_TYPE);
+    ssh_put_text(&w,"aes128-ctr"); ssh_put_text(&w,"aes128-ctr");
+    ssh_put_text(&w,"hmac-sha2-256"); ssh_put_text(&w,"hmac-sha2-256");
+    ssh_put_text(&w,"none"); ssh_put_text(&w,"none");
+    ssh_put_text(&w,""); ssh_put_text(&w,"");
+    ssh_put_byte(&w,0); ssh_put_u32(&w,0);
+    size_t n=frame(wire,payload,w.n); CHECK(ssh_receive(&engine,wire,n)==n);
+}
+static void transport_message(uint8_t type, int malformed)
+{
+    ssh_writer w={payload,0,sizeof(payload),0}; ssh_put_byte(&w,type);
+    if(type==3) ssh_put_u32(&w,9);
+    else { if(type==4) ssh_put_byte(&w,malformed?2:1); ssh_put_text(&w,"note"); if(type==4) ssh_put_text(&w,""); }
+    if(malformed && type!=4) ssh_put_byte(&w,0);
+    size_t n=frame(wire,payload,w.n); CHECK(ssh_receive(&engine,wire,n)==n);
+}
+static void transport_messages(void)
+{
+    /* RFC 4253 section 11: IGNORE, UNIMPLEMENTED and DEBUG are legal at any
+     * time after identification. Strict KEX forbids them during the initial
+     * exchange only, which is OpenSSH's KEX_INITIAL rule. */
+    fresh_client(); transport_message(2,0); CHECK(!engine.closed && engine.rx.seq==1);
+    client_kexinit(0); CHECK(!engine.closed && engine.kex==2 && !engine.strict);
+    transport_message(2,0); transport_message(3,0); transport_message(4,0);
+    CHECK(!engine.closed && engine.kex==2);
+    transport_message(4,1); CHECK(engine.closed);
+    fresh_client(); client_kexinit(0); transport_message(2,1); CHECK(engine.closed);
+    fresh_client(); client_kexinit(1); CHECK(!engine.closed && engine.strict && engine.kex==2);
+    transport_message(2,0); CHECK(engine.closed);
+    fresh_client(); client_kexinit(1); transport_message(4,0); CHECK(engine.closed);
+    /* A strict client's first packet must be KEXINIT; an IGNORE ahead of it
+     * is accepted on arrival and condemned by the sequence check. */
+    fresh_client(); transport_message(2,0); CHECK(!engine.closed);
+    client_kexinit(1); CHECK(engine.closed);
+    /* A rekey runs under live keys: strict or not, the messages stay legal
+     * before and after the peer's KEXINIT. */
+    for(int strict=0;strict<2;strict++) {
+        reset_connection(); engine.strict=strict; engine.kex=1;
+        transport_message(2,0); transport_message(4,0); CHECK(!engine.closed && engine.kex==1);
+        client_kexinit(strict); CHECK(!engine.closed && engine.kex==2);
+        transport_message(2,0); transport_message(3,0); CHECK(!engine.closed && engine.kex==2);
+    }
+}
+static void identification(void)
+{
+    /* RFC 4253 section 4.2: 255 bytes including CRLF, so 253 of content. */
+    char line[258]; memset(line,'x',sizeof(line)); memcpy(line,"SSH-2.0-",8);
+    line[253]='\r'; line[254]='\n';
+    CHECK(ssh_init(&engine,seed,private_key)); engine.out_len=0;
+    CHECK(ssh_receive(&engine,(const uint8_t *)line,255)==255);
+    CHECK(engine.identified && !engine.closed && engine.ident_len==253 && !engine.client_ident[253]);
+    line[253]='\n';
+    CHECK(ssh_init(&engine,seed,private_key)); engine.out_len=0;
+    CHECK(ssh_receive(&engine,(const uint8_t *)line,254)==254 && engine.identified && engine.ident_len==253);
+    line[253]='x'; line[254]='\r'; line[255]='\n';
+    CHECK(ssh_init(&engine,seed,private_key)); engine.out_len=0;
+    ssh_receive(&engine,(const uint8_t *)line,256); CHECK(engine.closed && !engine.identified);
+    line[253]='\r'; line[254]='\r';
+    CHECK(ssh_init(&engine,seed,private_key)); engine.out_len=0;
+    ssh_receive(&engine,(const uint8_t *)line,256); CHECK(engine.closed && !engine.identified);
+}
+static void deferred_reservation(void)
+{
+    /* 910 five-byte replies fill the 8 KiB deferred budget at 9 bytes each
+     * yet cost 48 wire bytes each once framed and authenticated. NEWKEYS
+     * must not be taken until the queue can hold all of them. */
+    uint8_t key[16]={0}, mkey[32]={0}, reply[5]={100,0,0,0,17};
+    reset_connection(); engine.kex=1;
+    br_aes_ct64_ctrcbc_init(&engine.tx.aes,key,16);
+    br_hmac_key_init(&engine.tx.mac,&br_sha256_vtable,mkey,32); engine.tx.active=1;
+    for(int i=0;i<910;i++) CHECK(ssh_packet_send(&engine,reply,sizeof(reply)));
+    CHECK(!engine.closed && !engine.out_len && engine.deferred_len==8190 && engine.deferred_wire==43680);
+    engine.kex=3; payload[0]=21; size_t n=frame(wire,payload,1);
+    engine.out_len=SSH_OUTPUT_CAP-(SSH_PACKET_MAX+1024);
+    CHECK(ssh_receive(&engine,wire,n)==0 && !engine.closed && engine.kex==3 && engine.deferred_len==8190);
+    engine.out_len=SSH_OUTPUT_CAP-(SSH_PACKET_MAX+1024+engine.deferred_wire);
+    size_t queued=engine.out_len;
+    CHECK(ssh_receive(&engine,wire,n)==n && !engine.closed && !engine.kex && engine.established);
+    CHECK(!engine.deferred_len && !engine.deferred_wire && engine.out_len==queued+43680);
+    CHECK(engine.tx.seq==910);
+    reset_connection(); engine.kex=1;
+    for(int i=0;i<910;i++) ssh_packet_send(&engine,reply,sizeof(reply));
+    CHECK(!engine.closed); CHECK(!ssh_packet_send(&engine,reply,sizeof(reply)) && engine.closed);
 }
 int main(int argc, char **argv)
 {
@@ -310,7 +400,7 @@ int main(int argc, char **argv)
 #else
     (void)argc; (void)argv;
 #endif
-    primitives(); codecs(); framing(); channels(); refused_dimensions(); dimension_bounds(); resize_results(); deferred_close(); authentication(); exchange_refusals();
+    primitives(); codecs(); framing(); channels(); refused_dimensions(); dimension_bounds(); resize_results(); deferred_close(); deferred_reservation(); authentication(); exchange_refusals(); transport_messages(); identification();
     report("sshtest: %d checks, %d failures\n",checks,failed);
     return failed?1:0;
 }

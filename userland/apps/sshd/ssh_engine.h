@@ -55,7 +55,7 @@ typedef struct {
     size_t out_head, out_len;
     uint8_t scratch[SSH_PACKET_MAX + 40];
     uint8_t deferred[8192];
-    size_t deferred_len;
+    size_t deferred_len, deferred_wire; // stored replies, and their framed cost
     char error[128], username[256], command[SSH_COMMAND_MAX + 1];
     int channel, started, pty, request_reply, input_eof, sent_close;
     uint32_t peer_channel, peer_window, peer_packet, receive_window;
