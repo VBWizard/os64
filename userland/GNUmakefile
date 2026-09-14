@@ -437,6 +437,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),$(TAR_FORMAT_PROGRAMS)),$(TAR_FORMAT_OBJ)) \
                        $(if $(filter $(1),$(TELNET_ENGINE_PROGRAMS)),$(TELNET_ENGINE_OBJ)) \
                        $(if $(filter $(1),bearssltest),$(BEARSSL_TEST_OBJ)) \
+                       $(if $(filter $(1),sshtest),$(addprefix $(OBJ)/apps/sshd/,ssh_codec.c.o ssh_keys.c.o ssh_transport.c.o ssh_connection.c.o)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
@@ -447,7 +448,7 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest),$(LIBHTML_SO)) \
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
                        $(if $(filter $(1),$(LIBFETCH_PROGRAMS)),$(LIBFETCH_SO)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(LIBTLS_SO)) \
-                       $(if $(filter $(1),bearssltest tlstrusttest tlsinputtest),$(BEARSSL_ARCHIVE))
+                       $(if $(filter $(1),bearssltest tlstrusttest tlsinputtest sshd sshtest),$(BEARSSL_ARCHIVE))
 APP_BASE_STAMP_$(1) := $(OBJ)/$(2)/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
 	@mkdir -p "$$(dir $$@)"
@@ -554,3 +555,8 @@ $(OBJ)/%.S.o: %.S
 .PHONY: clean
 clean:
 	rm -rf $(OBJ) $(BIN)
+
+# SSH uses private BearSSL primitives without widening libtls.so ABI.
+$(OBJ)/apps/sshd/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/port/include
+
+$(OBJ)/tests/sshtest/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/port/include

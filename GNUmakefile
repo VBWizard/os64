@@ -430,7 +430,7 @@ userland:
 # that rides it changes.
 TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
 
-$(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf GNUmakefile
+$(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -448,7 +448,7 @@ $(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE $(TLS_PUBLIC_ROOTS) tools/gen_
 	# is writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
 	# /home/husk.rc (the user's, on its own partition) still wins the
 	# search; /fat/husk.rc remains the lifeboat's copy.
-	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/crontab crontab\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\nwrite etc/bootenv.conf bootenv.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/crontab crontab\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\nwrite etc/bootenv.conf bootenv.conf\nwrite etc/sshd.conf sshd.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
 	# The pinned public roots are system configuration; /home/tls.conf can
 	# select another store through the configuration ladder.
 	printf 'mkdir /etc/certs\nwrite %s /etc/certs/roots.pem\n' "$(TLS_PUBLIC_ROOTS)" >> $(EXT2_STAGING)/debugfs_bins.cmds

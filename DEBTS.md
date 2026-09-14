@@ -445,3 +445,32 @@ how a worklist fills with things nobody intends to do.
   return SHORT and writes land WHOLE; the asymmetry is intentional (a reader
   that waits to fill its buffer deadlocks interactive pipelines; a writer that
   lands whole keeps records intact). See `pipe.h`.
+
+## SSH implementation boundaries (2026-09-13)
+
+- **Task allocation and app link-base collision:** `sshdtest` hashed to
+  `0x10000000`, also `USER_TASK_MEMORY_BASE`. In the private SSH QEMU run its
+  first `os64_runtime_init@plt` fetch at `0x1000d960` found zeroed, NX memory;
+  teardown subsequently panicked in the physical allocator. The SSH fixture
+  is named `sshtest` (assigned outside that allocation area). This avoids the
+  observed collision for this fixture; it does not repair the allocator or
+  establish that arbitrary app bases/thread counts are safe. A separate
+  address-space design/fix needs kernel-scope discussion. Evidence and
+  source pointers: `SSHD.md`, `userland/tools/app_bases.py`,
+  `kernel/include/task.h`, `task_alloc_aligned`/`task_reserve_task_virt`.
+- **SSH v1 intentionally lacks Ed25519, SFTP/scp, forwarding, passwords,
+  per-user identities, and concurrent session channels.** Reverse these
+  boundaries when a concrete client or file-transfer consumer needs them.
+  Public keys grant machine access; usernames are recorded without defining
+  users. No authorized key ships in the image.
+- **SSH exec inherits husk's 255-byte argument/line limit and shell syntax.**
+  Requests beyond the supported length are refused before spawn. `exit N`
+  ignores N on the stacked server baseline; normal command status (including
+  `false` returning 1) is propagated. A shell/argv expansion is separate work.
+- **SSH STREAM terminal settings:** dimensions are applied; the terminal-mode
+  opcode list is parsed but os64 owns the line discipline. Shell requests
+  require a PTY; exec with a PTY is refused. SSH EOF closes exec stdin;
+  interactive EOF uses Ctrl-D because the PTY has no write-half close.
+- **Non-PTY disconnects close the command pipes, without a process-group
+  cancellation API.** A command that neither reads stdin nor writes output
+  can outlive its connection. Do not claim remote disconnect cancels a job.

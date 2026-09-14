@@ -68,6 +68,8 @@ bool kRunCron = false;
 // twice. What it then hands out is a shell to anyone on the LAN, which is
 // why the lifeboat entry does not carry it.
 bool kRunTelnetd = false;
+// SSHD requests the userland SSH listener; absent means no SSH listener.
+bool kRunSshd = false;
 // DIRECTLOG: printd writes STRAIGHT to COM1 with the polled writer, bypassing
 // the per-core queues entirely.
 //
@@ -325,6 +327,7 @@ static cmdopt_t cmdopts[] = {
     {"TESTRUN", OPT_BOOL, &kRunTestrun, true, 0},
     {"CRON", OPT_BOOL, &kRunCron, true, 0},
     {"TELNETD", OPT_BOOL, &kRunTelnetd, true, 0},
+    {"SSHD", OPT_BOOL, &kRunSshd, true, 0},
     {"DIRECTLOG", OPT_BOOL, &kDirectLog, true, 0},
     {"NOTRACE", OPT_BOOL, &kEnableStackTrace, false, 0},
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},

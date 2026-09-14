@@ -220,3 +220,12 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
   the direction of travel is ours.)
 - **The rows above are the spec.** Anything in "Kept on merit" is free;
   everything else is a translation entry.
+
+## SSH access
+
+SSH public keys authorize access to the machine, not to a per-user account.
+os64 records the username from an accepted SSH login but has no user database
+or per-user permissions to apply. The v1 server supports ECDSA P-256 keys,
+non-PTY exec, and a STREAM-PTY shell, with one session channel per connection.
+Unsupported authentication and channel features are refused on the wire;
+see SSHD.md for the bounds and supported OpenSSH client.
