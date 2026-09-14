@@ -275,14 +275,11 @@ static void packet(ssh_engine *s, const uint8_t *p, size_t n)
             ssh_connection_packet(s, p, n); return;
         }
         /* Strict KEX ends the initial exchange on any unexpected packet.
-         * Otherwise a message this server knows (service request and
-         * accept, ext-info, NEWKEYS, the kex-specific range, a userauth
-         * request, a connection message), arriving out of order, is a
-         * protocol error, while one it does not know earns UNIMPLEMENTED
-         * (RFC 4253 section 11.4), as OpenSSH's kex_protocol_error does. */
-        int known = type == 5 || type == 6 || type == 7 || type == 21 ||
-                    (type >= 30 && type <= 50) || (type >= 80 && type <= 100);
-        if ((s->strict && !s->established) || known) ssh_disconnect(s, 2, "unexpected packet during key exchange");
+         * Otherwise anything this state does not handle, known type or
+         * not, earns UNIMPLEMENTED (RFC 4253 section 11.4), which is what
+         * OpenSSH's kex_protocol_error answers: the rule names no message
+         * numbers, so no range can be a number off. */
+        if (s->strict && !s->established) ssh_disconnect(s, 2, "unexpected packet during strict key exchange");
         else ssh_unimplemented(s);
         return;
     }

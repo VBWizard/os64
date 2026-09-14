@@ -293,19 +293,17 @@ static void authentication(void)
 }
 static void preauth_messages(void)
 {
-    /* RFC 4253 section 11.4: an unknown message before authentication earns
-     * UNIMPLEMENTED with its sequence number; a connection-protocol message
-     * there is a state violation and still disconnects. */
-    const uint8_t unknown[]={60,61,79,192,255};
-    for(size_t i=0;i<sizeof(unknown);i++) {
+    /* RFC 4253 section 11.4: before authentication every message but a
+     * userauth request earns UNIMPLEMENTED with its sequence number, known
+     * type or not. One value from every RFC 4250 range and the 83-89 gap;
+     * a second service request is the transport's, refused there. */
+    const uint8_t other[]={21,31,49,52,60,61,79,80,83,89,90,100,101,127,192,255};
+    for(size_t i=0;i<sizeof(other);i++) {
         reset_connection(); engine.authenticated=0; engine.rx.seq=6;
-        payload[0]=unknown[i]; payload[1]=0; size_t n=frame(wire,payload,2);
+        payload[0]=other[i]; payload[1]=0; size_t n=frame(wire,payload,2);
         CHECK(ssh_receive(&engine,wire,n)==n && !engine.closed && !engine.authenticated);
         CHECK(engine.out_len==16 && engine.output[5]==3 && engine.output[9]==6);
     }
-    reset_connection(); engine.authenticated=0;
-    payload[0]=90; size_t n=frame(wire,payload,1);
-    ssh_receive(&engine,wire,n); CHECK(engine.closed);
 }
 static void exchange_refusals(void)
 {
@@ -379,10 +377,11 @@ static void transport_messages(void)
 }
 static void unknown_during_kex(void)
 {
-    /* RFC 4253 section 11.4 during an exchange: an unknown type earns
-     * UNIMPLEMENTED unless strict KEX is guarding the initial exchange; a
-     * known message out of order still disconnects. */
-    const uint8_t unknown[]={8,19,25,29,51,79,101,127,192,255};
+    /* RFC 4253 section 11.4 during an exchange: any message this state does
+     * not handle earns UNIMPLEMENTED, known type or not, unless strict KEX
+     * is guarding the initial exchange. One value from every RFC 4250 range
+     * and the 83-89 gap; KEXINIT and ECDH_INIT are the handled ones. */
+    const uint8_t unknown[]={5,6,7,8,19,21,25,29,31,49,50,51,52,60,79,80,83,89,90,100,101,127,192,255};
     for(size_t i=0;i<sizeof(unknown);i++) {
         fresh_client(); client_kexinit(0); engine.out_len=0; engine.rx.seq=9;
         payload[0]=unknown[i]; size_t n=frame(wire,payload,1);
@@ -395,14 +394,6 @@ static void unknown_during_kex(void)
             CHECK(ssh_receive(&engine,wire,n)==n && !engine.closed && engine.kex==2);
             CHECK(engine.out_len==16 && engine.output[5]==3 && engine.output[9]==9);
         }
-    }
-    const uint8_t known[]={5,6,7,21,30,49,50,80,90,100};
-    for(size_t i=0;i<sizeof(known);i++) {
-        fresh_client(); client_kexinit(0);
-        payload[0]=known[i]; size_t n=frame(wire,payload,1);
-        ssh_receive(&engine,wire,n); CHECK(engine.closed);
-        reset_connection(); engine.kex=2;
-        ssh_receive(&engine,wire,n); CHECK(engine.closed);
     }
 }
 static void identification(void)

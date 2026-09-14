@@ -154,11 +154,12 @@ void ssh_connection_packet(ssh_engine *s, const uint8_t *p, size_t n)
 {
     uint8_t type = p[0];
     if (!s->authenticated) {
-        /* A connection-protocol message before authentication is a state
-         * violation by a peer that knows the message; anything else is a
-         * message this server does not know. */
+        /* Before authentication the only message this state handles is a
+         * userauth request; everything else, known type or not, earns
+         * UNIMPLEMENTED (RFC 4253 section 11.4), as OpenSSH answers. The
+         * authentication deadline and failure count bound a peer that keeps
+         * sending them. */
         if (type == 50) auth(s, p, n);
-        else if (type >= 80 && type <= 100) ssh_disconnect(s, 2, "authentication required");
         else ssh_unimplemented(s);
         return;
     }

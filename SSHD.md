@@ -96,10 +96,11 @@ counterpart there, and resets each direction's packet sequence at NEWKEYS
 when strict KEX is negotiated. Under strict KEX the initial exchange refuses
 IGNORE, DEBUG and UNIMPLEMENTED, as OpenSSH does; a rekey, and a peer that
 did not negotiate strict KEX, accept them at any time after identification
-(RFC 4253 section 11). An unknown message type is answered with
-UNIMPLEMENTED wherever it arrives, before authentication or during an
-exchange, except that strict KEX ends the initial exchange on any unexpected
-packet; a known message out of order disconnects. The client identification line may be the RFC's full
+(RFC 4253 section 11). Any message the current state does not handle,
+known type or not, is answered with UNIMPLEMENTED, before authentication
+and during an exchange alike, as OpenSSH answers; the one exception is
+strict KEX, which ends the initial exchange on any unexpected packet. The
+rule names no message numbers. The client identification line may be the RFC's full
 255 bytes including CRLF. Extension-info is not advertised. Cipher and
 MAC state belong to separate receive/transmit contexts.
 
@@ -498,6 +499,33 @@ TERM read-back and a second pass with `--skip-fixture`; the kernel suite
 passes 30 + 32 + 3, the boot's log carries no fault, and read-only ext2
 checks of the copied root and home partitions pass. Strict build and diff
 checks pass. Not deployed to the P5.
+
+## Review round 9 — 2026-09-14
+
+Two findings against `10baf57`:
+
+- The "known message" predicate, on its fourth round, still held the
+  unassigned 83–89 gap. It is gone: before authentication and during an
+  exchange alike, any message the state does not handle is answered with
+  UNIMPLEMENTED, known type or not, as OpenSSH answers; strict initial KEX
+  stays the one disconnect. A rule that names no numbers has no range to
+  be off by. The fixture sends one value from every RFC 4250 range and the
+  gap in each state; the round-8 engine fails 82 of those checks.
+- A `sshd.conf` the ladder names but cannot open was accepted as absent,
+  so the daemon listened on 22 with the operator's file unread. The port
+  logic is `configured_port`, which resolves and then reads; only genuine
+  absence permits the default, and an unreadable file refuses startup. The
+  daemon loop harness gained a `port` group scripting the ladder: absent,
+  unreadable, truncated, a valid port, an empty file, and invalid values.
+  A guest cannot produce "named but unopenable" on ext2 without a
+  permissions model, so that proof is the harness's.
+
+Host ASan/UBSan passes **2204 engine checks**, five daemon regression groups
+and the full OpenSSH interoperability suite. Private 8-core QEMU passes
+**2204 guest SSH checks** and the full 3 MiB/rekey/PTY probe; the kernel
+suite passes 30 + 32 + 3, the boot's log carries no fault, and read-only
+ext2 checks of the copied root and home partitions pass. Strict build and
+diff checks pass. Not deployed to the P5.
 
 ## References
 

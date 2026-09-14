@@ -16,7 +16,7 @@ root = Path(__file__).resolve().parents[1]
 source = Path(sys.argv[1]).read_text() if len(sys.argv)>1 else (root / 'userland/apps/sshd/sshd.c').read_text()
 
 def function(name):
-    m = re.search(r'static (?:int|void) ' + name + r'\(void\)\s*\{', source)
+    m = re.search(r'static [\w ]+ ' + name + r'\([^)]*\)\s*\{', source)
     assert m, name
     end, depth = m.end(), 1
     while depth:
@@ -40,7 +40,26 @@ program = r'''
 #include <string.h>
 #include "os64/syscall_numbers.h"
 #include "os64/signal.h"
+#include <stdbool.h>
+#include "os64/str.h"
+#include "os64/conf.h"
 #define CHILD_RING_CAP 65536u
+/* The configuration ladder, scripted: whether sshd.conf resolves, what the
+ * read returns, and the port line it delivers. */
+static int conf_found; static int64_t conf_rc; static const char *conf_value, *last_log;
+bool os64_streq(const char *a,const char *b) {return !strcmp(a,b);}
+int64_t os64_conf_find(const char *name,char *out,size_t cap) {
+ assert(!strcmp(name,"sshd.conf") && cap>=OS64_CONF_PATH_MAX);
+ if(!conf_found)return OS64_CONF_NO_FILE;
+ strcpy(out,"/home/sshd.conf");return 0;
+}
+int64_t os64_conf_read(const char *path,os64_conf_fn fn,void *user) {
+ assert(!strcmp(path,"/home/sshd.conf"));
+ if(conf_rc<0)return conf_rc;
+ if(conf_value && !fn("port",conf_value,user))return 1;
+ return conf_value?1:0;
+}
+static void log_line(const char *text) {last_log=text;}
 static ssh_engine engine;
 static uint32_t input_head,credited;
 static int64_t child=7,master;
@@ -104,6 +123,7 @@ static int64_t os64_reap(int32_t *status) {(void)status;return 0;}
 void ssh_send_exit(ssh_engine *s,uint32_t status) {(void)s;(void)status;assert(0);}
 '''
 program += resize + '\n' + function('flush') + '\nstatic void loop(void) {\n' + body + '\n}\n'
+program += function('port_setting') + '\n' + function('configured_port') + '\n'
 program += r'''
 static void reset(void) {
  memset(&engine,0,sizeof(engine));memset(streams,0,sizeof(streams));
@@ -146,6 +166,19 @@ int main(int argc,char **argv) {
   reset();master=-1;engine.started=0;resize_terminal();
   assert(!resize_calls && resize_completed==1 && resize_success);
   engine.started=1;resize_terminal();assert(!resize_calls && resize_completed==2 && !resize_success);
+ } else if(!strcmp(argv[1],"port")) {
+  /* Only genuine absence permits the default port. */
+  conf_found=0;conf_rc=OS64_CONF_NO_FILE;conf_value=0;last_log=0;
+  assert(configured_port()==22 && !last_log);
+  conf_found=1;conf_rc=OS64_CONF_NO_FILE;
+  assert(configured_port()==0 && last_log && strstr(last_log,"unreadable"));
+  conf_found=1;conf_rc=OS64_CONF_TRUNCATED;last_log=0;
+  assert(configured_port()==0 && last_log);
+  conf_found=1;conf_rc=0;conf_value="2222";last_log=0;
+  assert(configured_port()==2222 && !last_log);
+  conf_value=0;assert(configured_port()==22);
+  conf_value="70000";assert(configured_port()==0);
+  conf_value="22x";assert(configured_port()==0);
  } else assert(0);
  printf("sshd session %s PASS\n",argv[1]);
 }
@@ -156,7 +189,8 @@ with tempfile.TemporaryDirectory(prefix='sshd-session-') as directory:
     subprocess.run(['cc', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                     '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-no-pie',
                     '-I'+str(root / 'userland/apps/sshd'), '-I'+str(root / 'abi/include'),
+                    '-I'+str(root / 'userland/libos64/include'),
                     str(work / 'test.c'),
                     '-o', str(work / 'test')], check=True)
-    results = [subprocess.run([str(work / 'test'), case]).returncode for case in ('flush','close','fair','resize')]
+    results = [subprocess.run([str(work / 'test'), case]).returncode for case in ('flush','close','fair','resize','port')]
     raise SystemExit(any(results))

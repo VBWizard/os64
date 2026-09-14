@@ -407,13 +407,25 @@ static bool port_setting(const char *name, const char *value, void *user)
     }
     *port = p <= 65535 ? p : 0; return *port != 0;
 }
+/* The port sshd.conf configures, or 0 with the reason logged. Resolve, then
+ * read: only a file the ladder does not name permits the default. One it
+ * names but cannot read is the operator's word unread, and listening on 22
+ * anyway would be inventing a configuration. */
+static int configured_port(void)
+{
+    uint32_t port = 22; char conf_path[OS64_CONF_PATH_MAX];
+    int found = os64_conf_find("sshd.conf", conf_path, sizeof(conf_path)) == 0;
+    int64_t config = found ? os64_conf_read(conf_path, port_setting, &port) : OS64_CONF_NO_FILE;
+    if (found && config == OS64_CONF_NO_FILE) { log_line("sshd: sshd.conf found but unreadable; startup refused"); return 0; }
+    if (!port || (found && config < 0)) { log_line("sshd: invalid sshd.conf"); return 0; }
+    return (int)port;
+}
 int main(int argc, char **argv)
 {
     if (argc == 2 && os64_streq(argv[1], "-session")) return session();
     if (argc != 1) { log_line("usage: sshd (port in sshd.conf)"); return 2; }
-    uint32_t port = 22;
-    int64_t config = os64_conf_find_read("sshd.conf", port_setting, &port, 0, 0);
-    if ((!port) || (config < 0 && config != OS64_CONF_NO_FILE)) { log_line("sshd: invalid sshd.conf"); return 2; }
+    uint32_t port = (uint32_t)configured_port();
+    if (!port) return 2;
     os64_netdest_t local = {.ip=0, .port=(uint16_t)port, .protocol=OS64_NET_TCP};
     int64_t listener = os64_net_announce(&local);
     if (listener < 0) { log_line("sshd: cannot announce configured port"); return 1; }
