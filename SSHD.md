@@ -184,7 +184,9 @@ wait. Backpressured network output also has a finite no-progress deadline.
   This is terminal output adaptation; exec stdout/stderr stay byte-exact.
 - An exec request with an allocated PTY is refused; the interactive path is
   `pty-req` followed by `shell`. Shell requests without a PTY are refused.
-  `pty-req` records TERM and dimensions; `window-change` resizes the STREAM
+  `pty-req` records TERM and dimensions, and the seated shell is spawned
+  with TERM set to that name when it is a plain printable one (a value off
+  the wire is data until it passes that test); `window-change` resizes the STREAM
   PTY. Nonzero dimensions must fit the kernel's 2–512 columns and 2–256
   rows; zero preserves the last accepted component (or initial default).
   A live resize commits geometry and reports success only after the PTY
@@ -477,6 +479,25 @@ second pass with `--skip-fixture`; the kernel suite passes 30 + 32 + 3, the
 boot's log carries no fault, and read-only ext2 checks of the copied root
 and home partitions pass. Strict build and diff checks pass. Not deployed
 to the P5.
+
+## Review round 8 — 2026-09-14
+
+One finding against `b89807e`: the accepted `pty-req`'s terminal type never
+reached the shell. `ssh_term_env` answers it as a TERM value only when it
+is a plain printable name without `=`; the daemon sets TERM before the
+seated spawn, so the shell and everything it runs inherit it, and the host
+adapter does the same. No os64 program reads TERM yet; the value came off
+the wire with the PTY and the cost is one validated setenv. The fixture
+checks the rule both ways, and the live probe reads `$TERM` back through
+the guest PTY.
+
+Host ASan/UBSan passes **2023 engine checks**, the four daemon regression
+groups and the full OpenSSH interoperability suite. Private 8-core QEMU
+passes **2023 guest SSH checks**, the full 3 MiB/rekey/PTY probe with the
+TERM read-back and a second pass with `--skip-fixture`; the kernel suite
+passes 30 + 32 + 3, the boot's log carries no fault, and read-only ext2
+checks of the copied root and home partitions pass. Strict build and diff
+checks pass. Not deployed to the P5.
 
 ## References
 

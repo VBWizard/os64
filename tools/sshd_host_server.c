@@ -26,7 +26,11 @@ static int spawn(int *input, int out[2], int shell)
     if (shell) {
         struct winsize size = {.ws_row=s.rows, .ws_col=s.cols};
         pid = forkpty(input, NULL, NULL, &size);
-        if (!pid) { execl("/bin/sh", "sh", "-i", (char *)NULL); _exit(127); }
+        if (!pid) {
+            const char *term = ssh_term_env(&s);
+            if (term) setenv("TERM", term, 1);
+            execl("/bin/sh", "sh", "-i", (char *)NULL); _exit(127);
+        }
         out[0] = *input; out[1] = -1;
     } else {
         int in[2], stdout_pipe[2], stderr_pipe[2];

@@ -66,6 +66,14 @@ static void reply(ssh_engine *s, int success)
     ssh_put_byte(&w, success ? 99 : 100); ssh_put_u32(&w, s->peer_channel);
     ssh_packet_send(s, p, w.n);
 }
+const char *ssh_term_env(const ssh_engine *s)
+{
+    /* The peer's terminal type is data off the wire; it becomes TERM only
+     * as a plain printable name, the shape every real one has. */
+    if (!s->pty || !s->term[0]) return 0;
+    for (const char *c = s->term; *c; c++) if (*c <= 32 || *c > 126 || *c == '=') return 0;
+    return s->term;
+}
 void ssh_start_result(ssh_engine *s, int success)
 {
     s->started = success; reply(s, success);

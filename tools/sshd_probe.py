@@ -90,6 +90,9 @@ def main():
         raise AssertionError(('PTY did not produce', needle, bytes(transcript[-2000:])))
     try:
         until(b'husk>')
+        # The requested terminal type must reach the seated shell as TERM.
+        os.write(master, b'echo TERM=$TERM\r')
+        until(b'\r\nTERM=xterm\r\n')
         os.write(master, b'cat /proc/self/tty\r')
         until(b'cols')
         time.sleep(.3)

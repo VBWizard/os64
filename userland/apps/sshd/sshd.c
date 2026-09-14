@@ -205,6 +205,10 @@ static int spawn_command(int interactive)
     if (interactive) {
         master = (int32_t)os64_pty_create_stream((uint16_t)engine.cols, (uint16_t)engine.rows);
         if (master < 0) return 0;
+        /* The environment copies downward at spawn, so TERM set here reaches
+         * the seated shell and everything it runs. */
+        const char *term = ssh_term_env(&engine);
+        if (term) os64_setenv("TERM", term);
         char *args[] = {"/bin/husk", 0};
         child = os64_spawn_seated("/bin/husk", args, master);
         child_input = child_output = master;

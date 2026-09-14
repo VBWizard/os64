@@ -224,6 +224,29 @@ static void resize_results(void)
     request_dimensions("window-change",512,256,0); ssh_resize_result(&engine,1);
     CHECK(engine.cols==512 && engine.rows==256);
 }
+static void request_pty_term(const char *term)
+{
+    ssh_writer w={payload,0,sizeof(payload),0};
+    ssh_put_byte(&w,98); ssh_put_u32(&w,0); ssh_put_text(&w,"pty-req"); ssh_put_byte(&w,0);
+    ssh_put_text(&w,term); ssh_put_u32(&w,80); ssh_put_u32(&w,24); ssh_put_u32(&w,0); ssh_put_u32(&w,0);
+    uint8_t modes=0; ssh_put_string(&w,&modes,1);
+    size_t n=frame(wire,payload,w.n); CHECK(ssh_receive(&engine,wire,n)==n);
+}
+static void term_env(void)
+{
+    /* TERM reaches the shell only as a plain printable name. */
+    reset_connection(); engine.channel=1;
+    CHECK(!ssh_term_env(&engine));
+    request_pty_term("xterm-256color");
+    CHECK(engine.pty && ssh_term_env(&engine)==engine.term);
+    CHECK(ssh_equal((ssh_reader){(const uint8_t *)engine.term,strlen(engine.term),0},"xterm-256color"));
+    const char *bad[]={"","vt 100","TERM=xterm","x\x7fy","\xe9term"};
+    for(size_t i=0;i<sizeof(bad)/sizeof(bad[0]);i++) {
+        reset_connection(); engine.channel=1;
+        request_pty_term(bad[i]);
+        CHECK(engine.pty && !ssh_term_env(&engine));
+    }
+}
 static void deferred_close(void)
 {
     reset_connection(); engine.channel=1; engine.peer_channel=17; engine.kex=1;
@@ -444,7 +467,7 @@ int main(int argc, char **argv)
 #else
     (void)argc; (void)argv;
 #endif
-    primitives(); codecs(); framing(); channels(); refused_dimensions(); dimension_bounds(); resize_results(); deferred_close(); deferred_reservation(); authentication(); preauth_messages(); exchange_refusals(); transport_messages(); unknown_during_kex(); identification();
+    primitives(); codecs(); framing(); channels(); refused_dimensions(); dimension_bounds(); resize_results(); term_env(); deferred_close(); deferred_reservation(); authentication(); preauth_messages(); exchange_refusals(); transport_messages(); unknown_during_kex(); identification();
     report("sshtest: %d checks, %d failures\n",checks,failed);
     return failed?1:0;
 }
