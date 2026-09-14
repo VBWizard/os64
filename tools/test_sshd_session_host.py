@@ -49,6 +49,7 @@ static int64_t resize_return;
 typedef struct {uint8_t bytes[CHILD_RING_CAP];uint32_t head,tail;int eof,error,fd;} child_stream;
 static child_stream streams[2];
 static unsigned scenario,reads,turn,period,phase,sends[2],disconnected;
+static unsigned chunk=1,credits=40; /* window bytes per replenishment, and how many reads grant one */
 static uint64_t clock_ms;
 static int64_t write_result;
 static uint8_t wire[4096];static size_t wire_len;
@@ -69,8 +70,8 @@ static int64_t os64_read_for(int fd,void *p,size_t n,unsigned ms) {
   if(reads==1 || (scenario==0 && reads<=3)) {*(uint8_t *)p=(uint8_t)reads;return 1;}
   return OS64_ERR_TIMEOUT;
  }
- if(reads>40)return 0;
- if(reads%period==phase) engine.peer_window+=1;
+ if(reads>credits)return 0;
+ if(reads%period==phase) engine.peer_window+=chunk;
  return OS64_ERR_TIMEOUT;
 }
 size_t ssh_receive(ssh_engine *s,const uint8_t *p,size_t n) {
@@ -132,6 +133,12 @@ int main(int argc,char **argv) {
    loop();assert(sends[0]>0 && sends[1]>0);
    assert(sends[0]<=sends[1]+1 && sends[1]<=sends[0]+1);
   }
+  /* Credit just over one 4096-byte staging buffer: the stream that sends
+   * the big block must not be first again on the next replenishment. */
+  chunk=4097;credits=8;period=1;phase=0;
+  reset();streams[0].tail=streams[1].tail=CHILD_RING_CAP;
+  loop();assert(sends[0]+sends[1]==8*4097);
+  assert(sends[0]<=sends[1]+4096 && sends[1]<=sends[0]+4096);
  } else if(!strcmp(argv[1],"resize")) {
   reset();engine.cols=engine.resize_cols=103;engine.rows=engine.resize_rows=41;
   resize_return=-1;resize_terminal();assert(resize_calls==1 && resize_completed==1 && !resize_success);

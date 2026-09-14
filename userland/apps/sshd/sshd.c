@@ -347,7 +347,7 @@ static int session(void)
             if (head != credited && SSH_OUTPUT_CAP-engine.out_len > 256) {
                 ssh_input_consumed(&engine, head-credited); credited = head;
             }
-            unsigned first_stream = next_stream;
+            unsigned first_stream = next_stream; int rotated = 0;
             for (unsigned pass = 0; pass < 2; pass++) {
                 unsigned i = (first_stream + pass) % 2;
                 child_stream *stream = &streams[i];
@@ -363,9 +363,13 @@ static int session(void)
                 }
                 if (out_len[i]) {
                     size_t n = ssh_send_data(&engine, out[i], out_len[i], i);
-                    /* Rotate on credit spent, not idle turns: sparse window
-                     * updates must not repeatedly favor the same stream. */
-                    if (n) next_stream = i ^ 1u;
+                    /* Rotate once per pass, on credit spent: the first stream
+                     * to send hands priority to the other. Idle turns must
+                     * not rotate, or sparse credit favors one stream; a
+                     * second send in the same pass must not rotate either,
+                     * or credit just over one staging buffer splits 4096:1
+                     * the same way every time. */
+                    if (n && !rotated) { next_stream = i ^ 1u; rotated = 1; }
                     out_len[i] -= n; memmove(out[i], out[i]+n, out_len[i]);
                 }
             }

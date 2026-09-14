@@ -141,8 +141,10 @@ always release it; the budget's worst case fits the queue with room to spare.
 
 The server advertises a 2 MiB receive window and 32768-byte data packets.
 Peer window and maximum-packet limits constrain outgoing data. stdout and
-stderr take turns spending shared credit; priority advances when a stream
-sends bytes, so sparse window updates cannot starve the other stream. Window
+stderr take turns spending shared credit; priority advances once per service
+pass, away from the first stream that sent bytes, so neither sparse window
+updates nor credit just over one staging buffer can keep favoring one
+stream. Window
 addition overflow, data exceeding the advertised window, invalid channel
 numbers, malformed lengths, and invalid protocol transitions are refused.
 Transport packet length is capped at 35000 bytes. KEX name-lists are capped
@@ -393,6 +395,23 @@ kernel suite passes 30 pre-boot and 32 post-boot tests, and the boot's log
 carries no fault. Strict build, diff/stale-reference checks and read-only
 ext2 checks of the copied root and home partitions pass. These fixes have
 not been deployed to the P5.
+
+## Review round 4 — 2026-09-14
+
+One finding against `4b087aa`: within one service pass both streams could
+send, and the second send handed priority straight back to the first, so a
+replenishment just over the 4096-byte staging buffer split 4096:1 the same
+way on every update. The daemon now rotates once per pass, away from the
+first stream that sent bytes; the host adapter mirrors the rule. The loop
+harness gained an 8-replenishment, 4097-byte credit case that the old daemon
+fails at a 32768:8 split and the new one passes at 16388:16388.
+
+Host ASan/UBSan passes **1776 engine checks**, the four daemon regression
+groups and the full OpenSSH interoperability suite. Private 8-core QEMU
+passes **1776 guest SSH checks**, the full 3 MiB/rekey/PTY probe and the
+kernel suite (30 + 32 + 3), with no fault in the boot's log and clean
+read-only ext2 checks of the copied root and home partitions. Strict build
+and diff checks pass. Not deployed to the P5.
 
 ## References
 

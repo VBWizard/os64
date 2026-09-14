@@ -95,7 +95,7 @@ static void serve(int sock, const char *pubfile)
             } else if (errno!=EAGAIN && errno!=EINTR) { close(input); input=-1; }
         }
         if (eof && !pending_len && input>=0 && !s.pty) { close(input); input=-1; }
-        unsigned first_stream=next_stream;
+        unsigned first_stream=next_stream; int rotated=0;
         for (unsigned pass=0;pass<2;pass++) {
             unsigned i=(first_stream+pass)%2;
             size_t cap=sizeof(output); if (cap>s.peer_window) cap=s.peer_window;
@@ -105,7 +105,9 @@ static void serve(int sock, const char *pubfile)
             if (!got || (got<0 && errno==EIO && s.pty)) { close(out[i]); out[i]=-1; }
             else if (got>0) {
                 if (ssh_send_data(&s,output,(size_t)got,i)!=(size_t)got) abort();
-                next_stream=i^1u;
+                /* The daemon's rule: the first sender in a pass hands
+                 * priority to the other stream, and only the first. */
+                if (!rotated) { next_stream=i^1u; rotated=1; }
             }
         }
         if (!closing && !s.sent_close && rekey_bytes && s.established && !s.kex && (s.tx.bytes >= rekey_bytes || s.rx.bytes >= rekey_bytes)) ssh_rekey(&s);
