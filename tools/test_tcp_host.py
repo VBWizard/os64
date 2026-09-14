@@ -22,6 +22,7 @@ s='''#include <stdint.h>
 #define OS64_NET_ERR_NO_RESOURCES 1
 #define OS64_NET_ERR_REFUSED 2
 #define OS64_NET_ERR_TIMEOUT 3
+#define OS64_NET_ERR_PORT_TAKEN 4
 #define THREAD_STATE_ISLEEP 1
 #define SIGSLEEP 0
 #define IPV4_PROTO_TCP 6

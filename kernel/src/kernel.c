@@ -77,6 +77,7 @@ extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
 extern bool kRunTestrun; // launch /tests/testrun, the ring-3 half of the suite
 extern bool kRunCron;    // launch /bin/cron, the scheduler; the crontab says what it runs
+extern bool kRunTelnetd; // launch /bin/telnetd, the inbound shell (SERVERS.md)
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
 extern bool kTestPageFault; // TESTPF: deliberate wild-kernel-pointer #PF post-tests
@@ -952,6 +953,24 @@ void kernel_init()
         }
         else
             printf("  /bin/cron launch failed (not on the image?)\n");
+    }
+
+    // telnetd (2026-09-12, SERVERS.md § 3): the same arrangement as cron —
+    // the kernel starts it because the boot entry asked, not seated on any
+    // terminal (it hands out terminals of its own: a STREAM pty per
+    // session). Its own 0/1/2 are ktask's, so its diagnostics land on the
+    // console; each session's shell is seated on that session's slave.
+    if (kRunTelnetd && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/telnetd (the inbound shell) ...\n");
+        task_t *telnetdTask = task_create("/bin/telnetd", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (telnetdTask)
+        {
+            telnetdTask->autoReap = true;
+            scheduler_submit_new_task(telnetdTask);
+        }
+        else
+            printf("  /bin/telnetd launch failed (not on the image?)\n");
     }
 
     // THE LATE PHASE (2026-08-29). The slow post-boot tests, moved off the

@@ -49,6 +49,15 @@ int main(void)
 	  parse(b, n, &o);
 	  check(o.mss == 1460 && o.wscale_sent && o.wscale == 5, "our own SYN parses back"); }
 
+	// What our SYN-ACK sends to a peer that offered no shift: MSS alone,
+	// one whole word, no scale option for it to misread.
+	{ uint8_t b[TCP_SYN_OPTIONS_MSS_LEN];
+	  size_t n = tcp_syn_options_write_mss(b, 1460);
+	  check(n == 4, "write_mss: 4 bytes");
+	  check(b[0] == 2 && b[1] == 4 && b[2] == 0x05 && b[3] == 0xb4, "write_mss: the MSS option alone");
+	  parse(b, n, &o);
+	  check(o.mss == 1460 && !o.wscale_sent, "write_mss parses back with no shift"); }
+
 	// What Linux sends: MSS, SACK-permitted, timestamps, NOP, window scale.
 	{ uint8_t b[] = {2, 4, 0x05, 0xb4, 4, 2, 8, 10, 1, 2, 3, 4, 5, 6, 7, 8, 1, 3, 3, 7};
 	  parse(b, sizeof b, &o);

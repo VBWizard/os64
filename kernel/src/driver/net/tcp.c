@@ -36,6 +36,11 @@ tcp_stats_t kTcpStats;
 // Exported (tcp.h) so /sys/net/tcp can walk what tcp_poll walks.
 tcp_conn_t* kTcpConnList = NULL;
 spinlock_t kTcpListLock;
+// The announced ports (tcp.h § the listener), and the closed rows waiting
+// for tcp_poll to free them once nobody is inside and the morgue linger has
+// passed. Both under kTcpListLock.
+tcp_listener_t* kTcpListenerList = NULL;
+static tcp_listener_t* s_closed_listeners;
 // The dynamic range, 49152..65535 — same as UDP's (RFC 6335).
 #define TCP_EPHEMERAL_BASE   49152u
 #define TCP_EPHEMERAL_COUNT  16384u
@@ -87,9 +92,45 @@ static inline bool tcp_unacked(const tcp_conn_t* c) { return seq_gt(c->snd_max, 
 static inline uint32_t tcp_bytes_in_flight(const tcp_conn_t* c)
 {
 	uint32_t span = c->snd_max - c->snd_una;
-	uint32_t units = (c->state == TCP_SYN_SENT ? 1 : 0) +
+	uint32_t units = ((c->state == TCP_SYN_SENT || c->state == TCP_SYN_RECEIVED) ? 1 : 0) +
 	                 (c->snd_fin_sent && seq_leq(c->snd_una, c->snd_fin_seq) ? 1 : 0);
 	return span > units ? span - units : 0;
+}
+
+// A listener-owned conn stops being one: struck from the accept queue if it
+// was there, its promise released from the backlog, and DETACHED — nobody
+// owns it now, so the reaper may take it. Caller holds c->lock; the
+// listener's lock nests inside it (the order everywhere: list, conn,
+// listener). Both writers of c->listener = NULL hold l->lock, and a caller
+// that read it under c->lock alone re-checks here.
+static void tcp_listener_disown(tcp_conn_t* c)
+{
+	tcp_listener_t* l = c->listener;
+	if (l == NULL)
+		return;
+	spinlock_acquire(&l->lock);
+	if (c->listener == l)
+	{
+		tcp_conn_t** pp = &l->queue_head;
+		tcp_conn_t* prev = NULL;
+		while (*pp != NULL && *pp != c)
+		{
+			prev = *pp;
+			pp = &(*pp)->accept_next;
+		}
+		if (*pp == c)
+		{
+			*pp = c->accept_next;
+			if (l->queue_tail == c)
+				l->queue_tail = prev;
+			c->accept_next = NULL;
+		}
+		if (l->pending > 0)
+			l->pending--;
+		c->listener = NULL;
+		c->detached = true;
+	}
+	spinlock_release(&l->lock);
 }
 
 static void tcp_abort(tcp_conn_t* c)
@@ -99,6 +140,7 @@ static void tcp_abort(tcp_conn_t* c)
 	c->send_timer = TCP_TIMER_IDLE;
 	c->rtt_timing = false;
 	c->ack_owed = false;   // nothing is owed to a peer we are done with
+	tcp_listener_disown(c); // a death before accept releases the backlog slot
 }
 
 // The initial sequence number. RFC 793 specified a clock-based ISN, and
@@ -189,7 +231,12 @@ static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
                                   const void* data, uint16_t data_len, bool syn_options)
 {
 	uint8_t seg[TCP_HDR_MIN + TCP_SYN_OPTIONS_LEN + TCP_MSS];
-	uint16_t hdr_len = TCP_HDR_MIN + (syn_options ? TCP_SYN_OPTIONS_LEN : 0);
+	// The option space is the SYN exchange's: our MSS, and our window shift
+	// when we may offer one (syn_offers_wscale — always on a dial's SYN,
+	// and on a SYN-ACK only to a peer whose SYN offered its own).
+	uint16_t opts_len = syn_options ? (c->syn_offers_wscale ? TCP_SYN_OPTIONS_LEN
+	                                                        : TCP_SYN_OPTIONS_MSS_LEN) : 0;
+	uint16_t hdr_len = TCP_HDR_MIN + opts_len;
 
 	net_write16(seg + 0, c->local_port);
 	net_write16(seg + 2, c->peer_port);
@@ -209,8 +256,10 @@ static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 	                            // 1981 idea that modern stacks treat as a
 	                            // security footgun and applications ignore)
 
-	if (syn_options)
+	if (opts_len == TCP_SYN_OPTIONS_LEN)
 		tcp_syn_options_write(seg + TCP_HDR_MIN, TCP_MSS, TCP_RCV_WSCALE);
+	else if (opts_len == TCP_SYN_OPTIONS_MSS_LEN)
+		tcp_syn_options_write_mss(seg + TCP_HDR_MIN, TCP_MSS);
 	if (data_len)
 		memcpy(seg + hdr_len, (void*)data, data_len);
 
@@ -419,6 +468,19 @@ static ipv4_tx_t tcp_send_data_segment(tcp_conn_t* c, uint32_t off, uint32_t len
 static void tcp_send_syn(tcp_conn_t* c)
 {
 	if (tcp_send_segment(c, c->snd_nxt, TCP_SYN, NULL, 0, true) == IPV4_TX_INVALID)
+		return;
+	c->snd_nxt++;
+	c->snd_max = c->snd_nxt;
+	tcp_rto_arm(c);
+	tcp_rtt_start(c, c->snd_max);
+}
+
+// The passive side's half of the handshake: our SYN acknowledging theirs.
+// It consumes a sequence number and arms the same timer a SYN does, so a
+// lost SYN-ACK is resent by the clock like anything else.
+static void tcp_send_syn_ack(tcp_conn_t* c)
+{
+	if (tcp_send_segment(c, c->snd_nxt, TCP_SYN | TCP_ACK, NULL, 0, true) == IPV4_TX_INVALID)
 		return;
 	c->snd_nxt++;
 	c->snd_max = c->snd_nxt;
@@ -644,6 +706,8 @@ static void tcp_retransmit_head(tcp_conn_t* c)
 	ipv4_tx_t how;
 	if (c->state == TCP_SYN_SENT)
 		how = tcp_send_segment(c, c->snd_una, TCP_SYN, NULL, 0, true);
+	else if (c->state == TCP_SYN_RECEIVED)
+		how = tcp_send_segment(c, c->snd_una, TCP_SYN | TCP_ACK, NULL, 0, true);
 	else
 	{
 		uint32_t flight = tcp_bytes_in_flight(c);
@@ -923,9 +987,12 @@ static void tcp_absorb_held(tcp_conn_t* c)
 // caller once the lock is gone. Caller holds c->lock.
 static thread_t* tcp_claim_reader_if_ready(tcp_conn_t* c)
 {
+	// `handles == 0` is a condition too: the last handle closed under a
+	// pinned sibling's park, and it wakes to TCP_ERR_CLOSED (tcp.h pins).
 	thread_t* r = c->reader;
 	if (r == NULL || r->threadState != THREAD_STATE_ISLEEP ||
-	    !(c->rcv_count > 0 || c->rcv_fin || c->reset || c->state == TCP_CLOSED))
+	    !(c->rcv_count > 0 || c->rcv_fin || c->reset || c->state == TCP_CLOSED ||
+	      c->handles == 0))
 		return NULL;
 	c->reader = NULL;
 	return r;
@@ -935,7 +1002,8 @@ static thread_t* tcp_claim_writer_if_ready(tcp_conn_t* c)
 {
 	thread_t* w = c->writer;
 	if (w == NULL || w->threadState != THREAD_STATE_ISLEEP ||
-	    !(c->snd_count < TCP_SND_BUF || c->reset || c->state == TCP_CLOSED))
+	    !(c->snd_count < TCP_SND_BUF || c->reset || c->state == TCP_CLOSED ||
+	      c->handles == 0))
 		return NULL;
 	c->writer = NULL;
 	return w;
@@ -962,6 +1030,11 @@ static void tcp_input_wake_and_unlock(tcp_conn_t* c, uint64_t irqflags)
 	if (wake_reader) scheduler_wake_isleep_thread(wake_reader);
 	if (wake_writer) scheduler_wake_isleep_thread(wake_writer);
 }
+
+static tcp_conn_t* tcp_passive_open_locked(net_device_t* dev, tcp_listener_t* l,
+                                           uint32_t peer_ip, uint16_t peer_port,
+                                           uint32_t their_seq, uint16_t their_win,
+                                           const uint8_t* opts, size_t opts_len);
 
 void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
                const void* seg, uint16_t length)
@@ -1028,6 +1101,41 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 
 	if (c == NULL)
 	{
+		// A bare SYN — no ACK, no RST — at an announced port opens a door:
+		// it becomes a passive conn born in SYN_RECEIVED, listed like any
+		// other, and our SYN-ACK goes out under its lock. Anything else
+		// with nobody home is answered below. A full backlog or passive
+		// storage cap drops and counts the SYN; the peer's retry finds the
+		// door again if it has opened up by then.
+		//
+		// ONLY FOR A SYN ADDRESSED TO US BY NAME: ipv4_input also delivers
+		// the limited and the subnet broadcast, and a SYN to either would
+		// otherwise open a half-open conn on every machine listening on
+		// the port — one whose handshake can never complete, since the
+		// SYN-ACK comes back from a unicast address the peer never dialed.
+		// Sixteen such packets fill a backlog (Codex #101 rd5).
+		if ((flags & (TCP_SYN | TCP_ACK | TCP_RST)) == TCP_SYN &&
+		    dst_ip == kNetIPv4Address)
+		{
+			tcp_listener_t* l = kTcpListenerList;
+			while (l != NULL && (l->port != dst_port || l->closed))
+				l = l->next;
+			if (l != NULL)
+			{
+				c = tcp_passive_open_locked(dev, l, src_ip, src_port, seq, win_field,
+				                            p + TCP_HDR_MIN, (size_t)(hdr_len - TCP_HDR_MIN));
+				if (c == NULL)
+				{
+					spinlock_release_irqrestore(&kTcpListLock, irqflags);
+					return;
+				}
+				spinlock_acquire(&c->lock);
+				spinlock_release(&kTcpListLock);   // irqflags now belongs to c->lock
+				tcp_send_syn_ack(c);
+				spinlock_release_irqrestore(&c->lock, irqflags);
+				return;
+			}
+		}
 		spinlock_release_irqrestore(&kTcpListLock, irqflags);
 		// Nobody home. A segment for an unknown connection gets an RST —
 		// that is how the far side learns immediately instead of
@@ -1079,6 +1187,17 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		{
 			printd(DEBUG_NET, "tcp: RST for a SYN this connection did not send (ack 0x%x, ours 0x%x) — dropped\n",
 			       ack, c->snd_nxt);
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return;
+		}
+		// Half-open: only the peer that sent the SYN we answered can
+		// withdraw it, and its RST sits at exactly the number we expect
+		// next (RFC 793 §3.9's acceptability test, held to the strict
+		// reading a synchronized state gets below).
+		if (c->state == TCP_SYN_RECEIVED && seq != c->rcv_nxt)
+		{
+			printd(DEBUG_NET, "tcp: RST at seq 0x%x for a half-open conn expecting 0x%x — dropped\n",
+			       seq, c->rcv_nxt);
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return;
 		}
@@ -1141,6 +1260,12 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		c->snd_wl1 = seq;
 		c->snd_wl2 = ack;
 	}
+
+	// A handshake completed on an announced port wakes the listener's
+	// parked reader — claimed under the listener's lock at the moment the
+	// conn is queued, woken at the exit below once every lock is released
+	// (the discipline tcp_input_wake_and_unlock follows for readers).
+	thread_t* wake_acceptor = NULL;
 
 	switch (c->state)
 	{
@@ -1221,6 +1346,98 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 				       c->snd_wscale, c->rcv_wscale);
 			}
 			break;
+
+		case TCP_SYN_RECEIVED:
+			// The handshake's last packet, from the passive side. Their SYN
+			// again means our SYN-ACK was lost (or is still in flight) —
+			// answer it again; a SYN at any other number is a stranger,
+			// and gets the same challenge a synchronized state gives.
+			if (flags & TCP_SYN)
+			{
+				if (seq + 1 == c->rcv_nxt)
+					tcp_retransmit_head(c);
+				else
+					tcp_ack(c);
+				break;
+			}
+			if (!(flags & TCP_ACK))
+				break;
+			// The segment must be ACCEPTABLE before its ACK completes the
+			// handshake (RFC 793 §3.9 checks the sequence first): the ACK
+			// that finishes a passive open sits at exactly rcv_nxt — the byte
+			// after their SYN. A stale or forged packet carrying the right
+			// ack number but a sequence outside our window must NOT establish
+			// the connection and make accept hand out a stream that never
+			// validly shook hands (Codex #101 rd4). Re-announce and stay put.
+			if (seq != c->rcv_nxt)
+			{
+				printd(DEBUG_NET, "tcp: SYN_RECEIVED ack at seq 0x%x, expected 0x%x — out of window, dropped\n",
+				       seq, c->rcv_nxt);
+				tcp_ack(c);
+				spinlock_release_irqrestore(&c->lock, irqflags);
+				return;
+			}
+			// The ACK must be EXACTLY our SYN-ACK's successor — the same
+			// rule SYN_SENT applies to its answer, for the same reason: an
+			// incarnation of this tuple whose replies still roam the wire
+			// acknowledges a number this conn never sent (RFC 793 §3.9:
+			// RST at its own number, and the half-open conn stays put).
+			if (ack != c->snd_nxt)
+			{
+				printd(DEBUG_NET, "tcp: SYN_RECEIVED answer acks 0x%x, ours is 0x%x — a stale incarnation, RST\n",
+				       ack, c->snd_nxt);
+				spinlock_release_irqrestore(&c->lock, irqflags);
+				tcp_send_rst(dev, src_ip, dst_port, src_port, 0, ack, true);
+				return;
+			}
+			c->snd_una = ack;
+			c->recover_valid = false;
+			c->send_timer = TCP_TIMER_IDLE;
+			c->retries = 0;
+			c->rto_backed_off = false;
+			if (c->rtt_timing)
+			{
+				c->rtt_timing = false;
+				tcp_rtt_sample(c, (uint32_t)(kTicksSinceStart - c->snd_sent_at));
+			}
+			c->state = TCP_ESTABLISHED;
+			kTcpStats.connections_accepted++;
+			// Onto the listener's queue, unless the listener let go of this
+			// conn while the handshake was in flight (a close disowns and
+			// aborts, so a conn still owned here is one it still wants).
+			// Queued conns keep their backlog slot until read out.
+			{
+				tcp_listener_t* l = c->listener;
+				if (l != NULL)
+				{
+					spinlock_acquire(&l->lock);
+					if (c->listener == l)
+					{
+						c->accept_next = NULL;
+						if (l->queue_tail != NULL)
+							l->queue_tail->accept_next = c;
+						else
+							l->queue_head = c;
+						l->queue_tail = c;
+						l->accepted++;
+						thread_t* w = l->waiter;
+						if (w != NULL && w->threadState == THREAD_STATE_ISLEEP)
+						{
+							l->waiter = NULL;
+							wake_acceptor = w;
+						}
+					}
+					spinlock_release(&l->lock);
+				}
+			}
+			printd(DEBUG_NET, "tcp: accepted %u.%u.%u.%u:%u on port %u (their mss %u, win %u, shifts %u/%u)\n",
+			       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->local_port, c->snd_mss, win,
+			       c->snd_wscale, c->rcv_wscale);
+			// FALL THROUGH: the ACK that completes a handshake may carry the
+			// peer's first bytes, and the established handling below takes
+			// them (its ack arithmetic finds nothing new to retire — snd_una
+			// already equals the ack — and moves on to the data).
+			/* fall through */
 
 		case TCP_ESTABLISHED:
 		case TCP_FIN_WAIT_1:
@@ -1502,13 +1719,14 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	if (ack_was_owed && c->ack_owed && c->state != TCP_CLOSED)
 		tcp_ack(c);
 	tcp_input_wake_and_unlock(c, irqflags);
+	if (wake_acceptor != NULL)
+		scheduler_wake_isleep_thread(wake_acceptor);
 }
 
 // Give a port back to the draw. Caller holds kTcpListLock. Guarded because
 // only drawn ports live in the bitmap: a local port below the ephemeral
-// range (a listener's service port, when LISTEN arrives) was never claimed
-// there, and subtracting the base from it would underflow into a wild bit
-// index.
+// range (a listener's service port) was never claimed there, and
+// subtracting the base from it would underflow into a wild bit index.
 static void tcp_port_release_locked(uint16_t port)
 {
 	if (port >= TCP_EPHEMERAL_BASE)
@@ -1516,6 +1734,39 @@ static void tcp_port_release_locked(uint16_t port)
 		uint32_t bit = port - TCP_EPHEMERAL_BASE;
 		s_ephemeral_used[bit / 64] &= ~(1ULL << (bit % 64));
 	}
+}
+
+// A conn's funeral gives its port back only if the conn drew it: a passive
+// conn wears its LISTENER's port, and the listener holds that bit (when it
+// is in the range at all) until its own row is freed.
+// Is `port` still spoken for by a live listener or a live connection other
+// than `except`? Caller holds kTcpListLock. Only the SHARED-port paths ask
+// this (a listener's port, borrowed by every conn it accepts) — a dial owns
+// its drawn port alone, so it never needs the walk.
+static bool tcp_port_in_use_locked(uint16_t port, const tcp_conn_t* except)
+{
+	for (tcp_listener_t* l = kTcpListenerList; l != NULL; l = l->next)
+		if (l->port == port)
+			return true;
+	for (tcp_conn_t* c = kTcpConnList; c != NULL; c = c->next)
+		if (c != except && !c->tombstone && c->local_port == port)
+			return true;
+	return false;
+}
+
+static void tcp_conn_port_release_locked(const tcp_conn_t* c)
+{
+	// A dial drew a free port for itself alone — release it directly. A
+	// PASSIVE conn borrowed its listener's port, which other accepted conns
+	// (and, until it closes, the listener) may still hold, so its port bit
+	// is released only by the LAST user's funeral — otherwise a dial could
+	// draw a port a surviving passive stream is still using and forge its
+	// four-tuple (Codex #101 rd2). tcp_port_release_locked ignores a
+	// non-ephemeral port either way.
+	if (!c->passive)
+		tcp_port_release_locked(c->local_port);
+	else if (!tcp_port_in_use_locked(c->local_port, c))
+		tcp_port_release_locked(c->local_port);
 }
 
 // ── The list, and the tombstone queue threaded through it ──────────────────
@@ -1599,6 +1850,8 @@ static void tcp_heap_free_locked(void* p)
 // demux finds the state under the conn lock and answers with headers only.
 static void tcp_conn_strip_locked(tcp_conn_t* c)
 {
+	if (c->stripped)
+		return;
 	tcp_heap_free_locked(c->rcv_buf);
 	tcp_heap_free_locked(c->snd_buf);
 	c->rcv_buf = NULL;
@@ -1607,6 +1860,12 @@ static void tcp_conn_strip_locked(tcp_conn_t* c)
 	c->snd_count = 0;
 	c->snd_head = 0;
 	c->stripped = true;
+	if (c->passive)
+	{
+		if (kTcpStats.passive_buffered == 0)
+			panic("tcp: passive storage accounting underflow\n");
+		kTcpStats.passive_buffered--;
+	}
 }
 
 // CLOSED and detached: strip, give the port back, join the morgue queue,
@@ -1614,7 +1873,7 @@ static void tcp_conn_strip_locked(tcp_conn_t* c)
 static void tcp_conn_entomb_locked(tcp_conn_t* c, uint64_t now)
 {
 	tcp_conn_strip_locked(c);
-	tcp_port_release_locked(c->local_port);
+	tcp_conn_port_release_locked(c);
 	c->tombstone = true;
 	c->closed_at = now;
 	tcp_tomb_push_locked(c);
@@ -1634,6 +1893,11 @@ static void tcp_tomb_evict_over_cap_locked(void)
 	while (s_tomb_count > TCP_MORGUE_TOMBSTONES)
 	{
 		tcp_conn_t* evicted = s_tomb_head;
+		// A tombstone with an operation still inside it (tcp.h pins) is
+		// not freed under that operation; the cap is a soft one and the
+		// operation leaves within its backstop, having found handles == 0.
+		if (evicted->pins != 0)
+			break;
 		tcp_tomb_remove_locked(evicted);
 		tcp_list_unlink_locked(evicted);
 		spinlock_acquire(&evicted->lock);
@@ -1641,6 +1905,99 @@ static void tcp_tomb_evict_over_cap_locked(void)
 		tcp_heap_free_locked(evicted);
 		kTcpStats.connections_reaped++;
 	}
+}
+
+// ── The passive open (tcp.h § the listener; SERVERS.md § 1) ───────────────
+// A SYN has arrived at an announced port and nobody holds its four-tuple.
+// Caller holds kTcpListLock — the allocation, the listing and the backlog
+// claim are one critical section, exactly as a dial's are. Returns NULL
+// when the backlog or passive storage cap is full (the SYN is dropped; the
+// peer's retry will ask again). The conn is born in SYN_RECEIVED, owned by
+// the listener, its local port the listener's, with THEIR options parsed
+// by the same rules a dial applies to a SYN-ACK — and one rule of its own:
+// our shift is offered back only if theirs was offered (RFC 7323 §2.2).
+static tcp_conn_t* tcp_passive_open_locked(net_device_t* dev, tcp_listener_t* l,
+                                           uint32_t peer_ip, uint16_t peer_port,
+                                           uint32_t their_seq, uint16_t their_win,
+                                           const uint8_t* opts, size_t opts_len)
+{
+	spinlock_acquire(&l->lock);
+	bool storage_full = kTcpStats.passive_buffered >= TCP_PASSIVE_BUFFER_LIMIT;
+	if (l->pending >= TCP_LISTEN_BACKLOG || storage_full)
+	{
+		l->syns_dropped++;
+		if (storage_full)
+			kTcpStats.syns_dropped_storage++;
+		else
+			kTcpStats.syns_dropped_full++;
+		spinlock_release(&l->lock);
+		printd(DEBUG_NET, "tcp: SYN from %u.%u.%u.%u:%u to port %u dropped — %s\n",
+		       NET_IPV4_OCTETS(peer_ip), peer_port, l->port,
+		       storage_full ? "passive storage full" : "backlog full");
+		return NULL;
+	}
+	l->pending++;
+	spinlock_release(&l->lock);
+
+	tcp_conn_t* c = tcp_heap_alloc_locked(sizeof(*c));
+	c->rcv_buf = tcp_heap_alloc_locked(TCP_RCV_BUF);
+	c->snd_buf = tcp_heap_alloc_locked(TCP_SND_BUF);
+	c->dev = dev;
+	c->peer_ip = peer_ip;
+	c->peer_port = peer_port;
+	c->local_port = l->port;
+	c->passive = true;
+	kTcpStats.passive_buffered++;
+	c->listener = l;
+
+	tcp_syn_options_t said;
+	tcp_syn_options_parse(opts, opts_len, &said);
+	c->snd_mss = 536;              // RFC 879's floor when nobody says otherwise
+	if (said.mss >= TCP_SND_MSS_MIN)
+		c->snd_mss = said.mss;
+	else if (said.mss)
+		printd(DEBUG_NET, "tcp: %u.%u.%u.%u:%u advertised MSS %u — refused, using %u\n",
+		       NET_IPV4_OCTETS(peer_ip), peer_port, said.mss, c->snd_mss);
+	if (c->snd_mss > TCP_MSS)
+		c->snd_mss = TCP_MSS;
+	if (said.wscale_sent)
+	{
+		c->snd_wscale = said.wscale;
+		if (c->snd_wscale > TCP_WSCALE_MAX)
+		{
+			printd(DEBUG_NET, "tcp: %u.%u.%u.%u:%u offered window shift %u — over the ceiling, using %u\n",
+			       NET_IPV4_OCTETS(peer_ip), peer_port, c->snd_wscale, TCP_WSCALE_MAX);
+			c->snd_wscale = TCP_WSCALE_MAX;
+		}
+		c->rcv_wscale = TCP_RCV_WSCALE;
+		c->syn_offers_wscale = true;
+	}
+	// A SYN's window field is never scaled; it is the peer's first window.
+	c->snd_wnd = their_win;
+	c->snd_wl1 = their_seq;
+	c->snd_wl2 = 0;
+	c->cwnd = TCP_INIT_CWND_SEGMENTS * (uint32_t)c->snd_mss;
+	c->ssthresh = TCP_SND_BUF;
+	c->rto = TCP_RTO_INITIAL_TICKS;
+	c->rcv_nxt = their_seq + 1;    // their SYN counts as a byte
+
+	uint32_t iss = tcp_initial_seq();
+	c->snd_una = iss;
+	c->snd_nxt = iss;
+	c->snd_max = iss;
+	c->recover = iss;
+	c->state = TCP_SYN_RECEIVED;
+
+	c->next = kTcpConnList;
+	c->prev = NULL;
+	if (kTcpConnList != NULL)
+		kTcpConnList->prev = c;
+	kTcpConnList = c;
+
+	printd(DEBUG_NET, "tcp: SYN from %u.%u.%u.%u:%u at port %u (iss 0x%x, their mss %u, shift %s)\n",
+	       NET_IPV4_OCTETS(peer_ip), peer_port, l->port, iss, said.mss,
+	       said.wscale_sent ? "offered" : "none");
+	return c;
 }
 
 // A failed dial: the dialing thread entombs its own attempt at once
@@ -1765,7 +2122,7 @@ void tcp_poll(void)
 				printd(DEBUG_NET, "tcp: timeout #%u to %u.%u.%u.%u:%u (rto %u ticks, cwnd %u, %u bytes to resend)\n",
 				       (uint32_t)c->retries, NET_IPV4_OCTETS(c->peer_ip),
 				       c->peer_port, c->rto_ticks, c->cwnd, tcp_bytes_in_flight(c));
-				if (c->state == TCP_SYN_SENT)
+				if (c->state == TCP_SYN_SENT || c->state == TCP_SYN_RECEIVED)
 					tcp_retransmit_head(c);
 				else
 				{
@@ -1817,18 +2174,21 @@ void tcp_poll(void)
 		// find one CLOSED and detached entombs it — buffers, port, the
 		// morgue clock starts (tcp.h § the morgue). A dial that failed
 		// entombed itself before this sweep could.
+		// Never while an operation is inside the row (tcp.h pins): a
+		// pinned reader or writer has been woken to its CLOSED verdict
+		// and leaves within its backstop; the reap waits for it.
 		bool reap = false;
 		if (c->state == TCP_TIME_WAIT && c->detached)
 		{
 			if (!c->stripped)
 				tcp_conn_strip_locked(c);
-			reap = now >= c->time_wait_until;
+			reap = now >= c->time_wait_until && c->pins == 0;
 		}
 		else if (c->state == TCP_CLOSED && c->detached)
 		{
 			if (!c->tombstone)
 				tcp_conn_entomb_locked(c, now);
-			reap = (now >= c->closed_at + TCP_MORGUE_TICKS);
+			reap = (now >= c->closed_at + TCP_MORGUE_TICKS) && c->pins == 0;
 		}
 
 		spinlock_release_irqrestore(&c->lock, irqflags);
@@ -1842,7 +2202,7 @@ void tcp_poll(void)
 			if (c->tombstone)
 				tcp_tomb_remove_locked(c);
 			else
-				tcp_port_release_locked(c->local_port);
+				tcp_conn_port_release_locked(c);
 			printd(DEBUG_NET, "tcp: reaped %u.%u.%u.%u:%u (local port %u %s)\n",
 			       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->local_port,
 			       c->tombstone ? "was already free" : "free");
@@ -1855,6 +2215,35 @@ void tcp_poll(void)
 	// After the walk, never inside it: an eviction unlinks whichever
 	// tombstone is oldest, and the walk's cursor may point through it.
 	tcp_tomb_evict_over_cap_locked();
+
+	// Closed listeners are freed here and nowhere else: once no accept is
+	// inside the row and the morgue linger has passed — the same linger a
+	// dead conn gets, so a reader that fetched the row from a handle a
+	// moment before a sibling closed it is never handed freed memory.
+	tcp_listener_t** lp = &s_closed_listeners;
+	while (*lp != NULL)
+	{
+		tcp_listener_t* l = *lp;
+		bool free_it;
+		spinlock_acquire(&l->lock);
+		free_it = (l->busy == 0 && now >= l->closed_at + TCP_MORGUE_TICKS);
+		spinlock_release(&l->lock);
+		if (!free_it)
+		{
+			lp = &l->next;
+			continue;
+		}
+		*lp = l->next;
+		// Give the port back only if no accepted connection still uses it —
+		// a passive stream that outlived its listener holds the reservation
+		// until its own funeral (Codex #101 rd2). The row is already off
+		// kTcpListenerList, so it does not count itself.
+		if (!tcp_port_in_use_locked(l->port, NULL))
+			tcp_port_release_locked(l->port);
+		printd(DEBUG_NET, "tcp: listener on port %u freed (%lu accepted, %lu dropped)\n",
+		       l->port, l->accepted, l->syns_dropped);
+		tcp_heap_free_locked(l);
+	}
 	spinlock_release_irqrestore(&kTcpListLock, lf);
 }
 
@@ -1873,6 +2262,20 @@ void tcp_wake_if_ready(void)
 
 		if (r) scheduler_wake_isleep_thread_locked(r);
 		if (w) scheduler_wake_isleep_thread_locked(w);
+	}
+	// The same backstop for a listener's reader: a queued conn, or a close,
+	// that landed between its registration and its park.
+	for (tcp_listener_t* l = kTcpListenerList; l != NULL; l = l->next)
+	{
+		spinlock_acquire(&l->lock);
+		thread_t* a = l->waiter;
+		if (a != NULL && a->threadState == THREAD_STATE_ISLEEP &&
+		    (l->queue_head != NULL || l->closed))
+			l->waiter = NULL;
+		else
+			a = NULL;
+		spinlock_release(&l->lock);
+		if (a) scheduler_wake_isleep_thread_locked(a);
 	}
 	spinlock_release_irqrestore(&kTcpListLock, lf);
 }
@@ -1944,6 +2347,8 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	c->peer_ip = peer_ip;
 	c->peer_port = peer_port;
 	c->local_port = local_port;
+	c->handles = 1;                // the dialer's, installed by the syscall layer
+	c->syn_offers_wscale = true;   // a dial always asks; the SYN-ACK decides
 	c->snd_mss = 536;
 	c->snd_wnd = TCP_MSS;
 	c->cwnd = TCP_INIT_CWND_SEGMENTS * TCP_MSS;   // resized to the peer's MSS at establishment
@@ -2027,6 +2432,13 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 			return TCP_ERR_INTERRUPTED;
 
 		irqflags = spinlock_acquire_irqsave(&c->lock);
+		// Hung up under us: a sibling thread closed the last handle while
+		// we waited. Our pin kept the row; the conversation is over.
+		if (c->handles == 0)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return TCP_ERR_CLOSED;
+		}
 		if (c->rcv_count > 0)
 		{
 			// Short reads are the contract (every os64 read returns what
@@ -2106,6 +2518,13 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len, uint64_t deadlin
 			return sent ? (long)sent : TCP_ERR_INTERRUPTED;
 
 		irqflags = spinlock_acquire_irqsave(&c->lock);
+		// Hung up under us (the read's rule): the last handle closed while
+		// we waited for room; what landed, landed.
+		if (c->handles == 0)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return sent ? (long)sent : TCP_ERR_CLOSED;
+		}
 		if (c->reset || !(c->state == TCP_ESTABLISHED || c->state == TCP_CLOSE_WAIT))
 		{
 			spinlock_release_irqrestore(&c->lock, irqflags);
@@ -2183,7 +2602,244 @@ void tcp_conn_close(tcp_conn_t* c)
 	// A program should not wait 30 seconds for protocol politeness.
 	c->detached = true;
 	c->detached_deadline = kTicksSinceStart + TCP_DETACHED_IDLE_TICKS;
-	c->reader = NULL;
-	c->writer = NULL;
+	// A parked reader or writer here belongs to a SIBLING THREAD holding
+	// the conn through its pin (tcp.h pins) — the last handle closed under
+	// it. Woken to find handles == 0 and answer TCP_ERR_CLOSED; one still
+	// mid-park stays registered for the sweep, whose condition includes
+	// handles == 0 for the same reason (the pipe.c claim discipline).
+	thread_t* r = (c->reader != NULL && c->reader->threadState == THREAD_STATE_ISLEEP)
+	              ? c->reader : NULL;
+	thread_t* w = (c->writer != NULL && c->writer->threadState == THREAD_STATE_ISLEEP)
+	              ? c->writer : NULL;
+	if (r) c->reader = NULL;
+	if (w) c->writer = NULL;
 	spinlock_release_irqrestore(&c->lock, irqflags);
+	if (r) scheduler_wake_isleep_thread(r);
+	if (w) scheduler_wake_isleep_thread(w);
+}
+
+void tcp_conn_ref(tcp_conn_t* c)
+{
+	__sync_fetch_and_add(&c->handles, 1);
+}
+
+void tcp_conn_pin(tcp_conn_t* c)
+{
+	__sync_fetch_and_add(&c->pins, 1);
+}
+
+void tcp_conn_unpin(tcp_conn_t* c)
+{
+	__sync_fetch_and_sub(&c->pins, 1);
+}
+
+void tcp_conn_release(tcp_conn_t* c)
+{
+	// The last handle's close is the orderly close; an earlier one is a
+	// holder stepping away from a conn somebody else still speaks through
+	// (the parent that spawned a session and closed its own copy).
+	if (__sync_sub_and_fetch(&c->handles, 1) == 0)
+		tcp_conn_close(c);
+}
+
+// ── The listener: announce, accept, close (tcp.h § the listener) ───────────
+
+tcp_listener_t* tcp_listener_announce(net_device_t* dev, uint16_t port, int64_t* why)
+{
+	(void)dev;   // one NIC answers every address today; the row is per port
+	if (why) *why = OS64_NET_ERR_NO_RESOURCES;
+
+	// The claim, the allocation and the listing are one critical section,
+	// as a dial's are: two announces of one port cannot both succeed, and
+	// a port a dial holds is refused the same way — its bit is set. A port
+	// inside the ephemeral range takes its bit here so no later dial can
+	// draw it; one below the range needs no bit, since the draw never
+	// reaches it.
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+	for (tcp_listener_t* l = kTcpListenerList; l != NULL; l = l->next)
+		if (l->port == port)
+		{
+			spinlock_release_irqrestore(&kTcpListLock, lf);
+			if (why) *why = OS64_NET_ERR_PORT_TAKEN;
+			return NULL;
+		}
+	if (port >= TCP_EPHEMERAL_BASE)
+	{
+		uint32_t bit = port - TCP_EPHEMERAL_BASE;
+		if (s_ephemeral_used[bit / 64] & (1ULL << (bit % 64)))
+		{
+			// The bit is set. A DIAL's port is its own and the answer is
+			// no; a bit kept only by PASSIVE streams that outlived their
+			// listener (tcp_conn_port_release_locked) is a reservation
+			// against dials, not against a replacement listener — accepted
+			// streams have their own four-tuples, and a server restarted
+			// while old sessions linger must be able to reopen its door
+			// (Codex #101 rd8). No listener holds it: checked above.
+			for (tcp_conn_t* c = kTcpConnList; c != NULL; c = c->next)
+				if (!c->tombstone && c->local_port == port && !c->passive)
+				{
+					spinlock_release_irqrestore(&kTcpListLock, lf);
+					if (why) *why = OS64_NET_ERR_PORT_TAKEN;
+					return NULL;
+				}
+		}
+		s_ephemeral_used[bit / 64] |= (1ULL << (bit % 64));
+	}
+	tcp_listener_t* l = tcp_heap_alloc_locked(sizeof(*l));
+	l->port = port;
+	l->next = kTcpListenerList;
+	kTcpListenerList = l;
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+
+	printd(DEBUG_NET, "tcp: announcing port %u\n", port);
+	if (why) *why = 0;
+	return l;
+}
+
+tcp_conn_t* tcp_listener_accept(tcp_listener_t* l, uint64_t deadline, long* why)
+{
+	core_local_storage_t* cls = get_core_local_storage();
+	thread_t* self = cls->currentThread;
+	tcp_conn_t* got = NULL;
+	long verdict = 0;
+
+	// Inside the row from here to the return: the poll will not free a
+	// closed listener while busy is up, whatever a sibling's close does.
+	uint64_t irqflags = spinlock_acquire_irqsave(&l->lock);
+	l->busy++;
+	spinlock_release_irqrestore(&l->lock, irqflags);
+
+	for (;;)
+	{
+		// The park discipline every blocking read in this OS follows: a
+		// registration left by the park we just left is void, cleared
+		// before any return can leave the slot naming a thread that has
+		// moved on.
+		irqflags = spinlock_acquire_irqsave(&l->lock);
+		if (l->waiter == self)
+			l->waiter = NULL;
+		spinlock_release_irqrestore(&l->lock, irqflags);
+
+		if (signal_park_must_end(self))
+		{
+			verdict = TCP_ERR_INTERRUPTED;
+			break;
+		}
+
+		irqflags = spinlock_acquire_irqsave(&l->lock);
+		// CLOSED IS CHECKED BEFORE THE QUEUE (Codex #101 rd4): tcp_listener_close
+		// sets `closed` under this lock and then resets every queued row, so an
+		// accept that dequeued first would smuggle out a connection the close
+		// is in the middle of tearing down. Both writers hold l->lock, so once
+		// close has stamped `closed` no accept takes a row; the queue it leaves
+		// behind is the close's to reset.
+		if (l->closed)
+		{
+			// A sibling closed the door under us; the pipe's spelling for
+			// "the other end is gone" is the nearest verdict.
+			spinlock_release_irqrestore(&l->lock, irqflags);
+			verdict = TCP_ERR_RESET;
+			break;
+		}
+		if (l->queue_head != NULL)
+		{
+			// Hand the oldest completed handshake out. It leaves the
+			// listener's ownership here and becomes the caller's — the
+			// handle the syscall layer allocates is what owns it now —
+			// and its backlog slot is released with it.
+			got = l->queue_head;
+			l->queue_head = got->accept_next;
+			if (l->queue_head == NULL)
+				l->queue_tail = NULL;
+			got->accept_next = NULL;
+			got->listener = NULL;
+			got->handles = 1;      // the acceptor's, installed by the syscall layer
+			if (l->pending > 0)
+				l->pending--;
+			spinlock_release_irqrestore(&l->lock, irqflags);
+			break;
+		}
+		if (deadline != 0 && kTicksSinceStart >= deadline)
+		{
+			spinlock_release_irqrestore(&l->lock, irqflags);
+			verdict = TCP_ERR_TIMEOUT;
+			break;
+		}
+		l->waiter = self;
+		spinlock_release_irqrestore(&l->lock, irqflags);
+		uint64_t wake = kTicksSinceStart + TICKS_PER_SECOND;
+		if (deadline != 0 && deadline < wake)
+			wake = deadline;
+		signal_raise(SIGSLEEP, wake, self);
+	}
+
+	irqflags = spinlock_acquire_irqsave(&l->lock);
+	l->busy--;
+	spinlock_release_irqrestore(&l->lock, irqflags);
+	if (why) *why = verdict;
+	return got;
+}
+
+void tcp_listener_hold(tcp_listener_t* l)
+{
+	uint64_t irqflags = spinlock_acquire_irqsave(&l->lock);
+	l->busy++;
+	spinlock_release_irqrestore(&l->lock, irqflags);
+}
+
+void tcp_listener_release(tcp_listener_t* l)
+{
+	uint64_t irqflags = spinlock_acquire_irqsave(&l->lock);
+	l->busy--;
+	spinlock_release_irqrestore(&l->lock, irqflags);
+}
+
+void tcp_listener_close(tcp_listener_t* l)
+{
+	// Unlisted first, so no SYN can find the door while it is being shut;
+	// then everything the row still owns is reset — a queued conn is a
+	// promise the machine can no longer keep, a half-open one an answer
+	// nobody will read — and handed to the reaper (tcp_abort disowns and
+	// detaches). The peer hears RST so it does not retransmit into a void.
+	// The row itself joins the closed list for tcp_poll to free.
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+	tcp_listener_t** pp = &kTcpListenerList;
+	while (*pp != NULL && *pp != l)
+		pp = &(*pp)->next;
+	if (*pp == l)
+		*pp = l->next;
+
+	spinlock_acquire(&l->lock);
+	l->closed = true;
+	l->closed_at = kTicksSinceStart;
+	thread_t* w = l->waiter;
+	if (w != NULL && w->threadState == THREAD_STATE_ISLEEP)
+		l->waiter = NULL;
+	else
+		w = NULL;
+	spinlock_release(&l->lock);
+
+	for (tcp_conn_t* c = kTcpConnList; c != NULL; c = c->next)
+	{
+		if (c->listener != l)
+			continue;
+		spinlock_acquire(&c->lock);
+		if (c->listener == l && c->state != TCP_CLOSED)
+		{
+			tcp_send_rst(c->dev, c->peer_ip, c->local_port, c->peer_port,
+			             c->rcv_nxt, c->snd_nxt, true);
+			tcp_abort(c);
+		}
+		else
+			tcp_listener_disown(c);
+		spinlock_release(&c->lock);
+	}
+
+	l->next = s_closed_listeners;
+	s_closed_listeners = l;
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+
+	printd(DEBUG_NET, "tcp: port %u no longer announced\n", l->port);
+	if (w != NULL)
+		scheduler_wake_isleep_thread(w);
 }

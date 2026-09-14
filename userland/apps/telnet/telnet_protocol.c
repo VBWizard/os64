@@ -40,22 +40,32 @@ static void push(telnet_t *t, uint8_t byte)
         t->out[t->out_len++] = byte;
 }
 
-// ── What this client agrees to ──────────────────────────────────────────
+// ── What each end agrees to ──────────────────────────────────────────────
 //
-// Two questions, deliberately asked separately, because the answers differ
-// for the same option: ECHO is something the SERVER may do and this client
-// may not (a client echoing to the server is how you get every character
-// twice), and NAWS is something this client does and no server has any
-// business doing at us.
+// Two questions, asked separately because the answers differ for the same
+// option — and by ROLE, because the two ends want opposite things:
+//   we_agree(option)  — WE will do it, when he asks (answers his DO)
+//   he_may(option)    — HE may do it, when he offers (answers his WILL)
+// CLIENT: it may be echoed AT (ECHO is his), it offers its window size (NAWS
+// is ours), and SGA runs both ways. SERVER: it echoes (ECHO is ours), it is
+// TOLD the window size (NAWS is his), SGA both ways.
 
-static bool we_agree(uint8_t option)
+static bool we_agree(const telnet_t *t, uint8_t option)
 {
-    return option == TELNET_OPT_SGA || option == TELNET_OPT_NAWS;
+    if (option == TELNET_OPT_SGA)
+        return true;
+    if (t->role == TELNET_SERVER)
+        return option == TELNET_OPT_ECHO;      // the server drives echo
+    return option == TELNET_OPT_NAWS;          // the client offers its size
 }
 
-static bool he_may(uint8_t option)
+static bool he_may(const telnet_t *t, uint8_t option)
 {
-    return option == TELNET_OPT_ECHO || option == TELNET_OPT_SGA;
+    if (option == TELNET_OPT_SGA)
+        return true;
+    if (t->role == TELNET_SERVER)
+        return option == TELNET_OPT_NAWS;      // the server wants his size
+    return option == TELNET_OPT_ECHO;          // the client accepts his echo
 }
 
 // ── RFC 1143, the Q Method ──────────────────────────────────────────────
@@ -81,13 +91,54 @@ static bool he_may(uint8_t option)
 // talkative peer's every restatement.
 static void changed(telnet_t *t, uint8_t option, bool ours)
 {
-    // ECHO is HIS and decides whether we echo what is typed; NAWS is OURS and
-    // decides whether a window size can go out at all. An option's other
-    // direction is one this client refuses, so it never moves.
+    if (t->role == TELNET_SERVER) {
+        // A SERVER cares that HIS NAWS came on — now the subnegotiations it
+        // carries are worth reading. (SGA is the server's own and needs no
+        // notice: it decided it.)
+        if (!ours && option == TELNET_OPT_NAWS && t->him[option] == TELNET_OPT_YES)
+            t->notices |= TELNET_NOTE_SIZE;
+        // ECHO is the server's own too, but the CLIENT can refuse it (DONT
+        // ECHO — a line-mode client that echoes for itself), and a server
+        // that goes on echoing after agreeing not to shows every keystroke
+        // twice. The caller is told either way and reads the direction
+        // with telnet_option_ours; what it does about it is its decision.
+        if (ours && option == TELNET_OPT_ECHO)
+            t->notices |= TELNET_NOTE_ECHO;
+        return;
+    }
+    // CLIENT: ECHO is HIS and decides whether we echo what is typed; NAWS is
+    // OURS and decides whether a window size can go out at all. An option's
+    // other direction is one the client refuses, so it never moves.
     if (!ours && option == TELNET_OPT_ECHO)
         t->notices |= TELNET_NOTE_ECHO;
     if (ours && option == TELNET_OPT_NAWS && t->us[option] == TELNET_OPT_YES)
         t->notices |= TELNET_NOTE_SIZE;
+}
+
+// (SERVER, NAWS) Gather a subnegotiation's payload — only when it is a NAWS
+// this end asked for, and only up to the buffer, past which the rest is
+// discarded (a well-formed NAWS is four bytes). A client keeps nothing.
+static void sb_gather(telnet_t *t, uint8_t c)
+{
+    if (t->role != TELNET_SERVER || t->sb_opt != TELNET_OPT_NAWS ||
+        t->him[TELNET_OPT_NAWS] != TELNET_OPT_YES)
+        return;
+    if (t->sb_len < sizeof(t->sb_buf))
+        t->sb_buf[t->sb_len++] = c;
+}
+
+// (SERVER, NAWS) The subnegotiation ended: if it carried a full window size,
+// publish it. RFC 1073's order is cols first, rows second, each 16 bits big-
+// endian. A short one is ignored — a half-read size is worse than the last
+// good one.
+static void sb_finish(telnet_t *t)
+{
+    if (t->role != TELNET_SERVER || t->sb_opt != TELNET_OPT_NAWS ||
+        t->him[TELNET_OPT_NAWS] != TELNET_OPT_YES || t->sb_len < 4)
+        return;
+    t->peer_cols = (uint16_t)((t->sb_buf[0] << 8) | t->sb_buf[1]);
+    t->peer_rows = (uint16_t)((t->sb_buf[2] << 8) | t->sb_buf[3]);
+    t->notices |= TELNET_NOTE_RESIZE;
 }
 
 static void reply(telnet_t *t, uint8_t verb, uint8_t option)
@@ -103,7 +154,7 @@ static void got_will(telnet_t *t, uint8_t option)
 
     switch (t->him[option]) {
     case TELNET_OPT_NO:
-        if (he_may(option)) {
+        if (he_may(t, option)) {
             t->him[option] = TELNET_OPT_YES;
             reply(t, TELNET_DO, option);
         } else {
@@ -167,7 +218,7 @@ static void got_do(telnet_t *t, uint8_t option)
 
     switch (t->us[option]) {
     case TELNET_OPT_NO:
-        if (we_agree(option)) {
+        if (we_agree(t, option)) {
             t->us[option] = TELNET_OPT_YES;
             reply(t, TELNET_WILL, option);
         } else {
@@ -251,7 +302,14 @@ void telnet_init(telnet_t *t)
 {
     os64_memset(t, 0, sizeof(*t));
     // Every zero here is the right start: P_DATA, NO for all 512 option
-    // states, an empty queue, TELNET_ECHO_AUTO, no size known yet.
+    // states, an empty queue, TELNET_ECHO_AUTO, no size known yet. role is
+    // TELNET_CLIENT, also zero.
+}
+
+void telnet_init_server(telnet_t *t)
+{
+    telnet_init(t);
+    t->role = TELNET_SERVER;
 }
 
 bool telnet_offer(telnet_t *t)
@@ -265,6 +323,28 @@ bool telnet_offer(telnet_t *t)
     ask_him(t, TELNET_OPT_SGA);    // don't make us wait for a turn
     ask_us(t, TELNET_OPT_SGA);     // and we won't make you wait for one
     ask_us(t, TELNET_OPT_NAWS);    // we have a window size worth having
+    return true;
+}
+
+bool telnet_offer_server(telnet_t *t)
+{
+    // Four offers, three bytes each: WILL ECHO, WILL SGA, DO SGA, DO NAWS.
+    if (room(t) < 12)
+        return false;
+
+    ask_us(t, TELNET_OPT_ECHO);    // the server drives the line and echoes
+    ask_us(t, TELNET_OPT_SGA);     // no turn-taking either way
+    ask_him(t, TELNET_OPT_SGA);
+    ask_him(t, TELNET_OPT_NAWS);   // tell me your window size
+    return true;
+}
+
+bool telnet_peer_size(const telnet_t *t, uint16_t *cols, uint16_t *rows)
+{
+    if (t->peer_cols == 0 && t->peer_rows == 0)
+        return false;
+    if (cols) *cols = t->peer_cols;
+    if (rows) *rows = t->peer_rows;
     return true;
 }
 
@@ -304,14 +384,47 @@ size_t telnet_receive(telnet_t *t, const void *in, size_t len,
                 t->parse = P_IAC;
                 break;
             }
-            // NUL IS THE NVT'S NO-OP, and dropping it here is what makes the
-            // two-byte newline take care of itself. RFC 854 gives NUL no
-            // meaning at the printer; CR NUL is how the protocol spells a
-            // bare carriage return, the NUL being there only so that a CR is
-            // never the last byte of a line; and a NUL on its own is the PAD
-            // character terminfo has been sending to slow terminals since the
-            // 1970s. Drop it, and CR NUL arrives at the screen as the CR it
-            // means while CR LF arrives as both bytes, with no state to carry
+            if (t->role == TELNET_SERVER) {
+                // NORMALIZE A LINE ENDING TO ONE '\n' — husk's Enter. A
+                // client's CR LF, CR NUL, lone CR or lone LF all become a
+                // single '\n'; without this the CLIENT parser's verbatim CR
+                // LF reaches husk as TWO Enters, a command followed by an
+                // empty line and an extra prompt (Codex #101 P2). saw_cr
+                // carries the CR across the byte — and across reads — so the
+                // LF or NUL that completes it is swallowed.
+                if (c == '\r') {
+                    if (used == cap) { stalled = true; break; }  // don't consume; retry
+                    out[used++] = '\n';
+                    t->saw_cr = true;
+                    break;
+                }
+                if (c == '\n') {
+                    bool swallow = t->saw_cr;   // the LF of a CR LF
+                    t->saw_cr = false;
+                    if (swallow)
+                        break;                  // the CR already produced the Enter
+                    if (used == cap) { stalled = true; break; }
+                    out[used++] = '\n';
+                    break;
+                }
+                if (c == 0) {                   // CR NUL's NUL, or a lone NVT NUL
+                    t->saw_cr = false;
+                    break;
+                }
+                t->saw_cr = false;
+                if (used == cap) { stalled = true; break; }
+                out[used++] = c;
+                break;
+            }
+            // CLIENT role: the remote program's output, verbatim. NUL IS THE
+            // NVT'S NO-OP, and dropping it here is what makes the two-byte
+            // newline take care of itself. RFC 854 gives NUL no meaning at
+            // the printer; CR NUL is how the protocol spells a bare carriage
+            // return, the NUL being there only so that a CR is never the last
+            // byte of a line; and a NUL on its own is the PAD character
+            // terminfo has been sending to slow terminals since the 1970s.
+            // Drop it, and CR NUL arrives at the screen as the CR it means
+            // while CR LF arrives as both bytes, with no state to carry
             // between reads. os64's renderer would otherwise draw a glyph for
             // all three.
             if (c == 0)
@@ -351,9 +464,23 @@ size_t telnet_receive(telnet_t *t, const void *in, size_t len,
                 t->notices |= TELNET_NOTE_AYT;
                 t->parse = P_DATA;
                 break;
+            case TELNET_IP:
+            case TELNET_EC:
+            case TELNET_EL:
+                if (t->role == TELNET_SERVER) {
+                    // Server commands become the terminal's Ctrl+C,
+                    // Backspace and Ctrl+U bytes. Retain the command when
+                    // the decoded buffer is full so a retry delivers it.
+                    if (used == cap) { stalled = true; break; }
+                    out[used++] = c == TELNET_IP ? 0x03 : c == TELNET_EC ? 0x08 : 0x15;
+                    t->parse = P_DATA;
+                    break;
+                }
+                t->parse = P_DATA;   // CLIENT: consumed like the rest
+                break;
             default:
-                // NOP, GA, DM, BRK, IP, AO, EC, EL, a stray SE, and every
-                // command nobody has defined. Consumed, never printed — a
+                // Unhandled controls (NOP, GA, DM, BRK, AO, a stray SE)
+                // and unknown commands are consumed, never printed — a
                 // client that prints an unknown command has just let the peer
                 // write a byte of its choosing onto the glass, and a client
                 // that prints GA collects one per line from every half-duplex
@@ -380,21 +507,28 @@ size_t telnet_receive(telnet_t *t, const void *in, size_t len,
             // subnegotiation of option 255 (RFC 861's extended options list)
             // is a subnegotiation and not an IAC. That is the whole reason
             // this is a state of its own rather than the first byte of P_SB.
+            t->sb_opt = c;
+            t->sb_len = 0;
             t->parse = P_SB;
             break;
 
         case P_SB:
-            if (c == TELNET_IAC)
+            if (c == TELNET_IAC) {
                 t->parse = P_SB_IAC;
-            break;                      // everything else is skipped payload
+                break;
+            }
+            sb_gather(t, c);            // kept only for a NAWS a server wants
+            break;
 
         case P_SB_IAC:
             if (c == TELNET_IAC) {
                 t->parse = P_SB;        // a doubled escape inside the payload
+                sb_gather(t, TELNET_IAC);   // a literal 255 in the payload (a 255-wide window)
                 break;
             }
             if (c == TELNET_SE) {
-                t->parse = P_DATA;      // the end, and the payload is gone
+                sb_finish(t);           // decode a gathered NAWS, if any
+                t->parse = P_DATA;      // the end
                 break;
             }
             // ANYTHING ELSE ABANDONS THE SUBNEGOTIATION. Only IAC SE ends one

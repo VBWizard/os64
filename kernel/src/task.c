@@ -520,16 +520,12 @@ static void task_remove_dead_child_locked(task_t *parent, task_t *child)
 // Burial is TWO-PHASE, one kworker pass apart:
 //   pass N:   unlink the corpse from the deadChild list AND the kTaskList
 //             spine (scheduler_remove_task) and park it on kBurialList.
-//             From this instant no walker can newly reach it.
+//             From this instant a fresh walk cannot reach it by the lists.
 //   pass N+1: task_destroy() actually frees everything.
-// The gap is a grace period for LOCKLESS kTaskList walkers (procfs follows
-// ->next with no lock, by design — see scheduler_submit_new_task's publish
-// comment): a walker standing ON the corpse when it is unlinked can still
-// follow its intact ->next out; by the time the memory is freed a full
-// kworker period later, any such walk has long finished. A reader parked
-// mid-walk for 2+ seconds is already a wedged reader with bigger problems.
-// (The grown-up fix — snapshot-under-lock or generation counts — is booked
-// in DEBTS.md; this discipline is correct until /proc grows teeth.)
+// Consecutive passes need not sleep, so this deferral is not a guaranteed
+// elapsed-time grace period. Lockless list-walker lifetime remains booked
+// in DEBTS.md. A publisher retaining a task pointer takes a lifetime hold
+// before submission; held tasks cannot enter phase 1, even after collection.
 
 // Corpses between phase 1 and phase 2, linked through task->burialNext.
 // kworker-only (single consumer, single producer, same thread) — no lock.
@@ -1134,12 +1130,21 @@ static void task_destroy(task_t *t)
 	kTaskBurialCount++;
 }
 
+void task_hold(task_t *task)
+{
+	__sync_fetch_and_add(&task->lifetimeHolds, 1);
+}
+
+void task_release(task_t *task)
+{
+	__sync_fetch_and_sub(&task->lifetimeHolds, 1);
+}
+
 int task_reap_eligible_zombies(size_t max_to_reap)
 {
 	size_t reaped = 0;
 
-	// Phase 2 FIRST: bury whatever last pass unlinked. These corpses have
-	// been invisible to every walker for a full kworker period.
+	// Phase 2 FIRST: bury whatever the previous pass unlinked.
 	task_t *corpse = kBurialList;
 	kBurialList = NULL;
 	while (corpse != NULL) {
@@ -1200,7 +1205,11 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 				}
 			}
 
-			if (collected && task_threads_all_retired(child)) {
+			// A publisher may still need the task after a sibling collects
+			// its exit status. Holds are taken before publication (or under
+			// another hold), so zero permits unlinking without resurrection.
+			if (collected && task_threads_all_retired(child) &&
+			    __atomic_load_n(&child->lifetimeHolds, __ATOMIC_ACQUIRE) == 0) {
 				printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 					"task_reap_eligible_zombies: unlinking child task 0x%08x (%s), parent=0x%08x (%s), collected=%u autoReap=%u parentExited=%u\n",
 					child->taskID,
@@ -1369,12 +1378,15 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	if (task) {
 		// SIBLINGS FIRST, before the handles go. "Exit means exit" (Chris's
 		// ruling, 2026-08-02): when a task dies its threads die with it, and
-		// they must be TOLD before their handles are pulled out from under
-		// them — a worker mid-read on a pipe whose end just closed underneath
-		// it is a race, and telling it to die first makes the ordering
-		// honest. They will not all be gone by the time we return; each dies
-		// at its own next boundary, in its own context, which is the whole
-		// design (see task_terminate_sibling_threads).
+		// they are TOLD before their handles are closed so that a worker
+		// parked in a read wakes to its death promptly rather than at its
+		// backstop. They will not all be gone by the time we return; each
+		// dies at its own next boundary, in its own context, which is the
+		// whole design (see task_terminate_sibling_threads). The ordering is
+		// for promptness, not for safety: a sibling still inside a syscall
+		// on one of these handles holds its own pinned reference on the
+		// object (handle.c § The pin), so handle_close_all below only drops
+		// the table's, and the object outlives the sleeper.
 		task_terminate_sibling_threads(task, thread);
 
 		// Windows first, then handles, both before pages: any window this
@@ -1537,10 +1549,8 @@ static task_t *task_find_dead_child(task_t *parent, uint64_t targetPid)
 	return NULL;
 }
 
-// Find a LIVE child matching targetPid (0 = any), or NULL. Two callers, two
-// jobs: task_wait uses NULL-ness to fail fast when the caller asks for a child
-// that doesn't exist / was already reaped, and uses the task itself to hand
-// the console over (the child being waited on IS the foreground task).
+// Find a live child for task_wait's foreground hand-off. The caller holds
+// the terminal's foreground lock while choosing and publishing the pointer.
 static task_t *task_find_live_child(task_t *parent, uint64_t targetPid)
 {
 	for (task_t *t = kTaskList; t != NULL && t != (task_t*)NO_TASK; t = t->next)
@@ -1548,6 +1558,19 @@ static task_t *task_find_live_child(task_t *parent, uint64_t targetPid)
 			if (targetPid == 0 || t->taskID == targetPid)
 				return t;
 	return NULL;
+}
+
+// Called under kDeadChildLock alongside the dead-child probe. A task can
+// have exited without reaching its parent's dead list yet; it remains a
+// wait target until collection. This lock excludes collection and unlinking
+// during the walk, so neither transition can fall between the two probes.
+static bool task_has_uncollected_child_locked(task_t *parent, uint64_t targetPid)
+{
+	for (task_t *t = kTaskList; t != NULL && t != (task_t *)NO_TASK; t = t->next)
+		if (t->parentTask == parent && !t->retValCollected &&
+		    (targetPid == 0 || t->taskID == targetPid))
+			return true;
+	return false;
 }
 
 // Is `candidate` — a value read from a terminal's fgTask — a live child of
@@ -1632,16 +1655,24 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// under the terminal's foreground lock (tty.h): a sibling thread's
 	// spawn publishes its child under the same lock, so the finish's "not
 	// a live child" and "then store" cannot be split by a publication.
-	tty_t *console = task_tty(parent);
-	uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
-	bool movesConsole = parent->controllingShell || console->fgTask == parent ||
-	                    task_is_live_child(parent, (task_t *)console->fgTask);
-	if (movesConsole && targetPid != 0) {
-		task_t *fg = task_find_live_child(parent, targetPid);
-		if (fg != NULL)
-			console->fgTask = fg;
+	//
+	// The terminal is HELD for the whole wait (tty.h task_tty_hold), park
+	// included: the finish hands the console back through this pointer,
+	// and a sibling thread's teardown can bury a pty slave while we sleep.
+	// A terminal already gone (NULL) moves nothing, at entry or at finish.
+	tty_t *console = task_tty_hold(parent);
+	bool movesConsole = false;
+	if (console != NULL) {
+		uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+		movesConsole = parent->controllingShell || console->fgTask == parent ||
+		               task_is_live_child(parent, (task_t *)console->fgTask);
+		if (movesConsole && targetPid != 0) {
+			task_t *fg = task_find_live_child(parent, targetPid);
+			if (fg != NULL)
+				console->fgTask = fg;
+		}
+		spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 	}
-	spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 
 	while (1==1)
 	{
@@ -1657,8 +1688,10 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// must keep Ctrl+C aimed at the job. Handing the console back here
 		// would aim the next Ctrl+C at the shell, the one party that did
 		// not ask for it. The other returns below are the wait FINISHING.
-		if (signal_park_must_end(get_core_local_storage()->currentThread))
+		if (signal_park_must_end(get_core_local_storage()->currentThread)) {
+			task_tty_release(console);
 			return TASK_WAIT_INTERRUPTED;
+		}
 
 		// Check FIRST: an already-dead matching child returns immediately, no
 		// sleep (the "don't wait if the child already ended" rule).
@@ -1683,6 +1716,8 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			endedRetVal = child->retVal;
 			child->retValCollected = true;
 		}
+		bool childPending = endedPid == 0 &&
+		    task_has_uncollected_child_locked(parent, targetPid);
 		spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
 
 		if (endedPid != 0) {
@@ -1699,25 +1734,27 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			// older wait's restore. Under the foreground lock, so that
 			// check and this store are one transition against that spawn.
 			if (movesConsole) {
-				fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+				uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
 				if (!task_is_live_child(parent, (task_t *)console->fgTask))
 					console->fgTask = parent;
 				spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 			}
+			task_tty_release(console);
 			return endedPid;
 		}
 
-		// No dead match. If there is no matching LIVE child either, there is
-		// nothing to wait for — fail rather than sleep forever.
-		if (task_find_live_child(parent, targetPid) == NULL) {
+		// Neither a collectible status nor an uncollected child existed
+		// under the graveyard lock: fail rather than sleep forever.
+		if (!childPending) {
 			// Take the console back — same rule and same lock as the
 			// collected-corpse return above.
 			if (movesConsole) {
-				fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+				uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
 				if (!task_is_live_child(parent, (task_t *)console->fgTask))
 					console->fgTask = parent;
 				spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 			}
+			task_tty_release(console);
 			return 0;
 		}
 
@@ -2622,7 +2659,12 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
        // A pty terminal is COUNTED (PTY.md's seats): inheritance takes one,
        // teardown returns it, and the slave is buried only when the master
        // is closed AND the last seat empties. No-op for the kTTY[] fleet.
-       tty_pty_ref((tty_t *)newTask->tty);
+       // The seat is taken by pointer against the registry (tty.h): the
+       // parent's slave can be buried by a sibling's teardown while this
+       // spawn is in flight, and a child of a dead line gets the system
+       // console rather than a pointer to freed memory.
+       if (!tty_pty_ref((tty_t *)newTask->tty))
+           newTask->tty = NULL;
        //Initialize the current working directory to parentTask's cwd
        newTask->cwd=(char*)kmalloc(PAGE_SIZE);
        if (parentTaskPtr!=NULL && parentTaskPtr->cwd)

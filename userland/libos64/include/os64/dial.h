@@ -35,6 +35,30 @@
 int64_t os64_net_dial(const os64_netdest_t *dest);
 int64_t os64_dial(const char *dialstring);
 
+// The inbound door (SERVERS.md; NETWORK.md ruling #3). os64_announce opens
+// a port and returns a LISTENER handle; os64_accept reads one completed
+// connection off it — the new stream's handle plus the peer's identity in
+// `out`. accept blocks like any read; os64_read_for on the listener gives
+// it a deadline (OS64_NET_ERR_TIMEOUT when nobody came).
+//
+//   int64_t d = os64_announce("tcp!*!23");    // or the struct call below
+//   os64_netconn_t peer;
+//   while (os64_accept((int32_t)d, &peer) == 0)
+//       serve(peer.handle);                    // read/write/close like a dial
+//
+// os64_announce takes the same bang path as os64_dial, read as WHERE I AM:
+// the address segment must be '*' ("every address this machine has"), the
+// protocol must be tcp. A negative return is a code from the same table
+// (os64_dial_reason renders it) plus OS64_NET_ERR_PORT_TAKEN.
+int64_t os64_net_announce(const os64_netdest_t *local);
+int64_t os64_announce(const char *dialstring);
+
+// Read one connection off a listener handle. Returns 0 and fills `out` on a
+// connection; a negative os64_read result otherwise (a signal, a deadline
+// from os64_read_for, or the listener closing). A short read is impossible:
+// the kernel writes the whole os64_netconn_t or refuses.
+int64_t os64_accept(int32_t listener, os64_netconn_t *out);
+
 // A negative dial result, in words a person can act on — one vocabulary
 // for every program that dials, so a refusal and a timeout read the same
 // on every glass. Never NULL; an unknown code says "refused".

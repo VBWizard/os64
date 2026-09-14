@@ -192,6 +192,12 @@ struct directory
 	const char *mount_prefix;
 	size_t mount_prefix_len;
 	int mount_scan;
+	// How many holders reference this open directory: its one task handle
+	// (syscall_open sets 1; spawn never shares a directory) plus every
+	// pinned readdir in flight (handle.c § The pin). Only the LAST
+	// handle_dir_object_close runs dops->close — a sibling thread closing
+	// the handle under a readdir must not free the object out from under it.
+	int handleRefCount;
 	//arena_t* arena;
 };
 
@@ -327,9 +333,10 @@ struct file
 	// file between parent and child (same pattern as pipe end refcounts), and
 	// only the LAST close may run fops->close — otherwise the parent closing
 	// its copy frees the FIL out from under the child. Managed exclusively by
-	// syscall_open (=1), spawn_do_create (++), and handle_file_object_close
-	// (--, close at 0); kernel-internal users that call fops->open/close
-	// directly (ELF loader etc.) never touch it.
+	// syscall_open (=1), handle_share and handle_pin (++ — a child's slot
+	// taken at spawn's resolve, and an operation in flight; handle.c) and
+	// handle_file_object_close (--, close at 0); kernel-internal users that
+	// call fops->open/close directly (ELF loader etc.) never touch it.
 	int handleRefCount;
 	//arena_t* arena;
 

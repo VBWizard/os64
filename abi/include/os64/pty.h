@@ -1,32 +1,42 @@
 // os64/pty.h — the pseudo-terminal ABI (PTY.md, ratified 2026-08-19).
 //
 // A pty is a kernel tty with no keyboard and no glass: the MASTER handle's
-// holder stands where they stood. GRID mode (v1): the kernel's one terminal
-// interpreter fills the slave's grid exactly as it fills a VT's, and the
-// master's holder copies the interpreted screen out with pty_snapshot —
-// grid in, keys out, which is the whole job of a terminal window. STREAM
-// mode is reserved (the byte-ring flavor telnetd will want; its gate is TCP
-// listen() — see PTY.md's fork ruling and the future-customer principle).
+// holder stands where they stood. Two flavors, chosen at create and
+// differing only in the way OUT (PTY.md's fork ruling; SERVERS.md):
+//   GRID   — the kernel's one terminal interpreter fills the slave's grid
+//            exactly as it fills a VT's, and the master's holder copies the
+//            interpreted screen out with pty_snapshot: grid in, keys out,
+//            the whole job of a terminal WINDOW.
+//   STREAM — the child's bytes reach read(master) uninterpreted, a pipe
+//            wearing a tty's identity: what a REMOTE terminal wants, since
+//            the rendering happens at its end (telnetd, sshd).
 //
 // No /dev names anywhere: masters are handles, slaves are a task's
 // controlling terminal (task->tty). A future devfs is a naming layer over
 // this, never a redesign.
 //
 // The verbs:
-//   create   — SYSCALL_PTY_CREATE(cols, rows) -> master handle
+//   create   — SYSCALL_PTY_CREATE(cols, rows) -> a GRID master handle;
+//              SYSCALL_PTY_CREATE_STREAM(cols, rows) -> a STREAM one
 //   seat     — spawn with OS64_SPAWN_SET_TTY | (master << OS64_SPAWN_TTY_SHIFT)
-//   keys in  — plain write(master, bytes): each byte becomes a keystroke on
-//              the slave; 0x03 runs the slave's Ctrl+C intercept and aims
-//              SIGINT at the SLAVE's foreground (the program in the window),
-//              never at the master's holder
-//   screen   — SYSCALL_PTY_SNAPSHOT: header + interpreted cells, gated by a
-//              generation counter so a frame-cadence poll is near-free
-//   read()   — reserved for STREAM mode; in GRID mode it refuses (a grid is
-//              not a stream, and pretending would teach the wrong lesson)
-//   resize   — SYSCALL_PTY_RESIZE(master, cols, rows): the grid follows the
-//              window, and every task seated on the slave that installed a
-//              SIGWINCH handler gets the signal (the rest are not disturbed).
-//              The program inside asks /proc/self/tty what the size is now
+//   keys in  — plain write(master, bytes), BOTH modes: each byte becomes a
+//              keystroke on the slave; 0x03 runs the slave's Ctrl+C
+//              intercept and aims SIGINT at the SLAVE's foreground (the
+//              program in the window), never at the master's holder
+//   screen   — SYSCALL_PTY_SNAPSHOT, GRID only: header + interpreted cells,
+//              gated by a generation counter so a frame-cadence poll is
+//              near-free. A STREAM pty refuses it (a byte stream has no
+//              screen)
+//   read()   — STREAM only: the child's output, bytes, blocking like a pipe
+//              read; 0 once the slave's seats have emptied — THE SESSION
+//              ENDED, the stream spelling of OS64_PTY_HUNGUP. A GRID pty
+//              refuses it (a grid is not a stream, and pretending would
+//              teach the wrong lesson)
+//   resize   — SYSCALL_PTY_RESIZE(master, cols, rows), BOTH modes: the
+//              geometry follows the window. When it changes, each task on the
+//              slave that installed a SIGWINCH handler gets the signal (the
+//              rest are not disturbed). The program inside asks
+//              /proc/self/tty what the size is now
 
 #ifndef OS64_PTY_H
 #define OS64_PTY_H
@@ -82,6 +92,19 @@ _Static_assert(sizeof(os64_pty_header_t) == 32, "pty header ABI: 32 bytes");
 static inline int64_t os64_pty_create(uint32_t cols, uint32_t rows)
 {
 	return (int64_t)os64_syscall2(SYSCALL_PTY_CREATE, cols, rows);
+}
+
+// Create a STREAM-mode pty: same handle, same seating, same keystrokes in —
+// but the child's output comes back out of os64_read on the master as the
+// bytes it wrote, uninterpreted, and pty_snapshot is refused.
+// After its seated tasks and pending seats empty, output drains to EOF;
+// spawn_seated then refuses that master. Create a fresh pty for a new session.
+// Geometry is what /proc/self/tty reports to the child and what
+// os64_pty_resize changes. The FLAVOR is a SEPARATE SYSCALL, not an argument
+// on pty_create, so the two-argument GRID call never had its ABI widened.
+static inline int64_t os64_pty_create_stream(uint32_t cols, uint32_t rows)
+{
+	return (int64_t)os64_syscall2(SYSCALL_PTY_CREATE_STREAM, cols, rows);
 }
 
 // Copy the slave's live screen: header always, cells up to max_cells (size

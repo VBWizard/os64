@@ -1291,6 +1291,11 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "connect_timeouts: %lu\n", kTcpStats.connect_timeouts);
 	synth_text_addf(t, "connections_reaped: %lu\n", kTcpStats.connections_reaped);
 	synth_text_addf(t, "resets_received: %lu\n", kTcpStats.resets_received);
+	synth_text_addf(t, "connections_accepted: %lu\n", kTcpStats.connections_accepted);
+	synth_text_addf(t, "syns_dropped_full: %lu\n", kTcpStats.syns_dropped_full);
+	synth_text_addf(t, "passive_buffered: %lu\n", kTcpStats.passive_buffered);
+	synth_text_addf(t, "passive_buffer_limit: %u\n", TCP_PASSIVE_BUFFER_LIMIT);
+	synth_text_addf(t, "syns_dropped_storage: %lu\n", kTcpStats.syns_dropped_storage);
 	synth_text_addf(t, "segments_in: %lu\n", kTcpStats.segments_in);
 	synth_text_addf(t, "segments_out: %lu\n", kTcpStats.segments_out);
 	synth_text_addf(t, "retransmits: %lu\n", kTcpStats.retransmits);
@@ -1413,6 +1418,39 @@ static void sys_gen_net_tcp(synth_text_t *t)
 		spinlock_release_irqrestore(&c->lock, irqflags);
 		}
 	spinlock_release_irqrestore(&kTcpListLock, lf);
+
+	// The announced ports (SERVERS.md § 1): copied out under the lock like
+	// the rows above, formatted after it. `pending` is half-open plus
+	// queued-unread against the backlog; a rising `dropped` beside a full
+	// `pending` is a listener nobody reads, or a flood.
+	struct listener_row { uint16_t port; uint32_t pending; uint64_t accepted, dropped; };
+	struct listener_row lrows[16];
+	uint32_t ln = 0, lomitted = 0;
+	lf = spinlock_acquire_irqsave(&kTcpListLock);
+	for (tcp_listener_t *l = kTcpListenerList; l != NULL; l = l->next)
+	{
+		if (ln >= sizeof(lrows) / sizeof(lrows[0]))
+		{
+			lomitted++;
+			continue;
+		}
+		spinlock_acquire(&l->lock);
+		lrows[ln].port = l->port;
+		lrows[ln].pending = l->pending;
+		lrows[ln].accepted = l->accepted;
+		lrows[ln].dropped = l->syns_dropped;
+		spinlock_release(&l->lock);
+		ln++;
+	}
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+	synth_text_addf(t, "listeners: %u\n", ln + lomitted);
+	if (ln > 0)
+	{
+		synth_text_addf(t, "# port state pending backlog accepted dropped\n");
+		for (uint32_t i = 0; i < ln; i++)
+			synth_text_addf(t, "%u LISTEN %u %u %lu %lu\n", lrows[i].port, lrows[i].pending,
+			                (uint32_t)TCP_LISTEN_BACKLOG, lrows[i].accepted, lrows[i].dropped);
+	}
 
 	synth_text_addf(t, "connections: %u\n", n + omitted);
 	if (n > 0)

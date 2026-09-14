@@ -61,8 +61,19 @@ typedef struct pipe
 	// The classic hang — `cat foo | grep x` never finishing — is a shell that
 	// forgot to close ITS copy of the write end: writers never reaches 0, so
 	// the reader waits forever for an EOF that can never come.
+	// A HOLDER of an end is a task handle on it, a spawn carrying it to a
+	// child, or a thread INSIDE a read or write on it (handle.c § The pin):
+	// a read in flight counts as a reader until it returns, so a sibling
+	// closing the handle under a parked reader cannot free the pipe, and
+	// EOF/EPIPE fire only when the last of all of those is gone.
 	uint32_t readers;
 	uint32_t writers;
+	// A holder with NO side: keeps the memory, says nothing about EOF or
+	// EPIPE. A STREAM pty holds its pipe this way from birth to burial, so
+	// that a task holding the pty (tty.h pty_seat_hold) can take a writer's
+	// reference on a pipe both sides may already have closed — the pipe is
+	// still there because the pty is. Freed when all three are zero.
+	uint32_t holds;
 
 	// Parked threads (NULL = nobody waiting). One slot each: a second waiter
 	// simply falls back on its SIGSLEEP backstop and retries — correct, just
@@ -77,6 +88,7 @@ typedef struct pipe
 #define PIPE_ERR_CLOSED      (-1) // all readers gone: writing into the void (EPIPE)
 #define PIPE_ERR_NOMEM       (-2)
 #define PIPE_ERR_INTERRUPTED (-3) // the CALLER has a signal pending that ends
+#define PIPE_ERR_TIMEOUT     (-4) // pipe_read's deadline passed with no bytes
                                   // the wait (signal_park_must_end): a terminate,
                                   // or one a handler will catch. The syscall
                                   // boundary kills or answers OS64_INTERRUPTED;
@@ -90,12 +102,22 @@ void pipe_ref_read_end(pipe_t *p);
 void pipe_ref_write_end(pipe_t *p);
 void pipe_close_read_end(pipe_t *p);
 void pipe_close_write_end(pipe_t *p);
+// The side-less hold (`holds` above): the memory stays, the ends decide
+// EOF and EPIPE among themselves. The last of any kind of holder frees.
+void pipe_hold(pipe_t *p);
+void pipe_unhold(pipe_t *p);
 
 // Reads return SHORT: whatever is available, immediately — a reader asking for
 // 4096 when 10 bytes are there gets 10. (Waiting to fill the caller's buffer
 // deadlocks every interactive pipeline.) Blocks only when the pipe is EMPTY and
 // a writer still exists. Returns 0 = EOF once the last writer is gone.
-long pipe_read(pipe_t *p, char *buf, size_t len);
+//
+// `deadline` is a kTicksSinceStart value, or 0 for "block forever" (the
+// classic pipe read). A non-zero deadline that passes while the pipe is empty
+// returns PIPE_ERR_TIMEOUT — bytes and EOF still outrank the clock. It exists
+// for a caller that must wait on the pipe AND another source at once: a STREAM
+// pty master read carries it, so its holder can poll both (SERVERS.md).
+long pipe_read(pipe_t *p, char *buf, size_t len, uint64_t deadline);
 
 // Writes land WHOLE: a write of <= PIPE_CAPACITY is atomic — nothing is copied
 // until there is room for all of it, so two writers can never interleave. (Our
@@ -106,6 +128,13 @@ long pipe_read(pipe_t *p, char *buf, size_t len);
 // are gone (the caller raises SIGPIPE, whose default action terminates — that
 // is what makes `yes | head` terminate instead of spinning forever).
 long pipe_write(pipe_t *p, const char *buf, size_t len);
+
+// The write that NEVER PARKS: as many of `len` bytes as the ring has room
+// for, right now, and the count back — short or zero when it is full,
+// PIPE_ERR_CLOSED when nobody reads. For a caller that may not sleep
+// (kernel text aimed at a STREAM pty from the exception path — tty.c says
+// what it does with the shortfall). Wakes a parked reader like any write.
+long pipe_write_if_room(pipe_t *p, const char *buf, size_t len);
 
 // Level-triggered wake sweep, called once per scheduler pass from
 // processSignals — the same discipline as console_wake_if_ready(). The fast

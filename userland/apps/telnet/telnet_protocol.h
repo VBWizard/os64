@@ -156,7 +156,10 @@ typedef enum {
 // What the caller has to ACT on, as opposed to what it can read whenever it
 // likes. Latched by the engine, read and cleared by telnet_notices.
 
-#define TELNET_NOTE_ECHO       (1u << 0)  // local echo policy just changed
+#define TELNET_NOTE_ECHO       (1u << 0)  // (CLIENT) local echo policy just
+                                          //  changed; (SERVER) the client
+                                          //  answered our ECHO — on, or OFF
+                                          //  (DONT): telnet_option_ours says
 #define TELNET_NOTE_SIZE       (1u << 1)  // the peer takes NAWS now — send it
 #define TELNET_NOTE_AYT        (1u << 2)  // the peer asked "are you there?"
 #define TELNET_NOTE_CONTRADICT (1u << 3)  // RFC 1143 caught an answer that
@@ -164,13 +167,33 @@ typedef enum {
                                           //  DONT answered by WILL). Not
                                           //  fatal: the method resolves it,
                                           //  and this is how it says so
+#define TELNET_NOTE_RESIZE     (1u << 4)  // (SERVER role) the client sent a
+                                          //  NAWS window size — read it with
+                                          //  telnet_peer_size and resize the pty
+
+// The two ends of a telnet conversation want opposite things from the same
+// options, so the engine carries a role. CLIENT is the door's caller (the
+// original scope: it may be echoed AT, it offers its window size); SERVER is
+// the door — it echoes, and it wants to be TOLD the window size.
+typedef enum {
+    TELNET_CLIENT = 0,   // the zero default: telnet_init leaves this
+    TELNET_SERVER,
+} telnet_role_t;
 
 typedef struct {
-    // The parse state machine, and the byte it is waiting on. A
-    // subnegotiation has no buffer here: nothing this client offers has
-    // parameters to RECEIVE, so one is read only in order to be thrown away.
+    uint8_t  role;            // telnet_role_t — CLIENT (0) or SERVER
+
+    // The parse state machine, and the byte it is waiting on. A CLIENT reads
+    // a subnegotiation only to throw it away (it offers nothing with
+    // parameters to receive); a SERVER keeps a NAWS payload, so there is a
+    // small buffer below that only the server fills.
     uint8_t  parse;
     uint8_t  verb;            // WILL/WONT/DO/DONT awaiting its option byte
+    uint8_t  sb_opt;          // which option's subnegotiation we are inside
+    uint8_t  sb_len;          // bytes gathered into sb_buf (server, NAWS)
+    uint8_t  sb_buf[8];       // NAWS is four bytes; the cap discards the rest
+    bool     saw_cr;          // (SERVER) last data byte was CR — collapse a
+                              //  following LF/NUL so CR LF becomes one Enter
 
     // Outbound, a CR is only half a decision: the LF that may or may not
     // follow it belongs to the same newline, and can arrive in the next call.
@@ -193,6 +216,10 @@ typedef struct {
     uint16_t cols, rows;
     bool     size_known;      // telnet_send_size has been told a size
 
+    // (SERVER) the last window size the client sent by NAWS, published to the
+    // caller through telnet_peer_size and the RESIZE notice.
+    uint16_t peer_cols, peer_rows;
+
     // What Enter spells on the wire. FALSE — the default, and 4.2BSD's — is
     // CR NUL; TRUE is CR LF. See telnet_set_eol_crlf.
     bool     eol_crlf;
@@ -201,6 +228,11 @@ typedef struct {
 // ── Life ────────────────────────────────────────────────────────────────
 
 void telnet_init(telnet_t *t);
+
+// The same engine as a SERVER: it echoes and it wants the window size. Use
+// telnet_offer_server for its opening offers, and telnet_peer_size to read a
+// NAWS the client sent (the TELNET_NOTE_RESIZE notice says one arrived).
+void telnet_init_server(telnet_t *t);
 
 // THE CLIENT SPEAKS FIRST, and this is what it says: DO SGA and WILL SGA
 // (neither end should wait for a turn) and WILL NAWS (we have a window size
@@ -211,6 +243,18 @@ void telnet_init(telnet_t *t);
 // For a fresh engine, where the queue cannot be too full to hold the offers.
 // Returns false if it was not.
 bool telnet_offer(telnet_t *t);
+
+// THE SERVER SPEAKS FIRST TOO, and it says the opposite: WILL ECHO and WILL
+// SGA (it drives the line and echoes what is typed — echo is the reader's
+// job in os64, so husk echoes and a client that also echoed would double
+// every key) and DO NAWS (tell me your window size). Returns false if the
+// queue was too full to hold the offers.
+bool telnet_offer_server(telnet_t *t);
+
+// (SERVER) The window size the client last sent by NAWS. Returns true and
+// fills cols/rows if one has arrived; false before the first. Pair it with
+// the TELNET_NOTE_RESIZE notice — read the size, resize the pty.
+bool telnet_peer_size(const telnet_t *t, uint16_t *cols, uint16_t *rows);
 
 // ── From the peer ───────────────────────────────────────────────────────
 

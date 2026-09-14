@@ -5,6 +5,7 @@ static tcp_conn_t* init(void)
 {
 	tcp_conn_t* c = calloc(1, sizeof(*c));
 	c->state = TCP_ESTABLISHED; c->dev = &dev; c->peer_ip = 0x0a000202;
+	c->handles = 1;   // the fixture owns a live handle; zero means a closed line
 	c->local_port = 50000; c->peer_port = 7200; c->rcv_nxt = 5000;
 	c->snd_una = c->snd_nxt = c->snd_max = c->recover = 1000;
 	c->snd_wl1 = 5000; c->snd_wl2 = 1000;
@@ -496,10 +497,123 @@ static void test_write_deadline(void)
 	puts("TCP write waits: poll, finite expiry, partial/wrapped progress, wake, signal/reset and blocking writes PASS");
 }
 
+/* A child can release its handle while the peer leaves FIN unacknowledged.
+ * Admission must count the retained rings across accepts and listener
+ * replacement, then recover when the real TCP retirement path strips them. */
+static void test_passive_storage(void)
+{
+	cleanup(init());
+	int64_t why = 0;
+	tcp_listener_t *l = tcp_listener_announce(&dev, 23, &why);
+	assert(l);
+	/* Expected policy bound, independent of the implementation's macro. */
+	const unsigned limit = 32;
+	for (unsigned i = 0; i < limit; i++)
+	{
+		tcp_conn_t peer = {.peer_ip = 0x0a000202, .peer_port = 10000 + i, .local_port = 23};
+		incoming(&peer, 5000, 0, 65535, TCP_SYN);
+		tcp_conn_t *c = kTcpConnList;
+		assert(c && c->peer_port == peer.peer_port && c->state == TCP_SYN_RECEIVED);
+		incoming(c, c->rcv_nxt, c->snd_max, 65535, TCP_ACK);
+		long accept_why = 0;
+		assert(tcp_listener_accept(l, 0, &accept_why) == c);
+		tcp_conn_release(c);
+		assert(c->detached && c->state == TCP_FIN_WAIT_1 && !c->stripped);
+		assert(c->rcv_buf && c->snd_buf && !l->pending);
+	}
+	uint64_t moves = kTcpStats.heap_moves;
+	tcp_conn_t *head = kTcpConnList;
+	tcp_conn_t excess = {.peer_ip = 0x0a000202, .peer_port = 20000, .local_port = 23};
+	unsigned sent = npackets;
+	incoming(&excess, 5000, 0, 65535, TCP_SYN);
+	assert(kTcpStats.heap_moves == moves && kTcpConnList == head && npackets == sent);
+	assert(!l->pending && l->syns_dropped == 1);
+	tcp_listener_close(l);
+	l = tcp_listener_announce(&dev, 23, &why);
+	assert(l);
+	moves = kTcpStats.heap_moves;
+	incoming(&excess, 5000, 0, 65535, TCP_SYN);
+	assert(kTcpStats.heap_moves == moves && kTcpConnList == head);
+	assert(kTcpStats.passive_buffered == limit && kTcpStats.syns_dropped_storage == 2);
+
+	/* A normal FIN exchange releases one slot at TIME_WAIT stripping. A
+	 * later reset of that stripped row must not release the slot twice. */
+	incoming(head, head->rcv_nxt, head->snd_max, 65535, TCP_FIN | TCP_ACK);
+	tcp_poll();
+	assert(head->state == TCP_TIME_WAIT && head->stripped);
+	assert(kTcpStats.passive_buffered == limit - 1);
+	incoming(head, head->rcv_nxt, head->snd_max, 65535, TCP_RST | TCP_ACK);
+	tcp_poll();
+	assert(kTcpStats.passive_buffered == limit - 1);
+	incoming(&excess, 5000, 0, 65535, TCP_SYN);
+	tcp_conn_t *fresh = kTcpConnList;
+	assert(fresh != head && fresh->peer_port == excess.peer_port);
+	assert(kTcpStats.passive_buffered == limit);
+	incoming(fresh, fresh->rcv_nxt, fresh->snd_max, 65535, TCP_RST | TCP_ACK);
+	tcp_poll();
+	assert(kTcpStats.passive_buffered == limit - 1);
+
+	/* The detached deadline releases the rings even without FIN ACKs. */
+	kTicksSinceStart += TCP_DETACHED_IDLE_TICKS;
+	tcp_poll();
+	for (tcp_conn_t *c = kTcpConnList; c; c = c->next)
+		assert(c->stripped && !c->rcv_buf && !c->snd_buf);
+	assert(kTcpStats.passive_buffered == 0);
+	incoming(&excess, 5000, 0, 65535, TCP_SYN);
+	assert(kTcpConnList->peer_port == excess.peer_port && kTcpConnList->rcv_buf);
+	tcp_listener_close(l);
+	tcp_poll();
+	kTicksSinceStart += TCP_MORGUE_TICKS;
+	tcp_poll();
+	assert(!kTcpConnList && !kTcpListenerList && !s_closed_listeners);
+	assert(kTcpStats.passive_buffered == 0);
+	puts("TCP passive storage: closing rings retain capacity across listener replacement; timeout restores admission PASS");
+}
+
+static void test_passive_storage_across_listeners(void)
+{
+	cleanup(init());
+	int64_t why = 0;
+	tcp_listener_t *listeners[3];
+	for (unsigned i = 0; i < 3; i++)
+	{
+		listeners[i] = tcp_listener_announce(&dev, 23 + i, &why);
+		assert(listeners[i]);
+	}
+	for (unsigned i = 0; i < 32; i++)
+	{
+		tcp_conn_t peer = {.peer_ip = 0x0a000202, .peer_port = 10000 + i,
+		                   .local_port = 23 + i / 16};
+		incoming(&peer, 5000, 0, 65535, TCP_SYN);
+		assert(kTcpConnList->peer_port == peer.peer_port);
+	}
+	assert(kTcpStats.passive_buffered == 32);
+	tcp_conn_t extra = {.peer_ip = 0x0a000202, .peer_port = 20000, .local_port = 25};
+	uint64_t moves = kTcpStats.heap_moves;
+	incoming(&extra, 5000, 0, 65535, TCP_SYN);
+	assert(kTcpStats.heap_moves == moves && !listeners[2]->pending);
+	tcp_listener_close(listeners[0]);
+	assert(kTcpStats.passive_buffered == 32);  // close marks; the poll frees
+	tcp_poll();
+	assert(kTcpStats.passive_buffered == 16);
+	incoming(&extra, 5000, 0, 65535, TCP_SYN);
+	assert(listeners[2]->pending == 1 && kTcpStats.passive_buffered == 17);
+	tcp_listener_close(listeners[1]);
+	tcp_listener_close(listeners[2]);
+	tcp_poll();
+	assert(kTcpStats.passive_buffered == 0);
+	kTicksSinceStart += TCP_MORGUE_TICKS;
+	tcp_poll();
+	assert(!kTcpConnList && !kTcpListenerList && !s_closed_listeners);
+	puts("TCP passive storage: half-open connections share a global bound across ports PASS");
+}
+
 int main(void)
 {
 	test_submissions(); test_handshake_reset(); test_lifetime(); test_rto(); test_congestion();
 	test_persist(); test_wrap_fin_window(); test_stream(); test_arp_hold(); test_writer_wake(); test_write_deadline();
+	test_passive_storage();
+	test_passive_storage_across_listeners();
 	puts("TCP host: submission, lifetime, RTO, congestion, persist, ring/sequence/FIN, ARP-hold, writer-wake tests PASS");
 	return 0;
 }

@@ -38,8 +38,12 @@
 // What our SYN carries: MSS (4 bytes), a NOP, then the window scale (3
 // bytes). The NOP is padding to a 32-bit boundary — the header's data
 // offset counts in words — and it sits BEFORE the scale option, the order
-// 4.4BSD sent and the one the parsers of the internet grew up on.
-#define TCP_SYN_OPTIONS_LEN 8
+// 4.4BSD sent and the one the parsers of the internet grew up on. A
+// SYN-ACK answering a peer that offered no shift carries the MSS alone
+// (§2.2: the passive side may not offer scaling unasked), which is
+// already a whole word.
+#define TCP_SYN_OPTIONS_LEN     8
+#define TCP_SYN_OPTIONS_MSS_LEN 4
 
 typedef struct
 {
@@ -59,6 +63,10 @@ void tcp_syn_options_parse(const uint8_t* opts, size_t len, tcp_syn_options_t* o
 // Write our SYN's options into `out` (TCP_SYN_OPTIONS_LEN bytes) and
 // return how many were written.
 size_t tcp_syn_options_write(uint8_t* out, uint16_t mss, uint8_t wscale);
+
+// The MSS alone (TCP_SYN_OPTIONS_MSS_LEN bytes): what a SYN-ACK carries to
+// a peer whose SYN offered no shift. Returns how many were written.
+size_t tcp_syn_options_write_mss(uint8_t* out, uint16_t mss);
 
 // The window field for a segment: the window shifted down by our own
 // count, clamped to what sixteen bits can say. A shift of 0 is the
