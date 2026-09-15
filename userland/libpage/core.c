@@ -1095,7 +1095,7 @@ int64_t os64_page_set_text(os64_page_t *page, int32_t control, const char *utf8,
     char *raw = p_arena_copy(&temporary, utf8 != NULL ? utf8 : "", len);
     size_t value_len = 0;
     const char *value = raw != NULL ? p_sanitize_value(&temporary, c->node, c->element,
-                                                       c->input, raw, &value_len) : NULL;
+                                                       c->input, raw, len, &value_len) : NULL;
     char *text = value != NULL ? os64_malloc(value_len + 1) : NULL;
     if (text == NULL) {
         p_arena_free(&temporary);

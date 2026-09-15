@@ -124,7 +124,7 @@ normalization, long year handling, allocator arithmetic guards and dirty
 state preservation after failed edits. The previous range midpoint and
 2026-W53 tests asserted incorrect expectations; both are corrected.
 
-## Validation
+## Initial repair validation
 
 - `ASAN_OPTIONS=detect_leaks=0 bash tools/test_libpage_host.sh`: **178,130
   assertions, zero failures**; persistent failure sweep over 315 allocation
@@ -167,3 +167,27 @@ the capped-cycle status respectively. After each settles, compare the access
 log before and after Up/Down/Home/End. No extra requests should appear. The
 cycle permits the initial request plus five refresh hops. Explicit reload
 or a new navigation is a fresh loaded document and can handle refresh again.
+
+## Review round 1
+
+The text-edit sanitizer now receives the caller's byte length. Text controls,
+textareas, hidden controls, ticks and buttons retain embedded U+0000 and the
+bytes after it while applying their normal newline/whitespace rules. Scalar
+numeric/date/time/color values containing U+0000 are invalid as a whole;
+range and color use their specified invalid-value defaults. Reset retains
+normalized defaults, and request serializers receive the full current span.
+
+The option-value and refresh public comments were false: option fallback
+values come from gathered text rather than the display label, and a
+same-document fragment refresh follows fragment navigation rather than
+unconditionally fetching. The corresponding refresh claim in LIBPAGE.md is
+corrected too.
+
+The new span regressions produced 46 failed assertions before the fix and
+zero afterward. The complete host suite passes 178,224 assertions, including
+all three submission encodings, suffix bytes beyond NUL, explicit span ends,
+scalar rejection, hard wrapping and reset. The strict userland build passes.
+Two-core QEMU `pagetest` also checks the embedded-NUL value span and request
+bytes; it and `htmltest` pass. Guest evidence is in `/tmp/libpage-r1-guest/`.
+Execution logs: `/tmp/libpage-r1-before.log`, `/tmp/libpage-r1-after.log`,
+`/tmp/libpage-r1-build.log`.

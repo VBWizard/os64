@@ -203,9 +203,10 @@ const char *p_range_value(PArena *arena, const os64_html_node_t *node,
                           const char *raw, size_t *len);
 os64_page_input_t p_input_type(const os64_html_node_t *n);
 // Shared by initial values and edits; temporary storage belongs to arena.
+// raw_len is authoritative; raw also has a terminator at that offset.
 const char *p_sanitize_value(PArena *arena, const os64_html_node_t *n,
                             os64_page_element_t element, os64_page_input_t input,
-                            const char *raw, size_t *len);
+                            const char *raw, size_t raw_len, size_t *len);
 // The value the standard says this control holds, with the page's own bytes
 // sanitized for its type. Arena storage, or a tree pointer when nothing
 // needed changing.

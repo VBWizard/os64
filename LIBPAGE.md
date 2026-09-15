@@ -527,9 +527,9 @@ name the page it is already on. Both faces will want it identically.
 Three rules about whether to OBEY one stayed with the face, because each is
 about a person reading rather than about a page: a delay is patience to
 spend and wend has no timer in its key loop, so a delayed refresh is
-reported and left alone; a refresh naming the page it is on is a reload with
-no exit and is never automatic; and a chain of them is capped the way
-libfetch caps redirects. The redirector is also NOT remembered in the
+reported and left alone; an immediate same-document refresh without a
+fragment is not followed, while one with a fragment uses fragment navigation;
+and a chain of fetched refreshes is capped the way libfetch caps redirects. The redirector is also NOT remembered in the
 history, or `b` bounces straight off it back into the page it was sending
 you away from.
 

@@ -277,11 +277,86 @@ static void state_long_reset(void)
     os64_page_free(page); os64_html_document_free(doc);
 }
 
+static void state_byte_spans(void)
+{
+    static const struct {
+        const char *control, *edit;
+        size_t edit_len;
+        const char *want;
+        size_t want_len;
+        const char *body;
+    } cases[] = {
+#define SPAN(s) s, sizeof(s)-1
+        {"<input name=q>", SPAN("a\0b\r\nc"), SPAN("a\0bc"), "q=a%00bc"},
+        {"<input type=search name=q>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=tel name=q>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=password name=q>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=hidden name=q>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=checkbox name=q checked>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=radio name=q checked>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=url name=q>", SPAN(" a\0b \r\n "), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=email name=q>", SPAN(" a\0b \r\n "), SPAN("a\0b"), "q=a%00b"},
+        {"<input type=email multiple name=q>", SPAN(" a\0b , c@d "), SPAN("a\0b,c@d"), "q=a%00b%2Cc%40d"},
+        {"<textarea name=q></textarea>", SPAN("a\0b\r\nc"), SPAN("a\0b\nc"), "q=a%00b%0D%0Ac"},
+        {"<textarea name=q wrap=hard cols=2></textarea>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00%0D%0Ab"},
+        {"<input type=number name=q>", SPAN("12\0x"), SPAN(""), "q="},
+        {"<input type=date name=q>", SPAN("2024-01-01\0x"), SPAN(""), "q="},
+        {"<input type=month name=q>", SPAN("2024-01\0x"), SPAN(""), "q="},
+        {"<input type=week name=q>", SPAN("2024-W01\0x"), SPAN(""), "q="},
+        {"<input type=time name=q>", SPAN("12:30\0x"), SPAN(""), "q="},
+        {"<input type=datetime-local name=q>", SPAN("2024-01-01T12:30\0x"), SPAN(""), "q="},
+        {"<input type=range name=q>", SPAN("75\0x"), SPAN("50"), "q=50"},
+        {"<input type=color name=q>", SPAN("#ff0000\0x"), SPAN("#000000"), "q=%23000000"},
+        // The byte after the supplied span belongs to the caller, not the edit.
+        {"<input name=q>", "a\0bX", 3, SPAN("a\0b"), "q=a%00b"},
+        {"<input name=q>", SPAN("\0"), SPAN("\0"), "q=%00"},
+#undef SPAN
+    };
+    for (size_t i=0;i<sizeof(cases)/sizeof(cases[0]);i++) {
+        char html[256], name[80];
+        snprintf(html,sizeof(html),"<form method=post>%s<button>Go</button></form>",cases[i].control);
+        snprintf(name,sizeof(name),"byte span: case %zu",i);
+        os64_html_document_t *doc=parse(html,"utf-8");
+        os64_page_t *page=os64_page_build(doc,kPage,NULL);
+        const os64_page_control_t *c=os64_page_control(page,0);
+        const char *initial=c->value;size_t initial_len=c->value_len;
+        state_expect(name,os64_page_set_text(page,0,cases[i].edit,cases[i].edit_len)==0);
+        state_expect(name,c->value_len==cases[i].want_len &&
+            !memcmp(c->value,cases[i].want,cases[i].want_len) && c->value[c->value_len]=='\0');
+        os64_page_request_t req;
+        os64_page_what_t what={OS64_PAGE_ACTIVATE_CONTROL,1,0,0};
+        state_expect(name,os64_page_activate(page,what,&req)==OS64_PAGE_NAVIGATE &&
+            req.body_len==strlen(cases[i].body) && !memcmp(req.body,cases[i].body,req.body_len));
+        os64_page_request_free(&req);
+        state_expect(name,os64_page_reset(page,0)==0 && c->value_len==initial_len &&
+            !memcmp(c->value,initial,initial_len));
+        os64_page_free(page);os64_html_document_free(doc);
+    }
+    static const char *enctypes[]={"text/plain","multipart/form-data"};
+    for (size_t i=0;i<2;i++) {
+        char html[256];
+        snprintf(html,sizeof(html),"<form method=post enctype=%s><button name=q>Go</button></form>",enctypes[i]);
+        os64_html_document_t *doc=parse(html,"utf-8");
+        os64_page_t *page=os64_page_build(doc,kPage,NULL);
+        state_expect("byte span: button edit",os64_page_set_text(page,0,"a\0b",3)==0);
+        os64_page_request_t req;os64_page_what_t what={OS64_PAGE_ACTIVATE_CONTROL,0,0,0};
+        state_expect("byte span: raw submission",os64_page_activate(page,what,&req)==OS64_PAGE_NAVIGATE);
+        const char *needle=i==0 ? "q=a\0b\r\n" : "\r\n\r\na\0b\r\n";
+        size_t len=i==0 ? 7 : 9;bool found=false;
+        for (size_t at=0;at+len<=req.body_len;at++)
+            if (!memcmp(req.body+at,needle,len)) found=true;
+        state_expect("byte span: serializer retains NUL and suffix",found);
+        os64_page_request_free(&req);
+        os64_page_free(page);os64_html_document_free(doc);
+    }
+}
+
 static void state_cases(void)
 {
     state_group_reset();
     state_sanitizers();
     state_tick_values();
+    state_byte_spans();
     state_selection_cases();
     state_allocation_failures();
     state_large_group();

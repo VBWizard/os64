@@ -193,9 +193,8 @@ static bool valid_for(os64_page_input_t input, const char *s)
 
 // ── The sanitizers ──────────────────────────────────────────────────────
 
-static char *strip_breaks(PArena *arena, const char *s, size_t *len)
+static char *strip_breaks(PArena *arena, const char *s, size_t n, size_t *len)
 {
-    size_t n = os64_strlen(s);
     char *out = p_arena_alloc(arena, n + 1);
     if (out == NULL)
         return NULL;
@@ -254,13 +253,11 @@ static bool hex(char c)
     return digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
-static char *color_value(PArena *arena, const char *s, size_t *len)
+static char *color_value(PArena *arena, const char *s, size_t n, size_t *len)
 {
-    bool simple = s[0] == '#';
+    bool simple = n == 7 && s[0] == '#';
     for (int32_t i = 1; simple && i <= 6; i++)
         simple = hex(s[i]);
-    if (simple && s[7] != '\0')
-        simple = false;
     if (!simple) {
         *len = 7;
         return p_arena_copy(arena, "#000000", 7);
@@ -275,16 +272,16 @@ static char *color_value(PArena *arena, const char *s, size_t *len)
     return out;
 }
 
-static const char *datetime_value(PArena *arena, const char *raw, size_t *len)
+static const char *datetime_value(PArena *arena, const char *raw, size_t raw_len, size_t *len)
 {
-    char *out=p_arena_copy(arena,raw,os64_strlen(raw));
+    char *out=p_arena_copy(arena,raw,raw_len);
     if (out == NULL)
         return NULL;
     size_t time=0;
     while (out[time] != 'T' && out[time] != ' ')
         time++;
     out[time++]='T';
-    size_t end=os64_strlen(out);
+    size_t end=raw_len;
     if (end>time+8 && out[time+8]=='.') {
         while (out[end-1]=='0') end--;
         if (out[end-1]=='.') end--;
@@ -304,23 +301,35 @@ const char *p_page_value(os64_page_t *page, const os64_html_node_t *n,
         return NULL;
     if (raw == NULL && (input == OS64_PAGE_INPUT_CHECKBOX || input == OS64_PAGE_INPUT_RADIO))
         raw = "on";
-    return p_sanitize_value(&page->arena, n, element, input, raw != NULL ? raw : "", len);
+    size_t raw_len = element == OS64_PAGE_EL_TEXTAREA ? *len :
+                     raw != NULL ? os64_strlen(raw) : 0;
+    return p_sanitize_value(&page->arena, n, element, input, raw != NULL ? raw : "", raw_len, len);
+}
+
+// Scalar grammars consume terminated strings. A NUL inside the input span
+// invalidates the scalar rather than making its valid prefix the value.
+static bool contains_nul(const char *raw, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+        if (raw[i] == '\0')
+            return true;
+    return false;
 }
 
 const char *p_sanitize_value(PArena *arena, const os64_html_node_t *n,
                             os64_page_element_t element, os64_page_input_t input,
-                            const char *raw, size_t *len)
+                            const char *raw, size_t raw_len, size_t *len)
 {
     *len = 0;
     if (element == OS64_PAGE_EL_TEXTAREA) {
-        char *text = p_arena_copy(arena, raw, os64_strlen(raw));
+        char *text = p_arena_copy(arena, raw, raw_len);
         if (text == NULL)
             return NULL;
         size_t write = 0;
-        for (size_t read = 0; text[read] != '\0'; read++) {
+        for (size_t read = 0; read < raw_len; read++) {
             if (text[read] == '\r') {
                 text[write++] = '\n';
-                if (text[read + 1] == '\n')
+                if (read + 1 < raw_len && text[read + 1] == '\n')
                     read++;
             } else {
                 text[write++] = text[read];
@@ -333,7 +342,7 @@ const char *p_sanitize_value(PArena *arena, const os64_html_node_t *n,
     if (element == OS64_PAGE_EL_SELECT || input == OS64_PAGE_INPUT_FILE)
         return "";
     if (element == OS64_PAGE_EL_BUTTON) {
-        *len = os64_strlen(raw);
+        *len = raw_len;
         return raw;
     }
     switch (input) {
@@ -341,15 +350,15 @@ const char *p_sanitize_value(PArena *arena, const os64_html_node_t *n,
     case OS64_PAGE_INPUT_SEARCH:
     case OS64_PAGE_INPUT_TEL:
     case OS64_PAGE_INPUT_PASSWORD:
-        return strip_breaks(arena, raw, len);
+        return strip_breaks(arena, raw, raw_len, len);
     case OS64_PAGE_INPUT_URL: {
-        char *out = strip_breaks(arena, raw, len);
+        char *out = strip_breaks(arena, raw, raw_len, len);
         if (out != NULL)
             strip_ends(out, len);
         return out;
     }
     case OS64_PAGE_INPUT_EMAIL: {
-        char *out = strip_breaks(arena, raw, len);
+        char *out = strip_breaks(arena, raw, raw_len, len);
         if (out == NULL)
             return NULL;
         if (p_has_attr(n, "multiple"))
@@ -360,9 +369,9 @@ const char *p_sanitize_value(PArena *arena, const os64_html_node_t *n,
     }
     case OS64_PAGE_INPUT_NUMBER: {
         double value;
-        if (!p_number_parse(raw, true, &value))
+        if (contains_nul(raw, raw_len) || !p_number_parse(raw, true, &value))
             return "";
-        *len = os64_strlen(raw);
+        *len = raw_len;
         return raw;
     }
     case OS64_PAGE_INPUT_DATE:
@@ -370,21 +379,21 @@ const char *p_sanitize_value(PArena *arena, const os64_html_node_t *n,
     case OS64_PAGE_INPUT_WEEK:
     case OS64_PAGE_INPUT_TIME:
     case OS64_PAGE_INPUT_DATETIME_LOCAL:
-        if (!valid_for(input, raw))
+        if (contains_nul(raw, raw_len) || !valid_for(input, raw))
             return "";
         if (input == OS64_PAGE_INPUT_DATETIME_LOCAL)
-            return datetime_value(arena,raw,len);
-        *len = os64_strlen(raw);
+            return datetime_value(arena,raw,raw_len,len);
+        *len = raw_len;
         return raw;
     case OS64_PAGE_INPUT_RANGE:
-        return p_range_value(arena, n, raw, len);
+        return p_range_value(arena, n, contains_nul(raw, raw_len) ? "" : raw, len);
     case OS64_PAGE_INPUT_COLOR:
-        return color_value(arena, raw, len);
+        return color_value(arena, raw, raw_len, len);
     default:
         // Hidden values, ticks and buttons go through
         // verbatim; what each of them SENDS is family D's answer, not this
         // one's.
-        *len = os64_strlen(raw);
+        *len = raw_len;
         return raw;
     }
 }

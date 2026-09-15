@@ -164,8 +164,8 @@ typedef enum {
 // page made three.
 typedef struct {
     const os64_html_node_t *node;
-    const char *label;      // the words, as the standard gathers them
-    const char *value;      // what picking it sends: `value`, else the label
+    const char *label;      // display label: nonempty `label`, else gathered option text
+    const char *value;      // submitted value: `value`, else gathered option text
     bool disabled;          // its own attribute, or its `optgroup`'s
     bool selected;          // now, a person's choice included
 } os64_page_option_t;
@@ -242,7 +242,7 @@ typedef struct {
 //
 // libpage says a refresh is DECLARED and where to. Whether to follow it,
 // and whether to wait, is the face's: a delay is a person's patience, and a
-// refresh that names the page it is on is a reload the face may want to cap.
+// same-document refresh without a fragment is a reload the face may cap.
 // Follow it through the door, with OS64_PAGE_ACTIVATE_REFRESH, so the
 // request carries the same facts a link's does.
 typedef struct {
@@ -252,7 +252,8 @@ typedef struct {
     // page named an address at all: without one the target is this document,
     // which is a reload and what the bare-number form was invented for.
     os64_page_ref_t url;
-    // Following it re-fetches the page it was declared on.
+    // The target URL names this document. A fragment-bearing target goes
+    // through fragment navigation; without one, following it re-fetches.
     bool names_this_document;
 } os64_page_refresh_t;
 
@@ -330,7 +331,9 @@ const os64_html_node_t *os64_page_anchor(const os64_page_t *page, const char *de
 // to and never by an index, so the model can be rebuilt from the tree
 // without losing its value. Initial and edited text use the same type
 // sanitizer. Front ends needing intermediate invalid input retain their
-// editing buffer separately from this normalized value.
+// editing buffer separately from this normalized value. The input length
+// includes embedded U+0000 bytes; they survive text sanitization but make
+// numeric, date/time and color strings invalid for their scalar grammars.
 //
 // The model does not depend on how wide anything is, so a face builds it
 // ONCE per page: a window that changes size re-draws and never rebuilds.

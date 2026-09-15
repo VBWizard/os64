@@ -67,6 +67,12 @@ static void state(void)
     require(req.method==OS64_PAGE_METHOD_POST && os64_streq(req.url,"https://host/send"),"submission target");
     require(os64_streq((const char *)req.body,"s=B&r=a&t=abc%0D%0Adef"),"serialized state");
     os64_page_request_free(&req);
+    require(os64_page_set_text(page,3,"a\0b\r\nc",6)==0,"embedded NUL edit");
+    const os64_page_control_t *text=os64_page_control(page,3);
+    require(text->value_len==5 && os64_memcmp(text->value,"a\0b\nc",5)==0,"embedded NUL value span");
+    require(os64_page_activate(page,what,&req)==OS64_PAGE_NAVIGATE,"embedded NUL submission");
+    require(os64_streq((const char *)req.body,"s=B&r=a&t=a%00b%0D%0Ac"),"embedded NUL request bytes");
+    os64_page_request_free(&req);
     require(os64_page_reset(page,0)==0,"reset");
     require(os64_streq(os64_page_control(page,0)->value,"A") && os64_page_control(page,2)->checked,"normalized reset");
     os64_page_free(page);os64_html_document_free(doc);
