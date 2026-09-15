@@ -248,9 +248,10 @@ typedef struct {
 typedef struct {
     const os64_html_node_t *node;   // the `meta` that asked
     uint32_t seconds;               // 0 is now; a page may ask for a long wait
-    // WHERE TO, always resolved and never NULL. `spelled` says whether the
-    // page named an address at all: without one the target is this document,
-    // which is a reload and what the bare-number form was invented for.
+    // Check refused before reading url: retaining the winning candidate
+    // can fail with NO_MEMORY and a NULL URL. On success, url is resolved;
+    // spelled distinguishes an explicit address from a bare-delay reload
+    // of this document.
     os64_page_ref_t url;
     // The target URL names this document. A fragment-bearing target goes
     // through fragment navigation; without one, following it re-fetches.

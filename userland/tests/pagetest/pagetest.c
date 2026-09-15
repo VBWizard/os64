@@ -124,10 +124,25 @@ static void reference_edges(void)
     os64_page_request_free(&req);os64_page_free(page);os64_html_document_free(doc);
 }
 
+static void network_targets(void)
+{
+    const char *schemes[]={"http:foo","https:/foo","ftp:foo"};
+    for(size_t i=0;i<sizeof(schemes)/sizeof(schemes[0]);i++) {
+        char html[180];
+        os64_snprintf(html,sizeof(html),"<form action='%s'><input name=q value=x><button>Go</button>",schemes[i]);
+        os64_html_document_t *doc;
+        os64_page_t *page=build(html,&doc);
+        os64_page_request_t req;
+        require(os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL,1,0,0},&req)==OS64_PAGE_REFUSED &&
+            req.reason==OS64_PAGE_REASON_BAD_ACTION && req.url==NULL && req.body==NULL,"network action requires authority");
+        os64_page_request_free(&req);os64_page_free(page);os64_html_document_free(doc);
+    }
+}
+
 int main(void)
 {
     require(os64_heap_verify()==0,"heap before");
-    numeric();state();navigation();reference_edges();
+    numeric();state();navigation();reference_edges();network_targets();
     require(os64_heap_verify()==0,"heap after");
     os64_printf("pagetest: numeric conversion, range grids, control state and submission passed\n");
     os64_serial_log("pagetest: PASS numeric conversion, range grids, control state and submission");

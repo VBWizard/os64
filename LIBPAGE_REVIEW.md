@@ -273,3 +273,33 @@ row and report refusal/missing geometry. Screenshots were inspected and the
 server log contained only the two startup requests from the guest's two
 shells. Both guest runs shut down cleanly; the final smoke run includes the
 canonical-URL allocation guard. Allocation failure behavior is host-tested.
+
+## Third combined review follow-up
+
+The two findings are addressed without expanding the consumer migration or
+URL Standard scope:
+
+- The refresh struct comment was wrong: retaining the winning candidate
+  can publish `NO_MEMORY` with a NULL URL. It now requires checking refusal
+  before reading the URL, matching the getter contract and wend's existing
+  refusal handling. The allocation-failure regressions remain in the suite.
+- HTTP, HTTPS and FTP submissions validate the effective target with the
+  shared hierarchical URL parser before entry-list construction. Explicit
+  actions, submitter overrides, absent/empty actions and implicit submission
+  share this check. Authority-less network targets are refused with
+  `BAD_ACTION`; parser capacity failures preserve `TOO_LONG`. Dialog handling
+  remains before target validation because it does not navigate.
+
+The new host regressions produced 47 failed assertions before the guard and
+zero afterward. They cover four malformed targets across GET/POST and four
+action sources with a one-byte body limit, plus implicit submission, dialog
+ordering and valid HTTP/HTTPS/FTP requests. The complete ASan/UBSan libpage
+suite passes **178,629 checks**, including the 315-position persistent
+allocation-failure sweep. The full strict userland cross-build,
+`git diff --check` and `tools/stale_refs.sh` pass.
+
+Two-core QEMU `pagetest` and `htmltest` pass; the page test now verifies
+authority-less HTTP, HTTPS and FTP refusal without a URL or body. The guest
+powered off after the tests. Evidence is in `/tmp/libpage-r4-guest/`,
+`/tmp/libpage-r4-before.log`, `/tmp/libpage-r4-host.log` and
+`/tmp/libpage-r4-build.log`.

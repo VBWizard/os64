@@ -428,6 +428,12 @@ the destination resolver as well. The existing form serializer remains a
 separate migration item; its fragment buffer now refuses insufficient
 capacity rather than truncating, and destination lookup uses libpage.
 
+HTTP, HTTPS and FTP form targets must parse with the project's hierarchical
+URL grammar before entry-list construction. This check covers explicit
+actions, submitter overrides, and fallback document URLs. Authority-less
+spellings such as `http:foo` are refused, rather than repaired using the full
+URL Standard's special-scheme rules.
+
 The `max_body` option bounds HTTP POST bodies. Entry lists carried in URLs
 (GET and mail POST) use the URL ceiling and return `TOO_LONG`, including
 expansion and the final action/query combination. Effective readonly is

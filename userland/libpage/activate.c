@@ -302,11 +302,24 @@ static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what
     bool http = os64_streq(scheme, "http") || os64_streq(scheme, "https");
     bool data = os64_streq(scheme, "data");
     bool mail = os64_streq(scheme, "mailto");
-    bool bare = os64_streq(scheme, "ftp") || os64_streq(scheme, "javascript");
+    bool ftp = os64_streq(scheme, "ftp");
+    bool bare = ftp || os64_streq(scheme, "javascript");
     if (!http && !data && !mail && !bare)
         // The standard's table has no row for it, and its "otherwise" is to
         // do nothing — which this reports by name rather than in silence.
         return refuse(out, OS64_PAGE_REASON_SCHEME);
+
+    // Network submissions use this project's authority-based URL grammar.
+    // An opaque scheme spelling alone does not make a fetchable target.
+    // Check the effective target here, including an absent/empty action's
+    // document URL, before allocating or serializing the entry list.
+    if (http || ftp) {
+        os64_url_t parsed;
+        os64_url_result_t result = os64_url_parse(target, &parsed);
+        if (result != OS64_URL_OK)
+            return refuse(out, result == OS64_URL_TOO_LONG ? OS64_PAGE_REASON_TOO_LONG
+                                                         : OS64_PAGE_REASON_BAD_ACTION);
+    }
 
     PEntries entries;
     if (!p_entry_list(page, form, submitter, what, &entries)) {
