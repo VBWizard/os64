@@ -375,3 +375,71 @@ size_t os64_utf8_encode(uint32_t cp, char *out)
     o[3] = (unsigned char)(0x80 | (cp & 0x3F));
     return 4;
 }
+
+bool os64_glob_match(const char *pattern, const char *text)
+{
+    if (pattern == NULL || text == NULL)
+        return false;
+
+    while (*pattern != '\0')
+    {
+        if (*pattern == '*')
+        {
+            pattern++;
+            if (*pattern == '\0')
+                return true;
+            for (const char *candidate = text;; candidate++)
+            {
+                if (os64_glob_match(pattern, candidate))
+                    return true;
+                if (*candidate == '\0')
+                    return false;
+            }
+        }
+        if (*text == '\0')
+            return false;
+        if (*pattern == '?')
+        {
+            pattern++;
+            text++;
+            continue;
+        }
+        if (*pattern == '[')
+        {
+            const char *member = pattern + 1;
+            bool negate = *member == '!' || *member == '^';
+            if (negate)
+                member++;
+            bool matched = false;
+            bool first = true;
+            while (*member != '\0' && (*member != ']' || first))
+            {
+                first = false;
+                if (member[1] == '-' && member[2] != '\0' &&
+                    member[2] != ']')
+                {
+                    if ((unsigned char)*text >= (unsigned char)member[0] &&
+                        (unsigned char)*text <= (unsigned char)member[2])
+                        matched = true;
+                    member += 3;
+                }
+                else
+                {
+                    if (*text == *member)
+                        matched = true;
+                    member++;
+                }
+            }
+            if (*member != ']' || matched == negate)
+                return false;
+            pattern = member + 1;
+            text++;
+            continue;
+        }
+        if (*pattern != *text)
+            return false;
+        pattern++;
+        text++;
+    }
+    return *text == '\0';
+}
