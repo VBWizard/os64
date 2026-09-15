@@ -66,6 +66,16 @@ bool os64_streq(const char *a, const char *b);
 // (Found 2026-08-23, before a "just lowercase the keys" change shipped.)
 bool os64_streq_nocase(const char *a, const char *b);
 
+// Match one complete string against a shell-style pattern: '*' any run,
+// '?' one byte, and bracket expressions with members, ranges and a leading
+// !/^ negation — V7's glob grammar, the one husk's globbing speaks, so
+// `find -name` and the shell agree on what `*.[ch]` means. A `[` with no
+// closing `]` is an ordinary character, so `/bin/[` can be named (the
+// shell's rule, and one matcher means one rule). Recursive on '*', depth
+// bounded by the number of '*' in the pattern, not by the text's length.
+// husk's glob expansion and find's -name both run through this call.
+bool os64_glob_match(const char *pattern, const char *text);
+
 // Parse a decimal integer from the front of `s`: optional +/- sign, then
 // digits, stopping at the first non-digit (the classic contract). Returns 0
 // for no-digits — indistinguishable from a real zero, which is atoi's
