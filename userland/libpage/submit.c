@@ -320,36 +320,78 @@ static bool add_normalised(PEntries *entries, const char *name, const char *valu
     return entry_add(entries, n, name_len, v, out_len, is_file);
 }
 
-// The `dirname` companion: which way the field's text runs, as the standard
-// defines an element's directionality. `dir=auto` is why the Unicode table
-// is in libos64 — it means "read the text and see".
-static const char *directionality(PArena *arena, const os64_page_control_t *c)
+// Only HTML elements have a dir state. Invalid values are undefined, so
+// they neither override inheritance nor isolate a subtree from dir=auto.
+static int dir_state(const os64_html_node_t *n)
+{
+    if (n->kind != OS64_HTML_ELEMENT || n->ns != OS64_HTML_NS_HTML)
+        return 0;
+    const char *dir = p_attr(n, "dir");
+    if (dir == NULL) return 0;
+    if (os64_streq_nocase(dir, "ltr")) return 1;
+    if (os64_streq_nocase(dir, "rtl")) return 2;
+    if (os64_streq_nocase(dir, "auto")) return 3;
+    return 0;
+}
+
+// Walk text in tree order without flattening it: isolation boundaries must
+// exclude their entire subtree, while an invalid dir spelling does not.
+static os64_bidi_strong_t contained_direction(const os64_html_node_t *root)
+{
+    const os64_html_node_t *n = root->first_child;
+    while (n != NULL) {
+        bool excluded = n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML &&
+            (n->tag == OS64_HTML_TAG_BDI || n->tag == OS64_HTML_TAG_SCRIPT ||
+             n->tag == OS64_HTML_TAG_STYLE || n->tag == OS64_HTML_TAG_TEXTAREA || dir_state(n));
+        if (n->kind == OS64_HTML_TEXT) {
+            os64_bidi_strong_t strong = os64_bidi_first_strong(n->text, n->text_len);
+            if (strong == OS64_BIDI_L || strong == OS64_BIDI_R || strong == OS64_BIDI_AL)
+                return strong;
+        }
+        if (!excluded && n->first_child != NULL) {
+            n = n->first_child;
+            continue;
+        }
+        while (n != root && n->next == NULL)
+            n = n->parent;
+        if (n == root) break;
+        n = n->next;
+    }
+    return OS64_BIDI_L;
+}
+
+static bool auto_uses_value(const os64_page_control_t *c)
+{
+    if (c->element == OS64_PAGE_EL_TEXTAREA) return true;
+    if (c->element != OS64_PAGE_EL_INPUT) return false;
+    switch (c->input) {
+    case OS64_PAGE_INPUT_HIDDEN: case OS64_PAGE_INPUT_TEXT:
+    case OS64_PAGE_INPUT_SEARCH: case OS64_PAGE_INPUT_TEL:
+    case OS64_PAGE_INPUT_URL: case OS64_PAGE_INPUT_EMAIL:
+    case OS64_PAGE_INPUT_PASSWORD: case OS64_PAGE_INPUT_SUBMIT:
+    case OS64_PAGE_INPUT_RESET: case OS64_PAGE_INPUT_BUTTON:
+        return true;
+    default: return false;
+    }
+}
+
+// Values come from the current model, including when an ancestor control
+// supplies the inherited direction. Ordinary auto containers use scoped text.
+static const char *directionality(const os64_page_t *page, const os64_page_control_t *c)
 {
     for (const os64_html_node_t *up = c->node; up != NULL; up = up->parent) {
-        const char *dir = p_attr(up, "dir");
-        if (dir == NULL)
-            continue;
-        if (os64_streq_nocase(dir, "ltr"))
-            return "ltr";
-        if (os64_streq_nocase(dir, "rtl"))
-            return "rtl";
-        if (!os64_streq_nocase(dir, "auto"))
-            continue;
-        // A form control under `dir=auto` is read from its VALUE; anything
-        // else from the text inside it. Either way the first STRONG
-        // character decides and nothing else gets a vote, so a phone number
-        // in front of a Hebrew name does not make the field left to right.
-        os64_bidi_strong_t strong;
-        if (up == c->node) {
-            strong = os64_bidi_first_strong(c->value, c->value_len);
-        } else {
-            size_t len = 0;
-            const char *text = p_subtree_text_into(arena, up, false, &len);
-            if (text == NULL)
-                return NULL;
-            strong = os64_bidi_first_strong(text, len);
+        int dir = dir_state(up);
+        if (dir == 1) return "ltr";
+        if (dir == 2) return "rtl";
+        const os64_page_control_t *control = os64_page_control(page, os64_page_control_for(page, up));
+        if (dir == 3 || (up->ns == OS64_HTML_NS_HTML && up->tag == OS64_HTML_TAG_BDI)) {
+            os64_bidi_strong_t strong = control != NULL && auto_uses_value(control)
+                ? os64_bidi_first_strong(control->value, control->value_len)
+                : contained_direction(up);
+            return strong == OS64_BIDI_R || strong == OS64_BIDI_AL ? "rtl" : "ltr";
         }
-        return strong == OS64_BIDI_R || strong == OS64_BIDI_AL ? "rtl" : "ltr";
+        if (control != NULL && control->input == OS64_PAGE_INPUT_TEL)
+            return "ltr";
     }
     return "ltr";
 }
@@ -492,7 +534,7 @@ bool p_entry_list(const os64_page_t *page, int32_t form, int32_t submitter,
         if (value == NULL || !add_normalised(out, c->name, value, value_len, false))
             return false;
         if (sends_dirname(c)) {
-            const char *which = directionality(&out->arena, c);
+            const char *which = directionality(page, c);
             if (which == NULL || !add_normalised(out, c->dirname, which, os64_strlen(which), false))
                 return false;
         }

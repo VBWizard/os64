@@ -537,12 +537,10 @@ static bool blocks_implicit(os64_page_element_t element, os64_page_input_t input
 // rule either.
 static bool barred(const os64_page_control_t *c)
 {
-    bool readonly_applies =
-        c->element == OS64_PAGE_EL_TEXTAREA ||
-        (c->element == OS64_PAGE_EL_INPUT && text_like_input(c->input));
-    return c->disabled || (c->readonly && readonly_applies) || c->has_datalist_ancestor ||
-           c->input == OS64_PAGE_INPUT_HIDDEN || c->submits || c->resets ||
-           c->input == OS64_PAGE_INPUT_BUTTON;
+    return c->disabled || c->readonly || c->has_datalist_ancestor ||
+           c->input == OS64_PAGE_INPUT_HIDDEN || c->resets ||
+           c->input == OS64_PAGE_INPUT_BUTTON ||
+           (c->element == OS64_PAGE_EL_BUTTON && !c->submits);
 }
 
 static void read_overrides(os64_page_t *page, const os64_html_node_t *n,
@@ -691,7 +689,9 @@ static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_
         c->value_len = 0;
     }
     c->disabled = p_has_attr(n, "disabled") || disabled_by_fieldset(n);
-    c->readonly = p_has_attr(n, "readonly");
+    c->readonly = p_has_attr(n, "readonly") &&
+        (c->element == OS64_PAGE_EL_TEXTAREA ||
+         (c->element == OS64_PAGE_EL_INPUT && text_like_input(c->input)));
     c->required = p_has_attr(n, "required");
     c->multiple = p_has_attr(n, "multiple");
     c->has_value_attribute = p_has_attr(n, "value");
@@ -1005,7 +1005,7 @@ int32_t os64_page_control_for(const os64_page_t *page, const os64_html_node_t *n
 
 const os64_html_node_t *os64_page_anchor(const os64_page_t *page, const char *decoded_fragment)
 {
-    if (page == NULL || decoded_fragment == NULL)
+    if (page == NULL || page->incomplete || decoded_fragment == NULL)
         return NULL;
     // An id anywhere beats an `<a name>` anywhere: the standard asks the
     // two questions in that order and not in tree order.
@@ -1013,6 +1013,24 @@ const os64_html_node_t *os64_page_anchor(const os64_page_t *page, const char *de
     if (node == NULL)
         node = p_strmap_get(&page->aname_map, decoded_fragment);
     return node;
+}
+
+os64_page_reason_t os64_page_resolve_fragment(const os64_page_t *page,
+                                             const char *name,
+                                             const os64_html_node_t **node)
+{
+    if (node == NULL || name == NULL)
+        return OS64_PAGE_REASON_BAD_ACTION;
+    *node = NULL;
+    // Empty fragments are unconditionally the top. Every other answer,
+    // including a positive match, needs the complete precedence index.
+    if (name[0] == '\0')
+        return OS64_PAGE_REASON_OK;
+    if (page == NULL || page->incomplete)
+        return OS64_PAGE_REASON_NO_MEMORY;
+    *node = os64_page_anchor(page, name);
+    return *node != NULL || os64_streq_nocase(name, "top")
+        ? OS64_PAGE_REASON_OK : OS64_PAGE_REASON_NO_ANCHOR;
 }
 
 // ── A person's edits ────────────────────────────────────────────────────

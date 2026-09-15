@@ -200,7 +200,7 @@ typedef struct {
     const char *value;
     size_t value_len;
     bool disabled;          // its own attribute, or a disabled `fieldset`
-    bool readonly;          // who may change it, NOT whether it is sent
+    bool readonly;          // effective readonly; false where the attribute does not apply
     bool required;
     bool multiple;          // SELECT, and `multiple` on a file input
     bool checked;           // CHECKBOX / RADIO, now, a person's tick included
@@ -319,11 +319,18 @@ int32_t os64_page_ncontrols(const os64_page_t *page);
 const os64_page_control_t *os64_page_control(const os64_page_t *page, int32_t i);
 int32_t os64_page_control_for(const os64_page_t *page, const os64_html_node_t *node);
 
-// WHERE A `#name` LANDS: the node an `id` or an old-style `<a name>` put
-// there, or NULL when the page has no such anchor. The fragment is matched
-// DECODED, because a heading with a space in its name is written `%20` in
-// the link and plainly in the `id`. First in tree order wins.
+// Decoded fragment lookup: IDs take precedence over legacy <a name> matches;
+// first in tree order wins within each group. NULL means absent or incomplete.
+// Use resolve_fragment for navigation, including the empty and "top" fallbacks.
 const os64_html_node_t *os64_page_anchor(const os64_page_t *page, const char *decoded_fragment);
+
+// OK with *node == NULL means the document top; OK with a node means that
+// exact target. NO_ANCHOR leaves the reader in place. Nonempty lookups on an
+// absent/incomplete model return NO_MEMORY, even if a partial index has a match.
+// The destination document owns the node; this operation allocates nothing.
+os64_page_reason_t os64_page_resolve_fragment(const os64_page_t *page,
+                                             const char *decoded_fragment,
+                                             const os64_html_node_t **node);
 
 // ── Filling it in ───────────────────────────────────────────────────────
 //
@@ -401,7 +408,7 @@ typedef struct {
     // libpage never asks a person anything; the confirm is the face's.
     bool downgrade;
     bool leaves_machine;
-    // FRAGMENT: the node to move to, or NULL for the top of the document.
+    // FRAGMENT: document-owned node to move to, or NULL for the top.
     const os64_html_node_t *anchor;
     // NOTHING and REFUSED: which rule said no, and for INVALID the control
     // that failed so a face can put the cursor on it. -1 when none.

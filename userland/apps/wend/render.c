@@ -212,7 +212,7 @@ typedef struct {
 
 typedef struct {
     wend_page_t *page;
-    int32_t        linecap, spotcap, formcap, anchorcap, hiddencap;
+    int32_t        linecap, spotcap, formcap, nodecap, hiddencap;
     int32_t        cols;
     const os64_url_t *base;
 
@@ -287,7 +287,7 @@ static void line_trim(buf_t *b)
     }
 }
 
-static void anchors_bind(render_t *r, int32_t line);
+static void nodes_bind(render_t *r, int32_t line);
 
 // Commit the row under construction. `force` is the preformatted path's:
 // inside `pre` an empty row is a blank line the author typed, while in
@@ -346,7 +346,7 @@ static void line_open(render_t *r)
         if (r->page->nlines > 0)
             line_end(r, true);          // an empty row, deliberately
     }
-    anchors_bind(r, line_index(r));
+    nodes_bind(r, line_index(r));
     int32_t ind = indent_now(r);
     for (int32_t i = 0; i < ind; i++)
         if (!buf_append(&r->line, " ", 1, 0, 0)) {
@@ -688,11 +688,12 @@ static void fragment_unescape(char *s)
     s[put] = '\0';
 }
 
-static int32_t link_add(render_t *r, const char *href)
+static int32_t link_add(render_t *r, const os64_html_node_t *node, const char *href)
 {
     wend_spot_t *spot = spot_new(r, WEND_SPOT_LINK);
     if (!spot)
         return 0;
+    spot->node = node;
     char resolved[OS64_URL_REF_MAX];
     resolved[0] = '\0';
     // AN EMPTY href NAMES THE PAGE IT IS ON — the standard's rule, and what
@@ -712,56 +713,43 @@ static int32_t link_add(render_t *r, const char *href)
     return (spot->url && spot->fragment) ? r->page->nspots : 0;
 }
 
-// Remember a `#name`, for anything carrying an `id` and for the old-style
-// `<a name>`. The ROW an anchor names is the row its content lands on, which
-// is what a reader jumping to a section wants at the top of the screen, and
-// there are two ways to reach it.
-//
-// A BLOCK's name is not known yet: the element is met before its first word
-// is placed, and between the two lies a block break and possibly a blank
-// line. So it is left UNBOUND and takes the row that opens next.
-//
-// AN INLINE name is met with a row ALREADY OPEN — `<span id=x>` halfway
-// through a sentence — and that row is its answer. Waiting for the next row
-// to open would hand it the row after the paragraph, so a link to it lands
-// BELOW the words it names.
-static void anchor_add(render_t *r, const char *name)
+// A node met between rows binds to the next row opened. Inline nodes met
+// on an open row use it immediately, so reflow preserves their actual start.
+static void node_add(render_t *r, const os64_html_node_t *node)
 {
-    if (!name || name[0] == '\0')
-        return;
     wend_page_t *p = r->page;
-    if (!reserve((void **)&p->anchors, &r->anchorcap, p->nanchors + 1,
-                 sizeof(*p->anchors))) {
+    if (!reserve((void **)&p->node_rows, &r->nodecap, p->nnode_rows + 1,
+                 sizeof(*p->node_rows))) {
         r->oom = true;
         return;
     }
-    p->anchors[p->nanchors].name = dup_text(r, name);
+    p->node_rows[p->nnode_rows].node = node;
     // The same question `line_open` asks: a row with an indent laid but no
-    // words yet is open, and is the row this anchor's own words will reach.
+    // words yet is open, and is the row this node's own words will reach.
     bool row_open = r->line.len > 0 || r->content;
-    p->anchors[p->nanchors].line = row_open ? line_index(r) : -1;
-    if (p->anchors[p->nanchors].name)
-        p->nanchors++;
+    p->node_rows[p->nnode_rows].line = row_open ? line_index(r) : -1;
+    p->nnode_rows++;
 }
 
-// Give every anchor still waiting the row that is opening. They were added
+// Give each node still waiting the row that is opening. They were added
 // in document order, so the unbound ones are the tail.
-static void anchors_bind(render_t *r, int32_t line)
+static void nodes_bind(render_t *r, int32_t line)
 {
-    for (int32_t i = r->page->nanchors - 1; i >= 0; i--) {
-        if (r->page->anchors[i].line >= 0)
+    for (int32_t i = r->page->nnode_rows - 1; i >= 0; i--) {
+        if (r->page->node_rows[i].line >= 0)
             return;
-        r->page->anchors[i].line = line;
+        r->page->node_rows[i].line = line;
     }
 }
 
-int32_t wend_anchor_line(const wend_page_t *page, const char *name)
+int32_t wend_node_line(const wend_page_t *page, const os64_html_node_t *node)
 {
-    if (!page || !name || name[0] == '\0')
+    // Partial rendering cannot promise that a pending row was ever drawn.
+    if (page == NULL || node == NULL || page->incomplete)
         return -1;
-    for (int32_t i = 0; i < page->nanchors; i++)
-        if (os64_streq(some(page->anchors[i].name), name))
-            return page->anchors[i].line;
+    for (int32_t i = 0; i < page->nnode_rows; i++)
+        if (page->node_rows[i].node == node)
+            return page->node_rows[i].line;
     return -1;
 }
 
@@ -1731,6 +1719,16 @@ static void hidden_subtree(render_t *r, const os64_html_node_t *n)
     r->form_node = saved_form_node;
 }
 
+// Break before a block's content, then let its geometry bind to that
+// content's first row. Flushing preceding text may have bound the pending
+// node to the old row, so the reset belongs after the layout break.
+static void node_start_block(render_t *r, bool blank)
+{
+    if (blank) blank_break(r);
+    else block_break(r);
+    r->page->node_rows[r->page->nnode_rows - 1].line = -1;
+}
+
 static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
 {
     if (r->oom)
@@ -1772,33 +1770,21 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         return;
     }
 
-    // WHERE A `#name` LANDS is decided before the element draws anything:
-    // the row it is ABOUT to fall on is the row a reader jumping here wants
-    // at the top of the screen. `id` is every element's; `name` is only the
-    // old anchor's, where it meant the same thing.
-    const os64_html_attr_t *id = os64_html_attr(n, "id");
-    if (id && id->value)
-        anchor_add(r, id->value);
-    if (n->tag == OS64_HTML_TAG_A && !os64_html_attr(n, "href")) {
-        const os64_html_attr_t *anchor = os64_html_attr(n, "name");
-        if (anchor && anchor->value)
-            anchor_add(r, anchor->value);
+    // Nodes that draw nothing have no geometry, even if libpage selects
+    // them. A hidden target must not accidentally select a nearby row.
+    if (n->tag == OS64_HTML_TAG_HEAD || n->tag == OS64_HTML_TAG_SCRIPT ||
+        n->tag == OS64_HTML_TAG_STYLE || n->tag == OS64_HTML_TAG_TEMPLATE ||
+        n->tag == OS64_HTML_TAG_IFRAME ||
+        (n->tag == OS64_HTML_TAG_INPUT &&
+         os64_streq_nocase(some(attr_value(n, "type")), "hidden"))) {
+        if (n->tag == OS64_HTML_TAG_INPUT)
+            hidden_subtree(r, n);
+        return;
     }
+    node_add(r, n);
+    if (r->oom) return;
 
     switch (n->tag) {
-        // ── Never shown ──
-        //
-        // `head` carries no prose (its title is read separately), a script
-        // and a style are a program and a stylesheet, a template's contents
-        // are a fragment the page has not used, and an iframe is a different
-        // document that this program would have to fetch to show.
-        case OS64_HTML_TAG_HEAD:
-        case OS64_HTML_TAG_SCRIPT:
-        case OS64_HTML_TAG_STYLE:
-        case OS64_HTML_TAG_TEMPLATE:
-        case OS64_HTML_TAG_IFRAME:
-            return;
-
         // A FRAMESET PAGE IS ITS FRAMES. There is no body to show and no
         // prose anywhere in the document, so a face that skipped these would
         // paint an empty screen for a whole era of the web. Each frame
@@ -1808,8 +1794,8 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             const char *src = attr_value(n, "src");
             if (!src || !src[0])
                 return;
-            block_break(r);
-            int32_t idx = link_add(r, src);
+            node_start_block(r, false);
+            int32_t idx = link_add(r, n, src);
             if (idx > 0) {
                 r->spot = idx;
                 spot_mark(r, idx);
@@ -1832,14 +1818,14 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
 
         // ── The paragraph family: a blank line either side ──
         case OS64_HTML_TAG_P:
-            blank_break(r);
+            node_start_block(r, true);
             walk_children(r, n, list);
             blank_break(r);
             goto done;
 
         case OS64_HTML_TAG_H1: case OS64_HTML_TAG_H2: case OS64_HTML_TAG_H3:
         case OS64_HTML_TAG_H4: case OS64_HTML_TAG_H5: case OS64_HTML_TAG_H6:
-            blank_break(r);
+            node_start_block(r, true);
             r->attrs |= WEND_ATTR_BOLD;
             walk_children(r, n, list);
             r->attrs = saved_attrs;
@@ -1853,7 +1839,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         // its own bullet; leave `pre` first and the author's own trailing
         // spaces are trimmed off its last row.
         case OS64_HTML_TAG_BLOCKQUOTE:
-            blank_break(r);
+            node_start_block(r, true);
             r->indent += 4;
             walk_children(r, n, list);
             block_break(r);
@@ -1867,7 +1853,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         // sender reads as "the page this form is on", the standard's answer.
         case OS64_HTML_TAG_FORM: {
             const os64_html_node_t *saved_form_node = r->form_node;
-            block_break(r);
+            node_start_block(r, false);
             if (!form_open(r, n))
                 goto done;
             walk_children(r, n, list);
@@ -1885,7 +1871,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         case OS64_HTML_TAG_FIELDSET: {
             bool off = os64_html_attr(n, "disabled") != NULL;
             bool legend_seen = false;
-            block_break(r);
+            node_start_block(r, false);
             if (off)
                 r->disabled++;
             for (const os64_html_node_t *c = n->first_child; c && !r->oom; c = c->next) {
@@ -1918,7 +1904,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         case OS64_HTML_TAG_TABLE: case OS64_HTML_TAG_THEAD:
         case OS64_HTML_TAG_TBODY: case OS64_HTML_TAG_TFOOT:
         case OS64_HTML_TAG_TR:
-            block_break(r);
+            node_start_block(r, false);
             walk_children(r, n, list);
             block_break(r);
             goto done;
@@ -1954,7 +1940,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
                 }
                 (void)attr_int(n, "start", &inner.next);
             }
-            block_break(r);
+            node_start_block(r, false);
             r->indent += 2;
             walk_children(r, n, &inner);
             block_break(r);
@@ -1963,7 +1949,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         }
 
         case OS64_HTML_TAG_LI:
-            block_break(r);
+            node_start_block(r, false);
             // An item may name its own number, and the ones after it carry
             // on from there — which is what `value` is for.
             if (list && list->ordered)
@@ -1975,7 +1961,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             goto done;
 
         case OS64_HTML_TAG_DD:
-            block_break(r);
+            node_start_block(r, false);
             r->indent += 4;
             walk_children(r, n, list);
             block_break(r);
@@ -1987,7 +1973,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         // the meaning.
         case OS64_HTML_TAG_PRE: case OS64_HTML_TAG_LISTING:
         case OS64_HTML_TAG_XMP: case OS64_HTML_TAG_PLAINTEXT:
-            blank_break(r);
+            node_start_block(r, true);
             r->pre++;
             walk_children(r, n, list);
             block_break(r);              // the last row, while it is still the
@@ -2087,7 +2073,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             goto done;
 
         case OS64_HTML_TAG_HR: {
-            block_break(r);
+            node_start_block(r, false);
             char rule[256];
             int32_t width = r->cols - indent_now(r);
             if (width > (int32_t)sizeof(rule))
@@ -2114,7 +2100,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             const char *href = attr_value(n, "href");
             if (!href)
                 break;                   // an anchor with no address is a name
-            int32_t idx = link_add(r, href);
+            int32_t idx = link_add(r, n, href);
             if (idx > 0) {
                 r->spot = idx;
                 spot_mark(r, idx);       // glued to the link's first word
@@ -2291,9 +2277,9 @@ wend_page_t *wend_render_html(const os64_html_document_t *doc,
             walk(&r, root, NULL);
     }
     block_break(&r);
-    // An anchor at the very foot of a document has no row opening after it;
+    // A node at the very foot of a document has no row opening after it;
     // it belongs to the last one there is.
-    anchors_bind(&r, page->nlines > 0 ? page->nlines - 1 : 0);
+    nodes_bind(&r, page->nlines > 0 ? page->nlines - 1 : 0);
     // A CONTROL THAT NAMED ITS FORM RATHER THAN SAT IN ONE is placed here,
     // because the `id` it named may belong to a form the walk had not
     // reached.
@@ -2439,8 +2425,11 @@ wend_form_result_t wend_form_url(const wend_page_t *page, int32_t index,
         action = some(from->form_action)[0] ? from->form_action : some(page_url);
         want = some(from->form_fragment);
     }
-    if (fragment && fragment_cap)
+    if (fragment != NULL) {
+        if (fragment_cap == 0 || os64_strlen(want) >= fragment_cap)
+            return WEND_FORM_TOO_LONG;
         (void)os64_strcopy(fragment, fragment_cap, want);
+    }
     size_t at = 0;
     for (const char *q = action; *q != '\0' && *q != '?' && *q != '#'; q++) {
         if (at + 2 > cap)
@@ -2576,10 +2565,8 @@ void wend_page_free(wend_page_t *page)
         os64_free(page->hidden[i].name);
         os64_free(page->hidden[i].value);
     }
-    for (int32_t i = 0; i < page->nanchors; i++)
-        os64_free(page->anchors[i].name);
     os64_free(page->lines);
-    os64_free(page->anchors);
+    os64_free(page->node_rows);
     os64_free(page->spots);
     os64_free(page->forms);
     os64_free(page->hidden);

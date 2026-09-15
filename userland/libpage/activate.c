@@ -75,9 +75,8 @@ void os64_page_request_free(os64_page_request_t *request)
 {
     if (request == NULL)
         return;
-    // A REQUEST OWNS EVERY BYTE IT POINTS AT, including after a refusal:
-    // the alternative is a face that has to remember which verdicts leave
-    // something behind.
+    // String and body storage belongs to the request, including after a
+    // refusal. The anchor node is borrowed from the source document.
     os64_free((void *)request->url);
     os64_free((void *)request->fragment);
     os64_free((void *)request->content_type);
@@ -146,17 +145,10 @@ static os64_page_verdict_t navigate_ref(const os64_page_t *page, const os64_page
         out->fragment = keep(name);
         if (out->fragment == NULL)
             return refuse(out, OS64_PAGE_REASON_NO_MEMORY);
-        if (name[0] == '\0')
-            return OS64_PAGE_FRAGMENT;   // `#` is the top of the document
-        out->anchor = os64_page_anchor(page, name);
-        if (out->anchor != NULL)
+        os64_page_reason_t reason = os64_page_resolve_fragment(page, name, &out->anchor);
+        if (reason == OS64_PAGE_REASON_OK)
             return OS64_PAGE_FRAGMENT;
-        // `#top` is the top when nothing claims the name — and an unclaimed
-        // name that is NOT `top` moves nowhere at all, because guessing
-        // would throw away the place a person was reading.
-        if (os64_streq_nocase(name, "top"))
-            return OS64_PAGE_FRAGMENT;
-        return nothing(out, OS64_PAGE_REASON_NO_ANCHOR);
+        return reason == OS64_PAGE_REASON_NO_ANCHOR ? nothing(out, reason) : refuse(out, reason);
     }
 
     out->url = keep(ref->url);
@@ -355,9 +347,13 @@ static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what
     if (out->method == OS64_PAGE_METHOD_GET ||
         (mail && enctype != OS64_PAGE_ENCTYPE_TEXT_PLAIN))
         enctype = OS64_PAGE_ENCTYPE_URLENCODED;
-    if (!p_serialise(&entries, enctype, mail && enctype == OS64_PAGE_ENCTYPE_TEXT_PLAIN ? "utf-8" : encoding, page->opt.max_body, &bytes, &len, &type,
+    bool carries_body = out->method == OS64_PAGE_METHOD_POST && http;
+    size_t limit = carries_body ? page->opt.max_body : OS64_URL_REF_MAX - 1;
+    if (!p_serialise(&entries, enctype, mail && enctype == OS64_PAGE_ENCTYPE_TEXT_PLAIN ? "utf-8" : encoding, limit, &bytes, &len, &type,
                      &reason)) {
         p_entries_free(&entries);
+        if (!carries_body && reason == OS64_PAGE_REASON_BODY_TOO_LONG)
+            reason = OS64_PAGE_REASON_TOO_LONG;
         return refuse(out, reason);
     }
     p_entries_free(&entries);

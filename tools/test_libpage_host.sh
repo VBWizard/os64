@@ -21,7 +21,7 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    -fno-sanitize-recover=all \
    -I userland/libpage/include -I userland/libhtml/include -I userland/libos64/include \
    -I abi/include -I tools -I userland/libpage/upstream/ryu \
-   tools/test_libpage_host.c \
+   tools/test_libpage_host.c userland/apps/wend/render.c \
    userland/libpage/core.c userland/libpage/resolve.c userland/libpage/value.c \
    userland/libpage/number.c userland/libpage/range.c userland/libpage/upstream/ryu/ryu/d2s.c \
    userland/libpage/submit.c userland/libpage/encode.c userland/libpage/refresh.c userland/libpage/activate.c \

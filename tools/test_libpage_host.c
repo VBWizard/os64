@@ -432,6 +432,7 @@ static void model(const char *step_ids, const char *name, const char *html,
 #include "test_libpage_state.inc"
 #include "test_libpage_number.inc"
 #include "test_libpage_boundaries.inc"
+#include "test_libpage_navigation.inc"
 
 int main(int argc, char **argv)
 {
@@ -453,6 +454,7 @@ int main(int argc, char **argv)
         state_cases();
         number_cases();
         boundary_cases();
+        navigation_cases();
     }
     if (sweep)
         allocation_sweep();

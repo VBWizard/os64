@@ -1139,24 +1139,29 @@ static bool starts_with_nocase(const char *s, const char *prefix)
     return true;
 }
 
-// Move to a `#name` on the page that is showing. A page that does not carry
-// the name says so and stays where it is: the link was still a link, and
-// throwing away the reader's place would punish them for the page's mistake.
-static void jump_to_anchor(view_t *v, const char *name)
+// libpage selects the semantic target; the renderer supplies geometry for
+// that exact node. Missing geometry leaves the reader's position intact.
+static void jump_to_node(view_t *v, const os64_html_node_t *node)
 {
-    int32_t line = name[0] == '\0' ? 0 : wend_anchor_line(v->page, name);
-    // `#top` NAMES THE TOP when nothing else claims it, which is the
-    // standard's own fallback and what a page's "back to top" link relies
-    // on — most of them never define an element to match.
-    if (line < 0 && os64_streq_nocase(name, "top"))
-        line = 0;
+    int32_t line = node != NULL ? wend_node_line(v->page, node) : 0;
     if (line < 0) {
-        status_set(" this page has nothing named #%s", name);
+        status_set(" that target has no rendered row on this page");
         return;
     }
     v->top = line;
     scroll_clamp(v);
     selection_reanchor(v);
+}
+
+static void jump_to_fragment(view_t *v, const char *name)
+{
+    const os64_html_node_t *node = NULL;
+    os64_page_reason_t reason = os64_page_resolve_fragment(v->model, name, &node);
+    if (reason != OS64_PAGE_REASON_OK) {
+        status_set(" %s", os64_page_reason_name(reason));
+        return;
+    }
+    jump_to_node(v, node);
 }
 
 // ── A page that asks to send you somewhere ──────────────────────────────
@@ -1212,7 +1217,7 @@ static bool refresh_once(view_t *v, int32_t *chain)
     os64_page_request_t request;
     os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
     if (verdict == OS64_PAGE_FRAGMENT) {
-        jump_to_anchor(v,request.fragment != NULL ? request.fragment : "");
+        jump_to_node(v, request.anchor);
         os64_page_request_free(&request);
         return false;
     }
@@ -1247,20 +1252,14 @@ static bool refresh_once(view_t *v, int32_t *chain)
             return false;
         }
     }
-    char where[OS64_FETCH_URL_MAX];
-    char name[OS64_URL_PATH_MAX];
-    os64_strcopy(where, sizeof(where), request.url);
-    os64_strcopy(name, sizeof(name), request.has_fragment && request.fragment ? request.fragment
-                                                                             : "");
+    // The request owns its strings independently of the old view. Keep it
+    // alive through go(), then resolve against the new destination model.
+    // Redirectors do not occupy a history entry.
+    bool moved = go(v, request.url, false);
+    if (moved && request.has_fragment)
+        jump_to_fragment(v, request.fragment != NULL ? request.fragment : "");
     os64_page_request_free(&request);
-    // NOT REMEMBERED IN THE HISTORY. A redirector is not a page anybody
-    // meant to visit, and putting it on the stack makes `b` bounce straight
-    // back off it into the page it was sending you away from.
-    if (!go(v, where, false))
-        return false;
-    if (name[0] != '\0')
-        jump_to_anchor(v, name);
-    return true;
+    return moved;
 }
 
 static void refresh_if_declared(view_t *v)
@@ -1270,40 +1269,65 @@ static void refresh_if_declared(view_t *v)
         ;
 }
 
+static char *navigation_copy(const char *text)
+{
+    if (text == NULL) text = "";
+    size_t size = os64_strlen(text) + 1;
+    char *copy = os64_malloc(size);
+    if (copy != NULL) os64_memcpy(copy, text, size);
+    return copy;
+}
+
 static void follow_link(view_t *v, int32_t index)
 {
-    // Both are copied out first: following frees the page these point into.
-    // A page that ran out of memory partway can be missing a string, and a
-    // number typed at the status row reaches any spot, built or not.
     const wend_spot_t *spot = &v->page->spots[index];
-    char url[OS64_FETCH_URL_MAX], fragment[OS64_URL_PATH_MAX];
-    os64_strcopy(url, sizeof(url), spot->url ? spot->url : "");
-    os64_strcopy(fragment, sizeof(fragment), spot->fragment ? spot->fragment : "");
-
-    // A LINK INTO THE PAGE YOU ARE ON IS A MOVE, NOT A FETCH. Asking the
-    // server for the article again to show its top is what a table of
-    // contents would otherwise do to you, once per entry.
-    if (v->page->spots[index].has_fragment && os64_streq(url, v->url)) {
+    int32_t link = os64_page_link_for(v->model, spot->node);
+    os64_page_request_t request = {0};
+    if (link >= 0) {
+        os64_page_what_t what = {OS64_PAGE_ACTIVATE_LINK, link, 0, 0};
+        os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
+        if (verdict == OS64_PAGE_FRAGMENT) {
+            v->sel = index;
+            jump_to_node(v, request.anchor);
+            os64_page_request_free(&request);
+            return;
+        }
+        if (verdict != OS64_PAGE_NAVIGATE) {
+            status_set(" %s", os64_page_reason_name(request.reason));
+            os64_page_request_free(&request);
+            return;
+        }
+    } else {
+        // Frame destinations are renderer-generated links, outside libpage's
+        // a/area collection. A missing ordinary link is model uncertainty.
+        if (spot->node == NULL || spot->node->tag != OS64_HTML_TAG_FRAME) {
+            status_set(" the page model could not retain this link");
+            return;
+        }
+        request.url = navigation_copy(spot->url ? spot->url : "");
+        request.fragment = navigation_copy(spot->fragment ? spot->fragment : "");
+        request.has_fragment = spot->has_fragment;
+        if (request.url == NULL || request.fragment == NULL) {
+            status_set(" out of memory");
+            os64_page_request_free(&request);
+            return;
+        }
+        if (request.has_fragment && os64_streq(request.url, v->url)) {
+            jump_to_fragment(v, request.fragment);
+            os64_page_request_free(&request);
+            return;
+        }
+    }
+    if (request.url[0] == '\0') {
+        status_set(" link %d does not spell an address this browser can resolve", index + 1);
+    } else if (starts_with_nocase(request.url, "gopher://")) {
+        status_set(" that is gopherspace - read it with:  gopher '%s'", request.url);
+    } else {
         v->sel = index;
-        jump_to_anchor(v, fragment);     // "" is the top of the document
-        return;
+        if (go(v, request.url, true) && request.has_fragment)
+            jump_to_fragment(v, request.fragment != NULL ? request.fragment : "");
     }
-    if (url[0] == '\0') {
-        status_set(" link %d does not spell an address this browser can resolve",
-                   index + 1);
-        return;
-    }
-    // GOPHER IS A DIFFERENT PROGRAM'S PROTOCOL, and saying so is better than
-    // handing the address to a library that will refuse it in the language
-    // of HTTP.
-    if (starts_with_nocase(url, "gopher://")) {
-        status_set(" that is gopherspace - read it with:  gopher '%s'", url);
-        return;
-    }
-    v->sel = index;
-    // A fragment on another page is answered once that page is here.
-    if (go(v, url, true) && fragment[0] != '\0')
-        jump_to_anchor(v, fragment);
+    os64_page_request_free(&request);
 }
 
 // ── Sending a form ──────────────────────────────────────────────────────
@@ -1355,7 +1379,7 @@ static void form_send(view_t *v, int32_t index)
         }
     }
     if (go(v, url, true) && fragment[0] != '\0')
-        jump_to_anchor(v, fragment);     // the action asked for a section
+        jump_to_fragment(v, fragment);     // the action asked for a section
 }
 
 // THE BUTTON A FORM WOULD HAVE PRESSED ITSELF: the first one in it, which is

@@ -336,7 +336,8 @@ const os64_page_form_t  *os64_page_form(const os64_page_t *, int32_t i);
 int32_t                  os64_page_ncontrols(const os64_page_t *);
 const os64_page_control_t *os64_page_control(const os64_page_t *, int32_t i);
 int32_t                  os64_page_control_for(const os64_page_t *, const os64_html_node_t *); // -1: not a control
-const os64_html_node_t  *os64_page_anchor(const os64_page_t *, const char *decoded_fragment); // the node a fragment names, NULL for none; the face finds the row it drew for it
+const os64_html_node_t  *os64_page_anchor(const os64_page_t *, const char *decoded_fragment); // exact lookup; NULL if absent or incomplete
+os64_page_reason_t os64_page_resolve_fragment(const os64_page_t *, const char *, const os64_html_node_t **); // navigation result, including top and refusal
 
 // Edits — the dirty value, kept apart from the model (ruling 2): a table
 // INSIDE the page, KEYED BY NODE and never by index, so a rebuild over a
@@ -389,6 +390,40 @@ sweep runs here as it runs in libhtml).
   a body that would exceed a stated `max_body` is a refusal at family E.
 - **Nothing here blocks.** A face that wants to cancel cancels its fetch;
   libpage has nothing to cancel.
+
+## Fragment and geometry handoff
+
+`os64_page_resolve_fragment` selects a destination node from the decoded
+fragment. IDs take precedence over legacy names, with tree order breaking
+ties within each group. An empty fragment means the top; case-insensitive
+`top` is a fallback only when no node claims the spelling. A nonempty lookup
+on an incomplete model refuses with `NO_MEMORY`, because even a positive
+partial-index match might have lost to an omitted ID. The older
+`os64_page_anchor` lookup returns NULL on incomplete models; navigation uses
+the reason-bearing resolver.
+
+Wend records source-node rows during rendering and rebuilds that geometry
+at each width. It consumes the node supplied by same-document activation;
+after a fetch it resolves the full request-owned fragment against the new
+model. Request strings outlive destruction of the source view. Geometry
+lookup neither compares names nor chooses a fallback. Hidden, omitted, or
+unrendered targets have no row, and incomplete rendering refuses geometry
+lookup; those cases preserve the reader's position. Empty rendered elements
+bind to the next opened row, or the final row at document end.
+
+Links and refreshes use this handoff. Renderer-generated frame links use
+the destination resolver as well. The existing form serializer remains a
+separate migration item; its fragment buffer now refuses insufficient
+capacity rather than truncating, and destination lookup uses libpage.
+
+The `max_body` option bounds HTTP POST bodies. Entry lists carried in URLs
+(GET and mail POST) use the URL ceiling and return `TOO_LONG`, including
+expansion and the final action/query combination. Effective readonly is
+published only for applicable control types; validation consumes that same
+flag. Reset and inert buttons are barred, while submit and image buttons
+are not barred solely for their type. Directionality walks scoped text,
+excluding bidi isolation and defined-dir subtrees, and uses current control
+values where the HTML auto-directionality algorithm calls for them.
 
 ## Control state and allocation failure
 

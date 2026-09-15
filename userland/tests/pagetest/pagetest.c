@@ -78,10 +78,37 @@ static void state(void)
     os64_page_free(page);os64_html_document_free(doc);
 }
 
+static void navigation(void)
+{
+    os64_html_document_t *doc;
+    os64_page_t *page=build("<form method=post><div dir=auto><bdi>&#1488;</bdi>A"
+        "<input name=q dirname=d></div><button>Go</button></form>"
+        "<button type=button readonly>B</button><input type=checkbox readonly>"
+        "<a name=x href=/else>Legacy</a><h2 id=x>Winner</h2>",&doc);
+    require(!os64_page_control(page,1)->barred_from_validation,"submit validation candidate");
+    require(os64_page_control(page,2)->barred_from_validation,"inert button validation bar");
+    require(!os64_page_control(page,2)->readonly && !os64_page_control(page,3)->readonly,"effective readonly");
+    os64_page_request_t req;
+    require(os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL,1,0,0},&req)==OS64_PAGE_NAVIGATE,"direction submission");
+    require(os64_streq(req.body,"q=&d=ltr"),"isolated text direction");
+    os64_page_request_free(&req);
+    const os64_html_node_t *node=NULL;
+    require(os64_page_resolve_fragment(page,"x",&node)==0 && node && node->tag==OS64_HTML_TAG_H2,"ID precedence");
+    require(os64_page_resolve_fragment(page,"top",&node)==0 && node==NULL,"top fallback");
+    os64_page_free(page);os64_html_document_free(doc);
+    page=build("<form><input name=q value=abcdef><button>Go</button>",&doc);
+    os64_page_free(page);
+    os64_page_options_t opt=os64_page_options_default();opt.max_body=1;
+    page=os64_page_build(doc,"https://host/page",&opt);
+    require(page && os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL,1,0,0},&req)==OS64_PAGE_NAVIGATE,"GET independent of body limit");
+    require(req.body==NULL && os64_streq(req.url,"https://host/page?q=abcdef"),"GET query bytes");
+    os64_page_request_free(&req);os64_page_free(page);os64_html_document_free(doc);
+}
+
 int main(void)
 {
     require(os64_heap_verify()==0,"heap before");
-    numeric();state();
+    numeric();state();navigation();
     require(os64_heap_verify()==0,"heap after");
     os64_printf("pagetest: numeric conversion, range grids, control state and submission passed\n");
     os64_serial_log("pagetest: PASS numeric conversion, range grids, control state and submission");

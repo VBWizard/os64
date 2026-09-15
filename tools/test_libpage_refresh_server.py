@@ -14,6 +14,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = '<meta http-equiv=refresh content="0;url=#target"><h1>FRAGMENT TOP</h1>'
             body += ''.join(f'<p>Filler line {i}</p>' for i in range(80))
             body += '<h1 id=target>FRAGMENT TARGET REACHED</h1><p>End of fragment fixture</p>'
+        elif self.path == '/long-refresh':
+            body = '<meta http-equiv=refresh content="0;url=/long-target#' + 'x'*1100 + '">'
+        elif self.path == '/long-target':
+            body = ('<h1>BEFORE LONG TARGET</h1>' + '<p>filler</p>'*80 +
+                    '<h2 id="' + 'x'*1100 + '">LONG FRAGMENT TARGET</h2>' + '<p>after</p>'*40)
+        elif self.path == '/precedence':
+            body = ('<meta http-equiv=refresh content="0;url=#x">'
+                    '<a name=x href=/wrong>WRONG LEGACY TARGET</a>' + '<p>filler</p>'*80 +
+                    '<div>Before nested target<h2 id=x>ID PRECEDENCE TARGET</h2></div><a href=#y>named target</a>' +
+                    '<p>middle</p>'*40 + '<a name=y href=/else>NAMED LINK TARGET</a>' +
+                    '<p>after</p>'*40)
+        elif self.path == '/long-link':
+            body = '<a href="/long-target#' + 'x'*1100 + '">LONG LINK</a>'
         elif self.path == '/fail-refresh':
             body = ('<meta http-equiv=refresh content="0;url=/failure">'
                     '<h1>FAILED REFRESH SOURCE</h1><p>Keys must not repeat the failed fetch.</p>')

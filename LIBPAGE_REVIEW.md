@@ -191,3 +191,47 @@ Two-core QEMU `pagetest` also checks the embedded-NUL value span and request
 bytes; it and `htmltest` pass. Guest evidence is in `/tmp/libpage-r1-guest/`.
 Execution logs: `/tmp/libpage-r1-before.log`, `/tmp/libpage-r1-after.log`,
 `/tmp/libpage-r1-build.log`.
+
+
+## PR #100 combined review follow-up
+
+The seven combined-review findings are addressed by the fragment/geometry
+handoff, representation-specific limits, effective control flags, and scoped
+directionality traversal described in `LIBPAGE.md`. The button finding's
+rationale was too broad: reset and inert buttons are barred, while submit
+and image buttons are not barred merely for their type.
+
+`tools/test_libpage_navigation.inc` links the real renderer with libpage and
+libhtml. It checks ID precedence over earlier names, duplicate IDs, named
+links with href, hidden/unrendered targets, top fallbacks, reflow, full
+1,100-byte fragment ownership across source destruction, and exact legacy
+form fragment capacity. Isolated allocation failures cover incomplete model
+answers and incomplete renderer geometry. A final independent pass also
+found block targets inheriting preceding text's row; layout now resets their
+pending row after the opening block break, with regressions across block
+types. No parallel anchor-name selector remains in the renderer.
+
+Validation for this follow-up:
+
+- Libpage: **178,442 checks**, zero failures under ASan/UBSan, including the
+  315-position persistent failure sweep and new isolated geometry failures.
+- Renderer: **270,120 checks**, zero failures and no live blocks. Seven
+  retained corpus renders match; snapshot changes concern node-row metadata,
+  with displayed lines, spots and forms unchanged.
+- Full strict userland cross-build (`-Werror`), `git diff --check`, and
+  `tools/stale_refs.sh` pass.
+- Two-core QEMU runs `pagetest` and `htmltest`. The page test now covers
+  effective readonly, button eligibility, isolated directionality, ID
+  precedence, and GET with a one-byte body limit.
+- Interactive fixtures `/long-refresh`, `/precedence`, and `/long-link`
+  exercise full 1,100-byte fragments, ID-before-name precedence, and a named
+  anchor that also has href. The fixture server access log distinguishes
+  scrolling from fetching; the guest boots two shells, so startup requests
+  occur twice.
+
+Run `tools/test_libpage_refresh_server.py` and visit those paths in wend via
+`http://10.0.2.2:8769`. The long refresh and link should show
+`LONG FRAGMENT TARGET` at the first content row. The precedence page should
+show `ID PRECEDENCE TARGET` below its URL, excluding the preceding nested
+block text. Activate link 2 to see `NAMED LINK TARGET` without another fetch.
+The original failed-refresh and cycle fixtures remain available.
