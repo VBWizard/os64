@@ -706,8 +706,11 @@ int32_t topMain(const top_options_t *opts)
                              / tickNow.per_second;
         tickThen = tickNow;
 
-        // Recalibration guard must run BEFORE the ledger interval is taken
-        // (re-priced history can step any column backward once a minute).
+        // Defensive monotonicity guard. The fixed boot-time TSC rate means
+        // these counters should not move backward, but clamp a reset or
+        // discontinuity before doing unsigned delta arithmetic. It runs
+        // BEFORE the ledger interval is taken, because that interval is
+        // itself a core-0 delta.
         for (int32_t c = 0; c < coreCount; c++)
         {
             if (coresNow[c].total < coresPrev[c].total) coresPrev[c].total = coresNow[c].total;
@@ -721,18 +724,16 @@ int32_t topMain(const top_options_t *opts)
             ledgerIntervalUS = coresNow[0].total - coresPrev[0].total;
 
         // The ledger interval is the denominator when it's sane; the tick
-        // interval covers the first refresh and recalibration blips (a
-        // just-re-priced core 0 can post a near-zero delta for one round).
+        // interval covers the first refresh or a discontinuity that leaves
+        // core 0 with a near-zero delta for one round.
         uint64_t intervalUS = tickIntervalUS;
         if (ledgerIntervalUS > tickIntervalUS / 2 &&
             ledgerIntervalUS < tickIntervalUS * 4)
             intervalUS = ledgerIntervalUS;
 
         // A counter that went BACKWARD reads as zero delta, not as a
-        // 584-million-year spike: TSC recalibration re-prices the whole
-        // cycles→µs history, so a rate correction can step every
-        // runtime_us back slightly. Unsigned subtraction would turn that
-        // blip into the biggest number in the universe.
+        // 584-million-year spike. The counters are expected to be monotonic;
+        // this keeps an unexpected reset from wrapping unsigned subtraction.
         for (uint32_t i = 0; i < shownCount; i++)
             if (shown[i]->runtimeUS < shown[i]->prevRuntimeUS)
                 shown[i]->prevRuntimeUS = shown[i]->runtimeUS;
@@ -824,8 +825,8 @@ int32_t topMain(const top_options_t *opts)
             int32_t parked = 0;
             for (int32_t c = 0; c < coreCount; c++)
             {
-                // (Recalibration clamps already ran, before the ledger
-                // interval was taken from core 0.)
+                // Monotonicity clamps already ran, before the ledger
+                // interval was taken from core 0.
                 uint64_t dTotal = coresNow[c].total - coresPrev[c].total;
                 if (dTotal < intervalUS / 100)
                 {

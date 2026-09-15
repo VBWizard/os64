@@ -1474,13 +1474,6 @@ void scheduler_do()
 	if (cls->acctZeroTSC == 0)
 		cls->acctZeroTSC = acctPassStart;   // this core's meter starts now
 
-	// The BSP's pass also tends the cycles→µs exchange rate (x86_64.c has
-	// the doctrine: boot calibration is ±1% by construction; this converges
-	// it). BSP only — the recalibrator's TSC samples must all come from one
-	// core, and core 0 exists in every configuration.
-	if (apic_id == 0)
-		tsc_recalibrate();
-
     printd(DEBUG_SCHEDULER,"***** SCHEDULER *****\n");
     printd(DEBUG_SCHEDULER,"scheduler: AP %u\n",apic_id);
 #if SCHEDULER_DEBUG == 1

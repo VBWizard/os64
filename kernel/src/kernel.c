@@ -186,16 +186,20 @@ task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
 // Boot TSC calibration window, seconds (TSCCAL= on the cmdline).
 //
-// Default 5 (was 15 until 2026-08-01). The accuracy argument for 15 was
-// real but small: ±1 tick of boundary slop across 1500 ticks is ±0.07%,
-// versus ±0.2% across 500. What tipped it is that the continuous
-// recalibrator erases that gap within seconds of boot, while the 15
-// seconds are paid IN FULL on every single boot, by a human, watching a
-// progress line — and this OS gets booted dozens of times an evening.
-// Ten seconds of somebody's life beats 0.13% of initial timer accuracy
-// that a background task is about to fix anyway. Raise it for a session
-// that genuinely needs a tight cold start: TSCCAL=15.
-int kTSCCalibrationSeconds = 5;
+// The rate measured here is FIXED for the life of the boot. Every CPU-time
+// figure the kernel reports is cycles divided by this number, so moving it
+// later re-prices the whole history at once: a monotonic counter can step
+// backward, and top sees the step as a one-round blip in every column. A
+// converging recalibrator was tried and retired for exactly that (the
+// commit that removed it has the numbers). A percentage that divides one
+// ledger delta by another converts both at this same rate, so a fixed scale
+// error cancels out of it; only absolute CPU time carries the error.
+//
+// Precision is ±1 tick of boundary slop over the window: 3 seconds is 300
+// ticks, ±0.33%. That is the whole cost of a short window, and every second
+// here is paid IN FULL on every boot by a human watching a counter. Use
+// TSCCAL=15 (±0.07%) when absolute CPU-time units justify the wait.
+int kTSCCalibrationSeconds = 3;
 task_t* kIdleTasks[MAX_CPUS];
 task_t* kLogDTask;
 task_t* kKWorkerTask;
@@ -331,7 +335,7 @@ void kernel_init()
 	block_cache_attach_all();
 
 	detect_cpu();
-	// The pause has a NAME on the glass: a silent 15-second stare at a
+	// The pause has a NAME on the glass: a silent multi-second stare at a
 	// counter reads as a hang to anyone watching a boot.
 	printf("Calibrating TSC (%d second window) ... ", kTSCCalibrationSeconds);
 	kCPUCyclesPerSecond = tscGetCyclesPerSecond((uint32_t)kTSCCalibrationSeconds);

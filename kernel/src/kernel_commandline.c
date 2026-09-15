@@ -428,7 +428,7 @@ static cmdopt_t cmdopts[] = {
     // declaration in kernel.c for who consumes which half of it.
     {"TZ", OPT_STRING, kTZString, 0, 64},
     // Boot TSC calibration window in seconds (see kernel.c for the default
-    // and the precision arithmetic). TSCCAL=5 for the impatient.
+    // and the precision arithmetic). TSCCAL=15 when absolute CPU time matters.
     {"TSCCAL", OPT_INT, &kTSCCalibrationSeconds, 0, 0},
 };
 
