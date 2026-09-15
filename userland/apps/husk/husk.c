@@ -91,9 +91,9 @@ static void err_num(unsigned long v)
 
 // ── line editing ────────────────────────────────────────────────────────────
 // (the prompt itself lives down beside the job table, which one of its
-// escapes reports on; prompt_draw, beside the block assembler, is what
-// main and the completion repaint both call — it knows whether the shell
-// is prompting for a command or, inside an open `if`, for the rest of one)
+// escapes reports on; prompt_draw, beside the block assembler, is what the
+// line editor calls to draw it — it knows whether the shell is prompting for
+// a command or, inside an open `if`, for the rest of one)
 static void prompt_draw(void);
 
 // ── command history ─────────────────────────────────────────────────────────
@@ -140,39 +140,97 @@ static const char *history_get(int back)
 	return s_history[(s_hist_next + HISTORY_DEPTH - back) % HISTORY_DEPTH];
 }
 
-// Swap the displayed line for `src`: rub out what's showing, echo the
-// replacement, and update the buffer — the whole visual of history recall.
-static void replace_line(char *buf, int *n, int cap, const char *src)
+// ── the line on the screen ──────────────────────────────────────────────────
+// A line wider than the terminal wraps onto the rows below, and a caret that
+// walks back across that seam has to climb a row, which '\b' never does on
+// any terminal (os64's tty clamps it at column 0, and so did the VT100). So
+// the editor keeps a model of where the line sits — the terminal's width, the
+// column the line's first byte is drawn in, and which byte the cursor is on —
+// and every caret move is row and column arithmetic, spoken as ESC[A/B/C/D
+// and '\r': the vocabulary os64's terminals and the far end of an ssh or
+// telnet session share.
+//
+// THE LAST COLUMN IS WHERE TERMINALS DISAGREE. os64's tty wraps the moment a
+// glyph lands in the last column. A VT100 — and so xterm, and most of what
+// answers on the far end of a network session — leaves the cursor ON that
+// column until the next glyph arrives; termcap called it the `xn` glitch. The
+// same bytes leave the cursor a row apart, and a move computed for one is
+// wrong on the other. screen_paint removes the difference: a paint that ends
+// exactly at a row boundary writes the cell the cursor is about to rest on,
+// then '\r', which puts both kinds of terminal at the start of the next row.
+// Between keystrokes the cursor is never parked on that column.
+//
+// The model is only as good as its inputs. The width is asked for at every
+// prompt and at every SIGWINCH. The first column is measured from the prompt
+// as drawn, which assumes the prompt began at column 0: output that ended
+// without a newline puts it further right, and edits across a wrap then land
+// that many cells off (readline has the same blind spot). A byte is one cell,
+// which is what os64's terminals draw and not what a UTF-8 terminal on the
+// far end of ssh does with a multi-byte character. And a row that has
+// scrolled off the top cannot be climbed back to.
+#define SCREEN_UNBOUNDED (1 << 20)   // the width when the terminal cannot say: nothing wraps
+
+static struct {
+	int width;    // terminal columns
+	int origin;   // column the line's first byte is drawn in
+	int above;    // rows the prompt covers above the line's first row
+	int cursor;   // line index the terminal's cursor rests on
+} s_screen = { SCREEN_UNBOUNDED, 0, 0, 0 };
+
+// A SIGWINCH carries no payload, so the handler only notes that the size
+// changed; read_line asks for the new one and redraws (screen_redraw).
+static volatile int s_resized;
+
+static void on_resize(int signo)
 {
-	while (*n > 0) { os64_write(1, "\b \b", 3); (*n)--; }
-	int len = 0;
-	while (src[len] != '\0' && len < cap - 1)
-	{
-		buf[len] = src[len];
-		len++;
-	}
-	buf[len] = '\0';
-	if (len > 0)
-		os64_write(1, buf, (size_t)len);
-	*n = len;
+	(void)signo;
+	s_resized = 1;
 }
 
-// Walk the visible cursor left by k cells. (The console's '\b' only MOVES —
-// erasure stays overprint, per the renderer contract.)
-static void caret_back(int k)
+static void screen_read_width(void)
 {
-	static const char bs[8] = "\b\b\b\b\b\b\b\b";
-	while (k > 0)
-	{
-		int chunk = k > 8 ? 8 : k;
-		os64_write(1, bs, (size_t)chunk);
-		k -= chunk;
-	}
+	os64_tty_info_t tty;
+	if (os64_tty_read(&tty) == 0 && tty.cols > 0)
+		s_screen.width = (int)tty.cols;
+	else
+		s_screen.width = SCREEN_UNBOUNDED;
 }
 
-// Overprint k cells with blanks, advancing the cursor — caret_back's other
-// half, and together they are the renderer's entire erase vocabulary.
-static void blank_forward(int k)
+// ESC [ count final — one relative move.
+static void screen_csi(int count, char final)
+{
+	char seq[16];
+	int k = 0;
+	seq[k++] = 0x1B;
+	seq[k++] = '[';
+	k += utoa((unsigned long)count, seq + k);
+	seq[k++] = final;
+	os64_write(1, seq, (size_t)k);
+}
+
+// Put the terminal's cursor on line index `to`, from wherever it rests now.
+static void screen_move(int to)
+{
+	int w = s_screen.width;
+	int from = s_screen.origin + s_screen.cursor;
+	int dest = s_screen.origin + to;
+	int rows = dest / w - from / w;
+	if (rows < 0)
+		screen_csi(-rows, 'A');
+	else if (rows > 0)
+		screen_csi(rows, 'B');
+	int col = dest % w;
+	int was = from % w;
+	if (col == 0 && was != 0)
+		os64_write(1, "\r", 1);
+	else if (col < was)
+		screen_csi(was - col, 'D');
+	else if (col > was)
+		screen_csi(col - was, 'C');
+	s_screen.cursor = to;
+}
+
+static void write_blanks(int k)
 {
 	static const char sp[8] = "        ";
 	while (k > 0)
@@ -183,31 +241,172 @@ static void blank_forward(int k)
 	}
 }
 
+// Draw line cells [from, to), the cursor starting on `from`: the line's own
+// bytes, then blanks over whatever a longer line left past the end. Leaves
+// the cursor on `to`, settled if the last glyph filled the last column.
+static void screen_paint(const char *buf, int n, int from, int to)
+{
+	if (from < n)
+		os64_write(1, buf + from, (size_t)((to < n ? to : n) - from));
+	write_blanks(to - (from > n ? from : n));
+	s_screen.cursor = to;
+	if (to > from && (s_screen.origin + to) % s_screen.width == 0)
+	{
+		char settle[2] = { to < n ? buf[to] : ' ', '\r' };
+		os64_write(1, settle, 2);
+	}
+}
+
+// Index of the final byte of the escape sequence that starts at text[i].
+static int escape_end(const char *text, int len, int i)
+{
+	int j = i + 1;
+	if (j < len && text[j] == '[')           // CSI: parameters, then a final byte in @..~
+	{
+		for (j++; j < len; j++)
+			if ((unsigned char)text[j] >= 0x40 && (unsigned char)text[j] <= 0x7E)
+				return j;
+		return len - 1;
+	}
+	if (j < len && text[j] == ']')           // OSC: runs to BEL, or to ESC '\'
+	{
+		for (j++; j < len; j++)
+		{
+			if (text[j] == 0x07)
+				return j;
+			if (text[j] == 0x1B && j + 1 < len && text[j + 1] == '\\')
+				return j + 1;
+		}
+		return len - 1;
+	}
+	while (j < len && (unsigned char)text[j] >= 0x20 && (unsigned char)text[j] <= 0x2F)
+		j++;                                 // intermediates, as in ESC ( U
+	return j < len ? j : len - 1;
+}
+
+// The prompt was just drawn: find where it left the cursor, the way a
+// terminal would get there. Escape sequences draw nothing; a byte is one
+// cell (os64's terminals draw Latin-1 and CP437, one glyph a byte).
+static void screen_after_prompt(const char *text, int len)
+{
+	int w = s_screen.width;
+	int col = 0, rows = 0;
+	bool edge = false;       // the last GLYPH filled the last column; escapes after it change nothing
+	for (int i = 0; i < len; i++)
+	{
+		unsigned char c = (unsigned char)text[i];
+		if (c == 0x1B)
+		{
+			i = escape_end(text, len, i);
+			continue;
+		}
+		edge = false;
+		if (c == '\n')
+		{
+			rows++;
+			col = 0;
+		}
+		else if (c == '\r')
+			col = 0;
+		else if (c == '\b')
+		{
+			if (col > 0)
+				col--;
+		}
+		else if (c >= 0x20 && c != 0x7F && ++col == w)
+		{
+			rows++;
+			col = 0;
+			edge = true;
+		}
+	}
+	if (edge)
+		os64_write(1, " \r", 2);      // a prompt that fills its row settles like a paint
+	s_screen.origin = col;
+	s_screen.above = rows;
+	s_screen.cursor = 0;
+}
+
+// Leave the line for whatever comes next — a command's output, a completion
+// listing: the cursor goes past the end, and past `tail` (Ctrl+C's "^C")
+// drawn after it, onto a fresh row. A line that ended exactly at the right
+// edge has already settled onto that row, and a newline would leave a blank
+// one behind it.
+static void screen_leave(int n, const char *tail, int tlen)
+{
+	screen_move(n);
+	int end = s_screen.origin + n + tlen;
+	if (tlen > 0)
+	{
+		os64_write(1, tail, (size_t)tlen);
+		if (end % s_screen.width == 0)
+			os64_write(1, " \r", 2);
+	}
+	s_screen.cursor = n + tlen;
+	if (end % s_screen.width != 0 || (end == 0 && s_screen.above == 0))
+		os64_write(1, "\n", 1);
+}
+
+// The terminal changed size. What is on the screen was laid out for the old
+// width, so climb to the first row the prompt drew, erase from there down,
+// and draw the prompt and the line again for the new one. os64's terminals
+// keep each row where it was, which is what the climb counts on; a terminal
+// that reflows its own text first (Windows Terminal does) has moved the line
+// somewhere this arithmetic cannot see, and the redraw lands a row or two
+// off — readline's compromise too.
+static void screen_redraw(const char *buf, int n, int pos)
+{
+	int up = s_screen.above + (s_screen.origin + s_screen.cursor) / s_screen.width;
+	os64_write(1, "\r", 1);
+	if (up > 0)
+		screen_csi(up, 'A');
+	os64_write(1, "\x1b[J", 3);
+	prompt_draw();
+	screen_paint(buf, n, 0, n);
+	screen_move(pos);
+}
+
+// Swap the displayed line for `src` — the whole visual of history recall.
+static void replace_line(char *buf, int *n, int *pos, int cap, const char *src)
+{
+	int old = *n;
+	int len = 0;
+	while (src[len] != '\0' && len < cap - 1)
+	{
+		buf[len] = src[len];
+		len++;
+	}
+	buf[len] = '\0';
+	screen_move(0);
+	screen_paint(buf, len, 0, len > old ? len : old);
+	*n = len;
+	*pos = len;
+	screen_move(len);
+}
+
 // THE ONE DELETION ENGINE: remove buf[start, start+count) and leave the caret
 // at the seam. Every erase gesture is this with different arithmetic —
 // Backspace (start=pos-1, count=1), Delete (start=pos, count=1), Ctrl+U
 // (start=0, count=pos), Ctrl+K (start=pos, count=n-pos), Ctrl+W (start=word,
 // count=pos-word) — which is why the repaint lives here once instead of five
-// times: walk the caret to the seam, shift the tail over the corpse, repaint
-// the shifted tail, blank the orphaned cells, walk home.
+// times: move to the seam, shift the tail over the corpse, repaint the shifted
+// tail and blank the cells it vacated, move back to the seam.
 static void edit_delete(char *buf, int *n, int *pos, int start, int count)
 {
-	caret_back(*pos - start);
+	screen_move(start);
 	for (int i = start; i < *n - count; i++)
 		buf[i] = buf[i + count];
 	*n -= count;
 	*pos = start;
-	if (*pos < *n)
-		os64_write(1, buf + *pos, (size_t)(*n - *pos));
-	blank_forward(count);
-	caret_back(*n - *pos + count);
+	screen_paint(buf, *n, start, *n + count);
+	screen_move(start);
 }
 
 
 // Insert `len` bytes AT the caret: shift the tail right, land the bytes,
-// paint them plus the shifted tail, and walk the caret back to rest just
+// paint them plus the shifted tail, and move the caret back to rest just
 // after the insertion. At the end of the line this degenerates to the
-// classic echo — one write, no backspaces. Bytes that would not fit are
+// classic echo — the glyph, and no movement. Bytes that would not fit are
 // dropped, so the line never outgrows its buffer.
 static void edit_insert(char *buf, int *n, int *pos, int cap,
                         const char *text, int len)
@@ -221,9 +420,9 @@ static void edit_insert(char *buf, int *n, int *pos, int cap,
 	for (int i = 0; i < len; i++)
 		buf[*pos + i] = text[i];
 	*n += len;
-	os64_write(1, buf + *pos, (size_t)(*n - *pos));
+	screen_paint(buf, *n, *pos, *n);
 	*pos += len;
-	caret_back(*n - *pos);
+	screen_move(*pos);
 }
 
 // ── TAB COMPLETION ──────────────────────────────────────────────────────────
@@ -361,7 +560,7 @@ static void comp_list_and_repaint(const char *buf, int n, int pos)
 	if (cols < 1)
 		cols = 1;
 
-	os64_write(1, "\n", 1);
+	screen_leave(n, NULL, 0);
 	for (int i = 0; i < s_comp_count; i++)
 	{
 		int w = (int)os64_strlen(s_comp[i]);
@@ -375,12 +574,11 @@ static void comp_list_and_repaint(const char *buf, int n, int pos)
 		if (rowEnd)
 			os64_write(1, "\n", 1);
 		else
-			blank_forward(width - w);
+			write_blanks(width - w);
 	}
 	prompt_draw();
-	if (n > 0)
-		os64_write(1, buf, (size_t)n);
-	caret_back(n - pos);
+	screen_paint(buf, n, 0, n);
+	screen_move(pos);
 }
 
 // Complete the word that ends at the caret, editing the line in place.
@@ -496,8 +694,9 @@ static int64_t console_byte(char *c)
 	return os64_read(0, c, 1);
 }
 
-// Read one line from the console into buf (NUL-terminated), echoing as we go.
-// Returns the length, or -1 for a Ctrl+C at the prompt. Handles Enter
+// Draw the prompt and read one line from the console into buf
+// (NUL-terminated), echoing as we go. Returns the length, or -1 for a Ctrl+C
+// at the prompt. Handles Enter
 // (submit), Backspace (erase before the
 // caret), Left/Right caret movement with mid-line insert (2026-08-08 — the
 // day the console grew a real cursor to make it visible), Up/Down history
@@ -506,12 +705,27 @@ static int64_t console_byte(char *c)
 // era gave way to CRTs: Ctrl+A/E (home/end, emacs's spelling), Ctrl+U (kill
 // to start — V7's line-kill, promoted from @), Ctrl+K (kill to end), and
 // Ctrl+W (word erase — 4BSD's werase, the one Bill Joy typed). Tab completes
-// the word at the caret (complete_at_caret, above).
+// the word at the caret (complete_at_caret, above). Every one of them works
+// across a wrapped line (the screen model, above).
 //
-// KNOWN LIMIT, shared with history recall since birth: the renderer's '\b'
-// clamps at column 0, so editing a line that has WRAPPED misbehaves at the
-// wrap seam. A line that long deserves a script file anyway.
+// A RESIZE REDRAWS THE LINE. The SIGWINCH handler is installed only while the
+// prompt is up: that is the one place husk has something laid out for a
+// width, and a resize during a command is caught by the next prompt, which
+// asks for the width anyway. The prompt is drawn AFTER the handler goes in,
+// so a resize between the two cannot be lost.
+static int edit_line(char *buf, int cap);
+
 static int read_line(char *buf, int cap)
+{
+	s_resized = 0;
+	os64_signal_set_handler(OS64_SIGWINCH, on_resize);
+	prompt_draw();
+	int got = edit_line(buf, cap);
+	os64_signal_set_handler(OS64_SIGWINCH, OS64_SIG_DEFAULT);
+	return got;
+}
+
+static int edit_line(char *buf, int cap)
 {
 	int n = 0;
 	int pos = 0;                 // the caret: insertion point, 0..n
@@ -521,6 +735,13 @@ static int read_line(char *buf, int cap)
 
 	for (;;)
 	{
+		// Checked before every read as well as after an interrupted one: the
+		// handler can run on the way out of a read that DID return a byte.
+		if (s_resized)
+		{
+			s_resized = 0;
+			screen_redraw(buf, n, pos);
+		}
 		char c;
 		if (console_byte(&c) != 1)
 			continue;
@@ -529,7 +750,7 @@ static int read_line(char *buf, int cap)
 		{
 			// Submit takes the WHOLE line no matter where the caret sits —
 			// it is already fully painted on screen.
-			os64_write(1, "\n", 1);
+			screen_leave(n, NULL, 0);
 			buf[n] = 0;
 			history_store(buf);
 			return n;
@@ -551,7 +772,7 @@ static int read_line(char *buf, int cap)
 			// erodes all faith that it ever does anything — house doctrine.
 			// -1, not 0: an empty line inside an open `if` is nothing, a
 			// Ctrl+C there abandons the whole block.
-			os64_write(1, "^C\n", 3);
+			screen_leave(n, "^C", 2);
 			buf[0] = 0;
 			return -1;
 		}
@@ -586,71 +807,44 @@ static int read_line(char *buf, int cap)
 			{
 				if (history_get(browse + 1) == NULL)
 					continue;    // no further past; nothing visibly changes
-				// Browsing swaps the WHOLE line, and replace_line rubs out
-				// from the caret — so the caret goes to the end first
-				// (advancing over glyphs already on screen costs a re-echo).
-				if (pos < n)
-				{
-					os64_write(1, buf + pos, (size_t)(n - pos));
-					pos = n;
-				}
 				if (browse == 0)
 				{
 					buf[n] = '\0';           // park the half-typed line
 					os64_strcopy(live, LINE_MAX, buf);
 				}
 				browse++;
-				replace_line(buf, &n, cap, history_get(browse));
-				pos = n;
+				replace_line(buf, &n, &pos, cap, history_get(browse));
 			}
 			else if (seq[1] == 'B')          // Down — one step toward now
 			{
 				if (browse == 0)
 					continue;    // already composing; Down has nowhere to go
-				if (pos < n)
-				{
-					os64_write(1, buf + pos, (size_t)(n - pos));
-					pos = n;
-				}
 				browse--;
-				replace_line(buf, &n, cap,
+				replace_line(buf, &n, &pos, cap,
 				             browse == 0 ? live : history_get(browse));
-				pos = n;
 			}
 			else if (seq[1] == 'D')          // Left — caret one cell back
 			{
 				if (pos > 0)
-				{
-					pos--;
-					os64_write(1, "\b", 1);
-				}
+					screen_move(--pos);
 				// Pure movement is not editing: browse survives, so an Up
 				// after a stray Left still walks history from where it was.
 			}
 			else if (seq[1] == 'C')          // Right — caret one cell forward
 			{
 				if (pos < n)
-				{
-					// Re-echo the glyph under the caret: same pixels, and
-					// the console cursor advances one cell — movement by
-					// overprint, the only vocabulary the renderer needs.
-					os64_write(1, buf + pos, 1);
-					pos++;
-				}
+					screen_move(++pos);
 			}
 			else if (seq[1] == 'H')          // Home — caret to column one
 			{
-				caret_back(pos);
 				pos = 0;
+				screen_move(pos);
 				// Movement, not editing: browse survives, same as Left/Right.
 			}
 			else if (seq[1] == 'F')          // End — caret past the last glyph
 			{
-				if (pos < n)
-				{
-					os64_write(1, buf + pos, (size_t)(n - pos));
-					pos = n;
-				}
+				pos = n;
+				screen_move(pos);
 			}
 			else if (seq[1] == '~' && param == '3')   // Delete — erase AT the caret
 			{
@@ -668,17 +862,14 @@ static int read_line(char *buf, int cap)
 		// had a line-kill character, and 4BSD added word-erase.
 		if (c == 0x01)                       // Ctrl+A — home (emacs's spelling)
 		{
-			caret_back(pos);
 			pos = 0;
+			screen_move(pos);
 			continue;                        // movement: browse survives
 		}
 		if (c == 0x05)                       // Ctrl+E — end
 		{
-			if (pos < n)
-			{
-				os64_write(1, buf + pos, (size_t)(n - pos));
-				pos = n;
-			}
+			pos = n;
+			screen_move(pos);
 			continue;
 		}
 		if (c == 0x15)                       // Ctrl+U — kill to start of line
@@ -1769,14 +1960,14 @@ static void jobs_poll(void)
 // everything else.
 //
 // ABSENT: \u (there are no users), \h (above), \$'s #-for-root (there are no
-// privilege levels), and \[ \] (husk's rub-out counts typed characters rather
-// than measuring prompt columns, so it needs no zero-width delimiters).
+// privilege levels), and \[ \] (the line editor measures the prompt itself and
+// skips escape sequences as it goes, so it needs no zero-width delimiters).
 //
 // AN ESCAPE THE VOCABULARY DOES NOT KNOW IS EMITTED VERBATIM, backslash and
 // all. A prompt is cosmetic, so refusing to draw one over a typo would be
 // hostile — and a `\q` sitting in your prompt on every line is a louder
 // tripwire than a message you would see once and scroll past.
-// Up to 255 output bytes plus one byte to detect overflow. The write is
+// Up to 255 output bytes plus one byte to detect overflow. The length is
 // counted, so the buffer needs no NUL terminator.
 #define PROMPT_MAX 256
 
@@ -1801,16 +1992,17 @@ static void prompt_put_num(char *out, int *n, unsigned long v)
 	prompt_put(out, n, b);
 }
 
-static void prompt_render(int last_status)
+// Render the prompt into out[PROMPT_MAX] and return its length. Rendered
+// rather than written, because the line editor has to measure what it drew.
+static int prompt_render(int last_status, char *out)
 {
 	const char *fmt = os64_getenv("PROMPT");
 	if (fmt == NULL || *fmt == '\0')
 	{
-		os64_write(1, "husk> ", 6);
-		return;
+		os64_strcopy(out, PROMPT_MAX, "husk> ");
+		return 6;
 	}
 
-	char out[PROMPT_MAX];
 	int n = 0;
 
 	while (*fmt != '\0' && n < PROMPT_MAX)
@@ -1912,10 +2104,10 @@ static void prompt_render(int last_status)
 	// overlong expansion before writing any of it, including its escapes.
 	if (n == PROMPT_MAX)
 	{
-		os64_write(1, "husk> ", 6);
-		return;
+		os64_strcopy(out, PROMPT_MAX, "husk> ");
+		return 6;
 	}
-	os64_write(1, out, (unsigned)n);
+	return n;
 }
 
 // Strip a trailing `&` and say whether it was there. The `&` must be its OWN
@@ -3427,17 +3619,26 @@ static int feed_line(char *line, int lineNo, int *last_status)
 // The prompt as the shell is showing it right now: inside an open
 // `if`/`while`/`for`, Bourne's `> ` continuation — the shell is still
 // collecting, not waiting for a command — otherwise $PROMPT rendered
-// against the last status main recorded. One function, because two things
-// draw it: main before each line, and the completion listing when it
-// repaints the line it interrupted.
+// against the last status main recorded. One function, because the line
+// editor draws it at the start of a line and again whenever it repaints one
+// (a completion listing, a resize) — and measures it every time, since the
+// line starts wherever the prompt stopped.
 static int s_prompt_status = 0;
 
 static void prompt_draw(void)
 {
+	char text[PROMPT_MAX];
+	int len;
 	if (s_block.depth > 0)
-		os64_write(1, "> ", 2);
+	{
+		os64_strcopy(text, PROMPT_MAX, "> ");
+		len = 2;
+	}
 	else
-		prompt_render(s_prompt_status);
+		len = prompt_render(s_prompt_status, text);
+	screen_read_width();
+	os64_write(1, text, (size_t)len);
+	screen_after_prompt(text, len);
 }
 
 // At the end of an rc, a script or a -c line: a block still open is a
@@ -3863,9 +4064,8 @@ int main(int argc, char **argv, char **envp)
 		jobs_poll();
 
 		// After jobs_poll, so \j counts what is still running rather than what
-		// was running before this pass buried it.
+		// was running before this pass buried it. read_line draws the prompt.
 		s_prompt_status = last_status;
-		prompt_draw();
 		int got = read_line(line, sizeof(line));
 		if (got < 0)
 		{

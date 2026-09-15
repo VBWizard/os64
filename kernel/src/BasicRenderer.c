@@ -435,7 +435,7 @@ void print_n_direct(const char* str, size_t length) {
                 // Move back one cell, clamped at the line start (a terminal
                 // never backspaces up a line). This only MOVES the cursor —
                 // erasure is the caller's job by overprinting, which is why
-                // husk rubs out a glyph with "\b \b": back, blank, back.
+                // the classic rub-out is "\b \b": back, blank, back.
                 if (basicrenderer->cursor_position.x >= FONT_WIDTH)
                     basicrenderer->cursor_position.x -= FONT_WIDTH;
                 break;

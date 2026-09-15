@@ -21,11 +21,16 @@ the outer shell of a seed; this is the outer shell of the kernel.*
 | **Ctrl+W** | erase the word before the caret — 4BSD's werase *(2026-08-16)* |
 | **Up / Down** | walk command history (32 deep, duplicates stored once) |
 | **Ctrl+C** | at the prompt: kill the half-typed line, print `^C`, re-prompt |
-| **Tab** | literal tab — it's typeable text (no completion yet, honestly) |
+| **Tab** | completes the word at the caret; lists the candidates when it cannot extend |
 
 History browsing parks your half-typed line at the first Up and returns it
 when you walk back past the newest entry. Movement keys (arrows, Home/End)
 keep you browsing; the first *edit* makes the recalled line yours.
+
+Every key works on a line longer than the terminal is wide — the caret climbs
+and descends across the wrap — on the console, in a gterm, and over ssh or
+telnet alike. Resize the window mid-line and husk redraws the prompt and the
+line at the new width.
 
 ## Terminal chords — the tty's, not husk's
 
@@ -137,8 +142,8 @@ instead, before any custom prompt bytes are written: truncating a CSI or OSC
 sequence could otherwise consume the next command's echoed characters.
 
 Absent: `\u` (no users), `\h` (above), `\$`'s `#`-for-root (no privilege
-levels), and `\[ \]` (husk's rub-out counts typed characters rather than
-measuring prompt columns, so it needs no zero-width delimiters).
+levels), and `\[ \]` (the line editor measures the prompt itself and skips
+escape sequences as it goes, so it needs no zero-width delimiters).
 
 ## Builtins — only what MUST live in the shell
 
@@ -222,7 +227,15 @@ code — the pattern PTY.md and GRAPHICS.md's VT8 chapter both earned.
 
 ## Known limits, stated plainly
 
-- Editing a line that has WRAPPED misbehaves at the wrap seam — the
-  renderer's `\b` clamps at column 0. A line that long deserves a script.
+- Editing a wrapped line trusts husk's picture of the screen, and a few
+  things can falsify it: a prompt that starts partway along a row (the last
+  command's output ended without a newline), a line taller than the
+  terminal (rows scrolled off the top cannot be climbed back to), output
+  from something else arriving while you type, a multi-byte character (in
+  `$PROMPT` or the line) on a UTF-8 terminal over ssh, and a terminal that
+  reflows its own text on a resize.
+  Each draws the line a few cells or rows off, but only the picture is
+  wrong: Enter still submits exactly what you typed (DEBTS.md, "husk's
+  screen model trusts its inputs").
 - Globs cover the last path component: `/tmp/*` yes, `/*/foo` no (booked).
-- No tab completion, no `%1` job notation — the task number is the handle.
+- No `%1` job notation — the task number is the handle.
