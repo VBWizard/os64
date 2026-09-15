@@ -424,7 +424,7 @@ parked reader on arrival instead of at the tick.
   asks by writing `raw` to `/proc/self/tty` and the kernel restores cooked
   when it exits (SIGINT.md § Raw mode; telnet is the consumer). The framebuffer renderer
   (BasicRenderer.c print_n) honors '\b' (cursor back one cell, clamped at
-  column 0 — erasure is caller overprint, e.g. husk's "\b \b") and '\r'.
+  column 0 — erasure is caller overprint, the classic "\b \b") and '\r'.
   **Arrow keys arrive as `ESC [ A/B/C/D`** — the VT100 spelling, chosen for
   interop so that anything reading a terminal reads them unchanged
 

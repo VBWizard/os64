@@ -1,4 +1,4 @@
-// Exercise the actual prompt builder and feed its captured writes through
+// Exercise the actual prompt builder and feed the bytes it renders through
 // the production ANSI parser. No guest syscalls run in this fixture.
 #define main husk_main
 #include "../userland/apps/husk/husk.c"
@@ -27,17 +27,20 @@ int64_t os64_getcwd(char *buf, size_t len)
 }
 int64_t os64_date_now(os64_date_t *out, os64_time_t *raw)
 { (void)out; (void)raw; return -1; }
-int64_t os64_write(int32_t handle, const void *buf, size_t len)
+size_t os64_strcopy(char *dst, size_t cap, const char *src)
 {
-    check(handle == 1 && output_len + len <= sizeof(output), "invalid prompt write");
-    for (size_t i = 0; i < len; i++) output[output_len++] = ((const char *)buf)[i];
-    return (int64_t)len;
+    size_t len = 0;
+    while (src[len] != '\0') len++;
+    size_t n = len < cap - 1 ? len : cap - 1;
+    for (size_t i = 0; i < n; i++) dst[i] = src[i];
+    dst[n] = '\0';
+    return len;
 }
 
 static void render(const char *fmt, size_t expected_len, bool fallback)
 {
-    test_prompt = fmt; output_len = 0;
-    prompt_render(0);
+    test_prompt = fmt;
+    output_len = (size_t)prompt_render(0, output);
     check(output_len == expected_len, "unexpected prompt length");
     if (fallback) {
         const char *plain = "husk> ";

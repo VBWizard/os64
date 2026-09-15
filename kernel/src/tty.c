@@ -176,7 +176,7 @@ static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 		case '\b':
 			// Move back one cell, clamped at the line start (a terminal never
 			// backspaces up a line). Only MOVES — erasure stays the caller's
-			// job by overprint, which is why husk rubs out with "\b \b".
+			// job by overprint, which is why the classic rub-out is "\b \b".
 			if (t->cur_col > 0)
 				t->cur_col--;
 			break;
