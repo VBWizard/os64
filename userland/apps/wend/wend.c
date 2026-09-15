@@ -90,6 +90,7 @@ typedef struct {
     // whether the document declares a refresh — and the rest of the wire
     // semantics move onto it with the renderer's lift.
     os64_page_t *model;
+    bool refresh_handled;             // per loaded document, including refused attempts
     // WHAT A PERSON FILLED IN, kept beside the page rather than in it: a
     // re-wrap throws the page away and builds another, and what was typed
     // into a search box must survive that.
@@ -1178,7 +1179,10 @@ static void jump_to_anchor(view_t *v, const char *name)
 // what following only one per trip through the key loop would have meant.
 static bool refresh_once(view_t *v, int32_t *chain)
 {
+    if (v->refresh_handled)
+        return false;
     const os64_page_refresh_t *refresh = v->model ? os64_page_refresh(v->model) : NULL;
+    v->refresh_handled = true;
     if (refresh == NULL)
         return false;                    // an ordinary page ends the chain
     // A DELAY IS A PERSON'S PATIENCE TO SPEND. wend has no timer in its key
@@ -1194,10 +1198,9 @@ static bool refresh_once(view_t *v, int32_t *chain)
                        refresh->url.url, (unsigned)refresh->seconds);
         return false;
     }
-    // A refresh naming the page it is on is a reload, and following one with
-    // no delay is a loop with no exit. The page gets to say so and nothing
-    // else happens.
-    if (refresh->names_this_document) {
+    // A same-document refresh without a fragment would reload in a loop.
+    // A fragment instead moves within this document and is handled below.
+    if (refresh->names_this_document && !refresh->url.has_fragment) {
         status_set(" this page asks to reload itself immediately, which wend does not do");
         return false;
     }
@@ -1207,7 +1210,13 @@ static bool refresh_once(view_t *v, int32_t *chain)
     }
     os64_page_what_t what = { OS64_PAGE_ACTIVATE_REFRESH, 0, 0, 0 };
     os64_page_request_t request;
-    if (os64_page_activate(v->model, what, &request) != OS64_PAGE_NAVIGATE) {
+    os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
+    if (verdict == OS64_PAGE_FRAGMENT) {
+        jump_to_anchor(v,request.fragment != NULL ? request.fragment : "");
+        os64_page_request_free(&request);
+        return false;
+    }
+    if (verdict != OS64_PAGE_NAVIGATE) {
         status_set(" this page asks to send you somewhere it does not name properly");
         os64_page_request_free(&request);
         return false;

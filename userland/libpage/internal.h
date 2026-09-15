@@ -7,16 +7,10 @@
 
 #define P_ARRAY(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))
 
-// ── The arena, and the two things that are not in it ────────────────────
-//
-// Everything the model owns and never changes — resolved addresses,
-// sanitized values, decoded fragments, gathered option labels — is cut from
-// blocks that are freed whole with the page.
-//
-// Two things are not. What a PERSON changes cannot come from storage that
-// never gives anything back, so an edit is its own allocation. And an ENTRY
-// LIST gets an arena of its own, which is what lets the door take a page it
-// cannot modify: building a submission out of a page must not write to it.
+// Immutable strings live in page-owned arena blocks. Growable model vectors,
+// retained selection defaults and replaceable edits own separate allocations.
+// Submission scratch has its own arena so request construction does not
+// change the page or extend the lifetime of temporary entry-list bytes.
 typedef struct PBlock PBlock;
 
 typedef struct {
@@ -27,6 +21,15 @@ void *p_arena_alloc(PArena *arena, size_t size);
 char *p_arena_copy(PArena *arena, const char *s, size_t n);
 void p_arena_free(PArena *arena);
 
+// Normalized defaults survive edits. Reset restores these without allocating.
+typedef struct {
+    const char *value;
+    size_t value_len;
+    bool checked;
+    uint8_t *selected;
+} PInitial;
+
+
 // ── A PERSON'S EDIT, KEYED BY THE NODE IT BELONGS TO ────────────────────
 //
 // Never by an index, so a model rebuilt over a changed tree can re-key what
@@ -34,9 +37,9 @@ void p_arena_free(PArena *arena);
 // edit; a control's `value`, `checked` and an option's `selected` are made
 // to point at it, so a face still reads the live answer in one place.
 //
-// An untouched control has no record here at all. That is the rule about
-// what leaves the machine: the page's own bytes go out unless somebody
-// changed them.
+// A record may reserve storage without carrying a change. Its text, on and
+// chosen sentinels determine dirty state; record presence does not.
+
 typedef struct {
     const os64_html_node_t *node;   // THE KEY
     char *text;                     // TEXT: NUL-terminated; NULL = untouched
@@ -86,6 +89,7 @@ struct os64_page {
     os64_page_control_t *controls;
     int32_t ncontrols, controlcap;
 
+    PInitial *initial;             // per control, captured after group normalization
     PEdit *edits;
     int32_t nedits, editcap;
 
@@ -143,6 +147,10 @@ const os64_html_node_t *p_ancestor(const os64_html_node_t *n, os64_html_tag_t ta
 char *p_subtree_text(os64_page_t *page, const os64_html_node_t *n, bool collapse, size_t *len);
 // The same into any arena, for a reader that must not write to the page.
 char *p_subtree_text_into(PArena *arena, const os64_html_node_t *n, bool collapse, size_t *len);
+// HTML non-negative integer prefix parsing, saturated on arithmetic overflow.
+bool p_nonnegative(const char *text, uint64_t *value);
+// Whether the select display size is one, using HTML integer parsing.
+bool p_select_one_line(const os64_page_control_t *control);
 // Make a control's `value`, `checked` and its options' `selected` agree with
 // the edit table, which is where a person's changes are actually kept.
 void p_publish(os64_page_t *page, int32_t control);
@@ -161,6 +169,7 @@ bool p_base(os64_page_t *page);
 // Resolve one reference against the page's base, splitting off the `#name`
 // the address itself cannot carry. `ref` NULL means the page spelled none.
 void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out);
+void p_resolve_action(os64_page_t *page, const char *ref, os64_page_ref_t *out);
 // Canonicalise an address that is already absolute: the scheme's default
 // port is never spelled, because a link nobody wrote must not appear.
 bool p_canonical(os64_page_t *page, const char *text, const char **out,
@@ -185,7 +194,19 @@ bool p_refresh_from(os64_page_t *page, const os64_html_node_t *n);
 
 // ── H. Value sanitization ───────────────────────────────────────────────
 
+// HTML numeric syntax is strict for values, prefix-parsed for attributes.
+bool p_number_parse(const char *text, bool strict, double *out);
+// Shortest decimal form of a finite binary64 value; out has at least 32 bytes.
+size_t p_number_spell(double value, char out[32]);
+long double p_number_mod(long double x, long double y);
+const char *p_range_value(PArena *arena, const os64_html_node_t *node,
+                          const char *raw, size_t *len);
 os64_page_input_t p_input_type(const os64_html_node_t *n);
+// Shared by initial values and edits; temporary storage belongs to arena.
+// raw_len is authoritative; raw also has a terminator at that offset.
+const char *p_sanitize_value(PArena *arena, const os64_html_node_t *n,
+                            os64_page_element_t element, os64_page_input_t input,
+                            const char *raw, size_t raw_len, size_t *len);
 // The value the standard says this control holds, with the page's own bytes
 // sanitized for its type. Arena storage, or a tree pointer when nothing
 // needed changing.

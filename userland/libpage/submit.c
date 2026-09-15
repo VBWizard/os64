@@ -172,8 +172,7 @@ static bool select_ok(const os64_page_control_t *c)
 {
     if (!c->required)
         return true;
-    const char *size = p_attr(c->node, "size");
-    bool one_line = !c->multiple && (size == NULL || os64_streq(size, "1") || os64_streq(size, "0"));
+    bool one_line = p_select_one_line(c);
     for (int32_t i = 0; i < c->noptions; i++) {
         if (!c->options[i].selected)
             continue;
@@ -183,6 +182,27 @@ static bool select_ok(const os64_page_control_t *c)
             return true;
     }
     return false;
+}
+
+static size_t utf16_length(const char *s, size_t len)
+{
+    size_t units = 0;
+    for (size_t at = 0; at < len;) {
+        uint32_t cp = 0;
+        size_t used = os64_utf8_decode(s+at, len-at, &cp);
+        at += used != 0 ? used : 1;
+        units += cp > 0xffff ? 2 : 1;
+    }
+    return units;
+}
+
+static bool length_limited(const os64_page_control_t *c)
+{
+    return c->element == OS64_PAGE_EL_TEXTAREA ||
+        (c->element == OS64_PAGE_EL_INPUT &&
+         (c->input == OS64_PAGE_INPUT_TEXT || c->input == OS64_PAGE_INPUT_SEARCH ||
+          c->input == OS64_PAGE_INPUT_TEL || c->input == OS64_PAGE_INPUT_EMAIL ||
+          c->input == OS64_PAGE_INPUT_URL || c->input == OS64_PAGE_INPUT_PASSWORD));
 }
 
 bool p_validate(const os64_page_t *page, int32_t form, int32_t *control)
@@ -203,18 +223,18 @@ bool p_validate(const os64_page_t *page, int32_t form, int32_t *control)
         // THE LENGTH LIMITS APPLY TO WHAT A PERSON TYPED and to nothing
         // else: the standard hangs them on the dirty value, so a page that
         // ships a value longer than its own maxlength still submits it.
-        if (ok && p_edit_find(page, i) != NULL && text_like(c)) {
-            // A limit that is not a whole non-negative number is not a
-            // limit, which is what an invalid value means for one of these
-            // attributes — so the whole field is parsed rather than its
-            // leading digits.
+        const PEdit *edit = p_edit_find(page, i);
+        if (ok && edit != NULL && edit->text != NULL && length_limited(c)) {
+            // HTML numeric attributes share prefix parsing with select
+            // display size and textarea columns.
+            size_t units = utf16_length(c->value, c->value_len);
             uint64_t limit = 0;
             const char *most = p_attr(c->node, "maxlength");
             const char *least = p_attr(c->node, "minlength");
-            if (most != NULL && os64_parse_u64(most, &limit) && c->value_len > limit)
+            if (most != NULL && p_nonnegative(most, &limit) && units > limit)
                 ok = false;
-            if (ok && least != NULL && os64_parse_u64(least, &limit) && c->value_len != 0 &&
-                c->value_len < limit)
+            if (ok && least != NULL && p_nonnegative(least, &limit) && c->value_len != 0 &&
+                units < limit)
                 ok = false;
         }
         if (!ok) {
@@ -325,11 +345,55 @@ static const char *directionality(PArena *arena, const os64_page_control_t *c)
         } else {
             size_t len = 0;
             const char *text = p_subtree_text_into(arena, up, false, &len);
-            strong = text != NULL ? os64_bidi_first_strong(text, len) : OS64_BIDI_NOT_STRONG;
+            if (text == NULL)
+                return NULL;
+            strong = os64_bidi_first_strong(text, len);
         }
         return strong == OS64_BIDI_R || strong == OS64_BIDI_AL ? "rtl" : "ltr";
     }
     return "ltr";
+}
+
+// Deterministic hard wrapping: count Unicode scalar values, retain existing
+// LF breaks, and insert LF before the next scalar once cols is reached.
+static const char *submission_value(PArena *arena, const os64_page_control_t *c, size_t *len)
+{
+    *len = c->value_len;
+    const char *wrap = p_attr(c->node, "wrap");
+    if (c->element != OS64_PAGE_EL_TEXTAREA || wrap == NULL || !os64_streq_nocase(wrap, "hard"))
+        return c->value;
+    uint64_t cols = 0;
+    const char *attr = p_attr(c->node, "cols");
+    if (attr == NULL || !p_nonnegative(attr, &cols) || cols == 0)
+        cols = 20;
+    size_t extra = c->value_len / cols;
+    if (extra >= SIZE_MAX - c->value_len)
+        return NULL;
+    char *out = p_arena_alloc(arena, c->value_len+extra+1);
+    if (out == NULL)
+        return NULL;
+    size_t at = 0, column = 0;
+    for (size_t read = 0; read < c->value_len;) {
+        uint32_t cp = 0;
+        size_t used = os64_utf8_decode(c->value+read, c->value_len-read, &cp);
+        if (used == 0)
+            used = 1;
+        if (cp == '\n')
+            column = 0;
+        else {
+            if (column == cols) {
+                out[at++] = '\n';
+                column = 0;
+            }
+            column++;
+        }
+        os64_memcpy(out+at,c->value+read,used);
+        at += used;
+        read += used;
+    }
+    out[at] = '\0';
+    *len = at;
+    return out;
 }
 
 static bool sends_dirname(const os64_page_control_t *c)
@@ -364,18 +428,24 @@ bool p_entry_list(const os64_page_t *page, int32_t form, int32_t submitter,
         // under its own name when it has one and bare `x`/`y` when it does
         // not — so it is settled before the "no name, nothing sent" rule.
         if (c->input == OS64_PAGE_INPUT_IMAGE) {
-            char name[OS64_URL_PATH_MAX], number[24];
-            const char *prefix = c->name != NULL && c->name[0] != '\0' ? c->name : NULL;
+            char number[24];
+            size_t prefix = c->name != NULL ? os64_strlen(c->name) : 0;
+            if (prefix > SIZE_MAX - 3)
+                return false;
             for (int32_t axis = 0; axis < 2; axis++) {
-                if (prefix != NULL)
-                    os64_snprintf(name, sizeof(name), "%s.%c", prefix, axis == 0 ? 'x' : 'y');
-                else
-                    os64_snprintf(name, sizeof(name), "%c", axis == 0 ? 'x' : 'y');
+                size_t name_len = prefix != 0 ? prefix+2 : 1;
+                char *name = p_arena_alloc(&out->arena, name_len+1);
+                if (name == NULL)
+                    return false;
+                if (prefix != 0) {
+                    os64_memcpy(name,c->name,prefix);
+                    name[prefix] = '.';
+                }
+                name[name_len-1] = axis == 0 ? 'x' : 'y';
+                name[name_len] = '\0';
                 os64_snprintf(number, sizeof(number), "%d", axis == 0 ? what.x : what.y);
-                char *keep = p_arena_copy(&out->arena, name, os64_strlen(name));
                 char *held = p_arena_copy(&out->arena, number, os64_strlen(number));
-                if (keep == NULL || held == NULL ||
-                    !entry_add(out, keep, os64_strlen(keep), held, os64_strlen(held), false))
+                if (held == NULL || !add_normalised(out, name, held, os64_strlen(held), false))
                     return false;
             }
             continue;
@@ -398,9 +468,7 @@ bool p_entry_list(const os64_page_t *page, int32_t form, int32_t submitter,
             // A tick with no `value` sends `on`, the standard's default. One
             // that says `value=""` asked for the empty string, and sending
             // `on` for it picks a different branch on the far side.
-            const char *value = c->has_value_attribute ? c->value : "on";
-            size_t len = c->has_value_attribute ? c->value_len : 2;
-            if (!add_normalised(out, c->name, value, len, false))
+            if (!add_normalised(out, c->name, c->value, c->value_len, false))
                 return false;
             continue;
         }
@@ -419,11 +487,13 @@ bool p_entry_list(const os64_page_t *page, int32_t form, int32_t submitter,
                 return false;
             continue;
         }
-        if (!add_normalised(out, c->name, c->value, c->value_len, false))
+        size_t value_len = 0;
+        const char *value = submission_value(&out->arena, c, &value_len);
+        if (value == NULL || !add_normalised(out, c->name, value, value_len, false))
             return false;
         if (sends_dirname(c)) {
             const char *which = directionality(&out->arena, c);
-            if (!add_normalised(out, c->dirname, which, os64_strlen(which), false))
+            if (which == NULL || !add_normalised(out, c->dirname, which, os64_strlen(which), false))
                 return false;
         }
     }

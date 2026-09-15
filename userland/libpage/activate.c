@@ -239,17 +239,37 @@ static char *with_query(const char *url, const char *query, bool append, bool *t
 // `mailto:` GET puts the entry list in the address's headers, and a space
 // there is `%20` rather than `+`: these are mail header values and not a
 // query a server will decode.
-static void plus_to_space(char *s)
+static void plus_to_space(char *s, size_t len, size_t expanded)
 {
-    for (size_t at = 0; s[at] != '\0'; at++)
-        if (s[at] == '+') {
-            s[at] = '%';
-            // Room for this was reserved by the caller.
-            os64_memmove(s + at + 3, s + at + 1, os64_strlen(s + at + 1) + 1);
-            s[at + 1] = '2';
-            s[at + 2] = '0';
-            at += 2;
-        }
+    size_t write=expanded;
+    s[write]='\0';
+    while (len != 0) {
+        char c=s[--len];
+        if (c == '+') {
+            s[--write]='0';s[--write]='2';s[--write]='%';
+        } else s[--write]=c;
+    }
+}
+
+// Mail text/plain uses UTF-8 percent encoding with the URL path encode set.
+static char *mail_plain(const char *s, size_t len, size_t *out_len)
+{
+    if (len > (SIZE_MAX-1)/3)
+        return NULL;
+    char *out=os64_malloc(len*3+1);
+    if (out == NULL)
+        return NULL;
+    static const char hex[]="0123456789ABCDEF";
+    size_t at=0;
+    for (size_t i=0;i<len;i++) {
+        unsigned char c=(unsigned char)s[i];
+        if (c<=0x20 || c>=0x7f || c=='"' || c=='#' || c=='<' || c=='>' ||
+            c=='?' || c=='^' || c=='`' || c=='{' || c=='}') {
+            out[at++]='%';out[at++]=hex[c>>4];out[at++]=hex[c&15];
+        } else out[at++]=(char)c;
+    }
+    out[at]='\0';*out_len=at;
+    return out;
 }
 
 static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what,
@@ -308,6 +328,10 @@ static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what
     if (action->has_fragment) {
         out->has_fragment = true;
         out->fragment = keep(action->fragment != NULL ? action->fragment : "");
+        if (out->fragment == NULL) {
+            p_entries_free(&entries);
+            return refuse(out, OS64_PAGE_REASON_NO_MEMORY);
+        }
     }
 
     // `ftp:` and `javascript:` take no data at all whatever the form said,
@@ -326,14 +350,12 @@ static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what
     char *bytes = NULL, *type = NULL;
     size_t len = 0;
     os64_page_enctype_t enctype = out->enctype;
-    // `mailto:` carries the entry list urlencoded whichever enctype the form
-    // named, except that text/plain becomes a plain body; the query it goes
-    // into has no serialiser of its own.
-    if (mail && enctype != OS64_PAGE_ENCTYPE_TEXT_PLAIN)
+    // Every GET row that serializes entries uses urlencoding. Mail POST
+    // also uses it unless the page explicitly requests a plain-text body.
+    if (out->method == OS64_PAGE_METHOD_GET ||
+        (mail && enctype != OS64_PAGE_ENCTYPE_TEXT_PLAIN))
         enctype = OS64_PAGE_ENCTYPE_URLENCODED;
-    if (http && out->method == OS64_PAGE_METHOD_GET)
-        enctype = OS64_PAGE_ENCTYPE_URLENCODED;
-    if (!p_serialise(&entries, enctype, encoding, page->opt.max_body, &bytes, &len, &type,
+    if (!p_serialise(&entries, enctype, mail && enctype == OS64_PAGE_ENCTYPE_TEXT_PLAIN ? "utf-8" : encoding, page->opt.max_body, &bytes, &len, &type,
                      &reason)) {
         p_entries_free(&entries);
         return refuse(out, reason);
@@ -354,6 +376,15 @@ static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what
     }
 
     if (mail && out->method == OS64_PAGE_METHOD_POST) {
+        if (enctype == OS64_PAGE_ENCTYPE_TEXT_PLAIN) {
+            char *escaped=mail_plain(bytes,len,&len);
+            os64_free(bytes);
+            bytes=escaped;
+            if (bytes == NULL) {
+                os64_free(type);
+                return refuse(out,OS64_PAGE_REASON_NO_MEMORY);
+            }
+        }
         // The body rides in the address as one more header.
         char *query = os64_malloc(len + 6);
         if (query == NULL) {
@@ -395,7 +426,7 @@ static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what
             return refuse(out, OS64_PAGE_REASON_NO_MEMORY);
         }
         bytes = roomy;
-        plus_to_space(bytes);
+        plus_to_space(bytes,len,len+plusses*2);
     }
     bool too_long = false;
     out->url = with_query(target, bytes, false, &too_long);
@@ -420,5 +451,8 @@ os64_page_verdict_t os64_page_activate(const os64_page_t *page, os64_page_what_t
         return follow_link(page, what.index, out);
     if (what.how == OS64_PAGE_ACTIVATE_REFRESH)
         return follow_refresh(page, out);
+    // A partial model cannot establish a complete entry list or submitter.
+    if (page->incomplete)
+        return refuse(out, OS64_PAGE_REASON_NO_MEMORY);
     return submit(page, what, out);
 }

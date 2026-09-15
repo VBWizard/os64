@@ -27,6 +27,28 @@ static const os64_html_node_t *find(const os64_html_node_t *n, const char *name)
     }
     return NULL;
 }
+static void form_owners(void)
+{
+    static const char *const markup[] = {
+        "<table><form action=/s><tr><td><input name=q></td></tr></form></table>",
+        "<form><input>",
+        "<form id=f></form><input form=f>"};
+    for (size_t i = 0; i < sizeof(markup) / sizeof(markup[0]); i++) {
+        os64_html_parser_t *p = os64_html_parser_new(NULL);
+        require(p != NULL, "form owner constructor");
+        require(os64_html_parser_feed(p, markup[i], os64_strlen(markup[i])) == 0,
+                "form owner feed");
+        os64_html_document_t *doc = os64_html_parser_finish(p);
+        require(doc && !doc->refusal, "form owner document");
+        const os64_html_node_t *form = find(doc->body, "form");
+        const os64_html_node_t *input = find(doc->body, "input");
+        require(form && input, "form owner nodes");
+        require(input->form_owner == (i == 2 ? NULL : form), "parser form association");
+        if (i == 0)
+            require(!form->first_child, "table form remains empty");
+        os64_html_document_free(doc);
+    }
+}
 int main(void)
 {
     require(os64_heap_verify() == 0, "heap before parse");
@@ -59,6 +81,7 @@ int main(void)
                 "template isolation");
         os64_html_document_free(doc);
     }
+    form_owners();
     os64_html_options_t options = os64_html_options_default();
     options.max_depth = 3;
     os64_html_parser_t *p = os64_html_parser_new(&options);
@@ -73,6 +96,6 @@ int main(void)
     os64_html_parser_destroy(p);
     require(os64_heap_verify() == 0, "heap after free/cancel");
     os64_printf(
-        "htmltest: PASS (streaming, tree repair, UTF-8, namespaces, templates, bounds, heap)\n");
+        "htmltest: PASS (streaming, tree repair, UTF-8, namespaces, templates, form owners, bounds, heap)\n");
     return HTMLTEST_OK;
 }

@@ -180,6 +180,26 @@ static void check_no_form(const char *name, const os64_page_t *page)
 
 static void family_b(void)
 {
+    run((PCase){.steps = "B7",
+                .name = "B: a table-layout control submits through its parser owner",
+                .html = "<table><form action=/s><tr><td><input name=q value=cat>"
+                        "<button>Go</button></td></tr></form></table>",
+                .index = 1,
+                .url = "http://host/s?q=cat"});
+    run((PCase){.steps = "B7,C6",
+                .name = "B: implicit submission uses a parser-associated button",
+                .html = "<table><form action=/s><tr><td><input name=q value=cat>"
+                        "<button name=go value=yes>Go</button></td></tr></form></table>",
+                .implicit = true,
+                .index = 0,
+                .url = "http://host/s?q=cat&go=yes"});
+    run((PCase){.steps = "B7,B4",
+                .name = "B: explicit form excludes a table parser association",
+                .html = "<form id=other action=/other></form><table><form action=/s>"
+                        "<tr><td><input name=q value=cat form=other>"
+                        "<button form=other>Go</button></td></tr></form></table>",
+                .index = 1,
+                .url = "http://host/other?q=cat"});
     model("B1", "B: the nearest form ancestor", "<form><div><input name=q></div></form>",
           check_nearest);
     model("B2", "B: form= names a form anywhere", "<form id=f action=/s></form><input form=f name=q>",
@@ -883,11 +903,11 @@ static void family_h(void)
     value_case("H8", "H: and not in a common year", "<input type=date name=q value='2025-02-29'>",
                0, "");
     value_case("H9", "H: a week is checked against the year",
-               "<input type=week name=q value='2026-W53'>", 0, "");
+               "<input type=week name=q value='2021-W53'>", 0, "");
     value_case("H9", "H: a year with 53 weeks has one",
-               "<input type=week name=q value='2026-W52'>", 0, "2026-W52");
-    value_case("H10", "H: a range with no value holds the middle",
-               "<input type=range name=q min=1 max=10>", 0, "5.5");
+               "<input type=week name=q value='2026-W53'>", 0, "2026-W53");
+    value_case("H10", "H: a continuous range holds the midpoint",
+               "<input type=range name=q min=1 max=10 step=any>", 0, "5.5");
     value_case("H10", "H: a range's default span",
                "<input type=range name=q>", 0, "50");
     value_case("H10", "H: a range whose max is below its min",

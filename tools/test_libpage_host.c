@@ -6,11 +6,9 @@
 // outlives every front end written over the library: the same markup must
 // produce the same bytes whether a page is drawn in cells or in pixels.
 //
-// It is organised by the families of LIBPAGE.md, and every case NAMES the
-// steps of the standard it exercises. The step list is checked in below, so
-// "are we conformant" is a number with an auditable denominator rather than
-// a verdict to be argued: coverage is steps named by a case over steps
-// listed, printed per family at the end.
+// Cases name the local inventory of specification steps. The printed ratio
+// measures that inventory's test references, not conformance or branch
+// completeness; independent regressions also check state and failure rules.
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -34,11 +32,12 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len)
 // ── Allocation, and failing it on purpose ───────────────────────────────
 
 static size_t allocations, fail_at, live;
+static bool fail_single;
 
 void *os64_malloc(size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_at != 0 && (fail_single ? allocations == fail_at : allocations >= fail_at))
         return NULL;
     void *at = malloc(size != 0 ? size : 1);
     if (at != NULL)
@@ -57,7 +56,7 @@ void *os64_calloc(size_t count, size_t size)
 void *os64_realloc(void *ptr, size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_at != 0 && (fail_single ? allocations == fail_at : allocations >= fail_at))
         return NULL;
     void *at = realloc(ptr, size != 0 ? size : 1);
     if (at != NULL && ptr == NULL)
@@ -110,14 +109,7 @@ static PStep steps[] = {
     {"B4", "form= outranks the nearest ancestor", false},
     {"B5", "an id that names a non-form leaves the control in no form", false},
     {"B6", "a control outside every form belongs to none", false},
-    // BOOKED, AND libhtml's TO MAKE COVERABLE (issue #99): a control the
-    // parser associated with a form that is not its ancestor — the old web's
-    // `<table><form><tr><td><input>`, where the form node ends up with no
-    // children and the input still belongs to it. libhtml records nothing on
-    // the elements its form element pointer associated, so there is no way to
-    // ask. It is listed here rather than left out, because a family that
-    // counts 6/6 while missing a rule is a number that lies.
-    {"B7", "a parser-inserted owner (booked: libhtml, issue #99)", false},
+    {"B7", "a parser-inserted owner can be outside the ancestor chain", false},
 
     // C. The submitter (§4.10.21.2, §4.10.21.3)
     {"C1", "input type=submit is a submitter", false},
@@ -437,15 +429,35 @@ static void model(const char *step_ids, const char *name, const char *html,
 }
 
 #include "test_libpage_cases.inc"
+#include "test_libpage_state.inc"
+#include "test_libpage_number.inc"
+#include "test_libpage_boundaries.inc"
 
 int main(int argc, char **argv)
 {
     bool sweep = argc > 1 && strcmp(argv[1], "--sweep") == 0;
-    cases();
+    bool numeric_boundary = argc > 1 && strcmp(argv[1], "--numeric-boundary") == 0;
+    if (numeric_boundary) {
+        // Focused range regressions; the default suite also checks the
+        // independent decimal oracle and conversion boundaries.
+        value_case("H10", "numeric boundary: default step rounds midpoint upward",
+                   "<input type=range min=1 max=10>", 0, "6");
+        value_case("H10", "numeric boundary: clamp to maximum",
+                   "<input type=range min=0 max=10 value=100>", 0, "10");
+        value_case("H10", "numeric boundary: fractional step with minimum base",
+                   "<input type=range min=0.1 max=0.9 step=0.2 value=0.4>", 0, "0.5");
+        value_case("H10", "numeric boundary: disparate decimal scales",
+                   "<input type=range min=1e-20 max=1 step=any>", 0, "0.5");
+    } else {
+        cases();
+        state_cases();
+        number_cases();
+        boundary_cases();
+    }
     if (sweep)
         allocation_sweep();
     // Coverage, per family, from the step list above.
-    printf("libpage: %d cases, %d failed%s\n", checks, failures,
+    printf("libpage: %d checks, %d failed%s\n", checks, failures,
            live != 0 ? " (AND LEAKED)" : "");
     char family = 0;
     int32_t listed = 0, covered = 0;
@@ -465,7 +477,7 @@ int main(int argc, char **argv)
         if (steps[i].covered)
             covered++;
     }
-    printf("libpage coverage:%s\n", report);
+    printf("libpage step inventory (not conformance):%s\n", report);
     for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++)
         if (!steps[i].covered)
             printf("  %s has no case: %s\n", steps[i].id, steps[i].rule);
