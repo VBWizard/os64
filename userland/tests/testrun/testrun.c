@@ -120,6 +120,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/tartest",         NULL, 0x7A120000,  0,          "ustar create/list/extract, pipelines, ext2 atomic publication and path safety" },
     { "/tests/gziptest",        NULL, 0x621A0000,  0,          "standalone libgzip and safe gzip/gunzip command publication" },
     { "/tests/pngtest",         NULL, 0x90640000,  0,          "standalone libpng: filtered RGBA decode, alpha, CRC and pixel cap" },
+    { "/tests/pagetest",        NULL, 0x50670000,  0,          "libpage: numeric conversion, range grids, control state and submission" },
     { "/tests/htmltest",        NULL, 0x48640000,  0,          "standalone libhtml: document recovery, namespaces, templates and heap lifetime" },
     { "/tests/jpegtest",        NULL, 0x90650000,  0,          "JPEG: baseline/progressive, orientation, image dispatch, file load and cleanup" },
     { "/tests/bearssltest",     NULL, 0xBEA20000,  0,          "BearSSL foundation vectors and explicit entropy boundary" },

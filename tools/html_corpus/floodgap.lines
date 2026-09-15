@@ -4,7 +4,7 @@ width: 80
 lines: 108
 spots: 68
 forms: 3
-anchors: 1
+node rows: 564
 incomplete: no
 --
 |
@@ -224,4 +224,3 @@ incomplete: no
 form 1 post (this page)
 form 2 get https://gopher.floodgap.com/gopher/gw
 form 3 get https://gopher.floodgap.com/gopher/gw
-anchor #top line 0

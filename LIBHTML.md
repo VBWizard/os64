@@ -200,7 +200,14 @@ typedef struct os64_html_node {
     os64_html_attr_t *attrs;        // ELEMENT
     struct os64_html_node *template_contents;  // <template> only: an OS64_HTML_FRAGMENT node, the standard's DocumentFragment
     struct os64_html_node *parent, *first_child, *last_child, *prev, *next;
+    struct os64_html_node *form_owner; // parser association at insertion, or NULL; document-owned
 } os64_html_node_t;
+
+/* form_owner records the form element pointer when the parser associates an
+ * element under HTML section 13.2.6.1. It may point outside the ancestor chain.
+ * NULL means no parser association; consumers resolve form= and the nearest
+ * ancestor themselves. Tree repair does not recompute this insertion record.
+ * The pointer remains valid until document_free, including on partial trees. */
 
 typedef struct os64_html_document {
     os64_html_node_t *document;     // the DOCUMENT node: doctype, comments and <html> are its children

@@ -88,6 +88,7 @@ typedef struct {
 
 typedef struct {
     wend_spot_kind_t kind;
+    const os64_html_node_t *node; // document-owned source; NULL for synthetic spots
     int32_t line;        // the first row it appears on
     int32_t form;        // 1-based into forms[]; 0 = in no form at all
     char   *url;         // LINK: resolved; "" when the href will not resolve
@@ -181,23 +182,20 @@ typedef struct {
     int32_t after;
 } wend_hidden_t;
 
-// WHERE A `#name` LANDS. Every element carrying an `id`, and every old-style
-// `<a name>`, records the row it fell on — so a link into the same page is
-// answered by scrolling to the row rather than by fetching the document
-// again and showing its top, which is what a table of contents on a long
-// article is entirely made of.
+// Source-node geometry, rebuilt at each width. The document must outlive
+// node lookups. Names and fragment precedence belong to libpage.
 typedef struct {
-    char   *name;
+    const os64_html_node_t *node;
     int32_t line;
-} wend_anchor_t;
+} wend_node_row_t;
 
 typedef struct {
     wend_line_t   *lines;
     int32_t        nlines;
     wend_spot_t   *spots;
     int32_t        nspots;
-    wend_anchor_t *anchors;
-    int32_t        nanchors;
+    wend_node_row_t *node_rows;
+    int32_t        nnode_rows;
     wend_form_t   *forms;
     int32_t        nforms;
     wend_hidden_t *hidden;
@@ -272,8 +270,8 @@ wend_form_result_t wend_form_url(const wend_page_t *page, int32_t spot,
 // or the element carries no usable href.
 bool wend_base_href(const os64_html_document_t *doc, char *out, size_t cap);
 
-// The row a `#name` names, or -1 when the page has no such anchor.
-int32_t wend_anchor_line(const wend_page_t *page, const char *name);
+// The row for this source node, or -1 if absent or rendering was incomplete.
+int32_t wend_node_line(const wend_page_t *page, const os64_html_node_t *node);
 
 // ONE CODE POINT ONTO THE GLASS. Writes at most WEND_FOLD_MAX bytes and
 // returns how many: 0 for a code point that is invisible by definition (a

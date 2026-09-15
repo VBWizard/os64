@@ -149,6 +149,12 @@ void *os64_memmove(void *dst, const void *src, size_t n);
 // Fill `n` bytes with `c`.
 void *os64_memset(void *dst, int c, size_t n);
 
+// Compare `n` bytes: negative, zero or positive, memcmp's own contract. For
+// bytes and not strings — the streq family is what a NUL-terminated
+// comparison wants, and reaching for this one on a string reads the byte
+// after the NUL.
+int os64_memcmp(const void *a, const void *b, size_t n);
+
 // ── UTF-8 ───────────────────────────────────────────────────────────────
 //
 // libhtml's tree is UTF-8 and the glass is Latin-1 (or CP437), so every
@@ -177,5 +183,40 @@ size_t os64_utf8_decode(const char *s, size_t n, uint32_t *cp);
 // bytes it wrote: 1..4. A surrogate or a value past U+10FFFF is encoded as
 // OS64_UTF8_REPLACEMENT (3 bytes), never as an invalid sequence.
 size_t os64_utf8_encode(uint32_t cp, char *out);
+
+// ── Which way text runs ─────────────────────────────────────────────────
+//
+// A RUN OF TEXT IS POINTED THE WAY ITS FIRST STRONG CHARACTER POINTS, and
+// only three of Unicode's bidirectional classes are strong: L, R and AL
+// (UAX #9 P2 and P3). Everything else — digits, spaces, punctuation, the
+// marks — takes its direction from what surrounds it and decides nothing,
+// which is why "Hello" followed by Hebrew reads left to right and the same
+// Hebrew after a comma does not.
+//
+// HTML is written in these terms twice over: `dir=auto` means "read the
+// text and see", and a form's `dirname` entry sends the answer to the
+// server. A layout engine that ever draws Hebrew or Arabic needs the same
+// table, which is why it is here and not in the library that submits forms.
+//
+// The table is GENERATED from a pinned Unicode DerivedBidiClass.txt by
+// tools/gen_bidi_table.py — the classes move between Unicode versions, and
+// a hand-written copy would be a snapshot nobody could check.
+typedef enum {
+    OS64_BIDI_L = 0,       // Left_To_Right: Latin, Greek, most of the world
+    OS64_BIDI_R,           // Right_To_Left: Hebrew, Thaana, N'Ko
+    OS64_BIDI_AL,          // Arabic_Letter: right to left, and its own shaping
+    OS64_BIDI_NOT_STRONG   // decides nothing by itself
+} os64_bidi_strong_t;
+
+// One code point's strong class.
+os64_bidi_strong_t os64_bidi_strong(uint32_t cp);
+
+// The first strong class in `len` bytes of UTF-8, or OS64_BIDI_NOT_STRONG
+// when nothing in the text is strong — which is a different answer from
+// "left to right", and the caller's own rule decides what to do with it
+// (HTML's `dir=auto` reads both as left to right; a layout engine may not).
+// Bytes that are not UTF-8 decode to the replacement character, whose class
+// is not strong, so a corrupt string never decides a direction.
+os64_bidi_strong_t os64_bidi_first_strong(const char *utf8, size_t len);
 
 #endif // OS64_STR_H

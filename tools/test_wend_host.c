@@ -90,6 +90,43 @@ static int checks, failures;
     } \
 } while (0)
 
+// The geometry borrows source nodes. Keep each helper's document alive
+// until its rendered page is released, including multi-width test pairs.
+typedef struct TestDocument {
+    wend_page_t *page;
+    os64_html_document_t *doc;
+    struct TestDocument *next;
+} TestDocument;
+static TestDocument *test_documents;
+static void test_page_free(wend_page_t *page)
+{
+    TestDocument **at = &test_documents;
+    while (*at != NULL && (*at)->page != page) at = &(*at)->next;
+    if (*at != NULL) {
+        TestDocument *entry = *at;
+        *at = entry->next;
+        os64_html_document_free(entry->doc);
+        free(entry);
+    }
+    wend_page_free(page);
+}
+#define wend_page_free test_page_free
+
+// Fixture lookup only: production navigation resolves names in libpage.
+static int32_t fixture_node_line(const wend_page_t *page, const char *name)
+{
+    if (page == NULL) return -1;
+    for (int32_t i = 0; i < page->nnode_rows; i++) {
+        const os64_html_node_t *node = page->node_rows[i].node;
+        const os64_html_attr_t *id = os64_html_attr(node, "id");
+        const os64_html_attr_t *legacy = os64_html_attr(node, "name");
+        if ((id && strcmp(id->value, name) == 0) ||
+            (node->tag == OS64_HTML_TAG_A && legacy && strcmp(legacy->value, name) == 0))
+            return wend_node_line(page, node);
+    }
+    return -1;
+}
+
 static wend_page_t *render_html_text(const char *html, int32_t cols, const char *base_text)
 {
     os64_url_t base;
@@ -109,7 +146,14 @@ static wend_page_t *render_html_text(const char *html, int32_t cols, const char 
     if (!doc)
         return NULL;
     wend_page_t *page = wend_render_html(doc, base_text ? &base : NULL, cols, NULL, 0);
-    os64_html_document_free(doc);
+    if (page != NULL) {
+        TestDocument *entry = malloc(sizeof(*entry));
+        if (entry == NULL) abort();
+        *entry = (TestDocument){page, doc, test_documents};
+        test_documents = entry;
+    } else {
+        os64_html_document_free(doc);
+    }
     return page;
 }
 
@@ -426,16 +470,16 @@ static void anchor_checks(void)
         CHECK(strcmp(page->spots[1].url, "http://host/dir/other.html") == 0);
         CHECK(strcmp(page->spots[1].fragment, "frag") == 0);
     }
-    CHECK(wend_anchor_line(page, "one") >= 0);
-    CHECK(wend_anchor_line(page, "two") > wend_anchor_line(page, "one"));
-    CHECK(wend_anchor_line(page, "old") >= 0);      // the 1994 spelling
-    CHECK(wend_anchor_line(page, "nothing") == -1);
+    CHECK(fixture_node_line(page, "one") >= 0);
+    CHECK(fixture_node_line(page, "two") > fixture_node_line(page, "one"));
+    CHECK(fixture_node_line(page, "old") >= 0);      // the 1994 spelling
+    CHECK(fixture_node_line(page, "nothing") == -1);
     // `#` alone and `#top` both mean the document's top; the navigator
     // answers them, but the renderer has to say that one was ASKED for.
     CHECK(page->nspots == 2 && page->spots[0].has_fragment);
     // The row an anchor names is the row its element begins on, so a reader
     // sent there finds the heading at the top rather than above the screen.
-    int32_t at = wend_anchor_line(page, "two");
+    int32_t at = fixture_node_line(page, "two");
     CHECK(at >= 0 && at < page->nlines && strcmp(page->lines[at].text, "Two") == 0);
     wend_page_free(page);
 }
@@ -791,7 +835,7 @@ static void list_and_anchor_checks(void)
             40, "http://host/p");
         CHECK(page != NULL);
         if (page) {
-            int32_t at = wend_anchor_line(page, "target");
+            int32_t at = fixture_node_line(page, "target");
             CHECK(at >= 0 && at < page->nlines
                   && strstr(page->lines[at].text, "here") != NULL);
             wend_page_free(page);
@@ -883,7 +927,7 @@ static void form_edge_checks(void)
         CHECK(page != NULL && page && page->nspots == 1);
         if (page && page->nspots == 1) {
             CHECK(strcmp(page->spots[0].fragment, "section 2") == 0);
-            CHECK(wend_anchor_line(page, page->spots[0].fragment) >= 0);
+            CHECK(fixture_node_line(page, page->spots[0].fragment) >= 0);
             wend_page_free(page);
         }
     }
@@ -1236,7 +1280,7 @@ static void oom_checks(void)
             for (int32_t i = 0; i < page->nspots; i++)
                 (void)wend_form_url(page, i, "http://host/p", url, sizeof(url),
                                     frag, sizeof(frag));
-            (void)wend_anchor_line(page, "here");
+            (void)fixture_node_line(page, "here");
             wend_page_free(page);
         }
         fail_at = 0;
@@ -1269,7 +1313,7 @@ static void dump(const wend_page_t *page, const char *name)
     printf("lines: %d\n", page->nlines);
     printf("spots: %d\n", page->nspots);
     printf("forms: %d\n", page->nforms);
-    printf("anchors: %d\n", page->nanchors);
+    printf("node rows: %d\n", page->nnode_rows);
     printf("incomplete: %s\n", page->incomplete ? "yes" : "no");
     printf("--\n");
     for (int32_t i = 0; i < page->nlines; i++) {
@@ -1377,13 +1421,10 @@ static void dump(const wend_page_t *page, const char *name)
                        page->hidden[j].after);
         printf("\n");
     }
-    // The anchors are a page's own index. Only the count goes in the dump
-    // for a big page — the names are the document's own and would double
-    // its size — but a small one lists them, which is what the fixtures use.
-    if (page->nanchors <= 40)
-        for (int32_t i = 0; i < page->nanchors; i++)
-            printf("anchor #%s line %d\n", page->anchors[i].name,
-                   page->anchors[i].line);
+    // Node identities are process-local; snapshot row geometry by index.
+    if (page->nnode_rows <= 40)
+        for (int32_t i = 0; i < page->nnode_rows; i++)
+            printf("node %d line %d\n", i, page->node_rows[i].line);
 }
 
 static char *slurp(const char *path, size_t *len)

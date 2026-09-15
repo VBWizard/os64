@@ -32,6 +32,7 @@
 
 #include "fetch/fetch.h"
 #include "html/html.h"
+#include "page/page.h"
 #include "os64/args.h"
 #include "os64/fmt.h"
 #include "os64/io.h"
@@ -83,6 +84,13 @@ typedef struct {
     size_t   textlen;
     bool     text_utf8;
     wend_page_t *page;                  // the lines, at the current width
+    // WHAT THE PAGE MEANS, as opposed to how it reads (LIBPAGE.md). Built
+    // once per page because it does not depend on the width: a re-wrap
+    // rebuilds the lines and never this. Today it answers one question —
+    // whether the document declares a refresh — and the rest of the wire
+    // semantics move onto it with the renderer's lift.
+    os64_page_t *model;
+    bool refresh_handled;             // per loaded document, including refused attempts
     // WHAT A PERSON FILLED IN, kept beside the page rather than in it: a
     // re-wrap throws the page away and builds another, and what was typed
     // into a search box must survive that.
@@ -613,6 +621,8 @@ static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
 
 static void view_clear(view_t *v)
 {
+    // The model points into the tree, so it goes first.
+    os64_page_free(v->model);
     if (v->doc)
         os64_html_document_free(v->doc);
     os64_free(v->text);
@@ -620,6 +630,7 @@ static void view_clear(view_t *v)
     for (int32_t i = 0; i < v->nedits; i++)
         os64_free(v->edits[i].text);
     os64_free(v->edits);
+    v->model = NULL;
     v->doc = NULL;
     v->text = NULL;
     v->page = NULL;
@@ -841,6 +852,11 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
             os64_fetch_close(f);
             return false;
         }
+        // WHAT THE PAGE MEANS, from the tree and the address it came from.
+        // A page libpage cannot build a model of is still a page worth
+        // reading, so this is not a failure to return: what it costs is the
+        // one question the model answers.
+        out->model = os64_page_build(out->doc, head->url_text, NULL);
         // THE PAGE'S OWN WORD ABOUT WHERE IT LIVES OUTRANKS THE ADDRESS IT
         // CAME FROM, which is what <base href> is for and what a page
         // assembled from a template relies on.
@@ -1123,19 +1139,13 @@ static bool starts_with_nocase(const char *s, const char *prefix)
     return true;
 }
 
-// Move to a `#name` on the page that is showing. A page that does not carry
-// the name says so and stays where it is: the link was still a link, and
-// throwing away the reader's place would punish them for the page's mistake.
-static void jump_to_anchor(view_t *v, const char *name)
+// libpage selects the semantic target; the renderer supplies geometry for
+// that exact node. Missing geometry leaves the reader's position intact.
+static void jump_to_node(view_t *v, const os64_html_node_t *node)
 {
-    int32_t line = name[0] == '\0' ? 0 : wend_anchor_line(v->page, name);
-    // `#top` NAMES THE TOP when nothing else claims it, which is the
-    // standard's own fallback and what a page's "back to top" link relies
-    // on — most of them never define an element to match.
-    if (line < 0 && os64_streq_nocase(name, "top"))
-        line = 0;
+    int32_t line = node != NULL ? wend_node_line(v->page, node) : 0;
     if (line < 0) {
-        status_set(" this page has nothing named #%s", name);
+        status_set(" that target has no rendered row on this page");
         return;
     }
     v->top = line;
@@ -1143,40 +1153,185 @@ static void jump_to_anchor(view_t *v, const char *name)
     selection_reanchor(v);
 }
 
+static void jump_to_fragment(view_t *v, const char *name)
+{
+    const os64_html_node_t *node = NULL;
+    os64_page_reason_t reason = os64_page_resolve_fragment(v->model, name, &node);
+    if (reason != OS64_PAGE_REASON_OK) {
+        status_set(" %s", os64_page_reason_name(reason));
+        return;
+    }
+    jump_to_node(v, node);
+}
+
+// ── A page that asks to send you somewhere ──────────────────────────────
+//
+// `<meta http-equiv="refresh">` is a navigation the DOCUMENT declares, and
+// following it is what makes a search engine's result links work: the HTML
+// endpoints wrap every link in a click logger that answers 200 with no
+// redirect, a script for a browser that runs one, and this for a browser
+// that does not. libpage says whether one is declared and where to; the
+// three rules about whether to OBEY are here, because they are about a
+// person reading rather than about a page.
+// A chain of these can go on forever, so it is capped the way a chain of
+// redirects is — and for the same reason, which is that nobody reading can
+// tell the difference between a slow one and a stuck one.
+#define WEND_REFRESH_MAX 5
+
+// ONE HOP OF A CHAIN. True means the view moved and the page it moved to has
+// not been looked at yet, so the caller asks again: a redirector that lands
+// on another redirector must not need a keypress between them, which is
+// what following only one per trip through the key loop would have meant.
+static bool refresh_once(view_t *v, int32_t *chain)
+{
+    if (v->refresh_handled)
+        return false;
+    const os64_page_refresh_t *refresh = v->model ? os64_page_refresh(v->model) : NULL;
+    v->refresh_handled = true;
+    if (refresh == NULL)
+        return false;                    // an ordinary page ends the chain
+    if (refresh->url.refused != OS64_PAGE_REASON_OK) {
+        status_set(" refresh: %s", os64_page_reason_name(refresh->url.refused));
+        return false;
+    }
+    // A DELAY IS A PERSON'S PATIENCE TO SPEND. wend has no timer in its key
+    // loop and a page that moves under a reader mid-sentence is hostile, so
+    // a delayed refresh is reported and left for them to act on. The "you
+    // will be redirected in five seconds" page always carries a link too.
+    if (refresh->seconds != 0) {
+        if (refresh->names_this_document)
+            status_set(" this page asks to reload itself every %u seconds",
+                       (unsigned)refresh->seconds);
+        else
+            status_set(" this page asks to send you to %s in %u seconds - press g to go",
+                       refresh->url.url, (unsigned)refresh->seconds);
+        return false;
+    }
+    // A same-document refresh without a fragment would reload in a loop.
+    // A fragment instead moves within this document and is handled below.
+    if (refresh->names_this_document && !refresh->url.has_fragment) {
+        status_set(" this page asks to reload itself immediately, which wend does not do");
+        return false;
+    }
+    if (++*chain > WEND_REFRESH_MAX) {
+        status_set(" this page is the end of a chain of redirects too long to follow");
+        return false;
+    }
+    os64_page_what_t what = { OS64_PAGE_ACTIVATE_REFRESH, 0, 0, 0 };
+    os64_page_request_t request;
+    os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
+    if (verdict == OS64_PAGE_FRAGMENT) {
+        jump_to_node(v, request.anchor);
+        os64_page_request_free(&request);
+        return false;
+    }
+    if (verdict != OS64_PAGE_NAVIGATE) {
+        status_set(" this page asks to send you somewhere it does not name properly");
+        os64_page_request_free(&request);
+        return false;
+    }
+    // WHICH SCHEMES THIS BROWSER FOLLOWS IS ITS OWN LIST, which is why
+    // libpage states the scheme instead of keeping one.
+    bool fetchable = os64_streq(request.scheme, "http") || os64_streq(request.scheme, "https");
+    if (!fetchable) {
+        status_set(" this page asks to send you to %s, which wend does not fetch",
+                   request.url);
+        os64_page_request_free(&request);
+        return false;
+    }
+    // THE HOP NO FETCH CAN SEE. libfetch's downgrade callback judges the
+    // redirects inside one fetch, and this is a new fetch that starts where
+    // the page said — so an encrypted page handing over a plain address is
+    // a question only this side can ask.
+    if (request.downgrade) {
+        char question[WEND_STATUS_MAX];
+        os64_url_t target;
+        os64_snprintf(question, sizeof(question),
+                      " this encrypted page sends you to %s unencrypted - go? (y/n) ",
+                      os64_url_parse(request.url, &target) == OS64_URL_OK ? target.host
+                                                                         : "another address");
+        if (!confirm(question)) {
+            status_set(" stayed here");
+            os64_page_request_free(&request);
+            return false;
+        }
+    }
+    // The request owns its strings independently of the old view. Keep it
+    // alive through go(), then resolve against the new destination model.
+    // Redirectors do not occupy a history entry.
+    bool moved = go(v, request.url, false);
+    if (moved && request.has_fragment)
+        jump_to_fragment(v, request.fragment != NULL ? request.fragment : "");
+    os64_page_request_free(&request);
+    return moved;
+}
+
+static void refresh_if_declared(view_t *v)
+{
+    int32_t chain = 0;
+    while (refresh_once(v, &chain))
+        ;
+}
+
+static char *navigation_copy(const char *text)
+{
+    if (text == NULL) text = "";
+    size_t size = os64_strlen(text) + 1;
+    char *copy = os64_malloc(size);
+    if (copy != NULL) os64_memcpy(copy, text, size);
+    return copy;
+}
+
 static void follow_link(view_t *v, int32_t index)
 {
-    // Both are copied out first: following frees the page these point into.
-    // A page that ran out of memory partway can be missing a string, and a
-    // number typed at the status row reaches any spot, built or not.
     const wend_spot_t *spot = &v->page->spots[index];
-    char url[OS64_FETCH_URL_MAX], fragment[OS64_URL_PATH_MAX];
-    os64_strcopy(url, sizeof(url), spot->url ? spot->url : "");
-    os64_strcopy(fragment, sizeof(fragment), spot->fragment ? spot->fragment : "");
-
-    // A LINK INTO THE PAGE YOU ARE ON IS A MOVE, NOT A FETCH. Asking the
-    // server for the article again to show its top is what a table of
-    // contents would otherwise do to you, once per entry.
-    if (v->page->spots[index].has_fragment && os64_streq(url, v->url)) {
+    int32_t link = os64_page_link_for(v->model, spot->node);
+    os64_page_request_t request = {0};
+    if (link >= 0) {
+        os64_page_what_t what = {OS64_PAGE_ACTIVATE_LINK, link, 0, 0};
+        os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
+        if (verdict == OS64_PAGE_FRAGMENT) {
+            v->sel = index;
+            jump_to_node(v, request.anchor);
+            os64_page_request_free(&request);
+            return;
+        }
+        if (verdict != OS64_PAGE_NAVIGATE) {
+            status_set(" %s", os64_page_reason_name(request.reason));
+            os64_page_request_free(&request);
+            return;
+        }
+    } else {
+        // Frame destinations are renderer-generated links, outside libpage's
+        // a/area collection. A missing ordinary link is model uncertainty.
+        if (spot->node == NULL || spot->node->tag != OS64_HTML_TAG_FRAME) {
+            status_set(" the page model could not retain this link");
+            return;
+        }
+        request.url = navigation_copy(spot->url ? spot->url : "");
+        request.fragment = navigation_copy(spot->fragment ? spot->fragment : "");
+        request.has_fragment = spot->has_fragment;
+        if (request.url == NULL || request.fragment == NULL) {
+            status_set(" out of memory");
+            os64_page_request_free(&request);
+            return;
+        }
+        if (request.has_fragment && os64_streq(request.url, v->url)) {
+            jump_to_fragment(v, request.fragment);
+            os64_page_request_free(&request);
+            return;
+        }
+    }
+    if (request.url[0] == '\0') {
+        status_set(" link %d does not spell an address this browser can resolve", index + 1);
+    } else if (starts_with_nocase(request.url, "gopher://")) {
+        status_set(" that is gopherspace - read it with:  gopher '%s'", request.url);
+    } else {
         v->sel = index;
-        jump_to_anchor(v, fragment);     // "" is the top of the document
-        return;
+        if (go(v, request.url, true) && request.has_fragment)
+            jump_to_fragment(v, request.fragment != NULL ? request.fragment : "");
     }
-    if (url[0] == '\0') {
-        status_set(" link %d does not spell an address this browser can resolve",
-                   index + 1);
-        return;
-    }
-    // GOPHER IS A DIFFERENT PROGRAM'S PROTOCOL, and saying so is better than
-    // handing the address to a library that will refuse it in the language
-    // of HTTP.
-    if (starts_with_nocase(url, "gopher://")) {
-        status_set(" that is gopherspace - read it with:  gopher '%s'", url);
-        return;
-    }
-    v->sel = index;
-    // A fragment on another page is answered once that page is here.
-    if (go(v, url, true) && fragment[0] != '\0')
-        jump_to_anchor(v, fragment);
+    os64_page_request_free(&request);
 }
 
 // ── Sending a form ──────────────────────────────────────────────────────
@@ -1228,7 +1383,7 @@ static void form_send(view_t *v, int32_t index)
         }
     }
     if (go(v, url, true) && fragment[0] != '\0')
-        jump_to_anchor(v, fragment);     // the action asked for a section
+        jump_to_fragment(v, fragment);     // the action asked for a section
 }
 
 // THE BUTTON A FORM WOULD HAVE PRESSED ITSELF: the first one in it, which is
@@ -1640,6 +1795,12 @@ static int32_t session(const char *start)
                 scroll_to_spot(&view);
             scroll_clamp(&view);
         }
+        if (s_want_quit)
+            break;
+        // After any navigation has settled and before anything is painted:
+        // a redirector is a page nobody wants to see, and the reader's own
+        // `#name` jump has already happened.
+        refresh_if_declared(&view);
         if (s_want_quit)
             break;
 

@@ -1,14 +1,16 @@
 # BROWSER.md — the campaign constitution
 
-> **Under review (2026-09-12).** The boss fight below is right and the
-> ladder worked. What is missing is the word CONFORMANT, any mention of
-> JavaScript, and a rung between parsing and layout for what a parsed page
-> MEANS — which is where all 62 findings on the `wend` slice landed. The
-> record and the case for a second draft are in
-> [`docs/browser_second_draft.md`](docs/browser_second_draft.md). Read that
-> before starting new work from this file — in particular its stance on
-> "implement a thing when something asks for one", which is right for a
-> line-mode face and wrong for a daily driver.
+> **Reviewed and amended (2026-09-12).** The boss fight below is right and
+> the ladder worked, and this file was missing a rung: between PARSING a
+> page and LAYING IT OUT there is what the page MEANS, which is where all 62
+> findings on the `wend` slice landed. That rung is now its own layer with
+> its own document, [`LIBPAGE.md`](LIBPAGE.md), and it is **built to the
+> standard WHOLE rather than when a page asks** — Chris's ruling, and the
+> one place the stance below does not apply. The stance still governs
+> FEATURES; it never licensed a half-rule. The evidence that produced the
+> ruling is in [`docs/browser_second_draft.md`](docs/browser_second_draft.md).
+> JavaScript comes after the first daily-driver graphical browser, which is
+> a ruling too, and LIBPAGE.md carries what it costs.
 
 *2026-08-31/09-01, the insomnia session. Chris named the boss fight — a
 graphical browser, os64 as daily driver — and ratified the shape: tiny
@@ -18,10 +20,13 @@ Written by Fable for whoever holds a slice of this campaign (Opus included);
 read CLAUDE.md and SUCCESSION.md first, as always. The eyes slice
 (`/sys/net/tcp`, PR #46) is this arc's first landing.*
 
-## The two real bosses (and the one that isn't)
+## The three real bosses (and the one that isn't)
 
-HTML parsing is not the hard part — a tag-soup tokenizer for the real web's
-common elements is a weekend. The bosses are:
+HTML parsing is not the hard part, and libhtml proved it: built to the
+WHATWG algorithm against a pinned suite, and parsing was not where the pain
+was BECAUSE of that. What the sentence used to say next — that the hard
+parts are TLS and layout — left out the layer between them, and that
+omission cost the first `wend` slice sixty-two findings. Three bosses, then:
 
 1. **TLS.** The modern web is HTTPS-or-nothing. RULED: os64 BORROWS its TLS
    — recommendation BearSSL (no malloc, no syscalls, caller-owned buffers,
@@ -37,7 +42,15 @@ common elements is a weekend. The bosses are:
    plaintext-leg disclosure; `$no_proxy` bypass uses native TLS. CONNECT
    tunneling is deferred until needed.
 
-2. **Layout.** Block flow, inline flow, the box model. Distant; the ladder
+2. **What a page MEANS.** Form ownership, the submitter and what it
+   overrules, the entry list, the encodings, reference resolution, the
+   navigation a document declares. Neither parsing nor layout, and most of a
+   browser's conformance surface — a form is submitted identically whether
+   it is drawn in cells or in pixels, so it belongs to neither face. RULED
+   2026-09-12: it is `libpage`, it is built to the standard WHOLE, and its
+   corpus is the durable artefact. [LIBPAGE.md](LIBPAGE.md) is the record.
+
+3. **Layout.** Block flow, inline flow, the box model. Distant; the ladder
    climbs there via the gopher/line-mode client's UI. Not yet designed —
    deliberately.
 

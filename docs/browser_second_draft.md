@@ -1,8 +1,13 @@
 # The browser's second draft — what the first one taught
 
-**Status:** the case for stopping and redesigning, written 2026-09-12 from the
-review record of PR #98 (`wend`, the line-mode face). Chris's call; this is
-the evidence and the reading of it, for Fable to take into a new design.
+**Status: RULED, the same day.** This was the case for stopping and
+redesigning, written 2026-09-12 from the review record of PR #98 (`wend`, the
+line-mode face). Chris made the call and Fable took it into a design the same
+morning: the missing rung is [`LIBPAGE.md`](../LIBPAGE.md), it is built to the
+standard WHOLE, and JavaScript comes after the first daily-driver graphical
+browser. What follows is the EVIDENCE, kept as it was written — including its
+description of what BROWSER.md said before the amendment, which is the thing
+it was arguing about.
 
 **The goal is not new and BROWSER.md does state it:** "Chris named the boss
 fight — a graphical browser, os64 as daily driver". The mismatch is narrower

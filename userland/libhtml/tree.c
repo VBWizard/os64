@@ -251,6 +251,41 @@ static void foreign_attrs(os64_html_parser_t *p, HAttr *attrs, os64_html_ns_t ns
             a->ns = "http://www.w3.org/2000/xmlns/";
     }
 }
+static HNode *tree_root(os64_html_parser_t *p, HNode *n)
+{
+    while (n->parent) {
+        if (!h_work(p, 1))
+            return NULL;
+        n = n->parent;
+    }
+    return n;
+}
+static void associate_form(os64_html_parser_t *p, HNode *n, HNode *parent)
+{
+    if (!p->form || !named_in(n, "button fieldset input object output select textarea img") ||
+        template_open(p) || p->d->pub.refusal)
+        return;
+
+    /* img is form-associated but not listed: its form attribute does not
+     * override the parser pointer. Attribute presence excludes listed nodes
+     * even when the value is empty or names no form. */
+    if (!named(n, "img")) {
+        for (HAttr *a = n->attrs; a; a = a->next) {
+            if (!h_work(p, 1))
+                return;
+            if (!a->ns && h_eq(a->name, "form"))
+                return;
+        }
+    }
+    /* Compare the actual insertion parent's tree, including foster parenting.
+     * This records insertion-time knowledge, not subsequent DOM ownership. */
+    HNode *parent_root = tree_root(p, parent);
+    if (!parent_root)
+        return;
+    HNode *form_root = tree_root(p, p->form);
+    if (form_root && parent_root == form_root)
+        n->form_owner = p->form;
+}
 static HNode *element(os64_html_parser_t *p, HToken *t, os64_html_ns_t ns, bool push)
 {
     if (push && p->stack.n >= p->opt.max_depth) {
@@ -284,6 +319,10 @@ static HNode *element(os64_html_parser_t *p, HToken *t, os64_html_ns_t ns, bool 
     HNode *parent, *before;
     insertion_place(p, NULL, &parent, &before);
 
+    if (p->d->pub.refusal)
+        return NULL;
+
+    associate_form(p, n, parent);
     if (p->d->pub.refusal)
         return NULL;
 
