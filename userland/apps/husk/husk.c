@@ -784,82 +784,6 @@ static bool glob_has_meta(const char *s)
 	return false;
 }
 
-// V7 pattern match: '*' any run, '?' one character, [abc] [a-z] [!a-z] sets.
-// An '[' with no closing ']' is an ordinary character, as it is in the shell
-// input that invokes /bin/[.
-// Recursive on '*' — the classic formulation, and the recursion depth is
-// bounded by the number of '*' in the pattern, not by the name length.
-static bool glob_match(const char *p, const char *n)
-{
-	while (*p)
-	{
-		if (*p == '*')
-		{
-			p++;
-			if (*p == '\0')
-				return true;                  // trailing '*' takes the rest
-			for (const char *t = n; ; t++)
-			{
-				if (glob_match(p, t))
-					return true;
-				if (*t == '\0')
-					return false;
-			}
-		}
-		if (*n == '\0')
-			return false;
-		if (*p == '?')
-		{
-			p++; n++;
-			continue;
-		}
-		if (*p == '[')
-		{
-			const char *q = p + 1;
-			bool negate = (*q == '!' || *q == '^');
-			if (negate)
-				q++;
-			bool hit = false;
-			bool first = true;
-			// `first` lets a ']' immediately after '[' (or after '!') be a
-			// literal member, the way every shell since the Bourne shell does.
-			while (*q != '\0' && (*q != ']' || first))
-			{
-				first = false;
-				if (q[1] == '-' && q[2] != '\0' && q[2] != ']')
-				{
-					if ((unsigned char)*n >= (unsigned char)q[0] &&
-					    (unsigned char)*n <= (unsigned char)q[2])
-						hit = true;
-					q += 3;
-				}
-				else
-				{
-					if (*n == *q)
-						hit = true;
-					q++;
-				}
-			}
-			if (*q != ']')
-			{
-				if (*p != *n)
-					return false;
-				p++;
-				n++;
-				continue;
-			}
-			if (hit == negate)
-				return false;
-			p = q + 1;
-			n++;
-			continue;
-		}
-		if (*p != *n)
-			return false;
-		p++; n++;
-	}
-	return *n == '\0';
-}
 
 // Copy `s` into the expansion pool and return the stored pointer, or NULL if
 // the pool is full. The pool cannot be the line buffer: parse() tokenizes in
@@ -943,7 +867,7 @@ static int glob_expand(const char *token, char *argv[], int argc, int maxargs)
 	os64_dirent_t e;
 	while (os64_readdir((int32_t)d, &e) == 1)
 	{
-		if (!glob_match(pattern, e.name))
+		if (!os64_glob_match(pattern, e.name))
 			continue;
 
 		if (argc >= maxargs - 1)

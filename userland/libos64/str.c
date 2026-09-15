@@ -387,7 +387,7 @@ bool os64_glob_match(const char *pattern, const char *text)
         {
             pattern++;
             if (*pattern == '\0')
-                return true;
+                return true;                  // trailing '*' takes the rest
             for (const char *candidate = text;; candidate++)
             {
                 if (os64_glob_match(pattern, candidate))
@@ -412,6 +412,8 @@ bool os64_glob_match(const char *pattern, const char *text)
                 member++;
             bool matched = false;
             bool first = true;
+            // `first` lets a ']' immediately after '[' (or after '!') be a
+            // literal member, the way every shell since the Bourne shell does.
             while (*member != '\0' && (*member != ']' || first))
             {
                 first = false;
@@ -430,7 +432,18 @@ bool os64_glob_match(const char *pattern, const char *text)
                     member++;
                 }
             }
-            if (*member != ']' || matched == negate)
+            if (*member != ']')
+            {
+                // No closing ']': this '[' is an ordinary character, so a
+                // pattern can name /bin/[ (husk's rule, and it has to be the
+                // same rule here — husk's own expansion runs through this).
+                if (*pattern != *text)
+                    return false;
+                pattern++;
+                text++;
+                continue;
+            }
+            if (matched == negate)
                 return false;
             pattern = member + 1;
             text++;
