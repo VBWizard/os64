@@ -27,6 +27,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     '<p>after</p>'*40)
         elif self.path == '/long-link':
             body = '<a href="/long-target#' + 'x'*1100 + '">LONG LINK</a>'
+        elif self.path == '/reference-edges':
+            body = ('<meta http-equiv=refresh content="0;url=#reading">'
+                    '<p id=foo>WRONG PREFIX TARGET</p><area id=area>' + '<p>before</p>'*80 +
+                    '<h2 id=reading>READING POSITION</h2>'
+                    '<p><a href=#area>Invisible target</a></p>'
+                    '<p><a href=#%00>NUL top</a></p>'
+                    '<p><a href=#foo%00bar>NUL prefix</a></p>' + '<p>after</p>'*40)
         elif self.path == '/fail-refresh':
             body = ('<meta http-equiv=refresh content="0;url=/failure">'
                     '<h1>FAILED REFRESH SOURCE</h1><p>Keys must not repeat the failed fetch.</p>')

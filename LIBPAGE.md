@@ -395,7 +395,12 @@ sweep runs here as it runs in libhtml).
 
 `os64_page_resolve_fragment` selects a destination node from the decoded
 fragment. IDs take precedence over legacy names, with tree order breaking
-ties within each group. An empty fragment means the top; case-insensitive
+ties within each group. Decoding a NUL refuses a reference with `BAD_ACTION`,
+because the fragment API uses terminated strings; the prefix is never a
+substitute target. Opaque URLs lowercase their scheme while preserving
+payload bytes and case. Failure to retain the canonical document URL fails
+construction, so an unnormalized fallback cannot turn a local move into a
+fetch. An empty fragment means the top; case-insensitive
 `top` is a fallback only when no node claims the spelling. A nonempty lookup
 on an incomplete model refuses with `NO_MEMORY`, because even a positive
 partial-index match might have lost to an omitted ID. The older
@@ -409,7 +414,14 @@ model. Request strings outlive destruction of the source view. Geometry
 lookup neither compares names nor chooses a fallback. Hidden, omitted, or
 unrendered targets have no row, and incomplete rendering refuses geometry
 lookup; those cases preserve the reader's position. Empty rendered elements
-bind to the next opened row, or the final row at document end.
+bind to the next opened row, or the final row at document end. Inert element
+kinds such as `area`, metadata and column declarations do not get geometry;
+neither do images rendered as empty alt text or frames without a destination.
+
+A refresh candidate that cannot be retained because allocation failed stays
+published with `NO_MEMORY`. Later pragmas cannot replace it. Invalid or
+unrepresentable addresses still declare no refresh. Wend reports a retained
+refusal before inspecting the candidate's delay or displaying its URL.
 
 Links and refreshes use this handoff. Renderer-generated frame links use
 the destination resolver as well. The existing form serializer remains a

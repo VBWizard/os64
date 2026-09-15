@@ -91,7 +91,7 @@ static void family_a(void)
                 .reason = OS64_PAGE_REASON_BAD_ACTION,
                 .check_reason = true});
     run((PCase){.steps = "A16",
-                .name = "A: an opaque scheme is kept verbatim",
+                .name = "A: an opaque payload is kept verbatim",
                 .html = "<a href='mailto:someone@example.com'>x</a>",
                 .link = true,
                 .url = "mailto:someone@example.com",

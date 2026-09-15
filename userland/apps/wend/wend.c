@@ -1190,6 +1190,10 @@ static bool refresh_once(view_t *v, int32_t *chain)
     v->refresh_handled = true;
     if (refresh == NULL)
         return false;                    // an ordinary page ends the chain
+    if (refresh->url.refused != OS64_PAGE_REASON_OK) {
+        status_set(" refresh: %s", os64_page_reason_name(refresh->url.refused));
+        return false;
+    }
     // A DELAY IS A PERSON'S PATIENCE TO SPEND. wend has no timer in its key
     // loop and a page that moves under a reader mid-sentence is hostile, so
     // a delayed refresh is reported and left for them to act on. The "you

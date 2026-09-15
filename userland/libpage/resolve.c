@@ -87,7 +87,7 @@ bool p_canonical(os64_page_t *page, const char *text, const char **out,
     }
     // An address with no authority — `mailto:`, `data:`, `javascript:` —
     // which the grammar cannot take apart and a browser still navigates.
-    // There is nothing to canonicalise, so it is kept as it was written.
+    // Normalize the case-insensitive scheme, preserving the opaque payload.
     char scheme[OS64_URL_SCHEME_MAX];
     if (rc == OS64_URL_NOT_A_URL && os64_url_scheme_of(text, scheme, sizeof(scheme))) {
         size_t len = os64_strlen(text);
@@ -95,11 +95,13 @@ bool p_canonical(os64_page_t *page, const char *text, const char **out,
             *refused = OS64_PAGE_REASON_TOO_LONG;
             return false;
         }
-        *out = p_copy(page, text, len);
-        if (*out == NULL) {
+        char *canonical = p_copy(page, text, len);
+        if (canonical == NULL) {
             *refused = OS64_PAGE_REASON_NO_MEMORY;
             return false;
         }
+        os64_memcpy(canonical, scheme, os64_strlen(scheme));
+        *out = canonical;
         return true;
     }
     *refused = OS64_PAGE_REASON_BAD_ACTION;
@@ -148,6 +150,9 @@ bool p_document_url(os64_page_t *page, const char *text)
     const char *canonical = NULL;
     if (p_canonical(page, raw, &canonical, &refused))
         page->document_url = canonical;
+    else if (refused == OS64_PAGE_REASON_NO_MEMORY)
+        // Losing canonical identity must not turn a local move into a fetch.
+        return false;
     // Parsed for resolution, and separately: an address this grammar cannot
     // take apart is still an address a downgrade can be judged against, so
     // the scheme is read even when the rest is opaque.
@@ -252,7 +257,13 @@ void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
         }
         // Matched DECODED, because a heading whose name has a space in it is
         // written `%20` in the link and plainly in the `id`.
-        p_percent_decode(fragment, os64_strlen(fragment));
+        size_t decoded_len = p_percent_decode(fragment, os64_strlen(fragment));
+        // The public fragment API uses C strings. Reject a decoded NUL
+        // instead of treating its prefix as an anchor or the document top.
+        if (os64_strlen(fragment) != decoded_len) {
+            out->refused = OS64_PAGE_REASON_BAD_ACTION;
+            return;
+        }
         out->fragment = fragment;
     }
 

@@ -105,10 +105,29 @@ static void navigation(void)
     os64_page_request_free(&req);os64_page_free(page);os64_html_document_free(doc);
 }
 
+static void reference_edges(void)
+{
+    os64_html_document_t *doc;
+    os64_page_t *page=build("<p id=foo>Prefix</p><a href='#foo%00bar'>Go</a>"
+        "<meta http-equiv=refresh content='0;url=#%00'>",&doc);
+    os64_page_request_t req;
+    require(os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_LINK,0,0,0},&req)==OS64_PAGE_REFUSED &&
+        req.reason==OS64_PAGE_REASON_BAD_ACTION,"NUL fragment refused");
+    os64_page_request_free(&req);
+    require(os64_page_refresh(page)==NULL,"NUL refresh ignored");
+    os64_page_free(page);os64_html_document_free(doc);
+    page=build("<p id=target>Target</p><a href='data:text/plain,MiXeD#target'>Go</a>",&doc);
+    os64_page_free(page);
+    page=os64_page_build(doc,"DATA:text/plain,MiXeD",NULL);
+    require(page && os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_LINK,0,0,0},&req)==OS64_PAGE_FRAGMENT &&
+        req.anchor!=NULL,"opaque scheme same-document fragment");
+    os64_page_request_free(&req);os64_page_free(page);os64_html_document_free(doc);
+}
+
 int main(void)
 {
     require(os64_heap_verify()==0,"heap before");
-    numeric();state();navigation();
+    numeric();state();navigation();reference_edges();
     require(os64_heap_verify()==0,"heap after");
     os64_printf("pagetest: numeric conversion, range grids, control state and submission passed\n");
     os64_serial_log("pagetest: PASS numeric conversion, range grids, control state and submission");

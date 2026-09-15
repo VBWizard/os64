@@ -235,3 +235,41 @@ Run `tools/test_libpage_refresh_server.py` and visit those paths in wend via
 show `ID PRECEDENCE TARGET` below its URL, excluding the preceding nested
 block text. Activate link 2 to see `NAMED LINK TARGET` without another fetch.
 The original failed-refresh and cycle fixtures remain available.
+
+## Second combined review follow-up
+
+All four findings were reproduced against `b2c3f20` before their fixes:
+
+- Decoded NUL bytes now refuse a libpage reference with `BAD_ACTION`, so
+  `%00` cannot become document top and `foo%00bar` cannot match `foo`.
+  The legacy renderer's form, submitter-override and frame paths also refuse
+  these fragments. Literal `%2500` still decodes once to the name `%00`.
+- An allocation failure while retaining or resolving the first refresh
+  candidate publishes its `NO_MEMORY` refusal and stops pragma selection.
+  The delay remains attached to that candidate. Wend reports the refusal
+  before using delay/URL fields; a later pragma cannot win by being smaller.
+- Opaque URLs lowercase the scheme and preserve the payload byte for byte.
+  A further independent failure sweep found that losing the canonical
+  document URL could turn a local fragment into a fetch. Construction now
+  fails on that allocation error instead of retaining an unnormalized URL.
+- Inert renderer elements (`area`, metadata, column declarations and other
+  skipped kinds), empty-alt images and destination-less frames no longer
+  acquire unrelated rows. Empty layout containers and named anchors retain
+  the established row-binding behavior.
+
+`tools/test_libpage_review3.inc` covers these cases with real page/renderer
+code, including isolated failures throughout refresh and document building.
+The host suite passes **178,528 checks**; renderer checks pass **270,120**
+with no live allocations. All seven corpus renders match. The sole snapshot
+change removes 210 invisible node rows from Wikipedia's geometry count;
+displayed lines, spots and forms are unchanged. The strict userland build,
+`git diff --check` and `tools/stale_refs.sh` pass.
+
+Two-core QEMU `pagetest` and `htmltest` pass. The page test includes NUL
+refusals and opaque same-document resolution. In `/reference-edges`, activate
+links 1, 2 and 3 after its initial fragment refresh: the invisible area,
+NUL-top and NUL-prefix cases retain `READING POSITION` at the first content
+row and report refusal/missing geometry. Screenshots were inspected and the
+server log contained only the two startup requests from the guest's two
+shells. Both guest runs shut down cleanly; the final smoke run includes the
+canonical-URL allocation guard. Allocation failure behavior is host-tested.

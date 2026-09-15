@@ -100,7 +100,7 @@ static PStep steps[] = {
     {"A13", "a fragment is carried beside the address, never in it", false},
     {"A14", "the fragment is matched decoded", false},
     {"A15", "a base that will not resolve leaves the document's own", false},
-    {"A16", "an opaque scheme is kept as it was written", false},
+    {"A16", "an opaque URL normalizes its scheme and preserves its payload", false},
 
     // B. Form owner (§4.10.17.3)
     {"B1", "the nearest form ancestor owns a control", false},
@@ -433,6 +433,7 @@ static void model(const char *step_ids, const char *name, const char *html,
 #include "test_libpage_number.inc"
 #include "test_libpage_boundaries.inc"
 #include "test_libpage_navigation.inc"
+#include "test_libpage_review3.inc"
 
 int main(int argc, char **argv)
 {
@@ -455,6 +456,7 @@ int main(int argc, char **argv)
         number_cases();
         boundary_cases();
         navigation_cases();
+        review3_cases();
     }
     if (sweep)
         allocation_sweep();

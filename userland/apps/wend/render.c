@@ -671,7 +671,7 @@ static int32_t hex_digit(char c)
     return -1;
 }
 
-static void fragment_unescape(char *s)
+static bool fragment_unescape(char *s)
 {
     size_t at = 0, put = 0;
     while (s[at] != '\0') {
@@ -679,6 +679,9 @@ static void fragment_unescape(char *s)
         if (s[at] == '%' && s[at + 1] != '\0'
             && (hi = hex_digit(s[at + 1])) >= 0
             && (lo = hex_digit(s[at + 2])) >= 0) {
+            // Legacy form/frame references share libpage's C-string limit.
+            if (hi == 0 && lo == 0)
+                return false;
             s[put++] = (char)(hi * 16 + lo);
             at += 3;
             continue;
@@ -686,6 +689,7 @@ static void fragment_unescape(char *s)
         s[put++] = s[at++];
     }
     s[put] = '\0';
+    return true;
 }
 
 static int32_t link_add(render_t *r, const os64_html_node_t *node, const char *href)
@@ -707,8 +711,8 @@ static int32_t link_add(render_t *r, const os64_html_node_t *node, const char *h
     const char *hash = reference_fragment(href);
     spot->url = dup_text(r, resolved);
     spot->fragment = dup_text(r, hash ? hash : "");
-    if (spot->fragment)
-        fragment_unescape(spot->fragment);
+    if (spot->fragment && !fragment_unescape(spot->fragment) && spot->url)
+        spot->url[0] = '\0';
     spot->has_fragment = hash != NULL;
     return (spot->url && spot->fragment) ? r->page->nspots : 0;
 }
@@ -1332,8 +1336,8 @@ static void submit_overrides(render_t *r, const os64_html_node_t *n,
                                               over, sizeof(over));
     spot->form_action = dup_text(r, over);
     spot->form_fragment = dup_text(r, some(reference_fragment(formaction)));
-    if (spot->form_fragment)
-        fragment_unescape(spot->form_fragment);
+    if (spot->form_fragment && !fragment_unescape(spot->form_fragment))
+        spot->bad_action = true;
     spot->has_action = formaction != NULL;
     spot->has_method = formmethod != NULL && formmethod[0] != '\0';
     spot->post = spot->has_method && os64_streq_nocase(formmethod, "post");
@@ -1639,8 +1643,8 @@ static bool form_open(render_t *r, const os64_html_node_t *n)
                                               sizeof(resolved));
     form->action = dup_text(r, resolved);
     form->fragment = dup_text(r, some(reference_fragment(action)));
-    if (form->fragment)
-        fragment_unescape(form->fragment);
+    if (form->fragment && !fragment_unescape(form->fragment))
+        form->bad_action = true;
     form->id = dup_text(r, attr_value(n, "id"));
     form->post = method && os64_streq_nocase(method, "post");
     form->unreachable_submit = -1;
@@ -1770,11 +1774,25 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         return;
     }
 
-    // Nodes that draw nothing have no geometry, even if libpage selects
-    // them. A hidden target must not accidentally select a nearby row.
-    if (n->tag == OS64_HTML_TAG_HEAD || n->tag == OS64_HTML_TAG_SCRIPT ||
-        n->tag == OS64_HTML_TAG_STYLE || n->tag == OS64_HTML_TAG_TEMPLATE ||
-        n->tag == OS64_HTML_TAG_IFRAME ||
+    // These subtrees and inert element kinds do not participate in this
+    // renderer's layout. Libpage may select them, but they have no row.
+    switch (n->tag) {
+        case OS64_HTML_TAG_HEAD: case OS64_HTML_TAG_SCRIPT:
+        case OS64_HTML_TAG_STYLE: case OS64_HTML_TAG_TEMPLATE:
+        case OS64_HTML_TAG_IFRAME: case OS64_HTML_TAG_AREA:
+        case OS64_HTML_TAG_BASE: case OS64_HTML_TAG_BASEFONT:
+        case OS64_HTML_TAG_BGSOUND: case OS64_HTML_TAG_LINK:
+        case OS64_HTML_TAG_META: case OS64_HTML_TAG_COL:
+        case OS64_HTML_TAG_COLGROUP: case OS64_HTML_TAG_EMBED:
+        case OS64_HTML_TAG_PARAM: case OS64_HTML_TAG_SOURCE:
+        case OS64_HTML_TAG_TRACK: case OS64_HTML_TAG_WBR:
+            return;
+        default:
+            break;
+    }
+    const char *alt = n->tag == OS64_HTML_TAG_IMG ? attr_value(n, "alt") : NULL;
+    if ((alt != NULL && alt[0] == '\0') ||
+        (n->tag == OS64_HTML_TAG_FRAME && some(attr_value(n, "src"))[0] == '\0') ||
         (n->tag == OS64_HTML_TAG_INPUT &&
          os64_streq_nocase(some(attr_value(n, "type")), "hidden"))) {
         if (n->tag == OS64_HTML_TAG_INPUT)

@@ -113,10 +113,9 @@ bool p_refresh_content(const char *input, uint32_t *seconds, const char **url, s
     return true;
 }
 
-// One `meta`, asked whether it declares a refresh. False leaves the page
-// looking, which is what the standard's "will declaratively refresh" flag
-// amounts to: an INVALID pragma sets nothing, so a later valid one still
-// wins.
+// Invalid pragmas leave the page looking. Allocation failure instead
+// retains this candidate's refusal: uncertainty cannot authorize a later
+// pragma to replace the one that should have won.
 bool p_refresh_from(os64_page_t *page, const os64_html_node_t *n)
 {
     const char *equiv = p_attr(n, "http-equiv");
@@ -139,17 +138,19 @@ bool p_refresh_from(os64_page_t *page, const os64_html_node_t *n)
         found.url.url = page->document_url;
     } else {
         char *reference = p_copy(page, url, url_len);
-        if (reference == NULL)
-            return false;
-        p_resolve(page, reference, &found.url);
-        // AN ADDRESS THAT WILL NOT RESOLVE DECLARES NOTHING. The standard
-        // abandons the whole pragma rather than refreshing somewhere else,
-        // and a refusal a face could render would be a refusal to an
-        // instruction nobody was shown.
-        if (found.url.url == NULL)
+        if (reference == NULL) {
+            found.url.spelled = true;
+            found.url.refused = OS64_PAGE_REASON_NO_MEMORY;
+        } else {
+            p_resolve(page, reference, &found.url);
+        }
+        // An unusable address declares nothing. Failure to retain or
+        // resolve it in memory is different: preserve the refusal below.
+        if (found.url.url == NULL && found.url.refused != OS64_PAGE_REASON_NO_MEMORY)
             return false;
     }
-    found.names_this_document = os64_streq(found.url.url, page->document_url);
+    found.names_this_document = found.url.url != NULL &&
+        os64_streq(found.url.url, page->document_url);
     page->refresh = found;
     page->has_refresh = true;
     return true;

@@ -91,7 +91,7 @@ typedef enum {
 typedef struct {
     bool spelled;                  // the attribute was there, empty included
     const char *url;               // canonical, no scheme-default port; NULL if refused
-    const char *fragment;          // the `#name` decoded, without its '#'; NULL if none
+    const char *fragment;          // decoded, no '#'; decoded NUL refuses the reference
     bool has_fragment;
     os64_page_reason_t refused;    // OK when `url` is good
 } os64_page_ref_t;
@@ -259,7 +259,8 @@ typedef struct {
 
 // The refresh this page declares, or NULL for a page that declares none.
 // The FIRST valid one in tree order wins; an invalid pragma declares nothing
-// and leaves a later one free to.
+// and leaves a later one free to. Allocation failure retains the candidate
+// with url.refused == NO_MEMORY, preventing a later pragma from replacing it.
 const os64_page_refresh_t *os64_page_refresh(const os64_page_t *page);
 
 // ── Building one ────────────────────────────────────────────────────────
