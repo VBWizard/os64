@@ -678,6 +678,9 @@ typedef enum os64_shutdown_mode
 // tell an app anything the WINDOW SYSTEM knew about its own window.
 #define SYSCALL_GUI_WINDOW_GET_STATE    48
 
+// Owner-set minimum content dimensions; see os64/gui.h.
+#define SYSCALL_GUI_WINDOW_SET_MIN_SIZE 57
+
 // signal_handler — install a handler for a signal, and answer with the one it
 // replaced.
 //

@@ -437,6 +437,20 @@ int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
 	return 0;
 }
 
+int64_t gui_window_set_min_size(int64_t handle, uint32_t width, uint32_t height)
+{
+	int64_t err;
+	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	window_t *win = handle_lookup_owned(handle, &err);
+	if (!win) {
+		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		return err;
+	}
+	bool valid = wm_set_min_size(win, width, height);
+	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	return valid ? 0 : GUI_ERR_BAD_ARGS;
+}
+
 // Future syscall: SYSCALL_GUI_WINDOW_PUBLISH (19) — renamed from "present"
 // at design review ("present" doubles as an adjective and is swapchain
 // jargon besides). Damage rect is NULLABLE, so it stays OUT of the

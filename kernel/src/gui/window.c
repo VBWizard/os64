@@ -164,6 +164,8 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t ow
 	if (!w)
 		return NULL;
 	memset(w, 0, sizeof(window_t));
+	w->min_content_w = GUI_WINDOW_MIN_CONTENT_W;
+	w->min_content_h = GUI_WINDOW_MIN_CONTENT_H;
 	w->owner = owner;   // before the focus grab below, which reports siblings by it
 
 	// Both stores are reserved at CAPACITY and report the content size — the
@@ -486,10 +488,10 @@ rect_t wm_clamp_frame(const window_t *w, rect_t frame)
 	// Clamp into [minimum, reservation]. Clamping rather than refusing is
 	// deliberate: this is driven by a mouse, and a drag that runs past a
 	// limit should STOP at the limit, not abandon the whole gesture.
-	if (content_w < GUI_WINDOW_MIN_CONTENT_W)
-		content_w = GUI_WINDOW_MIN_CONTENT_W;
-	if (content_h < GUI_WINDOW_MIN_CONTENT_H)
-		content_h = GUI_WINDOW_MIN_CONTENT_H;
+	if (content_w < (int32_t)w->min_content_w)
+		content_w = (int32_t)w->min_content_w;
+	if (content_h < (int32_t)w->min_content_h)
+		content_h = (int32_t)w->min_content_h;
 	if ((uint32_t)content_w > w->canvas_cap_w)
 		content_w = (int32_t)w->canvas_cap_w;
 	if ((uint32_t)content_h > w->canvas_cap_h)
@@ -500,6 +502,22 @@ rect_t wm_clamp_frame(const window_t *w, rect_t frame)
 	frame.w = content_w + 2 * wm_border_width(w->flags);
 	frame.h = content_h + wm_chrome_top(w->flags) + wm_border_width(w->flags);
 	return frame;
+}
+
+bool wm_set_min_size(window_t *w, uint32_t width, uint32_t height)
+{
+	if (width < GUI_WINDOW_MIN_CONTENT_W) width = GUI_WINDOW_MIN_CONTENT_W;
+	if (height < GUI_WINDOW_MIN_CONTENT_H) height = GUI_WINDOW_MIN_CONTENT_H;
+	if (width > w->canvas_cap_w || height > w->canvas_cap_h)
+		return false;
+	if (width != w->min_content_w || height != w->min_content_h) {
+		// An outline computed with the previous limits must not commit later.
+		gui_cancel_resize(w);
+		w->min_content_w = width;
+		w->min_content_h = height;
+	}
+	wm_resize(w, w->frame);
+	return true;
 }
 
 bool wm_resize(window_t *w, rect_t frame)

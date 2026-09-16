@@ -53,6 +53,7 @@
 #include "os64/net.h"                // OS64_NET_ERR_* — refusals carry reasons (abi)
 #include "fpu.h"
 
+extern bool test_window_minimum_clamp(void);
 extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
@@ -5722,6 +5723,7 @@ static bool test_backstop_preemption(void)
 
 static void register_builtin_tests(void)
 {
+    test_register("window_minimum_clamp", test_window_minimum_clamp, TEST_PHASE_PREBOOT);
 	test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
 	test_register("fpu_state_round_trip", test_fpu_state_round_trip, TEST_PHASE_PREBOOT);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set, TEST_PHASE_PREBOOT);
