@@ -749,3 +749,20 @@ in the collection contracts above.
   passed, alongside 30 pre-boot, 32 post-boot, and 3 late tests with zero failures.
 - The correction changes userland only. The pending palette editor and rounded
   controls remain outside this PR.
+
+
+### PR #107 resize-focus correction
+
+Resize cancels held presses, drags, and hover through
+`os64_ui_cancel_gestures`, retaining a valid keyboard focus target. The shared
+libui resize path and Workshop's three-tree dispatcher use this operation.
+Full interaction cancellation still clears focus for modal/tree transitions;
+Workshop also clears it when its compact layout hides the editable controls.
+
+The host regression failed before the fix and passes afterward: text fields
+and editable text views continue receiving input after resize. Coverage also
+checks held mouse/key activation cancellation, blurred focus, full cancellation,
+and a layout callback hiding the focused control. The ASan/UBSan appearance
+suite, strict build, diff check, and stale-reference scan passed. QEMU verified
+continued typing through maximize/restore in Scribe, the composition-name field,
+and the sample field; all 65 built-in guest tests passed.

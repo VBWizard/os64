@@ -408,6 +408,7 @@ static void layout(void)
     place(&gSmall, 0, 0, width, height);
     gCanvas.hidden = gCompact;
     if (gCompact) {
+        os64_ui_cancel_interaction(&gEditor);
         os64_ui_cancel_interaction(&gPreview);
         gPreview.any_dirty = false;
         os64_ui_mark_dirty(&gEditor, &gRoot);
@@ -597,11 +598,11 @@ static void dispatch(const os64_gui_event_t *ev)
         return;
     }
     if (ev->type == OS64_GUI_EVENT_WINDOW_RESIZE) {
-        // Geometry changes cancel pointer gestures; a later release must
-        // not activate a control that moved underneath it.
-        os64_ui_cancel_interaction(&gEditor);
-        os64_ui_cancel_interaction(&gPreview);
-        os64_ui_cancel_interaction(&gDialog);
+        // Cancel gestures across changed bounds while retaining the typing target.
+        // A later release must not activate a control that moved underneath it.
+        os64_ui_cancel_gestures(&gEditor);
+        os64_ui_cancel_gestures(&gPreview);
+        os64_ui_cancel_gestures(&gDialog);
         os64_draw_ctx_refresh(&gCtx);
         layout();
         return;

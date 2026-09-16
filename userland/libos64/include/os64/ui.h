@@ -331,6 +331,9 @@ bool os64_ui_widget_enabled(const os64_ui_widget_t *w);
 void os64_ui_set_enabled(os64_ui_t *ui, os64_ui_widget_t *w, bool enabled);
 void os64_ui_set_hidden(os64_ui_t *ui, os64_ui_widget_t *w, bool hidden);
 void os64_ui_clear_hover(os64_ui_t *ui);
+// Cancel presses, drags, and hover while retaining the logical keyboard focus.
+void os64_ui_cancel_gestures(os64_ui_t *ui);
+// Cancel gestures and clear focus when replacing/hiding a tree or entering a modal.
 void os64_ui_cancel_interaction(os64_ui_t *ui);
 
 typedef struct os64_ui_checkbox {

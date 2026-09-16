@@ -10,6 +10,13 @@
 extern bool fail_alloc;
 void appearance_session_contracts(void);
 
+// Kernel surface refresh is outside this host test; retain its supplied size.
+int64_t __wrap_os64_draw_ctx_refresh(os64_draw_ctx_t *ctx)
+{
+    assert(ctx);
+    return 0;
+}
+
 static void theme_schema_contracts(void)
 {
     os64_ui_theme_t base, draft, decoded;
@@ -177,6 +184,12 @@ static void burst(os64_ui_t *ui, const char *s)
     for (; *s; ++s) key(ui, OS64_GUI_EVENT_KEY_DOWN, *s, 0x4d, 0);
 }
 
+static void hide_focus_on_resize(os64_ui_t *ui)
+{
+    assert(ui->focus);
+    ui->focus->hidden = true;
+}
+
 static void interaction_contracts(void)
 {
     os64_ui_t ui = {0};
@@ -278,6 +291,37 @@ static void interaction_contracts(void)
     assert(sl.value == INT_MIN);
     os64_ui_set_enabled(&ui, &sl.w, false);
     assert(sl.drag_offset == -1 && !ui.grab && !ui.focus);
+
+    // Resizing keeps keyboard focus but a pre-resize release cannot activate.
+    os64_draw_ctx_t ctx = {.surf = {.width = 400, .height = 400}};
+    ui.ctx = &ctx;
+    os64_gui_event_t resize = {.type = OS64_GUI_EVENT_WINDOW_RESIZE};
+    os64_ui_set_focus(&ui, &a);
+    key(&ui, OS64_GUI_EVENT_KEY_DOWN, ' ', 57, 0);
+    before = clicks;
+    os64_ui_dispatch(&ui, &resize);
+    assert(ui.focus == &a && a.focused && !a.pressed && !a.activation_key);
+    key(&ui, OS64_GUI_EVENT_KEY_UP, ' ', 57, 0);
+    assert(clicks == before);
+    mouse(&ui, OS64_GUI_EVENT_MOUSE_BUTTON_DOWN, 20, 20, OS64_GUI_MOUSE_LEFT);
+    assert(ui.grab == &a && a.pressed);
+    os64_ui_dispatch(&ui, &resize);
+    assert(ui.focus == &a && !ui.grab && !ui.hover && !a.hovered && !a.pressed);
+    mouse(&ui, OS64_GUI_EVENT_MOUSE_BUTTON_UP, 20, 20, OS64_GUI_MOUSE_LEFT);
+    assert(clicks == before);
+    blur.focus.gained = 0;
+    os64_ui_dispatch(&ui, &blur);
+    os64_ui_dispatch(&ui, &resize);
+    assert(ui.focus == &a && !a.focused);
+    blur.focus.gained = 1;
+    os64_ui_dispatch(&ui, &blur);
+    assert(ui.focus == &a && a.focused);
+    os64_ui_cancel_interaction(&ui);
+    assert(!ui.focus && !a.focused);
+    os64_ui_set_focus(&ui, &a);
+    ui.on_resize = hide_focus_on_resize;
+    os64_ui_dispatch(&ui, &resize);
+    assert(!ui.focus && !a.focused && a.hidden);
     os64_ui_set_enabled(&ui, &sl.w, true);
     mouse(&ui, OS64_GUI_EVENT_MOUSE_BUTTON_UP, INT_MAX, 110, OS64_GUI_MOUSE_LEFT);
     assert(sl.value == INT_MIN);
@@ -372,11 +416,22 @@ static void text_focus_preserves_literal_tabs(void)
     assert(ui.focus == &field.w);
     key(&ui, OS64_GUI_EVENT_KEY_DOWN, 'a', 30, 0);
     assert(strcmp(field_text, "a") == 0);
+    os64_draw_ctx_t ctx = {.surf = {.width = 400, .height = 400}};
+    ui.ctx = &ctx;
+    os64_gui_event_t resize = {.type = OS64_GUI_EVENT_WINDOW_RESIZE};
+    os64_ui_dispatch(&ui, &resize);
+    assert(ui.focus == &field.w && field.w.focused);
+    key(&ui, OS64_GUI_EVENT_KEY_DOWN, 'b', 48, 0);
+    assert(strcmp(field_text, "ab") == 0);
     key(&ui, OS64_GUI_EVENT_KEY_DOWN, '\t', 15, 0);
-    assert(ui.focus == &button && strcmp(field_text, "a") == 0);
+    assert(ui.focus == &button && strcmp(field_text, "ab") == 0);
     os64_ui_set_focus(&ui, &edit.w);
     key(&ui, OS64_GUI_EVENT_KEY_DOWN, '\t', 15, OS64_GUI_MOD_CTRL | OS64_GUI_MOD_SHIFT);
     assert(ui.focus == &button);
+    os64_ui_set_focus(&ui, &edit.w);
+    os64_ui_dispatch(&ui, &resize);
+    key(&ui, OS64_GUI_EVENT_KEY_DOWN, 'z', 44, 0);
+    assert(ui.focus == &edit.w && strcmp(sample_line, "\tz") == 0);
     os64_ui_set_focus(&ui, &read.w);
     size_t before = read.cur_col;
     mouse(&ui, OS64_GUI_EVENT_MOUSE_MOVE, 100, 110, 0);

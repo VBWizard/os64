@@ -118,12 +118,19 @@ void os64_ui_clear_hover(os64_ui_t *ui)
 	}
 }
 
-void os64_ui_cancel_interaction(os64_ui_t *ui)
+void os64_ui_cancel_gestures(os64_ui_t *ui)
 {
 	cancel_widget(ui, ui->grab);
+	if (ui->focus != ui->grab) cancel_widget(ui, ui->focus);
 	ui->grab = NULL;
-	os64_ui_set_focus(ui, NULL);
+	ui->grab_button = 0;
 	os64_ui_clear_hover(ui);
+}
+
+void os64_ui_cancel_interaction(os64_ui_t *ui)
+{
+	os64_ui_set_focus(ui, NULL);
+	os64_ui_cancel_gestures(ui);
 }
 
 static void reconcile(os64_ui_t *ui)
@@ -307,8 +314,9 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 		return (w && w->cls->event) ? w->cls->event(w, ui, ev) : false;
 	}
 	case OS64_GUI_EVENT_WINDOW_RESIZE: {
-		os64_ui_cancel_interaction(ui);
-		// After cancelling interaction, refresh geometry before app layout:
+		// Cancel presses/drags across changed bounds but keep the typing target.
+		os64_ui_cancel_gestures(ui);
+		// After cancelling gestures, refresh geometry before app layout:
 		//
 		//   1. refresh the draw context, or every primitive keeps clipping to
 		//      the old bounds and the new strip stays blank;
@@ -331,6 +339,7 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 		                                     (int32_t)ui->ctx->surf.height};
 		if (ui->on_resize)
 			ui->on_resize(ui);
+		reconcile(ui);
 		ui->dirty = ui->root->bounds;
 		ui->any_dirty = true;
 		return true;

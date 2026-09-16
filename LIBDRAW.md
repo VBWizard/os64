@@ -214,7 +214,11 @@ Tab/Shift+Tab traverse enabled, visible controls in tree order. Editable text
 views accept literal Tab and use Ctrl+Tab/Ctrl+Shift+Tab for traversal.
 
 `os64_ui_set_enabled` and `os64_ui_set_hidden` reconcile focus and grabs,
-including descendants. Window focus loss cancels gestures but retains the
+including descendants. Resize cancels held gestures and hover while retaining
+valid keyboard focus; layout that hides/disables/removes the target clears it.
+`os64_ui_cancel_gestures` retains focus, while `os64_ui_cancel_interaction` also
+clears focus for tree replacement or modal transitions. Window focus loss
+cancels gestures but retains the
 logical focus target for return. A class's optional `cancel` hook resets its
 private gesture state. Hover uses the compositor's coalesced pointer snapshot;
 ungrabbed motion does not invoke a widget's drag handler.
