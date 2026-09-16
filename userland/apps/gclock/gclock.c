@@ -193,9 +193,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-    // [3] The UI context. This is also where the THEME loads — defaults,
-    //     then /home/theme.conf on top — so every color and metric this
-    //     window shows is the user's to change without a recompile.
+    // [3] The UI context loads defaults and the startup theme through the
+    //     configuration ladder. Supported colors and metrics need no recompile.
     os64_ui_init(&gUi, &ctx);
 
     gUi.on_close = on_close_request;

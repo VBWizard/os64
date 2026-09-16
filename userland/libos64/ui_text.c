@@ -1,14 +1,12 @@
-// ui_text.c — the text family: scrollbar, textfield, textview. libui's
-// second wave, pulled into being by scribe(1) exactly as the app-driven rule
-// prescribes (ui.h: "the first app that wants a textbox is what brings the
-// textbox into being"). Same doctrine as ui.c throughout: logic in event,
-// look in paint, look reads only the theme, the app owns every struct.
+// Text widgets: scrollbars, text fields, and text views. Behavior and
+// painting are separate; the app owns the widget and its text model.
 //
 // THE CONTAINER PATTERN (ui.h documents it): these widgets need state the
 // base struct doesn't carry, so each embeds os64_ui_widget_t as its FIRST
 // member and casts back. libui threads the base; the app owns the whole.
 
 #include "os64/ui.h"
+#include "ui_internal.h"
 #include "os64/str.h"
 #include "os64/io.h"     // the clipboard is a FILE — open/read/write/close
 #include "os64/clip.h"   // ...at OS64_CLIPBOARD_PATH
@@ -36,15 +34,6 @@
 // focused widgets never decode concurrently, but statics in a library are
 // how that assumption becomes a bug later (the SMP lesson, applied at ring 3).
 
-typedef enum
-{
-	K_NONE,        // consumed mid-burst, or ignorable
-	K_CHAR,        // printable; the byte is in *ch
-	K_ENTER, K_BACKSPACE, K_TAB, K_ESC,
-	K_UP, K_DOWN, K_LEFT, K_RIGHT,
-	K_HOME, K_END, K_PGUP, K_PGDN, K_DELETE,
-} ui_key_t;
-
 #define SEQ_IDLE   0
 #define SEQ_ESC    1     // saw the burst's ESC
 #define SEQ_CSI    2     // saw ESC [
@@ -62,7 +51,7 @@ bool os64_ui_key_is_esc(const os64_gui_event_t *ev)
 	       (ev->key.scancode == SC_ESC_PS2 || ev->key.scancode == SC_ESC_HID);
 }
 
-static ui_key_t decode_key(uint8_t *seq, const os64_gui_event_t *ev, char *ch)
+ui_key_t os64_ui_decode_key(uint8_t *seq, const os64_gui_event_t *ev, char *ch)
 {
 	char a = ev->key.ascii;
 
@@ -260,8 +249,13 @@ static bool scrollbar_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	}
 }
 
+static void scrollbar_cancel(os64_ui_widget_t *w)
+{
+    ((os64_ui_scrollbar_t *)w)->drag_grab = -1;
+}
+
 const os64_ui_class_t os64_ui_scrollbar_class =
-	{ "scrollbar", scrollbar_paint, scrollbar_event };
+    { "scrollbar", scrollbar_paint, scrollbar_event, scrollbar_cancel };
 
 void os64_ui_scrollbar(os64_ui_scrollbar_t *sb,
                        void (*on_scroll)(os64_ui_scrollbar_t *, void *),
@@ -354,7 +348,7 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 
 	case OS64_GUI_EVENT_KEY_DOWN: {
 		char c = 0;
-		switch (decode_key(&tf->seq, ev, &c)) {
+		switch (os64_ui_decode_key(&tf->seq, ev, &c)) {
 		case K_CHAR:
 			if (tf->len + 1 < tf->cap) {
 				os64_memmove(tf->buf + tf->cursor + 1, tf->buf + tf->cursor,
@@ -404,8 +398,13 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	}
 }
 
+static void field_cancel(os64_ui_widget_t *w)
+{
+    ((os64_ui_textfield_t *)w)->seq = 0;
+}
+
 const os64_ui_class_t os64_ui_textfield_class =
-	{ "textfield", field_paint, field_event };
+    { "textfield", field_paint, field_event, field_cancel };
 
 void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
                        void (*on_submit)(os64_ui_textfield_t *, void *),
@@ -414,6 +413,7 @@ void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
 {
 	*tf = (os64_ui_textfield_t){0};
 	tf->w.cls = &os64_ui_textfield_class;
+	tf->w.focusable = true;
 	tf->buf = buf;
 	tf->cap = cap;
 	tf->on_submit = on_submit;
@@ -780,7 +780,7 @@ static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		size_t len;
 		const char *ln;
 
-		ui_key_t k = decode_key(&tv->seq, ev, &c);
+		ui_key_t k = os64_ui_decode_key(&tv->seq, ev, &c);
 		switch (k) {
 		case K_CHAR:
 		case K_TAB: {
@@ -929,8 +929,13 @@ static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	}
 }
 
+static void textview_cancel(os64_ui_widget_t *w)
+{
+    ((os64_ui_textview_t *)w)->seq = 0;
+}
+
 const os64_ui_class_t os64_ui_textview_class =
-	{ "textview", textview_paint, textview_event };
+    { "textview", textview_paint, textview_event, textview_cancel };
 
 void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
                       void (*on_change)(os64_ui_textview_t *, void *),
@@ -939,6 +944,8 @@ void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
 {
 	*tv = (os64_ui_textview_t){0};
 	tv->w.cls = &os64_ui_textview_class;
+	tv->w.focusable = true;
+	tv->w.accepts_tab = buf && buf->insert;
 	tv->buf = buf;
 	tv->on_change = on_change;
 	tv->on_view = on_view;

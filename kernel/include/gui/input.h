@@ -54,6 +54,8 @@ typedef enum input_event_type
     // flips. The flag is the state; these only say it changed.
     INPUT_EVENT_WINDOW_COVERED,
     INPUT_EVENT_WINDOW_UNCOVERED,
+    INPUT_EVENT_POINTER_STATE,
+    INPUT_EVENT_APPEARANCE,
 } input_event_type_t;
 
 _Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
@@ -61,6 +63,9 @@ _Static_assert(INPUT_EVENT_WINDOW_CLOSE     == OS64_GUI_EVENT_WINDOW_CLOSE,     
 _Static_assert(INPUT_EVENT_WINDOW_FOCUS     == OS64_GUI_EVENT_WINDOW_FOCUS,     "event ABI: focus");
 _Static_assert(INPUT_EVENT_WINDOW_COVERED   == OS64_GUI_EVENT_WINDOW_COVERED,   "event ABI: covered");
 _Static_assert(INPUT_EVENT_WINDOW_UNCOVERED == OS64_GUI_EVENT_WINDOW_UNCOVERED, "event ABI: uncovered");
+_Static_assert(INPUT_EVENT_POINTER_STATE == OS64_GUI_EVENT_POINTER_STATE, "event ABI: pointer state");
+
+_Static_assert(INPUT_EVENT_APPEARANCE == OS64_GUI_EVENT_APPEARANCE, "event ABI: appearance");
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
 // BUTTON_DOWN/UP events). These numbers are ABI — they ride out to ring 3 in
@@ -106,6 +111,14 @@ typedef struct input_event
             uint8_t gained;     // 1 = focus arrived here, 0 = it left
             uint8_t sibling;    // 1 = the other window is owned by the same task
         } focus;
+        struct {
+            int32_t x, y;
+            uint8_t inside;
+        } pointer;
+        struct {
+            // Split words preserve the event union's four-byte ABI alignment.
+            uint32_t generation_lo, generation_hi;
+        } appearance;
     };
     uint64_t tick;  // kTicksSinceStart at enqueue, for input latency debugging
 } input_event_t;

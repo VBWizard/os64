@@ -88,6 +88,12 @@ int32_t os64_draw_text(os64_gui_surface_t *dst, int32_t x, int32_t y,
                        const char *str, size_t len,
                        uint32_t fg, uint32_t bg);
 
+// The same Latin-1 glyph run, additionally clipped to a caller's rectangle.
+// Useful for controls whose bounds are smaller than their caption or glyphs.
+int32_t os64_draw_text_clipped(os64_gui_surface_t *dst, os64_gui_rect_t clip,
+                              int32_t x, int32_t y, const char *str, size_t len,
+                              uint32_t fg, uint32_t bg);
+
 // ── The draw context ────────────────────────────────────────────────────────
 
 typedef struct os64_draw_ctx

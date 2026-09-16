@@ -639,38 +639,14 @@ size_t wm_recency_ids(uint32_t *ids, size_t max)
 
 void wm_deliver_event(window_t *w, const input_event_t *ev)
 {
-	uint32_t next = (w->evt_head + 1) % GUI_WINDOW_EVENTS_MAX;
-	if (next == w->evt_tail) {
-		// FULL. Drop-newest is right for a stream — an unread mouse move is
-		// a sample nobody misses — and wrong for a focus transition, which
-		// is state the client cannot reconstruct and which a popup's whole
-		// dismissal hangs on: lose it and the menu stays up, pinned, with
-		// nothing left to take it down.
-		//
-		// So focus takes the OLDEST slot instead. Advancing the tail is what
-		// a reader does, so the arithmetic is untouched and no state lives
-		// outside the ring.
-		//
-		// What LEAVES is whatever is oldest, and it is worth being honest
-		// about the cost: usually a mouse move, but it can be anything the
-		// client has not read — an evicted WINDOW_CLOSE makes a polite
-		// Alt+F4 do nothing, and turns the user's second one into the
-		// SIGTERM escalation. That trade is deliberate, and only reachable
-		// by a client that has let its queue fill. (An older FOCUS event is
-		// the one eviction that costs nothing: the newer one is the
-		// transition that still holds.)
-		if (ev->type != INPUT_EVENT_WINDOW_FOCUS)
-			return;
-		w->evt_tail = (w->evt_tail + 1) % GUI_WINDOW_EVENTS_MAX;
-		printd(DEBUG_GUI, "wm: window %u queue full — oldest event evicted to deliver a focus change\n",
-		       w->id);
-	}
-	w->events[w->evt_head] = *ev;
-	w->evt_head = next;
+	int stored = gui_event_queue_push(&w->event_queue, ev);
+	if (!stored) return;
+	if (stored == 2)
+		printd(DEBUG_GUI, "wm: window %u queue full — oldest event evicted to deliver a focus change\n", w->id);
 
 	// Aim a wake at a parked event_wait-er. Runs in THREAD context under
 	// kGuiLock — the compositor's thread, or a client's own thread inside a
-	// create/destroy syscall, since the birth and death focus grabs deliver
+	// create/destroy syscall or appearance publication, since those deliver
 	// from there. Never an ISR under either, which is what invariant 4 needs.
 	// The wake takes only the scheduler queue lock inside, no trigger: the
 	// woken thread runs on the next scheduler pass, which is the latency
@@ -682,13 +658,21 @@ void wm_deliver_event(window_t *w, const input_event_t *ev)
 		scheduler_wake_isleep_thread(w->waiter);
 }
 
+void wm_appearance_changed(uint64_t generation)
+{
+    input_event_t ev = {
+        .type = INPUT_EVENT_APPEARANCE,
+        .appearance = { .generation_lo = (uint32_t)generation,
+                        .generation_hi = (uint32_t)(generation >> 32) },
+        .tick = kTicksSinceStart,
+    };
+    for (window_t *w = s_top; w; w = w->below)
+        wm_deliver_event(w, &ev);
+}
+
 bool wm_pop_event(window_t *w, input_event_t *out)
 {
-	if (w->evt_head == w->evt_tail)
-		return false;
-	*out = w->events[w->evt_tail];
-	w->evt_tail = (w->evt_tail + 1) % GUI_WINDOW_EVENTS_MAX;
-	return true;
+	return gui_event_queue_pop(&w->event_queue, out);
 }
 
 // Draw one window's chrome + content into the damaged part of the backbuffer.

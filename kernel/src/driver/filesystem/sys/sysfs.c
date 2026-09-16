@@ -27,7 +27,7 @@
 //
 //   /sys/                        the root: "bus", "cpu", "net", "block",
 //                                "cache", "conf", "gui", "log", "mounts",
-//                                "openfiles", "random", "shlib", "clipboard"
+//                                "openfiles", "random", "shlib", "clipboard", "appearance"
 //   /sys/random                  the entropy pool: which instructions the
 //                                CPU advertises and which passed the boot
 //                                variation check, what seeded the pool,
@@ -78,16 +78,16 @@
 //                                say where it DID (conf.h, 2026-08-23)
 //   /sys/clipboard               THE system clipboard, read AND write:
 //                                `... > /sys/clipboard` copies, `cat` pastes.
-//                                Two firsts for /sys, both worth naming: it
-//                                is the only node with DURABLE content (every
-//                                other file is generated fresh at open), and
-//                                the only write that STORES instead of
-//                                COMMANDS (cpu/<n>/probe fires a gun; this
-//                                keeps your bytes). The standing rule is
-//                                untouched — reading it changes nothing.
+//                                Copies accumulate and seal at close.
 //                                Store and rulings: clipboard.c, CLIPBOARD.md
 //
-// Every file is TEXT. The PCI values are the enumeration's saved headers —
+//   /sys/appearance              session appearance: generation header plus
+//                                opaque payload. Readers own a snapshot;
+//                                each write compares and publishes atomically.
+//                                Store and rulings: appearance.c, APPEARANCE.md
+//
+// Generated reports are text; stored payloads are opaque bytes.
+// The PCI values are the enumeration's saved headers —
 // kPCIDeviceHeaders / kPCIDeviceFunctions / kPCIBridgeHeaders, written once
 // by init_PCI before the scheduler exists and never touched again, which is
 // why every PCI read here is lock-free and safe: the snapshot machinery
@@ -151,6 +151,7 @@
 #include "CONFIG.h"
 #include "logging/log.h"   // /sys/log — ring stats and sink state
 #include "io.h"             // kSerialPresent
+#include "appearance.h"
 #include "clipboard.h"      // /sys/clipboard — the snarf store behind the file
 #include "shared_object.h"  // /sys/shlib — the loaded-shared-object registry
 
@@ -327,6 +328,7 @@ typedef enum
 	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
 	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
 	SYS_NODE_OPENFILESFILE, // /openfiles — the open-file registry (lsof's deep half)
+	SYS_NODE_APPEARANCE, // /appearance — session appearance generation and payload
 	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
 	SYS_NODE_CONFFILE,   // /conf — the config search path, and who took what (2026-08-23)
@@ -472,6 +474,13 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_BLOCKFILE;
+		return;
+	}
+
+	if (strcmp(comp, "appearance") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp))) return;
+		out->type = SYS_NODE_APPEARANCE;
 		return;
 	}
 
@@ -1705,13 +1714,13 @@ static void sys_gen_cpu_probe(synth_text_t *t, uint32_t core)
 
 // ── File operations ─────────────────────────────────────────────────────────
 
-// What an open handle IS, when it is not just a rendered snapshot. Everything
-// except these two is served by the bare snapshot; the probe file carries its
-// target, and the clipboard carries the entry it is reading or the copy it is
-// accumulating (same embed-the-head pattern as procfs's ctl handle).
+// Ordinary nodes own rendered snapshots. Probe handles also carry a target;
+// clipboard handles hold an entry or pending copy. Appearance writers issue
+// complete publication commands and do not accumulate bytes at close.
 typedef enum
 {
 	SYS_HANDLE_SNAPSHOT = 0,   // the ordinary case: text generated at open
+	SYS_HANDLE_APPEARANCE_WRITE,
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
 	SYS_HANDLE_CLIPWRITE,      // /sys/clipboard opened "w" — holds a pending
 } sys_handle_kind_t;
@@ -1741,21 +1750,32 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 
 	sys_parse_path(path, &sp);
 
-	// /sys is read-only EXCEPT two nodes: cpu/<n>/probe, the trigger (reads
-	// side-effect free, the gun behind a write — the header's ruling), and
-	// clipboard, the one node that STORES what you write. Rejecting the write
-	// modes at the boundary beats a write that silently goes nowhere.
-	//
-	// Mode "a" is REFUSED here along with everything else that is not exactly
-	// "r" or "w", and for the clipboard that refusal is deliberate rather than
-	// incidental: entries are immutable, and appending to one needs a consumer
-	// to justify it (CLIPBOARD.md). The single-character test does the work.
+	// Writable nodes opt in here; append and combined read/write modes have
+	// no contract for these command or immutable-snapshot interfaces.
 	bool is_probe = (sp.type == SYS_NODE_CPUFILE && strcmp(sp.name, "probe") == 0);
 	bool is_clip  = (sp.type == SYS_NODE_CLIPFILE);
-	if (mode == NULL || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
+	bool is_appearance = (sp.type == SYS_NODE_APPEARANCE);
+	if (mode == NULL || mode[0] == '\0' || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
 		return -1;
-	if (mode[0] == 'w' && !is_probe && !is_clip)
+	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance)
 		return -1;
+
+	if (is_appearance)
+	{
+		synth_text_t text = {0};
+		if (mode[0] == 'r') {
+			if (!synth_text_init(&text, OS64_APPEARANCE_MAX)) return -1;
+			int n = appearance_snapshot(text.buf, text.cap);
+			if (n < 0) { kfree(text.buf); return -1; }
+			text.len = (size_t)n;
+		}
+		sys_file_handle_t *ah = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+		                                              sizeof(sys_file_handle_t),
+		                                              FILETYPE_SYSFILE);
+		if (!ah) return -1;
+		if (mode[0] == 'w') ah->kind = SYS_HANDLE_APPEARANCE_WRITE;
+		return 0;
+	}
 
 	// The clipboard is served from the store, not from generated text, so it
 	// leaves the generator ladder below entirely. Both directions publish a
@@ -1885,13 +1905,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	return 0;
 }
 
-// Writing to /sys means one of exactly two things, and they are different in
-// kind. cpu/<n>/probe is a COMMAND aimed at the machine — same contract as
-// /proc's ctl, first whitespace-delimited word is the verb, the whole write
-// reports as consumed on success (a partial write would make `echo` retry the
-// tail, exactly wrong for a command). clipboard is CONTENT — every byte is
-// kept, and the accumulated copy is sealed at close. Everywhere else, -1 at
-// the fops layer is louder than a write that "succeeds" into nothing.
+// Probe and appearance writes are complete commands, never partial streams.
+// Clipboard writes accumulate content which becomes visible at close.
 static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 {
 	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
@@ -1900,6 +1915,9 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 
 	if (h == NULL || buffer == NULL)
 		return -1;
+
+	if (h->kind == SYS_HANDLE_APPEARANCE_WRITE)
+		return appearance_publish(buffer, size);
 
 	if (h->kind == SYS_HANDLE_CLIPWRITE)
 	{
@@ -2048,7 +2066,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bus", "cpu", "net" };
-			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard" };
+			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -2062,12 +2080,12 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			{
 				const char *name = kSysRootFiles[h->index - kDirCount];
 				strncpy(entry->name, name, OS64_DIRENT_NAME_MAX);
-				// Size 0 for the generated files — their content does not
-				// exist until something opens them. The clipboard is the
-				// exception BECAUSE its content is durable: `ls -l /sys` can
-				// honestly say how much is on the clipboard right now.
+				// Stored snapshots report their current sizes; generated
+				// reports use zero until opened.
 				if (strcmp(name, "clipboard") == 0)
 					entry->size = clipboard_length();
+				if (strcmp(name, "appearance") == 0)
+					entry->size = appearance_length();
 				h->index++;
 				return 1;
 			}
@@ -2261,9 +2279,12 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, "openfiles", OS64_DIRENT_NAME_MAX);
 			return 0;
 
-		// The clipboard reports its REAL length here (the only /sys node that
-		// can), which is how userland sizes a paste before reading one — and
-		// how `ls -l /sys` stops lying about the one file that has content.
+		case SYS_NODE_APPEARANCE:
+			strncpy(entry->name, "appearance", OS64_DIRENT_NAME_MAX);
+			entry->size = appearance_length();
+			return 0;
+
+		// Stored bytes have a size even before a reader opens a snapshot.
 		case SYS_NODE_CLIPFILE:
 			strncpy(entry->name, "clipboard", OS64_DIRENT_NAME_MAX);
 			entry->size = clipboard_length();

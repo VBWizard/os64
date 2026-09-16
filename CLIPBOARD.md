@@ -108,8 +108,9 @@ doctrine repealed. The day /dev grows into a service namespace, revisit.
      is the clipboard's own, because it must release the reference (and,
      on the write side, seal). One overridden fop, not four.
    - `stat` reports the entry's real length: `ls -l /sys` shows the
-     clipboard as the only node with a size, and `os64_clip_length()` asks
-     the question without reading the bytes.
+     clipboard's stored byte count, and `os64_clip_length()` asks the
+     question without reading the bytes. `/sys/appearance` also reports
+     its stored snapshot size.
    - Mode `"a"` is refused by sysfs's existing one-character mode test, so
      `>>` fails at open with husk's "cannot create" — the loud refusal the
      design asked for, at no cost.

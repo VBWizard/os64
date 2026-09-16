@@ -7,7 +7,7 @@
 //
 // RETAINED-LITE, deliberately (Chris's ruling): widgets are long-lived
 // structs the APP owns — stack, static, or its own heap; libui never
-// allocates and never frees. What "lite" buys: no scene graph, no z-order
+// allocates or frees widgets. What "lite" buys: no scene graph, no z-order
 // inside a window (children paint in list order), no incremental min-repaint
 // algebra — the dirty model is one union rect, the same choice the
 // compositor made at this population size. A foundation, not a dead end:
@@ -23,20 +23,18 @@
 //
 // THE THEME TABLE (customizability is a design value): ONE struct holds
 // every color and metric libui uses — zero scattered constants, enforced by
-// review. Defaults are the house look; `/home/theme.conf` overrides any of
-// them (key = value, '#' comments — logd.conf's syntax exactly, because
-// os64's second config file should not invent a second grammar; and /home
-// because the persistence doctrine says the user's look survives rebuilds).
+// review. Startup theme.conf follows the shared configuration ladder and
+// grammar. The schema validates supported colors and metrics before replacing
+// the defaults; font-cell metrics must match the available renderer.
 //
 // SCOPE HONESTY: this themes WIDGETS. Window chrome (titlebars, borders) is
 // painted by the kernel compositor from its own constants — chrome theming
 // arrives when decorations go client-side or a chrome-theme channel exists,
 // and is deliberately not faked here.
 //
-// Widgets grow APP-DRIVEN (the doc's rule: the first app that wants a
-// textbox is what brings the textbox into being). The starter set below —
-// panel, label, button — is what the first fixture demanded. Nothing is
-// built speculatively.
+// Widgets serve applications and the Appearance Workshop gallery. The
+// gallery is a place to develop reusable controls and their interaction
+// states before another application needs them (APPEARANCE.md).
 
 #ifndef OS64_UI_H
 #define OS64_UI_H
@@ -63,6 +61,13 @@ typedef struct os64_ui_theme
     uint32_t button_face_pressed;
     uint32_t button_border;
     uint32_t button_fg;
+    uint32_t button_highlight;
+    uint32_t button_shadow;
+    uint32_t button_face_hover;
+    uint32_t hover_border;
+    uint32_t focus_ring;
+    uint32_t disabled_bg;
+    uint32_t disabled_fg;
 
     // The text family (textview + textfield, born with scribe 2026-08-20).
     uint32_t text_bg;            // the paper
@@ -91,6 +96,9 @@ typedef struct os64_ui_theme
     int32_t  gap;        // spacing between stacked children
     int32_t  button_h;   // stock button height
     int32_t  scroll_w;   // scrollbar width
+    int32_t  button_bevel; // 0/1 = flat; 2..4 = relief including the outer border
+    int32_t  checkbox_size; // square indicator, clipped to the control bounds
+    int32_t  slider_track_h; // horizontal track thickness, clipped to control height
 
     // Font cell (the one embedded PSF1 face — a slot, so the day a second
     // face exists it arrives through the table like everything else).
@@ -98,12 +106,75 @@ typedef struct os64_ui_theme
     int32_t  font_h;
 } os64_ui_theme_t;
 
-// House defaults, then /home/theme.conf on top (absent file = defaults,
-// silently; a PRESENT file with an unknown key or unparsable value is
-// complained about by name on the console — the logd.conf discipline: a
-// config the user wrote deserves a loud answer, and the log is one Alt+F1
-// away).
+// Defaults, startup theme.conf through the config ladder, then the session.
+// Invalid startup configuration falls back to defaults; invalid session data
+// retains the process's last usable appearance.
 void os64_ui_theme_init(os64_ui_theme_t *t);
+void os64_ui_theme_startup(os64_ui_theme_t *t);
+// Overlay a usable startup file onto an application's supplied defaults.
+// Missing or invalid files leave the supplied theme unchanged.
+bool os64_ui_theme_read_startup(os64_ui_theme_t *t);
+
+// Ordinary-thread APIs, not async-signal-safe. Theme and installed belong to
+// the calling context; the cache is synchronized across the process. hint=0
+// checks the store even without an event (initialization); other hints come
+// from APPEARANCE events. Colors and relief merge without geometry changes.
+// Returns true when this context adopted a newer usable generation.
+bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t hint);
+
+#define OS64_UI_APPLY_IO        (-1)
+#define OS64_UI_APPLY_CONFLICT  (-2)
+#define OS64_UI_APPLY_INVALID   (-3)
+#define OS64_UI_APPLY_EXHAUSTED (-5)
+// Read the latest session, merge the specified components, compare/publish.
+// Returns 0 on success, optionally reports the published generation. A
+// conflict leaves the draft intact for an explicit retry. No files are saved.
+int os64_ui_theme_apply(const os64_ui_theme_t *draft, uint32_t components,
+                        uint64_t *published);
+
+#define OS64_UI_COMPONENT_PALETTE 1u
+#define OS64_UI_COMPONENT_TREATMENT 2u
+bool os64_ui_theme_valid(const os64_ui_theme_t *t);
+// Atomic decode. Session payloads require all colors and button.bevel, and
+// refuse geometry keys; startup files may specify a subset of the schema.
+bool os64_ui_theme_parse(os64_ui_theme_t *t, const char *text, size_t length,
+                        bool session);
+bool os64_ui_theme_parse_saved(os64_ui_theme_t *t, const char *text, size_t length);
+int64_t os64_ui_theme_encode_session(const os64_ui_theme_t *t, char *text, size_t cap);
+// Full snapshots include geometry. Startup selection writes theme.conf through
+// the shared ladder without publishing a live session change.
+int64_t os64_ui_theme_encode(const os64_ui_theme_t *t, char *text, size_t cap);
+int64_t os64_ui_theme_set_startup(const os64_ui_theme_t *t);
+
+#define OS64_UI_THEME_NAME_MAX 40
+#define OS64_UI_THEME_IO (-1)
+#define OS64_UI_THEME_EXISTS (-2)
+#define OS64_UI_THEME_INVALID (-3)
+#define OS64_UI_THEME_LIMIT (-4)
+typedef struct { char name[OS64_UI_THEME_NAME_MAX + 1]; } os64_ui_theme_entry_t;
+bool os64_ui_theme_name_valid(const char *name);
+// Personal collection: themes/ under the first configured settings directory.
+// List returns a count or a negative status; load leaves its output on failure.
+int os64_ui_theme_list(os64_ui_theme_entry_t *entries, size_t cap);
+int os64_ui_theme_load(const char *name, os64_ui_theme_t *theme);
+// Create uses no-replace publication. Explicit replacement requires atomic
+// filesystem replacement; concurrent replacements are last-publication-wins.
+int os64_ui_theme_save(const char *name, const os64_ui_theme_t *theme, bool replace);
+void os64_ui_theme_merge(os64_ui_theme_t *dst, const os64_ui_theme_t *src,
+                         uint32_t components);
+
+// Initialize without reading configuration, for independent theme previews.
+void os64_ui_theme_defaults(os64_ui_theme_t *t);
+
+typedef enum {
+    OS64_UI_PALETTE_MIDNIGHT,
+    OS64_UI_PALETTE_PAPER,
+    OS64_UI_PALETTE_ELECTRIC,
+} os64_ui_palette_t;
+
+// Replace colors while preserving metrics and button treatment. These are
+// building blocks for preview compositions, not a desktop-wide activation.
+void os64_ui_theme_palette(os64_ui_theme_t *t, os64_ui_palette_t palette);
 
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
@@ -121,6 +192,8 @@ typedef struct os64_ui_class
                   const os64_ui_theme_t *t);
     bool (*event)(os64_ui_widget_t *w, os64_ui_t *ui,
                   const os64_gui_event_t *ev);
+    // Optional private-state reset when focus or pointer ownership is lost.
+    void (*cancel)(os64_ui_widget_t *w);
 } os64_ui_class_t;
 
 struct os64_ui_widget
@@ -128,10 +201,13 @@ struct os64_ui_widget
     const os64_ui_class_t *cls;
     os64_gui_rect_t bounds;      // content-local, assigned by app or layout
     bool hidden;                 // skipped by paint AND hit-test
+    bool disabled;               // disables this subtree; use runtime setters below
+    bool focusable;              // participates in keyboard traversal
+    bool accepts_tab;            // literal Tab input; Ctrl+Tab still traverses
+    bool hovered;                // maintained by dispatch
     bool pressed;                // button state (owned by button's event fn)
-    bool focused;                // mirror of (ui->focus == this) — maintained
-                                 // by os64_ui_set_focus so PAINT can know,
-                                 // since paint deliberately never sees the ui
+    bool focused;                // active keyboard focus; false while the window is blurred
+    uint16_t activation_key;     // physical key identity while keyboard-pressed; 0 = idle
 
     const char *text;            // label/button caption (app-owned storage)
 
@@ -146,15 +222,20 @@ struct os64_ui_widget
     os64_ui_widget_t *next_sibling;
 };
 
-// ── The UI context (one per window) ─────────────────────────────────────────
+// ── The UI context (one per widget tree) ────────────────────────────────────
 
 struct os64_ui
 {
     os64_draw_ctx_t *ctx;        // the window's draw context (app-owned)
     os64_ui_theme_t  theme;
+    uint64_t appearance_generation; // installed by this context, not its siblings
+    bool follow_session;           // false for independent draft previews
     os64_ui_widget_t *root;
     os64_ui_widget_t *grab;      // widget owning the mouse (button held)
     os64_ui_widget_t *focus;     // key events go here (NULL = dropped)
+    os64_ui_widget_t *hover;     // current enabled control under the pointer
+    uint8_t grab_button;         // button that owns the widget grab
+    bool window_blurred;        // retain the logical focus target while its window is inactive
     os64_gui_rect_t  dirty;      // union of everything needing repaint
     bool             any_dirty;
 
@@ -191,11 +272,20 @@ void os64_ui_mark_dirty(os64_ui_t *ui, os64_ui_widget_t *w);
 // Route one event. Pointer events hit-test to the deepest visible widget
 // (with a press grab: DOWN grabs, UP releases and fires on_click if it ends
 // over the widget it started on — the ancient button contract, so a drag-off
-// cancels). Key events go to `focus`. Returns true if any widget consumed it.
+// cancels). Key events go to `focus`, with Tab traversal unless the focused
+// control accepts literal tabs (Ctrl+Tab traverses there). Hover state updates
+// on motion; ungrabbed moves are not sent to widget event handlers.
+// Returns true if the toolkit or a widget consumed the event.
 bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev);
 
 // Repaint whatever is dirty and publish exactly that rect. No-op when clean.
 void os64_ui_paint(os64_ui_t *ui);
+
+// Paint dirty widgets into the canvas without publishing. Returns true when
+// pending damage was processed, optionally reports that damage, and clears
+// it. Several UI contexts sharing a canvas can render first and publish their
+// combined damage once; damage may be NULL when the caller repaints a superset.
+bool os64_ui_render(os64_ui_t *ui, os64_gui_rect_t *damage);
 
 // The canonical L2 loop, packaged: event_wait → dispatch → paint, until the
 // window dies (event_wait error) or `*running` (may be NULL) goes false —
@@ -209,7 +299,7 @@ void os64_ui_run(os64_ui_t *ui, int64_t win, volatile bool *running);
 // just writes bounds. Grids and springs are future apps' demands.
 void os64_ui_stack_vertical(os64_ui_t *ui, os64_ui_widget_t *parent);
 
-// ── Starter widgets (app-driven; see header comment) ────────────────────────
+// ── Basic widgets ──────────────────────────────────────────────────────────
 // Initializers, not allocators: the app hands in the struct.
 void os64_ui_panel(os64_ui_widget_t *w);                       // themed slab + border
 void os64_ui_label(os64_ui_widget_t *w, const char *text);     // one line of text
@@ -224,10 +314,48 @@ extern const os64_ui_class_t os64_ui_label_class;
 extern const os64_ui_class_t os64_ui_button_class;
 
 // Move key focus. Maintains each widget's `focused` mirror and dirties both
-// ends so carets appear and disappear honestly. NULL blurs. Widgets that
-// WANT focus call this from their own BUTTON_DOWN handling; nothing focuses
-// by accident.
+// ends so carets appear and disappear honestly. NULL blurs. A non-NULL target
+// must be focusable, enabled, visible, and part of this UI's tree.
 void os64_ui_set_focus(os64_ui_t *ui, os64_ui_widget_t *w);
+
+// Step through focusable controls in tree order. With wrap=false, reaching
+// the edge clears focus and returns false so an app can continue in another
+// UI context. With wrap=true, traversal cycles within this tree.
+bool os64_ui_focus_next(os64_ui_t *ui, bool reverse, bool wrap);
+bool os64_ui_widget_enabled(const os64_ui_widget_t *w);
+void os64_ui_set_enabled(os64_ui_t *ui, os64_ui_widget_t *w, bool enabled);
+void os64_ui_set_hidden(os64_ui_t *ui, os64_ui_widget_t *w, bool hidden);
+void os64_ui_clear_hover(os64_ui_t *ui);
+void os64_ui_cancel_interaction(os64_ui_t *ui);
+
+typedef struct os64_ui_checkbox {
+    os64_ui_widget_t w;
+    bool checked;
+    void (*on_change)(struct os64_ui_checkbox *, void *);
+    void *check_user;
+} os64_ui_checkbox_t;
+void os64_ui_checkbox(os64_ui_checkbox_t *cb, const char *text, bool checked,
+                     void (*on_change)(os64_ui_checkbox_t *, void *), void *user);
+// Programmatic setters update/repaint without firing interaction callbacks.
+void os64_ui_checkbox_set(os64_ui_t *ui, os64_ui_checkbox_t *cb, bool checked);
+
+typedef struct os64_ui_slider {
+    os64_ui_widget_t w;
+    int32_t min, max, step, value;
+    int32_t drag_offset;
+    int32_t drag_x;              // last pointer sample; a stationary press preserves value
+    uint8_t seq;
+    void (*on_change)(struct os64_ui_slider *, void *);
+    void *slider_user;
+} os64_ui_slider_t;
+// Inclusive range; max<min becomes a fixed-value range and step<1 becomes 1.
+// Values clamp to the range. Keyboard arrows step, Home/End choose endpoints.
+void os64_ui_slider(os64_ui_slider_t *sl, int32_t min, int32_t max,
+                   int32_t step, int32_t value,
+                   void (*on_change)(os64_ui_slider_t *, void *), void *user);
+void os64_ui_slider_set(os64_ui_t *ui, os64_ui_slider_t *sl, int32_t value);
+extern const os64_ui_class_t os64_ui_checkbox_class;
+extern const os64_ui_class_t os64_ui_slider_class;
 
 // ── Stateful widgets (scribe's demands, 2026-08-20) ─────────────────────────
 // THE CONTAINER PATTERN: a widget kind that needs state beyond the base
@@ -264,6 +392,25 @@ void os64_ui_scrollbar(os64_ui_scrollbar_t *sb,
 // Update the three numbers and repaint. Clamps pos into [0, total-visible].
 void os64_ui_scrollbar_set(os64_ui_t *ui, os64_ui_scrollbar_t *sb,
                            int64_t total, int64_t visible, int64_t pos);
+
+// ── listbox — a single selection over application-owned labels ──────────────
+typedef struct os64_ui_listbox os64_ui_listbox_t;
+struct os64_ui_listbox {
+    os64_ui_widget_t w;
+    size_t count, top;
+    int selected, pressed_index;
+    uint8_t seq;
+    const char *(*label)(size_t index, void *user);
+    void (*on_change)(os64_ui_listbox_t *, void *user);
+    void *list_user;
+};
+void os64_ui_listbox(os64_ui_listbox_t *list, size_t count,
+                     const char *(*label)(size_t, void *),
+                     void (*on_change)(os64_ui_listbox_t *, void *), void *user);
+// Programmatic updates do not call on_change. Selection is -1 for none.
+void os64_ui_listbox_set(os64_ui_t *ui, os64_ui_listbox_t *list, size_t count, int selected);
+int os64_ui_listbox_rows(const os64_ui_listbox_t *list, const os64_ui_theme_t *theme);
+void os64_ui_listbox_scroll_to(os64_ui_t *ui, os64_ui_listbox_t *list, size_t top);
 
 // ── ui_textfield — one line of editable text ────────────────────────────────
 // Born for Save As; really the FORM control every dialog after it needs.

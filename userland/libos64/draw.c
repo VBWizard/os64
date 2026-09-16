@@ -1,13 +1,8 @@
 // draw.c — libdraw's implementation: surface.c's rasterizer, in ring 3.
 //
-// PORTED, NOT REINVENTED (LIBDRAW.md's instruction, and the house rule):
-// every clipping decision below is surface.c's, line for line where C
-// allows, because that code earned its correctness compositing a live
-// desktop. The differences are exactly three: the types wear their ABI
-// names (os64/gui.h), text comes from the EMBEDDED font instead of the
-// kernel's console font (the kernel stays out of app text, by design),
-// and there is no flush — apps publish, only the compositor touches
-// hardware.
+// Software drawing into userland canvases. Primitives clip to the surface;
+// text may additionally clip to a widget rectangle. Glyphs come from the
+// embedded font, and publishing hands completed pixels to the compositor.
 
 #include "os64/draw.h"
 #include "os64/font_psf1.h"
@@ -129,6 +124,7 @@ void os64_draw_vline(os64_gui_surface_t *dst, int32_t x, int32_t y,
 void os64_draw_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
                     uint32_t color)
 {
+    if (r.w <= 0 || r.h <= 0) return;
     os64_draw_hline(dst, r.x, r.y, r.w, color);
     os64_draw_hline(dst, r.x, r.y + r.h - 1, r.w, color);
     os64_draw_vline(dst, r.x, r.y, r.h, color);
@@ -143,18 +139,19 @@ int32_t os64_draw_text(os64_gui_surface_t *dst, int32_t x, int32_t y,
                                   OS64_CHARSET_LATIN1);
 }
 
-int32_t os64_draw_text_charset(os64_gui_surface_t *dst, int32_t x, int32_t y,
+static int32_t text_clipped(os64_gui_surface_t *dst, os64_gui_rect_t clip,
+                            int32_t x, int32_t y,
                                const char *str, size_t len,
                                uint32_t fg, uint32_t bg, uint8_t charset)
 {
-    // surface_draw_text's gait, glyphs from the embedded face: paint the
-    // opaque 8-wide cell, clipped per cell via one intersect. No layout
-    // logic beyond advancing the pen — wrapping and flow live upstairs.
+    // Intersect once with the canvas, then clip each glyph to that region.
+    if (!os64_rect_intersect(clip, surface_bounds(dst), &clip))
+        clip = (os64_gui_rect_t){0, 0, 0, 0};
     for (size_t i = 0; i < len; i++, x += OS64_FONT_GLYPH_W) {
         os64_gui_rect_t cell;
         if (!os64_rect_intersect(
                 (os64_gui_rect_t){x, y, OS64_FONT_GLYPH_W, OS64_FONT_GLYPH_H},
-                surface_bounds(dst), &cell))
+                clip, &cell))
             continue;
 
         // The SAME map the kernel's painter uses, against this face rather
@@ -171,6 +168,20 @@ int32_t os64_draw_text_charset(os64_gui_surface_t *dst, int32_t x, int32_t y,
         }
     }
     return x;
+}
+
+int32_t os64_draw_text_charset(os64_gui_surface_t *dst, int32_t x, int32_t y,
+                               const char *str, size_t len,
+                               uint32_t fg, uint32_t bg, uint8_t charset)
+{
+    return text_clipped(dst, surface_bounds(dst), x, y, str, len, fg, bg, charset);
+}
+
+int32_t os64_draw_text_clipped(os64_gui_surface_t *dst, os64_gui_rect_t clip,
+                              int32_t x, int32_t y, const char *str, size_t len,
+                              uint32_t fg, uint32_t bg)
+{
+    return text_clipped(dst, clip, x, y, str, len, fg, bg, OS64_CHARSET_LATIN1);
 }
 
 // ── The draw context ────────────────────────────────────────────────────────

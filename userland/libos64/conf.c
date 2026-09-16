@@ -22,6 +22,81 @@
 #include "os64/syscall.h"
 #include "os64/syscall_numbers.h"   // SYSCALL_CONF_RESOLVE — the kernel walks the ladder
 
+static int64_t conf_parse_buffer(char *buf, os64_conf_fn fn, void *user, bool *stopped)
+{
+	if (stopped) *stopped = false;
+	int64_t delivered = 0;
+	size_t i = 0;
+	while (buf[i] != '\0') {
+		// One line: find its bounds, then chop the comment off.
+		size_t start = i;
+		while (buf[i] != '\0' && buf[i] != '\n')
+			i++;
+		size_t end = i;
+		if (buf[i] == '\n')
+			i++;
+		for (size_t c = start; c < end; c++)
+			if (buf[c] == '#') { end = c; break; }
+
+		// key: the first token
+		size_t k = start;
+		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
+			k++;
+		size_t ks = k;
+		while (k < end && buf[k] != ' ' && buf[k] != '\t' && buf[k] != '=')
+			k++;
+		size_t ke = k;
+		if (ks == ke)
+			continue;   // blank, or comment-only
+
+		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
+			k++;
+		if (k >= end || buf[k] != '=') {
+			// Not `key = value`. Hand the caller the line as written (less
+			// its comment and trailing whitespace) and let it complain in
+			// its own voice.
+			size_t le = end;
+			while (le > ks && (buf[le - 1] == ' ' || buf[le - 1] == '\t' || buf[le - 1] == '\r'))
+				le--;
+			char saved = buf[le];
+			buf[le] = '\0';
+			bool go = fn(NULL, &buf[ks], user);
+			buf[le] = saved;
+			if (!go) {
+				if (stopped) *stopped = true;
+				return delivered;
+			}
+			continue;
+		}
+		k++;   // past '='
+
+		// value: to end of line, trimmed both sides, never split on spaces.
+		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
+			k++;
+		size_t vs = k, ve = end;
+		while (ve > vs && (buf[ve - 1] == ' ' || buf[ve - 1] == '\t' || buf[ve - 1] == '\r'))
+			ve--;
+
+		// Terminate both in place for the call, then put the bytes back:
+		// the walk above still needs the line intact (ke may equal vs's
+		// preceding '=', never the same byte as ve, so the two NULs are
+		// independent).
+		char savedK = buf[ke], savedV = buf[ve];
+		buf[ke] = '\0';
+		buf[ve] = '\0';
+		bool go = fn(&buf[ks], &buf[vs], user);
+		buf[ke] = savedK;
+		buf[ve] = savedV;
+		delivered++;
+		if (!go) {
+			if (stopped) *stopped = true;
+			return delivered;
+		}
+	}
+
+	return delivered;
+}
+
 int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user)
 {
 	int64_t fd = os64_open(path, "r");
@@ -84,77 +159,25 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user)
 	}
 	buf[got] = '\0';
 
-	int64_t delivered = 0;
-	size_t i = 0;
-	while (buf[i] != '\0') {
-		// One line: find its bounds, then chop the comment off.
-		size_t start = i;
-		while (buf[i] != '\0' && buf[i] != '\n')
-			i++;
-		size_t end = i;
-		if (buf[i] == '\n')
-			i++;
-		for (size_t c = start; c < end; c++)
-			if (buf[c] == '#') { end = c; break; }
-
-		// key: the first token
-		size_t k = start;
-		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
-			k++;
-		size_t ks = k;
-		while (k < end && buf[k] != ' ' && buf[k] != '\t' && buf[k] != '=')
-			k++;
-		size_t ke = k;
-		if (ks == ke)
-			continue;   // blank, or comment-only
-
-		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
-			k++;
-		if (k >= end || buf[k] != '=') {
-			// Not `key = value`. Hand the caller the line as written (less
-			// its comment and trailing whitespace) and let it complain in
-			// its own voice.
-			size_t le = end;
-			while (le > ks && (buf[le - 1] == ' ' || buf[le - 1] == '\t' || buf[le - 1] == '\r'))
-				le--;
-			char saved = buf[le];
-			buf[le] = '\0';
-			bool go = fn(NULL, &buf[ks], user);
-			buf[le] = saved;
-			if (!go) {
-				os64_free(buf);
-				return delivered;
-			}
-			continue;
-		}
-		k++;   // past '='
-
-		// value: to end of line, trimmed both sides, never split on spaces.
-		while (k < end && (buf[k] == ' ' || buf[k] == '\t'))
-			k++;
-		size_t vs = k, ve = end;
-		while (ve > vs && (buf[ve - 1] == ' ' || buf[ve - 1] == '\t' || buf[ve - 1] == '\r'))
-			ve--;
-
-		// Terminate both in place for the call, then put the bytes back:
-		// the walk above still needs the line intact (ke may equal vs's
-		// preceding '=', never the same byte as ve, so the two NULs are
-		// independent).
-		char savedK = buf[ke], savedV = buf[ve];
-		buf[ke] = '\0';
-		buf[ve] = '\0';
-		bool go = fn(&buf[ks], &buf[vs], user);
-		buf[ke] = savedK;
-		buf[ve] = savedV;
-		delivered++;
-		if (!go) {
-			os64_free(buf);
-			return delivered;
-		}
-	}
-
+	bool stopped;
+	int64_t delivered = conf_parse_buffer(buf, fn, user, &stopped);
 	os64_free(buf);
-	return truncated ? OS64_CONF_TRUNCATED : delivered;
+	return truncated && !stopped ? OS64_CONF_TRUNCATED : delivered;
+}
+
+int64_t os64_conf_parse(const char *text, size_t length, os64_conf_fn fn, void *user)
+{
+	if (!text || !fn) return OS64_CONF_BAD_SETTING;
+	if (length >= OS64_CONF_MAX) return OS64_CONF_TRUNCATED;
+	for (size_t i = 0; i < length; ++i)
+		if (!text[i]) return OS64_CONF_BAD_SETTING;
+	char *buf = os64_malloc(length + 1);
+	if (!buf) return OS64_CONF_NO_MEMORY;
+	os64_memcpy(buf, text, length);
+	buf[length] = 0;
+	int64_t result = conf_parse_buffer(buf, fn, user, NULL);
+	os64_free(buf);
+	return result;
 }
 
 static int64_t conf_resolve(const char *name, size_t from, bool any,
@@ -437,7 +460,14 @@ static bool setting_is_writable(const os64_conf_pair_t *p)
 	return true;
 }
 
-int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t count)
+int64_t os64_conf_target(const char *name, char *path_out, size_t cap)
+{
+    return conf_resolve(name, 0, true, path_out, cap) >= 1 ? 0 : OS64_CONF_NO_FILE;
+}
+
+static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
+                          size_t count, bool atomic_replace,
+                          bool (*validate)(const char *, size_t, void *), void *user)
 {
 	if (pairs == NULL || count == 0)
 		return 0;                           // nothing asked, nothing broken
@@ -458,7 +488,7 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 	// does not exist yet the first time, which is exactly the case a probing
 	// resolve cannot answer.
 	char path[OS64_CONF_PATH_MAX];
-	if (conf_resolve(name, 0, true, path, sizeof(path)) < 1)
+	if (os64_conf_target(name, path, sizeof(path)) != 0)
 		return OS64_CONF_NO_FILE;
 
 	// Room for the old text plus every pair appended, plus the ".new" name.
@@ -576,12 +606,17 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 		return OS64_CONF_TRUNCATED;         // refuse to publish a short file
 	}
 	neu[o.len] = '\0';
+    if (atomic_replace && (o.len >= OS64_CONF_MAX ||
+        (validate && !validate(neu, o.len, user)))) {
+        os64_free(old);
+        os64_free(neu);
+        return OS64_CONF_BAD_SETTING;
+    }
 
 	// RULE 3: write beside the target, then rename over it. On ext2 that
 	// replacement is atomic, so a crash between these calls leaves the old
-	// config whole rather than a half-written one. This legacy caller keeps
-	// flags-zero behavior; FAT's replacement has the remove-first window
-	// documented by os64_rename.
+	// config whole rather than a half-written one. The atomic variant refuses
+	// replacement on FAT; the legacy variant retains flags-zero behavior.
 	// The temp name is PER-SAVER, not a shared "<path>.new" (Codex #29 rd7):
 	// two processes saving the same file both opened the identical temp, and
 	// writer B could truncate it after A closed but before A renamed — so A
@@ -659,11 +694,24 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 		os64_unlink(temp);                  // no half-file left lying beside the real one
 		return OS64_CONF_NO_FILE;
 	}
-	if (os64_rename(temp, path) != 0) {
+	int64_t renamed = atomic_replace ? os64_rename_with_flags(temp, path,
+	    OS64_RENAME_REQUIRE_ATOMIC_REPLACE) : os64_rename(temp, path);
+	if (renamed != 0) {
 		os64_unlink(temp);
 		return OS64_CONF_NO_FILE;
 	}
 	return 0;
+}
+
+int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t count)
+{
+    return conf_write(name, pairs, count, false, NULL, NULL);
+}
+
+int64_t os64_conf_write_checked(const char *name, const os64_conf_pair_t *pairs, size_t count,
+    bool (*validate)(const char *, size_t, void *), void *user)
+{
+    return conf_write(name, pairs, count, true, validate, user);
 }
 
 int64_t os64_conf_set(const char *name, const char *key, const char *value)
