@@ -187,8 +187,10 @@ Stock defaults remain flat.
 
 `ui_theme.c` owns the property schema, supported ranges, parsing, and session
 serialization. Startup `theme.conf` uses the shared configuration search and
-parser. Invalid configuration leaves the compiled defaults in place. Session
-payloads contain the full color set and button relief, and exclude geometry;
+parser. Invalid configuration leaves the compiled defaults in place.
+Apply payloads contain the full color set and button relief. Startup preservation
+payloads begin with `inherit = startup` and carry the configured live keys,
+leaving absent keys at each application's defaults. Both forms exclude geometry;
 decoding is validated before replacing the caller's theme.
 
 `ui_session.c` overlays `/sys/appearance` at initialization and handles
@@ -196,8 +198,11 @@ decoding is validated before replacing the caller's theme.
 cached per process; each UI context installs its own generation and repaints.
 Colors and button relief merge without copying geometry or resetting widget
 state. Set `follow_session = false` for an independent draft. Custom consumers
-use `os64_ui_theme_session`; grootmenu repaints its open cascade levels after
-adoption. Invalid payloads retain the last usable theme. `os64_ui_theme_apply`
+initialize supplied defaults through `os64_ui_theme_current`, and use
+`os64_ui_theme_session` for live updates. The initializer keeps disk geometry
+but resolves colors against the pinned override when startup selection has
+changed the file. Disk-only startup APIs read the next-boot choice. Grootmenu
+repaints its open cascade levels after adoption. Invalid payloads retain the last usable theme. `os64_ui_theme_apply`
 merges selected components against the current session and reports publication
 conflicts; it does not save persistent files. These APIs are not signal-safe.
 

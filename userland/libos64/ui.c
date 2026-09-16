@@ -43,10 +43,10 @@ void os64_ui_mark_dirty(os64_ui_t *ui, os64_ui_widget_t *w)
 void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
 {
 	ui->ctx = ctx;
-	os64_ui_theme_startup(&ui->theme);
+	os64_ui_theme_defaults(&ui->theme);
 	ui->appearance_generation = 0;
 	ui->follow_session = true;
-	os64_ui_theme_session(&ui->theme, &ui->appearance_generation, 0);
+	os64_ui_theme_current(&ui->theme, &ui->appearance_generation);
 	ui->root = ui->grab = ui->focus = ui->hover = (os64_ui_widget_t *)0;
 	ui->grab_button = 0;
 	ui->window_blurred = false;

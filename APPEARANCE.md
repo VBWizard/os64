@@ -14,10 +14,11 @@ property editing, and window decorations remain separate slices.
 
 ## Review scope and checkpoint
 
-The working theme implementation is a local checkpoint. Component customization
-continues on this branch, with Theme intended to be reviewed together. Window
-decorations belong in a separate PR and design discussion. Their scope is not
-limited to frame colors or a few border metrics; the desired visual treatments,
+PR #107 covers the theme foundation: Control Center, Workshop presets and
+composition, live Apply, saved themes, and startup selection. Palette editing
+and rounded controls belong to a follow-up PR. Window decorations belong in
+a separate PR and design discussion. Their scope is not limited to frame colors
+or a few border metrics; the desired visual treatments,
 controls, geometry, and behavior must inform that design.
 
 ## Save and collection contracts (2026-09-15)
@@ -73,13 +74,28 @@ controls, geometry, and behavior must inform that design.
   Concurrent startup selections are last-publication-wins.
 - Before changing `theme.conf`, userland preserves the current session palette
   and relief. If `/sys/appearance` is still generation zero, it publishes the
-  old startup colors with expected generation zero. A racing valid Apply wins;
+  old startup override with expected generation zero, preserving absent keys
+  as application defaults. A racing valid Apply wins;
   an invalid session or I/O failure refuses startup selection. Existing sessions
   are not republished. Thus new applications continue to join the same live
   session after startup selection. Geometry is still initialized per application
   from startup configuration and is not live-reloaded; Workshop has no metric
   editor. The preservation publication can succeed even if the later file save
   fails, but it does not contain the proposed new startup colors.
+- Preservation payloads start with `inherit = startup` and contain the explicitly
+  configured live keys from the old startup file. Missing, empty, or invalid
+  startup configuration yields an empty override; transient read/allocation
+  errors refuse preservation. Geometry keys are validated when reading the file
+  but omitted from this payload. Ordinary Apply payloads still require the full
+  set of colors and button relief. The kernel treats either form as opaque data.
+- Active-context initialization uses `os64_ui_theme_current` with application
+  defaults. It reads disk configuration and then the session store; a preserved
+  override restores the caller's default colors before merging its present keys.
+  Thus an app opened after startup selection does not adopt the next-boot colors.
+  Existing contexts merge the same present keys without changing unspecified
+  fields or geometry. The disk-only startup APIs remain available for displaying
+  the next-boot selection. A later explicit Apply replaces the preserved override
+  with a complete shared appearance.
 - Control Center and the Workshop retain their Midnight defaults when no usable
   startup override exists, and honor a configured startup theme before applying
   the live session. Application-specific drawings and window chrome remain
@@ -397,7 +413,9 @@ not signal handlers. A yielding process-local lock serializes reloads and
 publications without sharing mutable UI contexts between threads.
 
 Userland loads startup `theme.conf` through the shared configuration ladder,
-then overlays a validated session snapshot. A bad or unsupported snapshot
+then resolves the active colors through a validated session snapshot. A pinned
+startup override uses application defaults for keys absent from that override,
+even when the disk file has since been replaced with the next-boot selection. A bad or unsupported snapshot
 does not replace a running client's usable theme. Applying a component merges
 it into the latest active appearance; a generation conflict is reported and
 can be retried without silently discarding another publisher's changes.
@@ -707,3 +725,27 @@ in the collection contracts above.
 - Following installation, Chris reported that startup reload works correctly
   on the P5. This is user-reported hardware validation, separate from the QEMU
   checks above.
+
+
+### PR #107 startup-preservation correction
+
+- A regression reproduced the default-install failure: the first startup
+  selection changed a Midnight context's surface from `ff202a36` to generic
+  `ffc0c0c0`. Preservation now publishes a startup override with field presence,
+  keeping absent keys at each application's defaults.
+- Host ASan/UBSan coverage includes missing, empty, malformed, partial, and
+  complete startup files; independently themed contexts; new-context and cold
+  cache initialization after the disk file changes; racing Apply; read/allocation
+  and publication failures; failed startup saving; repeated startup selection;
+  and replacement by explicit Apply. Ordinary incomplete Apply payloads and
+  preservation payloads containing geometry or invalid keys remain rejected.
+- Both appearance host suites, the default strict build, `git diff --check`,
+  and the stale-reference scan passed. Leak detection was disabled while
+  ASan/UBSan remained enabled.
+- In an isolated QEMU guest with a fresh home disk, selecting Paper for startup
+  without Apply left the running Midnight Workshop and generic Scribe unchanged.
+  A new Control Center retained Midnight, and a new Scribe retained its defaults.
+  After reboot the Workshop used Paper. The guest appearance/configuration tests
+  passed, alongside 30 pre-boot, 32 post-boot, and 3 late tests with zero failures.
+- The correction changes userland only. The pending palette editor and rounded
+  controls remain outside this PR.

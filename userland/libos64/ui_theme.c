@@ -204,16 +204,43 @@ static bool theme_setting(const char *name, const char *value, void *user)
     return false;
 }
 
-int64_t os64_ui_theme_parse_status(os64_ui_theme_t *t, const char *text, size_t length,
-                        bool session)
+// Presence is carried by key names, not table indices, in the shared payload.
+// An explicit startup marker permits missing live keys to retain app defaults.
+#define STARTUP_OVERLAY "inherit = startup\n"
+int64_t os64_ui_theme_decode_session(os64_ui_theme_t *t, uint64_t *fields,
+                                     bool *inherited, const char *text, size_t length)
 {
-    theme_parse_t p = {.candidate = *t, .session = session};
+    if (!text) return OS64_CONF_BAD_SETTING;
+    const size_t prefix = sizeof(STARTUP_OVERLAY) - 1;
+    bool overlay = length >= prefix;
+    for (size_t i = 0; overlay && i < prefix; ++i)
+        if (text[i] != STARTUP_OVERLAY[i]) overlay = false;
+    if (overlay) { text += prefix; length -= prefix; }
+    theme_parse_t p = {.candidate = *t, .session = true};
     int64_t result = os64_conf_parse(text, length, theme_setting, &p);
     if (result < 0) return result;
     if (p.bad || !os64_ui_theme_valid(&p.candidate)) return OS64_CONF_BAD_SETTING;
-    if (session)
+    if (!overlay)
         for (size_t i = 0; i < THEME_KEY_COUNT; ++i)
-            if (session_key(&kThemeKeys[i]) && !(p.seen & ((uint64_t)1 << i))) return OS64_CONF_BAD_SETTING;
+            if (session_key(&kThemeKeys[i]) && !(p.seen & ((uint64_t)1 << i)))
+                return OS64_CONF_BAD_SETTING;
+    *t = p.candidate;
+    *fields = p.seen;
+    *inherited = overlay;
+    return 0;
+}
+
+int64_t os64_ui_theme_parse_status(os64_ui_theme_t *t, const char *text, size_t length,
+                                  bool session)
+{
+    if (session) {
+        uint64_t fields; bool inherited;
+        return os64_ui_theme_decode_session(t, &fields, &inherited, text, length);
+    }
+    theme_parse_t p = {.candidate = *t};
+    int64_t result = os64_conf_parse(text, length, theme_setting, &p);
+    if (result < 0) return result;
+    if (p.bad || !os64_ui_theme_valid(&p.candidate)) return OS64_CONF_BAD_SETTING;
     *t = p.candidate;
     return 0;
 }
@@ -241,13 +268,13 @@ bool os64_ui_theme_parse_saved(os64_ui_theme_t *t, const char *text, size_t leng
     return os64_ui_theme_parse_saved_status(t, text, length) == 0;
 }
 
-static int64_t theme_encode(const os64_ui_theme_t *t, char *text, size_t cap, bool session)
+static int64_t theme_encode(const os64_ui_theme_t *t, char *text, size_t cap, bool session, uint64_t fields)
 {
     if (!text || !os64_ui_theme_valid(t)) return -1;
     size_t used = 0;
     for (size_t i = 0; i < THEME_KEY_COUNT; ++i) {
         const theme_key_t *key = &kThemeKeys[i];
-        if (session && !session_key(key)) continue;
+        if (!(fields & ((uint64_t)1 << i)) || (session && !session_key(key))) continue;
         if (used >= cap) return -1;
         const void *field = (const char *)t + key->offset;
         int n = key->kind == THEME_COLOR ?
@@ -263,12 +290,40 @@ static int64_t theme_encode(const os64_ui_theme_t *t, char *text, size_t cap, bo
 
 int64_t os64_ui_theme_encode_session(const os64_ui_theme_t *t, char *text, size_t cap)
 {
-    return theme_encode(t, text, cap, true);
+    return theme_encode(t, text, cap, true, UINT64_MAX);
 }
 
 int64_t os64_ui_theme_encode(const os64_ui_theme_t *t, char *text, size_t cap)
 {
-    return theme_encode(t, text, cap, false);
+    return theme_encode(t, text, cap, false, UINT64_MAX);
+}
+
+int64_t os64_ui_theme_snapshot_startup(char *text, size_t cap)
+{
+    theme_parse_t p = {0};
+    os64_ui_theme_defaults(&p.candidate);
+    int64_t result = os64_conf_find_read("theme.conf", theme_setting, &p, NULL, 0);
+    // Missing or malformed configuration has no overrides. Transient failures
+    // must not freeze an empty overlay in place of a valid startup file.
+    if (result == OS64_CONF_NO_MEMORY || result == OS64_CONF_IO_ERROR) return result;
+    if (result < 0 || p.bad || !os64_ui_theme_valid(&p.candidate)) {
+        p.seen = 0;
+        os64_ui_theme_defaults(&p.candidate);
+    }
+    const size_t prefix = sizeof(STARTUP_OVERLAY) - 1;
+    if (cap <= prefix) return OS64_CONF_TRUNCATED;
+    os64_memcpy(text, STARTUP_OVERLAY, prefix);
+    int64_t n = theme_encode(&p.candidate, text + prefix, cap - prefix, true, p.seen);
+    return n < 0 ? n : (int64_t)prefix + n;
+}
+
+void os64_ui_theme_merge_fields(os64_ui_theme_t *dst, const os64_ui_theme_t *src,
+                                uint64_t fields)
+{
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i)
+        if (fields & ((uint64_t)1 << i))
+            os64_memcpy((char *)dst + kThemeKeys[i].offset,
+                        (const char *)src + kThemeKeys[i].offset, 4);
 }
 
 static bool startup_text_valid(const char *text, size_t length, void *user)
@@ -332,7 +387,7 @@ void os64_ui_theme_startup(os64_ui_theme_t *t)
 
 void os64_ui_theme_init(os64_ui_theme_t *t)
 {
-    os64_ui_theme_startup(t);
+    os64_ui_theme_defaults(t);
     uint64_t installed = 0;
-    os64_ui_theme_session(t, &installed, 0);
+    os64_ui_theme_current(t, &installed);
 }

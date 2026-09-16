@@ -17,6 +17,12 @@ pthread_mutex_t kGuiLock = PTHREAD_MUTEX_INITIALIZER;
 bool fail_alloc;
 static unsigned allocations, reads, writes, notifications;
 static bool fail_open, fail_read, refuse_write, short_write, race_write;
+static const char *startup_text;
+static char next_startup[4096];
+static int startup_error;
+static bool fail_startup_save;
+int os64_ui_theme_preserve_session(void);
+int64_t os64_ui_theme_snapshot_startup(char *text, size_t cap);
 static gui_event_queue_t queues[3];
 static char racing[OS64_APPEARANCE_MAX + 1];
 static size_t racing_length;
@@ -32,8 +38,28 @@ void os64_yield(void) { sched_yield(); }
 int64_t __wrap_os64_conf_find_read(const char *name, os64_conf_fn fn, void *user,
                                   char *path, size_t cap)
 {
-    (void)name; (void)fn; (void)user; (void)path; (void)cap;
-    return OS64_CONF_NO_FILE;
+    (void)name; (void)path; (void)cap;
+    if (startup_error) return startup_error;
+    return startup_text ? os64_conf_parse(startup_text, strlen(startup_text), fn, user) : OS64_CONF_NO_FILE;
+}
+// The filesystem suite exercises the actual atomic writer. Here the seam
+// changes disk configuration only after the production preservation path runs.
+int64_t __wrap_os64_conf_write_checked(const char *name,
+    const os64_conf_pair_t *pairs, size_t count,
+    bool (*validate)(const char *, size_t, void *), void *user)
+{
+    assert(!strcmp(name, "theme.conf"));
+    if (fail_startup_save) return OS64_CONF_IO_ERROR;
+    size_t used = 0;
+    for (size_t i = 0; i < count; ++i) {
+        int n = snprintf(next_startup + used, sizeof(next_startup) - used,
+                         "%s = %s\n", pairs[i].key, pairs[i].value);
+        assert(n > 0 && (size_t)n < sizeof(next_startup) - used);
+        used += (size_t)n;
+    }
+    assert(validate(next_startup, used, user));
+    startup_text = next_startup;
+    return 0;
 }
 int64_t os64_open(const char *path, const char *mode)
 {
@@ -284,40 +310,98 @@ static void concurrency_and_queue_contracts(void)
         assert(!gui_event_queue_pending(&queues[k]));
     }
 }
-int os64_ui_theme_preserve_session(void);
-void appearance_session_contracts(void)
+static void startup_preservation_contracts(void)
 {
-    // Separate address spaces keep the production boot-lifetime store/cache
-    // pristine for each initial-publication and racing-publisher scenario.
-    for (int mode = 0; mode < 3; ++mode) {
+    enum { FRESH, RACING, REFUSED, PARTIAL, INVALID, EMPTY, FULL,
+           READ_FAIL, ALLOC_FAIL, COLD_CACHE, SAVE_FAIL, CASE_COUNT };
+    // Separate address spaces keep the boot-lifetime store/cache pristine.
+    for (int mode = 0; mode < CASE_COUNT; ++mode) {
         pid_t pid = fork(); assert(pid >= 0);
         if (!pid) {
-            os64_ui_theme_t theme; os64_ui_theme_defaults(&theme);
-            os64_ui_theme_palette(&theme, OS64_UI_PALETTE_ELECTRIC);
-            if (mode == 1) {
-                racing_length = encode(racing, &theme, 0); race_write = true;
+            os64_ui_theme_t target, paper;
+            os64_ui_theme_defaults(&target);
+            os64_ui_theme_palette(&target, OS64_UI_PALETTE_ELECTRIC);
+            target.pad = 13;
+            paper = target;
+            os64_ui_theme_palette(&paper, OS64_UI_PALETTE_PAPER);
+            char full[4096];
+            if (mode == PARTIAL || mode == COLD_CACHE)
+                startup_text = "label.fg = 123456\npad = 17\n";
+            if (mode == INVALID) startup_text = "label.fg = invalid\n";
+            if (mode == EMPTY) startup_text = "# No overrides\n";
+            if (mode == FULL) {
+                assert(os64_ui_theme_encode(&paper, full, sizeof(full)) > 0);
+                startup_text = full;
             }
-            if (mode == 2) refuse_write = true;
-            int rc = os64_ui_theme_preserve_session();
-            if (mode == 2) assert(rc == OS64_UI_APPLY_IO && generation() == 0);
-            else {
-                assert(rc == 0 && generation() == 1);
-                unsigned before = writes;
-                assert(os64_ui_theme_preserve_session() == 0 && writes == before);
-                if (mode == 1) {
-                    os64_ui_theme_t got; os64_ui_theme_defaults(&got);
-                    uint64_t installed = 0;
-                    assert(os64_ui_theme_session(&got, &installed, 0));
-                    assert(got.panel_bg == theme.panel_bg);
-                }
+            os64_ui_theme_t visible[2];
+            os64_ui_theme_defaults(&visible[0]);
+            visible[1] = visible[0];
+            os64_ui_theme_palette(&visible[1], OS64_UI_PALETTE_MIDNIGHT);
+            for (int i = 0; i < 2; ++i) os64_ui_theme_read_startup(&visible[i]);
+            if (mode == RACING) {
+                racing_length = encode(racing, &paper, 0); race_write = true;
             }
+            if (mode == REFUSED) refuse_write = true;
+            if (mode == READ_FAIL) startup_error = OS64_CONF_IO_ERROR;
+            if (mode == ALLOC_FAIL) startup_error = OS64_CONF_NO_MEMORY;
+            if (mode == SAVE_FAIL) fail_startup_save = true;
+            if (mode == COLD_CACHE) {
+                // Publish as another process would, without warming this cache.
+                char bytes[OS64_APPEARANCE_MAX + 1];
+                size_t h = os64_appearance_header_write(bytes, 0);
+                int64_t n = os64_ui_theme_snapshot_startup(bytes + h, sizeof(bytes) - h);
+                assert(n > 0 && appearance_publish(bytes, h + (size_t)n) > 0);
+                assert(os64_ui_theme_encode(&target, full, sizeof(full)) > 0);
+                startup_text = full;
+            } else {
+                int64_t rc = os64_ui_theme_set_startup(&target);
+                bool failed = mode == REFUSED || mode == READ_FAIL ||
+                              mode == ALLOC_FAIL || mode == SAVE_FAIL;
+                assert(failed ? rc < 0 : rc == 0);
+            }
+            startup_error = 0;
+            if (mode == REFUSED || mode == READ_FAIL || mode == ALLOC_FAIL) {
+                assert(generation() == 0);
+                _exit(0);
+            }
+            assert(generation() == 1);
+            unsigned before = writes;
+            assert(os64_ui_theme_preserve_session() == 0 && writes == before);
+            for (int i = 0; i < 2; ++i) {
+                os64_ui_theme_t got = visible[i];
+                uint64_t installed = 0;
+                assert(os64_ui_theme_session(&got, &installed, 0));
+                os64_ui_theme_t expected = visible[i];
+                if (mode == RACING) os64_ui_theme_merge(&expected, &paper, 3);
+                assert(memcmp(&got, &expected, sizeof(got)) == 0);
+                // New contexts use their own defaults for absent pinned keys,
+                // with geometry still initialized from the disk configuration.
+                os64_ui_theme_defaults(&got);
+                if (i) os64_ui_theme_palette(&got, OS64_UI_PALETTE_MIDNIGHT);
+                installed = 0;
+                os64_ui_theme_current(&got, &installed);
+                if (mode != SAVE_FAIL) expected.pad = target.pad;
+                assert(installed == 1 && !memcmp(&got, &expected, sizeof(got)));
+            }
+            // Startup changes do not replace the pin; an explicit Apply does.
+            fail_startup_save = false;
+            assert(os64_ui_theme_set_startup(&paper) == 0 && generation() == 1);
+            assert(os64_ui_theme_apply(&target, 3, NULL) == 0 && generation() == 2);
+            os64_ui_t born;
+            os64_ui_init(&born, NULL);
+            assert(born.theme.panel_bg == target.panel_bg);
             _exit(0);
         }
         int status; assert(waitpid(pid, &status, 0) == pid);
         assert(status == 0);
     }
+}
+
+void appearance_session_contracts(void)
+{
+    startup_preservation_contracts();
     store_contracts();
     client_contracts();
     concurrency_and_queue_contracts();
-    puts("appearance: session store, cache, races, independent contexts, and queue pressure passed");
+    puts("appearance: startup preservation, session store, cache, races, independent contexts, and queue pressure passed");
 }

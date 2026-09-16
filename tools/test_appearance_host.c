@@ -37,6 +37,19 @@ static void theme_schema_contracts(void)
     assert(os64_ui_theme_parse(&decoded, partial, strlen(partial), false));
     assert(decoded.button_face == 0xff123456);
     assert(!os64_ui_theme_parse(&decoded, partial, strlen(partial), true));
+    assert(!os64_ui_theme_parse(&decoded, NULL, 32, true));
+    const char *overlay = "inherit = startup\nbutton.face = 123456\n";
+    decoded = base;
+    assert(os64_ui_theme_parse(&decoded, overlay, strlen(overlay), true));
+    assert(decoded.button_face == 0xff123456 && decoded.panel_bg == base.panel_bg);
+    const char *bad_overlay[] = {"inherit = startup\npad = 17\n",
+        "inherit = startup\nunknown = 1\n", "inherit = startup\nbutton.face = xyz\n",
+        "inherit = other\n", "inherit = startup\ninherit = startup\n"};
+    for (size_t i = 0; i < sizeof(bad_overlay) / sizeof(*bad_overlay); ++i) {
+        decoded = base;
+        assert(!os64_ui_theme_parse(&decoded, bad_overlay[i], strlen(bad_overlay[i]), true));
+        assert(!memcmp(&decoded, &base, sizeof(base)));
+    }
     const char nul[] = "button.face = 123456\n\0junk";
     assert(!os64_ui_theme_parse(&decoded, nul, sizeof(nul) - 1, false));
     fail_alloc = true;

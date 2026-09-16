@@ -186,9 +186,8 @@ int main(int argc, char **argv)
     os64_ui_init(&gUi, &gCtx);
     os64_ui_theme_defaults(&gUi.theme);
     os64_ui_theme_palette(&gUi.theme, OS64_UI_PALETTE_MIDNIGHT);
-    os64_ui_theme_read_startup(&gUi.theme);
     gUi.appearance_generation = 0;
-    os64_ui_theme_session(&gUi.theme, &gUi.appearance_generation, 0);
+    os64_ui_theme_current(&gUi.theme, &gUi.appearance_generation);
     gUi.on_resize = resized;
     os64_ui_panel(&gRoot);
     os64_ui_set_root(&gUi, &gRoot);

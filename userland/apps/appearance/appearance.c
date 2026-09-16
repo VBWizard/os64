@@ -482,9 +482,8 @@ static void setup(void)
     gPreview.follow_session = false;
     os64_ui_theme_defaults(&gEditor.theme);
     os64_ui_theme_palette(&gEditor.theme, OS64_UI_PALETTE_MIDNIGHT);
-    os64_ui_theme_read_startup(&gEditor.theme);
     gEditor.appearance_generation = 0;
-    os64_ui_theme_session(&gEditor.theme, &gEditor.appearance_generation, 0);
+    os64_ui_theme_current(&gEditor.theme, &gEditor.appearance_generation);
     // The editor follows startup and session appearance; the specimen is
     // independently editable and adopts a collection entry only on Load.
     os64_ui_theme_startup(&gStartupTheme);

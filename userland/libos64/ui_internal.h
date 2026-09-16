@@ -16,5 +16,10 @@ ui_key_t os64_ui_decode_key(uint8_t *seq, const os64_gui_event_t *ev, char *ch);
 int64_t os64_ui_theme_parse_status(os64_ui_theme_t *t, const char *text,
                                   size_t length, bool session);
 int os64_ui_theme_preserve_session(void);
+int64_t os64_ui_theme_snapshot_startup(char *text, size_t cap);
+int64_t os64_ui_theme_decode_session(os64_ui_theme_t *t, uint64_t *fields,
+                                     bool *inherited, const char *text, size_t length);
+void os64_ui_theme_merge_fields(os64_ui_theme_t *dst, const os64_ui_theme_t *src,
+                                uint64_t fields);
 int64_t os64_ui_theme_parse_saved_status(os64_ui_theme_t *t, const char *text, size_t length);
 #endif

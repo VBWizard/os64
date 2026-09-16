@@ -114,6 +114,10 @@ void os64_ui_theme_startup(os64_ui_theme_t *t);
 // Overlay a usable startup file onto an application's supplied defaults.
 // Missing or invalid files leave the supplied theme unchanged.
 bool os64_ui_theme_read_startup(os64_ui_theme_t *t);
+// Initialize an active context from supplied defaults, disk geometry, and the
+// session. A pinned startup overlay preserves absent keys as caller defaults.
+// Use this for app initialization; read_startup reads the next-boot selection.
+void os64_ui_theme_current(os64_ui_theme_t *t, uint64_t *installed);
 
 // Ordinary-thread APIs, not async-signal-safe. Theme and installed belong to
 // the calling context; the cache is synchronized across the process. hint=0
@@ -135,8 +139,9 @@ int os64_ui_theme_apply(const os64_ui_theme_t *draft, uint32_t components,
 #define OS64_UI_COMPONENT_PALETTE 1u
 #define OS64_UI_COMPONENT_TREATMENT 2u
 bool os64_ui_theme_valid(const os64_ui_theme_t *t);
-// Atomic decode. Session payloads require all colors and button.bevel, and
-// refuse geometry keys; startup files may specify a subset of the schema.
+// Atomic decode. Apply payloads require all colors and button.bevel. A payload
+// starting with "inherit = startup\n" preserves only explicitly present live
+// keys. Both session forms refuse geometry; startup files may be partial.
 bool os64_ui_theme_parse(os64_ui_theme_t *t, const char *text, size_t length,
                         bool session);
 bool os64_ui_theme_parse_saved(os64_ui_theme_t *t, const char *text, size_t length);
