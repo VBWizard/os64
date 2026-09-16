@@ -4,6 +4,9 @@
 #include "os64/os64.h"
 #include "os64/ui.h"
 
+// Keep the WM constraint and the layout fallback in the same content units.
+enum { WORKSHOP_MIN_WIDTH = 958, WORKSHOP_MIN_HEIGHT = 696 };
+
 static os64_draw_ctx_t gCtx;
 static os64_ui_t gEditor, gPreview;
 static os64_ui_t *gInput;
@@ -631,7 +634,7 @@ static void layout(void)
 {
     int width = (int)gCtx.surf.width, height = (int)gCtx.surf.height;
     place(&gRoot, 0, 0, width, height);
-    gCompact = width < 958 || height < 696;
+    gCompact = width < WORKSHOP_MIN_WIDTH || height < WORKSHOP_MIN_HEIGHT;
     for (os64_ui_widget_t *w = gRoot.first_child; w; w = w->next_sibling)
         w->hidden = gCompact;
     gSmall.hidden = !gCompact;
@@ -1003,6 +1006,12 @@ int main(int argc, char **argv)
     int64_t win = os64_gui_window_create("Appearance Workshop", 32, 24, 960, 728, 0);
     if (win <= 0) {
         os64_complain("appearance: cannot create window (%ld)\n", (long)win);
+        return 1;
+    }
+    int64_t rc = os64_gui_window_set_min_size(win, WORKSHOP_MIN_WIDTH, WORKSHOP_MIN_HEIGHT);
+    if (rc != 0) {
+        os64_complain("appearance: cannot set minimum window size (%ld)\n", (long)rc);
+        os64_gui_window_destroy(win);
         return 1;
     }
     if (os64_draw_ctx_init(&gCtx, win) != 0) {

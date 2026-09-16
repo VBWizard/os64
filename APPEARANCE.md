@@ -18,9 +18,12 @@ window decorations remain separate slices.
 
 PR #107 merged the theme foundation, including live Apply, saved themes,
 startup selection, and the two review fixes for startup preservation and resize
-focus. This branch, `codex/appearance-customizer`, builds on that merged base.
+focus. PR #108 merged per-window minimum content sizes and the cancelled-resize
+grab correction. This branch, `codex/appearance-customizer`, builds on both
+reviewed foundations and requests a 958x696 content minimum at window creation.
 Its review scope is userland palette editing, the native color picker, shared
-and individual color controls, rounded treatments, tabbed layout, and draft Undo.
+and individual color controls, rounded treatments, tabbed layout, draft Undo,
+and the Workshop's use of the minimum-size API.
 
 Font sizing, spacing editing, additional treatments, tooltips, and a reusable
 application menu bar are later slices. The preview menu is a noninteractive
@@ -241,9 +244,12 @@ The customizer targets a 1024x768 desktop, matching the reported P5 default.
 It must fit its editing controls, persistent actions, and a useful preview at
 that resolution with the native 8x16 text cells. Extra settings belong in
 component pages or expandable sections; reducing text size is not a layout
-strategy. Larger desktops may provide more preview space without shrinking
-the text. Font scaling is a separate renderer/layout design, not a reason to
-require a higher boot resolution for this tool.
+strategy. The Workshop requests a 958x696 minimum content area from the WM,
+so drag resizing stops before the editor and preview would be hidden. The same
+constants guard the defensive layout fallback. Larger desktops may provide
+more preview space without shrinking the text. Font scaling is a separate
+renderer/layout design, not a reason to require a higher boot resolution for
+this tool.
 
 On the P5, the user reported that requesting 1680x1050 produced a 2560x1440
 framebuffer in `/sys/gui`, while requesting 1920x1080 produced 1920x1080.
@@ -880,8 +886,8 @@ and the sample field; all 65 built-in guest tests passed.
 
 ## Foundation integration (2026-09-16)
 
-PR #107 merged as `9a28b47`. The customizer continues on
-`codex/appearance-customizer`, based on that merge, with a userland-only diff.
+PR #107 merged as `9a28b47`. The first integration checkpoint on
+`codex/appearance-customizer` used that merge with a userland-only diff.
 The startup-preservation and resize-focus corrections remain in place. Legacy
 complete session payloads install a zero radius, while missing radius in a
 preserved startup override retains the caller's treatment. The host harness
@@ -899,3 +905,21 @@ passed. Evidence and the pre-integration backup are under
 Next checkpoint: internal review of the customizer's userland diff, then its
 follow-up PR. Fonts, tooltips, application menus, and window decorations remain
 separate work. The foundation's external review does not cover this follow-up.
+
+## Minimum-size adoption (2026-09-16)
+
+PR #108 passed Codex review at `75a1103` and merged as `e5b3814`.
+The unpublished customizer checkpoint was rebased onto that merge. Its diff
+against `userland` remains userland-only. Workshop creation requests a 958x696
+minimum drawable area before acquiring its drawing context, and the layout
+fallback uses the same constants. A failed request closes the new window and
+reports the error instead of launching without its required constraint.
+
+The strict build and ASan/UBSan appearance host suite passed. QEMU at 1024x768
+verified shrink attempts from all four corners stop at the minimum, all three
+tabs and the live preview remain visible, and unfinished hex/name edits retain
+text and focus across maximize/restore. All 66 built-in tests passed.
+Screenshots, logs and the QMP script are under
+`/tmp/appearance-minimum-adoption-20260916`. This is QEMU evidence; no new P5
+installation was performed. Install the branch's kernel together with its
+userland, since the Workshop uses the minimum-size syscall from PR #108.
