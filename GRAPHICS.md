@@ -105,6 +105,7 @@ to — including coordinates outside its own window, which is exactly what an
 app tracking a drag past its edge needs to see. `s_pointer_window` in
 compositor.c; released when the last button comes up, and by
 `gui_grab_release()` if the window dies mid-gesture.
+Additional button presses during that grab also go to its owner.
 
 The WM's own gestures always had this (`s_drag_window`, `s_band_window`, and
 the comment above them says why). Clients did not, and hit-testing every
@@ -307,6 +308,28 @@ unacceptable for tasks (any task could present/destroy any window).
 
 ### Event delivery
 
+`OS64_GUI_EVENT_POINTER_STATE` reports the latest exposed-content pointer
+target with content-local coordinates and an `inside` flag. The compositor
+reconciles it each frame, including geometry/z-order changes under a stationary
+pointer and VT ownership changes. Client grabs suppress hover in other windows;
+window-manager gestures suppress client hover. Teardown clears the tracked
+window before it can be freed.
+
+The snapshot coalesces outside the per-window input ring and is delivered
+after queued input, so older motion cannot reinstate a stale hover highlight.
+Intermediate crossings can collapse; the final snapshot survives ring pressure.
+It participates in poll/wait readiness and waiter wakeups. Ordinary input retains
+drop-newest on overflow, while a focus change evicts the oldest ring entry.
+
+`OS64_GUI_EVENT_APPEARANCE` carries the published session generation in two
+32-bit words, preserving the event layout. It coalesces in its own slot and
+precedes ordinary input. `/sys/appearance` publication and its window broadcast
+hold `kGuiLock` together; delayed clients read the newest immutable snapshot.
+Window creation and publication serialize on the same lock, and clients check
+the store after creating their first window. The event wakes normal event
+waiters; libui owns payload interpretation and per-process caching. Chrome
+remains independent. See APPEARANCE.md for the publication contract.
+
 **THE RULE FOR DECIDING WHERE A NEW FACT GOES (ruled 2026-08-25, on the
 SIGWINCH question — Chris: "there will be many, so we should probably settle
 on a pattern"): A SIGNAL TELLS A PROCESS SOMETHING; AN EVENT TELLS A WINDOW
@@ -324,8 +347,9 @@ from the outside. The difference is WHEN, and on top of WHAT:
   That is why "which libos64 functions may be called from a handler" is a real
   open question (SIGNALS.md books it).
 
-So: keys, mouse, resize, close, and every future window fact — focus, theme
-change, publish-ack, a polite close-REQUEST — are EVENTS. Every windowing
+So: keys, mouse, resize, focus, appearance changes, and polite close requests
+are EVENTS. Further window facts such as publish acknowledgments follow the
+same pattern. Every windowing
 system converged here independently (X11's queue, the Mac's `GetNextEvent`,
 Win32's message pump, all mid-80s); nobody has ever delivered mouse-moves by
 signal. **os64 could not even if it wanted to**: the pending set is

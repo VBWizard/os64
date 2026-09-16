@@ -254,7 +254,7 @@ typedef struct os64_gui_surface
 // Keyboard focus arrived at (`focus.gained` = 1) or left (0) this window.
 // Focus is what a click, Alt+Tab, or a new window's birth moves — you get
 // this for every change that touches one of your windows, and you can
-// ignore it (libui does). Its first customer is a popup menu, which must
+// ignore it. libui cancels interaction on focus loss. A popup menu must
 // vanish when you click anywhere else, and a focus change is the only way
 // it can see "anywhere else". `focus.sibling` = 1 means the window on the
 // other end of the change belongs to YOUR task — a cascade's submenu taking
@@ -269,6 +269,13 @@ typedef struct os64_gui_surface
 // own loop (gterm) uses them to stop painting while it keeps working.
 #define OS64_GUI_EVENT_WINDOW_COVERED    9
 #define OS64_GUI_EVENT_WINDOW_UNCOVERED  10
+// Latest pointer presence and content-local position, coalesced separately
+// from the input ring and delivered after queued input. Intermediate boundary
+// crossings may collapse; the final snapshot survives a full input queue.
+// This updates hover only: it is not a drag motion or a button transition.
+#define OS64_GUI_EVENT_POINTER_STATE    11
+// Coalesced session generation, independent of input-ring capacity.
+#define OS64_GUI_EVENT_APPEARANCE       12
 
 // Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
 // key events and — since resize — by mouse events too.
@@ -318,9 +325,22 @@ typedef struct os64_gui_event
             uint8_t gained;     // 1 = focus arrived here, 0 = it left
             uint8_t sibling;    // 1 = the other window is one of your own
         } focus;
+        struct {
+            int32_t x, y;       // content-local; meaningful when inside = 1
+            uint8_t inside;     // pointer is over exposed content owned by this window
+        } pointer;
+        struct {
+            // Split words preserve the event union's four-byte ABI alignment.
+            uint32_t generation_lo, generation_hi;
+        } appearance;
     };
     uint64_t tick;              // kTicksSinceStart at enqueue
 } os64_gui_event_t;
+
+static inline uint64_t os64_gui_appearance_generation(const os64_gui_event_t *ev)
+{
+    return ((uint64_t)ev->appearance.generation_hi << 32) | ev->appearance.generation_lo;
+}
 
 // ── L0: the wrappers (thin by doctrine — all logic is kernel-side) ──────────
 

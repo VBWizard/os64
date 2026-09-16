@@ -890,6 +890,47 @@ static void band_track_locked(int32_t x, int32_t y)
 // system since has one, because every window system without one grew this
 // same bug.
 static window_t *s_pointer_window = NULL;
+static window_t *s_hover_window = NULL;
+static int32_t s_hover_x, s_hover_y;
+static int32_t s_hover_w, s_hover_h;
+
+// Reconcile against the final scene each frame, including geometry changes
+// with no mouse motion. Grabs suppress hover in other windows; WM gestures
+// and text VTs have no client hover target. kGuiLock protects this and teardown.
+static void pointer_state_locked(void)
+{
+	window_t *under = NULL;
+	int32_t x = 0, y = 0;
+	int32_t width = 0, height = 0;
+	if (gui_owns_glass() && !s_drag_window && !s_band_window) {
+		under = wm_topmost_at(s_cursor_x, s_cursor_y);
+		if (under && s_pointer_window && under != s_pointer_window) under = NULL;
+		if (under) {
+			rect_t content = wm_content_rect_on_screen(under);
+			if (!rect_contains_point(content, s_cursor_x, s_cursor_y)) under = NULL;
+			else {
+				x = s_cursor_x - content.x; y = s_cursor_y - content.y;
+				width = content.w; height = content.h;
+			}
+		}
+	}
+	if (under != s_hover_window && s_hover_window) {
+		input_event_t leave = { .type = INPUT_EVENT_POINTER_STATE,
+		    .pointer = { .inside = 0 }, .tick = kTicksSinceStart };
+		wm_deliver_event(s_hover_window, &leave);
+	}
+	if (under && (under != s_hover_window || x != s_hover_x || y != s_hover_y ||
+	              width != s_hover_w || height != s_hover_h)) {
+		input_event_t enter = { .type = INPUT_EVENT_POINTER_STATE,
+		    .pointer = { .x = x, .y = y, .inside = 1 }, .tick = kTicksSinceStart };
+		wm_deliver_event(under, &enter);
+	}
+	s_hover_window = under;
+	s_hover_x = x;
+	s_hover_y = y;
+	s_hover_w = width;
+	s_hover_h = height;
+}
 
 void gui_grab_release(const struct window *w)
 {
@@ -900,6 +941,8 @@ void gui_grab_release(const struct window *w)
 		s_drag_window = NULL;
 	if (s_pointer_window == (const window_t *)w)
 		s_pointer_window = NULL;   // a window that dies mid-drag lets go
+	if (s_hover_window == (const window_t *)w)
+		s_hover_window = NULL;
 	if (s_band_window == (const window_t *)w) {
 		band_damage_locked(s_band_rect);   // erase the orphaned outline
 		s_band_window = NULL;
@@ -949,6 +992,14 @@ static void chord_report(const window_t *w, uint32_t bit, bool before,
 
 static void route_event_locked(const input_event_t *ev)
 {
+	// Track the physical pointer on text VTs too, so returning to the GUI
+	// can reconcile hover without waiting for another movement.
+	if (ev->type == INPUT_EVENT_MOUSE_MOVE) {
+		rect_t moved = cursor_rect();
+		s_cursor_x = ev->mouse.x;
+		s_cursor_y = ev->mouse.y;
+		gui_damage_add_locked(rect_union(moved, cursor_rect()));
+	}
 	// THE INPUT FORK (2026-08-21). Mouse events belong to whoever holds the
 	// glass: the window system when VT8 is up, the focused TEXT TERMINAL
 	// otherwise — where they become gpm's old gesture, select-to-copy and
@@ -969,14 +1020,6 @@ static void route_event_locked(const input_event_t *ev)
 
 	switch (ev->type) {
 	case INPUT_EVENT_MOUSE_MOVE: {
-		// Damage where the cursor WAS and where it lands; the recomposite
-		// repaints the scene under the old position.
-		rect_t moved = cursor_rect();
-		s_cursor_x = ev->mouse.x;
-		s_cursor_y = ev->mouse.y;
-		moved = rect_union(moved, cursor_rect());
-		gui_damage_add_locked(moved);
-
 		// A gesture in progress OWNS the pointer: no hit-testing, no delivery
 		// to whatever the cursor happens to sweep across. Losing this is how
 		// a drag ends up half-delivered to three different windows.
@@ -997,6 +1040,11 @@ static void route_event_locked(const input_event_t *ev)
 	case INPUT_EVENT_MOUSE_BUTTON_DOWN: {
 		if (s_band_window || s_drag_window)
 			break;   // a second button during a gesture is not a new gesture
+		if (s_pointer_window) {
+			// Additional buttons belong to the existing client gesture.
+			deliver_mouse_to_window(s_pointer_window, *ev, false);
+			break;
+		}
 
 		window_t *w = wm_topmost_at(ev->mouse.x, ev->mouse.y);
 		if (!w)
@@ -1397,6 +1445,7 @@ bool guicomp_thread(bool daemon)
 		// own create or destroy arrives as damage anyway, and the walk costs
 		// less than one damage rect's composite.
 		wm_cover_sweep_locked();
+		pointer_state_locked();
 
 		// Take the whole damage list in one hold and reset it, so clients
 		// publishing during this frame's flush accumulate into the NEXT
