@@ -337,6 +337,7 @@ static void startup_preservation_contracts(void)
             os64_ui_theme_defaults(&visible[0]);
             visible[1] = visible[0];
             os64_ui_theme_palette(&visible[1], OS64_UI_PALETTE_MIDNIGHT);
+            visible[1].control_radius = 6;
             for (int i = 0; i < 2; ++i) os64_ui_theme_read_startup(&visible[i]);
             if (mode == RACING) {
                 racing_length = encode(racing, &paper, 0); race_write = true;
@@ -377,7 +378,10 @@ static void startup_preservation_contracts(void)
                 // New contexts use their own defaults for absent pinned keys,
                 // with geometry still initialized from the disk configuration.
                 os64_ui_theme_defaults(&got);
-                if (i) os64_ui_theme_palette(&got, OS64_UI_PALETTE_MIDNIGHT);
+                if (i) {
+                    os64_ui_theme_palette(&got, OS64_UI_PALETTE_MIDNIGHT);
+                    got.control_radius = 6;
+                }
                 installed = 0;
                 os64_ui_theme_current(&got, &installed);
                 if (mode != SAVE_FAIL) expected.pad = target.pad;
@@ -397,8 +401,37 @@ static void startup_preservation_contracts(void)
     }
 }
 
+static void legacy_session_radius_contract(void)
+{
+    pid_t pid = fork(); assert(pid >= 0);
+    if (!pid) {
+        os64_ui_theme_t theme;
+        os64_ui_theme_defaults(&theme);
+        os64_ui_theme_palette(&theme, OS64_UI_PALETTE_ELECTRIC);
+        theme.control_radius = 6;
+        char bytes[OS64_APPEARANCE_MAX + 1];
+        size_t n = encode(bytes, &theme, 0);
+        char *line = strstr(bytes, "control.radius = 6\n");
+        assert(line);
+        size_t length = strlen("control.radius = 6\n");
+        memmove(line, line + length, n - (size_t)(line - bytes) - length);
+        n -= length;
+        assert(appearance_publish(bytes, n) == (int)n);
+        uint64_t installed = 0;
+        assert(os64_ui_theme_session(&theme, &installed, 0));
+        assert(theme.control_radius == 0);
+        theme.control_radius = 6;
+        os64_ui_theme_current(&theme, &installed);
+        assert(theme.control_radius == 0);
+        _exit(0);
+    }
+    int status; assert(waitpid(pid, &status, 0) == pid);
+    assert(status == 0);
+}
+
 void appearance_session_contracts(void)
 {
+    legacy_session_radius_contract();
     startup_preservation_contracts();
     store_contracts();
     client_contracts();

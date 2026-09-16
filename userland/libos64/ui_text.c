@@ -185,7 +185,7 @@ static void scrollbar_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	os64_gui_rect_t thumb = sb->horizontal
 	    ? (os64_gui_rect_t){ tpos, w->bounds.y + 2, tlen, w->bounds.h - 4 }
 	    : (os64_gui_rect_t){ w->bounds.x + 2, tpos, w->bounds.w - 4, tlen };
-	os64_draw_fill_rect(&ctx->surf, thumb, t->scroll_thumb);
+	os64_draw_fill_round_rect(&ctx->surf, thumb, t->control_radius, t->scroll_thumb);
 }
 
 static void scrollbar_moved(os64_ui_scrollbar_t *sb, os64_ui_t *ui, int64_t pos)
@@ -284,11 +284,16 @@ void os64_ui_scrollbar_set(os64_ui_t *ui, os64_ui_scrollbar_t *sb,
 
 // ── ui_textfield ────────────────────────────────────────────────────────────
 
-#define FIELD_INSET 4   // px between border and glyphs
+static int32_t field_inset(const os64_ui_theme_t *t)
+{
+    int32_t radius = t->control_radius;
+    if (radius > 8) radius = 8;
+    return radius > 3 ? radius + 1 : 4;
+}
 
 static int32_t field_cols(const os64_ui_textfield_t *tf, const os64_ui_theme_t *t)
 {
-	int32_t c = (tf->w.bounds.w - 2 * FIELD_INSET) / t->font_w;
+	int32_t c = (tf->w.bounds.w - 2 * field_inset(t)) / t->font_w;
 	return c > 0 ? c : 1;
 }
 
@@ -306,24 +311,27 @@ static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
                         const os64_ui_theme_t *t)
 {
 	os64_ui_textfield_t *tf = (os64_ui_textfield_t *)w;
-	os64_draw_fill_rect(&ctx->surf, w->bounds, t->field_bg);
-	os64_draw_rect(&ctx->surf, w->bounds,
-	               w->focused ? t->field_border_focus : t->field_border);
+	os64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);
+	os64_draw_fill_round_rect(&ctx->surf, w->bounds, t->control_radius, t->field_bg);
+	uint32_t border = w->focused ? t->field_border_focus : t->field_border;
+	os64_draw_round_rect(&ctx->surf, w->bounds, t->control_radius, border, border);
 
 	int32_t cols = field_cols(tf, t);
 	size_t n = tf->len > tf->first ? tf->len - tf->first : 0;
 	if (n > (size_t)cols)
 		n = (size_t)cols;
 	int32_t ty = w->bounds.y + (w->bounds.h - t->font_h) / 2;
-	os64_draw_text(&ctx->surf, w->bounds.x + FIELD_INSET, ty,
+	os64_draw_text_clipped(&ctx->surf, w->bounds, w->bounds.x + field_inset(t), ty,
 	               tf->buf + tf->first, n, t->field_fg, t->field_bg);
 
 	if (w->focused && tf->cursor >= tf->first &&
 	    tf->cursor <= tf->first + (size_t)cols) {
-		int32_t cx = w->bounds.x + FIELD_INSET +
+		int32_t cx = w->bounds.x + field_inset(t) +
 		             (int32_t)(tf->cursor - tf->first) * t->font_w;
 		os64_gui_rect_t caret = { cx, ty, 2, t->font_h };
-		os64_draw_fill_rect(&ctx->surf, caret, t->text_caret);
+		os64_gui_rect_t clipped;
+		if (os64_rect_intersect(caret, w->bounds, &clipped))
+			os64_draw_fill_rect(&ctx->surf, clipped, t->text_caret);
 	}
 }
 
@@ -336,7 +344,7 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	switch (ev->type) {
 	case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN: {
 		os64_ui_set_focus(ui, w);
-		int32_t cell = (ev->mouse.x - w->bounds.x - FIELD_INSET) / t->font_w;
+		int32_t cell = (ev->mouse.x - w->bounds.x - field_inset(t)) / t->font_w;
 		size_t cur = tf->first + (size_t)(cell > 0 ? cell : 0);
 		tf->cursor = cur > tf->len ? tf->len : cur;
 		os64_ui_mark_dirty(ui, w);

@@ -9,16 +9,26 @@ collection, Save, and startup selection are implemented. **Apply to session**
 updates participating open applications. **Save** stores a named composition
 without activating it. **Use at startup** stores a separate startup snapshot.
 Reboot clears session overrides and applications load that startup snapshot.
-Palette and control treatment remain independently composable. Fonts, detailed
-property editing, and window decorations remain separate slices.
+Palette and control treatment remain independently composable. The customizer
+edits shared color roles and individual colors, with a native HSV picker and
+flat/raised, square/rounded treatments. Font sizing, spacing editing, and
+window decorations remain separate slices.
 
 ## Review scope and checkpoint
 
-PR #107 covers the theme foundation: Control Center, Workshop presets and
-composition, live Apply, saved themes, and startup selection. Palette editing
-and rounded controls belong to a follow-up PR. Window decorations belong in
-a separate PR and design discussion. Their scope is not limited to frame colors
-or a few border metrics; the desired visual treatments,
+PR #107 merged the theme foundation, including live Apply, saved themes,
+startup selection, and the two review fixes for startup preservation and resize
+focus. This branch, `codex/appearance-customizer`, builds on that merged base.
+Its review scope is userland palette editing, the native color picker, shared
+and individual color controls, rounded treatments, tabbed layout, and draft Undo.
+
+Font sizing, spacing editing, additional treatments, tooltips, and a reusable
+application menu bar are later slices. The preview menu is a noninteractive
+color specimen. Keep Follow palette's current UI; explain it with a tooltip
+when that toolkit feature is available, per Chris's preference.
+
+Window decorations belong in a separate PR and design discussion. Their scope
+is not limited to frame colors or a few border metrics; the desired treatments,
 controls, geometry, and behavior must inform that design.
 
 ## Save and collection contracts (2026-09-15)
@@ -46,8 +56,10 @@ controls, geometry, and behavior must inform that design.
   collision through the filesystem's no-replace operation, not a racy existence
   check. Malformed files stay visible but cannot replace the preview on Load.
 - A saved file is a complete, independently owned copy of the current schema:
-  colors, button relief, and validated geometry. It uses the shared config
-  grammar and schema-driven encoding; partial, oversized, malformed, or
+  colors, button relief, corner radius, and validated geometry. Legacy complete
+  snapshots without `control.radius` decode as square; other missing required
+  properties are refused. It uses the shared config
+  grammar and schema-driven encoding; incomplete, oversized, malformed, or
   range-invalid snapshots are refused. The sample text, caret, selection,
   and scrollbar state belong to the gallery, not to the theme file.
 - Save uses a task/sequence-specific sibling temporary, checked writes and
@@ -73,7 +85,7 @@ controls, geometry, and behavior must inform that design.
   unknown preserved keys/malformed lines that would make startup unreadable.
   Concurrent startup selections are last-publication-wins.
 - Before changing `theme.conf`, userland preserves the current session palette
-  and relief. If `/sys/appearance` is still generation zero, it publishes the
+  and control treatment. If `/sys/appearance` is still generation zero, it publishes the
   old startup override with expected generation zero, preserving absent keys
   as application defaults. A racing valid Apply wins;
   an invalid session or I/O failure refuses startup selection. Existing sessions
@@ -87,7 +99,8 @@ controls, geometry, and behavior must inform that design.
   startup configuration yields an empty override; transient read/allocation
   errors refuse preservation. Geometry keys are validated when reading the file
   but omitted from this payload. Ordinary Apply payloads still require the full
-  set of colors and button relief. The kernel treats either form as opaque data.
+  set of colors and button relief; a legacy Apply without radius implies square
+  controls. The kernel treats either form as opaque data.
 - Active-context initialization uses `os64_ui_theme_current` with application
   defaults. It reads disk configuration and then the session store; a preserved
   override restores the caller's default colors before merging its present keys.
@@ -100,6 +113,52 @@ controls, geometry, and behavior must inform that design.
   startup override exists, and honor a configured startup theme before applying
   the live session. Application-specific drawings and window chrome remain
   outside this widget contract.
+
+## Palette customizer and rounded treatments (2026-09-15)
+
+- Chris approved the palette editor and first rounded treatments together,
+  targeting the P5's 1024x768 desktop. The native window is 960x728 with fixed
+  8x16 text. Themes, Palette, and Controls are left-hand pages selected by
+  tabs; the right-hand preview stays visible. This gives the inspector and
+  preview usable widths without shrinking the generated mockup or its text.
+  Name, Save, Apply to session, Undo, and status remain outside the pages.
+- Palette starts with the three existing presets, then offers nine shared
+  roles with swatches: Surface, Text & focus, Field & paper, Accent, Accent
+  text, Borders & muted, Hover & light, Pressed face, and Shadow. The native
+  picker has a saturation/value square and hue strip. Arrow keys adjust
+  saturation/value, Shift+Left/Right hue. Six-digit hex input commits on Set
+  or Enter; invalid text leaves the draft unchanged.
+- Individual control colors exposes the color schema through the same
+  swatch list and picker. A role's leading property supplies its color;
+  members equal to that color follow role edits, and differing members are
+  inferred overrides. Follow palette reattaches a member. It is disabled
+  for a leading property, which defines a role rather than following one.
+  Snapshots remain flattened independent colors, so this inference survives
+  reload without new role metadata. Equal colors cannot encode an intentional
+  override distinct from inheritance; explicit inheritance metadata is a
+  separate format decision. Choosing a preset replaces the whole palette.
+- Controls offers Flat/Raised relief and Square/Gently rounded corners.
+  Rounded sets `control.radius = 6`; the shared schema accepts 0..8 pixels.
+  Buttons, checkbox indicators, slider thumbs, text fields, and scrollbar
+  thumbs use the radius. Lists, text views, menus, panels, and window chrome
+  retain their rectangular geometry. Pointer targets stay rectangular.
+  Radius is paint-only; field text inset follows it while widget bounds stay
+  fixed. Built-in presets retain square corners and their original colors.
+- Session and saved decoders accept the old complete schema with absent
+  `control.radius` as zero, even when decoding into a rounded draft. Encoders
+  write the property. Session merges carry radius with control treatment,
+  not with palette or layout metrics. An older libui may reject a new payload
+  containing this key; install rebuilt participating applications together.
+- Undo stores up to 32 palette/treatment edit snapshots; one picker drag is
+  one edit. It changes the preview, not files or the active session. Loading
+  a theme starts new history. Reset component restores the selected palette
+  or treatment from the loaded/saved baseline and can itself be undone.
+  Composition-name typing remains the text field's own editing operation.
+- The preview includes menu colors/separator/selection and held normal,
+  hovered, pressed, focused, and disabled button examples. The normal button,
+  field, checkbox, slider, text selection, and scrollbar remain interactive.
+  Editor colors stay independent of the draft until Apply. The specimen is
+  not a window-decoration proposal.
 
 ## Agreed direction
 
@@ -176,7 +235,31 @@ settings; those examples do not commit their implementation in this work.
 
 ## Proposed Workshop interaction
 
-The window has three areas:
+### Readability and minimum desktop size
+
+The customizer targets a 1024x768 desktop, matching the reported P5 default.
+It must fit its editing controls, persistent actions, and a useful preview at
+that resolution with the native 8x16 text cells. Extra settings belong in
+component pages or expandable sections; reducing text size is not a layout
+strategy. Larger desktops may provide more preview space without shrinking
+the text. Font scaling is a separate renderer/layout design, not a reason to
+require a higher boot resolution for this tool.
+
+On the P5, the user reported that requesting 1680x1050 produced a 2560x1440
+framebuffer in `/sys/gui`, while requesting 1920x1080 produced 1920x1080.
+This is consistent with [Limine v8's documented resolution fallback](https://github.com/limine-bootloader/limine/blob/v8.x/CONFIG.md):
+an unavailable mode is replaced automatically. These are user-reported
+hardware observations, not QEMU results. A later readability slice should
+provide font sizes with matching control dimensions and layout measurements;
+font sizing is outside the current customizer slice.
+
+The three-column concept is a layout direction, not an instruction to scale
+down its generated image. The native layout must reserve room for window
+chrome and use real text/control measurements. Gentle corner rounding is an
+approved control-treatment direction; decoration design remains separate.
+
+The conceptual design has three areas (the native layout shares the left
+space between collection and inspector pages):
 
 1. A theme collection with named presets and saved personal variations.
 2. A working preview with actual toolkit controls and editable sample text.
@@ -192,8 +275,7 @@ those capabilities.
 
 Keep the editor controls usable while experimenting with an unreadable
 preview. The preview owns a draft theme separately from the editor's active
-theme. Changes to the draft repaint the preview immediately. Include reset
-and undo facilities; decide the exact undo scope before implementation.
+theme. Changes to the draft repaint the preview immediately. Reset and Undo follow the bounded draft-history contract above.
 
 Primary command meanings:
 
@@ -202,9 +284,10 @@ Primary command meanings:
 - **Apply** validates and publishes the draft as the active appearance,
   then requests participating applications to reload it.
 
-Undo, resetting an individual property, and loading the active appearance
-are editing operations whose placement remains to be designed. Keep their
-meaning distinct from changing the active desktop.
+Undo and component reset use the persistent footer and the history contract
+above. Follow palette restores a dependent color to its shared role. Loading
+the active session into the draft remains a future editing operation; keep
+that meaning distinct from applying the draft to the active desktop.
 
 Proposed state model: distinguish the draft being edited, the named theme
 last saved, and the active appearance with its session overrides. Apply
@@ -425,8 +508,8 @@ or automatically overwrites the racing publisher. A complete composition can
 repair invalid session bytes; a component-only update refuses them because it
 cannot preserve fields it could not decode.
 
-The first Apply changes colors and button relief, so it requires repainting
-without geometry changes. Spacing/font changes remain outside this publisher.
+Apply changes colors, button relief, and corner radius through repainting
+without moving or resizing widgets. Spacing/font changes remain outside this publisher.
 Toolkit clients reload in dispatch; custom theme consumers such as grootmenu
 need explicit integration. Workshop keeps draft and active themes separate,
 and applying must preserve editor text, selection, scroll position, and
@@ -766,3 +849,53 @@ and a layout callback hiding the focused control. The ASan/UBSan appearance
 suite, strict build, diff check, and stale-reference scan passed. QEMU verified
 continued typing through maximize/restore in Scribe, the composition-name field,
 and the sample field; all 65 built-in guest tests passed.
+
+## Customizer validation (2026-09-15)
+
+- `make -j8` passed the strict build. The Workshop ELF contains no COPY
+  relocations: held-state specimens obtain the button painter through the
+  public initializer. Direct access to the shared class data had introduced
+  an unsupported COPY relocation and a guest startup fault; the userland
+  correction was verified in subsequent guest boots.
+- Both appearance host suites passed with ASan/UBSan and
+  `ASAN_OPTIONS=detect_leaks=0`. Added coverage includes legacy radius omission,
+  radius bounds and component merging, role membership and override retention,
+  rounded primitive/control bounds, picker RGB endpoints, keyboard interaction,
+  cancelled/disabled gestures, actual Workshop page containment at 958x706 and
+  958x696 content sizes, hex validation, component reset and draft Undo.
+- The final isolated eight-CPU QEMU boot at 1024x768 reported 30 pre-boot,
+  32 post-boot, and 3 late tests passed with zero failures. Native interaction
+  covered the palette/treatment pages, swatches and HSV/hex editing, Undo,
+  unsaved-load confirmation, and an old saved theme loading as square.
+  An individual selection-fill override survived a shared accent edit;
+  Follow palette reattached it and Undo restored the custom color.
+- A custom `Electric Rounded` composition saved, applied to an already-open
+  Scribe, and persisted as the startup choice. After reboot `/sys/appearance`
+  reported generation zero, a new Scribe showed the saved rounded treatment
+  and colors, and the Workshop reloaded the personal composition successfully.
+- `git diff --check` and `tools/stale_refs.sh` passed without findings. Guest
+  screenshots and logs are under `/tmp/appearance-customizer-20260915` on this
+  workstation. This is QEMU evidence; no new P5 installation was performed.
+
+
+## Foundation integration (2026-09-16)
+
+PR #107 merged as `9a28b47`. The customizer continues on
+`codex/appearance-customizer`, based on that merge, with a userland-only diff.
+The startup-preservation and resize-focus corrections remain in place. Legacy
+complete session payloads install a zero radius, while missing radius in a
+preserved startup override retains the caller's treatment. The host harness
+uses the real startup-selection path with the shared config-writer fixture.
+
+Integration regressions cover independently rounded app defaults, actual cache
+adoption of legacy square sessions, and the Workshop's name/hex fields through
+resize. Relayout updates scroll geometry without replacing unsubmitted hex
+input. Both sanitizer host suites, strict build, whitespace and stale-reference
+checks passed. QEMU verified the existing saved rounded composition, session
+Apply to Scribe, and resize focus on the integrated branch; all 65 built-in tests
+passed. Evidence and the pre-integration backup are under
+`/tmp/appearance-customizer-integration-20260916`.
+
+Next checkpoint: internal review of the customizer's userland diff, then its
+follow-up PR. Fonts, tooltips, application menus, and window decorations remain
+separate work. The foundation's external review does not cover this follow-up.

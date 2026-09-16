@@ -104,6 +104,7 @@ typedef struct os64_ui_theme
     // face exists it arrives through the table like everything else).
     int32_t  font_w;
     int32_t  font_h;
+    int32_t  control_radius; // paint-only corner radius, 0 = square
 } os64_ui_theme_t;
 
 // Defaults, startup theme.conf through the config ladder, then the session.
@@ -122,7 +123,7 @@ void os64_ui_theme_current(os64_ui_theme_t *t, uint64_t *installed);
 // Ordinary-thread APIs, not async-signal-safe. Theme and installed belong to
 // the calling context; the cache is synchronized across the process. hint=0
 // checks the store even without an event (initialization); other hints come
-// from APPEARANCE events. Colors and relief merge without geometry changes.
+// from APPEARANCE events. Colors, relief and corners merge without relayout.
 // Returns true when this context adopted a newer usable generation.
 bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t hint);
 
@@ -141,7 +142,9 @@ int os64_ui_theme_apply(const os64_ui_theme_t *draft, uint32_t components,
 bool os64_ui_theme_valid(const os64_ui_theme_t *t);
 // Atomic decode. Apply payloads require all colors and button.bevel. A payload
 // starting with "inherit = startup\n" preserves only explicitly present live
-// keys. Both session forms refuse geometry; startup files may be partial.
+// keys. Both session forms refuse layout metrics; startup files may be partial.
+// Legacy saved/Apply snapshots without control.radius mean square controls;
+// a preservation overlay leaves absent treatment keys at caller defaults.
 bool os64_ui_theme_parse(os64_ui_theme_t *t, const char *text, size_t length,
                         bool session);
 bool os64_ui_theme_parse_saved(os64_ui_theme_t *t, const char *text, size_t length);
@@ -180,6 +183,21 @@ typedef enum {
 // Replace colors while preserving metrics and button treatment. These are
 // building blocks for preview compositions, not a desktop-wide activation.
 void os64_ui_theme_palette(os64_ui_theme_t *t, os64_ui_palette_t palette);
+
+// The color inspector uses the serialization schema rather than a second
+// list of fields. Invalid indices read as opaque black; writes are refused.
+size_t os64_ui_theme_color_count(void);
+const char *os64_ui_theme_color_name(size_t index); // stable file key
+const char *os64_ui_theme_color_label(size_t index); // inspector caption
+uint32_t os64_ui_theme_color_get(const os64_ui_theme_t *t, size_t index);
+bool os64_ui_theme_color_set(os64_ui_theme_t *t, size_t index, uint32_t color);
+#define OS64_UI_PALETTE_ROLE_COUNT 9
+const char *os64_ui_palette_role_name(size_t role);
+uint32_t os64_ui_palette_role_get(const os64_ui_theme_t *t, size_t role);
+// Update role members that still equal the previous role color. Distinct
+// individual colors remain overrides. Snapshots store the resolved colors.
+void os64_ui_palette_role_set(os64_ui_theme_t *t, size_t role, uint32_t color);
+bool os64_ui_palette_color_follow(os64_ui_theme_t *t, size_t index);
 
 // ── Widgets ─────────────────────────────────────────────────────────────────
 
@@ -365,6 +383,21 @@ void os64_ui_slider_set(os64_ui_t *ui, os64_ui_slider_t *sl, int32_t value);
 extern const os64_ui_class_t os64_ui_checkbox_class;
 extern const os64_ui_class_t os64_ui_slider_class;
 
+// HSV color picker: saturation/value square and hue strip. Arrow keys move
+// saturation/value; Shift+Left/Right changes hue. Programmatic set is silent.
+typedef struct os64_ui_colorpicker {
+    os64_ui_widget_t w;
+    uint32_t color;
+    int hue, saturation, value, drag_part;
+    uint8_t seq;
+    void (*on_change)(struct os64_ui_colorpicker *, void *);
+    void *color_user;
+} os64_ui_colorpicker_t;
+void os64_ui_colorpicker(os64_ui_colorpicker_t *picker, uint32_t color,
+    void (*on_change)(os64_ui_colorpicker_t *, void *), void *user);
+void os64_ui_colorpicker_set(os64_ui_t *ui, os64_ui_colorpicker_t *picker, uint32_t color);
+uint32_t os64_ui_color_from_hsv(int hue, int saturation, int value);
+
 // ── Stateful widgets (scribe's demands, 2026-08-20) ─────────────────────────
 // THE CONTAINER PATTERN: a widget kind that needs state beyond the base
 // struct EMBEDS os64_ui_widget_t as its FIRST member and hands libui the
@@ -411,6 +444,8 @@ struct os64_ui_listbox {
     const char *(*label)(size_t index, void *user);
     void (*on_change)(os64_ui_listbox_t *, void *user);
     void *list_user;
+    // Optional color chip before each label; shares the row's hit target.
+    uint32_t (*swatch)(size_t index, void *user);
 };
 void os64_ui_listbox(os64_ui_listbox_t *list, size_t count,
                      const char *(*label)(size_t, void *),

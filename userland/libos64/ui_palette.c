@@ -1,6 +1,7 @@
 // Palette building blocks. Geometry and paint treatment belong to separate
 // choices, so selecting colors preserves them.
 #include "os64/ui.h"
+#include "os64/str.h"
 
 void os64_ui_theme_palette(os64_ui_theme_t *t, os64_ui_palette_t palette)
 {
@@ -54,4 +55,63 @@ void os64_ui_theme_palette(os64_ui_theme_t *t, os64_ui_palette_t palette)
     t->menu_hi_bg = accent;
     t->menu_hi_fg = accent_ink;
     t->menu_sep = border;
+}
+
+typedef struct {
+    const char *name;
+    const char *members[6];
+} palette_role_t;
+
+// The first property supplies the role color. Other members follow while
+// equal to it; a different value is an override, including after a reload.
+static const palette_role_t kRoles[OS64_UI_PALETTE_ROLE_COUNT] = {
+    {"Surface", {"panel.bg", "disabled.bg", "menu.bg"}},
+    {"Text & focus", {"label.fg", "text.fg", "field.fg", "menu.fg", "focus.ring"}},
+    {"Field & paper", {"field.bg", "text.bg", "scroll.track"}},
+    {"Accent", {"button.face", "text.sel.bg", "text.caret", "field.border.focus", "menu.hi.bg"}},
+    {"Accent text", {"button.fg", "text.sel.fg", "menu.hi.fg"}},
+    {"Borders & muted", {"panel.border", "field.border", "scroll.thumb", "menu.sep", "disabled.fg"}},
+    {"Hover & light", {"button.highlight", "button.face.hover", "hover.border"}},
+    {"Pressed face", {"button.face.pressed"}},
+    {"Shadow", {"button.shadow", "button.border"}},
+};
+
+static size_t color_index(const char *name)
+{
+    size_t count = os64_ui_theme_color_count();
+    for (size_t i = 0; i < count; ++i)
+        if (os64_streq(name, os64_ui_theme_color_name(i))) return i;
+    return count;
+}
+
+const char *os64_ui_palette_role_name(size_t role)
+{
+    return role < OS64_UI_PALETTE_ROLE_COUNT ? kRoles[role].name : "";
+}
+
+uint32_t os64_ui_palette_role_get(const os64_ui_theme_t *t, size_t role)
+{
+    return role < OS64_UI_PALETTE_ROLE_COUNT ?
+        os64_ui_theme_color_get(t, color_index(kRoles[role].members[0])) : 0xff000000u;
+}
+
+void os64_ui_palette_role_set(os64_ui_theme_t *t, size_t role, uint32_t color)
+{
+    if (role >= OS64_UI_PALETTE_ROLE_COUNT || (color >> 24) != 255) return;
+    uint32_t previous = os64_ui_palette_role_get(t, role);
+    for (size_t i = 0; i < 6 && kRoles[role].members[i]; ++i) {
+        size_t index = color_index(kRoles[role].members[i]);
+        if (i == 0 || os64_ui_theme_color_get(t, index) == previous)
+            os64_ui_theme_color_set(t, index, color);
+    }
+}
+
+bool os64_ui_palette_color_follow(os64_ui_theme_t *t, size_t index)
+{
+    const char *name = os64_ui_theme_color_name(index);
+    for (size_t r = 0; r < OS64_UI_PALETTE_ROLE_COUNT; ++r)
+        for (size_t i = 1; i < 6 && kRoles[r].members[i]; ++i)
+            if (os64_streq(name, kRoles[r].members[i]))
+                return os64_ui_theme_color_set(t, index, os64_ui_palette_role_get(t, r));
+    return false;
 }

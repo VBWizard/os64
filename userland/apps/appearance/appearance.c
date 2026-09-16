@@ -9,8 +9,24 @@ static os64_ui_t gEditor, gPreview;
 static os64_ui_t *gInput;
 static os64_ui_widget_t gRoot, gHeading, gIntro, gPaletteLabel, gStyleLabel;
 static os64_ui_widget_t gStyles[2], gFooter, gSmall, gApply;
+static os64_ui_widget_t gPages[3], gTabs[3], gCorners[2], gCornerLabel, gTreatmentHint;
+static os64_ui_widget_t gUndo, gResetComponent, gColorTitle, gHexLabel, gSetHex, gFollow;
+static os64_ui_widget_t gColorHint, gStates[4], gMenuSample;
+static os64_ui_listbox_t gColors;
+static os64_ui_scrollbar_t gColorScroll;
+static os64_ui_checkbox_t gIndividual;
+static os64_ui_textfield_t gHexField;
+static os64_ui_colorpicker_t gPicker;
+static char gHex[8], gSelectedColor[64];
+static unsigned gPage = 1;
+static os64_ui_theme_t gUndoThemes[32];
+static size_t gUndoCount;
+static bool gPickerEditing;
+static void sync_color(void);
+static void remember_edit(void);
+static void refresh_composition(void);
 static os64_ui_widget_t gCanvas, gPreviewTitle, gFieldLabel, gAction, gReset;
-static os64_ui_widget_t gCount, gTextLabel, gSelectionHint;
+static os64_ui_widget_t gCount, gTextLabel;
 static os64_ui_widget_t gLevelLabel, gCollectionLabel, gNameLabel, gStartupLabel;
 static os64_ui_widget_t gLoad, gRefresh, gSave, gStartup;
 static os64_ui_listbox_t gThemes, gPalettes;
@@ -104,15 +120,17 @@ static void describe_palette(void)
         if (same_theme(&named, &gPreview.theme)) { gPalette = i; break; }
     }
     os64_ui_listbox_set(&gEditor, &gPalettes, 3, gPalette < 3 ? (int)gPalette : -1);
+    sync_color();
 }
 
 static void refresh_composition(void)
 {
-    os64_snprintf(gComposition, sizeof(gComposition), "%s / %s | %s | %s",
-                  kNames[gPalette], gStyle ? "raised" : "flat",
-                  draft_dirty() ? "Unsaved" : "Unchanged", gApplyStatus);
+    os64_snprintf(gComposition, sizeof(gComposition), "%s | %s", draft_dirty() ? "Unsaved changes" : "Saved / unchanged", gApplyStatus);
     gStyles[0].text = gStyle ? "Flat" : "Flat *";
     gStyles[1].text = gStyle ? "Raised *" : "Raised";
+    gCorners[0].text = gPreview.theme.control_radius ? "Square" : "Square *";
+    gCorners[1].text = gPreview.theme.control_radius ? "Gently rounded *" : "Gently rounded";
+    os64_ui_set_enabled(&gEditor, &gUndo, gUndoCount != 0);
     gStartupLabel.text = same_theme(&gPreview.theme, &gStartupTheme) ?
         "Startup: this composition" : "Startup: another appearance";
     os64_ui_mark_dirty(&gEditor, &gRoot);
@@ -124,8 +142,10 @@ static void palette_click(os64_ui_listbox_t *list, void *user)
     (void)user;
     gApplyStatus = "Preview changed";
     gChanged |= OS64_UI_COMPONENT_PALETTE;
+    remember_edit();
     gPalette = (unsigned)list->selected;
     os64_ui_theme_palette(&gPreview.theme, (os64_ui_palette_t)gPalette);
+    sync_color();
     refresh_composition();
 }
 
@@ -134,10 +154,219 @@ static void style_click(os64_ui_widget_t *w, void *user)
     (void)w;
     gApplyStatus = "Preview changed";
     gChanged |= OS64_UI_COMPONENT_TREATMENT;
+    remember_edit();
     gStyle = (unsigned)(uintptr_t)user;
     gPreview.theme.button_bevel = gStyle ? 3 : 0;
     refresh_composition();
 }
+
+
+static void remember_edit(void)
+{
+    if (gUndoCount == 32) {
+        for (size_t i = 1; i < 32; ++i) gUndoThemes[i - 1] = gUndoThemes[i];
+        --gUndoCount;
+    }
+    gUndoThemes[gUndoCount++] = gPreview.theme;
+}
+
+static uint32_t selected_color(void)
+{
+    size_t i = gColors.selected >= 0 ? (size_t)gColors.selected : 0;
+    return gIndividual.checked ? os64_ui_theme_color_get(&gPreview.theme, i) :
+        os64_ui_palette_role_get(&gPreview.theme, i);
+}
+
+static void sync_hex(void)
+{
+    char value[8];
+    os64_snprintf(value, sizeof(value), "%06X", selected_color() & 0xffffffu);
+    os64_ui_textfield_set(&gEditor, &gHexField, value);
+}
+
+static void sync_color(void)
+{
+    size_t i = gColors.selected >= 0 ? (size_t)gColors.selected : 0;
+    os64_snprintf(gSelectedColor, sizeof(gSelectedColor), "%s",
+        gIndividual.checked ? os64_ui_theme_color_label(i) : os64_ui_palette_role_name(i));
+    os64_ui_colorpicker_set(&gEditor, &gPicker, selected_color());
+    sync_hex();
+    os64_ui_theme_t probe = gPreview.theme;
+    os64_ui_set_enabled(&gEditor, &gFollow, gIndividual.checked &&
+        os64_ui_palette_color_follow(&probe, i));
+    os64_ui_mark_dirty(&gEditor, &gRoot);
+}
+
+static void edit_color(uint32_t color)
+{
+    size_t i = gColors.selected >= 0 ? (size_t)gColors.selected : 0;
+    if (gIndividual.checked) os64_ui_theme_color_set(&gPreview.theme, i, color);
+    else os64_ui_palette_role_set(&gPreview.theme, i, color);
+    gChanged |= OS64_UI_COMPONENT_PALETTE;
+    gPalette = 3;
+    os64_ui_listbox_set(&gEditor, &gPalettes, 3, -1);
+    gApplyStatus = "Color changed in preview";
+    sync_hex();
+    refresh_composition();
+}
+
+static void picker_changed(os64_ui_colorpicker_t *picker, void *user)
+{
+    (void)user;
+    if (!gPickerEditing) remember_edit();
+    gPickerEditing = picker->w.pressed;
+    edit_color(picker->color);
+}
+
+static void hex_submit(os64_ui_textfield_t *field, void *user)
+{
+    (void)user;
+    uint32_t color = 0;
+    if (field->len != 6) goto invalid;
+    for (size_t i = 0; i < 6; ++i) {
+        char c = field->buf[i];
+        unsigned digit;
+        if (c >= '0' && c <= '9') digit = (unsigned)(c - '0');
+        else if (c >= 'a' && c <= 'f') digit = (unsigned)(c - 'a') + 10;
+        else if (c >= 'A' && c <= 'F') digit = (unsigned)(c - 'A') + 10;
+        else goto invalid;
+        color = (color << 4) | digit;
+    }
+    color |= 0xff000000u;
+    if (color != selected_color()) { remember_edit(); edit_color(color); }
+    sync_color();
+    return;
+invalid:
+    gApplyStatus = "Enter six hex digits, such as 437DE0";
+    refresh_composition();
+}
+
+static void hex_click(os64_ui_widget_t *w, void *user)
+{ (void)w; hex_submit(&gHexField, user); }
+
+static const char *color_label(size_t index, void *user)
+{
+    (void)user;
+    return gIndividual.checked ? os64_ui_theme_color_label(index) : os64_ui_palette_role_name(index);
+}
+
+static uint32_t color_swatch(size_t index, void *user)
+{
+    (void)user;
+    return gIndividual.checked ? os64_ui_theme_color_get(&gPreview.theme, index) :
+        os64_ui_palette_role_get(&gPreview.theme, index);
+}
+
+static void color_selection(os64_ui_listbox_t *list, void *user)
+{
+    (void)user;
+    os64_ui_scrollbar_set(&gEditor, &gColorScroll, (int64_t)list->count,
+        os64_ui_listbox_rows(list, &gEditor.theme), (int64_t)list->top);
+    sync_color();
+}
+
+static void colors_scrolled(os64_ui_scrollbar_t *scroll, void *user)
+{
+    (void)user;
+    os64_ui_listbox_scroll_to(&gEditor, &gColors, (size_t)scroll->pos);
+}
+
+static void individual_changed(os64_ui_checkbox_t *cb, void *user)
+{
+    (void)user;
+    os64_ui_listbox_set(&gEditor, &gColors, cb->checked ?
+        os64_ui_theme_color_count() : OS64_UI_PALETTE_ROLE_COUNT, 0);
+    gColorHint.text = cb->checked ? "Fine-tune a control color." : "Shared roles keep colors together.";
+    color_selection(&gColors, NULL);
+}
+
+static void follow_click(os64_ui_widget_t *w, void *user)
+{
+    (void)w; (void)user;
+    os64_ui_theme_t next = gPreview.theme;
+    if (gColors.selected < 0 || !os64_ui_palette_color_follow(&next, (size_t)gColors.selected) ||
+        same_theme(&next, &gPreview.theme)) return;
+    remember_edit();
+    gPreview.theme = next;
+    gChanged |= OS64_UI_COMPONENT_PALETTE;
+    describe_palette();
+    gApplyStatus = "Color follows its shared role";
+    refresh_composition();
+}
+
+static void undo_click(os64_ui_widget_t *w, void *user)
+{
+    (void)w; (void)user;
+    if (!gUndoCount) return;
+    gPreview.theme = gUndoThemes[--gUndoCount];
+    gChanged = OS64_UI_COMPONENT_PALETTE | OS64_UI_COMPONENT_TREATMENT;
+    describe_palette();
+    gApplyStatus = "Edit undone in preview";
+    refresh_composition();
+}
+
+static void reset_component_click(os64_ui_widget_t *w, void *user)
+{
+    (void)w; (void)user;
+    remember_edit();
+    uint32_t component = gPage == 2 ? OS64_UI_COMPONENT_TREATMENT : OS64_UI_COMPONENT_PALETTE;
+    os64_ui_theme_merge(&gPreview.theme, &gBaseline, component);
+    gChanged |= component;
+    describe_palette();
+    gApplyStatus = "Component reset to loaded / saved values";
+    refresh_composition();
+}
+
+static void corner_click(os64_ui_widget_t *w, void *user)
+{
+    (void)w;
+    remember_edit();
+    gPreview.theme.control_radius = user ? 6 : 0;
+    gChanged |= OS64_UI_COMPONENT_TREATMENT;
+    gApplyStatus = "Corners changed in preview";
+    refresh_composition();
+}
+
+static void tab_click(os64_ui_widget_t *w, void *user)
+{
+    (void)w;
+    os64_ui_cancel_interaction(&gEditor);
+    gPickerEditing = false;
+    gPage = (unsigned)(uintptr_t)user;
+    layout();
+    os64_ui_set_focus(&gEditor, &gTabs[gPage]);
+}
+
+// These specimens hold visual states so palette changes can be compared
+// together. The normal button, field, checkbox, slider and text view interact.
+static void state_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
+{
+    // Initialize through libui so the non-PIE application does not import a
+    // shared-library data symbol via an unsupported ELF COPY relocation.
+    os64_ui_widget_t copy;
+    os64_ui_button(&copy, w->text, NULL, NULL);
+    copy.bounds = w->bounds;
+    copy.hovered = (uintptr_t)w->user == 0;
+    copy.pressed = (uintptr_t)w->user == 1;
+    copy.focused = (uintptr_t)w->user == 2;
+    copy.cls->paint(&copy, ctx, t);
+}
+static const os64_ui_class_t kStateClass = {"state sample", state_paint, NULL, NULL};
+
+static void menu_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
+{
+    os64_gui_rect_t r = w->bounds;
+    os64_draw_fill_rect(&ctx->surf, r, t->menu_bg);
+    os64_draw_rect(&ctx->surf, r, t->menu_sep);
+    os64_draw_text_clipped(&ctx->surf, r, r.x + 10, r.y + 7,
+        "File   Edit   View", 18, t->menu_fg, t->menu_bg);
+    os64_draw_hline(&ctx->surf, r.x + 6, r.y + 28, r.w - 12, t->menu_sep);
+    os64_gui_rect_t selected = {r.x + 6, r.y + 33, r.w - 12, 24};
+    os64_draw_fill_rect(&ctx->surf, selected, t->menu_hi_bg);
+    os64_draw_text_clipped(&ctx->surf, selected, r.x + 10, r.y + 37,
+        "Selected menu item", 18, t->menu_hi_fg, t->menu_hi_bg);
+}
+static const os64_ui_class_t kMenuClass = {"menu sample", menu_paint, NULL, NULL};
 
 static void apply_click(os64_ui_widget_t *w, void *user)
 {
@@ -251,6 +480,7 @@ static void load_selected(void)
         }
     }
     gPreview.theme = theme;
+    gUndoCount = 0;
     gBaseline = theme;
     os64_strcopy(gLoadedName, sizeof(gLoadedName), name);
     os64_ui_textfield_set(&gEditor, &gNameField, name);
@@ -401,12 +631,20 @@ static void layout(void)
 {
     int width = (int)gCtx.surf.width, height = (int)gCtx.surf.height;
     place(&gRoot, 0, 0, width, height);
-    gCompact = width < 880 || height < 696;
+    gCompact = width < 958 || height < 696;
     for (os64_ui_widget_t *w = gRoot.first_child; w; w = w->next_sibling)
         w->hidden = gCompact;
     gSmall.hidden = !gCompact;
     place(&gSmall, 0, 0, width, height);
     gCanvas.hidden = gCompact;
+    // Confirmation remains available even if the window is shrunk mid-prompt.
+    int dw = width < 520 ? width : 520, dh = height < 180 ? height : 180;
+    place(&gDialogRoot, (width - dw) / 2, (height - dh) / 2, dw, dh);
+    int dx = gDialogRoot.bounds.x, dy = gDialogRoot.bounds.y;
+    place(&gDialogTitle, dx + 20, dy + 20, dw - 40, 24);
+    place(&gDialogBody, dx + 20, dy + 58, dw - 40, 24);
+    place(&gConfirm, dx + 20, dy + 116, (dw - 60) / 2, 36);
+    place(&gCancel, dx + (dw + 20) / 2, dy + 116, (dw - 60) / 2, 36);
     if (gCompact) {
         os64_ui_cancel_interaction(&gEditor);
         os64_ui_cancel_interaction(&gPreview);
@@ -414,50 +652,78 @@ static void layout(void)
         os64_ui_mark_dirty(&gEditor, &gRoot);
         return;
     }
-    place(&gHeading, 24, 20, width - 48, 24);
-    place(&gIntro, 24, 49, width - 48, 20);
-    place(&gCollectionLabel, 24, 86, 280, 20);
-    place(&gThemes.w, 24, 112, 268, 124);
-    place(&gThemeScroll.w, 294, 112, 14, 124);
-    place(&gLoad, 24, 244, 174, 30);
-    place(&gRefresh, 206, 244, 102, 30);
-    place(&gPaletteLabel, 24, 292, 284, 20);
-    place(&gPalettes.w, 24, 318, 284, 76);
-    place(&gStyleLabel, 24, 408, 284, 20);
-    for (int i = 0; i < 2; ++i)
-        place(&gStyles[i], 24 + i * 146, 434, 138, 30);
-    place(&gNameLabel, 24, 482, 284, 20);
-    place(&gNameField.w, 24, 508, 284, 30);
-    place(&gSave, 24, 548, 108, 34);
-    place(&gApply, 140, 548, 168, 34);
-    place(&gStartup, 24, 596, 284, 30);
-    place(&gStartupLabel, 24, 634, 284, 20);
-    place(&gFooter, 24, height - 30, width - 48, 20);
-    place(&gDialogRoot, (width - 500) / 2, (height - 180) / 2, 500, 180);
-    int dx = gDialogRoot.bounds.x, dy = gDialogRoot.bounds.y;
-    place(&gDialogTitle, dx + 20, dy + 20, 460, 24);
-    place(&gDialogBody, dx + 20, dy + 58, 460, 24);
-    place(&gConfirm, dx + 20, dy + 116, 216, 36);
-    place(&gCancel, dx + 256, dy + 116, 224, 36);
+    int left = 444, footer = height - 106;
+    place(&gHeading, 24, 16, width - 48, 24);
+    place(&gIntro, 24, 44, width - 48, 20);
+    static const char *const tabs[] = {"Themes", "Palette", "Controls"};
+    static const char *const active[] = {"Themes *", "Palette *", "Controls *"};
+    for (unsigned i = 0; i < 3; ++i) {
+        place(&gTabs[i], 24 + (int)i * 150, 78, 144, 32);
+        gTabs[i].text = gPage == i ? active[i] : tabs[i];
+        place(&gPages[i], 24, 122, left, footer - 138);
+        os64_ui_set_hidden(&gEditor, &gPages[i], i != gPage);
+    }
+    place(&gCollectionLabel, 40, 138, left - 32, 20);
+    place(&gThemes.w, 40, 168, left - 54, 244);
+    place(&gThemeScroll.w, 436, 168, 16, 244);
+    place(&gLoad, 40, 426, 192, 32);
+    place(&gRefresh, 244, 426, 208, 32);
+    place(&gStartup, 40, 476, 412, 32);
+    place(&gStartupLabel, 40, 520, 412, 20);
+
+    place(&gPaletteLabel, 40, 136, 400, 20);
+    place(&gPalettes.w, 40, 164, 412, 76);
+    place(&gIndividual.w, 40, 250, 412, 26);
+    place(&gColors.w, 40, 290, 198, 244);
+    place(&gColorScroll.w, 240, 290, 14, 244);
+    place(&gColorTitle, 266, 282, 186, 28);
+    place(&gPicker.w, 266, 314, 186, 156);
+    place(&gHexLabel, 266, 476, 16, 30);
+    place(&gHexField.w, 286, 476, 92, 30);
+    place(&gSetHex, 386, 476, 66, 30);
+    place(&gFollow, 266, 514, 186, 28);
+    place(&gColorHint, 40, 546, 412, 20);
+    // Layout changes the scroll range, not the user's unsubmitted hex edit.
+    os64_ui_scrollbar_set(&gEditor, &gColorScroll, (int64_t)gColors.count,
+        os64_ui_listbox_rows(&gColors, &gEditor.theme), (int64_t)gColors.top);
+
+    place(&gStyleLabel, 40, 142, 412, 20);
+    for (unsigned i = 0; i < 2; ++i) {
+        place(&gStyles[i], 40 + (int)i * 212, 176, 200, 36);
+        place(&gCorners[i], 40 + (int)i * 212, 268, 200, 36);
+    }
+    place(&gCornerLabel, 40, 234, 412, 20);
+    place(&gTreatmentHint, 40, 328, 412, 20);
+
+    place(&gNameLabel, 24, footer, 144, 30);
+    place(&gNameField.w, 176, footer, 344, 30);
+    place(&gSave, width - 280, footer, 80, 30);
+    place(&gApply, width - 192, footer, 168, 30);
+    place(&gUndo, 24, footer + 40, 96, 30);
+    place(&gResetComponent, 132, footer + 40, 196, 30);
+    os64_ui_set_hidden(&gEditor, &gResetComponent, gPage == 0);
+    place(&gFooter, 24, height - 26, width - 48, 20);
     theme_selection(&gThemes, NULL);
 
-    int x = 332, y = 86, pw = width - x - 24;
-    place(&gCanvas, x, y, pw, height - y - 48);
-    place(&gPreviewTitle, x + 18, y + 16, pw - 36, 20);
-    place(&gFieldLabel, x + 18, y + 52, pw - 36, 20);
-    place(&gField.w, x + 18, y + 78, pw - 36, 32);
-    place(&gAction, x + 18, y + 127, 144, 34);
-    place(&gReset, x + 174, y + 127, 144, 34);
-    place(&gCount, x + 18, y + 172, pw - 36, 20);
-    place(&gEnable.w, x + 18, y + 209, 230, 28);
-    place(&gCheck.w, x + 252, y + 209, pw - 270, 28);
-    place(&gLevelLabel, x + 18, y + 255, 168, 28);
-    place(&gLevel.w, x + 192, y + 255, pw - 210, 28);
-    place(&gTextLabel, x + 18, y + 294, pw - 36, 20);
-    int text_y = y + 322, text_h = height - 114 - text_y;
-    place(&gText.w, x + 18, text_y, pw - 36 - 18, text_h);
-    place(&gScroll.w, x + pw - 32, text_y, 14, text_h);
-    place(&gSelectionHint, x + 18, height - 89, pw - 36, 20);
+    int x = 488, pw = width - x - 24;
+    place(&gCanvas, x, 122, pw, footer - 138);
+    place(&gPreviewTitle, x + 16, 138, pw - 32, 20);
+    place(&gMenuSample, x + 16, 166, pw - 32, 64);
+    place(&gFieldLabel, x + 16, 236, pw - 32, 20);
+    place(&gField.w, x + 16, 260, pw - 32, 30);
+    int bw = (pw - 48) / 5;
+    place(&gAction, x + 16, 306, bw, 32);
+    for (int i = 0; i < 4; ++i)
+        place(&gStates[i], x + 16 + (i + 1) * (bw + 4), 306, bw, 32);
+    place(&gEnable.w, x + 16, 350, 204, 28);
+    place(&gCheck.w, x + 224, 350, pw - 240, 28);
+    place(&gLevelLabel, x + 16, 390, 144, 28);
+    place(&gLevel.w, x + 164, 390, pw - 180, 28);
+    place(&gTextLabel, x + 16, 430, pw - 32, 20);
+    place(&gText.w, x + 16, 456, pw - 50, footer - 500);
+    place(&gScroll.w, x + pw - 30, 456, 14, footer - 500);
+    place(&gCount, x + 16, footer - 38, pw - 160, 20);
+    place(&gReset, x + pw - 132, footer - 40, 116, 24);
     view_changed(&gText, NULL);
     refresh_composition();
 }
@@ -466,6 +732,12 @@ static void editor_label(os64_ui_widget_t *w, const char *text)
 {
     os64_ui_label(w, text);
     os64_ui_add_child(&gRoot, w);
+}
+
+static void page_label(unsigned page, os64_ui_widget_t *w, const char *text)
+{
+    os64_ui_label(w, text);
+    os64_ui_add_child(&gPages[page], w);
 }
 
 static void preview_label(os64_ui_widget_t *w, const char *text)
@@ -494,11 +766,17 @@ static void setup(void)
     os64_ui_panel(&gCanvas);
     os64_ui_set_root(&gEditor, &gRoot);
     os64_ui_set_root(&gPreview, &gCanvas);
+    for (unsigned i = 0; i < 3; ++i) {
+        os64_ui_panel(&gPages[i]);
+        os64_ui_add_child(&gRoot, &gPages[i]);
+        os64_ui_button(&gTabs[i], "", tab_click, (void *)(uintptr_t)i);
+        os64_ui_add_child(&gRoot, &gTabs[i]);
+    }
     editor_label(&gHeading, "APPEARANCE WORKSHOP");
     editor_label(&gIntro, "Choose the pieces. Make something yours.");
-    editor_label(&gCollectionLabel, "01  THEME COLLECTION");
-    editor_label(&gPaletteLabel, "02  PALETTE");
-    editor_label(&gStyleLabel, "03  BUTTON TREATMENT");
+    page_label(0, &gCollectionLabel, "THEME COLLECTION");
+    page_label(1, &gPaletteLabel, "START WITH A PALETTE");
+    page_label(2, &gStyleLabel, "SURFACE TREATMENT");
     os64_ui_button(&gApply, "Apply to session", apply_click, NULL);
     os64_ui_add_child(&gRoot, &gApply);
     editor_label(&gFooter, gComposition);
@@ -506,24 +784,24 @@ static void setup(void)
     os64_ui_listbox(&gThemes, 3, theme_label, theme_selection, NULL);
     os64_ui_listbox(&gPalettes, 3, palette_label, palette_click, NULL);
     os64_ui_scrollbar(&gThemeScroll, themes_scrolled, NULL);
-    os64_ui_add_child(&gRoot, &gThemes.w);
-    os64_ui_add_child(&gRoot, &gThemeScroll.w);
-    os64_ui_add_child(&gRoot, &gPalettes.w);
+    os64_ui_add_child(&gPages[0], &gThemes.w);
+    os64_ui_add_child(&gPages[0], &gThemeScroll.w);
+    os64_ui_add_child(&gPages[1], &gPalettes.w);
     os64_ui_button(&gLoad, "Load theme", load_click, NULL);
     os64_ui_button(&gRefresh, "Refresh", refresh_click, NULL);
     os64_ui_button(&gSave, "Save", save_click, NULL);
     os64_ui_button(&gStartup, "Use at startup", startup_click, NULL);
-    os64_ui_add_child(&gRoot, &gLoad);
-    os64_ui_add_child(&gRoot, &gRefresh);
-    editor_label(&gNameLabel, "COMPOSITION NAME");
+    os64_ui_add_child(&gPages[0], &gLoad);
+    os64_ui_add_child(&gPages[0], &gRefresh);
+    editor_label(&gNameLabel, "Composition name");
     os64_ui_textfield(&gNameField, gName, sizeof(gName), NULL, NULL, NULL);
     os64_ui_add_child(&gRoot, &gNameField.w);
     os64_ui_textfield_set(&gEditor, &gNameField, kNames[0]);
     os64_strcopy(gLoadedName, sizeof(gLoadedName), kNames[0]);
     gBaseline = gPreview.theme;
     os64_ui_add_child(&gRoot, &gSave);
-    os64_ui_add_child(&gRoot, &gStartup);
-    editor_label(&gStartupLabel, "");
+    os64_ui_add_child(&gPages[0], &gStartup);
+    page_label(0, &gStartupLabel, "");
     os64_ui_panel(&gDialogRoot);
     os64_ui_set_root(&gDialog, &gDialogRoot);
     os64_ui_label(&gDialogTitle, "");
@@ -537,21 +815,60 @@ static void setup(void)
     for (unsigned i = 0; i < 2; ++i) {
         os64_ui_button(&gStyles[i], i ? "Raised" : "Flat", style_click,
                        (void *)(uintptr_t)i);
-        os64_ui_add_child(&gRoot, &gStyles[i]);
+        os64_ui_add_child(&gPages[2], &gStyles[i]);
     }
-    preview_label(&gPreviewTitle, "LIVE WIDGET GALLERY");
+    os64_ui_button(&gUndo, "Undo", undo_click, NULL);
+    os64_ui_button(&gResetComponent, "Reset component", reset_component_click, NULL);
+    os64_ui_add_child(&gRoot, &gUndo);
+    os64_ui_add_child(&gRoot, &gResetComponent);
+    page_label(2, &gCornerLabel, "CORNERS");
+    page_label(2, &gTreatmentHint, "Try the states in the live preview.");
+    for (unsigned i = 0; i < 2; ++i) {
+        os64_ui_button(&gCorners[i], "", corner_click, (void *)(uintptr_t)i);
+        os64_ui_add_child(&gPages[2], &gCorners[i]);
+    }
+    os64_ui_checkbox(&gIndividual, "Individual control colors", false, individual_changed, NULL);
+    os64_ui_add_child(&gPages[1], &gIndividual.w);
+    os64_ui_listbox(&gColors, OS64_UI_PALETTE_ROLE_COUNT, color_label, color_selection, NULL);
+    gColors.swatch = color_swatch;
+    os64_ui_listbox_set(&gEditor, &gColors, OS64_UI_PALETTE_ROLE_COUNT, 3);
+    os64_ui_scrollbar(&gColorScroll, colors_scrolled, NULL);
+    os64_ui_colorpicker(&gPicker, gPreview.theme.button_face, picker_changed, NULL);
+    os64_ui_textfield(&gHexField, gHex, sizeof(gHex), hex_submit, NULL, NULL);
+    os64_ui_button(&gSetHex, "Set", hex_click, NULL);
+    os64_ui_button(&gFollow, "Follow palette", follow_click, NULL);
+    os64_ui_add_child(&gPages[1], &gColors.w);
+    os64_ui_add_child(&gPages[1], &gColorScroll.w);
+    page_label(1, &gColorTitle, gSelectedColor);
+    os64_ui_add_child(&gPages[1], &gPicker.w);
+    page_label(1, &gHexLabel, "#");
+    os64_ui_add_child(&gPages[1], &gHexField.w);
+    os64_ui_add_child(&gPages[1], &gSetHex);
+    os64_ui_add_child(&gPages[1], &gFollow);
+    page_label(1, &gColorHint, "Shared roles keep colors together.");
+    preview_label(&gPreviewTitle, "LIVE PREVIEW");
+    gMenuSample.cls = &kMenuClass;
+    os64_ui_add_child(&gCanvas, &gMenuSample);
+    static const char *const states[] = {"Hover", "Pressed", "Focus", "Disabled"};
+    for (unsigned i = 0; i < 4; ++i) {
+        os64_ui_button(&gStates[i], states[i], NULL, (void *)(uintptr_t)i);
+        gStates[i].cls = &kStateClass;
+        gStates[i].focusable = false;
+        gStates[i].disabled = i == 3;
+        os64_ui_add_child(&gCanvas, &gStates[i]);
+    }
     preview_label(&gFieldLabel, "Sample text field");
     os64_ui_textfield(&gField, gFieldText, sizeof(gFieldText), field_submit, NULL, NULL);
     os64_ui_textfield_set(&gPreview, &gField, "A place to make it yours");
     os64_ui_add_child(&gCanvas, &gField.w);
-    os64_ui_button(&gAction, "Try a button", count_click, NULL);
+    os64_ui_button(&gAction, "Normal", count_click, NULL);
     os64_ui_button(&gReset, "Reset sample", reset_click, NULL);
     os64_ui_add_child(&gCanvas, &gAction);
     os64_ui_add_child(&gCanvas, &gReset);
     os64_strcopy(gCountText, sizeof(gCountText), "Button presses: 0");
     preview_label(&gCount, gCountText);
-    os64_ui_checkbox(&gEnable, "Enable sample controls", true, enabled_changed, NULL);
-    os64_ui_checkbox(&gCheck, "Sample choice", true, NULL, NULL);
+    os64_ui_checkbox(&gEnable, "Enable controls", true, enabled_changed, NULL);
+    os64_ui_checkbox(&gCheck, "Checked", true, NULL, NULL);
     os64_ui_add_child(&gCanvas, &gEnable.w);
     os64_ui_add_child(&gCanvas, &gCheck.w);
     preview_label(&gLevelLabel, gLevelText);
@@ -560,14 +877,17 @@ static void setup(void)
     level_changed(&gLevel, NULL);
     preview_label(&gTextLabel, "Paper, ink & selection");
     os64_ui_textview(&gText, &kText, NULL, view_changed, NULL);
+
     os64_ui_scrollbar(&gScroll, scroll_changed, NULL);
     os64_ui_add_child(&gCanvas, &gText.w);
     os64_ui_add_child(&gCanvas, &gScroll.w);
-    preview_label(&gSelectionHint, "Preview your choices, then Apply to session.");
     gInput = &gEditor;
     refresh_collection();
     describe_palette();
     layout();
+    sync_color();
+    os64_ui_textview_goto(&gPreview, &gText, 0, 2, false);
+    os64_ui_textview_goto(&gPreview, &gText, 0, 16, true);
 }
 
 static void paint(void)
@@ -592,6 +912,9 @@ static void paint(void)
 
 static void dispatch(const os64_gui_event_t *ev)
 {
+    if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN ||
+        ev->type == OS64_GUI_EVENT_WINDOW_FOCUS ||
+        ev->type == OS64_GUI_EVENT_WINDOW_RESIZE) gPickerEditing = false;
     if (ev->type == OS64_GUI_EVENT_WINDOW_CLOSE) {
         if (draft_dirty()) ask_confirmation(CONFIRM_CLOSE);
         else gEditor.quit = true;
@@ -670,6 +993,7 @@ static void dispatch(const os64_gui_event_t *ev)
         os64_ui_set_focus(inside ? &gEditor : &gPreview, NULL);
     }
     os64_ui_dispatch(gInput, ev);
+    if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_UP) gPickerEditing = false;
     if (gInput == &gEditor && gEditor.focus == &gNameField.w) refresh_composition();
 }
 

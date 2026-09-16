@@ -53,7 +53,14 @@ static void list_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         os64_draw_fill_rect(&ctx->surf, rect, bg);
         const char *label = list->label ? list->label(index, list->list_user) : "";
         if (!label) label = "";
-        os64_draw_text_clipped(&ctx->surf, rect, rect.x + 6, rect.y + 4,
+        int inset = 6;
+        if (list->swatch && rect.w >= 28) {
+            os64_gui_rect_t chip = {rect.x + 6, rect.y + 5, 16, 14};
+            os64_draw_fill_rect(&ctx->surf, chip, list->swatch(index, list->list_user));
+            os64_draw_rect(&ctx->surf, chip, fg);
+            inset = 28;
+        }
+        os64_draw_text_clipped(&ctx->surf, rect, rect.x + inset, rect.y + 4,
                                label, os64_strlen(label), fg, bg);
     }
 }

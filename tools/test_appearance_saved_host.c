@@ -104,7 +104,7 @@ int main(int argc, char **argv)
     const char *bad[] = {"", "../escape", "a/b", "a#b", "a=b", " white", "white ", "a\nb", "."};
     os64_ui_theme_t electric, paper, loaded, sentinel;
     os64_ui_theme_defaults(&electric); os64_ui_theme_palette(&electric, OS64_UI_PALETTE_ELECTRIC);
-    electric.button_bevel = 3; electric.pad = 13;
+    electric.button_bevel = 3; electric.pad = 13; electric.control_radius = 6;
     paper = electric; os64_ui_theme_palette(&paper, OS64_UI_PALETTE_PAPER);
     for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); ++i)
         assert(os64_ui_theme_save(bad[i], &electric, false) == OS64_UI_THEME_INVALID);
