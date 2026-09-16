@@ -131,6 +131,70 @@ void os64_draw_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
     os64_draw_vline(dst, r.x + r.w - 1, r.y, r.h, color);
 }
 
+static int32_t round_radius(os64_gui_rect_t r, int32_t radius)
+{
+    if (radius < 0) return 0;
+    if (radius > r.w / 2) radius = r.w / 2;
+    if (radius > r.h / 2) radius = r.h / 2;
+    return radius > 0 ? radius : 0;
+}
+
+// Test pixel centers against a circle, finding the first covered column.
+// Binary search bounds the work even for a huge, mostly offscreen rectangle.
+static int32_t round_inset(int32_t height, int32_t radius, int64_t row)
+{
+    if (!radius) return 0;
+    if (row >= height / 2) row = height - 1 - row;
+    if (row >= radius) return 0;
+    int64_t dy = 2 * (int64_t)radius - 2 * row - 1;
+    int64_t rr = 4 * (int64_t)radius * radius;
+    int32_t lo = 0, hi = radius;
+    while (lo < hi) {
+        int32_t mid = lo + (hi - lo) / 2;
+        int64_t dx = 2 * (int64_t)radius - 2 * mid - 1;
+        if (dx * dx + dy * dy <= rr) hi = mid;
+        else lo = mid + 1;
+    }
+    return lo;
+}
+
+void os64_draw_fill_round_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                               int32_t radius, uint32_t color)
+{
+    os64_gui_rect_t clip;
+    if (os64_rect_is_empty(r) || !os64_rect_intersect(r, surface_bounds(dst), &clip)) return;
+    radius = round_radius(r, radius);
+    for (int32_t y = clip.y; y < clip.y + clip.h; ++y) {
+        int32_t inset = round_inset(r.h, radius, (int64_t)y - r.y);
+        int64_t left = (int64_t)r.x + inset, right = (int64_t)r.x + r.w - inset;
+        if (left < clip.x) left = clip.x;
+        if (right > (int64_t)clip.x + clip.w) right = (int64_t)clip.x + clip.w;
+        uint32_t *row = surface_row(dst, y);
+        for (int64_t x = left; x < right; ++x) row[x] = color;
+    }
+}
+
+void os64_draw_round_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                          int32_t radius, uint32_t top_left, uint32_t bottom_right)
+{
+    os64_gui_rect_t clip;
+    if (os64_rect_is_empty(r) || !os64_rect_intersect(r, surface_bounds(dst), &clip)) return;
+    radius = round_radius(r, radius);
+    for (int32_t y = clip.y; y < clip.y + clip.h; ++y) {
+        int64_t ry = (int64_t)y - r.y;
+        int32_t outer = round_inset(r.h, radius, ry);
+        bool inner = r.w > 2 && ry > 0 && ry < r.h - 1;
+        int32_t in = inner ? 1 + round_inset(r.h - 2, radius > 0 ? radius - 1 : 0, ry - 1) : 0;
+        uint32_t *row = surface_row(dst, y);
+        for (int32_t x = clip.x; x < clip.x + clip.w; ++x) {
+            int64_t rx = (int64_t)x - r.x;
+            if (rx < outer || rx >= r.w - outer) continue;
+            if (inner && rx >= in && rx < r.w - in) continue;
+            row[x] = rx * r.h + ry * r.w < (int64_t)r.w * r.h ? top_left : bottom_right;
+        }
+    }
+}
+
 int32_t os64_draw_text(os64_gui_surface_t *dst, int32_t x, int32_t y,
                        const char *str, size_t len,
                        uint32_t fg, uint32_t bg)

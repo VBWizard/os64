@@ -468,24 +468,27 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 {
 	uint32_t face = w->pressed ? t->button_face_pressed :
 	                w->hovered ? t->button_face_hover : t->button_face;
-	os64_draw_fill_rect(&ctx->surf, w->bounds, face);
-	os64_draw_rect(&ctx->surf, w->bounds, w->focused ? t->focus_ring :
-	               w->hovered ? t->hover_border : t->button_border);
-	// Bound relief to the actual control so tiny resized buttons cannot
-	// paint their edges into a neighbor. Pressing reverses the light.
+	int32_t radius = t->control_radius;
+	if (radius < 0) radius = 0;
+	if (radius > 8) radius = 8;
+	if (radius > w->bounds.w / 2) radius = w->bounds.w / 2;
+	if (radius > w->bounds.h / 2) radius = w->bounds.h / 2;
+	if (radius) os64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);
+	os64_draw_fill_round_rect(&ctx->surf, w->bounds, radius, face);
+	uint32_t border = w->focused ? t->focus_ring :
+		w->hovered ? t->hover_border : t->button_border;
+	os64_draw_round_rect(&ctx->surf, w->bounds, radius, border, border);
+	// Bound relief to the control, including when it is smaller than its radius.
 	int32_t bevel = t->button_bevel;
 	if (bevel > 4) bevel = 4;
 	if (bevel > w->bounds.w / 2) bevel = w->bounds.w / 2;
 	if (bevel > w->bounds.h / 2) bevel = w->bounds.h / 2;
 	uint32_t light = w->pressed ? t->button_shadow : t->button_highlight;
 	uint32_t dark = w->pressed ? t->button_highlight : t->button_shadow;
-	for (int32_t i = 1; i < bevel; i++) {
-		int32_t x = w->bounds.x + i, y = w->bounds.y + i;
-		int32_t width = w->bounds.w - 2 * i, height = w->bounds.h - 2 * i;
-		os64_draw_hline(&ctx->surf, x, y, width, light);
-		os64_draw_vline(&ctx->surf, x, y, height, light);
-		os64_draw_hline(&ctx->surf, x, y + height - 1, width, dark);
-		os64_draw_vline(&ctx->surf, x + width - 1, y, height, dark);
+	for (int32_t i = 1; i < bevel; ++i) {
+		os64_gui_rect_t edge = {w->bounds.x + i, w->bounds.y + i,
+		                        w->bounds.w - 2 * i, w->bounds.h - 2 * i};
+		os64_draw_round_rect(&ctx->surf, edge, radius > i ? radius - i : 0, light, dark);
 	}
 	size_t len = ui_strlen(w->text);
 	int32_t tw = (int32_t)len * t->font_w;
@@ -495,7 +498,9 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		tx = w->bounds.x + t->pad;
 	if (ty < w->bounds.y)
 		ty = w->bounds.y;
-	os64_draw_text_clipped(&ctx->surf, w->bounds, tx, ty, w->text ? w->text : "", len,
+	os64_gui_rect_t text_clip = w->bounds;
+	if (radius > 0) { text_clip.x += radius; text_clip.w -= 2 * radius; }
+	os64_draw_text_clipped(&ctx->surf, text_clip, tx, ty, w->text ? w->text : "", len,
 	               t->button_fg, face);
 }
 

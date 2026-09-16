@@ -54,60 +54,63 @@ void os64_ui_theme_defaults(os64_ui_theme_t *t)
 	t->button_bevel = 0;
 	t->checkbox_size = 18;
 	t->slider_track_h = 4;
+	t->control_radius = 0;
 
 	t->font_w = 8;    // the embedded PSF1 face (font_psf1.h)
 	t->font_h = 16;
 }
 
-// The key table: theme.conf names → theme fields. Adding a themable value =
-// one struct field + one row here; scattering a constant anywhere else is
-// the review offense the ui.h header warns about.
+// The schema owns file keys, inspector captions, field offsets and ranges.
+// Add a theme value as a field in os64_ui_theme_t and a row in kThemeKeys;
+// colors also need membership in ui_palette.c's kRoles and preset values.
+// Keep theme values in this schema rather than scattered paint constants.
 typedef enum { THEME_COLOR, THEME_METRIC } theme_kind_t;
 typedef struct
 {
 	const char  *key;
+    const char  *label;
 	theme_kind_t kind;
 	size_t       offset;
 	int32_t min, max;
 } theme_key_t;
 
-#define THEME_ROW(name, kind, field) \
-	{ name, kind, __builtin_offsetof(os64_ui_theme_t, field), 0, 0 }
+#define THEME_ROW(name, label, kind, field) \
+	{ name, label, kind, __builtin_offsetof(os64_ui_theme_t, field), 0, 0 }
 
 #define METRIC(name, field, lo, hi) \
-    { name, THEME_METRIC, __builtin_offsetof(os64_ui_theme_t, field), lo, hi }
+    { name, name, THEME_METRIC, __builtin_offsetof(os64_ui_theme_t, field), lo, hi }
 
 static const theme_key_t kThemeKeys[] = {
-	THEME_ROW("panel.bg",            THEME_COLOR,  panel_bg),
-	THEME_ROW("panel.border",        THEME_COLOR,  panel_border),
-	THEME_ROW("label.fg",            THEME_COLOR,  label_fg),
-	THEME_ROW("button.face",         THEME_COLOR,  button_face),
-	THEME_ROW("button.face.pressed", THEME_COLOR,  button_face_pressed),
-	THEME_ROW("button.border",       THEME_COLOR,  button_border),
-	THEME_ROW("button.fg",           THEME_COLOR,  button_fg),
-	THEME_ROW("button.highlight",    THEME_COLOR,  button_highlight),
-	THEME_ROW("button.shadow",       THEME_COLOR,  button_shadow),
-	THEME_ROW("button.face.hover",   THEME_COLOR,  button_face_hover),
-	THEME_ROW("hover.border",        THEME_COLOR,  hover_border),
-	THEME_ROW("focus.ring",          THEME_COLOR,  focus_ring),
-	THEME_ROW("disabled.bg",         THEME_COLOR,  disabled_bg),
-	THEME_ROW("disabled.fg",         THEME_COLOR,  disabled_fg),
-	THEME_ROW("text.bg",             THEME_COLOR,  text_bg),
-	THEME_ROW("text.fg",             THEME_COLOR,  text_fg),
-	THEME_ROW("text.sel.bg",         THEME_COLOR,  text_sel_bg),
-	THEME_ROW("text.sel.fg",         THEME_COLOR,  text_sel_fg),
-	THEME_ROW("text.caret",          THEME_COLOR,  text_caret),
-	THEME_ROW("field.bg",            THEME_COLOR,  field_bg),
-	THEME_ROW("field.fg",            THEME_COLOR,  field_fg),
-	THEME_ROW("field.border",        THEME_COLOR,  field_border),
-	THEME_ROW("field.border.focus",  THEME_COLOR,  field_border_focus),
-	THEME_ROW("scroll.track",        THEME_COLOR,  scroll_track),
-	THEME_ROW("scroll.thumb",        THEME_COLOR,  scroll_thumb),
-	THEME_ROW("menu.bg",             THEME_COLOR,  menu_bg),
-	THEME_ROW("menu.fg",             THEME_COLOR,  menu_fg),
-	THEME_ROW("menu.hi.bg",          THEME_COLOR,  menu_hi_bg),
-	THEME_ROW("menu.hi.fg",          THEME_COLOR,  menu_hi_fg),
-	THEME_ROW("menu.sep",            THEME_COLOR,  menu_sep),
+	THEME_ROW("panel.bg", "Surface", THEME_COLOR, panel_bg),
+	THEME_ROW("panel.border", "Panel border", THEME_COLOR, panel_border),
+	THEME_ROW("label.fg", "Label text", THEME_COLOR, label_fg),
+	THEME_ROW("button.face", "Button face", THEME_COLOR, button_face),
+	THEME_ROW("button.face.pressed", "Button: pressed", THEME_COLOR, button_face_pressed),
+	THEME_ROW("button.border", "Button border", THEME_COLOR, button_border),
+	THEME_ROW("button.fg", "Button text", THEME_COLOR, button_fg),
+	THEME_ROW("button.highlight", "Button highlight", THEME_COLOR, button_highlight),
+	THEME_ROW("button.shadow", "Button shadow", THEME_COLOR, button_shadow),
+	THEME_ROW("button.face.hover", "Button: hover", THEME_COLOR, button_face_hover),
+	THEME_ROW("hover.border", "Hover outline", THEME_COLOR, hover_border),
+	THEME_ROW("focus.ring", "Focus outline", THEME_COLOR, focus_ring),
+	THEME_ROW("disabled.bg", "Disabled surface", THEME_COLOR, disabled_bg),
+	THEME_ROW("disabled.fg", "Disabled text", THEME_COLOR, disabled_fg),
+	THEME_ROW("text.bg", "Text background", THEME_COLOR, text_bg),
+	THEME_ROW("text.fg", "Text ink", THEME_COLOR, text_fg),
+	THEME_ROW("text.sel.bg", "Selection fill", THEME_COLOR, text_sel_bg),
+	THEME_ROW("text.sel.fg", "Selection text", THEME_COLOR, text_sel_fg),
+	THEME_ROW("text.caret", "Caret", THEME_COLOR, text_caret),
+	THEME_ROW("field.bg", "Field background", THEME_COLOR, field_bg),
+	THEME_ROW("field.fg", "Field text", THEME_COLOR, field_fg),
+	THEME_ROW("field.border", "Field border", THEME_COLOR, field_border),
+	THEME_ROW("field.border.focus", "Field: focus", THEME_COLOR, field_border_focus),
+	THEME_ROW("scroll.track", "Scroll track", THEME_COLOR, scroll_track),
+	THEME_ROW("scroll.thumb", "Scroll thumb", THEME_COLOR, scroll_thumb),
+	THEME_ROW("menu.bg", "Menu background", THEME_COLOR, menu_bg),
+	THEME_ROW("menu.fg", "Menu text", THEME_COLOR, menu_fg),
+	THEME_ROW("menu.hi.bg", "Menu selection", THEME_COLOR, menu_hi_bg),
+	THEME_ROW("menu.hi.fg", "Menu selected text", THEME_COLOR, menu_hi_fg),
+	THEME_ROW("menu.sep", "Menu separator", THEME_COLOR, menu_sep),
 	METRIC("pad", pad, 0, 32),
 	METRIC("gap", gap, 0, 32),
 	METRIC("button.h", button_h, 16, 80),
@@ -117,6 +120,7 @@ static const theme_key_t kThemeKeys[] = {
 	METRIC("slider.track.h", slider_track_h, 1, 16),
 	METRIC("font.w", font_w, 8, 8),
 	METRIC("font.h", font_h, 16, 16),
+	METRIC("control.radius", control_radius, 0, 8),
 };
 #define THEME_KEY_COUNT (sizeof(kThemeKeys) / sizeof(kThemeKeys[0]))
 
@@ -159,7 +163,8 @@ static bool parse_metric(const char *s, size_t len, int32_t *out)
 static bool session_key(const theme_key_t *key)
 {
     return key->kind == THEME_COLOR ||
-           key->offset == __builtin_offsetof(os64_ui_theme_t, button_bevel);
+           key->offset == __builtin_offsetof(os64_ui_theme_t, button_bevel) ||
+           key->offset == __builtin_offsetof(os64_ui_theme_t, control_radius);
 }
 
 bool os64_ui_theme_valid(const os64_ui_theme_t *t)
@@ -217,13 +222,20 @@ int64_t os64_ui_theme_decode_session(os64_ui_theme_t *t, uint64_t *fields,
         if (text[i] != STARTUP_OVERLAY[i]) overlay = false;
     if (overlay) { text += prefix; length -= prefix; }
     theme_parse_t p = {.candidate = *t, .session = true};
+    // Complete legacy snapshots imply square controls. Preservation overlays
+    // keep absence meaningful so each app retains its default treatment.
+    if (!overlay) p.candidate.control_radius = 0;
     int64_t result = os64_conf_parse(text, length, theme_setting, &p);
     if (result < 0) return result;
     if (p.bad || !os64_ui_theme_valid(&p.candidate)) return OS64_CONF_BAD_SETTING;
-    if (!overlay)
-        for (size_t i = 0; i < THEME_KEY_COUNT; ++i)
+    if (!overlay) {
+        for (size_t i = 0; i < THEME_KEY_COUNT; ++i) {
+            if (kThemeKeys[i].offset == __builtin_offsetof(os64_ui_theme_t, control_radius))
+                p.seen |= (uint64_t)1 << i;
             if (session_key(&kThemeKeys[i]) && !(p.seen & ((uint64_t)1 << i)))
                 return OS64_CONF_BAD_SETTING;
+        }
+    }
     *t = p.candidate;
     *fields = p.seen;
     *inherited = overlay;
@@ -254,11 +266,13 @@ bool os64_ui_theme_parse(os64_ui_theme_t *t, const char *text, size_t length,
 int64_t os64_ui_theme_parse_saved_status(os64_ui_theme_t *t, const char *text, size_t length)
 {
     theme_parse_t p = {.candidate = *t};
+    p.candidate.control_radius = 0;
     int64_t result = os64_conf_parse(text, length, theme_setting, &p);
     if (result < 0) return result;
     if (p.bad || !os64_ui_theme_valid(&p.candidate)) return OS64_CONF_BAD_SETTING;
     for (size_t i = 0; i < THEME_KEY_COUNT; ++i)
-        if (!(p.seen & ((uint64_t)1 << i))) return OS64_CONF_BAD_SETTING;
+        if (kThemeKeys[i].offset != __builtin_offsetof(os64_ui_theme_t, control_radius) &&
+            !(p.seen & ((uint64_t)1 << i))) return OS64_CONF_BAD_SETTING;
     *t = p.candidate;
     return 0;
 }
@@ -390,4 +404,45 @@ void os64_ui_theme_init(os64_ui_theme_t *t)
     os64_ui_theme_defaults(t);
     uint64_t installed = 0;
     os64_ui_theme_current(t, &installed);
+}
+
+static const theme_key_t *color_key(size_t index)
+{
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i)
+        if (kThemeKeys[i].kind == THEME_COLOR && index-- == 0) return &kThemeKeys[i];
+    return NULL;
+}
+
+size_t os64_ui_theme_color_count(void)
+{
+    size_t count = 0;
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i)
+        if (kThemeKeys[i].kind == THEME_COLOR) ++count;
+    return count;
+}
+
+const char *os64_ui_theme_color_name(size_t index)
+{
+    const theme_key_t *key = color_key(index);
+    return key ? key->key : "";
+}
+
+const char *os64_ui_theme_color_label(size_t index)
+{
+    const theme_key_t *key = color_key(index);
+    return key ? key->label : "";
+}
+
+uint32_t os64_ui_theme_color_get(const os64_ui_theme_t *t, size_t index)
+{
+    const theme_key_t *key = color_key(index);
+    return key ? *(const uint32_t *)((const char *)t + key->offset) : 0xff000000u;
+}
+
+bool os64_ui_theme_color_set(os64_ui_theme_t *t, size_t index, uint32_t color)
+{
+    const theme_key_t *key = color_key(index);
+    if (!key || (color >> 24) != 255) return false;
+    *(uint32_t *)((char *)t + key->offset) = color;
+    return true;
 }

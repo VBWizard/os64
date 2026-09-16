@@ -9,6 +9,7 @@
 
 extern bool fail_alloc;
 void appearance_session_contracts(void);
+void appearance_customizer_contracts(void);
 
 // Kernel surface refresh is outside this host test; retain its supplied size.
 int64_t __wrap_os64_draw_ctx_refresh(os64_draw_ctx_t *ctx)
@@ -513,11 +514,143 @@ static void list_contracts(void)
     }
 }
 
+static void rounded_and_color_contracts(void)
+{
+    os64_ui_theme_t theme, copy, before;
+    os64_ui_theme_defaults(&theme);
+    os64_ui_theme_palette(&theme, OS64_UI_PALETTE_ELECTRIC);
+    theme.control_radius = 6;
+    theme.button_bevel = 3;
+    char bytes[4096];
+    for (int session = 0; session < 2; ++session) {
+        int64_t n = session ? os64_ui_theme_encode_session(&theme, bytes, sizeof(bytes)) :
+            os64_ui_theme_encode(&theme, bytes, sizeof(bytes));
+        assert(n > 0);
+        copy = theme; copy.control_radius = 0;
+        assert(session ? os64_ui_theme_parse(&copy, bytes, (size_t)n, true) :
+            os64_ui_theme_parse_saved(&copy, bytes, (size_t)n));
+        assert(copy.control_radius == 6);
+        char *radius = strstr(bytes, "control.radius = 6\n");
+        assert(radius);
+        memmove(radius, radius + strlen("control.radius = 6\n"), strlen(radius + strlen("control.radius = 6\n")) + 1);
+        // A pre-customizer snapshot loads as square even into a rounded draft.
+        assert(session ? os64_ui_theme_parse(&copy, bytes, strlen(bytes), true) :
+            os64_ui_theme_parse_saved(&copy, bytes, strlen(bytes)));
+        assert(copy.control_radius == 0 && copy.button_face == theme.button_face);
+    }
+    before = theme;
+    assert(!os64_ui_theme_parse(&theme, "control.radius = 9\n", 19, false));
+    assert(!memcmp(&theme, &before, sizeof(theme)));
+    copy = theme; copy.control_radius = 0;
+    os64_ui_theme_merge(&copy, &theme, OS64_UI_COMPONENT_PALETTE);
+    assert(copy.control_radius == 0);
+    os64_ui_theme_merge(&copy, &theme, OS64_UI_COMPONENT_TREATMENT);
+    assert(copy.control_radius == 6);
+
+    // Shared colors move together, a differing override survives, and it
+    // can explicitly rejoin the role after a serialized round trip.
+    theme.text_sel_bg = 0xffaa1177;
+    os64_ui_palette_role_set(&theme, 3, 0xff123456);
+    assert(theme.button_face == 0xff123456 && theme.menu_hi_bg == 0xff123456);
+    assert(theme.text_sel_bg == 0xffaa1177 && theme.control_radius == 6);
+    int64_t n = os64_ui_theme_encode(&theme, bytes, sizeof(bytes));
+    assert(os64_ui_theme_parse_saved(&copy, bytes, (size_t)n));
+    size_t sel = 0;
+    while (sel < os64_ui_theme_color_count() && strcmp(os64_ui_theme_color_name(sel), "text.sel.bg")) ++sel;
+    assert(os64_ui_palette_color_follow(&copy, sel));
+    assert(copy.text_sel_bg == copy.button_face);
+    before = theme;
+    assert(!os64_ui_theme_color_set(&theme, os64_ui_theme_color_count(), 0xffffffff));
+    assert(!memcmp(&theme, &before, sizeof(theme)));
+    // Each compiled palette's properties participate in a role.
+    for (unsigned preset = 0; preset < 3; ++preset) {
+        os64_ui_theme_palette(&theme, (os64_ui_palette_t)preset);
+        for (size_t role = 0; role < OS64_UI_PALETTE_ROLE_COUNT; ++role)
+            os64_ui_palette_role_set(&theme, role, 0xff123456);
+        for (size_t i = 0; i < os64_ui_theme_color_count(); ++i)
+            assert(os64_ui_theme_color_get(&theme, i) == 0xff123456 &&
+                "theme color must belong to a palette role and follow it in each preset");
+    }
+
+    uint32_t pixels[48 * 48];
+    os64_draw_ctx_t ctx = {.surf = {.pixels = pixels, .width = 48, .height = 48, .pitch_px = 48}};
+    os64_ui_widget_t button; os64_ui_button(&button, "Long caption", NULL, NULL);
+    os64_ui_theme_palette(&theme, OS64_UI_PALETTE_ELECTRIC);
+    theme.control_radius = 8;
+    for (int h = 0; h < 30; ++h) for (int w = 0; w < 30; ++w) {
+        for (size_t i = 0; i < 48 * 48; ++i) pixels[i] = 0x12345678;
+        button.bounds = (os64_gui_rect_t){6, 7, w, h};
+        button.cls->paint(&button, &ctx, &theme);
+        for (int y = 0; y < 48; ++y) for (int x = 0; x < 48; ++x)
+            if (x < 6 || x >= 6 + w || y < 7 || y >= 7 + h)
+                assert(pixels[y * 48 + x] == 0x12345678);
+    }
+    os64_draw_fill_rect(&ctx.surf, (os64_gui_rect_t){0, 0, 48, 48}, 0x12345678);
+    os64_draw_fill_round_rect(&ctx.surf, (os64_gui_rect_t){4, 4, 24, 24}, 6, 0xffabcdef);
+    assert(pixels[4 * 48 + 4] == 0x12345678);
+    assert(pixels[4 * 48 + 16] == 0xffabcdef && pixels[16 * 48 + 4] == 0xffabcdef);
+    os64_draw_round_rect(&ctx.surf, (os64_gui_rect_t){INT_MIN, INT_MIN, INT_MAX, INT_MAX}, INT_MAX, 1, 2);
+    os64_draw_fill_round_rect(&ctx.surf, (os64_gui_rect_t){INT_MAX, INT_MAX, INT_MAX, INT_MAX}, INT_MAX, 1);
+    assert(pixels[4 * 48 + 4] == 0x12345678);
+}
+
+static int color_changes;
+static void picked(os64_ui_colorpicker_t *p, void *user)
+{ (void)p; (void)user; ++color_changes; }
+
+static void picker_contracts(void)
+{
+    assert(os64_ui_color_from_hsv(0, 255, 255) == 0xffff0000);
+    assert(os64_ui_color_from_hsv(120, 255, 255) == 0xff00ff00);
+    assert(os64_ui_color_from_hsv(240, 255, 255) == 0xff0000ff);
+    assert(os64_ui_color_from_hsv(200, 0, 255) == 0xffffffff);
+    assert(os64_ui_color_from_hsv(200, 255, 0) == 0xff000000);
+    os64_ui_t ui = {0}; os64_ui_theme_defaults(&ui.theme);
+    os64_ui_widget_t root; os64_ui_panel(&root);
+    root.bounds = (os64_gui_rect_t){0, 0, 120, 120};
+    os64_ui_colorpicker_t picker;
+    os64_ui_colorpicker(&picker, 0xffff0000, picked, NULL);
+    picker.w.bounds = (os64_gui_rect_t){4, 4, 104, 100};
+    os64_ui_add_child(&root, &picker.w); os64_ui_set_root(&ui, &root);
+    mouse(&ui, OS64_GUI_EVENT_MOUSE_BUTTON_DOWN, 6, 6, OS64_GUI_MOUSE_LEFT);
+    assert(picker.color == 0xffffffff && color_changes == 1);
+    mouse(&ui, OS64_GUI_EVENT_MOUSE_MOVE, 200, 200, 0);
+    assert(picker.color == 0xff000000);
+    os64_ui_cancel_interaction(&ui);
+    int count = color_changes;
+    mouse(&ui, OS64_GUI_EVENT_MOUSE_BUTTON_UP, 50, 50, OS64_GUI_MOUSE_LEFT);
+    assert(color_changes == count && !picker.drag_part);
+    os64_ui_colorpicker_set(&ui, &picker, 0xff437de0);
+    assert(picker.color == 0xff437de0 && color_changes == count);
+    os64_ui_set_focus(&ui, &picker.w);
+    int saturation = picker.saturation, value = picker.value;
+    burst(&ui, "\033[D"); assert(picker.saturation == saturation - 1);
+    burst(&ui, "\033[A"); assert(picker.value == value + 1);
+    os64_ui_set_enabled(&ui, &picker.w, false);
+    count = color_changes;
+    mouse(&ui, OS64_GUI_EVENT_MOUSE_BUTTON_DOWN, 50, 50, OS64_GUI_MOUSE_LEFT);
+    mouse(&ui, OS64_GUI_EVENT_MOUSE_BUTTON_UP, 50, 50, OS64_GUI_MOUSE_LEFT);
+    assert(color_changes == count);
+    uint32_t pixels[48 * 48];
+    os64_draw_ctx_t ctx = {.surf = {.pixels = pixels, .width = 48, .height = 48, .pitch_px = 48}};
+    for (int h = 0; h < 44; ++h) for (int w = 0; w < 40; ++w) {
+        for (size_t i = 0; i < 48 * 48; ++i) pixels[i] = 0x12345678;
+        picker.w.bounds = (os64_gui_rect_t){2, 2, w, h};
+        picker.w.cls->paint(&picker.w, &ctx, &ui.theme);
+        for (int y = 0; y < 48; ++y) for (int x = 0; x < 48; ++x)
+            if (x < 2 || x >= 2 + w || y < 2 || y >= 2 + h)
+                assert(pixels[y * 48 + x] == 0x12345678);
+    }
+}
+
 int main(void)
 {
+    rounded_and_color_contracts();
+    picker_contracts();
     list_contracts();
     theme_schema_contracts();
     appearance_session_contracts();
+    appearance_customizer_contracts();
     palettes_preserve_composition();
     bevel_stays_inside_button();
     render_composes_independent_trees();
@@ -525,5 +658,5 @@ int main(void)
     interaction_contracts();
     queue_preserves_final_pointer();
     text_focus_preserves_literal_tabs();
-    puts("appearance: palettes, bounded paint, interaction, and pointer queue contracts passed");
+    puts("appearance: palettes, legacy themes, rounded paint, color picker, interaction and pointer queue contracts passed");
 }

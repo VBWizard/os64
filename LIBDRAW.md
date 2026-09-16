@@ -170,7 +170,7 @@ The model:
   itself dirty, `ui_draw(root, ctx)` the dirty region → `draw_publish`.
 
 The toolkit includes panels, labels, buttons, checkboxes, integer sliders,
-text fields, text views, and scrollbars. APPEARANCE.md describes their gallery
+text fields, text views, scrollbars, swatch lists, and an HSV color picker. APPEARANCE.md describes their gallery
 and the appearance editor's remaining slices.
 
 `os64_ui_render` draws and consumes a UI's pending damage without publishing.
@@ -183,20 +183,24 @@ metrics, including button treatment. `button.bevel` values 0 and 1 are flat;
 values 2 through 4 include the outer border and add inner relief using
 `button.highlight` and `button.shadow`. The painter caps the bevel at four
 pixels and half the control's dimensions; negative values draw no relief.
-Stock defaults remain flat.
+Stock defaults remain flat and square. `control.radius` (0..8) rounds button,
+checkbox, slider/scrollbar thumb, and text-field painting without changing
+widget bounds. The Workshop's gently rounded choice is six pixels. The
+rounded primitives clip to the surface and clamp radius to the smaller half
+extent; rounded button captions stay inside the straight center strip.
 
 `ui_theme.c` owns the property schema, supported ranges, parsing, and session
 serialization. Startup `theme.conf` uses the shared configuration search and
 parser. Invalid configuration leaves the compiled defaults in place.
-Apply payloads contain the full color set and button relief. Startup preservation
+Apply payloads contain the full color set, button relief, and corner radius. Startup preservation
 payloads begin with `inherit = startup` and carry the configured live keys,
-leaving absent keys at each application's defaults. Both forms exclude geometry;
+leaving absent keys at each application's defaults. Both forms exclude layout metrics;
 decoding is validated before replacing the caller's theme.
 
 `ui_session.c` overlays `/sys/appearance` at initialization and handles
 `OS64_GUI_EVENT_APPEARANCE` through libui dispatch. Reads and validation are
 cached per process; each UI context installs its own generation and repaints.
-Colors and button relief merge without copying geometry or resetting widget
+Colors, button relief, and corner radius merge without copying geometry or resetting widget
 state. Set `follow_session = false` for an independent draft. Custom consumers
 initialize supplied defaults through `os64_ui_theme_current`, and use
 `os64_ui_theme_session` for live updates. The initializer keeps disk geometry
@@ -312,3 +316,17 @@ uses application-owned labels, supports keyboard navigation and pointer
 selection, and can be paired with `os64_ui_scrollbar`. Saved themes use
 `ui_saved.c`; full encoding and startup validation share the theme schema in
 `ui_theme.c`. Publication and failure contracts are recorded in APPEARANCE.md.
+
+### Color editing controls
+
+`os64_ui_colorpicker` provides a saturation/value square and hue strip using
+integer HSV conversion. Pointer gestures clamp to their starting area, and
+focus loss/hiding/disablement cancels the drag. Arrow keys change saturation
+and value; Shift+Left/Right changes hue. Programmatic color setters preserve
+the exact opaque RGB input and do not notify callbacks. User gestures notify
+when the resulting RGB value changes. The caller owns hex entry and history.
+
+A listbox may supply a `swatch` callback to draw color chips before its labels;
+the chip and label share the row's existing mouse and keyboard behavior.
+Palette-role and schema color accessors live in `ui_palette.c` / `ui_theme.c`.
+APPEARANCE.md records role inference, persistence compatibility, and Undo scope.

@@ -44,6 +44,12 @@ void os64_draw_vline(os64_gui_surface_t *dst, int32_t x, int32_t y,
                      int32_t len, uint32_t color);
 void os64_draw_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
                     uint32_t color);   // outline
+// Pixel-aligned rounded rectangles. Radius clamps to half the smaller side;
+// nonpositive radius is square. The outline is one pixel with optional relief.
+void os64_draw_fill_round_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                               int32_t radius, uint32_t color);
+void os64_draw_round_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                          int32_t radius, uint32_t top_left, uint32_t bottom_right);
 
 // Blit a block of pixels onto the surface with its top-left at (x, y).
 //
