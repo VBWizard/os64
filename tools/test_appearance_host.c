@@ -568,7 +568,8 @@ static void rounded_and_color_contracts(void)
         for (size_t role = 0; role < OS64_UI_PALETTE_ROLE_COUNT; ++role)
             os64_ui_palette_role_set(&theme, role, 0xff123456);
         for (size_t i = 0; i < os64_ui_theme_color_count(); ++i)
-            assert(os64_ui_theme_color_get(&theme, i) == 0xff123456);
+            assert(os64_ui_theme_color_get(&theme, i) == 0xff123456 &&
+                "theme color must belong to a palette role and follow it in each preset");
     }
 
     uint32_t pixels[48 * 48];

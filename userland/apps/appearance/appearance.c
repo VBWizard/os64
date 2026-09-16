@@ -143,11 +143,14 @@ static void refresh_composition(void)
 static void palette_click(os64_ui_listbox_t *list, void *user)
 {
     (void)user;
+    os64_ui_theme_t next = gPreview.theme;
+    os64_ui_theme_palette(&next, (os64_ui_palette_t)list->selected);
+    if (same_theme(&next, &gPreview.theme)) return;
+    remember_edit();
+    gPreview.theme = next;
     gApplyStatus = "Preview changed";
     gChanged |= OS64_UI_COMPONENT_PALETTE;
-    remember_edit();
     gPalette = (unsigned)list->selected;
-    os64_ui_theme_palette(&gPreview.theme, (os64_ui_palette_t)gPalette);
     sync_color();
     refresh_composition();
 }
@@ -155,11 +158,14 @@ static void palette_click(os64_ui_listbox_t *list, void *user)
 static void style_click(os64_ui_widget_t *w, void *user)
 {
     (void)w;
+    os64_ui_theme_t next = gPreview.theme;
+    next.button_bevel = user ? 3 : 0;
+    if (same_theme(&next, &gPreview.theme)) return;
+    remember_edit();
+    gPreview.theme = next;
     gApplyStatus = "Preview changed";
     gChanged |= OS64_UI_COMPONENT_TREATMENT;
-    remember_edit();
     gStyle = (unsigned)(uintptr_t)user;
-    gPreview.theme.button_bevel = gStyle ? 3 : 0;
     refresh_composition();
 }
 
@@ -311,9 +317,12 @@ static void undo_click(os64_ui_widget_t *w, void *user)
 static void reset_component_click(os64_ui_widget_t *w, void *user)
 {
     (void)w; (void)user;
-    remember_edit();
     uint32_t component = gPage == 2 ? OS64_UI_COMPONENT_TREATMENT : OS64_UI_COMPONENT_PALETTE;
-    os64_ui_theme_merge(&gPreview.theme, &gBaseline, component);
+    os64_ui_theme_t next = gPreview.theme;
+    os64_ui_theme_merge(&next, &gBaseline, component);
+    if (same_theme(&next, &gPreview.theme)) return;
+    remember_edit();
+    gPreview.theme = next;
     gChanged |= component;
     describe_palette();
     gApplyStatus = "Component reset to loaded / saved values";
@@ -323,8 +332,11 @@ static void reset_component_click(os64_ui_widget_t *w, void *user)
 static void corner_click(os64_ui_widget_t *w, void *user)
 {
     (void)w;
+    os64_ui_theme_t next = gPreview.theme;
+    next.control_radius = user ? 6 : 0;
+    if (same_theme(&next, &gPreview.theme)) return;
     remember_edit();
-    gPreview.theme.control_radius = user ? 6 : 0;
+    gPreview.theme = next;
     gChanged |= OS64_UI_COMPONENT_TREATMENT;
     gApplyStatus = "Corners changed in preview";
     refresh_composition();

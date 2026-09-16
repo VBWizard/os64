@@ -37,13 +37,13 @@ void os64_ui_colorpicker_set(os64_ui_t *ui, os64_ui_colorpicker_t *p, uint32_t c
     int delta = max - min;
     p->value = max;
     p->saturation = max ? (delta * 255 + max / 2) / max : 0;
+    // Preserve the hue of an achromatic color so dragging up from gray or
+    // black does not unexpectedly reset the user's chosen hue.
     if (delta) {
         int h = max == r ? 60 * (g - b) / delta :
                 max == g ? 120 + 60 * (b - r) / delta : 240 + 60 * (r - g) / delta;
         p->hue = h < 0 ? h + 360 : h;
     }
-    // Preserve the hue of an achromatic color so dragging up from gray or
-    // black does not unexpectedly reset the user's chosen hue.
     if (ui) os64_ui_mark_dirty(ui, &p->w);
 }
 

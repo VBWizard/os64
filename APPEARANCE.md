@@ -139,7 +139,8 @@ controls, geometry, and behavior must inform that design.
   Snapshots remain flattened independent colors, so this inference survives
   reload without new role metadata. Equal colors cannot encode an intentional
   override distinct from inheritance; explicit inheritance metadata is a
-  separate format decision. Choosing a preset replaces the whole palette.
+  separate format decision tracked in `DEBTS.md`. Choosing a preset replaces
+  the whole palette.
 - Controls offers Flat/Raised relief and Square/Gently rounded corners.
   Rounded sets `control.radius = 6`; the shared schema accepts 0..8 pixels.
   Buttons, checkbox indicators, slider thumbs, text fields, and scrollbar
@@ -153,9 +154,13 @@ controls, geometry, and behavior must inform that design.
   not with palette or layout metrics. An older libui may reject a new payload
   containing this key; install rebuilt participating applications together.
 - Undo stores up to 32 palette/treatment edit snapshots; one picker drag is
-  one edit. It changes the preview, not files or the active session. Loading
-  a theme starts new history. Reset component restores the selected palette
-  or treatment from the loaded/saved baseline and can itself be undone.
+  one edit. Each keyboard adjustment that changes the selected RGB color is
+  a separate edit, including key repeats; it can evict the oldest snapshot
+  when history is full. Unchanged palette/treatment choices and component
+  resets do not record an edit. Undo changes the preview, not files or the
+  active session. Loading a theme starts new history. Reset component restores
+  the selected palette or treatment from the loaded/saved baseline and can
+  itself be undone.
   Composition-name typing remains the text field's own editing operation.
 - The preview includes menu colors/separator/selection and held normal,
   hovered, pressed, focused, and disabled button examples. The normal button,
@@ -808,9 +813,7 @@ in the collection contracts above.
 - `git diff --check` passed. `tools/stale_refs.sh` findings were reviewed:
   surviving shorthand for button events/drawing APIs and the live config-path
   document; no new superlative claims were reported.
-- Evidence is under `/tmp/appearance-save-20260915/`, including
-  `final-workshop.png`, `final-scribe.png`, host/build logs, and guest serial logs.
-  Tests used private disk copies. The P5 was not modified by this work.
+- Tests used private disk copies. The P5 was not modified by this work.
 - Following installation, Chris reported that startup reload works correctly
   on the P5. This is user-reported hardware validation, separate from the QEMU
   checks above.
@@ -879,9 +882,8 @@ and the sample field; all 65 built-in guest tests passed.
   Scribe, and persisted as the startup choice. After reboot `/sys/appearance`
   reported generation zero, a new Scribe showed the saved rounded treatment
   and colors, and the Workshop reloaded the personal composition successfully.
-- `git diff --check` and `tools/stale_refs.sh` passed without findings. Guest
-  screenshots and logs are under `/tmp/appearance-customizer-20260915` on this
-  workstation. This is QEMU evidence; no new P5 installation was performed.
+- `git diff --check` and `tools/stale_refs.sh` passed without findings.
+  This is QEMU evidence; no new P5 installation was performed.
 
 
 ## Foundation integration (2026-09-16)
@@ -899,12 +901,11 @@ resize. Relayout updates scroll geometry without replacing unsubmitted hex
 input. Both sanitizer host suites, strict build, whitespace and stale-reference
 checks passed. QEMU verified the existing saved rounded composition, session
 Apply to Scribe, and resize focus on the integrated branch; all 65 built-in tests
-passed. Evidence and the pre-integration backup are under
-`/tmp/appearance-customizer-integration-20260916`.
+passed.
 
-Next checkpoint: internal review of the customizer's userland diff, then its
-follow-up PR. Fonts, tooltips, application menus, and window decorations remain
-separate work. The foundation's external review does not cover this follow-up.
+The customizer's userland diff is reviewed in PR #109. Fonts, tooltips,
+application menus, and window decorations are separate work. The foundation's
+external review does not cover the customizer.
 
 ## Minimum-size adoption (2026-09-16)
 
@@ -919,7 +920,26 @@ The strict build and ASan/UBSan appearance host suite passed. QEMU at 1024x768
 verified shrink attempts from all four corners stop at the minimum, all three
 tabs and the live preview remain visible, and unfinished hex/name edits retain
 text and focus across maximize/restore. All 66 built-in tests passed.
-Screenshots, logs and the QMP script are under
-`/tmp/appearance-minimum-adoption-20260916`. This is QEMU evidence; no new P5
-installation was performed. Install the branch's kernel together with its
-userland, since the Workshop uses the minimum-size syscall from PR #108.
+This is QEMU evidence; no new P5 installation was performed. Install the
+branch's kernel together with its userland, since the Workshop uses the
+minimum-size syscall from PR #108.
+
+## PR #109 review verification (2026-09-16)
+
+- The saved-theme harness's missing `os64_syscall3` declaration reproduced a
+  compile failure after minimum-size integration. Adding the declaration
+  restores `ASAN_OPTIONS=detect_leaks=0 tools/test_appearance_saved_host.sh`.
+- The unchanged-choice regression failed before the Undo guards and passes
+  with them in `ASAN_OPTIONS=detect_leaks=0 tools/test_appearance_host.sh`.
+  Coverage includes empty history, repeated choices beyond the 32-entry
+  capacity, preservation of a real edit, unchanged Apply component/status
+  tracking, palette/treatment resets, and separate keyboard adjustment steps.
+- Strict `make -j8` passed without compiler diagnostics. `git diff --check`
+  passed; the stale-reference scan reported references to its own live script,
+  which were inspected and remain valid.
+- An isolated eight-CPU QEMU guest at 1024x768 passed 31 pre-boot, 32 post-boot,
+  and 3 late tests. Forty clicks each on the current Square, Flat, and Reset
+  component choices left Undo disabled. Forty Gently rounded clicks created
+  one edit; one Undo restored the square preview and disabled Undo. Screenshots
+  were inspected, and pixel comparisons checked the Undo state and restored
+  preview. This run used private disk copies and made no P5 changes.

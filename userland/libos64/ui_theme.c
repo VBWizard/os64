@@ -61,6 +61,9 @@ void os64_ui_theme_defaults(os64_ui_theme_t *t)
 }
 
 // The schema owns file keys, inspector captions, field offsets and ranges.
+// Add a theme value as a field in os64_ui_theme_t and a row in kThemeKeys;
+// colors also need membership in ui_palette.c's kRoles and preset values.
+// Keep theme values in this schema rather than scattered paint constants.
 typedef enum { THEME_COLOR, THEME_METRIC } theme_kind_t;
 typedef struct
 {

@@ -48,11 +48,26 @@ void appearance_customizer_contracts(void)
     contained(&gRoot); contained(&gCanvas);
     gCtx.surf.height = 706; layout();
     os64_ui_theme_t old = gPreview.theme;
+    uint32_t unchanged_components = gChanged;
+    const char *unchanged_status = gApplyStatus;
+    // Repeated unchanged choices must not enable Undo or spend its history.
+    for (unsigned i = 0; i < 40; ++i) {
+        corner_click(NULL, NULL);
+        style_click(NULL, (void *)(uintptr_t)gStyle);
+        palette_click(&gPalettes, NULL);
+        reset_component_click(NULL, NULL);
+    }
+    assert(same_theme(&gPreview.theme, &old) && !gUndoCount && gUndo.disabled);
+    assert(gChanged == unchanged_components && gApplyStatus == unchanged_status);
     corner_click(NULL, (void *)1);
     assert(gPreview.theme.control_radius == 6 && gUndoCount == 1 && draft_dirty());
+    for (unsigned i = 0; i < 40; ++i) corner_click(NULL, (void *)1);
+    assert(gUndoCount == 1);
     undo_click(NULL, NULL);
     assert(same_theme(&gPreview.theme, &old) && !gUndoCount && !draft_dirty());
     tab_click(NULL, (void *)1);
+    reset_component_click(NULL, NULL);
+    assert(!gUndoCount && gUndo.disabled);
     os64_ui_listbox_set(&gEditor, &gColors, OS64_UI_PALETTE_ROLE_COUNT, 3);
     color_selection(&gColors, NULL);
     os64_ui_textfield_set(&gEditor, &gHexField, "12ZZ44");
@@ -74,6 +89,25 @@ void appearance_customizer_contracts(void)
     gPicker.color = 0xff335577; picker_changed(&gPicker, NULL);
     assert(gUndoCount == count + 1);
     gPicker.w.pressed = false; gPickerEditing = false;
+    undo_click(NULL, NULL);
+    assert(gPreview.theme.button_face == 0xff123456);
+    count = gUndoCount;
+    os64_ui_set_focus(&gEditor, &gPicker.w);
+    uint32_t first_key_color = 0;
+    for (unsigned i = 0; i < 2; ++i) {
+        const char *arrow = "\033[A";
+        while (*arrow) {
+            os64_gui_event_t ev = {.type = OS64_GUI_EVENT_KEY_DOWN,
+                .key = {.ascii = (unsigned char)*arrow++}};
+            dispatch(&ev);
+        }
+        if (!i) first_key_color = gPreview.theme.button_face;
+    }
+    assert(first_key_color != 0xff123456);
+    assert(gPreview.theme.button_face != first_key_color);
+    assert(gUndoCount == count + 2);
+    undo_click(NULL, NULL);
+    assert(gPreview.theme.button_face == first_key_color);
     undo_click(NULL, NULL);
     assert(gPreview.theme.button_face == 0xff123456);
     // Changing pages cancels the picker's drag and hidden controls lose focus.
