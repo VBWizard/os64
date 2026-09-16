@@ -87,16 +87,40 @@ int main(int argc, char **argv)
         CHECK(os64_gui_window_set_min_size(win, min_w = 958, min_h = 696) == 0);
         paint(&ctx, min_w, min_h);
         bool quit = false;
+        uint8_t client_buttons = 0;
+        unsigned presses = 0, releases = 0;
         while (!quit) {
             os64_gui_event_t ev;
             int64_t rc = os64_gui_event_wait(win, &ev);
             if (rc == OS64_INTERRUPTED) continue;
             if (rc != 1) { CHECK(false); break; }
+            if (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN) {
+                client_buttons |= (uint8_t)(1u << ev.mouse.button);
+                ++presses;
+            }
+            if (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_UP) {
+                // WM-owned presses must not produce client-only releases.
+                CHECK(client_buttons & (1u << ev.mouse.button));
+                client_buttons &= (uint8_t)~(1u << ev.mouse.button);
+                ++releases;
+            }
             if (ev.type == OS64_GUI_EVENT_WINDOW_CLOSE) quit = true;
             if (ev.type == OS64_GUI_EVENT_WINDOW_RESIZE) paint(&ctx, min_w, min_h);
             if (ev.type != OS64_GUI_EVENT_KEY_DOWN) continue;
             char c = ev.key.ascii;
             if (c == 'q') quit = true;
+            if (c == 'd') {
+                // Let the driver begin a WM resize, then replace its target.
+                os64_sleep(3000);
+                CHECK(os64_gui_window_destroy(win) == 0);
+                win = os64_gui_window_create("Replacement window", 32, 24, 960, 717, 0);
+                CHECK(win > 0);
+                if (win <= 0) return 1;
+                CHECK(os64_draw_ctx_init(&ctx, win) == 0);
+                min_w = 64; min_h = 32; client_buttons = 0;
+                paint(&ctx, min_w, min_h);
+                continue;
+            }
             if (c != 'r' && c != 'l' && c != 's' && c != 'g') continue;
             if (c == 'g') os64_sleep(3000);
             min_w = c == 'r' ? 64 : c == 'l' ? 640 : 958;
@@ -104,6 +128,7 @@ int main(int argc, char **argv)
             CHECK(os64_gui_window_set_min_size(win, min_w, min_h) == 0);
             paint(&ctx, min_w, min_h);
         }
+        os64_printf("windowmintest: client mouse presses %u releases %u\n", presses, releases);
     }
     CHECK(os64_gui_window_destroy(win) == 0);
     CHECK(os64_gui_window_set_min_size(win, 0, 0) == OS64_GUI_ERR_INVALID_HANDLE);

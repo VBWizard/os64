@@ -411,8 +411,9 @@ static inline int64_t os64_gui_window_get_state(int64_t handle,
 // A successful call grows an undersized window and emits WINDOW_RESIZE if its
 // size changes; lowering a limit does not shrink it. Re-fetch the surface after
 // success before drawing. An active WM resize gesture is cancelled when the
-// limits change. Drag, maximize, and restore honor these content limits even
-// if the resulting frame extends beyond the screen. Returns 0 or a GUI error;
+// limits change; the WM consumes its remaining mouse releases. Drag, maximize,
+// and restore honor these content limits even if the resulting frame extends
+// beyond the screen. Returns 0 or a GUI error;
 // only the owning task can change a window's limits.
 static inline int64_t os64_gui_window_set_min_size(int64_t handle,
                                                    uint32_t width, uint32_t height)

@@ -24,6 +24,10 @@ and damage handling. Lowering a limit does not shrink the window. The caller
 re-fetches its surface after success before drawing. Same-value calls do not
 cancel gestures; changed limits cancel the active WM resize outline for that
 window, so an outline computed under old constraints cannot later commit.
+The WM retains ownership of consumed mouse presses through their releases,
+including additional buttons pressed during the gesture. Cancelled geometry
+has no retained window pointer, so destroying the target is safe. Mouse events
+remain consumed on a text VT; client hover resumes after the grab drains.
 Client pointer grabs are unaffected.
 
 ## Window operations
@@ -48,7 +52,7 @@ Kernel regression coverage exercises decorated, undecorated and desktop clamps,
 minimum and capacity bounds, and unchanged legacy floors. The `windowmintest`
 guest fixture covers the syscall, immediate growth, preserved canvas address
 and stride, rejection atomicity, reset behavior, and interactive resize,
-maximize/restore and decoration changes. 
+maximize/restore and decoration changes.
 Validation on 2026-09-16:
 
 - `make -j8` passed with the repository's `-Wall -Wextra -Werror` build.
@@ -72,3 +76,26 @@ Screenshots, serial output, build logs, fixture results and the QMP gesture
 script are in `/tmp/window-minimum-size-20260916` on the development machine.
 No P5 deployment was performed. Appearance Workshop adoption remains in its
 separate customizer follow-up.
+
+## Review follow-up: keep mouse ownership after cancelling the outline
+
+The original cancellation cleared the outline's window pointer and also lost
+its implicit WM pointer grab. Releasing the right button over a client then
+produced a release without a matching client press. The compositor now tracks
+WM-consumed buttons independently of the outline. It drains each button edge
+through cancellation, target destruction and text-VT handoff. Additional
+buttons are consumed while a resize is active and while its cancelled grab
+is draining; hover stays suppressed until those releases finish.
+
+`windowmintest --hold` checks client press/release pairing. Its `g` key changes
+the minimum after three seconds, leaving time to start a resize; `d` replaces
+the target window after the same delay. The original implementation failed
+with zero client presses and one release. The corrected QEMU run reported
+four intended client presses, four releases and zero failures after exercising
+cancellation, extra buttons (including a combined release), target destruction,
+a text-VT release, and ordinary resize/maximize/restore afterward.
+
+The strict build, ASan/UBSan appearance suite, all 66 built-in tests,
+whitespace/stale-reference checks and private-home filesystem check passed.
+Evidence: `/tmp/window-minimum-review-108`, including `before.log`, `after.log`
+and the QMP reproduction/verification scripts. No P5 deployment was performed.

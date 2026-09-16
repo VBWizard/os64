@@ -749,6 +749,9 @@ static void alttab_end_locked(bool commit)
 // The readout reports CONTENT size, not frame size: the client area is what
 // an app actually gets, and for a terminal it is the number that matters.
 static window_t *s_band_window = NULL;   // the window being rubber-banded
+// Buttons consumed by the WM resize. Outlives the outline when it is cancelled
+// or its window dies; no window pointer is needed to drain the remaining edges.
+static uint8_t s_resize_buttons;
 static rect_t    s_band_rect;            // the outline, screen coords, as drawn
 static rect_t    s_band_origin;          // its frame when the gesture began
 static int32_t   s_band_anchor_x, s_band_anchor_y;   // where the press landed
@@ -902,7 +905,7 @@ static void pointer_state_locked(void)
 	window_t *under = NULL;
 	int32_t x = 0, y = 0;
 	int32_t width = 0, height = 0;
-	if (gui_owns_glass() && !s_drag_window && !s_band_window) {
+	if (gui_owns_glass() && !s_drag_window && !s_resize_buttons) {
 		under = wm_topmost_at(s_cursor_x, s_cursor_y);
 		if (under && s_pointer_window && under != s_pointer_window) under = NULL;
 		if (under) {
@@ -951,6 +954,7 @@ void gui_cancel_resize(const struct window *w)
 	if (s_band_window == (const window_t *)w) {
 		band_damage_locked(s_band_rect);
 		s_band_window = NULL;
+		// Keep s_resize_buttons: its matching releases still belong to us.
 	}
 }
 
@@ -1004,6 +1008,27 @@ static void route_event_locked(const input_event_t *ev)
 		s_cursor_x = ev->mouse.x;
 		s_cursor_y = ev->mouse.y;
 		gui_damage_add_locked(rect_union(moved, cursor_rect()));
+	}
+	if (s_resize_buttons && (ev->type == INPUT_EVENT_MOUSE_MOVE ||
+	                        ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN ||
+	                        ev->type == INPUT_EVENT_MOUSE_BUTTON_UP)) {
+		// Drain individual edges, not mouse.buttons: one physical report can
+		// enqueue several releases with the same final (empty) button mask.
+		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN)
+			s_resize_buttons |= (uint8_t)(1u << ev->mouse.button);
+		else if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP)
+			s_resize_buttons &= (uint8_t)~(1u << ev->mouse.button);
+		// Cancellation removes the outline, not ownership of its press. Do
+		// this before the VT fork so a release on a text VT is consumed too.
+		if (!s_band_window || !gui_owns_glass()) {
+			if (s_band_window) gui_cancel_resize(s_band_window);
+			return;
+		}
+		// Additional button presses were consumed during this resize; their
+		// releases must not fall through to a client while the band is live.
+		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP &&
+		    ev->mouse.button != INPUT_MOUSE_BUTTON_RIGHT)
+			return;
 	}
 	// THE INPUT FORK (2026-08-21). Mouse events belong to whoever holds the
 	// glass: the window system when VT8 is up, the focused TEXT TERMINAL
@@ -1084,6 +1109,7 @@ static void route_event_locked(const input_event_t *ev)
 				s_drag_dy = ev->mouse.y - w->frame.y;
 			} else if (ev->mouse.button == INPUT_MOUSE_BUTTON_RIGHT) {
 				s_band_window = w;
+				s_resize_buttons = ev->mouse.buttons;
 				s_band_origin = w->frame;
 				s_band_rect   = w->frame;
 				s_band_anchor_x = ev->mouse.x;

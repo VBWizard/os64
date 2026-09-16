@@ -48,8 +48,9 @@ void gui_emergency_disable(void);
 struct window;
 void gui_grab_release(const struct window *w);
 
-// Cancel the WM resize outline for this window under kGuiLock. Client pointer
-// grabs and window moves are unaffected. Used when size constraints change.
+// Cancel the WM resize outline under kGuiLock, retaining the WM's mouse grab
+// through the remaining button releases. Client grabs and moves are unaffected.
+// Used when size constraints change or the resize target is destroyed.
 void gui_cancel_resize(const struct window *w);
 
 // ── VT8 glass ownership (the VT8 chapter in GRAPHICS.md, 2026-08-19) ────────
