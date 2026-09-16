@@ -943,8 +943,13 @@ void gui_grab_release(const struct window *w)
 		s_pointer_window = NULL;   // a window that dies mid-drag lets go
 	if (s_hover_window == (const window_t *)w)
 		s_hover_window = NULL;
+	gui_cancel_resize(w);
+}
+
+void gui_cancel_resize(const struct window *w)
+{
 	if (s_band_window == (const window_t *)w) {
-		band_damage_locked(s_band_rect);   // erase the orphaned outline
+		band_damage_locked(s_band_rect);
 		s_band_window = NULL;
 	}
 }

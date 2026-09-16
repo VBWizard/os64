@@ -678,6 +678,16 @@ nothing in userland changed; the stale claim was a comment in `os64/gui.h`
 promising they were equal, and that comment is now the explanation of why they
 are not.
 
+### Per-window minimum size
+
+`os64_gui_window_set_min_size` lets an owner raise its window's minimum
+content dimensions above the default 64x32 resize floor. The existing clamp
+serves the outline, drag commit, maximize and restore. A successful request
+grows a too-small window through the normal resize path; limits beyond the
+reserved canvas capacity are refused without changes. See
+[WINDOW_MINIMUM_SIZE.md](WINDOW_MINIMUM_SIZE.md) for the syscall contract,
+mid-drag handling and verification fixture.
+
 ### The gesture
 
 - The chord is BOTH modifiers, so a plain Ctrl-click or Alt-click still reaches

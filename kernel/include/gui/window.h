@@ -208,6 +208,9 @@ typedef struct window
 
     char      title[GUI_WINDOW_TITLE_MAX];
 
+    // Effective content floors, initialized to the default resize limits.
+    uint32_t min_content_w, min_content_h;
+
     rect_t    frame;      // screen rect INCLUDING decorations
     surface_t content;    // what the COMPOSITOR composites (the front buffer)
     // The client's drawing target (the back buffer). gui_window_get_surface
@@ -306,14 +309,18 @@ void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
                             uint32_t *cap_w, uint32_t *cap_h);
 
 // The frame this window would actually ADOPT for a requested one: content
-// clamped to [GUI_WINDOW_MIN_CONTENT_*, capacity], then re-inflated by the
+// clamped to [per-window minimum, capacity], then re-inflated by the
 // chrome. Exported so an interactive resize can PREVIEW exactly what it will
 // commit — the rubber band and wm_resize share this function precisely so the
 // outline can never promise a size the window then refuses.
 rect_t wm_clamp_frame(const window_t *w, rect_t frame);
 
+// Validate both floors against capacity before changing either. Zero uses the
+// default floor; success grows a too-small window without shrinking it.
+bool wm_set_min_size(window_t *w, uint32_t width, uint32_t height);
+
 // Resize to `frame` (screen rect INCLUDING decorations), clamping the content
-// to [GUI_WINDOW_MIN_CONTENT_*, the canvas capacity]. Because both pixel
+// to [per-window minimum, the canvas capacity]. Because both pixel
 // stores were reserved at capacity this only re-reports their size, paints
 // whatever the growth newly exposed, damages old ∪ new, and hands the owner
 // an INPUT_EVENT_WINDOW_RESIZE. It allocates nothing and cannot fail; the
