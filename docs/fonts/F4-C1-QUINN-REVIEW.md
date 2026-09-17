@@ -1,5 +1,11 @@
 # Quinn review — F4 checkpoint 1
 
+**Latest disposition:** the [follow-up on 5357245](#follow-up-on-5357245)
+closes the original R1 use-after-free, R3 and R4. R2 remains open in three
+reproduced paths, and new R5 covers listbox teardown. Please address those
+four P2 issues before treating the C1 boundary as accepted for C2/C3.
+The original review below is preserved with its original commit references.
+
 2026-09-17. Reviewed implementation **d11608b** and review brief **5a33242**
 on `opus/font-widgets`, based on F2.5
 `788de9900282e941a7a93aa110ffa69154daa066`.
@@ -209,3 +215,194 @@ probes. `release` is expected to exit nonzero under ASan on the reviewed commit;
 other probes print the observed behavior and do not assert correctness through
 their exit code. Compare with `observations.txt`. The committed observations and
 trace came from the original review; the runner packages that source for reuse.
+
+
+## Follow-up on 5357245
+
+2026-09-17. Reviewed **5357245**, including the implementation delta from
+5a33242, the report's **After the review** reply, revised tests and original
+probe adaptations. This remains a C1 boundary review. No production code,
+shared F0/F2.5 contract, or C2/C3 work was changed by this review.
+
+### Disposition of the first round
+
+| Item | Result |
+| --- | --- |
+| R1: allocator-owner use-after-free | Closed for the original defect. Retained sets/runs no longer call a freed binding. See the teardown policy observation below and new R5. |
+| R2: failure propagation and prepared paint state | Partially fixed; remains open as R2a–R2c below. Status-bearing measurement and direct-draw refusal now work. |
+| R3: planner registration | Closed. Registration allocates nothing and rejects an incomplete callback trio. |
+| R4: primary-row clipping | Closed. The original small-primary/large-marker probe paints zero pixels outside the row. |
+| Q1: application planner | Direction accepted; R2c demonstrates a remaining ordering/data-flow gap between application geometry and widget preparation. |
+| Q2: class hooks | Prepare/commit/discard plus metrics are a reasonable split. Add a complete lifetime path for class-owned resources (R5). |
+| Q3: natural versus allocated height | Accepted direction. `natural_h`, `auto_h`, and the fixed-height setter separate the responsibilities; the supplied height-policy checks pass. |
+| Q4: shared context | Accepted direction. Explicit borrowing and rejection of a foreign candidate are implemented; the supplied sharing checks pass. |
+
+### R2a — P2: propagate failure while resolving the space/tab interval
+
+Location at 5357245: `userland/libos64/ui_font.c:130–159`, called without a
+status check from `consumer_prepare:688` (also used by startup binding).
+
+`faces_resolve` still returns void. Failure to lay out the space still becomes
+`8 * OS64_FONT_GLYPH_W * OS64_FONT_UNIT`, after which adoption can return OK.
+This is the space/tab path explicitly included in original R2, independently
+of the now-correct public measurement function.
+
+Reproduction: DejaVu Sans **16px**, deny one allocation during adoption, then
+allow allocations and measure a space and tab. Denials **2 through 13** each
+produce **adoption OK, space 5px, tab 64px**, although eight spaces require
+**40px**. The wrong interval persists in the installed faces after memory is
+available again. The 24px face used in the earlier width probe can conceal
+this error because its eight-space interval matches the bitmap interval.
+
+Required correction: make face/interval resolution report failure and carry
+that status through preparation with complete cleanup. Distinguish a defined
+policy for a valid zero-width space from an allocation/layout error. Cover
+all callers, including startup binding; live replacement must retain the old
+identity and usable state when resolution fails.
+
+Regression: walk denials through each role's space resolution using a face
+whose interval differs from 64px; require refusal or the exact successfully
+resolved interval, never a successful substitution.
+
+### R2b — P2: paint button alignment from its retained run
+
+Location: `userland/libos64/ui.c:549–562`, `button_paint`.
+
+The caption is retained during adoption, but the actual button painter calls
+`os64_ui_text_measure` again and ignores its status. This performs a new
+layout allocation on each paint. On refusal `tw` remains zero, while
+`os64_ui_draw_text` successfully paints the already-retained caption. The
+comment that failed measurement implies no painting is false for this path.
+
+Reproduction: adopt DejaVu Sans 24px on a 200px-wide button labeled `WWWW`.
+The first call to the **actual button class painter** makes **five allocations**.
+With allocations refused, the existing run still paints, but its leftmost ink
+moves from **X=52 to X=100**; **876 pixels differ**. The window has already
+committed the new font, so there is no preparation refusal left to return.
+
+Required correction: obtain the alignment width from the same retained/staged
+run used for painting. Resolve a changed caption once through a coherent
+update path; failed remeasurement must not pair a zero width with an old or
+successfully retained run. Review sibling painters for independent measure
+and draw work.
+
+Regression: after adoption, deny allocations and invoke the real button
+painter, not just `os64_ui_draw_text`. Require identical placement/pixels and
+no layout allocation for unchanged content.
+
+### R2c — P2: stage list rows against the application's candidate bounds
+
+Locations: `userland/libos64/ui_list.c:45–55,153–157` and
+`userland/libos64/ui_font.c:695–704`.
+
+List preparation uses the candidate row pitch but **live `w->bounds.h`**.
+`stage_tree_runs` runs before the application planner, so it cannot account
+for a candidate layout that gives the list more height. After commit, newly
+visible rows have no retained slots and must allocate in their first paint.
+The application cannot fix this through the current hook by writing live
+bounds during prepare: the shared transaction contract forbids that mutation.
+
+Reproduction: a three-item list, DejaVu Sans 8px, live height **22px**; the
+application planner stages height **58px** and applies it only at commit.
+Adoption returns OK with **three visible rows but one retained row run**.
+The first paint attempts **two refused allocations**, leaving the other two
+labels blank; with memory available it makes **ten allocations**. The two
+surfaces differ by **296 pixels**. This uses unchanged labels and no event or
+resize between preparation and painting.
+
+Required correction: make candidate application geometry available to widget
+resource preparation before the transaction succeeds. A planning/preparation
+split or an explicit staged-geometry view can do that without modifying live
+bounds. Include the candidate visible range/scroll position as applicable.
+Do not solve this by moving fallible work into commit or by staging every
+item in an unbounded list.
+
+Regression: application layout grows and shrinks a list as part of adoption;
+first paint of every candidate-visible row must use prepared resources under
+allocation denial. This ordering matters directly to C2 textview windows.
+
+### R5 — P2: release class-owned list runs during window teardown
+
+Locations: `userland/libos64/ui_font.c:779–801` and
+`userland/libos64/ui_list.c:84–98`.
+
+`release_tree_runs` releases only the generic widget `run` and `run_staged`.
+The new listbox stores its active runs in `row_runs` and its pending runs in
+`row_runs_staged`; teardown reaches neither array. List commit/discard cover
+replacement/abort, but provide no normal destruction path for the active
+array. The owned text context remains BUSY solely because of libui's own
+list resources.
+
+Reproduction: adopt a list with **one visible retained row**, release the
+caller's candidate, retain no external run, then release the UI. Both the
+initial release and retry return **BUSY**. The list retains its run and the
+binding retains **810,587 bytes**. The probe then manually releases the
+list's internal run/array, at which point teardown returns OK and the host
+allocator ledger reaches zero. That manual internal cleanup is diagnostic,
+not a proposed application responsibility.
+
+Required correction: give class-owned resources an explicit teardown path
+and invoke it for the tree, including active and staged arrays as applicable.
+Cover borrowed contexts as well: they must not retain window-owned runs after
+the UI is gone. Preserve the allocator owner for genuinely external survivors.
+A class destroy hook or another ownership mechanism is fine; generic caption
+cleanup alone is insufficient for C2's larger retained state too.
+
+Regression: successful list adoption and teardown with no external handles
+must complete without BUSY/leaks, for owned and borrowed contexts. Also test
+aborted staging and an external survivor that genuinely requires BUSY.
+
+### Teardown policy observation for R1/Q4
+
+The original lifetime fix works, but `BUSY` currently means **partial teardown
+with the allocator owner retained**, not the unchanged usable window promised
+by the header/report. With a caller-held candidate, `busy-state` observes
+BUSY, a cleared active-set identity, and `WWWW` changing from **96px to 32px**
+on subsequent measurement. The release implementation drops runs/set before
+attempting context destruction and permits builtin reinitialization afterward.
+
+This is recorded as a boundary-policy observation, not a second version of the
+closed use-after-free finding. A teardown-only retry API can be valid, but C2/F5
+callers must not rely on an unchanged usable UI after it. My recommendation is
+to make that lifecycle explicit if retaining destructive teardown; if unchanged
+refusal is the intended guarantee, the implementation needs to preserve the
+active state. R5 requires a code fix under either choice.
+
+### Follow-up evidence and handoff
+
+Independently reran the corrected real-backend host suite: **197 checks,
+zero failures**, O2, ASan+UBSan. Independently rebuilt/reran all **six original
+probes** against the new API; their results match the corrected observations.
+The follow-up probes link the real `ui.c`, `ui_controls.c`, **`ui_list.c`**,
+font adapter, F2/provider, and pinned FreeType backend. Their harness is O1
+with ASan+UBSan and uses the freshly built O2 backend objects. LeakSanitizer
+was disabled; the probes separately count allocator blocks and finish at zero
+(after the expressly identified manual cleanup for R5).
+
+The supplied first-paint test calls the draw helper directly, so it does not
+exercise button remeasurement. The supplied host runner does not link
+`ui_list.c`, so its 197 passing checks cannot establish list preparation or
+teardown correctness. The new probes cover those concrete missing paths.
+
+Repository handoff artifacts:
+
+- [Follow-up probe source](f4-evidence/c1-review/r2-repro.c)
+- [Follow-up runner](f4-evidence/c1-review/r2-run.py)
+- [Observed follow-up results](f4-evidence/c1-review/r2-observations.txt)
+- [Independently rerun baseline](f4-evidence/c1-review/r2-baseline-host.txt)
+- [Independently rerun original probes](f4-evidence/c1-review/r2-original-probes.txt)
+
+From this worktree:
+
+```sh
+python3 docs/fonts/f4-evidence/c1-review/r2-run.py --output /tmp/f4-c1-r2-review
+```
+
+The default command rebuilds the baseline and original probes before the new
+ones. `--baseline <existing-baseline-dir>` can reuse compatible objects from
+this checkout. Probes print observations rather than treating exit zero as
+approval; compare the recorded results and the required behavior above.
+
+No independent full cross-build, QEMU rerun, or hardware validation was
+performed for this follow-up. Those claims in Opus's report remain his evidence.
+No implementation edits, commit, push, merge, or C1 completion approval were made.

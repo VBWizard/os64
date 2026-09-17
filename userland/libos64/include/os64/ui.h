@@ -233,6 +233,14 @@ typedef struct os64_ui_class
     void (*commit)(os64_ui_widget_t *w);
     void (*discard)(os64_ui_widget_t *w);
 
+    // Let go of everything this class retains, staged and active alike.
+    // Called for the whole tree when the window's fonts are released. A
+    // class that keeps runs anywhere other than `run`/`run_staged` — a list
+    // keeps one per visible row — has to be asked, because the generic
+    // teardown cannot see its storage, and a run it keeps holds the text
+    // context BUSY for good.
+    void (*destroy)(os64_ui_widget_t *w);
+
     // IT REPORTS WHAT THE WIDGET NEEDS; IT DOES NOT ALLOCATE THE RECTANGLE.
     // A label, a button and a checkbox are each one row of text plus
     // furniture, so the class is the only thing that can size them under a
@@ -276,6 +284,14 @@ struct os64_ui_widget
     // that are one row of text; os64_ui_widget_fixed_height clears it.
     int32_t natural_h;
     bool    auto_h;
+
+    // WHERE THIS WIDGET WILL BE if the adoption in flight succeeds, staged
+    // by the application's planner and applied by commit. Live `bounds`
+    // never move before commit — but a widget preparing its text needs to
+    // know how much room it is ABOUT to have, or a list that grows stages
+    // runs for the rows it can show today and has none for the rest.
+    os64_gui_rect_t bounds_staged;
+    bool            bounds_staged_valid;
 
     // The run this widget's text is drawn from, retained under the active
     // face, and the one prepared against a candidate during adoption. Both
@@ -481,15 +497,22 @@ size_t os64_ui_font_live_bytes(const os64_ui_t *ui);
 // under a set it bound earlier.
 void os64_ui_font_restamp(os64_ui_t *ui);
 
-// Drop the set, the retained runs and — if libui built it — the context.
+// TEAR THE WINDOW'S FONTS DOWN. It drops every run the widget tree retains,
+// drops the window's set, and — if libui built the context — destroys it.
 // An app that simply exits need not call this; it exists so a fixture can
-// close the loop on the engine's accounting.
+// close the loop on the engine's accounting, and so a program that outlives
+// its windows can give an engine back.
 //
-// IT CAN REFUSE. A context stays BUSY while anything the caller still holds
-// is alive: a candidate set it retained, a run it took. The binding is that
-// context's ALLOCATOR, so freeing it would leave the survivors calling into
-// freed memory the moment they are released. BUSY therefore leaves the
-// window exactly as it was — release what you are holding and call again.
+// THIS IS DESTRUCTIVE, AND BUSY MEANS INCOMPLETE, NOT REFUSED. By the time
+// the context is asked to die its set and runs are already gone, so the
+// window is no longer wearing anything and is not usable as it was —
+// measuring through it afterwards answers with the bitmap cell, because
+// that is now the truth about it. BUSY says something OUTSIDE this window
+// is still alive on the same context: a candidate set the caller retained,
+// a run it took. The binding is that context's ALLOCATOR and is therefore
+// kept, so those survivors have somewhere to free themselves to; release
+// them and call again to finish. Nothing here is a way to ask "can I?"
+// without committing to it — for that, do not call it.
 os64_font_status_t os64_ui_font_release(os64_ui_t *ui);
 
 // Bind a UI to a window's draw context and load the theme. root may be set
@@ -510,12 +533,36 @@ static inline os64_ui_t *os64_ui_of(os64_ui_widget_t *w) { return w->ui; }
 // layout stops sizing it from the face, and a font change leaves it alone.
 void os64_ui_widget_fixed_height(os64_ui_widget_t *w, int32_t h);
 
+// ── staging a layout inside a font transaction ──────────────────────────────
+// An application planner runs BEFORE the widgets prepare their text, so what
+// it stages here is what they prepare against. Live bounds do not move until
+// commit, and an abort throws the staging away.
+
+// Publish the rectangle this widget will have if the adoption succeeds.
+void os64_ui_widget_stage_bounds(os64_ui_widget_t *w, os64_gui_rect_t bounds);
+// What a class's prepare should assume it will have: the staged rectangle
+// during a transaction, the live one at any other time.
+os64_gui_rect_t os64_ui_widget_planned_bounds(const os64_ui_widget_t *w);
+// os64_ui_stack_vertical's arithmetic, staged instead of assigned — what a
+// planner calls where it would otherwise have laid the window out directly.
+void os64_ui_stack_vertical_staged(os64_ui_t *ui, os64_ui_widget_t *parent);
+
 // The one-caption case of the class trio above, for a widget whose text is
 // `w->text`. A class with nothing else to stage can use these three
 // directly as its prepare/commit/discard.
 os64_font_status_t os64_ui_stage_caption(os64_ui_widget_t *w, os64_ui_t *ui);
 void os64_ui_commit_caption(os64_ui_widget_t *w);
 void os64_ui_discard_caption(os64_ui_widget_t *w);
+
+// The width of the text a run slot holds, from THE RUN THE PAINT WILL USE.
+// A painter that measures separately gets a second layout — an allocation
+// on every paint, and a different answer from the draw when that allocation
+// is refused, which is how a centred caption silently becomes a left-aligned
+// one. Ask here, then draw from the same slot: at most one layout, and the
+// alignment and the ink cannot disagree.
+os64_font_status_t os64_ui_run_width(os64_ui_t *ui, void **run_slot,
+                                     os64_font_role_t role,
+                                     const char *s, size_t len, int32_t *out);
 
 // Lay `s` out for this role and hand back a retained run, or NULL with OK
 // when the window wears no face and the caller should draw the bitmap cell.

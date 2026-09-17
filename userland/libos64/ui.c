@@ -451,7 +451,10 @@ void os64_ui_run(os64_ui_t *ui, int64_t win, volatile bool *running)
 
 // ── layout ──────────────────────────────────────────────────────────────────
 
-void os64_ui_stack_vertical(os64_ui_t *ui, os64_ui_widget_t *parent)
+// One arithmetic, two destinations: assigned now, or staged for a font
+// transaction to commit. A planner needs the second, because live bounds
+// may not move until the whole adoption has succeeded.
+static void stack_vertical_into(os64_ui_t *ui, os64_ui_widget_t *parent, bool staged)
 {
 	const os64_ui_theme_t *t = &ui->theme;
 	int32_t x = parent->bounds.x + t->pad;
@@ -463,13 +466,31 @@ void os64_ui_stack_vertical(os64_ui_t *ui, os64_ui_widget_t *parent)
 			continue;
 		// The widget's own answer when it is sizing itself, the
 		// application's when it said otherwise, and the theme's stock
-		// height for a widget with no opinion either way.
+		// height for a widget with no opinion either way. While STAGING,
+		// "what the application said" means what it has staged — a planner
+		// sizes a child and then stacks, and the stack has to see the
+		// first decision to honour it in the second.
+		int32_t chosen = staged ? os64_ui_widget_planned_bounds(c).h : c->bounds.h;
 		int32_t h = c->auto_h && c->natural_h > 0 ? c->natural_h :
-		            c->bounds.h > 0 ? c->bounds.h : t->button_h;
-		c->bounds = (os64_gui_rect_t){x, y, w, h};
+		            chosen > 0 ? chosen : t->button_h;
+		os64_gui_rect_t rect = {x, y, w, h};
+		if (staged)
+			os64_ui_widget_stage_bounds(c, rect);
+		else
+			c->bounds = rect;
 		y += h + t->gap;
 	}
 	os64_ui_mark_dirty(ui, parent);
+}
+
+void os64_ui_stack_vertical(os64_ui_t *ui, os64_ui_widget_t *parent)
+{
+	stack_vertical_into(ui, parent, false);
+}
+
+void os64_ui_stack_vertical_staged(os64_ui_t *ui, os64_ui_widget_t *parent)
+{
+	stack_vertical_into(ui, parent, true);
 }
 
 // ── the stock widgets ───────────────────────────────────────────────────────
@@ -546,10 +567,12 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	}
 	os64_ui_t *ui = os64_ui_of(w);
 	size_t len = ui_strlen(w->text);
-	// A caption that cannot be measured is one that will not be painted
-	// either; centre what we have and let the draw make that call.
+	// ASK THE RUN THAT WILL BE PAINTED. Measuring separately meant a second
+	// layout on every paint, and — when that allocation was refused — a
+	// width of zero paired with a retained run that painted perfectly well,
+	// which is a centred caption silently becoming a left-aligned one.
 	int32_t tw = 0;
-	os64_ui_text_measure(ui, OS64_FONT_ROLE_UI, w->text, len, &tw);
+	os64_ui_run_width(ui, &w->run, OS64_FONT_ROLE_UI, w->text, len, &tw);
 	int32_t tx = w->bounds.x + (w->bounds.w - tw) / 2;
 	int32_t ty = w->bounds.y +
 	             (w->bounds.h - os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI)) / 2;
@@ -623,11 +646,11 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 }
 
 const os64_ui_class_t os64_ui_panel_class  = { "panel",  panel_paint,  0, 0,
-	0, 0, 0, 0 };
+	0, 0, 0, 0, 0 };
 const os64_ui_class_t os64_ui_label_class  = { "label",  label_paint,  0, 0,
-	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, label_metrics };
+	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, label_metrics };
 const os64_ui_class_t os64_ui_button_class = { "button", button_paint, button_event, 0,
-	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, button_metrics };
+	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, button_metrics };
 
 static void widget_zero(os64_ui_widget_t *w)
 {

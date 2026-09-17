@@ -366,7 +366,7 @@ static void state_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui
     copy.focused = (uintptr_t)w->user == 2;
     copy.cls->paint(&copy, ctx, t);
 }
-static const os64_ui_class_t kStateClass = {"state sample", state_paint, NULL, NULL, NULL, NULL, NULL, NULL};
+static const os64_ui_class_t kStateClass = {"state sample", state_paint, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 
 static void menu_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
 {
@@ -381,7 +381,7 @@ static void menu_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     os64_draw_text_clipped(&ctx->surf, selected, r.x + 10, r.y + 37,
         "Selected menu item", 18, t->menu_hi_fg, t->menu_hi_bg);
 }
-static const os64_ui_class_t kMenuClass = {"menu sample", menu_paint, NULL, NULL, NULL, NULL, NULL, NULL};
+static const os64_ui_class_t kMenuClass = {"menu sample", menu_paint, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 
 static void apply_click(os64_ui_widget_t *w, void *user)
 {

@@ -255,7 +255,7 @@ static void scrollbar_cancel(os64_ui_widget_t *w)
 }
 
 const os64_ui_class_t os64_ui_scrollbar_class =
-    { "scrollbar", scrollbar_paint, scrollbar_event, scrollbar_cancel, 0, 0, 0, 0 };
+    { "scrollbar", scrollbar_paint, scrollbar_event, scrollbar_cancel, 0, 0, 0, 0, 0 };
 
 void os64_ui_scrollbar(os64_ui_scrollbar_t *sb,
                        void (*on_scroll)(os64_ui_scrollbar_t *, void *),
@@ -412,7 +412,7 @@ static void field_cancel(os64_ui_widget_t *w)
 }
 
 const os64_ui_class_t os64_ui_textfield_class =
-    { "textfield", field_paint, field_event, field_cancel, 0, 0, 0, 0 };
+    { "textfield", field_paint, field_event, field_cancel, 0, 0, 0, 0, 0 };
 
 void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
                        void (*on_submit)(os64_ui_textfield_t *, void *),
@@ -943,7 +943,7 @@ static void textview_cancel(os64_ui_widget_t *w)
 }
 
 const os64_ui_class_t os64_ui_textview_class =
-    { "textview", textview_paint, textview_event, textview_cancel, 0, 0, 0, 0 };
+    { "textview", textview_paint, textview_event, textview_cancel, 0, 0, 0, 0, 0 };
 
 void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
                       void (*on_change)(os64_ui_textview_t *, void *),

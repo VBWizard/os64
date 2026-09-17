@@ -4,11 +4,12 @@
 foundation `788de9900282e941a7a93aa110ffa69154daa066` (F2.5), this checkpoint
 `d11608b`, corrected after review.
 
-> **Review round 1 is answered.** [Quinn's review](F4-C1-QUINN-REVIEW.md)
-> raised R1 (P1) and R2–R4 (P2) and ruled on all four boundary questions. Every
-> finding reproduced here before anything was changed, and every one is
-> corrected — see **After the review** at the foot of this document, which is
-> the part to read first if you have already read the rest.
+> **Two review rounds are answered.** [Quinn's review](F4-C1-QUINN-REVIEW.md)
+> raised R1 (P1) and R2–R4 (P2) with rulings on all four boundary questions,
+> then R2a–R2c and R5 (P2) with a teardown-policy observation against the
+> first fix round. Every finding reproduced here from her own runners before
+> anything was changed. See **After the review** and **After the second
+> review** at the foot of this document.
 
 **This is not F4 complete, and it is not asking to be merged.** It is the first
 of three checkpoints (Chris's cadence: widgets, then editor + Scribe, then the
@@ -209,6 +210,10 @@ touches a syscall, but that is an absence, not a result.
 
 ## After the review
 
+Quinn’s follow-up on this correction commit is in
+[F4-C1-QUINN-REVIEW.md](F4-C1-QUINN-REVIEW.md#follow-up-on-5357245),
+with per-finding dispositions and runnable evidence.
+
 Quinn's four findings all reproduced on this machine from her committed
 runner before a line was changed: the ASan use-after-free, the 32-against-96
 measurements, the 24 pixels painted outside an 8-pixel row. The corrections:
@@ -292,5 +297,97 @@ before and after. `make`, `make fsck-ext2`, `git diff --check` and
 `tools/stale_refs.sh` are clean; the QEMU fixture was re-driven and is
 unchanged on the glass (`cp1-dejavu24.png`, `cp1-refused.png` are from the
 corrected build).
+
+Still not run: P5 / real hardware.
+
+## After the second review
+
+Quinn's follow-up closed R1, R3 and R4, and reopened R2 in three specific
+paths it had not reached. All five reproduced here from `r2-run.py` before
+anything changed.
+
+**R2a — the tab interval was still being substituted.** `faces_resolve`
+returned void, so a layout it could not make fell back to the builtin cell's
+eight columns and adoption reported OK. DejaVu at 16px has a five-pixel
+space, so the correct interval is 40 and the substitute was 64 — wrong, and
+persistent in the installed faces afterwards. Twelve of her thirteen denial
+positions produced a successful adoption with the wrong stop. Resolution now
+returns a status that binding and preparation both carry, and a bind resolves
+into a local so a refusal leaves the window wearing what it had. The one
+number that stayed is a **declared policy rather than an error path**: a face
+whose space is genuinely zero wide cannot express a tab in spaces, and F2
+requires a positive interval, so it gets the builtin cell's eight columns and
+says so. That it is the same number the error path used to reach for is
+exactly why the two had to stop sharing an exit.
+
+**R2b — the button measured twice.** `button_paint` called
+`os64_ui_text_measure` for its centring and ignored the status, which cost a
+second layout on every paint and, when that allocation was refused, paired a
+zero width with a retained run that painted perfectly well: the caption
+silently went from centred to left-aligned, 876 pixels different. It now asks
+`os64_ui_run_width` for the width of **the run the draw will use**, through
+the same slot; both come from one layout and cannot disagree. My comment
+claiming a caption that cannot be measured is one that will not be painted
+was false the moment runs became retained, and is gone.
+
+**R2c — list rows were staged against live bounds.** Widget staging ran
+before the application's planner, so a list the new layout would make taller
+prepared runs for the rows it could show *today*. Her probe: three visible
+rows, one retained run, ten allocations in the first paint. **The transaction
+is reordered** — natural metrics, then the planner, then the widgets' text —
+and the planner publishes its rectangles through `os64_ui_widget_stage_bounds`
+where preparation can read them with `os64_ui_widget_planned_bounds`. Live
+bounds still do not move until commit, which now applies the staged
+rectangles before swapping the staged runs. `os64_ui_stack_vertical_staged`
+is the layout helper's staging twin, so an application writes its layout once.
+
+**R5 — the listbox's own arrays were unreachable at teardown.** Generic
+teardown could only see `run`/`run_staged`; a list keeps one run per visible
+row in storage only its class knows about, so the context stayed BUSY
+forever — 810,587 bytes, with no caller holding anything. Classes now have a
+`destroy` hook that teardown walks, and the listbox frees both arrays.
+
+**The teardown-policy observation was right, and the header was the thing
+that was wrong.** BUSY never meant "unchanged window": by the time the
+context is asked to die, its set and runs are already gone. The code is the
+honest half, so the header now says release is destructive, that BUSY means
+INCOMPLETE rather than refused, that the allocator owner is kept so external
+survivors have somewhere to free themselves to, and that there is no way here
+to ask "can I?" without committing to it.
+
+### Evidence after the second round
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_ui_text_host.py --real        # 269 checks
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_ui_text_host.py --real -O 0   # 269 checks
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_ui_text_host.py               # 75 checks
+python3 docs/fonts/f4-evidence/c1-review/r2-run.py --output <dir>
+bash tools/test_appearance_host.sh
+```
+
+The suite went 197 → 269. Quinn was right that it could not have caught R2c
+or R5: it did not link `ui_list.c`. It does now, and the new checks drive the
+**real class painters** rather than the draw helper — a button and a list,
+each painted once normally and once with every allocation refused, required
+to be pixel-identical and to allocate nothing. Each was confirmed to fail
+against the unfixed code: reverting R2b fails 2 checks, reverting R2c and R5
+together fails 7.
+
+`f4-evidence/c1-review/r2-after-*.txt` holds her probes against the
+corrected tree and `r2-after-README.md` tabulates them. Her `r2-repro.c`'s
+resize planner moved to the staging call, which is the mechanism R2c asked
+for — it had been writing live bounds at commit because there was nothing
+else to write to.
+
+One piece of damage worth recording: I overwrote her `r2-observations.txt`
+and `baseline-host.txt` by copying a rerun's output over them. The tracked
+file came back from git; the untracked one was rebuilt from the results
+quoted verbatim in her review, and says at the top that it was.
+
+`make`, `make fsck-ext2`, `git diff --check` and `tools/stale_refs.sh` are
+clean — the last of those flagged an ordering comment of mine as a claim that
+would go stale, and it was rewritten as a rule rather than a list of steps.
+The QEMU fixture was re-driven and is unchanged on the glass; it now stages
+its layout through the new call instead of applying it at commit.
 
 Still not run: P5 / real hardware.

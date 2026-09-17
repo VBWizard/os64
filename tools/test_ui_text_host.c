@@ -235,7 +235,7 @@ static void probe_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 static const os64_ui_class_t kProbeClass = {
     "probe", NULL, NULL, NULL,
     os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption,
-    probe_metrics
+    NULL, probe_metrics
 };
 static os64_ui_widget_t gProbe;
 
@@ -675,6 +675,182 @@ static void shared_and_foreign_contexts(const char *dir)
     current = "";
 }
 
+/* R2a — the tab interval is MEASURED, and a measurement that could not be
+ * taken is a status. It used to fall back to the builtin cell's eight
+ * columns, which is indistinguishable from a correct answer under a face
+ * whose space happens to be 8 pixels wide — and wrong, silently and
+ * persistently, under every other face. */
+static void tab_interval_failure_travels(const char *dir)
+{
+    current = "tab interval";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    os64_text_context_t *text = os64_ui_font_context(&ui);
+
+    /* DejaVu at 16px has a 5-pixel space, so eight of them is 40 and not
+     * the 64 the bitmap cell would give — the face the original probe used
+     * at 24px could hide this because its interval matched. */
+    os64_font_set_t *set = outline_set(text, dir, "DejaVuSans.ttf", 16);
+    CHECK(set != NULL);
+    if (!set) { current = ""; return; }
+    CHECK(os64_ui_font_bind(&ui, set) == OS64_FONT_OK);
+
+    int32_t space = measured(&ui, " ", 1);
+    int32_t tab = measured(&ui, "\t", 1);
+    CHECK(space > 0 && space != OS64_FONT_GLYPH_W);
+    CHECK(tab == 8 * space);                    /* eight of THIS face's spaces */
+
+    /* Walk a denial through binding. Every refusal must be reported, and
+     * the window must still be wearing what it had — never a set whose tab
+     * stop came from a different face. */
+    int refusals = 0;
+    for (long n = 0; n < 14; ++n) {
+        os64_font_set_t *candidate = outline_set(text, dir, "DejaVuSans.ttf", 16);
+        if (!candidate)
+            break;
+        deny_countdown = n;
+        os64_font_status_t status = os64_ui_font_bind(&ui, candidate);
+        deny_countdown = -1;
+        if (status != OS64_FONT_OK) {
+            ++refusals;
+            CHECK(os64_ui_font_set(&ui) == set);          /* old face kept */
+        }
+        CHECK(measured(&ui, "\t", 1) == 8 * space);      /* never 64 */
+        os64_font_set_release(candidate);
+    }
+    CHECK(refusals > 0);
+    os64_font_set_release(set);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    current = "";
+}
+
+/* R2b — the button's alignment and its ink come from ONE run. Measuring
+ * separately allocated on every paint, and on refusal paired a zero width
+ * with a caption that painted fine: a centred label silently left-aligned. */
+static void button_paints_from_its_run(const char *dir)
+{
+    current = "button alignment";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui.theme = (os64_ui_theme_t){ .pad = 6, .button_h = 20, .gap = 4,
+                                  .button_fg = 0xffffffff, .button_face = 0xff000000,
+                                  .button_border = 0xff000000, .panel_bg = 0xff000000 };
+    os64_ui_widget_t button;
+    os64_ui_button(&button, "WWWW", NULL, NULL);
+    button.bounds = (os64_gui_rect_t){0, 0, 200, 50};
+    os64_ui_set_root(&ui, &button);
+
+    os64_text_context_t *text = os64_ui_font_context(&ui);
+    os64_font_set_t *set = outline_set(text, dir, "DejaVuSans.ttf", 24);
+    CHECK(set != NULL);
+    if (!set) { current = ""; return; }
+    os64_font_consumer_t consumer;
+    os64_ui_font_consumer(&ui, &consumer);
+    CHECK(os64_font_adopt(set, &consumer, 1, NULL) == OS64_FONT_OK);
+    os64_font_set_release(set);
+
+    /* The real class painter, not the draw helper: it is the one that used
+     * to measure a second time. */
+    canvas_t normal, denied;
+    canvas_init(&normal, 0xff000000);
+    canvas_init(&denied, 0xff000000);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+
+    ctx.surf = normal.s;
+    unsigned long before = allocations;
+    button.cls->paint(&button, &ctx, &ui.theme);
+    CHECK(allocations == before);            /* adoption prepared the run */
+
+    ctx.surf = denied.s;
+    deny_countdown = 0;
+    button.cls->paint(&button, &ctx, &ui.theme);
+    deny_countdown = -1;
+    /* Same placement, same pixels: nothing was re-measured, so nothing
+     * could disagree. */
+    CHECK(memcmp(normal.px, denied.px, sizeof(normal.px)) == 0);
+
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    CHECK(os64_ui_font_live_bytes(&ui) == 0);
+    current = "";
+}
+
+/* R2c + R5 — a list that the adoption makes TALLER must have runs prepared
+ * for the rows it will be able to show, not the rows it can show now; and
+ * whatever it retains must be released when the window's fonts go. */
+static os64_ui_listbox_t gList;
+static const char *const kRows[] = { "first row", "second row", "third row" };
+static const char *list_label(size_t index, void *user)
+{ (void)user; return index < 3 ? kRows[index] : ""; }
+
+static os64_font_status_t grow_plan(os64_ui_t *ui, void *user, void **out)
+{
+    (void)ui; (void)user;
+    os64_gui_rect_t grown = gList.w.bounds;
+    grown.h = 58;                            /* room for three rows, not one */
+    os64_ui_widget_stage_bounds(&gList.w, grown);
+    *out = &gList;
+    return OS64_FONT_OK;
+}
+static void grow_commit(os64_ui_t *ui, void *user, void *plan)
+{ (void)ui; (void)user; (void)plan; }        /* libui applies the staged rect */
+
+static void list_stages_its_candidate_rows(const char *dir)
+{
+    current = "list staging";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui.theme = (os64_ui_theme_t){ .pad = 6, .button_h = 20, .gap = 4,
+                                  .field_bg = 0xff000000, .field_fg = 0xffffffff,
+                                  .text_sel_bg = 0xff222222, .text_sel_fg = 0xffffffff,
+                                  .field_border = 0xff000000, .focus_ring = 0xff000000 };
+    os64_ui_listbox(&gList, 3, list_label, NULL, NULL);
+    gList.w.bounds = (os64_gui_rect_t){0, 0, 200, 22};   /* one row fits today */
+    os64_ui_set_root(&ui, &gList.w);
+    CHECK(os64_ui_font_planner(&ui, grow_plan, grow_commit, grow_commit, NULL)
+          == OS64_FONT_OK);
+
+    os64_text_context_t *text = os64_ui_font_context(&ui);
+    os64_font_set_t *set = outline_set(text, dir, "DejaVuSans.ttf", 8);
+    CHECK(set != NULL);
+    if (!set) { current = ""; return; }
+    os64_font_consumer_t consumer;
+    os64_ui_font_consumer(&ui, &consumer);
+    CHECK(os64_font_adopt(set, &consumer, 1, NULL) == OS64_FONT_OK);
+    os64_font_set_release(set);
+
+    /* The staged height was applied, and there is a prepared run for every
+     * row the box can now show. */
+    CHECK(gList.w.bounds.h == 58);
+    CHECK(os64_ui_listbox_rows(&gList, &ui.theme) == 3);
+    CHECK(gList.row_run_count == 3);
+
+    /* So the first paint allocates nothing, and painting with every
+     * allocation refused is pixel-identical to painting normally. */
+    canvas_t normal, denied;
+    canvas_init(&normal, 0xff000000);
+    canvas_init(&denied, 0xff000000);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.surf = normal.s;
+    unsigned long before = allocations;
+    gList.w.cls->paint(&gList.w, &ctx, &ui.theme);
+    CHECK(allocations == before);
+    ctx.surf = denied.s;
+    deny_countdown = 0;
+    gList.w.cls->paint(&gList.w, &ctx, &ui.theme);
+    deny_countdown = -1;
+    CHECK(memcmp(normal.px, denied.px, sizeof(normal.px)) == 0);
+
+    /* R5: with nothing outstanding outside the window, teardown completes.
+     * The list's runs live in its own array, which only its class can see. */
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    CHECK(gList.row_run_count == 0);
+    CHECK(os64_ui_font_live_bytes(&ui) == 0);
+    CHECK(ui.font == NULL);
+    current = "";
+}
+
 /* Q3 — automatic and explicit heights, across attach, relayout and a font
  * change. A padded control is in the mix so the check is not satisfied by
  * the builtin face happening to reproduce a 16px label. */
@@ -756,6 +932,9 @@ int main(int argc, char **argv)
     release_refuses_while_busy(dir);
     shared_and_foreign_contexts(dir);
     height_policy(dir);
+    tab_interval_failure_travels(dir);
+    button_paints_from_its_run(dir);
+    list_stages_its_candidate_rows(dir);
 #else
     (void)slurp;
     (void)rows_touched_outside;

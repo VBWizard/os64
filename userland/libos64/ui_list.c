@@ -45,11 +45,14 @@ static void free_runs(void ***runs, size_t *count)
 static os64_font_status_t list_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
 {
     os64_ui_listbox_t *list = (os64_ui_listbox_t *)w;
-    // Size the staging from the candidate's pitch, not the installed one:
-    // a taller face shows fewer rows, and staging the old count would
-    // either over-allocate or leave the first paint short.
+    // BOTH HALVES COME FROM THE CANDIDATE: its row pitch, and the height
+    // the application's planner has staged for this box. A taller face
+    // shows fewer rows and a taller box shows more, and a row the first
+    // paint discovers it can show has nothing prepared for it — which is a
+    // layout allocation in the one place that is not allowed to fail.
     int32_t pitch = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI) + 8;
-    int32_t fits = pitch > 0 ? (w->bounds.h - 4) / pitch : 0;
+    int32_t height = os64_ui_widget_planned_bounds(w).h;
+    int32_t fits = pitch > 0 ? (height - 4) / pitch : 0;
     size_t visible = fits > 0 ? (size_t)fits : 0;
     if (visible > list->count - (list->top < list->count ? list->top : list->count))
         visible = list->count - (list->top < list->count ? list->top : list->count);
@@ -94,8 +97,17 @@ static void list_commit(os64_ui_widget_t *w)
 static void list_discard(os64_ui_widget_t *w)
 {
     os64_ui_listbox_t *list = (os64_ui_listbox_t *)w;
-    free_runs(&((os64_ui_listbox_t *)w)->row_runs_staged,
-              &list->row_runs_staged_count);
+    free_runs(&list->row_runs_staged, &list->row_runs_staged_count);
+}
+
+// Commit and discard cover a REPLACEMENT; this covers the end. The active
+// array has no other way out, and a run left in it keeps the window's text
+// context alive for as long as the process does.
+static void list_destroy(os64_ui_widget_t *w)
+{
+    os64_ui_listbox_t *list = (os64_ui_listbox_t *)w;
+    free_runs(&list->row_runs, &list->row_run_count);
+    free_runs(&list->row_runs_staged, &list->row_runs_staged_count);
 }
 
 int os64_ui_listbox_rows(const os64_ui_listbox_t *list, const os64_ui_theme_t *theme)
@@ -229,7 +241,7 @@ static bool list_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
 
 static const os64_ui_class_t kListClass = {"listbox", list_paint, list_event, list_cancel,
                                           list_prepare, list_commit, list_discard,
-                                          list_metrics};
+                                          list_destroy, list_metrics};
 
 void os64_ui_listbox(os64_ui_listbox_t *list, size_t count,
                      const char *(*label)(size_t, void *),

@@ -124,21 +124,23 @@ static ui_font_binding_t *binding_ensure(os64_ui_t *ui)
 	return b;
 }
 
-// Resolve a set into the faces the widgets ask for. A role whose view fails
-// is left unbound and the others stay usable — one refused role must not
-// cost a window every glyph it can still draw.
-static void faces_resolve(ui_font_binding_t *b, os64_font_set_t *set,
-                          ui_font_faces_t *faces)
+// Resolve a set into the faces the widgets ask for. It CAN FAIL, and the
+// caller must carry that: a set whose roles or whose tab stop could not be
+// resolved is not a set this window can wear, and pretending otherwise
+// substitutes measurements from a face nobody chose.
+static os64_font_status_t faces_resolve(ui_font_binding_t *b, os64_font_set_t *set,
+                                        ui_font_faces_t *faces)
 {
 	os64_memset(faces, 0, sizeof(*faces));
 	if (!set)
-		return;
+		return OS64_FONT_OK;
 	for (int role = 0; role < OS64_FONT_ROLE_COUNT; ++role) {
 		os64_font_role_view_t *v = &faces->view[role];
-		if (os64_font_set_view(set, (os64_font_role_t)role, v) != OS64_FONT_OK) {
-			os64_memset(v, 0, sizeof(*v));
-			continue;
-		}
+		os64_font_status_t status =
+			os64_font_set_view(set, (os64_font_role_t)role, v);
+		if (status != OS64_FONT_OK)
+			return status;
+
 		// Eight columns of the primary's space: the editor's 1970s tab stop,
 		// said in the only unit a proportional face has. Measured, because
 		// no metric in the view carries it.
@@ -149,14 +151,25 @@ static void faces_resolve(ui_font_binding_t *b, os64_font_set_t *set,
 		};
 		os64_text_run_t *run = (os64_text_run_t *)0;
 		os64_text_run_view_t rv;
-		if (os64_text_layout(b->text, (const uint8_t *)" ", 1, &layout, &run) == OS64_FONT_OK) {
-			if (os64_text_run_view(run, &rv) == OS64_FONT_OK && rv.advance_x > 0)
-				faces->tab_interval[role] = 8 * rv.advance_x;
-			os64_text_run_release(run);
-		}
-		if (faces->tab_interval[role] <= 0)
-			faces->tab_interval[role] = 8 * OS64_FONT_GLYPH_W * OS64_FONT_UNIT;
+		status = os64_text_layout(b->text, (const uint8_t *)" ", 1, &layout, &run);
+		if (status != OS64_FONT_OK)
+			return status;            // could not measure: say so, do not guess
+		status = os64_text_run_view(run, &rv);
+		os64_font_pos_t advance = status == OS64_FONT_OK ? rv.advance_x : 0;
+		os64_text_run_release(run);
+		if (status != OS64_FONT_OK)
+			return status;
+
+		// A ZERO-WIDTH SPACE IS A MEASUREMENT, NOT AN ERROR, and it is the
+		// one answer that cannot be a tab stop — F2 requires a positive
+		// interval, and eight of nothing is nothing. A face like that gets
+		// the builtin cell's eight columns as a declared policy. It is the
+		// same number the old code reached for when a LAYOUT failed, which
+		// is exactly why the two had to stop sharing an exit.
+		faces->tab_interval[role] = advance > 0 ? 8 * advance
+		                                        : 8 * OS64_FONT_GLYPH_W * OS64_FONT_UNIT;
 	}
+	return OS64_FONT_OK;
 }
 
 // The builtin role set, prepared once on first use. NULL specs are the
@@ -176,7 +189,16 @@ static bool binding_ensure_builtin(ui_font_binding_t *b)
 		b->status = status;
 		return false;
 	}
-	faces_resolve(b, b->set, &b->faces);
+	status = faces_resolve(b, b->set, &b->faces);
+	if (status != OS64_FONT_OK) {
+		// Even the builtin face could not be resolved. Let go of it rather
+		// than keep a half-resolved set: the bitmap painter still works.
+		os64_font_set_release(b->set);
+		b->set = (os64_font_set_t *)0;
+		os64_memset(&b->faces, 0, sizeof(b->faces));
+		b->status = status;
+		return false;
+	}
 	return true;
 }
 
@@ -338,6 +360,14 @@ static bool run_matches(os64_text_run_t *run, const char *s, size_t len)
 	return true;
 }
 
+// Defined with the run primitives below, because a caller that asks for a
+// width and then draws has to come through the same door or pay for two
+// layouts and risk two different answers.
+static os64_font_status_t slot_run(os64_ui_t *ui, void **run_slot,
+                                   os64_font_role_t role,
+                                   const char *s, size_t len,
+                                   os64_text_run_t **out);
+
 int32_t os64_ui_draw_text(os64_ui_t *ui, void **run_slot,
                           os64_font_role_t role,
                           os64_gui_surface_t *dst, os64_gui_rect_t clip,
@@ -351,27 +381,19 @@ int32_t os64_ui_draw_text(os64_ui_t *ui, void **run_slot,
 
 	// The retained run is the usual case: adoption staged it, so the paint
 	// that follows a commit allocates nothing. Text that has changed
-	// underneath it is re-laid-out here and retained in the same slot.
+	// underneath it is re-laid-out here and retained in the same slot — the
+	// same door os64_ui_run_width uses, so a painter that asked for a width
+	// and then draws gets one layout between them, not two.
 	os64_text_run_t *run = (os64_text_run_t *)0;
-	bool borrowed = false;
-	if (run_slot && run_matches((os64_text_run_t *)*run_slot, s, len)) {
-		run = (os64_text_run_t *)*run_slot;
-		borrowed = true;
-	} else {
-		if (role_layout(ui, role, s, len, &run) != OS64_FONT_OK) {
-			// A window wearing a face has no honest way to draw this. The
-			// bitmap cell is a DIFFERENT font at a different size, so
-			// substituting it would put the wrong glyphs at the wrong
-			// widths and call it success. Leave the row as it is; the
-			// failure is on the binding for anyone who asks.
-			return x;
-		}
-		if (run && run_slot) {
-			os64_text_run_release((os64_text_run_t *)*run_slot);
-			*run_slot = run;
-			borrowed = true;
-		}
+	if (slot_run(ui, run_slot, role, s, len, &run) != OS64_FONT_OK) {
+		// A window wearing a face has no honest way to draw this. The
+		// bitmap cell is a DIFFERENT font at a different size, so
+		// substituting it would put the wrong glyphs at the wrong widths
+		// and call it success. Leave the row as it is; the failure is on
+		// the binding for anyone who asks.
+		return x;
 	}
+	bool borrowed = run_slot && *run_slot == (void *)run;
 
 	if (!run)   // unbound window: the painter this layer replaced
 		return os64_draw_text_clipped(dst, clip, x, top_y, s, len, fg, bg);
@@ -498,19 +520,27 @@ os64_font_status_t os64_ui_font_bind(os64_ui_t *ui, os64_font_set_t *set)
 		return OS64_FONT_NO_MEMORY;
 	if (!b->text)
 		return b->status;
+	// Resolve into a LOCAL first: a set that cannot be resolved must leave
+	// the window wearing what it had, not half of something new.
+	ui_font_faces_t resolved;
 	if (set) {
 		os64_font_status_t status = set_belongs_here(b, set);
+		if (status != OS64_FONT_OK)
+			return status;
+		status = faces_resolve(b, set, &resolved);
 		if (status != OS64_FONT_OK)
 			return status;
 		status = os64_font_set_retain(set);
 		if (status != OS64_FONT_OK)
 			return status;
+	} else {
+		os64_memset(&resolved, 0, sizeof(resolved));
 	}
 	os64_font_set_release(b->set);
 	b->set = set;
+	b->faces = resolved;
 	b->status = OS64_FONT_OK;
 	b->tried = set != (os64_font_set_t *)0;
-	faces_resolve(b, b->set, &b->faces);
 	os64_ui_font_restamp(ui);
 	if (ui->root)
 		os64_ui_mark_dirty(ui, ui->root);
@@ -564,12 +594,67 @@ void os64_ui_font_restamp(os64_ui_t *ui)
 }
 
 static void restamp_tree(os64_ui_widget_t *w, os64_ui_t *ui);
+static void commit_tree_bounds(os64_ui_widget_t *w);
+static void unstage_tree_bounds(os64_ui_widget_t *w);
 
 // ── staging a tree's text against a candidate ───────────────────────────────
 //
 // A commit cannot allocate, and a paint has nowhere to report a failure to,
 // so every run the window will need is laid out HERE — while failing is
 // still allowed and still means "the old face stays".
+
+// Make the slot hold a run for exactly these bytes, laying one out only if
+// what is there says something else. Borrowed from the slot afterwards.
+static os64_font_status_t slot_run(os64_ui_t *ui, void **run_slot,
+                                   os64_font_role_t role,
+                                   const char *s, size_t len,
+                                   os64_text_run_t **out)
+{
+	if (run_slot && run_matches((os64_text_run_t *)*run_slot, s, len)) {
+		*out = (os64_text_run_t *)*run_slot;
+		return OS64_FONT_OK;
+	}
+	os64_text_run_t *run = (os64_text_run_t *)0;
+	os64_font_status_t status = role_layout(ui, role, s, len, &run);
+	if (status != OS64_FONT_OK) {
+		*out = (os64_text_run_t *)0;
+		return status;
+	}
+	if (run && run_slot) {
+		os64_text_run_release((os64_text_run_t *)*run_slot);
+		*run_slot = run;
+	}
+	*out = run;
+	return OS64_FONT_OK;
+}
+
+os64_font_status_t os64_ui_run_width(os64_ui_t *ui, void **run_slot,
+                                     os64_font_role_t role,
+                                     const char *s, size_t len, int32_t *out)
+{
+	if (!out)
+		return OS64_FONT_BAD_ARGUMENT;
+	*out = 0;
+	if (!s || !len)
+		return OS64_FONT_OK;
+
+	os64_text_run_t *run = (os64_text_run_t *)0;
+	os64_font_status_t status = slot_run(ui, run_slot, role, s, len, &run);
+	if (status != OS64_FONT_OK)
+		return status;
+	if (!run) {
+		*out = (int32_t)len * OS64_FONT_GLYPH_W;   // unbound: the bitmap cell
+		return OS64_FONT_OK;
+	}
+	os64_text_run_view_t rv;
+	status = os64_text_run_view(run, &rv);
+	if (status == OS64_FONT_OK)
+		*out = px_ceil(rv.advance_x);
+	// The run belongs to the slot when there is one; otherwise it was ours.
+	if (!run_slot)
+		os64_text_run_release(run);
+	return status;
+}
 
 os64_font_status_t os64_ui_run_layout(os64_ui_t *ui, os64_font_role_t role,
                                       const char *s, size_t len, void **out)
@@ -621,6 +706,38 @@ void os64_ui_discard_caption(os64_ui_widget_t *w)
 {
 	os64_ui_run_release(w->run_staged);
 	w->run_staged = (void *)0;
+}
+
+void os64_ui_widget_stage_bounds(os64_ui_widget_t *w, os64_gui_rect_t bounds)
+{
+	w->bounds_staged = bounds;
+	w->bounds_staged_valid = true;
+}
+
+os64_gui_rect_t os64_ui_widget_planned_bounds(const os64_ui_widget_t *w)
+{
+	return w->bounds_staged_valid ? w->bounds_staged : w->bounds;
+}
+
+static void commit_tree_bounds(os64_ui_widget_t *w)
+{
+	if (!w)
+		return;
+	if (w->bounds_staged_valid) {
+		w->bounds = w->bounds_staged;
+		w->bounds_staged_valid = false;
+	}
+	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
+		commit_tree_bounds(c);
+}
+
+static void unstage_tree_bounds(os64_ui_widget_t *w)
+{
+	if (!w)
+		return;
+	w->bounds_staged_valid = false;
+	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
+		unstage_tree_bounds(c);
 }
 
 static os64_font_status_t stage_tree_runs(os64_ui_t *ui, os64_ui_widget_t *w)
@@ -685,29 +802,40 @@ static os64_font_status_t consumer_prepare(void *user, os64_font_set_t *candidat
 		return status;
 	}
 	plan->candidate = candidate;
-	faces_resolve(b, candidate, &plan->faces);
+	status = faces_resolve(b, candidate, &plan->faces);
+	if (status != OS64_FONT_OK) {
+		os64_font_set_release(plan->candidate);
+		os64_free(plan);
+		return status;
+	}
 
-	// Everything from here measures the candidate: the runs staged below,
-	// the natural heights the widgets report, and whatever the application
-	// measures inside its planner. A failure costs only this staging.
+	// Everything from here measures the candidate: the natural heights the
+	// widgets report, whatever the application measures inside its planner,
+	// and the runs staged after it. A failure costs only this staging.
 	b->staging = &plan->faces;
 
-	status = stage_tree_runs(ui, ui->root);
-	if (status == OS64_FONT_OK) {
-		// Natural metrics come from the candidate too, so an application
-		// planner sizing a column of controls is reading the face it is
-		// about to get. Abort puts them back.
-		restamp_tree(ui->root, ui);
-		if (ui->font_plan) {
-			status = ui->font_plan(ui, ui->font_plan_user, &plan->app_plan);
-			if (status == OS64_FONT_OK)
-				plan->app_planned = true;
-		}
+	// THE ORDER IS THE POINT. Natural metrics come before the planner, so
+	// it sizes against the face it is about to get; the planner comes
+	// before the widgets' text, because a widget preparing its runs has to
+	// know how much room it is ABOUT to have. A list the new layout makes
+	// taller can show rows it cannot show today, and staging against live
+	// bounds would leave those to be laid out by the first paint, where
+	// failing is not allowed.
+	restamp_tree(ui->root, ui);
+	if (ui->font_plan) {
+		status = ui->font_plan(ui, ui->font_plan_user, &plan->app_plan);
+		if (status == OS64_FONT_OK)
+			plan->app_planned = true;
 	}
+	if (status == OS64_FONT_OK)
+		status = stage_tree_runs(ui, ui->root);
 	b->staging = (const ui_font_faces_t *)0;
 
 	if (status != OS64_FONT_OK) {
+		if (plan->app_planned && ui->font_plan_discard)
+			ui->font_plan_discard(ui, ui->font_plan_user, plan->app_plan);
 		discard_tree_runs(ui->root);
+		unstage_tree_bounds(ui->root);
 		restamp_tree(ui->root, ui);       // back to the face still installed
 		os64_font_set_release(plan->candidate);
 		os64_free(plan);
@@ -740,6 +868,9 @@ static void consumer_commit(void *user, void *plan_ptr)
 	// Prepare already stamped them from the candidate, which is now the
 	// installed set; this re-runs against it and swaps in the staged runs,
 	// and neither allocates.
+	// The staged rectangles become the real ones, then the staged runs do.
+	// Neither allocates.
+	commit_tree_bounds(ui->root);
 	commit_tree_runs(ui->root);
 	os64_ui_font_restamp(ui);
 	if (plan->app_planned && ui->font_plan_commit)
@@ -760,6 +891,7 @@ static void consumer_abort(void *user, void *plan_ptr)
 	if (plan->app_planned && ui->font_plan_discard)
 		ui->font_plan_discard(ui, ui->font_plan_user, plan->app_plan);
 	discard_tree_runs(ui->root);
+	unstage_tree_bounds(ui->root);
 	restamp_tree(ui->root, ui);           // the face still installed
 	os64_font_set_release(plan->candidate);
 	os64_free(plan);
@@ -780,9 +912,15 @@ static void release_tree_runs(os64_ui_widget_t *w)
 {
 	if (!w)
 		return;
+	// Storage only the class can see goes first: a listbox keeps one run per
+	// visible row in its own array, and a run kept anywhere at all holds the
+	// text context BUSY for good.
+	if (w->cls && w->cls->destroy)
+		w->cls->destroy(w);
 	os64_text_run_release((os64_text_run_t *)w->run);
 	os64_text_run_release((os64_text_run_t *)w->run_staged);
 	w->run = w->run_staged = (void *)0;
+	w->bounds_staged_valid = false;
 	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
 		release_tree_runs(c);
 }

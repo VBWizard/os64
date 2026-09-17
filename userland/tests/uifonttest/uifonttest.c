@@ -67,12 +67,24 @@ static const char *row_label(size_t index, void *user)
 
 typedef struct { int32_t list_h, needed, have; } layout_plan_t;
 
+// Assign the layout for real — startup, and a window resize.
 static void apply_layout(const layout_plan_t *plan)
 {
 	// The labels, the checkbox and the buttons keep bounds.h at zero and let
 	// libui size them from the face — which is the point of the exercise.
 	gList.w.bounds.h = plan->list_h;
 	os64_ui_stack_vertical(&gUi, &gRoot);
+}
+
+// STAGE it instead, which is what a font transaction needs: the widgets
+// prepare their text against the room this layout will give them, and none
+// of it becomes real until the adoption succeeds.
+static void stage_layout(const layout_plan_t *plan)
+{
+	os64_gui_rect_t list_rect = gList.w.bounds;
+	list_rect.h = plan->list_h;
+	os64_ui_widget_stage_bounds(&gList.w, list_rect);
+	os64_ui_stack_vertical_staged(&gUi, &gRoot);
 }
 
 // THE LIST IS THE ELASTIC PART. Everything else needs exactly what the face
@@ -116,13 +128,16 @@ static os64_font_status_t plan_layout(os64_ui_t *ui, void *user, void **out)
 		return OS64_FONT_NO_MEMORY;
 	*staged = measured;
 	*out = staged;
+	// Publish the rectangles so the listbox prepares runs for the rows this
+	// layout will let it show, not the rows it can show right now.
+	stage_layout(staged);
 	return OS64_FONT_OK;
 }
 
 static void commit_layout(os64_ui_t *ui, void *user, void *plan)
 {
 	(void)ui; (void)user;
-	apply_layout((const layout_plan_t *)plan);
+	// libui applies the staged rectangles; nothing is left to lay out here.
 	os64_free(plan);
 }
 
