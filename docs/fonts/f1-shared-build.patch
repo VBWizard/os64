@@ -1,0 +1,154 @@
+diff --git a/GNUmakefile b/GNUmakefile
+index adf621c..11f43c5 100644
+--- a/GNUmakefile
++++ b/GNUmakefile
+@@ -205,7 +205,20 @@ USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
+ # dependencies. The set goes on both volumes that currently carry /bin — the
+ # ext2 root and the FAT lifeboat — with independent copies so damage to one
+ # volume does not also eat the repair environment's libraries.
+-USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so
++USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libfreetype.so
++
++# The font fixtures /tests/fonttest reads: two TrueType faces and two
++# OpenType/CFF ones, with their licences beside them. They land in /tests
++# because they are PROOF, not product — which fonts os64 ships with is F5's
++# question, and this directory does not pre-empt it.
++# userland/libfreetype/fixtures/FIXTURES.md records where each file came
++# from, its digest, and what licence it travels under.
++FONT_FIXTURE_DIR   := userland/libfreetype/fixtures
++FONT_FIXTURE_FILES := DejaVuSans.ttf DejaVuSansMono.ttf \
++                      SourceSans3-Regular.otf SourceCodePro-Regular.otf \
++                      LICENSE-DejaVu.txt LICENSE-SourceCodePro.txt \
++                      LICENSE-SourceSans3.txt
++FONT_FIXTURES      := $(addprefix $(FONT_FIXTURE_DIR)/,$(FONT_FIXTURE_FILES))
+ 
+ # Kernel-side ring-3 test fixtures. They ride the image into /tests alongside
+ # the userland ones — same shelf, because they are the same KIND of thing: a
+@@ -430,7 +443,7 @@ userland:
+ # that rides it changes.
+ TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
+ 
+-$(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf GNUmakefile
++$(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE $(FONT_FIXTURES) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf GNUmakefile
+ 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
+ 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
+ 	rm -f $(EXT2_TEST_IMAGE)
+@@ -453,6 +466,13 @@ $(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE $(TLS_PUBLIC_ROOTS) tools/gen_
+ 	# select another store through the configuration ladder.
+ 	printf 'mkdir /etc/certs\nwrite %s /etc/certs/roots.pem\n' "$(TLS_PUBLIC_ROOTS)" >> $(EXT2_STAGING)/debugfs_bins.cmds
+ 	printf 'mkdir /etc/licenses\nwrite license/libjpeg-turbo-LICENSE /etc/licenses/libjpeg-turbo.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
++	# The FreeType Licence asks that anything shipping FreeType credit it in
++	# its documentation. A file on the machine IS this machine's
++	# documentation, so the credit travels with the library rather than
++	# living only in a repository nobody has at run time. The shipped file
++	# is upstream's dual-licence notice followed by the FTL in full, which
++	# is the option os64 exercises (see libfreetype/UPSTREAM_REVIEW.md).
++	printf 'write license/freetype-LICENSE /etc/licenses/freetype.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+ 	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+ 	# /tests: the proof harness — the userland fixtures and the kernel-born
+ 	# ones, on one shelf. NOTE the tie-break if two source trees ever claim one
+@@ -463,6 +483,9 @@ $(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE $(TLS_PUBLIC_ROOTS) tools/gen_
+ 	# separate directories are the mechanism.
+ 	printf 'cd /tests\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+ 	$(foreach t,$(USERLAND_TESTBINS),printf 'write %s %s\n' "$(t)" "$(notdir $(t))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
++	printf 'mkdir /tests/fonts\ncd /tests/fonts\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
++	$(foreach f,$(FONT_FIXTURES),printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
++	printf 'cd /tests\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+ 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;))
+ 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
+ 	# FAT — the one file that must never lie about which filesystem it's on).
+@@ -482,7 +505,7 @@ $(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE $(TLS_PUBLIC_ROOTS) tools/gen_
+ # arrived (2026-08-23) — editing it left the image stale, which presents as "I
+ # changed my wallpaper and nothing happened". Any file the recipe copies belongs
+ # here; that is the whole contract of a prerequisite list.
+-$(DISK_IMAGE): license/libjpeg-turbo-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/bootenv.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
++$(DISK_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/bootenv.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+ 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
+ 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
+ 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
+@@ -522,6 +545,13 @@ $(DISK_IMAGE): license/libjpeg-turbo-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(
+ 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(t) ::/tests/$(notdir $(t));)
+ 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,\
+ 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/$(notdir $(f));))
++	# The font fixtures travel with the harness for the same reason the
++	# harness travels at all: a fixture that cannot find its inputs proves
++	# nothing, and a lifeboat where one test always skips is a lifeboat whose
++	# green result means less than root's.
++	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/tests/fonts > /dev/null 2>&1
++	$(foreach f,$(FONT_FIXTURES),\
++	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/fonts/$(notdir $(f));)
+ 	# The lifeboat's own /lib. Its /bin is dynamically linked exactly like
+ 	# root's, so these files are what make the lifeboat a working system
+ 	# rather than a partition full of programs that cannot start. Iterated
+@@ -548,6 +578,7 @@ $(DISK_IMAGE): license/libjpeg-turbo-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(
+ 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc > /dev/null 2>&1
+ 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/licenses
+ 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libjpeg-turbo-LICENSE ::/etc/licenses/libjpeg-turbo.txt
++	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/freetype-LICENSE ::/etc/licenses/freetype.txt
+ 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
+ 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gclock.conf ::/etc/gclock.conf
+ 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/os64.conf ::/etc/os64.conf
+diff --git a/userland/GNUmakefile b/userland/GNUmakefile
+index 1155083..d90d69c 100644
+--- a/userland/GNUmakefile
++++ b/userland/GNUmakefile
+@@ -216,7 +216,7 @@ LIBFETCH_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libfetch.so
+ # isolation would miss a hash collision and prelink two objects into the same
+ # slot. app_bases.py sorts before probing, so adding a library gives the build
+ # one deterministic map independent of link order.
+-LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so)
++LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so libfreetype.so)
+ LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
+ LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
+ LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
+@@ -335,14 +335,15 @@ $(foreach p,$(APP_BASE_PAIRS),\
+ include libtls/foundation.mk
+ include libtls/shared.mk
+ include libjpeg/shared.mk
++include libfreetype/shared.mk
+ include libimage/shared.mk
+ include libhtml/library.mk
+ 
+ # Source membership and the population used for prelink placement live here.
+-$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO): GNUmakefile
++$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO) $(LIBFREETYPE_SO): GNUmakefile
+ 
+ .PHONY: all
+-all: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
++all: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBFREETYPE_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
+      $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
+ 
+ $(BIN)/[: $(BIN)/test
+@@ -433,6 +434,7 @@ $(LIBFETCH_SO): $(LIBFETCH_OBJS) $(LIBTLS_SO) $(LIBGZIP_SO) $(LIBOS64_SO) $(CURD
+ define APP_RULE
+ APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard $(2)/$(1)/*.c))
+ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
++                       $(if $(filter $(1),fonttest),$(OBJ)/freetype/libfreetype/port/runtime.c.o $(OBJ)/freetype/libfreetype/port/nonlocal.S.o) \
+                        $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ)) \
+                        $(if $(filter $(1),$(TAR_FORMAT_PROGRAMS)),$(TAR_FORMAT_OBJ)) \
+                        $(if $(filter $(1),$(TELNET_ENGINE_PROGRAMS)),$(TELNET_ENGINE_OBJ)) \
+@@ -444,6 +446,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
+ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest),$(LIBHTML_SO)) \
+                        $(if $(filter $(1),gview desktop jpegtest),$(LIBIMAGE_SO)) \
+                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
++                       $(if $(filter $(1),fonttest),$(LIBFREETYPE_SO)) \
+                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
+                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
+                        $(if $(filter $(1),$(LIBFETCH_PROGRAMS)),$(LIBFETCH_SO)) \
+@@ -468,7 +471,7 @@ $(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
+ # FIXTURES ARE IN HERE TOO, and that is the point of the line rather than an
+ # afterthought: a fixture is the program you are most likely to be single-
+ # stepping, because it is what you reach for when something is already broken.
+-$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
++$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBFREETYPE_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
+ 	@mkdir -p "$(BIN)"
+ 	@printf '# GENERATED by userland/GNUmakefile — do not edit.\n' > $@
+ 	@printf '# Every program at its own base, so GDB can hold all their symbols at once.\n' >> $@
+@@ -491,6 +494,7 @@ $(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(addprefix $(B
+ 	@printf 'add-symbol-file %s\n' "$(LIBPNG_SO)" >> $@
+ 	@printf 'add-symbol-file %s\n' "$(LIBTLS_SO)" >> $@
+ 	@printf 'add-symbol-file %s\n' "$(LIBJPEG_SO)" >> $@
++	@printf 'add-symbol-file %s\n' "$(LIBFREETYPE_SO)" >> $@
+ 	@printf 'add-symbol-file %s\n' "$(LIBIMAGE_SO)" >> $@
+ 	@printf 'add-symbol-file %s\n' "$(LIBFETCH_SO)" >> $@
+ 	@printf 'add-symbol-file %s\n' "$(LIBHTML_SO)" >> $@

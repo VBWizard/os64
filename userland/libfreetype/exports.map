@@ -1,0 +1,5 @@
+# The whole public surface: one getter returning a constant operation table.
+# Everything else — upstream's FT_* API, the port's runtime, the adapter's own
+# functions — stays local, so no consumer can reach a FreeType type or come to
+# depend on a particular upstream version.
+{ global: os64_freetype_backend_v1; local: *; };
