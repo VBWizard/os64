@@ -6,6 +6,11 @@ Read [the design](../../FONTS.md), [the work plan](../../FONTS_WORK_PLAN.md), an
 AGENTS.md. Start after F0's cell/charset/font contracts and an integrated F1/F2
 baseline. Configuration can use an injected resolved font fixture until F5 lands.
 
+The shared provider/replacement boundary is [FONT_PROVIDER.md](../../FONT_PROVIDER.md),
+implemented by `os64/font_provider.h` and `os64/font_adopt.h`. Use its role sets
+and prepare/barrier/commit/abort sequence. The assignment receipt identifies the
+exact F2.5 base; the earlier F2 checkpoint alone does not contain these APIs.
+
 ## Scope and ownership
 
 Own `userland/apps/gterm/gterm.c`, any local helpers, and terminal-focused tests.

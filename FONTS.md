@@ -8,8 +8,10 @@ investigation and selected UTF-8 Western-language text and common symbols for
 the first release. The implementation contracts have R3 design approval; the
 reviewed F1 backend is integrated at `f065c7c`. The F2 implementation candidate
 and its host/guest evidence are recorded in [F2-REPORT.md](docs/fonts/F2-REPORT.md),
-with a [source map](docs/fonts/F2-IMPLEMENTATION.md). Independent F2 review and
-toolkit migration remain separate steps. Kernel console and window-decoration
+with a [source map](docs/fonts/F2-IMPLEMENTATION.md). Fable's
+[F2 implementation acceptance](docs/fonts/FABLE-REVIEW-F2.md) is recorded at
+`4b0a839`. [F2.5](FONT_PROVIDER.md) fixes the shared provider/adoption boundary;
+toolkit migration remains a separate package. Kernel console and window-decoration
 integration are separate work.
 
 ## Decision status and collaboration

@@ -6,6 +6,11 @@ Read [the design](../../FONTS.md), [the work plan](../../FONTS_WORK_PLAN.md), an
 AGENTS.md. The parser/resolver starts after F0 freezes the configuration contract.
 Live application depends on F3/F4's font-adoption and relayout operations.
 
+The shared provider/replacement boundary is [FONT_PROVIDER.md](../../FONT_PROVIDER.md),
+implemented by `os64/font_provider.h` and `os64/font_adopt.h`. Use its role sets
+and prepare/barrier/commit/abort sequence. The assignment receipt identifies the
+exact F2.5 base; the earlier F2 checkpoint alone does not contain these APIs.
+
 ## Scope and ownership
 
 Own new font-configuration/discovery files chosen by F0, sample fonts.conf,

@@ -8,8 +8,8 @@ are accepted; the contract baseline is identified in [F0-FREEZE.md](docs/fonts/F
 This checkout integrates the frozen F0 contracts and reviewed F1 backend
 (`f065c7c`). F2 has an implementation candidate with host and guest evidence;
 see [F2-REPORT.md](docs/fonts/F2-REPORT.md) and
-[the implementation map](docs/fonts/F2-IMPLEMENTATION.md). Independent F2 review
-is outstanding. F1's completed review is in
+[the implementation map](docs/fonts/F2-IMPLEMENTATION.md). Fable accepted F2 in
+[FABLE-REVIEW-F2.md](docs/fonts/FABLE-REVIEW-F2.md), committed at `4b0a839`. F1's completed review is in
 [F1-IMPLEMENTATION-REVIEW.md](docs/fonts/F1-IMPLEMENTATION-REVIEW.md).
 The frozen headers remain the API authority. F3/F4/F5 are not implemented here.
 
@@ -24,9 +24,10 @@ base commit, contract revision and allowed files when assigning a package.
 
 F0 is frozen at the recorded commit. F1 has passed its separate implementation
 review and guest validation. F2 builds against that backend and the deterministic
-fixture. F2's recorded integration checks pass; its independent review remains
-open. F3's terminal and F4's widgets/editor are separate application integration
-assignments after that review.
+fixture. F2's integration checks and independent implementation review pass.
+[F2.5](FONT_PROVIDER.md) supplies shared role sets and transactional replacement
+for F3 and F4. They are separate application integration assignments on that
+common foundation.
 F5 can implement the approved configuration parser; live Apply depends on F3/F4
 adoption and invalidation. This plan describes work that can be shared; it does
 not assign or launch agents.
@@ -38,6 +39,7 @@ not assign or launch agents.
 | F0 | [Contracts and fixtures](docs/fonts/00-contracts.md) | Architecture, public/internal interface headers, common test contract | Current merged base |
 | F1 | [FreeType backend](docs/fonts/01-freetype-backend.md) | Upstream pin, private runtime adapter, engine module, backend tests | Reviewed backend checkpoint f065c7c |
 | F2 | [Text layout and drawing](docs/fonts/02-text-layout.md) | Bitmap backend, font instances/cache, positioned runs, measurement/drawing/hit tests | F0 layout/backend freeze |
+| F2.5 | [Shared provider and adoption](FONT_PROVIDER.md) | Immutable role sets, primary metrics and consumer transaction boundary | Accepted F2 at 4b0a839 |
 | F3 | [Terminal integration](docs/fonts/03-terminal.md) | gterm cell metrics, rendering and existing PTY resize use | F0 terminal rules; integrated F1/F2 |
 | F4 | [Widgets and Scribe](docs/fonts/04-widgets-editor.md) | Widget measurement, editable text geometry, Scribe integration | F0 language/editor rules; integrated F1/F2 |
 | F5 | [Configuration and font settings](docs/fonts/05-configuration.md) | fonts.conf, discovery/roles, persistence, settings UI, live application | F0 config freeze; live path after F3/F4 invalidation |
@@ -123,5 +125,5 @@ is a scoped design issue to bring back, not implicit authorization to implement 
 Current architecture verdict: [Fable R3 review](docs/fonts/FABLE-REVIEW-R3.md) approves backend,
 layout and configuration contracts with no design findings remaining. The
 [freeze record](docs/fonts/F0-FREEZE.md) identifies the baseline for downstream assignments.
-F1 implementation review and guest validation are recorded separately; F2 and
-consumer acceptance still require their own evidence.
+F1 and F2 implementation reviews and guest validation are recorded separately.
+F3/F4/F5 consumer and product acceptance require their own evidence.
