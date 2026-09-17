@@ -1,5 +1,7 @@
 # Font delivery and collaboration plan
 
+Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
+
 Design planning record, 2026-09-16; base `3b82356`, merged PR #109.
 [FONTS.md](FONTS.md) is the feature authority. Its settled product requirements
 are accepted; the contract baseline is identified in [F0-FREEZE.md](docs/fonts/F0-FREEZE.md).
@@ -24,25 +26,21 @@ report format. They do not depend on access to chat history or workstation /tmp.
 Use the [handoff template](docs/fonts/HANDOFF.md) to name the actual branch,
 base commit, contract revision and allowed files when assigning a package.
 
-The most useful first assignment for another implementer is the source audit
-portion of **F1, FreeType backend**. It can run while the coordinator designs
-**F0, shared contracts**. It produces a source pin proposal, module/dependency
-inventory, license record, and port-risk review. F1's production adapter waits
-for the frozen backend header; its owner must not guess that API.
-
-Once contracts are frozen, F1's engine and F2's layout implementation can proceed
-independently using deterministic test backends. Once those integrate, F3's
-terminal and F4's widgets/editor are separate application integration assignments.
-F5's configuration parser can proceed after the configuration contract freezes;
-its live-Apply integration follows working layout and consumer invalidation.
-This plan describes work that can be shared; it does not assign or launch agents.
+F0 is frozen at the recorded commit. F1's candidate engine exists, with the B1
+correction checked by design review; the next coordinator task is its complete
+implementation review and fresh guest validation. F2 can build against the
+frozen contracts and deterministic backend. Once F1/F2 integrate, F3's terminal
+and F4's widgets/editor are separate application integration assignments.
+F5 can implement the approved configuration parser; live Apply depends on F3/F4
+adoption and invalidation. This plan describes work that can be shared; it does
+not assign or launch agents.
 
 ## Packages and ownership
 
 | ID | Work packet | Main ownership | Start dependency |
 |---|---|---|---|
 | F0 | [Contracts and fixtures](docs/fonts/00-contracts.md) | Architecture, public/internal interface headers, common test contract | Current merged base |
-| F1 | [FreeType backend](docs/fonts/01-freetype-backend.md) | Upstream pin, private runtime adapter, engine module, backend tests | Audit now; implementation after F0 backend freeze |
+| F1 | [FreeType backend](docs/fonts/01-freetype-backend.md) | Upstream pin, private runtime adapter, engine module, backend tests | Candidate ready for implementation review |
 | F2 | [Text layout and drawing](docs/fonts/02-text-layout.md) | Bitmap backend, font instances/cache, positioned runs, measurement/drawing/hit tests | F0 layout/backend freeze |
 | F3 | [Terminal integration](docs/fonts/03-terminal.md) | gterm cell metrics, rendering and existing PTY resize use | F0 terminal rules; integrated F1/F2 |
 | F4 | [Widgets and Scribe](docs/fonts/04-widgets-editor.md) | Widget measurement, editable text geometry, Scribe integration | F0 language/editor rules; integrated F1/F2 |

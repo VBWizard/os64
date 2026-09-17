@@ -1,5 +1,7 @@
 # F2 — Text runs, bitmap compatibility, cache and drawing
 
+Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
+
 Read [the design](../../FONTS.md), [the work plan](../../FONTS_WORK_PLAN.md), and
 AGENTS.md. Start against F0's frozen run/backend contracts and fake backend.
 Real-engine integration follows F1; the fake backend is not final runtime evidence.

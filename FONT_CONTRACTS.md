@@ -1,10 +1,12 @@
 # Font contracts — F0 R3
 
+Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
+
 2026-09-16, os64 base `3b82356413ab8f183bd6506febe8d06fea6e7de0`.
 This record makes the [feature design](FONTS.md) concrete. Fable's
 [R3 design review](docs/fonts/FABLE-REVIEW-R3.md) approves backend, layout and
 configuration with no design findings remaining. The [freeze record](docs/fonts/F0-FREEZE.md)
-identifies the contract baseline. This approval does not establish an implemented
+records the frozen contract baseline. This approval does not establish an implemented
 font feature or complete the separate F1 implementation review. The six F1
 questions have dispositions in [F0-F1-DECISIONS.md](docs/fonts/F0-F1-DECISIONS.md).
 
@@ -29,8 +31,7 @@ R3 names the review document revision. The backend table remains revision 1 and
 the getter remains `_v1`: R3 clarifies semantics without changing declarations,
 field layout or enum values. It is not a promise to support mixed-version
 installed libraries. The getter's table revision and struct size must match
-before use. Record the exact freeze commit after review; do not call the contract
-frozen merely because its header compiles. Changes update this record, header,
+before use. The recorded freeze follows Fable's R3 approval. Changes update this record, header,
 fixtures and affected work packets together.
 
 ## Backend semantics and bounds

@@ -1,5 +1,7 @@
 # F0 — Shared contracts and fixtures
 
+Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
+
 Read [the design](../../FONTS.md), [the work plan](../../FONTS_WORK_PLAN.md), and
 AGENTS.md. This package turns the design proposals into interfaces other authors
 can implement independently. It owns shared headers and contract changes.

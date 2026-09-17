@@ -1,5 +1,7 @@
 # F5 — Font discovery, configuration, persistence and settings
 
+Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
+
 Read [the design](../../FONTS.md), [the work plan](../../FONTS_WORK_PLAN.md), and
 AGENTS.md. The parser/resolver starts after F0 freezes the configuration contract.
 Live application depends on F3/F4's font-adoption and relayout operations.

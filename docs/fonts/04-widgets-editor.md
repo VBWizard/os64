@@ -1,5 +1,7 @@
 # F4 — Font-aware widgets and Scribe editing
 
+Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
+
 Read [the design](../../FONTS.md), [the work plan](../../FONTS_WORK_PLAN.md), and
 AGENTS.md. Start after F0's Unicode/editor/measurement contract and an integrated
 F1/F2 baseline. Use F0's deterministic layout fixtures as independent oracles.

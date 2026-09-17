@@ -1,5 +1,7 @@
 # Font work packets
 
+Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
+
 Read [FONTS.md](../../FONTS.md) for the design and
 [FONTS_WORK_PLAN.md](../../FONTS_WORK_PLAN.md) for dependency and ownership rules.
 These are shareable assignments, not claims that the feature is implemented.

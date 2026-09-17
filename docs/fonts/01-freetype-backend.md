@@ -1,5 +1,7 @@
 # F1 — FreeType source audit and backend
 
+Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
+
 Read [the design](../../FONTS.md), [the work plan](../../FONTS_WORK_PLAN.md), and
 AGENTS.md. This is the recommended initial independent assignment. Its source
 audit can begin now; production adapters depend on F0's frozen backend interface.
@@ -11,13 +13,13 @@ requirements for this assignment.
 Use the [F0 R3 contract](../../FONT_CONTRACTS.md) and
 [`os64/font_backend.h`](../../userland/libos64/include/os64/font_backend.h) for
 the interface checkpoint. The callback-driven header is in libos64's include
-tree for consumers but imports no libos64 functions. Review the candidate with
-the coordinator before freezing it; no production adapter is claimed here.
+tree for consumers but imports no libos64 functions. Use the recorded frozen
+baseline; no production adapter is linked into the F0 checkout.
 
 F1's candidate implementation now exists in `.worktrees/freetype-backend`.
 [F0's dispositions](F0-F1-DECISIONS.md) answer its six contract questions;
-the backend API signatures remain at table v1. The candidate still needs the
-architecture gate and later implementation review before integration acceptance.
+the backend API signatures remain at table v1. Architecture review is complete;
+the candidate needs implementation review before integration acceptance.
 
 ## Scope and ownership
 

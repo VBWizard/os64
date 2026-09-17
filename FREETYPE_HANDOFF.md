@@ -1,5 +1,7 @@
 # FreeType audit and backend — handoff for Claude Opus 5
 
+Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
+
 Prepared 2026-09-16. Assignment F1 in the os64 font feature.
 
 ## Assignment and starting state
@@ -37,7 +39,7 @@ no direct agent connection or access to the original conversation is required.
 | Local design branch | `codex/font-design` |
 | Local design directory | `/home/yogi/src/os64/.worktrees/font-design` |
 | Actual implementation branch/worktree | `opus/freetype-backend`, `.worktrees/freetype-backend` |
-| Frozen backend contract commit | See [F0-FREEZE.md](docs/fonts/F0-FREEZE.md) for the exact baseline |
+| Frozen backend contract commit | `23bf6dddfd1077bf844c661d8762a9b52e3a68f9`; [freeze record](docs/fonts/F0-FREEZE.md) |
 | Other implementation prerequisites | No F2 layout or F3/F4 consumer implementation required for the standalone backend |
 | Delivery requested | Local, reviewable implementation, audit, tests, and completion report; publication/merge is not part of this assignment |
 

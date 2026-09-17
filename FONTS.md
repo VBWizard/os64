@@ -1,5 +1,7 @@
 # Fonts and shared text layout
 
+Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
+
 Design record, 2026-09-16. Based on merged `userland` at `3b82356` (PR #109).
 Chris approved pursuing FreeType and proportional text after the feasibility
 investigation and selected UTF-8 Western-language text and common symbols for

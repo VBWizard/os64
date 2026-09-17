@@ -1,5 +1,7 @@
 # F0 contract fixtures
 
+Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
+
 See [FONT_CONTRACTS.md](../../FONT_CONTRACTS.md) for R3 semantics and review status.
 This directory contains a fake engine and hand-authored layout acceptance vectors,
 not a font parser or the F2 layout implementation. It is not linked into os64.
