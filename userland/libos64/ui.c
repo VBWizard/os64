@@ -457,9 +457,18 @@ void os64_ui_run(os64_ui_t *ui, int64_t win, volatile bool *running)
 static void stack_vertical_into(os64_ui_t *ui, os64_ui_widget_t *parent, bool staged)
 {
 	const os64_ui_theme_t *t = &ui->theme;
-	int32_t x = parent->bounds.x + t->pad;
-	int32_t y = parent->bounds.y + t->pad;
-	int32_t w = parent->bounds.w - 2 * t->pad;
+	// THE CHILDREN GO INSIDE THE PARENT THIS LAYOUT IS ABOUT. Staging reads
+	// the parent's planned rectangle for the same reason it reads a child's:
+	// a planner that moves or resizes a panel and then stacks it would
+	// otherwise commit the panel's new rectangle with children measured
+	// from its old one, and they would land outside it. It is also what
+	// makes a staged stack nest — an outer stack stages a container before
+	// an inner one lays out what is in it.
+	os64_gui_rect_t area = staged ? os64_ui_widget_planned_bounds(parent)
+	                             : parent->bounds;
+	int32_t x = area.x + t->pad;
+	int32_t y = area.y + t->pad;
+	int32_t w = area.w - 2 * t->pad;
 
 	for (os64_ui_widget_t *c = parent->first_child; c; c = c->next_sibling) {
 		if (c->hidden)
@@ -567,12 +576,16 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	}
 	os64_ui_t *ui = os64_ui_of(w);
 	size_t len = ui_strlen(w->text);
-	// ASK THE RUN THAT WILL BE PAINTED. Measuring separately meant a second
-	// layout on every paint, and — when that allocation was refused — a
-	// width of zero paired with a retained run that painted perfectly well,
-	// which is a centred caption silently becoming a left-aligned one.
+	// ASK THE RUN THAT WILL BE PAINTED, AND BELIEVE IT WHEN IT SAYS NO.
+	// Measuring separately meant a second layout on every paint; ignoring
+	// the answer meant a caption whose new text could not be prepared was
+	// placed from a width of zero and then painted anyway, because the
+	// draw's own retry happened to succeed. A width that does not exist is
+	// not a position — this paint leaves the caption off the face it just
+	// drew, and the next one puts it where it belongs.
 	int32_t tw = 0;
-	os64_ui_run_width(ui, &w->run, OS64_FONT_ROLE_UI, w->text, len, &tw);
+	bool placed = os64_ui_run_width(ui, &w->run, OS64_FONT_ROLE_UI,
+	                                w->text, len, &tw) == OS64_FONT_OK;
 	int32_t tx = w->bounds.x + (w->bounds.w - tw) / 2;
 	int32_t ty = w->bounds.y +
 	             (w->bounds.h - os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI)) / 2;
@@ -582,8 +595,9 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		ty = w->bounds.y;
 	os64_gui_rect_t text_clip = w->bounds;
 	if (radius > 0) { text_clip.x += radius; text_clip.w -= 2 * radius; }
-	os64_ui_draw_text(ui, &w->run, OS64_FONT_ROLE_UI, &ctx->surf, text_clip, tx, ty,
-	                  w->text ? w->text : "", len, t->button_fg, face);
+	if (placed)
+		os64_ui_draw_text(ui, &w->run, OS64_FONT_ROLE_UI, &ctx->surf, text_clip,
+		                  tx, ty, w->text ? w->text : "", len, t->button_fg, face);
 }
 
 static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,

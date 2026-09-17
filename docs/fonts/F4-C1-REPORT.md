@@ -4,12 +4,12 @@
 foundation `788de9900282e941a7a93aa110ffa69154daa066` (F2.5), this checkpoint
 `d11608b`, corrected after review.
 
-> **Two review rounds are answered.** [Quinn's review](F4-C1-QUINN-REVIEW.md)
+> **Three review rounds are answered.** [Quinn's review](F4-C1-QUINN-REVIEW.md)
 > raised R1 (P1) and R2–R4 (P2) with rulings on all four boundary questions,
 > then R2a–R2c and R5 (P2) with a teardown-policy observation against the
 > first fix round. Every finding reproduced here from her own runners before
-> anything was changed. See **After the review** and **After the second
-> review** at the foot of this document.
+> anything was changed. See **After the review**, **After the second review**
+> and **After the third review** at the foot of this document.
 
 **This is not F4 complete, and it is not asking to be merged.** It is the first
 of three checkpoints (Chris's cadence: widgets, then editor + Scribe, then the
@@ -302,6 +302,10 @@ Still not run: P5 / real hardware.
 
 ## After the second review
 
+Quinn’s re-review of this correction is recorded in
+[the third-review section](F4-C1-QUINN-REVIEW.md#third-review-of-0cfb485),
+including current dispositions and recovery of the original evidence.
+
 Quinn's follow-up closed R1, R3 and R4, and reopened R2 in three specific
 paths it had not reached. All five reproduced here from `r2-run.py` before
 anything changed.
@@ -389,5 +393,58 @@ clean — the last of those flagged an ordering comment of mine as a claim that
 would go stale, and it was rewritten as a rule rather than a list of steps.
 The QEMU fixture was re-driven and is unchanged on the glass; it now stages
 its layout through the new call instead of applying it at commit.
+
+Still not run: P5 / real hardware.
+
+## After the third review
+
+Quinn's third round closed R2a, the original R2c case and R5, accepted the
+teardown policy as a lifecycle choice now that the header states it, and left
+two P2s. Both reproduced from `r3-run.py` before anything changed.
+
+**R2b follow-up — a width that does not exist is not a position.** Sharing one
+run fixed the unchanged caption, but a caption that CHANGES needs a new
+layout, and `button_paint` was still ignoring the status. On refusal the width
+stayed zero and the old run stayed in the slot; then the draw's own retry
+succeeded and painted the new caption at the place a zero width implied —
+X=100 instead of X=52, 876 pixels wrong, after 14 allocation attempts. The
+painter now believes the answer: no width, no caption this time round, and the
+next paint puts it where it belongs. One attempt instead of fourteen.
+
+**R6 — children belong inside the parent this layout is about.** The staged
+stack read a child's planned height but took X, Y and width from
+`parent->bounds` in both modes, so a planner that moved a panel and then
+stacked it committed the panel's new rectangle with children measured from its
+old one — `(6,6,188,29)` where `(46,26,148,29)` was right, the child landing
+outside its own parent. It also meant a staged stack could not nest. Staging
+now takes the parent's planned rectangle, immediate layout takes its live one,
+and all three coordinates come from whichever was chosen.
+
+### Evidence after the third round
+
+The suite went 269 → 293. Both new checks were confirmed to fail against the
+unfixed code: reverting them fails 1 and 4 checks respectively. The caption
+check asserts the policy in both directions — a denied paint either matches
+the correct one or shows no caption, never something in between, and the paint
+after it is pixel-identical to a clean one. The staged-parent check covers the
+abort path too: a refused adoption leaves every live rectangle untouched.
+
+Quinn's two new probes against the corrected tree are in
+`f4-evidence/c1-review/r3-after-*.txt` with `r3-after-README.md` tabulating
+them; the round-2 probes were rebuilt and rerun alongside.
+
+**Two things of mine that she had to repair, and what I did about them.** She
+restored `r2-observations.txt` byte-for-byte from her own surviving capture,
+replacing the copy I had rebuilt from her quoted results, and re-added two
+receipts that were missing from my commit — `r3-provenance.md` records the
+sources. She also had to repair a name collision: her probes `#include` this
+harness whole to reuse its fixtures, so a `list_label` I added landed in their
+namespace and her runner would not compile. I had then done it AGAIN in this
+round with `ink_left`. The harness's collidable statics now carry a `ui_test_`
+prefix and its header says why, so the next person does not have to find this
+out from a build error in somebody else's tree.
+
+`make`, `make fsck-ext2`, `git diff --check` and `tools/stale_refs.sh` are
+clean; the QEMU fixture was re-driven and is unchanged on the glass.
 
 Still not run: P5 / real hardware.

@@ -1,10 +1,10 @@
 # Quinn review — F4 checkpoint 1
 
-**Latest disposition:** the [follow-up on 5357245](#follow-up-on-5357245)
-closes the original R1 use-after-free, R3 and R4. R2 remains open in three
-reproduced paths, and new R5 covers listbox teardown. Please address those
-four P2 issues before treating the C1 boundary as accepted for C2/C3.
-The original review below is preserved with its original commit references.
+**Latest disposition:** the [third review of 0cfb485](#third-review-of-0cfb485)
+closes R2a, the original R2c case, and R5. Two P2 issues remain: R2b's
+caption-change failure path and R6's staged parent geometry. Please address
+those before C1 boundary acceptance. Earlier rounds remain below with their
+original commit references and dispositions.
 
 2026-09-17. Reviewed implementation **d11608b** and review brief **5a33242**
 on `opus/font-widgets`, based on F2.5
@@ -406,3 +406,132 @@ approval; compare the recorded results and the required behavior above.
 No independent full cross-build, QEMU rerun, or hardware validation was
 performed for this follow-up. Those claims in Opus's report remain his evidence.
 No implementation edits, commit, push, merge, or C1 completion approval were made.
+
+
+## Third review of 0cfb485
+
+2026-09-17. Reviewed **0cfb485**, its complete production delta from 5357245,
+the new tests, fixture changes, and the report's **After the second review**
+reply. This is still C1 boundary review, not F4 completeness or merge approval.
+
+### Dispositions
+
+| Item | Result |
+| --- | --- |
+| R1, R3, R4 | Remain closed for their original defects; the original probes rerun successfully. |
+| R2a: space/tab failure | Closed. Resolution now reports errors; binding resolves before replacing active state; adoption cleans up and refuses. The denial probe finds zero successful adoptions with a substituted interval. |
+| R2b: button measurement/paint | The unchanged-caption case is fixed: zero allocations and identical pixels. The changed-caption failure path below remains open. |
+| R2c: candidate list geometry | Original case closed: three visible rows now have three prepared runs; both paints allocate zero and match. New helper issue R6 below affects staged parent layout. |
+| R5: class-owned teardown | Closed for the reproduced leak. The list destroy hook releases both arrays; release and retry return OK with zero retained rows and zero binding bytes. |
+| Teardown policy | Accepted as destructive teardown with BUSY meaning incomplete, as now stated in the public header. This was an allowed lifecycle choice, not a demand for nondestructive release. |
+
+The shared-context, class lifecycle, natural-height, and staged-geometry API
+directions remain reasonable. The two implementation issues below do not
+require reopening F0/F2.5 or expanding this checkpoint into C2/C3.
+
+### R2b follow-up — P2: stop painting when the caption's width preparation fails
+
+Location at 0cfb485: `userland/libos64/ui.c:574–585`, `button_paint`;
+`userland/libos64/ui_font.c`, `slot_run` and `os64_ui_run_width`.
+
+The painter still ignores the status returned by its width helper. The new
+shared slot fixes unchanged text, but a caption change requires a new layout.
+If that layout fails, `tw` stays zero and the old slot remains. The subsequent
+`os64_ui_draw_text` retries layout for the new bytes; if this allocation now
+succeeds, it paints the new run at the position calculated from zero width.
+
+Reproduction: adopt a 200px button with `iiii`, change its caption to `WWWW`,
+and deny **only the next allocation**. The actual class painter makes **14
+allocation attempts** and puts the ink at **X=100**. Its next unrestricted
+paint puts the same caption at **X=52**; **876 pixels differ**. Both paints
+use the same installed 24px face. This is ordinary caption mutation, explicitly
+supported by the slot's byte comparison, not a second font adoption.
+
+Required correction: check the width/preparation status before proceeding to
+caption paint. On failure, preserve a coherent update policy and retry on a
+later paint; do not perform a successful second layout using placement from
+a failed first one. A successfully prepared run should supply both width
+and ink. No change to the agreed unbound startup fallback is needed.
+
+Regression: invoke the real button painter after a caption change, with one
+allocation denied and subsequent allocations available. A failed update may
+omit the new caption under the chosen failure policy, but must not paint it
+at a zero-width-derived position. Keep the unchanged-caption zero-allocation
+regression too.
+
+### R6 — P2: use the staged parent's rectangle when stacking staged children
+
+Location: `userland/libos64/ui.c:457–462`, `stack_vertical_into`.
+
+The staging helper reads a child's planned height, but computes X, Y, and
+width from **`parent->bounds`** in both modes. A planner that stages a moved
+or resized panel and then stacks its children commits the panel's new
+rectangle together with child rectangles derived from its old one. This also
+breaks nested staged stacks: an outer stack stages a container before an
+inner stack lays out its children.
+
+Reproduction: stage a parent from `(0,0,200,240)` to `(40,20,160,220)`, then
+call `os64_ui_stack_vertical_staged` with 6px padding during adoption.
+Adoption succeeds with the new parent, but the child becomes
+**`(6,6,188,29)`**. Its correct X/Y/width are **`46,26,148`**. The child is
+outside the parent's new content rectangle and may be clipped or overlap
+adjacent UI. Live bounds were not changed during preparation in this probe.
+
+Required correction: take the parent's planned rectangle when staging and
+its live rectangle for immediate layout. Derive all three coordinates from
+that selected rectangle; preserve the existing child-height policy.
+
+Regression: stage a parent move/resize and a nested container stack, then
+check committed child rectangles against candidate parents. Also abort a
+staged layout and verify live rectangles are unchanged. The current list
+regression stages the list's own height directly, so it cannot catch this
+parent-to-child propagation error.
+
+### Evidence recovery and fresh verification
+
+The overwritten round-2 raw capture survived in my original temporary output.
+I restored `r2-observations.txt` **byte-for-byte from that capture**, replacing
+the reconstructed copy. Its observed results match Opus's reconstruction.
+`baseline-host.txt` matches the tracked original at 5357245. I also restored
+the previous review's two linked baseline/original-probe receipts, which were
+absent from the submitted commit, from their surviving original captures.
+See [the provenance receipt](f4-evidence/c1-review/r3-provenance.md) for exact
+sources and a SHA-256 of the restored raw output. No historical result was
+relabelled as a fresh run.
+
+Independent current validation:
+
+- Real-backend host suite: **269 checks, zero failures**, O2, ASan+UBSan.
+- Six original probes: rebuilt and rerun successfully against the current API.
+- Five round-2 probes: rebuilt and rerun after repairing a probe-local
+  `list_label` name collision with the newly expanded included host suite.
+  As submitted, that runner did not compile; the repair renames only its
+  callback and call site. Production code is unchanged.
+- Two new probes: actual button painter with a changed caption and one-shot
+  allocation denial; staged-parent stack through a complete adoption. Both
+  reproduce the findings above under ASan+UBSan and finish teardown with OK.
+- `git diff --check`: clean.
+
+New probe harnesses use O1 and the freshly compiled O2 pinned-backend objects.
+LeakSanitizer is disabled. No independent full cross-build, QEMU repeat, or
+hardware run was performed; Opus's reported guest results remain his evidence.
+
+Fresh artifacts (kept separate from the recovered historical captures):
+
+- [269-check host receipt](f4-evidence/c1-review/r3-baseline-host.txt)
+- [Round-2 probes against 0cfb485](f4-evidence/c1-review/r3-prior-probes.txt)
+- [New probe source](f4-evidence/c1-review/r3-repro.c)
+- [New probe runner](f4-evidence/c1-review/r3-run.py)
+- [New observed results](f4-evidence/c1-review/r3-observations.txt)
+
+```sh
+python3 docs/fonts/f4-evidence/c1-review/r3-run.py --output /tmp/f4-c1-r3-review
+```
+
+This rebuilds the baseline and six original probes before the new cases.
+The repaired `r2-run.py` separately reruns the five round-2 cases. Both runners
+accept `--baseline` to reuse compatible objects from this checkout. Probe
+exit zero means execution completed, not that the behavior is correct.
+
+Only review documents and evidence files were changed. No production fixes,
+commit, push, merge, or C1 completion approval were made.

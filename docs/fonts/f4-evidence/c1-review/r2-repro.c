@@ -24,7 +24,7 @@ static int width(os64_ui_t *ui, const char *s)
     if (st != OS64_FONT_OK) { fprintf(stderr, "unexpected measure status %d\n", st); exit(2); }
     return w;
 }
-static const char *list_label(size_t index, void *user)
+static const char *r2_list_label(size_t index, void *user)
 { (void)index; (void)user; return "WWWW"; }
 /* The height this adoption will give the list, PUBLISHED where widget
  * preparation can read it instead of written into live bounds at commit —
@@ -117,7 +117,7 @@ int main(int argc, char **argv)
         printf("ink left normal=%d denied=%d, differing pixels=%zu, retained run=%d\n",ink_left(&good),ink_left(&bad),pixel_difference(&good,&bad),button.run!=NULL);
         printf("teardown=%d\n",os64_ui_font_release(&ui));
     } else {
-        os64_ui_listbox_t list;os64_ui_listbox(&list,3,list_label,NULL,NULL);
+        os64_ui_listbox_t list;os64_ui_listbox(&list,3,r2_list_label,NULL,NULL);
         list.w.bounds=(os64_gui_rect_t){0,0,200,!strcmp(mode,"list-resize")?22:60};
         os64_ui_set_root(&ui,&list.w);
         if (!strcmp(mode,"list-resize")) os64_ui_font_planner(&ui,resize_plan,resize_commit,resize_discard,&list);

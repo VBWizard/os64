@@ -13,7 +13,13 @@
  * version of that number, it is a different font. Everything below that
  * denies an allocation is checking that the refusal travels.
  *
- * The toolkit is linked for real; only the window system is stubbed. */
+ * The toolkit is linked for real; only the window system is stubbed.
+ *
+ * ITS FILE-STATIC NAMES ARE SHARED. The review probes under
+ * docs/fonts/f4-evidence/c1-review/ #include this file whole to reuse its
+ * fixtures, so a new static here lands in their namespace too and a common
+ * name collides at compile time. Anything general enough to be wanted twice
+ * — a helper, a callback, a widget — takes the `ui_test_` prefix. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -778,18 +784,18 @@ static void button_paints_from_its_run(const char *dir)
 /* R2c + R5 — a list that the adoption makes TALLER must have runs prepared
  * for the rows it will be able to show, not the rows it can show now; and
  * whatever it retains must be released when the window's fonts go. */
-static os64_ui_listbox_t gList;
-static const char *const kRows[] = { "first row", "second row", "third row" };
-static const char *list_label(size_t index, void *user)
-{ (void)user; return index < 3 ? kRows[index] : ""; }
+static os64_ui_listbox_t gUiTestList;
+static const char *const kUiTestRows[] = { "first row", "second row", "third row" };
+static const char *ui_test_list_label(size_t index, void *user)
+{ (void)user; return index < 3 ? kUiTestRows[index] : ""; }
 
 static os64_font_status_t grow_plan(os64_ui_t *ui, void *user, void **out)
 {
     (void)ui; (void)user;
-    os64_gui_rect_t grown = gList.w.bounds;
+    os64_gui_rect_t grown = gUiTestList.w.bounds;
     grown.h = 58;                            /* room for three rows, not one */
-    os64_ui_widget_stage_bounds(&gList.w, grown);
-    *out = &gList;
+    os64_ui_widget_stage_bounds(&gUiTestList.w, grown);
+    *out = &gUiTestList;
     return OS64_FONT_OK;
 }
 static void grow_commit(os64_ui_t *ui, void *user, void *plan)
@@ -804,9 +810,9 @@ static void list_stages_its_candidate_rows(const char *dir)
                                   .field_bg = 0xff000000, .field_fg = 0xffffffff,
                                   .text_sel_bg = 0xff222222, .text_sel_fg = 0xffffffff,
                                   .field_border = 0xff000000, .focus_ring = 0xff000000 };
-    os64_ui_listbox(&gList, 3, list_label, NULL, NULL);
-    gList.w.bounds = (os64_gui_rect_t){0, 0, 200, 22};   /* one row fits today */
-    os64_ui_set_root(&ui, &gList.w);
+    os64_ui_listbox(&gUiTestList, 3, ui_test_list_label, NULL, NULL);
+    gUiTestList.w.bounds = (os64_gui_rect_t){0, 0, 200, 22};   /* one row fits today */
+    os64_ui_set_root(&ui, &gUiTestList.w);
     CHECK(os64_ui_font_planner(&ui, grow_plan, grow_commit, grow_commit, NULL)
           == OS64_FONT_OK);
 
@@ -821,9 +827,9 @@ static void list_stages_its_candidate_rows(const char *dir)
 
     /* The staged height was applied, and there is a prepared run for every
      * row the box can now show. */
-    CHECK(gList.w.bounds.h == 58);
-    CHECK(os64_ui_listbox_rows(&gList, &ui.theme) == 3);
-    CHECK(gList.row_run_count == 3);
+    CHECK(gUiTestList.w.bounds.h == 58);
+    CHECK(os64_ui_listbox_rows(&gUiTestList, &ui.theme) == 3);
+    CHECK(gUiTestList.row_run_count == 3);
 
     /* So the first paint allocates nothing, and painting with every
      * allocation refused is pixel-identical to painting normally. */
@@ -834,20 +840,182 @@ static void list_stages_its_candidate_rows(const char *dir)
     memset(&ctx, 0, sizeof(ctx));
     ctx.surf = normal.s;
     unsigned long before = allocations;
-    gList.w.cls->paint(&gList.w, &ctx, &ui.theme);
+    gUiTestList.w.cls->paint(&gUiTestList.w, &ctx, &ui.theme);
     CHECK(allocations == before);
     ctx.surf = denied.s;
     deny_countdown = 0;
-    gList.w.cls->paint(&gList.w, &ctx, &ui.theme);
+    gUiTestList.w.cls->paint(&gUiTestList.w, &ctx, &ui.theme);
     deny_countdown = -1;
     CHECK(memcmp(normal.px, denied.px, sizeof(normal.px)) == 0);
 
     /* R5: with nothing outstanding outside the window, teardown completes.
      * The list's runs live in its own array, which only its class can see. */
     CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
-    CHECK(gList.row_run_count == 0);
+    CHECK(gUiTestList.row_run_count == 0);
     CHECK(os64_ui_font_live_bytes(&ui) == 0);
     CHECK(ui.font == NULL);
+    current = "";
+}
+
+/* The leftmost painted column, or the surface width when nothing was
+ * painted — which is how "the caption is not there at all" is spelled. */
+static int32_t ui_test_ink_left(const canvas_t *c, uint32_t background)
+{
+    for (int32_t x = 0; x < SURF_W; ++x)
+        for (int32_t y = 0; y < SURF_H; ++y)
+            if (c->px[y * SURF_W + x] != background)
+                return x;
+    return SURF_W;
+}
+
+/* R2b follow-up — A WIDTH THAT DOES NOT EXIST IS NOT A POSITION. When a
+ * caption changes, the new text needs a new layout. If that layout is
+ * refused the width is zero, and the draw's own retry could still succeed
+ * and paint the new caption at the place a zero width implied. */
+static void changed_caption_is_not_placed_from_nothing(const char *dir)
+{
+    current = "caption change";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui.theme = (os64_ui_theme_t){ .pad = 6, .button_h = 20, .gap = 4,
+                                  .button_fg = 0xffffffff, .button_face = 0xff000000,
+                                  .button_border = 0xff000000, .panel_bg = 0xff000000 };
+    os64_ui_widget_t button;
+    os64_ui_button(&button, "iiii", NULL, NULL);
+    button.bounds = (os64_gui_rect_t){0, 0, 200, 50};
+    os64_ui_set_root(&ui, &button);
+
+    os64_text_context_t *text = os64_ui_font_context(&ui);
+    os64_font_set_t *set = outline_set(text, dir, "DejaVuSans.ttf", 24);
+    CHECK(set != NULL);
+    if (!set) { current = ""; return; }
+    os64_font_consumer_t consumer;
+    os64_ui_font_consumer(&ui, &consumer);
+    CHECK(os64_font_adopt(set, &consumer, 1, NULL) == OS64_FONT_OK);
+    os64_font_set_release(set);
+
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    canvas_t correct, denied;
+
+    /* Where the new caption belongs, painted with nothing in the way. */
+    button.text = "WWWW";
+    canvas_init(&correct, 0xff000000);
+    ctx.surf = correct.s;
+    button.cls->paint(&button, &ctx, &ui.theme);
+    int32_t want = ui_test_ink_left(&correct, 0xff000000);
+    CHECK(want > 0 && want < SURF_W);
+
+    /* Now the same change from scratch, with one allocation denied and the
+     * rest available — the shape that used to paint it at X=100. */
+    os64_ui_run_release(button.run);
+    button.run = NULL;
+    button.text = "iiii";
+    canvas_init(&denied, 0xff000000);
+    ctx.surf = denied.s;
+    button.cls->paint(&button, &ctx, &ui.theme);   /* settle on the old caption */
+    canvas_init(&denied, 0xff000000);
+    button.text = "WWWW";
+    deny_countdown = 0;
+    button.cls->paint(&button, &ctx, &ui.theme);
+    deny_countdown = -1;
+
+    /* Either the caption is where it belongs, or it is not painted. What it
+     * must never be is somewhere a failed measurement put it. */
+    int32_t got = ui_test_ink_left(&denied, 0xff000000);
+    CHECK(got == want || got == SURF_W);
+
+    /* And the paint after it puts the caption back where it belongs. */
+    canvas_t recovered;
+    canvas_init(&recovered, 0xff000000);
+    ctx.surf = recovered.s;
+    button.cls->paint(&button, &ctx, &ui.theme);
+    CHECK(memcmp(recovered.px, correct.px, sizeof(correct.px)) == 0);
+
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    CHECK(os64_ui_font_live_bytes(&ui) == 0);
+    current = "";
+}
+
+/* R6 — children belong inside the parent THIS layout is about. A planner
+ * that moves a panel and then stacks it used to commit the panel's new
+ * rectangle with children measured from its old one. */
+static os64_ui_widget_t gStagePanel, gStageChild;
+
+static os64_font_status_t move_panel_plan(os64_ui_t *ui, void *user, void **out)
+{
+    (void)user;
+    os64_ui_widget_stage_bounds(&gStagePanel, (os64_gui_rect_t){40, 20, 160, 220});
+    os64_ui_stack_vertical_staged(ui, &gStagePanel);
+    *out = &gStagePanel;
+    return OS64_FONT_OK;
+}
+static os64_font_status_t refuse_after_staging(os64_ui_t *ui, void *user, void **out)
+{
+    move_panel_plan(ui, user, out);
+    *out = NULL;
+    return OS64_FONT_LIMIT;
+}
+static void stage_nop(os64_ui_t *ui, void *user, void *plan)
+{ (void)ui; (void)user; (void)plan; }
+
+static void staged_children_follow_their_staged_parent(const char *dir)
+{
+    current = "staged parent";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui.theme = (os64_ui_theme_t){ .pad = 6, .button_h = 20, .gap = 4,
+                                  .panel_bg = 0xff000000, .panel_border = 0xff000000,
+                                  .label_fg = 0xffffffff };
+    os64_ui_panel(&gStagePanel);
+    gStagePanel.bounds = (os64_gui_rect_t){0, 0, 200, 240};
+    os64_ui_label(&gStageChild, "inside");
+    os64_ui_add_child(&gStagePanel, &gStageChild);
+    os64_ui_set_root(&ui, &gStagePanel);
+    os64_ui_stack_vertical(&ui, &gStagePanel);
+
+    os64_gui_rect_t live_parent = gStagePanel.bounds;
+    os64_gui_rect_t live_child = gStageChild.bounds;
+
+    os64_text_context_t *text = os64_ui_font_context(&ui);
+    os64_font_consumer_t consumer;
+    os64_ui_font_consumer(&ui, &consumer);
+
+    /* An adoption that REFUSES after staging must leave both rectangles
+     * exactly as they were. */
+    os64_font_set_t *first = outline_set(text, dir, "DejaVuSans.ttf", 20);
+    CHECK(first != NULL);
+    if (first) {
+        CHECK(os64_ui_font_planner(&ui, refuse_after_staging, stage_nop, stage_nop,
+                                   NULL) == OS64_FONT_OK);
+        CHECK(os64_font_adopt(first, &consumer, 1, NULL) == OS64_FONT_LIMIT);
+        CHECK(gStagePanel.bounds.x == live_parent.x && gStagePanel.bounds.y == live_parent.y);
+        CHECK(gStageChild.bounds.x == live_child.x && gStageChild.bounds.y == live_child.y);
+        CHECK(gStageChild.bounds.w == live_child.w);
+        os64_font_set_release(first);
+    }
+
+    /* And one that succeeds must put the child inside the parent's NEW
+     * rectangle, not the one it is leaving. */
+    os64_font_set_t *set = outline_set(text, dir, "DejaVuSans.ttf", 20);
+    CHECK(set != NULL);
+    if (set) {
+        CHECK(os64_ui_font_planner(&ui, move_panel_plan, stage_nop, stage_nop,
+                                   NULL) == OS64_FONT_OK);
+        CHECK(os64_font_adopt(set, &consumer, 1, NULL) == OS64_FONT_OK);
+        os64_font_set_release(set);
+
+        CHECK(gStagePanel.bounds.x == 40 && gStagePanel.bounds.y == 20);
+        CHECK(gStagePanel.bounds.w == 160);
+        CHECK(gStageChild.bounds.x == gStagePanel.bounds.x + ui.theme.pad);
+        CHECK(gStageChild.bounds.y == gStagePanel.bounds.y + ui.theme.pad);
+        CHECK(gStageChild.bounds.w == gStagePanel.bounds.w - 2 * ui.theme.pad);
+        /* The child is inside its parent, which is the whole point. */
+        CHECK(gStageChild.bounds.x >= gStagePanel.bounds.x);
+        CHECK(gStageChild.bounds.x + gStageChild.bounds.w <=
+              gStagePanel.bounds.x + gStagePanel.bounds.w);
+    }
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
     current = "";
 }
 
@@ -935,6 +1103,8 @@ int main(int argc, char **argv)
     tab_interval_failure_travels(dir);
     button_paints_from_its_run(dir);
     list_stages_its_candidate_rows(dir);
+    changed_caption_is_not_placed_from_nothing(dir);
+    staged_children_follow_their_staged_parent(dir);
 #else
     (void)slurp;
     (void)rows_touched_outside;

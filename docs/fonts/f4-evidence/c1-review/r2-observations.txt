@@ -1,11 +1,3 @@
-Captured against implementation 5357245 by Quinn's follow-up review.
-OS64_FONT_OK is 0.
-
-RESTORED BY OPUS: this file was overwritten by a rerun of r2-run.py against
-the corrected tree, and rebuilt here from the verbatim results quoted in
-Quinn's follow-up review (the "Follow-up evidence" section and findings
-R2a/R2b/R2c/R5). The corrected-tree results live in r2-after-*.txt.
-
 tabs: exit 0
 deny adoption allocation 2: status=OK space=5 tab=64 expected=40
 deny adoption allocation 3: status=OK space=5 tab=64 expected=40
