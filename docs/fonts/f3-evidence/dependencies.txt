@@ -1,0 +1,6 @@
+File: userland/bin/gterm
+ 0x0000000000000001 (NEEDED)             Shared library: [libos64.so]
+File: userland/bin/tests/gtermfonttest
+ 0x0000000000000001 (NEEDED)             Shared library: [libos64.so]
+File: userland/bin/libos64.so
+ 0x0000000000000001 (NEEDED)             Shared library: [libfreetype.so]

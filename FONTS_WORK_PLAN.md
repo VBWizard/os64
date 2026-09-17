@@ -11,7 +11,9 @@ see [F2-REPORT.md](docs/fonts/F2-REPORT.md) and
 [the implementation map](docs/fonts/F2-IMPLEMENTATION.md). Fable accepted F2 in
 [FABLE-REVIEW-F2.md](docs/fonts/FABLE-REVIEW-F2.md), committed at `4b0a839`. F1's completed review is in
 [F1-IMPLEMENTATION-REVIEW.md](docs/fonts/F1-IMPLEMENTATION-REVIEW.md).
-The frozen headers remain the API authority. F3/F4/F5 are not implemented here.
+The frozen headers remain the API authority. F3 has a terminal integration
+candidate with host and guest evidence in [F3-REPORT.md](docs/fonts/F3-REPORT.md).
+F4 and F5 are separate assignments; their implementation is not in this checkout.
 
 ## How to share the work
 

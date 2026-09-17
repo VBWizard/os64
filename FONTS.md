@@ -194,7 +194,7 @@ before integrating it with editable text.
 2. Import and adapt FreeType with a standalone guest specimen rendering installed
    monospace and proportional outline fonts. Check source pin, malformed input,
    allocation failure, cleanup, clipping, and bounded cache behavior.
-3. Migrate gterm's hardcoded CELL_W/CELL_H to selected cell metrics. Derive its
+3. Use selected font cell metrics throughout gterm. Derive its
    rows and columns from the drawable area, use the existing `os64_pty_resize`
    operation, and update pointer selection/cursor geometry together. Preserve
    the PTY's byte plus charset contract; this slice does not add a Unicode PTY.
