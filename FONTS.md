@@ -6,8 +6,10 @@ Design record, 2026-09-16. Based on merged `userland` at `3b82356` (PR #109).
 Chris approved pursuing FreeType and proportional text after the feasibility
 investigation and selected UTF-8 Western-language text and common symbols for
 the first release. The implementation contracts have R3 design approval; the
-separate F1 candidate port is not integrated into this checkout, and toolkit
-migration is not implemented here. Kernel console and window-decoration
+reviewed F1 backend is integrated at `f065c7c`. The F2 implementation candidate
+and its host/guest evidence are recorded in [F2-REPORT.md](docs/fonts/F2-REPORT.md),
+with a [source map](docs/fonts/F2-IMPLEMENTATION.md). Independent F2 review and
+toolkit migration remain separate steps. Kernel console and window-decoration
 integration are separate work.
 
 ## Decision status and collaboration
@@ -25,8 +27,8 @@ profile, limits, and configuration/live-Apply semantics are specified in the
 [F0-FREEZE.md](docs/fonts/F0-FREEZE.md). The six F1 questions have dispositions in
 [F0-F1-DECISIONS.md](docs/fonts/F0-F1-DECISIONS.md); the
 [Fable R3 verdict](docs/fonts/FABLE-REVIEW-R3.md) approves all three design gates.
-F1 has a separate candidate implementation and preserved host/guest evidence;
-it is not integrated here or implementation-approved. Task owners use the recorded
+F1 has passed its separate implementation review with preserved host/guest evidence
+in [F1-IMPLEMENTATION-REVIEW.md](docs/fonts/F1-IMPLEMENTATION-REVIEW.md). Task owners use the recorded
 contract baseline and must not invent competing contracts.
 
 [FONTS_WORK_PLAN.md](FONTS_WORK_PLAN.md) defines ownership, dependencies,
@@ -275,4 +277,5 @@ cross-cutting feature.
 Current architecture verdict: [Fable R3 review](docs/fonts/FABLE-REVIEW-R3.md) approves backend,
 layout and configuration contracts with no design findings remaining. The
 [freeze record](docs/fonts/F0-FREEZE.md) identifies the baseline for downstream assignments.
-F1 implementation review and guest validation remain separate gates.
+F1 implementation review and guest validation are recorded separately; F2 and
+consumer acceptance still require their own evidence.

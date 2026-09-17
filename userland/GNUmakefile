@@ -137,7 +137,8 @@ LAUNCH_OBJS := $(patsubst %,$(OBJ)/%.o,$(LAUNCH_SRCS))
 # the same day: a shared object's relocations resolve against itself and its
 # own dependencies (never against the executable that loaded it), so the
 # library has to carry every symbol the library uses.
-LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/env.c libos64/str.c libos64/walk.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_theme.c libos64/ui_session.c libos64/ui_saved.c libos64/ui_list.c libos64/ui_palette.c libos64/ui_color.c libos64/ui_controls.c libos64/ui_text.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/thread_trampoline.S
+LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/env.c libos64/str.c libos64/walk.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_theme.c libos64/ui_session.c libos64/ui_saved.c libos64/ui_list.c libos64/ui_palette.c libos64/ui_color.c libos64/ui_controls.c libos64/ui_text.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/thread_trampoline.S \
+    libos64/text.c libos64/text_cache.c libos64/text_decode.c libos64/text_bitmap.c libos64/text_draw.c
 # PIC objects live under obj/pic/ — a separate tree, because these are
 # compiled with different flags than everything else and an object built for
 # one world must never be picked up by the other.
@@ -360,11 +361,13 @@ $(BIN)/[: $(BIN)/test
 # options left to right, and lib.ld must see the assigned base and the slot
 # bound before it evaluates either one. LIB_SLOT_SIZE comes from the assigner
 # that spaces the bases, so its ASSERT checks against the build's actual map.
-$(LIBOS64_SO): $(LIBOS64_OBJS) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
+# The injected text backend lives in a leaf library. Keep its production
+# dependency explicit so ordinary consumers share the same dependency closure.
+$(LIBOS64_SO): $(LIBOS64_OBJS) $(LIBFREETYPE_SO) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBOS64_BASE) \
 	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBOS64_LDFLAGS) \
-	      -o $@ $(LIBOS64_OBJS)
+	      -o $@ $(LIBOS64_OBJS) --no-as-needed $(LIBFREETYPE_SO)
 	@printf '  %-10s prelinked at %s\n' "libos64.so" "$(LIBOS64_BASE)"
 
 # --no-as-needed makes the dependency an explicit property of libgzip.so.
@@ -446,7 +449,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
 APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest),$(LIBHTML_SO)) \
                        $(if $(filter $(1),gview desktop jpegtest),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
-                       $(if $(filter $(1),fonttest),$(LIBFREETYPE_SO)) \
+                       $(if $(filter $(1),fonttest texttest),$(LIBFREETYPE_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
                        $(if $(filter $(1),$(LIBFETCH_PROGRAMS)),$(LIBFETCH_SO)) \

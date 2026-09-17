@@ -443,7 +443,7 @@ userland:
 # that rides it changes.
 TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
 
-$(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE $(FONT_FIXTURES) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf GNUmakefile
+$(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(FONT_FIXTURES) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -473,6 +473,7 @@ $(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE $(FON
 	# is upstream's dual-licence notice followed by the FTL in full, which
 	# is the option os64 exercises (see libfreetype/UPSTREAM_REVIEW.md).
 	printf 'write license/freetype-LICENSE /etc/licenses/freetype.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'write license/unicode-LICENSE /etc/licenses/unicode.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	# /tests: the proof harness — the userland fixtures and the kernel-born
 	# ones, on one shelf. NOTE the tie-break if two source trees ever claim one
@@ -505,7 +506,7 @@ $(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE $(FON
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/bootenv.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/bootenv.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -579,6 +580,7 @@ $(DISK_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE $(KERNEL_B
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/licenses
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libjpeg-turbo-LICENSE ::/etc/licenses/libjpeg-turbo.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/freetype-LICENSE ::/etc/licenses/freetype.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/unicode-LICENSE ::/etc/licenses/unicode.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gclock.conf ::/etc/gclock.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/os64.conf ::/etc/os64.conf

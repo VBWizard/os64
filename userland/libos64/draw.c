@@ -1,8 +1,9 @@
 // draw.c — libdraw's implementation: surface.c's rasterizer, in ring 3.
 //
 // Software drawing into userland canvases. Primitives clip to the surface;
-// text may additionally clip to a widget rectangle. Glyphs come from the
-// embedded font, and publishing hands completed pixels to the compositor.
+// legacy byte text may additionally clip to a widget rectangle. These glyphs
+// come from the embedded compatibility font; text_draw.c paints positioned
+// outline/bitmap runs. Publishing hands completed pixels to the compositor.
 
 #include "os64/draw.h"
 #include "os64/font_psf1.h"

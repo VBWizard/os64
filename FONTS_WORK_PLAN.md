@@ -5,17 +5,13 @@ Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1
 Design planning record, 2026-09-16; base `3b82356`, merged PR #109.
 [FONTS.md](FONTS.md) is the feature authority. Its settled product requirements
 are accepted; the contract baseline is identified in [F0-FREEZE.md](docs/fonts/F0-FREEZE.md).
-This checkout contains F0 contracts/fixtures. F1 has a separate candidate port
-and preserved host/guest evidence in `.worktrees/freetype-backend`; it is not
-integrated into this checkout or accepted by an implementation review.
-
-[FONT_CONTRACTS.md](FONT_CONTRACTS.md) and its headers are the approved F0 R3
-contracts. The fake backend has host sanitizer and strict target compilation
-evidence; the golden vectors have arithmetic checks. Production layout, guest
-rendering in F2, F1 implementation review and F3/F4/F5 implementation remain outstanding.
-The six F1 questions are answered in
-[F0-F1-DECISIONS.md](docs/fonts/F0-F1-DECISIONS.md); use the
-[Fable R3 verdict](docs/fonts/FABLE-REVIEW-R3.md) for the completed architecture checkpoint.
+This checkout integrates the frozen F0 contracts and reviewed F1 backend
+(`f065c7c`). F2 has an implementation candidate with host and guest evidence;
+see [F2-REPORT.md](docs/fonts/F2-REPORT.md) and
+[the implementation map](docs/fonts/F2-IMPLEMENTATION.md). Independent F2 review
+is outstanding. F1's completed review is in
+[F1-IMPLEMENTATION-REVIEW.md](docs/fonts/F1-IMPLEMENTATION-REVIEW.md).
+The frozen headers remain the API authority. F3/F4/F5 are not implemented here.
 
 ## How to share the work
 
@@ -26,11 +22,11 @@ report format. They do not depend on access to chat history or workstation /tmp.
 Use the [handoff template](docs/fonts/HANDOFF.md) to name the actual branch,
 base commit, contract revision and allowed files when assigning a package.
 
-F0 is frozen at the recorded commit. F1's candidate engine exists, with the B1
-correction checked by design review; the next coordinator task is its complete
-implementation review and fresh guest validation. F2 can build against the
-frozen contracts and deterministic backend. Once F1/F2 integrate, F3's terminal
-and F4's widgets/editor are separate application integration assignments.
+F0 is frozen at the recorded commit. F1 has passed its separate implementation
+review and guest validation. F2 builds against that backend and the deterministic
+fixture. F2's recorded integration checks pass; its independent review remains
+open. F3's terminal and F4's widgets/editor are separate application integration
+assignments after that review.
 F5 can implement the approved configuration parser; live Apply depends on F3/F4
 adoption and invalidation. This plan describes work that can be shared; it does
 not assign or launch agents.
@@ -40,7 +36,7 @@ not assign or launch agents.
 | ID | Work packet | Main ownership | Start dependency |
 |---|---|---|---|
 | F0 | [Contracts and fixtures](docs/fonts/00-contracts.md) | Architecture, public/internal interface headers, common test contract | Current merged base |
-| F1 | [FreeType backend](docs/fonts/01-freetype-backend.md) | Upstream pin, private runtime adapter, engine module, backend tests | Candidate ready for implementation review |
+| F1 | [FreeType backend](docs/fonts/01-freetype-backend.md) | Upstream pin, private runtime adapter, engine module, backend tests | Reviewed backend checkpoint f065c7c |
 | F2 | [Text layout and drawing](docs/fonts/02-text-layout.md) | Bitmap backend, font instances/cache, positioned runs, measurement/drawing/hit tests | F0 layout/backend freeze |
 | F3 | [Terminal integration](docs/fonts/03-terminal.md) | gterm cell metrics, rendering and existing PTY resize use | F0 terminal rules; integrated F1/F2 |
 | F4 | [Widgets and Scribe](docs/fonts/04-widgets-editor.md) | Widget measurement, editable text geometry, Scribe integration | F0 language/editor rules; integrated F1/F2 |
@@ -127,4 +123,5 @@ is a scoped design issue to bring back, not implicit authorization to implement 
 Current architecture verdict: [Fable R3 review](docs/fonts/FABLE-REVIEW-R3.md) approves backend,
 layout and configuration contracts with no design findings remaining. The
 [freeze record](docs/fonts/F0-FREEZE.md) identifies the baseline for downstream assignments.
-F1 implementation review and guest validation remain separate gates.
+F1 implementation review and guest validation are recorded separately; F2 and
+consumer acceptance still require their own evidence.
