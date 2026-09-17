@@ -1,6 +1,7 @@
 # F3 — terminal font integration report
 
-Implementation candidate on `codex/terminal-fonts`, worktree
+Implementation commit **aa8b7a276164ad90f0fe0826c3d91ef8a4c60ac0** on
+`codex/terminal-fonts`, worktree
 `/home/yogi/src/os64/.worktrees/terminal-fonts`. Independent review and publication
 are pending. No merge is requested or implied by this report.
 
@@ -128,7 +129,10 @@ Screenshots, serial output, payload identities and guest assertions are retained
 under [f3-evidence](f3-evidence/). The final run shut down cleanly, and offline
 read-only checks of the copied root/home ext2 filesystems passed; see
 [image checks](f3-evidence/image-checks.txt). The guest assertion transcript is
-[guest-terminal.txt](f3-evidence/guest-terminal.txt).
+[guest-terminal.txt](f3-evidence/guest-terminal.txt); full guest serial output
+is [serial.txt](f3-evidence/serial.txt) (trailing whitespace removed), monitor input is
+[actions.txt](f3-evidence/actions.txt), and the final strict build transcript is
+[strict-build.txt](f3-evidence/strict-build.txt).
 
 ## Remaining boundaries
 
