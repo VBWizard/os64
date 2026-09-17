@@ -205,7 +205,20 @@ USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
 # dependencies. The set goes on both volumes that currently carry /bin — the
 # ext2 root and the FAT lifeboat — with independent copies so damage to one
 # volume does not also eat the repair environment's libraries.
-USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so
+USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libfreetype.so
+
+# The font fixtures /tests/fonttest reads: two TrueType faces and two
+# OpenType/CFF ones, with their licences beside them. They land in /tests
+# because they are PROOF, not product — which fonts os64 ships with is F5's
+# question, and this directory does not pre-empt it.
+# userland/libfreetype/fixtures/FIXTURES.md records where each file came
+# from, its digest, and what licence it travels under.
+FONT_FIXTURE_DIR   := userland/libfreetype/fixtures
+FONT_FIXTURE_FILES := DejaVuSans.ttf DejaVuSansMono.ttf \
+                      SourceSans3-Regular.otf SourceCodePro-Regular.otf \
+                      LICENSE-DejaVu.txt LICENSE-SourceCodePro.txt \
+                      LICENSE-SourceSans3.txt
+FONT_FIXTURES      := $(addprefix $(FONT_FIXTURE_DIR)/,$(FONT_FIXTURE_FILES))
 
 # Kernel-side ring-3 test fixtures. They ride the image into /tests alongside
 # the userland ones — same shelf, because they are the same KIND of thing: a
@@ -430,7 +443,7 @@ userland:
 # that rides it changes.
 TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
 
-$(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf GNUmakefile
+$(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE $(FONT_FIXTURES) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -453,6 +466,13 @@ $(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE $(TLS_PUBLIC_ROOTS) tools/gen_
 	# select another store through the configuration ladder.
 	printf 'mkdir /etc/certs\nwrite %s /etc/certs/roots.pem\n' "$(TLS_PUBLIC_ROOTS)" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'mkdir /etc/licenses\nwrite license/libjpeg-turbo-LICENSE /etc/licenses/libjpeg-turbo.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	# The FreeType Licence asks that anything shipping FreeType credit it in
+	# its documentation. A file on the machine IS this machine's
+	# documentation, so the credit travels with the library rather than
+	# living only in a repository nobody has at run time. The shipped file
+	# is upstream's dual-licence notice followed by the FTL in full, which
+	# is the option os64 exercises (see libfreetype/UPSTREAM_REVIEW.md).
+	printf 'write license/freetype-LICENSE /etc/licenses/freetype.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	# /tests: the proof harness — the userland fixtures and the kernel-born
 	# ones, on one shelf. NOTE the tie-break if two source trees ever claim one
@@ -463,6 +483,9 @@ $(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE $(TLS_PUBLIC_ROOTS) tools/gen_
 	# separate directories are the mechanism.
 	printf 'cd /tests\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach t,$(USERLAND_TESTBINS),printf 'write %s %s\n' "$(t)" "$(notdir $(t))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'mkdir /tests/fonts\ncd /tests/fonts\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach f,$(FONT_FIXTURES),printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'cd /tests\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;))
 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
 	# FAT — the one file that must never lie about which filesystem it's on).
@@ -482,7 +505,7 @@ $(EXT2_TEST_IMAGE): license/libjpeg-turbo-LICENSE $(TLS_PUBLIC_ROOTS) tools/gen_
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): license/libjpeg-turbo-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/bootenv.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/bootenv.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -522,6 +545,13 @@ $(DISK_IMAGE): license/libjpeg-turbo-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(t) ::/tests/$(notdir $(t));)
 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/$(notdir $(f));))
+	# The font fixtures travel with the harness for the same reason the
+	# harness travels at all: a fixture that cannot find its inputs proves
+	# nothing, and a lifeboat where one test always skips is a lifeboat whose
+	# green result means less than root's.
+	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/tests/fonts > /dev/null 2>&1
+	$(foreach f,$(FONT_FIXTURES),\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/fonts/$(notdir $(f));)
 	# The lifeboat's own /lib. Its /bin is dynamically linked exactly like
 	# root's, so these files are what make the lifeboat a working system
 	# rather than a partition full of programs that cannot start. Iterated
@@ -548,6 +578,7 @@ $(DISK_IMAGE): license/libjpeg-turbo-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc > /dev/null 2>&1
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/licenses
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libjpeg-turbo-LICENSE ::/etc/licenses/libjpeg-turbo.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/freetype-LICENSE ::/etc/licenses/freetype.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gclock.conf ::/etc/gclock.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/os64.conf ::/etc/os64.conf

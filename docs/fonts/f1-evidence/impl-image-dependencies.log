@@ -1,0 +1,6 @@
+Dry run suppresses recursive binary builders (-o userland -o kernel) to isolate image prerequisites.
+before userland/libfreetype/fixtures/DejaVuSans.ttf rebuilds ext2 = False
+after userland/libfreetype/fixtures/DejaVuSans.ttf rebuilds ext2 = True
+before license/freetype-LICENSE rebuilds ext2 = False
+after license/freetype-LICENSE rebuilds ext2 = True
+PASS: touching a fixture or engine license now refreshes ext2
