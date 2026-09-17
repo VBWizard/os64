@@ -943,3 +943,26 @@ minimum-size syscall from PR #108.
   one edit; one Undo restored the square preview and disabled Undo. Screenshots
   were inspected, and pixel comparisons checked the Undo state and restored
   preview. This run used private disk copies and made no P5 changes.
+
+## Font envelope migration requirement (planned F5)
+
+The font work's [R3 contract](FONT_CONTRACTS.md) requires a compatible userland
+line envelope before `fonts.*` session publication. This is planned work; the
+current theme decoder rejects unknown settings and its struct serializer cannot
+preserve font or future component lines.
+
+F5 moves envelope validation/preservation into ui_session. Readers accept
+well-formed unknown dotted keys while retaining validation of known settings
+and required full-snapshot palette keys. Writers merge at the expected
+generation, replacing only their component's keys and carrying other lines
+verbatim. Validate the complete merged payload against the existing 4096-byte
+cap before compare-and-publish. Component updates refuse an invalid base; an
+explicit full repair can replace it. Apply, Save and startup preservation all
+use this protocol. No kernel transport change is needed.
+
+After the refresh installing the first compatible libos64, reboot before any
+font settings are published. Existing processes retain the old library after
+refresh, including its incompatible decoder/writer; every appearance participant
+must restart with the compatible library. Later dotted-namespace extensions
+benefit from the tolerant-reader/preserving-writer rule. See the
+[F5 packet](docs/fonts/05-configuration.md) for compatibility and rollout tests.
