@@ -44,6 +44,7 @@
 #include <stdbool.h>
 #include "os64/draw.h"
 #include "os64/gui.h"
+#include "os64/font_adopt.h"
 
 // ── The theme table ─────────────────────────────────────────────────────────
 // Every color and metric libui reads, in one place. theme.conf keys are the
@@ -217,6 +218,22 @@ typedef struct os64_ui_class
                   const os64_gui_event_t *ev);
     // Optional private-state reset when focus or pointer ownership is lost.
     void (*cancel)(os64_ui_widget_t *w);
+    // Optional: re-derive this widget's font-dependent geometry. libui calls
+    // it when the widget joins a tree and again whenever the window's face
+    // changes, before any layout runs.
+    //
+    // A ONE-ROW CONTROL'S HEIGHT BELONGS TO ITS CLASS. A label, a button and
+    // a checkbox are each one row of text plus furniture, so their `bounds.h`
+    // is set here rather than by the app — a caption clipped by its own
+    // button is what the alternative looks like, and no layout can work it
+    // out from a theme that cannot carry a face. An app that wants a
+    // different height sets it after the widget joins the tree, and sets it
+    // again after a font change.
+    //
+    // It is also where a widget caches an answer the theme cannot give:
+    // os64_ui_listbox_rows is handed a THEME and needs a row pitch, so the
+    // listbox stores its own.
+    void (*metrics)(os64_ui_widget_t *w, os64_ui_t *ui);
 } os64_ui_class_t;
 
 struct os64_ui_widget
@@ -237,6 +254,13 @@ struct os64_ui_widget
     void (*on_click)(os64_ui_widget_t *w, void *user);
     void *user;
 
+    // The UI this widget belongs to, threaded in when it joins a tree.
+    // A paint routine is handed only (widget, canvas, theme) — the theme
+    // cannot carry a font, so this is how a widget reaches the window's
+    // binding to measure a string. NULL until it is attached, which reads
+    // as "no binding" and draws through the bitmap painter.
+    os64_ui_t *ui;
+
     // Tree links (intrusive — the app owns the nodes, libui only threads
     // them). Children paint and hit-test in list order; last child is
     // "topmost" for a hit, matching paint order.
@@ -251,6 +275,10 @@ struct os64_ui
 {
     os64_draw_ctx_t *ctx;        // the window's draw context (app-owned)
     os64_ui_theme_t  theme;
+    void            *font;       // this window's font binding, libui-owned
+                                 // (opaque: the plan types behind it are not
+                                 // an interface). NULL until a widget draws
+                                 // text or the app asks for the context.
     uint64_t appearance_generation; // installed by this context, not its siblings
     bool follow_session;           // false for independent draft previews
     os64_ui_widget_t *root;
@@ -281,13 +309,116 @@ struct os64_ui
     bool             quit;       // set by the default close handling; read by os64_ui_run
 };
 
+// ── the window's fonts (F4; FONT_PROVIDER.md is the contract) ───────────────
+// A window measures and paints text through an immutable role set: UI for
+// labels, buttons, list rows and fields; DOCUMENT for textviews. The set is
+// F5's to resolve from configuration — until then a window binds the builtin
+// 8x16 face on first use, which is the face libui always drew with.
+//
+// THE THEME'S font.w/font.h ARE NOT THIS. They stay 8/16 and describe the
+// bitmap painter that os64_draw_text still uses; they are not selectors and
+// they do not follow the bound face. Ask these calls for live metrics.
+
+typedef struct
+{
+    int32_t row_h;     // row pitch: the primary's line box, not a nominal size
+    int32_t baseline;  // from the row's top to the baseline
+    int32_t cell_w;    // fixed cell width; zero for UI and DOCUMENT
+} os64_ui_font_metrics_t;
+
+// The window's text context, created on first use and owned by libui. F5 and
+// the font fixtures prepare their candidate sets on THIS context, so one
+// window's widgets and document adopt from one context.
+os64_text_context_t *os64_ui_font_context(os64_ui_t *ui);
+
+// Install a set immediately, taking a reference. This is the STARTUP door —
+// there is no old layout to preserve, so it cannot half-succeed. A live
+// replacement goes through os64_font_adopt with the consumer below, which is
+// what keeps the document's bytes, focus and selection across the change.
+os64_font_status_t os64_ui_font_bind(os64_ui_t *ui, os64_font_set_t *set);
+
+// The whole-window consumer: prepare stages runs and geometry, commit swaps
+// them without allocating, abort throws the staging away. Hand it to
+// os64_font_adopt; the plan behind it is libui's and has no public shape.
+void os64_ui_font_consumer(os64_ui_t *ui, os64_font_consumer_t *out);
+
+// The app's own layout, planned with the CANDIDATE metrics before anything
+// live moves. libui calls `plan` inside prepare: measure with
+// os64_ui_text_width and os64_ui_font_metrics, which report the candidate
+// for the duration, and stage the result without touching a live bound.
+// Anything but OS64_FONT_OK fails the whole adoption and leaves the old
+// state as it was — return LIMIT when the layout will not fit the content
+// area, NO_MEMORY when staging could not be allocated, so the caller can
+// tell "too big" from "out of room" (they deserve different next moves).
+// Measure from the calls above, NOT from widget bounds: those still
+// describe the face the window is wearing, and only change at commit.
+// `commit` applies what was planned and cannot fail; `discard` frees it.
+// Any of the three may be NULL for a window whose layout is font-blind.
+void os64_ui_font_planner(os64_ui_t *ui,
+                          os64_font_status_t (*plan)(os64_ui_t *ui, void *user, void **out),
+                          void (*commit)(os64_ui_t *ui, void *user, void *plan),
+                          void (*discard)(os64_ui_t *ui, void *user, void *plan),
+                          void *user);
+
+// Live metrics for a role. These never build a font engine: a widget derives
+// its geometry the moment it joins a tree, and a tree is often laid out
+// before anything is drawn. False therefore means "this window is not
+// wearing a set" — it has drawn no text yet, or its engine refused — and the
+// metrics describe the 8x16 bitmap cell those windows draw with. A caller
+// that just wants numbers can ignore the return.
+bool os64_ui_font_metrics(os64_ui_t *ui, os64_font_role_t role,
+                          os64_ui_font_metrics_t *out);
+int32_t os64_ui_font_row_height(os64_ui_t *ui, os64_font_role_t role);
+
+// A string's advance in whole pixels, rounded outward so a width that
+// decides whether text fits never comes back short of its own ink.
+int32_t os64_ui_text_width(os64_ui_t *ui, os64_font_role_t role,
+                           const char *s, size_t len);
+
+// Paint one line at (x, top_y) — top, not baseline, which is what every
+// caller already has. Fills the run's box with `bg` first, then the glyphs.
+// Returns the pen's x after the run.
+int32_t os64_ui_draw_text(os64_ui_t *ui, os64_font_role_t role,
+                          os64_gui_surface_t *dst, os64_gui_rect_t clip,
+                          int32_t x, int32_t top_y, const char *s, size_t len,
+                          uint32_t fg, uint32_t bg);
+
+// The set this window holds (borrowed, NULL before first use), the status
+// that explains an absent set, and the engine's live bytes — the last for
+// fixtures that prove a released binding owes nothing.
+os64_font_set_t *os64_ui_font_set(os64_ui_t *ui);
+os64_font_status_t os64_ui_font_status(const os64_ui_t *ui);
+size_t os64_ui_font_live_bytes(const os64_ui_t *ui);
+
+// Re-derive every widget's cached geometry from the current binding. Called
+// for you when the set changes; an app needs it only after building a tree
+// under a set it bound earlier.
+void os64_ui_font_restamp(os64_ui_t *ui);
+
+// Drop the set and the context. An app that simply exits need not call this;
+// it exists so a fixture can close the loop on the engine's accounting.
+void os64_ui_font_release(os64_ui_t *ui);
+
 // Bind a UI to a window's draw context and load the theme. root may be set
 // afterwards (os64_ui_set_root marks everything dirty).
 void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx);
 void os64_ui_set_root(os64_ui_t *ui, os64_ui_widget_t *root);
 
-// Attach a child at the END of parent's list (paints last = on top).
+// Attach a child at the END of parent's list (paints last = on top). The
+// child (and its own subtree) joins the parent's UI, so it can measure text
+// before the first paint.
 void os64_ui_add_child(os64_ui_widget_t *parent, os64_ui_widget_t *child);
+
+// The UI a widget belongs to — what a paint routine or a metrics callback
+// asks when it needs the window's fonts. NULL for an unattached widget.
+static inline os64_ui_t *os64_ui_of(os64_ui_widget_t *w) { return w->ui; }
+
+// What a control has to be tall enough for: one row of the UI face plus the
+// theme's padding above and below, never less than the theme's stock button
+// height. A caption clipped by its own button is the fingerprint this
+// answers — the theme's button.h was written for an 8x16 cell and a face is
+// free to be taller than that.
+int32_t os64_ui_control_min_height(os64_ui_t *ui);
 
 // Mark a widget (its current bounds) as needing repaint.
 void os64_ui_mark_dirty(os64_ui_t *ui, os64_ui_widget_t *w);
@@ -446,6 +577,10 @@ struct os64_ui_listbox {
     void *list_user;
     // Optional color chip before each label; shares the row's hit target.
     uint32_t (*swatch)(size_t index, void *user);
+    // Row pitch, re-derived from the UI role whenever the font changes.
+    // Zero means "not stamped yet" and reads as the theme's bitmap cell,
+    // which is the same answer the builtin set gives.
+    int32_t row_h;
 };
 void os64_ui_listbox(os64_ui_listbox_t *list, size_t count,
                      const char *(*label)(size_t, void *),

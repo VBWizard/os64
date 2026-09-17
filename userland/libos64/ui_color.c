@@ -166,7 +166,7 @@ static bool picker_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_even
     }
 }
 
-static const os64_ui_class_t kPickerClass = {"colorpicker", picker_paint, picker_event, picker_cancel};
+static const os64_ui_class_t kPickerClass = {"colorpicker", picker_paint, picker_event, picker_cancel, 0};
 
 void os64_ui_colorpicker(os64_ui_colorpicker_t *p, uint32_t color,
     void (*on_change)(os64_ui_colorpicker_t *, void *), void *user)

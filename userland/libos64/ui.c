@@ -17,10 +17,25 @@ static size_t ui_strlen(const char *s)
 
 // ── tree + dirty ────────────────────────────────────────────────────────────
 
+// Thread a subtree onto its UI, so every widget in it can reach the window's
+// font binding — layout runs before the first paint and already measures.
+static void adopt_tree(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+	if (w == (os64_ui_widget_t *)0)
+		return;
+	w->ui = ui;
+	if (w->cls && w->cls->metrics)
+		w->cls->metrics(w, ui);
+	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
+		adopt_tree(c, ui);
+}
+
 void os64_ui_add_child(os64_ui_widget_t *parent, os64_ui_widget_t *child)
 {
 	child->parent = parent;
 	child->next_sibling = (os64_ui_widget_t *)0;
+	if (parent->ui)
+		adopt_tree(child, parent->ui);
 	if (parent->first_child == (os64_ui_widget_t *)0) {
 		parent->first_child = child;
 		return;
@@ -55,12 +70,14 @@ void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
 	ui->on_resize = (void (*)(os64_ui_t *))0;
 	ui->on_close = (void (*)(os64_ui_t *))0;
 	ui->quit = false;
+	ui->font = (void *)0;
 }
 
 void os64_ui_set_root(os64_ui_t *ui, os64_ui_widget_t *root)
 {
 	os64_ui_cancel_interaction(ui);
 	ui->root = root;
+	adopt_tree(root, ui);
 	os64_ui_mark_dirty(ui, root);
 }
 
@@ -355,6 +372,7 @@ static void paint_recursive(os64_ui_widget_t *w, os64_ui_t *ui)
 {
 	if (w == (os64_ui_widget_t *)0 || w->hidden)
 		return;
+	w->ui = ui;   // a widget attached by hand still reaches the fonts
 	os64_gui_rect_t clip;
 	if (!os64_rect_intersect(w->bounds, ui->dirty, &clip))
 		return;
@@ -451,16 +469,38 @@ static void panel_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	os64_draw_rect(&ctx->surf, w->bounds, t->panel_border);
 }
 
+int32_t os64_ui_control_min_height(os64_ui_t *ui)
+{
+	int32_t row = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
+	int32_t want = row + 2 * (ui ? ui->theme.pad : 0);
+	int32_t floor = ui ? ui->theme.button_h : 0;
+	return want > floor ? want : floor;
+}
+
+// A label is one row of text, a button is a control: same face, different
+// furniture around it.
+static void label_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+	w->bounds.h = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
+}
+
+static void button_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+	w->bounds.h = os64_ui_control_min_height(ui);
+}
+
 static void label_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
                         const os64_ui_theme_t *t)
 {
 	// Labels sit on their parent panel's face — repaint that patch first so
 	// a text change never shows the old glyphs underneath.
 	os64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);
-	int32_t ty = w->bounds.y + (w->bounds.h - t->font_h) / 2;
-	os64_draw_text_clipped(&ctx->surf, w->bounds, w->bounds.x, ty < w->bounds.y ? w->bounds.y : ty,
-	               w->text ? w->text : "", ui_strlen(w->text),
-	               t->label_fg, t->panel_bg);
+	os64_ui_t *ui = os64_ui_of(w);
+	int32_t ty = w->bounds.y + (w->bounds.h - os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI)) / 2;
+	os64_ui_draw_text(ui, OS64_FONT_ROLE_UI, &ctx->surf, w->bounds,
+	                  w->bounds.x, ty < w->bounds.y ? w->bounds.y : ty,
+	                  w->text ? w->text : "", ui_strlen(w->text),
+	                  t->label_fg, t->panel_bg);
 }
 
 static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
@@ -490,18 +530,20 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		                        w->bounds.w - 2 * i, w->bounds.h - 2 * i};
 		os64_draw_round_rect(&ctx->surf, edge, radius > i ? radius - i : 0, light, dark);
 	}
+	os64_ui_t *ui = os64_ui_of(w);
 	size_t len = ui_strlen(w->text);
-	int32_t tw = (int32_t)len * t->font_w;
+	int32_t tw = os64_ui_text_width(ui, OS64_FONT_ROLE_UI, w->text, len);
 	int32_t tx = w->bounds.x + (w->bounds.w - tw) / 2;
-	int32_t ty = w->bounds.y + (w->bounds.h - t->font_h) / 2;
+	int32_t ty = w->bounds.y +
+	             (w->bounds.h - os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI)) / 2;
 	if (tx < w->bounds.x + t->pad)
 		tx = w->bounds.x + t->pad;
 	if (ty < w->bounds.y)
 		ty = w->bounds.y;
 	os64_gui_rect_t text_clip = w->bounds;
 	if (radius > 0) { text_clip.x += radius; text_clip.w -= 2 * radius; }
-	os64_draw_text_clipped(&ctx->surf, text_clip, tx, ty, w->text ? w->text : "", len,
-	               t->button_fg, face);
+	os64_ui_draw_text(ui, OS64_FONT_ROLE_UI, &ctx->surf, text_clip, tx, ty,
+	                  w->text ? w->text : "", len, t->button_fg, face);
 }
 
 static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
@@ -563,9 +605,9 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	}
 }
 
-const os64_ui_class_t os64_ui_panel_class  = { "panel",  panel_paint,  0, 0 };
-const os64_ui_class_t os64_ui_label_class  = { "label",  label_paint,  0, 0 };
-const os64_ui_class_t os64_ui_button_class = { "button", button_paint, button_event, 0 };
+const os64_ui_class_t os64_ui_panel_class  = { "panel",  panel_paint,  0, 0, 0 };
+const os64_ui_class_t os64_ui_label_class  = { "label",  label_paint,  0, 0, label_metrics };
+const os64_ui_class_t os64_ui_button_class = { "button", button_paint, button_event, 0, button_metrics };
 
 static void widget_zero(os64_ui_widget_t *w)
 {

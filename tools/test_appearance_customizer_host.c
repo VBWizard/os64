@@ -131,5 +131,10 @@ void appearance_customizer_contracts(void)
     assert(gEditor.focus == &gHexField.w && !strcmp(gHex, "12AB"));
     os64_free(pixels);
     gCtx.surf.pixels = NULL;
+    // The widgets measured text, so each of these windows is holding a text
+    // context and its builtin role set. A program just exits; a leak-checked
+    // harness has to hand them back.
+    os64_ui_font_release(&gEditor);
+    os64_ui_font_release(&gPreview);
     puts("appearance customizer: native layout, palette edits, hex validation, Undo and page cancellation passed");
 }

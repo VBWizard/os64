@@ -3,14 +3,24 @@
 #include "ui_internal.h"
 #include "os64/str.h"
 
-static int row_height(const os64_ui_theme_t *theme)
+// The row's own pitch: the UI face's line box plus the padding that has
+// always separated rows. It is stamped on the listbox rather than derived
+// here because the questions that ask for it are handed a THEME, which
+// cannot carry a font; an unstamped listbox reads as the bitmap cell, which
+// is the same answer the builtin set gives.
+static int row_height(const os64_ui_listbox_t *list, const os64_ui_theme_t *theme)
 {
-    return theme->font_h + 8;
+    return (list->row_h > 0 ? list->row_h : theme->font_h) + 8;
+}
+
+static void list_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+    ((os64_ui_listbox_t *)w)->row_h = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
 }
 
 int os64_ui_listbox_rows(const os64_ui_listbox_t *list, const os64_ui_theme_t *theme)
 {
-    int rows = (list->w.bounds.h - 4) / row_height(theme);
+    int rows = (list->w.bounds.h - 4) / row_height(list, theme);
     return rows > 0 ? rows : 0;
 }
 
@@ -42,7 +52,7 @@ static void list_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     if (w->bounds.w < 4 || w->bounds.h < 4) return;
     os64_draw_fill_rect(&ctx->surf, w->bounds, t->field_bg);
     os64_draw_rect(&ctx->surf, w->bounds, w->focused ? t->focus_ring : t->field_border);
-    int rows = os64_ui_listbox_rows(list, t), height = row_height(t);
+    int rows = os64_ui_listbox_rows(list, t), height = row_height(list, t);
     for (int row = 0; row < rows && list->top + (size_t)row < list->count; ++row) {
         size_t index = list->top + (size_t)row;
         bool selected = list->selected >= 0 && index == (size_t)list->selected;
@@ -60,8 +70,9 @@ static void list_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
             os64_draw_rect(&ctx->surf, chip, fg);
             inset = 28;
         }
-        os64_draw_text_clipped(&ctx->surf, rect, rect.x + inset, rect.y + 4,
-                               label, os64_strlen(label), fg, bg);
+        os64_ui_draw_text(os64_ui_of(w), OS64_FONT_ROLE_UI, &ctx->surf, rect,
+                          rect.x + inset, rect.y + 4,
+                          label, os64_strlen(label), fg, bg);
     }
 }
 
@@ -70,7 +81,7 @@ static int pointer_index(const os64_ui_listbox_t *list, const os64_ui_theme_t *t
 {
     os64_gui_rect_t r = list->w.bounds;
     if (x < r.x + 2 || x >= r.x + r.w - 2 || y < r.y + 2) return -1;
-    int row = (y - r.y - 2) / row_height(t);
+    int row = (y - r.y - 2) / row_height(list, t);
     size_t index = list->top + (size_t)row;
     return row < os64_ui_listbox_rows(list, t) && index < list->count ? (int)index : -1;
 }
@@ -134,7 +145,8 @@ static bool list_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
     }
 }
 
-static const os64_ui_class_t kListClass = {"listbox", list_paint, list_event, list_cancel};
+static const os64_ui_class_t kListClass = {"listbox", list_paint, list_event, list_cancel,
+                                          list_metrics};
 
 void os64_ui_listbox(os64_ui_listbox_t *list, size_t count,
                      const char *(*label)(size_t, void *),
