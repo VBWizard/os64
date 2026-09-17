@@ -52,10 +52,13 @@ typedef struct ui_font_plan
 typedef struct ui_font_binding
 {
 	os64_text_context_t *text;
+	// Whose context it is. libui destroys only what libui built; a borrowed
+	// one belongs to the application, which outlives every window using it.
+	bool                 owns_text;
 	os64_font_set_t     *set;
 	ui_font_faces_t      faces;
 	size_t               live_bytes;
-	os64_font_status_t   status;   // why there is no set, when there is none
+	os64_font_status_t   status;   // why there is no set, or what last failed
 	bool                 tried;    // the lazy builtin attempt has happened
 
 	// Non-NULL only while prepare runs. Measurement answers from the
@@ -63,11 +66,6 @@ typedef struct ui_font_binding
 	// the new metrics before a single live bound moves.
 	const ui_font_faces_t *staging;
 
-	// The app's layout planner, if it registered one.
-	os64_font_status_t (*plan)(os64_ui_t *ui, void *user, void **out);
-	void  (*plan_commit)(os64_ui_t *ui, void *user, void *plan);
-	void  (*plan_discard)(os64_ui_t *ui, void *user, void *plan);
-	void  *plan_user;
 } ui_font_binding_t;
 
 // The engine allocates through libos64's heap, wrapped only to keep a
@@ -119,6 +117,8 @@ static ui_font_binding_t *binding_ensure(os64_ui_t *ui)
 		// the bitmap painter and os64_ui_font_status names why.
 		b->text = (os64_text_context_t *)0;
 		b->status = status;
+	} else {
+		b->owns_text = true;
 	}
 	ui->font = b;
 	return b;
@@ -231,23 +231,30 @@ static const os64_font_role_view_t *role_view(os64_ui_t *ui, os64_font_role_t ro
 
 // ── measuring and painting ──────────────────────────────────────────────────
 
-// Lay one line out. The run is the caller's to release.
-static os64_text_run_t *role_run(os64_ui_t *ui, os64_font_role_t role,
-                                 const char *s, size_t len)
+// Lay one line out against a role's faces. A NULL `out` run with an OK
+// status is how "this window wears no face, draw with the bitmap cell"
+// is spelled; any other status is a real failure and its own answer.
+static os64_font_status_t role_layout(os64_ui_t *ui, os64_font_role_t role,
+                                      const char *s, size_t len,
+                                      os64_text_run_t **out)
 {
+	*out = (os64_text_run_t *)0;
 	const os64_font_role_view_t *v = role_view(ui, role);
 	if (!v)
-		return (os64_text_run_t *)0;
+		return OS64_FONT_OK;           // unbound: the bitmap cell is the answer
 	ui_font_binding_t *b = binding_of(ui);
 	os64_text_layout_t layout = {
 		.encoding = OS64_TEXT_UTF8_WESTERN_V1,
 		.fonts = v->fonts, .font_count = v->font_count,
 		.tab_origin = 0, .tab_interval = binding_faces(b)->tab_interval[role],
 	};
-	os64_text_run_t *run = (os64_text_run_t *)0;
-	if (os64_text_layout(b->text, (const uint8_t *)s, len, &layout, &run) != OS64_FONT_OK)
-		return (os64_text_run_t *)0;
-	return run;
+	os64_font_status_t status =
+		os64_text_layout(b->text, (const uint8_t *)s, len, &layout, out);
+	if (status != OS64_FONT_OK) {
+		*out = (os64_text_run_t *)0;
+		b->status = status;            // what os64_ui_font_status will report
+	}
+	return status;
 }
 
 // 26.6 to whole pixels, outward: a width that decides whether text fits must
@@ -257,21 +264,30 @@ static int32_t px_ceil(os64_font_pos_t v)
 	return (int32_t)((v + (OS64_FONT_UNIT - 1)) / OS64_FONT_UNIT);
 }
 
-int32_t os64_ui_text_width(os64_ui_t *ui, os64_font_role_t role,
-                           const char *s, size_t len)
+os64_font_status_t os64_ui_text_measure(os64_ui_t *ui, os64_font_role_t role,
+                                        const char *s, size_t len, int32_t *out)
 {
+	if (!out)
+		return OS64_FONT_BAD_ARGUMENT;
+	*out = 0;
 	if (!s || !len)
-		return 0;
-	os64_text_run_t *run = role_run(ui, role, s, len);
+		return OS64_FONT_OK;
+
+	os64_text_run_t *run = (os64_text_run_t *)0;
+	os64_font_status_t status = role_layout(ui, role, s, len, &run);
+	if (status != OS64_FONT_OK)
+		return status;
 	if (!run) {
-		// The bitmap cell, which is what this window is still drawing with.
-		return (int32_t)len * OS64_FONT_GLYPH_W;
+		*out = (int32_t)len * OS64_FONT_GLYPH_W;   // the bitmap cell
+		return OS64_FONT_OK;
 	}
+
 	os64_text_run_view_t rv;
-	int32_t width = os64_text_run_view(run, &rv) == OS64_FONT_OK ? px_ceil(rv.advance_x)
-	                                                             : (int32_t)len * OS64_FONT_GLYPH_W;
+	status = os64_text_run_view(run, &rv);
+	if (status == OS64_FONT_OK)
+		*out = px_ceil(rv.advance_x);
 	os64_text_run_release(run);
-	return width;
+	return status;
 }
 
 bool os64_ui_font_metrics(os64_ui_t *ui, os64_font_role_t role,
@@ -305,40 +321,100 @@ int32_t os64_ui_font_row_height(os64_ui_t *ui, os64_font_role_t role)
 	return m.row_h;
 }
 
-int32_t os64_ui_draw_text(os64_ui_t *ui, os64_font_role_t role,
+// Does this retained run still say what the caption says? The run owns a
+// copy of the bytes it was laid out from, so the question is answerable
+// without trusting the caller to announce a change — and a caption is short
+// enough that comparing it beats laying it out again.
+static bool run_matches(os64_text_run_t *run, const char *s, size_t len)
+{
+	os64_text_run_view_t rv;
+	if (!run || os64_text_run_view(run, &rv) != OS64_FONT_OK)
+		return false;
+	if (rv.byte_count != len)
+		return false;
+	for (size_t i = 0; i < len; ++i)
+		if (rv.bytes[i] != (uint8_t)s[i])
+			return false;
+	return true;
+}
+
+int32_t os64_ui_draw_text(os64_ui_t *ui, void **run_slot,
+                          os64_font_role_t role,
                           os64_gui_surface_t *dst, os64_gui_rect_t clip,
                           int32_t x, int32_t top_y, const char *s, size_t len,
                           uint32_t fg, uint32_t bg)
 {
 	if (!s)
 		s = "";
-	os64_text_run_t *run = len ? role_run(ui, role, s, len) : (os64_text_run_t *)0;
-	if (!run) {
-		if (!len)
+	if (!len)
+		return x;
+
+	// The retained run is the usual case: adoption staged it, so the paint
+	// that follows a commit allocates nothing. Text that has changed
+	// underneath it is re-laid-out here and retained in the same slot.
+	os64_text_run_t *run = (os64_text_run_t *)0;
+	bool borrowed = false;
+	if (run_slot && run_matches((os64_text_run_t *)*run_slot, s, len)) {
+		run = (os64_text_run_t *)*run_slot;
+		borrowed = true;
+	} else {
+		if (role_layout(ui, role, s, len, &run) != OS64_FONT_OK) {
+			// A window wearing a face has no honest way to draw this. The
+			// bitmap cell is a DIFFERENT font at a different size, so
+			// substituting it would put the wrong glyphs at the wrong
+			// widths and call it success. Leave the row as it is; the
+			// failure is on the binding for anyone who asks.
 			return x;
-		return os64_draw_text_clipped(dst, clip, x, top_y, s, len, fg, bg);
+		}
+		if (run && run_slot) {
+			os64_text_run_release((os64_text_run_t *)*run_slot);
+			*run_slot = run;
+			borrowed = true;
+		}
 	}
+
+	if (!run)   // unbound window: the painter this layer replaced
+		return os64_draw_text_clipped(dst, clip, x, top_y, s, len, fg, bg);
 
 	os64_text_run_view_t rv;
 	if (os64_text_run_view(run, &rv) != OS64_FONT_OK) {
-		os64_text_run_release(run);
-		return os64_draw_text_clipped(dst, clip, x, top_y, s, len, fg, bg);
+		if (!borrowed)
+			os64_text_run_release(run);
+		return x;
 	}
 
 	os64_ui_font_metrics_t m;
 	os64_ui_font_metrics(ui, role, &m);
 	int32_t advance = px_ceil(rv.advance_x);
 
+	// THE ROW IS THE CEILING AND THE FLOOR. Pitch comes from the primary
+	// face and does not grow for a taller fallback or a missing-glyph
+	// marker (FONT_PROVIDER.md), so a glyph that overflows the line box is
+	// cut here — otherwise an 8px row carrying a 16px marker paints over
+	// its neighbours, and the row above belongs to a different widget.
+	// Horizontally the caller's clip still rules, overhang included.
+	os64_gui_rect_t row = { clip.x, top_y, clip.w, m.row_h };
+	os64_gui_rect_t row_clip;
+	if (!os64_rect_intersect(clip, row, &row_clip)) {
+		// Nothing of this row is visible. The pen still advanced — a
+		// caller laying a line out depends on that — but a run made
+		// here belongs to nobody now.
+		if (!borrowed)
+			os64_text_run_release(run);
+		return x + advance;
+	}
+
 	// The paper before the ink. os64_text_draw paints coverage only, while
 	// the painter it replaces filled each cell — so the row's own box is
 	// cleared here, or a shortened caption leaves its old tail on screen.
 	os64_gui_rect_t box = { x, top_y, advance, m.row_h };
 	os64_gui_rect_t painted;
-	if (os64_rect_intersect(box, clip, &painted))
+	if (os64_rect_intersect(box, row_clip, &painted))
 		os64_draw_fill_rect(dst, painted, bg);
 
-	os64_text_draw(run, dst, clip, x, top_y + m.baseline, fg);
-	os64_text_run_release(run);
+	os64_text_draw(run, dst, row_clip, x, top_y + m.baseline, fg);
+	if (!borrowed)
+		os64_text_run_release(run);
 	return x + advance;
 }
 
@@ -350,6 +426,45 @@ os64_text_context_t *os64_ui_font_context(os64_ui_t *ui)
 		return (os64_text_context_t *)0;
 	ui_font_binding_t *b = binding_ensure(ui);
 	return b ? b->text : (os64_text_context_t *)0;
+}
+
+os64_font_status_t os64_ui_font_borrow_context(os64_ui_t *ui,
+                                               os64_text_context_t *text)
+{
+	if (!ui || !text)
+		return OS64_FONT_BAD_ARGUMENT;
+	ui_font_binding_t *b = binding_ensure(ui);
+	if (!b)
+		return OS64_FONT_NO_MEMORY;
+	if (b->text == text)
+		return OS64_FONT_OK;
+	// Moving a window between engines would strand whatever it is already
+	// holding — its set, its widgets' runs — in a context nobody will
+	// destroy. A window picks its engine before it has anything in it.
+	if (b->set || b->tried)
+		return OS64_FONT_BUSY;
+	if (b->text && b->owns_text) {
+		os64_font_status_t status = os64_text_destroy(b->text);
+		if (status != OS64_FONT_OK)
+			return status;
+	}
+	b->text = text;
+	b->owns_text = false;
+	b->status = OS64_FONT_OK;
+	return OS64_FONT_OK;
+}
+
+// A set carries the context it was prepared on. Binding one from somewhere
+// else would have F2 refuse every layout against it, and this wrapper would
+// then measure the bitmap cell and report success — the wrong font, silently,
+// at the wrong widths. Ask the question once, here.
+static os64_font_status_t set_belongs_here(ui_font_binding_t *b, os64_font_set_t *set)
+{
+	os64_font_role_view_t view;
+	os64_font_status_t status = os64_font_set_view(set, OS64_FONT_ROLE_UI, &view);
+	if (status != OS64_FONT_OK)
+		return status;
+	return view.text == b->text ? OS64_FONT_OK : OS64_FONT_BAD_ARGUMENT;
 }
 
 os64_font_set_t *os64_ui_font_set(os64_ui_t *ui)
@@ -384,7 +499,10 @@ os64_font_status_t os64_ui_font_bind(os64_ui_t *ui, os64_font_set_t *set)
 	if (!b->text)
 		return b->status;
 	if (set) {
-		os64_font_status_t status = os64_font_set_retain(set);
+		os64_font_status_t status = set_belongs_here(b, set);
+		if (status != OS64_FONT_OK)
+			return status;
+		status = os64_font_set_retain(set);
 		if (status != OS64_FONT_OK)
 			return status;
 	}
@@ -399,19 +517,29 @@ os64_font_status_t os64_ui_font_bind(os64_ui_t *ui, os64_font_set_t *set)
 	return OS64_FONT_OK;
 }
 
-void os64_ui_font_planner(os64_ui_t *ui,
+os64_font_status_t os64_ui_font_planner(os64_ui_t *ui,
                           os64_font_status_t (*plan)(os64_ui_t *ui, void *user, void **out),
                           void (*commit)(os64_ui_t *ui, void *user, void *plan),
                           void (*discard)(os64_ui_t *ui, void *user, void *plan),
                           void *user)
 {
-	ui_font_binding_t *b = ui ? binding_ensure(ui) : (ui_font_binding_t *)0;
-	if (!b)
-		return;
-	b->plan = plan;
-	b->plan_commit = commit;
-	b->plan_discard = discard;
-	b->plan_user = user;
+	if (!ui)
+		return OS64_FONT_BAD_ARGUMENT;
+	// A staged plan that can be applied but not thrown away leaks on every
+	// refusal, and one that can be thrown away but not applied is not a
+	// plan. Either all three doors exist or none do.
+	bool any = plan || commit || discard;
+	bool all = plan && commit && discard;
+	if (any && !all)
+		return OS64_FONT_BAD_ARGUMENT;
+
+	// No allocation: the window already owns this storage, so a registered
+	// planner is a registered planner.
+	ui->font_plan = plan;
+	ui->font_plan_commit = commit;
+	ui->font_plan_discard = discard;
+	ui->font_plan_user = user;
+	return OS64_FONT_OK;
 }
 
 // ── the adoption consumer ───────────────────────────────────────────────────
@@ -435,6 +563,103 @@ void os64_ui_font_restamp(os64_ui_t *ui)
 	restamp_tree(ui->root, ui);
 }
 
+static void restamp_tree(os64_ui_widget_t *w, os64_ui_t *ui);
+
+// ── staging a tree's text against a candidate ───────────────────────────────
+//
+// A commit cannot allocate, and a paint has nowhere to report a failure to,
+// so every run the window will need is laid out HERE — while failing is
+// still allowed and still means "the old face stays".
+
+os64_font_status_t os64_ui_run_layout(os64_ui_t *ui, os64_font_role_t role,
+                                      const char *s, size_t len, void **out)
+{
+	os64_text_run_t *run = (os64_text_run_t *)0;
+	os64_font_status_t status = role_layout(ui, role, s, len, &run);
+	*out = run;
+	return status;
+}
+
+void os64_ui_run_release(void *run)
+{
+	os64_text_run_release((os64_text_run_t *)run);
+}
+
+bool os64_ui_run_matches(void *run, const char *s, size_t len)
+{
+	return run_matches((os64_text_run_t *)run, s, len);
+}
+
+// The one-caption default. A widget with no text stages nothing and drops
+// whatever it held, because that run describes a face on its way out.
+os64_font_status_t os64_ui_stage_caption(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+	size_t len = 0;
+	if (w->text)
+		while (w->text[len])
+			++len;
+	if (!len)
+		return OS64_FONT_OK;
+	void *run = (void *)0;
+	os64_font_status_t status =
+		os64_ui_run_layout(ui, OS64_FONT_ROLE_UI, w->text, len, &run);
+	if (status != OS64_FONT_OK)
+		return status;
+	os64_ui_run_release(w->run_staged);
+	w->run_staged = run;
+	return OS64_FONT_OK;
+}
+
+void os64_ui_commit_caption(os64_ui_widget_t *w)
+{
+	os64_ui_run_release(w->run);
+	w->run = w->run_staged;
+	w->run_staged = (void *)0;
+}
+
+void os64_ui_discard_caption(os64_ui_widget_t *w)
+{
+	os64_ui_run_release(w->run_staged);
+	w->run_staged = (void *)0;
+}
+
+static os64_font_status_t stage_tree_runs(os64_ui_t *ui, os64_ui_widget_t *w)
+{
+	if (!w)
+		return OS64_FONT_OK;
+	if (w->cls && w->cls->prepare) {
+		os64_font_status_t status = w->cls->prepare(w, ui);
+		if (status != OS64_FONT_OK)
+			return status;
+	}
+	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling) {
+		os64_font_status_t status = stage_tree_runs(ui, c);
+		if (status != OS64_FONT_OK)
+			return status;
+	}
+	return OS64_FONT_OK;
+}
+
+static void commit_tree_runs(os64_ui_widget_t *w)
+{
+	if (!w)
+		return;
+	if (w->cls && w->cls->commit)
+		w->cls->commit(w);
+	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
+		commit_tree_runs(c);
+}
+
+static void discard_tree_runs(os64_ui_widget_t *w)
+{
+	if (!w)
+		return;
+	if (w->cls && w->cls->discard)
+		w->cls->discard(w);
+	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
+		discard_tree_runs(c);
+}
+
 static os64_font_status_t consumer_prepare(void *user, os64_font_set_t *candidate,
                                            void **plan_out)
 {
@@ -449,7 +674,12 @@ static os64_font_status_t consumer_prepare(void *user, os64_font_set_t *candidat
 		return OS64_FONT_NO_MEMORY;
 	os64_memset(plan, 0, sizeof(*plan));
 
-	os64_font_status_t status = os64_font_set_retain(candidate);
+	os64_font_status_t status = set_belongs_here(b, candidate);
+	if (status != OS64_FONT_OK) {
+		os64_free(plan);
+		return status;
+	}
+	status = os64_font_set_retain(candidate);
 	if (status != OS64_FONT_OK) {
 		os64_free(plan);
 		return status;
@@ -457,19 +687,31 @@ static os64_font_status_t consumer_prepare(void *user, os64_font_set_t *candidat
 	plan->candidate = candidate;
 	faces_resolve(b, candidate, &plan->faces);
 
-	// Everything from here measures the candidate. The app's planner runs
-	// inside that window, so the layout it returns is the one the new face
-	// will actually get — and a failure costs only this staging.
-	if (b->plan) {
-		b->staging = &plan->faces;
-		status = b->plan(ui, b->plan_user, &plan->app_plan);
-		b->staging = (const ui_font_faces_t *)0;
-		if (status != OS64_FONT_OK) {
-			os64_font_set_release(plan->candidate);
-			os64_free(plan);
-			return status;
+	// Everything from here measures the candidate: the runs staged below,
+	// the natural heights the widgets report, and whatever the application
+	// measures inside its planner. A failure costs only this staging.
+	b->staging = &plan->faces;
+
+	status = stage_tree_runs(ui, ui->root);
+	if (status == OS64_FONT_OK) {
+		// Natural metrics come from the candidate too, so an application
+		// planner sizing a column of controls is reading the face it is
+		// about to get. Abort puts them back.
+		restamp_tree(ui->root, ui);
+		if (ui->font_plan) {
+			status = ui->font_plan(ui, ui->font_plan_user, &plan->app_plan);
+			if (status == OS64_FONT_OK)
+				plan->app_planned = true;
 		}
-		plan->app_planned = true;
+	}
+	b->staging = (const ui_font_faces_t *)0;
+
+	if (status != OS64_FONT_OK) {
+		discard_tree_runs(ui->root);
+		restamp_tree(ui->root, ui);       // back to the face still installed
+		os64_font_set_release(plan->candidate);
+		os64_free(plan);
+		return status;
 	}
 
 	*plan_out = plan;
@@ -495,9 +737,13 @@ static void consumer_commit(void *user, void *plan_ptr)
 	// the heights they report, so the app's commit has to see the heights
 	// this face gives them — restamping afterwards arranges the window
 	// against the face it just stopped using, and the rows overlap.
+	// Prepare already stamped them from the candidate, which is now the
+	// installed set; this re-runs against it and swaps in the staged runs,
+	// and neither allocates.
+	commit_tree_runs(ui->root);
 	os64_ui_font_restamp(ui);
-	if (plan->app_planned && b->plan_commit)
-		b->plan_commit(ui, b->plan_user, plan->app_plan);
+	if (plan->app_planned && ui->font_plan_commit)
+		ui->font_plan_commit(ui, ui->font_plan_user, plan->app_plan);
 
 	// The whole window repaints: every run in it was laid out against the
 	// set just retired.
@@ -509,11 +755,12 @@ static void consumer_commit(void *user, void *plan_ptr)
 static void consumer_abort(void *user, void *plan_ptr)
 {
 	os64_ui_t *ui = user;
-	ui_font_binding_t *b = binding_of(ui);
 	ui_font_plan_t *plan = plan_ptr;
 
-	if (plan->app_planned && b->plan_discard)
-		b->plan_discard(ui, b->plan_user, plan->app_plan);
+	if (plan->app_planned && ui->font_plan_discard)
+		ui->font_plan_discard(ui, ui->font_plan_user, plan->app_plan);
+	discard_tree_runs(ui->root);
+	restamp_tree(ui->root, ui);           // the face still installed
 	os64_font_set_release(plan->candidate);
 	os64_free(plan);
 }
@@ -527,16 +774,45 @@ void os64_ui_font_consumer(os64_ui_t *ui, os64_font_consumer_t *out)
 	out->abort = consumer_abort;
 }
 
-void os64_ui_font_release(os64_ui_t *ui)
+// Drop every run this tree is holding, so teardown is not defeated by a
+// caption the window happened to have painted.
+static void release_tree_runs(os64_ui_widget_t *w)
+{
+	if (!w)
+		return;
+	os64_text_run_release((os64_text_run_t *)w->run);
+	os64_text_run_release((os64_text_run_t *)w->run_staged);
+	w->run = w->run_staged = (void *)0;
+	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
+		release_tree_runs(c);
+}
+
+os64_font_status_t os64_ui_font_release(os64_ui_t *ui)
 {
 	if (!ui)
-		return;
+		return OS64_FONT_BAD_ARGUMENT;
 	ui_font_binding_t *b = binding_of(ui);
 	if (!b)
-		return;
-	ui->font = (void *)0;
+		return OS64_FONT_OK;
+
+	release_tree_runs(ui->root);
 	os64_font_set_release(b->set);
-	if (b->text)
-		os64_text_destroy(b->text);
+	b->set = (os64_font_set_t *)0;
+	os64_memset(&b->faces, 0, sizeof(b->faces));
+
+	// THE BINDING IS THE CONTEXT'S ALLOCATOR. A context that refuses to die
+	// is still holding somebody's set or run, and those call back through
+	// these callbacks when they are finally released — so the owner has to
+	// outlive them. BUSY leaves the window intact and says come back.
+	if (b->text && b->owns_text) {
+		os64_font_status_t status = os64_text_destroy(b->text);
+		if (status != OS64_FONT_OK) {
+			b->status = status;
+			b->tried = false;   // a retry may rebuild the builtin set
+			return status;
+		}
+	}
+	ui->font = (void *)0;
 	os64_free(b);
+	return OS64_FONT_OK;
 }

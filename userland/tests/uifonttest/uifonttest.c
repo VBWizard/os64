@@ -297,7 +297,14 @@ int main(int argc, char **argv)
 	os64_ui_add_child(&gRoot, &gBtnB);
 	os64_ui_set_root(&gUi, &gRoot);
 
-	os64_ui_font_planner(&gUi, plan_layout, commit_layout, discard_layout, (void *)0);
+	if (os64_ui_font_planner(&gUi, plan_layout, commit_layout, discard_layout,
+	                         (void *)0) != OS64_FONT_OK) {
+		// Without a registered planner an adoption would install a face and
+		// leave this window's layout untouched, which is exactly the silent
+		// half-change the transaction exists to prevent.
+		os64_printf("uifonttest: planner registration failed\n");
+		return 1;
+	}
 	layout_plan_t startup;
 	if (measure_layout(&gUi, &startup) == OS64_FONT_OK)
 		apply_layout(&startup);
@@ -319,7 +326,9 @@ int main(int argc, char **argv)
 		os64_ui_paint(&gUi);
 	}
 
-	os64_ui_font_release(&gUi);
+	os64_font_status_t released = os64_ui_font_release(&gUi);
+	if (released != OS64_FONT_OK)
+		os64_printf("uifonttest: font release refused (%d)\n", (int)released);
 	os64_gui_window_destroy(win);
 	return 0;
 }

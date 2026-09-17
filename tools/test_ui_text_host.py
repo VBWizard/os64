@@ -21,8 +21,13 @@ if a.real:
 # is the subject. The window system and the heap are stubbed in the test.
 sources=['tools/test_ui_text_host.c']
 if not a.real: sources.append('tools/fonts/fake_backend.c')
+# ui.c and ui_controls.c come along because the height policy is a property
+# of the TOOLKIT — the constructors that say a control sizes itself, and the
+# layout that consumes that. draw.c is the bitmap painter the identity check
+# compares against; ui_font.c is the subject.
 sources+=['userland/libos64/'+name+'.c' for name in
-          ['ui_font','font_provider','font_adopt','text','text_cache','text_decode','text_bitmap','text_draw','draw','str']]
+          ['ui_font','ui','ui_controls','font_provider','font_adopt','text','text_cache',
+           'text_decode','text_bitmap','text_draw','draw','str']]
 subprocess.run(['cc',*flags,*[str(ROOT/s) for s in sources],*objects,'-o',str(out/'test_ui_text')],check=True)
 result=subprocess.run([str(out/'test_ui_text'),str(ROOT/'userland/libfreetype/fixtures')],env=os.environ)
 print('Artifacts:',out);raise SystemExit(result.returncode)

@@ -1,0 +1,2 @@
+test_ui_text_host: 197 checks, 0 failures
+Artifacts: /tmp/claude-1000/-home-yogi-src-os64/03c86b6f-98be-4cb6-8489-87982ef7e72e/scratchpad/qfix3/baseline

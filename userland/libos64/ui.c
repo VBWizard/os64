@@ -71,6 +71,16 @@ void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
 	ui->on_close = (void (*)(os64_ui_t *))0;
 	ui->quit = false;
 	ui->font = (void *)0;
+	ui->font_plan = (os64_font_status_t (*)(os64_ui_t *, void *, void **))0;
+	ui->font_plan_commit = (void (*)(os64_ui_t *, void *, void *))0;
+	ui->font_plan_discard = (void (*)(os64_ui_t *, void *, void *))0;
+	ui->font_plan_user = (void *)0;
+}
+
+void os64_ui_widget_fixed_height(os64_ui_widget_t *w, int32_t h)
+{
+	w->bounds.h = h;
+	w->auto_h = false;
 }
 
 void os64_ui_set_root(os64_ui_t *ui, os64_ui_widget_t *root)
@@ -451,7 +461,11 @@ void os64_ui_stack_vertical(os64_ui_t *ui, os64_ui_widget_t *parent)
 	for (os64_ui_widget_t *c = parent->first_child; c; c = c->next_sibling) {
 		if (c->hidden)
 			continue;
-		int32_t h = c->bounds.h > 0 ? c->bounds.h : t->button_h;
+		// The widget's own answer when it is sizing itself, the
+		// application's when it said otherwise, and the theme's stock
+		// height for a widget with no opinion either way.
+		int32_t h = c->auto_h && c->natural_h > 0 ? c->natural_h :
+		            c->bounds.h > 0 ? c->bounds.h : t->button_h;
 		c->bounds = (os64_gui_rect_t){x, y, w, h};
 		y += h + t->gap;
 	}
@@ -481,12 +495,12 @@ int32_t os64_ui_control_min_height(os64_ui_t *ui)
 // furniture around it.
 static void label_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 {
-	w->bounds.h = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
+	w->natural_h = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
 }
 
 static void button_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 {
-	w->bounds.h = os64_ui_control_min_height(ui);
+	w->natural_h = os64_ui_control_min_height(ui);
 }
 
 static void label_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
@@ -497,7 +511,7 @@ static void label_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	os64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);
 	os64_ui_t *ui = os64_ui_of(w);
 	int32_t ty = w->bounds.y + (w->bounds.h - os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI)) / 2;
-	os64_ui_draw_text(ui, OS64_FONT_ROLE_UI, &ctx->surf, w->bounds,
+	os64_ui_draw_text(ui, &w->run, OS64_FONT_ROLE_UI, &ctx->surf, w->bounds,
 	                  w->bounds.x, ty < w->bounds.y ? w->bounds.y : ty,
 	                  w->text ? w->text : "", ui_strlen(w->text),
 	                  t->label_fg, t->panel_bg);
@@ -532,7 +546,10 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	}
 	os64_ui_t *ui = os64_ui_of(w);
 	size_t len = ui_strlen(w->text);
-	int32_t tw = os64_ui_text_width(ui, OS64_FONT_ROLE_UI, w->text, len);
+	// A caption that cannot be measured is one that will not be painted
+	// either; centre what we have and let the draw make that call.
+	int32_t tw = 0;
+	os64_ui_text_measure(ui, OS64_FONT_ROLE_UI, w->text, len, &tw);
 	int32_t tx = w->bounds.x + (w->bounds.w - tw) / 2;
 	int32_t ty = w->bounds.y +
 	             (w->bounds.h - os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI)) / 2;
@@ -542,7 +559,7 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		ty = w->bounds.y;
 	os64_gui_rect_t text_clip = w->bounds;
 	if (radius > 0) { text_clip.x += radius; text_clip.w -= 2 * radius; }
-	os64_ui_draw_text(ui, OS64_FONT_ROLE_UI, &ctx->surf, text_clip, tx, ty,
+	os64_ui_draw_text(ui, &w->run, OS64_FONT_ROLE_UI, &ctx->surf, text_clip, tx, ty,
 	                  w->text ? w->text : "", len, t->button_fg, face);
 }
 
@@ -605,9 +622,12 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	}
 }
 
-const os64_ui_class_t os64_ui_panel_class  = { "panel",  panel_paint,  0, 0, 0 };
-const os64_ui_class_t os64_ui_label_class  = { "label",  label_paint,  0, 0, label_metrics };
-const os64_ui_class_t os64_ui_button_class = { "button", button_paint, button_event, 0, button_metrics };
+const os64_ui_class_t os64_ui_panel_class  = { "panel",  panel_paint,  0, 0,
+	0, 0, 0, 0 };
+const os64_ui_class_t os64_ui_label_class  = { "label",  label_paint,  0, 0,
+	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, label_metrics };
+const os64_ui_class_t os64_ui_button_class = { "button", button_paint, button_event, 0,
+	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, button_metrics };
 
 static void widget_zero(os64_ui_widget_t *w)
 {
@@ -625,6 +645,9 @@ void os64_ui_label(os64_ui_widget_t *w, const char *text)
 	widget_zero(w);
 	w->cls = &os64_ui_label_class;
 	w->text = text;
+	// One row of text, sized by whatever face the window is wearing, until
+	// the application says otherwise with os64_ui_widget_fixed_height.
+	w->auto_h = true;
 }
 
 void os64_ui_button(os64_ui_widget_t *w, const char *text,
@@ -636,4 +659,5 @@ void os64_ui_button(os64_ui_widget_t *w, const char *text,
 	w->text = text;
 	w->on_click = on_click;
 	w->user = user;
+	w->auto_h = true;
 }

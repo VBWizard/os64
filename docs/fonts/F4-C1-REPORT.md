@@ -2,7 +2,13 @@
 
 2026-09-17, Opus. Worktree `.worktrees/font-widgets`, branch `opus/font-widgets`,
 foundation `788de9900282e941a7a93aa110ffa69154daa066` (F2.5), this checkpoint
-`d11608b`.
+`d11608b`, corrected after review.
+
+> **Review round 1 is answered.** [Quinn's review](F4-C1-QUINN-REVIEW.md)
+> raised R1 (P1) and R2–R4 (P2) and ruled on all four boundary questions. Every
+> finding reproduced here before anything was changed, and every one is
+> corrected — see **After the review** at the foot of this document, which is
+> the part to read first if you have already read the rest.
 
 **This is not F4 complete, and it is not asking to be merged.** It is the first
 of three checkpoints (Chris's cadence: widgets, then editor + Scribe, then the
@@ -35,7 +41,7 @@ All in `os64/ui.h`. The generic consumer descriptor F5 depends on comes from:
 | `os64_ui_font_context(ui)` | The window's `os64_text_context_t`, built on demand and owned by libui. F5 prepares its candidate set on **this** context so one window adopts from one context. |
 | `os64_ui_font_bind(ui, set)` | The startup door: install a set outright, taking a reference. There is no old layout to preserve, so it cannot half-succeed. |
 | `os64_ui_font_planner(ui, plan, commit, discard, user)` | The application's layout, planned against the candidate. |
-| `os64_ui_font_metrics` / `os64_ui_font_row_height` / `os64_ui_control_min_height` / `os64_ui_text_width` / `os64_ui_draw_text` | Measurement and painting. |
+| `os64_ui_font_metrics` / `os64_ui_font_row_height` / `os64_ui_control_min_height` / `os64_ui_text_measure` / `os64_ui_draw_text` | Measurement and painting. |
 | `os64_ui_font_set` / `os64_ui_font_status` / `os64_ui_font_live_bytes` / `os64_ui_font_restamp` / `os64_ui_font_release` | The set, why there isn't one, the engine's live bytes, a manual restamp, teardown. |
 
 The plan type behind the descriptor (`ui_font_plan_t`) is private to `ui_font.c`.
@@ -200,3 +206,91 @@ touches a syscall, but that is an absence, not a result.
   sample classes (its widgets are migrated; the gallery samples paint by hand),
   and the fixtures `gkeys`, `fpu_demo`, `texttest`, `windowmintest`. `gterm` is
   on that list too and is F3's, not mine.
+
+## After the review
+
+Quinn's four findings all reproduced on this machine from her committed
+runner before a line was changed: the ASan use-after-free, the 32-against-96
+measurements, the 24 pixels painted outside an 8-pixel row. The corrections:
+
+**R1 — the allocator owner outlives what can call it.** `os64_ui_font_release`
+returns a status. It drops the window's runs and its set, and then, if libui
+built the context, tries to destroy it: **BUSY leaves the window entirely
+intact** and the caller releases whatever it is still holding and calls again.
+Freeing the binding while a candidate or a run survived meant those survivors
+called `binding_free` on freed memory the moment they were released. A
+borrowed context is never destroyed here at all — the application that made
+it owns it, and supplied its allocator.
+
+**R2 — a failure is a status, never a smaller font's number.** Measurement is
+now `os64_ui_text_measure`, which returns `os64_font_status_t`; there is no
+call that answers a width and swallows the reason it might be wrong. Painting
+under a bound face that cannot be laid out **draws nothing** rather than
+substituting 8x16 glyphs at 8x16 widths. And the runs a paint needs are
+staged during PREPARE, through a new per-class trio (`prepare`/`commit`/
+`discard`) that the tree walk dispatches: prepare may fail, commit may not,
+and the first paint after a commit allocates nothing. The listbox stages the
+rows it can show — its strings come from the application's callback, so a
+single retained run was never going to be the shape. Text that changes under
+a retained run is detected by comparing the run's own copied bytes against
+the caller's, so an application that mutates a caption in place stays correct
+without having to announce it.
+
+**R3 — registration cannot fail for want of memory.** Quinn offered two cures
+and the second is stronger, so the planner trio now lives in the `os64_ui_t`
+the application already owns. Nothing is allocated, so nothing can be
+silently not-registered; `os64_ui_font_planner` still returns a status, but
+only to refuse a partial trio. Her `register` probe went from
+`adoption=0 planner_calls=0` to a planner that is called.
+
+**R4 — the row is the ceiling.** `os64_ui_draw_text` intersects the caller's
+clip with the primary row's vertical bounds before painting. Horizontal clip
+and overhang are untouched. Her probe went from 24 pixels outside a [20,30)
+row to none.
+
+**Q3 — the class reports, the layout allocates.** `natural_h` is back, with an
+explicit `auto_h` policy rather than an inference from zero: a widget sizes
+itself from the face until `os64_ui_widget_fixed_height` says otherwise, and
+an application height then survives attach, relayout and font replacement
+untouched. The class hook writes `natural_h` and never `bounds.h`.
+
+**Q4 — contexts can be shared.** `os64_ui_font_borrow_context` lends an
+application-owned context to a window; libui borrows and never destroys it,
+and refuses to move a window that is already wearing something. A set
+prepared on a different context is now **refused** by both `os64_ui_font_bind`
+and the consumer's prepare — Quinn's `cross` probe had it binding happily and
+then measuring every string in the bitmap cell, with a status of OK.
+
+One bug of my own surfaced while testing the fix: the new row-clip early
+return leaked the run it had just laid out, which the suite's own teardown
+accounting caught.
+
+### Evidence after the corrections
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_ui_text_host.py --real        # 197 checks
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_ui_text_host.py --real -O 0   # 197 checks
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_ui_text_host.py               # 75 checks
+python3 docs/fonts/f4-evidence/c1-review/run.py --output <dir>               # all six probes
+bash tools/test_appearance_host.sh                                           # green, leak check included
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_text_host.py                  # 7,161 checks (F2)
+```
+
+The suite grew from 85 checks to 197: a regression for each finding, in the
+shape Quinn specified — retained sets AND runs across an attempted teardown;
+allocation denial walked through measurement, painting and caption staging;
+a partial callback trio refused; a small primary with a taller marker and a
+surface-sized clip; automatic and explicit heights across attach, relayout
+and replacement, with a padded control so the builtin face reproducing a
+16px label cannot satisfy it; two windows sharing one engine with different
+active sets; a foreign candidate refused.
+
+Her runner is re-runnable against the corrected tree — its probe source moved
+to the new API so the questions survived the change rather than the call
+spellings — and `f4-evidence/c1-review/after-README.md` tabulates each probe
+before and after. `make`, `make fsck-ext2`, `git diff --check` and
+`tools/stale_refs.sh` are clean; the QEMU fixture was re-driven and is
+unchanged on the glass (`cp1-dejavu24.png`, `cp1-refused.png` are from the
+corrected build).
+
+Still not run: P5 / real hardware.

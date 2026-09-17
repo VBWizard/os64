@@ -222,13 +222,24 @@ typedef struct os64_ui_class
     // it when the widget joins a tree and again whenever the window's face
     // changes, before any layout runs.
     //
-    // A ONE-ROW CONTROL'S HEIGHT BELONGS TO ITS CLASS. A label, a button and
-    // a checkbox are each one row of text plus furniture, so their `bounds.h`
-    // is set here rather than by the app — a caption clipped by its own
-    // button is what the alternative looks like, and no layout can work it
-    // out from a theme that cannot carry a face. An app that wants a
-    // different height sets it after the widget joins the tree, and sets it
-    // again after a font change.
+    // Stage this widget's text against the candidate face, apply it, throw
+    // it away. THIS IS WHERE A WIDGET IS ALLOWED TO FAIL: laying text out
+    // allocates, a commit may not, and a paint has nowhere to report to —
+    // so the runs the next paint will need are built here, while "no" still
+    // means the window keeps the face it has. A widget whose text is one
+    // caption gets this for free (see os64_ui_stage_caption); one that
+    // draws a list of app-supplied strings stages the rows it can show.
+    os64_font_status_t (*prepare)(os64_ui_widget_t *w, os64_ui_t *ui);
+    void (*commit)(os64_ui_widget_t *w);
+    void (*discard)(os64_ui_widget_t *w);
+
+    // IT REPORTS WHAT THE WIDGET NEEDS; IT DOES NOT ALLOCATE THE RECTANGLE.
+    // A label, a button and a checkbox are each one row of text plus
+    // furniture, so the class is the only thing that can size them under a
+    // face the theme cannot carry — but it writes `natural_h`, and the
+    // layout decides what `bounds.h` becomes. It must not allocate and must
+    // not fail: it runs at commit, where there is no way to report either.
+    // Fallible work belongs to preparation.
     //
     // It is also where a widget caches an answer the theme cannot give:
     // os64_ui_listbox_rows is handed a THEME and needs a row pitch, so the
@@ -253,6 +264,27 @@ struct os64_ui_widget
 
     void (*on_click)(os64_ui_widget_t *w, void *user);
     void *user;
+
+    // WHAT THIS WIDGET WANTS, AND WHAT IT WAS GIVEN, are different things.
+    // `natural_h` is the height this kind of widget needs under the current
+    // face — a minimum, re-derived by its class and never allocated storage.
+    // `bounds.h` is what the layout handed it. `auto_h` says which one a
+    // layout should use, and it is an EXPLICIT policy rather than a guess:
+    // a height of zero cannot be told apart from one a layout wrote last
+    // time, and an application must not have to repair its own choice after
+    // every attach and font change. Constructors set it for the controls
+    // that are one row of text; os64_ui_widget_fixed_height clears it.
+    int32_t natural_h;
+    bool    auto_h;
+
+    // The run this widget's text is drawn from, retained under the active
+    // face, and the one prepared against a candidate during adoption. Both
+    // are os64_text_run_t*, opaque here because a widget does not open them
+    // — libui lays them out and swaps `staged` in at commit, which is what
+    // lets a commit allocate nothing and the first paint after it be
+    // coherent. Laying text out at paint time could fail, and a paint has
+    // nowhere to report a failure to.
+    void *run, *run_staged;
 
     // The UI this widget belongs to, threaded in when it joins a tree.
     // A paint routine is handed only (widget, canvas, theme) — the theme
@@ -279,6 +311,18 @@ struct os64_ui
                                  // (opaque: the plan types behind it are not
                                  // an interface). NULL until a widget draws
                                  // text or the app asks for the context.
+
+    // The application's layout planner, set by os64_ui_font_planner. It
+    // lives HERE, in storage the application already owns, so registering
+    // one cannot fail for want of memory — a planner that silently failed
+    // to register would let a later adoption install a face and leave the
+    // window's own layout untouched, which is the exact half-change the
+    // transaction exists to prevent. Set it through the function, which
+    // checks that the trio is whole.
+    os64_font_status_t (*font_plan)(os64_ui_t *ui, void *user, void **out);
+    void (*font_plan_commit)(os64_ui_t *ui, void *user, void *plan);
+    void (*font_plan_discard)(os64_ui_t *ui, void *user, void *plan);
+    void *font_plan_user;
     uint64_t appearance_generation; // installed by this context, not its siblings
     bool follow_session;           // false for independent draft previews
     os64_ui_widget_t *root;
@@ -327,9 +371,23 @@ typedef struct
 } os64_ui_font_metrics_t;
 
 // The window's text context, created on first use and owned by libui. F5 and
-// the font fixtures prepare their candidate sets on THIS context, so one
-// window's widgets and document adopt from one context.
+// the font fixtures prepare their candidate sets on THIS context. A set may
+// only be bound to a window whose context it was prepared on — a foreign
+// candidate is refused rather than measured through the wrong engine.
 os64_text_context_t *os64_ui_font_context(os64_ui_t *ui);
+
+// Lend this window an APPLICATION-OWNED context instead, so several windows
+// can share one engine and one glyph cache while each holds its own active
+// set. That is the usual shape for a program with more than one window: a
+// context is not an active-font singleton, and independent previews come
+// from separate SETS, not separate engines.
+//
+// libui borrows it and never destroys it; the application outlives every
+// window using it and destroys it last. Refused once this window already
+// has a context with anything in it, because moving a window between
+// engines would strand the runs it is holding.
+os64_font_status_t os64_ui_font_borrow_context(os64_ui_t *ui,
+                                               os64_text_context_t *text);
 
 // Install a set immediately, taking a reference. This is the STARTUP door —
 // there is no old layout to preserve, so it cannot half-succeed. A live
@@ -344,7 +402,7 @@ void os64_ui_font_consumer(os64_ui_t *ui, os64_font_consumer_t *out);
 
 // The app's own layout, planned with the CANDIDATE metrics before anything
 // live moves. libui calls `plan` inside prepare: measure with
-// os64_ui_text_width and os64_ui_font_metrics, which report the candidate
+// os64_ui_text_measure and os64_ui_font_metrics, which report the candidate
 // for the duration, and stage the result without touching a live bound.
 // Anything but OS64_FONT_OK fails the whole adoption and leaves the old
 // state as it was — return LIMIT when the layout will not fit the content
@@ -353,8 +411,12 @@ void os64_ui_font_consumer(os64_ui_t *ui, os64_font_consumer_t *out);
 // Measure from the calls above, NOT from widget bounds: those still
 // describe the face the window is wearing, and only change at commit.
 // `commit` applies what was planned and cannot fail; `discard` frees it.
-// Any of the three may be NULL for a window whose layout is font-blind.
-void os64_ui_font_planner(os64_ui_t *ui,
+// ALL THREE OR NONE: a plan that owns anything needs both the door that
+// applies it and the door that throws it away, so a partial trio is
+// BAD_ARGUMENT and all-NULL is how a window says it has no layout to stage.
+// It cannot fail for want of memory — the trio is stored in the os64_ui_t
+// itself — so the only refusal is a malformed one.
+os64_font_status_t os64_ui_font_planner(os64_ui_t *ui,
                           os64_font_status_t (*plan)(os64_ui_t *ui, void *user, void **out),
                           void (*commit)(os64_ui_t *ui, void *user, void *plan),
                           void (*discard)(os64_ui_t *ui, void *user, void *plan),
@@ -372,13 +434,37 @@ int32_t os64_ui_font_row_height(os64_ui_t *ui, os64_font_role_t role);
 
 // A string's advance in whole pixels, rounded outward so a width that
 // decides whether text fits never comes back short of its own ink.
-int32_t os64_ui_text_width(os64_ui_t *ui, os64_font_role_t role,
-                           const char *s, size_t len);
+//
+// IT RETURNS A STATUS BECAUSE MEASURING CAN FAIL. Laying a string out
+// allocates, and a window wearing a real face has no honest answer when
+// that allocation is refused — the 8x16 cell is not a smaller version of
+// DejaVu, it is a different number (`WWWW` is 32 pixels against 96). A
+// planner that swallowed the failure would stage a layout measured in a
+// font nobody is wearing and hand the coordinator a successful plan. An
+// unbound window is the one case with a real answer: it draws with the
+// bitmap cell, so that is what it measures.
+os64_font_status_t os64_ui_text_measure(os64_ui_t *ui, os64_font_role_t role,
+                                        const char *s, size_t len, int32_t *out);
 
 // Paint one line at (x, top_y) — top, not baseline, which is what every
-// caller already has. Fills the run's box with `bg` first, then the glyphs.
-// Returns the pen's x after the run.
-int32_t os64_ui_draw_text(os64_ui_t *ui, os64_font_role_t role,
+// caller already has. Fills the run's box with `bg` first, then the glyphs,
+// CLIPPED TO THE PRIMARY ROW: the row's pitch comes from the primary face
+// and does not grow for a taller fallback or a missing-glyph marker, so
+// what does not fit the row is cut rather than allowed to paint over the
+// line above. The caller's clip still bounds it horizontally, overhang and
+// all. Returns the pen's x after the run.
+//
+// `run_slot` is WHERE THIS TEXT'S RETAINED RUN LIVES — a widget's own `run`
+// for a caption, a row's slot for a list, NULL for text nobody caches. The
+// run there is reused when it still says what `s` says and re-laid-out into
+// the same slot when it does not, so app-supplied text that changes without
+// notice stays correct without a paint having to be told.
+//
+// A window wearing a face whose text cannot be laid out paints NOTHING
+// rather than substituting a different font's glyphs, and records the
+// failure for os64_ui_font_status.
+int32_t os64_ui_draw_text(os64_ui_t *ui, void **run_slot,
+                          os64_font_role_t role,
                           os64_gui_surface_t *dst, os64_gui_rect_t clip,
                           int32_t x, int32_t top_y, const char *s, size_t len,
                           uint32_t fg, uint32_t bg);
@@ -395,9 +481,16 @@ size_t os64_ui_font_live_bytes(const os64_ui_t *ui);
 // under a set it bound earlier.
 void os64_ui_font_restamp(os64_ui_t *ui);
 
-// Drop the set and the context. An app that simply exits need not call this;
-// it exists so a fixture can close the loop on the engine's accounting.
-void os64_ui_font_release(os64_ui_t *ui);
+// Drop the set, the retained runs and — if libui built it — the context.
+// An app that simply exits need not call this; it exists so a fixture can
+// close the loop on the engine's accounting.
+//
+// IT CAN REFUSE. A context stays BUSY while anything the caller still holds
+// is alive: a candidate set it retained, a run it took. The binding is that
+// context's ALLOCATOR, so freeing it would leave the survivors calling into
+// freed memory the moment they are released. BUSY therefore leaves the
+// window exactly as it was — release what you are holding and call again.
+os64_font_status_t os64_ui_font_release(os64_ui_t *ui);
 
 // Bind a UI to a window's draw context and load the theme. root may be set
 // afterwards (os64_ui_set_root marks everything dirty).
@@ -412,6 +505,27 @@ void os64_ui_add_child(os64_ui_widget_t *parent, os64_ui_widget_t *child);
 // The UI a widget belongs to — what a paint routine or a metrics callback
 // asks when it needs the window's fonts. NULL for an unattached widget.
 static inline os64_ui_t *os64_ui_of(os64_ui_widget_t *w) { return w->ui; }
+
+// Give a widget a height of the application's choosing, and say so: the
+// layout stops sizing it from the face, and a font change leaves it alone.
+void os64_ui_widget_fixed_height(os64_ui_widget_t *w, int32_t h);
+
+// The one-caption case of the class trio above, for a widget whose text is
+// `w->text`. A class with nothing else to stage can use these three
+// directly as its prepare/commit/discard.
+os64_font_status_t os64_ui_stage_caption(os64_ui_widget_t *w, os64_ui_t *ui);
+void os64_ui_commit_caption(os64_ui_widget_t *w);
+void os64_ui_discard_caption(os64_ui_widget_t *w);
+
+// Lay `s` out for this role and hand back a retained run, or NULL with OK
+// when the window wears no face and the caller should draw the bitmap cell.
+// Release it with os64_ui_run_release. This is what a class stages with.
+os64_font_status_t os64_ui_run_layout(os64_ui_t *ui, os64_font_role_t role,
+                                      const char *s, size_t len, void **out);
+void os64_ui_run_release(void *run);
+// Does this retained run still say what these bytes say? A class checks
+// before reusing one, because app-supplied text changes without notice.
+bool os64_ui_run_matches(void *run, const char *s, size_t len);
 
 // What a control has to be tall enough for: one row of the UI face plus the
 // theme's padding above and below, never less than the theme's stock button
@@ -581,6 +695,14 @@ struct os64_ui_listbox {
     // Zero means "not stamped yet" and reads as the theme's bitmap cell,
     // which is the same answer the builtin set gives.
     int32_t row_h;
+
+    // Retained runs for the rows this box can SHOW, staged against a
+    // candidate during adoption and swapped in at commit — the same
+    // contract a caption has, except the strings come from the
+    // application's callback and there is one per visible row. Rows
+    // outside the viewport are laid out when they scroll into it.
+    void **row_runs, **row_runs_staged;
+    size_t row_run_count, row_runs_staged_count;
 };
 void os64_ui_listbox(os64_ui_listbox_t *list, size_t count,
                      const char *(*label)(size_t, void *),
