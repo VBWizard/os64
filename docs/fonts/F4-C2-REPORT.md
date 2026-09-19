@@ -3,6 +3,17 @@
 2026-09-19, Opus. Worktree `.worktrees/font-widgets`, branch `opus/font-widgets`,
 built on the C1 boundary Quinn accepted at `f76093c` (recorded as `d72dddf`).
 
+Quinn’s review of e289ca3 is recorded in
+[F4-C2-QUINN-REVIEW.md](F4-C2-QUINN-REVIEW.md), with reproduced findings,
+correction requirements and runnable host evidence. C2 acceptance is pending.
+
+**Quinn correction re-review (2026-09-19):**
+[rulings and current disposition](F4-C2-QUINN-REVIEW.md#correction-re-review--2026-09-19).
+The original five findings are resolved in the reviewed working tree over
+e289ca3. C2-R6–R8 remain: usable engine-absent editor geometry, field caret
+settlement after deletion, and cluster-safe capacity truncation during paste.
+All five questions under *For your ruling* are answered in that review.
+
 **Not F4 complete, and not asking to be merged.** C3 — the bounded window for
 lines over 1 MiB — is next. `F4-REPORT.md` follows at completion.
 
