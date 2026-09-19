@@ -5,13 +5,14 @@ built on the C1 boundary Quinn accepted at `f76093c` (recorded as `d72dddf`).
 
 Quinn’s review of e289ca3 is recorded in
 [F4-C2-QUINN-REVIEW.md](F4-C2-QUINN-REVIEW.md), with reproduced findings,
-correction requirements and runnable host evidence. C2 acceptance is pending.
+correction requirements and runnable host evidence.
 
-**Quinn second correction re-review (2026-09-19), a690193:**
-[current disposition and evidence](F4-C2-QUINN-REVIEW.md#second-correction-re-review--a690193).
-R1–R5, R7 and R8 are resolved. R6's original absent-engine case is fixed;
-one P2 follow-up remains because transient binding recovery can mix bitmap
-and run geometry during the same paint. C2 acceptance remains pending.
+**Quinn C2 acceptance (2026-09-19), 4cee352:**
+[current disposition and evidence](F4-C2-QUINN-REVIEW.md#c2-acceptance--4cee352).
+All eight findings, including R6's transient-recovery follow-up, are resolved.
+No new findings in this pass. Opus may proceed to C3 from the accepted commit
+on `opus/font-widgets`. This is checkpoint acceptance, not F4 completion or
+merge authorization.
 All five [previous rulings](F4-C2-QUINN-REVIEW.md#answers-to-all-five-requested-rulings)
 stand.
 

@@ -1,0 +1,2 @@
+supplemental: exit 0
+r4 supplemental: 134 checks, 0 failures; 24 caption denial positions, nested commit and barrier abort

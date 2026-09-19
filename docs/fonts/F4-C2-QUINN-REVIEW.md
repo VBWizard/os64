@@ -1,9 +1,9 @@
 # Quinn review — F4 checkpoint 2
 
-**Latest: [second correction re-review](#second-correction-re-review--a690193).**
-R1–R5, R7 and R8 are resolved. R6's original absent-engine case is corrected;
-one P2 follow-up remains for transient recovery during paint. C2 acceptance
-is pending that correction. Earlier reviews/evidence remain historical receipts.
+**Latest: [C2 accepted at 4cee352](#c2-acceptance--4cee352).** All eight
+findings, including the R6 recovery follow-up, are resolved. Opus may proceed
+to C3. This accepts the C2 checkpoint, not completed F4 or a merge. Earlier
+reviews/evidence remain historical receipts.
 
 2026-09-19. Reviewed **e289ca3** on `opus/font-widgets`, against the accepted
 C1 implementation **f76093c** and its acceptance receipts d72dddf/eb66c85.
@@ -510,3 +510,81 @@ python3 docs/fonts/f4-evidence/c2-review-r3/run.py --baseline /tmp/c2-current --
 As in the earlier review runners, zero exit status means the observations
 completed, not that the observed behavior satisfies the contract. Prior raw
 captures have not been overwritten.
+
+## C2 acceptance — 4cee352
+
+2026-09-19. Reviewed **4cee35245993c34d1270c0c9bf386b4eef8b4158** on
+`opus/font-widgets`, with a clean working tree before these review records.
+
+**Disposition: C2 accepted. All C2-R1–R8 findings and the R6 transient-recovery
+follow-up are resolved. No new findings in this pass. Opus may proceed to C3
+from this commit on the assigned branch.** The earlier five coordinator
+rulings stand. Oversized-line windows, bounded cluster handling and lazy
+extents remain C3 work; this is not F4 completion or merge authorization.
+
+### Why the final correction closes R6
+
+The field and each textview row now resolve their rendering once and pass
+that exact result to drawing and overlay placement. `os64_ui_draw_run` does
+not retry binding/layout. A refused installed-face layout exits without
+drawing; an explicit bitmap result remains bitmap for the whole paint.
+The shared slot resolver retains a successful run, clears the slot for an
+OK bitmap result, and preserves the old slot on layout refusal.
+
+The centered-button sibling follows the same rule: width and caption drawing
+use the same resolved slot. The additive UI helpers are accepted for this
+purpose; they do not change the frozen F2/backend contracts. Reviewed the
+helper ownership/release paths and the other production run-width callers.
+
+Independent rerun of the exact recovery probe:
+
+- The textview's first paint retains **no run**, places the caret at 42 and
+  the selection's right edge at 41: both match the bitmap text drawn in that
+  paint. The unchanged next paint consistently uses the W1 run, at 34/33.
+- The field's first paint also retains **no run** and places its caret at
+  **44**, the end of its bitmap text, instead of the prior incorrect 36.
+- Both teardowns return OK. The probe's `run caret x=-1` is its initialized
+  sentinel for no run, not a measured negative caret or a failure.
+
+The new pixel-for-pixel tests provide the complementary evidence: for the
+view, field and button, the transient-refusal paint equals the persistent
+bitmap paint, and the next paint equals an already-bound run paint. The
+bitmap and run reference images are also required to differ, preventing a
+vacuous comparison. Persistent engine absence and installed-face refusal
+tests continue passing.
+
+### Independent validation
+
+- O2 real-backend widget suite: **1,042 checks, zero failures**.
+- O2 real-Scribe suite: **2,585 checks, zero failures**.
+- All three earlier C2 probe runners: corrected results preserved, including
+  exact saves, cluster-safe editing/paste and zero post-barrier allocations.
+- C1 fourth-review supplemental suite: **134 checks, zero failures**, covering
+  24 caption-denial positions, nested commit and barrier abort.
+- Appearance host suite: passed, including layout, rounded painting,
+  interaction, session/cache and customizer coverage.
+- Forced recompilation of the three changed UI C files with the strict
+  `x86_64-elf-gcc` flags (`-Wall -Wextra -Werror`); linked `libos64.so`, Scribe
+  and `scribefonttest` successfully. The two new helper symbols are exported
+  by the rebuilt shared library. The earlier `make -C userland all` check was
+  already up to date; the focused rebuild is the fresh compilation evidence.
+- Sanitized host suites/probes retain ASan+UBSan with LSan disabled.
+  `git diff --check` and the reviewed commit's whitespace check are clean.
+
+No independent QEMU, O0 repetition, full clean OS build or hardware run in
+this pass. Opus's reported guest **41-check** self-test remains his evidence.
+No production files were edited and no commit, push or merge was performed.
+
+Receipts under [c2-review-r4](f4-evidence/c2-review-r4/):
+[widget suite](f4-evidence/c2-review-r4/widget-host.txt),
+[Scribe suite](f4-evidence/c2-review-r4/scribe-host.txt),
+[Appearance suite](f4-evidence/c2-review-r4/appearance-host.txt),
+[strict rebuild](f4-evidence/c2-review-r4/focused-cross-build.txt),
+[original probes](f4-evidence/c2-review-r4/r1-after.txt),
+[first correction probes](f4-evidence/c2-review-r4/r2-after.txt),
+[recovery probe](f4-evidence/c2-review-r4/r3-after.txt),
+[C1 supplemental](f4-evidence/c2-review-r4/c1-supplemental.txt).
+
+The runners remain in their original evidence directories; no historical
+captures were overwritten. This acceptance records the reviewed code commit
+explicitly so C3 can preserve the checkpoint and its regression coverage.
