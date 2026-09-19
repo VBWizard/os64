@@ -57,7 +57,7 @@ static void c2_scribe_init(const char *dir)
     os64_ui_textview(&g.view,&g.textbuf,NULL,NULL,NULL);
     g.view.w.bounds=(os64_gui_rect_t){6,40,770,320};
     os64_ui_add_child(&g.root,&g.view.w);os64_ui_set_root(&g.ui,&g.root);
-    c2_bind(&g.ui,dir,16);measure_widest();
+    c2_bind(&g.ui,dir,16);measure_document();
     os64_ui_font_planner(&g.ui,plan_font,commit_font,discard_font,NULL);
 }
 int main(int argc,char **argv)

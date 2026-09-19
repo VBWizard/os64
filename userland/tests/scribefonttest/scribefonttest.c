@@ -33,6 +33,7 @@
 #define FONT_MAX (4u * 1024u * 1024u)
 #define DEFAULT_DOC "/tests/fonts/LICENSE-DejaVu.txt"
 #define SAVE_PROBE "/home/scribefonttest.out"
+#define SAVE_INPUT "/home/scribefonttest.in"
 
 static const char *const kFaces[] = {
     "builtin", "DejaVuSans.ttf", "SourceSans3-Regular.otf", "SourceCodePro-Regular.otf",
@@ -224,8 +225,9 @@ static void selftest(os64_ui_t *ui)
     CHECK("shrunk extent is the true one", narrow == fresh_extent(ui));
 
     // HELP, AND A FONT CHANGE WHILE IT IS OPEN. The document behind it keeps
-    // its bytes and its caret; its scroll and extent were pixels of a face
-    // that is gone by the time help closes, so they are measured again.
+    // its bytes and its caret. Its extent is measured by the change itself;
+    // its scroll was pixels of a face that is gone by the time help closes,
+    // so it is found again around the caret.
     snapshot_t doc = snap(ui);
     scribe_toggle_help();
     CHECK("help is on stage", scribe_help_active());
@@ -277,6 +279,47 @@ static void selftest(os64_ui_t *ui)
     os64_free(original);
     os64_free(saved);
     os64_unlink(SAVE_PROBE);
+
+    // HOW A FILE ENDS IS PART OF THE FILE, through the real disk: no final
+    // newline, nothing at all, CRLF with and without a last one, malformed
+    // UTF-8, control bytes and a NUL. Each is written, loaded, saved
+    // untouched and read back.
+    static const struct { const char *what, *bytes; size_t len; } ends[] = {
+        { "no final newline",     "abc", 3 },
+        { "an empty file",        "", 0 },
+        { "a final newline",      "abc\n", 4 },
+        { "only a newline",       "\n", 1 },
+        { "CRLF lines",           "a\r\nb\r\n", 6 },
+        { "CRLF, last unended",   "a\r\nb", 4 },
+        { "malformed UTF-8",      "\xff\xfe\xc3(\n\xe2\x82", 7 },
+        { "control bytes, a NUL", "x\x01\x00y\x7f\n\x00", 7 },
+    };
+    for (size_t i = 0; i < sizeof(ends) / sizeof(*ends); ++i) {
+        char what[64];
+        os64_snprintf(what, sizeof(what), "unchanged save: %s", ends[i].what);
+        int64_t fd = os64_open(SAVE_INPUT, "w");
+        bool wrote = fd >= 0 &&
+            (ends[i].len == 0 ||
+             os64_write((int32_t)fd, ends[i].bytes, ends[i].len) == (int64_t)ends[i].len);
+        if (fd >= 0)
+            os64_close((int32_t)fd);
+        sbuf_t e;
+        bool ok = wrote && sbuf_init(&e);
+        if (ok) {
+            ok = sbuf_load(&e, SAVE_INPUT, err, sizeof(err)) == 0 &&
+                 sbuf_save(&e, SAVE_PROBE, err, sizeof(err)) == 0;
+            sbuf_free(&e);
+        }
+        uint8_t *back = NULL;
+        size_t blen = 0;
+        ok = ok && os64_slurp(SAVE_PROBE, FONT_MAX, &back, &blen) == OS64_SLURP_OK &&
+             blen == ends[i].len &&
+             (blen == 0 || same_bytes(back, (const uint8_t *)ends[i].bytes, blen));
+        CHECK(what, ok);
+        os64_free(back);
+        os64_unlink(SAVE_INPUT);
+        os64_unlink(SAVE_PROBE);
+    }
 }
 
 // ── the hooks ───────────────────────────────────────────────────────────────

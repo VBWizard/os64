@@ -58,10 +58,11 @@ typedef struct
     os64_ui_scrollbar_t hscroll;    // horizontal: pixels of the document face
     int64_t max_width;              // the widest line's pixel width — the
                                     // h-bar's `total`. Grows as edits widen
-                                    // lines and is measured afresh on a load
-                                    // or a font change, never per keystroke
-                                    // (a bar briefly roomier than the text
-                                    // beats re-measuring a 136MB log each key)
+                                    // lines and is measured afresh on a load,
+                                    // a paste or a font change, never per
+                                    // keystroke (a bar briefly roomier than
+                                    // the text beats re-measuring a 136MB log
+                                    // each key)
 
     char path[SCRIBE_PATH_MAX];     // empty = unnamed buffer
     char status_text[SCRIBE_STATUS_MAX];
@@ -80,9 +81,10 @@ typedef struct
     int64_t saved_left, saved_max_width;
     bool    saved_sel;
     size_t  saved_sel_line, saved_sel_col;
-    // Set when the face changes while help is open: saved_left and
-    // saved_max_width are then pixels of a retired face, and help_leave
-    // measures instead of restoring them.
+    // Set when the face changes while help is open: saved_left is then in
+    // pixels of a retired face, and help_leave scrolls to the caret instead
+    // of restoring it. saved_max_width needs no such flag — the font change
+    // measures the waiting document too, and commits its extent there.
     bool    saved_face_stale;
 } scribe_t;
 
@@ -353,45 +355,88 @@ static void on_resize(os64_ui_t *ui)
 
 // Defined with the scrollbar wiring below.
 static void sync_scrollbar(void);
-static void remeasure_extent(void);
+
+// The widest line of a document, under whatever face measurement is
+// answering for: the candidate inside a font change, the installed face
+// everywhere else. ALL OR NOTHING — the answer is written only when every
+// line measured, because the widest of the lines that happened to measure is
+// not the document's width. A caller that keeps the number it had when this
+// refuses keeps a number that was true of something.
+static os64_font_status_t measure_extent(const os64_ui_textbuf_t *doc,
+                                         int64_t *out)
+{
+    int64_t widest = 0;
+    size_t count = doc->line_count(doc->user);
+    for (size_t i = 0; i < count; i++) {
+        size_t len;
+        const char *ln = doc->line(doc->user, i, &len);
+        int64_t v = 0;
+        os64_font_status_t status = os64_ui_textview_line_width(&g.ui, ln, len, &v);
+        if (status != OS64_FONT_OK)
+            return status;
+        if (v > widest)
+            widest = v;
+    }
+    *out = widest;
+    return OS64_FONT_OK;
+}
 
 // ── adopting a face ─────────────────────────────────────────────────────────
 // Scribe's half of a font change. libui stages the widgets' text; this stages
 // the WINDOW — every rectangle the new face implies — so the textview
 // prepares runs for the lines it will be able to show rather than the ones it
 // shows now. Nothing live moves until commit.
+//
+// The horizontal extents are staged here too. Every one scribe holds is in
+// the pixels of the face being retired, and measuring a line lays it out,
+// which allocates and can be refused — so it happens while a refusal can
+// still say no to the whole change. Commit must not allocate, and it only
+// moves these numbers into place.
+
+typedef struct
+{
+    scribe_layout_t layout;
+    int64_t doc_extent;     // the document's, even while help covers it
+    int64_t help_extent;    // the help page's, when it is on stage
+} scribe_font_plan_t;
 
 static os64_font_status_t plan_font(os64_ui_t *ui, void *user, void **out)
 {
     (void)user;
-    scribe_layout_t *l = os64_malloc(sizeof(*l));
-    if (!l)
+    scribe_font_plan_t *p = os64_malloc(sizeof(*p));
+    if (!p)
         return OS64_FONT_NO_MEMORY;
-    os64_font_status_t status = compute_layout(ui, l);
+    os64_font_status_t status = compute_layout(ui, &p->layout);
+    if (status == OS64_FONT_OK)
+        status = measure_extent(&g.textbuf, &p->doc_extent);
+    if (status == OS64_FONT_OK && g.help_active)
+        status = measure_extent(&kHelpBuf, &p->help_extent);
     if (status != OS64_FONT_OK) {
-        os64_free(l);
+        os64_free(p);
         return status;
     }
-    apply_layout(l, true);
-    *out = l;
+    apply_layout(&p->layout, true);
+    *out = p;
     return OS64_FONT_OK;
 }
 
 // libui has already applied the staged rectangles and swapped in the runs;
-// what is left is scribe's own derived state. The horizontal extent is in
-// the PIXELS of the face just retired, so it is measured again; a line that
-// cannot be measured keeps the extent it had (measure_widest's rule).
+// what is left is scribe's own derived state, all of it measured in plan.
 static void commit_font(os64_ui_t *ui, void *user, void *plan)
 {
     (void)ui; (void)user;
-    scribe_layout_t *l = plan;
-    g.mode_label.hidden = g.field.w.hidden = !l->bar2;
-    os64_free(plan);
-    // The document waiting behind the help page has a saved scroll and
-    // extent in the retired face's pixels; help_leave measures them afresh.
-    if (g.help_active)
+    scribe_font_plan_t *p = plan;
+    g.mode_label.hidden = g.field.w.hidden = !p->layout.bar2;
+    if (g.help_active) {
+        g.max_width = p->help_extent;
+        g.saved_max_width = p->doc_extent;
+        // The document's saved scroll is in the retired face's pixels, and
+        // is recomputed around its caret when help closes.
         g.saved_face_stale = true;
-    remeasure_extent();
+    } else {
+        g.max_width = p->doc_extent;
+    }
+    os64_free(p);
     sync_scrollbar();
 }
 
@@ -425,48 +470,14 @@ static void sync_scrollbar(void)
     os64_ui_scrollbar_set(&g.ui, &g.hscroll, g.max_width, width, g.view.left_px);
 }
 
-// One pass over the whole buffer for the widest line — load-time only.
-//
-// A LINE THAT CANNOT BE MEASURED LEAVES THE EXTENT ALONE. The measurement
-// allocates now, so it can be refused, and the answer to "how wide is the
-// widest line?" must never get SMALLER because we failed to ask: a
-// scrollbar that shrank would scroll the document away from under the
-// caret. os64_ui_textview_line_width leaves its output untouched on
-// failure, which is what makes the comparison below safe.
-static void measure_widest(void)
+// The document's widest line, measured again after something replaced a lot
+// of it: a load, a paste. A refusal keeps the extent the bar had — for a
+// load that is the previous document's, which is the wrong size but never
+// the wrong face, and the caret still scrolls the view wherever it goes;
+// view_changed grows the bar as lines are edited.
+static void measure_document(void)
 {
-    g.max_width = 0;
-    for (size_t i = 0; i < g.buf.count; i++) {
-        size_t len;
-        const char *ln = g.textbuf.line(g.textbuf.user, i, &len);
-        int64_t v = 0;
-        if (os64_ui_textview_line_width(&g.ui, ln, len, &v) == OS64_FONT_OK &&
-            v > g.max_width)
-            g.max_width = v;
-    }
-}
-
-// The help page's own widest line, for the horizontal bar while it is shown.
-static void measure_help(void)
-{
-    g.max_width = 0;
-    for (size_t i = 0; i < HELP_LINE_COUNT; i++) {
-        int64_t v = 0;
-        if (os64_ui_textview_line_width(&g.ui, kHelpLines[i],
-                                        os64_strlen(kHelpLines[i]), &v) == OS64_FONT_OK &&
-            v > g.max_width)
-            g.max_width = v;
-    }
-}
-
-// Whatever is on stage, measured again — what a face change needs, because
-// every extent scribe holds is in the pixels of the face it replaced.
-static void remeasure_extent(void)
-{
-    if (g.help_active)
-        measure_help();
-    else
-        measure_widest();
+    measure_extent(&g.textbuf, &g.max_width);
 }
 
 static void view_changed(os64_ui_textview_t *tv, void *user)
@@ -474,9 +485,9 @@ static void view_changed(os64_ui_textview_t *tv, void *user)
     (void)user;
     // Only the cursor's line can have widened; measure it, never the file.
     // The extent GROWS here and never shrinks, so a line that was the widest
-    // and then got shorter leaves the bar too long until the next load —
-    // the behaviour scribe has always had, and the alternative is rescanning
-    // the whole document on every keystroke.
+    // and then got shorter leaves the bar too long until the document is
+    // next measured whole — a load, a paste, a font change. The alternative
+    // is rescanning the whole document on every keystroke.
     size_t len;
     const char *ln = g.textbuf.line(g.textbuf.user, tv->cur_line, &len);
     int64_t v = 0;
@@ -527,13 +538,12 @@ static void help_leave(void)
     g.view.sel_col = g.saved_sel_col;
     g.max_width = g.saved_max_width;
     if (g.saved_face_stale) {
-        // The face changed while help was on stage, so the saved scroll and
-        // extent are pixels of a face nobody is wearing. The caret and the
-        // selection are BYTE positions and came back exactly; the rest is
-        // measured again around them.
+        // The face changed while help was on stage, so the saved scroll is
+        // in pixels of a face nobody is wearing. The caret and the selection
+        // are BYTE positions and came back exactly; the scroll is found
+        // again around them. (The extent was measured by the change itself.)
         g.saved_face_stale = false;
         g.view.left_px = 0;
-        measure_widest();
         os64_ui_textview_goto(&g.ui, &g.view, g.view.cur_line, g.view.cur_col, false);
         g.view.sel = g.saved_sel;
     }
@@ -569,7 +579,9 @@ static void help_toggle(void)
     g.view.left_px = 0;
     g.view.cur_line = g.view.cur_col = 0;
     g.view.sel = false;
-    measure_help();
+    // A refusal leaves the document's extent on the bar: roomier or
+    // narrower than the page, never a number from a face gone by.
+    measure_extent(&kHelpBuf, &g.max_width);
     status_show("help - Esc or ^G returns");
     sync_scrollbar();
     os64_ui_mark_dirty(&g.ui, &g.view.w);
@@ -580,9 +592,14 @@ static void enter_mode(field_mode_t m, const char *label, const char *prefill)
     help_leave();   // a file verb always means the DOCUMENT, never the help
     g.mode = m;
     g.mode_label.text = label;
+    // The bar is laid out FIRST: that is what shows the field, and a hidden
+    // widget cannot take focus; and it is what decides the field's width —
+    // the label beside it is measured — which the prefill's scroll has to
+    // be worked out against, or the caret at the end of a long path lands
+    // past the field's edge.
+    relayout_all();
     os64_ui_textfield_set(&g.ui, &g.field, prefill);
     os64_ui_set_focus(&g.ui, &g.field.w);
-    relayout_all();
 }
 
 static void leave_mode(void)
@@ -607,7 +624,7 @@ static void do_load(const char *path)
     g.view.left_px = 0;
     g.view.cur_line = g.view.cur_col = 0;
     g.view.sel = false;
-    measure_widest();
+    measure_document();
     leave_mode();
     if (rc == 1)
         status_show("new file - Save creates it");
@@ -855,7 +872,7 @@ static bool app_shortcut(const os64_gui_event_t *ev)
             // A multi-line paste can widen lines the on_change hook never
             // looks at — it measures the CARET's line, which is right for a
             // keystroke and not enough for a block of text. One honest pass.
-            measure_widest();
+            measure_document();
             sync_scrollbar();
             os64_ui_mark_dirty(&g.ui, &g.view.w);
         }
@@ -901,6 +918,8 @@ os64_ui_textview_t *scribe_view(void) { return &g.view; }
 int64_t scribe_extent(void) { return g.max_width; }
 void scribe_toggle_help(void) { help_toggle(); }
 
+static const char *scribe_build(void);   // after scribe_main, which calls it
+
 int scribe_main(int argc, char **argv, const scribe_hooks_t *hooks)
 {
     const char *arg_path = (argc > 1) ? argv[1] : NULL;
@@ -942,10 +961,58 @@ int scribe_main(int argc, char **argv, const scribe_hooks_t *hooks)
         return 1;
     }
 
-    if (!sbuf_init(&g.buf)) {
-        os64_hprintf(OS64_STDERR, "scribe: out of memory\n");
+    const char *refused = scribe_build();
+    if (refused) {
+        os64_hprintf(OS64_STDERR, "scribe: %s\n", refused);
         return 1;
     }
+
+    if (arg_path)
+        do_load(arg_path);
+    else
+        status_show("(unnamed) - ^G help  ^S save  ^F find  ^O open  ^Q quit");
+    sync_scrollbar();
+
+    if (hooks && hooks->ready)
+        hooks->ready(&g.ui, hooks->user);
+
+    // The canonical loop, with the app's shortcut check ahead of dispatch —
+    // scribe owns its loop instead of using os64_ui_run for exactly this.
+    g.running = true;
+    os64_ui_paint(&g.ui);
+    // `!g.ui.quit` as well as `g.running`: ui.h's contract says an app with
+    // its own loop must check it, because libui sets it for any close request
+    // an app has not claimed. scribe HAS claimed it (scribe_build sets
+    // on_close), so the flag should never fire — which is exactly why it is
+    // cheap to honor and expensive to omit. Not honoring it is the bug this
+    // slice came from.
+    while (g.running && !g.ui.quit) {
+        os64_gui_event_t ev;
+        int64_t rc = os64_gui_event_wait(g.win, &ev);
+        if (rc != 1)
+            break;
+        do {
+            if (hooks && hooks->key && ev.type == OS64_GUI_EVENT_KEY_DOWN &&
+                hooks->key(&g.ui, &ev, hooks->user))
+                continue;
+            if (!app_shortcut(&ev))
+                os64_ui_dispatch(&g.ui, &ev);
+        } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
+        os64_ui_paint(&g.ui);
+    }
+
+    os64_gui_window_destroy(g.win);
+    return 0;
+}
+
+// The window's contents, on whatever surface g.ctx holds: the buffer, the
+// widgets, their layout and the font planner. NULL when it is all standing,
+// otherwise what refused. Kept apart from the window so that a host harness
+// can build the real Scribe on a canvas of its own.
+static const char *scribe_build(void)
+{
+    if (!sbuf_init(&g.buf))
+        return "out of memory";
     g.textbuf = sbuf_textbuf_template;
     g.textbuf.user = &g.buf;
 
@@ -987,44 +1054,7 @@ int scribe_main(int argc, char **argv, const scribe_hooks_t *hooks)
     // trio in the os64_ui_t and cannot run out of memory; the one refusal is
     // a malformed trio, which these are not.
     if (os64_ui_font_planner(&g.ui, plan_font, commit_font, discard_font,
-                             NULL) != OS64_FONT_OK) {
-        os64_hprintf(OS64_STDERR, "scribe: font planner refused\n");
-        return 1;
-    }
-
-    if (arg_path)
-        do_load(arg_path);
-    else
-        status_show("(unnamed) - ^G help  ^S save  ^F find  ^O open  ^Q quit");
-    sync_scrollbar();
-
-    if (hooks && hooks->ready)
-        hooks->ready(&g.ui, hooks->user);
-
-    // The canonical loop, with the app's shortcut check ahead of dispatch —
-    // scribe owns its loop instead of using os64_ui_run for exactly this.
-    g.running = true;
-    os64_ui_paint(&g.ui);
-    // `!g.ui.quit` as well as `g.running`: ui.h's contract says an app with
-    // its own loop must check it, because libui sets it for any close request
-    // an app has not claimed. scribe HAS claimed it (on_close above), so the
-    // flag should never fire — which is exactly why it is cheap to honor and
-    // expensive to omit. Not honoring it is the bug this slice came from.
-    while (g.running && !g.ui.quit) {
-        os64_gui_event_t ev;
-        int64_t rc = os64_gui_event_wait(g.win, &ev);
-        if (rc != 1)
-            break;
-        do {
-            if (hooks && hooks->key && ev.type == OS64_GUI_EVENT_KEY_DOWN &&
-                hooks->key(&g.ui, &ev, hooks->user))
-                continue;
-            if (!app_shortcut(&ev))
-                os64_ui_dispatch(&g.ui, &ev);
-        } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
-        os64_ui_paint(&g.ui);
-    }
-
-    os64_gui_window_destroy(g.win);
-    return 0;
+                             NULL) != OS64_FONT_OK)
+        return "font planner refused";
+    return NULL;
 }

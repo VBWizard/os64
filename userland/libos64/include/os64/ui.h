@@ -590,11 +590,22 @@ os64_font_status_t os64_ui_run_hit(void *run, int32_t x, size_t *out_offset);
 // baseline row. Both offsets must already be legal boundaries.
 os64_font_status_t os64_ui_run_selection(void *run, size_t begin, size_t end,
                                          os64_gui_rect_t *out);
-// The byte offset one cluster before/after this one — what Backspace and
-// Delete remove, and what Left and Right step over. A caret never lands
-// inside a cluster, so this is not the same as offset +/- 1.
-os64_font_status_t os64_ui_run_step(void *run, size_t offset, bool forward,
-                                    size_t *out_offset);
+// ── cluster boundaries ──────────────────────────────────────────────────────
+// Where one cluster ends and the next begins, read from the BYTES of a line
+// in the UTF-8 profile os64_ui_run_layout lays text out in. They are the
+// boundaries a run of that line publishes its carets at, whatever the face,
+// and asking needs no run: no layout, no allocation, no failure. An editing
+// key that must not cut a letter in half asks here.
+
+// The boundary one cluster after `offset` (forward) or before it — what
+// Delete and Backspace remove, and what Right and Left step over. It is not
+// offset +/- 1: `é` is two bytes and one cluster. Ends clamp. An offset that
+// is not itself a boundary steps to the nearest one in the direction asked.
+size_t os64_ui_text_step(const char *s, size_t len, size_t offset, bool forward);
+// `offset` if it is a boundary, otherwise the one before it or, with
+// `after`, the one after it. For a position that came from somewhere other
+// than a boundary: a byte count, a search match, a byte-limited copy.
+size_t os64_ui_text_snap(const char *s, size_t len, size_t offset, bool after);
 
 // What a control has to be tall enough for: one row of the UI face plus the
 // theme's padding above and below, never less than the theme's stock button
@@ -795,6 +806,8 @@ struct os64_ui_textfield
     size_t cap;                  // bytes including the NUL
     size_t len, cursor;
     int32_t left_px;             // horizontal scroll, in pixels of the UI face
+    int32_t left_staged;         // the scroll a font change in progress would
+                                 // commit: pixels of the CANDIDATE face
     void (*on_submit)(os64_ui_textfield_t *tf, void *user);
     void (*on_cancel)(os64_ui_textfield_t *tf, void *user);
     void *edit_user;
@@ -805,13 +818,16 @@ void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
                        void (*on_submit)(os64_ui_textfield_t *, void *),
                        void (*on_cancel)(os64_ui_textfield_t *, void *),
                        void *user);
-// Replace the content (truncated to cap-1) and put the caret at its end.
+// Replace the content and put the caret at its end. Text longer than cap-1
+// bytes is cut at the last cluster boundary that fits, never inside a letter.
 void os64_ui_textfield_set(os64_ui_t *ui, os64_ui_textfield_t *tf,
                            const char *text);
 // Insert the system clipboard at the caret. A field is ONE line, so it takes
 // the clipboard's first line and stops there — said out loud rather than
 // discovered: pasting a two-line snarf into an Open box gets you line one,
-// not a mangled path. Returns bytes inserted (0 = nothing to paste, or full).
+// not a mangled path. Of that line it takes what fits, cut where one of the
+// clipboard's letters ends. Returns bytes inserted (0 = nothing to paste, no
+// room for its first letter, or no memory to read it into).
 // There is deliberately no field COPY: a textfield has no selection model,
 // and inventing one to feed the clipboard is a different slice with its own
 // consumer. (CLIPBOARD.md)
@@ -926,11 +942,13 @@ os64_font_status_t os64_ui_textview_line_width(os64_ui_t *ui,
 // raw scancode compare — a check that knows one dialect works in QEMU and
 // dies on the P5 (2026-08-21, the chord-publish day's ring-3 echo).
 bool os64_ui_key_is_esc(const os64_gui_event_t *ev);
-// Place the caret (clamped), optionally keeping/starting a selection from
-// the current anchor, and scroll it into view. The search-jump primitive.
+// Place the caret (clamped to the document, and to the cluster boundary at
+// or before `col`), optionally keeping/starting a selection from the
+// current anchor, and scroll it into view. The search-jump primitive.
 void os64_ui_textview_goto(os64_ui_t *ui, os64_ui_textview_t *tv,
                            size_t line, size_t col, bool select);
-// Select [sl,sc) .. [el,ec), caret at the end, scrolled into view.
+// Select [sl,sc) .. [el,ec), widened to whole clusters, caret at the end,
+// scrolled into view.
 void os64_ui_textview_select(os64_ui_t *ui, os64_ui_textview_t *tv,
                              size_t sl, size_t sc, size_t el, size_t ec);
 
@@ -961,7 +979,9 @@ bool os64_ui_textview_cut(os64_ui_t *ui, os64_ui_textview_t *tv);
 // the line-ending fossil it is, because a buffer holds LINES, not
 // terminators. Streams straight from the file — a large paste costs no
 // intermediate copy of itself. False = read-only view, or empty clipboard
-// (which changes nothing, selection included).
+// (which changes nothing, selection included). A buffer that refuses an
+// insert partway stops the paste there: what went in stays, and nothing
+// after the refusal is pasted around the gap.
 bool os64_ui_textview_paste(os64_ui_t *ui, os64_ui_textview_t *tv);
 
 extern const os64_ui_class_t os64_ui_scrollbar_class;

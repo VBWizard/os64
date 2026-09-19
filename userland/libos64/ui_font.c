@@ -22,6 +22,7 @@
 
 #include "os64/ui.h"
 #include "ui_internal.h"
+#include "text_internal.h"    // F2's decoder: cluster boundaries without a layout
 #include "os64/font_provider.h"
 #include "os64/font_adopt.h"
 #include "os64/text_draw.h"
@@ -729,37 +730,57 @@ os64_font_status_t os64_ui_run_selection(void *run, size_t begin, size_t end,
 	return OS64_FONT_OK;
 }
 
-// THE CARET LIST IS THE CLUSTER LIST. F2 publishes one caret per legal
-// boundary, so stepping is finding this offset among them and taking the
-// neighbour — which is why Backspace over a composed accent removes the
-// accent and its base together, and why Left does not land inside one.
-os64_font_status_t os64_ui_run_step(void *run, size_t offset, bool forward,
-                                    size_t *out_offset)
+// ── cluster boundaries, read from the bytes ─────────────────────────────────
+// WHERE A CLUSTER ENDS BELONGS TO THE ENCODING PROFILE, NOT TO THE FACE. F2
+// lays a line out by walking its decoder one cluster at a time and publishes
+// a caret at each end, so the carets of any run are exactly the boundaries
+// that decoder finds, in whatever face the run was laid out. Asking the
+// decoder directly gets the same answer with no layout: nothing to allocate,
+// nothing to refuse. That is what keeps Backspace, Delete, Left and Right
+// correct when memory is short. The alternative was falling back to one
+// byte, which is not a smaller cluster but a way of cutting one in half.
+//
+// The walk starts at the line's first byte, because a combining mark decides
+// where the cluster BEFORE it ends and the decoder cannot run backwards. It
+// is the same order of work as the layout the edit goes on to cause.
+
+static size_t cluster_end(const char *s, size_t len, size_t at)
 {
-	if (!run || !out_offset)
-		return OS64_FONT_BAD_ARGUMENT;
-	os64_text_run_view_t rv;
-	os64_font_status_t status = os64_text_run_view((os64_text_run_t *)run, &rv);
-	if (status != OS64_FONT_OK)
-		return status;
-	for (size_t i = 0; i < rv.caret_count; ++i) {
-		if (rv.carets[i].byte_offset != offset)
-			continue;
-		if (forward && i + 1 < rv.caret_count)
-			*out_offset = rv.carets[i + 1].byte_offset;
-		else if (!forward && i > 0)
-			*out_offset = rv.carets[i - 1].byte_offset;
-		else
-			*out_offset = offset;          // already at an end
-		return OS64_FONT_OK;
+	// The profile role_layout lays every widget's text out in.
+	return text_decode((const uint8_t *)s, len, at,
+	                   OS64_TEXT_UTF8_WESTERN_V1, false).end;
+}
+
+size_t os64_ui_text_step(const char *s, size_t len, size_t offset, bool forward)
+{
+	if (offset > len)
+		offset = len;
+	size_t at = 0;
+	if (forward) {
+		while (at < len && at <= offset)
+			at = cluster_end(s, len, at);
+		return at;
 	}
-	// Not a boundary at all: snap to one rather than invent a step.
-	os64_text_caret_t caret;
-	status = os64_text_caret((os64_text_run_t *)run, offset,
-	                         forward ? OS64_TEXT_AFTER : OS64_TEXT_BEFORE, &caret);
-	if (status == OS64_FONT_OK)
-		*out_offset = caret.byte_offset;
-	return status;
+	size_t before = 0;
+	while (at < offset) {
+		before = at;
+		at = cluster_end(s, len, at);
+	}
+	return before;
+}
+
+size_t os64_ui_text_snap(const char *s, size_t len, size_t offset, bool after)
+{
+	if (offset >= len)
+		return len;
+	size_t at = 0;
+	while (at < offset) {
+		size_t end = cluster_end(s, len, at);
+		if (end > offset)
+			return after ? end : at;
+		at = end;
+	}
+	return at;
 }
 
 // The one-caption default. A widget with no text stages nothing and drops

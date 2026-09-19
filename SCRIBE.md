@@ -94,6 +94,14 @@ whole costs seconds and RAM the machine has; if that ever hurts, the buffer
 vtable is where a streamed read-only backend slots in without touching the
 textview (booked, unbuilt).
 
+**A file saves as it loaded.** The buffer is the file's bytes split at LF,
+plus whether one more LF followed the last line — nothing else is
+interpreted, so an untouched file saves byte-for-byte (CRs, malformed UTF-8
+and a missing final newline included) and every edit is the byte edit it
+looks like. A file scribe creates from nothing ends in a newline. A load
+that fails leaves the buffer that was open, and a read that comes up short
+is a failed load, never a shorter file.
+
 Save writes `<file>` directly. Crash-safety via write-temp-then-rename is
 possible the day it matters — ext2 replacement rename is atomic, and the
 policy-bearing syscall can require that guarantee — booked, not built: v1's

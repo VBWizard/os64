@@ -26,6 +26,7 @@
 #include <string.h>
 #include "os64/ui.h"
 #include "os64/draw.h"
+#include "os64/text.h"
 #include "os64/font_psf1.h"
 #ifndef UI_TEXT_REAL
 #include "fake_backend.h"
@@ -44,11 +45,13 @@ static unsigned long checks;
  * "what happens when layout cannot allocate" is half of what is under test
  * — and the second has no window to dirty. */
 static long deny_countdown = -1;   /* -1 never denies; 0 denies the next one */
+static bool ui_test_deny_all;      /* every allocation refused while set */
 static unsigned long allocations;
 
 void *os64_malloc(size_t n)
 {
     ++allocations;
+    if (ui_test_deny_all) return NULL;
     if (deny_countdown == 0) { deny_countdown = -1; return NULL; }
     if (deny_countdown > 0) --deny_countdown;
     return malloc(n ? n : 1);
@@ -1193,16 +1196,82 @@ static void textview_partial_selection_paints_only_the_span(const char *dir)
     current = "";
 }
 
-/* Motion is by CLUSTER, and Up/Down remember a pixel. */
+/* THE BYTES AND THE RUN AGREE ON WHERE A LETTER ENDS. Editing keys step by
+ * os64_ui_text_step, which reads the bytes and needs no layout; the caret,
+ * the click and the highlight come from a run. If the two ever disagreed a
+ * caret could sit where no run has a caret, so every boundary the decoder
+ * walks must be a caret of the line's run and every caret a boundary — in
+ * the outline face and the bitmap one, since the claim is that the face
+ * does not matter. The strings are the cases that make a cluster more than
+ * one byte, or a byte less than a letter. */
+static const char *const kUiTestClusterLines[] = {
+    "caf\xc3\xa9",                /* precomposed: 2 bytes, 1 cluster */
+    "cafe\xcc\x81",               /* decomposed: e + U+0301, 1 cluster */
+    "a\xcc\x81\xcc\x88z",         /* two marks on one base */
+    "1\xcc\x81",                  /* a mark after a non-letter stands alone */
+    "\xcc\x81x",                  /* ...and so does one that starts a line */
+    "\xff\xc3(\xe2\x82",          /* malformed and truncated sequences */
+    "tab\there\x01\x7f",          /* a tab and control bytes */
+    "\xe2\x82\xac 5 \xe2\x80\x94 x", /* three-byte scalars */
+    "",
+};
+
+static void ui_test_boundaries_match_runs(os64_ui_t *ui)
+{
+    for (size_t i = 0; i < sizeof(kUiTestClusterLines) / sizeof(*kUiTestClusterLines); ++i) {
+        const char *s = kUiTestClusterLines[i];
+        size_t len = strlen(s);
+        void *run = NULL;
+        CHECK(os64_ui_run_layout(ui, OS64_FONT_ROLE_DOCUMENT, s, len, &run) == OS64_FONT_OK);
+        CHECK(run != NULL);
+        if (!run)
+            continue;
+        os64_text_run_view_t rv;
+        CHECK(os64_text_run_view((const os64_text_run_t *)run, &rv) == OS64_FONT_OK);
+
+        /* Forward from zero: the decoder's walk IS the caret list. */
+        size_t at = 0, n = 0;
+        CHECK(rv.caret_count > 0 && rv.carets[0].byte_offset == 0);
+        for (;;) {
+            CHECK(n < rv.caret_count && rv.carets[n].byte_offset == at);
+            if (at == len)
+                break;
+            size_t next = os64_ui_text_step(s, len, at, true);
+            CHECK(next > at);
+            if (next <= at)
+                break;
+            at = next;
+            ++n;
+        }
+        CHECK(n + 1 == rv.caret_count);
+
+        /* Backward from every caret lands on the one before it, and every
+         * byte in between snaps to the carets either side. */
+        for (size_t c = 1; c < rv.caret_count; ++c) {
+            size_t lo = rv.carets[c - 1].byte_offset, hi = rv.carets[c].byte_offset;
+            CHECK(os64_ui_text_step(s, len, hi, false) == lo);
+            for (size_t b = lo + 1; b < hi; ++b) {
+                CHECK(os64_ui_text_snap(s, len, b, false) == lo);
+                CHECK(os64_ui_text_snap(s, len, b, true) == hi);
+                CHECK(os64_ui_text_step(s, len, b, false) == lo);
+                CHECK(os64_ui_text_step(s, len, b, true) == hi);
+            }
+            CHECK(os64_ui_text_snap(s, len, hi, false) == hi);
+        }
+        /* The ends clamp. */
+        CHECK(os64_ui_text_step(s, len, 0, false) == 0);
+        CHECK(os64_ui_text_step(s, len, len, true) == len);
+        CHECK(os64_ui_text_snap(s, len, len + 7, false) == len);
+        os64_ui_run_release(run);
+    }
+}
+
 static void textview_motion(const char *dir)
 {
-    current = "textview motion";
+    current = "cluster boundaries";
     os64_ui_t ui;
     memset(&ui, 0, sizeof(ui));
-    ui_test_view_theme(&ui.theme);
-    os64_ui_textview(&gUiTestView, &kUiTestBuf, NULL, NULL, NULL);
-    gUiTestView.w.bounds = (os64_gui_rect_t){0, 0, 300, 120};
-    os64_ui_set_root(&ui, &gUiTestView.w);
+    ui_test_boundaries_match_runs(&ui);           /* the builtin face */
 
     os64_text_context_t *text = os64_ui_font_context(&ui);
     os64_font_set_t *set = outline_set(text, dir, "DejaVuSans.ttf", 16);
@@ -1210,27 +1279,106 @@ static void textview_motion(const char *dir)
     if (!set) { current = ""; return; }
     CHECK(os64_ui_font_bind(&ui, set) == OS64_FONT_OK);
     os64_font_set_release(set);
+    ui_test_boundaries_match_runs(&ui);           /* an outline face */
 
-    /* "café composed" — the accented letter is TWO BYTES and ONE cluster,
-     * so a caret steps over both together and never lands between them. */
-    gUiTestView.cur_line = 3;
-    gUiTestView.cur_col = 0;
-    void *run = NULL;
-    size_t len;
-    const char *ln = ui_test_doc_line(NULL, 3, &len);
-    CHECK(os64_ui_run_layout(&ui, OS64_FONT_ROLE_DOCUMENT, ln, len, &run) == OS64_FONT_OK);
-    CHECK(run != NULL);
-    if (run) {
-        size_t at = 3, next = 0;             /* the 'é' starts at byte 3 */
-        CHECK(os64_ui_run_step(run, at, true, &next) == OS64_FONT_OK);
-        CHECK(next == 5);                    /* two bytes in one step */
-        size_t back = 0;
-        CHECK(os64_ui_run_step(run, next, false, &back) == OS64_FONT_OK);
-        CHECK(back == at);
-        os64_ui_run_release(run);
-    }
+    /* ...and asking allocates nothing, so no refusal can reach it. */
+    unsigned long before = allocations;
+    CHECK(os64_ui_text_step("caf\xc3\xa9", 5, 3, true) == 5);
+    CHECK(os64_ui_text_step("caf\xc3\xa9", 5, 5, false) == 3);
+    CHECK(allocations == before);
+
     CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
     CHECK(os64_ui_font_live_bytes(&ui) == 0);
+    current = "";
+}
+
+/* Keys the way the keyboard sends them: a byte, or a VT100 burst. */
+static void ui_test_key(os64_ui_widget_t *w, os64_ui_t *ui, char ascii)
+{
+    os64_gui_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = OS64_GUI_EVENT_KEY_DOWN;
+    ev.key.ascii = ascii;
+    ev.key.scancode = 0x0e;
+    w->cls->event(w, ui, &ev);
+}
+static void ui_test_burst(os64_ui_widget_t *w, os64_ui_t *ui, const char *seq)
+{
+    ui_test_key(w, ui, 27);
+    for (const char *p = seq; *p; ++p)
+        ui_test_key(w, ui, *p);
+}
+
+/* THE KEYS DO NOT NEED A LAYOUT TO STAY ON LETTERS. Left and Right read the
+ * bytes; Up and Down need a pixel, and when the line they are going to
+ * cannot be laid out they refuse — the caret, the selection and the scroll
+ * all stay exactly where they were, rather than landing on a guessed byte. */
+static const char *const kUiTestEncLines[] = { "abc", "\xc3\xa9\xc3\xa9", "z" };
+static size_t ui_test_enc_count(void *user) { (void)user; return 3; }
+static const char *ui_test_enc_line(void *user, size_t i, size_t *len)
+{
+    (void)user;
+    const char *s = i < 3 ? kUiTestEncLines[i] : "";
+    *len = strlen(s);
+    return s;
+}
+static const os64_ui_textbuf_t kUiTestEncBuf = {
+    NULL, ui_test_enc_count, ui_test_enc_line, NULL, NULL, NULL, NULL, NULL
+};
+
+static void textview_keys_without_layout(const char *dir)
+{
+    current = "keys without layout";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    os64_ui_textview(&gUiTestView, &kUiTestBuf, NULL, NULL, NULL);
+    gUiTestView.w.bounds = (os64_gui_rect_t){0, 0, 300, 120};
+    os64_ui_set_root(&ui, &gUiTestView.w);
+    os64_font_set_t *set = outline_set(os64_ui_font_context(&ui), dir, "DejaVuSans.ttf", 16);
+    CHECK(set != NULL);
+    if (!set) { current = ""; return; }
+    CHECK(os64_ui_font_bind(&ui, set) == OS64_FONT_OK);
+    os64_font_set_release(set);
+
+    /* "café composed", caret before é, no run anywhere to be had. */
+    gUiTestView.cur_line = 3;
+    gUiTestView.cur_col = 3;
+    ui_test_deny_all = true;
+    ui_test_burst(&gUiTestView.w, &ui, "[C");               /* Right */
+    CHECK(gUiTestView.cur_col == 5);
+    ui_test_burst(&gUiTestView.w, &ui, "[D");               /* Left */
+    CHECK(gUiTestView.cur_col == 3);
+
+    /* Up to a line that cannot be laid out: nothing moves. */
+    gUiTestView.sel = true;
+    gUiTestView.sel_line = 3; gUiTestView.sel_col = 0;
+    size_t top = gUiTestView.top;
+    ui_test_burst(&gUiTestView.w, &ui, "[A");               /* Up */
+    ui_test_deny_all = false;
+    CHECK(gUiTestView.cur_line == 3 && gUiTestView.cur_col == 3);
+    CHECK(gUiTestView.sel && gUiTestView.sel_line == 3 && gUiTestView.sel_col == 0);
+    CHECK(gUiTestView.top == top);
+
+    /* ...and with memory back, the same key goes where the lane says. */
+    ui_test_burst(&gUiTestView.w, &ui, "[A");
+    CHECK(gUiTestView.cur_line == 2);
+    CHECK(!gUiTestView.sel);
+
+    /* A REPAINT OF UNCHANGED TEXT LAYS NOTHING OUT. This view never
+     * adopted a face — it was bound — so the first paint finds its row
+     * slots; the second must find every run it needs already in them. */
+    canvas_t c;
+    canvas_init(&c, 0xff000000);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.surf = c.s;
+    gUiTestView.w.focused = true;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    unsigned long before = allocations;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    CHECK(allocations == before);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
     current = "";
 }
 
@@ -1239,12 +1387,16 @@ static void textview_motion(const char *dir)
  * out, from nothing but a keystroke. */
 static void ui_test_field_key(os64_ui_textfield_t *tf, os64_ui_t *ui, char ascii)
 {
-    os64_gui_event_t ev;
-    memset(&ev, 0, sizeof(ev));
-    ev.type = OS64_GUI_EVENT_KEY_DOWN;
-    ev.key.ascii = ascii;
-    ev.key.scancode = 0x0e;
-    tf->w.cls->event(&tf->w, ui, &ev);
+    ui_test_key(&tf->w, ui, ascii);
+}
+static void ui_test_field_burst(os64_ui_textfield_t *tf, os64_ui_t *ui, char final)
+{
+    char seq[3] = { '[', final, '\0' };
+    ui_test_burst(&tf->w, ui, seq);
+}
+static void ui_test_field_delete(os64_ui_textfield_t *tf, os64_ui_t *ui)
+{
+    ui_test_burst(&tf->w, ui, "[3~");
 }
 
 static void textfield_edits_by_cluster(const char *dir)
@@ -1292,8 +1444,410 @@ static void textfield_edits_by_cluster(const char *dir)
         tf.w.cls->event(&tf.w, &ui, &click);
         CHECK(tf.cursor == 2);
     }
+
+    /* NO LAYOUT, NO PROBLEM. The run for "café" is cold (set while every
+     * allocation was refused) and stays unobtainable through the keys, and
+     * the edits are still whole letters: they read the bytes, not a run. */
+    ui_test_deny_all = true;
+    os64_ui_textfield_set(&ui, &tf, "caf\xc3\xa9");
+    ui_test_field_key(&tf, &ui, '\b');
+    ui_test_deny_all = false;
+    CHECK(tf.len == 3 && tf.cursor == 3 && memcmp(buf, "caf", 4) == 0);
+
+    os64_ui_textfield_set(&ui, &tf, "\xc3\xa9t");
+    ui_test_deny_all = true;
+    tf.cursor = 0;
+    ui_test_field_burst(&tf, &ui, 'C');                   /* Right */
+    CHECK(tf.cursor == 2);                                 /* past é, not into it */
+    tf.cursor = 0;
+    ui_test_field_delete(&tf, &ui);
+    ui_test_deny_all = false;
+    CHECK(tf.len == 1 && tf.cursor == 0 && memcmp(buf, "t", 2) == 0);
+
+    /* A letter typed in front of a combining mark becomes one cluster with
+     * it, and the caret goes after that cluster, never between its bytes. */
+    os64_ui_textfield_set(&ui, &tf, "\xcc\x81x");
+    tf.cursor = 0;
+    ui_test_field_key(&tf, &ui, 'e');
+    CHECK(tf.len == 4 && memcmp(buf, "e\xcc\x81x", 5) == 0);
+    CHECK(tf.cursor == 3);
+
+    /* C2-R7 — A DELETION CAN MAKE A LETTER TOO. In "e1" + U+0301 the digit
+     * keeps the e and the accent apart; delete it, by either key, and they
+     * are one letter with edges at 0 and 3. The caret goes after it, so the
+     * next key takes the whole letter or nothing — never the base alone,
+     * which would orphan the accent. */
+    os64_ui_textfield_set(&ui, &tf, "e1\xcc\x81");
+    tf.cursor = 1;
+    ui_test_field_delete(&tf, &ui);
+    CHECK(tf.len == 3 && memcmp(buf, "e\xcc\x81", 4) == 0 && tf.cursor == 3);
+    ui_test_field_delete(&tf, &ui);                        /* at the end: nothing */
+    CHECK(tf.len == 3 && tf.cursor == 3);
+    os64_ui_textfield_set(&ui, &tf, "e1\xcc\x81");
+    tf.cursor = 2;
+    ui_test_field_key(&tf, &ui, '\b');
+    CHECK(tf.len == 3 && memcmp(buf, "e\xcc\x81", 4) == 0 && tf.cursor == 3);
+    ui_test_field_key(&tf, &ui, '\b');                     /* the whole letter */
+    CHECK(tf.len == 0 && tf.cursor == 0);
+
+    /* Malformed bytes that a deletion makes whole: C3, a digit, A9 are
+     * three one-byte letters; without the digit they are é. */
+    os64_ui_textfield_set(&ui, &tf, "\xc3" "1" "\xa9");
+    tf.cursor = 1;
+    ui_test_field_delete(&tf, &ui);
+    CHECK(tf.len == 2 && memcmp(buf, "\xc3\xa9", 3) == 0 && tf.cursor == 2);
+    ui_test_field_key(&tf, &ui, '\b');
+    CHECK(tf.len == 0 && tf.cursor == 0);
+
     CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
     CHECK(os64_ui_font_live_bytes(&ui) == 0);
+
+    /* Text longer than the field is cut where a letter ends: six bytes of
+     * "abcdé" do not fit a field of six (the NUL takes one), and the fifth
+     * byte is the first half of é. */
+    char small[6];
+    os64_ui_textfield_t tiny;
+    os64_ui_textfield(&tiny, small, sizeof(small), NULL, NULL, NULL);
+    os64_ui_set_root(&ui, &tiny.w);               /* so teardown finds its run */
+    os64_ui_textfield_set(&ui, &tiny, "abcd\xc3\xa9");
+    CHECK(tiny.len == 4 && memcmp(small, "abcd", 5) == 0);
+    os64_ui_textfield_set(&ui, &tiny, "abcde\xcc\x81");   /* e + mark straddles */
+    CHECK(tiny.len == 4 && memcmp(small, "abcd", 5) == 0);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    current = "";
+}
+
+/* C2-R4 — a font change works the field's scroll out again. The scroll is
+ * pixels of the face being retired; after the change, the caret must be
+ * inside the field in the new face's pixels, the first paint must lay
+ * nothing out, and a refused change must leave the old scroll standing. */
+static os64_ui_textfield_t gUiTestField;
+static int32_t ui_test_field_staged_w;
+
+static os64_font_status_t ui_test_field_plan(os64_ui_t *ui, void *user, void **out)
+{
+    (void)ui; (void)user;
+    *out = NULL;
+    if (ui_test_field_staged_w) {
+        os64_gui_rect_t r = gUiTestField.w.bounds;
+        r.w = ui_test_field_staged_w;
+        os64_ui_widget_stage_bounds(&gUiTestField.w, r);
+    }
+    return OS64_FONT_OK;
+}
+static void ui_test_field_plan_done(os64_ui_t *ui, void *user, void *plan)
+{
+    (void)ui; (void)user; (void)plan;
+}
+static os64_font_status_t ui_test_refusing_barrier(void *user, void *plan)
+{
+    (void)user; (void)plan;
+    return OS64_FONT_LIMIT;
+}
+
+static bool ui_test_caret_shows(os64_ui_t *ui, os64_ui_textfield_t *tf)
+{
+    int32_t cx = 0;
+    if (!tf->w.run || os64_ui_run_caret(tf->w.run, tf->cursor, false, &cx) != OS64_FONT_OK)
+        return false;
+    int32_t inner = tf->w.bounds.w - 2 * 4;               /* field_inset 4 */
+    (void)ui;
+    return cx - tf->left_px >= 0 && cx - tf->left_px + 2 <= inner;
+}
+
+static os64_font_status_t ui_test_adopt(os64_ui_t *ui, const char *dir,
+                                              uint32_t size)
+{
+    os64_font_set_t *set = outline_set(os64_ui_font_context(ui), dir, "DejaVuSans.ttf", size);
+    CHECK(set != NULL);
+    if (!set)
+        return OS64_FONT_NO_MEMORY;
+    os64_font_consumer_t consumer;
+    os64_ui_font_consumer(ui, &consumer);
+    os64_font_status_t status = os64_font_adopt(set, &consumer, 1, NULL);
+    os64_font_set_release(set);
+    return status;
+}
+
+static void textfield_scroll_follows_the_face(const char *dir)
+{
+    current = "field scroll";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    char buf[64];
+    os64_ui_textfield(&gUiTestField, buf, sizeof(buf), NULL, NULL, NULL);
+    gUiTestField.w.bounds = (os64_gui_rect_t){0, 0, 100, 40};   /* 92 inside */
+    os64_ui_set_root(&ui, &gUiTestField.w);
+    gUiTestField.w.focused = true;
+    CHECK(os64_ui_font_planner(&ui, ui_test_field_plan, ui_test_field_plan_done,
+                               ui_test_field_plan_done, NULL) == OS64_FONT_OK);
+
+    CHECK(ui_test_adopt(&ui, dir, 8) == OS64_FONT_OK);
+    os64_ui_textfield_set(&ui, &gUiTestField, "WWWWWWWW");
+    CHECK(gUiTestField.left_px == 0);                     /* fits at 8px */
+    CHECK(ui_test_caret_shows(&ui, &gUiTestField));
+
+    /* Bigger: the caret is far past the old scroll's reach. */
+    CHECK(ui_test_adopt(&ui, dir, 24) == OS64_FONT_OK);
+    CHECK(gUiTestField.left_px > 0);
+    CHECK(ui_test_caret_shows(&ui, &gUiTestField));
+
+    /* The first paint in the new face lays nothing out. */
+    canvas_t c;
+    canvas_init(&c, 0xff000000);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.surf = c.s;
+    unsigned long before = allocations;
+    gUiTestField.w.cls->paint(&gUiTestField.w, &ctx, &ui.theme);
+    CHECK(allocations == before);
+
+    /* Narrower staged bounds: the caret shows in the rectangle it gets. */
+    ui_test_field_staged_w = 60;
+    CHECK(ui_test_adopt(&ui, dir, 20) == OS64_FONT_OK);
+    ui_test_field_staged_w = 0;
+    CHECK(gUiTestField.w.bounds.w == 60);
+    CHECK(ui_test_caret_shows(&ui, &gUiTestField));
+
+    /* Smaller again, small enough that the whole text fits: none of it is
+     * scrolled away. Keeping the retired scroll and moving it only as far
+     * as the caret needed would leave the caret at the left edge of an
+     * empty-looking field, every letter scrolled off to its left. */
+    gUiTestField.w.bounds.w = 100;
+    CHECK(ui_test_adopt(&ui, dir, 8) == OS64_FONT_OK);
+    CHECK(gUiTestField.left_px == 0);
+    CHECK(ui_test_caret_shows(&ui, &gUiTestField));
+
+    /* Refused AFTER the field has staged its new scroll — a barrier says no
+     * once every prepare is done — and the field keeps its scroll, its
+     * caret and its bytes. */
+    CHECK(ui_test_adopt(&ui, dir, 24) == OS64_FONT_OK);
+    int32_t left = gUiTestField.left_px;
+    size_t cursor = gUiTestField.cursor;
+    os64_font_set_t *set = outline_set(os64_ui_font_context(&ui), dir, "DejaVuSans.ttf", 40);
+    CHECK(set != NULL);
+    if (set) {
+        os64_font_consumer_t consumer;
+        os64_ui_font_consumer(&ui, &consumer);
+        consumer.barrier = ui_test_refusing_barrier;
+        CHECK(os64_font_adopt(set, &consumer, 1, NULL) == OS64_FONT_LIMIT);
+        os64_font_set_release(set);
+    }
+    CHECK(gUiTestField.left_staged != left);      /* it DID stage a change */
+    CHECK(gUiTestField.left_px == left);
+    CHECK(gUiTestField.cursor == cursor);
+    CHECK(memcmp(buf, "WWWWWWWW", 9) == 0);
+    CHECK(ui_test_caret_shows(&ui, &gUiTestField));
+
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    current = "";
+}
+
+/* The textview's half of the same rule. Its caret at the end of a line too
+ * wide for it at 24px scrolls; at 8px the whole line fits, and so the view
+ * shows it from its first letter rather than keeping a retired number. */
+static void textview_scroll_follows_the_face(const char *dir)
+{
+    current = "view scroll";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    os64_ui_textview(&gUiTestView, &kUiTestBuf, NULL, NULL, NULL);
+    gUiTestView.w.bounds = (os64_gui_rect_t){0, 0, 100, 60};      /* 96 inside */
+    os64_ui_set_root(&ui, &gUiTestView.w);
+    gUiTestView.cur_line = 0;
+    gUiTestView.cur_col = strlen(kUiTestDoc[0]);                   /* "iiii WWWW|" */
+
+    CHECK(ui_test_adopt(&ui, dir, 24) == OS64_FONT_OK);
+    CHECK(gUiTestView.left_px > 0);
+    int32_t cx = -1;
+    CHECK(gUiTestView.w.run != NULL);
+    if (gUiTestView.w.run)
+        CHECK(os64_ui_run_caret(gUiTestView.w.run, gUiTestView.cur_col, false, &cx) == OS64_FONT_OK);
+    CHECK(cx - gUiTestView.left_px >= 0 && cx - gUiTestView.left_px + 2 <= 96);
+
+    CHECK(ui_test_adopt(&ui, dir, 8) == OS64_FONT_OK);
+    CHECK(gUiTestView.left_px == 0);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    current = "";
+}
+
+/* C2-R6 — A WINDOW WITH NO FACE IS STILL AN EDITOR. When the engine cannot be
+ * built, text draws in the bitmap cell, and the caret, the highlight, a click
+ * and the scroll must agree with THAT: eight pixels a byte, stopping only
+ * where a letter ends. A window WEARING a face whose layout is refused is the
+ * other state, and must not borrow the cell's answers — they would put the
+ * caret where a different font's letters are. */
+static void ui_test_no_engine(os64_ui_t *ui)
+{
+    deny_countdown = 1;             /* the binding is made; its engine is not */
+    CHECK(os64_ui_font_context(ui) == NULL);
+    deny_countdown = -1;
+    CHECK(os64_ui_font_status(ui) != OS64_FONT_OK);
+}
+static size_t ui_test_count(const canvas_t *c, uint32_t colour)
+{
+    size_t n = 0;
+    for (size_t i = 0; i < SURF_W * (size_t)SURF_H; ++i)
+        n += c->px[i] == colour;
+    return n;
+}
+static void ui_test_click(os64_ui_widget_t *w, os64_ui_t *ui, int32_t x, int32_t y)
+{
+    os64_gui_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = OS64_GUI_EVENT_MOUSE_BUTTON_DOWN;
+    ev.mouse.button = OS64_GUI_MOUSE_LEFT;
+    ev.mouse.x = x;
+    ev.mouse.y = y;
+    w->cls->event(w, ui, &ev);
+}
+
+static void editors_without_a_face(const char *dir)
+{
+    current = "no face";
+    canvas_t c;
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+
+    /* THE FIELD. Inset 4, caret row 8..24 in a 32-pixel field. */
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    char buf[64];
+    os64_ui_textfield_t tf;
+    os64_ui_textfield(&tf, buf, sizeof(buf), NULL, NULL, NULL);
+    tf.w.bounds = (os64_gui_rect_t){0, 0, 150, 32};          /* 142 inside */
+    os64_ui_set_root(&ui, &tf.w);
+    tf.w.focused = true;
+    ui_test_no_engine(&ui);
+
+    os64_ui_textfield_set(&ui, &tf, "abc");
+    canvas_init(&c, 0xff000000);
+    ctx.surf = c.s;
+    tf.w.cls->paint(&tf.w, &ctx, &ui.theme);
+    CHECK(c.px[16 * SURF_W + 4 + 24] == ui.theme.text_caret);  /* after 3 cells */
+
+    /* A click inside é's two cells goes to the nearer of its edges. */
+    os64_ui_textfield_set(&ui, &tf, "\xc3\xa9t");            /* edges 0, 16, 24 */
+    ui_test_click(&tf.w, &ui, 4 + 9, 16);
+    CHECK(tf.cursor == 2);
+    ui_test_click(&tf.w, &ui, 4 + 5, 16);
+    CHECK(tf.cursor == 0);
+
+    /* Motion and deletion take the whole letter. */
+    ui_test_field_burst(&tf, &ui, 'C');                       /* Right */
+    CHECK(tf.cursor == 2);
+    ui_test_field_key(&tf, &ui, '\b');
+    CHECK(tf.len == 1 && tf.cursor == 0 && memcmp(buf, "t", 2) == 0);
+
+    /* A long field scrolls to keep its caret, counted in cells: forty W's
+     * put it at 320, and 142 pixels show. */
+    os64_ui_textfield_set(&ui, &tf, "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW");
+    CHECK(tf.left_px == 320 - 142 + 2);
+    canvas_init(&c, 0xff000000);
+    ctx.surf = c.s;
+    tf.w.cls->paint(&tf.w, &ctx, &ui.theme);
+    CHECK(c.px[16 * SURF_W + 4 + 320 - tf.left_px] == ui.theme.text_caret);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+
+    /* THE VIEW. Inset 2, rows of 16. */
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    os64_ui_textview(&gUiTestView, &kUiTestBuf, NULL, NULL, NULL);
+    gUiTestView.w.bounds = (os64_gui_rect_t){0, 0, 300, 60};  /* three rows */
+    os64_ui_set_root(&ui, &gUiTestView.w);
+    gUiTestView.w.focused = true;
+    ui_test_no_engine(&ui);
+
+    /* "iiii WWWW", its first four letters selected and the caret after
+     * them: the highlight is exactly four cells and the caret is at the
+     * fifth. */
+    gUiTestView.sel = true;
+    gUiTestView.sel_line = 0; gUiTestView.sel_col = 0;
+    gUiTestView.cur_line = 0; gUiTestView.cur_col = 4;
+    canvas_init(&c, 0xff000000);
+    ctx.surf = c.s;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    int lit_in = 0, lit_out = 0;
+    for (int32_t y = 2; y < 18; ++y)
+        for (int32_t x = 0; x < SURF_W; ++x)
+            if (c.px[y * SURF_W + x] == ui.theme.text_sel_bg) {
+                if (x >= 2 && x < 2 + 32) ++lit_in;
+                else ++lit_out;
+            }
+    CHECK(lit_in > 0 && lit_out == 0);
+    CHECK(c.px[10 * SURF_W + 2 + 32] == ui.theme.text_caret);
+
+    /* Clicks inside é's cells ("café composed", é across x 24..40) go to the
+     * nearer edge, 3 or 5 — never 4. */
+    gUiTestView.top = 1;                                      /* its row is 2 */
+    ui_test_click(&gUiTestView.w, &ui, 2 + 31, 2 + 2 * 16 + 8);
+    CHECK(gUiTestView.cur_line == 3 && gUiTestView.cur_col == 3);
+    ui_test_click(&gUiTestView.w, &ui, 2 + 33, 2 + 2 * 16 + 8);
+    CHECK(gUiTestView.cur_line == 3 && gUiTestView.cur_col == 5);
+    ui_test_burst(&gUiTestView.w, &ui, "[D");                 /* Left */
+    CHECK(gUiTestView.cur_col == 3);
+
+    /* Up and Down hold a lane in cells too. End on "abc" remembers x=24,
+     * which falls between the second é's edges at 16 and 32: a tie, and it
+     * goes to the later edge as a run's does. Never 3, inside a letter. */
+    gUiTestView.buf = &kUiTestEncBuf;
+    gUiTestView.top = 0;
+    gUiTestView.sel = false;
+    gUiTestView.cur_line = 0; gUiTestView.cur_col = 0;
+    ui_test_burst(&gUiTestView.w, &ui, "[F");                 /* End */
+    CHECK(gUiTestView.cur_col == 3 && gUiTestView.goal_x == 24);
+    ui_test_burst(&gUiTestView.w, &ui, "[B");                 /* Down */
+    CHECK(gUiTestView.cur_line == 1 && gUiTestView.cur_col == 4);
+
+    /* A line wider than the view scrolls to its caret, in cells:
+     * "kerning AV To Ta We" is 19 of them, 152 pixels, in 96. */
+    gUiTestView.buf = &kUiTestBuf;
+    gUiTestView.w.bounds.w = 100;
+    gUiTestView.cur_line = 1; gUiTestView.cur_col = 0;
+    gUiTestView.left_px = 0;
+    ui_test_burst(&gUiTestView.w, &ui, "[F");
+    CHECK(gUiTestView.left_px == 152 - 96 + 2);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+
+    /* THE OTHER STATE: a face installed, its layout refused. Nothing is
+     * drawn from the cell — no caret, no highlight — in either editor. */
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    os64_ui_textfield(&tf, buf, sizeof(buf), NULL, NULL, NULL);
+    tf.w.bounds = (os64_gui_rect_t){0, 0, 150, 32};
+    os64_ui_set_root(&ui, &tf.w);
+    tf.w.focused = true;
+    os64_font_set_t *set = outline_set(os64_ui_font_context(&ui), dir, "DejaVuSans.ttf", 16);
+    CHECK(set != NULL);
+    if (!set) { current = ""; return; }
+    CHECK(os64_ui_font_bind(&ui, set) == OS64_FONT_OK);
+    os64_font_set_release(set);
+    ui_test_deny_all = true;
+    os64_ui_textfield_set(&ui, &tf, "abc");                    /* never laid out */
+    canvas_init(&c, 0xff000000);
+    ctx.surf = c.s;
+    tf.w.cls->paint(&tf.w, &ctx, &ui.theme);
+    ui_test_deny_all = false;
+    CHECK(ui_test_count(&c, ui.theme.text_caret) == 0);
+
+    os64_ui_textview(&gUiTestView, &kUiTestBuf, NULL, NULL, NULL);
+    gUiTestView.w.bounds = (os64_gui_rect_t){0, 0, 300, 60};
+    os64_ui_set_root(&ui, &gUiTestView.w);
+    gUiTestView.w.focused = true;
+    gUiTestView.sel = true;
+    gUiTestView.sel_line = 0; gUiTestView.sel_col = 0;
+    gUiTestView.cur_line = 0; gUiTestView.cur_col = 4;
+    ui_test_deny_all = true;
+    canvas_init(&c, 0xff000000);
+    ctx.surf = c.s;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    ui_test_deny_all = false;
+    CHECK(ui_test_count(&c, ui.theme.text_caret) == 0);
+    CHECK(ui_test_count(&c, ui.theme.text_sel_bg) == 0);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
     current = "";
 }
 
@@ -1386,7 +1940,11 @@ int main(int argc, char **argv)
     textview_geometry_and_painting(dir);
     textview_partial_selection_paints_only_the_span(dir);
     textview_motion(dir);
+    textview_keys_without_layout(dir);
     textfield_edits_by_cluster(dir);
+    textfield_scroll_follows_the_face(dir);
+    textview_scroll_follows_the_face(dir);
+    editors_without_a_face(dir);
 #else
     (void)slurp;
     (void)rows_touched_outside;
