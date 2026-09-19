@@ -336,21 +336,8 @@ static os64_font_status_t field_geom(os64_ui_textfield_t *tf, os64_ui_t *ui,
                                      line_geom_t *g)
 {
 	*g = (line_geom_t){ NULL, tf->buf, tf->len };
-	if (os64_ui_run_matches(tf->w.run, tf->buf, tf->len)) {
-		g->run = tf->w.run;
-		return OS64_FONT_OK;
-	}
-	void *run = NULL;
-	os64_font_status_t status =
-		os64_ui_run_layout(ui, OS64_FONT_ROLE_UI, tf->buf, tf->len, &run);
-	if (status != OS64_FONT_OK)
-		return status;
-	if (run) {
-		os64_ui_run_release(tf->w.run);
-		tf->w.run = run;
-	}
-	g->run = run;
-	return OS64_FONT_OK;
+	return os64_ui_run_resolve(ui, &tf->w.run, OS64_FONT_ROLE_UI,
+	                           tf->buf, tf->len, &g->run);
 }
 
 // The least a scroll has to move for a caret at `cx` to show in a box
@@ -432,13 +419,18 @@ static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	int32_t row = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
 	int32_t ty = w->bounds.y + (w->bounds.h - row) / 2;
 	int32_t origin = inner.x - tf->left_px;
-	os64_ui_draw_text(ui, &tf->w.run, OS64_FONT_ROLE_UI, &ctx->surf, inner,
-	                  origin, ty, tf->buf, tf->len, t->field_fg, t->field_bg);
+
+	// ONE rendering for the whole paint, chosen here: the text and the
+	// caret are both drawn from it, so they cannot disagree about where
+	// the letters are. A refused layout draws neither.
+	line_geom_t g;
+	if (field_geom(tf, ui, &g) != OS64_FONT_OK)
+		return;
+	os64_ui_draw_run(ui, g.run, OS64_FONT_ROLE_UI, &ctx->surf, inner,
+	                 origin, ty, tf->buf, tf->len, t->field_fg, t->field_bg);
 
 	int32_t cx = 0;
-	line_geom_t g;
-	if (w->focused && field_geom(tf, ui, &g) == OS64_FONT_OK &&
-	    geom_caret(&g, tf->cursor, &cx) == OS64_FONT_OK) {
+	if (w->focused && geom_caret(&g, tf->cursor, &cx) == OS64_FONT_OK) {
 		os64_gui_rect_t caret = { origin + cx, ty, 2, row };
 		os64_gui_rect_t clipped;
 		if (os64_rect_intersect(caret, inner, &clipped))
@@ -772,22 +764,7 @@ static void tv_grow_slots(os64_ui_textview_t *tv, size_t want)
 static os64_font_status_t tv_run(os64_ui_t *ui, void **slot,
                                  const char *s, size_t len, void **out)
 {
-	*out = NULL;
-	if (os64_ui_run_matches(*slot, s, len)) {
-		*out = *slot;
-		return OS64_FONT_OK;
-	}
-	void *run = NULL;
-	os64_font_status_t status =
-		os64_ui_run_layout(ui, OS64_FONT_ROLE_DOCUMENT, s, len, &run);
-	if (status != OS64_FONT_OK)
-		return status;
-	if (run) {
-		os64_ui_run_release(*slot);
-		*slot = run;
-	}
-	*out = run;
-	return OS64_FONT_OK;
+	return os64_ui_run_resolve(ui, slot, OS64_FONT_ROLE_DOCUMENT, s, len, out);
 }
 
 // A line's geometry, its run laid out into the caret's slot: the line motion
@@ -1026,16 +1003,18 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		void *spare = NULL;
 		void **slot = (size_t)r < tv->row_run_count ? &tv->row_runs[r] : &spare;
 
-		// ONE RUN ANSWERS ALL THREE QUESTIONS. The glyphs, the highlight
-		// and the caret are the same measurement of the same bytes, so
-		// they cannot describe different text — which is what happens the
-		// moment a selection is computed one way and painted another. The
-		// draws below borrow it from the slot rather than laying out again.
-		// With no face, the bitmap cell is what is drawn and what answers;
-		// with a refused layout nothing answers, and the row gets no
-		// highlight or caret it cannot place.
+		// ONE RENDERING ANSWERS ALL THREE QUESTIONS, chosen once per row.
+		// The glyphs, the highlight and the caret are the same measurement
+		// of the same bytes, so they cannot describe different text — which
+		// is what happens the moment a selection is computed one way and
+		// painted another. The draws below are of this choice and look
+		// nothing up again: the line's run, or with no face the bitmap cell.
+		// A refused layout draws nothing and places nothing.
 		line_geom_t g = { NULL, ln, len };
-		bool placed = tv_run(ui, slot, ln, len, &g.run) == OS64_FONT_OK;
+		if (tv_run(ui, slot, ln, len, &g.run) != OS64_FONT_OK) {
+			os64_ui_run_release(spare);
+			continue;
+		}
 
 		// Selected bytes on this line, as a byte range of it.
 		size_t from = 0, to = 0;
@@ -1046,16 +1025,17 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 			lit = to > from;
 		}
 
-		// TWO PASSES OVER ONE RUN. The whole line in its ordinary colours,
-		// then the line again in the selection's colours CLIPPED TO THE
-		// SELECTED SPAN — the draw fills its own box with the background it
-		// is given, so the second pass lays down the highlight and the lit
-		// glyphs together, exactly as wide as the selection and no wider.
-		// Same run both times, so the second pass costs no layout and its
-		// glyphs land on the first pass's pixels.
-		os64_ui_draw_text(ui, slot, OS64_FONT_ROLE_DOCUMENT, &ctx->surf, clip,
-		                  origin, y, ln, len, t->text_fg, t->text_bg);
-		if (placed && lit) {
+		// TWO PASSES OVER ONE RENDERING. The whole line in its ordinary
+		// colours, then the line again in the selection's colours CLIPPED
+		// TO THE SELECTED SPAN — the draw fills its own box with the
+		// background it is given, so the second pass lays down the
+		// highlight and the lit glyphs together, exactly as wide as the
+		// selection and no wider. The same rendering both times, so the
+		// second pass costs no layout and its glyphs land on the first
+		// pass's pixels.
+		os64_ui_draw_run(ui, g.run, OS64_FONT_ROLE_DOCUMENT, &ctx->surf, clip,
+		                 origin, y, ln, len, t->text_fg, t->text_bg);
+		if (lit) {
 			os64_gui_rect_t sel;
 			if (geom_selection(&g, from, to, &sel) == OS64_FONT_OK) {
 				// X is relative to the line; the ROW is what this view lays
@@ -1064,13 +1044,13 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 				os64_gui_rect_t lit_rect = { origin + sel.x, y, sel.w, pitch };
 				os64_gui_rect_t sel_clip;
 				if (os64_rect_intersect(lit_rect, clip, &sel_clip))
-					os64_ui_draw_text(ui, slot, OS64_FONT_ROLE_DOCUMENT, &ctx->surf,
-					                  sel_clip, origin, y, ln, len,
-					                  t->text_sel_fg, t->text_sel_bg);
+					os64_ui_draw_run(ui, g.run, OS64_FONT_ROLE_DOCUMENT, &ctx->surf,
+					                 sel_clip, origin, y, ln, len,
+					                 t->text_sel_fg, t->text_sel_bg);
 			}
 		}
 
-		if (w->focused && li == tv->cur_line && placed) {
+		if (w->focused && li == tv->cur_line) {
 			int32_t cx = 0;
 			if (geom_caret(&g, tv->cur_col, &cx) == OS64_FONT_OK) {
 				os64_gui_rect_t caret = { origin + cx, y, 2, pitch };

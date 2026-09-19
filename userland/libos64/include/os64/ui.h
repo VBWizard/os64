@@ -479,11 +479,33 @@ os64_font_status_t os64_ui_text_measure(os64_ui_t *ui, os64_font_role_t role,
 // A window wearing a face whose text cannot be laid out paints NOTHING
 // rather than substituting a different font's glyphs, and records the
 // failure for os64_ui_font_status.
+//
+// This LOOKS THE RENDERING UP each time it is called: a painter that only
+// draws wants exactly that. A painter that measures or places anything
+// first — a centred caption, a caret, a highlight — must not call it after
+// measuring. Such a painter resolves the choice once, with
+// os64_ui_run_resolve or os64_ui_run_width, and draws that choice with
+// os64_ui_draw_run.
 int32_t os64_ui_draw_text(os64_ui_t *ui, void **run_slot,
                           os64_font_role_t role,
                           os64_gui_surface_t *dst, os64_gui_rect_t clip,
                           int32_t x, int32_t top_y, const char *s, size_t len,
                           uint32_t fg, uint32_t bg);
+
+// Draw ONE RENDERING ALREADY CHOSEN, as os64_ui_draw_text draws: `run`, or
+// with NULL the bitmap cell, which is how a window with no face draws. It
+// lays nothing out and looks nothing up.
+//
+// WHY THAT MATTERS: whether a window has a face is not settled until its
+// binding is made, and a binding that could not be made is tried again on
+// the next lookup. Two lookups in one paint can therefore disagree — the
+// caret placed in bitmap cells, one per byte, and the text drawn by a run,
+// one glyph per letter, so the two part at the first multi-byte letter. The
+// rendering that placed the overlays is the one drawn.
+int32_t os64_ui_draw_run(os64_ui_t *ui, void *run, os64_font_role_t role,
+                         os64_gui_surface_t *dst, os64_gui_rect_t clip,
+                         int32_t x, int32_t top_y, const char *s, size_t len,
+                         uint32_t fg, uint32_t bg);
 
 // The set this window holds (borrowed, NULL before first use), the status
 // that explains an absent set, and the engine's live bytes — the last for
@@ -558,11 +580,21 @@ void os64_ui_discard_caption(os64_ui_widget_t *w);
 // A painter that measures separately gets a second layout — an allocation
 // on every paint, and a different answer from the draw when that allocation
 // is refused, which is how a centred caption silently becomes a left-aligned
-// one. Ask here, then draw from the same slot: at most one layout, and the
-// alignment and the ink cannot disagree.
+// one. Ask here, then draw the slot with os64_ui_draw_run: at most one
+// layout, and the alignment and the ink cannot disagree.
 os64_font_status_t os64_ui_run_width(os64_ui_t *ui, void **run_slot,
                                      os64_font_role_t role,
                                      const char *s, size_t len, int32_t *out);
+
+// The rendering for `s`, chosen once: the slot's run if it still says `s`,
+// otherwise a fresh layout retained in the slot. OK with NULL means the
+// window wears no face and the bitmap cell draws `s`; any other status is a
+// refused layout, and nothing should be drawn or placed from it. After an OK
+// answer — from this or from os64_ui_run_width — the slot holds exactly the
+// choice made, so os64_ui_draw_run(*run_slot) draws what was measured.
+os64_font_status_t os64_ui_run_resolve(os64_ui_t *ui, void **run_slot,
+                                       os64_font_role_t role,
+                                       const char *s, size_t len, void **out);
 
 // Lay `s` out for this role and hand back a retained run, or NULL with OK
 // when the window wears no face and the caller should draw the bitmap cell.

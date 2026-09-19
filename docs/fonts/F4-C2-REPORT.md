@@ -15,14 +15,15 @@ and run geometry during the same paint. C2 acceptance remains pending.
 All five [previous rulings](F4-C2-QUINN-REVIEW.md#answers-to-all-five-requested-rulings)
 stand.
 
-> **Ready for re-review, second pass.** The five first-round findings
-> (C2-R1..R5) and the re-review's three (C2-R6..R8) each reproduced here
-> from Quinn's own runner, with her numbers, before anything changed. All
-> eight are corrected in the commit that carries this revision of the
-> report, which sits on top of her review record. The body below describes
-> e289ca3 as submitted. **After the review** covers round one, and **After
-> the re-review**, at the foot, covers R6–R8 and how to rerun everything.
-> Her rulings on the five questions are applied as given.
+> **Ready for acceptance review.** Every finding across the three rounds
+> (C2-R1..R8, and the R6 follow-up) reproduced here from Quinn's own runner,
+> with her numbers, before anything changed. All are corrected in the
+> commit that carries this revision of the report, which sits on top of her
+> review records. The body below describes e289ca3 as submitted. **After the
+> review** covers round one, **After the re-review** covers R6–R8, and
+> **After the second re-review**, at the foot, covers the follow-up and how
+> to rerun everything. Her rulings on the five questions are applied as
+> given.
 
 **Not F4 complete, and not asking to be merged.** C3 — the bounded window for
 lines over 1 MiB — is next. `F4-REPORT.md` follows at completion.
@@ -626,5 +627,92 @@ replaced them. No code or comment uses one.
 Her `c2-review-r2` probe calls the libui suite's `ui_test_field_key` and
 `ui_test_field_delete`. They keep those names, and the new paste tests live
 in the Scribe harness because both her probes define `os64_open` themselves.
+
+**Not run:** P5 / real hardware.
+
+## After the second re-review
+
+Quinn's [second re-review](F4-C2-QUINN-REVIEW.md#second-correction-re-review--a690193)
+of a690193 resolved R7 and R8, and R6's persistent no-engine case. It left
+one follow-up, which reproduced from her `c2-review-r3/run.py` with exactly
+her numbers.
+
+**What was wrong.** A binding that could not be made is tried again at the
+next lookup, and each editor's paint looked the rendering up twice. The
+textview chose its geometry once, then drew through `os64_ui_draw_text`,
+which looked again, found the binding available, and drew a run under a
+caret placed in bitmap cells. The field did the same the other way round:
+bitmap text, then a caret from a run. Recovery at the NEXT paint was always
+right. The mismatch lived inside one paint.
+
+**The correction: a painter chooses once, and draws what it chose.**
+
+- `os64_ui_run_resolve` (new) is the one lookup: the slot's run, a fresh
+  layout retained in the slot, OK with nothing when the window has no face,
+  or a refusal. After an OK answer the slot is the choice. A bitmap answer
+  now empties the slot rather than leaving whatever it held.
+- `os64_ui_draw_run` (new) draws exactly a given choice, the run or the
+  bitmap cell, and looks nothing up.
+- `os64_ui_draw_text` is now the two together. It is unchanged for a
+  painter that only draws, which is what the label, the checkbox caption,
+  list rows and your C1 probes use it for.
+- The textview resolves each row once, then draws both passes and places
+  the caret from that one choice. The field resolves before drawing,
+  instead of after.
+- **The same pattern was in `button_paint`,** from C1. It asked
+  `os64_ui_run_width` for the width, then drew through `os64_ui_draw_text`,
+  so a caption with a multi-byte letter could be centred by bitmap cells and
+  drawn by a run. It now draws its slot with `os64_ui_draw_run`.
+
+As you asked, swapping the order was not the fix. The field's paint now
+resolves first, but what makes it right is that the draw no longer looks
+anything up.
+
+Her probe against the corrected tree is in
+[`c2-fixes/c2-review-r3-after.txt`](f4-evidence/c2-fixes/c2-review-r3-after.txt).
+The paint that meets the refusal is now wholly bitmap, and no run is made
+partway through it. Its caret at 42 and the highlight ending at 41 are
+where the bitmap cells it drew put them. The next paint is wholly run: 34
+and 33, as before. The field's caret lands at 44, the end of the text it
+drew.
+
+### Tests, this round
+
+- `tools/test_ui_text_host.py --real`: 1018 → **1042** at O2 and O0; the
+  fake-backend run is still 75.
+- **One rendering per paint, for all three painters** (textview, field and
+  button). `é` is what tells the two renderings apart: two bitmap cells,
+  one glyph in a run. For each painter, three paints are compared pixel for
+  pixel:
+  - a paint with the binding refused throughout, which is all bitmap;
+  - a paint by a window whose binding already exists, which is all run;
+  - a paint that meets **one** refused binding, and the repaint after it.
+
+  The first two differ. The one-refusal paint must equal the all-bitmap
+  one, and its repaint the all-run one. The test needs no coordinates. For
+  the record, it also checks the view's caret and highlight positions in
+  the one-refusal paint (42 and 41).
+- **Four mutants, each failing that test:**
+  - the view's plain pass drawing through a second lookup;
+  - the view's highlight pass drawing through a second lookup;
+  - the field drawing before it chose;
+  - the button drawing through a second lookup.
+- The persistent no-engine tests and the installed-face refusal tests
+  stand unchanged and pass.
+- `tools/test_scribe_host.py`: still **2585**. Guest: `scribefonttest
+  --selftest` still **PASS, 41 checks** (`c2-fixes/r3-selftest-pass-41.png`).
+- Each earlier probe matches its record:
+  - your round-one C2 probes: `c2-review-after.txt`
+  - your round-two probe: `c2-review-r2-after.txt`
+  - your C1 runners: their after-records
+
+`make`, `make fsck-ext2`, `git diff --check` and `stale_refs.sh` are clean.
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_ui_text_host.py --real --output <dir>   # 1042
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_ui_text_host.py --real -O 0             # 1042
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_scribe_host.py                          # 2585
+python3 docs/fonts/f4-evidence/c2-review-r3/run.py --baseline <dir> --output <out>     # = c2-fixes/c2-review-r3-after.txt
+```
 
 **Not run:** P5 / real hardware.

@@ -361,9 +361,9 @@ static bool run_matches(os64_text_run_t *run, const char *s, size_t len)
 	return true;
 }
 
-// Defined with the run primitives below, because a caller that asks for a
-// width and then draws has to come through the same door or pay for two
-// layouts and risk two different answers.
+// Defined with the run primitives below. Every lookup of a slot's run comes
+// through it, which is what lets a painter that measures before it draws
+// look up once and draw that same answer.
 static os64_font_status_t slot_run(os64_ui_t *ui, void **run_slot,
                                    os64_font_role_t role,
                                    const char *s, size_t len,
@@ -382,9 +382,7 @@ int32_t os64_ui_draw_text(os64_ui_t *ui, void **run_slot,
 
 	// The retained run is the usual case: adoption staged it, so the paint
 	// that follows a commit allocates nothing. Text that has changed
-	// underneath it is re-laid-out here and retained in the same slot — the
-	// same door os64_ui_run_width uses, so a painter that asked for a width
-	// and then draws gets one layout between them, not two.
+	// underneath it is re-laid-out here and retained in the same slot.
 	os64_text_run_t *run = (os64_text_run_t *)0;
 	if (slot_run(ui, run_slot, role, s, len, &run) != OS64_FONT_OK) {
 		// A window wearing a face has no honest way to draw this. The
@@ -394,17 +392,29 @@ int32_t os64_ui_draw_text(os64_ui_t *ui, void **run_slot,
 		// the binding for anyone who asks.
 		return x;
 	}
-	bool borrowed = run_slot && *run_slot == (void *)run;
+	int32_t pen = os64_ui_draw_run(ui, run, role, dst, clip, x, top_y, s, len, fg, bg);
+	if (!(run_slot && *run_slot == (void *)run))
+		os64_text_run_release(run);    // made here, and nobody's now
+	return pen;
+}
 
-	if (!run)   // unbound window: the painter this layer replaced
+int32_t os64_ui_draw_run(os64_ui_t *ui, void *run_ptr, os64_font_role_t role,
+                         os64_gui_surface_t *dst, os64_gui_rect_t clip,
+                         int32_t x, int32_t top_y, const char *s, size_t len,
+                         uint32_t fg, uint32_t bg)
+{
+	if (!s)
+		s = "";
+	if (!len)
+		return x;
+	os64_text_run_t *run = (os64_text_run_t *)run_ptr;
+
+	if (!run)   // no face: the painter this layer replaced
 		return os64_draw_text_clipped(dst, clip, x, top_y, s, len, fg, bg);
 
 	os64_text_run_view_t rv;
-	if (os64_text_run_view(run, &rv) != OS64_FONT_OK) {
-		if (!borrowed)
-			os64_text_run_release(run);
+	if (os64_text_run_view(run, &rv) != OS64_FONT_OK)
 		return x;
-	}
 
 	os64_ui_font_metrics_t m;
 	os64_ui_font_metrics(ui, role, &m);
@@ -418,14 +428,8 @@ int32_t os64_ui_draw_text(os64_ui_t *ui, void **run_slot,
 	// Horizontally the caller's clip still rules, overhang included.
 	os64_gui_rect_t row = { clip.x, top_y, clip.w, m.row_h };
 	os64_gui_rect_t row_clip;
-	if (!os64_rect_intersect(clip, row, &row_clip)) {
-		// Nothing of this row is visible. The pen still advanced — a
-		// caller laying a line out depends on that — but a run made
-		// here belongs to nobody now.
-		if (!borrowed)
-			os64_text_run_release(run);
-		return x + advance;
-	}
+	if (!os64_rect_intersect(clip, row, &row_clip))
+		return x + advance;   // nothing visible; the pen still advanced
 
 	// The paper before the ink. os64_text_draw paints coverage only, while
 	// the painter it replaces filled each cell — so the row's own box is
@@ -436,8 +440,6 @@ int32_t os64_ui_draw_text(os64_ui_t *ui, void **run_slot,
 		os64_draw_fill_rect(dst, painted, bg);
 
 	os64_text_draw(run, dst, row_clip, x, top_y + m.baseline, fg);
-	if (!borrowed)
-		os64_text_run_release(run);
 	return x + advance;
 }
 
@@ -606,6 +608,13 @@ static void unstage_tree_bounds(os64_ui_widget_t *w);
 
 // Make the slot hold a run for exactly these bytes, laying one out only if
 // what is there says something else. Borrowed from the slot afterwards.
+//
+// AFTER AN OK ANSWER THE SLOT IS THE CHOICE: the run, or empty when the
+// window wears no face and the bitmap cell measured the bytes. A painter
+// that measured or placed through it draws exactly that choice with
+// os64_ui_draw_run. Asking again later in the same paint could get a
+// different answer, because a binding that could not be made this time is
+// tried again next time.
 static os64_font_status_t slot_run(os64_ui_t *ui, void **run_slot,
                                    os64_font_role_t role,
                                    const char *s, size_t len,
@@ -621,12 +630,24 @@ static os64_font_status_t slot_run(os64_ui_t *ui, void **run_slot,
 		*out = (os64_text_run_t *)0;
 		return status;
 	}
-	if (run && run_slot) {
+	if (run_slot) {
 		os64_text_run_release((os64_text_run_t *)*run_slot);
 		*run_slot = run;
 	}
 	*out = run;
 	return OS64_FONT_OK;
+}
+
+os64_font_status_t os64_ui_run_resolve(os64_ui_t *ui, void **run_slot,
+                                       os64_font_role_t role,
+                                       const char *s, size_t len, void **out)
+{
+	if (!run_slot || !out)
+		return OS64_FONT_BAD_ARGUMENT;
+	os64_text_run_t *run = (os64_text_run_t *)0;
+	os64_font_status_t status = slot_run(ui, run_slot, role, s ? s : "", len, &run);
+	*out = run;
+	return status;
 }
 
 os64_font_status_t os64_ui_run_width(os64_ui_t *ui, void **run_slot,

@@ -582,7 +582,9 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	// placed from a width of zero and then painted anyway, because the
 	// draw's own retry happened to succeed. A width that does not exist is
 	// not a position — this paint leaves the caption off the face it just
-	// drew, and the next one puts it where it belongs.
+	// drew, and the next one puts it where it belongs. And the draw is of
+	// the SAME choice the width came from, the slot's run or the bitmap
+	// cell: a second lookup could find a face the first one did not.
 	int32_t tw = 0;
 	bool placed = os64_ui_run_width(ui, &w->run, OS64_FONT_ROLE_UI,
 	                                w->text, len, &tw) == OS64_FONT_OK;
@@ -596,8 +598,8 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	os64_gui_rect_t text_clip = w->bounds;
 	if (radius > 0) { text_clip.x += radius; text_clip.w -= 2 * radius; }
 	if (placed)
-		os64_ui_draw_text(ui, &w->run, OS64_FONT_ROLE_UI, &ctx->surf, text_clip,
-		                  tx, ty, w->text ? w->text : "", len, t->button_fg, face);
+		os64_ui_draw_run(ui, w->run, OS64_FONT_ROLE_UI, &ctx->surf, text_clip,
+		                 tx, ty, w->text ? w->text : "", len, t->button_fg, face);
 }
 
 static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,

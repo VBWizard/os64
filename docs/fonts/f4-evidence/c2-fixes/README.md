@@ -37,3 +37,14 @@ re-review* in [F4-C2-REPORT.md](../../F4-C2-REPORT.md).
 |---|---|
 | `r2-selftest-pass-41.png` | the self-test after R6..R8: still `PASS, 41 checks, 0 failed` |
 | `r2-production-scribe-field.png` | `/bin/scribe`: Ctrl+O's field focused, a typed path, caret at its end |
+
+## Against the second re-review (the R6 follow-up)
+
+`c2-review-r3-after.txt` is her `../c2-review-r3/run.py` against the
+corrected tree: the paint that meets a refused binding is wholly bitmap
+(caret 42, highlight to 41, no run made), the next is wholly run (34, 33),
+and the field's caret sits at 44, the end of the text it drew.
+
+| File | Shows |
+|---|---|
+| `r3-selftest-pass-41.png` | the self-test after the follow-up: still `PASS, 41 checks, 0 failed` |

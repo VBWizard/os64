@@ -1704,6 +1704,156 @@ static void ui_test_click(os64_ui_widget_t *w, os64_ui_t *ui, int32_t x, int32_t
     w->cls->event(w, ui, &ev);
 }
 
+/* C2-R6 FOLLOW-UP — ONE RENDERING PER PAINT. A binding that could not be
+ * made is tried again at the next lookup, so a paint that looked twice could
+ * place its caret in bitmap cells and then draw a run, or the reverse. Each
+ * painter now chooses once. The test needs no coordinates. A paint that
+ * meets ONE refused binding must be pixel-identical to a paint where the
+ * binding is refused throughout, which is all bitmap. The repaint after it
+ * must be pixel-identical to a paint by a window whose binding already
+ * exists, which is all run. `é` is what tells the two renderings apart: two
+ * bitmap cells, one glyph in a run. */
+enum { UI_TEST_REFUSED_THROUGHOUT, UI_TEST_REFUSED_ONCE, UI_TEST_BOUND };
+static canvas_t gUiTestPaint[3];
+
+static void ui_test_paint_view(int mode, canvas_t *first, canvas_t *second)
+{
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    os64_ui_textview(&gUiTestView, &kUiTestBuf, NULL, NULL, NULL);
+    gUiTestView.w.bounds = (os64_gui_rect_t){0, 0, 300, 20};  /* one row */
+    os64_ui_set_root(&ui, &gUiTestView.w);
+    gUiTestView.w.focused = true;
+    gUiTestView.top = 3;                                  /* "café composed" */
+    gUiTestView.cur_line = 3; gUiTestView.cur_col = 5;
+    gUiTestView.sel = true;
+    gUiTestView.sel_line = 3; gUiTestView.sel_col = 3;    /* é selected */
+    /* Its row slot exists already, so the binding is the paint's first
+     * allocation and the one the single refusal lands on. */
+    gUiTestView.row_runs = os64_malloc(sizeof(*gUiTestView.row_runs));
+    gUiTestView.row_runs[0] = NULL;
+    gUiTestView.row_run_count = 1;
+    if (mode == UI_TEST_BOUND)
+        CHECK(os64_ui_font_context(&ui) != NULL);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    canvas_init(first, 0xff000000);
+    ctx.surf = first->s;
+    if (mode == UI_TEST_REFUSED_THROUGHOUT) ui_test_deny_all = true;
+    if (mode == UI_TEST_REFUSED_ONCE) deny_countdown = 0;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    ui_test_deny_all = false;
+    deny_countdown = -1;
+    if (second) {
+        canvas_init(second, 0xff000000);
+        ctx.surf = second->s;
+        gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    }
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+}
+
+static void ui_test_paint_field(int mode, canvas_t *first, canvas_t *second)
+{
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    ui.theme.field_fg = 0xffffffff;
+    char buf[32];
+    os64_ui_textfield_t tf;
+    os64_ui_textfield(&tf, buf, sizeof(buf), NULL, NULL, NULL);
+    tf.w.bounds = (os64_gui_rect_t){0, 0, 150, 32};
+    os64_ui_set_root(&ui, &tf.w);
+    tf.w.focused = true;
+    ui_test_deny_all = true;               /* set without making a binding */
+    os64_ui_textfield_set(&ui, &tf, "caf\xc3\xa9");
+    ui_test_deny_all = false;
+    if (mode == UI_TEST_BOUND)
+        CHECK(os64_ui_font_context(&ui) != NULL);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    canvas_init(first, 0xff000000);
+    ctx.surf = first->s;
+    if (mode == UI_TEST_REFUSED_THROUGHOUT) ui_test_deny_all = true;
+    if (mode == UI_TEST_REFUSED_ONCE) deny_countdown = 0;
+    tf.w.cls->paint(&tf.w, &ctx, &ui.theme);
+    ui_test_deny_all = false;
+    deny_countdown = -1;
+    if (second) {
+        canvas_init(second, 0xff000000);
+        ctx.surf = second->s;
+        tf.w.cls->paint(&tf.w, &ctx, &ui.theme);
+    }
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+}
+
+static void ui_test_paint_button(int mode, canvas_t *first, canvas_t *second)
+{
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    ui.theme.button_fg = 0xffffffff;
+    os64_ui_widget_t btn;
+    os64_ui_button(&btn, "Caf\xc3\xa9", NULL, NULL);
+    btn.bounds = (os64_gui_rect_t){0, 0, 100, 30};
+    os64_ui_set_root(&ui, &btn);
+    if (mode == UI_TEST_BOUND)
+        CHECK(os64_ui_font_context(&ui) != NULL);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    canvas_init(first, 0xff000000);
+    ctx.surf = first->s;
+    if (mode == UI_TEST_REFUSED_THROUGHOUT) ui_test_deny_all = true;
+    if (mode == UI_TEST_REFUSED_ONCE) deny_countdown = 0;
+    btn.cls->paint(&btn, &ctx, &ui.theme);
+    ui_test_deny_all = false;
+    deny_countdown = -1;
+    if (second) {
+        canvas_init(second, 0xff000000);
+        ctx.surf = second->s;
+        btn.cls->paint(&btn, &ctx, &ui.theme);
+    }
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+}
+
+static bool ui_test_same(const canvas_t *a, const canvas_t *b)
+{
+    return memcmp(a->px, b->px, sizeof(a->px)) == 0;
+}
+
+static void one_rendering_per_paint(void)
+{
+    current = "one rendering per paint";
+    canvas_t *bitmap = &gUiTestPaint[0], *run = &gUiTestPaint[1], *once = &gUiTestPaint[2];
+    static canvas_t after;
+    void (*const painters[])(int, canvas_t *, canvas_t *) = {
+        ui_test_paint_view, ui_test_paint_field, ui_test_paint_button,
+    };
+    for (size_t i = 0; i < 3; ++i) {
+        painters[i](UI_TEST_REFUSED_THROUGHOUT, bitmap, NULL);
+        painters[i](UI_TEST_BOUND, run, NULL);
+        CHECK(!ui_test_same(bitmap, run));     /* the renderings really differ */
+        painters[i](UI_TEST_REFUSED_ONCE, once, &after);
+        CHECK(ui_test_same(once, bitmap));     /* the first paint: all bitmap */
+        CHECK(ui_test_same(&after, run));      /* the next: all run */
+    }
+
+    /* The view's own numbers, for the record: in that bitmap paint the
+     * caret starts after five cells and the highlight ends with é's second
+     * cell, 2 + 40 and 2 + 39 with the view's inset of 2. */
+    ui_test_paint_view(UI_TEST_REFUSED_ONCE, once, NULL);
+    int32_t caret_x = -1, lit_right = -1;
+    for (int32_t y = 2; y < 18; ++y)
+        for (int32_t x = 2; x < 298; ++x) {
+            uint32_t p = once->px[y * SURF_W + x];
+            if (p == 0xffff0000 && (caret_x < 0 || x < caret_x)) caret_x = x;
+            if (p == 0xff0000ff && x > lit_right) lit_right = x;
+        }
+    CHECK(caret_x == 2 + 40);
+    CHECK(lit_right == 2 + 39);
+    current = "";
+}
+
 static void editors_without_a_face(const char *dir)
 {
     current = "no face";
@@ -1945,6 +2095,7 @@ int main(int argc, char **argv)
     textfield_scroll_follows_the_face(dir);
     textview_scroll_follows_the_face(dir);
     editors_without_a_face(dir);
+    one_rendering_per_paint();
 #else
     (void)slurp;
     (void)rows_touched_outside;
