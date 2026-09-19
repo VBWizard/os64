@@ -7,12 +7,13 @@ Quinn’s review of e289ca3 is recorded in
 [F4-C2-QUINN-REVIEW.md](F4-C2-QUINN-REVIEW.md), with reproduced findings,
 correction requirements and runnable host evidence. C2 acceptance is pending.
 
-**Quinn correction re-review (2026-09-19):**
-[rulings and current disposition](F4-C2-QUINN-REVIEW.md#correction-re-review--2026-09-19).
-The original five findings are resolved in the reviewed working tree over
-e289ca3. C2-R6–R8 remain: usable engine-absent editor geometry, field caret
-settlement after deletion, and cluster-safe capacity truncation during paste.
-All five questions under *For your ruling* are answered in that review.
+**Quinn second correction re-review (2026-09-19), a690193:**
+[current disposition and evidence](F4-C2-QUINN-REVIEW.md#second-correction-re-review--a690193).
+R1–R5, R7 and R8 are resolved. R6's original absent-engine case is fixed;
+one P2 follow-up remains because transient binding recovery can mix bitmap
+and run geometry during the same paint. C2 acceptance remains pending.
+All five [previous rulings](F4-C2-QUINN-REVIEW.md#answers-to-all-five-requested-rulings)
+stand.
 
 > **Ready for re-review, second pass.** The five first-round findings
 > (C2-R1..R5) and the re-review's three (C2-R6..R8) each reproduced here

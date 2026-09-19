@@ -1,9 +1,9 @@
 # Quinn review — F4 checkpoint 2
 
-**Latest: [correction re-review](#correction-re-review--2026-09-19).** The five
-original findings are resolved in the reviewed working tree. Three P2 items
-remain before C2 acceptance; all five requested coordinator rulings are below.
-The original review and evidence follow unchanged as the historical receipt.
+**Latest: [second correction re-review](#second-correction-re-review--a690193).**
+R1–R5, R7 and R8 are resolved. R6's original absent-engine case is corrected;
+one P2 follow-up remains for transient recovery during paint. C2 acceptance
+is pending that correction. Earlier reviews/evidence remain historical receipts.
 
 2026-09-19. Reviewed **e289ca3** on `opus/font-widgets`, against the accepted
 C1 implementation **f76093c** and its acceptance receipts d72dddf/eb66c85.
@@ -396,3 +396,117 @@ The supplemental executable prints observations; exit zero means it completed,
 not that its observed behavior meets the contract. Fix these three paths and
 rerun the affected consumer tests and review probes before returning for C2
 acceptance. No new standing agent-prompt rule is needed.
+
+## Second correction re-review — a690193
+
+2026-09-19. Reviewed **a6901938acd0471d36caa2997fea8fd5df612ad4** on
+`opus/font-widgets`, a clean working tree before this review's documentation
+and probes. This commit includes both correction rounds over e289ca3; the
+earlier reviews were committed separately as 757492f.
+
+**Disposition: one P2 follow-up to R6 remains before C2 acceptance/C3.**
+R1–R5 remain resolved. R7 and R8 are now resolved. The exact R6 failure from
+the previous review is fixed, but transient recovery exposes another case of
+text and overlays using different geometry within the same paint.
+
+### Corrections verified
+
+- **R6, persistent engine absence:** both widgets now paint 32 caret pixels;
+  the view paints 452 selection-background pixels. The shared geometry
+  helpers cover clicks, vertical goals and horizontal caret tracking. The
+  suite distinguishes absent-engine fallback from installed-face layout
+  refusal, and tests nearest legal endpoints in the bitmap path.
+- **R7:** removing the separator in `e1` + U+0301 settles the field caret at
+  byte 3. The next Delete changes nothing; the next Backspace removes the
+  whole cluster. The added malformed-byte junction case is also covered.
+- **R8:** pasting `é` with one byte free adds nothing and preserves `abc`,
+  caret 3. Reading available room plus four bytes is sufficient to decide
+  the cut under the current W1 decoder: a cluster continuing past the cut
+  needs to be recognized, not buffered to its eventual end. Tests cover
+  encoded/decomposed accents, suffix preservation, short reads, original
+  malformed bytes, and first-line-only paste.
+- All seven first-review probe modes still show the corrected behavior,
+  including zero commit allocations and exact unchanged saves.
+
+### C2-R6 follow-up — P2: hold one rendering choice through a paint
+
+Locations at a690193: `userland/libos64/ui_text.c:435–441`, `field_paint`;
+`:1037–1060`, `textview_paint`; `ui_font.c`'s lazy binding and draw lookup.
+
+The absence of a binding is retryable. If the binding allocation fails,
+`role_layout` returns OK with no run and leaves `ui->font` NULL. A second
+lookup in the same paint can then succeed and create the builtin W1 run.
+The new geometry object records the earlier choice, while drawing or caret
+placement independently resolves the choice again.
+
+This reproduces with one denied allocation; the allocator is available for
+the rest of the paint. It does not require an oversized line or a font switch.
+
+**Textview:** display `café composed`, select source bytes [3,5), caret 5.
+Keep a row slot allocated, start without a binding, and deny its allocation.
+`tv_run` chooses byte-cell geometry, then `os64_ui_draw_text` successfully
+creates and draws the W1 run. That run places byte 5 at local X=32, but the
+overlay still treats five bytes as 40 pixels. With origin X=2:
+
+- Actual painted caret: **42**, where the run says **34**.
+- Selection's rightmost painted pixel: **41**, where the run's span ends at
+  **33**. The highlight includes the following space although its source
+  byte is not selected.
+- A second paint of unchanged bytes corrects both positions to 34 and 33.
+
+**Textfield:** the order is reversed. Drawing hits the refused binding and
+paints `café` as five bitmap cells, ending at X=44 with inset 4. The subsequent
+`field_geom` lookup succeeds and positions the caret from the four-glyph W1
+run at **X=36**, inside the text that was just painted.
+
+These results are captured in the
+[supplemental observations](f4-evidence/c2-review-r3/observations.txt).
+The retained run, canvas pixels, and next-paint control are measured by the
+probe; the field's bitmap endpoint follows the actual five-cell draw path.
+The supplied persistent-context-failure test cannot catch this because its
+failed binding is retained and never retries during paint.
+
+**Required correction:** resolve the rendering choice once for each painted
+line/field, and use that exact run or bitmap choice for text, highlight and
+caret. In particular, do not feed a resolved bitmap decision back into a
+helper that may create a run before the paint finishes. Recovery on a later
+paint is fine. Keep installed-face layout failure distinct from fallback.
+Merely swapping the current measurement/draw order trades one sibling's
+failure for the other.
+
+Regression: deny the binding allocation once with cold field/view state,
+then allow subsequent allocations. Check the first paint's glyph/selection/
+caret alignment, followed by a successful unchanged repaint. Preserve the
+persistent-no-engine and installed-outline-refusal cases already in the suite.
+
+### Evidence and handback
+
+- Independently rebuilt and ran the O2 real-backend widget suite:
+  **1,018 checks, zero failures**.
+- Independently rebuilt and ran the O2 real-Scribe suite:
+  **2,585 checks, zero failures**.
+- Reran both previous review runners against the freshly built backend
+  objects; their recorded cases pass. The new probe also uses those objects.
+  Probe C is built at O1. All these runs retain ASan+UBSan with LSan disabled.
+- `git diff --check` is clean. No independent full cross-build, O0 run, QEMU
+  repetition, or hardware test this round; Opus's receipts remain attributed
+  to him. This checkpoint is not F4 completion or merge approval.
+- No production edits, commits, pushes, or C3 work. All five previous rulings
+  stand; no new design decision or user clarification is needed. Fix the
+  single shared paint-consistency issue and return for C2 acceptance.
+
+Durable evidence: [widget suite](f4-evidence/c2-review-r3/widget-host.txt),
+[Scribe suite](f4-evidence/c2-review-r3/scribe-host.txt),
+[original probes](f4-evidence/c2-review-r3/r1-after.txt),
+[previous correction probes](f4-evidence/c2-review-r3/r2-after.txt),
+[new probe](f4-evidence/c2-review-r3/repro.c),
+[runner](f4-evidence/c2-review-r3/run.py).
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_ui_text_host.py --real --output /tmp/c2-current
+python3 docs/fonts/f4-evidence/c2-review-r3/run.py --baseline /tmp/c2-current --output /tmp/c2-r3-extra
+```
+
+As in the earlier review runners, zero exit status means the observations
+completed, not that the observed behavior satisfies the contract. Prior raw
+captures have not been overwritten.
