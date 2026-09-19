@@ -37,7 +37,7 @@ flags = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
 flags += ['-I'+str(ROOT/p) for p in
           ['userland/libos64/include', 'userland/libos64', 'abi/include']]
 sources = [ROOT/('userland/libos64/'+n+'.c') for n in
-           ['ui_font', 'ui', 'ui_controls', 'ui_list', 'font_provider', 'font_adopt',
+           ['ui_font', 'ui', 'ui_controls', 'ui_list', 'ui_text', 'font_provider', 'font_adopt',
             'text', 'text_cache', 'text_decode', 'text_bitmap', 'text_draw', 'draw', 'str']]
 subprocess.run(['cc', *flags, str(HERE/'r4-check.c'), *map(str, sources+objects),
                 '-o', str(out/'r4-check')], check=True)

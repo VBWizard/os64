@@ -30,7 +30,7 @@ if not a.real: sources.append('tools/fonts/fake_backend.c')
 # array, which is the shape C2's textview will need. A suite that did not
 # link it could not see its staging or its teardown.
 sources+=['userland/libos64/'+name+'.c' for name in
-          ['ui_font','ui','ui_controls','ui_list','font_provider','font_adopt','text',
+          ['ui_font','ui','ui_controls','ui_list','ui_text','font_provider','font_adopt','text',
            'text_cache','text_decode','text_bitmap','text_draw','draw','str']]
 subprocess.run(['cc',*flags,*[str(ROOT/s) for s in sources],*objects,'-o',str(out/'test_ui_text')],check=True)
 result=subprocess.run([str(out/'test_ui_text'),str(ROOT/'userland/libfreetype/fixtures')],env=os.environ)

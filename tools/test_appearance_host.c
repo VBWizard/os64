@@ -328,6 +328,10 @@ static void interaction_contracts(void)
     assert(sl.value == INT_MIN);
     os64_ui_slider(&sl, 7, -5, 0, INT_MAX, NULL, NULL);
     assert(sl.min == 7 && sl.max == 7 && sl.step == 1 && sl.value == 7);
+    // Widgets retain runs now — a textview keeps one for the caret's line,
+    // a listbox one per visible row — so a leak-checked harness has to hand
+    // them back the way an application would.
+    os64_ui_font_release(&ui);
 }
 
 static void queue_preserves_final_pointer(void)
@@ -439,6 +443,10 @@ static void text_focus_preserves_literal_tabs(void)
     assert(read.cur_col == before); // hover must not become a selection drag
     os64_ui_set_enabled(&ui, &field.w, false);
     os64_ui_set_focus(&ui, &field.w); assert(ui.focus == &read.w);
+    // Widgets retain runs now — a textview keeps one for the caret's line,
+    // a listbox one per visible row — so a leak-checked harness has to hand
+    // them back the way an application would.
+    os64_ui_font_release(&ui);
 }
 
 static void render_composes_independent_trees(void)
@@ -466,6 +474,11 @@ static void render_composes_independent_trees(void)
     assert(pixels[2 * 16 + 2] == outer.theme.panel_bg);
     assert(pixels[6 * 16 + 6] == inner.theme.panel_bg);
     assert(!os64_ui_render(&inner, NULL));
+    // Widgets retain runs now — a textview keeps one for the caret's line,
+    // a listbox one per visible row — so a leak-checked harness has to hand
+    // them back the way an application would.
+    os64_ui_font_release(&outer);
+    os64_ui_font_release(&inner);
 }
 
 static const char *list_label(size_t index, void *user)
@@ -512,6 +525,10 @@ static void list_contracts(void)
             if (x < 2 || x >= 2 + w || y < 2 || y >= 2 + h)
                 assert(pixels[y * 32 + x] == 0x12345678);
     }
+    // Widgets retain runs now — a textview keeps one for the caret's line,
+    // a listbox one per visible row — so a leak-checked harness has to hand
+    // them back the way an application would.
+    os64_ui_font_release(&ui);
 }
 
 static void rounded_and_color_contracts(void)
@@ -641,6 +658,10 @@ static void picker_contracts(void)
             if (x < 2 || x >= 2 + w || y < 2 || y >= 2 + h)
                 assert(pixels[y * 48 + x] == 0x12345678);
     }
+    // Widgets retain runs now — a textview keeps one for the caret's line,
+    // a listbox one per visible row — so a leak-checked harness has to hand
+    // them back the way an application would.
+    os64_ui_font_release(&ui);
 }
 
 int main(void)

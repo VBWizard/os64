@@ -42,7 +42,7 @@ void appearance_customizer_contracts(void)
         os64_ui_render(&gEditor, NULL); os64_ui_render(&gPreview, NULL);
         for (unsigned j = 0; j < 3; ++j) assert(gPages[j].hidden == (i != j));
     }
-    assert(gText.left == 0 && gText.sel);
+    assert(gText.left_px == 0 && gText.sel);
     // The minimum supported native content area still contains its children.
     gCtx.surf.height = 696; layout();
     contained(&gRoot); contained(&gCanvas);

@@ -10,6 +10,7 @@
 #include "os64/str.h"
 #include "os64/io.h"     // the clipboard is a FILE — open/read/write/close
 #include "os64/clip.h"   // ...at OS64_CLIPBOARD_PATH
+#include "os64/mem.h"    // the visible lines' run arrays
 
 // ── decoding the keyboard's 1979 vocabulary ─────────────────────────────────
 //
@@ -103,42 +104,6 @@ ui_key_t os64_ui_decode_key(uint8_t *seq, const os64_gui_event_t *ev, char *ch)
 		return K_CHAR;
 	}
 	return K_NONE;   // other control bytes are the APP's (Ctrl+S et al.)
-}
-
-// ── tab-aware column geometry ───────────────────────────────────────────────
-// The buffer stores BYTES; the screen shows VISUAL columns, and the two
-// diverge at every '\t' (next multiple-of-8 stop — the teletype's number,
-// and /proc's files are tab-separated, which is why a log-reading editor
-// cannot fake this with one glyph).
-
-#define TAB_STOP 8
-
-static int64_t vcol_step(int64_t v, char c)
-{
-	return (c == '\t') ? ((v / TAB_STOP) + 1) * TAB_STOP : v + 1;
-}
-
-static int64_t vcol_of(const char *s, size_t len, size_t col)
-{
-	int64_t v = 0;
-	if (col > len)
-		col = len;
-	for (size_t i = 0; i < col; i++)
-		v = vcol_step(v, s[i]);
-	return v;
-}
-
-// The byte whose cell covers `vcol` (or the line end if vcol is past it).
-static size_t byte_of(const char *s, size_t len, int64_t vcol)
-{
-	int64_t v = 0;
-	for (size_t i = 0; i < len; i++) {
-		int64_t next = vcol_step(v, s[i]);
-		if (vcol < next)
-			return i;
-		v = next;
-	}
-	return len;
 }
 
 // ── ui_scrollbar ────────────────────────────────────────────────────────────
@@ -291,46 +256,86 @@ static int32_t field_inset(const os64_ui_theme_t *t)
     return radius > 3 ? radius + 1 : 4;
 }
 
-static int32_t field_cols(const os64_ui_textfield_t *tf, const os64_ui_theme_t *t)
+// The field's text is ONE LINE, laid out whole into the widget's own run —
+// the same slot a label's caption lives in, which is why the constructor
+// points `w.text` at the buffer: adoption stages it like any caption, and a
+// paint after a font change allocates nothing. The run answers the caret,
+// the click and the scroll; nothing here counts cells.
+static void *field_run(os64_ui_textfield_t *tf, os64_ui_t *ui)
 {
-	int32_t c = (tf->w.bounds.w - 2 * field_inset(t)) / t->font_w;
-	return c > 0 ? c : 1;
+	if (os64_ui_run_matches(tf->w.run, tf->buf, tf->len))
+		return tf->w.run;
+	void *run = NULL;
+	if (os64_ui_run_layout(ui, OS64_FONT_ROLE_UI, tf->buf, tf->len, &run) != OS64_FONT_OK)
+		return NULL;
+	if (run) {
+		os64_ui_run_release(tf->w.run);
+		tf->w.run = run;
+	}
+	return run;
 }
 
-static void field_keep_caret_visible(os64_ui_textfield_t *tf,
-                                     const os64_ui_theme_t *t)
+static void field_keep_caret_visible(os64_ui_textfield_t *tf, os64_ui_t *ui)
 {
-	size_t cols = (size_t)field_cols(tf, t);
-	if (tf->cursor < tf->first)
-		tf->first = tf->cursor;
-	if (tf->cursor >= tf->first + cols)
-		tf->first = tf->cursor - cols + 1;
+	int32_t width = tf->w.bounds.w - 2 * field_inset(&ui->theme);
+	int32_t cx = 0;
+	void *run = field_run(tf, ui);
+	if (!run || os64_ui_run_caret(run, tf->cursor, false, &cx) != OS64_FONT_OK)
+		return;                        // keep the scroll rather than guess one
+	if (cx < tf->left_px)
+		tf->left_px = cx;
+	if (cx > tf->left_px + width - 2)
+		tf->left_px = cx - width + 2;
+	if (tf->left_px < 0)
+		tf->left_px = 0;
+}
+
+// One cluster either way, so Backspace over an accented letter removes the
+// letter and not half of its encoding. Falls back to a byte only when the
+// window wears no face, where every byte IS a cluster.
+static size_t field_step(os64_ui_textfield_t *tf, os64_ui_t *ui, bool forward)
+{
+	void *run = field_run(tf, ui);
+	size_t to = tf->cursor;
+	if (run && os64_ui_run_step(run, tf->cursor, forward, &to) == OS64_FONT_OK)
+		return to;
+	if (forward)
+		return tf->cursor < tf->len ? tf->cursor + 1 : tf->len;
+	return tf->cursor > 0 ? tf->cursor - 1 : 0;
+}
+
+// A field is one row of text inside a control's furniture — a button's
+// arithmetic.
+static void field_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+	w->natural_h = os64_ui_control_min_height(ui);
 }
 
 static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
                         const os64_ui_theme_t *t)
 {
 	os64_ui_textfield_t *tf = (os64_ui_textfield_t *)w;
+	os64_ui_t *ui = os64_ui_of(w);
 	os64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);
 	os64_draw_fill_round_rect(&ctx->surf, w->bounds, t->control_radius, t->field_bg);
 	uint32_t border = w->focused ? t->field_border_focus : t->field_border;
 	os64_draw_round_rect(&ctx->surf, w->bounds, t->control_radius, border, border);
 
-	int32_t cols = field_cols(tf, t);
-	size_t n = tf->len > tf->first ? tf->len - tf->first : 0;
-	if (n > (size_t)cols)
-		n = (size_t)cols;
-	int32_t ty = w->bounds.y + (w->bounds.h - t->font_h) / 2;
-	os64_draw_text_clipped(&ctx->surf, w->bounds, w->bounds.x + field_inset(t), ty,
-	               tf->buf + tf->first, n, t->field_fg, t->field_bg);
+	int32_t inset = field_inset(t);
+	os64_gui_rect_t inner = { w->bounds.x + inset, w->bounds.y,
+	                          w->bounds.w - 2 * inset, w->bounds.h };
+	int32_t row = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
+	int32_t ty = w->bounds.y + (w->bounds.h - row) / 2;
+	int32_t origin = inner.x - tf->left_px;
+	os64_ui_draw_text(ui, &tf->w.run, OS64_FONT_ROLE_UI, &ctx->surf, inner,
+	                  origin, ty, tf->buf, tf->len, t->field_fg, t->field_bg);
 
-	if (w->focused && tf->cursor >= tf->first &&
-	    tf->cursor <= tf->first + (size_t)cols) {
-		int32_t cx = w->bounds.x + field_inset(t) +
-		             (int32_t)(tf->cursor - tf->first) * t->font_w;
-		os64_gui_rect_t caret = { cx, ty, 2, t->font_h };
+	int32_t cx = 0;
+	void *run = w->focused ? field_run(tf, ui) : NULL;
+	if (run && os64_ui_run_caret(run, tf->cursor, false, &cx) == OS64_FONT_OK) {
+		os64_gui_rect_t caret = { origin + cx, ty, 2, row };
 		os64_gui_rect_t clipped;
-		if (os64_rect_intersect(caret, w->bounds, &clipped))
+		if (os64_rect_intersect(caret, inner, &clipped))
 			os64_draw_fill_rect(&ctx->surf, clipped, t->text_caret);
 	}
 }
@@ -344,9 +349,13 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	switch (ev->type) {
 	case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN: {
 		os64_ui_set_focus(ui, w);
-		int32_t cell = (ev->mouse.x - w->bounds.x - field_inset(t)) / t->font_w;
-		size_t cur = tf->first + (size_t)(cell > 0 ? cell : 0);
-		tf->cursor = cur > tf->len ? tf->len : cur;
+		// The pixel of the TEXT under the pointer, which the run turns into
+		// a legal boundary — never the middle of a letter.
+		int32_t x = ev->mouse.x - w->bounds.x - field_inset(t) + tf->left_px;
+		void *run = field_run(tf, ui);
+		size_t at = 0;
+		if (run && os64_ui_run_hit(run, x > 0 ? x : 0, &at) == OS64_FONT_OK)
+			tf->cursor = at;
 		os64_ui_mark_dirty(ui, w);
 		return true;
 	}
@@ -366,22 +375,27 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 			}
 			break;
 		case K_BACKSPACE:
+			// A whole cluster: the span from the previous boundary to here.
 			if (tf->cursor > 0) {
-				os64_memmove(tf->buf + tf->cursor - 1, tf->buf + tf->cursor,
-				             tf->len - tf->cursor + 1);
-				tf->cursor--;
-				tf->len--;
+				size_t from = field_step(tf, ui, false);
+				size_t gone = tf->cursor - from;
+				os64_memmove(tf->buf + from, tf->buf + tf->cursor,
+				             tf->len - tf->cursor + 1);   // +1 rides the NUL
+				tf->cursor = from;
+				tf->len -= gone;
 			}
 			break;
 		case K_DELETE:
 			if (tf->cursor < tf->len) {
-				os64_memmove(tf->buf + tf->cursor, tf->buf + tf->cursor + 1,
-				             tf->len - tf->cursor);
-				tf->len--;
+				size_t to = field_step(tf, ui, true);
+				size_t gone = to - tf->cursor;
+				os64_memmove(tf->buf + tf->cursor, tf->buf + to,
+				             tf->len - to + 1);
+				tf->len -= gone;
 			}
 			break;
-		case K_LEFT:  if (tf->cursor > 0)       tf->cursor--; break;
-		case K_RIGHT: if (tf->cursor < tf->len) tf->cursor++; break;
+		case K_LEFT:  tf->cursor = field_step(tf, ui, false); break;
+		case K_RIGHT: tf->cursor = field_step(tf, ui, true);  break;
 		case K_HOME:  tf->cursor = 0;       break;
 		case K_END:   tf->cursor = tf->len; break;
 		case K_ENTER:
@@ -395,7 +409,7 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		default:
 			return true;   // consumed silently (mid-burst, strangers)
 		}
-		field_keep_caret_visible(tf, t);
+		field_keep_caret_visible(tf, ui);
 		os64_ui_mark_dirty(ui, w);
 		return true;
 	}
@@ -412,7 +426,9 @@ static void field_cancel(os64_ui_widget_t *w)
 }
 
 const os64_ui_class_t os64_ui_textfield_class =
-    { "textfield", field_paint, field_event, field_cancel, 0, 0, 0, 0, 0 };
+    { "textfield", field_paint, field_event, field_cancel,
+      os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption,
+      0, field_metrics };
 
 void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
                        void (*on_submit)(os64_ui_textfield_t *, void *),
@@ -422,6 +438,13 @@ void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
 	*tf = (os64_ui_textfield_t){0};
 	tf->w.cls = &os64_ui_textfield_class;
 	tf->w.focusable = true;
+	// The field's text IS a caption as far as a font change is concerned:
+	// one line, NUL-kept, in storage the application owns. Pointing the
+	// widget's caption at the buffer lets adoption stage it through the same
+	// door a label uses, and the byte comparison on every paint catches the
+	// edits libui makes to it in between.
+	tf->w.text = buf;
+	tf->w.auto_h = true;
 	tf->buf = buf;
 	tf->cap = cap;
 	tf->on_submit = on_submit;
@@ -438,7 +461,8 @@ void os64_ui_textfield_set(os64_ui_t *ui, os64_ui_textfield_t *tf,
 	if (tf->len >= tf->cap)
 		tf->len = tf->cap - 1;   // strcopy reports the untruncated length
 	tf->cursor = tf->len;
-	tf->first = 0;
+	tf->left_px = 0;
+	field_keep_caret_visible(tf, ui);   // the caret is at the END of a long path
 	os64_ui_mark_dirty(ui, &tf->w);
 }
 
@@ -512,7 +536,7 @@ size_t os64_ui_textfield_paste(os64_ui_t *ui, os64_ui_textfield_t *tf)
 
 	os64_close((int32_t)h);
 	if (added > 0) {
-		field_keep_caret_visible(tf, &ui->theme);
+		field_keep_caret_visible(tf, ui);
 		os64_ui_mark_dirty(ui, &tf->w);
 	}
 	return added;
@@ -522,18 +546,204 @@ size_t os64_ui_textfield_paste(os64_ui_t *ui, os64_ui_textfield_t *tf)
 
 #define VIEW_INSET 2
 
+// The pitch this view lays rows out on: the DOCUMENT face's line box, cached
+// on the widget because the call that asks for a row count is handed a theme
+// and a theme cannot carry a face. An unstamped view reads as the bitmap
+// cell, which is what the builtin set gives anyway.
+static int32_t tv_pitch(const os64_ui_textview_t *tv, const os64_ui_theme_t *t)
+{
+	return tv->row_h > 0 ? tv->row_h : t->font_h;
+}
+
 int32_t os64_ui_textview_rows(const os64_ui_textview_t *tv,
                               const os64_ui_theme_t *t)
 {
-	int32_t r = (tv->w.bounds.h - 2 * VIEW_INSET) / t->font_h;
+	int32_t pitch = tv_pitch(tv, t);
+	int32_t r = pitch > 0 ? (tv->w.bounds.h - 2 * VIEW_INSET) / pitch : 0;
 	return r > 0 ? r : 1;
 }
 
-int32_t os64_ui_textview_cols(const os64_ui_textview_t *tv,
-                              const os64_ui_theme_t *t)
+int32_t os64_ui_textview_width(const os64_ui_textview_t *tv)
 {
-	int32_t c = (tv->w.bounds.w - 2 * VIEW_INSET) / t->font_w;
-	return c > 0 ? c : 1;
+	int32_t width = tv->w.bounds.w - 2 * VIEW_INSET;
+	return width > 0 ? width : 1;
+}
+
+static void textview_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+	((os64_ui_textview_t *)w)->row_h =
+		os64_ui_font_row_height(ui, OS64_FONT_ROLE_DOCUMENT);
+}
+
+os64_font_status_t os64_ui_textview_line_width(os64_ui_t *ui,
+                                               const char *s, size_t len,
+                                               int64_t *out)
+{
+	int32_t width = 0;
+	os64_font_status_t status =
+		os64_ui_text_measure(ui, OS64_FONT_ROLE_DOCUMENT, s, len, &width);
+	if (status == OS64_FONT_OK)
+		*out = width;
+	return status;
+}
+
+// Defined with the rest of the model accessors below; the run cache needs
+// them and sits next to the geometry it serves.
+static const char *tv_line(const os64_ui_textview_t *tv, size_t i, size_t *len);
+static size_t tv_count(const os64_ui_textview_t *tv);
+
+// ── the visible lines' runs ─────────────────────────────────────────────────
+// One per row the view can show, plus one for the line the caret is on —
+// which is usually the same line, and is kept separately because motion
+// happens before the scroll that brings it back into view.
+
+static void tv_free_runs(void ***runs, size_t *count)
+{
+	for (size_t i = 0; i < *count; ++i)
+		os64_ui_run_release((*runs)[i]);
+	os64_free(*runs);
+	*runs = NULL;
+	*count = 0;
+}
+
+// The run for a line, in the slot that belongs to it, laid out only if what
+// is there says something else. NULL means this view is wearing no face and
+// the caller should fall back; a failure is reported as NULL too, and the
+// binding remembers why.
+static void *tv_run(os64_ui_t *ui, void **slot, const char *s, size_t len)
+{
+	if (!slot)
+		return NULL;
+	if (os64_ui_run_matches(*slot, s, len))
+		return *slot;
+	void *run = NULL;
+	if (os64_ui_run_layout(ui, OS64_FONT_ROLE_DOCUMENT, s, len, &run) != OS64_FONT_OK)
+		return NULL;
+	if (run) {
+		os64_ui_run_release(*slot);
+		*slot = run;
+	}
+	return run;
+}
+
+// The caret's line, which motion needs whether or not it is on screen.
+static void *tv_caret_run(os64_ui_textview_t *tv, os64_ui_t *ui)
+{
+	size_t len;
+	const char *ln = tv_line(tv, tv->cur_line, &len);
+	return tv_run(ui, &tv->w.run, ln, len);
+}
+
+static os64_font_status_t textview_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+	os64_ui_textview_t *tv = (os64_ui_textview_t *)w;
+	int32_t pitch = os64_ui_font_row_height(ui, OS64_FONT_ROLE_DOCUMENT);
+	os64_gui_rect_t planned = os64_ui_widget_planned_bounds(w);
+	int32_t fits = pitch > 0 ? (planned.h - 2 * VIEW_INSET) / pitch : 0;
+	size_t rows = fits > 0 ? (size_t)fits : 1;
+	int32_t width = planned.w - 2 * VIEW_INSET;
+	size_t count = tv_count(tv);
+
+	// The caret's line FIRST: where the caret is decides where the view has
+	// to be, and the view decides which lines to prepare.
+	size_t len;
+	const char *ln = tv_line(tv, tv->cur_line, &len);
+	void *caret = NULL;
+	os64_font_status_t status =
+		os64_ui_run_layout(ui, OS64_FONT_ROLE_DOCUMENT, ln, len, &caret);
+	if (status != OS64_FONT_OK)
+		return status;
+
+	// THE VIEW THIS FACE WILL SHOW. The vertical half is pure arithmetic on
+	// the candidate's pitch. The horizontal half starts from the old scroll
+	// — a number in the retired face's pixels, kept if it happens to still
+	// show the caret — and moves only as far as the caret requires. The
+	// remembered Up/Down X is re-derived from the caret too, so the next
+	// vertical run holds the lane the caret is actually in.
+	size_t top = tv->top;
+	if (tv->cur_line < top)
+		top = tv->cur_line;
+	if (tv->cur_line >= top + rows)
+		top = tv->cur_line - rows + 1;
+	int64_t left = tv->left_px, goal = tv->goal_x;
+	int32_t cx = 0;
+	if (caret && os64_ui_run_caret(caret, tv->cur_col, false, &cx) == OS64_FONT_OK) {
+		if (cx < left)
+			left = cx;
+		if (cx > left + width - 2)
+			left = cx - width + 2;
+		if (left < 0)
+			left = 0;
+		goal = cx;
+	}
+
+	size_t visible = rows;
+	if (top < count && visible > count - top)
+		visible = count - top;
+	else if (top >= count)
+		visible = 0;
+
+	tv_free_runs(&tv->row_runs_staged, &tv->row_runs_staged_count);
+	if (visible) {
+		void **runs = os64_malloc(visible * sizeof(*runs));
+		if (!runs) {
+			os64_ui_run_release(caret);
+			return OS64_FONT_NO_MEMORY;
+		}
+		for (size_t i = 0; i < visible; ++i)
+			runs[i] = NULL;
+		for (size_t i = 0; i < visible; ++i) {
+			const char *row = tv_line(tv, top + i, &len);
+			status = os64_ui_run_layout(ui, OS64_FONT_ROLE_DOCUMENT, row, len, &runs[i]);
+			if (status != OS64_FONT_OK) {
+				for (size_t j = 0; j < i; ++j)
+					os64_ui_run_release(runs[j]);
+				os64_free(runs);
+				os64_ui_run_release(caret);
+				return status;
+			}
+		}
+		tv->row_runs_staged = runs;
+		tv->row_runs_staged_count = visible;
+	}
+
+	os64_ui_run_release(w->run_staged);
+	w->run_staged = caret;
+	tv->top_staged = top;
+	tv->left_staged = left;
+	tv->goal_staged = goal;
+	return OS64_FONT_OK;
+}
+
+// Everything here was decided in preparation; commit only moves it into
+// place, so it cannot allocate and cannot fail. It fires no callback either
+// — the application's own commit runs next and brings its scrollbars along.
+static void textview_commit(os64_ui_widget_t *w)
+{
+	os64_ui_textview_t *tv = (os64_ui_textview_t *)w;
+	tv_free_runs(&tv->row_runs, &tv->row_run_count);
+	tv->row_runs = tv->row_runs_staged;
+	tv->row_run_count = tv->row_runs_staged_count;
+	tv->row_runs_staged = NULL;
+	tv->row_runs_staged_count = 0;
+	os64_ui_commit_caption(w);          // the caret line's run
+	tv->top = tv->top_staged;
+	tv->left_px = tv->left_staged;
+	tv->goal_x = tv->goal_staged;
+}
+
+static void textview_discard(os64_ui_widget_t *w)
+{
+	os64_ui_textview_t *tv = (os64_ui_textview_t *)w;
+	tv_free_runs(&tv->row_runs_staged, &tv->row_runs_staged_count);
+	os64_ui_discard_caption(w);
+}
+
+static void textview_destroy(os64_ui_widget_t *w)
+{
+	os64_ui_textview_t *tv = (os64_ui_textview_t *)w;
+	tv_free_runs(&tv->row_runs, &tv->row_run_count);
+	tv_free_runs(&tv->row_runs_staged, &tv->row_runs_staged_count);
 }
 
 static const char *tv_line(const os64_ui_textview_t *tv, size_t i, size_t *len)
@@ -571,14 +781,6 @@ static bool tv_sel_range(const os64_ui_textview_t *tv,
 	return !(*sl == *el && *sc == *ec);
 }
 
-static bool tv_byte_selected(size_t li, size_t b,
-                             size_t sl, size_t sc, size_t el, size_t ec)
-{
-	if (li < sl || li > el) return false;
-	if (li == sl && b < sc) return false;
-	if (li == el && b >= ec) return false;
-	return true;
-}
 
 static void tv_fire_view(os64_ui_textview_t *tv)
 {
@@ -591,26 +793,32 @@ static void tv_ensure_visible(os64_ui_t *ui, os64_ui_textview_t *tv)
 {
 	const os64_ui_theme_t *t = &ui->theme;
 	int32_t rows = os64_ui_textview_rows(tv, t);
-	int32_t cols = os64_ui_textview_cols(tv, t);
+	int32_t width = os64_ui_textview_width(tv);
 	size_t old_top = tv->top;
-	int64_t old_left = tv->left;
+	int64_t old_left = tv->left_px;
 
 	if (tv->cur_line < tv->top)
 		tv->top = tv->cur_line;
 	if (tv->cur_line >= tv->top + (size_t)rows)
 		tv->top = tv->cur_line - (size_t)rows + 1;
 
-	size_t len;
-	const char *ln = tv_line(tv, tv->cur_line, &len);
-	int64_t cv = vcol_of(ln, len, tv->cur_col);
-	if (cv < tv->left)
-		tv->left = cv;
-	if (cv >= tv->left + cols)
-		tv->left = cv - cols + 1;
-	if (tv->left < 0)
-		tv->left = 0;
+	// A caret that cannot be located leaves the horizontal scroll alone
+	// rather than jumping somewhere arbitrary; the vertical half above is
+	// pure arithmetic and always right.
+	int32_t cx = 0;
+	void *run = tv_caret_run(tv, ui);
+	if (run && os64_ui_run_caret(run, tv->cur_col, false, &cx) == OS64_FONT_OK) {
+		// A couple of pixels of air, so the caret is not flush against the
+		// edge it just scrolled to.
+		if (cx < tv->left_px)
+			tv->left_px = cx;
+		if (cx > tv->left_px + width - 2)
+			tv->left_px = cx - width + 2;
+		if (tv->left_px < 0)
+			tv->left_px = 0;
+	}
 
-	if (tv->top != old_top || tv->left != old_left)
+	if (tv->top != old_top || tv->left_px != old_left)
 		tv_fire_view(tv);
 	os64_ui_mark_dirty(ui, &tv->w);
 }
@@ -619,13 +827,21 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
                            const os64_ui_theme_t *t)
 {
 	os64_ui_textview_t *tv = (os64_ui_textview_t *)w;
+	os64_ui_t *ui = os64_ui_of(w);
 	os64_draw_fill_rect(&ctx->surf, w->bounds, t->text_bg);
 
 	int32_t rows = os64_ui_textview_rows(tv, t);
-	int32_t cols = os64_ui_textview_cols(tv, t);
+	int32_t pitch = tv_pitch(tv, t);
 	size_t count = tv_count(tv);
 	size_t sl = 0, sc = 0, el = 0, ec = 0;
 	bool have_sel = tv_sel_range(tv, &sl, &sc, &el, &ec);
+
+	// The paper the text sits on, and the origin the line's own pixel zero
+	// maps to once the view has scrolled.
+	os64_gui_rect_t area = { w->bounds.x + VIEW_INSET, w->bounds.y + VIEW_INSET,
+	                         w->bounds.w - 2 * VIEW_INSET,
+	                         w->bounds.h - 2 * VIEW_INSET };
+	int32_t origin = area.x - (int32_t)tv->left_px;
 
 	for (int32_t r = 0; r < rows; r++) {
 		size_t li = tv->top + (size_t)r;
@@ -633,43 +849,60 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 			break;
 		size_t len;
 		const char *ln = tv_line(tv, li, &len);
-		int32_t y = w->bounds.y + VIEW_INSET + r * t->font_h;
+		int32_t y = area.y + r * pitch;
+		os64_gui_rect_t row = { area.x, y, area.w, pitch };
+		os64_gui_rect_t clip;
+		if (!os64_rect_intersect(row, area, &clip))
+			continue;
 
-		int64_t v = 0;
-		for (size_t b = 0; b < len && v < tv->left + cols; b++) {
-			char c = ln[b];
-			int64_t vnext = vcol_step(v, c);
-			bool selq = have_sel && tv_byte_selected(li, b, sl, sc, el, ec);
-			uint32_t fg = selq ? t->text_sel_fg : t->text_fg;
-			uint32_t bg = selq ? t->text_sel_bg : t->text_bg;
+		void **slot = (size_t)r < tv->row_run_count ? &tv->row_runs[r] : NULL;
 
-			if (c == '\t') {
-				// A tab is background all the way to its stop — lit
-				// background when selected, so a selection over a tab is
-				// visibly a selection over a tab.
-				int64_t from = v < tv->left ? tv->left : v;
-				int64_t to = vnext > tv->left + cols ? tv->left + cols : vnext;
-				if (selq && to > from) {
-					os64_gui_rect_t span = {
-						w->bounds.x + VIEW_INSET + (int32_t)(from - tv->left) * t->font_w,
-						y, (int32_t)(to - from) * t->font_w, t->font_h };
-					os64_draw_fill_rect(&ctx->surf, span, bg);
-				}
-			} else if (v >= tv->left) {
-				int32_t x = w->bounds.x + VIEW_INSET +
-				            (int32_t)(v - tv->left) * t->font_w;
-				os64_draw_text(&ctx->surf, x, y, &c, 1, fg, bg);
-			}
-			v = vnext;
+		// ONE RUN ANSWERS ALL THREE QUESTIONS. The glyphs, the highlight
+		// and the caret are the same measurement of the same bytes, so
+		// they cannot describe different text — which is what happens the
+		// moment a selection is computed one way and painted another.
+		void *run = tv_run(ui, slot ? slot : &tv->w.run, ln, len);
+
+		// Selected bytes on this line, as a byte range of it.
+		size_t from = 0, to = 0;
+		bool lit = false;
+		if (have_sel && li >= sl && li <= el) {
+			from = li == sl ? sc : 0;
+			to = li == el ? ec : len;
+			lit = to > from;
 		}
 
-		if (w->focused && li == tv->cur_line) {
-			int64_t cv = vcol_of(ln, len, tv->cur_col);
-			if (cv >= tv->left && cv <= tv->left + cols) {
-				int32_t x = w->bounds.x + VIEW_INSET +
-				            (int32_t)(cv - tv->left) * t->font_w;
-				os64_gui_rect_t caret = { x, y, 2, t->font_h };
-				os64_draw_fill_rect(&ctx->surf, caret, t->text_caret);
+		// TWO PASSES OVER ONE RUN. The whole line in its ordinary colours,
+		// then the line again in the selection's colours CLIPPED TO THE
+		// SELECTED SPAN — the draw fills its own box with the background it
+		// is given, so the second pass lays down the highlight and the lit
+		// glyphs together, exactly as wide as the selection and no wider.
+		// Same run both times, so the second pass costs no layout and its
+		// glyphs land on the first pass's pixels.
+		os64_ui_draw_text(ui, slot, OS64_FONT_ROLE_DOCUMENT, &ctx->surf, clip,
+		                  origin, y, ln, len, t->text_fg, t->text_bg);
+		if (run && lit) {
+			os64_gui_rect_t sel;
+			if (os64_ui_run_selection(run, from, to, &sel) == OS64_FONT_OK) {
+				// The run reports X relative to the line; the ROW is what
+				// this view lays out on (FONT_PROVIDER.md: pitch comes from
+				// the primary face and does not grow for a fallback).
+				os64_gui_rect_t lit_rect = { origin + sel.x, y, sel.w, pitch };
+				os64_gui_rect_t sel_clip;
+				if (os64_rect_intersect(lit_rect, clip, &sel_clip))
+					os64_ui_draw_text(ui, slot, OS64_FONT_ROLE_DOCUMENT, &ctx->surf,
+					                  sel_clip, origin, y, ln, len,
+					                  t->text_sel_fg, t->text_sel_bg);
+			}
+		}
+
+		if (w->focused && li == tv->cur_line && run) {
+			int32_t cx = 0;
+			if (os64_ui_run_caret(run, tv->cur_col, false, &cx) == OS64_FONT_OK) {
+				os64_gui_rect_t caret = { origin + cx, y, 2, pitch };
+				os64_gui_rect_t painted;
+				if (os64_rect_intersect(caret, clip, &painted))
+					os64_draw_fill_rect(&ctx->surf, painted, t->text_caret);
 			}
 		}
 	}
@@ -727,27 +960,83 @@ static void tv_motion_prologue(os64_ui_textview_t *tv, bool shift)
 	}
 }
 
+// Remember where the caret is, in pixels, for a later Up or Down.
+static void tv_remember_goal(os64_ui_textview_t *tv, os64_ui_t *ui)
+{
+	void *run = tv_caret_run(tv, ui);
+	int32_t cx = 0;
+	if (run && os64_ui_run_caret(run, tv->cur_col, false, &cx) == OS64_FONT_OK)
+		tv->goal_x = cx;
+}
+
+// Put the caret at the remembered X on whatever line it is now on.
+static void tv_seek_goal(os64_ui_textview_t *tv, os64_ui_t *ui)
+{
+	void *run = tv_caret_run(tv, ui);
+	size_t offset = 0;
+	if (run && os64_ui_run_hit(run, (int32_t)tv->goal_x, &offset) == OS64_FONT_OK) {
+		tv->cur_col = offset;
+		return;
+	}
+	size_t len;
+	tv_line(tv, tv->cur_line, &len);
+	if (tv->cur_col > len)
+		tv->cur_col = len;
+}
+
+// One cluster forward or back, staying on legal boundaries.
+static void tv_step_caret(os64_ui_textview_t *tv, os64_ui_t *ui, bool forward)
+{
+	void *run = tv_caret_run(tv, ui);
+	size_t offset = tv->cur_col;
+	if (run && os64_ui_run_step(run, tv->cur_col, forward, &offset) == OS64_FONT_OK) {
+		tv->cur_col = offset;
+		return;
+	}
+	size_t len;
+	tv_line(tv, tv->cur_line, &len);
+	if (forward && tv->cur_col < len)
+		tv->cur_col++;
+	else if (!forward && tv->cur_col > 0)
+		tv->cur_col--;
+}
+
 static void tv_place_from_point(os64_ui_textview_t *tv, os64_ui_t *ui,
                                 int32_t mx, int32_t my)
 {
 	const os64_ui_theme_t *t = &ui->theme;
 	size_t count = tv_count(tv);
 
-	int32_t row = (my - tv->w.bounds.y - VIEW_INSET) / t->font_h;
+	int32_t pitch = tv_pitch(tv, t);
+	int32_t row = pitch > 0 ? (my - tv->w.bounds.y - VIEW_INSET) / pitch : 0;
 	int64_t li = (int64_t)tv->top + row;      // row may be negative: a drag
 	if (li < 0)                                // above the view auto-scrolls up
 		li = 0;
 	if (li >= (int64_t)count)
 		li = (int64_t)count - 1;
 
-	int32_t cell = (mx - tv->w.bounds.x - VIEW_INSET) / t->font_w;
-	int64_t vcol = tv->left + (cell > 0 ? cell : 0);
+	// The pixel of the LINE the pointer is over, which is where the pointer
+	// is minus where the line starts on screen.
+	int64_t x = (int64_t)(mx - tv->w.bounds.x - VIEW_INSET) + tv->left_px;
+	if (x < 0)
+		x = 0;
 
-	size_t len;
-	const char *ln = tv_line(tv, (size_t)li, &len);
 	tv->cur_line = (size_t)li;
-	tv->cur_col = byte_of(ln, len, vcol);
-	tv->goal_vcol = vcol_of(ln, len, tv->cur_col);
+	void *run = tv_caret_run(tv, ui);
+	size_t offset = tv->cur_col;
+	if (run && os64_ui_run_hit(run, (int32_t)x, &offset) == OS64_FONT_OK) {
+		tv->cur_col = offset;
+		int32_t cx = 0;
+		if (os64_ui_run_caret(run, tv->cur_col, false, &cx) == OS64_FONT_OK)
+			tv->goal_x = cx;
+	} else {
+		// No face, or a line that could not be laid out: put the caret at
+		// the start rather than somewhere invented.
+		size_t len;
+		tv_line(tv, tv->cur_line, &len);
+		tv->cur_col = 0;
+		tv->goal_x = 0;
+	}
 }
 
 static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
@@ -850,51 +1139,54 @@ static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
 
 		case K_LEFT:
 			tv_motion_prologue(tv, shift);
+			// Stepping is by CLUSTER BOUNDARY, not by byte. F2 publishes
+			// a caret for each legal boundary and snaps anything between
+			// them, so over a composed accent the caret moves past the
+			// whole letter rather than into the middle of it.
 			if (tv->cur_col > 0) {
-				tv->cur_col--;
+				tv_step_caret(tv, ui, false);
 			} else if (tv->cur_line > 0) {
 				tv->cur_line--;
 				tv_line(tv, tv->cur_line, &len);
 				tv->cur_col = len;
 			}
-			ln = tv_line(tv, tv->cur_line, &len);
-			tv->goal_vcol = vcol_of(ln, len, tv->cur_col);
+			tv_remember_goal(tv, ui);
 			break;
 		case K_RIGHT:
 			tv_motion_prologue(tv, shift);
 			ln = tv_line(tv, tv->cur_line, &len);
 			if (tv->cur_col < len) {
-				tv->cur_col++;
+				tv_step_caret(tv, ui, true);
 			} else if (tv->cur_line + 1 < count) {
 				tv->cur_line++;
 				tv->cur_col = 0;
 			}
-			ln = tv_line(tv, tv->cur_line, &len);
-			tv->goal_vcol = vcol_of(ln, len, tv->cur_col);
+			tv_remember_goal(tv, ui);
 			break;
 		case K_HOME:
 			tv_motion_prologue(tv, shift);
 			tv->cur_col = 0;
-			tv->goal_vcol = 0;
+			tv->goal_x = 0;
 			break;
 		case K_END:
 			tv_motion_prologue(tv, shift);
 			ln = tv_line(tv, tv->cur_line, &len);
 			tv->cur_col = len;
-			tv->goal_vcol = vcol_of(ln, len, len);
+			tv_remember_goal(tv, ui);
 			break;
 		case K_UP:
 		case K_DOWN:
-			// The remembered goal column: runs of Up/Down hold their lane
+			// The remembered goal X: runs of Up/Down hold their lane
 			// through short lines — every editor since vi has kept this
-			// promise, and its absence is instantly felt.
+			// promise, and its absence is instantly felt. It is a PIXEL
+			// now, because under a proportional face the column the caret
+			// "was in" is not a distance anything else agrees on.
 			tv_motion_prologue(tv, shift);
 			if (k == K_UP && tv->cur_line > 0)
 				tv->cur_line--;
 			else if (k == K_DOWN && tv->cur_line + 1 < count)
 				tv->cur_line++;
-			ln = tv_line(tv, tv->cur_line, &len);
-			tv->cur_col = byte_of(ln, len, tv->goal_vcol);
+			tv_seek_goal(tv, ui);
 			break;
 		case K_PGUP:
 		case K_PGDN: {
@@ -913,8 +1205,7 @@ static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
 				if (tv->top + (size_t)rows > count)
 					tv->top = count > (size_t)rows ? count - (size_t)rows : 0;
 			}
-			ln = tv_line(tv, tv->cur_line, &len);
-			tv->cur_col = byte_of(ln, len, tv->goal_vcol);
+			tv_seek_goal(tv, ui);
 			tv_fire_view(tv);
 			break;
 		}
@@ -943,7 +1234,9 @@ static void textview_cancel(os64_ui_widget_t *w)
 }
 
 const os64_ui_class_t os64_ui_textview_class =
-    { "textview", textview_paint, textview_event, textview_cancel, 0, 0, 0, 0, 0 };
+    { "textview", textview_paint, textview_event, textview_cancel,
+      textview_prepare, textview_commit, textview_discard, textview_destroy,
+      textview_metrics };
 
 void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
                       void (*on_change)(os64_ui_textview_t *, void *),
@@ -960,19 +1253,14 @@ void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
 	tv->view_user = user;
 }
 
-int64_t os64_ui_text_vcols(const char *s, size_t len)
-{
-	return vcol_of(s, len, len);
-}
-
 void os64_ui_textview_scroll_left(os64_ui_t *ui, os64_ui_textview_t *tv,
-                                  int64_t left)
+                                  int64_t left_px)
 {
-	if (left < 0)
-		left = 0;
-	if (left == tv->left)
+	if (left_px < 0)
+		left_px = 0;
+	if (left_px == tv->left_px)
 		return;
-	tv->left = left;
+	tv->left_px = left_px;
 	tv_fire_view(tv);
 	os64_ui_mark_dirty(ui, &tv->w);
 }
@@ -999,7 +1287,7 @@ void os64_ui_textview_goto(os64_ui_t *ui, os64_ui_textview_t *tv,
 	if (line >= count)
 		line = count - 1;
 	size_t len;
-	const char *ln = tv_line(tv, line, &len);
+	tv_line(tv, line, &len);
 	if (col > len)
 		col = len;
 
@@ -1012,7 +1300,7 @@ void os64_ui_textview_goto(os64_ui_t *ui, os64_ui_textview_t *tv,
 	}
 	tv->cur_line = line;
 	tv->cur_col = col;
-	tv->goal_vcol = vcol_of(ln, len, col);
+	tv_remember_goal(tv, ui);
 	tv_ensure_visible(ui, tv);
 }
 

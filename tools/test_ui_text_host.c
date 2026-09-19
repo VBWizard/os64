@@ -55,12 +55,10 @@ void *os64_malloc(size_t n)
 }
 void os64_free(void *p) { free(p); }
 
-/* The toolkit itself is linked, because the height policy lives in its
- * constructors and its layout rather than in the font binding. Its keyboard
- * decoder lives in ui_text.c, which this harness has no reason to build. */
+/* The toolkit itself is linked — the height policy lives in its
+ * constructors and its layout, and the editor's caret arithmetic in
+ * ui_text.c — so nothing of it is stubbed. */
 #include "ui_internal.h"
-ui_key_t os64_ui_decode_key(uint8_t *seq, const os64_gui_event_t *ev, char *ch)
-{ (void)seq; (void)ev; (void)ch; return K_NONE; }
 
 #ifndef UI_TEXT_REAL
 /* libui asks the provider for production FreeType and has no injection point
@@ -1019,6 +1017,286 @@ static void staged_children_follow_their_staged_parent(const char *dir)
     current = "";
 }
 
+/* ── the editor ──────────────────────────────────────────────────────────
+ * A textview's caret, its highlight and its glyphs have to be the same
+ * measurement of the same bytes. These drive the real widget against a
+ * small model and check that they agree — in pixels, because under a
+ * proportional face a column is not a distance. */
+
+static const char *const kUiTestDoc[] = {
+    "iiii WWWW",             /* two words no column count can reconcile */
+    "kerning AV To Ta We",
+    "short",
+    "caf\xc3\xa9 composed",   /* a two-byte scalar: one cluster, one caret */
+};
+#define UI_TEST_DOC_LINES 4
+
+static size_t ui_test_doc_count(void *user) { (void)user; return UI_TEST_DOC_LINES; }
+static const char *ui_test_doc_line(void *user, size_t i, size_t *len)
+{
+    (void)user;
+    const char *s = i < UI_TEST_DOC_LINES ? kUiTestDoc[i] : "";
+    *len = strlen(s);
+    return s;
+}
+static const os64_ui_textbuf_t kUiTestBuf = {
+    NULL, ui_test_doc_count, ui_test_doc_line, NULL, NULL, NULL, NULL, NULL
+};
+
+static os64_ui_textview_t gUiTestView;
+
+static void ui_test_view_theme(os64_ui_theme_t *t)
+{
+    memset(t, 0, sizeof(*t));
+    t->pad = 6; t->button_h = 20; t->gap = 4;
+    t->text_bg = 0xff000000; t->text_fg = 0xffffffff;
+    t->text_sel_bg = 0xff0000ff; t->text_sel_fg = 0xffffff00;
+    t->text_caret = 0xffff0000;
+    t->font_w = OS64_FONT_GLYPH_W; t->font_h = OS64_FONT_GLYPH_H;
+}
+
+static void textview_geometry_and_painting(const char *dir)
+{
+    current = "textview";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+
+    os64_ui_textview(&gUiTestView, &kUiTestBuf, NULL, NULL, NULL);
+    gUiTestView.w.bounds = (os64_gui_rect_t){0, 0, 300, 120};
+    os64_ui_set_root(&ui, &gUiTestView.w);
+    gUiTestView.w.focused = true;
+
+    os64_text_context_t *text = os64_ui_font_context(&ui);
+    os64_font_set_t *set = outline_set(text, dir, "DejaVuSans.ttf", 16);
+    CHECK(set != NULL);
+    if (!set) { current = ""; return; }
+    os64_font_consumer_t consumer;
+    os64_ui_font_consumer(&ui, &consumer);
+    CHECK(os64_font_adopt(set, &consumer, 1, NULL) == OS64_FONT_OK);
+    os64_font_set_release(set);
+
+    /* Rows come from the DOCUMENT face's line box, and the view's width is
+     * a pixel count because there is no column to count. */
+    int32_t pitch = os64_ui_font_row_height(&ui, OS64_FONT_ROLE_DOCUMENT);
+    CHECK(pitch > 0);
+    CHECK(os64_ui_textview_rows(&gUiTestView, &ui.theme) == (120 - 4) / pitch);
+    CHECK(os64_ui_textview_width(&gUiTestView) == 300 - 4);
+
+    /* Adoption staged a run for every visible line and for the caret's, so
+     * the first paint allocates nothing. */
+    CHECK(gUiTestView.row_run_count > 0);
+    CHECK(gUiTestView.w.run != NULL);
+    canvas_t painted;
+    canvas_init(&painted, 0xff000000);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.surf = painted.s;
+    unsigned long before = allocations;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    CHECK(allocations == before);
+    CHECK(ui_test_ink_left(&painted, 0xff000000) < SURF_W);   /* it drew */
+
+    /* THE CARET AND THE HIT TEST ARE INVERSES. Every legal boundary on a
+     * line must round-trip: where the caret sits, and what byte a click
+     * there lands on. `iiii WWWW` is the case a column count cannot do. */
+    void *run = gUiTestView.w.run;
+    CHECK(os64_ui_run_matches(run, kUiTestDoc[0], strlen(kUiTestDoc[0])));
+    int32_t prev = -1;
+    for (size_t n = 0; n <= strlen(kUiTestDoc[0]); ++n) {
+        int32_t x = -1;
+        CHECK(os64_ui_run_caret(run, n, false, &x) == OS64_FONT_OK);
+        CHECK(x > prev);                     /* strictly increasing */
+        prev = x;
+        size_t back = SIZE_MAX;
+        CHECK(os64_ui_run_hit(run, x, &back) == OS64_FONT_OK);
+        CHECK(back == n);
+    }
+    /* Four narrow letters are not as wide as four wide ones — the whole
+     * reason the coordinate had to stop being a column. */
+    int32_t after_i = 0, after_w = 0;
+    CHECK(os64_ui_run_caret(run, 4, false, &after_i) == OS64_FONT_OK);
+    CHECK(os64_ui_run_caret(run, 9, false, &after_w) == OS64_FONT_OK);
+    CHECK(after_w - after_i > after_i);
+
+    /* A selection's rectangle is the span between two carets, no wider. */
+    os64_gui_rect_t sel;
+    CHECK(os64_ui_run_selection(run, 0, 4, &sel) == OS64_FONT_OK);
+    CHECK(sel.x == 0 && sel.w == after_i);
+
+    current = "";
+}
+
+/* A PARTLY SELECTED LINE IS LIT ONLY WHERE IT IS SELECTED. The rectangle
+ * arithmetic was right and still the whole line painted blue, because the
+ * first pass filled the line's box with the selection colour; the rest of the
+ * line then showed ordinary glyphs on a highlight. Checking the rectangle does
+ * not catch that — only looking at the pixels past the selection's end does. */
+static void textview_partial_selection_paints_only_the_span(const char *dir)
+{
+    current = "partial selection";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    os64_ui_textview(&gUiTestView, &kUiTestBuf, NULL, NULL, NULL);
+    gUiTestView.w.bounds = (os64_gui_rect_t){0, 0, 300, 60};
+    os64_ui_set_root(&ui, &gUiTestView.w);
+
+    os64_text_context_t *text = os64_ui_font_context(&ui);
+    os64_font_set_t *set = outline_set(text, dir, "DejaVuSans.ttf", 16);
+    CHECK(set != NULL);
+    if (!set) { current = ""; return; }
+    CHECK(os64_ui_font_bind(&ui, set) == OS64_FONT_OK);
+    os64_font_set_release(set);
+
+    /* Select "iiii" out of "iiii WWWW": the selection ends mid-line. */
+    gUiTestView.sel = true;
+    gUiTestView.sel_line = 0; gUiTestView.sel_col = 0;
+    gUiTestView.cur_line = 0; gUiTestView.cur_col = 4;
+
+    canvas_t c;
+    canvas_init(&c, 0xff000000);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.surf = c.s;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+
+    void *run = NULL;
+    size_t len;
+    const char *ln = ui_test_doc_line(NULL, 0, &len);
+    CHECK(os64_ui_run_layout(&ui, OS64_FONT_ROLE_DOCUMENT, ln, len, &run) == OS64_FONT_OK);
+    int32_t sel_end = 0, line_end = 0;
+    if (run) {
+        CHECK(os64_ui_run_caret(run, 4, false, &sel_end) == OS64_FONT_OK);
+        CHECK(os64_ui_run_caret(run, len, false, &line_end) == OS64_FONT_OK);
+        os64_ui_run_release(run);
+    }
+    int32_t origin = gUiTestView.w.bounds.x + 2;     /* VIEW_INSET */
+    int32_t pitch = os64_ui_font_row_height(&ui, OS64_FONT_ROLE_DOCUMENT);
+    int32_t top = gUiTestView.w.bounds.y + 2;
+
+    /* The selected span is lit... */
+    int lit_inside = 0, lit_outside = 0;
+    for (int32_t y = top; y < top + pitch && y < SURF_H; ++y) {
+        for (int32_t x = origin; x < origin + line_end && x < SURF_W; ++x) {
+            if (c.px[y * SURF_W + x] != 0xff0000ff)     /* text_sel_bg */
+                continue;
+            if (x < origin + sel_end) ++lit_inside;
+            else ++lit_outside;
+        }
+    }
+    CHECK(lit_inside > 0);
+    /* ...and not one pixel of the unselected rest of the line is. */
+    CHECK(lit_outside == 0);
+
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    current = "";
+}
+
+/* Motion is by CLUSTER, and Up/Down remember a pixel. */
+static void textview_motion(const char *dir)
+{
+    current = "textview motion";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    os64_ui_textview(&gUiTestView, &kUiTestBuf, NULL, NULL, NULL);
+    gUiTestView.w.bounds = (os64_gui_rect_t){0, 0, 300, 120};
+    os64_ui_set_root(&ui, &gUiTestView.w);
+
+    os64_text_context_t *text = os64_ui_font_context(&ui);
+    os64_font_set_t *set = outline_set(text, dir, "DejaVuSans.ttf", 16);
+    CHECK(set != NULL);
+    if (!set) { current = ""; return; }
+    CHECK(os64_ui_font_bind(&ui, set) == OS64_FONT_OK);
+    os64_font_set_release(set);
+
+    /* "café composed" — the accented letter is TWO BYTES and ONE cluster,
+     * so a caret steps over both together and never lands between them. */
+    gUiTestView.cur_line = 3;
+    gUiTestView.cur_col = 0;
+    void *run = NULL;
+    size_t len;
+    const char *ln = ui_test_doc_line(NULL, 3, &len);
+    CHECK(os64_ui_run_layout(&ui, OS64_FONT_ROLE_DOCUMENT, ln, len, &run) == OS64_FONT_OK);
+    CHECK(run != NULL);
+    if (run) {
+        size_t at = 3, next = 0;             /* the 'é' starts at byte 3 */
+        CHECK(os64_ui_run_step(run, at, true, &next) == OS64_FONT_OK);
+        CHECK(next == 5);                    /* two bytes in one step */
+        size_t back = 0;
+        CHECK(os64_ui_run_step(run, next, false, &back) == OS64_FONT_OK);
+        CHECK(back == at);
+        os64_ui_run_release(run);
+    }
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    CHECK(os64_ui_font_live_bytes(&ui) == 0);
+    current = "";
+}
+
+/* A textfield edits by CLUSTER. Backspace over "é" used to remove one byte,
+ * leaving half a UTF-8 sequence behind — valid bytes in, malformed bytes
+ * out, from nothing but a keystroke. */
+static void ui_test_field_key(os64_ui_textfield_t *tf, os64_ui_t *ui, char ascii)
+{
+    os64_gui_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = OS64_GUI_EVENT_KEY_DOWN;
+    ev.key.ascii = ascii;
+    ev.key.scancode = 0x0e;
+    tf->w.cls->event(&tf->w, ui, &ev);
+}
+
+static void textfield_edits_by_cluster(const char *dir)
+{
+    current = "textfield";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    char buf[64];
+    os64_ui_textfield_t tf;
+    os64_ui_textfield(&tf, buf, sizeof(buf), NULL, NULL, NULL);
+    tf.w.bounds = (os64_gui_rect_t){0, 0, 200, 28};
+    os64_ui_set_root(&ui, &tf.w);
+
+    os64_text_context_t *text = os64_ui_font_context(&ui);
+    os64_font_set_t *set = outline_set(text, dir, "DejaVuSans.ttf", 16);
+    CHECK(set != NULL);
+    if (!set) { current = ""; return; }
+    CHECK(os64_ui_font_bind(&ui, set) == OS64_FONT_OK);
+    os64_font_set_release(set);
+
+    os64_ui_textfield_set(&ui, &tf, "caf\xc3\xa9");     /* 5 bytes, 4 letters */
+    CHECK(tf.len == 5 && tf.cursor == 5);
+
+    ui_test_field_key(&tf, &ui, '\b');
+    CHECK(tf.len == 3 && tf.cursor == 3);          /* both bytes of é gone */
+    CHECK(memcmp(buf, "caf", 4) == 0);              /* ...and nothing else */
+
+    ui_test_field_key(&tf, &ui, '\b');
+    CHECK(tf.len == 2 && memcmp(buf, "ca", 3) == 0);
+
+    /* A click lands on a boundary the run publishes, never inside a letter. */
+    os64_ui_textfield_set(&ui, &tf, "\xc3\xa9t\xc3\xa9");   /* é t é */
+    void *run = NULL;
+    CHECK(os64_ui_run_layout(&ui, OS64_FONT_ROLE_UI, buf, tf.len, &run) == OS64_FONT_OK);
+    if (run) {
+        int32_t x = 0;
+        CHECK(os64_ui_run_caret(run, 2, false, &x) == OS64_FONT_OK);   /* after é */
+        os64_ui_run_release(run);
+        os64_gui_event_t click;
+        memset(&click, 0, sizeof(click));
+        click.type = OS64_GUI_EVENT_MOUSE_BUTTON_DOWN;
+        click.mouse.button = OS64_GUI_MOUSE_LEFT;
+        click.mouse.x = tf.w.bounds.x + 4 + x - tf.left_px;   /* field_inset 4 */
+        tf.w.cls->event(&tf.w, &ui, &click);
+        CHECK(tf.cursor == 2);
+    }
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    CHECK(os64_ui_font_live_bytes(&ui) == 0);
+    current = "";
+}
+
 /* Q3 — automatic and explicit heights, across attach, relayout and a font
  * change. A padded control is in the mix so the check is not satisfied by
  * the builtin face happening to reproduce a 16px label. */
@@ -1105,6 +1383,10 @@ int main(int argc, char **argv)
     list_stages_its_candidate_rows(dir);
     changed_caption_is_not_placed_from_nothing(dir);
     staged_children_follow_their_staged_parent(dir);
+    textview_geometry_and_painting(dir);
+    textview_partial_selection_paints_only_the_span(dir);
+    textview_motion(dir);
+    textfield_edits_by_cluster(dir);
 #else
     (void)slurp;
     (void)rows_touched_outside;

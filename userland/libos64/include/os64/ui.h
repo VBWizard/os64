@@ -574,6 +574,28 @@ void os64_ui_run_release(void *run);
 // before reusing one, because app-supplied text changes without notice.
 bool os64_ui_run_matches(void *run, const char *s, size_t len);
 
+// ── asking a run where things are ───────────────────────────────────────────
+// An editor needs three answers and must get all three from the SAME run it
+// paints, or the caret, the highlight and the glyphs describe different
+// text. Offsets are byte offsets into the line the run was laid out from;
+// X is in pixels from the line's start, before any horizontal scrolling.
+
+// Where the caret sits for a byte offset. An interior offset snaps to a
+// legal cluster boundary — `after` chooses which way.
+os64_font_status_t os64_ui_run_caret(void *run, size_t byte_offset, bool after,
+                                     int32_t *out_x);
+// Which byte offset a pixel X lands on, clamped to the run's ends.
+os64_font_status_t os64_ui_run_hit(void *run, int32_t x, size_t *out_offset);
+// The rectangle covering [begin, end), relative to the line's start and its
+// baseline row. Both offsets must already be legal boundaries.
+os64_font_status_t os64_ui_run_selection(void *run, size_t begin, size_t end,
+                                         os64_gui_rect_t *out);
+// The byte offset one cluster before/after this one — what Backspace and
+// Delete remove, and what Left and Right step over. A caret never lands
+// inside a cluster, so this is not the same as offset +/- 1.
+os64_font_status_t os64_ui_run_step(void *run, size_t offset, bool forward,
+                                    size_t *out_offset);
+
 // What a control has to be tall enough for: one row of the UI face plus the
 // theme's padding above and below, never less than the theme's stock button
 // height. A caption clipped by its own button is the fingerprint this
@@ -772,7 +794,7 @@ struct os64_ui_textfield
     char  *buf;                  // app-owned, NUL-terminated
     size_t cap;                  // bytes including the NUL
     size_t len, cursor;
-    size_t first;                // first visible byte (horizontal scroll)
+    int32_t left_px;             // horizontal scroll, in pixels of the UI face
     void (*on_submit)(os64_ui_textfield_t *tf, void *user);
     void (*on_cancel)(os64_ui_textfield_t *tf, void *user);
     void *edit_user;
@@ -826,38 +848,76 @@ struct os64_ui_textview
     const os64_ui_textbuf_t *buf;
 
     size_t  top;                 // first visible line
-    int64_t left;                // first visible VISUAL column (tabs expand)
+    // HORIZONTAL POSITION IS IN PIXELS, not columns. A proportional face has
+    // no columns to count: `i` and `W` are not the same distance, so the
+    // only honest unit for "how far along this line are we" is the one the
+    // face measures in. Tabs still land on their eight-space stops; those
+    // stops are just pixels now (ui_font.c measures the space).
+    int64_t left_px;             // first visible pixel of the line
     size_t  cur_line, cur_col;   // caret; cur_col is a BYTE index
     bool    sel;                 // selection live?
     size_t  sel_line, sel_col;   // the anchor (byte index)
-    int64_t goal_vcol;           // remembered column for Up/Down runs
+    int64_t goal_x;              // remembered pixel X for Up/Down runs
 
     void (*on_change)(os64_ui_textview_t *tv, void *user);  // buffer edited
     void (*on_view)(os64_ui_textview_t *tv, void *user);    // viewport moved
     void *view_user;
     uint8_t seq;                 // VT100 burst parser state
+
+    // One retained run per VISIBLE line, and the set staged against a
+    // candidate face during adoption — the listbox's arrangement, for the
+    // same reason: the text comes from the application's model and there
+    // are more lines than a window can hold, so what is retained is what
+    // can be shown. A line whose bytes have changed is re-laid-out into
+    // its slot on the next paint. The widget's own `run` holds the CARET's
+    // line, which motion needs whether or not it is on screen.
+    void **row_runs, **row_runs_staged;
+    size_t row_run_count, row_runs_staged_count;
+    // Row pitch from the DOCUMENT face, cached for the same reason the
+    // listbox caches its own: os64_ui_textview_rows is handed a theme.
+    int32_t row_h;
+
+    // THE VIEW A FONT CHANGE WILL SHOW, worked out during preparation.
+    // Every pixel position above is in the units of the face being retired;
+    // the caret's BYTE offset is the one position a face change cannot
+    // disturb, so the view is recomputed around it — and it has to be done
+    // before commit, because which lines are visible decides which runs get
+    // prepared, and a line prepared for the wrong view is a layout the first
+    // paint would have to do.
+    size_t  top_staged;
+    int64_t left_staged, goal_staged;
 };
 
 void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
                       void (*on_change)(os64_ui_textview_t *, void *),
                       void (*on_view)(os64_ui_textview_t *, void *),
                       void *user);
-// Rows/columns that fit the current bounds under this theme.
+// Rows that fit the current bounds. The row pitch comes from the DOCUMENT
+// face when the window is wearing one, and from the theme's bitmap cell
+// otherwise; a widget caches it, so this keeps the theme-only signature an
+// application already calls.
 int32_t os64_ui_textview_rows(const os64_ui_textview_t *tv,
                               const os64_ui_theme_t *t);
-int32_t os64_ui_textview_cols(const os64_ui_textview_t *tv,
-                              const os64_ui_theme_t *t);
+// The width of the text area, in pixels. There is deliberately no column
+// count: under a proportional face a column is not a length, and a caller
+// that wanted one was really asking either "how wide is the paper?" — this
+// — or "how wide is this text?", which is os64_ui_textview_line_width.
+int32_t os64_ui_textview_width(const os64_ui_textview_t *tv);
 // Scroll so `top` is the first visible line (clamped); fires on_view.
 void os64_ui_textview_scroll_to(os64_ui_t *ui, os64_ui_textview_t *tv,
                                 size_t top);
-// Scroll horizontally so `left` is the first visible VISUAL column
+// Scroll horizontally so `left_px` is the first visible pixel of each line
 // (clamped at 0; the right edge is the app's knowledge — it tracks the
 // widest line, the view doesn't). Fires on_view.
 void os64_ui_textview_scroll_left(os64_ui_t *ui, os64_ui_textview_t *tv,
-                                  int64_t left);
-// A line's width in VISUAL columns (tabs expanded to their 8-stop) — the
-// number a horizontal scrollbar's `total` is made of.
-int64_t os64_ui_text_vcols(const char *s, size_t len);
+                                  int64_t left_px);
+// A line's width in pixels under the DOCUMENT face — the number a
+// horizontal scrollbar's `total` is made of. Measuring can fail, so this
+// says whether it did; on failure `*out` is untouched and the caller keeps
+// whatever extent it already had rather than shrinking the bar to a lie.
+os64_font_status_t os64_ui_textview_line_width(os64_ui_t *ui,
+                                               const char *s, size_t len,
+                                               int64_t *out);
 // Is this key event the REAL Esc key (not the ESC byte that opens a VT100
 // burst)? The burst's ESC is stamped with the extended key's code; the Esc
 // key carries its own — which is a DIALECT: PS/2 make-code 0x01 or HID

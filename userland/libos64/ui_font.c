@@ -675,6 +675,93 @@ bool os64_ui_run_matches(void *run, const char *s, size_t len)
 	return run_matches((os64_text_run_t *)run, s, len);
 }
 
+// ── asking a run where things are ───────────────────────────────────────────
+// F2 answers all of these in 26.6; an editor works in whole pixels, and the
+// contract's quantization is floor((pos + 32)/64) so a caret and the glyph
+// beside it round the same way. px_ceil is for EXTENTS, which must not come
+// back short; a position is not an extent.
+
+static int32_t px_round(os64_font_pos_t v)
+{
+	return (int32_t)((v + OS64_FONT_UNIT / 2) / OS64_FONT_UNIT);
+}
+
+os64_font_status_t os64_ui_run_caret(void *run, size_t byte_offset, bool after,
+                                     int32_t *out_x)
+{
+	if (!run || !out_x)
+		return OS64_FONT_BAD_ARGUMENT;
+	os64_text_caret_t caret;
+	os64_font_status_t status =
+		os64_text_caret((os64_text_run_t *)run, byte_offset,
+		                after ? OS64_TEXT_AFTER : OS64_TEXT_BEFORE, &caret);
+	if (status == OS64_FONT_OK)
+		*out_x = px_round(caret.x);
+	return status;
+}
+
+os64_font_status_t os64_ui_run_hit(void *run, int32_t x, size_t *out_offset)
+{
+	if (!run || !out_offset)
+		return OS64_FONT_BAD_ARGUMENT;
+	os64_text_caret_t caret;
+	os64_font_status_t status =
+		os64_text_hit((os64_text_run_t *)run, (os64_font_pos_t)x * OS64_FONT_UNIT,
+		              &caret);
+	if (status == OS64_FONT_OK)
+		*out_offset = caret.byte_offset;
+	return status;
+}
+
+os64_font_status_t os64_ui_run_selection(void *run, size_t begin, size_t end,
+                                         os64_gui_rect_t *out)
+{
+	if (!run || !out)
+		return OS64_FONT_BAD_ARGUMENT;
+	os64_font_rect_t rect;
+	os64_font_status_t status =
+		os64_text_selection((os64_text_run_t *)run, begin, end, &rect);
+	if (status != OS64_FONT_OK)
+		return status;
+	int32_t x0 = px_round(rect.x0), x1 = px_round(rect.x1);
+	int32_t y0 = px_round(rect.y0), y1 = px_round(rect.y1);
+	*out = (os64_gui_rect_t){ x0, y0, x1 - x0, y1 - y0 };
+	return OS64_FONT_OK;
+}
+
+// THE CARET LIST IS THE CLUSTER LIST. F2 publishes one caret per legal
+// boundary, so stepping is finding this offset among them and taking the
+// neighbour — which is why Backspace over a composed accent removes the
+// accent and its base together, and why Left does not land inside one.
+os64_font_status_t os64_ui_run_step(void *run, size_t offset, bool forward,
+                                    size_t *out_offset)
+{
+	if (!run || !out_offset)
+		return OS64_FONT_BAD_ARGUMENT;
+	os64_text_run_view_t rv;
+	os64_font_status_t status = os64_text_run_view((os64_text_run_t *)run, &rv);
+	if (status != OS64_FONT_OK)
+		return status;
+	for (size_t i = 0; i < rv.caret_count; ++i) {
+		if (rv.carets[i].byte_offset != offset)
+			continue;
+		if (forward && i + 1 < rv.caret_count)
+			*out_offset = rv.carets[i + 1].byte_offset;
+		else if (!forward && i > 0)
+			*out_offset = rv.carets[i - 1].byte_offset;
+		else
+			*out_offset = offset;          // already at an end
+		return OS64_FONT_OK;
+	}
+	// Not a boundary at all: snap to one rather than invent a step.
+	os64_text_caret_t caret;
+	status = os64_text_caret((os64_text_run_t *)run, offset,
+	                         forward ? OS64_TEXT_AFTER : OS64_TEXT_BEFORE, &caret);
+	if (status == OS64_FONT_OK)
+		*out_offset = caret.byte_offset;
+	return status;
+}
+
 // The one-caption default. A widget with no text stages nothing and drops
 // whatever it held, because that run describes a face on its way out.
 os64_font_status_t os64_ui_stage_caption(os64_ui_widget_t *w, os64_ui_t *ui)

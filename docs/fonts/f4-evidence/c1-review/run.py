@@ -32,7 +32,7 @@ flags += ['-I'+str(ROOT/p) for p in ['userland/libos64/include', 'userland/libos
 # ui.c and ui_controls.c joined the list when the height policy moved into
 # the toolkit's constructors and layout; the host test they wrap links them.
 sources = [ROOT/('userland/libos64/'+n+'.c') for n in
-           ['ui_font', 'ui', 'ui_controls', 'font_provider', 'font_adopt', 'text',
+           ['ui_font', 'ui', 'ui_controls', 'ui_list', 'ui_text', 'font_provider', 'font_adopt', 'text',
             'text_cache', 'text_decode', 'text_bitmap', 'text_draw', 'draw', 'str']]
 objects = sorted((out/'baseline').glob('ft*.o'))
 subprocess.run(['cc', *flags, str(HERE/'repro.c'),
