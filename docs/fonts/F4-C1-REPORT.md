@@ -398,6 +398,10 @@ Still not run: P5 / real hardware.
 
 ## After the third review
 
+Quinn’s [fourth review](F4-C1-QUINN-REVIEW.md#fourth-review-of-f76093c)
+accepts the C1 boundary at f76093c for C2/C3, with independent verification
+and the acceptance scope recorded there.
+
 Quinn's third round closed R2a, the original R2c case and R5, accepted the
 teardown policy as a lifecycle choice now that the header states it, and left
 two P2s. Both reproduced from `r3-run.py` before anything changed.
