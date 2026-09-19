@@ -1,10 +1,10 @@
 # Quinn review — F4 checkpoint 1
 
-**Latest disposition:** the [third review of 0cfb485](#third-review-of-0cfb485)
-closes R2a, the original R2c case, and R5. Two P2 issues remain: R2b's
-caption-change failure path and R6's staged parent geometry. Please address
-those before C1 boundary acceptance. Earlier rounds remain below with their
-original commit references and dispositions.
+**Latest disposition: C1 boundary accepted at f76093c.** The
+[fourth review](#fourth-review-of-f76093c) closes the remaining R2b and R6
+findings and reports no new findings in the reviewed scope. Opus can proceed
+with C2/C3 on this boundary. This is not full F4 completion or merge approval.
+Earlier rounds remain below with their original commit references and results.
 
 2026-09-17. Reviewed implementation **d11608b** and review brief **5a33242**
 on `opus/font-widgets`, based on F2.5
@@ -535,3 +535,79 @@ exit zero means execution completed, not that the behavior is correct.
 
 Only review documents and evidence files were changed. No production fixes,
 commit, push, merge, or C1 completion approval were made.
+
+
+## Fourth review of f76093c
+
+2026-09-17. Reviewed **f76093c**, including the complete production/test delta
+from 0cfb485 and the report's **After the third review** reply.
+
+**No new findings in this review. C1 boundary accepted for C2/C3.**
+
+- **R2b follow-up closed:** `button_paint` checks the width preparation status
+  and skips the caption when preparation fails. The changed-caption probe
+  makes one refused allocation and paints no misplaced text. A subsequent
+  paint places the caption correctly. A sweep across 24 one-shot allocation
+  denial positions produces either the correct pixels or no caption; it never
+  paints a new caption using a failed measurement's position.
+- **R6 closed:** staged stacking selects the parent's planned rectangle,
+  while immediate layout selects its live rectangle. The original probe now
+  commits child `(46,26,148,29)`, matching the new parent and padding. A nested
+  stack also places the grandchild from its candidate parent. Refusal at a
+  barrier after successful preparation preserves every live rectangle and
+  discards staged bounds/runs; a subsequent successful adoption works.
+- **Earlier closures stand:** reran the original six, round-2 five and round-3
+  two probes against this head. Tab-resolution refusal, allocation-free first
+  painting, candidate list-row coverage, teardown, registration and clipping
+  behave as recorded in their corrected dispositions. Destructive BUSY
+  teardown remains the accepted lifecycle policy.
+
+The callback-name changes in the host harness compile with the supplied
+review probes without reviewer repairs this round. Historical captures remain
+separate from fresh evidence; the recovered `r2-observations.txt` still has
+SHA-256 `00101efe7405f8209add83f45d3456198a27a11f8b7841f4bd8f4af46bc250b9`.
+
+### Independent verification
+
+- Supplied real-backend host suite: **293 checks, zero failures**, O2,
+  ASan+UBSan.
+- **All 13 earlier probes** rebuilt and rerun. Their exit status alone is not
+  a correctness assertion; the recorded outputs were checked against the
+  required behavior.
+- Supplemental review checks: **134 checks, zero failures**, covering 24
+  caption-allocation denial positions, a nested staged stack, barrier refusal
+  after preparation, cleanup, retry, and agreement with immediate layout.
+- Supplemental harness is O1 with ASan+UBSan, linking the freshly compiled O2
+  pinned-backend objects. LeakSanitizer is disabled.
+- `git diff --check`: clean. No production source was changed in this review.
+
+Fresh evidence:
+
+- [293-check suite receipt](f4-evidence/c1-review/r4-baseline-host.txt)
+- [Thirteen earlier probes on f76093c](f4-evidence/c1-review/r4-prior-probes.txt)
+- [Supplemental check source](f4-evidence/c1-review/r4-check.c)
+- [Supplemental runner](f4-evidence/c1-review/r4-run.py)
+- [134-check supplemental receipt](f4-evidence/c1-review/r4-supplemental.txt)
+
+```sh
+python3 docs/fonts/f4-evidence/c1-review/r4-run.py --output /tmp/f4-c1-r4-review
+```
+
+The default runner rebuilds the baseline and original six probes before the
+supplemental checks. The existing `r2-run.py` and `r3-run.py` reproduce the
+later probes; each accepts `--baseline <dir>` for compatible backend objects
+from this checkout.
+
+### Acceptance scope
+
+The four boundary answers now stand with the implemented lifetime,
+status-bearing preparation, staged geometry, class cleanup and shared-context
+mechanisms. C2 must still demonstrate the document/help model, unsaved bytes,
+source selections, caret/scroll behavior and Scribe's complete adoption plan;
+C3 must still demonstrate its bounded long-line strategy. Those are upcoming
+checkpoint obligations, not reopened findings against C1.
+
+This review did not independently repeat the full cross-build, QEMU or hardware
+validation. Opus's reported build/guest results remain his evidence. Acceptance
+here is the requested C1 API/ownership/transaction boundary decision, not F4
+completion or authorization to merge. No commit, push or merge was performed.

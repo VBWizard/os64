@@ -1,0 +1,60 @@
+Original six probes on f76093c:
+
+measure:
+planner measurement allocation denied; adoption=5 measure_status=5 staged_width=0 actual_width=32
+
+register:
+registration status=0 (0 would be a silent success)
+registration allocation denied; adoption=0 planner_calls=1 (expected refusal or registered planner)
+
+clip:
+primary row=[20,30), painted y=[20,29], pixels outside row=0
+
+paint:
+installed face width=96; paint allocation denied, rendered pen=0
+
+cross:
+foreign-context bind=1 widths=32 (a refusal is the correct answer)
+
+release:
+release while the caller still holds the candidate: status=7 (7=BUSY, owner kept)
+after releasing the candidate: status=0
+
+Round-2 probes on f76093c:
+
+tabs: exit 0
+successful adoptions with wrong tab interval=0; live allocator blocks=0
+
+button: exit 0
+adoption=0, first actual button paint allocations=0, denied paint allocation attempts=0
+ink left normal=52 denied=52, differing pixels=0, retained run=1
+teardown=0
+live allocator blocks=0
+
+busy-state: exit 0
+release=7 (7=BUSY), active identity preserved=0, width before=96 after=32
+live allocator blocks=0
+
+list-release: exit 0
+adoption=0, visible rows=1, retained row runs=1
+no caller-owned sets/runs: teardown=0, retry=0, list runs still retained=0, binding live bytes=0
+after probe manually frees list internals, teardown=0
+live allocator blocks=0
+
+list-resize: exit 0
+adoption=0, visible rows=3, retained row runs=3
+first paint denied allocation attempts=0; normal paint allocations=0; differing pixels=0
+no caller-owned sets/runs: teardown=0, retry=0, list runs still retained=0, binding live bytes=0
+after probe manually frees list internals, teardown=0
+live allocator blocks=0
+
+Round-3 probes on f76093c:
+
+caption: exit 0
+caption mutation iiii -> WWWW; one allocation denied: attempts=1, ink left denied=320 normal=52, differing pixels=876
+teardown=0
+
+parent: exit 0
+adoption=0 parent=(40,20,160,220) child=(46,26,148,29)
+expected child x=46 y=26 width=148 from committed parent + padding
+teardown=0
