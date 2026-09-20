@@ -362,14 +362,25 @@ Save uses existing checked config replacement and preserves the complete usable
 session envelope before changing startup disk choices. Apply and Save remain
 separate actions. F5 must test reader tolerance, verbatim preservation, competing
 component writers, complete-envelope size limits and the reboot rollout. These
-are required implementation changes; today's ui_session/theme code does not
-already provide this compatibility. See [APPEARANCE.md](APPEARANCE.md).
+are implemented and tested in F5; the evidence and remaining review boundary
+are recorded in its report. See [APPEARANCE.md](APPEARANCE.md).
 
 Per-process preparation can fail after publication (e.g. memory pressure): that
 process retains its old usable generation and exposes a retryable failure. The
 Workshop reports publication, not “applied everywhere”; processes do not repaint
 atomically. The R3 review approves this protocol as a contract; F5 implementation and its
 named compatibility tests remain required.
+
+### F5 implementation addendum for combined review
+
+F5 adds `fonts.serial` to the known font envelope keys: a positive uint64 set
+by a font publisher to its resulting session generation. Color/treatment
+writers preserve it. A font Apply reloads file contents even when selections
+are unchanged; unrelated component Apply leaves the serial and active font
+instances alone. Readers of a legacy font component without the field use its
+session generation. It is not a `fonts.conf` key. This concrete transport
+addition is pending Fable's combined implementation review; the backend,
+provider and text-layout ABIs are unchanged. See [F5-REPORT.md](docs/fonts/F5-REPORT.md).
 
 ## Call flows and verification gates
 

@@ -166,6 +166,12 @@ bool os64_ui_theme_name_valid(const char *name);
 // List returns a count or a negative status; load leaves its output on failure.
 int os64_ui_theme_list(os64_ui_theme_entry_t *entries, size_t cap);
 int os64_ui_theme_load(const char *name, os64_ui_theme_t *theme);
+// Retain the raw composition alongside the editable theme. Save replaces known
+// theme keys and preserves other settings/comments from that source. Passing
+// NULL base on replacement preserves the destination's existing unowned lines.
+int os64_ui_theme_load_snapshot(const char *, os64_ui_theme_t *, char *, size_t, size_t *);
+int os64_ui_theme_save_snapshot(const char *, const os64_ui_theme_t *,
+                                const char *, size_t, bool replace);
 // Create uses no-replace publication. Explicit replacement requires atomic
 // filesystem replacement; concurrent replacements are last-publication-wins.
 int os64_ui_theme_save(const char *name, const os64_ui_theme_t *theme, bool replace);
@@ -323,10 +329,14 @@ struct os64_ui
 {
     os64_draw_ctx_t *ctx;        // the window's draw context (app-owned)
     os64_ui_theme_t  theme;
-    void            *font;       // this window's font binding, libui-owned
-                                 // (opaque: the plan types behind it are not
-                                 // an interface). NULL until a widget draws
-                                 // text or the app asks for the context.
+    // Opaque libui-owned binding, created on first text/context use.
+    void            *font;
+    // Optional production settings participant. Previews and injected test
+    // consumers opt out by leaving the callback NULL.
+    void (*font_session)(os64_ui_t *);
+    uint64_t font_generation;
+    bool font_settings_ready;
+    int font_settings_result;
 
     // The application's layout planner, set by os64_ui_font_planner. It
     // lives HERE, in storage the application already owns, so registering
@@ -415,6 +425,11 @@ os64_font_status_t os64_ui_font_bind(os64_ui_t *ui, os64_font_set_t *set);
 // them without allocating, abort throws the staging away. Hand it to
 // os64_font_adopt; the plan behind it is libui's and has no public shape.
 void os64_ui_font_consumer(os64_ui_t *ui, os64_font_consumer_t *out);
+// Start following shared font settings after the widget tree and application
+// planner exist. Refusal keeps current fonts; another call or appearance event
+// retries. Without an app planner, fixed text-row heights are checked before
+// adoption. Result is zero or UI_APPLY_* and is also kept on the UI context.
+int os64_ui_font_follow(os64_ui_t *ui);
 
 // The app's own layout, planned with the CANDIDATE metrics before anything
 // live moves. libui calls `plan` inside prepare: measure with

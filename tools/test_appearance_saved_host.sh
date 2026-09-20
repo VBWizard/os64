@@ -13,7 +13,7 @@ uint64_t os64_syscall6(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_
 HEADER
 cc -pthread -std=c11 -g -O1 -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
     -fsanitize=address,undefined -I "$saved_test_dir/include" -I userland/libos64/include -I abi/include \
-    tools/test_appearance_saved_host.c userland/libos64/ui_saved.c userland/libos64/ui_theme.c \
+    tools/test_appearance_saved_host.c userland/libos64/ui_saved.c userland/libos64/ui_theme.c userland/libos64/ui_envelope.c userland/libos64/font_config.c userland/libos64/slurp.c \
     userland/libos64/ui_palette.c userland/libos64/conf.c userland/libos64/str.c userland/libos64/fmt.c \
     -Wl,--gc-sections -o "$saved_test_dir/test"
 "$saved_test_dir/test" "$saved_test_dir/conf"

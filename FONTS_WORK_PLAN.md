@@ -129,3 +129,12 @@ layout and configuration contracts with no design findings remaining. The
 [freeze record](docs/fonts/F0-FREEZE.md) identifies the baseline for downstream assignments.
 F1 and F2 implementation reviews and guest validation are recorded separately.
 F3/F4/F5 consumer and product acceptance require their own evidence.
+
+## Integrated F5 checkpoint
+
+`codex/font-settings` integrates accepted F4 `3bf7b1f` and F3 `ab7a1cd`.
+Chris authorized completing this integration before Fable's combined review;
+F3 review remains pending. [F5-REPORT.md](docs/fonts/F5-REPORT.md) records the
+implementation and verification, [the review packet](docs/fonts/FABLE-FONTS-REVIEW.md)
+sets the review scope, and [the overview](docs/fonts/FONTS-OVERVIEW.md) explains
+the finished user flows. No mainline merge or hardware acceptance is implied.

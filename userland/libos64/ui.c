@@ -71,6 +71,10 @@ void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
 	ui->on_close = (void (*)(os64_ui_t *))0;
 	ui->quit = false;
 	ui->font = (void *)0;
+	ui->font_session = NULL;
+	ui->font_generation = 0;
+	ui->font_settings_ready = false;
+	ui->font_settings_result = 0;
 	ui->font_plan = (os64_font_status_t (*)(os64_ui_t *, void *, void **))0;
 	ui->font_plan_commit = (void (*)(os64_ui_t *, void *, void *))0;
 	ui->font_plan_discard = (void (*)(os64_ui_t *, void *, void *))0;
@@ -256,6 +260,7 @@ static void update_hover(os64_ui_t *ui, int32_t x, int32_t y)
 bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 {
 	if (ev->type == OS64_GUI_EVENT_APPEARANCE) {
+		if (ui->follow_session && ui->font_session) ui->font_session(ui);
 		if (ui->follow_session && os64_ui_theme_session(&ui->theme,
 		        &ui->appearance_generation, os64_gui_appearance_generation(ev)))
 			os64_ui_mark_dirty(ui, ui->root);
@@ -433,6 +438,7 @@ void os64_ui_paint(os64_ui_t *ui)
 
 void os64_ui_run(os64_ui_t *ui, int64_t win, volatile bool *running)
 {
+	if (ui->follow_session) (void)os64_ui_font_follow(ui);
 	os64_ui_paint(ui);   // first frame: whatever set_root marked
 
 	while ((running == (volatile bool *)0 || *running) && !ui->quit) {

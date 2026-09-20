@@ -1,8 +1,10 @@
-// Appearance Workshop: compose palettes and button treatments in a local
-// preview, save named snapshots, and explicitly choose session/startup use.
+// Appearance Workshop: preview palettes, treatments and independent font
+// roles, then explicitly choose session or startup use. Named compositions
+// preserve unowned font/future settings alongside their editable theme.
 // Design and persistence contracts: APPEARANCE.md.
 #include "os64/os64.h"
 #include "os64/ui.h"
+#include "font_page.h"
 
 // Keep the WM constraint and the layout fallback in the same content units.
 enum { WORKSHOP_MIN_WIDTH = 958, WORKSHOP_MIN_HEIGHT = 696 };
@@ -12,7 +14,7 @@ static os64_ui_t gEditor, gPreview;
 static os64_ui_t *gInput;
 static os64_ui_widget_t gRoot, gHeading, gIntro, gPaletteLabel, gStyleLabel;
 static os64_ui_widget_t gStyles[2], gFooter, gSmall, gApply;
-static os64_ui_widget_t gPages[3], gTabs[3], gCorners[2], gCornerLabel, gTreatmentHint;
+static os64_ui_widget_t gPages[4], gTabs[4], gCorners[2], gCornerLabel, gTreatmentHint;
 static os64_ui_widget_t gUndo, gResetComponent, gColorTitle, gHexLabel, gSetHex, gFollow;
 static os64_ui_widget_t gColorHint, gStates[4], gMenuSample;
 static os64_ui_listbox_t gColors;
@@ -39,6 +41,8 @@ static char gName[OS64_UI_THEME_NAME_MAX + 1], gLoadedName[OS64_UI_THEME_NAME_MA
 static os64_ui_theme_t gBaseline, gStartupTheme;
 static os64_ui_theme_entry_t gSaved[128];
 static size_t gSavedCount;
+static char gLoadedEnvelope[4097];
+static size_t gLoadedEnvelopeLength;
 static os64_ui_t gDialog;
 static os64_ui_widget_t gDialogRoot, gDialogTitle, gDialogBody, gConfirm, gCancel;
 static int gPendingLoad;
@@ -59,6 +63,7 @@ static uint32_t gClicks;
 static unsigned gPalette, gStyle;
 static uint32_t gChanged = OS64_UI_COMPONENT_PALETTE | OS64_UI_COMPONENT_TREATMENT;
 static bool gCompact;
+static void font_status(const char *text) { gApplyStatus = text; refresh_composition(); }
 
 static const char *const kNames[] = {
     "Midnight Workshop", "Paper & Graphite", "Electric Workstation", "Current palette"
@@ -108,10 +113,10 @@ static bool same_theme(const os64_ui_theme_t *a, const os64_ui_theme_t *b)
     return true;
 }
 
+static bool theme_dirty(void)
+{ return !same_theme(&gPreview.theme, &gBaseline) || !os64_streq(gName, gLoadedName); }
 static bool draft_dirty(void)
-{
-    return !same_theme(&gPreview.theme, &gBaseline) || !os64_streq(gName, gLoadedName);
-}
+{ return font_page_dirty() || theme_dirty(); }
 
 static void describe_palette(void)
 {
@@ -133,7 +138,7 @@ static void refresh_composition(void)
     gStyles[1].text = gStyle ? "Raised *" : "Raised";
     gCorners[0].text = gPreview.theme.control_radius ? "Square" : "Square *";
     gCorners[1].text = gPreview.theme.control_radius ? "Gently rounded *" : "Gently rounded";
-    os64_ui_set_enabled(&gEditor, &gUndo, gUndoCount != 0);
+    os64_ui_set_enabled(&gEditor, &gUndo, gPage == 3 ? font_page_can_undo() : gUndoCount != 0);
     gStartupLabel.text = same_theme(&gPreview.theme, &gStartupTheme) ?
         "Startup: this composition" : "Startup: another appearance";
     os64_ui_mark_dirty(&gEditor, &gRoot);
@@ -306,6 +311,7 @@ static void follow_click(os64_ui_widget_t *w, void *user)
 static void undo_click(os64_ui_widget_t *w, void *user)
 {
     (void)w; (void)user;
+    if (gPage == 3) { font_page_undo(); return; }
     if (!gUndoCount) return;
     gPreview.theme = gUndoThemes[--gUndoCount];
     gChanged = OS64_UI_COMPONENT_PALETTE | OS64_UI_COMPONENT_TREATMENT;
@@ -317,6 +323,7 @@ static void undo_click(os64_ui_widget_t *w, void *user)
 static void reset_component_click(os64_ui_widget_t *w, void *user)
 {
     (void)w; (void)user;
+    if (gPage == 3) { font_page_reset(); return; }
     uint32_t component = gPage == 2 ? OS64_UI_COMPONENT_TREATMENT : OS64_UI_COMPONENT_PALETTE;
     os64_ui_theme_t next = gPreview.theme;
     os64_ui_theme_merge(&next, &gBaseline, component);
@@ -348,6 +355,7 @@ static void tab_click(os64_ui_widget_t *w, void *user)
     os64_ui_cancel_interaction(&gEditor);
     gPickerEditing = false;
     gPage = (unsigned)(uintptr_t)user;
+    if (gPage == 3) font_page_activate();
     layout();
     os64_ui_set_focus(&gEditor, &gTabs[gPage]);
 }
@@ -386,6 +394,7 @@ static const os64_ui_class_t kMenuClass = {"menu sample", menu_paint, NULL, NULL
 static void apply_click(os64_ui_widget_t *w, void *user)
 {
     (void)w; (void)user;
+    if (gPage == 3) { font_page_apply(); return; }
     uint64_t generation;
     // After an Apply, only edited components replace the latest session.
     // An unchanged preview can still be explicitly reapplied as a composition.
@@ -481,12 +490,14 @@ static void load_selected(void)
     os64_ui_theme_t theme;
     os64_ui_theme_defaults(&theme);
     const char *name;
+    char envelope[4097];
+    size_t envelope_length = 0;
     if (index < 3) {
         os64_ui_theme_palette(&theme, (os64_ui_palette_t)index);
         name = kNames[index];
     } else {
         name = gSaved[index - 3].name;
-        int result = os64_ui_theme_load(name, &theme);
+        int result = os64_ui_theme_load_snapshot(name, &theme, envelope, sizeof(envelope), &envelope_length);
         if (result) {
             gApplyStatus = result == OS64_UI_THEME_INVALID ?
                 "Invalid saved theme; preview kept" : "Cannot load theme; preview kept";
@@ -494,6 +505,8 @@ static void load_selected(void)
             return;
         }
     }
+    if (envelope_length) os64_memcpy(gLoadedEnvelope, envelope, envelope_length);
+    gLoadedEnvelopeLength = envelope_length;
     gPreview.theme = theme;
     gUndoCount = 0;
     gBaseline = theme;
@@ -514,13 +527,14 @@ static void load_click(os64_ui_widget_t *w, void *user)
         return;
     }
     gPendingLoad = gThemes.selected;
-    if (draft_dirty()) ask_confirmation(CONFIRM_LOAD);
+    if (theme_dirty()) ask_confirmation(CONFIRM_LOAD);
     else load_selected();
 }
 
 static void save_draft(bool replace)
 {
-    int result = os64_ui_theme_save(gName, &gPreview.theme, replace);
+    int result = os64_ui_theme_save_snapshot(gName, &gPreview.theme,
+        gLoadedEnvelopeLength ? gLoadedEnvelope : NULL, gLoadedEnvelopeLength, replace);
     if (result == OS64_UI_THEME_EXISTS) { ask_confirmation(CONFIRM_REPLACE); return; }
     if (!result) {
         gBaseline = gPreview.theme;
@@ -542,7 +556,8 @@ static void save_draft(bool replace)
 static void save_click(os64_ui_widget_t *w, void *user)
 {
     (void)w; (void)user;
-    save_draft(false);
+    if (gPage == 3) font_page_save();
+    else save_draft(false);
 }
 
 static void startup_click(os64_ui_widget_t *w, void *user)
@@ -670,10 +685,10 @@ static void layout(void)
     int left = 444, footer = height - 106;
     place(&gHeading, 24, 16, width - 48, 24);
     place(&gIntro, 24, 44, width - 48, 20);
-    static const char *const tabs[] = {"Themes", "Palette", "Controls"};
-    static const char *const active[] = {"Themes *", "Palette *", "Controls *"};
-    for (unsigned i = 0; i < 3; ++i) {
-        place(&gTabs[i], 24 + (int)i * 150, 78, 144, 32);
+    static const char *const tabs[] = {"Themes", "Palette", "Controls", "Fonts"};
+    static const char *const active[] = {"Themes *", "Palette *", "Controls *", "Fonts *"};
+    for (unsigned i = 0; i < 4; ++i) {
+        place(&gTabs[i], 24 + (int)i * 112, 78, 106, 32);
         gTabs[i].text = gPage == i ? active[i] : tabs[i];
         place(&gPages[i], 24, 122, left, footer - 138);
         os64_ui_set_hidden(&gEditor, &gPages[i], i != gPage);
@@ -741,6 +756,9 @@ static void layout(void)
     place(&gReset, x + pw - 132, footer - 40, 116, 24);
     view_changed(&gText, NULL);
     refresh_composition();
+    font_page_layout(gPage == 3);
+    os64_ui_set_hidden(&gEditor, &gNameField.w, gPage == 3);
+    os64_ui_set_hidden(&gEditor, &gNameLabel, gPage == 3);
 }
 
 static void editor_label(os64_ui_widget_t *w, const char *text)
@@ -781,7 +799,7 @@ static void setup(void)
     os64_ui_panel(&gCanvas);
     os64_ui_set_root(&gEditor, &gRoot);
     os64_ui_set_root(&gPreview, &gCanvas);
-    for (unsigned i = 0; i < 3; ++i) {
+    for (unsigned i = 0; i < 4; ++i) {
         os64_ui_panel(&gPages[i]);
         os64_ui_add_child(&gRoot, &gPages[i]);
         os64_ui_button(&gTabs[i], "", tab_click, (void *)(uintptr_t)i);
@@ -899,7 +917,10 @@ static void setup(void)
     gInput = &gEditor;
     refresh_collection();
     describe_palette();
+    font_page_init(&gEditor, &gPreview, &gPages[3], font_status);
     layout();
+    (void)os64_ui_font_follow(&gEditor);
+    (void)os64_ui_font_follow(&gDialog);
     sync_color();
     os64_ui_textview_goto(&gPreview, &gText, 0, 2, false);
     os64_ui_textview_goto(&gPreview, &gText, 0, 16, true);
@@ -952,8 +973,9 @@ static void dispatch(const os64_gui_event_t *ev)
     if (ev->type == OS64_GUI_EVENT_APPEARANCE) {
         uint64_t before = gEditor.appearance_generation;
         os64_ui_dispatch(&gEditor, ev);
+        (void)os64_ui_font_follow(&gDialog);
         if (gEditor.appearance_generation > before) {
-            gApplyStatus = "Session changed; preview kept";
+            gApplyStatus = gEditor.font_settings_result ? "Font does not fit editor; current font and preview kept" : "Session changed; preview kept";
             gDialog.theme = gEditor.theme;
             refresh_composition();
         }
@@ -1042,6 +1064,10 @@ int main(int argc, char **argv)
             dispatch(&ev);
         paint();
     }
+    font_page_close();
+    os64_ui_font_release(&gPreview);
+    os64_ui_font_release(&gEditor);
+    os64_ui_font_release(&gDialog);
     os64_gui_window_destroy(win);
     return 0;
 }

@@ -112,14 +112,10 @@ static void next(os64_ui_widget_t *w, void *user)
 
 static void fit_text(char *dst, size_t cap, const char *src, int pixels)
 {
-    size_t cells = pixels > 0 ? (size_t)pixels / 8 : 0;
-    if (cells >= cap) cells = cap - 1;
-    os64_strcopy(dst, cells + 1, src);
-    if (os64_strlen(src) > cells && cells >= 3) {
-        dst[cells - 3] = '.';
-        dst[cells - 2] = '.';
-        dst[cells - 1] = '.';
-    }
+    /* Widget clipping uses measured glyphs. Cell-based truncation would cut
+     * UTF-8 bytes and mismeasure a proportional interface face. */
+    (void)pixels;
+    os64_strcopy(dst, cap, src);
 }
 
 static void layout(os64_ui_t *ui)

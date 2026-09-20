@@ -1,3 +1,4 @@
+#include "os64/io.h"
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>
@@ -9,6 +10,7 @@ extern pid_t waitpid(pid_t pid, int *status, int options);
 #include "os64/ui.h"
 #include "os64/appearance.h"
 #include "os64/conf.h"
+#include "os64/font_settings.h"
 #include "os64/signal.h"
 #include "appearance.h"
 #include "gui/event_queue.h"
@@ -192,9 +194,11 @@ static void client_contracts(void)
     os64_gui_event_t ev = {.type=OS64_GUI_EVENT_APPEARANCE,
         .appearance={(uint32_t)gen, (uint32_t)(gen >> 32)}};
     assert(os64_ui_dispatch(&a, &ev));
+    unsigned after_decode = allocations;
+    assert(after_decode > alloc_before);
     assert(os64_ui_dispatch(&b, &ev));
     assert(os64_ui_dispatch(&preview, &ev));
-    assert(reads == read_before + 1 && allocations == alloc_before + 1);
+    assert(reads == read_before + 1 && allocations == after_decode);
     assert(a.appearance_generation == gen && b.appearance_generation == gen);
     assert(a.any_dirty && b.any_dirty && a.theme.panel_bg == electric.panel_bg);
     assert(a.theme.pad == 17 && b.theme.pad == 3);
@@ -206,8 +210,11 @@ static void client_contracts(void)
     assert(appearance_publish(bad, n) == (int)n);
     ev.appearance.generation_lo = (uint32_t)++gen;
     alloc_before = allocations; read_before = reads;
-    os64_ui_dispatch(&a, &ev); os64_ui_dispatch(&b, &ev);
-    assert(reads == read_before + 1 && allocations == alloc_before + 1);
+    os64_ui_dispatch(&a, &ev);
+    after_decode = allocations;
+    assert(after_decode > alloc_before);
+    os64_ui_dispatch(&b, &ev);
+    assert(reads == read_before + 1 && allocations == after_decode);
     assert(a.appearance_generation == gen-1 && a.theme.panel_bg == electric.panel_bg);
     os64_ui_t born; os64_ui_init(&born, NULL);
     assert(born.appearance_generation == gen-1 && born.theme.panel_bg == electric.panel_bg);
@@ -289,7 +296,7 @@ static void concurrency_and_queue_contracts(void)
     for (int i=0; i<2; ++i) assert(!pthread_create(&threads[i], NULL, reload, &args[i]));
     for (int i=0; i<2; ++i) pthread_join(threads[i], NULL);
     pthread_barrier_destroy(&start);
-    assert(reads == before_reads+1 && allocations == before_allocs+1);
+    assert(reads == before_reads+1 && allocations > before_allocs);
     assert(a.appearance_generation == fresh && b.appearance_generation == fresh);
     for (size_t k=0; k<3; ++k) {
         input_event_t motion = {.type=INPUT_EVENT_MOUSE_MOVE};
@@ -429,12 +436,137 @@ static void legacy_session_radius_contract(void)
     assert(status == 0);
 }
 
+static void first_font_apply_contract(void)
+{
+    pid_t pid = fork(); assert(pid >= 0);
+    if (!pid) {
+        os64_ui_t ui; os64_ui_init(&ui, NULL);
+        os64_font_config_t config; os64_font_config_defaults(&config);
+        startup_text = "# custom defaults survive\nfuture.texture = silk\n";
+        assert(!os64_font_settings_apply(os64_ui_font_context(&ui), &config, NULL, NULL));
+        os64_ui_theme_t actual, expected;
+        os64_ui_theme_defaults(&expected);
+        os64_ui_theme_palette(&expected, OS64_UI_PALETTE_ELECTRIC);
+        actual = expected; uint64_t installed = 0;
+        os64_ui_theme_current(&actual, &installed);
+        assert(installed && !memcmp(&actual, &expected, sizeof(actual)));
+        char bytes[OS64_APPEARANCE_MAX + 1];
+        int n = appearance_snapshot(bytes, sizeof(bytes)-1); bytes[n] = 0;
+        assert(strstr(bytes, "inherit = startup\n"));
+        assert(strstr(bytes, startup_text));
+        os64_ui_font_release(&ui);
+        _exit(0);
+    }
+    int status; assert(waitpid(pid, &status, 0) == pid && !status);
+}
+
+static void font_envelope_contracts(void)
+{
+    os64_ui_t ui;
+    os64_ui_init(&ui, NULL);
+    os64_text_context_t *context = os64_ui_font_context(&ui);
+    assert(context);
+    os64_font_config_t config, current;
+    os64_font_config_defaults(&config);
+    os64_ui_theme_t theme;
+    os64_ui_theme_defaults(&theme);
+    char bytes[OS64_APPEARANCE_MAX + 1], snapshot[OS64_APPEARANCE_MAX + 1];
+    const char *extras = "# Future settings stay byte-for-byte\nfuture.texture = linen  # silk later\nfonts.ui.face = builtin\nFONTS.ui.face = builtin\n";
+    size_t n = encode(bytes, &theme, generation());
+    memcpy(bytes + n, extras, strlen(extras)); n += strlen(extras);
+    assert(appearance_publish(bytes, n) == (int)n);
+    uint64_t published, serial;
+    assert(!os64_font_settings_apply(context, &config, &published, NULL));
+    assert(!os64_font_settings_current(&current, &serial) && serial == published);
+    int count = appearance_snapshot(snapshot, sizeof(snapshot)-1);
+    assert(count > 0); snapshot[count] = 0;
+    assert(strstr(snapshot, "# Future settings stay byte-for-byte\nfuture.texture = linen  # silk later\n"));
+    assert(!strstr(snapshot, "FONTS.ui.face"));
+    char *face = strstr(snapshot, "fonts.ui.face");
+    assert(face && !strstr(face + 1, "fonts.ui.face"));
+    assert(!os64_ui_theme_apply(&theme, OS64_UI_COMPONENT_PALETTE, NULL));
+    assert(!os64_font_settings_current(&current, &serial) && serial == published);
+    assert(!os64_font_settings_apply(context, &config, &published, NULL));
+    assert(!os64_font_settings_current(&current, &serial) && serial == published);
+    count = appearance_snapshot(snapshot, sizeof(snapshot)-1); snapshot[count] = 0;
+    assert(strstr(snapshot, "future.texture = linen  # silk later\n"));
+
+    // Another writer wins the exact CAS: preserve its raw bytes and retry.
+    racing_length = encode(racing, &theme, generation());
+    race_write = true;
+    assert(os64_font_settings_apply(context, &config, NULL, NULL) == OS64_UI_APPLY_CONFLICT);
+    assert(!os64_font_settings_apply(context, &config, NULL, NULL));
+    uint64_t before = generation();
+    refuse_write = true;
+    assert(os64_font_settings_apply(context, &config, NULL, NULL) == OS64_UI_APPLY_IO);
+    refuse_write = false; assert(generation() == before);
+    fail_alloc = true;
+    assert(os64_font_settings_apply(context, &config, NULL, NULL) != 0);
+    fail_alloc = false; assert(generation() == before);
+
+    const char *bad[] = {"unknown = x\n", "fonts.ui.size = bad\n", "fonts.ui.face = relative.ttf\n",
+        "fonts.serial = 0\n", "future..bad = x\n", "= blank\n", "fonts.ui.size = 24\n"};
+    for (size_t i = 0; i < sizeof(bad)/sizeof(*bad); ++i) {
+        n = encode(bytes, &theme, generation());
+        memcpy(bytes + n, bad[i], strlen(bad[i])); n += strlen(bad[i]);
+        assert(appearance_publish(bytes, n) == (int)n);
+        before = generation();
+        assert(os64_font_settings_apply(context, &config, NULL, NULL) == OS64_UI_APPLY_INVALID);
+        assert(generation() == before);
+        assert(!os64_ui_theme_apply(&theme, 3, NULL));
+    }
+    n = encode(bytes, &theme, generation());
+    size_t head; uint64_t ignored;
+    assert(os64_appearance_header_read(bytes, n, &ignored, &head));
+    // Comments count toward the complete envelope limit too.
+    bytes[n++] = '#';
+    memset(bytes+n, 'x', head + OS64_APPEARANCE_PAYLOAD_MAX - n);
+    n = head + OS64_APPEARANCE_PAYLOAD_MAX;
+    assert(appearance_publish(bytes, n) == (int)n);
+    before = generation();
+    assert(os64_font_settings_apply(context, &config, NULL, NULL) == OS64_UI_APPLY_INVALID);
+    assert(generation() == before);
+    publish(&theme);
+    os64_ui_font_release(&ui);
+    puts("font envelopes: preserving component CAS, reload serials, malformed input, conflicts, allocation/I/O failure and 4096-byte refusal passed");
+}
+
 void appearance_session_contracts(void)
 {
+    first_font_apply_contract();
     legacy_session_radius_contract();
     startup_preservation_contracts();
     store_contracts();
     client_contracts();
     concurrency_and_queue_contracts();
+    font_envelope_contracts();
     puts("appearance: startup preservation, session store, cache, races, independent contexts, and queue pressure passed");
+}
+
+/* The appearance UI suite has no installed-font filesystem. The separate font
+ * configuration/installation fixture exercises real files and failure paths. */
+int64_t __wrap_os64_conf_find(const char *name, char *out, size_t cap)
+{ (void)name; (void)out; (void)cap; return OS64_CONF_NO_FILE; }
+int64_t __wrap_os64_conf_target(const char *name, char *out, size_t cap)
+{ int n = snprintf(out, cap, "/home/%s", name); return n < 0 || (size_t)n >= cap ? -1 : 0; }
+int64_t os64_stat(const char *path, os64_dirent_t *entry) { (void)path; (void)entry; return -1; }
+int64_t os64_opendir(const char *path) { (void)path; return -1; }
+int64_t os64_readdir(int32_t fd, os64_dirent_t *entry) { (void)fd; (void)entry; return 0; }
+int64_t os64_mkdir(const char *path) { (void)path; return -1; }
+int64_t os64_sync(int32_t fd) { (void)fd; return -1; }
+int64_t os64_unlink(const char *path) { (void)path; return -1; }
+int64_t os64_rename(const char *a, const char *b) { (void)a; (void)b; return -1; }
+int64_t os64_rename_with_flags(const char *a, const char *b, uint64_t flags)
+{ (void)a; (void)b; (void)flags; return -1; }
+uint64_t os64_taskid(void) { return 1; }
+
+int64_t __wrap_os64_conf_find_bytes(const char *name, char **out, size_t *length)
+{
+    assert(!strcmp(name,"theme.conf"));
+    *out = NULL; *length = 0;
+    if (startup_error) return startup_error;
+    if (!startup_text) return OS64_CONF_NO_FILE;
+    *out = os64_malloc(strlen(startup_text)+1);
+    if (!*out) return OS64_CONF_NO_MEMORY;
+    strcpy(*out,startup_text); *length = strlen(startup_text); return 0;
 }

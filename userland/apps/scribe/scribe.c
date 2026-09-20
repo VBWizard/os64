@@ -966,6 +966,7 @@ int scribe_main(int argc, char **argv, const scribe_hooks_t *hooks)
         status_show("(unnamed) - ^G help  ^S save  ^F find  ^O open  ^Q quit");
     sync_scrollbar();
 
+    if (!hooks) (void)os64_ui_font_follow(&g.ui);
     if (hooks && hooks->ready)
         hooks->ready(&g.ui, hooks->user);
 

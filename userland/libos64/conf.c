@@ -21,6 +21,22 @@
 #include "os64/proc.h"  // os64_taskid — half of what makes that temp name unique
 #include "os64/syscall.h"
 #include "os64/syscall_numbers.h"   // SYSCALL_CONF_RESOLVE — the kernel walks the ladder
+#include "os64/slurp.h"
+
+int64_t os64_conf_find_bytes(const char *name, char **out, size_t *length)
+{
+    if (!out || !length) return OS64_CONF_BAD_SETTING;
+    *out = NULL; *length = 0;
+    char path[OS64_CONF_PATH_MAX];
+    if (os64_conf_find(name, path, sizeof(path)) < 0) return OS64_CONF_NO_FILE;
+    uint8_t *bytes = NULL;
+    os64_slurp_status_t status = os64_slurp(path, OS64_CONF_MAX - 1, &bytes, length);
+    if (status == OS64_SLURP_TOO_BIG) return OS64_CONF_TRUNCATED;
+    if (status == OS64_SLURP_NO_MEMORY) return OS64_CONF_NO_MEMORY;
+    if (status) return OS64_CONF_IO_ERROR;
+    *out = (char *)bytes;
+    return 0;
+}
 
 static int64_t conf_parse_buffer(char *buf, os64_conf_fn fn, void *user, bool *stopped)
 {
@@ -466,7 +482,7 @@ int64_t os64_conf_target(const char *name, char *path_out, size_t cap)
 }
 
 static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
-                          size_t count, bool atomic_replace,
+                          size_t count, bool atomic_replace, bool delete_keys,
                           bool (*validate)(const char *, size_t, void *), void *user)
 {
 	if (pairs == NULL || count == 0)
@@ -479,9 +495,11 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 	// (rule 4 in os64/conf.h — same whole-refusal doctrine as TOO_MANY above,
 	// because a save that quietly dropped one of its settings is the silent
 	// config failure this arc exists to abolish).
-	for (size_t p = 0; p < count; p++)
-		if (!setting_is_writable(&pairs[p]))
-			return OS64_CONF_BAD_SETTING;
+	for (size_t p = 0; p < count; p++) {
+        os64_conf_pair_t checked = pairs[p];
+        if (delete_keys && !checked.value) checked.value = "";
+		if (!setting_is_writable(&checked)) return OS64_CONF_BAD_SETTING;
+    }
 
 	// RULE 1: the TOP of the ladder, never where we read from. `true` asks
 	// the kernel for the path this name WOULD have at position 0 — the file
@@ -581,7 +599,8 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 		if (p >= 0 && (size_t)p < marks && !written[p]) {
 			// Replacing this line — hand out_setting the ORIGINAL so it can
 			// carry through any inline comment (the merge contract).
-			out_setting(&o, pairs[p].key, pairs[p].value, &old[start], end - start);
+			if (pairs[p].value)
+                out_setting(&o, pairs[p].key, pairs[p].value, &old[start], end - start);
 			written[p] = true;
 		} else if (p >= 0 && (size_t)p < marks) {
 			// A REPEATED key we already rewrote: drop the duplicate rather
@@ -597,7 +616,7 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 	// Pairs that matched no existing line go at the end — no original line,
 	// so no comment to carry (NULL).
 	for (size_t p = 0; p < marks; p++)
-		if (!written[p])
+		if (!written[p] && pairs[p].value)
 			out_setting(&o, pairs[p].key, pairs[p].value, NULL, 0);
 
 	if (o.overflow) {
@@ -705,17 +724,23 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 
 int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t count)
 {
-    return conf_write(name, pairs, count, false, NULL, NULL);
+    return conf_write(name, pairs, count, false, false, NULL, NULL);
 }
 
 int64_t os64_conf_write_checked(const char *name, const os64_conf_pair_t *pairs, size_t count,
     bool (*validate)(const char *, size_t, void *), void *user)
 {
-    return conf_write(name, pairs, count, true, validate, user);
+    return conf_write(name, pairs, count, true, false, validate, user);
 }
 
 int64_t os64_conf_set(const char *name, const char *key, const char *value)
 {
 	os64_conf_pair_t one = { .key = key, .value = value };
 	return os64_conf_write(name, &one, 1);
+}
+
+int64_t os64_conf_update_checked(const char *name, const os64_conf_pair_t *pairs,
+    size_t count, bool (*validate)(const char *, size_t, void *), void *user)
+{
+    return conf_write(name, pairs, count, true, true, validate, user);
 }

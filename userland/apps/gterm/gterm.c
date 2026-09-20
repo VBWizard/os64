@@ -43,6 +43,7 @@
 #include "os64/clip.h"
 #include "os64/mem.h"
 #include "font_grid.h"
+#include "os64/font_settings.h"
 
 #define WANT_COLS 100u
 #define WANT_ROWS 38u
@@ -58,6 +59,8 @@ static bool gSnapshotValid;
 static uint64_t gRenderedGen = UINT64_MAX;
 static int64_t gMaster = -1;
 static gterm_grid_t gGrid;
+static uint64_t gFontGeneration;
+static bool gFontSettingsReady;
 static os64_text_context_t *gText;
 
 // ── the selection (CLIPBOARD.md slice 3) ────────────────────────────────────
@@ -143,12 +146,30 @@ static void invalidate_grid(void *user)
 	gRenderedGen = UINT64_MAX;
 }
 
-/* F5 supplies a resolved shared set here. No path/config policy belongs to
- * the terminal consumer; the fixture injects sets through this same seam. */
+/* Both shared settings and the guest fixture use the grid transaction. */
 static os64_font_status_t replace_fonts(os64_font_set_t *candidate)
 {
 	os64_font_consumer_t consumer = gterm_grid_consumer(&gGrid);
 	return os64_font_adopt(candidate, &consumer, 1, NULL);
+}
+
+static void refresh_font_settings(void)
+{
+    os64_font_config_t config;
+    uint64_t generation;
+    if (os64_font_settings_current(&config, &generation) != 0) return;
+    if (gFontSettingsReady && gFontGeneration == generation) return;
+    os64_font_set_t *candidate = NULL;
+    os64_font_config_error_t error;
+    if (os64_font_config_prepare(gText, &config, &candidate, &error)) {
+        os64_printf("gterm: font line %lu: %s; keeping current grid\n",
+                    (unsigned long)error.line, os64_font_config_status_name(error.status));
+        return;
+    }
+    os64_font_status_t status = replace_fonts(candidate);
+    os64_font_set_release(candidate);
+    if (!status) { gFontSettingsReady = true; gFontGeneration = generation; }
+    else os64_printf("gterm: font/grid change refused (%u); keeping current grid\n", status);
 }
 
 static void cell_at(int32_t x, int32_t y, uint32_t *row, uint32_t *col)
@@ -311,8 +332,16 @@ int main(int argc, char **argv)
 	os64_font_set_t *initial = NULL;
 	gGrid = (gterm_grid_t){.memory = options.memory, .resize = resize_pty,
 		.invalidate = invalidate_grid};
-	if (os64_font_context_create(&options, &gText) != OS64_FONT_OK ||
-		os64_font_set_prepare(gText, NULL, &initial) != OS64_FONT_OK) {
+	os64_font_status_t startup = os64_font_context_create(&options, &gText);
+    if (!startup) {
+        os64_font_config_t config;
+        os64_font_config_error_t error;
+        if (!os64_font_settings_current(&config, &gFontGeneration) &&
+            !os64_font_config_prepare(gText, &config, &initial, &error))
+            gFontSettingsReady = true;
+        else startup = os64_font_set_prepare(gText, NULL, &initial);
+    }
+	if (startup != OS64_FONT_OK) {
 		os64_text_destroy(gText);
 		os64_printf("gterm: cannot prepare default font\n");
 		return 1;
@@ -322,6 +351,18 @@ int main(int argc, char **argv)
 	uint32_t frame_w, frame_h;
 	os64_gui_frame_for_content(WANT_COLS * (uint32_t)font.cell_width_px,
 		WANT_ROWS * (uint32_t)font.row_height_px, 0, &frame_w, &frame_h);
+	// A scalable startup face can make the preferred grid larger than the
+	// display. Keep the frame reachable; the grid/PTY use the actual surface.
+	int32_t initial_x = 140, initial_y = 120;
+	uint32_t screen_w, screen_h;
+	if (os64_gui_screen_info(&screen_w, &screen_h) == 0 && screen_w && screen_h) {
+		uint32_t max_w = screen_w > 32 ? screen_w - 32 : screen_w;
+		uint32_t max_h = screen_h > 64 ? screen_h - 64 : screen_h;
+		if (frame_w > max_w) frame_w = max_w;
+		if (frame_h > max_h) frame_h = max_h;
+		if ((uint64_t)initial_x + frame_w > screen_w) initial_x = (int32_t)((screen_w - frame_w) / 2);
+		if ((uint64_t)initial_y + frame_h > screen_h) initial_y = (int32_t)((screen_h - frame_h) / 2);
+	}
 	// `gterm [program args...]` seats that program instead of husk — the
 	// root menu's way of running a console program in a window (`item
 	// "Top" /bin/gterm /bin/top`). Full path: there is no shell in that
@@ -335,7 +376,7 @@ int main(int argc, char **argv)
 	if (title[0] == 0)
 		title = "gterm";
 
-	int64_t win = os64_gui_window_create(title, 140, 120,
+	int64_t win = os64_gui_window_create(title, initial_x, initial_y,
 	                                     frame_w, frame_h, 0);
 	if (win <= 0)
 	{
@@ -400,7 +441,11 @@ int main(int argc, char **argv)
 		bool repaint = false;   // the selection changed; the grid may not have
 		while ((erc = os64_gui_event_poll(win, &ev)) == 1)
 		{
-			if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii != 0)
+            if (ev.type == OS64_GUI_EVENT_APPEARANCE) {
+                refresh_font_settings();
+                repaint = true;
+            }
+			else if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii != 0)
 			{
 				// Typing means you are done looking: the highlight dies on
 				// any keystroke (his ruling). Keeping it lit while the screen

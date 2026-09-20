@@ -159,5 +159,24 @@ int main(int argc, char **argv)
     assert(n == 12 && !memcmp(bytes, "unknown = 4\n", 12));
     os64_conf_pair_t pairs[OS64_CONF_WRITE_MAX + 1];
     assert(os64_conf_write("unused.conf", pairs, OS64_CONF_WRITE_MAX + 1) == OS64_CONF_TOO_MANY);
+    // Named Save and Save As carry future components, comments and fonts
+    // through the raw snapshot, including replacement of an existing file.
+    char envelope[4097], carried[4097];
+    int64_t known = os64_ui_theme_encode(&electric, envelope, sizeof(envelope));
+    assert(known > 0);
+    const char *extra = "# shared annotation\nfuture.grain = oak  # exact\nfonts.document.face = builtin\n";
+    assert((size_t)known + strlen(extra) < sizeof(envelope));
+    strcpy(envelope+known,extra);
+    raw("themes/Extras.theme",envelope,strlen(envelope));
+    size_t carried_len = 0;
+    assert(!os64_ui_theme_load_snapshot("Extras", &loaded, carried, sizeof(carried), &carried_len));
+    assert(carried_len == strlen(envelope) && !strcmp(carried,envelope));
+    assert(!os64_ui_theme_save_snapshot("Copied", &paper, carried, carried_len, false));
+    assert(!os64_ui_theme_load_snapshot("Copied", &loaded, carried, sizeof(carried), &carried_len));
+    assert(strstr(carried,extra)); unchanged(&loaded,&paper);
+    assert(!os64_ui_theme_save("Copied", &electric, true));
+    assert(!os64_ui_theme_load_snapshot("Copied", &loaded, carried, sizeof(carried), &carried_len));
+    assert(strstr(carried,extra)); unchanged(&loaded,&electric);
     puts("appearance saved: round trips, full schema, names, I/O failures, atomic publication, concurrent create, startup merge passed");
+    return 0;
 }

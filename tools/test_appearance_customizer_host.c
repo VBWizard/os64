@@ -17,6 +17,13 @@ int os64_ui_theme_load(const char *name, os64_ui_theme_t *theme)
 int os64_ui_theme_save(const char *name, const os64_ui_theme_t *theme, bool replace)
 { (void)name; (void)theme; (void)replace; return OS64_UI_THEME_IO; }
 
+int os64_ui_theme_load_snapshot(const char *name, os64_ui_theme_t *theme,
+                                char *bytes, size_t cap, size_t *length)
+{ (void)bytes; (void)cap; (void)length; return os64_ui_theme_load(name,theme); }
+int os64_ui_theme_save_snapshot(const char *name, const os64_ui_theme_t *theme,
+                                const char *bytes, size_t length, bool replace)
+{ (void)bytes; (void)length; return os64_ui_theme_save(name,theme,replace); }
+
 static void contained(const os64_ui_widget_t *w)
 {
     if (w->hidden) return;
@@ -35,13 +42,14 @@ void appearance_customizer_contracts(void)
     assert(pixels);
     gCtx.surf = (os64_gui_surface_t){.pixels = pixels, .width = 958, .height = 706, .pitch_px = 958};
     setup();
-    for (unsigned i = 0; i < 3; ++i) {
+    for (unsigned i = 0; i < 4; ++i) {
         tab_click(NULL, (void *)(uintptr_t)i);
         assert(!gCompact && !gCanvas.hidden);
         contained(&gRoot); contained(&gCanvas);
         os64_ui_render(&gEditor, NULL); os64_ui_render(&gPreview, NULL);
-        for (unsigned j = 0; j < 3; ++j) assert(gPages[j].hidden == (i != j));
+        for (unsigned j = 0; j < 4; ++j) assert(gPages[j].hidden == (i != j));
     }
+    tab_click(NULL, (void *)(uintptr_t)2);
     assert(gText.left_px == 0 && gText.sel);
     // The minimum supported native content area still contains its children.
     gCtx.surf.height = 696; layout();
@@ -134,6 +142,7 @@ void appearance_customizer_contracts(void)
     // The widgets measured text, so each of these windows is holding a text
     // context and its builtin role set. A program just exits; a leak-checked
     // harness has to hand them back.
+    font_page_close();
     os64_ui_font_release(&gEditor);
     os64_ui_font_release(&gPreview);
     puts("appearance customizer: native layout, palette edits, hex validation, Undo and page cancellation passed");
