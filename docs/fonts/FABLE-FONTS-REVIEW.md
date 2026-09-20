@@ -17,8 +17,9 @@ Start with [F5-REPORT.md](F5-REPORT.md) for the final behavior and evidence,
 - F3: `aa8b7a2`, report `ab7a1cd`, [F3-REPORT.md](F3-REPORT.md).
 - Accepted F4 plus independent receipt: `3bf7b1f`,
   [F4-QUINN-REVIEW.md](F4-QUINN-REVIEW.md) and `f4-evidence/c3-review-r2/`.
-- F5 implementation: `419b36d`, integration parent `07d8a69`. Review
-  `git diff 07d8a69..419b36d` for settings and inspect the F3 change separately.
+- F5 implementation: `419b36d`, clean image build fix `bda3dc5`, integration
+  parent `07d8a69`. Review `git diff 07d8a69..HEAD` on this branch for settings
+  and packaging, and inspect the F3 change separately.
   The report and evidence checksums identify the validation artifacts.
 
 The backend/provider/layout boundaries remain unchanged. No kernel code or
@@ -53,3 +54,26 @@ checkpoints, not claims about the integrated production selector.
 Please report behavioral hazards and contract violations with a reproducer or
 specific failing path. Known limits and deferred work are in F5-REPORT.md;
 wording-only improvements are not review findings under AGENTS.md.
+
+## Handoff checkpoint — 2026-09-20
+
+The clean root build failure is fixed in `bda3dc5`. The report includes the
+failing/passing `make clean && make` receipts, FAT/ext2 package comparisons,
+and a fresh-image GUI boot that discovers and applies the shipped fonts.
+Chris also reports successful 24-pixel terminal text and DejaVu Sans interface
+text during hands-on use. This feedback is distinct from Quinn's guest evidence.
+
+Chris deferred further investigation of one Workshop observation: at 1024×768,
+changing the interface from Sans Book 16 to 17 pixels was refused; maximizing
+and retrying Apply succeeded, and restoring appeared visually sound. Source
+inspection confirms font adoption validates the current layout, whereas
+Workshop's resize handler reruns layout without repeating adoption validation.
+The particular refusal and its change after maximizing have not been isolated
+or independently reproduced; clipping on other pages has not been ruled out.
+Higher-resolution use is Chris's expectation, not evidence that the issue is
+resolved. Keep this as a known deferred behavior, with no expanded diagnostic
+UI requested. Other hazards remain within the combined review scope.
+
+The branch is local and unmerged. Three untracked root-level image backups
+(`os64.img`, `ext2_test.img`, `os64_data.img`) are intentionally outside the
+review and were preserved. Fable's review remains pending.

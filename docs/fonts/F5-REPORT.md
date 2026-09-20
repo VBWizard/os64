@@ -1,6 +1,6 @@
 # F5 — configurable fonts, live adoption and Appearance Workshop
 
-**Implementation: `419b36d`**, branch `codex/font-settings`, worktree
+**Implementation: `419b36d`; image build fix: `bda3dc5`**, branch `codex/font-settings`, worktree
 `.worktrees/font-settings`. Integration parent **`07d8a69`** merges F3
 `ab7a1cd` onto accepted F4 `3bf7b1f`. F5 implementation and verification are
 complete for combined review. Fable's F3/F5 implementation review is pending;
@@ -179,6 +179,11 @@ that distinction; the final binary manifest matches `419b36d`.
   are outside this slice.
 - Fixed-layout tools may retain their current fonts at larger sizes. Scribe
   and gterm have application-specific layout/grid transactions. Retry by Apply.
+- Chris deferred the Workshop maximize/Apply/restore inconsistency on
+  2026-09-20. His 1024×768 observation and the limits of source inspection are
+  recorded in the [handoff checkpoint](FABLE-FONTS-REVIEW.md#handoff-checkpoint--2026-09-20).
+  This is not a claim that resizing revalidates font fit or that higher
+  resolution resolves the behavior.
 - The inherited Western UTF-8/symbol profile, bitmap compatibility fallback,
   large-line Scribe extent debt, and non-Unicode PTY remain as documented in
   F0–F4. Complex shaping, window decorations, kernel console/titlebar fonts and
