@@ -1266,6 +1266,116 @@ static void ui_test_boundaries_match_runs(os64_ui_t *ui)
     }
 }
 
+/* C3 — THE SCANNER BACKS UP ONLY TO A CERTAIN EDGE, and must still agree
+ * with F2 everywhere. The strings are built from the byte patterns that make
+ * cluster edges hard: bases that absorb marks and ones that do not, marks in
+ * runs, lone leads, stray continuations, overlong and surrogate encodings,
+ * invalid bytes, truncations. For every offset, both directions of step and
+ * snap must name the carets the builtin face's run publishes. So must the
+ * bounded cluster helpers, measured against the true cluster lengths. */
+static const char *const kUiTestTokens[] = {
+    "a", "e", "z", " ", "\t", "1", "(", "\x01",
+    "\xc3\xa9",                    /* é precomposed */
+    "\xcc\x81", "\xcc\x88", "\xcc\x80", "\xcd\xaf",  /* marks at both ends of the range */
+    "\xcd\xb0",                    /* just past the marks */
+    "\xe2\x82\xac", "\xf0\x9f\x98\x80",
+    "\xc3", "\xe2", "\xe2\x82", "\xf0\x9f", "\xf0\x9f\x98",   /* truncated */
+    "\x80", "\xbf", "\x8f\x8f",    /* stray continuations */
+    "\xc0\x80", "\xe0\x80\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80", /* overlong, surrogate, too big */
+    "\xff", "\xf5",
+};
+
+static uint32_t ui_test_rng = 0x2545f491u;
+static uint32_t ui_test_rand(void)
+{
+    ui_test_rng ^= ui_test_rng << 13;
+    ui_test_rng ^= ui_test_rng >> 17;
+    ui_test_rng ^= ui_test_rng << 5;
+    return ui_test_rng;
+}
+
+static void boundaries_without_the_prefix(void)
+{
+    current = "anchor scanner";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    unsigned long mismatch = 0, strings = 0;
+    char s[200];
+    for (int n = 0; n < 4000; ++n) {
+        size_t len = 0;
+        int tokens = 1 + (int)(ui_test_rand() % 40);
+        for (int t = 0; t < tokens; ++t) {
+            const char *tok = kUiTestTokens[ui_test_rand() % (sizeof(kUiTestTokens) / sizeof(*kUiTestTokens))];
+            size_t tl = strlen(tok);
+            if (len + tl > sizeof(s))
+                break;
+            memcpy(s + len, tok, tl);
+            len += tl;
+        }
+        void *run = NULL;
+        if (os64_ui_run_layout(&ui, OS64_FONT_ROLE_DOCUMENT, s, len, &run) != OS64_FONT_OK || !run) {
+            ++mismatch;
+            continue;
+        }
+        os64_text_run_view_t rv;
+        os64_text_run_view((const os64_text_run_t *)run, &rv);
+        ++strings;
+        for (size_t p = 0; p <= len; ++p) {
+            size_t before = 0, after = len, prev = 0, next = len;
+            for (size_t c = 0; c < rv.caret_count; ++c) {
+                size_t b = rv.carets[c].byte_offset;
+                if (b <= p) before = b;
+                if (b >= p && after == len) after = b;
+                if (b < p) prev = b;
+                if (b > p && next == len) next = b;
+            }
+            if (os64_ui_text_snap(s, len, p, false) != before ||
+                os64_ui_text_snap(s, len, p, true) != after ||
+                os64_ui_text_step(s, len, p, false) != prev ||
+                os64_ui_text_step(s, len, p, true) != next) {
+                if (!mismatch)
+                    printf("  first mismatch: string %d offset %zu\n", n, p);
+                ++mismatch;
+            }
+        }
+        /* The bounded helpers, at every caret: a limit at the cluster's own
+         * length finds it, one byte less reports it as too long. */
+        for (size_t c = 0; c + 1 < rv.caret_count; ++c) {
+            size_t a = rv.carets[c].byte_offset, b = rv.carets[c + 1].byte_offset;
+            size_t got = 0;
+            if (!ui_text_cluster_after(s, len, a, b - a, &got) || got != b) ++mismatch;
+            if (b - a > 1 && ui_text_cluster_after(s, len, a, b - a - 1, &got)) ++mismatch;
+            if (!ui_text_cluster_before(s, len, b, b - a, &got) || got != a) ++mismatch;
+            if (b - a > 1 && ui_text_cluster_before(s, len, b, b - a - 1, &got)) ++mismatch;
+        }
+        os64_ui_run_release(run);
+    }
+    CHECK(strings == 4000);
+    CHECK(mismatch == 0);
+
+    /* A megabyte of marks after a base is ONE cluster. Its edges are found,
+     * and the bounded helpers give up after their limit rather than walking
+     * it: the costs are counted in bytes the scanner could have touched. */
+    size_t big = 1u << 20;
+    char *line = malloc(2 + 2 * big + 1);
+    line[0] = 'x';
+    line[1] = 'e';
+    for (size_t i = 0; i < big; ++i) { line[2 + 2 * i] = (char)0xcc; line[3 + 2 * i] = (char)0x81; }
+    line[2 + 2 * big] = 'y';
+    size_t L = 3 + 2 * big;
+    CHECK(os64_ui_text_step(line, L, 1, true) == 2 + 2 * big);        /* over it */
+    CHECK(os64_ui_text_step(line, L, 2 + 2 * big, false) == 1);        /* back */
+    CHECK(os64_ui_text_snap(line, L, 1000, false) == 1);
+    CHECK(os64_ui_text_snap(line, L, 1000, true) == 2 + 2 * big);
+    size_t e = 0;
+    CHECK(!ui_text_cluster_after(line, L, 1, 4096, &e));
+    CHECK(!ui_text_cluster_before(line, L, 2 + 2 * big, 4096, &e));
+    CHECK(ui_text_cluster_after(line, L, 2 + 2 * big, 4096, &e) && e == L);
+    free(line);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    current = "";
+}
+
 static void textview_motion(const char *dir)
 {
     current = "cluster boundaries";
@@ -1854,6 +1964,417 @@ static void one_rendering_per_paint(void)
     current = "";
 }
 
+/* THE ROW CONTRACT — a 12-pixel primary row (DejaVu Sans at 9), and a line
+ * holding markers taller than it (U+2603 is outside the Western profile, so
+ * it draws the 16-pixel missing-glyph marker). Rows keep the primary pitch:
+ * the neighbours paint exactly as they would beside an empty line, the
+ * caret moves one pitch per line, a click finds its row by the pitch, and
+ * the marker line's extent is its run's advance. */
+static const char *gUiTestMarkerLines[4] = {
+    "above", "\xe2\x98\x83 snow \xe2\x98\x83", "below", "x",
+};
+static size_t ui_test_marker_count(void *user) { (void)user; return 4; }
+static const char *ui_test_marker_line(void *user, size_t i, size_t *len)
+{
+    (void)user;
+    const char *s = i < 4 ? gUiTestMarkerLines[i] : "";
+    *len = strlen(s);
+    return s;
+}
+static const os64_ui_textbuf_t kUiTestMarkerBuf = {
+    NULL, ui_test_marker_count, ui_test_marker_line, NULL, NULL, NULL, NULL, NULL
+};
+
+static int32_t ui_test_caret_top(const canvas_t *c)
+{
+    for (int32_t y = 0; y < SURF_H; ++y)
+        for (int32_t x = 0; x < SURF_W; ++x)
+            if (c->px[y * SURF_W + x] == 0xffff0000)       /* text_caret */
+                return y;
+    return -1;
+}
+
+static void rows_keep_the_primary_pitch(const char *dir)
+{
+    current = "row contract";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    os64_ui_textview(&gUiTestView, &kUiTestMarkerBuf, NULL, NULL, NULL);
+    gUiTestView.w.bounds = (os64_gui_rect_t){0, 0, 300, 60};
+    os64_ui_set_root(&ui, &gUiTestView.w);
+    gUiTestView.w.focused = true;
+    CHECK(ui_test_adopt(&ui, dir, 9) == OS64_FONT_OK);
+    int32_t pitch = os64_ui_font_row_height(&ui, OS64_FONT_ROLE_DOCUMENT);
+    CHECK(pitch == 12 && pitch < OS64_FONT_GLYPH_H);       /* shorter than a marker */
+    gUiTestView.w.bounds.h = 4 + 4 * pitch;
+    CHECK(os64_ui_textview_rows(&gUiTestView, &ui.theme) == 4);
+
+    /* The neighbours: every row but the marker line's paints exactly as it
+     * does when that line is empty. */
+    canvas_t with, without;
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    gUiTestView.w.focused = false;                          /* no caret */
+    canvas_init(&with, 0xff000000);
+    ctx.surf = with.s;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    gUiTestMarkerLines[1] = "";
+    canvas_init(&without, 0xff000000);
+    ctx.surf = without.s;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    gUiTestMarkerLines[1] = "\xe2\x98\x83 snow \xe2\x98\x83";
+    int differ_outside = 0, differ_inside = 0;
+    for (int32_t y = 0; y < SURF_H; ++y)
+        for (int32_t x = 0; x < SURF_W; ++x) {
+            bool own = y >= 2 + pitch && y < 2 + 2 * pitch;
+            bool diff = with.px[y * SURF_W + x] != without.px[y * SURF_W + x];
+            if (diff) { if (own) ++differ_inside; else ++differ_outside; }
+        }
+    CHECK(differ_inside > 0);                               /* it drew */
+    CHECK(differ_outside == 0);                             /* and only there */
+
+    /* Down one line at a time: the caret's row moves one pitch each time,
+     * across the marker line as across any other. */
+    gUiTestView.w.focused = true;
+    os64_ui_textview_goto(&ui, &gUiTestView, 0, 0, false);
+    for (int li = 0; li < 4; ++li) {
+        canvas_init(&with, 0xff000000);
+        ctx.surf = with.s;
+        gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+        CHECK(gUiTestView.cur_line == (size_t)li);
+        CHECK(ui_test_caret_top(&with) == 2 + li * pitch);
+        ui_test_burst(&gUiTestView.w, &ui, "[B");
+    }
+
+    /* A click finds its row by the pitch: just inside the marker row, and
+     * just inside the row below it. */
+    ui_test_click(&gUiTestView.w, &ui, 10, 2 + pitch + 1);
+    CHECK(gUiTestView.cur_line == 1);
+    ui_test_click(&gUiTestView.w, &ui, 10, 2 + 2 * pitch + 1);
+    CHECK(gUiTestView.cur_line == 2);
+
+    /* The marker line's extent is its run's advance, and the row shows
+     * exactly that much. */
+    int64_t extent = 0, shown = 0;
+    bool whole = false;
+    size_t len;
+    const char *s = ui_test_marker_line(NULL, 1, &len);
+    CHECK(os64_ui_textview_line_width(&ui, &gUiTestView, s, len, &extent, &whole) == OS64_FONT_OK);
+    CHECK(whole && extent > 0);
+    CHECK(os64_ui_textview_row_width(&ui, &gUiTestView, 1, &shown) == OS64_FONT_OK);
+    CHECK(shown == extent);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    current = "";
+}
+
+/* C3 — A LONG LINE IS SHOWN THROUGH A WINDOW. A three-megabyte line, a
+ * line holding a 1.4 MB cluster (one e and 700,000 combining acutes) between
+ * ordinary letters, and a line that is nothing but such a cluster, in a
+ * read-only view. Most checks use a 64-byte window so the windows, their
+ * ends and their decorations fit the test canvas; the rest use the default
+ * window, or one past F2's run limit. */
+#define UI_TEST_LONG_LINES 5
+static char *gUiTestLong[UI_TEST_LONG_LINES];
+static size_t gUiTestLongLen[UI_TEST_LONG_LINES];
+static size_t ui_test_long_count(void *user) { (void)user; return UI_TEST_LONG_LINES; }
+static const char *ui_test_long_line(void *user, size_t i, size_t *len)
+{
+    (void)user;
+    *len = i < UI_TEST_LONG_LINES ? gUiTestLongLen[i] : 0;
+    return i < UI_TEST_LONG_LINES ? gUiTestLong[i] : "";
+}
+static const os64_ui_textbuf_t kUiTestLongBuf = {
+    NULL, ui_test_long_count, ui_test_long_line, NULL, NULL, NULL, NULL, NULL
+};
+#define UI_TEST_GIANT_MARKS 700000u
+
+static void ui_test_long_model(void)
+{
+    static const char word[] = "caf\xc3\xa9 words ";   /* 12 bytes, é in it */
+    gUiTestLong[0] = malloc(5);
+    memcpy(gUiTestLong[0], "short", 5);
+    gUiTestLongLen[0] = 5;
+    size_t n1 = 3u << 20;
+    gUiTestLong[1] = malloc(n1);
+    for (size_t i = 0; i < n1; ++i)
+        gUiTestLong[1][i] = word[i % 12];
+    gUiTestLongLen[1] = n1 - n1 % 12;                  /* ends between words */
+    size_t n2 = 4 + 2 * UI_TEST_GIANT_MARKS + 3;
+    gUiTestLong[2] = malloc(n2);
+    memcpy(gUiTestLong[2], "abce", 4);
+    for (size_t i = 0; i < UI_TEST_GIANT_MARKS; ++i) {
+        gUiTestLong[2][4 + 2 * i] = (char)0xcc;
+        gUiTestLong[2][5 + 2 * i] = (char)0x81;
+    }
+    memcpy(gUiTestLong[2] + 4 + 2 * UI_TEST_GIANT_MARKS, "xyz", 3);
+    gUiTestLongLen[2] = n2;
+    gUiTestLong[3] = malloc(20000);
+    memset(gUiTestLong[3], 'x', 20000);
+    gUiTestLongLen[3] = 20000;
+    size_t n4 = 1 + 2 * UI_TEST_GIANT_MARKS;             /* one cluster, all of it */
+    gUiTestLong[4] = malloc(n4);
+    gUiTestLong[4][0] = 'e';
+    for (size_t i = 0; i < UI_TEST_GIANT_MARKS; ++i) {
+        gUiTestLong[4][1 + 2 * i] = (char)0xcc;
+        gUiTestLong[4][2 + 2 * i] = (char)0x81;
+    }
+    gUiTestLongLen[4] = n4;
+}
+
+static size_t ui_test_run_bytes(void *run)
+{
+    os64_text_run_view_t rv;
+    if (!run || os64_text_run_view((const os64_text_run_t *)run, &rv) != OS64_FONT_OK)
+        return 0;
+    return rv.byte_count;
+}
+
+/* Is the caret on a letter edge of its line? */
+static bool ui_test_caret_legal(const os64_ui_textview_t *tv)
+{
+    size_t len;
+    const char *s = tv->buf->line(tv->buf->user, tv->cur_line, &len);
+    return tv->cur_col <= len && os64_ui_text_snap(s, len, tv->cur_col, false) == tv->cur_col;
+}
+
+static void ui_test_long_view(os64_ui_t *ui, size_t window)
+{
+    memset(ui, 0, sizeof(*ui));
+    ui_test_view_theme(&ui->theme);
+    ui->theme.scroll_track = 0xff404040;
+    ui->theme.scroll_thumb = 0xffc0c0c0;
+    os64_ui_textview(&gUiTestView, &kUiTestLongBuf, NULL, NULL, NULL);
+    gUiTestView.w.bounds = (os64_gui_rect_t){0, 0, 300, 64};
+    gUiTestView.window_bytes = window;
+    os64_ui_set_root(ui, &gUiTestView.w);
+    gUiTestView.w.focused = true;
+}
+
+static void long_lines_are_windowed(const char *dir)
+{
+    current = "long lines";
+    ui_test_long_model();
+    os64_ui_t ui;
+    canvas_t c;
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    size_t len1 = gUiTestLongLen[1];
+
+    /* The bitmap cell first: its widths are exact, so the row's geometry
+     * can be checked to the pixel. A window of 64 bytes from the line's
+     * start is 64 cells, with a "more" decoration of one row's height
+     * after it. The short line has no decoration at all. */
+    ui_test_long_view(&ui, 64);
+    ui_test_no_engine(&ui);
+    int64_t width = 0;
+    CHECK(os64_ui_textview_row_width(&ui, &gUiTestView, 0, &width) == OS64_FONT_OK);
+    CHECK(width == 5 * 8);
+    CHECK(os64_ui_textview_row_width(&ui, &gUiTestView, 3, &width) == OS64_FONT_OK);
+    CHECK(width == 64 * 8 + 16);
+    bool whole = true;
+    int64_t unknown = -7;
+    CHECK(os64_ui_textview_line_width(&ui, &gUiTestView, gUiTestLong[3], 20000,
+                                      &unknown, &whole) == OS64_FONT_OK);
+    CHECK(!whole && unknown == -7);                   /* unknown, not zero */
+    /* The cluster too long to lay out stands as a placeholder two squares
+     * wide, with a "more" of one outside it because the line goes on past
+     * it: before it, "abc", the placeholder and the "more"; after it, the
+     * "more", the placeholder and "xyz". */
+    os64_ui_textview_goto(&ui, &gUiTestView, 2, 0, false);
+    CHECK(os64_ui_textview_row_width(&ui, &gUiTestView, 2, &width) == OS64_FONT_OK);
+    CHECK(width == 3 * 8 + 32 + 16);
+    os64_ui_textview_goto(&ui, &gUiTestView, 2, 4 + 2 * UI_TEST_GIANT_MARKS, false);
+    CHECK(gUiTestView.cur_col == 4 + 2 * UI_TEST_GIANT_MARKS);
+    CHECK(os64_ui_textview_row_width(&ui, &gUiTestView, 2, &width) == OS64_FONT_OK);
+    CHECK(width == 16 + 32 + 3 * 8);
+    /* A line that is one long cluster has nothing beyond it at either end
+     * that anything knows of, so its placeholder stands alone. */
+    os64_ui_textview_goto(&ui, &gUiTestView, 4, 0, false);
+    CHECK(os64_ui_textview_row_width(&ui, &gUiTestView, 4, &width) == OS64_FONT_OK);
+    CHECK(width == 32);
+    os64_ui_textview_goto(&ui, &gUiTestView, 4, gUiTestLongLen[4], false);
+    CHECK(gUiTestView.cur_col == gUiTestLongLen[4]);
+    CHECK(os64_ui_textview_row_width(&ui, &gUiTestView, 4, &width) == OS64_FONT_OK);
+    CHECK(width == 32);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+
+    /* A face from here on. */
+    ui_test_long_view(&ui, 64);
+    os64_font_set_t *set = outline_set(os64_ui_font_context(&ui), dir, "DejaVuSans.ttf", 16);
+    CHECK(set != NULL);
+    if (!set) { current = ""; return; }
+    CHECK(os64_ui_font_bind(&ui, set) == OS64_FONT_OK);
+    os64_font_set_release(set);
+
+    /* The caret deep in the long line: its row lays out a window around
+     * it, and the window's run holds no more than the window. */
+    os64_ui_textview_goto(&ui, &gUiTestView, 1, 1008, false);   /* a word's start */
+    CHECK(gUiTestView.cur_line == 1 && gUiTestView.cur_col == 1008);
+    CHECK(gUiTestView.win_line == 1);
+    CHECK(gUiTestView.win_from <= 1008 && 1008 - gUiTestView.win_from <= 32);
+    size_t bytes = ui_test_run_bytes(gUiTestView.w.run);
+    CHECK(bytes > 0 && bytes <= 64);
+
+    /* Painted with the line at the top: a "more" decoration at each end
+     * of the row, in the window's chrome colours, not the text's. */
+    gUiTestView.top = 1;
+    gUiTestView.left_px = 0;
+    canvas_init(&c, 0xff000000);
+    ctx.surf = c.s;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    int lead_track = 0, lead_arrow = 0;
+    for (int32_t y = 2; y < 18; ++y)
+        for (int32_t x = 2; x < 2 + 16; ++x) {
+            lead_track += c.px[y * SURF_W + x] == 0xff404040;
+            lead_arrow += c.px[y * SURF_W + x] == 0xffc0c0c0;
+        }
+    CHECK(lead_track > 0 && lead_arrow > 0);
+
+    /* Right across the window's end, forty letters: every step lands on a
+     * letter edge inside the window, and the window moves to keep up. */
+    size_t from = gUiTestView.win_from;
+    bool moved = false;
+    for (int i = 0; i < 40; ++i) {
+        size_t before = gUiTestView.cur_col;
+        ui_test_burst(&gUiTestView.w, &ui, "[C");
+        CHECK(gUiTestView.cur_col > before);
+        CHECK(ui_test_caret_legal(&gUiTestView));
+        CHECK(gUiTestView.cur_col >= gUiTestView.win_from &&
+              gUiTestView.cur_col - gUiTestView.win_from <= 64);
+        moved |= gUiTestView.win_from != from;
+    }
+    CHECK(moved);
+    CHECK(ui_test_run_bytes(gUiTestView.w.run) <= 64);
+
+    /* And back, forty letters Left, the same way. */
+    from = gUiTestView.win_from;
+    moved = false;
+    for (int i = 0; i < 40; ++i) {
+        size_t before = gUiTestView.cur_col;
+        ui_test_burst(&gUiTestView.w, &ui, "[D");
+        CHECK(gUiTestView.cur_col < before);
+        CHECK(ui_test_caret_legal(&gUiTestView));
+        CHECK(gUiTestView.cur_col >= gUiTestView.win_from &&
+              gUiTestView.cur_col - gUiTestView.win_from <= 64);
+        moved |= gUiTestView.win_from != from;
+    }
+    CHECK(moved);
+
+    /* A click on the leading decoration puts the caret at the window's
+     * start, against the omitted text, and the window moves back past it. */
+    from = gUiTestView.win_from;
+    gUiTestView.left_px = 0;
+    ui_test_click(&gUiTestView.w, &ui, 2 + 4, 2 + 8);
+    CHECK(gUiTestView.cur_line == 1 && gUiTestView.cur_col == from);
+    CHECK(gUiTestView.win_from < from);
+
+    /* End and Home take the caret, and the window, to the line's ends. */
+    ui_test_burst(&gUiTestView.w, &ui, "[F");
+    CHECK(gUiTestView.cur_col == len1);
+    CHECK(len1 - gUiTestView.win_from <= 64);
+    ui_test_burst(&gUiTestView.w, &ui, "[H");
+    CHECK(gUiTestView.cur_col == 0 && gUiTestView.win_from == 0);
+
+    /* A SELECTION MAY SPAN OMITTED BYTES. Selected from near the line's
+     * start to near its end, with the caret at the end: the row shows the
+     * window around the caret, and its leading decoration, standing for the
+     * selected bytes before it, is lit. */
+    os64_ui_textview_select(&ui, &gUiTestView, 1, 12, 1, len1 - 12);
+    CHECK(gUiTestView.sel && gUiTestView.cur_col == len1 - 12);
+    gUiTestView.top = 1;
+    gUiTestView.left_px = 0;
+    canvas_init(&c, 0xff000000);
+    ctx.surf = c.s;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    int lead_lit = 0;
+    for (int32_t y = 2; y < 18; ++y)
+        for (int32_t x = 2; x < 2 + 16; ++x)
+            lead_lit += c.px[y * SURF_W + x] == 0xff0000ff;       /* text_sel_bg */
+    CHECK(lead_lit > 0);
+    gUiTestView.sel = false;
+
+    /* A CLUSTER LONGER THAN A WINDOW is never laid out: at its start the
+     * row ends in a placeholder, Right crosses the whole of it in one step,
+     * and Left comes back to its start. The caret stops only at its ends. */
+    os64_ui_textview_goto(&ui, &gUiTestView, 2, 0, false);
+    for (int i = 0; i < 3; ++i)
+        ui_test_burst(&gUiTestView.w, &ui, "[C");
+    CHECK(gUiTestView.cur_col == 3);
+    ui_test_burst(&gUiTestView.w, &ui, "[C");
+    CHECK(gUiTestView.cur_col == 4 + 2 * UI_TEST_GIANT_MARKS);
+    CHECK(gUiTestView.win_from == gUiTestView.cur_col);   /* just after it */
+    CHECK(ui_test_run_bytes(gUiTestView.w.run) <= 64);
+    gUiTestView.top = 2;
+    gUiTestView.left_px = 0;
+    canvas_init(&c, 0xff000000);
+    ctx.surf = c.s;
+    gUiTestView.w.cls->paint(&gUiTestView.w, &ctx, &ui.theme);
+    int arrow = 0, box = 0;              /* "more" outside, the outline inside */
+    for (int32_t y = 2; y < 18; ++y) {
+        for (int32_t x = 2; x < 2 + 16; ++x)
+            arrow += c.px[y * SURF_W + x] == 0xffc0c0c0;
+        for (int32_t x = 2 + 16; x < 2 + 16 + 32; ++x)
+            box += c.px[y * SURF_W + x] == 0xffc0c0c0;
+    }
+    CHECK(arrow > 0 && box > 0);
+    ui_test_burst(&gUiTestView.w, &ui, "[D");
+    CHECK(gUiTestView.cur_col == 3);
+
+    /* Up and Down between long lines land on letter edges of the rows
+     * they arrive in. */
+    os64_ui_textview_goto(&ui, &gUiTestView, 1, len1 - 60, false);
+    ui_test_burst(&gUiTestView.w, &ui, "[A");
+    CHECK(gUiTestView.cur_line == 0 && ui_test_caret_legal(&gUiTestView));
+    ui_test_burst(&gUiTestView.w, &ui, "[B");
+    CHECK(gUiTestView.cur_line == 1 && ui_test_caret_legal(&gUiTestView));
+    ui_test_burst(&gUiTestView.w, &ui, "[B");
+    CHECK(gUiTestView.cur_line == 2 && ui_test_caret_legal(&gUiTestView));
+    CHECK(gUiTestView.cur_col <= 3);            /* not inside the long cluster */
+
+    /* A font change with long lines on screen lays out windows, not
+     * lines: it succeeds, and the caret's run holds no more than a window. */
+    os64_ui_textview_goto(&ui, &gUiTestView, 1, len1 / 2, false);
+    gUiTestView.top = 0;
+    CHECK(ui_test_adopt(&ui, dir, 20) == OS64_FONT_OK);
+    CHECK(ui_test_run_bytes(gUiTestView.w.run) <= 64);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+
+    /* THE DEFAULT WINDOW. End on the three-megabyte line lays out at most
+     * OS64_UI_TEXTVIEW_WINDOW bytes, and a font change with it on screen
+     * succeeds too. */
+    ui_test_long_view(&ui, 0);
+    CHECK(ui_test_adopt(&ui, dir, 16) == OS64_FONT_OK);
+    os64_ui_textview_goto(&ui, &gUiTestView, 1, 0, false);
+    ui_test_burst(&gUiTestView.w, &ui, "[F");
+    CHECK(gUiTestView.cur_col == len1);
+    bytes = ui_test_run_bytes(gUiTestView.w.run);
+    CHECK(bytes > OS64_UI_TEXTVIEW_WINDOW / 2 && bytes <= OS64_UI_TEXTVIEW_WINDOW);
+    CHECK(ui_test_adopt(&ui, dir, 24) == OS64_FONT_OK);
+    CHECK(ui_test_run_bytes(gUiTestView.w.run) <= OS64_UI_TEXTVIEW_WINDOW);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+
+    /* A WINDOW THE RUN CALLS TOO BIG is halved, not left blank: a window of
+     * a megabyte and a half is past F2's limit, so the row lays out half of
+     * that and the caret still has a place. */
+    ui_test_long_view(&ui, 1536u << 10);
+    set = outline_set(os64_ui_font_context(&ui), dir, "DejaVuSans.ttf", 16);
+    CHECK(set != NULL);
+    if (set) {
+        CHECK(os64_ui_font_bind(&ui, set) == OS64_FONT_OK);
+        os64_font_set_release(set);
+    }
+    os64_ui_textview_goto(&ui, &gUiTestView, 1, len1 / 2, false);
+    CHECK(os64_ui_textview_row_width(&ui, &gUiTestView, 1, &width) == OS64_FONT_OK);
+    bytes = ui_test_run_bytes(gUiTestView.w.run);
+    CHECK(bytes > 0 && bytes <= (768u << 10));
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+
+    for (int i = 0; i < UI_TEST_LONG_LINES; ++i)
+        free(gUiTestLong[i]);
+    current = "";
+}
+
 static void editors_without_a_face(const char *dir)
 {
     current = "no face";
@@ -2090,12 +2611,15 @@ int main(int argc, char **argv)
     textview_geometry_and_painting(dir);
     textview_partial_selection_paints_only_the_span(dir);
     textview_motion(dir);
+    boundaries_without_the_prefix();
     textview_keys_without_layout(dir);
     textfield_edits_by_cluster(dir);
     textfield_scroll_follows_the_face(dir);
     textview_scroll_follows_the_face(dir);
     editors_without_a_face(dir);
     one_rendering_per_paint();
+    rows_keep_the_primary_pitch(dir);
+    long_lines_are_windowed(dir);
 #else
     (void)slurp;
     (void)rows_touched_outside;

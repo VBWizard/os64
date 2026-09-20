@@ -8,12 +8,21 @@
 //
 //   scribefonttest [file]              you drive it
 //   scribefonttest --selftest [file]   it drives itself, prints PASS/FAIL, exits
+//   scribefonttest --long-demo path    writes a file with a 2.5 MB line, and a
+//                                      line holding one 10 KB cluster, to open
+//                                      in scribe, and exits
+//   scribefonttest --log-demo path     writes a 9 MB log-shaped file, and exits
+//   scribefonttest --time-open path    times an Open of it, a change to DejaVu
+//                                      Sans with it open, and an Open under
+//                                      that face; prints, exits
 //
 // Interactive keys (ALT, so they cannot collide with anything scribe binds):
 //   Alt+1..4   builtin 8x16, DejaVu Sans, Source Sans 3, Source Code Pro
 //   Alt+= / -  nominal size, in steps of 4
 //   Alt+b      a face too big for the window: scribe's planner must refuse it
 //              and leave the editor exactly as it was
+//   Alt+w      a 64-byte window for long lines, so both its ends show, and
+//              back to the default
 //
 // WHY THE FONTS COME FROM /tests: which fonts os64 ships, and how a person
 // chooses one, is F5's question. Fixture bytes pre-empt none of it.
@@ -27,6 +36,7 @@
 #include "os64/ui.h"
 #include "os64/font_provider.h"
 #include "os64/font_adopt.h"
+#include "os64/text.h"
 #include "../../apps/scribe/scribe.h"
 #include "../../apps/scribe/scribe_buf.h"
 
@@ -40,7 +50,7 @@ static const char *const kFaces[] = {
 };
 static size_t   gFace = 0;
 static uint32_t gSize = 16;
-static bool     gSelftest;
+static bool     gSelftest, gTimeOpen;
 static const char *gDocPath = DEFAULT_DOC;
 static int      gFailures, gChecks;
 
@@ -133,18 +143,14 @@ static bool same_snapshot(const snapshot_t *a, const snapshot_t *b)
            a->focused == b->focused && a->hash == b->hash && a->dirty == b->dirty;
 }
 
-// The widest line of whatever document is on stage, measured fresh.
-static int64_t fresh_extent(os64_ui_t *ui)
+// The widest row the view shows now: what scribe's extent must be just
+// after it started over, at a load or a font change. -1 if it could not be
+// measured, which no extent equals.
+static int64_t shown_extent(os64_ui_t *ui)
 {
-    int64_t widest = 0;
-    for (size_t i = 0; i < scribe_line_count(); ++i) {
-        size_t len = 0;
-        const char *ln = scribe_line(i, &len);
-        int64_t w = 0;
-        if (os64_ui_textview_line_width(ui, ln, len, &w) == OS64_FONT_OK && w > widest)
-            widest = w;
-    }
-    return widest;
+    int64_t w = -1;
+    os64_ui_textview_shown_width(ui, scribe_view(), &w);
+    return w;
 }
 
 // ── driving the real editor through its real front door ─────────────────────
@@ -179,6 +185,88 @@ static bool same_bytes(const uint8_t *a, const uint8_t *b, size_t n)
 #define CHECK(what, cond) do { ++gChecks; if (!(cond)) { ++gFailures; \
     os64_printf("scribefonttest: FAIL %s (line %d)\n", what, __LINE__); } } while (0)
 
+// ── a line of megabytes ─────────────────────────────────────────────────────
+
+#define LONG_WORD "caf\xc3\xa9 words "          // 12 bytes, a two-byte letter in it
+#define LONG_BYTES (218453u * 12u)              // 2.5 MB of whole words
+#define LONG_INPUT "/home/scribefonttest.long"
+#define LONG_OUTPUT "/home/scribefonttest.long.out"
+
+// "head", the long line, "tail": the file a demo opens and the self-test
+// edits. False if the disk refused it.
+static bool write_long_file(const char *path)
+{
+    static char chunk[4096 * 3];               // a whole number of words
+    for (size_t i = 0; i < sizeof(chunk); ++i)
+        chunk[i] = LONG_WORD[i % 12];
+    int64_t fd = os64_open(path, "w");
+    if (fd < 0)
+        return false;
+    bool ok = os64_write((int32_t)fd, "head\n", 5) == 5;
+    for (size_t done = 0; ok && done < LONG_BYTES; done += sizeof(chunk)) {
+        size_t n = LONG_BYTES - done < sizeof(chunk) ? LONG_BYTES - done : sizeof(chunk);
+        ok = os64_write((int32_t)fd, chunk, n) == (int64_t)n;
+    }
+    ok = ok && os64_write((int32_t)fd, "\ntail\n", 6) == 6;
+    os64_close((int32_t)fd);
+    return ok;
+}
+
+static bool is_long_word_run(const uint8_t *b, size_t at, size_t n)
+{
+    for (size_t i = 0; i < n; ++i)
+        if (b[i] != (uint8_t)LONG_WORD[(at + i) % 12])
+            return false;
+    return true;
+}
+
+// Opened with scribe's own Open, edited deep inside through the editor's
+// keys, split there, and saved with Save As: every byte the window never
+// showed must come back as it was, around exactly the edits made.
+static void long_line(os64_ui_t *ui)
+{
+    CHECK("write a 2.5 MB line", write_long_file(LONG_INPUT));
+    scribe_open(LONG_INPUT);
+    size_t len = 0;
+    scribe_line(1, &len);
+    CHECK("open it", scribe_line_count() == 3 && len == LONG_BYTES);
+
+    size_t mid = LONG_BYTES / 2 - (LONG_BYTES / 2) % 12;   // a word's start
+    os64_ui_textview_t *tv = scribe_view();
+    os64_ui_textview_goto(ui, tv, 1, mid, false);
+    key(ui, 'X', 0x2d, OS64_GUI_MOD_SHIFT);
+    key(ui, 'Y', 0x15, OS64_GUI_MOD_SHIFT);
+    os64_text_run_view_t rv;
+    CHECK("the row lays out a window, not the line",
+          tv->w.run && os64_text_run_view(tv->w.run, &rv) == OS64_FONT_OK &&
+          rv.byte_count <= OS64_UI_TEXTVIEW_WINDOW);
+    key(ui, '\r', 0x1c, 0);                    // split it there
+    burst(ui, 'F', 0);                         // End
+    key(ui, 'Z', 0x2c, OS64_GUI_MOD_SHIFT);
+    CHECK("save it", scribe_save_as(LONG_OUTPUT));
+
+    uint8_t *back = NULL;
+    size_t blen = 0;
+    bool ok = os64_slurp(LONG_OUTPUT, FONT_MAX, &back, &blen) == OS64_SLURP_OK &&
+              blen == 5 + LONG_BYTES + 3 + 1 + 6;
+    if (ok) {
+        size_t at = 0;
+        ok = same_bytes(back, (const uint8_t *)"head\n", 5);
+        at = 5;
+        ok = ok && is_long_word_run(back + at, 0, mid);
+        at += mid;
+        ok = ok && same_bytes(back + at, (const uint8_t *)"XY\n", 3);
+        at += 3;
+        ok = ok && is_long_word_run(back + at, mid, LONG_BYTES - mid);
+        at += LONG_BYTES - mid;
+        ok = ok && same_bytes(back + at, (const uint8_t *)"Z\ntail\n", 7);
+    }
+    CHECK("every omitted byte saved as it was", ok);
+    os64_free(back);
+    os64_unlink(LONG_INPUT);
+    os64_unlink(LONG_OUTPUT);
+}
+
 // ── the self-test ───────────────────────────────────────────────────────────
 
 static void selftest(os64_ui_t *ui)
@@ -208,7 +296,7 @@ static void selftest(os64_ui_t *ui)
     snapshot_t after = snap(ui);
     CHECK("unsaved edit survives the switch", same_snapshot(&before, &after));
     CHECK("the new face is really on", os64_ui_font_row_height(ui, OS64_FONT_ROLE_DOCUMENT) != 16);
-    CHECK("extent measured in the new face", scribe_extent() == fresh_extent(ui));
+    CHECK("extent measured in the new face", scribe_extent() == shown_extent(ui));
 
     // AND AGAIN, to a different family: the selection is still the same bytes.
     CHECK("adopt Source Sans 3 18", adopt(ui, 2, 18) == OS64_FONT_OK);
@@ -222,12 +310,12 @@ static void selftest(os64_ui_t *ui)
     CHECK("adopt DejaVu Sans 12", adopt(ui, 1, 12) == OS64_FONT_OK);
     int64_t narrow = scribe_extent();
     CHECK("a smaller face shrinks the extent", narrow < wide);
-    CHECK("shrunk extent is the true one", narrow == fresh_extent(ui));
+    CHECK("shrunk extent is the true one", narrow == shown_extent(ui));
 
     // HELP, AND A FONT CHANGE WHILE IT IS OPEN. The document behind it keeps
-    // its bytes and its caret. Its extent is measured by the change itself;
-    // its scroll was pixels of a face that is gone by the time help closes,
-    // so it is found again around the caret.
+    // its bytes and its caret. Its extent and its scroll were pixels of a
+    // face that is gone by the time help closes, so the extent grows again
+    // from the rows it shows and the scroll is found again around the caret.
     snapshot_t doc = snap(ui);
     scribe_toggle_help();
     CHECK("help is on stage", scribe_help_active());
@@ -241,7 +329,7 @@ static void selftest(os64_ui_t *ui)
     CHECK("document caret and bytes survive help + a font change",
           back.cur_line == doc.cur_line && back.cur_col == doc.cur_col &&
           back.hash == doc.hash && back.dirty == doc.dirty);
-    CHECK("document extent measured in the face now on", scribe_extent() == fresh_extent(ui));
+    CHECK("document extent measured in the face now on", scribe_extent() == shown_extent(ui));
 
     // REFUSAL. A face too big for this window: scribe's own planner turns it
     // down, and the editor is exactly as it was and still takes typing.
@@ -320,6 +408,70 @@ static void selftest(os64_ui_t *ui)
         os64_unlink(SAVE_INPUT);
         os64_unlink(SAVE_PROBE);
     }
+
+    long_line(ui);
+}
+
+// ── how long a log takes ────────────────────────────────────────────────────
+// Scribe's horizontal bar grows from the rows it shows, so an Open and a
+// font change lay out a screen of rows, not the document. These are the
+// numbers for a log-sized file — for the record, not checks, because they
+// are the machine's as much as the code's.
+
+#define LOG_LINES 100000u
+
+// Log-shaped lines, 60 to 124 bytes each: about 9 MB.
+static bool write_log_file(const char *path)
+{
+    int64_t fd = os64_open(path, "w");
+    if (fd < 0)
+        return false;
+    static char buf[16384];
+    size_t used = 0;
+    bool ok = true;
+    for (unsigned i = 0; ok && i < LOG_LINES; ++i) {
+        char line[160];
+        int n = os64_snprintf(line, sizeof(line),
+                              "[%8u.%03u] core %u: scheduler: task %u ran %u ticks ",
+                              i / 7, (i * 37) % 1000, i % 8, (i * 13) % 4096, i % 97);
+        unsigned pad = (i * 29) % 64;
+        for (unsigned p = 0; p < pad && n < (int)sizeof(line) - 1; ++p)
+            line[n++] = (char)('a' + (i + p) % 26);
+        line[n++] = '\n';
+        if (used + (size_t)n > sizeof(buf)) {
+            ok = os64_write((int32_t)fd, buf, used) == (int64_t)used;
+            used = 0;
+        }
+        for (int b = 0; b < n; ++b)
+            buf[used++] = line[b];
+    }
+    ok = ok && os64_write((int32_t)fd, buf, used) == (int64_t)used;
+    os64_close((int32_t)fd);
+    return ok;
+}
+
+static unsigned long ms_between(const os64_ticks_t *a, const os64_ticks_t *b)
+{
+    return (unsigned long)((b->ticks - a->ticks) * 1000u / (a->per_second ? a->per_second : 1));
+}
+
+// Timed, in order: opening the document under the builtin face, changing
+// to DejaVu Sans with it open, and opening it again under that face.
+static void time_open(os64_ui_t *ui)
+{
+    os64_ticks_t t0, t1, t2, t3;
+    os64_ticks(&t0);
+    scribe_open(gDocPath);
+    os64_ticks(&t1);
+    os64_font_status_t status = adopt(ui, 1, 16);
+    os64_ticks(&t2);
+    scribe_open(gDocPath);
+    os64_ticks(&t3);
+    os64_printf("scribefonttest: %u lines; builtin Open %lu ms; DejaVu Sans 16 %s in %lu ms,"
+                " then Open in %lu ms\n",
+                (unsigned)scribe_line_count(), ms_between(&t0, &t1),
+                status == OS64_FONT_OK ? "adopted" : "REFUSED",
+                ms_between(&t1, &t2), ms_between(&t2, &t3));
 }
 
 // ── the hooks ───────────────────────────────────────────────────────────────
@@ -327,6 +479,11 @@ static void selftest(os64_ui_t *ui)
 static void ready(os64_ui_t *ui, void *user)
 {
     (void)user;
+    if (gTimeOpen) {
+        time_open(ui);
+        ui->quit = true;
+        return;
+    }
     if (!gSelftest)
         return;
     selftest(ui);
@@ -362,6 +519,15 @@ static bool on_key(os64_ui_t *ui, const os64_gui_event_t *ev, void *user)
         os64_font_status_t status = adopt(ui, gFace ? gFace : 1, 96);
         report(ui, status);
         return true;
+    } else if (a == 'w') {
+        // A window small enough to see both ends of on screen.
+        os64_ui_textview_t *tv = scribe_view();
+        tv->window_bytes = tv->window_bytes ? 0 : 64;
+        os64_printf("scribefonttest: long-line window %u bytes\n",
+                    tv->window_bytes ? (unsigned)tv->window_bytes
+                                     : (unsigned)OS64_UI_TEXTVIEW_WINDOW);
+        os64_ui_mark_dirty(ui, &tv->w);
+        return true;
     } else
         return false;
 
@@ -377,8 +543,30 @@ static bool on_key(os64_ui_t *ui, const os64_gui_event_t *ev, void *user)
 int main(int argc, char **argv)
 {
     int first = 1;
+    if (argc > 2 && os64_streq(argv[1], "--long-demo")) {
+        // The self-test's file, and after it a line whose e carries 5,000
+        // combining acutes: one cluster longer than the default window.
+        bool ok = write_long_file(argv[2]);
+        int64_t fd = ok ? os64_open(argv[2], "a") : -1;
+        ok = fd >= 0 && os64_write((int32_t)fd, "abc e", 5) == 5;
+        for (int i = 0; ok && i < 5000; ++i)
+            ok = os64_write((int32_t)fd, "\xcc\x81", 2) == 2;
+        ok = ok && os64_write((int32_t)fd, " xyz\n", 5) == 5;
+        if (fd >= 0)
+            os64_close((int32_t)fd);
+        os64_printf("scribefonttest: %s %s\n", ok ? "wrote" : "could not write", argv[2]);
+        return ok ? 0 : 1;
+    }
+    if (argc > 2 && os64_streq(argv[1], "--log-demo")) {
+        bool ok = write_log_file(argv[2]);
+        os64_printf("scribefonttest: %s %s\n", ok ? "wrote" : "could not write", argv[2]);
+        return ok ? 0 : 1;
+    }
     if (argc > 1 && os64_streq(argv[1], "--selftest")) {
         gSelftest = true;
+        first = 2;
+    } else if (argc > 2 && os64_streq(argv[1], "--time-open")) {
+        gTimeOpen = true;
         first = 2;
     }
     if (argc > first)
@@ -387,7 +575,8 @@ int main(int argc, char **argv)
     // scribe_main reads its file from argv[1], so hand it a clean argv.
     char *args[] = { argv[0], (char *)gDocPath, (char *)0 };
     scribe_hooks_t hooks = { ready, on_key, (void *)0 };
-    int rc = scribe_main(2, args, &hooks);
+    // A timed run starts empty, so every open it reports is one it timed.
+    int rc = scribe_main(gTimeOpen ? 1 : 2, args, &hooks);
     if (gSelftest)
         return gFailures ? 1 : rc;
     return rc;

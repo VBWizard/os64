@@ -37,5 +37,10 @@ os64_ui_textview_t *scribe_view(void);
 int64_t scribe_extent(void);
 // Toggle the help page, exactly as Ctrl+G does.
 void scribe_toggle_help(void);
+// Open a file, and save to one, exactly as the Open and Save As fields do
+// when their Enter is pressed. The save says whether the bytes reached the
+// disk.
+void scribe_open(const char *path);
+bool scribe_save_as(const char *path);
 
 #endif

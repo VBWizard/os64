@@ -94,6 +94,16 @@ whole costs seconds and RAM the machine has; if that ever hurts, the buffer
 vtable is where a streamed read-only backend slots in without touching the
 textview (booked, unbuilt).
 
+**The horizontal scrollbar is sized from the rows shown** (ruled 2026-09-19,
+F4's long-line checkpoint). Under a real face a line's width is a text
+layout, and laying out every line of a 100,000-line log to size the bar
+was nearly all of a 34-second Open in QEMU. So the bar grows as rows come
+on screen and as edits widen them, never shrinks until the next Open or
+font change, and a wide line nobody has scrolled to is outside it until it
+is shown. A
+background measurer that re-derives the whole document's widest line after
+each modification, an Open included, is booked in DEBTS.md.
+
 **A file saves as it loaded.** The buffer is the file's bytes split at LF,
 plus whether one more LF followed the last line — nothing else is
 interpreted, so an untouched file saves byte-for-byte (CRs, malformed UTF-8

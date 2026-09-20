@@ -912,13 +912,14 @@ struct os64_ui_textview
     void *view_user;
     uint8_t seq;                 // VT100 burst parser state
 
-    // One retained run per VISIBLE line, and the set staged against a
+    // One retained run per VISIBLE row, and the set staged against a
     // candidate face during adoption — the listbox's arrangement, for the
     // same reason: the text comes from the application's model and there
     // are more lines than a window can hold, so what is retained is what
-    // can be shown. A line whose bytes have changed is re-laid-out into
-    // its slot on the next paint. The widget's own `run` holds the CARET's
-    // line, which motion needs whether or not it is on screen.
+    // can be shown. A row lays out its line, or a long line's window. A
+    // row whose bytes have changed is re-laid-out into its slot on the
+    // next paint. The widget's own `run` holds the CARET's row, which
+    // motion needs whether or not it is on screen.
     void **row_runs, **row_runs_staged;
     size_t row_run_count, row_runs_staged_count;
     // Row pitch from the DOCUMENT face, cached for the same reason the
@@ -934,7 +935,40 @@ struct os64_ui_textview
     // paint would have to do.
     size_t  top_staged;
     int64_t left_staged, goal_staged;
+
+    // A LONG LINE IS SHOWN THROUGH A WINDOW. A line longer than
+    // `window_bytes` is never laid out whole: a row lays out at most that
+    // many bytes of it, cut where letters end, with a non-document
+    // indicator at each end where bytes are omitted. The caret's line
+    // keeps its window around the caret, moving it when the caret leaves it
+    // or comes near an end with more beyond. Every other row shows its
+    // line's start.
+    // Horizontal positions in a windowed row are measured from the row's
+    // own left edge, since the width of what was omitted is unknown.
+    // The document itself is never windowed: selections, deletion, copy
+    // and save all use byte offsets into the whole line.
+    size_t window_bytes;         // 0 = OS64_UI_TEXTVIEW_WINDOW
+    size_t win_line, win_from;   // the caret line's window, by its first byte
+
+    // THE BUDGET IN EFFECT, and why it is remembered rather than worked out
+    // again. A window the text engine refuses (LIMIT) is halved until it
+    // fits — and LIMIT depends on how full that engine is, so the same line
+    // resolves a bigger span the moment other runs are released. The span a
+    // row SHOWS has to be the span its retained run holds: the caret, the
+    // scroll and the decorations were all measured against it, and a lookup
+    // that quietly resolved a wider one would lay text out where a commit
+    // may not allocate and place the caret against geometry nobody staged.
+    // So a reduction is kept, and PREPARATION is the only place a wider
+    // window is tried again — the one place a refusal can still call the
+    // whole font change off.
+    size_t win_budget, win_budget_staged;
+    size_t win_budget_of;        // the `window_bytes` it was derived from
 };
+
+// How many bytes of a line a row lays out, unless the view says otherwise.
+// A screen of rows this long stays well inside the text engine's memory,
+// and it is several screens of text wide in any face.
+#define OS64_UI_TEXTVIEW_WINDOW 8192u
 
 void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
                       void (*on_change)(os64_ui_textview_t *, void *),
@@ -963,9 +997,32 @@ void os64_ui_textview_scroll_left(os64_ui_t *ui, os64_ui_textview_t *tv,
 // horizontal scrollbar's `total` is made of. Measuring can fail, so this
 // says whether it did; on failure `*out` is untouched and the caller keeps
 // whatever extent it already had rather than shrinking the bar to a lie.
+// A line longer than this view's window is never laid out whole, so its
+// width is UNKNOWN, not zero and not a guess: *whole is false and *out is
+// untouched. What such a line shows is os64_ui_textview_row_width's answer.
 os64_font_status_t os64_ui_textview_line_width(os64_ui_t *ui,
+                                               const os64_ui_textview_t *tv,
                                                const char *s, size_t len,
-                                               int64_t *out);
+                                               int64_t *out, bool *whole);
+// The width of line `line` AS THIS VIEW SHOWS IT: the whole line, or a long
+// line's window and its end indicators, measured from the row's left edge.
+// A long line's window is what horizontal scrolling moves across, so a
+// scrollbar needs this for the caret's line as well as the widest whole one.
+os64_font_status_t os64_ui_textview_row_width(os64_ui_t *ui,
+                                              os64_ui_textview_t *tv,
+                                              size_t line, int64_t *out);
+// The widest row this view shows NOW, each as it is drawn — a whole line,
+// or a long line's window and its end indicators — measured from the row's
+// left edge. The rows are laid out into the slots the paint draws from, so
+// the paint that follows lays none of them out again, and neither does a
+// call just after a font change: adoption staged those runs. A refused
+// layout is the answer, and *out is untouched. This is the LAZY extent: a
+// bar grown from it counts a line once the line has been on screen, and
+// never lays out one that has not — measuring every line of a large file
+// costs seconds, and most of it is never looked at.
+os64_font_status_t os64_ui_textview_shown_width(os64_ui_t *ui,
+                                                os64_ui_textview_t *tv,
+                                                int64_t *out);
 // Is this key event the REAL Esc key (not the ESC byte that opens a VT100
 // burst)? The burst's ESC is stamped with the extended key's code; the Esc
 // key carries its own — which is a DIALECT: PS/2 make-code 0x01 or HID

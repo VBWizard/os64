@@ -252,7 +252,7 @@ void os64_ui_scrollbar_set(os64_ui_t *ui, os64_ui_scrollbar_t *sb,
 // The editors ask a line three questions in pixels: where the caret for a
 // byte offset sits, which offset a pixel lands on, and where a selected span
 // runs. There are TWO honest sources of answers. Under a face it is the
-// line's run, the same measurement its glyphs were drawn from. In a window
+// row's run, the same measurement its glyphs were drawn from. In a window
 // wearing no face at all it is the bitmap cell, because that is what the
 // painter draws there: eight pixels a byte. The cell's answers still stop
 // only at the letter edges the decoder finds, so an `é` covers two cells and
@@ -262,58 +262,122 @@ void os64_ui_scrollbar_set(os64_ui_t *ui, os64_ui_scrollbar_t *sb,
 // this line in it; the cell is a different font at a different size. A
 // caller that could not get the run gets no geometry, and does nothing that
 // needed one.
+//
+// WHAT IS LAID OUT may be less than the line. A field and a short line are
+// laid out whole. A long line is laid out through a window, the span
+// [from, to), with a decoration standing at each end where bytes are
+// omitted: EDGE_MORE for ordinary text, EDGE_LONG for a cluster too long to
+// lay out at all, and both when the line is known to go on past that
+// cluster. The decorations are drawn by the editor, belong to no byte, and
+// take pixels: X is measured from the row's left edge, so the span starts
+// after the leading decoration. Offsets are always the line's.
+
+enum { EDGE_NONE = 0, EDGE_MORE = 1, EDGE_LONG = 2 };   // LONG may carry MORE
 
 typedef struct
 {
-	void *run;              // the line's run, or NULL: the bitmap cell is drawing
-	const char *s;
+	void *run;              // the span's run, or NULL: the bitmap cell is drawing
+	const char *s;          // the WHOLE line
 	size_t len;
+	size_t from, to;        // the span laid out
+	int32_t lead, trail;    // pixels of decoration before and after it
+	uint8_t lead_kind, trail_kind;
 } line_geom_t;
+
+static line_geom_t geom_whole(const char *s, size_t len)
+{
+	return (line_geom_t){ NULL, s, len, 0, len, 0, 0, EDGE_NONE, EDGE_NONE };
+}
 
 static int64_t cell_x(size_t offset)
 {
 	return (int64_t)offset * OS64_FONT_GLYPH_W;
 }
 
+// Where the caret for `offset` sits. Only the span's offsets have a place:
+// anything outside it is omitted, and the answer is BAD_ARGUMENT.
 static os64_font_status_t geom_caret(const line_geom_t *g, size_t offset,
                                      int32_t *out_x)
 {
-	if (g->run)
-		return os64_ui_run_caret(g->run, offset, false, out_x);
-	if (offset > g->len)
+	if (offset < g->from || offset > g->to)
 		return OS64_FONT_BAD_ARGUMENT;
-	*out_x = (int32_t)cell_x(os64_ui_text_snap(g->s, g->len, offset, false));
+	int32_t x = 0;
+	if (g->run) {
+		os64_font_status_t status =
+			os64_ui_run_caret(g->run, offset - g->from, false, &x);
+		if (status != OS64_FONT_OK)
+			return status;
+	} else {
+		x = (int32_t)cell_x(os64_ui_text_snap(g->s, g->len, offset, false) - g->from);
+	}
+	*out_x = g->lead + x;
 	return OS64_FONT_OK;
+}
+
+// The row's whole width: decorations and span.
+static int32_t geom_width(const line_geom_t *g)
+{
+	int32_t end = g->lead;
+	geom_caret(g, g->to, &end);
+	return end + g->trail;
 }
 
 // The nearest letter edge to `x`, a tie going to the later one as a run's
-// does. The edge at or before the cell under `x` and the next one after it
-// bracket `x`, so the answer is one of those two.
+// does. A pixel on a decoration answers the span's end beside it, so a
+// click there puts the caret against the omitted text. In the cell, the
+// edge at or before the cell under `x` and the next one after it bracket
+// `x`, so the answer is one of those two.
 static os64_font_status_t geom_hit(const line_geom_t *g, int32_t x,
                                    size_t *out_offset)
 {
-	if (g->run)
-		return os64_ui_run_hit(g->run, x, out_offset);
-	size_t cell = x > 0 ? (size_t)x / OS64_FONT_GLYPH_W : 0;
-	if (cell > g->len)
-		cell = g->len;
-	size_t lo = os64_ui_text_snap(g->s, g->len, cell, false);
-	size_t hi = os64_ui_text_step(g->s, g->len, lo, true);
-	*out_offset = (int64_t)x - cell_x(lo) < cell_x(hi) - (int64_t)x ? lo : hi;
+	int32_t end = 0;
+	os64_font_status_t status = geom_caret(g, g->to, &end);
+	if (status != OS64_FONT_OK)
+		return status;
+	if (x < g->lead || x > end) {
+		*out_offset = x < g->lead ? g->from : g->to;
+		return OS64_FONT_OK;
+	}
+	x -= g->lead;
+	if (g->run) {
+		status = os64_ui_run_hit(g->run, x, out_offset);
+		if (status == OS64_FONT_OK)
+			*out_offset += g->from;
+		return status;
+	}
+	size_t at = g->from + (x > 0 ? (size_t)x / OS64_FONT_GLYPH_W : 0);
+	if (at > g->to)
+		at = g->to;
+	size_t lo = os64_ui_text_snap(g->s, g->len, at, false);
+	size_t hi = lo < g->to ? os64_ui_text_step(g->s, g->len, lo, true) : g->to;
+	*out_offset = (int64_t)x - cell_x(lo - g->from) < cell_x(hi - g->from) - (int64_t)x
+	              ? lo : hi;
 	return OS64_FONT_OK;
 }
 
-// Where [from, to) runs, as X and width from the line's start. Both ends must
-// already be letter edges.
-static os64_font_status_t geom_selection(const line_geom_t *g, size_t from,
-                                         size_t to, os64_gui_rect_t *out)
+// Where the selected bytes [a, b) of the line run across the row, as X and
+// width. Any bytes selected beyond an end of the span light that end's
+// whole decoration: it is one indicator standing for all the bytes omitted
+// there, and does not say which of them. Both ends must be letter edges.
+static os64_font_status_t geom_selection(const line_geom_t *g, size_t a,
+                                         size_t b, os64_gui_rect_t *out)
 {
-	if (g->run)
-		return os64_ui_run_selection(g->run, from, to, out);
-	if (from > to || to > g->len)
-		return OS64_FONT_BAD_ARGUMENT;
-	*out = (os64_gui_rect_t){ (int32_t)cell_x(from), 0,
-	                          (int32_t)(cell_x(to) - cell_x(from)), OS64_FONT_GLYPH_H };
+	int32_t start = 0, end = 0;
+	os64_font_status_t status;
+	if ((status = geom_caret(g, a < g->from ? g->from : a > g->to ? g->to : a,
+	                         &start)) != OS64_FONT_OK ||
+	    (status = geom_caret(g, b > g->to ? g->to : b < g->from ? g->from : b,
+	                         &end)) != OS64_FONT_OK)
+		return status;
+	if (a < g->from)
+		start = 0;
+	if (b > g->to)
+		end += g->trail;
+	if (b < g->from)
+		end = g->lead;               // all of it omitted before the span
+	if (a > g->to)
+		start = end - g->trail;      // all of it omitted after
+	*out = (os64_gui_rect_t){ start, 0, end > start ? end - start : 0, 0 };
 	return OS64_FONT_OK;
 }
 
@@ -335,7 +399,7 @@ static int32_t field_inset(const os64_ui_theme_t *t)
 static os64_font_status_t field_geom(os64_ui_textfield_t *tf, os64_ui_t *ui,
                                      line_geom_t *g)
 {
-	*g = (line_geom_t){ NULL, tf->buf, tf->len };
+	*g = geom_whole(tf->buf, tf->len);
 	return os64_ui_run_resolve(ui, &tf->w.run, OS64_FONT_ROLE_UI,
 	                           tf->buf, tf->len, &g->run);
 }
@@ -378,7 +442,8 @@ static os64_font_status_t field_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
 	if (status != OS64_FONT_OK)
 		return status;
 	// An empty field stages no run, and its caret is at zero either way.
-	line_geom_t g = { w->run_staged, tf->buf, tf->len };
+	line_geom_t g = geom_whole(tf->buf, tf->len);
+	g.run = w->run_staged;
 	int32_t cx = 0;
 	status = geom_caret(&g, tf->cursor, &cx);
 	if (status != OS64_FONT_OK)
@@ -710,10 +775,19 @@ static void textview_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 		os64_ui_font_row_height(ui, OS64_FONT_ROLE_DOCUMENT);
 }
 
-os64_font_status_t os64_ui_textview_line_width(os64_ui_t *ui,
-                                               const char *s, size_t len,
-                                               int64_t *out)
+static size_t tv_window_bytes(const os64_ui_textview_t *tv)
 {
+	return tv->window_bytes ? tv->window_bytes : OS64_UI_TEXTVIEW_WINDOW;
+}
+
+os64_font_status_t os64_ui_textview_line_width(os64_ui_t *ui,
+                                               const os64_ui_textview_t *tv,
+                                               const char *s, size_t len,
+                                               int64_t *out, bool *whole)
+{
+	*whole = len <= tv_window_bytes(tv);
+	if (!*whole)
+		return OS64_FONT_OK;
 	int32_t width = 0;
 	os64_font_status_t status =
 		os64_ui_text_measure(ui, OS64_FONT_ROLE_DOCUMENT, s, len, &width);
@@ -767,32 +841,264 @@ static os64_font_status_t tv_run(os64_ui_t *ui, void **slot,
 	return os64_ui_run_resolve(ui, slot, OS64_FONT_ROLE_DOCUMENT, s, len, out);
 }
 
-// A line's geometry, its run laid out into the caret's slot: the line motion
-// is about to put the caret on, or the one it is on.
+// ── a long line's window ────────────────────────────────────────────────────
+// What a row lays out. Everything here scans a bounded number of bytes,
+// however long the line and however long any one cluster in it: a cluster
+// is recognized as too long to lay out after `budget` bytes of it, not at
+// its end. The one walk that is not bounded finds the edge before a kept
+// window origin that an edit has left inside a cluster — a mark typed at
+// the window's start joins the cluster before it — and it costs the length
+// of that one cluster.
+
+typedef struct
+{
+	size_t from, to;             // the span laid out
+	uint8_t lead, trail;         // EDGE_* at each end
+} tv_span_t;
+
+// Whole clusters from the edge `from`, at most `budget` bytes of them,
+// stopping before any cluster that is itself longer than the budget.
+//
+// PAST A CLUSTER TOO LONG TO LAY OUT, the line may go on or may not, and
+// finding its far end is a walk the length of the cluster. The line's own
+// end answers most of it for a bounded price: if the line's last cluster is
+// short, it is not the long one, so the line goes on past the long one —
+// and likewise before it, if the line's first cluster is short. A long
+// cluster at the line's end leaves the answer unknown, and unknown draws
+// no "more".
+static tv_span_t tv_span_from(const char *s, size_t len, size_t from,
+                              size_t budget)
+{
+	tv_span_t sp = { from, from, EDGE_NONE, EDGE_NONE };
+	size_t edge;
+	if (from > 0) {
+		sp.lead = ui_text_cluster_before(s, len, from, budget, &edge)
+		          ? EDGE_MORE : EDGE_LONG;
+		if (sp.lead == EDGE_LONG && ui_text_cluster_after(s, len, 0, budget, &edge))
+			sp.lead |= EDGE_MORE;
+	}
+	while (sp.to < len) {
+		if (!ui_text_cluster_after(s, len, sp.to, budget, &edge)) {
+			sp.trail = EDGE_LONG;
+			if (ui_text_cluster_before(s, len, len, budget, &edge))
+				sp.trail |= EDGE_MORE;
+			return sp;
+		}
+		if (edge - from > budget)
+			break;
+		sp.to = edge;
+	}
+	if (sp.to < len)
+		sp.trail = EDGE_MORE;
+	return sp;
+}
+
+// Where a window around the caret starts: half a budget of whole clusters
+// back from it — more near the line's end, where the other half has nothing
+// to show — or less where a cluster too long to lay out, or the line's
+// start, is nearer.
+static size_t tv_origin_around(const char *s, size_t len, size_t caret,
+                               size_t budget)
+{
+	size_t back = budget / 2;
+	if (len - caret < budget / 2)
+		back = budget - (len - caret);
+	size_t from = caret, start;
+	while (from > 0 && ui_text_cluster_before(s, len, from, budget, &start) &&
+	       caret - start <= back)
+		from = start;
+	return from;
+}
+
+// The span row `li` shows, with `budget` bytes to spend. A line that fits
+// is shown whole. The caret's line keeps the window it has while the caret
+// is inside it and at least an eighth of a window from an end with
+// ordinary text omitted beyond, and is otherwise centred on the caret, so
+// reaching an edge moves the window and the caret stays where it is in the
+// document. (A cluster too long to lay out is never slid into view; the
+// caret crosses it in one step, and the window follows.) Every other long
+// line shows its start. The answer depends only on the bytes, the caret,
+// the kept origin and the budget, so a paint and the click after it agree.
+static tv_span_t tv_window(const os64_ui_textview_t *tv, size_t li,
+                           size_t budget)
+{
+	size_t len;
+	const char *s = tv_line(tv, li, &len);
+	if (len <= budget)
+		return (tv_span_t){ 0, len, EDGE_NONE, EDGE_NONE };
+	if (li != tv->cur_line)
+		return tv_span_from(s, len, 0, budget);
+	size_t caret = tv->cur_col <= len ? tv->cur_col : len;
+	if (tv->win_line == li && tv->win_from <= caret) {
+		tv_span_t sp = tv_span_from(s, len,
+		                            os64_ui_text_snap(s, len, tv->win_from, false),
+		                            budget);
+		size_t margin = budget / 8;
+		bool near_start = sp.lead == EDGE_MORE && caret < sp.from + margin;
+		bool near_end = sp.trail == EDGE_MORE && caret + margin > sp.to;
+		if (caret >= sp.from && caret <= sp.to && !near_start && !near_end)
+			return sp;
+	}
+	return tv_span_from(s, len, tv_origin_around(s, len, caret, budget), budget);
+}
+
+// The budget this view lays rows out with: what a LIMIT left behind, or the
+// application's window when it has set a different one.
+static size_t tv_budget(os64_ui_textview_t *tv)
+{
+	size_t want = tv_window_bytes(tv);
+	if (!tv->win_budget || tv->win_budget_of != want) {
+		tv->win_budget = want;
+		tv->win_budget_of = want;
+	}
+	return tv->win_budget;
+}
+
+// Keep the caret line's window where tv_window puts it, so the next answer
+// starts from there. Called wherever the caret may have moved.
+static void tv_settle_window(os64_ui_textview_t *tv)
+{
+	tv->win_line = tv->cur_line;
+	tv->win_from = tv_window(tv, tv->cur_line, tv_budget(tv)).from;
+}
+
+// A decoration is a row's height square for "more", two for a cluster:
+// enough to be seen, not so much that it crowds the text it stands beside.
+static int32_t edge_width(uint8_t kind, int32_t pitch)
+{
+	if (pitch < OS64_FONT_GLYPH_W)
+		pitch = OS64_FONT_GLYPH_W;
+	return (kind & EDGE_MORE ? pitch : 0) + (kind & EDGE_LONG ? 2 * pitch : 0);
+}
+
+// The smallest window a LIMIT answer halves down to. There the halving
+// stops and the answer stands, whatever it is; a run of that few bytes is
+// nowhere near the text engine's limits.
+#define TV_WINDOW_FLOOR 64u
+
+// The geometry of row `li`, its span laid out into `slot`, with `*budget`
+// bytes to spend. A window the run calls too big (LIMIT) is halved until it
+// is not — rather than leaving the line with nothing to show or edit — and
+// `*budget` comes back at what it took, so every later row and every later
+// lookup resolves the same spans. Any other refusal is the answer.
+static os64_font_status_t tv_row_geom(os64_ui_textview_t *tv, os64_ui_t *ui,
+                                      size_t li, void **slot, int32_t pitch,
+                                      size_t *budget, line_geom_t *g)
+{
+	size_t len;
+	const char *s = tv_line(tv, li, &len);
+	for (;;) {
+		tv_span_t sp = tv_window(tv, li, *budget);
+		*g = (line_geom_t){ NULL, s, len, sp.from, sp.to,
+		                    edge_width(sp.lead, pitch), edge_width(sp.trail, pitch),
+		                    sp.lead, sp.trail };
+		os64_font_status_t status =
+			tv_run(ui, slot, s + sp.from, sp.to - sp.from, &g->run);
+		if (status != OS64_FONT_LIMIT || *budget / 2 < TV_WINDOW_FLOOR)
+			return status;
+		*budget /= 2;
+	}
+}
+
+// A row laid out with the LIVE budget, which a LIMIT here reduces for good:
+// the alternative is a later lookup resolving a wider span than the run this
+// one retained, which is the geometry the caret and the scroll came from.
+static os64_font_status_t tv_row_live(os64_ui_textview_t *tv, os64_ui_t *ui,
+                                      size_t li, void **slot, int32_t pitch,
+                                      line_geom_t *g)
+{
+	size_t budget = tv_budget(tv);
+	os64_font_status_t status = tv_row_geom(tv, ui, li, slot, pitch, &budget, g);
+	tv->win_budget = budget;
+	return status;
+}
+
+// A line's geometry, its span laid out into the caret's slot: the line
+// motion is about to put the caret on, or the one it is on.
 static os64_font_status_t tv_line_geom(os64_ui_textview_t *tv, os64_ui_t *ui,
                                        size_t li, line_geom_t *g)
 {
-	g->s = tv_line(tv, li, &g->len);
-	return tv_run(ui, &tv->w.run, g->s, g->len, &g->run);
+	return tv_row_live(tv, ui, li, &tv->w.run, tv_pitch(tv, &ui->theme), g);
 }
 
-static os64_font_status_t textview_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
+os64_font_status_t os64_ui_textview_row_width(os64_ui_t *ui,
+                                              os64_ui_textview_t *tv,
+                                              size_t line, int64_t *out)
 {
-	os64_ui_textview_t *tv = (os64_ui_textview_t *)w;
-	int32_t pitch = os64_ui_font_row_height(ui, OS64_FONT_ROLE_DOCUMENT);
-	os64_gui_rect_t planned = os64_ui_widget_planned_bounds(w);
-	int32_t fits = pitch > 0 ? (planned.h - 2 * VIEW_INSET) / pitch : 0;
-	size_t rows = fits > 0 ? (size_t)fits : 1;
-	int32_t width = planned.w - 2 * VIEW_INSET;
+	line_geom_t g;
+	os64_font_status_t status = tv_line_geom(tv, ui, line, &g);
+	if (status == OS64_FONT_OK)
+		*out = geom_width(&g);
+	return status;
+}
+
+os64_font_status_t os64_ui_textview_shown_width(os64_ui_t *ui,
+                                                os64_ui_textview_t *tv,
+                                                int64_t *out)
+{
+	// The rows the paint walks, in the slots it walks them with.
+	int32_t rows = os64_ui_textview_rows(tv, &ui->theme);
+	int32_t pitch = tv_pitch(tv, &ui->theme);
+	size_t count = tv_count(tv);
+	size_t shown = tv->top < count ? count - tv->top : 0;
+	if (shown > (size_t)rows)
+		shown = (size_t)rows;
+	if (tv->row_run_count < shown)
+		tv_grow_slots(tv, shown);
+
+	int64_t widest = 0;
+	for (size_t r = 0; r < shown; ++r) {
+		void *spare = NULL;
+		void **slot = r < tv->row_run_count ? &tv->row_runs[r] : &spare;
+		line_geom_t g;
+		os64_font_status_t status = tv_row_live(tv, ui, tv->top + r, slot, pitch, &g);
+		if (status == OS64_FONT_OK && geom_width(&g) > widest)
+			widest = geom_width(&g);
+		os64_ui_run_release(spare);
+		if (status != OS64_FONT_OK)
+			return status;
+	}
+	*out = widest;
+	return OS64_FONT_OK;
+}
+
+// What one preparation pass stages: the caret's run, the visible rows' runs,
+// and the view they were measured in.
+typedef struct
+{
+	void *caret;
+	void **runs;
+	size_t count;
+	size_t top;
+	int64_t left, goal;
+} tv_pass_t;
+
+static void tv_pass_release(tv_pass_t *p)
+{
+	os64_ui_run_release(p->caret);
+	for (size_t i = 0; i < p->count; ++i)
+		os64_ui_run_release(p->runs[i]);
+	os64_free(p->runs);
+	*p = (tv_pass_t){0};
+}
+
+// One pass: lay the caret's line and every visible row out with `*budget`,
+// and work out the view they imply. A LIMIT lowers `*budget`, and the caller
+// runs the pass again — the rows laid out before it dropped hold spans of a
+// window this view no longer uses.
+static os64_font_status_t tv_pass(os64_ui_textview_t *tv, os64_ui_t *ui,
+                                  int32_t pitch, size_t rows, int32_t width,
+                                  size_t *budget, tv_pass_t *out)
+{
+	*out = (tv_pass_t){0};
 	size_t count = tv_count(tv);
 
 	// The caret's line FIRST: where the caret is decides where the view has
-	// to be, and the view decides which lines to prepare.
-	size_t len;
-	const char *ln = tv_line(tv, tv->cur_line, &len);
-	void *caret = NULL;
+	// to be, and the view decides which lines to prepare. Its window, and
+	// every row's, is chosen in bytes, so a font change keeps it.
+	line_geom_t g;
 	os64_font_status_t status =
-		os64_ui_run_layout(ui, OS64_FONT_ROLE_DOCUMENT, ln, len, &caret);
+		tv_row_geom(tv, ui, tv->cur_line, &out->caret, pitch, budget, &g);
 	if (status != OS64_FONT_OK)
 		return status;
 
@@ -808,51 +1114,78 @@ static os64_font_status_t textview_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
 		top = tv->cur_line;
 	if (tv->cur_line >= top + rows)
 		top = tv->cur_line - rows + 1;
-	line_geom_t g = { caret, ln, len };
 	int32_t cx = 0;
 	status = geom_caret(&g, tv->cur_col, &cx);
-	if (status != OS64_FONT_OK) {
-		// Committing would keep a scroll in the retired face's pixels.
-		os64_ui_run_release(caret);
-		return status;
-	}
-	int64_t left = scroll_to_show(0, cx, width), goal = cx;
+	if (status != OS64_FONT_OK)
+		return status;      // committing would keep a scroll in retired pixels
+	out->top = top;
+	out->left = scroll_to_show(0, cx, width);
+	out->goal = cx;
 
 	size_t visible = rows;
 	if (top < count && visible > count - top)
 		visible = count - top;
 	else if (top >= count)
 		visible = 0;
+	if (!visible)
+		return OS64_FONT_OK;
 
-	tv_free_runs(&tv->row_runs_staged, &tv->row_runs_staged_count);
-	if (visible) {
-		void **runs = os64_malloc(visible * sizeof(*runs));
-		if (!runs) {
-			os64_ui_run_release(caret);
-			return OS64_FONT_NO_MEMORY;
+	out->runs = os64_malloc(visible * sizeof(*out->runs));
+	if (!out->runs)
+		return OS64_FONT_NO_MEMORY;
+	for (size_t i = 0; i < visible; ++i)
+		out->runs[i] = NULL;
+	out->count = visible;
+	for (size_t i = 0; i < visible; ++i) {
+		line_geom_t rg;
+		status = tv_row_geom(tv, ui, top + i, &out->runs[i], pitch, budget, &rg);
+		if (status != OS64_FONT_OK)
+			return status;
+	}
+	return OS64_FONT_OK;
+}
+
+static os64_font_status_t textview_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+	os64_ui_textview_t *tv = (os64_ui_textview_t *)w;
+	int32_t pitch = os64_ui_font_row_height(ui, OS64_FONT_ROLE_DOCUMENT);
+	os64_gui_rect_t planned = os64_ui_widget_planned_bounds(w);
+	int32_t fits = pitch > 0 ? (planned.h - 2 * VIEW_INSET) / pitch : 0;
+	size_t rows = fits > 0 ? (size_t)fits : 1;
+	int32_t width = planned.w - 2 * VIEW_INSET;
+
+	// A WIDER WINDOW IS TRIED AGAIN HERE. Preparation starts from the
+	// application's window whatever a LIMIT left behind, because this is
+	// where a refusal still means the old face, the old spans and the old
+	// view stay exactly as they are. (An application that sets
+	// `window_bytes` asks for a different window, and gets it afresh.) A
+	// pass that ends on a smaller budget than it began with is thrown away
+	// and run again, so every staged run holds a span of the SAME window —
+	// the one commit will lay the caret, the scroll and the decorations
+	// against.
+	tv_pass_t pass = {0};
+	size_t budget = tv_window_bytes(tv);
+	for (;;) {
+		size_t started = budget;
+		os64_font_status_t status = tv_pass(tv, ui, pitch, rows, width, &budget, &pass);
+		if (status != OS64_FONT_OK) {
+			tv_pass_release(&pass);
+			return status;
 		}
-		for (size_t i = 0; i < visible; ++i)
-			runs[i] = NULL;
-		for (size_t i = 0; i < visible; ++i) {
-			const char *row = tv_line(tv, top + i, &len);
-			status = os64_ui_run_layout(ui, OS64_FONT_ROLE_DOCUMENT, row, len, &runs[i]);
-			if (status != OS64_FONT_OK) {
-				for (size_t j = 0; j < i; ++j)
-					os64_ui_run_release(runs[j]);
-				os64_free(runs);
-				os64_ui_run_release(caret);
-				return status;
-			}
-		}
-		tv->row_runs_staged = runs;
-		tv->row_runs_staged_count = visible;
+		if (budget == started)
+			break;
+		tv_pass_release(&pass);
 	}
 
+	tv_free_runs(&tv->row_runs_staged, &tv->row_runs_staged_count);
+	tv->row_runs_staged = pass.runs;
+	tv->row_runs_staged_count = pass.count;
 	os64_ui_run_release(w->run_staged);
-	w->run_staged = caret;
-	tv->top_staged = top;
-	tv->left_staged = left;
-	tv->goal_staged = goal;
+	w->run_staged = pass.caret;
+	tv->top_staged = pass.top;
+	tv->left_staged = pass.left;
+	tv->goal_staged = pass.goal;
+	tv->win_budget_staged = budget;
 	return OS64_FONT_OK;
 }
 
@@ -871,6 +1204,10 @@ static void textview_commit(os64_ui_widget_t *w)
 	tv->top = tv->top_staged;
 	tv->left_px = tv->left_staged;
 	tv->goal_x = tv->goal_staged;
+	// The budget those runs were laid out with, so every lookup after this
+	// resolves the spans they hold rather than reaching for a wider window.
+	tv->win_budget = tv->win_budget_staged;
+	tv->win_budget_of = tv_window_bytes(tv);
 }
 
 static void textview_discard(os64_ui_widget_t *w)
@@ -935,13 +1272,18 @@ static void tv_ensure_visible(os64_ui_t *ui, os64_ui_textview_t *tv)
 	const os64_ui_theme_t *t = &ui->theme;
 	int32_t rows = os64_ui_textview_rows(tv, t);
 	int32_t width = os64_ui_textview_width(tv);
-	size_t old_top = tv->top;
+	size_t old_top = tv->top, old_win = tv->win_from;
 	int64_t old_left = tv->left_px;
 
 	if (tv->cur_line < tv->top)
 		tv->top = tv->cur_line;
 	if (tv->cur_line >= tv->top + (size_t)rows)
 		tv->top = tv->cur_line - (size_t)rows + 1;
+
+	// A long line's window moves first, if the caret has left it or come
+	// near an end of it: where the caret sits in the row depends on where
+	// the row starts.
+	tv_settle_window(tv);
 
 	// A caret that cannot be located leaves the horizontal scroll alone
 	// rather than jumping somewhere arbitrary; the vertical half above is
@@ -952,9 +1294,74 @@ static void tv_ensure_visible(os64_ui_t *ui, os64_ui_textview_t *tv)
 	    geom_caret(&g, tv->cur_col, &cx) == OS64_FONT_OK)
 		tv->left_px = scroll_to_show(tv->left_px, cx, width);
 
-	if (tv->top != old_top || tv->left_px != old_left)
+	if (tv->top != old_top || tv->left_px != old_left || tv->win_from != old_win)
 		tv_fire_view(tv);
 	os64_ui_mark_dirty(ui, &tv->w);
+}
+
+static void fill_clipped(os64_gui_surface_t *surf, os64_gui_rect_t r,
+                         os64_gui_rect_t clip, uint32_t colour)
+{
+	os64_gui_rect_t painted;
+	if (os64_rect_intersect(r, clip, &painted))
+		os64_draw_fill_rect(surf, painted, colour);
+}
+
+// A decoration, in the window's chrome colours because it is not text:
+// omitted bytes are a small arrowhead pointing at where they are, and a
+// cluster too long to lay out is a hollow box standing in for it. When
+// both stand at one end, the box is beside the text it follows or leads
+// and the arrow is outside it, because that is the order of the bytes.
+static void tv_draw_edge(os64_gui_surface_t *surf, os64_gui_rect_t clip,
+                         os64_gui_rect_t box, uint8_t kind, bool before,
+                         uint32_t bg, uint32_t fg)
+{
+	fill_clipped(surf, box, clip, bg);
+	int32_t cy = box.y + box.h / 2;
+	if (kind & EDGE_MORE) {
+		int32_t w = edge_width(EDGE_MORE, box.h);
+		os64_gui_rect_t cell = { before ? box.x : box.x + box.w - w, box.y, w, box.h };
+		int32_t size = box.h / 4 > 2 ? box.h / 4 : 2;
+		int32_t x0 = cell.x + (cell.w - size) / 2;
+		for (int32_t i = 0; i < size; ++i) {
+			int32_t reach = before ? i + 1 : size - i;
+			fill_clipped(surf, (os64_gui_rect_t){ x0 + i, cy - reach, 1, 2 * reach },
+			             clip, fg);
+		}
+		box.w -= w;
+		if (before)
+			box.x += w;
+	}
+	if (kind & EDGE_LONG) {
+		os64_gui_rect_t in = { box.x + 3, box.y + 3, box.w - 6, box.h - 6 };
+		fill_clipped(surf, (os64_gui_rect_t){ in.x, in.y, in.w, 1 }, clip, fg);
+		fill_clipped(surf, (os64_gui_rect_t){ in.x, in.y + in.h - 1, in.w, 1 }, clip, fg);
+		fill_clipped(surf, (os64_gui_rect_t){ in.x, in.y, 1, in.h }, clip, fg);
+		fill_clipped(surf, (os64_gui_rect_t){ in.x + in.w - 1, in.y, 1, in.h }, clip, fg);
+		for (int32_t x = in.x + 3; x + 1 < in.x + in.w - 2; x += 4)
+			fill_clipped(surf, (os64_gui_rect_t){ x, cy, 2, 1 }, clip, fg);
+	}
+}
+
+// One row as its geometry describes it: the leading decoration, the span,
+// the trailing decoration. Everything is drawn from `g`'s one rendering and
+// nothing is looked up again.
+static void tv_draw_row(os64_ui_t *ui, os64_gui_surface_t *surf,
+                        const line_geom_t *g, os64_gui_rect_t clip,
+                        int32_t origin, int32_t y, int32_t pitch,
+                        uint32_t fg, uint32_t bg, uint32_t edge_bg, uint32_t edge_fg)
+{
+	if (g->lead)
+		tv_draw_edge(surf, clip, (os64_gui_rect_t){ origin, y, g->lead, pitch },
+		             g->lead_kind, true, edge_bg, edge_fg);
+	os64_ui_draw_run(ui, g->run, OS64_FONT_ROLE_DOCUMENT, surf, clip,
+	                 origin + g->lead, y, g->s + g->from, g->to - g->from, fg, bg);
+	if (g->trail) {
+		int32_t end = g->lead;
+		geom_caret(g, g->to, &end);
+		tv_draw_edge(surf, clip, (os64_gui_rect_t){ origin + end, y, g->trail, pitch },
+		             g->trail_kind, false, edge_bg, edge_fg);
+	}
 }
 
 static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
@@ -992,8 +1399,6 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		size_t li = tv->top + (size_t)r;
 		if (li >= count)
 			break;
-		size_t len;
-		const char *ln = tv_line(tv, li, &len);
 		int32_t y = area.y + r * pitch;
 		os64_gui_rect_t row = { area.x, y, area.w, pitch };
 		os64_gui_rect_t clip;
@@ -1008,10 +1413,12 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		// of the same bytes, so they cannot describe different text — which
 		// is what happens the moment a selection is computed one way and
 		// painted another. The draws below are of this choice and look
-		// nothing up again: the line's run, or with no face the bitmap cell.
-		// A refused layout draws nothing and places nothing.
-		line_geom_t g = { NULL, ln, len };
-		if (tv_run(ui, slot, ln, len, &g.run) != OS64_FONT_OK) {
+		// nothing up again: the row's run, or with no face the bitmap cell.
+		// A long line's row is its window, and the geometry says where its
+		// decorations stand. A refused layout draws nothing and places
+		// nothing.
+		line_geom_t g;
+		if (tv_row_live(tv, ui, li, slot, pitch, &g) != OS64_FONT_OK) {
 			os64_ui_run_release(spare);
 			continue;
 		}
@@ -1021,32 +1428,33 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		bool lit = false;
 		if (have_sel && li >= sl && li <= el) {
 			from = li == sl ? sc : 0;
-			to = li == el ? ec : len;
+			to = li == el ? ec : g.len;
 			lit = to > from;
 		}
 
-		// TWO PASSES OVER ONE RENDERING. The whole line in its ordinary
-		// colours, then the line again in the selection's colours CLIPPED
+		// TWO PASSES OVER ONE RENDERING. The whole row in its ordinary
+		// colours, then the row again in the selection's colours CLIPPED
 		// TO THE SELECTED SPAN — the draw fills its own box with the
 		// background it is given, so the second pass lays down the
 		// highlight and the lit glyphs together, exactly as wide as the
 		// selection and no wider. The same rendering both times, so the
 		// second pass costs no layout and its glyphs land on the first
-		// pass's pixels.
-		os64_ui_draw_run(ui, g.run, OS64_FONT_ROLE_DOCUMENT, &ctx->surf, clip,
-		                 origin, y, ln, len, t->text_fg, t->text_bg);
+		// pass's pixels. A decoration standing for selected bytes is lit
+		// with them.
+		tv_draw_row(ui, &ctx->surf, &g, clip, origin, y, pitch,
+		            t->text_fg, t->text_bg, t->scroll_track, t->scroll_thumb);
 		if (lit) {
 			os64_gui_rect_t sel;
 			if (geom_selection(&g, from, to, &sel) == OS64_FONT_OK) {
-				// X is relative to the line; the ROW is what this view lays
+				// X is relative to the row; the ROW is what this view lays
 				// out on (FONT_PROVIDER.md: pitch comes from the primary
 				// face and does not grow for a fallback).
 				os64_gui_rect_t lit_rect = { origin + sel.x, y, sel.w, pitch };
 				os64_gui_rect_t sel_clip;
 				if (os64_rect_intersect(lit_rect, clip, &sel_clip))
-					os64_ui_draw_run(ui, g.run, OS64_FONT_ROLE_DOCUMENT, &ctx->surf,
-					                 sel_clip, origin, y, ln, len,
-					                 t->text_sel_fg, t->text_sel_bg);
+					tv_draw_row(ui, &ctx->surf, &g, sel_clip, origin, y, pitch,
+					            t->text_sel_fg, t->text_sel_bg,
+					            t->text_sel_bg, t->text_sel_fg);
 			}
 		}
 
@@ -1210,6 +1618,9 @@ static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
 			tv->sel = false;
 			tv->sel_line = tv->cur_line;
 			tv->sel_col = tv->cur_col;
+			// A click on a long line's decoration puts the caret against
+			// the omitted text, and its window moves to show some.
+			tv_ensure_visible(ui, tv);
 		} else if (!tv->sel) {
 			// Refused: the caret stays, and a drag that follows starts
 			// from it rather than from wherever an old anchor was left.

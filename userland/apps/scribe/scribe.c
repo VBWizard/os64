@@ -56,13 +56,17 @@ typedef struct
     os64_ui_textview_t view;
     os64_ui_scrollbar_t scroll;     // vertical: lines
     os64_ui_scrollbar_t hscroll;    // horizontal: pixels of the document face
-    int64_t max_width;              // the widest line's pixel width — the
-                                    // h-bar's `total`. Grows as edits widen
-                                    // lines and is measured afresh on a load,
-                                    // a paste or a font change, never per
-                                    // keystroke (a bar briefly roomier than
-                                    // the text beats re-measuring a 136MB log
-                                    // each key)
+    int64_t max_width;              // the widest row the view has shown since
+                                    // the document or the face last changed:
+                                    // the h-bar's `total`, unless the caret's
+                                    // long-line window is wider. It GROWS as
+                                    // rows come on screen and as edits widen
+                                    // them, and no line is laid out for it
+                                    // that has not been on screen: measuring
+                                    // a 100,000-line log whole took half a
+                                    // minute in QEMU. DEBTS.md books the
+                                    // background measurer that would make it
+                                    // the whole document's.
 
     char path[SCRIBE_PATH_MAX];     // empty = unnamed buffer
     char status_text[SCRIBE_STATUS_MAX];
@@ -78,13 +82,19 @@ typedef struct
     // page is the proof the log viewer will stand on.
     bool help_active;
     size_t  saved_top, saved_cur_line, saved_cur_col;
+    // The document's long-line window, which help would otherwise take with
+    // it: moving about the help page settles the view's window onto the help
+    // page, and a restored pixel scroll only points at the same text if the
+    // row it was measured in comes back too.
+    size_t  saved_win_line, saved_win_from, saved_win_budget;
     int64_t saved_left, saved_max_width;
     bool    saved_sel;
     size_t  saved_sel_line, saved_sel_col;
     // Set when the face changes while help is open: saved_left is then in
     // pixels of a retired face, and help_leave scrolls to the caret instead
-    // of restoring it. saved_max_width needs no such flag — the font change
-    // measures the waiting document too, and commits its extent there.
+    // of restoring it. saved_max_width is in those pixels too, and the
+    // change sets it to zero: no row of the document has been shown in the
+    // new face.
     bool    saved_face_stale;
 } scribe_t;
 
@@ -356,48 +366,21 @@ static void on_resize(os64_ui_t *ui)
 // Defined with the scrollbar wiring below.
 static void sync_scrollbar(void);
 
-// The widest line of a document, under whatever face measurement is
-// answering for: the candidate inside a font change, the installed face
-// everywhere else. ALL OR NOTHING — the answer is written only when every
-// line measured, because the widest of the lines that happened to measure is
-// not the document's width. A caller that keeps the number it had when this
-// refuses keeps a number that was true of something.
-static os64_font_status_t measure_extent(const os64_ui_textbuf_t *doc,
-                                         int64_t *out)
-{
-    int64_t widest = 0;
-    size_t count = doc->line_count(doc->user);
-    for (size_t i = 0; i < count; i++) {
-        size_t len;
-        const char *ln = doc->line(doc->user, i, &len);
-        int64_t v = 0;
-        os64_font_status_t status = os64_ui_textview_line_width(&g.ui, ln, len, &v);
-        if (status != OS64_FONT_OK)
-            return status;
-        if (v > widest)
-            widest = v;
-    }
-    *out = widest;
-    return OS64_FONT_OK;
-}
-
 // ── adopting a face ─────────────────────────────────────────────────────────
 // Scribe's half of a font change. libui stages the widgets' text; this stages
 // the WINDOW — every rectangle the new face implies — so the textview
 // prepares runs for the lines it will be able to show rather than the ones it
 // shows now. Nothing live moves until commit.
 //
-// The horizontal extents are staged here too. Every one scribe holds is in
-// the pixels of the face being retired, and measuring a line lays it out,
-// which allocates and can be refused — so it happens while a refusal can
-// still say no to the whole change. Commit must not allocate, and it only
-// moves these numbers into place.
+// The horizontal extent is not measured here. Every extent scribe holds is
+// in the pixels of the face being retired, so commit starts the one on stage
+// over, from the rows the new face shows — and those are exactly the runs
+// libui staged beside this plan, so reading them back lays nothing out and
+// allocates nothing, as a commit must not.
 
 typedef struct
 {
     scribe_layout_t layout;
-    int64_t doc_extent;     // the document's, even while help covers it
-    int64_t help_extent;    // the help page's, when it is on stage
 } scribe_font_plan_t;
 
 static os64_font_status_t plan_font(os64_ui_t *ui, void *user, void **out)
@@ -407,10 +390,6 @@ static os64_font_status_t plan_font(os64_ui_t *ui, void *user, void **out)
     if (!p)
         return OS64_FONT_NO_MEMORY;
     os64_font_status_t status = compute_layout(ui, &p->layout);
-    if (status == OS64_FONT_OK)
-        status = measure_extent(&g.textbuf, &p->doc_extent);
-    if (status == OS64_FONT_OK && g.help_active)
-        status = measure_extent(&kHelpBuf, &p->help_extent);
     if (status != OS64_FONT_OK) {
         os64_free(p);
         return status;
@@ -421,20 +400,19 @@ static os64_font_status_t plan_font(os64_ui_t *ui, void *user, void **out)
 }
 
 // libui has already applied the staged rectangles and swapped in the runs;
-// what is left is scribe's own derived state, all of it measured in plan.
+// what is left is scribe's own derived state.
 static void commit_font(os64_ui_t *ui, void *user, void *plan)
 {
     (void)ui; (void)user;
     scribe_font_plan_t *p = plan;
     g.mode_label.hidden = g.field.w.hidden = !p->layout.bar2;
+    g.max_width = 0;
     if (g.help_active) {
-        g.max_width = p->help_extent;
-        g.saved_max_width = p->doc_extent;
-        // The document's saved scroll is in the retired face's pixels, and
-        // is recomputed around its caret when help closes.
+        // The document waiting behind help has shown no row in this face,
+        // and its saved scroll is in the retired face's pixels: both are
+        // found again when help closes.
+        g.saved_max_width = 0;
         g.saved_face_stale = true;
-    } else {
-        g.max_width = p->doc_extent;
     }
     os64_free(p);
     sync_scrollbar();
@@ -466,34 +444,44 @@ static void sync_scrollbar(void)
     int64_t count = (int64_t)g.view.buf->line_count(g.view.buf->user);
     os64_ui_scrollbar_set(&g.ui, &g.scroll, count, rows, (int64_t)g.view.top);
     // The horizontal bar counts PIXELS now, because a proportional face
-    // has no columns to count. Its units are the view's own.
-    os64_ui_scrollbar_set(&g.ui, &g.hscroll, g.max_width, width, g.view.left_px);
+    // has no columns to count. Its units are the view's own. It reaches the
+    // widest row shown so far: the rows on screen join the extent here, laid
+    // out in the slots the paint draws from. A refusal leaves the extent as
+    // it was. The caret's row counts too, on screen or not: a long line the
+    // caret is on shows a window, and the bar reaches that window; the rest
+    // of the line is unknown, and reached by moving the caret, which moves
+    // the window. Nothing else in the document is laid out for the bar.
+    int64_t shown = 0;
+    if (os64_ui_textview_shown_width(&g.ui, &g.view, &shown) == OS64_FONT_OK &&
+        shown > g.max_width)
+        g.max_width = shown;
+    int64_t total = g.max_width;
+    if (os64_ui_textview_row_width(&g.ui, &g.view, g.view.cur_line, &shown) ==
+            OS64_FONT_OK && shown > total)
+        total = shown;
+    os64_ui_scrollbar_set(&g.ui, &g.hscroll, total, width, g.view.left_px);
 }
 
-// The document's widest line, measured again after something replaced a lot
-// of it: a load, a paste. A refusal keeps the extent the bar had — for a
-// load that is the previous document's, which is the wrong size but never
-// the wrong face, and the caret still scrolls the view wherever it goes;
-// view_changed grows the bar as lines are edited.
+// The document's extent, measured afresh after something replaced it
+// wholesale: it starts over from the rows the view shows, and grows as more
+// of them are shown.
 static void measure_document(void)
 {
-    measure_extent(&g.textbuf, &g.max_width);
+    int64_t shown = 0;
+    g.max_width = 0;
+    if (os64_ui_textview_shown_width(&g.ui, &g.view, &shown) == OS64_FONT_OK)
+        g.max_width = shown;
 }
 
 static void view_changed(os64_ui_textview_t *tv, void *user)
 {
-    (void)user;
-    // Only the cursor's line can have widened; measure it, never the file.
-    // The extent GROWS here and never shrinks, so a line that was the widest
-    // and then got shorter leaves the bar too long until the document is
-    // next measured whole — a load, a paste, a font change. The alternative
-    // is rescanning the whole document on every keystroke.
-    size_t len;
-    const char *ln = g.textbuf.line(g.textbuf.user, tv->cur_line, &len);
-    int64_t v = 0;
-    if (os64_ui_textview_line_width(&g.ui, ln, len, &v) == OS64_FONT_OK &&
-        v > g.max_width)
-        g.max_width = v;
+    (void)tv; (void)user;
+    // An edit widens rows that are on screen, or that the view is about to
+    // move to — and sync_scrollbar measures the rows shown, here and again
+    // when the view moves. The extent GROWS and never shrinks, so a line
+    // that was the widest and then got shorter leaves the bar too long
+    // until the next load or font change. The alternative is re-measuring
+    // every line on every keystroke.
     status_refresh();       // dirty star + line count stay honest
     sync_scrollbar();
 }
@@ -537,15 +525,21 @@ static void help_leave(void)
     g.view.sel_line = g.saved_sel_line;
     g.view.sel_col = g.saved_sel_col;
     g.max_width = g.saved_max_width;
+    g.view.win_line = g.saved_win_line;
+    g.view.win_from = g.saved_win_from;
     if (g.saved_face_stale) {
         // The face changed while help was on stage, so the saved scroll is
-        // in pixels of a face nobody is wearing. The caret and the selection
-        // are BYTE positions and came back exactly; the scroll is found
-        // again around them. (The extent was measured by the change itself.)
+        // in pixels of a face nobody is wearing — and the saved budget is
+        // that face's, while the one that arrived proved its own. The caret
+        // and the selection are BYTE positions and came back exactly; the
+        // scroll is found again around them in the window just restored,
+        // and the extent grows again from the rows shown.
         g.saved_face_stale = false;
         g.view.left_px = 0;
         os64_ui_textview_goto(&g.ui, &g.view, g.view.cur_line, g.view.cur_col, false);
         g.view.sel = g.saved_sel;
+    } else {
+        g.view.win_budget = g.saved_win_budget;
     }
     status_refresh();
     sync_scrollbar();
@@ -572,6 +566,9 @@ static void help_toggle(void)
     g.saved_sel_line = g.view.sel_line;
     g.saved_sel_col = g.view.sel_col;
     g.saved_max_width = g.max_width;
+    g.saved_win_line = g.view.win_line;
+    g.saved_win_from = g.view.win_from;
+    g.saved_win_budget = g.view.win_budget;
 
     g.help_active = true;
     g.view.buf = &kHelpBuf;
@@ -579,9 +576,7 @@ static void help_toggle(void)
     g.view.left_px = 0;
     g.view.cur_line = g.view.cur_col = 0;
     g.view.sel = false;
-    // A refusal leaves the document's extent on the bar: roomier or
-    // narrower than the page, never a number from a face gone by.
-    measure_extent(&kHelpBuf, &g.max_width);
+    g.max_width = 0;            // the page's own, grown as its rows show
     status_show("help - Esc or ^G returns");
     sync_scrollbar();
     os64_ui_mark_dirty(&g.ui, &g.view.w);
@@ -868,14 +863,10 @@ static bool app_shortcut(const os64_gui_event_t *ev)
             os64_ui_textfield_paste(&g.ui, &g.field);
             return true;
         }
-        if (os64_ui_textview_paste(&g.ui, &g.view)) {
-            // A multi-line paste can widen lines the on_change hook never
-            // looks at — it measures the CARET's line, which is right for a
-            // keystroke and not enough for a block of text. One honest pass.
-            measure_document();
-            sync_scrollbar();
+        // A multi-line paste widens rows the way typing does: on_change
+        // measures those on screen, and the rest join the bar as they show.
+        if (os64_ui_textview_paste(&g.ui, &g.view))
             os64_ui_mark_dirty(&g.ui, &g.view.w);
-        }
         return true;
 
     case 0x07:  // Ctrl+G — the guide (his commissioning order: a help
@@ -917,6 +908,8 @@ const char *scribe_line(size_t index, size_t *len)
 os64_ui_textview_t *scribe_view(void) { return &g.view; }
 int64_t scribe_extent(void) { return g.max_width; }
 void scribe_toggle_help(void) { help_toggle(); }
+void scribe_open(const char *path) { do_load(path); }
+bool scribe_save_as(const char *path) { return do_save(path); }
 
 static const char *scribe_build(void);   // after scribe_main, which calls it
 

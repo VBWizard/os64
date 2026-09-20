@@ -761,9 +761,18 @@ os64_font_status_t os64_ui_run_selection(void *run, size_t begin, size_t end,
 // correct when memory is short. The alternative was falling back to one
 // byte, which is not a smaller cluster but a way of cutting one in half.
 //
-// The walk starts at the line's first byte, because a combining mark decides
-// where the cluster BEFORE it ends and the decoder cannot run backwards. It
-// is the same order of work as the layout the edit goes on to cause.
+// NOR DOES IT NEED THE LINE BEFORE THE CARET. The decoder cannot run
+// backwards: whether a combining mark starts a cluster depends on what came
+// before it. But most positions do not depend on that at all. A scalar that
+// is not a combining mark never joins the cluster before it, so wherever one
+// starts, a cluster starts. The walk backs up only to the nearest such
+// position — past a few continuation bytes, or across the marks of the one
+// cluster the caret is beside — and decodes forward from there. A keystroke
+// at the end of a line of megabytes costs what is near the caret, not what
+// precedes it, and there is no cache of earlier answers to go stale when
+// the bytes change. Only a step across a single cluster of megabytes, or an
+// answer asked from inside one, costs that cluster's length, and that in
+// bounded memory.
 
 static size_t cluster_end(const char *s, size_t len, size_t at)
 {
@@ -772,17 +781,63 @@ static size_t cluster_end(const char *s, size_t len, size_t at)
 	                   OS64_TEXT_UTF8_WESTERN_V1, false).end;
 }
 
+// Does a scalar begin at `q`? Only a continuation byte can belong to the
+// scalar before it, and only to a lead byte at most three bytes back whose
+// whole valid sequence reaches it — the decoder takes nothing from a
+// malformed one but its lead. The nearest byte that is not a continuation
+// decides: a lead further back would have to swallow it first, and cannot.
+static bool scalar_start(const char *s, size_t len, size_t q)
+{
+	const uint8_t *b = (const uint8_t *)s;
+	if (q == 0 || q >= len || b[q] < 0x80 || b[q] > 0xBF)
+		return true;
+	for (size_t j = 1; j <= 3 && j <= q; ++j) {
+		if (b[q - j] >= 0x80 && b[q - j] <= 0xBF)
+			continue;
+		uint32_t cp;
+		return os64_utf8_decode(s + q - j, len - (q - j), &cp) <= j;
+	}
+	return true;                  // no lead near enough to reach it
+}
+
+// A position that is a cluster edge whatever came before it: the line's
+// ends, or the start of a scalar that is not a combining mark.
+static bool certain_edge(const char *s, size_t len, size_t q)
+{
+	if (q == 0 || q >= len)
+		return true;
+	if (!scalar_start(s, len, q))
+		return false;
+	uint32_t cp;
+	os64_utf8_decode(s + q, len - q, &cp);
+	return cp < 0x300 || cp > 0x36F;
+}
+
+// The nearest certain edge at or before `q`.
+static size_t edge_at_or_before(const char *s, size_t len, size_t q)
+{
+	if (q > len)
+		q = len;
+	while (!certain_edge(s, len, q))
+		--q;
+	return q;
+}
+
 size_t os64_ui_text_step(const char *s, size_t len, size_t offset, bool forward)
 {
 	if (offset > len)
 		offset = len;
-	size_t at = 0;
 	if (forward) {
-		while (at < len && at <= offset)
+		if (offset == len)
+			return len;
+		size_t at = edge_at_or_before(s, len, offset);
+		while (at <= offset)
 			at = cluster_end(s, len, at);
 		return at;
 	}
-	size_t before = 0;
+	if (offset == 0)
+		return 0;
+	size_t at = edge_at_or_before(s, len, offset - 1), before = at;
 	while (at < offset) {
 		before = at;
 		at = cluster_end(s, len, at);
@@ -794,7 +849,7 @@ size_t os64_ui_text_snap(const char *s, size_t len, size_t offset, bool after)
 {
 	if (offset >= len)
 		return len;
-	size_t at = 0;
+	size_t at = edge_at_or_before(s, len, offset);
 	while (at < offset) {
 		size_t end = cluster_end(s, len, at);
 		if (end > offset)
@@ -802,6 +857,48 @@ size_t os64_ui_text_snap(const char *s, size_t len, size_t offset, bool after)
 		at = end;
 	}
 	return at;
+}
+
+bool ui_text_cluster_after(const char *s, size_t len, size_t at, size_t limit,
+                           size_t *out_end)
+{
+	// Four bytes past the limit are enough to recognize a mark that would
+	// carry the cluster over it; the decoder never looks further than one
+	// scalar ahead, and no scalar is longer than four.
+	size_t seen = len - at > limit + 4 ? at + limit + 4 : len;
+	size_t end = text_decode((const uint8_t *)s, seen, at,
+	                         OS64_TEXT_UTF8_WESTERN_V1, false).end;
+	if (end - at > limit)
+		return false;
+	*out_end = end;
+	return true;
+}
+
+bool ui_text_cluster_before(const char *s, size_t len, size_t at, size_t limit,
+                            size_t *out_start)
+{
+	if (at == 0 || at > len)
+		return false;
+	// Every byte the search backs over belongs to a combining mark, or is a
+	// continuation byte of the scalar the marks follow, of which there are
+	// at most three. A run of marks is one cluster, the one ending here, so
+	// backing over more than `limit` + 3 bytes means that cluster is longer
+	// than `limit`, wherever it starts.
+	size_t q = at - 1, walked = 0;
+	while (!certain_edge(s, len, q)) {
+		if (++walked > limit + 3)
+			return false;
+		--q;
+	}
+	size_t before = q;
+	while (q < at) {
+		before = q;
+		q = cluster_end(s, len, q);
+	}
+	if (at - before > limit)
+		return false;
+	*out_start = before;
+	return true;
 }
 
 // The one-caption default. A widget with no text stages nothing and drops
