@@ -1,0 +1,4 @@
+gterm fonts: 12px passed, cell 7x15
+gterm fonts: 28px passed, cell 17x33
+gterm fonts: PASS 2406573 checks, 4482 allocation denial cases, zero live bytes
+Artifacts: /tmp/f3-host-o0
