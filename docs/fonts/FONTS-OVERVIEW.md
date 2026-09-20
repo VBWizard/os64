@@ -27,9 +27,13 @@ To add a font, enter its full guest path in **Install a font file**, then press
 Enter or **Install font**. Workshop validates it and copies it into `fonts/`
 at the top of the configuration ladder, normally `/home/fonts/`. It refuses an
 existing destination name. Select the installed face and size, preview, then
-Apply and/or Save. **Refresh fonts** rescans the folder next to the selected
-`fonts.conf`, plus files already selected by any role. Other folders are not
-searched recursively; use the installation path field to bring in their files.
+Apply and/or Save. **Refresh fonts** combines `/etc/fonts` and `/home/fonts`,
+plus a custom installation folder, the folder next to the selected `fonts.conf`,
+and files already selected by any role. Saving personal settings does not hide
+system fonts. Identical file contents appear once, even under different names;
+different versions remain separate. A configured copy is preferred, otherwise
+a personal copy is preferred to its identical system copy. Existing configured
+paths are preserved. Folders are not searched recursively.
 
 The advanced configuration file is `fonts.conf`. The first file on the normal
 configuration ladder wins, usually `/home/fonts.conf` before `/etc/fonts.conf`.

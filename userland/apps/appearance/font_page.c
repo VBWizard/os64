@@ -72,9 +72,7 @@ static const char *font_label(size_t i, void *user)
 
 static void controls(void)
 {
-    int chosen = -1;
-    for (size_t i = 0; catalog && i < catalog->count; ++i)
-        if (os64_streq(catalog->entries[i].path, draft.roles[role].face[0])) chosen = (int)i;
+    int chosen = os64_font_catalog_find(catalog, draft.roles[role].face[0]);
     os64_ui_listbox_set(editor, &fonts, catalog ? catalog->count : 0, chosen);
     os64_ui_slider_set(editor, &size_slider, (int32_t)draft.roles[role].size);
     os64_ui_set_enabled(editor, &size_slider.w, !os64_streq(draft.roles[role].face[0], "builtin"));

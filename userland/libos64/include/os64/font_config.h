@@ -64,19 +64,30 @@ typedef struct {
     os64_font_status_t font_status;
 } os64_font_catalog_entry_t;
 typedef struct {
+    char path[OS64_FONT_PATH_CAP], canonical[OS64_FONT_PATH_CAP];
+} os64_font_catalog_alias_t;
+typedef struct {
     os64_font_catalog_entry_t entries[OS64_FONT_DISCOVERY_MAX];
     size_t count;
     bool limited, directory_unavailable;
+    os64_font_catalog_alias_t aliases[OS64_FONT_ROLE_COUNT * 3];
+    size_t alias_count;
 } os64_font_catalog_t;
-/* Includes builtin, selected files, then files in the config's fonts/ folder.
- * No suffix filter or recursion. Selected paths survive an unavailable folder.
+/* Includes builtin, selected files, /home/fonts, /etc/fonts, the installation
+ * target and the config's adjacent fonts/ folder. No recursion or suffix filter.
+ * Identical valid file bytes share a row, preferring configured paths, then
+ * personal files. Different bytes remain separate even with matching names.
+ * Selected paths survive unavailable folders; aliases preserve their lookup.
  * Labels may repeat; clients disambiguate with path. Metadata fixed-width is
  * only a hint: prepare validates actual terminal advances at the chosen size.
- * At most 256 directory entries and 64 MiB of source reads per refresh.
+ * At most 256 directory entries and 64 MiB of source reads across the refresh.
+ * Exact deduplication retains at most 64 MiB of source buffers until return.
  * Success returns an owned catalog; individual entries may carry errors. */
 os64_font_config_status_t os64_font_config_discover(os64_text_context_t *,
     const os64_font_config_t *, os64_font_catalog_t **out);
 void os64_font_catalog_release(os64_font_catalog_t *);
+/* Find a representative or a configured alias; -1 if absent. */
+int os64_font_catalog_find(const os64_font_catalog_t *, const char *path);
 /* Copy the role's primary into fonts/ at the top of the config ladder. The
  * staged file and complete candidate are validated before no-replace publish.
  * Existing installed names are refused. Success returns the installed path;

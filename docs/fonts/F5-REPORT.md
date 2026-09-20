@@ -25,11 +25,14 @@ requiring its implementation vocabulary.
   keys, and first-file-wins on the system ladder. Relative faces resolve beside
   that file. Bad lines reject the whole candidate with original line/role/source
   provenance. Save writes absolute paths and removes obsolete fallback keys.
-- Discovery includes builtin, selected files and the selected configuration
-  folder's `fonts/`; it bounds scans at 256 entries, results at 128 assets,
-  sources at 32 MiB each and source reads at 64 MiB. File identity is the path
-  for selection, fresh content instances for the provider; labels include the
-  filename. The filesystem iterator is not recursive or extension-filtered.
+- Discovery includes builtin, selected files, `/home/fonts`, `/etc/fonts`, a
+  custom installation folder and the selected configuration folder's `fonts/`.
+  It bounds the combined scan at 256 entries, results at 128 assets, sources at
+  32 MiB each and source reads at 64 MiB. Byte-identical valid sources share one
+  row, preferring configured paths then personal files. Configured aliases keep
+  selection highlighting without rewriting saved paths. Exact comparison holds
+  source buffers within the 64 MiB read budget until discovery returns. Provider
+  content-instance identity is unchanged. Scans have no recursion/suffix filter.
 - Apply uses generation-checked `/sys/appearance` publication. Save changes
   next-startup choices while pinning the complete old session first. Empty-store
   font Apply preserves application-specific color defaults. Palette/treatment
@@ -62,6 +65,13 @@ Workshop changes; F3/F4 are integrated before their production hookup is edited.
 No kernel code or syscall changed.
 
 ## Validation
+
+### Combined discovery follow-up
+
+The [discovery receipt](f5-evidence/discovery-union/README.md) covers the
+post-`f9ca6ef` correction for system fonts disappearing after personal Save and
+reboot: combined folders, byte-exact deduplication, selection aliases, bounded
+temporary source retention, host regressions, strict image build and QEMU.
 
 ### Clean image build follow-up
 
@@ -174,7 +184,7 @@ that distinction; the final binary manifest matches `419b36d`.
 - Fable's combined review remains pending, particularly F3 and `fonts.serial`.
 - No P5/hardware validation, mainline merge, push or PR is claimed.
 - Fallbacks are configuration-editable; the UI edits primary faces and sizes.
-  Discovery is bounded to the selected folder/selected files. Installation does
+  Discovery is bounded to the documented folders/selected files. Installation does
   not overwrite existing names; uninstall and font browsing across many folders
   are outside this slice.
 - Fixed-layout tools may retain their current fonts at larger sizes. Scribe

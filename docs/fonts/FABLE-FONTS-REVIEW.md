@@ -77,3 +77,14 @@ UI requested. Other hazards remain within the combined review scope.
 The branch is local and unmerged. Three untracked root-level image backups
 (`os64.img`, `ext2_test.img`, `os64_data.img`) are intentionally outside the
 review and were preserved. Fable's review remains pending.
+
+## Discovery follow-up
+
+Chris's P5 trial exposed system fonts disappearing from Workshop after saving
+personal settings and rebooting. The fix combines system and personal folders,
+deduplicates byte-identical valid fonts, and preserves configured-path selection
+through catalog aliases. Review the follow-up after `f9ca6ef`, including the
+temporary memory bound and catalog lookup API. The
+[discovery receipt](f5-evidence/discovery-union/README.md) records host regressions,
+allocation-denial coverage and the guest fixture. Proportional terminal-entry
+disabling remains a discussed UI improvement, not part of this correction.

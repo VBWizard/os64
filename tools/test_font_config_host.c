@@ -30,24 +30,40 @@ int os64_snprintf(char *p, size_t n, const char *fmt, ...)
 }
 
 typedef struct { const char *path; unsigned char *data; size_t length, at; } file;
-static file files[5];
+static file files[10];
 static bool config_found, fail_read, fail_open;
 static int64_t advertised = -1;
 static size_t directory_at, directory_count = 3;
-static bool missing_directory;
+static bool missing_directory, multi_directory;
+static size_t directory_kind, total_entries;
 int64_t __wrap_os64_conf_target(const char *name, char *out, size_t cap)
 { CHECK(!strcmp(name,"fonts.conf") && cap > 15); strcpy(out,"/cfg/fonts.conf"); return 0; }
 int64_t os64_opendir(const char *path)
-{ CHECK(!strcmp(path,"/cfg/fonts")); directory_at = 0; return missing_directory ? -1 : 30; }
+{
+    directory_at = 0;
+    if (missing_directory) return -1;
+    if (!strcmp(path,"/cfg/fonts")) directory_kind = 0;
+    else if (multi_directory && !strcmp(path,"/home/fonts")) directory_kind = 1;
+    else if (multi_directory && !strcmp(path,"/etc/fonts")) directory_kind = 2;
+    else return -1;
+    return 30;
+}
 int64_t os64_readdir(int32_t h, os64_dirent_t *e)
 {
     CHECK(h == 30);
-    if (directory_at == directory_count) return 0;
+    size_t count = directory_kind ? 2 : directory_count;
+    if (directory_at == count) return 0;
     *e = (os64_dirent_t){0};
     const char *names[] = {"sans", "mono", "bad"};
+    const char *personal[] = {"copy", "revision"};
+    const char *system[] = {"sans", "extra"};
+    if (directory_kind) {
+        strcpy(e->name, directory_kind == 1 ? personal[directory_at] : system[directory_at]);
+        ++directory_at; ++total_entries; return 1;
+    }
     if (directory_at < 3) strcpy(e->name,names[directory_at]);
     else { strcpy(e->name,"folder"); e->flags = OS64_DE_DIR; }
-    ++directory_at; return 1;
+    ++directory_at; ++total_entries; return 1;
 }
 int64_t __wrap_os64_conf_find(const char *name, char *out, size_t cap)
 {
@@ -59,15 +75,15 @@ int64_t os64_open(const char *path, const char *mode)
 {
     CHECK(!strcmp(mode, "r")); ++opens;
     if (fail_open) return -1;
-    for (size_t i = 0; i < 5; ++i) if (files[i].path && !strcmp(files[i].path, path)) {
+    for (size_t i = 0; i < 10; ++i) if (files[i].path && !strcmp(files[i].path, path)) {
         files[i].at = 0; return (int64_t)i + 10;
     }
     return -1;
 }
-int64_t os64_close(int32_t h) { CHECK((h >= 10 && h < 15) || h == 30); return 0; }
+int64_t os64_close(int32_t h) { CHECK((h >= 10 && h < 20) || h == 30); return 0; }
 int64_t os64_read(int32_t h, void *out, size_t n)
 {
-    CHECK(h >= 10 && h < 15);
+    CHECK(h >= 10 && h < 20);
     file *f = &files[h - 10];
     if (fail_read && f->at) return -1;
     if (n > 32768) n = 32768; /* exercise legal short reads */
@@ -76,7 +92,7 @@ int64_t os64_read(int32_t h, void *out, size_t n)
 }
 int64_t os64_stat(const char *path, os64_dirent_t *e)
 {
-    for (size_t i = 0; i < 5; ++i) if (files[i].path && !strcmp(files[i].path, path)) {
+    for (size_t i = 0; i < 10; ++i) if (files[i].path && !strcmp(files[i].path, path)) {
         *e = (os64_dirent_t){.size = advertised >= 0 ? (uint64_t)advertised : files[i].length}; return 0;
     }
     return -1;
@@ -160,10 +176,40 @@ static void discovery(os64_text_context_t *ctx, const os64_font_config_t *c)
     CHECK(os64_font_config_discover(ctx,c,&catalog) == 0);
     CHECK(catalog->directory_unavailable && catalog->count == 3);
     os64_font_catalog_release(catalog); missing_directory = false;
-    directory_count = 300;
+    directory_count = 300; total_entries = 0;
     CHECK(os64_font_config_discover(ctx,c,&catalog) == 0);
-    CHECK(catalog->limited && directory_at == OS64_FONT_DISCOVERY_SCAN_MAX);
+    CHECK(catalog->limited && total_entries == OS64_FONT_DISCOVERY_SCAN_MAX);
     os64_font_catalog_release(catalog); directory_count = 3;
+    /* Saved personal settings must not hide unselected system files. Identical
+     * copies collapse across names, while changed bytes with the same family
+     * metadata remain separate. Both configured aliases resolve after sorting. */
+    multi_directory = true;
+    os64_font_config_t saved = *c;
+    strcpy(saved.path, "/home/fonts.conf");
+    strcpy(saved.roles[0].face[0], "/etc/fonts/sans");
+    strcpy(saved.roles[2].face[0], "/home/fonts/copy");
+    CHECK(os64_font_config_discover(ctx,&saved,&catalog) == 0);
+    CHECK(catalog->count == 6 && !catalog->directory_unavailable);
+    int first = os64_font_catalog_find(catalog,"/etc/fonts/sans");
+    CHECK(first > 0 && first == os64_font_catalog_find(catalog,"/home/fonts/copy"));
+    CHECK(os64_font_catalog_find(catalog,"/etc/fonts/extra") > 0);
+    int revision = os64_font_catalog_find(catalog,"/home/fonts/revision");
+    CHECK(revision > 0 && revision != first);
+    CHECK(!strcmp(catalog->entries[first].info.family, catalog->entries[revision].info.family));
+    CHECK(os64_font_catalog_find(catalog,"/absent") == -1);
+    os64_font_catalog_release(catalog);
+    /* Changing which config wins changes neither the union nor alias lookup. */
+    strcpy(saved.path, "/etc/fonts.conf");
+    CHECK(os64_font_config_discover(ctx,&saved,&catalog) == 0);
+    CHECK(catalog->count == 6);
+    CHECK(os64_font_catalog_find(catalog,"/etc/fonts/sans") ==
+          os64_font_catalog_find(catalog,"/home/fonts/copy"));
+    os64_font_catalog_release(catalog);
+    directory_count = 300; total_entries = 0;
+    CHECK(os64_font_config_discover(ctx,&saved,&catalog) == 0);
+    CHECK(catalog->limited && total_entries == OS64_FONT_DISCOVERY_SCAN_MAX);
+    os64_font_catalog_release(catalog); directory_count = 3;
+    multi_directory = false;
     deny = calls + 1;
     CHECK(os64_font_config_discover(ctx,c,&catalog) == OS64_FONT_CONFIG_NO_MEMORY && !catalog);
     deny = 0;
@@ -232,6 +278,26 @@ static void loading(void)
         CHECK(pos < 1999);
     }
     CHECK(failures > 10);
+    /* Discovery owns temporary retained source buffers in addition to provider
+     * allocations. Refuse allocation positions on fresh contexts and verify
+     * that releasing partial catalogs leaves nothing live. */
+    size_t discovery_failures = 0;
+    multi_directory = true;
+    for (size_t pos = 1; pos < 4000; ++pos) {
+        CHECK(os64_font_context_create(&options, &ctx) == OS64_FONT_OK);
+        deny = calls + pos;
+        os64_font_catalog_t *catalog = NULL;
+        os64_font_config_status_t result = os64_font_config_discover(ctx, &c, &catalog);
+        bool fired = calls >= deny; deny = 0;
+        CHECK(result == OS64_FONT_CONFIG_OK || result == OS64_FONT_CONFIG_NO_MEMORY);
+        if (fired) ++discovery_failures;
+        os64_font_catalog_release(catalog);
+        CHECK(os64_text_destroy(ctx) == OS64_FONT_OK && live == 0);
+        if (!fired) break;
+        CHECK(pos < 3999);
+    }
+    multi_directory = false;
+    printf("Discovery allocation-denial positions: %zu\n", discovery_failures);
     printf("Preparation allocation-denial cases: %zu\n", failures);
 }
 
@@ -241,7 +307,15 @@ int main(int argc, char **argv)
     load(&files[1], argv[1], "DejaVuSans.ttf", "/cfg/fonts/sans");
     load(&files[2], argv[1], "DejaVuSansMono.ttf", "/cfg/fonts/mono");
     files[3] = (file){"/cfg/fonts/bad", (unsigned char *)"bad", 3, 0};
+    files[4] = files[1]; files[4].path = "/etc/fonts/sans";
+    files[5] = files[1]; files[5].path = "/home/fonts/copy";
+    load(&files[6], argv[1], "SourceSans3-Regular.otf", "/etc/fonts/extra");
+    files[7] = files[1]; files[7].path = "/home/fonts/revision";
+    files[7].data = malloc(files[1].length + 1); CHECK(files[7].data);
+    memcpy(files[7].data, files[1].data, files[1].length);
+    files[7].data[files[1].length] = 0; ++files[7].length;
     parsing(); loading();
+    free(files[6].data); free(files[7].data);
     free(files[1].data); free(files[2].data);
     printf("font_config: %zu checks, 0 failures; no live allocations\n", checks);
     return 0;

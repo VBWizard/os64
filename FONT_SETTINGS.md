@@ -12,7 +12,10 @@ therefore remains pending, without blocking F5 implementation.
 1. `font_config` owns strict, line-diagnosed configuration parsing, absolute
    path resolution, bounded file loading and provider preparation. It never
    publishes settings or mutates an active consumer. Discovery uses the same
-   loader and provider metadata, with filenames kept as asset identities.
+   loader and provider metadata. It combines system and personal font folders
+   independently of configuration precedence. Byte-identical valid files share
+   a catalog entry; configured path aliases resolve to that entry without
+   rewriting saved choices. Provider content-instance identities are unchanged.
 2. `ui_session` owns a preserving line envelope and generation-checked
    component publication. Font configuration joins the existing transport;
    palette/treatment writers must retain font and unknown dotted-key lines.
