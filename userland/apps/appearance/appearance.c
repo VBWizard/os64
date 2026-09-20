@@ -48,6 +48,7 @@ static os64_ui_widget_t gDialogRoot, gDialogTitle, gDialogBody, gConfirm, gCance
 static int gPendingLoad;
 static enum { CONFIRM_NONE, CONFIRM_LOAD, CONFIRM_CLOSE, CONFIRM_REPLACE } gConfirmation;
 static void layout(void);
+static os64_font_status_t dialog_layout(os64_ui_t *ui, bool staged);
 static void refresh_collection(void);
 static void load_selected(void);
 static os64_ui_checkbox_t gEnable, gCheck;
@@ -478,6 +479,7 @@ static void ask_confirmation(int kind)
     gDialogTitle.text = kind == CONFIRM_REPLACE ? "Replace saved theme?" : "Discard unsaved changes?";
     gDialogBody.text = kind == CONFIRM_REPLACE ? gName : "Keep editing to save your composition first.";
     gConfirm.text = kind == CONFIRM_REPLACE ? "Replace" : "Discard changes";
+    dialog_layout(&gDialog,false);
     os64_ui_set_focus(&gDialog, &gCancel);
     os64_ui_mark_dirty(&gDialog, &gDialogRoot);
     os64_ui_mark_dirty(&gEditor, &gRoot);
@@ -652,114 +654,248 @@ static void scroll_changed(os64_ui_scrollbar_t *sb, void *user)
     os64_ui_textview_scroll_to(&gPreview, &gText, (size_t)sb->pos);
 }
 
+typedef struct {
+    int row, scale, button, field, check, top, footer, min_w, min_h;
+    int width, height;
+} workshop_layout_t;
+static os64_ui_t *gStagingLayout;
+static workshop_layout_t gLayout;
+static bool gHaveLayout;
+
+static int larger(int a, int b) { return a > b ? a : b; }
+static int scaled(const workshop_layout_t *m, int value)
+{ return (value * m->scale + 19) / 20; }
 static void place(os64_ui_widget_t *w, int x, int y, int width, int height)
 {
-    w->bounds = (os64_gui_rect_t){x, y, width, height};
+    os64_gui_rect_t r = {x,y,width,height};
+    if (gStagingLayout) {
+        if (w->ui == gStagingLayout) os64_ui_widget_stage_bounds(w, r);
+    } else w->bounds = r;
+}
+
+static os64_font_status_t measure_layout(os64_ui_t *ui, workshop_layout_t *m)
+{
+    *m = (workshop_layout_t){0};
+    m->row = larger(20, os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI));
+    m->scale = m->row;
+    /* Row height supplies a comfortable starting width; measured captions
+     * also protect wide faces whose advances grow faster than their rows. */
+    static const struct { const char *text; int width; } captions[] = {
+        {"Apply to session",168}, {"Reset component",196}, {"Save",80},
+        {"Interface *",132}, {"Terminal *",132}, {"Document *",132},
+        {"Install font",194}, {"Refresh fonts",206}, {"Controls *",106},
+        {"Follow palette",186}, {"Set",66}, {"Use at startup",412},
+        {"Undo",96}, {"Load theme",192}, {"Refresh",208},
+        {"Composition name",144}, {"Reset sample",116},
+        {"Keep editing",210}, {"Discard changes",210}
+    };
+    for (size_t i = 0; i < sizeof(captions)/sizeof(captions[0]); ++i) {
+        int32_t width;
+        os64_font_status_t status = os64_ui_text_measure(ui, OS64_FONT_ROLE_UI,
+            captions[i].text, os64_strlen(captions[i].text), &width);
+        if (status) return status;
+        m->scale = larger(m->scale, ((width + 12) * 20 + captions[i].width - 1) / captions[i].width);
+    }
+    m->button = larger(32, m->row + 12);
+    m->field = larger(30, m->row + 8);
+    m->check = larger(26, m->row + 4);
+    m->top = 16 + 2*m->row + 8 + 14 + m->button + 12;
+    m->footer = 2*m->field + 20 + m->row + 6;
+    int page_min = 266 + 5*m->row + 2*m->check + m->field;
+    m->min_w = larger(WORKSHOP_MIN_WIDTH, 68 + scaled(m,444) + scaled(m,446));
+    m->min_h = larger(WORKSHOP_MIN_HEIGHT, m->top + page_min + 16 + m->footer);
+    m->width = larger((int)gCtx.surf.width, m->min_w);
+    m->height = larger((int)gCtx.surf.height, m->min_h);
+    return OS64_FONT_OK;
+}
+
+static os64_font_status_t fit_window(workshop_layout_t *m)
+{
+    if (m->width == (int)gCtx.surf.width && m->height == (int)gCtx.surf.height)
+        return OS64_FONT_OK;
+    uint32_t sw, sh;
+    os64_gui_window_state_t state;
+    if (gCtx.win <= 0 || os64_gui_screen_info(&sw,&sh) ||
+        os64_gui_window_get_state(gCtx.win,&state)) return OS64_FONT_LIMIT;
+    int64_t right = larger(0,state.x) + (int64_t)m->width + state.width - gCtx.surf.width;
+    int64_t bottom = larger(0,state.y) + (int64_t)m->height + state.height - gCtx.surf.height;
+    return right <= sw && bottom <= sh ? OS64_FONT_OK : OS64_FONT_LIMIT;
+}
+
+static os64_font_status_t dialog_layout(os64_ui_t *ui, bool staged)
+{
+    int row = larger(20, os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI));
+    int button = larger(36,row+12), dw = 520;
+    const char *body = "Keep editing to save your composition first.";
+    int32_t width = 0;
+    os64_font_status_t status = os64_ui_text_measure(ui, OS64_FONT_ROLE_UI,
+        body, os64_strlen(body), &width);
+    if (status && staged) return status;
+    dw = larger(dw, width + 40);
+    int dh = 60 + 2*row + 16 + button;
+    if (staged && (dw > (int)gCtx.surf.width || dh > (int)gCtx.surf.height))
+        return OS64_FONT_LIMIT;
+    dw = dw < (int)gCtx.surf.width ? dw : (int)gCtx.surf.width;
+    int dx = ((int)gCtx.surf.width-dw)/2, dy = ((int)gCtx.surf.height-dh)/2;
+    gStagingLayout = staged ? ui : NULL;
+    place(&gDialogRoot,dx,dy,dw,dh);
+    place(&gDialogTitle,dx+20,dy+20,dw-40,row);
+    place(&gDialogBody,dx+20,dy+28+row,dw-40,row);
+    place(&gConfirm,dx+20,dy+44+2*row,(dw-60)/2,button);
+    place(&gCancel,dx+(dw+20)/2,dy+44+2*row,(dw-60)/2,button);
+    gStagingLayout = NULL;
+    return OS64_FONT_OK;
+}
+
+static void arrange(const workshop_layout_t *m, bool staged)
+{
+    int width=m->width, height=m->height, row=m->row, bh=m->button;
+    int left=scaled(m,444), px=24+left+20, pw=width-px-24;
+    int footer=height-m->footer, page_h=footer-16-m->top;
+    gStagingLayout = staged ? &gEditor : NULL;
+    place(&gRoot,0,0,width,height);
+    place(&gSmall,0,0,width,height);
+    place(&gHeading,24,16,width-48,row);
+    place(&gIntro,24,24+row,width-48,row);
+    static const char *const tabs[]={"Themes","Palette","Controls","Fonts"};
+    static const char *const active[]={"Themes *","Palette *","Controls *","Fonts *"};
+    for (unsigned i=0;i<4;++i) {
+        place(&gTabs[i],24+(int)i*scaled(m,112),m->top-12-bh,scaled(m,106),bh);
+        place(&gPages[i],24,m->top,left,page_h);
+        if (!staged) {
+            gTabs[i].text=gPage==i?active[i]:tabs[i];
+            os64_ui_set_hidden(&gEditor,&gPages[i],i!=gPage);
+        }
+    }
+    int x=40, inner=left-32, y=m->top+16;
+    place(&gCollectionLabel,x,y,inner,row);
+    int list_y=y+row+10, bottom=m->top+page_h-16;
+    int startup_y=bottom-row-8-bh;
+    int load_y=startup_y-12-bh;
+    place(&gThemes.w,x,list_y,inner-18,load_y-12-list_y);
+    place(&gThemeScroll.w,x+inner-16,list_y,16,load_y-12-list_y);
+    place(&gLoad,x,load_y,(inner-12)/2,bh);
+    place(&gRefresh,x+(inner+12)/2,load_y,(inner-12)/2,bh);
+    place(&gStartup,x,startup_y,inner,bh);
+    place(&gStartupLabel,x,bottom-row,inner,row);
+
+    place(&gPaletteLabel,x,y,inner,row); y+=row+8;
+    place(&gPalettes.w,x,y,inner,2*row+8); y+=2*row+18;
+    place(&gIndividual.w,x,y,inner,m->check); y+=m->check+12;
+    int right=scaled(m,186), rx=x+inner-right;
+    place(&gColors.w,x,y,rx-x-28,bottom-row-12-y);
+    place(&gColorScroll.w,rx-24,y,14,bottom-row-12-y);
+    place(&gColorTitle,rx,y,right,row); y+=row+8;
+    place(&gPicker.w,rx,y,right,156); y+=168;
+    int hex=scaled(m,92), hash=scaled(m,16), set=scaled(m,66);
+    place(&gHexLabel,rx,y,hash,m->field);
+    place(&gHexField.w,rx+hash+4,y,hex,m->field);
+    place(&gSetHex,rx+right-set,y,set,m->field); y+=m->field+8;
+    place(&gFollow,rx,y,right,m->check);
+    place(&gColorHint,x,bottom-row,inner,row);
+
+    y=m->top+16;
+    place(&gStyleLabel,x,y,inner,row); y+=row+12;
+    for(unsigned i=0;i<2;++i) place(&gStyles[i],x+(int)i*(inner+12)/2,y,(inner-12)/2,bh);
+    y+=bh+20; place(&gCornerLabel,x,y,inner,row); y+=row+12;
+    for(unsigned i=0;i<2;++i) place(&gCorners[i],x+(int)i*(inner+12)/2,y,(inner-12)/2,bh);
+    y+=bh+20; place(&gTreatmentHint,x,y,inner,row);
+
+    place(&gNameLabel,24,footer,scaled(m,144),m->field);
+    place(&gNameField.w,24+scaled(m,152),footer,scaled(m,344),m->field);
+    place(&gSave,width-24-scaled(m,256),footer,scaled(m,80),m->field);
+    place(&gApply,width-24-scaled(m,168),footer,scaled(m,168),m->field);
+    place(&gUndo,24,footer+m->field+10,scaled(m,96),m->field);
+    place(&gResetComponent,24+scaled(m,108),footer+m->field+10,scaled(m,196),m->field);
+    place(&gFooter,24,height-row-6,width-48,row);
+
+    /* The specimen is a separate font consumer. Its viewport follows the
+     * committed editor layout, as it does on an ordinary window resize. */
+    if (!staged) {
+        place(&gCanvas,px,m->top,pw,page_h);
+        int py=m->top+16, bx=px+16, iw=pw-32;
+        place(&gPreviewTitle,bx,py,iw,row); py+=row+8;
+        place(&gMenuSample,bx,py,iw,larger(64,row+16)); py+=larger(64,row+16)+8;
+        place(&gFieldLabel,bx,py,iw,row); py+=row+8;
+        place(&gField.w,bx,py,iw,bh); py+=bh+8;
+        int bw=(iw-16)/5;
+        place(&gAction,bx,py,bw,bh);
+        for(int i=0;i<4;++i) place(&gStates[i],bx+(i+1)*(bw+4),py,bw,bh);
+        py+=bh+8;
+        place(&gEnable.w,bx,py,scaled(m,204),m->check);
+        place(&gCheck.w,bx+scaled(m,224),py,iw-scaled(m,224),m->check); py+=m->check+8;
+        place(&gLevelLabel,bx,py,scaled(m,144),larger(28,row));
+        place(&gLevel.w,bx+scaled(m,164),py,iw-scaled(m,164),larger(28,row)); py+=larger(28,row)+8;
+        place(&gTextLabel,bx,py,iw,row); py+=row+8;
+        int count_y=m->top+page_h-16-m->field;
+        place(&gText.w,bx,py,iw-18,count_y-12-py);
+        place(&gScroll.w,bx+iw-16,py,16,count_y-12-py);
+        place(&gCount,bx,count_y,iw-scaled(m,132),m->field);
+        place(&gReset,bx+iw-scaled(m,116),count_y,scaled(m,116),m->field);
+    }
+    gStagingLayout = NULL;
+    font_page_layout(gPage==3,(os64_gui_rect_t){24,m->top,left,page_h},row,staged);
+    if (!staged) {
+        gCompact=false; gSmall.hidden=true; gCanvas.hidden=false;
+        os64_ui_set_hidden(&gEditor,&gResetComponent,gPage==0);
+        os64_ui_set_hidden(&gEditor,&gNameField.w,gPage==3);
+        os64_ui_set_hidden(&gEditor,&gNameLabel,gPage==3);
+        os64_ui_scrollbar_set(&gEditor,&gColorScroll,(int64_t)gColors.count,
+            os64_ui_listbox_rows(&gColors,&gEditor.theme),(int64_t)gColors.top);
+        theme_selection(&gThemes,NULL); view_changed(&gText,NULL); refresh_composition();
+    }
 }
 
 static void layout(void)
 {
-    int width = (int)gCtx.surf.width, height = (int)gCtx.surf.height;
-    place(&gRoot, 0, 0, width, height);
-    gCompact = width < WORKSHOP_MIN_WIDTH || height < WORKSHOP_MIN_HEIGHT;
-    for (os64_ui_widget_t *w = gRoot.first_child; w; w = w->next_sibling)
-        w->hidden = gCompact;
-    gSmall.hidden = !gCompact;
-    place(&gSmall, 0, 0, width, height);
-    gCanvas.hidden = gCompact;
-    // Confirmation remains available even if the window is shrunk mid-prompt.
-    int dw = width < 520 ? width : 520, dh = height < 180 ? height : 180;
-    place(&gDialogRoot, (width - dw) / 2, (height - dh) / 2, dw, dh);
-    int dx = gDialogRoot.bounds.x, dy = gDialogRoot.bounds.y;
-    place(&gDialogTitle, dx + 20, dy + 20, dw - 40, 24);
-    place(&gDialogBody, dx + 20, dy + 58, dw - 40, 24);
-    place(&gConfirm, dx + 20, dy + 116, (dw - 60) / 2, 36);
-    place(&gCancel, dx + (dw + 20) / 2, dy + 116, (dw - 60) / 2, 36);
-    if (gCompact) {
-        os64_ui_cancel_interaction(&gEditor);
-        os64_ui_cancel_interaction(&gPreview);
-        gPreview.any_dirty = false;
-        os64_ui_mark_dirty(&gEditor, &gRoot);
-        return;
+    if (!gHaveLayout) {
+        if (measure_layout(&gEditor,&gLayout)) return;
+        gHaveLayout=true;
     }
-    int left = 444, footer = height - 106;
-    place(&gHeading, 24, 16, width - 48, 24);
-    place(&gIntro, 24, 44, width - 48, 20);
-    static const char *const tabs[] = {"Themes", "Palette", "Controls", "Fonts"};
-    static const char *const active[] = {"Themes *", "Palette *", "Controls *", "Fonts *"};
-    for (unsigned i = 0; i < 4; ++i) {
-        place(&gTabs[i], 24 + (int)i * 112, 78, 106, 32);
-        gTabs[i].text = gPage == i ? active[i] : tabs[i];
-        place(&gPages[i], 24, 122, left, footer - 138);
-        os64_ui_set_hidden(&gEditor, &gPages[i], i != gPage);
-    }
-    place(&gCollectionLabel, 40, 138, left - 32, 20);
-    place(&gThemes.w, 40, 168, left - 54, 244);
-    place(&gThemeScroll.w, 436, 168, 16, 244);
-    place(&gLoad, 40, 426, 192, 32);
-    place(&gRefresh, 244, 426, 208, 32);
-    place(&gStartup, 40, 476, 412, 32);
-    place(&gStartupLabel, 40, 520, 412, 20);
-
-    place(&gPaletteLabel, 40, 136, 400, 20);
-    place(&gPalettes.w, 40, 164, 412, 76);
-    place(&gIndividual.w, 40, 250, 412, 26);
-    place(&gColors.w, 40, 290, 198, 244);
-    place(&gColorScroll.w, 240, 290, 14, 244);
-    place(&gColorTitle, 266, 282, 186, 28);
-    place(&gPicker.w, 266, 314, 186, 156);
-    place(&gHexLabel, 266, 476, 16, 30);
-    place(&gHexField.w, 286, 476, 92, 30);
-    place(&gSetHex, 386, 476, 66, 30);
-    place(&gFollow, 266, 514, 186, 28);
-    place(&gColorHint, 40, 546, 412, 20);
-    // Layout changes the scroll range, not the user's unsubmitted hex edit.
-    os64_ui_scrollbar_set(&gEditor, &gColorScroll, (int64_t)gColors.count,
-        os64_ui_listbox_rows(&gColors, &gEditor.theme), (int64_t)gColors.top);
-
-    place(&gStyleLabel, 40, 142, 412, 20);
-    for (unsigned i = 0; i < 2; ++i) {
-        place(&gStyles[i], 40 + (int)i * 212, 176, 200, 36);
-        place(&gCorners[i], 40 + (int)i * 212, 268, 200, 36);
-    }
-    place(&gCornerLabel, 40, 234, 412, 20);
-    place(&gTreatmentHint, 40, 328, 412, 20);
-
-    place(&gNameLabel, 24, footer, 144, 30);
-    place(&gNameField.w, 176, footer, 344, 30);
-    place(&gSave, width - 280, footer, 80, 30);
-    place(&gApply, width - 192, footer, 168, 30);
-    place(&gUndo, 24, footer + 40, 96, 30);
-    place(&gResetComponent, 132, footer + 40, 196, 30);
-    os64_ui_set_hidden(&gEditor, &gResetComponent, gPage == 0);
-    place(&gFooter, 24, height - 26, width - 48, 20);
-    theme_selection(&gThemes, NULL);
-
-    int x = 488, pw = width - x - 24;
-    place(&gCanvas, x, 122, pw, footer - 138);
-    place(&gPreviewTitle, x + 16, 138, pw - 32, 20);
-    place(&gMenuSample, x + 16, 166, pw - 32, 64);
-    place(&gFieldLabel, x + 16, 236, pw - 32, 20);
-    place(&gField.w, x + 16, 260, pw - 32, 30);
-    int bw = (pw - 48) / 5;
-    place(&gAction, x + 16, 306, bw, 32);
-    for (int i = 0; i < 4; ++i)
-        place(&gStates[i], x + 16 + (i + 1) * (bw + 4), 306, bw, 32);
-    place(&gEnable.w, x + 16, 350, 204, 28);
-    place(&gCheck.w, x + 224, 350, pw - 240, 28);
-    place(&gLevelLabel, x + 16, 390, 144, 28);
-    place(&gLevel.w, x + 164, 390, pw - 180, 28);
-    place(&gTextLabel, x + 16, 430, pw - 32, 20);
-    place(&gText.w, x + 16, 456, pw - 50, footer - 500);
-    place(&gScroll.w, x + pw - 30, 456, 14, footer - 500);
-    place(&gCount, x + 16, footer - 38, pw - 160, 20);
-    place(&gReset, x + pw - 132, footer - 40, 116, 24);
-    view_changed(&gText, NULL);
-    refresh_composition();
-    font_page_layout(gPage == 3);
-    os64_ui_set_hidden(&gEditor, &gNameField.w, gPage == 3);
-    os64_ui_set_hidden(&gEditor, &gNameLabel, gPage == 3);
+    workshop_layout_t m=gLayout;
+    /* Resize events use the actual surface. The WM enforces the accepted
+     * minimum; no hidden-controls fallback is used for a valid font layout. */
+    m.width=(int)gCtx.surf.width; m.height=(int)gCtx.surf.height;
+    arrange(&m,false);
+    dialog_layout(&gDialog,false);
 }
+
+static os64_font_status_t plan_workshop(os64_ui_t *ui, void *user, void **out)
+{
+    (void)user; *out=NULL;
+    workshop_layout_t *m=os64_malloc(sizeof(*m));
+    if (!m) return OS64_FONT_NO_MEMORY;
+    os64_font_status_t status=measure_layout(ui,m);
+    if (!status) status=fit_window(m);
+    if (status) { os64_free(m); return status; }
+    arrange(m,true); *out=m; return OS64_FONT_OK;
+}
+static void discard_workshop(os64_ui_t *ui, void *user, void *plan)
+{ (void)ui; (void)user; os64_free(plan); }
+static void commit_workshop(os64_ui_t *ui, void *user, void *plan)
+{
+    (void)user;
+    workshop_layout_t *m=plan;
+    /* The plan fits the reserved canvas. Setting its minimum allocates no
+     * memory; a live owned window can accept it. Refresh after any growth. */
+    if (gCtx.win>0 && (os64_gui_window_set_min_size(gCtx.win,m->min_w,m->min_h) ||
+                      os64_draw_ctx_refresh(&gCtx))) {
+        os64_complain("appearance: cannot update window minimum"); ui->quit=true;
+    } else {
+        gLayout=*m; gHaveLayout=true;
+        m->width=(int)gCtx.surf.width; m->height=(int)gCtx.surf.height;
+        arrange(m,false);
+        os64_printf("appearance: interface row %d, minimum %dx%d\n",m->row,m->min_w,m->min_h);
+    }
+    os64_free(m);
+}
+static os64_font_status_t plan_dialog(os64_ui_t *ui, void *user, void **out)
+{
+    (void)user; *out=NULL;
+    return dialog_layout(ui, true);
+}
+static void finish_dialog(os64_ui_t *ui, void *user, void *plan)
+{ (void)ui; (void)user; (void)plan; }
 
 static void editor_label(os64_ui_widget_t *w, const char *text)
 {
@@ -918,9 +1054,12 @@ static void setup(void)
     refresh_collection();
     describe_palette();
     font_page_init(&gEditor, &gPreview, &gPages[3], font_status);
+    (void)os64_ui_font_planner(&gEditor,plan_workshop,commit_workshop,discard_workshop,NULL);
+    (void)os64_ui_font_planner(&gDialog,plan_dialog,finish_dialog,finish_dialog,NULL);
     layout();
     (void)os64_ui_font_follow(&gEditor);
     (void)os64_ui_font_follow(&gDialog);
+    dialog_layout(&gDialog,false);
     sync_color();
     os64_ui_textview_goto(&gPreview, &gText, 0, 2, false);
     os64_ui_textview_goto(&gPreview, &gText, 0, 16, true);
@@ -974,6 +1113,7 @@ static void dispatch(const os64_gui_event_t *ev)
         uint64_t before = gEditor.appearance_generation;
         os64_ui_dispatch(&gEditor, ev);
         (void)os64_ui_font_follow(&gDialog);
+        dialog_layout(&gDialog,false);
         if (gEditor.appearance_generation > before) {
             gApplyStatus = gEditor.font_settings_result ? "Session updated; Workshop kept its fonts and preview" : "Session updated; preview kept";
             gDialog.theme = gEditor.theme;

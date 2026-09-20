@@ -22,8 +22,8 @@ Start with [F5-REPORT.md](F5-REPORT.md) for the final behavior and evidence,
   and packaging, and inspect the F3 change separately.
   The report and evidence checksums identify the validation artifacts.
 
-The backend/provider/layout boundaries remain unchanged. No kernel code or
-syscall was added. Historical checkpoint reports are receipts for those
+The backend/provider boundaries remain unchanged. The responsive-layout
+follow-up changes the existing kernel Restore path; no syscall or ABI is added. Historical checkpoint reports are receipts for those
 checkpoints, not claims about the integrated production selector.
 
 ## Decisions needing particular attention
@@ -72,8 +72,8 @@ Workshop's resize handler reruns layout without repeating adoption validation.
 The particular refusal and its change after maximizing have not been isolated
 or independently reproduced; clipping on other pages has not been ruled out.
 Higher-resolution use is Chris's expectation, not evidence that the issue is
-resolved. Keep this as a known deferred behavior, with no expanded diagnostic
-UI requested. Other hazards remain within the combined review scope.
+resolved. This was deferred at that checkpoint; the responsive-layout follow-up below
+supersedes that deferral. No expanded diagnostic UI was requested. Other hazards remain within the combined review scope.
 
 The branch is local and unmerged. Three untracked root-level image backups
 (`os64.img`, `ext2_test.img`, `os64_data.img`) are intentionally outside the
@@ -96,4 +96,14 @@ The post-`ce69b48` [role-fit follow-up](F5-ROLE-FIT-FOLLOWUP.md) narrows the def
 height guard to initial/changed interface rows and corrects Workshop's misleading
 failure message. It records a failing-before/passing-after regression, real-font
 widget checks, image build and guest role changes. Full-draft publication and
-custom application planners remain intact; the broader resize policy is deferred.
+custom application planners remain intact. The subsequent responsive-layout
+follow-up below addresses settings-window resizing.
+
+
+## Responsive settings follow-up
+
+[F5-RESPONSIVE-LAYOUT.md](F5-RESPONSIVE-LAYOUT.md) records the larger-font
+Workshop/Control Center planners, their atomic staging and dynamic minimums,
+and guest evidence. Review the kernel Restore refusal as part of this slice:
+a saved rectangle below the new minimum must leave the window maximized and
+remain available after a later font reduction. No new syscall is introduced.

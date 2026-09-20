@@ -384,8 +384,16 @@ void wm_set_maximized(window_t *w, bool maximized)
 		wm_raise(w);
 		wm_resize(w, (rect_t){0, 0, (int32_t)kFrameBuffer.width, (int32_t)kFrameBuffer.height});
 	} else {
-		w->flags &= ~GUI_WINDOW_MAXIMIZED;
-		wm_resize(w, w->restoreFrame);
+		// The saved rectangle may predate a larger application minimum (for
+		// example, after changing fonts). Keep the maximized state and saved
+		// rectangle until Restore can honor that size without clamping it.
+		rect_t target = wm_clamp_frame(w, w->restoreFrame);
+		if (target.w != w->restoreFrame.w || target.h != w->restoreFrame.h)
+			return;
+		bool already_there = target.x == w->frame.x && target.y == w->frame.y &&
+		                     target.w == w->frame.w && target.h == w->frame.h;
+		if (already_there || wm_resize(w, target))
+			w->flags &= ~GUI_WINDOW_MAXIMIZED;
 	}
 }
 

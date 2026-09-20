@@ -249,12 +249,13 @@ The customizer targets a 1024x768 desktop, matching the reported P5 default.
 It must fit its editing controls, persistent actions, and a useful preview at
 that resolution with the native 8x16 text cells. Extra settings belong in
 component pages or expandable sections; reducing text size is not a layout
-strategy. The Workshop requests a 958x696 minimum content area from the WM,
-so drag resizing stops before the editor and preview would be hidden. The same
-constants guard the defensive layout fallback. Larger desktops may provide
-more preview space without shrinking the text. Font scaling is a separate
-renderer/layout design, not a reason to require a higher boot resolution for
-this tool.
+strategy. The Workshop uses 958x696 as its minimum content area for native
+text. Its font planner increases that minimum for taller rows or wider
+captions; drag resizing stops before controls become unusable. A font change
+can grow the window when there is room on screen, or be retried after
+maximizing. Restore keeps the window maximized if the saved rectangle is below
+the accepted minimum. Lowering the font size lowers the minimum again.
+See [FONT_SETTINGS.md](FONT_SETTINGS.md) for font adoption and layout rules.
 
 On the P5, the user reported that requesting 1680x1050 produced a 2560x1440
 framebuffer in `/sys/gui`, while requesting 1920x1080 produced 1920x1080.

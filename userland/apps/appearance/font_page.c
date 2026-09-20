@@ -248,27 +248,39 @@ void font_page_init(os64_ui_t *ui, os64_ui_t *sample, os64_ui_widget_t *page,
     specimen = (os64_ui_widget_t){.cls = &specimen_class, .hidden = true};
     add(preview->root, &specimen);
 }
+static bool layout_staged;
 static void place(os64_ui_widget_t *w, int x, int y, int width, int height)
-{ w->bounds = (os64_gui_rect_t){x,y,width,height}; }
-void font_page_layout(bool visible)
 {
-    place(&heading,40,138,412,22);
-    for (size_t r = 0; r < 3; ++r) place(&roles[r],40+(int)r*140,172,132,32);
-    place(&fonts.w,40,218,390,140); place(&scroll.w,436,218,16,140);
-    place(&selected,40,369,412,22); place(&size_label,40,405,112,24);
-    place(&size_slider.w,160,405,292,24); place(&install_label,40,446,412,20);
-    place(&install_field.w,40,474,412,30); place(&install_button,40,518,194,32);
-    place(&refresh_button,246,518,206,32);
-    if (visible) {
-        for (os64_ui_widget_t *w = preview->root->first_child; w; w = w->next_sibling)
-            w->hidden = w != &specimen;
-    } else {
-        for (os64_ui_widget_t *w = preview->root->first_child; w; w = w->next_sibling)
-            w->hidden = w == &specimen;
-    }
-    specimen.bounds = preview->root->bounds;
-    if (loaded) controls();
+    os64_gui_rect_t bounds={x,y,width,height};
+    if (layout_staged) os64_ui_widget_stage_bounds(w,bounds);
+    else w->bounds=bounds;
 }
+void font_page_layout(bool visible, os64_gui_rect_t area, int row, bool staged)
+{
+    layout_staged=staged;
+    int bh=row+12>32?row+12:32, fh=row+8>30?row+8:30;
+    int x=area.x+16, y=area.y+16, width=area.w-32;
+    place(&heading,x,y,width,row); y+=row+12;
+    for(size_t r=0;r<3;++r) place(&roles[r],x+(int)r*(width+8)/3,y,(width-16)/3,bh);
+    y+=bh+12;
+    int lower=12+row+12+(row>24?row:24)+12+row+10+fh+12+bh+16;
+    int list_h=area.y+area.h-y-lower;
+    place(&fonts.w,x,y,width-22,list_h); place(&scroll.w,x+width-16,y,16,list_h); y+=list_h+12;
+    place(&selected,x,y,width,row); y+=row+12;
+    place(&size_label,x,y,width/3,row>24?row:24);
+    place(&size_slider.w,x+width/3+8,y,width-width/3-8,row>24?row:24); y+=(row>24?row:24)+12;
+    place(&install_label,x,y,width,row); y+=row+10;
+    place(&install_field.w,x,y,width,fh); y+=fh+12;
+    place(&install_button,x,y,(width-12)/2,bh);
+    place(&refresh_button,x+(width+12)/2,y,(width-12)/2,bh);
+    layout_staged=false;
+    if (staged) return;
+    for(os64_ui_widget_t *w=preview->root->first_child;w;w=w->next_sibling)
+        w->hidden=visible?w!=&specimen:w==&specimen;
+    specimen.bounds=preview->root->bounds;
+    if(loaded) controls();
+}
+
 void font_page_apply(void)
 {
     if (!loaded) font_page_activate();

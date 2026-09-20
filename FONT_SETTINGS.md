@@ -87,3 +87,30 @@ loading preserves the independent font draft.
 Workshop reports a local refusal as retaining its fonts and preview after the
 session update. That does not mean gterm or Scribe rejected the publication;
 the message does not classify unrelated I/O/allocation failures as layout fit.
+
+
+## Responsive settings windows
+
+Workshop and Control Center register application font planners. They measure
+the candidate interface row and captions, stage widget bounds, and retain the
+old font, bounds and minimum on preparation failure or abort. Commit uses the
+precomputed layout without measuring or allocating. It sets the existing WM
+minimum and refreshes the surface if that grew the window. A live owned window
+has a screen-sized reserved canvas; planning checks the requested dimensions
+against the available screen and current chrome before accepting growth.
+Unexpected loss of that window during commit closes the app with a diagnostic.
+
+Workshop retains a 958x696 floor. Its rows, columns and bottom actions adapt to
+the accepted interface metrics; Apply, Save and Undo remain visible. The local
+specimen keeps its independent draft font. Control Center computes its menu
+page size from the available height and keeps navigation below the tool rows.
+Resize reuses the accepted metrics, without a fallible measurement pass.
+A face that cannot fit on screen is refused locally, leaving session publication
+and other consumers' independent decisions unchanged.
+
+The existing WM Restore path preserves the maximized flag and saved rectangle
+when that rectangle would need size clamping (including a raised minimum).
+Shrinking the font lowers the minimum and can make the saved rectangle usable
+again. Both title-bar double-click and the maximize shortcut use this path.
+This is a kernel behavior change through the existing minimum-size mechanism;
+no syscall or ABI is added. Evidence: [responsive layout receipt](docs/fonts/F5-RESPONSIVE-LAYOUT.md).

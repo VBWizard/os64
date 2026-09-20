@@ -10,6 +10,7 @@
 extern bool fail_alloc;
 void appearance_session_contracts(void);
 void appearance_customizer_contracts(void);
+void controlcenter_layout_contracts(void);
 
 // Kernel surface refresh is outside this host test; retain its supplied size.
 int64_t __wrap_os64_draw_ctx_refresh(os64_draw_ctx_t *ctx)
@@ -672,6 +673,7 @@ int main(void)
     theme_schema_contracts();
     appearance_session_contracts();
     appearance_customizer_contracts();
+    controlcenter_layout_contracts();
     palettes_preserve_composition();
     bevel_stays_inside_button();
     render_composes_independent_trees();

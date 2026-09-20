@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
+#include "os64/font_settings.h"
 #define main appearance_guest_main
 #include "../userland/apps/appearance/appearance.c"
 #undef main
@@ -38,7 +39,7 @@ static void contained(const os64_ui_widget_t *w)
 
 void appearance_customizer_contracts(void)
 {
-    uint32_t *pixels = os64_malloc(958 * 706 * sizeof(uint32_t));
+    uint32_t *pixels = os64_malloc(1920 * 1003 * sizeof(uint32_t));
     assert(pixels);
     gCtx.surf = (os64_gui_surface_t){.pixels = pixels, .width = 958, .height = 706, .pitch_px = 958};
     setup();
@@ -137,6 +138,61 @@ void appearance_customizer_contracts(void)
     os64_ui_set_focus(&gEditor, &gHexField.w);
     dispatch(&resize);
     assert(gEditor.focus == &gHexField.w && !strcmp(gHex, "12AB"));
+    // Exercise the real app planner with a scalable provider, including
+    // refusal and retry. The surface models maximized 1920x1024 content.
+    gCtx.surf.width = 1920; gCtx.surf.height = 1003; gCtx.surf.pitch_px = 1920;
+    os64_font_config_t config; os64_font_config_defaults(&config);
+    strcpy(config.roles[0].face[0], "/test/scalable");
+    const unsigned sizes[] = {17, 24, 28, 32};
+    for (unsigned n = 0; n < sizeof(sizes)/sizeof(sizes[0]); ++n) {
+        gCtx.surf.width = 1920; gCtx.surf.height = 1003;
+        config.roles[0].size = sizes[n];
+        assert(!os64_font_settings_apply(os64_ui_font_context(&gEditor), &config, NULL, NULL));
+        assert(!os64_ui_font_follow(&gEditor));
+        assert(os64_ui_font_row_height(&gEditor, OS64_FONT_ROLE_UI) == (int)sizes[n]);
+        gCtx.surf.width = gLayout.min_w; gCtx.surf.height = gLayout.min_h;
+        for (unsigned i = 0; i < 4; ++i) {
+            tab_click(NULL, (void *)(uintptr_t)i);
+            contained(&gRoot); contained(&gCanvas);
+            assert(!gApply.hidden && !gSave.hidden && !gUndo.hidden);
+            assert(gApply.bounds.h >= (int)sizes[n] + 4);
+            os64_ui_render(&gEditor, NULL); os64_ui_render(&gPreview, NULL);
+        }
+    }
+    gCtx.surf.width = 1920; gCtx.surf.height = 1003; layout();
+    os64_gui_rect_t before_apply = gApply.bounds;
+    workshop_layout_t before_layout = gLayout;
+    // A later consumer may refuse after this planner succeeded. Preparing
+    // then aborting must not move the editor or its independent preview.
+    const uint8_t source = 'S';
+    os64_font_role_spec_t specs[OS64_FONT_ROLE_COUNT] = {0};
+    specs[0].primary = (os64_font_source_t){OS64_FONT_SOURCE_OUTLINE, &source, 1};
+    specs[0].pixel_height = 40;
+    os64_font_set_t *candidate = NULL;
+    assert(!os64_font_set_prepare(os64_ui_font_context(&gEditor), specs, &candidate));
+    os64_font_consumer_t consumer; os64_ui_font_consumer(&gEditor, &consumer);
+    os64_gui_rect_t before_preview = gCanvas.bounds;
+    void *plan = NULL;
+    assert(!consumer.prepare(consumer.user, candidate, &plan));
+    assert(!memcmp(&before_apply, &gApply.bounds, sizeof(before_apply)));
+    assert(!memcmp(&before_preview, &gCanvas.bounds, sizeof(before_preview)));
+    consumer.abort(consumer.user, plan);
+    os64_font_set_release(candidate);
+    assert(!memcmp(&before_layout, &gLayout, sizeof(before_layout)));
+    config.roles[0].size = 96;
+    assert(!os64_font_settings_apply(os64_ui_font_context(&gEditor), &config, NULL, NULL));
+    assert(os64_ui_font_follow(&gEditor));
+    assert(os64_ui_font_row_height(&gEditor, OS64_FONT_ROLE_UI) == 32);
+    assert(!memcmp(&before_apply, &gApply.bounds, sizeof(before_apply)));
+    assert(!memcmp(&before_layout, &gLayout, sizeof(before_layout)));
+    config.roles[0].size = 16;
+    assert(!os64_font_settings_apply(os64_ui_font_context(&gEditor), &config, NULL, NULL));
+    assert(!os64_ui_font_follow(&gEditor));
+    assert(gLayout.min_w == WORKSHOP_MIN_WIDTH && gLayout.min_h == WORKSHOP_MIN_HEIGHT);
+    // Leave the shared fixture's session at the builtin defaults.
+    os64_font_config_defaults(&config);
+    assert(!os64_font_settings_apply(os64_ui_font_context(&gEditor), &config, NULL, NULL));
+    puts("appearance responsive: 17/24/28/32px, all tabs, visible footer, atomic 96px refusal and shrinking minimum passed");
     os64_free(pixels);
     gCtx.surf.pixels = NULL;
     // The widgets measured text, so each of these windows is holding a text
@@ -145,5 +201,6 @@ void appearance_customizer_contracts(void)
     font_page_close();
     os64_ui_font_release(&gEditor);
     os64_ui_font_release(&gPreview);
+    os64_ui_font_release(&gDialog);
     puts("appearance customizer: native layout, palette edits, hex validation, Undo and page cancellation passed");
 }
