@@ -885,7 +885,10 @@ static void commit_workshop(os64_ui_t *ui, void *user, void *plan)
         gLayout=*m; gHaveLayout=true;
         m->width=(int)gCtx.surf.width; m->height=(int)gCtx.surf.height;
         arrange(m,false);
-        os64_printf("appearance: interface row %d, minimum %dx%d\n",m->row,m->min_w,m->min_h);
+        char line[128];
+        os64_snprintf(line, sizeof(line), "appearance: interface row %d, minimum %dx%d",
+                      m->row, m->min_w, m->min_h);
+        os64_debug_log(line);
     }
     os64_free(m);
 }

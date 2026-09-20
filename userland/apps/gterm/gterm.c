@@ -162,14 +162,21 @@ static void refresh_font_settings(void)
     os64_font_set_t *candidate = NULL;
     os64_font_config_error_t error;
     if (os64_font_config_prepare(gText, &config, &candidate, &error)) {
-        os64_printf("gterm: font line %lu: %s; keeping current grid\n",
+        char line[256];
+        os64_snprintf(line, sizeof(line), "gterm: font line %lu: %s; keeping current grid",
                     (unsigned long)error.line, os64_font_config_status_name(error.status));
+        os64_debug_log(line);
         return;
     }
     os64_font_status_t status = replace_fonts(candidate);
     os64_font_set_release(candidate);
     if (!status) { gFontSettingsReady = true; gFontGeneration = generation; }
-    else os64_printf("gterm: font/grid change refused (%u); keeping current grid\n", status);
+    else {
+        char line[128];
+        os64_snprintf(line, sizeof(line),
+                      "gterm: font/grid change refused (%u); keeping current grid", status);
+        os64_debug_log(line);
+    }
 }
 
 static void cell_at(int32_t x, int32_t y, uint32_t *row, uint32_t *col)

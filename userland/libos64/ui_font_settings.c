@@ -1,6 +1,7 @@
 #include "os64/ui.h"
 #include "os64/font_settings.h"
 #include "os64/fmt.h"
+#include "os64/io.h"
 #include "os64/str.h"
 #include "ui_internal.h"
 
@@ -49,9 +50,12 @@ static void refresh_fonts(os64_ui_t *ui)
     os64_font_set_t *set = NULL;
     os64_font_config_error_t error;
     if (os64_font_config_prepare(context, &config, &set, &error)) {
-        os64_printf("libui: font line %lu: %s (%u); keeping current fonts\n",
-                     (unsigned long)error.line, os64_font_config_status_name(error.status),
-                     error.font_status);
+        char line[256];
+        os64_snprintf(line, sizeof(line),
+            "libui: window %ld: font line %lu: %s (%u); keeping current fonts",
+            (long)(ui->ctx ? ui->ctx->win : 0), (unsigned long)error.line,
+            os64_font_config_status_name(error.status), error.font_status);
+        os64_debug_log(line);
         ui->font_settings_result = OS64_UI_APPLY_INVALID;
         return;
     }
@@ -63,7 +67,15 @@ static void refresh_fonts(os64_ui_t *ui)
     if (!adopted) {
         ui->font_generation = generation;
         ui->font_settings_ready = true;
-    } else os64_printf("libui: font layout refused (%u); keeping current fonts\n", adopted);
+    } else {
+        /* A retained font is a per-window diagnostic, not console output.
+         * The kernel log routes it to logd when the daemon owns the sink. */
+        char line[192];
+        os64_snprintf(line, sizeof(line),
+            "libui: window %ld: font layout refused (%u); keeping current fonts",
+            (long)(ui->ctx ? ui->ctx->win : 0), adopted);
+        os64_debug_log(line);
+    }
 }
 
 int os64_ui_font_follow(os64_ui_t *ui)

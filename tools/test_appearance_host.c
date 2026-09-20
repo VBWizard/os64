@@ -12,6 +12,9 @@ void appearance_session_contracts(void);
 void appearance_customizer_contracts(void);
 void controlcenter_layout_contracts(void);
 
+// Diagnostics use the kernel log in the guest; this fixture has no log sink.
+void os64_debug_log(const char *line) { assert(line && *line); }
+
 // Kernel surface refresh is outside this host test; retain its supplied size.
 int64_t __wrap_os64_draw_ctx_refresh(os64_draw_ctx_t *ctx)
 {

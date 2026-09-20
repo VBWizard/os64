@@ -107,3 +107,10 @@ Workshop/Control Center planners, their atomic staging and dynamic minimums,
 and guest evidence. Review the kernel Restore refusal as part of this slice:
 a saved rectangle below the new minimum must leave the window maximized and
 remain available after a later font reduction. No new syscall is introduced.
+
+## Font diagnostic routing
+
+[F5-FONT-LOGGING.md](F5-FONT-LOGGING.md) moves routine font diagnostics from
+inherited stdout to the existing kernel-log/logd path. It includes a guest
+refusal captured in logd's file with empty application stdout, alongside host
+and build checks. Font adoption and retry rules are unchanged.
