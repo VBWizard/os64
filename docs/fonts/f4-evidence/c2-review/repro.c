@@ -114,7 +114,7 @@ int main(int argc,char **argv)
         c2_deny_commit=!strcmp(mode,"commit-oom");
         int status=os64_font_adopt(set,&c,1,NULL);deny_countdown=-1;
         unsigned long attempts=allocations-c2_barrier_allocs;
-        int64_t expected=0;os64_ui_textview_line_width(&g.ui,g.buf.lines[0].bytes,g.buf.lines[0].len,&expected);
+        int64_t expected=0;bool whole=true;os64_ui_textview_line_width(&g.ui,&g.view,g.buf.lines[0].bytes,g.buf.lines[0].len,&expected,&whole);
         printf("real Scribe planner: adoption=%d commit allocation attempts=%lu; extent before=%lld after=%lld expected=%lld hscroll.total=%lld\n",status,attempts,(long long)before,(long long)g.max_width,(long long)expected,(long long)g.hscroll.total);
         os64_font_set_release(set);printf("teardown=%d\n",os64_ui_font_release(&g.ui));sbuf_free(&g.buf);
     } else if(!strcmp(mode,"save")) {
