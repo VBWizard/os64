@@ -65,7 +65,9 @@ New public boundaries are `font_config.h` (parse/load/prepare/discover/install),
 load/save, and checked configuration-key removal. Font-provider, text-layout and
 backend APIs are unchanged. F5 owns the coordinated ui_session/theme/saved and
 Workshop changes; F3/F4 are integrated before their production hookup is edited.
-No kernel code or syscall changed.
+The initial F5 slice changed no kernel code or syscall. The later
+[responsive-layout follow-up](F5-RESPONSIVE-LAYOUT.md) changes the existing
+kernel Restore path, without adding a syscall.
 
 ## Validation
 

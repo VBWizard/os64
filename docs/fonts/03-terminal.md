@@ -11,6 +11,8 @@ implemented by `os64/font_provider.h` and `os64/font_adopt.h`. Use its role sets
 and prepare/barrier/commit/abort sequence. The assignment receipt identifies the
 exact F2.5 base; the earlier F2 checkpoint alone does not contain these APIs.
 
+Pinned F3/F4 foundation: [F25-FREEZE.md](F25-FREEZE.md).
+
 ## Scope and ownership
 
 Own `userland/apps/gterm/gterm.c`, any local helpers, and terminal-focused tests.

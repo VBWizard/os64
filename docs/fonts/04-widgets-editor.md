@@ -11,6 +11,9 @@ implemented by `os64/font_provider.h` and `os64/font_adopt.h`. Use its role sets
 and prepare/barrier/commit/abort sequence. The assignment receipt identifies the
 exact F2.5 base; the earlier F2 checkpoint alone does not contain these APIs.
 
+Concrete assignment: [Opus F4 handoff](OPUS-F4-HANDOFF.md), including the exact
+F2.5 branch point and approved UI-header/build ownership extensions.
+
 ## Scope and ownership
 
 Own libos64's ui.c, ui_controls.c, ui_list.c, ui_text.c and related internal

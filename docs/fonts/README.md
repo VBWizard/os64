@@ -1,5 +1,10 @@
 # Font work packets
 
+For the integrated implementation review, start at
+[FABLE-FONTS-REVIEW.md](FABLE-FONTS-REVIEW.md) in `.worktrees/font-settings`.
+It indexes the complete F0–F5 code, prior reviews and latest follow-ups.
+The assignment packets below preserve the original work breakdown.
+
 Frozen F0 contract: `23bf6dddfd1077bf844c661d8762a9b52e3a68f9` (backend table v1, R3 semantics).
 
 Read [FONTS.md](../../FONTS.md) for the design and

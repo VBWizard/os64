@@ -1,14 +1,67 @@
 # Combined font implementation review
 
-Please review `codex/font-settings` in `.worktrees/font-settings`. Chris asked
-Quinn to finish the integrated feature before returning it for Fable's review.
-This request includes F3 and F5 implementation review; no F3 approval receipt
-was found and none is inferred. F4 has Quinn's accepted implementation review.
-No mainline merge or publication is implied by this development branch.
+**One review checkout:** `/home/yogi/src/os64/.worktrees/font-settings`, branch
+`codex/font-settings`. This tree contains the combined F0–F5 implementation from
+Opus and Quinn, including the subsequent P5-driven fixes. There is no need to
+switch to the earlier stage worktrees to review the delivered feature.
 
-Start with [F5-REPORT.md](F5-REPORT.md) for the final behavior and evidence,
-[FONT_SETTINGS.md](../../FONT_SETTINGS.md) for implementation decisions, and
-[FONTS-OVERVIEW.md](FONTS-OVERVIEW.md) for the user-facing explanation.
+Chris requested review of the combined work. Prior receipts are context, not
+instructions to exclude those components. In particular, F3 has no independent
+approval receipt, and the integrated F5/follow-up review remains pending.
+No mainline merge or push is implied by this handoff.
+
+Start with [FONTS-OVERVIEW.md](FONTS-OVERVIEW.md) for the user-facing feature,
+then use this index to inspect contracts, implementation and evidence.
+
+## Full review range
+
+Pre-font base: **`3b82356413ab8f183bd6506febe8d06fea6e7de0`**, merged PR #109.
+Latest implementation at this handoff: **`020040b`**. Later commits completing
+this index are documentation only. From this checkout:
+
+```sh
+git diff --stat 3b82356413ab8f183bd6506febe8d06fea6e7de0..HEAD
+git diff 3b82356413ab8f183bd6506febe8d06fea6e7de0..HEAD
+```
+
+That is the complete font feature, including the pinned third-party import,
+fixtures, build integration and later kernel Restore adjustment. The narrower
+`07d8a69..HEAD` range below is useful for F5, but is not the full feature.
+
+## Component index
+
+| Slice | Code / contract | Report and prior review |
+| --- | --- | --- |
+| F0: design and contracts | [FONTS.md](../../FONTS.md), [FONT_CONTRACTS.md](../../FONT_CONTRACTS.md) | [Freeze](F0-FREEZE.md), [Fable R3](FABLE-REVIEW-R3.md) |
+| F1: Opus's FreeType backend plus Quinn's corrections | `userland/libfreetype/`, its `UPSTREAM_REVIEW.md` | [Original report](F1-REPORT.md), [B1 correction](F1-B1-REPORT.md), [Implementation review](F1-IMPLEMENTATION-REVIEW.md) |
+| F2: text layout/cache/drawing | `userland/libos64/text*.c` | [Report](F2-REPORT.md), [Fable acceptance](FABLE-REVIEW-F2.md) |
+| F2.5: shared provider and replacement transactions | [FONT_PROVIDER.md](../../FONT_PROVIDER.md), `font_provider.c`, `font_adopt.c` | [Report](F25-REPORT.md), [Foundation receipt](F25-FREEZE.md), [Opus handoff](OPUS-F4-HANDOFF.md) |
+| F3: terminal fonts | `userland/apps/gterm/` | [Report](F3-REPORT.md); independent review pending |
+| F4: Opus's widgets and Scribe plus review fixes | `userland/libos64/ui*.c`, `userland/apps/scribe/` | [Report](F4-REPORT.md), [Quinn review](F4-QUINN-REVIEW.md), `f4-evidence/c3-review-r2/` |
+| F5: configuration, installation, discovery, live settings | [FONT_SETTINGS.md](../../FONT_SETTINGS.md), `font_config.c`, `font_discovery.c`, `font_install.c`, `ui_font_settings.c`, Workshop | [Report](F5-REPORT.md), `f5-evidence/` |
+| Follow-ups: combined catalog, role-fit, adaptive settings, logging | See the sections below; includes `kernel/src/gui/window.c` | [Role-fit](F5-ROLE-FIT-FOLLOWUP.md), [Responsive layout](F5-RESPONSIVE-LAYOUT.md), [Log routing](F5-FONT-LOGGING.md) |
+
+Historical reports retain the branch names, pending statuses and measurements
+from their checkpoints. They do not override later acceptance receipts or the
+current implementation. Read the associated correction/follow-up reports too.
+
+## Consolidation audit
+
+Checked against `020040b`: the branch tips for `codex/font-design` (`0ab3cee`),
+`opus/freetype-backend` (`f065c7c`), `codex/text-layout` (`4b0a839`),
+`codex/terminal-fonts` (`ab7a1cd`) and `opus/font-widgets` (`3bf7b1f`) are all
+ancestors of this combined branch. The F2.5 implementation `788de99` is also
+an ancestor. Those six earlier worktrees, including `font-provider`, had no
+tracked edits or untracked files at the audit.
+
+The provider branch's final commit `1cd6b50` contained only coordinator docs;
+it was not an ancestor. Its two handoff/freeze documents and packet links have
+now been copied here verbatim from that commit's additions. No missing
+implementation or code merge was required.
+
+The separate `APP_INSTANCE_POLICY.md` in `/home/yogi/src/os64` is a future-feature
+proposal, deliberately outside this font review. Title-bar font selection and
+window-decoration changes are also future work.
 
 ## Scope and provenance
 
@@ -18,13 +71,14 @@ Start with [F5-REPORT.md](F5-REPORT.md) for the final behavior and evidence,
 - Accepted F4 plus independent receipt: `3bf7b1f`,
   [F4-QUINN-REVIEW.md](F4-QUINN-REVIEW.md) and `f4-evidence/c3-review-r2/`.
 - F5 implementation: `419b36d`, clean image build fix `bda3dc5`, integration
-  parent `07d8a69`. Review `git diff 07d8a69..HEAD` on this branch for settings
-  and packaging, and inspect the F3 change separately.
+  parent `07d8a69`. For a focused settings/packaging pass, use
+  `git diff 07d8a69..HEAD`; use the pre-font base above for the full feature.
   The report and evidence checksums identify the validation artifacts.
 
 The backend/provider boundaries remain unchanged. The responsive-layout
-follow-up changes the existing kernel Restore path; no syscall or ABI is added. Historical checkpoint reports are receipts for those
-checkpoints, not claims about the integrated production selector.
+follow-up changes the existing kernel Restore path; no syscall or ABI is added.
+Historical checkpoint reports are receipts for those checkpoints, not claims
+about the integrated production selector.
 
 ## Decisions needing particular attention
 
@@ -72,8 +126,9 @@ Workshop's resize handler reruns layout without repeating adoption validation.
 The particular refusal and its change after maximizing have not been isolated
 or independently reproduced; clipping on other pages has not been ruled out.
 Higher-resolution use is Chris's expectation, not evidence that the issue is
-resolved. This was deferred at that checkpoint; the responsive-layout follow-up below
-supersedes that deferral. No expanded diagnostic UI was requested. Other hazards remain within the combined review scope.
+resolved. This was deferred at that checkpoint; the responsive-layout follow-up
+below supersedes that deferral. No expanded diagnostic UI was requested. Other
+hazards remain within the combined review scope.
 
 The branch is local and unmerged. Three untracked root-level image backups
 (`os64.img`, `ext2_test.img`, `os64_data.img`) are intentionally outside the
