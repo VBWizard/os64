@@ -1,0 +1,74 @@
+#!/bin/bash
+# vmboot — start a throwaway os64 VM, headless, and wait until its shell is up.
+#
+#   tools/vmboot [port]        (default 55556)
+#
+# WHY THIS EXISTS: every agent that tests a change in QEMU was rebuilding the
+# same twenty-flag invocation by hand, and getting it subtly wrong — missing
+# -machine q35 (a silent triple fault seconds in), or booting the repo's OWN
+# disk images, which then carry that test's leftovers into every later run.
+# This boots COPIES in /tmp and leaves disk/ untouched.
+#
+# The VM it starts is the text boot (Limine's default entry): husk on VT1,
+# no GUI. It self-destructs after an hour so a forgotten VM cannot outlive
+# the session.
+#
+# Companions: vmtype (type a command), vmshot (see the screen), vmget (copy
+# a file out of the guest's /home), vmstop (stop this VM).
+set -u
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+PORT=${1:-55556}
+DIR=/tmp/os64-vm-$PORT
+
+if [ ! -f "$ROOT/os64_kernel.iso" ]; then
+    echo "vmboot: no os64_kernel.iso — run make first" >&2
+    exit 2
+fi
+for img in disk/os64.img disk/os64_data.img; do
+    if [ ! -f "$ROOT/$img" ]; then
+        echo "vmboot: no $img — run make first" >&2
+        exit 2
+    fi
+done
+
+# Stop whatever is already on this port, and only that (never pkill qemu:
+# it matches this very script's command line and kills your own shell).
+"$ROOT/tools/vmstop" "$PORT" >/dev/null 2>&1
+
+# Fresh copies. --sparse keeps the gigabyte data image cheap to copy.
+rm -rf "$DIR"
+mkdir -p "$DIR"
+cp --sparse=always "$ROOT/disk/os64.img" "$DIR/os64.img"
+cp --sparse=always "$ROOT/disk/os64_data.img" "$DIR/os64_data.img"
+
+setsid timeout 3600 qemu-system-x86_64 \
+    -machine q35 -cpu qemu64,+rdrand,+rdseed -m 8g -smp 8 -no-reboot \
+    -cdrom "$ROOT/os64_kernel.iso" -boot d \
+    -display none \
+    -serial "file:$DIR/serial.log" \
+    -monitor "telnet:127.0.0.1:$PORT,server,nowait" \
+    -drive "file=$DIR/os64.img,format=raw,if=none,id=nvme1" \
+    -device nvme,drive=nvme1,serial=nvme1-serial \
+    -drive "file=$DIR/os64_data.img,format=raw,if=none,id=data1" \
+    -device nvme,drive=data1,serial=data1-serial \
+    > "$DIR/qemu.out" 2>&1 < /dev/null &
+
+# "boot complete" is the one line that still reaches the wire once logd has
+# claimed the log. It lands about 35 seconds in; 180 is slack for a loaded
+# machine, not an expectation.
+for _ in $(seq 180); do
+    if grep -q "boot complete" "$DIR/serial.log" 2>/dev/null; then
+        sleep 3      # husk prints its banner just after the marker
+        echo "vmboot: up on port $PORT (scratch $DIR)"
+        exit 0
+    fi
+    if ! pgrep -f "127.0.0.1:$PORT,server" >/dev/null 2>&1; then
+        echo "vmboot: QEMU exited early — see $DIR/qemu.out and $DIR/serial.log" >&2
+        exit 1
+    fi
+    sleep 1
+done
+
+echo "vmboot: no 'boot complete' after 180s — see $DIR/serial.log" >&2
+exit 1

@@ -1,0 +1,21 @@
+#!/bin/bash
+# vmstop — stop the VM on a port, and only that one.
+#
+#   tools/vmstop [port]        (default 55556)
+#
+# NEVER use pkill qemu: the pattern matches your own agent's command line as
+# well as other people's VMs on this machine. The monitor port is what makes
+# one VM identifiable, so that is what this matches.
+set -u
+PORT=${1:-55556}
+
+pids=$(pgrep -f "127.0.0.1:$PORT,server" 2>/dev/null)
+if [ -z "$pids" ]; then
+    echo "vmstop: nothing running on port $PORT"
+    exit 0
+fi
+for pid in $pids; do
+    kill "$pid" 2>/dev/null
+done
+sleep 1
+echo "vmstop: stopped port $PORT"

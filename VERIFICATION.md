@@ -169,6 +169,34 @@ Offer `-vnc :0` instead of `-display none` if the human wants to peek.
   block-cache test's coherence half, which skips itself when nothing is
   cached.
 
+### The helper scripts (`tools/vm*`)
+
+The invocation above, and the keystroke ballet that drives it, are wrapped
+so nobody rebuilds them from memory:
+
+| Script | What it does |
+|---|---|
+| `tools/vmboot [port]` | copies the images to `/tmp/os64-vm-<port>`, boots the default (text) entry headless, waits for `boot complete` |
+| `tools/vmtype <port> <text>` | types a line into the guest and presses Enter |
+| `tools/vmcmd <port> <monitor command>` | one monitor command, reply printed |
+| `tools/vmshot <file.png> [port]` | screendump, converted from PPM |
+| `tools/vmget [--root] <guest> <host> [port]` | reads a file out of the guest with `debugfs`: `/home` by default, the system filesystem with `--root`. Offsets are read from the makefile |
+| `tools/vmls [port]` | lists the guest's `/home` |
+| `tools/vmstop [port]` | kills only the VM on that port |
+| `tools/vmtest [options] '<cmd>' ...` | **all of the above in one foreground command**: boot, type, screenshot, fetch, compare, stop, with the evidence printed to stdout |
+
+`vmtest` exists for a caller that cannot keep a VM alive between commands —
+a sandbox with no background processes, or a scripted acceptance run that
+wants one command and one verdict. Its `--get` prints a fetched file's size,
+checksum and first bytes; `--cmp <guest>=<original>` compares a file the
+guest wrote against one the image shipped and prints IDENTICAL or DIFFERENT.
+
+**`docs/agent_qemu_testing.md` deliberately documents only the step-by-step
+scripts, not `vmtest`.** That document is what an agent under evaluation is
+given, and driving the loop itself — boot, type, wait, look, fetch, stop —
+is part of what is being evaluated. Point a colleague at `vmtest` when the
+goal is the answer rather than the exercise.
+
 ## The chaos rig (weather in the wire)
 
 slirp is a perfect network: nothing is ever lost, reordered, duplicated or
