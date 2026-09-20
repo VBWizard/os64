@@ -1,0 +1,55 @@
+# Combined font implementation review
+
+Please review `codex/font-settings` in `.worktrees/font-settings`. Chris asked
+Quinn to finish the integrated feature before returning it for Fable's review.
+This request includes F3 and F5 implementation review; no F3 approval receipt
+was found and none is inferred. F4 has Quinn's accepted implementation review.
+No mainline merge or publication is implied by this development branch.
+
+Start with [F5-REPORT.md](F5-REPORT.md) for the final behavior and evidence,
+[FONT_SETTINGS.md](../../FONT_SETTINGS.md) for implementation decisions, and
+[FONTS-OVERVIEW.md](FONTS-OVERVIEW.md) for the user-facing explanation.
+
+## Scope and provenance
+
+- Frozen F0: `23bf6dd` and [FONT_CONTRACTS.md](../../FONT_CONTRACTS.md).
+- F2.5 provider: `788de99`, [FONT_PROVIDER.md](../../FONT_PROVIDER.md).
+- F3: `aa8b7a2`, report `ab7a1cd`, [F3-REPORT.md](F3-REPORT.md).
+- Accepted F4 plus independent receipt: `3bf7b1f`,
+  [F4-QUINN-REVIEW.md](F4-QUINN-REVIEW.md) and `f4-evidence/c3-review-r2/`.
+- F5 implementation: `419b36d`, integration parent `07d8a69`. Review
+  `git diff 07d8a69..419b36d` for settings and inspect the F3 change separately.
+  The report and evidence checksums identify the validation artifacts.
+
+The backend/provider/layout boundaries remain unchanged. No kernel code or
+syscall was added. Historical checkpoint reports are receipts for those
+checkpoints, not claims about the integrated production selector.
+
+## Decisions needing particular attention
+
+1. `fonts.serial` is explicit reload metadata, stamped with the font publication
+   generation. Palette/treatment writers preserve it. Consumers can therefore
+   reload changed file bytes on an explicit font Apply without reloading fonts
+   for a color change. This is an F5 envelope addition to the R3 contract.
+2. Font Apply into an empty store preserves the partial startup overlay and
+   application-specific palette defaults. Save pins the usable session before
+   replacing disk choices. Readers read disk before the session store so a
+   concurrent Save cannot leak next-boot choices into the current session.
+3. Font and theme writers preserve unowned raw lines and comments, remove all
+   duplicate owned keys, and refuse a complete envelope that exceeds 4096 bytes.
+   Unknown dotted namespaces remain unowned; recognized keys remain validated.
+   Named theme Save As carries the raw source envelope through the UI.
+4. Installation stages a copy, validates the entire candidate role set, syncs,
+   and publishes with no-replace rename. Existing names are refused. Discovery
+   reads at most 64 MiB, scans at most 256 entries and returns at most 128 assets.
+5. Fixed-layout libui participants refuse text rows taller than their slots.
+   Scribe uses its measured planner; gterm uses the F3 PTY barrier. Per-process
+   refusal keeps the old generation and remains retryable. Publication is not
+   a global adoption acknowledgement.
+6. Workshop preview has its own provider and staged specimen runs. Interface,
+   terminal and document choices are independent. Apply/Save remain separate;
+   installing does not itself change either session or startup settings.
+
+Please report behavioral hazards and contract violations with a reproducer or
+specific failing path. Known limits and deferred work are in F5-REPORT.md;
+wording-only improvements are not review findings under AGENTS.md.

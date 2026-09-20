@@ -1,0 +1,3 @@
+font settings: native installation, format/terminal refusal, staging cleanup, I/O failure, duplicate fallback deletion, preserved comments, independent Apply/Save passed
+font settings: fresh process reads saved 24px startup selection
+Artifacts: /tmp/quinn-f5-settings-final2

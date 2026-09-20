@@ -1,0 +1,513 @@
+0 (0x0000) AP0: Interrupts enabled
+1 (0x0000) AP0: charset: CP437 map checked against zap-ext-light16.psf - 0 drifted, 39 not in the face
+2 (0x0000) AP0: ***** OS64 (built 2026-09-17 14:18:40) - system booting at 09/20/2026 01:34:41 *****
+2 (0x0000) AP0: FPU: x87 MMX SSE SSE2 SSE3 enabled, FXSAVE per thread (MXCSR mask 0xFFFF); no XSAVE
+3 (0x0000) AP0: Commandline: ROOT=2f4fd02e-68b4-4c82-98bc-72467529b3fc BACKSTOP=10 KWORKER HUSK CRON GUI DEBUG_GUI
+3 (0x0000) AP0: DEBUG_OPTIONS 0x00000000000000000000000002680103
+0 (0x0000) AP0: Interrupts enabled
+1 (0x0000) AP0: charset: CP437 map checked against zap-ext-light16.psf - 0 drifted, 39 not in the face
+2 (0x0000) AP0: ***** OS64 (built 2026-09-17 14:18:40) - system booting at 09/20/2026 01:34:41 *****
+2 (0x0000) AP0: FPU: x87 MMX SSE SSE2 SSE3 enabled, FXSAVE per thread (MXCSR mask 0xFFFF); no XSAVE
+3 (0x0000) AP0: Commandline: ROOT=2f4fd02e-68b4-4c82-98bc-72467529b3fc BACKSTOP=10 KWORKER HUSK CRON GUI DEBUG_GUI
+3 (0x0000) AP0: DEBUG_OPTIONS 0x00000000000000000000000002680103
+18 (0x0000) AP0: log: 8 ring(s) x 16 MB, 100 ticks/sec
+21 (0x0000) AP0: symbols: 2066 names loaded, 42967 bytes of strings
+21 (0x0000) AP0: ACPI: Limine passed PCI base address of 0x00000000000f5290, we'll use that
+21 (0x0000) AP0: ACPI: RSDP found at 0x00000000000f5290
+21 (0x0000) AP0: ACPI: RSDP revision = 0x00, OEMID = BOCHS
+21 (0x0000) AP0: ACPI: Using RSDT at 0x7ffe25c0
+21 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+21 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+21 (0x0000) AP0: ACPI: FACP table found at 0x7ffe2380
+21 (0x0000) AP0: ACPI: DSDT table found at 0x7ffe0040
+21 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+21 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+21 (0x0000) AP0: ACPI: MCFG table found at 0x7ffe255c
+21 (0x0000) AP0: ACPI: Entry 0: BaseAddress=0x00000000b0000000, SegmentGroup=0, StartBus=0, EndBus=255
+21 (0x0000) AP0: ACPI: *Found PCI Segment 0 Base Address: 0xb0000000, mapping 0x7800 pages so that we can scan 120 busses
+22 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+22 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+22 (0x0000) AP0: ACPI: MADT (APIC) table found at 000000007FFE2474
+22 (0x0000) AP0: ACPI: S5 ready — PM1a 0x0604 SLP_TYPa 0, PM1b 0x0000 SLP_TYPb 0
+22 (0x0000) AP0: tss: allocated 24 double-fault (IST1) stacks, CPU0's at 0xffff80007f34eff0
+22 (0x0000) AP0: tss: allocated 24 NMI (IST2) stacks, CPU0's at 0xffff800000099ff0
+132 (0x0000) AP0: blockcache: attached QEMU DVD-ROM (512-byte sectors, 128/line)
+132 (0x0000) AP0: blockcache: attached QEMU NVMe Ctrl (512-byte sectors, 128/line)
+132 (0x0000) AP0: blockcache: attached QEMU NVMe Ctrl (512-byte sectors, 128/line)
+132 (0x0000) AP0: blockcache: 3 device(s) attached
+432 (0x0000) AP0: random: rdrand ok, rdseed ok — pool seeded by rdseed (hw words 4, retries 0, jitter samples 0)
+471 (0x0000) AP0: mouse: PS/2 mouse initialized, streaming enabled
+471 (0x0000) AP0: BUILT-IN TESTS: Running pre-boot tests:
+471 (0x0000) AP0: 	[Test] window_minimum_clamp... OK
+471 (0x0000) AP0: 	[Test] kmalloc_not_null... OK
+471 (0x0000) AP0: 	[Test] fpu_state_round_trip... OK
+471 (0x0000) AP0: 	Page fault occurred during test mode, returning without halt.
+471 (0x0000) AP0: 	[Test] page_fault_test_mode_returns... OK
+471 (0x0000) AP0: 	[Test] page_zero_unmapped... OK
+471 (0x0000) AP0: 	[Test] dlist_basic_operations... OK
+471 (0x0000) AP0: 	[Test] arena_create_and_destroy... OK
+471 (0x0000) AP0: 	[Test] arena_basic_alloc... OK
+472 (0x0000) AP0: 	[Test] arena_aligned_alloc... OK
+472 (0x0000) AP0: 	[Test] arena_reset... OK
+472 (0x0000) AP0: 	[Test] arena_growth... OK
+472 (0x0000) AP0: 	[Test] vma_insert_and_lookup... OK
+472 (0x0000) AP0: 	[Test] vma_page_fault_resolved... OK
+472 (0x0000) AP0: 	[Test] vma_cow_write... OK
+472 (0x0000) AP0: 	[Test] env_create_empty... OK
+472 (0x0000) AP0: 	[Test] env_set_and_get... OK
+472 (0x0000) AP0: 	[Test] env_update_shorter_val... OK
+472 (0x0000) AP0: 	[Test] env_update_longer_val... OK
+472 (0x0000) AP0: 	[Test] env_multi_key... OK
+472 (0x0000) AP0: 	[Test] env_inherit_copies... OK
+472 (0x0000) AP0: 	[Test] env_inherit_independence... OK
+472 (0x0000) AP0: 	[Test] gmtime_negative_epoch... OK
+472 (0x0000) AP0: 	[Test] time_zone_minute_offsets... OK
+472 (0x0000) AP0: 	[Test] env_inherit_grown... OK
+472 (0x0000) AP0: 	[Test] env_count_accurate... OK
+474 (0x0000) AP0: 	[Test] env_capacity_full... OK
+474 (0x0000) AP0: 	[Test] task_arena_create_and_destroy... OK
+474 (0x0000) AP0: 	[Test] task_arena_alloc_and_convert... OK
+474 (0x0000) AP0: 	[Test] task_arena_aligned_alloc... OK
+474 (0x0000) AP0: 	[Test] task_arena_exhaustion... OK
+474 (0x0000) AP0: 	test_random_pool: seeded yes by rdseed (rdseed ok, rdrand ok, hw words 4, retries 0, exhausted 0, jitter 0)
+474 (0x0000) AP0: 	[Test] random_pool... OK
+474 (0x0000) AP0: BUILT-IN TESTS: 31 passed, 0 failed
+589 (0x0020) AP0: BOOT: If a ROOTPARTUUID (2f4fd02e-68b4-4c82-98bc-72467529b3fc) was passed in the commandline, we'll load it.
+589 (0x0020) AP0: BOOT: ROOTPARTUUID passed in commandline.  Will mount '2f4fd02e-68b4-4c82-98bc-72467529b3fc' as the root partition
+PAGE1 PAGE2
+dyn_consumer: first=0xdyn_consumer0000003: fi0r second=0st=0x00000030 second=0xx000000310 packed00=0x000301 0300031pac
+ked=0x00300031
+590 (0x0020) AP0: BOOT: Root filesystem found, mounting
+591 (0x0020) AP0: BOOT: Root filesystem successfully mounted
+591 (0x0020) AP0: BOOT: skipping fat partition 0 on device 1 — GUID already mounted (twin)
+592 (0x0020) AP0: BOOT: mounted ext2 (device 1 partition 1, GPT name "ext2") at /ext2
+592 (0x0020) AP0: BOOT: mounted ext2 (device 2 partition 0, GPT name "home") at /home
+592 (0x0020) AP0: BOOT: mounted /proc (synthetic — processes as files)
+592 (0x0020) AP0: BOOT: mounted /sys (synthetic — the machine as files)
+592 (0x0020) AP0: BOOT: mounted /dev (synthetic — the kernel's objects as files)
+592 (0x0020) AP0: conf: search path /home:/etc (built-in default (/etc/os64.conf sets no conf))
+593 (0x0020) AP0: bootenv: /etc/bootenv.conf: 0 set, 0 unset
+593 (0x0020) AP0: BUILT-IN TESTS: Running post-boot tests:
+593 (0x0020) AP0: 	[Test] vma_file_backed_page_fault_resolved... OK
+593 (0x0020) AP0: 	[Test] vma_partial_page_bss_zero_filled... OK
+595 (0x0020) AP0: 	PASS: test_elf_loader (demand-paged, retVal correct, exited cleanly)
+595 (0x0020) AP0: 	[Test] elf_loader... OK
+597 (0x0020) AP0: 	PASS: test_dynamic_linking (symbol resolution, relocation, CoW isolation, and physical sharing all correct)
+597 (0x0020) AP0: 	[Test] dynamic_linking... OK
+597 (0x0020) AP0: 	[Test] pty_publication_hold... OK
+598 (0x0020) AP0: 	[Test] pty_resize_modes... OK
+598 (0x0020) AP0: 	[Test] pty_stream_seats... OK
+600 (0x0020) AP0: 	PASS: test_task_args (argc/argv/env delivered at the ABI addresses, strings copied, BSS zero-filled)
+600 (0x0020) AP0: 	[Test] task_args... OK
+628 (0x0020) AP0: 	PASS: test_env_growth (block grew under the fixed window, pairs survived the copies, 64KB refusals were atomic)
+628 (0x0020) AP0: 	[Test] env_growth... OK
+638 (0x0020) AP0: 	PASS: test_ext2_real_partition (self-provision=written+verified [bs=1024], mkfs-fixtures=3/3, root listing, bogus path)
+638 (0x0020) AP0: 	[Test] ext2_real_partition... OK
+639 (0x0020) AP0: 	PASS: test_mount_table (6 mounts, 1 routed content checks)
+639 (0x0020) AP0: 	[Test] mount_table... OK
+640 (0x0020) AP0: 	[Test] devfs... OK
+640 (0x0020) AP0: 	PASS: test_net_arp_pending_order (synchronous ARP reply released parked IPv4 packet; parked=1 dropped=0)
+640 (0x0020) AP0: 	[Test] net_arp_pending_order... OK
+640 (0x0020) AP0: 	SKIP: test_net_wire (no NIC — QEMU: -netdev user,id=n0 -device virtio-net-pci,netdev=n0)
+640 (0x0020) AP0: 	[Test] net_wire... OK
+640 (0x0020) AP0: 	SKIP: test_net_arp (no NIC)
+640 (0x0020) AP0: 	[Test] net_arp... OK
+640 (0x0020) AP0: 	SKIP: test_net_ping (no NIC)
+640 (0x0020) AP0: 	[Test] net_ping... OK
+640 (0x0020) AP0: 	SKIP: test_net_echo_responder (no NIC)
+640 (0x0020) AP0: 	[Test] net_echo_responder... OK
+640 (0x0020) AP0: 	SKIP: test_net_dhcp (no NIC)
+640 (0x0020) AP0: 	[Test] net_dhcp... OK
+640 (0x0020) AP0: 	SKIP: test_net_udp_conn (no NIC)
+640 (0x0020) AP0: 	[Test] net_udp_conn... OK
+640 (0x0020) AP0: 	SKIP: test_net_icmp_conn (no NIC)
+640 (0x0020) AP0: 	[Test] net_icmp_conn... OK
+641 (0x0020) AP0: 	PASS: test_vfs_write_mkdir (create/write/read-back, mkdir, nested file — under /etc/testdata)
+641 (0x0020) AP0: 	[Test] vfs_write_mkdir... OK
+643 (0x0020) AP0: 	PASS: test_vfs_rename (FAT: legacy plus safe policies, move, directory move, open-source survives, 5 refusals)
+643 (0x0020) AP0: 	[Test] vfs_rename... OK
+643 (0x0020) AP0: 	SKIP: test_ext2_published_insert_failure (root is not writable ext2)
+643 (0x0020) AP0: 	[Test] ext2_published_insert_failure... OK
+643 (0x0020) AP0: 	SKIP: test_ext2_orphan (root is not ext2)
+643 (0x0020) AP0: 	[Test] ext2_orphan... OK
+643 (0x0020) AP0: 	SKIP: test_ext2_readonly_demotion (root is not writable ext2)
+643 (0x0020) AP0: 	[Test] ext2_readonly_demotion... OK
+679 (0x0020) AP0: 	PASS: test_ext2_secondary_write (exclusive-create/create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)
+679 (0x0020) AP0: 	[Test] ext2_secondary_write... OK
+682 (0x0020) AP0: 	PASS: test_shared_object_reload (unloaded at zero; reload and closure claims need a root that can replace an open file, and this one cannot)
+682 (0x0020) AP0: 	[Test] shared_object_reload... OK
+683 (0x0020) AP0: 	PASS: test_mount_unmount (/ext2: busy while held, unmounted idle, remounted ro by GUID at /mu_mount with its open refusing a pen, exact identifiers, a nested mount pinning its parent, restored rw)
+683 (0x0020) AP0: 	[Test] mount_unmount... OK
+686 (0x0020) AP0: 	PASS: test_console_read_deadline (poll + 3-tick patience; anything caught was put back)
+686 (0x0020) AP0: 	[Test] console_read_deadline... OK
+688 (0x0020) AP0: 	PASS: test_block_cache (warm hits 105, warm misses 0 vs cold 5; write invalidation honest)
+688 (0x0020) AP0: 	[Test] block_cache... OK
+688 (0x0020) AP0: 	PASS: test_dirent_mtime (/bin/top stamped 1789853674 — the plausible present)
+688 (0x0020) AP0: 	[Test] dirent_mtime... OK
+[user][user] husk: r husk: c: /home/husrc: /homk.rce/husk.r
+c
+700 (0x0020) AP0: 	PASS: test_backstop_preemption (9 lease expiries on APIC 1, SIGKILL landed)
+700 (0x0020) AP0: 	[Test] backstop_preemption... OK
+700 (0x0020) AP0: BUILT-IN TESTS: 32 passed, 0 failed
+702 (0x0034) AP4: BUILT-IN TESTS: Running late tests:
+702 (0x0020) AP0: input: unified event queue active (256 slots)
+702 (0x0020) AP0: gui_start: compositor task 0x00000035 submitted (affinity THREAD_NO_AFFINITY/0xffffffffffffffff)
+702 (0x0035) AP4: guicomp: compositor starting on APIC 4 (thread=0x00000035, daemon=1)
+703 (0x0032) AP2: [user] husk: started
+703 (0x0031) AP1: [user] husk: started
+705 (0x0033) AP3: [user] cron: started, 0 job(s), times are UTC
+705 (0x0035) AP4: guicomp: backbuffer 1024x768 ready (3072 KB x2)
+705 (0x0032) AP2: [user] husk: rc: /home/husk.rc
+705 (0x0031) AP1: [user] husk: rc: /home/husk.rc
+712 (0x0036) AP3: wm: created window 1 'desktop' at (0,0) 1024x768
+806 (0x0035) AP4: guicomp: heartbeat, 94 frames, 3 flushes (tick 806)
+906 (0x0035) AP4: guicomp: heartbeat, 198 frames, 3 flushes (tick 906)
+1006 (0x0035) AP4: guicomp: heartbeat, 298 frames, 3 flushes (tick 1006)
+1106 (0x0035) AP4: guicomp: heartbeat, 398 frames, 3 flushes (tick 1106)
+1206 (0x0035) AP4: guicomp: heartbeat, 498 frames, 3 flushes (tick 1206)
+1207 (0x0020) AP1: os64: up 1207 ticks, GUI running (status #1)
+1306 (0x0035) AP4: guicomp: heartbeat, 598 frames, 3 flushes (tick 1306)
+1406 (0x0035) AP4: guicomp: heartbeat, 698 frames, 3 flushes (tick 1406)
+1506 (0x0035) AP4: guicomp: heartbeat, 814 frames, 3 flushes (tick 1506)
+1606 (0x0035) AP4: guicomp: heartbeat, 914 frames, 3 flushes (tick 1606)
+1706 (0x0035) AP4: guicomp: heartbeat, 1033 frames, 3 flushes (tick 1706)
+1707 (0x0020) AP1: os64: up 1707 ticks, GUI running (status #2)
+1806 (0x0035) AP4: guicomp: heartbeat, 1133 frames, 3 flushes (tick 1806)
+1906 (0x0035) AP4: guicomp: heartbeat, 1252 frames, 3 flushes (tick 1906)
+1921 (0x0034) AP1: 	task_teardown_leak: 2 cycles — free 8376080832 -> 8376080832 (lost 0 bytes), VMA backing reclaimed 106496 bytes
+1921 (0x0034) AP1: 	task_teardown_leak: window clean — 0 bytes lost, 106496 bytes of VMA backing reclaimed over 2 cycles
+1921 (0x0034) AP1: 	task_teardown_leak: attempt 1 of 4 was clean — measuring again on a fresh window
+2006 (0x0035) AP4: guicomp: heartbeat, 1351 frames, 3 flushes (tick 2006)
+2106 (0x0035) AP4: guicomp: heartbeat, 1450 frames, 3 flushes (tick 2106)
+2206 (0x0035) AP4: guicomp: heartbeat, 1550 frames, 3 flushes (tick 2206)
+2207 (0x0020) AP0: os64: up 2207 ticks, GUI running (status #3)
+2306 (0x0035) AP4: guicomp: heartbeat, 1649 frames, 3 flushes (tick 2306)
+2406 (0x0035) AP4: guicomp: heartbeat, 1749 frames, 3 flushes (tick 2406)
+2506 (0x0035) AP4: guicomp: heartbeat, 1865 frames, 3 flushes (tick 2506)
+2606 (0x0035) AP4: guicomp: heartbeat, 1965 frames, 3 flushes (tick 2606)
+2706 (0x0035) AP4: guicomp: heartbeat, 2080 frames, 3 flushes (tick 2706)
+2707 (0x0020) AP0: os64: up 2707 ticks, GUI running (status #4)
+2806 (0x0035) AP4: guicomp: heartbeat, 2180 frames, 3 flushes (tick 2806)
+2906 (0x0035) AP4: guicomp: heartbeat, 2295 frames, 3 flushes (tick 2906)
+2926 (0x0034) AP1: 	task_teardown_leak: 2 cycles — free 8376080832 -> 8376080832 (lost 0 bytes), VMA backing reclaimed 106496 bytes
+2926 (0x0034) AP1: 	task_teardown_leak: window clean — 0 bytes lost, 106496 bytes of VMA backing reclaimed over 2 cycles
+2926 (0x0034) AP1: 	PASS: test_task_teardown_leak (a task costs nothing — 2 independently measured windows agreed, with 0 unmeasurable)
+2926 (0x0034) AP1: 	[Test] task_teardown_leak... OK
+2927 (0x0034) AP0: 	PASS: test_doorbell_wakes_sleeper (3 rings, worst 1 tick(s), 3 wake(s) answered by a pass)
+2927 (0x0034) AP0: 	[Test] doorbell_wakes_sleeper... OK
+2927 (0x0034) AP0: 	SKIP: test_net_tcp_refused (no NIC)
+2927 (0x0034) AP0: 	[Test] net_tcp_refused... OK
+2927 (0x0034) AP0: BUILT-IN TESTS: 3 passed, 0 failed
+3006 (0x0035) AP4: guicomp: heartbeat, 2394 frames, 3 flushes (tick 3006)
+3106 (0x0035) AP4: guicomp: heartbeat, 2498 frames, 3 flushes (tick 3106)
+3206 (0x0035) AP4: guicomp: heartbeat, 2597 frames, 3 flushes (tick 3206)
+3207 (0x0020) AP1: os64: up 3207 ticks, GUI running (status #5)
+3306 (0x0035) AP4: guicomp: heartbeat, 2697 frames, 3 flushes (tick 3306)
+3406 (0x0035) AP4: guicomp: heartbeat, 2797 frames, 3 flushes (tick 3406)
+3506 (0x0035) AP4: guicomp: heartbeat, 2896 frames, 3 flushes (tick 3506)
+3606 (0x0035) AP4: guicomp: heartbeat, 2996 frames, 3 flushes (tick 3606)
+3706 (0x0035) AP4: guicomp: heartbeat, 3095 frames, 3 flushes (tick 3706)
+3707 (0x0020) AP1: os64: up 3707 ticks, GUI running (status #6)
+3806 (0x0035) AP4: guicomp: heartbeat, 3195 frames, 3 flushes (tick 3806)
+3906 (0x0035) AP4: guicomp: heartbeat, 3294 frames, 3 flushes (tick 3906)
+4006 (0x0035) AP4: guicomp: heartbeat, 3394 frames, 3 flushes (tick 4006)
+4106 (0x0035) AP4: guicomp: heartbeat, 3494 frames, 3 flushes (tick 4106)
+4206 (0x0035) AP4: guicomp: heartbeat, 3594 frames, 3 flushes (tick 4206)
+4207 (0x0020) AP1: os64: up 4207 ticks, GUI running (status #7)
+4244 (0x0032) AP0: [user] husk: task 62 (appearance) started
+4247 (0x003e) AP1: wm: created window 2 'Appearance Workshop' at (32,24) 960x728
+4306 (0x0035) AP4: guicomp: heartbeat, 3699 frames, 3 flushes (tick 4306)
+4406 (0x0035) AP4: guicomp: heartbeat, 3799 frames, 18 flushes (tick 4406)
+4418 (0x0035) AP4: guicomp: button 0 down on window 2 at (445,138), mods 0x00
+4493 (0x0035) AP4: guicomp: button 0 down on window 2 at (220,303), mods 0x00
+4506 (0x0035) AP4: guicomp: heartbeat, 4369 frames, 45 flushes (tick 4506)
+4606 (0x0035) AP4: guicomp: heartbeat, 4630 frames, 46 flushes (tick 4606)
+4675 (0x0035) AP4: guicomp: button 0 down on window 2 at (419,233), mods 0x00
+4706 (0x0035) AP4: guicomp: heartbeat, 4718 frames, 69 flushes (tick 4706)
+4707 (0x0020) AP0: os64: up 4707 ticks, GUI running (status #8)
+4759 (0x0035) AP4: guicomp: button 0 down on window 2 at (190,531), mods 0x00
+4806 (0x0035) AP4: guicomp: heartbeat, 4804 frames, 95 flushes (tick 4806)
+4906 (0x0035) AP4: guicomp: heartbeat, 4891 frames, 100 flushes (tick 4906)
+5006 (0x0035) AP4: guicomp: heartbeat, 4977 frames, 106 flushes (tick 5006)
+5106 (0x0035) AP4: guicomp: heartbeat, 5062 frames, 111 flushes (tick 5106)
+5206 (0x0035) AP4: guicomp: heartbeat, 5148 frames, 117 flushes (tick 5206)
+5207 (0x0020) AP1: os64: up 5207 ticks, GUI running (status #9)
+5307 (0x0035) AP4: guicomp: heartbeat, 5235 frames, 122 flushes (tick 5307)
+5407 (0x0035) AP4: guicomp: heartbeat, 5324 frames, 128 flushes (tick 5407)
+5507 (0x0035) AP4: guicomp: heartbeat, 6210 frames, 130 flushes (tick 5507)
+5607 (0x0035) AP4: guicomp: heartbeat, 7103 frames, 131 flushes (tick 5607)
+5707 (0x0020) AP1: os64: up 5707 ticks, GUI running (status #10)
+5708 (0x0035) AP4: guicomp: heartbeat, 7195 frames, 150 flushes (tick 5708)
+5717 (0x0035) AP4: guicomp: button 0 down on window 2 at (880,660), mods 0x00
+5808 (0x0035) AP4: guicomp: heartbeat, 8268 frames, 157 flushes (tick 5808)
+5908 (0x0035) AP4: guicomp: heartbeat, 8367 frames, 157 flushes (tick 5908)
+6008 (0x0035) AP4: guicomp: heartbeat, 8465 frames, 157 flushes (tick 6008)
+6108 (0x0035) AP4: guicomp: heartbeat, 8565 frames, 157 flushes (tick 6108)
+6207 (0x0020) AP0: os64: up 6207 ticks, GUI running (status #11)
+6208 (0x0035) AP4: guicomp: heartbeat, 8664 frames, 157 flushes (tick 6208)
+6308 (0x0035) AP4: guicomp: heartbeat, 8764 frames, 157 flushes (tick 6308)
+6408 (0x0035) AP4: guicomp: heartbeat, 8863 frames, 157 flushes (tick 6408)
+6508 (0x0035) AP4: guicomp: heartbeat, 8963 frames, 157 flushes (tick 6508)
+6516 (0x0032) AP0: [user] husk: task 63 (scribe) started
+6520 (0x003f) AP1: wm: created window 3 'scribe - f5-document.txt' at (140,90) 640x440
+6608 (0x0035) AP4: guicomp: heartbeat, 9304 frames, 157 flushes (tick 6608)
+6707 (0x0020) AP2: os64: up 6707 ticks, GUI running (status #12)
+6708 (0x0035) AP4: guicomp: heartbeat, 9398 frames, 163 flushes (tick 6708)
+6808 (0x0035) AP4: guicomp: heartbeat, 9497 frames, 168 flushes (tick 6808)
+6908 (0x0035) AP4: guicomp: heartbeat, 9592 frames, 174 flushes (tick 6908)
+7008 (0x0035) AP4: guicomp: heartbeat, 9687 frames, 179 flushes (tick 7008)
+7108 (0x0035) AP4: guicomp: heartbeat, 9785 frames, 185 flushes (tick 7108)
+7207 (0x0020) AP1: os64: up 7207 ticks, GUI running (status #13)
+7208 (0x0035) AP4: guicomp: heartbeat, 9883 frames, 186 flushes (tick 7208)
+7308 (0x0035) AP4: guicomp: heartbeat, 9982 frames, 189 flushes (tick 7308)
+7408 (0x0035) AP4: guicomp: heartbeat, 10082 frames, 189 flushes (tick 7408)
+7508 (0x0035) AP4: guicomp: heartbeat, 10181 frames, 189 flushes (tick 7508)
+7608 (0x0035) AP4: guicomp: heartbeat, 10281 frames, 189 flushes (tick 7608)
+7707 (0x0020) AP1: os64: up 7707 ticks, GUI running (status #14)
+7708 (0x0035) AP4: guicomp: heartbeat, 10381 frames, 189 flushes (tick 7708)
+7808 (0x0035) AP4: guicomp: heartbeat, 10481 frames, 189 flushes (tick 7808)
+7908 (0x0035) AP4: guicomp: heartbeat, 10581 frames, 189 flushes (tick 7908)
+8008 (0x0035) AP4: guicomp: heartbeat, 10680 frames, 189 flushes (tick 8008)
+8108 (0x0035) AP4: guicomp: heartbeat, 10780 frames, 189 flushes (tick 8108)
+8207 (0x0020) AP1: os64: up 8207 ticks, GUI running (status #15)
+8208 (0x0035) AP4: guicomp: heartbeat, 10880 frames, 189 flushes (tick 8208)
+8308 (0x0035) AP4: guicomp: heartbeat, 10980 frames, 189 flushes (tick 8308)
+8408 (0x0035) AP4: guicomp: heartbeat, 11080 frames, 189 flushes (tick 8408)
+8508 (0x0035) AP4: guicomp: heartbeat, 11179 frames, 189 flushes (tick 8508)
+8608 (0x0035) AP4: guicomp: heartbeat, 11279 frames, 189 flushes (tick 8608)
+8707 (0x0020) AP1: os64: up 8707 ticks, GUI running (status #16)
+8708 (0x0035) AP4: guicomp: heartbeat, 11379 frames, 189 flushes (tick 8708)
+8808 (0x0035) AP4: guicomp: heartbeat, 11479 frames, 189 flushes (tick 8808)
+8908 (0x0035) AP4: guicomp: heartbeat, 11579 frames, 189 flushes (tick 8908)
+9008 (0x0035) AP4: guicomp: heartbeat, 11679 frames, 189 flushes (tick 9008)
+9108 (0x0035) AP4: guicomp: heartbeat, 11779 frames, 189 flushes (tick 9108)
+9207 (0x0020) AP1: os64: up 9207 ticks, GUI running (status #17)
+9208 (0x0035) AP4: guicomp: heartbeat, 11878 frames, 189 flushes (tick 9208)
+9308 (0x0035) AP4: guicomp: heartbeat, 11978 frames, 189 flushes (tick 9308)
+9408 (0x0035) AP4: guicomp: heartbeat, 12078 frames, 189 flushes (tick 9408)
+9508 (0x0035) AP4: guicomp: heartbeat, 12178 frames, 189 flushes (tick 9508)
+9608 (0x0035) AP4: guicomp: heartbeat, 12277 frames, 189 flushes (tick 9608)
+9707 (0x0020) AP1: os64: up 9707 ticks, GUI running (status #18)
+9708 (0x0035) AP4: guicomp: heartbeat, 12377 frames, 189 flushes (tick 9708)
+9808 (0x0035) AP4: guicomp: heartbeat, 12477 frames, 189 flushes (tick 9808)
+9908 (0x0035) AP4: guicomp: heartbeat, 12577 frames, 189 flushes (tick 9908)
+10008 (0x0035) AP4: guicomp: heartbeat, 12677 frames, 189 flushes (tick 10008)
+10108 (0x0035) AP4: guicomp: heartbeat, 12777 frames, 189 flushes (tick 10108)
+10207 (0x0020) AP0: os64: up 10207 ticks, GUI running (status #19)
+10208 (0x0035) AP4: guicomp: heartbeat, 12876 frames, 189 flushes (tick 10208)
+10308 (0x0035) AP4: guicomp: heartbeat, 12975 frames, 189 flushes (tick 10308)
+10408 (0x0035) AP4: guicomp: heartbeat, 13074 frames, 189 flushes (tick 10408)
+10508 (0x0035) AP4: guicomp: heartbeat, 13174 frames, 189 flushes (tick 10508)
+10608 (0x0035) AP4: guicomp: heartbeat, 13274 frames, 189 flushes (tick 10608)
+10707 (0x0020) AP0: os64: up 10707 ticks, GUI running (status #20)
+10708 (0x0035) AP4: guicomp: heartbeat, 13373 frames, 189 flushes (tick 10708)
+10808 (0x0035) AP4: guicomp: heartbeat, 13473 frames, 189 flushes (tick 10808)
+10909 (0x0035) AP4: guicomp: heartbeat, 13573 frames, 189 flushes (tick 10909)
+11010 (0x0035) AP4: guicomp: heartbeat, 13673 frames, 189 flushes (tick 11009)
+11110 (0x0035) AP4: guicomp: heartbeat, 13773 frames, 189 flushes (tick 11110)
+11207 (0x0020) AP1: os64: up 11207 ticks, GUI running (status #21)
+11210 (0x0035) AP4: guicomp: heartbeat, 13873 frames, 189 flushes (tick 11210)
+11310 (0x0035) AP4: guicomp: heartbeat, 13973 frames, 189 flushes (tick 11310)
+11410 (0x0035) AP4: guicomp: heartbeat, 14073 frames, 189 flushes (tick 11410)
+11510 (0x0035) AP4: guicomp: heartbeat, 14172 frames, 189 flushes (tick 11510)
+11610 (0x0035) AP4: guicomp: heartbeat, 14272 frames, 189 flushes (tick 11610)
+11707 (0x0020) AP0: os64: up 11707 ticks, GUI running (status #22)
+11710 (0x0035) AP4: guicomp: heartbeat, 14372 frames, 189 flushes (tick 11710)
+11810 (0x0035) AP4: guicomp: heartbeat, 14472 frames, 189 flushes (tick 11810)
+11910 (0x0035) AP4: guicomp: heartbeat, 14572 frames, 189 flushes (tick 11910)
+12010 (0x0035) AP4: guicomp: heartbeat, 14672 frames, 189 flushes (tick 12010)
+12110 (0x0035) AP4: guicomp: heartbeat, 14772 frames, 189 flushes (tick 12110)
+12207 (0x0020) AP0: os64: up 12207 ticks, GUI running (status #23)
+12210 (0x0035) AP4: guicomp: heartbeat, 14872 frames, 189 flushes (tick 12210)
+12310 (0x0035) AP4: guicomp: heartbeat, 14972 frames, 189 flushes (tick 12310)
+12410 (0x0035) AP4: guicomp: heartbeat, 15072 frames, 189 flushes (tick 12410)
+12510 (0x0035) AP4: guicomp: heartbeat, 15171 frames, 189 flushes (tick 12510)
+12610 (0x0035) AP4: guicomp: heartbeat, 15271 frames, 189 flushes (tick 12610)
+12707 (0x0020) AP1: os64: up 12707 ticks, GUI running (status #24)
+12710 (0x0035) AP4: guicomp: heartbeat, 15371 frames, 189 flushes (tick 12710)
+12810 (0x0035) AP4: guicomp: heartbeat, 15471 frames, 189 flushes (tick 12810)
+12910 (0x0035) AP4: guicomp: heartbeat, 15571 frames, 189 flushes (tick 12910)
+13010 (0x0035) AP4: guicomp: heartbeat, 15670 frames, 189 flushes (tick 13010)
+13110 (0x0035) AP4: guicomp: heartbeat, 15770 frames, 189 flushes (tick 13110)
+13207 (0x0020) AP0: os64: up 13207 ticks, GUI running (status #25)
+13210 (0x0035) AP4: guicomp: heartbeat, 15870 frames, 189 flushes (tick 13210)
+13310 (0x0035) AP4: guicomp: heartbeat, 15970 frames, 189 flushes (tick 13310)
+13410 (0x0035) AP4: guicomp: heartbeat, 16070 frames, 189 flushes (tick 13410)
+13510 (0x0035) AP4: guicomp: heartbeat, 16170 frames, 189 flushes (tick 13510)
+13610 (0x0035) AP4: guicomp: heartbeat, 16270 frames, 189 flushes (tick 13610)
+13707 (0x0020) AP1: os64: up 13707 ticks, GUI running (status #26)
+13710 (0x0035) AP4: guicomp: heartbeat, 16369 frames, 189 flushes (tick 13710)
+13810 (0x0035) AP4: guicomp: heartbeat, 16469 frames, 189 flushes (tick 13810)
+13910 (0x0035) AP4: guicomp: heartbeat, 16569 frames, 189 flushes (tick 13910)
+14010 (0x0035) AP4: guicomp: heartbeat, 16669 frames, 189 flushes (tick 14010)
+14110 (0x0035) AP4: guicomp: heartbeat, 16769 frames, 189 flushes (tick 14110)
+14207 (0x0020) AP1: os64: up 14207 ticks, GUI running (status #27)
+14210 (0x0035) AP4: guicomp: heartbeat, 16869 frames, 189 flushes (tick 14210)
+14310 (0x0035) AP4: guicomp: heartbeat, 16969 frames, 189 flushes (tick 14310)
+14410 (0x0035) AP4: guicomp: heartbeat, 17069 frames, 189 flushes (tick 14410)
+14510 (0x0035) AP4: guicomp: heartbeat, 17168 frames, 189 flushes (tick 14510)
+14610 (0x0035) AP4: guicomp: heartbeat, 17268 frames, 189 flushes (tick 14610)
+14707 (0x0020) AP1: os64: up 14707 ticks, GUI running (status #28)
+14710 (0x0035) AP4: guicomp: heartbeat, 17368 frames, 189 flushes (tick 14710)
+14810 (0x0035) AP4: guicomp: heartbeat, 17468 frames, 189 flushes (tick 14810)
+14911 (0x0035) AP4: guicomp: heartbeat, 17567 frames, 189 flushes (tick 14911)
+15011 (0x0035) AP4: guicomp: heartbeat, 17667 frames, 189 flushes (tick 15011)
+15047 (0x0032) AP1: [user] husk: task 64 (gterm) started
+15073 (0x0040) AP2: wm: created window 4 'husk' at (140,120) 802x629
+15079 (0x0041) AP1: [user] husk: started
+15111 (0x0035) AP4: guicomp: heartbeat, 18013 frames, 189 flushes (tick 15111)
+15207 (0x0020) AP1: os64: up 15207 ticks, GUI running (status #29)
+15211 (0x0035) AP4: guicomp: heartbeat, 18110 frames, 193 flushes (tick 15211)
+15312 (0x0035) AP4: guicomp: heartbeat, 18206 frames, 198 flushes (tick 15312)
+15412 (0x0035) AP4: guicomp: heartbeat, 18295 frames, 204 flushes (tick 15412)
+15512 (0x0035) AP4: guicomp: heartbeat, 18389 frames, 210 flushes (tick 15512)
+15518 (0x0041) AP0: [user] husk: task 66 (echo) started
+15518 (0x0041) AP2: [user] husk: task 66 (echo) exited code 0
+15612 (0x0035) AP4: guicomp: heartbeat, 18489 frames, 211 flushes (tick 15612)
+15707 (0x0020) AP1: os64: up 15707 ticks, GUI running (status #30)
+15712 (0x0035) AP4: guicomp: heartbeat, 18594 frames, 211 flushes (tick 15712)
+15812 (0x0035) AP4: guicomp: heartbeat, 18690 frames, 211 flushes (tick 15812)
+15912 (0x0035) AP4: guicomp: heartbeat, 18788 frames, 211 flushes (tick 15912)
+16012 (0x0035) AP4: guicomp: heartbeat, 18886 frames, 211 flushes (tick 16012)
+16112 (0x0035) AP4: guicomp: heartbeat, 18984 frames, 211 flushes (tick 16112)
+16199 (0x0032) AP0: [user] husk: task 67 (fontsettingstest) started
+16207 (0x0020) AP2: os64: up 16207 ticks, GUI running (status #31)
+16212 (0x0035) AP4: guicomp: heartbeat, 19081 frames, 211 flushes (tick 16212)
+16281 (0x0032) AP6: [user] husk: task 67 (fontsettingstest) exited code 0
+16312 (0x0035) AP4: guicomp: heartbeat, 19827 frames, 211 flushes (tick 16312)
+16412 (0x0035) AP4: guicomp: heartbeat, 21026 frames, 212 flushes (tick 16412)
+16512 (0x0035) AP4: guicomp: heartbeat, 21917 frames, 213 flushes (tick 16512)
+16612 (0x0035) AP4: guicomp: heartbeat, 22015 frames, 213 flushes (tick 16612)
+16707 (0x0020) AP1: os64: up 16707 ticks, GUI running (status #32)
+16712 (0x0035) AP4: guicomp: heartbeat, 22112 frames, 213 flushes (tick 16712)
+16812 (0x0035) AP4: guicomp: heartbeat, 22210 frames, 213 flushes (tick 16812)
+16900 (0x0032) AP0: [user] husk: task 68 (fontsettingstest) started
+16912 (0x0035) AP4: guicomp: heartbeat, 22309 frames, 213 flushes (tick 16912)
+16951 (0x0032) AP5: [user] husk: task 68 (fontsettingstest) exited code 0
+17012 (0x0035) AP4: guicomp: heartbeat, 24610 frames, 222 flushes (tick 17012)
+17014 (0x0035) AP4: guicomp: button 0 down on window 3 at (227,100), mods 0x00
+17112 (0x0035) AP4: guicomp: heartbeat, 25878 frames, 229 flushes (tick 17112)
+17208 (0x0020) AP0: os64: up 17208 ticks, GUI running (status #33)
+17212 (0x0035) AP4: guicomp: heartbeat, 26023 frames, 232 flushes (tick 17212)
+17312 (0x0035) AP4: guicomp: heartbeat, 26121 frames, 233 flushes (tick 17312)
+17412 (0x0035) AP4: guicomp: heartbeat, 26218 frames, 233 flushes (tick 17412)
+17512 (0x0035) AP4: guicomp: heartbeat, 26314 frames, 234 flushes (tick 17512)
+17612 (0x0035) AP4: guicomp: heartbeat, 26411 frames, 234 flushes (tick 17612)
+17708 (0x0020) AP0: os64: up 17708 ticks, GUI running (status #34)
+17712 (0x0035) AP4: guicomp: heartbeat, 26510 frames, 234 flushes (tick 17712)
+17812 (0x0035) AP4: guicomp: heartbeat, 26607 frames, 238 flushes (tick 17812)
+17841 (0x0035) AP4: guicomp: button 0 down on window 2 at (400,34), mods 0x00
+17912 (0x0035) AP4: guicomp: heartbeat, 26699 frames, 267 flushes (tick 17912)
+17917 (0x0035) AP4: guicomp: button 0 down on window 2 at (278,233), mods 0x00
+17987 (0x0035) AP4: guicomp: button 0 down on window 2 at (240,302), mods 0x00
+18012 (0x0035) AP4: guicomp: heartbeat, 26775 frames, 290 flushes (tick 18012)
+18112 (0x0035) AP4: guicomp: heartbeat, 27451 frames, 291 flushes (tick 18112)
+18167 (0x0035) AP4: guicomp: button 0 down on window 2 at (419,233), mods 0x00
+18208 (0x0020) AP2: os64: up 18208 ticks, GUI running (status #35)
+18213 (0x0035) AP4: guicomp: heartbeat, 27533 frames, 315 flushes (tick 18213)
+18244 (0x0035) AP4: guicomp: button 0 down on window 2 at (251,460), mods 0x00
+18313 (0x0035) AP4: guicomp: heartbeat, 28089 frames, 333 flushes (tick 18313)
+18413 (0x0035) AP4: guicomp: heartbeat, 28183 frames, 349 flushes (tick 18413)
+18432 (0x0035) AP4: guicomp: button 0 down on window 2 at (751,660), mods 0x00
+18513 (0x0035) AP4: guicomp: heartbeat, 28740 frames, 360 flushes (tick 18513)
+18613 (0x0035) AP4: guicomp: heartbeat, 28835 frames, 360 flushes (tick 18613)
+18708 (0x0020) AP1: os64: up 18708 ticks, GUI running (status #36)
+18714 (0x0035) AP4: guicomp: heartbeat, 28934 frames, 360 flushes (tick 18714)
+18814 (0x0035) AP4: guicomp: heartbeat, 29033 frames, 360 flushes (tick 18814)
+18914 (0x0035) AP4: guicomp: heartbeat, 29130 frames, 360 flushes (tick 18914)
+19014 (0x0035) AP4: guicomp: heartbeat, 29228 frames, 360 flushes (tick 19014)
+19114 (0x0035) AP4: guicomp: heartbeat, 29326 frames, 360 flushes (tick 19114)
+19208 (0x0020) AP1: os64: up 19208 ticks, GUI running (status #37)
+19214 (0x0035) AP4: guicomp: heartbeat, 29424 frames, 360 flushes (tick 19214)
+19314 (0x0035) AP4: guicomp: heartbeat, 29521 frames, 360 flushes (tick 19314)
+19398 (0x0032) AP0: [user] husk: task 69 (fontsettingstest) started
+19400 (0x0032) AP2: [user] husk: task 69 (fontsettingstest) exited code 0
+19414 (0x0035) AP4: guicomp: heartbeat, 29619 frames, 360 flushes (tick 19414)
+19514 (0x0035) AP4: guicomp: heartbeat, 29718 frames, 360 flushes (tick 19514)
+19615 (0x0035) AP4: guicomp: heartbeat, 29834 frames, 360 flushes (tick 19615)
+19708 (0x0020) AP1: os64: up 19708 ticks, GUI running (status #38)
+19715 (0x0035) AP4: guicomp: heartbeat, 29933 frames, 360 flushes (tick 19715)
+19815 (0x0035) AP4: guicomp: heartbeat, 30031 frames, 360 flushes (tick 19815)
+19915 (0x0035) AP4: guicomp: heartbeat, 30128 frames, 360 flushes (tick 19915)
+20015 (0x0035) AP4: guicomp: heartbeat, 30226 frames, 360 flushes (tick 20015)
+20115 (0x0035) AP4: guicomp: heartbeat, 30324 frames, 360 flushes (tick 20115)
+20208 (0x0020) AP1: os64: up 20208 ticks, GUI running (status #39)
+20215 (0x0035) AP4: guicomp: heartbeat, 30422 frames, 360 flushes (tick 20215)
+20316 (0x0035) AP4: guicomp: heartbeat, 30520 frames, 360 flushes (tick 20316)
+20326 (0x0032) AP2: [user] husk: task 70 (fontsettingstest) started
+20376 (0x0032) AP2: [user] husk: task 70 (fontsettingstest) exited code 0
+20416 (0x0035) AP4: guicomp: heartbeat, 31139 frames, 360 flushes (tick 20416)
+20516 (0x0035) AP4: guicomp: heartbeat, 31236 frames, 360 flushes (tick 20516)
+20616 (0x0035) AP4: guicomp: heartbeat, 31361 frames, 360 flushes (tick 20616)
+20708 (0x0020) AP1: os64: up 20708 ticks, GUI running (status #40)
+20716 (0x0035) AP4: guicomp: heartbeat, 31459 frames, 360 flushes (tick 20716)
+20816 (0x0035) AP4: guicomp: heartbeat, 31557 frames, 360 flushes (tick 20816)
+20916 (0x0035) AP4: guicomp: heartbeat, 31656 frames, 360 flushes (tick 20916)
+21016 (0x0035) AP4: guicomp: heartbeat, 31755 frames, 360 flushes (tick 21016)
+21116 (0x0035) AP4: guicomp: heartbeat, 31855 frames, 360 flushes (tick 21116)
+21208 (0x0020) AP0: os64: up 21208 ticks, GUI running (status #41)
+21216 (0x0035) AP4: guicomp: heartbeat, 31955 frames, 360 flushes (tick 21216)
+21254 (0x0032) AP0: [user] husk: task 71 (fontsettingstest) started
+21261 (0x0032) AP3: [user] husk: task 71 (fontsettingstest) exited code 0
+21316 (0x0035) AP4: guicomp: heartbeat, 32056 frames, 360 flushes (tick 21316)
+21416 (0x0035) AP4: guicomp: heartbeat, 32176 frames, 360 flushes (tick 21416)
+21516 (0x0035) AP4: guicomp: heartbeat, 32275 frames, 360 flushes (tick 21516)
+21616 (0x0035) AP4: guicomp: heartbeat, 32375 frames, 360 flushes (tick 21616)
+21708 (0x0020) AP0: os64: up 21708 ticks, GUI running (status #42)
+21716 (0x0035) AP4: guicomp: heartbeat, 32475 frames, 360 flushes (tick 21716)
+21816 (0x0035) AP4: guicomp: heartbeat, 32574 frames, 360 flushes (tick 21816)
+21916 (0x0035) AP4: guicomp: heartbeat, 32672 frames, 360 flushes (tick 21916)
+22016 (0x0035) AP4: guicomp: heartbeat, 32770 frames, 360 flushes (tick 22016)
+22116 (0x0035) AP4: guicomp: heartbeat, 32867 frames, 360 flushes (tick 22116)
+22183 (0x0032) AP1: [user] husk: task 72 (fontsettingstest) started
+22208 (0x0020) AP1: os64: up 22208 ticks, GUI running (status #43)
+22216 (0x0035) AP4: guicomp: heartbeat, 33156 frames, 360 flushes (tick 22216)
+22236 (0x0032) AP2: [user] husk: task 72 (fontsettingstest) exited code 0
+22316 (0x0035) AP4: guicomp: heartbeat, 35854 frames, 360 flushes (tick 22316)
+22416 (0x0035) AP4: guicomp: heartbeat, 36681 frames, 360 flushes (tick 22416)
+22516 (0x0035) AP4: guicomp: heartbeat, 36778 frames, 360 flushes (tick 22516)
+22616 (0x0035) AP4: guicomp: heartbeat, 36876 frames, 360 flushes (tick 22616)
+22708 (0x0020) AP0: os64: up 22708 ticks, GUI running (status #44)
+22716 (0x0035) AP4: guicomp: heartbeat, 36974 frames, 360 flushes (tick 22716)
+22816 (0x0035) AP4: guicomp: heartbeat, 37070 frames, 360 flushes (tick 22816)
+22916 (0x0035) AP4: guicomp: heartbeat, 37168 frames, 360 flushes (tick 22916)
+22946 (0x0032) AP0: [user] husk: task 73 (fontsettingstest) started
+23016 (0x0035) AP4: guicomp: heartbeat, 37932 frames, 360 flushes (tick 23016)
+23017 (0x0032) AP1: [user] husk: task 73 (fontsettingstest) exited code 0
+23116 (0x0035) AP4: guicomp: heartbeat, 38031 frames, 360 flushes (tick 23116)
+23208 (0x0020) AP0: os64: up 23208 ticks, GUI running (status #45)
+23216 (0x0035) AP4: guicomp: heartbeat, 38181 frames, 360 flushes (tick 23216)
+23316 (0x0035) AP4: guicomp: heartbeat, 38279 frames, 360 flushes (tick 23316)
+23416 (0x0035) AP4: guicomp: heartbeat, 38376 frames, 360 flushes (tick 23416)
+23425 (0x0032) AP3: [user] husk: task 74 (cat) started
+23427 (0x0032) AP1: [user] husk: task 74 (cat) exited code 0
+23516 (0x0035) AP4: guicomp: heartbeat, 38473 frames, 360 flushes (tick 23516)
+23616 (0x0035) AP4: guicomp: heartbeat, 38582 frames, 360 flushes (tick 23616)
+23708 (0x0020) AP0: os64: up 23708 ticks, GUI running (status #46)
+23716 (0x0035) AP4: guicomp: heartbeat, 38681 frames, 360 flushes (tick 23716)
+23789 (0x0032) AP1: [user] husk: task 75 (shutdown) started
+23816 (0x0035) AP4: guicomp: heartbeat, 38779 frames, 360 flushes (tick 23816)
+23916 (0x0035) AP4: guicomp: heartbeat, 38877 frames, 360 flushes (tick 23916)
+24016 (0x0035) AP4: guicomp: heartbeat, 38974 frames, 360 flushes (tick 24016)
+24116 (0x0035) AP4: guicomp: heartbeat, 39072 frames, 360 flushes (tick 24116)
+24208 (0x0020) AP0: os64: up 24208 ticks, GUI running (status #47)
+24216 (0x0035) AP4: guicomp: heartbeat, 39169 frames, 360 flushes (tick 24216)
+[shutdown] descent started
+24291 (0x004b) AP0: The system is going down NOW!
+24291 (0x004b) AP0: [shutdown] SIGTERM -> husk (task 49)
+24291 (0x004b) AP0: [shutdown] SIGTERM -> husk (task 50)
+24291 (0x004b) AP0: [shutdown] SIGTERM -> cron (task 51)
+24291 (0x004b) AP0: [shutdown] SIGTERM -> desktop (task 54)
+24291 (0x004b) AP0: [shutdown] SIGTERM -> appearance (task 62)
+24291 (0x004b) AP0: [shutdown] SIGTERM -> scribe (task 63)
+24291 (0x004b) AP0: [shutdown] SIGTERM -> gterm (task 64)
+24291 (0x004b) AP0: [shutdown] SIGTERM -> husk (task 65)
+24291 (0x004b) AP0:   asked 8 tasks to stop
+24292 (0x0040) AP2: gui: task 0x00000040 exited owning window 'husk' (handle 4) — destroying
+24292 (0x003e) AP0: gui: task 0x0000003e exited owning window 'Appearance Workshop' (handle 2) — destroying
+24294 (0x0037) AP6: gui: task 0x00000036 exited owning window 'desktop' (handle 1) — destroying
+24297 (0x003f) AP3: gui: task 0x0000003f exited owning window 'scribe - f5-document.txt' (handle 3) — destroying
+24301 (0x004b) AP5:   all stopped cleanly (100 ms)
+24316 (0x0035) AP4: guicomp: heartbeat, 39259 frames, 360 flushes (tick 24316)
+24351 (0x004b) AP5:   log daemon retired
+[shutdown] descent complete, powering off
