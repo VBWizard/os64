@@ -553,9 +553,6 @@ $(DISK_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/un
 	# harness travels at all: a fixture that cannot find its inputs proves
 	# nothing, and a lifeboat where one test always skips is a lifeboat whose
 	# green result means less than root's.
-	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/fonts > /dev/null 2>&1
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/fonts.conf ::/etc/fonts.conf
-	$(foreach f,$(FONT_PRODUCT),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/fonts/$(notdir $(f));)
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/tests/fonts > /dev/null 2>&1
 	$(foreach f,$(FONT_FIXTURES),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/fonts/$(notdir $(f));)
@@ -583,6 +580,10 @@ $(DISK_IMAGE): license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/un
 	# which is the entire job of the lifeboat. The other config files keep
 	# their ext2-only life until something on the lifeboat wants them.
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc > /dev/null 2>&1
+	# Product fonts live beside their configuration; create the parent first.
+	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/fonts
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/fonts.conf ::/etc/fonts.conf
+	$(foreach f,$(FONT_PRODUCT),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/fonts/$(notdir $(f));)
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/licenses
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt ::/etc/licenses/DejaVu.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libjpeg-turbo-LICENSE ::/etc/licenses/libjpeg-turbo.txt

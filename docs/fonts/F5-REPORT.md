@@ -63,6 +63,35 @@ No kernel code or syscall changed.
 
 ## Validation
 
+### Clean image build follow-up
+
+Chris's `make clean && make` exposed a FAT packaging failure after `db3fe41`:
+the recipe copied `fonts.conf` before creating `/etc`. The earlier userland
+build and guest payload refresh did not exercise that image recipe. Product
+font installation now follows parent-directory creation, and failure to create
+`/etc/fonts` is fatal. The ext2 sibling already creates its parents first.
+
+The exact clean root build failed with exit 2 before the fix and passed with
+exit 0 afterward, including ISO assembly. Four linker RWX warnings remain for
+kernel test fixtures (`arg_echo`, `stat_test`, `env_fill`, `glutton`); no build
+errors remain. [Build diagnostic excerpts](f5-evidence/clean-build/build-excerpts.txt)
+retain both outcomes and full local log hashes.
+
+[Package checks](f5-evidence/clean-build/package-check.txt) compare configuration,
+both product fonts, their license, Workshop and both font libraries against
+source/build files in FAT and ext2. Private copies of the freshly generated boot
+and home disks were then booted with the freshly generated ISO, without payload
+injection. The existing guest harness ran with `--resume --label clean` to skip
+its installation phase. Workshop discovered both faces and applied DejaVu Sans
+to the interface; screenshots were inspected. The guest shut down with exit 0.
+[Initial Fonts page](f5-evidence/clean-build/fonts.png),
+[applied interface](f5-evidence/clean-build/fonts-applied.png),
+[actions](f5-evidence/clean-build/actions.txt),
+[serial receipt](f5-evidence/clean-build/serial.txt).
+Existing home data and the three root-level backup images were preserved.
+
+### Original implementation checks
+
 All host suites below use ASan and UBSan. `ASAN_OPTIONS=detect_leaks=0` disables
 LSan; the configuration and terminal suites additionally prove their own
 allocation-ledger cleanup. Counts are assertions, including per-allocation and
