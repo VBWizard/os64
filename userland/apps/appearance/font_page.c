@@ -87,11 +87,11 @@ static void controls(void)
     os64_ui_mark_dirty(preview, preview->root);
 }
 
-static void refresh(void)
+static bool refresh(void)
 {
     os64_font_catalog_t *next = NULL;
     os64_font_config_status_t status = os64_font_config_discover(os64_ui_font_context(preview), &draft, &next);
-    if (status) { report("Cannot refresh fonts; previous list kept"); return; }
+    if (status) { report("Cannot refresh fonts; previous list kept"); return false; }
     os64_font_catalog_release(catalog); catalog = next;
     for (size_t i = 0; i < catalog->count; ++i) {
         const os64_font_catalog_entry_t *entry = &catalog->entries[i];
@@ -106,6 +106,7 @@ static void refresh(void)
     if (catalog->limited) report("Font list reached its limit; selected files are included");
     else if (catalog->directory_unavailable) report("Font folder unavailable; selected files are included");
     else report("Font list refreshed; preview kept");
+    return true;
 }
 
 void font_page_activate(void)
@@ -168,10 +169,18 @@ static void use_file(os64_ui_widget_t *w, void *user)
         error.status = status; failure("Install refused", &error); return;
     }
     os64_strcopy(candidate.roles[role].face[0], OS64_FONT_PATH_CAP, installed);
-    if (show_candidate(&candidate)) {
+    bool shown = show_candidate(&candidate);
+    if (shown) {
         previous = draft; have_undo = true; draft = candidate;
-        refresh(); report("Font installed; Save fonts keeps this choice");
     }
+    // Publication has succeeded even if the preview cannot adopt the font.
+    // Refresh from disk without making a refused preview the draft choice.
+    if (!refresh())
+        report(shown ? "Font installed; preview changed; list refresh failed" :
+                       "Font installed; preview kept; list refresh failed");
+    else
+        report(shown ? "Font installed; Save fonts keeps this choice" :
+                       "Font installed; preview kept");
     controls();
 }
 static void file_submit(os64_ui_textfield_t *field, void *user)

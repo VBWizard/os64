@@ -25,17 +25,17 @@
 
 int64_t os64_conf_find_bytes(const char *name, char **out, size_t *length)
 {
-    if (!out || !length) return OS64_CONF_BAD_SETTING;
-    *out = NULL; *length = 0;
-    char path[OS64_CONF_PATH_MAX];
-    if (os64_conf_find(name, path, sizeof(path)) < 0) return OS64_CONF_NO_FILE;
-    uint8_t *bytes = NULL;
-    os64_slurp_status_t status = os64_slurp(path, OS64_CONF_MAX - 1, &bytes, length);
-    if (status == OS64_SLURP_TOO_BIG) return OS64_CONF_TRUNCATED;
-    if (status == OS64_SLURP_NO_MEMORY) return OS64_CONF_NO_MEMORY;
-    if (status) return OS64_CONF_IO_ERROR;
-    *out = (char *)bytes;
-    return 0;
+	if (!out || !length) return OS64_CONF_BAD_SETTING;
+	*out = NULL; *length = 0;
+	char path[OS64_CONF_PATH_MAX];
+	if (os64_conf_find(name, path, sizeof(path)) < 0) return OS64_CONF_NO_FILE;
+	uint8_t *bytes = NULL;
+	os64_slurp_status_t status = os64_slurp(path, OS64_CONF_MAX - 1, &bytes, length);
+	if (status == OS64_SLURP_TOO_BIG) return OS64_CONF_TRUNCATED;
+	if (status == OS64_SLURP_NO_MEMORY) return OS64_CONF_NO_MEMORY;
+	if (status) return OS64_CONF_IO_ERROR;
+	*out = (char *)bytes;
+	return 0;
 }
 
 static int64_t conf_parse_buffer(char *buf, os64_conf_fn fn, void *user, bool *stopped)
@@ -478,7 +478,7 @@ static bool setting_is_writable(const os64_conf_pair_t *p)
 
 int64_t os64_conf_target(const char *name, char *path_out, size_t cap)
 {
-    return conf_resolve(name, 0, true, path_out, cap) >= 1 ? 0 : OS64_CONF_NO_FILE;
+	return conf_resolve(name, 0, true, path_out, cap) >= 1 ? 0 : OS64_CONF_NO_FILE;
 }
 
 static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
@@ -496,10 +496,10 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 	// because a save that quietly dropped one of its settings is the silent
 	// config failure this arc exists to abolish).
 	for (size_t p = 0; p < count; p++) {
-        os64_conf_pair_t checked = pairs[p];
-        if (delete_keys && !checked.value) checked.value = "";
+		os64_conf_pair_t checked = pairs[p];
+		if (delete_keys && !checked.value) checked.value = "";
 		if (!setting_is_writable(&checked)) return OS64_CONF_BAD_SETTING;
-    }
+	}
 
 	// RULE 1: the TOP of the ladder, never where we read from. `true` asks
 	// the kernel for the path this name WOULD have at position 0 — the file
@@ -600,7 +600,7 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 			// Replacing this line — hand out_setting the ORIGINAL so it can
 			// carry through any inline comment (the merge contract).
 			if (pairs[p].value)
-                out_setting(&o, pairs[p].key, pairs[p].value, &old[start], end - start);
+				out_setting(&o, pairs[p].key, pairs[p].value, &old[start], end - start);
 			written[p] = true;
 		} else if (p >= 0 && (size_t)p < marks) {
 			// A REPEATED key we already rewrote: drop the duplicate rather
@@ -625,12 +625,12 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 		return OS64_CONF_TRUNCATED;         // refuse to publish a short file
 	}
 	neu[o.len] = '\0';
-    if (atomic_replace && (o.len >= OS64_CONF_MAX ||
-        (validate && !validate(neu, o.len, user)))) {
-        os64_free(old);
-        os64_free(neu);
-        return OS64_CONF_BAD_SETTING;
-    }
+	if (atomic_replace && (o.len >= OS64_CONF_MAX ||
+		(validate && !validate(neu, o.len, user)))) {
+		os64_free(old);
+		os64_free(neu);
+		return OS64_CONF_BAD_SETTING;
+	}
 
 	// RULE 3: write beside the target, then rename over it. On ext2 that
 	// replacement is atomic, so a crash between these calls leaves the old
@@ -724,13 +724,13 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 
 int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t count)
 {
-    return conf_write(name, pairs, count, false, false, NULL, NULL);
+	return conf_write(name, pairs, count, false, false, NULL, NULL);
 }
 
 int64_t os64_conf_write_checked(const char *name, const os64_conf_pair_t *pairs, size_t count,
-    bool (*validate)(const char *, size_t, void *), void *user)
+	bool (*validate)(const char *, size_t, void *), void *user)
 {
-    return conf_write(name, pairs, count, true, false, validate, user);
+	return conf_write(name, pairs, count, true, false, validate, user);
 }
 
 int64_t os64_conf_set(const char *name, const char *key, const char *value)
@@ -740,7 +740,7 @@ int64_t os64_conf_set(const char *name, const char *key, const char *value)
 }
 
 int64_t os64_conf_update_checked(const char *name, const os64_conf_pair_t *pairs,
-    size_t count, bool (*validate)(const char *, size_t, void *), void *user)
+	size_t count, bool (*validate)(const char *, size_t, void *), void *user)
 {
-    return conf_write(name, pairs, count, true, true, validate, user);
+	return conf_write(name, pairs, count, true, true, validate, user);
 }

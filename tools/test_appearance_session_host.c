@@ -1,4 +1,6 @@
 #include "os64/io.h"
+#include "os64/slurp.h"
+#include "os64/str.h"
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>
@@ -603,7 +605,24 @@ void appearance_session_contracts(void)
 /* Two one-byte backend fixtures supply fonts for session/adoption tests.
  * The separate configuration/installation suite exercises real font files. */
 int64_t __wrap_os64_conf_find(const char *name, char *out, size_t cap)
-{ (void)name; (void)out; (void)cap; return OS64_CONF_NO_FILE; }
+{
+    if (strcmp(name,"theme.conf") || (!startup_text && !startup_error)) return OS64_CONF_NO_FILE;
+    os64_strcopy(out,cap,"/test/theme.conf"); return 0;
+}
+os64_slurp_status_t __real_os64_slurp(const char *, size_t, uint8_t **, size_t *);
+os64_slurp_status_t __wrap_os64_slurp(const char *path, size_t cap, uint8_t **out, size_t *length)
+{
+    if (strcmp(path,"/test/theme.conf")) return __real_os64_slurp(path,cap,out,length);
+    *out = NULL; *length = 0;
+    if (startup_error) return startup_error == OS64_CONF_NO_MEMORY ?
+        OS64_SLURP_NO_MEMORY : OS64_SLURP_IO_ERROR;
+    assert(startup_text);
+    size_t n = strlen(startup_text);
+    if (n > cap) return OS64_SLURP_TOO_BIG;
+    *out = os64_malloc(n+1);
+    if (!*out) return OS64_SLURP_NO_MEMORY;
+    memcpy(*out,startup_text,n+1); *length = n; return OS64_SLURP_OK;
+}
 int64_t __wrap_os64_conf_target(const char *name, char *out, size_t cap)
 { int n = snprintf(out, cap, "/home/%s", name); return n < 0 || (size_t)n >= cap ? -1 : 0; }
 int64_t os64_stat(const char *path, os64_dirent_t *entry)

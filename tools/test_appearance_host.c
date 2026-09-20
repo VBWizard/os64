@@ -9,6 +9,7 @@
 
 extern bool fail_alloc;
 void appearance_session_contracts(void);
+void font_page_install_contracts(void);
 void appearance_customizer_contracts(void);
 void controlcenter_layout_contracts(void);
 
@@ -674,6 +675,7 @@ int main(void)
     picker_contracts();
     list_contracts();
     theme_schema_contracts();
+    font_page_install_contracts();
     appearance_session_contracts();
     appearance_customizer_contracts();
     controlcenter_layout_contracts();

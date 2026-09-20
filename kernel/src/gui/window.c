@@ -363,6 +363,12 @@ void wm_set_decorated(window_t *w, bool decorated)
 	int32_t after = wm_chrome_top(w->flags);
 	w->frame.y += before - after;
 	w->frame.h += after - before;
+	// Restore must interpret the saved content with the same chrome as the
+	// live frame; otherwise a titlebar toggle can manufacture a size refusal.
+	if (w->flags & GUI_WINDOW_MAXIMIZED) {
+		w->restoreFrame.y += before - after;
+		w->restoreFrame.h += after - before;
+	}
 	gui_damage_add_locked(rect_union(old, w->frame));
 }
 
@@ -388,8 +394,13 @@ void wm_set_maximized(window_t *w, bool maximized)
 		// example, after changing fonts). Keep the maximized state and saved
 		// rectangle until Restore can honor that size without clamping it.
 		rect_t target = wm_clamp_frame(w, w->restoreFrame);
-		if (target.w != w->restoreFrame.w || target.h != w->restoreFrame.h)
+		if (target.w != w->restoreFrame.w || target.h != w->restoreFrame.h) {
+			printd(DEBUG_GUI, "wm: window %u restore refused: saved content %dx%d, minimum %ux%u\n",
+			       w->id, w->restoreFrame.w - 2 * wm_border_width(w->flags),
+			       w->restoreFrame.h - wm_chrome_top(w->flags) - wm_border_width(w->flags),
+			       w->min_content_w, w->min_content_h);
 			return;
+		}
 		bool already_there = target.x == w->frame.x && target.y == w->frame.y &&
 		                     target.w == w->frame.w && target.h == w->frame.h;
 		if (already_there || wm_resize(w, target))

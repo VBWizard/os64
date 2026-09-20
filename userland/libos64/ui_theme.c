@@ -5,6 +5,7 @@
 #include "os64/fmt.h"
 #include "ui_envelope.h"
 #include "os64/mem.h"
+#include "os64/slurp.h"
 
 // ── the theme ───────────────────────────────────────────────────────────────
 
@@ -432,14 +433,17 @@ void os64_ui_theme_merge(os64_ui_theme_t *dst, const os64_ui_theme_t *src,
 
 bool os64_ui_theme_read_startup(os64_ui_theme_t *t)
 {
-    char *text = NULL;
+    char path[OS64_CONF_PATH_MAX];
+    if (os64_conf_find("theme.conf", path, sizeof(path)) < 0) return false;
+    uint8_t *text = NULL;
     size_t length = 0;
-    int64_t result = os64_conf_find_bytes("theme.conf", &text, &length);
-    if (result == OS64_CONF_NO_FILE) return false;
-    if (!result) result = os64_ui_theme_parse_status(t, text, length, false);
+    // Resolve once so the diagnostic names the file whose bytes we read.
+    os64_slurp_status_t read = os64_slurp(path, OS64_CONF_MAX - 1, &text, &length);
+    int64_t result = read ? OS64_CONF_IO_ERROR :
+        os64_ui_theme_parse_status(t, (const char *)text, length, false);
     os64_free(text);
     if (result < 0) {
-        os64_printf("libui: unusable startup theme; keeping existing theme\n");
+        os64_printf("libui: unusable startup theme %s; keeping existing theme\n", path);
         return false;
     }
     return true;

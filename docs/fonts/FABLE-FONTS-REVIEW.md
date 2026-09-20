@@ -5,10 +5,12 @@
 Opus and Quinn, including the subsequent P5-driven fixes. There is no need to
 switch to the earlier stage worktrees to review the delivered feature.
 
-Chris requested review of the combined work. Prior receipts are context, not
-instructions to exclude those components. In particular, F3 has no independent
-approval receipt, and the integrated F5/follow-up review remains pending.
-No mainline merge or push is implied by this handoff.
+Fable [accepted the combined review](FABLE-REVIEW-COMBINED.md) at `10e142d`
+with no P1/P2 findings. That review covers F3, F5 and the integration seams;
+F0–F2 and F4 retain their earlier receipts. Quinn's
+[follow-up](FABLE-COMBINED-REPLY.md) records the four nonblocking P3 fixes,
+the accompanying notes and fresh verification. No mainline merge or push is
+implied by these receipts.
 
 Start with [FONTS-OVERVIEW.md](FONTS-OVERVIEW.md) for the user-facing feature,
 then use this index to inspect contracts, implementation and evidence.
@@ -16,8 +18,9 @@ then use this index to inspect contracts, implementation and evidence.
 ## Full review range
 
 Pre-font base: **`3b82356413ab8f183bd6506febe8d06fea6e7de0`**, merged PR #109.
-Latest implementation at this handoff: **`020040b`**. Later commits completing
-this index are documentation only. From this checkout:
+Original handoff implementation: **`020040b`**, indexed at **`10e142d`**.
+The combined-review follow-up adds the fixes recorded in the reply above.
+From this checkout:
 
 ```sh
 git diff --stat 3b82356413ab8f183bd6506febe8d06fea6e7de0..HEAD
@@ -36,7 +39,7 @@ fixtures, build integration and later kernel Restore adjustment. The narrower
 | F1: Opus's FreeType backend plus Quinn's corrections | `userland/libfreetype/`, its `UPSTREAM_REVIEW.md` | [Original report](F1-REPORT.md), [B1 correction](F1-B1-REPORT.md), [Implementation review](F1-IMPLEMENTATION-REVIEW.md) |
 | F2: text layout/cache/drawing | `userland/libos64/text*.c` | [Report](F2-REPORT.md), [Fable acceptance](FABLE-REVIEW-F2.md) |
 | F2.5: shared provider and replacement transactions | [FONT_PROVIDER.md](../../FONT_PROVIDER.md), `font_provider.c`, `font_adopt.c` | [Report](F25-REPORT.md), [Foundation receipt](F25-FREEZE.md), [Opus handoff](OPUS-F4-HANDOFF.md) |
-| F3: terminal fonts | `userland/apps/gterm/` | [Report](F3-REPORT.md); independent review pending |
+| F3: terminal fonts | `userland/apps/gterm/` | [Report](F3-REPORT.md), [combined acceptance](FABLE-REVIEW-COMBINED.md) |
 | F4: Opus's widgets and Scribe plus review fixes | `userland/libos64/ui*.c`, `userland/apps/scribe/` | [Report](F4-REPORT.md), [Quinn review](F4-QUINN-REVIEW.md), `f4-evidence/c3-review-r2/` |
 | F5: configuration, installation, discovery, live settings | [FONT_SETTINGS.md](../../FONT_SETTINGS.md), `font_config.c`, `font_discovery.c`, `font_install.c`, `ui_font_settings.c`, Workshop | [Report](F5-REPORT.md), `f5-evidence/` |
 | Follow-ups: combined catalog, role-fit, adaptive settings, logging | See the sections below; includes `kernel/src/gui/window.c` | [Role-fit](F5-ROLE-FIT-FOLLOWUP.md), [Responsive layout](F5-RESPONSIVE-LAYOUT.md), [Log routing](F5-FONT-LOGGING.md) |

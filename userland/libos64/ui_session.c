@@ -272,8 +272,10 @@ int os64_font_settings_current(os64_font_config_t *out, uint64_t *generation)
     session_unlock();
     if (result) return result;
     if (read) {
-        os64_printf("fonts.conf: line %lu: %s; keeping usable fonts\n",
-                    (unsigned long)error.line, os64_font_config_status_name(read));
+        char line[256];
+        os64_snprintf(line, sizeof(line), "fonts.conf: line %lu: %s; keeping usable fonts",
+                      (unsigned long)error.line, os64_font_config_status_name(read));
+        os64_debug_log(line);
         return read == OS64_FONT_CONFIG_IO || read == OS64_FONT_CONFIG_NO_MEMORY ?
                OS64_UI_APPLY_IO : OS64_UI_APPLY_INVALID;
     }

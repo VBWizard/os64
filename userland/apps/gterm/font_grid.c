@@ -118,6 +118,8 @@ void gterm_grid_cell_at(const gterm_grid_t *g, int32_t x, int32_t y,
     uint32_t *row, uint32_t *col)
 {
     const os64_font_role_view_t *f = gterm_grid_font(g);
+    /* A grabbed selection drag can leave the window. Clamp to the edge cell
+     * so selection continues while the pointer is outside the surface. */
     uint32_t r = y < 0 ? 0 : (uint32_t)y / (uint32_t)f->row_height_px;
     uint32_t c = x < 0 ? 0 : (uint32_t)x / (uint32_t)f->cell_width_px;
     *row = r < g->rows ? r : g->rows - 1;

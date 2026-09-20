@@ -45,6 +45,8 @@
 #include "font_grid.h"
 #include "os64/font_settings.h"
 
+// Prefer a grid wide enough for top without wrapping its usual columns.
+// Pixel dimensions follow the selected font and are capped to the screen.
 #define WANT_COLS 100u
 #define WANT_ROWS 38u
 #define MAX_CELLS GTERM_MAX_CELLS
@@ -136,6 +138,8 @@ static void font_release(void *user, void *ptr, size_t bytes)
 
 static int64_t resize_pty(void *user, uint32_t cols, uint32_t rows)
 {
+	// Resize travels WM -> gterm -> PTY, which sends SIGWINCH to slave
+	// listeners so applications can reflow. See PTY.md.
 	(void)user;
 	return gMaster < 0 ? 0 : os64_pty_resize(gMaster, cols, rows);
 }
@@ -155,28 +159,28 @@ static os64_font_status_t replace_fonts(os64_font_set_t *candidate)
 
 static void refresh_font_settings(void)
 {
-    os64_font_config_t config;
-    uint64_t generation;
-    if (os64_font_settings_current(&config, &generation) != 0) return;
-    if (gFontSettingsReady && gFontGeneration == generation) return;
-    os64_font_set_t *candidate = NULL;
-    os64_font_config_error_t error;
-    if (os64_font_config_prepare(gText, &config, &candidate, &error)) {
-        char line[256];
-        os64_snprintf(line, sizeof(line), "gterm: font line %lu: %s; keeping current grid",
-                    (unsigned long)error.line, os64_font_config_status_name(error.status));
-        os64_debug_log(line);
-        return;
-    }
-    os64_font_status_t status = replace_fonts(candidate);
-    os64_font_set_release(candidate);
-    if (!status) { gFontSettingsReady = true; gFontGeneration = generation; }
-    else {
-        char line[128];
-        os64_snprintf(line, sizeof(line),
-                      "gterm: font/grid change refused (%u); keeping current grid", status);
-        os64_debug_log(line);
-    }
+	os64_font_config_t config;
+	uint64_t generation;
+	if (os64_font_settings_current(&config, &generation) != 0) return;
+	if (gFontSettingsReady && gFontGeneration == generation) return;
+	os64_font_set_t *candidate = NULL;
+	os64_font_config_error_t error;
+	if (os64_font_config_prepare(gText, &config, &candidate, &error)) {
+		char line[256];
+		os64_snprintf(line, sizeof(line), "gterm: font line %lu: %s; keeping current grid",
+					(unsigned long)error.line, os64_font_config_status_name(error.status));
+		os64_debug_log(line);
+		return;
+	}
+	os64_font_status_t status = replace_fonts(candidate);
+	os64_font_set_release(candidate);
+	if (!status) { gFontSettingsReady = true; gFontGeneration = generation; }
+	else {
+		char line[128];
+		os64_snprintf(line, sizeof(line),
+					  "gterm: font/grid change refused (%u); keeping current grid", status);
+		os64_debug_log(line);
+	}
 }
 
 static void cell_at(int32_t x, int32_t y, uint32_t *row, uint32_t *col)
@@ -199,6 +203,8 @@ static void render(os64_draw_ctx_t *ctx)
 			gterm_grid_draw_cell(&gGrid, &ctx->surf, r, c, (uint8_t)cell->ch, cell->charset, fg);
 		}
 	}
+	// Snapshots contain cells and cursor coordinates, not the kernel
+	// renderer's cursor pixels; the graphical terminal paints its own.
 	if (gHdr.cur_row < gHdr.rows && gHdr.cur_col < gHdr.cols)
 		os64_draw_fill_rect(&ctx->surf,
 			gterm_grid_cell_rect(&gGrid, gHdr.cur_row, gHdr.cur_col), 0xffc0c0c0u);
@@ -340,14 +346,14 @@ int main(int argc, char **argv)
 	gGrid = (gterm_grid_t){.memory = options.memory, .resize = resize_pty,
 		.invalidate = invalidate_grid};
 	os64_font_status_t startup = os64_font_context_create(&options, &gText);
-    if (!startup) {
-        os64_font_config_t config;
-        os64_font_config_error_t error;
-        if (!os64_font_settings_current(&config, &gFontGeneration) &&
-            !os64_font_config_prepare(gText, &config, &initial, &error))
-            gFontSettingsReady = true;
-        else startup = os64_font_set_prepare(gText, NULL, &initial);
-    }
+	if (!startup) {
+		os64_font_config_t config;
+		os64_font_config_error_t error;
+		if (!os64_font_settings_current(&config, &gFontGeneration) &&
+			!os64_font_config_prepare(gText, &config, &initial, &error))
+			gFontSettingsReady = true;
+		else startup = os64_font_set_prepare(gText, NULL, &initial);
+	}
 	if (startup != OS64_FONT_OK) {
 		os64_text_destroy(gText);
 		os64_printf("gterm: cannot prepare default font\n");
@@ -448,10 +454,10 @@ int main(int argc, char **argv)
 		bool repaint = false;   // the selection changed; the grid may not have
 		while ((erc = os64_gui_event_poll(win, &ev)) == 1)
 		{
-            if (ev.type == OS64_GUI_EVENT_APPEARANCE) {
-                refresh_font_settings();
-                repaint = true;
-            }
+			if (ev.type == OS64_GUI_EVENT_APPEARANCE) {
+				refresh_font_settings();
+				repaint = true;
+			}
 			else if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii != 0)
 			{
 				// Typing means you are done looking: the highlight dies on

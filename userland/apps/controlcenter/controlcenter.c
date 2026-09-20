@@ -110,14 +110,6 @@ static void next(os64_ui_widget_t *w, void *user)
     layout(&gUi);
 }
 
-static void fit_text(char *dst, size_t cap, const char *src, int pixels)
-{
-    /* Widget clipping uses measured glyphs. Cell-based truncation would cut
-     * UTF-8 bytes and mismeasure a proportional interface face. */
-    (void)pixels;
-    os64_strcopy(dst, cap, src);
-}
-
 typedef struct {
     int row, button, nav, top, footer, min_w, min_h, width, height;
     int back_w, prev_w, next_w;
@@ -181,7 +173,8 @@ static void arrange(const center_layout_t *m,bool staged)
         os64_ui_set_hidden(&gUi, &gRows[i], i>=page || n<0);
         if(gRows[i].hidden) continue;
         gNodes[i]=n;
-        fit_text(gCaptions[i],sizeof(gCaptions[i]),gMenu.nodes[n].label,W-80);
+        // Copy the UTF-8 label; the widget clips it using measured glyphs.
+        os64_strcopy(gCaptions[i],sizeof(gCaptions[i]),gMenu.nodes[n].label);
         n=gMenu.nodes[n].next;
     }
     while(n>=0 && gMenu.nodes[n].kind==OS64_MENU_SEPARATOR) n=gMenu.nodes[n].next;
@@ -189,7 +182,7 @@ static void arrange(const center_layout_t *m,bool staged)
     os64_ui_set_hidden(&gUi, &gBack, gDepth==0);
     os64_ui_set_hidden(&gUi, &gPrev, gOffset==0);
     os64_ui_set_hidden(&gUi, &gNext, !gMore);
-    fit_text(gStatusText,sizeof(gStatusText),gMessage,W-48);
+    os64_strcopy(gStatusText,sizeof(gStatusText),gMessage);
     os64_ui_mark_dirty(&gUi,&gRoot);
 }
 static void layout(os64_ui_t *ui)

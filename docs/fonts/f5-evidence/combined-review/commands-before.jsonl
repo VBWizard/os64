@@ -1,0 +1,1 @@
+[["key", "ctrl-alt-f2"], ["enter", "/tests/windowmintest --hold > /home/restore-before.txt &"], ["wait", 2], ["key", "alt-f8"], ["key", "v"], ["key", "ctrl-alt-t"], ["key", "ctrl-alt-m"], ["key", "ctrl-alt-t"], ["key", "ctrl-alt-m"], ["wait", 1], ["key", "v"], ["snap", "restore-before"], ["key", "q"], ["wait", 1], ["hmp", "quit"]]
