@@ -1,0 +1,18 @@
+F3 grid 100x38 cell 8x16
+F3 PASS: font adoption committed and invalidated old snapshot
+F3 grid 114x40 cell 7x15
+F3 PASS: pointer selection copied exact bytes
+F3 PASS: font adoption committed and invalidated old snapshot
+F3 grid 47x18 cell 17x33
+F3 PASS: pointer selection copied exact bytes
+F3 PASS: real PTY refusal preserved font/grid/selection
+F3 PASS: pointer selection copied exact bytes
+F3 PASS: proportional terminal rejected
+F3 grid 60x22 cell 17x33
+F3 grid 47x18 cell 17x33
+F3 PASS: font adoption committed and invalidated old snapshot
+F3 grid 114x40 cell 7x15
+F3 PASS: font adoption committed and invalidated old snapshot
+F3 grid 47x18 cell 17x33
+F3 PASS: pointer selection copied exact bytes
+F3 PASS: fixture finished

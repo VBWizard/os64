@@ -1,0 +1,19 @@
+measure:
+planner measurement allocation denied; adoption=5 measure_status=5 staged_width=0 actual_width=32
+
+register:
+registration status=0 (0 would be a silent success)
+registration allocation denied; adoption=0 planner_calls=1 (expected refusal or registered planner)
+
+clip:
+primary row=[20,30), painted y=[20,29], pixels outside row=0
+
+paint:
+installed face width=96; paint allocation denied, rendered pen=0
+
+cross:
+foreign-context bind=1 widths=32 (a refusal is the correct answer)
+
+release:
+release while the caller still holds the candidate: status=7 (7=BUSY, owner kept)
+after releasing the candidate: status=0

@@ -3,6 +3,9 @@
 #include "os64/conf.h"
 #include "os64/str.h"
 #include "os64/fmt.h"
+#include "ui_envelope.h"
+#include "os64/mem.h"
+#include "os64/slurp.h"
 
 // ── the theme ───────────────────────────────────────────────────────────────
 
@@ -167,6 +170,32 @@ static bool session_key(const theme_key_t *key)
            key->offset == __builtin_offsetof(os64_ui_theme_t, control_radius);
 }
 
+unsigned ui_theme_key_owner(const char *name)
+{
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i) {
+        const theme_key_t *key = &kThemeKeys[i];
+        if (!os64_streq(name, key->key)) continue;
+        if (key->kind == THEME_COLOR) return OS64_UI_COMPONENT_PALETTE;
+        return session_key(key) ? OS64_UI_COMPONENT_TREATMENT : UI_ENVELOPE_GEOMETRY;
+    }
+    return 0;
+}
+
+static int64_t theme_text(const char *text, size_t length, char **out)
+{
+    *out = NULL;
+    os64_font_config_t fonts;
+    bool present = false;
+    int64_t result = ui_envelope_fonts(text, length, &fonts, &present, NULL);
+    if (result < 0) return result;
+    char *filtered = os64_malloc(length + 1);
+    if (!filtered) return OS64_CONF_NO_MEMORY;
+    result = ui_envelope_select(text, length, UI_ENVELOPE_THEME, false, filtered, length + 1);
+    if (result < 0) os64_free(filtered);
+    else *out = filtered;
+    return result;
+}
+
 bool os64_ui_theme_valid(const os64_ui_theme_t *t)
 {
     for (size_t i = 0; i < THEME_KEY_COUNT; ++i) {
@@ -212,7 +241,7 @@ static bool theme_setting(const char *name, const char *value, void *user)
 // Presence is carried by key names, not table indices, in the shared payload.
 // An explicit startup marker permits missing live keys to retain app defaults.
 #define STARTUP_OVERLAY "inherit = startup\n"
-int64_t os64_ui_theme_decode_session(os64_ui_theme_t *t, uint64_t *fields,
+static int64_t theme_decode_session_known(os64_ui_theme_t *t, uint64_t *fields,
                                      bool *inherited, const char *text, size_t length)
 {
     if (!text) return OS64_CONF_BAD_SETTING;
@@ -242,6 +271,17 @@ int64_t os64_ui_theme_decode_session(os64_ui_theme_t *t, uint64_t *fields,
     return 0;
 }
 
+int64_t os64_ui_theme_decode_session(os64_ui_theme_t *t, uint64_t *fields,
+                                     bool *inherited, const char *text, size_t length)
+{
+    char *filtered;
+    int64_t n = theme_text(text, length, &filtered);
+    if (n < 0) return n;
+    int64_t result = theme_decode_session_known(t, fields, inherited, filtered, (size_t)n);
+    os64_free(filtered);
+    return result;
+}
+
 int64_t os64_ui_theme_parse_status(os64_ui_theme_t *t, const char *text, size_t length,
                                   bool session)
 {
@@ -249,8 +289,12 @@ int64_t os64_ui_theme_parse_status(os64_ui_theme_t *t, const char *text, size_t 
         uint64_t fields; bool inherited;
         return os64_ui_theme_decode_session(t, &fields, &inherited, text, length);
     }
+    char *filtered;
+    int64_t n = theme_text(text, length, &filtered);
+    if (n < 0) return n;
     theme_parse_t p = {.candidate = *t};
-    int64_t result = os64_conf_parse(text, length, theme_setting, &p);
+    int64_t result = os64_conf_parse(filtered, (size_t)n, theme_setting, &p);
+    os64_free(filtered);
     if (result < 0) return result;
     if (p.bad || !os64_ui_theme_valid(&p.candidate)) return OS64_CONF_BAD_SETTING;
     *t = p.candidate;
@@ -265,9 +309,13 @@ bool os64_ui_theme_parse(os64_ui_theme_t *t, const char *text, size_t length,
 
 int64_t os64_ui_theme_parse_saved_status(os64_ui_theme_t *t, const char *text, size_t length)
 {
+    char *filtered;
+    int64_t n = theme_text(text, length, &filtered);
+    if (n < 0) return n;
     theme_parse_t p = {.candidate = *t};
     p.candidate.control_radius = 0;
-    int64_t result = os64_conf_parse(text, length, theme_setting, &p);
+    int64_t result = os64_conf_parse(filtered, (size_t)n, theme_setting, &p);
+    os64_free(filtered);
     if (result < 0) return result;
     if (p.bad || !os64_ui_theme_valid(&p.candidate)) return OS64_CONF_BAD_SETTING;
     for (size_t i = 0; i < THEME_KEY_COUNT; ++i)
@@ -314,20 +362,24 @@ int64_t os64_ui_theme_encode(const os64_ui_theme_t *t, char *text, size_t cap)
 
 int64_t os64_ui_theme_snapshot_startup(char *text, size_t cap)
 {
-    theme_parse_t p = {0};
-    os64_ui_theme_defaults(&p.candidate);
-    int64_t result = os64_conf_find_read("theme.conf", theme_setting, &p, NULL, 0);
-    // Missing or malformed configuration has no overrides. Transient failures
-    // must not freeze an empty overlay in place of a valid startup file.
+    char *original = NULL;
+    size_t length = 0;
+    int64_t result = os64_conf_find_bytes("theme.conf", &original, &length);
     if (result == OS64_CONF_NO_MEMORY || result == OS64_CONF_IO_ERROR) return result;
-    if (result < 0 || p.bad || !os64_ui_theme_valid(&p.candidate)) {
-        p.seen = 0;
-        os64_ui_theme_defaults(&p.candidate);
-    }
+    os64_ui_theme_t theme;
+    os64_ui_theme_defaults(&theme);
+    int64_t parsed = result == 0 ? os64_ui_theme_parse_status(&theme, original, length, false) : result;
+    if (parsed == OS64_CONF_NO_MEMORY) { os64_free(original); return parsed; }
+    bool usable = parsed == 0;
     const size_t prefix = sizeof(STARTUP_OVERLAY) - 1;
-    if (cap <= prefix) return OS64_CONF_TRUNCATED;
+    if (cap <= prefix) { os64_free(original); return OS64_CONF_TRUNCATED; }
     os64_memcpy(text, STARTUP_OVERLAY, prefix);
-    int64_t n = theme_encode(&p.candidate, text + prefix, cap - prefix, true, p.seen);
+    int64_t n = 0;
+    if (usable) n = ui_envelope_select(original, length,
+        OS64_UI_COMPONENT_PALETTE | OS64_UI_COMPONENT_TREATMENT | UI_ENVELOPE_FONTS,
+        true, text + prefix, cap - prefix);
+    else text[prefix] = 0;
+    os64_free(original);
     return n < 0 ? n : (int64_t)prefix + n;
 }
 
@@ -381,15 +433,19 @@ void os64_ui_theme_merge(os64_ui_theme_t *dst, const os64_ui_theme_t *src,
 
 bool os64_ui_theme_read_startup(os64_ui_theme_t *t)
 {
-    theme_parse_t p = {.candidate = *t};
-    char path[OS64_CONF_PATH_MAX] = {0};
-    int64_t result = os64_conf_find_read("theme.conf", theme_setting, &p, path, sizeof(path));
-    if (result == OS64_CONF_NO_FILE) return false;
-    if (result < 0 || p.bad || !os64_ui_theme_valid(&p.candidate)) {
+    char path[OS64_CONF_PATH_MAX];
+    if (os64_conf_find("theme.conf", path, sizeof(path)) < 0) return false;
+    uint8_t *text = NULL;
+    size_t length = 0;
+    // Resolve once so the diagnostic names the file whose bytes we read.
+    os64_slurp_status_t read = os64_slurp(path, OS64_CONF_MAX - 1, &text, &length);
+    int64_t result = read ? OS64_CONF_IO_ERROR :
+        os64_ui_theme_parse_status(t, (const char *)text, length, false);
+    os64_free(text);
+    if (result < 0) {
         os64_printf("libui: unusable startup theme %s; keeping existing theme\n", path);
         return false;
     }
-    *t = p.candidate;
     return true;
 }
 

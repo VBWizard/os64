@@ -30,8 +30,10 @@ static void checkbox_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
             os64_draw_fill_rect(&ctx->surf,
                 (os64_gui_rect_t){x + 2 + i, y + 1 - i / 2, 1, 2}, t->button_fg);
     }
-    os64_draw_text_clipped(&ctx->surf, w->bounds, w->bounds.x + size + t->gap,
-        w->bounds.y + (w->bounds.h - t->font_h) / 2,
+    os64_ui_t *ui = os64_ui_of(w);
+    os64_ui_draw_text(ui, &w->run, OS64_FONT_ROLE_UI, &ctx->surf, w->bounds,
+        w->bounds.x + size + t->gap,
+        w->bounds.y + (w->bounds.h - os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI)) / 2,
         w->text ? w->text : "", caption_length(w->text), t->label_fg, t->panel_bg);
 }
 
@@ -49,8 +51,17 @@ static bool checkbox_event(os64_ui_widget_t *w, os64_ui_t *ui,
     return os64_ui_button_class.event(w, ui, ev);
 }
 
+// The box and its caption share a row, so the control is one row tall plus
+// the theme's padding — the same arithmetic a button uses.
+static void checkbox_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
+{
+    w->natural_h = os64_ui_control_min_height(ui);
+}
+
 const os64_ui_class_t os64_ui_checkbox_class = {
-    "checkbox", checkbox_paint, checkbox_event, NULL
+    "checkbox", checkbox_paint, checkbox_event, NULL,
+    os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption,
+    NULL, checkbox_metrics
 };
 
 void os64_ui_checkbox(os64_ui_checkbox_t *cb, const char *text, bool checked,
@@ -203,7 +214,7 @@ static bool slider_event(os64_ui_widget_t *w, os64_ui_t *ui,
 }
 
 const os64_ui_class_t os64_ui_slider_class = {
-    "slider", slider_paint, slider_event, slider_cancel
+    "slider", slider_paint, slider_event, slider_cancel, NULL, NULL, NULL, NULL, NULL
 };
 
 void os64_ui_slider(os64_ui_slider_t *sl, int32_t min, int32_t max,

@@ -44,6 +44,7 @@
 #include <stdbool.h>
 #include "os64/draw.h"
 #include "os64/gui.h"
+#include "os64/font_adopt.h"
 
 // ── The theme table ─────────────────────────────────────────────────────────
 // Every color and metric libui reads, in one place. theme.conf keys are the
@@ -165,6 +166,12 @@ bool os64_ui_theme_name_valid(const char *name);
 // List returns a count or a negative status; load leaves its output on failure.
 int os64_ui_theme_list(os64_ui_theme_entry_t *entries, size_t cap);
 int os64_ui_theme_load(const char *name, os64_ui_theme_t *theme);
+// Retain the raw composition alongside the editable theme. Save replaces known
+// theme keys and preserves other settings/comments from that source. Passing
+// NULL base on replacement preserves the destination's existing unowned lines.
+int os64_ui_theme_load_snapshot(const char *, os64_ui_theme_t *, char *, size_t, size_t *);
+int os64_ui_theme_save_snapshot(const char *, const os64_ui_theme_t *,
+                                const char *, size_t, bool replace);
 // Create uses no-replace publication. Explicit replacement requires atomic
 // filesystem replacement; concurrent replacements are last-publication-wins.
 int os64_ui_theme_save(const char *name, const os64_ui_theme_t *theme, bool replace);
@@ -217,6 +224,41 @@ typedef struct os64_ui_class
                   const os64_gui_event_t *ev);
     // Optional private-state reset when focus or pointer ownership is lost.
     void (*cancel)(os64_ui_widget_t *w);
+    // Optional: re-derive this widget's font-dependent geometry. libui calls
+    // it when the widget joins a tree and again whenever the window's face
+    // changes, before any layout runs.
+    //
+    // Stage this widget's text against the candidate face, apply it, throw
+    // it away. THIS IS WHERE A WIDGET IS ALLOWED TO FAIL: laying text out
+    // allocates, a commit may not, and a paint has nowhere to report to —
+    // so the runs the next paint will need are built here, while "no" still
+    // means the window keeps the face it has. A widget whose text is one
+    // caption gets this for free (see os64_ui_stage_caption); one that
+    // draws a list of app-supplied strings stages the rows it can show.
+    os64_font_status_t (*prepare)(os64_ui_widget_t *w, os64_ui_t *ui);
+    void (*commit)(os64_ui_widget_t *w);
+    void (*discard)(os64_ui_widget_t *w);
+
+    // Let go of everything this class retains, staged and active alike.
+    // Called for the whole tree when the window's fonts are released. A
+    // class that keeps runs anywhere other than `run`/`run_staged` — a list
+    // keeps one per visible row — has to be asked, because the generic
+    // teardown cannot see its storage, and a run it keeps holds the text
+    // context BUSY for good.
+    void (*destroy)(os64_ui_widget_t *w);
+
+    // IT REPORTS WHAT THE WIDGET NEEDS; IT DOES NOT ALLOCATE THE RECTANGLE.
+    // A label, a button and a checkbox are each one row of text plus
+    // furniture, so the class is the only thing that can size them under a
+    // face the theme cannot carry — but it writes `natural_h`, and the
+    // layout decides what `bounds.h` becomes. It must not allocate and must
+    // not fail: it runs at commit, where there is no way to report either.
+    // Fallible work belongs to preparation.
+    //
+    // It is also where a widget caches an answer the theme cannot give:
+    // os64_ui_listbox_rows is handed a THEME and needs a row pitch, so the
+    // listbox stores its own.
+    void (*metrics)(os64_ui_widget_t *w, os64_ui_t *ui);
 } os64_ui_class_t;
 
 struct os64_ui_widget
@@ -237,6 +279,42 @@ struct os64_ui_widget
     void (*on_click)(os64_ui_widget_t *w, void *user);
     void *user;
 
+    // WHAT THIS WIDGET WANTS, AND WHAT IT WAS GIVEN, are different things.
+    // `natural_h` is the height this kind of widget needs under the current
+    // face — a minimum, re-derived by its class and never allocated storage.
+    // `bounds.h` is what the layout handed it. `auto_h` says which one a
+    // layout should use, and it is an EXPLICIT policy rather than a guess:
+    // a height of zero cannot be told apart from one a layout wrote last
+    // time, and an application must not have to repair its own choice after
+    // every attach and font change. Constructors set it for the controls
+    // that are one row of text; os64_ui_widget_fixed_height clears it.
+    int32_t natural_h;
+    bool    auto_h;
+
+    // WHERE THIS WIDGET WILL BE if the adoption in flight succeeds, staged
+    // by the application's planner and applied by commit. Live `bounds`
+    // never move before commit — but a widget preparing its text needs to
+    // know how much room it is ABOUT to have, or a list that grows stages
+    // runs for the rows it can show today and has none for the rest.
+    os64_gui_rect_t bounds_staged;
+    bool            bounds_staged_valid;
+
+    // The run this widget's text is drawn from, retained under the active
+    // face, and the one prepared against a candidate during adoption. Both
+    // are os64_text_run_t*, opaque here because a widget does not open them
+    // — libui lays them out and swaps `staged` in at commit, which is what
+    // lets a commit allocate nothing and the first paint after it be
+    // coherent. Laying text out at paint time could fail, and a paint has
+    // nowhere to report a failure to.
+    void *run, *run_staged;
+
+    // The UI this widget belongs to, threaded in when it joins a tree.
+    // A paint routine is handed only (widget, canvas, theme) — the theme
+    // cannot carry a font, so this is how a widget reaches the window's
+    // binding to measure a string. NULL until it is attached, which reads
+    // as "no binding" and draws through the bitmap painter.
+    os64_ui_t *ui;
+
     // Tree links (intrusive — the app owns the nodes, libui only threads
     // them). Children paint and hit-test in list order; last child is
     // "topmost" for a hit, matching paint order.
@@ -251,6 +329,26 @@ struct os64_ui
 {
     os64_draw_ctx_t *ctx;        // the window's draw context (app-owned)
     os64_ui_theme_t  theme;
+    // Opaque libui-owned binding, created on first text/context use.
+    void            *font;
+    // Optional production settings participant. Previews and injected test
+    // consumers opt out by leaving the callback NULL.
+    void (*font_session)(os64_ui_t *);
+    uint64_t font_generation;
+    bool font_settings_ready;
+    int font_settings_result;
+
+    // The application's layout planner, set by os64_ui_font_planner. It
+    // lives HERE, in storage the application already owns, so registering
+    // one cannot fail for want of memory — a planner that silently failed
+    // to register would let a later adoption install a face and leave the
+    // window's own layout untouched, which is the exact half-change the
+    // transaction exists to prevent. Set it through the function, which
+    // checks that the trio is whole.
+    os64_font_status_t (*font_plan)(os64_ui_t *ui, void *user, void **out);
+    void (*font_plan_commit)(os64_ui_t *ui, void *user, void *plan);
+    void (*font_plan_discard)(os64_ui_t *ui, void *user, void *plan);
+    void *font_plan_user;
     uint64_t appearance_generation; // installed by this context, not its siblings
     bool follow_session;           // false for independent draft previews
     os64_ui_widget_t *root;
@@ -281,13 +379,287 @@ struct os64_ui
     bool             quit;       // set by the default close handling; read by os64_ui_run
 };
 
+// ── the window's fonts (F4; FONT_PROVIDER.md is the contract) ───────────────
+// A window measures and paints text through an immutable role set: UI for
+// labels, buttons, list rows and fields; DOCUMENT for textviews. The set is
+// F5's to resolve from configuration — until then a window binds the builtin
+// 8x16 face on first use, which is the face libui always drew with.
+//
+// THE THEME'S font.w/font.h ARE NOT THIS. They stay 8/16 and describe the
+// bitmap painter that os64_draw_text still uses; they are not selectors and
+// they do not follow the bound face. Ask these calls for live metrics.
+
+typedef struct
+{
+    int32_t row_h;     // row pitch: the primary's line box, not a nominal size
+    int32_t baseline;  // from the row's top to the baseline
+    int32_t cell_w;    // fixed cell width; zero for UI and DOCUMENT
+} os64_ui_font_metrics_t;
+
+// The window's text context, created on first use and owned by libui. F5 and
+// the font fixtures prepare their candidate sets on THIS context. A set may
+// only be bound to a window whose context it was prepared on — a foreign
+// candidate is refused rather than measured through the wrong engine.
+os64_text_context_t *os64_ui_font_context(os64_ui_t *ui);
+
+// Lend this window an APPLICATION-OWNED context instead, so several windows
+// can share one engine and one glyph cache while each holds its own active
+// set. That is the usual shape for a program with more than one window: a
+// context is not an active-font singleton, and independent previews come
+// from separate SETS, not separate engines.
+//
+// libui borrows it and never destroys it; the application outlives every
+// window using it and destroys it last. Refused once this window already
+// has a context with anything in it, because moving a window between
+// engines would strand the runs it is holding.
+os64_font_status_t os64_ui_font_borrow_context(os64_ui_t *ui,
+                                               os64_text_context_t *text);
+
+// Install a set immediately, taking a reference. This is the STARTUP door —
+// there is no old layout to preserve, so it cannot half-succeed. A live
+// replacement goes through os64_font_adopt with the consumer below, which is
+// what keeps the document's bytes, focus and selection across the change.
+os64_font_status_t os64_ui_font_bind(os64_ui_t *ui, os64_font_set_t *set);
+
+// The whole-window consumer: prepare stages runs and geometry, commit swaps
+// them without allocating, abort throws the staging away. Hand it to
+// os64_font_adopt; the plan behind it is libui's and has no public shape.
+void os64_ui_font_consumer(os64_ui_t *ui, os64_font_consumer_t *out);
+// Start following shared font settings after the widget tree and application
+// planner exist. Refusal keeps current fonts; another call or appearance event
+// retries. Without an app planner, fixed text-row heights are checked before
+// adoption. Result is zero or UI_APPLY_* and is also kept on the UI context.
+int os64_ui_font_follow(os64_ui_t *ui);
+
+// The app's own layout, planned with the CANDIDATE metrics before anything
+// live moves. libui calls `plan` inside prepare: measure with
+// os64_ui_text_measure and os64_ui_font_metrics, which report the candidate
+// for the duration, and stage the result without touching a live bound.
+// Anything but OS64_FONT_OK fails the whole adoption and leaves the old
+// state as it was — return LIMIT when the layout will not fit the content
+// area, NO_MEMORY when staging could not be allocated, so the caller can
+// tell "too big" from "out of room" (they deserve different next moves).
+// Measure from the calls above, NOT from widget bounds: those still
+// describe the face the window is wearing, and only change at commit.
+// `commit` applies what was planned and cannot fail; `discard` frees it.
+// ALL THREE OR NONE: a plan that owns anything needs both the door that
+// applies it and the door that throws it away, so a partial trio is
+// BAD_ARGUMENT and all-NULL is how a window says it has no layout to stage.
+// It cannot fail for want of memory — the trio is stored in the os64_ui_t
+// itself — so the only refusal is a malformed one.
+os64_font_status_t os64_ui_font_planner(os64_ui_t *ui,
+                          os64_font_status_t (*plan)(os64_ui_t *ui, void *user, void **out),
+                          void (*commit)(os64_ui_t *ui, void *user, void *plan),
+                          void (*discard)(os64_ui_t *ui, void *user, void *plan),
+                          void *user);
+
+// Live metrics for a role. These never build a font engine: a widget derives
+// its geometry the moment it joins a tree, and a tree is often laid out
+// before anything is drawn. False therefore means "this window is not
+// wearing a set" — it has drawn no text yet, or its engine refused — and the
+// metrics describe the 8x16 bitmap cell those windows draw with. A caller
+// that just wants numbers can ignore the return.
+bool os64_ui_font_metrics(os64_ui_t *ui, os64_font_role_t role,
+                          os64_ui_font_metrics_t *out);
+int32_t os64_ui_font_row_height(os64_ui_t *ui, os64_font_role_t role);
+
+// A string's advance in whole pixels, rounded outward so a width that
+// decides whether text fits never comes back short of its own ink.
+//
+// IT RETURNS A STATUS BECAUSE MEASURING CAN FAIL. Laying a string out
+// allocates, and a window wearing a real face has no honest answer when
+// that allocation is refused — the 8x16 cell is not a smaller version of
+// DejaVu, it is a different number (`WWWW` is 32 pixels against 96). A
+// planner that swallowed the failure would stage a layout measured in a
+// font nobody is wearing and hand the coordinator a successful plan. An
+// unbound window is the one case with a real answer: it draws with the
+// bitmap cell, so that is what it measures.
+os64_font_status_t os64_ui_text_measure(os64_ui_t *ui, os64_font_role_t role,
+                                        const char *s, size_t len, int32_t *out);
+
+// Paint one line at (x, top_y) — top, not baseline, which is what every
+// caller already has. Fills the run's box with `bg` first, then the glyphs,
+// CLIPPED TO THE PRIMARY ROW: the row's pitch comes from the primary face
+// and does not grow for a taller fallback or a missing-glyph marker, so
+// what does not fit the row is cut rather than allowed to paint over the
+// line above. The caller's clip still bounds it horizontally, overhang and
+// all. Returns the pen's x after the run.
+//
+// `run_slot` is WHERE THIS TEXT'S RETAINED RUN LIVES — a widget's own `run`
+// for a caption, a row's slot for a list, NULL for text nobody caches. The
+// run there is reused when it still says what `s` says and re-laid-out into
+// the same slot when it does not, so app-supplied text that changes without
+// notice stays correct without a paint having to be told.
+//
+// A window wearing a face whose text cannot be laid out paints NOTHING
+// rather than substituting a different font's glyphs, and records the
+// failure for os64_ui_font_status.
+//
+// This LOOKS THE RENDERING UP each time it is called: a painter that only
+// draws wants exactly that. A painter that measures or places anything
+// first — a centred caption, a caret, a highlight — must not call it after
+// measuring. Such a painter resolves the choice once, with
+// os64_ui_run_resolve or os64_ui_run_width, and draws that choice with
+// os64_ui_draw_run.
+int32_t os64_ui_draw_text(os64_ui_t *ui, void **run_slot,
+                          os64_font_role_t role,
+                          os64_gui_surface_t *dst, os64_gui_rect_t clip,
+                          int32_t x, int32_t top_y, const char *s, size_t len,
+                          uint32_t fg, uint32_t bg);
+
+// Draw ONE RENDERING ALREADY CHOSEN, as os64_ui_draw_text draws: `run`, or
+// with NULL the bitmap cell, which is how a window with no face draws. It
+// lays nothing out and looks nothing up.
+//
+// WHY THAT MATTERS: whether a window has a face is not settled until its
+// binding is made, and a binding that could not be made is tried again on
+// the next lookup. Two lookups in one paint can therefore disagree — the
+// caret placed in bitmap cells, one per byte, and the text drawn by a run,
+// one glyph per letter, so the two part at the first multi-byte letter. The
+// rendering that placed the overlays is the one drawn.
+int32_t os64_ui_draw_run(os64_ui_t *ui, void *run, os64_font_role_t role,
+                         os64_gui_surface_t *dst, os64_gui_rect_t clip,
+                         int32_t x, int32_t top_y, const char *s, size_t len,
+                         uint32_t fg, uint32_t bg);
+
+// The set this window holds (borrowed, NULL before first use), the status
+// that explains an absent set, and the engine's live bytes — the last for
+// fixtures that prove a released binding owes nothing.
+os64_font_set_t *os64_ui_font_set(os64_ui_t *ui);
+os64_font_status_t os64_ui_font_status(const os64_ui_t *ui);
+size_t os64_ui_font_live_bytes(const os64_ui_t *ui);
+
+// Re-derive every widget's cached geometry from the current binding. Called
+// for you when the set changes; an app needs it only after building a tree
+// under a set it bound earlier.
+void os64_ui_font_restamp(os64_ui_t *ui);
+
+// TEAR THE WINDOW'S FONTS DOWN. It drops every run the widget tree retains,
+// drops the window's set, and — if libui built the context — destroys it.
+// An app that simply exits need not call this; it exists so a fixture can
+// close the loop on the engine's accounting, and so a program that outlives
+// its windows can give an engine back.
+//
+// THIS IS DESTRUCTIVE, AND BUSY MEANS INCOMPLETE, NOT REFUSED. By the time
+// the context is asked to die its set and runs are already gone, so the
+// window is no longer wearing anything and is not usable as it was —
+// measuring through it afterwards answers with the bitmap cell, because
+// that is now the truth about it. BUSY says something OUTSIDE this window
+// is still alive on the same context: a candidate set the caller retained,
+// a run it took. The binding is that context's ALLOCATOR and is therefore
+// kept, so those survivors have somewhere to free themselves to; release
+// them and call again to finish. Nothing here is a way to ask "can I?"
+// without committing to it — for that, do not call it.
+os64_font_status_t os64_ui_font_release(os64_ui_t *ui);
+
 // Bind a UI to a window's draw context and load the theme. root may be set
 // afterwards (os64_ui_set_root marks everything dirty).
 void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx);
 void os64_ui_set_root(os64_ui_t *ui, os64_ui_widget_t *root);
 
-// Attach a child at the END of parent's list (paints last = on top).
+// Attach a child at the END of parent's list (paints last = on top). The
+// child (and its own subtree) joins the parent's UI, so it can measure text
+// before the first paint.
 void os64_ui_add_child(os64_ui_widget_t *parent, os64_ui_widget_t *child);
+
+// The UI a widget belongs to — what a paint routine or a metrics callback
+// asks when it needs the window's fonts. NULL for an unattached widget.
+static inline os64_ui_t *os64_ui_of(os64_ui_widget_t *w) { return w->ui; }
+
+// Give a widget a height of the application's choosing, and say so: the
+// layout stops sizing it from the face, and a font change leaves it alone.
+void os64_ui_widget_fixed_height(os64_ui_widget_t *w, int32_t h);
+
+// ── staging a layout inside a font transaction ──────────────────────────────
+// An application planner runs BEFORE the widgets prepare their text, so what
+// it stages here is what they prepare against. Live bounds do not move until
+// commit, and an abort throws the staging away.
+
+// Publish the rectangle this widget will have if the adoption succeeds.
+void os64_ui_widget_stage_bounds(os64_ui_widget_t *w, os64_gui_rect_t bounds);
+// What a class's prepare should assume it will have: the staged rectangle
+// during a transaction, the live one at any other time.
+os64_gui_rect_t os64_ui_widget_planned_bounds(const os64_ui_widget_t *w);
+// os64_ui_stack_vertical's arithmetic, staged instead of assigned — what a
+// planner calls where it would otherwise have laid the window out directly.
+void os64_ui_stack_vertical_staged(os64_ui_t *ui, os64_ui_widget_t *parent);
+
+// The one-caption case of the class trio above, for a widget whose text is
+// `w->text`. A class with nothing else to stage can use these three
+// directly as its prepare/commit/discard.
+os64_font_status_t os64_ui_stage_caption(os64_ui_widget_t *w, os64_ui_t *ui);
+void os64_ui_commit_caption(os64_ui_widget_t *w);
+void os64_ui_discard_caption(os64_ui_widget_t *w);
+
+// The width of the text a run slot holds, from THE RUN THE PAINT WILL USE.
+// A painter that measures separately gets a second layout — an allocation
+// on every paint, and a different answer from the draw when that allocation
+// is refused, which is how a centred caption silently becomes a left-aligned
+// one. Ask here, then draw the slot with os64_ui_draw_run: at most one
+// layout, and the alignment and the ink cannot disagree.
+os64_font_status_t os64_ui_run_width(os64_ui_t *ui, void **run_slot,
+                                     os64_font_role_t role,
+                                     const char *s, size_t len, int32_t *out);
+
+// The rendering for `s`, chosen once: the slot's run if it still says `s`,
+// otherwise a fresh layout retained in the slot. OK with NULL means the
+// window wears no face and the bitmap cell draws `s`; any other status is a
+// refused layout, and nothing should be drawn or placed from it. After an OK
+// answer — from this or from os64_ui_run_width — the slot holds exactly the
+// choice made, so os64_ui_draw_run(*run_slot) draws what was measured.
+os64_font_status_t os64_ui_run_resolve(os64_ui_t *ui, void **run_slot,
+                                       os64_font_role_t role,
+                                       const char *s, size_t len, void **out);
+
+// Lay `s` out for this role and hand back a retained run, or NULL with OK
+// when the window wears no face and the caller should draw the bitmap cell.
+// Release it with os64_ui_run_release. This is what a class stages with.
+os64_font_status_t os64_ui_run_layout(os64_ui_t *ui, os64_font_role_t role,
+                                      const char *s, size_t len, void **out);
+void os64_ui_run_release(void *run);
+// Does this retained run still say what these bytes say? A class checks
+// before reusing one, because app-supplied text changes without notice.
+bool os64_ui_run_matches(void *run, const char *s, size_t len);
+
+// ── asking a run where things are ───────────────────────────────────────────
+// An editor needs three answers and must get all three from the SAME run it
+// paints, or the caret, the highlight and the glyphs describe different
+// text. Offsets are byte offsets into the line the run was laid out from;
+// X is in pixels from the line's start, before any horizontal scrolling.
+
+// Where the caret sits for a byte offset. An interior offset snaps to a
+// legal cluster boundary — `after` chooses which way.
+os64_font_status_t os64_ui_run_caret(void *run, size_t byte_offset, bool after,
+                                     int32_t *out_x);
+// Which byte offset a pixel X lands on, clamped to the run's ends.
+os64_font_status_t os64_ui_run_hit(void *run, int32_t x, size_t *out_offset);
+// The rectangle covering [begin, end), relative to the line's start and its
+// baseline row. Both offsets must already be legal boundaries.
+os64_font_status_t os64_ui_run_selection(void *run, size_t begin, size_t end,
+                                         os64_gui_rect_t *out);
+// ── cluster boundaries ──────────────────────────────────────────────────────
+// Where one cluster ends and the next begins, read from the BYTES of a line
+// in the UTF-8 profile os64_ui_run_layout lays text out in. They are the
+// boundaries a run of that line publishes its carets at, whatever the face,
+// and asking needs no run: no layout, no allocation, no failure. An editing
+// key that must not cut a letter in half asks here.
+
+// The boundary one cluster after `offset` (forward) or before it — what
+// Delete and Backspace remove, and what Right and Left step over. It is not
+// offset +/- 1: `é` is two bytes and one cluster. Ends clamp. An offset that
+// is not itself a boundary steps to the nearest one in the direction asked.
+size_t os64_ui_text_step(const char *s, size_t len, size_t offset, bool forward);
+// `offset` if it is a boundary, otherwise the one before it or, with
+// `after`, the one after it. For a position that came from somewhere other
+// than a boundary: a byte count, a search match, a byte-limited copy.
+size_t os64_ui_text_snap(const char *s, size_t len, size_t offset, bool after);
+
+// What a control has to be tall enough for: one row of the UI face plus the
+// theme's padding above and below, never less than the theme's stock button
+// height. A caption clipped by its own button is the fingerprint this
+// answers — the theme's button.h was written for an 8x16 cell and a face is
+// free to be taller than that.
+int32_t os64_ui_control_min_height(os64_ui_t *ui);
 
 // Mark a widget (its current bounds) as needing repaint.
 void os64_ui_mark_dirty(os64_ui_t *ui, os64_ui_widget_t *w);
@@ -446,6 +818,18 @@ struct os64_ui_listbox {
     void *list_user;
     // Optional color chip before each label; shares the row's hit target.
     uint32_t (*swatch)(size_t index, void *user);
+    // Row pitch, re-derived from the UI role whenever the font changes.
+    // Zero means "not stamped yet" and reads as the theme's bitmap cell,
+    // which is the same answer the builtin set gives.
+    int32_t row_h;
+
+    // Retained runs for the rows this box can SHOW, staged against a
+    // candidate during adoption and swapped in at commit — the same
+    // contract a caption has, except the strings come from the
+    // application's callback and there is one per visible row. Rows
+    // outside the viewport are laid out when they scroll into it.
+    void **row_runs, **row_runs_staged;
+    size_t row_run_count, row_runs_staged_count;
 };
 void os64_ui_listbox(os64_ui_listbox_t *list, size_t count,
                      const char *(*label)(size_t, void *),
@@ -468,7 +852,9 @@ struct os64_ui_textfield
     char  *buf;                  // app-owned, NUL-terminated
     size_t cap;                  // bytes including the NUL
     size_t len, cursor;
-    size_t first;                // first visible byte (horizontal scroll)
+    int32_t left_px;             // horizontal scroll, in pixels of the UI face
+    int32_t left_staged;         // the scroll a font change in progress would
+                                 // commit: pixels of the CANDIDATE face
     void (*on_submit)(os64_ui_textfield_t *tf, void *user);
     void (*on_cancel)(os64_ui_textfield_t *tf, void *user);
     void *edit_user;
@@ -479,13 +865,16 @@ void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
                        void (*on_submit)(os64_ui_textfield_t *, void *),
                        void (*on_cancel)(os64_ui_textfield_t *, void *),
                        void *user);
-// Replace the content (truncated to cap-1) and put the caret at its end.
+// Replace the content and put the caret at its end. Text longer than cap-1
+// bytes is cut at the last cluster boundary that fits, never inside a letter.
 void os64_ui_textfield_set(os64_ui_t *ui, os64_ui_textfield_t *tf,
                            const char *text);
 // Insert the system clipboard at the caret. A field is ONE line, so it takes
 // the clipboard's first line and stops there — said out loud rather than
 // discovered: pasting a two-line snarf into an Open box gets you line one,
-// not a mangled path. Returns bytes inserted (0 = nothing to paste, or full).
+// not a mangled path. Of that line it takes what fits, cut where one of the
+// clipboard's letters ends. Returns bytes inserted (0 = nothing to paste, no
+// room for its first letter, or no memory to read it into).
 // There is deliberately no field COPY: a textfield has no selection model,
 // and inventing one to feed the clipboard is a different slice with its own
 // consumer. (CLIPBOARD.md)
@@ -522,38 +911,133 @@ struct os64_ui_textview
     const os64_ui_textbuf_t *buf;
 
     size_t  top;                 // first visible line
-    int64_t left;                // first visible VISUAL column (tabs expand)
+    // HORIZONTAL POSITION IS IN PIXELS, not columns. A proportional face has
+    // no columns to count: `i` and `W` are not the same distance, so the
+    // only honest unit for "how far along this line are we" is the one the
+    // face measures in. Tabs still land on their eight-space stops; those
+    // stops are just pixels now (ui_font.c measures the space).
+    int64_t left_px;             // first visible pixel of the line
     size_t  cur_line, cur_col;   // caret; cur_col is a BYTE index
     bool    sel;                 // selection live?
     size_t  sel_line, sel_col;   // the anchor (byte index)
-    int64_t goal_vcol;           // remembered column for Up/Down runs
+    int64_t goal_x;              // remembered pixel X for Up/Down runs
 
     void (*on_change)(os64_ui_textview_t *tv, void *user);  // buffer edited
     void (*on_view)(os64_ui_textview_t *tv, void *user);    // viewport moved
     void *view_user;
     uint8_t seq;                 // VT100 burst parser state
+
+    // One retained run per VISIBLE row, and the set staged against a
+    // candidate face during adoption — the listbox's arrangement, for the
+    // same reason: the text comes from the application's model and there
+    // are more lines than a window can hold, so what is retained is what
+    // can be shown. A row lays out its line, or a long line's window. A
+    // row whose bytes have changed is re-laid-out into its slot on the
+    // next paint. The widget's own `run` holds the CARET's row, which
+    // motion needs whether or not it is on screen.
+    void **row_runs, **row_runs_staged;
+    size_t row_run_count, row_runs_staged_count;
+    // Row pitch from the DOCUMENT face, cached for the same reason the
+    // listbox caches its own: os64_ui_textview_rows is handed a theme.
+    int32_t row_h;
+
+    // THE VIEW A FONT CHANGE WILL SHOW, worked out during preparation.
+    // Every pixel position above is in the units of the face being retired;
+    // the caret's BYTE offset is the one position a face change cannot
+    // disturb, so the view is recomputed around it — and it has to be done
+    // before commit, because which lines are visible decides which runs get
+    // prepared, and a line prepared for the wrong view is a layout the first
+    // paint would have to do.
+    size_t  top_staged;
+    int64_t left_staged, goal_staged;
+
+    // A LONG LINE IS SHOWN THROUGH A WINDOW. A line longer than
+    // `window_bytes` is never laid out whole: a row lays out at most that
+    // many bytes of it, cut where letters end, with a non-document
+    // indicator at each end where bytes are omitted. The caret's line
+    // keeps its window around the caret, moving it when the caret leaves it
+    // or comes near an end with more beyond. Every other row shows its
+    // line's start.
+    // Horizontal positions in a windowed row are measured from the row's
+    // own left edge, since the width of what was omitted is unknown.
+    // The document itself is never windowed: selections, deletion, copy
+    // and save all use byte offsets into the whole line.
+    size_t window_bytes;         // 0 = OS64_UI_TEXTVIEW_WINDOW
+    size_t win_line, win_from;   // the caret line's window, by its first byte
+
+    // THE BUDGET IN EFFECT, and why it is remembered rather than worked out
+    // again. A window the text engine refuses (LIMIT) is halved until it
+    // fits — and LIMIT depends on how full that engine is, so the same line
+    // resolves a bigger span the moment other runs are released. The span a
+    // row SHOWS has to be the span its retained run holds: the caret, the
+    // scroll and the decorations were all measured against it, and a lookup
+    // that quietly resolved a wider one would lay text out where a commit
+    // may not allocate and place the caret against geometry nobody staged.
+    // So a reduction is kept, and PREPARATION is the only place a wider
+    // window is tried again — the one place a refusal can still call the
+    // whole font change off.
+    size_t win_budget, win_budget_staged;
+    size_t win_budget_of;        // the `window_bytes` it was derived from
 };
+
+// How many bytes of a line a row lays out, unless the view says otherwise.
+// A screen of rows this long stays well inside the text engine's memory,
+// and it is several screens of text wide in any face.
+#define OS64_UI_TEXTVIEW_WINDOW 8192u
 
 void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
                       void (*on_change)(os64_ui_textview_t *, void *),
                       void (*on_view)(os64_ui_textview_t *, void *),
                       void *user);
-// Rows/columns that fit the current bounds under this theme.
+// Rows that fit the current bounds. The row pitch comes from the DOCUMENT
+// face when the window is wearing one, and from the theme's bitmap cell
+// otherwise; a widget caches it, so this keeps the theme-only signature an
+// application already calls.
 int32_t os64_ui_textview_rows(const os64_ui_textview_t *tv,
                               const os64_ui_theme_t *t);
-int32_t os64_ui_textview_cols(const os64_ui_textview_t *tv,
-                              const os64_ui_theme_t *t);
+// The width of the text area, in pixels. There is deliberately no column
+// count: under a proportional face a column is not a length, and a caller
+// that wanted one was really asking either "how wide is the paper?" — this
+// — or "how wide is this text?", which is os64_ui_textview_line_width.
+int32_t os64_ui_textview_width(const os64_ui_textview_t *tv);
 // Scroll so `top` is the first visible line (clamped); fires on_view.
 void os64_ui_textview_scroll_to(os64_ui_t *ui, os64_ui_textview_t *tv,
                                 size_t top);
-// Scroll horizontally so `left` is the first visible VISUAL column
+// Scroll horizontally so `left_px` is the first visible pixel of each line
 // (clamped at 0; the right edge is the app's knowledge — it tracks the
 // widest line, the view doesn't). Fires on_view.
 void os64_ui_textview_scroll_left(os64_ui_t *ui, os64_ui_textview_t *tv,
-                                  int64_t left);
-// A line's width in VISUAL columns (tabs expanded to their 8-stop) — the
-// number a horizontal scrollbar's `total` is made of.
-int64_t os64_ui_text_vcols(const char *s, size_t len);
+                                  int64_t left_px);
+// A line's width in pixels under the DOCUMENT face — the number a
+// horizontal scrollbar's `total` is made of. Measuring can fail, so this
+// says whether it did; on failure `*out` is untouched and the caller keeps
+// whatever extent it already had rather than shrinking the bar to a lie.
+// A line longer than this view's window is never laid out whole, so its
+// width is UNKNOWN, not zero and not a guess: *whole is false and *out is
+// untouched. What such a line shows is os64_ui_textview_row_width's answer.
+os64_font_status_t os64_ui_textview_line_width(os64_ui_t *ui,
+                                               const os64_ui_textview_t *tv,
+                                               const char *s, size_t len,
+                                               int64_t *out, bool *whole);
+// The width of line `line` AS THIS VIEW SHOWS IT: the whole line, or a long
+// line's window and its end indicators, measured from the row's left edge.
+// A long line's window is what horizontal scrolling moves across, so a
+// scrollbar needs this for the caret's line as well as the widest whole one.
+os64_font_status_t os64_ui_textview_row_width(os64_ui_t *ui,
+                                              os64_ui_textview_t *tv,
+                                              size_t line, int64_t *out);
+// The widest row this view shows NOW, each as it is drawn — a whole line,
+// or a long line's window and its end indicators — measured from the row's
+// left edge. The rows are laid out into the slots the paint draws from, so
+// the paint that follows lays none of them out again, and neither does a
+// call just after a font change: adoption staged those runs. A refused
+// layout is the answer, and *out is untouched. This is the LAZY extent: a
+// bar grown from it counts a line once the line has been on screen, and
+// never lays out one that has not — measuring every line of a large file
+// costs seconds, and most of it is never looked at.
+os64_font_status_t os64_ui_textview_shown_width(os64_ui_t *ui,
+                                                os64_ui_textview_t *tv,
+                                                int64_t *out);
 // Is this key event the REAL Esc key (not the ESC byte that opens a VT100
 // burst)? The burst's ESC is stamped with the extended key's code; the Esc
 // key carries its own — which is a DIALECT: PS/2 make-code 0x01 or HID
@@ -562,11 +1046,13 @@ int64_t os64_ui_text_vcols(const char *s, size_t len);
 // raw scancode compare — a check that knows one dialect works in QEMU and
 // dies on the P5 (2026-08-21, the chord-publish day's ring-3 echo).
 bool os64_ui_key_is_esc(const os64_gui_event_t *ev);
-// Place the caret (clamped), optionally keeping/starting a selection from
-// the current anchor, and scroll it into view. The search-jump primitive.
+// Place the caret (clamped to the document, and to the cluster boundary at
+// or before `col`), optionally keeping/starting a selection from the
+// current anchor, and scroll it into view. The search-jump primitive.
 void os64_ui_textview_goto(os64_ui_t *ui, os64_ui_textview_t *tv,
                            size_t line, size_t col, bool select);
-// Select [sl,sc) .. [el,ec), caret at the end, scrolled into view.
+// Select [sl,sc) .. [el,ec), widened to whole clusters, caret at the end,
+// scrolled into view.
 void os64_ui_textview_select(os64_ui_t *ui, os64_ui_textview_t *tv,
                              size_t sl, size_t sc, size_t el, size_t ec);
 
@@ -597,7 +1083,9 @@ bool os64_ui_textview_cut(os64_ui_t *ui, os64_ui_textview_t *tv);
 // the line-ending fossil it is, because a buffer holds LINES, not
 // terminators. Streams straight from the file — a large paste costs no
 // intermediate copy of itself. False = read-only view, or empty clipboard
-// (which changes nothing, selection included).
+// (which changes nothing, selection included). A buffer that refuses an
+// insert partway stops the paste there: what went in stays, and nothing
+// after the refusal is pasted around the gap.
 bool os64_ui_textview_paste(os64_ui_t *ui, os64_ui_textview_t *tv);
 
 extern const os64_ui_class_t os64_ui_scrollbar_class;

@@ -1,0 +1,3 @@
+test_appearance: tools/test_appearance_session_host.c:563: role_specific_fit_contract: Assertion `!os64_ui_font_follow(&ui)' failed.
+test_appearance: tools/test_appearance_session_host.c:586: role_specific_fit_contract: Assertion `waitpid(pid, &status, 0) == pid && !status' failed.
+tools/test_appearance_host.sh: line 41:    87 Aborted                 (core dumped) "$appearance_test_dir/test_appearance"

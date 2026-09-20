@@ -1,0 +1,20 @@
+windowmintest: content 958x696 minimum 958x696 frame 32,24 960x717 flags 128
+windowmintest: content 958x696 minimum 958x696 frame 32,24 960x717 flags 128
+windowmintest: content 958x696 minimum 958x696 frame 32,24 960x717 flags 0
+windowmintest: content 1918x1078 minimum 958x696 frame 0,0 1920x1080 flags 9
+windowmintest: content 958x696 minimum 958x696 frame 32,24 960x717 flags 0
+windowmintest: content 958x696 minimum 958x696 frame 32,24 960x717 flags 0
+windowmintest: content 1918x1059 minimum 958x696 frame 0,0 1920x1080 flags 8
+windowmintest: content 958x696 minimum 958x696 frame 32,43 960x698 flags 1
+windowmintest: content 958x696 minimum 958x696 frame 32,43 960x698 flags 1
+windowmintest: content 1918x1078 minimum 958x696 frame 0,0 1920x1080 flags 9
+windowmintest: content 958x696 minimum 958x696 frame 32,43 960x698 flags 1
+windowmintest: content 958x696 minimum 958x696 frame 32,43 960x698 flags 1
+windowmintest: content 1918x1059 minimum 958x696 frame 0,0 1920x1080 flags 8
+windowmintest: content 1918x1059 minimum 1200x800 frame 0,0 1920x1080 flags 8
+windowmintest: content 1918x1059 minimum 1200x800 frame 0,0 1920x1080 flags 8
+windowmintest: content 1918x1059 minimum 958x696 frame 0,0 1920x1080 flags 8
+windowmintest: content 958x696 minimum 958x696 frame 32,24 960x717 flags 0
+windowmintest: content 958x696 minimum 958x696 frame 32,24 960x717 flags 0
+windowmintest: client mouse presses 0 releases 0
+windowmintest: PASS (0 failures)

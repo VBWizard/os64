@@ -1,0 +1,7 @@
+allocation-denial points: 672
+real DejaVuSansMono.ttf 12px: cell 7x15 baseline 12
+real DejaVuSansMono.ttf 28px: cell 17x33 baseline 26
+real SourceCodePro-Regular.otf 12px: cell 7x16 baseline 12
+real SourceCodePro-Regular.otf 28px: cell 17x36 baseline 28
+PASS: 1378253 provider/adoption checks
+Artifacts: /tmp/os64-f25-real-o2

@@ -3,6 +3,7 @@
 #include "os64/os64.h"
 #include "os64/conf.h"
 #include "os64/ui.h"
+#include "ui_envelope.h"
 #include "ui_internal.h"
 
 #define SNAPSHOT_MAX 4096
@@ -76,7 +77,8 @@ int os64_ui_theme_list(os64_ui_theme_entry_t *entries, size_t cap)
     return (int)count;
 }
 
-int os64_ui_theme_load(const char *name, os64_ui_theme_t *theme)
+int os64_ui_theme_load_snapshot(const char *name, os64_ui_theme_t *theme,
+                                char *snapshot, size_t cap, size_t *length)
 {
     char path[OS64_CONF_PATH_MAX], text[SNAPSHOT_MAX + 1];
     int result = theme_path(name, path, sizeof(path));
@@ -102,18 +104,44 @@ int os64_ui_theme_load(const char *name, os64_ui_theme_t *theme)
         if (parsed < 0) result = parsed == OS64_CONF_NO_MEMORY ?
             OS64_UI_THEME_IO : OS64_UI_THEME_INVALID;
     }
-    if (!result) *theme = candidate;
+    if (!result && snapshot && got >= cap) result = OS64_UI_THEME_LIMIT;
+    if (!result) {
+        *theme = candidate;
+        if (snapshot) { os64_memcpy(snapshot, text, got); snapshot[got] = 0; }
+        if (length) *length = got;
+    }
     return result;
 }
 
-int os64_ui_theme_save(const char *name, const os64_ui_theme_t *theme, bool replace)
+int os64_ui_theme_load(const char *name, os64_ui_theme_t *theme)
+{ return os64_ui_theme_load_snapshot(name, theme, NULL, 0, NULL); }
+
+int os64_ui_theme_save_snapshot(const char *name, const os64_ui_theme_t *theme,
+    const char *base, size_t base_length, bool replace)
 {
     char dir[OS64_CONF_PATH_MAX], path[OS64_CONF_PATH_MAX];
-    char temp[OS64_CONF_PATH_MAX], text[SNAPSHOT_MAX];
+    char temp[OS64_CONF_PATH_MAX], text[SNAPSHOT_MAX + 1];
+    char original[SNAPSHOT_MAX + 1], replacement[SNAPSHOT_MAX + 1];
     int result = theme_path(name, path, sizeof(path));
     if (result) return result;
-    int64_t len = os64_ui_theme_encode(theme, text, sizeof(text));
+    int64_t len = os64_ui_theme_encode(theme, replacement, sizeof(replacement));
     if (len < 0) return OS64_UI_THEME_INVALID;
+    if (!base && replace) {
+        os64_ui_theme_t previous;
+        result = os64_ui_theme_load_snapshot(name, &previous, original, sizeof(original), &base_length);
+        if (result) return result;
+        base = original;
+    }
+    if (base) {
+        os64_ui_theme_t previous;
+        os64_ui_theme_defaults(&previous);
+        if (os64_ui_theme_parse_saved_status(&previous, base, base_length) < 0)
+            return OS64_UI_THEME_INVALID;
+        len = ui_envelope_merge(base, base_length, replacement, (size_t)len,
+             OS64_UI_COMPONENT_PALETTE | OS64_UI_COMPONENT_TREATMENT | UI_ENVELOPE_GEOMETRY,
+             text, sizeof(text));
+        if (len < 0) return len == OS64_CONF_NO_MEMORY ? OS64_UI_THEME_IO : OS64_UI_THEME_LIMIT;
+    } else os64_memcpy(text, replacement, (size_t)len);
     if (collection(dir, sizeof(dir))) return OS64_UI_THEME_IO;
     os64_mkdir(dir);
     static uint64_t sequence;
@@ -141,3 +169,6 @@ int os64_ui_theme_save(const char *name, const os64_ui_theme_t *theme, bool repl
     if (result) os64_unlink(temp);
     return result;
 }
+
+int os64_ui_theme_save(const char *name, const os64_ui_theme_t *theme, bool replace)
+{ return os64_ui_theme_save_snapshot(name, theme, NULL, 0, replace); }

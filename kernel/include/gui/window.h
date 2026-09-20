@@ -69,8 +69,10 @@
 #define GUI_WINDOW_PINNED          (1u << 2)
 // MAXIMIZED (2026-08-23): the frame is the whole screen and restoreFrame
 // remembers where it came from. Ctrl+Alt+M toggles; so does a double-click
-// on the titlebar (the 1990 habit). A manual move or resize clears it — the
-// user has taken the geometry back, and a later "restore" to a frame they
+// on the titlebar (the 1990 habit). Restore retains this flag and the saved
+// frame if its size would need clamping to the current limits. A manual
+// move or resize clears it — the user has taken the geometry back, and a
+// later "restore" to a frame they
 // have since abandoned would be a surprise. The capacity reservation is
 // what makes this trivial: the screen IS the canvas capacity, so a
 // maximize can never fail and never allocates (window.h's canvas_cap_w).
@@ -473,10 +475,13 @@ static inline bool wm_point_in_titlebar(const window_t *w, int32_t x, int32_t y)
 // Show or hide the titlebar (Ctrl+Alt+T). The CONTENT STAYS WHERE IT IS —
 // the frame's top edge moves to meet it — because the content is what the
 // user is looking at, and a window that jumps 19 pixels when you hide its
-// title is a window you hid the title of by mistake. Damages old ∪ new.
+// title is a window you hid the title of by mistake. While maximized, the
+// saved frame receives the same delta to preserve its content on Restore.
+// Damages old ∪ new.
 void wm_set_decorated(window_t *w, bool decorated);
 
-// Maximize to the screen, or restore the remembered frame. See
+// Maximize to the screen, or restore the remembered frame when its size
+// fits the current limits without clamping; otherwise keep it maximized. See
 // GUI_WINDOW_MAXIMIZED. Goes through wm_resize, so the owner gets its
 // resize event exactly as it would for a drag.
 void wm_set_maximized(window_t *w, bool maximized);

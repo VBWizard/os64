@@ -1,0 +1,38 @@
+[
+  {
+    "filesystem": "fat",
+    "path": "/lib/libos64.so",
+    "sha256": "b17d4b69d3d46e6b9632a70a7e9a9f3bd7fe4891549a41efad4c4e2abe5823d9",
+    "matches_build": true
+  },
+  {
+    "filesystem": "ext2",
+    "path": "/lib/libos64.so",
+    "sha256": "b17d4b69d3d46e6b9632a70a7e9a9f3bd7fe4891549a41efad4c4e2abe5823d9",
+    "matches_build": true
+  },
+  {
+    "filesystem": "fat",
+    "path": "/lib/libfreetype.so",
+    "sha256": "3bd864cce0abb6e6027c01ac90f278f816d09e19c06a422bfc6cf88c2424331c",
+    "matches_build": true
+  },
+  {
+    "filesystem": "ext2",
+    "path": "/lib/libfreetype.so",
+    "sha256": "3bd864cce0abb6e6027c01ac90f278f816d09e19c06a422bfc6cf88c2424331c",
+    "matches_build": true
+  },
+  {
+    "filesystem": "fat",
+    "path": "/etc/licenses/unicode.txt",
+    "sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+    "matches_build": true
+  },
+  {
+    "filesystem": "ext2",
+    "path": "/etc/licenses/unicode.txt",
+    "sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
+    "matches_build": true
+  }
+]

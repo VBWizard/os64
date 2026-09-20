@@ -1,0 +1,11 @@
+{
+  "/lib/libos64.so": {
+    "sha256": "5d43aa334e237d746d980057feac60b92cd52397c2f2eb08c4d8f12137c6485d",
+    "matches_build": true
+  },
+  "/tests/fontsettest": {
+    "sha256": "d7fefe96ea23c6be547202d0204f1fffea7c84e7dbadd3332cddbc9a3bad399e",
+    "matches_build": true
+  },
+  "iso_sha256": "feb774a13c20b2ac6f69b241b8dd7bcf79b56583d75d8d863798fed0e70c9908"
+}

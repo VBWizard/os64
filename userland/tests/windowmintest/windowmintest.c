@@ -30,7 +30,7 @@ static void paint(os64_draw_ctx_t *ctx, unsigned width, unsigned height)
     os64_draw_text(&ctx->surf, 16, 24, text, os64_strlen(text), 0xffeeeeee, 0xff172334);
     const char *help = "Ctrl+Alt+right-drag; M maximize; T titlebar (with Ctrl+Alt)";
     os64_draw_text(&ctx->surf, 16, 56, help, os64_strlen(help), 0xffeeeeee, 0xff172334);
-    help = "r: reset   l: 640x480   s: 958x696   g: set large after 3s   q: quit";
+    help = "r: reset   l/s: larger   b: 1200x800   v: state   g: delayed   q: quit";
     os64_draw_text(&ctx->surf, 16, 88, help, os64_strlen(help), 0xffeeeeee, 0xff172334);
     CHECK(os64_gui_window_publish(ctx->win, NULL) == 0);
 }
@@ -121,10 +121,12 @@ int main(int argc, char **argv)
                 paint(&ctx, min_w, min_h);
                 continue;
             }
-            if (c != 'r' && c != 'l' && c != 's' && c != 'g') continue;
+            if (c == 'v') { paint(&ctx, min_w, min_h); continue; }
+            if (c == 'b' && (screen_w < 1202 || screen_h < 821)) continue;
+            if (c != 'r' && c != 'l' && c != 's' && c != 'g' && c != 'b') continue;
             if (c == 'g') os64_sleep(3000);
-            min_w = c == 'r' ? 64 : c == 'l' ? 640 : 958;
-            min_h = c == 'r' ? 32 : c == 'l' ? 480 : 696;
+            min_w = c == 'r' ? 64 : c == 'l' ? 640 : c == 'b' ? 1200 : 958;
+            min_h = c == 'r' ? 32 : c == 'l' ? 480 : c == 'b' ? 800 : 696;
             CHECK(os64_gui_window_set_min_size(win, min_w, min_h) == 0);
             paint(&ctx, min_w, min_h);
         }

@@ -113,6 +113,10 @@ int64_t os64_conf_find_from(const char *name, size_t from,
 // know); otherwise it receives the path that was read.
 int64_t os64_conf_find_read(const char *name, os64_conf_fn fn, void *user,
                             char *path_out, size_t cap);
+// Read a selected configuration without losing comments, blank lines or
+// unknown settings. Success returns zero and owned, NUL-terminated bytes;
+// free with os64_free. A selected file that cannot open returns IO_ERROR.
+int64_t os64_conf_find_bytes(const char *name, char **out, size_t *length);
 
 // The persistence gradient, walked for you: try each path in order, read the
 // FIRST that opens, return its result (or OS64_CONF_NO_FILE if none did).
@@ -287,6 +291,13 @@ int64_t os64_conf_write(const char *name,
 int64_t os64_conf_write_checked(const char *name,
     const os64_conf_pair_t *pairs, size_t count,
     bool (*validate)(const char *text, size_t length, void *user), void *user);
+
+// Checked merge with explicit deletions: NULL value removes every matching
+// line; an empty string remains an empty setting. Other entry points continue
+// to reject NULL values. This lets optional settings be removed without
+// changing the meaning of an empty value or dropping unrelated lines.
+int64_t os64_conf_update_checked(const char *name, const os64_conf_pair_t *pairs,
+    size_t count, bool (*validate)(const char *, size_t, void *), void *user);
 
 // One setting, same three rules. `os64_conf_write` with a count of one.
 int64_t os64_conf_set(const char *name, const char *key, const char *value);

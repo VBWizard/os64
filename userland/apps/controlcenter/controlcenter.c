@@ -110,65 +110,126 @@ static void next(os64_ui_widget_t *w, void *user)
     layout(&gUi);
 }
 
-static void fit_text(char *dst, size_t cap, const char *src, int pixels)
+typedef struct {
+    int row, button, nav, top, footer, min_w, min_h, width, height;
+    int back_w, prev_w, next_w;
+} center_layout_t;
+static center_layout_t gLayout;
+static bool gHaveLayout;
+static int max_int(int a,int b) { return a>b?a:b; }
+static os64_font_status_t measured_width(os64_ui_t *ui,const char *s,int *out)
 {
-    size_t cells = pixels > 0 ? (size_t)pixels / 8 : 0;
-    if (cells >= cap) cells = cap - 1;
-    os64_strcopy(dst, cells + 1, src);
-    if (os64_strlen(src) > cells && cells >= 3) {
-        dst[cells - 3] = '.';
-        dst[cells - 2] = '.';
-        dst[cells - 1] = '.';
-    }
+    int32_t w;
+    os64_font_status_t status=os64_ui_text_measure(ui,OS64_FONT_ROLE_UI,s,os64_strlen(s),&w);
+    if(!status) *out=w+20;
+    return status;
 }
-
+static os64_font_status_t measure_layout(os64_ui_t *ui,center_layout_t *m)
+{
+    *m=(center_layout_t){0};
+    m->row=max_int(20,os64_ui_font_row_height(ui,OS64_FONT_ROLE_UI));
+    m->button=max_int(36,m->row+12); m->nav=max_int(30,m->row+10);
+    m->top=48+2*m->row; m->footer=m->nav+14+m->row+12;
+    int title,subtitle;
+    os64_font_status_t status;
+    if((status=measured_width(ui,"Back",&m->back_w)) ||
+       (status=measured_width(ui,"Previous",&m->prev_w)) ||
+       (status=measured_width(ui,"Next",&m->next_w)) ||
+       (status=measured_width(ui,"CONTROL CENTER",&title)) ||
+       (status=measured_width(ui,"Your workspace, your choices.",&subtitle))) return status;
+    m->min_w=max_int(360,48+max_int(max_int(title,subtitle),m->back_w+m->prev_w+m->next_w+20));
+    m->min_h=max_int(250,m->top+m->button+12+m->footer);
+    m->width=max_int((int)gCtx.surf.width,m->min_w);
+    m->height=max_int((int)gCtx.surf.height,m->min_h);
+    return OS64_FONT_OK;
+}
+static void place(os64_ui_widget_t *w,os64_gui_rect_t r,bool staged)
+{ if(staged) os64_ui_widget_stage_bounds(w,r); else w->bounds=r; }
+static void arrange(const center_layout_t *m,bool staged)
+{
+    int W=m->width,H=m->height;
+    place(&gRoot,(os64_gui_rect_t){0,0,W,H},staged);
+    place(&gTitle,(os64_gui_rect_t){24,20,W-48,m->row},staged);
+    place(&gSubtitle,(os64_gui_rect_t){24,28+m->row,W-48,m->row},staged);
+    unsigned page=(unsigned)max_int(1,(H-m->top-m->footer-12)/(m->button+10));
+    if(page>ROWS) page=ROWS;
+    for(unsigned i=0;i<ROWS;++i)
+        place(&gRows[i],(os64_gui_rect_t){24,m->top+(int)i*(m->button+10),W-48,m->button},staged);
+    int y=H-m->footer;
+    place(&gBack,(os64_gui_rect_t){24,y,m->back_w,m->nav},staged);
+    place(&gPrev,(os64_gui_rect_t){34+m->back_w,y,m->prev_w,m->nav},staged);
+    place(&gNext,(os64_gui_rect_t){44+m->back_w+m->prev_w,y,m->next_w,m->nav},staged);
+    place(&gStatus,(os64_gui_rect_t){24,H-m->row-12,W-48,m->row},staged);
+    if(staged) return;
+    gPageSize=page;
+    int16_t n=gFirst; unsigned skipped=0;
+    while(n>=0 && skipped<gOffset) {
+        if(gMenu.nodes[n].kind!=OS64_MENU_SEPARATOR) ++skipped;
+        n=gMenu.nodes[n].next;
+    }
+    for(unsigned i=0;i<ROWS;++i) {
+        while(n>=0 && gMenu.nodes[n].kind==OS64_MENU_SEPARATOR) n=gMenu.nodes[n].next;
+        gNodes[i]=-1;
+        os64_ui_set_hidden(&gUi, &gRows[i], i>=page || n<0);
+        if(gRows[i].hidden) continue;
+        gNodes[i]=n;
+        // Copy the UTF-8 label; the widget clips it using measured glyphs.
+        os64_strcopy(gCaptions[i],sizeof(gCaptions[i]),gMenu.nodes[n].label);
+        n=gMenu.nodes[n].next;
+    }
+    while(n>=0 && gMenu.nodes[n].kind==OS64_MENU_SEPARATOR) n=gMenu.nodes[n].next;
+    gMore=n>=0;
+    os64_ui_set_hidden(&gUi, &gBack, gDepth==0);
+    os64_ui_set_hidden(&gUi, &gPrev, gOffset==0);
+    os64_ui_set_hidden(&gUi, &gNext, !gMore);
+    os64_strcopy(gStatusText,sizeof(gStatusText),gMessage);
+    os64_ui_mark_dirty(&gUi,&gRoot);
+}
 static void layout(os64_ui_t *ui)
 {
-    int width = (int)gCtx.surf.width, height = (int)gCtx.surf.height;
-    gRoot.bounds = (os64_gui_rect_t){0, 0, width, height};
-    bool small = width < 360 || height < 250;
-    for (os64_ui_widget_t *w = gRoot.first_child; w; w = w->next_sibling)
-        w->hidden = small;
-    gStatus.hidden = false;
-    if (small) {
-        gStatus.bounds = (os64_gui_rect_t){0, 0, width, height};
-        fit_text(gStatusText, sizeof(gStatusText), "Enlarge this window.", width);
-        os64_ui_mark_dirty(ui, &gRoot);
-        return;
+    if(!gHaveLayout) {
+        if(measure_layout(ui,&gLayout)) return;
+        gHaveLayout=true;
     }
-    gTitle.bounds = (os64_gui_rect_t){24, 20, width - 48, 24};
-    gSubtitle.bounds = (os64_gui_rect_t){24, 49, width - 48, 20};
-    gPageSize = (unsigned)(height - 174) / 46;
-    if (gPageSize > ROWS) gPageSize = ROWS;
-    int16_t n = gFirst;
-    unsigned skipped = 0;
-    while (n >= 0 && skipped < gOffset) {
-        if (gMenu.nodes[n].kind != OS64_MENU_SEPARATOR) skipped++;
-        n = gMenu.nodes[n].next;
+    center_layout_t m=gLayout;
+    m.width=(int)gCtx.surf.width; m.height=(int)gCtx.surf.height;
+    arrange(&m,false);
+}
+static os64_font_status_t plan_font(os64_ui_t *ui,void *user,void **out)
+{
+    (void)user; *out=NULL;
+    center_layout_t *m=os64_malloc(sizeof(*m));
+    if(!m) return OS64_FONT_NO_MEMORY;
+    os64_font_status_t status=measure_layout(ui,m);
+    if(!status && (m->width>(int)gCtx.surf.width || m->height>(int)gCtx.surf.height)) {
+        uint32_t sw,sh; os64_gui_window_state_t state;
+        if(gCtx.win<=0 || os64_gui_screen_info(&sw,&sh) || os64_gui_window_get_state(gCtx.win,&state)) status=OS64_FONT_LIMIT;
+        else if(max_int(0,state.x)+(int64_t)m->width+state.width-gCtx.surf.width>sw ||
+                max_int(0,state.y)+(int64_t)m->height+state.height-gCtx.surf.height>sh) status=OS64_FONT_LIMIT;
     }
-    for (unsigned i = 0; i < ROWS; ++i) {
-        while (n >= 0 && gMenu.nodes[n].kind == OS64_MENU_SEPARATOR)
-            n = gMenu.nodes[n].next;
-        gNodes[i] = -1;
-        gRows[i].hidden = i >= gPageSize || n < 0;
-        if (gRows[i].hidden) continue;
-        gNodes[i] = n;
-        gRows[i].bounds = (os64_gui_rect_t){24, 92 + (int)i * 46, width - 48, 36};
-        fit_text(gCaptions[i], sizeof(gCaptions[i]), gMenu.nodes[n].label, width - 80);
-        n = gMenu.nodes[n].next;
+    if(status) { os64_free(m); return status; }
+    arrange(m,true); *out=m; return OS64_FONT_OK;
+}
+static void discard_font(os64_ui_t *ui,void *user,void *plan)
+{ (void)ui; (void)user; os64_free(plan); }
+static void commit_font(os64_ui_t *ui,void *user,void *plan)
+{
+    (void)user; center_layout_t *m=plan;
+    // The plan fits the live window's reservation; this minimum needs no
+    // allocation. Re-fetch the surface if setting it grows the window.
+    if(gCtx.win>0 && (os64_gui_window_set_min_size(gCtx.win,m->min_w,m->min_h) ||
+                     os64_draw_ctx_refresh(&gCtx))) {
+        os64_complain("controlcenter: cannot update window minimum"); ui->quit=true;
+    } else {
+        gLayout=*m; gHaveLayout=true;
+        m->width=(int)gCtx.surf.width; m->height=(int)gCtx.surf.height;
+        arrange(m,false);
+        char line[128];
+        os64_snprintf(line, sizeof(line), "controlcenter: interface row %d, minimum %dx%d",
+                      m->row, m->min_w, m->min_h);
+        os64_debug_log(line);
     }
-    while (n >= 0 && gMenu.nodes[n].kind == OS64_MENU_SEPARATOR)
-        n = gMenu.nodes[n].next;
-    gMore = n >= 0;
-    gBack.hidden = gDepth == 0;
-    gPrev.hidden = gOffset == 0;
-    gNext.hidden = !gMore;
-    gBack.bounds = (os64_gui_rect_t){24, height - 78, 90, 30};
-    gPrev.bounds = (os64_gui_rect_t){124, height - 78, 90, 30};
-    gNext.bounds = (os64_gui_rect_t){224, height - 78, 90, 30};
-    gStatus.bounds = (os64_gui_rect_t){24, height - 32, width - 48, 20};
-    fit_text(gStatusText, sizeof(gStatusText), gMessage, width - 48);
-    os64_ui_mark_dirty(ui, &gRoot);
+    os64_free(m);
 }
 
 int main(int argc, char **argv)
@@ -177,6 +238,13 @@ int main(int argc, char **argv)
     int64_t win = os64_gui_window_create("Control Center", 64, 112, 468, 442, 0);
     if (win <= 0) {
         os64_complain("controlcenter: cannot create window (%ld)\n", (long)win);
+        return 1;
+    }
+    // Keep the builtin layout usable even if initial configured-font adoption
+    // is refused. Successful adoption replaces this floor with its own plan.
+    if (os64_gui_window_set_min_size(win, 360, 250) != 0) {
+        os64_complain("controlcenter: cannot set window minimum\n");
+        os64_gui_window_destroy(win);
         return 1;
     }
     if (os64_draw_ctx_init(&gCtx, win) != 0) {
@@ -224,8 +292,10 @@ int main(int argc, char **argv)
         gFirst = -1;
         os64_strcopy(gMessage, sizeof(gMessage), "Cannot start tool reaper; launching disabled.");
     }
+    (void)os64_ui_font_planner(&gUi,plan_font,commit_font,discard_font,NULL);
     layout(&gUi);
     os64_ui_run(&gUi, win, NULL);
+    os64_ui_font_release(&gUi);
     os64_gui_window_destroy(win);
     return 0;
 }

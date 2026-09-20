@@ -1,0 +1,9 @@
+field Delete joining accent: bytes=65cc81 caret=3 snapped-before=3 snapped-after=3
+next same key: bytes=65cc81 caret=3
+field Backspace joining accent: bytes=65cc81 caret=3 snapped-before=3 snapped-after=3
+next same key: bytes= caret=0
+engine absent=1 status=5
+no-engine field: text pixels=64 caret pixels=32
+engine absent=1 status=5
+no-engine view: text pixels=514 caret pixels=32 selection pixels=452
+capacity paste of e-acute: added=0 bytes=616263 caret=3

@@ -1,0 +1,3 @@
+ac03056bbe4353828a9209aed45bee84bd1162dc432f3544b40992e6db501ded  userland/bin/appearance
+1ec4b6c89f1f1bfee10c23b203f8c18dfa7f363fcf84842ee44a62995270696e  userland/bin/libos64.so
+c604b7eae23d81cd10ad5c538fdeaed4ffc4bad01c2cb38d60155710d7dd3aba  userland/bin/gterm

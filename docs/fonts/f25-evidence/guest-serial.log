@@ -1,0 +1,16 @@
+0 (0x0000) AP0: Interrupts enabled
+1 (0x0000) AP0: charset: CP437 map checked against zap-ext-light16.psf - 0 drifted, 39 not in the face
+2 (0x0000) AP0: ***** OS64 (built 2026-09-17 03:49:37) - system booting at 09/17/2026 13:41:49 *****
+2 (0x0000) AP0: FPU: x87 MMX SSE SSE2 SSE3 enabled, FXSAVE per thread (MXCSR mask 0xFFFF); no XSAVE
+3 (0x0000) AP0: Commandline: ROOT=1ec5f5ab-71b7-45cd-a7a4-05646e878e57 KWORKER HUSK CRON LOGD=/home/os64.log
+3 (0x0000) AP0: DEBUG_OPTIONS 0x00000000000000000000000002480103
+PAGE1 PAGE2
+dyn_consumer: first=0x00000030 second=0x00000031 packed=0x00300031
+dyn_consumer: first=0x00000030 second=0x00000031 packed=0x00300031
+[[user] hususer]k: husk: r c:rc:  /home/husk/home/husk..rc
+rc
+[pool] boot complete: 199/5191 paging pages used
+[shutdown] descent started
+[logd] userland log sink went quiet — kernel resuming serial drain
+2059 (0x0038) AP2:   log daemon retired
+[shutdown] descent complete, powering off

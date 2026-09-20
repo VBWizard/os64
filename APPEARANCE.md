@@ -249,12 +249,13 @@ The customizer targets a 1024x768 desktop, matching the reported P5 default.
 It must fit its editing controls, persistent actions, and a useful preview at
 that resolution with the native 8x16 text cells. Extra settings belong in
 component pages or expandable sections; reducing text size is not a layout
-strategy. The Workshop requests a 958x696 minimum content area from the WM,
-so drag resizing stops before the editor and preview would be hidden. The same
-constants guard the defensive layout fallback. Larger desktops may provide
-more preview space without shrinking the text. Font scaling is a separate
-renderer/layout design, not a reason to require a higher boot resolution for
-this tool.
+strategy. The Workshop uses 958x696 as its minimum content area for native
+text. Its font planner increases that minimum for taller rows or wider
+captions; drag resizing stops before controls become unusable. A font change
+can grow the window when there is room on screen, or be retried after
+maximizing. Restore keeps the window maximized if the saved rectangle is below
+the accepted minimum. Lowering the font size lowers the minimum again.
+See [FONT_SETTINGS.md](FONT_SETTINGS.md) for font adoption and layout rules.
 
 On the P5, the user reported that requesting 1680x1050 produced a 2560x1440
 framebuffer in `/sys/gui`, while requesting 1920x1080 produced 1920x1080.
@@ -943,3 +944,33 @@ minimum-size syscall from PR #108.
   one edit; one Undo restored the square preview and disabled Undo. Screenshots
   were inspected, and pixel comparisons checked the Undo state and restored
   preview. This run used private disk copies and made no P5 changes.
+
+## Font envelope migration (F5)
+
+The font work's [R3 contract](FONT_CONTRACTS.md) requires a compatible userland
+line envelope before `fonts.*` session publication. The implementation and
+verification are recorded in [F5-REPORT.md](docs/fonts/F5-REPORT.md). The Fonts
+page previews independent interface, terminal and document choices; Apply
+publishes them, while Save writes next-startup choices.
+
+F5 implements envelope validation/preservation in ui_session. Readers accept
+well-formed unknown dotted keys while retaining validation of known settings
+and required full-snapshot palette keys. Writers merge at the expected
+generation, replacing only their component's keys and carrying other lines
+verbatim. Validate the complete merged payload against the existing 4096-byte
+cap before compare-and-publish. Component updates refuse an invalid base; an
+explicit full repair can replace it. Apply, Save and startup preservation all
+use this protocol. No kernel transport change is needed.
+
+After the refresh installing the first compatible libos64, reboot before any
+font settings are published. Existing processes retain the old library after
+refresh, including its incompatible decoder/writer; every appearance participant
+must restart with the compatible library. Later dotted-namespace extensions
+benefit from the tolerant-reader/preserving-writer rule. See the
+[F5 packet](docs/fonts/05-configuration.md) for compatibility and rollout tests.
+
+Font publications carry `fonts.serial`, their publication generation. Other
+components preserve it so color changes do not reload font bytes. An explicit
+font Apply does reload, even when its paths and sizes are unchanged. The raw
+saved-composition API preserves font/future lines during theme Save and Save As;
+the Fonts page writes its choices to `fonts.conf` separately.

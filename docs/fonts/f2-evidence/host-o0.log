@@ -1,0 +1,6 @@
+real DejaVuSans.ttf: AV advance 2685/64, V origin 1277/64, ink pixels 228
+real DejaVuSansMono.ttf: AV advance 2432/64, V origin 1216/64, ink pixels 218
+real SourceSans3-Regular.otf: AV advance 2083/64, V origin 1059/64, ink pixels 170
+real SourceCodePro-Regular.otf: AV advance 2432/64, V origin 1216/64, ink pixels 189
+PASS: 7910 checks, F2 vectors, ownership, failure, drawing and profile
+Artifacts: /tmp/os64-f2-final-o0

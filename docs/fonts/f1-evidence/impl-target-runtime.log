@@ -1,0 +1,7 @@
+make: Entering directory '/home/yogi/src/os64/.worktrees/freetype-backend/userland'
+make: '/home/yogi/src/os64/.worktrees/freetype-backend/userland/obj/freetype/libfreetype/port/runtime.c.o' is up to date.
+make: '/home/yogi/src/os64/.worktrees/freetype-backend/userland/obj/freetype/libfreetype/port/nonlocal.S.o' is up to date.
+make: Leaving directory '/home/yogi/src/os64/.worktrees/freetype-backend/userland'
+PASS: production target runtime, private aliases and nonlocal return (Linux entry/exit only)
+PASS: build rejects removal of the loop-pattern policy flag
+OBSERVED: flag-removal runtime variant returned 0; this observation is separate from the build-policy check
