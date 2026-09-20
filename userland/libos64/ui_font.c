@@ -344,6 +344,14 @@ int32_t os64_ui_font_row_height(os64_ui_t *ui, os64_font_role_t role)
 	return m.row_h;
 }
 
+bool ui_font_interface_row_unchanged(const os64_ui_t *ui)
+{
+	const ui_font_binding_t *b = ui ? (const ui_font_binding_t *)ui->font : NULL;
+	return b && b->set && b->staging &&
+	       b->faces.view[OS64_FONT_ROLE_UI].row_height_px ==
+	       b->staging->view[OS64_FONT_ROLE_UI].row_height_px;
+}
+
 // Does this retained run still say what the caption says? The run owns a
 // copy of the bytes it was laid out from, so the question is answerable
 // without trusting the caller to announce a change — and a caption is short

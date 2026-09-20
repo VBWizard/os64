@@ -2,10 +2,11 @@
 #include "os64/font_settings.h"
 #include "os64/fmt.h"
 #include "os64/str.h"
+#include "ui_internal.h"
 
-/* Fixed-coordinate applications can adopt a new face only while their text
- * rows fit. Applications that reflow install their own planner before follow.
- * Include inactive pages: switching tabs must remain usable after adoption. */
+/* Fixed-coordinate applications check initial and changed interface row
+ * heights against their slots, including inactive pages. Applications that
+ * reflow install their own planner before follow. */
 static os64_font_status_t fixed_rows(os64_ui_t *ui, os64_ui_widget_t *w)
 {
     if (!w) return OS64_FONT_OK;
@@ -24,7 +25,16 @@ static os64_font_status_t fixed_rows(os64_ui_t *ui, os64_ui_widget_t *w)
     return OS64_FONT_OK;
 }
 static os64_font_status_t fixed_plan(os64_ui_t *ui, void *user, void **out)
-{ (void)user; *out = NULL; return fixed_rows(ui, ui->root); }
+{
+    (void)user; *out = NULL;
+    /* A resize may leave existing rows shorter than this guard allows.
+     * An unchanged interface height adds no vertical fit requirement when
+     * Terminal or Document changes. Widget run preparation still follows;
+     * this does not skip provider validation or custom application planners. */
+    if (ui->font_settings_ready && ui_font_interface_row_unchanged(ui))
+        return OS64_FONT_OK;
+    return fixed_rows(ui, ui->root);
+}
 static void fixed_done(os64_ui_t *ui, void *user, void *plan)
 { (void)ui; (void)user; (void)plan; }
 

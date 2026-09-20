@@ -39,7 +39,10 @@ requiring its implementation vocabulary.
   writers preserve font and unknown future components, including raw unowned
   lines and comments. Named theme Save/Save As carries the raw envelope.
 - Production Scribe and gterm follow the shared settings through their F4/F3
-  consumers. Fixed-layout libui tools refuse rows that do not fit. gclock stages
+  consumers. Fixed-layout libui tools validate initial/changed interface row
+  heights; unchanged installed heights skip that guard. Other preparation and
+  application planners still run. Workshop reports its own retention without
+  claiming that another consumer failed or misclassifying the cause. gclock stages
   a measured clock label. gterm caps its preferred startup frame to the display
   before computing its grid and PTY dimensions. A refused adoption remains
   retryable; success of publication is not acknowledgement from every process.
@@ -65,6 +68,13 @@ Workshop changes; F3/F4 are integrated before their production hookup is edited.
 No kernel code or syscall changed.
 
 ## Validation
+
+### Role-fit follow-up
+
+The [role-fit report](F5-ROLE-FIT-FOLLOWUP.md) records the post-`ce69b48` correction
+for unrelated role updates repeating the interface height guard, and Workshop's
+replacement of the inaccurate catch-all fit warning with a local-retention
+notice. Initial and changed interface heights remain validated.
 
 ### Combined discovery follow-up
 

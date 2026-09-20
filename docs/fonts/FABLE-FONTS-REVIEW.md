@@ -43,7 +43,8 @@ checkpoints, not claims about the integrated production selector.
 4. Installation stages a copy, validates the entire candidate role set, syncs,
    and publishes with no-replace rename. Existing names are refused. Discovery
    reads at most 64 MiB, scans at most 256 entries and returns at most 128 assets.
-5. Fixed-layout libui participants refuse text rows taller than their slots.
+5. Fixed-layout libui participants validate initial/changed interface row heights
+   against their slots; unrelated roles do not recheck unchanged installed heights.
    Scribe uses its measured planner; gterm uses the F3 PTY barrier. Per-process
    refusal keeps the old generation and remains retryable. Publication is not
    a global adoption acknowledgement.
@@ -88,3 +89,11 @@ temporary memory bound and catalog lookup API. The
 [discovery receipt](f5-evidence/discovery-union/README.md) records host regressions,
 allocation-denial coverage and the guest fixture. Proportional terminal-entry
 disabling remains a discussed UI improvement, not part of this correction.
+
+## Role-fit follow-up
+
+The post-`ce69b48` [role-fit follow-up](F5-ROLE-FIT-FOLLOWUP.md) narrows the default
+height guard to initial/changed interface rows and corrects Workshop's misleading
+failure message. It records a failing-before/passing-after regression, real-font
+widget checks, image build and guest role changes. Full-draft publication and
+custom application planners remain intact; the broader resize policy is deferred.

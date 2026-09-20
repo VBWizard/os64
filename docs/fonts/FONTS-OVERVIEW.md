@@ -45,8 +45,12 @@ primary font and size; it preserves those fallback choices.
 If a file or setting is invalid, the whole candidate is refused. An application
 keeps its old usable font if it cannot prepare the replacement. Scribe measures
 and rearranges its controls before switching; gterm also has to resize its PTY
-successfully. Fixed-layout tools keep their old font when the new text rows will
-not fit. Applying publishes a request; it does not make every window change at
+successfully. Fixed-layout tools check interface rows on initial adoption and
+when their height changes. Changing Terminal or Document does not repeat that
+fit check for an unchanged installed interface height. Other preparation can
+still fail; Workshop's notice that it kept its fonts describes Workshop, not
+whether the terminal or editor accepted the session update.
+Applying publishes a request; it does not make every window change at
 exactly the same instant. Apply again to retry a refused change or explicitly
 reload a font whose file was replaced.
 

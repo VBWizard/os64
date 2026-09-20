@@ -8,6 +8,7 @@ struct os64_font_engine {
 struct os64_font_face {
     os64_font_engine_t *engine;
     const uint8_t *source;
+    uint32_t pixel_height;
 };
 struct os64_font_glyph {
     os64_font_engine_t *engine;
@@ -99,12 +100,12 @@ static os64_font_status_t face_open(os64_font_engine_t *engine, const uint8_t *b
     if (length > OS64_FONT_FILE_MAX || engine->stats.live_faces == OS64_FONT_FACE_MAX)
         return OS64_FONT_LIMIT;
     if (length != 1) return OS64_FONT_MALFORMED;
-    if (*bytes != 'P' && *bytes != 'M' && *bytes != 'L') return OS64_FONT_UNSUPPORTED;
+    if (*bytes != 'P' && *bytes != 'M' && *bytes != 'L' && *bytes != 'S' && *bytes != 'T') return OS64_FONT_UNSUPPORTED;
     void *allocation;
     os64_font_status_t status = allocate(engine, sizeof(os64_font_face_t), &allocation);
     if (status != OS64_FONT_OK) return status;
     os64_font_face_t *face = allocation;
-    *face = (os64_font_face_t){engine, bytes};
+    *face = (os64_font_face_t){engine, bytes, options->pixel_height};
     ++engine->stats.live_faces;
     *out = face;
     return OS64_FONT_OK;
@@ -123,9 +124,10 @@ static os64_font_status_t face_info(os64_font_face_t *face, os64_font_face_info_
     if (out) *out = (os64_font_face_info_t){0};
     if (!face || !out) return OS64_FONT_BAD_ARGUMENT;
     *out = (os64_font_face_info_t){.glyph_count = GLYPH_COUNT,
-        .flags = *face->source == 'M' ? OS64_FONT_FACE_FIXED_WIDTH : 0,
+        .flags = (*face->source == 'M' || *face->source == 'T') ? OS64_FONT_FACE_FIXED_WIDTH : 0,
         .family = "Contract fixture", .style = "Regular",
-        .ascent = 768, .descent = 256, .line_height = 1024};
+        .ascent = 768, .descent = 256,
+        .line_height = (*face->source == 'S' || *face->source == 'T') ? (int32_t)face->pixel_height * 64 : 1024};
     return OS64_FONT_OK;
 }
 
@@ -134,6 +136,9 @@ static os64_font_status_t lookup(os64_font_face_t *face, uint32_t scalar, uint32
     if (out) *out = 0;
     if (!face || !out || scalar > 0x10ffff || (scalar >= 0xd800 && scalar <= 0xdfff))
         return OS64_FONT_BAD_ARGUMENT;
+    if (*face->source == 'T' && scalar >= 0x20 && scalar <= 0x7e) {
+        *out = 1; return OS64_FONT_OK;
+    }
     if (*face->source == 'L' && scalar == 'W') return OS64_FONT_MISSING;
     for (size_t i = 1; i < GLYPH_COUNT; ++i) {
         if (metrics[i].scalar == scalar) { *out = (uint32_t)i; return OS64_FONT_OK; }
@@ -164,7 +169,7 @@ static os64_font_status_t render(os64_font_face_t *face, uint32_t id, os64_font_
     os64_font_glyph_t *glyph = allocation;
     const metric_t *m = &metrics[id];
     *glyph = (os64_font_glyph_t){.engine = engine, .view = {
-        .advance_x = *face->source == 'M' ? 512 : m->advance,
+        .advance_x = (*face->source == 'M' || *face->source == 'T') ? 512 : m->advance,
         .left = m->left, .top = m->top, .width = m->width,
         .height = m->height, .stride = m->width}};
     size_t area = (size_t)m->width * m->height;

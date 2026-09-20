@@ -69,7 +69,12 @@ layout or provider ABI.
 
 Scribe uses F4's application planner and retains unsaved bytes, caret, selection
 and view state across accepted changes. Fixed-coordinate libui tools use a
-default text-row fit check; their previous fonts remain usable on refusal.
+default interface-row fit check on initial adoption and when the interface row
+height changes. An unchanged installed interface height does not trigger that
+guard again for a Terminal/Document publication after a resize. Provider and
+widget-run preparation still run; custom planners are unchanged. A pending
+interface height that differs from the installed one remains subject to the
+guard even if another role also changes. Previous fonts remain usable on refusal.
 gclock measures a clock row before staging its centered label. gterm clamps
 its initial frame to the screen before preparing the grid, so a large saved
 font cannot open a preferred 100-column window beyond the display.
@@ -79,3 +84,6 @@ commits them without allocation. Its editor and confirmation dialog follow
 the session independently; the specimen remains a local draft. Font Undo is
 one step, and font Reset returns to the last saved/initial choices. Theme
 loading preserves the independent font draft.
+Workshop reports a local refusal as retaining its fonts and preview after the
+session update. That does not mean gterm or Scribe rejected the publication;
+the message does not classify unrelated I/O/allocation failures as layout fit.

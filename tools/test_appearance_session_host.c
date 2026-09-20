@@ -65,7 +65,8 @@ int64_t __wrap_os64_conf_write_checked(const char *name,
 }
 int64_t os64_open(const char *path, const char *mode)
 {
-    assert(strcmp(path, OS64_APPEARANCE_PATH) == 0);
+    bool font = !strcmp(path, "/test/scalable") || !strcmp(path, "/test/mono");
+    assert(font || strcmp(path, OS64_APPEARANCE_PATH) == 0);
     if (fail_open) return -1;
     for (int fd = 3; fd < 16; ++fd) {
         if (handles[fd].open) continue;
@@ -73,6 +74,11 @@ int64_t os64_open(const char *path, const char *mode)
         handles[fd].writer = mode && *mode == 'w';
         handles[fd].pos = 0;
         if (!handles[fd].writer) {
+            if (font) {
+                handles[fd].data[0] = !strcmp(path, "/test/mono") ? 'T' : 'S';
+                handles[fd].size = 1;
+                return fd;
+            }
             ++reads;
             int n = appearance_snapshot(handles[fd].data, sizeof(handles[fd].data));
             assert(n > 0);
@@ -531,8 +537,59 @@ static void font_envelope_contracts(void)
     puts("font envelopes: preserving component CAS, reload serials, malformed input, conflicts, allocation/I/O failure and 4096-byte refusal passed");
 }
 
+static void role_specific_fit_contract(void)
+{
+    pid_t pid = fork(); assert(pid >= 0);
+    if (!pid) {
+        os64_ui_t ui; os64_ui_init(&ui, NULL);
+        os64_ui_widget_t root, button;
+        os64_ui_panel(&root); os64_ui_set_root(&ui, &root);
+        os64_ui_button(&button, "Test", NULL, NULL);
+        button.bounds = (os64_gui_rect_t){0,0,100,18};
+        os64_ui_add_child(&root, &button);
+        /* Initial adoption must still validate even the builtin row. */
+        assert(os64_ui_font_follow(&ui) != 0);
+        button.bounds.h = 20;
+        assert(!os64_ui_font_follow(&ui));
+        os64_font_config_t config; os64_font_config_defaults(&config);
+        strcpy(config.roles[0].face[0], "/test/scalable");
+        assert(!os64_font_settings_apply(os64_ui_font_context(&ui), &config, NULL, NULL));
+        assert(!os64_ui_font_follow(&ui));
+        /* Restore a smaller window after acceptance. Terminal-only changes
+         * must not re-refuse an already installed interface line height. */
+        button.bounds.h = 18;
+        strcpy(config.roles[1].face[0], "/test/mono"); config.roles[1].size = 24;
+        assert(!os64_font_settings_apply(os64_ui_font_context(&ui), &config, NULL, NULL));
+        assert(!os64_ui_font_follow(&ui));
+        strcpy(config.roles[2].face[0], "/test/scalable"); config.roles[2].size = 28;
+        assert(!os64_font_settings_apply(os64_ui_font_context(&ui), &config, NULL, NULL));
+        assert(!os64_ui_font_follow(&ui));
+        assert(os64_ui_font_row_height(&ui, OS64_FONT_ROLE_DOCUMENT) == 28);
+        uint64_t accepted = ui.font_generation;
+        /* A changed interface height still fails atomically and remains
+         * retryable at the same generation after the window grows. */
+        config.roles[0].size = 24;
+        assert(!os64_font_settings_apply(os64_ui_font_context(&ui), &config, NULL, NULL));
+        assert(os64_ui_font_follow(&ui) != 0 && ui.font_generation == accepted);
+        assert(os64_ui_font_row_height(&ui, OS64_FONT_ROLE_UI) == 16);
+        button.bounds.h = 28;
+        assert(!os64_ui_font_follow(&ui));
+        assert(os64_ui_font_row_height(&ui, OS64_FONT_ROLE_UI) == 24);
+        /* Refusal is still necessary when the interface grows on a later
+         * full-set publication, even if another role also changes. */
+        config.roles[0].size = 30; config.roles[1].size = 26;
+        assert(!os64_font_settings_apply(os64_ui_font_context(&ui), &config, NULL, NULL));
+        assert(os64_ui_font_follow(&ui) != 0);
+        os64_ui_font_release(&ui);
+        _exit(0);
+    }
+    int status; assert(waitpid(pid, &status, 0) == pid && !status);
+    puts("font fit: unchanged interface rows allow terminal/document changes; initial, changed-height and retry checks passed");
+}
+
 void appearance_session_contracts(void)
 {
+    role_specific_fit_contract();
     first_font_apply_contract();
     legacy_session_radius_contract();
     startup_preservation_contracts();
@@ -543,13 +600,17 @@ void appearance_session_contracts(void)
     puts("appearance: startup preservation, session store, cache, races, independent contexts, and queue pressure passed");
 }
 
-/* The appearance UI suite has no installed-font filesystem. The separate font
- * configuration/installation fixture exercises real files and failure paths. */
+/* Two one-byte backend fixtures supply fonts for session/adoption tests.
+ * The separate configuration/installation suite exercises real font files. */
 int64_t __wrap_os64_conf_find(const char *name, char *out, size_t cap)
 { (void)name; (void)out; (void)cap; return OS64_CONF_NO_FILE; }
 int64_t __wrap_os64_conf_target(const char *name, char *out, size_t cap)
 { int n = snprintf(out, cap, "/home/%s", name); return n < 0 || (size_t)n >= cap ? -1 : 0; }
-int64_t os64_stat(const char *path, os64_dirent_t *entry) { (void)path; (void)entry; return -1; }
+int64_t os64_stat(const char *path, os64_dirent_t *entry)
+{
+    if (strcmp(path,"/test/scalable") && strcmp(path,"/test/mono")) return -1;
+    *entry = (os64_dirent_t){.size = 1}; return 0;
+}
 int64_t os64_opendir(const char *path) { (void)path; return -1; }
 int64_t os64_readdir(int32_t fd, os64_dirent_t *entry) { (void)fd; (void)entry; return 0; }
 int64_t os64_mkdir(const char *path) { (void)path; return -1; }

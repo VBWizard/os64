@@ -26,6 +26,10 @@ bool ui_text_cluster_before(const char *s, size_t len, size_t at, size_t limit,
 int64_t os64_ui_theme_parse_status(os64_ui_theme_t *t, const char *text,
                                   size_t length, bool session);
 int os64_ui_theme_preserve_session(void);
+// During adoption, compare the candidate's interface row with the installed
+// row without switching measurement away from the candidate or allocating.
+__attribute__((visibility("hidden")))
+bool ui_font_interface_row_unchanged(const os64_ui_t *ui);
 int64_t os64_ui_theme_snapshot_startup(char *text, size_t cap);
 int64_t os64_ui_theme_decode_session(os64_ui_theme_t *t, uint64_t *fields,
                                      bool *inherited, const char *text, size_t length);

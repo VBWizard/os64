@@ -975,7 +975,7 @@ static void dispatch(const os64_gui_event_t *ev)
         os64_ui_dispatch(&gEditor, ev);
         (void)os64_ui_font_follow(&gDialog);
         if (gEditor.appearance_generation > before) {
-            gApplyStatus = gEditor.font_settings_result ? "Font does not fit editor; current font and preview kept" : "Session changed; preview kept";
+            gApplyStatus = gEditor.font_settings_result ? "Session updated; Workshop kept its fonts and preview" : "Session updated; preview kept";
             gDialog.theme = gEditor.theme;
             refresh_composition();
         }
