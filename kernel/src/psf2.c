@@ -119,17 +119,44 @@ static size_t utf8_one(const uint8_t *p, const uint8_t *end, uint32_t *cp)
     return need + 1;
 }
 
-static void claim(psf2_charmap_t *map, uint32_t cp, uint16_t glyph)
+// CP437 is not a range of Unicode, so "which bytes mean this code point?" has
+// to be asked backwards. It is asked of a table sorted by code point, because
+// the forward scan costs 256 compares PER CODE POINT IN THE FONT'S TABLE and
+// that table is the writer's to size: a megabyte of code points was a quarter
+// of a billion compares, run where the door runs — with interrupts off.
+typedef struct { uint32_t cp; uint8_t byte; } cp437_rev_t;
+
+static void cp437_reverse(cp437_rev_t rev[256])
+{
+    for (uint32_t b = 0; b < 256; b++)
+    {
+        cp437_rev_t e = { os64_cp437_codepoint((uint8_t)b), (uint8_t)b };
+        uint32_t i = b;
+        while (i > 0 && rev[i - 1].cp > e.cp)
+        {
+            rev[i] = rev[i - 1];
+            i--;
+        }
+        rev[i] = e;
+    }
+}
+
+static void claim(psf2_charmap_t *map, const cp437_rev_t rev[256], uint32_t cp, uint16_t glyph)
 {
     if (cp < 256 && map->glyph[OS64_CHARSET_LATIN1][cp] == PSF2_MAP_NONE)
         map->glyph[OS64_CHARSET_LATIN1][cp] = glyph;
-    // CP437 is not a range of Unicode, so the question is asked backwards:
-    // which bytes mean this code point? Usually one, and 256 compares per
-    // table entry is nothing beside the disk read that fetched the font.
-    for (uint32_t b = 0; b < 256; b++)
-        if (os64_cp437_codepoint((uint8_t)b) == cp &&
-            map->glyph[OS64_CHARSET_CP437][b] == PSF2_MAP_NONE)
-            map->glyph[OS64_CHARSET_CP437][b] = glyph;
+
+    uint32_t lo = 0, hi = 256;
+    while (lo < hi)
+    {
+        uint32_t mid = (lo + hi) / 2;
+        if (rev[mid].cp < cp) lo = mid + 1; else hi = mid;
+    }
+    // Every byte that means this code point, should the code page ever give
+    // one code point to two bytes: equal keys sit together in a sorted table.
+    for (; lo < 256 && rev[lo].cp == cp; lo++)
+        if (map->glyph[OS64_CHARSET_CP437][rev[lo].byte] == PSF2_MAP_NONE)
+            map->glyph[OS64_CHARSET_CP437][rev[lo].byte] = glyph;
 }
 
 psf2_status_t psf2_build_charmap(const psf2_face_t *face, psf2_charmap_t *out,
@@ -153,6 +180,9 @@ psf2_status_t psf2_build_charmap(const psf2_face_t *face, psf2_charmap_t *out,
         const uint8_t *p = face->table, *end = face->table + face->table_bytes;
         uint32_t glyph = 0;
         bool in_sequences = false;
+        // On the stack, per call: two loads on two cores share nothing.
+        cp437_rev_t rev[256];
+        cp437_reverse(rev);
         while (p < end && glyph < face->nglyphs) {
             if (*p == 0xFF) { glyph++; in_sequences = false; p++; continue; }
             if (*p == 0xFE) { in_sequences = true; p++; continue; }
@@ -161,7 +191,7 @@ psf2_status_t psf2_build_charmap(const psf2_face_t *face, psf2_charmap_t *out,
             if (used == 0)
                 return refuse(PSF2_BAD_TABLE, glyph, offender);
             if (!in_sequences)
-                claim(&map, cp, (uint16_t)glyph);
+                claim(&map, rev, cp, (uint16_t)glyph);
             p += used;
         }
         // Every glyph has an entry, even an empty one, so a table that runs

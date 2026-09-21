@@ -33,6 +33,7 @@
 extern uint64_t mp_isrSavedRSP[];
 #include "shared_object.h"
 #include "tty.h"             // tty_write — a ring-3 death's headline goes to the program's own terminal
+#include "gui/compositor.h"  // gui_emergency_disable — exception_panic takes the glass
 #include "strings/strlen.h"  // strlen — the headline's length for tty_write
 
 uint64_t gLastFaultRbp = 0;
@@ -411,6 +412,20 @@ void dump_fault_registers(bool direct)
 
 void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     core_local_storage_t* core = try_get_core_local_storage();
+
+    // TAKE THE GLASS FIRST, as panic() does and for panic()'s reasons — this
+    // machine is about to halt, and what reaches the screen is all a machine
+    // with no serial port will ever say about why. Without it the report goes
+    // through the live terminal, and the live terminal stops painting at its
+    // first SCROLL and leaves the rest to a rider that runs from the
+    // scheduler — which a halted machine never runs again. On a screen with
+    // room left that loses everything after the first few lines; on a full
+    // one, which is the normal state of a machine that has been up for a
+    // minute, it loses the whole report.
+    mpFreezeOtherCores();
+    gui_emergency_disable();
+    renderer_bust_lock();
+    tty_emergency_direct();
 
     // One narrator per report (exception_report.h) — without this, two cores
     // faulting together braid their reports character-by-character on COM1,

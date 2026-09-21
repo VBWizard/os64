@@ -428,6 +428,12 @@ int handle_file_object_close(void *vfs_file)
 	// (ext2 makes this a formality — writes are full write-through, so there
 	// is nothing left to fail at close. FAT is why the line exists, and the
 	// lifeboat is FAT.)
+	//
+	// THE LINE SAYS WHAT IS TRUE OF EVERY CLOSE THAT FAILS, and no more: a
+	// close is also where a file that JUDGES what it was given says no —
+	// /sys/console/font refuses a font there — and nothing was on its way to
+	// a disk in that case. A message that names a flush on those sends the
+	// reader looking for a disk problem that does not exist.
 	// DEBUG_EXCEPTIONS, and the choice is load-bearing rather than lazy:
 	// printd requires ALL the bits it is given ((kDebugLevel & level) !=
 	// level), and DEBUG_VFS is not in DEBUG_MINIMAL_OPTIONS — so tagging this
@@ -437,7 +443,7 @@ int handle_file_object_close(void *vfs_file)
 	// went wrong that nobody asked to hear about.
 	if (rc != 0)
 		printd(DEBUG_EXCEPTIONS,
-		       "handle_file_object_close: FLUSH FAILED (%d) closing '%s' — data written to this file may not be on disk\n",
+		       "handle_file_object_close: CLOSE FAILED (%d) on '%s' - what was written was not committed (a disk file: may not be on disk; a /sys file: it refused, and says why when read)\n",
 		       rc, path_copy ? path_copy : "<unnamed>");
 
 	if (path_copy != NULL)

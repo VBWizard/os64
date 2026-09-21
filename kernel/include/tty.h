@@ -327,6 +327,30 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode);
 // or -1 for invalid geometry (no mutation). Caller must keep t alive.
 int tty_resize(tty_t *t, uint32_t cols, uint32_t rows);
 
+// Re-shape a GRID terminal and KEEP ITS TEXT — the carrier for a console font
+// change, where nobody repaints (CONSOLE_FONTS.md § The contents survive).
+// tty_resize's opposite in policy: long lines wrap and re-join through
+// tty_reflow.h instead of losing their right-hand end, the scrolled-back view
+// keeps its line, and the ring is never smaller than the scrollback it would
+// have been born with. Touches no glass; the caller repaints.
+//
+// What the reshape could not carry is COUNTED into *dropped (oldest history,
+// past TTY_REFONT_MAX_LINES) and *clipped (rows under the cursor on a shorter
+// screen); either pointer may be NULL. Returns like tty_resize: 1 changed,
+// 0 already that shape, -1 refused (geometry outside the fence, or a STREAM
+// terminal, which has no cells). Task context: it allocates.
+#define TTY_REFONT_MAX_LINES 8192u
+int tty_refont(tty_t *t, uint32_t cols, uint32_t rows,
+               uint32_t *dropped, uint32_t *clipped);
+
+// The largest grid tty_refont will take, for a caller that wants to refuse
+// with a reason before it gets that far. Settled by tty_init.
+void tty_refont_limits(uint32_t *cols_max, uint32_t *rows_max);
+
+// Repaint whichever terminal has the glass, from its grid. For a caller that
+// changed what the glass should show without writing to a terminal.
+void tty_repaint_focused(void);
+
 // The master's write half: bytes become synthesized key events into the
 // slave's input ring — after 0x03 runs the per-tty interrupt intercept
 // against the SLAVE (a windowed Ctrl+C aims at the slave's foreground, not
