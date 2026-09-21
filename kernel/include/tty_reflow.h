@@ -9,9 +9,11 @@
 // rest go, and sizes the ring by the new row count. A FONT CHANGE has nobody
 // to repaint for it — the likeliest moment is just after boot, with the boot
 // log on the glass and a larger face cutting 240 columns to 160 — so the rule
-// here is the opposite one: every cell that was on the screen or in the
-// scrollback is still there afterwards, in the same order, and going back to
-// the old shape puts it back the way it was.
+// here is the opposite one: what was on the screen or in the scrollback is
+// still there afterwards, in the same order, and going back to the old shape
+// puts it back the way it was. The two things that can still be lost are
+// forced by the caller's own limits, and each is COUNTED in the result
+// (`history_dropped`, `below_clipped`) rather than going quietly.
 //
 // THE UNIT IS THE PARAGRAPH: a row, plus every row after it whose first cell
 // carries TTY_ATTR_WRAPPED. A paragraph is laid into the new grid as one run
@@ -48,7 +50,9 @@ typedef struct
 	// screen, so screen_top == hist_lines (tty_resize's convention too).
 	uint32_t lines_needed;             // hist_lines + rows: the least total_lines that holds it
 	uint32_t hist_lines;
-	uint32_t view_offset;              // keeps the same line at the top of the view
+	// The same line stays at the top of the view — or, when the fence below
+	// threw that line away, the oldest line there still is.
+	uint32_t view_offset;
 	uint32_t cur_row, cur_col;
 	uint32_t save_row, save_col;
 	// What did NOT come across, which is zero unless a fence forced it:

@@ -32,9 +32,10 @@
 //
 // WHY A CHARMAP AT ALL. A terminal cell holds a BYTE and the character set
 // it was written under (os64/charset.h); a font holds glyphs in whatever
-// order its author liked, and says which code points each one draws. Only
-// the boot face happens to keep Latin-1 in index order. So for any other
-// face BOTH sets go through the table: Latin-1 byte b is code point b,
+// order its author liked, and says which code points each one draws. The
+// boot face happens to keep Latin-1 in index order and nothing says the
+// next one will, so BOTH sets go through the table: Latin-1 byte b is code
+// point b,
 // CP437 byte b is os64_cp437_codepoint(b), and the map holds the glyph that
 // claims that code point — or PSF2_MAP_NONE, which draws blank or one of
 // the synthesized blocks below, never a guess.
