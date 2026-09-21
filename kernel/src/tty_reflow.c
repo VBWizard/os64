@@ -90,8 +90,10 @@ static void walk(const tty_reflow_in_t *in, uint32_t nc, layout_t *lay,
 			// rows in the new one, so an anchor sitting in that tail is at
 			// the boundary with whatever comes next — and for the screen's
 			// anchor, pulling it back inside would put text it was below,
-			// which is history, on the live screen. The cursor never
-			// reaches here: its paragraph was grown to hold it.
+			// which is history, on the live screen. Row `need` IS that
+			// boundary (the rows are 0..need-1), so r == need is already
+			// right and only a row beyond it is brought back. The cursor
+			// never reaches here: its paragraph was grown to hold it.
 			if (r > need) r = need;
 			an->new_row = next_new + (uint32_t)r;
 			an->new_col = (uint32_t)(off % nc);

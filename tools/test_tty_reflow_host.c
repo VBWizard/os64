@@ -130,14 +130,16 @@ static void same_story(const story_t *a, const story_t *b, size_t dropped, const
 //
 // It may move FORWARD through the content: a narrower grid needs more rows
 // for the same text, and the top slides down so the last line still shows.
-// Going BACKWARD it has two landing places and no others. The START OF THE
-// ROW that holds the cell it began at, because the boundary must fall on a
-// row boundary and the old one rarely does in the new width. Or the START OF
-// THE LINE, when a wider grid has rejoined a line that straddled the
-// boundary — its head comes back onto the screen with its tail, because the
-// cursor is on that line and it cannot be left half in history. Reaching
-// back to any OTHER row of the line is the failure: the part above the new
-// top is a history line handed to the next paint to destroy.
+// Going BACKWARD it has one landing place: the START OF THE ROW that holds
+// the cell it began at, because the boundary must fall on a row boundary and
+// the old one rarely does in the new width. A line that straddled the
+// boundary and was rejoined by a wider grid is that same case — its one row
+// holds the old cell, and its head comes back onto the screen with its tail.
+// Reaching back to any EARLIER row is the failure: the part above the new
+// top is a history line handed to the next paint to destroy. "The start of
+// the line" is deliberately NOT a second allowance: a screen top sitting in
+// a line's blank tail, pulled back to that line's first row, is a bug that
+// lands exactly there.
 //
 // Asked apart from `same_story` because that derives the cursor as
 // hist + cur_row: an error that moves the screen top and the cursor row
@@ -147,9 +149,8 @@ static void screen_top_held(const story_t *a, const story_t *b, uint32_t nc, con
     bool forward  = b->top_para > a->top_para ||
                     (b->top_para == a->top_para && b->top_off >= a->top_off);
     bool same_row = b->top_para == a->top_para && b->top_off + nc > a->top_off;
-    bool rejoined = b->top_para == a->top_para && b->top_off == 0;
-    CHECK(forward || same_row || rejoined,
-          "%s: the screen went back to line %zu cell %zu, neither its row nor its start, from line %zu cell %zu",
+    CHECK(forward || same_row,
+          "%s: the screen went back to line %zu cell %zu, above the row holding line %zu cell %zu",
           what, b->top_para, b->top_off, a->top_para, a->top_off);
 }
 
