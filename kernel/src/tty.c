@@ -1268,6 +1268,19 @@ int tty_resize(tty_t *t, uint32_t cols, uint32_t rows)
 	return 1;
 }
 
+// tty_refont's fence is tty_resize's — sanity, not policy — WIDENED TO THE
+// GRID THE MACHINE WAS BORN WITH. tty_init takes whatever the boot face makes
+// of the framebuffer and asks nobody (640 columns on a 5120-pixel screen),
+// and a terminal that may not be given that shape again can never go back to
+// the boot face.
+static uint32_t s_refont_cols_max = 512, s_refont_rows_max = 256;
+
+void tty_refont_limits(uint32_t *cols_max, uint32_t *rows_max)
+{
+	*cols_max = s_refont_cols_max;
+	*rows_max = s_refont_rows_max;
+}
+
 // The font change's carrier. tty_reflow does the thinking; this is the part
 // that needs a terminal: sizing and allocating the new ring, and swapping it
 // in under the grid lock.
@@ -1291,8 +1304,8 @@ int tty_refont(tty_t *t, uint32_t cols, uint32_t rows,
 {
 	if (dropped != NULL) *dropped = 0;
 	if (clipped != NULL) *clipped = 0;
-	// tty_resize's fence, for tty_resize's reason: sanity, not policy.
-	if (t == NULL || cols < 2 || rows < 2 || cols > 512 || rows > 256)
+	if (t == NULL || cols < 2 || rows < 2 ||
+	    cols > s_refont_cols_max || rows > s_refont_rows_max)
 		return -1;
 
 	tty_cell_t *fresh = NULL;
@@ -1731,6 +1744,10 @@ void tty_init(void)
 {
 	uint32_t cols = renderer_cols();
 	uint32_t rows = renderer_rows();
+
+	// The shape being born here must stay reachable (tty_refont's fence).
+	if (cols > s_refont_cols_max) s_refont_cols_max = cols;
+	if (rows > s_refont_rows_max) s_refont_rows_max = rows;
 
 	for (uint32_t i = 0; i < TTY_COUNT; i++)
 	{

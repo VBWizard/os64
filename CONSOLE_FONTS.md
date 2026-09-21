@@ -112,8 +112,10 @@ state a program sets by naming it is a file.
   with no operands prints, and what it polls after a write.
 - **Write the single word `boot`** to go back to the Limine-module face.
 - **A cell has to leave a grid somebody can work at**: 40x10 at the least,
-  512x256 at the most (the terminal's own fence). A 64x128 face on a
-  1024x768 screen is a valid font and a 16x6 terminal, and is refused.
+  512x256 at the most (the terminal's own fence) — or the grid the boot face
+  made of this screen, where that is larger, because `boot` has to be able
+  to come back. A 64x128 face on a 1024x768 screen is a valid font and a
+  16x6 terminal, and is refused.
 
 **One face for every VT**, in v1. The renderer is one object with one cell
 size and eight terminals share it; per-VT faces would mean a cell size per

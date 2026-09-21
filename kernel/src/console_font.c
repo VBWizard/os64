@@ -25,11 +25,10 @@ extern task_t *kKernelTask;
 // are about the person. A 64x128 face on a 1024x768 screen is a valid font
 // and a 16x6 terminal, which is a prompt and nowhere to read its answer —
 // the refusal is cheaper than the reboot it would take to undo. The upper
-// pair is tty_refont's own fence, asked here so the refusal has a reason.
+// pair is tty_refont's own fence (tty_refont_limits), asked at submit so the
+// refusal has a reason.
 #define CONSOLE_GRID_COLS_MIN  40u
 #define CONSOLE_GRID_ROWS_MIN  10u
-#define CONSOLE_GRID_COLS_MAX 512u
-#define CONSOLE_GRID_ROWS_MAX 256u
 
 // The blocks psf2_synth_block can make, in the order their slots are laid
 // out after the blank one. ANSI art cannot be drawn without them, so a face
@@ -210,15 +209,27 @@ static void resolve(console_loaded_t *f, const psf2_face_t *psf, const psf2_char
 	}
 }
 
-static void queue(console_loaded_t *f, bool boot)
+// The slot and the words about it change in ONE critical section: two closes
+// can race here, and whichever wins the slot must also be the one `last:`
+// describes, or a program polling the status credits the pending install to
+// the offer that lost.
+static void queue(console_loaded_t *f, bool boot, const char *fmt, ...)
 {
+	char line[sizeof(s_last)];
+	va_list args;
+	va_start(args, fmt);
+	vsnprintf(line, sizeof(line), fmt, args);
+	va_end(args);
+
 	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
 	console_loaded_t *superseded = s_queued;   // the last word wins
 	s_queued = f;
 	s_queued_boot = boot;
 	s_pending = true;
+	memcpy(s_last, line, sizeof(s_last));
 	spinlock_release_irqrestore(&s_lock, flags);
 	loaded_free(superseded);
+	printd(DEBUG_SYSTEM, "console font: %s\n", line);
 }
 
 int console_font_submit(console_font_pending_t *p)
@@ -244,8 +255,7 @@ int console_font_submit(console_font_pending_t *p)
 	if (is_boot_word(p->bytes, p->length))
 	{
 		console_font_discard(p);
-		queue(NULL, true);
-		verdict("accepted: the boot face, waiting for the swap");
+		queue(NULL, true, "accepted: the boot face, waiting for the swap");
 		return 0;
 	}
 
@@ -264,13 +274,14 @@ int console_font_submit(console_font_pending_t *p)
 
 	uint32_t cols = kFrameBuffer.width / psf.width;
 	uint32_t rows = kFrameBuffer.height / psf.height;
+	uint32_t cols_max, rows_max;
+	tty_refont_limits(&cols_max, &rows_max);
 	if (cols < CONSOLE_GRID_COLS_MIN || rows < CONSOLE_GRID_ROWS_MIN ||
-	    cols > CONSOLE_GRID_COLS_MAX || rows > CONSOLE_GRID_ROWS_MAX)
+	    cols > cols_max || rows > rows_max)
 	{
 		verdict("refused: a %ux%u cell makes this screen %ux%u, outside %ux%u..%ux%u",
 		        psf.width, psf.height, cols, rows,
-		        CONSOLE_GRID_COLS_MIN, CONSOLE_GRID_ROWS_MIN,
-		        CONSOLE_GRID_COLS_MAX, CONSOLE_GRID_ROWS_MAX);
+		        CONSOLE_GRID_COLS_MIN, CONSOLE_GRID_ROWS_MIN, cols_max, rows_max);
 		console_font_discard(p);
 		return -1;
 	}
@@ -294,9 +305,8 @@ int console_font_submit(console_font_pending_t *p)
 	p->bytes = NULL;               // ...so discarding the pending must not free it
 	console_font_discard(p);
 
-	queue(f, false);
-	verdict("accepted: %ux%u cell, %ux%u grid, waiting for the swap",
-	        psf.width, psf.height, cols, rows);
+	queue(f, false, "accepted: %ux%u cell, %ux%u grid, waiting for the swap",
+	      psf.width, psf.height, cols, rows);
 	return 0;
 }
 

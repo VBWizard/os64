@@ -343,6 +343,10 @@ int tty_resize(tty_t *t, uint32_t cols, uint32_t rows);
 int tty_refont(tty_t *t, uint32_t cols, uint32_t rows,
                uint32_t *dropped, uint32_t *clipped);
 
+// The largest grid tty_refont will take, for a caller that wants to refuse
+// with a reason before it gets that far. Settled by tty_init.
+void tty_refont_limits(uint32_t *cols_max, uint32_t *rows_max);
+
 // Repaint whichever terminal has the glass, from its grid. For a caller that
 // changed what the glass should show without writing to a terminal.
 void tty_repaint_focused(void);
