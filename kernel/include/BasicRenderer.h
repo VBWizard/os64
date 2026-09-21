@@ -35,11 +35,33 @@ struct Point
 #define BGREEN 0xff00FF00,
 #define TBLACK 0x00000000;
 
+// THE FACE THE CONSOLE IS DRAWING WITH — everything the painter needs to
+// know about a bitmap font, and nothing about the file it came from. A glyph
+// is `height` rows of `row_bytes` bytes, MSB first, the leftmost pixel in
+// the top bit of a row's first byte; PSF1 and PSF2 both lay glyphs down that
+// way, so one blitter serves either. The cell size is a property of the
+// face, which is why no constant names it: CONSOLE_FONTS.md is the design.
+//
+// The fences are what the cursor's save-under buffer and the blitter's
+// arithmetic are sized for. A face outside them is refused where it is
+// loaded, never clamped here.
+#define CONSOLE_CELL_W_MAX 64u
+#define CONSOLE_CELL_H_MAX 128u
+typedef struct
+{
+    const uint8_t *glyphs;     // nglyphs * glyph_bytes
+    uint32_t nglyphs;
+    uint32_t width, height;    // the cell, in pixels
+    uint32_t row_bytes;        // (width + 7) / 8
+    uint32_t glyph_bytes;      // height * row_bytes
+} console_face_t;
+
 typedef struct
 {
     struct Point cursor_position;
     struct Framebuffer *framebuffer;
     struct PSF1_FONT *psf1_font;
+    console_face_t face;
 
     unsigned int color;
     bool overwrite;
@@ -66,13 +88,11 @@ extern BasicRenderer kRenderer;
 // gui_owns_glass(), and the single-store-from-any-context panic property the
 // pointer provided lives on in gui_emergency_disable's seated flag.)
 
-// Glyph cell size for the built-in PSF1 console font. These were bare 8s and
-// 16s scattered through the renderer; naming them means a font change breaks
-// in one place instead of five. (FONT_HEIGHT still shadows the font's own
-// charsize field — where a BasicRenderer is in hand, prefer
-// psf1_font->psf1_header->charsize, which is the authority.)
-#define FONT_WIDTH  8
-#define FONT_HEIGHT 16
+// The live cell, for code that turns pixels into cells without a renderer
+// in hand (the text-console mouse). Functions, not constants, because the
+// cell belongs to the face and is known only once one is installed.
+uint32_t renderer_cell_w(void);
+uint32_t renderer_cell_h(void);
 
 void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer, struct PSF1_FONT *psf1_font);
 void moveto(BasicRenderer *basicrenderer, unsigned int x, unsigned int y);
