@@ -1,8 +1,10 @@
 # CONSOLE_FONTS.md — changing the face a virtual terminal draws with
 
-**Status: slices 1 to 3 of 6 are built** (§ Work, in slices); the door and
-the swap are design. A section moves into the present tense
-when its slice lands, and this line changes with it.
+**Status: slices 1 to 4 of 6 are built** (§ Work, in slices) — a PSF2 face
+can be loaded through `/sys/console/font` today, with `cp`. Rendering an
+outline face to PSF2 (slice 5) and `vtfont` (slice 6) are design. A section
+moves into the present tense when its slice lands, and this line changes
+with it.
 
 ## The one-paragraph version
 
@@ -89,15 +91,29 @@ state a program sets by naming it is a file.
 
 - **Write:** open "w", write the PSF2 image in as many pieces as you like,
   close. The bytes accumulate in a pending buffer owned by the handle and
-  are validated and installed **at close**, which is `/sys/clipboard`'s
-  shape and for the same reason: a half-written font must never reach the
-  glass. A refused image changes nothing and the close reports the refusal;
-  the reason (which limit, and the number that broke it) is logged under
-  `DEBUG_SYSTEM`.
-- **Read:** one line of text — source (`boot` or `loaded`), cell `WxH`,
-  glyph count, whether a Unicode table came with it, and the grid that cell
-  gives this screen. It is what a `vtfont` with no operands prints.
+  are JUDGED **at close**, which is `/sys/clipboard`'s shape and for the
+  same reason: a half-written font must never reach the glass. A refused
+  image changes nothing.
+- **Judged at close, installed a moment later.** A sysfs close runs with
+  that core's interrupts off, and it also runs inside the burial of a task
+  that died holding the file. Neither is a place to allocate eight new
+  grids and repaint a screen. So the close VALIDATES — parse, charmap, and
+  whether the cell gives this screen a usable grid — and queues the result
+  for **kworker**, which does the swap in task context with interrupts on.
+  It is the arrangement a keystroke on a dark terminal already uses to get
+  its shell, and the same early wake rousts the worker for both.
+- **Read:** `source` (`boot` or `loaded`), `cell`, `glyphs`, and for a
+  loaded face `table` and how many printable bytes of each set it left
+  `unmapped`; the `grid` that cell gives this screen; `pending`; and
+  **`last`** — the verdict on the most recent offer, which is where a
+  program learns WHY a font was refused (`refused: glyphs truncated (512)`)
+  or that it is now on the glass (`installed: … 8 terminals reshaped, 1
+  told; 0 history lines dropped, 0 rows clipped`). It is what a `vtfont`
+  with no operands prints, and what it polls after a write.
 - **Write the single word `boot`** to go back to the Limine-module face.
+- **A cell has to leave a grid somebody can work at**: 40x10 at the least,
+  512x256 at the most (the terminal's own fence). A 64x128 face on a
+  1024x768 screen is a valid font and a 16x6 terminal, and is refused.
 
 **One face for every VT**, in v1. The renderer is one object with one cell
 size and eight terminals share it; per-VT faces would mean a cell size per
@@ -107,22 +123,35 @@ fonts.conf's `terminal` role and lives in ring 3.)
 
 ## What happens at the swap
 
-Under `kRendererLock`, in this order:
+`console_font_sweep`, in kworker, in this order:
 
-1. Install the new glyph pointer, width, height and charset table.
-2. Recompute `renderer_cols()` / `renderer_rows()` from the framebuffer.
-3. Drop the lock; carry every VT's grid across with `tty_reflow` (next
-   section), which keeps ALL of it, then raise SIGWINCH at every seated
-   task that installed a handler, so husk redraws its line and scribe/top
-   reflow exactly as they do in a gterm that was dragged. The tty-side
-   glue that allocates the new ring and calls the reflow under `t->lock`
-   is `tty_refont`, and it is what slice 4 builds.
-4. Full repaint of the focused VT.
+1. **The grids.** `tty_refont` on every VT — each under its own lock, one
+   at a time, the focused terminal LAST. It plans the reflow, allocates
+   outside the lock, plans again (output kept arriving), and swaps the ring
+   in; the next section is what it preserves.
+2. **The face.** `renderer_face_install`, under `kRendererLock`, hiding the
+   text cursor first: its save-under pixels are in the outgoing cell's
+   geometry. Which glyph draws a byte was settled when the face was
+   accepted — 2 x 256 bitmap pointers, a blank or a synthesized block where
+   the face has nothing — so the blitter indexes and never decides.
+3. **The picture.** Repaint whichever terminal has the glass NOW; focus may
+   have moved during step 1.
+4. Free the outgoing face, and raise SIGWINCH at every task seated on a VT
+   that installed a handler, so husk redraws its line and scribe/top reflow
+   exactly as they do in a gterm that was dragged.
 
-The old face's memory is freed only after step 4, and **the boot face is
-never freed at all**: `panic()` and `renderer_bust_lock` switch the renderer
-back to it before drawing. A panic must not trust bytes that came from
-ring 3, and must not find a half-installed face if it lands mid-swap.
+Between 1 and 3 the focused terminal's cells and the face disagree, and a
+write in that interval lands new-grid cells at old-face positions. It is
+ugly for a few milliseconds and it is in bounds: every glyph write clips
+to the framebuffer. Doing the focused terminal last is what keeps it short.
+
+The outgoing face can be freed as soon as the install returns, because
+every read of a glyph happens under the lock the install takes. **The boot
+face is never freed at all**, and a panic goes back to it: `renderer_bust_lock`
+reinstalls it before anything is drawn, overwriting the whole face struct so
+a swap caught halfway cannot survive. A panic must not trust bytes that came
+from ring 3. (Proved by loading a 16x32 face, filling the screen, and
+injecting an NMI: the report arrives whole, in zap 8x16.)
 
 The GUI owns the glass on VT8; a swap while it is focused installs the face
 and resizes the grids but skips the repaint, as any tty write does there.
@@ -149,9 +178,11 @@ policy:
   ANSI attribute bits gterm reads are unchanged.
 - **The reflow reports the LEAST ring that holds the content**, which going
   wider is fewer lines than the old ring had. Keeping the scrollback deep is
-  the swap's job, not the reflow's: it allocates at least
+  the swap's job, not the reflow's: `tty_refont` allocates at least
   `rows * TTY_SCROLLBACK_SCREENS` whatever the plan asks for, because memory
-  is the price and "grow rather than drop" is the house rule.
+  is the price and "grow rather than drop" is the house rule. Its one fence
+  is `TTY_REFONT_MAX_LINES` (8192); history past that is dropped oldest
+  first, counted, and named in the door's `last:` line.
 - **The view stays on the line it was on.** Someone reading scrollback when
   the face changes keeps their place; `tty_resize`'s snap to the live
   screen is a drag's behaviour.
@@ -205,10 +236,12 @@ print-time wraps with the same bit is a follow-on, not part of this arc.
    narrow, widen back, compare the rings cell for cell — with lines of
    every length around both column counts, a full history, a scrolled-back
    view and a cursor on a wrapped line.
-4. **The door and the swap** (sysfs node, pending buffer, the sequence
-   above, the panic fallback). `TESTPANIC` after a font load is the
-   acceptance test for the fallback. Five things it has to answer, found
-   while reviewing the slices beneath it:
+4. **The door and the swap** (`console_font.c`, the sysfs node,
+   `tty_refont`, `renderer_face_install`, the panic fallback). The
+   fallback's acceptance test is a panic AFTER a font load, with the screen
+   full — provoked with QEMU's `nmi`, since `TESTPANIC` fires at boot, before
+   any face can be loaded. Five things it had to answer, found while
+   reviewing the slices beneath it:
    - **The ring it allocates is its own policy.** `tty_reflow_plan` returns
      the least that holds the content; the swap asks for at least
      `rows * TTY_SCROLLBACK_SCREENS`.

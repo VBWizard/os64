@@ -7,6 +7,8 @@
 
 #include "tty.h"
 #include "BasicRenderer.h"     // the glass: renderer_glass_* primitives
+#include "tty_reflow.h"        // tty_refont: a reshape that keeps the text
+#include "console_font.h"      // console_font_pending — kworker's other early call
 #include "console.h"           // console_intr_intercept_tty — the master's 0x03
 #include "pipe.h"              // a STREAM slave's way out is a pipe
 #include "gui/compositor.h"    // gui_vt8_seated/gui_vt8_focus_gained — the
@@ -1042,7 +1044,9 @@ bool tty_summon_pending(void)
 // Same wake idiom as console_wake_if_ready, for the same lost-wakeup reasons.
 void tty_summon_wake(void)
 {
-	if (!tty_summon_pending())
+	// A queued console face waits on the same worker, and a person watching
+	// the glass for their new font is as badly served by a 2s nap.
+	if (!tty_summon_pending() && !console_font_pending())
 		return;
 	if (kKWorkerTask == NULL || kKWorkerTask->threads == NULL)
 		return;
@@ -1262,6 +1266,115 @@ int tty_resize(tty_t *t, uint32_t cols, uint32_t rows)
 	spinlock_release_irqrestore(&t->lock, flags);
 	kfree(old);
 	return 1;
+}
+
+// The font change's carrier. tty_reflow does the thinking; this is the part
+// that needs a terminal: sizing and allocating the new ring, and swapping it
+// in under the grid lock.
+//
+// PLAN, ALLOCATE, PLAN AGAIN. The ring's size depends on how the text wraps,
+// which is only known under the lock, and the allocation must happen outside
+// it (tty_resize's rule: kmalloc takes the allocator's own interrupts-off
+// lock). Output keeps arriving in between, so the second plan can want more
+// than the first did; the buffer carries a screen of slack for that, and a
+// plan that still outgrows it goes round again rather than quietly dropping
+// history the fence had room for. The loop ends: a pass fails only when the
+// text outgrew the last pass's buffer, so the buffers only get larger, and
+// one of TTY_REFONT_MAX_LINES always fits because that is the plan's fence.
+int tty_refont(tty_t *t, uint32_t cols, uint32_t rows,
+               uint32_t *dropped, uint32_t *clipped)
+{
+	if (dropped != NULL) *dropped = 0;
+	if (clipped != NULL) *clipped = 0;
+	// tty_resize's fence, for tty_resize's reason: sanity, not policy.
+	if (t == NULL || cols < 2 || rows < 2 || cols > 512 || rows > 256)
+		return -1;
+
+	tty_cell_t *fresh = NULL;
+	uint32_t have = 0;
+	// The argument above says this loop ends; the counter is for the day the
+	// argument is wrong, which should cost a refused font and not a core.
+	for (uint32_t pass = 0; ; pass++)
+	{
+		uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+		bool same = (t->cols == cols && t->rows == rows);
+		if (t->cells == NULL || same || pass > 16)
+		{
+			spinlock_release_irqrestore(&t->lock, flags);
+			if (fresh != NULL)
+				kfree(fresh);
+			return same ? 0 : -1;
+		}
+
+		tty_reflow_in_t in = {
+			.cells = t->cells, .cols = t->cols, .rows = t->rows,
+			.total_lines = t->total_lines, .screen_top = t->screen_top,
+			.hist_lines = t->hist_lines, .view_offset = t->view_offset,
+			.cur_row = t->cur_row, .cur_col = t->cur_col,
+			.save_row = t->save_row, .save_col = t->save_col,
+		};
+		tty_reflow_out_t out;
+		if (!tty_reflow_plan(&in, cols, rows, TTY_REFONT_MAX_LINES, &out))
+		{
+			spinlock_release_irqrestore(&t->lock, flags);
+			if (fresh != NULL)
+				kfree(fresh);
+			return -1;
+		}
+
+		if (fresh != NULL && out.lines_needed <= have &&
+		    tty_reflow_run(&in, cols, rows, TTY_REFONT_MAX_LINES, fresh, have, &out))
+		{
+			tty_cell_t *old = t->cells;
+			t->cells       = fresh;
+			t->cols        = cols;
+			t->rows        = rows;
+			t->total_lines = have;
+			t->hist_lines  = out.hist_lines;
+			t->screen_top  = out.hist_lines;   // laid down history first (tty_reflow.h)
+			t->view_offset = out.view_offset;
+			t->cur_row     = out.cur_row;
+			t->cur_col     = out.cur_col;
+			t->save_row    = out.save_row;
+			t->save_col    = out.save_col;
+			t->generation++;                   // every grid mutation (the text-console
+			                                   // selection reads this and lets go)
+			spinlock_release_irqrestore(&t->lock, flags);
+			kfree(old);
+			if (dropped != NULL) *dropped = out.history_dropped;
+			if (clipped != NULL) *clipped = out.below_clipped;
+			return 1;
+		}
+
+		uint32_t needed = out.lines_needed;
+		spinlock_release_irqrestore(&t->lock, flags);
+		if (fresh != NULL)
+			kfree(fresh);
+
+		// The reflow reports the LEAST that holds the text. A terminal is
+		// owed the scrollback it would have been born with besides, so
+		// going wider does not shrink how far back it can remember.
+		uint32_t want = needed + rows;
+		if (want < rows * TTY_SCROLLBACK_SCREENS)
+			want = rows * TTY_SCROLLBACK_SCREENS;
+		if (want > TTY_REFONT_MAX_LINES)
+			want = TTY_REFONT_MAX_LINES;
+		fresh = kmalloc((size_t)want * cols * sizeof(tty_cell_t));
+		have = want;
+	}
+}
+
+void tty_repaint_focused(void)
+{
+	tty_t *t = kTTYFocused;
+	if (t == NULL || !kTTYReady || kTTYDirect)
+		return;
+	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+	// Focus may have moved while we waited; the one that holds the glass
+	// NOW is the one to paint, and its lock is the one to hold doing it.
+	if (t == kTTYFocused)
+		tty_repaint_locked(t);
+	spinlock_release_irqrestore(&t->lock, flags);
 }
 
 int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)

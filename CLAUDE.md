@@ -506,6 +506,35 @@ first time a program with better taste in terminals runs.
   which reads as missing rather than as corruption — approximating a
   box-drawing character is a lie about what the program asked for.
 
+### The console's face (`/sys/console/font`) — CONSOLE_FONTS.md is the design
+
+**The virtual terminals can be given another font while the machine runs**:
+`cp terminus-24.psf /sys/console/font`, and `echo boot > /sys/console/font`
+to go back. The kernel takes a **PSF2 bitmap** and nothing smarter — it is
+built `-mno-sse`, so rendering an outline face is ring 3's job, and what
+arrives is the same bytes either way.
+
+- **The cell is the face's, not a constant.** `kRenderer.face`
+  (`console_face_t`) carries width, height and the glyphs; nothing in the
+  kernel may assume 8x16. `renderer_cols()/rows()` follow it.
+- **Judged at close, installed by kworker** (`kernel/src/console_font.c`).
+  A sysfs close runs with interrupts off, and inside burials; the close
+  only VALIDATES (`psf2.c`, pure, host-tested) and queues. kworker reshapes
+  the eight grids, installs the face, repaints, and raises SIGWINCH.
+  **`cat /sys/console/font` FIRST when a font did not take** — its `last:`
+  line is the verdict, with the reason and the number that broke the rule.
+- **The text survives** (`tty_refont` → `tty_reflow.c`, pure, host-tested):
+  long lines wrap onto rows marked `TTY_ATTR_WRAPPED` (bit 7 of a cell's
+  attribute byte, the terminal's own bookkeeping) and re-join when the grid
+  widens. `tty_resize` is the opposite policy and stays the pty's.
+- **A panic draws with the BOOT face**, whatever is loaded:
+  `renderer_bust_lock` reinstalls it. Test it with a font loaded, the
+  screen FULL, and QEMU's `nmi` — a panic on a screen with room left proves
+  much less than it looks like it does.
+- Both character sets go through the face's Unicode table
+  (`psf2_build_charmap`): zap happens to keep Latin-1 in index order, and
+  nothing says the next face will.
+
 ### SMP (Symmetric Multiprocessing)
 
 **SMP Initialization (`kernel/src/smp.c`, `kernel/src/smp_core.c`):**

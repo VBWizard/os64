@@ -25,9 +25,17 @@
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        the root: "bus", "cpu", "net", "block",
-//                                "cache", "conf", "gui", "log", "mounts",
+//   /sys/                        the root: "bus", "console", "cpu", "net",
+//                                "block", "cache", "conf", "gui", "log", "mounts",
 //                                "openfiles", "random", "shlib", "clipboard", "appearance"
+//   /sys/console/font            the face the virtual terminals draw with.
+//                                READ: which face, its cell, the grid it
+//                                gives this screen, and the verdict on the
+//                                last one offered. WRITE: a PSF2 image, in
+//                                as many pieces as the writer likes, judged
+//                                at CLOSE — or the word "boot". The write
+//                                side is console_font.h; CONSOLE_FONTS.md
+//                                is the design.
 //   /sys/random                  the entropy pool: which instructions the
 //                                CPU advertises and which passed the boot
 //                                variation check, what seeded the pool,
@@ -153,6 +161,7 @@
 #include "io.h"             // kSerialPresent
 #include "appearance.h"
 #include "clipboard.h"      // /sys/clipboard — the snarf store behind the file
+#include "console_font.h"   // /sys/console/font — the VTs' face, and its door
 #include "shared_object.h"  // /sys/shlib — the loaded-shared-object registry
 
 extern volatile uint64_t kTicksSinceStart;   // /sys/log stamps the sink heartbeat against it
@@ -333,6 +342,8 @@ typedef enum
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
 	SYS_NODE_CONFFILE,   // /conf — the config search path, and who took what (2026-08-23)
 	SYS_NODE_RANDOMFILE, // /random — the entropy pool: sources, seeding, counters (RANDOM.md)
+	SYS_NODE_CONSOLEDIR, // /console
+	SYS_NODE_CONSOLEFONT,// /console/font — the VTs' face, readable and writable (CONSOLE_FONTS.md)
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -492,6 +503,19 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_CLIPFILE;
+		return;
+	}
+
+	if (strcmp(comp, "console") == 0)
+	{
+		if (!synth_next_component(path, &pos, comp, sizeof(comp)))
+		{
+			out->type = SYS_NODE_CONSOLEDIR;
+			return;
+		}
+		if (strcmp(comp, "font") != 0 || synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_CONSOLEFONT;
 		return;
 	}
 
@@ -1723,6 +1747,7 @@ typedef enum
 	SYS_HANDLE_APPEARANCE_WRITE,
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
 	SYS_HANDLE_CLIPWRITE,      // /sys/clipboard opened "w" — holds a pending
+	SYS_HANDLE_FONTWRITE,      // /sys/console/font opened "w" — holds an image
 } sys_handle_kind_t;
 
 typedef struct
@@ -1741,6 +1766,7 @@ typedef struct
 	sys_handle_kind_t kind;
 	snarf_entry_t    *entry;     // CLIPREAD: the entry this handle is reading
 	snarf_pending_t  *pending;   // CLIPWRITE: the copy being accumulated
+	console_font_pending_t *font; // FONTWRITE: the image being accumulated
 } sys_file_handle_t;
 
 static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
@@ -1755,10 +1781,46 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	bool is_probe = (sp.type == SYS_NODE_CPUFILE && strcmp(sp.name, "probe") == 0);
 	bool is_clip  = (sp.type == SYS_NODE_CLIPFILE);
 	bool is_appearance = (sp.type == SYS_NODE_APPEARANCE);
+	bool is_font = (sp.type == SYS_NODE_CONSOLEFONT);
 	if (mode == NULL || mode[0] == '\0' || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
 		return -1;
-	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance)
+	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font)
 		return -1;
+
+	// The console's face. A reader gets the status text as an ordinary
+	// snapshot; a writer gets an empty handle that owns the image it is about
+	// to be given, the clipboard writer's arrangement and for its reason — a
+	// half-written font must never reach the glass, so nothing is judged
+	// until close.
+	if (is_font)
+	{
+		synth_text_t text = {0};
+		console_font_pending_t *font = NULL;
+		if (mode[0] == 'r')
+		{
+			if (!synth_text_init(&text, 512)) return -1;
+			text.len = console_font_status(text.buf, text.cap);
+		}
+		else if ((font = console_font_begin()) == NULL)
+			return -1;
+
+		sys_file_handle_t *fh = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+		                                              sizeof(sys_file_handle_t),
+		                                              FILETYPE_SYSFILE);
+		if (fh == NULL)
+		{
+			// The open is failing: the caller never gets a handle and never
+			// writes a byte, so there is nothing to judge. Discard, not submit.
+			console_font_discard(font);
+			return -1;
+		}
+		if (mode[0] == 'w')
+		{
+			fh->kind = SYS_HANDLE_FONTWRITE;
+			fh->font = font;
+		}
+		return 0;
+	}
 
 	if (is_appearance)
 	{
@@ -1931,6 +1993,17 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 		return (int)size;
 	}
 
+	if (h->kind == SYS_HANDLE_FONTWRITE)
+	{
+		if (size == 0)
+			return 0;
+		// Past the loader's size fence the image is poisoned, so the close
+		// refuses it whether or not the writer looked at this -1.
+		if (console_font_append(h->font, buffer, size) < 0)
+			return -1;
+		return (int)size;
+	}
+
 	if (!h->is_probe || size == 0)
 		return -1;
 
@@ -1980,10 +2053,21 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 static int sys_close(vfs_file_t *vfs_file)
 {
 	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
+	int verdict = 0;
 
 	if (h != NULL)
 	{
-		if (h->kind == SYS_HANDLE_CLIPWRITE)
+		if (h->kind == SYS_HANDLE_FONTWRITE)
+		{
+			// Judged here, installed later: the submit validates the image
+			// and queues it for kworker, because this close may be running
+			// with interrupts off or inside a burial (console_font.h). A
+			// refusal is what this function returns; the REASON is in
+			// /sys/console/font, which is what a program should read.
+			verdict = console_font_submit(h->font);
+			h->font = NULL;
+		}
+		else if (h->kind == SYS_HANDLE_CLIPWRITE)
 		{
 			// Publishes, or discards a poisoned copy. Either way the pending
 			// is freed and the handle owns nothing afterwards.
@@ -2001,7 +2085,8 @@ static int sys_close(vfs_file_t *vfs_file)
 		}
 	}
 
-	return synth_snapshot_close(vfs_file);   // frees the handle and the vfs_file
+	int closed = synth_snapshot_close(vfs_file);   // frees the handle and the vfs_file
+	return verdict < 0 ? verdict : closed;
 }
 
 // ── Directory operations ────────────────────────────────────────────────────
@@ -2022,7 +2107,8 @@ static int sys_open_dir(vfs_directory_t **vfs_dir, const char *path,
 
 	if (sp.type != SYS_NODE_ROOT && sp.type != SYS_NODE_BUSDIR &&
 	    sp.type != SYS_NODE_PCIDIR && sp.type != SYS_NODE_CPUDIR &&
-	    sp.type != SYS_NODE_CPUCORE && sp.type != SYS_NODE_NETDIR)
+	    sp.type != SYS_NODE_CPUCORE && sp.type != SYS_NODE_NETDIR &&
+	    sp.type != SYS_NODE_CONSOLEDIR)
 		return -1;
 
 	sys_dir_handle_t *h = kmalloc(sizeof(sys_dir_handle_t));
@@ -2065,7 +2151,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// as the "log" entry that went missing from a merge in August —
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
-			static const char *kSysRootDirs[] = { "bus", "cpu", "net" };
+			static const char *kSysRootDirs[] = { "bus", "console", "cpu", "net" };
 			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
@@ -2135,6 +2221,13 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			}
 			return 0;
 		}
+
+		case SYS_NODE_CONSOLEDIR:
+			if (h->index != 0)
+				return 0;
+			h->index = 1;
+			strncpy(entry->name, "font", OS64_DIRENT_NAME_MAX);
+			return 1;
 
 		case SYS_NODE_NETDIR:
 		{
@@ -2318,6 +2411,15 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 		case SYS_NODE_NETDIR:
 			entry->flags = OS64_DE_DIR;
 			strncpy(entry->name, "net", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_CONSOLEDIR:
+			entry->flags = OS64_DE_DIR;
+			strncpy(entry->name, "console", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_CONSOLEFONT:
+			strncpy(entry->name, "font", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_NETIP:

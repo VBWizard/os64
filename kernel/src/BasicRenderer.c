@@ -84,9 +84,22 @@ static void renderer_blit_full(BasicRenderer *r)
 // message written to a shadow that never flushes is a panic nobody reads,
 // the same sin with a newer name. Disable throttling forever and force the
 // glass current, so every subsequent panic print lands immediately.
+//
+// AND THE BOOT FACE COMES BACK. A panic draws with the face Limine handed
+// the kernel and nothing else: a face installed since then is bytes a ring-3
+// program wrote, and this can land in the middle of installing one. The
+// whole struct is overwritten, so a half-written face cannot survive it, and
+// the cursor's saved pixels are dropped with it rather than restored at a
+// cell size they were not taken at.
+static console_face_t s_bootFace;
+static bool s_cursorOn;
+
 void renderer_bust_lock(void)
 {
 	__sync_lock_release(&kRendererLock);
+	if (s_bootFace.glyphs != NULL)   // a panic before init_video has no face to go back to
+		kRenderer.face = s_bootFace;
+	s_cursorOn = false;
 	s_throttleEnabled = false;
 	renderer_blit_full(&kRenderer);
 }
@@ -312,12 +325,26 @@ void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer
         .row_bytes   = 1,
         .glyph_bytes = psf1_font->psf1_header->charsize,
     };
+    s_bootFace = basicrenderer->face;
     basicrenderer->shadow = NULL;   // attached later, once kmalloc exists
     return;
 }
 
 uint32_t renderer_cell_w(void) { return kRenderer.face.width; }
 uint32_t renderer_cell_h(void) { return kRenderer.face.height; }
+
+void renderer_face_install(const console_face_t *face)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+	cursor_hide_locked(&kRenderer);
+	kRenderer.face = (face != NULL) ? *face : s_bootFace;
+	spinlock_release_irqrestore(&kRendererLock, flags);
+}
+
+const console_face_t *renderer_boot_face(void)
+{
+	return &s_bootFace;
+}
 
 void renderer_attach_shadow(void)
 {
@@ -540,6 +567,10 @@ static const uint8_t *glyph_for(BasicRenderer *basicrenderer, unsigned char chr,
                                 uint8_t charset)
 {
     const console_face_t *face = &basicrenderer->face;
+
+    // A face that arrived at runtime answered this when it was installed.
+    if (face->resolved != NULL)
+        return face->resolved[(charset == OS64_CHARSET_CP437 ? 256u : 0u) + chr];
 
     // os64/charset.h recognises its 8x16 cell by a glyph's BYTE COUNT, and a
     // 16x8 cell is sixteen bytes too — so a face that is not 8 wide never
