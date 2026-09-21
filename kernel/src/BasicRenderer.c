@@ -98,11 +98,12 @@ static void renderer_blit_full(BasicRenderer *r)
 // with the other's dimensions. So each side raises its own flag and THEN
 // reads the other's, both with locked instructions (which also settles what
 // is in memory and what is still in a store buffer): at least one of them
-// sees the other. The install that sees the panic writes nothing. The panic
-// that sees an install waits for it — a struct copy with interrupts off, so
-// nanoseconds — and the wait is bounded for the case where the install's own
-// core is the one panicking and will never finish. s_facePanic is never
-// lowered.
+// sees the other. The install that sees the panic touches nothing — not the
+// face, and not the cursor it would have hidden on the way. The panic that
+// sees an install waits for it — one cursor cell and a struct copy with
+// interrupts off, so microseconds — and the wait is bounded for the case
+// where the install's own core is the one panicking and will never finish.
+// s_facePanic is never lowered.
 static console_face_t s_bootFace;
 static bool s_cursorOn;
 static volatile bool s_facePanic;
@@ -357,25 +358,29 @@ bool renderer_face_install(const console_face_t *face)
 {
 	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
 
-	// The cursor's saved pixels belong to the outgoing cell, so it goes
-	// before the face does. WHILE THE GUI HAS THE GLASS it is dropped rather
-	// than hidden: hiding RESTORES those pixels, and they are a strip of a
-	// text terminal that the compositor painted over long ago — putting them
-	// back would leave it lying across the desktop until something happened
-	// to damage that spot.
-	if (gui_owns_glass())
-		s_cursorOn = false;
-	else
-		cursor_hide_locked(&kRenderer);
-
 	// This core has interrupts off, so a panic's freeze cannot stop it — the
-	// handshake above renderer_bust_lock is what keeps the two apart. The
-	// locked store of "done" also puts the whole face in memory before the
-	// waiting panic is let go.
+	// handshake above renderer_bust_lock is what keeps the two apart, and it
+	// brackets the cursor work as well as the face: hiding the cursor writes
+	// saved pixels to the glass, and a panic's report must not be painted
+	// over by them either. The locked store of "done" also puts the whole
+	// face in memory before the waiting panic is let go.
 	__atomic_store_n(&s_faceInstalling, true, __ATOMIC_SEQ_CST);
 	bool installed = !__atomic_load_n(&s_facePanic, __ATOMIC_SEQ_CST);
 	if (installed)
+	{
+		// The cursor's saved pixels belong to the outgoing cell, so it goes
+		// before the face does. WHILE THE GUI HAS THE GLASS it is dropped
+		// rather than hidden: hiding RESTORES those pixels, and they are a
+		// strip of a text terminal that the compositor painted over long ago
+		// — putting them back would leave it lying across the desktop until
+		// something happened to damage that spot.
+		if (gui_owns_glass())
+			s_cursorOn = false;
+		else
+			cursor_hide_locked(&kRenderer);
+
 		kRenderer.face = (face != NULL) ? *face : s_bootFace;
+	}
 	__atomic_store_n(&s_faceInstalling, false, __ATOMIC_SEQ_CST);
 
 	spinlock_release_irqrestore(&kRendererLock, flags);
