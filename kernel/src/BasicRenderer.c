@@ -378,14 +378,18 @@ void print_at(BasicRenderer *basicrenderer, unsigned int x, unsigned int y, cons
 	if (gui_owns_glass())
 		return;
 
+	// Same lock as print_n: we don't touch the cursor, but we DO share the
+	// framebuffer — drawing into a scroll-in-progress would tear.
+	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+
+	// The cell is read INSIDE the lock, with the glyphs that will be drawn
+	// with it: laying the string out against one face while put_char draws
+	// it with another puts the text somewhere nobody asked for.
 	const unsigned int charWidth = basicrenderer->face.width;
 	const unsigned int charHeight = basicrenderer->face.height;
 	unsigned int px = x * charWidth;
 	unsigned int py = y * charHeight;
 
-	// Same lock as print_n: we don't touch the cursor, but we DO share the
-	// framebuffer — drawing into a scroll-in-progress would tear.
-	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
 	for (const char *chr = str; *chr; chr++)
 	{
 		if (px + charWidth > basicrenderer->framebuffer->width)

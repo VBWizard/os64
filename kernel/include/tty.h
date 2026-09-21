@@ -51,25 +51,7 @@
 #define TTY_COUNT 8                    // tty1..tty8 — the os32 loadout, kept
 #define TTY_SCROLLBACK_SCREENS 4       // grid holds 4 screens: 1 live + 3 history
 
-// One character cell: the glyph, how it was painted, and the colours it was
-// painted in. 8 bytes — at 1080p that is ~½MB per tty, ~4MB for the fleet,
-// which is the cheapest possible price for repaint-from-state plus
-// scrollback.
-//
-// An attribute byte and a background index keep the cell at 8 bytes. Its
-// size and field offsets are checked against os64_pty_cell_t in syscall.c
-// because gterm renders these same cells in ring 3. The index represents
-// this implementation's sixteen-colour SGR subset plus default paper;
-// extended indexed and RGB SGR colours are consumed without applying them.
-// A second full XRGB would increase each cell's size and scrollback cost.
-typedef struct tty_cell
-{
-	char ch;                           // 0 = blank
-	uint8_t attrs;                     // OS64_ANSI_ATTR_* (bold, reverse)
-	uint8_t bg;                        // palette index+1; 0 = the tty's own
-	uint8_t charset;                   // OS64_CHARSET_* this byte was written under
-	uint32_t color;                    // foreground, XRGB
-} tty_cell_t;
+#include "tty_cell.h"                  // tty_cell_t — one character cell of a grid
 
 // A tty with no shell seated: dark glass, waiting. First keystroke on a
 // dormant tty summons a fresh husk (the getty ritual, on demand — V6 read

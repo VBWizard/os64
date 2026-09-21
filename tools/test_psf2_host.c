@@ -296,16 +296,45 @@ static unsigned popcount_glyph(const uint8_t *g, uint32_t w, uint32_t h)
     return lit;
 }
 
+// THE SYNTHESIZED BLOCKS MUST MATCH THE GLASS at 8x16 — not one header, the
+// GLASS. Of the eight, three (the light and medium shades and the full
+// block) are glyphs the shipped face carries and five are bitmaps
+// os64/charset.h supplies, and a reader has no way to tell which is which.
+// So the question is asked the way the console asks it: resolve the CP437
+// byte through os64_charset_glyph against the real boot face, and require
+// psf2_synth_block to produce the same sixteen bytes. Pinning literals here
+// would pin the answer to nothing.
+static void test_synth_matches_the_console(const char *path)
+{
+    FILE *fp = fopen(path, "rb");
+    if (!fp) { printf("test_psf2_host: no %s; console-continuity check skipped\n", path); return; }
+    uint8_t face[65536];
+    size_t n = fread(face, 1, sizeof(face), fp);
+    fclose(fp);
+    if (n < 4 || face[0] != 0x36 || face[1] != 0x04) { CHECK(0, "%s is not a PSF1 face", path); return; }
+    uint32_t charsize = face[3], nglyphs = (face[2] & 0x01) ? 512 : 256;
+    const uint8_t *glyphs = face + 4;
+    CHECK(charsize == 16 && 4 + (size_t)nglyphs * charsize <= n, "%s is a whole 8x16 face", path);
+
+    static const uint32_t blocks[] = {0x2580, 0x2584, 0x2588, 0x258C, 0x2590, 0x2591, 0x2592, 0x2593};
+    for (size_t i = 0; i < sizeof(blocks) / sizeof(blocks[0]); i++) {
+        int byte = -1;
+        for (int b = 0x80; b < 0x100; b++)
+            if (os64_cp437_codepoint((uint8_t)b) == blocks[i]) { byte = b; break; }
+        CHECK(byte >= 0, "U+%04X has a CP437 byte", blocks[i]);
+        if (byte < 0) continue;
+        const uint8_t *drawn = os64_charset_glyph((uint8_t)byte, OS64_CHARSET_CP437,
+                                                  glyphs, nglyphs, charsize);
+        uint8_t synth[16];
+        CHECK(psf2_synth_block(blocks[i], 8, 16, synth), "U+%04X is synthesized", blocks[i]);
+        CHECK(memcmp(drawn, synth, 16) == 0,
+              "U+%04X (CP437 0x%02X) differs from what the console draws", blocks[i], byte);
+    }
+}
+
 static void test_synth(void)
 {
-    // At 8x16 the shades must be the bitmaps os64/charset.h ships, byte for
-    // byte: the family resemblance is the claim, so it is checked as one.
     uint8_t g[1024];
-    CHECK(psf2_synth_block(0x2591, 8, 16, g) && g[0] == 0x88 && g[1] == 0x22, "light shade is 0x88/0x22");
-    CHECK(psf2_synth_block(0x2593, 8, 16, g) && g[0] == 0x77 && g[1] == 0xDD, "dark shade is 0x77/0xDD");
-    CHECK(psf2_synth_block(0x2592, 8, 16, g) && g[0] == 0xAA && g[1] == 0x55, "medium shade is a checkerboard");
-    CHECK(psf2_synth_block(0x258C, 8, 16, g) && g[0] == 0xF0, "left half is 0xF0");
-    CHECK(psf2_synth_block(0x2580, 8, 16, g) && g[7] == 0xFF && g[8] == 0x00, "upper half ends at the middle");
 
     for (uint32_t w = PSF2_CELL_W_MIN; w <= PSF2_CELL_W_MAX; w += 3)
         for (uint32_t h = PSF2_CELL_H_MIN; h <= PSF2_CELL_H_MAX; h += 7) {
@@ -358,6 +387,7 @@ int main(int argc, char **argv)
     test_truncation();
     test_fuzz(20000);
     test_synth();
+    test_synth_matches_the_console("external/zap-light16.psf");
     printf("test_psf2_host: %lu checks, %lu failures\n", checks, failures);
     return failures ? 1 : 0;
 }

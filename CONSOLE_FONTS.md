@@ -1,7 +1,7 @@
 # CONSOLE_FONTS.md — changing the face a virtual terminal draws with
 
-**Status: slices 1 and 2 of 6 are built** (§ Work, in slices); the door,
-the swap and the reflow are design. A section moves into the present tense
+**Status: slices 1 to 3 of 6 are built** (§ Work, in slices); the door and
+the swap are design. A section moves into the present tense
 when its slice lands, and this line changes with it.
 
 ## The one-paragraph version
@@ -57,8 +57,11 @@ dumb glyph table and something smarter fills it.
   first glyph to claim a code point keeps it. What no glyph claims is
   `PSF2_MAP_NONE`, which draws blank — except the three shades, the full
   block and the four halves, which `psf2_synth_block` makes to measure for
-  any cell (at 8x16 they are byte-identical to the bitmaps `os64/charset.h`
-  ships, and the host test holds them to that).
+  any cell. **At 8x16 all eight are byte-identical to what the console draws
+  today**, which is the continuity that matters and is stronger than a match
+  against one header: five of them are bitmaps `os64/charset.h` supplies and
+  three are glyphs the shipped face itself carries, and the host test asks
+  the question the way the console asks it rather than pinning literals.
 - **A face with no table is drawn as the identity** under both sets. Such a
   font is laid out in its own code page and nothing in the file says which.
 - **A face that cannot draw printable ASCII is refused** (`PSF2_NO_ASCII`,
@@ -108,11 +111,12 @@ Under `kRendererLock`, in this order:
 
 1. Install the new glyph pointer, width, height and charset table.
 2. Recompute `renderer_cols()` / `renderer_rows()` from the framebuffer.
-3. Drop the lock; for each VT call `tty_refont(t, cols, rows)` (next
-   section), which carries EVERYTHING into the new grid, then raise
-   SIGWINCH at every seated task that installed a handler, so husk redraws
-   its line and scribe/top reflow exactly as they do in a gterm that was
-   dragged.
+3. Drop the lock; carry every VT's grid across with `tty_reflow` (next
+   section), which keeps ALL of it, then raise SIGWINCH at every seated
+   task that installed a handler, so husk redraws its line and scribe/top
+   reflow exactly as they do in a gterm that was dragged. The tty-side
+   glue that allocates the new ring and calls the reflow under `t->lock`
+   is `tty_refont`, and it is what slice 4 builds.
 4. Full repaint of the focused VT.
 
 The old face's memory is freed only after step 4, and **the boot face is
@@ -133,7 +137,7 @@ rows means a shorter history. Both are right for a drag (the program inside
 repaints) and wrong here, where the likeliest moment is just after boot
 with the boot log on the glass and a larger face cutting 240 columns to 160.
 
-`tty_refont` shares `tty_resize`'s logical-line walk and replaces the
+`tty_reflow` shares `tty_resize`'s logical-line walk and replaces the
 policy:
 
 - **Narrower: a long line WRAPS onto continuation rows.** Trailing blank
@@ -143,14 +147,40 @@ policy:
   the change reversible: going wider re-joins marked rows, so 16 → 24 → 16
   px returns the ring it started with. It is a kernel-side mark; the two
   ANSI attribute bits gterm reads are unchanged.
-- **History capacity never shrinks.** The new ring holds at least as many
-  lines as the old one held, plus what wrapping added. Memory is the price
-  and "grow rather than drop" is already the house rule.
+- **The reflow reports the LEAST ring that holds the content**, which going
+  wider is fewer lines than the old ring had. Keeping the scrollback deep is
+  the swap's job, not the reflow's: it allocates at least
+  `rows * TTY_SCROLLBACK_SCREENS` whatever the plan asks for, because memory
+  is the price and "grow rather than drop" is the house rule.
 - **The view stays on the line it was on.** Someone reading scrollback when
   the face changes keeps their place; `tty_resize`'s snap to the live
   screen is a drag's behaviour.
 - **The cursor lands on the cell it was on**, which after a wrap may be a
   row further down.
+- **Blank screen under the last text is not content.** Laying it out would
+  push real lines into history to make room for nothing.
+- **The screen never starts above where it started.** That would put
+  history back on the live screen under a cursor that knows nothing of it.
+  So when a narrower grid pushes the top of the screen into history, going
+  wide again leaves it there: every line is still reachable with
+  Shift+PgUp, but the live screen shows its lower part with blank rows
+  beneath. A terminal cannot tell a screen that scrolled from one that was
+  cleared, and only the first may be pulled back.
+
+The reflow is `kernel/src/tty_reflow.c` — pure, two calls (`plan` counts
+the lines so the caller can allocate, `run` lays them down), and held by
+`tools/test_tty_reflow_host.sh` to the property rather than to pictures: a
+grid is reduced to what a person would say is on it (the lines, trailing
+bare paper trimmed, every cell with its colours and character set), and that
+story must come out of every reflow unchanged, through chains of random
+shapes and home again, with the cursor on the same cell of the same line.
+
+**What it admits to losing, and counts.** `below_clipped`: text UNDER the
+cursor that no longer fits beneath it on a shorter screen — a full-screen
+program's picture, which that program repaints when SIGWINCH arrives. It
+happens only with the cursor pinned to row 0, and the harness holds it to
+that. `history_dropped`: oldest lines past the `max_total` the caller is
+willing to pay for; the door chooses that number, and it is generous.
 
 What it does not do: re-join lines the terminal wrapped while PRINTING
 before this code existed — they were stored as separate rows with no mark.
@@ -169,7 +199,7 @@ print-time wraps with the same bit is a follow-on, not part of this arc.
    headers, so a `tools/test_psf2_host.sh` drives it under ASan against
    truncated, lying and oversized images before the kernel ever sees one —
    `ansi.c`'s arrangement, for `ansi.c`'s reason.
-3. **`tty_refont`: the reflow.** The wrap/re-join walk is written as a pure
+3. **`tty_reflow`: the reflow.** The wrap/re-join walk is written as a pure
    function over a cell array (old ring in, new ring out) so the host
    harness can drive it under ASan. Its acceptance test is the round trip:
    narrow, widen back, compare the rings cell for cell — with lines of
@@ -177,7 +207,25 @@ print-time wraps with the same bit is a follow-on, not part of this arc.
    view and a cursor on a wrapped line.
 4. **The door and the swap** (sysfs node, pending buffer, the sequence
    above, the panic fallback). `TESTPANIC` after a font load is the
-   acceptance test for the fallback.
+   acceptance test for the fallback. Five things it has to answer, found
+   while reviewing the slices beneath it:
+   - **The ring it allocates is its own policy.** `tty_reflow_plan` returns
+     the least that holds the content; the swap asks for at least
+     `rows * TTY_SCROLLBACK_SCREENS`.
+   - **`view_offset` means the same thing on both sides.** The reflow
+     refuses one larger than `hist_lines` and counts up from the live
+     screen; `tty.c`'s field wants checking against that before it is
+     passed.
+   - **Hide the cursor before installing the face.** The save-under buffer
+     holds pixels in the OLD cell's geometry, and `cursor_hide_locked`
+     restores them through the NEW one.
+   - **A face taller than the framebuffer makes `renderer_rows()` zero**
+     and `scroll_framebuffer_full`'s `height - line_h` underflow. Nothing
+     can produce that through the loader's fences; the door is where a
+     height first becomes arbitrary, so it is the door's to refuse.
+   - **`renderer_cell_w/h()` are unlocked scalar reads** for the text
+     console's mouse. One mis-targeted click during a swap is the worst
+     case, and that is the trade — a deliberate one, not an oversight.
 5. **libos64: `os64_font_render_psf2(face bytes, pixel height, out, cap)`**
    on top of F1/F2. Picks the cell from the face's advance and line
    metrics, renders code points for the 256 Latin-1 slots plus the CP437
