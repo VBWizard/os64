@@ -203,6 +203,52 @@ static void test_table_rules(void)
     }
 }
 
+// The reverse lookup has to agree with the forward table for EVERY byte: a
+// font whose glyph b claims exactly CP437's code point for byte b must map
+// every CP437 byte to its own index. One wrong comparison in the search and
+// some byte of box-drawing silently draws blank.
+static void test_cp437_every_byte(void)
+{
+    uint8_t *t = malloc(256 * 5);
+    size_t n = 0;
+    for (uint32_t g = 0; g < 256; g++) { n += utf8(t + n, os64_cp437_codepoint((uint8_t)g)); t[n++] = 0xFF; }
+    image_t im = build(8, 16, 256, t, n);
+    psf2_face_t f; psf2_charmap_t m;
+    CHECK(psf2_parse(im.bytes, im.len, &f, NULL) == PSF2_OK, "cp437 font parses");
+    CHECK(psf2_build_charmap(&f, &m, NULL) == PSF2_OK, "cp437 font maps");
+    unsigned wrong = 0;
+    for (uint32_t b = 0; b < 256; b++) wrong += m.glyph[OS64_CHARSET_CP437][b] != b;
+    CHECK(wrong == 0, "%u CP437 bytes did not find their own glyph", wrong);
+    CHECK(m.unmapped[OS64_CHARSET_CP437] == 0, "CP437 fully mapped");
+    free(im.bytes); free(t);
+}
+
+// THE TABLE IS THE WRITER'S TO SIZE. Glyph 0 claims as many code points as a
+// megabyte holds before it ever writes a terminator; the map must still come
+// out right, and the work must be a walk of the bytes and not a walk of the
+// bytes times the code page — this runs where the door runs, with interrupts
+// off. The count is printed rather than timed: a time limit on a shared
+// build host fails for the wrong reasons.
+static void test_table_flood(void)
+{
+    size_t room = PSF2_IMAGE_MAX - 32 - 128 * 16;
+    uint8_t *t = malloc(room);
+    size_t n = 0, claims = 0;
+    // Leave room for the terminator and the 127 two-byte entries that follow.
+    while (n + 3 + 1 + 127 * 2 <= room) { n += utf8(t + n, 0x4E00 + (uint32_t)(claims % 20000)); claims++; }
+    t[n++] = 0xFF;                                       // ...end of glyph 0, at last
+    for (uint32_t g = 1; g < 128; g++) { n += utf8(t + n, g); t[n++] = 0xFF; }
+    image_t im = build(8, 16, 128, t, n);
+    psf2_face_t f; psf2_charmap_t m; uint32_t why = 0;
+    CHECK(psf2_parse(im.bytes, im.len, &f, NULL) == PSF2_OK, "flooded font parses");
+    psf2_status_t s = psf2_build_charmap(&f, &m, &why);
+    // Glyph 0 claimed no ASCII, and NUL is not printable, so the font is whole.
+    CHECK(s == PSF2_OK, "flooded table: %s (%u)", psf2_status_name(s), why);
+    CHECK(m.glyph[OS64_CHARSET_LATIN1]['A'] == 'A', "the real entries after the flood still map");
+    printf("test_psf2_host: a %zu-byte table of %zu code points mapped\n", n, claims);
+    free(im.bytes); free(t);
+}
+
 static void test_refusals(void)
 {
     struct { uint32_t off, value; psf2_status_t want; const char *what; } cases[] = {
@@ -383,6 +429,8 @@ int main(int argc, char **argv)
     test_wide_cell();
     test_no_table();
     test_table_rules();
+    test_cp437_every_byte();
+    test_table_flood();
     test_refusals();
     test_truncation();
     test_fuzz(20000);

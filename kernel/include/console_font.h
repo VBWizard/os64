@@ -9,8 +9,11 @@
 //
 //   The door (begin/append/submit) runs wherever a sysfs write and close run
 //   — a syscall with this core's interrupts off, or the burial of a task
-//   that died with the file open. It may only do what is cheap and cannot
-//   block: gather the bytes, VALIDATE them, and queue the result. A font the
+//   that died with the file open. It may only do what cannot block and is
+//   BOUNDED BY THE IMAGE'S SIZE — one walk of at most PSF2_IMAGE_MAX bytes,
+//   never a walk of the bytes times something the writer chose (psf2.c's
+//   reverse table is there for that): gather the bytes, VALIDATE them, and
+//   queue the result. A font the
 //   loader refuses is refused HERE, synchronously, so the verdict exists by
 //   the time the close returns — and /sys/console/font is where a program
 //   reads it, because that text says WHY and a return value cannot.

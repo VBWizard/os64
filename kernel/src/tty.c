@@ -1278,9 +1278,14 @@ int tty_resize(tty_t *t, uint32_t cols, uint32_t rows)
 // lock). Output keeps arriving in between, so the second plan can want more
 // than the first did; the buffer carries a screen of slack for that, and a
 // plan that still outgrows it goes round again rather than quietly dropping
-// history the fence had room for. The loop ends: a pass fails only when the
-// text outgrew the last pass's buffer, so the buffers only get larger, and
-// one of TTY_REFONT_MAX_LINES always fits because that is the plan's fence.
+// history the fence had room for.
+//
+// THE LOOP ENDS, and not by giving up: a terminal under sustained output
+// could outrun a screen of slack on every pass, so after a few of them the
+// buffer asked for is TTY_REFONT_MAX_LINES itself — the plan's own fence,
+// which no plan can exceed, so the pass after that one always fits. Giving
+// up instead would hand the caller a terminal it could not reshape while the
+// others already were, which is the state a font change must not leave.
 int tty_refont(tty_t *t, uint32_t cols, uint32_t rows,
                uint32_t *dropped, uint32_t *clipped)
 {
@@ -1292,13 +1297,11 @@ int tty_refont(tty_t *t, uint32_t cols, uint32_t rows,
 
 	tty_cell_t *fresh = NULL;
 	uint32_t have = 0;
-	// The argument above says this loop ends; the counter is for the day the
-	// argument is wrong, which should cost a refused font and not a core.
 	for (uint32_t pass = 0; ; pass++)
 	{
 		uint64_t flags = spinlock_acquire_irqsave(&t->lock);
 		bool same = (t->cols == cols && t->rows == rows);
-		if (t->cells == NULL || same || pass > 16)
+		if (t->cells == NULL || same)
 		{
 			spinlock_release_irqrestore(&t->lock, flags);
 			if (fresh != NULL)
@@ -1357,7 +1360,7 @@ int tty_refont(tty_t *t, uint32_t cols, uint32_t rows,
 		uint32_t want = needed + rows;
 		if (want < rows * TTY_SCROLLBACK_SCREENS)
 			want = rows * TTY_SCROLLBACK_SCREENS;
-		if (want > TTY_REFONT_MAX_LINES)
+		if (want > TTY_REFONT_MAX_LINES || pass >= 3)
 			want = TTY_REFONT_MAX_LINES;
 		fresh = kmalloc((size_t)want * cols * sizeof(tty_cell_t));
 		have = want;
@@ -1373,7 +1376,14 @@ void tty_repaint_focused(void)
 	// Focus may have moved while we waited; the one that holds the glass
 	// NOW is the one to paint, and its lock is the one to hold doing it.
 	if (t == kTTYFocused)
+	{
 		tty_repaint_locked(t);
+		// The repaint painted over whatever was laid on top of the grid —
+		// the text console's pointer and selection — and a caller that
+		// changed no cell changed no generation, so the overlay would go on
+		// believing it was on the glass. The generation is how it finds out.
+		t->generation++;
+	}
 	spinlock_release_irqrestore(&t->lock, flags);
 }
 

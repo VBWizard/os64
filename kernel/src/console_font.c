@@ -51,8 +51,17 @@ typedef struct
 	uint32_t unmapped[2];
 } console_loaded_t;
 
+// ONE OPEN FILE CAN HAVE TWO WRITERS: spawn redirection shares a file object
+// between parent and child, and a handle's pin protects the object's
+// lifetime, not the order of its writes. Two appends that both decide to grow
+// would each copy, swap and free the same buffer, which is not interleaved
+// file contents but a double free in the kernel heap. So every field below
+// is `lock`'s. The clipboard's rule applies (clipboard.c): allocate and free
+// OUTSIDE the lock, swap pointers UNDER it, because kmalloc takes the
+// allocator's own interrupts-off lock.
 struct console_font_pending
 {
+	spinlock_t lock;
 	uint8_t *bytes;
 	size_t length, cap;
 	bool poisoned;
@@ -102,32 +111,53 @@ console_font_pending_t *console_font_begin(void)
 
 int console_font_append(console_font_pending_t *p, const void *bytes, size_t length)
 {
-	if (p == NULL || bytes == NULL || p->poisoned)
+	if (p == NULL || bytes == NULL)
 		return -1;
-	// One byte of headroom past the fence, so "exactly the largest image" and
-	// "too large" are different lengths by the time the loader is asked.
-	if (length > (size_t)PSF2_IMAGE_MAX + 1 - p->length)
+
+	for (;;)
 	{
-		p->poisoned = true;
-		return -1;
-	}
-	if (p->length + length > p->cap)
-	{
-		size_t cap = p->cap ? p->cap : 65536;
-		while (cap < p->length + length)
+		uint64_t flags = spinlock_acquire_irqsave(&p->lock);
+		// One byte of headroom past the fence, so "exactly the largest image"
+		// and "too large" are different lengths by the time the loader is asked.
+		if (p->poisoned || length > (size_t)PSF2_IMAGE_MAX + 1 - p->length)
+		{
+			p->poisoned = true;
+			spinlock_release_irqrestore(&p->lock, flags);
+			return -1;
+		}
+		size_t need = p->length + length;
+		if (need <= p->cap)
+		{
+			memcpy(p->bytes + p->length, bytes, length);
+			p->length = need;
+			spinlock_release_irqrestore(&p->lock, flags);
+			return 0;
+		}
+		spinlock_release_irqrestore(&p->lock, flags);
+
+		// Grow with no lock held, then offer the larger buffer. Another
+		// writer may have grown it meanwhile — then ours is the spare — or
+		// appended enough that ours is already too small, and the loop asks
+		// again. The fence bounds `need`, so the doubling stops.
+		size_t cap = 65536;
+		while (cap < need)
 			cap *= 2;
 		uint8_t *grown = kmalloc(cap);
-		if (p->bytes != NULL)
+
+		flags = spinlock_acquire_irqsave(&p->lock);
+		uint8_t *spare = grown;
+		if (p->cap < cap)
 		{
-			memcpy(grown, p->bytes, p->length);
-			kfree(p->bytes);
+			if (p->length > 0)
+				memcpy(grown, p->bytes, p->length);
+			spare = p->bytes;
+			p->bytes = grown;
+			p->cap = cap;
 		}
-		p->bytes = grown;
-		p->cap = cap;
+		spinlock_release_irqrestore(&p->lock, flags);
+		if (spare != NULL)
+			kfree(spare);
 	}
-	memcpy(p->bytes + p->length, bytes, length);
-	p->length += length;
-	return 0;
 }
 
 void console_font_discard(console_font_pending_t *p)
@@ -196,9 +226,17 @@ int console_font_submit(console_font_pending_t *p)
 	if (p == NULL)
 		return -1;
 
-	if (p->poisoned || p->length == 0)
+	// Close the image to further writing before judging it: whatever is
+	// judged below is what gets installed, so it must not be able to change
+	// underneath the judgement. After this an append is refused.
+	uint64_t pflags = spinlock_acquire_irqsave(&p->lock);
+	bool poisoned = p->poisoned;
+	p->poisoned = true;
+	spinlock_release_irqrestore(&p->lock, pflags);
+
+	if (poisoned || p->length == 0)
 	{
-		verdict(p->poisoned ? "refused: image larger than %u bytes" : "refused: nothing was written",
+		verdict(poisoned ? "refused: image larger than %u bytes" : "refused: nothing was written",
 		        (unsigned)PSF2_IMAGE_MAX);
 		console_font_discard(p);
 		return -1;
@@ -304,9 +342,20 @@ bool console_font_sweep(void)
 	// in bounds (every glyph write clips to the framebuffer), and the repaint
 	// below is what ends it. Focus can move meanwhile — the repaint asks who
 	// has the glass at that moment rather than remembering.
+	//
+	// ALL EIGHT OR NONE. A terminal that will not take the new shape while
+	// the face goes in anyway would wrap, repaint and report its size by one
+	// cell and be painted with another — so a refusal puts back the ones
+	// already reshaped and installs nothing. tty_refont does not give up on
+	// a busy terminal (tty.c); what it still refuses is a terminal whose
+	// own state fails the reflow's checks, which is a bug to be told about,
+	// not a font to be loaded on top of.
 	uint32_t dropped = 0, clipped = 0, reshaped = 0;
+	uint32_t was_cols[TTY_COUNT], was_rows[TTY_COUNT];
+	bool changed[TTY_COUNT] = { false };
+	int refused = -1;
 	tty_t *focused = kTTYFocused;
-	for (uint32_t pass = 0; pass < 2; pass++)
+	for (uint32_t pass = 0; pass < 2 && refused < 0; pass++)
 	{
 		for (uint32_t i = 0; i < TTY_COUNT; i++)
 		{
@@ -314,11 +363,30 @@ bool console_font_sweep(void)
 			if ((t == focused) != (pass == 1))
 				continue;
 			uint32_t d = 0, c = 0;
-			if (tty_refont(t, cols, rows, &d, &c) > 0)
-				reshaped++;
+			was_cols[i] = t->cols;
+			was_rows[i] = t->rows;
+			int r = tty_refont(t, cols, rows, &d, &c);
+			if (r < 0)
+			{
+				refused = (int)i;
+				break;
+			}
+			changed[i] = r > 0;
+			reshaped += r > 0;
 			dropped += d;
 			clipped += c;
 		}
+	}
+	if (refused >= 0)
+	{
+		for (uint32_t i = 0; i < TTY_COUNT; i++)
+			if (changed[i])
+				(void)tty_refont(&kTTY[i], was_cols[i], was_rows[i], NULL, NULL);
+		tty_repaint_focused();
+		loaded_free(next);
+		verdict("refused: tty%u would not take a %ux%u grid; nothing was changed",
+		        (unsigned)refused + 1, cols, rows);
+		return true;
 	}
 
 	renderer_face_install(next != NULL ? &next->face : NULL);
@@ -332,12 +400,23 @@ bool console_font_sweep(void)
 	spinlock_release_irqrestore(&s_lock, flags);
 	loaded_free(outgoing);
 
-	// The window just changed size under every program seated at a VT.
+	// The window just changed size under every program at a VT. WHICH
+	// terminal a task is at is task_tty's answer, not the raw field's: a task
+	// with no terminal of record is at VT1 — that is what it reads its
+	// geometry from and what /proc reports — so skipping it for having a
+	// NULL there leaves it laying out for a shape that is gone.
+	//
+	// And only when it DID change size: a face with the cell of the one it
+	// replaces reshapes nothing, and SIGWINCH says "your window is a
+	// different size now", which would be a lie a program redraws for.
 	uint32_t told = 0;
-	for (task_t *seat = kTaskList; seat != NULL && seat != (task_t *)NO_TASK; seat = seat->next)
+	for (task_t *seat = kTaskList;
+	     reshaped > 0 && seat != NULL && seat != (task_t *)NO_TASK; seat = seat->next)
 	{
-		tty_t *tt = (tty_t *)seat->tty;
-		if (tt < &kTTY[0] || tt >= &kTTY[TTY_COUNT] || seat == kKernelTask || seat->exited)
+		if (seat == kKernelTask || seat->exited)
+			continue;
+		tty_t *tt = task_tty(seat);
+		if (tt < &kTTY[0] || tt >= &kTTY[TTY_COUNT])
 			continue;
 		if (task_signal_and_nudge(seat, SIGWINCH))
 			told++;

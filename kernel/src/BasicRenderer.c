@@ -93,9 +93,15 @@ static void renderer_blit_full(BasicRenderer *r)
 // cell size they were not taken at.
 static console_face_t s_bootFace;
 static bool s_cursorOn;
+// Raised here and never lowered; renderer_face_install has the argument for
+// why it is raised BEFORE the boot face is written, and what the barrier
+// counter beside it is for.
+static volatile bool s_facePanic;
+static volatile uint32_t s_faceBarrier;
 
 void renderer_bust_lock(void)
 {
+	__atomic_store_n(&s_facePanic, true, __ATOMIC_SEQ_CST);
 	__sync_lock_release(&kRendererLock);
 	if (s_bootFace.glyphs != NULL)   // a panic before init_video has no face to go back to
 		kRenderer.face = s_bootFace;
@@ -336,8 +342,40 @@ uint32_t renderer_cell_h(void) { return kRenderer.face.height; }
 void renderer_face_install(const console_face_t *face)
 {
 	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
-	cursor_hide_locked(&kRenderer);
+
+	// The cursor's saved pixels belong to the outgoing cell, so it goes
+	// before the face does. WHILE THE GUI HAS THE GLASS it is dropped rather
+	// than hidden: hiding RESTORES those pixels, and they are a strip of a
+	// text terminal that the compositor painted over long ago — putting them
+	// back would leave it lying across the desktop until something happened
+	// to damage that spot.
+	if (gui_owns_glass())
+		s_cursorOn = false;
+	else
+		cursor_hide_locked(&kRenderer);
+
 	kRenderer.face = (face != NULL) ? *face : s_bootFace;
+
+	// A PANIC ON ANOTHER CORE CAN LAND IN THE MIDDLE OF THE LINE ABOVE. This
+	// core has interrupts off, so the panic's freeze cannot stop it; the
+	// panic busts the lock, puts the boot face back, and then this core
+	// finishes writing a ring-3 face over it — the one thing the fallback
+	// exists to prevent. So the panic raises s_facePanic BEFORE it writes
+	// the boot face, and this asks AFTER it has written its own.
+	//
+	// "After" has to be true in MEMORY and not only in program order: x86
+	// lets this core's stores wait in its store buffer while it reads the
+	// flag as still clear, and drain on top of the panic's boot face later.
+	// A locked instruction cannot complete until the stores before it have
+	// reached memory, so the add below is the barrier — on a counter of its
+	// own, because a barrier that wrote to the flag could erase the panic's
+	// raising of it. Flag clear after the barrier means our face was in
+	// memory before the panic raised it, so the panic's write comes later
+	// and wins; flag set means we put the boot face back ourselves.
+	(void)__atomic_add_fetch(&s_faceBarrier, 1, __ATOMIC_SEQ_CST);
+	if (__atomic_load_n(&s_facePanic, __ATOMIC_SEQ_CST))
+		kRenderer.face = s_bootFace;
+
 	spinlock_release_irqrestore(&kRendererLock, flags);
 }
 

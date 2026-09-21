@@ -128,9 +128,14 @@ fonts.conf's `terminal` role and lives in ring 3.)
 1. **The grids.** `tty_refont` on every VT — each under its own lock, one
    at a time, the focused terminal LAST. It plans the reflow, allocates
    outside the lock, plans again (output kept arriving), and swaps the ring
-   in; the next section is what it preserves.
-2. **The face.** `renderer_face_install`, under `kRendererLock`, hiding the
-   text cursor first: its save-under pixels are in the outgoing cell's
+   in; the next section is what it preserves. It does not give up on a busy
+   terminal — after a few passes it asks for the fence itself, which always
+   fits. **All eight or none:** if a terminal still refuses, the ones
+   already reshaped are put back and no face is installed.
+2. **The face.** `renderer_face_install`, under `kRendererLock`, dealing
+   with the text cursor first (hidden — or, while the GUI has the glass,
+   dropped, since hiding would restore a strip of text terminal over the
+   desktop): its save-under pixels are in the outgoing cell's
    geometry. Which glyph draws a byte was settled when the face was
    accepted — 2 x 256 bitmap pointers, a blank or a synthesized block where
    the face has nothing — so the blitter indexes and never decides.
@@ -152,6 +157,17 @@ reinstalls it before anything is drawn, overwriting the whole face struct so
 a swap caught halfway cannot survive. A panic must not trust bytes that came
 from ring 3. (Proved by loading a 16x32 face, filling the screen, and
 injecting an NMI: the report arrives whole, in zap 8x16.)
+
+**The one way that could still fail is an install in flight on another
+core**: it holds the renderer lock with interrupts off, so the panic's freeze
+cannot stop it, and it could finish writing its face over the boot face the
+panic just restored. So the panic raises a flag BEFORE it writes, and the
+install checks it AFTER its own write — after in memory, not only in program
+order, which on x86 takes a locked instruction between the two, because a
+core's own stores can wait in its store buffer past its next read. Whichever
+order the two land in, the boot face is the last one written. That argument
+is in `renderer_face_install`; it is reasoned, not reproduced — the window
+is a struct copy wide.
 
 The GUI owns the glass on VT8; a swap while it is focused installs the face
 and resizes the grids but skips the repaint, as any tty write does there.

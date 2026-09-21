@@ -103,9 +103,10 @@ uint32_t renderer_cell_w(void);
 uint32_t renderer_cell_h(void);
 
 // Draw with this face from now on; NULL puts the boot face back. Takes the
-// renderer lock itself, and hides the text cursor FIRST: the cursor's
-// save-under pixels are in the outgoing cell's geometry, and restoring them
-// through the incoming one would paint them somewhere else. The face's
+// renderer lock itself, and deals with the text cursor FIRST: its save-under
+// pixels are in the outgoing cell's geometry, and restoring them through the
+// incoming one would paint them somewhere else. After a panic has taken the
+// glass it installs the boot face whatever it was asked for. The face's
 // memory is the caller's — it must stay valid until another install has
 // returned, and may be freed the moment one has, because every read of a
 // glyph happens under the lock this takes.
