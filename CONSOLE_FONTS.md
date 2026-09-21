@@ -171,7 +171,9 @@ So each side raises a flag of its own and THEN reads the other's, both with
 locked instructions (a core's plain stores can wait in its store buffer past
 its next read): at least one sees the other. An install that sees the panic
 writes nothing; a panic that sees an install waits, bounded, for it to
-finish before it writes or draws. That argument is above
+finish before it writes or draws. An install turned away says so, and the
+swap then frees neither face — the renderer may still hold the old one
+until the panic has written its own. That argument is above
 `renderer_bust_lock`; it is reasoned, not reproduced — the window is a
 struct copy wide.
 

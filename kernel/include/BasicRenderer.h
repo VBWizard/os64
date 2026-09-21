@@ -105,17 +105,21 @@ uint32_t renderer_cell_h(void);
 // Draw with this face from now on; NULL puts the boot face back. Takes the
 // renderer lock itself, and deals with the text cursor FIRST: its save-under
 // pixels are in the outgoing cell's geometry, and restoring them through the
-// incoming one would paint them somewhere else. After a panic has taken the
-// glass it installs the boot face whatever it was asked for. The face's
-// memory is the caller's — it must stay valid until another install has
-// returned, and may be freed the moment one has, because every read of a
-// glyph happens under the lock this takes.
+// incoming one would paint them somewhere else. The face's memory is the
+// caller's — it must stay valid until another install has returned TRUE, and
+// may be freed the moment one has, because every read of a glyph happens
+// under the lock this takes.
+//
+// FALSE means a panic has the glass and nothing was written: the face is the
+// panic's to set (renderer_bust_lock), and until it has, the renderer may
+// still be pointing at the face the caller meant to retire — so a caller
+// told false frees nothing.
 //
 // It changes the PAINT and nothing else. The terminals' grids are re-shaped
 // by the caller (console_font.c), and until the focused one is repainted the
 // glass shows old cells at new positions; every glyph write clips to the
 // framebuffer, so that interval is ugly and not dangerous.
-void renderer_face_install(const console_face_t *face);
+bool renderer_face_install(const console_face_t *face);
 // The face Limine handed the kernel: what NULL above installs, and what a
 // panic draws with whatever has been installed since.
 const console_face_t *renderer_boot_face(void);

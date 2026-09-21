@@ -428,7 +428,12 @@ bool console_font_sweep(void)
 		return true;
 	}
 
-	renderer_face_install(next != NULL ? &next->face : NULL);
+	// Refused only by a panic that has the glass. The machine is going down,
+	// and the renderer may still be reading the face this would retire, so
+	// both faces are left exactly where they are: nothing is freed, and
+	// nothing is reported about a swap that did not happen.
+	if (!renderer_face_install(next != NULL ? &next->face : NULL))
+		return true;
 	tty_repaint_focused();
 
 	// Every glyph read happens under the renderer lock, and the install has

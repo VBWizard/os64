@@ -353,7 +353,7 @@ void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer
 uint32_t renderer_cell_w(void) { return kRenderer.face.width; }
 uint32_t renderer_cell_h(void) { return kRenderer.face.height; }
 
-void renderer_face_install(const console_face_t *face)
+bool renderer_face_install(const console_face_t *face)
 {
 	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
 
@@ -373,11 +373,13 @@ void renderer_face_install(const console_face_t *face)
 	// locked store of "done" also puts the whole face in memory before the
 	// waiting panic is let go.
 	__atomic_store_n(&s_faceInstalling, true, __ATOMIC_SEQ_CST);
-	if (!__atomic_load_n(&s_facePanic, __ATOMIC_SEQ_CST))
+	bool installed = !__atomic_load_n(&s_facePanic, __ATOMIC_SEQ_CST);
+	if (installed)
 		kRenderer.face = (face != NULL) ? *face : s_bootFace;
 	__atomic_store_n(&s_faceInstalling, false, __ATOMIC_SEQ_CST);
 
 	spinlock_release_irqrestore(&kRendererLock, flags);
+	return installed;
 }
 
 const console_face_t *renderer_boot_face(void)
