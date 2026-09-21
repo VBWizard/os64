@@ -10,6 +10,13 @@
 #include "tty.h"       // print_n's router half: grids up -> bytes go to VT1
 #include "gui/compositor.h"  // gui_owns_glass — "is the iron the GUI's right now?"
 #include "os64/charset.h"    // which bitmap draws a byte over 0x7F
+#include "psf2.h"            // the loader's fences, held against this file's
+
+// A face the loader accepts must be one this file can draw: the cursor's
+// save-under buffer is sized by the width fence, and psf2.h cannot include
+// this header (it is built on the host, where no renderer exists).
+_Static_assert(PSF2_CELL_W_MAX == CONSOLE_CELL_W_MAX, "psf2.h and BasicRenderer.h disagree on the widest cell");
+_Static_assert(PSF2_CELL_H_MAX == CONSOLE_CELL_H_MAX, "psf2.h and BasicRenderer.h disagree on the tallest cell");
 
 extern BasicRenderer kRenderer;
 uint32_t kFrameBufferBackgroundColor;
