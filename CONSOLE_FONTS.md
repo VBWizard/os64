@@ -109,7 +109,10 @@ state a program sets by naming it is a file.
   program learns WHY a font was refused (`refused: glyphs truncated (512)`)
   or that it is now on the glass (`installed: … 8 terminals reshaped, 1
   told; 0 history lines dropped, 0 rows clipped`). It is what a `vtfont`
-  with no operands prints, and what it polls after a write.
+  with no operands prints, and what it polls after a write. A swap reports
+  there only while its offer is still the newest: if another font was
+  offered while it ran, `last` stays with that one (whose refusal nothing
+  would ever repeat), and `source`/`cell`/`grid` say what is on the glass.
 - **Write the single word `boot`** to go back to the Limine-module face.
 - **A cell has to leave a grid somebody can work at**: 40x10 at the least,
   512x256 at the most (the terminal's own fence) — or the grid the boot face
@@ -162,14 +165,15 @@ injecting an NMI: the report arrives whole, in zap 8x16.)
 
 **The one way that could still fail is an install in flight on another
 core**: it holds the renderer lock with interrupts off, so the panic's freeze
-cannot stop it, and it could finish writing its face over the boot face the
-panic just restored. So the panic raises a flag BEFORE it writes, and the
-install checks it AFTER its own write — after in memory, not only in program
-order, which on x86 takes a locked instruction between the two, because a
-core's own stores can wait in its store buffer past its next read. Whichever
-order the two land in, the boot face is the last one written. That argument
-is in `renderer_face_install`; it is reasoned, not reproduced — the window
-is a struct copy wide.
+cannot stop it, and it could write its face over the boot face the panic
+just restored — or be halfway through the struct while the panic reads it.
+So each side raises a flag of its own and THEN reads the other's, both with
+locked instructions (a core's plain stores can wait in its store buffer past
+its next read): at least one sees the other. An install that sees the panic
+writes nothing; a panic that sees an install waits, bounded, for it to
+finish before it writes or draws. That argument is above
+`renderer_bust_lock`; it is reasoned, not reproduced — the window is a
+struct copy wide.
 
 The GUI owns the glass on VT8; a swap while it is focused installs the face
 and resizes the grids but skips the repaint, as any tty write does there.

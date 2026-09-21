@@ -74,6 +74,13 @@ static bool s_queued_boot;              // ...or a request for the boot face
 static volatile bool s_pending;         // either of the two above
 static console_loaded_t *s_active;      // NULL while the boot face is in use
 static char s_last[160] = "nothing loaded since boot";
+// `last:` IS ABOUT THE MOST RECENT OFFER, so every judged offer takes a
+// number, and the swap — which finishes long after the close that queued it —
+// speaks only while its offer is still the newest. A font refused in the
+// meantime has no swap coming to say so again; its reason must not be
+// written over by news of the font before it.
+static uint64_t s_offers;               // offers judged so far
+static uint64_t s_queued_offer;         // the one in the slot
 
 static void loaded_free(console_loaded_t *f)
 {
@@ -85,6 +92,8 @@ static void loaded_free(console_loaded_t *f)
 	kfree(f);
 }
 
+// An offer judged and NOT queued — a refusal. (An accepted one is numbered
+// and announced by queue(), with the slot, in one critical section.)
 static void verdict(const char *fmt, ...)
 {
 	char line[sizeof(s_last)];
@@ -94,7 +103,25 @@ static void verdict(const char *fmt, ...)
 	va_end(args);
 
 	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
+	s_offers++;
 	memcpy(s_last, line, sizeof(s_last));
+	spinlock_release_irqrestore(&s_lock, flags);
+	printd(DEBUG_SYSTEM, "console font: %s\n", line);
+}
+
+// What became of offer number `offer`, from the swap. The log hears it
+// either way; the status line only if no offer has been judged since.
+static void sweep_verdict(uint64_t offer, const char *fmt, ...)
+{
+	char line[sizeof(s_last)];
+	va_list args;
+	va_start(args, fmt);
+	vsnprintf(line, sizeof(line), fmt, args);
+	va_end(args);
+
+	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
+	if (s_offers == offer)
+		memcpy(s_last, line, sizeof(s_last));
 	spinlock_release_irqrestore(&s_lock, flags);
 	printd(DEBUG_SYSTEM, "console font: %s\n", line);
 }
@@ -225,6 +252,7 @@ static void queue(console_loaded_t *f, bool boot, const char *fmt, ...)
 	console_loaded_t *superseded = s_queued;   // the last word wins
 	s_queued = f;
 	s_queued_boot = boot;
+	s_queued_offer = ++s_offers;
 	s_pending = true;
 	memcpy(s_last, line, sizeof(s_last));
 	spinlock_release_irqrestore(&s_lock, flags);
@@ -325,6 +353,7 @@ bool console_font_sweep(void)
 	uint64_t flags = spinlock_acquire_irqsave(&s_lock);
 	console_loaded_t *next = s_queued;
 	bool boot = s_queued_boot;
+	uint64_t offer = s_queued_offer;
 	s_queued = NULL;
 	s_queued_boot = false;
 	s_pending = false;
@@ -394,8 +423,8 @@ bool console_font_sweep(void)
 				(void)tty_refont(&kTTY[i], was_cols[i], was_rows[i], NULL, NULL);
 		tty_repaint_focused();
 		loaded_free(next);
-		verdict("refused: tty%u would not take a %ux%u grid; nothing was changed",
-		        (unsigned)refused + 1, cols, rows);
+		sweep_verdict(offer, "refused: tty%u would not take a %ux%u grid; nothing was changed",
+		              (unsigned)refused + 1, cols, rows);
 		return true;
 	}
 
@@ -432,10 +461,10 @@ bool console_font_sweep(void)
 			told++;
 	}
 
-	verdict("installed: %s, %ux%u grid, %u terminals reshaped, %u told; "
-	        "%u history lines dropped, %u rows clipped",
-	        next != NULL ? "loaded face" : "boot face", cols, rows, reshaped, told,
-	        dropped, clipped);
+	sweep_verdict(offer, "installed: %s, %ux%u grid, %u terminals reshaped, %u told; "
+	              "%u history lines dropped, %u rows clipped",
+	              next != NULL ? "loaded face" : "boot face", cols, rows, reshaped, told,
+	              dropped, clipped);
 	return true;
 }
 

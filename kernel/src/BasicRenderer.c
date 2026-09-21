@@ -91,17 +91,31 @@ static void renderer_blit_full(BasicRenderer *r)
 // whole struct is overwritten, so a half-written face cannot survive it, and
 // the cursor's saved pixels are dropped with it rather than restored at a
 // cell size they were not taken at.
+//
+// THE PANIC AND AN INSTALL NEVER WRITE THE FACE AT THE SAME TIME, and the
+// panic never draws while an install is writing. The face is a struct, and a
+// struct copy the panic could read halfway through pairs one face's glyphs
+// with the other's dimensions. So each side raises its own flag and THEN
+// reads the other's, both with locked instructions (which also settles what
+// is in memory and what is still in a store buffer): at least one of them
+// sees the other. The install that sees the panic writes nothing. The panic
+// that sees an install waits for it — a struct copy with interrupts off, so
+// nanoseconds — and the wait is bounded for the case where the install's own
+// core is the one panicking and will never finish. s_facePanic is never
+// lowered.
 static console_face_t s_bootFace;
 static bool s_cursorOn;
-// Raised here and never lowered; renderer_face_install has the argument for
-// why it is raised BEFORE the boot face is written, and what the barrier
-// counter beside it is for.
 static volatile bool s_facePanic;
-static volatile uint32_t s_faceBarrier;
+static volatile bool s_faceInstalling;
+#define FACE_INSTALL_WAIT_SPINS 10000000u
 
 void renderer_bust_lock(void)
 {
 	__atomic_store_n(&s_facePanic, true, __ATOMIC_SEQ_CST);
+	for (uint32_t spins = 0;
+	     __atomic_load_n(&s_faceInstalling, __ATOMIC_SEQ_CST) && spins < FACE_INSTALL_WAIT_SPINS;
+	     spins++)
+		__builtin_ia32_pause();
 	__sync_lock_release(&kRendererLock);
 	if (s_bootFace.glyphs != NULL)   // a panic before init_video has no face to go back to
 		kRenderer.face = s_bootFace;
@@ -354,27 +368,14 @@ void renderer_face_install(const console_face_t *face)
 	else
 		cursor_hide_locked(&kRenderer);
 
-	kRenderer.face = (face != NULL) ? *face : s_bootFace;
-
-	// A PANIC ON ANOTHER CORE CAN LAND IN THE MIDDLE OF THE LINE ABOVE. This
-	// core has interrupts off, so the panic's freeze cannot stop it; the
-	// panic busts the lock, puts the boot face back, and then this core
-	// finishes writing a ring-3 face over it — the one thing the fallback
-	// exists to prevent. So the panic raises s_facePanic BEFORE it writes
-	// the boot face, and this asks AFTER it has written its own.
-	//
-	// "After" has to be true in MEMORY and not only in program order: x86
-	// lets this core's stores wait in its store buffer while it reads the
-	// flag as still clear, and drain on top of the panic's boot face later.
-	// A locked instruction cannot complete until the stores before it have
-	// reached memory, so the add below is the barrier — on a counter of its
-	// own, because a barrier that wrote to the flag could erase the panic's
-	// raising of it. Flag clear after the barrier means our face was in
-	// memory before the panic raised it, so the panic's write comes later
-	// and wins; flag set means we put the boot face back ourselves.
-	(void)__atomic_add_fetch(&s_faceBarrier, 1, __ATOMIC_SEQ_CST);
-	if (__atomic_load_n(&s_facePanic, __ATOMIC_SEQ_CST))
-		kRenderer.face = s_bootFace;
+	// This core has interrupts off, so a panic's freeze cannot stop it — the
+	// handshake above renderer_bust_lock is what keeps the two apart. The
+	// locked store of "done" also puts the whole face in memory before the
+	// waiting panic is let go.
+	__atomic_store_n(&s_faceInstalling, true, __ATOMIC_SEQ_CST);
+	if (!__atomic_load_n(&s_facePanic, __ATOMIC_SEQ_CST))
+		kRenderer.face = (face != NULL) ? *face : s_bootFace;
+	__atomic_store_n(&s_faceInstalling, false, __ATOMIC_SEQ_CST);
 
 	spinlock_release_irqrestore(&kRendererLock, flags);
 }
