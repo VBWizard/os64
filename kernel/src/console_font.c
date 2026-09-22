@@ -491,7 +491,11 @@ size_t console_font_status(char *out, size_t cap)
 		              s_active->from_table ? "yes" : "no",
 		              s_active->unmapped[0], s_active->unmapped[1]);
 	if (n > 0 && (size_t)n < cap)
-		n += snprintf(out + n, cap - (size_t)n, "grid: %ux%u\npending: %s\nlast: %s\n",
+		// The screen the grid was computed against, in pixels: a program
+		// choosing a size for a grid it wants needs the dividend, not a
+		// quotient it would have to invert to within a column.
+		n += snprintf(out + n, cap - (size_t)n, "screen: %ux%u\ngrid: %ux%u\npending: %s\nlast: %s\n",
+		              (unsigned)kFrameBuffer.width, (unsigned)kFrameBuffer.height,
 		              kFrameBuffer.width / face->width, kFrameBuffer.height / face->height,
 		              s_pending ? "yes" : "no", s_last);
 	spinlock_release_irqrestore(&s_lock, flags);
