@@ -104,7 +104,9 @@ state a program sets by naming it is a file.
   its shell, and the same early wake rousts the worker for both.
 - **Read:** `source` (`boot` or `loaded`), `cell`, `glyphs`, and for a
   loaded face `table` and how many printable bytes of each set it left
-  `unmapped`; the `grid` that cell gives this screen; `pending`; and
+  `unmapped`; the `screen` in pixels and the `grid` that cell makes of it
+  (the dividend is published because `vtfont 100x40` chooses a size by
+  it, and a quotient cannot be inverted to within a column); `pending`; and
   **`last`** — the verdict on the most recent offer, which is where a
   program learns WHY a font was refused (`refused: glyphs truncated (512)`)
   or that it is now on the glass (`installed: … 8 terminals reshaped, 1
@@ -316,17 +318,41 @@ starts.
 
 ## Persistence
 
-`console.conf` on the config ladder (`face = <path>`, `size = <pixels>`,
-size ignored for a `.psf`), read by `vtfont --startup`, launched once at
-boot beside logd and cron. Not a key in `fonts.conf`: that file's decoder
-refuses unknown keys by design, and its three roles are ring-3 consumers
-with a transaction the console does not take part in. Not a kernel reader
-either: rendering an outline face needs FreeType, so the thing that applies
-the setting has to live in ring 3 regardless.
+`console.conf` on the config ladder — `face = <name-or-path>` and `size =`
+in the same two words `vtfont` takes at a prompt (`24`, or `100x40`; a size
+beside a bitmap is ignored) — read by `vtfont --startup`, which the kernel
+launches **right after logd, when the file resolves on the ladder**: the
+earliest moment the root, `/home`, the ladder, kworker and the terminals
+all exist, so every boot line from the post-boot tests on is in the chosen
+face. (Beside cron it would buy nothing a crontab `@reboot` line does not;
+this early it buys the readable boot, which at 1920x1080 is the point. The
+lines before the root mounts stay in the boot face: that module is PSF1,
+eight pixels wide by format, and teaching the module loader PSF2 is its own
+slice.) The FILE is
+the switch, not a boot token, because a token does not travel to a machine
+that boots from its own disk, and every machine this is for does; absent
+file, or a file with no `face`, and nothing is launched. No example file
+ships, for `mounts.conf`'s reason: a shipped copy of comments would launch
+a no-op and announce it on every boot. The whole file is
+
+```
+face = Uni2-Terminus24x12      # a name on /etc/fonts, or a path
+size = 100x40                  # for an outline face: pixels, or the grid you want
+```
+
+Not a key in `fonts.conf`: that file's
+decoder refuses unknown keys by design, and its three roles are ring-3
+consumers with a transaction the console does not take part in. Not a kernel
+reader either: the kernel asks the ladder only whether the file EXISTS,
+because applying it may mean rendering an outline face, and FreeType lives
+in ring 3.
 
 The boot face therefore stays what every boot STARTS in, and the configured
-one arrives a moment after userland is up. The lifeboat entry does not
-launch it.
+one arrives before the post-boot tests print, with one line on the console
+saying what took. A face that cannot load costs a line and nothing
+else. The lifeboat honours the file too, if the ladder reaches a `/home`
+that carries one: unlike cron, there is nothing a font can do behind your
+back, and `vtfont boot` undoes it.
 
 ## Known limits, stated before anyone finds them
 

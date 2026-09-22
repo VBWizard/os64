@@ -660,6 +660,39 @@ void kernel_init()
 		}
 	}
 
+	// THE CONSOLE'S CONFIGURED FACE (CONSOLE_FONTS.md § Persistence), as
+	// early as it can go: the root and /home are mounted, the ladder is
+	// settled, kworker exists to do the swap, and the terminals are up — so
+	// from here on the boot prints in the face the person chose, which at
+	// 1920x1080 is the difference between reading the post-boot lines and
+	// watching them scroll past at 8x16. Later, beside cron, it would buy
+	// nothing a crontab @reboot line does not; here it buys the boot.
+	//
+	// The FILE is the switch, not a boot token: a token does not travel to a
+	// machine that boots from its own disk, and every machine this is for
+	// does. The kernel asks the ladder only whether console.conf exists —
+	// reading it is /bin/vtfont's, because applying it may mean rendering
+	// an outline face, and FreeType lives in ring 3. Absent file, absent
+	// launch, and the boot face stays. Not waited for: the reflow carries
+	// whatever the tests print meanwhile across the change.
+	if (kRootFilesystem != NULL)
+	{
+		char consoleConf[256];
+		if (conf_find("console.conf", consoleConf, sizeof(consoleConf)))
+		{
+			printf("Launching /bin/vtfont --startup (%s) ...\n", consoleConf);
+			char *vtfontArgv[] = { "/bin/vtfont", "--startup" };
+			task_t *vtfontTask = task_create("/bin/vtfont", 2, vtfontArgv, kKernelTask, false, THREAD_NO_AFFINITY);
+			if (vtfontTask)
+			{
+				vtfontTask->autoReap = true;
+				scheduler_submit_new_task(vtfontTask);
+			}
+			else
+				printf("  /bin/vtfont launch failed (not on the image?)\n");
+		}
+	}
+
 	// TEMP (userland bring-up, remove when the shell exists): launch
 	// /bin/hello as a FIRST-CLASS scheduled application from the normal boot
 	// flow — task_create + scheduler_submit_new_task, then walk away. No test
