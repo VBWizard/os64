@@ -1,10 +1,10 @@
 # CONSOLE_FONTS.md — changing the face a virtual terminal draws with
 
-**Status: slices 1 to 4 of 6 are built** (§ Work, in slices) — a PSF2 face
-can be loaded through `/sys/console/font` today, with `cp`. Rendering an
-outline face to PSF2 (slice 5) and `vtfont` (slice 6) are design. A section
-moves into the present tense when its slice lands, and this line changes
-with it.
+**Status: slices 1 to 5 of 6 are built** (§ Work, in slices) — a PSF2 face
+can be loaded through `/sys/console/font` with `cp`, and an outline face can
+be rendered to one at a size (`/tests/psf2probe face.ttf 24`). `vtfont`
+(slice 6) and the persistence that rides on it are design. A section moves
+into the present tense when its slice lands, and this line changes with it.
 
 ## The one-paragraph version
 
@@ -283,15 +283,31 @@ print-time wraps with the same bit is a follow-on, not part of this arc.
    - **`renderer_cell_w/h()` are unlocked scalar reads** for the text
      console's mouse. One mis-targeted click during a swap is the worst
      case, and that is the trade — a deliberate one, not an oversight.
-5. **libos64: `os64_font_render_psf2(face bytes, pixel height, out, cap)`**
-   on top of F1/F2. Picks the cell from the face's advance and line
-   metrics, renders code points for the 256 Latin-1 slots plus the CP437
-   set, thresholds each F2 coverage mask to one bit, and writes the Unicode
-   table. Refuses a proportional face the way the provider's terminal role
-   already does. Host-tested against the fixture faces.
+5. **libos64: `os64_font_render_psf2`** (`os64/font_psf2.h`), written
+   against the F1 backend table and nothing above it — a console font is
+   one face and one glyph per code point, which is none of what the text
+   layer exists for, and going straight to `lookup`/`render`/`glyph_view`
+   is what lets the host harness inject a backend of its own. The cell is
+   the face's advance by the face's line; glyphs 0..255 are Latin-1 in
+   index order and the CP437 code points Latin-1 lacks follow; coverage is
+   thresholded at the middle; a Unicode table names every glyph. **A code
+   point the face lacks, or cannot draw at this size, or that the kernel
+   draws better, is left OUT of the table**, so the kernel makes the block
+   elements itself and draws the rest blank — a blank glyph that claimed to
+   be the dark shade would be drawn as one (§ Known limits has the three
+   rules). Refuses a proportional face, a fractional advance, a face that
+   cannot draw all of printable ASCII at this size (naming the character),
+   and a size whose cell the kernel would refuse (with the cell).
+   `tools/test_font_psf2_host.py` hands what it writes to the kernel's own
+   `psf2.c`: every pixel of every glyph of both sets against a fake backend
+   with a known ink pattern, every allocation failed in turn, and with
+   `--real` the fixture faces through FreeType at EVERY size from 8 to 72 —
+   the six hand-picked sizes a first version checked all happened to dodge
+   the breakage in between, which is the lesson. `/tests/psf2probe` is the
+   worked example: face and size to `/sys/console/font`, or to a `.psf`
+   file that `cp` can load later with no FreeType in the room.
 6. **`vtfont`** — Chris's program. `vtfont` (show), `vtfont face.psf`,
-   `vtfont DejaVuSansMono.ttf 24`, `vtfont boot`. Slice 5 ships with a
-   ten-line example that does the second and third.
+   `vtfont DejaVuSansMono.ttf 24`, `vtfont boot`.
 
 Slices 1–4 are kernel work on the glass and its lock, reachable from
 interrupt and panic context. That is the category CLAUDE.md says earns an
@@ -314,11 +330,45 @@ launch it.
 
 ## Known limits, stated before anyone finds them
 
-- **One bit per pixel.** The kernel blitter has no alpha, so an outline
-  face at 16 px renders rougher than zap, which was drawn for that grid by
-  hand. From about 22 px up the difference stops mattering, and that is the
-  range anyone reaches for an outline face in. An 8-bit coverage format
-  would be a PSF2 we invented and a second blitter; not proposed.
+- **One bit per pixel.** The kernel blitter has no alpha, so coverage is
+  cut at the middle, and a stroke thinner than a pixel that straddles two
+  can vanish whole. Below about 11 px that takes printable ASCII with it
+  (DejaVu's `'` and `|` at 10 px), and the converter REFUSES the size and
+  names the character rather than ship a prompt with no bar in it; a glyph
+  outside ASCII that vanishes is left unnamed and draws blank. From the
+  mid-teens up the difference from a hand-drawn bitmap is cosmetic. An
+  8-bit coverage format would be a PSF2 we invented and a second blitter;
+  not proposed.
+- **One face, no fallback chain.** A code point the chosen face lacks is
+  not borrowed from another: the kernel synthesizes the blocks and the rest
+  draw blank. DejaVu Sans Mono and Source Code Pro both carry all of CP437,
+  so nothing has asked for more; the day a face with no box-drawing set is
+  somebody's choice, fallback is F2's and the converter would move up to it.
+- **Box-drawing joins take two rules, because the cell is not the line.**
+  The backend delivers the ascender rounded up and the descender rounded
+  down, each on its own, so the cell can stand a row or two taller than the
+  line the face drew its box set to span (DejaVu at 26 px: a 30.3 px line
+  in a 32-row cell), and the threshold drops the partly-covered edge rows —
+  which broke every frame at 13 DejaVu sizes, 26 px among them, the P5's
+  160x45. So, for the joining glyphs only: an edge pixel the face covered at
+  all is ink when the pixel just inside it is ink (the face aimed the stroke
+  at the edge; the rounding moved the edge), and a glyph that still does
+  not reach an edge its name promises is left UNNAMED, because blank reads
+  as missing and a frame with gaps reads as corruption. DejaVu at 9 px is
+  the one size that rule still touches: eight box glyphs blank. Ship an
+  outline face that draws its box set short of its own line and it will be
+  blank frames, not broken ones.
+- **The eight block elements are never the face's.** `█ ▀ ▄ ▌ ▐ ░ ▒ ▓` come
+  through the threshold with seams between rows and shades at whatever
+  density the designer liked, while CP437 art was drawn against the VGA
+  ROM's dither — which is what `psf2_synth_block` reproduces, to measure,
+  for any cell. The converter leaves them unnamed and the kernel draws its
+  own.
+- **A glyph can lose ink to the cell's edge**, and that is reported, not
+  hidden: `info.clipped` counts only glyphs that do not join (DejaVu clips
+  the tops of 19 accented capitals at 14 px, and half of Ñ's tilde at 42),
+  and `psf2probe` prints it as a warning. Growing the cell to fit would
+  change the line spacing at those sizes to save part of an accent.
 - **No bold or italic face.** SGR bold stays a colour, as now.
 - **A terminal draws 2 x 256 characters, whatever the face holds.** A cell
   is a byte and a set, so a 1,300-glyph Terminus shows the Latin-1 and CP437

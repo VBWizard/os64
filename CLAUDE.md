@@ -534,6 +534,12 @@ arrives is the same bytes either way.
 - Both character sets go through the face's Unicode table
   (`psf2_build_charmap`): zap happens to keep Latin-1 in index order, and
   nothing says the next face will.
+- **An outline face gets there through libos64**: `os64_font_render_psf2`
+  (`os64/font_psf2.h`) turns TTF/OTF bytes and a pixel size into a PSF2
+  image — `/tests/psf2probe /etc/fonts/DejaVuSansMono.ttf 24`. It is
+  written against the font BACKEND table so `tools/test_font_psf2_host.py`
+  can feed its output to the kernel's own `psf2.c`; run that after touching
+  either half, because neither suite alone can tell whether they agree.
 
 ### SMP (Symmetric Multiprocessing)
 
