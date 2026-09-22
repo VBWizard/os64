@@ -95,6 +95,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/pipeexit",        NULL, 0x91E00000,  0,          "32 default-SIGPIPE exits preserve status 141" },
     { "/tests/spawnreap",       NULL, 0x5A9E0000,  0,          "128 short-lived children with concurrent sibling reap" },
     { "/tests/malloctest",      NULL, 0x0A110C00,  0,          "the heap: split, coalesce, recycle, give-back, /proc/<pid>/heap" },
+    { "/tests/arenatest",       NULL, 0xA2E7A000,  0,          "arenas: alignment, growth, limits, zeroing, frame reuse and heap integrity" },
     { "/tests/malloctest",      argv_malloc_threads,    0x0A110C10, 0, "four threads, one heap: the lock, and cross-thread frees" },
     { "/tests/malloctest",      argv_malloc_doublefree, 0xF12EEBAD, 0, "a double free kills the program (it must)" },
     { "/tests/malloctest",      argv_malloc_stomp,      0xCA9A12ED, 0, "a stomped canary kills the program (it must)" },
