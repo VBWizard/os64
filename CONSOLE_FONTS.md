@@ -344,10 +344,12 @@ lines before the root mounts stay in the boot face: that module is PSF1,
 eight pixels wide by format, and teaching the module loader PSF2 is its own
 slice.) The FILE is
 the switch, not a boot token, because a token does not travel to a machine
-that boots from its own disk, and every machine this is for does; absent
-file, or a file with no `face`, and nothing is launched. No example file
-ships, for `mounts.conf`'s reason: a shipped copy of comments would launch
-a no-op and announce it on every boot. The whole file is
+that boots from its own disk, and every machine this is for does. Absent
+file, and nothing is launched; a file with no `face` launches `vtfont`,
+which reads it and does nothing — the kernel asks only whether the file
+exists. No example file ships, for `mounts.conf`'s reason: a shipped copy
+of comments would launch that no-op and announce it on every boot. The
+whole file is
 
 ```
 face = Uni2-Terminus24x12      # a name on /etc/fonts, or a path

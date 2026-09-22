@@ -124,6 +124,12 @@ static int show(void)
 // Write the bytes, wait for the swap, report the kernel's verdict. The exit
 // status is the verdict's: "installed" is success and anything else is not,
 // because the write itself cannot be trusted to say.
+//
+// `pending: no` alone does not mean the swap is over: the kernel clears it
+// when kworker TAKES the offer, before the reflows and the repaint, and
+// writes the verdict after them. In between the door reads `pending: no`
+// with `last: accepted: ... waiting for the swap` — so the wait goes on
+// while the verdict is still the offer's own, and stops on the swap's.
 static int offer(const uint8_t *bytes, size_t len, const char *what)
 {
     int64_t h = os64_open(DOOR, "w");
@@ -149,11 +155,15 @@ static int offer(const uint8_t *bytes, size_t len, const char *what)
             os64_hprintf(OS64_STDERR, "vtfont: cannot read " DOOR " back\n");
             return 1;
         }
-        if (!d.pending || waited >= SWAP_WAIT_MS) break;
+        bool waiting = d.pending || starts_with(d.last, os64_strlen(d.last), "accepted");
+        if (!waiting || waited >= SWAP_WAIT_MS) break;
         os64_sleep(50);
     }
     bool installed = starts_with(d.last, os64_strlen(d.last), "installed");
-    os64_printf("vtfont: %s: %s\n", what, d.last);
+    if (!installed && starts_with(d.last, os64_strlen(d.last), "accepted"))
+        os64_printf("vtfont: %s: not installed within %u ms (%s)\n", what, SWAP_WAIT_MS, d.last);
+    else
+        os64_printf("vtfont: %s: %s\n", what, d.last);
     if (installed)
         os64_printf("vtfont: %ux%u cell, %ux%u on this screen\n", d.cell_w, d.cell_h, d.grid_w, d.grid_h);
     return installed ? 0 : 1;
@@ -182,9 +192,14 @@ static const char *resolve(const char *name, char *buf, size_t cap)
     return exists(name) ? name : NULL;
 }
 
-static bool is_psf2(const uint8_t *b, size_t n)
+static bool has_psf2_magic(const uint8_t *b, size_t n)
 {
     return n >= 4 && b[0] == 0x72 && b[1] == 0xB5 && b[2] == 0x4A && b[3] == 0x86;
+}
+// The magic AND a whole header: the grid branch reads the cell out of it.
+static bool is_psf2(const uint8_t *b, size_t n)
+{
+    return n >= 32 && has_psf2_magic(b, n);
 }
 static bool is_psf1(const uint8_t *b, size_t n)
 {
@@ -237,26 +252,35 @@ static bool render(render_t *r, uint32_t px)
 }
 
 // The largest size whose grid still holds `cols` by `rows` on a screen of
-// `sw` by `sh` pixels. The cell grows with the size, so the sizes that fit
-// are a prefix of 8..96 and bisection finds its end; a size the converter
-// refuses (hairlines vanish below about 11 px) is stepped past downward,
-// which is the only direction a refusal leaves. Returns 0 when nothing fits.
-static uint32_t size_for_grid(render_t *r, uint32_t sw, uint32_t sh, uint32_t cols, uint32_t rows)
+// `sw` by `sh` pixels. The cell grows with the size, so the sizes whose
+// CELL fits are a prefix of 8..96 and bisection finds its end — and the
+// converter reports the cell even when it refuses the size (a hairline
+// vanished, the cell is past the fence), so a refusal still answers the
+// question the search is asking. From that end the search steps down to
+// the nearest size the converter accepts, which is then the largest
+// accepted size that fits, wherever the refusals fell. Only a refusal that
+// leaves the cell unknown (the engine could not open the face at that
+// size, or its advance was not a whole pixel) has to be guessed at as "does
+// not fit", and *sure is cleared so the caller does not call the answer
+// the largest. Returns 0 when nothing fits.
+static uint32_t size_for_grid(render_t *r, uint32_t sw, uint32_t sh, uint32_t cols, uint32_t rows,
+                              bool *sure)
 {
     uint32_t lo = 8, hi = 96, best = 0;
+    *sure = true;
     while (lo <= hi) {
         uint32_t mid = (lo + hi) / 2;
+        bool ok = render(r, mid);
         bool fits;
-        if (render(r, mid)) {
+        if (ok || r->info.cell_w > 0) {
             fits = sw / r->info.cell_w >= cols && sh / r->info.cell_h >= rows;
-        } else if (r->status == OS64_FONT_LIMIT && r->info.cell_w > 0) {
-            fits = sw / r->info.cell_w >= cols && sh / r->info.cell_h >= rows;   // the cell is known, if unusable
         } else {
-            fits = mid <= 12;   // a hairline refusal, below the sizes anyone asks for by grid
+            fits = false;
+            *sure = false;
         }
         if (fits) { best = mid; lo = mid + 1; } else { if (mid == 0) break; hi = mid - 1; }
     }
-    // `best` may itself be a refused size; the sizes below it all fit.
+    // `best` may itself be a refused size; every size below it fits.
     while (best >= 8 && !render(r, best))
         best--;
     return best >= 8 ? best : 0;
@@ -389,6 +413,10 @@ int main(int argc, char **argv)
         os64_free(face);
         return rc;
     }
+    if (has_psf2_magic(face, face_len)) {
+        os64_hprintf(OS64_STDERR, "vtfont: %s is a PSF2 font cut short of its header\n", path);
+        return 1;
+    }
     if (is_psf1(face, face_len)) {
         os64_hprintf(OS64_STDERR, "vtfont: %s is a PSF1 font; the console takes PSF2\n", path);
         return 1;
@@ -412,7 +440,8 @@ int main(int argc, char **argv)
             os64_hprintf(OS64_STDERR, "vtfont: cannot learn the screen's size from " DOOR "\n");
             return 1;
         }
-        px = size_for_grid(&r, d.screen_w, d.screen_h, size_a, size_b);
+        bool sure = true;
+        px = size_for_grid(&r, d.screen_w, d.screen_h, size_a, size_b, &sure);
         if (px == 0) {
             // Nothing fit — but a face the converter refuses at EVERY size
             // (proportional, not a font) fits nowhere for a reason that is
@@ -427,7 +456,8 @@ int main(int argc, char **argv)
                          path, d.screen_w, d.screen_h, size_a, size_b);
             return 1;
         }
-        os64_printf("vtfont: %s at %u px is the largest that gives %ux%u\n", path, px, size_a, size_b);
+        os64_printf("vtfont: %s at %u px %s %ux%u\n", path, px,
+                    sure ? "is the largest that gives" : "gives", size_a, size_b);
     } else {
         px = size_a;
     }
