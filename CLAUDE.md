@@ -509,8 +509,13 @@ first time a program with better taste in terminals runs.
 ### The console's face (`/sys/console/font`) — CONSOLE_FONTS.md is the design
 
 **The virtual terminals can be given another font while the machine runs**:
-`cp terminus-24.psf /sys/console/font`, and `echo boot > /sys/console/font`
-to go back. The kernel takes a **PSF2 bitmap** and nothing smarter — it is
+`vtfont terminus-24.psf`, `vtfont DejaVuSansMono 100x40` (the largest size
+that gives that grid), `vtfont boot` to go back — or `cp face.psf
+/sys/console/font` by hand, which is all `vtfont` does underneath, plus
+reading the verdict back. **`console.conf` on the ladder (`face =`, `size =`)
+is applied at boot by `vtfont --startup`, which the kernel launches only when
+the file resolves — the FILE is the switch, no token, because tokens don't
+reach the P5.** The kernel takes a **PSF2 bitmap** and nothing smarter — it is
 built `-mno-sse`, so rendering an outline face is ring 3's job, and what
 arrives is the same bytes either way.
 

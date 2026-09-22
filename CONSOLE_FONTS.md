@@ -1,10 +1,11 @@
 # CONSOLE_FONTS.md — changing the face a virtual terminal draws with
 
-**Status: slices 1 to 5 of 6 are built** (§ Work, in slices) — a PSF2 face
-can be loaded through `/sys/console/font` with `cp`, and an outline face can
-be rendered to one at a size (`/tests/psf2probe face.ttf 24`). `vtfont`
-(slice 6) and the persistence that rides on it are design. A section moves
-into the present tense when its slice lands, and this line changes with it.
+**Status: all six slices and the persistence are built** (§ Work, in
+slices; § Persistence) — `vtfont` puts a bitmap or an outline face on the
+virtual terminals, at a pixel size or at the largest size that gives the
+grid you ask for, and `console.conf` makes it the face every boot prints
+in from the post-boot tests on. A section moves into the present tense
+when its slice lands, and this line changes with it.
 
 ## The one-paragraph version
 
@@ -308,8 +309,21 @@ print-time wraps with the same bit is a follow-on, not part of this arc.
    the breakage in between, which is the lesson. `/tests/psf2probe` is the
    worked example: face and size to `/sys/console/font`, or to a `.psf`
    file that `cp` can load later with no FreeType in the room.
-6. **`vtfont`** — Chris's program. `vtfont` (show), `vtfont face.psf`,
-   `vtfont DejaVuSansMono.ttf 24`, `vtfont boot`.
+6. **`vtfont`** (`userland/apps/vtfont`): `vtfont` (show), `vtfont boot`,
+   `vtfont face.psf`, `vtfont DejaVuSansMono.ttf 24`, and **`vtfont
+   DejaVuSansMono.ttf 100x40`** — the size a person actually has in mind is
+   how much fits on the glass, so the grid form finds the LARGEST pixel
+   size whose cell still gives this screen that many columns and rows
+   (bisection over the sizes the kernel accepts; the cell grows with the
+   size), and prints the size it settled on so it can be typed next time.
+   A bare name is looked for in `/etc/fonts` with `.ttf`, `.otf` and `.psf`
+   tried in turn. Which kind a file is comes from its first bytes, not its
+   name; a bitmap asked for a grid answers with the grid it gives. What
+   took is the KERNEL's to say: after the write it waits for the swap and
+   prints the door's `last:` line, and its exit status is that verdict's —
+   a failed close is not yet heard in ring 3 (DEBTS.md), and this is the
+   program that does not need it to be. The door publishes `screen:` for
+   it, because a grid search needs the dividend.
 
 Slices 1–4 are kernel work on the glass and its lock, reachable from
 interrupt and panic context. That is the category CLAUDE.md says earns an
@@ -330,10 +344,12 @@ lines before the root mounts stay in the boot face: that module is PSF1,
 eight pixels wide by format, and teaching the module loader PSF2 is its own
 slice.) The FILE is
 the switch, not a boot token, because a token does not travel to a machine
-that boots from its own disk, and every machine this is for does; absent
-file, or a file with no `face`, and nothing is launched. No example file
-ships, for `mounts.conf`'s reason: a shipped copy of comments would launch
-a no-op and announce it on every boot. The whole file is
+that boots from its own disk, and every machine this is for does. Absent
+file, and nothing is launched; a file with no `face` launches `vtfont`,
+which reads it and does nothing — the kernel asks only whether the file
+exists. No example file ships, for `mounts.conf`'s reason: a shipped copy
+of comments would launch that no-op and announce it on every boot. The
+whole file is
 
 ```
 face = Uni2-Terminus24x12      # a name on /etc/fonts, or a path
