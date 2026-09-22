@@ -286,6 +286,40 @@ static uint32_t size_for_grid(render_t *r, uint32_t sw, uint32_t sh, uint32_t co
     return best >= 8 ? best : 0;
 }
 
+// ── console.conf with no `face` in it ───────────────────────────────────────
+//
+// A file that exists is somebody's deliberate act, so a file with no `face`
+// gets a line naming what it did say: `font = …` is the natural slip, and
+// a boot that silently keeps the boot face is the worst way to learn a key's
+// name. A file of nothing but comments says nothing — there is nothing to
+// correct.
+typedef struct { uint32_t unknown, known; } keys_t;
+
+static bool note_key(const char *key, const char *value, void *user)
+{
+    (void)value;
+    keys_t *k = user;
+    if (key == NULL) {
+        k->unknown++;
+        os64_hprintf(OS64_STDERR, "vtfont: console.conf: not a `key = value` line: %s\n", value);
+    } else if (os64_streq_nocase(key, "face") || os64_streq_nocase(key, "size")) {
+        k->known++;
+    } else {
+        k->unknown++;
+        os64_hprintf(OS64_STDERR, "vtfont: console.conf: `%s` is not a setting here (the keys are `face` and `size`)\n", key);
+    }
+    return true;
+}
+
+static int complain_about_keys(void)
+{
+    keys_t k = {0};
+    (void)os64_conf_find_read("console.conf", note_key, &k, NULL, 0);
+    if (k.unknown != 0 || k.known != 0)
+        os64_hprintf(OS64_STDERR, "vtfont: console.conf has no `face` line; the boot face stays\n");
+    return k.unknown != 0 ? 1 : 0;
+}
+
 // ── main ────────────────────────────────────────────────────────────────────
 
 // "24" or "100x40". Returns 0 for a pixel size, 1 for a grid, -1 for neither.
@@ -341,8 +375,10 @@ int main(int argc, char **argv)
             return 2;
         }
         int64_t r = os64_conf_get("console.conf", "face", conf_face, sizeof(conf_face));
-        if (r == OS64_CONF_NO_FILE || r == OS64_CONF_NO_KEY)
+        if (r == OS64_CONF_NO_FILE)
             return 0;
+        if (r == OS64_CONF_NO_KEY)
+            return complain_about_keys();
         if (r < 0) {
             os64_hprintf(OS64_STDERR, "vtfont: console.conf: cannot read `face`\n");
             return 1;
