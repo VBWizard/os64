@@ -192,6 +192,33 @@ void hid_keyboard_report(hid_keyboard_t *kbd, const uint8_t rep[8])
 	if (rep[2] == 0x01 && rep[3] == 0x01 && rep[4] == 0x01)
 		return;
 
+	// ONE REPORT, THREE STEPS, IN THE ORDER A HAND DOES THEM: the keys that
+	// lifted, then the modifiers that changed, then the keys that went down.
+	// A report that lets go of Alt+Tab whole (a viewer closing, or two keys
+	// lifted inside one USB poll) must deliver the Tab-up while Alt still
+	// holds, or the Alt-up ends the Alt-Tab hold first and the Tab-up, now
+	// carrying no Alt, reaches whichever window was just focused as half a
+	// chord it never saw begin.
+	//
+	// RELEASE EDGES (2026-08-23): a usage present in the previous report and
+	// absent now is a key-UP, delivered under the modifiers held until this
+	// report (kbd->mods is still the previous report's here), so a chord's
+	// key lifts inside its chord.
+	// The GUI has wanted these since keyboard.c grew break-code delivery for
+	// PS/2 ("modifier-drag interactions and chords depend on knowing when a
+	// key was released"); the text path ignores them.
+	for (int j = 2; j < 8; j++) {
+		uint8_t u = kbd->prev_report[j];
+		if (u == 0)
+			continue;
+		bool still_down = false;
+		for (int i = 2; i < 8; i++)
+			if (rep[i] == u)
+				still_down = true;
+		if (!still_down)
+			keyboard_deliver_event(hid_usage_ascii(kbd, u), u, kbd->mods, false);
+	}
+
 	// HID modifier bits: LCtrl,LShift,LAlt,LGui,RCtrl,RShift,RAlt,RGui.
 	uint8_t m = rep[0];
 	uint8_t mods = (uint8_t)(kbd->mods & KEYBOARD_MOD_CAPS);   // caps latch survives
@@ -225,23 +252,6 @@ void hid_keyboard_report(hid_keyboard_t *kbd, const uint8_t rep[8])
 		uint8_t mask = (uint8_t)(1u << bit);
 		if ((m & mask) != (prev_m & mask))
 			keyboard_deliver_event(0, (uint8_t)(0xE0 + bit), mods, (m & mask) != 0);
-	}
-
-	// RELEASE EDGES (same day): a usage present in the previous report and
-	// absent now is a key-UP, delivered with the same ASCII its press
-	// carried. The GUI has wanted these since keyboard.c grew break-code
-	// delivery for PS/2 ("modifier-drag interactions and chords depend on
-	// knowing when a key was released"); the text path ignores them.
-	for (int j = 2; j < 8; j++) {
-		uint8_t u = kbd->prev_report[j];
-		if (u == 0)
-			continue;
-		bool still_down = false;
-		for (int i = 2; i < 8; i++)
-			if (rep[i] == u)
-				still_down = true;
-		if (!still_down)
-			keyboard_deliver_event(hid_usage_ascii(kbd, u), u, mods, false);
 	}
 
 	// Edge detection: a usage present now but absent from the previous

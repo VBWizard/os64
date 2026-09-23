@@ -21,6 +21,8 @@
 //      Two viewers at once: a second pointer moving holding nothing does not
 //      lift the first one's held button, and a second keyboard typing does
 //      not drop a Ctrl the first one holds (it still rides on the pointer).
+//      An Alt+Tab let go of in one report leaks no Tab to the window it
+//      focused.
 //      Ctrl+Alt+F1 brings the terminal back.
 //
 // `glasstest watch` prints every record's header for thirty seconds instead:
@@ -53,6 +55,7 @@
 #define GLASSTEST_TWO_HANDS 0x61A55F0F   // one pointer's move ended another's held button
 #define GLASSTEST_TWO_KEYS  0x61A55F10   // one keyboard's typing dropped a chord another held
 #define GLASSTEST_CAPS      0x61A55F11   // a held Caps Lock toggled more than once
+#define GLASSTEST_CHORD_UP  0x61A55F12   // a consumed chord's key-up leaked to a window
 
 #define PAINT 0x0012AB34u
 
@@ -166,6 +169,7 @@ static void listen(int64_t win, seen_t *seen, int ms)
 #define KEY_C   0x06
 #define KEY_F1  0x3A
 #define KEY_CAPS 0x39
+#define KEY_TAB  0x2B
 #define KEY_F8  0x41
 #define MOD_LCTRL  0x01
 #define MOD_LSHIFT 0x02
@@ -335,6 +339,34 @@ static int hands(void)
 				            seen.moves, seen.move_modifiers);
 				code = GLASSTEST_TWO_KEYS;
 			}
+		}
+	}
+
+	if (!code)
+	{
+		// A chord let go of in ONE report, the way a closing viewer does:
+		// with a second window focused, Alt+Tab back to this one, then
+		// every key up at once. The switcher consumed the Tab, so neither
+		// half of it may reach the window that now has focus.
+		int64_t win2 = os64_gui_window_create("glasstest second", 260, 260, 200, 120, 0);
+		os64_draw_ctx_t ctx2;
+		if (win2 <= 0 || os64_draw_ctx_init(&ctx2, win2) != 0)
+			code = GLASSTEST_CHORD_UP;
+		else
+		{
+			os64_gui_window_publish(win2, NULL);
+			listen(win, &seen, 300);
+			write_key(h, MOD_LALT, 0);
+			write_key(h, MOD_LALT, KEY_TAB);
+			write_key(h, 0, 0);
+			listen(win, &seen, 400);
+			if (seen.down['\t'] || seen.up['\t'])
+			{
+				os64_printf("glasstest: Alt+Tab's Tab reached the window it focused (%d down, %d up)\n",
+				            seen.down['\t'], seen.up['\t']);
+				code = GLASSTEST_CHORD_UP;
+			}
+			os64_gui_window_destroy(win2);
 		}
 	}
 
