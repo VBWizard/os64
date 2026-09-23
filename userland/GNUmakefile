@@ -548,7 +548,7 @@ $(OBJ)/pic/%.S.o: %.S
 # program lives under tests/, and a pattern-specific variable that matches
 # nothing is silent — the -O2 would simply stop applying with no diagnostic.
 # fpu_demo made exactly that move on the day /tests was created.
-OPTIMIZED_APPS := fpu_demo
+OPTIMIZED_APPS := fpu_demo vncd
 $(foreach a,$(OPTIMIZED_APPS),\
   $(eval $(OBJ)/$(if $(filter $(a),$(TESTS)),tests,apps)/$(a)/%.c.o: CFLAGS += -O2))
 
