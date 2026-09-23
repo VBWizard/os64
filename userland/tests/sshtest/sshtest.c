@@ -326,6 +326,17 @@ static void forwards(void)
     CHECK(engine.forwards[0].receive_window==SSH_FORWARD_WINDOW-4);
     engine.out_len=0; ssh_forward_consumed(&engine,0,4); p=last_sent(&len);
     CHECK(engine.forwards[0].receive_window==SSH_FORWARD_WINDOW && p && p[0]==93 && be32(p+1)==41 && be32(p+5)==4);
+    /* A credit the output queue has no room for is kept, not lost, and a
+     * later call (n = 0 retries alone) sends it all in one adjust. The
+     * window check counts what is owed. */
+    send_channel(94,1,"abcdefgh",0); CHECK(engine.forwards[0].receive_window==SSH_FORWARD_WINDOW-8);
+    engine.out_len=SSH_OUTPUT_CAP; ssh_forward_consumed(&engine,0,3); ssh_forward_consumed(&engine,0,2);
+    CHECK(!engine.closed && engine.forwards[0].credit_owed==5 && engine.forwards[0].receive_window==SSH_FORWARD_WINDOW-8);
+    engine.out_len=0; ssh_forward_consumed(&engine,0,0); p=last_sent(&len);
+    CHECK(p && p[0]==93 && be32(p+5)==5 && !engine.forwards[0].credit_owed && engine.forwards[0].receive_window==SSH_FORWARD_WINDOW-3);
+    engine.out_len=SSH_OUTPUT_CAP; ssh_forward_consumed(&engine,0,3); CHECK(!engine.closed && engine.forwards[0].credit_owed==3);
+    engine.out_len=0; ssh_forward_consumed(&engine,0,1); CHECK(engine.closed);
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK; open_forward(41,1000);
     /* Data out is clamped by the peer's window, and an adjust restores it. */
     CHECK(ssh_forward_send(&engine,0,(const uint8_t *)"0123456789abcdef",16)==16);
     CHECK(engine.forwards[0].peer_window==984);
@@ -343,13 +354,30 @@ static void forwards(void)
     send_channel(94,1,"late",0); CHECK(!engine.closed && engine.event==SSH_EVENT_NONE);
     engine.out_len=0; send_channel(97,1,0,0);
     CHECK(engine.event==SSH_EVENT_FORWARD_CLOSE && engine.event_forward==0 && !engine.out_len);
-    CHECK(engine.forwards[0].state==SSH_FORWARD_FREE && !ssh_forwards_live(&engine));
+    /* The channel is dead but the slot stays taken until the caller has
+     * delivered what the client sent, and says so. */
+    CHECK(engine.forwards[0].state==SSH_FORWARD_CLOSED && ssh_forwards_live(&engine)==1);
+    engine.out_len=0; CHECK(!ssh_forward_send(&engine,0,big,1) && ssh_forward_finish(&engine,0) && !engine.out_len);
+    ssh_forward_consumed(&engine,0,4); CHECK(!engine.out_len && !engine.closed);
+    ssh_forward_release(&engine,0); CHECK(engine.forwards[0].state==SSH_FORWARD_FREE && !ssh_forwards_live(&engine));
     /* A dead channel number is a protocol violation. */
     send_channel(94,1,"ghost",0); CHECK(engine.closed);
-    /* Peer closes first: we answer with our CLOSE and free the slot. */
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK; open_forward(42,1000);
+    engine.out_len=0; send_channel(97,1,0,0);
+    send_channel(94,1,"ghost",0); CHECK(engine.closed);
+    /* Peer closes first: we answer with our CLOSE; the slot waits for release. */
     reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK; open_forward(42,1000);
     engine.out_len=0; send_channel(97,1,0,0); p=last_sent(&len);
-    CHECK(engine.event==SSH_EVENT_FORWARD_CLOSE && p && p[0]==97 && be32(p+1)==42 && !ssh_forwards_live(&engine));
+    CHECK(engine.event==SSH_EVENT_FORWARD_CLOSE && p && p[0]==97 && be32(p+1)==42 && ssh_forwards_live(&engine)==1);
+    ssh_forward_release(&engine,0); CHECK(!ssh_forwards_live(&engine));
+    /* A released slot's peer number may be used again; a live one may not. */
+    open_forward(42,1000); CHECK(!engine.closed && ssh_forwards_live(&engine)==1);
+    send_open(42,"localhost",5900,1000,32768,0); CHECK(engine.closed);
+    /* ...and a CLOSED one's may, before release: the number died when the
+     * CLOSEs crossed, and the slot is still taken, so it gets another. */
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK; open_forward(42,1000);
+    send_channel(97,1,0,0); send_open(42,"localhost",5900,1000,32768,0);
+    CHECK(!engine.closed && engine.event==SSH_EVENT_FORWARD_OPEN && engine.event_forward==1);
     /* EOF from the client is an event, and data after it is a violation. */
     reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK; open_forward(43,1000);
     send_channel(96,1,0,0); CHECK(engine.event==SSH_EVENT_FORWARD_EOF && engine.forwards[0].input_eof);
@@ -394,6 +422,9 @@ static void forwards(void)
     engine.out_len=0; send_open(70,"localhost",5900,1000,32768,0); p=last_sent(&len);
     CHECK(engine.event==SSH_EVENT_NONE && p && p[0]==92 && be32(p+1)==70 && be32(p+5)==4);
     send_channel(97,4,0,0); CHECK(engine.event==SSH_EVENT_FORWARD_CLOSE && engine.event_forward==3);
+    engine.out_len=0; send_open(71,"localhost",5900,1000,32768,0); p=last_sent(&len);
+    CHECK(engine.event==SSH_EVENT_NONE && p && p[0]==92 && be32(p+5)==4);
+    ssh_forward_release(&engine,3);
     send_open(71,"localhost",5900,1000,32768,0); CHECK(engine.event==SSH_EVENT_FORWARD_OPEN && engine.event_forward==3);
     ssh_forward_result(&engine,3,1,0,""); CHECK(ssh_forwards_live(&engine)==SSH_FORWARDS);
     send_channel(94,8,"none",0); CHECK(engine.closed);
@@ -406,7 +437,23 @@ static void forwards(void)
     send_channel(94,0,"shell",0); CHECK(engine.event==SSH_EVENT_INPUT && engine.event_len==5);
     send_channel(94,1,"vnc",0); CHECK(engine.event==SSH_EVENT_FORWARD_DATA && engine.event_len==3);
     CHECK(engine.receive_window==SSH_WINDOW-5 && engine.forwards[0].receive_window==SSH_FORWARD_WINDOW-3);
+    /* One number per live channel, whichever kind asks: a forward may not
+     * take the session's, nor a second session a forward's. */
+    { reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK;
+      ssh_writer v={payload,0,sizeof(payload),0};
+      ssh_put_byte(&v,90); ssh_put_text(&v,"session"); ssh_put_u32(&v,17); ssh_put_u32(&v,1000); ssh_put_u32(&v,32768);
+      size_t m=frame(wire,payload,v.n); ssh_receive(&engine,wire,m); CHECK(engine.channel);
+      send_open(17,"localhost",5900,1000,32768,0); CHECK(engine.closed);
+      reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK; open_forward(19,1000);
+      v.n=0; ssh_put_byte(&v,90); ssh_put_text(&v,"session"); ssh_put_u32(&v,19); ssh_put_u32(&v,1000); ssh_put_u32(&v,32768);
+      m=frame(wire,payload,v.n); ssh_receive(&engine,wire,m); CHECK(engine.closed && !engine.channel); }
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK;
+    n=frame(wire,payload,w.n); ssh_receive(&engine,wire,n); CHECK(engine.channel);
+    engine.started=1; open_forward(18,1000);
     send_channel(97,0,0,0); CHECK(engine.event==SSH_EVENT_CLOSE && ssh_forwards_live(&engine)==1);
+    /* The session's number is free once its CLOSEs have crossed. */
+    send_open(17,"localhost",5900,1000,32768,0); CHECK(!engine.closed && engine.event==SSH_EVENT_FORWARD_OPEN);
+    ssh_forward_result(&engine,engine.event_forward,0,1,"");
     /* A key exchange holds a forward's close, as it holds exit-status. */
     engine.kex=1; CHECK(!ssh_forward_finish(&engine,0) && !engine.forwards[0].sent_close);
     engine.kex=0; CHECK(ssh_forward_finish(&engine,0) && engine.forwards[0].sent_close);

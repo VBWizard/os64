@@ -24,7 +24,10 @@
 #define SSH_FORWARD_WINDOW 262144u
 #define SSH_FORWARD_HOST_MAX 255u
 enum ssh_forward_policy { SSH_FORWARD_NONE, SSH_FORWARD_LOOPBACK };
-enum ssh_forward_state { SSH_FORWARD_FREE, SSH_FORWARD_OPENING, SSH_FORWARD_OPEN };
+/* CLOSED: both CLOSEs have crossed, so the channel number is dead, but the
+ * caller may still owe the local connection bytes the client sent before its
+ * CLOSE. The slot stays taken until ssh_forward_release. */
+enum ssh_forward_state { SSH_FORWARD_FREE, SSH_FORWARD_OPENING, SSH_FORWARD_OPEN, SSH_FORWARD_CLOSED };
 
 /* The caller owns time, I/O and process lifetime. One thread owns this engine.
  * receive stops at an event; its data remains valid until the next receive.
@@ -50,6 +53,7 @@ typedef struct {
 typedef struct {
     enum ssh_forward_state state;
     uint32_t peer_channel, peer_window, peer_packet, receive_window;
+    uint32_t credit_owed;                  // consumed, but no room yet to say so
     int input_eof, sent_close;
     char host[SSH_FORWARD_HOST_MAX + 1];   // requested destination, printable
     uint32_t port;
@@ -77,6 +81,7 @@ typedef struct {
     size_t deferred_len, deferred_wire; // stored replies, and their framed cost
     char error[128], username[256], command[SSH_COMMAND_MAX + 1];
     int channel, started, pty, request_reply, input_eof, sent_close;
+    int peer_close;                         // the session channel's CLOSE arrived
     uint32_t peer_channel, peer_window, peer_packet, receive_window;
     uint32_t cols, rows;
     uint32_t resize_cols, resize_rows; // proposal exposed by SSH_EVENT_RESIZE
@@ -128,9 +133,12 @@ void ssh_rekey(ssh_engine *s);
  * receiving another packet (success confirms the channel, failure sends
  * OPEN_FAILURE with `reason`, RFC 4254 section 5.1, and frees the slot).
  * FORWARD_DATA carries client bytes for the local connection, to be credited
- * back with ssh_forward_consumed as they leave. FORWARD_EOF is the client's
- * half-close. FORWARD_CLOSE means the channel is gone: the slot is already
- * free and the caller closes its connection. */
+ * back with ssh_forward_consumed as they leave; credit the output queue has
+ * no room for is kept and sent by a later call, which may pass n = 0 to
+ * retry alone. FORWARD_EOF is the client's half-close. FORWARD_CLOSE means
+ * the channel is gone (SSH_FORWARD_CLOSED): nothing more goes to the client,
+ * the caller delivers what the client already sent, closes its connection,
+ * and frees the slot with ssh_forward_release. */
 void ssh_forward_result(ssh_engine *s, uint32_t forward, int success,
                         uint32_t reason, const char *text);
 size_t ssh_forward_send(ssh_engine *s, uint32_t forward, const uint8_t *p, size_t n);
@@ -138,6 +146,7 @@ void ssh_forward_consumed(ssh_engine *s, uint32_t forward, uint32_t n);
 /* The local connection ended: send EOF and CLOSE. Returns 0 when that must
  * wait (a key exchange, or no output room); call again next turn. */
 int ssh_forward_finish(ssh_engine *s, uint32_t forward);
+void ssh_forward_release(ssh_engine *s, uint32_t forward);
 /* Forwards not yet free, whatever their state. */
 uint32_t ssh_forwards_live(const ssh_engine *s);
 #endif
