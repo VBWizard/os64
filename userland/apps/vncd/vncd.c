@@ -228,9 +228,8 @@ static uint32_t presented(uint32_t x, uint32_t y)
 	return (p >> 2) & 0x3F3F3F;
 }
 
-static void pixel_out(uint8_t *out, uint32_t xrgb, const vnc_format_t *pf)
+static void pixel_out(uint8_t *out, uint32_t v, const vnc_format_t *pf)
 {
-	uint32_t v = vnc_pixel(xrgb, pf);
 	uint32_t bytes = pf->bpp / 8;
 	for (uint32_t i = 0; i < bytes; i++)
 		out[pf->big_endian ? bytes - 1 - i : i] = (uint8_t)(v >> (8 * i));
@@ -249,10 +248,13 @@ static bool send_raw(rect_t r, const vnc_format_t *pf)
 	if (!out_bytes(head, sizeof(head)))
 		return false;
 	uint32_t bytes = pf->bpp / 8;
+	vnc_lut_t lut;
+	vnc_lut_build(&lut, pf);
 	for (int32_t y = r.y; y < r.y + r.h; y++)
 	{
 		for (int32_t x = 0; x < r.w; x++)
-			pixel_out(s_row + (size_t)x * bytes, presented((uint32_t)(r.x + x), (uint32_t)y), pf);
+			pixel_out(s_row + (size_t)x * bytes,
+			          vnc_lut_pixel(&lut, presented((uint32_t)(r.x + x), (uint32_t)y)), pf);
 		if (!out_bytes(s_row, (size_t)r.w * bytes))
 			return false;
 	}

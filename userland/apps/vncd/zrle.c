@@ -2,12 +2,14 @@
 
 #include "zrle.h"
 
-uint32_t vnc_pixel(uint32_t xrgb, const vnc_format_t *pf)
+void vnc_lut_build(vnc_lut_t *lut, const vnc_format_t *pf)
 {
-	uint32_t r = (xrgb >> 16) & 0xFF, g = (xrgb >> 8) & 0xFF, b = xrgb & 0xFF;
-	return ((r * pf->rmax + 127) / 255) << pf->rshift |
-	       ((g * pf->gmax + 127) / 255) << pf->gshift |
-	       ((b * pf->bmax + 127) / 255) << pf->bshift;
+	for (uint32_t v = 0; v < 256; v++)
+	{
+		lut->r[v] = ((v * pf->rmax + 127) / 255) << pf->rshift;
+		lut->g[v] = ((v * pf->gmax + 127) / 255) << pf->gshift;
+		lut->b[v] = ((v * pf->bmax + 127) / 255) << pf->bshift;
+	}
 }
 
 // Where a 32-bit pixel's colour bits live: the low three bytes, the high
@@ -205,6 +207,8 @@ size_t zrle_tiles(const uint32_t *px, size_t stride, uint32_t w, uint32_t h,
 {
 	uint8_t *start = out;
 	uint32_t values[ZRLE_TILE * ZRLE_TILE];
+	vnc_lut_t lut;
+	vnc_lut_build(&lut, pf);
 	for (uint32_t ty = 0; ty < h; ty += ZRLE_TILE)
 		for (uint32_t tx = 0; tx < w; tx += ZRLE_TILE)
 		{
@@ -212,7 +216,7 @@ size_t zrle_tiles(const uint32_t *px, size_t stride, uint32_t w, uint32_t h,
 			uint32_t th = h - ty < ZRLE_TILE ? h - ty : ZRLE_TILE;
 			for (uint32_t y = 0; y < th; y++)
 				for (uint32_t x = 0; x < tw; x++)
-					values[y * tw + x] = vnc_pixel(px[(size_t)(ty + y) * stride + tx + x], pf);
+					values[y * tw + x] = vnc_lut_pixel(&lut, px[(size_t)(ty + y) * stride + tx + x]);
 			out = tile(values, tw, th, pf, out);
 		}
 	return (size_t)(out - start);

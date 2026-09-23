@@ -29,8 +29,22 @@ typedef struct
 
 #define ZRLE_TILE 64
 
-// The pixel value an XRGB colour has in `pf`.
-uint32_t vnc_pixel(uint32_t xrgb, const vnc_format_t *pf);
+// The pixel value an XRGB colour has in `pf`, from three 256-entry tables:
+// each channel scaled to its max with rounding and shifted into place. Built
+// once per rectangle, so a pixel costs a lookup per channel and two ORs
+// instead of three multiplies and three divisions — the translation table
+// every VNC server since the first has kept.
+typedef struct
+{
+	uint32_t r[256], g[256], b[256];
+} vnc_lut_t;
+
+void vnc_lut_build(vnc_lut_t *lut, const vnc_format_t *pf);
+
+static inline uint32_t vnc_lut_pixel(const vnc_lut_t *lut, uint32_t xrgb)
+{
+	return lut->r[(xrgb >> 16) & 0xFF] | lut->g[(xrgb >> 8) & 0xFF] | lut->b[xrgb & 0xFF];
+}
 
 // The bytes of a CPIXEL in `pf`: 3 where the RFC compacts a 32-bit pixel whose
 // colour fits three bytes, else bpp / 8.
