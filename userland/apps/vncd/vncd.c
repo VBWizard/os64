@@ -36,6 +36,10 @@
 #define VNCD_BANNER_H      20
 #define VNCD_OUT_CAP       (64 * 1024)
 #define VNCD_CUT_TEXT_MAX  (1024 * 1024)
+// How much of the glass one turn takes before answering the viewer: two
+// full 1080p frames of pixels, so a turn keeps up with any screen and still
+// ends.
+#define VNCD_DRAIN_BUDGET  (16u * 1024 * 1024)
 
 static void log_line(const char *text)
 {
@@ -306,15 +310,25 @@ static void outbound(void)
 	while (!__atomic_load_n(&s_quit, __ATOMIC_ACQUIRE))
 	{
 		// A short patience, so a request that arrives while the screen is
-		// still is answered within a couple of ticks; then take everything
-		// else the glass already holds without waiting.
+		// still is answered within a couple of ticks; then take what else
+		// the glass already holds without waiting — up to a BUDGET. While a
+		// window is dragged the compositor adds a change every frame, so a
+		// drain that runs "until empty" never ends, and the viewer is never
+		// answered until the drag stops (the P5, 2026-09-23: seconds of
+		// nothing, then everything). What the budget leaves stays in the
+		// glass and is taken on the next turn; the shadow is eventually
+		// exact either way.
 		int64_t n = os64_read_for(s_glass, rec, sizeof(rec), 20);
+		size_t taken = 0;
 		while (n > 0)
 		{
 			apply_record(rec, n);
+			taken += (size_t)n;
+			if (taken >= VNCD_DRAIN_BUDGET)
+				break;
 			n = os64_read_for(s_glass, rec, sizeof(rec), 0);
 		}
-		if (n != OS64_ERR_TIMEOUT && n != OS64_INTERRUPTED)
+		if (n <= 0 && n != OS64_ERR_TIMEOUT && n != OS64_INTERRUPTED)
 		{
 			log_line("vncd: the glass closed under the session");
 			break;
