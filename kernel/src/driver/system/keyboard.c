@@ -251,28 +251,40 @@ static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers)
 // The machine-wide modifier state the mouse path reads (keyboard_current_
 // modifiers in the header has the contract). Ctrl, Shift and Alt are counted:
 // how many keyboards hold each, so one is held while any keyboard holds it.
-// The latches and the dialect tag are the last reporting keyboard's. Written
-// from IRQ context and from /dev/glass writes on any core, so the counts are
-// atomic; each keyboard reports its own changes in order.
+// The latches and the dialect tag are the last reporting keyboard's. ONE
+// WORD holds all of it — a 16-bit holder count per modifier and the latch
+// byte on top — changed by compare-and-swap and read by one load, so a
+// pointer packet on another core sees a keyboard's change whole: a report
+// going from nothing to Ctrl+Alt is never read as Ctrl alone. Written from
+// IRQ context and from /dev/glass writes on any core; each keyboard reports
+// its own changes in order.
 static const uint8_t kHeldModifiers[3] = { KEYBOARD_MOD_CTRL, KEYBOARD_MOD_SHIFT, KEYBOARD_MOD_ALT };
-static volatile uint32_t s_modifierHolders[3];
-static volatile uint8_t s_liveLatches;
+#define MODIFIER_COUNT_SHIFT(i) (16u * (unsigned)(i))
+#define MODIFIER_LATCH_SHIFT    48u
+static volatile uint64_t s_modifierState;
 
 static void keyboard_publish_change(uint8_t before, uint8_t after) {
-    for (int i = 0; i < 3; i++) {
-        uint8_t m = kHeldModifiers[i];
-        if ((after & m) && !(before & m))
-            __atomic_add_fetch(&s_modifierHolders[i], 1, __ATOMIC_RELAXED);
-        else if (!(after & m) && (before & m))
-            __atomic_sub_fetch(&s_modifierHolders[i], 1, __ATOMIC_RELAXED);
-    }
-    s_liveLatches = (uint8_t)(after & ~(KEYBOARD_MOD_CTRL | KEYBOARD_MOD_SHIFT | KEYBOARD_MOD_ALT));
+    uint8_t latches = (uint8_t)(after & ~(KEYBOARD_MOD_CTRL | KEYBOARD_MOD_SHIFT | KEYBOARD_MOD_ALT));
+    uint64_t old = __atomic_load_n(&s_modifierState, __ATOMIC_RELAXED), next;
+    do {
+        next = old;
+        for (int i = 0; i < 3; i++) {
+            uint8_t m = kHeldModifiers[i];
+            if ((after & m) && !(before & m))
+                next += 1ull << MODIFIER_COUNT_SHIFT(i);
+            else if (!(after & m) && (before & m))
+                next -= 1ull << MODIFIER_COUNT_SHIFT(i);
+        }
+        next = (next & ~(0xFFull << MODIFIER_LATCH_SHIFT)) | ((uint64_t)latches << MODIFIER_LATCH_SHIFT);
+    } while (!__atomic_compare_exchange_n(&s_modifierState, &old, next, false,
+                                          __ATOMIC_RELAXED, __ATOMIC_RELAXED));
 }
 
 uint8_t keyboard_current_modifiers(void) {
-    uint8_t mods = s_liveLatches;
+    uint64_t state = __atomic_load_n(&s_modifierState, __ATOMIC_RELAXED);
+    uint8_t mods = (uint8_t)(state >> MODIFIER_LATCH_SHIFT);
     for (int i = 0; i < 3; i++)
-        if (__atomic_load_n(&s_modifierHolders[i], __ATOMIC_RELAXED) != 0)
+        if ((state >> MODIFIER_COUNT_SHIFT(i)) & 0xFFFF)
             mods |= kHeldModifiers[i];
     return mods;
 }
