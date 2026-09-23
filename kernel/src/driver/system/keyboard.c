@@ -28,6 +28,14 @@ static uint8_t s_modifiers;
 static bool s_capsHeld, s_numHeld;   // the lock keys, down now (toggle on the press only)
 static bool s_extended_pending;
 static bool s_key_state[KEYBOARD_MAX_SCANCODE];
+// Keys a chord consumed, held now: a key a chord took belongs to the chord
+// until its break (X's passive grab). Hardware typematic repeats its make,
+// and each repeat runs the chord tests again (a held Alt+Right keeps
+// walking), but one that no longer matches is dropped, never delivered:
+// after Alt+F8 hands a text terminal's glass to the desktop, where bare
+// Alt+F8 is no chord, the held F8 must not arrive as an ordinary key. Nor
+// does its break, since its press never did. One table per code page.
+static bool s_key_consumed[128], s_ext_consumed[128];
 static __uint128_t s_saved_debug_level;
 static bool s_debug_suppressed;
 
@@ -511,6 +519,8 @@ void keyboard_handle_scancode(uint8_t scancode) {
     if (s_extended_pending) {
         keyboard_update_modifier_extended(code, !is_break);
         s_extended_pending = false;
+        if (is_break)
+            s_ext_consumed[code] = false;
 
         // Arrow keys (extended make codes) become VT100 escape sequences on
         // the input stream: ESC '[' A/B/C/D for Up/Down/Right/Left — the
@@ -526,6 +536,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
             if (code == 0x53 &&
                 (s_modifiers & KEYBOARD_MOD_CTRL) && (s_modifiers & KEYBOARD_MOD_ALT)) {
                 keyboard_ctrl_alt_del();
+                s_ext_consumed[code] = true;
                 return;
             }
             // Virtual-terminal chords, extended block (checked BEFORE the
@@ -537,13 +548,15 @@ void keyboard_handle_scancode(uint8_t scancode) {
             // os32 heritage gait, Alt+A/Alt+D's grandchild; Shift+PgUp is
             // scrollback's chord since the Linux 0.x console.)
             if (s_modifiers & KEYBOARD_MOD_ALT) {
-                if (code == 0x4B) { tty_focus_step(-1); return; }   // Alt+Left
-                if (code == 0x4D) { tty_focus_step(+1); return; }   // Alt+Right
+                if (code == 0x4B) { tty_focus_step(-1); s_ext_consumed[code] = true; return; }   // Alt+Left
+                if (code == 0x4D) { tty_focus_step(+1); s_ext_consumed[code] = true; return; }   // Alt+Right
             }
             if (s_modifiers & KEYBOARD_MOD_SHIFT) {
-                if (code == 0x49) { tty_view_scroll(+1); return; }  // Shift+PgUp
-                if (code == 0x51) { tty_view_scroll(-1); return; }  // Shift+PgDn
+                if (code == 0x49) { tty_view_scroll(+1); s_ext_consumed[code] = true; return; }  // Shift+PgUp
+                if (code == 0x51) { tty_view_scroll(-1); s_ext_consumed[code] = true; return; }  // Shift+PgDn
             }
+            if (s_ext_consumed[code])
+                return;   // still the chord's (s_key_consumed)
             char final = 0;
             switch (code) {
                 case 0x48: final = 'A'; break;   // Up
@@ -597,6 +610,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
         if (code == 0x53 &&
             (s_modifiers & KEYBOARD_MOD_CTRL) && (s_modifiers & KEYBOARD_MOD_ALT)) {
             keyboard_ctrl_alt_del();
+            s_key_consumed[code] = true;
             return;
         }
         // Alt+F1..F8: direct-select a virtual terminal (the Linux console's
@@ -616,8 +630,11 @@ void keyboard_handle_scancode(uint8_t scancode) {
             (s_modifiers & KEYBOARD_MOD_ALT) &&
             (!gui_owns_glass() || (s_modifiers & KEYBOARD_MOD_CTRL))) {
             tty_focus(code - 0x3B);
+            s_key_consumed[code] = true;
             return;
         }
+        if (s_key_consumed[code])
+            return;   // still the chord's (s_key_consumed)
         // Make code (including hardware typematic repeats). Emit on PRESS:
         // interactive consumers want to react when the key goes down, and
         // holding a key repeats for free. (This used to emit on release,
@@ -628,8 +645,9 @@ void keyboard_handle_scancode(uint8_t scancode) {
         return;
     }
 
+    s_key_consumed[code] = false;
     if (!s_key_state[code]) {
-        // Spurious break; nothing to emit.
+        // Spurious break, or a chord's key let go; nothing to emit.
         return;
     }
 
