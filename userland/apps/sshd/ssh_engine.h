@@ -82,6 +82,7 @@ typedef struct {
     char error[128], username[256], command[SSH_COMMAND_MAX + 1];
     int channel, started, pty, request_reply, input_eof, sent_close;
     int peer_close;                         // the session channel's CLOSE arrived
+    uint32_t credit_owed;                   // session input consumed, not yet adjusted
     uint32_t peer_channel, peer_window, peer_packet, receive_window;
     uint32_t cols, rows;
     uint32_t resize_cols, resize_rows; // proposal exposed by SSH_EVENT_RESIZE
@@ -125,6 +126,10 @@ const char *ssh_term_env(const ssh_engine *s);
  * the proposed geometry; either result sends the requested channel reply. */
 void ssh_resize_result(ssh_engine *s, int success);
 size_t ssh_send_data(ssh_engine *s, const uint8_t *p, size_t n, int stderr_stream);
+/* Credit the client's window for n bytes of session input that have left.
+ * The credit is owed until it can go out as one WINDOW_ADJUST: never during
+ * a key exchange (every packet then waits in the deferred-reply budget, one
+ * per call) and never without output room. Call with n = 0 to retry. */
 void ssh_input_consumed(ssh_engine *s, uint32_t n);
 void ssh_send_exit(ssh_engine *s, uint32_t status);
 void ssh_rekey(ssh_engine *s);
@@ -133,9 +138,9 @@ void ssh_rekey(ssh_engine *s);
  * receiving another packet (success confirms the channel, failure sends
  * OPEN_FAILURE with `reason`, RFC 4254 section 5.1, and frees the slot).
  * FORWARD_DATA carries client bytes for the local connection, to be credited
- * back with ssh_forward_consumed as they leave; credit the output queue has
- * no room for is kept and sent by a later call, which may pass n = 0 to
- * retry alone. FORWARD_EOF is the client's half-close. FORWARD_CLOSE means
+ * back with ssh_forward_consumed as they leave, by ssh_input_consumed's
+ * rule (owed through a key exchange or a full output queue; n = 0 retries).
+ * ssh_forward_send sends what fits the output queue's free room. FORWARD_EOF is the client's half-close. FORWARD_CLOSE means
  * the channel is gone (SSH_FORWARD_CLOSED): nothing more goes to the client,
  * the caller delivers what the client already sent, closes its connection,
  * and frees the slot with ssh_forward_release. */

@@ -141,6 +141,18 @@ static void channels(void)
     n=frame(wire,payload,w.n); ssh_receive(&engine,wire,n);
     CHECK(engine.event==SSH_EVENT_INPUT && engine.event_len==5 && engine.receive_window==SSH_WINDOW-5);
     ssh_input_consumed(&engine,5); CHECK(engine.receive_window==SSH_WINDOW);
+    /* Credit is owed through a key exchange (nothing enters the deferred-
+     * reply budget) and a full queue, then goes out as one adjust. */
+    w.n=0; ssh_put_byte(&w,94); ssh_put_u32(&w,0); ssh_put_text(&w,"abcdefgh");
+    n=frame(wire,payload,w.n); ssh_receive(&engine,wire,n); CHECK(engine.receive_window==SSH_WINDOW-8);
+    engine.kex=1; size_t deferred=engine.deferred_len; engine.out_len=0;
+    ssh_input_consumed(&engine,3); ssh_input_consumed(&engine,2);
+    CHECK(engine.credit_owed==5 && engine.deferred_len==deferred && !engine.out_len && engine.receive_window==SSH_WINDOW-8);
+    engine.kex=0; engine.out_len=SSH_OUTPUT_CAP; ssh_input_consumed(&engine,3);
+    CHECK(engine.credit_owed==8 && engine.receive_window==SSH_WINDOW-8);
+    engine.out_len=0; ssh_input_consumed(&engine,0);
+    CHECK(!engine.credit_owed && engine.receive_window==SSH_WINDOW && engine.out_len && engine.output[engine.out_head+5]==93);
+    engine.out_len=0;
     w.n=0; ssh_put_byte(&w,93); ssh_put_u32(&w,0); ssh_put_u32(&w,UINT32_MAX);
     n=frame(wire,payload,w.n); ssh_receive(&engine,wire,n); CHECK(engine.closed);
     reset_connection();
@@ -334,6 +346,11 @@ static void forwards(void)
     CHECK(!engine.closed && engine.forwards[0].credit_owed==5 && engine.forwards[0].receive_window==SSH_FORWARD_WINDOW-8);
     engine.out_len=0; ssh_forward_consumed(&engine,0,0); p=last_sent(&len);
     CHECK(p && p[0]==93 && be32(p+5)==5 && !engine.forwards[0].credit_owed && engine.forwards[0].receive_window==SSH_FORWARD_WINDOW-3);
+    send_channel(94,1,"wxyz",0); engine.kex=1; size_t deferred=engine.deferred_len;
+    ssh_forward_consumed(&engine,0,2); ssh_forward_consumed(&engine,0,2);
+    CHECK(engine.forwards[0].credit_owed==4 && engine.deferred_len==deferred);
+    engine.kex=0; engine.out_len=0; ssh_forward_consumed(&engine,0,0); p=last_sent(&len);
+    CHECK(p && p[0]==93 && be32(p+5)==4 && !engine.forwards[0].credit_owed && engine.forwards[0].receive_window==SSH_FORWARD_WINDOW-3);
     engine.out_len=SSH_OUTPUT_CAP; ssh_forward_consumed(&engine,0,3); CHECK(!engine.closed && engine.forwards[0].credit_owed==3);
     engine.out_len=0; ssh_forward_consumed(&engine,0,1); CHECK(engine.closed);
     reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK; open_forward(41,1000);
@@ -344,6 +361,10 @@ static void forwards(void)
     CHECK(ssh_forward_send(&engine,0,big,sizeof(big))==984 && !engine.forwards[0].peer_window);
     CHECK(ssh_forward_send(&engine,0,big,1)==0);
     send_channel(93,1,0,500); CHECK(!engine.closed && engine.forwards[0].peer_window==500);
+    /* ...and by the output queue's free room, never refused whole. */
+    engine.out_len=SSH_OUTPUT_CAP-300; CHECK(ssh_forward_send(&engine,0,big,400)==235 && engine.out_len<=SSH_OUTPUT_CAP);
+    engine.out_len=SSH_OUTPUT_CAP-65; CHECK(ssh_forward_send(&engine,0,big,400)==0);
+    engine.out_len=0; CHECK(engine.forwards[0].peer_window==265);
     /* A request on a forward is refused when it asks for an answer. */
     engine.out_len=0; send_channel(98,1,"env",1); p=last_sent(&len);
     CHECK(!engine.closed && p && p[0]==100 && be32(p+1)==41);

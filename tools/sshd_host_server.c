@@ -159,6 +159,7 @@ static void serve(int sock, const char *pubfile)
             default: break;
             }
         }
+        ssh_input_consumed(&s,0);   /* credit owed through a rekey or a full queue */
         if (pending_len && input>=0) {
             ssize_t wrote=write(input,pending,pending_len);
             if (wrote>0) {

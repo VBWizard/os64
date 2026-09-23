@@ -85,8 +85,15 @@ uint32_t ssh_forwards_live(const ssh_engine *s) {(void)s;return live_turns?1:0;}
 /* The real relay's collaborators, for forwardfair: a shared output budget
  * per pass stands in for the engine's output queue. */
 static size_t fair_budget,fair_sent[SSH_FORWARDS];
+/* mixedfair: the output room both kinds of channel draw from, refilled once
+ * per pass, sized by the engine's rules (a stream all or nothing, 64 of
+ * framing; a forward what fits, 65). */
+static size_t room;
 size_t ssh_forward_send(ssh_engine *s,uint32_t f,const uint8_t *p,size_t n) {
- (void)s;(void)p;if(n>fair_budget)n=fair_budget;fair_budget-=n;fair_sent[f]+=n;return n;
+ (void)s;(void)p;
+ if(scenario==3) {if(room<=65)return 0;if(n>room-65)n=room-65;room-=n+65;fair_sent[f]+=n;return n;}
+ if(n>fair_budget) {n=fair_budget;}
+ fair_budget-=n;fair_sent[f]+=n;return n;
 }
 void ssh_forward_consumed(ssh_engine *s,uint32_t f,uint32_t n) {(void)s;(void)f;(void)n;}
 int ssh_forward_finish(ssh_engine *s,uint32_t f) {(void)s;(void)f;return 1;}
@@ -94,7 +101,8 @@ static unsigned releases;
 void ssh_forward_release(ssh_engine *s,uint32_t f) {(void)s;(void)f;releases++;}
 static int64_t os64_close(int32_t h) {(void)h;return 0;}
 static void os64_free(void *p) {(void)p;}
-static int forwards_pass(void) {if(!live_turns)return 0;live_turns--;return 1;}
+static int real_forwards_pass(void);
+static int forwards_pass(void) {if(scenario==3)return real_forwards_pass();if(!live_turns)return 0;live_turns--;return 1;}
 size_t ssh_output(ssh_engine *s,const uint8_t **p) {*p=s->output+s->out_head;return s->out_len;}
 void ssh_output_consume(ssh_engine *s,size_t n) {assert(n<=s->out_len);s->out_head+=n;s->out_len-=n;}
 /* A forward's local end for closedrain: takes local_accept bytes a write,
@@ -118,6 +126,7 @@ static int64_t os64_read_for(int fd,void *p,size_t n,unsigned ms) {
   return OS64_ERR_TIMEOUT;
  }
  if(reads>credits)return 0;
+ if(scenario==3) {room=5000;return OS64_ERR_TIMEOUT;}
  if(reads%period==phase) engine.peer_window+=chunk;
  return OS64_ERR_TIMEOUT;
 }
@@ -144,6 +153,7 @@ void ssh_rekey(ssh_engine *s) {(void)s;assert(0 && "no new rekey during close");
 void ssh_input_consumed(ssh_engine *s,uint32_t n) {(void)s;(void)n;}
 size_t ssh_send_data(ssh_engine *s,const uint8_t *p,size_t n,int stream) {
  (void)p;if(s->kex || s->sent_close || s->closed)return 0;
+ if(scenario==3) {if(n+64>room)return 0;room-=n+64;sends[stream]+=(unsigned)n;return n;}
  if(n>s->peer_window)n=s->peer_window;
  s->peer_window-=(uint32_t)n;sends[stream]+=(unsigned)n;return n;
 }
@@ -250,6 +260,19 @@ int main(int argc,char **argv) {
   assert(delivered==1000 && releases==1 && !local_reads);
   links[0]=(forward_link){.handle=11,.to_local=to,.from_local=from,.to_len=1000,.peer_closed=1};
   local_accept=-1;assert(real_forwards_pass() && links[0].handle<0 && releases==2 && !local_reads);
+ } else if(!strcmp(argv[1],"mixedfair")) {
+  /* A session and a forward that both always have more to send than a
+   * pass's room: the session's 4 KiB fits where a forward's 32 KiB read
+   * would not, so whoever goes first every time takes the room. Taking
+   * turns, neither gets more than twice the other. */
+  scenario=3;credits=150;reset();streams[0].tail=streams[1].tail=UINT32_MAX/2; /* never runs dry */
+  for(uint32_t i=0;i<SSH_FORWARDS;i++) links[i].handle=-1;
+  static uint8_t to[SSH_FORWARD_WINDOW],from[SSH_DATA_MAX];
+  links[0]=(forward_link){.handle=10,.to_local=to,.from_local=from};
+  loop();
+  size_t session=(size_t)sends[0]+sends[1],forward=fair_sent[0];
+  printf("mixedfair: session %zu bytes, forward %zu bytes over %u passes\n",session,forward,reads-1);fflush(stdout);
+  assert(session && forward && session<=2*forward && forward<=2*session);
  } else if(!strcmp(argv[1],"linger")) {
   /* A closed session with a live forward keeps the connection; the loop
    * yields instead of napping while the forward moves bytes, then ends
@@ -270,5 +293,5 @@ with tempfile.TemporaryDirectory(prefix='sshd-session-') as directory:
                     '-I'+str(root / 'userland/libos64/include'),
                     str(work / 'test.c'),
                     '-o', str(work / 'test')], check=True)
-    results = [subprocess.run([str(work / 'test'), case]).returncode for case in ('flush','close','fair','resize','port','forward','forwardfair','closedrain','linger')]
+    results = [subprocess.run([str(work / 'test'), case]).returncode for case in ('flush','close','fair','resize','port','forward','forwardfair','closedrain','mixedfair','linger')]
     raise SystemExit(any(results))
