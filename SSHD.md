@@ -158,7 +158,12 @@ Peer window and maximum-packet limits constrain outgoing data. stdout and
 stderr take turns spending shared credit; priority advances once per service
 pass, away from the first stream that sent bytes, so neither sparse window
 updates nor credit just over one staging buffer can keep favoring one
-stream. Window
+stream. The session's streams and the forwards take turns going first for
+the output queue's room by the same rule, so a trickle of room is never all
+one group's. Credit for input the command took is owed until it can go out
+as one WINDOW_ADJUST: never during a key exchange, where each adjust would
+wait in the deferred-reply budget and enough of them would exhaust it, and
+never without output room. Window
 addition overflow, data exceeding the advertised window, invalid channel
 numbers, malformed lengths, and invalid protocol transitions are refused.
 Transport packet length is capped at 35000 bytes. KEX name-lists are capped
@@ -235,11 +240,13 @@ it too. The session is local channel 0, and forward *i* is local channel
   name that has to go to DNS blocks only the session asking.
 - **Windows.** Each forward advertises 256 KiB, sized for keystrokes and
   requests, not the session's 2 MiB. Outgoing data obeys the peer's window
-  and packet size, and a window overrun or overflowing adjustment
-  disconnects, the session's rules. Credit for bytes the local connection
-  took is owed to the client even when the output queue has no room for the
-  WINDOW_ADJUST: it is kept and sent on a later pass, never dropped, or the
-  client's window would shrink for good. Each forward's two queues (256 KiB
+  and packet size and is sized to the output queue's free room (a forward
+  that waited for room for a whole 32 KiB read could wait forever behind
+  the session's 4 KiB refills), and a window overrun or overflowing
+  adjustment disconnects, the session's rules. Credit for bytes the local
+  connection took follows the session's rule: owed through a key exchange
+  or a full queue and sent as one adjust, never dropped, or the client's
+  window would shrink for good. Each forward's two queues (256 KiB
   toward the local connection, 32 KiB toward the client) are allocated when
   it opens and freed when it closes, which keeps the program inside its
   link slot.
@@ -268,12 +275,15 @@ it too. The session is local channel 0, and forward *i* is local channel
 Proof: `sshtest`'s forward matrix (policy, confirmation fields, data and
 window credit, send clamping, requests, both close orders, EOF, window
 violations, refusals, destination shape, seven-and-an-eighth, slot reuse,
-a session alongside, KEX holding a close, credit kept when the output is
-full, a closed slot held until release, channel numbers live and dead). The
+a session alongside, KEX holding a close, credit kept through a full
+queue and a key exchange, sends sized to the free room, a closed slot held
+until release, channel numbers live and dead). The
 daemon-loop harness gained `forward` (the config key), `linger` (a closed
 session with a live forward keeps the connection and yields rather than
-naps) and `closedrain` (a closed forward delivers its queue, then is
-released once). The host
+naps), `closedrain` (a closed forward delivers its queue, then is released
+once) and `mixedfair` (a session and a forward that always have more than a
+pass's room each get a share within 2x; the round-1 daemon, which always
+served the session first, split it 5.4 to 1). The host
 adapter mirrors the daemon's rules, and real OpenSSH drives `ssh -N -L`:
 3 MiB each way, the same across client and server rekeys, seven concurrent
 forwards, the eighth refused, a non-loopback destination and a closed port

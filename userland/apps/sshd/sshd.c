@@ -314,9 +314,11 @@ static void forward_open(uint32_t i)
  * two session streams use) is exact for two and drifts without bound for
  * three or more. */
 static uint32_t next_forward;
+/* Returns 0 when nothing moved; bit 0 when something did, and bit 1 when a
+ * forward sent bytes, which is what the session loop's turn-taking counts. */
 static int forwards_pass(void)
 {
-    int moved = 0, cut = 0;
+    int moved = 0, cut = 0, sent_any = 0;
     uint32_t first = next_forward;
     for (uint32_t k = 0; k < SSH_FORWARDS; k++) {
         uint32_t i = (first + k) % SSH_FORWARDS;
@@ -354,7 +356,7 @@ static int forwards_pass(void)
         }
         if (l->from_len) {
             size_t sent = ssh_forward_send(&engine, i, l->from_local, l->from_len);
-            if (sent) { l->from_len -= (uint32_t)sent; memmove(l->from_local, l->from_local + sent, l->from_len); moved = 1; }
+            if (sent) { l->from_len -= (uint32_t)sent; memmove(l->from_local, l->from_local + sent, l->from_len); moved = 1; sent_any = 2; }
             if (l->from_len && !cut) { next_forward = i; cut = 1; }
         }
         /* Everything read has been sent: the channel follows the connection
@@ -364,7 +366,7 @@ static int forwards_pass(void)
             link_close(i); moved = 1;
         }
     }
-    return moved;
+    return moved | sent_any;
 }
 static void resize_terminal(void)
 {
@@ -464,6 +466,11 @@ static int session(void)
     uint64_t begin = now_ms(), last_progress = begin, key_time = begin, kex_begin = begin, close_time = 0;
     int had_kex = engine.kex;
     unsigned next_stream = 0;
+    /* The session's streams and the forwards take turns going first for the
+     * output queue's room, by the streams' own rule: whichever group went
+     * first and spent room hands the lead to the other. Going first every
+     * time, either would take all of a trickle of room and starve the other. */
+    int forwards_lead = 0;
     for (;;) {
         size_t queued = engine.out_len;
         if (!flush()) break;
@@ -502,11 +509,18 @@ static int session(void)
             event();
             if (engine.event == SSH_EVENT_CLOSE) close_received = 1;
         }
+        int forwards_went_first = forwards_lead;
+        if (forwards_went_first) {
+            int result = forwards_pass();
+            if (result) moved = 1;
+            if (result & 2) forwards_lead = 0;
+        }
         if (engine.started) {
+            /* ssh_input_consumed keeps the credit owed until it can go out
+             * (not during a key exchange, not without output room), so every
+             * pass reports what left and a zero retries. */
             uint32_t head = __atomic_load_n(&input_head, __ATOMIC_ACQUIRE);
-            if (head != credited && SSH_OUTPUT_CAP-engine.out_len > 256) {
-                ssh_input_consumed(&engine, head-credited); credited = head;
-            }
+            ssh_input_consumed(&engine, head-credited); credited = head;
             unsigned first_stream = next_stream; int rotated = 0;
             for (unsigned pass = 0; pass < 2; pass++) {
                 unsigned i = (first_stream + pass) % 2;
@@ -530,6 +544,7 @@ static int session(void)
                      * or credit just over one staging buffer splits 4096:1
                      * the same way every time. */
                     if (n && !rotated) { next_stream = i ^ 1u; rotated = 1; }
+                    if (n && !forwards_went_first) forwards_lead = 1;
                     if (n) moved = 1;
                     out_len[i] -= n; memmove(out[i], out[i]+n, out_len[i]);
                 }
@@ -544,7 +559,7 @@ static int session(void)
                 if (!engine.out_len && now-close_time > 5000) break;
             }
         }
-        if (forwards_pass()) moved = 1;
+        if (!forwards_went_first && forwards_pass()) moved = 1;
         /* Nap only on a pass that moved nothing. A forward carries a screen's
          * worth of pixels, and a nap per pass capped it at one read per tick.
          * Taking bytes the engine buffered counts as moving: ssh_receive

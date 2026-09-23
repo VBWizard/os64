@@ -349,11 +349,13 @@ size_t ssh_send_data(ssh_engine *s, const uint8_t *p, size_t n, int stderr_strea
 }
 void ssh_input_consumed(ssh_engine *s, uint32_t n)
 {
-    if (!n || s->closed || s->sent_close) return;
-    if (n > SSH_WINDOW - s->receive_window) { ssh_disconnect(s, 2, "invalid local window credit"); return; }
+    if (s->closed || s->sent_close) return;
+    if (n > SSH_WINDOW - s->receive_window - s->credit_owed) { ssh_disconnect(s, 2, "invalid local window credit"); return; }
+    s->credit_owed += n;
+    if (!s->credit_owed || s->kex) return;
     uint8_t p[9]; ssh_writer w = {p, 0, sizeof(p), 0};
-    ssh_put_byte(&w, 93); ssh_put_u32(&w, s->peer_channel); ssh_put_u32(&w, n);
-    if (ssh_packet_send(s, p, w.n)) s->receive_window += n;
+    ssh_put_byte(&w, 93); ssh_put_u32(&w, s->peer_channel); ssh_put_u32(&w, s->credit_owed);
+    if (ssh_packet_send(s, p, w.n)) { s->receive_window += s->credit_owed; s->credit_owed = 0; }
 }
 void ssh_send_exit(ssh_engine *s, uint32_t status)
 {
@@ -385,7 +387,15 @@ size_t ssh_forward_send(ssh_engine *s, uint32_t forward, const uint8_t *p, size_
     if (n > f->peer_window) n = f->peer_window;
     if (n > f->peer_packet) n = f->peer_packet;
     if (n > SSH_DATA_MAX) n = SSH_DATA_MAX;
-    if (!n || SSH_OUTPUT_CAP - s->out_len < n + 64) return 0;
+    /* As much as the free room takes, not all or nothing: the session's
+     * streams refill freed room 4 KiB at a time, and a forward that waited
+     * for room for a whole 32 KiB read could wait forever behind them.
+     * Framing costs at most 65 bytes: 9 of header, 5 of length and padding
+     * length, up to 19 of padding, 32 of MAC. */
+    size_t room = SSH_OUTPUT_CAP - s->out_len;
+    if (room <= 65) return 0;
+    if (n > room - 65) n = room - 65;
+    if (!n) return 0;
     uint8_t payload[SSH_DATA_MAX + 9]; ssh_writer w = {payload, 0, sizeof(payload), 0};
     ssh_put_byte(&w, 94); ssh_put_u32(&w, f->peer_channel); ssh_put_string(&w, p, n);
     if (!ssh_packet_send(s, payload, w.n)) return 0;
@@ -397,11 +407,11 @@ void ssh_forward_consumed(ssh_engine *s, uint32_t forward, uint32_t n)
     ssh_forward *f = &s->forwards[forward];
     if (s->closed || f->state != SSH_FORWARD_OPEN || f->sent_close) return;
     if (n > SSH_FORWARD_WINDOW - f->receive_window - f->credit_owed) { ssh_disconnect(s, 2, "invalid local window credit"); return; }
-    /* Bytes that left are owed back to the client's window whether or not
-     * the output queue has room for the WINDOW_ADJUST right now; a credit
-     * dropped here would shrink that window for good. */
+    /* Bytes that left are owed back to the client's window, and a credit
+     * dropped would shrink it for good; ssh_input_consumed's rule says when
+     * the owed sum goes out. */
     f->credit_owed += n;
-    if (!f->credit_owed) return;
+    if (!f->credit_owed || s->kex) return;
     uint8_t p[9]; ssh_writer w = {p, 0, sizeof(p), 0};
     ssh_put_byte(&w, 93); ssh_put_u32(&w, f->peer_channel); ssh_put_u32(&w, f->credit_owed);
     if (ssh_packet_send(s, p, w.n)) { f->receive_window += f->credit_owed; f->credit_owed = 0; }
