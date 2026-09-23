@@ -42,10 +42,11 @@ static const char s_hid_shift[0x39] = {
 
 static char hid_usage_ascii(const hid_keyboard_t *kbd, uint8_t usage);
 
-// Deliver one press. Returns whether it reached keyboard_deliver_event: a
-// chord or latch this driver consumes here returns false, and the release
-// of a press that was never delivered is never delivered either (the
-// report's release loop asks kbd->delivered).
+// Deliver one press. Returns where it went: HID_CONSUMED for a chord or
+// latch this driver takes here (the release of a press that was never
+// delivered is never delivered either; the report's release loop asks
+// kbd->delivered), else HID_TO_TEXT or HID_TO_GUI, which the release
+// follows (keyboard_deliver_release).
 //
 // A KEY A CHORD TOOK BELONGS TO THE CHORD UNTIL IT IS LET GO (X's passive
 // grab). Its typematic repeats run the chord tests again (a held Alt+Right
@@ -53,13 +54,16 @@ static char hid_usage_ascii(const hid_keyboard_t *kbd, uint8_t usage);
 // repeat that no longer matches is dropped rather than delivered: after
 // Alt+F8 switches a text terminal to the desktop, where bare Alt+F8 is not
 // a chord, the held F8 must not start arriving as an ordinary key.
-static bool hid_deliver_usage(hid_keyboard_t *kbd, uint8_t usage, bool may_deliver)
+enum { HID_CONSUMED, HID_TO_TEXT, HID_TO_GUI };
+static int hid_where(bool to_gui) { return to_gui ? HID_TO_GUI : HID_TO_TEXT; }
+
+static int hid_deliver_usage(hid_keyboard_t *kbd, uint8_t usage, bool may_deliver)
 {
 	if (usage == 0x39) {                      // Caps Lock: a latch, not a key
 		uint8_t before = kbd->mods;
 		kbd->mods ^= KEYBOARD_MOD_CAPS;
 		keyboard_publish_hid_modifiers(before, kbd->mods);   // the latch is modifier state too
-		return false;
+		return HID_CONSUMED;
 	}
 	// The three-finger salute, HID spelling: Delete Forward (0x4C) or keypad
 	// Del (0x63) with Ctrl+Alt. Same hook the PS/2 driver calls — one chord,
@@ -67,7 +71,7 @@ static bool hid_deliver_usage(hid_keyboard_t *kbd, uint8_t usage, bool may_deliv
 	if ((usage == 0x4C || usage == 0x63) &&
 	    (kbd->mods & KEYBOARD_MOD_CTRL) && (kbd->mods & KEYBOARD_MOD_ALT)) {
 		keyboard_ctrl_alt_del();
-		return false;
+		return HID_CONSUMED;
 	}
 	// Virtual-terminal chords, HID spelling — same policy hooks as the PS/2
 	// driver, consumed before anything can reach an input ring. F1-F8 are
@@ -82,13 +86,13 @@ static bool hid_deliver_usage(hid_keyboard_t *kbd, uint8_t usage, bool may_deliv
 		// own escape hatch, opened the day Alt+F4 was wanted for close.
 		// (The PS/2 driver makes the identical test; keep them in step.)
 		if (usage >= 0x3A && usage <= 0x41 &&
-		    (!gui_owns_glass() || (kbd->mods & KEYBOARD_MOD_CTRL))) { tty_focus(usage - 0x3A); return false; }
-		if (usage == 0x50) { tty_focus_step(-1); return false; }   // Alt+Left
-		if (usage == 0x4F) { tty_focus_step(+1); return false; }   // Alt+Right
+		    (!gui_owns_glass() || (kbd->mods & KEYBOARD_MOD_CTRL))) { tty_focus(usage - 0x3A); return HID_CONSUMED; }
+		if (usage == 0x50) { tty_focus_step(-1); return HID_CONSUMED; }   // Alt+Left
+		if (usage == 0x4F) { tty_focus_step(+1); return HID_CONSUMED; }   // Alt+Right
 	}
 	if (kbd->mods & KEYBOARD_MOD_SHIFT) {
-		if (usage == 0x4B) { tty_view_scroll(+1); return false; }  // Shift+PgUp
-		if (usage == 0x4E) { tty_view_scroll(-1); return false; }  // Shift+PgDn
+		if (usage == 0x4B) { tty_view_scroll(+1); return HID_CONSUMED; }  // Shift+PgUp
+		if (usage == 0x4E) { tty_view_scroll(-1); return HID_CONSUMED; }  // Shift+PgDn
 	}
 	// Arrows: the SAME three VT100 bytes the PS/2 path emits (ESC '[' A/B/C/D
 	// — see keyboard.c for the 1979 lineage). This was the parity debt that
@@ -107,11 +111,10 @@ static bool hid_deliver_usage(hid_keyboard_t *kbd, uint8_t usage, bool may_deliv
 		}
 		if (final != 0) {
 			if (!may_deliver)
-				return false;
+				return HID_CONSUMED;
 			keyboard_deliver_event(0x1B, usage, kbd->mods, true);
 			keyboard_deliver_event('[',  usage, kbd->mods, true);
-			keyboard_deliver_event(final, usage, kbd->mods, true);
-			return true;
+			return hid_where(keyboard_deliver_event(final, usage, kbd->mods, true));
 		}
 		// The digit-parameter family, HID spelling — Insert=2, Delete=3,
 		// PgUp=5, PgDn=6, xterm's vocabulary, mirroring keyboard.c's PS/2
@@ -130,12 +133,11 @@ static bool hid_deliver_usage(hid_keyboard_t *kbd, uint8_t usage, bool may_deliv
 		}
 		if (param != 0) {
 			if (!may_deliver)
-				return false;
+				return HID_CONSUMED;
 			keyboard_deliver_event(0x1B, usage, kbd->mods, true);
 			keyboard_deliver_event('[',  usage, kbd->mods, true);
 			keyboard_deliver_event(param, usage, kbd->mods, true);
-			keyboard_deliver_event('~', usage, kbd->mods, true);
-			return true;
+			return hid_where(keyboard_deliver_event('~', usage, kbd->mods, true));
 		}
 	}
 	// A key with no ASCII (the F-row, the keypad without NumLock) is still
@@ -146,7 +148,7 @@ static bool hid_deliver_usage(hid_keyboard_t *kbd, uint8_t usage, bool may_deliv
 	// never see from a USB keyboard. The text path ignores ASCII 0 at its
 	// door (keyboard_emit_event), so the terminals see nothing new.
 	if (!may_deliver)
-		return false;
+		return HID_CONSUMED;
 	char c = hid_usage_ascii(kbd, usage);
 
 	// Scancode field: HID usage stands in. Downstream, the GUI's key-code
@@ -155,8 +157,7 @@ static bool hid_deliver_usage(hid_keyboard_t *kbd, uint8_t usage, bool may_deliv
 	// this field means different things on the two keyboard paths.
 	printd(kbd->debug | DEBUG_DETAILED, "%s: key usage 0x%02x -> 0x%02x\n",
 	       kbd->name, usage, (uint8_t)c);
-	keyboard_deliver_event(c, usage, kbd->mods, true);
-	return true;
+	return hid_where(keyboard_deliver_event(c, usage, kbd->mods, true));
 }
 
 // The ASCII a usage produces under the keyboard's current modifiers, or 0 for
@@ -238,10 +239,15 @@ void hid_keyboard_report(hid_keyboard_t *kbd, const uint8_t rep[8])
 		// the GUI holds the glass, and an F8-up would reach its focused
 		// window as half a key it never saw. The PS/2 driver's s_key_state
 		// is the same rule.
+		// And a release goes where its press went (keyboard_deliver_release):
+		// Ctrl+Alt+F1 pressed on the desktop is let go on a text terminal,
+		// and the window that saw keys go down must see them come up.
 		uint8_t bit = (uint8_t)(1u << (u & 7));
 		if (!still_down && (kbd->delivered[u >> 3] & bit)) {
+			keyboard_deliver_release(hid_usage_ascii(kbd, u), u, kbd->mods,
+			                         (kbd->to_gui[u >> 3] & bit) != 0);
 			kbd->delivered[u >> 3] &= (uint8_t)~bit;
-			keyboard_deliver_event(hid_usage_ascii(kbd, u), u, kbd->mods, false);
+			kbd->to_gui[u >> 3] &= (uint8_t)~bit;
 		}
 	}
 
@@ -276,8 +282,16 @@ void hid_keyboard_report(hid_keyboard_t *kbd, const uint8_t rep[8])
 	uint8_t prev_m = kbd->prev_report[0];
 	for (int bit = 0; bit < 8; bit++) {
 		uint8_t mask = (uint8_t)(1u << bit);
-		if ((m & mask) != (prev_m & mask))
-			keyboard_deliver_event(0, (uint8_t)(0xE0 + bit), mods, (m & mask) != 0);
+		if ((m & mask) == (prev_m & mask))
+			continue;
+		if (m & mask) {
+			if (keyboard_deliver_event(0, (uint8_t)(0xE0 + bit), mods, true))
+				kbd->mods_to_gui |= mask;
+		} else {
+			// Up where the down went (the release rule above).
+			keyboard_deliver_release(0, (uint8_t)(0xE0 + bit), mods, (kbd->mods_to_gui & mask) != 0);
+			kbd->mods_to_gui &= (uint8_t)~mask;
+		}
 	}
 
 	// Edge detection: a usage present now but absent from the previous
@@ -298,8 +312,11 @@ void hid_keyboard_report(hid_keyboard_t *kbd, const uint8_t rep[8])
 			if (kbd->prev_report[j] == u)
 				was_down = true;
 		if (!was_down) {
-			if (hid_deliver_usage(kbd, u, true))
+			int where = hid_deliver_usage(kbd, u, true);
+			if (where != HID_CONSUMED)
 				kbd->delivered[u >> 3] |= (uint8_t)(1u << (u & 7));
+			if (where == HID_TO_GUI)
+				kbd->to_gui[u >> 3] |= (uint8_t)(1u << (u & 7));
 			// The LAST key pressed is the repeat candidate — classic
 			// typematic semantics since the 5150: press-and-hold J while
 			// holding K, and J is what repeats. Caps Lock is a latch, and
@@ -335,7 +352,9 @@ void hid_keyboard_tick(hid_keyboard_t *kbd)
 	    kTicksSinceStart < kbd->rpt_next_tick)
 		return;
 	kbd->rpt_next_tick = kTicksSinceStart + HID_TYPEMATIC_PERIOD_TICKS;
-	// A repeat may deliver only what its press delivered (hid_deliver_usage).
+	// A repeat may deliver only what its press delivered (hid_deliver_usage),
+	// and one that reaches the GUI makes the release owed there too.
 	uint8_t u = kbd->rpt_usage;
-	hid_deliver_usage(kbd, u, (kbd->delivered[u >> 3] & (1u << (u & 7))) != 0);
+	if (hid_deliver_usage(kbd, u, (kbd->delivered[u >> 3] & (1u << (u & 7))) != 0) == HID_TO_GUI)
+		kbd->to_gui[u >> 3] |= (uint8_t)(1u << (u & 7));
 }

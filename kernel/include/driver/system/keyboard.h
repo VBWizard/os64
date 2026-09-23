@@ -128,11 +128,16 @@ typedef struct keyboard_event {
 void keyboard_init(void);
 void keyboard_handle_scancode(uint8_t scancode);
 
-// THE delivery choke for every keyboard driver (PS/2 IRQ path and the USB
-// HID poll both land here): pushes key-downs into the console event ring
-// (spinlock-guarded — two producers now) and hands both edges to the GUI
-// input queue. `modifiers` is the KEYBOARD_MOD_* bitmask at press time.
-void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed);
+// THE delivery choke for every keyboard driver (PS/2, USB HID, /dev/glass
+// writers): pushes key-downs into the console event ring (spinlock-guarded,
+// several producers) and hands both edges to the GUI input queue. `modifiers` is the KEYBOARD_MOD_* bitmask at press time.
+// Routed by who holds the glass NOW; returns true when it went to the GUI.
+bool keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed);
+// A RELEASE GOES WHERE ITS PRESS WENT. A driver remembers what the call above
+// returned for a press and passes it here for the release: a key or modifier
+// pressed on the desktop and let go after a switch to a text terminal still
+// reaches the window that saw it go down (the text path takes no releases).
+void keyboard_deliver_release(char ascii, uint8_t scancode, uint8_t modifiers, bool to_gui);
 
 // The machine's modifiers, for the MOUSE path (input.c): a mouse event carries
 // the keyboard state that was true when it happened, because Ctrl+Alt+drag
