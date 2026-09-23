@@ -155,10 +155,12 @@ void handle_close_all(struct task *t);
 // (rd14), because most callers have nowhere to report to and silence there was
 // the original defect: on FAT the commit happens inside close.
 int handle_file_object_close(void *vfs_file);
-// The same, and whether the verdict went elsewhere: *deferred is set when
-// this was not the last holder and what remains is an operation in flight
-// (a pin), whose unpin will do the real close with nowhere to answer to.
-int handle_file_object_close_verdict(void *vfs_file, bool *deferred);
+// The same, for a handle's hold (as_pin false) or a pin's (true, which drops
+// the pin with it in one step), and whether the verdict went elsewhere:
+// *deferred is set when this was not the last holder and what remains is an
+// operation in flight, whose unpin will do the real close with nowhere to
+// answer to.
+int handle_file_object_close_verdict(void *vfs_file, bool as_pin, bool *deferred);
 
 // The directory sibling: drops one reference on a HANDLE_DIR's
 // vfs_directory_t (handleRefCount, vfs.h — the table's one, or a pin's), and

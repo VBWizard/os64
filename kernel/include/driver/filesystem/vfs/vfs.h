@@ -328,22 +328,30 @@ struct file
 	void *copyBuffer;
 	uint32_t verification;
 	void *owner;
-	// HANDLE-LAYER refcount (task.h handle table, NOT a VFS concept): how many
-	// task handles reference this open file. Spawn redirection shares one open
-	// file between parent and child (same pattern as pipe end refcounts), and
-	// only the LAST close may run fops->close — otherwise the parent closing
-	// its copy frees the FIL out from under the child. Managed exclusively by
-	// syscall_open (=1), handle_share and handle_pin (++ — a child's slot
-	// taken at spawn's resolve, and an operation in flight; handle.c) and
-	// handle_file_object_close (--, close at 0); kernel-internal users that
-	// call fops->open/close directly (ELF loader etc.) never touch it.
-	int handleRefCount;
-	// How many of those holders are OPERATIONS IN FLIGHT (handle_pin) rather
-	// than handles. A close that is not the last holder needs to know which
-	// kind is left: another handle will close in its own time and answer for
+	// HANDLE-LAYER holds (task.h handle table, NOT a VFS concept): how many
+	// things reference this open file, in ONE word so that two counts can
+	// change together. The low 32 bits are the HOLDERS — task handles, and
+	// operations in flight; the high 32 (VFS_HOLD_PIN units) are how many of
+	// those holders are OPERATIONS (handle_pin) rather than handles. Spawn
+	// redirection shares one open file between parent and child (same
+	// pattern as pipe end refcounts), and only the LAST holder's close may run
+	// fops->close — otherwise the parent closing its copy frees the FIL out
+	// from under the child. A close that is NOT last needs to know what kind
+	// of holder remains: a handle will close in its own time and answer for
 	// itself, but a pin's unpin does the real close with nowhere to put the
-	// verdict — so that close answers "deferred" instead of 0 (os64/file.h).
-	int pinCount;
+	// verdict, so that close answers "deferred" (os64/file.h). Both counts in
+	// one word is what makes that answer exact: an unpin subtracts its pin
+	// and its hold in ONE atomic step, and a closer's own subtraction hands
+	// back both counts from the same instant — there is no moment at which a
+	// pin's hold is counted but its pin is not. Managed exclusively by
+	// syscall_open (=1), handle_share (+1), handle_pin (+VFS_HOLD_PIN+1) and
+	// handle_file_object_close_verdict (the subtraction, close at zero
+	// holders); kernel-internal users that call fops->open/close directly
+	// (ELF loader etc.) never touch it.
+	uint64_t holds;
+#define VFS_HOLD_PIN     (UINT64_C(1) << 32)
+#define VFS_HOLDERS(h)   ((uint32_t)((h) & 0xFFFFFFFFu))
+#define VFS_PINS(h)      ((uint32_t)((h) >> 32))
 	//arena_t* arena;
 
 	// OPEN-FILE REGISTRY links (vfs.c, since 2026-08-06 — the sync(8) slice).

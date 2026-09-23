@@ -38,6 +38,12 @@
 // flush's own) or do not race yourself. Never answered for a handle shared
 // with a child by spawn: that copy will close in its own time and its close
 // answers for the file.
-#define OS64_CLOSE_DEFERRED        (-4)
+//
+// -5 and not -4: OS64_INTERRUPTED (-4, os64/signal.h) is a SYSTEM-WIDE
+// sentinel, not a family's — "a handled signal cut this call short, call
+// again" — and callers retry on it. A deferred close is not to be retried;
+// the handle is gone, and a retry would close whatever a sibling thread
+// has since put in that slot.
+#define OS64_CLOSE_DEFERRED        (-5)
 
 #endif // OS64_ABI_FILE_H

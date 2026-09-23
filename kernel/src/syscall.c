@@ -2924,10 +2924,10 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 	else
 	{
-		// One handle references this file so far (see handleRefCount in
+		// One handle references this file so far (see `holds` in
 		// vfs.h) — set BEFORE handle_alloc so no close path can ever see it
 		// uninitialized.
-		p->file->handleRefCount = 1;
+		p->file->holds = 1;
 
 		h = reserved_h >= 0
 		        ? (handle_commit_reserved(task, reserved_h, HANDLE_FILE, p->file)
@@ -3996,7 +3996,7 @@ static void spawn_do_create(void *arg)
 			continue;   // the caller had closed that slot: keep the built-in default (console)
 
 		// The child's OWN reference on the object — a pipe end's count, a
-		// file's handleRefCount, a TCP conn's handle count — was taken at
+		// file's holds, a TCP conn's handle count — was taken at
 		// RESOLVE by handle_share, in the same critical section that found
 		// the parent's slot live (syscall_spawn says why nothing later is
 		// early enough). Two tasks hold the object from that instant: the
@@ -4118,7 +4118,7 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// The load below blocks on the disk, and a sibling thread can close any
 	// of the parent's handles while it does. For the three redirections the
 	// answer is handle_share (handle.h): the CHILD's own reference — a pipe
-	// end, a file's handleRefCount, a TCP conn's handle count — taken in the
+	// end, a file's holds, a TCP conn's handle count — taken in the
 	// same critical section that finds the slot live, so from that instant
 	// the object has one more table holder and nothing a sibling closes can
 	// hang it up or free it under the load. A pin was the wrong instrument
