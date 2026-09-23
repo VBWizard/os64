@@ -513,3 +513,17 @@ how a worklist fills with things nobody intends to do.
 - **Non-PTY disconnects close the command pipes, without a process-group
   cancellation API.** A command that neither reads stdin nor writes output
   can outlive its connection. Do not claim remote disconnect cancels a job.
+- **A session channel closed under live forwards leaves its command
+  running** (Codex #121). The command's pty or pipes are torn down only
+  when the connection's process exits, and live forwards keep that process
+  alive, so a client that CLOSEs the session channel while its command runs
+  and forwards stay open leaves the command running (and its output
+  workers parked) until the last forward ends. OpenSSH does not do this:
+  its shell or command ends first, and `ssh -N` opens no session. The
+  standard cure is OpenSSH's own: close the session's pty master or pipes
+  at the channel CLOSE, which SIGHUPs a seated shell. What stops it today
+  is that sshd's worker threads are parked in reads and writes on those
+  same handles, and while a pinned close is memory-safe, nobody has yet
+  shown that the hangup reaches the child while our own read holds the
+  master open. Pay when a client other than OpenSSH drives forwards, and
+  verify a pty and a pipe close under a parked reader first.
