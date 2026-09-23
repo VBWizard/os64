@@ -143,9 +143,10 @@ void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, boo
 // chord this one holds. Caps, Num and the dialect tag are the last reporting
 // keyboard's. A key EVENT still carries its own keyboard's modifiers.
 //
-// A keyboard that disappears while holding a modifier would leave it held;
-// none can disappear today (xHCI enumerates at boot and never detaches), and
-// the day one can, its removal must report its modifiers released.
+// A keyboard that disappears while holding a modifier must report it
+// released, or its count never comes down: xHCI does, when a keyboard's
+// endpoint fails or its port loses the device (xhci_hid_lost), and a
+// /dev/glass viewer does at close.
 uint8_t keyboard_current_modifiers(void);
 // The HID half of the publication (the PS/2 half is keyboard.c's static
 // keyboard_publish_modifiers): a HID keyboard reports its modifier byte

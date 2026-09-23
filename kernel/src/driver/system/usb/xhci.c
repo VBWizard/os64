@@ -135,6 +135,8 @@ typedef struct {
 
 	// Boot-keyboard state (hid_keyboard.h). Unused (and zero) for a mouse.
 	hid_keyboard_t kbd;
+	// Boot-mouse buttons (gui/input.h). Unused (and zero) for a keyboard.
+	input_pointer_source_t pointer;
 } xhci_hid_t;
 
 // One controller. The P5 may place its keyboard and mouse on different xHCI
@@ -245,6 +247,7 @@ static uint64_t ring_push(xhci_ring_t *r, uint64_t param, uint32_t status, uint3
 // ── Event ring drain ────────────────────────────────────────────────────────
 
 static void xhci_handle_transfer_event(xhci_trb_t *ev);
+static void xhci_hid_lost(xhci_hid_t *dev);
 
 // Consume every event the controller has posted. Returns the count.
 // This is the whole "interrupt handler", minus the interrupt.
@@ -267,11 +270,24 @@ static uint32_t xhci_drain_events(void)
 			case TRB_EV_TRANSFER:
 				xhci_handle_transfer_event(ev);
 				break;
-			case TRB_EV_PORT_STATUS:
-				// v1: no hotplug — note it and move on. (The port that
-				// changed is (param >> 24) & 0xFF, for the day this grows.)
-				printd(DEBUG_USB, "xhci: port status change (ignored, no hotplug in v1)\n");
+			case TRB_EV_PORT_STATUS: {
+				// v1: no hotplug, so nothing is enumerated here. A port that
+				// has LOST its device still matters: whatever that device
+				// held is released (xhci_hid_lost).
+				uint32_t port = (uint32_t)(ev->param >> 24) & 0xFF;
+				if (port < 1 || port > s_hc->max_ports)
+					break;   // not a port this controller has
+				bool connected = (mmio_r32(s_hc->op, XHCI_OP_PORTSC(port)) & PORTSC_CCS) != 0;
+				printd(DEBUG_USB, "xhci: port %u status change (%s)\n", port,
+				       connected ? "connected" : "disconnected");
+				if (!connected) {
+					if (s_hc->keyboard.present && s_hc->keyboard.port == port)
+						xhci_hid_lost(&s_hc->keyboard);
+					if (s_hc->mouse.present && s_hc->mouse.port == port)
+						xhci_hid_lost(&s_hc->mouse);
+				}
 				break;
+			}
 			default:
 				printd(DEBUG_USB, "xhci: unhandled event type %u cc %u\n",
 				       TRB_GET_TYPE(control), TRB_CC(ev->status));
@@ -390,10 +406,25 @@ static bool xhci_control_request(xhci_hid_t *dev,
 
 // HID boot mouse report: buttons, signed X, signed Y. HID Y is already in
 // screen orientation (positive is down), unlike the PS/2 packet decoder.
-static void hid_process_mouse_report(const uint8_t *rep)
+static void hid_process_mouse_report(xhci_hid_t *dev, const uint8_t *rep)
 {
-	static input_pointer_source_t pointer;   // the USB mouse's buttons (gui/input.h)
-	input_inject_mouse(&pointer, (int8_t)rep[1], (int8_t)rep[2], rep[0] & 0x07);
+	input_inject_mouse(&dev->pointer, (int8_t)rep[1], (int8_t)rep[2], rep[0] & 0x07);
+}
+
+// A device that stops reporting while holding something must let go of it:
+// the machine counts held modifiers and buttons per source (keyboard.h,
+// gui/input.h), and nothing else can bring a vanished source's count down,
+// so a keyboard pulled with Ctrl held would leave Ctrl on every pointer
+// packet until reboot. Its keys, modifiers and buttons are released as if
+// it had reported letting go. Idempotent: a second call finds nothing held.
+static void xhci_hid_lost(xhci_hid_t *dev)
+{
+	if (dev->kind == HID_KEYBOARD) {
+		static const uint8_t none[8];
+		hid_keyboard_report(&dev->kbd, none);
+	} else {
+		input_release_pointer(&dev->pointer);
+	}
 }
 
 // ── Transfer events (keyboard/mouse reports arriving) ────────────────────────
@@ -433,6 +464,7 @@ static void xhci_handle_transfer_event(xhci_trb_t *ev)
 	if (cc != TRB_CC_SUCCESS && cc != TRB_CC_SHORT_PACKET) {
 		printd(DEBUG_USB, "xhci: HID %s transfer error cc=%u\n",
 		       dev->kind == HID_KEYBOARD ? "keyboard" : "mouse", cc);
+		xhci_hid_lost(dev);
 		return;   // deliberately NOT re-armed: a dead endpoint stays quiet
 	}
 
@@ -455,7 +487,7 @@ static void xhci_handle_transfer_event(xhci_trb_t *ev)
 		if (dev->kind == HID_KEYBOARD && actual >= 8)
 			hid_keyboard_report(&dev->kbd, report);
 		else if (dev->kind == HID_MOUSE && actual >= 3)
-			hid_process_mouse_report(report);
+			hid_process_mouse_report(dev, report);
 	}
 	xhci_arm_report_trb(dev, buf_index);   // hand the same buffer back
 }
