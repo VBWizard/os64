@@ -288,6 +288,13 @@ long glass_view_write(glass_view_t *v, const void *data, size_t len)
 			return GLASS_ERR_RECORD;
 		os64_glass_keyboard_t k;
 		memcpy(&k, p, sizeof(k));
+		// A keyboard never reports one key twice: a report that does is
+		// refused, or each copy would be its own press (and a Caps Lock
+		// toggled once per copy).
+		for (int i = 2; i < 8; i++)
+			for (int j = i + 1; j < 8; j++)
+				if (k.report[i] != 0 && k.report[i] == k.report[j])
+					return GLASS_ERR_RECORD;
 		uint64_t flags = spinlock_acquire_irqsave(&v->input_lock);
 		if (v->input_closed)
 		{

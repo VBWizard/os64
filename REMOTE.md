@@ -342,8 +342,18 @@ OS64_GLASS_POINTER:  uint8_t kind, buttons; uint16_t x, y;            // 6 bytes
   window's) is full at that moment and the releases are dropped with it
   (DEBTS § Remote access).
 - **Validation is whole-record, at the boundary.** An unknown kind, a record
-  whose length is not its kind's, a button bit above middle, or a position
-  off the screen (refused, not moved) is refused.
+  whose length is not its kind's, a keyboard report listing one usage twice,
+  a button bit above middle, or a position off the screen (refused, not
+  moved) is refused.
+- **A key a chord took stays the chord's until it is let go** (X's passive
+  grab). A press the keyboard interpreter takes for itself (a terminal
+  switch, Ctrl+Alt+Del, Caps Lock's toggle) is never delivered, nor is its
+  release, nor any typematic repeat that no longer matches the chord: after
+  Alt+F8 the desktop holds the screen, where bare Alt+F8 is no chord, and a
+  held F8 would otherwise reach the focused window as F8 presses and then
+  an F8-up. Repeats that still match keep acting (a held Alt+Right keeps
+  walking the terminals). The PS/2 driver follows the same rule for its
+  hardware repeats.
 - **Proof:** `glasstest`'s hands half, on a GUI boot, from VT1:
   - a `"r"` viewer cannot type, and malformed records are refused;
   - its own glass keyboard types Alt+F8, and `/sys/gui` says the desktop
@@ -354,6 +364,10 @@ OS64_GLASS_POINTER:  uint8_t kind, buttons; uint16_t x, y;            // 6 bytes
   - with two viewers, a second pointer moving with no buttons does not lift
     the first one's held button, and a second keyboard typing does not drop
     a Ctrl the first one holds (the old kernel fails both);
+  - a Caps Lock held past the repeat delay toggles once; an Alt+Tab let go
+    of in one report leaks no Tab; an Alt+F8 held past the repeat delay
+    sends the window neither repeats nor a release; a report listing a key
+    twice is refused;
   - Ctrl+Alt+F1 gives the screen back to the terminal.
 
   A QEMU mouse still moves the pointer through the shared path.
