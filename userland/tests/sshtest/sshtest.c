@@ -153,6 +153,14 @@ static void channels(void)
     engine.out_len=0; ssh_input_consumed(&engine,0);
     CHECK(!engine.credit_owed && engine.receive_window==SSH_WINDOW && engine.out_len && engine.output[engine.out_head+5]==93);
     engine.out_len=0;
+    /* A data packet takes what fits the free room, never all or nothing;
+     * stderr's header is 4 bytes longer. */
+    engine.peer_window=1000; engine.peer_packet=32768; static const uint8_t bulk[400];
+    engine.out_len=SSH_OUTPUT_CAP-300; CHECK(ssh_send_data(&engine,bulk,400,0)==235 && engine.out_len<=SSH_OUTPUT_CAP);
+    engine.out_len=SSH_OUTPUT_CAP-300; CHECK(ssh_send_data(&engine,bulk,400,1)==231 && engine.out_len<=SSH_OUTPUT_CAP);
+    engine.out_len=SSH_OUTPUT_CAP-65; CHECK(!ssh_send_data(&engine,bulk,400,0));
+    engine.out_len=SSH_OUTPUT_CAP-69; CHECK(!ssh_send_data(&engine,bulk,400,1));
+    engine.out_len=0;
     w.n=0; ssh_put_byte(&w,93); ssh_put_u32(&w,0); ssh_put_u32(&w,UINT32_MAX);
     n=frame(wire,payload,w.n); ssh_receive(&engine,wire,n); CHECK(engine.closed);
     reset_connection();
