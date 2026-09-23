@@ -22,8 +22,10 @@
 //      lift the first one's held button, and a second keyboard typing does
 //      not drop a Ctrl the first one holds (it still rides on the pointer).
 //      An Alt+Tab let go of in one report leaks no Tab to the window it
-//      focused, and an Alt+F8 the driver consumed, held past the repeat
-//      delay, sends the window neither F8 repeats nor an F8-up.
+//      focused; Ctrl and Alt pressed on the desktop and let go after the
+//      switch to a text terminal still come up in the window; and an Alt+F8
+//      the driver consumed, held past the repeat delay, sends the window
+//      neither F8 repeats nor an F8-up.
 //      Ctrl+Alt+F1 brings the terminal back.
 //
 // `glasstest watch` prints every record's header for thirty seconds instead:
@@ -58,6 +60,7 @@
 #define GLASSTEST_CAPS      0x61A55F11   // a held Caps Lock toggled more than once
 #define GLASSTEST_CHORD_UP  0x61A55F12   // a consumed chord's key-up leaked to a window
 #define GLASSTEST_ORPHAN_UP 0x61A55F13   // a press the driver consumed still sent its release
+#define GLASSTEST_MOD_UP    0x61A55F14   // a window saw modifiers go down and never come up
 
 #define PAINT 0x0012AB34u
 
@@ -391,16 +394,29 @@ static int hands(void)
 		// the desktop back and this window focused, where bare Alt+F8 is
 		// no chord. Its repeats must not arrive as F8 presses, nor its
 		// release as an F8-up.
+		// The way there is itself a check: Ctrl+Alt+F1 pressed on the
+		// desktop sends this window Ctrl and Alt going down, and the switch
+		// to a text terminal comes before they are let go. They must still
+		// come up here, where they went down.
+		listen(win, &seen, 200);
 		write_key(h, MOD_LCTRL | MOD_LALT, KEY_F1);
 		write_key(h, 0, 0);
-		os64_sleep(300);
+		listen(win, &seen, 300);
+		if (!seen.up_code[0xE0] || !seen.up_code[0xE2])
+		{
+			os64_printf("glasstest: Ctrl/Alt went down here and came up elsewhere (%d/%d up)\n",
+			            seen.up_code[0xE0], seen.up_code[0xE2]);
+			code = GLASSTEST_MOD_UP;
+		}
 		write_key(h, MOD_LALT, 0);
 		write_key(h, MOD_LALT, KEY_F8);
 		listen(win, &seen, 800);
 		int held = seen.down_code[KEY_F8];
 		write_key(h, 0, 0);
 		listen(win, &seen, 300);
-		if (!desktop_on_screen() || held || seen.up_code[KEY_F8])
+		if (code)
+			;   // the modifier check above already failed
+		else if (!desktop_on_screen() || held || seen.up_code[KEY_F8])
 		{
 			os64_printf("glasstest: a consumed Alt+F8 reached the window (%d F8-down, %d F8-up)\n",
 			            held, seen.up_code[KEY_F8]);

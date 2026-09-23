@@ -556,7 +556,10 @@ One owner variable, and it already exists: `kTTYFocused`.
   pty slave), just in ring 3 where it always belonged.
 - **Input routing follows the glass — dual delivery dies.**
   `keyboard_deliver_event` forks on ownership: VT8 focused → GUI input queue
-  only; text VT focused → tty path only. The chords are consumed BEFORE the
+  only; text VT focused → tty path only. A RELEASE is the exception: it goes
+  where its press went (`keyboard_deliver_release`), so a key or modifier
+  pressed on the desktop and let go after a switch to a text terminal still
+  comes up in the window that saw it go down. The chords are consumed BEFORE the
   fork (Alt+arrows must work from either world; they are commands to the
   terminal stack, same doctrine as Ctrl+Alt+Del). The mouse already goes
   only to the GUI queue; on text VTs its events drop (gpm is a non-goal).
@@ -722,8 +725,10 @@ mid-drag handling and verification fixture.
   modifier change that produces no delivered event — the extended path updates
   the state and returns without delivering for any key that is not an arrow or
   a named editing key, so holding Right Alt would change the driver's mind and
-  tell nobody. State is published where it CHANGES now
-  (`keyboard_publish_modifiers`), with the choke still covering the xHCI path.
+  tell nobody. State is published where it CHANGES now: `keyboard_publish_modifiers`
+  for PS/2 and `keyboard_publish_hid_modifiers` for each HID keyboard, counted
+  so a modifier is held while any keyboard holds it (keyboard.h). The choke
+  does not touch it.
 - Mouse events carry `modifiers` (input.h, ABI-compatible — the union had 20
   bytes and was using 14), because a compositor keeping its own shadow copy of
   modifier state would drift out of sync across a VT switch.
