@@ -346,8 +346,10 @@ slice.) The FILE is
 the switch, not a boot token, because a token does not travel to a machine
 that boots from its own disk, and every machine this is for does. Absent
 file, and nothing is launched; a file with no `face` launches `vtfont`,
-which reads it and does nothing — the kernel asks only whether the file
-exists. No example file ships, for `mounts.conf`'s reason: a shipped copy
+which reads it and keeps the boot face — silently for a file of comments,
+and with a line naming every key it does not know for anything else,
+because `font = …` is the natural slip and a boot that quietly stays 8x16
+is the worst way to learn a key's name. No example file ships, for `mounts.conf`'s reason: a shipped copy
 of comments would launch that no-op and announce it on every boot. The
 whole file is
 
