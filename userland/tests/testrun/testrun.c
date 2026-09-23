@@ -134,6 +134,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/rngprobe",        NULL, 0,           3,          "CPU RNG availability and bounded sampling; not entropy certification" },
     { "/tests/randtest",        NULL, 0x5EED0000,  0,          "/dev/random: two distinct seeds, a page-capped read, a contribution, /sys/random seeded" },
     { "/tests/renametest",      NULL, 0x4E4D0000,  0,          "rename policies on ext2 and FAT, plus invalid flags and legacy ABI compatibility" },
+    { "/tests/closetest",       NULL, 0xC10E0000,  0,          "a close that could not commit is heard in ring 3 (OS64_CLOSE_NOT_COMMITTED), and told apart from no-such-handle" },
     { "/tests/openxtest",        NULL, 0x0EAC7000,  0,          "atomic exclusive create on ext2 and FAT, including contention and full-handle refusal" },
     { "/tests/sigtest",         NULL, 0x05160000,  0,          "signal handlers: install, replace, restore, and the refusals" },
     { "/tests/winchtest",       NULL, 0x0A1D0000,  0,          "pty resize: the grid follows, the seats hear SIGWINCH, a blocked read and a blocked wait are interrupted" },

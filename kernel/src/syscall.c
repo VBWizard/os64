@@ -44,6 +44,7 @@
 #include "os64/pty.h"      // os64_pty_header_t/_cell_t — pty_snapshot's out-structs (abi)
 #include "env.h"           // env_set/env_unset — setenv() mutates the task's env block
 #include "os64/net.h"      // os64_netdest_t — net_dial's in-struct (abi)
+#include "os64/file.h"     // OS64_CLOSE_NOT_COMMITTED — close's third answer (abi)
 #include "os64/mount.h"    // OS64_MOUNT_BAD_ARGS — namespace verbs preserve this ABI verdict
 #include "driver/net/net_device.h"   // kNetDevices — dial needs a NIC to dial on
 #include "driver/net/net_wire.h"     // NET_IPV4_OCTETS — address logging
@@ -2644,9 +2645,13 @@ static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (task == NULL)
 		return SYSCALL_RESULT_INVALID;
 
-	if (!handle_close(task, (int)(int64_t)arg0))
+	// Three answers, and the middle one is the point (os64/file.h): the
+	// handle is gone in both of the last two, and only the bytes differ.
+	int rc;
+	if (!handle_close_rc(task, (int)(int64_t)arg0, &rc))
 		return SYSCALL_RESULT_INVALID;
-
+	if (rc != 0)
+		return (uint64_t)(int64_t)OS64_CLOSE_NOT_COMMITTED;
 	return 0;
 }
 

@@ -501,8 +501,18 @@ void handle_dir_object_close(void *vfs_dir)
 		kfree(path_copy);
 }
 
-bool handle_close(struct task *t, int h)
+// Close, and say how it went, as TWO facts because they live in different
+// number spaces: the return is whether there was a handle to close at all
+// (false for an empty slot, or one another closer owns), and *rc is the
+// filesystem's own answer for the LAST close of a file — 0, or its nonzero
+// code when what was written could not be committed. A filesystem's -1 and
+// "no such handle" must never be one value, which is why this is not a
+// single int with a sentinel (it was, for an hour, and a refused font read
+// back as a bad handle). The slot is freed whenever the return is true; the
+// verdict is about the bytes (os64/file.h).
+bool handle_close_rc(struct task *t, int h, int *rc)
 {
+	*rc = 0;
 	// Everything below works through `handle` (== &task->handles[h]); the slot
 	// index is closed over by that pointer. The task is needed for one thing,
 	// its handleLock.
@@ -585,7 +595,9 @@ bool handle_close(struct task *t, int h)
 			pipe_close_write_end((pipe_t *)object);
 			break;
 		case HANDLE_FILE:
-			handle_file_object_close(object);
+			// The one closer with something to say: a flush that did not
+			// happen, or a file that judged what it was given and refused.
+			*rc = handle_file_object_close(object);
 			break;
 		case HANDLE_DIR:
 			handle_dir_object_close(object);
@@ -639,6 +651,15 @@ bool handle_close(struct task *t, int h)
 	handle->object = NULL;
 	__atomic_store_n(&handle->type, HANDLE_NONE, __ATOMIC_RELEASE);
 	return true;
+}
+
+// For the callers that only need to know whether there was a handle to
+// close — burial, the redirect plumbing. What the close could not commit is
+// already in the log by the time it gets here (handle_file_object_close).
+bool handle_close(struct task *t, int h)
+{
+	int rc;
+	return handle_close_rc(t, h, &rc);
 }
 
 void handle_close_all(struct task *t)

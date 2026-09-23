@@ -258,6 +258,14 @@ int64_t os64_tty_handle(void);
 // dropping the last write end is what delivers end-of-input to the reader, and
 // dropping the last read end is what kills a writer that is producing into the
 // void.
+//
+// THREE ANSWERS (os64/file.h). 0: the handle is gone and nothing was left
+// undone. OS64_CLOSE_NOT_COMMITTED: the handle is gone but what you wrote is
+// not where you think it is — a FAT file's flush failed at close (that is
+// where FatFs commits), or a file that judges what it is given refused it
+// (/sys/console/font, whose `last:` line then says why). -1: there was no
+// such handle. A program that ignores the result loses nothing it had
+// before; one that checks it is told the truth, which `cp` does.
 int64_t os64_close(int32_t handle);
 
 // Commit a written file to the device — its bytes AND the directory entry

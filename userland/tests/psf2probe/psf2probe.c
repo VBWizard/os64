@@ -11,9 +11,9 @@
 // proves the seam under it.
 //
 // `echo boot > /sys/console/font` goes back, and `cat /sys/console/font` says
-// what the kernel made of the write — that second one matters, because a
-// close that fails is not yet heard in ring 3 (DEBTS.md), so this program
-// reports what it SENT and the kernel's verdict is in that file.
+// what the kernel made of the write — the close answers a bare
+// OS64_CLOSE_NOT_COMMITTED for a font refused, and that file holds the
+// reason, so this program reports what it SENT and points there.
 
 #include "os64/os64.h"
 #include "os64/fmt.h"

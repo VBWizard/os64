@@ -321,8 +321,8 @@ print-time wraps with the same bit is a follow-on, not part of this arc.
    name; a bitmap asked for a grid answers with the grid it gives. What
    took is the KERNEL's to say: after the write it waits for the swap and
    prints the door's `last:` line, and its exit status is that verdict's —
-   a failed close is not yet heard in ring 3 (DEBTS.md), and this is the
-   program that does not need it to be. The door publishes `screen:` for
+   the close itself answers only `OS64_CLOSE_NOT_COMMITTED` for a font
+   refused, and the line is the reason. The door publishes `screen:` for
    it, because a grid search needs the dividend.
 
 Slices 1–4 are kernel work on the glass and its lock, reachable from

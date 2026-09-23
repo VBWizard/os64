@@ -124,6 +124,13 @@ void handle_unshare(const handle_t *shared);
 // Close one handle: drops the task's reference on the underlying object (for a
 // pipe, that is the refcount that decides EOF/EPIPE) and frees the slot.
 bool handle_close(struct task *t, int h);
+// The same close, with the verdict kept apart from the bookkeeping: returns
+// whether there was a handle to close (false: an empty slot, or one another
+// closer owns), and *rc receives the filesystem's own answer for the last
+// close of a file — 0, or its nonzero code when what was written could not
+// be committed. Two facts in two places, because a filesystem's -1 and "no
+// such handle" must never be one number (os64/file.h).
+bool handle_close_rc(struct task *t, int h, int *rc);
 
 // Close every handle a task holds. Called on task exit — WITHOUT this, a task
 // that dies holding a pipe end keeps that end open forever, and the process on
