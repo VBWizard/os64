@@ -3863,7 +3863,9 @@ typedef struct {
 // Give back the CHILD's references on the redirections (handle_share, taken
 // at resolve in syscall_spawn) when no child comes to own them. Slots not
 // yet resolved are HANDLE_NONE, so every failure path may call this for all
-// three; the console tags hold nothing and unshare as nothing.
+// three; the console tags hold nothing and unshare as nothing. A file whose
+// parent handle a sibling closed meanwhile is closed for real here, and the
+// verdict goes to the log — that close was told "deferred" (os64/file.h).
 static void spawn_unshare_all(spawn_params_t *p)
 {
 	for (int slot = 0; slot < 3; slot++)
@@ -4004,9 +4006,12 @@ static void spawn_do_create(void *arg)
 		// child, `upper < file` survives the shell's immediate close of its
 		// own handle (and the child inherits the file POSITION — shared FIL,
 		// dup semantics — position 0 for a just-opened redirect, as
-		// intended), and the FIN waits for the child's close. handle_install
-		// hands that already-held reference over.
-		handle_install(child, slot, p->redirType[slot], p->redirObject[slot]);
+		// intended), and the FIN waits for the child's close.
+		// handle_share_install hands that already-held reference over, and
+		// a file's stops counting as an operation in flight: from here it
+		// is the child's handle, and answers for its own close.
+		handle_t shared = { .type = p->redirType[slot], .object = p->redirObject[slot] };
+		handle_share_install(child, slot, &shared);
 	}
 
 	// Submission lets the child exit and a sibling reap it before this

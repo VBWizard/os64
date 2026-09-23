@@ -58,5 +58,46 @@ int main(void)
     if (r != OS64_FILE_ERR_INVALID)
         return BADGE + 8;
 
+    // 5. A spawn that FAILS gives its redirection share back whole. The
+    //    share is held as an operation in flight until a child owns it, and
+    //    a failed load releases it as one; if either half were wrong the
+    //    close below would answer "deferred" (a pin left behind) or the
+    //    file would already be gone. What must come back is the refusal —
+    //    this handle is the only holder again, and it answers for the file.
+    h = os64_open("/sys/console/font", "w");
+    if (h < 0)
+        return BADGE + 9;
+    char *const noargs[] = { "nonesuch", NULL };
+    int64_t pid = os64_spawn_redirected("/tests/nonesuch", noargs, -1, (int32_t)h, -1, 0);
+    os64_printf("closetest: spawning a program that does not exist answered %ld (want < 0)\n", (long)pid);
+    if (pid >= 0)
+        return BADGE + 10;
+    if (os64_write((int32_t)h, junk, sizeof(junk) - 1) != (int64_t)(sizeof(junk) - 1))
+        return BADGE + 11;
+    r = os64_close((int32_t)h);
+    os64_printf("closetest: close after a failed spawn answered %ld (want %d)\n", (long)r, OS64_CLOSE_NOT_COMMITTED);
+    if (r != OS64_CLOSE_NOT_COMMITTED)
+        return BADGE + 12;
+
+    // 6. A spawn that SUCCEEDS turns the share into the child's handle, so
+    //    the parent's close answers 0 — that copy will answer for the file
+    //    — and not "deferred", which is what a share still counted as an
+    //    operation would make it say.
+    h = os64_open("/tmp/closetest.txt", "w");
+    if (h < 0)
+        return BADGE + 13;
+    char *const trueargs[] = { "true", NULL };
+    pid = os64_spawn_redirected("/bin/true", trueargs, -1, (int32_t)h, -1, 0);
+    if (pid < 0)
+        return BADGE + 14;
+    r = os64_close((int32_t)h);
+    os64_printf("closetest: close of a file a child also holds answered %ld (want 0)\n", (long)r);
+    int32_t code = -1;
+    while (os64_wait(pid, &code) == OS64_INTERRUPTED)
+        ;
+    (void)os64_unlink("/tmp/closetest.txt");
+    if (r != 0)
+        return BADGE + 15;
+
     return BADGE;
 }

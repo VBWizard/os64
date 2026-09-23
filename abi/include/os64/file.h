@@ -35,9 +35,10 @@
 // outcome goes to the kernel log alone. A program that closes a handle
 // while it is using it on another thread is told exactly that, rather than
 // 0. If the outcome matters, os64_sync before the close (its answer is the
-// flush's own) or do not race yourself. Never answered for a handle shared
-// with a child by spawn: that copy will close in its own time and its close
-// answers for the file.
+// flush's own) or do not race yourself. A spawn on another thread with this
+// handle as a redirection is such an operation, until the child owns its
+// copy: once it does, that copy closes in its own time and its close
+// answers for the file, and the parent's close answers 0.
 //
 // -5 and not -4: OS64_INTERRUPTED (-4, os64/signal.h) is a SYSTEM-WIDE
 // sentinel, not a family's — "a handled signal cut this call short, call

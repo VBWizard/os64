@@ -323,7 +323,13 @@ bool handle_share(struct task *t, int h, handle_t *out)
 		case HANDLE_PIPE_READ:    pipe_ref_read_end((pipe_t *)object); break;
 		case HANDLE_PIPE_WRITE:   pipe_ref_write_end((pipe_t *)object); break;
 		case HANDLE_FILE:
-			__sync_fetch_and_add(&((vfs_file_t *)object)->holds, 1);   // a handle: no pin
+			// A holder AND a pin, like an operation's, because until the
+			// child's slot exists this share IS an operation in flight on
+			// the parent's handle: if the spawn fails, handle_unshare does
+			// the real close with nowhere to answer to, so a sibling's close
+			// that sees this hold must be told "deferred", not 0 (vfs.h
+			// `holds`). handle_share_install turns it into a handle's hold.
+			__sync_fetch_and_add(&((vfs_file_t *)object)->holds, VFS_HOLD_PIN | 1);
 			break;
 		case HANDLE_NET_TCP:      tcp_conn_ref((tcp_conn_t *)object); break;
 		default:                  shareable = false; break;   // free, mid-close, or not a stream
@@ -337,13 +343,34 @@ bool handle_share(struct task *t, int h, handle_t *out)
 	return true;
 }
 
+void handle_share_install(struct task *child, int slot, const handle_t *shared)
+{
+	// The share becomes the child's handle: a holder that will close in its
+	// own time and answer for the file, so its pin comes off — one atomic
+	// step, so a closer's subtraction sees either the operation or the
+	// handle, never a hold that is neither.
+	if (shared->type == HANDLE_FILE)
+		__sync_fetch_and_sub(&((vfs_file_t *)shared->object)->holds, VFS_HOLD_PIN);
+	handle_install(child, slot, shared->type, shared->object);
+}
+
 void handle_unshare(const handle_t *shared)
 {
 	switch (shared->type)
 	{
 		case HANDLE_PIPE_READ:    pipe_close_read_end((pipe_t *)shared->object); break;
 		case HANDLE_PIPE_WRITE:   pipe_close_write_end((pipe_t *)shared->object); break;
-		case HANDLE_FILE:         handle_file_object_close(shared->object); break;
+		case HANDLE_FILE:
+		{
+			// The pin and its hold go together, as an unpin's do. If the
+			// share was the last holder — a sibling closed the parent's
+			// handle while the spawn was loading — this is the real close,
+			// and its verdict goes to the log: that close already answered
+			// "deferred" (os64/file.h).
+			bool deferred;
+			(void)handle_file_object_close_verdict(shared->object, true, &deferred);
+			break;
+		}
 		case HANDLE_NET_TCP:      tcp_conn_release((tcp_conn_t *)shared->object); break;
 		default: break;
 	}
@@ -395,18 +422,19 @@ int handle_file_object_close_verdict(void *vfs_file, bool as_pin, bool *deferred
 	if (file == NULL || file->fops == NULL || file->fops->close == NULL)
 		return 0;   // nothing to close is not a failure to close
 
-	// Drop THIS hold — a handle's, or a pin's (which drops its pin too, in
-	// the same step). Spawn redirection shares one open file between parent
-	// and child (see `holds` in vfs.h) — same rule as pipe ends: only the
-	// LAST holder's close actually closes. Atomic because parent and child
-	// can close concurrently on different cores.
+	// Drop THIS hold — a handle's, or an operation's (which drops its pin
+	// too, in the same step). Spawn redirection shares one open file between
+	// parent and child (see `holds` in vfs.h) — same rule as pipe ends: only
+	// the LAST holder's close actually closes. Atomic because parent and
+	// child can close concurrently on different cores.
 	//
 	// WHO IS LEFT decides what this close can honestly answer, and the one
 	// subtraction hands back both counts from the same instant. Another
 	// HANDLE will close in its own time and its close answers for the file.
-	// A PIN — an operation in flight on another thread — cannot: its unpin
-	// does the real close with nowhere to return to, so this close says
-	// "deferred" rather than 0. Because a pin and its hold are one word,
+	// A PIN — an operation in flight on another thread, a syscall's or a
+	// spawn's share not yet a child's — cannot: its end does the real close
+	// with nowhere to return to, so this close says "deferred" rather than
+	// 0. Because a pin and its hold are one word,
 	// there is no order of events in which a pin's hold is counted while its
 	// pin is not (or the reverse): whatever remains is exactly what the
 	// answer describes.
@@ -636,8 +664,8 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 			// The one closer with something to say — a flush that did not
 			// happen, or a file that judged what it was given and refused —
 			// when it is the last holder. When an operation on another
-			// thread still holds the file, the real close is that thread's
-			// unpin, and this one can only say so.
+			// thread still holds the file, the real close is that
+			// operation's end, and this one can only say so.
 			*rc = handle_file_object_close_verdict(object, false, deferred);
 			break;
 		case HANDLE_DIR:

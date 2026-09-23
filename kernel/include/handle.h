@@ -116,9 +116,14 @@ void handle_unpin(const handle_t *pinned);
 // conn's row, never its line — tcp.h pins). Only what a child's 0/1/2 can
 // be is shareable: the console tags (nothing to take), pipe ends, open
 // files, TCP conns; anything else answers false and touches nothing.
+// handle_share_install puts the share in the child's slot as its handle;
 // handle_unshare gives the reference back when no child comes to own it —
-// the same release handle_close would run.
+// the same release handle_close would run. A FILE's share is held as an
+// OPERATION until one or the other happens: a sibling's close that finds
+// it must answer "deferred" (os64/file.h), because an unshare's close has
+// nowhere to answer to — while a child's handle answers for itself.
 bool handle_share(struct task *t, int h, handle_t *out);
+void handle_share_install(struct task *child, int slot, const handle_t *shared);
 void handle_unshare(const handle_t *shared);
 
 // Close one handle: drops the task's reference on the underlying object (for a
