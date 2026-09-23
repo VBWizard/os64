@@ -144,7 +144,8 @@ A KEX has a separate 120-second completion deadline. Connection replies
 received in flight before the client's KEXINIT are deferred until NEWKEYS;
 application output pauses during KEX. A channel close during that exchange
 keeps the transport running until NEWKEYS releases the deferred close reply
-or the KEX deadline expires. Closing does not initiate another server rekey.
+or the KEX deadline expires. A connection that is ending (its session
+closed and no forwards live) does not initiate another server rekey.
 The deferred reply budget is 8 KiB of stored replies. Their framed wire cost
 is tracked alongside, and receive takes no further packet until the output
 queue has room for one maximum packet plus that whole replay, so NEWKEYS can
@@ -235,20 +236,31 @@ it too. The session is local channel 0, and forward *i* is local channel
 - **Windows.** Each forward advertises 256 KiB, sized for keystrokes and
   requests, not the session's 2 MiB. Outgoing data obeys the peer's window
   and packet size, and a window overrun or overflowing adjustment
-  disconnects, the session's rules. Each forward's two queues (256 KiB
+  disconnects, the session's rules. Credit for bytes the local connection
+  took is owed to the client even when the output queue has no room for the
+  WINDOW_ADJUST: it is kept and sent on a later pass, never dropped, or the
+  client's window would shrink for good. Each forward's two queues (256 KiB
   toward the local connection, 32 KiB toward the client) are allocated when
   it opens and freed when it closes, which keeps the program inside its
   link slot.
 - **Closing.** When the local connection ends, EOF and CLOSE are sent once
   everything read from it has gone out; like exit-status they wait out a key
-  exchange. The slot is freed when both CLOSEs have crossed. **A client EOF
+  exchange. Both CLOSEs crossing ends the channel, but the slot is freed
+  only after the bytes the client sent before its CLOSE have been delivered
+  to the local connection (or it failed): a client may CLOSE without an EOF
+  first, and its last bytes are still owed. **A client EOF
   ends the local connection whole** once the client's bytes are delivered:
   os64 has no ring-3 half-close, so a reply the local service would have
   sent after a half-close is lost (DEBTS). A viewer or browser that closes
   fully loses nothing.
 - **Lifetime.** A closed session does not end the connection while forwards
   are live; `ssh -N` opens no session at all. The connection ends when the
-  client leaves.
+  client leaves. The server's rekey limits hold for the connection, so
+  forwards outliving the session still rekey.
+- **Channel numbers.** Every reply to an open is addressed by the client's
+  number for it, so an open (session or forward) that names a number one of
+  the client's live channels already uses ends the connection; a number is
+  live until both CLOSEs for it have crossed, and then it may be used again.
 - **The loop naps only on a pass that moved nothing.** It used to nap a
   tick every pass, which is fine for a shell but capped a forward at one
   read per tick.
@@ -256,9 +268,12 @@ it too. The session is local channel 0, and forward *i* is local channel
 Proof: `sshtest`'s forward matrix (policy, confirmation fields, data and
 window credit, send clamping, requests, both close orders, EOF, window
 violations, refusals, destination shape, seven-and-an-eighth, slot reuse,
-a session alongside, KEX holding a close). The daemon-loop harness gained
-`forward` (the config key) and `linger` (a closed session with a live
-forward keeps the connection and yields rather than naps). The host
+a session alongside, KEX holding a close, credit kept when the output is
+full, a closed slot held until release, channel numbers live and dead). The
+daemon-loop harness gained `forward` (the config key), `linger` (a closed
+session with a live forward keeps the connection and yields rather than
+naps) and `closedrain` (a closed forward delivers its queue, then is
+released once). The host
 adapter mirrors the daemon's rules, and real OpenSSH drives `ssh -N -L`:
 3 MiB each way, the same across client and server rekeys, seven concurrent
 forwards, the eighth refused, a non-loopback destination and a closed port
