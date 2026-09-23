@@ -16,7 +16,8 @@
 //      terminal the test runs on, its own keyboard types Alt+F8 and the
 //      desktop takes the screen; a window it creates then receives a key,
 //      a shifted key, a click at its centre, a held key's typematic
-//      repeats, and the release a viewer closed mid-keypress still owes.
+//      repeats, a Caps Lock held past the repeat delay toggling once, and
+//      the release a viewer closed mid-keypress still owes.
 //      Two viewers at once: a second pointer moving holding nothing does not
 //      lift the first one's held button, and a second keyboard typing does
 //      not drop a Ctrl the first one holds (it still rides on the pointer).
@@ -51,6 +52,7 @@
 #define GLASSTEST_LIFT      0x61A55F0E   // closing a viewer did not release its held key
 #define GLASSTEST_TWO_HANDS 0x61A55F0F   // one pointer's move ended another's held button
 #define GLASSTEST_TWO_KEYS  0x61A55F10   // one keyboard's typing dropped a chord another held
+#define GLASSTEST_CAPS      0x61A55F11   // a held Caps Lock toggled more than once
 
 #define PAINT 0x0012AB34u
 
@@ -163,6 +165,7 @@ static void listen(int64_t win, seen_t *seen, int ms)
 #define KEY_B   0x05
 #define KEY_C   0x06
 #define KEY_F1  0x3A
+#define KEY_CAPS 0x39
 #define KEY_F8  0x41
 #define MOD_LCTRL  0x01
 #define MOD_LSHIFT 0x02
@@ -240,6 +243,29 @@ static int hands(void)
 		{
 			os64_printf("glasstest: a held key arrived %d time(s)\n", held);
 			code = GLASSTEST_REPEAT;
+		}
+	}
+
+	if (!code)
+	{
+		// Caps Lock held well past the repeat delay toggles once: a latch
+		// does not repeat. Then once more, back to lower case.
+		write_key(h, 0, KEY_CAPS);
+		listen(win, &seen, 900);
+		write_key(h, 0, 0);
+		write_key(h, 0, KEY_A);
+		write_key(h, 0, 0);
+		listen(win, &seen, 300);
+		bool upper = seen.down['A'] == 1 && !seen.down['a'];
+		write_key(h, 0, KEY_CAPS);
+		write_key(h, 0, 0);
+		write_key(h, 0, KEY_A);
+		write_key(h, 0, 0);
+		listen(win, &seen, 300);
+		if (!upper || seen.down['a'] != 1)
+		{
+			os64_printf("glasstest: a held Caps Lock left the case wrong\n");
+			code = GLASSTEST_CAPS;
 		}
 	}
 
