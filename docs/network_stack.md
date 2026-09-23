@@ -113,7 +113,8 @@ protocol. Departures answer the one routing question a host has, on my
 link or via the gateway, and carry DF with TTL 64. **Fragments are
 neither sent nor reassembled**: an arrival with MF or an offset is
 dropped, counted and logged (DEBTS). Header options are not parsed. There
-is no forwarding, and there is one address (`/sys/net/ip`).
+is no forwarding, and there is one LAN address beside loopback's 127/8,
+which only `lo` carries (`/sys/net/ip`).
 
 The submission contract for the layers above: `ipv4_send_from_ex` reports
 SENT, PARKED (held for ARP, or dropped when no slot is free), DROPPED (the
