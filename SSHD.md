@@ -160,7 +160,9 @@ pass, away from the first stream that sent bytes, so neither sparse window
 updates nor credit just over one staging buffer can keep favoring one
 stream. The session's streams and the forwards take turns going first for
 the output queue's room by the same rule, so a trickle of room is never all
-one group's. Credit for input the command took is owed until it can go out
+one group's. The lead passes because every channel sends what fits the
+free room rather than all or nothing: a channel that waited for room for
+its whole staged packet would never spend any, and so never hand over. Credit for input the command took is owed until it can go out
 as one WINDOW_ADJUST: never during a key exchange, where each adjust would
 wait in the deferred-reply budget and enough of them would exhaust it, and
 never without output room. Window
@@ -240,9 +242,9 @@ it too. The session is local channel 0, and forward *i* is local channel
   name that has to go to DNS blocks only the session asking.
 - **Windows.** Each forward advertises 256 KiB, sized for keystrokes and
   requests, not the session's 2 MiB. Outgoing data obeys the peer's window
-  and packet size and is sized to the output queue's free room (a forward
-  that waited for room for a whole 32 KiB read could wait forever behind
-  the session's 4 KiB refills), and a window overrun or overflowing
+  and packet size and is sized to the output queue's free room, as the
+  session's is (see Commands, channels, and backpressure), and a window
+  overrun or overflowing
   adjustment disconnects, the session's rules. Credit for bytes the local
   connection took follows the session's rule: owed through a key exchange
   or a full queue and sent as one adjust, never dropped, or the client's

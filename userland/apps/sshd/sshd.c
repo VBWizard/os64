@@ -469,7 +469,10 @@ static int session(void)
     /* The session's streams and the forwards take turns going first for the
      * output queue's room, by the streams' own rule: whichever group went
      * first and spent room hands the lead to the other. Going first every
-     * time, either would take all of a trickle of room and starve the other. */
+     * time, either would take all of a trickle of room and starve the other.
+     * The lead passes because every channel sends what fits the room
+     * (ssh_connection.c fit_room): a leader with anything to send spends
+     * some, however little is free. */
     int forwards_lead = 0;
     for (;;) {
         size_t queued = engine.out_len;
