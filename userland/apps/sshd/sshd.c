@@ -35,6 +35,7 @@ typedef struct {
     uint32_t from_len;
     int local_ended;                        // read EOF or a failed write: EOF + CLOSE owed
     int client_eof;                         // the client half-closed (FORWARD_EOF)
+    int peer_closed;                        // the channel closed: deliver to_local, then release
 } forward_link;
 static forward_link links[SSH_FORWARDS];
 static const char key_path[] = "/home/sshd_host_key";
@@ -271,7 +272,7 @@ static void link_close(uint32_t i)
     if (l->to_local) os64_free(l->to_local);
     if (l->from_local) os64_free(l->from_local);
     l->handle = -1; l->to_local = l->from_local = 0;
-    l->to_len = l->from_len = 0; l->local_ended = l->client_eof = 0;
+    l->to_len = l->from_len = 0; l->local_ended = l->client_eof = l->peer_closed = 0;
 }
 /* Judge and dial a direct-tcpip destination. The check is on the ADDRESS the
  * name resolves to, never its spelling: `localhost` passes because /etc/hosts
@@ -321,6 +322,7 @@ static int forwards_pass(void)
         uint32_t i = (first + k) % SSH_FORWARDS;
         forward_link *l = &links[i];
         if (l->handle < 0) continue;
+        ssh_forward_consumed(&engine, i, 0);   // credit the output queue had no room for
         if (l->to_len && !l->local_ended) {
             int64_t wrote = os64_write_for(l->handle, l->to_local, l->to_len, 0);
             if (wrote > 0) {
@@ -331,6 +333,13 @@ static int forwards_pass(void)
                  * be delivered, and the channel ends as a read EOF would. */
                 l->local_ended = 1; l->to_len = 0;
             }
+        }
+        /* A closed channel takes nothing more from the local end; what the
+         * client sent before its CLOSE is delivered first, and then the
+         * slot is the engine's to reuse. */
+        if (l->peer_closed) {
+            if (!l->to_len || l->local_ended) { link_close(i); ssh_forward_release(&engine, i); moved = 1; }
+            continue;
         }
         /* The client's EOF, once its bytes are delivered, ends the local
          * connection whole: there is no ring-3 half-close to pass on, so a
@@ -404,7 +413,15 @@ static void event(void)
     /* A half-close ends the local connection once the queue drains
      * (forwards_pass). */
     case SSH_EVENT_FORWARD_EOF: links[engine.event_forward].client_eof = 1; break;
-    case SSH_EVENT_FORWARD_CLOSE: link_close(engine.event_forward); break;
+    /* A link already closed (our CLOSE went first, after the local end
+     * ended) owes nothing; an open one delivers its queue before closing
+     * (forwards_pass). Bytes read for the client can no longer be sent. */
+    case SSH_EVENT_FORWARD_CLOSE: {
+        forward_link *l = &links[engine.event_forward];
+        if (l->handle < 0) ssh_forward_release(&engine, engine.event_forward);
+        else { l->peer_closed = 1; l->from_len = 0; }
+        break;
+    }
     default: break;
     }
 }
@@ -467,7 +484,11 @@ static int session(void)
         if (had_kex && !engine.kex) key_time = now;
         had_kex = engine.kex;
         if (engine.kex && now - kex_begin > 120000) ssh_disconnect(&engine, 3, "key exchange timeout");
-        if (!close_received && !engine.sent_close && !engine.kex && (now-key_time >= 3600000 || engine.tx.bytes >= 536870912 || engine.rx.bytes >= 536870912)) {
+        /* Key-use limits hold for the connection, not the session channel:
+         * forwards outlive the session. Only a connection already ending
+         * skips the rekey. */
+        int ending = (close_received || engine.sent_close) && !ssh_forwards_live(&engine);
+        if (!ending && !engine.kex && (now-key_time >= 3600000 || engine.tx.bytes >= 536870912 || engine.rx.bytes >= 536870912)) {
             ssh_rekey(&engine); kex_begin = now; had_kex = engine.kex;
         }
         if (net_off == net_len) {
