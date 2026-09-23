@@ -39,6 +39,18 @@ os64_deflate_status_t os64_deflate_process(os64_deflate_t *stream,
                                             size_t *output_length,
                                             bool end_of_input);
 
+// SYNC FLUSH (zlib's Z_SYNC_FLUSH): finish everything given so far so a
+// decoder can reproduce all of it now, and keep the stream open. The pending
+// input ends as a non-final block, then an empty stored block brings the
+// stream to a byte boundary; its 00 00 FF FF is the marker a decoder's
+// inflate stops at, which is how an RFB viewer's ZRLE decoder knows a
+// rectangle is complete. The 32 KiB history survives the flush.
+// NEED_OUTPUT: call again with more room. NEED_INPUT: the flush is complete
+// and the stream takes input again. BAD_ARGUMENT after the stream is DONE.
+os64_deflate_status_t os64_deflate_flush(os64_deflate_t *stream,
+                                          uint8_t **output,
+                                          size_t *output_length);
+
 uint64_t os64_deflate_input_size(const os64_deflate_t *stream);
 uint64_t os64_deflate_output_size(const os64_deflate_t *stream);
 const char *os64_deflate_status_name(os64_deflate_status_t status);

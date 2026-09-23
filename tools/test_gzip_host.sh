@@ -157,6 +157,39 @@ for path in root.glob("boundary-*"):
 PY
 echo "raw/gzip encoders: chunks, boundaries, mtime, ratio, interop PASS"
 
+# Sync flush: every flush point decodes to exactly the input before it, ends
+# in the 00 00 FF FF marker, and the stream still finishes (RFB's ZRLE).
+for shape in "1 1" "100 7" "4096 97" "40000 65536"; do
+    set -- $shape
+    ASAN_OPTIONS=detect_leaks=0 "$work/test_gzip" sync "$work/payload" \
+        "$work/sync-$1-$2" "$work/sync-$1-$2.cuts" "$1" "$2"
+done
+python3 - "$work" <<'PY'
+import pathlib
+import sys
+import zlib
+root = pathlib.Path(sys.argv[1])
+payload = (root / "payload").read_bytes()
+streams = sorted(root.glob("sync-*[0-9]"))
+assert streams
+for stream in streams:
+    data = stream.read_bytes()
+    d = zlib.decompressobj(-15)
+    produced = b""
+    previous = 0
+    for line in (root / (stream.name + ".cuts")).read_text().split("\n"):
+        if not line:
+            continue
+        consumed, cut = map(int, line.split())
+        assert data[cut - 4:cut] == b"\x00\x00\xff\xff", (stream, cut)
+        produced += d.decompress(data[previous:cut])
+        assert produced == payload[:consumed], (stream, consumed, len(produced))
+        previous = cut
+    produced += d.decompress(data[previous:]) + d.flush()
+    assert produced == payload and d.eof, stream
+PY
+echo "raw sync flush: every flush point decodes, marker, stream finishes PASS"
+
 run raw "$work/encoded-raw-1-1" "$work/payload" 3 5 \
     18446744073709551615 done 0
 run gzip "$work/encoded-gzip-1-1" "$work/payload" 3 5 \

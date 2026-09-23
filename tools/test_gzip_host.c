@@ -299,8 +299,94 @@ static int run_encode(const char *format, const uint8_t *input_bytes,
     return failed;
 }
 
+// Deflate `input` in `segment`-byte pieces with a sync flush after each,
+// writing the stream to `output_path` and the output offset of every flush
+// point to `cuts_path` (one decimal per line). The script decodes each prefix.
+static int run_sync(const uint8_t *input_bytes, size_t input_length,
+                    const char *output_path, const char *cuts_path,
+                    size_t segment, size_t output_chunk)
+{
+    size_t capacity = input_length * 2 + 1024 + (input_length / segment + 2) * 16;
+    uint8_t *actual = calloc(1, capacity);
+    os64_deflate_t *raw = os64_deflate_create();
+    FILE *cuts = fopen(cuts_path, "w");
+    if (actual == NULL || raw == NULL || cuts == NULL) {
+        free(actual);
+        os64_deflate_destroy(raw);
+        if (cuts) fclose(cuts);
+        return 2;
+    }
+    size_t in_pos = 0, out_pos = 0;
+    int failed = 0;
+    while (!failed && in_pos < input_length) {
+        size_t take = input_length - in_pos < segment ? input_length - in_pos : segment;
+        const uint8_t *input = input_bytes + in_pos;
+        size_t input_left = take;
+        while (input_left != 0) {
+            uint8_t *output = actual + out_pos;
+            size_t room = capacity - out_pos < output_chunk ? capacity - out_pos : output_chunk;
+            size_t left = room;
+            int status = os64_deflate_process(raw, &input, &input_left, &output, &left, false);
+            out_pos += room - left;
+            if (status != OS64_DEFLATE_NEED_INPUT && status != OS64_DEFLATE_NEED_OUTPUT) {
+                failed = 1;
+                break;
+            }
+        }
+        in_pos += take;
+        for (int turns = 0; !failed; turns++) {
+            uint8_t *output = actual + out_pos;
+            size_t room = capacity - out_pos < output_chunk ? capacity - out_pos : output_chunk;
+            size_t left = room;
+            int status = os64_deflate_flush(raw, &output, &left);
+            out_pos += room - left;
+            if (status == OS64_DEFLATE_NEED_INPUT)
+                break;
+            if (status != OS64_DEFLATE_NEED_OUTPUT || turns > 1000000)
+                failed = 1;
+        }
+        fprintf(cuts, "%zu %zu\n", in_pos, out_pos);
+    }
+    // And the stream still finishes normally after its flushes.
+    for (int turns = 0; !failed; turns++) {
+        const uint8_t *input = NULL;
+        size_t input_left = 0;
+        uint8_t *output = actual + out_pos;
+        size_t room = capacity - out_pos < output_chunk ? capacity - out_pos : output_chunk;
+        size_t left = room;
+        int status = os64_deflate_process(raw, &input, &input_left, &output, &left, true);
+        out_pos += room - left;
+        if (status == OS64_DEFLATE_DONE)
+            break;
+        if (status != OS64_DEFLATE_NEED_OUTPUT || turns > 1000000)
+            failed = 1;
+    }
+    uint8_t *output = actual + out_pos;
+    size_t left = 16;
+    if (!failed && os64_deflate_flush(raw, &output, &left) != OS64_DEFLATE_BAD_ARGUMENT)
+        failed = 1;   // a finished stream has nothing to flush into
+    fclose(cuts);
+    if (!failed && write_file(output_path, actual, out_pos) < 0)
+        failed = 1;
+    if (failed)
+        fprintf(stderr, "sync flush encode failed at input %zu output %zu\n", in_pos, out_pos);
+    os64_deflate_destroy(raw);
+    free(actual);
+    return failed;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 7 && strcmp(argv[1], "sync") == 0) {
+        size_t input_length = 0;
+        uint8_t *input = read_file(argv[2], &input_length);
+        if (input == NULL)
+            return 2;
+        int result = run_sync(input, input_length, argv[3], argv[4],
+                              (size_t)parse_u64(argv[5]), (size_t)parse_u64(argv[6]));
+        free(input);
+        return result;
+    }
     if (argc == 8 && strcmp(argv[1], "encode") == 0) {
         size_t input_length = 0;
         uint8_t *input = read_file(argv[3], &input_length);

@@ -256,7 +256,7 @@ TELNET_ENGINE_OBJ      := $(OBJ)/apps/telnet/telnet_protocol.c.o
 # selective: linking libgzip into every app would turn an optional format
 # engine into part of the foundational runtime by accident. (os64get is not
 # here: it names libfetch, which carries its own edges on libgzip and libtls.)
-LIBGZIP_PROGRAMS := gzip gunzip gziptest
+LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd
 
 # Programs that download: they name libfetch and get its whole closure.
 LIBFETCH_PROGRAMS := os64get

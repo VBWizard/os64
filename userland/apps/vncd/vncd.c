@@ -29,6 +29,8 @@
 #include "os64/conf.h"
 #include "os64/draw.h"
 #include "os64/glass.h"
+#include "gzip/deflate.h"
+#include "zrle.h"
 
 #define VNCD_PORT_DEFAULT  5900
 #define VNCD_SESSIONS_MAX  4
@@ -48,18 +50,11 @@ static void log_line(const char *text)
 // The two threads meet here, under `s_lock`: a test-and-set that yields on
 // contention. Every hold is a handful of stores.
 
-typedef struct
-{
-	uint8_t  bpp;            // 8, 16 or 32
-	uint8_t  big_endian;
-	uint16_t rmax, gmax, bmax;
-	uint8_t  rshift, gshift, bshift;
-} pixel_format_t;
-
 typedef struct { int32_t x, y, w, h; } rect_t;
 
 static volatile uint32_t s_lock;
-static pixel_format_t s_format = { 32, 0, 255, 255, 255, 16, 8, 0 };
+static vnc_format_t s_format = { 32, 24, 0, 255, 255, 255, 16, 8, 0 };
+static bool   s_zrle;             // the viewer prefers ZRLE to Raw
 static bool   s_request;          // an update request is outstanding
 static bool   s_request_full;     // ... and it asked for everything in its rectangle
 static rect_t s_request_rect;
@@ -233,19 +228,16 @@ static uint32_t presented(uint32_t x, uint32_t y)
 	return (p >> 2) & 0x3F3F3F;
 }
 
-static void pixel_out(uint8_t *out, uint32_t xrgb, const pixel_format_t *pf)
+static void pixel_out(uint8_t *out, uint32_t xrgb, const vnc_format_t *pf)
 {
-	uint32_t r = (xrgb >> 16) & 0xFF, g = (xrgb >> 8) & 0xFF, b = xrgb & 0xFF;
-	uint32_t v = ((r * pf->rmax + 127) / 255) << pf->rshift |
-	             ((g * pf->gmax + 127) / 255) << pf->gshift |
-	             ((b * pf->bmax + 127) / 255) << pf->bshift;
+	uint32_t v = vnc_pixel(xrgb, pf);
 	uint32_t bytes = pf->bpp / 8;
 	for (uint32_t i = 0; i < bytes; i++)
 		out[pf->big_endian ? bytes - 1 - i : i] = (uint8_t)(v >> (8 * i));
 }
 
 // One Raw rectangle, header and pixels.
-static bool send_raw(rect_t r, const pixel_format_t *pf)
+static bool send_raw(rect_t r, const vnc_format_t *pf)
 {
 	uint8_t head[12];
 	put16(head, (uint16_t)r.x); put16(head + 2, (uint16_t)r.y);
@@ -264,9 +256,84 @@ static bool send_raw(rect_t r, const pixel_format_t *pf)
 	return true;
 }
 
+// ── ZRLE (encoding 16): tiles from zrle.c, one zlib stream per connection ──
+// RFC 6143 section 7.7.6: every rectangle's tiles go through the SAME zlib
+// stream, flushed at the rectangle's end so the viewer's inflate can finish
+// it, and the stream's two-byte header goes out once, in the first. A
+// rectangle is sent in bands of 64 rows — the tile height, so banding changes
+// nothing a viewer decodes — which bounds every buffer below by the width.
+
+static os64_deflate_t *s_zstream;
+static bool      s_zheader_sent;
+static uint32_t *s_band;                // one band of presented pixels
+static uint8_t  *s_tiles;               // its uncompressed tiles
+static uint8_t  *s_zout;                // and their compressed bytes
+static size_t    s_tiles_cap, s_zout_cap;
+
+static bool zrle_ready(void)
+{
+	if (s_zstream != NULL)
+		return true;
+	vnc_format_t widest = { 32, 32, 0, 255, 255, 255, 16, 8, 0 };   // 4 bytes a CPIXEL: the largest
+	s_tiles_cap = zrle_bound(s_w, ZRLE_TILE, &widest);
+	// Fixed Huffman spends at most nine bits a byte; add block headers, the
+	// stream header and a flush's marker.
+	s_zout_cap = s_tiles_cap + s_tiles_cap / 8 + (s_tiles_cap / 32768 + 2) * 8 + 64;
+	s_zstream = os64_deflate_create();
+	s_band = os64_malloc((size_t)s_w * ZRLE_TILE * sizeof(uint32_t));
+	s_tiles = os64_malloc(s_tiles_cap);
+	s_zout = os64_malloc(s_zout_cap);
+	if (!s_zstream || !s_band || !s_tiles || !s_zout)
+	{
+		log_line("vncd: out of memory for ZRLE");
+		return false;
+	}
+	return true;
+}
+
+static bool send_zrle(rect_t r, const vnc_format_t *pf)
+{
+	for (int32_t y = 0; y < r.h; y++)
+		for (int32_t x = 0; x < r.w; x++)
+			s_band[(size_t)y * (size_t)r.w + (size_t)x] = presented((uint32_t)(r.x + x), (uint32_t)(r.y + y));
+	size_t n = zrle_tiles(s_band, (size_t)r.w, (uint32_t)r.w, (uint32_t)r.h, pf, s_tiles);
+
+	uint8_t *out = s_zout;
+	size_t room = s_zout_cap;
+	if (!s_zheader_sent)
+	{
+		out[0] = 0x78;                       // deflate, 32 KiB window
+		out[1] = 0x01;                       // no dictionary; CMF*256+FLG is a multiple of 31
+		out += 2;
+		room -= 2;
+		s_zheader_sent = true;
+	}
+	const uint8_t *in = s_tiles;
+	size_t in_left = n;
+	while (in_left != 0)
+		if (os64_deflate_process(s_zstream, &in, &in_left, &out, &room, false) != OS64_DEFLATE_NEED_INPUT)
+		{
+			log_line("vncd: ZRLE compression outgrew its buffer");
+			return false;
+		}
+	if (os64_deflate_flush(s_zstream, &out, &room) != OS64_DEFLATE_NEED_INPUT)
+	{
+		log_line("vncd: ZRLE flush outgrew its buffer");
+		return false;
+	}
+	size_t zlen = (size_t)(out - s_zout);
+
+	uint8_t head[16];
+	put16(head, (uint16_t)r.x); put16(head + 2, (uint16_t)r.y);
+	put16(head + 4, (uint16_t)r.w); put16(head + 6, (uint16_t)r.h);
+	put32(head + 8, 16);                     // encoding 16: ZRLE
+	put32(head + 12, (uint32_t)zlen);
+	return out_bytes(head, sizeof(head)) && out_bytes(s_zout, zlen);
+}
+
 // Answer the outstanding request with whatever of the dirty list falls in
 // its rectangle. Returns false when the connection is gone.
-static bool answer(rect_t want, const pixel_format_t *pf)
+static bool answer(rect_t want, const vnc_format_t *pf, bool zrle)
 {
 	rect_t send[VNCD_DIRTY_MAX];
 	uint32_t n = 0;
@@ -286,13 +353,32 @@ static bool answer(rect_t want, const pixel_format_t *pf)
 	}
 	s_dirty_count = kept;
 
+	if (zrle && !zrle_ready())
+		return false;
+	// Under ZRLE each rectangle goes as its bands, and the count says so.
+	uint32_t count = 0;
+	for (uint32_t i = 0; i < n; i++)
+		count += zrle ? (uint32_t)((send[i].h + ZRLE_TILE - 1) / ZRLE_TILE) : 1;
 	uint8_t head[4] = { 0, 0, 0, 0 };        // FramebufferUpdate
-	put16(head + 2, (uint16_t)n);
+	put16(head + 2, (uint16_t)count);
 	if (!out_bytes(head, sizeof(head)))
 		return false;
 	for (uint32_t i = 0; i < n; i++)
-		if (!send_raw(send[i], pf))
-			return false;
+	{
+		if (!zrle)
+		{
+			if (!send_raw(send[i], pf))
+				return false;
+			continue;
+		}
+		for (int32_t y = 0; y < send[i].h; y += ZRLE_TILE)
+		{
+			rect_t band = { send[i].x, send[i].y + y, send[i].w,
+			                send[i].h - y < ZRLE_TILE ? send[i].h - y : ZRLE_TILE };
+			if (!send_zrle(band, pf))
+				return false;
+		}
+	}
 	return out_flush();
 }
 
@@ -321,7 +407,8 @@ static void outbound(void)
 		bool want = s_request;
 		bool full = s_request_full;
 		rect_t r = s_request_rect;
-		pixel_format_t pf = s_format;
+		vnc_format_t pf = s_format;
+		bool zrle = s_zrle;
 		unlock();
 		if (!want)
 			continue;
@@ -339,7 +426,7 @@ static void outbound(void)
 		s_request = false;
 		s_request_full = false;
 		unlock();
-		if (!answer(r, &pf))
+		if (!answer(r, &pf, zrle))
 			break;
 	}
 	__atomic_store_n(&s_quit, true, __ATOMIC_RELEASE);
@@ -490,8 +577,8 @@ static void pointer_event(uint8_t mask, uint16_t x, uint16_t y)
 
 static bool set_pixel_format(const uint8_t *pf)
 {
-	pixel_format_t f = {
-		.bpp = pf[0], .big_endian = pf[2] != 0,
+	vnc_format_t f = {
+		.bpp = pf[0], .depth = pf[1], .big_endian = pf[2] != 0,
 		.rmax = get16(pf + 4), .gmax = get16(pf + 6), .bmax = get16(pf + 8),
 		.rshift = pf[10], .gshift = pf[11], .bshift = pf[12],
 	};
@@ -525,13 +612,28 @@ static int64_t inbound(void *unused)
 				break;
 			case 2:                          // SetEncodings
 			{
+				// The viewer's list is in its order of preference: the first
+				// of ZRLE and Raw it names is the one it gets. Raw is always
+				// spoken, named or not.
 				if (!read_exact(m, 3))
 					goto done;
 				uint16_t count = get16(m + 1);
+				bool chosen = false, zrle = false;
 				for (uint16_t i = 0; i < count; i++)
+				{
 					if (!read_exact(m, 4))
 						goto done;
-				break;                       // Raw is always spoken
+					int32_t e = (int32_t)get32(m);
+					if (!chosen && (e == 16 || e == 0))
+					{
+						chosen = true;
+						zrle = e == 16;
+					}
+				}
+				lock();
+				s_zrle = zrle;
+				unlock();
+				break;
 			}
 			case 3:                          // FramebufferUpdateRequest
 			{
