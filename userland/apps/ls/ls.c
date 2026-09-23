@@ -3,6 +3,8 @@
 #define MAX_DIR_ENTRIES 512
 #define LS_PATH_MAX 512
 #define LS_MAX_PATHS 512
+// The width to lay out for when the terminal cannot be asked.
+#define LS_DEFAULT_WIDTH 80
 // GNU/POSIX ls's "six months" display boundary: half an average Gregorian
 // year. Recent files show HH:MM; older and future-dated files show the year.
 #define LS_RECENT_SECONDS (31556952 / 2)
@@ -109,25 +111,144 @@ static void format_mtime(uint64_t mtime, int64_t currentEpoch,
                       month, date.day, date.year);
 }
 
-static void print_entry(const os64_dirent_t *entry, bool longMode,
-                        bool humanReadable, bool fullTime,
-                        int64_t currentEpoch)
+typedef struct {
+    bool longMode;
+    bool humanReadable;
+    bool fullTime;
+    int64_t currentEpoch;
+    int32_t termWidth;
+} ls_options_t;
+
+// A name is measured in BYTES, and on os64's terminals that is also its
+// width in cells: the console draws one glyph per byte (Latin-1 or CP437),
+// so even a UTF-8 name occupies exactly as many cells as it has bytes.
+static int32_t name_width(const os64_dirent_t *entry)
 {
-    if (!longMode)
+    return (int32_t)os64_strlen(entry->name);
+}
+
+// The columns are measured from what is being listed, never fixed, and the
+// name is never clipped: a listing that shortens a name shows a file that
+// does not exist.
+//
+// Short form fills DOWN the columns (the Unix reading order: the eye runs
+// down a column, so the listing's order survives the layout) and chooses the
+// most columns whose total width fits.
+// Each column is as wide as its longest name plus a two-space gutter, except
+// the last, which is never padded. The fit is strictly narrower than the
+// terminal, so no row ever depends on whether a write to the last cell wraps.
+// A name wider than the terminal gets a row to itself and wraps as it must.
+static void print_short_listing(const os64_dirent_t *entries, int32_t count,
+                                int32_t termWidth)
+{
+    const int32_t gutter = 2;
+    int32_t rows = count;   // one column: the fallback that always "fits"
+
+    for (int32_t columns = count; columns > 1; columns--)
     {
-        os64_printf("%-20.19s", entry->name);
-        return;
+        int32_t tryRows = (count + columns - 1) / columns;
+        // Filling down with tryRows rows may need fewer columns than asked;
+        // measure the layout that would actually print.
+        int32_t used = (count + tryRows - 1) / tryRows;
+        int32_t total = 0;
+        for (int32_t column = 0; column < used && total < termWidth; column++)
+        {
+            int32_t widest = 0;
+            for (int32_t row = 0; row < tryRows; row++)
+            {
+                int32_t index = column * tryRows + row;
+                if (index < count && name_width(&entries[index]) > widest)
+                    widest = name_width(&entries[index]);
+            }
+            total += widest + (column + 1 < used ? gutter : 0);
+        }
+        if (total < termWidth)
+        {
+            rows = tryRows;
+            break;
+        }
     }
 
-    char size[32];
-    char mtime[32];
-    format_size(entry->size, humanReadable, size, sizeof(size));
-    format_mtime(entry->mtime, currentEpoch, fullTime,
-                 mtime, sizeof(mtime));
-    int32_t timeWidth = fullTime ? 19 : 12;
-    os64_printf("%-32.31s %10s  %*s  %s\n", entry->name, size,
-                timeWidth, mtime,
-                (entry->flags & OS64_DE_DIR) ? "<dir>" : "<file>");
+    int32_t columns = (count + rows - 1) / rows;
+    for (int32_t row = 0; row < rows; row++)
+    {
+        for (int32_t column = 0; column < columns; column++)
+        {
+            int32_t index = column * rows + row;
+            if (index >= count)
+                break;
+            // The next entry to the right decides whether this cell pads:
+            // a row's last name ends the line with no trailing spaces.
+            bool last = column + 1 >= columns || index + rows >= count;
+            if (last)
+            {
+                os64_printf("%s", entries[index].name);
+                continue;
+            }
+            int32_t widest = 0;
+            for (int32_t r = 0; r < rows; r++)
+            {
+                int32_t other = column * rows + r;
+                if (other < count && name_width(&entries[other]) > widest)
+                    widest = name_width(&entries[other]);
+            }
+            os64_printf("%-*s", widest + gutter, entries[index].name);
+        }
+        os64_printf("\n");
+    }
+}
+
+// Long form measures every column but the name, and puts the name LAST —
+// the one column of unbounded width goes where nothing follows it, so it is
+// never clipped and nothing after it is pushed out of line.
+static void print_long_listing(const os64_dirent_t *entries, int32_t count,
+                               const ls_options_t *options)
+{
+    int32_t kindWidth = 0;
+    int32_t sizeWidth = 0;
+    int32_t timeWidth = 0;
+    char text[32];
+
+    for (int32_t i = 0; i < count; i++)
+    {
+        int32_t width = (entries[i].flags & OS64_DE_DIR) ? 5 : 6;
+        if (width > kindWidth)
+            kindWidth = width;
+        format_size(entries[i].size, options->humanReadable,
+                    text, sizeof(text));
+        width = (int32_t)os64_strlen(text);
+        if (width > sizeWidth)
+            sizeWidth = width;
+        format_mtime(entries[i].mtime, options->currentEpoch,
+                     options->fullTime, text, sizeof(text));
+        width = (int32_t)os64_strlen(text);
+        if (width > timeWidth)
+            timeWidth = width;
+    }
+
+    for (int32_t i = 0; i < count; i++)
+    {
+        char size[32];
+        char mtime[32];
+        format_size(entries[i].size, options->humanReadable,
+                    size, sizeof(size));
+        format_mtime(entries[i].mtime, options->currentEpoch,
+                     options->fullTime, mtime, sizeof(mtime));
+        os64_printf("%-*s  %*s  %*s  %s\n", kindWidth,
+                    (entries[i].flags & OS64_DE_DIR) ? "<dir>" : "<file>",
+                    sizeWidth, size, timeWidth, mtime, entries[i].name);
+    }
+}
+
+static void print_listing(const os64_dirent_t *entries, int32_t count,
+                          const ls_options_t *options)
+{
+    if (count == 0)
+        return;
+    if (options->longMode)
+        print_long_listing(entries, count, options);
+    else
+        print_short_listing(entries, count, options->termWidth);
 }
 
 static int32_t get_directory_listing(const char *path,
@@ -230,6 +351,17 @@ int main(int argc, char **argv)
     if (longMode)
         os64_time(&now);   // failure leaves epoch 0: safely choose year form
 
+    ls_options_t options = {
+        .longMode = longMode,
+        .humanReadable = humanReadable,
+        .fullTime = fullTime,
+        .termWidth = LS_DEFAULT_WIDTH
+    };
+    options.currentEpoch = now.epoch;
+    os64_tty_info_t tty = {0};
+    if (os64_tty_read(&tty) == 0 && tty.cols > 0)
+        options.termWidth = (int32_t)tty.cols;
+
     ls_sort_t sort = sortTime ? LS_SORT_TIME :
                      sortSize ? LS_SORT_SIZE : LS_SORT_DIRECTORY;
     int32_t returnCode = 0;
@@ -247,9 +379,7 @@ int main(int argc, char **argv)
 
         if ((statEntry.flags & OS64_DE_DIR) == 0)
         {
-            print_entry(&statEntry, longMode, humanReadable, fullTime, now.epoch);
-            if (!longMode)
-                os64_printf("\n");
+            print_listing(&statEntry, 1, &options);
             printedOperand = true;
             continue;
         }
@@ -269,16 +399,7 @@ int main(int argc, char **argv)
             continue;
         }
         sort_entries(dirEntries, entryCount, sort);
-
-        for (int32_t i = 0; i < entryCount; i++)
-        {
-            print_entry(&dirEntries[i], longMode, humanReadable,
-                        fullTime, now.epoch);
-            if (!longMode && (i + 1) % 5 == 0)
-                os64_printf("\n");
-        }
-        if (!longMode && entryCount % 5 != 0)
-            os64_printf("\n");
+        print_listing(dirEntries, entryCount, &options);
         printedOperand = true;
     }
     return returnCode;
