@@ -129,8 +129,10 @@ bool handle_close(struct task *t, int h);
 // closer owns), and *rc receives the filesystem's own answer for the last
 // close of a file — 0, or its nonzero code when what was written could not
 // be committed. Two facts in two places, because a filesystem's -1 and "no
-// such handle" must never be one number (os64/file.h).
-bool handle_close_rc(struct task *t, int h, int *rc);
+// such handle" must never be one number (os64/file.h). *deferred: the
+// verdict belongs to an operation still in flight on another thread, and
+// this close does not have it.
+bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred);
 
 // Close every handle a task holds. Called on task exit — WITHOUT this, a task
 // that dies holding a pipe end keeps that end open forever, and the process on
@@ -153,6 +155,10 @@ void handle_close_all(struct task *t);
 // (rd14), because most callers have nowhere to report to and silence there was
 // the original defect: on FAT the commit happens inside close.
 int handle_file_object_close(void *vfs_file);
+// The same, and whether the verdict went elsewhere: *deferred is set when
+// this was not the last holder and what remains is an operation in flight
+// (a pin), whose unpin will do the real close with nowhere to answer to.
+int handle_file_object_close_verdict(void *vfs_file, bool *deferred);
 
 // The directory sibling: drops one reference on a HANDLE_DIR's
 // vfs_directory_t (handleRefCount, vfs.h — the table's one, or a pin's), and

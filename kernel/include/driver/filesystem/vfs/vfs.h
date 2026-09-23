@@ -338,6 +338,12 @@ struct file
 	// handle_file_object_close (--, close at 0); kernel-internal users that
 	// call fops->open/close directly (ELF loader etc.) never touch it.
 	int handleRefCount;
+	// How many of those holders are OPERATIONS IN FLIGHT (handle_pin) rather
+	// than handles. A close that is not the last holder needs to know which
+	// kind is left: another handle will close in its own time and answer for
+	// itself, but a pin's unpin does the real close with nowhere to put the
+	// verdict — so that close answers "deferred" instead of 0 (os64/file.h).
+	int pinCount;
 	//arena_t* arena;
 
 	// OPEN-FILE REGISTRY links (vfs.c, since 2026-08-06 — the sync(8) slice).

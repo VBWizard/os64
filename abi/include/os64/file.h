@@ -28,4 +28,16 @@
 // parent and child) does the work, so only the last close can answer this.
 #define OS64_CLOSE_NOT_COMMITTED   (-3)
 
+// CLOSE: THE HANDLE IS GONE, AND THE VERDICT IS NOT THIS CLOSE'S TO GIVE.
+// Another thread of the same task was in the middle of an operation on the
+// same handle; the file stays open until that operation ends, and ITS end
+// does the real close — which has nowhere to return to, so the commit's
+// outcome goes to the kernel log alone. A program that closes a handle
+// while it is using it on another thread is told exactly that, rather than
+// 0. If the outcome matters, os64_sync before the close (its answer is the
+// flush's own) or do not race yourself. Never answered for a handle shared
+// with a child by spawn: that copy will close in its own time and its close
+// answers for the file.
+#define OS64_CLOSE_DEFERRED        (-4)
+
 #endif // OS64_ABI_FILE_H

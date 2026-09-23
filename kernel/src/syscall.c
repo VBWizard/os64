@@ -2645,13 +2645,17 @@ static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (task == NULL)
 		return SYSCALL_RESULT_INVALID;
 
-	// Three answers, and the middle one is the point (os64/file.h): the
-	// handle is gone in both of the last two, and only the bytes differ.
+	// Four answers (os64/file.h). The handle is gone in every case but the
+	// first; what differs is what this close can honestly say about the
+	// bytes: nothing left undone, not committed, or not its to know.
 	int rc;
-	if (!handle_close_rc(task, (int)(int64_t)arg0, &rc))
+	bool deferred;
+	if (!handle_close_rc(task, (int)(int64_t)arg0, &rc, &deferred))
 		return SYSCALL_RESULT_INVALID;
 	if (rc != 0)
 		return (uint64_t)(int64_t)OS64_CLOSE_NOT_COMMITTED;
+	if (deferred)
+		return (uint64_t)(int64_t)OS64_CLOSE_DEFERRED;
 	return 0;
 }
 
