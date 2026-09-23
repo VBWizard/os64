@@ -468,9 +468,18 @@ how a worklist fills with things nobody intends to do.
   address-space design/fix needs kernel-scope discussion. Evidence and
   source pointers: `SSHD.md`, `userland/tools/app_bases.py`,
   `kernel/include/task.h`, `task_alloc_aligned`/`task_reserve_task_virt`.
-- **SSH v1 intentionally lacks Ed25519, SFTP/scp, forwarding, passwords,
-  per-user identities, and concurrent session channels.** Reverse these
-  boundaries when a concrete client or file-transfer consumer needs them.
+- **SSH v1 intentionally lacks Ed25519, SFTP/scp, remote forwarding
+  (`tcpip-forward`), local forwarding beyond this machine's loopback,
+  passwords, per-user identities, and concurrent session channels.** Reverse
+  these boundaries when a concrete client or file-transfer consumer needs
+  them. Local forwarding to 127/8 arrived 2026-09-23 for REMOTE.md.
+- **A forward cannot pass on a half-close.** A client EOF on a `direct-tcpip`
+  channel ends the local connection whole once the client's bytes are
+  delivered (SSHD.md § Local forwarding), because ring 3 has no TCP
+  shutdown-for-writing. A local service that answers after its client
+  half-closes (`nc -N`, some one-shot request protocols) loses that answer.
+  Reverse with a half-close verb on TCP handles when such a service is
+  forwarded.
   Public keys grant machine access; usernames are recorded without defining
   users. No authorized key ships in the image.
 - **SSH exec inherits husk's 255-byte argument/line limit and shell syntax.**

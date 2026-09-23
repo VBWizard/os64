@@ -148,25 +148,27 @@ which the host cannot send through QEMU's user network.
 
 ## 2. sshd — channels, plural
 
-Today the engine has one channel, and it is one in the most literal sense.
-`peer_channel`, `peer_window`, `receive_window`, `sent_close` and the rest are
-scalars, and any channel number other than 0 is a DISCONNECT.
-`ssh -N -L 5900:localhost:5900` opens no session channel at all, and a plain
-`ssh -L` opens a session AND a forward. Both need a table.
+The engine had one channel, in the most literal sense: `peer_channel`,
+`peer_window`, `receive_window`, `sent_close` and the rest were scalars, and
+any channel number other than 0 was a DISCONNECT. `ssh -N -L
+5900:localhost:5900` opens no session channel at all, and a plain `ssh -L`
+opens a session AND a forward. SSHD.md § Local forwarding is the record of
+what was built. In brief:
 
-- **A channel table of 8 slots**: at most one `session` plus `direct-tcpip`
-  forwards. Each slot has its own ids, both windows, peer max packet, EOF and
-  CLOSE state in each direction, and its kind. Every channel message looks
-  its slot up by our id, and an unknown or closed id is a protocol violation
-  (DISCONNECT, as now). A ninth open gets OPEN_FAILURE `RESOURCE_SHORTAGE`.
-  The events the engine hands the daemon carry the slot.
+- **The session stays local channel 0, with its reviewed fields untouched;
+  forwards are a table beside it**, local channels 1–7. Every forward
+  message looks its slot up by our id, and a free slot's id is a protocol
+  violation (DISCONNECT, as before). An eighth open gets OPEN_FAILURE
+  `RESOURCE_SHORTAGE`. The engine stays pure: it raises `FORWARD_OPEN`,
+  `_DATA`, `_EOF` and `_CLOSE` events naming the slot, and the daemon does
+  the I/O. An open is completed before the next packet is read, which is
+  resize's contract.
 - **`direct-tcpip`** (RFC 4254 §7.2) resolves the requested host with
   `os64_resolve`, the same resolver every dialer uses, and accepts only an
   address in `127.0.0.0/8`. The check is on the ADDRESS, never the spelling,
   so `localhost` works because `/etc/hosts` says `127.0.0.1 localhost` (slice
-  1 adds that line, since slice 1 makes it true). A resolve blocks only the
-  session asking, because each connection is its own process. Anything else
-  gets OPEN_FAILURE
+  1 added that line). A resolve blocks only the session asking, because each
+  connection is its own process. Anything else gets OPEN_FAILURE
   `ADMINISTRATIVELY_PROHIBITED` with the text "forwarding reaches this
   machine's loopback only". An authorized key holder can already dial
   anywhere from a shell, so this is not a security boundary against them. It
@@ -174,31 +176,41 @@ scalars, and any channel number other than 0 is a DISCONNECT.
   smallest thing that serves the consumer. A refused dial gets
   `CONNECT_FAILED` with `os64_dial_reason`'s text.
 - **`sshd.conf` gets `forward = loopback`** (the default) or `forward = none`.
-  An unknown value refuses startup. This follows round 9's port rule: a file
-  the operator wrote is never half-read.
+  An unknown value refuses startup, following round 9's port rule: a file the
+  operator wrote is never half-read. The listener hands each session the
+  policy on its command line.
 - **The relay lives in the existing event loop.** No new threads are needed,
   because network handles take `os64_read_for`/`os64_write_for` with zero
   patience:
-  - Client to local: CHANNEL_DATA goes into a per-channel bounded queue,
-    drained with non-blocking writes. WINDOW_ADJUST is sent as bytes
-    actually leave, which is the same credit discipline stdin uses today.
-  - Local to client: read only while the peer window and the output queue
-    have room, so TCP's own window is the backpressure.
+  - Client to local: CHANNEL_DATA goes into the forward's queue (its 256 KiB
+    window), drained with non-blocking writes. WINDOW_ADJUST is sent as
+    bytes actually leave, the credit discipline stdin uses.
+  - Local to client: one 32 KiB staging buffer per forward, read only when it
+    is empty, so TCP's own window is the backpressure. The buffers are
+    allocated when a forward opens: seven reserved up front did not fit
+    sshd's link slot.
+  - Forwards share one output queue, served round robin from wherever the
+    queue last ran out, which keeps busy forwards within one staging buffer
+    of each other. The streams' "after the first sender" rule is exact for
+    two and drifts for three or more; the harness shows both.
   - Local EOF becomes CHANNEL_EOF then CLOSE. Client CLOSE closes the local
-    handle. Channels take turns, the same rotation that fixed the
-    stdout/stderr split in rounds 1 and 4.
-- **The loop sleeps only when a pass moved nothing.** Today every pass ends in
-  `os64_sleep(1)`, one tick, and reads at most 8 KiB. That is fine for a shell
-  and a ceiling of about 800 KB/s for a framebuffer. Draining until no
-  progress, then parking, removes that ceiling without spinning.
-- **Proof:** the engine fixture gains a channel-table matrix (open, close and
-  reuse; interleaved data; per-channel window violations; a ninth open; a
-  non-loopback destination; `forward = none`). The host OpenSSH suite gains
-  `ssh -N -L` and `ssh -L` plus a shell, against a host echo server. In the
-  guest, `ssh -L` through QEMU hostfwd reaches `looptest`'s listener.
-  Checksummed MiBs both ways, with forced rekeys mid-stream.
-- **Paid:** the DEBTS row "SSH v1 intentionally lacks … forwarding …
-  concurrent session channels" loses its forwarding clause. Concurrent
+    connection. **A client EOF closes it whole** once the client's bytes are
+    delivered, because ring 3 has no half-close (DEBTS). A viewer closes
+    fully and loses nothing.
+  - A closed session does not end the connection while forwards are live.
+- **The loop naps only on a pass that moved nothing.** It used to end every
+  pass with `os64_sleep(1)`, one tick, and to read at most 8 KiB. That is fine
+  for a shell and a ceiling of about 800 KB/s for a framebuffer.
+- **Proof:** `sshtest` (2330 checks, host and guest) gained a forward matrix.
+  The daemon-loop harness gained `forward`, `forwardfair` and `linger`. The
+  host adapter mirrors the daemon, and real OpenSSH `ssh -N -L` moved 3 MiB
+  each way, again across client and server rekeys, along with seven
+  concurrent forwards, the eighth refused, both refusals, and a session
+  sharing the connection. In QEMU, host `ssh -N -L` through the port forward
+  to `looptest echo 127.0.0.1` echoed 3 MiB each way with every byte
+  matching, and `tools/sshd_probe.py` stayed green.
+- **Paid:** the DEBTS row "SSH v1 intentionally lacks … forwarding" now names
+  only remote forwarding and destinations beyond loopback. Concurrent
   *session* channels stay unsupported, because nothing needs them.
 
 ## 3. `/dev/glass`, read side — what the screen shows

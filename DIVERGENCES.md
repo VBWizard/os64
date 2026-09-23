@@ -226,6 +226,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 SSH public keys authorize access to the machine, not to a per-user account.
 os64 records the username from an accepted SSH login but has no user database
 or per-user permissions to apply. The v1 server supports ECDSA P-256 keys,
-non-PTY exec, and a STREAM-PTY shell, with one session channel per connection.
+non-PTY exec, and a STREAM-PTY shell, with one session channel per connection,
+and local forwarding (`ssh -L`) to this machine's loopback only.
 Unsupported authentication and channel features are refused on the wire;
 see SSHD.md for the bounds and supported OpenSSH client.

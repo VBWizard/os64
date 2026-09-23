@@ -262,6 +262,157 @@ static void deferred_close(void)
     CHECK(!engine.closed && !engine.kex && !engine.deferred_len && engine.rx.active);
     CHECK(engine.out_len>=10 && engine.output[5]==97 && engine.output[9]==17);
 }
+/* The payload of the last packet the engine queued, from plaintext output
+ * (reset_connection leaves the transmit direction without keys). */
+static const uint8_t *last_sent(size_t *len)
+{
+    const uint8_t *p=engine.output+engine.out_head, *last=0; size_t left=engine.out_len; *len=0;
+    while(left>=5) {
+        uint32_t total=((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
+        if(total+4>left || total<1u+p[4]) break;
+        last=p+5; *len=total-1-p[4]; p+=total+4; left-=total+4;
+    }
+    return last;
+}
+static uint32_t be32(const uint8_t *p) { return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]; }
+static void send_open(uint32_t id, const char *host, uint32_t port, uint32_t window, uint32_t max, int trailing)
+{
+    ssh_writer w={payload,0,sizeof(payload),0};
+    ssh_put_byte(&w,90); ssh_put_text(&w,"direct-tcpip"); ssh_put_u32(&w,id);
+    ssh_put_u32(&w,window); ssh_put_u32(&w,max);
+    ssh_put_text(&w,host); ssh_put_u32(&w,port); ssh_put_text(&w,"127.0.0.1"); ssh_put_u32(&w,50000);
+    if(trailing) ssh_put_byte(&w,0);
+    size_t n=frame(wire,payload,w.n); CHECK(ssh_receive(&engine,wire,n)==n);
+}
+static void send_channel(uint8_t type, uint32_t id, const char *text, uint32_t value)
+{
+    ssh_writer w={payload,0,sizeof(payload),0};
+    ssh_put_byte(&w,type); ssh_put_u32(&w,id);
+    if(type==93) ssh_put_u32(&w,value);
+    if(type==94) ssh_put_text(&w,text);
+    if(type==98) { ssh_put_text(&w,text); ssh_put_byte(&w,(uint8_t)value); }
+    size_t n=frame(wire,payload,w.n); ssh_receive(&engine,wire,n);
+}
+/* An open the caller confirms: forward 0, local channel 1, peer channel `id`. */
+static void open_forward(uint32_t id, uint32_t window)
+{
+    send_open(id,"localhost",5900,window,32768,0);
+    CHECK(engine.event==SSH_EVENT_FORWARD_OPEN);
+    uint32_t f=engine.event_forward;
+    ssh_forward_result(&engine,f,1,0,"");
+    CHECK(engine.forwards[f].state==SSH_FORWARD_OPEN && engine.event==SSH_EVENT_NONE);
+}
+static void forwards(void)
+{
+    size_t len; const uint8_t *p;
+    /* Policy none: refused with the reason, nothing handed to the caller. */
+    reset_connection(); engine.out_len=0;
+    send_open(40,"localhost",5900,1000,32768,0);
+    p=last_sent(&len);
+    CHECK(engine.event==SSH_EVENT_NONE && p && p[0]==92 && be32(p+1)==40 && be32(p+5)==1);
+    CHECK(!ssh_forwards_live(&engine));
+    /* Loopback policy: the destination reaches the caller, and success
+     * confirms with our channel 1, the forward window and packet size. */
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK;
+    send_open(41,"localhost",5900,1000,32768,0);
+    CHECK(engine.event==SSH_EVENT_FORWARD_OPEN && engine.event_forward==0);
+    CHECK(!memcmp(engine.forwards[0].host,"localhost",10) && engine.forwards[0].port==5900);
+    CHECK(engine.forwards[0].state==SSH_FORWARD_OPENING && ssh_forwards_live(&engine)==1);
+    engine.out_len=0; ssh_forward_result(&engine,0,1,0,""); p=last_sent(&len);
+    CHECK(p && len==17 && p[0]==91 && be32(p+1)==41 && be32(p+5)==1 && be32(p+9)==SSH_FORWARD_WINDOW && be32(p+13)==SSH_DATA_MAX);
+    /* Data in: an event with the bytes, the window spent, then credited. */
+    send_channel(94,1,"keys",0);
+    CHECK(engine.event==SSH_EVENT_FORWARD_DATA && engine.event_forward==0 && engine.event_len==4 && !memcmp(engine.event_data,"keys",4));
+    CHECK(engine.forwards[0].receive_window==SSH_FORWARD_WINDOW-4);
+    engine.out_len=0; ssh_forward_consumed(&engine,0,4); p=last_sent(&len);
+    CHECK(engine.forwards[0].receive_window==SSH_FORWARD_WINDOW && p && p[0]==93 && be32(p+1)==41 && be32(p+5)==4);
+    /* Data out is clamped by the peer's window, and an adjust restores it. */
+    CHECK(ssh_forward_send(&engine,0,(const uint8_t *)"0123456789abcdef",16)==16);
+    CHECK(engine.forwards[0].peer_window==984);
+    uint8_t big[2000]; memset(big,'x',sizeof(big));
+    CHECK(ssh_forward_send(&engine,0,big,sizeof(big))==984 && !engine.forwards[0].peer_window);
+    CHECK(ssh_forward_send(&engine,0,big,1)==0);
+    send_channel(93,1,0,500); CHECK(!engine.closed && engine.forwards[0].peer_window==500);
+    /* A request on a forward is refused when it asks for an answer. */
+    engine.out_len=0; send_channel(98,1,"env",1); p=last_sent(&len);
+    CHECK(!engine.closed && p && p[0]==100 && be32(p+1)==41);
+    /* Local end first: EOF and CLOSE go out; the slot waits for theirs. */
+    engine.out_len=0; CHECK(ssh_forward_finish(&engine,0)); p=last_sent(&len);
+    CHECK(engine.forwards[0].sent_close && p && p[0]==97 && be32(p+1)==41);
+    CHECK(engine.out_len && engine.output[5]==96);
+    send_channel(94,1,"late",0); CHECK(!engine.closed && engine.event==SSH_EVENT_NONE);
+    engine.out_len=0; send_channel(97,1,0,0);
+    CHECK(engine.event==SSH_EVENT_FORWARD_CLOSE && engine.event_forward==0 && !engine.out_len);
+    CHECK(engine.forwards[0].state==SSH_FORWARD_FREE && !ssh_forwards_live(&engine));
+    /* A dead channel number is a protocol violation. */
+    send_channel(94,1,"ghost",0); CHECK(engine.closed);
+    /* Peer closes first: we answer with our CLOSE and free the slot. */
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK; open_forward(42,1000);
+    engine.out_len=0; send_channel(97,1,0,0); p=last_sent(&len);
+    CHECK(engine.event==SSH_EVENT_FORWARD_CLOSE && p && p[0]==97 && be32(p+1)==42 && !ssh_forwards_live(&engine));
+    /* EOF from the client is an event, and data after it is a violation. */
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK; open_forward(43,1000);
+    send_channel(96,1,0,0); CHECK(engine.event==SSH_EVENT_FORWARD_EOF && engine.forwards[0].input_eof);
+    send_channel(94,1,"after",0); CHECK(engine.closed);
+    /* Window violations disconnect: overflowing an adjust, overrunning ours. */
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK; open_forward(44,1000);
+    send_channel(93,1,0,UINT32_MAX); CHECK(engine.closed);
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK; open_forward(45,1000);
+    engine.forwards[0].receive_window=3; send_channel(94,1,"four",0); CHECK(engine.closed);
+    /* The caller's refusal carries its reason and frees the slot. */
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK;
+    send_open(46,"example.com",80,1000,32768,0); CHECK(engine.event==SSH_EVENT_FORWARD_OPEN);
+    engine.out_len=0; ssh_forward_result(&engine,0,0,1,"forwarding reaches this machine's loopback only"); p=last_sent(&len);
+    CHECK(p && p[0]==92 && be32(p+1)==46 && be32(p+5)==1 && !ssh_forwards_live(&engine));
+    /* A result that answers no pending open changes nothing. */
+    engine.out_len=0; ssh_forward_result(&engine,0,1,0,""); CHECK(!engine.out_len && !ssh_forwards_live(&engine));
+    /* Destinations the engine refuses on sight, without troubling the caller. */
+    const char *bad_hosts[]={"","two words","tab\there"};
+    for(unsigned i=0;i<3;i++) {
+        reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK;
+        send_open(47,bad_hosts[i],5900,1000,32768,0); p=last_sent(&len);
+        CHECK(engine.event==SSH_EVENT_NONE && p && p[0]==92 && be32(p+5)==1 && !ssh_forwards_live(&engine));
+    }
+    char long_host[SSH_FORWARD_HOST_MAX+2]; memset(long_host,'a',sizeof(long_host)-1); long_host[sizeof(long_host)-1]=0;
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK;
+    send_open(48,long_host,5900,1000,32768,0); CHECK(engine.event==SSH_EVENT_NONE && !ssh_forwards_live(&engine));
+    long_host[SSH_FORWARD_HOST_MAX]=0;
+    send_open(48,long_host,5900,1000,32768,0); CHECK(engine.event==SSH_EVENT_FORWARD_OPEN);
+    uint32_t bad_ports[]={0,65536};
+    for(unsigned i=0;i<2;i++) {
+        reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK;
+        send_open(49,"localhost",bad_ports[i],1000,32768,0);
+        CHECK(engine.event==SSH_EVENT_NONE && !ssh_forwards_live(&engine));
+    }
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK;
+    send_open(50,"localhost",5900,1000,0,0); CHECK(engine.event==SSH_EVENT_NONE && !ssh_forwards_live(&engine));
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK;
+    send_open(51,"localhost",5900,1000,32768,1); CHECK(engine.closed);
+    /* Seven forwards, then RESOURCE_SHORTAGE; a freed slot is reused. */
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK;
+    for(uint32_t i=0;i<SSH_FORWARDS;i++) { open_forward(60+i,1000); CHECK(engine.forwards[i].peer_channel==60+i); }
+    engine.out_len=0; send_open(70,"localhost",5900,1000,32768,0); p=last_sent(&len);
+    CHECK(engine.event==SSH_EVENT_NONE && p && p[0]==92 && be32(p+1)==70 && be32(p+5)==4);
+    send_channel(97,4,0,0); CHECK(engine.event==SSH_EVENT_FORWARD_CLOSE && engine.event_forward==3);
+    send_open(71,"localhost",5900,1000,32768,0); CHECK(engine.event==SSH_EVENT_FORWARD_OPEN && engine.event_forward==3);
+    ssh_forward_result(&engine,3,1,0,""); CHECK(ssh_forwards_live(&engine)==SSH_FORWARDS);
+    send_channel(94,8,"none",0); CHECK(engine.closed);
+    /* The session and a forward share the connection without crossing. */
+    reset_connection(); engine.forward_policy=SSH_FORWARD_LOOPBACK;
+    ssh_writer w={payload,0,sizeof(payload),0};
+    ssh_put_byte(&w,90); ssh_put_text(&w,"session"); ssh_put_u32(&w,17); ssh_put_u32(&w,1000); ssh_put_u32(&w,32768);
+    size_t n=frame(wire,payload,w.n); ssh_receive(&engine,wire,n); CHECK(engine.channel);
+    engine.started=1; open_forward(18,1000);
+    send_channel(94,0,"shell",0); CHECK(engine.event==SSH_EVENT_INPUT && engine.event_len==5);
+    send_channel(94,1,"vnc",0); CHECK(engine.event==SSH_EVENT_FORWARD_DATA && engine.event_len==3);
+    CHECK(engine.receive_window==SSH_WINDOW-5 && engine.forwards[0].receive_window==SSH_FORWARD_WINDOW-3);
+    send_channel(97,0,0,0); CHECK(engine.event==SSH_EVENT_CLOSE && ssh_forwards_live(&engine)==1);
+    /* A key exchange holds a forward's close, as it holds exit-status. */
+    engine.kex=1; CHECK(!ssh_forward_finish(&engine,0) && !engine.forwards[0].sent_close);
+    engine.kex=0; CHECK(ssh_forward_finish(&engine,0) && engine.forwards[0].sent_close);
+    /* Out-of-range and non-open forwards are inert to the caller's calls. */
+    CHECK(!ssh_forward_send(&engine,SSH_FORWARDS,big,1) && ssh_forward_finish(&engine,SSH_FORWARDS));
+}
 static void authentication(void)
 {
     uint8_t point[65], blob[104], digest[32], raw[64], pair[80], sig[128], sid[36];
@@ -458,7 +609,7 @@ int main(int argc, char **argv)
 #else
     (void)argc; (void)argv;
 #endif
-    primitives(); codecs(); framing(); channels(); refused_dimensions(); dimension_bounds(); resize_results(); term_env(); deferred_close(); deferred_reservation(); authentication(); preauth_messages(); exchange_refusals(); transport_messages(); unknown_during_kex(); identification();
+    primitives(); codecs(); framing(); channels(); refused_dimensions(); dimension_bounds(); resize_results(); term_env(); deferred_close(); deferred_reservation(); forwards(); authentication(); preauth_messages(); exchange_refusals(); transport_messages(); unknown_during_kex(); identification();
     report("sshtest: %d checks, %d failures\n",checks,failed);
     return failed?1:0;
 }
