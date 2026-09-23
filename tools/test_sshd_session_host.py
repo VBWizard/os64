@@ -89,8 +89,10 @@ static size_t fair_budget,fair_sent[SSH_FORWARDS];
  * per pass, sized by the engine's rule (what fits, less framing: 65 for a
  * stdout or forward packet, 69 for stderr). */
 static size_t room,room_refill;
+static int blocked_forward=-1; /* forwardblocked: one forward's own window is spent */
+int ssh_output_full(const ssh_engine *s) {(void)s;return scenario==3?room<=65:fair_budget==0;}
 size_t ssh_forward_send(ssh_engine *s,uint32_t f,const uint8_t *p,size_t n) {
- (void)s;(void)p;
+ (void)s;(void)p;if((int)f==blocked_forward)return 0;
  if(scenario==3) {if(room<=65)return 0;if(n>room-65)n=room-65;room-=n+65;fair_sent[f]+=n;return n;}
  if(n>fair_budget) {n=fair_budget;}
  fair_budget-=n;fair_sent[f]+=n;return n;
@@ -244,6 +246,19 @@ int main(int argc,char **argv) {
   for(unsigned pass=0;pass<300;pass++) {fair_budget=40000;assert(real_forwards_pass());}
   for(uint32_t i=0;i<3;i++) for(uint32_t j=0;j<3;j++) assert(fair_sent[i]<=fair_sent[j]+SSH_DATA_MAX);
   assert(fair_sent[0]+fair_sent[1]+fair_sent[2]==300u*40000u);
+ } else if(!strcmp(argv[1],"forwardblocked")) {
+  /* Three busy forwards, the first held back by its own spent window, and
+   * less room a pass than one staged read. The held-back one is not where
+   * the queue ran out, so it must not pin the rotation: the other two share
+   * the room, neither more than one staging buffer ahead. */
+  reset();blocked_forward=0;
+  for(uint32_t i=0;i<SSH_FORWARDS;i++) links[i].handle=-1;
+  static uint8_t bto[3][SSH_FORWARD_WINDOW],bfrom[3][SSH_DATA_MAX];
+  for(uint32_t i=0;i<3;i++) {links[i].handle=(int32_t)(10+i);links[i].to_local=bto[i];links[i].from_local=bfrom[i];}
+  for(unsigned pass=0;pass<300;pass++) {fair_budget=20000;real_forwards_pass();}
+  printf("forwardblocked: %zu %zu %zu\n",fair_sent[0],fair_sent[1],fair_sent[2]);fflush(stdout);
+  assert(!fair_sent[0] && fair_sent[1]+fair_sent[2]==300u*20000u);
+  assert(fair_sent[1]<=fair_sent[2]+SSH_DATA_MAX && fair_sent[2]<=fair_sent[1]+SSH_DATA_MAX);
  } else if(!strcmp(argv[1],"closedrain")) {
   /* The client's CLOSE crossed ours with bytes still queued for the local
    * end: nothing more is read from it, the queue is delivered first, and
@@ -298,5 +313,5 @@ with tempfile.TemporaryDirectory(prefix='sshd-session-') as directory:
                     '-I'+str(root / 'userland/libos64/include'),
                     str(work / 'test.c'),
                     '-o', str(work / 'test')], check=True)
-    results = [subprocess.run([str(work / 'test'), case]).returncode for case in ('flush','close','fair','resize','port','forward','forwardfair','closedrain','mixedfair','linger')]
+    results = [subprocess.run([str(work / 'test'), case]).returncode for case in ('flush','close','fair','resize','port','forward','forwardfair','forwardblocked','closedrain','mixedfair','linger')]
     raise SystemExit(any(results))

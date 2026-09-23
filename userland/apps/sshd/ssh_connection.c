@@ -346,6 +346,10 @@ static size_t fit_room(const ssh_engine *s, size_t n, size_t header)
     if (room <= framing) return 0;
     return n < room - framing ? n : room - framing;
 }
+int ssh_output_full(const ssh_engine *s)
+{
+    return !fit_room(s, 1, 9);
+}
 size_t ssh_send_data(ssh_engine *s, const uint8_t *p, size_t n, int stderr_stream)
 {
     if (!s->started || s->sent_close || s->closed || s->kex) return 0;
