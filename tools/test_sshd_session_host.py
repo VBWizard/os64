@@ -86,9 +86,9 @@ uint32_t ssh_forwards_live(const ssh_engine *s) {(void)s;return live_turns?1:0;}
  * per pass stands in for the engine's output queue. */
 static size_t fair_budget,fair_sent[SSH_FORWARDS];
 /* mixedfair: the output room both kinds of channel draw from, refilled once
- * per pass, sized by the engine's rules (a stream all or nothing, 64 of
- * framing; a forward what fits, 65). */
-static size_t room;
+ * per pass, sized by the engine's rule (what fits, less framing: 65 for a
+ * stdout or forward packet, 69 for stderr). */
+static size_t room,room_refill;
 size_t ssh_forward_send(ssh_engine *s,uint32_t f,const uint8_t *p,size_t n) {
  (void)s;(void)p;
  if(scenario==3) {if(room<=65)return 0;if(n>room-65)n=room-65;room-=n+65;fair_sent[f]+=n;return n;}
@@ -126,7 +126,7 @@ static int64_t os64_read_for(int fd,void *p,size_t n,unsigned ms) {
   return OS64_ERR_TIMEOUT;
  }
  if(reads>credits)return 0;
- if(scenario==3) {room=5000;return OS64_ERR_TIMEOUT;}
+ if(scenario==3) {room=room_refill;return OS64_ERR_TIMEOUT;}
  if(reads%period==phase) engine.peer_window+=chunk;
  return OS64_ERR_TIMEOUT;
 }
@@ -153,7 +153,7 @@ void ssh_rekey(ssh_engine *s) {(void)s;assert(0 && "no new rekey during close");
 void ssh_input_consumed(ssh_engine *s,uint32_t n) {(void)s;(void)n;}
 size_t ssh_send_data(ssh_engine *s,const uint8_t *p,size_t n,int stream) {
  (void)p;if(s->kex || s->sent_close || s->closed)return 0;
- if(scenario==3) {if(n+64>room)return 0;room-=n+64;sends[stream]+=(unsigned)n;return n;}
+ if(scenario==3) {size_t f=stream?69:65;if(room<=f)return 0;if(n>room-f)n=room-f;room-=n+f;sends[stream]+=(unsigned)n;return n;}
  if(n>s->peer_window)n=s->peer_window;
  s->peer_window-=(uint32_t)n;sends[stream]+=(unsigned)n;return n;
 }
@@ -262,17 +262,22 @@ int main(int argc,char **argv) {
   local_accept=-1;assert(real_forwards_pass() && links[0].handle<0 && releases==2 && !local_reads);
  } else if(!strcmp(argv[1],"mixedfair")) {
   /* A session and a forward that both always have more to send than a
-   * pass's room: the session's 4 KiB fits where a forward's 32 KiB read
-   * would not, so whoever goes first every time takes the room. Taking
-   * turns, neither gets more than twice the other. */
-  scenario=3;credits=150;reset();streams[0].tail=streams[1].tail=UINT32_MAX/2; /* never runs dry */
-  for(uint32_t i=0;i<SSH_FORWARDS;i++) links[i].handle=-1;
+   * pass's room, so whoever goes first every time takes the room. Taking
+   * turns, neither gets more than twice the other, at a room that fits a
+   * whole 4 KiB staging buffer and at one that fits neither kind's whole
+   * staged packet. */
   static uint8_t to[SSH_FORWARD_WINDOW],from[SSH_DATA_MAX];
-  links[0]=(forward_link){.handle=10,.to_local=to,.from_local=from};
-  loop();
-  size_t session=(size_t)sends[0]+sends[1],forward=fair_sent[0];
-  printf("mixedfair: session %zu bytes, forward %zu bytes over %u passes\n",session,forward,reads-1);fflush(stdout);
-  assert(session && forward && session<=2*forward && forward<=2*session);
+  size_t refills[]={5000,3000};
+  for(unsigned k=0;k<2;k++) {
+   scenario=3;credits=150;room_refill=refills[k];reset();fair_sent[0]=0;
+   streams[0].tail=streams[1].tail=UINT32_MAX/2; /* never runs dry */
+   for(uint32_t i=0;i<SSH_FORWARDS;i++) links[i].handle=-1;
+   links[0]=(forward_link){.handle=10,.to_local=to,.from_local=from};
+   loop();
+   size_t session=(size_t)sends[0]+sends[1],forward=fair_sent[0];
+   printf("mixedfair %zu: session %zu bytes, forward %zu bytes over %u passes\n",refills[k],session,forward,reads-1);fflush(stdout);
+   assert(session && forward && session<=2*forward && forward<=2*session);
+  }
  } else if(!strcmp(argv[1],"linger")) {
   /* A closed session with a live forward keeps the connection; the loop
    * yields instead of napping while the forward moves bytes, then ends
