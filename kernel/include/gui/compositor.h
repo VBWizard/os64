@@ -62,6 +62,11 @@ bool gui_vt8_seated(void);
 // projection and keyboard.c's input fork read it; the compositor's flush
 // loop is gated on it.
 bool gui_owns_glass(void);
+// The backbuffer, the canonical screen image (GRAPHICS.md invariant 1), or
+// NULL before the compositor has allocated it — on a boot without the GUI,
+// that is forever. Its pixels live for the life of the machine once
+// allocated; /dev/glass reads them (gui/glass.h).
+const surface_t *gui_backbuffer(void);
 // tty_focus's handoff INTO the GUI: one lock-free store (safe from the
 // keyboard IRQ, where VT switches happen); the compositor converts it to a
 // full-screen repaint on its next frame.

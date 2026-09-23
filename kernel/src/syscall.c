@@ -51,6 +51,7 @@
 #include "driver/net/udp_conn.h"     // the object behind HANDLE_NET_UDP
 #include "driver/net/tcp.h"          // ...and HANDLE_NET_TCP
 #include "driver/net/icmp_conn.h"    // ...and HANDLE_NET_ICMP
+#include "gui/glass.h"               // glass_view_read — the object behind HANDLE_GLASS
 
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
 // and handed to ring 3 by ticks().
@@ -1796,7 +1797,8 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 		if (h->type != HANDLE_CONSOLE_IN &&
 		    h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
 		    h->type != HANDLE_NET_ICMP && h->type != HANDLE_NET_LISTENER &&
-		    h->type != HANDLE_PTY_MASTER)   // a STREAM master; GRID refuses the read itself
+		    h->type != HANDLE_PTY_MASTER &&   // a STREAM master; GRID refuses the read itself
+		    h->type != HANDLE_GLASS)
 			return SYSCALL_RESULT_INVALID;
 		deadline = syscall_io_deadline(timeout_ms);
 	}
@@ -1943,6 +1945,26 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			}
 			return (uint64_t)sizeof(nc);
 		}
+
+		case HANDLE_GLASS:
+			// One changed rectangle and its pixels (os64/glass.h), taken into
+			// the thread's scratch and copied out by the common tail. The
+			// scratch bounds a band: a taller rectangle comes back in bands.
+			got = glass_view_read((glass_view_t *)h->object, kbuf, want, deadline);
+			if (got == GLASS_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
+			if (got == GLASS_ERR_INTERRUPTED)
+			{
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
+				*die = true;   // unpin first, then the death: the wrapper does both
+				return 0;
+			}
+			if (got == GLASS_ERR_CLOSED)
+				return 0;   // a sibling closed the handle under the wait: nothing more will come
+			if (got < 0)
+				return SYSCALL_RESULT_INVALID;   // too small for the header and one row
+			break;
 
 		case HANDLE_PIPE_READ:
 			// Blocks until >=1 byte is available, OR the last writer closes —
@@ -2817,29 +2839,37 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_INVALID;   // nothing mounted yet
 	}
 
-	// THE HANDLE ALIAS (devfs, 2026-08-20). One path in the whole namespace —
-	// /dev/tty — names a HANDLE KIND rather than a byte container, and it is
-	// answered here, before any filesystem is asked to open anything.
+	// THE HANDLE ALIAS (devfs, 2026-08-20). Two paths in the namespace —
+	// /dev/tty and /dev/glass — name a HANDLE KIND rather than a byte
+	// container, and they are answered here, before any filesystem is asked
+	// to open anything (devfs.h, THE ALIAS HOOK).
 	//
-	// It has to happen at this layer: a console handle carries no object and
-	// late-binds to task_tty(caller) at every read, and the read itself
-	// BLOCKS. A fops->read could not do it — HANDLE_FILE reads run through
-	// call_in_kernel_context on the core's interrupt stack, and sleeping there
-	// is how this kernel gets corrupted (the stack poisoner caught exactly
-	// that on 2026-08-13). Answering at open costs one branch and reuses the
-	// entire console path downstream: Ctrl+C, EOF, tty focus, all unchanged.
+	// It has to happen at this layer: both reads BLOCK (a console handle
+	// late-binds to task_tty(caller) at every read and waits for a key; a
+	// glass view waits for the screen to change). A fops->read could not do
+	// it — HANDLE_FILE reads run through call_in_kernel_context on the core's
+	// interrupt stack, and sleeping there is how this kernel gets corrupted
+	// (the stack poisoner caught exactly that on 2026-08-13). For /dev/tty,
+	// answering at open costs one branch and reuses the entire console path
+	// downstream: Ctrl+C, EOF, tty focus, all unchanged.
 	//
 	// This is the promise the comment at syscall_tty_handle made — the verb
 	// came first because a pager needed it before a devfs existed, and the
 	// name now NAMES the verb instead of rivalling it. Both spellings mint the
 	// same handle; only one of them can be written in husk.rc.
 	handle_type_t alias_type;
-	if (devfs_handle_alias(p->fs, tail, p->mode, &alias_type))
+	void *alias_object;
+	if (devfs_handle_alias(p->fs, tail, p->mode, &alias_type, &alias_object))
 	{
 		kfree(p);
-		int ah = handle_alloc(task, alias_type, NULL);
+		if (alias_type == HANDLE_NONE)
+			return SYSCALL_RESULT_INVALID;   // a kind this boot cannot give (/dev/glass with no desktop)
+		int ah = handle_alloc(task, alias_type, alias_object);
 		if (ah < 0)
-			return SYSCALL_RESULT_INVALID;   // table full — the only failure here
+		{
+			devfs_handle_alias_abandon(alias_type, alias_object);
+			return SYSCALL_RESULT_INVALID;   // table full
+		}
 		printd(DEBUG_SYSCALL, "open: task %s: '%s' aliased to handle %d\n",
 		       task->exename, path, ah);
 		return (uint64_t)ah;

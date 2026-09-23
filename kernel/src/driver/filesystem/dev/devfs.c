@@ -22,6 +22,7 @@
 #include "serial_logging.h"
 #include "CONFIG.h"
 #include "random.h"            // /dev/random: the entropy pool's door
+#include "gui/glass.h"         // /dev/glass: a viewer of the screen
 
 // ── The node vocabulary ─────────────────────────────────────────────────────
 
@@ -33,7 +34,8 @@ typedef enum
 	DEV_NODE_ZERO,       // "/zero"
 	DEV_NODE_FULL,       // "/full"
 	DEV_NODE_RANDOM,     // "/random" — the entropy pool's door (random.h)
-	DEV_NODE_TTY         // "/tty" — never opened as a file (see devfs.h)
+	DEV_NODE_TTY,        // "/tty" — never opened as a file (see devfs.h)
+	DEV_NODE_GLASS       // "/glass" — the screen; never opened as a file either
 } dev_node_t;
 
 // ONE table, walked by every path lookup and by readdir alike. Counted, never
@@ -52,6 +54,7 @@ static const dev_entry_t kDevNodes[] = {
 	{ "full", DEV_NODE_FULL },
 	{ "random", DEV_NODE_RANDOM },
 	{ "tty",  DEV_NODE_TTY  },
+	{ "glass", DEV_NODE_GLASS },
 };
 static const int kDevNodeCount = (int)(sizeof(kDevNodes) / sizeof(kDevNodes[0]));
 
@@ -128,11 +131,11 @@ static int dev_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	     mode[0] != 'c' && mode[0] != 'u'))
 		return -1;
 
-	// ROOT is a directory (dops), NONE does not exist, and TTY never gets
-	// here at all — syscall_open answers it as a handle alias before the
-	// filesystem is ever asked to open anything (devfs.h, THE ALIAS). If it
-	// somehow arrives, refusing is the honest answer: this layer cannot
-	// produce a terminal.
+	// ROOT is a directory (dops), NONE does not exist, and TTY and GLASS
+	// never get here at all — syscall_open answers them as handle aliases
+	// before the filesystem is ever asked to open anything (devfs.h, THE
+	// ALIAS). If one somehow arrives, refusing is the honest answer: this
+	// layer cannot produce a terminal or a screen.
 	if (node != DEV_NODE_NULL && node != DEV_NODE_ZERO && node != DEV_NODE_FULL &&
 	    node != DEV_NODE_RANDOM)
 		return -1;
@@ -410,12 +413,26 @@ static vfs_filesystem_t *kDevFilesystem = NULL;   // set at mount; the identity
                                                   // check the alias hook needs
 
 bool devfs_handle_alias(vfs_filesystem_t *fs, const char *path,
-                        const char *mode, handle_type_t *type)
+                        const char *mode, handle_type_t *type, void **object)
 {
-	if (fs == NULL || fs != kDevFilesystem || type == NULL)
+	if (fs == NULL || fs != kDevFilesystem || type == NULL || object == NULL)
 		return false;
 
-	if (dev_parse_path(path) != DEV_NODE_TTY)
+	*object = NULL;
+	dev_node_t node = dev_parse_path(path);
+	if (node == DEV_NODE_GLASS)
+	{
+		// One viewer per open, reading. A boot with no desktop has no
+		// screen to watch: the name is still an alias, and HANDLE_NONE is
+		// its refusal. Any mode but "r" falls through to the ordinary open,
+		// which refuses it as a file.
+		if (mode == NULL || mode[0] != 'r' || mode[1] != '\0')
+			return false;
+		*object = glass_view_open();
+		*type = *object != NULL ? HANDLE_GLASS : HANDLE_NONE;
+		return true;
+	}
+	if (node != DEV_NODE_TTY)
 		return false;
 
 	// "d" is the directory mode, and a terminal is not a directory. Refusing
@@ -435,6 +452,12 @@ bool devfs_handle_alias(vfs_filesystem_t *fs, const char *path,
 		*type = HANDLE_CONSOLE_OUT;
 
 	return true;
+}
+
+void devfs_handle_alias_abandon(handle_type_t type, void *object)
+{
+	if (type == HANDLE_GLASS && object != NULL)
+		glass_view_close((glass_view_t *)object);
 }
 
 // ── Mounting ────────────────────────────────────────────────────────────────

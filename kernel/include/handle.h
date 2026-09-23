@@ -47,6 +47,9 @@ typedef enum handle_type
 	                       // (net_announce; read = ACCEPT, one
 	                       // os64_netconn_t per completed handshake; write
 	                       // is refused — a door is not a stream)
+	HANDLE_GLASS,          // object = glass_view_t*, one viewer of the screen
+	                       // (/dev/glass; read = one changed rectangle and
+	                       // its pixels, os64/glass.h)
 
 	// A slot reserved before an operation that may publish external state.
 	// Exclusive file creation uses it so a full handle table is discovered

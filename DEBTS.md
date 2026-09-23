@@ -456,6 +456,22 @@ how a worklist fills with things nobody intends to do.
   that waits to fill its buffer deadlocks interactive pipelines; a writer that
   lands whole keeps records intact). See `pipe.h`.
 
+## Remote access (REMOTE.md, 2026-09-23)
+
+- **`/dev/glass` shows the desktop only (phase 2 is the text VTs).** While a
+  text terminal holds the screen, a viewer receives the desktop's pixels
+  flagged `OS64_GLASS_TEXT_VT`. `BasicRenderer` keeps a RAM shadow of the
+  console's pixels, so phase 2 serves that shadow for VT1-7 with the renderer
+  feeding damage the way the compositor does; the record shape does not
+  change. Chris ruled phase 1 first, to see how the desktop performs.
+- **The pointer is part of `/dev/glass`'s pixels.** A viewer sees the real
+  cursor one round trip late. RFB's Cursor pseudo-encoding would draw it at
+  the viewer, and needs a read of the backbuffer without the cursor. Reverse
+  when the lag is felt.
+- **No CopyRect.** A window drag re-sends every pixel it moves; the
+  compositor knows the move and could say so. Reverse when a drag over a
+  slow link is felt.
+
 ## SSH implementation boundaries (2026-09-13)
 
 - **Task allocation and app link-base collision:** `sshdtest` hashed to

@@ -25,6 +25,7 @@ client API.
 | 2. Window system | `gui/window.{h,c}` | `window_t`, z-order list, chrome (titlebar/border), hit-testing, per-window event queues |
 | 3. Compositor | `gui/compositor.c` | The `/guicomp` daemon: frame loop = drain input → route → recomposite damage → flush; cursor; drag state machine |
 | 4. Client API | `gui/gui_client.{h,c}` | Handle-based, **syscall-shaped** functions apps call; the future userland boundary |
+| — | `gui/glass.{h,c}` | `/dev/glass`: each frame's damage fed to every open viewer, which copies the changed rectangles out of the backbuffer. See the chapter below |
 | — | VT8 seat | `gui_owns_glass()` (compositor.c) — the GUI is VT8's seated shell, and that predicate gates every flush. See the VT8 chapter below |
 | — | ~~`gui/console_window.{h,c}`~~ | RETIRED 2026-08-19 with `kConsoleSink`; boot output lives in VT1's grid, and the shell-in-a-window is ring-3 `gterm` |
 
@@ -1078,6 +1079,29 @@ click "Bounce" → gbounce appears, menu gone; open, left-click elsewhere →
 gone (focus-lost); open, Escape → gone; open, click "Terminal" → gterm.
 The lesson for the next driver: QEMU's monitor `mouse_button` bitmask is
 1=left, 2=right, 4=middle.
+
+## /dev/glass — the backbuffer, watched (built 2026-09-23)
+
+REMOTE.md § 3 is the design and `os64/glass.h` the ABI. What the window
+system has to know:
+
+- **The compositor feeds it.** Right after `composite_locked` runs a
+  frame's damage and before `kGuiLock` drops, `glass_damage_locked` adds that
+  damage to every open viewer and wakes a parked reader. Being fed after the
+  pixels are down and under the same lock is what makes a viewer's copy
+  eventually exact: a composite that overlaps a copy records its damage after
+  the copy took its rectangle.
+- **The backbuffer has readers on other threads now.** A glass read takes its
+  rectangle under `kGuiLock` and copies the pixels after releasing it, so the
+  frame loop never waits on a copy. `gui_backbuffer()` hands the surface out
+  only once `s_backbuffer_ready` is published: `surface_init` stores the
+  pixel pointer before the size, and a reader needs both. The hardware
+  framebuffer is still never read (invariant 1).
+- **It follows the backbuffer, not the glass.** While a text VT holds the
+  screen the backbuffer keeps compositing, so viewers keep receiving the
+  desktop, flagged `OS64_GLASS_TEXT_VT`. A change of who holds the screen
+  re-sends the whole frame, noticed at the reader's next wake (at most a
+  quarter second).
 
 ## Testing / debugging
 

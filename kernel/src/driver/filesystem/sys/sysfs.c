@@ -150,6 +150,7 @@
 #include "knet.h"                       // /sys/net/knet — the drainer's counters
 #include "doorbell.h"                   // /sys/net/knet — every bell in the registry
 #include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
+#include "gui/glass.h"                 // glass_view_count — /sys/gui's viewer count
 #include "driver/net/loopback.h"        // kNetLoopback — lo's queue in /sys/net/knet
 #include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
 #include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
@@ -1173,6 +1174,9 @@ static void sys_gen_gui(synth_text_t *t)
 	// (GRAPHICS.md's capacity reservation), so this scales with resolution.
 	synth_text_addf(t, "bytes_per_window: %lu\n",
 	                2ull * kFrameBuffer.width * kFrameBuffer.height * 4);
+	// Who is watching the screen through /dev/glass (gui/glass.h) — a
+	// remote viewer is otherwise invisible from the machine it watches.
+	synth_text_addf(t, "glass_viewers: %u\n", glass_view_count());
 }
 
 // ── /sys/net (2026-08-20) ───────────────────────────────────────────────────

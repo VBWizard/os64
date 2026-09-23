@@ -16,6 +16,7 @@
 #include "gui/window.h"
 #include "gui/gui_client.h"
 #include "gui/gui_internal.h"
+#include "gui/glass.h"         // glass_damage_locked — every frame feeds /dev/glass
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
 #include "vt_select.h"       // the other side of the input fork: console mouse selection
@@ -147,8 +148,17 @@ static inline bool damage_merge_is_cheap(rect_t a, rect_t b)
 	return rect_area(rect_union(a, b)) <= rect_area(a) + rect_area(b) + DAMAGE_MERGE_SLACK;
 }
 
-// The canonical screen image (scene + cursor). Compositor-thread-only.
+// The canonical screen image (scene + cursor). Written by the compositor
+// thread only; /dev/glass readers on other threads copy its pixels, which is
+// why it is published through s_backbuffer_ready rather than by its pointer
+// (surface_init stores the pointer before the size a reader needs with it).
 static surface_t kBackbuffer;
+static bool s_backbuffer_ready;
+
+const surface_t *gui_backbuffer(void)
+{
+	return __atomic_load_n(&s_backbuffer_ready, __ATOMIC_ACQUIRE) ? &kBackbuffer : NULL;
+}
 
 // tty_focus calls this instead of a grid repaint when focus lands on the
 // seated VT8. It runs in the SWITCHER's context — usually the keyboard IRQ —
@@ -1389,6 +1399,7 @@ bool guicomp_thread(bool daemon)
 		printd(DEBUG_GUI, "guicomp: FATAL: surface allocation failed, compositor exiting\n");
 		return false;
 	}
+	__atomic_store_n(&s_backbuffer_ready, true, __ATOMIC_RELEASE);
 	printd(DEBUG_GUI, "guicomp: backbuffer %ux%u ready (%lu KB x2)\n",
 		kBackbuffer.width, kBackbuffer.height,
 		(uint64_t)kBackbuffer.width * kBackbuffer.height * 4 / 1024);
@@ -1486,6 +1497,11 @@ bool guicomp_thread(bool daemon)
 		for (uint32_t i = 0; i < damage_count; i++)
 			damage[i] = composite_locked(kPendingDamage[i]);
 		kPendingDamageCount = 0;
+		// Every /dev/glass viewer learns what this frame changed. Here,
+		// after the pixels are down and before the lock goes, is what makes
+		// a viewer's copy eventually exact (gui/glass.h): any composite that
+		// overlaps a copy records its damage after the copy's take.
+		glass_damage_locked(damage, damage_count);
 
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 
