@@ -10,8 +10,9 @@
 //   6. Closing a viewer under a parked reader ends the wait; it never reads
 //      freed memory (the kernel would panic, which is the failure this
 //      catches).
-//   7. THE HANDS (os64/glass.h). A viewer opened "r" cannot type; one opened
-//      "u" can, and its malformed records are refused. From the text
+//   7. THE HANDS (os64/glass.h). A viewer opened "r" cannot type, not even
+//      an empty write; one opened "u" can, and its malformed records,
+//      the empty one included, are refused. From the text
 //      terminal the test runs on, its own keyboard types Alt+F8 and the
 //      desktop takes the screen; a window it creates then receives a key,
 //      a shifted key, a click at its centre, a held key's typematic
@@ -172,7 +173,7 @@ static int hands(void)
 	int64_t hr = os64_open("/dev/glass", "r");
 	if (hr < 0)
 		return GLASSTEST_OPEN;
-	bool typed = write_key((int32_t)hr, 0, KEY_A);
+	bool typed = write_key((int32_t)hr, 0, KEY_A) || os64_write((int32_t)hr, "", 0) >= 0;
 	os64_close((int32_t)hr);
 	if (typed)
 		return GLASSTEST_READ_ONLY;
@@ -184,7 +185,7 @@ static int hands(void)
 	uint8_t odd[9] = { 9 };
 	os64_glass_keyboard_t shortk = { .kind = OS64_GLASS_KEYBOARD };
 	if (write_pointer(h, screen_w, 0, 0) || write_pointer(h, 0, screen_h, 0) ||
-	    write_pointer(h, 0, 0, 0x08) || os64_write(h, odd, sizeof(odd)) >= 0 ||
+	    write_pointer(h, 0, 0, 0x08) || os64_write(h, odd, sizeof(odd)) >= 0 || os64_write(h, odd, 0) >= 0 ||
 	    os64_write(h, &shortk, sizeof(shortk) - 1) >= 0)
 		return GLASSTEST_RECORD;
 

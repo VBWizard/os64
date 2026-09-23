@@ -52,7 +52,7 @@
 // A write of anything else, or of a record whose length is not its kind's,
 // is refused whole. CLOSING the viewer lifts every key and button it holds,
 // so a dropped connection does not leave Ctrl down or a drag in progress,
-// short of the GUI's input queue being full at that moment (DEBTS).
+// short of a GUI event queue being full at that moment (DEBTS).
 
 #include <stdint.h>
 
