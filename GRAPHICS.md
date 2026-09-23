@@ -757,7 +757,7 @@ Three things learned building them, for the next chord:
   lesson, re-learned in one day — it is now the rule.)
 - **The HID path emits releases now.** Until today xHCI delivered key-DOWN
   only: no key-up, no event at all for a modifier-only report. The Alt+Tab
-  hold therefore could not end on USB. `hid_process_keyboard_report`
+  hold therefore could not end on USB. `hid_keyboard_report` (hid_keyboard.c)
   emits a release edge per usage that left the report and a press/release
   per modifier bit that flipped (scancode `0xE0 + bit`, ASCII 0, so the
   text path ignores them exactly as it ignores PS/2 modifier keys).
