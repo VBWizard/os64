@@ -24,6 +24,7 @@
 typedef struct hid_keyboard
 {
 	uint8_t  prev_report[8];   // the last report, for press/release edges
+	uint8_t  delivered[32];    // a bit per usage whose press was delivered (only those release)
 	uint8_t  mods;             // KEYBOARD_MOD_* as last derived, CAPS latched
 	uint8_t  rpt_usage;        // the typematic candidate, 0 = none
 	uint64_t rpt_next_tick;

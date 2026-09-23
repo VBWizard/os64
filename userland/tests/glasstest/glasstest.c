@@ -12,7 +12,7 @@
 //      catches).
 //   7. THE HANDS (os64/glass.h). A viewer opened "r" cannot type, not even
 //      an empty write; one opened "u" can, and its malformed records,
-//      the empty one included, are refused. From the text
+//      the empty one and one listing a key twice included, are refused. From the text
 //      terminal the test runs on, its own keyboard types Alt+F8 and the
 //      desktop takes the screen; a window it creates then receives a key,
 //      a shifted key, a click at its centre, a held key's typematic
@@ -22,7 +22,8 @@
 //      lift the first one's held button, and a second keyboard typing does
 //      not drop a Ctrl the first one holds (it still rides on the pointer).
 //      An Alt+Tab let go of in one report leaks no Tab to the window it
-//      focused.
+//      focused, and an Alt+F8 the driver consumed, held past the repeat
+//      delay, sends the window neither F8 repeats nor an F8-up.
 //      Ctrl+Alt+F1 brings the terminal back.
 //
 // `glasstest watch` prints every record's header for thirty seconds instead:
@@ -56,6 +57,7 @@
 #define GLASSTEST_TWO_KEYS  0x61A55F10   // one keyboard's typing dropped a chord another held
 #define GLASSTEST_CAPS      0x61A55F11   // a held Caps Lock toggled more than once
 #define GLASSTEST_CHORD_UP  0x61A55F12   // a consumed chord's key-up leaked to a window
+#define GLASSTEST_ORPHAN_UP 0x61A55F13   // a press the driver consumed still sent its release
 
 #define PAINT 0x0012AB34u
 
@@ -109,6 +111,13 @@ static bool write_key(int32_t h, uint8_t mods, uint8_t usage)
 	return os64_write(h, &k, sizeof(k)) == (int64_t)sizeof(k);
 }
 
+// A report holding two usages: refused when they are the same key.
+static bool write_key2(int32_t h, uint8_t first, uint8_t second)
+{
+	os64_glass_keyboard_t k = { .kind = OS64_GLASS_KEYBOARD, .report = { 0, 0, first, second, 0, 0, 0, 0 } };
+	return os64_write(h, &k, sizeof(k)) == (int64_t)sizeof(k);
+}
+
 static bool write_pointer(int32_t h, uint32_t x, uint32_t y, uint8_t buttons)
 {
 	os64_glass_pointer_t m = { .kind = OS64_GLASS_POINTER, .buttons = buttons,
@@ -137,6 +146,8 @@ typedef struct
 	int button_down, button_up;
 	int moves;
 	uint8_t move_modifiers;   // the last move's
+	int up_code[256];         // key-ups by scancode (a HID usage from glass)
+	int down_code[256];       // and key-downs
 } seen_t;
 
 // What the window heard in the next `ms` milliseconds.
@@ -151,6 +162,8 @@ static void listen(int64_t win, seen_t *seen, int ms)
 			unsigned char c = (unsigned char)ev.key.ascii;
 			if (ev.type == OS64_GUI_EVENT_KEY_DOWN && c < 128) seen->down[c]++;
 			if (ev.type == OS64_GUI_EVENT_KEY_UP && c < 128) seen->up[c]++;
+			if (ev.type == OS64_GUI_EVENT_KEY_UP) seen->up_code[ev.key.scancode]++;
+			if (ev.type == OS64_GUI_EVENT_KEY_DOWN) seen->down_code[ev.key.scancode]++;
 			if (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN) seen->button_down++;
 			if (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_UP) seen->button_up++;
 			if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
@@ -193,6 +206,7 @@ static int hands(void)
 	os64_glass_keyboard_t shortk = { .kind = OS64_GLASS_KEYBOARD };
 	if (write_pointer(h, screen_w, 0, 0) || write_pointer(h, 0, screen_h, 0) ||
 	    write_pointer(h, 0, 0, 0x08) || os64_write(h, odd, sizeof(odd)) >= 0 || os64_write(h, odd, 0) >= 0 ||
+	    write_key2(h, KEY_A, KEY_A) ||
 	    os64_write(h, &shortk, sizeof(shortk) - 1) >= 0)
 		return GLASSTEST_RECORD;
 
@@ -367,6 +381,30 @@ static int hands(void)
 				code = GLASSTEST_CHORD_UP;
 			}
 			os64_gui_window_destroy(win2);
+		}
+	}
+
+	if (!code)
+	{
+		// A key a chord consumed stays the chord's until it is let go:
+		// from a text terminal, Alt+F8 held past the repeat delay brings
+		// the desktop back and this window focused, where bare Alt+F8 is
+		// no chord. Its repeats must not arrive as F8 presses, nor its
+		// release as an F8-up.
+		write_key(h, MOD_LCTRL | MOD_LALT, KEY_F1);
+		write_key(h, 0, 0);
+		os64_sleep(300);
+		write_key(h, MOD_LALT, 0);
+		write_key(h, MOD_LALT, KEY_F8);
+		listen(win, &seen, 800);
+		int held = seen.down_code[KEY_F8];
+		write_key(h, 0, 0);
+		listen(win, &seen, 300);
+		if (!desktop_on_screen() || held || seen.up_code[KEY_F8])
+		{
+			os64_printf("glasstest: a consumed Alt+F8 reached the window (%d F8-down, %d F8-up)\n",
+			            held, seen.up_code[KEY_F8]);
+			code = GLASSTEST_ORPHAN_UP;
 		}
 	}
 

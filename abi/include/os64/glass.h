@@ -43,7 +43,9 @@
 //                        (Alt+F8 brings the desktop back), the modifier
 //                        edges and typematic repeat are the ones a local
 //                        keyboard gets. Send the state after every change;
-//                        a held key repeats on its own.
+//                        a held key repeats on its own. A usage listed twice
+//                        refuses the record: a keyboard never holds one key
+//                        twice.
 //   OS64_GLASS_POINTER   an ABSOLUTE position in screen pixels and the
 //                        buttons held (bit 0 left, bit 1 right, bit 2
 //                        middle). A position off the screen, or a button bit
