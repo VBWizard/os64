@@ -152,6 +152,9 @@ void ssh_forward_consumed(ssh_engine *s, uint32_t forward, uint32_t n);
  * wait (a key exchange, or no output room); call again next turn. */
 int ssh_forward_finish(ssh_engine *s, uint32_t forward);
 void ssh_forward_release(ssh_engine *s, uint32_t forward);
+/* The output queue has no room for one more byte of channel data: a send cut
+ * short now was cut by the queue, not by that channel's own window. */
+int ssh_output_full(const ssh_engine *s);
 /* Forwards not yet free, whatever their state. */
 uint32_t ssh_forwards_live(const ssh_engine *s);
 #endif

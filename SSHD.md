@@ -283,7 +283,9 @@ until release, channel numbers live and dead). The
 daemon-loop harness gained `forward` (the config key), `linger` (a closed
 session with a live forward keeps the connection and yields rather than
 naps), `closedrain` (a closed forward delivers its queue, then is released
-once) and `mixedfair` (a session and a forward that always have more than a
+once), `forwardblocked` (a forward held back by its own spent window does
+not pin the rotation; the round-3 daemon handed the next forward five times
+the other's share) and `mixedfair` (a session and a forward that always have more than a
 pass's room each get a share within 2x; the round-1 daemon, which always
 served the session first, split it 5.4 to 1). The host
 adapter mirrors the daemon's rules, and real OpenSSH drives `ssh -N -L`:

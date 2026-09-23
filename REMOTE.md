@@ -191,7 +191,8 @@ what was built. In brief:
     sshd's link slot.
   - Forwards share one output queue, served round robin from wherever the
     queue last ran out, which keeps busy forwards within one staging buffer
-    of each other. The streams' "after the first sender" rule is exact for
+    of each other. A forward held back by its own window is not that point:
+    it would pin the rotation and hand every refill to the forward after it. The streams' "after the first sender" rule is exact for
     two and drifts for three or more; the harness shows both.
   - Local EOF becomes CHANNEL_EOF then CLOSE. Client CLOSE closes the local
     connection once the bytes the client sent before it are delivered. **A
