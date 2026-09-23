@@ -303,19 +303,22 @@ static void forward_open(uint32_t i)
     os64_snprintf(note, sizeof(note), "sshd: forwarding to %s:%u", f->host, (unsigned)f->port); log_line(note);
     ssh_forward_result(&engine, i, 1, 0, "");
 }
-/* One turn of every live forward, both directions, never blocking. Returns
- * whether anything moved, which is what lets the loop skip its nap.
+/* One turn of every live forward, both directions, never blocking. Returns 0
+ * when nothing moved; bit 0 when something did, which lets the loop skip its
+ * nap, and bit 1 when a forward sent bytes, which is what the session loop's
+ * turn-taking counts.
  *
  * Forwards share one output queue, so the order they are served in is who
- * gets it when it is short. Round robin: the next pass starts at the first
- * forward this one could not empty, which is where the queue ran out. That
+ * gets it when it is short. Round robin: the next pass starts at the forward
+ * where the queue ran out, the first one left holding bytes because no room
+ * was left for them (ssh_output_full). A forward held back by its own limits,
+ * the client's window for it or its packet size, is not that point, or it
+ * would pin the rotation and hand every refill to the forward after it. That
  * keeps every busy forward within one staging buffer of the others however
  * long they run. Starting after the first forward that SENT (the rule the
  * two session streams use) is exact for two and drifts without bound for
  * three or more. */
 static uint32_t next_forward;
-/* Returns 0 when nothing moved; bit 0 when something did, and bit 1 when a
- * forward sent bytes, which is what the session loop's turn-taking counts. */
 static int forwards_pass(void)
 {
     int moved = 0, cut = 0, sent_any = 0;
@@ -357,7 +360,7 @@ static int forwards_pass(void)
         if (l->from_len) {
             size_t sent = ssh_forward_send(&engine, i, l->from_local, l->from_len);
             if (sent) { l->from_len -= (uint32_t)sent; memmove(l->from_local, l->from_local + sent, l->from_len); moved = 1; sent_any = 2; }
-            if (l->from_len && !cut) { next_forward = i; cut = 1; }
+            if (l->from_len && !cut && ssh_output_full(&engine)) { next_forward = i; cut = 1; }
         }
         /* Everything read has been sent: the channel follows the connection
          * into EOF and CLOSE. The slot stays the engine's until the client's

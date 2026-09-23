@@ -372,6 +372,7 @@ static void forwards(void)
     /* ...and by the output queue's free room, never refused whole. */
     engine.out_len=SSH_OUTPUT_CAP-300; CHECK(ssh_forward_send(&engine,0,big,400)==235 && engine.out_len<=SSH_OUTPUT_CAP);
     engine.out_len=SSH_OUTPUT_CAP-65; CHECK(ssh_forward_send(&engine,0,big,400)==0);
+    CHECK(ssh_output_full(&engine)); engine.out_len=SSH_OUTPUT_CAP-66; CHECK(!ssh_output_full(&engine));
     engine.out_len=0; CHECK(engine.forwards[0].peer_window==265);
     /* A request on a forward is refused when it asks for an answer. */
     engine.out_len=0; send_channel(98,1,"env",1); p=last_sent(&len);
