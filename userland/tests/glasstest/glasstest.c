@@ -10,6 +10,13 @@
 //   6. Closing a viewer under a parked reader ends the wait; it never reads
 //      freed memory (the kernel would panic, which is the failure this
 //      catches).
+//   7. THE HANDS (os64/glass.h). A viewer opened "r" cannot type; one opened
+//      "u" can, and its malformed records are refused. From the text
+//      terminal the test runs on, its own keyboard types Alt+F8 and the
+//      desktop takes the screen; a window it creates then receives a key,
+//      a shifted key, a click at its centre, a held key's typematic
+//      repeats, and the release a viewer closed mid-keypress still owes.
+//      Ctrl+Alt+F1 brings the terminal back.
 //
 // `glasstest watch` prints every record's header for thirty seconds instead:
 // the hands-on half, for what no fixture can do alone — switch terminals and
@@ -31,6 +38,13 @@
 #define GLASSTEST_WINDOW    0x61A55F05   // a painted window never reached the viewer
 #define GLASSTEST_STILL     0x61A55F06   // a still screen never timed out
 #define GLASSTEST_CLOSE     0x61A55F07   // a close under a parked reader went wrong
+#define GLASSTEST_READ_ONLY 0x61A55F08   // a viewer opened "r" accepted a keystroke
+#define GLASSTEST_RECORD    0x61A55F09   // a malformed input record was accepted
+#define GLASSTEST_CHORD     0x61A55F0A   // Alt+F8 / Ctrl+Alt+F1 did not move the screen
+#define GLASSTEST_KEYS      0x61A55F0B   // the window did not receive the typed keys
+#define GLASSTEST_CLICK     0x61A55F0C   // the window did not receive the click
+#define GLASSTEST_REPEAT    0x61A55F0D   // a held key did not repeat
+#define GLASSTEST_LIFT      0x61A55F0E   // closing a viewer did not release its held key
 
 #define PAINT 0x0012AB34u
 
@@ -76,6 +90,169 @@ static int watch(void)
 	}
 	os64_close((int32_t)h);
 	return 0;
+}
+
+static bool write_key(int32_t h, uint8_t mods, uint8_t usage)
+{
+	os64_glass_keyboard_t k = { .kind = OS64_GLASS_KEYBOARD, .report = { mods, 0, usage, 0, 0, 0, 0, 0 } };
+	return os64_write(h, &k, sizeof(k)) == (int64_t)sizeof(k);
+}
+
+static bool write_pointer(int32_t h, uint32_t x, uint32_t y, uint8_t buttons)
+{
+	os64_glass_pointer_t m = { .kind = OS64_GLASS_POINTER, .buttons = buttons,
+	                           .x = (uint16_t)x, .y = (uint16_t)y };
+	return os64_write(h, &m, sizeof(m)) == (int64_t)sizeof(m);
+}
+
+// Whether the desktop holds the screen, as /sys/gui says.
+static bool desktop_on_screen(void)
+{
+	char text[512];
+	int64_t f = os64_open("/sys/gui", NULL);
+	if (f < 0)
+		return false;
+	int64_t n = os64_read((int32_t)f, text, sizeof(text) - 1);
+	os64_close((int32_t)f);
+	if (n <= 0)
+		return false;
+	text[n] = '\0';
+	return os64_glob_match("*owns_glass: yes*", text);
+}
+
+typedef struct
+{
+	int down[128], up[128];
+	int button_down, button_up;
+} seen_t;
+
+// What the window heard in the next `ms` milliseconds.
+static void listen(int64_t win, seen_t *seen, int ms)
+{
+	os64_memset(seen, 0, sizeof(*seen));
+	for (int waited = 0; waited < ms; waited += 20)
+	{
+		os64_gui_event_t ev;
+		while (os64_gui_event_poll(win, &ev) == 1)
+		{
+			unsigned char c = (unsigned char)ev.key.ascii;
+			if (ev.type == OS64_GUI_EVENT_KEY_DOWN && c < 128) seen->down[c]++;
+			if (ev.type == OS64_GUI_EVENT_KEY_UP && c < 128) seen->up[c]++;
+			if (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN) seen->button_down++;
+			if (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_UP) seen->button_up++;
+		}
+		os64_sleep(20);
+	}
+}
+
+// HID usages and modifier bits the hands test types with.
+#define KEY_A   0x04
+#define KEY_B   0x05
+#define KEY_C   0x06
+#define KEY_F1  0x3A
+#define KEY_F8  0x41
+#define MOD_LCTRL  0x01
+#define MOD_LSHIFT 0x02
+#define MOD_LALT   0x04
+
+static int hands(void)
+{
+	int64_t hr = os64_open("/dev/glass", "r");
+	if (hr < 0)
+		return GLASSTEST_OPEN;
+	bool typed = write_key((int32_t)hr, 0, KEY_A);
+	os64_close((int32_t)hr);
+	if (typed)
+		return GLASSTEST_READ_ONLY;
+
+	int64_t hu = os64_open("/dev/glass", "u");
+	if (hu < 0)
+		return GLASSTEST_OPEN;
+	int32_t h = (int32_t)hu;
+	uint8_t odd[9] = { 9 };
+	os64_glass_keyboard_t shortk = { .kind = OS64_GLASS_KEYBOARD };
+	if (write_pointer(h, screen_w, 0, 0) || write_pointer(h, 0, screen_h, 0) ||
+	    write_pointer(h, 0, 0, 0x08) || os64_write(h, odd, sizeof(odd)) >= 0 ||
+	    os64_write(h, &shortk, sizeof(shortk) - 1) >= 0)
+		return GLASSTEST_RECORD;
+
+	// Alt+F8 from this terminal, typed on the glass keyboard.
+	if (!write_key(h, MOD_LALT, KEY_F8) || !write_key(h, 0, 0))
+		return GLASSTEST_CHORD;
+	os64_sleep(300);
+	if (!desktop_on_screen())
+		return GLASSTEST_CHORD;
+
+	int64_t win = os64_gui_window_create("glasstest hands", 200, 200, 320, 200, 0);
+	os64_draw_ctx_t ctx;
+	if (win <= 0 || os64_draw_ctx_init(&ctx, win) != 0)
+		return GLASSTEST_KEYS;
+	os64_draw_fill_rect(&ctx.surf, (os64_gui_rect_t){0, 0, (int32_t)ctx.surf.width, (int32_t)ctx.surf.height}, 0xFF203040u);
+	os64_gui_window_publish(win, NULL);
+	os64_gui_window_state_t st;
+	os64_gui_window_get_state(win, &st);
+	seen_t seen;
+	listen(win, &seen, 300);
+
+	int code = 0;
+	write_key(h, 0, KEY_A);
+	write_key(h, 0, 0);
+	write_key(h, MOD_LSHIFT, KEY_A);
+	write_key(h, 0, 0);
+	listen(win, &seen, 400);
+	if (!seen.down['a'] || !seen.up['a'] || !seen.down['A'])
+		code = GLASSTEST_KEYS;
+
+	uint32_t cx = (uint32_t)st.x + st.width / 2, cy = (uint32_t)st.y + st.height / 2;
+	if (!code)
+	{
+		write_pointer(h, cx, cy, 0);
+		write_pointer(h, cx, cy, OS64_GLASS_BUTTON_LEFT);
+		write_pointer(h, cx, cy, 0);
+		listen(win, &seen, 400);
+		if (seen.button_down < 1 || seen.button_up < 1)
+			code = GLASSTEST_CLICK;
+	}
+
+	if (!code)
+	{
+		// Held for most of a second: the first repeat comes at half a
+		// second, then they are quick.
+		write_key(h, 0, KEY_C);
+		listen(win, &seen, 900);
+		write_key(h, 0, 0);
+		int held = seen.down['c'];
+		listen(win, &seen, 200);
+		if (held < 3)
+		{
+			os64_printf("glasstest: a held key arrived %d time(s)\n", held);
+			code = GLASSTEST_REPEAT;
+		}
+	}
+
+	if (!code)
+	{
+		// A second viewer presses a key and closes without letting go.
+		int64_t h2 = os64_open("/dev/glass", "u");
+		if (h2 < 0 || !write_key((int32_t)h2, 0, KEY_B))
+			code = GLASSTEST_LIFT;
+		else
+		{
+			os64_close((int32_t)h2);
+			listen(win, &seen, 400);
+			if (!seen.down['b'] || !seen.up['b'])
+				code = GLASSTEST_LIFT;
+		}
+	}
+
+	os64_gui_window_destroy(win);
+	write_key(h, MOD_LCTRL | MOD_LALT, KEY_F1);
+	write_key(h, 0, 0);
+	os64_close(h);
+	os64_sleep(300);
+	if (!code && desktop_on_screen())
+		code = GLASSTEST_CHORD;
+	return code;
 }
 
 static int64_t park_and_read(void *arg)
@@ -190,6 +367,11 @@ int main(int argc, char **argv)
 		return GLASSTEST_CLOSE;
 
 	os64_close((int32_t)h);
-	os64_printf("glasstest: the screen came through /dev/glass: whole, banded, refused, painted, still, closed\n");
+
+	int hands_code = hands();
+	if (hands_code)
+		return hands_code;
+
+	os64_printf("glasstest: the screen came through /dev/glass: whole, banded, refused, painted, still, closed; and the hands typed, clicked, repeated and let go\n");
 	return GLASSTEST_OK;
 }

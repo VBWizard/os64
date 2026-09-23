@@ -13,6 +13,8 @@
 #include "scheduler.h"
 #include "signals.h"
 #include "kernel.h"          // kTicksSinceStart — the park's backstop and the deadline
+#include "gui/input.h"       // input_inject_pointer / input_inject_mouse — the view's pointer
+#include "driver/system/hid_keyboard.h"   // the view's keyboard: the USB keyboard's interpreter
 #include "CONFIG.h"          // TICKS_PER_SECOND
 
 // How many separate rectangles a view keeps before it folds them into one.
@@ -34,6 +36,13 @@ struct glass_view
 	uint32_t refs;                       // handle + operations in flight (atomic)
 	thread_t *waiter;                    // a reader parked for the next change
 	struct glass_view *next;             // s_views, under kGuiLock
+
+	// The hands, under input_lock (gui/glass.h, INPUT).
+	bool writable;                       // opened "u"
+	bool input_closed;                   // the handle closed: nothing more is delivered
+	spinlock_t input_lock;
+	hid_keyboard_t kbd;
+	uint8_t buttons;                     // the buttons this view holds down
 };
 
 static glass_view_t *s_views;
@@ -73,7 +82,7 @@ static void pending_add(glass_view_t *v, rect_t r)
 	v->count = 1;
 }
 
-glass_view_t *glass_view_open(void)
+glass_view_t *glass_view_open(bool writable)
 {
 	const surface_t *bb = gui_backbuffer();
 	if (bb == NULL)
@@ -82,6 +91,9 @@ glass_view_t *glass_view_open(void)
 	if (v == NULL)
 		return NULL;
 	v->refs = 1;
+	v->writable = writable;
+	v->kbd.name = "glass";
+	v->kbd.debug = DEBUG_GUI;
 	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
 	v->pending[0] = screen_rect(bb);
 	v->count = 1;
@@ -115,6 +127,24 @@ void glass_view_release(glass_view_t *v)
 
 void glass_view_close(glass_view_t *v)
 {
+	// Lift every finger first, under the input lock, so no write can land
+	// after the release: an empty report ends every key and modifier the
+	// keyboard held (with their release events), and a button-only packet
+	// ends a drag.
+	uint64_t iflags = spinlock_acquire_irqsave(&v->input_lock);
+	v->input_closed = true;
+	if (v->writable)
+	{
+		static const uint8_t none[8];
+		hid_keyboard_report(&v->kbd, none);
+		if (v->buttons != 0)
+		{
+			input_inject_mouse(0, 0, 0);
+			v->buttons = 0;
+		}
+	}
+	spinlock_release_irqrestore(&v->input_lock, iflags);
+
 	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
 	v->closed = true;
 	// The slot is the waiter's to clear (gui_client.c's event wait has the
@@ -245,4 +275,87 @@ uint32_t glass_view_count(void)
 		n++;
 	spinlock_release_irqrestore(&kGuiLock, flags);
 	return n;
+}
+
+long glass_view_write(glass_view_t *v, const void *data, size_t len)
+{
+	if (!v->writable)
+		return GLASS_ERR_READ_ONLY;
+	const uint8_t *p = (const uint8_t *)data;
+	if (len == 0)
+		return GLASS_ERR_RECORD;
+
+	if (p[0] == OS64_GLASS_KEYBOARD)
+	{
+		if (len != sizeof(os64_glass_keyboard_t))
+			return GLASS_ERR_RECORD;
+		os64_glass_keyboard_t k;
+		memcpy(&k, p, sizeof(k));
+		uint64_t flags = spinlock_acquire_irqsave(&v->input_lock);
+		if (v->input_closed)
+		{
+			spinlock_release_irqrestore(&v->input_lock, flags);
+			return GLASS_ERR_CLOSED;
+		}
+		hid_keyboard_report(&v->kbd, k.report);
+		spinlock_release_irqrestore(&v->input_lock, flags);
+		return (long)len;
+	}
+
+	if (p[0] == OS64_GLASS_POINTER)
+	{
+		if (len != sizeof(os64_glass_pointer_t))
+			return GLASS_ERR_RECORD;
+		os64_glass_pointer_t m;
+		memcpy(&m, p, sizeof(m));
+		const surface_t *bb = gui_backbuffer();
+		// Off the screen is refused, not moved: a viewer that believes the
+		// screen is another size is wrong about everything it will send.
+		if (bb == NULL || m.x >= bb->width || m.y >= bb->height ||
+		    (m.buttons & ~(OS64_GLASS_BUTTON_LEFT | OS64_GLASS_BUTTON_RIGHT | OS64_GLASS_BUTTON_MIDDLE)))
+			return GLASS_ERR_RECORD;
+		uint64_t flags = spinlock_acquire_irqsave(&v->input_lock);
+		if (v->input_closed)
+		{
+			spinlock_release_irqrestore(&v->input_lock, flags);
+			return GLASS_ERR_CLOSED;
+		}
+		v->buttons = m.buttons;
+		input_inject_pointer(m.x, m.y, m.buttons);
+		spinlock_release_irqrestore(&v->input_lock, flags);
+		return (long)len;
+	}
+
+	return GLASS_ERR_RECORD;
+}
+
+// How many views one frame's tick serves. More writable views than this is
+// more remote keyboards than there are people; the rest wait a frame.
+#define GLASS_TICK_MAX 8
+
+void glass_input_tick(void)
+{
+	// Take the views with a key held under kGuiLock, each with a reference
+	// so it cannot be freed, then tick them with kGuiLock released (the
+	// delivery's locks may not nest under it). rpt_usage is read here
+	// without the input lock: it is a hint, and a stale one costs a frame.
+	glass_view_t *due[GLASS_TICK_MAX];
+	uint32_t n = 0;
+	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+	for (glass_view_t *v = s_views; v != NULL && n < GLASS_TICK_MAX; v = v->next)
+		if (v->writable && !v->closed && v->kbd.rpt_usage != 0)
+		{
+			glass_view_ref(v);
+			due[n++] = v;
+		}
+	spinlock_release_irqrestore(&kGuiLock, flags);
+
+	for (uint32_t i = 0; i < n; i++)
+	{
+		uint64_t iflags = spinlock_acquire_irqsave(&due[i]->input_lock);
+		if (!due[i]->input_closed)
+			hid_keyboard_tick(&due[i]->kbd);
+		spinlock_release_irqrestore(&due[i]->input_lock, iflags);
+		glass_view_release(due[i]);
+	}
 }

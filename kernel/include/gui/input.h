@@ -130,6 +130,9 @@ void input_init(void);
 // Producer side (IRQ context safe: irqsave spinlock, enqueue only).
 void input_inject_key(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed);
 void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons);
+// The pointer at an ABSOLUTE position (clamped to the screen) — /dev/glass's,
+// whose viewer says where rather than how far. Same events as a mouse.
+void input_inject_pointer(int32_t x, int32_t y, uint8_t buttons);
 
 // Consumer side (compositor only). Returns false when the queue is empty.
 bool input_pop(input_event_t *out);

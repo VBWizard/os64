@@ -1397,6 +1397,21 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 			return r;
 		}
 
+		case HANDLE_GLASS:
+		{
+			// One input record (os64/glass.h, THE HANDS): a keyboard report
+			// or a pointer position, taken whole or refused. Copied in first,
+			// because the record is delivered with interrupts off, where a
+			// user page may not fault.
+			uint8_t record[16];
+			if (length > sizeof(record))
+				return SYSCALL_RESULT_INVALID;
+			if (!copy_user_buffer(user_buffer, record, length))
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			long r = glass_view_write((glass_view_t *)h->object, record, length);
+			return r < 0 ? SYSCALL_RESULT_INVALID : (uint64_t)r;
+		}
+
 		case HANDLE_PTY_MASTER:
 		{
 			// Keystrokes INTO the window (PTY.md): same bounded ferry as the

@@ -11,11 +11,19 @@
 // window system's state. A read takes its rectangle under the lock and copies
 // the pixels after releasing it, so a slow copy never holds up a frame.
 //
+// INPUT: a view opened for update is also a keyboard and a pointer. Its
+// keyboard is a hid_keyboard_t, the interpreter a USB keyboard uses; its
+// pointer says where, through input_inject_pointer. Both deliver with the
+// view's own input lock held and kGuiLock NOT held: keystrokes reach the tty
+// and the renderer, whose locks may not nest under the window system's
+// (GRAPHICS.md, "Painting happens with kGuiLock RELEASED").
+//
 // LIFETIME: a view is reference counted. The handle holds one reference, each
 // operation in flight holds one (handle.c's pin), and the last release frees
 // it. Closing the handle marks the view closed and wakes a reader parked in
 // it, which then answers GLASS_ERR_CLOSED instead of reading freed memory.
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "gui/gui_types.h"
@@ -27,15 +35,30 @@ typedef struct glass_view glass_view_t;
 #define GLASS_ERR_INTERRUPTED  (-3)   // a signal ended the wait
 #define GLASS_ERR_CLOSED       (-4)   // the handle was closed under the reader
 #define GLASS_ERR_SMALL        (-5)   // the buffer cannot hold the header and one row
+#define GLASS_ERR_READ_ONLY    (-6)   // a write to a viewer opened "r"
+#define GLASS_ERR_RECORD       (-7)   // not a record, the wrong length for its kind, or out of range
 
 // A new view whose first read is the whole screen, holding one reference for
 // its handle; NULL on a boot with no desktop (no backbuffer) or no memory.
-glass_view_t *glass_view_open(void);
+// `writable` makes it a keyboard and pointer too (mode "u").
+glass_view_t *glass_view_open(bool writable);
 void glass_view_ref(glass_view_t *v);
 void glass_view_release(glass_view_t *v);
-// The handle's close: marks the view closed, wakes a parked reader, and drops
-// the handle's reference.
+// The handle's close: lifts every key and button the view holds, marks it
+// closed, wakes a parked reader, and drops the handle's reference.
 void glass_view_close(glass_view_t *v);
+
+// One input record (os64/glass.h), `len` bytes of kernel memory. Returns
+// `len` or a GLASS_ERR_*. Task context; the keystrokes are delivered with
+// interrupts off, as a keyboard interrupt delivers them.
+long glass_view_write(glass_view_t *v, const void *data, size_t len);
+
+// Typematic for every view's keyboard. The compositor calls it each frame,
+// outside kGuiLock: glass exists only where a desktop does, and the frame
+// loop's nap is bounded by its core's scheduler timer (the tick on the BSP,
+// the backstop lease on a tickless AP), so a held key repeats at the
+// keyboard's cadence or, at worst, the lease's.
+void glass_input_tick(void);
 
 // Take one changed rectangle into `out` (kernel memory, at most `cap` bytes):
 // an os64_glass_rect_t and its pixel rows. Blocks until something changed,

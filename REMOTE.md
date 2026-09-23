@@ -293,45 +293,58 @@ mouse move, and the flagged frame again.
 
 ## 4. `/dev/glass`, write side — hands
 
-A write is one input record:
+A viewer opened with mode `"u"` may also write, one input record per write
+(`os64/glass.h` has the structs, packed and size-asserted). A viewer opened
+`"r"` only watches, and a write to it is refused.
 
 ```c
-OS64_GLASS_KEYBOARD: uint8_t report[8];               // HID boot keyboard report
-OS64_GLASS_POINTER:  uint16_t x, y; uint8_t buttons;  // ABSOLUTE; bits L/R/M
+OS64_GLASS_KEYBOARD: uint8_t kind; uint8_t report[8];                 // 9 bytes: a HID boot keyboard report
+OS64_GLASS_POINTER:  uint8_t kind, buttons; uint16_t x, y;            // 6 bytes: ABSOLUTE; bits L/R/M
 ```
 
-- **The keyboard is a virtual HID keyboard, one per handle.**
-  `hid_process_keyboard_report`, `hid_deliver_usage`, `hid_usage_ascii` and
-  the typematic engine move out of `xhci.c` into `hid_keyboard.c`, taking the
-  per-device state as an argument. xHCI owns one instance, and each glass
-  handle owns one. Pure hoist first, a behaviour-neutral commit that the P5's
-  USB keyboard proves, then the second caller. The typematic tick has to run
-  on a machine with no xHCI (QEMU's default has none), so the remote
-  instances are ticked from somewhere xHCI's presence does not decide.
+- **The keyboard is a virtual HID keyboard, one per viewer.** The report
+  decoder, the usage tables, the chords and the typematic engine moved out of
+  `xhci.c` into `hid_keyboard.c` (`hid_keyboard_t` carries the state). That
+  was a behaviour-neutral commit of its own, proven on a QEMU USB keyboard
+  (shifted text, history, Alt+F2/Alt+F1). xHCI owns one instance and each
+  writable viewer owns one. So the chords are the ones a local keyboard
+  gets, Alt+F8 included, and Ctrl+Alt+Del prints its polite note as it
+  does locally.
+- **Typematic runs in the compositor's frame loop**, outside `kGuiLock`.
+  Glass exists only where a desktop does, and that loop's nap is bounded by
+  its core's scheduler timer. xHCI's poll could not do it, because it returns
+  early on a machine with no xHCI, which is QEMU's default. Views with a held
+  key are taken under `kGuiLock` with a reference each, then ticked after
+  it drops. Delivery never happens under `kGuiLock`, because keystrokes reach
+  the tty and the renderer, whose locks may not nest under it. Each view has
+  its own input lock instead.
 - **The pointer is absolute.** `input_inject_pointer(x, y, buttons)` sits
-  beside `input_inject_mouse` in `input.c`. It clamps, sets the tracked
-  position, emits the MOVE with the implied delta, and shares the button-edge
-  diffing, so grabs, drags and the WM chords all see what a real mouse would
-  produce. There is no wheel: nothing in os64 has one yet. VNC's buttons 4–7
-  are dropped by vncd and booked.
+  beside `input_inject_mouse`. Both now end in one `pointer_locked`, so the
+  clamp, the MOVE with its implied delta, and the button-edge diffing are
+  the same code, and grabs, drags and WM chords see what a real mouse would
+  produce. There is no wheel, because nothing in os64 has one yet (DEBTS).
 - **Closing the handle lifts every finger.** Close delivers an empty keyboard
-  report and a buttons-up pointer record, so a dropped connection can never
-  leave Ctrl held or a drag grabbed. It is a tripwire as well as a courtesy:
-  a stuck modifier on a remote seat looks like the machine went mad.
-- Validation happens whole-record at the boundary: an unknown kind, a short
-  record, or a coordinate outside the screen after clamping (reported, not
-  silently moved) is refused.
-- **Proof:** `glasstest` gains a write half. On a GUI boot, `gkeys`-style
-  focus receives the right ASCII and edges from injected reports (including a
-  Shift chord and a held key's typematic repeats). An injected Alt+F1 moves
-  the glass to VT1 and Alt+F8 brings it back. A pointer press, drag and
-  release reaches the window under it as an implicit grab. Closing mid-chord
-  releases everything.
+  report and, if the viewer held a button, a buttons-up packet, under the
+  view's input lock so that no write can land after it. A dropped connection
+  can never leave Ctrl held or a drag grabbed.
+- **Validation is whole-record, at the boundary.** An unknown kind, a record
+  whose length is not its kind's, a button bit above middle, or a position
+  off the screen (refused, not moved) is refused.
+- **Proof:** `glasstest`'s hands half, on a GUI boot, from VT1:
+  - a `"r"` viewer cannot type, and malformed records are refused;
+  - its own glass keyboard types Alt+F8, and `/sys/gui` says the desktop
+    holds the screen;
+  - a window it creates receives `a` with its release, a shifted `A`, a left
+    click at its centre, repeats of a key held for 900 ms, and the release
+    of a key held by a second viewer that closed without letting go;
+  - Ctrl+Alt+F1 gives the screen back to the terminal.
+
+  A QEMU mouse still moves the pointer through the shared path.
 
 **Permission.** os64 has no users. Any process that can open `/dev/glass`
-can see the screen and type into it. That is consistent with a machine where
-any process can already read `/proc/<pid>/mem`, and it is written down in
-DIVERGENCES rather than left to be discovered.
+can see the screen, and with `"u"` type into it. That is consistent with a
+machine where any process can already read `/proc/<pid>/mem`, and it is
+written down in DIVERGENCES rather than left to be discovered.
 
 ## 5. vncd — RFB 3.8
 

@@ -468,6 +468,10 @@ how a worklist fills with things nobody intends to do.
   cursor one round trip late. RFB's Cursor pseudo-encoding would draw it at
   the viewer, and needs a read of the backbuffer without the cursor. Reverse
   when the lag is felt.
+- **No wheel.** Nothing in os64 reads a scroll wheel yet: the PS/2 and HID
+  mouse decoders take three buttons, and `/dev/glass`'s pointer record
+  carries the same three. VNC's buttons 4-7 are dropped at vncd. Reverse
+  with the local mouse drivers first, when a program wants to scroll.
 - **No CopyRect.** A window drag re-sends every pixel it moves; the
   compositor knows the move and could say so. Reverse when a drag over a
   slow link is felt.

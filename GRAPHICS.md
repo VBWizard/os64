@@ -1097,6 +1097,12 @@ system has to know:
   only once `s_backbuffer_ready` is published: `surface_init` stores the
   pixel pointer before the size, and a reader needs both. The hardware
   framebuffer is still never read (invariant 1).
+- **A viewer opened "u" is also a keyboard and a pointer.** Its keyboard
+  is a `hid_keyboard_t` (the USB keyboard's interpreter) and its pointer
+  goes through `input_inject_pointer`, which shares `pointer_locked` with
+  the mice. Held keys repeat from `glass_input_tick`, called in the frame
+  loop outside `kGuiLock`. Delivery happens under the view's input lock and
+  never under `kGuiLock`, for the reason the painting rule above gives.
 - **It follows the backbuffer, not the glass.** While a text VT holds the
   screen the backbuffer keeps compositing, so viewers keep receiving the
   desktop, flagged `OS64_GLASS_TEXT_VT`. A change of who holds the screen

@@ -422,13 +422,14 @@ bool devfs_handle_alias(vfs_filesystem_t *fs, const char *path,
 	dev_node_t node = dev_parse_path(path);
 	if (node == DEV_NODE_GLASS)
 	{
-		// One viewer per open, reading. A boot with no desktop has no
-		// screen to watch: the name is still an alias, and HANDLE_NONE is
-		// its refusal. Any mode but "r" falls through to the ordinary open,
-		// which refuses it as a file.
-		if (mode == NULL || mode[0] != 'r' || mode[1] != '\0')
+		// One viewer per open: "r" watches, "u" watches and types
+		// (os64/glass.h, THE HANDS). A boot with no desktop has no screen:
+		// the name is still an alias, and HANDLE_NONE is its refusal. Any
+		// other mode falls through to the ordinary open, which refuses it
+		// as a file.
+		if (mode == NULL || (mode[0] != 'r' && mode[0] != 'u') || mode[1] != '\0')
 			return false;
-		*object = glass_view_open();
+		*object = glass_view_open(mode[0] == 'u');
 		*type = *object != NULL ? HANDLE_GLASS : HANDLE_NONE;
 		return true;
 	}

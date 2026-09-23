@@ -77,27 +77,12 @@ void input_inject_key(char ascii, uint8_t scancode, uint8_t modifiers, bool pres
 	spinlock_release_irqrestore(&s_input_lock, flags);
 }
 
-void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons)
+// Move by (dx, dy), clamped to the screen, and diff the buttons into
+// discrete DOWN/UP events. Caller holds s_input_lock. Both pointers — the
+// mice, which move relatively, and /dev/glass, which says where — end here,
+// so a grab, a drag and a chord see the same events from either.
+static void pointer_locked(int32_t dx, int32_t dy, uint8_t buttons, uint8_t modifiers)
 {
-	if (!s_active)
-		return;
-
-	// Text VTs took no mouse from 2026-08-19 until 2026-08-21, and the reason
-	// given was "there is no consumer". THERE IS ONE NOW: vt_select.c, the
-	// gpm-lineage console selection this comment promised. Events are
-	// enqueued unconditionally; the compositor decides at the far end of the
-	// ring whether they belong to a window or to the focused terminal, which
-	// is the only place that knows who holds the glass at drain time.
-
-	// The keyboard state that was true when this packet arrived. Sampled ONCE
-	// for the whole packet so the move and the button edges it may also carry
-	// agree with each other — a chord that is released mid-packet must not
-	// produce a move that thinks it was held and a button-up that thinks it
-	// was not (that disagreement is exactly how a modifier-drag gets stuck).
-	uint8_t modifiers = keyboard_current_modifiers();
-
-	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);
-
 	// Integrate motion and clamp to the screen. PS/2 y is positive-up;
 	// the DRIVER converts to screen coords (positive-down) before injecting,
 	// so dy here is already screen-oriented.
@@ -111,7 +96,7 @@ void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons)
 
 		input_event_t ev = {
 			.type = INPUT_EVENT_MOUSE_MOVE,
-			.mouse = { .x = s_mouse_x, .y = s_mouse_y, .dx = dx, .dy = dy,
+			.mouse = { .x = s_mouse_x, .y = s_mouse_y, .dx = (int16_t)dx, .dy = (int16_t)dy,
 			           .buttons = buttons, .button = 0,
 			           .modifiers = modifiers },
 		};
@@ -135,7 +120,40 @@ void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons)
 		enqueue_locked(&ev);
 	}
 	s_mouse_buttons = buttons;
+}
 
+void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons)
+{
+	if (!s_active)
+		return;
+
+	// Text VTs took no mouse from 2026-08-19 until 2026-08-21, and the reason
+	// given was "there is no consumer". THERE IS ONE NOW: vt_select.c, the
+	// gpm-lineage console selection this comment promised. Events are
+	// enqueued unconditionally; the compositor decides at the far end of the
+	// ring whether they belong to a window or to the focused terminal, which
+	// is the only place that knows who holds the glass at drain time.
+
+	// The keyboard state that was true when this packet arrived. Sampled ONCE
+	// for the whole packet so the move and the button edges it may also carry
+	// agree with each other — a chord that is released mid-packet must not
+	// produce a move that thinks it was held and a button-up that thinks it
+	// was not (that disagreement is exactly how a modifier-drag gets stuck).
+	uint8_t modifiers = keyboard_current_modifiers();
+
+	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);
+	pointer_locked(dx, dy, buttons, modifiers);
+	spinlock_release_irqrestore(&s_input_lock, flags);
+}
+
+void input_inject_pointer(int32_t x, int32_t y, uint8_t buttons)
+{
+	if (!s_active)
+		return;
+	// The same one-sample rule as a mouse packet (above).
+	uint8_t modifiers = keyboard_current_modifiers();
+	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);
+	pointer_locked(x - s_mouse_x, y - s_mouse_y, buttons, modifiers);
 	spinlock_release_irqrestore(&s_input_lock, flags);
 }
 
