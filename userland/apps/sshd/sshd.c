@@ -20,7 +20,28 @@ typedef struct {
     int32_t fd;
 } child_stream;
 static child_stream streams[2];
+/* One local connection per forward slot (engine.forwards[i], REMOTE.md
+ * section 2). to_local holds client bytes the connection has not taken yet,
+ * bounded by the window the forward advertised; from_local holds what the
+ * channel could not take yet. Both are allocated when the forward opens, not
+ * reserved for all seven up front: a program's image must fit its link slot
+ * (app_bases.py), and most connections forward nothing. The event loop alone
+ * touches them, as it alone touches the engine. */
+typedef struct {
+    int32_t handle;                         // the dialed connection, or -1
+    uint8_t *to_local;                      // SSH_FORWARD_WINDOW bytes while open
+    uint32_t to_len;
+    uint8_t *from_local;                    // SSH_DATA_MAX bytes while open
+    uint32_t from_len;
+    int local_ended;                        // read EOF or a failed write: EOF + CLOSE owed
+    int client_eof;                         // the client half-closed (FORWARD_EOF)
+    int peer_closed;                        // the channel closed: deliver to_local, then release
+} forward_link;
+static forward_link links[SSH_FORWARDS];
 static const char key_path[] = "/home/sshd_host_key";
+/* The forwarding policy this session obeys, from the listener's argv. The
+ * engine is zeroed at init, so it is applied after (session()). */
+static enum ssh_forward_policy engine_policy = SSH_FORWARD_NONE;
 
 static uint64_t now_ms(void)
 {
@@ -244,6 +265,112 @@ spawned:
     }
     return 1;
 }
+static void link_close(uint32_t i)
+{
+    forward_link *l = &links[i];
+    if (l->handle >= 0) os64_close(l->handle);
+    if (l->to_local) os64_free(l->to_local);
+    if (l->from_local) os64_free(l->from_local);
+    l->handle = -1; l->to_local = l->from_local = 0;
+    l->to_len = l->from_len = 0; l->local_ended = l->client_eof = l->peer_closed = 0;
+}
+/* Judge and dial a direct-tcpip destination. The check is on the ADDRESS the
+ * name resolves to, never its spelling: `localhost` passes because /etc/hosts
+ * says 127.0.0.1, and a name that resolves elsewhere is refused whatever it
+ * looks like. */
+static void forward_open(uint32_t i)
+{
+    ssh_forward *f = &engine.forwards[i];
+    char note[400];
+    uint32_t ip = 0;
+    int64_t rc = os64_resolve(f->host, &ip);
+    if (rc < 0) { ssh_forward_result(&engine, i, 0, 2, os64_dial_reason(rc)); return; }
+    if ((ip >> 24) != 127) {
+        os64_snprintf(note, sizeof(note), "sshd: refused forward to %s:%u (not loopback)", f->host, (unsigned)f->port);
+        log_line(note);
+        ssh_forward_result(&engine, i, 0, 1, "forwarding reaches this machine's loopback only"); return;
+    }
+    link_close(i);
+    links[i].to_local = os64_malloc(SSH_FORWARD_WINDOW);
+    links[i].from_local = os64_malloc(SSH_DATA_MAX);
+    if (!links[i].to_local || !links[i].from_local) {
+        link_close(i); ssh_forward_result(&engine, i, 0, 4, "out of memory for a forward"); return;
+    }
+    os64_netdest_t dest = {.ip = ip, .port = (uint16_t)f->port, .protocol = OS64_NET_TCP};
+    int64_t h = os64_net_dial(&dest);
+    if (h < 0) { link_close(i); ssh_forward_result(&engine, i, 0, 2, os64_dial_reason(h)); return; }
+    links[i].handle = (int32_t)h;
+    os64_snprintf(note, sizeof(note), "sshd: forwarding to %s:%u", f->host, (unsigned)f->port); log_line(note);
+    ssh_forward_result(&engine, i, 1, 0, "");
+}
+/* One turn of every live forward, both directions, never blocking. Returns 0
+ * when nothing moved; bit 0 when something did, which lets the loop skip its
+ * nap, and bit 1 when a forward sent bytes, which is what the session loop's
+ * turn-taking counts.
+ *
+ * Forwards share one output queue, so the order they are served in is who
+ * gets it when it is short. Round robin: the next pass starts at the forward
+ * where the queue ran out, the first one left holding bytes because no room
+ * was left for them (ssh_output_full). A forward held back by its own limits,
+ * the client's window for it or its packet size, is not that point, or it
+ * would pin the rotation and hand every refill to the forward after it. That
+ * keeps every busy forward within one staging buffer of the others however
+ * long they run. Starting after the first forward that SENT (the rule the
+ * two session streams use) is exact for two and drifts without bound for
+ * three or more. */
+static uint32_t next_forward;
+static int forwards_pass(void)
+{
+    int moved = 0, cut = 0, sent_any = 0;
+    uint32_t first = next_forward;
+    for (uint32_t k = 0; k < SSH_FORWARDS; k++) {
+        uint32_t i = (first + k) % SSH_FORWARDS;
+        forward_link *l = &links[i];
+        if (l->handle < 0) continue;
+        ssh_forward_consumed(&engine, i, 0);   // credit the output queue had no room for
+        if (l->to_len && !l->local_ended) {
+            int64_t wrote = os64_write_for(l->handle, l->to_local, l->to_len, 0);
+            if (wrote > 0) {
+                l->to_len -= (uint32_t)wrote; memmove(l->to_local, l->to_local + wrote, l->to_len);
+                ssh_forward_consumed(&engine, i, (uint32_t)wrote); moved = 1;
+            } else if (wrote != OS64_ERR_TIMEOUT && wrote != OS64_INTERRUPTED) {
+                /* The local end is gone: what the client sent can no longer
+                 * be delivered, and the channel ends as a read EOF would. */
+                l->local_ended = 1; l->to_len = 0;
+            }
+        }
+        /* A closed channel takes nothing more from the local end; what the
+         * client sent before its CLOSE is delivered first, and then the
+         * slot is the engine's to reuse. */
+        if (l->peer_closed) {
+            if (!l->to_len || l->local_ended) { link_close(i); ssh_forward_release(&engine, i); moved = 1; }
+            continue;
+        }
+        /* The client's EOF, once its bytes are delivered, ends the local
+         * connection whole: there is no ring-3 half-close to pass on, so a
+         * reply the local end would have sent after it is lost (DEBTS). A
+         * client that closes fully, which is what a viewer does, loses
+         * nothing. */
+        if (l->client_eof && !l->to_len) l->local_ended = 1;
+        if (!l->local_ended && !l->from_len) {
+            int64_t got = os64_read_for(l->handle, l->from_local, SSH_DATA_MAX, 0);
+            if (got > 0) { l->from_len = (uint32_t)got; moved = 1; }
+            else if (got != OS64_ERR_TIMEOUT && got != OS64_INTERRUPTED) l->local_ended = 1;
+        }
+        if (l->from_len) {
+            size_t sent = ssh_forward_send(&engine, i, l->from_local, l->from_len);
+            if (sent) { l->from_len -= (uint32_t)sent; memmove(l->from_local, l->from_local + sent, l->from_len); moved = 1; sent_any = 2; }
+            if (l->from_len && !cut && ssh_output_full(&engine)) { next_forward = i; cut = 1; }
+        }
+        /* Everything read has been sent: the channel follows the connection
+         * into EOF and CLOSE. The slot stays the engine's until the client's
+         * CLOSE crosses ours (SSH_EVENT_FORWARD_CLOSE). */
+        if (l->local_ended && !l->from_len && ssh_forward_finish(&engine, i)) {
+            link_close(i); moved = 1;
+        }
+    }
+    return moved | sent_any;
+}
 static void resize_terminal(void)
 {
     /* Before shell startup the accepted proposal supplies its initial size.
@@ -276,6 +403,30 @@ static void event(void)
         __atomic_store_n(&input_tail, tail + (uint32_t)engine.event_len, __ATOMIC_RELEASE); break;
     }
     case SSH_EVENT_EOF: __atomic_store_n(&input_done, 1, __ATOMIC_RELEASE); break;
+    case SSH_EVENT_FORWARD_OPEN: forward_open(engine.event_forward); break;
+    case SSH_EVENT_FORWARD_DATA: {
+        forward_link *l = &links[engine.event_forward];
+        /* A dead local end discards, and the window is credited back so the
+         * client is not left waiting on bytes nobody will take. */
+        if (l->handle < 0 || l->local_ended) { ssh_forward_consumed(&engine, engine.event_forward, (uint32_t)engine.event_len); break; }
+        if (engine.event_len > SSH_FORWARD_WINDOW - l->to_len) {
+            ssh_disconnect(&engine, 2, "forward queue exceeds advertised window"); break;
+        }
+        memcpy(l->to_local + l->to_len, engine.event_data, engine.event_len);
+        l->to_len += (uint32_t)engine.event_len; break;
+    }
+    /* A half-close ends the local connection once the queue drains
+     * (forwards_pass). */
+    case SSH_EVENT_FORWARD_EOF: links[engine.event_forward].client_eof = 1; break;
+    /* A link already closed (our CLOSE went first, after the local end
+     * ended) owes nothing; an open one delivers its queue before closing
+     * (forwards_pass). Bytes read for the client can no longer be sent. */
+    case SSH_EVENT_FORWARD_CLOSE: {
+        forward_link *l = &links[engine.event_forward];
+        if (l->handle < 0) ssh_forward_release(&engine, engine.event_forward);
+        else { l->peer_closed = 1; l->from_len = 0; }
+        break;
+    }
     default: break;
     }
 }
@@ -309,21 +460,34 @@ static int session(void)
     int good = ssh_init(&engine, seed, key);
     ssh_wipe(seed, 32); ssh_wipe(key, 32);
     if (!good) return 1;
+    engine.forward_policy = engine_policy;
     if (!authorized_keys()) ssh_disconnect(&engine, 14, "no usable authorized keys or key file refused");
     os64_signal_set_handler(OS64_SIGPIPE, ignore_pipe);
+    for (uint32_t i = 0; i < SSH_FORWARDS; i++) links[i].handle = -1;
     uint8_t net[8192], out[2][4096]; size_t net_len = 0, net_off = 0, out_len[2] = {0,0};
     int eof[2] = {0,0}, exited = 0, close_received = 0; int32_t status = 0;
     uint64_t begin = now_ms(), last_progress = begin, key_time = begin, kex_begin = begin, close_time = 0;
     int had_kex = engine.kex;
     unsigned next_stream = 0;
+    /* The session's streams and the forwards take turns going first for the
+     * output queue's room, by the streams' own rule: whichever group went
+     * first and spent room hands the lead to the other. Going first every
+     * time, either would take all of a trickle of room and starve the other.
+     * The lead passes because every channel sends what fits the room
+     * (ssh_connection.c fit_room): a leader with anything to send spends
+     * some, however little is free. */
+    int forwards_lead = 0;
     for (;;) {
         size_t queued = engine.out_len;
         if (!flush()) break;
         uint64_t now = now_ms();
+        int moved = queued && engine.out_len < queued;
         if (!queued || engine.out_len < queued) last_progress = now;
         /* An in-flight channel close can owe a deferred reply. Keep reading
-         * the active KEX until NEWKEYS releases it, or its deadline expires. */
-        if (engine.closed || (close_received && !engine.kex)) {
+         * the active KEX until NEWKEYS releases it, or its deadline expires.
+         * A closed session is not the end while forwards are live: the
+         * client ends those itself, then the connection. */
+        if (engine.closed || (close_received && !engine.kex && !ssh_forwards_live(&engine))) {
             if (!engine.out_len || now - last_progress > 5000) break;
             os64_sleep(10); continue;
         }
@@ -333,24 +497,36 @@ static int session(void)
         if (had_kex && !engine.kex) key_time = now;
         had_kex = engine.kex;
         if (engine.kex && now - kex_begin > 120000) ssh_disconnect(&engine, 3, "key exchange timeout");
-        if (!close_received && !engine.sent_close && !engine.kex && (now-key_time >= 3600000 || engine.tx.bytes >= 536870912 || engine.rx.bytes >= 536870912)) {
+        /* Key-use limits hold for the connection, not the session channel:
+         * forwards outlive the session. Only a connection already ending
+         * skips the rekey. */
+        int ending = (close_received || engine.sent_close) && !ssh_forwards_live(&engine);
+        if (!ending && !engine.kex && (now-key_time >= 3600000 || engine.tx.bytes >= 536870912 || engine.rx.bytes >= 536870912)) {
             ssh_rekey(&engine); kex_begin = now; had_kex = engine.kex;
         }
         if (net_off == net_len) {
             int64_t n = os64_read_for(0, net, sizeof(net), 0);
             if (n == 0 || (n < 0 && n != OS64_ERR_TIMEOUT && n != OS64_INTERRUPTED)) break;
-            net_off = net_len = 0; if (n > 0) { net_len = (size_t)n; }
+            net_off = net_len = 0; if (n > 0) { net_len = (size_t)n; moved = 1; }
         }
         if (net_off < net_len) {
-            net_off += ssh_receive(&engine, net+net_off, net_len-net_off);
+            size_t took = ssh_receive(&engine, net+net_off, net_len-net_off);
+            net_off += took; if (took) moved = 1;
             event();
             if (engine.event == SSH_EVENT_CLOSE) close_received = 1;
         }
+        int forwards_went_first = forwards_lead;
+        if (forwards_went_first) {
+            int result = forwards_pass();
+            if (result) moved = 1;
+            if (result & 2) forwards_lead = 0;
+        }
         if (engine.started) {
+            /* ssh_input_consumed keeps the credit owed until it can go out
+             * (not during a key exchange, not without output room), so every
+             * pass reports what left and a zero retries. */
             uint32_t head = __atomic_load_n(&input_head, __ATOMIC_ACQUIRE);
-            if (head != credited && SSH_OUTPUT_CAP-engine.out_len > 256) {
-                ssh_input_consumed(&engine, head-credited); credited = head;
-            }
+            ssh_input_consumed(&engine, head-credited); credited = head;
             unsigned first_stream = next_stream; int rotated = 0;
             for (unsigned pass = 0; pass < 2; pass++) {
                 unsigned i = (first_stream + pass) % 2;
@@ -374,6 +550,8 @@ static int session(void)
                      * or credit just over one staging buffer splits 4096:1
                      * the same way every time. */
                     if (n && !rotated) { next_stream = i ^ 1u; rotated = 1; }
+                    if (n && !forwards_went_first) forwards_lead = 1;
+                    if (n) moved = 1;
                     out_len[i] -= n; memmove(out[i], out[i]+n, out_len[i]);
                 }
             }
@@ -382,12 +560,18 @@ static int session(void)
                 if (done == child) exited = 1;
             }
             if (exited && eof[0] && eof[1] && !out_len[0] && !out_len[1]) ssh_send_exit(&engine, (uint32_t)status);
-            if (engine.sent_close && !engine.kex) {
+            if (engine.sent_close && !engine.kex && !ssh_forwards_live(&engine)) {
                 if (!close_time) close_time = now;
                 if (!engine.out_len && now-close_time > 5000) break;
             }
         }
-        os64_sleep(1);
+        if (!forwards_went_first && forwards_pass()) moved = 1;
+        /* Nap only on a pass that moved nothing. A forward carries a screen's
+         * worth of pixels, and a nap per pass capped it at one read per tick.
+         * Taking bytes the engine buffered counts as moving: ssh_receive
+         * takes one packet per call, so a read holding several would
+         * otherwise cost a tick for each packet after the first. */
+        os64_sleep(moved ? 0 : 1);
     }
     if (engine.error[0]) log_line(engine.error);
     /* Returning tears down the task, including a worker parked in a pipe
@@ -395,44 +579,67 @@ static int session(void)
     ssh_wipe(&engine, sizeof(engine));
     return 0;
 }
-static bool port_setting(const char *name, const char *value, void *user)
+typedef struct { uint32_t port; enum ssh_forward_policy forward; int bad; } sshd_settings;
+/* Every key sshd.conf may hold; an unknown key or value refuses the file
+ * rather than being read as less than the operator wrote. */
+static bool setting(const char *name, const char *value, void *user)
 {
-    uint32_t *port = user;
-    if (!name || !os64_streq(name, "port")) { *port = 0; return false; }
-    uint32_t p = 0;
-    if (!*value) { *port = 0; return false; }
-    for (const char *c = value; *c; c++) {
-        if (*c < '0' || *c > '9' || p > 6553) { *port = 0; return false; }
-        p = p*10 + (unsigned)(*c-'0');
+    sshd_settings *c = user;
+    if (name && os64_streq(name, "port")) {
+        uint32_t p = 0;
+        if (!*value) { c->bad = 1; return false; }
+        for (const char *d = value; *d; d++) {
+            if (*d < '0' || *d > '9' || p > 6553) { c->bad = 1; return false; }
+            p = p*10 + (unsigned)(*d-'0');
+        }
+        if (!p || p > 65535) { c->bad = 1; return false; }
+        c->port = p; return true;
     }
-    *port = p <= 65535 ? p : 0; return *port != 0;
+    if (name && os64_streq(name, "forward")) {
+        if (os64_streq(value, "loopback")) c->forward = SSH_FORWARD_LOOPBACK;
+        else if (os64_streq(value, "none")) c->forward = SSH_FORWARD_NONE;
+        else { c->bad = 1; return false; }
+        return true;
+    }
+    c->bad = 1; return false;
 }
-/* The port sshd.conf configures, or 0 with the reason logged. Resolve, then
- * read: only a file the ladder does not name permits the default. One it
- * names but cannot read is the operator's word unread, and listening on 22
- * anyway would be inventing a configuration. */
-static int configured_port(void)
+/* What sshd.conf configures, into `out`; returns 0 with the reason logged
+ * when it cannot be used. Resolve, then read: only a file the ladder does not
+ * name permits the defaults (port 22, forwarding to loopback). One it names
+ * but cannot read is the operator's word unread, and listening anyway would
+ * be inventing a configuration. */
+static int configured(sshd_settings *out)
 {
-    uint32_t port = 22; char conf_path[OS64_CONF_PATH_MAX];
+    sshd_settings c = {22, SSH_FORWARD_LOOPBACK, 0}; char conf_path[OS64_CONF_PATH_MAX];
     int found = os64_conf_find("sshd.conf", conf_path, sizeof(conf_path)) == 0;
-    int64_t config = found ? os64_conf_read(conf_path, port_setting, &port) : OS64_CONF_NO_FILE;
+    int64_t config = found ? os64_conf_read(conf_path, setting, &c) : OS64_CONF_NO_FILE;
     if (found && config == OS64_CONF_NO_FILE) { log_line("sshd: sshd.conf found but unreadable; startup refused"); return 0; }
-    if (!port || (found && config < 0)) { log_line("sshd: invalid sshd.conf"); return 0; }
-    return (int)port;
+    if (c.bad || (found && config < 0)) { log_line("sshd: invalid sshd.conf"); return 0; }
+    *out = c; return 1;
 }
 int main(int argc, char **argv)
 {
-    if (argc == 2 && os64_streq(argv[1], "-session")) return session();
-    if (argc != 1) { log_line("usage: sshd (port in sshd.conf)"); return 2; }
-    uint32_t port = (uint32_t)configured_port();
-    if (!port) return 2;
+    /* A session is told the forwarding policy by the listener that read
+     * sshd.conf, so every connection it accepted obeys the same file. */
+    if (argc == 3 && os64_streq(argv[1], "-session")) {
+        if (os64_streq(argv[2], "loopback")) engine_policy = SSH_FORWARD_LOOPBACK;
+        else if (!os64_streq(argv[2], "none")) return 2;
+        return session();
+    }
+    if (argc != 1) { log_line("usage: sshd (port and forward in sshd.conf)"); return 2; }
+    sshd_settings conf;
+    if (!configured(&conf)) return 2;
+    uint32_t port = conf.port;
     os64_netdest_t local = {.ip=0, .port=(uint16_t)port, .protocol=OS64_NET_TCP};
     int64_t listener = os64_net_announce(&local);
     if (listener < 0) { log_line("sshd: cannot announce configured port"); return 1; }
     uint8_t key[32];
     if (!host_key(key, 1)) { os64_close((int32_t)listener); return 1; }
     fingerprint(key); ssh_wipe(key, 32);
-    char message[80]; os64_snprintf(message, sizeof(message), "sshd: listening on port %u", (unsigned)port); log_line(message);
+    char message[96];
+    os64_snprintf(message, sizeof(message), "sshd: listening on port %u, %s", (unsigned)port,
+                  conf.forward == SSH_FORWARD_LOOPBACK ? "forwarding to loopback" : "forwarding disabled");
+    log_line(message);
     unsigned sessions = 0;
     for (;;) {
         while (os64_reap(0) > 0) if (sessions) sessions--;
@@ -443,7 +650,7 @@ int main(int argc, char **argv)
         /* Each unauthenticated connection owns bounded but substantial crypto
          * and input storage. Cap children before allocating another session. */
         if (sessions < 16) {
-            char *args[] = {"/bin/sshd", "-session", 0};
+            char *args[] = {"/bin/sshd", "-session", conf.forward == SSH_FORWARD_LOOPBACK ? "loopback" : "none", 0};
             if (os64_spawn_redirected("/bin/sshd", args, conn.handle, conn.handle, -1, 0) >= 0) sessions++;
         }
         os64_close(conn.handle);

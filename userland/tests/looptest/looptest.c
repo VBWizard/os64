@@ -229,10 +229,54 @@ static int hold(const char *address)
 	return answered;
 }
 
+// `looptest echo <address>`: an echo service on port 4401 for sixty seconds,
+// one thread per call, so a forward can be proved end to end (REMOTE.md
+// section 2: host ssh -L -> QEMU's forward -> sshd -> loopback -> here).
+static int64_t echo_one(void *arg)
+{
+	int32_t h = (int32_t)(int64_t)arg;
+	uint8_t *buf = os64_malloc(CHUNK);
+	int64_t n;
+	while (buf != NULL && (n = os64_read(h, buf, CHUNK)) > 0)
+		if (write_all(h, buf, (uint32_t)n) != n)
+			break;
+	os64_free(buf);
+	os64_close(h);
+	return 0;
+}
+
+static int echo(const char *address)
+{
+	char dial[64];
+	os64_snprintf(dial, sizeof(dial), "tcp!%s!4401", address);
+	int64_t lh = os64_announce(dial);
+	if (lh < 0)
+	{
+		os64_printf("looptest echo: %s: %s\n", dial, os64_dial_reason(lh));
+		return 255;
+	}
+	os64_printf("looptest echo: %s echoing for 60 seconds\n", dial);
+	int calls = 0;
+	for (int second = 0; second < 60; second++)
+	{
+		os64_netconn_t conn;
+		if (os64_read_for((int32_t)lh, &conn, sizeof(conn), 1000) != (int64_t)sizeof(conn))
+			continue;
+		if (os64_thread(echo_one, (void *)(int64_t)conn.handle) < 0)
+			os64_close(conn.handle);
+		calls++;
+	}
+	os64_close((int32_t)lh);
+	os64_printf("looptest echo: %d call(s)\n", calls);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc == 3 && os64_streq(argv[1], "hold"))
 		return hold(argv[2]);
+	if (argc == 3 && os64_streq(argv[1], "echo"))
+		return echo(argv[2]);
 
 	int64_t lh = os64_announce("tcp!127.0.0.1!4401");
 	if (lh < 0)

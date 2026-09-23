@@ -468,9 +468,18 @@ how a worklist fills with things nobody intends to do.
   address-space design/fix needs kernel-scope discussion. Evidence and
   source pointers: `SSHD.md`, `userland/tools/app_bases.py`,
   `kernel/include/task.h`, `task_alloc_aligned`/`task_reserve_task_virt`.
-- **SSH v1 intentionally lacks Ed25519, SFTP/scp, forwarding, passwords,
-  per-user identities, and concurrent session channels.** Reverse these
-  boundaries when a concrete client or file-transfer consumer needs them.
+- **SSH v1 intentionally lacks Ed25519, SFTP/scp, remote forwarding
+  (`tcpip-forward`), local forwarding beyond this machine's loopback,
+  passwords, per-user identities, and concurrent session channels.** Reverse
+  these boundaries when a concrete client or file-transfer consumer needs
+  them. Local forwarding to 127/8 arrived 2026-09-23 for REMOTE.md.
+- **A forward cannot pass on a half-close.** A client EOF on a `direct-tcpip`
+  channel ends the local connection whole once the client's bytes are
+  delivered (SSHD.md § Local forwarding), because ring 3 has no TCP
+  shutdown-for-writing. A local service that answers after its client
+  half-closes (`nc -N`, some one-shot request protocols) loses that answer.
+  Reverse with a half-close verb on TCP handles when such a service is
+  forwarded.
   Public keys grant machine access; usernames are recorded without defining
   users. No authorized key ships in the image.
 - **SSH exec inherits husk's 255-byte argument/line limit and shell syntax.**
@@ -484,3 +493,17 @@ how a worklist fills with things nobody intends to do.
 - **Non-PTY disconnects close the command pipes, without a process-group
   cancellation API.** A command that neither reads stdin nor writes output
   can outlive its connection. Do not claim remote disconnect cancels a job.
+- **A session channel closed under live forwards leaves its command
+  running** (Codex #121). The command's pty or pipes are torn down only
+  when the connection's process exits, and live forwards keep that process
+  alive, so a client that CLOSEs the session channel while its command runs
+  and forwards stay open leaves the command running (and its output
+  workers parked) until the last forward ends. OpenSSH does not do this:
+  its shell or command ends first, and `ssh -N` opens no session. The
+  standard cure is OpenSSH's own: close the session's pty master or pipes
+  at the channel CLOSE, which SIGHUPs a seated shell. What stops it today
+  is that sshd's worker threads are parked in reads and writes on those
+  same handles, and while a pinned close is memory-safe, nobody has yet
+  shown that the hangup reaches the child while our own read holds the
+  master open. Pay when a client other than OpenSSH drives forwards, and
+  verify a pty and a pipe close under a parked reader first.

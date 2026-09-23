@@ -13,7 +13,9 @@ echo $?  # 1
 ```
 
 `ssh -t -i ~/.ssh/id_ecdsa os64@p5` opens an interactive husk on a STREAM
-PTY. There is one session channel per connection. The daemon is userland;
+PTY. There is one session channel per connection, beside up to seven
+`direct-tcpip` forwards to this machine's loopback (§ Local forwarding). The
+daemon is userland;
 the kernel addition is the `SSHD` token's existing-style launch hook. No new
 syscall, pipe operation, PTY operation, or cryptographic ABI is introduced.
 
@@ -65,7 +67,12 @@ carries none, since it runs no services:
 
 ```text
 port = 22
+forward = loopback
 ```
+
+`forward` is `loopback` (the default when the key is absent) or `none`; any
+other value refuses the file, as an unreadable one does. The listener reads
+the file once and hands each session the policy on its command line.
 
 Start `sshd &` at a prompt, or add `SSHD` to the intended boot entry's kernel
 command line. Standard boot entries do not automatically enable the service;
@@ -137,7 +144,8 @@ A KEX has a separate 120-second completion deadline. Connection replies
 received in flight before the client's KEXINIT are deferred until NEWKEYS;
 application output pauses during KEX. A channel close during that exchange
 keeps the transport running until NEWKEYS releases the deferred close reply
-or the KEX deadline expires. Closing does not initiate another server rekey.
+or the KEX deadline expires. A connection that is ending (its session
+closed and no forwards live) does not initiate another server rekey.
 The deferred reply budget is 8 KiB of stored replies. Their framed wire cost
 is tracked alongside, and receive takes no further packet until the output
 queue has room for one maximum packet plus that whole replay, so NEWKEYS can
@@ -150,7 +158,14 @@ Peer window and maximum-packet limits constrain outgoing data. stdout and
 stderr take turns spending shared credit; priority advances once per service
 pass, away from the first stream that sent bytes, so neither sparse window
 updates nor credit just over one staging buffer can keep favoring one
-stream. Window
+stream. The session's streams and the forwards take turns going first for
+the output queue's room by the same rule, so a trickle of room is never all
+one group's. The lead passes because every channel sends what fits the
+free room rather than all or nothing: a channel that waited for room for
+its whole staged packet would never spend any, and so never hand over. Credit for input the command took is owed until it can go out
+as one WINDOW_ADJUST: never during a key exchange, where each adjust would
+wait in the deferred-reply budget and enough of them would exhaust it, and
+never without output room. Window
 addition overflow, data exceeding the advertised window, invalid channel
 numbers, malformed lengths, and invalid protocol transitions are refused.
 Transport packet length is capped at 35000 bytes. KEX name-lists are capped
@@ -199,13 +214,86 @@ wait. Backpressured network output also has a finite no-progress deadline.
   interface. Interactive teardown closes the PTY master and hangs up the
   seated shell.
 
-Forwarding channel types and second session channels receive OPEN_FAILURE.
-Unsupported global requests receive REQUEST_FAILURE when requested.
-Unsupported channel requests, including env, subsystem/SFTP, agent
+Channel types other than `session` and `direct-tcpip`, and second session
+channels, receive OPEN_FAILURE. Unsupported global requests, including
+`tcpip-forward` (remote forwarding, `ssh -R`), receive REQUEST_FAILURE when
+requested. Unsupported channel requests, including env, subsystem/SFTP, agent
 forwarding, signal, break, and xon-xoff, receive CHANNEL_FAILURE when
 requested. No passwords, per-user access control, Ed25519, SFTP/scp,
-compression, forwarding, or multiplexed sessions are implemented. Reversing
-conditions are recorded in DEBTS.md.
+compression, remote forwarding, or multiplexed sessions are implemented.
+Reversing conditions are recorded in DEBTS.md.
+
+## Local forwarding (`direct-tcpip`, 2026-09-23)
+
+`ssh -L 5900:localhost:5900 os64@p5` reaches a service on the P5's loopback.
+It is REMOTE.md's tunnel, and anything else announced on `127.0.0.1` can use
+it too. The session is local channel 0, and forward *i* is local channel
+*i + 1*, seven at most. An eighth open receives OPEN_FAILURE
+`RESOURCE_SHORTAGE`.
+
+- **The destination is judged by its address, never its spelling.** The
+  engine refuses on sight a host that is empty, over 255 bytes or not
+  printable, and a port of 0 or above 65535, and hands the rest to the
+  daemon. The daemon resolves the host with `os64_resolve`, accepts only
+  `127.0.0.0/8` (`localhost` passes because `/etc/hosts` says 127.0.0.1),
+  and dials. A refused destination is `ADMINISTRATIVELY_PROHIBITED`
+  ("forwarding reaches this machine's loopback only") and is logged; a
+  dial that fails is `CONNECT_FAILED` with `os64_dial_reason`'s words. A
+  name that has to go to DNS blocks only the session asking.
+- **Windows.** Each forward advertises 256 KiB, sized for keystrokes and
+  requests, not the session's 2 MiB. Outgoing data obeys the peer's window
+  and packet size and is sized to the output queue's free room, as the
+  session's is (see Commands, channels, and backpressure), and a window
+  overrun or overflowing
+  adjustment disconnects, the session's rules. Credit for bytes the local
+  connection took follows the session's rule: owed through a key exchange
+  or a full queue and sent as one adjust, never dropped, or the client's
+  window would shrink for good. Each forward's two queues (256 KiB
+  toward the local connection, 32 KiB toward the client) are allocated when
+  it opens and freed when it closes, which keeps the program inside its
+  link slot.
+- **Closing.** When the local connection ends, EOF and CLOSE are sent once
+  everything read from it has gone out; like exit-status they wait out a key
+  exchange. Both CLOSEs crossing ends the channel, but the slot is freed
+  only after the bytes the client sent before its CLOSE have been delivered
+  to the local connection (or it failed): a client may CLOSE without an EOF
+  first, and its last bytes are still owed. **A client EOF
+  ends the local connection whole** once the client's bytes are delivered:
+  os64 has no ring-3 half-close, so a reply the local service would have
+  sent after a half-close is lost (DEBTS). A viewer or browser that closes
+  fully loses nothing.
+- **Lifetime.** A closed session does not end the connection while forwards
+  are live; `ssh -N` opens no session at all. The connection ends when the
+  client leaves. The server's rekey limits hold for the connection, so
+  forwards outliving the session still rekey.
+- **Channel numbers.** Every reply to an open is addressed by the client's
+  number for it, so an open (session or forward) that names a number one of
+  the client's live channels already uses ends the connection; a number is
+  live until both CLOSEs for it have crossed, and then it may be used again.
+- **The loop naps only on a pass that moved nothing.** It used to nap a
+  tick every pass, which is fine for a shell but capped a forward at one
+  read per tick.
+
+Proof: `sshtest`'s forward matrix (policy, confirmation fields, data and
+window credit, send clamping, requests, both close orders, EOF, window
+violations, refusals, destination shape, seven-and-an-eighth, slot reuse,
+a session alongside, KEX holding a close, credit kept through a full
+queue and a key exchange, sends sized to the free room, a closed slot held
+until release, channel numbers live and dead). The
+daemon-loop harness gained `forward` (the config key), `linger` (a closed
+session with a live forward keeps the connection and yields rather than
+naps), `closedrain` (a closed forward delivers its queue, then is released
+once), `forwardblocked` (a forward held back by its own spent window does
+not pin the rotation; the round-3 daemon handed the next forward five times
+the other's share) and `mixedfair` (a session and a forward that always have more than a
+pass's room each get a share within 2x; the round-1 daemon, which always
+served the session first, split it 5.4 to 1). The host
+adapter mirrors the daemon's rules, and real OpenSSH drives `ssh -N -L`:
+3 MiB each way, the same across client and server rekeys, seven concurrent
+forwards, the eighth refused, a non-loopback destination and a closed port
+refused, and a session sharing the connection. In QEMU, host `ssh -N -L`
+through the port forward to `looptest echo 127.0.0.1` echoed 3 MiB each way,
+and the two refusals came back with their reasons.
 
 ## Validation and review boundaries
 
