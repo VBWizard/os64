@@ -10,13 +10,15 @@
 #define LS_RECENT_SECONDS (31556952 / 2)
 
 typedef enum {
-    LS_SORT_DIRECTORY,
+    LS_SORT_NAME,
     LS_SORT_TIME,
     LS_SORT_SIZE
 } ls_sort_t;
 
 static os64_dirent_t dirEntries[MAX_DIR_ENTRIES];
 
+// Name order is BYTE order, as in Unix's C locale: every capital sorts before
+// every lowercase letter, and nothing depends on a locale os64 does not have.
 static int compare_names(const char *first, const char *second)
 {
     while (*first != '\0' && *first == *second)
@@ -27,8 +29,9 @@ static int compare_names(const char *first, const char *second)
     return (unsigned char)*first - (unsigned char)*second;
 }
 
-// Return negative when first belongs before second. Time and size follow the
-// familiar ls rule (newest/largest first); names break ties deterministically.
+// Return negative when first belongs before second. Names are the default
+// order; time and size follow the familiar ls rule (newest/largest first),
+// and names break their ties deterministically.
 static int compare_entries(const os64_dirent_t *first,
                            const os64_dirent_t *second, ls_sort_t sort)
 {
@@ -41,9 +44,6 @@ static int compare_entries(const os64_dirent_t *first,
 
 static void sort_entries(os64_dirent_t *entries, int32_t count, ls_sort_t sort)
 {
-    if (sort == LS_SORT_DIRECTORY)
-        return;
-
     // Directory listings are capped at 512 entries. Insertion sort is small,
     // stable, allocation-free, and plenty quick at that honest upper bound.
     for (int32_t i = 1; i < count; i++)
@@ -323,7 +323,8 @@ int main(int argc, char **argv)
 
     os64_args_init(&args, argc, argv, specs, 5);
     args.about = "List directories or files.";
-    args.details = "When both -t and -S are present, -t takes precedence.";
+    args.details = "Entries are listed by name unless -t or -S asks otherwise;\n"
+                   "when both are present, -t takes precedence.";
 
     int32_t positionals = os64_args_parse(
         &args, "ls [-lhSt] [--full-time] [PATH ...]", paths, LS_MAX_PATHS);
@@ -363,7 +364,7 @@ int main(int argc, char **argv)
         options.termWidth = (int32_t)tty.cols;
 
     ls_sort_t sort = sortTime ? LS_SORT_TIME :
-                     sortSize ? LS_SORT_SIZE : LS_SORT_DIRECTORY;
+                     sortSize ? LS_SORT_SIZE : LS_SORT_NAME;
     int32_t returnCode = 0;
     bool printedOperand = false;
     for (int32_t operand = 0; operand < positionals; operand++)
