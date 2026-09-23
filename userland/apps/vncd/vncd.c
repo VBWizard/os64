@@ -244,7 +244,10 @@ static void pixel_out(uint8_t *out, uint32_t xrgb, const pixel_format_t *pf)
 		out[pf->big_endian ? bytes - 1 - i : i] = (uint8_t)(v >> (8 * i));
 }
 
-// One Raw rectangle, header and pixels.
+// One Raw rectangle, header and pixels, a row at a time: a row is built
+// whole and handed to the output buffer in one call.
+static uint8_t *s_row;                   // one screen row at 4 bytes a pixel
+
 static bool send_raw(rect_t r, const pixel_format_t *pf)
 {
 	uint8_t head[12];
@@ -253,14 +256,14 @@ static bool send_raw(rect_t r, const pixel_format_t *pf)
 	put32(head + 8, 0);                      // encoding 0: Raw
 	if (!out_bytes(head, sizeof(head)))
 		return false;
-	uint8_t px[4];
+	uint32_t bytes = pf->bpp / 8;
 	for (int32_t y = r.y; y < r.y + r.h; y++)
-		for (int32_t x = r.x; x < r.x + r.w; x++)
-		{
-			pixel_out(px, presented((uint32_t)x, (uint32_t)y), pf);
-			if (!out_bytes(px, pf->bpp / 8))
-				return false;
-		}
+	{
+		for (int32_t x = 0; x < r.w; x++)
+			pixel_out(s_row + (size_t)x * bytes, presented((uint32_t)(r.x + x), (uint32_t)y), pf);
+		if (!out_bytes(s_row, (size_t)r.w * bytes))
+			return false;
+	}
 	return true;
 }
 
@@ -688,9 +691,10 @@ static int session(void)
 		return 1;
 
 	s_shadow = os64_calloc((size_t)s_w * s_h, sizeof(uint32_t));
+	s_row = os64_malloc((size_t)s_w * 4);
 	s_banner = (os64_gui_surface_t){ os64_calloc((size_t)s_w * VNCD_BANNER_H, sizeof(uint32_t)),
 	                                 s_w, VNCD_BANNER_H, s_w };
-	if (s_shadow == NULL || s_banner.pixels == NULL)
+	if (s_shadow == NULL || s_row == NULL || s_banner.pixels == NULL)
 		return 1;
 	const char notice[] = "A text terminal has the screen. Alt+F8 brings the desktop back.";
 	for (size_t i = 0; i < (size_t)s_w * VNCD_BANNER_H; i++)
