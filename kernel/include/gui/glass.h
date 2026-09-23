@@ -44,8 +44,9 @@ typedef struct glass_view glass_view_t;
 glass_view_t *glass_view_open(bool writable);
 void glass_view_ref(glass_view_t *v);
 void glass_view_release(glass_view_t *v);
-// The handle's close: lifts every key and button the view holds, marks it
-// closed, wakes a parked reader, and drops the handle's reference.
+// The handle's close: lifts every key and button the view holds (the release
+// events are dropped if the input queue is full; DEBTS), marks it closed,
+// wakes a parked reader, and drops the handle's reference.
 void glass_view_close(glass_view_t *v);
 
 // One input record (os64/glass.h), `len` bytes of kernel memory. Returns

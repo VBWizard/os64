@@ -311,7 +311,11 @@ OS64_GLASS_POINTER:  uint8_t kind, buttons; uint16_t x, y;            // 6 bytes
   (shifted text, history, Alt+F2/Alt+F1). xHCI owns one instance and each
   writable viewer owns one. So the chords are the ones a local keyboard
   gets, Alt+F8 included, and Ctrl+Alt+Del prints its polite note as it
-  does locally.
+  does locally. The modifiers a mouse packet carries are the machine's:
+  Ctrl, Shift and Alt are held while any keyboard holds them (X's core
+  keyboard), so a viewer holding Ctrl for a Ctrl+drag is not undone by a
+  local key or another viewer's typing. A key event still carries its own
+  keyboard's modifiers.
 - **Typematic runs in the compositor's frame loop**, outside `kGuiLock`.
   Glass exists only where a desktop does, and that loop's nap is bounded by
   its core's scheduler timer. xHCI's poll could not do it, because it returns
@@ -319,16 +323,23 @@ OS64_GLASS_POINTER:  uint8_t kind, buttons; uint16_t x, y;            // 6 bytes
   key are taken under `kGuiLock` with a reference each, then ticked after
   it drops. Delivery never happens under `kGuiLock`, because keystrokes reach
   the tty and the renderer, whose locks may not nest under it. Each view has
-  its own input lock instead.
-- **The pointer is absolute.** `input_inject_pointer(x, y, buttons)` sits
-  beside `input_inject_mouse`. Both now end in one `pointer_locked`, so the
-  clamp, the MOVE with its implied delta, and the button-edge diffing are
-  the same code, and grabs, drags and WM chords see what a real mouse would
-  produce. There is no wheel, because nothing in os64 has one yet (DEBTS).
+  its own input lock instead. A frame serves at most eight views with a
+  held key and the start rotates, so a ninth repeats more slowly rather than
+  never.
+- **The pointer is absolute.** `input_inject_pointer(src, x, y, buttons)`
+  sits beside `input_inject_mouse`. Both now end in one `pointer_locked`, so
+  the clamp, the MOVE with its implied delta, and the button-edge diffing
+  are the same code, and grabs, drags and WM chords see what a real mouse
+  would produce. Buttons are held per source (`input_pointer_source_t`: each
+  mouse driver and each view owns one), and a button is down while any
+  source holds it, so a local mouse nudged during a remote drag does not end
+  it, nor the reverse. There is no wheel, because nothing in os64 has one
+  yet (DEBTS).
 - **Closing the handle lifts every finger.** Close delivers an empty keyboard
-  report and, if the viewer held a button, a buttons-up packet, under the
-  view's input lock so that no write can land after it. A dropped connection
-  can never leave Ctrl held or a drag grabbed.
+  report and lifts the view's own buttons, under the view's input lock so
+  that no write can land after it. A dropped connection does not leave Ctrl
+  held or a drag grabbed, unless the GUI's input queue is full at that
+  moment and the releases are dropped with it (DEBTS § Remote access).
 - **Validation is whole-record, at the boundary.** An unknown kind, a record
   whose length is not its kind's, a button bit above middle, or a position
   off the screen (refused, not moved) is refused.
@@ -339,6 +350,9 @@ OS64_GLASS_POINTER:  uint8_t kind, buttons; uint16_t x, y;            // 6 bytes
   - a window it creates receives `a` with its release, a shifted `A`, a left
     click at its centre, repeats of a key held for 900 ms, and the release
     of a key held by a second viewer that closed without letting go;
+  - with two viewers, a second pointer moving with no buttons does not lift
+    the first one's held button, and a second keyboard typing does not drop
+    a Ctrl the first one holds (the old kernel fails both);
   - Ctrl+Alt+F1 gives the screen back to the terminal.
 
   A QEMU mouse still moves the pointer through the shared path.

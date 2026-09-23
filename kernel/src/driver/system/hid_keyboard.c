@@ -45,8 +45,9 @@ static char hid_usage_ascii(const hid_keyboard_t *kbd, uint8_t usage);
 static void hid_deliver_usage(hid_keyboard_t *kbd, uint8_t usage)
 {
 	if (usage == 0x39) {                      // Caps Lock: a latch, not a key
+		uint8_t before = kbd->mods;
 		kbd->mods ^= KEYBOARD_MOD_CAPS;
-		keyboard_publish_hid_modifiers(kbd->mods);   // the latch is modifier state too
+		keyboard_publish_hid_modifiers(before, kbd->mods);   // the latch is modifier state too
 		return;
 	}
 	// The three-finger salute, HID spelling: Delete Forward (0x4C) or keypad
@@ -198,13 +199,14 @@ void hid_keyboard_report(hid_keyboard_t *kbd, const uint8_t rep[8])
 	if (m & 0x22) mods |= KEYBOARD_MOD_SHIFT;
 	if (m & 0x44) mods |= KEYBOARD_MOD_ALT;
 	mods |= KEYBOARD_MOD_HID;   // the dialect tag: every event from here says "HID usage" (keyboard.h)
+	uint8_t before = kbd->mods;
 	kbd->mods = mods;
-	// Publish to the shared snapshot NOW, not at the next keyboard_deliver_event.
-	// A modifier-only report (Ctrl+Alt held, no key usages) delivers no event at
+	// Publish this keyboard's change NOW, at the report that made it. A
+	// modifier-only report (Ctrl+Alt held, no key usages) delivers no event at
 	// all, and the mouse path samples keyboard_current_modifiers() to decide
 	// whether the window-management chord is held — without this line the chord
 	// was invisible on USB keyboards (worked in QEMU's PS/2, dead on the P5).
-	keyboard_publish_hid_modifiers(mods);
+	keyboard_publish_hid_modifiers(before, mods);
 
 	// MODIFIER EDGES (2026-08-23). A modifier-only report changes state and
 	// — until today — sent no event: the GUI learned that Alt was held only

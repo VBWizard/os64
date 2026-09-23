@@ -134,28 +134,28 @@ void keyboard_handle_scancode(uint8_t scancode);
 // input queue. `modifiers` is the KEYBOARD_MOD_* bitmask at press time.
 void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed);
 
-// The modifier bitmask as of the last key event that reached the choke above.
-// Read by the MOUSE path (input.c) so a mouse event can carry the keyboard
-// state that was true when it happened — Ctrl+Alt+drag needs to know whether
-// the chord is held, and a pointer packet has no idea by itself.
+// The machine's modifiers, for the MOUSE path (input.c): a mouse event carries
+// the keyboard state that was true when it happened, because Ctrl+Alt+drag
+// needs to know whether the chord is held and a pointer packet has no idea by
+// itself. Ctrl, Shift and Alt are held while ANY keyboard holds them (X's
+// core keyboard): the PS/2 keyboard, every USB keyboard and every /dev/glass
+// writer each count, so another keyboard typing or letting go cannot drop a
+// chord this one holds. Caps, Num and the dialect tag are the last reporting
+// keyboard's. A key EVENT still carries its own keyboard's modifiers.
 //
-// Snapshotted in keyboard_deliver_event rather than read out of the PS/2
-// driver's own s_modifiers, because that variable belongs to ONE of the two
-// keyboard drivers: the xHCI HID path carries its own modifier byte and never
-// touches it. Sampling at the shared choke makes the answer source-blind by
-// construction, which is the same reason the choke exists at all.
+// A keyboard that disappears while holding a modifier would leave it held;
+// none can disappear today (xHCI enumerates at boot and never detaches), and
+// the day one can, its removal must report its modifiers released.
 uint8_t keyboard_current_modifiers(void);
-// The USB half of the publication (the PS/2 half is keyboard.c's static
-// keyboard_publish_modifiers). The xHCI HID driver calls this the moment a
-// report changes its modifier byte, because a modifier-ONLY report — Ctrl+Alt
-// held, no key usages, which is exactly what the window-management chord
-// looks like on the wire — never reaches keyboard_deliver_event, and the
-// snapshot above would otherwise stay stale until some unrelated key rode by.
-// Same rule, each driver at its own change point: a modifier is state, and
-// state has to be published where it CHANGES. (Found 2026-08-21: Ctrl+Alt
-// move/resize worked in QEMU's PS/2 keyboard and did nothing on the P5's
-// USB one.)
-void keyboard_publish_hid_modifiers(uint8_t modifiers);
+// The HID half of the publication (the PS/2 half is keyboard.c's static
+// keyboard_publish_modifiers): a HID keyboard reports its modifier byte
+// before and after, the moment a report changes it, because a modifier-ONLY
+// report — Ctrl+Alt held, no key usages, which is exactly what the window-
+// management chord looks like on the wire — never reaches keyboard_deliver_
+// event. A modifier is state, and state is published where it CHANGES.
+// (Found 2026-08-21: Ctrl+Alt move/resize worked in QEMU's PS/2 keyboard and
+// did nothing on the P5's USB one.)
+void keyboard_publish_hid_modifiers(uint8_t before, uint8_t after);
 // The three-finger salute, shared by both keyboard drivers (PS/2 scancodes
 // and xHCI HID usages both land here). v1 answers with a message; becomes
 // the polite reboot when SYSCALL_SHUTDOWN verb 1 gets its meaning.

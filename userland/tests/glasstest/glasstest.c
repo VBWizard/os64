@@ -16,6 +16,9 @@
 //      desktop takes the screen; a window it creates then receives a key,
 //      a shifted key, a click at its centre, a held key's typematic
 //      repeats, and the release a viewer closed mid-keypress still owes.
+//      Two viewers at once: a second pointer moving holding nothing does not
+//      lift the first one's held button, and a second keyboard typing does
+//      not drop a Ctrl the first one holds (it still rides on the pointer).
 //      Ctrl+Alt+F1 brings the terminal back.
 //
 // `glasstest watch` prints every record's header for thirty seconds instead:
@@ -45,6 +48,8 @@
 #define GLASSTEST_CLICK     0x61A55F0C   // the window did not receive the click
 #define GLASSTEST_REPEAT    0x61A55F0D   // a held key did not repeat
 #define GLASSTEST_LIFT      0x61A55F0E   // closing a viewer did not release its held key
+#define GLASSTEST_TWO_HANDS 0x61A55F0F   // one pointer's move ended another's held button
+#define GLASSTEST_TWO_KEYS  0x61A55F10   // one keyboard's typing dropped a chord another held
 
 #define PAINT 0x0012AB34u
 
@@ -124,6 +129,8 @@ typedef struct
 {
 	int down[128], up[128];
 	int button_down, button_up;
+	int moves;
+	uint8_t move_modifiers;   // the last move's
 } seen_t;
 
 // What the window heard in the next `ms` milliseconds.
@@ -140,6 +147,11 @@ static void listen(int64_t win, seen_t *seen, int ms)
 			if (ev.type == OS64_GUI_EVENT_KEY_UP && c < 128) seen->up[c]++;
 			if (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN) seen->button_down++;
 			if (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_UP) seen->button_up++;
+			if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
+			{
+				seen->moves++;
+				seen->move_modifiers = ev.mouse.modifiers;
+			}
 		}
 		os64_sleep(20);
 	}
@@ -242,6 +254,60 @@ static int hands(void)
 			listen(win, &seen, 400);
 			if (!seen.down['b'] || !seen.up['b'])
 				code = GLASSTEST_LIFT;
+		}
+	}
+
+	if (!code)
+	{
+		// Two pointers, one button: this viewer presses on the window, a
+		// second moves across it holding nothing. The button stays down
+		// until the viewer that pressed it lets go.
+		int64_t h2 = os64_open("/dev/glass", "u");
+		if (h2 < 0)
+			code = GLASSTEST_TWO_HANDS;
+		else
+		{
+			write_pointer(h, cx, cy, OS64_GLASS_BUTTON_LEFT);
+			write_pointer((int32_t)h2, cx + 10, cy + 10, 0);
+			write_pointer((int32_t)h2, cx + 20, cy, 0);
+			listen(win, &seen, 400);
+			int early_up = seen.button_up;
+			write_pointer(h, cx, cy, 0);
+			listen(win, &seen, 400);
+			os64_close((int32_t)h2);
+			if (early_up || seen.button_up != 1)
+			{
+				os64_printf("glasstest: a second pointer's move lifted a held button (%d early, %d after)\n",
+				            early_up, seen.button_up);
+				code = GLASSTEST_TWO_HANDS;
+			}
+		}
+	}
+
+	if (!code)
+	{
+		// Two keyboards, one chord: this viewer holds Ctrl alone, a second
+		// types a plain b and lets go. Ctrl is still held, so the next
+		// pointer move carries it.
+		int64_t h2 = os64_open("/dev/glass", "u");
+		if (h2 < 0)
+			code = GLASSTEST_TWO_KEYS;
+		else
+		{
+			write_key(h, MOD_LCTRL, 0);
+			write_key((int32_t)h2, 0, KEY_B);
+			write_key((int32_t)h2, 0, 0);
+			listen(win, &seen, 200);
+			write_pointer(h, cx + 5, cy + 5, 0);
+			listen(win, &seen, 300);
+			write_key(h, 0, 0);
+			os64_close((int32_t)h2);
+			if (!seen.moves || !(seen.move_modifiers & OS64_GUI_MOD_CTRL))
+			{
+				os64_printf("glasstest: another keyboard's key dropped a held Ctrl (%d moves, modifiers 0x%x)\n",
+				            seen.moves, seen.move_modifiers);
+				code = GLASSTEST_TWO_KEYS;
+			}
 		}
 	}
 
