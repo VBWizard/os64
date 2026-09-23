@@ -476,7 +476,8 @@ static int session(void)
             net_off = net_len = 0; if (n > 0) { net_len = (size_t)n; moved = 1; }
         }
         if (net_off < net_len) {
-            net_off += ssh_receive(&engine, net+net_off, net_len-net_off);
+            size_t took = ssh_receive(&engine, net+net_off, net_len-net_off);
+            net_off += took; if (took) moved = 1;
             event();
             if (engine.event == SSH_EVENT_CLOSE) close_received = 1;
         }
@@ -524,7 +525,10 @@ static int session(void)
         }
         if (forwards_pass()) moved = 1;
         /* Nap only on a pass that moved nothing. A forward carries a screen's
-         * worth of pixels, and a nap per pass capped it at one read per tick. */
+         * worth of pixels, and a nap per pass capped it at one read per tick.
+         * Taking bytes the engine buffered counts as moving: ssh_receive
+         * takes one packet per call, so a read holding several would
+         * otherwise cost a tick for each packet after the first. */
         os64_sleep(moved ? 0 : 1);
     }
     if (engine.error[0]) log_line(engine.error);
