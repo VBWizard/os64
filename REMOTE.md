@@ -480,6 +480,24 @@ ssh -N -L 5900:localhost:5900 -i ~/.ssh/id_ecdsa os64@<p5>
 Windows has shipped an OpenSSH client since Windows 10 1809. TigerVNC's
 viewer is a single `.exe`.
 
+Three things learned on the P5 (2026-09-23), all on the Windows side:
+
+- **Run the tunnel from WSL2, not Windows' `ssh.exe`.** Traced end to end,
+  every round trip through Windows' client took about half a second, even
+  during ssh's own handshake, and a viewer that asks for each update after
+  the last one lands turned that into 1.5 to 3 seconds of lag. The Linux
+  client in WSL2, on the same machine and network, took about 11 ms. WSL2
+  forwards `localhost` ports to Windows, so the viewer still points at
+  `localhost:5900`.
+- **TigerVNC keeps Ctrl+Alt for its own shortcuts.** To send a chord that
+  starts with it (Ctrl+Alt+F1 to a text terminal), press Ctrl+Alt+Space,
+  let go of Space, then press the rest. Ctrl+Alt+arrows pass through.
+- **Display scaling stretches the picture.** At 150%, Windows draws the
+  viewer's pixels 1.5x, and the bottom of the P5's screen falls off. The
+  exe's Properties, Compatibility, "Change high DPI settings", override
+  with scaling performed by the Application gives one screen pixel per P5
+  pixel.
+
 ## Booked, not built (DEBTS rows arrive with the slices)
 
 - **Phase 2: the text VTs** — §3's note.
