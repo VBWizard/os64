@@ -265,8 +265,11 @@ void hid_keyboard_report(hid_keyboard_t *kbd, const uint8_t rep[8])
 			hid_deliver_usage(kbd, u);
 			// The LAST key pressed is the repeat candidate — classic
 			// typematic semantics since the 5150: press-and-hold J while
-			// holding K, and J is what repeats.
-			kbd->rpt_usage = u;
+			// holding K, and J is what repeats. Caps Lock is a latch, and
+			// a latch toggles on its press only: repeating it would flip it
+			// every period. It still ends the current repeat, as it does on
+			// hardware whose typematic moves to the last key pressed.
+			kbd->rpt_usage = u == 0x39 ? 0 : u;
 			kbd->rpt_next_tick = kTicksSinceStart + HID_TYPEMATIC_DELAY_TICKS;
 		}
 	}

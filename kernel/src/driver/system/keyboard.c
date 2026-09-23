@@ -25,6 +25,7 @@ extern volatile uint64_t kTicksSinceStart;
 #define KEYBOARD_MAX_SCANCODE 128
 
 static uint8_t s_modifiers;
+static bool s_capsHeld, s_numHeld;   // the lock keys, down now (toggle on the press only)
 static bool s_extended_pending;
 static bool s_key_state[KEYBOARD_MAX_SCANCODE];
 static __uint128_t s_saved_debug_level;
@@ -423,15 +424,18 @@ static void keyboard_update_modifier(uint8_t scancode, bool pressed) {
                 s_modifiers &= (uint8_t)~KEYBOARD_MOD_ALT;
             }
             break;
+        // The locks toggle on the press, not on its typematic repeats: a PS/2
+        // keyboard repeats a held key's make code in hardware, and toggling
+        // on each one would flip the latch every period while it is held.
         case 0x3A: // Caps Lock
-            if (pressed) {
+            if (pressed && !s_capsHeld)
                 s_modifiers ^= KEYBOARD_MOD_CAPS;
-            }
+            s_capsHeld = pressed;
             break;
         case 0x45: // Num Lock
-            if (pressed) {
+            if (pressed && !s_numHeld)
                 s_modifiers ^= KEYBOARD_MOD_NUM;
-            }
+            s_numHeld = pressed;
             break;
         default:
             break;
