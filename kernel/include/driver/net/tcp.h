@@ -41,8 +41,10 @@
 //     a SYN that finds one becomes an ordinary conn born in SYN_RECEIVED,
 //     and accept is a read on the listener handle (ruling #3). What is NOT
 //     offered: SYN cookies (a full backlog drops SYNs and counts them —
-//     the threat model is a LAN), and announce on one of several
-//     addresses (there is one NIC). Both in DEBTS.md.
+//     the threat model is a LAN), and announce on one card's address of
+//     several (there is one NIC; the one specific address a door may name
+//     is loopback's, tcp_listener_t.ip). Both are in SERVERS.md's booked
+//     list.
 //   - A SEND WINDOW (tcp.c § the sender): write() queues into a ring and
 //     returns; as many segments as the peer's window and our congestion
 //     window allow are in flight at once; the oldest is what the timer
@@ -278,6 +280,13 @@ typedef struct tcp_conn
 	tcp_state_t state;
 	net_device_t* dev;
 	uint32_t peer_ip;
+	// OUR address in this conversation. Zero means the machine's address,
+	// read live from kNetIPv4Address on every segment, because a DHCP lease
+	// can change it under a connection. A loopback conversation carries its
+	// 127/8 address instead — on the answering side the one the peer dialed,
+	// so replies come FROM the address the peer is talking to; on the dialing
+	// side 127.0.0.1 (tcp_local_ip).
+	uint32_t local_ip;
 	uint16_t peer_port, local_port;
 
 	// ── SEND state (RFC 793's SND.* names on purpose) ──
@@ -557,6 +566,12 @@ typedef struct tcp_listener
 {
 	spinlock_t lock;
 	uint16_t port;
+	// Which of our addresses this door answers on: 0 for every address the
+	// machine has (loopback included, as BSD's INADDR_ANY always did), or one
+	// 127/8 address for a service this machine alone may reach. A port has
+	// one listener whatever its address — two on one port is refused as
+	// PORT_TAKEN, not ranked.
+	uint32_t ip;
 	bool closed;
 	uint32_t busy;                   // accept calls inside this row
 	uint32_t pending;                // half-open + queued, bounded by the backlog
@@ -572,9 +587,11 @@ typedef struct tcp_listener
 
 extern tcp_listener_t* kTcpListenerList;
 
-// Open the door. Refusals in `why` (OS64_NET_ERR_*): PORT_TAKEN when a
-// listener or a dialed conn holds the port, NO_RESOURCES otherwise.
-tcp_listener_t* tcp_listener_announce(net_device_t* dev, uint16_t port, int64_t* why);
+// Open the door on `ip` (0 = every address; the syscall layer has already
+// refused anything but 0 or 127/8). Refusals in `why` (OS64_NET_ERR_*):
+// PORT_TAKEN when a listener or a dialed conn holds the port, NO_RESOURCES
+// otherwise.
+tcp_listener_t* tcp_listener_announce(uint32_t ip, uint16_t port, int64_t* why);
 // ACCEPT: block until a handshake has completed on this port, hand its conn
 // out. NULL with TCP_ERR_INTERRUPTED / TCP_ERR_TIMEOUT / TCP_ERR_RESET (the
 // listener was closed under us) in `why`. Task context only.

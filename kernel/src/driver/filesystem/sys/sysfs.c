@@ -150,6 +150,7 @@
 #include "knet.h"                       // /sys/net/knet — the drainer's counters
 #include "doorbell.h"                   // /sys/net/knet — every bell in the registry
 #include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
+#include "driver/net/loopback.h"        // kNetLoopback — lo's queue in /sys/net/knet
 #include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
 #include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
 #include "driver/net/tcp.h"             // /sys/net/tcp — kTcpStats + the conn list
@@ -1224,9 +1225,14 @@ static void sys_gen_net_ip(synth_text_t *t)
 	// installed will otherwise reasonably wonder which one this belongs to —
 	// and the honest answer is "the machine", until addressing goes
 	// per-interface. Naming the card that carries it costs one line and saves
-	// that question.
-	synth_text_addf(t, "scope: machine (os64 is single-homed: one address, %u NIC slot(s))\n",
+	// that question. Loopback is the one other address, and it is on no card.
+	synth_text_addf(t, "scope: machine (os64 is single-homed: one LAN address, %u NIC slot(s))\n",
 	                (unsigned)NET_MAX_DEVICES);
+	if (kNetLoopback != NULL)
+		synth_text_addf(t, "loopback: 127.0.0.1 (lo, 127.0.0.0/8, TCP only)\n");
+	// A 127/8 source or destination arriving on a card: a forgery, dropped
+	// (ipv4_input). Nonzero means something on the LAN is trying.
+	synth_text_addf(t, "martians_dropped: %lu\n", kIPv4Stats.rx_martian);
 }
 
 // net/dhcp — how the address above was come by, and whether it is still a
@@ -1456,7 +1462,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	// the rows above, formatted after it. `pending` is half-open plus
 	// queued-unread against the backlog; a rising `dropped` beside a full
 	// `pending` is a listener nobody reads, or a flood.
-	struct listener_row { uint16_t port; uint32_t pending; uint64_t accepted, dropped; };
+	struct listener_row { uint16_t port; uint32_t ip, pending; uint64_t accepted, dropped; };
 	struct listener_row lrows[16];
 	uint32_t ln = 0, lomitted = 0;
 	lf = spinlock_acquire_irqsave(&kTcpListLock);
@@ -1469,6 +1475,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 		}
 		spinlock_acquire(&l->lock);
 		lrows[ln].port = l->port;
+		lrows[ln].ip = l->ip;
 		lrows[ln].pending = l->pending;
 		lrows[ln].accepted = l->accepted;
 		lrows[ln].dropped = l->syns_dropped;
@@ -1479,10 +1486,20 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "listeners: %u\n", ln + lomitted);
 	if (ln > 0)
 	{
-		synth_text_addf(t, "# port state pending backlog accepted dropped\n");
+		// The address is the LAST column so the earlier ones keep their
+		// positions: `*` for every address, else the loopback address the
+		// door was opened on.
+		synth_text_addf(t, "# port state pending backlog accepted dropped address\n");
 		for (uint32_t i = 0; i < ln; i++)
-			synth_text_addf(t, "%u LISTEN %u %u %lu %lu\n", lrows[i].port, lrows[i].pending,
-			                (uint32_t)TCP_LISTEN_BACKLOG, lrows[i].accepted, lrows[i].dropped);
+		{
+			if (lrows[i].ip == 0)
+				synth_text_addf(t, "%u LISTEN %u %u %lu %lu *\n", lrows[i].port, lrows[i].pending,
+				                (uint32_t)TCP_LISTEN_BACKLOG, lrows[i].accepted, lrows[i].dropped);
+			else
+				synth_text_addf(t, "%u LISTEN %u %u %lu %lu %u.%u.%u.%u\n", lrows[i].port,
+				                lrows[i].pending, (uint32_t)TCP_LISTEN_BACKLOG, lrows[i].accepted,
+				                lrows[i].dropped, NET_IPV4_OCTETS(lrows[i].ip));
+		}
 	}
 
 	synth_text_addf(t, "connections: %u\n", n + omitted);
@@ -1556,7 +1573,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 // thread parked and relinked it — the rest found it already awake.
 static void sys_gen_net_knet(synth_text_t *t)
 {
-	synth_text_addf(t, "thread: %s\n", kKnetTask != NULL ? "running" : "none (no NIC registered)");
+	synth_text_addf(t, "thread: %s\n", kKnetTask != NULL ? "running" : "none (networking disabled)");
 	synth_text_addf(t, "mode: %s\n", kNetPoll ? "tick-driven (NETPOLL)" : "doorbell");
 	synth_text_addf(t, "wakes: %lu\n", kKnetWakes);
 	synth_text_addf(t, "drain_rounds: %lu\n", kKnetDrainRounds);
@@ -1565,6 +1582,16 @@ static void sys_gen_net_knet(synth_text_t *t)
 	synth_text_addf(t, "bell_rings: %lu\n", kNetDoorbell.rings);
 	synth_text_addf(t, "bell_wakes: %lu\n", kNetDoorbell.wakes);
 	synth_text_addf(t, "bell_rung_runnable: %lu\n", kNetDoorbell.rung_runnable);
+	// lo's queue, which knet drains beside the cards (loopback.h). A
+	// depth_max near slots means a sender outran the drainer; dropped_full
+	// is what that cost, in segments TCP had to send again.
+	if (kNetLoopback != NULL)
+	{
+		loopback_stats_t lo;
+		loopback_get_stats(&lo);
+		synth_text_addf(t, "lo: queued %lu delivered %lu dropped_full %lu depth %u depth_max %u slots %u\n",
+		                lo.queued, lo.delivered, lo.dropped_full, lo.depth, lo.depth_max, lo.slots);
+	}
 	// Every bell in the registry, for the day there is a second daemon on
 	// one — async NVMe is the named next customer.
 	for (uint32_t i = 0; i < doorbell_count(); i++)

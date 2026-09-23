@@ -47,6 +47,7 @@
 #include "os64/mount.h"    // OS64_MOUNT_BAD_ARGS — namespace verbs preserve this ABI verdict
 #include "driver/net/net_device.h"   // kNetDevices — dial needs a NIC to dial on
 #include "driver/net/net_wire.h"     // NET_IPV4_OCTETS — address logging
+#include "driver/net/loopback.h"     // kNetLoopback — where a dial to 127/8 goes
 #include "driver/net/udp_conn.h"     // the object behind HANDLE_NET_UDP
 #include "driver/net/tcp.h"          // ...and HANDLE_NET_TCP
 #include "driver/net/icmp_conn.h"    // ...and HANDLE_NET_ICMP
@@ -2524,7 +2525,13 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	// Dial tone requires a line: no NIC, no conversation. (A netless boot
 	// is a configuration, not an error — but dialing on one is an error.)
-	if (kNetDeviceCount == 0)
+	// 127/8 is the one line every networked boot has: lo, TCP only
+	// (REMOTE.md § 1 — a UDP or ICMP conversation with this machine has no
+	// consumer yet, and saying no beats sending it to the gateway).
+	bool loop = net_ip_is_loopback(dest.ip);
+	if (loop && dest.protocol != OS64_NET_TCP)
+		return (uint64_t)(int64_t)OS64_NET_ERR_BAD_DEST;
+	if (loop ? kNetLoopback == NULL : kNetDeviceCount == 0)
 		return (uint64_t)(int64_t)OS64_NET_ERR_NO_NIC;
 
 	// One syscall, two protocols, two object types behind two handle tags —
@@ -2541,7 +2548,7 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	{
 		// BLOCKS through the three-way handshake (or a refusal, or the
 		// connect timeout) — a dial that returns has a live stream.
-		conn = tcp_conn_dial(kNetDevices[0], dest.ip, dest.port, &why);
+		conn = tcp_conn_dial(loop ? kNetLoopback : kNetDevices[0], dest.ip, dest.port, &why);
 		tag = HANDLE_NET_TCP;
 	}
 	else if (dest.protocol == OS64_NET_ICMP)
@@ -2594,12 +2601,18 @@ static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2
 	if (!copy_user_buffer((const void *)arg0, &local, sizeof(local)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
-	// ip must be 0 — "every address this machine has" — because there is
-	// one NIC and a per-address announce has no consumer (DEBTS). TCP
-	// only, for the same reason. A port of 0 names no door.
-	if (local.ip != 0 || local.protocol != OS64_NET_TCP || local.port == 0)
+	// ip is 0 — "every address this machine has", loopback included — or a
+	// 127/8 address, for a service this machine alone may reach (vncd, whose
+	// safety rests on it: REMOTE.md). The machine's LAN address is not
+	// accepted by name: with one card, 0 already means it, and a per-card
+	// announce waits for a second card (DEBTS). TCP only, for want of a UDP
+	// consumer. A port of 0 names no door.
+	if ((local.ip != 0 && !net_ip_is_loopback(local.ip)) ||
+	    local.protocol != OS64_NET_TCP || local.port == 0)
 		return (uint64_t)(int64_t)OS64_NET_ERR_BAD_DEST;
-	if (kNetDeviceCount == 0)
+	// With no card at all the machine still has loopback, and a door on it
+	// is a door; only a boot with networking switched off has no address.
+	if (kNetLoopback == NULL)
 		return (uint64_t)(int64_t)OS64_NET_ERR_NO_NIC;
 
 	// The slot is RESERVED before the listener is published and COMMITTED
@@ -2612,7 +2625,7 @@ static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2
 		return (uint64_t)(int64_t)OS64_NET_ERR_NO_RESOURCES;
 
 	int64_t why = OS64_NET_ERR_NO_RESOURCES;
-	tcp_listener_t *l = tcp_listener_announce(kNetDevices[0], local.port, &why);
+	tcp_listener_t *l = tcp_listener_announce(local.ip, local.port, &why);
 	if (l == NULL)
 	{
 		(void)handle_cancel_reserved(task, h);
@@ -2623,8 +2636,8 @@ static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2
 		tcp_listener_close(l);   // teardown cancelled the slot first: the task is dying
 		return SYSCALL_RESULT_INVALID;
 	}
-	printd(DEBUG_NET, "net_announce: task %s <- tcp!*!%u = handle %d\n",
-	       task->exename, local.port, h);
+	printd(DEBUG_NET, "net_announce: task %s <- tcp!%s!%u = handle %d\n",
+	       task->exename, local.ip == 0 ? "*" : "loopback", local.port, h);
 	return (uint64_t)h;
 }
 

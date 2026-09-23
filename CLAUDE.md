@@ -387,8 +387,11 @@ make -C kernel test-elf
 DOORBELL.md is the design record.** A NIC's interrupt handler RINGS a
 doorbell (lock-free, a store and a self-IPI — it may never take the queue
 lock, the 9badced rule) and `knet`, a kernel daemon pinned to the BSP, wakes
-to DRAIN every registered NIC through the seam's `drain` verb, run the
-TCP/DHCP timers, and park. The tick rings the same bell once per tick, which
+to DRAIN every registered NIC through the seam's `drain` verb (and
+loopback's queue beside them — `lo` is no card, so it is not in the table;
+`kernel/src/driver/net/loopback.c`), run the TCP/DHCP timers, and park.
+knet exists whenever networking does, card or no card; NONET is the only
+boot without it. The tick rings the same bell once per tick, which
 is what keeps a NIC with no interrupt (virtio) at its old cadence.
 `/sys/net/knet` carries the counters (wakes, drain rounds, the longest wake)
 — read it FIRST when a transfer is slower than the wire; it caught a 5,800

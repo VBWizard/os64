@@ -49,10 +49,16 @@ typedef struct os64_netdest
                                          //  1-65535 — or PRESENT on icmp,
                                          //  which has no doors
 #define OS64_NET_ERR_BAD_DEST      (-6)  // kernel: struct refused (ip 0,
-                                         //  unknown protocol, port 0)
-#define OS64_NET_ERR_NO_NIC        (-7)  // kernel: netless boot — dialing
-                                         //  with no line is the error, the
-                                         //  boot itself is a configuration
+                                         //  unknown protocol, port 0, UDP
+                                         //  or ICMP to loopback, or an
+                                         //  announce on an address that is
+                                         //  neither * nor 127/8)
+#define OS64_NET_ERR_NO_NIC        (-7)  // kernel: no line to dial on — no
+                                         //  card for a LAN address, or
+                                         //  networking switched off (NONET);
+                                         //  the boot itself is a
+                                         //  configuration, dialing is the
+                                         //  error
 #define OS64_NET_ERR_NO_RESOURCES  (-8)  // kernel: out of memory, ephemeral
                                          //  ports, identifiers, or handles
 #define OS64_NET_ERR_REFUSED       (-9)  // kernel: TCP peer answered RST —
@@ -88,10 +94,13 @@ typedef struct os64_netdest
 
 // ── Announce: the inbound door (NETWORK.md ruling #3, SERVERS.md) ──────
 // announce(local) takes the SAME struct as dial and reads it as WHERE I
-// AM: ip must be 0 ("every address this machine has" — the dial string
-// spells it `tcp!*!23`, `*` being how every dialer since Plan 9 has said
-// "any of mine"), port is the door to open, protocol must be TCP (a UDP
-// announce waits for its consumer — DEBTS). It returns a LISTENER handle,
+// AM: ip is 0 ("every address this machine has", loopback included — the
+// dial string spells it `tcp!*!23`, `*` being how every dialer since Plan 9
+// has said "any of mine") or a 127/8 address (`tcp!127.0.0.1!5900`: a door
+// only this machine can reach, because no card delivers a 127/8
+// destination), port is the door to open, protocol must be TCP (a UDP
+// announce waits for its consumer — DEBTS). One listener per port whatever
+// its address. It returns a LISTENER handle,
 // and ACCEPT IS A READ ON IT: each read blocks until a connection has
 // completed its handshake, then yields exactly one of these —
 typedef struct os64_netconn

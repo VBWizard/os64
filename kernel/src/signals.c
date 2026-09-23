@@ -922,7 +922,7 @@ void processSignals()
 	// which woke it, which parked it, which rang it: 5,800 wakes a second on
 	// an idle link, measured in /sys/net/knet the first time it existed.
 	static uint64_t s_net_rung_at_tick;
-	if (kNetDeviceCount > 0 && kTicksSinceStart != s_net_rung_at_tick)
+	if (kKnetTask != NULL && kTicksSinceStart != s_net_rung_at_tick)
 	{
 		s_net_rung_at_tick = kTicksSinceStart;
 		doorbell_ring_in_pass(&kNetDoorbell);

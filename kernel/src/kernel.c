@@ -53,6 +53,7 @@
 #include "driver/net/e1000.h"
 #include "driver/net/r8125.h"
 #include "driver/net/ethernet.h"   // init_net_stack — the protocol stack over the seam
+#include "driver/net/loopback.h"   // init_loopback — lo, which every networked boot has
 #include "knet.h"                  // the network drainer, minted beside kworker
 #include "random.h"                // the entropy pool, seeded before anything dials
 #include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
@@ -370,6 +371,10 @@ void kernel_init()
 	if (kEnableNet)
 	{
 		init_net_stack();
+		// Loopback exists whenever networking does, card or no card: it is
+		// how two programs on this machine talk, and it is what a service
+		// announced for this machine alone listens on (REMOTE.md § 1).
+		init_loopback();
 		init_virtio_net();
 		// The e1000 AFTER virtio, deliberately: registration order is
 		// device order, and kNetDevices[0] is the NIC the stack dials
@@ -547,14 +552,14 @@ void kernel_init()
 	    scheduler_submit_new_task(kKWorkerTask);
 	}
 
-	// THE NETWORK DRAINER (DOORBELL.md). A daemon like kworker, minted only
-	// when a NIC registered — a netless boot has nothing to drain and gets no
-	// thread. PINNED TO THE BSP for v1 (Chris, 2026-09-05: "keep the
+	// THE NETWORK DRAINER (DOORBELL.md). A daemon like kworker, minted
+	// whenever networking is enabled — even with no NIC, because loopback's
+	// frames and TCP's timers are its work too (a NONET boot gets none). PINNED TO THE BSP for v1 (Chris, 2026-09-05: "keep the
 	// complexity down"): the NIC interrupts are routed there, so a ring is a
 	// self-IPI and the tick that preempts a busy drainer is the one the BSP
 	// already has. The bell it parks on is rung by every NIC interrupt
 	// handler and by processSignals once per tick.
-	if (kEnableNet && kNetDeviceCount > 0)
+	if (kEnableNet)
 	{
 		kKnetTask = task_create("/knet", 0, NULL, kKernelTask, true, BOOTSTRAP_PROCESSOR_ID);
 		kKnetTask->autoReap = true;
