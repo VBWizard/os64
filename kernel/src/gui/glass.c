@@ -130,8 +130,8 @@ void glass_view_close(glass_view_t *v)
 	// Lift every finger first, under the input lock, so no write can land
 	// after the release: an empty report ends every key and modifier the
 	// keyboard held (with their release events), and releasing the view's
-	// pointer lifts the buttons it held, and no other device's. A full input
-	// queue drops those events like any others (DEBTS § Remote access).
+	// pointer lifts the buttons it held, and no other device's. A full GUI
+	// event queue drops those events like any others (DEBTS § Remote access).
 	uint64_t iflags = spinlock_acquire_irqsave(&v->input_lock);
 	v->input_closed = true;
 	if (v->writable)
