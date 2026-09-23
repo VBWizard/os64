@@ -44,6 +44,7 @@
 #include "os64/pty.h"      // os64_pty_header_t/_cell_t — pty_snapshot's out-structs (abi)
 #include "env.h"           // env_set/env_unset — setenv() mutates the task's env block
 #include "os64/net.h"      // os64_netdest_t — net_dial's in-struct (abi)
+#include "os64/file.h"     // OS64_CLOSE_NOT_COMMITTED — close's third answer (abi)
 #include "os64/mount.h"    // OS64_MOUNT_BAD_ARGS — namespace verbs preserve this ABI verdict
 #include "driver/net/net_device.h"   // kNetDevices — dial needs a NIC to dial on
 #include "driver/net/net_wire.h"     // NET_IPV4_OCTETS — address logging
@@ -2679,9 +2680,17 @@ static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (task == NULL)
 		return SYSCALL_RESULT_INVALID;
 
-	if (!handle_close(task, (int)(int64_t)arg0))
+	// Four answers (os64/file.h). The handle is gone in every case but the
+	// first; what differs is what this close can honestly say about the
+	// bytes: nothing left undone, not committed, or not its to know.
+	int rc;
+	bool deferred;
+	if (!handle_close_rc(task, (int)(int64_t)arg0, &rc, &deferred))
 		return SYSCALL_RESULT_INVALID;
-
+	if (rc != 0)
+		return (uint64_t)(int64_t)OS64_CLOSE_NOT_COMMITTED;
+	if (deferred)
+		return (uint64_t)(int64_t)OS64_CLOSE_DEFERRED;
 	return 0;
 }
 
@@ -2958,10 +2967,10 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 	else
 	{
-		// One handle references this file so far (see handleRefCount in
+		// One handle references this file so far (see `holds` in
 		// vfs.h) — set BEFORE handle_alloc so no close path can ever see it
 		// uninitialized.
-		p->file->handleRefCount = 1;
+		p->file->holds = 1;
 
 		h = reserved_h >= 0
 		        ? (handle_commit_reserved(task, reserved_h, HANDLE_FILE, p->file)
@@ -3897,7 +3906,9 @@ typedef struct {
 // Give back the CHILD's references on the redirections (handle_share, taken
 // at resolve in syscall_spawn) when no child comes to own them. Slots not
 // yet resolved are HANDLE_NONE, so every failure path may call this for all
-// three; the console tags hold nothing and unshare as nothing.
+// three; the console tags hold nothing and unshare as nothing. A file whose
+// parent handle a sibling closed meanwhile is closed for real here, and the
+// verdict goes to the log — that close was told "deferred" (os64/file.h).
 static void spawn_unshare_all(spawn_params_t *p)
 {
 	for (int slot = 0; slot < 3; slot++)
@@ -4030,7 +4041,7 @@ static void spawn_do_create(void *arg)
 			continue;   // the caller had closed that slot: keep the built-in default (console)
 
 		// The child's OWN reference on the object — a pipe end's count, a
-		// file's handleRefCount, a TCP conn's handle count — was taken at
+		// file's holds, a TCP conn's handle count — was taken at
 		// RESOLVE by handle_share, in the same critical section that found
 		// the parent's slot live (syscall_spawn says why nothing later is
 		// early enough). Two tasks hold the object from that instant: the
@@ -4038,9 +4049,12 @@ static void spawn_do_create(void *arg)
 		// child, `upper < file` survives the shell's immediate close of its
 		// own handle (and the child inherits the file POSITION — shared FIL,
 		// dup semantics — position 0 for a just-opened redirect, as
-		// intended), and the FIN waits for the child's close. handle_install
-		// hands that already-held reference over.
-		handle_install(child, slot, p->redirType[slot], p->redirObject[slot]);
+		// intended), and the FIN waits for the child's close.
+		// handle_share_install hands that already-held reference over, and
+		// a file's stops counting as an operation in flight: from here it
+		// is the child's handle, and answers for its own close.
+		handle_t shared = { .type = p->redirType[slot], .object = p->redirObject[slot] };
+		handle_share_install(child, slot, &shared);
 	}
 
 	// Submission lets the child exit and a sibling reap it before this
@@ -4152,7 +4166,7 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// The load below blocks on the disk, and a sibling thread can close any
 	// of the parent's handles while it does. For the three redirections the
 	// answer is handle_share (handle.h): the CHILD's own reference — a pipe
-	// end, a file's handleRefCount, a TCP conn's handle count — taken in the
+	// end, a file's holds, a TCP conn's handle count — taken in the
 	// same critical section that finds the slot live, so from that instant
 	// the object has one more table holder and nothing a sibling closes can
 	// hang it up or free it under the load. A pin was the wrong instrument

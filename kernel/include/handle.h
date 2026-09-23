@@ -119,14 +119,28 @@ void handle_unpin(const handle_t *pinned);
 // conn's row, never its line — tcp.h pins). Only what a child's 0/1/2 can
 // be is shareable: the console tags (nothing to take), pipe ends, open
 // files, TCP conns; anything else answers false and touches nothing.
+// handle_share_install puts the share in the child's slot as its handle;
 // handle_unshare gives the reference back when no child comes to own it —
-// the same release handle_close would run.
+// the same release handle_close would run. A FILE's share is held as an
+// OPERATION until one or the other happens: a sibling's close that finds
+// it must answer "deferred" (os64/file.h), because an unshare's close has
+// nowhere to answer to — while a child's handle answers for itself.
 bool handle_share(struct task *t, int h, handle_t *out);
+void handle_share_install(struct task *child, int slot, const handle_t *shared);
 void handle_unshare(const handle_t *shared);
 
 // Close one handle: drops the task's reference on the underlying object (for a
 // pipe, that is the refcount that decides EOF/EPIPE) and frees the slot.
 bool handle_close(struct task *t, int h);
+// The same close, with the verdict kept apart from the bookkeeping: returns
+// whether there was a handle to close (false: an empty slot, or one another
+// closer owns), and *rc receives the filesystem's own answer for the last
+// close of a file — 0, or its nonzero code when what was written could not
+// be committed. Two facts in two places, because a filesystem's -1 and "no
+// such handle" must never be one number (os64/file.h). *deferred: the
+// verdict belongs to an operation still in flight on another thread, and
+// this close does not have it.
+bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred);
 
 // Close every handle a task holds. Called on task exit — WITHOUT this, a task
 // that dies holding a pipe end keeps that end open forever, and the process on
@@ -149,6 +163,12 @@ void handle_close_all(struct task *t);
 // (rd14), because most callers have nowhere to report to and silence there was
 // the original defect: on FAT the commit happens inside close.
 int handle_file_object_close(void *vfs_file);
+// The same, for a handle's hold (as_pin false) or a pin's (true, which drops
+// the pin with it in one step), and whether the verdict went elsewhere:
+// *deferred is set when this was not the last holder and what remains is an
+// operation in flight, whose unpin will do the real close with nowhere to
+// answer to.
+int handle_file_object_close_verdict(void *vfs_file, bool as_pin, bool *deferred);
 
 // The directory sibling: drops one reference on a HANDLE_DIR's
 // vfs_directory_t (handleRefCount, vfs.h — the table's one, or a pin's), and

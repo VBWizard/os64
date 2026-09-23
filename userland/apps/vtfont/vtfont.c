@@ -29,10 +29,10 @@
 // grid, it answers with the grid it gives.
 //
 // WHAT TOOK IS THE KERNEL'S TO SAY. A write to /sys/console/font is judged
-// at close and installed by kworker a moment later, and a close that fails
-// is not yet heard in ring 3 (DEBTS.md) — so after the write this waits for
-// the swap and prints the door's own `last:` line, and its exit status is
-// that verdict's, never the write's.
+// at close and installed by kworker a moment later. The close answers
+// OS64_CLOSE_NOT_COMMITTED for a font refused, but that is a number and the
+// door's `last:` line is the REASON — so after the write this waits for the
+// swap and prints that line, and its exit status is the verdict's.
 
 #include "os64/os64.h"
 #include "os64/font_psf2.h"
