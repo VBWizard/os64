@@ -150,8 +150,8 @@ int64_t os64_dial(const char *dialstring)
 int64_t os64_announce(const char *dialstring)
 {
 	// The bang path read as WHERE I AM: tcp, then '*' for "every address
-	// this machine has", then the port. Strict like os64_dial, and for the
-	// same reason — a listen string is user input.
+	// this machine has" or a dotted quad, then the port. Strict like
+	// os64_dial, and for the same reason — a listen string is user input.
 	if (dialstring == 0)
 		return OS64_NET_ERR_BAD_STRING;
 
@@ -164,16 +164,17 @@ int64_t os64_announce(const char *dialstring)
 	if (!(bang - s == 3 && s[0] == 't' && s[1] == 'c' && s[2] == 'p'))
 		return OS64_NET_ERR_BAD_STRING;   // announce is TCP; a UDP door waits for its consumer
 
-	// The address segment must be the wildcard: one NIC answers every
-	// address, so a specific one has no meaning to give yet (DEBTS).
+	// The address segment: the wildcard, or a dotted quad for the kernel to
+	// judge. It accepts 127/8 (loopback) and refuses the rest as BAD_DEST.
 	s = bang + 1;
 	const char *seg_end = s;
 	while (*seg_end && *seg_end != '!')
 		seg_end++;
 	if (*seg_end != '!')
 		return OS64_NET_ERR_BAD_SERVICE;   // "tcp!*" — the port is missing
-	if (!(seg_end - s == 1 && s[0] == '*'))
-		return OS64_NET_ERR_BAD_ADDRESS;   // announce takes '*', not a host
+	uint32_t ip = 0;
+	if (!(seg_end - s == 1 && s[0] == '*') && !os64_parse_ipv4(s, seg_end, &ip))
+		return OS64_NET_ERR_BAD_ADDRESS;   // announce takes '*' or an address, not a name
 
 	s = seg_end + 1;
 	const char *end = s;
@@ -183,7 +184,7 @@ int64_t os64_announce(const char *dialstring)
 	if (!parse_decimal_segment(s, end, 65535, &port) || port == 0)
 		return OS64_NET_ERR_BAD_SERVICE;
 
-	os64_netdest_t local = { .ip = 0, .port = (uint16_t)port, .protocol = OS64_NET_TCP };
+	os64_netdest_t local = { .ip = ip, .port = (uint16_t)port, .protocol = OS64_NET_TCP };
 	return os64_net_announce(&local);
 }
 
@@ -205,7 +206,7 @@ const char *os64_dial_reason(int64_t err)
 		case OS64_NET_ERR_BAD_STRING:   return "not a dial string — expected network!address!service";
 		case OS64_NET_ERR_BAD_ADDRESS:  return "that host is not a dotted quad or a name";
 		case OS64_NET_ERR_BAD_SERVICE:  return "bad service — a port from 1 to 65535 (ICMP takes none)";
-		case OS64_NET_ERR_BAD_DEST:     return "the kernel refused the destination (address 0, or an unknown protocol)";
+		case OS64_NET_ERR_BAD_DEST:     return "the kernel refused the destination (address 0, an unknown protocol, UDP/ICMP to loopback, or announcing on an address other than * or 127/8)";
 		case OS64_NET_ERR_PORT_TAKEN:   return "that port is already spoken for — another listener, or a live connection";
 		case OS64_NET_ERR_INVALID:
 		case OS64_NET_ERR_BAD_POINTER:  return "refused at the syscall boundary";

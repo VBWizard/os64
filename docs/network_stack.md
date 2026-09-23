@@ -13,7 +13,7 @@ PR #65; until it lands, the sender is stop-and-wait.*
 
 A frame arrives at a NIC. The driver's interrupt handler rings a doorbell
 and returns; `knet`, one kernel thread pinned to the BSP, wakes, drains
-every registered NIC, and hands each frame up: ethernet demuxes by
+every registered NIC and loopback's queue, and hands each frame up: ethernet demuxes by
 ethertype to ARP or IPv4; IPv4 validates and demuxes by protocol to ICMP,
 UDP or TCP; each of those finds the conversation the frame belongs to and
 delivers into it, waking the thread parked on it. Outbound is the mirror:
@@ -22,8 +22,9 @@ decides on-link or gateway, ARP supplies the MAC, ethernet frames it, the
 driver's ring takes it.
 
 Three facts shape everything below. **os64 is a host, not a router**: it
-never forwards. **It is single-homed**: one machine address, however many
-cards. **Nothing textual crosses the syscall boundary**: a program dials a
+never forwards. **It is single-homed**: one machine address on the LAN,
+however many cards, beside loopback's 127/8, which no card carries
+(REMOTE.md § 1). **Nothing textual crosses the syscall boundary**: a program dials a
 bang path, the library lowers it to a struct, the kernel owns the wire and
 does every byte swap at the packet edge (`net_wire.h` is the whole swap
 surface).

@@ -10,6 +10,7 @@
 #include "doorbell.h"
 #include "random.h"             // the pool's thread-context fold, and the drain's own moment
 #include "driver/net/net_device.h"
+#include "driver/net/loopback.h"
 #include "driver/net/tcp.h"
 #include "driver/net/dhcp.h"
 #include "driver/net/e1000.h"   // kE1000IntxDivorced — the no-silent-fallbacks receipt
@@ -73,6 +74,10 @@ void knet_thread(void)
 				if (d->ops->drain(d))
 					moved = true;
 			}
+			// lo is not a card and so not in the table (loopback.h), but its
+			// queue is a receive ring like any other.
+			if (kNetLoopback != NULL && kNetLoopback->ops->drain(kNetLoopback))
+				moved = true;
 			rounds++;
 		} while (moved && rounds < KNET_DRAIN_ROUNDS);
 		kKnetDrainRounds += rounds;

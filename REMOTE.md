@@ -94,27 +94,57 @@ the e1000, virtio and RTL8125 use:
   loopback is the bottleneck. It will not be, because SSH's software AES
   will be.
 - A full queue drops the frame and counts it, like a NIC with a full ring.
-  TCP retransmits. `/sys/net` gets a `lo` row with queued, delivered and
-  dropped counts.
+  TCP retransmits. The queue holds 1024 frames, enough for a whole 1 MiB
+  window in flight, and `/sys/net/knet` prints its counters on an `lo:`
+  line (knet drains it). `lo` is not in `kNetDevices[]`: that table's order
+  is load-bearing (device 0 is the NIC the stack dials and DHCP runs on),
+  and a boot with no card must still answer `NO_NIC` to a LAN dial. So knet
+  drains `lo` by name, and knet now exists whenever networking does, card or
+  no card.
+- **Each TCP conversation knows its own address** (`local_ip`): zero means
+  the machine's address, read live as before, and a loopback conversation
+  carries its 127/8 address. Demux matches it, so the four-tuple includes
+  our address.
+- **A real card never delivers 127/8.** `ipv4_input` drops a 127/8 source
+  or destination arriving on anything but `lo`, counted as
+  `martians_dropped` in `/sys/net/ip`. Without that rule a forged LAN packet
+  could reach a loopback-only door, or be demuxed into a live loopback
+  conversation.
 
 **Per-address announce.** `announce` requires `ip == 0` today ("every address
 this machine has"), with per-address announce booked "for a second NIC".
 Loopback is that second interface. `announce(tcp!127.0.0.1!5900)` matches
 only segments addressed to 127.0.0.1, so a SYN from the LAN to port 5900
-finds no listener and gets the RST any closed port gets. A wildcard listener
-and a loopback listener on the same port may coexist, and the specific
-address wins, which is BSD's rule. Any address other than `0` or `127.x.y.z`
-still returns `BAD_DEST` until a machine has two real NICs.
+finds no listener and gets the RST any closed port gets. A port has ONE
+listener whatever its address, so a loopback listener and a wildcard one on
+the same port are `PORT_TAKEN`, not ranked. BSD's coexistence rule has no
+consumer, and the port bookkeeping it would touch has been through many
+review rounds. Any address other than `0` or `127.x.y.z` still returns
+`BAD_DEST` until a machine has two real NICs.
 
-**Out of scope for this slice:** a dial to the machine's own LAN address.
-That traffic still goes to the wire. It is booked in DEBTS, and nothing here
-needs it.
+**Out of scope for this slice** (one DEBTS row, § Networking): UDP and ICMP
+to 127/8 are refused at dial as `BAD_DEST`, so `ping localhost` says no
+rather than working; a dial to the machine's own LAN address still goes to
+the wire; and the one-listener-per-port rule above. Nothing here needs any
+of them.
 
-**Proof:** `/tests/looptest`, the booked in-OS listener fixture. It announces
-on loopback, dials itself, moves a few MiB both ways with a checksum,
-confirms a LAN-address SYN to the loopback-only port is refused (QEMU
-hostfwd, driven by the host probe), and closes from each side. The existing
-telnetd/sshd host probes must stay green.
+**A bug loopback found on the way:** a dial waited for `ESTABLISHED` and
+nothing else. A peer that answers and hangs up at once moves the
+connection on to `CLOSE_WAIT` before the dialer's first 10 ms nap ends. On
+loopback that happens every time, and a LAN server that speaks first and
+closes can do it too. The dialer then waited out its 10-second timeout and
+reported `TIMEOUT` for a call that had connected. `CLOSE_WAIT` now counts
+as connected.
+
+**Proof:** `/tests/looptest` in the ring-3 suite, the booked in-OS listener
+fixture. It checks the refusals, announces on loopback, dials itself, moves
+3 MiB each way with every byte checked, reaches the door as `localhost`,
+shows that a wildcard door answers on loopback, and checks that the
+client's close is the server's EOF. `looptest hold <address>` keeps a door
+open so the host can knock through QEMU's port forward: `hold any` answers
+the host's call, and `hold 127.0.0.1` answers nothing. The kernel test
+`net_martian_dropped` hands `ipv4_input` a forged 127/8 packet from a card,
+which the host cannot send through QEMU's user network.
 
 ## 2. sshd — channels, plural
 

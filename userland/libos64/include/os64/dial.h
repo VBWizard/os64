@@ -47,9 +47,12 @@ int64_t os64_dial(const char *dialstring);
 //       serve(peer.handle);                    // read/write/close like a dial
 //
 // os64_announce takes the same bang path as os64_dial, read as WHERE I AM:
-// the address segment must be '*' ("every address this machine has"), the
-// protocol must be tcp. A negative return is a code from the same table
-// (os64_dial_reason renders it) plus OS64_NET_ERR_PORT_TAKEN.
+// the address segment is '*' ("every address this machine has") or a
+// loopback address such as 127.0.0.1 (this machine alone may connect), and
+// the protocol must be tcp. A name is not accepted: a door is opened on an
+// address the kernel owns, and a resolver answer is somebody's opinion of
+// one. A negative return is a code from the same table (os64_dial_reason
+// renders it) plus OS64_NET_ERR_PORT_TAKEN.
 int64_t os64_net_announce(const os64_netdest_t *local);
 int64_t os64_announce(const char *dialstring);
 

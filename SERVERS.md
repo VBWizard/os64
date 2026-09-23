@@ -23,11 +23,13 @@ it says what it does — "I am here, on this port."
 
 - **`announce(const os64_netdest_t *local)`** (syscall 55) returns a
   LISTENER handle (`HANDLE_NET_LISTENER`). `protocol` must be TCP (a UDP
-  announce waits for its consumer — DEBTS). `ip` must be 0: "every address
-  this machine has", which is one NIC today (a per-address announce waits
-  for a second NIC — DEBTS). `port` is 1..65535. The dial string spelling is
-  `tcp!*!23`, `*` being how every dialer since Plan 9 has spelled "any of
-  mine".
+  announce waits for its consumer — DEBTS). `ip` is 0 — "every address
+  this machine has", loopback included — or a 127/8 address, a door only
+  this machine can reach (REMOTE.md § 1: no card delivers a 127/8
+  destination). The LAN address is not accepted by name; with one card, 0
+  already means it. One listener per port, whatever its address. `port` is
+  1..65535. The dial string spelling is `tcp!*!23`, `*` being how every
+  dialer since Plan 9 has spelled "any of mine", or `tcp!127.0.0.1!5900`.
 - **`read(listener, &conn, sizeof conn)`** blocks until a connection has
   completed its handshake, then yields ONE `os64_netconn_t {handle, peer_ip,
   peer_port}` — the new stream's handle is allocated in the reader's table,
@@ -36,10 +38,11 @@ it says what it does — "I am here, on this port."
   buffer shorter than that is refused, never half-filled. `os64_read_for`'s
   patience works on it (`OS64_ERR_TIMEOUT` when nobody came); a signal ends
   the wait like every other park.
-- **Refusals** are specific, the dial table's doctrine: `BAD_DEST` (a
-  non-zero ip, a protocol other than TCP, port 0), `NO_NIC`, `NO_RESOURCES`
-  (handles, memory), and one new code, **`OS64_NET_ERR_PORT_TAKEN`**:
-  another listener already answers there, or a dialed connection holds that
+- **Refusals** are specific, the dial table's doctrine: `BAD_DEST` (an
+  ip that is neither 0 nor 127/8, a protocol other than TCP, port 0),
+  `NO_NIC` (networking switched off), `NO_RESOURCES` (handles, memory), and
+  one new code, **`OS64_NET_ERR_PORT_TAKEN`**: another listener already
+  answers there, whatever its address, or a dialed connection holds that
   port (a port inside the ephemeral range is claimed in the same bitmap the
   draw reads, so the two can never collide).
 
@@ -287,10 +290,11 @@ it to the P5's own limine.conf, or types `telnetd &` at a prompt.
 
 Still owed:
 
-- **Kernel self-test:** none for the listener yet — the stack has no
-  loopback (a dial to our own address goes to the wire and is not looped
-  back), so the machine cannot accept its own connection. Booked; the host
-  script is the fixture until then.
+- **In-OS listener fixture: PAID 2026-09-23 by `/tests/looptest`**
+  (REMOTE.md § 1). With loopback the machine accepts its own call: the
+  ring-3 suite announces, dials itself, and moves 3 MiB each way. The host
+  scripts still own what only a real peer can show — Telnet negotiation,
+  resize storms, dropped clients.
 
 `tools/test_telnet_host.sh` covers both roles, including NAWS with escaped
 255, refusal/withdrawal, and command delivery with a full decoded buffer.
@@ -535,7 +539,7 @@ the P5.
 
 ## Booked (DEBTS.md rows follow the code)
 
-UDP announce; announce on one address of several; SYN cookies; loopback
-(and with it an in-OS listener fixture); a deadline on plain pipe-handle
+UDP announce; announce on one card's address of several; SYN cookies;
+loopback beyond TCP to 127/8 (DEBTS § Networking); a deadline on plain pipe-handle
 reads (the STREAM master's has one); `/sys` rows for ptys; the STREAM
 slave's kernel-text drop counter surfacing somewhere readable.
