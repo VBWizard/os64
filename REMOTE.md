@@ -215,11 +215,20 @@ what was built. In brief:
 
 ## 3. `/dev/glass`, read side — what the screen shows
 
-**One handle is one viewer.** `open("/dev/glass")` returns a handle with its
-own damage accumulator: up to 16 rects with the compositor's cheap-merge
-rule, collapsing to their union on overflow. It starts as the whole screen,
-so the first read is a full frame. Two vncd sessions are two independent
-handles.
+**One handle is one viewer.** `open("/dev/glass", "r")` returns a
+`HANDLE_GLASS` with its own record of what changed: a rectangle that touches
+one already pending grows it, up to 16 separate ones, and past that they fold
+into their union. It starts as the whole screen, so the first read is a full
+frame. Two vncd sessions are two independent handles. A boot with no desktop
+refuses the open.
+
+**Why a handle alias and not a devfs file.** A glass read BLOCKS until the
+screen changes, and a devfs file read runs in the borrowed kernel context
+where sleeping corrupts the kernel. That is the reason `/dev/tty` is a
+handle alias (devfs.h, THE ALIAS), so devfs's alias hook grew an object
+out-parameter and a second customer. `/sys/gui` counts the open viewers
+(`glass_viewers`), since a remote viewer is otherwise invisible from the
+machine it watches.
 
 **A read yields one damaged rectangle, with its pixels.** This is the shape
 `announce` uses: *accept is a read*, and here *a frame is a read*.
@@ -237,7 +246,9 @@ typedef struct {
   ends the park, as it does everywhere (`signal_park_must_end`).
 - A rect too big for the caller's buffer is returned as a band of whole rows
   from its top, and the remainder stays pending. A buffer that cannot hold
-  the header plus one row is refused and never half-filled.
+  the header plus one row is refused and never half-filled. The kernel side
+  of a read is the read syscall's 1 MiB per-thread scratch, so a band is at
+  most that: 255 rows of a 1024-pixel screen.
 - **Where damage comes from:** the compositor's frame loop, right after
   `composite_locked` and still under `kGuiLock`, adds that frame's damage
   list to every open glass handle.
@@ -269,12 +280,16 @@ renderer's shadow for VT1–7, with the renderer feeding damage the way the
 compositor does. The flag stops being set, and vncd's dimmed notice goes
 away. No record field changes.
 
-**Proof:** `/tests/glasstest` opens the device, checks that the first read is
-a full frame of the stated size, creates a window through the GUI syscalls,
-checks that the next read's rect covers it and its pixels match what was
-drawn, checks that a small buffer gets banded rows, that patience times out
-on a still screen, and that a text-VT switch sets the flag. It runs on a GUI
-boot. The ring-3 suite skips it, and says so, when no compositor is seated.
+**Proof:** `/tests/glasstest` checks that the first reads compose the whole
+screen in whole-row bands, that a ten-row buffer gets ten rows, that a
+buffer too small for one row is refused without losing the change, that a
+window painted a known colour reaches the viewer pixel for pixel, that a
+still screen times out, and that closing a viewer under a parked reader ends
+the wait instead of freeing memory under it. It passes on a GUI boot, and
+the ring-3 suite reports it as SKIP on a text boot (no desktop). By hand,
+`glasstest watch` across Alt+F8 and Ctrl+Alt+F1 printed the whole frame
+flagged `TEXT_VT`, the whole frame unflagged, one 52x48 rectangle for a
+mouse move, and the flagged frame again.
 
 ## 4. `/dev/glass`, write side — hands
 
