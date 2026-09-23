@@ -338,8 +338,9 @@ OS64_GLASS_POINTER:  uint8_t kind, buttons; uint16_t x, y;            // 6 bytes
 - **Closing the handle lifts every finger.** Close delivers an empty keyboard
   report and lifts the view's own buttons, under the view's input lock so
   that no write can land after it. A dropped connection does not leave Ctrl
-  held or a drag grabbed, unless the GUI's input queue is full at that
-  moment and the releases are dropped with it (DEBTS § Remote access).
+  held or a drag grabbed, unless a GUI event queue (the input queue or the
+  window's) is full at that moment and the releases are dropped with it
+  (DEBTS § Remote access).
 - **Validation is whole-record, at the boundary.** An unknown kind, a record
   whose length is not its kind's, a button bit above middle, or a position
   off the screen (refused, not moved) is refused.
