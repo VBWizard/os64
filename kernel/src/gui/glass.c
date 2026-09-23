@@ -13,7 +13,7 @@
 #include "scheduler.h"
 #include "signals.h"
 #include "kernel.h"          // kTicksSinceStart — the park's backstop and the deadline
-#include "gui/input.h"       // input_inject_pointer / input_inject_mouse — the view's pointer
+#include "gui/input.h"       // input_inject_pointer / input_release_pointer — the view's pointer
 #include "driver/system/hid_keyboard.h"   // the view's keyboard: the USB keyboard's interpreter
 #include "CONFIG.h"          // TICKS_PER_SECOND
 
@@ -42,7 +42,7 @@ struct glass_view
 	bool input_closed;                   // the handle closed: nothing more is delivered
 	spinlock_t input_lock;
 	hid_keyboard_t kbd;
-	uint8_t buttons;                     // the buttons this view holds down
+	input_pointer_source_t pointer;      // the buttons this view holds down
 };
 
 static glass_view_t *s_views;
@@ -129,19 +129,16 @@ void glass_view_close(glass_view_t *v)
 {
 	// Lift every finger first, under the input lock, so no write can land
 	// after the release: an empty report ends every key and modifier the
-	// keyboard held (with their release events), and a button-only packet
-	// ends a drag.
+	// keyboard held (with their release events), and releasing the view's
+	// pointer lifts the buttons it held, and no other device's. A full input
+	// queue drops those events like any others (DEBTS § Remote access).
 	uint64_t iflags = spinlock_acquire_irqsave(&v->input_lock);
 	v->input_closed = true;
 	if (v->writable)
 	{
 		static const uint8_t none[8];
 		hid_keyboard_report(&v->kbd, none);
-		if (v->buttons != 0)
-		{
-			input_inject_mouse(0, 0, 0);
-			v->buttons = 0;
-		}
+		input_release_pointer(&v->pointer);
 	}
 	spinlock_release_irqrestore(&v->input_lock, iflags);
 
@@ -320,8 +317,7 @@ long glass_view_write(glass_view_t *v, const void *data, size_t len)
 			spinlock_release_irqrestore(&v->input_lock, flags);
 			return GLASS_ERR_CLOSED;
 		}
-		v->buttons = m.buttons;
-		input_inject_pointer(m.x, m.y, m.buttons);
+		input_inject_pointer(&v->pointer, m.x, m.y, m.buttons);
 		spinlock_release_irqrestore(&v->input_lock, flags);
 		return (long)len;
 	}
@@ -330,8 +326,15 @@ long glass_view_write(glass_view_t *v, const void *data, size_t len)
 }
 
 // How many views one frame's tick serves. More writable views than this is
-// more remote keyboards than there are people; the rest wait a frame.
+// more remote keyboards than there are people; the start rotates through
+// them, so every held key is served within a few frames and repeats more
+// slowly while there are that many, rather than not at all.
 #define GLASS_TICK_MAX 8
+
+static bool glass_tick_due(const glass_view_t *v)
+{
+	return v->writable && !v->closed && v->kbd.rpt_usage != 0;
+}
 
 void glass_input_tick(void)
 {
@@ -339,15 +342,32 @@ void glass_input_tick(void)
 	// so it cannot be freed, then tick them with kGuiLock released (the
 	// delivery's locks may not nest under it). rpt_usage is read here
 	// without the input lock: it is a hint, and a stale one costs a frame.
+	// The scan starts where the last one stopped, counted among the due
+	// views, so a cap reached every frame still reaches them all.
+	static uint32_t s_rotation;
 	glass_view_t *due[GLASS_TICK_MAX];
-	uint32_t n = 0;
+	uint32_t n = 0, eligible = 0;
 	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
-	for (glass_view_t *v = s_views; v != NULL && n < GLASS_TICK_MAX; v = v->next)
-		if (v->writable && !v->closed && v->kbd.rpt_usage != 0)
+	for (glass_view_t *v = s_views; v != NULL; v = v->next)
+		if (glass_tick_due(v))
+			eligible++;
+	uint32_t start = eligible ? s_rotation % eligible : 0;
+	for (uint32_t pass = 0; pass < 2 && n < GLASS_TICK_MAX; pass++)
+	{
+		uint32_t index = 0;
+		for (glass_view_t *v = s_views; v != NULL && n < GLASS_TICK_MAX; v = v->next)
 		{
-			glass_view_ref(v);
-			due[n++] = v;
+			if (!glass_tick_due(v))
+				continue;
+			if (pass == 0 ? index >= start : index < start)
+			{
+				glass_view_ref(v);
+				due[n++] = v;
+			}
+			index++;
 		}
+	}
+	s_rotation = start + n;
 	spinlock_release_irqrestore(&kGuiLock, flags);
 
 	for (uint32_t i = 0; i < n; i++)

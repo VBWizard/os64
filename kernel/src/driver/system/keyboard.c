@@ -248,40 +248,57 @@ static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers)
 // who gets SIGINT) lives entirely in console.c — this file stays a device
 // driver, exactly the layering SIGINT.md prescribes; gui_owns_glass is a
 // routing predicate, not policy, same standing as tty_input_event.
-// Last modifier state seen by the choke below — the mouse path's window into
-// the keyboard (see keyboard_current_modifiers in the header for why it is
-// sampled HERE and not from s_modifiers). Written from IRQ context, read from
-// IRQ context; a single byte, so `volatile` and natural atomicity are the
-// whole synchronization story.
-static volatile uint8_t s_liveModifiers;
+// The machine-wide modifier state the mouse path reads (keyboard_current_
+// modifiers in the header has the contract). Ctrl, Shift and Alt are counted:
+// how many keyboards hold each, so one is held while any keyboard holds it.
+// The latches and the dialect tag are the last reporting keyboard's. Written
+// from IRQ context and from /dev/glass writes on any core, so the counts are
+// atomic; each keyboard reports its own changes in order.
+static const uint8_t kHeldModifiers[3] = { KEYBOARD_MOD_CTRL, KEYBOARD_MOD_SHIFT, KEYBOARD_MOD_ALT };
+static volatile uint32_t s_modifierHolders[3];
+static volatile uint8_t s_liveLatches;
+
+static void keyboard_publish_change(uint8_t before, uint8_t after) {
+    for (int i = 0; i < 3; i++) {
+        uint8_t m = kHeldModifiers[i];
+        if ((after & m) && !(before & m))
+            __atomic_add_fetch(&s_modifierHolders[i], 1, __ATOMIC_RELAXED);
+        else if (!(after & m) && (before & m))
+            __atomic_sub_fetch(&s_modifierHolders[i], 1, __ATOMIC_RELAXED);
+    }
+    s_liveLatches = (uint8_t)(after & ~(KEYBOARD_MOD_CTRL | KEYBOARD_MOD_SHIFT | KEYBOARD_MOD_ALT));
+}
 
 uint8_t keyboard_current_modifiers(void) {
-    return s_liveModifiers;
+    uint8_t mods = s_liveLatches;
+    for (int i = 0; i < 3; i++)
+        if (__atomic_load_n(&s_modifierHolders[i], __ATOMIC_RELAXED) != 0)
+            mods |= kHeldModifiers[i];
+    return mods;
 }
 
 // The PS/2 half of the publication (see the forward declaration above the
-// updaters). Defined down here so it sits beside the other half.
+// updaters). Defined down here so it sits beside the other half; it remembers
+// what it last published, because the counts need this keyboard's change.
+static uint8_t s_ps2Published;
 static void keyboard_publish_modifiers(void) {
-    s_liveModifiers = s_modifiers;
+    keyboard_publish_change(s_ps2Published, s_modifiers);
+    s_ps2Published = s_modifiers;
 }
 
-// The USB half of the publication (declared in keyboard.h — see the comment
-// there for why the HID driver must publish at its own change point).
-// Deliberately trivial: the HID driver owns its modifier byte entirely; this
-// is only the hand-off to the shared snapshot.
-void keyboard_publish_hid_modifiers(uint8_t modifiers) {
-    s_liveModifiers = modifiers;
+// The HID half (keyboard.h): each HID keyboard owns its modifier byte and
+// reports its own before and after.
+void keyboard_publish_hid_modifiers(uint8_t before, uint8_t after) {
+    keyboard_publish_change(before, after);
 }
 
 void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed) {
-    // The USB half. The xHCI HID path carries its own modifier byte and never
-    // touches this file's s_modifiers, so the choke is the only place that
-    // sees it — and for the PS/2 path this simply re-publishes the value
-    // keyboard_publish_modifiers just wrote. Sampled BEFORE the routing fork,
-    // because a chord can be pressed while the GUI holds the glass and
-    // released after a switch to a text VT.
-    s_liveModifiers = modifiers;
-
+    // The modifier snapshot is not touched here: each driver publishes where
+    // its modifier byte CHANGES (keyboard_publish_modifiers and keyboard_
+    // publish_hid_modifiers), whichever way the event is routed, so a chord
+    // pressed while the GUI holds the glass and released on a text VT still
+    // balances. Writing every event's byte here made the snapshot the last
+    // keyboard to type anything, which dropped a chord held on another.
     if (gui_owns_glass()) {
         input_inject_key(ascii, scancode, modifiers, pressed);
         return;

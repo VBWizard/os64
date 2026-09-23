@@ -392,7 +392,8 @@ static bool xhci_control_request(xhci_hid_t *dev,
 // screen orientation (positive is down), unlike the PS/2 packet decoder.
 static void hid_process_mouse_report(const uint8_t *rep)
 {
-	input_inject_mouse((int8_t)rep[1], (int8_t)rep[2], rep[0] & 0x07);
+	static input_pointer_source_t pointer;   // the USB mouse's buttons (gui/input.h)
+	input_inject_mouse(&pointer, (int8_t)rep[1], (int8_t)rep[2], rep[0] & 0x07);
 }
 
 // ── Transfer events (keyboard/mouse reports arriving) ────────────────────────

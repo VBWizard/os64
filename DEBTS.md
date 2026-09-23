@@ -475,6 +475,20 @@ how a worklist fills with things nobody intends to do.
 - **No CopyRect.** A window drag re-sends every pixel it moves; the
   compositor knows the move and could say so. Reverse when a drag over a
   slow link is felt.
+- **A release can be lost when the GUI's input queue is full** (Codex #123,
+  deferred on Chris's ruling). `input.c` drops the newest event when all
+  256 slots are taken, and a key-up, a modifier release or a button-up is
+  an event like any other, while the source's own state has already moved
+  on. So a closing viewer's releases, or any keyboard's, can vanish, and the
+  compositor keeps Alt-Tab open, a drag grabbed or a key held until the
+  user presses and lets go again. Reaching it takes the queue full at that
+  moment: a writer flooding it between frames, or a compositor that stops
+  draining. The cure is Linux evdev's overflow rule applied where the drop
+  happens: a release that does not fit is remembered (a bit per key and
+  button) and enqueued when the compositor makes room, and a new press of
+  the same key cancels it, since the compositor never saw it go up. Pay
+  when a stuck key or grab is seen, or before anything less trusted than
+  the machine's own programs can open `/dev/glass`.
 
 ## SSH implementation boundaries (2026-09-13)
 

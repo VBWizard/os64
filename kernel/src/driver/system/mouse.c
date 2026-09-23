@@ -47,6 +47,7 @@ static bool s_mouse_active = false;
 
 // 3-byte packet assembly state
 static uint8_t s_packet[3];
+static input_pointer_source_t s_pointer;   // the PS/2 mouse's buttons (gui/input.h)
 static uint8_t s_packet_index = 0;
 // Tick of the last AUX byte, for timeout resync: if the controller dropped a
 // byte mid-packet (e.g. its buffer overflowed during a motion burst), the
@@ -210,7 +211,7 @@ void mouse_handle_byte(uint8_t data)
 		dy = (int16_t)-dy;
 
 		// Button bits 0/1/2 = L/R/M — same order as INPUT_MOUSE_BUTTON_*.
-		input_inject_mouse(dx, dy, s_packet[0] & 0x07);
+		input_inject_mouse(&s_pointer, dx, dy, s_packet[0] & 0x07);
 		break;
 	}
 }

@@ -15,9 +15,9 @@
 // section 4) are the same dialect. Each owns one hid_keyboard_t and calls in
 // with its own serialization; nothing here locks.
 //
-// The live-modifier snapshot (keyboard_current_modifiers) is machine-wide:
-// with two keyboards, the one that changed a modifier last is what a mouse
-// packet sees — as with any two keyboards on one machine.
+// Each keyboard reports its modifier changes to the machine-wide state a mouse
+// packet reads (keyboard_current_modifiers): a modifier is held while any
+// keyboard holds it, so two keyboards cannot drop each other's chords.
 
 #include <stdint.h>
 
