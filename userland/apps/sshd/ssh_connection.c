@@ -333,13 +333,27 @@ void ssh_connection_packet(ssh_engine *s, const uint8_t *p, size_t n)
 malformed:
     ssh_disconnect(s, 2, "invalid channel message, state or window");
 }
+/* How much of an n-byte data packet with a `header`-byte message header fits
+ * the output queue's free room. Every channel sends what fits rather than all
+ * or nothing: the session and the forwards take turns going first for the
+ * room (sshd.c), and a channel that waited for room for its whole staged
+ * packet would never take its turn while the other spent each trickle.
+ * Framing beyond the header costs at most 56 bytes: 5 of length and padding
+ * length, up to 19 of padding, 32 of MAC. */
+static size_t fit_room(const ssh_engine *s, size_t n, size_t header)
+{
+    size_t room = SSH_OUTPUT_CAP - s->out_len, framing = header + 56;
+    if (room <= framing) return 0;
+    return n < room - framing ? n : room - framing;
+}
 size_t ssh_send_data(ssh_engine *s, const uint8_t *p, size_t n, int stderr_stream)
 {
     if (!s->started || s->sent_close || s->closed || s->kex) return 0;
     if (n > s->peer_window) n = s->peer_window;
     if (n > s->peer_packet) n = s->peer_packet;
     if (n > SSH_DATA_MAX) n = SSH_DATA_MAX;
-    if (!n || SSH_OUTPUT_CAP - s->out_len < n + 64) return 0;
+    n = fit_room(s, n, stderr_stream ? 13 : 9);
+    if (!n) return 0;
     uint8_t payload[SSH_DATA_MAX + 13]; ssh_writer w = {payload, 0, sizeof(payload), 0};
     ssh_put_byte(&w, stderr_stream ? 95 : 94); ssh_put_u32(&w, s->peer_channel);
     if (stderr_stream) ssh_put_u32(&w, 1);
@@ -387,14 +401,7 @@ size_t ssh_forward_send(ssh_engine *s, uint32_t forward, const uint8_t *p, size_
     if (n > f->peer_window) n = f->peer_window;
     if (n > f->peer_packet) n = f->peer_packet;
     if (n > SSH_DATA_MAX) n = SSH_DATA_MAX;
-    /* As much as the free room takes, not all or nothing: the session's
-     * streams refill freed room 4 KiB at a time, and a forward that waited
-     * for room for a whole 32 KiB read could wait forever behind them.
-     * Framing costs at most 65 bytes: 9 of header, 5 of length and padding
-     * length, up to 19 of padding, 32 of MAC. */
-    size_t room = SSH_OUTPUT_CAP - s->out_len;
-    if (room <= 65) return 0;
-    if (n > room - 65) n = room - 65;
+    n = fit_room(s, n, 9);
     if (!n) return 0;
     uint8_t payload[SSH_DATA_MAX + 9]; ssh_writer w = {payload, 0, sizeof(payload), 0};
     ssh_put_byte(&w, 94); ssh_put_u32(&w, f->peer_channel); ssh_put_string(&w, p, n);
