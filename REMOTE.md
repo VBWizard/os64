@@ -194,7 +194,8 @@ what was built. In brief:
     of each other. The streams' "after the first sender" rule is exact for
     two and drifts for three or more; the harness shows both.
   - Local EOF becomes CHANNEL_EOF then CLOSE. Client CLOSE closes the local
-    connection. **A client EOF closes it whole** once the client's bytes are
+    connection once the bytes the client sent before it are delivered. **A
+    client EOF closes it whole** once the client's bytes are
     delivered, because ring 3 has no half-close (DEBTS). A viewer closes
     fully and loses nothing.
   - A closed session does not end the connection while forwards are live.
