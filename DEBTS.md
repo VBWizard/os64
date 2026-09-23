@@ -472,6 +472,10 @@ how a worklist fills with things nobody intends to do.
   mouse decoders take three buttons, and `/dev/glass`'s pointer record
   carries the same three. VNC's buttons 4-7 are dropped at vncd. Reverse
   with the local mouse drivers first, when a program wants to scroll.
+- **No clipboard across the tunnel.** vncd reads and discards a viewer's
+  ClientCutText and never sends ServerCutText. `/sys/clipboard` exists; the
+  missing piece is a way for vncd to hear that it changed. Reverse when
+  copying between the machines is wanted.
 - **No CopyRect.** A window drag re-sends every pixel it moves; the
   compositor knows the move and could say so. Reverse when a drag over a
   slow link is felt.
