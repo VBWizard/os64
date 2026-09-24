@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DATA = Path(__file__).resolve().parent / 'unicode-17.0.0'
 PINS = {'UnicodeData.txt': '2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c',
         'LICENSE.txt': 'e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96'}
-OUT = ROOT / 'userland/libos64/text_w1_data.h'
+OUT = ROOT / 'abi/include/os64/text_w1_data.h'
 
 def generate():
     for name, digest in PINS.items():
