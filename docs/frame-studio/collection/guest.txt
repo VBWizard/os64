@@ -1,0 +1,16 @@
+framestudio: ready content=1240x840 title=16 buttons=4 generation=0
+framestudio: Load OK name=Orchard bytes=156484 generation=0
+framestudio: Save OK name=Orchard bytes=156484 generation=0
+framestudio: Delete OK name=Orchard dirty=1 generation=0
+framestudio: Load OK name=Orchard bytes=156484 generation=0
+framestudio: Load OK name=Blue-Hour bytes=173000 generation=0
+framestudio: Apply OK generation=1 font=24 buttons=4 finish=2
+framestudio: Load OK name=Orchard bytes=156484 generation=1
+framestudio: closed
+rc=0
+framestudio: active match name=Blue-Hour generation=1
+framestudio: ready content=1240x840 title=24 buttons=4 generation=1
+framestudio: Load OK name=Orchard bytes=156484 generation=1
+framestudio: Apply OK generation=2 font=22 buttons=3 finish=1
+framestudio: closed
+exit=0

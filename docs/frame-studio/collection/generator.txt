@@ -1,0 +1,8 @@
+Blue-Hour: 173800 bytes; prepared, decoded and painted
+Orchard: 157284 bytes; prepared, decoded and painted
+Porcelain: 173800 bytes; prepared, decoded and painted
+Copperline: 173800 bytes; prepared, decoded and painted
+Moss-and-Linen: 173800 bytes; prepared, decoded and painted
+Signal: 173800 bytes; prepared, decoded and painted
+Collection matches the checked-in assets.
+Preview: /tmp/frame-collection-verified.ppm

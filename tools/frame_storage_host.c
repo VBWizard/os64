@@ -18,6 +18,17 @@
 extern void frame_test_deny_next_alloc(void);
 
 static char directory[128];
+static char included_directory[128];
+static const char *frames_target;
+static const char *host_path(const char *path)
+{
+    static char translated[512];
+    size_t n=strlen(FRAME_INCLUDED_DIR);
+    if(strncmp(path,FRAME_INCLUDED_DIR,n) || (path[n] && path[n]!='/'))return path;
+    if(!included_directory[0])return "/nonexistent-os64-included-frames";
+    assert(snprintf(translated,sizeof(translated),"%s%s",included_directory,path+n)<(int)sizeof(translated));
+    return translated;
+}
 static DIR *listing;
 static bool fail_write,fail_sync,fail_rename,fail_read,fail_unlink;
 static unsigned rename_calls,apply_calls,unlink_calls;
@@ -49,6 +60,7 @@ int os64_decor_apply(const void *bytes,size_t length,uint64_t expected)
 int64_t os64_conf_target(const char *name,char *out,size_t cap)
 {
     assert(!strcmp(name,"frames") || !strcmp(name,"decoration.startup"));
+    if(frames_target && !strcmp(name,"frames"))return snprintf(out,cap,"%s",frames_target)<(int)cap?0:-1;
     return snprintf(out,cap,!strcmp(name,"frames")?"%s":"%s/decoration.startup",directory)<(int)cap?0:-1;
 }
 int64_t os64_conf_find(const char *name,char *out,size_t cap)
@@ -60,13 +72,15 @@ int64_t os64_conf_find(const char *name,char *out,size_t cap)
     return access(out,F_OK)?-1:0;
 }
 uint64_t os64_taskid(void){return 77;}
+int64_t os64_getcwd(char *out,size_t cap)
+{return snprintf(out,cap,"/home")<(int)cap?5:-1;}
 int64_t os64_mkdir(const char *path){return mkdir(path,0700);}
 int64_t os64_open(const char *path,const char *mode)
 {
     /* File operations must not consult the missing font sources. */
-    assert(!strncmp(path,directory,strlen(directory)));
+    assert(!strncmp(path,directory,strlen(directory)) || !strncmp(path,FRAME_INCLUDED_DIR,strlen(FRAME_INCLUDED_DIR)));
     int flags=!strcmp(mode,"x")?O_WRONLY|O_CREAT|O_EXCL:O_RDONLY;
-    return open(path,flags,0600);
+    return open(host_path(path),flags,0600);
 }
 int64_t os64_close(int32_t fd)
 {if(fd==900){closedir(listing);listing=NULL;return 0;}return close(fd);}
@@ -88,7 +102,7 @@ int64_t os64_rename_with_flags(const char *from,const char *to,uint64_t flags)
     return rename(from,to);
 }
 int64_t os64_opendir(const char *path)
-{assert(!listing);listing=opendir(path);return listing?900:-1;}
+{assert(!listing);listing=opendir(host_path(path));return listing?900:-1;}
 int64_t os64_readdir(int32_t fd,os64_dirent_t *out)
 {
     assert(fd==900);errno=0;struct dirent *entry=readdir(listing);
@@ -250,6 +264,52 @@ static void test_active(const frame_draft_t *draft,const void *bundle,size_t len
     }
     puts("frame active match: PASS V4/V5/V6 bundles, sorted duplicates, missing/corrupt entries, exact contents/length, legacy/default, read failure, racing Apply, no publication");
 }
+static void test_included(const frame_draft_t *draft,const void *bundle,size_t length)
+{
+    strcpy(included_directory,"/tmp/os64-included-XXXXXX");assert(mkdtemp(included_directory));
+    void *file=NULL;size_t bytes=0;
+    assert(frame_encode(draft,bundle,length,&file,&bytes)==FRAME_STORE_OK);
+    char path[256];snprintf(path,sizeof(path),"%s/Included.frame",included_directory);
+    FILE *f=fopen(path,"wb");assert(f && fwrite(file,1,bytes,f)==bytes && !fclose(f));os64_free(file);
+    frame_saved_t names[4];assert(frame_saved_list(names,4)==1 && names[0].included);
+    frame_saved_t selected=names[0];frame_draft_t loaded;void *copy=NULL;size_t size=0;
+    assert(frame_load_entry(&selected,&loaded,&copy,&size)==FRAME_STORE_OK);
+    assert(frame_same(draft,&loaded) && size==length && !memcmp(copy,bundle,length));os64_free(copy);
+    assert(frame_delete("Included")==FRAME_STORE_IO && !access(path,F_OK));
+    const char *aliases[]={FRAME_INCLUDED_DIR,"/etc//./frames/","/home/../etc/frames","../etc/frames"};
+    for(size_t i=0;i<sizeof(aliases)/sizeof(aliases[0]);++i){
+        frames_target=aliases[i];
+        assert(frame_saved_list(names,4)==1 && names[0].included);
+        assert(frame_save("Included",draft,bundle,length,true)==FRAME_STORE_INVALID);
+        assert(frame_delete("Included")==FRAME_STORE_INVALID && !access(path,F_OK));
+    }
+    frames_target=NULL;
+    fail_status=false;change_during_lookup=false;status_reads=0;
+    active_status=(os64_decor_status_t){9,os64_decor_fingerprint(bundle,length),(uint32_t)length};
+    size_t index=7;uint64_t generation=0;
+    assert(frame_load_active(names,1,&index,&loaded,&copy,&size,&generation)==1 && index==0 && generation==9);
+    os64_free(copy);
+    assert(frame_save("Included",draft,bundle,length,false)==FRAME_STORE_OK);
+    assert(frame_saved_list(names,4)==1 && !names[0].included);
+    selected=names[0];
+    char personal[256];snprintf(personal,sizeof(personal),"%s/Included.frame",directory);
+    f=fopen(personal,"wb");assert(f && fwrite("broken",1,6,f)==6 && !fclose(f));
+    assert(frame_load_entry(&selected,&loaded,&copy,&size)==FRAME_STORE_INVALID && !copy && !size);
+    assert(frame_delete("Included")==FRAME_STORE_OK);
+    assert(frame_load_entry(&selected,&loaded,&copy,&size)==FRAME_STORE_IO && !copy && !size);
+    assert(frame_saved_list(names,4)==1 && names[0].included);
+    assert(frame_load_entry(&names[0],&loaded,&copy,&size)==FRAME_STORE_OK);os64_free(copy);
+    assert(frame_save("Personal",draft,bundle,length,false)==FRAME_STORE_OK);
+    assert(frame_saved_list(names,1)==-FRAME_STORE_LIMIT);
+    assert(frame_saved_list(names,4)==2 && names[0].included && !names[1].included);
+    assert(frame_delete("Personal")==FRAME_STORE_OK);
+    assert(!unlink(path));
+    assert(frame_load_entry(&names[0],&loaded,&copy,&size)==FRAME_STORE_IO && !copy && !size);
+    assert(!rmdir(included_directory));included_directory[0]=0;
+    assert(frame_saved_list(names,4)==0);
+    puts("included frames: PASS discovery, source-pinned load, active match, personal shadow, corrupt personal refusal, deletion reveal, config aliases and bounds");
+}
+
 void test_frame_storage(const frame_draft_t *draft,const void *bundle,size_t length)
 {
     strcpy(directory,"/tmp/os64-frames-XXXXXX");assert(mkdtemp(directory));
@@ -299,6 +359,7 @@ void test_frame_storage(const frame_draft_t *draft,const void *bundle,size_t len
     test_startup(bundle,length,next,next_length);
     test_delete(draft,bundle,length);
     test_active(draft,bundle,length);
+    test_included(draft,bundle,length);
     assert(!rmdir(directory));
     os64_free(next);
     puts("frame storage: PASS embedded-asset round trip, bounds/checksum, names, short I/O, write/sync/rename refusal, replacement, collection");
