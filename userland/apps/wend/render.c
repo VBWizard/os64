@@ -678,9 +678,9 @@ static void list_marker(render_t *r, list_t *list)
     if (list && list->ordered) {
         n = num_text(list->next, mark);
         if (list->down) {
-            if (list->next > -0x7FFFFFFF)
+            if (list->next > INT32_MIN)
                 list->next--;
-        } else if (list->next < 0x7FFFFFFF) {
+        } else if (list->next < INT32_MAX) {
             list->next++;                // a list this long has other problems
         }
         mark[n++] = '.';

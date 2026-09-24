@@ -110,6 +110,7 @@ static int32_t s_cols = 80;
 static int64_t s_keys = OS64_STDIN;
 static char    s_status[WEND_STATUS_MAX];
 static bool    s_raw;
+static bool    s_raw_refused;         // raw mode was refused; said after the first page
 
 // Set by a handler, read by the loops. A resize is noticed wherever the
 // program next looks; a cancel ends the fetch that is in flight; a hangup
@@ -1713,6 +1714,14 @@ static int32_t session(const char *start)
                ? WEND_BAD_URL : WEND_FAILED;
     }
 
+    // Said after the first page, and beside whatever that page said.
+    if (s_raw_refused) {
+        char page_said[WEND_STATUS_MAX];
+        os64_strcopy(page_said, sizeof(page_said), s_status);
+        status_set("%s%s this terminal will not go raw - Ctrl+C interrupts instead",
+                   page_said, page_said[0] ? " -" : "");
+    }
+
     screen_clear();
     char number[8];
     int32_t digits = 0;
@@ -1861,14 +1870,16 @@ static int32_t session(const char *start)
 // Ask for raw mode, and report a refusal once rather than at every
 // keystroke. Refused is a working browser, not a broken one: Ctrl+C becomes
 // SIGINT, the handler sets the same flag, and a page still stops. What is
-// lost is Ctrl+C meaning anything when nothing is loading.
+// lost is Ctrl+C meaning anything when nothing is loading. The report waits
+// for the first page (session), because the fetch that builds it owns the
+// status row until then.
 static void raw_acquire(void)
 {
     if (os64_tty_set_raw(true) == 0) {
         s_raw = true;
         return;
     }
-    status_set(" this terminal will not go raw - Ctrl+C interrupts instead");
+    s_raw_refused = true;
 }
 
 static void raw_release(void)

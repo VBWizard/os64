@@ -1068,6 +1068,12 @@ static void form_edge_checks(void)
                      40, want, 3);
     }
     {
+        // A countdown reaches the most negative number there is, and stays.
+        const char *want[] = { "  -2147483647. A", "  -2147483648. B", "  -2147483648. C" };
+        expect_lines("ol reversed floor", "<ol reversed start=-2147483647><li>A<li>B<li>C</ol>",
+                     40, want, 3);
+    }
+    {
         // ...and an explicit `start` still outranks the item count.
         const char *want[] = { "  9. C", "  8. B" };
         expect_lines("ol reversed start", "<ol reversed start=9><li>C<li>B</ol>",
