@@ -1172,9 +1172,20 @@ static bool details_reveal(view_t *v, const os64_html_node_t *node)
             !wend_details_open(up, (const os64_html_node_t *const *)v->flipped, v->nflipped) &&
             details_flip(v, up))
             opened = true;
-    if (opened)
-        edit_commit(v);
-    return opened;
+    if (!opened)
+        return false;
+    // Opening inserts spots, so a selection BELOW the opened part would keep
+    // its number and lose its meaning. It is found again by what it IS.
+    const os64_html_node_t *selected =
+        v->page && v->sel >= 0 && v->sel < v->page->nspots ? v->page->spots[v->sel].node : NULL;
+    edit_commit(v);
+    v->sel = -1;
+    for (int32_t i = 0; selected != NULL && v->page != NULL && i < v->page->nspots; i++)
+        if (v->page->spots[i].node == selected) {
+            v->sel = i;
+            break;
+        }
+    return true;
 }
 
 // libpage selects the semantic target; the renderer supplies geometry for
