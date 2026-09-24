@@ -33,6 +33,8 @@ when that toolkit feature is available, per Chris's preference.
 Window decorations belong in a separate PR and design discussion. Their scope
 is not limited to frame colors or a few border metrics; the desired treatments,
 controls, geometry, and behavior must inform that design.
+The [Frame Studio draft](FRAME_STUDIO.md) records that discussion's product
+requirements and proposed implementation boundaries; it is not implemented.
 
 ## Save and collection contracts (2026-09-15)
 

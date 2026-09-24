@@ -23,6 +23,7 @@ pci.ids
 /tmp
 *.o
 *.swp
+/etc/fonts
 
 # VSCode IntelliSense database (machine-specific absolute paths; regenerate
 # with `make compdb`)

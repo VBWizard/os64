@@ -40,6 +40,46 @@ static int label_encoding(const unsigned char *s, size_t n)
         return E_UTF16BE;
     return -1;
 }
+static const char *encoding_name(int encoding)
+{
+    return encoding == E_UTF8      ? "utf-8"
+           : encoding == E_UTF16LE ? "utf-16le"
+           : encoding == E_UTF16BE ? "utf-16be"
+                                   : "windows-1252";
+}
+/* A form's accept-charset is a list of labels and the standard takes the
+ * first that names an encoding we support, so a consumer asks the table that
+ * already answers the question instead of carrying a second copy of it. */
+const char *os64_html_encoding_for_label(const char *label, size_t len)
+{
+    if (!label)
+        return NULL;
+    int encoding = label_encoding((const unsigned char *)label, len);
+    return encoding < 0 ? NULL : encoding_name(encoding);
+}
+/* The Encoding Standard's single-byte encoder, over the same index the
+ * decoder reads: ASCII is itself, otherwise the FIRST pointer whose code
+ * point matches, which is why the high table is searched before the identity
+ * run above it. A code point the index has no pointer for has no byte, and
+ * what a caller does about that is the caller's rule to keep — form
+ * submission spells it as a numeric character reference. */
+bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out)
+{
+    if (cp < 0x80) {
+        *out = (uint8_t)cp;
+        return true;
+    }
+    for (size_t i = 0; i < H_ARRAY(windows_high); i++)
+        if (windows_high[i] == cp) {
+            *out = (uint8_t)(0x80 + i);
+            return true;
+        }
+    if (cp >= 0xa0 && cp <= 0xff) {
+        *out = (uint8_t)cp;
+        return true;
+    }
+    return false;
+}
 static const unsigned char *content_charset(const unsigned char *s, size_t n, size_t *out_n)
 {
     for (size_t i = 0; i + 7 <= n; i++) {
@@ -319,10 +359,7 @@ void h_encoding_start(os64_html_parser_t *p)
     if (encoding < 0)
         encoding = E_1252;
     p->encoding = (unsigned)encoding;
-    p->d->pub.charset = encoding == E_UTF8      ? "utf-8"
-                        : encoding == E_UTF16LE ? "utf-16le"
-                        : encoding == E_UTF16BE ? "utf-16be"
-                                                : "windows-1252";
+    p->d->pub.charset = encoding_name(encoding);
     for (size_t i = skip; i < n && !p->d->pub.refusal; i++)
         h_decode(p, s[i], i);
 }

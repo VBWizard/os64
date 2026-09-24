@@ -124,14 +124,15 @@ void *memmove(void *dst, const void *src, size_t n)
 
 int memcmp(const void *a, const void *b, size_t n)
 {
-    // No os64_ twin yet — nothing human has asked for one (the streq family
-    // covers strings). The compiler is memcmp's only client today, so the
-    // body lives here until a real consumer promotes it.
+    return os64_memcmp(a, b, n);
+}
+
+int os64_memcmp(const void *a, const void *b, size_t n)
+{
     const unsigned char *pa = a, *pb = b;
-    for (size_t i = 0; i < n; i++) {
+    for (size_t i = 0; i < n; i++)
         if (pa[i] != pb[i])
             return pa[i] < pb[i] ? -1 : 1;
-    }
     return 0;
 }
 
