@@ -1,0 +1,26 @@
+# Run with husk in a disposable guest; results are written under /home.
+cp /bin/sleep /home/ka-nap
+cp /bin/sleep /home/ka-nap-extra
+/home/ka-nap 120 &
+/home/ka-nap 120 &
+/home/ka-nap-extra 120 &
+ps -e > /home/killall-before.txt
+killall ka-nap
+echo exact=$? > /home/killall-results.txt
+sleep 0.1
+ps -e > /home/killall-exact.txt
+killall ka-nap
+echo absent=$? >> /home/killall-results.txt
+killall --substring ka-nap
+echo substring=$? >> /home/killall-results.txt
+sleep 0.1
+ps -e > /home/killall-substring.txt
+/home/ka-nap 120 &
+killall -s INT ka-nap
+echo interrupt=$? >> /home/killall-results.txt
+sleep 0.1
+ps -e > /home/killall-interrupt.txt
+killall killall
+echo self=$? >> /home/killall-results.txt
+killall -s TERM ka-nap
+echo unsupported=$? >> /home/killall-results.txt
