@@ -51,6 +51,7 @@
 #include "smp.h"             // core_local_storage_t (/proc/self's identity read)
 #include "smp_core.h"        // mpAcctSettleAll — the status files' freshness contract
 #include "os64/heap.h"       // os64_heap_report_t — what ring 3 publishes for /proc/<id>/heap
+#include "os64/syscall_numbers.h"   // OS64_SPAWN_ARG_MAX — how long a cmdline argument can be
 
 extern uint64_t  kCPUCyclesPerSecond;  // boot-calibrated: the cycles→µs exchange rate
 
@@ -344,44 +345,48 @@ static thread_t *proc_task_liveliest_thread(task_t *t)
 //
 // So: walk the TASK'S OWN page tables to get the physical page, then read
 // through the HHDM alias, which is the technique CLAUDE.md prescribes for
-// exactly this. Byte at a time — the strings are short (TASK_MAX_PATH_LEN),
-// and per-byte translation makes a string that straddles a page boundary
-// correct for free instead of correct by luck.
-static bool proc_copy_task_string(task_t *task, uintptr_t task_va,
-                                  char *out, size_t outlen)
+// exactly this. The string is appended to `t` as it is read, never gathered
+// on the stack first: a spawn argument may be OS64_SPAWN_ARG_MAX long, which
+// is more than a kernel stack holds.
+//
+// Chunks through the fault-proof reader (PR #26, round seven — this copier
+// had the same walk-vs-burial window as its heap sibling since birth, booked
+// in DEBTS and paid the day the ruling arrived), each no wider than the rest
+// of its page, so a string that straddles a boundary is read correctly and
+// an unreadable page ends it there: truncated but honest. Stops at the
+// terminator or after `max` bytes. Returns whether any of it was readable —
+// an empty string that was is still an argument.
+static bool proc_add_task_string(synth_text_t *t, task_t *task,
+                                 uintptr_t task_va, size_t max)
 {
-	size_t n = 0;
-
-	if (out == NULL || outlen == 0)
-		return false;
-	out[0] = '\0';
 	if (task == NULL || task->pml4v == NULL || task_va == 0)
 		return false;
 
-	// Page-sized chunks through the fault-proof reader (PR #26, round seven
-	// — this copier had the same walk-vs-burial window as its heap sibling
-	// since birth, booked in DEBTS and paid the day the ruling arrived):
-	// copy what a page offers, scan for the terminator, stop at NUL or at
-	// the first unreadable page — truncated but honest, as it always was.
-	while (n + 1 < outlen)
+	char chunk[256];
+	size_t n = 0;
+	bool readable = false;
+	while (n < max)
 	{
 		uintptr_t va = task_va + n;
 		size_t want = PAGE_SIZE - (size_t)(va & 0xFFF);
-		if (want > outlen - 1 - n)
-			want = outlen - 1 - n;
+		if (want > sizeof(chunk))
+			want = sizeof(chunk);
+		if (want > max - n)
+			want = max - n;
 
-		if (!allocator_copy_from_task_va(task->pml4v, va, out + n, want))
+		if (!allocator_copy_from_task_va(task->pml4v, va, chunk, want))
 			break;   // unmapped or mid-burial — the string ends here
+		readable = true;
 
 		size_t k = 0;
-		while (k < want && out[n + k] != '\0')
+		while (k < want && chunk[k] != '\0')
 			k++;
+		synth_text_add(t, chunk, k);
 		n += k;
 		if (k < want)
 			break;   // found the NUL inside this chunk
 	}
-	out[n] = '\0';
-	return n > 0;
+	return readable;
 }
 
 static const char *proc_state_name(eThreadState s)
@@ -530,10 +535,9 @@ static void proc_gen_cmdline(synth_text_t *t, task_t *task)
 	for (int i = 0; i < task->argc && i < PROC_MAX_LIST_WALK; i++)
 	{
 		// argv[i] is a TASK virtual address, not a kernel one — it must be
-		// translated, never dereferenced. See proc_copy_task_string.
-		char arg[TASK_MAX_PATH_LEN];
-		if (proc_copy_task_string(task, (uintptr_t)task->argv[i], arg, sizeof(arg)))
-			synth_text_addf(t, "%s\n", arg);
+		// translated, never dereferenced. See proc_add_task_string.
+		if (proc_add_task_string(t, task, (uintptr_t)task->argv[i], OS64_SPAWN_ARG_MAX - 1))
+			synth_text_add(t, "\n", 1);
 	}
 }
 
@@ -904,7 +908,7 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 }
 
 // Copy `len` bytes OUT OF A TASK'S ADDRESS SPACE — the fixed-length sibling
-// of proc_copy_task_string. Per-page, because a struct that straddles a page
+// of proc_add_task_string. Per-page, because a struct that straddles a page
 // boundary must be correct for free rather than by luck, and because an
 // untouched (demand-paged) page must end the copy honestly.
 //

@@ -40,8 +40,8 @@
 // tight — and NOTHING CHECKED IT. A blob that outgrew the gap would have been
 // mapped straight over TASK_ENV_VIRT by paging_map_pages, and the child's
 // environment would silently become the tail of its own argv. That guard now
-// exists (task.c, TASK_ARGV_MAX_BYTES); this layout gives it room to never
-// fire.
+// exists (TASK_ARGV_MAX_BYTES, below), and the window is the real bound on
+// how much argument a child can be handed.
 //
 // ARGV STAYS AT 0x6f000000 on purpose: it is the one address a program can
 // observe directly (arg_echo asserts on it), so the window grows upward and
@@ -56,7 +56,10 @@
 //   0x70000000  TASK_HEAP_START
 #define TASK_ARGV_VIRT 0x6f000000
 // The most the argv blob may occupy before it would collide with the
-// environment. Enforced in task_create — see the packing comment there.
+// environment, pointer slots included. A ring-3 spawn is measured against it
+// before anything is copied (syscall.c, measure_user_argv, which answers
+// OS64_SPAWN_TOO_LONG), and task_create checks the blob it builds against it
+// too — see the packing comment there.
 #define TASK_ARGV_MAX_BYTES 0x100000
 #define TASK_ENV_VIRT 0x6f100000
 // The env block's growth ceiling — the fixed-VA window between TASK_ENV_VIRT
@@ -98,12 +101,12 @@
 // key\0val\0 block replaced. Referenced by nothing; same species of furniture
 // as TASK_ENVP_VIRT above, removed the same week. The REAL env sizing lives
 // in env.h (ENV_DATA_CAPACITY) and TASK_ENV_MAX_BYTES above.)
-// Longest single path/argument the kernel will carry, NUL included. Raised
-// 128 -> 256 on 2026-08-13 (Chris: "even the path max length makes me kind of
-// nervous"). Costs nothing per task now that the argv blob packs its strings
-// end to end — this is a CAP, no longer a per-argument reservation. It is
-// still the width of the fixed `raw[]`/`path[]` scratch buffers in syscall.c's
-// path handlers, which live on an 80KB kernel stack, so doubling them is noise.
+// Longest path the kernel will carry, NUL included — OS64_PATH_MAX in the ABI,
+// and syscall.c asserts the two agree. Raised 128 -> 256 on 2026-08-13 (Chris:
+// "even the path max length makes me kind of nervous"). It is the width of
+// the fixed `raw[]`/`path[]` scratch buffers in syscall.c's path handlers,
+// which live on an 80KB kernel stack, so doubling them was noise. A spawn
+// ARGUMENT is not a path and has its own, far larger cap (OS64_SPAWN_ARG_MAX).
 #define TASK_MAX_PATH_LEN 256
 
 	struct timeval {

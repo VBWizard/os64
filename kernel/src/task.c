@@ -10,6 +10,7 @@
 #include "gdt.h"
 #include "strcpy.h"
 #include "strlen.h"   // packed argv blob measures each argument before copying
+#include "syscall_numbers.h"   // OS64_SPAWN_ARG_MAX — the per-argument cap the blob honours
 #include "strstr.h"
 #include "time.h"
 #include "memcpy.h"
@@ -2717,24 +2718,28 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// TASK_MAX_PATH_LEN slot, so `cat` (four bytes) reserved 128 and a 44-entry
 	// glob reserved 5.6KB to hold 660 bytes. Strings now sit end to end, each
 	// costing strlen+1, exactly the way a real execve argv block is laid out.
-	// That is what makes the 512-argument / 256-byte ceiling FREE: those are
-	// caps now, not reservations, so an ordinary two-argument command still
-	// allocates a couple of hundred bytes and maps a single page. Wildcards are
-	// what forced the question — `cat /tmp/*` has to survive a busy directory.
+	// That is what makes the generous ceilings FREE — 512 arguments, each up
+	// to OS64_SPAWN_ARG_MAX: they are caps, not reservations, so an ordinary
+	// two-argument command still allocates a couple of hundred bytes and maps
+	// a single page. Wildcards are what forced the question — `cat /tmp/*` has
+	// to survive a busy directory — and a whole command line carried as one
+	// argument (`husk -c`) is what made one argument large.
 	int effectiveArgc = (argc > 0) ? argc : 1;
 	newTask->argc = effectiveArgc;
 
 	size_t argvPtrBytes = (size_t)(effectiveArgc + 1) * sizeof(char*);
 
 	// Measure first, then allocate exactly what the strings need (each capped
-	// at TASK_MAX_PATH_LEN including its NUL, matching the copy below).
+	// at OS64_SPAWN_ARG_MAX including its NUL, matching the copy below). A
+	// spawn from ring 3 has already refused anything longer; the cap is for
+	// the kernel's own callers.
 	size_t argvStrBytes = 0;
 	for (int cnt = 0; cnt < effectiveArgc; cnt++)
 	{
 		const char *src = (argc > 0) ? argv[cnt] : path;
 		size_t len = strlen(src);
-		if (len > TASK_MAX_PATH_LEN - 1)
-			len = TASK_MAX_PATH_LEN - 1;
+		if (len > OS64_SPAWN_ARG_MAX - 1)
+			len = OS64_SPAWN_ARG_MAX - 1;
 		argvStrBytes += len + 1;
 	}
 	size_t argvBlobBytes = argvPtrBytes + argvStrBytes;
@@ -2746,6 +2751,10 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// checked this while the ceiling was 32 args; raising it to 512 without the
 	// check would have turned a distant theoretical into a live footgun. Refuse
 	// loudly instead, naming the number, and let the caller report "cannot run".
+	// A ring-3 spawn measures against this same window before it gets here and
+	// says "too long" itself; this one still fires for the kernel's own callers
+	// and for a #! script, whose rewrite adds the interpreter's words to an
+	// argument list that was measured without them.
 	if (argvBlobBytes > TASK_ARGV_MAX_BYTES)
 	{
 		printd(DEBUG_TASK, "task_create: argv blob for %s is %lu bytes, over the %lu-byte "
@@ -2763,8 +2772,8 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		//Source string: caller-provided argv[cnt], or the path for the implicit argv[0].
 		const char *src = (argc > 0) ? argv[cnt] : path;
 		size_t len = strlen(src);
-		if (len > TASK_MAX_PATH_LEN - 1)
-			len = TASK_MAX_PATH_LEN - 1;
+		if (len > OS64_SPAWN_ARG_MAX - 1)
+			len = OS64_SPAWN_ARG_MAX - 1;
 
 		char *dst = argvStrBase + argvStrUsed;
 		memcpy(dst, src, len);

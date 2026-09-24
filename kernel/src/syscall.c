@@ -62,9 +62,9 @@ extern task_t *kKernelTask;        // never a pty seat — pty_resize's walk ski
 extern uint64_t kTotalMemory;      // installed RAM (memmap.c, Limine map sum)
 extern uint64_t kAvailableMemory;  // USABLE entries only — what the allocator governs
 
-// spawn: cap on argv length. A command line's worth of args is plenty; the
-// per-arg length cap is task.c's TASK_MAX_PATH_LEN (the blob it builds uses
-// dynamically sized slots up to width).
+// spawn: cap on argv length. A command line's worth of args is plenty; each
+// one's length is capped by OS64_SPAWN_ARG_MAX and all of them together by
+// the child's argument block (TASK_ARGV_MAX_BYTES).
 #define SPAWN_MAX_ARGS 512
 
 #define SYSCALL_RESULT_INVALID UINT64_C(0xFFFFFFFFFFFFFFFF)
@@ -875,6 +875,60 @@ static bool copy_user_string(const char *user_str, char *buffer, size_t buffer_l
 out:
         user_cr3_window_close(original_cr3, switched);
         return success;
+}
+
+// How long a user string is, reading no further than `cap` bytes: 1 with
+// *len set when its terminator lies within them, 0 when it does not, -1 when
+// a byte before the terminator cannot be read. A page is vetted once and then
+// scanned where it lies, because a spawn measures up to a mebibyte of
+// arguments with interrupts masked, and vetting that a byte at a time is a
+// million VMA lookups. Nothing is copied, so the answer is only as current as
+// the scan: user memory can change after it, and a caller that copies must
+// check what arrived.
+static int user_string_length(const char *user_str, size_t cap, size_t *len)
+{
+        if (user_str == NULL)
+        {
+                return -1;
+        }
+
+        bool switched = false;
+        uint64_t original_cr3 = user_cr3_window_open(&switched);
+
+        int verdict = 0;
+        size_t n = 0;
+        while (n < cap)
+        {
+                uintptr_t at = (uintptr_t)user_str + n;
+                size_t chunk = PAGE_SIZE - (at & (PAGE_SIZE - 1));
+                if (chunk > cap - n)
+                {
+                        chunk = cap - n;
+                }
+                if (at >= kHHDMOffset || chunk > kHHDMOffset - at ||
+                    !user_range_accessible((const void *)at, chunk, false))
+                {
+                        verdict = -1;
+                        break;
+                }
+
+                const char *bytes = (const char *)at;
+                size_t k = 0;
+                while (k < chunk && bytes[k] != '\0')
+                {
+                        k++;
+                }
+                n += k;
+                if (k < chunk)
+                {
+                        *len = n;
+                        verdict = 1;
+                        break;
+                }
+        }
+
+        user_cr3_window_close(original_cr3, switched);
+        return verdict;
 }
 
 // Copy exactly `length` bytes from user space into a kernel buffer.  The
@@ -3728,41 +3782,65 @@ static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	return 0;
 }
 
-// Marshal a user argv (NULL-terminated array of user string pointers) into
-// kernel space: fills kargv[] (<= SPAWN_MAX_ARGS, NULL-terminated) with
-// pointers into strbuf, each string copied from user space. Returns argc, or
-// -1 on a bad user pointer. NULL user_argv means "no args" (argc 0).
-// Count the entries in a user argv[] without touching the strings — reads only
-// the pointer array, stopping at the NULL terminator or SPAWN_MAX_ARGS.
-// Returns the count, or -1 on a bad user pointer.
+// Measure a user argv[] before anything is allocated for it: how many
+// entries, and how many bytes their strings take with their terminators.
+// NULL user_argv means "no args" (argc 0).
 //
-// Exists so the spawn block can be sized to the ACTUAL argument count instead
-// of the maximum. With SPAWN_MAX_ARGS at 512 and TASK_MAX_PATH_LEN at 256, a
-// fixed worst-case block would be 128KB kmalloc'd AND ZEROED on every spawn —
-// on `pwd`, on every prompt. Measured first, an ordinary command's block is a
-// few hundred bytes: cheaper than the 4KB the fixed 32-argument version cost.
-static int count_user_argv(char *const *user_argv)
-{
-	if (user_argv == NULL)
-		return 0;
+// THE SPAWN BLOCK IS SIZED BY WHAT IS THERE, NOT BY WHAT COULD BE. The caps
+// are generous — 512 arguments, each up to OS64_SPAWN_ARG_MAX — so the worst
+// case is tens of megabytes, and an ordinary `ls` is a few hundred bytes.
+// Measuring first is what lets both be true.
+//
+// The ANSWER TO "TOO MUCH" IS GIVEN HERE, before a byte is copied: an
+// argument that does not end within the per-argument cap, a 513th argument,
+// or a running total past the child's argument block (the pointer slots
+// included, as task_create lays them out) — and the scan stops at the first
+// of them, so a spawn asking for too much costs about one block's worth of
+// reading, not everything it asked for.
+typedef enum {
+	ARGV_FITS,
+	ARGV_UNREADABLE,     // an address in it could not be read
+	ARGV_TOO_LONG,       // readable, and more than a spawn carries
+} argv_measure_t;
 
-	for (int argc = 0; argc < SPAWN_MAX_ARGS; argc++)
+static argv_measure_t measure_user_argv(char *const *user_argv,
+                                        int *argc_out, size_t *bytes_out)
+{
+	*argc_out = 0;
+	*bytes_out = 0;
+	if (user_argv == NULL)
+		return ARGV_FITS;
+
+	size_t bytes = 0;
+	for (int argc = 0; ; argc++)
 	{
 		char *uptr = NULL;
 		if (!copy_user_buffer(&user_argv[argc], &uptr, sizeof(char *)))
-			return -1;
+			return ARGV_UNREADABLE;
 		if (uptr == NULL)
-			return argc;
+		{
+			*argc_out = argc;
+			*bytes_out = bytes;
+			return ARGV_FITS;
+		}
+		if (argc == SPAWN_MAX_ARGS)
+			return ARGV_TOO_LONG;
+
+		size_t len = 0;
+		int ended = user_string_length(uptr, OS64_SPAWN_ARG_MAX, &len);
+		if (ended < 0)
+			return ARGV_UNREADABLE;
+		if (ended == 0)
+			return ARGV_TOO_LONG;
+		bytes += len + 1;
+		if ((size_t)(argc + 2) * sizeof(char *) + bytes > TASK_ARGV_MAX_BYTES)
+			return ARGV_TOO_LONG;
 	}
-	return SPAWN_MAX_ARGS;
 }
 
-// The cap below is PUBLISHED, so ring 3 can say "that argument is too long"
-// instead of discovering it as a spawn that failed for no stated reason. Two
-// spellings of one number drift; this is what stops them.
-_Static_assert(TASK_MAX_PATH_LEN == OS64_SPAWN_ARG_MAX,
-               "spawn's argument cap and the ABI's OS64_SPAWN_ARG_MAX disagree");
-
+// Copy a measured user argv into kernel space: fills kargv[] (at most
+// max_args entries, NULL-terminated) with pointers into strbuf. Returns argc,
+// or -1 when the user memory no longer matches what was measured.
 static int marshal_user_argv(char *const *user_argv, char *kargv[],
                              char *strbuf, size_t strbuf_len, int max_args)
 {
@@ -3774,13 +3852,13 @@ static int marshal_user_argv(char *const *user_argv, char *kargv[],
 
 	size_t used = 0;
 	int argc = 0;
-	// Bounded by max_args, NOT by SPAWN_MAX_ARGS: the caller sized kargv[] from
-	// a COUNT PASS over this same user memory, and userland can modify its own
-	// argv between the two passes (another thread, or a deliberately hostile
-	// program). Trusting the second walk to agree with the first would let a
-	// racing user drive writes past the end of the allocated pointer array —
-	// a kernel heap overflow from ring 3. The count is the contract; this walk
-	// stops there and the string buffer's own `avail` check covers the rest.
+	// Bounded by max_args, NOT by SPAWN_MAX_ARGS, and every string by what is
+	// left of strbuf: the caller sized both from the MEASURE PASS over this
+	// same user memory, and userland can change its own argv between the two
+	// passes (another thread, or a deliberately hostile program). Trusting
+	// the second walk to agree with the first would let a racing user drive
+	// writes past the end of the allocation — a kernel heap overflow from
+	// ring 3. The measure is the contract; this walk stops there.
 	for (argc = 0; argc < max_args; argc++)
 	{
 		// Read user_argv[argc] — a user-space char* — into the kernel.
@@ -3790,24 +3868,33 @@ static int marshal_user_argv(char *const *user_argv, char *kargv[],
 		if (uptr == NULL)
 			break;   // NULL terminator: end of argv
 
+		// Measured again, bounded by the room left and by the per-argument
+		// cap, then copied in one piece, terminator and all. The room is what
+		// the measure pass paid for, and the cap is the promise that nothing
+		// is truncated later, so a string that has grown past either is
+		// refused; within them, whatever the string holds now is what arrives.
+		// The copy must carry its terminator where this measure found it,
+		// because the memory can change again between the two reads.
 		char *dst = strbuf + used;
 		size_t avail = strbuf_len - used;
-		if (avail < 2)
-			return -1;   // out of scratch space
-		size_t cap = avail < TASK_MAX_PATH_LEN ? avail : TASK_MAX_PATH_LEN;
-		if (!copy_user_string((const char *)uptr, dst, cap))
+		size_t room = avail < OS64_SPAWN_ARG_MAX ? avail : OS64_SPAWN_ARG_MAX;
+		size_t len = 0;
+		if (user_string_length(uptr, room, &len) != 1)
+			return -1;
+		if (!copy_user_buffer(uptr, dst, len + 1) || dst[len] != '\0')
 			return -1;
 
 		kargv[argc] = dst;
-		// Advance past the copied (NUL-terminated) string.
-		size_t slen = 0;
-		while (dst[slen] != '\0')
-			slen++;
-		used += slen + 1;
+		used += len + 1;
 	}
 	kargv[argc] = NULL;
 	return argc;
 }
+
+// A path is published as OS64_PATH_MAX, so ring 3 can size a getcwd buffer
+// without a guess. Two spellings of one number drift; this is what stops them.
+_Static_assert(TASK_MAX_PATH_LEN == OS64_PATH_MAX,
+               "the kernel's path length and the ABI's OS64_PATH_MAX disagree");
 
 // All the state task_create() needs, in ONE kmalloc'd (HHDM) block so it is
 // reachable from BOTH the syscall CR3 (to fill in) AND kKernelPML4 (where the
@@ -3818,10 +3905,9 @@ typedef struct {
 	char   path[TASK_MAX_PATH_LEN];
 	int    argc;
 	// Both point into `tail` below, which is sized at allocation time to the
-	// ACTUAL argument count (see count_user_argv). These were fixed arrays
-	// until 2026-08-13; at the 512-argument ceiling that shell globbing needs,
-	// a fixed worst case would have been ~135KB allocated and zeroed on every
-	// single spawn. Sized to fit, `pwd` costs a few hundred bytes.
+	// arguments actually present (see measure_user_argv) — a worst case
+	// would be tens of megabytes allocated and zeroed on every spawn, and
+	// sized to fit, `pwd` costs a few hundred bytes.
 	char **argv;
 	char  *argvstrs;
 	task_t *parent;
@@ -3837,7 +3923,7 @@ typedef struct {
 	tty_t *ttySlave;
 	bool   background;                    // OS64_SPAWN_BACKGROUND (`&`)
 	volatile long result;                 // child pid, or -1 on failure
-	// [ (argc+1) pointer slots ][ argc * TASK_MAX_PATH_LEN bytes of strings ].
+	// [ (argc+1) pointer slots ][ the strings, packed, as measured ].
 	// One allocation, so the whole thing stays HHDM-contiguous and reachable
 	// from kKernelPML4 exactly as the comment above requires.
 	char   tail[];
@@ -4055,13 +4141,20 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	     ~(uint64_t)(OS64_SPAWN_BACKGROUND | OS64_SPAWN_SET_TTY)) != 0)
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
-	// Size the block to the arguments actually present. The count pass reads
-	// only the user's pointer array; the strings are copied once, below.
-	int argcHint = count_user_argv(user_argv);
-	if (argcHint < 0)
-		return SYSCALL_RESULT_BAD_USER_DATA;
+	// Size the block to the arguments actually present, and refuse the ones
+	// a spawn cannot carry before anything is allocated for them.
+	int argcHint = 0;
+	size_t argvStrBytes = 0;
+	switch (measure_user_argv(user_argv, &argcHint, &argvStrBytes))
+	{
+		case ARGV_FITS:
+			break;
+		case ARGV_UNREADABLE:
+			return SYSCALL_RESULT_BAD_USER_DATA;
+		case ARGV_TOO_LONG:
+			return (uint64_t)(int64_t)OS64_SPAWN_TOO_LONG;
+	}
 	size_t argvPtrBytes = (size_t)(argcHint + 1) * sizeof(char *);
-	size_t argvStrBytes = (size_t)argcHint * TASK_MAX_PATH_LEN;
 
 	spawn_params_t *p = kmalloc(sizeof(*p) + argvPtrBytes + argvStrBytes);
 	if (p == NULL)
@@ -5053,7 +5146,7 @@ static uint64_t syscall_conf_resolve(uint64_t arg0, uint64_t arg1, uint64_t arg2
 // task's own page tables to get at it — never a bare dereference, because a
 // user VA means nothing under any other CR3 and means something WRONG under
 // the vestigial low identity window (the bug that once made husk's cmdline
-// report "/idle7"; see proc_copy_task_string's comment for the whole story).
+// report "/idle7"; see proc_add_task_string's comment for the whole story).
 //
 // The dispatcher has already range-checked arg0 as a user pointer (mask 0x01),
 // so all that remains is the alignment the struct's uint64 fields require.
