@@ -447,8 +447,13 @@ written down in DIVERGENCES rather than left to be discovered.
 
   Measured under QEMU's emulated CPU, with software AES in sshd: a full
   1024x768 frame takes 880 ms at 32 bpp and 384 ms at 16 bpp, and a pointer
-  move's update takes 66 ms round trip. A real viewer (TigerVNC) is the
-  morning's check. None is installed on the build machine.
+  move's update takes 66 ms round trip. A real viewer ran it on the P5 on
+  2026-09-23: TigerVNC 1.16.2 on Windows through an `ssh -L` tunnel, against
+  the whole stack (ZRLE, § 6, included), with its default encoding list,
+  which puts ZRLE ahead of Raw, and with Raw forced.
+  The desktop, typing, window drags, VT switching (Ctrl+Alt+Space, then the
+  key) and the text-terminal banner all worked; the lag it showed at first
+  was Windows' ssh client (see Using it).
 
 ## 6. ZRLE — the pleasant one
 
