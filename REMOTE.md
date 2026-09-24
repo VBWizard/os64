@@ -295,45 +295,87 @@ mouse move, and the flagged frame again.
 
 ## 4. `/dev/glass`, write side — hands
 
-A write is one input record:
+A viewer opened with mode `"u"` may also write, one input record per write
+(`os64/glass.h` has the structs, packed and size-asserted). A viewer opened
+`"r"` only watches, and a write to it is refused.
 
 ```c
-OS64_GLASS_KEYBOARD: uint8_t report[8];               // HID boot keyboard report
-OS64_GLASS_POINTER:  uint16_t x, y; uint8_t buttons;  // ABSOLUTE; bits L/R/M
+OS64_GLASS_KEYBOARD: uint8_t kind; uint8_t report[8];                 // 9 bytes: a HID boot keyboard report
+OS64_GLASS_POINTER:  uint8_t kind, buttons; uint16_t x, y;            // 6 bytes: ABSOLUTE; bits L/R/M
 ```
 
-- **The keyboard is a virtual HID keyboard, one per handle.**
-  `hid_process_keyboard_report`, `hid_deliver_usage`, `hid_usage_ascii` and
-  the typematic engine move out of `xhci.c` into `hid_keyboard.c`, taking the
-  per-device state as an argument. xHCI owns one instance, and each glass
-  handle owns one. Pure hoist first, a behaviour-neutral commit that the P5's
-  USB keyboard proves, then the second caller. The typematic tick has to run
-  on a machine with no xHCI (QEMU's default has none), so the remote
-  instances are ticked from somewhere xHCI's presence does not decide.
-- **The pointer is absolute.** `input_inject_pointer(x, y, buttons)` sits
-  beside `input_inject_mouse` in `input.c`. It clamps, sets the tracked
-  position, emits the MOVE with the implied delta, and shares the button-edge
-  diffing, so grabs, drags and the WM chords all see what a real mouse would
-  produce. There is no wheel: nothing in os64 has one yet. VNC's buttons 4–7
-  are dropped by vncd and booked.
+- **The keyboard is a virtual HID keyboard, one per viewer.** The report
+  decoder, the usage tables, the chords and the typematic engine moved out of
+  `xhci.c` into `hid_keyboard.c` (`hid_keyboard_t` carries the state). That
+  was a behaviour-neutral commit of its own, proven on a QEMU USB keyboard
+  (shifted text, history, Alt+F2/Alt+F1). xHCI owns one instance and each
+  writable viewer owns one. So the chords are the ones a local keyboard
+  gets, Alt+F8 included, and Ctrl+Alt+Del prints its polite note as it
+  does locally. The modifiers a mouse packet carries are the machine's:
+  Ctrl, Shift and Alt are held while any keyboard holds them (X's core
+  keyboard), so a viewer holding Ctrl for a Ctrl+drag is not undone by a
+  local key or another viewer's typing. A key event still carries its own
+  keyboard's modifiers.
+- **Typematic runs in the compositor's frame loop**, outside `kGuiLock`.
+  Glass exists only where a desktop does, and that loop's nap is bounded by
+  its core's scheduler timer. xHCI's poll could not do it, because it returns
+  early on a machine with no xHCI, which is QEMU's default. Views with a held
+  key are taken under `kGuiLock` with a reference each, then ticked after
+  it drops. Delivery never happens under `kGuiLock`, because keystrokes reach
+  the tty and the renderer, whose locks may not nest under it. Each view has
+  its own input lock instead. A frame serves at most eight views with a
+  held key and the start rotates, so a ninth repeats more slowly rather than
+  never.
+- **The pointer is absolute.** `input_inject_pointer(src, x, y, buttons)`
+  sits beside `input_inject_mouse`. Both now end in one `pointer_locked`, so
+  the clamp, the MOVE with its implied delta, and the button-edge diffing
+  are the same code, and grabs, drags and WM chords see what a real mouse
+  would produce. Buttons are held per source (`input_pointer_source_t`: each
+  mouse driver and each view owns one), and a button is down while any
+  source holds it, so a local mouse nudged during a remote drag does not end
+  it, nor the reverse. There is no wheel, because nothing in os64 has one
+  yet (DEBTS).
 - **Closing the handle lifts every finger.** Close delivers an empty keyboard
-  report and a buttons-up pointer record, so a dropped connection can never
-  leave Ctrl held or a drag grabbed. It is a tripwire as well as a courtesy:
-  a stuck modifier on a remote seat looks like the machine went mad.
-- Validation happens whole-record at the boundary: an unknown kind, a short
-  record, or a coordinate outside the screen after clamping (reported, not
-  silently moved) is refused.
-- **Proof:** `glasstest` gains a write half. On a GUI boot, `gkeys`-style
-  focus receives the right ASCII and edges from injected reports (including a
-  Shift chord and a held key's typematic repeats). An injected Alt+F1 moves
-  the glass to VT1 and Alt+F8 brings it back. A pointer press, drag and
-  release reaches the window under it as an implicit grab. Closing mid-chord
-  releases everything.
+  report and lifts the view's own buttons, under the view's input lock so
+  that no write can land after it. A dropped connection does not leave Ctrl
+  held or a drag grabbed, unless a GUI event queue (the input queue or the
+  window's) is full at that moment and the releases are dropped with it
+  (DEBTS § Remote access).
+- **Validation is whole-record, at the boundary.** An unknown kind, a record
+  whose length is not its kind's, a keyboard report listing one usage twice,
+  a button bit above middle, or a position off the screen (refused, not
+  moved) is refused.
+- **A key a chord took stays the chord's until it is let go** (X's passive
+  grab). A press the keyboard interpreter takes for itself (a terminal
+  switch, Ctrl+Alt+Del, Caps Lock's toggle) is never delivered, nor is its
+  release, nor any typematic repeat that no longer matches the chord: after
+  Alt+F8 the desktop holds the screen, where bare Alt+F8 is no chord, and a
+  held F8 would otherwise reach the focused window as F8 presses and then
+  an F8-up. Repeats that still match keep acting (a held Alt+Right keeps
+  walking the terminals). The PS/2 driver follows the same rule for its
+  hardware repeats.
+- **Proof:** `glasstest`'s hands half, on a GUI boot, from VT1:
+  - a `"r"` viewer cannot type, and malformed records are refused;
+  - its own glass keyboard types Alt+F8, and `/sys/gui` says the desktop
+    holds the screen;
+  - a window it creates receives `a` with its release, a shifted `A`, a left
+    click at its centre, repeats of a key held for 900 ms, and the release
+    of a key held by a second viewer that closed without letting go;
+  - with two viewers, a second pointer moving with no buttons does not lift
+    the first one's held button, and a second keyboard typing does not drop
+    a Ctrl the first one holds (the old kernel fails both);
+  - a Caps Lock held past the repeat delay toggles once; an Alt+Tab let go
+    of in one report leaks no Tab; an Alt+F8 held past the repeat delay
+    sends the window neither repeats nor a release; a report listing a key
+    twice is refused;
+  - Ctrl+Alt+F1 gives the screen back to the terminal.
+
+  A QEMU mouse still moves the pointer through the shared path.
 
 **Permission.** os64 has no users. Any process that can open `/dev/glass`
-can see the screen and type into it. That is consistent with a machine where
-any process can already read `/proc/<pid>/mem`, and it is written down in
-DIVERGENCES rather than left to be discovered.
+can see the screen, and with `"u"` type into it. That is consistent with a
+machine where any process can already read `/proc/<pid>/mem`, and it is
+written down in DIVERGENCES rather than left to be discovered.
 
 ## 5. vncd — RFB 3.8
 
@@ -405,6 +447,24 @@ ssh -N -L 5900:localhost:5900 -i ~/.ssh/id_ecdsa os64@<p5>
 
 Windows has shipped an OpenSSH client since Windows 10 1809. TigerVNC's
 viewer is a single `.exe`.
+
+Three things learned on the P5 (2026-09-23), all on the Windows side:
+
+- **Run the tunnel from WSL2, not Windows' `ssh.exe`.** Traced end to end,
+  every round trip through Windows' client took about half a second, even
+  during ssh's own handshake, and a viewer that asks for each update after
+  the last one lands turned that into 1.5 to 3 seconds of lag. The Linux
+  client in WSL2, on the same machine and network, took about 11 ms. WSL2
+  forwards `localhost` ports to Windows, so the viewer still points at
+  `localhost:5900`.
+- **TigerVNC keeps Ctrl+Alt for its own shortcuts.** To send a chord that
+  starts with it (Ctrl+Alt+F1 to a text terminal), press Ctrl+Alt+Space,
+  let go of Space, then press the rest. Ctrl+Alt+arrows pass through.
+- **Display scaling stretches the picture.** At 150%, Windows draws the
+  viewer's pixels 1.5x, and the bottom of the P5's screen falls off. The
+  exe's Properties, Compatibility, "Change high DPI settings", override
+  with scaling performed by the Application gives one screen pixel per P5
+  pixel.
 
 ## Booked, not built (DEBTS rows arrive with the slices)
 

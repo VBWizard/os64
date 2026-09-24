@@ -256,6 +256,7 @@ how a worklist fills with things nobody intends to do.
 | ~~**`gui.conf` has TWO readers taking different keys.**~~ **CLOSED THE SAME DAY IT WAS BOOKED (2026-08-25), and not by refactoring: Chris retired the `hello` window outright — "lets remove it. If I want to reminisce, I can run an old build." That key was the only reason the kernel still read gui.conf, so the file now has exactly one reader (`/bin/desktop`) and `kernel/src/gui/startup.c` is deleted entirely. Recorded because the row was right about the smell and wrong about the cure: I offered two refactors and the answer was to delete the feature that caused it.** | Cleanup | — | CLOSED | `userland/apps/desktop` |
 | **`os64_draw_blit` is an OPAQUE COPY — no source-over blending.** libpng now preserves real alpha in its ARGB result, and gview copies those pixels verbatim because this primitive deliberately does not consult the alpha byte. The browser and launcher icons are the real customers for a separate source-over operation; changing ordinary blit would break backgrounds that require an exact copy. BMP is a second, independent input gap: libimage still refuses BI_BITFIELDS, which is how BMP carries an alpha mask (BI_RGB's fourth byte is reserved and zero in real files). PNG means blending no longer has to wait for that BMP work, but the BMP arm still needs both mask decoding and the same source-over primitive before it can display transparency | Feature-gate | S | before the browser draws a transparent PNG over page content | `os64_draw_blit` / `libpng` ARGB output / `image.c` BMP arm |
 | ~~**USB HID mouse**~~ **PAID 2026-08-17 — by CHRIS** (e497d91: controller fleet + per-device xhci_hid_t + boot-mouse decoder into input_inject_mouse; combo-receiver rebind bug caught in review, fixed same hour). RESIDUE, the real row now: **some P5 port combinations enumerate HID dongles ("attached") but their interrupt endpoints never deliver** — most rear-rear placements were deaf at any distance; USBQUIET neither causes nor cures it. The P5 is FIVE Rembrandt xHCI controllers (64:00.3/.4 = 1022:161d/161e USB3.1; 65:00.0 = 161f USB2-only; 65:00.3/.4 = 15d6/15d7 USB4-side), so suspicion ranks: the USB4-side controllers' interrupt endpoints, per-controller interval/speed quirks, cross-controller connector twins. KNOWN-GOOD CONFIG (do not disturb casually): mouse = front right (facing the P5), keyboard = top rear slot. Fix rides the Supported Protocol capability walk + link power management slice — which is also what makes USBQUIET safe enough to default | Robustness | M | with the xHCI LPM/protocol-walk slice (also unlocks default 2.4GHz hygiene) | Chris's port-fiddling campaign 2026-08-17; kUSBQuiet's scar comment |
+| **USB has no hotplug: a device plugged in after boot, or plugged back in, is never attached** (booked 2026-09-23, after Chris unplugged the P5's keyboard and mouse to test #123's lost-device release, and neither came back). xHCI enumerates once, at boot; a port-status change now releases what a vanished device held (`xhci_hid_lost`) but nothing enumerates what arrives. The cure is boot's own path, run from the event: on a port that reports a connection, reset it and repeat the slot/address/configure/arm-the-endpoint sequence, with a fresh `hid_keyboard_t` or pointer source, and free the dead device's slot and rings when it leaves. The same seam serves USB mass storage (its own row, "thumb drives mount like disks") | Feature | M | the next time a device has to be re-plugged without a reboot, or with USB mass storage | xhci.c TRB_EV_PORT_STATUS / xhci_setup_hid |
 | **xHCI is polled, and the poll rides dispatch frequency** — `xhci_poll` runs from `processSignals`, so USB input liveness is exactly scheduler-pass liveness. On a mostly-idle tickless GUI boot with no logd heartbeat, passes arrive SECONDS apart and queued HID reports trickle in one per kernel-task wake (measured 2026-08-21 in QEMU: reports metronome-spaced at exactly 1000 ticks — the status-print cadence — while the compositor's HALT loop, which never crosses processSignals, composited obliviously at 50fps). The P5 never feels it because logd's heartbeat keeps dispatches frequent, and keyboard+mouse sharing one FIFO event ring means a click can never outrun the chord modifiers ahead of it — but that comfort is one daemon deep. Fix is xHCI interrupt wiring (MSI-X or INTx, the e1000 precedent), which the driver's header has anticipated from day one; a cheaper stopgap is a compositor-loop nudge. Surfaced by the Ctrl+Alt chord hunt, where QEMU's PS/2 click kept lapping the starved USB ring | Robustness | M | before any USB input runs on a boot with no other heartbeat (or with the LPM/protocol-walk slice, its natural neighbor) | xhci.h "minus the interrupt" comment; the 2026-08-21 chord-publish hunt |
 | Alpha translucency (X byte in XRGB reserved; `surface_blit_masked` already shapes) | Feature-gate | M | UX | GRAPHICS #7 |
 | Runtime resolution switching (only `framebuffers[0]` used) | Feature-gate | M | UX | GRAPHICS #8 |
@@ -468,9 +469,29 @@ how a worklist fills with things nobody intends to do.
   cursor one round trip late. RFB's Cursor pseudo-encoding would draw it at
   the viewer, and needs a read of the backbuffer without the cursor. Reverse
   when the lag is felt.
+- **No wheel.** Nothing in os64 reads a scroll wheel yet: the PS/2 and HID
+  mouse decoders take three buttons, and `/dev/glass`'s pointer record
+  carries the same three. VNC's buttons 4-7 are dropped at vncd. Reverse
+  with the local mouse drivers first, when a program wants to scroll.
 - **No CopyRect.** A window drag re-sends every pixel it moves; the
   compositor knows the move and could say so. Reverse when a drag over a
   slow link is felt.
+- **A release can be lost when a GUI event queue is full** (Codex #123,
+  deferred on Chris's ruling). Two queues drop the newest event when full:
+  `input.c`'s 256-slot input queue, and each window's 64-entry event queue
+  (`event_queue.c`), which a writer can fill with accepted keys while the
+  input queue still has room. A key-up, a modifier release or a button-up
+  is an event like any other there, while the source's own state has
+  already moved on. So a closing viewer's releases, or any keyboard's, can vanish, and the
+  compositor keeps Alt-Tab open, a drag grabbed or a key held until the
+  user presses and lets go again. Reaching it takes the queue full at that
+  moment: a writer flooding one between frames, or a compositor or client
+  that stops draining. The cure is Linux evdev's overflow rule applied where the drop
+  happens, in both queues: a release that does not fit is remembered (a
+  bit per key and button) and enqueued when the consumer makes room, and a new press of
+  the same key cancels it, since the compositor never saw it go up. Pay
+  when a stuck key or grab is seen, or before anything less trusted than
+  the machine's own programs can open `/dev/glass`.
 
 ## SSH implementation boundaries (2026-09-13)
 

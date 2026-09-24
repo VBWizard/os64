@@ -1342,7 +1342,10 @@ static uint64_t syscall_write_console(tty_t *tty, bool stream_pty,
 static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
     const char *user_buffer, size_t length, uint64_t timeout_ms, write_death_t *die)
 {
-	if (length == 0)
+	// An empty write succeeds and moves nothing, except on glass, where a
+	// write is one record taken whole or refused (os64/glass.h), and an
+	// empty one, or any write to a watch-only viewer, is refused.
+	if (length == 0 && h->type != HANDLE_GLASS)
 		return 0;
 
 	// Like read, lower patience once for the complete call. TCP honors
@@ -1396,6 +1399,21 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 				pipe_close_write_end(tty->stream);
 			task_tty_release(tty);
 			return r;
+		}
+
+		case HANDLE_GLASS:
+		{
+			// One input record (os64/glass.h, THE HANDS): a keyboard report
+			// or a pointer position, taken whole or refused. Copied in first,
+			// because the record is delivered with interrupts off, where a
+			// user page may not fault.
+			uint8_t record[16];
+			if (length > sizeof(record))
+				return SYSCALL_RESULT_INVALID;
+			if (length && !copy_user_buffer(user_buffer, record, length))
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			long r = glass_view_write((glass_view_t *)h->object, record, length);
+			return r < 0 ? SYSCALL_RESULT_INVALID : (uint64_t)r;
 		}
 
 		case HANDLE_PTY_MASTER:

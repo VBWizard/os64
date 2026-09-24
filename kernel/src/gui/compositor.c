@@ -1505,6 +1505,10 @@ bool guicomp_thread(bool daemon)
 
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 
+		// A /dev/glass keyboard's held key repeats here, outside kGuiLock as
+		// delivery must be (gui/glass.h, INPUT and glass_input_tick).
+		glass_input_tick();
+
 		// A close escalation decided under the lock is carried out here,
 		// outside it: signalling a task takes scheduler locks, and kGuiLock
 		// must never nest under those (see gui_window_terminate_owner).

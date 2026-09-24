@@ -556,7 +556,10 @@ One owner variable, and it already exists: `kTTYFocused`.
   pty slave), just in ring 3 where it always belonged.
 - **Input routing follows the glass — dual delivery dies.**
   `keyboard_deliver_event` forks on ownership: VT8 focused → GUI input queue
-  only; text VT focused → tty path only. The chords are consumed BEFORE the
+  only; text VT focused → tty path only. A RELEASE is the exception: it goes
+  where its press went (`keyboard_deliver_release`), so a key or modifier
+  pressed on the desktop and let go after a switch to a text terminal still
+  comes up in the window that saw it go down. The chords are consumed BEFORE the
   fork (Alt+arrows must work from either world; they are commands to the
   terminal stack, same doctrine as Ctrl+Alt+Del). The mouse already goes
   only to the GUI queue; on text VTs its events drop (gpm is a non-goal).
@@ -722,8 +725,10 @@ mid-drag handling and verification fixture.
   modifier change that produces no delivered event — the extended path updates
   the state and returns without delivering for any key that is not an arrow or
   a named editing key, so holding Right Alt would change the driver's mind and
-  tell nobody. State is published where it CHANGES now
-  (`keyboard_publish_modifiers`), with the choke still covering the xHCI path.
+  tell nobody. State is published where it CHANGES now: `keyboard_publish_modifiers`
+  for PS/2 and `keyboard_publish_hid_modifiers` for each HID keyboard, counted
+  so a modifier is held while any keyboard holds it (keyboard.h). The choke
+  does not touch it.
 - Mouse events carry `modifiers` (input.h, ABI-compatible — the union had 20
   bytes and was using 14), because a compositor keeping its own shadow copy of
   modifier state would drift out of sync across a VT switch.
@@ -757,7 +762,7 @@ Three things learned building them, for the next chord:
   lesson, re-learned in one day — it is now the rule.)
 - **The HID path emits releases now.** Until today xHCI delivered key-DOWN
   only: no key-up, no event at all for a modifier-only report. The Alt+Tab
-  hold therefore could not end on USB. `hid_process_keyboard_report`
+  hold therefore could not end on USB. `hid_keyboard_report` (hid_keyboard.c)
   emits a release edge per usage that left the report and a press/release
   per modifier bit that flipped (scancode `0xE0 + bit`, ASCII 0, so the
   text path ignores them exactly as it ignores PS/2 modifier keys).
@@ -1097,6 +1102,12 @@ system has to know:
   only once `s_backbuffer_ready` is published: `surface_init` stores the
   pixel pointer before the size, and a reader needs both. The hardware
   framebuffer is still never read (invariant 1).
+- **A viewer opened "u" is also a keyboard and a pointer.** Its keyboard
+  is a `hid_keyboard_t` (the USB keyboard's interpreter) and its pointer
+  goes through `input_inject_pointer`, which shares `pointer_locked` with
+  the mice. Held keys repeat from `glass_input_tick`, called in the frame
+  loop outside `kGuiLock`. Delivery happens under the view's input lock and
+  never under `kGuiLock`, for the reason the painting rule above gives.
 - **It follows the backbuffer, not the glass.** While a text VT holds the
   screen the backbuffer keeps compositing, so viewers keep receiving the
   desktop, flagged `OS64_GLASS_TEXT_VT`. A change of who holds the screen

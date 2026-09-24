@@ -101,8 +101,9 @@ void devfs_mount(void);
 //   "/tty"    reading gets HANDLE_CONSOLE_IN, writing or appending
 //             HANDLE_CONSOLE_OUT, and the object is NULL — a console handle
 //             carries none, by design.
-//   "/glass"  reading gets HANDLE_GLASS and a new glass_view_t (gui/glass.h):
-//             one viewer of the screen. On a boot with no desktop the answer
+//   "/glass"  "r" or "u" gets HANDLE_GLASS and a new glass_view_t
+//             (gui/glass.h): one viewer of the screen, and with "u" also a
+//             keyboard and pointer. On a boot with no desktop the answer
 //             is HANDLE_NONE, which the caller turns into a refused open.
 //             /dev/glass blocks for the next change, and a HANDLE_FILE read
 //             may not sleep (THE ALIAS above) — the same reason /dev/tty is

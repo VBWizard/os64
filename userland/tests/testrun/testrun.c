@@ -136,7 +136,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/looptest",        NULL, 0x100BBAC0,  0,          "loopback: a door only this machine can reach, 3 MiB each way, localhost, and the refusals" },
     // glasstest reports 0x61A55001 on a boot with no desktop: there is no
     // screen to watch, a fact about the BOOT (synctest's treatment).
-    { "/tests/glasstest",       NULL, 0x61A55000,  0x61A55001, "/dev/glass: the whole screen, banded, refused when too small, a painted window, a still screen, a close under a parked reader" },
+    { "/tests/glasstest",       NULL, 0x61A55000,  0x61A55001, "/dev/glass: the whole screen, banded, refused when too small, a painted window, a still screen, a close under a parked reader; and its hands: keys, chords, a click, repeat, release on close" },
     { "/tests/renametest",      NULL, 0x4E4D0000,  0,          "rename policies on ext2 and FAT, plus invalid flags and legacy ABI compatibility" },
     { "/tests/closetest",       NULL, 0xC10E0000,  0,          "a close that could not commit is heard in ring 3 (OS64_CLOSE_NOT_COMMITTED), and told apart from no-such-handle" },
     { "/tests/openxtest",        NULL, 0x0EAC7000,  0,          "atomic exclusive create on ext2 and FAT, including contention and full-handle refusal" },
