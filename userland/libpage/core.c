@@ -600,6 +600,9 @@ static void read_options(os64_page_t *page, const os64_html_node_t *n, os64_page
             text = "";
         }
         option->label = text;
+        // An EMPTY `label` is no label: the standard's rule is "the label
+        // attribute, if there is one and its value is not the empty
+        // string", and the text otherwise.
         const char *label = p_attr(n, "label");
         if (label != NULL && label[0] != '\0')
             option->label = label;

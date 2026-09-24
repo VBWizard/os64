@@ -542,8 +542,8 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   `[n][v the chosen option]` — and `+2` after it when the page has marked
   more than one, since one row shows one option and a person who could not
   tell that three were going has no reason to doubt what the row says. An
-  option's words are its `label` attribute where it has one and its text
-  otherwise, while the VALUE it sends falls back to that text and never to
+  option's words are its `label` attribute where that is not empty and its
+  text otherwise (the standard's rule: an empty `label` is no label), while the VALUE it sends falls back to that text and never to
   the label. What the row shows is always something that will actually GO:
   a DROP-DOWN always holds one, so with nothing marked it shows its first,
   while a `multiple` list and a list drawn as several ROWS (`size` above

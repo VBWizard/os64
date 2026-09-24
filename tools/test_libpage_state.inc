@@ -565,8 +565,23 @@ static void state_scale(void)
     os64_html_document_free(doc);
 }
 
+// An empty `label` is no label; the words fall back to the text.
+static void state_option_labels(void)
+{
+    os64_html_document_t *doc = parse("<select><option label='' value=x>Fallback"
+                                      "<option label=Short value=y>Long</select>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    const os64_page_control_t *c = os64_page_control(page, 0);
+    state_expect("option: empty label falls back to text",
+                 c != NULL && c->noptions == 2 && strcmp(c->options[0].label, "Fallback") == 0 &&
+                 strcmp(c->options[1].label, "Short") == 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 static void state_cases(void)
 {
+    state_option_labels();
     state_scale();
     state_taken_away();
     state_frames();
