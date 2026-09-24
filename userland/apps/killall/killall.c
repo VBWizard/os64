@@ -4,6 +4,11 @@
 #define MAX_NAMES 512
 #define STATUS_LINE_MAX 512
 
+typedef struct {
+    uint64_t pid;
+    char name[STATUS_LINE_MAX];
+} target_t;
+
 static bool matches(const char *name, const char *pattern, bool substring)
 {
     if (!substring)
@@ -142,8 +147,10 @@ int main(int argc, char **argv)
     uint64_t self = os64_taskid();
     os64_dirent_t entry;
     int64_t result;
-    int status = 0;
-    // /proc advances by PID, so removing a task does not skip its successor.
+    target_t *targets = NULL;
+    size_t target_count = 0, capacity = 0;
+    // Finish selection before signaling: /proc is a live listing, and a
+    // supervisor may append replacements in response to our signals.
     while ((result = os64_readdir(directory, &entry)) == 1)
     {
         uint64_t pid;
@@ -155,7 +162,37 @@ int main(int argc, char **argv)
         for (int32_t i = 0; i < count; i++)
             if (matches(name, names[i], substring)) selected = true;
         if (!selected) continue;
-        if (send_signal(pid, name, verb))
+        if (target_count == capacity)
+        {
+            size_t next_capacity = capacity ? capacity * 2 : 64;
+            target_t *grown = NULL;
+            if (capacity <= SIZE_MAX / sizeof(*targets) / 2)
+                grown = os64_realloc(targets, next_capacity * sizeof(*targets));
+            if (!grown)
+            {
+                os64_hprintf(OS64_STDERR, "killall: cannot allocate task list\n");
+                os64_close(directory);
+                os64_free(targets);
+                return 1;
+            }
+            targets = grown;
+            capacity = next_capacity;
+        }
+        targets[target_count].pid = pid;
+        os64_strcopy(targets[target_count].name, STATUS_LINE_MAX, name);
+        target_count++;
+    }
+    int64_t closed = os64_close(directory);
+    if (result < 0 || closed < 0)
+    {
+        os64_hprintf(OS64_STDERR, "killall: error reading /proc\n");
+        os64_free(targets);
+        return 1;
+    }
+    int status = 0;
+    for (size_t t = 0; t < target_count; t++)
+    {
+        if (send_signal(targets[t].pid, targets[t].name, verb))
         {
             status = 1;
             continue;
@@ -163,14 +200,9 @@ int main(int argc, char **argv)
         // Overlapping operands account for the same successful signal;
         // each task receives one command per invocation.
         for (int32_t i = 0; i < count; i++)
-            if (matches(name, names[i], substring)) signaled[i] = true;
+            if (matches(targets[t].name, names[i], substring)) signaled[i] = true;
     }
-    int64_t closed = os64_close(directory);
-    if (result < 0 || closed < 0)
-    {
-        os64_hprintf(OS64_STDERR, "killall: error reading /proc\n");
-        status = 1;
-    }
+    os64_free(targets);
     for (int32_t i = 0; i < count; i++)
         if (!signaled[i])
         {

@@ -29,11 +29,15 @@ each operand had a successful signal and no signaling or directory error
 occurred, 1 for operational failure or an operand with no successful signal,
 and 2 for invalid usage. Success reports command delivery, not confirmed exit.
 
-Enumeration walks `/proc` by PID without a fixed task-count limit. It reads
-status names directly because the shared display reader truncates at 63 bytes.
+Enumeration collects matching PIDs and names into a growable list, then closes
+`/proc` before sending signals. Replacements spawned in response to those signals
+are excluded from that invocation. Allocation or directory failures abort
+collection without signaling a partial list. Status names are read directly
+because the shared display reader truncates at 63 bytes.
 Incomplete or unreadable status reports are skipped, including tasks that
 exit during enumeration. Names and task lifetime can change between reading
 status and writing ctl; this is not an atomic selection-and-signal operation.
+The collection pass remains a live `/proc` walk, not an invocation-time snapshot.
 
 ## Validation
 
@@ -82,3 +86,15 @@ standalone `rmdir` utility.
 
 Chris also tested killall on the P5 and confirmed that `--substring clock`
 terminated his gclock (user-reported hardware validation).
+
+## Respawn review regression
+
+Host coverage simulates a supervisor appending a matching replacement after each
+signal. The invocation signals its two collected targets and leaves both
+replacements untouched. Tests also cover initial allocation and growth failures,
+and directory read/close failures: no signals are sent from an incomplete list.
+
+The respawn test failed before the correction and passed afterward under
+ASan/UBSan. The strict killall cross-build, whitespace check, and stale-reference
+audit passed. These review changes have host validation; the hardware results
+above describe the original implementation.

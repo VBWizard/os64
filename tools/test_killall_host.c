@@ -1,6 +1,7 @@
 // Exercise the real command/parser against a synthetic /proc and ctl sink.
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #define main killall_main
 #include "../userland/apps/killall/killall.c"
@@ -18,7 +19,16 @@ static size_t ntasks, cursor, current, line_number;
 static int fail_pid, short_pid, close_pid;
 static bool directory_error, open_error, read_error;
 static unsigned opens;
+static bool respawn, directory_open, directory_close_error;
+static unsigned allocations, fail_allocation;
 static char last_verb[32];
+
+void *os64_realloc(void *ptr, size_t size)
+{
+    if (++allocations == fail_allocation) return NULL;
+    return realloc(ptr, size);
+}
+void os64_free(void *ptr) { free(ptr); }
 
 uint64_t os64_taskid(void) { return 1; }
 int64_t os64_opendir(const char *path)
@@ -26,11 +36,12 @@ int64_t os64_opendir(const char *path)
     assert(strcmp(path, "/proc") == 0);
     opens++;
     cursor = 0;
+    directory_open = !open_error;
     return open_error ? -1 : 3;
 }
 int64_t os64_readdir(int32_t handle, os64_dirent_t *entry)
 {
-    assert(handle == 3);
+    assert(handle == 3 && directory_open);
     if (cursor == ntasks) return directory_error ? -1 : 0;
     snprintf(entry->name, sizeof(entry->name), "%zu", ++cursor);
     return 1;
@@ -66,13 +77,22 @@ int64_t os64_readline(int32_t handle, char *out, size_t cap)
 }
 int64_t os64_close(int32_t handle)
 {
+    if (handle == 3)
+    {
+        assert(directory_open);
+        directory_open = false;
+        return directory_close_error ? -1 : 0;
+    }
     return handle == 5 && (int)current + 1 == close_pid ? -1 : 0;
 }
 int64_t os64_write(int32_t handle, const void *data, size_t size)
 {
     if (handle == 1 || handle == 2) return (int64_t)size;
-    assert(handle == 5 && size < sizeof(last_verb));
+    assert(handle == 5 && !directory_open && size < sizeof(last_verb));
     tasks[current].sends++;
+    // Model a supervisor replacing each worker after receiving a signal.
+    if (respawn && ntasks < 30)
+        tasks[ntasks++] = (task_t){.name = "worker", .state = "runnable"};
     memcpy(last_verb, data, size);
     last_verb[size] = 0;
     return (int)current + 1 == short_pid ? (int64_t)size - 1 : (int64_t)size;
@@ -91,6 +111,8 @@ static void reset(void)
     fail_pid = short_pid = close_pid = 0;
     directory_error = open_error = read_error = false;
     opens = 0;
+    respawn = directory_open = directory_close_error = false;
+    allocations = fail_allocation = 0;
 }
 #define RUN(expected, ...) do { \
     char *argv[] = {"killall", __VA_ARGS__}; \
@@ -106,6 +128,10 @@ int main(void)
 {
     reset(); RUN(0, "worker"); assert(sent() == 2 && tasks[1].sends && tasks[2].sends);
     assert(strcmp(last_verb, "kill") == 0);
+    reset(); respawn = true; RUN(0, "worker");
+    assert(sent() == 2 && ntasks == 10);
+    assert(tasks[1].sends == 1 && tasks[2].sends == 1);
+    assert(!tasks[8].sends && !tasks[9].sends);
     reset(); RUN(0, "--substring", "work", "worker"); assert(sent() == 3);
     reset(); RUN(0, "-2", "worker", "worker"); assert(sent() == 2 && strcmp(last_verb, "interrupt") == 0);
     reset(); RUN(0, "--signal=sIgInT", "worker"); assert(sent() == 2);
@@ -122,7 +148,9 @@ int main(void)
     reset(); tasks[1].name = "-worker"; RUN(0, "--", "-worker"); assert(sent() == 1);
     reset(); tasks[1].name = "work.er"; RUN(1, "--substring", "work.*"); assert(!sent());
     reset(); open_error = true; RUN(1, "worker"); assert(!sent());
-    reset(); directory_error = true; RUN(1, "worker"); assert(sent() == 2);
+    reset(); directory_error = true; RUN(1, "worker"); assert(!sent() && !directory_open);
+    reset(); directory_close_error = true; RUN(1, "worker"); assert(!sent() && !directory_open);
+    reset(); fail_allocation = 1; RUN(1, "worker"); assert(!sent() && !directory_open);
     reset(); read_error = true; RUN(1, "worker"); assert(!sent());
     reset(); fail_pid = 2; RUN(1, "worker"); assert(tasks[2].sends == 1);
     reset(); short_pid = 2; RUN(1, "worker"); assert(sent() == 2);
@@ -137,6 +165,9 @@ int main(void)
     reset(); ntasks = 600;
     for (size_t i = 0; i < ntasks; i++) tasks[i] = (task_t){.name = "worker", .state = "usleep"};
     RUN(0, "worker"); assert(sent() == 599);
+    reset(); ntasks = 600; fail_allocation = 2;
+    for (size_t i = 0; i < ntasks; i++) tasks[i] = (task_t){.name = "worker", .state = "usleep"};
+    RUN(1, "worker"); assert(!sent() && !directory_open);
     puts("killall host tests passed");
     return 0;
 }
