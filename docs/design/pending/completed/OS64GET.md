@@ -24,14 +24,17 @@ Finish the build on the host, then start the server from the repository root:
 
 ```sh
 make
-python3 tools/os64serve.py userland/bin userland/bin/tests=tests kernel/bin=kernelbin etc
+python3 tools/os64serve.py userland/bin userland/bin/tests=tests kernel/bin=kernelbin etc frames=frames
 ```
 
 This offers applications, shared libraries, test programs, the kernel and
-its build outputs, and system configuration. The `tests` and `kernelbin`
+its build outputs, system configuration, and Frame Studio compositions. The `tests` and `kernelbin`
 labels matter: they let the shipped client configuration send fixtures to
 `/tests` while more specific rules send the kernel and libraries elsewhere.
 Serving `userland/bin` alone does not include its `tests` subdirectory.
+The `frames` lot routes to `/etc/frames`. On an existing installation, add
+`@frames = /etc/frames` to the effective `os64get.conf` before the first bulk
+refresh; see [the collection update instructions](../../../../FRAME_COLLECTION.md#p5-update).
 
 On os64, replace `HOST` with the build PC's reachable hostname or IPv4 address:
 
@@ -312,7 +315,8 @@ python3.exe '\\wsl$\<distro>\home\<you>\src\os64\tools\os64serve.py' \
   '\\wsl$\<distro>\home\<you>\src\os64\userland\bin' \
   '\\wsl$\<distro>\home\<you>\src\os64\userland\bin\tests=tests' \
   '\\wsl$\<distro>\home\<you>\src\os64\kernel\bin=kernelbin' \
-  '\\wsl$\<distro>\home\<you>\src\os64\etc'
+  '\\wsl$\<distro>\home\<you>\src\os64\etc' \
+  '\\wsl$\<distro>\home\<you>\src\os64\frames=frames'
 ```
 
 Use an existing Windows-visible working directory; `/mnt/c/temp` is an

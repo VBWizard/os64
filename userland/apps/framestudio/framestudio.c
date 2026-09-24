@@ -22,6 +22,8 @@ static os64_ui_colorpicker_t picker;
 static os64_ui_textfield_t hex_field,name_field;
 static char saved_name[FRAME_NAME_MAX+1],pending_name[FRAME_NAME_MAX+1];
 static frame_saved_t saved_entries[FRAME_SAVED_MAX];
+static frame_saved_t pending_entry;
+static char saved_labels[FRAME_SAVED_MAX][FRAME_NAME_MAX+16];
 static size_t saved_count;
 static unsigned confirmation; /* 1: close, 2: replace, 3: load, 4: delete */
 static char hex[8],font_text[256],size_text[80],status[200],prop_text[6][80];
@@ -245,7 +247,7 @@ static void hex_submit(os64_ui_textfield_t *w,void *u)
     frame_draft_t next=draft;put_color(&next,value);(void)accept(&next,NULL);
 }
 static const char *saved_at(size_t n,void *u)
-{(void)u;return n<saved_count?saved_entries[n].name:"";}
+{(void)u;return n<saved_count?saved_labels[n]:"";}
 static void saved_changed(os64_ui_listbox_t *w,void *u)
 {
     (void)u;
@@ -260,6 +262,8 @@ static void refresh_saved(void)
 {
     int count=frame_saved_list(saved_entries,FRAME_SAVED_MAX);
     saved_count=count>=0?(size_t)count:0;
+    for(size_t i=0;i<saved_count;++i)os64_snprintf(saved_labels[i],sizeof(saved_labels[i]),
+        "%s%s",saved_entries[i].name,saved_entries[i].included?" (included)":"");
     int selected=-1;
     for(size_t i=0;i<saved_count;++i)if(os64_streq(saved_entries[i].name,saved_name))selected=(int)i;
     os64_ui_listbox_set(&ui,&saved_list,saved_count,selected);
@@ -293,7 +297,7 @@ static void save_draft(bool replace)
 static void load_selected(void)
 {
     frame_draft_t next;void *bytes=NULL;size_t length=0;
-    if(frame_load(pending_name,&next,&bytes,&length)){
+    if(frame_load_entry(&pending_entry,&next,&bytes,&length)){
         report("Cannot load that composition. Draft kept.");return;
     }
     clear_history();os64_free(bundle);bundle=bytes;bundle_length=length;
@@ -301,7 +305,7 @@ static void load_selected(void)
     os64_strcopy(baseline_name,sizeof(baseline_name),pending_name);
     (void)os64_decor_validate(bundle,bundle_length,&view);
     os64_ui_textfield_set(&ui,&name_field,pending_name);reset_samples();refresh_fonts();sync_controls();
-    report("Loaded into preview. Apply when ready.");
+    report(pending_entry.included?"Included composition. Save makes a personal copy.":"Loaded into preview. Apply when ready.");
     os64_printf("framestudio: Load OK name=%s bytes=%lu generation=%lu\n",pending_name,(unsigned long)bundle_length,generation);
 }
 static void delete_selected(void)
@@ -336,7 +340,9 @@ static void clicked(os64_ui_widget_t *w,void *u)
     if(id==REFRESH_SAVED){report("Collection refreshed. Draft kept.");refresh_saved();sync_controls();return;}
     if(id==LOAD || id==DELETE_SAVED){
         if(saved_list.selected<0 || (size_t)saved_list.selected>=saved_count)return;
-        os64_strcopy(pending_name,sizeof(pending_name),saved_entries[saved_list.selected].name);
+        pending_entry=saved_entries[saved_list.selected];
+        if(id==DELETE_SAVED && pending_entry.included)return;
+        os64_strcopy(pending_name,sizeof(pending_name),pending_entry.name);
         if(id==DELETE_SAVED)ask_confirmation(4);else if(dirty())ask_confirmation(3);else load_selected();return;
     }
     if(id==APPLY){
@@ -482,7 +488,8 @@ static void sync_controls(void)
     os64_ui_set_enabled(&ui,&buttons[UNDO],history_count!=0);
     os64_ui_set_enabled(&ui,&buttons[LOAD],saved_list.selected>=0 && (size_t)saved_list.selected<saved_count);
     os64_ui_set_enabled(&ui,&buttons[USE_STARTUP],saved_baseline && !dirty());
-    os64_ui_set_enabled(&ui,&buttons[DELETE_SAVED],saved_list.selected>=0 && (size_t)saved_list.selected<saved_count);
+    os64_ui_set_enabled(&ui,&buttons[DELETE_SAVED],saved_list.selected>=0 &&
+        (size_t)saved_list.selected<saved_count && !saved_entries[saved_list.selected].included);
     bool deleting=close_pending && confirmation==4;
     heading.text=deleting?"DELETE SAVED COMPOSITION":"FRAME STUDIO";
     intro.text=deleting?delete_lines[0]:introduction;
@@ -719,7 +726,7 @@ static void build_ui(void)
     os64_ui_textfield(&hex_field,hex,sizeof(hex),hex_submit,NULL,NULL);os64_ui_add_child(&pages[2],&hex_field.w);
     add_button(SET_HEX,&pages[2],"Set");
     add_button(COLOR_FIRST,&pages[2],"Color 1");add_button(COLOR_SECOND,&pages[2],"Color 2");
-    add_label(&saved_label,&pages[3],"Saved compositions");
+    add_label(&saved_label,&pages[3],"Personal + included compositions");
     os64_ui_listbox(&saved_list,0,saved_at,saved_changed,NULL);os64_ui_add_child(&pages[3],&saved_list.w);
     os64_ui_scrollbar(&saved_scroll,saved_scrolled,NULL);os64_ui_add_child(&pages[3],&saved_scroll.w);
     add_label(&name_label,&pages[3],"Composition name");

@@ -1,0 +1,14 @@
+  test: listed 6 files (1026284 bytes)
+  test: sent Blue-Hour.frame (173800 bytes, crc a64ba060)
+Blue-Hour.frame: LIST/GET length/CRC, ext2 and FAT bytes match
+  test: sent Copperline.frame (173800 bytes, crc 5788e20f)
+Copperline.frame: LIST/GET length/CRC, ext2 and FAT bytes match
+  test: sent Moss-and-Linen.frame (173800 bytes, crc 76e8bd8d)
+Moss-and-Linen.frame: LIST/GET length/CRC, ext2 and FAT bytes match
+  test: sent Orchard.frame (157284 bytes, crc 941644aa)
+Orchard.frame: LIST/GET length/CRC, ext2 and FAT bytes match
+  test: sent Porcelain.frame (173800 bytes, crc 71f2a5ec)
+Porcelain.frame: LIST/GET length/CRC, ext2 and FAT bytes match
+  test: sent Signal.frame (173800 bytes, crc 78fdfd66)
+Signal.frame: LIST/GET length/CRC, ext2 and FAT bytes match
+PASS six compositions, lot frames, ext2 + FAT installation

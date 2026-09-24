@@ -221,6 +221,9 @@ FONT_FIXTURE_FILES := DejaVuSans.ttf DejaVuSansMono.ttf \
 FONT_FIXTURES      := $(addprefix $(FONT_FIXTURE_DIR)/,$(FONT_FIXTURE_FILES))
 FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSans.ttf DejaVuSansMono.ttf)
 
+# Prepared compositions carry their own glyphs and finish tiles.
+FRAME_COMPOSITIONS := $(wildcard frames/*.frame)
+
 # Kernel-side ring-3 test fixtures. They ride the image into /tests alongside
 # the userland ones — same shelf, because they are the same KIND of thing: a
 # program whose verdict is its exit code. Only their source tree differs
@@ -444,7 +447,7 @@ userland:
 # that rides it changes.
 TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
 
-$(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(FONT_FIXTURES) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf GNUmakefile
+$(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(FONT_FIXTURES) $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -478,6 +481,8 @@ $(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENS
 	printf 'write license/unicode-LICENSE /etc/licenses/unicode.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'mkdir /etc/fonts\nwrite etc/fonts.conf /etc/fonts.conf\nwrite $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt /etc/licenses/DejaVu.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(FONT_PRODUCT),printf 'write %s /etc/fonts/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'mkdir /etc/frames\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach f,$(FRAME_COMPOSITIONS),printf 'write %s /etc/frames/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	# /tests: the proof harness — the userland fixtures and the kernel-born
 	# ones, on one shelf. NOTE the tie-break if two source trees ever claim one
@@ -510,7 +515,7 @@ $(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENS
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -585,6 +590,8 @@ $(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE lic
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/fonts
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/fonts.conf ::/etc/fonts.conf
 	$(foreach f,$(FONT_PRODUCT),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/fonts/$(notdir $(f));)
+	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/frames
+	$(foreach f,$(FRAME_COMPOSITIONS),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/frames/$(notdir $(f));)
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/licenses
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt ::/etc/licenses/DejaVu.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libjpeg-turbo-LICENSE ::/etc/licenses/libjpeg-turbo.txt

@@ -20,6 +20,10 @@ the decoration engine, its userland consumers and the editor together. See
 [publication validation](docs/frame-studio/publication-checkpoint.md).
 The subsequent review corrections and validation are recorded in the
 [review checkpoint](docs/frame-studio/review-checkpoint.md).
+The [included composition collection](FRAME_COLLECTION.md) ships under
+`/etc/frames`; personal saves normally live under `/home/frames` and take
+precedence by name. Included entries can be loaded and customized, with Save
+creating a personal copy and Delete reserved for personal files.
 
 Per-slice checkpoints below are historical evidence. Their pending-work and
 hardware/publication statements describe the point when each slice was tested;
@@ -483,7 +487,9 @@ exclusive per-task staging file in the collection, handles short writes,
 requires successful sync, then publishes with NOREPLACE. Explicit replacement
 uses REQUIRE_ATOMIC_REPLACE; a filesystem unable to preserve the old name
 refuses. Failure removes the staging file and keeps the old composition.
-The browser admits 128 named entries within a 512-entry directory scan.
+The browser admits 128 distinct names across personal and included collections,
+with a 512-entry scan limit per directory. Personal entries take precedence;
+the browser marks included entries and disables their Delete action.
 Load validates the complete file before replacing the draft and clears Undo
 after a discard confirmation if needed. Undo owns prepared snapshots so font
 changes can be reversed without source files; its budget is 32 entries and

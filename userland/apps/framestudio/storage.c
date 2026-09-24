@@ -78,10 +78,39 @@ int frame_decode(const void *bytes,size_t size,frame_draft_t *draft,void **bundl
     os64_memcpy(next.font.face,h->face,sizeof(h->face));
     *draft=next;*bundle=copy;*length=h->bundle_bytes;return FRAME_STORE_OK;
 }
+static int personal_directory(char *dir)
+{
+    char target[OS64_CONF_PATH_MAX],cwd[OS64_CONF_PATH_MAX];
+    if(os64_conf_target("frames",target,sizeof(target)))return FRAME_STORE_IO;
+    cwd[0]=0;
+    if(target[0]!='/' && os64_getcwd(cwd,sizeof(cwd))<0)return FRAME_STORE_IO;
+    /* Match VFS component resolution so config aliases cannot turn the
+     * included directory into a writable personal collection. */
+    const char *parts[2]={cwd,target};size_t used=1;dir[0]='/';
+    for(unsigned i=0;i<2;++i){const char *p=parts[i];
+        while(*p){
+            while(*p=='/')++p;
+            const char *start=p;while(*p && *p!='/')++p;
+            size_t n=(size_t)(p-start);
+            if(!n || (n==1 && start[0]=='.'))continue;
+            if(n==2 && start[0]=='.' && start[1]=='.'){
+                while(used>1 && dir[used-1]!='/')--used;
+                if(used>1)--used;
+                continue;
+            }
+            size_t slash=used>1?1:0;
+            if(used+slash+n>=OS64_CONF_PATH_MAX)return FRAME_STORE_INVALID;
+            if(slash)dir[used++]='/';
+            os64_memcpy(dir+used,start,n);used+=n;
+        }
+    }
+    dir[used]=0;return FRAME_STORE_OK;
+}
 static int paths(const char *name,char *dir,char *path)
 {
     if(!frame_name_valid(name))return FRAME_STORE_INVALID;
-    if(os64_conf_target("frames",dir,OS64_CONF_PATH_MAX))return FRAME_STORE_IO;
+    int result=personal_directory(dir);if(result)return result;
+    if(os64_streq(dir,FRAME_INCLUDED_DIR))return FRAME_STORE_INVALID;
     int n=os64_snprintf(path,OS64_CONF_PATH_MAX,"%s/%s.frame",dir,name);
     return n>0 && n<OS64_CONF_PATH_MAX?FRAME_STORE_OK:FRAME_STORE_INVALID;
 }
@@ -90,23 +119,40 @@ static bool name_after(const char *a,const char *b)
     while(*a && *a==*b){++a;++b;}
     return (unsigned char)*a>(unsigned char)*b;
 }
-int frame_saved_list(frame_saved_t *entries,size_t capacity)
+static int scan_collection(const char *dir,bool included,frame_saved_t *entries,
+    size_t capacity,size_t *count)
 {
-    char dir[OS64_CONF_PATH_MAX];
-    if(!entries || !capacity)return -FRAME_STORE_INVALID;
-    if(os64_conf_target("frames",dir,sizeof(dir)))return -FRAME_STORE_IO;
-    (void)os64_mkdir(dir);int64_t fd=os64_opendir(dir);if(fd<0)return -FRAME_STORE_IO;
-    os64_dirent_t entry;size_t count=0,scanned=0;int result=0;int64_t rc;
+    int64_t fd=os64_opendir(dir);
+    /* An older installation may have no included collection. */
+    if(fd<0)return included?0:-FRAME_STORE_IO;
+    os64_dirent_t entry;size_t scanned=0;int result=0;int64_t rc;
     while((rc=os64_readdir(fd,&entry))==1){
         if(++scanned>512){result=-FRAME_STORE_LIMIT;break;}
         if(entry.flags&OS64_DE_DIR)continue;
         size_t n=os64_strlen(entry.name);
         if(n<=6 || n>FRAME_NAME_MAX+6 || !os64_streq(entry.name+n-6,".frame"))continue;
         entry.name[n-6]=0;if(!frame_name_valid(entry.name))continue;
-        if(count==capacity){result=-FRAME_STORE_LIMIT;break;}
-        os64_strcopy(entries[count++].name,sizeof(entries[0].name),entry.name);
+        bool duplicate=false;
+        for(size_t i=0;i<*count;++i)if(os64_streq(entries[i].name,entry.name)){duplicate=true;break;}
+        if(duplicate)continue;
+        if(*count==capacity){result=-FRAME_STORE_LIMIT;break;}
+        frame_saved_t *saved=&entries[(*count)++];
+        os64_strcopy(saved->name,sizeof(saved->name),entry.name);saved->included=included;
     }
     os64_close(fd);if(rc<0)return -FRAME_STORE_IO;if(result)return result;
+    return 0;
+}
+int frame_saved_list(frame_saved_t *entries,size_t capacity)
+{
+    char dir[OS64_CONF_PATH_MAX];
+    if(!entries || !capacity)return -FRAME_STORE_INVALID;
+    int result=personal_directory(dir);if(result)return -result;
+    size_t count=0;
+    if(!os64_streq(dir,FRAME_INCLUDED_DIR)){
+        (void)os64_mkdir(dir);
+        result=scan_collection(dir,false,entries,capacity,&count);if(result)return result;
+    }
+    result=scan_collection(FRAME_INCLUDED_DIR,true,entries,capacity,&count);if(result)return result;
     for(size_t i=1;i<count;++i){frame_saved_t value=entries[i];size_t j=i;
         while(j && name_after(entries[j-1].name,value.name)){entries[j]=entries[j-1];--j;}entries[j]=value;
     }
@@ -140,12 +186,12 @@ int frame_save(const char *name,const frame_draft_t *draft,const void *bundle,si
     if(result)(void)os64_unlink(temp);
     return result;
 }
-int frame_load(const char *name,frame_draft_t *draft,void **bundle,size_t *length)
+static int load_path(const char *path,frame_draft_t *draft,void **bundle,size_t *length)
 {
     if(bundle)*bundle=NULL;
     if(length)*length=0;
     if(!draft || !bundle || !length)return FRAME_STORE_INVALID;
-    char dir[OS64_CONF_PATH_MAX],path[OS64_CONF_PATH_MAX];int result=paths(name,dir,path);if(result)return result;
+    int result=FRAME_STORE_OK;
     int64_t fd=os64_open(path,"r");if(fd<0)return FRAME_STORE_IO;
     int64_t size=os64_seek(fd,0,OS64_SEEK_END);
     if(size<(int64_t)sizeof(frame_file_t) || size>FRAME_FILE_BYTES_MAX || os64_seek(fd,0,OS64_SEEK_SET)!=0){os64_close(fd);return FRAME_STORE_INVALID;}
@@ -161,6 +207,29 @@ int frame_load(const char *name,frame_draft_t *draft,void **bundle,size_t *lengt
     os64_close(fd);
     if(!result)result=frame_decode(bytes,(size_t)size,draft,bundle,length);
     os64_free(bytes);return result;
+}
+
+int frame_load_entry(const frame_saved_t *entry,frame_draft_t *draft,void **bundle,size_t *length)
+{
+    if(bundle)*bundle=NULL;
+    if(length)*length=0;
+    if(!entry || !draft || !bundle || !length || !frame_name_valid(entry->name))return FRAME_STORE_INVALID;
+    char dir[OS64_CONF_PATH_MAX],path[OS64_CONF_PATH_MAX];
+    if(entry->included){
+        int n=os64_snprintf(path,sizeof(path),"%s/%s.frame",FRAME_INCLUDED_DIR,entry->name);
+        if(n<0 || (size_t)n>=sizeof(path))return FRAME_STORE_INVALID;
+    }else{
+        int result=paths(entry->name,dir,path);if(result)return result;
+    }
+    return load_path(path,draft,bundle,length);
+}
+int frame_load(const char *name,frame_draft_t *draft,void **bundle,size_t *length)
+{
+    if(bundle)*bundle=NULL;
+    if(length)*length=0;
+    if(!frame_name_valid(name))return FRAME_STORE_INVALID;
+    frame_saved_t entry={0};os64_strcopy(entry.name,sizeof(entry.name),name);
+    return frame_load_entry(&entry,draft,bundle,length);
 }
 
 int frame_delete(const char *name)
@@ -184,7 +253,7 @@ int frame_load_active(const frame_saved_t *entries,size_t count,size_t *selected
     if(os64_decor_current(&before) || !before.bytes)return 0;
     for(size_t i=0;i<count;++i){
         frame_draft_t next;void *bytes=NULL;size_t size=0;
-        if(frame_load(entries[i].name,&next,&bytes,&size))continue;
+        if(frame_load_entry(&entries[i],&next,&bytes,&size))continue;
         if(size==before.bytes && os64_decor_fingerprint(bytes,size)==before.fingerprint){
             if(os64_decor_current(&after) || before.generation!=after.generation ||
                 before.fingerprint!=after.fingerprint || before.bytes!=after.bytes){

@@ -1,0 +1,17 @@
+decoration fingerprint: PASS FNV vectors, status bounds, legacy framing, truncation and invalid fields
+controls: PASS group geometry, minimum width, empty/spacer hits, capture re-entry and cancellation
+button colors: PASS custom/inactive colors, transparency/states/hits, split damage, saved V4 compatibility and V6 round trip
+symbol colors: PASS per-action active/inactive ink, inherited V4/V5 pixel parity and migration, housing isolation, disabled backgrounds, split damage, hits, save/load, allocation refusal
+startup decoration: PASS next-boot isolation, embedded snapshots, replacement failures, fallback/default masking, corrupt data, generation-zero race
+frame deletion: PASS name confinement, refusal preservation, exact collection removal, corrupt files, directory refusal, retained loaded assets and startup snapshot, session isolation
+frame active match: PASS V4/V5/V6 bundles, sorted duplicates, missing/corrupt entries, exact contents/length, legacy/default, read failure, racing Apply, no publication
+included frames: PASS discovery, source-pinned load, active match, personal shadow, corrupt personal refusal, deletion reveal and bounds
+frame storage: PASS embedded-asset round trip, bounds/checksum, names, short I/O, write/sync/rename refusal, replacement, collection
+button colors: PASS custom/inactive colors, transparency/states/hits, split damage, saved V4 compatibility and V6 round trip
+symbol colors: PASS per-action active/inactive ink, inherited V4/V5 pixel parity and migration, housing isolation, disabled backgrounds, split damage, hits, save/load, allocation refusal
+startup decoration: PASS next-boot isolation, embedded snapshots, replacement failures, fallback/default masking, corrupt data, generation-zero race
+frame deletion: PASS name confinement, refusal preservation, exact collection removal, corrupt files, directory refusal, retained loaded assets and startup snapshot, session isolation
+frame active match: PASS V4/V5/V6 bundles, sorted duplicates, missing/corrupt entries, exact contents/length, legacy/default, read failure, racing Apply, no publication
+included frames: PASS discovery, source-pinned load, active match, personal shadow, corrupt personal refusal, deletion reveal and bounds
+frame storage: PASS embedded-asset round trip, bounds/checksum, names, short I/O, write/sync/rename refusal, replacement, collection
+decoration: PASS lifetime, refusal, F2 parity, two-color endpoints and strength, finishes, restyle, split damage, translation, presets, bounded format

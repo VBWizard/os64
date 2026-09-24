@@ -1,0 +1,3 @@
+framestudio: ready content=1240x840 title=16 buttons=4 generation=0
+framestudio: closed
+exit=0
