@@ -36,6 +36,7 @@
 
 #include "os64/os64.h"
 #include "os64/conf.h"   // os64_conf_find — husk.rc rides the system search path now
+#include "os64/url.h"    // an address is not a filename pattern; see token_is_address
 
 #include "limits.h"
 
@@ -1012,6 +1013,33 @@ static bool glob_has_meta(const char *s)
 	return false;
 }
 
+// AN ADDRESS IS NOT A PATTERN, and `?` is what makes the difference matter:
+// a URL carries one in almost every query it ever asks, so
+// `wend https://host/html?q=hobby+os+development` was being read as a
+// filename pattern, split at its last slash, and answered with a complaint
+// about a directory called `https://host`.
+//
+// This is NOT the no-match case below and does not soften Chris's ruling on
+// it. A pattern that matches nothing is a mistake worth reporting because
+// it COULD have matched. Nothing on any filesystem can match a pattern
+// whose directory part is a scheme and an authority: the word was never a
+// pattern, and globbing it was the error.
+//
+// os64/url.h answers the question, because recognising `scheme://host` is
+// what that grammar exists for, and its own contract says NOT_A_URL is how
+// a caller learns an operand had no scheme. Anything else means it did,
+// which is enough — a host the parser dislikes is still not a directory.
+//
+// AN ADDRESS WITH NO SCHEME IS NOT RECOGNISED, and cannot be: `host/p?q=1`
+// is spelled exactly as a filename pattern is, and a shell that decided by
+// which program it was about to run would be one no program could predict.
+// wend and gopher accept a bare host as a convenience; a bare one with a
+// `?` in it is written with its scheme, or quoted. (DEBTS.md.)
+static bool token_is_address(const char *token)
+{
+	os64_url_t parsed;
+	return os64_url_parse(token, &parsed) != OS64_URL_NOT_A_URL;
+}
 
 // Copy `s` into the expansion pool and return the stored pointer, or NULL if
 // the pool is full. The pool cannot be the line buffer: parse() tokenizes in
@@ -1388,7 +1416,7 @@ static int parse(char *line, char *argv[], int maxargs)
 		while (*readp == ' ' || *readp == '\t') readp++;
 		*writep++ = 0;
 
-		if (unquotedMeta && glob_has_meta(token))
+		if (unquotedMeta && glob_has_meta(token) && !token_is_address(token))
 		{
 			int expanded = glob_expand(token, argv, argc, maxargs);
 			if (expanded < 0)

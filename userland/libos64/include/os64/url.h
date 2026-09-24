@@ -119,4 +119,25 @@ const char *os64_url_reason(os64_url_result_t rc);
 bool os64_url_absolute(const os64_url_t *base, const char *reference,
                        char *out, size_t cap);
 
+// Spell a parsed address back out — os64_url_parse's inverse, and the only
+// way to write one down without assembling it by hand somewhere else. The
+// port rides along only when it is non-zero, this struct's rule, so a caller
+// that zeroed a scheme's default gets the address a page would have written
+// rather than one nobody spells. What went in RAW comes out raw; a fragment
+// was never in there to come back. False when it will not fit in `cap`.
+bool os64_url_spell(const os64_url_t *url, char *out, size_t cap);
+
+// WHICH SCHEME A REFERENCE NAMES, without requiring it to be one this parser
+// can take apart. `mailto:`, `javascript:` and `data:` carry no authority,
+// so os64_url_parse answers NOT_A_URL for all three — and yet the scheme is
+// exactly what a caller needs in order to refuse them by name, or hand them
+// to whatever does handle them. The answer is lowercased and carries no
+// colon.
+//
+// False means the text does not begin with a scheme at all (RFC 3986 §3.1: a
+// letter, then letters, digits, '+', '-' and '.', then ':'), which is how a
+// caller learns the reference is a relative one — or that the scheme is
+// longer than a scheme may be.
+bool os64_url_scheme_of(const char *text, char *out, size_t cap);
+
 #endif // OS64_URL_H

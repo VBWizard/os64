@@ -455,3 +455,35 @@ bool os64_url_absolute(const os64_url_t *base, const char *location,
         n = os64_snprintf(out, cap, "%s://%s%s%s", base->scheme, base->host, path, query);
     return n > 0 && (size_t)n < cap;
 }
+
+// ── Writing one down ────────────────────────────────────────────────────
+
+bool os64_url_spell(const os64_url_t *url, char *out, size_t cap)
+{
+    if (url == NULL || out == NULL || cap == 0)
+        return false;
+    int32_t n;
+    if (url->port != 0)
+        n = os64_snprintf(out, cap, "%s://%s:%u%s", url->scheme, url->host, (unsigned)url->port,
+                          url->path);
+    else
+        n = os64_snprintf(out, cap, "%s://%s%s", url->scheme, url->host, url->path);
+    return n > 0 && (size_t)n < cap;
+}
+
+bool os64_url_scheme_of(const char *text, char *out, size_t cap)
+{
+    if (text == NULL || out == NULL || cap == 0)
+        return false;
+    if (!is_alpha(text[0]))
+        return false;
+    size_t len = 0;
+    while (text[len] != '\0' && text[len] != ':') {
+        if (!is_scheme_byte(text[len]))
+            return false;   // whatever this is, it is not a scheme
+        len++;
+    }
+    if (text[len] != ':')
+        return false;
+    return copy_lower(out, cap, text, len) < cap;
+}

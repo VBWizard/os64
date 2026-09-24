@@ -1,0 +1,1514 @@
+// render.c — the tree walked, the words wrapped, the page turned into lines.
+//
+// THE SHAPE OF THE WALK. One pass, depth first, with a PEN (bold, underline,
+// which link or form control we are inside) that elements push and pop, and
+// a WORD held back until whitespace ends it. Holding the word back is what
+// makes wrapping work: a row is committed only when the next word will not
+// fit, so no word is ever split except one that could not have fitted a row.
+//
+// Recursion is bounded by libhtml's max_depth (512 by default, a refusal by
+// name past that) and a frame here is small, so a page cannot spend this
+// program's megabyte of stack by nesting divs.
+//
+// WHAT THIS FILE MAY NOT DO: touch a handle, read the clock, print, or
+// decide what a page means. Its only outside world is the allocator, the
+// UTF-8 decoder and libpage's model, read and never written, which is what
+// lets the host harness run every corpus page through it under the
+// sanitizers.
+
+#include "render.h"
+
+#include "html/tags.h"
+#include "os64/mem.h"
+#include "os64/str.h"
+
+// ── The fold: a code point onto a Latin-1 glass ─────────────────────────
+//
+// The tree is UTF-8 and the terminal draws Latin-1, so something has to
+// decide what a curly quote becomes. The rule: a code point below 256 is its
+// own byte, the punctuation the web is full of gets a byte that READS right,
+// and everything else is `?`.
+//
+// `?` and never a blank. A blank says nothing was there; the mark says
+// something was there and this program could not draw it, which is both the
+// truth and the thing a person needs in order to know whether they are
+// missing anything.
+//
+// The exceptions to "below 256 is its byte" are the code points that are not
+// characters in the drawing sense. The C0 and C1 control ranges are a
+// stranger steering the terminal rather than writing on it. The invisibles —
+// a soft hyphen, a zero-width joiner — mark where a word MAY break, and
+// drawing the soft hyphen as the dash Latin-1 keeps at 0xAD would put a
+// hyphen in the middle of a word that has none.
+static const struct { uint32_t cp; const char *as; } s_fold[] = {
+    // The quotation marks a word processor produces
+    { 0x2018, "'" }, { 0x2019, "'" }, { 0x201A, "'" }, { 0x201B, "'" },
+    { 0x201C, "\"" }, { 0x201D, "\"" }, { 0x201E, "\"" }, { 0x201F, "\"" },
+    { 0x2039, "<" }, { 0x203A, ">" },
+    { 0x2032, "'" }, { 0x2033, "\"" },
+    // Every dash that is not the hyphen-minus
+    { 0x2010, "-" }, { 0x2011, "-" }, { 0x2012, "-" }, { 0x2013, "-" },
+    { 0x2014, "-" }, { 0x2015, "-" }, { 0x2212, "-" },
+    { 0x2026, "..." },
+    // A space that must neither collapse nor break a line. It folds AFTER
+    // the collapser has had its say, so it survives where an ordinary space
+    // would have been eaten.
+    { 0x00A0, " " },
+    // Bullets, for the lists a page draws by hand
+    { 0x2022, "*" }, { 0x2023, "*" }, { 0x25AA, "*" }, { 0x25CF, "*" },
+    { 0x25E6, "*" }, { 0x2605, "*" }, { 0x2606, "*" },
+    // Arrows point the way they point
+    { 0x2190, "<" }, { 0x2192, ">" }, { 0x2191, "^" }, { 0x2193, "v" },
+    { 0x21D0, "<" }, { 0x21D2, ">" },
+    { 0x2122, "(tm)" },        // Latin-1 keeps (c) and (r); this one it lacks
+    { 0x2044, "/" },
+    // Invisible by definition: a break opportunity, not a character
+    { 0x00AD, "" }, { 0x200B, "" }, { 0x200C, "" }, { 0x200D, "" },
+    { 0x2060, "" }, { 0xFEFF, "" },
+    // "New line" as a document with no markup spells it
+    { 0x2028, " " }, { 0x2029, " " },
+};
+
+size_t wend_fold(uint32_t cp, char *out)
+{
+    for (size_t i = 0; i < sizeof(s_fold) / sizeof(s_fold[0]); i++)
+        if (s_fold[i].cp == cp) {
+            size_t n = os64_strlen(s_fold[i].as);
+            if (n > WEND_FOLD_MAX)
+                n = WEND_FOLD_MAX;
+            os64_memcpy(out, s_fold[i].as, n);
+            return n;
+        }
+    // The printable halves of Latin-1 and nothing else: the gaps are the two
+    // control ranges, 0x00-0x1F and 0x7F-0x9F.
+    if ((cp >= 0x20 && cp < 0x7F) || (cp >= 0xA0 && cp < 0x100)) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    out[0] = '?';
+    return 1;
+}
+
+// A number as its digits, for the `[n]` a link wears and the counter an
+// ordered list keeps. Local because this file has no business pulling in a
+// formatter for two call sites, and because the host harness links it alone.
+// A NUMBER CAN BE NEGATIVE HERE, because a page may write `<ol start=-3>`
+// and a list that counted `0. 0. -1.` would be telling the reader something
+// the page did not. The magnitude is taken as unsigned so the most negative
+// number has somewhere to go.
+static size_t num_text(int32_t v, char *out)
+{
+    char tmp[12];
+    size_t n = 0;
+    uint32_t mag = v < 0 ? (uint32_t)0 - (uint32_t)v : (uint32_t)v;
+    do {
+        tmp[n++] = (char)('0' + (mag % 10));
+        mag /= 10;
+    } while (mag && n < sizeof(tmp));
+    size_t at = 0;
+    if (v < 0)
+        out[at++] = '-';
+    for (size_t i = 0; i < n; i++)
+        out[at++] = tmp[n - 1 - i];
+    return at;
+}
+
+// ── Growing arrays ──────────────────────────────────────────────────────
+
+static bool reserve(void **items, int32_t *cap, int32_t want, size_t elem)
+{
+    if (want <= *cap)
+        return true;
+    int32_t next = *cap ? *cap : 16;
+    while (next < want) {
+        if (next > (int32_t)0x3FFFFFFF)
+            return false;
+        next *= 2;
+    }
+    void *grown = os64_realloc(*items, (size_t)next * elem);
+    if (!grown)
+        return false;
+    *items = grown;
+    *cap = next;
+    return true;
+}
+
+// ── A buffer of folded bytes, and the pens over it ──────────────────────
+//
+// Both the row being built and the word being held are this: bytes, plus the
+// runs that say how to paint them. A run EXTENDS rather than repeating
+// itself, so a row of prose costs one run and one SGR pair.
+
+typedef struct {
+    char         *text;
+    int32_t       len, cap;
+    wend_run_t *runs;
+    int32_t       nruns, runcap;
+} buf_t;
+
+static void buf_reset(buf_t *b) { b->len = 0; b->nruns = 0; }
+
+static void buf_free(buf_t *b)
+{
+    os64_free(b->text);
+    os64_free(b->runs);
+    b->text = NULL;
+    b->runs = NULL;
+    b->len = b->cap = b->nruns = b->runcap = 0;
+}
+
+static bool buf_append(buf_t *b, const char *s, size_t n, uint8_t attrs, int32_t spot)
+{
+    if (n == 0)
+        return true;
+    if (!reserve((void **)&b->text, &b->cap, b->len + (int32_t)n + 1, 1))
+        return false;
+    // TERMINATE BEFORE ANYTHING ELSE CAN FAIL. Fresh storage holds whatever
+    // the allocator last had there, and the run reservation below can refuse
+    // — which would leave a row whose bytes nobody wrote and whose end
+    // nothing marks, for the painter to walk off.
+    b->text[b->len] = '\0';
+    wend_run_t *last = b->nruns ? &b->runs[b->nruns - 1] : NULL;
+    if (!last || last->attrs != attrs || last->spot != spot) {
+        if (!reserve((void **)&b->runs, &b->runcap, b->nruns + 1, sizeof(*b->runs)))
+            return false;
+        b->runs[b->nruns++] = (wend_run_t){ (uint32_t)b->len, 0, attrs, spot };
+        last = &b->runs[b->nruns - 1];
+    }
+    os64_memcpy(b->text + b->len, s, n);
+    b->len += (int32_t)n;
+    b->text[b->len] = '\0';
+    last->len += (uint32_t)n;
+    return true;
+}
+
+// ── The renderer's state ────────────────────────────────────────────────
+
+typedef struct {
+    wend_page_t *page;
+    int32_t        linecap, spotcap, nodecap;
+    int32_t        cols;
+    const os64_page_t *model;   // what every link and control IS; NULL = unknown
+    const os64_html_node_t *const *flipped;   // `details` the reader opened or closed
+    int32_t nflipped;
+
+    buf_t   line;           // what is on the row so far, its indent included
+    buf_t   word;           // held back until whitespace or a block ends it
+
+    uint8_t attrs;          // the pen
+    int32_t spot;
+
+    // THE PEN THE OWED SPACE WEARS, kept from where the whitespace WAS. A
+    // space between two words of one link belongs to that link, a space
+    // inside a heading is part of the heading — and by the time the word
+    // after it is laid down the walk may have left the element that owned
+    // them both, taking the pen with it.
+    uint8_t space_attrs;
+    int32_t space_spot;
+
+    int32_t indent;        // spaces a fresh row opens with
+    int32_t pre;            // >0 inside pre/listing: the author's own columns
+    int32_t foreign;        // >0 inside SVG or MathML: its own text is not drawn
+    bool    pending_space;  // whitespace was seen; one space is owed
+    bool    content;        // this row holds something besides its indent
+    bool    want_blank;     // a blank row is owed before the next content
+    bool    oom;
+} render_t;
+
+// Where the row under construction will land. A spot records it the moment
+// its first byte reaches a row, which is what lets the selection scroll to
+// one without searching the page for it.
+static int32_t line_index(const render_t *r) { return r->page->nlines; }
+
+// AN INDENT MAY NEVER EAT THE ROW. Comment threads and quoted mail nest far
+// deeper than anyone designing a margin imagines, and an indent that reached
+// the right edge would leave no room for a word and no way forward. Half the
+// screen is the most any nesting gets.
+static int32_t indent_now(const render_t *r)
+{
+    int32_t ind = r->indent;
+    if (ind > r->cols / 2)
+        ind = r->cols / 2;
+    return ind < 0 ? 0 : ind;
+}
+
+// Spaces at the end of a flowed row are the renderer's own leavings — a cell
+// separator that turned out to end the row, an indent under nothing. They
+// paint as nothing and they widen a selection over nothing, so they go.
+// Inside `pre` they are the author's and they stay.
+static void line_trim(buf_t *b)
+{
+    while (b->len > 0 && b->text[b->len - 1] == ' ') {
+        b->text[--b->len] = '\0';
+        wend_run_t *last = &b->runs[b->nruns - 1];
+        if (--last->len == 0)
+            b->nruns--;
+    }
+}
+
+static void nodes_bind(render_t *r, int32_t line);
+
+// Commit the row under construction. `force` is the preformatted path's:
+// inside `pre` an empty row is a blank line the author typed, while in
+// flowing text it is the artefact of a block that turned out to hold nothing.
+static void line_end(render_t *r, bool force)
+{
+    if (!r->content && !force) {
+        buf_reset(&r->line);
+        r->pending_space = false;
+        return;
+    }
+    if (r->pre == 0)
+        line_trim(&r->line);
+    wend_page_t *p = r->page;
+    if (!reserve((void **)&p->lines, &r->linecap, p->nlines + 1, sizeof(*p->lines))) {
+        r->oom = true;
+        buf_reset(&r->line);
+        r->content = false;
+        r->pending_space = false;
+        return;
+    }
+    char *text = r->line.text;
+    if (!text) {
+        text = os64_malloc(1);          // a blank row still owes a string
+        if (!text) {
+            r->oom = true;
+            buf_reset(&r->line);
+            r->content = false;
+            r->pending_space = false;
+            return;
+        }
+        text[0] = '\0';
+    }
+    p->lines[p->nlines].text = text;
+    p->lines[p->nlines].runs = r->line.runs;
+    p->lines[p->nlines].nruns = r->line.nruns;
+    p->lines[p->nlines].len = r->line.len;
+    p->nlines++;
+    // The row's storage belongs to the page now; the builder starts empty.
+    r->line.text = NULL;
+    r->line.runs = NULL;
+    r->line.len = r->line.cap = r->line.nruns = r->line.runcap = 0;
+    r->content = false;
+    r->pending_space = false;
+}
+
+// Open a row if none is open: first the blank line anything owes, then the
+// indent. Called from the content path rather than from the block verbs, so
+// an owed blank never materialises at the foot of a page.
+static void line_open(render_t *r)
+{
+    if (r->line.len > 0 || r->content)
+        return;
+    if (r->want_blank) {
+        r->want_blank = false;
+        if (r->page->nlines > 0)
+            line_end(r, true);          // an empty row, deliberately
+    }
+    nodes_bind(r, line_index(r));
+    int32_t ind = indent_now(r);
+    for (int32_t i = 0; i < ind; i++)
+        if (!buf_append(&r->line, " ", 1, 0, 0)) {
+            r->oom = true;
+            return;
+        }
+}
+
+// Put a slice of the held word onto the row, with the pens it was written
+// under. A word that outgrew the screen is cut here, so the cut has to carry
+// its runs across.
+static void word_slice_to_line(render_t *r, int32_t from, int32_t take)
+{
+    for (int32_t i = 0; i < r->word.nruns && !r->oom; i++) {
+        wend_run_t *run = &r->word.runs[i];
+        int32_t start = (int32_t)run->start, end = start + (int32_t)run->len;
+        int32_t piece_from = start > from ? start : from;
+        int32_t piece_to = end < from + take ? end : from + take;
+        if (piece_to <= piece_from)
+            continue;
+        if (run->spot > 0 && r->page->spots[run->spot - 1].line < 0)
+            r->page->spots[run->spot - 1].line = line_index(r);
+        if (!buf_append(&r->line, r->word.text + piece_from,
+                        (size_t)(piece_to - piece_from), run->attrs, run->spot))
+            r->oom = true;
+    }
+}
+
+// End the held word: wrap first if it will not fit where the row now stands,
+// then lay it down. A word wider than the whole row is cut at the margin,
+// which is the only place this program ever splits one.
+static void word_flush(render_t *r)
+{
+    if (r->word.len == 0)
+        return;
+    line_open(r);
+    if (r->oom) {
+        buf_reset(&r->word);
+        return;
+    }
+    int32_t owed = (r->pending_space && r->content) ? 1 : 0;
+    if (r->content && r->line.len + owed + r->word.len > r->cols) {
+        line_end(r, false);
+        line_open(r);
+        owed = 0;
+    }
+    if (owed) {
+        if (r->space_spot > 0 && r->page->spots[r->space_spot - 1].line < 0)
+            r->page->spots[r->space_spot - 1].line = line_index(r);
+        if (!buf_append(&r->line, " ", 1, r->space_attrs, r->space_spot))
+            r->oom = true;
+    }
+    r->pending_space = false;
+
+    int32_t at = 0;
+    while (at < r->word.len && !r->oom) {
+        line_open(r);
+        int32_t room = r->cols - r->line.len;
+        if (room <= 0) {                 // an indent this wide cannot happen,
+            line_end(r, true);           // but a row with no room must still
+            continue;                    // make progress
+        }
+        int32_t take = r->word.len - at;
+        if (take > room)
+            take = room;
+        word_slice_to_line(r, at, take);
+        r->content = true;
+        at += take;
+        if (at < r->word.len)
+            line_end(r, false);
+    }
+    buf_reset(&r->word);
+}
+
+// ── What the walk puts on the page ──────────────────────────────────────
+
+// Text that is part of a word: a marker, a widget, the fold's output. It
+// GLUES, so `[3]` and the first word of the link stay on one row together.
+static void word_text(render_t *r, const char *s, size_t n)
+{
+    if (!buf_append(&r->word, s, n, r->attrs, r->spot))
+        r->oom = true;
+}
+
+// Text that opens a row: a list bullet, a rule. Ends whatever word was held
+// and lands directly, so a wrap indents under it rather than beside it.
+static void line_text(render_t *r, const char *s, size_t n)
+{
+    word_flush(r);
+    line_open(r);
+    if (r->oom)
+        return;
+    if (!buf_append(&r->line, s, n, r->attrs, r->spot))
+        r->oom = true;
+    else
+        r->content = true;
+}
+
+static void block_break(render_t *r)
+{
+    word_flush(r);
+    line_end(r, false);
+}
+
+static void blank_break(render_t *r)
+{
+    block_break(r);
+    r->want_blank = true;
+}
+
+// A row of the author's own text, verbatim. Wraps hard at the margin because
+// there is nothing here that may be re-flowed: inside `pre` the columns ARE
+// the meaning.
+static void pre_put(render_t *r, const char *s, size_t n)
+{
+    line_open(r);
+    if (r->oom)
+        return;
+    if (r->content && r->line.len + (int32_t)n > r->cols) {
+        line_end(r, false);
+        line_open(r);
+        if (r->oom)
+            return;
+    }
+    if (r->spot > 0 && r->page->spots[r->spot - 1].line < 0)
+        r->page->spots[r->spot - 1].line = line_index(r);
+    if (!buf_append(&r->line, s, n, r->attrs, r->spot))
+        r->oom = true;
+    else
+        r->content = true;
+}
+
+// ── Text nodes ──────────────────────────────────────────────────────────
+
+static bool is_space(uint32_t cp)
+{
+    return cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0C || cp == 0x0D;
+}
+
+// Flowing text: runs of whitespace become one owed space, and the words
+// between them are held for the wrapper.
+static void flow_text(render_t *r, const char *s, size_t n)
+{
+    size_t at = 0;
+    while (at < n && !r->oom) {
+        uint32_t cp = 0;
+        size_t took = os64_utf8_decode(s + at, n - at, &cp);
+        at += took ? took : 1;
+        if (is_space(cp)) {
+            word_flush(r);
+            r->pending_space = true;
+            r->space_attrs = r->attrs;
+            r->space_spot = r->spot;
+            continue;
+        }
+        char folded[WEND_FOLD_MAX];
+        size_t got = wend_fold(cp, folded);
+        if (got)
+            word_text(r, folded, got);
+    }
+}
+
+// WHAT A NON-UTF-8 BYTE OVER 0x7F MEANS, which on the web is one answer and
+// not two: every label in the Latin-1 family — `iso-8859-1`, `latin1`,
+// `us-ascii`, `windows-1252` — decodes as windows-1252, and a page that
+// declares one of them and then writes 0x93 meant a curly quote. The C1
+// range is the whole difference: Latin-1 puts controls there, which fold to
+// `?`, and this puts the punctuation a word processor produces. libhtml
+// decodes the markup half by this same table, so the two halves of the
+// browser cannot disagree about one byte.
+static const uint16_t s_windows_high[32] = {
+    0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
+    0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178,
+};
+
+// Preformatted text: every byte where the author put it. A newline is a row
+// even when the row is empty, and a tab goes to the next eight-column stop —
+// the width every author who typed one was imagining.
+//
+// `utf8` says how to read a byte over 0x7F. False means windows-1252, which
+// is what the machines that wrote the old web's .txt files meant; decoding
+// those as UTF-8 turns every accented name into a question mark.
+static void pre_bytes(render_t *r, const char *s, size_t n, bool utf8)
+{
+    size_t at = 0;
+    while (at < n && !r->oom) {
+        uint32_t cp = 0;
+        if (utf8) {
+            size_t took = os64_utf8_decode(s + at, n - at, &cp);
+            at += took ? took : 1;
+        } else {
+            unsigned char b = (unsigned char)s[at++];
+            cp = b >= 0x80 && b <= 0x9F ? s_windows_high[b - 0x80] : b;
+        }
+        if (cp == 0x0A) {
+            line_end(r, true);
+            continue;
+        }
+        // A CARRIAGE RETURN ENDS A ROW TOO, because a text file written on a
+        // machine that ended its lines that way is still a text file with
+        // lines. A CRLF pair is ONE ending: the newline that follows is
+        // swallowed rather than counted again. (libhtml normalises both
+        // before the tree, so this is the raw-text path's business.)
+        if (cp == 0x0D) {
+            line_end(r, true);
+            if (at < n && s[at] == '\n')
+                at++;                   // CRLF is one ending, not two
+            continue;
+        }
+        if (cp == 0x09) {
+            line_open(r);
+            if (r->oom)
+                return;
+            int32_t stop = (r->line.len / 8 + 1) * 8;
+            if (stop > r->cols)
+                stop = r->cols;
+            while (r->line.len < stop && !r->oom)
+                pre_put(r, " ", 1);
+            continue;
+        }
+        char folded[WEND_FOLD_MAX];
+        size_t got = wend_fold(cp, folded);
+        if (got)
+            pre_put(r, folded, got);
+    }
+}
+
+static void text_node(render_t *r, const os64_html_node_t *n)
+{
+    if (!n->text || n->text_len == 0 || r->foreign > 0)
+        return;
+    if (r->pre > 0)
+        pre_bytes(r, n->text, n->text_len, true);
+    else
+        flow_text(r, n->text, n->text_len);
+}
+
+// ── Spots: the places a person can land ─────────────────────────────────
+
+// Claim the next spot for a link or a control the model knows. 0 when there
+// was no room, which leaves the thing drawn and unnumbered.
+static int32_t spot_add(render_t *r, wend_spot_kind_t kind, const os64_html_node_t *node,
+                        int32_t link, int32_t control)
+{
+    wend_page_t *p = r->page;
+    if (!reserve((void **)&p->spots, &r->spotcap, p->nspots + 1, sizeof(*p->spots))) {
+        r->oom = true;
+        return 0;
+    }
+    p->spots[p->nspots] = (wend_spot_t){ kind, node, -1, link, control };
+    return ++p->nspots;
+}
+
+int32_t wend_spot_for_control(const wend_page_t *page, int32_t control)
+{
+    if (page == NULL || control < 0)
+        return -1;
+    for (int32_t i = 0; i < page->nspots; i++)
+        if (page->spots[i].kind != WEND_SPOT_LINK && page->spots[i].control == control)
+            return i;
+    return -1;
+}
+
+// A node met between rows binds to the next row opened. Inline nodes met
+// on an open row use it immediately, so reflow preserves their actual start.
+static void node_add(render_t *r, const os64_html_node_t *node)
+{
+    wend_page_t *p = r->page;
+    if (!reserve((void **)&p->node_rows, &r->nodecap, p->nnode_rows + 1,
+                 sizeof(*p->node_rows))) {
+        r->oom = true;
+        return;
+    }
+    p->node_rows[p->nnode_rows].node = node;
+    // The same question `line_open` asks: a row with an indent laid but no
+    // words yet is open, and is the row this node's own words will reach.
+    bool row_open = r->line.len > 0 || r->content;
+    p->node_rows[p->nnode_rows].line = row_open ? line_index(r) : -1;
+    p->nnode_rows++;
+}
+
+// Give each node still waiting the row that is opening. They were added
+// in document order, so the unbound ones are the tail.
+static void nodes_bind(render_t *r, int32_t line)
+{
+    for (int32_t i = r->page->nnode_rows - 1; i >= 0; i--) {
+        if (r->page->node_rows[i].line >= 0)
+            return;
+        r->page->node_rows[i].line = line;
+    }
+}
+
+int32_t wend_node_line(const wend_page_t *page, const os64_html_node_t *node)
+{
+    // Partial rendering cannot promise that a pending row was ever drawn.
+    if (page == NULL || node == NULL || page->incomplete)
+        return -1;
+    for (int32_t i = 0; i < page->nnode_rows; i++)
+        if (page->node_rows[i].node == node)
+            return page->node_rows[i].line;
+    return -1;
+}
+
+static const char *attr_value(const os64_html_node_t *el, const char *name)
+{
+    const os64_html_attr_t *a = os64_html_attr(el, name);
+    return a && a->value ? a->value : NULL;
+}
+
+// A WHOLE NUMBER AN ATTRIBUTE SPELLS — `<ol start>`, `<li value>`. False
+// when there is no number there, so the caller keeps its own default rather
+// than counting from a zero the page never wrote. A run of digits longer
+// than the type holds SATURATES instead of wrapping: a list that counted
+// backwards from a negative number because its `start` overflowed would be
+// stranger than one that stopped at the largest number there is.
+static bool attr_int(const os64_html_node_t *el, const char *name, int32_t *out)
+{
+    const char *s = attr_value(el, name);
+    if (!s)
+        return false;
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\f' || *s == '\r')
+        s++;
+    bool negative = *s == '-';
+    if (*s == '-' || *s == '+')
+        s++;
+    if (*s < '0' || *s > '9')
+        return false;
+    uint32_t limit = negative ? 0x80000000u : 0x7FFFFFFFu;
+    uint32_t mag = 0;
+    for (; *s >= '0' && *s <= '9'; s++) {
+        uint32_t digit = (uint32_t)(*s - '0');
+        if (mag > (limit - digit) / 10) {
+            mag = limit;
+            continue;                    // saturated; the rest only confirms it
+        }
+        mag = mag * 10 + digit;
+    }
+    *out = negative ? (int32_t)(0u - mag) : (int32_t)mag;
+    return true;
+}
+
+// ── The walk ────────────────────────────────────────────────────────────
+
+// A list in progress: which bullet its items wear, and what number the next
+// ordered item gets. It lives on the walk's own stack frame, which is where
+// the nesting already is — no separate stack to keep in step with the tree.
+//
+// THE NUMBER IS THE PAGE'S TO CHOOSE. `<ol start=5>` and `<li value=5>` are
+// how a procedure interrupted by a paragraph carries on counting, and a list
+// that restarted at 1 would show numbers its own prose contradicts.
+typedef struct {
+    bool    ordered;
+    bool    down;        // `<ol reversed>`: the count runs the other way
+    int32_t next;        // the number the next item wears
+} list_t;
+
+static void walk(render_t *r, const os64_html_node_t *n, list_t *list);
+
+static void walk_children(render_t *r, const os64_html_node_t *n, list_t *list)
+{
+    for (const os64_html_node_t *c = n->first_child; c && !r->oom; c = c->next)
+        walk(r, c, list);
+}
+
+// The bullet an item opens with, and the indent its wrapped rows line up
+// under. An ordered list counts; an unordered one does not.
+static void list_marker(render_t *r, list_t *list)
+{
+    char mark[16];
+    size_t n = 0;
+    if (list && list->ordered) {
+        n = num_text(list->next, mark);
+        if (list->down) {
+            if (list->next > INT32_MIN)
+                list->next--;
+        } else if (list->next < INT32_MAX) {
+            list->next++;                // a list this long has other problems
+        }
+        mark[n++] = '.';
+        mark[n++] = ' ';
+    } else {
+        mark[n++] = '*';
+        mark[n++] = ' ';
+    }
+    line_text(r, mark, n);
+    r->indent += (int32_t)n;            // a wrap aligns under the text
+}
+
+// The number a spot wears, glued to whatever it labels. It is what "type 3
+// and press Enter" reaches, and on a form control it is the only thing that
+// says the control is a place you can go.
+static void spot_mark(render_t *r, int32_t index)
+{
+    char mark[16];
+    size_t n = 0;
+    mark[n++] = '[';
+    n += num_text(index, mark + n);
+    mark[n++] = ']';
+    word_text(r, mark, n);
+}
+
+// UTF-8 in, cells out, no collapsing: a value is what somebody typed or what
+// the page put there, spaces and all.
+static void word_folded(render_t *r, const char *s, size_t len)
+{
+    size_t at = 0;
+    while (at < len && !r->oom) {
+        uint32_t cp = 0;
+        size_t took = os64_utf8_decode(s + at, len - at, &cp);
+        at += took ? took : 1;
+        char folded[WEND_FOLD_MAX];
+        size_t n = wend_fold(cp, folded);
+        if (n)
+            word_text(r, folded, n);
+    }
+}
+
+// HOW WIDE A BOX IS DRAWN. The page's own width when it gives a sane one,
+// something typeable when it does not, and never more than half the row —
+// a box wider than the screen is a box you cannot see the end of.
+static int32_t box_width(render_t *r, const os64_html_node_t *n)
+{
+    // A textarea says it in `cols`, 20 when it does not; an input in `size`.
+    bool area = n->tag == OS64_HTML_TAG_TEXTAREA;
+    const char *size = attr_value(n, area ? "cols" : "size");
+    int32_t width = area ? 20 : 16;
+    if (size) {
+        int32_t asked = 0;
+        for (const char *p = size; *p >= '0' && *p <= '9' && asked < 1000; p++)
+            asked = asked * 10 + (*p - '0');
+        if (asked >= 3)
+            width = asked;
+    }
+    if (width > r->cols / 2)
+        width = r->cols / 2;
+    if (width < 3)
+        width = 3;
+    return width;
+}
+
+// A text box with what is in it. The TAIL is what shows when the value
+// outgrows the box, because the tail is what you just typed.
+//
+// A SECRET IS DRAWN AS ITS LENGTH AND NOTHING ELSE. A password field's
+// value is on the glass in front of whoever is standing behind you, and a
+// page that prefills one is not a reason to publish it.
+//
+// A line break inside a value — a textarea's, mostly — is shown as a space
+// rather than as the `?` an unprintable code point earns. The VALUE keeps
+// its bytes; this is one row's account of text that has more than one.
+static void draw_box(render_t *r, const char *value, size_t len, int32_t width, bool secret)
+{
+    char cells[128];
+    if (width > (int32_t)sizeof(cells))
+        width = (int32_t)sizeof(cells);
+    int32_t have = 0;
+    size_t at = 0;
+    while (at < len) {
+        uint32_t cp = 0;
+        size_t took = os64_utf8_decode(value + at, len - at, &cp);
+        at += took ? took : 1;
+        char folded[WEND_FOLD_MAX];
+        size_t n;
+        if (secret) {
+            folded[0] = '*';
+            n = 1;
+        } else if (cp == 0x0A || cp == 0x0D || cp == 0x09) {
+            folded[0] = ' ';
+            n = 1;
+        } else {
+            n = wend_fold(cp, folded);
+        }
+        for (size_t i = 0; i < n; i++) {
+            if (have == width) {
+                for (int32_t j = 1; j < width; j++)
+                    cells[j - 1] = cells[j];
+                have--;
+            }
+            cells[have++] = folded[i];
+        }
+    }
+    word_text(r, "[", 1);
+    if (have)
+        word_text(r, cells, (size_t)have);
+    for (int32_t i = have; i < width; i++)
+        word_text(r, "_", 1);
+    word_text(r, "]", 1);
+}
+
+// A control that is drawn and cannot be operated — a reset, a plain button,
+// one the page disabled. It stays visible because a page with a gap where
+// its button was reads as broken, and it is not a spot because landing on it
+// would promise something.
+static void draw_dead_control(render_t *r, const char *label, size_t len, const char *fallback)
+{
+    word_text(r, "[", 1);
+    if (label && len)
+        word_folded(r, label, len);
+    else
+        word_text(r, fallback, os64_strlen(fallback));
+    word_text(r, "]", 1);
+}
+
+// ── Controls, drawn as the model says they stand ────────────────────────
+//
+// WHAT A CONTROL HOLDS, WHETHER IT IS TICKED, WHICH OPTION IS PICKED AND
+// WHETHER THE PAGE TOOK IT AWAY are all the model's answers, with a person's
+// edits already in them — so a re-wrap draws what was typed without this
+// file keeping any of it, and a control shows exactly what would be sent.
+
+// The model's control for an element, with its index. NULL when the model
+// has none for it: no model at all, or one that ran out of memory building.
+static const os64_page_control_t *control_of(const render_t *r, const os64_html_node_t *n,
+                                             int32_t *index)
+{
+    *index = os64_page_control_for(r->model, n);
+    return os64_page_control(r->model, *index);
+}
+
+// Number a spot and draw what follows under its pen, for the length of one
+// control. Returns false when there was no room to number it, and the
+// caller draws the control dead.
+static bool spot_open(render_t *r, wend_spot_kind_t kind, const os64_html_node_t *n,
+                      int32_t control)
+{
+    int32_t index = spot_add(r, kind, n, -1, control);
+    if (index <= 0)
+        return false;
+    r->spot = index;
+    spot_mark(r, index);
+    return true;
+}
+
+// One `input`, which is a dozen controls wearing one tag name.
+static void field_input(render_t *r, const os64_html_node_t *n)
+{
+    int32_t index;
+    const os64_page_control_t *c = control_of(r, n, &index);
+    if (c == NULL) {
+        // Nothing behind it to fill in or send; say a control is there.
+        word_text(r, "[?]", 3);
+        return;
+    }
+    switch (c->input) {
+        case OS64_PAGE_INPUT_HIDDEN:
+            return;                      // the form's data, never on the screen
+        case OS64_PAGE_INPUT_RESET:
+        case OS64_PAGE_INPUT_BUTTON:
+            draw_dead_control(r, c->value, c->value_len,
+                              c->input == OS64_PAGE_INPUT_RESET ? "reset" : "button");
+            return;
+        case OS64_PAGE_INPUT_FILE:
+            // A file is picked from a disk, which this face has no way to
+            // offer; the form sends it as a field with no file chosen.
+            draw_dead_control(r, NULL, 0, "file");
+            return;
+        default:
+            break;
+    }
+
+    wend_spot_kind_t kind = WEND_SPOT_TEXT;
+    if (c->submits)
+        kind = WEND_SPOT_SUBMIT;
+    else if (c->input == OS64_PAGE_INPUT_CHECKBOX)
+        kind = WEND_SPOT_CHECK;
+    else if (c->input == OS64_PAGE_INPUT_RADIO)
+        kind = WEND_SPOT_RADIO;
+    bool secret = c->input == OS64_PAGE_INPUT_PASSWORD;
+
+    // A button says what its page wrote on it: an image button its `alt`,
+    // then its value, and one that says nothing, what it does.
+    const char *label = c->value;
+    size_t label_len = c->value_len;
+    if (kind == WEND_SPOT_SUBMIT) {
+        const char *alt = c->input == OS64_PAGE_INPUT_IMAGE ? attr_value(n, "alt") : NULL;
+        if (alt && alt[0]) {
+            label = alt;
+            label_len = os64_strlen(alt);
+        } else if (label_len == 0) {
+            label = "Submit";
+            label_len = 6;
+        }
+    }
+
+    bool live = !c->disabled && spot_open(r, kind, n, index);
+    switch (kind) {
+        case WEND_SPOT_SUBMIT:
+            draw_dead_control(r, label, label_len, "Submit");
+            break;
+        case WEND_SPOT_CHECK:
+            word_text(r, c->checked ? "[x]" : "[ ]", 3);
+            break;
+        case WEND_SPOT_RADIO:
+            word_text(r, c->checked ? "(*)" : "( )", 3);
+            break;
+        default:
+            draw_box(r, c->value, c->value_len, box_width(r, n), secret);
+            break;
+    }
+    if (live)
+        r->spot = 0;
+}
+
+// A `select` is its picked option, cycled in place rather than opened.
+static void field_select(render_t *r, const os64_html_node_t *n)
+{
+    int32_t index;
+    const os64_page_control_t *c = control_of(r, n, &index);
+    if (c == NULL || c->disabled) {
+        // Its options are the page's business and it is not yours to open,
+        // so what is drawn is that a list is there.
+        word_text(r, "[v]", 3);
+        return;
+    }
+    if (!spot_open(r, WEND_SPOT_CHOICE, n, index)) {
+        word_text(r, "[v]", 3);
+        return;
+    }
+    // WHAT THE ROW SHOWS MUST BE WHAT GOES. A one-answer list shows its
+    // answer, even a disabled one — a "choose one" placeholder the page
+    // marked is the honest account of what the list holds, and it sends
+    // nothing. A `multiple` list shows the first option that will actually
+    // be sent, and says how many more go with it: one row shows one option,
+    // and a person who could not tell that three were going would have no
+    // reason to doubt it. A list holding nothing is drawn empty.
+    int32_t shown = -1, going = 0;
+    for (int32_t i = 0; i < c->noptions; i++) {
+        const os64_page_option_t *o = &c->options[i];
+        if (!o->selected || (c->multiple && o->disabled))
+            continue;
+        if (shown < 0)
+            shown = i;
+        going++;
+    }
+    word_text(r, "[v ", 3);
+    if (shown >= 0) {
+        const char *label = c->options[shown].label;
+        word_folded(r, label, os64_strlen(label));
+    }
+    if (c->multiple && going > 1) {
+        char more[16];
+        size_t at = 0;
+        more[at++] = ' ';
+        more[at++] = '+';
+        at += num_text(going - 1, more + at);
+        word_text(r, more, at);
+    }
+    word_text(r, "]", 1);
+    r->spot = 0;
+}
+
+// A textarea's text is its VALUE, not the page's prose — showing it as prose
+// would put the contents of a comment box into the article — so it is drawn
+// as a box holding what the model says it holds. One row's worth: a
+// line-mode browser has no second row to give it.
+static void field_textarea(render_t *r, const os64_html_node_t *n)
+{
+    int32_t index;
+    const os64_page_control_t *c = control_of(r, n, &index);
+    if (c == NULL) {
+        word_text(r, "[?]", 3);
+        return;
+    }
+    bool live = !c->disabled && spot_open(r, WEND_SPOT_TEXT, n, index);
+    draw_box(r, c->value, c->value_len, box_width(r, n), false);
+    if (live)
+        r->spot = 0;
+}
+
+// A `button` element's own words are its label, so they are drawn INSIDE it
+// rather than gathered: the pen it sets makes the whole thing one highlight.
+// One that does not submit, or that the page disabled, is drawn and not
+// landed on, like a reset.
+static void field_button(render_t *r, const os64_html_node_t *n, list_t *list)
+{
+    int32_t index;
+    const os64_page_control_t *c = control_of(r, n, &index);
+    bool live = c != NULL && c->submits && !c->disabled &&
+                spot_open(r, WEND_SPOT_SUBMIT, n, index);
+    word_text(r, "[", 1);
+    walk_children(r, n, list);
+    word_text(r, "]", 1);
+    if (live)
+        r->spot = 0;
+}
+
+// Break before a block's content, then let its geometry bind to that
+// content's first row. Flushing preceding text may have bound the pending
+// node to the old row, so the reset belongs after the layout break.
+static void node_start_block(render_t *r, bool blank)
+{
+    if (blank) blank_break(r);
+    else block_break(r);
+    r->page->node_rows[r->page->nnode_rows - 1].line = -1;
+}
+
+static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
+{
+    if (r->oom)
+        return;
+    switch (n->kind) {
+        case OS64_HTML_TEXT:
+            text_node(r, n);
+            return;
+        case OS64_HTML_DOCUMENT:
+        case OS64_HTML_FRAGMENT:
+            walk_children(r, n, list);
+            return;
+        case OS64_HTML_ELEMENT:
+            break;
+        default:
+            return;                      // a doctype and a comment draw nothing
+    }
+
+    // SVG AND MATHML DRAW NOTHING OF THEIR OWN HERE. Their shapes are the
+    // graphical browser's job, and their text is not prose — printing a
+    // formula's tokens in reading order would say something the page does
+    // not. But HTML can live inside them (an SVG `foreignObject`), and that
+    // is the page's own prose, links and controls: the walk descends, draws
+    // no foreign text, and draws HTML wherever it finds it.
+    if (n->ns != OS64_HTML_NS_HTML) {
+        r->foreign++;
+        for (const os64_html_node_t *c = n->first_child; c && !r->oom; c = c->next) {
+            if (c->kind == OS64_HTML_ELEMENT && c->ns == OS64_HTML_NS_HTML) {
+                int32_t saved_foreign = r->foreign;
+                r->foreign = 0;
+                walk(r, c, list);
+                r->foreign = saved_foreign;
+            } else {
+                walk(r, c, list);
+            }
+        }
+        r->foreign--;
+        return;
+    }
+
+    uint8_t saved_attrs = r->attrs;
+    int32_t saved_spot = r->spot;
+    int32_t saved_indent = r->indent;
+
+    // `hidden` IS THE PAGE SAYING THIS IS NOT ON THE SCREEN — a dialog that
+    // has not opened, a tab that is not the one showing. Drawing it would
+    // put a menu's worth of prose and addresses in front of a reader that
+    // the page had deliberately put away, and make its controls places the
+    // keyboard lands. Its VALUES still go with the form: they are in the
+    // model, which is what a submission is built from, and not on the screen.
+    if (os64_html_attr(n, "hidden") != NULL)
+        return;
+    // A `dialog` that is not open is not on the screen either.
+    if (n->tag == OS64_HTML_TAG_DIALOG && os64_html_attr(n, "open") == NULL)
+        return;
+
+    // These subtrees and inert element kinds do not participate in this
+    // renderer's layout. Libpage may select them, but they have no row. A
+    // `datalist` is suggestions for another control, never shown and never
+    // sent, so what is inside it is no place to land.
+    switch (n->tag) {
+        case OS64_HTML_TAG_DATALIST:
+        case OS64_HTML_TAG_HEAD: case OS64_HTML_TAG_SCRIPT:
+        case OS64_HTML_TAG_STYLE: case OS64_HTML_TAG_TEMPLATE:
+        case OS64_HTML_TAG_IFRAME: case OS64_HTML_TAG_AREA:
+        case OS64_HTML_TAG_BASE: case OS64_HTML_TAG_BASEFONT:
+        case OS64_HTML_TAG_BGSOUND: case OS64_HTML_TAG_LINK:
+        case OS64_HTML_TAG_META: case OS64_HTML_TAG_COL:
+        case OS64_HTML_TAG_COLGROUP: case OS64_HTML_TAG_EMBED:
+        case OS64_HTML_TAG_PARAM: case OS64_HTML_TAG_SOURCE:
+        case OS64_HTML_TAG_TRACK: case OS64_HTML_TAG_WBR:
+            return;
+        default:
+            break;
+    }
+    const char *alt = n->tag == OS64_HTML_TAG_IMG ? attr_value(n, "alt") : NULL;
+    const char *src = n->tag == OS64_HTML_TAG_FRAME ? attr_value(n, "src") : NULL;
+    const char *type = n->tag == OS64_HTML_TAG_INPUT ? attr_value(n, "type") : NULL;
+    // A frame that spells no address of its own is nowhere worth offering;
+    // an `input type=hidden` is the form's data and never drawn.
+    if ((alt != NULL && alt[0] == '\0') ||
+        (n->tag == OS64_HTML_TAG_FRAME && (src == NULL || src[0] == '\0')) ||
+        (type != NULL && os64_streq_nocase(type, "hidden")))
+        return;
+    node_add(r, n);
+    if (r->oom) return;
+
+    switch (n->tag) {
+        // A FRAMESET PAGE IS ITS FRAMES. There is no body to show and no
+        // prose anywhere in the document, so a face that skipped these would
+        // paint an empty screen for a whole era of the web. Each frame
+        // becomes a link to the document it names, which is what the page
+        // was going to show you anyway.
+        case OS64_HTML_TAG_FRAME: {
+            node_start_block(r, false);
+            int32_t link = os64_page_link_for(r->model, n);
+            int32_t idx = link >= 0 ? spot_add(r, WEND_SPOT_LINK, n, link, -1) : 0;
+            if (idx > 0) {
+                r->spot = idx;
+                spot_mark(r, idx);
+            }
+            const char *name = attr_value(n, "name");
+            word_text(r, "frame: ", 7);
+            flow_text(r, name && name[0] ? name : src,
+                      os64_strlen(name && name[0] ? name : src));
+            r->spot = saved_spot;
+            block_break(r);
+            return;
+        }
+
+        // `noscript` is SHOWN, and that is the point of parsing with a
+        // standard parser: this browser runs no script, so the standard says
+        // its contents are markup, and they are usually the page's own
+        // apology for needing one.
+        case OS64_HTML_TAG_NOSCRIPT:
+            break;
+
+        // ── The paragraph family: a blank line either side ──
+        case OS64_HTML_TAG_P:
+            node_start_block(r, true);
+            walk_children(r, n, list);
+            blank_break(r);
+            goto done;
+
+        case OS64_HTML_TAG_H1: case OS64_HTML_TAG_H2: case OS64_HTML_TAG_H3:
+        case OS64_HTML_TAG_H4: case OS64_HTML_TAG_H5: case OS64_HTML_TAG_H6:
+            node_start_block(r, true);
+            r->attrs |= WEND_ATTR_BOLD;
+            walk_children(r, n, list);
+            r->attrs = saved_attrs;
+            blank_break(r);
+            goto done;
+
+        // WHATEVER THE WALK CHANGED IS PUT BACK ONLY AFTER THE ROWS IT
+        // GOVERNS ARE DOWN, because a word and a row are both still held
+        // when an element's children are done. Give the margin back first
+        // and the last word of a list item wraps at the OUTER indent, under
+        // its own bullet; leave `pre` first and the author's own trailing
+        // spaces are trimmed off its last row.
+        case OS64_HTML_TAG_BLOCKQUOTE:
+            node_start_block(r, true);
+            r->indent += 4;
+            walk_children(r, n, list);
+            block_break(r);
+            r->indent = saved_indent;
+            blank_break(r);
+            goto done;
+
+        // ── Blocks that only want their own row ──
+        // A form and a fieldset are among them: which form a control belongs
+        // to and whether a fieldset disabled it are the model's answers, read
+        // when the control is drawn, so the walk has nothing to remember.
+        case OS64_HTML_TAG_FORM: case OS64_HTML_TAG_FIELDSET:
+        case OS64_HTML_TAG_DIV: case OS64_HTML_TAG_DL: case OS64_HTML_TAG_DT:
+        case OS64_HTML_TAG_ADDRESS: case OS64_HTML_TAG_CENTER:
+        case OS64_HTML_TAG_SECTION: case OS64_HTML_TAG_ARTICLE:
+        case OS64_HTML_TAG_NAV: case OS64_HTML_TAG_ASIDE:
+        case OS64_HTML_TAG_HEADER: case OS64_HTML_TAG_FOOTER:
+        case OS64_HTML_TAG_MAIN: case OS64_HTML_TAG_FIGURE:
+        case OS64_HTML_TAG_FIGCAPTION: case OS64_HTML_TAG_CAPTION:
+        case OS64_HTML_TAG_SUMMARY:
+        case OS64_HTML_TAG_TABLE: case OS64_HTML_TAG_THEAD:
+        case OS64_HTML_TAG_TBODY: case OS64_HTML_TAG_TFOOT:
+        case OS64_HTML_TAG_TR:
+            node_start_block(r, false);
+            walk_children(r, n, list);
+            block_break(r);
+            goto done;
+
+        // A `details` IS ITS SUMMARY, AND THE SUMMARY IS A PLACE TO LAND:
+        // Enter opens or closes what it folds, as a click does in any
+        // browser, drawn `>` closed and `v` open. What is folded away is
+        // not on the screen, and its links and boxes are no place to land
+        // until it is opened. With no `summary` of its own it is labelled
+        // "Details", as the standard says.
+        case OS64_HTML_TAG_DETAILS: {
+            bool open = wend_details_open(n, r->flipped, r->nflipped);
+            const os64_html_node_t *summary = NULL;
+            for (const os64_html_node_t *c = n->first_child; c && !summary; c = c->next)
+                if (c->kind == OS64_HTML_ELEMENT && c->ns == OS64_HTML_NS_HTML &&
+                    c->tag == OS64_HTML_TAG_SUMMARY)
+                    summary = c;
+            node_start_block(r, false);
+            if (summary) {
+                node_add(r, summary);
+                if (r->oom)
+                    goto done;
+            }
+            int32_t idx = spot_add(r, WEND_SPOT_TOGGLE, n, -1, -1);
+            if (idx > 0) {
+                r->spot = idx;
+                spot_mark(r, idx);
+            }
+            word_text(r, open ? "v " : "> ", 2);
+            if (summary)
+                walk_children(r, summary, list);
+            else
+                word_text(r, "Details", 7);
+            r->spot = saved_spot;
+            block_break(r);
+            if (open)
+                for (const os64_html_node_t *c = n->first_child; c && !r->oom; c = c->next)
+                    if (c != summary)
+                        walk(r, c, list);
+            goto done;
+        }
+
+        // A CELL IS TWO SPACES FROM ITS NEIGHBOUR AND NOTHING MORE. The old
+        // web's tables are LAYOUT — a page built as one big table reads
+        // acceptably as a sequence of rows, which is what lynx shows — and
+        // aligning columns is the graphical browser's boss, not this one's.
+        case OS64_HTML_TAG_TD: case OS64_HTML_TAG_TH:
+            // The word the PREVIOUS cell ended with is still held, so ask
+            // whether the row has anything on it only after laying it down —
+            // otherwise the first two cells of every row run together.
+            word_flush(r);
+            if (r->content)
+                line_text(r, "  ", 2);
+            walk_children(r, n, list);
+            goto done;
+
+        case OS64_HTML_TAG_UL: case OS64_HTML_TAG_OL:
+        case OS64_HTML_TAG_MENU: case OS64_HTML_TAG_DIR: {
+            list_t inner = { n->tag == OS64_HTML_TAG_OL, false, 1 };
+            if (inner.ordered) {
+                // A COUNTDOWN COUNTS DOWN, and starts at as many as it has:
+                // `<ol reversed>` is how a page writes a top-ten backwards,
+                // and showing it 1, 2, 3 says the opposite of what it means.
+                inner.down = os64_html_attr(n, "reversed") != NULL;
+                if (inner.down) {
+                    inner.next = 0;
+                    for (const os64_html_node_t *c = n->first_child; c; c = c->next)
+                        if (c->kind == OS64_HTML_ELEMENT && c->ns == OS64_HTML_NS_HTML
+                            && c->tag == OS64_HTML_TAG_LI && inner.next < 0x7FFFFFFF)
+                            inner.next++;
+                }
+                (void)attr_int(n, "start", &inner.next);
+            }
+            node_start_block(r, false);
+            r->indent += 2;
+            walk_children(r, n, &inner);
+            block_break(r);
+            r->indent = saved_indent;
+            goto done;
+        }
+
+        case OS64_HTML_TAG_LI:
+            node_start_block(r, false);
+            // An item may name its own number, and the ones after it carry
+            // on from there — which is what `value` is for.
+            if (list && list->ordered)
+                (void)attr_int(n, "value", &list->next);
+            list_marker(r, list);
+            walk_children(r, n, list);
+            block_break(r);
+            r->indent = saved_indent;
+            goto done;
+
+        case OS64_HTML_TAG_DD:
+            node_start_block(r, false);
+            r->indent += 4;
+            walk_children(r, n, list);
+            block_break(r);
+            r->indent = saved_indent;
+            goto done;
+
+        // `xmp` and `plaintext` are the 1993 spellings of `pre`, and the
+        // pages that still use them are exactly the ones whose columns are
+        // the meaning.
+        case OS64_HTML_TAG_PRE: case OS64_HTML_TAG_LISTING:
+        case OS64_HTML_TAG_XMP: case OS64_HTML_TAG_PLAINTEXT:
+            node_start_block(r, true);
+            r->pre++;
+            walk_children(r, n, list);
+            block_break(r);              // the last row, while it is still the
+            r->pre--;                    // author's own spacing
+            r->want_blank = true;
+            goto done;
+
+        case OS64_HTML_TAG_TEXTAREA:
+            field_textarea(r, n);
+            goto done;
+
+        case OS64_HTML_TAG_SELECT:
+            field_select(r, n);
+            goto done;
+
+        case OS64_HTML_TAG_INPUT:
+            field_input(r, n);
+            goto done;
+
+        case OS64_HTML_TAG_BUTTON:
+            field_button(r, n, list);
+            goto done;
+
+        case OS64_HTML_TAG_BR:
+            // A break the author asked for is a break even on an empty row —
+            // two of them in a row is how a page with no `p` writes a blank
+            // line. What it may not do is open the page with one.
+            word_flush(r);
+            if (r->content)
+                line_end(r, false);
+            else if (r->page->nlines > 0)
+                line_end(r, true);
+            goto done;
+
+        case OS64_HTML_TAG_HR: {
+            node_start_block(r, false);
+            char rule[256];
+            int32_t width = r->cols - indent_now(r);
+            if (width > (int32_t)sizeof(rule))
+                width = (int32_t)sizeof(rule);
+            for (int32_t i = 0; i < width; i++)
+                rule[i] = '-';
+            line_text(r, rule, (size_t)(width > 0 ? width : 0));
+            block_break(r);
+            goto done;
+        }
+
+        // ── The pen ──
+        case OS64_HTML_TAG_B: case OS64_HTML_TAG_STRONG:
+            r->attrs |= WEND_ATTR_BOLD;
+            break;
+
+        // Italic as UNDERLINE, which is lynx's answer and the only one a
+        // terminal with one font weight can give.
+        case OS64_HTML_TAG_I: case OS64_HTML_TAG_EM: case OS64_HTML_TAG_U:
+            r->attrs |= WEND_ATTR_UNDERLINE;
+            break;
+
+        // A LINK IS WHAT THE MODEL SAYS IS ONE: an `a` with an href, resolved
+        // there. An anchor with no address is a name, and one the model could
+        // not keep is drawn as the words it is.
+        case OS64_HTML_TAG_A: {
+            int32_t link = os64_page_link_for(r->model, n);
+            if (link < 0)
+                break;
+            int32_t idx = spot_add(r, WEND_SPOT_LINK, n, link, -1);
+            if (idx > 0) {
+                r->spot = idx;
+                spot_mark(r, idx);       // glued to the link's first word
+            }
+            break;
+        }
+
+        // An image is its alt text, which is what alt text is FOR. Without
+        // one, the word `[image]` — because a page that is one picture and
+        // no words should say so rather than look empty. Inside a link, both
+        // are the link's text, which is how a masthead stays followable.
+        case OS64_HTML_TAG_IMG: {
+            // AN EMPTY `alt` IS AN ANSWER, not a missing one: it is the page
+            // saying this picture is decoration and carries no words. Drawing
+            // `[image]` for it fills a page with prose its author deliberately
+            // did not write — a modern article's logos, icons and tracking
+            // pixels all say `alt=""`.
+            const os64_html_attr_t *alt = os64_html_attr(n, "alt");
+            if (alt && alt->value && alt->value[0]) {
+                word_text(r, "[", 1);
+                flow_text(r, alt->value, os64_strlen(alt->value));
+                word_text(r, "]", 1);
+            } else if (!alt) {
+                word_text(r, "[image]", 7);
+            }
+            goto done;
+        }
+
+        default:
+            break;                       // every other element is its contents
+    }
+
+    walk_children(r, n, list);
+
+done:
+    r->attrs = saved_attrs;
+    r->spot = saved_spot;
+    r->indent = saved_indent;
+}
+
+// ── The page's own facts ────────────────────────────────────────────────
+
+// The title, folded and collapsed: it goes on one row of chrome, so the
+// newlines and runs of spaces a page puts in its `title` element are noise.
+static void title_text(wend_page_t *page, const os64_html_node_t *title)
+{
+    size_t at = 0;
+    bool space_owed = false;
+    for (const os64_html_node_t *c = title->first_child; c; c = c->next) {
+        if (c->kind != OS64_HTML_TEXT || !c->text)
+            continue;
+        size_t i = 0;
+        while (i < c->text_len) {
+            uint32_t cp = 0;
+            size_t took = os64_utf8_decode(c->text + i, c->text_len - i, &cp);
+            i += took ? took : 1;
+            if (is_space(cp)) {
+                space_owed = at > 0;
+                continue;
+            }
+            char folded[WEND_FOLD_MAX];
+            size_t got = wend_fold(cp, folded);
+            if (!got)
+                continue;
+            if (space_owed && at + 1 < sizeof(page->title)) {
+                page->title[at++] = ' ';
+                space_owed = false;
+            }
+            if (at + got >= sizeof(page->title))
+                return;                  // a title this long is already said
+            os64_memcpy(page->title + at, folded, got);
+            at += got;
+            page->title[at] = '\0';
+        }
+    }
+}
+
+// ── Entry points ────────────────────────────────────────────────────────
+
+// The narrowest page this will lay out, which is a floor against absurdity
+// rather than a policy: an indent is capped at half the row, so every loop
+// here makes progress at any width, and a real terminal is far above this.
+#define WEND_COLS_MIN 4
+
+static wend_page_t *page_new(int32_t cols)
+{
+    wend_page_t *page = os64_calloc(1, sizeof(*page));
+    if (!page)
+        return NULL;
+    page->cols = cols < WEND_COLS_MIN ? WEND_COLS_MIN : cols;
+    return page;
+}
+
+bool wend_details_open(const os64_html_node_t *details,
+                       const os64_html_node_t *const *flipped, int32_t nflipped)
+{
+    bool open = os64_html_attr(details, "open") != NULL;
+    for (int32_t i = 0; i < nflipped; i++)
+        if (flipped[i] == details)
+            open = !open;
+    return open;
+}
+
+wend_page_t *wend_render_html(const os64_html_document_t *doc,
+                              const os64_page_t *model, int32_t cols,
+                              const os64_html_node_t *const *flipped, int32_t nflipped)
+{
+    wend_page_t *page = page_new(cols);
+    if (!page)
+        return NULL;
+    render_t r = { 0 };
+    r.page = page;
+    r.cols = page->cols;
+    r.model = model;
+    r.flipped = flipped;
+    r.nflipped = flipped ? nflipped : 0;
+    if (doc) {
+        if (doc->head)
+            for (const os64_html_node_t *c = doc->head->first_child; c; c = c->next)
+                if (c->kind == OS64_HTML_ELEMENT && c->tag == OS64_HTML_TAG_TITLE) {
+                    title_text(page, c);
+                    break;
+                }
+        const os64_html_node_t *root = doc->document ? doc->document : doc->html;
+        if (root)
+            walk(&r, root, NULL);
+    }
+    block_break(&r);
+    // A node at the very foot of a document has no row opening after it;
+    // it belongs to the last one there is.
+    nodes_bind(&r, page->nlines > 0 ? page->nlines - 1 : 0);
+    buf_free(&r.line);
+    buf_free(&r.word);
+    page->incomplete = r.oom;
+    return page;
+}
+
+wend_page_t *wend_render_text(const char *text, size_t len, bool utf8, int32_t cols)
+{
+    wend_page_t *page = page_new(cols);
+    if (!page)
+        return NULL;
+    render_t r = { 0 };
+    r.page = page;
+    r.cols = page->cols;
+    r.pre = 1;
+    if (text && len)
+        pre_bytes(&r, text, len, utf8);
+    // A file that ends without a newline still ends with a line.
+    if (r.content)
+        line_end(&r, false);
+    buf_free(&r.line);
+    buf_free(&r.word);
+    page->incomplete = r.oom;
+    return page;
+}
+
+void wend_page_free(wend_page_t *page)
+{
+    if (!page)
+        return;
+    for (int32_t i = 0; i < page->nlines; i++) {
+        os64_free(page->lines[i].text);
+        os64_free(page->lines[i].runs);
+    }
+    os64_free(page->lines);
+    os64_free(page->node_rows);
+    os64_free(page->spots);
+    os64_free(page);
+}
