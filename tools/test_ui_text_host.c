@@ -1611,6 +1611,18 @@ static void ui_test_field_selection(void)
     tf.w.cls->paint(&tf.w,&dc,&ui.theme);
     CHECK(canvas.px[6*SURF_W+5]==ui.theme.text_sel_bg);
     ui_test_field_burst(&tf,&ui,'D');CHECK(tf.cursor==0 && !tf.selected);
+    /* These printable Ctrl chords arrive untranslated from both keyboard
+     * drivers. They must preserve the field, selection, and clipboard. */
+    const char strangers[] = {'8', '6', '#', '!'};
+    for (size_t i = 0; i < sizeof(strangers); ++i) {
+        os64_ui_textfield_set(&ui,&tf,"203B59");
+        tf.anchor=1;tf.cursor=4;tf.selected=true;
+        memcpy(ui_test_clip,"keep",4);ui_test_clip_len=4;
+        ui_test_field_chord(&tf,&ui,strangers[i],OS64_GUI_MOD_CTRL);
+        CHECK(!strcmp(buf,"203B59") && tf.len==6);
+        CHECK(tf.selected && tf.anchor==1 && tf.cursor==4);
+        CHECK(ui_test_clip_len==4 && !memcmp(ui_test_clip,"keep",4));
+    }
     CHECK(os64_ui_font_release(&ui)==OS64_FONT_OK);
 }
 
