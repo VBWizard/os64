@@ -79,6 +79,7 @@ extern bool kRunHusk;    // launch the shell from the boot flow
 extern bool kRunTestrun; // launch /tests/testrun, the ring-3 half of the suite
 extern bool kRunCron;    // launch /bin/cron, the scheduler; the crontab says what it runs
 extern bool kRunSshd;
+extern bool kRunVncd;
 extern bool kRunTelnetd; // launch /bin/telnetd, the inbound shell (SERVERS.md)
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
@@ -1029,6 +1030,21 @@ void kernel_init()
         }
         else
             printf("  /bin/sshd launch failed (not on the image?)\n");
+    }
+
+    // The remote desktop's listener, the same way (REMOTE.md). It serves
+    // viewers only while a desktop runs, and says so to each one otherwise.
+    if (kRunVncd && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/vncd ...\n");
+        task_t *vncdTask = task_create("/bin/vncd", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (vncdTask)
+        {
+            vncdTask->autoReap = true;
+            scheduler_submit_new_task(vncdTask);
+        }
+        else
+            printf("  /bin/vncd launch failed (not on the image?)\n");
     }
 
     // THE LATE PHASE (2026-08-29). The slow post-boot tests, moved off the

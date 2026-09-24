@@ -795,6 +795,13 @@ the library serves every process). How it fits together:
     environment is for. **Adding a token here does not ship it to the P5** —
     the boot menu does not travel over the wire (DEBTS § Explicitly NOT
     debts), so say so out loud when you add one
+  - `VNCD`: launch `/bin/vncd`, the remote desktop (REMOTE.md). It listens
+    on 127.0.0.1 ONLY (port 5900 unless `vncd.conf` says otherwise) and is
+    reached through `SSHD`'s forwarding
+    (`ssh -N -L 5900:localhost:5900`), so a boot that wants remote access
+    carries both, and a GUI flag for there to be a desktop to serve. It is
+    not in any shipped entry, and like every token it does NOT travel to
+    the P5: that boot entry is edited there
   - `nolog` / `alllog`: Control logging (both lowercase — legacy)
   - `LOGD=<path>`: launch `/bin/logd` to append the kernel log to a file, and
     hold the kernel drainer off serial until it attaches

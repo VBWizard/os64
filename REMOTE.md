@@ -379,44 +379,81 @@ written down in DIVERGENCES rather than left to be discovered.
 
 ## 5. vncd — RFB 3.8
 
-- **Listens on `tcp!127.0.0.1!5900`** (port from `vncd.conf` on the ladder,
-  the sshd rule for unreadable files). It **refuses to start** on any
-  non-loopback address. One process per connection, the sshd and telnetd
-  pattern, capped at 4.
-- **The handshake:** `RFB 003.008`. Security types are `[None]`, then
-  SecurityResult OK. ClientInit's shared flag is ignored, because every
-  viewer is shared. ServerInit carries the screen size, native 32bpp
-  depth-24 little-endian true colour (R<<16 G<<8 B), and the name
-  `os64 on <HOSTNAME>`.
+- **Listens on `tcp!127.0.0.1!5900`** (the port from `vncd.conf` on the
+  ladder, with sshd's rule for an unreadable file). No setting names an
+  address, and if the announce on loopback fails, vncd does not start.
+  There is one process per connection, the sshd and telnetd pattern, capped
+  at 4, because each viewer holds a copy of the screen.
+- **The handshake:** it offers `RFB 003.008` and speaks 3.3, 3.7 and 3.8.
+  Anything newer is answered by 3.8's rules, as the RFC asks. The only
+  security type offered is None, followed by SecurityResult OK where the
+  version has one. ClientInit's shared flag is ignored, because every viewer
+  is shared. ServerInit carries the screen size, the native 32bpp depth-24
+  little-endian true colour (R<<16 G<<8 B), and the name
+  `os64 on <HOSTNAME>`. On a boot with no desktop, the handshake refuses in
+  the version's own words ("no desktop on this boot").
+- **A shadow of the screen.** Each session opens `/dev/glass` with `"u"`.
+  Every record it reads lands in a shadow copy and a dirty list of up to 32
+  rectangles, which fold into one when full. An update request is answered
+  from the shadow with the dirty rectangles inside the requested area; a
+  non-incremental request marks its whole area dirty first. While a text
+  terminal holds the screen, the frame is dimmed under a one-line notice
+  ("A text terminal has the screen. Alt+F8 brings the desktop back."), and
+  a change of hands re-sends everything.
 - **Client messages:**
-  - SetPixelFormat: any true-colour format is translated per pixel with
-    shift and max arithmetic. A colour-map format ends the session with a
-    logged reason, because RFB 3.8 gives the server no way to refuse it.
-  - SetEncodings: Raw always, and ZRLE after slice 6.
-  - FramebufferUpdateRequest: incremental requests are served from
-    `/dev/glass`, and a non-incremental one re-reads the named region.
-  - KeyEvent: X11 keysym to HID usage, US layout (os64's only one). The
-    modifier keysyms set the report's modifier byte. A repeat of a key
-    already down is dropped, because the kernel's typematic repeats it, as it
-    would a USB key. An unmapped keysym is logged once and ignored.
-  - PointerEvent: absolute coordinates. Buttons 1–3 map to L/M/R, and 4–7
-    are dropped.
-  - ClientCutText is ignored until the clipboard slice.
+  - SetPixelFormat: any 8, 16 or 32 bpp true-colour format, translated per
+    pixel with shift and max arithmetic. A colour-map format ends the
+    session with a logged reason, because RFB gives the server no way to
+    refuse it.
+  - SetEncodings: read and ignored, since Raw is always spoken (ZRLE is §6).
+  - FramebufferUpdateRequest: clipped to the screen, answered when
+    something in it is dirty.
+  - KeyEvent: X11 keysym to HID usage, US layout (os64's only one), keypad
+    digits as digits. A keysym that is the shifted face of its key ('!',
+    'A') carries Shift in the report whatever the viewer said about Shift,
+    so a viewer with a different layout still types the character it
+    showed. Meta is Alt, because some viewers send it that way. A repeat of
+    a key already down is dropped: the kernel repeats a held key, as it
+    does a USB key's. An unmapped keysym is logged and ignored.
+  - PointerEvent: absolute coordinates, buttons 1/2/3 to left, middle and
+    right. The wheel's 8 and 16 are dropped (DEBTS).
+  - ClientCutText: read and discarded, up to 1 MiB, until the clipboard
+    slice (DEBTS).
+  - Anything else ends the session. RFB messages carry no length, so an
+    unknown one cannot be skipped.
 - **Threads, the telnetd shape:** an inbound thread parses the socket and
-  writes input records. The outbound thread waits on the glass while a
-  request is outstanding, encodes, and is the ONLY writer of the socket. A
-  TCP write copies what fits and resumes, so two writers could interleave
-  inside a message (SERVERS.md § 3). Nothing the client sends needs a reply
-  from the inbound side.
-- **Launch:** `vncd &` at a prompt, or a `VNCD` command-line token that
-  mirrors `SSHD`. **A token does not travel to the P5**: the P5's boot entry
-  has to be edited there.
-- **Proof:** host `tools/vncd_probe.py`, a small pure-Python RFB client. It
-  runs the handshake, requests a full frame and compares it with QEMU's
-  `screendump`, requests incremental updates across a window drag, requests
-  a 16bpp format, and types into gterm and reads it back through the screen.
-  The run goes through the real path: host `ssh -L` → QEMU hostfwd → sshd →
-  loopback → vncd. Then a real viewer: TigerVNC.
+  writes input records. The outbound thread reads the glass, answers
+  requests, and is the ONLY writer of the socket. A TCP write copies what
+  fits and resumes, so two writers could interleave inside a message
+  (SERVERS.md § 3). The two share a pixel format and one outstanding
+  request under a yield-on-contention lock, because libos64 has no mutex.
+  Closing the glass at the end lifts anything the viewer held.
+- **Launch:** `vncd &` at a prompt, or the `VNCD` command-line token that
+  mirrors `SSHD` (CLAUDE.md's token list). **A token does not travel to the
+  P5**: the P5's boot entry has to be edited there, and it needs `SSHD` and
+  the GUI too.
+- **Proof:** host `tools/vncd_probe.py`, a small pure-Python RFB client, run
+  through the real path: host `ssh -N -L` → QEMU hostfwd → sshd → loopback →
+  vncd. It checks:
+  - the handshake;
+  - a full Raw frame, equal to QEMU's own `screendump` in all 786,432
+    pixels;
+  - an incremental update after a pointer move, a single rectangle;
+  - RGB565, matching the 32-bit frame quantized;
+  - Ctrl+Alt+F1 typed through the viewer, and the bannered frame;
+  - a command typed into husk through the viewer, which a separate `ssh`
+    exec then confirmed ran;
+  - Alt+F8 bringing the desktop back.
+
+  Measured under QEMU's emulated CPU, with software AES in sshd: a full
+  1024x768 frame takes 880 ms at 32 bpp and 384 ms at 16 bpp, and a pointer
+  move's update takes 66 ms round trip. A real viewer ran it on the P5 on
+  2026-09-23: TigerVNC 1.16.2 on Windows through an `ssh -L` tunnel, against
+  the whole stack (ZRLE, § 6, included), with its default encoding list,
+  which puts ZRLE ahead of Raw, and with Raw forced.
+  The desktop, typing, window drags, VT switching (Ctrl+Alt+Space, then the
+  key) and the text-terminal banner all worked; the lag it showed at first
+  was Windows' ssh client (see Using it).
 
 ## 6. ZRLE — the pleasant one
 

@@ -70,6 +70,11 @@ bool kRunCron = false;
 bool kRunTelnetd = false;
 // SSHD requests the userland SSH listener; absent means no SSH listener.
 bool kRunSshd = false;
+// VNCD requests the remote-desktop listener (REMOTE.md). It listens on
+// loopback only, so on its own it serves nobody off the machine: it is
+// reached through SSHD's forwarding, and a boot that wants remote access
+// carries both tokens.
+bool kRunVncd = false;
 // DIRECTLOG: printd writes STRAIGHT to COM1 with the polled writer, bypassing
 // the per-core queues entirely.
 //
@@ -328,6 +333,7 @@ static cmdopt_t cmdopts[] = {
     {"CRON", OPT_BOOL, &kRunCron, true, 0},
     {"TELNETD", OPT_BOOL, &kRunTelnetd, true, 0},
     {"SSHD", OPT_BOOL, &kRunSshd, true, 0},
+    {"VNCD", OPT_BOOL, &kRunVncd, true, 0},
     {"DIRECTLOG", OPT_BOOL, &kDirectLog, true, 0},
     {"NOTRACE", OPT_BOOL, &kEnableStackTrace, false, 0},
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},
