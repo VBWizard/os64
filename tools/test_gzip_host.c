@@ -375,8 +375,130 @@ static int run_sync(const uint8_t *input_bytes, size_t input_length,
     return failed;
 }
 
+// The flush's edges (Fable's #125 review). A: a stream given end_of_input
+// that ran out of room has its FINAL block pending; a flush then is refused,
+// and process() finishes a valid stream. B: a flush cut short by NEED_OUTPUT
+// and completed by process() must not leave the next flush without its
+// marker. Writes A's stream to `path_a`, and B's stream to `path_b` with the
+// offset of its second flush point in `path_b_cut`.
+static int run_edges(const uint8_t *in, size_t n, const char *path_a,
+                     const char *path_b, const char *path_b_cut)
+{
+    size_t capacity = n * 2 + 4096;
+    uint8_t *buf = calloc(1, capacity);
+    os64_deflate_t *z = os64_deflate_create();
+    if (buf == NULL || z == NULL)
+        return 2;
+    int failed = 0;
+
+    // A, on an input short enough to be one block, so the block pending when
+    // room runs out is the FINAL one.
+    size_t short_n = n < 1000 ? n : 1000;
+    const uint8_t *input = in;
+    size_t input_left = short_n, pos = 0;
+    uint8_t *output = buf;
+    size_t left = 1;
+    if (os64_deflate_process(z, &input, &input_left, &output, &left, true) != OS64_DEFLATE_NEED_OUTPUT)
+        failed = 10;
+    pos = 1 - left;
+    output = buf + pos;
+    left = 64;
+    if (!failed && os64_deflate_flush(z, &output, &left) != OS64_DEFLATE_BAD_ARGUMENT)
+        failed = 11;   // a finishing stream refuses a flush
+    for (int turns = 0; !failed; turns++) {
+        output = buf + pos;
+        left = capacity - pos;
+        int status = os64_deflate_process(z, &input, &input_left, &output, &left, true);
+        pos = capacity - left;
+        if (status == OS64_DEFLATE_DONE)
+            break;
+        if (status != OS64_DEFLATE_NEED_OUTPUT || turns > 1000)
+            failed = 12;
+    }
+    if (!failed && (input_left != 0 || write_file(path_a, buf, pos) < 0))
+        failed = 13;
+    os64_deflate_destroy(z);
+
+    // B
+    z = os64_deflate_create();
+    size_t half = n / 2;
+    input = in;
+    input_left = half;
+    pos = 0;
+    output = buf;
+    left = capacity;
+    if (!failed && os64_deflate_process(z, &input, &input_left, &output, &left, false) != OS64_DEFLATE_NEED_INPUT)
+        failed = 20;
+    pos = capacity - left;
+    output = buf + pos;
+    left = 1;
+    if (!failed && os64_deflate_flush(z, &output, &left) != OS64_DEFLATE_NEED_OUTPUT)
+        failed = 21;   // the flush, cut short
+    pos += 1 - left;
+    input_left = 0;
+    output = buf + pos;
+    left = capacity - pos;
+    if (!failed && os64_deflate_process(z, &input, &input_left, &output, &left, false) != OS64_DEFLATE_NEED_INPUT)
+        failed = 22;   // process() completes the flush's emission
+    pos = capacity - left;
+    // A block's worth with one byte of room: process() leaves its own block
+    // pending, which is the first thing the next flush meets. A `flushing`
+    // left over from the cut-short flush made that flush stop after emitting
+    // it, with no marker.
+    input = in + half;
+    input_left = n - half;
+    output = buf + pos;
+    left = 1;
+    if (!failed && os64_deflate_process(z, &input, &input_left, &output, &left, false) != OS64_DEFLATE_NEED_OUTPUT)
+        failed = 23;
+    pos += 1 - left;
+    output = buf + pos;
+    left = capacity - pos;
+    if (!failed && os64_deflate_flush(z, &output, &left) != OS64_DEFLATE_NEED_INPUT)
+        failed = 24;
+    pos = capacity - left;
+    if (!failed && (pos < 4 || memcmp(buf + pos - 4, "\x00\x00\xff\xff", 4) != 0))
+        failed = 25;   // the flush wrote its own marker
+    size_t cut = pos, consumed = n - input_left;
+    for (int turns = 0; !failed; turns++) {
+        output = buf + pos;
+        left = capacity - pos;
+        int status = os64_deflate_process(z, &input, &input_left, &output, &left, true);
+        pos = capacity - left;
+        if (status == OS64_DEFLATE_DONE)
+            break;
+        if (status != OS64_DEFLATE_NEED_OUTPUT || turns > 1000)
+            failed = 26;
+    }
+    if (!failed && write_file(path_b, buf, pos) < 0)
+        failed = 27;
+    if (!failed) {
+        FILE *f = fopen(path_b_cut, "w");
+        if (f == NULL)
+            failed = 28;
+        else {
+            fprintf(f, "%zu %zu\n", cut, consumed);
+            fclose(f);
+        }
+    }
+    if (failed)
+        fprintf(stderr, "flush edges failed at step %d\n", failed);
+    os64_deflate_destroy(z);
+    free(buf);
+    return failed ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 6 && strcmp(argv[1], "edges") == 0) {
+        size_t input_length = 0;
+        uint8_t *input = read_file(argv[2], &input_length);
+        if (input == NULL)
+            return 2;
+        int result = run_edges(input, input_length, argv[3], argv[4], argv[5]);
+        free(input);
+        return result;
+    }
     if (argc == 7 && strcmp(argv[1], "sync") == 0) {
         size_t input_length = 0;
         uint8_t *input = read_file(argv[2], &input_length);

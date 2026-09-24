@@ -46,7 +46,9 @@ os64_deflate_status_t os64_deflate_process(os64_deflate_t *stream,
 // inflate stops at, which is how an RFB viewer's ZRLE decoder knows a
 // rectangle is complete. The 32 KiB history survives the flush.
 // NEED_OUTPUT: call again with more room. NEED_INPUT: the flush is complete
-// and the stream takes input again. BAD_ARGUMENT after the stream is DONE.
+// and the stream takes input again. BAD_ARGUMENT once the stream is ending:
+// after process() was given end_of_input (its final block is pending, and
+// only process() may finish it) or after DONE.
 os64_deflate_status_t os64_deflate_flush(os64_deflate_t *stream,
                                           uint8_t **output,
                                           size_t *output_length);

@@ -323,6 +323,11 @@ os64_deflate_status_t os64_deflate_flush(os64_deflate_t *stream,
         (*output_length != 0 && *output == NULL) ||
         stream->mode == DEFLATE_MODE_DONE)
         return OS64_DEFLATE_BAD_ARGUMENT;
+    // A stream whose final block is pending is ending: a flush would emit
+    // it, return to COLLECT and append a stored block after BFINAL, a
+    // corrupt stream that never reaches DONE. Only process() finishes it.
+    if (stream->final_pending)
+        return OS64_DEFLATE_BAD_ARGUMENT;
 
     for (;;) {
         if (stream->mode == DEFLATE_MODE_EMIT) {
@@ -380,6 +385,10 @@ os64_deflate_status_t os64_deflate_process(os64_deflate_t *stream,
         if (stream->mode == DEFLATE_MODE_EMIT) {
             if (!emit_pending(stream, output, output_length))
                 return OS64_DEFLATE_NEED_OUTPUT;
+            // Whatever was pending has gone, a flush's marker included: a
+            // flush that returned NEED_OUTPUT and was finished here must not
+            // leave the next flush thinking its marker is still owed.
+            stream->flushing = false;
             if (stream->final_pending) {
                 stream->mode = DEFLATE_MODE_DONE;
                 return OS64_DEFLATE_DONE;

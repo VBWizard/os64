@@ -190,6 +190,27 @@ for stream in streams:
 PY
 echo "raw sync flush: every flush point decodes, marker, stream finishes PASS"
 
+# The flush's edges: a finishing stream refuses a flush and still ends
+# valid; a flush completed by process() leaves the next one its marker.
+ASAN_OPTIONS=detect_leaks=0 "$work/test_gzip" edges "$work/payload" \
+    "$work/edge-a" "$work/edge-b" "$work/edge-b.cut"
+python3 - "$work" <<'PY'
+import pathlib
+import sys
+import zlib
+root = pathlib.Path(sys.argv[1])
+payload = (root / "payload").read_bytes()
+d = zlib.decompressobj(-15)
+assert d.decompress((root / "edge-a").read_bytes()) + d.flush() == payload[:1000] and d.eof
+data = (root / "edge-b").read_bytes()
+cut, consumed = map(int, (root / "edge-b.cut").read_text().split())
+d = zlib.decompressobj(-15)
+assert data[cut - 4:cut] == b"\x00\x00\xff\xff"
+assert d.decompress(data[:cut]) == payload[:consumed]
+assert d.decompress(data[cut:]) + d.flush() == payload[consumed:] and d.eof
+PY
+echo "raw flush edges: an ending stream refuses a flush; a completed flush leaves the next its marker PASS"
+
 run raw "$work/encoded-raw-1-1" "$work/payload" 3 5 \
     18446744073709551615 done 0
 run gzip "$work/encoded-gzip-1-1" "$work/payload" 3 5 \
