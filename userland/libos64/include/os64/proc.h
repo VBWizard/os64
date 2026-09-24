@@ -34,10 +34,10 @@ void os64_exit(int32_t code) __attribute__((noreturn));
 // shell BUILTIN and always has been, in every shell, ever.
 
 // Copy the cwd (canonical, absolute, NUL-terminated) into buf. Returns its
-// length, or negative if the buffer is too small. A path is bounded by the
-// same number spawn's arguments are — OS64_SPAWN_ARG_MAX, terminator included
-// — so a buffer of that size always suffices. (This said 128 while the kernel
-// said 256, which is the reason the number is published rather than retyped.)
+// length, or negative if the buffer is too small. A path is bounded by
+// OS64_PATH_MAX, terminator included, so a buffer of that size always
+// suffices. (This said 128 while the kernel said 256, which is the reason the
+// number is published rather than retyped.)
 int64_t os64_getcwd(char *buf, size_t len);
 
 // The ENVIRONMENT — more process state. The kernel maps every task's env
@@ -82,7 +82,10 @@ int64_t os64_chdir(const char *path);
 
 // Spawn `path` as a child, non-blocking. `argv` is a NULL-terminated array of
 // string pointers (argv[0] conventionally the program name); pass NULL for no
-// args. Returns the child's pid (> 0), or negative on error. The child
+// args. Returns the child's pid (> 0), or negative on error —
+// OS64_SPAWN_TOO_LONG when the arguments are more than a spawn carries (each
+// at most OS64_SPAWN_ARG_MAX bytes including NUL, 512 arguments, and a
+// mebibyte in all including pointers). The child
 // inherits this process's environment.
 int64_t os64_spawn(const char *path, char *const argv[]);
 
@@ -134,7 +137,7 @@ int64_t os64_spawn_seated(const char *path, char *const argv[], int64_t master);
 // unresolved when nothing matched, so the spawn that follows delivers the
 // "no" and the caller reports the name the user typed. A candidate that
 // would not fit `resolved` is skipped, not truncated. The buffer must stay
-// alive until the spawn; OS64_SPAWN_ARG_MAX bytes is exactly what a spawnable
+// alive until the spawn; OS64_PATH_MAX bytes is exactly what a spawnable
 // path can be, so nothing that fits there is lost for want of room here.
 const char *os64_resolve_command(const char *command, char *resolved,
                                  size_t capacity);

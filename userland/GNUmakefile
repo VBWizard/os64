@@ -75,7 +75,7 @@ CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
            $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include \
-           -I$(CURDIR)/libhtml/include -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libtls/include -I$(CURDIR)/libfetch/include
+           -I$(CURDIR)/libhtml/include -I$(CURDIR)/libpage/include -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libtls/include -I$(CURDIR)/libfetch/include
 # -z noexecstack: bare-metal objects carry no .note.GNU-stack section (that
 # annotation is a Linux userspace convention), and without the flag ld warns
 # about one arbitrary object per link — noise with no meaning here, since
@@ -137,7 +137,7 @@ LAUNCH_OBJS := $(patsubst %,$(OBJ)/%.o,$(LAUNCH_SRCS))
 # the same day: a shared object's relocations resolve against itself and its
 # own dependencies (never against the executable that loaded it), so the
 # library has to carry every symbol the library uses.
-LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/arena.c libos64/decoration_prepare.c libos64/decoration_session.c libos64/decoration_startup.c libos64/env.c libos64/str.c libos64/walk.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_theme.c libos64/ui_session.c libos64/ui_envelope.c libos64/ui_saved.c libos64/ui_list.c libos64/ui_palette.c libos64/ui_color.c libos64/ui_controls.c libos64/ui_text.c libos64/ui_font.c libos64/ui_font_settings.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/thread_trampoline.S \
+LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/proc_command.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/arena.c libos64/decoration_prepare.c libos64/decoration_session.c libos64/decoration_startup.c libos64/env.c libos64/str.c libos64/bidi.c libos64/walk.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_theme.c libos64/ui_session.c libos64/ui_envelope.c libos64/ui_saved.c libos64/ui_list.c libos64/ui_palette.c libos64/ui_color.c libos64/ui_controls.c libos64/ui_text.c libos64/ui_font.c libos64/ui_font_settings.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/thread_trampoline.S \
     libos64/text.c libos64/text_cache.c libos64/text_decode.c libos64/text_bitmap.c libos64/text_draw.c libos64/font_provider.c libos64/font_adopt.c libos64/font_config.c libos64/font_discovery.c libos64/font_install.c libos64/font_psf2.c
 # PIC objects live under obj/pic/ — a separate tree, because these are
 # compiled with different flags than everything else and an object built for
@@ -223,7 +223,7 @@ LIBFETCH_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libfetch.so
 # isolation would miss a hash collision and prelink two objects into the same
 # slot. app_bases.py sorts before probing, so adding a library gives the build
 # one deterministic map independent of link order.
-LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so libfreetype.so)
+LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so libpage.so libfreetype.so)
 LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
 LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
 LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
@@ -265,7 +265,14 @@ TELNET_ENGINE_OBJ      := $(OBJ)/apps/telnet/telnet_protocol.c.o
 LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd
 
 # Programs that download: they name libfetch and get its whole closure.
-LIBFETCH_PROGRAMS := os64get
+LIBFETCH_PROGRAMS := os64get wend
+# What a page MEANS is a browser's edge and nobody else's (LIBPAGE.md).
+# `wend` declares the edge before it CALLS anything through it, which is
+# deliberate: the library is otherwise on the image with nothing loading it,
+# and a prelink slot that collides or a `.so` that will not resolve is worth
+# finding on the boot that ships the library rather than on the one that
+# starts using it. The calls arrive with the renderer's lift.
+LIBPAGE_PROGRAMS := wend pagetest
 
 # pngtest directly checks the codec; gview and desktop use libimage.
 # libpng carries its own DT_NEEDED edge on
@@ -345,12 +352,13 @@ include libjpeg/shared.mk
 include libfreetype/shared.mk
 include libimage/shared.mk
 include libhtml/library.mk
+include libpage/library.mk
 
 # Source membership and the population used for prelink placement live here.
-$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO) $(LIBFREETYPE_SO): GNUmakefile
+$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFREETYPE_SO): GNUmakefile
 
 .PHONY: all
-all: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBFREETYPE_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
+all: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBJPEG_SO) $(LIBFREETYPE_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
      $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
 
 $(BIN)/[: $(BIN)/test
@@ -453,7 +461,8 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
-APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest),$(LIBHTML_SO)) \
+APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest),$(LIBHTML_SO)) \
+                       $(if $(filter $(1),$(LIBPAGE_PROGRAMS)),$(LIBPAGE_SO)) \
                        $(if $(filter $(1),gview desktop jpegtest),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
                        $(if $(filter $(1),fonttest texttest),$(LIBFREETYPE_SO)) \
@@ -481,7 +490,7 @@ $(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
 # FIXTURES ARE IN HERE TOO, and that is the point of the line rather than an
 # afterthought: a fixture is the program you are most likely to be single-
 # stepping, because it is what you reach for when something is already broken.
-$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBFREETYPE_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
+$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBJPEG_SO) $(LIBFREETYPE_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
 	@mkdir -p "$(BIN)"
 	@printf '# GENERATED by userland/GNUmakefile — do not edit.\n' > $@
 	@printf '# Every program at its own base, so GDB can hold all their symbols at once.\n' >> $@
@@ -508,6 +517,7 @@ $(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBJPEG_SO) $(LIBFREETYPE_SO) $(LIBIMAGE_S
 	@printf 'add-symbol-file %s\n' "$(LIBIMAGE_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBFETCH_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBHTML_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBPAGE_SO)" >> $@
 	@printf '# (symbols for %s + every shared library above)\n' "$(APPS) $(TESTS)" >> $@
 
 # Every .d gcc emitted for the runtime and each app — self-maintaining: each

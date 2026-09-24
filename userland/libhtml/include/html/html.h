@@ -55,6 +55,9 @@ typedef struct os64_html_node {
     os64_html_attr_t *attrs;
     struct os64_html_node *template_contents;
     struct os64_html_node *parent, *first_child, *last_child, *prev, *next;
+    /* Parser association at insertion, or NULL; document-owned, possibly
+     * non-ancestor. Consumers resolve form= and ancestry separately. */
+    struct os64_html_node *form_owner;
 } os64_html_node_t;
 
 typedef struct {
@@ -94,6 +97,24 @@ const os64_html_attr_t *os64_html_attr(const os64_html_node_t *element, const ch
 os64_html_tag_t os64_html_tag_from_name(const char *name);
 const char *os64_html_tag_name(os64_html_tag_t tag);
 const char *os64_html_status_name(int64_t status);
+
+/* THE ENCODING TABLE ANSWERS FOR EVERYONE, so nothing carries a second copy
+ * of it. A parser needs to read a label and decode bytes; a consumer asking
+ * what a form's accept-charset names, and writing that encoding back out,
+ * needs the same table read the other way.
+ *
+ * `os64_html_encoding_for_label` takes one label of `len` bytes, ASCII
+ * whitespace at either end ignored, and answers with the canonical name of
+ * the encoding it names — "utf-8", "windows-1252", "utf-16le", "utf-16be",
+ * the four this parser decodes — or NULL for a label it does not know. The
+ * name is a literal and outlives any document.
+ *
+ * `os64_html_encode_windows_1252` is the Encoding Standard's single-byte
+ * encoder for that index. False means the encoding has no byte for the code
+ * point, which is a fact and not an error: what to send instead belongs to
+ * whoever is doing the sending. */
+const char *os64_html_encoding_for_label(const char *label, size_t len);
+bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out);
 
 #pragma GCC visibility pop
 

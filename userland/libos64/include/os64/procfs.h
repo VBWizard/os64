@@ -10,6 +10,7 @@
 #include <stdbool.h>
 
 #define OS64_PROC_NAME_MAX 64
+// Bounded display summary in the existing process-record ABI.
 #define OS64_PROC_COMMAND_MAX 256
 
 typedef enum {
@@ -90,6 +91,11 @@ int32_t os64_proc_snapshot(os64_proc_info_t *out, size_t capacity);
 // which already own an identity-keyed cache and should not allocate a second
 // whole-system snapshot merely to share the parser.
 int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out);
+// Read the complete command, joining cmdline's argument lines with spaces.
+// Returns 0 and allocated NUL-terminated text (release with os64_free), or -1
+// and *out == NULL on read/allocation/size failure. Empty reports yield "".
+// The 1 MiB read ceiling covers the child's argv window; no prefix is returned.
+int32_t os64_proc_command(uint64_t pid, char **out);
 int32_t os64_proc_read_thread(uint64_t pid, uint64_t tid,
                               os64_thread_info_t *out);
 

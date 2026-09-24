@@ -6,3 +6,8 @@ tools/html5lib-tests/** -text -whitespace linguist-vendored
 tools/html_corpus/** -text -whitespace linguist-vendored
 userland/libhtml/*.inc linguist-generated
 userland/libhtml/include/html/tags.h linguist-generated
+
+# Keep pinned numeric sources byte-identical to their upstream revisions.
+userland/libpage/upstream/musl/** -text -whitespace linguist-vendored
+userland/libpage/upstream/ryu/ryu/** -text -whitespace linguist-vendored
+tools/test_libpage_range.inc linguist-generated

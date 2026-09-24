@@ -9,7 +9,8 @@
 #define SSH_OUTPUT_CAP 131072u
 #define SSH_WINDOW 2097152u
 #define SSH_DATA_MAX 32768u
-#define SSH_COMMAND_MAX 255u
+#include "../husk/limits.h"
+#define SSH_COMMAND_MAX (HUSK_LINE_MAX - 1u)
 #define SSH_KEYS_MAX 64u
 #define SSH_KEY_BLOB_MAX 104u
 #define SSH_IDENT "SSH-2.0-os64sshd_1.0"
