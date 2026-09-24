@@ -62,6 +62,7 @@ static bool   s_zrle;             // the viewer prefers ZRLE to Raw
 static bool   s_request;          // an update request is outstanding
 static bool   s_request_full;     // ... and it asked for everything in its rectangle
 static rect_t s_request_rect;
+static uint32_t s_request_generation;   // bumped by every request posted
 static volatile bool s_quit;      // either thread: the session is over
 
 static void lock(void)
@@ -399,12 +400,9 @@ static void outbound(void)
 	{
 		// A short patience, so a request that arrives while the screen is
 		// still is answered within a couple of ticks; then take what else
-		// the glass already holds without waiting — up to a BUDGET. While a
-		// window is dragged the compositor adds a change every frame, so a
-		// drain that runs "until empty" never ends, and the viewer is never
-		// answered until the drag stops (the P5, 2026-09-23: seconds of
-		// nothing, then everything). What the budget leaves stays in the
-		// glass and is taken on the next turn; the shadow is eventually
+		// the glass already holds without waiting, up to a budget, so a turn
+		// always ends however busy the screen is. What the budget leaves
+		// stays in the glass for the next turn; the shadow is eventually
 		// exact either way.
 		int64_t n = os64_read_for(s_glass, rec, sizeof(rec), 20);
 		size_t taken = 0;
@@ -426,6 +424,7 @@ static void outbound(void)
 		bool want = s_request;
 		bool full = s_request_full;
 		rect_t r = s_request_rect;
+		uint32_t generation = s_request_generation;
 		vnc_format_t pf = s_format;
 		bool zrle = s_zrle;
 		unlock();
@@ -441,9 +440,15 @@ static void outbound(void)
 		}
 		if (!pending)
 			continue;                        // incremental and nothing changed: wait
+		// Cleared only if no request arrived since the snapshot: one posted
+		// in between (a SetPixelFormat and a full request while an
+		// incremental one waits) is the next turn's to answer, not lost.
 		lock();
-		s_request = false;
-		s_request_full = false;
+		if (s_request_generation == generation)
+		{
+			s_request = false;
+			s_request_full = false;
+		}
 		unlock();
 		if (!answer(r, &pf, zrle))
 			break;
@@ -666,6 +671,7 @@ static int64_t inbound(void *unused)
 				s_request = true;
 				s_request_full = s_request_full || m[0] == 0;
 				s_request_rect = clipped;
+				s_request_generation++;
 				unlock();
 				break;
 			}
