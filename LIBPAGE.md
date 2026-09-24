@@ -389,10 +389,13 @@ sweep runs here as it runs in libhtml).
 
 ## Bounds
 
-- **The radio search is bounded.** A group is settled by a whole-document
-  search per group under a work budget; `wend` renders a 40,000-radio page
-  in 0.45 s and this must not regress. Settle every group ONCE at build,
-  not at every tick.
+- **No question is asked once per control.** A page is an attacker's lever,
+  and libhtml's size limit is the attacker's budget, so anything answered
+  per control must not cost the size of the page. Radio groups are chained
+  and linked at build, and validation judges each group once; a disabled
+  fieldset's first legend is found once, as the walk enters it; a
+  `dir=auto` element's direction is found once per submission. The host
+  suite builds and submits one page carrying tens of thousands of each.
 - **The forms table is swept once**, at build, so `form=` is answerable
   during the walk.
 - **Sizes ride libhtml's.** A page libhtml accepted is a page libpage
@@ -611,7 +614,9 @@ the text either wrong or under-specified. Nothing here changes a RULING.
    be the same bug in a new place.
 4. **No work budget on the radio search.** Every radio sharing a name is
    CHAINED at build, so settling a group is a walk of the group instead of a
-   walk of the document, and the whole build is linear. *Bounds*' "must not
+   walk of the document, and the whole build is linear (a disabled
+   fieldset's first legend, found once per control until PR #98's review
+   caught it, is found once per fieldset). *Bounds*' "must not
    regress" is satisfied by construction; a knob that could never fire would
    be a knob that lies about the cost.
 5. **libpage owns the scheme default-port table**, which `os64/url.h`

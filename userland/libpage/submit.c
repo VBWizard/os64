@@ -146,18 +146,16 @@ static bool text_like(const os64_page_control_t *c)
 
 // A radio group is required when ANY member says so, and it is satisfied
 // when any member is ticked — one question, one answer, however many of the
-// buttons carry the attribute.
+// buttons carry the attribute. The group is judged ONCE, at the first member
+// validation applies to, over its own linked members: judging it at every
+// member made a form of N radios cost N² to submit.
 static bool radio_group_ok(const os64_page_t *page, int32_t control)
 {
-    const os64_page_control_t *c = &page->controls[control];
-    if (c->name == NULL || c->name[0] == '\0')
-        return !c->required || c->checked;
-    const void *head = p_strmap_get(&page->radio_map, c->name);
+    int32_t head = page->group_head[control];
+    if (page->group_judged_at[head] != control)
+        return true;                     // judged at another member, or will be
     bool required = false, ticked = false;
-    for (int32_t at = head != NULL ? p_ptrmap_get(&page->control_map, head) : -1; at >= 0;
-         at = page->radio_next[at]) {
-        if (page->controls[at].form != c->form)
-            continue;
+    for (int32_t at = head; at >= 0; at = page->group_next[at]) {
         required = required || page->controls[at].required;
         ticked = ticked || page->controls[at].checked;
     }
@@ -377,7 +375,8 @@ static bool auto_uses_value(const os64_page_control_t *c)
 
 // Values come from the current model, including when an ancestor control
 // supplies the inherited direction. Ordinary auto containers use scoped text.
-static const char *directionality(const os64_page_t *page, const os64_page_control_t *c)
+static const char *directionality(const os64_page_t *page, const os64_page_control_t *c,
+                                  PEntries *entries)
 {
     for (const os64_html_node_t *up = c->node; up != NULL; up = up->parent) {
         int dir = dir_state(up);
@@ -385,9 +384,16 @@ static const char *directionality(const os64_page_t *page, const os64_page_contr
         if (dir == 2) return "rtl";
         const os64_page_control_t *control = os64_page_control(page, os64_page_control_for(page, up));
         if (dir == 3 || (up->ns == OS64_HTML_NS_HTML && up->tag == OS64_HTML_TAG_BDI)) {
-            os64_bidi_strong_t strong = control != NULL && auto_uses_value(control)
-                ? os64_bidi_first_strong(control->value, control->value_len)
-                : contained_direction(up);
+            os64_bidi_strong_t strong;
+            if (control != NULL && auto_uses_value(control)) {
+                strong = os64_bidi_first_strong(control->value, control->value_len);
+            } else {
+                int32_t known = p_ptrmap_get(&entries->direction, up);
+                strong = known >= 0 ? (os64_bidi_strong_t)known : contained_direction(up);
+                // A cache that cannot grow only costs the scan again.
+                if (known < 0)
+                    (void)p_ptrmap_put(&entries->direction, up, (int32_t)strong);
+            }
             return strong == OS64_BIDI_R || strong == OS64_BIDI_AL ? "rtl" : "ltr";
         }
         if (control != NULL && control->input == OS64_PAGE_INPUT_TEL)
@@ -534,7 +540,7 @@ bool p_entry_list(const os64_page_t *page, int32_t form, int32_t submitter,
         if (value == NULL || !add_normalised(out, c->name, value, value_len, false))
             return false;
         if (sends_dirname(c)) {
-            const char *which = directionality(page, c);
+            const char *which = directionality(page, c, out);
             if (which == NULL || !add_normalised(out, c->dirname, which, os64_strlen(which), false))
                 return false;
         }
@@ -544,6 +550,7 @@ bool p_entry_list(const os64_page_t *page, int32_t form, int32_t submitter,
 
 void p_entries_free(PEntries *entries)
 {
+    p_ptrmap_free(&entries->direction);
     os64_free(entries->items);
     p_arena_free(&entries->arena);
     entries->items = NULL;

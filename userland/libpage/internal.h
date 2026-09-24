@@ -103,6 +103,16 @@ struct os64_page {
     // radio sharing a name; the owner is compared when it is walked.
     PStrMap radio_map;
     int32_t *radio_next;            // per control; -1 ends the chain
+    // ONE GROUP, LINKED: its first member (a control's own index when it is
+    // in no group) and the next member of the same name AND owner, -1 at the
+    // end. Built once, so a question about a whole group — validation's
+    // "is anything ticked?" — costs its size and not its size times itself.
+    int32_t *group_head;
+    int32_t *group_next;
+    // Per group head: the first member validation applies to, where the
+    // group is judged so that failures still come out in tree order; -1
+    // when every member is barred.
+    int32_t *group_judged_at;
 
     // The first VALID declarative refresh in tree order. An invalid pragma
     // sets nothing, which is what leaves a later one free to win.
@@ -229,6 +239,10 @@ typedef struct {
     PEntry *items;
     int32_t count, cap;
     PArena arena;                   // the normalised bytes, and nothing of the page's
+    // A `dir=auto` element's direction, by node, for this one list: every
+    // `dirname` control under one such element would otherwise scan its
+    // whole subtree again.
+    PPtrMap direction;
 } PEntries;
 
 // The control a submission submits FROM, or -1 for a form submitting

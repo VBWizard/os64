@@ -375,28 +375,15 @@ char *p_subtree_text(os64_page_t *page, const os64_html_node_t *n, bool collapse
 // A disabled `fieldset` disables its descendants — EXCEPT those inside its
 // first `legend` child, which is where the control that turns the group back
 // on lives. The exception is per fieldset, so a control can sit in the
-// legend of one and in the body of another.
-static bool disabled_by_fieldset(const os64_html_node_t *n)
+// legend of one and in the body of another. The walk carries the answer down
+// (collect_model's `off`), finding each fieldset's first legend once: asking
+// it again per control made a legendless fieldset of N inputs cost N².
+static const os64_html_node_t *first_legend(const os64_html_node_t *fieldset)
 {
-    for (const os64_html_node_t *up = n->parent; up != NULL; up = up->parent) {
-        if (!p_is(up, OS64_HTML_TAG_FIELDSET) || !p_has_attr(up, "disabled"))
-            continue;
-        const os64_html_node_t *legend = NULL;
-        for (const os64_html_node_t *c = up->first_child; c != NULL; c = c->next)
-            if (p_is(c, OS64_HTML_TAG_LEGEND)) {
-                legend = c;
-                break;
-            }
-        bool sheltered = false;
-        for (const os64_html_node_t *in = n; in != NULL && in != up; in = in->parent)
-            if (in == legend) {
-                sheltered = true;
-                break;
-            }
-        if (!sheltered)
-            return true;
-    }
-    return false;
+    for (const os64_html_node_t *c = fieldset->first_child; c != NULL; c = c->next)
+        if (p_is(c, OS64_HTML_TAG_LEGEND))
+            return c;
+    return NULL;
 }
 
 static bool in_hidden_subtree(const os64_html_node_t *n)
@@ -668,7 +655,8 @@ static void add_link(os64_page_t *page, const os64_html_node_t *n, const char *a
     page->nlinks++;
 }
 
-static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_element_t element)
+static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_element_t element,
+                        bool fieldset_off)
 {
     if (!p_grow((void **)&page->controls, &page->controlcap, page->ncontrols,
                 sizeof(*page->controls))) {
@@ -688,7 +676,7 @@ static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_
         c->value = "";
         c->value_len = 0;
     }
-    c->disabled = p_has_attr(n, "disabled") || disabled_by_fieldset(n);
+    c->disabled = p_has_attr(n, "disabled") || fieldset_off;
     c->readonly = p_has_attr(n, "readonly") &&
         (c->element == OS64_PAGE_EL_TEXTAREA ||
          (c->element == OS64_PAGE_EL_INPUT && text_like_input(c->input)));
@@ -775,38 +763,52 @@ static void collect_ids(os64_page_t *page, const os64_html_node_t *n)
     }
 }
 
-static void collect_model(os64_page_t *page, const os64_html_node_t *n)
+static void collect_model(os64_page_t *page, const os64_html_node_t *n, bool off);
+
+// One node and everything under it. `off` says a disabled fieldset above has
+// taken this subtree away.
+static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off)
 {
-    for (; n != NULL; n = n->next) {
-        // A foreign element is not an HTML link or control however it is
-        // spelled, but HTML nested INSIDE one still is — so the test is per
-        // node and the walk never prunes a subtree for its namespace.
-        if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML) {
-            if ((p_is(n, OS64_HTML_TAG_A) || p_is(n, OS64_HTML_TAG_AREA)) &&
-                p_has_attr(n, "href"))
-                add_link(page, n, "href");
-            // A FRAME NAMES A DOCUMENT the way a link does, and a face that
-            // cannot draw frames offers each one as somewhere to go. It is
-            // resolved here for the reason every reference is: two resolvers
-            // disagree about a `<base>`. An `iframe` is left out: no face
-            // offers one as a destination, and an entry nothing follows is
-            // an entry nothing tests.
-            if (p_is(n, OS64_HTML_TAG_FRAME) && p_has_attr(n, "src"))
-                add_link(page, n, "src");
-            // A `meta` inside `noscript` counts, and that is the case that
-            // matters: with scripting off those contents ARE the document's,
-            // which is the whole reason the element exists.
-            if (!page->has_refresh && p_is(n, OS64_HTML_TAG_META))
-                p_refresh_from(page, n);
-            os64_page_element_t element;
-            if (element_kind(n, &element))
-                add_control(page, n, element);
-        }
-        // `template` contents are a separate fragment and belong to no form,
-        // so the walk never follows them: they hang off their own pointer
-        // rather than off first_child, which is what makes that free.
-        collect_model(page, n->first_child);
+    // A foreign element is not an HTML link or control however it is
+    // spelled, but HTML nested INSIDE one still is — so the test is per
+    // node and the walk never prunes a subtree for its namespace.
+    if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML) {
+        if ((p_is(n, OS64_HTML_TAG_A) || p_is(n, OS64_HTML_TAG_AREA)) &&
+            p_has_attr(n, "href"))
+            add_link(page, n, "href");
+        // A FRAME NAMES A DOCUMENT the way a link does, and a face that
+        // cannot draw frames offers each one as somewhere to go. It is
+        // resolved here for the reason every reference is: two resolvers
+        // disagree about a `<base>`. An `iframe` is left out: no face offers
+        // one as a destination, and an entry nothing follows is an entry
+        // nothing tests.
+        if (p_is(n, OS64_HTML_TAG_FRAME) && p_has_attr(n, "src"))
+            add_link(page, n, "src");
+        // A `meta` inside `noscript` counts, and that is the case that
+        // matters: with scripting off those contents ARE the document's,
+        // which is the whole reason the element exists.
+        if (!page->has_refresh && p_is(n, OS64_HTML_TAG_META))
+            p_refresh_from(page, n);
+        os64_page_element_t element;
+        if (element_kind(n, &element))
+            add_control(page, n, element, off);
     }
+    // `template` contents are a separate fragment and belong to no form, so
+    // the walk never follows them: they hang off their own pointer rather
+    // than off first_child, which is what makes that free.
+    if (p_is(n, OS64_HTML_TAG_FIELDSET) && p_has_attr(n, "disabled")) {
+        const os64_html_node_t *legend = first_legend(n);
+        for (const os64_html_node_t *c = n->first_child; c != NULL; c = c->next)
+            collect_node(page, c, off || c != legend);
+        return;
+    }
+    collect_model(page, n->first_child, off);
+}
+
+static void collect_model(os64_page_t *page, const os64_html_node_t *n, bool off)
+{
+    for (; n != NULL; n = n->next)
+        collect_node(page, n, off);
 }
 
 // Chain every radio sharing a name, so the rest of a group can be found from
@@ -836,16 +838,31 @@ static bool chain_radios(os64_page_t *page)
     return true;
 }
 
-// Visit each name chain once, with the owner as the second group key.
-// Later checked members replace earlier ones, including hidden controls.
+// Visit each name chain once, with the owner as the second group key: link
+// each (name, owner) group, and settle its initial state. Later checked
+// members replace earlier ones, including hidden controls.
 static bool capture_initial(os64_page_t *page)
 {
     size_t owners = (size_t)page->nforms + 1;
     int32_t *last = os64_malloc(owners * sizeof(*last));
-    if (last == NULL)
+    int32_t *tail = os64_malloc(owners * sizeof(*tail));
+    page->group_head = os64_malloc(((size_t)page->ncontrols + 1) * sizeof(*page->group_head));
+    page->group_next = os64_malloc(((size_t)page->ncontrols + 1) * sizeof(*page->group_next));
+    page->group_judged_at =
+        os64_malloc(((size_t)page->ncontrols + 1) * sizeof(*page->group_judged_at));
+    if (last == NULL || tail == NULL || page->group_head == NULL || page->group_next == NULL ||
+        page->group_judged_at == NULL) {
+        os64_free(last);
+        os64_free(tail);
         return false;
+    }
     for (size_t i = 0; i < owners; i++)
-        last[i] = -1;
+        last[i] = tail[i] = -1;
+    for (int32_t i = 0; i < page->ncontrols; i++) {
+        page->group_head[i] = i;
+        page->group_next[i] = -1;
+        page->group_judged_at[i] = -1;
+    }
     for (size_t slot = 0; slot < page->radio_map.cap; slot++) {
         const void *head = page->radio_map.vals[slot];
         if (head == NULL)
@@ -853,6 +870,12 @@ static bool capture_initial(os64_page_t *page)
         int32_t first = p_ptrmap_get(&page->control_map, head);
         for (int32_t i = first; i >= 0; i = page->radio_next[i]) {
             os64_page_control_t *c = &page->controls[i];
+            int32_t *end = &tail[c->form + 1];
+            if (*end >= 0) {
+                page->group_next[*end] = i;
+                page->group_head[i] = page->group_head[*end];
+            }
+            *end = i;
             if (c->checked) {
                 if (last[c->form + 1] >= 0)
                     page->controls[last[c->form + 1]].checked = false;
@@ -860,9 +883,15 @@ static bool capture_initial(os64_page_t *page)
             }
         }
         for (int32_t i = first; i >= 0; i = page->radio_next[i])
-            last[page->controls[i].form + 1] = -1;
+            last[page->controls[i].form + 1] = tail[page->controls[i].form + 1] = -1;
     }
     os64_free(last);
+    os64_free(tail);
+    for (int32_t i = 0; i < page->ncontrols; i++) {
+        int32_t head = page->group_head[i];
+        if (!page->controls[i].barred_from_validation && page->group_judged_at[head] < 0)
+            page->group_judged_at[head] = i;
+    }
     page->initial = os64_calloc((size_t)page->ncontrols, sizeof(*page->initial));
     if (page->initial == NULL && page->ncontrols != 0)
         return false;
@@ -905,7 +934,7 @@ os64_page_t *os64_page_build(const os64_html_document_t *doc, const char *docume
     // because a control's owner is settled as it is met, and the model last.
     collect_ids(page, root);
     collect_forms(page, root);
-    collect_model(page, root);
+    collect_model(page, root, false);
     if (!chain_radios(page))
         page->incomplete = true;
     if (!page->incomplete && !capture_initial(page))
@@ -932,6 +961,9 @@ void os64_page_free(os64_page_t *page)
     os64_free(page->forms);
     os64_free(page->controls);
     os64_free(page->radio_next);
+    os64_free(page->group_head);
+    os64_free(page->group_next);
+    os64_free(page->group_judged_at);
     p_ptrmap_free(&page->link_map);
     p_ptrmap_free(&page->form_map);
     p_ptrmap_free(&page->control_map);

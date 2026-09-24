@@ -388,17 +388,10 @@ static void keys_drop_typeahead(void)
     }
 }
 
-// Ask a yes/no question on the status row. Only `y` agrees: the dangerous
-// direction is always the one a stray keystroke should not pick.
-//
-// AND THE ANSWER MUST COME AFTER THE QUESTION. Keys typed while a page was
-// loading are held for whoever asks next (fetch_cancelled keeps them), and a
-// `y` meant for something else would otherwise answer a question it never
-// saw — including "shall I send this in clear?", which is the one question
-// in this program where a stale keystroke could do real harm. So everything
-// typed before the question is dropped here, and only here: everywhere else,
-// type-ahead is a person working faster than the network.
-static bool confirm(const char *question)
+static void status_set(const char *fmt, ...);
+
+// Put the question and wait for the answer to it.
+static bool confirm_asked(const char *question)
 {
     keys_drop_typeahead();
     // A HANGUP DOES NOT WAIT TO BE ASKED. The loop below ends on one, but
@@ -428,6 +421,37 @@ static bool confirm(const char *question)
             return false;                // nobody is there to ask
         return c == 'y' || c == 'Y';
     }
+}
+
+// Ask a yes/no question on the status row. Only `y` agrees: the dangerous
+// direction is always the one a stray keystroke should not pick.
+//
+// AND THE ANSWER MUST COME AFTER THE QUESTION. Keys typed while a page was
+// loading are held for whoever asks next (fetch_cancelled keeps them), and a
+// `y` meant for something else would otherwise answer a question it never
+// saw — including "shall I send this in clear?", where a stale keystroke
+// could do real harm. So everything typed before the question is dropped
+// here, and only here: everywhere else, type-ahead is a person working
+// faster than the network.
+//
+// A SECURITY question put to keys that are not a terminal is answered NO
+// without reading. Such input cannot be polled, so what was typed before the
+// question cannot be told from what came after it, and an answer that cannot
+// be shown to be fresh is not a person's decision.
+//
+// `refused` is the caller's sentence for a no, put on the status row here so
+// that a refusal nobody typed can say why; NULL says nothing.
+static bool confirm(const char *question, bool security, const char *refused)
+{
+    if (security && !s_timed_keys) {
+        status_set("%s - this input is not a terminal, so it cannot answer",
+                   refused != NULL ? refused : "");
+        return false;
+    }
+    bool yes = confirm_asked(question);
+    if (!yes && refused != NULL)
+        status_set("%s", refused);
+    return yes;
 }
 
 // WHAT A PROMPT CAME BACK WITH takes three words rather than two: "nothing
@@ -608,8 +632,9 @@ static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
     os64_snprintf(question, sizeof(question),
                   " %s sends you to unencrypted http - follow? (y/n) ",
                   hop->target.host);
-    bool yes = confirm(question);
-    status_set(yes ? " following an unencrypted hop" : " stopped at the unencrypted hop");
+    bool yes = confirm(question, true, " stopped at the unencrypted hop");
+    if (yes)
+        status_set(" following an unencrypted hop");
     return yes ? OS64_FETCH_HOP_FOLLOW : OS64_FETCH_HOP_STOP;
 }
 
@@ -1172,10 +1197,8 @@ static bool perform(view_t *v, const os64_page_request_t *request, bool remember
         else
             os64_snprintf(question, sizeof(question),
                           " this encrypted page sends you to %s unencrypted - go? (y/n) ", host);
-        if (!confirm(question)) {
-            status_set(ask == ASK_SEND ? " not sent" : " stayed here");
+        if (!confirm(question, true, ask == ASK_SEND ? " not sent" : " stayed here"))
             return false;
-        }
     }
     if (!go(v, request->url, remember))
         return false;
@@ -1772,7 +1795,7 @@ static int32_t session(const char *start)
                         // LEAVING THROWS AWAY THE SESSION AND ITS HISTORY,
                         // which is why it is the move that gets asked about:
                         // `q` sits one key from the arrows.
-                        if (!confirm(" leave wend? (y/n) "))
+                        if (!confirm(" leave wend? (y/n) ", false, NULL))
                             break;
                         view_clear(&view);
                         return WEND_OK;

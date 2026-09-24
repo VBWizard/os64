@@ -481,8 +481,93 @@ static void state_reference_bytes(void)
     }
 }
 
+// Per-control questions answered once. Each of these was N² before: a
+// legendless disabled fieldset rescanned its children for every control, a
+// radio group was walked whole at every member, and a `dir=auto` subtree
+// was rescanned for every `dirname` control under it. At these sizes the
+// old code would run for minutes; the suite would visibly stall.
+static void state_scale(void)
+{
+    enum { N = 60000 };
+    size_t cap = (size_t)N * 64 + 256, at = 0;
+    char *html = malloc(cap);
+    if (html == NULL)
+        abort();
+    at += (size_t)snprintf(html + at, cap - at, "<form method=post><fieldset disabled>");
+    for (int i = 0; i < N; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<input name=f>");
+    at += (size_t)snprintf(html + at, cap - at, "</fieldset>");
+    for (int i = 0; i < N; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<input type=radio name=r required%s>",
+                               i == N - 1 ? " checked" : "");
+    at += (size_t)snprintf(html + at, cap - at, "<div dir=auto>");
+    for (int i = 0; i < N / 4; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<input name=t dirname=d>");
+    snprintf(html + at, cap - at, "</div><button>Go</button></form>");
+    os64_html_document_t *doc = parse(html, "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    state_expect("scale: builds whole", page != NULL && !os64_page_incomplete(page));
+    state_expect("scale: fieldset disables its first and last",
+                 os64_page_control(page, 0)->disabled && os64_page_control(page, N - 1)->disabled);
+    os64_page_request_t req;
+    os64_page_what_t what = {OS64_PAGE_ACTIVATE_CONTROL, os64_page_ncontrols(page) - 1, 0, 0};
+    state_expect("scale: submits", os64_page_activate(page, what, &req) == OS64_PAGE_NAVIGATE &&
+                                   req.body != NULL);
+    os64_page_request_free(&req);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    free(html);
+
+    // The rules, on small pages: a fieldset's exception is its OWN first
+    // legend, nested ones included.
+    doc = parse("<form><fieldset disabled><p>x</p>"
+                "<legend><fieldset disabled><legend><input name=a></legend>"
+                "<input name=b></fieldset></legend>"
+                "<legend><input name=c></legend><input name=d></fieldset></form>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL);
+    state_expect("fieldset: inner legend live", !os64_page_control(page, 0)->disabled);
+    state_expect("fieldset: inner body off", os64_page_control(page, 1)->disabled);
+    state_expect("fieldset: second legend off", os64_page_control(page, 2)->disabled);
+    state_expect("fieldset: outer body off", os64_page_control(page, 3)->disabled);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    // A group judged where its first unbarred member stands, over every
+    // member: a disabled checked radio still answers it.
+    doc = parse("<form><input name=t><input type=radio name=r disabled required>"
+                "<input type=radio name=r><button>Go</button></form>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL);
+    what = (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 3, 0, 0};
+    state_expect("radio group judged past a barred head",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING &&
+                 req.reason == OS64_PAGE_REASON_INVALID && req.control == 2);
+    os64_page_request_free(&req);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    doc = parse("<form><input type=radio name=r disabled required checked>"
+                "<input type=radio name=r><button>Go</button></form>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL);
+    what = (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 2, 0, 0};
+    state_expect("radio group answered by a disabled tick",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NAVIGATE);
+    os64_page_request_free(&req);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    doc = parse("<form><input name=t><input type=radio name=r><input type=radio name=r required>"
+                "<button>Go</button></form>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL);
+    what = (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 3, 0, 0};
+    state_expect("radio group failure names its first member",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING &&
+                 req.reason == OS64_PAGE_REASON_INVALID && req.control == 1);
+    os64_page_request_free(&req);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 static void state_cases(void)
 {
+    state_scale();
     state_taken_away();
     state_frames();
     state_reference_bytes();

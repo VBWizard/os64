@@ -1029,6 +1029,12 @@ static bool glob_has_meta(const char *s)
 // what that grammar exists for, and its own contract says NOT_A_URL is how
 // a caller learns an operand had no scheme. Anything else means it did,
 // which is enough — a host the parser dislikes is still not a directory.
+//
+// AN ADDRESS WITH NO SCHEME IS NOT RECOGNISED, and cannot be: `host/p?q=1`
+// is spelled exactly as a filename pattern is, and a shell that decided by
+// which program it was about to run would be one no program could predict.
+// wend and gopher accept a bare host as a convenience; a bare one with a
+// `?` in it is written with its scheme, or quoted. (DEBTS.md.)
 static bool token_is_address(const char *token)
 {
 	os64_url_t parsed;
