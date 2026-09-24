@@ -60,6 +60,7 @@ typedef enum {
     // the edit verbs rather than from the door.
     OS64_PAGE_REASON_NO_CONTROL,               // that index names no control
     OS64_PAGE_REASON_WRONG_KIND,               // that control holds no such value
+    OS64_PAGE_REASON_READONLY,                 // the page keeps that value as it is
 } os64_page_reason_t;
 
 // The refusal in words, for a status row. Never NULL.
@@ -99,7 +100,7 @@ typedef struct {
 // ── The model ───────────────────────────────────────────────────────────
 
 typedef struct {
-    const os64_html_node_t *node;   // the `a` or `area` it came from
+    const os64_html_node_t *node;   // the `a`, `area` or `frame` it came from
     os64_page_ref_t href;
     // It names THIS document, so following it is a MOVE and not a fetch —
     // compared without the fragment, which is the whole of a table of
@@ -347,11 +348,24 @@ os64_page_reason_t os64_page_resolve_fragment(const os64_page_t *page,
 // The model does not depend on how wide anything is, so a face builds it
 // ONCE per page: a window that changes size re-draws and never rebuilds.
 //
-// Each returns 0, or a negative OS64_PAGE_REASON_* for an index that names
-// no control, a control of the wrong kind, or memory it could not get.
-// Failure preserves published values and selections. Incomplete models
-// reject edits and form submission with NO_MEMORY. File selection has no
-// text setter; set_text returns WRONG_KIND for a file input.
+// THESE ARE A PERSON'S EDITS, so they refuse what a person cannot do in a
+// browser: text goes only into a control a person types into (a textarea,
+// or an input whose type takes typed text, a range or a colour) and never
+// into a tick's, a button's or a hidden field's value; a `disabled` control
+// takes no edit at all, and a `readonly` one takes no text; a disabled option
+// cannot be chosen. The rule lives here and not in each face because a rule
+// every face must remember is a rule some face forgets.
+//
+// Clearing a one-line single-choice list's choice hands the answer to its
+// first enabled option, which is the selection rule the standard applies
+// when the page itself leaves one unmarked.
+//
+// Each returns 0, or a negative OS64_PAGE_REASON_*: NO_CONTROL for an index
+// that names no control, WRONG_KIND for a control or option of the wrong
+// kind, DISABLED or READONLY for one the page took away, NO_MEMORY for
+// memory it could not get. Failure preserves published values and
+// selections. Incomplete models reject edits and form submission with
+// NO_MEMORY. File selection has no text setter.
 int64_t os64_page_set_text(os64_page_t *page, int32_t control, const char *utf8, size_t len);
 int64_t os64_page_set_checked(os64_page_t *page, int32_t control, bool on);
 int64_t os64_page_set_chosen(os64_page_t *page, int32_t control, int32_t option, bool on);

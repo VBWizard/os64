@@ -648,7 +648,7 @@ static void note_anchor_name(os64_page_t *page, const os64_html_node_t *n)
         page->incomplete = true;
 }
 
-static void add_link(os64_page_t *page, const os64_html_node_t *n)
+static void add_link(os64_page_t *page, const os64_html_node_t *n, const char *attribute)
 {
     if (!p_grow((void **)&page->links, &page->linkcap, page->nlinks, sizeof(*page->links))) {
         page->incomplete = true;
@@ -657,7 +657,7 @@ static void add_link(os64_page_t *page, const os64_html_node_t *n)
     os64_page_link_t *link = &page->links[page->nlinks];
     os64_memset(link, 0, sizeof(*link));
     link->node = n;
-    p_resolve(page, p_attr(n, "href"), &link->href);
+    p_resolve(page, p_attr(n, attribute), &link->href);
     // It names THIS document, compared without the fragment — which is what
     // both sides of the comparison are, since neither canonical form carries
     // one. Following it is a move and not a fetch.
@@ -784,7 +784,15 @@ static void collect_model(os64_page_t *page, const os64_html_node_t *n)
         if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML) {
             if ((p_is(n, OS64_HTML_TAG_A) || p_is(n, OS64_HTML_TAG_AREA)) &&
                 p_has_attr(n, "href"))
-                add_link(page, n);
+                add_link(page, n, "href");
+            // A FRAME NAMES A DOCUMENT the way a link does, and a face that
+            // cannot draw frames offers each one as somewhere to go. It is
+            // resolved here for the reason every reference is: two resolvers
+            // disagree about a `<base>`. An `iframe` is left out: no face
+            // offers one as a destination, and an entry nothing follows is
+            // an entry nothing tests.
+            if (p_is(n, OS64_HTML_TAG_FRAME) && p_has_attr(n, "src"))
+                add_link(page, n, "src");
             // A `meta` inside `noscript` counts, and that is the case that
             // matters: with scripting off those contents ARE the document's,
             // which is the whole reason the element exists.
@@ -1096,17 +1104,30 @@ void p_publish(os64_page_t *page, int32_t control)
     }
 }
 
+// What a person can TYPE into. A tick's, a button's and a hidden field's
+// `value` is the page's word about what they send, and no browser offers a
+// person a box to change it in; a file input takes a file, not text.
+static bool takes_text(const os64_page_control_t *c)
+{
+    return c->element == OS64_PAGE_EL_TEXTAREA ||
+           (c->element == OS64_PAGE_EL_INPUT &&
+            (text_like_input(c->input) || c->input == OS64_PAGE_INPUT_RANGE ||
+             c->input == OS64_PAGE_INPUT_COLOR));
+}
+
 int64_t os64_page_set_text(os64_page_t *page, int32_t control, const char *utf8, size_t len)
 {
     const os64_page_control_t *c = os64_page_control(page, control);
     if (c == NULL)
         return -OS64_PAGE_REASON_NO_CONTROL;
-    if (c->element == OS64_PAGE_EL_SELECT)
+    if (!takes_text(c))
         return -OS64_PAGE_REASON_WRONG_KIND;
+    if (c->disabled)
+        return -OS64_PAGE_REASON_DISABLED;
+    if (c->readonly)
+        return -OS64_PAGE_REASON_READONLY;
     if (page->incomplete)
         return -OS64_PAGE_REASON_NO_MEMORY;
-    if (c->input == OS64_PAGE_INPUT_FILE)
-        return -OS64_PAGE_REASON_WRONG_KIND;
     if (len == SIZE_MAX || (utf8 == NULL && len != 0))
         return -OS64_PAGE_REASON_WRONG_KIND;
     PArena temporary = {0};
@@ -1140,6 +1161,8 @@ int64_t os64_page_set_checked(os64_page_t *page, int32_t control, bool on)
         return -OS64_PAGE_REASON_NO_CONTROL;
     if (c->input != OS64_PAGE_INPUT_CHECKBOX && c->input != OS64_PAGE_INPUT_RADIO)
         return -OS64_PAGE_REASON_WRONG_KIND;
+    if (c->disabled)
+        return -OS64_PAGE_REASON_DISABLED;
     if (page->incomplete)
         return -OS64_PAGE_REASON_NO_MEMORY;
     if (p_edit_for(page, control) == NULL)
@@ -1170,6 +1193,10 @@ int64_t os64_page_set_chosen(os64_page_t *page, int32_t control, int32_t option,
         return -OS64_PAGE_REASON_NO_CONTROL;
     if (c->element != OS64_PAGE_EL_SELECT || option < 0 || option >= c->noptions)
         return -OS64_PAGE_REASON_WRONG_KIND;
+    // Putting a disabled option DOWN is allowed: it is how a face moves off a
+    // "choose one" placeholder the page marked selected.
+    if (c->disabled || (on && c->options[option].disabled))
+        return -OS64_PAGE_REASON_DISABLED;
     if (page->incomplete)
         return -OS64_PAGE_REASON_NO_MEMORY;
     PEdit *edit = p_edit_for(page, control);
@@ -1190,6 +1217,19 @@ int64_t os64_page_set_chosen(os64_page_t *page, int32_t control, int32_t option,
             edit->chosen[i] = 0;
     edit->chosen[option] = on ? 1 : 0;
     p_publish(page, control);
+    // PUTTING A DROP-DOWN'S CHOICE DOWN DOES NOT EMPTY IT: it holds its first
+    // enabled option, exactly as it would had the page marked none.
+    if (!on && p_select_one_line(c)) {
+        bool any = false;
+        for (int32_t i = 0; i < c->noptions; i++)
+            any = any || c->options[i].selected;
+        for (int32_t i = 0; !any && i < c->noptions; i++)
+            if (!c->options[i].disabled) {
+                edit->chosen[i] = 1;
+                p_publish(page, control);
+                break;
+            }
+    }
     return 0;
 }
 

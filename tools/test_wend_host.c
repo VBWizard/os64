@@ -21,6 +21,7 @@
 
 #include "apps/wend/render.h"
 #include "html/html.h"
+#include "page/page.h"
 #include "os64/str.h"
 #include "os64/url.h"
 
@@ -90,11 +91,13 @@ static int checks, failures;
     } \
 } while (0)
 
-// The geometry borrows source nodes. Keep each helper's document alive
-// until its rendered page is released, including multi-width test pairs.
+// The geometry borrows source nodes and the model borrows the tree. Keep each
+// helper's document and model alive until its rendered page is released,
+// including multi-width test pairs.
 typedef struct TestDocument {
     wend_page_t *page;
     os64_html_document_t *doc;
+    os64_page_t *model;
     struct TestDocument *next;
 } TestDocument;
 static TestDocument *test_documents;
@@ -105,12 +108,49 @@ static void test_page_free(wend_page_t *page)
     if (*at != NULL) {
         TestDocument *entry = *at;
         *at = entry->next;
+        os64_page_free(entry->model);
         os64_html_document_free(entry->doc);
         free(entry);
     }
     wend_page_free(page);
 }
 #define wend_page_free test_page_free
+
+// The model a helper-rendered page was drawn from.
+static os64_page_t *model_of(const wend_page_t *page)
+{
+    for (TestDocument *at = test_documents; at != NULL; at = at->next)
+        if (at->page == page)
+            return at->model;
+    return NULL;
+}
+
+// The same document and model drawn again at another width, the way a
+// resize draws it. The page returned borrows them from `page`'s entry.
+static wend_page_t *redraw(const wend_page_t *page, int32_t cols)
+{
+    for (TestDocument *at = test_documents; at != NULL; at = at->next)
+        if (at->page == page)
+            return wend_render_html(at->doc, at->model, cols);
+    return NULL;
+}
+
+// Where spot `i`, a link, goes — the model's answer. "" when it has none.
+static const char *link_url(const wend_page_t *page, int32_t i)
+{
+    const os64_page_link_t *link = os64_page_link(model_of(page), page->spots[i].link);
+    return link != NULL && link->href.url != NULL ? link->href.url : "";
+}
+
+static const os64_page_link_t *link_of(const wend_page_t *page, int32_t i)
+{
+    return os64_page_link(model_of(page), page->spots[i].link);
+}
+
+static const os64_page_control_t *control_at(const wend_page_t *page, int32_t i)
+{
+    return os64_page_control(model_of(page), page->spots[i].control);
+}
 
 // Fixture lookup only: production navigation resolves names in libpage.
 static int32_t fixture_node_line(const wend_page_t *page, const char *name)
@@ -127,14 +167,11 @@ static int32_t fixture_node_line(const wend_page_t *page, const char *name)
     return -1;
 }
 
-static wend_page_t *render_html_text(const char *html, int32_t cols, const char *base_text)
+// Parse, build the model the browser would, and draw it. `page_url` is the
+// address the document came from, which is what the model resolves against
+// unless the page carries a `<base href>` of its own.
+static wend_page_t *render_html_text(const char *html, int32_t cols, const char *page_url)
 {
-    os64_url_t base;
-    memset(&base, 0, sizeof(base));
-    if (base_text && os64_url_parse(base_text, &base) != OS64_URL_OK) {
-        fprintf(stderr, "bad base %s\n", base_text);
-        exit(2);
-    }
     os64_html_parser_t *p = os64_html_parser_new(NULL);
     if (!p)
         return NULL;
@@ -145,13 +182,16 @@ static wend_page_t *render_html_text(const char *html, int32_t cols, const char 
     os64_html_document_t *doc = os64_html_parser_finish(p);
     if (!doc)
         return NULL;
-    wend_page_t *page = wend_render_html(doc, base_text ? &base : NULL, cols, NULL, 0);
-    if (page != NULL) {
-        TestDocument *entry = malloc(sizeof(*entry));
-        if (entry == NULL) abort();
-        *entry = (TestDocument){page, doc, test_documents};
+    os64_page_t *model = os64_page_build(doc, page_url ? page_url : "http://h/d/p.html", NULL);
+    wend_page_t *page = wend_render_html(doc, model, cols);
+    TestDocument *entry = page != NULL ? malloc(sizeof(*entry)) : NULL;
+    if (entry != NULL) {
+        *entry = (TestDocument){page, doc, model, test_documents};
         test_documents = entry;
     } else {
+        if (page != NULL)
+            abort();
+        os64_page_free(model);
         os64_html_document_free(doc);
     }
     return page;
@@ -363,8 +403,8 @@ static void render_checks(void)
     CHECK(page != NULL);
     if (page) {
         CHECK(page->nspots == 2);
-        CHECK(page->nspots == 2 && strcmp(page->spots[0].url, "http://host/two") == 0);
-        CHECK(page->nspots == 2 && strcmp(page->spots[1].url, "http://other/x") == 0);
+        CHECK(page->nspots == 2 && strcmp(link_url(page, 0), "http://host/two") == 0);
+        CHECK(page->nspots == 2 && strcmp(link_url(page, 1), "http://other/x") == 0);
         // one, blank, [1]two, blank, [2]three
         CHECK(page->nspots == 2 && page->spots[0].line == 2);
         CHECK(page->nspots == 2 && page->spots[1].line == 4);
@@ -372,29 +412,33 @@ static void render_checks(void)
     }
 
     // A <base href> is the page's own word about where it lives, and it wins
-    // over the address the reply came from.
-    os64_html_parser_t *p = os64_html_parser_new(NULL);
-    CHECK(p != NULL);
-    const char *doc_text = "<head><base href='http://elsewhere/sub/'><title> A  long\n"
-                           "title </title></head><body><a href=rel>r</a>";
-    if (p && os64_html_parser_feed(p, doc_text, strlen(doc_text)) >= 0) {
-        os64_html_document_t *doc = os64_html_parser_finish(p);
-        CHECK(doc != NULL);
-        char href[256];
-        CHECK(doc && wend_base_href(doc, href, sizeof(href)));
-        CHECK(strcmp(href, "http://elsewhere/sub/") == 0);
-        os64_url_t base;
-        CHECK(os64_url_parse(href, &base) == OS64_URL_OK);
-        wend_page_t *page2 = wend_render_html(doc, &base, 40, NULL, 0);
-        CHECK(page2 != NULL);
-        if (page2) {
-            CHECK(strcmp(page2->title, "A long title") == 0);
-            CHECK(page2->nspots == 1 &&
-                  strcmp(page2->spots[0].url, "http://elsewhere/sub/rel") == 0);
-            wend_page_free(page2);
-        }
-        os64_html_document_free(doc);
+    // over the address the reply came from — in the model, where every link
+    // is resolved, so the renderer never needs to know a base exists.
+    wend_page_t *page2 = render_html_text(
+        "<head><base href='http://elsewhere/sub/'><title> A  long\n"
+        "title </title></head><body><a href=rel>r</a>", 40, "http://host/dir/page.html");
+    CHECK(page2 != NULL);
+    if (page2) {
+        CHECK(strcmp(page2->title, "A long title") == 0);
+        CHECK(page2->nspots == 1 && strcmp(link_url(page2, 0), "http://elsewhere/sub/rel") == 0);
+        wend_page_free(page2);
     }
+
+    // A FRAMESET PAGE IS ITS FRAMES, each one a link the model resolved —
+    // against the page's `<base>` like any other reference.
+    wend_page_t *frames = render_html_text(
+        "<head><base href='http://other/dir/'></head>"
+        "<frameset><frame name=menu src=menu.html><frame src=body.html#top>"
+        "<frame name=nothing></frameset>", 40, "http://host/p");
+    CHECK(frames != NULL && frames->nspots == 2);
+    if (frames && frames->nspots == 2) {
+        CHECK(frames->nlines == 2 && strcmp(frames->lines[0].text, "[1]frame: menu") == 0 &&
+              strcmp(frames->lines[1].text, "[2]frame: body.html#top") == 0);
+        CHECK(strcmp(link_url(frames, 0), "http://other/dir/menu.html") == 0);
+        CHECK(strcmp(link_url(frames, 1), "http://other/dir/body.html") == 0 &&
+              strcmp(link_of(frames, 1)->href.fragment, "top") == 0);
+    }
+    wend_page_free(frames);
 
     // text/plain, both ways round: the same byte is a character in Latin-1
     // and half a character in UTF-8.
@@ -425,27 +469,98 @@ static void render_checks(void)
 
 // ── What a form would send ──────────────────────────────────────────────
 
+// What a spot's activation should come to. A form is sent, refused as a
+// POST (libfetch sends no body), in no form at all, or refused because what
+// it names will not fit or will not resolve.
+typedef enum {
+    WANT_SENT = 0,
+    WANT_NO_FORM,
+    WANT_POST,
+    WANT_TOO_LONG,
+    WANT_BAD_ACTION,
+} want_t;
+
+// Ask the model what activating spot `spot` does, the way the browser asks:
+// a button is PRESSED, and any other control is FINISHED — the standard's
+// implicit submission, which libpage answers with the form's default button.
+static os64_page_verdict_t send_spot(const wend_page_t *page, int32_t spot,
+                                     os64_page_request_t *request)
+{
+    os64_page_what_t what = { OS64_PAGE_ACTIVATE_IMPLICIT, page->spots[spot].control, 0, 0 };
+    if (page->spots[spot].kind == WEND_SPOT_SUBMIT)
+        what.how = OS64_PAGE_ACTIVATE_CONTROL;
+    return os64_page_activate(model_of(page), what, request);
+}
+
 // Render, then ask what activating one spot would ask for. The page URL is
 // the one a form with no action of its own falls back to.
 static void expect_url(const char *what, const char *html, int32_t spot,
-                       wend_form_result_t want_result, const char *want_url)
+                       want_t want, const char *want_url)
 {
     const char *page_url = "http://host/dir/page.html?old=1";
     wend_page_t *page = render_html_text(html, 80, page_url);
     checks++;
-    if (!page) {
+    if (!page || spot >= page->nspots) {
         failures++;
-        fprintf(stderr, "FAIL %s: no page\n", what);
+        fprintf(stderr, "FAIL %s: no page, or no spot %d\n", what, spot);
+        if (page)
+            wend_page_free(page);
         return;
     }
-    char url[2048], frag[256];
-    url[0] = '\0';
-    wend_form_result_t got = wend_form_url(page, spot, page_url, url, sizeof(url), frag, sizeof(frag));
-    if (got != want_result || (want_url && strcmp(url, want_url) != 0)) {
-        failures++;
-        fprintf(stderr, "FAIL %s: result %d url |%s|\n            want %d |%s|\n",
-                what, (int)got, url, (int)want_result, want_url ? want_url : "");
+    os64_page_request_t request;
+    os64_page_verdict_t verdict = send_spot(page, spot, &request);
+    bool ok;
+    switch (want) {
+        case WANT_SENT:
+            ok = verdict == OS64_PAGE_NAVIGATE && request.method == OS64_PAGE_METHOD_GET &&
+                 (want_url == NULL || strcmp(request.url, want_url) == 0);
+            break;
+        case WANT_POST:
+            ok = verdict == OS64_PAGE_NAVIGATE && request.method == OS64_PAGE_METHOD_POST;
+            break;
+        case WANT_NO_FORM:
+            ok = verdict == OS64_PAGE_NOTHING && request.reason == OS64_PAGE_REASON_NO_FORM;
+            break;
+        case WANT_TOO_LONG:
+            ok = verdict == OS64_PAGE_REFUSED && request.reason == OS64_PAGE_REASON_TOO_LONG;
+            break;
+        default:
+            ok = verdict == OS64_PAGE_REFUSED && request.reason == OS64_PAGE_REASON_BAD_ACTION;
+            break;
     }
+    if (!ok) {
+        failures++;
+        fprintf(stderr, "FAIL %s: verdict %d reason %s method %d url |%s|\n"
+                        "            want %d |%s|\n",
+                what, (int)verdict, os64_page_reason_name(request.reason), (int)request.method,
+                request.url ? request.url : "", (int)want, want_url ? want_url : "");
+    }
+    os64_page_request_free(&request);
+    wend_page_free(page);
+}
+
+// The same question, for the verdicts that send nothing at all.
+static void expect_nothing(const char *what, const char *html, int32_t spot,
+                           os64_page_reason_t want)
+{
+    wend_page_t *page = render_html_text(html, 80, "https://host/dir/page.html");
+    checks++;
+    if (!page || spot >= page->nspots) {
+        failures++;
+        fprintf(stderr, "FAIL %s: no page, or no spot %d\n", what, spot);
+        if (page)
+            wend_page_free(page);
+        return;
+    }
+    os64_page_request_t request;
+    os64_page_verdict_t verdict = send_spot(page, spot, &request);
+    if (verdict == OS64_PAGE_NAVIGATE || request.reason != want) {
+        failures++;
+        fprintf(stderr, "FAIL %s: verdict %d reason %s url |%s|, want %s\n", what,
+                (int)verdict, os64_page_reason_name(request.reason),
+                request.url ? request.url : "", os64_page_reason_name(want));
+    }
+    os64_page_request_free(&request);
     wend_page_free(page);
 }
 
@@ -464,19 +579,26 @@ static void anchor_checks(void)
         return;
     CHECK(page->nspots == 2);
     if (page->nspots == 2) {
-        // The resolver drops a fragment, correctly; the spot keeps it.
-        CHECK(strcmp(page->spots[0].url, "http://host/dir/page.html") == 0);
-        CHECK(strcmp(page->spots[0].fragment, "two") == 0);
-        CHECK(strcmp(page->spots[1].url, "http://host/dir/other.html") == 0);
-        CHECK(strcmp(page->spots[1].fragment, "frag") == 0);
+        // The address drops a fragment, correctly; the link keeps it.
+        CHECK(strcmp(link_url(page, 0), "http://host/dir/page.html") == 0);
+        CHECK(strcmp(link_of(page, 0)->href.fragment, "two") == 0);
+        CHECK(link_of(page, 0)->same_document);
+        CHECK(strcmp(link_url(page, 1), "http://host/dir/other.html") == 0);
+        CHECK(strcmp(link_of(page, 1)->href.fragment, "frag") == 0);
     }
     CHECK(fixture_node_line(page, "one") >= 0);
     CHECK(fixture_node_line(page, "two") > fixture_node_line(page, "one"));
     CHECK(fixture_node_line(page, "old") >= 0);      // the 1994 spelling
     CHECK(fixture_node_line(page, "nothing") == -1);
-    // `#` alone and `#top` both mean the document's top; the navigator
-    // answers them, but the renderer has to say that one was ASKED for.
-    CHECK(page->nspots == 2 && page->spots[0].has_fragment);
+    // Following the table-of-contents link is a MOVE to the node the model
+    // names, and that node has a row on this page.
+    if (page->nspots == 2) {
+        os64_page_request_t request;
+        os64_page_what_t what = { OS64_PAGE_ACTIVATE_LINK, page->spots[0].link, 0, 0 };
+        CHECK(os64_page_activate(model_of(page), what, &request) == OS64_PAGE_FRAGMENT);
+        CHECK(wend_node_line(page, request.anchor) == fixture_node_line(page, "two"));
+        os64_page_request_free(&request);
+    }
     // The row an anchor names is the row its element begins on, so a reader
     // sent there finds the heading at the top rather than above the screen.
     int32_t at = fixture_node_line(page, "two");
@@ -490,12 +612,12 @@ static void form_checks(void)
     // the box's value sent, the nameless button sending nothing.
     expect_url("search", "<form action=/s><input type=hidden name=h value=1>"
                "<input name=q value=cats><input type=submit value=Go></form>",
-               1, WEND_FORM_OK, "http://host/s?h=1&q=cats");
+               1, WANT_SENT, "http://host/s?h=1&q=cats");
     // A form with no action of its own goes back to the page — and a GET
     // form REPLACES the query that page already carried.
     expect_url("no action", "<form><input name=q value=x>"
                "<input type=submit name=go value=now></form>",
-               1, WEND_FORM_OK, "http://host/dir/page.html?q=x&go=now");
+               1, WANT_SENT, "http://host/dir/page.html?q=x&go=now");
     // Spaces become plus, everything else that is not unreserved becomes
     // percent-and-two-digits, over the UTF-8 bytes the page itself holds —
     // which is why the page has to say it is UTF-8 for this to be the
@@ -503,26 +625,41 @@ static void form_checks(void)
     expect_url("encoding", "<meta charset=utf-8>"
                "<form action=/s><input name='a b' value='c d/\xc3\xa9'>"
                "<input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?a+b=c+d%2F%C3%A9");
+               1, WANT_SENT, "http://host/s?a+b=c+d%2F%C3%A9");
     // A box that is not ticked is not sent; one with no value of its own
     // sends `on`.
     expect_url("ticks", "<form action=/s><input type=checkbox name=a checked>"
                "<input type=checkbox name=b><input type=checkbox name=c value=yes checked>"
                "<input type=submit></form>",
-               3, WEND_FORM_OK, "http://host/s?a=on&c=yes");
+               3, WANT_SENT, "http://host/s?a=on&c=yes");
     // A list sends the option's value, not the words shown for it.
     expect_url("choice", "<form action=/s><select name=pick>"
                "<option value=1>One<option value=2 selected>Two</select>"
                "<input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?pick=2");
+               1, WANT_SENT, "http://host/s?pick=2");
     // Two buttons, and only the one pressed says it was.
     expect_url("which button", "<form action=/s><input type=submit name=go value=up>"
                "<input type=submit name=go value=down></form>",
-               1, WEND_FORM_OK, "http://host/s?go=down");
+               1, WANT_SENT, "http://host/s?go=down");
     expect_url("post refused", "<form action=/s method=POST><input name=pw>"
-               "<input type=submit></form>", 1, WEND_FORM_POST, NULL);
-    expect_url("no form", "<a href=/x>link</a>", 0, WEND_FORM_NONE, NULL);
-    expect_url("no form either", "<input name=loose>", 0, WEND_FORM_NONE, NULL);
+               "<input type=submit></form>", 1, WANT_POST, NULL);
+    expect_url("no form", "<input name=loose>", 0, WANT_NO_FORM, NULL);
+    // A `dialog` form CLOSES A DIALOG and no server hears of it — whoever
+    // says so, the form or the button. Sent as a GET, it put a password in
+    // an address.
+    expect_nothing("dialog form", "<form method=dialog action=/s>"
+                   "<input type=password name=pw value=secret>"
+                   "<input type=submit name=go value=Go></form>",
+                   1, OS64_PAGE_REASON_DIALOG);
+    expect_nothing("dialog button", "<form action=/s><input type=password name=pw value=s>"
+                   "<button formmethod=dialog>Close</button></form>",
+                   1, OS64_PAGE_REASON_DIALOG);
+    // FINISHING A BOX PRESSES THE FORM'S DEFAULT BUTTON, and a disabled one
+    // means the form is not sent at all, rather than sent as though it had
+    // no button.
+    expect_nothing("disabled default button", "<form action=/s><input name=q value=x>"
+                   "<input type=submit disabled></form>",
+                   0, OS64_PAGE_REASON_DEFAULT_BUTTON_DISABLED);
 
     // A DISABLED CONTROL IS DRAWN, IS NOT LANDED ON, AND IS NOT SENT. The
     // only spot on this page is the button, so the query carries nothing of
@@ -530,7 +667,7 @@ static void form_checks(void)
     expect_url("disabled", "<form action=/s><input name=a value=1 disabled>"
                "<input type=hidden name=h value=2 disabled>"
                "<input name=b value=3><input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?b=3");
+               1, WANT_SENT, "http://host/s?b=3");
     {
         const char *want[] = { "[1___][1][___][2][Go]" };
         expect_lines("disabled drawn", "<form><input name=a value=1 size=4 disabled>"
@@ -551,26 +688,28 @@ static void form_checks(void)
             "<form action=/s><textarea name=note cols=10>two  spaces\nand a line"
             "</textarea><input type=submit></form>", 80, "http://host/p");
         CHECK(page && page->nspots == 2);
-        if (page) {
-            CHECK(strcmp(page->spots[0].value, "two  spaces\nand a line") == 0);
-            char url[256];
-            CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url), NULL, 0)
-                  == WEND_FORM_OK);
+        if (page && page->nspots == 2) {
+            CHECK(strcmp(control_at(page, 0)->value, "two  spaces\nand a line") == 0);
+            os64_page_request_t request;
+            CHECK(send_spot(page, 1, &request) == OS64_PAGE_NAVIGATE);
             // The wire spells a line break CRLF, whatever the page's own
             // bytes were.
-            CHECK(strcmp(url, "http://host/s?note=two++spaces%0D%0Aand+a+line") == 0);
-            wend_page_free(page);
+            CHECK(request.url && strcmp(request.url,
+                                        "http://host/s?note=two++spaces%0D%0Aand+a+line") == 0);
+            os64_page_request_free(&request);
         }
+        if (page)
+            wend_page_free(page);
     }
 
     // A BUTTON MAY OVERRULE ITS FORM. The method decides whether this is a
     // submission wend performs at all, and the action decides where.
     expect_url("formmethod", "<form action=/s><input name=pw value=secret>"
                "<input type=submit formmethod=post></form>",
-               1, WEND_FORM_POST, NULL);
+               1, WANT_POST, NULL);
     expect_url("formaction", "<form action=/s method=get><input name=q value=x>"
                "<input type=submit formaction=/other></form>",
-               1, WEND_FORM_OK, "http://host/other?q=x");
+               1, WANT_SENT, "http://host/other?q=x");
     // An IMAGE button sends where you clicked, which from a keyboard is the
     // origin — and never its value, which is what a server expecting
     // `name.x` is written against. With no name the fields are plain `x` and
@@ -578,10 +717,10 @@ static void form_checks(void)
     // so a nameless one saying nothing would say nothing AT ALL.
     expect_url("image button", "<form action=/s><input name=q value=x>"
                "<input type=image name=go src=go.gif value=ignored></form>",
-               1, WEND_FORM_OK, "http://host/s?q=x&go.x=0&go.y=0");
+               1, WANT_SENT, "http://host/s?q=x&go.x=0&go.y=0");
     expect_url("image nameless", "<form action=/s><input name=q value=x>"
                "<input type=image src=go.gif></form>",
-               1, WEND_FORM_OK, "http://host/s?q=x&x=0&y=0");
+               1, WANT_SENT, "http://host/s?q=x&x=0&y=0");
 
     // THE FORM DATA SET GOES OUT IN TREE ORDER, hidden fields included —
     // visible only when two controls share a name, which is exactly when a
@@ -589,18 +728,18 @@ static void form_checks(void)
     expect_url("tree order", "<form action=/s><input name=k value=1>"
                "<input type=hidden name=k value=2><input name=k value=3>"
                "<input type=hidden name=k value=4><input type=submit></form>",
-               2, WEND_FORM_OK, "http://host/s?k=1&k=2&k=3&k=4");
+               2, WANT_SENT, "http://host/s?k=1&k=2&k=3&k=4");
 
     // A DISABLED OPTION is shown, never stepped onto, and never sent — which
     // is exactly what a "choose one" placeholder needs.
     expect_url("placeholder", "<form action=/s><select name=pick>"
                "<option disabled selected value=none>Choose one"
                "<option value=1>One</select><input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s");
+               1, WANT_SENT, "http://host/s?");
     expect_url("optgroup off", "<form action=/s><select name=pick>"
                "<optgroup disabled><option value=1 selected>One</optgroup>"
                "<option value=2>Two</select><input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s");
+               1, WANT_SENT, "http://host/s?");
     {
         // The placeholder is what the list SHOWS, all the same.
         const char *want[] = { "[1][v Choose one][2][Submit]" };
@@ -611,7 +750,7 @@ static void form_checks(void)
     // READONLY is not DISABLED: the page keeps the value fixed and the value
     // still goes.
     expect_url("readonly sent", "<form action=/s><input name=a value=1 readonly>"
-               "<input type=submit></form>", 1, WEND_FORM_OK, "http://host/s?a=1");
+               "<input type=submit></form>", 1, WANT_SENT, "http://host/s?a=1");
     // A button's own action brings its own section with it.
     {
         wend_page_t *page = render_html_text(
@@ -619,36 +758,28 @@ static void form_checks(void)
             "<input type=submit formaction='/other#results'></form>",
             80, "http://host/p");
         CHECK(page && page->nspots == 2);
-        if (page) {
-            char url[256], frag[64];
-            CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url),
-                                frag, sizeof(frag)) == WEND_FORM_OK);
-            CHECK(strcmp(url, "http://host/other?q=x") == 0);
-            CHECK(strcmp(frag, "results") == 0);
-            wend_page_free(page);
+        if (page && page->nspots == 2) {
+            os64_page_request_t request;
+            CHECK(send_spot(page, 1, &request) == OS64_PAGE_NAVIGATE);
+            CHECK(request.url && strcmp(request.url, "http://host/other?q=x") == 0);
+            CHECK(request.has_fragment && strcmp(request.fragment, "results") == 0);
+            os64_page_request_free(&request);
         }
+        wend_page_free(page);
     }
     // A BASE WHOSE PORT IS ITS SCHEME'S DEFAULT resolves as if it named no
     // port — the shape a fetch hands over, and the one that would otherwise
     // spell `host:443` into every relative link on the page.
     {
-        os64_url_t base;
-        CHECK(os64_url_parse("https://host/dir/page.html", &base) == OS64_URL_OK);
-        base.port = 443;                 // as a fetch fills it in
-        os64_html_parser_t *p = os64_html_parser_new(NULL);
-        const char *html = "<a href='rel.html'>r</a><a href='#x'>f</a>";
-        if (p && os64_html_parser_feed(p, html, strlen(html)) >= 0) {
-            os64_html_document_t *doc = os64_html_parser_finish(p);
-            wend_page_t *page = doc ? wend_render_html(doc, &base, 40, NULL, 0) : NULL;
-            CHECK(page && page->nspots == 2);
-            if (page && page->nspots == 2) {
-                CHECK(strcmp(page->spots[0].url, "https://host/dir/rel.html") == 0);
-                CHECK(strcmp(page->spots[1].url, "https://host/dir/page.html") == 0);
-            }
-            wend_page_free(page);
-            if (doc)
-                os64_html_document_free(doc);
+        wend_page_t *page = render_html_text("<a href='rel.html'>r</a><a href='#x'>f</a>",
+                                             40, "https://host:443/dir/page.html");
+        CHECK(page && page->nspots == 2);
+        if (page && page->nspots == 2) {
+            CHECK(strcmp(link_url(page, 0), "https://host/dir/rel.html") == 0);
+            CHECK(strcmp(link_url(page, 1), "https://host/dir/page.html") == 0);
+            CHECK(link_of(page, 1)->same_document);
         }
+        wend_page_free(page);
     }
 
     // `#` with nothing after it asked for a fragment; an empty href did not.
@@ -657,9 +788,9 @@ static void form_checks(void)
                                              40, "http://host/p");
         CHECK(page && page->nspots == 2);
         if (page && page->nspots == 2) {
-            CHECK(page->spots[0].has_fragment && page->spots[0].fragment[0] == '\0');
-            CHECK(!page->spots[1].has_fragment);
-            CHECK(strcmp(page->spots[0].url, "http://host/p") == 0);
+            CHECK(link_of(page, 0)->href.has_fragment && link_of(page, 0)->href.fragment[0] == '\0');
+            CHECK(!link_of(page, 1)->href.has_fragment);
+            CHECK(strcmp(link_url(page, 0), "http://host/p") == 0);
         }
         wend_page_free(page);
     }
@@ -670,7 +801,7 @@ static void form_checks(void)
                                              "http://host/dir/page.html?q=1");
         CHECK(page && page->nspots == 1);
         if (page && page->nspots == 1)
-            CHECK(strcmp(page->spots[0].url, "http://host/dir/page.html?q=1") == 0);
+            CHECK(strcmp(link_url(page, 0), "http://host/dir/page.html?q=1") == 0);
         wend_page_free(page);
     }
 
@@ -678,20 +809,20 @@ static void form_checks(void)
     // this was true, activating one read a pointer the renderer never set.
     expect_url("button method", "<form action=/s><input name=pw value=x>"
                "<button formmethod=post>Log in</button></form>",
-               1, WEND_FORM_POST, NULL);
+               1, WANT_POST, NULL);
     expect_url("button action", "<form action=/s><input name=q value=x>"
                "<button formaction=/other>Go</button></form>",
-               1, WEND_FORM_OK, "http://host/other?q=x");
+               1, WANT_SENT, "http://host/other?q=x");
     expect_url("button plain", "<form action=/s><input name=q value=x>"
                "<button name=go value=now>Go</button></form>",
-               1, WEND_FORM_OK, "http://host/s?q=x&go=now");
+               1, WANT_SENT, "http://host/s?q=x&go=now");
 
     // A fieldset disables everything under it — except the words in its
     // first legend, which were never a control.
     expect_url("fieldset off", "<form action=/s><fieldset disabled>"
                "<legend>Title</legend><input name=a value=1></fieldset>"
                "<input name=b value=2><input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?b=2");
+               1, WANT_SENT, "http://host/s?b=2");
     {
         // The fieldset is a block, so its row ends with it; the box inside
         // is drawn and unnumbered, the ones after it are spots.
@@ -705,48 +836,38 @@ static void form_checks(void)
         wend_page_t *page = render_html_text(
             "<form action='/s#results'><input name=q value=x>"
             "<input type=submit></form>", 80, "http://host/p");
-        CHECK(page && page->nforms == 1);
-        if (page) {
-            char url[256], frag[64];
-            CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url),
-                                frag, sizeof(frag)) == WEND_FORM_OK);
-            CHECK(strcmp(url, "http://host/s?q=x") == 0);
-            CHECK(strcmp(frag, "results") == 0);
-            wend_page_free(page);
+        CHECK(page && page->nspots == 2);
+        if (page && page->nspots == 2) {
+            os64_page_request_t request;
+            CHECK(send_spot(page, 1, &request) == OS64_PAGE_NAVIGATE);
+            CHECK(request.url && strcmp(request.url, "http://host/s?q=x") == 0);
+            CHECK(request.has_fragment && strcmp(request.fragment, "results") == 0);
+            os64_page_request_free(&request);
         }
+        wend_page_free(page);
     }
 
     // WHAT A PERSON TYPED SURVIVES A RE-WRAP, which is the whole reason the
-    // edits live outside the page: the same spot number carries the value
-    // into the next render, at whatever width.
-    const char *html = "<form action=/s><input name=q size=6 value=old>"
-                       "<input type=submit value=Go></form>";
-    wend_page_t *first = render_html_text(html, 80, "http://host/p");
+    // edits live in the model and not in the lines: a page drawn again at
+    // another width shows the value, and the form sends it.
+    wend_page_t *first = render_html_text("<form action=/s><input name=q size=6 value=old>"
+                                          "<input type=submit value=Go></form>",
+                                          80, "http://host/p");
     CHECK(first != NULL && first->nspots == 2);
-    if (first) {
-        wend_edit_t edits[2] = { { (char *)"new cat", -1, -1 }, { NULL, -1, -1 } };
-        os64_html_parser_t *p = os64_html_parser_new(NULL);
-        os64_url_t base;
-        CHECK(p != NULL && os64_url_parse("http://host/p", &base) == OS64_URL_OK);
-        if (p && os64_html_parser_feed(p, html, strlen(html)) >= 0) {
-            os64_html_document_t *doc = os64_html_parser_finish(p);
-            wend_page_t *again = doc ? wend_render_html(doc, &base, 40, edits, 2) : NULL;
-            CHECK(again != NULL);
-            if (again) {
-                CHECK(again->nspots == 2);
-                CHECK(strcmp(again->spots[0].value, "new cat") == 0);
-                CHECK(again->nlines > 0 && strstr(again->lines[0].text, "[ew cat]") != NULL);
-                char url[256];
-                CHECK(wend_form_url(again, 1, "http://host/p", url, sizeof(url), NULL, 0)
-                      == WEND_FORM_OK);
-                CHECK(strcmp(url, "http://host/s?q=new+cat") == 0);
-                wend_page_free(again);
-            }
-            if (doc)
-                os64_html_document_free(doc);
+    if (first && first->nspots == 2) {
+        CHECK(os64_page_set_text(model_of(first), first->spots[0].control, "new cat", 7) == 0);
+        wend_page_t *again = redraw(first, 40);
+        CHECK(again != NULL && again->nspots == 2);
+        if (again) {
+            CHECK(again->nlines > 0 && strstr(again->lines[0].text, "[ew cat]") != NULL);
+            wend_page_free(again);
         }
-        wend_page_free(first);
+        os64_page_request_t request;
+        CHECK(send_spot(first, 1, &request) == OS64_PAGE_NAVIGATE);
+        CHECK(request.url && strcmp(request.url, "http://host/s?q=new+cat") == 0);
+        os64_page_request_free(&request);
     }
+    wend_page_free(first);
 }
 
 // An allocation failure anywhere leaves a page that is honest about being
@@ -852,47 +973,48 @@ static void form_edge_checks(void)
     // it happens to be written inside.
     expect_url("form attribute", "<form id=f action=/s></form>"
                "<input form=f name=q value=x><input type=submit form=f>",
-               1, WEND_FORM_OK, "http://host/s?q=x");
+               1, WANT_SENT, "http://host/s?q=x");
     expect_url("form attribute hidden", "<form id=f action=/s></form>"
                "<input type=hidden form=f name=h value=1>"
                "<input type=submit form=f>",
-               0, WEND_FORM_OK, "http://host/s?h=1");
+               0, WANT_SENT, "http://host/s?h=1");
     expect_url("form attribute unmatched", "<form action=/s>"
                "<input form=nosuch name=q value=x><input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s");
+               1, WANT_SENT, "http://host/s?");
     {
         wend_page_t *page = render_html_text(
             "<form action=/s><input form=nosuch name=q value=x></form>", 80,
             "http://host/p");
-        CHECK(page && page->nspots == 1 && page->spots[0].form == 0);
+        CHECK(page && page->nspots == 1 && control_at(page, 0)->form == -1);
         // A control in no form has nowhere to be sent.
-        if (page) {
-            char url[128];
-            CHECK(wend_form_url(page, 0, "http://host/p", url, sizeof(url), NULL, 0)
-                  == WEND_FORM_NONE);
-            wend_page_free(page);
+        if (page && page->nspots == 1) {
+            os64_page_request_t request;
+            CHECK(send_spot(page, 0, &request) == OS64_PAGE_NOTHING &&
+                  request.reason == OS64_PAGE_REASON_NO_FORM);
+            os64_page_request_free(&request);
         }
+        wend_page_free(page);
     }
     // AN EMPTY `formaction` IS THE PAGE ITSELF, and an absent one is the
     // form's — the string alone cannot tell them apart.
     expect_url("formaction empty", "<form action=/other><input name=q value=x>"
                "<input type=submit formaction=''></form>",
-               1, WEND_FORM_OK, "http://host/dir/page.html?q=x");
+               1, WANT_SENT, "http://host/dir/page.html?q=x");
     expect_url("formaction absent", "<form action=/other><input name=q value=x>"
                "<input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/other?q=x");
+               1, WANT_SENT, "http://host/other?q=x");
     // A TICK THAT SAYS `value=""` ASKED FOR AN EMPTY ANSWER; only one with
     // no value at all takes the `on` the standard supplies.
     expect_url("empty tick value", "<form action=/s>"
                "<input type=checkbox name=a value='' checked>"
                "<input type=checkbox name=b checked><input type=submit></form>",
-               2, WEND_FORM_OK, "http://host/s?a=&b=on");
+               2, WANT_SENT, "http://host/s?a=&b=on");
     // A PAGE THAT MARKS TWO OF A GROUP HAS PICKED THE LAST ONE. Leaving both
     // would send a server the opposite of what it reads first.
     expect_url("radio group", "<form action=/s><input type=radio name=x value=a checked>"
                "<input type=radio name=x value=b checked>"
                "<input type=radio name=y value=c checked><input type=submit></form>",
-               3, WEND_FORM_OK, "http://host/s?x=b&y=c");
+               3, WANT_SENT, "http://host/s?x=b&y=c");
     {
         // ...and the ROW agrees, because the group is settled before the
         // control is drawn: a page showing two dots where one value goes is
@@ -926,8 +1048,8 @@ static void form_edge_checks(void)
             40, "http://host/p");
         CHECK(page != NULL && page && page->nspots == 1);
         if (page && page->nspots == 1) {
-            CHECK(strcmp(page->spots[0].fragment, "section 2") == 0);
-            CHECK(fixture_node_line(page, page->spots[0].fragment) >= 0);
+            CHECK(strcmp(link_of(page, 0)->href.fragment, "section 2") == 0);
+            CHECK(fixture_node_line(page, link_of(page, 0)->href.fragment) >= 0);
             wend_page_free(page);
         }
     }
@@ -962,14 +1084,14 @@ static void form_edge_checks(void)
                "<input type=submit></form>"
                "<form action=/t><input type=radio name=x value=b checked>"
                "<input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?x=a");
+               1, WANT_SENT, "http://host/s?x=a");
     // A `multiple` list sends every option the page marked, in the page's
     // own order.
     expect_url("multi select", "<form action=/s><select name=p multiple>"
                "<option value=1 selected>One<option value=2>Two"
                "<option value=3 selected>Three</select>"
                "<input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?p=1&p=3");
+               1, WANT_SENT, "http://host/s?p=1&p=3");
     {
         // ...and says on the row that there is more than one.
         const char *want[] = { "[1][v One +1][2][Submit]" };
@@ -980,28 +1102,29 @@ static void form_edge_checks(void)
     {
         // PICKING IS ONE THING EVEN ON A `multiple` LIST: the list cycles,
         // so one key says "this one" and the page's several give way to it.
-        const char *html = "<form action=/s><select name=p multiple>"
-                           "<option value=1 selected>One<option value=2>Two"
-                           "<option value=3 selected>Three</select>"
-                           "<input type=submit></form>";
-        wend_edit_t edits[2] = { { NULL, -1, 1 }, { NULL, -1, -1 } };
-        os64_html_parser_t *p = os64_html_parser_new(NULL);
-        os64_url_t base;
-        CHECK(p != NULL && os64_url_parse("http://host/p", &base) == OS64_URL_OK);
-        if (p && os64_html_parser_feed(p, html, strlen(html)) >= 0) {
-            os64_html_document_t *doc = os64_html_parser_finish(p);
-            wend_page_t *page = doc ? wend_render_html(doc, &base, 80, edits, 2) : NULL;
-            CHECK(page != NULL);
-            if (page) {
-                char url[256];
-                CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url), NULL, 0)
-                      == WEND_FORM_OK);
-                CHECK(strcmp(url, "http://host/s?p=2") == 0);
-                wend_page_free(page);
-            }
-            if (doc)
-                os64_html_document_free(doc);
+        // These are the edits wend's step makes; the row and the wire must
+        // then agree on the one.
+        wend_page_t *page = render_html_text(
+            "<form action=/s><select name=p multiple>"
+            "<option value=1 selected>One<option value=2>Two"
+            "<option value=3 selected>Three</select>"
+            "<input type=submit></form>", 80, "http://host/p");
+        CHECK(page != NULL && page->nspots == 2);
+        if (page && page->nspots == 2) {
+            os64_page_t *model = model_of(page);
+            int32_t list = page->spots[0].control;
+            CHECK(os64_page_set_chosen(model, list, 1, true) == 0);
+            CHECK(os64_page_set_chosen(model, list, 0, false) == 0);
+            CHECK(os64_page_set_chosen(model, list, 2, false) == 0);
+            wend_page_t *again = redraw(page, 80);
+            CHECK(again && again->nlines > 0 && strstr(again->lines[0].text, "[v Two]"));
+            wend_page_free(again);
+            os64_page_request_t request;
+            CHECK(send_spot(page, 1, &request) == OS64_PAGE_NAVIGATE);
+            CHECK(request.url && strcmp(request.url, "http://host/s?p=2") == 0);
+            os64_page_request_free(&request);
         }
+        wend_page_free(page);
     }
     {
         // A `multiple` list shows an option that will actually GO. With
@@ -1015,7 +1138,7 @@ static void form_edge_checks(void)
     expect_url("multi select empty sends", "<form action=/s><select name=p multiple>"
                "<option value=1>One<option value=2>Two</select>"
                "<input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s");
+               1, WANT_SENT, "http://host/s?");
     {
         // ...and a disabled first choice is not what the row shows either,
         // because it is not what goes.
@@ -1028,38 +1151,17 @@ static void form_edge_checks(void)
                "<form action=/s><select name=p multiple>"
                "<option value=x selected disabled>X<option value=b selected>B"
                "</select><input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?p=b");
-    {
-        // A SUBMIT CONTROL NOBODY CAN PRESS IS STILL THE FORM'S DEFAULT
-        // BUTTON. The renderer records where the first one stood, so the
-        // session can refuse the Enter-in-one-box shortcut rather than send
-        // the form as though it had no button at all.
-        wend_page_t *page = render_html_text(
-            "<form action=/s><div hidden><button formmethod=post>Go</button></div>"
-            "<input name=q value=x></form>"
-            "<form action=/t><input name=q value=x>"
-            "<div hidden><input type=submit></div></form>", 80, "http://host/p");
-        CHECK(page != NULL && page->nforms == 2);
-        if (page && page->nforms == 2) {
-            // The first form's button comes before its only spot...
-            CHECK(page->forms[0].unreachable_submit == 0);
-            // ...and the second form's comes after it.
-            CHECK(page->forms[1].unreachable_submit == 2);
-            wend_page_free(page);
-        }
-    }
-    {
-        // A form with no hidden button at all says so, so the shortcut is
-        // not refused on a page that never had one.
-        wend_page_t *page = render_html_text(
-            "<form action=/s><input name=q value=x><input type=submit></form>",
-            80, "http://host/p");
-        CHECK(page != NULL && page->nforms == 1);
-        if (page) {
-            CHECK(page->forms[0].unreachable_submit == -1);
-            wend_page_free(page);
-        }
-    }
+               1, WANT_SENT, "http://host/s?p=b");
+    // A SUBMIT CONTROL NOBODY CAN PRESS IS STILL THE FORM'S DEFAULT BUTTON,
+    // and finishing the form's one box presses it — method, action and all.
+    // Out of sight, it still decides that the first form POSTS (which wend
+    // refuses by name) and that the second goes where the second says.
+    expect_url("hidden default button posts", "<form action=/s>"
+               "<div hidden><button formmethod=post>Go</button></div>"
+               "<input name=q value=x></form>", 0, WANT_POST, NULL);
+    expect_url("hidden default button sends", "<form action=/t><input name=q value=x>"
+               "<div hidden><input type=submit name=b value=v></div></form>",
+               0, WANT_SENT, "http://host/t?q=x&b=v");
     // A GROUP IS EVERY RADIO OF ONE NAME WITH ONE FORM OWNER, so two
     // root-level radios naming different forms are two groups and neither
     // cancels the other.
@@ -1067,28 +1169,19 @@ static void form_edge_checks(void)
                "<input type=radio form=a name=x value=1 checked>"
                "<input type=radio form=b name=x value=2 checked>"
                "<input type=submit form=a>",
-               2, WEND_FORM_OK, "http://host/s?x=1");
+               2, WANT_SENT, "http://host/s?x=1");
     // A SUBMIT CONTROL OUT OF REACH BELONGS TO THE FORM IT NAMES, not to the
-    // document it happens to sit in — a claim against the wrong form leaves
-    // the right one thinking it has no button at all.
-    {
-        wend_page_t *page = render_html_text(
-            "<form id=a action=/s></form>"
-            "<div hidden><button form=a formmethod=post>Go</button></div>"
-            "<input form=a name=pw value=secret>", 80, "http://host/p");
-        CHECK(page != NULL && page->nforms == 1);
-        if (page && page->nforms == 1) {
-            CHECK(page->forms[0].unreachable_submit == 0);
-            wend_page_free(page);
-        }
-    }
+    // document it happens to sit in.
+    expect_url("hidden default button by owner", "<form id=a action=/s></form>"
+               "<div hidden><button form=a formmethod=post>Go</button></div>"
+               "<input form=a name=pw value=secret>", 0, WANT_POST, NULL);
     // A DISABLED FIELDSET'S FIRST `legend` IS LIVE wherever the section is
     // drawn, which includes not being drawn at all.
     expect_url("hidden legend", "<form action=/s><div hidden>"
                "<fieldset disabled><legend><input name=x value=y></legend>"
                "<input name=off value=1></fieldset></div>"
                "<input type=submit></form>",
-               0, WEND_FORM_OK, "http://host/s?x=y");
+               0, WANT_SENT, "http://host/s?x=y");
     {
         // A STATED DESTINATION THAT WILL NOT RESOLVE IS A REFUSAL, never the
         // page it is on: that is a different host to be wrong about. An
@@ -1098,16 +1191,18 @@ static void form_edge_checks(void)
         huge[sizeof(huge) - 1] = '\0';
         snprintf(html, sizeof(html), "<form action=/%s><input name=q value=x>"
                  "<input type=submit></form>", huge);
-        expect_url("bad form action", html, 1, WEND_FORM_BAD_ACTION, NULL);
+        expect_url("bad form action", html, 1, WANT_TOO_LONG, NULL);
         snprintf(html, sizeof(html), "<form action=/s><input name=q value=x>"
                  "<input type=submit formaction=/%s></form>", huge);
-        expect_url("bad button action", html, 1, WEND_FORM_BAD_ACTION, NULL);
+        expect_url("bad button action", html, 1, WANT_TOO_LONG, NULL);
     }
-    // A `_charset_` field is the FORM's answer, not the page's.
+    // A `_charset_` field is the FORM's answer, not the page's: the encoding
+    // the values go out in, which is the document's — windows-1252 for a
+    // page that names none.
     expect_url("charset field", "<form action=/s>"
                "<input type=hidden name=_charset_><input name=q value=x>"
                "<input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?_charset_=UTF-8&q=x");
+               1, WANT_SENT, "http://host/s?_charset_=windows-1252&q=x");
     // An option's `label` is its words; its VALUE still falls back to the
     // element's text, never to the label.
     {
@@ -1119,17 +1214,17 @@ static void form_edge_checks(void)
     expect_url("option label value", "<form action=/s><select name=p>"
                "<option label=Short>Long fallback</select>"
                "<input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?p=Long+fallback");
+               1, WANT_SENT, "http://host/s?p=Long+fallback");
     // A list drawn as several ROWS is not a drop-down: it holds nothing
     // until the page marks something, so nothing is invented for it.
     expect_url("select sized", "<form action=/s><select name=x size=2>"
                "<option value=a>A<option value=b>B</select>"
                "<input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s");
+               1, WANT_SENT, "http://host/s?");
     expect_url("select dropdown", "<form action=/s><select name=x>"
                "<option value=a>A<option value=b>B</select>"
                "<input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?x=a");
+               1, WANT_SENT, "http://host/s?x=a");
     // A SUBTREE THE PAGE MARKED `hidden` DRAWS NOTHING AND IS NO PLACE TO
     // LAND — and its values still go with the form, which is what a page
     // that puts a section away relies on.
@@ -1145,14 +1240,14 @@ static void form_edge_checks(void)
     expect_url("hidden control itself", "<form action=/s>"
                "<input name=away value=v hidden><input name=q value=x>"
                "<input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?away=v&q=x");
+               1, WANT_SENT, "http://host/s?away=v&q=x");
     // A disabled control is not sent whether it is on the screen or not.
     expect_url("hidden and disabled", "<form action=/s>"
                "<div hidden><input name=a value=1 disabled>"
                "<fieldset disabled><input name=b value=2></fieldset>"
                "<input name=c value=3></div>"
                "<input type=submit></form>",
-               0, WEND_FORM_OK, "http://host/s?c=3");
+               0, WANT_SENT, "http://host/s?c=3");
     expect_url("hidden subtree sent",
                "<form action=/s><div hidden><input name=internal value=v>"
                "<input type=checkbox name=t value=1 checked>"
@@ -1161,7 +1256,7 @@ static void form_edge_checks(void)
                "<textarea name=note>kept</textarea>"
                "<input type=submit name=btn value=no></div>"
                "<input name=q value=x><input type=submit></form>",
-               1, WEND_FORM_OK,
+               1, WANT_SENT,
                "http://host/s?internal=v&t=1&pick=b&note=kept&q=x");
     {
         // A `hidden` subtree is not a form's excuse to forget where things
@@ -1170,21 +1265,21 @@ static void form_edge_checks(void)
             "<form action=/s><input name=q value=first>"
             "<div hidden><input name=q value=second></div>"
             "<input type=submit></form>", 80, "http://host/p");
-        CHECK(page != NULL);
-        if (page) {
-            char url[256];
-            CHECK(wend_form_url(page, 1, "http://host/p", url, sizeof(url), NULL, 0)
-                  == WEND_FORM_OK);
-            CHECK(strcmp(url, "http://host/s?q=first&q=second") == 0);
-            wend_page_free(page);
+        CHECK(page != NULL && page->nspots == 2);
+        if (page && page->nspots == 2) {
+            os64_page_request_t request;
+            CHECK(send_spot(page, 1, &request) == OS64_PAGE_NAVIGATE);
+            CHECK(request.url && strcmp(request.url, "http://host/s?q=first&q=second") == 0);
+            os64_page_request_free(&request);
         }
+        wend_page_free(page);
     }
     // WHITESPACE AT AN ELEMENT BOUNDARY IS STILL WHITESPACE. An option's
     // words are gathered as one sequence, so `A<b> B</b>` is two words in
     // what is shown AND in what is sent.
     expect_url("gather boundary", "<form action=/s><select name=p>"
                "<option>A<b> B</b></select><input type=submit></form>",
-               1, WEND_FORM_OK, "http://host/s?p=A+B");
+               1, WANT_SENT, "http://host/s?p=A+B");
     {
         const char *want[] = { "[1][v A B][2][Submit]" };
         expect_lines("gather boundary drawn", "<form><select name=p>"
@@ -1195,35 +1290,28 @@ static void form_edge_checks(void)
         // THE FIRST `base` CARRYING AN href WINS, empty or not: an empty one
         // names the document, and skipping it would hand every relative link
         // on the page to the later base's host.
-        char href[OS64_URL_REF_MAX];
-        os64_html_parser_t *p = os64_html_parser_new(NULL);
-        const char *html = "<head><base href=''><base href='http://other/'></head>"
-                           "<body><a href=x>link</a>";
-        CHECK(p != NULL);
-        if (p && os64_html_parser_feed(p, html, strlen(html)) >= 0) {
-            os64_html_document_t *doc = os64_html_parser_finish(p);
-            CHECK(doc != NULL);
-            if (doc) {
-                CHECK(wend_base_href(doc, href, sizeof(href)));
-                CHECK(strcmp(href, "") == 0);
-                os64_html_document_free(doc);
-            }
-        }
+        wend_page_t *page = render_html_text(
+            "<head><base href=''><base href='http://other/'></head>"
+            "<body><a href=x>link</a>", 40, "http://host/dir/p.html");
+        CHECK(page != NULL && page->nspots == 1);
+        if (page && page->nspots == 1)
+            CHECK(strcmp(link_url(page, 0), "http://host/dir/x") == 0);
+        wend_page_free(page);
     }
 }
 
-// A PAGE IS A LEVER, and the searching one may make this program do is
-// budgeted. Without that, forty thousand marked radios in one form ran past
-// two minutes on a host far faster than the guest — in a program a person
-// cannot interrupt while it renders.
-static void budget_checks(void)
+// A PAGE IS A LEVER. Forty thousand marked radios in one form once ran past
+// two minutes in a group search a person could not interrupt; the model
+// settles a group once, and a page this size must draw one dot and send the
+// one value the page's last mark chose.
+static void big_group_checks(void)
 {
     size_t n = 20000, cap = n * 48 + 64, at = 0;
     char *html = malloc(cap);
     CHECK(html != NULL);
     if (!html)
         return;
-    at += (size_t)snprintf(html + at, cap - at, "<form>");
+    at += (size_t)snprintf(html + at, cap - at, "<form action=/s>");
     for (size_t i = 0; i < n; i++)
         at += (size_t)snprintf(html + at, cap - at,
                                "<input type=radio name=x value=%zu checked>", i);
@@ -1232,18 +1320,15 @@ static void budget_checks(void)
     CHECK(page != NULL);
     if (page) {
         CHECK(page->nspots == (int32_t)n);
-        // Past the budget a radio keeps the page's own answer, so the row and
-        // the wire agree on what the page wrote — and this form is far longer
-        // than an address may be, which is what it would have been refused
-        // for whatever the group rule decided.
         int32_t on = 0;
-        for (int32_t i = 0; i < page->nspots; i++)
-            if (page->spots[i].on)
+        for (int32_t i = 0; i < page->nlines; i++)
+            for (const char *dot = page->lines[i].text; (dot = strstr(dot, "(*)")); dot++)
                 on++;
-        CHECK(on > 1);
-        char url[2048];
-        CHECK(wend_form_url(page, 0, "http://host/p", url, sizeof(url), NULL, 0)
-              == WEND_FORM_TOO_LONG);
+        CHECK(on == 1);
+        os64_page_request_t request;
+        CHECK(send_spot(page, 0, &request) == OS64_PAGE_NAVIGATE);
+        CHECK(request.url && strcmp(request.url, "http://host/s?x=19999") == 0);
+        os64_page_request_free(&request);
         wend_page_free(page);
     }
     free(html);
@@ -1251,35 +1336,49 @@ static void budget_checks(void)
 
 static void oom_checks(void)
 {
-    // THE FORM MACHINERY UNDER FAILURE. Spots, options, anchors and hidden
-    // fields are all allocated mid-walk, so a refusal at any step can leave
-    // a page half-built — and a NUMBER typed at the status row reaches any
-    // spot, drawn or not. What comes back must be paintable, answerable and
-    // free-clean at every one of those steps.
-    for (size_t n = 1; n < 700; n++) {
+    // THE FORM MACHINERY UNDER FAILURE. The model and the renderer both
+    // allocate as they go, so a refusal at any step can leave a page
+    // half-built or a model missing — and a NUMBER typed at the status row
+    // reaches any spot, drawn or not. What comes back must be paintable,
+    // answerable and free-clean at every one of those steps, and the sweep
+    // is as long as a clean run's allocations so a longer build cannot
+    // quietly shorten it.
+    static const char oom_page[] =
+        "<h2 id=here>Form</h2><form id=f action='/s#r'>"
+        "<input type=hidden name=h value=1><input name=q value=x size=4>"
+        "<select name=p multiple><option disabled selected>Pick"
+        "<option value=2 selected>Two<b> Deux</b></select>"
+        "<input type=checkbox name=c checked><textarea name=t>a\nb</textarea>"
+        "<div hidden><input name=away value=1><select name=s>"
+        "<option value=z selected>Z</select><textarea name=n>hush</textarea></div>"
+        "<button formmethod=post name=go formaction=''>Send</button></form>"
+        "<input form=f name=outside value=o>"
+        "<input type=radio form=f name=r value=1 checked>"
+        "<select name=lab size=2><option label=Short>Long</select>"
+        "<ol reversed><li>one<li>two</ol>"
+        "<a href='#he%72e'>back up</a>";
+    allocations = 0;
+    wend_page_t *clean = render_html_text(oom_page, 40, "http://host/p");
+    size_t steps = allocations;
+    CHECK(clean != NULL && !clean->incomplete && clean->nspots > 5);
+    wend_page_free(clean);
+    for (size_t n = 1; n <= steps + 1; n++) {
         allocations = 0;
         fail_at = n;
-        wend_page_t *page = render_html_text(
-            "<h2 id=here>Form</h2><form id=f action='/s#r'>"
-            "<input type=hidden name=h value=1><input name=q value=x size=4>"
-            "<select name=p multiple><option disabled selected>Pick"
-            "<option value=2 selected>Two<b> Deux</b></select>"
-            "<input type=checkbox name=c checked><textarea name=t>a\nb</textarea>"
-            "<div hidden><input name=away value=1><select name=s>"
-            "<option value=z selected>Z</select><textarea name=n>hush</textarea></div>"
-            "<button formmethod=post name=go formaction=''>Send</button></form>"
-            "<input form=f name=outside value=o>"
-            "<input type=radio form=f name=r value=1 checked>"
-            "<select name=lab size=2><option label=Short>Long</select>"
-            "<ol reversed><li>one<li>two</ol>"
-            "<a href='#he%72e'>back up</a>", 40, "http://host/p");
+        wend_page_t *page = render_html_text(oom_page, 40, "http://host/p");
         if (page) {
             check_printable(page);
-            char url[512], frag[64];
-            // Every spot is asked what it would send; none may fault.
-            for (int32_t i = 0; i < page->nspots; i++)
-                (void)wend_form_url(page, i, "http://host/p", url, sizeof(url),
-                                    frag, sizeof(frag));
+            // Every spot is asked what it would do; none may fault.
+            for (int32_t i = 0; i < page->nspots; i++) {
+                os64_page_request_t request;
+                if (page->spots[i].kind == WEND_SPOT_LINK) {
+                    os64_page_what_t what = { OS64_PAGE_ACTIVATE_LINK, page->spots[i].link, 0, 0 };
+                    (void)os64_page_activate(model_of(page), what, &request);
+                } else {
+                    (void)send_spot(page, i, &request);
+                }
+                os64_page_request_free(&request);
+            }
             (void)fixture_node_line(page, "here");
             wend_page_free(page);
         }
@@ -1305,14 +1404,14 @@ static void oom_checks(void)
 
 // ── The dump ────────────────────────────────────────────────────────────
 
-static void dump(const wend_page_t *page, const char *name)
+static void dump(const wend_page_t *page, const os64_page_t *model, const char *name)
 {
     printf("page: %s\n", name);
     printf("title: %s\n", page->title);
     printf("width: %d\n", page->cols);
     printf("lines: %d\n", page->nlines);
     printf("spots: %d\n", page->nspots);
-    printf("forms: %d\n", page->nforms);
+    printf("forms: %d\n", os64_page_nforms(model));
     printf("node rows: %d\n", page->nnode_rows);
     printf("incomplete: %s\n", page->incomplete ? "yes" : "no");
     printf("--\n");
@@ -1350,75 +1449,80 @@ static void dump(const wend_page_t *page, const char *name)
             printf("|~%s\n", attrs);
     }
     printf("--\n");
-    // The spots, in the order the keyboard walks them. A link shows where it
-    // goes; a control shows what it would send, because that is the half a
-    // reader of this dump cannot get from the rows above.
+    // The spots, in the order the keyboard walks them, and what the MODEL
+    // says each one is. A link shows where it goes; a control shows what it
+    // would send, because that is the half a reader of this dump cannot get
+    // from the rows above.
     static const char *const kinds[] = { "link", "text", "check", "radio",
                                          "choice", "submit" };
     for (int32_t i = 0; i < page->nspots; i++) {
         const wend_spot_t *spot = &page->spots[i];
         printf("%d %s", i + 1, kinds[spot->kind]);
-        if (spot->form)
-            printf(" form=%d", spot->form);
-        if (spot->has_action)
-            printf(" formaction=%s", spot->form_action[0] ? spot->form_action
-                                                          : "(this page)");
         if (spot->kind == WEND_SPOT_LINK) {
-            printf(" %s", spot->url[0] ? spot->url : "(unresolved)");
+            const os64_page_link_t *link = os64_page_link(model, spot->link);
+            printf(" %s", link && link->href.url ? link->href.url : "(unresolved)");
             // A fragment that was ASKED for prints even when it is empty:
             // `#` alone means the top, and it is a different behaviour from
             // no fragment at all.
-            if (spot->has_fragment)
-                printf(" #%s", spot->fragment);
+            if (link && link->href.has_fragment)
+                printf(" #%s", link->href.fragment ? link->href.fragment : "");
             printf("\n");
             continue;
         }
-        if (spot->secret)
+        const os64_page_control_t *c = os64_page_control(model, spot->control);
+        if (c == NULL) {
+            printf(" (no control)\n");
+            continue;
+        }
+        if (c->form >= 0)
+            printf(" form=%d", c->form + 1);
+        if (c->overrides.action.spelled)
+            printf(" formaction=%s", c->overrides.action.url ? c->overrides.action.url
+                                                             : "(unresolved)");
+        if (c->input == OS64_PAGE_INPUT_PASSWORD)
             printf(" secret");
-        if (spot->image)
+        if (c->input == OS64_PAGE_INPUT_IMAGE)
             printf(" image");
-        printf(" name=%s", spot->name[0] ? spot->name : "(none)");
-        if (spot->readonly)
+        printf(" name=%s", c->name && c->name[0] ? c->name : "(none)");
+        if (c->readonly)
             printf(" readonly");
         switch (spot->kind) {
             case WEND_SPOT_CHECK:
             case WEND_SPOT_RADIO:
-                printf(" %s value=%s", spot->on ? "on" : "off", spot->value);
+                printf(" %s value=%s", c->checked ? "on" : "off", c->value);
                 break;
             case WEND_SPOT_CHOICE:
-                printf(" chosen=%d of %d%s", spot->chosen, spot->noptions,
-                       spot->multiple ? " multiple" : "");
-                for (int32_t j = 0; j < spot->noptions; j++)
-                    printf(" [%s=%s%s%s]", spot->options[j].shown,
-                           spot->options[j].value,
-                           spot->options[j].on ? " on" : "",
-                           spot->options[j].off ? " off" : "");
-                break;
-            case WEND_SPOT_SUBMIT:
-                printf(" label=%s value=%s", spot->label, spot->value);
+                printf(" of %d%s", c->noptions, c->multiple ? " multiple" : "");
+                for (int32_t j = 0; j < c->noptions; j++)
+                    printf(" [%s=%s%s%s]", c->options[j].label, c->options[j].value,
+                           c->options[j].selected ? " on" : "",
+                           c->options[j].disabled ? " off" : "");
                 break;
             default:
-                printf(" value=%s width=%d", spot->value, spot->width);
+                printf(" value=%s", c->value);
                 break;
         }
         printf("\n");
     }
-    for (int32_t i = 0; i < page->nforms; i++) {
-        const wend_form_t *form = &page->forms[i];
-        printf("form %d %s %s", i + 1, form->post ? "post" : "get",
-               form->action[0] ? form->action : "(this page)");
-        if (form->id[0])
+    static const char *const methods[] = { "get", "post", "dialog" };
+    for (int32_t i = 0; i < os64_page_nforms(model); i++) {
+        const os64_page_form_t *form = os64_page_form(model, i);
+        printf("form %d %s %s", i + 1, methods[form->method],
+               !form->action.spelled || (form->action.url && !form->action.url[0])
+                   ? "(this page)"
+                   : form->action.url ? form->action.url : "(unresolved)");
+        if (form->id && form->id[0])
             printf(" id=%s", form->id);
-        // Only when there is one, so a page without a button out of reach
-        // reads exactly as it did.
-        if (form->unreachable_submit >= 0)
-            printf(" unreachable-submit@%d", form->unreachable_submit);
-        // The values it carries and never shows, each where the page wrote
-        // it — the position is what keeps the query in tree order.
-        for (int32_t j = 0; j < page->nhidden; j++)
-            if (page->hidden[j].form == i + 1)
-                printf(" %s=%s@%d", page->hidden[j].name, page->hidden[j].value,
-                       page->hidden[j].after);
+        // The values it carries and never shows: a hidden field, or a
+        // control the page put out of sight. In tree order, which is the
+        // order they are sent in.
+        for (int32_t j = 0; j < os64_page_ncontrols(model); j++) {
+            const os64_page_control_t *c = os64_page_control(model, j);
+            bool tick = c->input == OS64_PAGE_INPUT_CHECKBOX || c->input == OS64_PAGE_INPUT_RADIO;
+            if (c->form == i && (c->input == OS64_PAGE_INPUT_HIDDEN || c->hidden_subtree) &&
+                !c->disabled && (!tick || c->checked) && c->name && c->name[0])
+                printf(" %s=%s", c->name, c->value);
+        }
         printf("\n");
     }
     // Node identities are process-local; snapshot row geometry by index.
@@ -1490,7 +1594,7 @@ int main(int argc, char **argv)
         list_and_anchor_checks();
         form_checks();
         form_edge_checks();
-        budget_checks();
+        big_group_checks();
         anchor_checks();
         oom_checks();
         printf("renderer: %d checks, %d failures, %zu blocks live\n",
@@ -1508,15 +1612,11 @@ int main(int argc, char **argv)
     size_t len = 0;
     char *bytes = slurp(file, &len);
     wend_page_t *page = NULL;
+    os64_html_document_t *doc = NULL;
+    os64_page_t *model = NULL;
     if (plain) {
         page = wend_render_text(bytes, len, !latin1, cols);
     } else {
-        os64_url_t base;
-        memset(&base, 0, sizeof(base));
-        if (base_text && os64_url_parse(base_text, &base) != OS64_URL_OK) {
-            fprintf(stderr, "bad base %s\n", base_text);
-            return 2;
-        }
         os64_html_options_t opt = os64_html_options_default();
         opt.charset = charset;
         os64_html_parser_t *p = os64_html_parser_new(&opt);
@@ -1524,31 +1624,26 @@ int main(int argc, char **argv)
             fprintf(stderr, "parse failed\n");
             return 1;
         }
-        os64_html_document_t *doc = os64_html_parser_finish(p);
+        doc = os64_html_parser_finish(p);
         if (!doc) {
             fprintf(stderr, "no document\n");
             return 1;
         }
-        // The page's own <base href> outranks where it was fetched from,
-        // exactly as it does in the browser.
-        char href[OS64_URL_REF_MAX];
-        os64_url_t from_page;
-        if (base_text && wend_base_href(doc, href, sizeof(href))) {
-            char absolute[OS64_URL_REF_MAX];
-            if (os64_url_absolute(&base, href, absolute, sizeof(absolute)) &&
-                os64_url_parse(absolute, &from_page) == OS64_URL_OK)
-                base = from_page;
-        }
-        page = wend_render_html(doc, base_text ? &base : NULL, cols, NULL, 0);
-        os64_html_document_free(doc);
+        // The model resolves against where the page came from — and against
+        // its own <base href> where it has one, exactly as in the browser.
+        model = os64_page_build(doc, base_text ? base_text : "", NULL);
+        page = wend_render_html(doc, model, cols);
     }
     if (!page) {
         fprintf(stderr, "no page\n");
         return 1;
     }
     check_printable(page);
-    dump(page, name);
+    dump(page, model, name);
     wend_page_free(page);
+    os64_page_free(model);
+    if (doc)
+        os64_html_document_free(doc);
     free(bytes);
     if (failures) {
         fprintf(stderr, "%d invariant failures\n", failures);

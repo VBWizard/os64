@@ -153,10 +153,10 @@ incomplete: no
 |Access to the proxy is limited to 16K/sec and maximum 4MB per access. Please use
 |a full client for larger files.
 --
-1 submit form=1 name=(none) label=<< Back value=<< Back
-2 submit form=2 name=(none) label=Floodgap Gopher value=Floodgap Gopher
-3 text form=3 name=a value=gopher://gopher.floodgap.com/ width=40
-4 submit form=3 name=(none) label=GO! value=GO!
+1 submit form=1 name=(none) value=<< Back
+2 submit form=2 name=(none) value=Floodgap Gopher
+3 text form=3 name=a value=gopher://gopher.floodgap.com/
+4 submit form=3 name=(none) value=GO!
 5 link gopher://gopher.floodgap.com/
 6 link https://gopher.floodgap.com/gopher/
 7 link https://www.floodgap.com/
@@ -221,6 +221,6 @@ incomplete: no
 66 link https://gopher.floodgap.com/gopher/gw
 67 link https://www.floodgap.com/etc/tos.html
 68 link https://gopher.floodgap.com/overbite/
-form 1 post (this page)
+form 1 post https://gopher.floodgap.com/gopher/gw
 form 2 get https://gopher.floodgap.com/gopher/gw
 form 3 get https://gopher.floodgap.com/gopher/gw

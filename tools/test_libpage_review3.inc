@@ -10,18 +10,18 @@ static void review3_nul_fragments(void)
         snprintf(html,sizeof(html),"<form action='/next#%s'><button>Go</button>",fragments[i]);
         run((PCase){.steps="A14",.name="NUL form fragment refuses",.html=html,
             .verdict=OS64_PAGE_REFUSED,.check_reason=true,.reason=OS64_PAGE_REASON_BAD_ACTION});
-        os64_html_document_t *doc=parse(html,"utf-8");os64_url_t base;os64_url_parse(kPage,&base);
-        wend_page_t *drawn=wend_render_html(doc,&base,40,NULL,0);char url[300],fragment[80];
-        state_expect("legacy form refuses NUL fragment",wend_form_url(drawn,0,kPage,url,sizeof(url),fragment,sizeof(fragment))==WEND_FORM_BAD_ACTION);
-        wend_page_free(drawn);os64_html_document_free(doc);
         snprintf(html,sizeof(html),"<form action=/ok><button formaction='/next#%s'>Go</button>",fragments[i]);
-        doc=parse(html,"utf-8");drawn=wend_render_html(doc,&base,40,NULL,0);
-        state_expect("legacy override refuses NUL fragment",wend_form_url(drawn,0,kPage,url,sizeof(url),fragment,sizeof(fragment))==WEND_FORM_BAD_ACTION);
-        wend_page_free(drawn);os64_html_document_free(doc);
+        run((PCase){.steps="A14",.name="NUL override fragment refuses",.html=html,
+            .verdict=OS64_PAGE_REFUSED,.check_reason=true,.reason=OS64_PAGE_REASON_BAD_ACTION});
+        // A frame is a link the model resolves, so it refuses the same way,
+        // and the renderer still draws it as a place to go.
         snprintf(html,sizeof(html),"<frameset><frame src='/next#%s'></frameset>",fragments[i]);
-        doc=parse(html,"utf-8");drawn=wend_render_html(doc,&base,40,NULL,0);
-        state_expect("frame refuses NUL fragment",drawn && drawn->nspots==1 && drawn->spots[0].url && !drawn->spots[0].url[0]);
-        wend_page_free(drawn);os64_html_document_free(doc);
+        os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL);
+        wend_page_t *drawn=wend_render_html(doc,page,40);os64_page_request_t req;
+        state_expect("frame refuses NUL fragment",drawn && drawn->nspots==1 &&
+            os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_LINK,drawn->spots[0].link,0,0},&req)==OS64_PAGE_REFUSED &&
+            req.reason==OS64_PAGE_REASON_BAD_ACTION);
+        os64_page_request_free(&req);wend_page_free(drawn);os64_page_free(page);os64_html_document_free(doc);
         snprintf(html,sizeof(html),"<meta http-equiv=refresh content='0;url=#%s'><p id=foo>Prefix</p>",fragments[i]);
         run((PCase){.steps="A14,K1",.name="NUL refresh never chooses a prefix",.html=html,.refresh=true,
             .verdict=OS64_PAGE_NOTHING,.check_reason=true,.reason=OS64_PAGE_REASON_NO_REFRESH});
@@ -85,9 +85,9 @@ static void review3_unrendered(void)
     for(size_t i=0;i<sizeof(markup)/sizeof(markup[0]);i++) {
         char html[250];snprintf(html,sizeof(html),"%s<p>Other content</p><a href=#x>Go</a>",markup[i]);
         os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL);
-        const os64_html_node_t *node=os64_page_anchor(page,"x");os64_url_t base;os64_url_parse(kPage,&base);
+        const os64_html_node_t *node=os64_page_anchor(page,"x");
         for(int width=80;width>=20;width-=60) {
-            wend_page_t *drawn=wend_render_html(doc,&base,width,NULL,0);
+            wend_page_t *drawn=wend_render_html(doc,page,width);
             state_expect("unrendered target has no geometry",node && wend_node_line(drawn,node)==-1);
             wend_page_free(drawn);
         }

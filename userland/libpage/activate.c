@@ -54,6 +54,8 @@ const char *os64_page_reason_name(os64_page_reason_t reason)
         return "there is no such control on this page";
     case OS64_PAGE_REASON_WRONG_KIND:
         return "that control does not hold a value of that kind";
+    case OS64_PAGE_REASON_READONLY:
+        return "the page keeps that value as it is";
     }
     return "unknown refusal";
 }

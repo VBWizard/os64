@@ -253,7 +253,7 @@ incomplete: no
 |Search: [229][_________________]
 |~ F229:8-32
 --
-1 link https://news.ycombinator.com
+1 link https://news.ycombinator.com/
 2 link https://news.ycombinator.com/news
 3 link https://news.ycombinator.com/newest
 4 link https://news.ycombinator.com/front
@@ -445,7 +445,7 @@ incomplete: no
 190 link https://news.ycombinator.com/hide?id=49647134&goto=news
 191 link https://news.ycombinator.com/item?id=49647134
 192 link https://news.ycombinator.com/vote?id=49650418&how=up&goto=news
-193 link https://www.ntsb.gov:443/news/press-releases/Pages/NR20260909.aspx
+193 link https://www.ntsb.gov/news/press-releases/Pages/NR20260909.aspx
 194 link https://news.ycombinator.com/from?site=ntsb.gov
 195 link https://news.ycombinator.com/user?id=mckn1ght
 196 link https://news.ycombinator.com/item?id=49650418
@@ -481,5 +481,5 @@ incomplete: no
 226 link https://www.ycombinator.com/legal/
 227 link https://www.ycombinator.com/apply/
 228 link mailto:hn@ycombinator.com
-229 text form=1 name=q value= width=17
+229 text form=1 name=q value=
 form 1 get https://hn.algolia.com/

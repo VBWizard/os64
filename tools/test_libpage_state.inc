@@ -74,14 +74,17 @@ static void state_tick_values(void)
     os64_html_document_t *doc=parse("<form method=post><input type=checkbox name=c checked>"
         "<input type=radio name=r checked><button>Send</button></form>","utf-8");
     os64_page_t *page=os64_page_build(doc,kPage,NULL);
+    // A tick's value is the page's word about what it sends; nobody types it.
     for (int32_t i=0;i<2;i++) {
         state_value("tick: default value",page,i,"on");
-        state_expect("tick: edit value",os64_page_set_text(page,i,"edited",6)==0);
+        state_expect("tick: value takes no typing",
+                     os64_page_set_text(page,i,"edited",6)==-OS64_PAGE_REASON_WRONG_KIND);
+        state_value("tick: refused edit leaves value",page,i,"on");
     }
     os64_page_request_t req;
     os64_page_what_t what={OS64_PAGE_ACTIVATE_CONTROL,2,0,0};
     state_expect("tick: submit current value",os64_page_activate(page,what,&req)==OS64_PAGE_NAVIGATE &&
-        req.body != NULL && !strcmp((const char *)req.body,"c=edited&r=edited"));
+        req.body != NULL && !strcmp((const char *)req.body,"c=on&r=on"));
     os64_page_request_free(&req);
     state_expect("tick: reset",os64_page_reset(page,0)==0);
     state_value("tick: reset checkbox",page,0,"on");
@@ -291,9 +294,6 @@ static void state_byte_spans(void)
         {"<input type=search name=q>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
         {"<input type=tel name=q>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
         {"<input type=password name=q>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
-        {"<input type=hidden name=q>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
-        {"<input type=checkbox name=q checked>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
-        {"<input type=radio name=q checked>", SPAN("a\0b"), SPAN("a\0b"), "q=a%00b"},
         {"<input type=url name=q>", SPAN(" a\0b \r\n "), SPAN("a\0b"), "q=a%00b"},
         {"<input type=email name=q>", SPAN(" a\0b \r\n "), SPAN("a\0b"), "q=a%00b"},
         {"<input type=email multiple name=q>", SPAN(" a\0b , c@d "), SPAN("a\0b,c@d"), "q=a%00b%2Cc%40d"},
@@ -335,11 +335,11 @@ static void state_byte_spans(void)
     static const char *enctypes[]={"text/plain","multipart/form-data"};
     for (size_t i=0;i<2;i++) {
         char html[256];
-        snprintf(html,sizeof(html),"<form method=post enctype=%s><button name=q>Go</button></form>",enctypes[i]);
+        snprintf(html,sizeof(html),"<form method=post enctype=%s><input name=q><button>Go</button></form>",enctypes[i]);
         os64_html_document_t *doc=parse(html,"utf-8");
         os64_page_t *page=os64_page_build(doc,kPage,NULL);
-        state_expect("byte span: button edit",os64_page_set_text(page,0,"a\0b",3)==0);
-        os64_page_request_t req;os64_page_what_t what={OS64_PAGE_ACTIVATE_CONTROL,0,0,0};
+        state_expect("byte span: text edit",os64_page_set_text(page,0,"a\0b",3)==0);
+        os64_page_request_t req;os64_page_what_t what={OS64_PAGE_ACTIVATE_CONTROL,1,0,0};
         state_expect("byte span: raw submission",os64_page_activate(page,what,&req)==OS64_PAGE_NAVIGATE);
         const char *needle=i==0 ? "q=a\0b\r\n" : "\r\n\r\na\0b\r\n";
         size_t len=i==0 ? 7 : 9;bool found=false;
@@ -351,8 +351,141 @@ static void state_byte_spans(void)
     }
 }
 
+// The edit verbs refuse what the page took away, because every face would
+// otherwise have to remember to (PR #98's disabled and readonly findings).
+static void state_taken_away(void)
+{
+    os64_html_document_t *doc = parse(
+        "<form method=post>"
+        "<input name=ro readonly value=fixed>"                          // 0
+        "<input name=off disabled value=gone>"                          // 1
+        "<fieldset disabled><input type=checkbox name=box>"             // 2
+        "<legend>no</legend></fieldset>"
+        "<fieldset disabled><legend><input name=live value=l></legend>" // 3
+        "</fieldset>"
+        "<select name=pick><option value=a>A<option value=b disabled>B" // 4
+        "<optgroup disabled><option value=c>C</optgroup></select>"
+        "<select name=one><option value=x>X<option value=y>Y</select>"  // 5
+        "<select name=rows size=2><option value=p selected>P"           // 6
+        "<option value=q>Q</select>"
+        "<select name=gone disabled><option>G<option>H</select>"        // 7
+        "<input type=hidden name=h value=v>"                            // 8
+        "<input type=submit name=s value=S>"                            // 9
+        "<input type=radio name=rad disabled>"                          // 10
+        "<textarea name=note readonly>kept</textarea>"                  // 11
+        "<input type=checkbox name=tick readonly>"                      // 12
+        "<button name=b>Go</button></form>",                            // 13
+        "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    state_expect("taken: control count", os64_page_ncontrols(page) == 14);
+    state_expect("taken: readonly text",
+                 os64_page_set_text(page, 0, "x", 1) == -OS64_PAGE_REASON_READONLY);
+    state_value("taken: readonly keeps value", page, 0, "fixed");
+    state_expect("taken: disabled text",
+                 os64_page_set_text(page, 1, "x", 1) == -OS64_PAGE_REASON_DISABLED);
+    state_expect("taken: fieldset-disabled tick",
+                 os64_page_set_checked(page, 2, true) == -OS64_PAGE_REASON_DISABLED);
+    state_expect("taken: tick stays clear", !os64_page_control(page, 2)->checked);
+    state_expect("taken: legend control is live", os64_page_set_text(page, 3, "m", 1) == 0);
+    state_expect("taken: disabled option",
+                 os64_page_set_chosen(page, 4, 1, true) == -OS64_PAGE_REASON_DISABLED);
+    state_expect("taken: optgroup-disabled option",
+                 os64_page_set_chosen(page, 4, 2, true) == -OS64_PAGE_REASON_DISABLED);
+    state_value("taken: list keeps its answer", page, 4, "a");
+    state_expect("taken: disabled option may be put down",
+                 os64_page_set_chosen(page, 4, 1, false) == 0);
+    state_expect("taken: drop-down cleared", os64_page_set_chosen(page, 5, 0, false) == 0);
+    state_value("taken: drop-down is never empty", page, 5, "x");
+    state_expect("taken: drop-down moved", os64_page_set_chosen(page, 5, 1, true) == 0 &&
+                                           os64_page_set_chosen(page, 5, 1, false) == 0);
+    state_value("taken: cleared drop-down holds its first", page, 5, "x");
+    state_expect("taken: list box cleared", os64_page_set_chosen(page, 6, 0, false) == 0);
+    state_value("taken: list box may hold nothing", page, 6, "");
+    state_expect("taken: disabled list",
+                 os64_page_set_chosen(page, 7, 1, true) == -OS64_PAGE_REASON_DISABLED);
+    state_expect("taken: hidden value takes no typing",
+                 os64_page_set_text(page, 8, "x", 1) == -OS64_PAGE_REASON_WRONG_KIND);
+    state_expect("taken: submit value takes no typing",
+                 os64_page_set_text(page, 9, "x", 1) == -OS64_PAGE_REASON_WRONG_KIND);
+    state_expect("taken: disabled radio",
+                 os64_page_set_checked(page, 10, true) == -OS64_PAGE_REASON_DISABLED);
+    state_expect("taken: readonly textarea",
+                 os64_page_set_text(page, 11, "x", 1) == -OS64_PAGE_REASON_READONLY);
+    state_expect("taken: readonly means nothing on a tick",
+                 os64_page_set_checked(page, 12, true) == 0);
+    state_expect("taken: button value takes no typing",
+                 os64_page_set_text(page, 13, "x", 1) == -OS64_PAGE_REASON_WRONG_KIND);
+    state_expect("taken: refusal has a name",
+                 strcmp(os64_page_reason_name(OS64_PAGE_REASON_READONLY), "unknown refusal") != 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+// A frame names a document, resolved by the same door as an href.
+static void state_frames(void)
+{
+    os64_html_document_t *doc = parse(
+        "<head><base href=\"http://other/dir/\"></head>"
+        "<frameset><frame name=menu src=\" menu.html#top%20part \">"
+        "<frame name=empty><frame src=\"\"></frameset>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    state_expect("frames: one link per frame with a src", os64_page_nlinks(page) == 2);
+    const os64_page_link_t *link = os64_page_link(page, 0);
+    state_expect("frames: resolved against the base",
+                 link != NULL && link->href.url != NULL &&
+                 strcmp(link->href.url, "http://other/dir/menu.html") == 0 &&
+                 link->href.has_fragment && strcmp(link->href.fragment, "top part") == 0);
+    link = os64_page_link(page, 1);
+    state_expect("frames: an empty src is the base",
+                 link != NULL && link->href.url != NULL &&
+                 strcmp(link->href.url, "http://other/dir/") == 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+// What a page writes in an href is percent-encoded part by part, as every
+// browser does: a path in UTF-8, a query in the document's encoding, a
+// fragment left for the matcher.
+static void state_reference_bytes(void)
+{
+    static const struct { const char *html, *charset, *url, *fragment; } cases[] = {
+        {"<a href='/wiki/H\xC3\xA5kon Wium'>x</a>", "utf-8",
+         "http://host/wiki/H%C3%A5kon%20Wium", NULL},
+        {"<a href='/a\"b<c>d`e{f}'>x</a>", "utf-8",
+         "http://host/a%22b%3Cc%3Ed%60e%7Bf%7D", NULL},
+        {"<a href='/s?q=caf\xC3\xA9 \"x\"&k=`{}`'>x</a>", "utf-8",
+         "http://host/s?q=caf%C3%A9%20%22x%22&k=`{}`", NULL},
+        // A windows-1252 page's query is windows-1252, and a character it
+        // cannot hold is the markup that names it, escaped.
+        {"<a href='/s?q=caf\xE9\x92&#9731;'>x</a>", "windows-1252",
+         "http://host/s?q=caf%E9%92%26%239731%3B", NULL},
+        // ...and its path is UTF-8 all the same.
+        {"<a href='/caf\xE9'>x</a>", "windows-1252", "http://host/caf%C3%A9", NULL},
+        {"<a href='/p#H\xC3\xA5kon'>x</a>", "utf-8", "http://host/p", "H\xC3\xA5kon"},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        os64_html_document_t *doc = parse(cases[i].html, cases[i].charset);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        const os64_page_link_t *link = os64_page_link(page, 0);
+        char name[64];
+        snprintf(name, sizeof(name), "reference bytes: case %zu", i);
+        state_expect(name, link != NULL && link->href.url != NULL &&
+                           strcmp(link->href.url, cases[i].url) == 0);
+        if (link != NULL && link->href.url != NULL && strcmp(link->href.url, cases[i].url) != 0)
+            fprintf(stderr, "    got %s\n", link->href.url);
+        if (cases[i].fragment != NULL)
+            state_expect(name, link != NULL && link->href.fragment != NULL &&
+                               strcmp(link->href.fragment, cases[i].fragment) == 0);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+}
+
 static void state_cases(void)
 {
+    state_taken_away();
+    state_frames();
+    state_reference_bytes();
     state_group_reset();
     state_sanitizers();
     state_tick_values();

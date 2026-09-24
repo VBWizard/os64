@@ -96,7 +96,9 @@ carrying the `os64_html_node_t *` it came from so a face can find its own
 geometry for it. Faces render nodes; libpage never learns about rows,
 cells or pixels.
 
-- **Links**: every `a` and `area` with an `href`, resolved against the base;
+- **Links**: every `a` and `area` with an `href`, and every `frame` with a
+  `src` (a face that cannot draw frames offers each as a destination),
+  resolved against the base;
   whether the reference asked for a fragment at all (the text cannot tell
   `href="#"` from `href=""`); whether it names THIS document (a move, not a
   fetch).
@@ -157,7 +159,16 @@ door: `page_resolve(page, ref, out, &asked_fragment)`. First `base` with an
 EMPTY reference names the document itself (every reload link on the old
 web, round 3); a scheme-default port is never spelled into a link (the
 `:443` finding); a reference that does not resolve or does not fit is a
-refusal, never a fallback. Fragment-only references never fetch.
+refusal, never a fallback. Fragment-only references never fetch. What a
+page WRITES in a reference is percent-encoded part by part before it
+resolves, as the URL Standard's parser does and every browser follows: a
+path in UTF-8 (controls, space, `"<>`\`{}` and anything past ASCII), a
+query in the document's encoding (a windows-1252 page's query is
+windows-1252, and a character it cannot hold is `&#NNN;`, escaped), a
+fragment left as written for the matcher. An opaque address (`mailto:`,
+`data:`, `javascript:`) keeps its punctuation and spaces. `os64/url.h`
+refuses such bytes, rightly, for an address a PERSON types — the page's
+rule lives here.
 
 **B. Form owner** (§4.10.17.3). One door: `page_form_owner(page, control)`,
 settled ONCE for every control after the walk and before anything asks, so
@@ -183,8 +194,8 @@ from document scope (round 7). If that button is disabled, NOTHING. If the
 form has no submit control at all: NOTHING when more than one field blocks
 implicit submission (an `input` whose type is text, search, url, tel,
 email, password, number or one of the date types — `readonly` does not
-exempt one, and this is a DEPARTURE FROM `wend`, whose round-5 truth pass
-let a readonly box stand aside; that rule does not survive the lift),
+exempt one; `wend`'s own rule that only a form with one thing left to
+answer sends itself is a face's patience layered on top, not this one),
 otherwise the form submits with itself as submitter and no overrides. A submitter's own `formaction` (presence
 recorded apart from the string — `formaction=""` is the page, round 4),
 `formmethod`, `formenctype`, `formnovalidate` overrule the form's.
@@ -231,8 +242,7 @@ decoder reads (issue #99 again); and a code point the encoding cannot
 hold becomes a numeric character reference `&#NNN;` — the standard's
 `html` error mode — whose `&`, `#` and `;` are then percent-encoded like
 any other byte, so it reads `%26%231234%3B` on the wire. That last step
-is the classic mistake and has its own corpus case. `wend` sends UTF-8
-for everything today; the lift retires that. Three serialisers, each the
+is the classic mistake and has its own corpus case. Three serialisers, each the
 standard's: `application/x-www-form-urlencoded` (the safe set is
 alphanumerics and `*-._`; space is `+`; everything else percent-encoded
 from the selected encoding); `multipart/form-data` (RFC 7578 — a
@@ -423,10 +433,9 @@ published with `NO_MEMORY`. Later pragmas cannot replace it. Invalid or
 unrepresentable addresses still declare no refresh. Wend reports a retained
 refusal before inspecting the candidate's delay or displaying its URL.
 
-Links and refreshes use this handoff. Renderer-generated frame links use
-the destination resolver as well. The existing form serializer remains a
-separate migration item; its fragment buffer now refuses insufficient
-capacity rather than truncating, and destination lookup uses libpage.
+Links, frames, refreshes and form submissions all use this handoff: a
+frame is a link the model resolves, and a form's `#name` rides the request
+exactly as a link's does.
 
 HTTP, HTTPS and FTP form targets must parse with the project's hierarchical
 URL grammar before entry-list construction. This check covers explicit
@@ -509,13 +518,13 @@ marked throwaway.
 
 ## What the consumers owe
 
-- **`wend`**: the wire half of `render.c` — form ownership, the entry list,
-  the submitter, URL resolution, percent-encoding, charset decoding for the
-  query — comes OUT, replaced by calls through the door. The renderer keeps
-  the walk, the wrap, the fold, and the cells. `wend_form_url` and the six
-  submitter sites are deleted, not wrapped. The face keeps: drawing,
-  editing (through `os64_page_set_*`), history, confirm and its type-ahead
-  discipline, the POST refusal by name, and rendering a request's `reason`.
+- **`wend`**: every link, frame, form and refresh goes through the door,
+  and every edit through `os64_page_set_*`; its renderer keeps the walk,
+  the wrap, the fold and the cells, and draws each control as the model
+  says it stands. A spot is a place on the screen and an index into the
+  model, nothing else. The face keeps drawing, the edit prompt, history,
+  confirm and its type-ahead discipline, the scheme list, the POST refusal
+  by name, and rendering a request's `reason`.
 - **The graphical browser**: links against the same library and adds
   nothing to it that is about pixels.
 - **libhtml**: supplies the parser's `form_owner` insertion record, the
@@ -525,28 +534,16 @@ marked throwaway.
 - **libfetch** (Fable): a request body, when the first login is worth
   doing.
 
-## The plan for PR #98
+## PR #98's shape
 
-TWO PRs, stacked. **A**: the library and its corpus, off `opus/wend`.
-**B**: the `wend` lift on top of A — the six submitter sites and the wire
-half of `render.c` deleted, the door called in their place, the three
-predicted findings closed there. Both merge together, A first, so round
-eight reads a LIBRARY without a renderer's deletions in the same diff.
-
-**A grew two small consumers on the way**, which is a departure worth
-stating rather than leaving for a reader to notice. `wend` calls the door
-for family K, because a real page needed it the day the library was written
-and a library nothing calls is a library nothing proves. That put an
-`os64_page_t` on the view, which is the first line of the lift rather than a
-detour around it. And `husk` stopped treating an address as a filename
-pattern, because a `?` in a query was making `wend <url>` unrunnable
-unquoted.
-
-**Everything else in `wend` still goes through `render.c`**, so the three
-predicted findings are RIGHT IN THE LIBRARY and still WRONG IN THE FACE
-until B lands: a `method=dialog` form typed into wend today still puts its
-values in an address. That is the cost of splitting the work, and it is
-bounded by B.
+TWO pieces, stacked. **A** is the library and its corpus (#100, with the
+independent repair in #103). **B** is the `wend` lift on top of it: the six
+submitter sites and the wire half of `render.c` deleted, the door called in
+their place, and the three predicted findings (`method=dialog`,
+`formmethod=dialog`, a disabled default button) closed in the face by
+being closed in the library. `husk` rode along with A: it stopped treating
+an address as a filename pattern, because a `?` in a query was making
+`wend <url>` unrunnable unquoted.
 
 Review tier: A is not app code. Its bugs are the class the nine P1s came
 from — passwords in query strings — so it takes Codex rounds (requested by

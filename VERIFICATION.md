@@ -814,8 +814,9 @@ before the rows it governs are down**:
 | A row could reach the painter unterminated | ASan, on the allocation-failure sweep: fresh storage plus a refused run reservation left bytes nobody wrote and no end marker. The buffer is terminated the moment it is reserved |
 
 **Forms are the largest part**, because what a form would ASK FOR is a
-string built from a page and is checkable without a wire:
-`wend_form_url` is driven over a search box with a hidden field, a query
+string built from a page and is checkable without a wire. Every spot is
+asked of libpage's door exactly as the browser asks it — a button PRESSED,
+any other control FINISHED (implicit submission) — over a search box with a hidden field, a query
 the action already carried (replaced, as a GET form does), spaces and
 UTF-8 through the encoder, ticked and unticked boxes, a list's value
 rather than its words, two buttons where only the pressed one says so, a
@@ -825,9 +826,27 @@ naming a form that does not exist, an empty `formaction` against an absent
 one, `value=""` on a tick against no value at all, a group with two radios
 `checked`, a `multiple` list's several sent and then replaced by one pick,
 a `hidden` subtree drawn as nothing and sent in full and in TREE ORDER, and
-whitespace across a nested element inside an option. One case renders a
-page twice at two widths with an edit in hand, proving that what was typed
-survives a re-wrap and reaches the query.
+whitespace across a nested element inside an option, and the three that
+were live in the face until it went through the door: a `dialog` form, a
+`formmethod=dialog` button, and a disabled default button, none of which
+sends anything. One case edits the model and draws the page again at
+another width, proving that what was typed survives a re-wrap and reaches
+the query. **In the guest, the lift was driven against a host server
+whose access log is the verdict**: a `dialog` form and a `formmethod=dialog`
+button pressed with a prefilled password, a form whose hidden default
+button POSTs and one whose default button is disabled, each finished with
+Enter — and not one request reached the server; a hidden GET default
+button's own name went out with the implicit submission; a search form
+edited, its list stepped past a disabled option, its tick cleared, sent as
+exactly that; a readonly box refused and still sent; a prefilled value
+holding an em dash and curly quotes offered only to be replaced, and sent
+byte for byte when left alone; a frameset's frames followed; a
+windows-1252 page's query and `_charset_` in windows-1252; and a UTF-8
+link path percent-encoded on the wire. Then Wikipedia over HTTPS: one box,
+Enter, the implicit submission, the redirect, the article. The corpus dumps print what the MODEL says each spot is, so a
+change in what a link resolves to — the four Wikipedia links with UTF-8 in
+their paths, and one with quotation marks, that the old renderer showed as
+resolved and the fetch then refused — is a reviewable line.
 
 **In the guest** (headless QEMU, `-netdev user` with slirp to the real
 internet, screendumps read as images): example.com and its link followed to

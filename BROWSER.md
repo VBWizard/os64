@@ -691,89 +691,57 @@ the request.
 
 **Filling something in, and sending it.** A box is opened with Enter and
 edited on the status row, starting from whatever it already holds; Enter
-again keeps the text and Escape leaves it as it was. **A value is stored
-as UTF-8** — which is what the page put there and what a server that sent
-a UTF-8 page expects back — and converted at each end: folded to Latin-1
-to be shown, encoded again as the typed bytes are taken. **The values
-live BESIDE the page, indexed by spot number**, because a re-wrap throws
-the page away and builds another, and what was typed into a search box
-has to survive the window changing width; the walk is deterministic for
-one tree, so the same number carries the same value into the next render.
+again keeps the text and Escape leaves it as it was. **Everything a form
+MEANS is libpage's** (LIBPAGE.md): which form a control belongs to, what
+it holds, whether the page took it away, which button a submission
+presses and what that button overrules, the entry list in tree order, the
+encoding, and what goes on the wire. wend asks and never decides, so there
+is one answer to each of those questions, and the renderer draws every
+control as the model says it stands. **A person's edits live in the model
+too**, keyed by the element they belong to, so a re-wrap throws the lines
+away and draws them again with what was typed still in the box. The model
+refuses an edit the page took away: a `disabled` control, text into a
+`readonly` one, a disabled option. The status row says so in the model's
+own words.
 
-Sending builds the address in `render.c` (`wend_form_url`) rather than in
-the session, because it is pure computation over the page and that is
-where the harness can check what would go on the wire. The form's action,
-or the page itself when it names none; the query REPLACED, not appended
-to, which is what a GET form does; then every successful control **in
-TREE ORDER**, the values a form carries and never shows interleaved where
-the page wrote them rather than all in front, because the order is
-visible to a server exactly when two controls share a name. A box that is
-not ticked sends nothing, and a ticked one sends `on` only when the page
-spelled no `value` at all — `value=""` asked for an empty answer and gets
-one, which on the far side can be a different branch. A page that marks
-two radios of one group `checked` has still made ONE choice, the last, as
-leaving both would tell a server reading the first value the opposite of
-what the page said — and the group is settled FROM THE TREE before any of
-it is drawn, because a face that drew each control as it met it and applied
-the rule afterwards would leave a row showing two dots where one value
-goes. A group is every radio of one name with one form
-OWNER — so the same name in two forms is two groups, two root-level radios
-naming different forms with `form=<id>` are two groups, and a radio with no
-name is in none. The search is therefore of the whole DOCUMENT, asking each
-candidate who owns it. **And it is BUDGETED**: it is one search per marked
-radio, and a page well inside libhtml's own limits could otherwise spin this
-program for minutes with no way to interrupt it. Past the budget a marked radio keeps
-the page's own answer, which leaves the row and the wire agreeing on what
-the page wrote — and a form with that many controls is longer than an
-address may be, so it was never going to be sent whatever this decided. A list sends its option's VALUE rather than the words
-shown for it, and a `multiple` list sends EVERY option the page marked.
-Of two buttons only the one pressed says so, and an IMAGE button says it
-with COORDINATES rather than a value — `name.x=0&name.y=0` from a keyboard,
-or plain `x=0&y=0` where it has no name, since those fields are how such a
-button says it was the one pressed. A hidden `_charset_` field is the FORM's
-answer and not the page's: it goes out naming the encoding the values are
-written in, which here is always UTF-8. **A STATED DESTINATION THAT WILL NOT
-RESOLVE IS A REFUSAL**, never the page it is on — a form that names nothing
-means "the page I am on", which is the standard's rule, but one whose action
-is too long for an address or is not an address at all has named somewhere
-ELSE, and sending what a person typed to the page they are on instead is the
-wrong host to be wrong about. And **the button that was
-pressed may overrule its form**, because the standard lets it carry its
-own action and its own method. The METHOD matters most to a browser that
-sends only one of them: a GET form with a `formmethod=post` button is a
-POST, and sending it as a GET would put whatever it collected into an
-address that servers and proxies write down. NAMING an action is what
-puts the button in charge, not naming a usable one: `formaction=""` is
-the document's own address, and reading the empty string as "said
-nothing" would send the answers to the form's destination instead. An
-action's `#name` is kept beside the address the same way a link's is, and
-applied once the answer arrives.
+**A value is stored as UTF-8** — what the page put there and what its
+server expects back — and the glass is Latin-1, so a box is edited as its
+folded shadow. **A value that does not survive that round trip is not
+offered for editing**: one holding a character the terminal cannot draw, a
+line break, or more than the prompt holds would come back as something
+else, a curly quote straight and a textarea one line. Its prompt starts
+EMPTY and says it will REPLACE the value, so nothing goes out that the
+person did not type.
 
-**A form with exactly ONE THING TO ANSWER
-sends itself when you finish that thing**, because there is nowhere else
-in it to go and stopping to hunt for a button is the step nobody expects.
-Anything else to fill in — a second box, a tick, a list — and it waits
-for its button, since sending early would send the rest at their defaults
-before a person working down the page ever reached them. It is sent AS
-THOUGH ITS OWN BUTTON HAD BEEN PRESSED — the first one in the form, the
-standard's default submitter — so that button's name and value go along
-and so does anything it overrules, which is what keeps a GET form with a
-`formmethod=post` button refused by name here rather than sent as a query
-with a password in it. **And a default button this browser cannot PRESS
-stops the shortcut**: a submit control inside a `hidden` subtree is drawn
-nowhere and is no spot, and is still the button whose method and action a
-submission would take — so a form led by one is refused rather than sent
-as though it had no button at all.
+**A form with exactly ONE THING TO ANSWER sends itself when you finish
+that thing**, because there is nowhere else in it to go and stopping to
+hunt for a button is the step nobody expects. Anything else to fill in — a
+second box, a tick, a list — and it waits for its button, since sending
+early would send the rest at their defaults before a person working down
+the page ever reached them. Finishing it is the standard's IMPLICIT
+SUBMISSION, and libpage answers what that sends: the form's default
+button, with its name and whatever it overrules, even where that button
+stands out of sight.
 
-**A form off an HTTPS page whose action is plain `http` asks first.**
-libfetch's downgrade callback cannot see that one: it judges the
-redirects INSIDE a fetch, and this fetch begins at http, so nothing in
-the library learns where the values came from. What is being sent is what
-somebody typed, which makes it a stronger case for asking than an
-ordinary downgrade, not a weaker one. The question is asked of the
-address the PAGE came from and not of its base, because `<base href>` can
-move the base to http while the page that collected the values stays
-encrypted. And **a security question drops everything typed before it**: keys
+**A POST is refused by name**, because libfetch sends no body and sending
+the same form as a GET would put a password in an address that servers
+and proxies write down. **Every navigation a page asks for — a link, a
+form, a declared refresh — goes through one function** (`perform` in
+wend.c), which holds this browser's own list of the schemes it fetches and
+the person's decisions.
+
+**A form off an HTTPS page whose action is plain `http` asks first**, and
+so does a refresh that takes an encrypted page somewhere plain. libfetch's
+downgrade callback cannot see either: it judges the redirects INSIDE a
+fetch, and each of these begins a new fetch where the page said, so nothing
+in the library learns where the request came from. libpage states the
+fact (`downgrade`), judged against the address the PAGE came from and not
+its base, because `<base href>` can move the base to http while the page
+that collected the values stays encrypted; wend asks. A link is not asked
+about: a person pressed it, and where it goes is written on the page. What
+a form sends is what somebody typed, which makes it a stronger case for
+asking than an ordinary downgrade, not a weaker one. And **a security
+question drops everything typed before it**: keys
 struck while a page was loading are held for whoever asks next, and a `y`
 meant for something else must not answer a question it never saw. BOTH
 queues go — the keys this program is holding and the ones still sitting
@@ -799,8 +767,8 @@ rendering change is a reviewable diff to a page and not "it looks
 different". The fold gets its own cases and a sweep of the whole code
 space, the wrapper gets its edges written down as markup-in/rows-out, and
 an allocation failure is injected at every step of one page. What a FORM
-would ask for is pure computation too, so the suite checks the address
-before any wire carries it. VERIFICATION.md § wend acceptance carries the
+would ask for is asked of libpage through the same door the browser uses,
+so the suite checks the address before any wire carries it. VERIFICATION.md § wend acceptance carries the
 run commands, what the guest was driven through, and the four defects the
 harness caught before the OS ran a byte.
 
@@ -817,7 +785,7 @@ Codex round is Chris's call.
 | PICKING more than one answer from a `select multiple` | one answer is what the keys can express — Enter steps a list, and there is no screen on which to hold several open. What the page itself marked IS sent, every option of it; touching the list replaces the lot with the one thing a key can say | a page whose meaning needs two answers a person chose |
 | A `text/plain` body in a charset outside the UTF-8 and windows-1252 families | libhtml owns the encoding ladder and only markup goes through it. Raw text reads the reply's label for UTF-8 — or, where the reply named no charset at all, a leading UTF-8 byte order mark, which is the file saying it itself — and takes everything else as windows-1252, which is the same answer libhtml gives the markup half — so both halves agree, and a Shift-JIS `.txt` reads as mojibake in a page and in a text file alike, rather than as a refusal in neither | the first text file worth reading that says it is something else |
 | A file-upload control | it is a POST with a body made of parts, so it waits on the row above and on a file picker this browser has no screen for | a page worth uploading to |
-| Editing longer than a status row | a box is edited on the bottom row, so a long value is a scrolling window onto itself; fine for a query, thin for a comment | the first time somebody writes prose into a page |
+| Editing longer than a status row, or text the glass cannot draw | a box is edited on the bottom row as its Latin-1 shadow, so a long value is a scrolling window onto itself and a value the fold would change is offered only to be REPLACED; fine for a query, thin for a comment | the first time somebody writes prose into a page, or needs to edit a word this terminal cannot show |
 | XHTML parsed by the HTML parser | there is no XML parser here, and the HTML tree builder reads all but the constructs XML spells differently — a self-closing `<script/>` ends where XML says and not where HTML does, so the text after it is swallowed. Refusing `application/xhtml+xml` outright would turn every XHTML page into "that is not a page", which is worse for a reader than a rare page with a swallowed tail | an XHTML page worth reading that the HTML rules mangle |
 | `gopher://` links | libfetch's gopher scheme is booked; the gopher client still owns the protocol | the browser's first gopher link |
 | Column-aligned tables | rows read fine for the old web's layout tables; alignment is layout, the graphical browser's boss | a data table that is unreadable as rows |

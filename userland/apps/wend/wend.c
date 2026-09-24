@@ -1,15 +1,16 @@
 // wend.c — a line-mode web browser you steer with the keyboard.
 //
 // BROWSER.md's ladder ends here: libfetch dials, redirects and hands over
-// decoded bytes; libhtml turns those bytes into the standard's tree; this
-// program walks the tree onto a terminal and lets a person move around in
-// it. It is the gopher client's shape — a title row, content rows, a status
-// row, arrows and a history stack — pointed at the web.
+// decoded bytes; libhtml turns those bytes into the standard's tree;
+// libpage says what the tree MEANS — where each link goes, what each form
+// sends; this program walks the tree onto a terminal and lets a person move
+// around in it. It is the gopher client's shape — a title row, content rows,
+// a status row, arrows and a history stack — pointed at the web.
 //
 // THE RENDERER IS THROWAWAY AND THE REST IS NOT (BROWSER.md § The face).
 // render.c walks and prints; it does not lay out, and the graphical browser
 // will not inherit it. What that browser does inherit is everything under
-// it: the fetch, the parse, and the navigator in this file.
+// it: the fetch, the parse, the model, and the navigator in this file.
 //
 // NO ESCAPE SEQUENCE FROM THE WIRE REACHES THE TERMINAL, and it takes two
 // guards because there are two kinds of stranger's bytes here. PAGE TEXT is
@@ -78,24 +79,19 @@
 // of asking the network for a page we already have.
 typedef struct {
     char     url[OS64_FETCH_URL_MAX];   // the address the body came from
-    os64_url_t base;                    // what an href resolves against
     os64_html_document_t *doc;          // HTML: the tree, kept for re-wrapping
     char    *text;                      // text/plain: the bytes, same reason
     size_t   textlen;
     bool     text_utf8;
     wend_page_t *page;                  // the lines, at the current width
-    // WHAT THE PAGE MEANS, as opposed to how it reads (LIBPAGE.md). Built
-    // once per page because it does not depend on the width: a re-wrap
-    // rebuilds the lines and never this. Today it answers one question —
-    // whether the document declares a refresh — and the rest of the wire
-    // semantics move onto it with the renderer's lift.
+    // WHAT THE PAGE MEANS, as opposed to how it reads (LIBPAGE.md): where
+    // every link goes, what every control holds, what a form sends. Built
+    // once per page because it does not depend on the width, and it is where
+    // a person's edits are kept — so a re-wrap throws the lines away and
+    // draws them again from this, and what was typed into a search box
+    // survives it.
     os64_page_t *model;
     bool refresh_handled;             // per loaded document, including refused attempts
-    // WHAT A PERSON FILLED IN, kept beside the page rather than in it: a
-    // re-wrap throws the page away and builds another, and what was typed
-    // into a search box must survive that.
-    wend_edit_t *edits;
-    int32_t  nedits;
     int32_t  top;                       // first visible row
     int32_t  sel;                       // the selected spot, -1 for none
     char     note[WEND_STATUS_MAX];     // what this page's status row says
@@ -627,44 +623,20 @@ static void view_clear(view_t *v)
         os64_html_document_free(v->doc);
     os64_free(v->text);
     wend_page_free(v->page);
-    for (int32_t i = 0; i < v->nedits; i++)
-        os64_free(v->edits[i].text);
-    os64_free(v->edits);
     v->model = NULL;
     v->doc = NULL;
     v->text = NULL;
     v->page = NULL;
-    v->edits = NULL;
-    v->nedits = 0;
     v->textlen = 0;
-}
-
-// Room to remember an edit for every spot on the page. Grown rather than
-// sized once, because a page that ran out of memory partway through its
-// first render has fewer spots than its second may find.
-static bool edits_room(view_t *v)
-{
-    if (!v->page || v->page->nspots <= v->nedits)
-        return v->page != NULL;
-    wend_edit_t *grown = os64_realloc(v->edits, (size_t)v->page->nspots * sizeof(*grown));
-    if (!grown) {
-        status_set(" out of memory remembering what you typed");
-        return false;
-    }
-    v->edits = grown;
-    for (int32_t i = v->nedits; i < v->page->nspots; i++)
-        v->edits[i] = (wend_edit_t){ NULL, -1, -1 };
-    v->nedits = v->page->nspots;
-    return true;
 }
 
 // Wrap the page this view is holding to the current width. The tree (or the
 // text) is what was kept, so a resize costs a re-wrap and not a fetch — and
-// the edits go back in, so the box still holds what was typed into it.
+// the model holds the edits, so the box still holds what was typed into it.
 static void view_layout(view_t *v)
 {
     wend_page_free(v->page);
-    v->page = v->doc ? wend_render_html(v->doc, &v->base, s_cols, v->edits, v->nedits)
+    v->page = v->doc ? wend_render_html(v->doc, v->model, s_cols)
                      : wend_render_text(v->text, v->textlen, v->text_utf8, s_cols);
     if (!v->page)
         status_set(" out of memory laying the page out at %d columns", (int)s_cols);
@@ -841,7 +813,6 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
     }
 
     os64_strcopy(out->url, sizeof(out->url), head->url_text);
-    out->base = head->url;
     out->sel = -1;
     out->top = 0;
 
@@ -852,20 +823,12 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
             os64_fetch_close(f);
             return false;
         }
-        // WHAT THE PAGE MEANS, from the tree and the address it came from.
-        // A page libpage cannot build a model of is still a page worth
-        // reading, so this is not a failure to return: what it costs is the
-        // one question the model answers.
+        // WHAT THE PAGE MEANS, from the tree and the address it came from —
+        // `<base href>` included, which libpage reads. A page it cannot build
+        // a model of is still a page worth reading, so this is not a failure
+        // to return: what it costs is the links and boxes, which are drawn
+        // and cannot be used, and the status row says so.
         out->model = os64_page_build(out->doc, head->url_text, NULL);
-        // THE PAGE'S OWN WORD ABOUT WHERE IT LIVES OUTRANKS THE ADDRESS IT
-        // CAME FROM, which is what <base href> is for and what a page
-        // assembled from a template relies on.
-        char href[OS64_URL_REF_MAX], absolute[OS64_URL_REF_MAX];
-        os64_url_t from_page;
-        if (wend_base_href(out->doc, href, sizeof(href))
-            && os64_url_absolute(&head->url, href, absolute, sizeof(absolute))
-            && os64_url_parse(absolute, &from_page) == OS64_URL_OK)
-            out->base = from_page;
     } else {
         bool whole = true;
         out->text = read_body(f, limits.max_bytes, &out->textlen, url, &whole);
@@ -910,6 +873,9 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
     }
     if (out->page->incomplete)
         status_set(" out of memory partway through the page - what is here is real");
+    else if (out->doc && (!out->model || os64_page_incomplete(out->model)))
+        status_set(" out of memory understanding the page - its links and boxes"
+                   " may not work");
     else if (out->page->nlines == 0)
         // A BLANK SCREEN IS AMBIGUOUS AND THIS IS NOT. A reply that parsed
         // to nothing — a page that is all script, a body of zero bytes — is
@@ -1127,18 +1093,6 @@ static bool go(view_t *v, const char *url, bool remember)
     return true;
 }
 
-static bool starts_with_nocase(const char *s, const char *prefix)
-{
-    for (size_t i = 0; prefix[i] != '\0'; i++) {
-        char a = s[i], b = prefix[i];
-        if (a >= 'A' && a <= 'Z')
-            a = (char)(a + ('a' - 'A'));
-        if (a != b)
-            return false;
-    }
-    return true;
-}
-
 // libpage selects the semantic target; the renderer supplies geometry for
 // that exact node. Missing geometry leaves the reader's position intact.
 static void jump_to_node(view_t *v, const os64_html_node_t *node)
@@ -1162,6 +1116,74 @@ static void jump_to_fragment(view_t *v, const char *name)
         return;
     }
     jump_to_node(v, node);
+}
+
+// ── Doing what a page asks ──────────────────────────────────────────────
+//
+// EVERY FETCH A PAGE ASKS FOR ENDS HERE: a link followed, a form sent, a
+// refresh the document declares. (A move within the page is no fetch and
+// never comes here.) libpage has already decided where each one goes and says what it knows about it; what is left is this browser's
+// own list of what it can carry, and the person's decision where one is
+// owed. One door, because the same rules written once per road are how a
+// road comes to miss one.
+
+// WHO IS ASKED BEFORE AN ENCRYPTED PAGE'S REQUEST GOES OUT IN THE CLEAR.
+// Nobody for a link: a person pressed it, and where it goes is written on
+// the page. A person for a form, because what goes is what they typed, and
+// for a refresh, because the page chose the destination and nobody pressed
+// anything. libfetch's downgrade callback cannot see either: it judges the
+// redirects inside one fetch, and each of these starts a new fetch where the
+// page said.
+typedef enum {
+    ASK_NEVER = 0,
+    ASK_SEND,         // a form: "shall what you typed go in clear?"
+    ASK_GO,           // a refresh: "shall I take you there?"
+} ask_t;
+
+// Perform a NAVIGATE. True when the view moved. The request's strings are
+// its own, so they outlive the view `go` replaces.
+static bool perform(view_t *v, const os64_page_request_t *request, bool remember, ask_t ask)
+{
+    // libfetch sends no request body, so a POST is refused BY NAME rather
+    // than sent as something else — as a GET, it would put a password in an
+    // address that servers and proxies write down.
+    if (request->method == OS64_PAGE_METHOD_POST) {
+        status_set(" this form posts, and wend sends only forms that ask by address");
+        return false;
+    }
+    // WHICH SCHEMES THIS BROWSER FOLLOWS IS ITS OWN LIST, which is why
+    // libpage states the scheme instead of keeping one.
+    if (os64_streq(request->scheme, "gopher")) {
+        status_set(" that is gopherspace - read it with:  gopher '%s'", request->url);
+        return false;
+    }
+    if (!os64_streq(request->scheme, "http") && !os64_streq(request->scheme, "https")) {
+        status_set(" that is a %s: address, which wend does not fetch", request->scheme);
+        return false;
+    }
+    if (ask != ASK_NEVER && request->downgrade) {
+        char question[WEND_STATUS_MAX];
+        os64_url_t target;
+        const char *host = os64_url_parse(request->url, &target) == OS64_URL_OK
+                               ? target.host : "that address";
+        if (ask == ASK_SEND)
+            os64_snprintf(question, sizeof(question),
+                          " %s would get this unencrypted - send it? (y/n) ", host);
+        else
+            os64_snprintf(question, sizeof(question),
+                          " this encrypted page sends you to %s unencrypted - go? (y/n) ", host);
+        if (!confirm(question)) {
+            status_set(ask == ASK_SEND ? " not sent" : " stayed here");
+            return false;
+        }
+    }
+    if (!go(v, request->url, remember))
+        return false;
+    // The new page's own model finds the section: the `#name` was asked of
+    // a document that has only now arrived.
+    if (request->has_fragment)
+        jump_to_fragment(v, request->fragment != NULL ? request->fragment : "");
+    return true;
 }
 
 // ── A page that asks to send you somewhere ──────────────────────────────
@@ -1220,48 +1242,14 @@ static bool refresh_once(view_t *v, int32_t *chain)
     os64_page_what_t what = { OS64_PAGE_ACTIVATE_REFRESH, 0, 0, 0 };
     os64_page_request_t request;
     os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
-    if (verdict == OS64_PAGE_FRAGMENT) {
+    bool moved = false;
+    if (verdict == OS64_PAGE_FRAGMENT)
         jump_to_node(v, request.anchor);
-        os64_page_request_free(&request);
-        return false;
-    }
-    if (verdict != OS64_PAGE_NAVIGATE) {
+    else if (verdict == OS64_PAGE_NAVIGATE)
+        // Redirectors do not occupy a history entry.
+        moved = perform(v, &request, false, ASK_GO);
+    else
         status_set(" this page asks to send you somewhere it does not name properly");
-        os64_page_request_free(&request);
-        return false;
-    }
-    // WHICH SCHEMES THIS BROWSER FOLLOWS IS ITS OWN LIST, which is why
-    // libpage states the scheme instead of keeping one.
-    bool fetchable = os64_streq(request.scheme, "http") || os64_streq(request.scheme, "https");
-    if (!fetchable) {
-        status_set(" this page asks to send you to %s, which wend does not fetch",
-                   request.url);
-        os64_page_request_free(&request);
-        return false;
-    }
-    // THE HOP NO FETCH CAN SEE. libfetch's downgrade callback judges the
-    // redirects inside one fetch, and this is a new fetch that starts where
-    // the page said — so an encrypted page handing over a plain address is
-    // a question only this side can ask.
-    if (request.downgrade) {
-        char question[WEND_STATUS_MAX];
-        os64_url_t target;
-        os64_snprintf(question, sizeof(question),
-                      " this encrypted page sends you to %s unencrypted - go? (y/n) ",
-                      os64_url_parse(request.url, &target) == OS64_URL_OK ? target.host
-                                                                         : "another address");
-        if (!confirm(question)) {
-            status_set(" stayed here");
-            os64_page_request_free(&request);
-            return false;
-        }
-    }
-    // The request owns its strings independently of the old view. Keep it
-    // alive through go(), then resolve against the new destination model.
-    // Redirectors do not occupy a history entry.
-    bool moved = go(v, request.url, false);
-    if (moved && request.has_fragment)
-        jump_to_fragment(v, request.fragment != NULL ? request.fragment : "");
     os64_page_request_free(&request);
     return moved;
 }
@@ -1273,193 +1261,92 @@ static void refresh_if_declared(view_t *v)
         ;
 }
 
-static char *navigation_copy(const char *text)
-{
-    if (text == NULL) text = "";
-    size_t size = os64_strlen(text) + 1;
-    char *copy = os64_malloc(size);
-    if (copy != NULL) os64_memcpy(copy, text, size);
-    return copy;
-}
-
 static void follow_link(view_t *v, int32_t index)
 {
-    const wend_spot_t *spot = &v->page->spots[index];
-    int32_t link = os64_page_link_for(v->model, spot->node);
-    os64_page_request_t request = {0};
-    if (link >= 0) {
-        os64_page_what_t what = {OS64_PAGE_ACTIVATE_LINK, link, 0, 0};
-        os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
-        if (verdict == OS64_PAGE_FRAGMENT) {
-            v->sel = index;
-            jump_to_node(v, request.anchor);
-            os64_page_request_free(&request);
-            return;
-        }
-        if (verdict != OS64_PAGE_NAVIGATE) {
-            status_set(" %s", os64_page_reason_name(request.reason));
-            os64_page_request_free(&request);
-            return;
-        }
-    } else {
-        // Frame destinations are renderer-generated links, outside libpage's
-        // a/area collection. A missing ordinary link is model uncertainty.
-        if (spot->node == NULL || spot->node->tag != OS64_HTML_TAG_FRAME) {
-            status_set(" the page model could not retain this link");
-            return;
-        }
-        request.url = navigation_copy(spot->url ? spot->url : "");
-        request.fragment = navigation_copy(spot->fragment ? spot->fragment : "");
-        request.has_fragment = spot->has_fragment;
-        if (request.url == NULL || request.fragment == NULL) {
-            status_set(" out of memory");
-            os64_page_request_free(&request);
-            return;
-        }
-        if (request.has_fragment && os64_streq(request.url, v->url)) {
-            jump_to_fragment(v, request.fragment);
-            os64_page_request_free(&request);
-            return;
-        }
-    }
-    if (request.url[0] == '\0') {
-        status_set(" link %d does not spell an address this browser can resolve", index + 1);
-    } else if (starts_with_nocase(request.url, "gopher://")) {
-        status_set(" that is gopherspace - read it with:  gopher '%s'", request.url);
-    } else {
-        v->sel = index;
-        if (go(v, request.url, true) && request.has_fragment)
-            jump_to_fragment(v, request.fragment != NULL ? request.fragment : "");
-    }
+    os64_page_what_t what = { OS64_PAGE_ACTIVATE_LINK, v->page->spots[index].link, 0, 0 };
+    os64_page_request_t request;
+    os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
+    v->sel = index;
+    if (verdict == OS64_PAGE_FRAGMENT)
+        jump_to_node(v, request.anchor);   // a place in this page: a move, no fetch
+    else if (verdict == OS64_PAGE_NAVIGATE)
+        perform(v, &request, true, ASK_NEVER);
+    else
+        status_set(" %s", os64_page_reason_name(request.reason));
     os64_page_request_free(&request);
 }
 
 // ── Sending a form ──────────────────────────────────────────────────────
 
-// Send the form the given control belongs to. The address it asks for is
-// render.c's to build — it is pure computation over the page, and that is
-// where the harness can check it — so what is left here is the sentence for
-// each way it can refuse.
-static void form_send(view_t *v, int32_t index)
+// Ask the model what pressing (or finishing) a control sends, and do it.
+// Everything a submission decides — which button, its overrides, the entry
+// list, the encoding — is libpage's; what is here is the sentence for each
+// way it can say no, and putting the cursor on a field the form requires.
+static void form_send(view_t *v, int32_t control, os64_page_activation_t how)
 {
-    char url[OS64_FETCH_URL_MAX], fragment[OS64_URL_PATH_MAX];
-    switch (wend_form_url(v->page, index, v->url, url, sizeof(url),
-                          fragment, sizeof(fragment))) {
-        case WEND_FORM_NONE:
-            status_set(" that control is in no form, so there is nowhere to send it");
-            return;
-        case WEND_FORM_POST:
-            status_set(" this form posts, and wend sends only forms that ask by address");
-            return;
-        case WEND_FORM_TOO_LONG:
-            status_set(" what this form would send is longer than an address may be");
-            return;
-        case WEND_FORM_BAD_ACTION:
-            status_set(" this form names a destination that is not an address"
-                       " this browser can resolve");
-            return;
-        case WEND_FORM_OK:
-            break;
-    }
-    // A FORM OFF AN ENCRYPTED PAGE THAT POSTS ITS ANSWERS IN CLEAR IS THE
-    // PERSON'S DECISION TOO. libfetch's downgrade callback cannot see this
-    // one: it judges the REDIRECTS inside a fetch, and this fetch starts at
-    // http, so nothing in the library ever learns that the values came off
-    // an https page. What is being sent is what somebody typed, which makes
-    // it worse than an ordinary downgrade, not better.
-    // THE PAGE THAT COLLECTED THE VALUES IS `url`, NOT `base`. A page can
-    // move its own base with <base href>, and one that moves it to http
-    // would otherwise answer this question on the encrypted page's behalf.
-    if (starts_with_nocase(v->url, "https://") && starts_with_nocase(url, "http://")) {
-        os64_url_t target;
-        char question[WEND_STATUS_MAX];
-        os64_snprintf(question, sizeof(question),
-                      " %s would get this unencrypted - send it? (y/n) ",
-                      os64_url_parse(url, &target) == OS64_URL_OK ? target.host
-                                                                 : "that address");
-        if (!confirm(question)) {
-            status_set(" not sent");
-            return;
+    os64_page_what_t what = { how, control, 0, 0 };
+    os64_page_request_t request;
+    os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
+    if (verdict == OS64_PAGE_NAVIGATE) {
+        perform(v, &request, true, ASK_SEND);
+    } else if (verdict == OS64_PAGE_FRAGMENT) {
+        jump_to_node(v, request.anchor);
+    } else {
+        status_set(" %s", os64_page_reason_name(request.reason));
+        int32_t spot = request.reason == OS64_PAGE_REASON_INVALID
+                           ? wend_spot_for_control(v->page, request.control) : -1;
+        if (spot >= 0) {
+            v->sel = spot;
+            scroll_to_spot(v);
         }
     }
-    if (go(v, url, true) && fragment[0] != '\0')
-        jump_to_fragment(v, fragment);     // the action asked for a section
+    os64_page_request_free(&request);
 }
 
-// THE BUTTON A FORM WOULD HAVE PRESSED ITSELF: the first one in it, which is
-// the standard's default submitter and the one a browser clicks when Enter
-// finishes a box. -1 when the form has no button at all, which is a form
-// that can only ever be submitted implicitly.
-static int32_t form_default_submitter(const wend_page_t *p, int32_t form)
+// Whether a control is something a person still has to ANSWER: not a
+// button (a button is how you say you are done), not a value the page keeps
+// or took away, not one it put out of sight.
+static bool control_answerable(const os64_page_control_t *c)
 {
-    for (int32_t i = 0; i < p->nspots; i++)
-        if (p->spots[i].kind == WEND_SPOT_SUBMIT && p->spots[i].form == form)
-            return i;
-    return -1;
+    return !c->disabled && !c->readonly && !c->hidden_subtree && !c->has_datalist_ancestor &&
+           c->input != OS64_PAGE_INPUT_HIDDEN && c->input != OS64_PAGE_INPUT_BUTTON &&
+           c->element != OS64_PAGE_EL_BUTTON && !c->submits && !c->resets;
 }
 
-// A form with ONE THING TO ANSWER has nowhere else for you to go, so
+// A FORM WITH ONE THING TO ANSWER has nowhere else for you to go, so
 // finishing that one thing finishes the form. Anything else to fill in —
 // another box, a tick, a list — and the value is kept while the form waits,
 // because sending early would send the rest at their defaults and a person
 // working down the page in order would never get to them.
 //
-// AND IT IS SENT AS THOUGH ITS OWN BUTTON HAD BEEN PRESSED, because that is
-// what happened: pressing Enter in the only box of a form is how a browser
-// clicks the default button. The button's name and value go with the form,
-// and so does anything it overrules — which is what keeps a GET form with a
-// `formmethod=post` button REFUSED here rather than sent as a query with
-// somebody's password in it.
-static void form_send_if_alone(view_t *v, int32_t index)
+// Finishing it is the standard's IMPLICIT SUBMISSION, and libpage decides
+// what that sends: the form's default button, with its name and whatever it
+// overrules, wherever on the page that button stands.
+static void form_send_if_alone(view_t *v, int32_t control)
 {
-    const wend_page_t *p = v->page;
-    if (index < 0 || index >= p->nspots || p->spots[index].form <= 0)
+    const os64_page_control_t *c = os64_page_control(v->model, control);
+    if (c == NULL || c->form < 0)
         return;
     int32_t answers = 0;
-    for (int32_t i = 0; i < p->nspots; i++) {
-        if (p->spots[i].form != p->spots[index].form)
-            continue;
-        // A button is not something to answer: it is how you say you are
-        // done, which is exactly what finishing the box already said. Nor is
-        // a BOX the page keeps fixed — there is nothing to do to it. A tick
-        // carrying `readonly` is still something to answer, since the
-        // standard gives that word no meaning on one and the renderer
-        // records it only where it has some.
-        if (p->spots[i].kind != WEND_SPOT_LINK && p->spots[i].kind != WEND_SPOT_SUBMIT
-            && !p->spots[i].readonly)
+    for (int32_t i = 0; i < os64_page_ncontrols(v->model); i++) {
+        const os64_page_control_t *other = os64_page_control(v->model, i);
+        if (other->form == c->form && control_answerable(other))
             answers++;
     }
-    if (answers != 1)
-        return;
-    int32_t form = p->spots[index].form;
-    if (form > p->nforms)
-        return;                          // a page that ran out of memory partway
-    int32_t button = form_default_submitter(p, form);
-    // A DEFAULT BUTTON THIS BROWSER CANNOT PRESS STOPS THE SHORTCUT. A
-    // submit control inside a subtree the page marked `hidden` is drawn
-    // nowhere and is no spot, and it is still the button a submission would
-    // take its method and action from — so a form led by one is not sent as
-    // though it had none. Refusing costs a page that would have worked; not
-    // refusing sends a form the way the page did not ask, which on a
-    // `formmethod=post` button is a password in an address.
-    int32_t away = p->forms[form - 1].unreachable_submit;
-    if (away >= 0 && (button < 0 || away <= button)) {
-        status_set(" this form's button is not one this browser can reach");
-        return;
-    }
-    form_send(v, button >= 0 ? button : index);
+    if (answers == 1)
+        form_send(v, control, OS64_PAGE_ACTIVATE_IMPLICIT);
 }
 
 // ── Filling a form in ───────────────────────────────────────────────────
 
-// TWO ALPHABETS MEET IN A FORM FIELD. The tree and the wire are UTF-8; the
+// TWO ALPHABETS MEET IN A FORM FIELD. The model and the wire are UTF-8; the
 // keyboard and the glass are Latin-1. So a value is STORED as UTF-8 — which
 // is what the page put there and what the server is expecting back — and
 // converted at each end: folded for the prompt to show, encoded again when
 // what was typed is taken.
-static void value_to_typed(const char *value, char *out, size_t cap)
+static void value_to_typed(const char *value, size_t len, char *out, size_t cap)
 {
-    size_t at = 0, len = os64_strlen(value), n = 0;
+    size_t at = 0, n = 0;
     while (at < len) {
         uint32_t cp = 0;
         size_t took = os64_utf8_decode(value + at, len - at, &cp);
@@ -1472,7 +1359,7 @@ static void value_to_typed(const char *value, char *out, size_t cap)
     out[n] = '\0';
 }
 
-static void typed_to_value(const char *typed, char *out, size_t cap)
+static size_t typed_to_value(const char *typed, char *out, size_t cap)
 {
     size_t n = 0;
     for (const char *p = typed; *p != '\0'; p++) {
@@ -1484,12 +1371,12 @@ static void typed_to_value(const char *typed, char *out, size_t cap)
             out[n++] = utf8[i];
     }
     out[n] = '\0';
+    return n;
 }
 
 // Lay the page out again so a control shows what it now holds, and put the
-// reader back where they were. The edits are indexed by spot and the walk is
-// deterministic for one tree, so the new page carries the same value at the
-// same number.
+// reader back where they were. The walk is deterministic for one tree, so
+// the new page numbers the same control with the same spot.
 static void edit_commit(view_t *v)
 {
     int32_t sel = v->sel, top = v->top;
@@ -1499,124 +1386,121 @@ static void edit_commit(view_t *v)
     scroll_clamp(v);
 }
 
+// The model said no to an edit: say why, in its words.
+static bool edit_refused(int64_t rc)
+{
+    if (rc >= 0)
+        return false;
+    status_set(" %s", os64_page_reason_name((os64_page_reason_t)-rc));
+    return true;
+}
+
 static void field_type(view_t *v, int32_t index)
 {
-    wend_spot_t *spot = &v->page->spots[index];
-    if (spot->readonly) {
+    int32_t control = v->page->spots[index].control;
+    const os64_page_control_t *c = os64_page_control(v->model, control);
+    if (c == NULL)
+        return;
+    if (c->readonly) {
         status_set(" the page keeps that one as it is");
         return;
     }
-    if (!edits_room(v))
-        return;
     char shown[WEND_STATUS_MAX], before[WEND_STATUS_MAX];
-    char label[64];
-    const char *name = spot->name ? spot->name : "";
-    value_to_typed(spot->value ? spot->value : "", shown, sizeof(shown));
-    os64_strcopy(before, sizeof(before), shown);
-    os64_snprintf(label, sizeof(label), " %s: ", name[0] ? name : "type");
-    if (prompt(label, shown, sizeof(shown), spot->secret) == PROMPT_CANCELLED) {
-        status_set(" left as it was");
-        return;
-    }
-    // AN UNTOUCHED VALUE IS LEFT ALONE, not re-typed back over itself. What
-    // was shown came through the fold, so storing it would replace the
-    // page's own bytes with their Latin-1 shadow — a curly quote becomes a
-    // straight one, a character with no glyph becomes `?`, and anything past
-    // the prompt's buffer is gone. Only a CHANGE is worth keeping.
-    if (os64_streq(shown, before)) {
-        status_set(" left as it was");
-        if (v->page && v->sel >= 0 && v->sel < v->page->nspots)
-            form_send_if_alone(v, v->sel);
-        return;
-    }
     char stored[WEND_STATUS_MAX * 2];
-    typed_to_value(shown, stored, sizeof(stored));
-    char *copy = os64_malloc(os64_strlen(stored) + 1);
-    if (!copy) {
-        status_set(" out of memory keeping what you typed");
+    char label[64];
+    const char *name = c->name ? c->name : "";
+    value_to_typed(c->value, c->value_len, shown, sizeof(shown));
+    // WHAT THE GLASS CANNOT SHOW, THE PROMPT CANNOT HAND BACK. A value is
+    // edited as its Latin-1 shadow, so one holding a character this terminal
+    // has no glyph for, a line break, or more than the prompt holds would
+    // come back as something else: a curly quote straight, an em dash a
+    // hyphen, a textarea one line, its tail gone. Such a value is offered
+    // only to be REPLACED: the prompt starts empty and says so, and nothing
+    // is sent that the person did not type.
+    size_t round = typed_to_value(shown, stored, sizeof(stored));
+    bool faithful = round == c->value_len && os64_memcmp(stored, c->value, round) == 0;
+    if (!faithful)
+        shown[0] = '\0';
+    os64_strcopy(before, sizeof(before), shown);
+    os64_snprintf(label, sizeof(label), faithful ? " %s: " : " replace %s: ",
+                  name[0] ? name : "text");
+    prompt_result_t got = prompt(label, shown, sizeof(shown),
+                                 c->input == OS64_PAGE_INPUT_PASSWORD);
+    // AN UNTOUCHED VALUE IS LEFT ALONE, not re-typed back over itself — and
+    // a replacement nobody typed is no replacement.
+    if (got == PROMPT_CANCELLED || os64_streq(shown, before)) {
+        status_set(" left as it was");
+        if (got != PROMPT_CANCELLED)
+            form_send_if_alone(v, control);
         return;
     }
-    os64_memcpy(copy, stored, os64_strlen(stored) + 1);
-    os64_free(v->edits[index].text);
-    v->edits[index].text = copy;
+    size_t len = typed_to_value(shown, stored, sizeof(stored));
+    if (edit_refused(os64_page_set_text(v->model, control, stored, len)))
+        return;
     edit_commit(v);
-
     // ENTER IN A SEARCH BOX SENDS IT: a form whose only box you can type in
     // has nowhere else for you to go, and stopping there to hunt for a
     // button is the step nobody expects.
-    // The re-layout can fail for want of memory, and an edited field always
-    // has a selection — so the page has to be checked before it is walked.
-    if (v->page && v->sel >= 0 && v->sel < v->page->nspots)
-        form_send_if_alone(v, v->sel);
+    form_send_if_alone(v, control);
 }
 
 static void check_toggle(view_t *v, int32_t index)
 {
-    if (!edits_room(v))
+    int32_t control = v->page->spots[index].control;
+    const os64_page_control_t *c = os64_page_control(v->model, control);
+    if (c == NULL || edit_refused(os64_page_set_checked(v->model, control, !c->checked)))
         return;
-    v->edits[index].on = v->page->spots[index].on ? 0 : 1;
     edit_commit(v);
 }
 
-// A control's name, or "" when a page that ran out of memory partway never
-// got to store one.
-static const char *some_name(const wend_spot_t *spot)
-{
-    return spot->name ? spot->name : "";
-}
-
 // TICKING ONE OF A GROUP UNTICKS THE REST, which is what makes a radio a
-// radio: the group is every control of that kind sharing a NAME with one
-// form owner.
+// radio — and which radios are a group is the model's answer.
 static void radio_pick(view_t *v, int32_t index)
 {
-    if (!edits_room(v))
+    if (edit_refused(os64_page_set_checked(v->model, v->page->spots[index].control, true)))
         return;
-    const wend_spot_t *picked = &v->page->spots[index];
-    // A RADIO WITH NO NAME IS IN NO GROUP, so picking it unticks nothing:
-    // two absent names are not the same name, and clearing every other
-    // nameless radio would put out dots the page had lit for reasons of its
-    // own. It sends nothing either way.
-    if (some_name(picked)[0] == '\0') {
-        v->edits[index].on = 1;
-        edit_commit(v);
-        return;
-    }
-    for (int32_t i = 0; i < v->page->nspots; i++) {
-        const wend_spot_t *other = &v->page->spots[i];
-        if (other->kind != WEND_SPOT_RADIO || other->form != picked->form)
-            continue;
-        if (!os64_streq(some_name(other), some_name(picked)))
-            continue;
-        v->edits[i].on = (i == index) ? 1 : 0;
-    }
     edit_commit(v);
 }
 
 // A list CYCLES rather than opening a menu of its own. A menu is a second
 // kind of screen and this browser has one kind; stepping through the options
 // in place shows each answer where the answer will be.
+//
+// WHAT A PERSON PICKS IS EXACTLY ONE THING, on a `multiple` list too: one
+// key can say "this one" and has no way to say "these three", so stepping a
+// multiple list leaves it holding the one it stepped to. Until it is touched
+// the page's own several go out untouched, which is the half that matters
+// for a page you are only reading. Picking SEVERAL is booked in BROWSER.md.
 static void choice_cycle(view_t *v, int32_t index)
 {
-    wend_spot_t *spot = &v->page->spots[index];
-    // Step to the next option the page will actually take. A disabled one is
-    // shown when it is what the list holds — the "choose one" placeholder —
-    // and is never stepped ONTO.
+    int32_t control = v->page->spots[index].control;
+    const os64_page_control_t *c = os64_page_control(v->model, control);
+    if (c == NULL || c->noptions == 0)
+        return;
+    // Step from what the row shows, to the next option the page will take.
+    // A disabled one is shown when it is what the list holds — the "choose
+    // one" placeholder — and is never stepped ONTO.
+    int32_t current = -1;
+    for (int32_t i = 0; i < c->noptions && current < 0; i++)
+        if (c->options[i].selected && !(c->multiple && c->options[i].disabled))
+            current = i;
     int32_t next = -1;
-    for (int32_t i = 1; i <= spot->noptions; i++) {
-        int32_t try = (spot->chosen + i) % (spot->noptions > 0 ? spot->noptions : 1);
-        if (try != spot->chosen && !spot->options[try].off) {
+    for (int32_t step = 1; step <= c->noptions && next < 0; step++) {
+        int32_t try = ((current < 0 ? -1 : current) + step + c->noptions) % c->noptions;
+        if (try != current && !c->options[try].disabled)
             next = try;
-            break;
-        }
     }
     if (next < 0) {
         status_set(" that list offers nothing else");
         return;
     }
-    if (!edits_room(v))
+    if (edit_refused(os64_page_set_chosen(v->model, control, next, true)))
         return;
-    v->edits[index].chosen = next;
+    if (c->multiple)
+        for (int32_t i = 0; i < c->noptions; i++)
+            if (i != next && c->options[i].selected &&
+                edit_refused(os64_page_set_chosen(v->model, control, i, false)))
+                break;
     edit_commit(v);
 }
 
@@ -1635,13 +1519,14 @@ static void activate(view_t *v, int32_t index)
     }
     v->sel = index;
     scroll_to_spot(v);
-    switch (v->page->spots[index].kind) {
+    const wend_spot_t *spot = &v->page->spots[index];
+    switch (spot->kind) {
         case WEND_SPOT_LINK:   follow_link(v, index); break;
         case WEND_SPOT_TEXT:   field_type(v, index); break;
         case WEND_SPOT_CHECK:  check_toggle(v, index); break;
         case WEND_SPOT_RADIO:  radio_pick(v, index); break;
         case WEND_SPOT_CHOICE: choice_cycle(v, index); break;
-        case WEND_SPOT_SUBMIT: form_send(v, index); break;
+        case WEND_SPOT_SUBMIT: form_send(v, spot->control, OS64_PAGE_ACTIVATE_CONTROL); break;
     }
 }
 

@@ -108,8 +108,113 @@ bool p_canonical(os64_page_t *page, const char *text, const char **out,
     return false;
 }
 
-// URL input preprocessing: strip surrounding C0 controls and spaces, and
-// remove ASCII tab/newline bytes throughout, before splitting fragments.
+// ── What a page writes in an href, made into an address ────────────────
+//
+// A PAGE MAY WRITE A CHARACTER AN ADDRESS CANNOT CARRY, and the URL
+// Standard says exactly what a browser does with it: percent-encode it,
+// part by part. os64/url.h refuses such bytes, rightly — for an address a
+// PERSON typed, encoding would be a guess — so the page's rule is applied
+// here, before anything resolves. Without it `/wiki/Håkon_Wium_Lie` is not
+// a link, and every browser follows it.
+//
+// THE PARTS ARE ENCODED DIFFERENTLY. A path is UTF-8, whatever the page
+// was written in. A query is in the DOCUMENT'S encoding, because the
+// server that wrote a windows-1252 page reads its queries in windows-1252;
+// a character that encoding cannot hold is written as the markup that
+// names it, `&#NNN;`, escaped. A fragment is left as written: it is decoded
+// again before it is matched and never crosses the wire.
+
+// An OPAQUE address — a scheme not followed by `//`, as `mailto:`, `data:`
+// and `javascript:` are — keeps its punctuation and its spaces: the
+// standard escapes only controls and what is not ASCII there, because the
+// rest is the scheme's own business.
+static bool path_escapes(unsigned char c, bool opaque)
+{
+    if (opaque)
+        return c < 0x20 || c >= 0x7F;
+    return c <= 0x20 || c >= 0x7F || c == '"' || c == '<' || c == '>' || c == '`' ||
+           c == '{' || c == '}';
+}
+
+static bool opaque_reference(const char *text, size_t len)
+{
+    size_t at = 0;
+    if (len == 0 || !((text[0] >= 'a' && text[0] <= 'z') || (text[0] >= 'A' && text[0] <= 'Z')))
+        return false;
+    while (at < len && ((text[at] >= 'a' && text[at] <= 'z') || (text[at] >= 'A' && text[at] <= 'Z') ||
+                        (text[at] >= '0' && text[at] <= '9') || text[at] == '+' ||
+                        text[at] == '-' || text[at] == '.'))
+        at++;
+    return at < len && text[at] == ':' && (at + 1 >= len || text[at + 1] != '/');
+}
+
+static bool query_escapes(unsigned char c)
+{
+    return c <= 0x20 || c >= 0x7F || c == '"' || c == '<' || c == '>';
+}
+
+static bool document_is_1252(const os64_page_t *page)
+{
+    return page->doc != NULL && page->doc->charset != NULL &&
+           os64_streq(page->doc->charset, "windows-1252");
+}
+
+// Write (or, with `out` NULL, measure) `text` with each part encoded as the
+// standard asks. Returns the length; `*escaped` says whether any byte was.
+static size_t encode_reference(const char *text, size_t len, bool query_1252, char *out,
+                               bool *escaped)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t at = 0;
+    *escaped = false;
+    enum { PATH, QUERY, FRAGMENT } part = PATH;
+    bool opaque = opaque_reference(text, len);
+#define PUT(ch) do { char put_ = (char)(ch); if (out != NULL) out[at] = put_; at++; } while (0)
+#define ESCAPE(byte) do { PUT('%'); PUT(hex[(byte) >> 4]); PUT(hex[(byte) & 15]); \
+                          *escaped = true; } while (0)
+    for (size_t i = 0; i < len;) {
+        unsigned char c = (unsigned char)text[i];
+        if (c == '#' && part != FRAGMENT)
+            part = FRAGMENT;
+        else if (c == '?' && part == PATH)
+            part = QUERY;
+        else if (part == QUERY && query_1252 && c >= 0x80) {
+            uint32_t cp = 0;
+            size_t took = os64_utf8_decode(text + i, len - i, &cp);
+            uint8_t byte = 0;
+            if (os64_html_encode_windows_1252(cp, &byte)) {
+                ESCAPE(byte);
+            } else {
+                // `&#NNN;` with its three special bytes escaped.
+                char digits[12];
+                size_t n = 0;
+                do {
+                    digits[n++] = (char)('0' + cp % 10);
+                    cp /= 10;
+                } while (cp != 0);
+                ESCAPE('&');
+                ESCAPE('#');
+                while (n != 0)
+                    PUT(digits[--n]);
+                ESCAPE(';');
+            }
+            i += took != 0 ? took : 1;
+            continue;
+        } else if ((part == PATH && path_escapes(c, opaque)) || (part == QUERY && query_escapes(c))) {
+            ESCAPE(c);
+            i++;
+            continue;
+        }
+        PUT(c);
+        i++;
+    }
+#undef ESCAPE
+#undef PUT
+    return at;
+}
+
+// URL input preprocessing: strip surrounding C0 controls and spaces, remove
+// ASCII tab/newline bytes throughout, then percent-encode each part.
 static char *url_input(os64_page_t *page, const char *text)
 {
     size_t first = 0, end = os64_strlen(text);
@@ -117,14 +222,23 @@ static char *url_input(os64_page_t *page, const char *text)
         first++;
     while (end > first && (unsigned char)text[end-1] <= 0x20)
         end--;
-    char *out = p_alloc(page, end-first+1);
-    if (out == NULL)
+    char *kept = p_alloc(page, end-first+1);
+    if (kept == NULL)
         return NULL;
-    size_t at = 0;
+    size_t len = 0;
     for (size_t i = first; i < end; i++)
         if (text[i] != '\t' && text[i] != '\r' && text[i] != '\n')
-            out[at++] = text[i];
-    out[at] = '\0';
+            kept[len++] = text[i];
+    kept[len] = '\0';
+    bool query_1252 = document_is_1252(page), escaped = false;
+    size_t want = encode_reference(kept, len, query_1252, NULL, &escaped);
+    if (!escaped)
+        return kept;
+    char *out = p_alloc(page, want + 1);
+    if (out == NULL)
+        return NULL;
+    encode_reference(kept, len, query_1252, out, &escaped);
+    out[want] = '\0';
     return out;
 }
 

@@ -1,7 +1,8 @@
 #!/bin/bash
-# wend's renderer on the host: the fold's table, the
-# wrapper's edges, an allocation failure at every step, and every saved corpus
-# page rendered and diffed against its checked-in dump.
+# wend's renderer on the host, over libpage's model: the fold's table, the
+# wrapper's edges, what each spot asks the model to send, an allocation
+# failure at every step, and every saved corpus page rendered and diffed
+# against its checked-in dump.
 #
 # Refresh the dumps deliberately, never by accident:
 #   tools/test_wend_host.sh --refresh
@@ -22,11 +23,15 @@ trap cleanup EXIT
 cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    -fno-sanitize-recover=all \
    -I userland/libhtml/include -I userland/libos64/include -I userland \
-   -I abi/include \
+   -I userland/libpage/include -I userland/libpage/upstream/ryu -I abi/include \
    tools/test_wend_host.c userland/apps/wend/render.c \
+   userland/libpage/core.c userland/libpage/resolve.c userland/libpage/value.c \
+   userland/libpage/number.c userland/libpage/range.c userland/libpage/upstream/ryu/ryu/d2s.c \
+   userland/libpage/submit.c userland/libpage/encode.c userland/libpage/refresh.c \
+   userland/libpage/activate.c \
    userland/libhtml/core.c userland/libhtml/encoding.c \
    userland/libhtml/tokenizer.c userland/libhtml/tree.c \
-   userland/libos64/str.c userland/libos64/url.c userland/libos64/fmt.c \
+   userland/libos64/str.c userland/libos64/bidi.c userland/libos64/url.c userland/libos64/fmt.c \
    -o "$work/wend_driver"
 
 "$work/wend_driver" --checks

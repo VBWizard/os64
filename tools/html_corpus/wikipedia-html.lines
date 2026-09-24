@@ -4980,9 +4980,9 @@ incomplete: no
 |~ F2216:0-23 L2217:24-40
 --
 1 link https://en.wikipedia.org/wiki/HTML #bodyContent
-2 check name=(none) off value=
-3 submit name=(none) label=move to sidebar value=
-4 submit name=(none) label=hide value=
+2 check name=(none) off value=on
+3 submit name=(none) value=
+4 submit name=(none) value=
 5 link https://en.wikipedia.org/wiki/Main_Page
 6 link https://en.wikipedia.org/wiki/Wikipedia:Contents
 7 link https://en.wikipedia.org/wiki/Portal:Current_events
@@ -4997,21 +4997,21 @@ incomplete: no
 16 link https://en.wikipedia.org/wiki/Special:SpecialPages
 17 link https://en.wikipedia.org/wiki/Main_Page
 18 link https://en.wikipedia.org/wiki/Special:Search
-19 text form=1 name=search value= width=16
-20 submit form=1 name=(none) label=Search value=
-21 check name=(none) off value=
+19 text form=1 name=search value=
+20 submit form=1 name=(none) value=
+21 check name=(none) off value=on
 22 link https://donate.wikimedia.org/?wmf_source=donate&wmf_medium=sidebar&wmf_campaign=en.wikipedia.org&uselang=en
 23 link https://en.wikipedia.org/w/index.php?title=Special:CreateAccount&returnto=HTML
 24 link https://en.wikipedia.org/w/index.php?title=Special:UserLogin&returnto=HTML
-25 check name=(none) off value=
+25 check name=(none) off value=on
 26 link https://donate.wikimedia.org/?wmf_source=donate&wmf_medium=sidebar&wmf_campaign=en.wikipedia.org&uselang=en
 27 link https://en.wikipedia.org/w/index.php?title=Special:CreateAccount&returnto=HTML
 28 link https://en.wikipedia.org/w/index.php?title=Special:UserLogin&returnto=HTML
-29 submit name=(none) label=move to sidebar value=
-30 submit name=(none) label=hide value=
+29 submit name=(none) value=
+30 submit name=(none) value=
 31 link https://en.wikipedia.org/wiki/HTML #
 32 link https://en.wikipedia.org/wiki/HTML #History
-33 submit name=(none) label=Toggle History subsection value=
+33 submit name=(none) value=
 34 link https://en.wikipedia.org/wiki/HTML #Development
 35 link https://en.wikipedia.org/wiki/HTML #HTML_version_timeline
 36 link https://en.wikipedia.org/wiki/HTML #HTML_2
@@ -5022,7 +5022,7 @@ incomplete: no
 41 link https://en.wikipedia.org/wiki/HTML #XHTML_versions
 42 link https://en.wikipedia.org/wiki/HTML #Transition_of_HTML_publication_to_WHATWG
 43 link https://en.wikipedia.org/wiki/HTML #Markup
-44 submit name=(none) label=Toggle Markup subsection value=
+44 submit name=(none) value=
 45 link https://en.wikipedia.org/wiki/HTML #Elements
 46 link https://en.wikipedia.org/wiki/HTML #Element_examples
 47 link https://en.wikipedia.org/wiki/HTML #Headings
@@ -5036,13 +5036,13 @@ incomplete: no
 55 link https://en.wikipedia.org/wiki/HTML #Document_type_declaration
 56 link https://en.wikipedia.org/wiki/HTML #Semantic_HTML
 57 link https://en.wikipedia.org/wiki/HTML #Delivery
-58 submit name=(none) label=Toggle Delivery subsection value=
+58 submit name=(none) value=
 59 link https://en.wikipedia.org/wiki/HTML #HTTP
 60 link https://en.wikipedia.org/wiki/HTML #HTML_e-mail
 61 link https://en.wikipedia.org/wiki/HTML #Naming_conventions
 62 link https://en.wikipedia.org/wiki/HTML #HTML_Application
 63 link https://en.wikipedia.org/wiki/HTML #HTML4_variations
-64 submit name=(none) label=Toggle HTML4 variations subsection value=
+64 submit name=(none) value=
 65 link https://en.wikipedia.org/wiki/HTML #SGML-based_versus_XML-based_HTML
 66 link https://en.wikipedia.org/wiki/HTML #Transitional_versus_strict
 67 link https://en.wikipedia.org/wiki/HTML #Frameset_versus_transitional
@@ -5053,8 +5053,8 @@ incomplete: no
 72 link https://en.wikipedia.org/wiki/HTML #Notes
 73 link https://en.wikipedia.org/wiki/HTML #References
 74 link https://en.wikipedia.org/wiki/HTML #External_links
-75 check name=(none) off value=
-76 check name=(none) off value=
+75 check name=(none) off value=on
+76 check name=(none) off value=on
 77 link https://af.wikipedia.org/wiki/HTML
 78 link https://als.wikipedia.org/wiki/HTML
 79 link https://an.wikipedia.org/wiki/HTML
@@ -5198,13 +5198,13 @@ incomplete: no
 217 link https://www.wikidata.org/wiki/Special:EntityPage/Q8811 #sitelinks-wikipedia
 218 link https://en.wikipedia.org/wiki/HTML
 219 link https://en.wikipedia.org/wiki/Talk:HTML
-220 check name=(none) off value=
+220 check name=(none) off value=on
 221 link https://en.wikipedia.org/wiki/HTML
 222 link https://en.wikipedia.org/w/index.php?title=HTML&action=edit
 223 link https://en.wikipedia.org/w/index.php?title=HTML&action=history
-224 check name=(none) off value=
-225 submit name=(none) label=move to sidebar value=
-226 submit name=(none) label=hide value=
+224 check name=(none) off value=on
+225 submit name=(none) value=
+226 submit name=(none) value=
 227 link https://en.wikipedia.org/wiki/HTML
 228 link https://en.wikipedia.org/w/index.php?title=HTML&action=edit
 229 link https://en.wikipedia.org/w/index.php?title=HTML&action=history
@@ -5224,8 +5224,8 @@ incomplete: no
 243 link https://en.wikibooks.org/wiki/HyperText_Markup_Language
 244 link https://en.wikiversity.org/wiki/HTML
 245 link https://www.wikidata.org/wiki/Special:EntityPage/Q8811
-246 submit name=(none) label=move to sidebar value=
-247 submit name=(none) label=hide value=
+246 submit name=(none) value=
+247 submit name=(none) value=
 248 link https://en.wikipedia.org/wiki/Wikipedia:Protection_policy #semi
 249 link https://en.wikipedia.org/wiki/HTM_(disambiguation)
 250 link https://en.wikipedia.org/wiki/Special:EditPage/HTML
@@ -5506,7 +5506,7 @@ incomplete: no
 525 link https://en.wikipedia.org/wiki/HTML #cite_note-73
 526 link https://en.wikipedia.org/wiki/Document_type_declaration
 527 link https://en.wikipedia.org/wiki/Standards_mode
-528 link https://en.wikipedia.org/wiki/"Hello,_World!"_program
+528 link https://en.wikipedia.org/wiki/%22Hello,_World!%22_program
 529 link https://en.wikipedia.org/wiki/Browser_tab
 530 link https://en.wikipedia.org/wiki/Window_(computing)
 531 link https://en.wikipedia.org/wiki/Quirks_mode
@@ -5530,7 +5530,7 @@ incomplete: no
 549 link https://en.wikipedia.org/wiki/URL
 550 link https://en.wikipedia.org/wiki/Main_Page
 551 link https://en.wikipedia.org/wiki/HTML_attribute
-552 link https://en.wikipedia.org/wiki/Name–value_pair
+552 link https://en.wikipedia.org/wiki/Name%E2%80%93value_pair
 553 link https://en.wikipedia.org/wiki/HTML #cite_note-77
 554 link https://en.wikipedia.org/wiki/HTML #cite_note-78
 555 link https://en.wikipedia.org/wiki/HTML #cite_note-79
@@ -5864,7 +5864,7 @@ incomplete: no
 883 link https://en.wikipedia.org/wiki/HTML #cite_ref-48
 884 link https://www.usenix.org/publications/library/proceedings/usenix98/freenix/bowers.pdf
 885 link https://en.wikipedia.org/wiki/HTML #cite_ref-49
-886 link https://en.wikipedia.org/wiki/Håkon_Wium_Lie
+886 link https://en.wikipedia.org/wiki/H%C3%A5kon_Wium_Lie
 887 link https://en.wikipedia.org/wiki/Bert_Bos
 888 link https://archive.org/details/cascadingstylesh00lieh
 889 link https://archive.org/details/cascadingstylesh00lieh/page/263
@@ -6100,7 +6100,7 @@ incomplete: no
 1119 link https://en.wikipedia.org/wiki/Arc_(web_browser)
 1120 link https://en.wikipedia.org/wiki/ChatGPT_Atlas
 1121 link https://en.wikipedia.org/wiki/Avast_Secure_Browser
-1122 link https://en.wikipedia.org/wiki/Cốc_Cốc
+1122 link https://en.wikipedia.org/wiki/C%E1%BB%91c_C%E1%BB%91c
 1123 link https://en.wikipedia.org/wiki/Perplexity_AI #Comet
 1124 link https://en.wikipedia.org/wiki/Comodo_Dragon
 1125 link https://en.wikipedia.org/wiki/Ecosia #Ecosia_Browser
@@ -6214,7 +6214,7 @@ incomplete: no
 1233 link https://en.wikipedia.org/wiki/Bolt_(web_browser)
 1234 link https://en.wikipedia.org/wiki/Dolphin_Browser
 1235 link https://en.wikipedia.org/wiki/Fluid_(web_browser)
-1236 link https://en.wikipedia.org/wiki/Google_TV_(2010–2014)
+1236 link https://en.wikipedia.org/wiki/Google_TV_(2010%E2%80%932014)
 1237 link https://en.wikipedia.org/wiki/Iris_Browser
 1238 link https://en.wikipedia.org/wiki/Mercury_Browser
 1239 link https://en.wikipedia.org/wiki/Nokia_Browser_for_Symbian
@@ -7177,16 +7177,16 @@ incomplete: no
 2196 link https://en.wikipedia.org/wiki/Wikipedia:Contact_us
 2197 link https://foundation.wikimedia.org/wiki/Special:MyLanguage/Legal:Wikimedia_Foundation_Legal_and_Safety_Contact_Information
 2198 link https://foundation.wikimedia.org/wiki/Special:MyLanguage/Policy:Universal_Code_of_Conduct
-2199 link https://developer.wikimedia.org
+2199 link https://developer.wikimedia.org/
 2200 link https://stats.wikimedia.org/ #/en.wikipedia.org
 2201 link https://foundation.wikimedia.org/wiki/Special:MyLanguage/Policy:Cookie_statement
 2202 link https://en.wikipedia.org/w/index.php?title=HTML&mobileaction=toggle_view_mobile
 2203 link https://www.wikimedia.org/
 2204 link https://www.mediawiki.org/
-2205 submit name=(none) label=Search value=
-2206 text form=2 name=search value= width=16
-2207 submit form=2 name=(none) label=Search value=
-2208 check name=(none) off value=
+2205 submit name=(none) value=
+2206 text form=2 name=search value=
+2207 submit form=2 name=(none) value=
+2208 check name=(none) off value=on
 2209 link https://en.wikipedia.org/wiki/HTML #
 2210 link https://en.wikipedia.org/wiki/HTML #
 2211 link https://en.wikipedia.org/wiki/HTML #
@@ -7194,7 +7194,7 @@ incomplete: no
 2213 link https://en.wikipedia.org/wiki/HTML #
 2214 link https://en.wikipedia.org/wiki/HTML #
 2215 link https://en.wikipedia.org/wiki/HTML #
-2216 submit name=(none) label=140 languages value=
+2216 submit name=(none) value=
 2217 link https://en.wikipedia.org/wiki/HTML #
-form 1 get https://en.wikipedia.org/w/index.php id=searchform title=Special:Search@19
-form 2 get https://en.wikipedia.org/w/index.php id=vector-sticky-search-form title=Special:Search@2206
+form 1 get https://en.wikipedia.org/w/index.php id=searchform title=Special:Search
+form 2 get https://en.wikipedia.org/w/index.php id=vector-sticky-search-form title=Special:Search

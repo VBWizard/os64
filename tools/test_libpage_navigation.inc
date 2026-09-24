@@ -78,12 +78,11 @@ static void navigation_geometry(void)
         "<p><a name=y href=/next>Named link</a></p>"
         "<div hidden id=hidden>Hidden</div><p id=top>Claimed top</p><script id=script>x</script>";
     os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL);
-    os64_url_t base;os64_url_parse(kPage,&base);
     const os64_html_node_t *target=NULL;
     state_expect("ID precedence",os64_page_resolve_fragment(page,"x",&target)==OS64_PAGE_REASON_OK && target->tag==OS64_HTML_TAG_H2);
     int32_t previous=-1;
     for(int width=80;width>=20;width-=60) {
-        wend_page_t *drawn=wend_render_html(doc,&base,width,NULL,0);
+        wend_page_t *drawn=wend_render_html(doc,page,width);
         int32_t row=wend_node_line(drawn,target);
         state_expect("resolved node reaches its row",row>=0 && row<drawn->nlines && strcmp(drawn->lines[row].text,"ID winner")==0);
         if(previous>=0) state_expect("geometry rebuilt on reflow",row>previous);
@@ -103,10 +102,10 @@ static void navigation_geometry(void)
         state_expect("absent fragment",os64_page_resolve_fragment(page,"absent",&node)==OS64_PAGE_REASON_NO_ANCHOR);
         wend_page_free(drawn);
     }
-    size_t before=allocations;wend_page_t *drawn=wend_render_html(doc,&base,40,NULL,0);
+    size_t before=allocations;wend_page_t *drawn=wend_render_html(doc,page,40);
     size_t count=allocations-before;wend_page_free(drawn);
     for (size_t i=1;i<=count;i++) {
-        fail_single=true;fail_at=allocations+i;drawn=wend_render_html(doc,&base,40,NULL,0);fail_at=0;fail_single=false;
+        fail_single=true;fail_at=allocations+i;drawn=wend_render_html(doc,page,40);fail_at=0;fail_single=false;
         if(drawn && drawn->incomplete) state_expect("incomplete geometry refuses",wend_node_line(drawn,target)==-1);
         wend_page_free(drawn);
     }
@@ -136,7 +135,7 @@ static void navigation_block_geometry(void)
     for(size_t i=0;i<sizeof(tags)/sizeof(tags[0]);i++) {
         char html[200];snprintf(html,sizeof(html),"<div>Before<%s id=x>Target</%s></div>",tags[i],tags[i]);
         os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL);
-        os64_url_t base;os64_url_parse(kPage,&base);wend_page_t *drawn=wend_render_html(doc,&base,40,NULL,0);
+        wend_page_t *drawn=wend_render_html(doc,page,40);
         int32_t row=wend_node_line(drawn,os64_page_anchor(page,"x"));
         state_expect("block target starts after preceding text",row>0);
         wend_page_free(drawn);os64_page_free(page);os64_html_document_free(doc);
@@ -157,19 +156,18 @@ static void navigation_long_fragment(void)
         doc=parse(destination,"utf-8");page=os64_page_build(doc,req.url,NULL);
         const os64_html_node_t *node=NULL;
         state_expect("destination resolves entire fragment",os64_page_resolve_fragment(page,req.fragment,&node)==0 && node!=NULL);
-        os64_url_t base;os64_url_parse(req.url,&base);
-        wend_page_t *drawn=wend_render_html(doc,&base,40,NULL,0);
+        wend_page_t *drawn=wend_render_html(doc,page,40);
         int32_t row=wend_node_line(drawn,node);
         state_expect("long target geometry",row>=0 && strcmp(drawn->lines[row].text,"Long target")==0);
         wend_page_free(drawn);os64_page_request_free(&req);os64_page_free(page);os64_html_document_free(doc);
     }
     snprintf(html,sizeof(html),"<form action='/other#%s'><button>Go</button>",name);
-    os64_html_document_t *doc=parse(html,"utf-8");os64_url_t base;os64_url_parse(kPage,&base);
-    wend_page_t *drawn=wend_render_html(doc,&base,40,NULL,0);
-    char url[OS64_URL_REF_MAX],fragment[1102];
-    state_expect("legacy form refuses fragment truncation",wend_form_url(drawn,0,kPage,url,sizeof(url),fragment,1100)==WEND_FORM_TOO_LONG);
-    state_expect("legacy form exact fragment capacity",wend_form_url(drawn,0,kPage,url,sizeof(url),fragment,1101)==WEND_FORM_OK && strcmp(fragment,name)==0);
-    wend_page_free(drawn);os64_html_document_free(doc);
+    os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL);
+    os64_page_request_t req;
+    state_expect("form keeps its whole fragment",
+        os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL,0,0,0},&req)==OS64_PAGE_NAVIGATE &&
+        req.fragment && strcmp(req.fragment,name)==0);
+    os64_page_request_free(&req);os64_page_free(page);os64_html_document_free(doc);
 }
 
 static void navigation_cases(void)
