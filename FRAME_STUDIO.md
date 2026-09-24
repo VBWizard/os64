@@ -18,6 +18,8 @@ shared decoding/data with no kernel implementation changes; `codex/ui-editing`
 adds reusable widget editing with no kernel changes; `codex/frame-studio` adds
 the decoration engine, its userland consumers and the editor together. See
 [publication validation](docs/frame-studio/publication-checkpoint.md).
+The subsequent review corrections and validation are recorded in the
+[review checkpoint](docs/frame-studio/review-checkpoint.md).
 
 Per-slice checkpoints below are historical evidence. Their pending-work and
 hardware/publication statements describe the point when each slice was tested;
@@ -420,8 +422,9 @@ For ordinary windows, preserve the content dimensions and content screen
 position, growing/shrinking the frame around them. Translate only when necessary
 to expose the enabled button groups and a usable drag region on screen. If no
 such placement exists, or the frame is narrower than its required controls,
-refuse Apply with the affected window named. Content may remain partly offscreen;
-do not shrink it to rescue an oversized decoration.
+refuse Apply and name the affected window and rule in the DEBUG_GUI log.
+Content may remain partly offscreen; do not shrink it to rescue an oversized
+decoration.
 
 Maximized windows keep their screen-filling outer frame; new insets therefore
 change their drawable size. Refuse the whole Apply if that would violate a

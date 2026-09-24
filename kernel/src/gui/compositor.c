@@ -908,16 +908,16 @@ static uint32_t s_control_hover;
 
 void gui_cancel_decoration(const struct window *w)
 {
-    if (!w || s_control_capture.window==w->id) {
-        window_t *pressed=wm_window_by_id(s_control_capture.window);
-        if (pressed) wm_decoration_state(pressed,0,0);
-        os64_decor_capture_cancel(&s_control_capture);
-    }
-    if (!w || s_control_hover==w->id) {
-        window_t *hover=wm_window_by_id(s_control_hover);
-        if (hover) wm_decoration_state(hover,0,0);
-        s_control_hover=0;
-    }
+	if (!w || s_control_capture.window==w->id) {
+		window_t *pressed=wm_window_by_id(s_control_capture.window);
+		if (pressed) wm_decoration_state(pressed,0,0);
+		os64_decor_capture_cancel(&s_control_capture);
+	}
+	if (!w || s_control_hover==w->id) {
+		window_t *hover=wm_window_by_id(s_control_hover);
+		if (hover) wm_decoration_state(hover,0,0);
+		s_control_hover=0;
+	}
 }
 
 static window_t *s_pointer_window = NULL;
@@ -927,26 +927,26 @@ static int32_t s_hover_w, s_hover_h;
 
 static void control_state_locked(void)
 {
-    if (!gui_owns_glass() || s_glass_regained) gui_cancel_decoration(NULL);
-    window_t *under=NULL;
-    uint32_t hit=0;
-    if (gui_owns_glass() && !s_drag_window && !s_wm_buttons && !s_pointer_window) {
-        under=wm_topmost_at(s_cursor_x,s_cursor_y);
-        if (under) hit=wm_decoration_hit(under,s_cursor_x,s_cursor_y);
-        if (under && (wm_decoration_disabled(under) & (1u<<hit))) hit=0;
-    }
-    if (s_control_capture.buttons) {
-        (void)os64_decor_capture_step(&s_control_capture,OS64_DECOR_POINTER_MOVE,0,
-            under?under->id:0,hit);
-        if (!s_control_capture.armed) hit=0;
-    }
-    uint32_t id=hit && under?under->id:0;
-    if (s_control_hover && s_control_hover!=id) {
-        window_t *old=wm_window_by_id(s_control_hover);
-        if (old) wm_decoration_state(old,0,0);
-    }
-    if (id) wm_decoration_state(under,hit,s_control_capture.armed?hit:0);
-    s_control_hover=id;
+	if (!gui_owns_glass() || s_glass_regained) gui_cancel_decoration(NULL);
+	window_t *under=NULL;
+	uint32_t hit=0;
+	if (gui_owns_glass() && !s_drag_window && !s_wm_buttons && !s_pointer_window) {
+		under=wm_topmost_at(s_cursor_x,s_cursor_y);
+		if (under) hit=wm_decoration_hit(under,s_cursor_x,s_cursor_y);
+		if (under && (wm_decoration_disabled(under) & (1u<<hit))) hit=0;
+	}
+	if (s_control_capture.buttons) {
+		(void)os64_decor_capture_step(&s_control_capture,OS64_DECOR_POINTER_MOVE,0,
+			under?under->id:0,hit);
+		if (!s_control_capture.armed) hit=0;
+	}
+	uint32_t id=hit && under?under->id:0;
+	if (s_control_hover && s_control_hover!=id) {
+		window_t *old=wm_window_by_id(s_control_hover);
+		if (old) wm_decoration_state(old,0,0);
+	}
+	if (id) wm_decoration_state(under,hit,s_control_capture.armed?hit:0);
+	s_control_hover=id;
 }
 
 // Reconcile against the final scene each frame, including geometry changes
@@ -989,7 +989,7 @@ static void pointer_state_locked(void)
 
 void gui_grab_release(const struct window *w)
 {
-    gui_cancel_decoration(w);
+	gui_cancel_decoration(w);
 	// Called from wm_destroy under kGuiLock while the window is still linked
 	// and alive. Clear its control state before releasing pointer references.
 	if (s_drag_window == (const window_t *)w)
@@ -1014,10 +1014,10 @@ void gui_cancel_resize(const struct window *w)
 // Client grabs remain paired; WM-owned edges drain after cancellation.
 void gui_decoration_changed(void)
 {
-    gui_cancel_decoration(NULL);
-    if (s_drag_window) { s_wm_buttons |= s_drag_buttons; s_drag_window=NULL; }
-    if (s_band_window) gui_cancel_resize(s_band_window);
-    s_titlebar_click_window=0;
+	gui_cancel_decoration(NULL);
+	if (s_drag_window) { s_wm_buttons |= s_drag_buttons; s_drag_window=NULL; }
+	if (s_band_window) gui_cancel_resize(s_band_window);
+	s_titlebar_click_window=0;
 }
 
 // Deliver a mouse event to a window, in ITS coordinates. `require_inside`
@@ -1064,10 +1064,10 @@ static void chord_report(const window_t *w, uint32_t bit, bool before,
 static void route_event_locked(const input_event_t *ev)
 {
 	if (s_drag_window) {
-        if (ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN) s_drag_buttons |= (uint8_t)(1u << ev->mouse.button);
-        if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP) s_drag_buttons &= (uint8_t)~(1u << ev->mouse.button);
-    }
-    // Track the physical pointer on text VTs too, so returning to the GUI
+		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN) s_drag_buttons |= (uint8_t)(1u << ev->mouse.button);
+		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP) s_drag_buttons &= (uint8_t)~(1u << ev->mouse.button);
+	}
+	// Track the physical pointer on text VTs too, so returning to the GUI
 	// can reconcile hover without waiting for another movement.
 	if (ev->type == INPUT_EVENT_MOUSE_MOVE) {
 		rect_t moved = cursor_rect();
@@ -1075,23 +1075,23 @@ static void route_event_locked(const input_event_t *ev)
 		s_cursor_y = ev->mouse.y;
 		gui_damage_add_locked(rect_union(moved, cursor_rect()));
 	}
-    if (!gui_owns_glass() || s_glass_regained) gui_cancel_decoration(NULL);
-    if (s_control_capture.buttons && (ev->type==INPUT_EVENT_MOUSE_MOVE ||
-        ev->type==INPUT_EVENT_MOUSE_BUTTON_DOWN || ev->type==INPUT_EVENT_MOUSE_BUTTON_UP)) {
-        uint32_t owner=s_control_capture.window;
-        window_t *under=wm_topmost_at(ev->mouse.x,ev->mouse.y);
-        uint32_t hit=under?wm_decoration_hit(under,ev->mouse.x,ev->mouse.y):0;
-        if (under && (wm_decoration_disabled(under) & (1u<<hit))) hit=0;
-        uint32_t kind=ev->type==INPUT_EVENT_MOUSE_MOVE?OS64_DECOR_POINTER_MOVE:
-            ev->type==INPUT_EVENT_MOUSE_BUTTON_DOWN?OS64_DECOR_POINTER_DOWN:OS64_DECOR_POINTER_UP;
-        uint32_t action=os64_decor_capture_step(&s_control_capture,kind,ev->mouse.button,
-            under?under->id:0,hit);
-        window_t *w=wm_window_by_id(owner);
-        if (w) wm_decoration_state(w,0,0);
-        if (action && w) wm_decoration_action(w,action,ev->tick);
-        control_state_locked();
-        return;
-    }
+	if (!gui_owns_glass() || s_glass_regained) gui_cancel_decoration(NULL);
+	if (s_control_capture.buttons && (ev->type==INPUT_EVENT_MOUSE_MOVE ||
+		ev->type==INPUT_EVENT_MOUSE_BUTTON_DOWN || ev->type==INPUT_EVENT_MOUSE_BUTTON_UP)) {
+		uint32_t owner=s_control_capture.window;
+		window_t *under=wm_topmost_at(ev->mouse.x,ev->mouse.y);
+		uint32_t hit=under?wm_decoration_hit(under,ev->mouse.x,ev->mouse.y):0;
+		if (under && (wm_decoration_disabled(under) & (1u<<hit))) hit=0;
+		uint32_t kind=ev->type==INPUT_EVENT_MOUSE_MOVE?OS64_DECOR_POINTER_MOVE:
+			ev->type==INPUT_EVENT_MOUSE_BUTTON_DOWN?OS64_DECOR_POINTER_DOWN:OS64_DECOR_POINTER_UP;
+		uint32_t action=os64_decor_capture_step(&s_control_capture,kind,ev->mouse.button,
+			under?under->id:0,hit);
+		window_t *w=wm_window_by_id(owner);
+		if (w) wm_decoration_state(w,0,0);
+		if (action && w) wm_decoration_action(w,action,ev->tick);
+		control_state_locked();
+		return;
+	}
 	if (s_wm_buttons && (ev->type == INPUT_EVENT_MOUSE_MOVE ||
 	                        ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN ||
 	                        ev->type == INPUT_EVENT_MOUSE_BUTTON_UP)) {
@@ -1172,17 +1172,17 @@ static void route_event_locked(const input_event_t *ev)
 			ev->mouse.button, w->id, ev->mouse.x, ev->mouse.y, ev->mouse.modifiers);
 		wm_raise(w);
 
-        uint32_t action=wm_decoration_hit(w,ev->mouse.x,ev->mouse.y);
-        if (action) {
-            s_titlebar_click_window=0;
-            uint32_t accepted=ev->mouse.button==INPUT_MOUSE_BUTTON_LEFT &&
-                !(wm_decoration_disabled(w) & (1u<<action))?action:0;
-            os64_decor_capture_begin(&s_control_capture,w->id,accepted,
-                ev->mouse.buttons | (1u<<ev->mouse.button));
-            if (!accepted) os64_decor_capture_cancel(&s_control_capture);
-            control_state_locked();
-            break;
-        }
+		uint32_t action=wm_decoration_hit(w,ev->mouse.x,ev->mouse.y);
+		if (action) {
+			s_titlebar_click_window=0;
+			uint32_t accepted=ev->mouse.button==INPUT_MOUSE_BUTTON_LEFT &&
+				!(wm_decoration_disabled(w) & (1u<<action))?action:0;
+			os64_decor_capture_begin(&s_control_capture,w->id,accepted,
+				ev->mouse.buttons | (1u<<ev->mouse.button));
+			if (!accepted) os64_decor_capture_cancel(&s_control_capture);
+			control_state_locked();
+			break;
+		}
 
 		// The chord's two verbs (see the gesture comment above the band
 		// state): left moves, right resizes, anywhere in the window.
@@ -1232,7 +1232,7 @@ static void route_event_locked(const input_event_t *ev)
 			if (w->id == s_titlebar_click_window &&
 			    ev->tick - s_titlebar_click_tick <= DOUBLE_CLICK_TICKS) {
 				s_titlebar_click_window = 0;   // a third click starts over
-                s_wm_buttons=ev->mouse.buttons | (1u<<ev->mouse.button);
+				s_wm_buttons=ev->mouse.buttons | (1u<<ev->mouse.button);
 				bool was = (w->flags & GUI_WINDOW_MAXIMIZED) != 0;
 				wm_decoration_action(w,OS64_DECOR_MAXIMIZE,ev->tick);
 				if (((w->flags & GUI_WINDOW_MAXIMIZED) != 0) != was)
@@ -1408,7 +1408,7 @@ static void route_event_locked(const input_event_t *ev)
 				} else {
 					printd(DEBUG_GUI, "guicomp: window %u asked to close\n", focus->id);
 					focus->closeAskedTick = ev->tick;
-                    wm_decoration_action(focus,OS64_DECOR_CLOSE,ev->tick);
+					wm_decoration_action(focus,OS64_DECOR_CLOSE,ev->tick);
 				}
 			}
 			break;
@@ -1538,7 +1538,7 @@ bool guicomp_thread(bool daemon)
 		// iron — see the seated-predicate comment). Convert the ISR's one-
 		// store flag into ordinary damage here, under our own lock.
 		if (s_glass_regained) {
-            gui_cancel_decoration(NULL);
+			gui_cancel_decoration(NULL);
 			s_glass_regained = false;
 			// Whatever the console overlay had painted is gone with the VT
 			// switch's repaint; it must not try to restore cells that now

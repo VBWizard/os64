@@ -198,7 +198,7 @@ bin/$(OUTPUT): GNUmakefile linker.ld $(OBJ) cc-runtime-x86_64/cc-runtime.a
 # Compilation rules for *.c files.
 obj/shared/%.c.o: ../shared/%.c GNUmakefile
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -c $< -o $@
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 obj/%.c.o: src/%.c GNUmakefile
 	@mkdir -p "$$(dirname $@)"

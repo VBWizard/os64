@@ -1871,20 +1871,20 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	}
 
 	if (is_decoration) {
-        synth_text_t text = {0};
-        decoration_pending_t *pending = NULL;
-        if (mode[0] == 'r') {
-            if (!synth_text_init(&text, OS64_DECOR_STATUS_MAX)) return -1;
-            int n = decorations_status(text.buf, text.cap);
-            if (n < 0) { kfree(text.buf); return -1; }
-            text.len = (size_t)n;
-        } else if (!(pending = decorations_begin())) return -1;
-        sys_file_handle_t *dh = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
-            sizeof(sys_file_handle_t), FILETYPE_SYSFILE);
-        if (!dh) { decorations_discard(pending); return -1; }
-        if (pending) { dh->kind = SYS_HANDLE_DECORATIONS_WRITE; dh->decoration = pending; }
-        return 0;
-    }
+		synth_text_t text = {0};
+		decoration_pending_t *pending = NULL;
+		if (mode[0] == 'r') {
+			if (!synth_text_init(&text, OS64_DECOR_STATUS_MAX)) return -1;
+			int n = decorations_status(text.buf, text.cap);
+			if (n < 0) { kfree(text.buf); return -1; }
+			text.len = (size_t)n;
+		} else if (!(pending = decorations_begin())) return -1;
+		sys_file_handle_t *dh = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+			sizeof(sys_file_handle_t), FILETYPE_SYSFILE);
+		if (!dh) { decorations_discard(pending); return -1; }
+		if (pending) { dh->kind = SYS_HANDLE_DECORATIONS_WRITE; dh->decoration = pending; }
+		return 0;
+	}
 
 	if (is_appearance)
 	{

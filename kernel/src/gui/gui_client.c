@@ -204,12 +204,12 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		printd(DEBUG_GUI, "gui: window_create refused — DESKTOP and PINNED are contradictory\n");
 		return GUI_ERR_BAD_ARGS;
 	}
-    bool content_size=(flags & OS64_GUI_CREATE_CONTENT_SIZE)!=0;
-    uint64_t sizing_flags=spinlock_acquire_irqsave(&kGuiLock);
-    os64_decor_insets_t insets=wm_decoration_insets(create_flags);
-    int32_t content_w=(int32_t)w-(content_size?0:insets.left+insets.right);
-    int32_t content_h=(int32_t)h-(content_size?0:insets.top+insets.bottom);
-    spinlock_release_irqrestore(&kGuiLock,sizing_flags);
+	bool content_size=(flags & OS64_GUI_CREATE_CONTENT_SIZE)!=0;
+	uint64_t sizing_flags=spinlock_acquire_irqsave(&kGuiLock);
+	os64_decor_insets_t insets=wm_decoration_insets(create_flags);
+	int32_t content_w=(int32_t)w-(content_size?0:insets.left+insets.right);
+	int32_t content_h=(int32_t)h-(content_size?0:insets.top+insets.bottom);
+	spinlock_release_irqrestore(&kGuiLock,sizing_flags);
 	if (content_w < GUI_MIN_CONTENT || content_h < GUI_MIN_CONTENT)
 		return GUI_ERR_BAD_ARGS;
 
@@ -270,35 +270,35 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 
 	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
 
-    // Re-derive against the style held for creation; an Apply may have won
-    // while the canvas was allocated. Check the staged capacity before use.
-    insets=wm_decoration_insets(create_flags);
-    if (content_size && (flags & OS64_GUI_CREATE_FIT_SCREEN)) {
-        int64_t available_w=(int64_t)kFrameBuffer.width-insets.left-insets.right;
-        int64_t available_h=(int64_t)kFrameBuffer.height-insets.top-insets.bottom;
-        if (available_w<GUI_MIN_CONTENT || available_h<GUI_MIN_CONTENT) {
-            spinlock_release_irqrestore(&kGuiLock,irqflags);
-            goto undo_pivot;
-        }
-        if (w>(uint64_t)available_w) w=(uint32_t)available_w;
-        if (h>(uint64_t)available_h) h=(uint32_t)available_h;
-    }
-    uint64_t frame_w=(uint64_t)w+(content_size?(uint32_t)(insets.left+insets.right):0);
-    uint64_t frame_h=(uint64_t)h+(content_size?(uint32_t)(insets.top+insets.bottom):0);
-    int64_t final_cw=(int64_t)frame_w-insets.left-insets.right;
-    int64_t final_ch=(int64_t)frame_h-insets.top-insets.bottom;
-    if (frame_w>wm_dim_max() || frame_h>wm_dim_max() || final_cw<GUI_MIN_CONTENT ||
-        final_ch<GUI_MIN_CONTENT || (pivot && (final_cw>cap_w || final_ch>cap_h))) {
-        spinlock_release_irqrestore(&kGuiLock,irqflags);
-        goto undo_pivot;
-    }
-    w=(uint32_t)frame_w;h=(uint32_t)frame_h;
-    if (content_size && (flags & OS64_GUI_CREATE_FIT_SCREEN)) {
-        if (x<0) x=0;
-        if (y<0) y=0;
-        if ((int64_t)x+w>kFrameBuffer.width) x=(int32_t)(kFrameBuffer.width-w);
-        if ((int64_t)y+h>kFrameBuffer.height) y=(int32_t)(kFrameBuffer.height-h);
-    }
+	// Re-derive against the style held for creation; an Apply may have won
+	// while the canvas was allocated. Check the staged capacity before use.
+	insets=wm_decoration_insets(create_flags);
+	if (content_size && (flags & OS64_GUI_CREATE_FIT_SCREEN)) {
+		int64_t available_w=(int64_t)kFrameBuffer.width-insets.left-insets.right;
+		int64_t available_h=(int64_t)kFrameBuffer.height-insets.top-insets.bottom;
+		if (available_w<GUI_MIN_CONTENT || available_h<GUI_MIN_CONTENT) {
+			spinlock_release_irqrestore(&kGuiLock,irqflags);
+			goto undo_pivot;
+		}
+		if (w>(uint64_t)available_w) w=(uint32_t)available_w;
+		if (h>(uint64_t)available_h) h=(uint32_t)available_h;
+	}
+	uint64_t frame_w=(uint64_t)w+(content_size?(uint32_t)(insets.left+insets.right):0);
+	uint64_t frame_h=(uint64_t)h+(content_size?(uint32_t)(insets.top+insets.bottom):0);
+	int64_t final_cw=(int64_t)frame_w-insets.left-insets.right;
+	int64_t final_ch=(int64_t)frame_h-insets.top-insets.bottom;
+	if (frame_w>wm_dim_max() || frame_h>wm_dim_max() || final_cw<GUI_MIN_CONTENT ||
+		final_ch<GUI_MIN_CONTENT || (pivot && (final_cw>cap_w || final_ch>cap_h))) {
+		spinlock_release_irqrestore(&kGuiLock,irqflags);
+		goto undo_pivot;
+	}
+	w=(uint32_t)frame_w;h=(uint32_t)frame_h;
+	if (content_size && (flags & OS64_GUI_CREATE_FIT_SCREEN)) {
+		if (x<0) x=0;
+		if (y<0) y=0;
+		if ((int64_t)x+w>kFrameBuffer.width) x=(int32_t)(kFrameBuffer.width-w);
+		if ((int64_t)y+h>kFrameBuffer.height) y=(int32_t)(kFrameBuffer.height-h);
+	}
 
 	int64_t handle = 0;
 	for (int i = 0; i < GUI_MAX_WINDOWS; i++) {

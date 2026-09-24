@@ -351,6 +351,7 @@ static inline int64_t os64_gui_window_create(const char *title,
                                   w, h, flags);
 }
 
+// Requests content dimensions and interprets title as UTF-8.
 static inline int64_t os64_gui_window_create_content(const char *title,
     int32_t x, int32_t y, uint32_t width, uint32_t height, uint64_t flags)
 {
