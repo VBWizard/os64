@@ -17,7 +17,7 @@ static void review3_nul_fragments(void)
         // and the renderer still draws it as a place to go.
         snprintf(html,sizeof(html),"<frameset><frame src='/next#%s'></frameset>",fragments[i]);
         os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL);
-        wend_page_t *drawn=wend_render_html(doc,page,40);os64_page_request_t req;
+        wend_page_t *drawn=wend_render_html(doc,page,40,NULL,0);os64_page_request_t req;
         state_expect("frame refuses NUL fragment",drawn && drawn->nspots==1 &&
             os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_LINK,drawn->spots[0].link,0,0},&req)==OS64_PAGE_REFUSED &&
             req.reason==OS64_PAGE_REASON_BAD_ACTION);
@@ -87,7 +87,7 @@ static void review3_unrendered(void)
         os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL);
         const os64_html_node_t *node=os64_page_anchor(page,"x");
         for(int width=80;width>=20;width-=60) {
-            wend_page_t *drawn=wend_render_html(doc,page,width);
+            wend_page_t *drawn=wend_render_html(doc,page,width,NULL,0);
             state_expect("unrendered target has no geometry",node && wend_node_line(drawn,node)==-1);
             wend_page_free(drawn);
         }

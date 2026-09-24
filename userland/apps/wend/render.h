@@ -75,6 +75,7 @@ typedef enum {
     WEND_SPOT_RADIO,      // one of a group that share a name
     WEND_SPOT_CHOICE,     // a list to pick from
     WEND_SPOT_SUBMIT,     // the control that sends the form
+    WEND_SPOT_TOGGLE,     // a `details` summary: opens or closes what it folds
 } wend_spot_kind_t;
 
 // A PLACE ON THE SCREEN AND WHAT IT IS IN THE MODEL — nothing else. What a
@@ -83,7 +84,7 @@ typedef enum {
 // answer to each question and it is libpage's.
 typedef struct {
     wend_spot_kind_t kind;
-    const os64_html_node_t *node; // the element the spot was drawn for
+    const os64_html_node_t *node; // the element the spot was drawn for (TOGGLE: the `details`)
     int32_t line;        // the first row it appears on
     int32_t link;        // LINK: index into the model's links
     int32_t control;     // every other kind: index into the model's controls
@@ -117,8 +118,18 @@ typedef struct {
 // ran out of memory building) is drawn and is not a spot: there is nothing
 // behind it to follow or fill in. NULL on no memory, which is different from
 // `incomplete` — nothing at all came out.
+//
+// `flipped` lists the `details` elements the READER has opened or closed:
+// each is drawn the other way from what its `open` attribute says. The
+// reader's state, not the page's, which is why it is passed in and never
+// written to the tree.
 wend_page_t *wend_render_html(const os64_html_document_t *doc,
-                              const os64_page_t *model, int32_t cols);
+                              const os64_page_t *model, int32_t cols,
+                              const os64_html_node_t *const *flipped, int32_t nflipped);
+
+// Whether this `details` is drawn open, given the reader's flips.
+bool wend_details_open(const os64_html_node_t *details,
+                       const os64_html_node_t *const *flipped, int32_t nflipped);
 
 // Render bytes that are not markup — a text/plain reply, or a message this
 // program is writing to itself. Shown as it is, the way `pre` is: line

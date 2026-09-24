@@ -594,7 +594,8 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   showing would mean fetching), `noscript`'s CONTENTS are shown (we run
   no script, so the standard parsed them as markup — that is the point),
   `template` contents (the fragment branch), comments, a closed
-  `details` past its summary, a `dialog` that is not `open`, and the text
+  `details` past its summary (the summary is a spot that opens it, and a
+  fragment link into it opens it on the way), a `dialog` that is not `open`, and the text
   of SVG and MathML (they draw nothing of their own in this face, but HTML
   inside them — a `foreignObject` — is drawn like any other).
   **A `frame` is the exception (departure):** a frameset page has no

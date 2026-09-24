@@ -131,7 +131,7 @@ static wend_page_t *redraw(const wend_page_t *page, int32_t cols)
 {
     for (TestDocument *at = test_documents; at != NULL; at = at->next)
         if (at->page == page)
-            return wend_render_html(at->doc, at->model, cols);
+            return wend_render_html(at->doc, at->model, cols, NULL, 0);
     return NULL;
 }
 
@@ -183,7 +183,7 @@ static wend_page_t *render_html_text(const char *html, int32_t cols, const char 
     if (!doc)
         return NULL;
     os64_page_t *model = os64_page_build(doc, page_url ? page_url : "http://h/d/p.html", NULL);
-    wend_page_t *page = wend_render_html(doc, model, cols);
+    wend_page_t *page = wend_render_html(doc, model, cols, NULL, 0);
     TestDocument *entry = page != NULL ? malloc(sizeof(*entry)) : NULL;
     if (entry != NULL) {
         *entry = (TestDocument){page, doc, model, test_documents};
@@ -400,14 +400,35 @@ static void render_checks(void)
                      40, want, 1);
     }
     {
-        // A closed `details` is its summary; an open one is all of it; a
+        // A `details` is its summary, and the summary is a toggle: closed,
+        // nothing it folds is drawn or landed on; open, all of it is. A
         // closed `dialog` is nothing at all.
-        const char *want[] = { "Title", "[1]open" };
+        const char *want[] = { "[1]> Title", "[2]v Details", "[3]open" };
         expect_lines("details", "<details><summary>Title</summary><a href=/s>secret</a>"
                      "<input name=x></details><details open><a href=/o>open</a></details>"
-                     "<dialog><a href=/d>boxed</a></dialog>", 40, want, 2);
-        const char *none[] = { "Details" };
-        expect_lines("details unlabelled", "<details><p>folded</details>", 40, none, 1);
+                     "<dialog><a href=/d>boxed</a></dialog>", 40, want, 3);
+        // The READER's flips turn each the other way, and the page is not
+        // touched to do it.
+        wend_page_t *page = render_html_text("<details><summary>T</summary><a href=/s>in</a>"
+                                             "</details><details open><a href=/o>o</a></details>",
+                                             40, "http://host/p");
+        CHECK(page != NULL && page->nspots == 3 && page->spots[0].kind == WEND_SPOT_TOGGLE);
+        if (page && page->nspots == 3) {
+            const os64_html_node_t *flips[2] = { page->spots[0].node, page->spots[1].node };
+            CHECK(!wend_details_open(flips[0], NULL, 0) && wend_details_open(flips[1], NULL, 0));
+            CHECK(wend_details_open(flips[0], flips, 2) && !wend_details_open(flips[1], flips, 2));
+            TestDocument *entry = test_documents;
+            while (entry != NULL && entry->page != page)
+                entry = entry->next;
+            wend_page_t *turned = entry ? wend_render_html(entry->doc, entry->model, 40, flips, 2)
+                                        : NULL;
+            CHECK(turned != NULL && turned->nlines == 3 &&
+                  strcmp(turned->lines[0].text, "[1]v T") == 0 &&
+                  strcmp(turned->lines[1].text, "[2]in") == 0 &&
+                  strcmp(turned->lines[2].text, "[3]> Details") == 0);
+            wend_page_free(turned);
+        }
+        wend_page_free(page);
     }
     {
         // A textarea is as wide as its `cols`, 20 without one.
@@ -1492,7 +1513,7 @@ static void dump(const wend_page_t *page, const os64_page_t *model, const char *
     // would send, because that is the half a reader of this dump cannot get
     // from the rows above.
     static const char *const kinds[] = { "link", "text", "check", "radio",
-                                         "choice", "submit" };
+                                         "choice", "submit", "toggle" };
     for (int32_t i = 0; i < page->nspots; i++) {
         const wend_spot_t *spot = &page->spots[i];
         printf("%d %s", i + 1, kinds[spot->kind]);
@@ -1670,7 +1691,7 @@ int main(int argc, char **argv)
         // The model resolves against where the page came from — and against
         // its own <base href> where it has one, exactly as in the browser.
         model = os64_page_build(doc, base_text ? base_text : "", NULL);
-        page = wend_render_html(doc, model, cols);
+        page = wend_render_html(doc, model, cols, NULL, 0);
     }
     if (!page) {
         fprintf(stderr, "no page\n");

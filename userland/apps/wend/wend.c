@@ -92,6 +92,10 @@ typedef struct {
     // survives it.
     os64_page_t *model;
     bool refresh_handled;             // per loaded document, including refused attempts
+    // The `details` the reader has opened or closed — their state, not the
+    // page's, so it lives here and survives a re-wrap like an edit does.
+    const os64_html_node_t **flipped;
+    int32_t nflipped, flippedcap;
     int32_t  top;                       // first visible row
     int32_t  sel;                       // the selected spot, -1 for none
     char     note[WEND_STATUS_MAX];     // what this page's status row says
@@ -649,6 +653,9 @@ static void view_clear(view_t *v)
         os64_html_document_free(v->doc);
     os64_free(v->text);
     wend_page_free(v->page);
+    os64_free(v->flipped);
+    v->flipped = NULL;
+    v->nflipped = v->flippedcap = 0;
     v->model = NULL;
     v->doc = NULL;
     v->text = NULL;
@@ -662,7 +669,9 @@ static void view_clear(view_t *v)
 static void view_layout(view_t *v)
 {
     wend_page_free(v->page);
-    v->page = v->doc ? wend_render_html(v->doc, v->model, s_cols)
+    v->page = v->doc ? wend_render_html(v->doc, v->model, s_cols,
+                                        (const os64_html_node_t *const *)v->flipped,
+                                        v->nflipped)
                      : wend_render_text(v->text, v->textlen, v->text_utf8, s_cols);
     if (!v->page)
         status_set(" out of memory laying the page out at %d columns", (int)s_cols);
@@ -1129,11 +1138,52 @@ static bool go(view_t *v, const char *url, bool remember)
     return true;
 }
 
+// Open or close a `details` for the reader. False on no memory.
+static bool details_flip(view_t *v, const os64_html_node_t *details)
+{
+    for (int32_t i = 0; i < v->nflipped; i++)
+        if (v->flipped[i] == details) {
+            v->flipped[i] = v->flipped[--v->nflipped];   // flipped back
+            return true;
+        }
+    if (v->nflipped == v->flippedcap) {
+        int32_t cap = v->flippedcap ? v->flippedcap * 2 : 8;
+        const os64_html_node_t **grown = os64_realloc(v->flipped, (size_t)cap * sizeof(*grown));
+        if (grown == NULL)
+            return false;
+        v->flipped = grown;
+        v->flippedcap = cap;
+    }
+    v->flipped[v->nflipped++] = details;
+    return true;
+}
+
+static void edit_commit(view_t *v);
+
+// A TARGET FOLDED INSIDE A CLOSED `details` IS OPENED TO, the way a browser
+// reveals it: every closed `details` between it and the root opens, and the
+// page is drawn again so the target has a row.
+static bool details_reveal(view_t *v, const os64_html_node_t *node)
+{
+    bool opened = false;
+    for (const os64_html_node_t *up = node->parent; up != NULL; up = up->parent)
+        if (up->kind == OS64_HTML_ELEMENT && up->ns == OS64_HTML_NS_HTML &&
+            up->tag == OS64_HTML_TAG_DETAILS &&
+            !wend_details_open(up, (const os64_html_node_t *const *)v->flipped, v->nflipped) &&
+            details_flip(v, up))
+            opened = true;
+    if (opened)
+        edit_commit(v);
+    return opened;
+}
+
 // libpage selects the semantic target; the renderer supplies geometry for
 // that exact node. Missing geometry leaves the reader's position intact.
 static void jump_to_node(view_t *v, const os64_html_node_t *node)
 {
     int32_t line = node != NULL ? wend_node_line(v->page, node) : 0;
+    if (line < 0 && node != NULL && details_reveal(v, node))
+        line = wend_node_line(v->page, node);
     if (line < 0) {
         status_set(" that target has no rendered row on this page");
         return;
@@ -1574,6 +1624,12 @@ static void activate(view_t *v, int32_t index)
         case WEND_SPOT_RADIO:  radio_pick(v, index); break;
         case WEND_SPOT_CHOICE: choice_cycle(v, index); break;
         case WEND_SPOT_SUBMIT: form_send(v, spot->control, OS64_PAGE_ACTIVATE_CONTROL); break;
+        case WEND_SPOT_TOGGLE:
+            if (!details_flip(v, spot->node))
+                status_set(" out of memory opening that");
+            else
+                edit_commit(v);
+            break;
     }
 }
 

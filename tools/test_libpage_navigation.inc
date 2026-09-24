@@ -82,7 +82,7 @@ static void navigation_geometry(void)
     state_expect("ID precedence",os64_page_resolve_fragment(page,"x",&target)==OS64_PAGE_REASON_OK && target->tag==OS64_HTML_TAG_H2);
     int32_t previous=-1;
     for(int width=80;width>=20;width-=60) {
-        wend_page_t *drawn=wend_render_html(doc,page,width);
+        wend_page_t *drawn=wend_render_html(doc,page,width,NULL,0);
         int32_t row=wend_node_line(drawn,target);
         state_expect("resolved node reaches its row",row>=0 && row<drawn->nlines && strcmp(drawn->lines[row].text,"ID winner")==0);
         if(previous>=0) state_expect("geometry rebuilt on reflow",row>previous);
@@ -102,10 +102,10 @@ static void navigation_geometry(void)
         state_expect("absent fragment",os64_page_resolve_fragment(page,"absent",&node)==OS64_PAGE_REASON_NO_ANCHOR);
         wend_page_free(drawn);
     }
-    size_t before=allocations;wend_page_t *drawn=wend_render_html(doc,page,40);
+    size_t before=allocations;wend_page_t *drawn=wend_render_html(doc,page,40,NULL,0);
     size_t count=allocations-before;wend_page_free(drawn);
     for (size_t i=1;i<=count;i++) {
-        fail_single=true;fail_at=allocations+i;drawn=wend_render_html(doc,page,40);fail_at=0;fail_single=false;
+        fail_single=true;fail_at=allocations+i;drawn=wend_render_html(doc,page,40,NULL,0);fail_at=0;fail_single=false;
         if(drawn && drawn->incomplete) state_expect("incomplete geometry refuses",wend_node_line(drawn,target)==-1);
         wend_page_free(drawn);
     }
@@ -135,7 +135,7 @@ static void navigation_block_geometry(void)
     for(size_t i=0;i<sizeof(tags)/sizeof(tags[0]);i++) {
         char html[200];snprintf(html,sizeof(html),"<div>Before<%s id=x>Target</%s></div>",tags[i],tags[i]);
         os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL);
-        wend_page_t *drawn=wend_render_html(doc,page,40);
+        wend_page_t *drawn=wend_render_html(doc,page,40,NULL,0);
         int32_t row=wend_node_line(drawn,os64_page_anchor(page,"x"));
         state_expect("block target starts after preceding text",row>0);
         wend_page_free(drawn);os64_page_free(page);os64_html_document_free(doc);
@@ -156,7 +156,7 @@ static void navigation_long_fragment(void)
         doc=parse(destination,"utf-8");page=os64_page_build(doc,req.url,NULL);
         const os64_html_node_t *node=NULL;
         state_expect("destination resolves entire fragment",os64_page_resolve_fragment(page,req.fragment,&node)==0 && node!=NULL);
-        wend_page_t *drawn=wend_render_html(doc,page,40);
+        wend_page_t *drawn=wend_render_html(doc,page,40,NULL,0);
         int32_t row=wend_node_line(drawn,node);
         state_expect("long target geometry",row>=0 && strcmp(drawn->lines[row].text,"Long target")==0);
         wend_page_free(drawn);os64_page_request_free(&req);os64_page_free(page);os64_html_document_free(doc);

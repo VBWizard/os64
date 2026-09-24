@@ -189,6 +189,8 @@ typedef struct {
     int32_t        linecap, spotcap, nodecap;
     int32_t        cols;
     const os64_page_t *model;   // what every link and control IS; NULL = unknown
+    const os64_html_node_t *const *flipped;   // `details` the reader opened or closed
+    int32_t nflipped;
 
     buf_t   line;           // what is on the row so far, its indent included
     buf_t   word;           // held back until whitespace or a block ends it
@@ -1171,26 +1173,41 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             block_break(r);
             goto done;
 
-        // A CLOSED `details` SHOWS ITS SUMMARY AND NOTHING ELSE — what is
-        // folded away is not on the screen, and its links and boxes are no
-        // place to land until the page opens it. With no `summary` of its
-        // own it is labelled "Details", as the standard says.
+        // A `details` IS ITS SUMMARY, AND THE SUMMARY IS A PLACE TO LAND:
+        // Enter opens or closes what it folds, as a click does in any
+        // browser, drawn `>` closed and `v` open. What is folded away is
+        // not on the screen, and its links and boxes are no place to land
+        // until it is opened. With no `summary` of its own it is labelled
+        // "Details", as the standard says.
         case OS64_HTML_TAG_DETAILS: {
+            bool open = wend_details_open(n, r->flipped, r->nflipped);
+            const os64_html_node_t *summary = NULL;
+            for (const os64_html_node_t *c = n->first_child; c && !summary; c = c->next)
+                if (c->kind == OS64_HTML_ELEMENT && c->ns == OS64_HTML_NS_HTML &&
+                    c->tag == OS64_HTML_TAG_SUMMARY)
+                    summary = c;
             node_start_block(r, false);
-            if (os64_html_attr(n, "open") != NULL) {
-                walk_children(r, n, list);
-            } else {
-                const os64_html_node_t *summary = NULL;
-                for (const os64_html_node_t *c = n->first_child; c && !summary; c = c->next)
-                    if (c->kind == OS64_HTML_ELEMENT && c->ns == OS64_HTML_NS_HTML &&
-                        c->tag == OS64_HTML_TAG_SUMMARY)
-                        summary = c;
-                if (summary)
-                    walk(r, summary, list);
-                else
-                    word_text(r, "Details", 7);
+            if (summary) {
+                node_add(r, summary);
+                if (r->oom)
+                    goto done;
             }
+            int32_t idx = spot_add(r, WEND_SPOT_TOGGLE, n, -1, -1);
+            if (idx > 0) {
+                r->spot = idx;
+                spot_mark(r, idx);
+            }
+            word_text(r, open ? "v " : "> ", 2);
+            if (summary)
+                walk_children(r, summary, list);
+            else
+                word_text(r, "Details", 7);
+            r->spot = saved_spot;
             block_break(r);
+            if (open)
+                for (const os64_html_node_t *c = n->first_child; c && !r->oom; c = c->next)
+                    if (c != summary)
+                        walk(r, c, list);
             goto done;
         }
 
@@ -1418,8 +1435,19 @@ static wend_page_t *page_new(int32_t cols)
     return page;
 }
 
+bool wend_details_open(const os64_html_node_t *details,
+                       const os64_html_node_t *const *flipped, int32_t nflipped)
+{
+    bool open = os64_html_attr(details, "open") != NULL;
+    for (int32_t i = 0; i < nflipped; i++)
+        if (flipped[i] == details)
+            open = !open;
+    return open;
+}
+
 wend_page_t *wend_render_html(const os64_html_document_t *doc,
-                              const os64_page_t *model, int32_t cols)
+                              const os64_page_t *model, int32_t cols,
+                              const os64_html_node_t *const *flipped, int32_t nflipped)
 {
     wend_page_t *page = page_new(cols);
     if (!page)
@@ -1428,6 +1456,8 @@ wend_page_t *wend_render_html(const os64_html_document_t *doc,
     r.page = page;
     r.cols = page->cols;
     r.model = model;
+    r.flipped = flipped;
+    r.nflipped = flipped ? nflipped : 0;
     if (doc) {
         if (doc->head)
             for (const os64_html_node_t *c = doc->head->first_child; c; c = c->next)
