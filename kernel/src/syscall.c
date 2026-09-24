@@ -44,12 +44,15 @@
 #include "os64/pty.h"      // os64_pty_header_t/_cell_t — pty_snapshot's out-structs (abi)
 #include "env.h"           // env_set/env_unset — setenv() mutates the task's env block
 #include "os64/net.h"      // os64_netdest_t — net_dial's in-struct (abi)
+#include "os64/file.h"     // OS64_CLOSE_NOT_COMMITTED — close's third answer (abi)
 #include "os64/mount.h"    // OS64_MOUNT_BAD_ARGS — namespace verbs preserve this ABI verdict
 #include "driver/net/net_device.h"   // kNetDevices — dial needs a NIC to dial on
 #include "driver/net/net_wire.h"     // NET_IPV4_OCTETS — address logging
+#include "driver/net/loopback.h"     // kNetLoopback — where a dial to 127/8 goes
 #include "driver/net/udp_conn.h"     // the object behind HANDLE_NET_UDP
 #include "driver/net/tcp.h"          // ...and HANDLE_NET_TCP
 #include "driver/net/icmp_conn.h"    // ...and HANDLE_NET_ICMP
+#include "gui/glass.h"               // glass_view_read — the object behind HANDLE_GLASS
 
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
 // and handed to ring 3 by ticks().
@@ -182,6 +185,8 @@ static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uin
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_window_set_min_size(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -280,6 +285,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_POLL,         "gui_event_poll",         syscall_gui_event_poll,         false, 0x02),  // arg1 = input_event_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_SCREEN_INFO,        "gui_screen_info",        syscall_gui_screen_info,        false, 0x00),  // arg0/arg1 = uint32_t outs, EITHER may be NULL (handler validates)
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x00),  // arg1 = input_event_t out OR NULL (nullable: NULL = wait, don't take — handler validates); BLOCKS (like read)
+	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_MIN_SIZE, "gui_window_set_min_size", syscall_gui_window_set_min_size, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_STATE,   "gui_window_get_state",   syscall_gui_window_get_state,   false, 0x02),  // arg1 = os64_gui_window_state_t out
 	// arg1 is a CODE address the kernel will one day jump to, not a buffer it
 	// reads — so it stays OUT of the pointer mask (which validates readable
@@ -1390,7 +1396,10 @@ static uint64_t syscall_write_console(tty_t *tty, bool stream_pty,
 static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
     const char *user_buffer, size_t length, uint64_t timeout_ms, write_death_t *die)
 {
-	if (length == 0)
+	// An empty write succeeds and moves nothing, except on glass, where a
+	// write is one record taken whole or refused (os64/glass.h), and an
+	// empty one, or any write to a watch-only viewer, is refused.
+	if (length == 0 && h->type != HANDLE_GLASS)
 		return 0;
 
 	// Like read, lower patience once for the complete call. TCP honors
@@ -1444,6 +1453,21 @@ static uint64_t syscall_write_pinned(task_t *task, const handle_t *h,
 				pipe_close_write_end(tty->stream);
 			task_tty_release(tty);
 			return r;
+		}
+
+		case HANDLE_GLASS:
+		{
+			// One input record (os64/glass.h, THE HANDS): a keyboard report
+			// or a pointer position, taken whole or refused. Copied in first,
+			// because the record is delivered with interrupts off, where a
+			// user page may not fault.
+			uint8_t record[16];
+			if (length > sizeof(record))
+				return SYSCALL_RESULT_INVALID;
+			if (length && !copy_user_buffer(user_buffer, record, length))
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			long r = glass_view_write((glass_view_t *)h->object, record, length);
+			return r < 0 ? SYSCALL_RESULT_INVALID : (uint64_t)r;
 		}
 
 		case HANDLE_PTY_MASTER:
@@ -1846,7 +1870,8 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 		if (h->type != HANDLE_CONSOLE_IN &&
 		    h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
 		    h->type != HANDLE_NET_ICMP && h->type != HANDLE_NET_LISTENER &&
-		    h->type != HANDLE_PTY_MASTER)   // a STREAM master; GRID refuses the read itself
+		    h->type != HANDLE_PTY_MASTER &&   // a STREAM master; GRID refuses the read itself
+		    h->type != HANDLE_GLASS)
 			return SYSCALL_RESULT_INVALID;
 		deadline = syscall_io_deadline(timeout_ms);
 	}
@@ -1993,6 +2018,26 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			}
 			return (uint64_t)sizeof(nc);
 		}
+
+		case HANDLE_GLASS:
+			// One changed rectangle and its pixels (os64/glass.h), taken into
+			// the thread's scratch and copied out by the common tail. The
+			// scratch bounds a band: a taller rectangle comes back in bands.
+			got = glass_view_read((glass_view_t *)h->object, kbuf, want, deadline);
+			if (got == GLASS_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
+			if (got == GLASS_ERR_INTERRUPTED)
+			{
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
+				*die = true;   // unpin first, then the death: the wrapper does both
+				return 0;
+			}
+			if (got == GLASS_ERR_CLOSED)
+				return 0;   // a sibling closed the handle under the wait: nothing more will come
+			if (got < 0)
+				return SYSCALL_RESULT_INVALID;   // too small for the header and one row
+			break;
 
 		case HANDLE_PIPE_READ:
 			// Blocks until >=1 byte is available, OR the last writer closes —
@@ -2575,7 +2620,13 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	// Dial tone requires a line: no NIC, no conversation. (A netless boot
 	// is a configuration, not an error — but dialing on one is an error.)
-	if (kNetDeviceCount == 0)
+	// 127/8 is the one line every networked boot has: lo, TCP only
+	// (REMOTE.md § 1 — a UDP or ICMP conversation with this machine has no
+	// consumer yet, and saying no beats sending it to the gateway).
+	bool loop = net_ip_is_loopback(dest.ip);
+	if (loop && dest.protocol != OS64_NET_TCP)
+		return (uint64_t)(int64_t)OS64_NET_ERR_BAD_DEST;
+	if (loop ? kNetLoopback == NULL : kNetDeviceCount == 0)
 		return (uint64_t)(int64_t)OS64_NET_ERR_NO_NIC;
 
 	// One syscall, two protocols, two object types behind two handle tags —
@@ -2592,7 +2643,7 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	{
 		// BLOCKS through the three-way handshake (or a refusal, or the
 		// connect timeout) — a dial that returns has a live stream.
-		conn = tcp_conn_dial(kNetDevices[0], dest.ip, dest.port, &why);
+		conn = tcp_conn_dial(loop ? kNetLoopback : kNetDevices[0], dest.ip, dest.port, &why);
 		tag = HANDLE_NET_TCP;
 	}
 	else if (dest.protocol == OS64_NET_ICMP)
@@ -2645,12 +2696,18 @@ static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2
 	if (!copy_user_buffer((const void *)arg0, &local, sizeof(local)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
-	// ip must be 0 — "every address this machine has" — because there is
-	// one NIC and a per-address announce has no consumer (DEBTS). TCP
-	// only, for the same reason. A port of 0 names no door.
-	if (local.ip != 0 || local.protocol != OS64_NET_TCP || local.port == 0)
+	// ip is 0 — "every address this machine has", loopback included — or a
+	// 127/8 address, for a service this machine alone may reach (vncd, whose
+	// safety rests on it: REMOTE.md). The machine's LAN address is not
+	// accepted by name: with one card, 0 already means it, and a per-card
+	// announce waits for a second card (DEBTS). TCP only, for want of a UDP
+	// consumer. A port of 0 names no door.
+	if ((local.ip != 0 && !net_ip_is_loopback(local.ip)) ||
+	    local.protocol != OS64_NET_TCP || local.port == 0)
 		return (uint64_t)(int64_t)OS64_NET_ERR_BAD_DEST;
-	if (kNetDeviceCount == 0)
+	// With no card at all the machine still has loopback, and a door on it
+	// is a door; only a boot with networking switched off has no address.
+	if (kNetLoopback == NULL)
 		return (uint64_t)(int64_t)OS64_NET_ERR_NO_NIC;
 
 	// The slot is RESERVED before the listener is published and COMMITTED
@@ -2663,7 +2720,7 @@ static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2
 		return (uint64_t)(int64_t)OS64_NET_ERR_NO_RESOURCES;
 
 	int64_t why = OS64_NET_ERR_NO_RESOURCES;
-	tcp_listener_t *l = tcp_listener_announce(kNetDevices[0], local.port, &why);
+	tcp_listener_t *l = tcp_listener_announce(local.ip, local.port, &why);
 	if (l == NULL)
 	{
 		(void)handle_cancel_reserved(task, h);
@@ -2674,8 +2731,8 @@ static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2
 		tcp_listener_close(l);   // teardown cancelled the slot first: the task is dying
 		return SYSCALL_RESULT_INVALID;
 	}
-	printd(DEBUG_NET, "net_announce: task %s <- tcp!*!%u = handle %d\n",
-	       task->exename, local.port, h);
+	printd(DEBUG_NET, "net_announce: task %s <- tcp!%s!%u = handle %d\n",
+	       task->exename, local.ip == 0 ? "*" : "loopback", local.port, h);
 	return (uint64_t)h;
 }
 
@@ -2695,9 +2752,17 @@ static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (task == NULL)
 		return SYSCALL_RESULT_INVALID;
 
-	if (!handle_close(task, (int)(int64_t)arg0))
+	// Four answers (os64/file.h). The handle is gone in every case but the
+	// first; what differs is what this close can honestly say about the
+	// bytes: nothing left undone, not committed, or not its to know.
+	int rc;
+	bool deferred;
+	if (!handle_close_rc(task, (int)(int64_t)arg0, &rc, &deferred))
 		return SYSCALL_RESULT_INVALID;
-
+	if (rc != 0)
+		return (uint64_t)(int64_t)OS64_CLOSE_NOT_COMMITTED;
+	if (deferred)
+		return (uint64_t)(int64_t)OS64_CLOSE_DEFERRED;
 	return 0;
 }
 
@@ -2855,29 +2920,37 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_INVALID;   // nothing mounted yet
 	}
 
-	// THE HANDLE ALIAS (devfs, 2026-08-20). One path in the whole namespace —
-	// /dev/tty — names a HANDLE KIND rather than a byte container, and it is
-	// answered here, before any filesystem is asked to open anything.
+	// THE HANDLE ALIAS (devfs, 2026-08-20). Two paths in the namespace —
+	// /dev/tty and /dev/glass — name a HANDLE KIND rather than a byte
+	// container, and they are answered here, before any filesystem is asked
+	// to open anything (devfs.h, THE ALIAS HOOK).
 	//
-	// It has to happen at this layer: a console handle carries no object and
-	// late-binds to task_tty(caller) at every read, and the read itself
-	// BLOCKS. A fops->read could not do it — HANDLE_FILE reads run through
-	// call_in_kernel_context on the core's interrupt stack, and sleeping there
-	// is how this kernel gets corrupted (the stack poisoner caught exactly
-	// that on 2026-08-13). Answering at open costs one branch and reuses the
-	// entire console path downstream: Ctrl+C, EOF, tty focus, all unchanged.
+	// It has to happen at this layer: both reads BLOCK (a console handle
+	// late-binds to task_tty(caller) at every read and waits for a key; a
+	// glass view waits for the screen to change). A fops->read could not do
+	// it — HANDLE_FILE reads run through call_in_kernel_context on the core's
+	// interrupt stack, and sleeping there is how this kernel gets corrupted
+	// (the stack poisoner caught exactly that on 2026-08-13). For /dev/tty,
+	// answering at open costs one branch and reuses the entire console path
+	// downstream: Ctrl+C, EOF, tty focus, all unchanged.
 	//
 	// This is the promise the comment at syscall_tty_handle made — the verb
 	// came first because a pager needed it before a devfs existed, and the
 	// name now NAMES the verb instead of rivalling it. Both spellings mint the
 	// same handle; only one of them can be written in husk.rc.
 	handle_type_t alias_type;
-	if (devfs_handle_alias(p->fs, tail, p->mode, &alias_type))
+	void *alias_object;
+	if (devfs_handle_alias(p->fs, tail, p->mode, &alias_type, &alias_object))
 	{
 		kfree(p);
-		int ah = handle_alloc(task, alias_type, NULL);
+		if (alias_type == HANDLE_NONE)
+			return SYSCALL_RESULT_INVALID;   // a kind this boot cannot give (/dev/glass with no desktop)
+		int ah = handle_alloc(task, alias_type, alias_object);
 		if (ah < 0)
-			return SYSCALL_RESULT_INVALID;   // table full — the only failure here
+		{
+			devfs_handle_alias_abandon(alias_type, alias_object);
+			return SYSCALL_RESULT_INVALID;   // table full
+		}
 		printd(DEBUG_SYSCALL, "open: task %s: '%s' aliased to handle %d\n",
 		       task->exename, path, ah);
 		return (uint64_t)ah;
@@ -2966,10 +3039,10 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 	else
 	{
-		// One handle references this file so far (see handleRefCount in
+		// One handle references this file so far (see `holds` in
 		// vfs.h) — set BEFORE handle_alloc so no close path can ever see it
 		// uninitialized.
-		p->file->handleRefCount = 1;
+		p->file->holds = 1;
 
 		h = reserved_h >= 0
 		        ? (handle_commit_reserved(task, reserved_h, HANDLE_FILE, p->file)
@@ -3937,7 +4010,9 @@ typedef struct {
 // Give back the CHILD's references on the redirections (handle_share, taken
 // at resolve in syscall_spawn) when no child comes to own them. Slots not
 // yet resolved are HANDLE_NONE, so every failure path may call this for all
-// three; the console tags hold nothing and unshare as nothing.
+// three; the console tags hold nothing and unshare as nothing. A file whose
+// parent handle a sibling closed meanwhile is closed for real here, and the
+// verdict goes to the log — that close was told "deferred" (os64/file.h).
 static void spawn_unshare_all(spawn_params_t *p)
 {
 	for (int slot = 0; slot < 3; slot++)
@@ -4070,7 +4145,7 @@ static void spawn_do_create(void *arg)
 			continue;   // the caller had closed that slot: keep the built-in default (console)
 
 		// The child's OWN reference on the object — a pipe end's count, a
-		// file's handleRefCount, a TCP conn's handle count — was taken at
+		// file's holds, a TCP conn's handle count — was taken at
 		// RESOLVE by handle_share, in the same critical section that found
 		// the parent's slot live (syscall_spawn says why nothing later is
 		// early enough). Two tasks hold the object from that instant: the
@@ -4078,9 +4153,12 @@ static void spawn_do_create(void *arg)
 		// child, `upper < file` survives the shell's immediate close of its
 		// own handle (and the child inherits the file POSITION — shared FIL,
 		// dup semantics — position 0 for a just-opened redirect, as
-		// intended), and the FIN waits for the child's close. handle_install
-		// hands that already-held reference over.
-		handle_install(child, slot, p->redirType[slot], p->redirObject[slot]);
+		// intended), and the FIN waits for the child's close.
+		// handle_share_install hands that already-held reference over, and
+		// a file's stops counting as an operation in flight: from here it
+		// is the child's handle, and answers for its own close.
+		handle_t shared = { .type = p->redirType[slot], .object = p->redirObject[slot] };
+		handle_share_install(child, slot, &shared);
 	}
 
 	// Submission lets the child exit and a sibling reap it before this
@@ -4199,7 +4277,7 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// The load below blocks on the disk, and a sibling thread can close any
 	// of the parent's handles while it does. For the three redirections the
 	// answer is handle_share (handle.h): the CHILD's own reference — a pipe
-	// end, a file's handleRefCount, a TCP conn's handle count — taken in the
+	// end, a file's holds, a TCP conn's handle count — taken in the
 	// same critical section that finds the slot live, so from that instant
 	// the object has one more table holder and nothing a sibling closes can
 	// hang it up or free it under the load. A pin was the wrong instrument
@@ -5526,6 +5604,17 @@ static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint6
 	if (!copy_to_user_buffer((void *)arg1, &st, sizeof(st)))
 		return (uint64_t)GUI_ERR_BAD_ARGS;
 	return 0;
+}
+
+static uint64_t syscall_gui_window_set_min_size(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+	// Validate raw registers before narrowing: high bits must not alias a
+	// smaller, accepted limit when a caller bypasses the typed ABI wrapper.
+	if (arg1 > UINT32_MAX || arg2 > UINT32_MAX)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)gui_window_set_min_size((int64_t)arg0, (uint32_t)arg1, (uint32_t)arg2);
 }
 
 static uint64_t syscall_gui_window_publish(uint64_t arg0, uint64_t arg1, uint64_t arg2,

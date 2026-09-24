@@ -1,0 +1,2 @@
+caption mutation iiii -> WWWW; one allocation denied: attempts=1, ink left denied=320 normal=52, differing pixels=876
+teardown=0

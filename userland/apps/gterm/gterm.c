@@ -30,8 +30,8 @@
 // widget TREES, and wrapping a single grid in one would be ceremony. The
 // day gterm wants chrome (scrollbar, tabs), it adopts libui and becomes
 // the custom-widget-class precedent. Geometry is honest the other way
-// around too: the pty is sized FROM the window's real content area, so
-// whatever the chrome costs, the grid fits exactly.
+// around too: the pty is sized from the actual content area and selected
+// cell metrics. A refused resize leaves the old grid clipped or letterboxed.
 
 #include "os64/os64.h"
 #include "os64/gui.h"
@@ -41,17 +41,29 @@
 #include "os64/fmt.h"
 #include "os64/io.h"
 #include "os64/clip.h"
+#include "os64/mem.h"
+#include "font_grid.h"
+#include "os64/font_settings.h"
 
-#define CELL_W 8
-#define CELL_H 16
+// Prefer a grid wide enough for top without wrapping its usual columns.
+// Pixel dimensions follow the selected font and are capped to the screen.
 #define WANT_COLS 100u
 #define WANT_ROWS 38u
-#define MAX_CELLS 16384u          // 128KB of BSS; past it a resize keeps the old grid
+#define MAX_CELLS GTERM_MAX_CELLS
 
 #define GTERM_BG 0xff000000u      // the console's black, honored
 
 static os64_pty_header_t gHdr;
-static os64_pty_cell_t   gCells[MAX_CELLS];
+/* Header probes and incomplete reads must not overwrite the displayed grid. */
+static os64_pty_cell_t gCellStorage[2][MAX_CELLS];
+static os64_pty_cell_t *gCells = gCellStorage[0];
+static bool gSnapshotValid;
+static uint64_t gRenderedGen = UINT64_MAX;
+static int64_t gMaster = -1;
+static gterm_grid_t gGrid;
+static uint64_t gFontGeneration;
+static bool gFontSettingsReady;
+static os64_text_context_t *gText;
 
 // ── the selection (CLIPBOARD.md slice 3) ────────────────────────────────────
 // SELECT IS COPY: releasing a drag publishes the highlighted text to
@@ -119,107 +131,84 @@ static bool row_highlight(uint32_t r, uint32_t *from, uint32_t *to)
 	return true;
 }
 
-// Which cell is under a content-local point? Clamped, because a GRABBED drag
-// legitimately reports coordinates outside the window (the compositor's
-// implicit pointer grab, 2026-08-21) — dragging past the bottom edge should
-// select to the last row, not compute a wild index.
-static void cell_at(int32_t x, int32_t y, uint32_t *row, uint32_t *col)
+static void *font_allocate(void *user, size_t bytes)
+{ (void)user; return os64_malloc(bytes); }
+static void font_release(void *user, void *ptr, size_t bytes)
+{ (void)user; (void)bytes; os64_free(ptr); }
+
+static int64_t resize_pty(void *user, uint32_t cols, uint32_t rows)
 {
-	int32_t r = (y < 0) ? 0 : y / CELL_H;
-	int32_t c = (x < 0) ? 0 : x / CELL_W;
-	if (r >= (int32_t)gHdr.rows) r = (int32_t)gHdr.rows - 1;
-	if (c >= (int32_t)gHdr.cols) c = (int32_t)gHdr.cols - 1;
-	if (r < 0) r = 0;
-	if (c < 0) c = 0;
-	*row = (uint32_t)r;
-	*col = (uint32_t)c;
+	// Resize travels WM -> gterm -> PTY, which sends SIGWINCH to slave
+	// listeners so applications can reflow. See PTY.md.
+	(void)user;
+	return gMaster < 0 ? 0 : os64_pty_resize(gMaster, cols, rows);
 }
+static void invalidate_grid(void *user)
+{
+	(void)user;
+	gSelLive = gDragging = gSnapshotValid = false;
+	gRenderedGen = UINT64_MAX;
+}
+
+/* Both shared settings and the guest fixture use the grid transaction. */
+static os64_font_status_t replace_fonts(os64_font_set_t *candidate)
+{
+	os64_font_consumer_t consumer = gterm_grid_consumer(&gGrid);
+	return os64_font_adopt(candidate, &consumer, 1, NULL);
+}
+
+static void refresh_font_settings(void)
+{
+	os64_font_config_t config;
+	uint64_t generation;
+	if (os64_font_settings_current(&config, &generation) != 0) return;
+	if (gFontSettingsReady && gFontGeneration == generation) return;
+	os64_font_set_t *candidate = NULL;
+	os64_font_config_error_t error;
+	if (os64_font_config_prepare(gText, &config, &candidate, &error)) {
+		char line[256];
+		os64_snprintf(line, sizeof(line), "gterm: font line %lu: %s; keeping current grid",
+					(unsigned long)error.line, os64_font_config_status_name(error.status));
+		os64_debug_log(line);
+		return;
+	}
+	os64_font_status_t status = replace_fonts(candidate);
+	os64_font_set_release(candidate);
+	if (!status) { gFontSettingsReady = true; gFontGeneration = generation; }
+	else {
+		char line[128];
+		os64_snprintf(line, sizeof(line),
+					  "gterm: font/grid change refused (%u); keeping current grid", status);
+		os64_debug_log(line);
+	}
+}
+
+static void cell_at(int32_t x, int32_t y, uint32_t *row, uint32_t *col)
+{ gterm_grid_cell_at(&gGrid, x, y, row, col); }
 
 static void render(os64_draw_ctx_t *ctx)
 {
-	// Repaint from state, whole grid: the damage list downstream is what
-	// keeps this cheap on the glass, and a grid's worth of RAM writes is
-	// the same order as the composite that follows.
-	os64_gui_rect_t all = {0, 0, (int32_t)ctx->surf.width,
-	                       (int32_t)ctx->surf.height};
+	if (!gSnapshotValid) return;
+	os64_gui_rect_t all = {0, 0, (int32_t)ctx->surf.width, (int32_t)ctx->surf.height};
 	os64_draw_fill_rect(&ctx->surf, all, GTERM_BG);
-
-	for (uint32_t r = 0; r < gHdr.rows; r++)
-	{
-		const os64_pty_cell_t *row = &gCells[r * gHdr.cols];
-		// Batch runs of same-colored glyphs into single text calls: a
-		// mostly-monochrome row (the usual) draws in one or two runs.
-		// One trim per ROW, not per cell — the range is the same for every
-		// cell in it, and asking per cell would be O(cols^2) for a picture
-		// that never changes within the row.
+	for (uint32_t r = 0; r < gHdr.rows; r++) {
 		uint32_t hf = 0, ht = 0;
 		bool hl = row_highlight(r, &hf, &ht);
-		#define SELECTED(col) (hl && (col) >= hf && (col) <= ht)
-
-		char run[512];
-		uint32_t c = 0;
-		while (c < gHdr.cols)
-		{
-			// A RUN IS A STRETCH THAT LOOKS THE SAME, which since the
-			// terminal learned escape sequences means the same foreground,
-			// the same background AND the same attributes — batching on
-			// colour alone would have painted a reversed cell like its
-			// neighbour. The two colours are resolved through os64/ansi.h,
-			// the one place that knows what an index and an attribute mean,
-			// so a red is the same red here as on the glass.
-			uint32_t fg = row[c].color;
-			uint32_t bg = os64_ansi_bg_color(row[c].bg, GTERM_BG);
-			os64_ansi_apply_attrs(row[c].attrs, &fg, &bg);
-			uint8_t attrs = row[c].attrs;
-			uint8_t bgix = row[c].bg;
-			// AND THE SAME CHARACTER SET, which is the fourth thing that
-			// makes two cells look alike: the same byte draws a block under
-			// CP437 and an accented capital under Latin-1, so a run that
-			// spanned both would paint half of it wrong.
-			uint8_t cset = row[c].charset;
-			uint32_t base = row[c].color;
-			// Selection breaks a run exactly like a color change does — it IS
-			// a color change, just one the grid doesn't store. Highlighting
-			// therefore costs no extra pass over the row.
-			bool sel = SELECTED(c);
-			uint32_t start = c, n = 0;
-			while (c < gHdr.cols && row[c].color == base &&
-			       row[c].bg == bgix && row[c].attrs == attrs &&
-			       row[c].charset == cset &&
-			       SELECTED(c) == sel && n < sizeof(run))
-			{
-				char ch = row[c].ch;
-				// A byte at or above 0x80 is a GLYPH, not a control code —
-				// under either set. Only the low control range is blanked.
-				run[n++] = (ch >= ' ' || (unsigned char)ch >= 0x80) ? ch : ' ';
-				c++;
-			}
-			// Inverse video for the highlight: the oldest "this is selected"
-			// signal there is, and it needs no theme, no second color, and no
-			// agreement with whatever the program inside chose to paint. It
-			// swaps whatever the cell had ALREADY resolved to, so selecting
-			// text that is itself reversed reads correctly.
-			os64_draw_text_charset(&ctx->surf, (int32_t)(start * CELL_W),
-			                       (int32_t)(r * CELL_H), run, n,
-			                       sel ? bg : fg,
-			                       sel ? fg : bg, cset);
+		for (uint32_t c = 0; c < gHdr.cols; c++) {
+			const os64_pty_cell_t *cell = &gCells[r * gHdr.cols + c];
+			uint32_t fg = cell->color, bg = os64_ansi_bg_color(cell->bg, GTERM_BG);
+			os64_ansi_apply_attrs(cell->attrs, &fg, &bg);
+			if (hl && c >= hf && c <= ht) { uint32_t swap = fg; fg = bg; bg = swap; }
+			os64_draw_fill_rect(&ctx->surf, gterm_grid_cell_rect(&gGrid, r, c), bg);
+			gterm_grid_draw_cell(&gGrid, &ctx->surf, r, c, (uint8_t)cell->ch, cell->charset, fg);
 		}
-		#undef SELECTED
 	}
-
-	// The cursor: a filled cell, the block style the glass console wears.
-	// The grid doesn't contain it (the kernel's cursor is renderer state,
-	// not cell state), so the terminal paints its own — every terminal
-	// emulator ever written rediscovers this on day one.
+	// Snapshots contain cells and cursor coordinates, not the kernel
+	// renderer's cursor pixels; the graphical terminal paints its own.
 	if (gHdr.cur_row < gHdr.rows && gHdr.cur_col < gHdr.cols)
-	{
-		os64_gui_rect_t cur = {(int32_t)(gHdr.cur_col * CELL_W),
-		                       (int32_t)(gHdr.cur_row * CELL_H),
-		                       CELL_W, CELL_H};
-		os64_draw_fill_rect(&ctx->surf, cur, 0xffc0c0c0u);
-	}
-
-	os64_draw_publish(ctx, (const os64_gui_rect_t *)0);
+		os64_draw_fill_rect(&ctx->surf,
+			gterm_grid_cell_rect(&gGrid, gHdr.cur_row, gHdr.cur_col), 0xffc0c0c0u);
+	os64_draw_publish(ctx, NULL);
 }
 
 // ── select is copy ──────────────────────────────────────────────────────────
@@ -249,7 +238,7 @@ static void selection_copy(void)
 		for (uint32_t c = from; c <= to && c < gHdr.cols && n < sizeof(line); c++)
 		{
 			char ch = row[c].ch;
-			line[n++] = (ch >= ' ') ? ch : ' ';
+			line[n++] = (char)gterm_grid_byte((uint8_t)ch);
 		}
 		// TRAILING BLANKS ARE NOT TEXT. A terminal row is padded out to the
 		// full width with spaces nobody typed, and copying them would make
@@ -352,12 +341,41 @@ static void paste_step(int32_t master)
 
 int main(int argc, char **argv)
 {
-	// Ask for chrome + a WANT_COLS x WANT_ROWS content area (100x38 since
-	// Chris's first day driving it — top with no wrapping is uber important);
-	// then believe the SURFACE we actually got and size the pty from it —
-	// the grid fits the window by construction, whatever the decorations
-	// cost this month. Window geometry persistence (/home/.config) is a
-	// wished-for future; until then the constants ARE the config.
+	os64_text_options_t options = {.memory = {NULL, font_allocate, font_release}};
+	os64_font_set_t *initial = NULL;
+	gGrid = (gterm_grid_t){.memory = options.memory, .resize = resize_pty,
+		.invalidate = invalidate_grid};
+	os64_font_status_t startup = os64_font_context_create(&options, &gText);
+	if (!startup) {
+		os64_font_config_t config;
+		os64_font_config_error_t error;
+		if (!os64_font_settings_current(&config, &gFontGeneration) &&
+			!os64_font_config_prepare(gText, &config, &initial, &error))
+			gFontSettingsReady = true;
+		else startup = os64_font_set_prepare(gText, NULL, &initial);
+	}
+	if (startup != OS64_FONT_OK) {
+		os64_text_destroy(gText);
+		os64_printf("gterm: cannot prepare default font\n");
+		return 1;
+	}
+	os64_font_role_view_t font;
+	os64_font_set_view(initial, OS64_FONT_ROLE_TERMINAL, &font);
+	uint32_t frame_w, frame_h;
+	os64_gui_frame_for_content(WANT_COLS * (uint32_t)font.cell_width_px,
+		WANT_ROWS * (uint32_t)font.row_height_px, 0, &frame_w, &frame_h);
+	// A scalable startup face can make the preferred grid larger than the
+	// display. Keep the frame reachable; the grid/PTY use the actual surface.
+	int32_t initial_x = 140, initial_y = 120;
+	uint32_t screen_w, screen_h;
+	if (os64_gui_screen_info(&screen_w, &screen_h) == 0 && screen_w && screen_h) {
+		uint32_t max_w = screen_w > 32 ? screen_w - 32 : screen_w;
+		uint32_t max_h = screen_h > 64 ? screen_h - 64 : screen_h;
+		if (frame_w > max_w) frame_w = max_w;
+		if (frame_h > max_h) frame_h = max_h;
+		if ((uint64_t)initial_x + frame_w > screen_w) initial_x = (int32_t)((screen_w - frame_w) / 2);
+		if ((uint64_t)initial_y + frame_h > screen_h) initial_y = (int32_t)((screen_h - frame_h) / 2);
+	}
 	// `gterm [program args...]` seats that program instead of husk — the
 	// root menu's way of running a console program in a window (`item
 	// "Top" /bin/gterm /bin/top`). Full path: there is no shell in that
@@ -371,12 +389,12 @@ int main(int argc, char **argv)
 	if (title[0] == 0)
 		title = "gterm";
 
-	int64_t win = os64_gui_window_create(title, 140, 120,
-	                                     WANT_COLS * CELL_W + 8,
-	                                     WANT_ROWS * CELL_H + 24, 0);
+	int64_t win = os64_gui_window_create(title, initial_x, initial_y,
+	                                     frame_w, frame_h, 0);
 	if (win <= 0)
 	{
 		os64_printf("gterm: no GUI here (window_create %ld)\n", (long)win);
+		os64_font_set_release(initial); os64_text_destroy(gText);
 		return 1;
 	}
 
@@ -384,23 +402,24 @@ int main(int argc, char **argv)
 	if (os64_draw_ctx_init(&ctx, win) != 0)
 	{
 		os64_printf("gterm: get_surface failed\n");
+		os64_font_set_release(initial); os64_text_destroy(gText);
 		os64_gui_window_destroy(win);
 		return 1;
 	}
 
-	uint32_t cols = ctx.surf.width / CELL_W;
-	uint32_t rows = ctx.surf.height / CELL_H;
-	if (cols * rows > MAX_CELLS)
-	{
-		os64_printf("gterm: window absurdly large (%ux%u cells)\n", cols, rows);
-		os64_gui_window_destroy(win);
+	gGrid.width = ctx.surf.width; gGrid.height = ctx.surf.height;
+	os64_font_status_t status = replace_fonts(initial);
+	os64_font_set_release(initial);
+	if (status != OS64_FONT_OK) {
+		os64_printf("gterm: font/grid preparation failed (%u)\n", status);
+		os64_gui_window_destroy(win); os64_text_destroy(gText);
 		return 1;
 	}
-
-	int64_t master = os64_pty_create(cols, rows);
-	if (master < 0)
-	{
+	int64_t master = os64_pty_create(gGrid.cols, gGrid.rows);
+	gMaster = master;
+	if (master < 0) {
 		os64_printf("gterm: pty_create failed (%ld)\n", (long)master);
+		gterm_grid_destroy(&gGrid); os64_text_destroy(gText);
 		os64_gui_window_destroy(win);
 		return 1;
 	}
@@ -409,6 +428,7 @@ int main(int argc, char **argv)
 	if (seated <= 0)
 	{
 		os64_printf("gterm: %s would not seat (%ld)\n", prog, (long)seated);
+		gterm_grid_destroy(&gGrid); os64_text_destroy(gText);
 		os64_close((int32_t)master);
 		os64_gui_window_destroy(win);
 		return 1;
@@ -416,7 +436,6 @@ int main(int argc, char **argv)
 
 	os64_frame_clock_t clock;
 	os64_frame_clock_init(&clock);
-	uint64_t rendered_gen = ~(uint64_t)0;
 	bool window_alive = true;
 	bool covered = false;   // nobody can see the window: read the pty, skip the paint
 
@@ -435,7 +454,11 @@ int main(int argc, char **argv)
 		bool repaint = false;   // the selection changed; the grid may not have
 		while ((erc = os64_gui_event_poll(win, &ev)) == 1)
 		{
-			if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii != 0)
+			if (ev.type == OS64_GUI_EVENT_APPEARANCE) {
+				refresh_font_settings();
+				repaint = true;
+			}
+			else if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii != 0)
 			{
 				// Typing means you are done looking: the highlight dies on
 				// any keystroke (his ruling). Keeping it lit while the screen
@@ -450,7 +473,7 @@ int main(int argc, char **argv)
 			}
 			else if (ev.type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN)
 			{
-				if (ev.mouse.button == OS64_GUI_MOUSE_LEFT)
+				if (ev.mouse.button == OS64_GUI_MOUSE_LEFT && gSnapshotValid)
 				{
 					// A press anchors but lights nothing: a plain click must
 					// never touch the clipboard, only a DRAG does.
@@ -493,33 +516,12 @@ int main(int argc, char **argv)
 			}
 			else if (ev.type == OS64_GUI_EVENT_WINDOW_RESIZE)
 			{
-				// The WINDOW resized; the GRID follows (PTY.md § Resize).
-				// Hop one, WM -> us, is this event. Hop two, us -> the
-				// program inside, is pty_resize: the kernel reallocates the
-				// grid, carries the text, and raises SIGWINCH at every task
-				// seated on the slave that installed a handler for it — a
-				// program that never asked gets nothing, not even a pending
-				// bit; husk today ignores it, a full-screen program listens.
-				// We are the master and the master owns the geometry; the
-				// snapshot header reports the new size from the next poll,
-				// so render() picks it up without being told.
-				os64_draw_ctx_refresh(&ctx);
-				uint32_t ncols = ctx.surf.width / CELL_W;
-				uint32_t nrows = ctx.surf.height / CELL_H;
-				if (ncols >= 2 && nrows >= 2 && ncols * nrows <= MAX_CELLS &&
-				    (ncols != cols || nrows != rows))
-				{
-					if (os64_pty_resize(master, ncols, nrows) == 0)
-					{
-						cols = ncols;
-						rows = nrows;
-						gSelLive = false;   // the cells a highlight named just moved
-					}
-					// A refused resize (the kernel's geometry fence — its only refusal)
-					// leaves the old grid: letterboxed or clipped, but honest
-					// about its size to the program inside.
+				if (os64_draw_ctx_refresh(&ctx) == 0) {
+					/* Allocation and bounds refusals retain the old PTY grid;
+					 * the resized surface clips or letterboxes that grid. */
+					gterm_grid_resize(&gGrid, ctx.surf.width, ctx.surf.height);
+					gRenderedGen = UINT64_MAX;
 				}
-				rendered_gen = ~(uint64_t)0;   // force a repaint next pass
 			}
 			// COVERED / UNCOVERED events need no branch here: the flag is
 			// asked every pass below, and a nudge that can be dropped from a
@@ -537,9 +539,10 @@ int main(int argc, char **argv)
 		paste_step((int32_t)master);
 
 		// Grid in — header first, cells only when the generation moved.
-		if (os64_pty_snapshot(master, &gHdr, (os64_pty_cell_t *)0, 0) < 0)
+		os64_pty_header_t probe;
+		if (os64_pty_snapshot(master, &probe, NULL, 0) < 0)
 			break;
-		if (gHdr.flags & OS64_PTY_HUNGUP)
+		if (probe.flags & OS64_PTY_HUNGUP)
 			break;                  // the session ended: exit closes the window
 		// Can anyone see us? Asked EVERY pass — one get_state per frame —
 		// never inferred from the COVERED/UNCOVERED events, either of which
@@ -554,18 +557,26 @@ int main(int argc, char **argv)
 			if (os64_gui_window_get_state(win, &st) == 0)
 				now_covered = (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
 			if (covered && !now_covered)
-				rendered_gen = ~(uint64_t)0;   // show what happened while hidden
+				gRenderedGen = ~(uint64_t)0;   // show what happened while hidden
 			covered = now_covered;
 		}
 		if (covered)
 		{
-			// Whatever moved is noted by the stale rendered_gen; the first
+			// Whatever moved is noted by the stale gRenderedGen; the first
 			// uncovered pass paints it all at once.
 		}
-		else if (gHdr.generation != rendered_gen)
+		else if (!gSnapshotValid || probe.generation != gRenderedGen)
 		{
-			if (os64_pty_snapshot(master, &gHdr, gCells, cols * rows) < 0)
-				break;
+			os64_pty_header_t next = {0};
+			os64_pty_cell_t *cells = gCells == gCellStorage[0] ? gCellStorage[1] : gCellStorage[0];
+			int64_t copied = os64_pty_snapshot(master, &next, cells, MAX_CELLS);
+			if (!gterm_grid_snapshot_matches(&gGrid, &next, copied)) {
+				/* A successful PTY barrier is not undone by a transient read.
+				 * Keep the displayed snapshot intact and retry next frame. */
+				os64_frame_wait(&clock, 33);
+				continue;
+			}
+			gHdr = next; gCells = cells; gSnapshotValid = true;
 			// The text moved underneath. A highlight is a claim about WHICH
 			// TEXT you have, and those coordinates now name something else —
 			// so it goes out rather than lying. (The drag itself survives: if
@@ -574,7 +585,7 @@ int main(int argc, char **argv)
 			// following anyway.)
 			gSelLive = false;
 			render(&ctx);
-			rendered_gen = gHdr.generation;
+			gRenderedGen = gHdr.generation;
 		}
 		else if (repaint)
 		{
@@ -584,6 +595,8 @@ int main(int argc, char **argv)
 		os64_frame_wait(&clock, 33);   // the ratified ~30Hz poll
 	}
 
+	gterm_grid_destroy(&gGrid);
+	os64_text_destroy(gText);
 	paste_end();                       // a paste cut off by the hangup lets the snarf go
 	os64_close((int32_t)master);       // hangup: the slave orphans benignly
 	if (window_alive)

@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define INSTALL_PATH_MAX 256
-#define INSTALL_MAX_FILES 256
+#define INSTALL_MAX_FILES 1024
 
 typedef struct {
     char dest[INSTALL_PATH_MAX];

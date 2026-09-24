@@ -76,8 +76,8 @@ static bool cell_at(const tty_t *t, int32_t x, int32_t y,
 	if (t == NULL || t->rows == 0 || t->cols == 0)
 		return false;
 
-	int32_t r = (y < 0) ? 0 : y / (int32_t)FONT_HEIGHT;
-	int32_t c = (x < 0) ? 0 : x / (int32_t)FONT_WIDTH;
+	int32_t r = (y < 0) ? 0 : y / (int32_t)renderer_cell_h();
+	int32_t c = (x < 0) ? 0 : x / (int32_t)renderer_cell_w();
 	if (r >= (int32_t)t->rows) r = (int32_t)t->rows - 1;
 	if (c >= (int32_t)t->cols) c = (int32_t)t->cols - 1;
 

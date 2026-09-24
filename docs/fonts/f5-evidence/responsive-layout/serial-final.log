@@ -1,0 +1,215 @@
+0 (0x0000) AP0: Interrupts enabled
+0 (0x0000) AP0: charset: CP437 map checked against zap-ext-light16.psf - 0 drifted, 39 not in the face
+1 (0x0000) AP0: ***** OS64 (built 2026-09-20 15:24:00) - system booting at 09/20/2026 15:37:54 *****
+2 (0x0000) AP0: FPU: x87 MMX SSE SSE2 SSE3 enabled, FXSAVE per thread (MXCSR mask 0xFFFF); no XSAVE
+2 (0x0000) AP0: Commandline: ROOT=2f4fd02e-68b4-4c82-98bc-72467529b3fc BACKSTOP=10 KWORKER HUSK CRON GUI DEBUG_GUI
+2 (0x0000) AP0: DEBUG_OPTIONS 0x00000000000000000000000002680103
+0 (0x0000) AP0: Interrupts enabled
+0 (0x0000) AP0: charset: CP437 map checked against zap-ext-light16.psf - 0 drifted, 39 not in the face
+1 (0x0000) AP0: ***** OS64 (built 2026-09-20 15:24:00) - system booting at 09/20/2026 15:37:54 *****
+2 (0x0000) AP0: FPU: x87 MMX SSE SSE2 SSE3 enabled, FXSAVE per thread (MXCSR mask 0xFFFF); no XSAVE
+2 (0x0000) AP0: Commandline: ROOT=2f4fd02e-68b4-4c82-98bc-72467529b3fc BACKSTOP=10 KWORKER HUSK CRON GUI DEBUG_GUI
+2 (0x0000) AP0: DEBUG_OPTIONS 0x00000000000000000000000002680103
+15 (0x0000) AP0: log: 8 ring(s) x 16 MB, 100 ticks/sec
+19 (0x0000) AP0: symbols: 2066 names loaded, 42967 bytes of strings
+19 (0x0000) AP0: ACPI: Limine passed PCI base address of 0x00000000000f5290, we'll use that
+19 (0x0000) AP0: ACPI: RSDP found at 0x00000000000f5290
+19 (0x0000) AP0: ACPI: RSDP revision = 0x00, OEMID = BOCHS 
+19 (0x0000) AP0: ACPI: Using RSDT at 0x7ffe25c0
+19 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+19 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+19 (0x0000) AP0: ACPI: FACP table found at 0x7ffe2380
+19 (0x0000) AP0: ACPI: DSDT table found at 0x7ffe0040
+19 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+19 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+19 (0x0000) AP0: ACPI: MCFG table found at 0x7ffe255c
+19 (0x0000) AP0: ACPI: Entry 0: BaseAddress=0x00000000b0000000, SegmentGroup=0, StartBus=0, EndBus=255
+19 (0x0000) AP0: ACPI: *Found PCI Segment 0 Base Address: 0xb0000000, mapping 0x7800 pages so that we can scan 120 busses
+20 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+20 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+20 (0x0000) AP0: ACPI: MADT (APIC) table found at 000000007FFE2474
+20 (0x0000) AP0: ACPI: S5 ready — PM1a 0x0604 SLP_TYPa 0, PM1b 0x0000 SLP_TYPb 0
+20 (0x0000) AP0: tss: allocated 24 double-fault (IST1) stacks, CPU0's at 0xffff80000007fff0
+20 (0x0000) AP0: tss: allocated 24 NMI (IST2) stacks, CPU0's at 0xffff800000080ff0
+128 (0x0000) AP0: blockcache: attached QEMU DVD-ROM (512-byte sectors, 128/line)
+128 (0x0000) AP0: blockcache: attached QEMU NVMe Ctrl (512-byte sectors, 128/line)
+128 (0x0000) AP0: blockcache: attached QEMU NVMe Ctrl (512-byte sectors, 128/line)
+128 (0x0000) AP0: blockcache: 3 device(s) attached
+428 (0x0000) AP0: random: rdrand ok, rdseed ok — pool seeded by rdseed (hw words 4, retries 0, jitter samples 0)
+466 (0x0000) AP0: mouse: PS/2 mouse initialized, streaming enabled
+466 (0x0000) AP0: BUILT-IN TESTS: Running pre-boot tests:
+466 (0x0000) AP0: 	[Test] window_minimum_clamp... OK
+466 (0x0000) AP0: 	[Test] kmalloc_not_null... OK
+466 (0x0000) AP0: 	[Test] fpu_state_round_trip... OK
+466 (0x0000) AP0: 	Page fault occurred during test mode, returning without halt.
+466 (0x0000) AP0: 	[Test] page_fault_test_mode_returns... OK
+466 (0x0000) AP0: 	[Test] page_zero_unmapped... OK
+466 (0x0000) AP0: 	[Test] dlist_basic_operations... OK
+466 (0x0000) AP0: 	[Test] arena_create_and_destroy... OK
+466 (0x0000) AP0: 	[Test] arena_basic_alloc... OK
+466 (0x0000) AP0: 	[Test] arena_aligned_alloc... OK
+466 (0x0000) AP0: 	[Test] arena_reset... OK
+466 (0x0000) AP0: 	[Test] arena_growth... OK
+466 (0x0000) AP0: 	[Test] vma_insert_and_lookup... OK
+466 (0x0000) AP0: 	[Test] vma_page_fault_resolved... OK
+466 (0x0000) AP0: 	[Test] vma_cow_write... OK
+466 (0x0000) AP0: 	[Test] env_create_empty... OK
+466 (0x0000) AP0: 	[Test] env_set_and_get... OK
+466 (0x0000) AP0: 	[Test] env_update_shorter_val... OK
+466 (0x0000) AP0: 	[Test] env_update_longer_val... OK
+466 (0x0000) AP0: 	[Test] env_multi_key... OK
+466 (0x0000) AP0: 	[Test] env_inherit_copies... OK
+466 (0x0000) AP0: 	[Test] env_inherit_independence... OK
+466 (0x0000) AP0: 	[Test] gmtime_negative_epoch... OK
+467 (0x0000) AP0: 	[Test] time_zone_minute_offsets... OK
+467 (0x0000) AP0: 	[Test] env_inherit_grown... OK
+467 (0x0000) AP0: 	[Test] env_count_accurate... OK
+468 (0x0000) AP0: 	[Test] env_capacity_full... OK
+468 (0x0000) AP0: 	[Test] task_arena_create_and_destroy... OK
+468 (0x0000) AP0: 	[Test] task_arena_alloc_and_convert... OK
+468 (0x0000) AP0: 	[Test] task_arena_aligned_alloc... OK
+468 (0x0000) AP0: 	[Test] task_arena_exhaustion... OK
+468 (0x0000) AP0: 	test_random_pool: seeded yes by rdseed (rdseed ok, rdrand ok, hw words 4, retries 0, exhausted 0, jitter 0)
+468 (0x0000) AP0: 	[Test] random_pool... OK
+468 (0x0000) AP0: BUILT-IN TESTS: 31 passed, 0 failed
+583 (0x0020) AP0: BOOT: If a ROOTPARTUUID (2f4fd02e-68b4-4c82-98bc-72467529b3fc) was passed in the commandline, we'll load it.
+583 (0x0020) AP0: BOOT: ROOTPARTUUID passed in commandline.  Will mount '2f4fd02e-68b4-4c82-98bc-72467529b3fc' as the root partition
+PAGE1 PAGE2
+dyn_consumer: first=0x00000030 second=0x00000031 packed=0x00300031
+dyn_consumer: first=0x00000030 second=0x00000031 packed=0x00300031
+584 (0x0020) AP0: BOOT: Root filesystem found, mounting
+584 (0x0020) AP0: BOOT: Root filesystem successfully mounted
+585 (0x0020) AP0: BOOT: skipping fat partition 0 on device 1 — GUID already mounted (twin)
+585 (0x0020) AP0: BOOT: mounted ext2 (device 1 partition 1, GPT name "ext2") at /ext2
+585 (0x0020) AP0: BOOT: mounted ext2 (device 2 partition 0, GPT name "home") at /home
+585 (0x0020) AP0: BOOT: mounted /proc (synthetic — processes as files)
+585 (0x0020) AP0: BOOT: mounted /sys (synthetic — the machine as files)
+585 (0x0020) AP0: BOOT: mounted /dev (synthetic — the kernel's objects as files)
+585 (0x0020) AP0: conf: search path /home:/etc (built-in default (/etc/os64.conf sets no conf))
+586 (0x0020) AP0: bootenv: /etc/bootenv.conf: 0 set, 0 unset
+586 (0x0020) AP0: BUILT-IN TESTS: Running post-boot tests:
+586 (0x0020) AP0: 	[Test] vma_file_backed_page_fault_resolved... OK
+586 (0x0020) AP0: 	[Test] vma_partial_page_bss_zero_filled... OK
+588 (0x0020) AP0: 	PASS: test_elf_loader (demand-paged, retVal correct, exited cleanly)
+588 (0x0020) AP0: 	[Test] elf_loader... OK
+589 (0x0020) AP0: 	PASS: test_dynamic_linking (symbol resolution, relocation, CoW isolation, and physical sharing all correct)
+589 (0x0020) AP0: 	[Test] dynamic_linking... OK
+589 (0x0020) AP0: 	[Test] pty_publication_hold... OK
+589 (0x0020) AP0: 	[Test] pty_resize_modes... OK
+589 (0x0020) AP0: 	[Test] pty_stream_seats... OK
+591 (0x0020) AP0: 	PASS: test_task_args (argc/argv/env delivered at the ABI addresses, strings copied, BSS zero-filled)
+591 (0x0020) AP0: 	[Test] task_args... OK
+613 (0x0020) AP0: 	PASS: test_env_growth (block grew under the fixed window, pairs survived the copies, 64KB refusals were atomic)
+613 (0x0020) AP0: 	[Test] env_growth... OK
+622 (0x0020) AP0: 	PASS: test_ext2_real_partition (self-provision=written+verified [bs=1024], mkfs-fixtures=3/3, root listing, bogus path)
+622 (0x0020) AP0: 	[Test] ext2_real_partition... OK
+622 (0x0020) AP0: 	PASS: test_mount_table (6 mounts, 1 routed content checks)
+622 (0x0020) AP0: 	[Test] mount_table... OK
+622 (0x0020) AP0: 	[Test] devfs... OK
+623 (0x0020) AP0: 	PASS: test_net_arp_pending_order (synchronous ARP reply released parked IPv4 packet; parked=1 dropped=0)
+623 (0x0020) AP0: 	[Test] net_arp_pending_order... OK
+623 (0x0020) AP0: 	SKIP: test_net_wire (no NIC — QEMU: -netdev user,id=n0 -device virtio-net-pci,netdev=n0)
+623 (0x0020) AP0: 	[Test] net_wire... OK
+623 (0x0020) AP0: 	SKIP: test_net_arp (no NIC)
+623 (0x0020) AP0: 	[Test] net_arp... OK
+623 (0x0020) AP0: 	SKIP: test_net_ping (no NIC)
+623 (0x0020) AP0: 	[Test] net_ping... OK
+623 (0x0020) AP0: 	SKIP: test_net_echo_responder (no NIC)
+623 (0x0020) AP0: 	[Test] net_echo_responder... OK
+623 (0x0020) AP0: 	SKIP: test_net_dhcp (no NIC)
+623 (0x0020) AP0: 	[Test] net_dhcp... OK
+623 (0x0020) AP0: 	SKIP: test_net_udp_conn (no NIC)
+623 (0x0020) AP0: 	[Test] net_udp_conn... OK
+623 (0x0020) AP0: 	SKIP: test_net_icmp_conn (no NIC)
+623 (0x0020) AP0: 	[Test] net_icmp_conn... OK
+624 (0x0020) AP0: 	PASS: test_vfs_write_mkdir (create/write/read-back, mkdir, nested file — under /etc/testdata)
+624 (0x0020) AP0: 	[Test] vfs_write_mkdir... OK
+625 (0x0020) AP0: 	PASS: test_vfs_rename (FAT: legacy plus safe policies, move, directory move, open-source survives, 5 refusals)
+625 (0x0020) AP0: 	[Test] vfs_rename... OK
+625 (0x0020) AP0: 	SKIP: test_ext2_published_insert_failure (root is not writable ext2)
+625 (0x0020) AP0: 	[Test] ext2_published_insert_failure... OK
+625 (0x0020) AP0: 	SKIP: test_ext2_orphan (root is not ext2)
+625 (0x0020) AP0: 	[Test] ext2_orphan... OK
+625 (0x0020) AP0: 	SKIP: test_ext2_readonly_demotion (root is not writable ext2)
+625 (0x0020) AP0: 	[Test] ext2_readonly_demotion... OK
+[user[user] hu] husksk: rc: /ho: rc: /hmeome/husk./husk.rc
+rc
+656 (0x0020) AP0: 	PASS: test_ext2_secondary_write (exclusive-create/create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)
+656 (0x0020) AP0: 	[Test] ext2_secondary_write... OK
+658 (0x0020) AP0: 	PASS: test_shared_object_reload (unloaded at zero; reload and closure claims need a root that can replace an open file, and this one cannot)
+658 (0x0020) AP0: 	[Test] shared_object_reload... OK
+659 (0x0020) AP0: 	PASS: test_mount_unmount (/ext2: busy while held, unmounted idle, remounted ro by GUID at /mu_mount with its open refusing a pen, exact identifiers, a nested mount pinning its parent, restored rw)
+659 (0x0020) AP0: 	[Test] mount_unmount... OK
+662 (0x0020) AP0: 	PASS: test_console_read_deadline (poll + 3-tick patience; anything caught was put back)
+662 (0x0020) AP0: 	[Test] console_read_deadline... OK
+663 (0x0020) AP0: 	PASS: test_block_cache (warm hits 105, warm misses 0 vs cold 4; write invalidation honest)
+663 (0x0020) AP0: 	[Test] block_cache... OK
+663 (0x0020) AP0: 	PASS: test_dirent_mtime (/bin/top stamped 1789904236 — the plausible present)
+663 (0x0020) AP0: 	[Test] dirent_mtime... OK
+675 (0x0020) AP0: 	PASS: test_backstop_preemption (9 lease expiries on APIC 1, SIGKILL landed)
+675 (0x0020) AP0: 	[Test] backstop_preemption... OK
+675 (0x0020) AP0: BUILT-IN TESTS: 32 passed, 0 failed
+677 (0x0034) AP4: BUILT-IN TESTS: Running late tests:
+677 (0x0020) AP0: input: unified event queue active (256 slots)
+677 (0x0020) AP0: gui_start: compositor task 0x00000035 submitted (affinity THREAD_NO_AFFINITY/0xffffffffffffffff)
+677 (0x0035) AP4: guicomp: compositor starting on APIC 4 (thread=0x00000035, daemon=1)
+678 (0x0031) AP1: [user] husk: started
+678 (0x0032) AP2: [user] husk: started
+679 (0x0033) AP3: [user] cron: started, 0 job(s), times are UTC
+681 (0x0032) AP2: [user] husk: rc: /home/husk.rc
+681 (0x0031) AP1: [user] husk: rc: /home/husk.rc
+681 (0x0035) AP4: guicomp: backbuffer 1920x1080 ready (8100 KB x2)
+685 (0x0036) AP3: wm: created window 1 'desktop' at (0,0) 1920x1080
+783 (0x0035) AP4: guicomp: heartbeat, 113 frames, 3 flushes (tick 783)
+883 (0x0035) AP4: guicomp: heartbeat, 213 frames, 3 flushes (tick 883)
+974 (0x0032) AP1: [user] husk: task 56 (controlcenter) started
+980 (0x0038) AP2: wm: created window 2 'Control Center' at (64,112) 468x442
+983 (0x0035) AP4: guicomp: heartbeat, 307 frames, 3 flushes (tick 983)
+1001 (0x0038) AP2: wm: window 2 resized to 493x421 content at (64,112)
+1083 (0x0035) AP4: guicomp: heartbeat, 587 frames, 3 flushes (tick 1083)
+1182 (0x0020) AP1: os64: up 1182 ticks, GUI running (status #1)
+1183 (0x0035) AP4: guicomp: heartbeat, 685 frames, 4 flushes (tick 1183)
+1283 (0x0035) AP4: guicomp: heartbeat, 784 frames, 4 flushes (tick 1283)
+1383 (0x0035) AP4: guicomp: heartbeat, 901 frames, 4 flushes (tick 1383)
+1483 (0x0035) AP4: guicomp: heartbeat, 1001 frames, 4 flushes (tick 1483)
+1583 (0x0035) AP4: guicomp: heartbeat, 1118 frames, 4 flushes (tick 1583)
+1682 (0x0020) AP1: os64: up 1682 ticks, GUI running (status #2)
+1683 (0x0035) AP4: guicomp: heartbeat, 1218 frames, 4 flushes (tick 1683)
+1712 (0x0034) AP1: 	task_teardown_leak: 2 cycles — free 8324947848 -> 8324947848 (lost 0 bytes), VMA backing reclaimed 106496 bytes
+1712 (0x0034) AP1: 	task_teardown_leak: window clean — 0 bytes lost, 106496 bytes of VMA backing reclaimed over 2 cycles
+1712 (0x0034) AP1: 	task_teardown_leak: attempt 1 of 4 was clean — measuring again on a fresh window
+1783 (0x0035) AP4: guicomp: heartbeat, 1333 frames, 4 flushes (tick 1783)
+1883 (0x0035) AP4: guicomp: heartbeat, 1433 frames, 4 flushes (tick 1883)
+1983 (0x0035) AP4: guicomp: heartbeat, 1533 frames, 4 flushes (tick 1983)
+2017 (0x0032) AP1: [user] husk: task 61 (windowmintest) started
+2023 (0x003d) AP2: wm: created window 3 'Minimum size test' at (32,24) 360x240
+2026 (0x003d) AP2: wm: window 3 resized to 640x480 content at (32,24)
+2027 (0x003d) AP2: wm: window 3 resized to 958x696 content at (32,24)
+2083 (0x0035) AP4: guicomp: heartbeat, 1623 frames, 4 flushes (tick 2083)
+2182 (0x0020) AP1: os64: up 2182 ticks, GUI running (status #3)
+2183 (0x0035) AP4: guicomp: heartbeat, 1726 frames, 5 flushes (tick 2183)
+2257 (0x0035) AP4: wm: window 3 resized to 1918x1059 content at (0,0)
+2257 (0x0035) AP4: guicomp: window 3 maximized
+2283 (0x0035) AP4: guicomp: heartbeat, 1807 frames, 8 flushes (tick 2283)
+2383 (0x0035) AP4: guicomp: heartbeat, 1898 frames, 9 flushes (tick 2383)
+2449 (0x0035) AP4: wm: window 3 resized to 958x696 content at (32,24)
+2449 (0x0035) AP4: guicomp: window 3 restored
+2483 (0x0035) AP4: guicomp: heartbeat, 1984 frames, 13 flushes (tick 2483)
+2583 (0x0035) AP4: guicomp: heartbeat, 2084 frames, 13 flushes (tick 2583)
+2682 (0x0020) AP0: os64: up 2682 ticks, GUI running (status #4)
+2683 (0x0035) AP4: guicomp: heartbeat, 2181 frames, 14 flushes (tick 2683)
+2783 (0x0035) AP4: guicomp: heartbeat, 2297 frames, 14 flushes (tick 2783)
+2883 (0x0035) AP4: guicomp: heartbeat, 2397 frames, 14 flushes (tick 2883)
+2905 (0x0032) AP1: [user] husk: task 66 (cat) started
+2906 (0x0032) AP1: [user] husk: task 66 (cat) exited code 0
+2906 (0x0032) AP1: [user] husk: task 61 (windowmintest) exited code 0
+2983 (0x0035) AP4: guicomp: heartbeat, 2514 frames, 14 flushes (tick 2983)
+3083 (0x0035) AP4: guicomp: heartbeat, 2613 frames, 14 flushes (tick 3083)
+3136 (0x0034) AP1: 	task_teardown_leak: 2 cycles — free 8322598904 -> 8323431400 (lost -832496 bytes), VMA backing reclaimed 65536 bytes
+3136 (0x0034) AP1: 	task_teardown_leak: -832496 bytes per 2 cycles unaccounted for (-416248 bytes/task)
+3136 (0x0034) AP1: 	task_teardown_leak: attempt 2 of 4 was a loss — measuring again on a fresh window
+3182 (0x0020) AP0: os64: up 3182 ticks, GUI running (status #5)
+3183 (0x0035) AP4: guicomp: heartbeat, 2756 frames, 14 flushes (tick 3183)
+3200 (0x0032) AP0: [user] husk: task 67 (sync) started
+3200 (0x0032) AP2: [user] husk: task 67 (sync) exited code 0
+3283 (0x0035) AP4: guicomp: heartbeat, 2857 frames, 14 flushes (tick 3283)

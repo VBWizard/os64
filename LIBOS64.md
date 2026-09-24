@@ -95,6 +95,7 @@ umbrella that pulled the world into every TU.
 | `<os64/io.h>` | raw `read`/`write`/`open`/`close`/`seek`/`stat`/`getdir` on handles |
 | `<os64/stdio.h>` | buffered `FILE*` layer: `fopen`/`fread`/`fwrite`/`printf`/`fprintf`/`getline` |
 | `<os64/mem.h>` | `os64_map`/`os64_unmap` (os64's anonymous mmap) and the heap on top of them: `os64_malloc`/`free`/`calloc`/`realloc`, `os64_heap_verify` — engine in `heap.c`, design in MALLOC.md |
+| `<os64/arena.h>` | reusable, growable heap-backed arenas with bulk reset/destroy, aligned and zeroed allocation, string copies, budgets and statistics; design in ARENA.md |
 | `<os64/runtime.h>` | `os64_runtime_init` — what `launch` stands up before `main` (today: the heap) |
 | `<os64/str.h>` | str*/mem* primitives |
 | `<os64/url.h>` | `os64_url_parse` — the `scheme://host:port/path` grammar RFC 1738 wrote once for http and gopher as siblings. Grammar only: no scheme table, no default ports, no percent-decoding, so a caller says which schemes it serves and what each implies |

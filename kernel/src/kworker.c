@@ -11,6 +11,7 @@
 #include "task.h"
 #include "thread.h"
 #include "tty.h"     // the midwife half of the job: shells for knocked terminals
+#include "console_font.h"   // and a third trade: hanging a new face on the glass
 #include "logging/log.h"
 
 #define KWORKER_SLEEP_TICKS (TICKS_PER_SECOND * 2)
@@ -41,6 +42,14 @@ static bool kworker_run_maintenance(void)
 	// task context, never an IRQ. The undertaker and the midwife turn out to
 	// be the same worker, which any small town could have told us.
 	if (tty_summon_sweep()) {
+		did_work = true;
+	}
+
+	// A console face somebody wrote to /sys/console/font, validated at the
+	// door and waiting for a context that may do the rest: re-shaping the
+	// terminals' grids allocates, and the door runs with interrupts off or
+	// inside a burial (console_font.h).
+	if (console_font_sweep()) {
 		did_work = true;
 	}
 

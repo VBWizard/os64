@@ -150,6 +150,104 @@ static void channel_request(ssh_engine *s, ssh_reader r)
 malformed:
     ssh_disconnect(s, 2, "malformed channel request");
 }
+static void open_failure(ssh_engine *s, uint32_t id, uint32_t reason, const char *text)
+{
+    uint8_t p[160]; ssh_writer w = {p, 0, sizeof(p), 0};
+    ssh_put_byte(&w, 92); ssh_put_u32(&w, id); ssh_put_u32(&w, reason);
+    ssh_put_text(&w, text); ssh_put_text(&w, "");
+    ssh_packet_send(s, p, w.n);
+}
+/* A peer channel number names one of the client's channels until both CLOSEs
+ * for it have crossed; after that the client may use it again. */
+static int peer_channel_live(const ssh_engine *s, uint32_t id)
+{
+    if (s->channel && !s->peer_close && s->peer_channel == id) return 1;
+    for (uint32_t i = 0; i < SSH_FORWARDS; i++) {
+        const ssh_forward *f = &s->forwards[i];
+        if ((f->state == SSH_FORWARD_OPENING || f->state == SSH_FORWARD_OPEN) && f->peer_channel == id) return 1;
+    }
+    return 0;
+}
+/* A direct-tcpip open (RFC 4254 section 7.2): host, port, originator address
+ * and port. The engine judges only what it can without I/O — the policy, the
+ * shape of the request, a free slot — and hands the destination to the caller,
+ * which resolves it, insists on loopback and dials (SSH_EVENT_FORWARD_OPEN). */
+static void forward_open(ssh_engine *s, ssh_reader r, uint32_t id, uint32_t window, uint32_t max)
+{
+    ssh_reader host = ssh_string(&r); uint32_t port = ssh_u32(&r);
+    ssh_reader origin = ssh_string(&r); (void)ssh_u32(&r);
+    if (r.bad || r.n || origin.bad) { ssh_disconnect(s, 2, "malformed direct-tcpip open"); return; }
+    if (s->forward_policy != SSH_FORWARD_LOOPBACK) { open_failure(s, id, 1, "forwarding is disabled"); return; }
+    /* The destination is data off the wire, and it will be printed and
+     * resolved: a name every resolver would accept, or refused whole. */
+    int printable = host.n && host.n <= SSH_FORWARD_HOST_MAX;
+    for (size_t i = 0; printable && i < host.n; i++) if (host.p[i] <= 32 || host.p[i] > 126) printable = 0;
+    if (!printable || !port || port > 65535) { open_failure(s, id, 1, "invalid forwarding destination"); return; }
+    if (max < 1) { open_failure(s, id, 1, "maximum packet size is zero"); return; }
+    uint32_t i = 0;
+    while (i < SSH_FORWARDS && s->forwards[i].state != SSH_FORWARD_FREE) i++;
+    if (i == SSH_FORWARDS) { open_failure(s, id, 4, "too many forwarded channels"); return; }
+    ssh_forward *f = &s->forwards[i];
+    memset(f, 0, sizeof(*f));
+    f->state = SSH_FORWARD_OPENING; f->peer_channel = id; f->peer_window = window; f->peer_packet = max;
+    memcpy(f->host, host.p, host.n); f->host[host.n] = 0; f->port = port;
+    s->event_forward = i; s->event = SSH_EVENT_FORWARD_OPEN;
+}
+/* Channel messages for local channel id >= 1: a forward. Only an OPEN slot
+ * is addressable — an OPENING one is answered before the next packet is
+ * read, and a FREE or CLOSED one has no conversation for the peer to be in. */
+static void forward_message(ssh_engine *s, uint8_t type, uint32_t id, ssh_reader r, size_t n)
+{
+    if (id > SSH_FORWARDS || s->forwards[id - 1].state != SSH_FORWARD_OPEN) goto malformed;
+    uint32_t i = id - 1; ssh_forward *f = &s->forwards[i];
+    if (type == 97) {
+        if (r.n) goto malformed;
+        if (!f->sent_close) {
+            uint8_t response[5]; ssh_writer w = {response, 0, sizeof(response), 0};
+            ssh_put_byte(&w, 97); ssh_put_u32(&w, f->peer_channel); ssh_packet_send(s, response, w.n);
+        }
+        /* Both CLOSEs have now crossed: the channel number is dead. The slot
+         * stays taken while the caller delivers what the client sent before
+         * its CLOSE (ssh_forward_release). */
+        f->state = SSH_FORWARD_CLOSED;
+        s->event_forward = i; s->event = SSH_EVENT_FORWARD_CLOSE; return;
+    }
+    /* After our CLOSE only theirs matters (RFC 4254 section 5.3). */
+    if (f->sent_close) return;
+    if (type == 93) {
+        uint32_t add = ssh_u32(&r);
+        if (r.bad || r.n || add > UINT32_MAX - f->peer_window) goto malformed;
+        f->peer_window += add; return;
+    }
+    if (type == 94 || type == 95) {
+        if (type == 95) (void)ssh_u32(&r);
+        ssh_reader data = ssh_string(&r);
+        if (r.bad || r.n || f->input_eof || data.n > SSH_DATA_MAX || data.n > f->receive_window) goto malformed;
+        f->receive_window -= (uint32_t)data.n;
+        /* A TCP connection has one stream; extended data has nowhere to go. */
+        if (type == 95) { ssh_forward_consumed(s, i, (uint32_t)data.n); return; }
+        s->event_forward = i; s->event = SSH_EVENT_FORWARD_DATA;
+        s->event_data = data.p; s->event_len = data.n; return;
+    }
+    if (type == 96) {
+        if (r.n) goto malformed;
+        f->input_eof = 1; s->event_forward = i; s->event = SSH_EVENT_FORWARD_EOF; return;
+    }
+    if (type == 98) {
+        /* A forward takes no requests; answer the ones that ask. */
+        (void)ssh_string(&r); uint8_t want = ssh_byte(&r);
+        if (n > 8192 || r.bad || want > 1) goto malformed;
+        if (want) {
+            uint8_t response[5]; ssh_writer w = {response, 0, sizeof(response), 0};
+            ssh_put_byte(&w, 100); ssh_put_u32(&w, f->peer_channel); ssh_packet_send(s, response, w.n);
+        }
+        return;
+    }
+    if (r.n) goto malformed;   /* 99/100: replies to requests we never make */
+    return;
+malformed:
+    ssh_disconnect(s, 2, "invalid channel message, state or window");
+}
 void ssh_connection_packet(ssh_engine *s, const uint8_t *p, size_t n)
 {
     uint8_t type = p[0];
@@ -176,10 +274,16 @@ void ssh_connection_packet(ssh_engine *s, const uint8_t *p, size_t n)
         ssh_reader kind = ssh_string(&r);
         uint32_t id = ssh_u32(&r), window = ssh_u32(&r), max = ssh_u32(&r);
         if (r.bad) goto malformed;
+        /* Every reply to an open, refusals included, is addressed by the
+         * client's number for it. One it already uses for a live channel
+         * would route that reply, and everything after, to the other
+         * channel, so the connection ends instead. */
+        if (peer_channel_live(s, id)) { ssh_disconnect(s, 2, "channel number already in use"); return; }
+        if (ssh_equal(kind, "direct-tcpip")) { forward_open(s, r, id, window, max); return; }
         uint8_t response[128]; ssh_writer w = {response, 0, sizeof(response), 0};
         if (!ssh_equal(kind, "session") || s->channel || max < 1) {
             ssh_put_byte(&w, 92); ssh_put_u32(&w, id); ssh_put_u32(&w, 1);
-            ssh_put_text(&w, "one session channel; forwarding disabled"); ssh_put_text(&w, "");
+            ssh_put_text(&w, "one session channel; no other channel type but direct-tcpip"); ssh_put_text(&w, "");
         } else {
             if (r.n) goto malformed;
             s->channel = 1; s->peer_channel = id; s->peer_window = window;
@@ -191,7 +295,9 @@ void ssh_connection_packet(ssh_engine *s, const uint8_t *p, size_t n)
     }
     if (type >= 93 && type <= 100) {
         uint32_t id = ssh_u32(&r);
-        if (r.bad || !s->channel || id != 0) goto malformed;
+        if (r.bad) goto malformed;
+        if (id != 0) { forward_message(s, type, id, r, n); return; }
+        if (!s->channel) goto malformed;
         if (type == 97) {
             if (r.n) goto malformed;
             if (!s->sent_close) {
@@ -199,6 +305,7 @@ void ssh_connection_packet(ssh_engine *s, const uint8_t *p, size_t n)
                 ssh_put_byte(&w, 97); ssh_put_u32(&w, s->peer_channel); ssh_packet_send(s, response, w.n);
                 s->sent_close = 1;
             }
+            s->peer_close = 1;
             s->event = SSH_EVENT_CLOSE; return;
         }
         if (s->sent_close) return;
@@ -226,13 +333,31 @@ void ssh_connection_packet(ssh_engine *s, const uint8_t *p, size_t n)
 malformed:
     ssh_disconnect(s, 2, "invalid channel message, state or window");
 }
+/* How much of an n-byte data packet with a `header`-byte message header fits
+ * the output queue's free room. Every channel sends what fits rather than all
+ * or nothing: the session and the forwards take turns going first for the
+ * room (sshd.c), and a channel that waited for room for its whole staged
+ * packet would never take its turn while the other spent each trickle.
+ * Framing beyond the header costs at most 56 bytes: 5 of length and padding
+ * length, up to 19 of padding, 32 of MAC. */
+static size_t fit_room(const ssh_engine *s, size_t n, size_t header)
+{
+    size_t room = SSH_OUTPUT_CAP - s->out_len, framing = header + 56;
+    if (room <= framing) return 0;
+    return n < room - framing ? n : room - framing;
+}
+int ssh_output_full(const ssh_engine *s)
+{
+    return !fit_room(s, 1, 9);
+}
 size_t ssh_send_data(ssh_engine *s, const uint8_t *p, size_t n, int stderr_stream)
 {
     if (!s->started || s->sent_close || s->closed || s->kex) return 0;
     if (n > s->peer_window) n = s->peer_window;
     if (n > s->peer_packet) n = s->peer_packet;
     if (n > SSH_DATA_MAX) n = SSH_DATA_MAX;
-    if (!n || SSH_OUTPUT_CAP - s->out_len < n + 64) return 0;
+    n = fit_room(s, n, stderr_stream ? 13 : 9);
+    if (!n) return 0;
     uint8_t payload[SSH_DATA_MAX + 13]; ssh_writer w = {payload, 0, sizeof(payload), 0};
     ssh_put_byte(&w, stderr_stream ? 95 : 94); ssh_put_u32(&w, s->peer_channel);
     if (stderr_stream) ssh_put_u32(&w, 1);
@@ -242,11 +367,13 @@ size_t ssh_send_data(ssh_engine *s, const uint8_t *p, size_t n, int stderr_strea
 }
 void ssh_input_consumed(ssh_engine *s, uint32_t n)
 {
-    if (!n || s->closed || s->sent_close) return;
-    if (n > SSH_WINDOW - s->receive_window) { ssh_disconnect(s, 2, "invalid local window credit"); return; }
+    if (s->closed || s->sent_close) return;
+    if (n > SSH_WINDOW - s->receive_window - s->credit_owed) { ssh_disconnect(s, 2, "invalid local window credit"); return; }
+    s->credit_owed += n;
+    if (!s->credit_owed || s->kex) return;
     uint8_t p[9]; ssh_writer w = {p, 0, sizeof(p), 0};
-    ssh_put_byte(&w, 93); ssh_put_u32(&w, s->peer_channel); ssh_put_u32(&w, n);
-    if (ssh_packet_send(s, p, w.n)) s->receive_window += n;
+    ssh_put_byte(&w, 93); ssh_put_u32(&w, s->peer_channel); ssh_put_u32(&w, s->credit_owed);
+    if (ssh_packet_send(s, p, w.n)) { s->receive_window += s->credit_owed; s->credit_owed = 0; }
 }
 void ssh_send_exit(ssh_engine *s, uint32_t status)
 {
@@ -257,4 +384,68 @@ void ssh_send_exit(ssh_engine *s, uint32_t status)
     ssh_packet_send(s, p, w.n);
     w.n = 0; ssh_put_byte(&w, 96); ssh_put_u32(&w, s->peer_channel); ssh_packet_send(s, p, w.n);
     p[0] = 97; ssh_packet_send(s, p, w.n); s->sent_close = 1;
+}
+void ssh_forward_result(ssh_engine *s, uint32_t forward, int success, uint32_t reason, const char *text)
+{
+    if (s->event != SSH_EVENT_FORWARD_OPEN || forward != s->event_forward) return;
+    ssh_forward *f = &s->forwards[forward];
+    s->event = SSH_EVENT_NONE;
+    if (!success) { open_failure(s, f->peer_channel, reason, text); memset(f, 0, sizeof(*f)); return; }
+    f->state = SSH_FORWARD_OPEN; f->receive_window = SSH_FORWARD_WINDOW;
+    uint8_t p[17]; ssh_writer w = {p, 0, sizeof(p), 0};
+    ssh_put_byte(&w, 91); ssh_put_u32(&w, f->peer_channel); ssh_put_u32(&w, forward + 1);
+    ssh_put_u32(&w, SSH_FORWARD_WINDOW); ssh_put_u32(&w, SSH_DATA_MAX);
+    ssh_packet_send(s, p, w.n);
+}
+size_t ssh_forward_send(ssh_engine *s, uint32_t forward, const uint8_t *p, size_t n)
+{
+    if (forward >= SSH_FORWARDS) return 0;
+    ssh_forward *f = &s->forwards[forward];
+    if (f->state != SSH_FORWARD_OPEN || f->sent_close || s->closed || s->kex) return 0;
+    if (n > f->peer_window) n = f->peer_window;
+    if (n > f->peer_packet) n = f->peer_packet;
+    if (n > SSH_DATA_MAX) n = SSH_DATA_MAX;
+    n = fit_room(s, n, 9);
+    if (!n) return 0;
+    uint8_t payload[SSH_DATA_MAX + 9]; ssh_writer w = {payload, 0, sizeof(payload), 0};
+    ssh_put_byte(&w, 94); ssh_put_u32(&w, f->peer_channel); ssh_put_string(&w, p, n);
+    if (!ssh_packet_send(s, payload, w.n)) return 0;
+    f->peer_window -= (uint32_t)n; return n;
+}
+void ssh_forward_consumed(ssh_engine *s, uint32_t forward, uint32_t n)
+{
+    if (forward >= SSH_FORWARDS) return;
+    ssh_forward *f = &s->forwards[forward];
+    if (s->closed || f->state != SSH_FORWARD_OPEN || f->sent_close) return;
+    if (n > SSH_FORWARD_WINDOW - f->receive_window - f->credit_owed) { ssh_disconnect(s, 2, "invalid local window credit"); return; }
+    /* Bytes that left are owed back to the client's window, and a credit
+     * dropped would shrink it for good; ssh_input_consumed's rule says when
+     * the owed sum goes out. */
+    f->credit_owed += n;
+    if (!f->credit_owed || s->kex) return;
+    uint8_t p[9]; ssh_writer w = {p, 0, sizeof(p), 0};
+    ssh_put_byte(&w, 93); ssh_put_u32(&w, f->peer_channel); ssh_put_u32(&w, f->credit_owed);
+    if (ssh_packet_send(s, p, w.n)) { f->receive_window += f->credit_owed; f->credit_owed = 0; }
+}
+int ssh_forward_finish(ssh_engine *s, uint32_t forward)
+{
+    if (forward >= SSH_FORWARDS) return 1;
+    ssh_forward *f = &s->forwards[forward];
+    if (f->state != SSH_FORWARD_OPEN || f->sent_close || s->closed) return 1;
+    /* ssh_send_exit's rule: application messages wait out a key exchange. */
+    if (s->kex || SSH_OUTPUT_CAP - s->out_len < 256) return 0;
+    uint8_t p[5]; ssh_writer w = {p, 0, sizeof(p), 0};
+    ssh_put_byte(&w, 96); ssh_put_u32(&w, f->peer_channel); ssh_packet_send(s, p, w.n);
+    p[0] = 97; ssh_packet_send(s, p, w.n); f->sent_close = 1; return 1;
+}
+void ssh_forward_release(ssh_engine *s, uint32_t forward)
+{
+    if (forward < SSH_FORWARDS && s->forwards[forward].state == SSH_FORWARD_CLOSED)
+        memset(&s->forwards[forward], 0, sizeof(s->forwards[forward]));
+}
+uint32_t ssh_forwards_live(const ssh_engine *s)
+{
+    uint32_t live = 0;
+    for (uint32_t i = 0; i < SSH_FORWARDS; i++) if (s->forwards[i].state != SSH_FORWARD_FREE) live++;
+    return live;
 }

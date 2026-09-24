@@ -48,6 +48,11 @@ void gui_emergency_disable(void);
 struct window;
 void gui_grab_release(const struct window *w);
 
+// Cancel the WM resize outline under kGuiLock, retaining the WM's mouse grab
+// through the remaining button releases. Client grabs and moves are unaffected.
+// Used when size constraints change or the resize target is destroyed.
+void gui_cancel_resize(const struct window *w);
+
 // ── VT8 glass ownership (the VT8 chapter in GRAPHICS.md, 2026-08-19) ────────
 // True once gui_start has seated the compositor as VT8's shell. Stays false
 // for the machine's whole life on a boot without the GUI flag — VT8 is then
@@ -57,6 +62,11 @@ bool gui_vt8_seated(void);
 // projection and keyboard.c's input fork read it; the compositor's flush
 // loop is gated on it.
 bool gui_owns_glass(void);
+// The backbuffer, the canonical screen image (GRAPHICS.md invariant 1), or
+// NULL before the compositor has allocated it — on a boot without the GUI,
+// that is forever. Its pixels live for the life of the machine once
+// allocated; /dev/glass reads them (gui/glass.h).
+const surface_t *gui_backbuffer(void);
 // tty_focus's handoff INTO the GUI: one lock-free store (safe from the
 // keyboard IRQ, where VT switches happen); the compositor converts it to a
 // full-screen repaint on its next frame.

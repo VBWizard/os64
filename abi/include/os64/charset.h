@@ -5,10 +5,9 @@
 //
 // ONE copy, on the ABI shelf, for the reason ansi.h is here: BOTH SIDES OF
 // THE RING BOUNDARY DRAW THESE BYTES. The kernel paints the glass through
-// BasicRenderer; gterm paints the same cells in ring 3 out of the PTY grid.
-// Two tables would mean one terminal showing a block where the other shows
-// an accented capital, and the difference would be invisible until somebody
-// put them side by side.
+// BasicRenderer; userland bitmap drawing consumes the same legacy indices.
+// The scalable gterm renderer uses the Unicode mapping below through F2.
+// Keeping the byte encodings here prevents the renderers from disagreeing.
 //
 // ── Why a terminal needs more than one answer ───────────────────────────
 //
@@ -37,7 +36,7 @@
 //
 // A glyph is found by codepoint in the shipped face's own Unicode table, so
 // the numbers below are that face's indices and nothing more general. They
-// are written down rather than derived because gterm's embedded font has no
+// are written down rather than derived because the embedded bitmap font has no
 // Unicode table to derive from (font_psf1.h: "the source file's unicode
 // table is deliberately NOT embedded"), and a table only one of the two
 // painters could build is exactly the disagreement this header exists to
@@ -50,7 +49,7 @@
 
 #include <stdint.h>
 
-#define OS64_CHARSET_LATIN1  0   // the byte IS the glyph index — the old behaviour
+#define OS64_CHARSET_LATIN1  0   // Latin-1 byte encoding
 #define OS64_CHARSET_CP437   1   // the byte is a CP437 code point
 
 // A glyph this face does not carry. Five of them are supplied below because
@@ -94,7 +93,7 @@ static inline uint16_t os64_charset_entry(uint8_t byte)
 // Resolve one byte to the CHARSIZE bytes of bitmap that draw it.
 //
 // `glyphs`/`nglyphs`/`charsize` describe the caller's own face — the kernel's
-// loaded PSF1, or gterm's embedded one. Always returns something drawable.
+// loaded PSF1, or userland's embedded bitmap. Returns a drawable bitmap.
 static inline const uint8_t *os64_charset_glyph(uint8_t byte, uint8_t charset,
                                                 const uint8_t *glyphs,
                                                 uint32_t nglyphs,
@@ -134,9 +133,9 @@ static inline const uint8_t *os64_charset_glyph(uint8_t byte, uint8_t charset,
 
     const uint8_t *own = glyphs + (uint32_t)byte * charsize;
 
-    // The supplied bitmaps are 8x16 because that is the cell every os64
-    // terminal draws. A face of another size gets the old answer rather than
-    // a glyph of the wrong height.
+    // These fallback bitmaps belong to the legacy 8x16 bitmap path. A face
+    // of another size keeps its own glyph mapping; scalable terminals use
+    // F2's Unicode lookup and cell-sized procedural fallback instead.
     if (charset != OS64_CHARSET_CP437 || byte < 0x80 || charsize != 16)
         return byte < nglyphs ? own : glyphs;
 

@@ -1434,7 +1434,7 @@ int vfs_openfiles_snapshot(vfs_openfile_row_t *rows, int max_rows)
 			r->tail[1] = '\0';
 		}
 		r->ident = f->f_ident;
-		r->handles = f->handleRefCount;
+		r->handles = (int)VFS_HOLDERS(f->holds);   // handles and pins alike: what keeps it open
 	}
 	spinlock_release(&kOpenFileLock);
 	return total;

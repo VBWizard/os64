@@ -28,6 +28,7 @@
 #include "driver/net/net_checksum.h"
 #include "driver/net/ethernet.h"
 #include "driver/net/ipv4.h"
+#include "driver/net/loopback.h"
 #include "driver/net/tcp.h"
 #include "driver/net/tcp_options.h"
 
@@ -221,6 +222,13 @@ static uint32_t tcp_window(tcp_conn_t* c)
 	return free_space;
 }
 
+// The address this end speaks from (tcp.h, local_ip): a loopback
+// conversation's 127/8 address, or the machine's address as it stands now.
+static uint32_t tcp_local_ip(const tcp_conn_t* c)
+{
+	return c->local_ip != 0 ? c->local_ip : kNetIPv4Address;
+}
+
 // Build and transmit one segment. `syn_options` adds the MSS and window
 // scale options, which only ever ride a SYN (that is the one moment both
 // sides are allowed to state their limits).
@@ -268,8 +276,9 @@ static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 	// The checksum covers a PSEUDO-HEADER (addresses, protocol, length)
 	// plus the whole segment — same anti-misdelivery insurance as UDP's,
 	// except here it is MANDATORY: TCP has no "sender skipped it" option.
+	uint32_t local_ip = tcp_local_ip(c);
 	uint8_t pseudo[12];
-	net_write32(pseudo + 0, kNetIPv4Address);
+	net_write32(pseudo + 0, local_ip);
 	net_write32(pseudo + 4, c->peer_ip);
 	pseudo[8] = 0;
 	pseudo[9] = IPV4_PROTO_TCP;
@@ -279,7 +288,7 @@ static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 	net_write16(seg + 16, net_checksum_fold(sum));
 
 	ipv4_tx_t how = IPV4_TX_DROPPED;
-	ipv4_send_from_ex(c->dev, kNetIPv4Address, c->peer_ip, IPV4_PROTO_TCP, seg, total, &how);
+	ipv4_send_from_ex(c->dev, local_ip, c->peer_ip, IPV4_PROTO_TCP, seg, total, &how);
 	if (how == IPV4_TX_INVALID)
 		tcp_abort(c);
 	else
@@ -780,8 +789,11 @@ static void tcp_congestion_grow(tcp_conn_t* c, uint32_t acked)
 
 // A refusal to a segment we have no connection for: RST, the protocol's
 // "you have the wrong number." Built by hand because there is no conn.
-static void tcp_send_rst(net_device_t* dev, uint32_t peer_ip, uint16_t local_port,
-                         uint16_t peer_port, uint32_t seq, uint32_t ack, bool ack_valid)
+// `local_ip` is the address the refused segment was sent to, so the refusal
+// comes from where the peer was talking.
+static void tcp_send_rst(net_device_t* dev, uint32_t local_ip, uint32_t peer_ip,
+                         uint16_t local_port, uint16_t peer_port, uint32_t seq,
+                         uint32_t ack, bool ack_valid)
 {
 	uint8_t seg[TCP_HDR_MIN];
 	net_write16(seg + 0, local_port);
@@ -798,7 +810,7 @@ static void tcp_send_rst(net_device_t* dev, uint32_t peer_ip, uint16_t local_por
 	net_write16(seg + 18, 0);
 
 	uint8_t pseudo[12];
-	net_write32(pseudo + 0, kNetIPv4Address);
+	net_write32(pseudo + 0, local_ip);
 	net_write32(pseudo + 4, peer_ip);
 	pseudo[8] = 0;
 	pseudo[9] = IPV4_PROTO_TCP;
@@ -807,7 +819,7 @@ static void tcp_send_rst(net_device_t* dev, uint32_t peer_ip, uint16_t local_por
 	sum = net_checksum_add(sum, seg, TCP_HDR_MIN);
 	net_write16(seg + 16, net_checksum_fold(sum));
 
-	ipv4_send(dev, peer_ip, IPV4_PROTO_TCP, seg, TCP_HDR_MIN);
+	ipv4_send_from(dev, local_ip, peer_ip, IPV4_PROTO_TCP, seg, TCP_HDR_MIN);
 	kTcpStats.segments_out++;
 }
 
@@ -1032,6 +1044,7 @@ static void tcp_input_wake_and_unlock(tcp_conn_t* c, uint64_t irqflags)
 }
 
 static tcp_conn_t* tcp_passive_open_locked(net_device_t* dev, tcp_listener_t* l,
+                                           uint32_t local_ip,
                                            uint32_t peer_ip, uint16_t peer_port,
                                            uint32_t their_seq, uint16_t their_win,
                                            const uint8_t* opts, size_t opts_len);
@@ -1059,6 +1072,12 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	}
 	kTcpStats.segments_in++;
 
+	// The address the peer is talking to, for anything this function answers
+	// without a conn (an RST, a passive open). ipv4_input has already made
+	// 127/8 mean "arrived on lo" and nothing else; on a card dst_ip may be a
+	// broadcast, which is never a source, so the machine's address answers.
+	uint32_t our_ip = net_ip_is_loopback(dst_ip) ? dst_ip : kNetIPv4Address;
+
 	uint16_t src_port = net_read16(p + 0);
 	uint16_t dst_port = net_read16(p + 2);
 	uint32_t seq      = net_read32(p + 4);
@@ -1071,9 +1090,11 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	const uint8_t* data = p + hdr_len;
 	uint16_t data_len = (uint16_t)(length - hdr_len);
 
-	// Demux on the FULL four-tuple (their address, their port, our port) —
-	// which is what lets two programs on this machine talk to the same
-	// server, and the same program talk to two servers, without confusion.
+	// Demux on the FULL four-tuple (their address, their port, our address,
+	// our port) — which is what lets two programs on this machine talk to the
+	// same server, and the same program talk to two servers, without
+	// confusion. Our address is the conn's local_ip, where zero stands for the
+	// machine's own and so matches any segment that did not arrive on lo.
 	// A tombstone is not a party to anything: its port is back in the
 	// draw, so the tuple it shows may belong to a live dial, and the
 	// answer to a segment aimed at its dead conversation is "nobody
@@ -1092,7 +1113,8 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	uint64_t irqflags = spinlock_acquire_irqsave(&kTcpListLock);
 	for (tcp_conn_t* t = kTcpConnList; t != NULL; t = t->next)
 		if (!t->tombstone &&
-		    t->local_port == dst_port && t->peer_port == src_port && t->peer_ip == src_ip)
+		    t->local_port == dst_port && t->peer_port == src_port && t->peer_ip == src_ip &&
+		    (t->local_ip != 0 ? t->local_ip == dst_ip : !net_ip_is_loopback(dst_ip)))
 		{
 			c = t;
 			spinlock_acquire(&c->lock);
@@ -1114,15 +1136,20 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		// the port — one whose handshake can never complete, since the
 		// SYN-ACK comes back from a unicast address the peer never dialed.
 		// Sixteen such packets fill a backlog (Codex #101 rd5).
+		//
+		// And only at a door open on THAT address: a listener announced on
+		// 127.0.0.1 does not answer a SYN sent to the machine's LAN address,
+		// which is the whole of what announcing on loopback means.
 		if ((flags & (TCP_SYN | TCP_ACK | TCP_RST)) == TCP_SYN &&
-		    dst_ip == kNetIPv4Address)
+		    dst_ip == our_ip)
 		{
 			tcp_listener_t* l = kTcpListenerList;
-			while (l != NULL && (l->port != dst_port || l->closed))
+			while (l != NULL &&
+			       (l->port != dst_port || l->closed || (l->ip != 0 && l->ip != dst_ip)))
 				l = l->next;
 			if (l != NULL)
 			{
-				c = tcp_passive_open_locked(dev, l, src_ip, src_port, seq, win_field,
+				c = tcp_passive_open_locked(dev, l, our_ip, src_ip, src_port, seq, win_field,
 				                            p + TCP_HDR_MIN, (size_t)(hdr_len - TCP_HDR_MIN));
 				if (c == NULL)
 				{
@@ -1143,7 +1170,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		// port answers, which is why "connection refused" is instant).
 		kTcpStats.no_connection++;
 		if (!(flags & TCP_RST))
-			tcp_send_rst(dev, src_ip, dst_port, src_port, seq + data_len +
+			tcp_send_rst(dev, our_ip, src_ip, dst_port, src_port, seq + data_len +
 			             (((flags & TCP_SYN) || (flags & TCP_FIN)) ? 1 : 0),
 			             ack, (flags & TCP_ACK) != 0);
 		return;
@@ -1289,7 +1316,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 				printd(DEBUG_NET, "tcp: SYN_SENT answer acks 0x%x, ours is 0x%x — a stale incarnation, RST\n",
 				       ack, c->snd_nxt);
 				spinlock_release_irqrestore(&c->lock, irqflags);
-				tcp_send_rst(dev, src_ip, dst_port, src_port, 0, ack, true);
+				tcp_send_rst(dev, our_ip, src_ip, dst_port, src_port, 0, ack, true);
 				return;
 			}
 			if ((flags & TCP_SYN) && (flags & TCP_ACK))
@@ -1387,7 +1414,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 				printd(DEBUG_NET, "tcp: SYN_RECEIVED answer acks 0x%x, ours is 0x%x — a stale incarnation, RST\n",
 				       ack, c->snd_nxt);
 				spinlock_release_irqrestore(&c->lock, irqflags);
-				tcp_send_rst(dev, src_ip, dst_port, src_port, 0, ack, true);
+				tcp_send_rst(dev, our_ip, src_ip, dst_port, src_port, 0, ack, true);
 				return;
 			}
 			c->snd_una = ack;
@@ -1703,7 +1730,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			// retransmit into the morgue's silence instead of learning
 			// immediately. (RST segments never reach here — judged above.)
 			spinlock_release_irqrestore(&c->lock, irqflags);
-			tcp_send_rst(dev, src_ip, dst_port, src_port, seq + data_len +
+			tcp_send_rst(dev, our_ip, src_ip, dst_port, src_port, seq + data_len +
 			             (((flags & TCP_SYN) || (flags & TCP_FIN)) ? 1 : 0),
 			             ack, (flags & TCP_ACK) != 0);
 			return;
@@ -1917,6 +1944,7 @@ static void tcp_tomb_evict_over_cap_locked(void)
 // by the same rules a dial applies to a SYN-ACK — and one rule of its own:
 // our shift is offered back only if theirs was offered (RFC 7323 §2.2).
 static tcp_conn_t* tcp_passive_open_locked(net_device_t* dev, tcp_listener_t* l,
+                                           uint32_t local_ip,
                                            uint32_t peer_ip, uint16_t peer_port,
                                            uint32_t their_seq, uint16_t their_win,
                                            const uint8_t* opts, size_t opts_len)
@@ -1944,6 +1972,8 @@ static tcp_conn_t* tcp_passive_open_locked(net_device_t* dev, tcp_listener_t* l,
 	c->snd_buf = tcp_heap_alloc_locked(TCP_SND_BUF);
 	c->dev = dev;
 	c->peer_ip = peer_ip;
+	// Zero for the machine's address, which stays live (tcp.h local_ip).
+	c->local_ip = net_ip_is_loopback(local_ip) ? local_ip : 0;
 	c->peer_port = peer_port;
 	c->local_port = l->port;
 	c->passive = true;
@@ -2345,6 +2375,9 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	c->snd_buf = tcp_heap_alloc_locked(TCP_SND_BUF);
 	c->dev = dev;
 	c->peer_ip = peer_ip;
+	// A dial to 127/8 speaks from 127.0.0.1 (the syscall layer routed it to
+	// lo); any other speaks from the machine's address, live (tcp.h local_ip).
+	c->local_ip = net_ip_is_loopback(peer_ip) ? NET_LOOPBACK_ADDR : 0;
 	c->peer_port = peer_port;
 	c->local_port = local_port;
 	c->handles = 1;                // the dialer's, installed by the syscall layer
@@ -2386,17 +2419,25 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	// drops SYNs instead of resetting them that is every single dial. Same
 	// cadence, no burn; safe here because the lock above is already released
 	// and this runs in task context.
+	//
+	// THE HANDSHAKE IS OVER IN EITHER OF TWO STATES. A peer that answers
+	// and hangs up at once moves this conn through ESTABLISHED to CLOSE_WAIT
+	// before the first nap ends — loopback does it inside one knet wake, and
+	// a LAN server that speaks first and closes can do it too. That is a
+	// call that connected: the caller reads what was said, then EOF. A call
+	// that connected and was RESET before the first look reads as REFUSED,
+	// which is the one answer this loop still cannot tell apart.
 	uint64_t deadline = kTicksSinceStart + TCP_CONNECT_TIMEOUT;
 	while (kTicksSinceStart < deadline)
 	{
-		if (c->state == TCP_ESTABLISHED)
+		if (c->state == TCP_ESTABLISHED || c->state == TCP_CLOSE_WAIT)
 			return c;
 		if (c->reset || c->state == TCP_CLOSED)
 			break;
 		nap(10);
 	}
 
-	if (c->state != TCP_ESTABLISHED)
+	if (c->state != TCP_ESTABLISHED && c->state != TCP_CLOSE_WAIT)
 	{
 		// The two failures a caller can actually act on: REFUSED means the
 		// machine answered and said no (wrong port? service down?); TIMEOUT
@@ -2644,13 +2685,13 @@ void tcp_conn_release(tcp_conn_t* c)
 
 // ── The listener: announce, accept, close (tcp.h § the listener) ───────────
 
-tcp_listener_t* tcp_listener_announce(net_device_t* dev, uint16_t port, int64_t* why)
+tcp_listener_t* tcp_listener_announce(uint32_t ip, uint16_t port, int64_t* why)
 {
-	(void)dev;   // one NIC answers every address today; the row is per port
 	if (why) *why = OS64_NET_ERR_NO_RESOURCES;
 
 	// The claim, the allocation and the listing are one critical section,
-	// as a dial's are: two announces of one port cannot both succeed, and
+	// as a dial's are: two announces of one port cannot both succeed —
+	// whatever addresses they name, since the row is per port (tcp.h) — and
 	// a port a dial holds is refused the same way — its bit is set. A port
 	// inside the ephemeral range takes its bit here so no later dial can
 	// draw it; one below the range needs no bit, since the draw never
@@ -2687,11 +2728,12 @@ tcp_listener_t* tcp_listener_announce(net_device_t* dev, uint16_t port, int64_t*
 	}
 	tcp_listener_t* l = tcp_heap_alloc_locked(sizeof(*l));
 	l->port = port;
+	l->ip = ip;
 	l->next = kTcpListenerList;
 	kTcpListenerList = l;
 	spinlock_release_irqrestore(&kTcpListLock, lf);
 
-	printd(DEBUG_NET, "tcp: announcing port %u\n", port);
+	printd(DEBUG_NET, "tcp: announcing port %u on %s\n", port, ip == 0 ? "every address" : "loopback");
 	if (why) *why = 0;
 	return l;
 }
@@ -2826,7 +2868,7 @@ void tcp_listener_close(tcp_listener_t* l)
 		spinlock_acquire(&c->lock);
 		if (c->listener == l && c->state != TCP_CLOSED)
 		{
-			tcp_send_rst(c->dev, c->peer_ip, c->local_port, c->peer_port,
+			tcp_send_rst(c->dev, tcp_local_ip(c), c->peer_ip, c->local_port, c->peer_port,
 			             c->rcv_nxt, c->snd_nxt, true);
 			tcp_abort(c);
 		}

@@ -53,6 +53,9 @@ typedef bool (*os64_conf_fn)(const char *key, const char *value, void *user);
 #define OS64_CONF_NO_MEMORY  (-3)
 #define OS64_CONF_MAX        8192   // the buffer; 8KB of `key = value` is a lot of opinions
 int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user);
+// Parse an immutable memory span using the same grammar/callback contract.
+// Embedded NULs are refused; length must be below OS64_CONF_MAX.
+int64_t os64_conf_parse(const char *text, size_t length, os64_conf_fn fn, void *user);
 
 // THE SEARCH PATH (2026-08-23). Ask the system where the config file called
 // `name` lives — "logd.conf", a FILE name and never a path — and receive the
@@ -80,6 +83,9 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user);
 // back, because half a path opens nothing, or something else.
 #define OS64_CONF_PATH_MAX 256
 int64_t os64_conf_find(const char *name, char *path_out, size_t cap);
+// Resolve a write destination at the top of the configured ladder without
+// probing for existence. Returns 0 or OS64_CONF_NO_FILE.
+int64_t os64_conf_target(const char *name, char *path_out, size_t cap);
 
 // The same walk, RESUMABLE — for the reader that wants every copy on the
 // ladder rather than the first. Returns a positive cursor (the matching
@@ -107,6 +113,10 @@ int64_t os64_conf_find_from(const char *name, size_t from,
 // know); otherwise it receives the path that was read.
 int64_t os64_conf_find_read(const char *name, os64_conf_fn fn, void *user,
                             char *path_out, size_t cap);
+// Read a selected configuration without losing comments, blank lines or
+// unknown settings. Success returns zero and owned, NUL-terminated bytes;
+// free with os64_free. A selected file that cannot open returns IO_ERROR.
+int64_t os64_conf_find_bytes(const char *name, char **out, size_t *length);
 
 // The persistence gradient, walked for you: try each path in order, read the
 // FIRST that opens, return its result (or OS64_CONF_NO_FILE if none did).
@@ -222,10 +232,10 @@ typedef struct {
 //    paragraph named a literal `<path>.new` nobody writes until rd16.
 // More settings than this in ONE save is refused (OS64_CONF_TOO_MANY) rather
 // than partly written: the merge tracks which pairs it has placed in a fixed
-// array, and a writer that silently dropped the seventeenth would be the
+// array, and a writer that silently dropped a setting beyond this limit would be the
 // exact silent-config-failure this arc exists to abolish. Raise the number if
 // a real caller ever needs more.
-#define OS64_CONF_WRITE_MAX 16
+#define OS64_CONF_WRITE_MAX 64
 #define OS64_CONF_TOO_MANY  (-5)
 //
 // 4. A SETTING IT CANNOT READ BACK IS REFUSED, WHOLE (OS64_CONF_BAD_SETTING,
@@ -275,6 +285,19 @@ typedef struct {
 #define OS64_CONF_IO_ERROR (-7)
 int64_t os64_conf_write(const char *name,
                         const os64_conf_pair_t *pairs, size_t count);
+// Merge, validate the complete resulting text, then publish atomically.
+// Validation failure returns BAD_SETTING before opening a temporary file.
+// Filesystems without atomic replacement refuse an existing destination.
+int64_t os64_conf_write_checked(const char *name,
+    const os64_conf_pair_t *pairs, size_t count,
+    bool (*validate)(const char *text, size_t length, void *user), void *user);
+
+// Checked merge with explicit deletions: NULL value removes every matching
+// line; an empty string remains an empty setting. Other entry points continue
+// to reject NULL values. This lets optional settings be removed without
+// changing the meaning of an empty value or dropping unrelated lines.
+int64_t os64_conf_update_checked(const char *name, const os64_conf_pair_t *pairs,
+    size_t count, bool (*validate)(const char *, size_t, void *), void *user);
 
 // One setting, same three rules. `os64_conf_write` with a count of one.
 int64_t os64_conf_set(const char *name, const char *key, const char *value);

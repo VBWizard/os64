@@ -1,0 +1,5 @@
+adoption=0, visible rows=3, retained row runs=3
+first paint denied allocation attempts=0; normal paint allocations=0; differing pixels=0
+no caller-owned sets/runs: teardown=0, retry=0, list runs still retained=0, binding live bytes=0
+after probe manually frees list internals, teardown=0
+live allocator blocks=0

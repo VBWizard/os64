@@ -1,0 +1,4 @@
+Discovery allocation-denial positions: 3713
+Preparation allocation-denial cases: 1141
+font_config: 28012099 checks, 0 failures; no live allocations
+Artifacts: /tmp/quinn-font-union-final

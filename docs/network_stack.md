@@ -13,7 +13,7 @@ PR #65; until it lands, the sender is stop-and-wait.*
 
 A frame arrives at a NIC. The driver's interrupt handler rings a doorbell
 and returns; `knet`, one kernel thread pinned to the BSP, wakes, drains
-every registered NIC, and hands each frame up: ethernet demuxes by
+every registered NIC and loopback's queue, and hands each frame up: ethernet demuxes by
 ethertype to ARP or IPv4; IPv4 validates and demuxes by protocol to ICMP,
 UDP or TCP; each of those finds the conversation the frame belongs to and
 delivers into it, waking the thread parked on it. Outbound is the mirror:
@@ -22,8 +22,9 @@ decides on-link or gateway, ARP supplies the MAC, ethernet frames it, the
 driver's ring takes it.
 
 Three facts shape everything below. **os64 is a host, not a router**: it
-never forwards. **It is single-homed**: one machine address, however many
-cards. **Nothing textual crosses the syscall boundary**: a program dials a
+never forwards. **It is single-homed**: one machine address on the LAN,
+however many cards, beside loopback's 127/8, which no card carries
+(REMOTE.md § 1). **Nothing textual crosses the syscall boundary**: a program dials a
 bang path, the library lowers it to a struct, the kernel owns the wire and
 does every byte swap at the packet edge (`net_wire.h` is the whole swap
 surface).
@@ -112,7 +113,8 @@ protocol. Departures answer the one routing question a host has, on my
 link or via the gateway, and carry DF with TTL 64. **Fragments are
 neither sent nor reassembled**: an arrival with MF or an offset is
 dropped, counted and logged (DEBTS). Header options are not parsed. There
-is no forwarding, and there is one address (`/sys/net/ip`).
+is no forwarding, and there is one LAN address beside loopback's 127/8,
+which only `lo` carries (`/sys/net/ip`).
 
 The submission contract for the layers above: `ipv4_send_from_ex` reports
 SENT, PARKED (held for ARP, or dropped when no slot is free), DROPPED (the

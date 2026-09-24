@@ -1,0 +1,504 @@
+#include "os64/ui.h"
+#include "ui_internal.h"
+#include "os64/conf.h"
+#include "os64/str.h"
+#include "os64/fmt.h"
+#include "ui_envelope.h"
+#include "os64/mem.h"
+#include "os64/slurp.h"
+
+// ── the theme ───────────────────────────────────────────────────────────────
+
+void os64_ui_theme_defaults(os64_ui_theme_t *t)
+{
+	// Compiled defaults are the fallback when no usable startup theme exists.
+	t->panel_bg            = OS64_GUI_COLOR_LIGHT_GRAY;
+	t->panel_border        = OS64_GUI_COLOR_DARK_GRAY;
+	t->label_fg            = OS64_GUI_COLOR_BLACK;
+	t->button_face         = 0xff2a62b8u;   // the titlebar-focused blue
+	t->button_face_pressed = 0xff1c4380u;   // same hue, pressed down a stop
+	t->button_border       = OS64_GUI_COLOR_DARK_GRAY;
+	t->button_fg           = OS64_GUI_COLOR_WHITE;
+	t->button_highlight    = 0xff7199d4u;
+	t->button_shadow       = 0xff163968u;
+	t->button_face_hover   = 0xff3975cdu;
+	t->hover_border        = 0xff7199d4u;
+	t->focus_ring          = 0xffe6b765u;
+	t->disabled_bg         = 0xffb8b8b8u;
+	t->disabled_fg         = 0xff666666u;
+
+	// The text family: gkeys' warm paper, ink on it, and the house blue
+	// inverted for selection — the look every editor since Bravo settled on.
+	t->text_bg             = 0xfff4f2eau;   // warm paper white
+	t->text_fg             = OS64_GUI_COLOR_BLACK;
+	t->text_sel_bg         = 0xff2a62b8u;   // the house blue
+	t->text_sel_fg         = OS64_GUI_COLOR_WHITE;
+	t->text_caret          = OS64_GUI_COLOR_BLACK;
+	t->field_bg            = OS64_GUI_COLOR_WHITE;
+	t->field_fg            = OS64_GUI_COLOR_BLACK;
+	t->field_border        = OS64_GUI_COLOR_DARK_GRAY;
+	t->field_border_focus  = 0xff2a62b8u;   // "your keys land here"
+	t->scroll_track        = 0xffd8d6ceu;
+	t->scroll_thumb        = 0xff8a8880u;
+
+	// The menu family: the panel's gray, the house blue for the row under
+	// the pointer — a menu is a column of buttons that have not been drawn
+	// as buttons.
+	t->menu_bg             = OS64_GUI_COLOR_LIGHT_GRAY;
+	t->menu_fg             = OS64_GUI_COLOR_BLACK;
+	t->menu_hi_bg          = 0xff2a62b8u;
+	t->menu_hi_fg          = OS64_GUI_COLOR_WHITE;
+	t->menu_sep            = OS64_GUI_COLOR_DARK_GRAY;
+
+	t->pad      = 8;
+	t->gap      = 8;
+	t->button_h = 24;
+	t->scroll_w = 14;
+	t->button_bevel = 0;
+	t->checkbox_size = 18;
+	t->slider_track_h = 4;
+	t->control_radius = 0;
+
+	t->font_w = 8;    // the embedded PSF1 face (font_psf1.h)
+	t->font_h = 16;
+}
+
+// The schema owns file keys, inspector captions, field offsets and ranges.
+// Add a theme value as a field in os64_ui_theme_t and a row in kThemeKeys;
+// colors also need membership in ui_palette.c's kRoles and preset values.
+// Keep theme values in this schema rather than scattered paint constants.
+typedef enum { THEME_COLOR, THEME_METRIC } theme_kind_t;
+typedef struct
+{
+	const char  *key;
+    const char  *label;
+	theme_kind_t kind;
+	size_t       offset;
+	int32_t min, max;
+} theme_key_t;
+
+#define THEME_ROW(name, label, kind, field) \
+	{ name, label, kind, __builtin_offsetof(os64_ui_theme_t, field), 0, 0 }
+
+#define METRIC(name, field, lo, hi) \
+    { name, name, THEME_METRIC, __builtin_offsetof(os64_ui_theme_t, field), lo, hi }
+
+static const theme_key_t kThemeKeys[] = {
+	THEME_ROW("panel.bg", "Surface", THEME_COLOR, panel_bg),
+	THEME_ROW("panel.border", "Panel border", THEME_COLOR, panel_border),
+	THEME_ROW("label.fg", "Label text", THEME_COLOR, label_fg),
+	THEME_ROW("button.face", "Button face", THEME_COLOR, button_face),
+	THEME_ROW("button.face.pressed", "Button: pressed", THEME_COLOR, button_face_pressed),
+	THEME_ROW("button.border", "Button border", THEME_COLOR, button_border),
+	THEME_ROW("button.fg", "Button text", THEME_COLOR, button_fg),
+	THEME_ROW("button.highlight", "Button highlight", THEME_COLOR, button_highlight),
+	THEME_ROW("button.shadow", "Button shadow", THEME_COLOR, button_shadow),
+	THEME_ROW("button.face.hover", "Button: hover", THEME_COLOR, button_face_hover),
+	THEME_ROW("hover.border", "Hover outline", THEME_COLOR, hover_border),
+	THEME_ROW("focus.ring", "Focus outline", THEME_COLOR, focus_ring),
+	THEME_ROW("disabled.bg", "Disabled surface", THEME_COLOR, disabled_bg),
+	THEME_ROW("disabled.fg", "Disabled text", THEME_COLOR, disabled_fg),
+	THEME_ROW("text.bg", "Text background", THEME_COLOR, text_bg),
+	THEME_ROW("text.fg", "Text ink", THEME_COLOR, text_fg),
+	THEME_ROW("text.sel.bg", "Selection fill", THEME_COLOR, text_sel_bg),
+	THEME_ROW("text.sel.fg", "Selection text", THEME_COLOR, text_sel_fg),
+	THEME_ROW("text.caret", "Caret", THEME_COLOR, text_caret),
+	THEME_ROW("field.bg", "Field background", THEME_COLOR, field_bg),
+	THEME_ROW("field.fg", "Field text", THEME_COLOR, field_fg),
+	THEME_ROW("field.border", "Field border", THEME_COLOR, field_border),
+	THEME_ROW("field.border.focus", "Field: focus", THEME_COLOR, field_border_focus),
+	THEME_ROW("scroll.track", "Scroll track", THEME_COLOR, scroll_track),
+	THEME_ROW("scroll.thumb", "Scroll thumb", THEME_COLOR, scroll_thumb),
+	THEME_ROW("menu.bg", "Menu background", THEME_COLOR, menu_bg),
+	THEME_ROW("menu.fg", "Menu text", THEME_COLOR, menu_fg),
+	THEME_ROW("menu.hi.bg", "Menu selection", THEME_COLOR, menu_hi_bg),
+	THEME_ROW("menu.hi.fg", "Menu selected text", THEME_COLOR, menu_hi_fg),
+	THEME_ROW("menu.sep", "Menu separator", THEME_COLOR, menu_sep),
+	METRIC("pad", pad, 0, 32),
+	METRIC("gap", gap, 0, 32),
+	METRIC("button.h", button_h, 16, 80),
+	METRIC("scroll.w", scroll_w, 4, 40),
+	METRIC("button.bevel", button_bevel, 0, 4),
+	METRIC("checkbox.size", checkbox_size, 8, 40),
+	METRIC("slider.track.h", slider_track_h, 1, 16),
+	METRIC("font.w", font_w, 8, 8),
+	METRIC("font.h", font_h, 16, 16),
+	METRIC("control.radius", control_radius, 0, 8),
+};
+#define THEME_KEY_COUNT (sizeof(kThemeKeys) / sizeof(kThemeKeys[0]))
+
+// Parse a 6-digit RGB hex span ("2a62b8") into opaque XRGB. Returns false on
+// anything else — a color the user wrote wrong should be refused loudly, not
+// half-parsed into a surprise.
+static bool parse_color(const char *s, size_t len, uint32_t *out)
+{
+	if (len != 6)
+		return false;
+	uint32_t v = 0;
+	for (size_t i = 0; i < 6; i++) {
+		char c = s[i];
+		uint32_t d;
+		if (c >= '0' && c <= '9')      d = (uint32_t)(c - '0');
+		else if (c >= 'a' && c <= 'f') d = (uint32_t)(c - 'a' + 10);
+		else if (c >= 'A' && c <= 'F') d = (uint32_t)(c - 'A' + 10);
+		else return false;
+		v = (v << 4) | d;
+	}
+	*out = 0xff000000u | v;   // the X byte stays opaque until alpha exists
+	return true;
+}
+
+static bool parse_metric(const char *s, size_t len, int32_t *out)
+{
+	if (len == 0 || len > 5)
+		return false;
+	int32_t v = 0;
+	for (size_t i = 0; i < len; i++) {
+		if (s[i] < '0' || s[i] > '9')
+			return false;
+		v = v * 10 + (s[i] - '0');
+	}
+	*out = v;
+	return true;
+}
+
+
+static bool session_key(const theme_key_t *key)
+{
+    return key->kind == THEME_COLOR ||
+           key->offset == __builtin_offsetof(os64_ui_theme_t, button_bevel) ||
+           key->offset == __builtin_offsetof(os64_ui_theme_t, control_radius);
+}
+
+unsigned ui_theme_key_owner(const char *name)
+{
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i) {
+        const theme_key_t *key = &kThemeKeys[i];
+        if (!os64_streq(name, key->key)) continue;
+        if (key->kind == THEME_COLOR) return OS64_UI_COMPONENT_PALETTE;
+        return session_key(key) ? OS64_UI_COMPONENT_TREATMENT : UI_ENVELOPE_GEOMETRY;
+    }
+    return 0;
+}
+
+static int64_t theme_text(const char *text, size_t length, char **out)
+{
+    *out = NULL;
+    os64_font_config_t fonts;
+    bool present = false;
+    int64_t result = ui_envelope_fonts(text, length, &fonts, &present, NULL);
+    if (result < 0) return result;
+    char *filtered = os64_malloc(length + 1);
+    if (!filtered) return OS64_CONF_NO_MEMORY;
+    result = ui_envelope_select(text, length, UI_ENVELOPE_THEME, false, filtered, length + 1);
+    if (result < 0) os64_free(filtered);
+    else *out = filtered;
+    return result;
+}
+
+bool os64_ui_theme_valid(const os64_ui_theme_t *t)
+{
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i) {
+        const theme_key_t *key = &kThemeKeys[i];
+        const char *value = (const char *)t + key->offset;
+        if (key->kind == THEME_COLOR) {
+            if ((*(const uint32_t *)value >> 24) != 255) return false;
+        } else {
+            int32_t metric = *(const int32_t *)value;
+            if (metric < key->min || metric > key->max) return false;
+        }
+    }
+    return true;
+}
+
+typedef struct {
+    os64_ui_theme_t candidate;
+    uint64_t seen;
+    bool bad, session;
+} theme_parse_t;
+_Static_assert(THEME_KEY_COUNT <= 64, "theme schema exceeds presence bitmap");
+
+static bool theme_setting(const char *name, const char *value, void *user)
+{
+    theme_parse_t *p = user;
+    if (!name) { p->bad = true; return false; }
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i) {
+        const theme_key_t *key = &kThemeKeys[i];
+        if (!os64_streq(name, key->key)) continue;
+        if (p->session && !session_key(key)) { p->bad = true; return false; }
+        void *field = (char *)&p->candidate + key->offset;
+        bool ok = key->kind == THEME_COLOR ?
+            parse_color(value, os64_strlen(value), field) :
+            parse_metric(value, os64_strlen(value), field);
+        if (!ok) { p->bad = true; return false; }
+        p->seen |= (uint64_t)1 << i;
+        return true;
+    }
+    p->bad = true;
+    return false;
+}
+
+// Presence is carried by key names, not table indices, in the shared payload.
+// An explicit startup marker permits missing live keys to retain app defaults.
+#define STARTUP_OVERLAY "inherit = startup\n"
+static int64_t theme_decode_session_known(os64_ui_theme_t *t, uint64_t *fields,
+                                     bool *inherited, const char *text, size_t length)
+{
+    if (!text) return OS64_CONF_BAD_SETTING;
+    const size_t prefix = sizeof(STARTUP_OVERLAY) - 1;
+    bool overlay = length >= prefix;
+    for (size_t i = 0; overlay && i < prefix; ++i)
+        if (text[i] != STARTUP_OVERLAY[i]) overlay = false;
+    if (overlay) { text += prefix; length -= prefix; }
+    theme_parse_t p = {.candidate = *t, .session = true};
+    // Complete legacy snapshots imply square controls. Preservation overlays
+    // keep absence meaningful so each app retains its default treatment.
+    if (!overlay) p.candidate.control_radius = 0;
+    int64_t result = os64_conf_parse(text, length, theme_setting, &p);
+    if (result < 0) return result;
+    if (p.bad || !os64_ui_theme_valid(&p.candidate)) return OS64_CONF_BAD_SETTING;
+    if (!overlay) {
+        for (size_t i = 0; i < THEME_KEY_COUNT; ++i) {
+            if (kThemeKeys[i].offset == __builtin_offsetof(os64_ui_theme_t, control_radius))
+                p.seen |= (uint64_t)1 << i;
+            if (session_key(&kThemeKeys[i]) && !(p.seen & ((uint64_t)1 << i)))
+                return OS64_CONF_BAD_SETTING;
+        }
+    }
+    *t = p.candidate;
+    *fields = p.seen;
+    *inherited = overlay;
+    return 0;
+}
+
+int64_t os64_ui_theme_decode_session(os64_ui_theme_t *t, uint64_t *fields,
+                                     bool *inherited, const char *text, size_t length)
+{
+    char *filtered;
+    int64_t n = theme_text(text, length, &filtered);
+    if (n < 0) return n;
+    int64_t result = theme_decode_session_known(t, fields, inherited, filtered, (size_t)n);
+    os64_free(filtered);
+    return result;
+}
+
+int64_t os64_ui_theme_parse_status(os64_ui_theme_t *t, const char *text, size_t length,
+                                  bool session)
+{
+    if (session) {
+        uint64_t fields; bool inherited;
+        return os64_ui_theme_decode_session(t, &fields, &inherited, text, length);
+    }
+    char *filtered;
+    int64_t n = theme_text(text, length, &filtered);
+    if (n < 0) return n;
+    theme_parse_t p = {.candidate = *t};
+    int64_t result = os64_conf_parse(filtered, (size_t)n, theme_setting, &p);
+    os64_free(filtered);
+    if (result < 0) return result;
+    if (p.bad || !os64_ui_theme_valid(&p.candidate)) return OS64_CONF_BAD_SETTING;
+    *t = p.candidate;
+    return 0;
+}
+
+bool os64_ui_theme_parse(os64_ui_theme_t *t, const char *text, size_t length,
+                        bool session)
+{
+    return os64_ui_theme_parse_status(t, text, length, session) == 0;
+}
+
+int64_t os64_ui_theme_parse_saved_status(os64_ui_theme_t *t, const char *text, size_t length)
+{
+    char *filtered;
+    int64_t n = theme_text(text, length, &filtered);
+    if (n < 0) return n;
+    theme_parse_t p = {.candidate = *t};
+    p.candidate.control_radius = 0;
+    int64_t result = os64_conf_parse(filtered, (size_t)n, theme_setting, &p);
+    os64_free(filtered);
+    if (result < 0) return result;
+    if (p.bad || !os64_ui_theme_valid(&p.candidate)) return OS64_CONF_BAD_SETTING;
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i)
+        if (kThemeKeys[i].offset != __builtin_offsetof(os64_ui_theme_t, control_radius) &&
+            !(p.seen & ((uint64_t)1 << i))) return OS64_CONF_BAD_SETTING;
+    *t = p.candidate;
+    return 0;
+}
+
+bool os64_ui_theme_parse_saved(os64_ui_theme_t *t, const char *text, size_t length)
+{
+    return os64_ui_theme_parse_saved_status(t, text, length) == 0;
+}
+
+static int64_t theme_encode(const os64_ui_theme_t *t, char *text, size_t cap, bool session, uint64_t fields)
+{
+    if (!text || !os64_ui_theme_valid(t)) return -1;
+    size_t used = 0;
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i) {
+        const theme_key_t *key = &kThemeKeys[i];
+        if (!(fields & ((uint64_t)1 << i)) || (session && !session_key(key))) continue;
+        if (used >= cap) return -1;
+        const void *field = (const char *)t + key->offset;
+        int n = key->kind == THEME_COLOR ?
+            os64_snprintf(text + used, cap - used, "%s = %06x\n", key->key,
+                          *(const uint32_t *)field & 0xffffffu) :
+            os64_snprintf(text + used, cap - used, "%s = %d\n", key->key,
+                          *(const int32_t *)field);
+        if (n < 0 || (size_t)n >= cap - used) return -1;
+        used += (size_t)n;
+    }
+    return (int64_t)used;
+}
+
+int64_t os64_ui_theme_encode_session(const os64_ui_theme_t *t, char *text, size_t cap)
+{
+    return theme_encode(t, text, cap, true, UINT64_MAX);
+}
+
+int64_t os64_ui_theme_encode(const os64_ui_theme_t *t, char *text, size_t cap)
+{
+    return theme_encode(t, text, cap, false, UINT64_MAX);
+}
+
+int64_t os64_ui_theme_snapshot_startup(char *text, size_t cap)
+{
+    char *original = NULL;
+    size_t length = 0;
+    int64_t result = os64_conf_find_bytes("theme.conf", &original, &length);
+    if (result == OS64_CONF_NO_MEMORY || result == OS64_CONF_IO_ERROR) return result;
+    os64_ui_theme_t theme;
+    os64_ui_theme_defaults(&theme);
+    int64_t parsed = result == 0 ? os64_ui_theme_parse_status(&theme, original, length, false) : result;
+    if (parsed == OS64_CONF_NO_MEMORY) { os64_free(original); return parsed; }
+    bool usable = parsed == 0;
+    const size_t prefix = sizeof(STARTUP_OVERLAY) - 1;
+    if (cap <= prefix) { os64_free(original); return OS64_CONF_TRUNCATED; }
+    os64_memcpy(text, STARTUP_OVERLAY, prefix);
+    int64_t n = 0;
+    if (usable) n = ui_envelope_select(original, length,
+        OS64_UI_COMPONENT_PALETTE | OS64_UI_COMPONENT_TREATMENT | UI_ENVELOPE_FONTS,
+        true, text + prefix, cap - prefix);
+    else text[prefix] = 0;
+    os64_free(original);
+    return n < 0 ? n : (int64_t)prefix + n;
+}
+
+void os64_ui_theme_merge_fields(os64_ui_theme_t *dst, const os64_ui_theme_t *src,
+                                uint64_t fields)
+{
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i)
+        if (fields & ((uint64_t)1 << i))
+            os64_memcpy((char *)dst + kThemeKeys[i].offset,
+                        (const char *)src + kThemeKeys[i].offset, 4);
+}
+
+static bool startup_text_valid(const char *text, size_t length, void *user)
+{
+    (void)user;
+    os64_ui_theme_t candidate;
+    os64_ui_theme_defaults(&candidate);
+    return os64_ui_theme_parse_saved(&candidate, text, length);
+}
+
+int64_t os64_ui_theme_set_startup(const os64_ui_theme_t *t)
+{
+    if (!os64_ui_theme_valid(t)) return OS64_CONF_BAD_SETTING;
+    _Static_assert(THEME_KEY_COUNT <= OS64_CONF_WRITE_MAX, "theme must fit one save");
+    os64_conf_pair_t pairs[THEME_KEY_COUNT];
+    char values[THEME_KEY_COUNT][16];
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i) {
+        const theme_key_t *key = &kThemeKeys[i];
+        const void *field = (const char *)t + key->offset;
+        if (key->kind == THEME_COLOR)
+            os64_snprintf(values[i], sizeof(values[i]), "%06x", *(const uint32_t *)field & 0xffffffu);
+        else
+            os64_snprintf(values[i], sizeof(values[i]), "%d", *(const int32_t *)field);
+        pairs[i] = (os64_conf_pair_t){key->key, values[i]};
+    }
+    if (os64_ui_theme_preserve_session() != 0) return OS64_CONF_IO_ERROR;
+    return os64_conf_write_checked("theme.conf", pairs, THEME_KEY_COUNT, startup_text_valid, NULL);
+}
+
+void os64_ui_theme_merge(os64_ui_theme_t *dst, const os64_ui_theme_t *src,
+                         uint32_t components)
+{
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i) {
+        const theme_key_t *key = &kThemeKeys[i];
+        bool copy = key->kind == THEME_COLOR ? components & OS64_UI_COMPONENT_PALETTE :
+            session_key(key) && (components & OS64_UI_COMPONENT_TREATMENT);
+        if (copy)
+            os64_memcpy((char *)dst + key->offset, (const char *)src + key->offset, 4);
+    }
+}
+
+bool os64_ui_theme_read_startup(os64_ui_theme_t *t)
+{
+    char path[OS64_CONF_PATH_MAX];
+    if (os64_conf_find("theme.conf", path, sizeof(path)) < 0) return false;
+    uint8_t *text = NULL;
+    size_t length = 0;
+    // Resolve once so the diagnostic names the file whose bytes we read.
+    os64_slurp_status_t read = os64_slurp(path, OS64_CONF_MAX - 1, &text, &length);
+    int64_t result = read ? OS64_CONF_IO_ERROR :
+        os64_ui_theme_parse_status(t, (const char *)text, length, false);
+    os64_free(text);
+    if (result < 0) {
+        os64_printf("libui: unusable startup theme %s; keeping existing theme\n", path);
+        return false;
+    }
+    return true;
+}
+
+void os64_ui_theme_startup(os64_ui_theme_t *t)
+{
+    os64_ui_theme_defaults(t);
+    os64_ui_theme_read_startup(t);
+}
+
+void os64_ui_theme_init(os64_ui_theme_t *t)
+{
+    os64_ui_theme_defaults(t);
+    uint64_t installed = 0;
+    os64_ui_theme_current(t, &installed);
+}
+
+static const theme_key_t *color_key(size_t index)
+{
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i)
+        if (kThemeKeys[i].kind == THEME_COLOR && index-- == 0) return &kThemeKeys[i];
+    return NULL;
+}
+
+size_t os64_ui_theme_color_count(void)
+{
+    size_t count = 0;
+    for (size_t i = 0; i < THEME_KEY_COUNT; ++i)
+        if (kThemeKeys[i].kind == THEME_COLOR) ++count;
+    return count;
+}
+
+const char *os64_ui_theme_color_name(size_t index)
+{
+    const theme_key_t *key = color_key(index);
+    return key ? key->key : "";
+}
+
+const char *os64_ui_theme_color_label(size_t index)
+{
+    const theme_key_t *key = color_key(index);
+    return key ? key->label : "";
+}
+
+uint32_t os64_ui_theme_color_get(const os64_ui_theme_t *t, size_t index)
+{
+    const theme_key_t *key = color_key(index);
+    return key ? *(const uint32_t *)((const char *)t + key->offset) : 0xff000000u;
+}
+
+bool os64_ui_theme_color_set(os64_ui_theme_t *t, size_t index, uint32_t color)
+{
+    const theme_key_t *key = color_key(index);
+    if (!key || (color >> 24) != 255) return false;
+    *(uint32_t *)((char *)t + key->offset) = color;
+    return true;
+}

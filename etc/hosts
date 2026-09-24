@@ -19,3 +19,7 @@
 #
 # Names here are case-insensitive, as DNS names are. Anything that is not
 # found here is asked of the name server (see /etc/net.conf).
+
+# This machine, by the name every program expects. The address is lo's
+# (REMOTE.md, section 1): a connection to it never leaves the machine.
+127.0.0.1   localhost

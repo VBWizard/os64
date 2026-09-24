@@ -10,6 +10,13 @@
 #include "tty.h"       // print_n's router half: grids up -> bytes go to VT1
 #include "gui/compositor.h"  // gui_owns_glass — "is the iron the GUI's right now?"
 #include "os64/charset.h"    // which bitmap draws a byte over 0x7F
+#include "psf2.h"            // the loader's fences, held against this file's
+
+// A face the loader accepts must be one this file can draw: the cursor's
+// save-under buffer is sized by the width fence, and psf2.h cannot include
+// this header (it is built on the host, where no renderer exists).
+_Static_assert(PSF2_CELL_W_MAX == CONSOLE_CELL_W_MAX, "psf2.h and BasicRenderer.h disagree on the widest cell");
+_Static_assert(PSF2_CELL_H_MAX == CONSOLE_CELL_H_MAX, "psf2.h and BasicRenderer.h disagree on the tallest cell");
 
 extern BasicRenderer kRenderer;
 uint32_t kFrameBufferBackgroundColor;
@@ -77,9 +84,43 @@ static void renderer_blit_full(BasicRenderer *r)
 // message written to a shadow that never flushes is a panic nobody reads,
 // the same sin with a newer name. Disable throttling forever and force the
 // glass current, so every subsequent panic print lands immediately.
+//
+// AND THE BOOT FACE COMES BACK. A panic draws with the face Limine handed
+// the kernel and nothing else: a face installed since then is bytes a ring-3
+// program wrote, and this can land in the middle of installing one. The
+// whole struct is overwritten, so a half-written face cannot survive it, and
+// the cursor's saved pixels are dropped with it rather than restored at a
+// cell size they were not taken at.
+//
+// THE PANIC AND AN INSTALL NEVER WRITE THE FACE AT THE SAME TIME, and the
+// panic never draws while an install is writing. The face is a struct, and a
+// struct copy the panic could read halfway through pairs one face's glyphs
+// with the other's dimensions. So each side raises its own flag and THEN
+// reads the other's, both with locked instructions (which also settles what
+// is in memory and what is still in a store buffer): at least one of them
+// sees the other. The install that sees the panic touches nothing — not the
+// face, and not the cursor it would have hidden on the way. The panic that
+// sees an install waits for it — one cursor cell and a struct copy with
+// interrupts off, so microseconds — and the wait is bounded for the case
+// where the install's own core is the one panicking and will never finish.
+// s_facePanic is never lowered.
+static console_face_t s_bootFace;
+static bool s_cursorOn;
+static volatile bool s_facePanic;
+static volatile bool s_faceInstalling;
+#define FACE_INSTALL_WAIT_SPINS 10000000u
+
 void renderer_bust_lock(void)
 {
+	__atomic_store_n(&s_facePanic, true, __ATOMIC_SEQ_CST);
+	for (uint32_t spins = 0;
+	     __atomic_load_n(&s_faceInstalling, __ATOMIC_SEQ_CST) && spins < FACE_INSTALL_WAIT_SPINS;
+	     spins++)
+		__builtin_ia32_pause();
 	__sync_lock_release(&kRendererLock);
+	if (s_bootFace.glyphs != NULL)   // a panic before init_video has no face to go back to
+		kRenderer.face = s_bootFace;
+	s_cursorOn = false;
 	s_throttleEnabled = false;
 	renderer_blit_full(&kRenderer);
 }
@@ -128,7 +169,9 @@ void renderer_flush_if_dirty(void)
 #define CURSOR_ROWS 2                       // bottom 2 pixel rows of the cell
 static bool s_cursorOn = false;
 static unsigned int s_cursorPX, s_cursorPY;              // cell origin, pixels
-static unsigned int s_cursorSave[CURSOR_ROWS * FONT_WIDTH];
+// A static buffer cannot follow the face, so it is sized for the widest cell
+// a face may have (BasicRenderer.h's fence) and strided by that maximum.
+static unsigned int s_cursorSave[CURSOR_ROWS * CONSOLE_CELL_W_MAX];
 
 // Caller holds kRendererLock. Restore what the cursor covered.
 static void cursor_hide_locked(BasicRenderer *r)
@@ -137,16 +180,16 @@ static void cursor_hide_locked(BasicRenderer *r)
 		return;
 	s_cursorOn = false;
 	unsigned int *pixPtr = (unsigned int *)r->framebuffer->base_address;
-	unsigned int charH = r->psf1_font->psf1_header->charsize;
+	unsigned int charH = r->face.height;
 	for (unsigned int row = 0; row < CURSOR_ROWS; row++)
 	{
 		unsigned int y = s_cursorPY + charH - CURSOR_ROWS + row;
-		for (unsigned int x = 0; x < FONT_WIDTH; x++)
+		for (unsigned int x = 0; x < r->face.width; x++)
 		{
 			if (s_cursorPX + x >= r->framebuffer->width || y >= r->framebuffer->height)
 				continue;
 			size_t idx = (s_cursorPX + x) + (size_t)y * r->framebuffer->pixels_per_scan_line;
-			unsigned int px = s_cursorSave[row * FONT_WIDTH + x];
+			unsigned int px = s_cursorSave[row * CONSOLE_CELL_W_MAX + x];
 			if (!s_glassDirty)
 				*(pixPtr + idx) = px;
 			if (r->shadow != NULL)
@@ -161,20 +204,20 @@ static void cursor_show_locked(BasicRenderer *r)
 	if (s_cursorOn)
 		cursor_hide_locked(r);   // repaint at the CURRENT position
 	unsigned int *pixPtr = (unsigned int *)r->framebuffer->base_address;
-	unsigned int charH = r->psf1_font->psf1_header->charsize;
+	unsigned int charH = r->face.height;
 	s_cursorPX = r->cursor_position.x;
 	s_cursorPY = r->cursor_position.y;
 	for (unsigned int row = 0; row < CURSOR_ROWS; row++)
 	{
 		unsigned int y = s_cursorPY + charH - CURSOR_ROWS + row;
-		for (unsigned int x = 0; x < FONT_WIDTH; x++)
+		for (unsigned int x = 0; x < r->face.width; x++)
 		{
 			if (s_cursorPX + x >= r->framebuffer->width || y >= r->framebuffer->height)
 				continue;
 			size_t idx = (s_cursorPX + x) + (size_t)y * r->framebuffer->pixels_per_scan_line;
 			// Save from the SHADOW when there is one — it is the truth even
 			// while the glass is throttle-dirty; VRAM is never read after boot.
-			s_cursorSave[row * FONT_WIDTH + x] =
+			s_cursorSave[row * CONSOLE_CELL_W_MAX + x] =
 			    (r->shadow != NULL) ? r->shadow[idx] : *(pixPtr + idx);
 			if (!s_glassDirty)
 				*(pixPtr + idx) = r->color;
@@ -224,7 +267,10 @@ void scroll_framebuffer_full(BasicRenderer *basicrenderer) {
     unsigned int width = basicrenderer->framebuffer->width;
     unsigned int height = basicrenderer->framebuffer->height;
 
-    size_t visible_lines = height - 16; // Height minus one font line
+    // One TEXT line is one cell height of pixel lines — the face's, which is
+    // why the distance is read here and not named by a constant.
+    unsigned int line_h = basicrenderer->face.height;
+    size_t visible_lines = height - line_h; // Height minus one font line
     size_t copy_bytes = visible_lines * pixels_per_scanline * sizeof(unsigned int);
 
     if (basicrenderer->shadow != NULL) {
@@ -233,8 +279,8 @@ void scroll_framebuffer_full(BasicRenderer *basicrenderer) {
         // frame to VRAM with a single pure-WRITE pass. Write-combining eats
         // sequential stores at full speed; it was the READ half of the old
         // in-place memmove that cost a quarter second per scroll on metal.
-        memmove(basicrenderer->shadow, basicrenderer->shadow + (16 * pixels_per_scanline), copy_bytes);
-        clear_bottom_lines(basicrenderer->shadow, pixels_per_scanline, width, height - 16, height);
+        memmove(basicrenderer->shadow, basicrenderer->shadow + (line_h * pixels_per_scanline), copy_bytes);
+        clear_bottom_lines(basicrenderer->shadow, pixels_per_scanline, width, height - line_h, height);
         // THROTTLED (see the doctrine above kRendererLock): blit only when
         // the ~30Hz window allows; otherwise mark the glass dirty and let
         // the processSignals rider deliver the finished frame. A log burst
@@ -249,11 +295,11 @@ void scroll_framebuffer_full(BasicRenderer *basicrenderer) {
     }
 
     // No shadow yet (pre-kmalloc early boot): the honest slow way.
-    // Move all lines up by FONT_HEIGHT (16 pixels)
-    memmove(pixPtr, pixPtr + (16 * pixels_per_scanline), copy_bytes);
+    // Move all lines up by one text line
+    memmove(pixPtr, pixPtr + (line_h * pixels_per_scanline), copy_bytes);
 
-    // Clear the last FONT_HEIGHT lines
-	clear_bottom_lines(pixPtr, pixels_per_scanline, width, height - 16, height);
+    // Clear the text line that scrolled in
+	clear_bottom_lines(pixPtr, pixels_per_scanline, width, height - line_h, height);
 }
 
 // Wipe the whole console to the background color — the screen half of form
@@ -290,8 +336,60 @@ void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer
 
     basicrenderer->framebuffer = framebuffer;
     basicrenderer->psf1_font = psf1_font;
+    // PSF1 says only how TALL a glyph is: the format fixes the width at 8
+    // (one byte per row) and spends a mode bit on 256-or-512 glyphs.
+    basicrenderer->face = (console_face_t){
+        .glyphs      = (const uint8_t *)psf1_font->glyph_buffer,
+        .nglyphs     = (psf1_font->psf1_header->mode & 0x01) ? 512 : 256,
+        .width       = 8,
+        .height      = psf1_font->psf1_header->charsize,
+        .row_bytes   = 1,
+        .glyph_bytes = psf1_font->psf1_header->charsize,
+    };
+    s_bootFace = basicrenderer->face;
     basicrenderer->shadow = NULL;   // attached later, once kmalloc exists
     return;
+}
+
+uint32_t renderer_cell_w(void) { return kRenderer.face.width; }
+uint32_t renderer_cell_h(void) { return kRenderer.face.height; }
+
+bool renderer_face_install(const console_face_t *face)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+
+	// This core has interrupts off, so a panic's freeze cannot stop it — the
+	// handshake above renderer_bust_lock is what keeps the two apart, and it
+	// brackets the cursor work as well as the face: hiding the cursor writes
+	// saved pixels to the glass, and a panic's report must not be painted
+	// over by them either. The locked store of "done" also puts the whole
+	// face in memory before the waiting panic is let go.
+	__atomic_store_n(&s_faceInstalling, true, __ATOMIC_SEQ_CST);
+	bool installed = !__atomic_load_n(&s_facePanic, __ATOMIC_SEQ_CST);
+	if (installed)
+	{
+		// The cursor's saved pixels belong to the outgoing cell, so it goes
+		// before the face does. WHILE THE GUI HAS THE GLASS it is dropped
+		// rather than hidden: hiding RESTORES those pixels, and they are a
+		// strip of a text terminal that the compositor painted over long ago
+		// — putting them back would leave it lying across the desktop until
+		// something happened to damage that spot.
+		if (gui_owns_glass())
+			s_cursorOn = false;
+		else
+			cursor_hide_locked(&kRenderer);
+
+		kRenderer.face = (face != NULL) ? *face : s_bootFace;
+	}
+	__atomic_store_n(&s_faceInstalling, false, __ATOMIC_SEQ_CST);
+
+	spinlock_release_irqrestore(&kRendererLock, flags);
+	return installed;
+}
+
+const console_face_t *renderer_boot_face(void)
+{
+	return &s_bootFace;
 }
 
 void renderer_attach_shadow(void)
@@ -314,8 +412,8 @@ void renderer_attach_shadow(void)
 void moveto(BasicRenderer *basicrenderer, unsigned int x, unsigned int y)
 {
 	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
-	basicrenderer->cursor_position.x = x * FONT_WIDTH;
-	basicrenderer->cursor_position.y = y * basicrenderer->psf1_font->psf1_header->charsize;
+	basicrenderer->cursor_position.x = x * basicrenderer->face.width;
+	basicrenderer->cursor_position.y = y * basicrenderer->face.height;
 	spinlock_release_irqrestore(&kRendererLock, flags);
 }
 
@@ -329,8 +427,8 @@ void moveto(BasicRenderer *basicrenderer, unsigned int x, unsigned int y)
 void get_cursor_pos(BasicRenderer *basicrenderer, unsigned int* x, unsigned int* y)
 {
 	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
-	*x = basicrenderer->cursor_position.x / FONT_WIDTH;
-	*y = basicrenderer->cursor_position.y / basicrenderer->psf1_font->psf1_header->charsize;
+	*x = basicrenderer->cursor_position.x / basicrenderer->face.width;
+	*y = basicrenderer->cursor_position.y / basicrenderer->face.height;
 	spinlock_release_irqrestore(&kRendererLock, flags);
 }
 
@@ -353,21 +451,26 @@ void print_at(BasicRenderer *basicrenderer, unsigned int x, unsigned int y, cons
 	if (gui_owns_glass())
 		return;
 
-	const unsigned int charHeight = basicrenderer->psf1_font->psf1_header->charsize;
-	unsigned int px = x * FONT_WIDTH;
-	unsigned int py = y * charHeight;
-
 	// Same lock as print_n: we don't touch the cursor, but we DO share the
 	// framebuffer — drawing into a scroll-in-progress would tear.
 	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+
+	// The cell is read INSIDE the lock, with the glyphs that will be drawn
+	// with it: laying the string out against one face while put_char draws
+	// it with another puts the text somewhere nobody asked for.
+	const unsigned int charWidth = basicrenderer->face.width;
+	const unsigned int charHeight = basicrenderer->face.height;
+	unsigned int px = x * charWidth;
+	unsigned int py = y * charHeight;
+
 	for (const char *chr = str; *chr; chr++)
 	{
-		if (px + FONT_WIDTH > basicrenderer->framebuffer->width)
+		if (px + charWidth > basicrenderer->framebuffer->width)
 			break;
 		if (py + charHeight > basicrenderer->framebuffer->height)
 			break;
 		put_char(basicrenderer, *chr, px, py);
-		px += FONT_WIDTH;
+		px += charWidth;
 	}
 	spinlock_release_irqrestore(&kRendererLock, flags);
 }
@@ -422,22 +525,26 @@ void print_n_direct(const char* str, size_t length) {
     // First act under the lock: the cursor gets out of the way (restoring the
     // pixels it covered), so no glyph, wrap, or scroll ever lands on it.
     cursor_hide_locked(basicrenderer);
+    // The cell is the face's. Read once, under the lock that guards the
+    // renderer, so one write lays every character out on the same cell.
+    const unsigned int cell_w = basicrenderer->face.width;
+    const unsigned int cell_h = basicrenderer->face.height;
     for (size_t i = 0; i < length; i++, chr++) {
         switch (*chr) {
             case '\n':
                 basicrenderer->cursor_position.x = 0;
-                basicrenderer->cursor_position.y += FONT_HEIGHT;
+                basicrenderer->cursor_position.y += cell_h;
                 break;
             case '\t':
-                basicrenderer->cursor_position.x += FONT_WIDTH;
+                basicrenderer->cursor_position.x += cell_w;
                 break;
             case '\b':
                 // Move back one cell, clamped at the line start (a terminal
                 // never backspaces up a line). This only MOVES the cursor —
                 // erasure is the caller's job by overprinting, which is why
                 // the classic rub-out is "\b \b": back, blank, back.
-                if (basicrenderer->cursor_position.x >= FONT_WIDTH)
-                    basicrenderer->cursor_position.x -= FONT_WIDTH;
+                if (basicrenderer->cursor_position.x >= cell_w)
+                    basicrenderer->cursor_position.x -= cell_w;
                 break;
             case '\r':
                 // Carriage return does what the carriage did: column zero,
@@ -458,20 +565,20 @@ void print_n_direct(const char* str, size_t length) {
                 break;
             default:
                 put_char(basicrenderer, *chr, basicrenderer->cursor_position.x, basicrenderer->cursor_position.y);
-                basicrenderer->cursor_position.x += FONT_WIDTH;
+                basicrenderer->cursor_position.x += cell_w;
                 break;
         }
 
         // Handle line wrapping
-        if (basicrenderer->cursor_position.x + FONT_WIDTH > basicrenderer->framebuffer->width) {
+        if (basicrenderer->cursor_position.x + cell_w > basicrenderer->framebuffer->width) {
             basicrenderer->cursor_position.x = 0;
-            basicrenderer->cursor_position.y += FONT_HEIGHT;
+            basicrenderer->cursor_position.y += cell_h;
         }
 
         // Handle scrolling
-        if (basicrenderer->cursor_position.y + FONT_HEIGHT > basicrenderer->framebuffer->height) {
+        if (basicrenderer->cursor_position.y + cell_h > basicrenderer->framebuffer->height) {
             scroll_framebuffer_full(basicrenderer);
-            basicrenderer->cursor_position.y = basicrenderer->framebuffer->height - FONT_HEIGHT;
+            basicrenderer->cursor_position.y = basicrenderer->framebuffer->height - cell_h;
         }
     }
     spinlock_release_irqrestore(&kRendererLock, flags);
@@ -505,12 +612,20 @@ void print(const char* str) {
 static const uint8_t *glyph_for(BasicRenderer *basicrenderer, unsigned char chr,
                                 uint8_t charset)
 {
-    const struct PSF1_HEADER *head = basicrenderer->psf1_font->psf1_header;
-    uint32_t nglyphs = (head->mode & 0x01) ? 512 : 256;
+    const console_face_t *face = &basicrenderer->face;
 
-    return os64_charset_glyph(chr, charset,
-                              (const uint8_t *)basicrenderer->psf1_font->glyph_buffer,
-                              nglyphs, head->charsize);
+    // A face that arrived at runtime answered this when it was installed.
+    if (face->resolved != NULL)
+        return face->resolved[(charset == OS64_CHARSET_CP437 ? 256u : 0u) + chr];
+
+    // os64/charset.h recognises its 8x16 cell by a glyph's BYTE COUNT, and a
+    // 16x8 cell is sixteen bytes too — so a face that is not 8 wide never
+    // reaches it, and draws the byte as its own glyph index.
+    if (face->width != 8)
+        return face->glyphs + (size_t)(chr < face->nglyphs ? chr : 0) * face->glyph_bytes;
+
+    return os64_charset_glyph(chr, charset, face->glyphs, face->nglyphs,
+                              face->glyph_bytes);
 }
 
 static void put_char_colors(BasicRenderer *basicrenderer, unsigned char chr,
@@ -518,11 +633,14 @@ static void put_char_colors(BasicRenderer *basicrenderer, unsigned char chr,
                             uint32_t fg, uint32_t bg)
 {
     unsigned int *pixPtr = (unsigned int *)basicrenderer->framebuffer->base_address;
-    const char *fontPtr = (const char *)glyph_for(basicrenderer, chr, charset);
+    const uint8_t *fontPtr = glyph_for(basicrenderer, chr, charset);
+    const unsigned long cell_w = basicrenderer->face.width;
+    const unsigned long cell_h = basicrenderer->face.height;
+    const unsigned long row_bytes = basicrenderer->face.row_bytes;
 
-    for (unsigned long y = yOff; y < yOff + 16; y++)
+    for (unsigned long y = yOff; y < yOff + cell_h; y++)
     {
-        for (unsigned long x = xOff; x < xOff + 8; x++)
+        for (unsigned long x = xOff; x < xOff + cell_w; x++)
         {
             if (x >= basicrenderer->framebuffer->width || y >= basicrenderer->framebuffer->height)
                 continue;
@@ -533,7 +651,10 @@ static void put_char_colors(BasicRenderer *basicrenderer, unsigned char chr,
             // glass is throttle-dirty: then the pending full blit will
             // repaint every pixel anyway, so the VRAM store is skipped and
             // a burst's glyph rendering costs shadow writes only.
-            unsigned int px = ((*fontPtr & (0b10000000 >> (x - xOff))) > 0)
+            // A row is row_bytes bytes, leftmost pixel in the first byte's
+            // top bit: pixel n is bit (7 - n%8) of byte n/8.
+            unsigned long n = x - xOff;
+            unsigned int px = (fontPtr[n >> 3] & (0x80u >> (n & 7)))
                                   ? fg
                                   : bg;
             size_t idx = x + (y * basicrenderer->framebuffer->pixels_per_scan_line);
@@ -542,7 +663,7 @@ static void put_char_colors(BasicRenderer *basicrenderer, unsigned char chr,
             if (basicrenderer->shadow != NULL)
                 basicrenderer->shadow[idx] = px;
         }
-        fontPtr++;
+        fontPtr += row_bytes;
     }
 }
 
@@ -563,12 +684,12 @@ void put_char(BasicRenderer *basicrenderer, unsigned char chr, unsigned int xOff
 
 uint32_t renderer_cols(void)
 {
-	return kRenderer.framebuffer->width / FONT_WIDTH;
+	return kRenderer.framebuffer->width / kRenderer.face.width;
 }
 
 uint32_t renderer_rows(void)
 {
-	return kRenderer.framebuffer->height / FONT_HEIGHT;
+	return kRenderer.framebuffer->height / kRenderer.face.height;
 }
 
 uint64_t renderer_glass_begin(void)
@@ -584,8 +705,8 @@ void renderer_glass_end(uint64_t flags, uint32_t row, uint32_t col, bool show_cu
 {
 	// Park the pixel cursor at the tty's cell so the underscore cursor (and
 	// any get_cursor_pos snapshot) agrees with the grid about where we are.
-	kRenderer.cursor_position.x = col * FONT_WIDTH;
-	kRenderer.cursor_position.y = row * FONT_HEIGHT;
+	kRenderer.cursor_position.x = col * kRenderer.face.width;
+	kRenderer.cursor_position.y = row * kRenderer.face.height;
 	if (show_cursor)
 		cursor_show_locked(&kRenderer);
 	spinlock_release_irqrestore(&kRendererLock, flags);
@@ -597,7 +718,7 @@ void renderer_glass_putc_locked(char ch, uint32_t row, uint32_t col, uint32_t co
 	// nothing else writes kRenderer.color at runtime (checked 2026-08-08),
 	// so there is nothing to save and restore.
 	kRenderer.color = color;
-	put_char(&kRenderer, ch, col * FONT_WIDTH, row * FONT_HEIGHT);
+	put_char(&kRenderer, ch, col * kRenderer.face.width, row * kRenderer.face.height);
 }
 
 void renderer_glass_putc_bg_locked(char ch, uint8_t charset,
@@ -607,7 +728,7 @@ void renderer_glass_putc_bg_locked(char ch, uint8_t charset,
 	// Same contract as the putc above, with the background named. Does NOT
 	// touch kRenderer.color: an overlay is a temporary lie about one cell,
 	// and the tty's idea of the current write color must survive it intact.
-	put_char_colors(&kRenderer, ch, charset, col * FONT_WIDTH, row * FONT_HEIGHT, fg, bg);
+	put_char_colors(&kRenderer, ch, charset, col * kRenderer.face.width, row * kRenderer.face.height, fg, bg);
 }
 
 void renderer_glass_scroll_locked(void)
@@ -627,8 +748,8 @@ void renderer_glass_background_locked(uint32_t color)
 {
 	kFrameBufferBackgroundColor = color;
 	struct Framebuffer *fb = kRenderer.framebuffer;
-	uint32_t cell_width = renderer_cols() * FONT_WIDTH;
-	uint32_t cell_height = renderer_rows() * FONT_HEIGHT;
+	uint32_t cell_width = renderer_cols() * kRenderer.face.width;
+	uint32_t cell_height = renderer_rows() * kRenderer.face.height;
 	uint32_t *pixels = (uint32_t *)fb->base_address;
 	for (uint32_t y = 0; y < fb->height; y++)
 	{

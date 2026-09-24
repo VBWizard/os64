@@ -1,0 +1,3 @@
+77267d1ac66171c5a11bb6524730771b3d2ad135484c4dd66308b0c791f3f96d  userland/bin/appearance
+b4226d1928e8f8ebf5b4c612e9878aff5933eb79636af60d9299a5623bdca2c5  userland/bin/libos64.so
+a772adaea8da3aa04975ee8f58d929794038af7837a7fffa9e7a25b5994bb6f2  userland/bin/libfreetype.so

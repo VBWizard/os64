@@ -1,0 +1,6 @@
+fsck.fat 4.2 (2021-01-31)
+Free cluster summary wrong (94518 vs. really 94514)
+  Auto-correcting.
+
+Leaving filesystem unchanged.
+/tmp/quinn-f5-fat-control/fat.img: 197 files, 34508/129022 clusters

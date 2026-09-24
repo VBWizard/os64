@@ -387,8 +387,11 @@ make -C kernel test-elf
 DOORBELL.md is the design record.** A NIC's interrupt handler RINGS a
 doorbell (lock-free, a store and a self-IPI — it may never take the queue
 lock, the 9badced rule) and `knet`, a kernel daemon pinned to the BSP, wakes
-to DRAIN every registered NIC through the seam's `drain` verb, run the
-TCP/DHCP timers, and park. The tick rings the same bell once per tick, which
+to DRAIN every registered NIC through the seam's `drain` verb (and
+loopback's queue beside them — `lo` is no card, so it is not in the table;
+`kernel/src/driver/net/loopback.c`), run the TCP/DHCP timers, and park.
+knet exists whenever networking does, card or no card; NONET is the only
+boot without it. The tick rings the same bell once per tick, which
 is what keeps a NIC with no interrupt (virtio) at its old cadence.
 `/sys/net/knet` carries the counters (wakes, drain rounds, the longest wake)
 — read it FIRST when a transfer is slower than the wire; it caught a 5,800
@@ -505,6 +508,46 @@ first time a program with better taste in terminals runs.
   cannot be drawn without them; the rest of a missing entry draws BLANK,
   which reads as missing rather than as corruption — approximating a
   box-drawing character is a lie about what the program asked for.
+
+### The console's face (`/sys/console/font`) — CONSOLE_FONTS.md is the design
+
+**The virtual terminals can be given another font while the machine runs**:
+`vtfont terminus-24.psf`, `vtfont DejaVuSansMono 100x40` (the largest size
+that gives that grid), `vtfont boot` to go back — or `cp face.psf
+/sys/console/font` by hand, which is all `vtfont` does underneath, plus
+reading the verdict back. **`console.conf` on the ladder (`face =`, `size =`)
+is applied at boot by `vtfont --startup`, which the kernel launches only when
+the file resolves — the FILE is the switch, no token, because tokens don't
+reach the P5.** The kernel takes a **PSF2 bitmap** and nothing smarter — it is
+built `-mno-sse`, so rendering an outline face is ring 3's job, and what
+arrives is the same bytes either way.
+
+- **The cell is the face's, not a constant.** `kRenderer.face`
+  (`console_face_t`) carries width, height and the glyphs; nothing in the
+  kernel may assume 8x16. `renderer_cols()/rows()` follow it.
+- **Judged at close, installed by kworker** (`kernel/src/console_font.c`).
+  A sysfs close runs with interrupts off, and inside burials; the close
+  only VALIDATES (`psf2.c`, pure, host-tested) and queues. kworker reshapes
+  the eight grids, installs the face, repaints, and raises SIGWINCH.
+  **`cat /sys/console/font` FIRST when a font did not take** — its `last:`
+  line is the verdict, with the reason and the number that broke the rule.
+- **The text survives** (`tty_refont` → `tty_reflow.c`, pure, host-tested):
+  long lines wrap onto rows marked `TTY_ATTR_WRAPPED` (bit 7 of a cell's
+  attribute byte, the terminal's own bookkeeping) and re-join when the grid
+  widens. `tty_resize` is the opposite policy and stays the pty's.
+- **A panic draws with the BOOT face**, whatever is loaded:
+  `renderer_bust_lock` reinstalls it. Test it with a font loaded, the
+  screen FULL, and QEMU's `nmi` — a panic on a screen with room left proves
+  much less than it looks like it does.
+- Both character sets go through the face's Unicode table
+  (`psf2_build_charmap`): zap happens to keep Latin-1 in index order, and
+  nothing says the next face will.
+- **An outline face gets there through libos64**: `os64_font_render_psf2`
+  (`os64/font_psf2.h`) turns TTF/OTF bytes and a pixel size into a PSF2
+  image — `/tests/psf2probe /etc/fonts/DejaVuSansMono.ttf 24`. It is
+  written against the font BACKEND table so `tools/test_font_psf2_host.py`
+  can feed its output to the kernel's own `psf2.c`; run that after touching
+  either half, because neither suite alone can tell whether they agree.
 
 ### SMP (Symmetric Multiprocessing)
 
@@ -752,6 +795,13 @@ the library serves every process). How it fits together:
     environment is for. **Adding a token here does not ship it to the P5** —
     the boot menu does not travel over the wire (DEBTS § Explicitly NOT
     debts), so say so out loud when you add one
+  - `VNCD`: launch `/bin/vncd`, the remote desktop (REMOTE.md). It listens
+    on 127.0.0.1 ONLY (port 5900 unless `vncd.conf` says otherwise) and is
+    reached through `SSHD`'s forwarding
+    (`ssh -N -L 5900:localhost:5900`), so a boot that wants remote access
+    carries both, and a GUI flag for there to be a desktop to serve. It is
+    not in any shipped entry, and like every token it does NOT travel to
+    the P5: that boot entry is edited there
   - `nolog` / `alllog`: Control logging (both lowercase — legacy)
   - `LOGD=<path>`: launch `/bin/logd` to append the kernel log to a file, and
     hold the kernel drainer off serial until it attaches

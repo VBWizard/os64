@@ -16,6 +16,7 @@
 #include "gui/window.h"
 #include "gui/gui_client.h"
 #include "gui/gui_internal.h"
+#include "gui/glass.h"         // glass_damage_locked — every frame feeds /dev/glass
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
 #include "vt_select.h"       // the other side of the input fork: console mouse selection
@@ -147,8 +148,17 @@ static inline bool damage_merge_is_cheap(rect_t a, rect_t b)
 	return rect_area(rect_union(a, b)) <= rect_area(a) + rect_area(b) + DAMAGE_MERGE_SLACK;
 }
 
-// The canonical screen image (scene + cursor). Compositor-thread-only.
+// The canonical screen image (scene + cursor). Written by the compositor
+// thread only; /dev/glass readers on other threads copy its pixels, which is
+// why it is published through s_backbuffer_ready rather than by its pointer
+// (surface_init stores the pointer before the size a reader needs with it).
 static surface_t kBackbuffer;
+static bool s_backbuffer_ready;
+
+const surface_t *gui_backbuffer(void)
+{
+	return __atomic_load_n(&s_backbuffer_ready, __ATOMIC_ACQUIRE) ? &kBackbuffer : NULL;
+}
 
 // tty_focus calls this instead of a grid repaint when focus lands on the
 // seated VT8. It runs in the SWITCHER's context — usually the keyboard IRQ —
@@ -749,6 +759,9 @@ static void alttab_end_locked(bool commit)
 // The readout reports CONTENT size, not frame size: the client area is what
 // an app actually gets, and for a terminal it is the number that matters.
 static window_t *s_band_window = NULL;   // the window being rubber-banded
+// Buttons consumed by the WM resize. Outlives the outline when it is cancelled
+// or its window dies; no window pointer is needed to drain the remaining edges.
+static uint8_t s_resize_buttons;
 static rect_t    s_band_rect;            // the outline, screen coords, as drawn
 static rect_t    s_band_origin;          // its frame when the gesture began
 static int32_t   s_band_anchor_x, s_band_anchor_y;   // where the press landed
@@ -890,6 +903,47 @@ static void band_track_locked(int32_t x, int32_t y)
 // system since has one, because every window system without one grew this
 // same bug.
 static window_t *s_pointer_window = NULL;
+static window_t *s_hover_window = NULL;
+static int32_t s_hover_x, s_hover_y;
+static int32_t s_hover_w, s_hover_h;
+
+// Reconcile against the final scene each frame, including geometry changes
+// with no mouse motion. Grabs suppress hover in other windows; WM gestures
+// and text VTs have no client hover target. kGuiLock protects this and teardown.
+static void pointer_state_locked(void)
+{
+	window_t *under = NULL;
+	int32_t x = 0, y = 0;
+	int32_t width = 0, height = 0;
+	if (gui_owns_glass() && !s_drag_window && !s_resize_buttons) {
+		under = wm_topmost_at(s_cursor_x, s_cursor_y);
+		if (under && s_pointer_window && under != s_pointer_window) under = NULL;
+		if (under) {
+			rect_t content = wm_content_rect_on_screen(under);
+			if (!rect_contains_point(content, s_cursor_x, s_cursor_y)) under = NULL;
+			else {
+				x = s_cursor_x - content.x; y = s_cursor_y - content.y;
+				width = content.w; height = content.h;
+			}
+		}
+	}
+	if (under != s_hover_window && s_hover_window) {
+		input_event_t leave = { .type = INPUT_EVENT_POINTER_STATE,
+		    .pointer = { .inside = 0 }, .tick = kTicksSinceStart };
+		wm_deliver_event(s_hover_window, &leave);
+	}
+	if (under && (under != s_hover_window || x != s_hover_x || y != s_hover_y ||
+	              width != s_hover_w || height != s_hover_h)) {
+		input_event_t enter = { .type = INPUT_EVENT_POINTER_STATE,
+		    .pointer = { .x = x, .y = y, .inside = 1 }, .tick = kTicksSinceStart };
+		wm_deliver_event(under, &enter);
+	}
+	s_hover_window = under;
+	s_hover_x = x;
+	s_hover_y = y;
+	s_hover_w = width;
+	s_hover_h = height;
+}
 
 void gui_grab_release(const struct window *w)
 {
@@ -900,9 +954,17 @@ void gui_grab_release(const struct window *w)
 		s_drag_window = NULL;
 	if (s_pointer_window == (const window_t *)w)
 		s_pointer_window = NULL;   // a window that dies mid-drag lets go
+	if (s_hover_window == (const window_t *)w)
+		s_hover_window = NULL;
+	gui_cancel_resize(w);
+}
+
+void gui_cancel_resize(const struct window *w)
+{
 	if (s_band_window == (const window_t *)w) {
-		band_damage_locked(s_band_rect);   // erase the orphaned outline
+		band_damage_locked(s_band_rect);
 		s_band_window = NULL;
+		// Keep s_resize_buttons: its matching releases still belong to us.
 	}
 }
 
@@ -949,6 +1011,35 @@ static void chord_report(const window_t *w, uint32_t bit, bool before,
 
 static void route_event_locked(const input_event_t *ev)
 {
+	// Track the physical pointer on text VTs too, so returning to the GUI
+	// can reconcile hover without waiting for another movement.
+	if (ev->type == INPUT_EVENT_MOUSE_MOVE) {
+		rect_t moved = cursor_rect();
+		s_cursor_x = ev->mouse.x;
+		s_cursor_y = ev->mouse.y;
+		gui_damage_add_locked(rect_union(moved, cursor_rect()));
+	}
+	if (s_resize_buttons && (ev->type == INPUT_EVENT_MOUSE_MOVE ||
+	                        ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN ||
+	                        ev->type == INPUT_EVENT_MOUSE_BUTTON_UP)) {
+		// Drain individual edges, not mouse.buttons: one physical report can
+		// enqueue several releases with the same final (empty) button mask.
+		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN)
+			s_resize_buttons |= (uint8_t)(1u << ev->mouse.button);
+		else if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP)
+			s_resize_buttons &= (uint8_t)~(1u << ev->mouse.button);
+		// Cancellation removes the outline, not ownership of its press. Do
+		// this before the VT fork so a release on a text VT is consumed too.
+		if (!s_band_window || !gui_owns_glass()) {
+			if (s_band_window) gui_cancel_resize(s_band_window);
+			return;
+		}
+		// Additional button presses were consumed during this resize; their
+		// releases must not fall through to a client while the band is live.
+		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP &&
+		    ev->mouse.button != INPUT_MOUSE_BUTTON_RIGHT)
+			return;
+	}
 	// THE INPUT FORK (2026-08-21). Mouse events belong to whoever holds the
 	// glass: the window system when VT8 is up, the focused TEXT TERMINAL
 	// otherwise — where they become gpm's old gesture, select-to-copy and
@@ -969,14 +1060,6 @@ static void route_event_locked(const input_event_t *ev)
 
 	switch (ev->type) {
 	case INPUT_EVENT_MOUSE_MOVE: {
-		// Damage where the cursor WAS and where it lands; the recomposite
-		// repaints the scene under the old position.
-		rect_t moved = cursor_rect();
-		s_cursor_x = ev->mouse.x;
-		s_cursor_y = ev->mouse.y;
-		moved = rect_union(moved, cursor_rect());
-		gui_damage_add_locked(moved);
-
 		// A gesture in progress OWNS the pointer: no hit-testing, no delivery
 		// to whatever the cursor happens to sweep across. Losing this is how
 		// a drag ends up half-delivered to three different windows.
@@ -997,6 +1080,11 @@ static void route_event_locked(const input_event_t *ev)
 	case INPUT_EVENT_MOUSE_BUTTON_DOWN: {
 		if (s_band_window || s_drag_window)
 			break;   // a second button during a gesture is not a new gesture
+		if (s_pointer_window) {
+			// Additional buttons belong to the existing client gesture.
+			deliver_mouse_to_window(s_pointer_window, *ev, false);
+			break;
+		}
 
 		window_t *w = wm_topmost_at(ev->mouse.x, ev->mouse.y);
 		if (!w)
@@ -1031,6 +1119,7 @@ static void route_event_locked(const input_event_t *ev)
 				s_drag_dy = ev->mouse.y - w->frame.y;
 			} else if (ev->mouse.button == INPUT_MOUSE_BUTTON_RIGHT) {
 				s_band_window = w;
+				s_resize_buttons = ev->mouse.buttons;
 				s_band_origin = w->frame;
 				s_band_rect   = w->frame;
 				s_band_anchor_x = ev->mouse.x;
@@ -1310,6 +1399,7 @@ bool guicomp_thread(bool daemon)
 		printd(DEBUG_GUI, "guicomp: FATAL: surface allocation failed, compositor exiting\n");
 		return false;
 	}
+	__atomic_store_n(&s_backbuffer_ready, true, __ATOMIC_RELEASE);
 	printd(DEBUG_GUI, "guicomp: backbuffer %ux%u ready (%lu KB x2)\n",
 		kBackbuffer.width, kBackbuffer.height,
 		(uint64_t)kBackbuffer.width * kBackbuffer.height * 4 / 1024);
@@ -1397,6 +1487,7 @@ bool guicomp_thread(bool daemon)
 		// own create or destroy arrives as damage anyway, and the walk costs
 		// less than one damage rect's composite.
 		wm_cover_sweep_locked();
+		pointer_state_locked();
 
 		// Take the whole damage list in one hold and reset it, so clients
 		// publishing during this frame's flush accumulate into the NEXT
@@ -1406,8 +1497,17 @@ bool guicomp_thread(bool daemon)
 		for (uint32_t i = 0; i < damage_count; i++)
 			damage[i] = composite_locked(kPendingDamage[i]);
 		kPendingDamageCount = 0;
+		// Every /dev/glass viewer learns what this frame changed. Here,
+		// after the pixels are down and before the lock goes, is what makes
+		// a viewer's copy eventually exact (gui/glass.h): any composite that
+		// overlaps a copy records its damage after the copy's take.
+		glass_damage_locked(damage, damage_count);
 
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
+
+		// A /dev/glass keyboard's held key repeats here, outside kGuiLock as
+		// delivery must be (gui/glass.h, INPUT and glass_input_tick).
+		glass_input_tick();
 
 		// A close escalation decided under the lock is carried out here,
 		// outside it: signalling a task takes scheduler locks, and kGuiLock

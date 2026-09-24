@@ -53,6 +53,7 @@
 #include "driver/net/e1000.h"
 #include "driver/net/r8125.h"
 #include "driver/net/ethernet.h"   // init_net_stack — the protocol stack over the seam
+#include "driver/net/loopback.h"   // init_loopback — lo, which every networked boot has
 #include "knet.h"                  // the network drainer, minted beside kworker
 #include "random.h"                // the entropy pool, seeded before anything dials
 #include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
@@ -78,6 +79,7 @@ extern bool kRunHusk;    // launch the shell from the boot flow
 extern bool kRunTestrun; // launch /tests/testrun, the ring-3 half of the suite
 extern bool kRunCron;    // launch /bin/cron, the scheduler; the crontab says what it runs
 extern bool kRunSshd;
+extern bool kRunVncd;
 extern bool kRunTelnetd; // launch /bin/telnetd, the inbound shell (SERVERS.md)
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
@@ -370,6 +372,10 @@ void kernel_init()
 	if (kEnableNet)
 	{
 		init_net_stack();
+		// Loopback exists whenever networking does, card or no card: it is
+		// how two programs on this machine talk, and it is what a service
+		// announced for this machine alone listens on (REMOTE.md § 1).
+		init_loopback();
 		init_virtio_net();
 		// The e1000 AFTER virtio, deliberately: registration order is
 		// device order, and kNetDevices[0] is the NIC the stack dials
@@ -547,14 +553,14 @@ void kernel_init()
 	    scheduler_submit_new_task(kKWorkerTask);
 	}
 
-	// THE NETWORK DRAINER (DOORBELL.md). A daemon like kworker, minted only
-	// when a NIC registered — a netless boot has nothing to drain and gets no
-	// thread. PINNED TO THE BSP for v1 (Chris, 2026-09-05: "keep the
+	// THE NETWORK DRAINER (DOORBELL.md). A daemon like kworker, minted
+	// whenever networking is enabled — even with no NIC, because loopback's
+	// frames and TCP's timers are its work too (a NONET boot gets none). PINNED TO THE BSP for v1 (Chris, 2026-09-05: "keep the
 	// complexity down"): the NIC interrupts are routed there, so a ring is a
 	// self-IPI and the tick that preempts a busy drainer is the one the BSP
 	// already has. The bell it parks on is rung by every NIC interrupt
 	// handler and by processSignals once per tick.
-	if (kEnableNet && kNetDeviceCount > 0)
+	if (kEnableNet)
 	{
 		kKnetTask = task_create("/knet", 0, NULL, kKernelTask, true, BOOTSTRAP_PROCESSOR_ID);
 		kKnetTask->autoReap = true;
@@ -657,6 +663,39 @@ void kernel_init()
 			// own deadline is the only thing that will notice. Better to name
 			// it here than to leave a silent 30 seconds.
 			printf("  /bin/logd launch failed (not on the image?) — serial logging resumes shortly\n");
+		}
+	}
+
+	// THE CONSOLE'S CONFIGURED FACE (CONSOLE_FONTS.md § Persistence), as
+	// early as it can go: the root and /home are mounted, the ladder is
+	// settled, kworker exists to do the swap, and the terminals are up — so
+	// from here on the boot prints in the face the person chose, which at
+	// 1920x1080 is the difference between reading the post-boot lines and
+	// watching them scroll past at 8x16. Later, beside cron, it would buy
+	// nothing a crontab @reboot line does not; here it buys the boot.
+	//
+	// The FILE is the switch, not a boot token: a token does not travel to a
+	// machine that boots from its own disk, and every machine this is for
+	// does. The kernel asks the ladder only whether console.conf exists —
+	// reading it is /bin/vtfont's, because applying it may mean rendering
+	// an outline face, and FreeType lives in ring 3. Absent file, absent
+	// launch, and the boot face stays. Not waited for: the reflow carries
+	// whatever the tests print meanwhile across the change.
+	if (kRootFilesystem != NULL)
+	{
+		char consoleConf[256];
+		if (conf_find("console.conf", consoleConf, sizeof(consoleConf)))
+		{
+			printf("Launching /bin/vtfont --startup (%s) ...\n", consoleConf);
+			char *vtfontArgv[] = { "/bin/vtfont", "--startup" };
+			task_t *vtfontTask = task_create("/bin/vtfont", 2, vtfontArgv, kKernelTask, false, THREAD_NO_AFFINITY);
+			if (vtfontTask)
+			{
+				vtfontTask->autoReap = true;
+				scheduler_submit_new_task(vtfontTask);
+			}
+			else
+				printf("  /bin/vtfont launch failed (not on the image?)\n");
 		}
 	}
 
@@ -991,6 +1030,21 @@ void kernel_init()
         }
         else
             printf("  /bin/sshd launch failed (not on the image?)\n");
+    }
+
+    // The remote desktop's listener, the same way (REMOTE.md). It serves
+    // viewers only while a desktop runs, and says so to each one otherwise.
+    if (kRunVncd && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/vncd ...\n");
+        task_t *vncdTask = task_create("/bin/vncd", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (vncdTask)
+        {
+            vncdTask->autoReap = true;
+            scheduler_submit_new_task(vncdTask);
+        }
+        else
+            printf("  /bin/vncd launch failed (not on the image?)\n");
     }
 
     // THE LATE PHASE (2026-08-29). The slow post-boot tests, moved off the

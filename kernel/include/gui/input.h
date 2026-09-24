@@ -54,6 +54,8 @@ typedef enum input_event_type
     // flips. The flag is the state; these only say it changed.
     INPUT_EVENT_WINDOW_COVERED,
     INPUT_EVENT_WINDOW_UNCOVERED,
+    INPUT_EVENT_POINTER_STATE,
+    INPUT_EVENT_APPEARANCE,
 } input_event_type_t;
 
 _Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
@@ -61,6 +63,9 @@ _Static_assert(INPUT_EVENT_WINDOW_CLOSE     == OS64_GUI_EVENT_WINDOW_CLOSE,     
 _Static_assert(INPUT_EVENT_WINDOW_FOCUS     == OS64_GUI_EVENT_WINDOW_FOCUS,     "event ABI: focus");
 _Static_assert(INPUT_EVENT_WINDOW_COVERED   == OS64_GUI_EVENT_WINDOW_COVERED,   "event ABI: covered");
 _Static_assert(INPUT_EVENT_WINDOW_UNCOVERED == OS64_GUI_EVENT_WINDOW_UNCOVERED, "event ABI: uncovered");
+_Static_assert(INPUT_EVENT_POINTER_STATE == OS64_GUI_EVENT_POINTER_STATE, "event ABI: pointer state");
+
+_Static_assert(INPUT_EVENT_APPEARANCE == OS64_GUI_EVENT_APPEARANCE, "event ABI: appearance");
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
 // BUTTON_DOWN/UP events). These numbers are ABI — they ride out to ring 3 in
@@ -106,6 +111,14 @@ typedef struct input_event
             uint8_t gained;     // 1 = focus arrived here, 0 = it left
             uint8_t sibling;    // 1 = the other window is owned by the same task
         } focus;
+        struct {
+            int32_t x, y;
+            uint8_t inside;
+        } pointer;
+        struct {
+            // Split words preserve the event union's four-byte ABI alignment.
+            uint32_t generation_lo, generation_hi;
+        } appearance;
     };
     uint64_t tick;  // kTicksSinceStart at enqueue, for input latency debugging
 } input_event_t;
@@ -114,9 +127,25 @@ typedef struct input_event
 // the OS without the GUI has no input consumer, so queueing would be waste.
 void input_init(void);
 
+// One pointing device's buttons: each mouse driver and each /dev/glass view
+// owns one, and passes it with every packet. A button is down while ANY
+// source holds it (X's core pointer), so a DOWN edge is the first holder's
+// press and an UP edge the last holder's release: a local mouse moving with
+// no buttons cannot end a remote viewer's drag, nor the reverse. The owner
+// serializes calls for its own source; input.c's lock covers the rest.
+typedef struct input_pointer_source
+{
+	uint8_t buttons;   // what this source holds down, as last reported
+} input_pointer_source_t;
+
 // Producer side (IRQ context safe: irqsave spinlock, enqueue only).
 void input_inject_key(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed);
-void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons);
+void input_inject_mouse(input_pointer_source_t *src, int16_t dx, int16_t dy, uint8_t buttons);
+// The pointer at an ABSOLUTE position (clamped to the screen) — /dev/glass's,
+// whose viewer says where rather than how far. Same events as a mouse.
+void input_inject_pointer(input_pointer_source_t *src, int32_t x, int32_t y, uint8_t buttons);
+// Lift every button `src` holds, where the pointer is: a source going away.
+void input_release_pointer(input_pointer_source_t *src);
 
 // Consumer side (compositor only). Returns false when the queue is empty.
 bool input_pop(input_event_t *out);

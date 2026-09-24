@@ -3,14 +3,16 @@
 
 #include "spinlock.h"
 
-// GUI-internal shared state — for compositor.c / window.c / gui_client.c
-// ONLY. Nothing here is client API (that's gui_client.h).
+// GUI-internal shared state, including appearance publication and notification.
+// Client API lives in gui_client.h.
 //
 // kGuiLock serializes ALL mutable window-system state: the z-order list,
 // per-window event queues, the damage accumulator, and the handle table.
+// It also protects the appearance store and its publication broadcast.
 // Rules:
 //  * gui_client.c and the compositor ACQUIRE it; window.c (wm_*) functions
-//    assume the caller already holds it.
+//    assume the caller already holds it. appearance.c acquires it for the
+//    session store and broadcasts while holding it.
 //  * Compositing into the backbuffer happens UNDER the lock (sub-millisecond
 //    RAM work; keeps window lifetimes trivially safe), but the flush to the
 //    slow uncached framebuffer happens strictly AFTER release.

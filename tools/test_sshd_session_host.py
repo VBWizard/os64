@@ -53,11 +53,13 @@ int64_t os64_conf_find(const char *name,char *out,size_t cap) {
  if(!conf_found)return OS64_CONF_NO_FILE;
  strcpy(out,"/home/sshd.conf");return 0;
 }
+static const char *conf_forward;
 int64_t os64_conf_read(const char *path,os64_conf_fn fn,void *user) {
  assert(!strcmp(path,"/home/sshd.conf"));
  if(conf_rc<0)return conf_rc;
  if(conf_value && !fn("port",conf_value,user))return 1;
- return conf_value?1:0;
+ if(conf_forward && !fn("forward",conf_forward,user))return 1;
+ return conf_value||conf_forward?1:0;
 }
 static void log_line(const char *text) {last_log=text;}
 static ssh_engine engine;
@@ -73,23 +75,60 @@ static uint64_t clock_ms;
 static int64_t write_result;
 static uint8_t wire[4096];static size_t wire_len;
 static uint64_t now_ms(void) {return clock_ms;}
+static unsigned naps,yields,live_turns;
 static void os64_sleep(unsigned ms) {
- (void)ms;assert(++turn<200);clock_ms+=scenario==1?1000:1;
+ if(ms)naps++;else yields++;
+ assert(++turn<200);clock_ms+=scenario==1?1000:1;
 }
+/* Forwards, scripted: live for live_turns passes, moving bytes on each. */
+uint32_t ssh_forwards_live(const ssh_engine *s) {(void)s;return live_turns?1:0;}
+/* The real relay's collaborators, for forwardfair: a shared output budget
+ * per pass stands in for the engine's output queue. */
+static size_t fair_budget,fair_sent[SSH_FORWARDS];
+/* mixedfair: the output room both kinds of channel draw from, refilled once
+ * per pass, sized by the engine's rule (what fits, less framing: 65 for a
+ * stdout or forward packet, 69 for stderr). */
+static size_t room,room_refill;
+static int blocked_forward=-1; /* forwardblocked: one forward's own window is spent */
+int ssh_output_full(const ssh_engine *s) {(void)s;return scenario==3?room<=65:fair_budget==0;}
+size_t ssh_forward_send(ssh_engine *s,uint32_t f,const uint8_t *p,size_t n) {
+ (void)s;(void)p;if((int)f==blocked_forward)return 0;
+ if(scenario==3) {if(room<=65)return 0;if(n>room-65)n=room-65;room-=n+65;fair_sent[f]+=n;return n;}
+ if(n>fair_budget) {n=fair_budget;}
+ fair_budget-=n;fair_sent[f]+=n;return n;
+}
+void ssh_forward_consumed(ssh_engine *s,uint32_t f,uint32_t n) {(void)s;(void)f;(void)n;}
+int ssh_forward_finish(ssh_engine *s,uint32_t f) {(void)s;(void)f;return 1;}
+static unsigned releases;
+void ssh_forward_release(ssh_engine *s,uint32_t f) {(void)s;(void)f;releases++;}
+static int64_t os64_close(int32_t h) {(void)h;return 0;}
+static void os64_free(void *p) {(void)p;}
+static int real_forwards_pass(void);
+static int forwards_pass(void) {if(scenario==3)return real_forwards_pass();if(!live_turns)return 0;live_turns--;return 1;}
 size_t ssh_output(ssh_engine *s,const uint8_t **p) {*p=s->output+s->out_head;return s->out_len;}
 void ssh_output_consume(ssh_engine *s,size_t n) {assert(n<=s->out_len);s->out_head+=n;s->out_len-=n;}
+/* A forward's local end for closedrain: takes local_accept bytes a write,
+ * or fails when it is negative. */
+static int64_t local_accept;static unsigned delivered,local_reads;
 static int64_t os64_write_for(int fd,const void *p,size_t n,unsigned ms) {
+ if(fd>=10) {
+  assert(!ms);if(local_accept<0)return -1;
+  size_t c=n<(size_t)local_accept?n:(size_t)local_accept;delivered+=(unsigned)c;
+  return c?(int64_t)c:OS64_ERR_TIMEOUT;
+ }
  assert(fd==1 && !ms);if(write_result<=0)return write_result;
  size_t count=n<(size_t)write_result?n:(size_t)write_result;
  assert(wire_len+count<=sizeof(wire));memcpy(wire+wire_len,p,count);wire_len+=count;return count;
 }
 static int64_t os64_read_for(int fd,void *p,size_t n,unsigned ms) {
+ if(fd>=10) {assert(!ms);local_reads++;memset(p,fd,n);return (int64_t)n;} /* a forward's local end: an endless sender */
  assert(fd==0 && n && !ms);reads++;
  if(scenario<2) {
   if(reads==1 || (scenario==0 && reads<=3)) {*(uint8_t *)p=(uint8_t)reads;return 1;}
   return OS64_ERR_TIMEOUT;
  }
  if(reads>credits)return 0;
+ if(scenario==3) {room=room_refill;return OS64_ERR_TIMEOUT;}
  if(reads%period==phase) engine.peer_window+=chunk;
  return OS64_ERR_TIMEOUT;
 }
@@ -116,6 +155,7 @@ void ssh_rekey(ssh_engine *s) {(void)s;assert(0 && "no new rekey during close");
 void ssh_input_consumed(ssh_engine *s,uint32_t n) {(void)s;(void)n;}
 size_t ssh_send_data(ssh_engine *s,const uint8_t *p,size_t n,int stream) {
  (void)p;if(s->kex || s->sent_close || s->closed)return 0;
+ if(scenario==3) {size_t f=stream?69:65;if(room<=f)return 0;if(n>room-f)n=room-f;room-=n+f;sends[stream]+=(unsigned)n;return n;}
  if(n>s->peer_window)n=s->peer_window;
  s->peer_window-=(uint32_t)n;sends[stream]+=(unsigned)n;return n;
 }
@@ -123,11 +163,16 @@ static int64_t os64_reap(int32_t *status) {(void)status;return 0;}
 void ssh_send_exit(ssh_engine *s,uint32_t status) {(void)s;(void)status;assert(0);}
 '''
 program += resize + '\n' + function('flush') + '\nstatic void loop(void) {\n' + body + '\n}\n'
-program += function('port_setting') + '\n' + function('configured_port') + '\n'
+settings_type = source[source.index('typedef struct { uint32_t port;'):source.index('sshd_settings;') + len('sshd_settings;')]
+link_type = source[source.index('typedef struct {\n    int32_t handle;'):source.index('forward_link;') + len('forward_link;')]
+relay = function('forwards_pass').replace('forwards_pass(', 'real_forwards_pass(')
+program += link_type + '\nstatic forward_link links[SSH_FORWARDS];\nstatic uint32_t next_forward;\n'
+program += function('link_close') + '\n' + relay + '\n'
+program += settings_type + '\n' + function('setting') + '\n' + function('configured') + '\n'
 program += r'''
 static void reset(void) {
  memset(&engine,0,sizeof(engine));memset(streams,0,sizeof(streams));
- engine.authenticated=engine.started=1;reads=turn=disconnected=0;
+ engine.authenticated=engine.started=1;reads=turn=disconnected=0;naps=yields=live_turns=0;
  clock_ms=1;wire_len=0;write_result=2;sends[0]=sends[1]=0;
  master=3;resize_calls=resize_completed=resize_success=0;resize_return=0;
 }
@@ -167,18 +212,94 @@ int main(int argc,char **argv) {
   assert(!resize_calls && resize_completed==1 && resize_success);
   engine.started=1;resize_terminal();assert(!resize_calls && resize_completed==2 && !resize_success);
  } else if(!strcmp(argv[1],"port")) {
-  /* Only genuine absence permits the default port. */
-  conf_found=0;conf_rc=OS64_CONF_NO_FILE;conf_value=0;last_log=0;
-  assert(configured_port()==22 && !last_log);
+  /* Only genuine absence permits the defaults. */
+  sshd_settings c;
+  conf_found=0;conf_rc=OS64_CONF_NO_FILE;conf_value=0;conf_forward=0;last_log=0;
+  assert(configured(&c) && c.port==22 && c.forward==SSH_FORWARD_LOOPBACK && !last_log);
   conf_found=1;conf_rc=OS64_CONF_NO_FILE;
-  assert(configured_port()==0 && last_log && strstr(last_log,"unreadable"));
+  assert(!configured(&c) && last_log && strstr(last_log,"unreadable"));
   conf_found=1;conf_rc=OS64_CONF_TRUNCATED;last_log=0;
-  assert(configured_port()==0 && last_log);
+  assert(!configured(&c) && last_log);
   conf_found=1;conf_rc=0;conf_value="2222";last_log=0;
-  assert(configured_port()==2222 && !last_log);
-  conf_value=0;assert(configured_port()==22);
-  conf_value="70000";assert(configured_port()==0);
-  conf_value="22x";assert(configured_port()==0);
+  assert(configured(&c) && c.port==2222 && !last_log);
+  conf_value=0;assert(configured(&c) && c.port==22);
+  conf_value="70000";assert(!configured(&c));
+  conf_value="22x";assert(!configured(&c));
+  conf_value="0";assert(!configured(&c));
+ } else if(!strcmp(argv[1],"forward")) {
+  /* The forwarding key: two words, anything else refuses the file. */
+  sshd_settings c;
+  conf_found=1;conf_rc=0;conf_value=0;conf_forward="none";last_log=0;
+  assert(configured(&c) && c.port==22 && c.forward==SSH_FORWARD_NONE && !last_log);
+  conf_forward="loopback";assert(configured(&c) && c.forward==SSH_FORWARD_LOOPBACK);
+  conf_value="2200";conf_forward="none";assert(configured(&c) && c.port==2200 && c.forward==SSH_FORWARD_NONE);
+  conf_value=0;conf_forward="yes";last_log=0;assert(!configured(&c) && last_log);
+  conf_forward="";assert(!configured(&c));
+ } else if(!strcmp(argv[1],"forwardfair")) {
+  /* Three forwards, each with more to send than the output can take: over
+   * many passes of a budget smaller than one staging buffer, no forward
+   * leads every time, so none gets more than one buffer ahead. */
+  reset();
+  for(uint32_t i=0;i<SSH_FORWARDS;i++) links[i].handle=-1;
+  static uint8_t to[3][SSH_FORWARD_WINDOW],from[3][SSH_DATA_MAX];
+  for(uint32_t i=0;i<3;i++) {links[i].handle=(int32_t)(10+i);links[i].to_local=to[i];links[i].from_local=from[i];}
+  for(unsigned pass=0;pass<300;pass++) {fair_budget=40000;assert(real_forwards_pass());}
+  for(uint32_t i=0;i<3;i++) for(uint32_t j=0;j<3;j++) assert(fair_sent[i]<=fair_sent[j]+SSH_DATA_MAX);
+  assert(fair_sent[0]+fair_sent[1]+fair_sent[2]==300u*40000u);
+ } else if(!strcmp(argv[1],"forwardblocked")) {
+  /* Three busy forwards, the first held back by its own spent window, and
+   * less room a pass than one staged read. The held-back one is not where
+   * the queue ran out, so it must not pin the rotation: the other two share
+   * the room, neither more than one staging buffer ahead. */
+  reset();blocked_forward=0;
+  for(uint32_t i=0;i<SSH_FORWARDS;i++) links[i].handle=-1;
+  static uint8_t bto[3][SSH_FORWARD_WINDOW],bfrom[3][SSH_DATA_MAX];
+  for(uint32_t i=0;i<3;i++) {links[i].handle=(int32_t)(10+i);links[i].to_local=bto[i];links[i].from_local=bfrom[i];}
+  for(unsigned pass=0;pass<300;pass++) {fair_budget=20000;real_forwards_pass();}
+  printf("forwardblocked: %zu %zu %zu\n",fair_sent[0],fair_sent[1],fair_sent[2]);fflush(stdout);
+  assert(!fair_sent[0] && fair_sent[1]+fair_sent[2]==300u*20000u);
+  assert(fair_sent[1]<=fair_sent[2]+SSH_DATA_MAX && fair_sent[2]<=fair_sent[1]+SSH_DATA_MAX);
+ } else if(!strcmp(argv[1],"closedrain")) {
+  /* The client's CLOSE crossed ours with bytes still queued for the local
+   * end: nothing more is read from it, the queue is delivered first, and
+   * only then is the slot released, once. A local end that fails ends the
+   * wait at once. */
+  reset();
+  for(uint32_t i=0;i<SSH_FORWARDS;i++) links[i].handle=-1;
+  static uint8_t to[SSH_FORWARD_WINDOW],from[SSH_DATA_MAX];
+  links[0]=(forward_link){.handle=10,.to_local=to,.from_local=from,.to_len=1000,.peer_closed=1};
+  local_accept=0;assert(!real_forwards_pass() && links[0].handle==10 && !releases && !local_reads);
+  local_accept=300;
+  assert(real_forwards_pass() && links[0].to_len==700 && links[0].handle==10 && !releases);
+  while(links[0].handle>=0) assert(real_forwards_pass());
+  assert(delivered==1000 && releases==1 && !local_reads);
+  links[0]=(forward_link){.handle=11,.to_local=to,.from_local=from,.to_len=1000,.peer_closed=1};
+  local_accept=-1;assert(real_forwards_pass() && links[0].handle<0 && releases==2 && !local_reads);
+ } else if(!strcmp(argv[1],"mixedfair")) {
+  /* A session and a forward that both always have more to send than a
+   * pass's room, so whoever goes first every time takes the room. Taking
+   * turns, neither gets more than twice the other, at a room that fits a
+   * whole 4 KiB staging buffer and at one that fits neither kind's whole
+   * staged packet. */
+  static uint8_t to[SSH_FORWARD_WINDOW],from[SSH_DATA_MAX];
+  size_t refills[]={5000,3000};
+  for(unsigned k=0;k<2;k++) {
+   scenario=3;credits=150;room_refill=refills[k];reset();fair_sent[0]=0;
+   streams[0].tail=streams[1].tail=UINT32_MAX/2; /* never runs dry */
+   for(uint32_t i=0;i<SSH_FORWARDS;i++) links[i].handle=-1;
+   links[0]=(forward_link){.handle=10,.to_local=to,.from_local=from};
+   loop();
+   size_t session=(size_t)sends[0]+sends[1],forward=fair_sent[0];
+   printf("mixedfair %zu: session %zu bytes, forward %zu bytes over %u passes\n",refills[k],session,forward,reads-1);fflush(stdout);
+   assert(session && forward && session<=2*forward && forward<=2*session);
+  }
+ } else if(!strcmp(argv[1],"linger")) {
+  /* A closed session with a live forward keeps the connection; the loop
+   * yields instead of napping while the forward moves bytes, then ends
+   * once the forward is gone and the output is drained. */
+  scenario=0;reset();live_turns=20;
+  loop();
+  assert(!live_turns && yields>=20 && wire_len==5 && !disconnected);
  } else assert(0);
  printf("sshd session %s PASS\n",argv[1]);
 }
@@ -192,5 +313,5 @@ with tempfile.TemporaryDirectory(prefix='sshd-session-') as directory:
                     '-I'+str(root / 'userland/libos64/include'),
                     str(work / 'test.c'),
                     '-o', str(work / 'test')], check=True)
-    results = [subprocess.run([str(work / 'test'), case]).returncode for case in ('flush','close','fair','resize','port')]
+    results = [subprocess.run([str(work / 'test'), case]).returncode for case in ('flush','close','fair','resize','port','forward','forwardfair','forwardblocked','closedrain','mixedfair','linger')]
     raise SystemExit(any(results))
