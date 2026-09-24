@@ -64,10 +64,44 @@ def main():
         require(command(args.fixture + ' -streams'), status=7, stdout=b'stdout-marker\n', stderr=b'stderr-marker\n')
         require(command(args.fixture + ' -stderr', data), stdout=b'', stderr=data)
         print(f'guest: {len(data)} binary stderr bytes PASS', flush=True)
-    long = command('x' * 256)
+    for size in (1000, 4095):
+        text = 'q' * (size - 5)
+        require(command('echo ' + text), stdout=(text + '\n').encode(), stderr=b'')
+    print('guest: 1000-byte and boundary-length exec commands PASS', flush=True)
+    long = command('x' * 4096)
     require(long, status=255, stdout=b'')
     assert b'exec request failed' in long.stderr, long
     print('guest: overlong command refused PASS', flush=True)
+
+    # Long words also pass through expansion and recursive command capture.
+    word = 'w' * 1000
+    require(command('echo $(echo $(echo ' + word + '))'),
+            stdout=(word + '\n').encode(), stderr=b'')
+    require(command('echo $(echo alpha; echo beta)'), stdout=b'alpha\nbeta\n', stderr=b'')
+    require(command("echo -e '" + word + "\\nZ'"),
+            stdout=(word + '\nZ\n').encode(), stderr=b'')
+    script_path = f'/tmp/sshd-long-lines-{os.getpid()}'
+    try:
+        script = ('VALUE=' + word + '\necho "$VALUE"\nfor item in ' + word +
+                  ' short\ndo\necho "$item"\ndone\n').encode()
+        require(command('cat > ' + script_path, script), stdout=b'', stderr=b'')
+        require(command('husk ' + script_path),
+                stdout=(word + '\n' + word + '\nshort\n').encode(), stderr=b'')
+        # Neither an overlong script line nor its following line may run.
+        bad_line = ('echo ' + 'q' * (4096 - 5) + '\necho SHOULD_NOT_RUN\n').encode()
+        require(command('cat > ' + script_path, bad_line), stdout=b'', stderr=b'')
+        rejected = command('husk ' + script_path)
+        require(rejected, status=2, stdout=b'')
+        assert b'refusing to run part of it' in rejected.stderr, rejected
+        # Expansion can hand husk -c a string larger than its source limit.
+        script = ('VALUE=' + 'x' * 1023 + '\nhusk -c "$VALUE$VALUE$VALUE$VALUE tail"\n').encode()
+        require(command('cat > ' + script_path, script), stdout=b'', stderr=b'')
+        rejected = command('husk ' + script_path)
+        require(rejected, status=2, stdout=b'')
+        assert b'-c line too long (limit 4095)' in rejected.stderr, rejected
+    finally:
+        require(command('rm ' + script_path), stdout=b'', stderr=b'')
+    print('guest: long words, nested capture, escapes, loops and overflow refusals PASS', flush=True)
 
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 88, 0, 0))
@@ -93,6 +127,14 @@ def main():
         # The requested terminal type must reach the seated shell as TERM.
         os.write(master, b'echo TERM=$TERM\r')
         until(b'\r\nTERM=xterm\r\n')
+        typed = b't' * 1000
+        start = len(transcript)
+        os.write(master, b'echo ' + typed + b'\r')
+        until(b'\r\n' + typed + b'\r\n', start=start)
+        start = len(transcript)
+        os.write(master, b'\x1b[A\r')
+        until(b'\r\n' + typed + b'\r\n', start=start)
+        print('guest: interactive 1000-byte input and history recall PASS', flush=True)
         os.write(master, b'cat /proc/self/tty\r')
         until(b'cols')
         time.sleep(.3)

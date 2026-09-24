@@ -84,7 +84,8 @@ int64_t os64_chdir(const char *path);
 // string pointers (argv[0] conventionally the program name); pass NULL for no
 // args. Returns the child's pid (> 0), or negative on error —
 // OS64_SPAWN_TOO_LONG when the arguments are more than a spawn carries (each
-// under OS64_SPAWN_ARG_MAX, 512 at most, a mebibyte in all). The child
+// at most OS64_SPAWN_ARG_MAX bytes including NUL, 512 arguments, and a
+// mebibyte in all including pointers). The child
 // inherits this process's environment.
 int64_t os64_spawn(const char *path, char *const argv[]);
 

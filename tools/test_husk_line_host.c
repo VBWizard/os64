@@ -225,7 +225,7 @@ size_t os64_strcopy(char *dst, size_t cap, const char *src)
 static struct {
     char buf[LINE_MAX];
     int n, pos;
-    char hist[HISTORY_DEPTH][LINE_MAX];
+    char hist[32][LINE_MAX];
     int hist_count, browse;
     char live[LINE_MAX];
 } R;
@@ -312,7 +312,7 @@ static void ref_submit(void)
     R.buf[R.n] = 0;
     if (R.n > 0 && (R.hist_count == 0 || !str_eq(R.hist[R.hist_count - 1], R.buf)))
     {
-        check(R.hist_count < HISTORY_DEPTH, "scenario outgrew the reference history");
+        check(R.hist_count < 32, "scenario outgrew the reference history");
         os64_strcopy(R.hist[R.hist_count++], LINE_MAX, R.buf);
     }
 }
@@ -482,7 +482,8 @@ static void fresh(int width, int height, const char *fmt, const char *shown)
     s_prompt_shown = shown;
     s_block.depth = 0;
     memset(&R, 0, sizeof(R));
-    s_hist_count = s_hist_next = 0;
+    s_hist_count = 0;
+    s_hist_next = s_hist_head = s_hist_used = 0;
 }
 
 static void type(const char *s)

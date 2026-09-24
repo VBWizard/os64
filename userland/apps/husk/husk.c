@@ -37,7 +37,10 @@
 #include "os64/os64.h"
 #include "os64/conf.h"   // os64_conf_find — husk.rc rides the system search path now
 
-#define LINE_MAX 256
+#include "limits.h"
+
+#define LINE_MAX HUSK_LINE_MAX
+_Static_assert(LINE_MAX <= OS64_SPAWN_ARG_MAX, "husk -c must fit one spawn argument");
 #define ARGS_MAX 512        // raised from 16 for globbing; matches the kernel SPAWN_MAX_ARGS ceiling
 #define MAX_STAGES 4          // a | b | c | d is plenty of rope for now
 #define TASK_NAME_MAX 64      // lifecycle log identity; basename, always bounded
@@ -97,7 +100,8 @@ static void err_num(unsigned long v)
 static void prompt_draw(void);
 
 // ── command history ─────────────────────────────────────────────────────────
-// A ring of the last HISTORY_DEPTH submitted lines, recalled with Up/Down.
+// A byte ring of submitted lines, recalled with Up/Down. Oldest records
+// are evicted when the next line needs their space.
 // The arrows arrive as VT100 escape sequences (ESC '[' A/B — the keyboard
 // driver speaks 1979's vocabulary since 2026-08-04, and this parser is its
 // first customer). A recalled line is edited exactly like a live one: the
@@ -111,33 +115,66 @@ static void prompt_draw(void);
 // half-typed line to a stray arrow is the beginner trap this dodges).
 // Duplicate suppression: a line identical to the previous entry is not
 // stored twice (spamming `free` all night = ONE entry, Chris = the consumer).
-#define HISTORY_DEPTH 32
-static char s_history[HISTORY_DEPTH][LINE_MAX];
-static int  s_hist_count = 0;    // entries stored (saturates at DEPTH)
-static int  s_hist_next  = 0;    // ring slot the NEXT submit writes
+#define HISTORY_BYTES (16 * 1024)
+static char s_history[HISTORY_BYTES];
+static size_t s_hist_head, s_hist_next, s_hist_used;
+static int s_hist_count;
+
+// Records include their NUL. Recalled text is copied because a record can
+// wrap across the end of the byte ring. Valid until the next history_get.
+static const char *history_get(int back)
+{
+	static char recalled[LINE_MAX];
+	if (back < 1 || back > s_hist_count)
+		return NULL;
+	size_t end = s_hist_next;
+	for (int i = 0; i < back; i++)
+	{
+		size_t start = (end + HISTORY_BYTES - 1) % HISTORY_BYTES;
+		while (start != s_hist_head)
+		{
+			size_t prev = (start + HISTORY_BYTES - 1) % HISTORY_BYTES;
+			if (s_history[prev] == '\0') break;
+			start = prev;
+		}
+		if (i + 1 == back)
+		{
+			size_t n = 0;
+			do {
+				recalled[n++] = s_history[start];
+				start = (start + 1) % HISTORY_BYTES;
+			} while (recalled[n - 1] != '\0');
+			return recalled;
+		}
+		end = start;
+	}
+	return NULL;
+}
 
 static void history_store(const char *line)
 {
-	if (line[0] == '\0')
-		return;                  // empty lines are not history
-	if (s_hist_count > 0)
+	size_t bytes = os64_strlen(line) + 1;
+	if (bytes == 1 || bytes > LINE_MAX)
+		return;
+	const char *last = history_get(1);
+	if (last && os64_streq(last, line)) return;
+	while (HISTORY_BYTES - s_hist_used < bytes)
 	{
-		int last = (s_hist_next + HISTORY_DEPTH - 1) % HISTORY_DEPTH;
-		if (os64_streq(s_history[last], line))
-			return;              // same as the previous entry — once is enough
+		char c;
+		do {
+			c = s_history[s_hist_head];
+			s_hist_head = (s_hist_head + 1) % HISTORY_BYTES;
+			s_hist_used--;
+		} while (c != '\0');
+		s_hist_count--;
 	}
-	os64_strcopy(s_history[s_hist_next], LINE_MAX, line);
-	s_hist_next = (s_hist_next + 1) % HISTORY_DEPTH;
-	if (s_hist_count < HISTORY_DEPTH)
-		s_hist_count++;
-}
-
-// Entry `back` steps into the past (1 = most recent). NULL when out of range.
-static const char *history_get(int back)
-{
-	if (back < 1 || back > s_hist_count)
-		return NULL;
-	return s_history[(s_hist_next + HISTORY_DEPTH - back) % HISTORY_DEPTH];
+	for (size_t i = 0; i < bytes; i++)
+	{
+		s_history[s_hist_next] = line[i];
+		s_hist_next = (s_hist_next + 1) % HISTORY_BYTES;
+	}
+	s_hist_used += bytes;
+	s_hist_count++;
 }
 
 // ── the line on the screen ──────────────────────────────────────────────────
@@ -1144,13 +1181,14 @@ static int glob_expand(const char *token, char *argv[], int argc, int maxargs)
 // one static set — the inner line would overwrite the outer's buffer in the
 // middle of filling it. One context per depth; s_expdepth names the one in
 // use, 0 for a line that arrived from the keyboard, the rc or a script.
-// STATIC rather than stack frames, because s_expbase/s_expmask describe the
-// buffer for as long as parse() reads it.
+// Each depth owns a reset-only arena. A nested substitution cannot reset
+// its caller's words, and the next line at that depth reuses its storage.
 #define SUBST_DEPTH_MAX 3
 typedef struct {
-	char    text[EXPANDED_MAX];      // the expanded line run_expanded parses
-	uint8_t mask[EXPANDED_MAX];      // 1 = this byte came from an expansion
-	char    capture[EXPANDED_MAX];   // what the line's commands wrote to stdout
+	os64_arena_t *arena;
+	char   *text;      // the expanded line run_expanded parses
+	uint8_t *mask;      // 1 = this byte came from an expansion
+	char   *capture;   // what the line's commands wrote to stdout
 	int     captureLen;
 	bool    captureOverflow;         // more arrived than fits: the substitution is refused
 	bool    substRan;                // a $(...) ran while THIS depth's line was expanding
@@ -1166,6 +1204,35 @@ static int s_explen = 0;                  // how much of it is live
 // Set by expand_line when it has already explained a refusal, so run_segment
 // does not add a second, wrong explanation on top.
 static bool s_expand_complained = false;
+
+// A context lasts through its line and through the caller consuming captured
+// output. Reuse begins when the next line at this depth starts.
+static bool expansion_begin(expansion_ctx_t *ctx)
+{
+	if (!ctx->arena)
+		ctx->arena = os64_arena_create(16 * 1024, 256 * 1024);
+	os64_arena_reset(ctx->arena);
+	ctx->text = os64_arena_alloc(ctx->arena, EXPANDED_MAX);
+	ctx->mask = os64_arena_alloc(ctx->arena, EXPANDED_MAX);
+	ctx->capture = os64_arena_alloc(ctx->arena, EXPANDED_MAX);
+	ctx->captureLen = 0;
+	ctx->captureOverflow = false;
+	ctx->substRan = false;
+	if (ctx->text && ctx->mask && ctx->capture) return true;
+	err_puts("husk: out of command scratch memory - not run\n");
+	return false;
+}
+
+static void *command_scratch(size_t bytes)
+{
+	void *p = os64_arena_alloc(s_expctx[s_expdepth].arena, bytes);
+	if (!p)
+	{
+		err_puts("husk: out of command scratch memory - not run\n");
+		s_expand_complained = true;
+	}
+	return p;
+}
 
 static int run_line(char *line, int *last_status);   // a substitution runs one
 
@@ -1580,8 +1647,9 @@ static bool run_substitution(const char *inner, int last_status,
 		s_expand_complained = true;
 		return false;
 	}
-	char line[LINE_MAX];
-	os64_strcopy(line, sizeof(line), inner);    // run_line tokenizes in place
+	char *line = command_scratch(os64_strlen(inner) + 1);
+	if (!line) return false;
+	os64_strcopy(line, os64_strlen(inner) + 1, inner);    // run_line tokenizes in place
 
 	s_expdepth++;
 	expansion_ctx_t *ctx = &s_expctx[s_expdepth];
@@ -1593,6 +1661,11 @@ static bool run_substitution(const char *inner, int last_status,
 	s_expctx[s_expdepth].substRan = true;
 	s_expctx[s_expdepth].substStatus = status;
 
+	if (!ctx->text || !ctx->mask || !ctx->capture)
+	{
+		s_expand_complained = true;
+		return false;
+	}
 	if (ctx->captureOverflow)
 	{
 		err_puts("husk: $( produced more than a line can hold - not run\n");
@@ -1649,13 +1722,14 @@ static bool expand_line(const char *src, char *dst, int cap, int last_status,
 			// its own expanding. Expanding it here first would hand a
 			// substituted value to a second parser as syntax.
 			int ilen = (int)(close - (src + 2));
-			char inner[LINE_MAX];
 			if (ilen >= LINE_MAX)
 			{
 				err_puts("husk: $( too long - not run\n");
 				s_expand_complained = true;
 				return false;
 			}
+			char *inner = command_scratch((size_t)ilen + 1);
+			if (!inner) return false;
 			for (int i = 0; i < ilen; i++)
 				inner[i] = src[2 + i];
 			inner[ilen] = '\0';
@@ -2414,7 +2488,8 @@ static int run_pipeline(char *stages[], int nstages, int background)
 			// Written BEFORE the hand-off closes below, while the handle is
 			// still ours.
 			int where = (err >= 0) ? err : OS64_STDERR;
-			hputs(where, "husk: cannot run ");
+			hputs(where, tid == OS64_SPAWN_TOO_LONG ?
+			      "husk: argument list too long: " : "husk: cannot run ");
 			hputs(where, cargv[0]);
 			hputs(where, "\n");
 		}
@@ -2713,7 +2788,8 @@ static int run_assignment(const char *stmt, const char *eq, int *last_status)
 		name[k++] = *q;
 	name[k] = '\0';
 
-	char value[EXPANDED_MAX];
+	char *value = command_scratch(EXPANDED_MAX);
+	if (!value) { *last_status = 1; return 0; }
 	int n = 0;
 	char quote = 0;
 	for (const char *v = eq + 1; *v != '\0'; v++)
@@ -2744,7 +2820,7 @@ static int run_assignment(const char *stmt, const char *eq, int *last_status)
 			*last_status = 2;
 			return 0;
 		}
-		if (n < (int)sizeof(value) - 1)
+		if (n < (int)EXPANDED_MAX - 1)
 			value[n++] = *v;
 	}
 	value[n] = '\0';
@@ -3043,6 +3119,11 @@ static int run_segment(char *seg, int *last_status)
 // dies with the shell — what could it print to?), else 0.
 static int run_line(char *line, int *last_status)
 {
+	if (!expansion_begin(&s_expctx[s_expdepth]))
+	{
+		*last_status = 1;
+		return 0;
+	}
 	char *cmds[MAX_CMDS];
 	int seps[MAX_CMDS];
 
@@ -3395,6 +3476,12 @@ static int exec_for(int i, int to, int *last_status, int *exiting)
 		// This depth's context is idle between statements, so the list can
 		// be expanded in it — and must then be copied out (see s_for_pool).
 		expansion_ctx_t *ctx = &s_expctx[s_expdepth];
+		if (!expansion_begin(ctx))
+		{
+			*last_status = 1;
+			s_block_abort = true;
+			return to;
+		}
 		s_expand_complained = false;
 		if (!expand_line(p, ctx->text, EXPANDED_MAX, *last_status, ctx->mask))
 		{
@@ -3891,7 +3978,7 @@ static int run_command_argument(const char *command)
 	// Copy before running. run_line tokenizes IN PLACE — it punches NULs into
 	// the separators — and the argv block is the kernel's, sized by whoever
 	// spawned us rather than by anything husk chose. Refuse an over-long line
-	// out loud instead of silently running the first 255 bytes of it, which
+	// out loud instead of silently running the prefix that fit, which
 	// is the failure mode that turns `> important` into a truncated file.
 	while (command[i] != '\0' && i < LINE_MAX - 1)
 	{
@@ -3901,7 +3988,8 @@ static int run_command_argument(const char *command)
 	line[i] = '\0';
 	if (command[i] != '\0')
 	{
-		err_puts("husk: -c line too long (limit 255)\n");
+		os64_hprintf(OS64_STDERR, "husk: -c line too long (limit %u)\n",
+		             (unsigned)(LINE_MAX - 1));
 		return 2;
 	}
 
