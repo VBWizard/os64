@@ -755,7 +755,9 @@ static char *read_body(os64_fetch_t *f, size_t cap, size_t *len, const char *url
 // What the reply's own charset label says about a text/plain body. UTF-8 is
 // the modern answer, and everything else is read as windows-1252 — which is
 // what libhtml does with the markup half of the same web, so a smart quote
-// cannot draw as `"` in a page and as `?` in the text file beside it. A
+// cannot draw as `"` in a page and as `?` in the text file beside it. The
+// label is asked of libhtml's own table, so every spelling of UTF-8 the
+// markup half knows (`unicode-1-1-utf-8` among them) is known here too. A
 // server that says nothing about a .txt file written in 1994 is not talking
 // about UTF-8. A label naming an encoding in neither family is booked in
 // BROWSER.md; it reads as windows-1252 rather than as a refusal.
@@ -768,13 +770,26 @@ static char *read_body(os64_fetch_t *f, size_t cap, size_t *len, const char *url
 // U+FEFF as nothing.
 static bool charset_is_utf8(const char *charset)
 {
-    return os64_streq_nocase(charset, "utf-8") || os64_streq_nocase(charset, "utf8");
+    const char *named = os64_html_encoding_for_label(charset, os64_strlen(charset));
+    return named != NULL && os64_streq(named, "utf-8");
 }
 
 static bool bytes_begin_utf8(const char *text, size_t len)
 {
     return text && len >= 3 && (unsigned char)text[0] == 0xEF
            && (unsigned char)text[1] == 0xBB && (unsigned char)text[2] == 0xBF;
+}
+
+// Whether an address can be offered inside single quotes as a command to
+// type. Quoted because husk splits a line at `;`; refused when the address
+// holds a quote itself, because a page chose it, and a quote in it would
+// end the quoting and run whatever the page wrote after it.
+static bool shell_quotable(const char *address)
+{
+    for (const char *q = address; *q != '\0'; q++)
+        if (*q == '\'')
+            return false;
+    return true;
 }
 
 // Fetch, parse and lay out one address. The view is built beside the one on
@@ -821,13 +836,8 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why)
                 || os64_streq(type, "application/xhtml+xml");
     bool plain = !html && type_is_text(type);
     if (!html && !plain) {
-        // Not a page at all. Say what it is and how to keep it — quoted the
-        // way os64get quotes an address, because husk splits a line at `;`.
-        bool quotable = true;
-        for (const char *q = head->url_text; *q != '\0'; q++)
-            if (*q == '\'')
-                quotable = false;
-        if (quotable)
+        // Not a page at all. Say what it is and how to keep it.
+        if (shell_quotable(head->url_text))
             status_set(" that is %s, not a page - save it with:  os64get '%s'",
                        type, head->url_text);
         else
@@ -1179,7 +1189,11 @@ static bool perform(view_t *v, const os64_page_request_t *request, bool remember
     // WHICH SCHEMES THIS BROWSER FOLLOWS IS ITS OWN LIST, which is why
     // libpage states the scheme instead of keeping one.
     if (os64_streq(request->scheme, "gopher")) {
-        status_set(" that is gopherspace - read it with:  gopher '%s'", request->url);
+        if (shell_quotable(request->url))
+            status_set(" that is gopherspace - read it with:  gopher '%s'", request->url);
+        else
+            status_set(" that is gopherspace - and its address holds a quote,"
+                       " so open it in gopher by hand");
         return false;
     }
     if (!os64_streq(request->scheme, "http") && !os64_streq(request->scheme, "https")) {
@@ -1277,6 +1291,16 @@ static bool refresh_once(view_t *v, int32_t *chain)
     return moved;
 }
 
+// The address a page asks to send the reader to after a delay, or NULL.
+static const char *delayed_refresh(const view_t *v)
+{
+    const os64_page_refresh_t *refresh = v->model ? os64_page_refresh(v->model) : NULL;
+    if (refresh == NULL || refresh->seconds == 0 || refresh->names_this_document ||
+        refresh->url.refused != OS64_PAGE_REASON_OK || refresh->url.url == NULL)
+        return NULL;
+    return refresh->url.url;
+}
+
 static void refresh_if_declared(view_t *v)
 {
     int32_t chain = 0;
@@ -1326,21 +1350,17 @@ static void form_send(view_t *v, int32_t control, os64_page_activation_t how)
     os64_page_request_free(&request);
 }
 
-// Whether a control is something a person still has to ANSWER: not a
-// button (a button is how you say you are done), not a value the page keeps
-// or took away, not one it put out of sight.
-static bool control_answerable(const os64_page_control_t *c)
-{
-    return !c->disabled && !c->readonly && !c->hidden_subtree && !c->has_datalist_ancestor &&
-           c->input != OS64_PAGE_INPUT_HIDDEN && c->input != OS64_PAGE_INPUT_BUTTON &&
-           c->element != OS64_PAGE_EL_BUTTON && !c->submits && !c->resets;
-}
-
 // A FORM WITH ONE THING TO ANSWER has nowhere else for you to go, so
 // finishing that one thing finishes the form. Anything else to fill in —
 // another box, a tick, a list — and the value is kept while the form waits,
 // because sending early would send the rest at their defaults and a person
 // working down the page in order would never get to them.
+//
+// WHAT COUNTS IS WHAT THIS FACE LETS A PERSON OPERATE: the form's spots,
+// less its buttons (a button is how you say you are done) and a box the
+// page keeps fixed. A control drawn dead — a file input, one the page
+// disabled or put out of sight — is not something anyone here can answer,
+// and counting it would leave a form with no button unsendable.
 //
 // Finishing it is the standard's IMPLICIT SUBMISSION, and libpage decides
 // what that sends: the form's default button, with its name and whatever it
@@ -1348,12 +1368,15 @@ static bool control_answerable(const os64_page_control_t *c)
 static void form_send_if_alone(view_t *v, int32_t control)
 {
     const os64_page_control_t *c = os64_page_control(v->model, control);
-    if (c == NULL || c->form < 0)
+    if (c == NULL || c->form < 0 || v->page == NULL)
         return;
     int32_t answers = 0;
-    for (int32_t i = 0; i < os64_page_ncontrols(v->model); i++) {
-        const os64_page_control_t *other = os64_page_control(v->model, i);
-        if (other->form == c->form && control_answerable(other))
+    for (int32_t i = 0; i < v->page->nspots; i++) {
+        const wend_spot_t *spot = &v->page->spots[i];
+        if (spot->kind == WEND_SPOT_LINK || spot->kind == WEND_SPOT_SUBMIT)
+            continue;
+        const os64_page_control_t *other = os64_page_control(v->model, spot->control);
+        if (other != NULL && other->form == c->form && !other->readonly)
             answers++;
     }
     if (answers == 1)
@@ -1776,8 +1799,16 @@ static int32_t session(const char *start)
                         go(&view, view.url, false);
                         break;
                     case 'g': {
+                        // An address is typed fresh — unless the page asked
+                        // to send the reader somewhere after a delay, which
+                        // the status row offered as "press g": then the
+                        // prompt holds that address, and Enter is the
+                        // reader's own decision to go.
                         char typed[OS64_FETCH_URL_MAX];
-                        typed[0] = '\0';         // an address is typed fresh
+                        typed[0] = '\0';
+                        const char *later = delayed_refresh(&view);
+                        if (later != NULL && os64_strlen(later) < sizeof(typed))
+                            os64_strcopy(typed, sizeof(typed), later);
                         if (prompt(" go to: ", typed, sizeof(typed), false) != PROMPT_TYPED) {
                             status_set(" stayed here");
                             break;

@@ -1037,8 +1037,11 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         return;
 
     // These subtrees and inert element kinds do not participate in this
-    // renderer's layout. Libpage may select them, but they have no row.
+    // renderer's layout. Libpage may select them, but they have no row. A
+    // `datalist` is suggestions for another control, never shown and never
+    // sent, so what is inside it is no place to land.
     switch (n->tag) {
+        case OS64_HTML_TAG_DATALIST:
         case OS64_HTML_TAG_HEAD: case OS64_HTML_TAG_SCRIPT:
         case OS64_HTML_TAG_STYLE: case OS64_HTML_TAG_TEMPLATE:
         case OS64_HTML_TAG_IFRAME: case OS64_HTML_TAG_AREA:

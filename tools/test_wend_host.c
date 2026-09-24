@@ -384,6 +384,14 @@ static void render_checks(void)
                      "<input type=submit value=Go></form>", 40, want, 1);
     }
     {
+        // A `datalist` is suggestions for a box, never shown: the box is the
+        // only place to land.
+        const char *want[] = { "[1][____]" };
+        expect_lines("datalist", "<input name=q size=4 list=l>"
+                     "<datalist id=l><option value=a>A<input name=inner></datalist>",
+                     40, want, 1);
+    }
+    {
         // A box shows what is in it, padded to its width.
         const char *want[] = { "[1][cat_____]" };
         expect_lines("box value", "<input name=q size=8 value=cat>", 40, want, 1);
