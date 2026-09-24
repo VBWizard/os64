@@ -21,13 +21,28 @@ static void format_time(uint64_t usec, char *out, size_t capacity)
                   seconds / 60, seconds % 60, (usec % 1000000) / 100000);
 }
 
+// Command text can exceed printf's formatting buffer and a pipe write.
+static void print_command(const char *text)
+{
+    size_t left = os64_strlen(text);
+    while (left)
+    {
+        int64_t written = os64_write(OS64_STDOUT, text, left);
+        if (written <= 0) return;
+        text += written;
+        left -= (size_t)written;
+    }
+}
+
 static void print_task(const os64_proc_info_t *task, const ps_options_t *options,
                        uint32_t depth)
 {
     char time[24];
     format_time(task->runtime_us, time, sizeof(time));
     char marker = task->foreground ? '+' : task->shell ? 's' : ' ';
-    const char *command = options->full ? task->command : task->name;
+    char *full_command = NULL;
+    bool command_failed = options->full && os64_proc_command(task->pid, &full_command) < 0;
+    const char *command = full_command ? full_command : task->name;
 
     if (options->full)
         os64_printf("%5lu %5lu %3u %c%c %4u %3u %9s %6lu %6lu ",
@@ -41,7 +56,9 @@ static void print_task(const os64_proc_info_t *task, const ps_options_t *options
 
     if (options->forest)
         for (uint32_t i = 0; i < depth; i++) os64_puts("  ");
-    os64_printf("%s\n", command[0] ? command : "(none)");
+    print_command(command[0] ? command : "(none)");
+    os64_puts(command_failed ? " [command unavailable]\n" : "\n");
+    os64_free(full_command);
 }
 
 static void print_threads(const os64_proc_info_t *task)

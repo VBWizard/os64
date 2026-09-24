@@ -19,7 +19,7 @@ the outer shell of a seed; this is the outer shell of the kernel.*
 | **Ctrl+U** | kill to start of line — V7's line-kill, promoted from `@` *(2026-08-16)* |
 | **Ctrl+K** | kill to end of line *(2026-08-16)* |
 | **Ctrl+W** | erase the word before the caret — 4BSD's werase *(2026-08-16)* |
-| **Up / Down** | walk command history (32 deep, duplicates stored once) |
+| **Up / Down** | walk command history (16 KiB byte ring, consecutive duplicates stored once) |
 | **Ctrl+C** | at the prompt: kill the half-typed line, print `^C`, re-prompt |
 | **Tab** | completes the word at the caret; lists the candidates when it cannot extend |
 
@@ -239,3 +239,7 @@ code — the pattern PTY.md and GRAPHICS.md's VT8 chapter both earned.
   screen model trusts its inputs").
 - Globs cover the last path component: `/tmp/*` yes, `/*/foo` no (booked).
 - No `%1` job notation — the task number is the handle.
+
+Command input holds up to 4095 bytes plus its terminator, including `-c`,
+scripts, and interactive input. Expanded commands have 512 additional bytes
+of room. See [command-line limits](docs/commandline_limits.md).

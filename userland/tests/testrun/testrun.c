@@ -92,6 +92,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/threadtest",      NULL, 0x1B2EAD00,  0,          "threads: create, argument, join, shared address space" },
     { "/tests/pintest",         NULL, 0x91A70000,  0,          "a handle closed by a sibling thread under a parked read: pipe, pty master, thread handle" },
     { "/tests/streamseat",      NULL, 0x57EA0000,  0,          "STREAM EOF refuses another seat; failed load and GRID reuse" },
+    { "/tests/argsize",         NULL, 0xA2650000,  0,          "128 KiB spawn arguments arrive whole; too long, too many and too much are refused by name" },
     { "/tests/pipeexit",        NULL, 0x91E00000,  0,          "32 default-SIGPIPE exits preserve status 141" },
     { "/tests/spawnreap",       NULL, 0x5A9E0000,  0,          "128 short-lived children with concurrent sibling reap" },
     { "/tests/malloctest",      NULL, 0x0A110C00,  0,          "the heap: split, coalesce, recycle, give-back, /proc/<pid>/heap" },

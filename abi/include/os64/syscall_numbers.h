@@ -571,15 +571,33 @@ typedef enum os64_shutdown_mode
 // of acquiring handles into the ABI.
 #define SYSCALL_CONF_RESOLVE 47
 
-// HOW LONG ONE spawn() ARGUMENT MAY BE, including its terminator. The kernel
-// copies each argv string into a bounded scratch block and REFUSES one that
-// does not fit — it never truncates — so a caller holding a string of its own
-// choosing needs the number rather than a guess. Published because a caller
-// asked: /bin/gopher accepts a menu selector far longer than this and hands
-// part of it to os64get, and a spawn that simply failed read as "the program
-// is missing" when it was the ARGUMENT that could not be carried. A limit a
-// caller cannot see is one it reports as the wrong thing.
-#define OS64_SPAWN_ARG_MAX 256
+// HOW LONG ONE spawn() ARGUMENT MAY BE, including its terminator: 128 KiB,
+// Linux's MAX_ARG_STRLEN. The kernel measures every argument before it
+// copies any, and REFUSES a spawn it cannot carry whole — it never truncates
+// — answering OS64_SPAWN_TOO_LONG, so a caller holding a string of its own
+// choosing needs the number rather than a guess. The per-argument cap is not
+// what really bounds a spawn: the child's whole argument block is one
+// mebibyte, its pointers included, and at most 512 arguments. The cap is
+// this large because one argument can be a whole command line — `husk -c`
+// carries it as a single string, and so does an ssh exec request — and a
+// limit a caller cannot see is one it reports as the wrong thing.
+#define OS64_SPAWN_ARG_MAX (128 * 1024)
+
+// spawn()'s own refusal. The boundary's two answers keep their meanings (-1:
+// the kernel will not do it — no such program, a handle that cannot be
+// handed on; -2: a request it could not take in — an unreadable address, a
+// path it cannot resolve, a flag it does not know), and this one says the
+// arguments were readable and there is too much of them: one longer than
+// OS64_SPAWN_ARG_MAX, more than 512 of them, or more in all than a child's
+// argument block holds. Distinct because "cannot run" sends a person looking
+// for a program that is sitting right there — Unix's E2BIG, the "Argument
+// list too long" every shell user has met.
+#define OS64_SPAWN_TOO_LONG (-3)
+
+// HOW LONG A PATH MAY BE, including its terminator. The cwd getcwd copies out
+// and a program path spawn resolves are both bounded by it, so a buffer this
+// size always holds one.
+#define OS64_PATH_MAX 256
 
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.

@@ -89,6 +89,21 @@ void synth_text_addf(synth_text_t *t, const char *fmt, ...)
 	t->buf[t->len] = '\0';
 }
 
+// Append bytes as they are, however many: no format, so no line buffer to
+// cap them. For text too long to be one formatted call — a spawn argument can
+// be far wider than synth_text_addf's line.
+void synth_text_add(synth_text_t *t, const char *bytes, size_t len)
+{
+	if (t->buf == NULL || len == 0)
+		return;
+	if (t->len + len + 1 > t->cap && !synth_text_grow(t, t->len + len + 1))
+		return;
+
+	memcpy(t->buf + t->len, bytes, len);
+	t->len += len;
+	t->buf[t->len] = '\0';
+}
+
 // Escape one DATA field for a whitespace-columned report (contract and the
 // argument for it in synthfs.h). Truncates rather than overrun, and never
 // truncates mid-escape — half of a `\xHH` would decode to something the

@@ -92,7 +92,11 @@ def interop(work):
     assert result.returncode == 255 and not result.stdout and b'publickey' in result.stderr, result
     result = command('printf forbidden', key='ed25519')
     assert result.returncode == 255 and not result.stdout and b'publickey' in result.stderr, result
-    result = command('x' * 256)
+    for size in (1000, 4095):
+        text = 'q' * (size - 7)
+        result = command('printf ' + text)
+        assert result.returncode == 0 and result.stdout == text.encode(), result
+    result = command('x' * 4096)
     assert result.returncode == 255 and not result.stdout and b'exec request failed' in result.stderr, result
     print('OpenSSH: false, unenrolled key, Ed25519, oversized exec PASS', flush=True)
     data = bytes(range(256)) * 12288

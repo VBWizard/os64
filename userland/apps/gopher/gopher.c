@@ -1040,21 +1040,12 @@ static int32_t hand_to_os64get(const char *selector)
         os64_strcopy(s_status, sizeof(s_status), " that link carries no address");
         return GOPHER_BAD_ADDRESS;
     }
-    // A SPAWN ARGUMENT IS BOUNDED AND A SELECTOR IS NOT, so the two caps
-    // disagree and the gap has to be named rather than discovered. An
-    // argument is capped at TASK_MAX_PATH_LEN (ABI.md) while a selector runs
-    // to GOPHER_SELECTOR_MAX, so a long enough `URL:` is a link this program
-    // accepted, parsed and cannot hand over — and the spawn's plain failure
-    // read as "could not run os64get", which sends a person to look for a
-    // missing binary that is sitting right there. Say what is actually
-    // wrong; carrying such a URL through a wider channel is in DECLINED.md.
-    if (os64_strlen(url) >= OS64_SPAWN_ARG_MAX) {
-        os64_snprintf(s_status, sizeof(s_status),
-                      " that link's address is longer than %d bytes,"
-                      " which is more than os64get can be handed",
-                      (int)OS64_SPAWN_ARG_MAX - 1);
-        return GOPHER_BAD_ADDRESS;
-    }
+    // A URL is part of a selector, and a whole selector fits in one spawn
+    // argument, so any address this program accepted can be handed on. If
+    // either cap moves so that stops being true, the build says so here
+    // rather than a link failing as "could not run os64get".
+    _Static_assert(GOPHER_SELECTOR_MAX <= OS64_SPAWN_ARG_MAX,
+                   "a gopher selector must fit in one spawn argument");
 
     // Somewhere to put it that is nobody's working directory. Named for the
     // task so two gophers cannot land on one file, and remembered at file
