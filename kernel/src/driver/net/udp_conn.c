@@ -104,7 +104,9 @@ void udp_conn_wake_if_ready(void)
 		// moves ISLEEP threads), and the sleeper then eats its full
 		// backstop second. See the long note in icmp_conn.c, where a
 		// measured 100-tick "round trip" made it visible.
-		if (c->waiter != NULL && c->count > 0 &&
+		// A closed conn is a condition too: the close's own wake misses a
+		// reader still mid-park, and this pass is what delivers it.
+		if (c->waiter != NULL && (c->count > 0 || c->closed) &&
 		    c->waiter->threadState == THREAD_STATE_ISLEEP)
 		{
 			w = c->waiter;
@@ -145,6 +147,7 @@ udp_conn_t* udp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	c->dev = dev;
 	c->peer_ip = peer_ip;
 	c->peer_port = peer_port;
+	c->holders = 1;   // the handle's; pins add theirs (udp_conn.h LIFETIME)
 
 	// Claim an ephemeral port. udp_bind refuses doubles, so "walk until a
 	// bind sticks" is the whole allocator; 200 tries covers pathological
@@ -204,6 +207,13 @@ long udp_conn_read(udp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 			return UDP_CONN_ERR_INTERRUPTED;
 
 		irqflags = spinlock_acquire_irqsave(&c->lock);
+		// Hung up under us — a sibling thread closed the handle while we
+		// waited. Our pin kept the memory; the conversation is over.
+		if (c->closed)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return UDP_CONN_ERR_CLOSED;
+		}
 		if (c->count > 0)
 		{
 			uint16_t slot = c->head;
@@ -255,10 +265,30 @@ long udp_conn_write(udp_conn_t* c, const void* buf, size_t len)
 	// HERE (unlike the RX-context responders) we can simply wait out the
 	// resolution: retry for up to ~500ms, which is geological time for an
 	// ARP round trip on any link this OS has met.
+	//
+	// EVERY attempt re-asks whether a sibling has hung up meanwhile, and
+	// counts itself in `sending` while the datagram is on its way out: the
+	// close waits for that count before it unbinds the port, so a datagram
+	// can never leave from a port a later dial already owns (Codex #101
+	// rd7).
 	for (int tries = 0; tries < 50; tries++)
 	{
+		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		if (c->closed)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return UDP_CONN_ERR_CLOSED;   // hung up under us; the port is (being) unbound
+		}
+		c->sending++;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		int32_t rc = udp_send(c->dev, c->peer_ip, c->local_port, c->peer_port,
 		                      buf, (uint16_t)len);
+
+		irqflags = spinlock_acquire_irqsave(&c->lock);
+		c->sending--;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		if (rc == 0)
 			return (long)len;
 		if (rc != -2)
@@ -274,10 +304,51 @@ long udp_conn_write(udp_conn_t* c, const void* buf, size_t len)
 // ── Close ───────────────────────────────────────────────────────────────────
 void udp_conn_close(udp_conn_t* c)
 {
-	// Stop arrivals first: after udp_unbind returns, udp.c can never call
-	// udp_conn_rx with this conn again, so the frees below race nothing.
+	// Hang up FIRST, then wait out any writer already past its own check
+	// (udp_conn.h sending) before the port is given back: a writer that
+	// saw "not closed" sends from THIS port, and the port must still be
+	// ours while it does. A send is microseconds; the wait is a few spins.
+	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+	c->closed = true;
+	// And tell a reader parked on the ring — a SIBLING THREAD of the
+	// closer, holding the conn through its pin — that the conversation is
+	// over. A reader still mid-park is left registered for the sweep,
+	// whose condition now includes `closed` (the pipe.c claim discipline).
+	thread_t* w = NULL;
+	if (c->waiter != NULL && c->waiter->threadState == THREAD_STATE_ISLEEP)
+	{
+		w = c->waiter;
+		c->waiter = NULL;
+	}
+	while (c->sending != 0)
+	{
+		spinlock_release_irqrestore(&c->lock, irqflags);
+		wait(1);
+		irqflags = spinlock_acquire_irqsave(&c->lock);
+	}
+	spinlock_release_irqrestore(&c->lock, irqflags);
+	if (w != NULL)
+		scheduler_wake_isleep_thread(w);
+
+	// Stop arrivals: after udp_unbind returns, udp.c can never call
+	// udp_conn_rx with this conn again, and no writer can start a send.
 	udp_unbind(c->local_port);
 
+	udp_conn_release(c);   // the handle's hold; the last one frees
+}
+
+void udp_conn_ref(udp_conn_t* c)
+{
+	__sync_fetch_and_add(&c->holders, 1);
+}
+
+void udp_conn_release(udp_conn_t* c)
+{
+	if (__sync_sub_and_fetch(&c->holders, 1) > 0)
+		return;
+
+	// Last holder: off the sweep list, then the memory. No RX can reach it
+	// (unbound at the close) and no reader is inside it (they hold it).
 	uint64_t lf = spinlock_acquire_irqsave(&s_list_lock);
 	udp_conn_t** pp = &kUdpConnList;
 	while (*pp != NULL && *pp != c)
@@ -286,9 +357,6 @@ void udp_conn_close(udp_conn_t* c)
 		*pp = c->next;
 	spinlock_release_irqrestore(&s_list_lock, lf);
 
-	// A task can't be parked in read() and closing at once (one thread),
-	// and exit's handle_close_all only runs after the thread left the
-	// syscall — so no waiter can exist here. Stated, not assumed silently.
 	kfree(c->slots);
 	kfree(c);
 }

@@ -47,6 +47,7 @@ icmp_conn_t* icmp_conn_dial(net_device_t* dev, uint32_t peer_ip)
 	c->dev = dev;
 	c->peer_ip = peer_ip;
 	c->next_sequence = 1;   // ping counts from 1; seq 0 reads as "unset"
+	c->holders = 1;         // the handle's; pins add theirs (icmp_conn.h LIFETIME)
 
 	uint64_t lf = spinlock_acquire_irqsave(&s_list_lock);
 	// Walk until we find an identifier nobody is using. The population is
@@ -86,6 +87,8 @@ long icmp_conn_write(icmp_conn_t* c, const void* buf, size_t len)
 {
 	if (len > ICMP_CONN_MAX_PAYLOAD)
 		return -1;   // over MTU: refused, never fragmented (the Phase 2 stance)
+	if (c->closed)
+		return ICMP_CONN_ERR_CLOSED;   // hung up under us; no reply would be delivered
 
 	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
 	uint16_t seq = c->next_sequence++;
@@ -102,10 +105,30 @@ long icmp_conn_write(icmp_conn_t* c, const void* buf, size_t len)
 	// MINUTE: the ARP cache's 60s lazy TTL expired the gateway entry, the
 	// next echo ate the first-packet drop, and write() failed for one
 	// beat. 500ms of retries is geological time for an ARP round trip.)
+	// EVERY attempt re-asks whether a sibling has hung up meanwhile, and
+	// counts itself in `sending` while the request is on its way out (the
+	// UDP writer's rule): the close waits that count out, so the check and
+	// the send are one interval as far as a close can tell, and no request
+	// leaves after the conversation is hung up — a success whose reply
+	// delivery would discard (Codex #101 rd8, rd9).
 	for (int tries = 0; tries < 50; tries++)
 	{
+		irqflags = spinlock_acquire_irqsave(&c->lock);
+		if (c->closed)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return ICMP_CONN_ERR_CLOSED;   // hung up under us
+		}
+		c->sending++;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		int32_t rc = icmp_send_echo(c->dev, c->peer_ip, c->identifier, seq,
 		                            buf, (uint16_t)len);
+
+		irqflags = spinlock_acquire_irqsave(&c->lock);
+		c->sending--;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		if (rc == 0)
 		{
 			c->requests_sent++;
@@ -126,19 +149,29 @@ long icmp_conn_write(icmp_conn_t* c, const void* buf, size_t len)
 void icmp_conn_deliver(uint32_t src_ip, uint16_t identifier,
                        const void* payload, uint16_t length)
 {
+	// THE CONN IS LOCKED BEFORE THE LIST LOCK DROPS (tcp.c's demux
+	// discipline): the last holder's release unlinks under the list lock
+	// and then takes the conn lock once before freeing, so a conn found
+	// here is either locked by us before the freer gets the list — and the
+	// freer waits — or already gone before we look. A closed conn is
+	// skipped: its reader has been told, and it takes no more replies.
 	uint64_t lf = spinlock_acquire_irqsave(&s_list_lock);
 	icmp_conn_t* c = NULL;
 	for (icmp_conn_t* t = kIcmpConnList; t != NULL; t = t->next)
-		if (t->identifier == identifier && t->peer_ip == src_ip)
+		if (t->identifier == identifier && t->peer_ip == src_ip && !t->closed)
 		{
 			c = t;
+			spinlock_acquire(&c->lock);
 			break;
 		}
-	spinlock_release_irqrestore(&s_list_lock, lf);
 	if (c == NULL)
+	{
+		spinlock_release_irqrestore(&s_list_lock, lf);
 		return;   // nobody's conversation (or a stale reply after close)
+	}
+	spinlock_release(&s_list_lock);   // lf now belongs to c->lock
+	uint64_t irqflags = lf;
 
-	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
 	if (c->count >= ICMP_CONN_QUEUE_SLOTS)
 	{
 		c->dropped_full++;   // asking faster than reading: the newest waits for nobody
@@ -174,6 +207,13 @@ long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 			return ICMP_CONN_ERR_INTERRUPTED;
 
 		irqflags = spinlock_acquire_irqsave(&c->lock);
+		// Hung up under us — a sibling thread closed the handle while we
+		// waited. Our pin kept the memory; the conversation is over.
+		if (c->closed)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return ICMP_CONN_ERR_CLOSED;
+		}
 		if (c->count > 0)
 		{
 			uint16_t slot = c->head;
@@ -228,7 +268,9 @@ void icmp_conn_wake_if_ready(void)
 		// Leaving a not-yet-parked waiter REGISTERED costs one more
 		// sweep (~1 tick) and is what makes the reply latency the wire's
 		// instead of the timer's.
-		if (c->waiter != NULL && c->count > 0 &&
+		// A closed conn is a condition too: the close's own wake misses a
+		// reader still mid-park, and this pass is what delivers it.
+		if (c->waiter != NULL && (c->count > 0 || c->closed) &&
 		    c->waiter->threadState == THREAD_STATE_ISLEEP)
 		{
 			w = c->waiter;
@@ -243,16 +285,59 @@ void icmp_conn_wake_if_ready(void)
 
 void icmp_conn_close(icmp_conn_t* c)
 {
+	// Hang up, and tell a reader parked on the ring — a SIBLING THREAD of
+	// the closer, holding the conn through its pin — that no reply is
+	// coming. A reader still mid-park is left registered for the sweep,
+	// whose condition now includes `closed`. Delivery stops finding the
+	// conn from here on (it skips closed rows).
+	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+	c->closed = true;
+	thread_t* w = NULL;
+	if (c->waiter != NULL && c->waiter->threadState == THREAD_STATE_ISLEEP)
+	{
+		w = c->waiter;
+		c->waiter = NULL;
+	}
+	// A writer already past its own "not closed" check is mid-send: wait it
+	// out (icmp_conn.h sending) so the close returns with no request in
+	// flight — a send is microseconds, the wait a few spins.
+	while (c->sending != 0)
+	{
+		spinlock_release_irqrestore(&c->lock, irqflags);
+		wait(1);
+		irqflags = spinlock_acquire_irqsave(&c->lock);
+	}
+	spinlock_release_irqrestore(&c->lock, irqflags);
+	if (w != NULL)
+		scheduler_wake_isleep_thread(w);
+
+	icmp_conn_release(c);   // the handle's hold; the last one frees
+}
+
+void icmp_conn_ref(icmp_conn_t* c)
+{
+	__sync_fetch_and_add(&c->holders, 1);
+}
+
+void icmp_conn_release(icmp_conn_t* c)
+{
+	if (__sync_sub_and_fetch(&c->holders, 1) > 0)
+		return;
+
+	// Last holder: unlink under the list lock, then pass through the conn
+	// lock once — a delivery that found this row before the unlink holds
+	// that lock until it is done with the row (icmp_conn_deliver), so
+	// taking it here is what makes the frees below race nothing.
 	uint64_t lf = spinlock_acquire_irqsave(&s_list_lock);
 	icmp_conn_t** pp = &kIcmpConnList;
 	while (*pp != NULL && *pp != c)
 		pp = &(*pp)->next;
 	if (*pp == c)
 		*pp = c->next;
+	spinlock_acquire(&c->lock);
+	spinlock_release(&c->lock);
 	spinlock_release_irqrestore(&s_list_lock, lf);
 
-	// Off the list first: after this, icmp_conn_deliver can never find
-	// this conn again, so the frees race nothing.
 	kfree(c->slots);
 	kfree(c);
 }

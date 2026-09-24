@@ -53,6 +53,7 @@
 #include "os64/net.h"                // OS64_NET_ERR_* — refusals carry reasons (abi)
 #include "fpu.h"
 
+extern bool test_window_minimum_clamp(void);
 extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
@@ -74,6 +75,9 @@ static bool g_framework_initialized = false;
 
 bool test_vma_file_backed_page_fault_resolved(void);
 bool test_vma_partial_page_bss_zero_filled(void);
+bool test_pty_publication_hold(void);
+bool test_pty_resize_modes(void);
+bool test_pty_stream_seats(void);
 
 bool test_register_policy(const char *name, bool (*func)(void), int phase,
                           test_policy_t policy)
@@ -4381,6 +4385,52 @@ static int32_t arp_pending_order_transmit(net_device_t *dev, const void *frame,
     return 0;
 }
 
+// A MARTIAN is a 127/8 address arriving on a real card, and it is a forgery:
+// nothing on a wire may carry one (RFC 1122). The whole remote-access design
+// leans on ipv4_input refusing them — a door announced on loopback asks for
+// no password because only this machine can reach it (REMOTE.md) — and the
+// host cannot forge one through QEMU's user network, so the test does it
+// here: a well-formed TCP SYN with a loopback address in each position,
+// handed to ipv4_input as if a card had delivered it. The card is a stand-in
+// struct, since the rule is "not lo" and a netless boot must pass too.
+static bool test_net_martian_dropped(void)
+{
+    static net_device_t card;   // any device that is not kNetLoopback
+    struct { uint32_t src, dst; const char *what; } cases[] = {
+        { NET_IPV4(127, 0, 0, 1), kNetIPv4Address,        "a 127/8 source" },
+        { NET_IPV4(10, 0, 2, 2),  NET_IPV4(127, 0, 0, 1), "a 127/8 destination" },
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    {
+        uint8_t pkt[IPV4_HDR_MIN + TCP_HDR_MIN];
+        memset(pkt, 0, sizeof(pkt));
+        pkt[0] = 0x45;
+        net_write16(pkt + 2, sizeof(pkt));
+        pkt[8] = 64;
+        pkt[9] = IPV4_PROTO_TCP;
+        net_write32(pkt + 12, cases[i].src);
+        net_write32(pkt + 16, cases[i].dst);
+        net_write16(pkt + 10, net_checksum(pkt, IPV4_HDR_MIN));
+        uint8_t *seg = pkt + IPV4_HDR_MIN;
+        net_write16(seg + 0, 40000);
+        net_write16(seg + 2, 22);
+        seg[12] = (TCP_HDR_MIN / 4) << 4;
+        seg[13] = 0x02;   // SYN
+
+        uint64_t martians = kIPv4Stats.rx_martian;
+        uint64_t segments = kTcpStats.segments_in;
+        ipv4_input(&card, pkt, sizeof(pkt));
+        if (kIPv4Stats.rx_martian != martians + 1 || kTcpStats.segments_in != segments)
+        {
+            printd(DEBUG_TESTS, "\tFAIL: test_net_martian_dropped - %s on a card reached %s\n",
+                   cases[i].what,
+                   kTcpStats.segments_in != segments ? "TCP" : "no counter");
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool test_net_arp_pending_order(void)
 {
     arp_pending_order_state_t state = {
@@ -5719,6 +5769,7 @@ static bool test_backstop_preemption(void)
 
 static void register_builtin_tests(void)
 {
+    test_register("window_minimum_clamp", test_window_minimum_clamp, TEST_PHASE_PREBOOT);
 	test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
 	test_register("fpu_state_round_trip", test_fpu_state_round_trip, TEST_PHASE_PREBOOT);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set, TEST_PHASE_PREBOOT);
@@ -5752,6 +5803,9 @@ static void register_builtin_tests(void)
     test_register("vma_partial_page_bss_zero_filled", test_vma_partial_page_bss_zero_filled, TEST_PHASE_POSTBOOT);
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
+    test_register("pty_publication_hold", test_pty_publication_hold, TEST_PHASE_POSTBOOT);
+    test_register("pty_resize_modes", test_pty_resize_modes, TEST_PHASE_POSTBOOT);
+    test_register("pty_stream_seats", test_pty_stream_seats, TEST_PHASE_POSTBOOT);
     test_register("task_args", test_task_args, TEST_PHASE_POSTBOOT);
     test_register("env_growth", test_env_growth, TEST_PHASE_POSTBOOT);
     // LATE, both of them, and they are the two that bought the phase: on a
@@ -5768,6 +5822,7 @@ static void register_builtin_tests(void)
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
     test_register("devfs", test_devfs, TEST_PHASE_POSTBOOT);
     test_register("net_arp_pending_order", test_net_arp_pending_order, TEST_PHASE_POSTBOOT);
+    test_register("net_martian_dropped", test_net_martian_dropped, TEST_PHASE_POSTBOOT);
     test_register("net_wire", test_net_wire, TEST_PHASE_POSTBOOT);
     test_register("net_arp", test_net_arp, TEST_PHASE_POSTBOOT);
     test_register("random_pool", test_random_pool, TEST_PHASE_PREBOOT);

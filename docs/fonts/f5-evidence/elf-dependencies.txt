@@ -1,0 +1,72 @@
+
+File: userland/bin/appearance
+
+Dynamic section at offset 0xc000 contains 12 entries:
+  Tag        Type                         Name/Value
+ 0x0000000000000001 (NEEDED)             Shared library: [libos64.so]
+ 0x0000000000000004 (HASH)               0x30807000
+ 0x0000000000000005 (STRTAB)             0x30807a80
+ 0x0000000000000006 (SYMTAB)             0x30807270
+ 0x000000000000000a (STRSZ)              1763 (bytes)
+ 0x000000000000000b (SYMENT)             24 (bytes)
+ 0x0000000000000015 (DEBUG)              0x0
+ 0x0000000000000003 (PLTGOT)             0x3080b110
+ 0x0000000000000002 (PLTRELSZ)           2040 (bytes)
+ 0x0000000000000014 (PLTREL)             RELA
+ 0x0000000000000017 (JMPREL)             0x30808168
+ 0x0000000000000000 (NULL)               0x0
+
+File: userland/bin/scribe
+
+Dynamic section at offset 0x8000 contains 12 entries:
+  Tag        Type                         Name/Value
+ 0x0000000000000001 (NEEDED)             Shared library: [libos64.so]
+ 0x0000000000000004 (HASH)               0x24404000
+ 0x0000000000000005 (STRTAB)             0x244046a0
+ 0x0000000000000006 (SYMTAB)             0x24404178
+ 0x000000000000000a (STRSZ)              986 (bytes)
+ 0x000000000000000b (SYMENT)             24 (bytes)
+ 0x0000000000000015 (DEBUG)              0x0
+ 0x0000000000000003 (PLTGOT)             0x24407110
+ 0x0000000000000002 (PLTRELSZ)           1296 (bytes)
+ 0x0000000000000014 (PLTREL)             RELA
+ 0x0000000000000017 (JMPREL)             0x24404a80
+ 0x0000000000000000 (NULL)               0x0
+
+File: userland/bin/gterm
+
+Dynamic section at offset 0x5000 contains 12 entries:
+  Tag        Type                         Name/Value
+ 0x0000000000000001 (NEEDED)             Shared library: [libos64.so]
+ 0x0000000000000004 (HASH)               0x3a403000
+ 0x0000000000000005 (STRTAB)             0x3a403360
+ 0x0000000000000006 (SYMTAB)             0x3a4030c0
+ 0x000000000000000a (STRSZ)              501 (bytes)
+ 0x000000000000000b (SYMENT)             24 (bytes)
+ 0x0000000000000015 (DEBUG)              0x0
+ 0x0000000000000003 (PLTGOT)             0x3a404110
+ 0x0000000000000002 (PLTRELSZ)           648 (bytes)
+ 0x0000000000000014 (PLTREL)             RELA
+ 0x0000000000000017 (JMPREL)             0x3a403558
+ 0x0000000000000000 (NULL)               0x0
+
+File: userland/bin/libos64.so
+
+Dynamic section at offset 0x40000 contains 16 entries:
+  Tag        Type                         Name/Value
+ 0x0000000000000001 (NEEDED)             Shared library: [libfreetype.so]
+ 0x000000000000000e (SONAME)             Library soname: [libos64.so]
+ 0x0000000000000004 (HASH)               0x7f0050000158
+ 0x0000000000000005 (STRTAB)             0x7f0050002b58
+ 0x0000000000000006 (SYMTAB)             0x7f0050000ae8
+ 0x000000000000000a (STRSZ)              6394 (bytes)
+ 0x000000000000000b (SYMENT)             24 (bytes)
+ 0x0000000000000003 (PLTGOT)             0x7f0050040180
+ 0x0000000000000002 (PLTRELSZ)           24 (bytes)
+ 0x0000000000000014 (PLTREL)             RELA
+ 0x0000000000000017 (JMPREL)             0x7f0050005be0
+ 0x0000000000000007 (RELA)               0x7f0050004458
+ 0x0000000000000008 (RELASZ)             6024 (bytes)
+ 0x0000000000000009 (RELAENT)            24 (bytes)
+ 0x000000006ffffff9 (RELACOUNT)          243
+ 0x0000000000000000 (NULL)               0x0

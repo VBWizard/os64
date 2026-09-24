@@ -7,14 +7,17 @@
 
 #include "tty.h"
 #include "BasicRenderer.h"     // the glass: renderer_glass_* primitives
+#include "tty_reflow.h"        // tty_refont: a reshape that keeps the text
+#include "console_font.h"      // console_font_pending — kworker's other early call
 #include "console.h"           // console_intr_intercept_tty — the master's 0x03
+#include "pipe.h"              // a STREAM slave's way out is a pipe
 #include "gui/compositor.h"    // gui_vt8_seated/gui_vt8_focus_gained — the
                                // VT8 handoff (policy stays HERE, per the
                                // keyboard driver's doctrine; the compositor
                                // only answers "am I seated?")
 #include "kmalloc.h"
 #include "memset.h"
-#include "memcpy.h"            // tty_resize_grid carries rows into the new ring
+#include "memcpy.h"            // tty_resize carries rows into the new ring
 #include "strings/sprintf.h"
 #include "strings/strlen.h"
 #include "task.h"
@@ -175,7 +178,7 @@ static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 		case '\b':
 			// Move back one cell, clamped at the line start (a terminal never
 			// backspaces up a line). Only MOVES — erasure stays the caller's
-			// job by overprint, which is why husk rubs out with "\b \b".
+			// job by overprint, which is why the classic rub-out is "\b \b".
 			if (t->cur_col > 0)
 				t->cur_col--;
 			break;
@@ -563,6 +566,21 @@ void tty_write(tty_t *t, const char *bytes, size_t length)
 	if (t == NULL || bytes == NULL || length == 0)
 		return;
 
+	// A STREAM slave has no interpreter and no glass: its output is the
+	// pipe. What arrives HERE is kernel text (a seated task's own writes
+	// come through the syscall layer as blocking pipe writes), and the
+	// caller may be the exception path, which cannot park — so this pushes
+	// what fits and counts what did not (tty.h stream_dropped).
+	if (t->is_pty && t->pty_mode == PTY_MODE_STREAM)
+	{
+		long n = pipe_write_if_room(t->stream, bytes, length);
+		if (n < 0)
+			n = 0;
+		if ((size_t)n < length)
+			t->stream_dropped += length - (size_t)n;
+		return;
+	}
+
 	// (The kConsoleSink diversion stood here until the VT8 chapter,
 	// 2026-08-19 — and note what it did: it caught bytes BEFORE the grid, so
 	// during GUI mode a tty's own history was never written. Retiring it is
@@ -856,6 +874,8 @@ void tty_seat_shell(tty_t *t, struct task *shell)
 	// inherit it), foreground (who Ctrl+C aims at HERE), and the lights on.
 	shell->controllingShell = true;
 	shell->tty = t;
+	if (t->is_pty)
+		t->everSeated = true;   // commits the seat reserved before the ELF load
 	uint64_t flags = spinlock_acquire_irqsave(&t->fg_lock);
 	t->shell = shell;
 	t->fgTask = shell;
@@ -993,9 +1013,21 @@ void tty_task_departed(struct task *task)
 announce:
 	// The 1971 logout, os64 dialect: the shell is gone, the line is quiet,
 	// and the next knock summons a fresh one (getty, on demand).
-	static const char msg[] =
-		"\n[shell departed -- press any key to summon another]\n";
-	tty_write(t, msg, sizeof(msg) - 1);
+	//
+	// A VIRTUAL TERMINAL ONLY. getty-on-demand is the physical console's
+	// life — it persists, goes dormant, and the summon sweep below walks
+	// kTTY[] to respawn a shell on the next keypress. A pty has no such
+	// afterlife: when its seated shell departs, the terminal's HOLDER
+	// decides what "session over" means (gterm closes the window, telnetd
+	// FINs the connection), and there is no key to press to summon anything.
+	// Writing this line to a pty only leaks getty's prompt down a telnet
+	// session or into a closing gterm grid.
+	if (!t->is_pty)
+	{
+		static const char msg[] =
+			"\n[shell departed -- press any key to summon another]\n";
+		tty_write(t, msg, sizeof(msg) - 1);
+	}
 }
 
 bool tty_summon_pending(void)
@@ -1012,7 +1044,9 @@ bool tty_summon_pending(void)
 // Same wake idiom as console_wake_if_ready, for the same lost-wakeup reasons.
 void tty_summon_wake(void)
 {
-	if (!tty_summon_pending())
+	// A queued console face waits on the same worker, and a person watching
+	// the glass for their new font is as badly served by a 2s nap.
+	if (!tty_summon_pending() && !console_font_pending())
 		return;
 	if (kKWorkerTask == NULL || kKWorkerTask->threads == NULL)
 		return;
@@ -1074,30 +1108,34 @@ bool tty_summon_sweep(void)
 // kTTY[] — the focus walker, the knock-summon sweep, and Alt+F's bounds
 // check stay blind to ptys by construction, and a pty can never become
 // kTTYFocused, which is what makes every repaint door irrelevant to it.
-// What a slave DOES share is everything that matters: the grid and the one
-// terminal interpreter (tty_write neither knows nor cares), the input ring
-// console_read drains, and the multiplied singletons — fgTask so Ctrl+C
-// aims correctly, EOF, the waiter, the seat.
+// Both modes share the input ring, geometry, foreground task, EOF, waiter
+// and seat. GRID uses the terminal interpreter; STREAM sends output bytes
+// through its pipe to the master.
 
 tty_t * volatile kPtyList = NULL;
 static spinlock_t kPtyListLock = 0;
 static uint32_t kPtyNextIndex = 0;
 
-tty_t *pty_create_slave(uint32_t cols, uint32_t rows)
+tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 {
 	// Bounds are sanity, not policy: a 1-cell terminal is a caller bug, and
 	// a giant one is a kmalloc grenade. 512x256 is far past any real window.
 	if (cols < 2 || rows < 2 || cols > 512 || rows > 256)
 		return NULL;
+	if (mode != PTY_MODE_GRID && mode != PTY_MODE_STREAM)
+		return NULL;
 
 	// Zeroed at the allocator choke point, and never NULL: the allocator
 	// panics by name on exhaustion (allocator.c), so the fence above is this
-	// function's only refusal — same as tty_resize_grid.
+	// function's only refusal — same as tty_resize.
 	tty_t *t = kmalloc(sizeof(tty_t));
 	t->cols = cols;
 	t->rows = rows;
-	t->total_lines = rows * TTY_SCROLLBACK_SCREENS;
-	t->cells = kmalloc((size_t)t->total_lines * cols * sizeof(tty_cell_t));
+	if (mode == PTY_MODE_GRID)
+	{
+		t->total_lines = rows * TTY_SCROLLBACK_SCREENS;
+		t->cells = kmalloc((size_t)t->total_lines * cols * sizeof(tty_cell_t));
+	}
 	// kmalloc zeroes, which is already right for the attributes, the
 	// background and the escape reader. The two that are NOT zero say so:
 	// the pen's colour did not come from the palette, and the paper starts
@@ -1106,7 +1144,20 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows)
 	t->fg_index = TTY_FG_NOT_INDEXED;
 	t->glass_bg = kFrameBufferBackgroundColor;
 	t->is_pty  = true;
-	t->pty_mode = PTY_MODE_GRID;
+	t->pty_mode = mode;
+	// STREAM's way out. The pipe is born with one reader (the master) and
+	// one writer (the seats, counted as one: the write end closes when
+	// they empty), so pipe.c's own EOF and EPIPE rules apply unchanged —
+	// and with the pty's own side-less hold (pipe.h holds), dropped at
+	// burial, so the pipe is there for as long as the pty is whatever the
+	// ends have done: a seated task's write can take a writer's reference
+	// on it under its seat hold without racing the last end close.
+	if (mode == PTY_MODE_STREAM)
+	{
+		t->stream = pipe_create();
+		if (t->stream != NULL)
+			pipe_hold(t->stream);
+	}
 	t->state   = TTY_LIVE;   // born attended — its master IS the human
 
 	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
@@ -1117,7 +1168,8 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows)
 	return t;
 }
 
-// The grid follows the window (see tty.h for the policy this implements).
+// Geometry follows the window; STREAM has no cells to rebuild. A GRID
+// resize preserves text under the policy in tty.h.
 //
 // The ring is a LOGICAL LIST of lines — hist_lines of history, oldest first,
 // then the rows of the live screen — and the copy walks that list rather
@@ -1126,11 +1178,27 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows)
 // contiguously in the fresh ring, and set screen_top to where the screen
 // landed. Cells are copied row by row, min(old cols, new cols) each, so
 // the left edge is what every line keeps.
-bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows)
+int tty_resize(tty_t *t, uint32_t cols, uint32_t rows)
 {
 	// Same fence as pty_create_slave: sanity, not policy.
 	if (t == NULL || cols < 2 || rows < 2 || cols > 512 || rows > 256)
-		return false;
+		return -1;
+
+	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+	if (t->cols == cols && t->rows == rows)
+	{
+		spinlock_release_irqrestore(&t->lock, flags);
+		return 0;
+	}
+	if (t->is_pty && t->pty_mode == PTY_MODE_STREAM)
+	{
+		t->cols = cols;
+		t->rows = rows;
+		t->generation++;
+		spinlock_release_irqrestore(&t->lock, flags);
+		return 1;
+	}
+	spinlock_release_irqrestore(&t->lock, flags);
 
 	uint32_t new_total = rows * TTY_SCROLLBACK_SCREENS;
 	// Allocate OUTSIDE the grid lock: kmalloc takes the allocator's own
@@ -1142,7 +1210,15 @@ bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows)
 	// above is this function's only refusal.
 	tty_cell_t *fresh = kmalloc((size_t)new_total * cols * sizeof(tty_cell_t));
 
-	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+	flags = spinlock_acquire_irqsave(&t->lock);
+	// A concurrent resize may have installed the requested geometry while
+	// this caller allocated. Leave its cells and generation intact.
+	if (t->cols == cols && t->rows == rows)
+	{
+		spinlock_release_irqrestore(&t->lock, flags);
+		kfree(fresh);
+		return 0;
+	}
 
 	// If the cursor would fall off the bottom of a shorter screen, the top
 	// `shift` rows of the old screen become history so the cursor's row is
@@ -1189,7 +1265,139 @@ bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows)
 
 	spinlock_release_irqrestore(&t->lock, flags);
 	kfree(old);
-	return true;
+	return 1;
+}
+
+// tty_refont's fence is tty_resize's — sanity, not policy — WIDENED TO THE
+// GRID THE MACHINE WAS BORN WITH. tty_init takes whatever the boot face makes
+// of the framebuffer and asks nobody (640 columns on a 5120-pixel screen),
+// and a terminal that may not be given that shape again can never go back to
+// the boot face.
+static uint32_t s_refont_cols_max = 512, s_refont_rows_max = 256;
+
+void tty_refont_limits(uint32_t *cols_max, uint32_t *rows_max)
+{
+	*cols_max = s_refont_cols_max;
+	*rows_max = s_refont_rows_max;
+}
+
+// The font change's carrier. tty_reflow does the thinking; this is the part
+// that needs a terminal: sizing and allocating the new ring, and swapping it
+// in under the grid lock.
+//
+// PLAN, ALLOCATE, PLAN AGAIN. The ring's size depends on how the text wraps,
+// which is only known under the lock, and the allocation must happen outside
+// it (tty_resize's rule: kmalloc takes the allocator's own interrupts-off
+// lock). Output keeps arriving in between, so the second plan can want more
+// than the first did; the buffer carries a screen of slack for that, and a
+// plan that still outgrows it goes round again rather than quietly dropping
+// history the fence had room for.
+//
+// THE LOOP ENDS, and not by giving up: a terminal under sustained output
+// could outrun a screen of slack on every pass, so after a few of them the
+// buffer asked for is TTY_REFONT_MAX_LINES itself — the plan's own fence,
+// which no plan can exceed, so the pass after that one always fits. Giving
+// up instead would hand the caller a terminal it could not reshape while the
+// others already were, which is the state a font change must not leave.
+int tty_refont(tty_t *t, uint32_t cols, uint32_t rows,
+               uint32_t *dropped, uint32_t *clipped)
+{
+	if (dropped != NULL) *dropped = 0;
+	if (clipped != NULL) *clipped = 0;
+	if (t == NULL || cols < 2 || rows < 2 ||
+	    cols > s_refont_cols_max || rows > s_refont_rows_max)
+		return -1;
+
+	tty_cell_t *fresh = NULL;
+	uint32_t have = 0;
+	for (uint32_t pass = 0; ; pass++)
+	{
+		uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+		bool same = (t->cols == cols && t->rows == rows);
+		if (t->cells == NULL || same)
+		{
+			spinlock_release_irqrestore(&t->lock, flags);
+			if (fresh != NULL)
+				kfree(fresh);
+			return same ? 0 : -1;
+		}
+
+		tty_reflow_in_t in = {
+			.cells = t->cells, .cols = t->cols, .rows = t->rows,
+			.total_lines = t->total_lines, .screen_top = t->screen_top,
+			.hist_lines = t->hist_lines, .view_offset = t->view_offset,
+			.cur_row = t->cur_row, .cur_col = t->cur_col,
+			.save_row = t->save_row, .save_col = t->save_col,
+		};
+		tty_reflow_out_t out;
+		if (!tty_reflow_plan(&in, cols, rows, TTY_REFONT_MAX_LINES, &out))
+		{
+			spinlock_release_irqrestore(&t->lock, flags);
+			if (fresh != NULL)
+				kfree(fresh);
+			return -1;
+		}
+
+		if (fresh != NULL && out.lines_needed <= have &&
+		    tty_reflow_run(&in, cols, rows, TTY_REFONT_MAX_LINES, fresh, have, &out))
+		{
+			tty_cell_t *old = t->cells;
+			t->cells       = fresh;
+			t->cols        = cols;
+			t->rows        = rows;
+			t->total_lines = have;
+			t->hist_lines  = out.hist_lines;
+			t->screen_top  = out.hist_lines;   // laid down history first (tty_reflow.h)
+			t->view_offset = out.view_offset;
+			t->cur_row     = out.cur_row;
+			t->cur_col     = out.cur_col;
+			t->save_row    = out.save_row;
+			t->save_col    = out.save_col;
+			t->generation++;                   // every grid mutation (the text-console
+			                                   // selection reads this and lets go)
+			spinlock_release_irqrestore(&t->lock, flags);
+			kfree(old);
+			if (dropped != NULL) *dropped = out.history_dropped;
+			if (clipped != NULL) *clipped = out.below_clipped;
+			return 1;
+		}
+
+		uint32_t needed = out.lines_needed;
+		spinlock_release_irqrestore(&t->lock, flags);
+		if (fresh != NULL)
+			kfree(fresh);
+
+		// The reflow reports the LEAST that holds the text. A terminal is
+		// owed the scrollback it would have been born with besides, so
+		// going wider does not shrink how far back it can remember.
+		uint32_t want = needed + rows;
+		if (want < rows * TTY_SCROLLBACK_SCREENS)
+			want = rows * TTY_SCROLLBACK_SCREENS;
+		if (want > TTY_REFONT_MAX_LINES || pass >= 3)
+			want = TTY_REFONT_MAX_LINES;
+		fresh = kmalloc((size_t)want * cols * sizeof(tty_cell_t));
+		have = want;
+	}
+}
+
+void tty_repaint_focused(void)
+{
+	tty_t *t = kTTYFocused;
+	if (t == NULL || !kTTYReady || kTTYDirect)
+		return;
+	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+	// Focus may have moved while we waited; the one that holds the glass
+	// NOW is the one to paint, and its lock is the one to hold doing it.
+	if (t == kTTYFocused)
+	{
+		tty_repaint_locked(t);
+		// The repaint painted over whatever was laid on top of the grid —
+		// the text console's pointer and selection — and a caller that
+		// changed no cell changed no generation, so the overlay would go on
+		// believing it was on the glass. The generation is how it finds out.
+		t->generation++;
+	}
+	spinlock_release_irqrestore(&t->lock, flags);
 }
 
 int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
@@ -1243,21 +1451,25 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
 // The count doubles as a LIFETIME GUARD for kernel code that must survive its
 // own hangup sweep (pty_master_close) — a holder is a holder, whether it is a
 // task sitting at the terminal or the code taking the terminal away.
-// The slave is buried when the master is CLOSED and the seats are EMPTY —
-// whichever happens last does it. The race between a last unref and a
-// master close is settled by the unlink: burial happens inside the list
-// lock, and only the caller who actually finds the node on the list frees
-// it — the loser finds it already gone and walks away.
+// The slave is buried when the master is CLOSED, the seats are EMPTY, and
+// no operation is still inside it from either side (holds) — whichever of
+// the three happens last does it. The race between them is
+// settled by the unlink: burial happens inside the list lock, and only the
+// caller who actually finds the node on the list frees it — the loser finds
+// it already gone and walks away.
 
 static void pty_maybe_bury(tty_t *t)
 {
-	if (!t->masterClosed || t->seats > 0)
+	if (!t->masterClosed || t->seats > 0 || t->holds > 0)
 		return;
 
 	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
 	// Re-check under the lock (the flags may have moved), then unlink; a
-	// node not found was buried by the racing caller.
-	if (!t->masterClosed || t->seats > 0)
+	// node not found was buried by the racing caller. holds is the third
+	// condition: an operation still inside the slave (pty_master_hold,
+	// pty_seat_hold) buries it itself when it leaves — and a seat hold is
+	// taken under this same lock, so one cannot arrive after the unlink.
+	if (!t->masterClosed || t->seats > 0 || t->holds > 0)
 	{
 		spinlock_release_irqrestore(&kPtyListLock, flags);
 		return;
@@ -1278,25 +1490,89 @@ static void pty_maybe_bury(tty_t *t)
 
 	if (found)
 	{
+		// The pty's own side-less hold on its stream (pipe.h holds): the
+		// ends have closed by now, so this is normally the free itself; an
+		// operation that still references an end keeps the pipe past it.
+		if (t->stream != NULL)
+			pipe_unhold(t->stream);
 		kfree(t->cells);
 		kfree(t);
 	}
 }
 
-void tty_pty_ref(tty_t *t)
+static bool pty_take_seat(tty_t *t, bool committed)
 {
-	if (t == NULL || !t->is_pty)
-		return;
-	__sync_fetch_and_add(&t->seats, 1);
-	t->everSeated = true;   // arms HUNGUP: emptied is hung up, young is not
+	if (t == NULL || tty_is_vt(t))
+		return true;
+	// By pointer against the registry (tty.h): the seat is taken under the
+	// lock burial unlinks under, so a slave found here is alive and stays
+	// so — and a slave not found is buried, and no seat can be taken on it.
+	// STREAM closure shares this lock with the last-seat decrement: an
+	// admitted reservation keeps the writer open until committed or cancelled.
+	bool found = false;
+	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
+	for (tty_t *p = kPtyList; p != NULL; p = p->next_pty)
+		if (p == t)
+		{
+			if (t->masterClosed || t->stream_writer_closed)
+				break;
+			__sync_fetch_and_add(&t->seats, 1);
+			if (committed)
+				t->everSeated = true;
+			found = true;
+			break;
+		}
+	spinlock_release_irqrestore(&kPtyListLock, flags);
+	return found;
+}
+
+bool tty_pty_ref(tty_t *t)
+{
+	return pty_take_seat(t, true);
+}
+
+bool tty_pty_reserve_seat(tty_t *t)
+{
+	return pty_take_seat(t, false);
+}
+
+tty_t *task_tty_hold(struct task *t)
+{
+	tty_t *tty = task_tty(t);
+	if (tty_is_vt(tty))
+		return tty;
+	return pty_seat_hold(tty) ? tty : NULL;
+}
+
+void task_tty_release(tty_t *tty)
+{
+	if (tty != NULL && !tty_is_vt(tty))
+		pty_seat_unhold(tty);
 }
 
 void tty_pty_unref(tty_t *t)
 {
 	if (t == NULL || !t->is_pty)
 		return;
-	if (__sync_sub_and_fetch(&t->seats, 1) <= 0)
-		pty_maybe_bury(t);
+	// Serialize the last-seat decision with new seats. Mark closure before
+	// unlocking so EOF cannot be followed by an accepted re-seat. Keep an
+	// operation hold through the pipe close: a concurrent master close can
+	// drop its guard seat and attempt burial while the pipe wakes its reader.
+	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
+	bool emptied = __sync_sub_and_fetch(&t->seats, 1) <= 0;
+	bool close_writer = false;
+	if (emptied)
+	{
+		__sync_fetch_and_add(&t->holds, 1);
+		close_writer = t->stream != NULL && t->everSeated &&
+		    __sync_bool_compare_and_swap(&t->stream_writer_closed, false, true);
+	}
+	spinlock_release_irqrestore(&kPtyListLock, flags);
+	// Pipe close can wake the scheduler; queue lock precedes kPtyListLock.
+	if (close_writer)
+		pipe_close_write_end(t->stream);
+	if (emptied)
+		pty_seat_unhold(t);
 }
 
 void pty_master_close(tty_t *slave)
@@ -1309,8 +1585,8 @@ void pty_master_close(tty_t *slave)
 	// freed — and the sweep below is what makes them depart: a task takes
 	// its SIGHUP, dies on another core, and reaches tty_pty_unref while we
 	// are still walking the list, reading slave->index for the diagnostic,
-	// and calling the burial at the bottom. The seat count is the only thing
-	// burial consults, so holding one is how the sweep says "still in use".
+	// and calling the burial at the bottom. The guard keeps the seat count
+	// nonzero while this sweep still needs the slave.
 	//
 	// Bumped directly rather than through tty_pty_ref because this is NOT a
 	// seat: everSeated must stay off, or closing the master of a pty nobody
@@ -1319,6 +1595,19 @@ void pty_master_close(tty_t *slave)
 	// hangup is being dispatched, so it has not completed.
 	__sync_fetch_and_add(&slave->seats, 1);
 	slave->masterClosed = true;
+
+	// A STREAM slave's reader is gone with the master: a child that writes
+	// after this gets the pipe's EPIPE instead of parking forever on a ring
+	// nobody will drain (SERVERS.md § 2). A slave never seated never had a
+	// writer, so its write end goes here too, and the pipe frees itself.
+	if (slave->stream != NULL)
+	{
+		if (__sync_bool_compare_and_swap(&slave->stream_reader_closed, false, true))
+			pipe_close_read_end(slave->stream);
+		if (!slave->everSeated &&
+		    __sync_bool_compare_and_swap(&slave->stream_writer_closed, false, true))
+			pipe_close_write_end(slave->stream);
+	}
 
 	// ── THE OTHER HANGUP (2026-08-31; booked in PTY.md § SIGHUP on master
 	// close). tty_task_departed's sweep is the SHELL-side carrier drop; this
@@ -1356,8 +1645,56 @@ void pty_master_close(tty_t *slave)
 	}
 
 	// Drop the guard, which IS the burial call: whoever holds the last seat
-	// buries, and after the sweep that is us or it is the task still seated.
+	// buries, and after the sweep that is us or it is the task still seated
+	// — or the operation still inside (pty_master_unhold, pty_seat_unhold).
 	tty_pty_unref(slave);
+}
+
+// The master's hold (tty.h). Taken before publishing a new master, or under
+// the holder's handleLock while its handle is live. In both cases the
+// stream's read end is still owned when we reference it. Released in reverse
+// order: the pipe end first (its last-out rule may destroy the pipe), then
+// the hold, whose zero is a burial condition like an emptied seat count.
+void pty_master_hold(tty_t *slave)
+{
+	__sync_fetch_and_add(&slave->holds, 1);
+	if (slave->stream != NULL)
+		pipe_ref_read_end(slave->stream);
+}
+
+void pty_master_unhold(tty_t *slave)
+{
+	if (slave->stream != NULL)
+		pipe_close_read_end(slave->stream);
+	if (__sync_sub_and_fetch(&slave->holds, 1) <= 0)
+		pty_maybe_bury(slave);
+}
+
+// The seat side's hold (tty.h). The pointer is matched against the registry
+// WITHOUT being dereferenced first: a slave the caller's task was seated on
+// may already be buried — its own teardown drops the seat while a sibling
+// thread is still entering a console read — and the list lock is what
+// burial unlinks under, so a node found here is alive for as long as the
+// hold is held.
+bool pty_seat_hold(tty_t *slave)
+{
+	bool found = false;
+	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
+	for (tty_t *t = kPtyList; t != NULL; t = t->next_pty)
+		if (t == slave)
+		{
+			__sync_fetch_and_add(&t->holds, 1);
+			found = true;
+			break;
+		}
+	spinlock_release_irqrestore(&kPtyListLock, flags);
+	return found;
+}
+
+void pty_seat_unhold(tty_t *slave)
+{
+	if (__sync_sub_and_fetch(&slave->holds, 1) <= 0)
+		pty_maybe_bury(slave);
 }
 
 // console_wake_if_ready's pty leg — the same wake idiom as its VT loop,
@@ -1407,6 +1744,10 @@ void tty_init(void)
 {
 	uint32_t cols = renderer_cols();
 	uint32_t rows = renderer_rows();
+
+	// The shape being born here must stay reachable (tty_refont's fence).
+	if (cols > s_refont_cols_max) s_refont_cols_max = cols;
+	if (rows > s_refont_rows_max) s_refont_rows_max = rows;
 
 	for (uint32_t i = 0; i < TTY_COUNT; i++)
 	{

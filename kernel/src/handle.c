@@ -1,21 +1,54 @@
 // handle.c — the per-task handle table. See handle.h for the contract.
 //
-// Deliberately dumb: a fixed array, no lock — but NOT "no concurrent access".
-// This header used to say that, and it was true until ring-3 threads arrived:
-// every thread of a task shares this table, so two threads can open, close,
-// or exit against the same slot at once. What keeps it lock-free is that the
-// slot's TYPE is the claim token, moved only by atomics: handle_alloc claims a
-// free slot through CLOSING; two-phase allocation claims one as RESERVED and
-// later commits through CLOSING; handle_close claims a non-closing state with
-// an exchange. Nothing touches a slot it did not win. Spawn still builds a
-// child's table with plain stores, and may: the child has not been submitted
-// to the scheduler, so nothing else can see it.
+// Deliberately dumb: a fixed array — but NOT "no concurrent access". Every
+// thread of a task shares this table, so two threads can open, close, or exit
+// against the same slot at once. The slot's TYPE is the claim token, moved
+// only by atomics: handle_alloc claims a free slot through CLOSING; two-phase
+// allocation claims one as RESERVED and later commits through CLOSING;
+// handle_close claims a non-closing state with an exchange. Nothing touches a
+// slot it did not win. Spawn still builds a child's table with plain stores,
+// and may: the child has not been submitted to the scheduler, so nothing else
+// can see it.
 //
 // (Codex #29 rd4 made close atomic and argued "alloc only ever reclaims a
 // NONE slot" — which is only true once alloc's claim is atomic too. Fable's
 // review of rd15, 2026-08-25, found alloc still scanning-and-storing: two
 // threads opening at once could both win slot N, orphaning one object with no
 // handle at all and handing the other thread a handle of the wrong type.)
+//
+// ── THE PIN (Codex #101 rd4, two P1s with one cause) ────────────────────────
+//
+// The claim token protects the SLOT. It never protected the OBJECT: a syscall
+// resolved a handle to a bare pointer, and from that instant a sibling thread
+// could close the same handle, run the closer, and free the object while the
+// first thread was still inside an operation on it — a reader parked in
+// pipe_read woke into a freed pipe; spawn took a TCP reference on a
+// connection the closer had just released. telnetd is the first program to
+// share handles between threads AND park in a syscall while its task tears
+// down, and it found both.
+//
+// So a handle is now resolved PINNED. handle_pin does two things in one
+// critical section under the task's handleLock: it checks the slot is live,
+// and it takes a reference ON THE OBJECT in the object's own currency (a pipe
+// end's readers/writers, a file's holds, a TCP conn's pins, a
+// listener's busy, a directory's handleRefCount, a join object's refcount, a
+// pty's holds, a UDP or ICMP conn's holders). handle_close claims the slot
+// under the same lock and only then releases the table's reference — outside
+// the lock, because a release can do disk I/O. The two cannot interleave: a
+// pin that saw the slot
+// live holds its reference before the closer can drop the table's, and a pin
+// that arrives after the claim sees CLOSING and refuses. The lock is held for
+// a handful of instructions on both sides, never across a park.
+//
+// The consequence worth stating: an operation in flight IS a holder. A parked
+// reader whose handle a sibling closed is the one who frees the pipe when it
+// leaves; a file whose last table handle closed mid-read gets its real close
+// from the reader's unpin. Spawn's redirections are the other use of the
+// lock: handle_share takes the CHILD's own reference in the same critical
+// section, so the object is the child's before the load begins (a pin would
+// keep a net conn's row but not its line). Lock order: handleLock, then the
+// object's own lock (pipe, listener) inside it — never the reverse, because
+// no object code ever touches a handle table.
 
 #include "handle.h"
 #include "task.h"
@@ -29,7 +62,8 @@
 #include "memory/vma.h"       // call_in_kernel_context
 #include "thread_join.h"           // thread_join_close — HANDLE_THREAD's release
 #include "driver/net/udp_conn.h"   // udp_conn_close — HANDLE_NET_UDP's release
-#include "driver/net/tcp.h"        // tcp_conn_close — HANDLE_NET_TCP's release
+#include "driver/net/tcp.h"        // tcp_conn_release / tcp_listener_close — the TCP kinds' releases
+#include "gui/glass.h"               // glass_view_ref / _release / _close — the /dev/glass viewer's
 #include "driver/net/icmp_conn.h"  // icmp_conn_close — HANDLE_NET_ICMP's release
 
 void handle_table_init(struct task *t)
@@ -160,7 +194,11 @@ bool handle_install(struct task *t, int slot, handle_type_t type, void *object)
 	return true;
 }
 
-handle_t *handle_get(struct task *t, int h)
+// An UNPINNED look at a slot — the table's own use only (handle_close's
+// range and liveness pre-check). Nothing may dereference `object` through
+// this: the moment it returns, a sibling's close can free what it points at.
+// Every syscall resolves through handle_pin.
+static handle_t *handle_get(struct task *t, int h)
 {
 	task_t *task = (task_t *)t;
 
@@ -173,6 +211,172 @@ handle_t *handle_get(struct task *t, int h)
 		return NULL;   // free, reserved, or mid-close — none is operable
 
 	return &task->handles[h];
+}
+
+// The object-reference half of a pin, in each object's own currency. Runs
+// under handleLock, so nothing here may block: every arm is an atomic
+// increment or a short spinlock section. The console tags reference no
+// object, so they have no arm.
+static void handle_object_ref(handle_type_t type, void *object)
+{
+	switch (type)
+	{
+		case HANDLE_PIPE_READ:     pipe_ref_read_end((pipe_t *)object); break;
+		case HANDLE_PIPE_WRITE:    pipe_ref_write_end((pipe_t *)object); break;
+		case HANDLE_FILE:
+			// A holder AND a pin, in one step — the closer needs to know
+			// whether what remains can answer for the close (a handle) or
+			// cannot (an operation), and must never see one without the
+			// other (vfs.h `holds`).
+			__sync_fetch_and_add(&((vfs_file_t *)object)->holds, VFS_HOLD_PIN | 1);
+			break;
+		case HANDLE_DIR:
+			__sync_fetch_and_add(&((vfs_directory_t *)object)->handleRefCount, 1);
+			break;
+		case HANDLE_THREAD:        thread_join_ref((thread_join_t *)object); break;
+		case HANDLE_NET_UDP:       udp_conn_ref((udp_conn_t *)object); break;
+		case HANDLE_NET_TCP:       tcp_conn_pin((tcp_conn_t *)object); break;   // NOT a handle: the last handle's close still hangs up (tcp.h pins)
+		case HANDLE_NET_ICMP:      icmp_conn_ref((icmp_conn_t *)object); break;
+		case HANDLE_NET_LISTENER:  tcp_listener_hold((tcp_listener_t *)object); break;
+		case HANDLE_PTY_MASTER:    pty_master_hold((tty_t *)object); break;
+		case HANDLE_GLASS:         glass_view_ref((glass_view_t *)object); break;
+		default: break;
+	}
+}
+
+bool handle_pin(struct task *t, int h, handle_t *out)
+{
+	task_t *task = (task_t *)t;
+
+	if (h < 0 || h >= TASK_MAX_HANDLES)
+		return false;
+
+	uint64_t flags = spinlock_acquire_irqsave(&task->handleLock);
+	handle_type_t type = __atomic_load_n(&task->handles[h].type, __ATOMIC_ACQUIRE);
+	if (type == HANDLE_NONE || type == HANDLE_RESERVED || type == HANDLE_CLOSING)
+	{
+		spinlock_release_irqrestore(&task->handleLock, flags);
+		return false;   // free, reserved, or mid-close — none is operable
+	}
+	// The slot is live and the closer cannot claim it while we hold the
+	// lock, so the object is alive and its own reference count can be
+	// taken safely. (alloc published `object` before the live type with
+	// release semantics; the acquire load above sees it.)
+	void *object = task->handles[h].object;
+	handle_object_ref(type, object);
+	spinlock_release_irqrestore(&task->handleLock, flags);
+
+	out->type = type;
+	out->object = object;
+	return true;
+}
+
+void handle_unpin(const handle_t *pinned)
+{
+	// The same releases handle_close runs for the table's reference where
+	// the object's currency is one count — an in-flight operation is a
+	// holder like any other, and whichever holder goes last does the real
+	// close (EOF/EPIPE for a pipe end, the VFS close for a file, burial for
+	// a pty). The net conns keep hanging up and freeing apart: their close
+	// is the handle count's alone, and a pin only keeps the memory.
+	switch (pinned->type)
+	{
+		case HANDLE_PIPE_READ:     pipe_close_read_end((pipe_t *)pinned->object); break;
+		case HANDLE_PIPE_WRITE:    pipe_close_write_end((pipe_t *)pinned->object); break;
+		case HANDLE_FILE:
+		{
+			// The pin and its hold go in one atomic step (vfs.h `holds`).
+			// If this unpin is the last holder it does the real close, and
+			// the verdict goes to the log alone — the syscall that closed
+			// the handle has already answered "deferred" (os64/file.h).
+			bool deferred;
+			(void)handle_file_object_close_verdict(pinned->object, true, &deferred);
+			break;
+		}
+		case HANDLE_DIR:           handle_dir_object_close(pinned->object); break;
+		case HANDLE_THREAD:        thread_join_close((thread_join_t *)pinned->object); break;
+		case HANDLE_NET_UDP:       udp_conn_release((udp_conn_t *)pinned->object); break;
+		case HANDLE_NET_TCP:       tcp_conn_unpin((tcp_conn_t *)pinned->object); break;
+		case HANDLE_NET_ICMP:      icmp_conn_release((icmp_conn_t *)pinned->object); break;
+		case HANDLE_NET_LISTENER:  tcp_listener_release((tcp_listener_t *)pinned->object); break;
+		case HANDLE_PTY_MASTER:    pty_master_unhold((tty_t *)pinned->object); break;
+		case HANDLE_GLASS:         glass_view_release((glass_view_t *)pinned->object); break;
+		default: break;
+	}
+}
+
+bool handle_share(struct task *t, int h, handle_t *out)
+{
+	task_t *task = (task_t *)t;
+
+	if (h < 0 || h >= TASK_MAX_HANDLES)
+		return false;
+
+	uint64_t flags = spinlock_acquire_irqsave(&task->handleLock);
+	handle_type_t type = __atomic_load_n(&task->handles[h].type, __ATOMIC_ACQUIRE);
+	void *object = task->handles[h].object;
+	// The child's reference, in the handle's own currency, taken while the
+	// slot is provably live — the closer's claim cannot straddle this lock.
+	bool shareable = true;
+	switch (type)
+	{
+		case HANDLE_CONSOLE_IN:
+		case HANDLE_CONSOLE_OUT:
+		case HANDLE_CONSOLE_ERR:  break;   // a tag, not an object: nothing to hold
+		case HANDLE_PIPE_READ:    pipe_ref_read_end((pipe_t *)object); break;
+		case HANDLE_PIPE_WRITE:   pipe_ref_write_end((pipe_t *)object); break;
+		case HANDLE_FILE:
+			// A holder AND a pin, like an operation's, because until the
+			// child's slot exists this share IS an operation in flight on
+			// the parent's handle: if the spawn fails, handle_unshare does
+			// the real close with nowhere to answer to, so a sibling's close
+			// that sees this hold must be told "deferred", not 0 (vfs.h
+			// `holds`). handle_share_install turns it into a handle's hold.
+			__sync_fetch_and_add(&((vfs_file_t *)object)->holds, VFS_HOLD_PIN | 1);
+			break;
+		case HANDLE_NET_TCP:      tcp_conn_ref((tcp_conn_t *)object); break;
+		default:                  shareable = false; break;   // free, mid-close, or not a stream
+	}
+	spinlock_release_irqrestore(&task->handleLock, flags);
+
+	if (!shareable)
+		return false;
+	out->type = type;
+	out->object = object;
+	return true;
+}
+
+void handle_share_install(struct task *child, int slot, const handle_t *shared)
+{
+	// The share becomes the child's handle: a holder that will close in its
+	// own time and answer for the file, so its pin comes off — one atomic
+	// step, so a closer's subtraction sees either the operation or the
+	// handle, never a hold that is neither.
+	if (shared->type == HANDLE_FILE)
+		__sync_fetch_and_sub(&((vfs_file_t *)shared->object)->holds, VFS_HOLD_PIN);
+	handle_install(child, slot, shared->type, shared->object);
+}
+
+void handle_unshare(const handle_t *shared)
+{
+	switch (shared->type)
+	{
+		case HANDLE_PIPE_READ:    pipe_close_read_end((pipe_t *)shared->object); break;
+		case HANDLE_PIPE_WRITE:   pipe_close_write_end((pipe_t *)shared->object); break;
+		case HANDLE_FILE:
+		{
+			// The pin and its hold go together, as an unpin's do. If the
+			// share was the last holder — a sibling closed the parent's
+			// handle while the spawn was loading — this is the real close,
+			// and its verdict goes to the log: that close already answered
+			// "deferred" (os64/file.h).
+			bool deferred;
+			(void)handle_file_object_close_verdict(shared->object, true, &deferred);
+			break;
+		}
+		case HANDLE_NET_TCP:      tcp_conn_release((tcp_conn_t *)shared->object); break;
+		default: break;
+	}
 }
 
 // Trampoline body for handle_file_object_close: runs under kKernelPML4 on the
@@ -209,17 +413,40 @@ static void file_close_in_kernel(void *arg)
 
 int handle_file_object_close(void *vfs_file)
 {
+	bool deferred;
+	return handle_file_object_close_verdict(vfs_file, false, &deferred);
+}
+
+int handle_file_object_close_verdict(void *vfs_file, bool as_pin, bool *deferred)
+{
 	vfs_file_t *file = (vfs_file_t *)vfs_file;
+	*deferred = false;
 
 	if (file == NULL || file->fops == NULL || file->fops->close == NULL)
 		return 0;   // nothing to close is not a failure to close
 
-	// Drop THIS handle's reference. Spawn redirection shares one open file
-	// between parent and child (see handleRefCount in vfs.h) — same rule as
-	// pipe ends: only the LAST holder's close actually closes. Atomic because
-	// parent and child can close concurrently on different cores.
-	if (__sync_sub_and_fetch(&file->handleRefCount, 1) > 0)
+	// Drop THIS hold — a handle's, or an operation's (which drops its pin
+	// too, in the same step). Spawn redirection shares one open file between
+	// parent and child (see `holds` in vfs.h) — same rule as pipe ends: only
+	// the LAST holder's close actually closes. Atomic because parent and
+	// child can close concurrently on different cores.
+	//
+	// WHO IS LEFT decides what this close can honestly answer, and the one
+	// subtraction hands back both counts from the same instant. Another
+	// HANDLE will close in its own time and its close answers for the file.
+	// A PIN — an operation in flight on another thread, a syscall's or a
+	// spawn's share not yet a child's — cannot: its end does the real close
+	// with nowhere to return to, so this close says "deferred" rather than
+	// 0. Because a pin and its hold are one word,
+	// there is no order of events in which a pin's hold is counted while its
+	// pin is not (or the reverse): whatever remains is exactly what the
+	// answer describes.
+	uint64_t left = __sync_sub_and_fetch(&file->holds, as_pin ? (VFS_HOLD_PIN | 1) : 1);
+	if (VFS_HOLDERS(left) > 0)
+	{
+		*deferred = VFS_PINS(left) > 0 && VFS_HOLDERS(left) <= VFS_PINS(left);
 		return 0;   // somebody else still holds it; nothing was flushed here
+	}
 
 	// Harvest f_path BEFORE closing — the VFS close frees the file object, and
 	// for a HANDLE_FILE, f_path is always the kmalloc'd copy syscall_open made
@@ -267,6 +494,12 @@ int handle_file_object_close(void *vfs_file)
 	// (ext2 makes this a formality — writes are full write-through, so there
 	// is nothing left to fail at close. FAT is why the line exists, and the
 	// lifeboat is FAT.)
+	//
+	// THE LINE SAYS WHAT IS TRUE OF EVERY CLOSE THAT FAILS, and no more: a
+	// close is also where a file that JUDGES what it was given says no —
+	// /sys/console/font refuses a font there — and nothing was on its way to
+	// a disk in that case. A message that names a flush on those sends the
+	// reader looking for a disk problem that does not exist.
 	// DEBUG_EXCEPTIONS, and the choice is load-bearing rather than lazy:
 	// printd requires ALL the bits it is given ((kDebugLevel & level) !=
 	// level), and DEBUG_VFS is not in DEBUG_MINIMAL_OPTIONS — so tagging this
@@ -276,7 +509,7 @@ int handle_file_object_close(void *vfs_file)
 	// went wrong that nobody asked to hear about.
 	if (rc != 0)
 		printd(DEBUG_EXCEPTIONS,
-		       "handle_file_object_close: FLUSH FAILED (%d) closing '%s' — data written to this file may not be on disk\n",
+		       "handle_file_object_close: CLOSE FAILED (%d) on '%s' - what was written was not committed (a disk file: may not be on disk; a /sys file: it refused, and says why when read)\n",
 		       rc, path_copy ? path_copy : "<unnamed>");
 
 	if (path_copy != NULL)
@@ -285,8 +518,10 @@ int handle_file_object_close(void *vfs_file)
 }
 
 // Directory sibling of the file pair above — same kernel-context discipline
-// (a directory close COULD flush fs state), same f_path-copy ownership, no
-// refcount (spawn rejects HANDLE_DIR, so a dir object has exactly one owner).
+// (a directory close COULD flush fs state), same f_path-copy ownership, and
+// the same last-holder rule: the handle is one reference and every pinned
+// readdir in flight is another (spawn rejects HANDLE_DIR, so those are the
+// only two kinds).
 static void dir_close_in_kernel(void *arg)
 {
 	vfs_directory_t *dir = (vfs_directory_t *)arg;
@@ -299,6 +534,9 @@ void handle_dir_object_close(void *vfs_dir)
 
 	if (dir == NULL || dir->dops == NULL || dir->dops->close == NULL)
 		return;
+
+	if (__sync_sub_and_fetch(&dir->handleRefCount, 1) > 0)
+		return;   // a pinned operation still holds it; its unpin closes
 
 	// Harvest before close — the VFS close frees the directory object, and
 	// f_path is the kmalloc'd copy syscall_open made (dir flavor).
@@ -329,10 +567,24 @@ void handle_dir_object_close(void *vfs_dir)
 		kfree(path_copy);
 }
 
-bool handle_close(struct task *t, int h)
+// Close, and say how it went, as TWO facts because they live in different
+// number spaces: the return is whether there was a handle to close at all
+// (false for an empty slot, or one another closer owns), and *rc is the
+// filesystem's own answer for the LAST close of a file — 0, or its nonzero
+// code when what was written could not be committed. A filesystem's -1 and
+// "no such handle" must never be one value, which is why this is not a
+// single int with a sentinel (it was, for an hour, and a refused font read
+// back as a bad handle). The slot is freed whenever the return is true; the
+// verdict is about the bytes (os64/file.h).
+// *deferred is the third fact: the verdict went to an operation still in
+// flight on another thread, and this close cannot have it.
+bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 {
+	*rc = 0;
+	*deferred = false;
 	// Everything below works through `handle` (== &task->handles[h]); the slot
-	// index is closed over by that pointer, so the task_t is not needed here.
+	// index is closed over by that pointer. The task is needed for one thing,
+	// its handleLock.
 	handle_t *handle = handle_get(t, h);
 
 	if (handle == NULL)
@@ -373,19 +625,32 @@ bool handle_close(struct task *t, int h)
 	//   NONE — after the object is released. The TYPE is the claim token (a
 	//   console handle's object is legitimately NULL, so it cannot be one);
 	//   a loser sees CLOSING or NONE and bails.
+	//
+	// UNDER handleLock (the file header's § The pin): the claim is what a
+	// handle_pin in progress must not straddle. The lock covers the exchange
+	// and the read of `object` only — the release below can sleep in the
+	// VFS, and it does not need the lock, because a pin that got in first
+	// already holds its own reference on the object.
+	task_t *task = (task_t *)t;
+	uint64_t lockFlags = spinlock_acquire_irqsave(&task->handleLock);
 	handle_type_t type = __atomic_exchange_n(&handle->type, HANDLE_CLOSING, __ATOMIC_ACQ_REL);
 	if (type == HANDLE_NONE)
 	{
 		// We stamped CLOSING onto an already-free slot — undo it so alloc can
 		// have it back. (Nobody else can be mid-close on a NONE slot.)
 		__atomic_store_n(&handle->type, HANDLE_NONE, __ATOMIC_RELEASE);
+		spinlock_release_irqrestore(&task->handleLock, lockFlags);
 		return false;
 	}
 	if (type == HANDLE_CLOSING)
+	{
+		spinlock_release_irqrestore(&task->handleLock, lockFlags);
 		return false;   // another closer owns it — must NOT revert, that frees it mid-close
+	}
 
 	// We own it, and alloc cannot touch a CLOSING slot, so `object` is stable.
 	void *object = handle->object;
+	spinlock_release_irqrestore(&task->handleLock, lockFlags);
 
 	// Dropping the task's reference on the object. For a pipe this is THE
 	// refcount that decides EOF (last writer gone) and EPIPE (last reader
@@ -399,7 +664,12 @@ bool handle_close(struct task *t, int h)
 			pipe_close_write_end((pipe_t *)object);
 			break;
 		case HANDLE_FILE:
-			handle_file_object_close(object);
+			// The one closer with something to say — a flush that did not
+			// happen, or a file that judged what it was given and refused —
+			// when it is the last holder. When an operation on another
+			// thread still holds the file, the real close is that
+			// operation's end, and this one can only say so.
+			*rc = handle_file_object_close_verdict(object, false, deferred);
 			break;
 		case HANDLE_DIR:
 			handle_dir_object_close(object);
@@ -411,10 +681,17 @@ bool handle_close(struct task *t, int h)
 			thread_join_close((thread_join_t *)object);
 			break;
 		case HANDLE_NET_TCP:
-			// Orderly shutdown: sends FIN and DETACHES — the closing
-			// dance and TIME_WAIT finish in the background (tcp_poll),
-			// so closing a handle never blocks the program.
-			tcp_conn_close((tcp_conn_t *)object);
+			// One handle fewer names the conn; the LAST one's close is the
+			// orderly shutdown — FIN, then DETACH, the closing dance and
+			// TIME_WAIT finishing in the background (tcp_poll), so closing
+			// a handle never blocks the program. An earlier close is a
+			// parent stepping away from a session it handed to a child.
+			tcp_conn_release((tcp_conn_t *)object);
+			break;
+		case HANDLE_NET_LISTENER:
+			// The door shuts: no new SYN finds it, what was queued is
+			// reset, and tcp_poll frees the row once nobody is inside it.
+			tcp_listener_close((tcp_listener_t *)object);
 			break;
 		case HANDLE_NET_ICMP:
 			icmp_conn_close((icmp_conn_t *)object);
@@ -426,11 +703,16 @@ bool handle_close(struct task *t, int h)
 			// makes benign by construction.
 			pty_master_close((tty_t *)object);
 			break;
+		case HANDLE_GLASS:
+			// The viewer stops watching: a reader parked in it wakes to
+			// CLOSED, and the last reference frees it (gui/glass.h).
+			glass_view_close((glass_view_t *)object);
+			break;
 		case HANDLE_NET_UDP:
-			// Hang up: unbinds the ephemeral port and frees the object.
-			// Safe on any CR3 (everything it touches is kmalloc'd, upper
-			// half) and safe from handle_close_all at task exit (the
-			// owning thread has left any blocking read by then).
+			// Hang up: unbinds the ephemeral port, wakes a parked reader to
+			// its CLOSED verdict, and drops the handle's hold — the last
+			// holder frees. Safe on any CR3 (everything it touches is
+			// kmalloc'd, upper half).
 			udp_conn_close((udp_conn_t *)object);
 			break;
 		default:
@@ -446,6 +728,16 @@ bool handle_close(struct task *t, int h)
 	handle->object = NULL;
 	__atomic_store_n(&handle->type, HANDLE_NONE, __ATOMIC_RELEASE);
 	return true;
+}
+
+// For the callers that only need to know whether there was a handle to
+// close — burial, the redirect plumbing. What the close could not commit is
+// already in the log by the time it gets here (handle_file_object_close).
+bool handle_close(struct task *t, int h)
+{
+	int rc;
+	bool deferred;
+	return handle_close_rc(t, h, &rc, &deferred);
 }
 
 void handle_close_all(struct task *t)

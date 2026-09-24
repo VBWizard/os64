@@ -33,6 +33,8 @@
 //               ONE node: the random/urandom split is a fossil of a gated
 //               estimator Linux itself retired in 5.6.
 //   /dev/tty    the caller's own terminal (see THE ALIAS below).
+//   /dev/glass  the screen, as a stream of changed rectangles: one viewer
+//               per open (gui/glass.h, os64/glass.h). Also an alias.
 //
 // ── Lineage, because it explains the shapes ─────────────────────────────────
 //
@@ -95,18 +97,29 @@ void devfs_mount(void);
 // THE ALIAS HOOK (syscall_open's one question for devfs).
 //
 // "Does this fs-local path name a HANDLE KIND rather than a byte container?"
-// True for exactly one path today — "/tty" — and *type receives the handle
-// tag the requested mode calls for: reading gets HANDLE_CONSOLE_IN, writing
-// or appending gets HANDLE_CONSOLE_OUT. The object is always NULL; a console
-// handle carries none, by design.
+// *type receives the handle tag and *object what the handle will carry:
+//   "/tty"    reading gets HANDLE_CONSOLE_IN, writing or appending
+//             HANDLE_CONSOLE_OUT, and the object is NULL — a console handle
+//             carries none, by design.
+//   "/glass"  "r" or "u" gets HANDLE_GLASS and a new glass_view_t
+//             (gui/glass.h): one viewer of the screen, and with "u" also a
+//             keyboard and pointer. On a boot with no desktop the answer
+//             is HANDLE_NONE, which the caller turns into a refused open.
+//             /dev/glass blocks for the next change, and a HANDLE_FILE read
+//             may not sleep (THE ALIAS above) — the same reason /dev/tty is
+//             a handle.
 //
-// Deliberately a direct call rather than a new fops slot: there is ONE
-// customer, and consumer-driven growth says size the seam to the demand. The
-// day a second filesystem wants to alias a handle, this becomes the op-table
-// entry it should have been, and this function becomes its implementation.
-// Returns false for every other path (and for any fs that is not devfs), so
-// the caller falls through to the ordinary open.
+// Deliberately a direct call rather than a new fops slot: the customers are
+// both devfs's, and consumer-driven growth says size the seam to the demand.
+// The day a second filesystem wants to alias a handle, this becomes the
+// op-table entry it should have been, and this function becomes its
+// implementation. Returns false for every other path (and for any fs that is
+// not devfs), so the caller falls through to the ordinary open.
 bool devfs_handle_alias(vfs_filesystem_t *fs, const char *path,
-                        const char *mode, handle_type_t *type);
+                        const char *mode, handle_type_t *type, void **object);
+
+// An alias whose handle could not be published (a full handle table): give
+// back what devfs_handle_alias created for it.
+void devfs_handle_alias_abandon(handle_type_t type, void *object);
 
 #endif

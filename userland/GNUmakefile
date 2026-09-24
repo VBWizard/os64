@@ -137,7 +137,8 @@ LAUNCH_OBJS := $(patsubst %,$(OBJ)/%.o,$(LAUNCH_SRCS))
 # the same day: a shared object's relocations resolve against itself and its
 # own dependencies (never against the executable that loaded it), so the
 # library has to carry every symbol the library uses.
-LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/env.c libos64/str.c libos64/bidi.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_text.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/thread_trampoline.S
+LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/arena.c libos64/env.c libos64/str.c libos64/bidi.c libos64/walk.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_theme.c libos64/ui_session.c libos64/ui_envelope.c libos64/ui_saved.c libos64/ui_list.c libos64/ui_palette.c libos64/ui_color.c libos64/ui_controls.c libos64/ui_text.c libos64/ui_font.c libos64/ui_font_settings.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/thread_trampoline.S \
+    libos64/text.c libos64/text_cache.c libos64/text_decode.c libos64/text_bitmap.c libos64/text_draw.c libos64/font_provider.c libos64/font_adopt.c libos64/font_config.c libos64/font_discovery.c libos64/font_install.c libos64/font_psf2.c
 # PIC objects live under obj/pic/ — a separate tree, because these are
 # compiled with different flags than everything else and an object built for
 # one world must never be picked up by the other.
@@ -216,7 +217,7 @@ LIBFETCH_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libfetch.so
 # isolation would miss a hash collision and prelink two objects into the same
 # slot. app_bases.py sorts before probing, so adding a library gives the build
 # one deterministic map independent of link order.
-LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so libpage.so)
+LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so libpage.so libfreetype.so)
 LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
 LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
 LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
@@ -243,11 +244,19 @@ HEX_BUFFER_OBJ  := $(OBJ)/$(HEX_BUFFER_SRC).o
 TAR_FORMAT_PROGRAMS := tartest
 TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
 
+# The telnet protocol engine (RFC 854 + RFC 1143) is bytes in, bytes out and
+# host-tested at every chunk size. The telnet CLIENT and telnetd both drive
+# it — the client role and the server role are one file, so the negotiation
+# has one implementation to be right. telnetd links the object the client
+# app already builds.
+TELNET_ENGINE_PROGRAMS := telnetd
+TELNET_ENGINE_OBJ      := $(OBJ)/apps/telnet/telnet_protocol.c.o
+
 # These programs consume the standalone gzip module. Keep the dependency
 # selective: linking libgzip into every app would turn an optional format
 # engine into part of the foundational runtime by accident. (os64get is not
 # here: it names libfetch, which carries its own edges on libgzip and libtls.)
-LIBGZIP_PROGRAMS := gzip gunzip gziptest
+LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd
 
 # Programs that download: they name libfetch and get its whole closure.
 LIBFETCH_PROGRAMS := os64get wend
@@ -334,15 +343,16 @@ $(foreach p,$(APP_BASE_PAIRS),\
 include libtls/foundation.mk
 include libtls/shared.mk
 include libjpeg/shared.mk
+include libfreetype/shared.mk
 include libimage/shared.mk
 include libhtml/library.mk
 include libpage/library.mk
 
 # Source membership and the population used for prelink placement live here.
-$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO) $(LIBPAGE_SO): GNUmakefile
+$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFREETYPE_SO): GNUmakefile
 
 .PHONY: all
-all: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
+all: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBJPEG_SO) $(LIBFREETYPE_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
      $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
 
 $(BIN)/[: $(BIN)/test
@@ -359,11 +369,13 @@ $(BIN)/[: $(BIN)/test
 # options left to right, and lib.ld must see the assigned base and the slot
 # bound before it evaluates either one. LIB_SLOT_SIZE comes from the assigner
 # that spaces the bases, so its ASSERT checks against the build's actual map.
-$(LIBOS64_SO): $(LIBOS64_OBJS) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
+# The injected text backend lives in a leaf library. Keep its production
+# dependency explicit so ordinary consumers share the same dependency closure.
+$(LIBOS64_SO): $(LIBOS64_OBJS) $(LIBFREETYPE_SO) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBOS64_BASE) \
 	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBOS64_LDFLAGS) \
-	      -o $@ $(LIBOS64_OBJS)
+	      -o $@ $(LIBOS64_OBJS) --no-as-needed $(LIBFREETYPE_SO)
 	@printf '  %-10s prelinked at %s\n' "libos64.so" "$(LIBOS64_BASE)"
 
 # --no-as-needed makes the dependency an explicit property of libgzip.so.
@@ -433,9 +445,13 @@ $(LIBFETCH_SO): $(LIBFETCH_OBJS) $(LIBTLS_SO) $(LIBGZIP_SO) $(LIBOS64_SO) $(CURD
 define APP_RULE
 APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard $(2)/$(1)/*.c))
 APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
+                       $(if $(filter $(1),fonttest),$(OBJ)/freetype/libfreetype/port/runtime.c.o $(OBJ)/freetype/libfreetype/port/nonlocal.S.o) \
                        $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ)) \
                        $(if $(filter $(1),$(TAR_FORMAT_PROGRAMS)),$(TAR_FORMAT_OBJ)) \
+                       $(if $(filter $(1),$(TELNET_ENGINE_PROGRAMS)),$(TELNET_ENGINE_OBJ)) \
                        $(if $(filter $(1),bearssltest),$(BEARSSL_TEST_OBJ)) \
+                       $(if $(filter $(1),sshtest),$(addprefix $(OBJ)/apps/sshd/,ssh_codec.c.o ssh_keys.c.o ssh_transport.c.o ssh_connection.c.o)) \
+                       $(if $(filter $(1),scribefonttest),$(addprefix $(OBJ)/apps/scribe/,scribe.c.o scribe_buf.c.o)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
@@ -443,11 +459,12 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest),$(LIBHTML_SO))
                        $(if $(filter $(1),$(LIBPAGE_PROGRAMS)),$(LIBPAGE_SO)) \
                        $(if $(filter $(1),gview desktop jpegtest),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
+                       $(if $(filter $(1),fonttest texttest),$(LIBFREETYPE_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
                        $(if $(filter $(1),$(LIBFETCH_PROGRAMS)),$(LIBFETCH_SO)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(LIBTLS_SO)) \
-                       $(if $(filter $(1),bearssltest tlstrusttest tlsinputtest),$(BEARSSL_ARCHIVE))
+                       $(if $(filter $(1),bearssltest tlstrusttest tlsinputtest sshd sshtest),$(BEARSSL_ARCHIVE))
 APP_BASE_STAMP_$(1) := $(OBJ)/$(2)/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
 	@mkdir -p "$$(dir $$@)"
@@ -467,7 +484,7 @@ $(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
 # FIXTURES ARE IN HERE TOO, and that is the point of the line rather than an
 # afterthought: a fixture is the program you are most likely to be single-
 # stepping, because it is what you reach for when something is already broken.
-$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
+$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBJPEG_SO) $(LIBFREETYPE_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
 	@mkdir -p "$(BIN)"
 	@printf '# GENERATED by userland/GNUmakefile — do not edit.\n' > $@
 	@printf '# Every program at its own base, so GDB can hold all their symbols at once.\n' >> $@
@@ -490,6 +507,7 @@ $(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $
 	@printf 'add-symbol-file %s\n' "$(LIBPNG_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBTLS_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBJPEG_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBFREETYPE_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBIMAGE_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBFETCH_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBHTML_SO)" >> $@
@@ -540,7 +558,7 @@ $(OBJ)/pic/%.S.o: %.S
 # program lives under tests/, and a pattern-specific variable that matches
 # nothing is silent — the -O2 would simply stop applying with no diagnostic.
 # fpu_demo made exactly that move on the day /tests was created.
-OPTIMIZED_APPS := fpu_demo
+OPTIMIZED_APPS := fpu_demo vncd
 $(foreach a,$(OPTIMIZED_APPS),\
   $(eval $(OBJ)/$(if $(filter $(a),$(TESTS)),tests,apps)/$(a)/%.c.o: CFLAGS += -O2))
 
@@ -555,3 +573,8 @@ $(OBJ)/%.S.o: %.S
 .PHONY: clean
 clean:
 	rm -rf $(OBJ) $(BIN)
+
+# SSH uses private BearSSL primitives without widening libtls.so ABI.
+$(OBJ)/apps/sshd/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/port/include
+
+$(OBJ)/tests/sshtest/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/port/include

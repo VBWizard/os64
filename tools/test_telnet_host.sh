@@ -54,7 +54,7 @@ IAC, DONT, DO, WONT, WILL, SB = 255, 254, 253, 252, 251, 250
 GA, EL, EC, AYT, AO, IP, BRK, DM, NOP, SE = 249, 248, 247, 246, 245, 244, 243, 242, 241, 240
 O_BINARY, O_ECHO, O_SGA, O_TTYPE, O_NAWS = 0, 1, 3, 24, 31
 
-NOTE_ECHO, NOTE_SIZE, NOTE_AYT, NOTE_CONTRADICT = 1, 2, 4, 8
+NOTE_ECHO, NOTE_SIZE, NOTE_AYT, NOTE_CONTRADICT, NOTE_RESIZE = 1, 2, 4, 8, 16
 
 CHUNKS = (1, 2, 3, 7, 17, 64, 0)
 
@@ -213,6 +213,88 @@ _, wire, got = decode(bytes([IAC, WILL, O_ECHO, IAC, WONT, O_ECHO]))
 check("echo off again", wire, bytes([IAC, DO, O_ECHO, IAC, DONT, O_ECHO]))
 check("and we echo again", got["echo"], "1")
 print("negotiation: the three options in scope, and the refusals for everything else")
+
+# ── The server role: telnetd's half of the same engine ──────────────────
+
+SERVER_OFFERS = bytes([IAC, WILL, O_ECHO, IAC, WILL, O_SGA, IAC, DO, O_SGA, IAC, DO, O_NAWS])
+
+def server(*steps):
+    """A fresh SERVER engine, the opening offers already made and drained.
+    The wire returned is what the STEPS put there, after those offers."""
+    got = run("--server", "offer-server", *steps)
+    wire = bytes.fromhex(got["wire"])
+    if not wire.startswith(SERVER_OFFERS):
+        raise SystemExit(f"server engine did not open with its offers: {wire!r}")
+    return unescape(got["data"]), wire[len(SERVER_OFFERS):], got
+
+# The server speaks first, and says the opposite of the client: it will
+# echo, neither side waits for a turn, and it wants the client's window.
+got = run("--server", "offer-server")
+check("the server's opening offers", got["wire"], hx(SERVER_OFFERS))
+
+# A client that takes the echo: no notice is needed — the server offered it —
+# but the option is in force on our side.
+_, wire, got = server("in:" + hx([IAC, DO, O_ECHO]))
+check("a DO ECHO completes the offer silently", wire, b"")
+check("and the server echoes", got["us.echo"], "1")
+
+# A client that REFUSES the echo (a line-mode client echoes for itself). The
+# server's option goes off — and the caller is TOLD, because a server that
+# echoes after agreeing not to shows every keystroke twice. telnetd ends the
+# session on this notice; the engine's job is to raise it (Codex #101 rd5).
+_, wire, got = server("in:" + hx([IAC, DONT, O_ECHO]))
+check("a DONT ECHO is not answered (the offer is withdrawn, not argued)", wire, b"")
+check("the server's echo is off", got["us.echo"], "0")
+check("and the caller is told", int(got["notes"]) & NOTE_ECHO, NOTE_ECHO)
+
+# A client that agrees and later changes its mind is told about the change.
+got = run("--server", "offer-server", "in:" + hx([IAC, DO, O_ECHO]),
+          "in:" + hx([IAC, DONT, O_ECHO]))
+check("echo taken then refused: off", got["us.echo"], "0")
+check("and the refusal is the last notice", int(got["notes_last"]) & NOTE_ECHO, NOTE_ECHO)
+
+# The window size, when the client will give it: the subnegotiation lands
+# as a RESIZE notice, and its dimensions are read back through the engine.
+_, wire, got = server("in:" + hx([IAC, WILL, O_NAWS, IAC, SB, O_NAWS, 0, 80, 0, 24, IAC, SE]))
+check("the client's NAWS is accepted", got["him.naws"], "1")
+check("and a size subnegotiation is a resize notice", int(got["notes"]) & NOTE_RESIZE, NOTE_RESIZE)
+
+# NAWS is meaningful after WILL, and stops being meaningful after WONT.
+# Escaped 255 also exercises the subnegotiation's IAC state at each boundary.
+size_frame = bytes([IAC, SB, O_NAWS, 0, IAC, IAC, 0, 24, IAC, SE])
+for chunk in CHUNKS:
+    for prefix in ([], ["offer-server"],
+                   ["offer-server", "in:" + hx([IAC, WONT, O_NAWS])],
+                   ["offer-server", "in:" + hx([IAC, WILL, O_NAWS]),
+                    "in:" + hx([IAC, WONT, O_NAWS])]):
+        got = run("--server", "--chunk", chunk, *prefix, "in:" + hx(size_frame))
+        check(f"unnegotiated NAWS ignored @{chunk} {prefix}",
+              int(got["notes_last"]) & NOTE_RESIZE, 0)
+    _, _, got = server("--chunk", chunk, "in:" + hx([IAC, WILL, O_NAWS]),
+                       "in:" + hx(size_frame))
+    check(f"enabled escaped NAWS accepted @{chunk}",
+          int(got["notes_last"]) & NOTE_RESIZE, NOTE_RESIZE)
+
+# A full decoded buffer must retain the erase command for the next call.
+for chunk in CHUNKS:
+    for cap in (1, 2, 32):
+        for command, control in ((EC, 0x08), (EL, 0x15)):
+            data, _, _ = server("--chunk", chunk, "--cap", cap,
+                                 "in:" + hx([ord('x'), IAC, command, ord('y')]))
+            check(f"server erase {command} @{chunk} cap {cap}",
+                  data, bytes([ord('x'), control, ord('y')]))
+
+# What a keyboard's Enter arrives as — CR LF, CR NUL, or a bare CR — is ONE
+# newline to the shell behind the pty, never two (the double prompt of Codex
+# #101 rd1), and a remote interrupt is the Ctrl+C byte.
+for chunk in CHUNKS:
+    data, _, _ = server("--chunk", chunk, "in:" + hx(b"ls\r\n"))
+    check(f"CR LF is one newline (chunk {chunk})", data, b"ls\n")
+    data, _, _ = server("--chunk", chunk, "in:" + hx(b"ls\r\x00"))
+    check(f"CR NUL is one newline (chunk {chunk})", data, b"ls\n")
+    data, _, _ = server("--chunk", chunk, "in:" + hx(bytes([IAC, IP]) + b"x"))
+    check(f"IAC IP is a Ctrl+C (chunk {chunk})", data, b"\x03x")
+print("server role: the offers, echo refused and honoured, NAWS, Enter's three spellings, IAC IP")
 
 # ── RFC 1143: no repeated acknowledgements, no loops ────────────────────
 

@@ -1,0 +1,1 @@
+planner measurement allocation denied; adoption=5 measure_status=5 staged_width=0 actual_width=32

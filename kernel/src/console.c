@@ -47,11 +47,20 @@ extern volatile uint64_t kTicksSinceStart;
 bool console_unread(char c)
 {
 	core_local_storage_t *cls = get_core_local_storage();
-	tty_t *tty = task_tty(cls ? cls->task : NULL);
-	if (tty->pushbackCount >= CONSOLE_PUSHBACK_MAX)
+	// Held like every touch of a task's terminal (tty.h task_tty_hold): a
+	// pty slave already buried by a sibling's teardown has no slot to push
+	// into, and the byte is refused the way a full slot is.
+	tty_t *tty = task_tty_hold(cls ? cls->task : NULL);
+	if (tty == NULL)
 		return false;
-	tty->pushback[tty->pushbackCount++] = c;
-	return true;
+	bool ok = false;
+	if (tty->pushbackCount < CONSOLE_PUSHBACK_MAX)
+	{
+		tty->pushback[tty->pushbackCount++] = c;
+		ok = true;
+	}
+	task_tty_release(tty);
+	return ok;
 }
 
 // How long the reader sleeps before waking to re-check, as a BACKSTOP only.
@@ -147,16 +156,35 @@ long console_read(char *buf, size_t len)
 	return console_read_deadline(buf, len, 0);
 }
 
+static long console_read_held(tty_t *tty, char *buf, size_t len, uint64_t deadline);
+
 long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 {
 	if (len == 0)
 		return 0;
 
 	core_local_storage_t *cls = get_core_local_storage();
+	// The terminal this reader answers to, HELD across the read (tty.h
+	// task_tty_hold). NULL-safe all the way down — early-boot probes and
+	// kernel threads read the system console, VT1, which needs no hold. A
+	// pty slave's seat keeps it alive only until the task's own teardown
+	// drops that seat, and a sibling thread parked here can outlive that by
+	// a scheduler pass — the shape handle.c § The pin closes for handles,
+	// met here on the terminal instead. A slave already buried is a line
+	// that is dead, and an empty read on a dead line has always been EOF.
+	tty_t *tty = task_tty_hold(cls->task);
+	if (tty == NULL)
+		return 0;
+	long r = console_read_held(tty, buf, len, deadline);
+	task_tty_release(tty);
+	return r;
+}
+
+// The body of the read, on a terminal the wrapper above holds.
+static long console_read_held(tty_t *tty, char *buf, size_t len, uint64_t deadline)
+{
+	core_local_storage_t *cls = get_core_local_storage();
 	thread_t *self = cls->currentThread;
-	// The terminal this reader answers to. NULL-safe all the way down —
-	// early-boot probes and kernel threads read the system console, VT1.
-	tty_t *tty = task_tty(cls->task);
 
 	// An EOT from a previous drain is a promised EOF — deliver it first.
 	if (tty->eofPending)

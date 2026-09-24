@@ -1,0 +1,69 @@
+x86_64-elf-readelf -d userland/bin/libos64.so
+
+Dynamic section at offset 0x32000 contains 16 entries:
+  Tag        Type                         Name/Value
+ 0x0000000000000001 (NEEDED)             Shared library: [libfreetype.so]
+ 0x000000000000000e (SONAME)             Library soname: [libos64.so]
+ 0x0000000000000004 (HASH)               0x7f0050000158
+ 0x0000000000000005 (STRTAB)             0x7f00500024e0
+ 0x0000000000000006 (SYMTAB)             0x7f00500009f8
+ 0x000000000000000a (STRSZ)              5052 (bytes)
+ 0x000000000000000b (SYMENT)             24 (bytes)
+ 0x0000000000000003 (PLTGOT)             0x7f0050032180
+ 0x0000000000000002 (PLTRELSZ)           24 (bytes)
+ 0x0000000000000014 (PLTREL)             RELA
+ 0x0000000000000017 (JMPREL)             0x7f0050004c80
+ 0x0000000000000007 (RELA)               0x7f00500038a0
+ 0x0000000000000008 (RELASZ)             5088 (bytes)
+ 0x0000000000000009 (RELAENT)            24 (bytes)
+ 0x000000006ffffff9 (RELACOUNT)          204
+ 0x0000000000000000 (NULL)               0x0
+x86_64-elf-nm -D --undefined-only userland/bin/libos64.so
+                 U os64_freetype_backend_v1
+x86_64-elf-readelf -d userland/bin/libfreetype.so
+
+Dynamic section at offset 0x66000 contains 11 entries:
+  Tag        Type                         Name/Value
+ 0x000000000000000e (SONAME)             Library soname: [libfreetype.so]
+ 0x0000000000000004 (HASH)               0x7f0044000158
+ 0x0000000000000005 (STRTAB)             0x7f00440001a0
+ 0x0000000000000006 (SYMTAB)             0x7f0044000170
+ 0x000000000000000a (STRSZ)              41 (bytes)
+ 0x000000000000000b (SYMENT)             24 (bytes)
+ 0x0000000000000007 (RELA)               0x7f00440001d0
+ 0x0000000000000008 (RELASZ)             18240 (bytes)
+ 0x0000000000000009 (RELAENT)            24 (bytes)
+ 0x000000006ffffff9 (RELACOUNT)          760
+ 0x0000000000000000 (NULL)               0x0
+x86_64-elf-nm -D --undefined-only userland/bin/libfreetype.so
+x86_64-elf-readelf -d userland/bin/tests/fontsettest
+
+Dynamic section at offset 0x3000 contains 12 entries:
+  Tag        Type                         Name/Value
+ 0x0000000000000001 (NEEDED)             Shared library: [libos64.so]
+ 0x0000000000000004 (HASH)               0x2c01000
+ 0x0000000000000005 (STRTAB)             0x2c011b8
+ 0x0000000000000006 (SYMTAB)             0x2c01050
+ 0x000000000000000a (STRSZ)              242 (bytes)
+ 0x000000000000000b (SYMENT)             24 (bytes)
+ 0x0000000000000015 (DEBUG)              0x0
+ 0x0000000000000003 (PLTGOT)             0x2c02110
+ 0x0000000000000002 (PLTRELSZ)           336 (bytes)
+ 0x0000000000000014 (PLTREL)             RELA
+ 0x0000000000000017 (JMPREL)             0x2c012b0
+ 0x0000000000000000 (NULL)               0x0
+x86_64-elf-nm -D --undefined-only userland/bin/tests/fontsettest
+                 U os64_exit
+                 U os64_font_adopt
+                 U os64_font_context_create
+                 U os64_font_set_prepare
+                 U os64_font_set_release
+                 U os64_font_set_retain
+                 U os64_font_set_view
+                 U os64_free
+                 U os64_malloc
+                 U os64_printf
+                 U os64_runtime_init
+                 U os64_slurp
+                 U os64_snprintf
+                 U os64_text_destroy

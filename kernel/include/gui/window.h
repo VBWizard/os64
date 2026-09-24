@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "gui/gui_types.h"
 #include "gui/input.h"
+#include "gui/event_queue.h"
 
 // The window system (GUI layer 3): window objects, z-order, decorations,
 // hit-testing, event routing.
@@ -21,7 +22,6 @@
 // size from data, as an image viewer does, will otherwise hand over a legal
 // picture and be told its window is bad.
 #define GUI_MIN_CONTENT        8
-#define GUI_WINDOW_EVENTS_MAX  64
 
 // Chrome geometry: a titlebar across the top (which includes the top border)
 // and a 1-pixel border on the other three sides.
@@ -69,8 +69,10 @@
 #define GUI_WINDOW_PINNED          (1u << 2)
 // MAXIMIZED (2026-08-23): the frame is the whole screen and restoreFrame
 // remembers where it came from. Ctrl+Alt+M toggles; so does a double-click
-// on the titlebar (the 1990 habit). A manual move or resize clears it — the
-// user has taken the geometry back, and a later "restore" to a frame they
+// on the titlebar (the 1990 habit). Restore retains this flag and the saved
+// frame if its size would need clamping to the current limits. A manual
+// move or resize clears it — the user has taken the geometry back, and a
+// later "restore" to a frame they
 // have since abandoned would be a surprise. The capacity reservation is
 // what makes this trivial: the screen IS the canvas capacity, so a
 // maximize can never fail and never allocates (window.h's canvas_cap_w).
@@ -208,6 +210,9 @@ typedef struct window
 
     char      title[GUI_WINDOW_TITLE_MAX];
 
+    // Effective content floors, initialized to the default resize limits.
+    uint32_t min_content_w, min_content_h;
+
     rect_t    frame;      // screen rect INCLUDING decorations
     surface_t content;    // what the COMPOSITOR composites (the front buffer)
     // The client's drawing target (the back buffer). gui_window_get_surface
@@ -246,12 +251,11 @@ typedef struct window
     // safely — booked in DEBTS rather than built.
     uint32_t  canvas_cap_w, canvas_cap_h;
 
-    // Per-window event queue: the compositor pushes routed events, the
-    // owning app thread pops them via gui_event_poll(). Drop-newest on full,
-    // except a focus transition, which evicts the oldest to get in
-    // (wm_deliver_event says why).
-    input_event_t events[GUI_WINDOW_EVENTS_MAX];
-    uint32_t  evt_head, evt_tail;
+    // Routed input and synthesized window facts share this queue. The owning
+    // app drains it through poll/wait. event_queue.h defines ring overflow;
+    // coalesced appearance generations precede input and pointer snapshots
+    // follow it, independently of ring capacity.
+    gui_event_queue_t event_queue;
 
     // The thread parked in gui_event_wait on this window, or NULL. Owned by
     // the WAITER (it registers and unregisters itself, console_read's
@@ -307,14 +311,18 @@ void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
                             uint32_t *cap_w, uint32_t *cap_h);
 
 // The frame this window would actually ADOPT for a requested one: content
-// clamped to [GUI_WINDOW_MIN_CONTENT_*, capacity], then re-inflated by the
+// clamped to [per-window minimum, capacity], then re-inflated by the
 // chrome. Exported so an interactive resize can PREVIEW exactly what it will
 // commit — the rubber band and wm_resize share this function precisely so the
 // outline can never promise a size the window then refuses.
 rect_t wm_clamp_frame(const window_t *w, rect_t frame);
 
+// Validate both floors against capacity before changing either. Zero uses the
+// default floor; success grows a too-small window without shrinking it.
+bool wm_set_min_size(window_t *w, uint32_t width, uint32_t height);
+
 // Resize to `frame` (screen rect INCLUDING decorations), clamping the content
-// to [GUI_WINDOW_MIN_CONTENT_*, the canvas capacity]. Because both pixel
+// to [per-window minimum, the canvas capacity]. Because both pixel
 // stores were reserved at capacity this only re-reports their size, paints
 // whatever the growth newly exposed, damages old ∪ new, and hands the owner
 // an INPUT_EVENT_WINDOW_RESIZE. It allocates nothing and cannot fail; the
@@ -359,15 +367,17 @@ window_t *wm_focused(void);
 size_t wm_recency_ids(uint32_t *ids, size_t max);
 #define ALTTAB_RING_MAX 16   // the most a snapshot holds; the cycle covers the top sixteen
 
-// Push a routed event onto the window's queue (drops when full).
+// Deliver an event and wake its waiter; event_queue.h defines overflow policy.
 void wm_deliver_event(window_t *w, const input_event_t *ev);
+// Caller holds kGuiLock through publication and this broadcast.
+void wm_appearance_changed(uint64_t generation);
 
 // Pop for the owner side; false when empty.
 bool wm_pop_event(window_t *w, input_event_t *out);
 // Is anything queued? The peek-wait's question (gui_event_wait with no out).
 static inline bool wm_has_event(const window_t *w)
 {
-    return w->evt_head != w->evt_tail;
+    return gui_event_queue_pending(&w->event_queue);
 }
 
 // Composite every window that intersects `damage` (screen coords) into the
@@ -465,10 +475,13 @@ static inline bool wm_point_in_titlebar(const window_t *w, int32_t x, int32_t y)
 // Show or hide the titlebar (Ctrl+Alt+T). The CONTENT STAYS WHERE IT IS —
 // the frame's top edge moves to meet it — because the content is what the
 // user is looking at, and a window that jumps 19 pixels when you hide its
-// title is a window you hid the title of by mistake. Damages old ∪ new.
+// title is a window you hid the title of by mistake. While maximized, the
+// saved frame receives the same delta to preserve its content on Restore.
+// Damages old ∪ new.
 void wm_set_decorated(window_t *w, bool decorated);
 
-// Maximize to the screen, or restore the remembered frame. See
+// Maximize to the screen, or restore the remembered frame when its size
+// fits the current limits without clamping; otherwise keep it maximized. See
 // GUI_WINDOW_MAXIMIZED. Goes through wm_resize, so the owner gets its
 // resize event exactly as it would for a drag.
 void wm_set_maximized(window_t *w, bool maximized);

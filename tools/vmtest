@@ -1,0 +1,142 @@
+#!/bin/bash
+# vmtest — boot os64 in QEMU, run commands in its shell, collect the results,
+# shut it down. One foreground command, start to finish.
+#
+#   tools/vmtest [options] '<guest command>' ['<guest command>' ...]
+#
+#   tools/vmtest 'dd if=/dev/zero of=/home/z.bin bs=512 count=4' --get /home/z.bin
+#   tools/vmtest --cmp /home/copy=/bin/cat 'dd if=/bin/cat of=/home/copy'
+#
+# Options (all optional, any order):
+#   --get   <guest path>          fetch a file from the guest's /home and
+#                                 report its size, checksum and first bytes
+#   --cmp   <guest path>=<path>   compare a /home file with a file from the
+#                                 shipped root filesystem, byte for byte
+#   --shot  <file.png>            where to save the screenshot of the console
+#   --port  <n>                   monitor port (default 55556; 55555 is Chris's)
+#   --keep                        leave the VM running afterwards
+#
+# WHY IT IS ONE COMMAND: the VM cannot outlive your command, and neither can
+# /tmp in some sandboxes, so everything this finds is PRINTED. What you read
+# in the output is the whole result; the files are a convenience.
+#
+# WHAT IT IS NOT: a way to run the host's copy of your program. os64 binaries
+# only run inside os64. This is the only way to see yours actually work.
+set -u
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+OUT=${VMTEST_OUT:-/tmp/os64-vmtest}
+PORT=55556
+SHOT=""
+KEEP=0
+CMDS=()
+GETS=()
+CMPS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --get)   GETS+=("${2:-}"); shift 2 ;;
+        --cmp)   CMPS+=("${2:-}"); shift 2 ;;
+        --shot)  SHOT="${2:-}"; shift 2 ;;
+        --port)  PORT="${2:-55556}"; shift 2 ;;
+        --keep)  KEEP=1; shift ;;
+        -*)      echo "vmtest: unknown option $1" >&2; exit 2 ;;
+        *)       CMDS+=("$1"); shift ;;
+    esac
+done
+if [ ${#CMDS[@]} -eq 0 ]; then
+    echo "usage: tools/vmtest [--get P] [--cmp P=Q] [--shot F.png] '<guest command>' ..." >&2
+    exit 2
+fi
+mkdir -p "$OUT"
+[ -n "$SHOT" ] || SHOT=$OUT/screen.png
+
+# A stale image is the classic wasted run: `make -C userland` builds the
+# program, but only a root `make` puts it on the disk the VM boots.
+if [ -n "$(find "$ROOT/userland/bin" -newer "$ROOT/os64_kernel.iso" -type f 2>/dev/null | head -1)" ]; then
+    echo "vmtest: WARNING — userland/bin is newer than os64_kernel.iso."
+    echo "vmtest: run 'make' (at the repository root) or the VM boots the OLD program."
+fi
+
+echo "=== booting"
+"$ROOT/tools/vmboot" "$PORT" || exit 1
+
+echo "=== running"
+for c in "${CMDS[@]}"; do
+    echo "husk> $c"
+    "$ROOT/tools/vmtype" "$PORT" "$c"
+    sleep 3
+done
+# Commit the guest's writes before the host reads the disk underneath it.
+"$ROOT/tools/vmtype" "$PORT" sync
+sleep 3
+
+echo "=== screen"
+"$ROOT/tools/vmshot" "$SHOT" "$PORT" || true
+
+report() {   # report <label> <host file>
+    local label=$1 f=$2
+    local size sum
+    size=$(stat -c %s "$f" 2>/dev/null || echo 0)
+    sum=$(sha256sum "$f" 2>/dev/null | cut -c1-16)
+    echo "--- $label: $size bytes, sha256:$sum"
+    if [ "$size" = 0 ]; then
+        return
+    fi
+    if LC_ALL=C grep -qI . "$f" 2>/dev/null; then
+        echo "    text, first lines:"
+        head -c 400 "$f" | sed 's/^/    | /'
+        echo
+    else
+        echo "    binary, first 64 bytes:"
+        od -An -tx1 -N64 "$f" | sed 's/^/    |/'
+    fi
+}
+
+if [ ${#GETS[@]} -gt 0 ]; then
+    echo "=== files"
+    for g in "${GETS[@]}"; do
+        host=$OUT/$(basename "$g")
+        if "$ROOT/tools/vmget" "$g" "$host" "$PORT" > /dev/null 2>&1; then
+            report "$g" "$host"
+        else
+            echo "--- $g: NOT FOUND in the guest's /home"
+        fi
+    done
+fi
+
+if [ ${#CMPS[@]} -gt 0 ]; then
+    echo "=== comparisons"
+    for pair in "${CMPS[@]}"; do
+        guest=${pair%%=*}
+        orig=${pair#*=}
+        a=$OUT/cmp_guest_$(basename "$guest")
+        b=$OUT/cmp_root_$(basename "$orig")
+        if ! "$ROOT/tools/vmget" "$guest" "$a" "$PORT" > /dev/null 2>&1; then
+            echo "--- $guest vs $orig: the guest file is missing"
+            continue
+        fi
+        if ! "$ROOT/tools/vmget" --root "$orig" "$b" "$PORT" > /dev/null 2>&1; then
+            echo "--- $guest vs $orig: $orig is not on the shipped root filesystem"
+            continue
+        fi
+        if cmp -s "$a" "$b"; then
+            echo "--- $guest vs $orig: IDENTICAL ($(stat -c %s "$a") bytes)"
+        else
+            echo "--- $guest vs $orig: DIFFERENT"
+            echo "    guest $(stat -c %s "$a") bytes, original $(stat -c %s "$b") bytes"
+            cmp "$a" "$b" 2>&1 | head -3 | sed 's/^/    /'
+        fi
+    done
+fi
+
+echo "=== kernel log (last lines)"
+tail -5 "/tmp/os64-vm-$PORT/serial.log" 2>/dev/null | sed 's/^/    /'
+
+if [ "$KEEP" = 1 ]; then
+    echo "=== VM left running on port $PORT (stop it with tools/vmstop $PORT)"
+else
+    "$ROOT/tools/vmstop" "$PORT" > /dev/null
+    echo "=== VM stopped"
+fi
+echo "=== screenshot: $SHOT"

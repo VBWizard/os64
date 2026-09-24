@@ -1,0 +1,22 @@
+FAIL [cmap/full-repertoire-before-platform] full-repertoire format 8 lost U+10000
+FAIL [cmap/full-repertoire-before-platform] full-repertoire format 10 lost U+10000
+
+cost: face @ size                     px peak bytes allocations     held
+DejaVu Sans (TTF)                     16      51268        465    49315
+DejaVu Sans (TTF)                     24      51268        465    49351
+DejaVu Sans (TTF)                     32      51268        465    49418
+DejaVu Sans Mono (TTF)                16      45712        457    44512
+DejaVu Sans Mono (TTF)                24      45712        457    44533
+DejaVu Sans Mono (TTF)                32      45712        457    44579
+Source Sans 3 (CFF)                   16     109780        968   106068
+Source Sans 3 (CFF)                   24     109780        968   106104
+Source Sans 3 (CFF)                   32     109780        968   106114
+Source Code Pro (CFF)                 16      75090        910    71386
+Source Code Pro (CFF)                 24      75090        910    71414
+Source Code Pro (CFF)                 32      75090        910    71429
+
+1086 checks, 2 failures
+host cc: cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+flags  : -O2 -g -std=c11 -fcf-protection=none -fno-builtin -fno-tree-loop-distribute-patterns -DOS64_FREETYPE_HOSTED -I/home/yogi/src/os64/.worktrees/freetype-backend/userland/libfreetype/port -I/home/yogi/src/os64/.worktrees/freetype-backend/userland/libfreetype/upstream/include -I/home/yogi/src/os64/.worktrees/freetype-backend/userland/libos64/include -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+sources: 11 upstream + 4 port + harness
+build directory: /tmp/ft-host-rgwjbdjp

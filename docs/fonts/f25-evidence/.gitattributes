@@ -1,0 +1,2 @@
+# Raw terminal and build receipts retain emitted whitespace.
+*.log -whitespace

@@ -1,0 +1,2 @@
+test_scribe_host: 2585 checks, 0 failures
+Artifacts: /tmp/quinn-f4-c2-r4-scribe

@@ -1,0 +1,18 @@
+font fit: unchanged interface rows allow terminal/document changes; initial, changed-height and retry checks passed
+font envelopes: preserving component CAS, reload serials, malformed input, conflicts, allocation/I/O failure and 4096-byte refusal passed
+appearance: startup preservation, session store, cache, races, independent contexts, and queue pressure passed
+appearance: interface row 20, minimum 958x696
+appearance: interface row 20, minimum 958x696
+appearance: interface row 24, minimum 1137x738
+appearance: interface row 28, minimum 1315x794
+appearance: interface row 32, minimum 1493x850
+libui: font layout refused (4); keeping current fonts
+appearance: interface row 20, minimum 958x696
+appearance responsive: 17/24/28/32px, all tabs, visible footer, atomic 96px refusal and shrinking minimum passed
+appearance customizer: native layout, palette edits, hex validation, Undo and page cancellation passed
+controlcenter: interface row 20, minimum 360x250
+controlcenter: interface row 28, minimum 360x250
+libui: font layout refused (4); keeping current fonts
+controlcenter: interface row 20, minimum 360x250
+controlcenter responsive: 28px adoption, fewer rows, every tool reachable, refusal and shrinking minimum passed
+appearance: palettes, legacy themes, rounded paint, color picker, interaction and pointer queue contracts passed

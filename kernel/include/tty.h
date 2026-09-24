@@ -51,25 +51,7 @@
 #define TTY_COUNT 8                    // tty1..tty8 — the os32 loadout, kept
 #define TTY_SCROLLBACK_SCREENS 4       // grid holds 4 screens: 1 live + 3 history
 
-// One character cell: the glyph, how it was painted, and the colours it was
-// painted in. 8 bytes — at 1080p that is ~½MB per tty, ~4MB for the fleet,
-// which is the cheapest possible price for repaint-from-state plus
-// scrollback.
-//
-// An attribute byte and a background index keep the cell at 8 bytes. Its
-// size and field offsets are checked against os64_pty_cell_t in syscall.c
-// because gterm renders these same cells in ring 3. The index represents
-// this implementation's sixteen-colour SGR subset plus default paper;
-// extended indexed and RGB SGR colours are consumed without applying them.
-// A second full XRGB would increase each cell's size and scrollback cost.
-typedef struct tty_cell
-{
-	char ch;                           // 0 = blank
-	uint8_t attrs;                     // OS64_ANSI_ATTR_* (bold, reverse)
-	uint8_t bg;                        // palette index+1; 0 = the tty's own
-	uint8_t charset;                   // OS64_CHARSET_* this byte was written under
-	uint32_t color;                    // foreground, XRGB
-} tty_cell_t;
+#include "tty_cell.h"                  // tty_cell_t — one character cell of a grid
 
 // A tty with no shell seated: dark glass, waiting. First keystroke on a
 // dormant tty summons a fresh husk (the getty ritual, on demand — V6 read
@@ -89,9 +71,9 @@ typedef struct tty
 	uint32_t index;                    // 0-based; humans say "tty1" = index 0
 
 	// ── The grid (guarded by `lock`) ────────────────────────────────────────
-	tty_cell_t *cells;                 // total_lines * cols, kmalloc'd at init
+	tty_cell_t *cells;                 // GRID cell ring; NULL for STREAM
 	uint32_t cols, rows;               // live-screen geometry (glass cells)
-	uint32_t total_lines;              // rows * TTY_SCROLLBACK_SCREENS (ring)
+	uint32_t total_lines;              // GRID ring height; zero for STREAM
 	uint32_t screen_top;               // ring index of live row 0
 	uint32_t hist_lines;               // valid history lines above screen_top
 	uint32_t view_offset;              // >0 = viewing history, this many lines up
@@ -164,7 +146,7 @@ typedef struct tty
 	volatile bool spawnRequested;      // set by a keystroke, served by kworker
 
 	// ── Change tracking (all ttys; PTY.md's snapshot poll reads it) ─────────
-	// Bumped on every grid mutation. A pty master's holder polls this at
+	// Bumped on grid mutations and geometry changes. A GRID master polls at
 	// frame cadence and copies cells only when it moved; VTs carry it too
 	// because the counter is free and a future dirty-aware consumer (the
 	// client-notification seam) will want it everywhere.
@@ -177,24 +159,64 @@ typedef struct tty
 	// never see them — they walk kTTY[] only — and repaint can't happen: a
 	// pty is never kTTYFocused).
 	bool is_pty;
-	uint8_t pty_mode;                  // PTY_MODE_* — GRID today, STREAM reserved
-	// Seats = tasks whose ->tty this is (the child and everything it spawns,
-	// via task_create's inheritance). everSeated arms HUNGUP: a slave that
+	uint8_t pty_mode;                  // PTY_MODE_*
+	// STREAM mode's way out: a pipe. A seated task's console write is a
+	// pipe_write into it (the syscall layer does that, so the write blocks
+	// and ends like any pipe write); the master's read is a pipe_read. Its
+	// write end closes when the seats empty (EOF to the master: the session
+	// ended), its read end when the master closes (EPIPE to a child that
+	// writes after). KERNEL text aimed at a STREAM slave — a death headline
+	// from the exception path — may not park, so tty_write pushes what fits
+	// and counts the rest here: the one byte this design chooses to lose.
+	struct pipe *stream;
+	uint64_t stream_dropped;
+	// Each end of `stream` is closed exactly once: the write end when the
+	// occupied seats and reservations empty (tty_pty_unref), or an unused
+	// master's close; the read end closes with the master. The pipe's holds
+	// keep it alive after its ends close while operations finish.
+	volatile bool stream_writer_closed;
+	volatile bool stream_reader_closed;
+	// Seats count tasks, pending spawn reservations and the master-close
+	// guard. everSeated arms HUNGUP: a slave that
 	// EMPTIED is hung up; one nothing has sat on yet is merely young.
 	volatile int32_t seats;
 	volatile bool everSeated;
 	volatile bool masterClosed;        // the terminal side hung up its handle
+	// Operations INSIDE the slave, from either side: a master-side read
+	// parked on the stream, a resize, a snapshot (pty_master_hold, the
+	// pin's — handle.c § The pin), and a seated task's console read or
+	// write (pty_seat_hold). Burial waits for zero. NOT a seat: a seat held
+	// by the very reader waiting for the seats to empty would defer the EOF
+	// it is waiting for, forever.
+	volatile int32_t holds;
 	struct tty *next_pty;              // the registry chain (kPtyList)
 } tty_t;
 
 // PTY.md's mode seam: the flavor is decided at ONE choke point (tty_write),
-// which is what makes STREAM an addition and never a rewrite. GRID is v1;
-// STREAM's gate is TCP listen() and its customer is telnetd.
+// which is what makes STREAM an addition and never a rewrite. GRID feeds
+// the interpreter and the grid; STREAM (SERVERS.md § 2) hands the child's
+// bytes to `stream`, a pipe the master reads — a pipe wearing a tty's
+// identity, so the blocking, the EOF and the EPIPE rules are pipe.c's.
+// The flavor is NOT an ABI value: it is the syscall number — pty_create (44)
+// for GRID, pty_create_stream (56) for STREAM — so 44 never widened its
+// two-argument contract for a mode (Codex #101 P1). These are the kernel's
+// internal names for what each syscall passes to pty_create_slave.
 #define PTY_MODE_GRID   0
-#define PTY_MODE_STREAM 1   // reserved — bytes to a ring instead of the grid
+#define PTY_MODE_STREAM 1
 
 extern tty_t kTTY[TTY_COUNT];
 extern tty_t * volatile kTTYFocused;   // whose grid the glass is showing
+
+// Is this one of the VT fleet? Answered by POINTER RANGE, not by reading a
+// field: the fleet is a static array that is never freed, and anything else
+// is a pty slave that may already be buried — a terminal of record can be
+// freed by its task's own teardown while a sibling thread is still entering
+// a console read. A caller that wants to know must ask this first, take the
+// seat hold if the answer is no, and only then read the slave's fields.
+static inline bool tty_is_vt(const tty_t *t)
+{
+	return t >= &kTTY[0] && t < &kTTY[TTY_COUNT];
+}
 extern volatile bool kTTYReady;        // false until tty_init: printf paints
                                        // direct (legacy) before, VT1 grid after
 
@@ -268,6 +290,7 @@ void tty_view_scroll(int dir);         // Shift+PgUp(+1)/PgDn(-1) — half scree
 
 // ── Shells and the summons ──────────────────────────────────────────────────
 // Seat a controlling shell on a tty (LIVE, foreground, the works).
+// For a pty, the caller transfers an owned seat reservation to the shell.
 void tty_seat_shell(tty_t *t, struct task *shell);
 // Called from the exit path: if the dying task was a tty's seated shell, the
 // tty goes dormant and announces how to summon a new one; if it was the
@@ -291,30 +314,42 @@ void tty_emergency_direct(void);
 extern volatile bool kTTYDirect;
 
 // ── The pty family (PTY.md; mechanism here, the syscall skin in syscall.c) ──
-// Create a GRID-mode slave: a live tty_t with its own grid + scrollback
-// ring, registered on kPtyList (NEVER in kTTY[] — the VT iterators stay
-// blind to ptys by construction). Returns NULL on a bad geometry — the
-// only refusal (the allocator panics on exhaustion, never returns NULL).
-tty_t *pty_create_slave(uint32_t cols, uint32_t rows);
+// Create a registered slave with input and geometry. GRID owns a cell ring;
+// STREAM owns an output pipe and has no cells. Returns NULL for an invalid
+// geometry or mode. The allocator panics on exhaustion.
+tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode);
 
-// Resize a grid IN PLACE (the SIGWINCH slice, PTY.md § Resize). The ring is
-// reallocated at the new geometry and the old text carried across, then the
-// generation bumps so a snapshot poller repaints. Policy, stated so nobody
-// files it as a bug: NO REFLOW. Rows keep their left edge (a narrower grid
-// clips each line's tail, a wider one blanks the new cells), the cursor is
-// clamped into the new bounds, and the view snaps back to the live screen.
-// ONE refinement over "preserve the origin": when fewer rows would leave
-// the cursor below the glass, the top rows roll into scrollback instead so
-// the line being typed stays visible — what xterm does, and the difference
-// between a shrink that keeps your prompt and one that eats it. Rewrapping
-// logical lines is a scrollback feature and waits for that row.
+// Resize geometry without touching the glass. STREAM updates dimensions;
+// GRID carries text without reflow, keeps each line's left edge, clamps the
+// cursor and returns to the live view. Shrinking below the cursor rolls the
+// top rows into history so the current line stays visible.
+// Returns 1 for a change (generation bumped), 0 for unchanged dimensions,
+// or -1 for invalid geometry (no mutation). Caller must keep t alive.
+int tty_resize(tty_t *t, uint32_t cols, uint32_t rows);
+
+// Re-shape a GRID terminal and KEEP ITS TEXT — the carrier for a console font
+// change, where nobody repaints (CONSOLE_FONTS.md § The contents survive).
+// tty_resize's opposite in policy: long lines wrap and re-join through
+// tty_reflow.h instead of losing their right-hand end, the scrolled-back view
+// keeps its line, and the ring is never smaller than the scrollback it would
+// have been born with. Touches no glass; the caller repaints.
 //
-// Grid-only: it never touches the glass, so it is a PTY verb today (the
-// syscall gates on is_pty). A VT could use it the day the renderer's cell
-// geometry can change underneath one. Returns false on a bad geometry —
-// the only refusal there is (the allocator panics on exhaustion rather
-// than returning NULL) — and then the grid is untouched.
-bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows);
+// What the reshape could not carry is COUNTED into *dropped (oldest history,
+// past TTY_REFONT_MAX_LINES) and *clipped (rows under the cursor on a shorter
+// screen); either pointer may be NULL. Returns like tty_resize: 1 changed,
+// 0 already that shape, -1 refused (geometry outside the fence, or a STREAM
+// terminal, which has no cells). Task context: it allocates.
+#define TTY_REFONT_MAX_LINES 8192u
+int tty_refont(tty_t *t, uint32_t cols, uint32_t rows,
+               uint32_t *dropped, uint32_t *clipped);
+
+// The largest grid tty_refont will take, for a caller that wants to refuse
+// with a reason before it gets that far. Settled by tty_init.
+void tty_refont_limits(uint32_t *cols_max, uint32_t *rows_max);
+
+// Repaint whichever terminal has the glass, from its grid. For a caller that
+// changed what the glass should show without writing to a terminal.
+void tty_repaint_focused(void);
 
 // The master's write half: bytes become synthesized key events into the
 // slave's input ring — after 0x03 runs the per-tty interrupt intercept
@@ -326,12 +361,47 @@ bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows);
 int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length);
 
 // Seat references: every task whose ->tty is this pty holds one (taken at
-// inheritance in task_create and at spawn's explicit seating; dropped in
-// task teardown). The slave frees itself when the master is closed AND the
-// seats are empty — whichever happens last does the burial.
-void tty_pty_ref(tty_t *t);          // no-op unless t->is_pty
+// inheritance in task_create or reserved before spawn's explicit seating;
+// dropped in task teardown). The slave frees itself when the master is
+// closed AND the seats are empty AND no operation is inside it (holds)
+// — whichever of the three happens last does the burial.
+// tty_pty_ref takes the seat BY POINTER against the registry, under its
+// lock, and answers false for an unlisted slave, a closed master or a STREAM
+// whose writer has closed. A parent whose terminal a child inherits can be
+// torn down by a sibling while the spawn is in flight, and its slave buried.
+// A VT is always true.
+bool tty_pty_ref(tty_t *t);          // no-op (true) unless t is a pty
+// Counts a future seat without marking the pty as previously occupied.
+// Commit with tty_seat_shell after loading, or cancel with tty_pty_unref.
+// A failed first load leaves the STREAM writer open for a later attempt.
+bool tty_pty_reserve_seat(tty_t *t);
 void tty_pty_unref(tty_t *t);        // no-op unless t->is_pty
+
+// A task's terminal of record, HELD: the VT fleet needs no hold, a pty
+// slave gets the seat hold (pty_seat_hold below) — or NULL when the slave is
+// already buried, which a caller reads as "the line is dead". Every reader
+// of a task's terminal that is not already holding it goes through this
+// pair, because a task's own seat stops protecting the slave the moment a
+// sibling thread's teardown drops it (handle.c § The pin, met on the
+// terminal). Release with task_tty_release; both are no-ops for a VT.
+tty_t *task_tty_hold(struct task *t);
+void task_tty_release(tty_t *tty);
 void pty_master_close(tty_t *slave); // the handle-table close hook
+// The pin's hold on a master (handle.c § The pin): the slave stays unburied
+// and its stream keeps its read end while a master-side operation is inside
+// it. The stream's read end is held because the master's read IS a
+// pipe_read on it, and the master's close may close that end underneath.
+// Taken before publishing a new master, or while its handle is locked live.
+void pty_master_hold(tty_t *slave);
+void pty_master_unhold(tty_t *slave);
+// The SEAT side's hold, for a seated task's console read or write on the
+// slave: the task's seat keeps the slave alive only until the task's own
+// teardown drops it, and a sibling thread parked in the read can outlive
+// that by a scheduler pass. Taken by pointer against the registry under its
+// lock — burial unlinks under the same lock — so a slave already buried is
+// simply not found, and the answer is false: the line is dead.
+bool pty_seat_hold(tty_t *slave);
+void pty_seat_unhold(tty_t *slave);
 
 // console_wake_if_ready's pty leg: wake any slave's parked reader whose ring
 // has input. Lives here because the registry walk needs the (private) list

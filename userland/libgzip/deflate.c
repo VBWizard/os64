@@ -21,10 +21,12 @@
 #define DEFLATE_NO_POSITION  UINT64_MAX
 
 // A fixed-code literal costs at most nine bits. Add the block header, EOB,
-// one carried partial byte from the preceding block, and final byte rounding.
+// one carried partial byte from the preceding block, and final byte rounding;
+// then a sync flush's empty stored block — three bits, a pad byte and its
+// four LEN/NLEN bytes — may follow it in the same pending buffer.
 _Static_assert(DEFLATE_PENDING_SIZE >=
-               (DEFLATE_BLOCK_SIZE * 9u + 3u + 7u + 7u + 7u) / 8u,
-               "pending buffer holds the worst fixed-Huffman block");
+               (DEFLATE_BLOCK_SIZE * 9u + 3u + 7u + 7u + 7u) / 8u + 1u + 4u,
+               "pending buffer holds the worst fixed-Huffman block and a sync flush");
 
 typedef enum {
     DEFLATE_MODE_COLLECT,
@@ -44,6 +46,7 @@ struct os64_deflate {
     size_t pending_position;
     uint32_t bit_count;
     bool final_pending;
+    bool flushing;           // the pending bytes end with a sync flush's marker
     uint8_t block[DEFLATE_BLOCK_SIZE];
     uint8_t window[DEFLATE_WINDOW_SIZE];
     uint8_t pending[DEFLATE_PENDING_SIZE];
@@ -297,6 +300,72 @@ const char *os64_deflate_status_name(os64_deflate_status_t status)
     return "unknown";
 }
 
+// Hand pending bytes to the caller. True when all of them have gone.
+static bool emit_pending(os64_deflate_t *stream, uint8_t **output, size_t *output_length)
+{
+    size_t available = stream->pending_size - stream->pending_position;
+    size_t amount = available < *output_length ? available : *output_length;
+    if (amount != 0) {
+        os64_memcpy(*output, stream->pending + stream->pending_position, amount);
+        *output += amount;
+        *output_length -= amount;
+        stream->pending_position += amount;
+        stream->output_size += amount;
+    }
+    return stream->pending_position == stream->pending_size;
+}
+
+os64_deflate_status_t os64_deflate_flush(os64_deflate_t *stream,
+                                          uint8_t **output,
+                                          size_t *output_length)
+{
+    if (stream == NULL || output == NULL || output_length == NULL ||
+        (*output_length != 0 && *output == NULL) ||
+        stream->mode == DEFLATE_MODE_DONE)
+        return OS64_DEFLATE_BAD_ARGUMENT;
+    // A stream whose final block is pending is ending: a flush would emit
+    // it, return to COLLECT and append a stored block after BFINAL, a
+    // corrupt stream that never reaches DONE. Only process() finishes it.
+    if (stream->final_pending)
+        return OS64_DEFLATE_BAD_ARGUMENT;
+
+    for (;;) {
+        if (stream->mode == DEFLATE_MODE_EMIT) {
+            if (!emit_pending(stream, output, output_length))
+                return OS64_DEFLATE_NEED_OUTPUT;
+            stream->mode = DEFLATE_MODE_COLLECT;
+            if (stream->flushing) {
+                stream->flushing = false;
+                return OS64_DEFLATE_NEED_INPUT;
+            }
+        }
+        // Whatever is collected becomes a block now, not a final one; then
+        // an empty stored block (BFINAL 0, BTYPE 00) takes the stream to a
+        // byte boundary, and its LEN/NLEN are the 00 00 FF FF a decoder
+        // stops at. The history window survives, so later matches may still
+        // reach back across the flush.
+        if (stream->block_size != 0)
+            generate_block(stream, false);
+        else {
+            stream->pending_size = 0;
+            stream->pending_position = 0;
+            stream->final_pending = false;
+            stream->mode = DEFLATE_MODE_EMIT;
+        }
+        write_bits(stream, 0, 3);
+        if (stream->bit_count != 0) {
+            stream->pending[stream->pending_size++] = (uint8_t)stream->bit_buffer;
+            stream->bit_buffer = 0;
+            stream->bit_count = 0;
+        }
+        stream->pending[stream->pending_size++] = 0x00;
+        stream->pending[stream->pending_size++] = 0x00;
+        stream->pending[stream->pending_size++] = 0xFF;
+        stream->pending[stream->pending_size++] = 0xFF;
+        stream->flushing = true;
+    }
+}
+
 os64_deflate_status_t os64_deflate_process(os64_deflate_t *stream,
                                             const uint8_t **input,
                                             size_t *input_length,
@@ -314,20 +383,12 @@ os64_deflate_status_t os64_deflate_process(os64_deflate_t *stream,
 
     for (;;) {
         if (stream->mode == DEFLATE_MODE_EMIT) {
-            size_t available = stream->pending_size - stream->pending_position;
-            size_t amount = available < *output_length ? available :
-                                                         *output_length;
-            if (amount != 0) {
-                os64_memcpy(*output,
-                            stream->pending + stream->pending_position,
-                            amount);
-                *output += amount;
-                *output_length -= amount;
-                stream->pending_position += amount;
-                stream->output_size += amount;
-            }
-            if (stream->pending_position != stream->pending_size)
+            if (!emit_pending(stream, output, output_length))
                 return OS64_DEFLATE_NEED_OUTPUT;
+            // Whatever was pending has gone, a flush's marker included: a
+            // flush that returned NEED_OUTPUT and was finished here must not
+            // leave the next flush thinking its marker is still owed.
+            stream->flushing = false;
             if (stream->final_pending) {
                 stream->mode = DEFLATE_MODE_DONE;
                 return OS64_DEFLATE_DONE;

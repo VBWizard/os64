@@ -130,6 +130,24 @@ static void refresh_clock_text(void)
                       now.hour, now.minute, now.second);
 }
 
+static os64_font_status_t plan_clock_font(os64_ui_t *ui, void *user, void **out)
+{
+    (void)user; *out = NULL;
+    int32_t width;
+    os64_font_status_t status = os64_ui_text_measure(ui, OS64_FONT_ROLE_UI,
+                                                    "88:88:88", 8, &width);
+    if (status) return status;
+    int32_t height = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
+    os64_gui_rect_t box = gRoot.bounds;
+    if (width > box.w || height > box.h) return OS64_FONT_LIMIT;
+    box.x += (box.w-width)/2; box.y += (box.h-height)/2;
+    box.w = width; box.h = height;
+    os64_ui_widget_stage_bounds(&gLblClockText, box);
+    return OS64_FONT_OK;
+}
+static void clock_font_done(os64_ui_t *ui, void *user, void *plan)
+{ (void)ui; (void)user; (void)plan; }
+
 static void on_close_request(os64_ui_t *ui)
 {
     (void)ui;
@@ -193,9 +211,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-    // [3] The UI context. This is also where the THEME loads — defaults,
-    //     then /home/theme.conf on top — so every color and metric this
-    //     window shows is the user's to change without a recompile.
+    // [3] The UI context loads defaults and the startup theme through the
+    //     configuration ladder. Supported colors and metrics need no recompile.
     os64_ui_init(&gUi, &ctx);
 
     gUi.on_close = on_close_request;
@@ -216,6 +233,9 @@ int main(int argc, char **argv)
     //     black-window lesson, preserved here as a warning label.
     gLblClockText.bounds.h = gUi.theme.font_h;
     os64_ui_stack_vertical(&gUi, &gRoot);
+
+    (void)os64_ui_font_planner(&gUi, plan_clock_font, clock_font_done, clock_font_done, NULL);
+    (void)os64_ui_font_follow(&gUi);
 
     // [6] First paint: deliver everything set_root/stack marked dirty.
     //     Without it the window shows its birth-gray until the first tick.
@@ -252,5 +272,6 @@ int main(int argc, char **argv)
     //     skips the save, and the kernel's exit sweep reclaims the window.
     //     (This comment said "no exit path" from the day the clock had none
     //     until Codex #29 rd19, two commits after it grew one.)
+	os64_ui_font_release(&gUi);
 	return 0;
 }

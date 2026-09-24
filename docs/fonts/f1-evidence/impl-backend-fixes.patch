@@ -1,0 +1,138 @@
+--- a/userland/libfreetype/port/backend.c
++++ b/userland/libfreetype/port/backend.c
+@@ -382,7 +382,10 @@
+             scalar = unit;
+ 
+         if ( scalar == 0 )             /* an embedded NUL ends the string */
+-            break;
++        {
++            out[used] = '\0';
++            return 0;
++        }
+ 
+         if ( !utf8_append( out, cap, &used, scalar ) )
+         {
+@@ -431,9 +434,9 @@
+ /* Score a candidate name entry. Higher wins; zero means "not usable". The
+  * shape of the preference is upstream's own: a typographic family name (16)
+  * describes the family a person means, while the legacy family name (1) was
+- * bent for four-style menus in 1990s applications. English is preferred
+- * because it is the name the font's own designer wrote in ASCII; a settings
+- * list in another language is a later, separate decision. */
++ * bent for four-style menus in 1990s applications. Microsoft en-US and
++ * Unicode-platform language zero are deterministic preferences, not an
++ * inference about a font designer's language or the encoding of its label. */
+ static unsigned name_score( const FT_SfntName *name,
+                             FT_UShort preferred, FT_UShort legacy )
+ {
+@@ -498,13 +501,9 @@
+ 
+ 
+ /* ── charmap selection ─────────────────────────────────────────────────── */
+-/*
+- * The contract asks for the broadest Unicode coverage and forbids quietly
+- * settling for a symbol or legacy map, so the choice is made here and not
+- * left to `FT_Select_Charmap`'s first match: a face carrying both a
+- * full-repertoire UCS-4 map and a BMP-only one must be read through the
+- * former, or every scalar above U+FFFF silently becomes a missing glyph.
+- */
++/* Full-repertoire formats outrank BMP maps regardless of their platform.
++ * Unicode-platform IDs also describe BMP and variation-selector maps, so
++ * platform alone cannot establish coverage or selectability. */
+ 
+ static int select_unicode_charmap( FT_Face ft )
+ {
+@@ -519,17 +518,23 @@
+ 
+         if ( map->encoding != FT_ENCODING_UNICODE )
+             continue;
++        FT_Long format = FT_Get_CMap_Format( map );
++        if ( format == 14 )             /* variation selectors, not a base map */
++            continue;
+ 
+         if ( map->platform_id == TT_PLATFORM_MICROSOFT &&
+              map->encoding_id == TT_MS_ID_UCS_4 )
+-            rank = 40;                       /* the whole repertoire */
++            rank = 40;
+         else if ( map->platform_id == TT_PLATFORM_APPLE_UNICODE )
+-            rank = 30;                       /* also beyond the BMP */
++            rank = 30;
+         else if ( map->platform_id == TT_PLATFORM_MICROSOFT &&
+                   map->encoding_id == TT_MS_ID_UNICODE_CS )
+-            rank = 20;                       /* BMP only */
++            rank = 20;
+         else
+-            rank = 10;                       /* Unicode by some other road */
++            rank = 10;
++
++        if ( format == 8 || format == 10 || format == 12 || format == 13 )
++            rank += 100;
+ 
+         if ( rank > best_rank )
+         {
+@@ -702,6 +707,10 @@
+     if ( engine->live_faces >= OS64_FONT_FACE_MAX )
+         return OS64_FONT_LIMIT;
+ 
++    /* A one-face TTC is still a collection; face count is not its format. */
++    if ( length >= 4 && __builtin_memcmp( bytes, "ttcf", 4 ) == 0 )
++        return OS64_FONT_UNSUPPORTED;
++
+     engine->allocation_failure = OS64_FONT_OK;
+     face = engine_alloc( engine, sizeof( *face ) );
+     if ( face == NULL )
+@@ -714,13 +723,11 @@
+         goto fail;
+     }
+ 
+-    /* WHAT R1 DOES NOT SERVE, refused here rather than half-served later.
+-     * A collection holds several faces behind one set of bytes and there is
+-     * no syntax yet that says which; a variable font's instance is part of
+-     * its identity, so accepting one at its default would make two different
+-     * renderings answer to one cache key; and a face with no outlines has
+-     * nothing this backend can rasterize. */
+-    if ( ft->num_faces > 1 || has_table( ft, TTAG_fvar ) ||
++    /* The contract accepts static SFNT outlines. Bare CFF can synthesize a
++     * Unicode map but is outside that container profile. Variation state is
++     * not represented in face identity; bitmap-only faces have no outline
++     * for the selected renderer. */
++    if ( !FT_IS_SFNT( ft ) || ft->num_faces > 1 || has_table( ft, TTAG_fvar ) ||
+          has_table( ft, TTAG_CFF2 ) || !FT_IS_SCALABLE( ft ) )
+     {
+         status = OS64_FONT_UNSUPPORTED;
+@@ -803,6 +810,15 @@
+     if ( cut )
+         face->info.flags |= OS64_FONT_FACE_NAME_TRUNCATED;
+ 
++    /* Name strings are loaded lazily. FreeType can suppress a failed read
++     * allocation and return an empty record, which is not a usable fallback
++     * decision: callers must be able to retry after recovering memory. */
++    if ( engine->allocation_failure != OS64_FONT_OK )
++    {
++        status = engine->allocation_failure;
++        goto fail;
++    }
++
+     engine->live_faces++;
+     *out = face;
+     return OS64_FONT_OK;
+@@ -1015,14 +1031,16 @@
+ 
+     /* Copy row by row rather than wholesale: upstream's pitch is a signed
+      * stride that can run the rows BACKWARD through memory, and it is not
+-     * required to equal the width. The contract's mask is tightly packed and
+-     * top row first, so this loop is where that becomes true. */
++     * required to equal the width. FreeType's buffer starts at the lowest
++     * address, so a negative pitch places the top row at the far end. The
++     * contract's output is tightly packed and top row first. */
+     for ( uint32_t row = 0; row < height; row++ )
+     {
+         const uint8_t *src = slot->bitmap.pitch >= 0
+             ? slot->bitmap.buffer + (size_t)row * (size_t)slot->bitmap.pitch
+             : slot->bitmap.buffer
+-                  - (size_t)( height - 1 - row ) * (size_t)( -slot->bitmap.pitch );
++                  + (size_t)( height - 1 - row )
++                      * (size_t)( -(int64_t)slot->bitmap.pitch );
+ 
+ 
+         __builtin_memcpy( glyph->coverage + (size_t)row * (size_t)width,

@@ -25,9 +25,17 @@
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        the root: "bus", "cpu", "net", "block",
-//                                "cache", "conf", "gui", "log", "mounts",
-//                                "openfiles", "random", "shlib", "clipboard"
+//   /sys/                        the root: "bus", "console", "cpu", "net",
+//                                "block", "cache", "conf", "gui", "log", "mounts",
+//                                "openfiles", "random", "shlib", "clipboard", "appearance"
+//   /sys/console/font            the face the virtual terminals draw with.
+//                                READ: which face, its cell, the grid it
+//                                gives this screen, and the verdict on the
+//                                last one offered. WRITE: a PSF2 image, in
+//                                as many pieces as the writer likes, judged
+//                                at CLOSE — or the word "boot". The write
+//                                side is console_font.h; CONSOLE_FONTS.md
+//                                is the design.
 //   /sys/random                  the entropy pool: which instructions the
 //                                CPU advertises and which passed the boot
 //                                variation check, what seeded the pool,
@@ -78,16 +86,16 @@
 //                                say where it DID (conf.h, 2026-08-23)
 //   /sys/clipboard               THE system clipboard, read AND write:
 //                                `... > /sys/clipboard` copies, `cat` pastes.
-//                                Two firsts for /sys, both worth naming: it
-//                                is the only node with DURABLE content (every
-//                                other file is generated fresh at open), and
-//                                the only write that STORES instead of
-//                                COMMANDS (cpu/<n>/probe fires a gun; this
-//                                keeps your bytes). The standing rule is
-//                                untouched — reading it changes nothing.
+//                                Copies accumulate and seal at close.
 //                                Store and rulings: clipboard.c, CLIPBOARD.md
 //
-// Every file is TEXT. The PCI values are the enumeration's saved headers —
+//   /sys/appearance              session appearance: generation header plus
+//                                opaque payload. Readers own a snapshot;
+//                                each write compares and publishes atomically.
+//                                Store and rulings: appearance.c, APPEARANCE.md
+//
+// Generated reports are text; stored payloads are opaque bytes.
+// The PCI values are the enumeration's saved headers —
 // kPCIDeviceHeaders / kPCIDeviceFunctions / kPCIBridgeHeaders, written once
 // by init_PCI before the scheduler exists and never touched again, which is
 // why every PCI read here is lock-free and safe: the snapshot machinery
@@ -142,6 +150,8 @@
 #include "knet.h"                       // /sys/net/knet — the drainer's counters
 #include "doorbell.h"                   // /sys/net/knet — every bell in the registry
 #include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
+#include "gui/glass.h"                 // glass_view_count — /sys/gui's viewer count
+#include "driver/net/loopback.h"        // kNetLoopback — lo's queue in /sys/net/knet
 #include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
 #include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
 #include "driver/net/tcp.h"             // /sys/net/tcp — kTcpStats + the conn list
@@ -151,7 +161,9 @@
 #include "CONFIG.h"
 #include "logging/log.h"   // /sys/log — ring stats and sink state
 #include "io.h"             // kSerialPresent
+#include "appearance.h"
 #include "clipboard.h"      // /sys/clipboard — the snarf store behind the file
+#include "console_font.h"   // /sys/console/font — the VTs' face, and its door
 #include "shared_object.h"  // /sys/shlib — the loaded-shared-object registry
 
 extern volatile uint64_t kTicksSinceStart;   // /sys/log stamps the sink heartbeat against it
@@ -327,10 +339,13 @@ typedef enum
 	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
 	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
 	SYS_NODE_OPENFILESFILE, // /openfiles — the open-file registry (lsof's deep half)
+	SYS_NODE_APPEARANCE, // /appearance — session appearance generation and payload
 	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
 	SYS_NODE_CONFFILE,   // /conf — the config search path, and who took what (2026-08-23)
 	SYS_NODE_RANDOMFILE, // /random — the entropy pool: sources, seeding, counters (RANDOM.md)
+	SYS_NODE_CONSOLEDIR, // /console
+	SYS_NODE_CONSOLEFONT,// /console/font — the VTs' face, readable and writable (CONSOLE_FONTS.md)
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -475,6 +490,13 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		return;
 	}
 
+	if (strcmp(comp, "appearance") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp))) return;
+		out->type = SYS_NODE_APPEARANCE;
+		return;
+	}
+
 	if (strcmp(comp, "clipboard") == 0)
 	{
 		// A file, and a file it stays: history, when it comes, arrives BESIDE
@@ -483,6 +505,19 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_CLIPFILE;
+		return;
+	}
+
+	if (strcmp(comp, "console") == 0)
+	{
+		if (!synth_next_component(path, &pos, comp, sizeof(comp)))
+		{
+			out->type = SYS_NODE_CONSOLEDIR;
+			return;
+		}
+		if (strcmp(comp, "font") != 0 || synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_CONSOLEFONT;
 		return;
 	}
 
@@ -1139,6 +1174,9 @@ static void sys_gen_gui(synth_text_t *t)
 	// (GRAPHICS.md's capacity reservation), so this scales with resolution.
 	synth_text_addf(t, "bytes_per_window: %lu\n",
 	                2ull * kFrameBuffer.width * kFrameBuffer.height * 4);
+	// Who is watching the screen through /dev/glass (gui/glass.h) — a
+	// remote viewer is otherwise invisible from the machine it watches.
+	synth_text_addf(t, "glass_viewers: %u\n", glass_view_count());
 }
 
 // ── /sys/net (2026-08-20) ───────────────────────────────────────────────────
@@ -1191,9 +1229,14 @@ static void sys_gen_net_ip(synth_text_t *t)
 	// installed will otherwise reasonably wonder which one this belongs to —
 	// and the honest answer is "the machine", until addressing goes
 	// per-interface. Naming the card that carries it costs one line and saves
-	// that question.
-	synth_text_addf(t, "scope: machine (os64 is single-homed: one address, %u NIC slot(s))\n",
+	// that question. Loopback is the one other address, and it is on no card.
+	synth_text_addf(t, "scope: machine (os64 is single-homed: one LAN address, %u NIC slot(s))\n",
 	                (unsigned)NET_MAX_DEVICES);
+	if (kNetLoopback != NULL)
+		synth_text_addf(t, "loopback: 127.0.0.1 (lo, 127.0.0.0/8, TCP only)\n");
+	// A 127/8 source or destination arriving on a card: a forgery, dropped
+	// (ipv4_input). Nonzero means something on the LAN is trying.
+	synth_text_addf(t, "martians_dropped: %lu\n", kIPv4Stats.rx_martian);
 }
 
 // net/dhcp — how the address above was come by, and whether it is still a
@@ -1291,6 +1334,11 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "connect_timeouts: %lu\n", kTcpStats.connect_timeouts);
 	synth_text_addf(t, "connections_reaped: %lu\n", kTcpStats.connections_reaped);
 	synth_text_addf(t, "resets_received: %lu\n", kTcpStats.resets_received);
+	synth_text_addf(t, "connections_accepted: %lu\n", kTcpStats.connections_accepted);
+	synth_text_addf(t, "syns_dropped_full: %lu\n", kTcpStats.syns_dropped_full);
+	synth_text_addf(t, "passive_buffered: %lu\n", kTcpStats.passive_buffered);
+	synth_text_addf(t, "passive_buffer_limit: %u\n", TCP_PASSIVE_BUFFER_LIMIT);
+	synth_text_addf(t, "syns_dropped_storage: %lu\n", kTcpStats.syns_dropped_storage);
 	synth_text_addf(t, "segments_in: %lu\n", kTcpStats.segments_in);
 	synth_text_addf(t, "segments_out: %lu\n", kTcpStats.segments_out);
 	synth_text_addf(t, "retransmits: %lu\n", kTcpStats.retransmits);
@@ -1414,6 +1462,50 @@ static void sys_gen_net_tcp(synth_text_t *t)
 		}
 	spinlock_release_irqrestore(&kTcpListLock, lf);
 
+	// The announced ports (SERVERS.md § 1): copied out under the lock like
+	// the rows above, formatted after it. `pending` is half-open plus
+	// queued-unread against the backlog; a rising `dropped` beside a full
+	// `pending` is a listener nobody reads, or a flood.
+	struct listener_row { uint16_t port; uint32_t ip, pending; uint64_t accepted, dropped; };
+	struct listener_row lrows[16];
+	uint32_t ln = 0, lomitted = 0;
+	lf = spinlock_acquire_irqsave(&kTcpListLock);
+	for (tcp_listener_t *l = kTcpListenerList; l != NULL; l = l->next)
+	{
+		if (ln >= sizeof(lrows) / sizeof(lrows[0]))
+		{
+			lomitted++;
+			continue;
+		}
+		spinlock_acquire(&l->lock);
+		lrows[ln].port = l->port;
+		lrows[ln].ip = l->ip;
+		lrows[ln].pending = l->pending;
+		lrows[ln].accepted = l->accepted;
+		lrows[ln].dropped = l->syns_dropped;
+		spinlock_release(&l->lock);
+		ln++;
+	}
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+	synth_text_addf(t, "listeners: %u\n", ln + lomitted);
+	if (ln > 0)
+	{
+		// The address is the LAST column so the earlier ones keep their
+		// positions: `*` for every address, else the loopback address the
+		// door was opened on.
+		synth_text_addf(t, "# port state pending backlog accepted dropped address\n");
+		for (uint32_t i = 0; i < ln; i++)
+		{
+			if (lrows[i].ip == 0)
+				synth_text_addf(t, "%u LISTEN %u %u %lu %lu *\n", lrows[i].port, lrows[i].pending,
+				                (uint32_t)TCP_LISTEN_BACKLOG, lrows[i].accepted, lrows[i].dropped);
+			else
+				synth_text_addf(t, "%u LISTEN %u %u %lu %lu %u.%u.%u.%u\n", lrows[i].port,
+				                lrows[i].pending, (uint32_t)TCP_LISTEN_BACKLOG, lrows[i].accepted,
+				                lrows[i].dropped, NET_IPV4_OCTETS(lrows[i].ip));
+		}
+	}
+
 	synth_text_addf(t, "connections: %u\n", n + omitted);
 	if (n > 0)
 	{
@@ -1485,7 +1577,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 // thread parked and relinked it — the rest found it already awake.
 static void sys_gen_net_knet(synth_text_t *t)
 {
-	synth_text_addf(t, "thread: %s\n", kKnetTask != NULL ? "running" : "none (no NIC registered)");
+	synth_text_addf(t, "thread: %s\n", kKnetTask != NULL ? "running" : "none (networking disabled)");
 	synth_text_addf(t, "mode: %s\n", kNetPoll ? "tick-driven (NETPOLL)" : "doorbell");
 	synth_text_addf(t, "wakes: %lu\n", kKnetWakes);
 	synth_text_addf(t, "drain_rounds: %lu\n", kKnetDrainRounds);
@@ -1494,6 +1586,16 @@ static void sys_gen_net_knet(synth_text_t *t)
 	synth_text_addf(t, "bell_rings: %lu\n", kNetDoorbell.rings);
 	synth_text_addf(t, "bell_wakes: %lu\n", kNetDoorbell.wakes);
 	synth_text_addf(t, "bell_rung_runnable: %lu\n", kNetDoorbell.rung_runnable);
+	// lo's queue, which knet drains beside the cards (loopback.h). A
+	// depth_max near slots means a sender outran the drainer; dropped_full
+	// is what that cost, in segments TCP had to send again.
+	if (kNetLoopback != NULL)
+	{
+		loopback_stats_t lo;
+		loopback_get_stats(&lo);
+		synth_text_addf(t, "lo: queued %lu delivered %lu dropped_full %lu depth %u depth_max %u slots %u\n",
+		                lo.queued, lo.delivered, lo.dropped_full, lo.depth, lo.depth_max, lo.slots);
+	}
 	// Every bell in the registry, for the day there is a second daemon on
 	// one — async NVMe is the named next customer.
 	for (uint32_t i = 0; i < doorbell_count(); i++)
@@ -1667,15 +1769,16 @@ static void sys_gen_cpu_probe(synth_text_t *t, uint32_t core)
 
 // ── File operations ─────────────────────────────────────────────────────────
 
-// What an open handle IS, when it is not just a rendered snapshot. Everything
-// except these two is served by the bare snapshot; the probe file carries its
-// target, and the clipboard carries the entry it is reading or the copy it is
-// accumulating (same embed-the-head pattern as procfs's ctl handle).
+// Ordinary nodes own rendered snapshots. Probe handles also carry a target;
+// clipboard handles hold an entry or pending copy. Appearance writers issue
+// complete publication commands and do not accumulate bytes at close.
 typedef enum
 {
 	SYS_HANDLE_SNAPSHOT = 0,   // the ordinary case: text generated at open
+	SYS_HANDLE_APPEARANCE_WRITE,
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
 	SYS_HANDLE_CLIPWRITE,      // /sys/clipboard opened "w" — holds a pending
+	SYS_HANDLE_FONTWRITE,      // /sys/console/font opened "w" — holds an image
 } sys_handle_kind_t;
 
 typedef struct
@@ -1694,6 +1797,7 @@ typedef struct
 	sys_handle_kind_t kind;
 	snarf_entry_t    *entry;     // CLIPREAD: the entry this handle is reading
 	snarf_pending_t  *pending;   // CLIPWRITE: the copy being accumulated
+	console_font_pending_t *font; // FONTWRITE: the image being accumulated
 } sys_file_handle_t;
 
 static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
@@ -1703,21 +1807,68 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 
 	sys_parse_path(path, &sp);
 
-	// /sys is read-only EXCEPT two nodes: cpu/<n>/probe, the trigger (reads
-	// side-effect free, the gun behind a write — the header's ruling), and
-	// clipboard, the one node that STORES what you write. Rejecting the write
-	// modes at the boundary beats a write that silently goes nowhere.
-	//
-	// Mode "a" is REFUSED here along with everything else that is not exactly
-	// "r" or "w", and for the clipboard that refusal is deliberate rather than
-	// incidental: entries are immutable, and appending to one needs a consumer
-	// to justify it (CLIPBOARD.md). The single-character test does the work.
+	// Writable nodes opt in here; append and combined read/write modes have
+	// no contract for these command or immutable-snapshot interfaces.
 	bool is_probe = (sp.type == SYS_NODE_CPUFILE && strcmp(sp.name, "probe") == 0);
 	bool is_clip  = (sp.type == SYS_NODE_CLIPFILE);
-	if (mode == NULL || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
+	bool is_appearance = (sp.type == SYS_NODE_APPEARANCE);
+	bool is_font = (sp.type == SYS_NODE_CONSOLEFONT);
+	if (mode == NULL || mode[0] == '\0' || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
 		return -1;
-	if (mode[0] == 'w' && !is_probe && !is_clip)
+	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font)
 		return -1;
+
+	// The console's face. A reader gets the status text as an ordinary
+	// snapshot; a writer gets an empty handle that owns the image it is about
+	// to be given, the clipboard writer's arrangement and for its reason — a
+	// half-written font must never reach the glass, so nothing is judged
+	// until close.
+	if (is_font)
+	{
+		synth_text_t text = {0};
+		console_font_pending_t *font = NULL;
+		if (mode[0] == 'r')
+		{
+			if (!synth_text_init(&text, 512)) return -1;
+			text.len = console_font_status(text.buf, text.cap);
+		}
+		else if ((font = console_font_begin()) == NULL)
+			return -1;
+
+		sys_file_handle_t *fh = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+		                                              sizeof(sys_file_handle_t),
+		                                              FILETYPE_SYSFILE);
+		if (fh == NULL)
+		{
+			// The open is failing: the caller never gets a handle and never
+			// writes a byte, so there is nothing to judge. Discard, not submit.
+			console_font_discard(font);
+			return -1;
+		}
+		if (mode[0] == 'w')
+		{
+			fh->kind = SYS_HANDLE_FONTWRITE;
+			fh->font = font;
+		}
+		return 0;
+	}
+
+	if (is_appearance)
+	{
+		synth_text_t text = {0};
+		if (mode[0] == 'r') {
+			if (!synth_text_init(&text, OS64_APPEARANCE_MAX)) return -1;
+			int n = appearance_snapshot(text.buf, text.cap);
+			if (n < 0) { kfree(text.buf); return -1; }
+			text.len = (size_t)n;
+		}
+		sys_file_handle_t *ah = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+		                                              sizeof(sys_file_handle_t),
+		                                              FILETYPE_SYSFILE);
+		if (!ah) return -1;
+		if (mode[0] == 'w') ah->kind = SYS_HANDLE_APPEARANCE_WRITE;
+		return 0;
+	}
 
 	// The clipboard is served from the store, not from generated text, so it
 	// leaves the generator ladder below entirely. Both directions publish a
@@ -1847,13 +1998,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	return 0;
 }
 
-// Writing to /sys means one of exactly two things, and they are different in
-// kind. cpu/<n>/probe is a COMMAND aimed at the machine — same contract as
-// /proc's ctl, first whitespace-delimited word is the verb, the whole write
-// reports as consumed on success (a partial write would make `echo` retry the
-// tail, exactly wrong for a command). clipboard is CONTENT — every byte is
-// kept, and the accumulated copy is sealed at close. Everywhere else, -1 at
-// the fops layer is louder than a write that "succeeds" into nothing.
+// Probe and appearance writes are complete commands, never partial streams.
+// Clipboard writes accumulate content which becomes visible at close.
 static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 {
 	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
@@ -1863,6 +2009,9 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	if (h == NULL || buffer == NULL)
 		return -1;
 
+	if (h->kind == SYS_HANDLE_APPEARANCE_WRITE)
+		return appearance_publish(buffer, size);
+
 	if (h->kind == SYS_HANDLE_CLIPWRITE)
 	{
 		if (size == 0)
@@ -1871,6 +2020,17 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 		// the copy and said so on the glass; -1 here is for the tools that do
 		// check, and the poison is for the ones that don't.
 		if (clipboard_append(h->pending, buffer, size) < 0)
+			return -1;
+		return (int)size;
+	}
+
+	if (h->kind == SYS_HANDLE_FONTWRITE)
+	{
+		if (size == 0)
+			return 0;
+		// Past the loader's size fence the image is poisoned, so the close
+		// refuses it whether or not the writer looked at this -1.
+		if (console_font_append(h->font, buffer, size) < 0)
 			return -1;
 		return (int)size;
 	}
@@ -1924,10 +2084,21 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 static int sys_close(vfs_file_t *vfs_file)
 {
 	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
+	int verdict = 0;
 
 	if (h != NULL)
 	{
-		if (h->kind == SYS_HANDLE_CLIPWRITE)
+		if (h->kind == SYS_HANDLE_FONTWRITE)
+		{
+			// Judged here, installed later: the submit validates the image
+			// and queues it for kworker, because this close may be running
+			// with interrupts off or inside a burial (console_font.h). A
+			// refusal is what this function returns; the REASON is in
+			// /sys/console/font, which is what a program should read.
+			verdict = console_font_submit(h->font);
+			h->font = NULL;
+		}
+		else if (h->kind == SYS_HANDLE_CLIPWRITE)
 		{
 			// Publishes, or discards a poisoned copy. Either way the pending
 			// is freed and the handle owns nothing afterwards.
@@ -1945,7 +2116,8 @@ static int sys_close(vfs_file_t *vfs_file)
 		}
 	}
 
-	return synth_snapshot_close(vfs_file);   // frees the handle and the vfs_file
+	int closed = synth_snapshot_close(vfs_file);   // frees the handle and the vfs_file
+	return verdict < 0 ? verdict : closed;
 }
 
 // ── Directory operations ────────────────────────────────────────────────────
@@ -1966,7 +2138,8 @@ static int sys_open_dir(vfs_directory_t **vfs_dir, const char *path,
 
 	if (sp.type != SYS_NODE_ROOT && sp.type != SYS_NODE_BUSDIR &&
 	    sp.type != SYS_NODE_PCIDIR && sp.type != SYS_NODE_CPUDIR &&
-	    sp.type != SYS_NODE_CPUCORE && sp.type != SYS_NODE_NETDIR)
+	    sp.type != SYS_NODE_CPUCORE && sp.type != SYS_NODE_NETDIR &&
+	    sp.type != SYS_NODE_CONSOLEDIR)
 		return -1;
 
 	sys_dir_handle_t *h = kmalloc(sizeof(sys_dir_handle_t));
@@ -2009,8 +2182,8 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// as the "log" entry that went missing from a merge in August —
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
-			static const char *kSysRootDirs[] = { "bus", "cpu", "net" };
-			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard" };
+			static const char *kSysRootDirs[] = { "bus", "console", "cpu", "net" };
+			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -2024,12 +2197,12 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			{
 				const char *name = kSysRootFiles[h->index - kDirCount];
 				strncpy(entry->name, name, OS64_DIRENT_NAME_MAX);
-				// Size 0 for the generated files — their content does not
-				// exist until something opens them. The clipboard is the
-				// exception BECAUSE its content is durable: `ls -l /sys` can
-				// honestly say how much is on the clipboard right now.
+				// Stored snapshots report their current sizes; generated
+				// reports use zero until opened.
 				if (strcmp(name, "clipboard") == 0)
 					entry->size = clipboard_length();
+				if (strcmp(name, "appearance") == 0)
+					entry->size = appearance_length();
 				h->index++;
 				return 1;
 			}
@@ -2079,6 +2252,13 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			}
 			return 0;
 		}
+
+		case SYS_NODE_CONSOLEDIR:
+			if (h->index != 0)
+				return 0;
+			h->index = 1;
+			strncpy(entry->name, "font", OS64_DIRENT_NAME_MAX);
+			return 1;
 
 		case SYS_NODE_NETDIR:
 		{
@@ -2223,9 +2403,12 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, "openfiles", OS64_DIRENT_NAME_MAX);
 			return 0;
 
-		// The clipboard reports its REAL length here (the only /sys node that
-		// can), which is how userland sizes a paste before reading one — and
-		// how `ls -l /sys` stops lying about the one file that has content.
+		case SYS_NODE_APPEARANCE:
+			strncpy(entry->name, "appearance", OS64_DIRENT_NAME_MAX);
+			entry->size = appearance_length();
+			return 0;
+
+		// Stored bytes have a size even before a reader opens a snapshot.
 		case SYS_NODE_CLIPFILE:
 			strncpy(entry->name, "clipboard", OS64_DIRENT_NAME_MAX);
 			entry->size = clipboard_length();
@@ -2259,6 +2442,15 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 		case SYS_NODE_NETDIR:
 			entry->flags = OS64_DE_DIR;
 			strncpy(entry->name, "net", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_CONSOLEDIR:
+			entry->flags = OS64_DE_DIR;
+			strncpy(entry->name, "console", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_CONSOLEFONT:
+			strncpy(entry->name, "font", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_NETIP:

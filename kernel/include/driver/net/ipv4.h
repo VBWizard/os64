@@ -66,6 +66,7 @@ typedef struct ipv4_stats
 	uint64_t rx_truncated;         // lengths don't add up
 	uint64_t rx_fragment_dropped;  // the loud fragment drop (see stance above)
 	uint64_t rx_not_for_us;        // unicast to someone else's address
+	uint64_t rx_martian;           // a 127/8 source or destination on a real card — forged
 	uint64_t rx_unknown_proto;     // protocol we don't parse yet
 	uint64_t tx_sent;
 	uint64_t tx_awaiting_arp;      // DROPPED: next hop unresolved and no room to hold it

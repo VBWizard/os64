@@ -164,6 +164,8 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t ow
 	if (!w)
 		return NULL;
 	memset(w, 0, sizeof(window_t));
+	w->min_content_w = GUI_WINDOW_MIN_CONTENT_W;
+	w->min_content_h = GUI_WINDOW_MIN_CONTENT_H;
 	w->owner = owner;   // before the focus grab below, which reports siblings by it
 
 	// Both stores are reserved at CAPACITY and report the content size — the
@@ -361,6 +363,12 @@ void wm_set_decorated(window_t *w, bool decorated)
 	int32_t after = wm_chrome_top(w->flags);
 	w->frame.y += before - after;
 	w->frame.h += after - before;
+	// Restore must interpret the saved content with the same chrome as the
+	// live frame; otherwise a titlebar toggle can manufacture a size refusal.
+	if (w->flags & GUI_WINDOW_MAXIMIZED) {
+		w->restoreFrame.y += before - after;
+		w->restoreFrame.h += after - before;
+	}
 	gui_damage_add_locked(rect_union(old, w->frame));
 }
 
@@ -382,8 +390,21 @@ void wm_set_maximized(window_t *w, bool maximized)
 		wm_raise(w);
 		wm_resize(w, (rect_t){0, 0, (int32_t)kFrameBuffer.width, (int32_t)kFrameBuffer.height});
 	} else {
-		w->flags &= ~GUI_WINDOW_MAXIMIZED;
-		wm_resize(w, w->restoreFrame);
+		// The saved rectangle may predate a larger application minimum (for
+		// example, after changing fonts). Keep the maximized state and saved
+		// rectangle until Restore can honor that size without clamping it.
+		rect_t target = wm_clamp_frame(w, w->restoreFrame);
+		if (target.w != w->restoreFrame.w || target.h != w->restoreFrame.h) {
+			printd(DEBUG_GUI, "wm: window %u restore refused: saved content %dx%d, minimum %ux%u\n",
+			       w->id, w->restoreFrame.w - 2 * wm_border_width(w->flags),
+			       w->restoreFrame.h - wm_chrome_top(w->flags) - wm_border_width(w->flags),
+			       w->min_content_w, w->min_content_h);
+			return;
+		}
+		bool already_there = target.x == w->frame.x && target.y == w->frame.y &&
+		                     target.w == w->frame.w && target.h == w->frame.h;
+		if (already_there || wm_resize(w, target))
+			w->flags &= ~GUI_WINDOW_MAXIMIZED;
 	}
 }
 
@@ -486,10 +507,10 @@ rect_t wm_clamp_frame(const window_t *w, rect_t frame)
 	// Clamp into [minimum, reservation]. Clamping rather than refusing is
 	// deliberate: this is driven by a mouse, and a drag that runs past a
 	// limit should STOP at the limit, not abandon the whole gesture.
-	if (content_w < GUI_WINDOW_MIN_CONTENT_W)
-		content_w = GUI_WINDOW_MIN_CONTENT_W;
-	if (content_h < GUI_WINDOW_MIN_CONTENT_H)
-		content_h = GUI_WINDOW_MIN_CONTENT_H;
+	if (content_w < (int32_t)w->min_content_w)
+		content_w = (int32_t)w->min_content_w;
+	if (content_h < (int32_t)w->min_content_h)
+		content_h = (int32_t)w->min_content_h;
 	if ((uint32_t)content_w > w->canvas_cap_w)
 		content_w = (int32_t)w->canvas_cap_w;
 	if ((uint32_t)content_h > w->canvas_cap_h)
@@ -500,6 +521,22 @@ rect_t wm_clamp_frame(const window_t *w, rect_t frame)
 	frame.w = content_w + 2 * wm_border_width(w->flags);
 	frame.h = content_h + wm_chrome_top(w->flags) + wm_border_width(w->flags);
 	return frame;
+}
+
+bool wm_set_min_size(window_t *w, uint32_t width, uint32_t height)
+{
+	if (width < GUI_WINDOW_MIN_CONTENT_W) width = GUI_WINDOW_MIN_CONTENT_W;
+	if (height < GUI_WINDOW_MIN_CONTENT_H) height = GUI_WINDOW_MIN_CONTENT_H;
+	if (width > w->canvas_cap_w || height > w->canvas_cap_h)
+		return false;
+	if (width != w->min_content_w || height != w->min_content_h) {
+		// An outline computed with the previous limits must not commit later.
+		gui_cancel_resize(w);
+		w->min_content_w = width;
+		w->min_content_h = height;
+	}
+	wm_resize(w, w->frame);
+	return true;
 }
 
 bool wm_resize(window_t *w, rect_t frame)
@@ -639,38 +676,14 @@ size_t wm_recency_ids(uint32_t *ids, size_t max)
 
 void wm_deliver_event(window_t *w, const input_event_t *ev)
 {
-	uint32_t next = (w->evt_head + 1) % GUI_WINDOW_EVENTS_MAX;
-	if (next == w->evt_tail) {
-		// FULL. Drop-newest is right for a stream — an unread mouse move is
-		// a sample nobody misses — and wrong for a focus transition, which
-		// is state the client cannot reconstruct and which a popup's whole
-		// dismissal hangs on: lose it and the menu stays up, pinned, with
-		// nothing left to take it down.
-		//
-		// So focus takes the OLDEST slot instead. Advancing the tail is what
-		// a reader does, so the arithmetic is untouched and no state lives
-		// outside the ring.
-		//
-		// What LEAVES is whatever is oldest, and it is worth being honest
-		// about the cost: usually a mouse move, but it can be anything the
-		// client has not read — an evicted WINDOW_CLOSE makes a polite
-		// Alt+F4 do nothing, and turns the user's second one into the
-		// SIGTERM escalation. That trade is deliberate, and only reachable
-		// by a client that has let its queue fill. (An older FOCUS event is
-		// the one eviction that costs nothing: the newer one is the
-		// transition that still holds.)
-		if (ev->type != INPUT_EVENT_WINDOW_FOCUS)
-			return;
-		w->evt_tail = (w->evt_tail + 1) % GUI_WINDOW_EVENTS_MAX;
-		printd(DEBUG_GUI, "wm: window %u queue full — oldest event evicted to deliver a focus change\n",
-		       w->id);
-	}
-	w->events[w->evt_head] = *ev;
-	w->evt_head = next;
+	int stored = gui_event_queue_push(&w->event_queue, ev);
+	if (!stored) return;
+	if (stored == 2)
+		printd(DEBUG_GUI, "wm: window %u queue full — oldest event evicted to deliver a focus change\n", w->id);
 
 	// Aim a wake at a parked event_wait-er. Runs in THREAD context under
 	// kGuiLock — the compositor's thread, or a client's own thread inside a
-	// create/destroy syscall, since the birth and death focus grabs deliver
+	// create/destroy syscall or appearance publication, since those deliver
 	// from there. Never an ISR under either, which is what invariant 4 needs.
 	// The wake takes only the scheduler queue lock inside, no trigger: the
 	// woken thread runs on the next scheduler pass, which is the latency
@@ -682,13 +695,21 @@ void wm_deliver_event(window_t *w, const input_event_t *ev)
 		scheduler_wake_isleep_thread(w->waiter);
 }
 
+void wm_appearance_changed(uint64_t generation)
+{
+    input_event_t ev = {
+        .type = INPUT_EVENT_APPEARANCE,
+        .appearance = { .generation_lo = (uint32_t)generation,
+                        .generation_hi = (uint32_t)(generation >> 32) },
+        .tick = kTicksSinceStart,
+    };
+    for (window_t *w = s_top; w; w = w->below)
+        wm_deliver_event(w, &ev);
+}
+
 bool wm_pop_event(window_t *w, input_event_t *out)
 {
-	if (w->evt_head == w->evt_tail)
-		return false;
-	*out = w->events[w->evt_tail];
-	w->evt_tail = (w->evt_tail + 1) % GUI_WINDOW_EVENTS_MAX;
-	return true;
+	return gui_event_queue_pop(&w->event_queue, out);
 }
 
 // Draw one window's chrome + content into the damaged part of the backbuffer.

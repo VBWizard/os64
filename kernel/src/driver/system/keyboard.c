@@ -25,8 +25,20 @@ extern volatile uint64_t kTicksSinceStart;
 #define KEYBOARD_MAX_SCANCODE 128
 
 static uint8_t s_modifiers;
+static bool s_capsHeld, s_numHeld;   // the lock keys, down now (toggle on the press only)
 static bool s_extended_pending;
 static bool s_key_state[KEYBOARD_MAX_SCANCODE];
+// Keys whose press, or a hardware repeat of it, reached the GUI: their break
+// goes there whoever holds the glass by then (keyboard_deliver_release).
+static bool s_key_to_gui[KEYBOARD_MAX_SCANCODE];
+// Keys a chord consumed, held now: a key a chord took belongs to the chord
+// until its break (X's passive grab). Hardware typematic repeats its make,
+// and each repeat runs the chord tests again (a held Alt+Right keeps
+// walking), but one that no longer matches is dropped, never delivered:
+// after Alt+F8 hands a text terminal's glass to the desktop, where bare
+// Alt+F8 is no chord, the held F8 must not arrive as an ordinary key. Nor
+// does its break, since its press never did. One table per code page.
+static bool s_key_consumed[128], s_ext_consumed[128];
 static __uint128_t s_saved_debug_level;
 static bool s_debug_suppressed;
 
@@ -248,46 +260,84 @@ static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers)
 // who gets SIGINT) lives entirely in console.c — this file stays a device
 // driver, exactly the layering SIGINT.md prescribes; gui_owns_glass is a
 // routing predicate, not policy, same standing as tty_input_event.
-// Last modifier state seen by the choke below — the mouse path's window into
-// the keyboard (see keyboard_current_modifiers in the header for why it is
-// sampled HERE and not from s_modifiers). Written from IRQ context, read from
-// IRQ context; a single byte, so `volatile` and natural atomicity are the
-// whole synchronization story.
-static volatile uint8_t s_liveModifiers;
+// The machine-wide modifier state the mouse path reads (keyboard_current_
+// modifiers in the header has the contract). Ctrl, Shift and Alt are counted:
+// how many keyboards hold each, so one is held while any keyboard holds it.
+// The latches and the dialect tag are the last reporting keyboard's. ONE
+// WORD holds all of it — a 16-bit holder count per modifier and the latch
+// byte on top — changed by compare-and-swap and read by one load, so a
+// pointer packet on another core sees a keyboard's change whole: a report
+// going from nothing to Ctrl+Alt is never read as Ctrl alone. Written from
+// IRQ context and from /dev/glass writes on any core; each keyboard reports
+// its own changes in order.
+static const uint8_t kHeldModifiers[3] = { KEYBOARD_MOD_CTRL, KEYBOARD_MOD_SHIFT, KEYBOARD_MOD_ALT };
+#define MODIFIER_COUNT_SHIFT(i) (16u * (unsigned)(i))
+#define MODIFIER_LATCH_SHIFT    48u
+static volatile uint64_t s_modifierState;
+
+static void keyboard_publish_change(uint8_t before, uint8_t after) {
+    uint8_t latches = (uint8_t)(after & ~(KEYBOARD_MOD_CTRL | KEYBOARD_MOD_SHIFT | KEYBOARD_MOD_ALT));
+    uint64_t old = __atomic_load_n(&s_modifierState, __ATOMIC_RELAXED), next;
+    do {
+        next = old;
+        for (int i = 0; i < 3; i++) {
+            uint8_t m = kHeldModifiers[i];
+            if ((after & m) && !(before & m))
+                next += 1ull << MODIFIER_COUNT_SHIFT(i);
+            else if (!(after & m) && (before & m))
+                next -= 1ull << MODIFIER_COUNT_SHIFT(i);
+        }
+        next = (next & ~(0xFFull << MODIFIER_LATCH_SHIFT)) | ((uint64_t)latches << MODIFIER_LATCH_SHIFT);
+    } while (!__atomic_compare_exchange_n(&s_modifierState, &old, next, false,
+                                          __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+}
 
 uint8_t keyboard_current_modifiers(void) {
-    return s_liveModifiers;
+    uint64_t state = __atomic_load_n(&s_modifierState, __ATOMIC_RELAXED);
+    uint8_t mods = (uint8_t)(state >> MODIFIER_LATCH_SHIFT);
+    for (int i = 0; i < 3; i++)
+        if ((state >> MODIFIER_COUNT_SHIFT(i)) & 0xFFFF)
+            mods |= kHeldModifiers[i];
+    return mods;
 }
 
 // The PS/2 half of the publication (see the forward declaration above the
-// updaters). Defined down here so it sits beside the other half.
+// updaters). Defined down here so it sits beside the other half; it remembers
+// what it last published, because the counts need this keyboard's change.
+static uint8_t s_ps2Published;
 static void keyboard_publish_modifiers(void) {
-    s_liveModifiers = s_modifiers;
+    keyboard_publish_change(s_ps2Published, s_modifiers);
+    s_ps2Published = s_modifiers;
 }
 
-// The USB half of the publication (declared in keyboard.h — see the comment
-// there for why the HID driver must publish at its own change point).
-// Deliberately trivial: the HID driver owns its modifier byte entirely; this
-// is only the hand-off to the shared snapshot.
-void keyboard_publish_hid_modifiers(uint8_t modifiers) {
-    s_liveModifiers = modifiers;
+// The HID half (keyboard.h): each HID keyboard owns its modifier byte and
+// reports its own before and after.
+void keyboard_publish_hid_modifiers(uint8_t before, uint8_t after) {
+    keyboard_publish_change(before, after);
 }
 
-void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed) {
-    // The USB half. The xHCI HID path carries its own modifier byte and never
-    // touches this file's s_modifiers, so the choke is the only place that
-    // sees it — and for the PS/2 path this simply re-publishes the value
-    // keyboard_publish_modifiers just wrote. Sampled BEFORE the routing fork,
-    // because a chord can be pressed while the GUI holds the glass and
-    // released after a switch to a text VT.
-    s_liveModifiers = modifiers;
-
+bool keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed) {
+    // The modifier snapshot is not touched here: each driver publishes where
+    // its modifier byte CHANGES (keyboard_publish_modifiers and keyboard_
+    // publish_hid_modifiers), whichever way the event is routed, so a chord
+    // pressed while the GUI holds the glass and released on a text VT still
+    // balances. Writing every event's byte here made the snapshot the last
+    // keyboard to type anything, which dropped a chord held on another.
     if (gui_owns_glass()) {
         input_inject_key(ascii, scancode, modifiers, pressed);
-        return;
+        return true;
     }
     if (pressed)
         keyboard_emit_event(scancode, ascii, modifiers);
+    return false;
+}
+
+void keyboard_deliver_release(char ascii, uint8_t scancode, uint8_t modifiers, bool to_gui) {
+    // Where its press went, not who holds the glass now: the text path takes
+    // no releases, so only a press the GUI saw is owed one, and it is owed
+    // one even after a switch to a text terminal took the glass.
+    if (to_gui)
+        input_inject_key(ascii, scancode, modifiers, false);
 }
 
 // Decide whether Caps Lock should affect this character.
@@ -370,39 +420,36 @@ static char keyboard_translate_scancode(uint8_t scancode) {
 static void keyboard_publish_modifiers(void);
 
 // Update latch-style modifiers for non-extended keys.
+// The six modifier keys, held now. Shift, Ctrl and Alt are each held while
+// EITHER side is, so letting go of Right Ctrl does not drop a Left Ctrl still
+// down (the HID path's 0x11/0x22/0x44 masks say the same).
+static bool s_shiftL, s_shiftR, s_ctrlL, s_ctrlR, s_altL, s_altR;
+
+static void keyboard_derive_held(void) {
+    s_modifiers &= (uint8_t)~(KEYBOARD_MOD_SHIFT | KEYBOARD_MOD_CTRL | KEYBOARD_MOD_ALT);
+    if (s_shiftL || s_shiftR) s_modifiers |= KEYBOARD_MOD_SHIFT;
+    if (s_ctrlL || s_ctrlR)   s_modifiers |= KEYBOARD_MOD_CTRL;
+    if (s_altL || s_altR)     s_modifiers |= KEYBOARD_MOD_ALT;
+}
+
 static void keyboard_update_modifier(uint8_t scancode, bool pressed) {
     switch (scancode) {
-        case 0x2A: // Left Shift
-        case 0x36: // Right Shift
-            if (pressed) {
-                s_modifiers |= KEYBOARD_MOD_SHIFT;
-            } else {
-                s_modifiers &= (uint8_t)~KEYBOARD_MOD_SHIFT;
-            }
-            break;
-        case 0x1D: // Left Control
-            if (pressed) {
-                s_modifiers |= KEYBOARD_MOD_CTRL;
-            } else {
-                s_modifiers &= (uint8_t)~KEYBOARD_MOD_CTRL;
-            }
-            break;
-        case 0x38: // Left Alt
-            if (pressed) {
-                s_modifiers |= KEYBOARD_MOD_ALT;
-            } else {
-                s_modifiers &= (uint8_t)~KEYBOARD_MOD_ALT;
-            }
-            break;
+        case 0x2A: s_shiftL = pressed; keyboard_derive_held(); break;   // Left Shift
+        case 0x36: s_shiftR = pressed; keyboard_derive_held(); break;   // Right Shift
+        case 0x1D: s_ctrlL = pressed; keyboard_derive_held(); break;    // Left Control
+        case 0x38: s_altL = pressed; keyboard_derive_held(); break;     // Left Alt
+        // The locks toggle on the press, not on its typematic repeats: a PS/2
+        // keyboard repeats a held key's make code in hardware, and toggling
+        // on each one would flip the latch every period while it is held.
         case 0x3A: // Caps Lock
-            if (pressed) {
+            if (pressed && !s_capsHeld)
                 s_modifiers ^= KEYBOARD_MOD_CAPS;
-            }
+            s_capsHeld = pressed;
             break;
         case 0x45: // Num Lock
-            if (pressed) {
+            if (pressed && !s_numHeld)
                 s_modifiers ^= KEYBOARD_MOD_NUM;
-            }
+            s_numHeld = pressed;
             break;
         default:
             break;
@@ -413,20 +460,8 @@ static void keyboard_update_modifier(uint8_t scancode, bool pressed) {
 // Extended scancodes provide right-side modifiers.
 static void keyboard_update_modifier_extended(uint8_t scancode, bool pressed) {
     switch (scancode) {
-        case 0x1D: // Right Control
-            if (pressed) {
-                s_modifiers |= KEYBOARD_MOD_CTRL;
-            } else {
-                s_modifiers &= (uint8_t)~KEYBOARD_MOD_CTRL;
-            }
-            break;
-        case 0x38: // Right Alt (AltGr)
-            if (pressed) {
-                s_modifiers |= KEYBOARD_MOD_ALT;
-            } else {
-                s_modifiers &= (uint8_t)~KEYBOARD_MOD_ALT;
-            }
-            break;
+        case 0x1D: s_ctrlR = pressed; keyboard_derive_held(); break;    // Right Control
+        case 0x38: s_altR = pressed; keyboard_derive_held(); break;     // Right Alt (AltGr)
         default:
             break;
     }
@@ -478,6 +513,8 @@ void keyboard_handle_scancode(uint8_t scancode) {
     if (s_extended_pending) {
         keyboard_update_modifier_extended(code, !is_break);
         s_extended_pending = false;
+        if (is_break)
+            s_ext_consumed[code] = false;
 
         // Arrow keys (extended make codes) become VT100 escape sequences on
         // the input stream: ESC '[' A/B/C/D for Up/Down/Right/Left — the
@@ -493,6 +530,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
             if (code == 0x53 &&
                 (s_modifiers & KEYBOARD_MOD_CTRL) && (s_modifiers & KEYBOARD_MOD_ALT)) {
                 keyboard_ctrl_alt_del();
+                s_ext_consumed[code] = true;
                 return;
             }
             // Virtual-terminal chords, extended block (checked BEFORE the
@@ -504,13 +542,15 @@ void keyboard_handle_scancode(uint8_t scancode) {
             // os32 heritage gait, Alt+A/Alt+D's grandchild; Shift+PgUp is
             // scrollback's chord since the Linux 0.x console.)
             if (s_modifiers & KEYBOARD_MOD_ALT) {
-                if (code == 0x4B) { tty_focus_step(-1); return; }   // Alt+Left
-                if (code == 0x4D) { tty_focus_step(+1); return; }   // Alt+Right
+                if (code == 0x4B) { tty_focus_step(-1); s_ext_consumed[code] = true; return; }   // Alt+Left
+                if (code == 0x4D) { tty_focus_step(+1); s_ext_consumed[code] = true; return; }   // Alt+Right
             }
             if (s_modifiers & KEYBOARD_MOD_SHIFT) {
-                if (code == 0x49) { tty_view_scroll(+1); return; }  // Shift+PgUp
-                if (code == 0x51) { tty_view_scroll(-1); return; }  // Shift+PgDn
+                if (code == 0x49) { tty_view_scroll(+1); s_ext_consumed[code] = true; return; }  // Shift+PgUp
+                if (code == 0x51) { tty_view_scroll(-1); s_ext_consumed[code] = true; return; }  // Shift+PgDn
             }
+            if (s_ext_consumed[code])
+                return;   // still the chord's (s_key_consumed)
             char final = 0;
             switch (code) {
                 case 0x48: final = 'A'; break;   // Up
@@ -564,6 +604,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
         if (code == 0x53 &&
             (s_modifiers & KEYBOARD_MOD_CTRL) && (s_modifiers & KEYBOARD_MOD_ALT)) {
             keyboard_ctrl_alt_del();
+            s_key_consumed[code] = true;
             return;
         }
         // Alt+F1..F8: direct-select a virtual terminal (the Linux console's
@@ -583,20 +624,25 @@ void keyboard_handle_scancode(uint8_t scancode) {
             (s_modifiers & KEYBOARD_MOD_ALT) &&
             (!gui_owns_glass() || (s_modifiers & KEYBOARD_MOD_CTRL))) {
             tty_focus(code - 0x3B);
+            s_key_consumed[code] = true;
             return;
         }
+        if (s_key_consumed[code])
+            return;   // still the chord's (s_key_consumed)
         // Make code (including hardware typematic repeats). Emit on PRESS:
         // interactive consumers want to react when the key goes down, and
         // holding a key repeats for free. (This used to emit on release,
         // which made every keystroke feel like it lagged by its own length.)
         s_key_state[code] = true;
         char ascii = keyboard_translate_scancode(code);
-        keyboard_deliver_event(ascii, code, s_modifiers, true);
+        if (keyboard_deliver_event(ascii, code, s_modifiers, true))
+            s_key_to_gui[code] = true;
         return;
     }
 
+    s_key_consumed[code] = false;
     if (!s_key_state[code]) {
-        // Spurious break; nothing to emit.
+        // Spurious break, or a chord's key let go; nothing to emit.
         return;
     }
 
@@ -604,9 +650,10 @@ void keyboard_handle_scancode(uint8_t scancode) {
 
     // Break code: the legacy ring only carries keystrokes (presses), but the
     // GUI needs KEY_UP too — modifier-drag interactions and chords depend on
-    // knowing when a key was released. (deliver_event routes releases to the
-    // GUI queue only.)
-    keyboard_deliver_event(keyboard_translate_scancode(code), code, s_modifiers, false);
+    // knowing when a key was released. It goes where the make went (the text
+    // path takes no releases), whoever holds the glass by now.
+    keyboard_deliver_release(keyboard_translate_scancode(code), code, s_modifiers, s_key_to_gui[code]);
+    s_key_to_gui[code] = false;
 }
 
 void ps2_handle_irq(void) {

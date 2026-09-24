@@ -36,7 +36,7 @@ typedef struct os64_netdest
 // without a debugger. The first two are the syscall boundary's house-wide
 // verdicts, named here so a dialer can read them; the rest are dial's own.
 // Codes -3..-5 are the LIBRARY parser's (the kernel never sees text);
-// -6..-10 come up from the kernel.
+// -6..-10 and -13 come up from the kernel; -11..-12 are the resolver's.
 #define OS64_NET_ERR_INVALID       (-1)  // generic refusal (boundary-owned;
                                          //  dial itself always says more below)
 #define OS64_NET_ERR_BAD_POINTER   (-2)  // the netdest pointer wasn't yours
@@ -49,10 +49,16 @@ typedef struct os64_netdest
                                          //  1-65535 — or PRESENT on icmp,
                                          //  which has no doors
 #define OS64_NET_ERR_BAD_DEST      (-6)  // kernel: struct refused (ip 0,
-                                         //  unknown protocol, port 0)
-#define OS64_NET_ERR_NO_NIC        (-7)  // kernel: netless boot — dialing
-                                         //  with no line is the error, the
-                                         //  boot itself is a configuration
+                                         //  unknown protocol, port 0, UDP
+                                         //  or ICMP to loopback, or an
+                                         //  announce on an address that is
+                                         //  neither * nor 127/8)
+#define OS64_NET_ERR_NO_NIC        (-7)  // kernel: no line to dial on — no
+                                         //  card for a LAN address, or
+                                         //  networking switched off (NONET);
+                                         //  the boot itself is a
+                                         //  configuration, dialing is the
+                                         //  error
 #define OS64_NET_ERR_NO_RESOURCES  (-8)  // kernel: out of memory, ephemeral
                                          //  ports, identifiers, or handles
 #define OS64_NET_ERR_REFUSED       (-9)  // kernel: TCP peer answered RST —
@@ -81,6 +87,35 @@ typedef struct os64_netdest
                                          //  server were all asked, and the
                                          //  answer was no (NXDOMAIN, or an
                                          //  answer with no A record)
+#define OS64_NET_ERR_PORT_TAKEN    (-13) // kernel: announce — another
+                                         //  listener already answers that
+                                         //  port, or a dialed connection
+                                         //  holds it
+
+// ── Announce: the inbound door (NETWORK.md ruling #3, SERVERS.md) ──────
+// announce(local) takes the SAME struct as dial and reads it as WHERE I
+// AM: ip is 0 ("every address this machine has", loopback included — the
+// dial string spells it `tcp!*!23`, `*` being how every dialer since Plan 9
+// has said "any of mine") or a 127/8 address (`tcp!127.0.0.1!5900`: a door
+// only this machine can reach, because no card delivers a 127/8
+// destination), port is the door to open, protocol must be TCP (a UDP
+// announce waits for its consumer — DEBTS). One listener per port whatever
+// its address. It returns a LISTENER handle,
+// and ACCEPT IS A READ ON IT: each read blocks until a connection has
+// completed its handshake, then yields exactly one of these —
+typedef struct os64_netconn
+{
+	int32_t  handle;     // the new stream, in the reader's own table:
+	                     //  read/write/close it like any dialed connection
+	uint32_t peer_ip;    // host order, like everything else in this file
+	uint16_t peer_port;
+	uint16_t _reserved;
+} os64_netconn_t;
+// — and returns sizeof(os64_netconn_t). A buffer shorter than that is
+// refused, never half-filled. os64_read_for's patience works on a listener
+// (OS64_ERR_TIMEOUT when nobody came), and a signal ends the wait like any
+// other park. Closing the listener stops answering the port; connections
+// already accepted are unaffected, ones still queued are reset.
 
 // The handle net_dial returns obeys the house read/write contract:
 //   write(h, buf, len)  — one call = ONE datagram (atomic; oversize is an

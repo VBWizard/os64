@@ -35,11 +35,41 @@ struct Point
 #define BGREEN 0xff00FF00,
 #define TBLACK 0x00000000;
 
+// THE FACE THE CONSOLE IS DRAWING WITH — everything the painter needs to
+// know about a bitmap font, and nothing about the file it came from. A glyph
+// is `height` rows of `row_bytes` bytes, MSB first, the leftmost pixel in
+// the top bit of a row's first byte; PSF1 and PSF2 both lay glyphs down that
+// way, so one blitter serves either. The cell size is a property of the
+// face, which is why no constant names it: CONSOLE_FONTS.md is the design.
+//
+// The fences are what the cursor's save-under buffer and the blitter's
+// arithmetic are sized for. A face outside them is refused where it is
+// loaded, never clamped here.
+#define CONSOLE_CELL_W_MAX 64u
+#define CONSOLE_CELL_H_MAX 128u
+typedef struct
+{
+    const uint8_t *glyphs;     // nglyphs * glyph_bytes
+    uint32_t nglyphs;
+    uint32_t width, height;    // the cell, in pixels
+    uint32_t row_bytes;        // (width + 7) / 8
+    uint32_t glyph_bytes;      // height * row_bytes
+    // WHICH GLYPH DRAWS A BYTE, already answered: 2 x 256 bitmap pointers,
+    // [charset * 256 + byte], each glyph_bytes long. A face that arrives at
+    // runtime is resolved ONCE, when it is installed (console_font.c), so the
+    // blitter indexes and never decides — a byte the face cannot draw points
+    // at a blank or a synthesized block, never at nothing. NULL for the boot
+    // face, which keeps Latin-1 in index order and is drawn through
+    // os64/charset.h as it always was.
+    const uint8_t *const *resolved;
+} console_face_t;
+
 typedef struct
 {
     struct Point cursor_position;
     struct Framebuffer *framebuffer;
     struct PSF1_FONT *psf1_font;
+    console_face_t face;
 
     unsigned int color;
     bool overwrite;
@@ -66,13 +96,33 @@ extern BasicRenderer kRenderer;
 // gui_owns_glass(), and the single-store-from-any-context panic property the
 // pointer provided lives on in gui_emergency_disable's seated flag.)
 
-// Glyph cell size for the built-in PSF1 console font. These were bare 8s and
-// 16s scattered through the renderer; naming them means a font change breaks
-// in one place instead of five. (FONT_HEIGHT still shadows the font's own
-// charsize field — where a BasicRenderer is in hand, prefer
-// psf1_font->psf1_header->charsize, which is the authority.)
-#define FONT_WIDTH  8
-#define FONT_HEIGHT 16
+// The live cell, for code that turns pixels into cells without a renderer
+// in hand (the text-console mouse). Functions, not constants, because the
+// cell belongs to the face and is known only once one is installed.
+uint32_t renderer_cell_w(void);
+uint32_t renderer_cell_h(void);
+
+// Draw with this face from now on; NULL puts the boot face back. Takes the
+// renderer lock itself, and deals with the text cursor FIRST: its save-under
+// pixels are in the outgoing cell's geometry, and restoring them through the
+// incoming one would paint them somewhere else. The face's memory is the
+// caller's — it must stay valid until another install has returned TRUE, and
+// may be freed the moment one has, because every read of a glyph happens
+// under the lock this takes.
+//
+// FALSE means a panic has the glass and nothing was written: the face is the
+// panic's to set (renderer_bust_lock), and until it has, the renderer may
+// still be pointing at the face the caller meant to retire — so a caller
+// told false frees nothing.
+//
+// It changes the PAINT and nothing else. The terminals' grids are re-shaped
+// by the caller (console_font.c), and until the focused one is repainted the
+// glass shows old cells at new positions; every glyph write clips to the
+// framebuffer, so that interval is ugly and not dangerous.
+bool renderer_face_install(const console_face_t *face);
+// The face Limine handed the kernel: what NULL above installs, and what a
+// panic draws with whatever has been installed since.
+const console_face_t *renderer_boot_face(void);
 
 void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer, struct PSF1_FONT *psf1_font);
 void moveto(BasicRenderer *basicrenderer, unsigned int x, unsigned int y);

@@ -1,0 +1,55 @@
+1270 (0x0032) AP0: [user] husk: task 56 (logd) started
+1340 (0x0035) AP5: guicomp: heartbeat, 584 frames, 3 flushes (tick 1340)
+1440 (0x0035) AP5: guicomp: heartbeat, 681 frames, 3 flushes (tick 1440)
+1540 (0x0035) AP5: guicomp: heartbeat, 793 frames, 3 flushes (tick 1540)
+1640 (0x0035) AP5: guicomp: heartbeat, 892 frames, 3 flushes (tick 1640)
+1740 (0x0035) AP5: guicomp: heartbeat, 1002 frames, 3 flushes (tick 1740)
+1742 (0x0020) AP0: os64: up 1742 ticks, GUI running (status #2)
+1840 (0x0035) AP5: guicomp: heartbeat, 1100 frames, 3 flushes (tick 1840)
+1927 (0x0034) AP0: 	task_teardown_leak: 2 cycles — free 8373494040 -> 8373494040 (lost 0 bytes), VMA backing reclaimed 106496 bytes
+1927 (0x0034) AP0: 	task_teardown_leak: window clean — 0 bytes lost, 106496 bytes of VMA backing reclaimed over 2 cycles
+1927 (0x0034) AP0: 	task_teardown_leak: attempt 1 of 4 was clean — measuring again on a fresh window
+1940 (0x0035) AP5: guicomp: heartbeat, 1214 frames, 3 flushes (tick 1940)
+2040 (0x0035) AP5: guicomp: heartbeat, 1312 frames, 3 flushes (tick 2040)
+2140 (0x0035) AP5: guicomp: heartbeat, 1409 frames, 3 flushes (tick 2140)
+2240 (0x0035) AP5: guicomp: heartbeat, 1507 frames, 3 flushes (tick 2240)
+2242 (0x0020) AP1: os64: up 2242 ticks, GUI running (status #3)
+2290 (0x0032) AP1: [user] husk: task 60 (appearance) started
+2294 (0x003c) AP2: wm: created window 2 'Appearance Workshop' at (32,24) 960x728
+2340 (0x0035) AP5: guicomp: heartbeat, 1886 frames, 3 flushes (tick 2340)
+2344 (0x003c) AP2: [user] libui: window 2: font layout refused (4); keeping current fonts
+2440 (0x0035) AP5: guicomp: heartbeat, 2187 frames, 3 flushes (tick 2440)
+2540 (0x0035) AP5: guicomp: heartbeat, 2300 frames, 3 flushes (tick 2540)
+2640 (0x0035) AP5: guicomp: heartbeat, 2397 frames, 3 flushes (tick 2640)
+2740 (0x0035) AP5: guicomp: heartbeat, 2511 frames, 3 flushes (tick 2740)
+2742 (0x0020) AP0: os64: up 2742 ticks, GUI running (status #4)
+2840 (0x0035) AP5: guicomp: heartbeat, 2608 frames, 3 flushes (tick 2840)
+2932 (0x0034) AP0: 	task_teardown_leak: 2 cycles — free 8362117416 -> 8362117416 (lost 0 bytes), VMA backing reclaimed 106496 bytes
+2932 (0x0034) AP0: 	task_teardown_leak: window clean — 0 bytes lost, 106496 bytes of VMA backing reclaimed over 2 cycles
+2932 (0x0034) AP0: 	PASS: test_task_teardown_leak (a task costs nothing — 2 independently measured windows agreed, with 0 unmeasurable)
+2932 (0x0034) AP0: 	[Test] task_teardown_leak... OK
+2932 (0x0034) AP0: 	PASS: test_doorbell_wakes_sleeper (3 rings, worst 0 tick(s), 3 wake(s) answered by a pass)
+2932 (0x0034) AP0: 	[Test] doorbell_wakes_sleeper... OK
+2932 (0x0034) AP0: 	SKIP: test_net_tcp_refused (no NIC)
+2932 (0x0034) AP0: 	[Test] net_tcp_refused... OK
+2932 (0x0034) AP0: BUILT-IN TESTS: 3 passed, 0 failed
+2940 (0x0035) AP5: guicomp: heartbeat, 2720 frames, 3 flushes (tick 2940)
+3040 (0x0035) AP5: guicomp: heartbeat, 2818 frames, 3 flushes (tick 3040)
+3140 (0x0035) AP5: guicomp: heartbeat, 2917 frames, 3 flushes (tick 3140)
+3192 (0x0032) AP1: [user] husk: task 64 (controlcenter) started
+3195 (0x0040) AP2: wm: created window 3 'Control Center' at (64,112) 468x442
+3224 (0x0040) AP2: wm: window 3 resized to 493x421 content at (64,112)
+3224 (0x0040) AP2: [user] controlcenter: interface row 33, minimum 493x273
+3240 (0x0035) AP5: guicomp: heartbeat, 3174 frames, 3 flushes (tick 3240)
+3242 (0x0020) AP1: os64: up 3242 ticks, GUI running (status #5)
+3340 (0x0035) AP5: guicomp: heartbeat, 3272 frames, 3 flushes (tick 3340)
+3440 (0x0035) AP5: guicomp: heartbeat, 3369 frames, 3 flushes (tick 3440)
+3540 (0x0035) AP5: guicomp: heartbeat, 3466 frames, 3 flushes (tick 3540)
+3640 (0x0035) AP5: guicomp: heartbeat, 3563 frames, 4 flushes (tick 3640)
+3740 (0x0035) AP5: guicomp: heartbeat, 3659 frames, 4 flushes (tick 3740)
+3742 (0x0020) AP1: os64: up 3742 ticks, GUI running (status #6)
+3819 (0x0032) AP0: [user] husk: task 66 (sync) started
+3820 (0x0032) AP2: [user] husk: task 66 (sync) exited code 0
+3840 (0x0035) AP5: guicomp: heartbeat, 3758 frames, 4 flushes (tick 3840)
+3940 (0x0035) AP5: guicomp: heartbeat, 3864 frames, 4 flushes (tick 3940)
+4040 (0x0035) AP5: guicomp: heartbeat, 3961 frames, 4 flushes (tick 4040)

@@ -1,0 +1,1 @@
+[["key", "ctrl-alt-f2"], ["enter", "/tests/fontsettingstest 5"], ["enter", "gterm &"], ["key", "alt-f8"], ["enter", "echo fitted-after-reboot"], ["snap", "19-reboot-terminal-fitted"], ["key", "ctrl-alt-f2"], ["enter", "shutdown"]]

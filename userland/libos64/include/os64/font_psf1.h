@@ -1,8 +1,8 @@
 // font_psf1.h — libdraw's embedded font (LIBDRAW.md: "one embedded font,
 // by design"). GENERATED from external/zap-light16.psf — the same face the
 // text console has always used, so GUI text and console text are one voice.
-// os64's aesthetic is "one good font, possibly forever"; proportional faces
-// are a documented future slot, not a present ambition.
+// This is the fixed-size compatibility face for the byte drawing APIs and
+// bitmap text instances; outline-font runs use the separate font backend.
 //
 // PSF1 layout: 4-byte header (magic 36 04, mode, charsize=16) then 256
 // glyphs of 8x16 (one byte per row, MSB = leftmost pixel). The source

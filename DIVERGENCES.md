@@ -220,3 +220,26 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
   the direction of travel is ours.)
 - **The rows above are the spec.** Anything in "Kept on merit" is free;
   everything else is a translation entry.
+
+## SSH access
+
+SSH public keys authorize access to the machine, not to a per-user account.
+os64 records the username from an accepted SSH login but has no user database
+or per-user permissions to apply. The v1 server supports ECDSA P-256 keys,
+non-PTY exec, and a STREAM-PTY shell, with one session channel per connection,
+and local forwarding (`ssh -L`) to this machine's loopback only.
+Unsupported authentication and channel features are refused on the wire;
+see SSHD.md for the bounds and supported OpenSSH client.
+
+## The screen as a device (`/dev/glass`, 2026-09-23)
+
+Any process may watch the screen through `/dev/glass`, and with mode `"u"`
+type and point on it, because os64 has no users to refuse: the same machine
+lets any process read `/proc/<pid>/mem`. X11 and Wayland gate the
+equivalent on a display connection's authority. Here the gate is who can
+reach the machine at all, and for remote viewers that is sshd's key check
+(REMOTE.md: vncd listens on loopback only). The device is also shaped
+differently from `/dev/fb0`'s memory map: a read returns a CHANGED
+rectangle and blocks until there is one, which is what a remote viewer
+needs, where a flat framebuffer file would make every reader diff frames
+itself.

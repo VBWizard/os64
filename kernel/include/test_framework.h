@@ -7,7 +7,7 @@
 
 #include "printd.h"
 
-#define TEST_MAX_CASES 64
+#define TEST_MAX_CASES 128
 
 #define TEST_FAIL(msg) panic("    FAIL: %s\n", msg); 
 

@@ -1,0 +1,13 @@
+  applying 0001-psaux-cf2_stack_setReal-index-off-by-one.patch
+  applying 0002-psaux-cf2_stack_roll-operate-on-top-elements.patch
+  applying 0003-psaux-cf2_doBlend-bounds-check-all-operands.patch
+  applying 0004-psaux-charstring-subr-nesting-off-by-one.patch
+  applying 0005-cff-cff_index_get_name-non-null-memcpy.patch
+  applying 0006-autofit-aflatin-signed-overflow.patch
+  applying 0007-autofit-aflatin-signed-overflow-2.patch
+  applying 0008-autofit-af_validate_coverage-last-element.patch
+  applying 0009-autofit-af_validate_coverage-reject-overlaps.patch
+  applying 0010-autofit-af_validate_coverage-unsigned.patch
+  applying 0011-truetype-TT_Load_Simple_Glyph-unsigned-counts.patch
+PASS: pinned archive SHA256; fresh extraction plus 11 patches reproduces all 334 imported files
+  334 files match the manifest; 11 patches unchanged

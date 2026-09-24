@@ -32,7 +32,9 @@ static spinlock_t s_input_lock = 0;
 // The GUI-side cursor position, tracked here so every mouse event carries
 // absolute screen coordinates and the compositor never integrates deltas.
 static int32_t s_mouse_x, s_mouse_y;
-static uint8_t s_mouse_buttons;
+// How many sources hold each button (input.h, input_pointer_source_t); a
+// button is down while its count is nonzero.
+static uint32_t s_button_holders[3];
 
 // Gate: stays false when the GUI is off so the always-on keyboard driver's
 // inject calls cost one branch and nothing else.
@@ -44,7 +46,8 @@ void input_init(void)
 	s_head = s_tail = 0;
 	s_mouse_x = (int32_t)kFrameBuffer.width / 2;   // start centered
 	s_mouse_y = (int32_t)kFrameBuffer.height / 2;
-	s_mouse_buttons = 0;
+	for (int b = 0; b < 3; b++)
+		s_button_holders[b] = 0;
 	s_active = true;
 	spinlock_release_irqrestore(&s_input_lock, flags);
 	printd(DEBUG_GUI, "input: unified event queue active (%u slots)\n", INPUT_QUEUE_SIZE);
@@ -77,7 +80,75 @@ void input_inject_key(char ascii, uint8_t scancode, uint8_t modifiers, bool pres
 	spinlock_release_irqrestore(&s_input_lock, flags);
 }
 
-void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons)
+static uint8_t buttons_held(void)
+{
+	uint8_t held = 0;
+	for (int b = 0; b < 3; b++)
+		if (s_button_holders[b] != 0)
+			held |= (uint8_t)(1u << b);
+	return held;
+}
+
+// Move by (dx, dy), clamped to the screen, and turn `src`'s new buttons into
+// the machine's DOWN/UP edges. Caller holds s_input_lock. Both pointers —
+// the mice, which move relatively, and /dev/glass, which says where — end
+// here, so a grab, a drag and a chord see the same events from either.
+static void pointer_locked(input_pointer_source_t *src, int32_t dx, int32_t dy, uint8_t buttons,
+                           uint8_t modifiers)
+{
+	buttons &= 0x07;
+	uint8_t before = buttons_held();
+	for (int b = 0; b < 3; b++)
+	{
+		uint8_t mask = (uint8_t)(1u << b);
+		if ((buttons & mask) && !(src->buttons & mask))
+			s_button_holders[b]++;
+		else if (!(buttons & mask) && (src->buttons & mask))
+			s_button_holders[b]--;
+	}
+	src->buttons = buttons;
+	uint8_t held = buttons_held();
+
+	// Integrate motion and clamp to the screen. PS/2 y is positive-up;
+	// the DRIVER converts to screen coords (positive-down) before injecting,
+	// so dy here is already screen-oriented.
+	if (dx || dy) {
+		s_mouse_x += dx;
+		s_mouse_y += dy;
+		if (s_mouse_x < 0) s_mouse_x = 0;
+		if (s_mouse_y < 0) s_mouse_y = 0;
+		if (s_mouse_x >= (int32_t)kFrameBuffer.width)  s_mouse_x = (int32_t)kFrameBuffer.width - 1;
+		if (s_mouse_y >= (int32_t)kFrameBuffer.height) s_mouse_y = (int32_t)kFrameBuffer.height - 1;
+
+		input_event_t ev = {
+			.type = INPUT_EVENT_MOUSE_MOVE,
+			.mouse = { .x = s_mouse_x, .y = s_mouse_y, .dx = (int16_t)dx, .dy = (int16_t)dy,
+			           .buttons = held, .button = 0,
+			           .modifiers = modifiers },
+		};
+		enqueue_locked(&ev);
+	}
+
+	// Diff the machine's button state into discrete DOWN/UP events, one per
+	// changed button, so the window system routes clicks without re-deriving
+	// edges.
+	uint8_t changed = held ^ before;
+	for (uint8_t b = 0; changed && b < 3; b++) {
+		uint8_t mask = (uint8_t)(1u << b);
+		if (!(changed & mask))
+			continue;
+		input_event_t ev = {
+			.type = (held & mask) ? INPUT_EVENT_MOUSE_BUTTON_DOWN
+			                      : INPUT_EVENT_MOUSE_BUTTON_UP,
+			.mouse = { .x = s_mouse_x, .y = s_mouse_y, .dx = 0, .dy = 0,
+			           .buttons = held, .button = b,
+			           .modifiers = modifiers },
+		};
+		enqueue_locked(&ev);
+	}
+}
+
+void input_inject_mouse(input_pointer_source_t *src, int16_t dx, int16_t dy, uint8_t buttons)
 {
 	if (!s_active)
 		return;
@@ -97,45 +168,28 @@ void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons)
 	uint8_t modifiers = keyboard_current_modifiers();
 
 	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);
+	pointer_locked(src, dx, dy, buttons, modifiers);
+	spinlock_release_irqrestore(&s_input_lock, flags);
+}
 
-	// Integrate motion and clamp to the screen. PS/2 y is positive-up;
-	// the DRIVER converts to screen coords (positive-down) before injecting,
-	// so dy here is already screen-oriented.
-	if (dx || dy) {
-		s_mouse_x += dx;
-		s_mouse_y += dy;
-		if (s_mouse_x < 0) s_mouse_x = 0;
-		if (s_mouse_y < 0) s_mouse_y = 0;
-		if (s_mouse_x >= (int32_t)kFrameBuffer.width)  s_mouse_x = (int32_t)kFrameBuffer.width - 1;
-		if (s_mouse_y >= (int32_t)kFrameBuffer.height) s_mouse_y = (int32_t)kFrameBuffer.height - 1;
+void input_inject_pointer(input_pointer_source_t *src, int32_t x, int32_t y, uint8_t buttons)
+{
+	if (!s_active)
+		return;
+	// The same one-sample rule as a mouse packet (above).
+	uint8_t modifiers = keyboard_current_modifiers();
+	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);
+	pointer_locked(src, x - s_mouse_x, y - s_mouse_y, buttons, modifiers);
+	spinlock_release_irqrestore(&s_input_lock, flags);
+}
 
-		input_event_t ev = {
-			.type = INPUT_EVENT_MOUSE_MOVE,
-			.mouse = { .x = s_mouse_x, .y = s_mouse_y, .dx = dx, .dy = dy,
-			           .buttons = buttons, .button = 0,
-			           .modifiers = modifiers },
-		};
-		enqueue_locked(&ev);
-	}
-
-	// Diff button state into discrete DOWN/UP events, one per changed button,
-	// so the window system routes clicks without re-deriving edges.
-	uint8_t changed = buttons ^ s_mouse_buttons;
-	for (uint8_t b = 0; changed && b < 3; b++) {
-		uint8_t mask = (uint8_t)(1u << b);
-		if (!(changed & mask))
-			continue;
-		input_event_t ev = {
-			.type = (buttons & mask) ? INPUT_EVENT_MOUSE_BUTTON_DOWN
-			                         : INPUT_EVENT_MOUSE_BUTTON_UP,
-			.mouse = { .x = s_mouse_x, .y = s_mouse_y, .dx = 0, .dy = 0,
-			           .buttons = buttons, .button = b,
-			           .modifiers = modifiers },
-		};
-		enqueue_locked(&ev);
-	}
-	s_mouse_buttons = buttons;
-
+void input_release_pointer(input_pointer_source_t *src)
+{
+	if (!s_active)
+		return;
+	uint8_t modifiers = keyboard_current_modifiers();
+	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);
+	pointer_locked(src, 0, 0, 0, modifiers);
 	spinlock_release_irqrestore(&s_input_lock, flags);
 }
 

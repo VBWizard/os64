@@ -114,10 +114,12 @@ int64_t os64_spawn_redirected(const char *path, char *const argv[],
                            uint64_t flags);
 
 // Seat the child on a pty slave (PTY.md): `master` is a handle from
-// os64_pty_create, and the child becomes that slave's shell — controlling
-// terminal, foreground, its console handles routed there — with zero
+// os64_pty_create or os64_pty_create_stream. The child becomes its shell —
+// controlling terminal, foreground, its console handles routed there — with zero
 // pty-awareness in the child. The terminal's whole job becomes: write
-// keystrokes to the master, snapshot the screen out.
+// keystrokes to the master, snapshot GRID cells or read STREAM output.
+// STREAM seating is refused after its writer closes at the end of a session;
+// a fresh master is needed for a new session. GRID permits re-seating.
 int64_t os64_spawn_seated(const char *path, char *const argv[], int64_t master);
 
 // Where is the program called `command`? The search a shell runs at every

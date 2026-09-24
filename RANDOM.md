@@ -88,8 +88,8 @@ the kernel API and the generator.
   The pool folds the fast pools in under its lock at every reseed and
   every 64 events, whichever first — knet's wake is the usual folder, and
   a draw or a `/dev/random` read that finds the pool unseeded folds them
-  too, so a machine with no NIC (and so no knet) still seeds from the
-  tick.
+  too, so a boot with networking switched off (NONET, and so no knet)
+  still seeds from the tick.
 - Reseed: after 300 seconds or 1 MB served, whichever first, from RDSEED
   plus the fast pools. A reseed that finds RDSEED exhausted takes the fast
   pools alone and counts the miss.

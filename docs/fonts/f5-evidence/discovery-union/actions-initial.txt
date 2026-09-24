@@ -1,0 +1,128 @@
+sendkey down
+sendkey ret
+sendkey ctrl-alt-f2
+sendkey a
+sendkey p
+sendkey p
+sendkey e
+sendkey a
+sendkey r
+sendkey a
+sendkey n
+sendkey c
+sendkey e
+sendkey spc
+sendkey shift-7
+sendkey ret
+sendkey alt-f8
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move 100 100
+mouse_move 100 38
+mouse_move 100 0
+mouse_move 100 0
+mouse_move 45 0
+mouse_button 1
+mouse_button 0
+screendump /tmp/quinn-font-union-guest/union-ui.ppm
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move 100 100
+mouse_move 100 100
+mouse_move 100 33
+mouse_move 100 0
+mouse_move 19 0
+mouse_button 1
+mouse_button 0
+screendump /tmp/quinn-font-union-guest/union-document-alias.ppm
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move 100 100
+mouse_move 40 100
+mouse_move 0 33
+mouse_button 1
+mouse_button 0
+screendump /tmp/quinn-font-union-guest/union-interface.ppm
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move 100 100
+mouse_move 100 100
+mouse_move 100 100
+mouse_move 100 100
+mouse_move 100 100
+mouse_move 100 100
+mouse_move 100 60
+mouse_move 51 0
+mouse_button 1
+mouse_button 0
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move -100 -100
+mouse_move 100 100
+mouse_move 100 100
+mouse_move 100 100
+mouse_move 80 100
+mouse_move 0 100
+mouse_move 0 80
+mouse_button 1
+mouse_button 0
+screendump /tmp/quinn-font-union-guest/union-after-save-refresh.ppm
+sendkey ctrl-alt-f2
+sendkey s
+sendkey h
+sendkey u
+sendkey t
+sendkey d
+sendkey o
+sendkey w
+sendkey n
+sendkey ret

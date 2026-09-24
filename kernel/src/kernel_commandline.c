@@ -62,6 +62,19 @@ bool kRunTestrun = false;
 // unconditional to match HUSK and LOGD=: the kernel starts a userland service
 // because a boot entry asked it to, never because the kernel had an opinion.
 bool kRunCron = false;
+// TELNETD: launch /bin/telnetd once userland is up (SERVERS.md § 3). The
+// CRON precedent exactly — the kernel starts it because a boot entry asked,
+// and not husk.rc, which runs in every husk and would announce one port
+// twice. What it then hands out is a shell to anyone on the LAN, which is
+// why the lifeboat entry does not carry it.
+bool kRunTelnetd = false;
+// SSHD requests the userland SSH listener; absent means no SSH listener.
+bool kRunSshd = false;
+// VNCD requests the remote-desktop listener (REMOTE.md). It listens on
+// loopback only, so on its own it serves nobody off the machine: it is
+// reached through SSHD's forwarding, and a boot that wants remote access
+// carries both tokens.
+bool kRunVncd = false;
 // DIRECTLOG: printd writes STRAIGHT to COM1 with the polled writer, bypassing
 // the per-core queues entirely.
 //
@@ -318,6 +331,9 @@ static cmdopt_t cmdopts[] = {
     {"HUSK", OPT_BOOL, &kRunHusk, true, 0},
     {"TESTRUN", OPT_BOOL, &kRunTestrun, true, 0},
     {"CRON", OPT_BOOL, &kRunCron, true, 0},
+    {"TELNETD", OPT_BOOL, &kRunTelnetd, true, 0},
+    {"SSHD", OPT_BOOL, &kRunSshd, true, 0},
+    {"VNCD", OPT_BOOL, &kRunVncd, true, 0},
     {"DIRECTLOG", OPT_BOOL, &kDirectLog, true, 0},
     {"NOTRACE", OPT_BOOL, &kEnableStackTrace, false, 0},
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},
@@ -418,7 +434,7 @@ static cmdopt_t cmdopts[] = {
     // declaration in kernel.c for who consumes which half of it.
     {"TZ", OPT_STRING, kTZString, 0, 64},
     // Boot TSC calibration window in seconds (see kernel.c for the default
-    // and the precision arithmetic). TSCCAL=5 for the impatient.
+    // and the precision arithmetic). TSCCAL=15 when absolute CPU time matters.
     {"TSCCAL", OPT_INT, &kTSCCalibrationSeconds, 0, 0},
 };
 

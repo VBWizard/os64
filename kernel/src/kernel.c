@@ -53,6 +53,7 @@
 #include "driver/net/e1000.h"
 #include "driver/net/r8125.h"
 #include "driver/net/ethernet.h"   // init_net_stack — the protocol stack over the seam
+#include "driver/net/loopback.h"   // init_loopback — lo, which every networked boot has
 #include "knet.h"                  // the network drainer, minted beside kworker
 #include "random.h"                // the entropy pool, seeded before anything dials
 #include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
@@ -77,6 +78,9 @@ extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
 extern bool kRunTestrun; // launch /tests/testrun, the ring-3 half of the suite
 extern bool kRunCron;    // launch /bin/cron, the scheduler; the crontab says what it runs
+extern bool kRunSshd;
+extern bool kRunVncd;
+extern bool kRunTelnetd; // launch /bin/telnetd, the inbound shell (SERVERS.md)
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
 extern bool kTestPageFault; // TESTPF: deliberate wild-kernel-pointer #PF post-tests
@@ -184,16 +188,20 @@ task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
 // Boot TSC calibration window, seconds (TSCCAL= on the cmdline).
 //
-// Default 5 (was 15 until 2026-08-01). The accuracy argument for 15 was
-// real but small: ±1 tick of boundary slop across 1500 ticks is ±0.07%,
-// versus ±0.2% across 500. What tipped it is that the continuous
-// recalibrator erases that gap within seconds of boot, while the 15
-// seconds are paid IN FULL on every single boot, by a human, watching a
-// progress line — and this OS gets booted dozens of times an evening.
-// Ten seconds of somebody's life beats 0.13% of initial timer accuracy
-// that a background task is about to fix anyway. Raise it for a session
-// that genuinely needs a tight cold start: TSCCAL=15.
-int kTSCCalibrationSeconds = 5;
+// The rate measured here is FIXED for the life of the boot. Every CPU-time
+// figure the kernel reports is cycles divided by this number, so moving it
+// later re-prices the whole history at once: a monotonic counter can step
+// backward, and top sees the step as a one-round blip in every column. A
+// converging recalibrator was tried and retired for exactly that (the
+// commit that removed it has the numbers). A percentage that divides one
+// ledger delta by another converts both at this same rate, so a fixed scale
+// error cancels out of it; only absolute CPU time carries the error.
+//
+// Precision is ±1 tick of boundary slop over the window: 3 seconds is 300
+// ticks, ±0.33%. That is the whole cost of a short window, and every second
+// here is paid IN FULL on every boot by a human watching a counter. Use
+// TSCCAL=15 (±0.07%) when absolute CPU-time units justify the wait.
+int kTSCCalibrationSeconds = 3;
 task_t* kIdleTasks[MAX_CPUS];
 task_t* kLogDTask;
 task_t* kKWorkerTask;
@@ -329,7 +337,7 @@ void kernel_init()
 	block_cache_attach_all();
 
 	detect_cpu();
-	// The pause has a NAME on the glass: a silent 15-second stare at a
+	// The pause has a NAME on the glass: a silent multi-second stare at a
 	// counter reads as a hang to anyone watching a boot.
 	printf("Calibrating TSC (%d second window) ... ", kTSCCalibrationSeconds);
 	kCPUCyclesPerSecond = tscGetCyclesPerSecond((uint32_t)kTSCCalibrationSeconds);
@@ -364,6 +372,10 @@ void kernel_init()
 	if (kEnableNet)
 	{
 		init_net_stack();
+		// Loopback exists whenever networking does, card or no card: it is
+		// how two programs on this machine talk, and it is what a service
+		// announced for this machine alone listens on (REMOTE.md § 1).
+		init_loopback();
 		init_virtio_net();
 		// The e1000 AFTER virtio, deliberately: registration order is
 		// device order, and kNetDevices[0] is the NIC the stack dials
@@ -541,14 +553,14 @@ void kernel_init()
 	    scheduler_submit_new_task(kKWorkerTask);
 	}
 
-	// THE NETWORK DRAINER (DOORBELL.md). A daemon like kworker, minted only
-	// when a NIC registered — a netless boot has nothing to drain and gets no
-	// thread. PINNED TO THE BSP for v1 (Chris, 2026-09-05: "keep the
+	// THE NETWORK DRAINER (DOORBELL.md). A daemon like kworker, minted
+	// whenever networking is enabled — even with no NIC, because loopback's
+	// frames and TCP's timers are its work too (a NONET boot gets none). PINNED TO THE BSP for v1 (Chris, 2026-09-05: "keep the
 	// complexity down"): the NIC interrupts are routed there, so a ring is a
 	// self-IPI and the tick that preempts a busy drainer is the one the BSP
 	// already has. The bell it parks on is rung by every NIC interrupt
 	// handler and by processSignals once per tick.
-	if (kEnableNet && kNetDeviceCount > 0)
+	if (kEnableNet)
 	{
 		kKnetTask = task_create("/knet", 0, NULL, kKernelTask, true, BOOTSTRAP_PROCESSOR_ID);
 		kKnetTask->autoReap = true;
@@ -651,6 +663,39 @@ void kernel_init()
 			// own deadline is the only thing that will notice. Better to name
 			// it here than to leave a silent 30 seconds.
 			printf("  /bin/logd launch failed (not on the image?) — serial logging resumes shortly\n");
+		}
+	}
+
+	// THE CONSOLE'S CONFIGURED FACE (CONSOLE_FONTS.md § Persistence), as
+	// early as it can go: the root and /home are mounted, the ladder is
+	// settled, kworker exists to do the swap, and the terminals are up — so
+	// from here on the boot prints in the face the person chose, which at
+	// 1920x1080 is the difference between reading the post-boot lines and
+	// watching them scroll past at 8x16. Later, beside cron, it would buy
+	// nothing a crontab @reboot line does not; here it buys the boot.
+	//
+	// The FILE is the switch, not a boot token: a token does not travel to a
+	// machine that boots from its own disk, and every machine this is for
+	// does. The kernel asks the ladder only whether console.conf exists —
+	// reading it is /bin/vtfont's, because applying it may mean rendering
+	// an outline face, and FreeType lives in ring 3. Absent file, absent
+	// launch, and the boot face stays. Not waited for: the reflow carries
+	// whatever the tests print meanwhile across the change.
+	if (kRootFilesystem != NULL)
+	{
+		char consoleConf[256];
+		if (conf_find("console.conf", consoleConf, sizeof(consoleConf)))
+		{
+			printf("Launching /bin/vtfont --startup (%s) ...\n", consoleConf);
+			char *vtfontArgv[] = { "/bin/vtfont", "--startup" };
+			task_t *vtfontTask = task_create("/bin/vtfont", 2, vtfontArgv, kKernelTask, false, THREAD_NO_AFFINITY);
+			if (vtfontTask)
+			{
+				vtfontTask->autoReap = true;
+				scheduler_submit_new_task(vtfontTask);
+			}
+			else
+				printf("  /bin/vtfont launch failed (not on the image?)\n");
 		}
 	}
 
@@ -952,6 +997,54 @@ void kernel_init()
         }
         else
             printf("  /bin/cron launch failed (not on the image?)\n");
+    }
+
+    // telnetd (2026-09-12, SERVERS.md § 3): the same arrangement as cron —
+    // the kernel starts it because the boot entry asked, not seated on any
+    // terminal (it hands out terminals of its own: a STREAM pty per
+    // session). Its own 0/1/2 are ktask's, so its diagnostics land on the
+    // console; each session's shell is seated on that session's slave.
+    if (kRunTelnetd && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/telnetd (the inbound shell) ...\n");
+        task_t *telnetdTask = task_create("/bin/telnetd", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (telnetdTask)
+        {
+            telnetdTask->autoReap = true;
+            scheduler_submit_new_task(telnetdTask);
+        }
+        else
+            printf("  /bin/telnetd launch failed (not on the image?)\n");
+    }
+
+    // The boot token selects the service; authentication and transport stay
+    // inside /bin/sshd, whose children own individual connections.
+    if (kRunSshd && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/sshd ...\n");
+        task_t *sshdTask = task_create("/bin/sshd", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (sshdTask)
+        {
+            sshdTask->autoReap = true;
+            scheduler_submit_new_task(sshdTask);
+        }
+        else
+            printf("  /bin/sshd launch failed (not on the image?)\n");
+    }
+
+    // The remote desktop's listener, the same way (REMOTE.md). It serves
+    // viewers only while a desktop runs, and says so to each one otherwise.
+    if (kRunVncd && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/vncd ...\n");
+        task_t *vncdTask = task_create("/bin/vncd", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (vncdTask)
+        {
+            vncdTask->autoReap = true;
+            scheduler_submit_new_task(vncdTask);
+        }
+        else
+            printf("  /bin/vncd launch failed (not on the image?)\n");
     }
 
     // THE LATE PHASE (2026-08-29). The slow post-boot tests, moved off the

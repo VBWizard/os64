@@ -59,6 +59,7 @@ bool sbuf_init(sbuf_t *b)
 		return false;
 	b->lines[0] = (sbuf_line_t){0};
 	b->count = 1;
+	b->terminated = true;
 	return true;
 }
 
@@ -217,9 +218,11 @@ int sbuf_load(sbuf_t *b, const char *path, char *err, size_t errcap)
 	if (os64_stat(path, &e) < 0) {
 		// No such file: an editor opens it EMPTY and creates it at save —
 		// that has been an editor's contract since ed.
-		sbuf_free(b);
-		if (!sbuf_init(b))
+		sbuf_t fresh;
+		if (!sbuf_init(&fresh))
 			goto oom;
+		sbuf_free(b);
+		*b = fresh;
 		return 1;
 	}
 	uint64_t size = e.size;
@@ -253,6 +256,14 @@ int sbuf_load(sbuf_t *b, const char *path, char *err, size_t errcap)
 	while (got < size && (n = os64_read((int32_t)fd, blob + got, size - got)) > 0)
 		got += (uint64_t)n;
 	os64_close((int32_t)fd);
+	// Fewer bytes than the file holds is a failed load, not a smaller file:
+	// a buffer of part of it, marked unchanged, would write that part back
+	// over the whole on the next save.
+	if (got < size) {
+		os64_free(blob);
+		os64_snprintf(err, errcap, "read failed on %s", path);
+		return -1;
+	}
 
 	// Count lines first so the table is ONE allocation, not a doubling walk.
 	size_t nlines = 1;
@@ -260,15 +271,21 @@ int sbuf_load(sbuf_t *b, const char *path, char *err, size_t errcap)
 		if (blob[i] == '\n')
 			nlines++;
 	// A file ENDING in \n has no phantom empty last line ("a\n" is one line
-	// — vi's answer, kept).
-	if (got > 0 && blob[got - 1] == '\n')
+	// — vi's answer, kept) — and remembers that it ended that way, so the
+	// newline is written back only if it was read. An empty file ends in
+	// nothing and is one empty line with no newline after it.
+	bool terminated = got > 0 && blob[got - 1] == '\n';
+	if (terminated)
 		nlines--;
 	if (nlines == 0)
 		nlines = 1;
 
-	sbuf_free(b);
-	*b = (sbuf_t){0};
-	if (!lines_reserve(b, nlines)) {
+	// The new document is built BESIDE the old one and replaces it only
+	// whole. A load that runs out of memory halfway must leave the buffer
+	// the user was editing — unsaved changes and all — not half of the file
+	// they asked for.
+	sbuf_t fresh = {0};
+	if (!lines_reserve(&fresh, nlines)) {
 		os64_free(blob);
 		goto oom;
 	}
@@ -282,26 +299,23 @@ int sbuf_load(sbuf_t *b, const char *path, char *err, size_t errcap)
 		if (end > at) {
 			if (!line_reserve(&ln, end - at)) {
 				os64_free(blob);
+				sbuf_free(&fresh);
 				goto oom;
 			}
 			os64_memcpy(ln.bytes, blob + at, end - at);
 			ln.len = end - at;
 		}
-		b->lines[li] = ln;
-		b->count++;
+		fresh.lines[li] = ln;
+		fresh.count++;
 		at = end + 1;   // step over the newline
 	}
 	os64_free(blob);
-	if (b->count == 0) {
-		b->lines[0] = (sbuf_line_t){0};
-		b->count = 1;
-	}
-	b->dirty = false;
+	fresh.terminated = terminated;
+	sbuf_free(b);
+	*b = fresh;         // dirty false: this is what the disk holds
 	return 0;
 
 oom:
-	if (b->count == 0)
-		sbuf_init(b);
 	os64_snprintf(err, errcap, "out of memory loading %s", path);
 	return -1;
 }
@@ -358,7 +372,8 @@ int sbuf_save(sbuf_t *b, const char *path, char *err, size_t errcap)
 	for (size_t i = 0; i < b->count; i++) {
 		writer_put(&wr, b->lines[i].bytes ? b->lines[i].bytes : "",
 		           b->lines[i].len);
-		writer_put(&wr, "\n", 1);
+		if (i + 1 < b->count || b->terminated)
+			writer_put(&wr, "\n", 1);
 	}
 	writer_flush(&wr);
 	// COMMIT BEFORE BELIEVING (Codex #29 rd24 — the same finding conf.c took

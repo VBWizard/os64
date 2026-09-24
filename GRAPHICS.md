@@ -25,6 +25,7 @@ client API.
 | 2. Window system | `gui/window.{h,c}` | `window_t`, z-order list, chrome (titlebar/border), hit-testing, per-window event queues |
 | 3. Compositor | `gui/compositor.c` | The `/guicomp` daemon: frame loop = drain input → route → recomposite damage → flush; cursor; drag state machine |
 | 4. Client API | `gui/gui_client.{h,c}` | Handle-based, **syscall-shaped** functions apps call; the future userland boundary |
+| — | `gui/glass.{h,c}` | `/dev/glass`: each frame's damage fed to every open viewer, which copies the changed rectangles out of the backbuffer. See the chapter below |
 | — | VT8 seat | `gui_owns_glass()` (compositor.c) — the GUI is VT8's seated shell, and that predicate gates every flush. See the VT8 chapter below |
 | — | ~~`gui/console_window.{h,c}`~~ | RETIRED 2026-08-19 with `kConsoleSink`; boot output lives in VT1's grid, and the shell-in-a-window is ring-3 `gterm` |
 
@@ -105,6 +106,7 @@ to — including coordinates outside its own window, which is exactly what an
 app tracking a drag past its edge needs to see. `s_pointer_window` in
 compositor.c; released when the last button comes up, and by
 `gui_grab_release()` if the window dies mid-gesture.
+Additional button presses during that grab also go to its owner.
 
 The WM's own gestures always had this (`s_drag_window`, `s_band_window`, and
 the comment above them says why). Clients did not, and hit-testing every
@@ -307,6 +309,28 @@ unacceptable for tasks (any task could present/destroy any window).
 
 ### Event delivery
 
+`OS64_GUI_EVENT_POINTER_STATE` reports the latest exposed-content pointer
+target with content-local coordinates and an `inside` flag. The compositor
+reconciles it each frame, including geometry/z-order changes under a stationary
+pointer and VT ownership changes. Client grabs suppress hover in other windows;
+window-manager gestures suppress client hover. Teardown clears the tracked
+window before it can be freed.
+
+The snapshot coalesces outside the per-window input ring and is delivered
+after queued input, so older motion cannot reinstate a stale hover highlight.
+Intermediate crossings can collapse; the final snapshot survives ring pressure.
+It participates in poll/wait readiness and waiter wakeups. Ordinary input retains
+drop-newest on overflow, while a focus change evicts the oldest ring entry.
+
+`OS64_GUI_EVENT_APPEARANCE` carries the published session generation in two
+32-bit words, preserving the event layout. It coalesces in its own slot and
+precedes ordinary input. `/sys/appearance` publication and its window broadcast
+hold `kGuiLock` together; delayed clients read the newest immutable snapshot.
+Window creation and publication serialize on the same lock, and clients check
+the store after creating their first window. The event wakes normal event
+waiters; libui owns payload interpretation and per-process caching. Chrome
+remains independent. See APPEARANCE.md for the publication contract.
+
 **THE RULE FOR DECIDING WHERE A NEW FACT GOES (ruled 2026-08-25, on the
 SIGWINCH question — Chris: "there will be many, so we should probably settle
 on a pattern"): A SIGNAL TELLS A PROCESS SOMETHING; AN EVENT TELLS A WINDOW
@@ -324,8 +348,9 @@ from the outside. The difference is WHEN, and on top of WHAT:
   That is why "which libos64 functions may be called from a handler" is a real
   open question (SIGNALS.md books it).
 
-So: keys, mouse, resize, close, and every future window fact — focus, theme
-change, publish-ack, a polite close-REQUEST — are EVENTS. Every windowing
+So: keys, mouse, resize, focus, appearance changes, and polite close requests
+are EVENTS. Further window facts such as publish acknowledgments follow the
+same pattern. Every windowing
 system converged here independently (X11's queue, the Mac's `GetNextEvent`,
 Win32's message pump, all mid-80s); nobody has ever delivered mouse-moves by
 signal. **os64 could not even if it wanted to**: the pending set is
@@ -531,7 +556,10 @@ One owner variable, and it already exists: `kTTYFocused`.
   pty slave), just in ring 3 where it always belonged.
 - **Input routing follows the glass — dual delivery dies.**
   `keyboard_deliver_event` forks on ownership: VT8 focused → GUI input queue
-  only; text VT focused → tty path only. The chords are consumed BEFORE the
+  only; text VT focused → tty path only. A RELEASE is the exception: it goes
+  where its press went (`keyboard_deliver_release`), so a key or modifier
+  pressed on the desktop and let go after a switch to a text terminal still
+  comes up in the window that saw it go down. The chords are consumed BEFORE the
   fork (Alt+arrows must work from either world; they are commands to the
   terminal stack, same doctrine as Ctrl+Alt+Del). The mouse already goes
   only to the GUI queue; on text VTs its events drop (gpm is a non-goal).
@@ -654,6 +682,16 @@ nothing in userland changed; the stale claim was a comment in `os64/gui.h`
 promising they were equal, and that comment is now the explanation of why they
 are not.
 
+### Per-window minimum size
+
+`os64_gui_window_set_min_size` lets an owner raise its window's minimum
+content dimensions above the default 64x32 resize floor. The existing clamp
+serves the outline, drag commit, maximize and restore. A successful request
+grows a too-small window through the normal resize path; limits beyond the
+reserved canvas capacity are refused without changes. See
+[WINDOW_MINIMUM_SIZE.md](WINDOW_MINIMUM_SIZE.md) for the syscall contract,
+mid-drag handling and verification fixture.
+
 ### The gesture
 
 - The chord is BOTH modifiers, so a plain Ctrl-click or Alt-click still reaches
@@ -687,8 +725,10 @@ are not.
   modifier change that produces no delivered event — the extended path updates
   the state and returns without delivering for any key that is not an arrow or
   a named editing key, so holding Right Alt would change the driver's mind and
-  tell nobody. State is published where it CHANGES now
-  (`keyboard_publish_modifiers`), with the choke still covering the xHCI path.
+  tell nobody. State is published where it CHANGES now: `keyboard_publish_modifiers`
+  for PS/2 and `keyboard_publish_hid_modifiers` for each HID keyboard, counted
+  so a modifier is held while any keyboard holds it (keyboard.h). The choke
+  does not touch it.
 - Mouse events carry `modifiers` (input.h, ABI-compatible — the union had 20
   bytes and was using 14), because a compositor keeping its own shadow copy of
   modifier state would drift out of sync across a VT switch.
@@ -722,7 +762,7 @@ Three things learned building them, for the next chord:
   lesson, re-learned in one day — it is now the rule.)
 - **The HID path emits releases now.** Until today xHCI delivered key-DOWN
   only: no key-up, no event at all for a modifier-only report. The Alt+Tab
-  hold therefore could not end on USB. `hid_process_keyboard_report`
+  hold therefore could not end on USB. `hid_keyboard_report` (hid_keyboard.c)
   emits a release edge per usage that left the report and a press/release
   per modifier bit that flipped (scancode `0xE0 + bit`, ASCII 0, so the
   text path ignores them exactly as it ignores PS/2 modifier keys).
@@ -1044,6 +1084,35 @@ click "Bounce" → gbounce appears, menu gone; open, left-click elsewhere →
 gone (focus-lost); open, Escape → gone; open, click "Terminal" → gterm.
 The lesson for the next driver: QEMU's monitor `mouse_button` bitmask is
 1=left, 2=right, 4=middle.
+
+## /dev/glass — the backbuffer, watched (built 2026-09-23)
+
+REMOTE.md § 3 is the design and `os64/glass.h` the ABI. What the window
+system has to know:
+
+- **The compositor feeds it.** Right after `composite_locked` runs a
+  frame's damage and before `kGuiLock` drops, `glass_damage_locked` adds that
+  damage to every open viewer and wakes a parked reader. Being fed after the
+  pixels are down and under the same lock is what makes a viewer's copy
+  eventually exact: a composite that overlaps a copy records its damage after
+  the copy took its rectangle.
+- **The backbuffer has readers on other threads now.** A glass read takes its
+  rectangle under `kGuiLock` and copies the pixels after releasing it, so the
+  frame loop never waits on a copy. `gui_backbuffer()` hands the surface out
+  only once `s_backbuffer_ready` is published: `surface_init` stores the
+  pixel pointer before the size, and a reader needs both. The hardware
+  framebuffer is still never read (invariant 1).
+- **A viewer opened "u" is also a keyboard and a pointer.** Its keyboard
+  is a `hid_keyboard_t` (the USB keyboard's interpreter) and its pointer
+  goes through `input_inject_pointer`, which shares `pointer_locked` with
+  the mice. Held keys repeat from `glass_input_tick`, called in the frame
+  loop outside `kGuiLock`. Delivery happens under the view's input lock and
+  never under `kGuiLock`, for the reason the painting rule above gives.
+- **It follows the backbuffer, not the glass.** While a text VT holds the
+  screen the backbuffer keeps compositing, so viewers keep receiving the
+  desktop, flagged `OS64_GLASS_TEXT_VT`. A change of who holds the screen
+  re-sends the whole frame, noticed at the reader's next wake (at most a
+  quarter second).
 
 ## Testing / debugging
 

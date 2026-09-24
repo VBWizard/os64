@@ -35,3 +35,6 @@ compile_commands.json
 # settings.local.json is per-machine and must not.
 .claude/settings.local.json
 net_capture.pcap
+
+# Python bytecode from running tools/*.py
+__pycache__/

@@ -213,8 +213,16 @@ void thread_join_close(thread_join_t* j)
 {
 	printd(DEBUG_THREAD, "thread_join_close: handle for thread 0x%08lx released (%s)\n",
 	       j->threadID, j->exited ? "already exited" : "still running — detached");
-	j->waiter = NULL;
+	// The waiter slot is NOT cleared here (it was, until the pin): a reader
+	// parked in thread_join_read may still be inside this object on its own
+	// reference, and it voids its own registration at the top of its loop.
+	// Clearing it from a sibling's close would only lose that reader's wake.
 	thread_join_unref(j);
+}
+
+void thread_join_ref(thread_join_t* j)
+{
+	__sync_fetch_and_add(&j->refcount, 1);
 }
 
 void thread_join_wake_if_ready(void)

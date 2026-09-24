@@ -8,6 +8,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "os64/file.h"   // what os64_close can answer
 #include <stdbool.h>                // os64_linereader_t carries an eof flag
 #include "os64/syscall_numbers.h"   // OS64_SEEK_* — the seek() vocabulary
 #include "os64/dirent.h"            // os64_dirent_t — what readdir() delivers
@@ -258,6 +259,17 @@ int64_t os64_tty_handle(void);
 // dropping the last write end is what delivers end-of-input to the reader, and
 // dropping the last read end is what kills a writer that is producing into the
 // void.
+//
+// FOUR ANSWERS (os64/file.h, included here so a caller can name them). 0:
+// the handle is gone and nothing was left undone. OS64_CLOSE_NOT_COMMITTED:
+// the handle is gone but what you wrote is not where you think it is — a
+// FAT file's flush failed at close (that is where FatFs commits), or a file
+// that judges what it is given refused it (/sys/console/font, whose `last:`
+// line then says why). OS64_CLOSE_DEFERRED: the handle is gone, but another
+// thread of yours was mid-operation on it, so the real close is that
+// thread's and its outcome went to the log — sync first if it matters. -1:
+// there was no such handle. A program that ignores the result loses nothing
+// it had before; one that checks it is told the truth, which `cp` does.
 int64_t os64_close(int32_t handle);
 
 // Commit a written file to the device — its bytes AND the directory entry

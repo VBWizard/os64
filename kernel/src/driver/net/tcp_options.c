@@ -49,6 +49,15 @@ size_t tcp_syn_options_write(uint8_t* out, uint16_t mss, uint8_t wscale)
 	return TCP_SYN_OPTIONS_LEN;
 }
 
+size_t tcp_syn_options_write_mss(uint8_t* out, uint16_t mss)
+{
+	out[0] = TCP_OPT_MSS;
+	out[1] = 4;
+	out[2] = (uint8_t)(mss >> 8);
+	out[3] = (uint8_t)mss;
+	return TCP_SYN_OPTIONS_MSS_LEN;
+}
+
 uint16_t tcp_window_field(uint32_t window, uint8_t shift)
 {
 	uint32_t field = window >> shift;

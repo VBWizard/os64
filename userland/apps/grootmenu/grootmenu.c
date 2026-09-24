@@ -66,6 +66,7 @@ typedef struct
 
 static os64_menu_t     gMenu;
 static os64_ui_theme_t gTheme;
+static uint64_t gAppearanceGeneration;
 static level_t         gLevels[MENU_DEPTH_MAX];
 static int             gDepth;
 static uint32_t        gScreenW, gScreenH;
@@ -282,6 +283,11 @@ static void handle(int d, const os64_gui_event_t *ev)
 {
     level_t *lv = &gLevels[d];
     switch (ev->type) {
+    case OS64_GUI_EVENT_APPEARANCE:
+        if (os64_ui_theme_session(&gTheme, &gAppearanceGeneration,
+                                  os64_gui_appearance_generation(ev)))
+            for (int i = 0; i < gDepth; ++i) paint(&gLevels[i]);
+        break;
     case OS64_GUI_EVENT_MOUSE_MOVE: {
         int r = row_at(lv, ev->mouse.y);
         if (r >= 0 && gMenu.nodes[lv->rows[r]].kind == OS64_MENU_SEPARATOR)
@@ -381,6 +387,9 @@ int main(int argc, char **argv)
             os64_complain("grootmenu: menu \"%s\" is empty\n", name);
         return 1;
     }
+
+    if (os64_ui_theme_session(&gTheme, &gAppearanceGeneration, 0))
+        paint(&gLevels[0]);
 
     // Several windows, one program: poll every level's queue at frame
     // cadence. event_wait blocks on ONE window, and the pointer wanders

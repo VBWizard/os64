@@ -216,4 +216,15 @@ cc -std=gnu11 -D_POSIX_C_SOURCE=200809L -g -O1 -fno-builtin -masm=intel \
    -o "$work/test_husk_prompt"
 "$work/test_husk_prompt"
 
+# Drive husk's line editor with scripted keys and check what it draws on two
+# model terminals: os64's tty, which wraps at once, and a VT100, which waits
+# on the last column. Both must show the line and put the cursor on the caret.
+cc -std=gnu11 -D_POSIX_C_SOURCE=200809L -g -O1 -fno-builtin -masm=intel \
+   -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
+   -Wno-unused-function -fsanitize=address,undefined \
+   -I userland/libos64/include -I abi/include -I kernel/include \
+   -Wl,--gc-sections tools/test_husk_line_host.c kernel/src/ansi.c \
+   -o "$work/test_husk_line"
+"$work/test_husk_line"
+
 echo "test_ansi_host: all checks passed"

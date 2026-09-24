@@ -12,12 +12,28 @@
 #include <stdbool.h>
 #include "os64/dial.h"
 #include "os64/resolve.h"         // names become addresses here, not in the kernel
+#include "os64/io.h"              // os64_read — accept is a read on the listener
 #include "os64/syscall.h"          // the raw stubs
 #include "os64/syscall_numbers.h"
 
 int64_t os64_net_dial(const os64_netdest_t *dest)
 {
 	return (int64_t)os64_syscall1(SYSCALL_NET_DIAL, (uint64_t)dest);
+}
+
+int64_t os64_net_announce(const os64_netdest_t *local)
+{
+	return (int64_t)os64_syscall1(SYSCALL_NET_ANNOUNCE, (uint64_t)local);
+}
+
+int64_t os64_accept(int32_t listener, os64_netconn_t *out)
+{
+	// Accept is a read; the kernel writes the whole struct or refuses, so a
+	// count that is not the struct's size is a refusal even when positive.
+	int64_t n = os64_read(listener, out, sizeof(*out));
+	if (n < 0)
+		return n;
+	return (n == (int64_t)sizeof(*out)) ? 0 : OS64_NET_ERR_INVALID;
 }
 
 // Parse an unsigned decimal out of [s, bang-or-end), bounded by `max`.
@@ -131,6 +147,47 @@ int64_t os64_dial(const char *dialstring)
 	return os64_net_dial(&dest);
 }
 
+int64_t os64_announce(const char *dialstring)
+{
+	// The bang path read as WHERE I AM: tcp, then '*' for "every address
+	// this machine has" or a dotted quad, then the port. Strict like
+	// os64_dial, and for the same reason — a listen string is user input.
+	if (dialstring == 0)
+		return OS64_NET_ERR_BAD_STRING;
+
+	const char *s = dialstring;
+	const char *bang = s;
+	while (*bang && *bang != '!')
+		bang++;
+	if (*bang != '!')
+		return OS64_NET_ERR_BAD_STRING;
+	if (!(bang - s == 3 && s[0] == 't' && s[1] == 'c' && s[2] == 'p'))
+		return OS64_NET_ERR_BAD_STRING;   // announce is TCP; a UDP door waits for its consumer
+
+	// The address segment: the wildcard, or a dotted quad for the kernel to
+	// judge. It accepts 127/8 (loopback) and refuses the rest as BAD_DEST.
+	s = bang + 1;
+	const char *seg_end = s;
+	while (*seg_end && *seg_end != '!')
+		seg_end++;
+	if (*seg_end != '!')
+		return OS64_NET_ERR_BAD_SERVICE;   // "tcp!*" — the port is missing
+	uint32_t ip = 0;
+	if (!(seg_end - s == 1 && s[0] == '*') && !os64_parse_ipv4(s, seg_end, &ip))
+		return OS64_NET_ERR_BAD_ADDRESS;   // announce takes '*' or an address, not a name
+
+	s = seg_end + 1;
+	const char *end = s;
+	while (*end)
+		end++;
+	uint32_t port = 0;
+	if (!parse_decimal_segment(s, end, 65535, &port) || port == 0)
+		return OS64_NET_ERR_BAD_SERVICE;
+
+	os64_netdest_t local = { .ip = ip, .port = (uint16_t)port, .protocol = OS64_NET_TCP };
+	return os64_net_announce(&local);
+}
+
 // The refusal, in words a person can act on — ONE vocabulary for every
 // program that dials, so "connection refused" and "timed out" read the same
 // on every glass. They mean very different things to whoever is standing at
@@ -149,7 +206,8 @@ const char *os64_dial_reason(int64_t err)
 		case OS64_NET_ERR_BAD_STRING:   return "not a dial string — expected network!address!service";
 		case OS64_NET_ERR_BAD_ADDRESS:  return "that host is not a dotted quad or a name";
 		case OS64_NET_ERR_BAD_SERVICE:  return "bad service — a port from 1 to 65535 (ICMP takes none)";
-		case OS64_NET_ERR_BAD_DEST:     return "the kernel refused the destination (address 0, or an unknown protocol)";
+		case OS64_NET_ERR_BAD_DEST:     return "the kernel refused the destination (address 0, an unknown protocol, UDP/ICMP to loopback, or announcing on an address other than * or 127/8)";
+		case OS64_NET_ERR_PORT_TAKEN:   return "that port is already spoken for — another listener, or a live connection";
 		case OS64_NET_ERR_INVALID:
 		case OS64_NET_ERR_BAD_POINTER:  return "refused at the syscall boundary";
 		default:                        return "refused";
