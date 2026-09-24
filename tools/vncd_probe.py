@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
 
 
 def recv_exact(sock, n):
@@ -54,8 +55,14 @@ class Viewer:
         self.w, self.h, self.name = w, h, name
         assert pf[:4] == bytes([32, 24, 0, 1]), pf
         self.bpp = 32
+        self.fmt = (255, 255, 255, 16, 8, 0)
         self.fb = bytearray(w * h * 4)           # as 32bpp little-endian XRGB
-        self.sock.sendall(struct.pack('>BBH i', 2, 0, 1, 0))   # SetEncodings: Raw
+        self.zin = zlib.decompressobj()          # ZRLE: one zlib stream for the connection
+        self.wire = 0                            # encoded pixel bytes received
+        self.encodings([0])
+
+    def encodings(self, codes):
+        self.sock.sendall(struct.pack('>BBH', 2, 0, len(codes)) + b''.join(struct.pack('>i', c) for c in codes))
 
     def set_format(self, bpp, rmax, gmax, bmax, rshift, gshift, bshift):
         pf = struct.pack('>BBBBHHHBBB3x', bpp, 16 if bpp == 16 else 24, 0, 1, rmax, gmax, bmax,
@@ -74,14 +81,73 @@ class Viewer:
         rects = []
         for _ in range(struct.unpack('>H', msg[2:])[0]):
             x, y, w, h, enc = struct.unpack('>HHHHi', recv_exact(self.sock, 12))
-            assert enc == 0, enc
-            data = recv_exact(self.sock, w * h * self.bpp // 8)
+            assert enc in (0, 16), enc
+            if enc == 16:
+                zlen = struct.unpack('>I', recv_exact(self.sock, 4))[0]
+                self.wire += zlen
+                data = self.zrle(w, h, self.zin.decompress(recv_exact(self.sock, zlen)))
+            else:
+                data = recv_exact(self.sock, w * h * self.bpp // 8)
+                self.wire += len(data)
             if self.bpp == 32:
                 for row in range(h):
                     start = ((y + row) * self.w + x) * 4
                     self.fb[start:start + w * 4] = data[row * w * 4:(row + 1) * w * 4]
             rects.append((x, y, w, h, data))
         return rects
+
+    def zrle(self, w, h, tiles):
+        """ZRLE tiles (RFC 6143 section 7.7.6) back to this format's PIXELs."""
+        pb = self.bpp // 8
+        cb = 3 if self.bpp == 32 else pb        # vncd's 32 bpp formats keep colour in 3 bytes
+        p = 0
+        def cpixel():
+            nonlocal p
+            v = tiles[p:p + cb] + (b'\0' if cb == 3 else b'')
+            p += cb
+            return bytes(v)
+        def run():
+            nonlocal p
+            total = 1
+            while True:
+                b = tiles[p]; p += 1; total += b
+                if b != 255:
+                    return total
+        out = bytearray(w * h * pb)
+        for ty in range(0, h, 64):
+            for tx in range(0, w, 64):
+                tw, th = min(64, w - tx), min(64, h - ty)
+                sub = tiles[p]; p += 1
+                vals = []
+                if sub == 0:
+                    vals = [cpixel() for _ in range(tw * th)]
+                elif sub == 1:
+                    vals = [cpixel()] * (tw * th)
+                elif 2 <= sub <= 16:
+                    pal = [cpixel() for _ in range(sub)]
+                    bits = 1 if sub == 2 else 2 if sub <= 4 else 4
+                    for _ in range(th):
+                        n = (tw * bits + 7) // 8
+                        row = tiles[p:p + n]; p += n
+                        for x in range(tw):
+                            b = x * bits
+                            vals.append(pal[(row[b // 8] >> (8 - bits - b % 8)) & ((1 << bits) - 1)])
+                elif sub == 128:
+                    while len(vals) < tw * th:
+                        c = cpixel(); vals += [c] * run()
+                elif sub >= 130:
+                    pal = [cpixel() for _ in range(sub - 128)]
+                    while len(vals) < tw * th:
+                        b = tiles[p]; p += 1
+                        vals += [pal[b & 127]] * (run() if b & 128 else 1)
+                else:
+                    raise AssertionError(f'subencoding {sub}')
+                for y in range(th):
+                    for x in range(tw):
+                        at = ((ty + y) * w + tx + x) * pb
+                        out[at:at + pb] = vals[y * tw + x]
+        assert p == len(tiles), (p, len(tiles))
+        return bytes(out)
 
     def key(self, keysym, down):
         self.sock.sendall(struct.pack('>BBxxI', 4, 1 if down else 0, keysym))
@@ -160,6 +226,31 @@ def main():
     assert rects and bad == 0, bad
     v.set_format(32, 255, 255, 255, 16, 8, 0)
     print('vncd: SetPixelFormat to RGB565 matches the 32-bit frame PASS', flush=True)
+
+    # 3b. The same, under ZRLE: the viewer prefers it, and every frame from
+    # here on (typing and terminals included) arrives as ZRLE.
+    v.encodings([16, 0])
+    raw_frame = bytes(v.fb)
+    v.fb = bytearray(len(v.fb))
+    v.wire = 0
+    v.request(False)
+    v.update()
+    assert bytes(v.fb) == raw_frame, 'the ZRLE frame differs from the Raw one'
+    print(f'vncd: a full ZRLE frame equals the Raw frame, in {v.wire} bytes against {len(raw_frame)} PASS', flush=True)
+    v.set_format(16, 31, 63, 31, 11, 5, 0)
+    v.request(False, 0, 0, v.w, 64)
+    rects = v.update()
+    bad = 0
+    for x, y, w, h, data in rects:
+        for i in range(w * h):
+            px = struct.unpack_from('<H', data, i * 2)[0]
+            j = ((y + i // w) * v.w + (x + i % w)) * 4
+            r, g, b = v.fb[j + 2], v.fb[j + 1], v.fb[j]
+            if px != (((r * 31 + 127) // 255) << 11 | ((g * 63 + 127) // 255) << 5 | ((b * 31 + 127) // 255)):
+                bad += 1
+    assert rects and bad == 0, bad
+    v.set_format(32, 255, 255, 255, 16, 8, 0)
+    print('vncd: ZRLE in RGB565 matches the 32-bit frame PASS', flush=True)
 
     # 4. Ctrl+Alt+F1 on the glass keyboard: a text terminal takes the
     # screen, and the frame comes back dimmed under the banner.

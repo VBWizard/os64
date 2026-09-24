@@ -405,7 +405,8 @@ written down in DIVERGENCES rather than left to be discovered.
     pixel with shift and max arithmetic. A colour-map format ends the
     session with a logged reason, because RFB gives the server no way to
     refuse it.
-  - SetEncodings: read and ignored, since Raw is always spoken (ZRLE is §6).
+  - SetEncodings: the first of ZRLE and Raw the viewer names wins (§6); Raw
+    when it names neither.
   - FramebufferUpdateRequest: clipped to the screen, answered when
     something in it is dirty.
   - KeyEvent: X11 keysym to HID usage, US layout (os64's only one), keypad
@@ -458,21 +459,49 @@ written down in DIVERGENCES rather than left to be discovered.
 ## 6. ZRLE — the pleasant one
 
 ZRLE (RFC 6143 §7.7.6) is 64×64 tiles, each raw, solid, packed-palette or
-RLE, all through ONE zlib stream for the life of the connection, with a sync
-flush after each rectangle. The desktop is mostly flat colour and text, so
-most tiles are solid or small-palette, and RLE plus DEFLATE does very well
+RLE, all through ONE zlib stream for the life of the connection, with a
+sync flush after each rectangle. The desktop is mostly flat colour and text,
+so most tiles are solid or small-palette, and RLE plus DEFLATE does very well
 on them.
 
-- **libgzip gains `os64_deflate_flush`**: finish the current block, then emit
-  the empty stored block (`00 00 FF FF`), byte-aligned, with the history
-  window kept. That is zlib's `Z_SYNC_FLUSH`, and it is the one verb missing.
-  vncd writes the two-byte zlib header itself. The stream never ends, so no
-  Adler-32 trailer is ever sent.
-- The encoder is fixed-Huffman, as it is today. Dynamic Huffman is a later
-  improvement *only if* a measurement says the link is the bottleneck.
-- **Proof:** host tests where Python's `zlib.decompressobj` inflates a
-  sync-flushed stream at every flush point, plus a host ZRLE decode of vncd's
-  tiles compared with the source pixels. TigerVNC is the live client.
+- **libgzip gained `os64_deflate_flush`.** It is zlib's `Z_SYNC_FLUSH`: the
+  collected input ends as a non-final block, an empty stored block brings
+  the stream to a byte boundary, and its `00 00 FF FF` is the marker a
+  viewer's inflate stops at. The 32 KiB history survives, so matches still
+  reach back across rectangles. The drain that `process` and `flush` share
+  is one helper. vncd writes the two-byte zlib header (`78 01`) itself,
+  once, and never sends an Adler-32 trailer because the stream never ends.
+  The encoder stays fixed-Huffman; dynamic Huffman is worth it only if a
+  measurement says the link is the bottleneck.
+- **The tiles are `apps/vncd/zrle.c`: pure, no I/O.** Each tile takes the
+  cheapest of raw, solid, packed palette (up to 16 colours, 1/2/4-bit
+  indices), plain RLE and palette RLE. It uses the RFC's 3-byte CPIXEL where
+  a 32-bit format's colour fits three bytes, low or high.
+- **vncd uses ZRLE when the viewer prefers it**: the first of ZRLE and Raw
+  in its SetEncodings list. Rectangles go out in 64-row bands. That is the
+  tile height, so banding changes nothing a viewer decodes, and it bounds
+  every buffer by the screen's width.
+- **Proof:**
+  - `tools/test_gzip_host.sh` gained a sync-flush case. At every flush
+    point, Python's zlib decodes exactly the input before it, the prefix
+    ends in the marker, and the stream still finishes; a flush after the
+    end is refused.
+  - `tools/test_zrle_host.sh` runs the tile encoder over 210 images (solid,
+    two-colour, palette, gradient, noise, at tile-straddling sizes) in seven
+    pixel formats (32 bpp compacted low and high, big-endian, depth 32,
+    RGB565 both ways, BGR233). It decodes them with an independent Python
+    decoder written from the RFC: every pixel is exact, and all five tile
+    shapes get chosen.
+  - `tools/vncd_probe.py`, through the real tunnel, checks that a full ZRLE
+    frame equals the Raw one and that RGB565 over ZRLE is exact, then runs
+    its terminal and typing steps over ZRLE.
+- **Measured under QEMU's emulated CPU**, on the flat default desktop:
+  - a full 1024x768 frame is 137 bytes of ZRLE against 3.1 MB Raw, and
+    335 ms against 1491 ms;
+  - a pointer move's update takes 77 ms round trip.
+
+  The time left is the emulated CPU's, not the link's. A busy screen will
+  cost more bytes, and real hardware will spend less time.
 
 ## Using it (the Windows side)
 
