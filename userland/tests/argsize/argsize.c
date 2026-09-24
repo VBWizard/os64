@@ -4,9 +4,11 @@
 // child a truncated argv. The child half checks what arrived, byte for byte,
 // in its argv and again in its own /proc/self/cmdline.
 #include "os64/os64.h"
+#include "os64/procfs.h"
 
 #define PASS 0xA2650000u
 #define SELF "/tests/argsize"
+#define SCRIPT "/home/argsize-script"
 
 static char pattern(size_t i)
 {
@@ -35,6 +37,8 @@ static bool is_pattern(const char *s, size_t len)
 // argsize cmdline <len> <string>  — and /proc/self/cmdline says so too
 static int child(int argc, char **argv)
 {
+    if (argc >= 2 && os64_streq(argv[1], SCRIPT))
+        return 0;
     if (argc >= 3 && os64_streq(argv[1], "count"))
         return argc == (int)parse(argv[2]) ? 0 : 21;
 
@@ -73,7 +77,14 @@ static int child(int argc, char **argv)
             return 26;
         line++;
     }
-    return (is_pattern(line, len) && line[len] == '\n' && line[len + 1] == '\0') ? 0 : 27;
+    if (!is_pattern(line, len) || line[len] != '\n' || line[len + 1] != '\0') return 27;
+    os64_free(text);
+    char *command = NULL;
+    if (os64_proc_command(os64_taskid(), &command) < 0) return 28;
+    size_t prefix = os64_strlen(SELF) + 1 + 7 + 1 + os64_strlen(argv[2]) + 1;
+    bool whole = os64_strlen(command) == prefix + len && is_pattern(command + prefix, len);
+    os64_free(command);
+    return whole ? 0 : 29;
 }
 
 // ── the parent's half ───────────────────────────────────────────────────────
@@ -158,7 +169,37 @@ int main(int argc, char **argv)
     if (os64_spawn(SELF, wild) != -2)
         return PASS | 9;
 
+    // The original vector fits, but adding the interpreter and script path
+    // exceeds the child window. Repetition exercises the refusal path.
+    const char script_text[] = "#!" SELF "\n";
+    int32_t file = (int32_t)os64_open(SCRIPT, "w");
+    if (file < 0 || os64_write(file, script_text, sizeof(script_text) - 1) != sizeof(script_text) - 1)
+        return PASS | 10;
+    os64_close(file);
+    char *near_limit = make_arg(131060);
+    if (!near_limit) return PASS | 11;
+    char *script_args[10] = {"s"};
+    for (int i = 1; i < 9; i++) script_args[i] = near_limit;
+    for (int i = 0; i < 8; i++)
+        if (os64_spawn(SCRIPT, script_args) != OS64_SPAWN_TOO_LONG) return PASS | 12;
+    os64_free(near_limit);
+    char *small[] = {"s", "ok", NULL};
+    pid = os64_spawn(SCRIPT, small);
+    if (pid <= 0 || os64_wait(pid, &code) != pid || code) return PASS | 13;
+    os64_unlink(SCRIPT);
+
+    // A 255-character path has its terminator in the last ABI buffer byte.
+    char long_path[OS64_PATH_MAX];
+    os64_memset(long_path, 'p', sizeof(long_path) - 1);
+    os64_memcpy(long_path, "/home/", 6);
+    long_path[sizeof(long_path) - 1] = 0;
+    file = (int32_t)os64_open(long_path, "w");
+    if (file < 0) return PASS | 14;
+    os64_close(file);
+    if (os64_unlink(long_path) < 0) return PASS | 15;
+
     os64_printf("argsize: PASS 128 KiB arguments whole in argv and cmdline; "
-                "too long, too many and too much refused by name\n");
+                "too long, too many and rewritten overflow refused by name; "
+                "full command reader and 255-character paths checked\n");
     return PASS;
 }

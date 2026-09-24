@@ -61,6 +61,7 @@
 // OS64_SPAWN_TOO_LONG), and task_create checks the blob it builds against it
 // too — see the packing comment there.
 #define TASK_ARGV_MAX_BYTES 0x100000
+#define TASK_ARGV_MAX_ARGS 512
 #define TASK_ENV_VIRT 0x6f100000
 // The env block's growth ceiling — the fixed-VA window between TASK_ENV_VIRT
 // and the exit trampoline. ENFORCED since 2026-08-14: env_grow (env.c) caps
@@ -417,6 +418,10 @@
     void task_release(task_t *task);
 
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
+	// Like task_create, with a failure verdict: -1 or OS64_SPAWN_TOO_LONG.
+	// The verdict covers interpreter-rewritten arguments before construction.
+	task_t *task_create_checked(char *path, int argc, char **argv, task_t *parent,
+	                            bool kernel, uint64_t affinity, int64_t *error);
 	void task_exit(void);
 	void task_exit_with_retval(void);   // asm stub: captures RAX into task->retVal then calls task_exit
 	// Block until a child of parentTask exits, collect it, and return its

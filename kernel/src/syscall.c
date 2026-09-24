@@ -68,7 +68,7 @@ extern uint64_t kAvailableMemory;  // USABLE entries only — what the allocator
 // spawn: cap on argv length. A command line's worth of args is plenty; each
 // one's length is capped by OS64_SPAWN_ARG_MAX and all of them together by
 // the child's argument block (TASK_ARGV_MAX_BYTES).
-#define SPAWN_MAX_ARGS 512
+#define SPAWN_MAX_ARGS TASK_ARGV_MAX_ARGS
 
 #define SYSCALL_RESULT_INVALID UINT64_C(0xFFFFFFFFFFFFFFFF)
 #define SYSCALL_RESULT_BAD_USER_DATA UINT64_C(0xFFFFFFFFFFFFFFFE)
@@ -860,7 +860,7 @@ static bool copy_user_string(const char *user_str, char *buffer, size_t buffer_l
 
         bool success = false;
         size_t written = 0;
-        while (written < buffer_len - 1)
+        while (written < buffer_len)
         {
                 char ch = 0;
                 if (!validate_and_copy_user_data(user_str + written, sizeof(char), &ch))
@@ -879,6 +879,8 @@ static bool copy_user_string(const char *user_str, char *buffer, size_t buffer_l
         buffer[buffer_len - 1] = '\0';
 
 out:
+        if (!success)
+                buffer[written < buffer_len ? written : buffer_len - 1] = '\0';
         user_cr3_window_close(original_cr3, switched);
         return success;
 }
@@ -3995,7 +3997,7 @@ typedef struct {
 	// caller's context, like the redirections — same reasoning, same seam.
 	tty_t *ttySlave;
 	bool   background;                    // OS64_SPAWN_BACKGROUND (`&`)
-	volatile long result;                 // child pid, or -1 on failure
+	volatile long result;                 // child pid, -1, or OS64_SPAWN_TOO_LONG
 	// [ (argc+1) pointer slots ][ the strings, packed, as measured ].
 	// One allocation, so the whole thing stays HHDM-contiguous and reachable
 	// from kKernelPML4 exactly as the comment above requires.
@@ -4036,14 +4038,15 @@ static void spawn_do_create(void *arg)
 		p->result = -1;
 		return;
 	}
-	task_t *child = task_create(p->path, p->argc, p->argv, p->parent,
-	                            false, THREAD_NO_AFFINITY);
+	int64_t create_error = -1;
+	task_t *child = task_create_checked(p->path, p->argc, p->argv, p->parent,
+	                                    false, THREAD_NO_AFFINITY, &create_error);
 	if (child == NULL)
 	{
 		if (p->ttySlave != NULL)
 			tty_pty_unref(p->ttySlave);
 		spawn_unshare_all(p);   // the child never happened; its references go back
-		p->result = -1;         // (the master's pin goes back in syscall_spawn)
+		p->result = create_error; // the master's pin goes back in syscall_spawn
 		return;
 	}
 
@@ -4379,8 +4382,7 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (ttyPinned)
 		handle_unpin(&ttyPin);   // the child holds its seat now, or never came to be
 	kfree(p);
-	if (r < 0)
-		return SYSCALL_RESULT_INVALID;   // bad path / load failure
+	// Preserve the post-rewrite size verdict from task creation.
 	return (uint64_t)r;
 }
 

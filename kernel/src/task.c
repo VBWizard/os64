@@ -2362,8 +2362,44 @@ static void task_setup_entry(task_t *task)
 	}
 }
 
+// Include pointer slots and terminators in the final child layout. This runs
+// on kernel-owned arguments, including each interpreter rewrite, before task
+// resources exist; a size refusal therefore has nothing to tear down.
+static bool task_measure_argv(const char *path, int argc, char **argv, size_t *bytes)
+{
+	int count = argc > 0 ? argc : 1;
+	if (count > TASK_ARGV_MAX_ARGS)
+		return false;
+	size_t total = (size_t)(count + 1) * sizeof(char *);
+	for (int i = 0; i < count; i++)
+	{
+		const char *src = argc > 0 ? argv[i] : path;
+		size_t length = strlen(src);
+		if (length >= OS64_SPAWN_ARG_MAX ||
+		    length + 1 > TASK_ARGV_MAX_BYTES - total)
+			return false;
+		total += length + 1;
+	}
+	*bytes = total;
+	return true;
+}
+
 task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID)
 {
+	return task_create_checked(path, argc, argv, parentTaskPtr, isKernelTask,
+	                           pinnedAPICID, NULL);
+}
+
+task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTaskPtr,
+                            bool isKernelTask, uint64_t pinnedAPICID, int64_t *error)
+{
+	if (error) *error = -1;
+	size_t argvBlobBytes;
+	if (!task_measure_argv(path, argc, argv, &argvBlobBytes))
+	{
+		if (error) *error = OS64_SPAWN_TOO_LONG;
+		return NULL;
+	}
 	uintptr_t mapPages;
 	// The kernel's built-in tasks are recognized by the START of their path —
 	// they carry no ELF image, so a match means "skip the loader, this task's
@@ -2495,7 +2531,7 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 
 			printd(DEBUG_TASK, "task_create: '%s' is a #! script — running %s%s%s with it\n",
 			       path, interp, iarg[0] ? " " : "", iarg);
-			return task_create(interp, nargc, nargv, parentTaskPtr, isKernelTask, pinnedAPICID);
+			return task_create_checked(interp, nargc, nargv, parentTaskPtr, isKernelTask, pinnedAPICID, error);
 		}
 
 		if (!elf_can_load(path))
@@ -2729,40 +2765,8 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 
 	size_t argvPtrBytes = (size_t)(effectiveArgc + 1) * sizeof(char*);
 
-	// Measure first, then allocate exactly what the strings need (each capped
-	// at OS64_SPAWN_ARG_MAX including its NUL, matching the copy below). A
-	// spawn from ring 3 has already refused anything longer; the cap is for
-	// the kernel's own callers.
-	size_t argvStrBytes = 0;
-	for (int cnt = 0; cnt < effectiveArgc; cnt++)
-	{
-		const char *src = (argc > 0) ? argv[cnt] : path;
-		size_t len = strlen(src);
-		if (len > OS64_SPAWN_ARG_MAX - 1)
-			len = OS64_SPAWN_ARG_MAX - 1;
-		argvStrBytes += len + 1;
-	}
-	size_t argvBlobBytes = argvPtrBytes + argvStrBytes;
-
-	// THE GUARD THAT DID NOT EXIST. The blob is mapped at a FIXED address whose
-	// neighbour is also fixed, so an oversized blob does not fail an allocation
-	// — paging_map_pages cheerfully maps it straight over TASK_ENV_VIRT, and the
-	// child's environment silently becomes the tail of its own argv. Nothing
-	// checked this while the ceiling was 32 args; raising it to 512 without the
-	// check would have turned a distant theoretical into a live footgun. Refuse
-	// loudly instead, naming the number, and let the caller report "cannot run".
-	// A ring-3 spawn measures against this same window before it gets here and
-	// says "too long" itself; this one still fires for the kernel's own callers
-	// and for a #! script, whose rewrite adds the interpreter's words to an
-	// argument list that was measured without them.
-	if (argvBlobBytes > TASK_ARGV_MAX_BYTES)
-	{
-		printd(DEBUG_TASK, "task_create: argv blob for %s is %lu bytes, over the %lu-byte "
-			"window between TASK_ARGV_VIRT and TASK_ENV_VIRT (%d arguments) — refusing to spawn\n",
-			newTask->path, argvBlobBytes, (uint64_t)TASK_ARGV_MAX_BYTES, effectiveArgc);
-		task_table_bracket_close();
-		return NULL;
-	}
+	// The final layout was measured before task construction, after any
+	// interpreter rewrite. The private argv strings remain stable here.
 
 	newTask->argv = (char**)kmalloc_aligned(argvBlobBytes);
 	char *argvStrBase = (char*)newTask->argv + argvPtrBytes;   // kernel view of the string area
@@ -2772,8 +2776,6 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		//Source string: caller-provided argv[cnt], or the path for the implicit argv[0].
 		const char *src = (argc > 0) ? argv[cnt] : path;
 		size_t len = strlen(src);
-		if (len > OS64_SPAWN_ARG_MAX - 1)
-			len = OS64_SPAWN_ARG_MAX - 1;
 
 		char *dst = argvStrBase + argvStrUsed;
 		memcpy(dst, src, len);

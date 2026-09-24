@@ -17,9 +17,11 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 source = (root / 'kernel/src/syscall.c').read_text()
+task_source = (root / 'kernel/src/task.c').read_text()
 
 
-def function(signature):
+def function(signature, text=None):
+    source = text if text is not None else (root / 'kernel/src/syscall.c').read_text()
     match = re.search(re.escape(signature) + r'\([^;]+?\)\s*\{', source)
     assert match, signature
     end, depth = match.end(), 1
@@ -46,6 +48,7 @@ program = r'''
 #define PAGE_SIZE 4096
 #define SPAWN_MAX_ARGS 512
 #define TASK_ARGV_MAX_BYTES 0x100000
+#define TASK_ARGV_MAX_ARGS 512
 static const uintptr_t kHHDMOffset = (uintptr_t)0xffff800000000000ull;
 
 // One real hole: a page nobody may read.
@@ -72,7 +75,11 @@ static bool copy_user_buffer(const void *src, void *dst, size_t len)
     memcpy(dst, src, len);
     return true;
 }
-''' + enum.group(0) + function('static int user_string_length') \
+static bool validate_and_copy_user_data(const void *src, size_t len, void *dst)
+{ return copy_user_buffer(src, dst, len); }
+''' + function('static bool copy_user_string') \
+    + function('static bool task_measure_argv', task_source) \
+    + enum.group(0) + function('static int user_string_length') \
     + function('static argv_measure_t measure_user_argv') \
     + function('static int marshal_user_argv') + r'''
 
@@ -204,6 +211,42 @@ int main(void)
     char *moving[] = { "prog", strdup("abc"), NULL };
     g_argv = moving;
     assert(marshal(moving, &kargv, &strbuf, lengthen_in_place, 4) == -1);
+
+
+    // The copier may consume the final destination byte if it is a NUL.
+    char path[257], copied[256];
+    memset(path, 'x', sizeof(path)); path[255] = 0;
+    assert(copy_user_string(path, copied, sizeof(copied)));
+    assert(strlen(copied) == 255);
+    path[255] = 'x'; path[256] = 0;
+    assert(!copy_user_string(path, copied, sizeof(copied)) && copied[255] == 0);
+    assert(copy_user_string("", copied, 1) && copied[0] == 0);
+    assert(!copy_user_string("x", copied, 1) && copied[0] == 0);
+    char *path_edge = hole - 256;
+    memset(path_edge, 'x', 256); path_edge[255] = 0;
+    assert(copy_user_string(path_edge, copied, sizeof(copied)));
+    path_edge[255] = 'x';
+    assert(!copy_user_string(path_edge, copied, sizeof(copied)));
+    assert(!copy_user_string(hole - 1, copied, sizeof(copied)) && copied[1] == 0);
+
+    // An accepted original argv can exceed the window after a #! rewrite.
+    char *near_limit = pattern(131060);
+    char *original[10] = {"s"};
+    for (int i = 1; i < 9; i++) original[i] = near_limit;
+    size_t layout;
+    assert(measure(original, &argc, &bytes) == ARGV_FITS);
+    assert(task_measure_argv("/home/probe", 9, original, &layout));
+    char *rewritten[11] = {"/bin/husk", "/home/probe"};
+    for (int i = 2; i < 10; i++) rewritten[i] = near_limit;
+    assert(!task_measure_argv("/bin/husk", 10, rewritten, &layout));
+    char *small[] = {"/bin/husk", "/home/probe", "ok"};
+    assert(task_measure_argv("/bin/husk", 3, small, &layout));
+    assert(layout == 4 * sizeof(char *) + 10 + 12 + 3);
+    assert(!task_measure_argv("/bin/husk", 513, NULL, &layout));
+    char *overlong[] = {pattern(OS64_SPAWN_ARG_MAX)};
+    assert(!task_measure_argv("prog", 1, overlong, &layout));
+    assert(task_measure_argv("prog", 0, NULL, &layout) && layout == 2 * sizeof(char *) + 5);
+    puts("path final-byte/guard-page and rewritten argv preflight: PASS");
 
     puts("spawn argv: caps exact at the terminator, the 512th argument and the block's last byte; "
          "the hole is never read; growth, cap-dodging and a moved terminator between passes refused, "
