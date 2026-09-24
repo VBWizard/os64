@@ -90,4 +90,9 @@ capture, escaped echo, long loop words, script and `-c` overflow rejection,
 1000-byte interactive input/history recall, binary streams/rekeys, PTY resize,
 and recovery after a dropped connection. Logs are in
 `/tmp/os64-spawn-*.log` and `/tmp/os64-spawn-argsize-guest.txt` on the build host.
-The P5 has not received this kernel/shell change.
+After Chris installed the updated components on the P5, hardware SSH checks
+also passed: 1000- and 4095-byte commands returned their expected output
+byte-for-byte, a 4096-byte request was rejected, and a fresh short SSH command
+succeeded afterward. The hardware check covers the command-length boundary;
+the larger spawn and shell regression suite above ran in QEMU. Its transcript
+is `/tmp/os64-p5-long-command-retry.txt` on the build host.
