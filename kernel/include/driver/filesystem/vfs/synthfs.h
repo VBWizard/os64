@@ -41,6 +41,7 @@ typedef struct
 
 bool synth_text_init(synth_text_t *t, size_t cap);
 void synth_text_addf(synth_text_t *t, const char *fmt, ...);
+void synth_text_add(synth_text_t *t, const char *bytes, size_t len);
 
 // ── Whitespace-columned reports: escaping a field that is DATA ──────────────
 // A row of whitespace-separated columns only parses if no column contains

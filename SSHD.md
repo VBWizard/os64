@@ -181,12 +181,11 @@ wait. Backpressured network output also has a finite no-progress deadline.
 
 **Audit corrections to the original design:**
 
-- This branch limits both a spawn argument and husk's command line to 255
-  bytes. SSH refuses longer commands before spawning; it does not advertise
-  the draft's 4 KiB allowance. Shell syntax is husk's: `exit N` ignores N and
-  `>&2` is not POSIX descriptor duplication on this baseline. The SSH
-  fixture's `-streams` and `-stderr` modes test status 7 and raw stderr
-  without relying on those shell features.
+- SSH exec accepts up to 4095 command bytes, sharing husk's 4096-byte
+  input-buffer limit through `userland/apps/husk/limits.h`. Longer requests
+  are refused before spawning. The kernel carries individual arguments up
+  to 128 KiB including their terminator; husk's command-language limit is
+  separate. See [command-line limits](docs/commandline_limits.md).
 - Ordinary pipe reads reject finite patience on the server branch. stdout
   and stderr therefore have dedicated blocking readers, each feeding a
   bounded 64 KiB SPSC queue. A separate stdin writer owns a bounded 2 MiB
