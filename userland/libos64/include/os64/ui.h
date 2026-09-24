@@ -767,6 +767,8 @@ typedef struct os64_ui_colorpicker {
 } os64_ui_colorpicker_t;
 void os64_ui_colorpicker(os64_ui_colorpicker_t *picker, uint32_t color,
     void (*on_change)(os64_ui_colorpicker_t *, void *), void *user);
+// Setting the current RGB preserves HSV editing coordinates, including hue
+// and saturation that cannot be recovered from gray or black RGB values.
 void os64_ui_colorpicker_set(os64_ui_t *ui, os64_ui_colorpicker_t *picker, uint32_t color);
 uint32_t os64_ui_color_from_hsv(int hue, int saturation, int value);
 
@@ -831,6 +833,8 @@ struct os64_ui_listbox {
     void **row_runs, **row_runs_staged;
     size_t row_run_count, row_runs_staged_count;
 };
+// Click a row or Tab to focus. Up/Down, Home/End and Page Up/Down choose
+// rows and reveal the selection. Choosing the same row does not notify.
 void os64_ui_listbox(os64_ui_listbox_t *list, size_t count,
                      const char *(*label)(size_t, void *),
                      void (*on_change)(os64_ui_listbox_t *, void *), void *user);
@@ -843,7 +847,8 @@ void os64_ui_listbox_scroll_to(os64_ui_t *ui, os64_ui_listbox_t *list, size_t to
 // Born for Save As; really the FORM control every dialog after it needs.
 // Storage is the APP's (buf/cap, NUL-kept). Click focuses and places the
 // caret; printable keys insert; Backspace/Delete, Left/Right/Home/End move
-// and erase; Enter fires on_submit, Esc fires on_cancel. Long content
+// and erase; drag or Shift+motion selects, Ctrl+A/C/X/V selects all/copies/
+// cuts/pastes. Enter fires on_submit, Esc fires on_cancel. Long content
 // scrolls horizontally to keep the caret in view.
 typedef struct os64_ui_textfield os64_ui_textfield_t;
 struct os64_ui_textfield
@@ -851,7 +856,8 @@ struct os64_ui_textfield
     os64_ui_widget_t w;          // MUST be first
     char  *buf;                  // app-owned, NUL-terminated
     size_t cap;                  // bytes including the NUL
-    size_t len, cursor;
+    size_t len, cursor, anchor;
+    bool selected;              // anchor and cursor delimit cluster boundaries
     int32_t left_px;             // horizontal scroll, in pixels of the UI face
     int32_t left_staged;         // the scroll a font change in progress would
                                  // commit: pixels of the CANDIDATE face
@@ -869,15 +875,15 @@ void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
 // bytes is cut at the last cluster boundary that fits, never inside a letter.
 void os64_ui_textfield_set(os64_ui_t *ui, os64_ui_textfield_t *tf,
                            const char *text);
-// Insert the system clipboard at the caret. A field is ONE line, so it takes
+// Copy the selection; return bytes copied, zero for none, negative on failure.
+int64_t os64_ui_textfield_copy(const os64_ui_textfield_t *tf);
+// Insert the clipboard at the caret, replacing a selection on success.
+// A field is ONE line, so it takes
 // the clipboard's first line and stops there — said out loud rather than
 // discovered: pasting a two-line snarf into an Open box gets you line one,
 // not a mangled path. Of that line it takes what fits, cut where one of the
 // clipboard's letters ends. Returns bytes inserted (0 = nothing to paste, no
 // room for its first letter, or no memory to read it into).
-// There is deliberately no field COPY: a textfield has no selection model,
-// and inventing one to feed the clipboard is a different slice with its own
-// consumer. (CLIPBOARD.md)
 size_t os64_ui_textfield_paste(os64_ui_t *ui, os64_ui_textfield_t *tf);
 
 // ── ui_textview — a viewport over a text buffer ─────────────────────────────

@@ -182,9 +182,12 @@ static int pointer_index(const os64_ui_listbox_t *list, const os64_ui_theme_t *t
 
 static void choose(os64_ui_t *ui, os64_ui_listbox_t *list, int index)
 {
-    if (index < 0 || (size_t)index >= list->count || index == list->selected) return;
+    if (index < 0 || (size_t)index >= list->count) return;
+    bool changed = index != list->selected;
+    // A companion scrollbar may have moved the selection out of view.
+    // Navigation must reveal it even when Home/End chooses the same row.
     os64_ui_listbox_set(ui, list, list->count, index);
-    if (list->on_change) list->on_change(list, list->list_user);
+    if (changed && list->on_change) list->on_change(list, list->list_user);
 }
 
 static void list_cancel(os64_ui_widget_t *w)

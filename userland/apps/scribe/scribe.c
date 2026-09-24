@@ -804,8 +804,8 @@ static void click_saveas(os64_ui_widget_t *w, void *user)
 
 // ── app-level shortcuts, intercepted BEFORE dispatch ────────────────────────
 // The driver already turned Ctrl+letter into its control code (1963's
-// design, working); the widgets ignore control bytes on purpose, so these
-// are the app's to claim. Returns true when the event was a command.
+// design, working). Scribe owns document shortcuts; textfields handle their
+// own selection and clipboard chords. Returns true for an app command.
 
 static bool app_shortcut(const os64_gui_event_t *ev)
 {
@@ -824,9 +824,8 @@ static bool app_shortcut(const os64_gui_event_t *ev)
         return false;
     switch (ev->key.ascii) {
     // The clipboard trio. libui owns the mechanism (it knows the selection
-    // and the buffer); scribe owns the KEYS, same as every other shortcut
-    // here — a toolkit that claimed Ctrl+C would be a toolkit a terminal
-    // widget has to fight. The clipboard itself is /sys/clipboard, the
+    // and the buffer); scribe owns the textview's keys. Field modes leave
+    // copy and cut to the focused field. The clipboard is /sys/clipboard, the
     // system's one snarf buffer, which is why what leaves here also arrives
     // in `cat /sys/clipboard` (CLIPBOARD.md).
     case 0x03: {  // Ctrl+C — copy

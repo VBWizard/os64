@@ -30,7 +30,11 @@ uint32_t os64_ui_color_from_hsv(int hue, int saturation, int value)
 
 void os64_ui_colorpicker_set(os64_ui_t *ui, os64_ui_colorpicker_t *p, uint32_t color)
 {
-    p->color = color | 0xff000000u;
+    color |= 0xff000000u;
+    // An app may echo our RGB from on_change. Reconstructing HSV loses
+    // precision near gray/black and moves the hue during a shade drag.
+    if (p->color == color) return;
+    p->color = color;
     int r = (color >> 16) & 255, g = (color >> 8) & 255, b = color & 255;
     int max = r > g ? r : g; if (b > max) max = b;
     int min = r < g ? r : g; if (b < min) min = b;
