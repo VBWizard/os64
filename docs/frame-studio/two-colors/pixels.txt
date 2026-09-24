@@ -1,0 +1,1 @@
+Guest frame pixels: PASS exact gradient endpoints (49,42)..(1288,42), two chosen stripe colors, and Undo restoration

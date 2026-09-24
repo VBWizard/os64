@@ -1,0 +1,2 @@
+framestudio: active match name=Traffic lights generation=1
+framestudio: ready content=1240x840 title=24 buttons=4 generation=1

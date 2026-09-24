@@ -39,6 +39,7 @@
 #include "os64/str.h"
 #include "os64/fmt.h"       // os64_snprintf — the click position, as argv for the launcher
 #include "os64/thread.h"
+#include "os64/decoration_startup.h"
 
 #define DESKTOP_PATH_MAX   192
 #define DESKTOP_APPS_MAX   16
@@ -378,6 +379,17 @@ int main(int argc, char **argv)
         os64_complain("desktop: no GUI here (screen_info)\n");
         return 1;
     }
+
+    // Disk policy belongs to the desktop startup path. The generation check
+    // preserves a session that was already changed by an explicit Apply.
+    int decoration=os64_decor_startup_install();
+    if(decoration<0)
+        os64_complain("desktop: startup decoration failed (%d); live frame retained\n",decoration);
+    else
+        os64_printf("desktop: startup decoration %s\n",
+            decoration==OS64_DECOR_STARTUP_APPLIED?"installed":
+            decoration==OS64_DECOR_STARTUP_SKIPPED?"skipped (session already changed)":
+            decoration==OS64_DECOR_STARTUP_DEFAULT?"built-in (explicit choice)":"built-in (no saved choice)");
 
     // The window IS the screen. START_UNFOCUSED asks that the programs this
     // shell is about to start get the keyboard rather than the wallpaper —

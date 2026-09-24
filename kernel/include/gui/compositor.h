@@ -48,10 +48,16 @@ void gui_emergency_disable(void);
 struct window;
 void gui_grab_release(const struct window *w);
 
+// Cancel controls for w (NULL selects the current control gesture), clear
+// their visual state, and retain consumed edges until release. kGuiLock held.
+void gui_cancel_decoration(const struct window *w);
+
 // Cancel the WM resize outline under kGuiLock, retaining the WM's mouse grab
 // through the remaining button releases. Client grabs and moves are unaffected.
 // Used when size constraints change or the resize target is destroyed.
 void gui_cancel_resize(const struct window *w);
+// Cancel WM geometry gestures and drain their releases under kGuiLock.
+void gui_decoration_changed(void);
 
 // ── VT8 glass ownership (the VT8 chapter in GRAPHICS.md, 2026-08-19) ────────
 // True once gui_start has seated the compositor as VT8's shell. Stays false

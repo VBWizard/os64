@@ -1,0 +1,1 @@
+glasstest: the screen came through /dev/glass: whole, banded, refused, painted, still, closed; and the hands typed, clicked, repeated and let go

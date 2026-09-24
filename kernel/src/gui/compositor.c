@@ -398,6 +398,7 @@ static rect_t composite_locked(rect_t damage)
 // click-to-focus/raise and titlebar dragging, and translate whatever belongs
 // to a window into content-local coordinates on its queue.
 // ---------------------------------------------------------------------------
+static uint8_t s_drag_buttons;
 static window_t *s_drag_window = NULL;
 static int32_t s_drag_dx, s_drag_dy;   // grab offset: cursor minus frame origin
 
@@ -590,9 +591,9 @@ static void switcher_composite(surface_t *backbuffer, rect_t damage)
 	// border colour outlining it — the same two greys the chrome uses to say
 	// "this one is live", one level up from a window.
 	surface_fill_rect(&view, (rect_t){sx, sy, s_alttab_strip.w, s_alttab_strip.h},
-	                  WINDOW_BORDER_UNFOCUSED);
+	                  wm_border_color(false));
 	surface_draw_rect(&view, (rect_t){sx, sy, s_alttab_strip.w, s_alttab_strip.h},
-	                  WINDOW_BORDER_FOCUSED);
+	                  wm_border_color(true));
 
 	// NO SEPARATOR LINES. Each row is a tile laid on the dark slab and one
 	// pixel shorter than its pitch, so the frame itself shows through between
@@ -604,8 +605,8 @@ static void switcher_composite(surface_t *backbuffer, rect_t damage)
 		rect_t row = {sx + SWITCHER_BORDER,
 		              sy + SWITCHER_BORDER + (int32_t)i * SWITCHER_ROW_H,
 		              s_alttab_row_w, SWITCHER_ROW_H - SWITCHER_ROW_GAP};
-		uint32_t bg = (i == s_alttab_step) ? WINDOW_TITLEBAR_FOCUSED
-		                                   : WINDOW_TITLEBAR_UNFOCUSED;
+		uint32_t bg = (i == s_alttab_step) ? wm_titlebar_color(true)
+		                                   : wm_titlebar_color(false);
 		surface_fill_rect(&view, row, bg);
 
 		// A MINIMIZED WINDOW IS IN THE RING AND DRAWN DIM. That is the whole
@@ -759,9 +760,9 @@ static void alttab_end_locked(bool commit)
 // The readout reports CONTENT size, not frame size: the client area is what
 // an app actually gets, and for a terminal it is the number that matters.
 static window_t *s_band_window = NULL;   // the window being rubber-banded
-// Buttons consumed by the WM resize. Outlives the outline when it is cancelled
-// or its window dies; no window pointer is needed to drain the remaining edges.
-static uint8_t s_resize_buttons;
+// Buttons owned by a resize or cancelled WM move. Ownership outlives the
+// outline/target; draining releases needs no live window pointer.
+static uint8_t s_wm_buttons;
 static rect_t    s_band_rect;            // the outline, screen coords, as drawn
 static rect_t    s_band_origin;          // its frame when the gesture began
 static int32_t   s_band_anchor_x, s_band_anchor_y;   // where the press landed
@@ -902,10 +903,51 @@ static void band_track_locked(int32_t x, int32_t y)
 // the pointer for the client until the last button comes up. Every window
 // system since has one, because every window system without one grew this
 // same bug.
+static os64_decor_capture_t s_control_capture;
+static uint32_t s_control_hover;
+
+void gui_cancel_decoration(const struct window *w)
+{
+    if (!w || s_control_capture.window==w->id) {
+        window_t *pressed=wm_window_by_id(s_control_capture.window);
+        if (pressed) wm_decoration_state(pressed,0,0);
+        os64_decor_capture_cancel(&s_control_capture);
+    }
+    if (!w || s_control_hover==w->id) {
+        window_t *hover=wm_window_by_id(s_control_hover);
+        if (hover) wm_decoration_state(hover,0,0);
+        s_control_hover=0;
+    }
+}
+
 static window_t *s_pointer_window = NULL;
 static window_t *s_hover_window = NULL;
 static int32_t s_hover_x, s_hover_y;
 static int32_t s_hover_w, s_hover_h;
+
+static void control_state_locked(void)
+{
+    if (!gui_owns_glass() || s_glass_regained) gui_cancel_decoration(NULL);
+    window_t *under=NULL;
+    uint32_t hit=0;
+    if (gui_owns_glass() && !s_drag_window && !s_wm_buttons && !s_pointer_window) {
+        under=wm_topmost_at(s_cursor_x,s_cursor_y);
+        if (under) hit=wm_decoration_hit(under,s_cursor_x,s_cursor_y);
+        if (under && (wm_decoration_disabled(under) & (1u<<hit))) hit=0;
+    }
+    if (s_control_capture.buttons) {
+        (void)os64_decor_capture_step(&s_control_capture,OS64_DECOR_POINTER_MOVE,0,
+            under?under->id:0,hit);
+        if (!s_control_capture.armed) hit=0;
+    }
+    uint32_t id=hit && under?under->id:0;
+    if (s_control_hover && s_control_hover!=id) {
+        window_t *old=wm_window_by_id(s_control_hover);
+        if (old) wm_decoration_state(old,0,0);
+    }
+    if (id) wm_decoration_state(under,hit,s_control_capture.armed?hit:0);
+    s_control_hover=id;
+}
 
 // Reconcile against the final scene each frame, including geometry changes
 // with no mouse motion. Grabs suppress hover in other windows; WM gestures
@@ -915,7 +957,7 @@ static void pointer_state_locked(void)
 	window_t *under = NULL;
 	int32_t x = 0, y = 0;
 	int32_t width = 0, height = 0;
-	if (gui_owns_glass() && !s_drag_window && !s_resize_buttons) {
+	if (gui_owns_glass() && !s_drag_window && !s_wm_buttons && !s_control_capture.buttons) {
 		under = wm_topmost_at(s_cursor_x, s_cursor_y);
 		if (under && s_pointer_window && under != s_pointer_window) under = NULL;
 		if (under) {
@@ -947,9 +989,9 @@ static void pointer_state_locked(void)
 
 void gui_grab_release(const struct window *w)
 {
-	// Called from wm_destroy under kGuiLock — the one moment a dying window
-	// can un-name itself before its memory goes back. Compare only; never
-	// dereference (the caller is mid-teardown).
+    gui_cancel_decoration(w);
+	// Called from wm_destroy under kGuiLock while the window is still linked
+	// and alive. Clear its control state before releasing pointer references.
 	if (s_drag_window == (const window_t *)w)
 		s_drag_window = NULL;
 	if (s_pointer_window == (const window_t *)w)
@@ -964,8 +1006,18 @@ void gui_cancel_resize(const struct window *w)
 	if (s_band_window == (const window_t *)w) {
 		band_damage_locked(s_band_rect);
 		s_band_window = NULL;
-		// Keep s_resize_buttons: its matching releases still belong to us.
+		// Keep s_wm_buttons: its matching releases still belong to us.
 	}
+}
+
+// Install a new frame geometry without retaining a gesture's old offsets.
+// Client grabs remain paired; WM-owned edges drain after cancellation.
+void gui_decoration_changed(void)
+{
+    gui_cancel_decoration(NULL);
+    if (s_drag_window) { s_wm_buttons |= s_drag_buttons; s_drag_window=NULL; }
+    if (s_band_window) gui_cancel_resize(s_band_window);
+    s_titlebar_click_window=0;
 }
 
 // Deliver a mouse event to a window, in ITS coordinates. `require_inside`
@@ -989,8 +1041,8 @@ static bool deliver_mouse_to_window(window_t *w, input_event_t ev,
 
 // Is the window-management chord held? BOTH modifiers, so a plain Ctrl-click
 // or Alt-click still reaches the app underneath — the chord has to be
-// deliberate, because it overrides whatever the window itself wanted the
-// click to mean.
+// deliberate. Decoration buttons are handled before this chord; elsewhere
+// it overrides the client's interpretation of the click.
 static inline bool wm_chord_held(const input_event_t *ev)
 {
 	const uint8_t both = KEYBOARD_MOD_CTRL | KEYBOARD_MOD_ALT;
@@ -1011,7 +1063,11 @@ static void chord_report(const window_t *w, uint32_t bit, bool before,
 
 static void route_event_locked(const input_event_t *ev)
 {
-	// Track the physical pointer on text VTs too, so returning to the GUI
+	if (s_drag_window) {
+        if (ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN) s_drag_buttons |= (uint8_t)(1u << ev->mouse.button);
+        if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP) s_drag_buttons &= (uint8_t)~(1u << ev->mouse.button);
+    }
+    // Track the physical pointer on text VTs too, so returning to the GUI
 	// can reconcile hover without waiting for another movement.
 	if (ev->type == INPUT_EVENT_MOUSE_MOVE) {
 		rect_t moved = cursor_rect();
@@ -1019,15 +1075,32 @@ static void route_event_locked(const input_event_t *ev)
 		s_cursor_y = ev->mouse.y;
 		gui_damage_add_locked(rect_union(moved, cursor_rect()));
 	}
-	if (s_resize_buttons && (ev->type == INPUT_EVENT_MOUSE_MOVE ||
+    if (!gui_owns_glass() || s_glass_regained) gui_cancel_decoration(NULL);
+    if (s_control_capture.buttons && (ev->type==INPUT_EVENT_MOUSE_MOVE ||
+        ev->type==INPUT_EVENT_MOUSE_BUTTON_DOWN || ev->type==INPUT_EVENT_MOUSE_BUTTON_UP)) {
+        uint32_t owner=s_control_capture.window;
+        window_t *under=wm_topmost_at(ev->mouse.x,ev->mouse.y);
+        uint32_t hit=under?wm_decoration_hit(under,ev->mouse.x,ev->mouse.y):0;
+        if (under && (wm_decoration_disabled(under) & (1u<<hit))) hit=0;
+        uint32_t kind=ev->type==INPUT_EVENT_MOUSE_MOVE?OS64_DECOR_POINTER_MOVE:
+            ev->type==INPUT_EVENT_MOUSE_BUTTON_DOWN?OS64_DECOR_POINTER_DOWN:OS64_DECOR_POINTER_UP;
+        uint32_t action=os64_decor_capture_step(&s_control_capture,kind,ev->mouse.button,
+            under?under->id:0,hit);
+        window_t *w=wm_window_by_id(owner);
+        if (w) wm_decoration_state(w,0,0);
+        if (action && w) wm_decoration_action(w,action,ev->tick);
+        control_state_locked();
+        return;
+    }
+	if (s_wm_buttons && (ev->type == INPUT_EVENT_MOUSE_MOVE ||
 	                        ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN ||
 	                        ev->type == INPUT_EVENT_MOUSE_BUTTON_UP)) {
 		// Drain individual edges, not mouse.buttons: one physical report can
 		// enqueue several releases with the same final (empty) button mask.
 		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN)
-			s_resize_buttons |= (uint8_t)(1u << ev->mouse.button);
+			s_wm_buttons |= (uint8_t)(1u << ev->mouse.button);
 		else if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP)
-			s_resize_buttons &= (uint8_t)~(1u << ev->mouse.button);
+			s_wm_buttons &= (uint8_t)~(1u << ev->mouse.button);
 		// Cancellation removes the outline, not ownership of its press. Do
 		// this before the VT fork so a release on a text VT is consumed too.
 		if (!s_band_window || !gui_owns_glass()) {
@@ -1099,6 +1172,18 @@ static void route_event_locked(const input_event_t *ev)
 			ev->mouse.button, w->id, ev->mouse.x, ev->mouse.y, ev->mouse.modifiers);
 		wm_raise(w);
 
+        uint32_t action=wm_decoration_hit(w,ev->mouse.x,ev->mouse.y);
+        if (action) {
+            s_titlebar_click_window=0;
+            uint32_t accepted=ev->mouse.button==INPUT_MOUSE_BUTTON_LEFT &&
+                !(wm_decoration_disabled(w) & (1u<<action))?action:0;
+            os64_decor_capture_begin(&s_control_capture,w->id,accepted,
+                ev->mouse.buttons | (1u<<ev->mouse.button));
+            if (!accepted) os64_decor_capture_cancel(&s_control_capture);
+            control_state_locked();
+            break;
+        }
+
 		// The chord's two verbs (see the gesture comment above the band
 		// state): left moves, right resizes, anywhere in the window.
 		//
@@ -1115,11 +1200,12 @@ static void route_event_locked(const input_event_t *ev)
 		} else if (wm_chord_held(ev)) {
 			if (ev->mouse.button == INPUT_MOUSE_BUTTON_LEFT) {
 				s_drag_window = w;
+			s_drag_buttons = ev->mouse.buttons;
 				s_drag_dx = ev->mouse.x - w->frame.x;
 				s_drag_dy = ev->mouse.y - w->frame.y;
 			} else if (ev->mouse.button == INPUT_MOUSE_BUTTON_RIGHT) {
 				s_band_window = w;
-				s_resize_buttons = ev->mouse.buttons;
+				s_wm_buttons = ev->mouse.buttons;
 				s_band_origin = w->frame;
 				s_band_rect   = w->frame;
 				s_band_anchor_x = ev->mouse.x;
@@ -1146,8 +1232,9 @@ static void route_event_locked(const input_event_t *ev)
 			if (w->id == s_titlebar_click_window &&
 			    ev->tick - s_titlebar_click_tick <= DOUBLE_CLICK_TICKS) {
 				s_titlebar_click_window = 0;   // a third click starts over
+                s_wm_buttons=ev->mouse.buttons | (1u<<ev->mouse.button);
 				bool was = (w->flags & GUI_WINDOW_MAXIMIZED) != 0;
-				wm_set_maximized(w, !was);
+				wm_decoration_action(w,OS64_DECOR_MAXIMIZE,ev->tick);
 				if (((w->flags & GUI_WINDOW_MAXIMIZED) != 0) != was)
 					printd(DEBUG_GUI, "guicomp: titlebar double-click: window %u %s\n",
 						w->id, was ? "restored" : "maximized");
@@ -1158,6 +1245,7 @@ static void route_event_locked(const input_event_t *ev)
 			// Grab for dragging; remember where in the frame we grabbed so
 			// the window doesn't jump under the cursor.
 			s_drag_window = w;
+			s_drag_buttons = ev->mouse.buttons;
 			s_drag_dx = ev->mouse.x - w->frame.x;
 			s_drag_dy = ev->mouse.y - w->frame.y;
 		} else if (deliver_mouse_to_window(w, *ev, true)) {
@@ -1301,9 +1389,8 @@ static void route_event_locked(const input_event_t *ev)
 		    keyboard_fkey_number(ev->key.scancode, ev->key.modifiers) == 4) {
 			window_t *focus = wm_focused();
 			// The desktop is exempt — and this one is guarded HERE rather
-			// than at a wm_ setter because there is no setter to guard: a
-			// close is a REQUEST delivered to the owner, so the only place
-			// to decline it is where it is composed. Alt+F4 with nothing
+			// than relying on the action helper: escalation bypasses the normal
+			// close request, so its guard must cover both paths here. Alt+F4 with nothing
 			// but your desktop showing is a gesture nobody means, and its
 			// second press would SIGTERM the shell.
 			if (focus && (focus->flags & GUI_WINDOW_DESKTOP)) {
@@ -1321,11 +1408,7 @@ static void route_event_locked(const input_event_t *ev)
 				} else {
 					printd(DEBUG_GUI, "guicomp: window %u asked to close\n", focus->id);
 					focus->closeAskedTick = ev->tick;
-					input_event_t close = {
-						.type = INPUT_EVENT_WINDOW_CLOSE,
-						.tick = ev->tick,
-					};
-					wm_deliver_event(focus, &close);
+                    wm_decoration_action(focus,OS64_DECOR_CLOSE,ev->tick);
 				}
 			}
 			break;
@@ -1345,13 +1428,13 @@ static void route_event_locked(const input_event_t *ev)
 				switch (ev->key.ascii) {
 				case 0x10: {   // Ctrl+Alt+P: pin on top (toggle)
 					bool was = (focus->flags & GUI_WINDOW_PINNED) != 0;
-					wm_set_pinned(focus, !was);
+					wm_decoration_action(focus,OS64_DECOR_PIN,ev->tick);
 					chord_report(focus, GUI_WINDOW_PINNED, was, "pinned", "unpinned");
 					break;
 				}
 				case 0x0D: {   // Ctrl+Alt+M: maximize (toggle) — 0x0D is Ctrl+M, a CR by 1963's table
 					bool was = (focus->flags & GUI_WINDOW_MAXIMIZED) != 0;
-					wm_set_maximized(focus, !was);
+					wm_decoration_action(focus,OS64_DECOR_MAXIMIZE,ev->tick);
 					chord_report(focus, GUI_WINDOW_MAXIMIZED, was, "maximized", "restored");
 					break;
 				}
@@ -1360,7 +1443,7 @@ static void route_event_locked(const input_event_t *ev)
 				// hold ENDS on it (walking past leaves it hidden).
 				case 0x0E: {
 					bool was = wm_is_hidden(focus);
-					wm_set_minimized(focus, true);
+					wm_decoration_action(focus,OS64_DECOR_MINIMIZE,ev->tick);
 					chord_report(focus, GUI_WINDOW_MINIMIZED, was, "minimized", "restored");
 					break;
 				}
@@ -1455,6 +1538,7 @@ bool guicomp_thread(bool daemon)
 		// iron — see the seated-predicate comment). Convert the ISR's one-
 		// store flag into ordinary damage here, under our own lock.
 		if (s_glass_regained) {
+            gui_cancel_decoration(NULL);
 			s_glass_regained = false;
 			// Whatever the console overlay had painted is gone with the VT
 			// switch's repaint; it must not try to restore cells that now
@@ -1487,6 +1571,7 @@ bool guicomp_thread(bool daemon)
 		// own create or destroy arrives as damage anyway, and the walk costs
 		// less than one damage rect's composite.
 		wm_cover_sweep_locked();
+		control_state_locked();
 		pointer_state_locked();
 
 		// Take the whole damage list in one hold and reset it, so clients

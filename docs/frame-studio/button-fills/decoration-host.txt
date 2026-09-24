@@ -1,0 +1,6 @@
+controls: PASS group geometry, minimum width, empty/spacer hits, capture re-entry and cancellation
+button colors: PASS custom/inactive colors, transparency/states/hits, split damage, saved V4 compatibility and V5 round trip
+frame storage: PASS embedded-asset round trip, bounds/checksum, names, short I/O, write/sync/rename refusal, replacement, collection
+button colors: PASS custom/inactive colors, transparency/states/hits, split damage, saved V4 compatibility and V5 round trip
+frame storage: PASS embedded-asset round trip, bounds/checksum, names, short I/O, write/sync/rename refusal, replacement, collection
+decoration: PASS lifetime, refusal, F2 parity, two-color endpoints and strength, finishes, restyle, split damage, translation, presets, bounded format

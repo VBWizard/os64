@@ -1,0 +1,9 @@
+decorationtest: PASS font=24px screen=1920x1080 generation=4 frame=502x277 content=500x240
+decorationtest: content minimum fixed at current size
+decorationtest: state frame=0,0 1920x1080 content=1918x1043 flags=264
+decorationtest: client edges down=0 up=0 close=0 layout=1
+decorationtest: state frame=0,0 1920x1080 content=1918x1043 flags=264
+decorationtest: client edges down=0 up=0 close=0 layout=1
+decorationtest: content minimum released
+decorationtest: state frame=160,164 502x277 content=500x240 flags=256
+decorationtest: client edges down=0 up=0 close=0 layout=1

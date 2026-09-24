@@ -1,5 +1,6 @@
 #ifndef GUI_WINDOW_H
 #define GUI_WINDOW_H
+#include "os64/decoration.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -23,8 +24,8 @@
 // picture and be told its window is bad.
 #define GUI_MIN_CONTENT        8
 
-// Chrome geometry: a titlebar across the top (which includes the top border)
-// and a 1-pixel border on the other three sides.
+// Compiled fallback geometry, also published as legacy ABI defaults.
+// Installed decorations derive their metrics from the prepared font.
 #define GUI_TITLEBAR_HEIGHT    20
 #define GUI_BORDER_WIDTH       1
 
@@ -40,8 +41,9 @@
 // flags
 // NO TITLEBAR. Honored since 2026-08-23 (it was reserved from birth): the
 // window keeps its 1-pixel border on all four sides — a window with no edge
-// at all is unfindable on a desktop — and loses the 20-pixel bar. Content
-// size is untouched; only the frame shrinks. A creation flag for clients
+// at all is unfindable on a desktop — and loses the configured titlebar. Content
+// size is preserved for ordinary windows; maximized windows retain their
+// screen-sized frame. A creation flag for clients
 // AND a toggle for the user (Ctrl+Alt+T), because "hide the title" is a
 // thing you decide while looking at the window, not only when writing the
 // program. Ctrl+Alt+left-drag still moves it — the chord gestures were
@@ -59,6 +61,8 @@
 // the "unless nothing holds it yet" clause is what focuses the desktop on
 // a boot that starts nothing.
 #define GUI_WINDOW_START_UNFOCUSED (1u << 1)
+// Title bytes use the shared Western UTF-8 profile instead of legacy Latin-1.
+#define GUI_WINDOW_TITLE_UTF8 (1u << 8)
 // PIN ON TOP (2026-08-23): the window lives in the upper band of the z-list
 // and cannot be buried by an ordinary raise. The user can toggle it with
 // Ctrl+Alt+P, and clients whose persisted state asks for it can request it
@@ -147,21 +151,18 @@
 // other's; this one pins the kernel's flags to EACH OTHER.
 _Static_assert((GUI_WINDOW_NO_DECORATIONS ^ GUI_WINDOW_START_UNFOCUSED ^ GUI_WINDOW_PINNED ^
                 GUI_WINDOW_MAXIMIZED ^ GUI_WINDOW_MINIMIZED ^ GUI_WINDOW_DESKTOP ^
-                GUI_WINDOW_COVERED ^ GUI_WINDOW_POPUP) ==
+                GUI_WINDOW_COVERED ^ GUI_WINDOW_POPUP ^ GUI_WINDOW_TITLE_UTF8) ==
                (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_START_UNFOCUSED | GUI_WINDOW_PINNED |
                 GUI_WINDOW_MAXIMIZED | GUI_WINDOW_MINIMIZED | GUI_WINDOW_DESKTOP |
-                GUI_WINDOW_COVERED | GUI_WINDOW_POPUP),
+                GUI_WINDOW_COVERED | GUI_WINDOW_POPUP | GUI_WINDOW_TITLE_UTF8),
                "two window flags share a bit");
 
 // Alt+F4 twice within this long (5s) on a window that did not go away is
 // "I mean it": the owner task gets SIGTERM.
 #define GUI_CLOSE_ESCALATE_TICKS   (5 * TICKS_PER_SECOND)
 
-// THE CHROME PALETTE. Private to window.c until 2026-08-23, when the Alt+Tab
-// switcher became a second consumer: its highlighted cell has to be the same
-// blue a focused titlebar is, or the strip is telling the user about a
-// different desktop than the one behind it. One copy, shared — the alternative
-// was a second set of literals drifting a shade at a time.
+// Compiled fallback palette. Consumers of the active palette use
+// wm_titlebar_color/wm_border_color under the GUI lock.
 #define WINDOW_TITLEBAR_FOCUSED   0xff2a62b8
 #define WINDOW_TITLEBAR_UNFOCUSED 0xff6a6f78
 #define WINDOW_BORDER_FOCUSED     0xffd8dce4
@@ -194,6 +195,7 @@ typedef struct window
     // INPUT_EVENT_WINDOW_CLOSE in input.h for why the first one is only a
     // request.
     uint64_t  closeAskedTick;
+    uint32_t decor_hover, decor_pressed;
 
     // The task that created this window through the client API (task.h
     // taskID), or 0 for a window no task is behind. Stamped by wm_create
@@ -402,39 +404,21 @@ void wm_cover_sweep_locked(void);
 // fullscreen window — see the comment at the definition for the measurement.
 bool wm_rect_is_covered(rect_t screen_rect);
 
-// How much chrome sits ABOVE the content: the titlebar (which includes the
-// top border) for a decorated window, the bare border for an undecorated
-// one. THE one place the question is answered — seven sites used to spell
-// "GUI_TITLEBAR_HEIGHT" by hand, which is seven sites to miss the day the
-// answer stopped being constant. Takes flags, not a window, because the
-// client boundary sizes a content area before any window exists.
+// Four-sided geometry is derived from the current immutable decoration.
+// Call under kGuiLock, including sizing at the client boundary.
+os64_decor_insets_t wm_decoration_insets(uint32_t flags);
+uint32_t wm_decoration_min_width(uint32_t flags);
+uint32_t wm_decoration_hit(const window_t *, int32_t x, int32_t y);
+uint32_t wm_decoration_disabled(const window_t *);
+void wm_decoration_state(window_t *, uint32_t hover, uint32_t pressed);
+void wm_decoration_action(window_t *, uint32_t action, uint64_t tick);
+bool wm_set_decoration(const os64_decor_view_t *view, void **retired);
+uint32_t wm_titlebar_color(bool active);
+uint32_t wm_border_color(bool active);
 static inline int32_t wm_chrome_top(uint32_t flags)
-{
-    if (flags & GUI_WINDOW_DESKTOP)
-        return 0;   // no chrome at all — see wm_border_width
-    return (flags & GUI_WINDOW_NO_DECORATIONS) ? GUI_BORDER_WIDTH : GUI_TITLEBAR_HEIGHT;
-}
-
-// How wide the border is — and it is not always a constant, which is why this
-// exists (2026-08-25). THE DESKTOP HAS NO BORDER.
-//
-// NO_DECORATIONS drops the titlebar and keeps a 1px frame, which is right for
-// an ordinary undecorated window: the border is what separates it from
-// whatever is behind it, and its COLOR is the only focus indication such a
-// window has. Neither argument survives on the desktop. There is nothing
-// behind it to be separated from, and the "border" is a line around the edge
-// of the entire screen that changes colour when you click the wallpaper —
-// which is what Chris saw the first afternoon the shell ran, and it reads as
-// a rendering bug rather than as focus.
-//
-// Written as a function beside wm_chrome_top for exactly the reason that one
-// exists: the border was spelled GUI_BORDER_WIDTH by hand at six sites, and
-// six sites is six chances to miss the day the answer stopped being constant.
-// It stopped being constant today.
+{ return wm_decoration_insets(flags).top; }
 static inline int32_t wm_border_width(uint32_t flags)
-{
-    return (flags & GUI_WINDOW_DESKTOP) ? 0 : GUI_BORDER_WIDTH;
-}
+{ return wm_decoration_insets(flags).left; }
 
 // Where the content area sits on screen (for event coordinate translation
 // and publish-rect mapping).
@@ -448,36 +432,18 @@ static inline rect_t wm_content_rect_on_screen(const window_t *w)
     };
 }
 
-// True if the point (screen coords) lands in the window's titlebar — the
-// grab-handle for dragging and NOT part of the client content. An
-// undecorated window has none; its top border is content-adjacent chrome
-// like the other three sides, and a click there is the window system's.
-// Does this window HAVE a titlebar? Asked of wm_chrome_top rather than of the
-// NO_DECORATIONS bit (Codex #31 rd3): a DESKTOP window has no chrome whatever
-// its decoration bit says, and the two sites that tested the bit by hand —
-// this hit-test and composite_one's titlebar paint — disagreed with the
-// chrome functions for a desktop created WITHOUT NO_DECORATIONS: an
-// invisible 20px titlebar across the top of the wallpaper that swallowed
-// clicks and dragged the desktop. One question, one answerer.
+// Titlebar presence is semantic, independent of a particular font height.
 static inline bool wm_has_titlebar(uint32_t flags)
-{
-    return wm_chrome_top(flags) == GUI_TITLEBAR_HEIGHT;
-}
-
+{ return !(flags & (GUI_WINDOW_DESKTOP | GUI_WINDOW_NO_DECORATIONS)); }
 static inline bool wm_point_in_titlebar(const window_t *w, int32_t x, int32_t y)
 {
-    if (!wm_has_titlebar(w->flags))
-        return false;
-    return rect_contains_point(
-        (rect_t){w->frame.x, w->frame.y, w->frame.w, GUI_TITLEBAR_HEIGHT}, x, y);
+    return wm_has_titlebar(w->flags) && rect_contains_point(
+        (rect_t){w->frame.x, w->frame.y, w->frame.w, wm_chrome_top(w->flags)}, x, y);
 }
 
-// Show or hide the titlebar (Ctrl+Alt+T). The CONTENT STAYS WHERE IT IS —
-// the frame's top edge moves to meet it — because the content is what the
-// user is looking at, and a window that jumps 19 pixels when you hide its
-// title is a window you hid the title of by mistake. While maximized, the
-// saved frame receives the same delta to preserve its content on Restore.
-// Damages old ∪ new.
+// Toggle between the configured decoration and the 1px bare frame. Ordinary
+// content retains its size/position subject to titlebar reachability; maximized
+// frames stay screen-sized and refuse a toggle that violates content minima.
 void wm_set_decorated(window_t *w, bool decorated);
 
 // Maximize to the screen, or restore the remembered frame when its size

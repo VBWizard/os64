@@ -159,8 +159,9 @@ override ASFILES := $(shell find src -type f -name '*.S' | LC_ALL=C sort)
 override NASMFILES := $(shell find src -type f -name '*.asm' | LC_ALL=C sort)
 override OBJ := $(patsubst src/%,obj/%,$(SRC_CFILES:.c=.c.o) $(ASFILES:.S=.S.o) $(NASMFILES:.asm=.asm.o)) \
     $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.o))
+override OBJ += obj/shared/decoration.c.o
 override HEADER_DEPS := $(patsubst src/%,obj/%,$(SRC_CFILES:.c=.c.d) $(ASFILES:.S=.S.d)) \
-    $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.d))
+    $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.d)) obj/shared/decoration.c.d
 
 
 # Default target.
@@ -195,6 +196,10 @@ bin/$(OUTPUT): GNUmakefile linker.ld $(OBJ) cc-runtime-x86_64/cc-runtime.a
 -include $(HEADER_DEPS)
 
 # Compilation rules for *.c files.
+obj/shared/%.c.o: ../shared/%.c GNUmakefile
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 obj/%.c.o: src/%.c GNUmakefile
 	@mkdir -p "$$(dirname $@)"
 	@$(CC) $(CFLAGS) -c $< -o $@

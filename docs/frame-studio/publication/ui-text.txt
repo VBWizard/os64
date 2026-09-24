@@ -1,0 +1,2 @@
+test_ui_text_host: 1430 checks, 0 failures
+Artifacts: /tmp/os64-ui-text-fgrg_w0q

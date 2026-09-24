@@ -27,7 +27,7 @@
 //
 //   /sys/                        the root: "bus", "console", "cpu", "net",
 //                                "block", "cache", "conf", "gui", "log", "mounts",
-//                                "openfiles", "random", "shlib", "clipboard", "appearance"
+//                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations"
 //   /sys/console/font            the face the virtual terminals draw with.
 //                                READ: which face, its cell, the grid it
 //                                gives this screen, and the verdict on the
@@ -93,6 +93,11 @@
 //                                opaque payload. Readers own a snapshot;
 //                                each write compares and publishes atomically.
 //                                Store and rulings: appearance.c, APPEARANCE.md
+//
+//   /sys/decorations             prepared window decoration: generation plus
+//                                content fingerprint and length on read;
+//                                staged compare-and-publish commands on write.
+//                                Store and contract: decorations.c, FRAME_STUDIO.md
 //
 // Generated reports are text; stored payloads are opaque bytes.
 // The PCI values are the enumeration's saved headers —
@@ -162,6 +167,8 @@
 #include "logging/log.h"   // /sys/log — ring stats and sink state
 #include "io.h"             // kSerialPresent
 #include "appearance.h"
+#include "decorations.h"
+#include "os64/decoration.h"
 #include "clipboard.h"      // /sys/clipboard — the snarf store behind the file
 #include "console_font.h"   // /sys/console/font — the VTs' face, and its door
 #include "shared_object.h"  // /sys/shlib — the loaded-shared-object registry
@@ -339,6 +346,7 @@ typedef enum
 	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
 	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
 	SYS_NODE_OPENFILESFILE, // /openfiles — the open-file registry (lsof's deep half)
+	SYS_NODE_DECORATIONS,
 	SYS_NODE_APPEARANCE, // /appearance — session appearance generation and payload
 	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
@@ -487,6 +495,12 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_BLOCKFILE;
+		return;
+	}
+
+	if (strcmp(comp, "decorations") == 0) {
+		if (synth_next_component(path, &pos, comp, sizeof(comp))) return;
+		out->type = SYS_NODE_DECORATIONS;
 		return;
 	}
 
@@ -1776,6 +1790,7 @@ typedef enum
 {
 	SYS_HANDLE_SNAPSHOT = 0,   // the ordinary case: text generated at open
 	SYS_HANDLE_APPEARANCE_WRITE,
+	SYS_HANDLE_DECORATIONS_WRITE,
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
 	SYS_HANDLE_CLIPWRITE,      // /sys/clipboard opened "w" — holds a pending
 	SYS_HANDLE_FONTWRITE,      // /sys/console/font opened "w" — holds an image
@@ -1797,6 +1812,7 @@ typedef struct
 	sys_handle_kind_t kind;
 	snarf_entry_t    *entry;     // CLIPREAD: the entry this handle is reading
 	snarf_pending_t  *pending;   // CLIPWRITE: the copy being accumulated
+	decoration_pending_t *decoration;
 	console_font_pending_t *font; // FONTWRITE: the image being accumulated
 } sys_file_handle_t;
 
@@ -1811,11 +1827,12 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	// no contract for these command or immutable-snapshot interfaces.
 	bool is_probe = (sp.type == SYS_NODE_CPUFILE && strcmp(sp.name, "probe") == 0);
 	bool is_clip  = (sp.type == SYS_NODE_CLIPFILE);
+	bool is_decoration = (sp.type == SYS_NODE_DECORATIONS);
 	bool is_appearance = (sp.type == SYS_NODE_APPEARANCE);
 	bool is_font = (sp.type == SYS_NODE_CONSOLEFONT);
 	if (mode == NULL || mode[0] == '\0' || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
 		return -1;
-	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font)
+	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration)
 		return -1;
 
 	// The console's face. A reader gets the status text as an ordinary
@@ -1852,6 +1869,22 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		}
 		return 0;
 	}
+
+	if (is_decoration) {
+        synth_text_t text = {0};
+        decoration_pending_t *pending = NULL;
+        if (mode[0] == 'r') {
+            if (!synth_text_init(&text, OS64_DECOR_STATUS_MAX)) return -1;
+            int n = decorations_status(text.buf, text.cap);
+            if (n < 0) { kfree(text.buf); return -1; }
+            text.len = (size_t)n;
+        } else if (!(pending = decorations_begin())) return -1;
+        sys_file_handle_t *dh = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+            sizeof(sys_file_handle_t), FILETYPE_SYSFILE);
+        if (!dh) { decorations_discard(pending); return -1; }
+        if (pending) { dh->kind = SYS_HANDLE_DECORATIONS_WRITE; dh->decoration = pending; }
+        return 0;
+    }
 
 	if (is_appearance)
 	{
@@ -2009,6 +2042,9 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	if (h == NULL || buffer == NULL)
 		return -1;
 
+	if (h->kind == SYS_HANDLE_DECORATIONS_WRITE)
+		return decorations_write(h->decoration, buffer, size);
+
 	if (h->kind == SYS_HANDLE_APPEARANCE_WRITE)
 		return appearance_publish(buffer, size);
 
@@ -2088,7 +2124,11 @@ static int sys_close(vfs_file_t *vfs_file)
 
 	if (h != NULL)
 	{
-		if (h->kind == SYS_HANDLE_FONTWRITE)
+		if (h->kind == SYS_HANDLE_DECORATIONS_WRITE) {
+			decorations_discard(h->decoration);
+			h->decoration = NULL;
+		}
+		else if (h->kind == SYS_HANDLE_FONTWRITE)
 		{
 			// Judged here, installed later: the submit validates the image
 			// and queues it for kworker, because this close may be running
@@ -2183,7 +2223,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bus", "console", "cpu", "net" };
-			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance" };
+			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -2403,6 +2443,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, "openfiles", OS64_DIRENT_NAME_MAX);
 			return 0;
 
+		case SYS_NODE_DECORATIONS:
+			strncpy(entry->name, "decorations", OS64_DIRENT_NAME_MAX);
+			entry->size = 0;
+			return 0;
 		case SYS_NODE_APPEARANCE:
 			strncpy(entry->name, "appearance", OS64_DIRENT_NAME_MAX);
 			entry->size = appearance_length();

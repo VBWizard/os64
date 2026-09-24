@@ -1,0 +1,6 @@
+Saved decoration version: 5
+Button slots: 4
+slot 0: action=2 group=1 shape=1 face=FFFFBD2E
+slot 1: action=3 group=1 shape=1 face=FF28C840
+slot 2: action=1 group=1 shape=1 face=FFFF5F57
+slot 3: action=4 group=0 shape=1 face=00000000

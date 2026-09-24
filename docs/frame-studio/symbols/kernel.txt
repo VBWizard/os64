@@ -1,0 +1,1 @@
+decorationtest: PASS font=24px screen=1920x1080 generation=7 frame=502x277 content=500x240
