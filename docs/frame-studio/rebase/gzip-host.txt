@@ -1,0 +1,10 @@
+raw/gzip encoders: chunks, boundaries, mtime, ratio, interop PASS
+raw sync flush: every flush point decodes, marker, stream finishes PASS
+raw flush edges: an ending stream refuses a flush; a completed flush leaves the next its marker PASS
+libgzip decoders accept streams produced by libgzip encoders PASS
+raw stored blocks across five chunk shapes                 PASS
+raw fixed blocks across five chunk shapes                 PASS
+raw dynamic blocks across five chunk shapes                 PASS
+raw empty, 32K history, malformed, and expansion-limit cases PASS
+gzip plain, optional headers, and concatenated members       PASS
+gzip empty/history, corruption, truncation, and limit cases  PASS

@@ -1,0 +1,4 @@
+debugfs 1.47.0 (5-Feb-2023)
+/fonts/Studio.ttf: File not found by ext2_lookup
+debugfs 1.47.0 (5-Feb-2023)
+/frames/Blue grain.frame: File not found by ext2_lookup

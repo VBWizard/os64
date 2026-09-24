@@ -1,0 +1,1 @@
+zrle: 210 images across 7 pixel formats decode exactly; raw, solid, packed palette, RLE and palette RLE all chosen PASS

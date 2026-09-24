@@ -455,7 +455,6 @@ static int32_t draw_run(os64_gui_surface_t *surf, os64_font_face_t *face,
 static void draw_specimen(os64_font_engine_t *engine)
 {
     uint32_t screen_w = 0, screen_h = 0;
-    uint32_t frame_w = 0, frame_h = 0;
     int64_t win;
     os64_gui_surface_t surf;
     os64_gui_rect_t all;
@@ -470,10 +469,9 @@ static void draw_specimen(os64_font_engine_t *engine)
 
     // ASK FOR THE CONTENT, NOT THE FRAME: the specimen's height is the sum of
     // four faces' line heights at four sizes, and a window sized by eye
-    // truncates the last line behind the border. The helper adds whatever
-    // chrome the theme is wearing.
-    os64_gui_frame_for_content(620, SPECIMEN_CONTENT_H, 0, &frame_w, &frame_h);
-    win = os64_gui_window_create("fonttest", 90, 40, frame_w, frame_h, 0);
+    // truncates the last line behind the border. The WM adds the current
+    // decoration in the same transaction as creation.
+    win = os64_gui_window_create_content("fonttest",90,40,620,SPECIMEN_CONTENT_H,0);
     if (win <= 0)
     {
         os64_printf("fonttest: SKIP specimen - window_create %ld\n", (long)win);

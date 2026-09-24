@@ -1,0 +1,2 @@
+QEMU screenshots, mouse-cursor-free hue strip rectangle (325,424)-(563,430): pixel-identical before/after shade drag.
+Palette sample (557,333): RGB (234,238,6) before and after.

@@ -361,21 +361,10 @@ int main(int argc, char **argv)
 	}
 	os64_font_role_view_t font;
 	os64_font_set_view(initial, OS64_FONT_ROLE_TERMINAL, &font);
-	uint32_t frame_w, frame_h;
-	os64_gui_frame_for_content(WANT_COLS * (uint32_t)font.cell_width_px,
-		WANT_ROWS * (uint32_t)font.row_height_px, 0, &frame_w, &frame_h);
-	// A scalable startup face can make the preferred grid larger than the
-	// display. Keep the frame reachable; the grid/PTY use the actual surface.
-	int32_t initial_x = 140, initial_y = 120;
-	uint32_t screen_w, screen_h;
-	if (os64_gui_screen_info(&screen_w, &screen_h) == 0 && screen_w && screen_h) {
-		uint32_t max_w = screen_w > 32 ? screen_w - 32 : screen_w;
-		uint32_t max_h = screen_h > 64 ? screen_h - 64 : screen_h;
-		if (frame_w > max_w) frame_w = max_w;
-		if (frame_h > max_h) frame_h = max_h;
-		if ((uint64_t)initial_x + frame_w > screen_w) initial_x = (int32_t)((screen_w - frame_w) / 2);
-		if ((uint64_t)initial_y + frame_h > screen_h) initial_y = (int32_t)((screen_h - frame_h) / 2);
-	}
+	uint32_t content_w=WANT_COLS*(uint32_t)font.cell_width_px;
+	uint32_t content_h=WANT_ROWS*(uint32_t)font.row_height_px;
+	int32_t initial_x=140,initial_y=120;
+	// The WM fits the preferred grid and its current decoration together.
 	// `gterm [program args...]` seats that program instead of husk — the
 	// root menu's way of running a console program in a window (`item
 	// "Top" /bin/gterm /bin/top`). Full path: there is no shell in that
@@ -389,8 +378,8 @@ int main(int argc, char **argv)
 	if (title[0] == 0)
 		title = "gterm";
 
-	int64_t win = os64_gui_window_create(title, initial_x, initial_y,
-	                                     frame_w, frame_h, 0);
+	int64_t win = os64_gui_window_create_content(title, initial_x, initial_y,
+										 content_w, content_h, OS64_GUI_CREATE_FIT_SCREEN);
 	if (win <= 0)
 	{
 		os64_printf("gterm: no GUI here (window_create %ld)\n", (long)win);

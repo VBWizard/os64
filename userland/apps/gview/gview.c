@@ -93,28 +93,15 @@ int main(int argc, char **argv)
     uint32_t content_w = img.width  < OS64_GUI_MIN_CONTENT ? OS64_GUI_MIN_CONTENT : img.width;
     uint32_t content_h = img.height < OS64_GUI_MIN_CONTENT ? OS64_GUI_MIN_CONTENT : img.height;
 
-    uint32_t win_w, win_h;
-    os64_gui_frame_for_content(content_w, content_h, 0, &win_w, &win_h);
-
-    // Capped to the screen. screen_info failing is not fatal — an unknown
-    // screen just means no cap. The cap applies to the FRAME, since that is
-    // what has to fit on the glass.
-    uint32_t sw = 0, sh = 0;
-    if (os64_gui_screen_info(&sw, &sh) == 0 && sw > 0 && sh > 0) {
-        uint32_t max_w = (sw > GVIEW_SCREEN_MARGIN) ? sw - GVIEW_SCREEN_MARGIN : sw;
-        uint32_t max_h = (sh > GVIEW_SCREEN_MARGIN) ? sh - GVIEW_SCREEN_MARGIN : sh;
-        if (win_w > max_w) win_w = max_w;
-        if (win_h > max_h) win_h = max_h;
+    // Request image-sized content; the WM fits its current decoration to
+    // the screen in the same transaction, including when Apply is racing.
+    uint32_t sw=0,sh=0;
+    if (os64_gui_screen_info(&sw,&sh)==0 && sw && sh) {
+        uint32_t max_w=sw>GVIEW_SCREEN_MARGIN?sw-GVIEW_SCREEN_MARGIN:sw;
+        uint32_t max_h=sh>GVIEW_SCREEN_MARGIN?sh-GVIEW_SCREEN_MARGIN:sh;
+        if (content_w>max_w) content_w=max_w;
+        if (content_h>max_h) content_h=max_h;
     }
-    // AND to the largest window the WM will create (Codex #30 rd6). The
-    // screen cap alone is not enough on a panel wider than that limit: a
-    // 5000-pixel image on an 8K display passed the screen cap and was then
-    // refused at create, and gview reported a window failure for a file it
-    // had decoded perfectly. The picture is still centered and cropped by
-    // the blit, exactly as an image larger than the screen is.
-    if (win_w > OS64_GUI_WINDOW_DIM_MAX) win_w = OS64_GUI_WINDOW_DIM_MAX;
-    if (win_h > OS64_GUI_WINDOW_DIM_MAX) win_h = OS64_GUI_WINDOW_DIM_MAX;
-
     // THE TITLE IS THE BASENAME, BOUNDED (Codex #30 rd4). A title longer than
     // the window's own field is REFUSED, not truncated — deliberately, so a
     // silently shortened name cannot "succeed" — which meant gview decoded
@@ -128,7 +115,7 @@ int main(int argc, char **argv)
     char title[OS64_GUI_TITLE_MAX];
     os64_strcopy(title, sizeof(title), base);   // strlcpy semantics: always terminated
 
-    int64_t win = os64_gui_window_create(title, 64, 64, win_w, win_h, 0);
+    int64_t win = os64_gui_window_create_content(title,64,64,content_w,content_h,OS64_GUI_CREATE_FIT_SCREEN);
     if (win <= 0) {
         // "No GUI here" is true for exactly ONE of these answers, and saying
         // it for all of them sent the last reader looking for a missing

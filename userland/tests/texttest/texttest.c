@@ -51,8 +51,7 @@ int main(void)
     REQUIRE(os64_text_destroy(context)==OS64_FONT_BUSY);
     uint32_t sw=0,sh=0;
     if(os64_gui_screen_info(&sw,&sh)==0) {
-        uint32_t w,h;os64_gui_frame_for_content(940,550,0,&w,&h);
-        int64_t win=os64_gui_window_create("F2 text runs",30,35,w,h,0);REQUIRE(win>0);
+        int64_t win=os64_gui_window_create_content("F2 text runs",30,35,940,550,0);REQUIRE(win>0);
         os64_gui_surface_t surface;REQUIRE(os64_gui_window_get_surface(win,&surface)==0);
         os64_gui_rect_t clip={0,0,(int32_t)surface.width,(int32_t)surface.height};
         os64_draw_fill_rect(&surface,clip,0xfff6f3ec);

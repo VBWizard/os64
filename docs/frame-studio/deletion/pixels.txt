@@ -1,0 +1,1 @@
+PASS live titlebar and preview pixels unchanged by deletion of the loaded saved composition.

@@ -67,7 +67,8 @@ input.c: one ring (irqsave spinlock), tracks cursor position (clamped) and
          diffs button state into discrete DOWN/UP events
 compositor: drains per frame; routes under kGuiLock:
    MOUSE, and the GUI does NOT own the glass → vt_select.c (the text VT)
-   clicks → hit-test top-down → raise+focus; titlebar+left = drag grab;
+   clicks → hit-test top-down → raise+focus; decoration control = action grab;
+            remaining titlebar+left = drag grab;
             a click landing in a client's CONTENT starts the pointer grab
    moves  → cursor damage; WM drag → wm_move; pointer grab → its owner;
             else hit-test and deliver content-local to the window under it
@@ -902,11 +903,10 @@ The clip is structural, not remembered: `surface_draw_text` paints an
 OPAQUE background per glyph, so a title allowed to run past its row would
 repaint the frame beside it. Strip = rows + border, centered.
 
-The palette is the chrome's, and that is why the four `WINDOW_TITLEBAR_*` /
-`WINDOW_BORDER_*` values moved from `window.c` to `window.h`: the
-highlighted row must be the same blue a focused titlebar is, or the strip is
-describing a different desktop than the one behind it. One copy, two
-consumers.
+The strip reads the active chrome palette through `wm_titlebar_color` and
+`wm_border_color`, so its highlighted row follows the installed decoration.
+Those accessors use the compiled fallback until a decoration is applied.
+Switcher text remains on the bitmap font.
 
 **No separator lines.** Each row is a tile laid on the dark slab and one
 pixel shorter than its pitch, so the frame shows through between them: the
@@ -1138,9 +1138,9 @@ system has to know:
    + the frame loop).
 5. ~~Window resize~~ **BUILT 2026-08-19 (see the resize chapter above)**;
    ~~minimize, `GUI_WINDOW_NO_DECORATIONS` honor~~ **BUILT 2026-08-23 (the
-   chords chapter above)**. Still open: close buttons (and any titlebar
-   button at all — the chords were chosen so none is needed yet), a
-   taskbar/dock (Alt+Tab is the only way back from minimize — ~~launcher~~
+   chords chapter above)**. Prepared titlebars support configurable close,
+   minimize, maximize/restore and pin controls (see `FRAME_STUDIO.md`).
+   Still open: a taskbar/dock (Alt+Tab is the only way back from minimize — ~~launcher~~
    **the root menu is BUILT 2026-08-25, see its chapter above; a dock is
    another `gui.conf` line away by design**), and
    re-reading `desktop.conf` without a reboot — **which is a much smaller job

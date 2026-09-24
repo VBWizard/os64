@@ -28,9 +28,8 @@
 // the defaults; font-cell metrics must match the available renderer.
 //
 // SCOPE HONESTY: this themes WIDGETS. Window chrome (titlebars, borders) is
-// painted by the kernel compositor from its own constants — chrome theming
-// arrives when decorations go client-side or a chrome-theme channel exists,
-// and is deliberately not faked here.
+// painted by the kernel compositor from prepared decoration bundles through
+// /sys/decorations; it is independent of this widget theme.
 //
 // Widgets serve applications and the Appearance Workshop gallery. The
 // gallery is a place to develop reusable controls and their interaction

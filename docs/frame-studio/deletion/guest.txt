@@ -1,0 +1,10 @@
+framestudio: ready content=1240x840 title=24 buttons=4 generation=0
+framestudio: Load OK name=Traffic lights bytes=172968 generation=0
+framestudio: Save OK name=Delete me bytes=172968 generation=0
+framestudio: startup decoration result=0 generation=0
+framestudio: Apply OK generation=1 font=24 buttons=4 finish=2
+framestudio: Delete OK name=Delete me dirty=1 generation=1
+framestudio: Save OK name=Keep me bytes=172968 generation=1
+framestudio: Save OK name=WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW bytes=172968 generation=1
+framestudio: Delete OK name=Broken dirty=0 generation=1
+framestudio: closed

@@ -137,12 +137,18 @@ LAUNCH_OBJS := $(patsubst %,$(OBJ)/%.o,$(LAUNCH_SRCS))
 # the same day: a shared object's relocations resolve against itself and its
 # own dependencies (never against the executable that loaded it), so the
 # library has to carry every symbol the library uses.
-LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/proc_command.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/arena.c libos64/env.c libos64/str.c libos64/bidi.c libos64/walk.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_theme.c libos64/ui_session.c libos64/ui_envelope.c libos64/ui_saved.c libos64/ui_list.c libos64/ui_palette.c libos64/ui_color.c libos64/ui_controls.c libos64/ui_text.c libos64/ui_font.c libos64/ui_font_settings.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/thread_trampoline.S \
+LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/proc_command.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/arena.c libos64/decoration_prepare.c libos64/decoration_session.c libos64/decoration_startup.c libos64/env.c libos64/str.c libos64/bidi.c libos64/walk.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_theme.c libos64/ui_session.c libos64/ui_envelope.c libos64/ui_saved.c libos64/ui_list.c libos64/ui_palette.c libos64/ui_color.c libos64/ui_controls.c libos64/ui_text.c libos64/ui_font.c libos64/ui_font_settings.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/menu.c libos64/thread_trampoline.S \
     libos64/text.c libos64/text_cache.c libos64/text_decode.c libos64/text_bitmap.c libos64/text_draw.c libos64/font_provider.c libos64/font_adopt.c libos64/font_config.c libos64/font_discovery.c libos64/font_install.c libos64/font_psf2.c
 # PIC objects live under obj/pic/ — a separate tree, because these are
 # compiled with different flags than everything else and an object built for
 # one world must never be picked up by the other.
 LIBOS64_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBOS64_SRCS))
+LIBOS64_OBJS += $(OBJ)/pic/shared/decoration.c.o
+
+$(OBJ)/pic/shared/%.c.o: ../shared/%.c
+	@mkdir -p $(@D)
+	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@
+
 LIBOS64_SO   := $(BIN)/libos64.so
 
 # libgzip is a separate shared module: the raw DEFLATE engine serves gzip,
@@ -578,3 +584,5 @@ clean:
 $(OBJ)/apps/sshd/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/port/include
 
 $(OBJ)/tests/sshtest/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/port/include
+
+-include $(OBJ)/pic/shared/decoration.c.d

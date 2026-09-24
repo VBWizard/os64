@@ -1,0 +1,5 @@
+PASS: preview samples show black active and 223344 inactive close/minimize/maximize; EEFAFF active and AACCEE inactive pin.
+PASS: Undo changes only the active close symbol in the preview (9x9 bounds).
+PASS: V6 saved and startup prepared bundles are byte-identical (173000 bytes).
+Symbols: ff000000, ff223344, ff000000, ff223344, ff000000, ff223344, ffeefaff, ffaaccee
+PASS: cold-boot live and preview close/minimize/maximize/pin symbol samples match.

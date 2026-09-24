@@ -43,6 +43,13 @@
 
 // ── Window flags ────────────────────────────────────────────────────────────
 #define OS64_GUI_WINDOW_NO_DECORATIONS  (1u << 0)   // no titlebar; 1px border stays (honored since 2026-08-23)
+// Creation dimensions may name content directly; the WM adds current chrome
+// atomically. Legacy calls keep their outer-frame interpretation.
+#define OS64_GUI_CREATE_CONTENT_SIZE (1ull << 32)
+// With CONTENT_SIZE, clamp the requested content and position so its frame
+// fits the screen, using the same locked decoration snapshot as creation.
+#define OS64_GUI_CREATE_FIT_SCREEN (1ull << 33)
+#define OS64_GUI_WINDOW_TITLE_UTF8 (1u << 8) // W1 title text; legacy titles remain Latin-1
 #define OS64_GUI_WINDOW_START_UNFOCUSED (1u << 1)   // born on top, declines focus
 #define OS64_GUI_WINDOW_PINNED           (1u << 2)   // born in the always-on-top band
 
@@ -89,15 +96,8 @@
 // and titlebar, so asking for a 200x150 frame gets you a 198x129 canvas, and
 // a 200x150 image drawn into it loses two columns and twenty-one rows.
 //
-// EVERY APP THAT WANTS A CANVAS OF A GIVEN SIZE HAS HAD TO KNOW THAT, and
-// until 2026-08-25 the ABI never said it out loud: gclock carries a private
-// `TITLEBAR_FRAME_DELTA 19` (which is this titlebar height minus this border
-// width, derived by hand), and gview got it wrong outright — every image it
-// opened was clipped, and anything under 10x29 was refused as a degenerate
-// window. Two apps, two different mistakes, one missing fact. So the fact is
-// published here, and gui_client.c asserts it against the kernel's own
-// numbers so the two rings cannot drift apart in silence — the same handshake
-// the struct layouts already get.
+// These constants describe the compiled fallback, not installed decorations.
+// Use os64_gui_window_create_content for an exact content-size request.
 #define OS64_GUI_BORDER_WIDTH     1
 #define OS64_GUI_TITLEBAR_HEIGHT  20
 
@@ -132,13 +132,8 @@
 // constant equals this one.
 #define OS64_GUI_WINDOW_DIM_MAX   4096
 
-// The frame to ASK FOR in order to BE GIVEN a canvas of content_w x content_h.
-// Pass the same flags you will create with: an undecorated window still keeps
-// its 1px border, and a DESKTOP window has no chrome at all — its frame IS
-// its canvas (the WM's wm_border_width/wm_chrome_top say the same, and the
-// three cases here mirror those two functions case for case; a fourth kind
-// of window gets added to both or the static asserts in gui_client.c are
-// the only thing standing between it and every app sizing itself wrong).
+// Legacy fallback-only arithmetic. Kept for source compatibility and fixed
+// bare-frame popups; do not use it to size dynamically decorated windows.
 static inline void os64_gui_frame_for_content(uint32_t content_w, uint32_t content_h,
                                               uint64_t flags,
                                               uint32_t *frame_w, uint32_t *frame_h)
@@ -354,6 +349,14 @@ static inline int64_t os64_gui_window_create(const char *title,
     return (int64_t)os64_syscall6(SYSCALL_GUI_WINDOW_CREATE, (uint64_t)title,
                                   (uint64_t)(int64_t)x, (uint64_t)(int64_t)y,
                                   w, h, flags);
+}
+
+// Requests content dimensions and interprets title as UTF-8.
+static inline int64_t os64_gui_window_create_content(const char *title,
+    int32_t x, int32_t y, uint32_t width, uint32_t height, uint64_t flags)
+{
+    return os64_gui_window_create(title,x,y,width,height,
+        flags | OS64_GUI_CREATE_CONTENT_SIZE | OS64_GUI_WINDOW_TITLE_UTF8);
 }
 
 static inline int64_t os64_gui_window_destroy(int64_t handle)

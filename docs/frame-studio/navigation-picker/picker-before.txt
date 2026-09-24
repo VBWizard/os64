@@ -1,0 +1,2 @@
+test_appearance: tools/test_appearance_host.c:643: picker_feedback_contracts: Assertion `p.hue==held && p.saturation==x-6 && p.value==261-y' failed.
+tools/test_appearance_host.sh: line 41:    89 Aborted                 (core dumped) "$appearance_test_dir/test_appearance"

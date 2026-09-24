@@ -1,0 +1,9 @@
+framestudio: ready content=1240x840 title=24 buttons=4 generation=0
+framestudio: Apply OK generation=1 font=24 buttons=4 finish=2
+framestudio: Apply OK generation=2 font=28 buttons=4 finish=2
+framestudio: Apply OK generation=3 font=26 buttons=4 finish=2
+framestudio: Apply OK generation=4 font=26 buttons=1 finish=2
+framestudio: Apply OK generation=5 font=26 buttons=1 finish=2
+framestudio: Apply OK generation=6 font=26 buttons=4 finish=1
+framestudio: Apply OK generation=7 font=26 buttons=4 finish=2
+framestudio: closed
