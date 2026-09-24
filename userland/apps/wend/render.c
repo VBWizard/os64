@@ -206,6 +206,7 @@ typedef struct {
 
     int32_t indent;        // spaces a fresh row opens with
     int32_t pre;            // >0 inside pre/listing: the author's own columns
+    int32_t foreign;        // >0 inside SVG or MathML: its own text is not drawn
     bool    pending_space;  // whitespace was seen; one space is owed
     bool    content;        // this row holds something besides its indent
     bool    want_blank;     // a blank row is owed before the next content
@@ -534,7 +535,7 @@ static void pre_bytes(render_t *r, const char *s, size_t n, bool utf8)
 
 static void text_node(render_t *r, const os64_html_node_t *n)
 {
-    if (!n->text || n->text_len == 0)
+    if (!n->text || n->text_len == 0 || r->foreign > 0)
         return;
     if (r->pre > 0)
         pre_bytes(r, n->text, n->text_len, true);
@@ -722,13 +723,15 @@ static void word_folded(render_t *r, const char *s, size_t len)
     }
 }
 
-// HOW WIDE A BOX IS DRAWN. The page's `size` when it gives a sane one,
+// HOW WIDE A BOX IS DRAWN. The page's own width when it gives a sane one,
 // something typeable when it does not, and never more than half the row —
 // a box wider than the screen is a box you cannot see the end of.
 static int32_t box_width(render_t *r, const os64_html_node_t *n)
 {
-    const char *size = attr_value(n, "size");
-    int32_t width = 16;
+    // A textarea says it in `cols`, 20 when it does not; an input in `size`.
+    bool area = n->tag == OS64_HTML_TAG_TEXTAREA;
+    const char *size = attr_value(n, area ? "cols" : "size");
+    int32_t width = area ? 20 : 16;
     if (size) {
         int32_t asked = 0;
         for (const char *p = size; *p >= '0' && *p <= '9' && asked < 1000; p++)
@@ -1017,11 +1020,27 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             return;                      // a doctype and a comment draw nothing
     }
 
-    // SVG AND MATHML DRAW NOTHING HERE. Their shapes are the graphical
-    // browser's job, and their text is not prose — printing a formula's
-    // tokens in reading order would say something the page does not.
-    if (n->ns != OS64_HTML_NS_HTML)
+    // SVG AND MATHML DRAW NOTHING OF THEIR OWN HERE. Their shapes are the
+    // graphical browser's job, and their text is not prose — printing a
+    // formula's tokens in reading order would say something the page does
+    // not. But HTML can live inside them (an SVG `foreignObject`), and that
+    // is the page's own prose, links and controls: the walk descends, draws
+    // no foreign text, and draws HTML wherever it finds it.
+    if (n->ns != OS64_HTML_NS_HTML) {
+        r->foreign++;
+        for (const os64_html_node_t *c = n->first_child; c && !r->oom; c = c->next) {
+            if (c->kind == OS64_HTML_ELEMENT && c->ns == OS64_HTML_NS_HTML) {
+                int32_t saved_foreign = r->foreign;
+                r->foreign = 0;
+                walk(r, c, list);
+                r->foreign = saved_foreign;
+            } else {
+                walk(r, c, list);
+            }
+        }
+        r->foreign--;
         return;
+    }
 
     uint8_t saved_attrs = r->attrs;
     int32_t saved_spot = r->spot;
@@ -1034,6 +1053,9 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
     // keyboard lands. Its VALUES still go with the form: they are in the
     // model, which is what a submission is built from, and not on the screen.
     if (os64_html_attr(n, "hidden") != NULL)
+        return;
+    // A `dialog` that is not open is not on the screen either.
+    if (n->tag == OS64_HTML_TAG_DIALOG && os64_html_attr(n, "open") == NULL)
         return;
 
     // These subtrees and inert element kinds do not participate in this
@@ -1140,7 +1162,7 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
         case OS64_HTML_TAG_HEADER: case OS64_HTML_TAG_FOOTER:
         case OS64_HTML_TAG_MAIN: case OS64_HTML_TAG_FIGURE:
         case OS64_HTML_TAG_FIGCAPTION: case OS64_HTML_TAG_CAPTION:
-        case OS64_HTML_TAG_SUMMARY: case OS64_HTML_TAG_DETAILS:
+        case OS64_HTML_TAG_SUMMARY:
         case OS64_HTML_TAG_TABLE: case OS64_HTML_TAG_THEAD:
         case OS64_HTML_TAG_TBODY: case OS64_HTML_TAG_TFOOT:
         case OS64_HTML_TAG_TR:
@@ -1148,6 +1170,29 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
             walk_children(r, n, list);
             block_break(r);
             goto done;
+
+        // A CLOSED `details` SHOWS ITS SUMMARY AND NOTHING ELSE — what is
+        // folded away is not on the screen, and its links and boxes are no
+        // place to land until the page opens it. With no `summary` of its
+        // own it is labelled "Details", as the standard says.
+        case OS64_HTML_TAG_DETAILS: {
+            node_start_block(r, false);
+            if (os64_html_attr(n, "open") != NULL) {
+                walk_children(r, n, list);
+            } else {
+                const os64_html_node_t *summary = NULL;
+                for (const os64_html_node_t *c = n->first_child; c && !summary; c = c->next)
+                    if (c->kind == OS64_HTML_ELEMENT && c->ns == OS64_HTML_NS_HTML &&
+                        c->tag == OS64_HTML_TAG_SUMMARY)
+                        summary = c;
+                if (summary)
+                    walk(r, summary, list);
+                else
+                    word_text(r, "Details", 7);
+            }
+            block_break(r);
+            goto done;
+        }
 
         // A CELL IS TWO SPACES FROM ITS NEIGHBOUR AND NOTHING MORE. The old
         // web's tables are LAYOUT — a page built as one big table reads

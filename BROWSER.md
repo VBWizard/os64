@@ -593,8 +593,10 @@ to a cell. Whitespace collapses to one space except inside `pre` (and
   title row), `script`, `style`, `iframe` (a different document, which
   showing would mean fetching), `noscript`'s CONTENTS are shown (we run
   no script, so the standard parsed them as markup — that is the point),
-  `template` contents (the fragment branch), comments, and every subtree
-  whose `ns` is not HTML (SVG and MathML draw nothing in this face).
+  `template` contents (the fragment branch), comments, a closed
+  `details` past its summary, a `dialog` that is not `open`, and the text
+  of SVG and MathML (they draw nothing of their own in this face, but HTML
+  inside them — a `foreignObject` — is drawn like any other).
   **A `frame` is the exception (departure):** a frameset page has no
   body and no prose anywhere, so skipping it paints an empty screen for
   a whole era of the web. Each frame becomes a link to the document it

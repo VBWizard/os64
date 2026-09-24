@@ -392,6 +392,30 @@ static void render_checks(void)
                      40, want, 1);
     }
     {
+        // HTML inside SVG is the page's own: drawn and landed on, while the
+        // SVG's own text stays undrawn.
+        const char *want[] = { "[1]inside[2][____]" };
+        expect_lines("foreign html", "<svg><text>token</text><foreignObject><form>"
+                     "<a href=/x>inside</a><input name=q size=4></form></foreignObject></svg>",
+                     40, want, 1);
+    }
+    {
+        // A closed `details` is its summary; an open one is all of it; a
+        // closed `dialog` is nothing at all.
+        const char *want[] = { "Title", "[1]open" };
+        expect_lines("details", "<details><summary>Title</summary><a href=/s>secret</a>"
+                     "<input name=x></details><details open><a href=/o>open</a></details>"
+                     "<dialog><a href=/d>boxed</a></dialog>", 40, want, 2);
+        const char *none[] = { "Details" };
+        expect_lines("details unlabelled", "<details><p>folded</details>", 40, none, 1);
+    }
+    {
+        // A textarea is as wide as its `cols`, 20 without one.
+        const char *want[] = { "[1][" "__________" "]", "[2][" "____________________" "]" };
+        expect_lines("textarea cols", "<textarea cols=10></textarea><br>"
+                     "<textarea size=3></textarea>", 80, want, 2);
+    }
+    {
         // A box shows what is in it, padded to its width.
         const char *want[] = { "[1][cat_____]" };
         expect_lines("box value", "<input name=q size=8 value=cat>", 40, want, 1);
