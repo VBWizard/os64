@@ -74,6 +74,49 @@ const os64_font_backend_t *os64_freetype_backend_v1(void)
 }
 #endif
 
+/* Harnesses including this file provide their own filesystem seam. */
+#if __INCLUDE_LEVEL__ == 0
+/* Clipboard file seam: short I/O and refused publication are observable. */
+static char ui_test_clip[256], ui_test_clip_stage[256];
+static size_t ui_test_clip_len, ui_test_clip_pos, ui_test_clip_written;
+static bool ui_test_clip_write_mode, ui_test_clip_fail, ui_test_clip_read_fail;
+int64_t os64_open(const char *path, const char *mode)
+{
+    CHECK(!strcmp(path, "/sys/clipboard"));
+    ui_test_clip_write_mode = !strcmp(mode, "w");
+    ui_test_clip_pos = ui_test_clip_written = 0;
+    return 73;
+}
+int64_t os64_write(int32_t fd, const void *p, size_t n)
+{
+    CHECK(fd == 73 && ui_test_clip_write_mode);
+    if (ui_test_clip_fail) return -1;
+    if (n > 2) n = 2;
+    CHECK(ui_test_clip_written + n <= sizeof(ui_test_clip_stage));
+    memcpy(ui_test_clip_stage + ui_test_clip_written, p, n); ui_test_clip_written += n;
+    return (int64_t)n;
+}
+int64_t os64_read(int32_t fd, void *p, size_t n)
+{
+    CHECK(fd == 73 && !ui_test_clip_write_mode);
+    if (ui_test_clip_read_fail && ui_test_clip_pos) return -1;
+    if (n > 2) n = 2;
+    if (n > ui_test_clip_len-ui_test_clip_pos) n = ui_test_clip_len-ui_test_clip_pos;
+    memcpy(p, ui_test_clip + ui_test_clip_pos, n); ui_test_clip_pos += n;
+    return (int64_t)n;
+}
+int64_t os64_close(int32_t fd)
+{
+    CHECK(fd == 73);
+    if (ui_test_clip_write_mode && !ui_test_clip_fail) {
+        memcpy(ui_test_clip, ui_test_clip_stage, ui_test_clip_written);
+        ui_test_clip_len = ui_test_clip_written;
+    }
+    return ui_test_clip_fail ? -1 : 0;
+}
+
+#endif
+
 /* ── surfaces ──────────────────────────────────────────────────────────── */
 
 #define SURF_W 320
@@ -1509,6 +1552,82 @@ static void ui_test_field_delete(os64_ui_textfield_t *tf, os64_ui_t *ui)
     ui_test_burst(&tf->w, ui, "[3~");
 }
 
+#if __INCLUDE_LEVEL__ == 0
+static void ui_test_field_chord(os64_ui_textfield_t *tf, os64_ui_t *ui, char c, uint32_t modifiers)
+{
+    os64_gui_event_t ev = {.type=OS64_GUI_EVENT_KEY_DOWN};
+    ev.key.ascii=c;ev.key.modifiers=modifiers;
+    tf->w.cls->event(&tf->w,ui,&ev);
+}
+static void ui_test_field_shift_left(os64_ui_textfield_t *tf, os64_ui_t *ui)
+{
+    ui_test_field_chord(tf,ui,27,OS64_GUI_MOD_SHIFT);
+    ui_test_field_chord(tf,ui,'[',OS64_GUI_MOD_SHIFT);
+    ui_test_field_chord(tf,ui,'D',OS64_GUI_MOD_SHIFT);
+}
+static void ui_test_field_selection(void)
+{
+    current="field selection and clipboard";
+    os64_ui_t ui={0};ui_test_view_theme(&ui.theme);
+    char buf[8];os64_ui_textfield_t tf;
+    os64_ui_textfield(&tf,buf,sizeof(buf),NULL,NULL,NULL);
+    tf.w.bounds=(os64_gui_rect_t){0,0,180,28};os64_ui_set_root(&ui,&tf.w);
+    os64_ui_textfield_set(&ui,&tf,"203B59");
+    ui_test_field_chord(&tf,&ui,1,OS64_GUI_MOD_CTRL);
+    CHECK(tf.selected && tf.anchor==0 && tf.cursor==6);
+    ui_test_field_chord(&tf,&ui,3,OS64_GUI_MOD_CTRL);
+    CHECK(ui_test_clip_len==6 && !memcmp(ui_test_clip,"203B59",6));
+    ui_test_field_chord(&tf,&ui,22,OS64_GUI_MOD_CTRL);
+    CHECK(!tf.selected && tf.len==6 && !strcmp(buf,"203B59"));
+    ui_test_field_shift_left(&tf,&ui);ui_test_field_shift_left(&tf,&ui);
+    CHECK(tf.selected && tf.anchor==6 && tf.cursor==4);
+    ui_test_field_chord(&tf,&ui,3,OS64_GUI_MOD_CTRL);
+    CHECK(ui_test_clip_len==2 && !memcmp(ui_test_clip,"59",2));
+    ui_test_clip_fail=true;
+    ui_test_field_chord(&tf,&ui,24,OS64_GUI_MOD_CTRL);
+    CHECK(tf.selected && !strcmp(buf,"203B59"));
+    ui_test_clip_fail=false;
+    ui_test_field_chord(&tf,&ui,24,OS64_GUI_MOD_CTRL);
+    CHECK(!tf.selected && !strcmp(buf,"203B"));
+    ui_test_field_chord(&tf,&ui,22,OS64_GUI_MOD_CTRL);
+    CHECK(!strcmp(buf,"203B59"));
+    ui_test_field_chord(&tf,&ui,1,OS64_GUI_MOD_CTRL);
+    ui_test_clip_read_fail=true;
+    CHECK(os64_ui_textfield_paste(&ui,&tf)==0 && tf.selected && !strcmp(buf,"203B59"));
+    ui_test_clip_read_fail=false;
+    ui_test_field_key(&tf,&ui,'A');CHECK(!strcmp(buf,"A") && !tf.selected);
+    os64_ui_textfield_set(&ui,&tf,"caf\xc3\xa9");
+    ui_test_field_shift_left(&tf,&ui);
+    CHECK(tf.cursor==3 && tf.anchor==5);
+    ui_test_field_chord(&tf,&ui,3,OS64_GUI_MOD_CTRL);
+    CHECK(ui_test_clip_len==2 && !memcmp(ui_test_clip,"\xc3\xa9",2));
+    ui_test_field_key(&tf,&ui,'X');CHECK(!strcmp(buf,"cafX"));
+    os64_ui_textfield_set(&ui,&tf,"203B59");
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};ev.mouse.x=4;ev.mouse.y=12;
+    tf.w.cls->event(&tf.w,&ui,&ev);
+    ev.type=OS64_GUI_EVENT_MOUSE_MOVE;ev.mouse.x=4+6*8;tf.w.cls->event(&tf.w,&ui,&ev);
+    CHECK(tf.selected && tf.anchor==0 && tf.cursor==6);
+    canvas_t canvas;canvas_init(&canvas,0);os64_draw_ctx_t dc={0};dc.surf=canvas.s;
+    tf.w.cls->paint(&tf.w,&dc,&ui.theme);
+    CHECK(canvas.px[6*SURF_W+5]==ui.theme.text_sel_bg);
+    ui_test_field_burst(&tf,&ui,'D');CHECK(tf.cursor==0 && !tf.selected);
+    /* These printable Ctrl chords arrive untranslated from both keyboard
+     * drivers. They must preserve the field, selection, and clipboard. */
+    const char strangers[] = {'8', '6', '#', '!'};
+    for (size_t i = 0; i < sizeof(strangers); ++i) {
+        os64_ui_textfield_set(&ui,&tf,"203B59");
+        tf.anchor=1;tf.cursor=4;tf.selected=true;
+        memcpy(ui_test_clip,"keep",4);ui_test_clip_len=4;
+        ui_test_field_chord(&tf,&ui,strangers[i],OS64_GUI_MOD_CTRL);
+        CHECK(!strcmp(buf,"203B59") && tf.len==6);
+        CHECK(tf.selected && tf.anchor==1 && tf.cursor==4);
+        CHECK(ui_test_clip_len==4 && !memcmp(ui_test_clip,"keep",4));
+    }
+    CHECK(os64_ui_font_release(&ui)==OS64_FONT_OK);
+}
+
+#endif
+
 static void textfield_edits_by_cluster(const char *dir)
 {
     current = "textfield";
@@ -2613,6 +2732,9 @@ int main(int argc, char **argv)
     textview_motion(dir);
     boundaries_without_the_prefix();
     textview_keys_without_layout(dir);
+#if __INCLUDE_LEVEL__ == 0
+    ui_test_field_selection();
+#endif
     textfield_edits_by_cluster(dir);
     textfield_scroll_follows_the_face(dir);
     textview_scroll_follows_the_face(dir);

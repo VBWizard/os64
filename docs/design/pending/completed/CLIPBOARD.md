@@ -145,10 +145,13 @@ doctrine repealed. The day /dev grows into a service namespace, revisit.
      model holds lines and not terminators), paste reads 512 bytes at a time
      and inserts one RUN per line instead of one call per byte. libui
      allocates nothing, and a 16MB snarf never exists twice.
-   - `os64_ui_textfield_paste` came along for the ride: a path or a search
-     term pasted into the entry field. One line, said out loud — a field is
-     one line. No field COPY (a textfield has no selection model; inventing
-     one is a different slice with its own consumer).
+   - Textfields support drag and Shift+motion selection, Ctrl+A/C/X/V, and
+     `os64_ui_textfield_copy` / `os64_ui_textfield_paste`. Copy publishes the
+     selected bytes; cut deletes them only after a successful copy. Paste
+     takes the first line and replaces a selection only when bytes can be
+     inserted. Read failure, allocation refusal and an empty clipboard
+     preserve the field. This behavior is shared by textfield consumers,
+     including color-code editors.
    - CR is dropped on paste, alone or as half a CRLF: a buffer holds LINES,
      and a carriage return inside one is a fossil of a file format.
    - Verified by driving the GUI: three lines selected in scribe → "copied

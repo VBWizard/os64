@@ -494,6 +494,19 @@ static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	os64_ui_draw_run(ui, g.run, OS64_FONT_ROLE_UI, &ctx->surf, inner,
 	                 origin, ty, tf->buf, tf->len, t->field_fg, t->field_bg);
 
+	if (tf->selected && tf->anchor != tf->cursor) {
+		size_t lo = tf->anchor < tf->cursor ? tf->anchor : tf->cursor;
+		size_t hi = tf->anchor > tf->cursor ? tf->anchor : tf->cursor;
+		os64_gui_rect_t sel, clipped;
+		if (geom_selection(&g, lo, hi, &sel) == OS64_FONT_OK) {
+			sel.x += origin; sel.y = ty; sel.h = row;
+			if (os64_rect_intersect(sel, inner, &clipped)) {
+				os64_draw_fill_rect(&ctx->surf, clipped, t->text_sel_bg);
+				os64_ui_draw_run(ui, g.run, OS64_FONT_ROLE_UI, &ctx->surf, clipped,
+					origin, ty, tf->buf, tf->len, t->text_sel_fg, t->text_sel_bg);
+			}
+		}
+	}
 	int32_t cx = 0;
 	if (w->focused && geom_caret(&g, tf->cursor, &cx) == OS64_FONT_OK) {
 		os64_gui_rect_t caret = { origin + cx, ty, 2, row };
@@ -503,6 +516,24 @@ static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	}
 }
 
+static bool field_range(const os64_ui_textfield_t *tf, size_t *lo, size_t *hi)
+{
+	*lo = tf->cursor < tf->anchor ? tf->cursor : tf->anchor;
+	*hi = tf->cursor > tf->anchor ? tf->cursor : tf->anchor;
+	return tf->selected && *lo < *hi;
+}
+
+static bool field_delete_selection(os64_ui_textfield_t *tf)
+{
+	size_t lo, hi;
+	if (!field_range(tf, &lo, &hi)) return false;
+	os64_memmove(tf->buf + lo, tf->buf + hi, tf->len - hi + 1);
+	tf->len -= hi - lo;
+	tf->cursor = tf->anchor = lo;
+	tf->selected = false;
+	return true;
+}
+
 static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
                         const os64_gui_event_t *ev)
 {
@@ -510,8 +541,10 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	const os64_ui_theme_t *t = &ui->theme;
 
 	switch (ev->type) {
-	case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN: {
-		os64_ui_set_focus(ui, w);
+	case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN:
+	case OS64_GUI_EVENT_MOUSE_MOVE: {
+		bool down = ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN;
+		if (down) os64_ui_set_focus(ui, w);
 		// The pixel of the TEXT under the pointer, which the geometry turns
 		// into a letter edge — never the middle of a letter.
 		int32_t x = ev->mouse.x - w->bounds.x - field_inset(t) + tf->left_px;
@@ -520,17 +553,39 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		if (field_geom(tf, ui, &g) == OS64_FONT_OK &&
 		    geom_hit(&g, x > 0 ? x : 0, &at) == OS64_FONT_OK)
 			tf->cursor = at;
+		if (down) tf->anchor = tf->cursor;
+		tf->selected = !down && tf->anchor != tf->cursor;
+		field_keep_caret_visible(tf, ui);
 		os64_ui_mark_dirty(ui, w);
 		return true;
 	}
-	case OS64_GUI_EVENT_MOUSE_MOVE:
 	case OS64_GUI_EVENT_MOUSE_BUTTON_UP:
-		return true;   // no drag-selection in a one-line field, v1
+		return true;
 
 	case OS64_GUI_EVENT_KEY_DOWN: {
+		bool shift = (ev->key.modifiers & OS64_GUI_MOD_SHIFT) != 0;
+		if (!tf->seq && (ev->key.modifiers & OS64_GUI_MOD_CTRL) &&
+			!(ev->key.modifiers & OS64_GUI_MOD_ALT)) {
+			unsigned key = (unsigned char)ev->key.ascii;
+			if (key == 1) { tf->anchor = 0; tf->cursor = tf->len; tf->selected = tf->len != 0; }
+			else if (key == 3) { (void)os64_ui_textfield_copy(tf); return true; }
+			else if (key == 22) { (void)os64_ui_textfield_paste(ui, tf); return true; }
+			else if (key == 24) { if (os64_ui_textfield_copy(tf) > 0) field_delete_selection(tf); }
+			else if (ev->key.ascii != 0x1b) return true;
+			if (key == 1 || key == 24) {
+				tf->cursor = os64_ui_text_snap(tf->buf, tf->len, tf->cursor, true);
+				field_keep_caret_visible(tf, ui); os64_ui_mark_dirty(ui, w); return true;
+			}
+		}
 		char c = 0;
-		switch (os64_ui_decode_key(&tf->seq, ev, &c)) {
+		ui_key_t key = os64_ui_decode_key(&tf->seq, ev, &c);
+		bool motion = key == K_LEFT || key == K_RIGHT || key == K_HOME || key == K_END;
+		size_t lo = 0, hi = 0;
+		bool selection = field_range(tf, &lo, &hi);
+		if (motion && shift && !tf->selected) tf->anchor = tf->cursor;
+		switch (key) {
 		case K_CHAR:
+			field_delete_selection(tf);
 			if (tf->len + 1 < tf->cap) {
 				os64_memmove(tf->buf + tf->cursor + 1, tf->buf + tf->cursor,
 				             tf->len - tf->cursor + 1);   // +1 rides the NUL
@@ -539,6 +594,7 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 			}
 			break;
 		case K_BACKSPACE:
+			if (field_delete_selection(tf)) break;
 			// A whole cluster: the span from the previous boundary to here,
 			// found from the bytes, so no layout can refuse it.
 			if (tf->cursor > 0) {
@@ -551,6 +607,7 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 			}
 			break;
 		case K_DELETE:
+			if (field_delete_selection(tf)) break;
 			if (tf->cursor < tf->len) {
 				size_t to = os64_ui_text_step(tf->buf, tf->len, tf->cursor, true);
 				size_t gone = to - tf->cursor;
@@ -560,10 +617,10 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 			}
 			break;
 		case K_LEFT:
-			tf->cursor = os64_ui_text_step(tf->buf, tf->len, tf->cursor, false);
+			tf->cursor = selection && !shift ? lo : os64_ui_text_step(tf->buf, tf->len, tf->cursor, false);
 			break;
 		case K_RIGHT:
-			tf->cursor = os64_ui_text_step(tf->buf, tf->len, tf->cursor, true);
+			tf->cursor = selection && !shift ? hi : os64_ui_text_step(tf->buf, tf->len, tf->cursor, true);
 			break;
 		case K_HOME:  tf->cursor = 0;       break;
 		case K_END:   tf->cursor = tf->len; break;
@@ -578,6 +635,8 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		default:
 			return true;   // consumed silently (mid-burst, strangers)
 		}
+		tf->selected = motion && shift && tf->anchor != tf->cursor;
+		if (!tf->selected) tf->anchor = tf->cursor;
 		// An edit can make one letter of the bytes either side of the caret:
 		// a letter typed in front of a combining mark, or a deletion that
 		// leaves a base and a mark touching. The caret goes after that
@@ -644,7 +703,8 @@ void os64_ui_textfield_set(os64_ui_t *ui, os64_ui_textfield_t *tf,
 		if (tf->cap)
 			tf->buf[tf->len] = '\0';
 	}
-	tf->cursor = tf->len;
+	tf->cursor = tf->anchor = tf->len;
+	tf->selected = false;
 	tf->left_px = 0;
 	field_keep_caret_visible(tf, ui);   // the caret is at the END of a long path
 	os64_ui_mark_dirty(ui, &tf->w);
@@ -680,9 +740,23 @@ static bool clip_write_all(int32_t h, const void *bytes, size_t n, int64_t *tota
 	return true;
 }
 
+int64_t os64_ui_textfield_copy(const os64_ui_textfield_t *tf)
+{
+	size_t lo, hi;
+	if (!field_range(tf, &lo, &hi)) return 0;
+	int64_t fd = os64_open(OS64_CLIPBOARD_PATH, "w");
+	if (fd < 0) return fd;
+	int64_t total = 0;
+	bool ok = clip_write_all((int32_t)fd, tf->buf + lo, hi - lo, &total);
+	int64_t closed = os64_close((int32_t)fd);
+	return ok && closed >= 0 ? total : -1;
+}
+
 size_t os64_ui_textfield_paste(os64_ui_t *ui, os64_ui_textfield_t *tf)
 {
-	size_t room = (tf->len + 1 < tf->cap) ? (tf->cap - 1 - tf->len) : 0;
+	size_t lo, hi;
+	size_t retained = tf->len - (field_range(tf, &lo, &hi) ? hi - lo : 0);
+	size_t room = (retained + 1 < tf->cap) ? (tf->cap - 1 - retained) : 0;
 	if (room == 0)
 		return 0;
 	int64_t h = os64_open(OS64_CLIPBOARD_PATH, "r");
@@ -704,14 +778,14 @@ size_t os64_ui_textfield_paste(os64_ui_t *ui, os64_ui_textfield_t *tf)
 		return 0;
 	}
 	size_t got = 0;
-	bool ended = false;
+	bool ended = false, failed = false;
 	while (got < want && !ended) {
 		int64_t n = os64_read((int32_t)h, line + got, want - got);
-		if (n <= 0)
-			break;
+		if (n < 0) { failed = true; break; }
+		if (n == 0) break;
 		size_t end = got + (size_t)n;
 		for (size_t i = got; i < end; i++) {
-			if (line[i] == '\n' || line[i] == '\r') {
+			if (line[i] == '\n' || line[i] == '\r' || !line[i]) {
 				end = i;                 // a field takes line one, and says so
 				ended = true;
 				break;
@@ -724,8 +798,9 @@ size_t os64_ui_textfield_paste(os64_ui_t *ui, os64_ui_textfield_t *tf)
 	// A letter that does not fit is left behind whole. Malformed bytes are
 	// one-byte letters to the decoder and paste as they came: the field
 	// keeps the clipboard's bytes, it does not repair them.
-	size_t take = got > room ? os64_ui_text_snap(line, got, room, false) : got;
+	size_t take = failed ? 0 : got > room ? os64_ui_text_snap(line, got, room, false) : got;
 	if (take > 0) {
+		field_delete_selection(tf);
 		// +1 rides the NUL, exactly as the K_CHAR path does.
 		os64_memmove(tf->buf + tf->cursor + take, tf->buf + tf->cursor,
 		             tf->len - tf->cursor + 1);
@@ -735,6 +810,7 @@ size_t os64_ui_textfield_paste(os64_ui_t *ui, os64_ui_textfield_t *tf)
 		// Pasted text can finish a letter the field already held — a
 		// letter in front of a combining mark — so settle past it.
 		tf->cursor = os64_ui_text_snap(tf->buf, tf->len, tf->cursor, true);
+		tf->anchor = tf->cursor; tf->selected = false;
 		field_keep_caret_visible(tf, ui);
 		os64_ui_mark_dirty(ui, &tf->w);
 	}

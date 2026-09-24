@@ -493,8 +493,48 @@ static const char *list_label(size_t index, void *user)
 static int list_changes;
 static void list_changed(os64_ui_listbox_t *list, void *user)
 { (void)list; (void)user; ++list_changes; }
+static void list_key(os64_ui_t *ui, const char *bytes, uint8_t ps2, uint8_t hid, bool usb)
+{
+    uint8_t sc=usb?hid:ps2, mods=usb?OS64_GUI_MOD_HID:0;
+    for(const char *p=bytes;*p;++p)key(ui,OS64_GUI_EVENT_KEY_DOWN,*p,sc,mods);
+    key(ui,OS64_GUI_EVENT_KEY_UP,0,sc,mods);
+}
+static void list_keyboard_contracts(void)
+{
+    for(unsigned usb=0;usb<2;++usb){
+        os64_ui_t ui={0};os64_ui_theme_defaults(&ui.theme);
+        os64_ui_widget_t root;os64_ui_panel(&root);root.bounds=(os64_gui_rect_t){0,0,200,200};
+        os64_ui_listbox_t list;os64_ui_listbox(&list,10,list_label,list_changed,NULL);
+        list.w.bounds=(os64_gui_rect_t){4,4,180,100}; /* four complete rows */
+        os64_ui_add_child(&root,&list.w);os64_ui_set_root(&ui,&root);
+        os64_ui_listbox_set(&ui,&list,10,9);
+        mouse(&ui,OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,12,90,OS64_GUI_MOUSE_LEFT);
+        mouse(&ui,OS64_GUI_EVENT_MOUSE_BUTTON_UP,12,90,OS64_GUI_MOUSE_LEFT);
+        assert(ui.focus==&list.w && !ui.grab && list.selected==9);
+        list_key(&ui,"\033[H",0x47,0x4a,usb);assert(list.selected==0 && list.top==0);
+        list_key(&ui,"\033[B",0x50,0x51,usb);assert(list.selected==1);
+        list_key(&ui,"\033[A",0x48,0x52,usb);assert(list.selected==0);
+        list_key(&ui,"\033[6~",0x51,0x4e,usb);assert(list.selected==4 && list.top==1);
+        list_key(&ui,"\033[5~",0x49,0x4b,usb);assert(list.selected==0 && list.top==0);
+        list_key(&ui,"\033[F",0x4f,0x4d,usb);assert(list.selected==9 && list.top==6);
+        int before=list_changes;
+        list_key(&ui,"\033[B",0x50,0x51,usb);assert(list.selected==9 && list_changes==before);
+        /* Browsing with a companion scrollbar must not strand selection:
+         * End still reveals the last row when it was already selected. */
+        os64_ui_listbox_scroll_to(&ui,&list,0);
+        list_key(&ui,"\033[F",0x4f,0x4d,usb);
+        assert(list.top==6 && list.selected==9 && list_changes==before);
+        os64_ui_listbox_set(&ui,&list,0,-1);
+        list_key(&ui,"\033[5~",0x49,0x4b,usb);assert(list.selected==-1 && list.top==0);
+        os64_ui_listbox_set(&ui,&list,1,-1);
+        list_key(&ui,"\033[B",0x50,0x51,usb);assert(list.selected==0 && list.top==0);
+        os64_ui_font_release(&ui);
+    }
+}
+
 static void list_contracts(void)
 {
+    list_changes = 0;
     os64_ui_t ui = {0}; os64_ui_theme_defaults(&ui.theme);
     os64_ui_widget_t root; os64_ui_panel(&root);
     root.bounds = (os64_gui_rect_t){0, 0, 120, 90};
@@ -620,6 +660,41 @@ static int color_changes;
 static void picked(os64_ui_colorpicker_t *p, void *user)
 { (void)p; (void)user; ++color_changes; }
 
+static void picker_echo(os64_ui_colorpicker_t *p, void *user)
+{
+    /* An editor refreshes controls after accepting the proposed RGB. */
+    os64_ui_colorpicker_set(user, p, p->color);
+}
+static void picker_feedback_contracts(void)
+{
+    os64_ui_t ui={0};os64_ui_theme_defaults(&ui.theme);
+    os64_ui_widget_t root;os64_ui_panel(&root);
+    root.bounds=(os64_gui_rect_t){0,0,320,320};
+    os64_ui_colorpicker_t p;os64_ui_colorpicker(&p,0xffffff00,picker_echo,&ui);
+    p.w.bounds=(os64_gui_rect_t){4,4,260,282};
+    os64_ui_add_child(&root,&p.w);os64_ui_set_root(&ui,&root);
+    /* Sweep through pale and nearly black shades while the app echoes RGB. */
+    for(int hue=0;hue<360;hue+=7) {
+        os64_ui_colorpicker_set(&ui,&p,os64_ui_color_from_hsv(hue,255,255));
+        int held=p.hue;
+        mouse(&ui,OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,7,7,OS64_GUI_MOUSE_LEFT);
+        for(int y=6;y<=261;y+=5)for(int x=6;x<=261;x+=11){
+            mouse(&ui,OS64_GUI_EVENT_MOUSE_MOVE,x,y,0);
+            assert(p.hue==held && p.saturation==x-6 && p.value==261-y);
+        }
+        mouse(&ui,OS64_GUI_EVENT_MOUSE_BUTTON_UP,6,261,OS64_GUI_MOUSE_LEFT);
+        assert(p.hue==held && p.value==0 && p.saturation==0);
+        /* A hue choice made while black must survive a same-RGB refresh. */
+        mouse(&ui,OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,100,274,OS64_GUI_MOUSE_LEFT);
+        held=p.hue;os64_ui_colorpicker_set(&ui,&p,p.color);
+        assert(p.hue==held && p.value==0);
+        mouse(&ui,OS64_GUI_EVENT_MOUSE_BUTTON_UP,100,274,OS64_GUI_MOUSE_LEFT);
+    }
+    os64_ui_colorpicker_set(&ui,&p,0xff123456);
+    assert(p.color==0xff123456 && p.value==0x56);
+    os64_ui_font_release(&ui);
+}
+
 static void picker_contracts(void)
 {
     assert(os64_ui_color_from_hsv(0, 255, 255) == 0xffff0000);
@@ -672,7 +747,9 @@ static void picker_contracts(void)
 int main(void)
 {
     rounded_and_color_contracts();
+    picker_feedback_contracts();
     picker_contracts();
+    list_keyboard_contracts();
     list_contracts();
     theme_schema_contracts();
     font_page_install_contracts();
