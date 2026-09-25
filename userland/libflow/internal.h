@@ -88,6 +88,12 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
 // `display: none` subtree, which pass 1 does not descend into.
 const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node);
 void f_style_free(FStyles *styles);
+// The style of an ANONYMOUS box: its parent's inherited properties and the
+// initial value of every other (CSS 2.1 §9.2.1.1) — never a copy of the
+// parent's struct, which would give an anonymous block its parent's margins
+// and borders a second time.
+void f_style_anonymous(const FStyles *styles, const flow_style_t *parent,
+                       flow_display_t display, flow_style_t *out);
 
 // One line per styled element, indented by depth: the element, its display,
 // then what it CHANGED — an inherited property where it differs from the
@@ -95,5 +101,106 @@ void f_style_free(FStyles *styles);
 // reads as the rules that fired. Like snprintf, it answers the length the
 // whole dump needs and writes what fits.
 int64_t f_style_dump(const FStyles *styles, char *out, size_t cap);
+
+// ── Pass 2: the box tree (boxes.c) ──────────────────────────────────────
+//
+// Block-level boxes form the tree. A block container whose content is
+// inline holds, instead of children, its INLINE FORMATTING CONTEXT as one
+// flat sequence of items — text pieces, the opening and closing edges of
+// inline boxes, atomic inlines, breaks — because a line is broken across
+// that sequence and not per node: `foo<b>bar</b>` is one word in two nodes
+// (LAYOUT.md § Pass 3).
+
+typedef enum {
+    FB_BLOCK = 0,       // a block container; node NULL for an anonymous one
+    FB_REPLACED,        // a block-level replaced box: a frame
+    FB_TABLE,
+    FB_CAPTION,         // a block container
+    FB_COLUMN_GROUP,
+    FB_COLUMN,
+    FB_ROW_GROUP,
+    FB_ROW,
+    FB_CELL,            // a block container
+} f_box_kind_t;
+
+typedef enum {
+    FI_TEXT = 0,
+    FI_OPEN,            // an inline box begins (or, after a split, continues)
+    FI_CLOSE,           // it ends (or is interrupted by a block)
+    FI_ATOMIC,          // a replaced inline, or an inline-block with content
+    FI_BREAK,           // `br`, or a preserved newline
+    FI_WBR,             // a break opportunity and nothing else
+    FI_MARKER,          // a list marker drawn inside
+} f_item_kind_t;
+
+typedef struct FBox FBox;
+
+// One record per inline element, shared by every piece a block splits it
+// into, so a face paints a split `<a>` as one link.
+typedef struct {
+    const os64_html_node_t *node;
+    const flow_style_t *style;
+    int32_t link;                   // libpage's index, or -1
+    int32_t pieces;                 // how many OPENs have been emitted
+    FBox *open_in;                  // the context its current piece is open in
+} FInline;
+
+typedef struct FItem FItem;
+struct FItem {
+    FItem *next;
+    f_item_kind_t kind;
+    // TEXT: the text node, or for generated text the element that
+    // generated it. OPEN/CLOSE/ATOMIC/BREAK/WBR: the element (NULL for a
+    // preserved newline). MARKER: the list item.
+    const os64_html_node_t *node;
+    const flow_style_t *style;      // what the item is drawn in
+    // TEXT, MARKER: the bytes to lay out. For page text, a slice of the
+    // node's processed copy starting `offset` bytes in — the range a
+    // selection maps back through.
+    const char *text;
+    uint32_t len, offset;
+    bool generated;                 // TEXT the sheet made: a quote mark, a ruby parenthesis
+    bool continuation;              // OPEN: an earlier piece exists; CLOSE: a block split it here
+    FInline *inl;                   // OPEN, CLOSE
+    FBox *content;                  // ATOMIC with a block of its own (a marquee)
+    int32_t link, control;          // ATOMIC: libpage's indexes, or -1
+};
+
+struct FBox {
+    f_box_kind_t kind;
+    const os64_html_node_t *node;
+    const flow_style_t *style;
+    FBox *parent, *first, *last, *next;
+    // A block container either has block children or is an inline
+    // formatting context with items — never both.
+    bool ifc;
+    FItem *items, *last_item;
+    int32_t nitems;
+    bool collapse_space;            // build time: the last text ended in a collapsible space
+    // A list item's marker when it is drawn OUTSIDE; an inside marker is
+    // an item. NULL when the item has none.
+    const char *marker;
+    uint32_t marker_len;
+    // The link this box IS (a frame) or sits inside (a block that split an
+    // `a`, which has no inline edge left to carry it), or -1. A box deeper
+    // down is found by walking up to one that says.
+    int32_t link;
+};
+
+typedef struct {
+    FArena arena;
+    FBox *root;
+    // Memory ran out partway: every box and item present is real, and the
+    // build stopped at the first thing it could not make.
+    bool incomplete;
+} FBoxes;
+
+// NULL only when there is not memory for the tree itself.
+FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
+                      const FStyles *styles, const flow_env_t *env);
+void f_boxes_free(FBoxes *boxes);
+// One line per box and per item, indented by depth; the same contract as
+// f_style_dump.
+int64_t f_boxes_dump(const FBoxes *boxes, char *out, size_t cap);
 
 #endif

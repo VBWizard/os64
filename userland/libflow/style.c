@@ -1377,6 +1377,16 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
     return out;
 }
 
+void f_style_anonymous(const FStyles *styles, const flow_style_t *parent,
+                       flow_display_t display, flow_style_t *out)
+{
+    Ctx c = {styles->doc, NULL, styles->env, NULL, false, false, false, 0};
+    *out = inherit(&c, parent);
+    out->display = display;
+    for (int i = 0; i < 4; i++)
+        out->border_color[i] = out->color;
+}
+
 const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node)
 {
     return styles != NULL ? f_map_get(&styles->map, node) : NULL;

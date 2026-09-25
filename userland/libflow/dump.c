@@ -300,3 +300,121 @@ int64_t f_style_dump(const FStyles *styles, char *out, size_t cap)
         out[b.len < cap ? b.len : cap - 1] = '\0';
     return (int64_t)b.len;
 }
+
+// ── The box tree ────────────────────────────────────────────────────────
+
+static void indent(Buf *b, int32_t depth)
+{
+    for (int32_t i = 0; i < depth; i++)
+        puts_(b, "  ");
+}
+
+static const char *node_name(const os64_html_node_t *n)
+{
+    if (n == NULL)
+        return "anon";
+    const char *name = n->ns == OS64_HTML_NS_HTML && n->tag != OS64_HTML_TAG_UNKNOWN
+                           ? os64_html_tag_name(n->tag) : n->name;
+    return name != NULL ? name : "?";
+}
+
+// Text as a quoted string, with the bytes that would break a line or a
+// quote escaped. UTF-8 passes through as itself.
+static void quoted(Buf *b, const char *s, uint32_t len)
+{
+    puts_(b, "\"");
+    for (uint32_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '"' || c == '\\') {
+            char e[2] = {'\\', (char)c};
+            put(b, e, 2);
+        } else if (c == '\n') {
+            puts_(b, "\\n");
+        } else if (c == '\t') {
+            puts_(b, "\\t");
+        } else if (c < 0x20 || c == 0x7F) {
+            putf(b, "\\x%02x", c);
+        } else {
+            put(b, (const char *)&s[i], 1);
+        }
+    }
+    puts_(b, "\"");
+}
+
+static const char *const s_box[] = {
+    "block", "replaced", "table", "caption", "column-group", "column", "row-group", "row", "cell",
+};
+
+static void box_lines(Buf *b, const FBox *box, int32_t depth);
+
+static void item_line(Buf *b, const FItem *it, int32_t depth)
+{
+    indent(b, depth);
+    switch (it->kind) {
+    case FI_TEXT:
+        puts_(b, "text ");
+        quoted(b, it->text, it->len);
+        if (it->offset != 0)
+            putf(b, " @%u", (unsigned)it->offset);
+        if (it->generated)
+            putf(b, " generated-by %s", node_name(it->node));
+        break;
+    case FI_OPEN:
+    case FI_CLOSE:
+        putf(b, "%s %s", it->kind == FI_OPEN ? "open" : "close", node_name(it->node));
+        if (it->kind == FI_OPEN && it->inl != NULL && it->inl->link >= 0)
+            putf(b, " link %d", (int)it->inl->link);
+        if (it->continuation)
+            puts_(b, it->kind == FI_OPEN ? " continued" : " split");
+        break;
+    case FI_ATOMIC:
+        putf(b, "atomic %s", node_name(it->node));
+        if (it->link >= 0)
+            putf(b, " link %d", (int)it->link);
+        if (it->control >= 0)
+            putf(b, " control %d", (int)it->control);
+        break;
+    case FI_BREAK:
+        puts_(b, it->node != NULL ? "br" : "newline");
+        break;
+    case FI_WBR:
+        puts_(b, "wbr");
+        break;
+    case FI_MARKER:
+        puts_(b, "marker ");
+        quoted(b, it->text, it->len);
+        break;
+    }
+    puts_(b, "\n");
+    if (it->kind == FI_ATOMIC && it->content != NULL)
+        box_lines(b, it->content, depth + 1);
+}
+
+static void box_lines(Buf *b, const FBox *box, int32_t depth)
+{
+    indent(b, depth);
+    putf(b, "%s %s", s_box[box->kind], node_name(box->node));
+    if (box->marker != NULL) {
+        puts_(b, " marker ");
+        quoted(b, box->marker, box->marker_len);
+    }
+    if (box->link >= 0)
+        putf(b, " link %d", (int)box->link);
+    puts_(b, "\n");
+    for (const FItem *it = box->items; it != NULL; it = it->next)
+        item_line(b, it, depth + 1);
+    for (const FBox *c = box->first; c != NULL; c = c->next)
+        box_lines(b, c, depth + 1);
+}
+
+int64_t f_boxes_dump(const FBoxes *boxes, char *out, size_t cap)
+{
+    Buf b = {out, cap, 0};
+    if (boxes != NULL && boxes->root != NULL)
+        box_lines(&b, boxes->root, 0);
+    if (boxes != NULL && boxes->incomplete)
+        puts_(&b, "incomplete\n");
+    if (cap > 0)
+        out[b.len < cap ? b.len : cap - 1] = '\0';
+    return (int64_t)b.len;
+}

@@ -138,8 +138,8 @@ rect. Boxes are:
 - **Inline boxes** (`b`, `a`, `span`…) as ranges over the fragments they
   contain on each line: what a link underline or a background is painted
   behind. An inline box that spans lines has one fragment range per line.
-- **Replaced boxes**: an image, a form control, a frame's placeholder, an
-  `hr` (a replaced box the engine paints itself, described in the dump).
+- **Replaced boxes**: an image, a form control, a frame's or an iframe's
+  placeholder, a meter or a progress bar.
 - **Table boxes**: table, caption, row group, row, cell, with the column
   widths the algorithm settled on carried on the table.
 - **List markers**: outside the `li`'s content, positioned; their text
@@ -285,36 +285,71 @@ allows.
 
 ### Pass 2 — boxes: tree + style → box tree
 
-The walk `wend`'s renderer does, without the drawing: `display: none`
-subtrees are skipped whole (their controls still belong to libpage's
-model, which is what makes a hidden field submit); `template` contents
-are the fragment branch and are skipped; comments and `head` are skipped;
-`noscript` contents are shown (we run no script). Foreign elements (SVG,
-MathML) generate no boxes of their own and their HTML descendants are
-walked, `wend`'s rule. A `frame` becomes a replaced box the face draws as
-the link libpage already lists, `wend`'s departure kept, because a
-frameset page has no other content — and an `iframe` becomes the same
-kind of box, drawn as a link to its `src` (libpage lists an iframe with a
-non-empty `src` as a link for exactly this face). An iframe with an empty
-`src` is the blank page: its box is laid out at its size and draws
-nothing to follow.
+**What makes a box.** A block-level element makes a block-level box; an
+inline element makes no box of its own here, only the OPENING and
+CLOSING EDGES of an inline box in its container's item sequence;
+`display: contents` makes nothing and its children are its parent's;
+`display: none` makes nothing and nothing inside it does either (its
+controls still belong to libpage's model, which is what makes a hidden
+field submit). `template` contents are the fragment branch and are never
+reached; comments make nothing; `noscript` is shown (we run no script).
+Foreign elements (SVG, MathML) are `contents`: their HTML descendants are
+walked and their own text is not drawn, `wend`'s rule — a formula's
+tokens in reading order would say something the page does not. A closed
+`details` shows its first `summary` and nothing else, text included.
 
-Text nodes get **white-space processing** (CSS 2.1 §16.6.1) HERE, once,
-into a collapsed copy the box owns: under `normal` and `nowrap`, runs of
-spaces, tabs and newlines become one space, a space at a line's start or
-end is removed at layout, leading and trailing collapsible space across
-element boundaries obeys the standard's "segment break" rules; under `pre`
-and `pre-wrap` bytes are kept and a newline ends a line; tabs under `pre`
-land on eight-column stops the way the terminal and the textview place
-them. libhtml kept the bytes verbatim so this pass could read them; the
-copy is what the text fragments' byte ranges index.
+**The item sequence.** A block container whose content is inline holds,
+instead of children, its inline formatting context as ONE flat sequence —
+text pieces, the open and close edges of inline boxes, atomic inlines,
+`br`s and preserved newlines, `wbr`s, an inside list marker — because a
+line is broken across that sequence and not per node (pass 3). An inline
+box is one record shared by every OPEN that names it, so a split `<a>`
+is one link to paint.
+
+**Replaced elements are atomic**: `img`, `input` (except hidden),
+`button`, `select`, `textarea`, `iframe`, `meter`, `progress` and `frame`
+are laid out at a size the face supplies and never walked inside — a
+button's label and a select's options are its widget's. `frame` is
+block-level (a frameset stacks its frames); the rest are atomic inlines.
+A frame and an iframe are drawn as the link libpage lists for them,
+`wend`'s departure kept, because a frameset page has no other content
+(libpage lists an iframe only when its `src` names something; an empty
+one is the blank page and draws nothing to follow). A `marquee`, the one
+inline-block that is not replaced, is an atom with a block container of
+its own inside it. `object`, `video` and `canvas` show their fallback
+content, since nothing plays them; `embed` and `audio` have none and make
+nothing, and neither do `source`, `track` and `keygen`. `hr` is not
+special: it is an empty block whose borders are the rule, which is what
+the chapter's sheet says it is.
+
+Text gets **white-space processing** (CSS 2.1 §16.6.1) HERE, once, into
+the item: under `normal` and `nowrap`, a run of spaces, tabs and newlines
+becomes one space, and a collapsible space that follows another ANYWHERE
+in the same inline formatting context — across element boundaries — is
+removed; a context starts as if after a space, which is the rule that
+removes a line's leading space applied to its first line. A line's
+TRAILING space stays for pass 3, which removes it where a line ends.
+Under `pre` and `pre-wrap` every byte is kept and a newline is a forced
+break, so a preformatted text node becomes a text item per line — the
+engine refuses a literal LF (*Line breaking*, below). A text item POINTS
+into the tree when processing changed nothing and owns a copy when it
+did; its offset into the node's processed text is what a selection maps
+a pixel back through. Tabs under `pre` land on eight-column stops the
+way the terminal and the textview place them (pass 3).
+
+**Generated content** is the sheet's: `q` draws its quotation marks,
+nested levels alternating “double” and ‘single’, and an `rt` whose
+`ruby` has no `rp` is drawn in parentheses — the chapter's fallback for a
+browser that lays out no ruby.
 
 **Anonymous boxes**, the two kinds CSS 2.1 requires. The first: a block
 container whose children mix inline content and block boxes wraps each
 inline run in an anonymous block (§9.2.1.1). A text node of nothing but
 collapsible white space is not inline content for this purpose (the
 newline between two `<p>`s makes no wrapper), which is why the question
-is asked after pass 1 knows each node's `white-space`.
+is asked after pass 1 knows each node's `white-space`. An anonymous block
+is made on the first CONTENT of a run and never before, so a run of
+nothing but collapsible space — or an empty `<span>` — makes no box.
 
 **A block INSIDE an inline is the old web's normal case, not an edge
 case**, and §9.2.1.1's second paragraph is the rule for it: the inline
@@ -327,37 +362,48 @@ keeps them nested exactly as written, because a `<p>` does not close a
 `<font>`; `<a href><div>…</div></a>` is the same shape today. A container
 whose only child is that `<font>` therefore MIXES, even though every one
 of its children is inline — the blocks are a level down. So pass 1
-computes, bottom-up, one bit per element: **contains an in-flow block**
-(itself a block-level box, or an inline whose subtree holds one, not
-looking past a block, which answers for its own subtree). The mixing
-decision reads that bit on each child, and an inline child with the bit
-set is split rather than wrapped whole. The pieces of a split inline are
-one inline box for painting purposes — its per-line fragment ranges
-simply continue into the next anonymous block — and its link or control
-index is on every piece.
+computes, bottom-up, one bit per element: **holds a block** (an inline
+with a block-level child, or with an inline child that holds one; a
+block answers for its own subtree). The mixing decision reads that bit on
+each child, and an inline child with the bit set is split rather than
+wrapped whole: at the block, every inline open around that point is
+CLOSED (marked `split`), and after it the same inlines are OPENED again,
+outermost first (marked `continued`). A block that splits a LINK carries
+the link's index itself, since no inline edge is left to say so — Hacker
+News's upvote arrow is `<a href><div></div></a>`, and a click on it must
+still go somewhere.
 
 Whether a container mixes is decided BEFORE its children are built, from
 those bits (each child is read once by its parent, and the bit was
 computed once by pass 1, so the cost is linear), so the wrapper exists
 from the first inline child rather than being made retroactively when a
-block sibling turns up. That is what lets a build that stops early still
-be a prefix of the whole build (*Proof*).
+block sibling turns up. With boxes and items attached the moment they
+are made and nothing ever discarded, a build that stops early is a
+PREFIX of the whole build (*Proof*); the one allocation that would break
+that — a list item's marker text — is made before its box.
 
 The second kind: table structure that is missing gets anonymous table
-objects (§17.2.1) — a cell whose parent is not a row, a row outside a row
-group. libhtml's tree builder already repairs most table markup, so the
-second kind is rare here and is implemented because the rule is the
-standard's, not because the corpus has a case (it will get one).
+objects (§17.2.1), level by level. Collapsible space between table parts
+belongs to none of them; in a table or a row group, a cell or other loose
+content gets an anonymous row (consecutive ones sharing it); in a row,
+loose content gets an anonymous cell, which lays its run out like any
+block container — so a table part inside it gets an anonymous table of
+its own, and so does an internal table box found in ordinary flow.
+libhtml's tree builder already repairs table markup, so these are rare
+here and are implemented because the rule is the standard's.
 
-`li` under `ul`/`ol`/`menu`/`dir` gets its marker box; a `list-item` with
-no list parent still gets one (the standard's rule; the marker is a
-bullet). Counters walk `ol start`, `li value` and `reversed` exactly as
-`wend` counts them today — that code moves, it is not rewritten.
-
-`img`, `input` (except hidden), `button`, `select`, `textarea`, `iframe`,
-`embed`/`object` (drawn as their fallback content, since nothing plays
-them), `hr` and `frame` are **replaced boxes**; the walk records them in
-the two lists the face reads.
+**List markers.** An element displayed `list-item` gets a marker: its
+text is generated here (CSS Counter Styles' symbols and suffixes — `• `,
+`◦ `, `▪ `, `3. `, `c. `, `iv. `, the disclosure triangles — with a number
+a style cannot spell falling back to decimal), drawn OUTSIDE by pass 3
+from the box, or INSIDE as the first item of the item's content, where it
+is inline content and can mix the item. The counters are the chapter's
+sheet: `ol`, `ul` and `menu` reset the list-item counter (NOT `dir`, which
+is `wend`'s one departure from the sheet, corrected here), `ol start`
+names the first number and `li value` the current one, and `ol reversed`
+counts down from `start` or from how many items the list holds — its
+items, not a nested list's. A `summary` is a list item that counts
+nothing.
 
 ### Pass 3 — layout: box tree + width → rectangles
 
@@ -455,8 +501,8 @@ still reads), and an image with empty alt and no size takes no space. A
 form control with an unknown size (the face has not measured it) gets a
 placeholder the size of one row of its font, which the face will correct
 on the next layout — the oracle is the truth and the engine never caches
-it. `hspace`/`vspace` are margins; `hr` is a replaced block of the
-content width and a 2 px rule.
+it. `hspace`/`vspace` are margins; an `hr` is an ordinary empty block whose
+borders are the rule.
 
 **Tables** (§17.5, automatic layout §17.5.2.2): for every column the
 MIN-CONTENT width (the widest thing that cannot break: the longest word,
@@ -704,6 +750,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 - **Block**: nested margins collapsing every way §8.3.1 lists, padding and
   border stopping a collapse, an empty block collapsing through, `auto`
   margins centring, percent widths, a set height smaller than content,
+  `hr` under every `align` and `size`,
   and a block inside an inline — `<font>` round `<p>`s and a `<table>`,
   `<a>` round a `<div>`, the split inline's pieces and its underline
   ranges continuing across them.
@@ -720,8 +767,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 - **Lists**: every marker style, `start`/`value`/`reversed`, nesting,
   a `menu` with `list-style: none`.
 - **Replaced**: known and unknown image sizes, attrs with and without
-  alt, controls with and without an oracle answer, `hr` under every
-  `align`.
+  alt, controls with and without an oracle answer.
 - **Quirks**: the same page under all THREE modes — no-quirks,
   limited-quirks, quirks — with the margins full quirks changes and the
   sliced-image table that limited-quirks keeps gapless and no-quirks does

@@ -133,6 +133,7 @@ static void style_case(const char *name, const char *html, const char *expected)
 
 #include "test_libflow_attrs.inc"
 #include "test_libflow_style.inc"
+#include "test_libflow_boxes.inc"
 
 // ── The corpus, and the allocation sweep ────────────────────────────────
 
@@ -178,7 +179,28 @@ static void corpus(void)
         size_t lines = 0;
         for (const char *p = a; p != NULL && *p != '\0'; p++)
             lines += *p == '\n';
-        printf("corpus %-22s %zu styled elements\n", kCorpus[i], lines);
+        char *x = boxes_dump_of(html);
+        char *y = boxes_dump_of(html);
+        expect(path, x != NULL && y != NULL && strcmp(x, y) == 0, "boxes not deterministic");
+        expect(path, x != NULL && strstr(x, "incomplete") == NULL, "boxes incomplete");
+        size_t boxes = 0, items = 0;
+        for (const char *p = x; p != NULL && *p != '\0'; p++)
+            if (*p == '\n') {
+                const char *q = p + 1;
+                while (*q == ' ')
+                    q++;
+                if (strncmp(q, "block", 5) == 0 || strncmp(q, "table", 5) == 0 ||
+                    strncmp(q, "row", 3) == 0 || strncmp(q, "cell", 4) == 0 ||
+                    strncmp(q, "caption", 7) == 0 || strncmp(q, "column", 6) == 0 ||
+                    strncmp(q, "replaced", 8) == 0)
+                    boxes++;
+                else if (*q != '\0')
+                    items++;
+            }
+        printf("corpus %-22s %5zu styled elements, %5zu boxes, %5zu items\n", kCorpus[i],
+               lines, boxes + 1, items);
+        free(x);
+        free(y);
         free(a);
         free(b);
         free(html);
@@ -230,12 +252,26 @@ static void allocation_sweep(void)
     free(html);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    // `--styles FILE` / `--boxes FILE`: print one page's dump, for reading.
+    if (argc == 3 && (strcmp(argv[1], "--styles") == 0 || strcmp(argv[1], "--boxes") == 0)) {
+        size_t len = 0;
+        char *html = slurp(argv[2], &len);
+        if (html == NULL)
+            return 2;
+        char *text = argv[1][2] == 's' ? style_dump_of(html) : boxes_dump_of(html);
+        fputs(text != NULL ? text : "(null)\n", stdout);
+        free(text);
+        free(html);
+        return 0;
+    }
     attrs_cases();
     style_cases();
+    boxes_cases();
     corpus();
     allocation_sweep();
+    boxes_sweep();
     printf("libflow: %d checks, %d failed%s\n", checks, failures,
            live != 0 ? " (AND LEAKED)" : "");
     return failures != 0 || live != 0 ? 1 : 0;

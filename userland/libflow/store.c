@@ -9,7 +9,11 @@ struct FBlock {
     _Alignas(16) unsigned char data[];
 };
 
+// The host harness builds with a block of one byte, so every record is its
+// own allocation and the allocation sweep can fail each one in turn.
+#ifndef F_BLOCK_BYTES
 #define F_BLOCK_BYTES (64u * 1024u)
+#endif
 
 void *f_arena_alloc(FArena *arena, size_t size)
 {
