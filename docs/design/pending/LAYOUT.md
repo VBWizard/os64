@@ -106,9 +106,10 @@ window. The harness renders the corpus and diffs box coordinates.
   from a fetch the engine never sees, and a control's natural size is the
   face's theme and fonts (a libui textfield's row height is libui's to
   say). Unknown is an honest answer; the engine has a rule for it.
-- **The viewport's font size** (16 px unless the face says otherwise) and
-  the three colours a face owns — the page's default ink, the link colour,
-  the paper — so the dumps carry no theme.
+- **The viewport's font size** (16 px unless the face says otherwise), the
+  generic family a page that names none is drawn in, and the three colours
+  a face owns — the page's default ink, the link colour, the paper — so the
+  dumps carry no theme.
 
 ## What comes out
 
@@ -172,84 +173,115 @@ so a cascade slots in above this struct with no field renamed:
 
 | Field | Values | Inherited |
 |---|---|---|
-| `display` | none, block, inline, list-item, table, table-caption, table-row-group, table-header-group, table-footer-group, table-row, table-cell, inline-block (the last for form controls and `img`, which are inline replaced) | no |
-| `font` | a family list — names as written, ending in a generic (serif, sans, mono) — bold, italic, size px | yes |
-| `color`, `background` | XRGB; background may be "none" | color yes, background no |
-| `margin[4]`, `padding[4]`, `border[4]` | px; margins may be `auto` (horizontal only) | no |
+| `display` | inline, block, list-item, inline-block (form controls, `meter`, `progress`, `marquee`), table, table-caption, table-row-group, table-header-group, table-footer-group, table-row, table-cell, table-column-group, table-column, contents (`slot`, and an SVG or MathML element, whose HTML descendants still render), none | no |
+| `family` | a list of names as the page wrote them (slices of the attribute, never copied), ending in a generic: serif, sans, mono | yes |
+| `font_weight`, `font_style`, `font_size` | 100..900 (`bolder` by CSS Fonts' table); normal or italic; 26.6 px | yes |
+| `color`, `background` | XRGB; background may be absent (transparent) | color yes, background no |
+| `margin[4]`, `padding[4]` | px, percent, or (margins) `auto` | no |
+| `border_width[4]`, `border_style[4]`, `border_color[4]` | 26.6 px, computed to 0 where the style is none or hidden; none, hidden, solid, inset, outset, groove; XRGB with `currentColor` resolved | no |
 | `width`, `height` | auto, px, or percent (kept as percent until layout knows the containing block) | no |
-| `text_align` | left, right, center | yes |
-| `vertical_align` | baseline, top, middle, bottom (cells and replaced boxes) | no |
+| `text_align` | left, right, center, justify, and the HTML alignments html-left, html-right, html-center, html-justify: the text aligned AND the element's block descendants aligned with it, which is what `<center>` and `<div align>` do and `text-align` alone does not | yes |
+| `vertical_align` | baseline, sub, super, top, text-top, middle, bottom, and html-middle (`align=middle` on a picture: its middle on the baseline, not CSS's baseline plus half an x-height) | no |
 | `white_space` | normal, pre, nowrap, pre-wrap | yes |
-| `list_style` | disc, circle, square, decimal, lower-alpha, upper-alpha, lower-roman, upper-roman, none; position outside | yes |
-| `text_decoration` | underline, line-through, none | no (but propagates through inline descendants, the standard's odd rule) |
-| `visibility` | visible, hidden (takes space, paints nothing) | yes |
-| `border_spacing`, `border_collapse`, `caption_side` | tables | yes |
-| `float`, `clear` | recorded from `align=left/right` and `<br clear>` so the struct is complete — NOT ACTED ON in the first cut (booked below) | no |
+| `list_style_type`, `list_style_position` | disc, circle, square, decimal, lower/upper-alpha, lower/upper-roman, disclosure-closed/open, none; outside or inside | yes |
+| `text_decoration` | underline, line-through — this element's own; an ancestor's reaching its inline descendants is derived at layout, in the ancestor's colour | no |
+| `visibility` | visible, hidden, collapse | yes |
+| `border_spacing[2]`, `border_collapse`, `caption_side` | tables | yes |
+| `float_side`, `clear` | recorded from `align=left/right` and `<br clear>` so the struct is complete — NOT ACTED ON in the first cut (booked below) | no |
 
-**The first producer** is `style.c`: the Rendering chapter's rules, by
-element — `body { margin: 8px }`, `p { margin: 1em 0 }`, `h1 { font-size:
-2em; margin: 0.67em 0; font-weight: bold }` down to `h6`, `blockquote {
-margin: 1em 40px }`, `ul`/`ol` `{ padding-left: 40px }` and their
-markers, `pre`/`code`/`tt`/`kbd`/`samp` monospace, `b`/`strong` bold,
-`i`/`em`/`cite`/`var`/`dfn` italic, `u`/`ins` underline, `s`/`strike`/`del`
-line-through, `small`/`big` size, `sub`/`sup` size (their vertical shift
-booked), `center { text-align: center }`, `table { border-spacing: 2px }`,
-`td`/`th { padding: 1px }` and `th` bold centered, `hr` as a 2px inset
-line with 0.5em margins, `address` italic, `dd { margin-left: 40px }`,
-`listing`/`xmp`/`plaintext` as `pre`,
-`nobr { white-space: nowrap }`, `wbr` (a break opportunity and nothing
-else — the chapter spells it as a zero-width space, and pass 3 reads it
-as the one element boundary that IS a break),
-`fieldset` bordered with its legend,
-`[hidden] { display: none }` and the list of elements displayed `none`
-(`head`, `title`, `meta`, `link`, `style`, `script`, `template`, `area`,
-`base`, `param`, `datalist`, `rp`, `input[type=hidden]`, a `dialog` not
-`open`, a closed `details`' children past its first `summary`) — and then
-the PRESENTATIONAL ATTRIBUTES the chapter maps to properties: `align` on
-blocks, headings, `p`, `div`, `hr`, and cells (text-align, or the
-horizontal margins for `hr` and `table`); `width`/`height` on `img`,
-`table`, `td`, `th`, `col`, `hr`, `iframe`; `bgcolor` and `text`/`link`
-on `body`, and `body`'s margin attributes — `marginwidth`/`leftmargin`/
-`rightmargin` to the horizontal margins, `marginheight`/`topmargin`/
-`bottommargin` to the vertical ones — which is how a 1990s page gets its
-text flush to the edge; `bgcolor` on tables and cells; `color`, `size` (the 1..7
-table: xx-small…xxx-large) and `face` on `font` (its comma list goes into
-the family list AS WRITTEN, and the generic appended as its tail is
-guessed by keyword — "mono"/"courier" → mono, "serif"/"times"/"georgia"
-→ serif, else sans — so a resolver that matches names gets them and one
-that does not still lands on the right generic); **`a[href]`: the link
-colour and `text-decoration: underline`** — the Rendering chapter's
-`:link` rule, the colour from the face's `link_ink` unless `body link=`
-overrides it, and ONLY where libpage says the node is a link
-(`os64_page_link_for`), so "is this a link" has one decider and "what
-colour is it" has one field: a `<font color>` inside the `a` beats it by
-ordinary cascade order, and the face paints what the struct says and
-never consults the link list for ink; `border`, `cellpadding`,
-`cellspacing` on `table`; `nowrap` on cells; `hspace`/`vspace` on `img`;
-`type`/`start`/`value`/`reversed` on lists (the counter rules `wend`
-already honours, moved here whole); `valign` on cells and rows; `align`
-on `img` (top/middle/bottom → vertical-align; left/right → `float`,
-recorded and not acted on). **Quirks mode has THREE states** (`doc->quirks`:
-no-quirks, limited-quirks, quirks), and the producer honours all three
-as the chapter's quirks section lists them. Full quirks: the body margin,
-`p` and heading margins inside cells, table font inheritance (a table
-does not inherit the body's font), the percent-height quirks. **Limited
-quirks and full quirks BOTH keep the line-height calculation quirk**,
-which is the visible one: a line box holding nothing but replaced boxes
-ignores the strut, so images stacked in table cells touch — a page made
-of sliced images (the old web's whole navigation idiom) shows gaps
-between the slices without it, and limited-quirks mode exists precisely
-to keep this quirk while dropping the rest. Hacker News in the corpus has
-no doctype and runs in full quirks; a sliced-image table is a fixture.
-The quirk switch lives in this one producer, so a cascade that arrives
-inherits it.
+Lengths are 26.6 fixed point — the text engine's unit — so a margin of
+`0.67em` on a 32px heading is 1372/64 px and nothing rounds until a box
+coordinate is written (*Rounding*, below).
 
-Inheritance walks parent to child; `em` and percent font sizes resolve
-against the parent's computed size; a relative size on the root resolves
-against the viewport size the face passed. A `font` size of `+1` is the
-legacy relative form and resolves against the basefont (3). The result is
-absolute pixels everywhere except `width`/`height`/margins in percent,
-which wait for pass 3.
+**The first producer** is `style.c`: the Rendering chapter's sheet, section
+by section, each rule naming its section so the file can be held against
+the standard line by line — the hidden elements, `body`'s 8px, `p`'s 1em,
+the headings (size in the parent's em, margins in their own), `blockquote`
+and `figure`, the monospace and `white-space: pre` elements, the phrasing
+elements (italic, `bolder`, `larger`/`smaller` by CSS Fonts' 6/5 ratio,
+`sub`/`sup`, `mark`, the decorations, `nobr`), the lists (with the nesting
+rules that make a nested `ul` circle and a third level square and take
+nested lists' block margins away), the tables (`border-spacing: 2px`,
+cells' 1px padding, `th` bold and centred when its row's alignment was
+never set, rows and cells taking `vertical-align` from their group), `hr`
+(gray, a 1px inset border all round, `0.5em auto` margins), `fieldset`,
+`iframe`'s 2px inset border, form controls as inline-blocks, `details`
+(the first `summary` is the disclosure; the rest of a closed one is not
+drawn), an open `dialog` laid out where it stands (positioning is booked),
+and a `form` the parser left inside table structure displayed `none`.
+`wbr` is a break opportunity and nothing else; pass 3 reads it as the one
+element boundary that IS a break. `noscript` is SHOWN — the chapter hides
+it only when scripting is on.
+
+Then the PRESENTATIONAL ATTRIBUTES, as the chapter maps them: `body`'s
+margins (`marginheight`/`topmargin` vertical, `marginwidth`/`leftmargin`
+horizontal, the FIRST one present deciding, 8px when it will not parse),
+`bgcolor`, `text` and `link`; `pre wrap`; `align` on `div` and on the
+table parts (the HTML alignments), on `p` and the headings (plain), on
+`table` (`center` is auto margins, `left`/`right` a float), on `caption`
+(`bottom`), on `hr` (its margins) and on pictures (`float` or
+`vertical-align`); `valign`; `bgcolor` on the table parts; `table`'s
+`width` (nonzero), `height`, `border` (outset, and 1px inset on its OWN
+cells — a parse error counts as 1, a zero as nothing), `bordercolor`,
+`cellspacing`, `cellpadding` (onto its own cells only), `rules` and
+`frame`; `nowrap`, `width` and `height` on cells; `col width`; `hr`'s
+`width`, `size`, `noshade` and `color`; `hspace`, `vspace`, `border`,
+`width` and `height` on pictures; `iframe frameborder`; `br clear`;
+`ol`/`ul`/`li` `type` (case-SENSITIVE for the letters, where `a` and `A`
+are two lists; case-insensitive for the names); and `font`: `color`,
+`size` by the chapter's legacy-size rules (1..7 → x-small..xxx-large,
+`+n`/`-n` from 3, clamped), and `face`, whose comma list goes into the
+family AS WRITTEN with its generic tail — the first generic keyword the
+page wrote, else guessed from the first name ("mono"/"courier" → mono,
+"sans" → sans, "serif"/"times"/"georgia" → serif, else sans) — so a
+resolver that matches names gets them and one that does not still lands
+on the right generic. A `face` of nothing declares nothing. Values are
+read by HTML's own microsyntaxes (`attrs.c`): dimensions, integers, and
+the legacy colour algorithm that has made `bgcolor=chucknorris` red in
+every browser since Netscape. The keyword sizes are CSS Fonts' scaling
+factors on the face's `medium`.
+
+**`a[href]` — the link colour and underline** — is the chapter's `:link`
+rule: the face's `link_ink`, or `body link=` (a hint on the same selector,
+so it beats the sheet), and ONLY where libpage says the node is a link
+(`os64_page_link_for`). "Is this a link" has one decider and "what colour
+is it" has one field: a `<font color>` inside the `a` beats it by ordinary
+cascade order, and the face paints what the struct says and never consults
+the link list for ink.
+
+**Quirks mode has THREE states** (`doc->quirks`: no-quirks,
+limited-quirks, quirks), and two standards say what they change. What is
+STYLE, pass 1 applies in full quirks: the chapter's `form` bottom margin,
+its `table` font reset (weight, style, size, white-space and alignment do
+not inherit into a table), its `li` marker drawn inside when the item has
+no list, its 3px beside a picture floated by `align`, its `nowrap` cell
+with a pixel width wrapping after all, its four margin-collapsing rules
+(§15.3.9: a paragraph's margin at the top of a body or cell, and at the
+bottom of a cell, is zero) — and the Quirks Mode standard's 3.12, a table
+taking the BODY's colour rather than its parent's. What is GEOMETRY is
+pass 3's and 4's, each with its fixture: **the line-height calculation
+quirk and the blocks-ignore-line-height quirk (3.3, 3.4) apply in
+limited-quirks mode too** — which is why limited-quirks mode exists: a
+line holding nothing but pictures makes no strut, so images stacked in
+table cells touch, and a page made of sliced images (the old web's whole
+navigation idiom) shows gaps between the slices without it. Hacker News in
+the corpus has no doctype and runs in full quirks; a sliced-image table
+is a fixture. The rest are full-quirks and geometry: percentage heights
+(3.5), `html` and `body` filling the viewport (3.6, 3.7), text decoration
+not reaching into tables (3.11), and the table quirks (3.8, 3.9, 3.10,
+3.13). The hashless-hex and unitless-length quirks are CSS parsing, the
+cascade's. The quirk switch lives in the producers, so a cascade that
+arrives inherits it.
+
+Inheritance walks parent to child, iteratively over the tree's parent
+pointers; `em` and percent font sizes resolve against the parent's
+computed size, and every other `em` against the element's own. The result
+is absolute everywhere except percentages of a containing block, which
+wait for pass 3. Pass 1 is ALL OR NOTHING: a style is a few hundred bytes
+an element, so a page that cannot have its styles cannot have its boxes,
+and a half-built table would let pass 2 decide a container's shape from
+half its children — `flow_layout` answers NULL instead, which the door
+allows.
 
 ### Pass 2 — boxes: tree + style → box tree
 
@@ -510,8 +542,9 @@ typedef struct {
     bool (*replaced_size)(void *ctx, const os64_html_node_t *node,
                           int32_t *w, int32_t *h);
     os64_text_context_t *text;      // the engine the runs are laid out on
-    uint32_t viewport_font_px;      // 16 unless the face says otherwise
-    uint32_t ink, link_ink, paper;  // XRGB; the dump never prints them
+    uint32_t viewport_font_px;      // `medium`; 16 unless the face says otherwise
+    flow_generic_t default_generic; // the family a page that names none is drawn in
+    uint32_t ink, link_ink, paper;  // XRGB; the dumps name these, never print them
 } flow_env_t;
 
 // Build the box tree and lay it out at `width`. NULL on no memory only;
@@ -739,6 +772,10 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | `sub`/`sup` vertical shift | one `vertical-align` value each, cheap, and the first cut's fixtures do not cover it | the first page that reads wrong without it (footnotes) |
 | Soft hyphen breaks, CJK and script-aware breaking, bidi/RTL layout | the text profile is Western v1; bidi classes exist in libos64 for `dirname`, the layout half is a real slice | a page in one of those scripts worth reading |
 | `marquee` | the Rendering chapter has it; it is a timer in a face | a page whose meaning scrolls, which is none |
+| A `legend` drawn on its `fieldset`'s border | not CSS 2.1's model; laid out inside the fieldset, first, where it still reads | a form page where it misleads |
+| Ruby annotations | CSS 2.1 has no ruby; `rt` is laid out inline after its base, `rp` hidden | a page in a script that uses it |
+| `dialog` and `popover` positioning | an open dialog is laid out where it stands (the `position` row) | the `position` row |
+| Dotted underlines (`abbr[title]`) | drawn as a plain underline; the line's style is a cascade property | the cascade |
 | `iframe` content | a document inside a document is a second fetch and a second tree; drawn as a link to its `src`, `wend`'s frame rule | a page whose meaning is in the frame |
 | `object`/`embed`/`video`/`audio`/`canvas` | nothing plays or scripts them; fallback content is shown | media, after JS |
 | SVG drawing | a renderer of its own | the first inline SVG worth seeing |
