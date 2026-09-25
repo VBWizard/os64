@@ -443,6 +443,81 @@ static void state_frames(void)
     os64_html_document_free(doc);
 }
 
+// An iframe is offered like a frame, but only when it names something: an
+// empty src is the blank page, which is nowhere to go.
+static void state_iframes(void)
+{
+    os64_html_document_t *doc = parse(
+        "<body><a href=a.html>a</a><iframe src=\"ad.html#x\">fallback</iframe>"
+        "<iframe></iframe><iframe src=\" \t\"></iframe>"
+        "<iframe src=\"\"></iframe></body>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    state_expect("iframes: only the one that names a document", os64_page_nlinks(page) == 2);
+    const os64_page_link_t *link = os64_page_link(page, 1);
+    state_expect("iframes: resolved like a frame, fragment kept apart",
+                 link != NULL && link->node != NULL &&
+                 link->node->tag == OS64_HTML_TAG_IFRAME && link->href.url != NULL &&
+                 strcmp(link->href.url, "http://host/dir/ad.html") == 0 &&
+                 link->href.has_fragment && strcmp(link->href.fragment, "x") == 0);
+    state_expect("iframes: the node names its link",
+                 link != NULL && os64_page_link_for(page, link->node) == 1);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+// Every picture the page names, in tree order, resolved against the base;
+// alt kept as written, absent and empty told apart; an empty src listed
+// nowhere, because fetching the page itself as a picture is the bug.
+static void state_images(void)
+{
+    os64_html_document_t *doc = parse(
+        "<head><base href=\"http://pics/lib/\"></head><body>"
+        "<img src=\" cat.png \" alt=\"A cat\">"
+        "<img src=dog.gif alt=\"\">"
+        "<img src=\"\" alt=empty><img alt=none><img src=\"  \">"
+        "<form><input type=IMAGE src=\"/go.png\" name=go></form>"
+        "<input type=submit src=x.png>"
+        "<img src=\"http://[bad\">"
+        "<svg><img src=foreign.png></svg>"
+        "<template><img src=inert.png></template>"
+        "</body>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    state_expect("images: every img and image input that names a src",
+                 os64_page_nimages(page) == 5);
+    const os64_page_image_t *image = os64_page_image(page, 0);
+    state_expect("images: resolved against the base, space trimmed",
+                 image != NULL && image->src.url != NULL &&
+                 strcmp(image->src.url, "http://pics/lib/cat.png") == 0 &&
+                 image->alt != NULL && strcmp(image->alt, "A cat") == 0);
+    image = os64_page_image(page, 1);
+    state_expect("images: an empty alt is empty, not absent",
+                 image != NULL && image->alt != NULL && image->alt[0] == '\0');
+    image = os64_page_image(page, 2);
+    state_expect("images: an image button is a picture too",
+                 image != NULL && image->node != NULL &&
+                 image->node->tag == OS64_HTML_TAG_INPUT && image->alt == NULL &&
+                 image->src.url != NULL && strcmp(image->src.url, "http://pics/go.png") == 0 &&
+                 os64_page_control_for(page, image->node) >= 0);
+    image = os64_page_image(page, 3);
+    state_expect("images: an address that will not resolve is listed, refused",
+                 image != NULL && image->src.url == NULL &&
+                 image->src.refused != OS64_PAGE_REASON_OK);
+    image = os64_page_image(page, 4);
+    state_expect("images: HTML inside a foreign element still counts",
+                 image != NULL && image->src.url != NULL &&
+                 strcmp(image->src.url, "http://pics/lib/foreign.png") == 0);
+    for (int32_t i = 0; i < os64_page_nimages(page); i++) {
+        image = os64_page_image(page, i);
+        state_expect("images: every node names its image",
+                     image != NULL && os64_page_image_for(page, image->node) == i);
+    }
+    state_expect("images: out of range is NULL",
+                 os64_page_image(page, -1) == NULL && os64_page_image(page, 5) == NULL &&
+                 os64_page_image_for(page, NULL) < 0 && os64_page_image_for(NULL, NULL) < 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 // What a page writes in an href is percent-encoded part by part, as every
 // browser does: a path in UTF-8, a query in the document's encoding, a
 // fragment left for the matcher.
@@ -585,6 +660,8 @@ static void state_cases(void)
     state_scale();
     state_taken_away();
     state_frames();
+    state_iframes();
+    state_images();
     state_reference_bytes();
     state_group_reset();
     state_sanitizers();

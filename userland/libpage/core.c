@@ -658,6 +658,33 @@ static void add_link(os64_page_t *page, const os64_html_node_t *n, const char *a
     page->nlinks++;
 }
 
+static bool blank(const char *s)
+{
+    for (; *s != '\0'; s++)
+        if (!space(*s))
+            return false;
+    return true;
+}
+
+static void add_image(os64_page_t *page, const os64_html_node_t *n)
+{
+    const char *src = p_attr(n, "src");
+    if (src == NULL || blank(src))
+        return;
+    if (!p_grow((void **)&page->images, &page->imagecap, page->nimages, sizeof(*page->images))) {
+        page->incomplete = true;
+        return;
+    }
+    os64_page_image_t *image = &page->images[page->nimages];
+    os64_memset(image, 0, sizeof(*image));
+    image->node = n;
+    p_resolve(page, src, &image->src);
+    image->alt = p_attr(n, "alt");
+    if (!p_ptrmap_put(&page->image_map, n, page->nimages))
+        page->incomplete = true;
+    page->nimages++;
+}
+
 static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_element_t element,
                         bool fieldset_off)
 {
@@ -782,11 +809,18 @@ static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off)
         // A FRAME NAMES A DOCUMENT the way a link does, and a face that
         // cannot draw frames offers each one as somewhere to go. It is
         // resolved here for the reason every reference is: two resolvers
-        // disagree about a `<base>`. An `iframe` is left out: no face offers
-        // one as a destination, and an entry nothing follows is an entry
-        // nothing tests.
+        // disagree about a `<base>`. An `iframe` is offered the same way by
+        // a face that draws no document inside a document — but only one
+        // that names something: an iframe with an empty `src` is the blank
+        // page, and there is nowhere to go.
         if (p_is(n, OS64_HTML_TAG_FRAME) && p_has_attr(n, "src"))
             add_link(page, n, "src");
+        if (p_is(n, OS64_HTML_TAG_IFRAME) && p_has_attr(n, "src") &&
+            !blank(p_attr(n, "src")))
+            add_link(page, n, "src");
+        if (p_is(n, OS64_HTML_TAG_IMG) ||
+            (p_is(n, OS64_HTML_TAG_INPUT) && p_input_type(n) == OS64_PAGE_INPUT_IMAGE))
+            add_image(page, n);
         // A `meta` inside `noscript` counts, and that is the case that
         // matters: with scripting off those contents ARE the document's,
         // which is the whole reason the element exists.
@@ -963,6 +997,7 @@ void os64_page_free(os64_page_t *page)
     os64_free(page->links);
     os64_free(page->forms);
     os64_free(page->controls);
+    os64_free(page->images);
     os64_free(page->radio_next);
     os64_free(page->group_head);
     os64_free(page->group_next);
@@ -971,6 +1006,7 @@ void os64_page_free(os64_page_t *page)
     p_ptrmap_free(&page->form_map);
     p_ptrmap_free(&page->control_map);
     p_ptrmap_free(&page->edit_map);
+    p_ptrmap_free(&page->image_map);
     p_strmap_free(&page->id_map);
     p_strmap_free(&page->aname_map);
     p_strmap_free(&page->radio_map);
@@ -1044,6 +1080,23 @@ const os64_page_control_t *os64_page_control(const os64_page_t *page, int32_t i)
 int32_t os64_page_control_for(const os64_page_t *page, const os64_html_node_t *node)
 {
     return page != NULL ? p_ptrmap_get(&page->control_map, node) : -1;
+}
+
+int32_t os64_page_nimages(const os64_page_t *page)
+{
+    return page != NULL ? page->nimages : 0;
+}
+
+const os64_page_image_t *os64_page_image(const os64_page_t *page, int32_t i)
+{
+    if (page == NULL || i < 0 || i >= page->nimages)
+        return NULL;
+    return &page->images[i];
+}
+
+int32_t os64_page_image_for(const os64_page_t *page, const os64_html_node_t *node)
+{
+    return page != NULL ? p_ptrmap_get(&page->image_map, node) : -1;
 }
 
 const os64_html_node_t *os64_page_anchor(const os64_page_t *page, const char *decoded_fragment)

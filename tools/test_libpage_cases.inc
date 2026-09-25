@@ -1324,6 +1324,10 @@ static const char *const kSweepPages[] = {
     // where an allocation on that path fails.
     "<meta http-equiv=refresh content='0;url=/somewhere/else'>"
     "<noscript><meta http-equiv=refresh content='5'></noscript>",
+    // Pictures and iframes grow lists of their own, so an allocation on
+    // either path fails here too.
+    "<img src=a.png alt=A><img src='b c.gif'><iframe src=f.html></iframe>"
+    "<form><input type=image src=go.png name=go></form><img src='http://[bad'>",
 };
 
 // Everything the sweep does, once, so the first pass can count the

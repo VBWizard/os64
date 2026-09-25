@@ -95,12 +95,21 @@ carrying the `os64_html_node_t *` it came from so a face can find its own
 geometry for it. Faces render nodes; libpage never learns about rows,
 cells or pixels.
 
-- **Links**: every `a` and `area` with an `href`, and every `frame` with a
-  `src` (a face that cannot draw frames offers each as a destination),
+- **Links**: every `a` and `area` with an `href`, every `frame` with a
+  `src`, and every `iframe` whose `src` is not empty (a face that cannot
+  draw a document inside a document offers each as a destination; an
+  empty iframe `src` is the blank page, which is nowhere to go),
   resolved against the base;
   whether the reference asked for a fragment at all (the text cannot tell
   `href="#"` from `href=""`); whether it names THIS document (a move, not a
   fetch).
+- **Images**: every `img` and `input type=image` whose `src` is not empty,
+  with the `src` resolved against the base and the `alt` as written (NULL
+  when absent — `alt=""` says "decoration" and absence says nothing). An
+  empty `src` is not listed: the standard draws that image broken rather
+  than fetching the page it sits on as a picture. Where a picture comes
+  from is a fact about the page; how big it is stays on the node, for
+  whoever lays the page out (LAYOUT.md).
 - **Anchors**: every `id` and every old-style `<a name>`, the names a
   fragment is matched against, with the match made on the DECODED fragment
   (round 7: a heading with a space in its name).

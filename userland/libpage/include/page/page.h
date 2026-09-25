@@ -100,7 +100,7 @@ typedef struct {
 // ── The model ───────────────────────────────────────────────────────────
 
 typedef struct {
-    const os64_html_node_t *node;   // the `a`, `area` or `frame` it came from
+    const os64_html_node_t *node;   // the `a`, `area`, `frame` or `iframe` it came from
     os64_page_ref_t href;
     // It names THIS document, so following it is a MOVE and not a fetch —
     // compared without the fragment, which is the whole of a table of
@@ -233,6 +233,27 @@ typedef struct {
     int32_t noptions;
 } os64_page_control_t;
 
+// ── The pictures a page names ───────────────────────────────────────────
+//
+// WHERE A PICTURE COMES FROM IS A FACT ABOUT THE PAGE, NOT ABOUT PIXELS, so
+// it is resolved here for the reason every reference is: two resolvers
+// disagree about a `<base>`. How big it is and where it goes are geometry,
+// and belong to whoever lays the page out — its `width` and `height` stay
+// attributes on the node.
+//
+// Every `img` and every `input type=image` whose `src` names something. An
+// empty `src` (white space counts as empty) names nothing, and the standard
+// shows such an image as broken rather than fetching the page it sits on as
+// a picture — so it is not listed, and `os64_page_image_for` answers -1.
+typedef struct {
+    const os64_html_node_t *node;   // the `img` or `input type=image`
+    os64_page_ref_t src;            // resolved against the base; refused says why
+    // As written, or NULL when the page wrote none: an ABSENT alt and an
+    // EMPTY one differ, because `alt=""` says the picture is decoration and
+    // its absence says nothing at all.
+    const char *alt;
+} os64_page_image_t;
+
 // ── What the page asks for on its own ───────────────────────────────────
 //
 // A DECLARATIVE REFRESH is a navigation the DOCUMENT asks for, with nobody
@@ -321,6 +342,10 @@ int32_t os64_page_form_for(const os64_page_t *page, const os64_html_node_t *node
 int32_t os64_page_ncontrols(const os64_page_t *page);
 const os64_page_control_t *os64_page_control(const os64_page_t *page, int32_t i);
 int32_t os64_page_control_for(const os64_page_t *page, const os64_html_node_t *node);
+
+int32_t os64_page_nimages(const os64_page_t *page);
+const os64_page_image_t *os64_page_image(const os64_page_t *page, int32_t i);
+int32_t os64_page_image_for(const os64_page_t *page, const os64_html_node_t *node);
 
 // Decoded fragment lookup: IDs take precedence over legacy <a name> matches;
 // first in tree order wins within each group. NULL means absent or incomplete.
