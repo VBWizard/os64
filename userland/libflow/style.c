@@ -296,9 +296,14 @@ static flow_style_t initial(const Ctx *c)
     s.font_style = FLOW_FONT_NORMAL;
     s.font_size = (flow_unit_t)c->env->viewport_font_px * FLOW_UNITS_PER_PX;
     s.color = c->env->ink;
-    // Everything else starts at zero, which is each property's initial
-    // value: auto lengths, no borders, left, baseline, normal, disc
-    // outside, separate, top, no float.
+    // Margins and padding start at 0px — NOT at zero bytes, which is `auto`.
+    for (int i = 0; i < 4; i++) {
+        s.margin[i] = (flow_length_t){FLOW_LENGTH_PX, 0};
+        s.padding[i] = (flow_length_t){FLOW_LENGTH_PX, 0};
+    }
+    // Everything else starts at zero bytes, which is each property's
+    // initial value: auto width and height, no borders, left, baseline,
+    // normal, disc outside, separate, top, no float.
     return s;
 }
 
