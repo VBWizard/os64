@@ -1,0 +1,42 @@
+PASS rgb-False-0
+PASS rgb-False-1
+PASS rgb-False-2
+PASS rgb-True-0
+PASS rgb-True-1
+PASS rgb-True-2
+PASS L
+PASS CMYK
+PASS YCCK
+PASS orient-False-1
+PASS orient-False-2
+PASS orient-False-3
+PASS orient-False-4
+PASS orient-False-5
+PASS orient-False-6
+PASS orient-False-7
+PASS orient-False-8
+PASS orient-True-1
+PASS orient-True-2
+PASS orient-True-3
+PASS orient-True-4
+PASS orient-True-5
+PASS orient-True-6
+PASS orient-True-7
+PASS orient-True-8
+PASS bad-orientation
+PASS duplicate-orientation
+PASS bad-exif-offset
+PASS huge
+PASS precision12
+PASS lossless
+PASS arithmetic
+PASS JPEG reference pixels, every truncated prefix, allocation failures and cleanup
+libimage + libdraw copy/blend — host tests
+
+formats (the cross-check: four files, one picture)
+refusals (broken files, and files we simply do not decode)
+blit (clipping, pitch, and the guard rails)
+blend (straight alpha, rounding, clipping, pitch, guards)
+
+180 checks, 0 failures
+PASS

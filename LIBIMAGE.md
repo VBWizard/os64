@@ -99,11 +99,10 @@ to supply `0xff` until support for a variant with an actual alpha mask arrives.
 The decoder produces pixels, not a surface: pitch, clipping, blending,
 placement, damage, and publication remain libdraw concerns.
 
-`os64_draw_blit` remains an opaque copy. Gview skips fully transparent runs
-to show its mat, handling GIF binary alpha, but does not blend fractional-alpha
-PNG pixels. The browser needs the distinct source-over operation already recorded in
-DEBTS; silently changing ordinary blit would break callers that require an
-exact background copy.
+`os64_draw_blit` remains an opaque copy. Gview uses the separate
+`os64_draw_blend` operation for straight-alpha image pixels over its mat,
+including fractional-alpha PNGs and binary-alpha GIFs. The same operation is
+available to browser and icon consumers; see [SOURCE_OVER.md](SOURCE_OVER.md).
 
 The common status vocabulary must continue to distinguish:
 

@@ -1,15 +1,6 @@
-// gview(1) — look at a picture.
-//
-// The first program os64 has ever had that opens an image file and shows it
-// to you. It exists as much to PROVE the image codecs and os64_draw_blit
-// against real files as to be useful: the desktop shell and the launcher will
-// both stand on this pair, and neither is a good place to discover that a BMP
-// decodes upside down or a PNG lost its alpha.
-//
-// It is deliberately a direct libdraw app rather than a libui one. There is
-// no furniture here — no labels, no panels, nothing to lay out — just a
-// picture centered on a background, so the retained-mode widget machinery
-// would be ceremony around a single blit.
+// gview(1) — view still images and animated sequences.
+// Libimage owns decoding and frame composition. This direct libdraw app
+// centers the resulting pixels and blends them over a neutral background.
 //
 // Still pictures and paused/finished sequences block for events. Animated
 // pictures use the bound frame clock, which sleeps while the window is hidden.
@@ -49,31 +40,13 @@ static void repaint(os64_draw_ctx_t *ctx, const os64_image_frame_t *img)
                                  (int32_t)ctx->surf.height};
     os64_draw_fill_rect(&ctx->surf, all, GVIEW_BACKGROUND);
 
-    // Center, and let the blit clip. An image larger than the window ends up
-    // with a negative origin, which crops it around its middle rather than
-    // drawing it shifted — that behaviour is the blit's contract, not luck.
+    // Center before clipping so an oversized image is cropped around its middle.
     int32_t x = ((int32_t)ctx->surf.width  - (int32_t)img->width)  / 2;
     int32_t y = ((int32_t)ctx->surf.height - (int32_t)img->height) / 2;
-    // GIF canvases have binary alpha. Leave transparent runs as the mat
-    // and copy painted runs. Fractional-alpha PNG compositing remains the
-    // separate source-over drawing feature; ordinary blit stays a copy.
-    uint32_t first_col = x < 0 ? (uint32_t)-x : 0;
-    uint32_t last_col = img->width;
-    if ((int64_t)x + last_col > ctx->surf.width)
-        last_col = (uint32_t)((int64_t)ctx->surf.width - x);
-    for (uint32_t row = 0; row < img->height; row++) {
-        if ((int64_t)y + row < 0 || (int64_t)y + row >= ctx->surf.height) continue;
-        const uint32_t *pixels = img->pixels + (size_t)row * img->width;
-        uint32_t col = first_col;
-        while (col < last_col) {
-            while (col < last_col && (pixels[col] >> 24) == 0) col++;
-            uint32_t start = col;
-            while (col < last_col && (pixels[col] >> 24) != 0) col++;
-            if (col > start)
-                os64_draw_blit(&ctx->surf, x + (int32_t)start, y + (int32_t)row,
-                               pixels + start, col - start, 1, col - start);
-        }
-    }
+    // Image pixels carry straight alpha. The shared operation handles PNG
+    // soft edges and GIF transparency, with a copy path for opaque runs.
+    os64_draw_blend(&ctx->surf, x, y, img->pixels,
+                    img->width, img->height, img->width);
 
     os64_draw_publish(ctx, NULL);
 }
