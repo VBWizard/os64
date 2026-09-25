@@ -910,6 +910,7 @@ FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
     FBoxes *out = os64_calloc(1, sizeof(*out));
     if (out == NULL)
         return NULL;
+    out->styles = styles;
     B b = {doc, model, styles, env, out, false};
     const os64_html_node_t *html = doc->html;
     const FStyled *root = html != NULL ? styled(&b, html) : NULL;

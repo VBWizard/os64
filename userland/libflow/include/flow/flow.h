@@ -233,6 +233,27 @@ typedef struct {
     uint32_t ink, link_ink, paper;  // XRGB; the dumps name these, never print them
 } flow_env_t;
 
+// ── The door ────────────────────────────────────────────────────────────
+
+typedef struct flow_tree flow_tree_t;
+
+// Styles, boxes and lays out the page at `width` CSS pixels. NULL on no
+// memory only; otherwise a tree whose `incomplete` says whether it is
+// whole. Every call is a whole rebuild (LAYOUT.md, ruling 2).
+flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *model,
+                         int32_t width, const flow_env_t *env);
+void flow_free(flow_tree_t *tree);
+
+// The page's size in whole pixels: its height, and its width — at least
+// the width laid out at, more where a word or a table would not fit.
+int32_t flow_height(const flow_tree_t *tree);
+int32_t flow_width(const flow_tree_t *tree);
+bool flow_incomplete(const flow_tree_t *tree);
+
+// The laid-out tree as text, for the harness and a probe in the guest.
+// Like snprintf: answers the length the whole dump needs, writes what fits.
+int64_t flow_dump(const flow_tree_t *tree, char *out, size_t cap);
+
 #pragma GCC visibility pop
 
 #endif

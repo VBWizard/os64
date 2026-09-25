@@ -134,6 +134,8 @@ typedef enum {
 } f_item_kind_t;
 
 typedef struct FBox FBox;
+typedef struct FLine FLine;
+typedef struct FFrag FFrag;
 
 // One record per inline element, shared by every piece a block splits it
 // into, so a face paints a split `<a>` as one link.
@@ -185,15 +187,64 @@ struct FBox {
     // `a`, which has no inline edge left to carry it), or -1. A box deeper
     // down is found by walking up to one that says.
     int32_t link;
+
+    // ── Pass 3's geometry, in 26.6 document coordinates (x from the page's
+    // left edge, y from its top). 64-bit, because a long page is taller
+    // than 26.6 can count in 32 bits.
+    bool placed;                    // false: layout stopped before this box
+    int64_t x, y, w, h;             // the border box
+    int64_t border[4], padding[4];  // used widths, top right bottom left
+    FLine *lines, *last_line;       // an inline formatting context's lines
+    FFrag *marker_frag;             // an outside marker, placed
 };
 
 typedef struct {
     FArena arena;
+    const FStyles *styles;          // what the boxes' styles came from
     FBox *root;
     // Memory ran out partway: every box and item present is real, and the
     // build stopped at the first thing it could not make.
     bool incomplete;
 } FBoxes;
+
+// ── Pass 3: lines and fragments (layout.c) ──────────────────────────────
+
+typedef enum { FF_TEXT = 0, FF_ATOMIC, FF_MARKER } f_frag_kind_t;
+
+// What one line holds: a text fragment is one run of the text engine; an
+// atomic fragment is a replaced box or an inline-block; a marker fragment
+// is a list marker's text.
+struct FFrag {
+    FFrag *next;
+    f_frag_kind_t kind;
+    const FItem *item;              // TEXT, ATOMIC; a MARKER drawn inside
+    const os64_html_node_t *node;
+    const flow_style_t *style;
+    os64_text_run_t *run;           // TEXT, MARKER: owned, released with the tree
+    const char *text;               // TEXT, MARKER: the bytes the run was laid out from
+    uint32_t begin, end;            // TEXT: the byte range in the item's text
+    int64_t x, y, w, h;             // TEXT, MARKER: the content area; ATOMIC: the border box
+    int64_t baseline;               // absolute
+    uint8_t decoration;             // FLOW_DECORATION_* drawn across it
+    uint32_t decoration_color;
+    int32_t link;                   // the link it sits in, or -1
+};
+
+// One inline box's piece on one line: what a link's underline or a
+// background is drawn behind.
+typedef struct FSpan FSpan;
+struct FSpan {
+    FSpan *next;
+    const FInline *inl;
+    int64_t x0, x1, top, bottom;
+};
+
+struct FLine {
+    FLine *next;
+    int64_t x, y, w, h, baseline;   // w: the content width it was broken to
+    FFrag *frags, *last_frag;
+    FSpan *spans, *last_span;
+};
 
 // NULL only when there is not memory for the tree itself.
 FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
@@ -202,5 +253,27 @@ void f_boxes_free(FBoxes *boxes);
 // One line per box and per item, indented by depth; the same contract as
 // f_style_dump.
 int64_t f_boxes_dump(const FBoxes *boxes, char *out, size_t cap);
+
+typedef struct {
+    const flow_env_t *env;
+    os64_html_quirks_t quirks;
+    const os64_page_t *model;
+    FBoxes *boxes;
+    FArena arena;                   // lines, fragments, spans
+    // Every run a fragment holds, so freeing the tree releases each once.
+    os64_text_run_t **runs;
+    size_t nruns, cap_runs;
+    int64_t width, height;          // the page's, 26.6
+    // The text engine or the allocator refused partway: what is placed is
+    // real, and nothing after the refusal is.
+    bool incomplete;
+} FLayout;
+
+// Lays the box tree out at `width` CSS pixels. NULL only when there is not
+// memory for the layout record.
+FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
+                  const flow_env_t *env, int32_t width);
+void f_layout_free(FLayout *layout);
+int64_t f_layout_dump(const FLayout *layout, char *out, size_t cap);
 
 #endif

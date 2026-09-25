@@ -16,6 +16,8 @@
 #include "page/page.h"
 #include "flow/flow.h"
 #include "internal.h"
+#include "os64/text.h"
+#include "test_libflow_fonts.h"
 
 // libos64's formatter reaches for the write syscall on paths nothing here
 // prints through; answering "all of it went out" keeps the link honest.
@@ -81,15 +83,109 @@ static void expect(const char *name, bool ok, const char *detail)
     }
 }
 
+// ── Fonts: the resolver a face would hand in, over the test backend ──────
+
+static os64_text_context_t *s_text;
+
+static void *text_alloc_cb(void *ctx, size_t n)
+{
+    (void)ctx;
+    return malloc(n);
+}
+
+static void text_free_cb(void *ctx, void *p, size_t n)
+{
+    (void)ctx;
+    (void)n;
+    free(p);
+}
+
+// One font per (generic, size), opened once and kept for the run.
+static struct {
+    char kind;
+    uint32_t px;
+    os64_text_font_t *font;
+} s_fonts[128];
+static int s_nfonts;
+
+static os64_font_status_t test_fonts(void *ctx, const flow_family_list_t *families, bool bold,
+                                     bool italic, uint32_t px, os64_text_font_t *const **list,
+                                     size_t *count, os64_font_face_info_t *primary)
+{
+    (void)ctx;
+    (void)bold;
+    (void)italic;
+    char kind = families->generic == FLOW_GENERIC_MONO ? 'M'
+              : families->generic == FLOW_GENERIC_SANS ? 'A' : 'S';
+    int i = 0;
+    while (i < s_nfonts && !(s_fonts[i].kind == kind && s_fonts[i].px == px))
+        i++;
+    if (i == s_nfonts) {
+        if (s_nfonts == (int)(sizeof(s_fonts) / sizeof(s_fonts[0])))
+            return OS64_FONT_LIMIT;
+        os64_font_face_options_t o = {.pixel_height = px, .hint = OS64_FONT_HINT_NONE};
+        os64_font_status_t st = os64_text_font_open(s_text, (const uint8_t *)&kind, 1, &o,
+                                                    &s_fonts[i].font);
+        if (st != OS64_FONT_OK)
+            return st;
+        s_fonts[i].kind = kind;
+        s_fonts[i].px = px;
+        s_nfonts++;
+    }
+    *list = &s_fonts[i].font;
+    *count = 1;
+    memset(primary, 0, sizeof(*primary));
+    primary->ascent = (int32_t)px * 48;
+    primary->descent = (int32_t)px * 16;
+    primary->line_height = (int32_t)px * 80;
+    return OS64_FONT_OK;
+}
+
+// The face's measure of a picture: one whose src says "known" is 40x30;
+// everything else has not arrived.
+static bool test_oracle(void *ctx, const os64_html_node_t *node, int32_t *w, int32_t *h)
+{
+    (void)ctx;
+    const os64_html_attr_t *src = os64_html_attr(node, "src");
+    if (src == NULL || src->value == NULL || strstr(src->value, "known") == NULL)
+        return false;
+    *w = 40;
+    *h = 30;
+    return true;
+}
+
 // The theme a face would hand in, in colours no page case uses, so the
 // dump's `ink`, `link` and `paper` can only mean the environment's.
-static const flow_env_t kEnv = {
+static flow_env_t kEnv = {
+    .fonts = test_fonts,
+    .replaced_size = test_oracle,
     .viewport_font_px = 16,
     .default_generic = FLOW_GENERIC_SERIF,
     .ink = 0x101010,
     .link_ink = 0x1010ee,
     .paper = 0xfefefe,
 };
+
+static void text_setup(void)
+{
+    os64_text_options_t o = {
+        .memory = {NULL, text_alloc_cb, text_free_cb},
+        .backend = flow_test_backend(),
+    };
+    if (os64_text_create(&o, &s_text) != OS64_FONT_OK) {
+        fprintf(stderr, "no text context\n");
+        exit(2);
+    }
+    kEnv.text = s_text;
+}
+
+static void text_teardown(void)
+{
+    for (int i = 0; i < s_nfonts; i++)
+        os64_text_font_release(s_fonts[i].font);
+    if (os64_text_destroy(s_text) != OS64_FONT_OK)
+        expect("text context: every run released", false, NULL);
+}
 
 static const char *kPage = "http://host/dir/page.html";
 
@@ -134,6 +230,7 @@ static void style_case(const char *name, const char *html, const char *expected)
 #include "test_libflow_attrs.inc"
 #include "test_libflow_style.inc"
 #include "test_libflow_boxes.inc"
+#include "test_libflow_layout.inc"
 
 // ── The corpus, and the allocation sweep ────────────────────────────────
 
@@ -197,8 +294,23 @@ static void corpus(void)
                 else if (*q != '\0')
                     items++;
             }
-        printf("corpus %-22s %5zu styled elements, %5zu boxes, %5zu items\n", kCorpus[i],
-               lines, boxes + 1, items);
+        int32_t widths[2] = {800, 400};
+        size_t heights[2] = {0, 0};
+        for (int w = 0; w < 2; w++) {
+            char *l1 = layout_dump_of(html, widths[w]);
+            char *l2 = layout_dump_of(html, widths[w]);
+            expect(path, l1 != NULL && l2 != NULL && strcmp(l1, l2) == 0,
+                   "layout not deterministic");
+            expect(path, l1 != NULL && strstr(l1, "incomplete") == NULL, "layout incomplete");
+            long pw = 0, ph = 0;
+            if (l1 != NULL)
+                sscanf(l1, "page %ld %ld", &pw, &ph);
+            heights[w] = (size_t)ph;
+            free(l1);
+            free(l2);
+        }
+        printf("corpus %-22s %5zu styled, %5zu boxes, %5zu items, %6zupx tall at 800, %6zupx at 400\n",
+               kCorpus[i], lines, boxes + 1, items, heights[0], heights[1]);
         free(x);
         free(y);
         free(a);
@@ -252,26 +364,83 @@ static void allocation_sweep(void)
     free(html);
 }
 
+// Every allocation of a whole layout fails in turn: NULL, or a tree that
+// says it is incomplete, or the whole one — never a crash, never a leak.
+static void layout_sweep(void)
+{
+    const char *html =
+        "<!doctype html><h1>T</h1><p>one <b>two</b> three<br>four <img src=known.png>"
+        "<ul><li>a<li>b</ul><pre>x\ty</pre><font face=arial><p>in</p>out</font>";
+    os64_html_document_t *doc = parse(html);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    size_t base_live = live;
+    allocations = 0;
+    flow_tree_t *probe = flow_layout(doc, page, 300, &kEnv);
+    size_t count = allocations;
+    flow_free(probe);
+    size_t tried = 0, nulls = 0, partial = 0;
+    for (size_t at = 1; at <= count; at++) {
+        allocations = 0;
+        fail_at = at;
+        flow_tree_t *t = flow_layout(doc, page, 300, &kEnv);
+        fail_at = 0;
+        tried++;
+        if (t == NULL)
+            nulls++;
+        else if (flow_incomplete(t))
+            partial++;
+        else
+            expect("layout sweep: a failure is visible", false, NULL);
+        flow_free(t);
+        if (live != base_live) {
+            expect("layout sweep: nothing leaked", false, NULL);
+            break;
+        }
+    }
+    printf("libflow layout sweep: %zu allocations failed in turn: %zu NULL, %zu incomplete, "
+           "nothing leaked\n", tried, nulls, partial);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 int main(int argc, char **argv)
 {
     // `--styles FILE` / `--boxes FILE`: print one page's dump, for reading.
+    // `--layout FILE WIDTH`: the laid-out page.
+    if (argc == 4 && strcmp(argv[1], "--layout") == 0) {
+        size_t len = 0;
+        char *html = slurp(argv[2], &len);
+        if (html == NULL)
+            return 2;
+        text_setup();
+        char *text = layout_dump_of(html, atoi(argv[3]));
+        fputs(text != NULL ? text : "(null)\n", stdout);
+        free(text);
+        free(html);
+        return 0;
+    }
     if (argc == 3 && (strcmp(argv[1], "--styles") == 0 || strcmp(argv[1], "--boxes") == 0)) {
         size_t len = 0;
         char *html = slurp(argv[2], &len);
         if (html == NULL)
             return 2;
+        text_setup();
         char *text = argv[1][2] == 's' ? style_dump_of(html) : boxes_dump_of(html);
         fputs(text != NULL ? text : "(null)\n", stdout);
         free(text);
         free(html);
         return 0;
     }
+    text_setup();
     attrs_cases();
     style_cases();
     boxes_cases();
+    layout_cases();
     corpus();
     allocation_sweep();
     boxes_sweep();
+    layout_sweep();
+    text_teardown();
     printf("libflow: %d checks, %d failed%s\n", checks, failures,
            live != 0 ? " (AND LEAKED)" : "");
     return failures != 0 || live != 0 ? 1 : 0;

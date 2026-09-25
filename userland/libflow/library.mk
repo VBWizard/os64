@@ -3,7 +3,8 @@
 # libpage (whether a node is a link or a control), libhtml (the tree it
 # walks) and libos64 (strings, the formatter, the text engine); none of
 # those knows a box exists.
-LIBFLOW_SRCS := libflow/store.c libflow/attrs.c libflow/style.c libflow/boxes.c libflow/dump.c
+LIBFLOW_SRCS := libflow/store.c libflow/attrs.c libflow/style.c libflow/boxes.c libflow/layout.c \
+                libflow/flow.c libflow/dump.c
 LIBFLOW_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBFLOW_SRCS))
 LIBFLOW_SO := $(BIN)/libflow.so
 # -O2, libhtml's and libpage's reasoning: a page is walked once per layout
