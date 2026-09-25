@@ -6,6 +6,7 @@
 #include "model.h"
 #include "storage.h"
 #include "os64/decoration_startup.h"
+#include <stdarg.h>
 
 static os64_draw_ctx_t ctx;
 static os64_ui_t ui;
@@ -61,6 +62,17 @@ static char captions[BUTTON_COUNT][128];
 static int row=30,left_width=420;
 static void sync_controls(void);
 static void arrange(bool staged,int r,int left);
+static void log_message(const char *fmt,...) OS64_PRINTF(1,2);
+static void log_message(const char *fmt,...)
+{
+    char line[1024];
+    va_list args;va_start(args,fmt);
+    os64_vsnprintf(line,sizeof(line),fmt,args);va_end(args);
+    /* The system log supplies its own line ending. */
+    size_t n=os64_strlen(line);
+    if(n && line[n-1]=='\n')line[n-1]=0;
+    os64_debug_log(line);
+}
 static void report(const char *text)
 {
     os64_strcopy(status,sizeof(status),text);
@@ -299,7 +311,7 @@ static void save_draft(bool replace)
     baseline=draft;baseline_revision=font_revision;saved_baseline=true;baseline_deleted=false;
     os64_strcopy(baseline_name,sizeof(baseline_name),saved_name);
     refresh_saved();sync_controls();report("Saved. Apply separately to change the session.");
-    os64_printf("framestudio: Save OK name=%s bytes=%lu generation=%lu\n",saved_name,(unsigned long)bundle_length,generation);
+    log_message("framestudio: Save OK name=%s bytes=%lu generation=%lu\n",saved_name,(unsigned long)bundle_length,generation);
 }
 static void load_selected(void)
 {
@@ -313,7 +325,7 @@ static void load_selected(void)
     (void)os64_decor_validate(bundle,bundle_length,&view);
     os64_ui_textfield_set(&ui,&name_field,pending_name);reset_samples();refresh_fonts();sync_controls();
     report(pending_entry.included?"Included composition. Save makes a personal copy.":"Loaded into preview. Apply when ready.");
-    os64_printf("framestudio: Load OK name=%s bytes=%lu generation=%lu\n",pending_name,(unsigned long)bundle_length,generation);
+    log_message("framestudio: Load OK name=%s bytes=%lu generation=%lu\n",pending_name,(unsigned long)bundle_length,generation);
 }
 static void delete_selected(void)
 {
@@ -325,7 +337,7 @@ static void delete_selected(void)
     }
     report(baseline_deleted?"Deleted. Draft kept; save to keep a copy.":"Deleted. Draft and startup choice kept.");
     refresh_saved();sync_controls();
-    os64_printf("framestudio: Delete OK name=%s dirty=%u generation=%lu\n",pending_name,dirty(),generation);
+    log_message("framestudio: Delete OK name=%s dirty=%u generation=%lu\n",pending_name,dirty(),generation);
 }
 static void clicked(os64_ui_widget_t *w,void *u)
 {
@@ -340,7 +352,9 @@ static void clicked(os64_ui_widget_t *w,void *u)
         int result=os64_decor_startup_save(defaults?NULL:bundle,defaults?0:bundle_length);
         report(result?"Startup save failed. Previous choice kept.":defaults?
             "Default on next boot. Session unchanged.":"Chosen for next boot. Session unchanged.");
-        os64_printf("framestudio: startup %s result=%d generation=%lu\n",
+        if(result)os64_complain("framestudio: startup %s failed result=%d generation=%lu\n",
+            defaults?"default":"decoration",result,generation);
+        else log_message("framestudio: startup %s result=%d generation=%lu\n",
             defaults?"default":"decoration",result,generation);
         return;
     }
@@ -356,7 +370,7 @@ static void clicked(os64_ui_widget_t *w,void *u)
         if(os64_decor_apply(bundle,bundle_length,generation)==0){
             ++generation;applied=draft;applied_revision=font_revision;applied_once=true;
             report("Applied to this session. Keep experimenting.");
-            os64_printf("framestudio: Apply OK generation=%lu font=%u buttons=%u finish=%u\n",generation,draft.font.size,draft.style.button_count,draft.style.finish);
+            log_message("framestudio: Apply OK generation=%lu font=%u buttons=%u finish=%u\n",generation,draft.font.size,draft.style.button_count,draft.style.finish);
         }else{uint64_t actual=generation;
             if(os64_decor_generation(&actual)==0 && actual!=generation){generation=actual;report("Session changed. Review draft; Apply to replace.");}
             else report("Apply refused: window size or resource limit.");
@@ -784,8 +798,8 @@ int main(int argc,char **argv)
     (void)os64_decor_validate(bundle,bundle_length,&view);
     refresh_fonts();sync_controls();
     report(active_loaded?"Active composition loaded. Ready to edit.":ui.font_settings_result?"Interface font refused; editor kept its fallback.":"Midnight Enamel / pin left. Preview until Apply.");
-    if(active_loaded)os64_printf("framestudio: active match name=%s generation=%lu\n",baseline_name,generation);
-    os64_printf("framestudio: ready content=%ux%u title=%u buttons=%u generation=%lu\n",ctx.surf.width,ctx.surf.height,draft.font.size,draft.style.button_count,generation);
+    if(active_loaded)log_message("framestudio: active match name=%s generation=%lu\n",baseline_name,generation);
+    log_message("framestudio: ready content=%ux%u title=%u buttons=%u generation=%lu\n",ctx.surf.width,ctx.surf.height,draft.font.size,draft.style.button_count,generation);
     os64_ui_paint(&ui);
     while(!ui.quit){os64_gui_event_t event;if(os64_gui_event_wait(win,&event)!=1)break;
         do{
@@ -801,6 +815,6 @@ int main(int argc,char **argv)
         }while(os64_gui_event_poll(win,&event)==1);
         os64_ui_paint(&ui);
     }
-    os64_printf("framestudio: closed\n");
+    log_message("framestudio: closed\n");
     clear_history();os64_font_catalog_release(catalog);os64_free(bundle);os64_ui_font_release(&ui);os64_gui_window_destroy(win);return 0;
 }

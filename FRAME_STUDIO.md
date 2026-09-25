@@ -11,6 +11,11 @@ button-symbol colors are implemented; their contract is in
 remain later work. The broader design below is not a claim that those stages
 are implemented.
 
+Routine lifecycle and successful Save/Load/Delete/Apply/startup messages go
+through `os64_debug_log` to the system log, without writing to the launching
+console. Errors reported through `os64_complain` remain on stderr and in the
+system log; editor status messages remain visible in the window.
+
 ## Review and publication
 
 The feature is split into a review stack: `codex/shared-text-profile` contains
