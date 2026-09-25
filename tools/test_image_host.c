@@ -594,12 +594,64 @@ static void test_blit(void)
     eq_u32(dst_at(0, 0), 0xff111111u, "blit: zero size and NULL source are no-ops");
 }
 
+// A tiny hand-authored GIF: red, green / green, red. The LZW stream is
+// Clear, 0, 1, Clear, 1, 0, EOI, packed in three-bit codes.
+static void test_gif(void)
+{
+    const uint8_t base[] = {
+        'G','I','F','8','9','a', 2,0,2,0, 0x80,0,0,
+        255,0,0, 0,255,0,
+        0x2c,0,0,0,0,2,0,2,0,0, 2,3,0x44,0x18,0x14,0,0x3b
+    };
+    os64_image_t img;
+    eq_status(os64_image_decode(base, sizeof base, &img), OS64_IMAGE_OK,
+              "GIF global palette decodes");
+    if (img.pixels) {
+        eq_u32(img.pixels[0], 0xffff0000, "GIF first pixel");
+        eq_u32(img.pixels[1], 0xff00ff00, "GIF second pixel");
+        eq_u32(img.pixels[2], 0xff00ff00, "GIF second row");
+        eq_u32(img.pixels[3], 0xffff0000, "GIF fourth pixel");
+    }
+    os64_image_free(&img);
+    uint8_t b[sizeof base];
+    memcpy(b, base, sizeof b);
+    b[4] = '7';
+    eq_status(os64_image_decode(b, sizeof b, &img), OS64_IMAGE_OK, "GIF87a");
+    os64_image_free(&img);
+    for (size_t n = 6; n < sizeof base; n++) {
+        g_alloc_largest = 0;
+        eq_status(os64_image_decode(base, n, &img), OS64_IMAGE_MALFORMED,
+                  "GIF truncated prefix");
+        ok(g_alloc_largest == 0, "GIF missing trailer refuses before allocation");
+        ok(img.pixels == NULL && img.width == 0 && img.height == 0,
+           "GIF refusal owns nothing");
+    }
+    memcpy(b, base, sizeof b);
+    b[6] = b[7] = 0xff;
+    g_alloc_largest = 0;
+    eq_status(os64_image_decode(b, sizeof b, &img), OS64_IMAGE_LIMIT,
+              "GIF huge header refuses");
+    ok(g_alloc_largest == 0, "GIF dimension limit allocates nothing");
+    memcpy(b, base, sizeof b);
+    b[6] = b[8] = 1; b[7] = b[9] = 0x10;
+    g_alloc_largest = 0;
+    eq_status(os64_image_decode(b, sizeof b, &img), OS64_IMAGE_LIMIT,
+              "GIF pixel budget refuses");
+    ok(g_alloc_largest == 0, "GIF pixel limit allocates nothing");
+    memcpy(b, base, sizeof b);
+    b[32] = 0x10; // Clears the EOI code, retaining the expected pixels.
+    eq_status(os64_image_decode(b, sizeof b, &img), OS64_IMAGE_MALFORMED,
+              "GIF exact pixels still need EOI");
+    ok(img.pixels == NULL, "GIF LZW failure publishes nothing");
+}
+
 int main(void)
 {
     printf("libimage + libdraw blit — host tests\n\n");
     test_formats();
     test_refusals();
     test_blit();
+    test_gif();
     printf("\n%d checks, %d failures\n", checks, failures);
     if (failures == 0)
         printf("PASS\n");

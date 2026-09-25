@@ -1,10 +1,11 @@
-// BMP/PPM decoding and format dispatch; PNG and JPEG own their format parsing.
+// BMP/PPM decoding and format dispatch; GIF, PNG and JPEG have separate parsers.
 #include "os64/os64.h"
 #include "image/image.h"
 #include "os64/slurp.h"
 #include "os64/mem.h"
 #include "png/png.h"
 #include "jpeg/jpeg.h"
+#include "gif.h"
 
 const char *os64_image_status_name(os64_image_status_t status)
 {
@@ -391,6 +392,10 @@ os64_image_status_t os64_image_decode(const uint8_t *data, size_t len,
         if (status == OS64_JPEG_NO_MEMORY) return OS64_IMAGE_NO_MEMORY;
         return OS64_IMAGE_MALFORMED;
     }
+
+    if (len >= 6 && data[0] == 'G' && data[1] == 'I' && data[2] == 'F' &&
+        data[3] == '8' && (data[4] == '7' || data[4] == '9') && data[5] == 'a')
+        return image_decode_gif(data, len, out);
 
     // Detect by file signature, regardless of filename.
     if (data[0] == 'P' && data[1] == '6')

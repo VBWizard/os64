@@ -1,0 +1,2 @@
+6ec677a513805505d94dbf05643c25e709cc8bb0a40addc8c3cf1e40132b0bcf  userland/bin/libimage.so
+fa537d2b9dc802519f829b9f35933b6281f8d51d27b9f8f8e0affb6d80133553  userland/bin/tests/giftest
