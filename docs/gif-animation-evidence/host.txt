@@ -1,0 +1,31 @@
+PASS /tmp/os64-gif-sequence/disposal-0-loop-None.gif: 3 frames, 1 plays, owned 19885 bytes (mutation peak 118189)
+PASS /tmp/os64-gif-sequence/disposal-0-loop-0.gif: 3 frames, 0 plays, owned 19904 bytes (mutation peak 20416)
+PASS /tmp/os64-gif-sequence/disposal-0-loop-1.gif: 3 frames, 2 plays, owned 19904 bytes (mutation peak 20416)
+PASS /tmp/os64-gif-sequence/disposal-0-loop-2.gif: 3 frames, 3 plays, owned 19904 bytes (mutation peak 20416)
+PASS /tmp/os64-gif-sequence/disposal-1-loop-None.gif: 3 frames, 1 plays, owned 19885 bytes (mutation peak 118189)
+PASS /tmp/os64-gif-sequence/disposal-1-loop-0.gif: 3 frames, 0 plays, owned 19904 bytes (mutation peak 20416)
+PASS /tmp/os64-gif-sequence/disposal-1-loop-1.gif: 3 frames, 2 plays, owned 19904 bytes (mutation peak 20416)
+PASS /tmp/os64-gif-sequence/disposal-1-loop-2.gif: 3 frames, 3 plays, owned 19904 bytes (mutation peak 20416)
+PASS /tmp/os64-gif-sequence/disposal-2-loop-None.gif: 3 frames, 1 plays, owned 19885 bytes (mutation peak 118189)
+PASS /tmp/os64-gif-sequence/disposal-2-loop-0.gif: 3 frames, 0 plays, owned 19904 bytes (mutation peak 20416)
+PASS /tmp/os64-gif-sequence/disposal-2-loop-1.gif: 3 frames, 2 plays, owned 19904 bytes (mutation peak 20416)
+PASS /tmp/os64-gif-sequence/disposal-2-loop-2.gif: 3 frames, 3 plays, owned 19904 bytes (mutation peak 20416)
+PASS /tmp/os64-gif-sequence/disposal-3-loop-None.gif: 3 frames, 1 plays, owned 19933 bytes (mutation peak 118237)
+PASS /tmp/os64-gif-sequence/disposal-3-loop-0.gif: 3 frames, 0 plays, owned 19952 bytes (mutation peak 20464)
+PASS /tmp/os64-gif-sequence/disposal-3-loop-1.gif: 3 frames, 2 plays, owned 19952 bytes (mutation peak 20464)
+PASS /tmp/os64-gif-sequence/disposal-3-loop-2.gif: 3 frames, 3 plays, owned 19952 bytes (mutation peak 20464)
+PASS /tmp/os64-gif-sequence/restore-chain.gif: 4 frames, 0 plays, owned 21065 bytes (mutation peak 62025)
+PASS /tmp/os64-gif-sequence/transparent-loop-reset.gif: 2 frames, 0 plays, owned 18804 bytes (mutation peak 51572)
+PASS /tmp/os64-gif-sequence/singleton.gif: 1 frames, 0 plays, owned 17629 bytes (mutation peak 34013)
+PASS /tmp/os64-gif-sequence/local-palette-change.gif: 2 frames, 2 plays, owned 18784 bytes (mutation peak 117088)
+PASS /tmp/os64-gif-sequence/later-corruption.gif: 2 frames, 0 plays, owned 18761 bytes (mutation peak 51529)
+PASS refusal bad-gce
+PASS refusal plain-text
+PASS refusal loop-duplicate
+PASS refusal loop-bad-size
+PASS refusal too-many-frames
+PASS refusal working-memory-cap
+PASS refusal encoded-cap
+PASS /tmp/os64-gif-sequence/ppm.gif: 1 frames, 1 plays, owned 96 bytes (mutation peak 96)
+PASS /tmp/os64-gif-sequence/os64-hayabusa2.gif: 416 frames, 0 plays, owned 9786191 bytes (mutation peak 9786191)
+PASS sequence frames, delays, loops, disposal, rollback, allocation failures, ownership and budgets

@@ -19,6 +19,7 @@ const char *os64_image_status_name(os64_image_status_t status)
         case OS64_IMAGE_MALFORMED:      return "malformed image";
         case OS64_IMAGE_UNSUPPORTED:    return "unsupported variant";
         case OS64_IMAGE_LIMIT:          return "image resource limit";
+        case OS64_IMAGE_END:            return "end of image sequence";
     }
     return "unknown";
 }

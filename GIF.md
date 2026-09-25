@@ -3,8 +3,10 @@
 `os64_image_decode` recognizes `GIF87a` and `GIF89a` and returns the first
 image raster on a logical-screen-sized ARGB canvas. `os64_image_load` supplies
 file I/O; `os64_image_free` releases the pixels. The decoder lives in
-`userland/libimage/gif.c`, built into `libimage.so`; it adds no public symbols,
-shared library, kernel code, or libos64 dependency on an image codec.
+`userland/libimage/gif.c`, built into `libimage.so`. First-picture decoding
+uses the ordinary image API; animation adds the sequence API described in
+[GIF_ANIMATION.md](GIF_ANIMATION.md). Neither requires a separate shared
+library, kernel code, or libos64 dependency on an image codec.
 
 ## Pixel and stream contract
 
@@ -95,11 +97,11 @@ Build and runtime results are recorded in
 ## Integration and follow-up
 
 The `*.gif` rule in `etc/os64get.conf` routes valet downloads to `/home/images`.
-`gview` uses libimage's format detection without a GIF-specific path.
-Its existing opaque blit copies alpha; displaying transparent GIFs over the
-viewer's mat still needs the separate source-over drawing work.
+`gview` uses the incremental sequence API described in
+[GIF_ANIMATION.md](GIF_ANIMATION.md), including frame disposal, delays and
+looping. Fully transparent runs show the viewer's mat. Fractional-alpha
+compositing remains the separate source-over drawing feature.
 
-Animation (frame storage, disposal, timing and loop policy), rendering Plain
-Text, cross-stream palettes, and partial images are outside this decoder.
-Animation needs a multi-frame API and a consumer with a playback clock;
-partial images need a common status and policy across GIF, PNG and JPEG.
+The first-picture API described here does not animate or return partial
+images. Sequence playback is a separate opt-in API; Plain Text rendering,
+cross-stream palettes and partial-image status remain outside these APIs.

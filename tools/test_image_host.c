@@ -41,6 +41,7 @@ void *os64_malloc(size_t size)
     return malloc(size);
 }
 void  os64_free(void *ptr)     { free(ptr); }
+int os64_memcmp(const void *a, const void *b, size_t n) { return memcmp(a,b,n); }
 void *os64_memcpy(void *d, const void *s, size_t n) { return memcpy(d,s,n); }
 void *os64_memset(void *d, int c, size_t n) { return memset(d,c,n); }
 

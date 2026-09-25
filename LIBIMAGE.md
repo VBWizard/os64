@@ -69,14 +69,16 @@ reason before that machinery exists.
 ## Where the tree stands
 
 `userland/libimage/image.c` owns BMP/PPM decoding, complete-file loading, magic
-selection and status mapping. `userland/libimage/gif.c` owns first-frame GIF
-decoding, documented in [GIF.md](GIF.md). The public header is `image/image.h`.
+selection and status mapping. `userland/libimage/gif.c` owns GIF raster
+decoding and incremental image sequences, documented in [GIF.md](GIF.md) and
+[GIF_ANIMATION.md](GIF_ANIMATION.md). The public headers are `image/image.h`
+and `image/sequence.h`.
 `gview` and `desktop` link libimage; no image symbols remain in libos64.
 
 `libpng.so` supplies non-interlaced PNG through libgzip's raw inflater.
 `libjpeg.so` supplies the bounded libjpeg-turbo decoder and photo orientation
 recorded in [JPEG.md](JPEG.md). The five formats share the image result below.
-`giftest` checks GIF decoding and file loading; `pngtest` checks the PNG codec;
+`giftest` checks GIF decoding, animation sequences and file loading; `pngtest` checks the PNG codec;
 `jpegtest` checks JPEG and the common image entry points through their
 shared-library dependencies in ring 3.
 
@@ -97,9 +99,9 @@ to supply `0xff` until support for a variant with an actual alpha mask arrives.
 The decoder produces pixels, not a surface: pitch, clipping, blending,
 placement, damage, and publication remain libdraw concerns.
 
-`os64_draw_blit` remains an opaque copy. gview therefore proves PNG decoding
-and retains the alpha byte, but does not composite transparent pixels over its
-mat. The browser needs the distinct source-over operation already recorded in
+`os64_draw_blit` remains an opaque copy. Gview skips fully transparent runs
+to show its mat, handling GIF binary alpha, but does not blend fractional-alpha
+PNG pixels. The browser needs the distinct source-over operation already recorded in
 DEBTS; silently changing ordinary blit would break callers that require an
 exact background copy.
 

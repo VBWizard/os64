@@ -1,6 +1,8 @@
 #include "os64/os64.h"
 #include "image/image.h"
+#include "image/sequence.h"
 #include "vectors.h"
+#include "sequence_vectors.h"
 
 static bool check(const uint8_t *data, size_t size, const uint8_t *expected)
 {
@@ -15,6 +17,40 @@ static bool check(const uint8_t *data, size_t size, const uint8_t *expected)
         good = pixels[i] == expected[i+8];
     os64_image_free(&image);
     return good && !image.pixels && !image.width && !image.height;
+}
+
+static uint32_t read32(const uint8_t *p)
+{
+    return p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
+}
+
+static bool check_sequence(const uint8_t *data, size_t len, const uint8_t *expected)
+{
+    os64_image_sequence_t *seq;
+    if (os64_image_sequence_decode(data,len,&seq) != OS64_IMAGE_OK) return false;
+    uint32_t width=read32(expected+4), height=read32(expected+8);
+    uint32_t count=read32(expected+12), plays=read32(expected+16);
+    unsigned passes=plays ? plays : 2;
+    bool good=true;
+    for (unsigned pass=0;good && pass<passes;pass++) {
+        const uint8_t *p=expected+20;
+        for (unsigned i=0;good && i<count;i++) {
+            const os64_image_frame_t *f=os64_image_sequence_frame(seq);
+            good=f->width==width && f->height==height && f->frame_count==count &&
+                 f->play_count==plays && f->index==i && f->delay_ms==read32(p);
+            p+=4;
+            const uint8_t *px=(const uint8_t *)f->pixels;
+            for (size_t n=0;good && n<(size_t)width*height*4;n++) good=px[n]==p[n];
+            p+=(size_t)width*height*4;
+            os64_image_status_t want=(plays && pass+1==plays && i+1==count) ?
+                                    OS64_IMAGE_END : OS64_IMAGE_OK;
+            if (good) good=os64_image_sequence_next(seq)==want;
+        }
+    }
+    if (good) good=os64_image_sequence_rewind(seq)==OS64_IMAGE_OK &&
+                   os64_image_sequence_frame(seq)->index==0;
+    os64_image_sequence_free(seq);
+    return good;
 }
 
 int main(void)
@@ -42,8 +78,18 @@ int main(void)
     bool good = written == sizeof gif_data_0 && closed == 0 && status == OS64_IMAGE_OK &&
                 loaded.width == 19 && loaded.height == 11;
     os64_image_free(&loaded);
+    os64_image_sequence_t *seq;
+    if (os64_image_sequence_load(path,0,&seq)!=OS64_IMAGE_OK) good=false;
+    else {
+        good=good && os64_image_sequence_frame(seq)->frame_count==1 &&
+             os64_image_sequence_next(seq)==OS64_IMAGE_END;
+        os64_image_sequence_free(seq);
+    }
     if (os64_unlink(path) < 0 || !good || os64_heap_verify())
         return 4;
-    os64_printf("PASS GIF palettes, transparency, interlace, offset canvas, LZW, truncation, file loading and heap cleanup\n");
+    if (!check_sequence(sequence_data_0,sizeof sequence_data_0,sequence_expected_0) ||
+        !check_sequence(sequence_data_1,sizeof sequence_data_1,sequence_expected_1) ||
+        os64_heap_verify()) return 5;
+    os64_printf("PASS GIF first-frame decode, animation canvases, disposal, loops, rewind, file loading and heap cleanup\n");
     return 0;
 }
