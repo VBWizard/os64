@@ -23,6 +23,7 @@
 #define PS2_COMMAND_PORT 0x64   // write: controller command
 #define PS2_STATUS_OUTPUT_FULL 0x01  // a byte is waiting in 0x60
 #define PS2_STATUS_INPUT_FULL  0x02  // controller hasn't consumed our last write
+#define PS2_STATUS_AUX         0x20  // output byte came from the mouse
 
 // Controller commands
 #define PS2_CMD_READ_CONFIG   0x20
@@ -35,6 +36,8 @@
 #define PS2_CONFIG_AUX_CLOCK_OFF   0x20  // bit 5: AUX clock DISABLED when set
 
 // Mouse device commands (sent via 0xD4 prefix) and replies
+#define MOUSE_CMD_GET_ID          0xF2
+#define MOUSE_CMD_SET_SAMPLE_RATE 0xF3
 #define MOUSE_CMD_SET_DEFAULTS    0xF6
 #define MOUSE_CMD_ENABLE_STREAM   0xF4
 #define MOUSE_REPLY_ACK           0xFA
@@ -45,8 +48,9 @@
 
 static bool s_mouse_active = false;
 
-// 3-byte packet assembly state
-static uint8_t s_packet[3];
+// Packet length is selected by the device ID: plain PS/2 or IntelliMouse.
+static uint8_t s_packet[4];
+static uint8_t s_packet_length = 3;
 static input_pointer_source_t s_pointer;   // the PS/2 mouse's buttons (gui/input.h)
 static uint8_t s_packet_index = 0;
 // Tick of the last AUX byte, for timeout resync: if the controller dropped a
@@ -80,6 +84,24 @@ static bool ps2_wait_output_full(void)
 	return false;
 }
 
+// Read an AUX reply. Keyboard bytes cannot stand in for a mouse ACK or ID.
+// As during controller setup, unrelated boot-time bytes are discarded.
+static bool mouse_read(uint8_t *reply)
+{
+	for (int i = 0; i < PS2_WAIT_SPINS; i++) {
+		uint8_t status = inb(PS2_STATUS_PORT);
+		if (status & PS2_STATUS_OUTPUT_FULL) {
+			uint8_t data = inb(PS2_DATA_PORT);
+			if (status & PS2_STATUS_AUX) {
+				*reply = data;
+				return true;
+			}
+		}
+		__builtin_ia32_pause();
+	}
+	return false;
+}
+
 // Send one byte to the MOUSE (0xD4 prefix) and wait for its ACK (0xFA).
 static bool mouse_send(uint8_t cmd)
 {
@@ -94,9 +116,9 @@ static bool mouse_send(uint8_t cmd)
 	// a device ID can also be in flight right after reset — skip past
 	// anything that isn't the ACK we're waiting for, within bounds.
 	for (int tries = 0; tries < 8; tries++) {
-		if (!ps2_wait_output_full())
+		uint8_t reply;
+		if (!mouse_read(&reply))
 			return false;
-		uint8_t reply = inb(PS2_DATA_PORT);
 		if (reply == MOUSE_REPLY_ACK)
 			return true;
 		printd(DEBUG_GUI, "mouse: expected ACK for 0x%02x, got 0x%02x (skipping)\n", cmd, reply);
@@ -104,12 +126,38 @@ static bool mouse_send(uint8_t cmd)
 	return false;
 }
 
+static bool mouse_get_id(uint8_t *id)
+{
+	if (!mouse_send(MOUSE_CMD_GET_ID) || !mouse_read(id))
+		return false;
+	return *id == 0 || *id == 3;
+}
+
+static bool mouse_negotiate(void)
+{
+	bool rates = mouse_send(MOUSE_CMD_SET_SAMPLE_RATE) && mouse_send(200) &&
+	             mouse_send(MOUSE_CMD_SET_SAMPLE_RATE) && mouse_send(100) &&
+	             mouse_send(MOUSE_CMD_SET_SAMPLE_RATE) && mouse_send(80);
+	uint8_t id;
+	if (!rates || !mouse_get_id(&id)) {
+		// An ACK can be lost after the mouse changes mode. Defaults does not
+		// reset that mode, so verify the ID before choosing a packet length.
+		// Two defaults also finish a possibly outstanding rate argument.
+		(void)mouse_send(MOUSE_CMD_SET_DEFAULTS);
+		if (!mouse_send(MOUSE_CMD_SET_DEFAULTS) || !mouse_get_id(&id))
+			return false;
+	}
+	s_packet_length = id == 3 ? 4 : 3;
+	printd(DEBUG_GUI, "mouse: PS/2 device ID %u, %u-byte packets\n", id, s_packet_length);
+	return true;
+}
+
 void mouse_init(void)
 {
 	// The whole handshake runs with interrupts off: the IRQ1 handler is
 	// already live and its 8042 drain (ps2_handle_irq) would eat our ACK
 	// bytes mid-handshake. With IF clear we poll the ports directly and
-	// nothing can race us; this takes well under a millisecond.
+	// the local IRQ handler cannot consume replies. Port waits are bounded.
 	uint64_t rflags;
 	__asm__ volatile("pushfq\n\tpop %0" : "=r"(rflags) :: "memory");
 	__asm__ volatile("cli" ::: "memory");
@@ -137,11 +185,10 @@ void mouse_init(void)
 			break;
 		outb(PS2_DATA_PORT, config);
 
-		// Program the mouse itself: sane defaults, then start streaming
-		// movement packets.
+		// Select the packet format before allowing movement reports.
 		if (!mouse_send(MOUSE_CMD_SET_DEFAULTS))
 			break;
-		if (!mouse_send(MOUSE_CMD_ENABLE_STREAM))
+		if (!mouse_negotiate() || !mouse_send(MOUSE_CMD_ENABLE_STREAM))
 			break;
 
 		ok = true;
@@ -152,7 +199,7 @@ void mouse_init(void)
 		s_mouse_active = true;
 		printd(DEBUG_GUI, "mouse: PS/2 mouse initialized, streaming enabled\n");
 	} else {
-		printd(DEBUG_GUI, "mouse: no PS/2 mouse detected (or handshake timed out) — continuing cursor-less\n");
+		printd(DEBUG_GUI, "mouse: PS/2 initialization refused (timeout or unsupported ID)\n");
 	}
 
 	if (rflags & 0x200)
@@ -176,42 +223,26 @@ void mouse_handle_byte(uint8_t data)
 	}
 	s_last_byte_tick = kTicksSinceStart;
 
-	// Standard 3-byte PS/2 packet:
-	//   byte 0: buttons (bits 0-2), ALWAYS-1 (bit 3), X/Y sign (4/5), X/Y overflow (6/7)
-	//   byte 1: X movement       byte 2: Y movement (positive = up)
-	switch (s_packet_index) {
-	case 0:
-		if (!(data & 0x08)) {
-			// Bit 3 must be set in the first byte. If it isn't, we lost
-			// sync (dropped byte somewhere) — discard until a plausible
-			// packet header comes by.
-			printd(DEBUG_GUI | DEBUG_DETAILED, "mouse: resync, dropped byte 0x%02x\n", data);
-			return;
-		}
-		s_packet[0] = data;
-		s_packet_index = 1;
-		break;
-	case 1:
-		s_packet[1] = data;
-		s_packet_index = 2;
-		break;
-	case 2:
-		s_packet[2] = data;
-		s_packet_index = 0;
-
-		// Overflow means the deltas are garbage; drop the whole packet.
-		if (s_packet[0] & 0xC0)
-			return;
-
-		// 9-bit signed deltas: the sign bits live in byte 0.
-		int16_t dx = (int16_t)s_packet[1] - ((s_packet[0] & 0x10) ? 0x100 : 0);
-		int16_t dy = (int16_t)s_packet[2] - ((s_packet[0] & 0x20) ? 0x100 : 0);
-
-		// PS/2 y is positive-UP; screen coordinates are positive-DOWN.
-		dy = (int16_t)-dy;
-
-		// Button bits 0/1/2 = L/R/M — same order as INPUT_MOUSE_BUTTON_*.
-		input_inject_mouse(&s_pointer, dx, dy, s_packet[0] & 0x07);
-		break;
+	// The header is shared by plain PS/2 and IntelliMouse packets. Data
+	// bytes can also have bit 3 set; only test it at a packet boundary.
+	if (s_packet_index == 0 && !(data & 0x08)) {
+		printd(DEBUG_GUI | DEBUG_DETAILED, "mouse: resync, dropped byte 0x%02x\n", data);
+		return;
 	}
+	s_packet[s_packet_index++] = data;
+	if (s_packet_index != s_packet_length)
+		return;
+	s_packet_index = 0;
+
+	// Overflow invalidates motion, but the packet still carries valid
+	// buttons and wheel data. Consume its full length to preserve framing.
+	int16_t dx = 0, dy = 0;
+	if (!(s_packet[0] & 0xC0)) {
+		// 9-bit signed motion; PS/2 Y is positive up, screen Y down.
+		dx = (int16_t)s_packet[1] - ((s_packet[0] & 0x10) ? 0x100 : 0);
+		dy = -((int16_t)s_packet[2] - ((s_packet[0] & 0x20) ? 0x100 : 0));
+	}
+	// ID 3 uses a signed byte, positive toward the user (scroll down).
+	int16_t wheel = s_packet_length == 4 ? (int8_t)s_packet[3] : 0;
+	input_inject_mouse(&s_pointer, dx, dy, s_packet[0] & 0x07, wheel);
 }

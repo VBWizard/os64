@@ -747,6 +747,8 @@ typedef struct os64_ui_slider {
 } os64_ui_slider_t;
 // Inclusive range; max<min becomes a fixed-value range and step<1 becomes 1.
 // Values clamp to the range. Keyboard arrows step, Home/End choose endpoints.
+// Hovered wheel up/right increases by step per notch; down/left decreases.
+// Wheel preserves focus and is consumed without adjustment during a pointer grab.
 void os64_ui_slider(os64_ui_slider_t *sl, int32_t min, int32_t max,
                    int32_t step, int32_t value,
                    void (*on_change)(os64_ui_slider_t *, void *), void *user);
@@ -784,7 +786,8 @@ uint32_t os64_ui_color_from_hsv(int hue, int saturation, int value);
 // fit the companion view, `pos` is the first visible one. The thumb is the
 // proportion made pixel; dragging it, or clicking the track above/below
 // (page jumps), moves pos and fires on_scroll. total <= visible = full
-// thumb, nothing to do — a scrollbar that vanishes would reflow its
+// thumb, nothing to do. Wheel notches move one unit along the bar and fire
+// on_scroll when pos changes. A scrollbar that vanishes would reflow its
 // neighbour, and v1 does not reflow.
 typedef struct os64_ui_scrollbar os64_ui_scrollbar_t;
 struct os64_ui_scrollbar
@@ -816,6 +819,9 @@ struct os64_ui_listbox {
     uint8_t seq;
     const char *(*label)(size_t index, void *user);
     void (*on_change)(os64_ui_listbox_t *, void *user);
+    // Viewport notification, including wheel and programmatic scrolling.
+    // Does not mean selection changed; use it to sync a companion bar.
+    void (*on_view)(os64_ui_listbox_t *, void *user);
     void *list_user;
     // Optional color chip before each label; shares the row's hit target.
     uint32_t (*swatch)(size_t index, void *user);
@@ -833,7 +839,8 @@ struct os64_ui_listbox {
     size_t row_run_count, row_runs_staged_count;
 };
 // Click a row or Tab to focus. Up/Down, Home/End and Page Up/Down choose
-// rows and reveal the selection. Choosing the same row does not notify.
+// rows and reveal the selection. Choosing the same row does not notify
+// on_change. Wheel scrolls three rows per notch without choosing a row.
 void os64_ui_listbox(os64_ui_listbox_t *list, size_t count,
                      const char *(*label)(size_t, void *),
                      void (*on_change)(os64_ui_listbox_t *, void *), void *user);

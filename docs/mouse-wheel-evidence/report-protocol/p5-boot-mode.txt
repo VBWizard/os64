@@ -1,0 +1,7 @@
+09:30:34 (442,0) USB: xhci: no boot-protocol keyboard or mouse found on root ports
+09:30:34 (459,0) USB: xhci: HID identity port 3 slot 1 VID:PID 25a7:fa61 revision 0620
+09:30:34 (475,0) USB: xhci: mouse interface 1 SET_PROTOCOL boot accepted
+09:30:34 (476,0) USB: xhci: HID identity port 2 slot 1 VID:PID 03f0:a407 revision 0321
+09:30:34 (477,0) USB: USB mouse: port 2 slot 1 ep 2 (interval 4)
+09:30:34 (477,0) USB: xhci: mouse live — port 2 slot 1 dci 5 mps 9
+09:30:35 (630,0) USB: xhci: mouse report slot 1 len 3 bytes 00 fc 00 00 00 00 00 00

@@ -2699,6 +2699,125 @@ static void height_policy(const char *dir)
 }
 #endif
 
+#if __INCLUDE_LEVEL__ == 0
+bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t hint)
+{ (void)theme; (void)installed; (void)hint; return false; }
+#endif
+static unsigned ui_test_wheel_views, ui_test_wheel_selections;
+static void ui_test_wheel_list_view(os64_ui_listbox_t *list, void *user)
+{ (void)list; (void)user; ++ui_test_wheel_views; }
+static void ui_test_wheel_list_choice(os64_ui_listbox_t *list, void *user)
+{ (void)list; (void)user; ++ui_test_wheel_selections; }
+static void ui_test_wheel_bar(os64_ui_scrollbar_t *bar, void *user)
+{ (void)bar; (void)user; ++ui_test_wheel_views; }
+static void ui_test_wheel_text_view(os64_ui_textview_t *tv, void *user)
+{ (void)tv; (void)user; ++ui_test_wheel_views; }
+static void ui_test_wheel_slider(os64_ui_slider_t *sl, void *user)
+{ (void)sl; (void)user; ++ui_test_wheel_views; }
+static size_t ui_test_wheel_count(void *user) { (void)user; return 100; }
+static const char *ui_test_wheel_line(void *user, size_t i, size_t *len)
+{ (void)user; (void)i; *len=3; return "row"; }
+
+static void ui_test_wheel_dispatch(void)
+{
+    current="wheel dispatch";
+    os64_ui_t ui={0}; ui.theme.font_h=16; ui.theme.font_w=8;
+    os64_ui_widget_t root, button;
+    os64_ui_panel(&root); root.bounds=(os64_gui_rect_t){0,0,400,200};
+    os64_ui_button(&button,"Other",NULL,NULL);
+    button.bounds=(os64_gui_rect_t){220,0,100,60};
+    os64_ui_listbox_t list;
+    os64_ui_listbox(&list,100,NULL,ui_test_wheel_list_choice,NULL);
+    list.w.bounds=(os64_gui_rect_t){0,0,200,124}; // five rows
+    list.on_view=ui_test_wheel_list_view;
+    os64_ui_add_child(&root,&list.w); os64_ui_add_child(&root,&button);
+    os64_ui_set_root(&ui,&root); os64_ui_set_focus(&ui,&button);
+    list.selected=10;
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_WHEEL,
+                        .mouse={.x=50,.y=40,.dy=1}};
+    ui_test_wheel_views=ui_test_wheel_selections=0;
+    CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(list.top==3);
+    CHECK(ui.focus==&button && !ui.grab && list.selected==10);
+    CHECK(ui_test_wheel_views==1 && ui_test_wheel_selections==0);
+    ev.mouse.dy=-1; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(list.top==0);
+    ev.mouse.dy=INT16_MAX; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(list.top==95);
+    unsigned calls=ui_test_wheel_views;
+    CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(ui_test_wheel_views==calls);
+    ev.mouse.dy=INT16_MIN; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(list.top==0);
+    ev.mouse.dy=0; CHECK(!os64_ui_dispatch(&ui,&ev));
+    ev.mouse.dy=1; ev.mouse.x=230; CHECK(!os64_ui_dispatch(&ui,&ev)); CHECK(list.top==0);
+    ev.mouse.x=50; list.w.disabled=true;
+    CHECK(!os64_ui_dispatch(&ui,&ev)); CHECK(list.top==0); list.w.disabled=false;
+    list.w.hidden=true; CHECK(!os64_ui_dispatch(&ui,&ev)); list.w.hidden=false;
+    ui.window_blurred=true; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(list.top==3);
+    ui.window_blurred=false;
+    // A non-scrolling child bubbles to its viewport; an existing grab stays.
+    os64_ui_widget_t child; os64_ui_button(&child,"Child",NULL,NULL);
+    child.bounds=(os64_gui_rect_t){10,10,80,50}; os64_ui_add_child(&list.w,&child);
+    ui.grab=&button; button.pressed=true;
+    CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(list.top==6);
+    CHECK(ui.grab==&button && button.pressed && ui.focus==&button);
+    ui.grab=NULL; button.pressed=false;
+
+    os64_ui_scrollbar_t bar; os64_ui_scrollbar(&bar,ui_test_wheel_bar,NULL);
+    bar.w.bounds=(os64_gui_rect_t){0,0,20,120}; os64_ui_set_root(&ui,&bar.w);
+    os64_ui_scrollbar_set(&ui,&bar,INT64_MAX,10,INT64_MAX-11);
+    ev.mouse.x=10; ev.mouse.dy=INT16_MAX;
+    CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(bar.pos==INT64_MAX-10);
+    bar.pos=1; ev.mouse.dy=INT16_MIN;
+    CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(bar.pos==0);
+    bar.horizontal=true; ev.mouse.dy=1;
+    CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(bar.pos==1);
+    ev.mouse.dx=2; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(bar.pos==3);
+    CHECK(bar.drag_grab==-1 && !ui.grab);
+
+    os64_ui_slider_t slider;
+    os64_ui_slider(&slider,-10,10,3,0,ui_test_wheel_slider,NULL);
+    slider.w.bounds=(os64_gui_rect_t){0,0,200,40};
+    os64_ui_widget_t slider_root, slider_other;
+    os64_ui_panel(&slider_root); slider_root.bounds=root.bounds;
+    os64_ui_button(&slider_other,"Other",NULL,NULL); slider_other.bounds=button.bounds;
+    os64_ui_add_child(&slider_root,&slider.w); os64_ui_add_child(&slider_root,&slider_other);
+    os64_ui_set_root(&ui,&slider_root);
+    os64_ui_set_focus(&ui,&slider_other);
+    ev.mouse.x=50; ev.mouse.y=20; ev.mouse.dx=0; ev.mouse.dy=-2;
+    ui_test_wheel_views=0;
+    CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(slider.value==6);
+    CHECK(ui_test_wheel_views==1 && ui.focus==&slider_other && !ui.grab);
+    ev.mouse.dy=1; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(slider.value==3);
+    ev.mouse.dy=INT16_MIN; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(slider.value==10);
+    calls=ui_test_wheel_views;
+    CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(ui_test_wheel_views==calls);
+    ev.mouse.dy=INT16_MAX; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(slider.value==-10);
+    ev.mouse.dy=0; CHECK(!os64_ui_dispatch(&ui,&ev));
+    ev.mouse.dx=2; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(slider.value==-4);
+    slider.w.disabled=true;
+    CHECK(!os64_ui_dispatch(&ui,&ev)); CHECK(slider.value==-4);
+    slider.w.disabled=false; slider.w.hidden=true;
+    CHECK(!os64_ui_dispatch(&ui,&ev)); slider.w.hidden=false;
+    ui.grab=&slider.w; slider.w.pressed=true; slider.drag_offset=4; slider.drag_x=50;
+    calls=ui_test_wheel_views;
+    CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(slider.value==-4 && ui_test_wheel_views==calls);
+    CHECK(ui.grab==&slider.w && slider.w.pressed && slider.drag_offset==4 && slider.drag_x==50);
+    ui.grab=NULL; slider.w.pressed=false; slider.drag_offset=-1;
+    // A large step times a multi-notch event must clamp without 32-bit overflow.
+    slider.min=INT32_MIN; slider.max=INT32_MAX; slider.step=INT32_MAX;
+    ev.mouse.dx=INT16_MAX; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(slider.value==INT32_MAX);
+    ev.mouse.dx=INT16_MIN; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(slider.value==INT32_MIN);
+
+    const os64_ui_textbuf_t buf={.line_count=ui_test_wheel_count,.line=ui_test_wheel_line};
+    os64_ui_textview_t tv; os64_ui_textview(&tv,&buf,NULL,ui_test_wheel_text_view,NULL);
+    tv.w.bounds=(os64_gui_rect_t){0,0,200,124}; os64_ui_set_root(&ui,&tv.w);
+    tv.cur_line=7; tv.cur_col=2; tv.sel=true; tv.sel_line=6; tv.sel_col=1;
+    ev.mouse.dx=0; ev.mouse.dy=2; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(tv.top==6);
+    CHECK(tv.cur_line==7 && tv.cur_col==2 && tv.sel && tv.sel_line==6 && tv.sel_col==1);
+    ev.mouse.dy=INT16_MAX; CHECK(os64_ui_dispatch(&ui,&ev));
+    CHECK(tv.top==100-(size_t)os64_ui_textview_rows(&tv,&ui.theme));
+    ev.mouse.dy=INT16_MIN; CHECK(os64_ui_dispatch(&ui,&ev)); CHECK(tv.top==0);
+    CHECK(os64_ui_font_release(&ui)==OS64_FONT_OK);
+    current="";
+}
+
 int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : "userland/libfreetype/fixtures";
@@ -2709,6 +2828,7 @@ int main(int argc, char **argv)
     os64_ui_t ui;
     memset(&ui, 0, sizeof(ui));
 
+    ui_test_wheel_dispatch();
     identity_against_bitmap(&ui);
     builtin_metrics(&ui);
     CHECK(os64_ui_font_status(&ui) == OS64_FONT_OK);

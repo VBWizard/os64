@@ -1,0 +1,2 @@
+test_mouse_wheel_host: all checks passed
+test_hid_mouse_host: descriptor, report ID, packed axes, truncation and mutation checks passed

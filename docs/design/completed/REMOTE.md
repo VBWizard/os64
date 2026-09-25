@@ -333,8 +333,9 @@ OS64_GLASS_POINTER:  uint8_t kind, buttons; uint16_t x, y;            // 6 bytes
   would produce. Buttons are held per source (`input_pointer_source_t`: each
   mouse driver and each view owns one), and a button is down while any
   source holds it, so a local mouse nudged during a remote drag does not end
-  it, nor the reverse. There is no wheel, because nothing in os64 has one
-  yet (DEBTS).
+  it, nor the reverse. The remote input record carries no wheel. Local
+  wheel support is described in MOUSE_WHEEL.md; remote transport is booked
+  in DEBTS.
 - **Closing the handle lifts every finger.** Close delivers an empty keyboard
   report and lifts the view's own buttons, under the view's input lock so
   that no write can land after it. A dropped connection does not leave Ctrl

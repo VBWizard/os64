@@ -1,7 +1,7 @@
 #ifndef XHCI_H
 #define XHCI_H
 
-// xHCI (USB 3.x host controller) + USB HID boot-protocol keyboard/mouse.
+// xHCI (USB 3.x host controller), boot keyboard and relative mouse input.
 //
 // WHY THIS EXISTS: the Bosgame P5 has no PS/2 port. Every keystroke it will
 // ever receive arrives over USB, so "os64 runs on real hardware" requires
@@ -19,7 +19,8 @@
 //   - ENUMERATION AT BOOT ONLY: no hotplug. Plug it in, then power on.
 //   - Controllers are searched until the first boot-protocol keyboard and
 //     first boot-protocol mouse have been found; they may live on different
-//     controllers.
+//     controllers. Mouse descriptors can select report protocol for a
+//     relative X/Y/wheel layout; unsupported descriptors retain boot mode.
 //   - Handles BOTH context sizes (HCCPARAMS1.CSZ): QEMU uses 32-byte
 //     contexts, real hardware frequently uses 64 — the P5 gets to choose.
 //   - Scratchpad buffers allocated when the controller demands them

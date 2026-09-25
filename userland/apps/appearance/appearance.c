@@ -272,11 +272,16 @@ static uint32_t color_swatch(size_t index, void *user)
         os64_ui_palette_role_get(&gPreview.theme, index);
 }
 
-static void color_selection(os64_ui_listbox_t *list, void *user)
+static void color_view(os64_ui_listbox_t *list, void *user)
 {
     (void)user;
     os64_ui_scrollbar_set(&gEditor, &gColorScroll, (int64_t)list->count,
         os64_ui_listbox_rows(list, &gEditor.theme), (int64_t)list->top);
+}
+
+static void color_selection(os64_ui_listbox_t *list, void *user)
+{
+    color_view(list, user);
     sync_color();
 }
 
@@ -954,6 +959,7 @@ static void setup(void)
     editor_label(&gFooter, gComposition);
     editor_label(&gSmall, "Enlarge the window to explore the gallery.");
     os64_ui_listbox(&gThemes, 3, theme_label, theme_selection, NULL);
+    gThemes.on_view = theme_selection;
     os64_ui_listbox(&gPalettes, 3, palette_label, palette_click, NULL);
     os64_ui_scrollbar(&gThemeScroll, themes_scrolled, NULL);
     os64_ui_add_child(&gPages[0], &gThemes.w);
@@ -1002,6 +1008,7 @@ static void setup(void)
     os64_ui_checkbox(&gIndividual, "Individual control colors", false, individual_changed, NULL);
     os64_ui_add_child(&gPages[1], &gIndividual.w);
     os64_ui_listbox(&gColors, OS64_UI_PALETTE_ROLE_COUNT, color_label, color_selection, NULL);
+    gColors.on_view = color_view;
     gColors.swatch = color_swatch;
     os64_ui_listbox_set(&gEditor, &gColors, OS64_UI_PALETTE_ROLE_COUNT, 3);
     os64_ui_scrollbar(&gColorScroll, colors_scrolled, NULL);

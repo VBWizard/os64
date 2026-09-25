@@ -45,7 +45,8 @@ Open, edit, save, scroll, select. Explicitly OUT of v1, each with a reason:
   Ctrl+F reveals the path textfield repurposed as a search field; Enter jumps
   to the next hit and scrolls it into view. Linear scan over the loaded
   buffer — no index, no regex (booked), honest and fast enough.
-- **Mouse wheel** — GRAPHICS #6, not scribe's to build.
+- **Mouse wheel** — supplied by libui: three rows per notch over the textview,
+  with its existing viewport callback keeping the scrollbar synchronized.
 - **Word wrap** — v1 clips long lines and scrolls horizontally to follow the
   cursor. Wrap is a REFLOW engine and reflow is where editors go to die
   young; the seam stays open.

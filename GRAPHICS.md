@@ -61,33 +61,36 @@ client API.
 ```
 IRQ1/IRQ12 → ps2_handle_irq (keyboard.c): drain 8042, dispatch on status bit 5
    ├─ keyboard_handle_scancode → emits on MAKE (press) + input_inject_key(down/up)
-   └─ mouse_handle_byte (mouse.c): 3-byte packets, sync bit + 30ms timeout resync
-        → input_inject_mouse(dx, dy, buttons)
+   └─ mouse_handle_byte (mouse.c): 3/4-byte packets selected by device ID, sync bit + 30ms timeout resync
+        → input_inject_mouse(source, dx, dy, buttons, wheel)
 input.c: one ring (irqsave spinlock), tracks cursor position (clamped) and
-         diffs button state into discrete DOWN/UP events
+         diffs button state into discrete DOWN/UP events, then queues WHEEL
+         (text-VT wheels update scrollback directly and defer repaint)
 compositor: drains per frame; routes under kGuiLock:
-   MOUSE, and the GUI does NOT own the glass → vt_select.c (the text VT)
+   moves/buttons, and the GUI does NOT own the glass → vt_select.c (the text VT)
    clicks → hit-test top-down → raise+focus; decoration control = action grab;
             remaining titlebar+left = drag grab;
             a click landing in a client's CONTENT starts the pointer grab
    moves  → cursor damage; WM drag → wm_move; pointer grab → its owner;
             else hit-test and deliver content-local to the window under it
+   wheels → pointer-grab owner or content under pointer; no focus change;
+            decorations and WM gestures swallow them
    keys   → focused window
 ```
 
 ### The input fork (2026-08-21)
 
-Mouse events belong to whoever holds the glass. `input_inject_mouse` used to
-DROP them whenever a text VT was focused ("there is no consumer" — true until
-this date); it now enqueues unconditionally, and the fork happens at the far
-end of the ring, in `route_event_locked`, which is the only place that knows
-who holds the glass at drain time. With VT8 up they route to windows; with a
-text terminal up they route to **vt_select.c**, where they become gpm's old
-gesture — select-to-copy, right-click-to-paste, and a pointer that is one
-inverted character cell.
+Motion and button events share the compositor's input ring. With VT8 up
+they route to windows; with a text terminal up they route to **vt_select.c**
+for select-to-copy, right-click-to-paste, and an inverted-cell pointer.
 
-Keys are NOT forked here and never were: the keyboard driver routes those at
-its own end, tty by tty. Only the pointer had nowhere to go.
+Wheel input on VT1..VT7 changes the focused terminal's scrollback at arrival,
+three rows per notch, under its tty lock. It marks the glass stale for
+`tty_flush_if_dirty`; it does not paint or wake a task in the mouse handler.
+This also works on text-only boots. GUI wheel events use event 13 and the
+existing mouse payload; see [MOUSE_WHEEL.md](MOUSE_WHEEL.md).
+
+Keyboard drivers route keys at arrival, tty by tty.
 
 Two consequences worth knowing:
 - **No new thread.** The compositor already drains the ring every frame
@@ -1147,7 +1150,8 @@ system has to know:
    now that the reader is `/bin/desktop`**: re-reading a config and
    repainting is an ordinary thing for a program to do, where it used to mean
    the compositor re-entering the VFS.
-6. Mouse wheel + 5-button (IntelliMouse magic sample-rate handshake).
+6. Five-button IntelliMouse Explorer and horizontal tilt. Vertical wheel
+   input includes descriptor-driven USB reports; see MOUSE_WHEEL.md.
 7. Alpha translucency (X byte in XRGB is reserved for it; `surface_blit_masked`
    already does shaped blits).
 8. Runtime resolution switching (only `framebuffers[0]` used; fixed by

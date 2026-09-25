@@ -10,10 +10,11 @@
 //
 // One ring carries keyboard AND mouse events in arrival order, so the
 // compositor sees a single interleaved timeline (a click can't jump ahead of
-// the keystroke that preceded it). Producers are the PS/2 IRQ handlers;
-// the only consumer is the compositor's frame loop.
+// the keystroke that preceded it). Device drivers and /dev/glass produce
+// events; the compositor's frame loop consumes them.
 //
-// HARD RULE for producers: IRQ handlers ONLY enqueue. They must never wake
+// HARD RULE for producers: IRQ handlers enqueue or update deferred text-VT
+// scroll state, without painting. They must never wake
 // threads (scheduler_wake_task_waiter -> scheduler_trigger does sti/hlt,
 // which is fatal in IRQ context). The compositor polls each frame instead.
 
@@ -56,6 +57,7 @@ typedef enum input_event_type
     INPUT_EVENT_WINDOW_UNCOVERED,
     INPUT_EVENT_POINTER_STATE,
     INPUT_EVENT_APPEARANCE,
+    INPUT_EVENT_MOUSE_WHEEL,
 } input_event_type_t;
 
 _Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
@@ -66,6 +68,7 @@ _Static_assert(INPUT_EVENT_WINDOW_UNCOVERED == OS64_GUI_EVENT_WINDOW_UNCOVERED, 
 _Static_assert(INPUT_EVENT_POINTER_STATE == OS64_GUI_EVENT_POINTER_STATE, "event ABI: pointer state");
 
 _Static_assert(INPUT_EVENT_APPEARANCE == OS64_GUI_EVENT_APPEARANCE, "event ABI: appearance");
+_Static_assert(INPUT_EVENT_MOUSE_WHEEL == OS64_GUI_EVENT_MOUSE_WHEEL, "event ABI: wheel");
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
 // BUTTON_DOWN/UP events). These numbers are ABI — they ride out to ring 3 in
@@ -92,8 +95,8 @@ typedef struct input_event
         } key;
         struct {
             int32_t x, y;       // cursor position, screen coords (filled by
-                                // the mouse driver's position tracking)
-            int16_t dx, dy;     // raw motion delta this packet
+                                // unified input position tracking)
+            int16_t dx, dy;     // motion pixels, or signed notches for WHEEL
             uint8_t buttons;    // current button state bitmask
             uint8_t button;     // for BUTTON_DOWN/UP: which button changed
             uint8_t modifiers;  // keyboard_modifiers_t bitmask at event time
@@ -123,8 +126,8 @@ typedef struct input_event
     uint64_t tick;  // kTicksSinceStart at enqueue, for input latency debugging
 } input_event_t;
 
-// Called by gui_start(). Until this runs, inject calls are cheap no-ops —
-// the OS without the GUI has no input consumer, so queueing would be waste.
+// Called by gui_start(). Before this, GUI events are discarded; text-VT
+// wheel scrolling works independently of the compositor.
 void input_init(void);
 
 // One pointing device's buttons: each mouse driver and each /dev/glass view
@@ -138,9 +141,12 @@ typedef struct input_pointer_source
 	uint8_t buttons;   // what this source holds down, as last reported
 } input_pointer_source_t;
 
-// Producer side (IRQ context safe: irqsave spinlock, enqueue only).
+// Producer side (IRQ-safe state updates, no painting or task wakeups).
 void input_inject_key(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed);
-void input_inject_mouse(input_pointer_source_t *src, int16_t dx, int16_t dy, uint8_t buttons);
+// wheel is signed notches, positive down. A GUI packet queues its wheel
+// after movement and button edges, under the same lock.
+void input_inject_mouse(input_pointer_source_t *src, int16_t dx, int16_t dy,
+                        uint8_t buttons, int16_t wheel);
 // The pointer at an ABSOLUTE position (clamped to the screen) — /dev/glass's,
 // whose viewer says where rather than how far. Same events as a mouse.
 void input_inject_pointer(input_pointer_source_t *src, int32_t x, int32_t y, uint8_t buttons);

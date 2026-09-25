@@ -1,0 +1,2 @@
+test_scribe_host: 2470 checks, 0 failures
+Artifacts: /tmp/os64-scribe-se_0a5ht
