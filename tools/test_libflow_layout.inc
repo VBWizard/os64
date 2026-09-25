@@ -156,6 +156,17 @@ static void layout_cases(void)
         free(big);
     }
 
+    // The </b> after the <br> closes on the <br>'s line: no empty line.
+    layout_case("an inline closing after a break closes on that line",
+        "<!doctype html><p><b>a<br></b>", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        span b 8 18 8 16\n"
+        "        text \"a\" 8 18 8 16 serif 16 bold\n");
+
     // 32px: ascent 24, descent 8, line 40, so 4 of leading above: the
     // baseline is 28 down. The margin is 0.67em of 32 = 1372/64 = 21.44,
     // which collapses with body's 8; the page is 21.44 + 40 + 21.44.

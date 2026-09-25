@@ -515,28 +515,53 @@ never caches it. A replaced box sits on the baseline by its bottom margin
 edge, or where its `vertical-align` puts it. `hspace`/`vspace` are
 margins; an `hr` is an ordinary empty block whose borders are the rule.
 
-**Tables** (§17.5, automatic layout §17.5.2.2): for every column the
-MIN-CONTENT width (the widest thing that cannot break: the longest word,
-the widest replaced box, a `nowrap` cell whole) and the MAX-CONTENT width
-(the content on one line), each cell's contribution found by laying its
-content out as a block container at width 0 and at unbounded width — the
-three layouts per cell every table engine pays, MEMOIZED per box so a
-nested table costs its cells three times and not three to the power of
-its depth (the classic exponential, and the *Bounds* section's first
-rule). A spanning cell's minimum and maximum are spread over its columns
-in proportion to what the columns already have, the rule Netscape's
-engine used and every engine since. Then: a table with a `width` takes
-it; without one, it takes its max-content width when that fits the
-containing block, else the containing block's width, never less than its
-min-content width (it overflows rather than squashing a word). Column
-widths: `col`/`td` `width` attributes as minimums where they fit, then
-the remainder distributed from min toward max in proportion to each
-column's max-minus-min. Rows are as tall as their tallest cell; `rowspan`
-spreads a cell's height over its rows; `valign` places the cell's content
-within its row; captions above (or below, `caption-side`) at the table's
-width; `border-spacing` between cells, `cellpadding` inside them; the
-`border` attribute draws the old web's inset frame. `border-collapse` is
-recorded and rendered as separate borders in the first cut (booked).
+**Tables** (§17.5, automatic layout §17.5.2.2) — MEASURE, THEN PLACE.
+The grid first: rows in the order they are drawn (the first header group
+first, the first footer group last, every other group and every run of
+groupless rows between), each cell given its slot past the slots rowspans
+from above still hold, with the standard's clamps — `colspan` 1..1000,
+`rowspan` 1..65534 and 0 meaning "to the end of the row group" — and a
+rowspan never reaching past its group. Declared columns (`col span`, a
+`colgroup`'s own span when it has no `col`s) count where no cell reaches.
+
+Then the widths. Every cell's MIN-CONTENT width (the widest thing that
+cannot break — a word across nodes, a replaced box — plus its padding and
+border) and MAX-CONTENT width (its content with only forced breaks) are
+READ from its item sequence rather than found by laying it out, and kept
+on the box: a table nested forty deep costs each of its contexts a
+constant number of measurements, not three to the power of its depth
+(*Bounds*; the harness asserts the count). A cell's set width is what it
+wants at most, never less than it can be. Columns take their one-column
+cells' widths and `col` widths; spanning cells then spread what their
+columns lack over them, narrowest span first, in proportion to what each
+column wants at most — the rule Netscape's engine used and every engine
+since. The table's width: a set width (`table { box-sizing: border-box }`,
+so it is the border box) and never less than its least; otherwise its
+most when that fits the containing block, else what the block has, and
+never less than its least — it overflows rather than squash a word.
+The grid's width is then shared: a percentage column its share, a fixed
+column its width, the auto columns from least toward most in proportion
+to how far apart the two are, and what is left over to the auto columns
+in proportion to what they want (else to the others), never a column
+below its least.
+
+Then the heights: each cell laid out ONCE at its final width; a row as
+tall as its tallest one-row cell and its own set height; a rowspan's
+excess spread evenly over its rows; a set table height's excess shared by
+the rows in proportion. `valign` places a cell's content in its rows —
+top, middle (the sheet's default for a table's rows), bottom, or
+baseline, which lines the first baselines of a row's baseline cells up.
+Captions sit above (or below, `caption-side`) the table's box, as wide
+as it; `border-spacing` separates cells and `cellpadding` pads them; the
+`border` attribute draws the old web's outset frame and inset cells. The
+collapsing border model is recorded, draws no spacing, and draws its
+borders separately (booked). Quirks mode: a picture in an auto-width cell
+has no wrap opportunity either side (3.8), a nowrap cell's pixel width is
+its least (3.9), a table with no rows and no captions is nothing (3.10),
+a cell's set height counts its border and padding (3.13). A cell that
+would start past the ten-thousandth column is not laid out: the one
+limit here the standard does not have, so a page of spans costs what its
+cells cost.
 
 **Lists**: the marker box sits in the left padding the Rendering chapter
 gives lists, right-aligned to the content edge with a space, on the
@@ -834,7 +859,8 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 |---|---|---|
 | Floats and `clear` (`align=left/right` on `img`/`table`, `<br clear>`) | the float rules (§9.5) are a second placement pass with their own line-box shortening; the struct records them so the cascade and the first cut agree on the field | the first page whose layout is unreadable without a float — image-beside-text pages of the old web will vote early |
 | Negative margins | no presentational attribute produces one; the collapsing arithmetic asserts non-negative and names this row | the cascade's first `margin: -` |
-| `position`, `z-index`, `overflow`, `inline-block` from a cascade, `inline-table`, `border-collapse: collapse` | none can arise from the first producer | the cascade |
+| `position`, `z-index`, `overflow`, `inline-block` from a cascade, `inline-table` | none can arise from the first producer | the cascade |
+| Collapsing borders (§17.6.2) | a table with `rules` or `frame` records `border-collapse: collapse`; it is laid out with no spacing and its borders drawn separately | the first ruled table that reads wrong for it |
 | A range-draw on a measuring run (F2 ask) | halves layout work and run memory; works without it | a page whose layout time is visible, measured, or a page that hits the memory cap through runs |
 | Incremental relayout | ruling 2 says rebuild; the face paces it | the engine, or a page whose rebuild is visibly slow |
 | Selection and copy | needs the fragment byte ranges (kept) and a face gesture | yonder's second slice |
