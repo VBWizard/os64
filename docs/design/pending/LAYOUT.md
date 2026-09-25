@@ -598,9 +598,9 @@ block html 0 0 500 156
         text " page." 172 67 50 19 sans 16
     block ul 8 102 484 38
       block li 48 102 444 19
-        marker "• " 34 102 14 19
         line 48 102 444 19 base 15
           text "one" 48 102 30 19 sans 16
+        marker "• " 34 102 14 19
 ```
 
 `page` is the laid-out width and height. A box is `x y w h` of its border
@@ -608,7 +608,11 @@ box; a `line` adds how far below its top the baseline lies; a `text`
 fragment's rectangle is its content area (the baseline less the ascent,
 ascent plus descent tall), then the face, size and what decorates it; a
 `span` is one inline box's piece on one line; an `atomic` is a replaced
-box's border box. (That page has no doctype, so the heading's top margin
+box's border box. A box's line boxes come before its child boxes and its
+marker last, which is the order they are built in and the order the
+allocation sweep reads a prefix in. A box layout stopped inside ends
+` unfinished`, and a tree that is not whole ends with a line reading
+`incomplete`. (That page has no doctype, so the heading's top margin
 at the top of the body is the quirks-mode zero.)
 
 The host harness renders against its own backend,
@@ -621,77 +625,47 @@ not scale with size, which a layout test needs it to.
 
 ## The one door
 
-```c
-typedef struct flow_tree flow_tree_t;
+`userland/libflow/include/flow/flow.h` is the door, and its comments are
+its contract; this is what it offers and why.
 
-typedef struct {
-    // Fonts: the face's resolver. On the host, the harness's backend.
-    void *ctx;
-    // `families` is the struct's list: names as the page wrote them,
-    // then a generic. A resolver that matches no name takes the generic.
-    os64_font_status_t (*fonts)(void *ctx, const flow_family_list_t *families,
-                                bool bold, bool italic, uint32_t px,
-                                os64_text_font_t *const **list, size_t *count,
-                                os64_font_face_info_t *primary);
-    // Replaced sizes: the face's oracle. False = unknown.
-    bool (*replaced_size)(void *ctx, const os64_html_node_t *node,
-                          int32_t *w, int32_t *h);
-    os64_text_context_t *text;      // the engine the runs are laid out on
-    uint32_t viewport_font_px;      // `medium`; 16 unless the face says otherwise
-    flow_generic_t default_generic; // the family a page that names none is drawn in
-    uint32_t ink, link_ink, paper;  // XRGB; the dumps name these, never print them
-} flow_env_t;
+- **`flow_layout(doc, model, width, env)`** — NULL on no memory only;
+  otherwise a tree whose `flow_incomplete` says whether it is whole. Every
+  call is a whole rebuild (ruling 2): the face calls it on load, on
+  resize, when an image's size arrives, when a control is edited in a way
+  that changes its size, and never more than once per frame. `flow_env_t`
+  carries the fonts resolver (the family list, then a generic), the
+  replaced-size oracle, the text context, `medium`, the default generic
+  and the three colours the dumps name and never print.
+- **`flow_root` and `flow_visit(tree, viewport, fn, ctx)`** — the tree for
+  painting, walked in Appendix E's order without z-index or positioning:
+  the block-level boxes first (backgrounds and borders), then the inline
+  content, a span before the text it sits behind, an atom's own content
+  where the atom is. The walk prunes on each box's OVERFLOW rect, never
+  its own, so a child hanging out of a too-short parent is still visited
+  and painting the viewport costs the boxes it shows.
+- **`flow_hit(tree, x, y)`** — the box whose OWN rect holds the point,
+  searched through overflow rects, the last one painted winning (the one
+  on top). The face then asks libpage what its node MEANS and a TEXT's run
+  where in the text the pointer is (`os64_text_hit`).
+- **`flow_box_for(tree, node)`** — a node's first box: where a fragment
+  link scrolls to, where a control's widget goes. NULL for a node with
+  none (hidden, `display: none`, or past where an incomplete layout
+  stopped).
+- **`flow_nimages`/`flow_image`, `flow_ncontrols`/`flow_control`** — the
+  two lists the face schedules from, in tree order, each item once: an
+  image's box (its alt text's first run when it is laid out as text) so the
+  face fetches libpage's resolved src, and a control's atom so the face
+  places a widget on it.
+- **`flow_height`, `flow_width`** — the width is the root's overflow
+  width: at least the width laid out at, more where something would not
+  fit. **`flow_dump`** is the dump above, snprintf-shaped.
 
-// Build the box tree and lay it out at `width`. NULL on no memory only;
-// otherwise a tree whose `incomplete` says whether it is whole. Every
-// call is a whole rebuild (ruling 2): the face calls it on load, on
-// resize, when an image's size arrives, when a control is edited in a
-// way that changes its size, and never more than once per frame.
-flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *model,
-                         int32_t width, const flow_env_t *env);
-void flow_free(flow_tree_t *);
-
-// The tree, for painting: the root box, and a walk pruned by a rectangle
-// — against each box's OVERFLOW rect, never its own, so a child that
-// hangs out of a too-short parent is still visited — so painting the
-// viewport costs the visible boxes and the depth above them. Boxes are
-// in painting order (backgrounds before content, CSS 2.1 Appendix E
-// without z-index or positioning, which the first cut has none of).
-const flow_box_t *flow_root(const flow_tree_t *);
-void flow_visit(const flow_tree_t *, os64_gui_rect_t viewport,
-                void (*visit)(void *ctx, const flow_box_t *), void *ctx);
-
-// Hit-testing: the deepest box whose OWN rect contains (x, y), searched
-// through overflow rects, or NULL. The face then asks libpage what the
-// box's node MEANS (link_for / control_for) and asks the fragment's run
-// where in the text the pointer is (os64_text_hit).
-const flow_box_t *flow_hit(const flow_tree_t *, int32_t x, int32_t y);
-
-// Geometry for a node — the box a fragment link scrolls to, the rectangle
-// a control widget is placed in. NULL for a node with no box (hidden,
-// display none, or the tree is incomplete past it).
-const flow_box_t *flow_box_for(const flow_tree_t *, const os64_html_node_t *);
-
-// The two lists the face schedules from: image boxes (with their nodes, so
-// the face fetches libpage's resolved src) and control boxes (with their
-// libpage control index, so the face places a widget per control).
-int32_t flow_nimages(const flow_tree_t *);   const flow_box_t *flow_image(const flow_tree_t *, int32_t);
-int32_t flow_ncontrols(const flow_tree_t *); const flow_box_t *flow_control(const flow_tree_t *, int32_t);
-
-int32_t flow_height(const flow_tree_t *);
-int32_t flow_width(const flow_tree_t *);     // the root's overflow width — at least the width
-                                             // the tree was laid out at, more when something overflowed
-bool    flow_incomplete(const flow_tree_t *);
-
-// The dump, for the harness and for /proc-style forensics in the guest.
-int64_t flow_dump(const flow_tree_t *, char *out, size_t cap);
-```
-
-`flow_box_t` is public and read-only: kind, node, rect, style pointer, the
-run handle and byte range for a text fragment, the link or control index
-for a box that is one (settled at build from libpage, so the face never
-keeps a counter — LIBPAGE.md's "node names its item" rule, applied
-downward), first child, next sibling, parent.
+`flow_box_t` is public and read-only: kind, node, style pointer, rect and
+overflow rect, baseline, the run handle and byte range for a text
+fragment, what decorates it, the link or control index for a box that is
+one (settled at build from libpage, so the face never keeps a counter —
+LIBPAGE.md's "node names its item" rule, applied downward), whether
+layout stopped inside it, and parent, first child and next sibling.
 
 ## Bounds
 
@@ -825,9 +799,15 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
   deep round a `pre`, form-in-table-in-form, an unclosed inline tag over
   a table).
 - **The allocation-failure sweep**: an injected failure at every
-  allocation of one corpus page, asserting no crash, no leak, and either
-  NULL or a tree whose `incomplete` is set — the wend harness's shape, at
-  the depth that harness already runs. **The partial tree's relation to the whole one is stated here
+  allocation, asserting no crash, no leak, and either NULL or a tree whose
+  `incomplete` is set — the wend harness's shape, at the depth that
+  harness already runs. It runs four ways: pass 1 alone on floodgap
+  (all or nothing, so a style table that comes back is the whole one);
+  pass 2 alone, every partial box tree a prefix of the whole; the whole
+  layout with every allocation from the Nth on failing; and a SINGLE failure at N with
+  everything after it succeeding, on a page with a member of every family
+  and on floodgap at 800 — the hard case, where the build goes on past
+  the hole, and the one the relation below is asserted on. **The partial tree's relation to the whole one is stated here
   so the assertion is not invented at the keyboard**: a dump prints a
   box's height before its children, so a truncated tree differs from the
   whole at its first line, and a table laid out from partial content has
@@ -842,13 +822,31 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
   early can still move when its line completes; (c) every unfinished box
   is an ancestor of the last box. Heights and table widths of unfinished
   ancestors, and the geometry under an unfinished line, are not compared.
-- **Fuzz**: every corpus page truncated at every 64 bytes and tag-soup
-  mutations of them, under ASan/UBSan, asserting the invariants of a box
-  tree (every child's overflow rect inside its parent's OVERFLOW rect —
-  not its own rect, which content may legitimately exceed; every rect
-  non-negative; every fragment's byte range within its piece's text;
-  every memoized width COMPUTED at most once per box; every span within
-  its clamp).
+  Beside the three, a partial page is as tall as the blocks it holds, so
+  what did lay out can be scrolled to. What makes it all hold: pass 2
+  marks the box it was filling when memory ran out and every box above
+  it; a line cut short is kept EMPTY where it would have begun; a table
+  cut short in either pass keeps its place with no rows, because its
+  columns would come from only the cells it has and no line in it would
+  break where the whole table's does; an interrupted block holds what was
+  laid out and hands its bottom to its parent; and an unfinished list
+  item gets no marker. A NULL root with `incomplete` set is the empty
+  prefix.
+- **Fuzz** (`tools/test_libflow_host.sh --fuzz`, or `--fuzz PAGE K N`
+  for one page's Kth of N shares, because the whole run is hours in one
+  process; the default run samples it): every corpus page truncated at every 64 bytes and 400
+  tag-soup mutations of each, laid out at 800, 200 and 0 under ASan,
+  asserting the invariants of a box tree — the layout is whole; every
+  child's overflow rect inside its parent's OVERFLOW rect (not its own
+  rect, which content may legitimately exceed); every rect non-negative;
+  every text fragment's byte range within its node's text; every
+  memoized width COMPUTED at most once per box. The span clamps are
+  proved by the table cases, which lay out a page of spanning cells at
+  the limits.
+- **The corpus dumps**: `--write-corpus` writes `<page>.boxes` (800) and
+  `<page>.400.boxes` beside each corpus page, and every run compares
+  against them. They are regression, not proof: they say a change moved a
+  real page, and the diff says by how much.
 - **In the guest**: yonder's page view on the corpus pages screendumped
   and read; a table page and a form page by hand. Runtime claims want a
   guest probe, as always.

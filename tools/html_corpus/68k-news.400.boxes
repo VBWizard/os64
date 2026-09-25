@@ -1,0 +1,3270 @@
+page 400 17369
+block html 0 0 400 17369
+  block body 8 21 384 17332
+    block center 8 21 384 80
+      block h1 8 21 384 80
+        line 8 21 384 40 base 28
+          span b 8 25 136 32
+          span font 152 25 240 32
+          span i 152 25 240 32
+          text "68k.news:" 8 25 136 32 serif 32 bold
+          text " " 144 25 8 32 serif 32 bold
+          text "Headlines from the" 152 25 240 32 serif 32 bold italic
+        line 8 61 384 40 base 28
+          span i 160 65 80 32
+          span font 160 65 80 32
+          text "Future" 160 65 80 32 serif 32 bold italic
+    block hr 8 123 384 2
+    block center 8 133 384 40
+      line 8 133 384 20 base 14
+        span b 311 137 61 13
+        span a 311 137 61 13 link 0
+        span small 12 137 377 13
+        text "Basic HTML Google News for vintage computers. Built by " 12 137 299 13 serif 13
+        text "Action Retro" 311 137 61 13 serif 13 bold underline link 0
+        text " on" 372 137 17 13 serif 13
+      line 8 153 384 20 base 14
+        span a 164 157 124 13 link 1
+        span b 164 157 124 13
+        span small 112 157 176 13
+        text "YouTube. " 112 157 52 13 serif 13
+        text "Support this on Patreon." 164 157 124 13 serif 13 bold underline link 1
+    block p 8 186 384 0
+    block center 8 186 384 65
+      line 8 186 384 16 base 12
+        span a 21 188 20 13 link 2
+        span a 44 188 36 13 link 3
+        span a 83 188 39 13 link 4
+        span a 125 188 52 13 link 5
+        span a 181 188 65 13 link 6
+        span a 249 188 88 13 link 7
+        span a 340 188 39 13 link 8
+        text "TOP" 21 188 20 13 serif 13 underline link 2
+        text " " 41 188 3 13 serif 13
+        text "WORLD" 44 188 36 13 serif 13 underline link 3
+        text " " 80 188 3 13 serif 13
+        text "NATION" 83 188 39 13 serif 13 underline link 4
+        text " " 122 188 3 13 serif 13
+        text "BUSINESS" 125 188 52 13 serif 13 underline link 5
+        text " " 177 188 4 13 serif 13
+        text "TECHNOLOGY" 181 188 65 13 serif 13 underline link 6
+        text " " 246 188 3 13 serif 13
+        text "ENTERTAINMENT" 249 188 88 13 serif 13 underline link 7
+        text " " 337 188 3 13 serif 13
+        text "SPORTS" 340 188 39 13 serif 13 underline link 8
+      line 8 202 384 17 base 12
+        span a 156 204 46 13 link 9
+        span a 205 204 39 13 link 10
+        text "SCIENCE" 156 204 46 13 serif 13 underline link 9
+        text " " 202 204 3 13 serif 13
+        text "HEALTH" 205 204 39 13 serif 13 underline link 10
+      line 8 219 384 16 base 11
+        span font 119 221 162 12
+        text "-=-=-=-=-=-=-=-=-=-=-=-=-=-" 119 221 162 12 serif 12
+      line 8 235 384 16 base 11
+        span a 202 237 52 13 link 11
+        text "US Edition " 146 237 56 13 serif 13
+        text "(Change)" 202 237 52 13 serif 13 underline link 11
+    block p 8 265 384 0
+    block h3 8 270 384 90
+      line 8 270 384 30 base 21
+        span font 8 273 330 24
+        span a 8 273 330 24 link 12
+        text "Apple Watch Series 12 vs. 11: Every" 8 273 330 24 serif 24 bold underline link 12
+      line 8 300 384 30 base 21
+        span font 8 303 342 24
+        span a 8 303 342 24 link 12
+        text "upgrade, including one Apple didn't" 8 303 342 24 serif 24 bold underline link 12
+      line 8 330 384 30 base 21
+        span a 8 333 198 24 link 12
+        span font 8 333 198 24
+        text "mention - Mashable" 8 333 198 24 serif 24 bold underline link 12
+    block p 8 379 384 0
+      line 8 360 384 0 base 17
+        span font 8 362 0 19
+    block ol 8 379 384 332
+      block li 48 379 344 71
+        line 48 379 344 23 base 16
+          span font 48 381 333 19
+          span a 48 381 333 19 link 13
+          text "Apple Watch Series 12 vs. 11: Every upgrade," 48 381 333 19 serif 19 underline link 13
+        line 48 402 344 24 base 17
+          span font 48 405 200 19
+          span a 48 405 200 19 link 13
+          text "including one Apple didn't" 48 405 200 19 serif 19 underline link 13
+        line 48 426 344 24 base 17
+          span a 48 429 62 19 link 13
+          span font 48 429 157 19
+          text "mention" 48 429 62 19 serif 19 underline link 13
+          text "  Mashable" 110 429 95 19 serif 19
+        marker "1. " 36 383 12 16
+      block li 48 450 344 47
+        line 48 450 344 24 base 17
+          span font 48 452 333 19
+          span a 48 452 333 19 link 14
+          text "Introducing Apple Watch Series 12, with the" 48 452 333 19 serif 19 underline link 14
+        line 48 474 344 23 base 16
+          span a 48 476 242 19 link 14
+          span font 48 476 304 19
+          text "all-new Health Sensing System" 48 476 242 19 serif 19 underline link 14
+          text "  Apple" 290 476 62 19 serif 19
+        marker "2. " 32 455 16 16
+      block li 48 497 344 72
+        line 48 497 344 24 base 17
+          span font 48 500 333 19
+          span a 48 500 333 19 link 15
+          text "Apple Watch Series 12 vs. Apple Watch Ultra" 48 500 333 19 serif 19 underline link 15
+        line 48 521 344 24 base 17
+          span font 48 524 219 19
+          span a 48 524 219 19 link 15
+          text "4: Clash of the Newest Apple" 48 524 219 19 serif 19 underline link 15
+        line 48 545 344 24 base 17
+          span a 48 547 67 19 link 15
+          span font 48 547 124 19
+          text "Watches" 48 547 67 19 serif 19 underline link 15
+          text "  CNET" 115 547 57 19 serif 19
+        marker "3. " 32 502 16 16
+      block li 48 569 344 71
+        line 48 569 344 23 base 16
+          span font 48 571 266 19
+          span a 48 571 266 19 link 16
+          text "Apple Takes on AI Wearables With" 48 571 266 19 serif 19 underline link 16
+        line 48 592 344 24 base 17
+          span font 48 595 190 19
+          span a 48 595 190 19 link 16
+          text "Always-Listening Watch" 48 595 190 19 serif 19 underline link 16
+        line 48 616 344 24 base 17
+          span a 48 619 67 19 link 16
+          span font 48 619 204 19
+          text "Features" 48 619 67 19 serif 19 underline link 16
+          text "  bloomberg.com" 115 619 137 19 serif 19
+        marker "4. " 32 573 16 16
+      block li 48 640 344 71
+        line 48 640 344 24 base 17
+          span font 48 642 318 19
+          span a 48 642 318 19 link 17
+          text "Apple's New Siri Recap Turns Every Apple" 48 642 318 19 serif 19 underline link 17
+        line 48 664 344 23 base 16
+          span font 48 666 247 19
+          span a 48 666 247 19 link 17
+          text "Watch Into a Mass Surveillance" 48 666 247 19 serif 19 underline link 17
+        line 48 687 344 24 base 17
+          span a 48 690 76 19 link 17
+          span font 48 690 147 19
+          text "Nightmare" 48 690 76 19 serif 19 underline link 17
+          text "  PCMag" 124 690 71 19 serif 19
+        marker "5. " 32 645 16 16
+    block p 8 727 384 0
+    block p 8 727 384 0
+    block p 8 727 384 20
+      line 8 727 384 20 base 14
+        span small 8 731 202 13
+        text "Posted on 11 September 2026 | 5:56 am" 8 731 202 13 serif 13
+    block h3 8 766 384 90
+      line 8 766 384 30 base 21
+        span font 8 769 366 24
+        span a 8 769 366 24 link 18
+        text "Trump shadow looms large over Brics" 8 769 366 24 serif 24 bold underline link 18
+      line 8 796 384 30 base 21
+        span font 8 799 354 24
+        span a 8 799 354 24 link 18
+        text "as Modi hosts Putin and Xi in Delhi -" 8 799 354 24 serif 24 bold underline link 18
+      line 8 826 384 30 base 21
+        span a 8 829 36 24 link 18
+        span font 8 829 36 24
+        text "BBC" 8 829 36 24 serif 24 bold underline link 18
+    block p 8 875 384 0
+      line 8 856 384 0 base 16
+        span font 8 858 0 19
+    block ol 8 875 384 285
+      block li 48 875 344 47
+        line 48 875 344 23 base 16
+          span font 48 877 314 19
+          span a 48 877 314 19 link 19
+          text "Trump shadow looms large over Brics as" 48 877 314 19 serif 19 underline link 19
+        line 48 898 344 24 base 17
+          span a 48 901 242 19 link 19
+          span font 48 901 290 19
+          text "Modi hosts Putin and Xi in Delhi" 48 901 242 19 serif 19 underline link 19
+          text "  BBC" 290 901 48 19 serif 19
+        marker "1. " 36 879 12 16
+      block li 48 922 344 48
+        line 48 922 344 24 base 17
+          span font 48 924 342 19
+          span a 48 924 342 19 link 20
+          text "India hosts BRICS summit as Iran war tests" 48 924 342 19 serif 19 underline link 20
+        line 48 946 344 24 base 16
+          span a 48 948 76 19 link 20
+          span font 48 948 185 19
+          text "bloc unity" 48 948 76 19 serif 19 underline link 20
+          text "  reuters.com" 124 948 109 19 serif 19
+        marker "2. " 32 927 16 16
+      block li 48 970 344 47
+        line 48 970 344 23 base 16
+          span font 48 972 299 19
+          span a 48 972 299 19 link 21
+          text "BRICS At 20: How Big It Is, And Why It" 48 972 299 19 serif 19 underline link 21
+        line 48 993 344 24 base 17
+          span a 48 996 242 19 link 21
+          span font 48 996 299 19
+          text "Matters To India And The World" 48 996 242 19 serif 19 underline link 21
+          text "  NDTV" 290 996 57 19 serif 19
+        marker "3. " 32 974 16 16
+      block li 48 1017 344 71
+        line 48 1017 344 24 base 17
+          span font 48 1019 314 19
+          span a 48 1019 314 19 link 22
+          text "New Delhi residents face traffic chaos as" 48 1019 314 19 serif 19 underline link 22
+        line 48 1041 344 24 base 16
+          span a 48 1043 285 19 link 22
+          span font 48 1043 323 19
+          text "India prepares to host BRICS summit" 48 1043 285 19 serif 19 underline link 22
+          text "  AP" 333 1043 38 19 serif 19
+        line 48 1065 344 23 base 16
+          span font 48 1067 43 19
+          text "News" 48 1067 43 19 serif 19
+        marker "4. " 32 1022 16 16
+      block li 48 1088 344 72
+        line 48 1088 344 24 base 17
+          span font 48 1091 333 19
+          span a 48 1091 333 19 link 23
+          text "Why Emerging Powers Keep Joining BRICS," 48 1091 333 19 serif 19 underline link 23
+        line 48 1112 344 24 base 17
+          span a 48 1114 200 19 link 23
+          span font 48 1114 323 19
+          text "Even When They Disagree" 48 1114 200 19 serif 19 underline link 23
+          text "  The New York" 248 1114 123 19 serif 19
+        line 48 1136 344 24 base 16
+          span font 48 1138 48 19
+          text "Times" 48 1138 48 19 serif 19
+        marker "5. " 32 1093 16 16
+    block p 8 1176 384 0
+    block p 8 1176 384 0
+    block p 8 1176 384 20
+      line 8 1176 384 20 base 14
+        span small 8 1180 202 13
+        text "Posted on 11 September 2026 | 5:38 am" 8 1180 202 13 serif 13
+    block h3 8 1214 384 60
+      line 8 1214 384 30 base 21
+        span font 8 1217 354 24
+        span a 8 1217 354 24 link 24
+        text "Yemen's Houthis seize strategic Red" 8 1217 354 24 serif 24 bold underline link 24
+      line 8 1244 384 30 base 21
+        span a 8 1247 234 24 link 24
+        span font 8 1247 234 24
+        text "Sea port of Mokha - BBC" 8 1247 234 24 serif 24 bold underline link 24
+    block p 8 1293 384 0
+      line 8 1274 384 0 base 17
+        span font 8 1277 0 19
+    block ol 8 1293 384 309
+      block li 48 1293 344 48
+        line 48 1293 344 24 base 17
+          span font 48 1295 314 19
+          span a 48 1295 314 19 link 25
+          text "Yemen's Houthis seize strategic Red Sea" 48 1295 314 19 serif 19 underline link 25
+        line 48 1317 344 24 base 16
+          span a 48 1319 105 19 link 25
+          span font 48 1319 152 19
+          text "port of Mokha" 48 1319 105 19 serif 19 underline link 25
+          text "  BBC" 153 1319 47 19 serif 19
+        marker "1. " 36 1298 12 16
+      block li 48 1341 344 71
+        line 48 1341 344 23 base 16
+          span font 48 1343 280 19
+          span a 48 1343 280 19 link 26
+          text "Iran war live: Houthis take control of" 48 1343 280 19 serif 19 underline link 26
+        line 48 1364 344 24 base 17
+          span a 48 1367 257 19 link 26
+          span font 48 1367 290 19
+          text "Yemen's entire Red Sea coastline" 48 1367 257 19 serif 19 underline link 26
+          text "  Al" 305 1367 33 19 serif 19
+        line 48 1388 344 24 base 17
+          span font 48 1390 62 19
+          text "Jazeera" 48 1390 62 19 serif 19
+        marker "2. " 32 1345 16 16
+      block li 48 1412 344 47
+        line 48 1412 344 24 base 16
+          span font 48 1414 318 19
+          span a 48 1414 318 19 link 27
+          text "Yemen's Houthis reach strategic island at" 48 1414 318 19 serif 19 underline link 27
+        line 48 1436 344 23 base 16
+          span a 48 1438 214 19 link 27
+          span font 48 1438 323 19
+          text "mouth of vital shipping lane" 48 1438 214 19 serif 19 underline link 27
+          text "  reuters.com" 262 1438 109 19 serif 19
+        marker "3. " 32 1416 16 16
+      block li 48 1459 344 72
+        line 48 1459 344 24 base 17
+          span font 48 1462 318 19
+          span a 48 1462 318 19 link 28
+          text "Exclusive: This small island off Yemen is" 48 1462 318 19 serif 19 underline link 28
+        line 48 1483 344 24 base 17
+          span font 48 1485 323 19
+          span a 48 1485 323 19 link 28
+          text "now a strategic prize in the widening Iran" 48 1485 323 19 serif 19 underline link 28
+        line 48 1507 344 24 base 16
+          span a 48 1509 29 19 link 28
+          span font 48 1509 76 19
+          text "war" 48 1509 29 19 serif 19 underline link 28
+          text "  CNN" 77 1509 47 19 serif 19
+        marker "4. " 32 1464 16 16
+      block li 48 1531 344 71
+        line 48 1531 344 23 base 16
+          span font 48 1533 342 19
+          span a 48 1533 342 19 link 29
+          text "Houthis Seize Strategic Red Sea Port, a Major" 48 1533 342 19 serif 19 underline link 29
+        line 48 1554 344 24 base 17
+          span a 48 1557 171 19 link 29
+          span font 48 1557 295 19
+          text "Victory for Iranian Ally" 48 1557 171 19 serif 19 underline link 29
+          text "  The New York" 219 1557 124 19 serif 19
+        line 48 1578 344 24 base 17
+          span font 48 1580 48 19
+          text "Times" 48 1580 48 19 serif 19
+        marker "5. " 32 1535 16 16
+    block p 8 1618 384 0
+    block p 8 1618 384 0
+    block p 8 1618 384 20
+      line 8 1618 384 20 base 14
+        span small 8 1622 202 13
+        text "Posted on 11 September 2026 | 5:20 am" 8 1622 202 13 serif 13
+    block h3 8 1656 384 90
+      line 8 1656 384 30 base 21
+        span font 8 1659 354 24
+        span a 8 1659 354 24 link 30
+        text "Oil Keeps Rising and Diesel Hits $6 a" 8 1659 354 24 serif 24 bold underline link 30
+      line 8 1686 384 30 base 21
+        span font 8 1689 372 24
+        span a 8 1689 372 24 link 30
+        text "Gallon as Middle East Tensions Mount" 8 1689 372 24 serif 24 bold underline link 30
+      line 8 1716 384 30 base 21
+        span a 8 1719 216 24 link 30
+        span font 8 1719 216 24
+        text "- The New York Times" 8 1719 216 24 serif 24 bold underline link 30
+    block p 8 1765 384 0
+      line 8 1746 384 0 base 17
+        span font 8 1749 0 19
+    block ol 8 1765 384 309
+      block li 48 1765 344 71
+        line 48 1765 344 24 base 17
+          span font 48 1768 333 19
+          span a 48 1768 333 19 link 31
+          text "Oil Keeps Rising and Diesel Hits $6 a Gallon" 48 1768 333 19 serif 19 underline link 31
+        line 48 1789 344 24 base 17
+          span a 48 1791 242 19 link 31
+          span font 48 1791 328 19
+          text "as Middle East Tensions Mount" 48 1791 242 19 serif 19 underline link 31
+          text "  The New" 290 1791 86 19 serif 19
+        line 48 1813 344 23 base 16
+          span font 48 1815 86 19
+          text "York Times" 48 1815 86 19 serif 19
+        marker "1. " 36 1770 12 16
+      block li 48 1836 344 72
+        line 48 1836 344 24 base 17
+          span font 48 1839 309 19
+          span a 48 1839 309 19 link 32
+          text "Oil Prices Could Top $120 as Middle East" 48 1839 309 19 serif 19 underline link 32
+        line 48 1860 344 24 base 17
+          span a 48 1863 138 19 link 32
+          span font 48 1863 337 19
+          text "Conflict Escalates" 48 1863 138 19 serif 19 underline link 32
+          text "  Crude Oil Prices Today |" 186 1863 199 19 serif 19
+        line 48 1884 344 24 base 17
+          span font 48 1886 95 19
+          text "OilPrice.com" 48 1886 95 19 serif 19
+        marker "2. " 32 1841 16 16
+      block li 48 1908 344 71
+        line 48 1908 344 23 base 16
+          span font 48 1910 328 19
+          span a 48 1910 328 19 link 33
+          text "Stock market today: Dow, S&P 500, Nasdaq" 48 1910 328 19 serif 19 underline link 33
+        line 48 1931 344 24 base 17
+          span font 48 1934 309 19
+          span a 48 1934 309 19 link 33
+          text "fall for fourth straight day as bond yields" 48 1934 309 19 serif 19 underline link 33
+        line 48 1955 344 24 base 17
+          span a 48 1958 204 19 link 33
+          span font 48 1958 337 19
+          text "jump, oil stays above $100" 48 1958 204 19 serif 19 underline link 33
+          text "  Yahoo Finance" 252 1958 133 19 serif 19
+        marker "3. " 32 1912 16 16
+      block li 48 1979 344 24
+        line 48 1979 344 24 base 17
+          span a 48 1981 71 19 link 34
+          span font 48 1981 204 19
+          text "Business" 48 1981 71 19 serif 19 underline link 34
+          text "  The Economist" 119 1981 133 19 serif 19
+        marker "4. " 32 1984 16 16
+      block li 48 2003 344 71
+        line 48 2003 344 23 base 16
+          span font 48 2005 333 19
+          span a 48 2005 333 19 link 35
+          text "Oil set to end week above $100 for first time" 48 2005 333 19 serif 19 underline link 35
+        line 48 2026 344 24 base 17
+          span font 48 2029 304 19
+          span a 48 2029 304 19 link 35
+          text "since mid-May as US diesel hits record" 48 2029 304 19 serif 19 underline link 35
+        line 48 2050 344 24 base 17
+          span a 48 2053 33 19 link 35
+          span font 48 2053 143 19
+          text "high" 48 2053 33 19 serif 19 underline link 35
+          text "  reuters.com" 81 2053 110 19 serif 19
+        marker "5. " 32 2007 16 16
+    block p 8 2090 384 0
+    block p 8 2090 384 0
+    block p 8 2090 384 20
+      line 8 2090 384 20 base 14
+        span small 8 2094 195 13
+        text "Posted on 11 September 2026 | 5:11 am" 8 2094 195 13 serif 13
+    block h3 8 2129 384 90
+      line 8 2129 384 30 base 21
+        span font 8 2132 336 24
+        span a 8 2132 336 24 link 36
+        text "Empty seats, socialism and Trump" 8 2132 336 24 serif 24 bold underline link 36
+      line 8 2159 384 30 base 21
+        span font 8 2162 324 24
+        span a 8 2162 324 24 link 36
+        text "dominate the Republican midterm" 8 2162 324 24 serif 24 bold underline link 36
+      line 8 2189 384 30 base 21
+        span a 8 2192 168 24 link 36
+        span font 8 2192 168 24
+        text "convention - NPR" 8 2192 168 24 serif 24 bold underline link 36
+    block p 8 2237 384 0
+      line 8 2219 384 0 base 16
+        span font 8 2221 0 19
+    block ol 8 2237 384 333
+      block li 48 2237 344 48
+        line 48 2237 344 24 base 17
+          span font 48 2240 342 19
+          span a 48 2240 342 19 link 37
+          text "Empty seats, socialism and Trump dominate" 48 2240 342 19 serif 19 underline link 37
+        line 48 2261 344 24 base 17
+          span a 48 2264 271 19 link 37
+          span font 48 2264 318 19
+          text "the Republican midterm convention" 48 2264 271 19 serif 19 underline link 37
+          text "  NPR" 319 2264 47 19 serif 19
+        marker "1. " 36 2242 12 16
+      block li 48 2285 344 71
+        line 48 2285 344 24 base 17
+          span font 48 2287 333 19
+          span a 48 2287 333 19 link 38
+          text "Trump steps on Vance's primetime moment" 48 2287 333 19 serif 19 underline link 38
+        line 48 2309 344 23 base 16
+          span font 48 2311 337 19
+          span a 48 2311 337 19 link 38
+          text "and other takeaways from RNC convention's" 48 2311 337 19 serif 19 underline link 38
+        line 48 2332 344 24 base 17
+          span a 48 2335 100 19 link 38
+          span font 48 2335 147 19
+          text "second night" 48 2335 100 19 serif 19 underline link 38
+          text "  CNN" 148 2335 47 19 serif 19
+        marker "2. " 32 2290 16 16
+      block li 48 2356 344 71
+        line 48 2356 344 24 base 17
+          span font 48 2359 342 19
+          span a 48 2359 342 19 link 39
+          text "Vance? Rubio? DeSantis? Cruz? Republicans" 48 2359 342 19 serif 19 underline link 39
+        line 48 2380 344 24 base 17
+          span font 48 2382 299 19
+          span a 48 2382 299 19 link 39
+          text "at Dallas convention ponder options for" 48 2382 299 19 serif 19 underline link 39
+        line 48 2404 344 23 base 16
+          span a 48 2406 143 19 link 39
+          span font 48 2406 257 19
+          text "post-Trump leader" 48 2406 143 19 serif 19 underline link 39
+          text "  Dallas News" 191 2406 114 19 serif 19
+        marker "3. " 32 2361 16 16
+      block li 48 2427 344 72
+        line 48 2427 344 24 base 17
+          span font 48 2430 290 19
+          span a 48 2430 290 19 link 40
+          text "Crowd erupts as Vance smacks down" 48 2430 290 19 serif 19 underline link 40
+        line 48 2451 344 24 base 17
+          span font 48 2454 342 19
+          span a 48 2454 342 19 link 40
+          text "protester waving Mexican flag: 'Get your a--" 48 2454 342 19 serif 19 underline link 40
+        line 48 2475 344 24 base 17
+          span a 48 2477 81 19 link 40
+          span font 48 2477 176 19
+          text "over there'" 48 2477 81 19 serif 19 underline link 40
+          text "  Fox News" 129 2477 95 19 serif 19
+        marker "4. " 32 2432 16 16
+      block li 48 2499 344 71
+        line 48 2499 344 23 base 16
+          span font 48 2501 333 19
+          span a 48 2501 333 19 link 41
+          text "'You Know What Happens if You Don't Vote':" 48 2501 333 19 serif 19 underline link 41
+        line 48 2522 344 24 base 17
+          span font 48 2525 223 19
+          span a 48 2525 223 19 link 41
+          text "7 Takeaways From the G.O.P." 48 2525 223 19 serif 19 underline link 41
+        line 48 2546 344 24 base 17
+          span a 48 2549 86 19 link 41
+          span font 48 2549 261 19
+          text "Convention" 48 2549 86 19 serif 19 underline link 41
+          text "  The New York Times" 134 2549 175 19 serif 19
+        marker "5. " 32 2503 16 16
+    block p 8 2586 384 0
+    block p 8 2586 384 0
+    block p 8 2586 384 20
+      line 8 2586 384 20 base 14
+        span small 8 2590 202 13
+        text "Posted on 11 September 2026 | 5:00 am" 8 2590 202 13 serif 13
+    block h3 8 2625 384 90
+      line 8 2625 384 30 base 21
+        span font 8 2628 384 24
+        span a 8 2628 384 24 link 42
+        text "Prince Harry's 'Error' During King Charles" 8 2628 384 24 serif 24 bold underline link 42
+      line 8 2655 384 30 base 21
+        span font 8 2658 336 24
+        span a 8 2658 336 24 link 42
+        text "Meeting Cost Him Dearly — Expert -" 8 2658 336 24 serif 24 bold underline link 42
+      line 8 2685 384 30 base 21
+        span a 8 2688 60 24 link 42
+        span font 8 2688 60 24
+        text "Yahoo" 8 2688 60 24 serif 24 bold underline link 42
+    block p 8 2733 384 0
+      line 8 2715 384 0 base 16
+        span font 8 2717 0 19
+    block ol 8 2733 384 309
+      block li 48 2733 344 48
+        line 48 2733 344 24 base 17
+          span font 48 2736 304 19
+          span a 48 2736 304 19 link 43
+          text "Prince Harry's 'Error' During King Charles" 48 2736 304 19 serif 19 underline link 43
+        line 48 2757 344 24 base 17
+          span a 48 2759 252 19 link 43
+          span font 48 2759 318 19
+          text "Meeting Cost Him Dearly — Expert" 48 2759 252 19 serif 19 underline link 43
+          text "  Yahoo" 300 2759 66 19 serif 19
+        marker "1. " 36 2738 12 16
+      block li 48 2781 344 47
+        line 48 2781 344 24 base 16
+          span font 48 2783 342 19
+          span a 48 2783 342 19 link 44
+          text "Prince Harry and Meghan not working royals," 48 2783 342 19 serif 19 underline link 44
+        line 48 2805 344 23 base 16
+          span a 48 2807 76 19 link 44
+          span font 48 2807 124 19
+          text "says King" 48 2807 76 19 serif 19 underline link 44
+          text "  BBC" 124 2807 48 19 serif 19
+        marker "2. " 32 2785 16 16
+      block li 48 2828 344 72
+        line 48 2828 344 24 base 17
+          span font 48 2831 328 19
+          span a 48 2831 328 19 link 45
+          text "Prince Harry and King Charles Have Spoken" 48 2831 328 19 serif 19 underline link 45
+        line 48 2852 344 24 base 17
+          span font 48 2854 333 19
+          span a 48 2854 333 19 link 45
+          text "Since Harry's U.K. Return, Despite Reports to" 48 2854 333 19 serif 19 underline link 45
+        line 48 2876 344 24 base 16
+          span a 48 2878 90 19 link 45
+          span font 48 2878 200 19
+          text "the Contrary" 48 2878 90 19 serif 19 underline link 45
+          text "  instyle.com" 138 2878 110 19 serif 19
+        marker "3. " 32 2833 16 16
+      block li 48 2900 344 71
+        line 48 2900 344 23 base 16
+          span font 48 2902 318 19
+          span a 48 2902 318 19 link 46
+          text "King Charles III clarifies status of Prince" 48 2902 318 19 serif 19 underline link 46
+        line 48 2923 344 24 base 17
+          span font 48 2926 337 19
+          span a 48 2926 337 19 link 46
+          text "Harry and his wife, Meghan, after their return" 48 2926 337 19 serif 19 underline link 46
+        line 48 2947 344 24 base 17
+          span a 48 2949 67 19 link 46
+          span font 48 2949 152 19
+          text "to the UK" 48 2949 67 19 serif 19 underline link 46
+          text "  AP News" 115 2949 85 19 serif 19
+        marker "4. " 32 2904 16 16
+      block li 48 2971 344 71
+        line 48 2971 344 24 base 16
+          span font 48 2973 285 19
+          span a 48 2973 285 19 link 47
+          text "The Tragic Truth About How Harry and" 48 2973 285 19 serif 19 underline link 47
+        line 48 2995 344 23 base 16
+          span font 48 2997 147 19
+          span a 48 2997 147 19 link 47
+          text "Meghan Really See" 48 2997 147 19 serif 19 underline link 47
+        line 48 3018 344 24 base 17
+          span a 48 3021 95 19 link 47
+          span font 48 3021 257 19
+          text "Themselves" 48 3021 95 19 serif 19 underline link 47
+          text "  thedailybeast.com" 143 3021 162 19 serif 19
+        marker "5. " 32 2975 16 16
+    block p 8 3058 384 0
+    block p 8 3058 384 0
+    block p 8 3058 384 20
+      line 8 3058 384 20 base 14
+        span small 8 3062 202 13
+        text "Posted on 11 September 2026 | 4:04 am" 8 3062 202 13 serif 13
+    block h3 8 3097 384 90
+      line 8 3097 384 30 base 21
+        span font 8 3100 360 24
+        span a 8 3100 360 24 link 48
+        text "U.S. diesel price tops $6 per gallon, a" 8 3100 360 24 serif 24 bold underline link 48
+      line 8 3127 384 30 base 21
+        span font 8 3130 360 24
+        span a 8 3130 360 24 link 48
+        text "record high as Ukraine and Iran wars" 8 3130 360 24 serif 24 bold underline link 48
+      line 8 3157 384 30 base 21
+        span a 8 3160 300 24 link 48
+        span font 8 3160 300 24
+        text "ripple through economy - CNBC" 8 3160 300 24 serif 24 bold underline link 48
+    block p 8 3206 384 0
+      line 8 3187 384 0 base 16
+        span font 8 3189 0 19
+    block ol 8 3206 384 332
+      block li 48 3206 344 71
+        line 48 3206 344 23 base 16
+          span font 48 3208 337 19
+          span a 48 3208 337 19 link 49
+          text "U.S. diesel price tops $6 per gallon, a record" 48 3208 337 19 serif 19 underline link 49
+        line 48 3229 344 24 base 17
+          span font 48 3232 342 19
+          span a 48 3232 342 19 link 49
+          text "high as Ukraine and Iran wars ripple through" 48 3232 342 19 serif 19 underline link 49
+        line 48 3253 344 24 base 17
+          span a 48 3255 71 19 link 49
+          span font 48 3255 128 19
+          text "economy" 48 3255 71 19 serif 19 underline link 49
+          text "  CNBC" 119 3255 57 19 serif 19
+        marker "1. " 36 3210 12 16
+      block li 48 3277 344 71
+        line 48 3277 344 24 base 16
+          span font 48 3279 318 19
+          span a 48 3279 318 19 link 50
+          text "Diesel costs more than $6 a gallon for the" 48 3279 318 19 serif 19 underline link 50
+        line 48 3301 344 23 base 16
+          span font 48 3303 328 19
+          span a 48 3303 328 19 link 50
+          text "first time. Here's how that affects you | CNN" 48 3303 328 19 serif 19 underline link 50
+        line 48 3324 344 24 base 17
+          span a 48 3327 71 19 link 50
+          span font 48 3327 119 19
+          text "Business" 48 3327 71 19 serif 19 underline link 50
+          text "  CNN" 119 3327 48 19 serif 19
+        marker "2. " 32 3281 16 16
+      block li 48 3348 344 71
+        line 48 3348 344 24 base 17
+          span font 48 3350 295 19
+          span a 48 3350 295 19 link 51
+          text "US diesel prices soar past $6 a gallon," 48 3350 295 19 serif 19 underline link 51
+        line 48 3372 344 24 base 16
+          span font 48 3374 290 19
+          span a 48 3374 290 19 link 51
+          text "deepening strain for hauling everyday" 48 3374 290 19 serif 19 underline link 51
+        line 48 3396 344 23 base 16
+          span a 48 3398 48 19 link 51
+          span font 48 3398 133 19
+          text "goods" 48 3398 48 19 serif 19 underline link 51
+          text "  AP News" 96 3398 85 19 serif 19
+        marker "3. " 32 3353 16 16
+      block li 48 3419 344 72
+        line 48 3419 344 24 base 17
+          span font 48 3422 333 19
+          span a 48 3422 333 19 link 52
+          text "US average diesel price passes $6 a gallon" 48 3422 333 19 serif 19 underline link 52
+        line 48 3443 344 24 base 17
+          span font 48 3445 204 19
+          span a 48 3445 204 19 link 52
+          text "for the first time, GasBuddy" 48 3445 204 19 serif 19 underline link 52
+        line 48 3467 344 24 base 16
+          span a 48 3469 38 19 link 52
+          span font 48 3469 147 19
+          text "says" 48 3469 38 19 serif 19 underline link 52
+          text "  reuters.com" 86 3469 109 19 serif 19
+        marker "4. " 32 3424 16 16
+      block li 48 3491 344 47
+        line 48 3491 344 23 base 16
+          span font 48 3493 314 19
+          span a 48 3493 314 19 link 53
+          text "US Diesel Prices Rise Past $6 a Gallon for" 48 3493 314 19 serif 19 underline link 53
+        line 48 3514 344 24 base 17
+          span a 48 3517 114 19 link 53
+          span font 48 3517 252 19
+          text "First Time Ever" 48 3517 114 19 serif 19 underline link 53
+          text "  bloomberg.com" 162 3517 138 19 serif 19
+        marker "5. " 32 3495 16 16
+    block p 8 3554 384 0
+    block p 8 3554 384 0
+    block p 8 3554 384 20
+      line 8 3554 384 20 base 14
+        span small 8 3558 202 13
+        text "Posted on 11 September 2026 | 3:43 am" 8 3558 202 13 serif 13
+    block h3 8 3593 384 90
+      line 8 3593 384 30 base 21
+        span font 8 3596 384 24
+        span a 8 3596 384 24 link 54
+        text "Oil prices falls to $105 and Asian shares" 8 3596 384 24 serif 24 bold underline link 54
+      line 8 3623 384 30 base 21
+        span font 8 3626 360 24
+        span a 8 3626 360 24 link 54
+        text "decline, tracking Wall Street losses -" 8 3626 360 24 serif 24 bold underline link 54
+      line 8 3653 384 30 base 21
+        span a 8 3656 84 24 link 54
+        span font 8 3656 84 24
+        text "AP News" 8 3656 84 24 serif 24 bold underline link 54
+    block p 8 3701 384 0
+      line 8 3683 384 0 base 16
+        span font 8 3685 0 19
+    block ol 8 3701 384 333
+      block li 48 3701 344 72
+        line 48 3701 344 24 base 17
+          span font 48 3704 304 19
+          span a 48 3704 304 19 link 55
+          text "Oil prices falls to $105 and Asian shares" 48 3704 304 19 serif 19 underline link 55
+        line 48 3725 344 24 base 17
+          span a 48 3728 271 19 link 55
+          span font 48 3728 309 19
+          text "decline, tracking Wall Street losses" 48 3728 271 19 serif 19 underline link 55
+          text "  AP" 319 3728 38 19 serif 19
+        line 48 3749 344 24 base 17
+          span font 48 3751 43 19
+          text "News" 48 3751 43 19 serif 19
+        marker "1. " 36 3706 12 16
+      block li 48 3773 344 95
+        line 48 3773 344 23 base 16
+          span font 48 3775 337 19
+          span a 48 3775 337 19 link 56
+          text "Oil prices stay above $108 and Asian shares" 48 3775 337 19 serif 19 underline link 56
+        line 48 3796 344 24 base 17
+          span a 48 3799 271 19 link 56
+          span font 48 3799 318 19
+          text "decline, tracking Wall Street losses" 48 3799 271 19 serif 19 underline link 56
+          text "  ABC" 319 3799 47 19 serif 19
+        line 48 3820 344 24 base 17
+          span font 48 3823 314 19
+          text "News - Breaking News, Latest News and" 48 3823 314 19 serif 19
+        line 48 3844 344 24 base 17
+          span font 48 3846 52 19
+          text "Videos" 48 3846 52 19 serif 19
+        marker "2. " 32 3777 16 16
+      block li 48 3868 344 47
+        line 48 3868 344 23 base 16
+          span font 48 3870 342 19
+          span a 48 3870 342 19 link 57
+          text "Asian Stock Markets Mixed, Investors Await" 48 3870 342 19 serif 19 underline link 57
+        line 48 3891 344 24 base 17
+          span a 48 3894 100 19 link 57
+          span font 48 3894 152 19
+          text "U.S. CPI Data" 48 3894 100 19 serif 19 underline link 57
+          text "  WSJ" 148 3894 52 19 serif 19
+        marker "3. " 32 3872 16 16
+      block li 48 3915 344 71
+        line 48 3915 344 24 base 17
+          span font 48 3918 328 19
+          span a 48 3918 328 19 link 58
+          text "Asian stocks tumble as oil surge, Fed hike" 48 3918 328 19 serif 19 underline link 58
+        line 48 3939 344 24 base 17
+          span font 48 3941 171 19
+          span a 48 3941 171 19 link 58
+          text "bets overshadow chip" 48 3941 171 19 serif 19 underline link 58
+        line 48 3963 344 23 base 16
+          span a 48 3965 71 19 link 58
+          span font 48 3965 204 19
+          text "optimism" 48 3965 71 19 serif 19 underline link 58
+          text "  Investing.com" 119 3965 133 19 serif 19
+        marker "4. " 32 3920 16 16
+      block li 48 3986 344 48
+        line 48 3986 344 24 base 17
+          span font 48 3989 328 19
+          span a 48 3989 328 19 link 59
+          text "Asian stocks extend losses following Wall" 48 3989 328 19 serif 19 underline link 59
+        line 48 4010 344 24 base 17
+          span a 48 4013 185 19 link 59
+          span font 48 4013 314 19
+          text "Street slide; oil hits $103" 48 4013 185 19 serif 19 underline link 59
+          text "  Seeking Alpha" 233 4013 129 19 serif 19
+        marker "5. " 32 3991 16 16
+    block p 8 4050 384 0
+    block p 8 4050 384 0
+    block p 8 4050 384 20
+      line 8 4050 384 20 base 14
+        span small 8 4054 202 13
+        text "Posted on 11 September 2026 | 3:33 am" 8 4054 202 13 serif 13
+    block h3 8 4089 384 90
+      line 8 4089 384 30 base 21
+        span font 8 4092 372 24
+        span a 8 4092 372 24 link 60
+        text "Aryna Sabalenka cruises past Jessica" 8 4092 372 24 serif 24 bold underline link 60
+      line 8 4119 384 30 base 21
+        span font 8 4122 348 24
+        span a 8 4122 348 24 link 60
+        text "Pegula and into the U.S. Open final -" 8 4122 348 24 serif 24 bold underline link 60
+      line 8 4149 384 30 base 21
+        span a 8 4152 198 24 link 60
+        span font 8 4152 198 24
+        text "The New York Times" 8 4152 198 24 serif 24 bold underline link 60
+    block p 8 4197 384 0
+      line 8 4179 384 0 base 16
+        span font 8 4181 0 19
+    block ol 8 4197 384 309
+      block li 48 4197 344 72
+        line 48 4197 344 24 base 17
+          span font 48 4200 295 19
+          span a 48 4200 295 19 link 61
+          text "Aryna Sabalenka cruises past Jessica" 48 4200 295 19 serif 19 underline link 61
+        line 48 4221 344 24 base 17
+          span a 48 4224 261 19 link 61
+          span font 48 4224 309 19
+          text "Pegula and into the U.S. Open final" 48 4224 261 19 serif 19 underline link 61
+          text "  The" 309 4224 48 19 serif 19
+        line 48 4245 344 24 base 17
+          span font 48 4247 124 19
+          text "New York Times" 48 4247 124 19 serif 19
+        marker "1. " 36 4202 12 16
+      block li 48 4269 344 47
+        line 48 4269 344 23 base 16
+          span font 48 4271 304 19
+          span a 48 4271 304 19 link 62
+          text "Sabalenka rolls past Pegula, will vie for" 48 4271 304 19 serif 19 underline link 62
+        line 48 4292 344 24 base 17
+          span a 48 4295 204 19 link 62
+          span font 48 4295 261 19
+          text "three-peat in US Open final" 48 4295 204 19 serif 19 underline link 62
+          text "  ESPN" 252 4295 57 19 serif 19
+        marker "2. " 32 4273 16 16
+      block li 48 4316 344 71
+        line 48 4316 344 24 base 17
+          span font 48 4319 314 19
+          span a 48 4319 314 19 link 63
+          text "Michelle Obama, Al Roker, Hoda Kotb and" 48 4319 314 19 serif 19 underline link 63
+        line 48 4340 344 24 base 17
+          span font 48 4342 261 19
+          span a 48 4342 261 19 link 63
+          text "More Attend the US Open Women's" 48 4342 261 19 serif 19 underline link 63
+        line 48 4364 344 23 base 16
+          span a 48 4366 81 19 link 63
+          span font 48 4366 190 19
+          text "Semifinals" 48 4366 81 19 serif 19 underline link 63
+          text "  People.com" 129 4366 109 19 serif 19
+        marker "3. " 32 4321 16 16
+      block li 48 4387 344 72
+        line 48 4387 344 24 base 17
+          span font 48 4390 328 19
+          span a 48 4390 328 19 link 64
+          text "Jessica Pegula has another wild beverage" 48 4390 328 19 serif 19 underline link 64
+        line 48 4411 344 24 base 17
+          span a 48 4414 271 19 link 64
+          span font 48 4414 323 19
+          text "exchange after US Open semis loss" 48 4414 271 19 serif 19 underline link 64
+          text "  New" 319 4414 52 19 serif 19
+        line 48 4435 344 24 base 17
+          span font 48 4437 71 19
+          text "York Post" 48 4437 71 19 serif 19
+        marker "4. " 32 4392 16 16
+      block li 48 4459 344 47
+        line 48 4459 344 23 base 16
+          span font 48 4461 328 19
+          span a 48 4461 328 19 link 65
+          text "'Desperation' serving Sabalenka well in US" 48 4461 328 19 serif 19 underline link 65
+        line 48 4482 344 24 base 17
+          span a 48 4485 138 19 link 65
+          span font 48 4485 242 19
+          text "Open title defense" 48 4485 138 19 serif 19 underline link 65
+          text "  usopen.org" 186 4485 104 19 serif 19
+        marker "5. " 32 4463 16 16
+    block p 8 4522 384 0
+    block p 8 4522 384 0
+    block p 8 4522 384 20
+      line 8 4522 384 20 base 14
+        span small 8 4526 202 13
+        text "Posted on 11 September 2026 | 2:39 am" 8 4526 202 13 serif 13
+    block h3 8 4561 384 90
+      line 8 4561 384 30 base 21
+        span font 8 4564 384 24
+        span a 8 4564 384 24 link 66
+        text "Shanahan, McVay brush off travel plans" 8 4564 384 24 serif 24 bold underline link 66
+      line 8 4591 384 30 base 21
+        span font 8 4594 348 24
+        span a 8 4594 348 24 link 66
+        text "as factor in Niners' win over Rams -" 8 4594 348 24 serif 24 bold underline link 66
+      line 8 4621 384 30 base 21
+        span a 8 4624 48 24 link 66
+        span font 8 4624 48 24
+        text "ESPN" 8 4624 48 24 serif 24 bold underline link 66
+    block p 8 4670 384 0
+      line 8 4651 384 0 base 16
+        span font 8 4653 0 19
+    block ol 8 4670 384 332
+      block li 48 4670 344 47
+        line 48 4670 344 23 base 16
+          span font 48 4672 328 19
+          span a 48 4672 328 19 link 67
+          text "Shanahan, McVay brush off travel plans as" 48 4672 328 19 serif 19 underline link 67
+        line 48 4693 344 24 base 17
+          span a 48 4696 238 19 link 67
+          span font 48 4696 295 19
+          text "factor in Niners' win over Rams" 48 4696 238 19 serif 19 underline link 67
+          text "  ESPN" 286 4696 57 19 serif 19
+        marker "1. " 36 4674 12 16
+      block li 48 4717 344 71
+        line 48 4717 344 24 base 17
+          span font 48 4719 323 19
+          span a 48 4719 323 19 link 68
+          text "In Australia, the NFL's Super Bowl favorite" 48 4719 323 19 serif 19 underline link 68
+        line 48 4741 344 24 base 16
+          span a 48 4743 295 19 link 68
+          span font 48 4743 342 19
+          text "looked a world away from its potential" 48 4743 295 19 serif 19 underline link 68
+          text "  NBC" 343 4743 47 19 serif 19
+        line 48 4765 344 23 base 16
+          span font 48 4767 43 19
+          text "News" 48 4767 43 19 serif 19
+        marker "2. " 32 4722 16 16
+      block li 48 4788 344 72
+        line 48 4788 344 24 base 17
+          span font 48 4791 285 19
+          span a 48 4791 285 19 link 69
+          text "Rams' disaster in Australia raises the" 48 4791 285 19 serif 19 underline link 69
+        line 48 4812 344 24 base 17
+          span font 48 4814 342 19
+          span a 48 4814 342 19 link 69
+          text "question: Should the team have followed the" 48 4814 342 19 serif 19 underline link 69
+        line 48 4836 344 24 base 16
+          span a 48 4838 147 19 link 69
+          span font 48 4838 242 19
+          text "49ers there earlier?" 48 4838 147 19 serif 19 underline link 69
+          text "  Fox News" 195 4838 95 19 serif 19
+        marker "3. " 32 4793 16 16
+      block li 48 4860 344 71
+        line 48 4860 344 23 base 16
+          span font 48 4862 333 19
+          span a 48 4862 333 19 link 70
+          text "49ers say 'Night Night' to weary Rams, who" 48 4862 333 19 serif 19 underline link 70
+        line 48 4883 344 24 base 17
+          span a 48 4886 257 19 link 70
+          span font 48 4886 304 19
+          text "depart Down Under in desperation" 48 4886 257 19 serif 19 underline link 70
+          text "  San" 305 4886 47 19 serif 19
+        line 48 4907 344 24 base 17
+          span font 48 4909 152 19
+          text "Francisco Chronicle" 48 4909 152 19 serif 19
+        marker "4. " 32 4864 16 16
+      block li 48 4931 344 71
+        line 48 4931 344 24 base 16
+          span font 48 4933 328 19
+          span a 48 4933 328 19 link 71
+          text "Maybe the Rams needed more sleep. Plus," 48 4933 328 19 serif 19 underline link 71
+        line 48 4955 344 23 base 16
+          span a 48 4957 223 19 link 71
+          span font 48 4957 309 19
+          text "NASCAR's curse-word money" 48 4957 223 19 serif 19 underline link 71
+          text "  The New" 271 4957 86 19 serif 19
+        line 48 4978 344 24 base 17
+          span font 48 4981 86 19
+          text "York Times" 48 4981 86 19 serif 19
+        marker "5. " 32 4935 16 16
+    block p 8 5018 384 0
+    block p 8 5018 384 0
+    block p 8 5018 384 20
+      line 8 5018 384 20 base 14
+        span small 8 5022 202 13
+        text "Posted on 11 September 2026 | 2:22 am" 8 5022 202 13 serif 13
+    block h3 8 5057 384 60
+      line 8 5057 384 30 base 21
+        span font 8 5060 342 24
+        span a 8 5060 342 24 link 72
+        text "Behind the killer robots of Ukraine's" 8 5060 342 24 serif 24 bold underline link 72
+      line 8 5087 384 30 base 21
+        span a 8 5090 372 24 link 72
+        span font 8 5090 372 24
+        text "new warfare 'revolution' - reuters.com" 8 5090 372 24 serif 24 bold underline link 72
+    block p 8 5136 384 71
+      line 8 5136 384 23 base 16
+        span font 8 5138 371 19
+        span a 8 5138 371 19 link 73
+        text "Behind the killer robots of Ukraine's new warfare" 8 5138 371 19 serif 19 underline link 73
+      line 8 5159 384 24 base 17
+        span a 8 5162 86 19 link 73
+        span font 8 5162 361 19
+        span b 203 5162 166 19
+        span a 203 5162 166 19 link 74
+        text "'revolution'" 8 5162 86 19 serif 19 underline link 73
+        text "  reuters.com" 94 5162 109 19 serif 19
+        text "See more headlines &" 203 5162 166 19 serif 19 bold underline link 74
+      line 8 5183 384 24 base 17
+        span a 8 5185 228 19 link 74
+        span b 8 5185 228 19
+        span font 8 5185 228 19
+        text "perspectives on Google News" 8 5185 228 19 serif 19 bold underline link 74
+    block p 8 5223 384 0
+    block p 8 5223 384 20
+      line 8 5223 384 20 base 14
+        span small 8 5227 202 13
+        text "Posted on 11 September 2026 | 2:04 am" 8 5227 202 13 serif 13
+    block h3 8 5261 384 60
+      line 8 5261 384 30 base 21
+        span font 8 5264 348 24
+        span a 8 5264 348 24 link 75
+        text "Physicists just found a tiny glitch in" 8 5264 348 24 serif 24 bold underline link 75
+      line 8 5291 384 30 base 21
+        span a 8 5294 252 24 link 75
+        span font 8 5294 252 24
+        text "time itself - Science Daily" 8 5294 252 24 serif 24 bold underline link 75
+    block p 8 5340 384 48
+      line 8 5340 384 24 base 17
+        span font 8 5343 314 19
+        span a 8 5343 314 19 link 76
+        text "Physicists just found a tiny glitch in time" 8 5343 314 19 serif 19 underline link 76
+      line 8 5364 384 24 base 17
+        span a 8 5366 38 19 link 76
+        span font 8 5366 162 19
+        text "itself" 8 5366 38 19 serif 19 underline link 76
+        text "  Science Daily" 46 5366 124 19 serif 19
+    block p 8 5404 384 0
+    block p 8 5404 384 20
+      line 8 5404 384 20 base 14
+        span small 8 5408 198 13
+        text "Posted on 11 September 2026 | 1:20 am" 8 5408 198 13 serif 13
+    block h3 8 5442 384 90
+      line 8 5442 384 30 base 21
+        span font 8 5445 288 24
+        span a 8 5445 288 24 link 77
+        text "Trump Makes GOP Convention" 8 5445 288 24 serif 24 bold underline link 77
+      line 8 5472 384 30 base 21
+        span font 8 5475 354 24
+        span a 8 5475 354 24 link 77
+        text "Attendees Pledge To Vote And 'Cheat" 8 5475 354 24 serif 24 bold underline link 77
+      line 8 5502 384 30 base 21
+        span a 8 5505 366 24 link 77
+        span font 8 5505 366 24
+        text "Like Hell' In Bizarre Moment - Forbes" 8 5505 366 24 serif 24 bold underline link 77
+    block p 8 5551 384 0
+      line 8 5532 384 0 base 17
+        span font 8 5535 0 19
+    block ol 8 5551 384 285
+      block li 48 5551 344 71
+        line 48 5551 344 24 base 17
+          span font 48 5554 309 19
+          span a 48 5554 309 19 link 78
+          text "Trump Makes GOP Convention Attendees" 48 5554 309 19 serif 19 underline link 78
+        line 48 5575 344 24 base 17
+          span font 48 5577 299 19
+          span a 48 5577 299 19 link 78
+          text "Pledge To Vote And 'Cheat Like Hell' In" 48 5577 299 19 serif 19 underline link 78
+        line 48 5599 344 23 base 16
+          span a 48 5601 119 19 link 78
+          span font 48 5601 190 19
+          text "Bizarre Moment" 48 5601 119 19 serif 19 underline link 78
+          text "  Forbes" 167 5601 71 19 serif 19
+        marker "1. " 36 5556 12 16
+      block li 48 5622 344 24
+        line 48 5622 344 24 base 17
+          span a 48 5625 228 19 link 79
+          span font 48 5625 337 19
+          text "Trump's Weird Loyalty Pledge" 48 5625 228 19 serif 19 underline link 79
+          text "  The Atlantic" 276 5625 109 19 serif 19
+        marker "2. " 32 5627 16 16
+      block li 48 5646 344 48
+        line 48 5646 344 24 base 17
+          span font 48 5649 328 19
+          span a 48 5649 328 19 link 80
+          text "Capitol agenda: Trump tells Republicans to" 48 5649 328 19 serif 19 underline link 80
+        line 48 5670 344 24 base 17
+          span a 48 5672 138 19 link 80
+          span font 48 5672 214 19
+          text "vote or 'go to hell'" 48 5672 138 19 serif 19 underline link 80
+          text "  Politico" 186 5672 76 19 serif 19
+        marker "3. " 32 5651 16 16
+      block li 48 5694 344 71
+        line 48 5694 344 23 base 16
+          span font 48 5696 318 19
+          span a 48 5696 318 19 link 81
+          text "Trump tells GOP faithful to 'pretend I'm on" 48 5696 318 19 serif 19 underline link 81
+        line 48 5717 344 24 base 17
+          span font 48 5720 209 19
+          span a 48 5720 209 19 link 81
+          text "the ticket' as he closes out" 48 5720 209 19 serif 19 underline link 81
+        line 48 5741 344 24 base 17
+          span a 48 5744 86 19 link 81
+          span font 48 5744 133 19
+          text "convention" 48 5744 86 19 serif 19 underline link 81
+          text "  CNN" 134 5744 47 19 serif 19
+        marker "4. " 32 5698 16 16
+      block li 48 5765 344 71
+        line 48 5765 344 24 base 17
+          span font 48 5767 337 19
+          span a 48 5767 337 19 link 82
+          text "Trump issues blunt midterm warning, Vance" 48 5767 337 19 serif 19 underline link 82
+        line 48 5789 344 23 base 16
+          span font 48 5791 314 19
+          span a 48 5791 314 19 link 82
+          text "greeted with '48' chants: Top takeaways" 48 5791 314 19 serif 19 underline link 82
+        line 48 5812 344 24 base 17
+          span a 48 5815 157 19 link 82
+          span font 48 5815 252 19
+          text "from GOP convention" 48 5815 157 19 serif 19 underline link 82
+          text "  Fox News" 205 5815 95 19 serif 19
+        marker "5. " 32 5770 16 16
+    block p 8 5852 384 0
+    block p 8 5852 384 0
+    block p 8 5852 384 20
+      line 8 5852 384 20 base 14
+        span small 8 5856 198 13
+        text "Posted on 11 September 2026 | 1:07 am" 8 5856 198 13 serif 13
+    block h3 8 5891 384 90
+      line 8 5891 384 30 base 21
+        span font 8 5894 318 24
+        span a 8 5894 318 24 link 83
+        text "'Practical Magic 2' Aims to Make" 8 5894 318 24 serif 24 bold underline link 83
+      line 8 5921 384 30 base 21
+        span font 8 5924 354 24
+        span a 8 5924 354 24 link 83
+        text "'Spider-Man' Disappear From No. 1 at" 8 5924 354 24 serif 24 bold underline link 83
+      line 8 5951 384 30 base 21
+        span a 8 5954 348 24 link 83
+        span font 8 5954 348 24
+        text "Box Office - The Hollywood Reporter" 8 5954 348 24 serif 24 bold underline link 83
+    block p 8 6000 384 0
+      line 8 5981 384 0 base 16
+        span font 8 5983 0 19
+    block ol 8 6000 384 285
+      block li 48 6000 344 71
+        line 48 6000 344 23 base 16
+          span font 48 6002 252 19
+          span a 48 6002 252 19 link 84
+          text "'Practical Magic 2' Aims to Make" 48 6002 252 19 serif 19 underline link 84
+        line 48 6023 344 24 base 17
+          span font 48 6026 314 19
+          span a 48 6026 314 19 link 84
+          text "'Spider-Man' Disappear From No. 1 at Box" 48 6026 314 19 serif 19 underline link 84
+        line 48 6047 344 24 base 17
+          span a 48 6049 43 19 link 84
+          span font 48 6049 242 19
+          text "Office" 48 6049 43 19 serif 19 underline link 84
+          text "  The Hollywood Reporter" 91 6049 199 19 serif 19
+        marker "1. " 36 6004 12 16
+      block li 48 6071 344 47
+        line 48 6071 344 24 base 16
+          span font 48 6073 333 19
+          span a 48 6073 333 19 link 85
+          text "People long for simpler times, say Practical" 48 6073 333 19 serif 19 underline link 85
+        line 48 6095 344 23 base 16
+          span a 48 6097 143 19 link 85
+          span font 48 6097 190 19
+          text "Magic reboot stars" 48 6097 143 19 serif 19 underline link 85
+          text "  BBC" 191 6097 47 19 serif 19
+        marker "2. " 32 6075 16 16
+      block li 48 6118 344 72
+        line 48 6118 344 24 base 17
+          span font 48 6121 295 19
+          span a 48 6121 295 19 link 86
+          text "For Sandra Bullock and Nicole Kidman," 48 6121 295 19 serif 19 underline link 86
+        line 48 6142 344 24 base 17
+          span a 48 6144 285 19 link 86
+          span font 48 6144 323 19
+          text "'Practical Magic 2' heals old wounds" 48 6144 285 19 serif 19 underline link 86
+          text "  AP" 333 6144 38 19 serif 19
+        line 48 6166 344 24 base 16
+          span font 48 6168 43 19
+          text "News" 48 6168 43 19 serif 19
+        marker "3. " 32 6123 16 16
+      block li 48 6190 344 47
+        line 48 6190 344 23 base 16
+          span font 48 6192 309 19
+          span a 48 6192 309 19 link 87
+          text "'Practical Magic 2' Review: Live a Little," 48 6192 309 19 serif 19 underline link 87
+        line 48 6213 344 24 base 17
+          span a 48 6216 76 19 link 87
+          span font 48 6216 252 19
+          text "Live a Lot" 48 6216 76 19 serif 19 underline link 87
+          text "  The New York Times" 124 6216 176 19 serif 19
+        marker "4. " 32 6194 16 16
+      block li 48 6237 344 48
+        line 48 6237 344 24 base 17
+          span font 48 6239 342 19
+          span a 48 6239 342 19 link 88
+          text "Put the Lime in the Coconut & Drink Up These" 48 6239 342 19 serif 19 underline link 88
+        line 48 6261 344 24 base 16
+          span a 48 6263 181 19 link 88
+          span font 48 6263 247 19
+          text "Practical Magic Secrets" 48 6263 181 19 serif 19 underline link 88
+          text "  Yahoo" 229 6263 66 19 serif 19
+        marker "5. " 32 6242 16 16
+    block p 8 6301 384 0
+    block p 8 6301 384 0
+    block p 8 6301 384 20
+      line 8 6301 384 20 base 14
+        span small 8 6305 205 13
+        text "Posted on 11 September 2026 | 12:37 am" 8 6305 205 13 serif 13
+    block h3 8 6339 384 90
+      line 8 6339 384 30 base 21
+        span font 8 6342 360 24
+        span a 8 6342 360 24 link 89
+        text "Rabies cases increased 17 percent in" 8 6342 360 24 serif 24 bold underline link 89
+      line 8 6369 384 30 base 21
+        span font 8 6372 276 24
+        span a 8 6372 276 24 link 89
+        text "July and August, CDC says -" 8 6372 276 24 serif 24 bold underline link 89
+      line 8 6399 384 30 base 21
+        span a 8 6402 204 24 link 89
+        span font 8 6402 204 24
+        text "washingtonpost.com" 8 6402 204 24 serif 24 bold underline link 89
+    block p 8 6448 384 0
+      line 8 6429 384 0 base 17
+        span font 8 6432 0 19
+    block ol 8 6448 384 333
+      block li 48 6448 344 71
+        line 48 6448 344 24 base 17
+          span font 48 6450 323 19
+          span a 48 6450 323 19 link 90
+          text "Rabies cases increased 17 percent in July" 48 6450 323 19 serif 19 underline link 90
+        line 48 6472 344 24 base 16
+          span font 48 6474 124 19
+          span a 48 6474 124 19 link 90
+          text "and August, CDC" 48 6474 124 19 serif 19 underline link 90
+        line 48 6496 344 23 base 16
+          span a 48 6498 38 19 link 90
+          span font 48 6498 219 19
+          text "says" 48 6498 38 19 serif 19 underline link 90
+          text "  washingtonpost.com" 86 6498 181 19 serif 19
+        marker "1. " 36 6453 12 16
+      block li 48 6519 344 95
+        line 48 6519 344 24 base 17
+          span font 48 6522 309 19
+          span a 48 6522 309 19 link 91
+          text "Nationwide Increase in Reported Human" 48 6522 309 19 serif 19 underline link 91
+        line 48 6543 344 24 base 17
+          span font 48 6545 318 19
+          span a 48 6545 318 19 link 91
+          text "Rabies Exposures: Rabies Post-exposure" 48 6545 318 19 serif 19 underline link 91
+        line 48 6567 344 24 base 16
+          span a 48 6569 204 19 link 91
+          span font 48 6569 304 19
+          text "Prophylaxis Administration" 48 6569 204 19 serif 19 underline link 91
+          text "  Centers for" 252 6569 100 19 serif 19
+        line 48 6591 344 23 base 16
+          span font 48 6593 337 19
+          text "Disease Control and Prevention | CDC (.gov)" 48 6593 337 19 serif 19
+        marker "2. " 32 6524 16 16
+      block li 48 6614 344 72
+        line 48 6614 344 24 base 17
+          span font 48 6617 337 19
+          span a 48 6617 337 19 link 92
+          text "Task force dropping edible vaccine packets" 48 6617 337 19 serif 19 underline link 92
+        line 48 6638 344 24 base 17
+          span font 48 6640 266 19
+          span a 48 6640 266 19 link 92
+          text "from helicopter to combat rabies in" 48 6640 266 19 serif 19 underline link 92
+        line 48 6662 344 24 base 16
+          span a 48 6664 119 19 link 92
+          span font 48 6664 214 19
+          text "Massachusetts" 48 6664 119 19 serif 19 underline link 92
+          text "  CBS News" 167 6664 95 19 serif 19
+        marker "3. " 32 6619 16 16
+      block li 48 6686 344 47
+        line 48 6686 344 23 base 16
+          span font 48 6688 299 19
+          span a 48 6688 299 19 link 93
+          text "CDC warns of a summer spike in rabies" 48 6688 299 19 serif 19 underline link 93
+        line 48 6709 344 24 base 17
+          span a 48 6712 81 19 link 93
+          span font 48 6712 176 19
+          text "exposures" 48 6712 81 19 serif 19 underline link 93
+          text "  NBC News" 129 6712 95 19 serif 19
+        marker "4. " 32 6690 16 16
+      block li 48 6733 344 48
+        line 48 6733 344 24 base 17
+          span font 48 6735 309 19
+          span a 48 6735 309 19 link 94
+          text "CDC warns of increase in rabies activity," 48 6735 309 19 serif 19 underline link 94
+        line 48 6757 344 24 base 16
+          span a 48 6759 228 19 link 94
+          span font 48 6759 314 19
+          text "human exposures across U.S." 48 6759 228 19 serif 19 underline link 94
+          text "  ktla.com" 276 6759 86 19 serif 19
+        marker "5. " 32 6738 16 16
+    block p 8 6797 384 0
+    block p 8 6797 384 0
+    block p 8 6797 384 20
+      line 8 6797 384 20 base 14
+        span small 8 6801 205 13
+        text "Posted on 11 September 2026 | 12:20 am" 8 6801 205 13 serif 13
+    block h3 8 6835 384 90
+      line 8 6835 384 30 base 21
+        span font 8 6838 378 24
+        span a 8 6838 378 24 link 95
+        text "Anthropic says it blocked misuse of its" 8 6838 378 24 serif 24 bold underline link 95
+      line 8 6865 384 30 base 21
+        span font 8 6868 384 24
+        span a 8 6868 384 24 link 95
+        text "AI that could have supported biological" 8 6868 384 24 serif 24 bold underline link 95
+      line 8 6895 384 30 base 21
+        span a 8 6898 198 24 link 95
+        span font 8 6898 198 24
+        text "weapons - AP News" 8 6898 198 24 serif 24 bold underline link 95
+    block p 8 6944 384 95
+      line 8 6944 384 24 base 17
+        span font 8 6946 356 19
+        span a 8 6946 356 19 link 96
+        text "Anthropic says it blocked misuse of its AI that" 8 6946 356 19 serif 19 underline link 96
+      line 8 6968 384 23 base 16
+        span a 8 6970 323 19 link 96
+        span font 8 6970 361 19
+        text "could have supported biological weapons" 8 6970 323 19 serif 19 underline link 96
+        text "  AP" 331 6970 38 19 serif 19
+      line 8 6991 384 24 base 17
+        span font 8 6994 337 19
+        span b 51 6994 294 19
+        span a 51 6994 294 19 link 97
+        text "News" 8 6994 43 19 serif 19
+        text "See more headlines & perspectives on" 51 6994 294 19 serif 19 bold underline link 97
+      line 8 7015 384 24 base 17
+        span a 8 7018 100 19 link 97
+        span b 8 7018 100 19
+        span font 8 7018 100 19
+        text "Google News" 8 7018 100 19 serif 19 bold underline link 97
+    block p 8 7055 384 0
+    block p 8 7055 384 20
+      line 8 7055 384 20 base 14
+        span small 8 7059 205 13
+        text "Posted on 10 September 2026 | 11:59 pm" 8 7059 205 13 serif 13
+    block h3 8 7094 384 60
+      line 8 7094 384 30 base 21
+        span font 8 7097 336 24
+        span a 8 7097 336 24 link 98
+        text "Brock Purdy, 49ers dominate Rams" 8 7097 336 24 serif 24 bold underline link 98
+      line 8 7124 384 30 base 21
+        span a 8 7127 288 24 link 98
+        span font 8 7127 288 24
+        text "27-7 in Australia - NBC Sports" 8 7127 288 24 serif 24 bold underline link 98
+    block p 8 7172 384 0
+      line 8 7154 384 0 base 16
+        span font 8 7156 0 19
+    block ol 8 7172 384 285
+      block li 48 7172 344 48
+        line 48 7172 344 24 base 17
+          span font 48 7175 328 19
+          span a 48 7175 328 19 link 99
+          text "Brock Purdy, 49ers dominate Rams 27-7 in" 48 7175 328 19 serif 19 underline link 99
+        line 48 7196 344 24 base 17
+          span a 48 7199 67 19 link 99
+          span font 48 7199 166 19
+          text "Australia" 48 7199 67 19 serif 19 underline link 99
+          text "  NBC Sports" 115 7199 99 19 serif 19
+        marker "1. " 36 7177 12 16
+      block li 48 7220 344 47
+        line 48 7220 344 24 base 17
+          span font 48 7222 333 19
+          span a 48 7222 333 19 link 100
+          text "Niners-Rams in Australia: What We Learned" 48 7222 333 19 serif 19 underline link 100
+        line 48 7244 344 23 base 16
+          span a 48 7246 238 19 link 100
+          span font 48 7246 323 19
+          text "from San Francisco's 27-7 win" 48 7246 238 19 serif 19 underline link 100
+          text "  NFL.com" 286 7246 85 19 serif 19
+        marker "2. " 32 7225 16 16
+      block li 48 7267 344 72
+        line 48 7267 344 24 base 17
+          span font 48 7270 271 19
+          span a 48 7270 271 19 link 101
+          text "A spectacle like no other: the NFL's" 48 7270 271 19 serif 19 underline link 101
+        line 48 7291 344 24 base 17
+          span font 48 7294 276 19
+          span a 48 7294 276 19 link 101
+          text "Australian 'experiment' was always" 48 7294 276 19 serif 19 underline link 101
+        line 48 7315 344 24 base 17
+          span a 48 7317 157 19 link 101
+          span font 48 7317 214 19
+          text "destined to succeed" 48 7317 157 19 serif 19 underline link 101
+          text "  ESPN" 205 7317 57 19 serif 19
+        marker "3. " 32 7272 16 16
+      block li 48 7339 344 71
+        line 48 7339 344 23 base 16
+          span font 48 7341 318 19
+          span a 48 7341 318 19 link 102
+          text "Fans pack Melbourne for the Rams-49ers" 48 7341 318 19 serif 19 underline link 102
+        line 48 7362 344 24 base 17
+          span font 48 7365 337 19
+          span a 48 7365 337 19 link 102
+          text "season opener, the first regular-season NFL" 48 7365 337 19 serif 19 underline link 102
+        line 48 7386 344 24 base 17
+          span a 48 7389 133 19 link 102
+          span font 48 7389 219 19
+          text "game in Australia" 48 7389 133 19 serif 19 underline link 102
+          text "  AP News" 181 7389 86 19 serif 19
+        marker "4. " 32 7343 16 16
+      block li 48 7410 344 47
+        line 48 7410 344 24 base 17
+          span font 48 7412 337 19
+          span a 48 7412 337 19 link 103
+          text "More than 100,000 watch 49ers shock Rams" 48 7412 337 19 serif 19 underline link 103
+        line 48 7434 344 23 base 16
+          span a 48 7436 52 19 link 103
+          span font 48 7436 171 19
+          text "at MCG" 48 7436 52 19 serif 19 underline link 103
+          text "  Yahoo Sports" 100 7436 119 19 serif 19
+        marker "5. " 32 7415 16 16
+    block p 8 7473 384 0
+    block p 8 7473 384 0
+    block p 8 7473 384 20
+      line 8 7473 384 20 base 14
+        span small 8 7478 205 13
+        text "Posted on 10 September 2026 | 11:38 pm" 8 7478 205 13 serif 13
+    block h3 8 7512 384 90
+      line 8 7512 384 30 base 21
+        span font 8 7515 282 24
+        span a 8 7515 282 24 link 104
+        text "Hong Kong's Tiananmen vigil" 8 7515 282 24 serif 24 bold underline link 104
+      line 8 7542 384 30 base 21
+        span font 8 7545 384 24
+        span a 8 7545 384 24 link 104
+        text "organizers handed lengthy prison terms" 8 7545 384 24 serif 24 bold underline link 104
+      line 8 7572 384 30 base 21
+        span a 8 7575 54 24 link 104
+        span font 8 7575 54 24
+        text "- CNN" 8 7575 54 24 serif 24 bold underline link 104
+    block p 8 7621 384 0
+      line 8 7602 384 0 base 17
+        span font 8 7604 0 19
+    block ol 8 7621 384 285
+      block li 48 7621 344 47
+        line 48 7621 344 24 base 16
+          span font 48 7623 309 19
+          span a 48 7623 309 19 link 105
+          text "Hong Kong's Tiananmen vigil organizers" 48 7623 309 19 serif 19 underline link 105
+        line 48 7645 344 23 base 16
+          span a 48 7647 219 19 link 105
+          span font 48 7647 266 19
+          text "handed lengthy prison terms" 48 7647 219 19 serif 19 underline link 105
+          text "  CNN" 267 7647 47 19 serif 19
+        marker "1. " 36 7625 12 16
+      block li 48 7668 344 48
+        line 48 7668 344 24 base 17
+          span font 48 7671 295 19
+          span a 48 7671 295 19 link 106
+          text "Hong Kong sentences Tiananmen vigil" 48 7671 295 19 serif 19 underline link 106
+        line 48 7692 344 24 base 17
+          span a 48 7694 152 19 link 106
+          span font 48 7694 295 19
+          text "organisers to prison" 48 7694 152 19 serif 19 underline link 106
+          text "  Financial Times" 200 7694 143 19 serif 19
+        marker "2. " 32 7673 16 16
+      block li 48 7716 344 71
+        line 48 7716 344 24 base 16
+          span font 48 7718 257 19
+          span a 48 7718 257 19 link 107
+          text "Organizers of Hong Kong Vigils for" 48 7718 257 19 serif 19 underline link 107
+        line 48 7740 344 23 base 16
+          span font 48 7742 271 19
+          span a 48 7742 271 19 link 107
+          text "Tiananmen Massacre Sentenced to" 48 7742 271 19 serif 19 underline link 107
+        line 48 7763 344 24 base 17
+          span a 48 7766 48 19 link 107
+          span font 48 7766 223 19
+          text "Prison" 48 7766 48 19 serif 19 underline link 107
+          text "  The New York Times" 96 7766 175 19 serif 19
+        marker "3. " 32 7720 16 16
+      block li 48 7787 344 48
+        line 48 7787 344 24 base 17
+          span font 48 7789 342 19
+          span a 48 7789 342 19 link 108
+          text "Hong Kong's Tiananmen activists sentenced" 48 7789 342 19 serif 19 underline link 108
+        line 48 7811 344 24 base 16
+          span a 48 7813 228 19 link 108
+          span font 48 7813 276 19
+          text "to up to seven years in prison" 48 7813 228 19 serif 19 underline link 108
+          text "  BBC" 276 7813 48 19 serif 19
+        marker "4. " 32 7792 16 16
+      block li 48 7835 344 71
+        line 48 7835 344 23 base 16
+          span font 48 7837 299 19
+          span a 48 7837 299 19 link 109
+          text "Opinion | This slogan infuriates Beijing." 48 7837 299 19 serif 19 underline link 109
+        line 48 7858 344 24 base 17
+          span font 48 7861 214 19
+          span a 48 7861 214 19 link 109
+          text "Judges have turned it into a" 48 7861 214 19 serif 19 underline link 109
+        line 48 7882 344 24 base 17
+          span a 48 7884 48 19 link 109
+          span font 48 7884 228 19
+          text "crime." 48 7884 48 19 serif 19 underline link 109
+          text "  washingtonpost.com" 96 7884 180 19 serif 19
+        marker "5. " 32 7839 16 16
+    block p 8 7922 384 0
+    block p 8 7922 384 0
+    block p 8 7922 384 20
+      line 8 7922 384 20 base 14
+        span small 8 7926 208 13
+        text "Posted on 10 September 2026 | 10:33 pm" 8 7926 208 13 serif 13
+    block h3 8 7961 384 90
+      line 8 7961 384 30 base 21
+        span font 8 7964 384 24
+        span a 8 7964 384 24 link 110
+        text "Hawaii Governor Asks Trump for Help as" 8 7964 384 24 serif 24 bold underline link 110
+      line 8 7991 384 30 base 21
+        span font 8 7994 378 24
+        span a 8 7994 378 24 link 110
+        text "State Copes With Hurricane's Damage -" 8 7994 378 24 serif 24 bold underline link 110
+      line 8 8021 384 30 base 21
+        span a 8 8024 198 24 link 110
+        span font 8 8024 198 24
+        text "The New York Times" 8 8024 198 24 serif 24 bold underline link 110
+    block p 8 8069 384 0
+      line 8 8051 384 0 base 16
+        span font 8 8053 0 19
+    block ol 8 8069 384 262
+      block li 48 8069 344 72
+        line 48 8069 344 24 base 17
+          span font 48 8072 304 19
+          span a 48 8072 304 19 link 111
+          text "Hawaii Governor Asks Trump for Help as" 48 8072 304 19 serif 19 underline link 111
+        line 48 8093 344 24 base 17
+          span a 48 8095 285 19 link 111
+          span font 48 8095 333 19
+          text "State Copes With Hurricane's Damage" 48 8095 285 19 serif 19 underline link 111
+          text "  The" 333 8095 48 19 serif 19
+        line 48 8117 344 24 base 16
+          span font 48 8119 124 19
+          text "New York Times" 48 8119 124 19 serif 19
+        marker "1. " 36 8074 12 16
+      block li 48 8141 344 47
+        line 48 8141 344 23 base 16
+          span font 48 8143 318 19
+          span a 48 8143 318 19 link 112
+          text "Weather tracker: Hurricane Lowell pounds" 48 8143 318 19 serif 19 underline link 112
+        line 48 8164 344 24 base 17
+          span a 48 8167 195 19 link 112
+          span font 48 8167 314 19
+          text "Hawaii's western islands" 48 8167 195 19 serif 19 underline link 112
+          text "  The Guardian" 243 8167 119 19 serif 19
+        marker "2. " 32 8145 16 16
+      block li 48 8188 344 48
+        line 48 8188 344 24 base 17
+          span font 48 8190 271 19
+          span a 48 8190 271 19 link 113
+          text "Kauai 'in dire straits' after Hurricane" 48 8190 271 19 serif 19 underline link 113
+        line 48 8212 344 24 base 16
+          span a 48 8214 52 19 link 113
+          span font 48 8214 128 19
+          text "Lowell" 48 8214 52 19 serif 19 underline link 113
+          text "  SFGATE" 100 8214 76 19 serif 19
+        marker "3. " 32 8193 16 16
+      block li 48 8236 344 47
+        line 48 8236 344 23 base 16
+          span font 48 8238 295 19
+          span a 48 8238 295 19 link 114
+          text "Flood advisory issued east, southeast" 48 8238 295 19 serif 19 underline link 114
+        line 48 8259 344 24 base 17
+          span a 48 8262 166 19 link 114
+          span font 48 8262 304 19
+          text "portions of Big Island" 48 8262 166 19 serif 19 underline link 114
+          text "  Big Island Now" 214 8262 138 19 serif 19
+        marker "4. " 32 8240 16 16
+      block li 48 8283 344 48
+        line 48 8283 344 24 base 17
+          span font 48 8285 328 19
+          span a 48 8285 328 19 link 115
+          text "Over 250 pizzas airlifted to help feed Kauai" 48 8285 328 19 serif 19 underline link 115
+        line 48 8307 344 24 base 16
+          span a 48 8309 166 19 link 115
+          span font 48 8309 323 19
+          text "after Hurricane Lowell" 48 8309 166 19 serif 19 underline link 115
+          text "  Hawaii News Now" 214 8309 157 19 serif 19
+        marker "5. " 32 8288 16 16
+    block p 8 8347 384 0
+    block p 8 8347 384 0
+    block p 8 8347 384 20
+      line 8 8347 384 20 base 14
+        span small 8 8351 205 13
+        text "Posted on 10 September 2026 | 9:08 pm" 8 8351 205 13 serif 13
+    block h3 8 8385 384 90
+      line 8 8385 384 30 base 21
+        span font 8 8388 318 24
+        span a 8 8388 318 24 link 116
+        text "Lindsay Clancy juror can't shake" 8 8388 318 24 serif 24 bold underline link 116
+      line 8 8415 384 30 base 21
+        span font 8 8418 324 24
+        span a 8 8418 324 24 link 116
+        text "feeling jury failed by not reaching" 8 8418 324 24 serif 24 bold underline link 116
+      line 8 8445 384 30 base 21
+        span a 8 8448 258 24 link 116
+        span font 8 8448 258 24
+        text "verdict - The Boston Globe" 8 8448 258 24 serif 24 bold underline link 116
+    block p 8 8494 384 0
+      line 8 8475 384 0 base 17
+        span font 8 8478 0 19
+    block ol 8 8494 384 356
+      block li 48 8494 344 71
+        line 48 8494 344 24 base 17
+          span font 48 8496 342 19
+          span a 48 8496 342 19 link 117
+          text "Lindsay Clancy juror can't shake feeling jury" 48 8496 342 19 serif 19 underline link 117
+        line 48 8518 344 23 base 16
+          span a 48 8520 223 19 link 117
+          span font 48 8520 328 19
+          text "failed by not reaching verdict" 48 8520 223 19 serif 19 underline link 117
+          text "  The Boston" 271 8520 105 19 serif 19
+        line 48 8541 344 24 base 17
+          span font 48 8544 43 19
+          text "Globe" 48 8544 43 19 serif 19
+        marker "1. " 36 8499 12 16
+      block li 48 8565 344 95
+        line 48 8565 344 24 base 17
+          span font 48 8568 314 19
+          span a 48 8568 314 19 link 118
+          text "Clancy holdout juror mimicked strangling" 48 8568 314 19 serif 19 underline link 118
+        line 48 8589 344 24 base 17
+          span a 48 8591 252 19 link 118
+          span font 48 8591 299 19
+          text "during deliberations, juror claims" 48 8591 252 19 serif 19 underline link 118
+          text "  ABC" 300 8591 47 19 serif 19
+        line 48 8613 344 23 base 16
+          span font 48 8615 314 19
+          text "News - Breaking News, Latest News and" 48 8615 314 19 serif 19
+        line 48 8636 344 24 base 17
+          span font 48 8639 52 19
+          text "Videos" 48 8639 52 19 serif 19
+        marker "2. " 32 8570 16 16
+      block li 48 8660 344 48
+        line 48 8660 344 24 base 17
+          span font 48 8663 333 19
+          span a 48 8663 333 19 link 119
+          text "Lindsay Clancy's lawyer asks judge to find" 48 8663 333 19 serif 19 underline link 119
+        line 48 8684 344 24 base 17
+          span a 48 8686 200 19 link 119
+          span font 48 8686 318 19
+          text "her not guilty after mistrial" 48 8686 200 19 serif 19 underline link 119
+          text "  The Guardian" 248 8686 118 19 serif 19
+        marker "3. " 32 8665 16 16
+      block li 48 8708 344 71
+        line 48 8708 344 23 base 16
+          span font 48 8710 276 19
+          span a 48 8710 276 19 link 120
+          text "Lone holdout in Lindsay Clancy trial" 48 8710 276 19 serif 19 underline link 120
+        line 48 8731 344 24 base 17
+          span font 48 8734 247 19
+          span a 48 8734 247 19 link 120
+          text "demonstrated the killings during" 48 8734 247 19 serif 19 underline link 120
+        line 48 8755 344 24 base 17
+          span a 48 8758 238 19 link 120
+          span font 48 8758 333 19
+          text "deliberations, fellow juror says" 48 8758 238 19 serif 19 underline link 120
+          text "  Fox News" 286 8758 95 19 serif 19
+        marker "4. " 32 8712 16 16
+      block li 48 8779 344 71
+        line 48 8779 344 24 base 17
+          span font 48 8781 328 19
+          span a 48 8781 328 19 link 121
+          text "Lindsay Clancy's lawyer asks the judge to" 48 8781 328 19 serif 19 underline link 121
+        line 48 8803 344 23 base 16
+          span font 48 8805 285 19
+          span a 48 8805 285 19 link 121
+          text "spare her a second trial for killing her" 48 8805 285 19 serif 19 underline link 121
+        line 48 8826 344 24 base 17
+          span a 48 8829 62 19 link 121
+          span font 48 8829 147 19
+          text "children" 48 8829 62 19 serif 19 underline link 121
+          text "  AP News" 110 8829 85 19 serif 19
+        marker "5. " 32 8784 16 16
+    block p 8 8866 384 0
+    block p 8 8866 384 0
+    block p 8 8866 384 20
+      line 8 8866 384 20 base 14
+        span small 8 8870 205 13
+        text "Posted on 10 September 2026 | 8:49 pm" 8 8870 205 13 serif 13
+    block h3 8 8905 384 90
+      line 8 8905 384 30 base 21
+        span font 8 8908 324 24
+        span a 8 8908 324 24 link 122
+        text "Mariska Hargitay calls pre-Emmy" 8 8908 324 24 serif 24 bold underline link 122
+      line 8 8935 384 30 base 21
+        span font 8 8938 330 24
+        span a 8 8938 330 24 link 122
+        text "wardrobe malfunction good luck -" 8 8938 330 24 serif 24 bold underline link 122
+      line 8 8965 384 30 base 21
+        span a 8 8968 270 24 link 122
+        span font 8 8968 270 24
+        text "'Damn straight' - USA Today" 8 8968 270 24 serif 24 bold underline link 122
+    block p 8 9014 384 0
+      line 8 8995 384 0 base 17
+        span font 8 8997 0 19
+    block ol 8 9014 384 332
+      block li 48 9014 344 71
+        line 48 9014 344 23 base 16
+          span font 48 9016 333 19
+          span a 48 9016 333 19 link 123
+          text "Mariska Hargitay calls pre-Emmy wardrobe" 48 9016 333 19 serif 19 underline link 123
+        line 48 9037 344 24 base 17
+          span font 48 9040 238 19
+          span a 48 9040 238 19 link 123
+          text "malfunction good luck - 'Damn" 48 9040 238 19 serif 19 underline link 123
+        line 48 9061 344 24 base 17
+          span a 48 9064 62 19 link 123
+          span font 48 9064 162 19
+          text "straight'" 48 9064 62 19 serif 19 underline link 123
+          text "  USA Today" 110 9064 100 19 serif 19
+        marker "1. " 36 9018 12 16
+      block li 48 9085 344 71
+        line 48 9085 344 24 base 17
+          span font 48 9087 337 19
+          span a 48 9087 337 19 link 124
+          text "Mariska Hargitay's friends warned her not to" 48 9087 337 19 serif 19 underline link 124
+        line 48 9109 344 23 base 16
+          span font 48 9111 323 19
+          span a 48 9111 323 19 link 124
+          text "host the Emmys. Then she decided it was" 48 9111 323 19 serif 19 underline link 124
+        line 48 9132 344 24 base 17
+          span a 48 9135 109 19 link 124
+          span font 48 9135 176 19
+          text "worth the risk." 48 9135 109 19 serif 19 underline link 124
+          text "  Yahoo" 157 9135 67 19 serif 19
+        marker "2. " 32 9090 16 16
+      block li 48 9156 344 48
+        line 48 9156 344 24 base 17
+          span font 48 9159 323 19
+          span a 48 9159 323 19 link 125
+          text "Emmys Host Mariska Hargitay & Producers" 48 9159 323 19 serif 19 underline link 125
+        line 48 9180 344 24 base 17
+          span a 48 9182 195 19 link 125
+          span font 48 9182 280 19
+          text "Tease 78th Awards Show" 48 9182 195 19 serif 19 underline link 125
+          text "  Deadline" 243 9182 85 19 serif 19
+        marker "3. " 32 9161 16 16
+      block li 48 9204 344 71
+        line 48 9204 344 23 base 16
+          span font 48 9206 337 19
+          span a 48 9206 337 19 link 126
+          text "Mariska Hargitay Ditches Her Signature Style" 48 9206 337 19 serif 19 underline link 126
+        line 48 9227 344 24 base 17
+          span font 48 9230 323 19
+          span a 48 9230 323 19 link 126
+          text "for Head-to-Toe Sequins Ahead of Historic" 48 9230 323 19 serif 19 underline link 126
+        line 48 9251 344 24 base 17
+          span a 48 9254 128 19 link 126
+          span font 48 9254 238 19
+          text "Career Milestone" 48 9254 128 19 serif 19 underline link 126
+          text "  instyle.com" 176 9254 110 19 serif 19
+        marker "4. " 32 9208 16 16
+      block li 48 9275 344 71
+        line 48 9275 344 24 base 17
+          span font 48 9277 342 19
+          span a 48 9277 342 19 link 127
+          text "Mariska Hargitay's 2026 has been busy with" 48 9277 342 19 serif 19 underline link 127
+        line 48 9299 344 23 base 16
+          span font 48 9301 337 19
+          span a 48 9301 337 19 link 127
+          text "a Broadway stint and 'SVU.' Next up: Emmys" 48 9301 337 19 serif 19 underline link 127
+        line 48 9322 344 24 base 17
+          span a 48 9325 33 19 link 127
+          span font 48 9325 200 19
+          text "host" 48 9325 33 19 serif 19 underline link 127
+          text "  Los Angeles Times" 81 9325 167 19 serif 19
+        marker "5. " 32 9280 16 16
+    block p 8 9362 384 0
+    block p 8 9362 384 0
+    block p 8 9362 384 20
+      line 8 9362 384 20 base 14
+        span small 8 9366 202 13
+        text "Posted on 10 September 2026 | 8:01 pm" 8 9366 202 13 serif 13
+    block h3 8 9401 384 60
+      line 8 9401 384 30 base 21
+        span font 8 9404 378 24
+        span a 8 9404 378 24 link 128
+        text "Apple's foldable iPhone poses a $1,999" 8 9404 378 24 serif 24 bold underline link 128
+      line 8 9431 384 30 base 21
+        span a 8 9434 360 24 link 128
+        span font 8 9434 360 24
+        text "question: Who is it for? - reuters.com" 8 9434 360 24 serif 24 bold underline link 128
+    block p 8 9480 384 0
+      line 8 9461 384 0 base 16
+        span font 8 9463 0 19
+    block ol 8 9480 384 237
+      block li 48 9480 344 47
+        line 48 9480 344 23 base 16
+          span font 48 9482 299 19
+          span a 48 9482 299 19 link 129
+          text "Apple's foldable iPhone poses a $1,999" 48 9482 299 19 serif 19 underline link 129
+        line 48 9503 344 24 base 17
+          span a 48 9506 176 19 link 129
+          span font 48 9506 285 19
+          text "question: Who is it for?" 48 9506 176 19 serif 19 underline link 129
+          text "  reuters.com" 224 9506 109 19 serif 19
+        marker "1. " 36 9484 12 16
+      block li 48 9527 344 48
+        line 48 9527 344 24 base 17
+          span font 48 9529 314 19
+          span a 48 9529 314 19 link 130
+          text "Why is Apple's New Foldable iPhone Duo" 48 9529 314 19 serif 19 underline link 130
+        line 48 9551 344 24 base 16
+          span a 48 9553 57 19 link 130
+          span font 48 9553 233 19
+          text "$1,999?" 48 9553 57 19 serif 19 underline link 130
+          text "  The New York Times" 105 9553 176 19 serif 19
+        marker "2. " 32 9532 16 16
+      block li 48 9575 344 47
+        line 48 9575 344 23 base 16
+          span a 48 9577 295 19 link 131
+          span font 48 9577 342 19
+          text "Apple addresses iPhone Duo copycats" 48 9577 295 19 serif 19 underline link 131
+          text "  The" 343 9577 47 19 serif 19
+        line 48 9598 344 24 base 17
+          span font 48 9601 43 19
+          text "Verge" 48 9601 43 19 serif 19
+        marker "3. " 32 9579 16 16
+      block li 48 9622 344 24
+        line 48 9622 344 24 base 17
+          span a 48 9624 195 19 link 132
+          span font 48 9624 257 19
+          text "Apple unveils iPhone Duo" 48 9624 195 19 serif 19 underline link 132
+          text "  Apple" 243 9624 62 19 serif 19
+        marker "4. " 32 9627 16 16
+      block li 48 9646 344 71
+        line 48 9646 344 24 base 16
+          span font 48 9648 314 19
+          span a 48 9648 314 19 link 133
+          text "CNBC Daily Open: 'Welcome to Foldables'" 48 9648 314 19 serif 19 underline link 133
+        line 48 9670 344 23 base 16
+          span font 48 9672 295 19
+          span a 48 9672 295 19 link 133
+          text "Samsung roasts Apple for being late to" 48 9672 295 19 serif 19 underline link 133
+        line 48 9693 344 24 base 17
+          span a 48 9696 38 19 link 133
+          span font 48 9696 95 19
+          text "party" 48 9696 38 19 serif 19 underline link 133
+          text "  CNBC" 86 9696 57 19 serif 19
+        marker "5. " 32 9650 16 16
+    block p 8 9733 384 0
+    block p 8 9733 384 0
+    block p 8 9733 384 20
+      line 8 9733 384 20 base 14
+        span small 8 9737 205 13
+        text "Posted on 10 September 2026 | 7:40 pm" 8 9737 205 13 serif 13
+    block h3 8 9772 384 120
+      line 8 9772 384 30 base 21
+        span font 8 9775 354 24
+        span a 8 9775 354 24 link 134
+        text "Dolly Parton's sister thinks Nashville" 8 9775 354 24 serif 24 bold underline link 134
+      line 8 9802 384 30 base 21
+        span font 8 9805 306 24
+        span a 8 9805 306 24 link 134
+        text "stars haven't sent condolences" 8 9805 306 24 serif 24 bold underline link 134
+      line 8 9832 384 30 base 21
+        span font 8 9835 336 24
+        span a 8 9835 336 24 link 134
+        text "because of her outspoken political" 8 9835 336 24 serif 24 bold underline link 134
+      line 8 9862 384 30 base 21
+        span a 8 9865 300 24 link 134
+        span font 8 9865 300 24
+        text "beliefs - Entertainment Weekly" 8 9865 300 24 serif 24 bold underline link 134
+    block p 8 9911 384 0
+      line 8 9892 384 0 base 16
+        span font 8 9894 0 19
+    block ol 8 9911 384 380
+      block li 48 9911 344 95
+        line 48 9911 344 23 base 16
+          span font 48 9913 323 19
+          span a 48 9913 323 19 link 135
+          text "Dolly Parton's sister thinks Nashville stars" 48 9913 323 19 serif 19 underline link 135
+        line 48 9934 344 24 base 17
+          span font 48 9937 318 19
+          span a 48 9937 318 19 link 135
+          text "haven't sent condolences because of her" 48 9937 318 19 serif 19 underline link 135
+        line 48 9958 344 24 base 17
+          span a 48 9960 204 19 link 135
+          span font 48 9960 328 19
+          text "outspoken political beliefs" 48 9960 204 19 serif 19 underline link 135
+          text "  Entertainment" 252 9960 124 19 serif 19
+        line 48 9982 344 24 base 16
+          span font 48 9984 57 19
+          text "Weekly" 48 9984 57 19 serif 19
+        marker "1. " 36 9915 12 16
+      block li 48 10006 344 71
+        line 48 10006 344 23 base 16
+          span font 48 10008 309 19
+          span a 48 10008 309 19 link 136
+          text "Dolly Parton's sister reveals why type of" 48 10008 309 19 serif 19 underline link 136
+        line 48 10029 344 24 base 17
+          span font 48 10032 276 19
+          span a 48 10032 276 19 link 136
+          text "cancer that killed her has been kept" 48 10032 276 19 serif 19 underline link 136
+        line 48 10053 344 24 base 17
+          span a 48 10055 52 19 link 136
+          span font 48 10055 119 19
+          text "private" 48 10055 52 19 serif 19 underline link 136
+          text "  Yahoo" 100 10055 67 19 serif 19
+        marker "2. " 32 10010 16 16
+      block li 48 10077 344 71
+        line 48 10077 344 24 base 16
+          span font 48 10079 299 19
+          span a 48 10079 299 19 link 137
+          text "Dolly Parton's sister reveals 'last thing'" 48 10079 299 19 serif 19 underline link 137
+        line 48 10101 344 23 base 16
+          span font 48 10103 266 19
+          span a 48 10103 266 19 link 137
+          text "country legend asked of her before" 48 10103 266 19 serif 19 underline link 137
+        line 48 10124 344 24 base 17
+          span a 48 10127 43 19 link 137
+          span font 48 10127 138 19
+          text "death" 48 10127 43 19 serif 19 underline link 137
+          text "  Fox News" 91 10127 95 19 serif 19
+        marker "3. " 32 10081 16 16
+      block li 48 10148 344 71
+        line 48 10148 344 24 base 17
+          span font 48 10150 309 19
+          span a 48 10150 309 19 link 138
+          text "Stella Parton says her sister Dolly Parton" 48 10150 309 19 serif 19 underline link 138
+        line 48 10172 344 24 base 16
+          span font 48 10174 333 19
+          span a 48 10174 333 19 link 138
+          text "was prepared and at peace when she died:" 48 10174 333 19 serif 19 underline link 138
+        line 48 10196 344 23 base 16
+          span a 48 10198 214 19 link 138
+          span font 48 10198 309 19
+          text "\"Knew where she was goin" 48 10198 214 19 serif 19 underline link 138
+          text "  CBS News" 262 10198 95 19 serif 19
+        marker "4. " 32 10153 16 16
+      block li 48 10219 344 72
+        line 48 10219 344 24 base 17
+          span font 48 10222 337 19
+          span a 48 10222 337 19 link 139
+          text "Dolly Parton didn't want people to know she" 48 10222 337 19 serif 19 underline link 139
+        line 48 10243 344 24 base 17
+          span font 48 10245 309 19
+          span a 48 10245 309 19 link 139
+          text "was sick, sister says: 'She did not want" 48 10245 309 19 serif 19 underline link 139
+        line 48 10267 344 24 base 16
+          span a 48 10269 90 19 link 139
+          span font 48 10269 152 19
+          text "people sad'" 48 10269 90 19 serif 19 underline link 139
+          text "  KMOV" 138 10269 62 19 serif 19
+        marker "5. " 32 10224 16 16
+    block p 8 10307 384 0
+    block p 8 10307 384 0
+    block p 8 10307 384 20
+      line 8 10307 384 20 base 14
+        span small 8 10311 202 13
+        text "Posted on 10 September 2026 | 7:18 pm" 8 10311 202 13 serif 13
+    block h3 8 10345 384 90
+      line 8 10345 384 30 base 21
+        span font 8 10348 372 24
+        span a 8 10348 372 24 link 140
+        text "Newsom signs online kid safety laws," 8 10348 372 24 serif 24 bold underline link 140
+      line 8 10375 384 30 base 21
+        span font 8 10378 372 24
+        span a 8 10378 372 24 link 140
+        text "including rules backed by Sam Altman" 8 10378 372 24 serif 24 bold underline link 140
+      line 8 10405 384 30 base 21
+        span a 8 10408 90 24 link 140
+        span font 8 10408 90 24
+        text "- Politico" 8 10408 90 24 serif 24 bold underline link 140
+    block p 8 10454 384 0
+      line 8 10435 384 0 base 17
+        span font 8 10438 0 19
+    block ol 8 10454 384 261
+      block li 48 10454 344 71
+        line 48 10454 344 24 base 17
+          span font 48 10456 295 19
+          span a 48 10456 295 19 link 141
+          text "Newsom signs online kid safety laws," 48 10456 295 19 serif 19 underline link 141
+        line 48 10478 344 23 base 16
+          span font 48 10480 238 19
+          span a 48 10480 238 19 link 141
+          text "including rules backed by Sam" 48 10480 238 19 serif 19 underline link 141
+        line 48 10501 344 24 base 17
+          span a 48 10504 52 19 link 141
+          span font 48 10504 128 19
+          text "Altman" 48 10504 52 19 serif 19 underline link 141
+          text "  Politico" 100 10504 76 19 serif 19
+        marker "1. " 36 10459 12 16
+      block li 48 10525 344 48
+        line 48 10525 344 24 base 17
+          span font 48 10528 337 19
+          span a 48 10528 337 19 link 142
+          text "California's Governor Signs Landmark Online" 48 10528 337 19 serif 19 underline link 142
+        line 48 10549 344 24 base 17
+          span a 48 10551 128 19 link 142
+          span font 48 10551 304 19
+          text "Child Safety Bills" 48 10551 128 19 serif 19 underline link 142
+          text "  The New York Times" 176 10551 176 19 serif 19
+        marker "2. " 32 10530 16 16
+      block li 48 10573 344 47
+        line 48 10573 344 23 base 16
+          span font 48 10575 342 19
+          span a 48 10575 342 19 link 143
+          text "Gov. Newsom Signs Sweeping New Rules for" 48 10575 342 19 serif 19 underline link 143
+        line 48 10596 344 24 base 17
+          span a 48 10599 143 19 link 143
+          span font 48 10599 200 19
+          text "Online Child Safety" 48 10599 143 19 serif 19 underline link 143
+          text "  KQED" 191 10599 57 19 serif 19
+        marker "3. " 32 10577 16 16
+      block li 48 10620 344 48
+        line 48 10620 344 24 base 17
+          span font 48 10623 342 19
+          span a 48 10623 342 19 link 144
+          text "California enacts new curbs on social media" 48 10623 342 19 serif 19 underline link 144
+        line 48 10644 344 24 base 17
+          span a 48 10646 86 19 link 144
+          span font 48 10646 143 19
+          text "for children" 48 10646 86 19 serif 19 underline link 144
+          text "  CNBC" 134 10646 57 19 serif 19
+        marker "4. " 32 10625 16 16
+      block li 48 10668 344 47
+        line 48 10668 344 23 base 16
+          span font 48 10670 209 19
+          span a 48 10670 209 19 link 145
+          text "Backing California's Adams" 48 10670 209 19 serif 19 underline link 145
+        line 48 10691 344 24 base 17
+          span a 48 10694 33 19 link 145
+          span font 48 10694 242 19
+          text "Law" 48 10694 33 19 serif 19 underline link 145
+          text "  newsroom.pinterest.com" 81 10694 209 19 serif 19
+        marker "5. " 32 10672 16 16
+    block p 8 10731 384 0
+    block p 8 10731 384 0
+    block p 8 10731 384 20
+      line 8 10731 384 20 base 14
+        span small 8 10735 205 13
+        text "Posted on 10 September 2026 | 6:39 pm" 8 10735 205 13 serif 13
+    block h3 8 10770 384 90
+      line 8 10770 384 30 base 21
+        span font 8 10773 366 24
+        span a 8 10773 366 24 link 146
+        text "Plain community shares perspectives" 8 10773 366 24 serif 24 bold underline link 146
+      line 8 10800 384 30 base 21
+        span font 8 10803 348 24
+        span a 8 10803 348 24 link 146
+        text "as measles cases rise in Lancaster" 8 10803 348 24 serif 24 bold underline link 146
+      line 8 10830 384 30 base 21
+        span a 8 10833 144 24 link 146
+        span font 8 10833 144 24
+        text "County - WGAL" 8 10833 144 24 serif 24 bold underline link 146
+    block p 8 10879 384 0
+      line 8 10860 384 0 base 17
+        span font 8 10862 0 19
+    block ol 8 10879 384 332
+      block li 48 10879 344 71
+        line 48 10879 344 23 base 16
+          span font 48 10881 314 19
+          span a 48 10881 314 19 link 147
+          text "Plain community shares perspectives as" 48 10881 314 19 serif 19 underline link 147
+        line 48 10902 344 24 base 17
+          span font 48 10905 252 19
+          span a 48 10905 252 19 link 147
+          text "measles cases rise in Lancaster" 48 10905 252 19 serif 19 underline link 147
+        line 48 10926 344 24 base 17
+          span a 48 10929 52 19 link 147
+          span font 48 10929 114 19
+          text "County" 48 10929 52 19 serif 19 underline link 147
+          text "  WGAL" 100 10929 62 19 serif 19
+        marker "1. " 36 10883 12 16
+      block li 48 10950 344 71
+        line 48 10950 344 24 base 17
+          span font 48 10952 328 19
+          span a 48 10952 328 19 link 148
+          text "Coroner releases details on 2 infant deaths" 48 10952 328 19 serif 19 underline link 148
+        line 48 10974 344 23 base 16
+          span a 48 10976 266 19 link 148
+          span font 48 10976 314 19
+          text "in Pennsylvania measles outbreak" 48 10976 266 19 serif 19 underline link 148
+          text "  CBS" 314 10976 48 19 serif 19
+        line 48 10997 344 24 base 17
+          span font 48 11000 43 19
+          text "News" 48 11000 43 19 serif 19
+        marker "2. " 32 10955 16 16
+      block li 48 11021 344 48
+        line 48 11021 344 24 base 17
+          span font 48 11024 333 19
+          span a 48 11024 333 19 link 149
+          text "Pennsylvania's measles outbreak grows to" 48 11024 333 19 serif 19 underline link 149
+        line 48 11045 344 24 base 17
+          span a 48 11047 81 19 link 149
+          span font 48 11047 238 19
+          text "624 cases" 48 11047 81 19 serif 19 underline link 149
+          text "  6abc Philadelphia" 129 11047 157 19 serif 19
+        marker "3. " 32 11026 16 16
+      block li 48 11069 344 71
+        line 48 11069 344 23 base 16
+          span font 48 11071 328 19
+          span a 48 11071 328 19 link 150
+          text "Opinion | What health officials should learn" 48 11071 328 19 serif 19 underline link 150
+        line 48 11092 344 24 base 17
+          span font 48 11095 228 19
+          span a 48 11095 228 19 link 150
+          text "from Pennsylvania's measles" 48 11095 228 19 serif 19 underline link 150
+        line 48 11116 344 24 base 17
+          span a 48 11119 48 19 link 150
+          span font 48 11119 228 19
+          text "fracas" 48 11119 48 19 serif 19 underline link 150
+          text "  washingtonpost.com" 96 11119 180 19 serif 19
+        marker "4. " 32 11073 16 16
+      block li 48 11140 344 71
+        line 48 11140 344 24 base 17
+          span font 48 11142 328 19
+          span a 48 11142 328 19 link 151
+          text "Pennsylvania's measles crisis: Inside the" 48 11142 328 19 serif 19 underline link 151
+        line 48 11164 344 23 base 16
+          span a 48 11166 190 19 link 151
+          span font 48 11166 285 19
+          text "nation's largest outbreak" 48 11166 190 19 serif 19 underline link 151
+          text "  Pittsburgh" 238 11166 95 19 serif 19
+        line 48 11187 344 24 base 17
+          span font 48 11190 100 19
+          text "Post-Gazette" 48 11190 100 19 serif 19
+        marker "5. " 32 11145 16 16
+    block p 8 11227 384 0
+    block p 8 11227 384 0
+    block p 8 11227 384 20
+      line 8 11227 384 20 base 14
+        span small 8 11231 202 13
+        text "Posted on 10 September 2026 | 6:15 pm" 8 11231 202 13 serif 13
+    block h3 8 11266 384 90
+      line 8 11266 384 30 base 21
+        span font 8 11269 366 24
+        span a 8 11269 366 24 link 152
+        text "Exceptionally Preserved Bird Feathers" 8 11269 366 24 serif 24 bold underline link 152
+      line 8 11296 384 30 base 21
+        span font 8 11299 378 24
+        span a 8 11299 378 24 link 152
+        text "Found in 66-Million-Year-Old Dinosaur" 8 11299 378 24 serif 24 bold underline link 152
+      line 8 11326 384 30 base 21
+        span a 8 11329 198 24 link 152
+        span font 8 11329 198 24
+        text "Coprolite - sci.news" 8 11329 198 24 serif 24 bold underline link 152
+    block p 8 11375 384 0
+      line 8 11356 384 0 base 16
+        span font 8 11358 0 19
+    block ol 8 11375 384 356
+      block li 48 11375 344 71
+        line 48 11375 344 23 base 16
+          span font 48 11377 342 19
+          span a 48 11377 342 19 link 153
+          text "Exceptionally Preserved Bird Feathers Found" 48 11377 342 19 serif 19 underline link 153
+        line 48 11398 344 24 base 17
+          span font 48 11401 247 19
+          span a 48 11401 247 19 link 153
+          text "in 66-Million-Year-Old Dinosaur" 48 11401 247 19 serif 19 underline link 153
+        line 48 11422 344 24 base 17
+          span a 48 11424 67 19 link 153
+          span font 48 11424 157 19
+          text "Coprolite" 48 11424 67 19 serif 19 underline link 153
+          text "  sci.news" 115 11424 90 19 serif 19
+        marker "1. " 36 11379 12 16
+      block li 48 11446 344 71
+        line 48 11446 344 24 base 16
+          span font 48 11448 314 19
+          span a 48 11448 314 19 link 154
+          text "A fossil feather from the age of dinosaurs" 48 11448 314 19 serif 19 underline link 154
+        line 48 11470 344 23 base 16
+          span font 48 11472 261 19
+          span a 48 11472 261 19 link 154
+          text "may explain why only some birds" 48 11472 261 19 serif 19 underline link 154
+        line 48 11493 344 24 base 17
+          span a 48 11496 67 19 link 154
+          span font 48 11496 114 19
+          text "survived" 48 11496 67 19 serif 19 underline link 154
+          text "  NPR" 115 11496 47 19 serif 19
+        marker "2. " 32 11450 16 16
+      block li 48 11517 344 71
+        line 48 11517 344 24 base 17
+          span font 48 11519 323 19
+          span a 48 11519 323 19 link 155
+          text "A Tyrannosaur Ate a Feathery Meal—and It" 48 11519 323 19 serif 19 underline link 155
+        line 48 11541 344 24 base 16
+          span font 48 11543 109 19
+          span a 48 11543 109 19 link 155
+          text "Was Frozen in" 48 11543 109 19 serif 19 underline link 155
+        line 48 11565 344 23 base 16
+          span a 48 11567 38 19 link 155
+          span font 48 11567 242 19
+          text "Time" 48 11567 38 19 serif 19 underline link 155
+          text "  nationalgeographic.com" 86 11567 204 19 serif 19
+        marker "3. " 32 11522 16 16
+      block li 48 11588 344 72
+        line 48 11588 344 24 base 17
+          span font 48 11591 318 19
+          span a 48 11591 318 19 link 156
+          text "A fossil feather preserved inside dinosaur" 48 11591 318 19 serif 19 underline link 156
+        line 48 11612 344 24 base 17
+          span font 48 11614 337 19
+          span a 48 11614 337 19 link 156
+          text "poop could help explain why birds survived" 48 11614 337 19 serif 19 underline link 156
+        line 48 11636 344 24 base 16
+          span a 48 11638 152 19 link 156
+          span font 48 11638 238 19
+          text "the mass extinction" 48 11638 152 19 serif 19 underline link 156
+          text "  Phys.org" 200 11638 86 19 serif 19
+        marker "4. " 32 11593 16 16
+      block li 48 11660 344 71
+        line 48 11660 344 23 base 16
+          span font 48 11662 323 19
+          span a 48 11662 323 19 link 157
+          text "Exquisite 66-million-year-old bird feather" 48 11662 323 19 serif 19 underline link 157
+        line 48 11683 344 24 base 17
+          span a 48 11686 238 19 link 157
+          span font 48 11686 290 19
+          text "preserved in dinosaur dropping" 48 11686 238 19 serif 19 underline link 157
+          text "  New" 286 11686 52 19 serif 19
+        line 48 11707 344 24 base 17
+          span font 48 11709 67 19
+          text "Scientist" 48 11709 67 19 serif 19
+        marker "5. " 32 11664 16 16
+    block p 8 11747 384 0
+    block p 8 11747 384 0
+    block p 8 11747 384 20
+      line 8 11747 384 20 base 14
+        span small 8 11751 202 13
+        text "Posted on 10 September 2026 | 6:12 pm" 8 11751 202 13 serif 13
+    block h3 8 11786 384 90
+      line 8 11786 384 30 base 21
+        span font 8 11789 342 24
+        span a 8 11789 342 24 link 158
+        text "LG defends smart-TV features amid" 8 11789 342 24 serif 24 bold underline link 158
+      line 8 11816 384 30 base 21
+        span font 8 11819 336 24
+        span a 8 11819 336 24 link 158
+        text "audio surveillance allegations - Al" 8 11819 336 24 serif 24 bold underline link 158
+      line 8 11846 384 30 base 21
+        span a 8 11849 78 24 link 158
+        span font 8 11849 78 24
+        text "Jazeera" 8 11849 78 24 serif 24 bold underline link 158
+    block p 8 11894 384 0
+      line 8 11876 384 0 base 16
+        span font 8 11878 0 19
+    block ol 8 11894 384 285
+      block li 48 11894 344 48
+        line 48 11894 344 24 base 17
+          span font 48 11897 318 19
+          span a 48 11897 318 19 link 159
+          text "LG defends smart-TV features amid audio" 48 11897 318 19 serif 19 underline link 159
+        line 48 11918 344 24 base 17
+          span a 48 11920 185 19 link 159
+          span font 48 11920 285 19
+          text "surveillance allegations" 48 11920 185 19 serif 19 underline link 159
+          text "  Al Jazeera" 233 11920 100 19 serif 19
+        marker "1. " 36 11899 12 16
+      block li 48 11942 344 95
+        line 48 11942 344 24 base 16
+          span font 48 11944 328 19
+          span a 48 11944 328 19 link 160
+          text "LG strongly denies TV spying claims, says" 48 11944 328 19 serif 19 underline link 160
+        line 48 11966 344 23 base 16
+          span font 48 11968 333 19
+          span a 48 11968 333 19 link 160
+          text "tracking and snooping concerns 'not true' —" 48 11968 333 19 serif 19 underline link 160
+        line 48 11989 344 24 base 17
+          span font 48 11992 337 19
+          span a 48 11992 337 19 link 160
+          text "online investigation claims 216,000,000 TVs" 48 11992 337 19 serif 19 underline link 160
+        line 48 12013 344 24 base 17
+          span a 48 12015 162 19 link 160
+          span font 48 12015 304 19
+          text "spy and record audio" 48 12015 162 19 serif 19 underline link 160
+          text "  Tom's Hardware" 210 12015 142 19 serif 19
+        marker "2. " 32 11946 16 16
+      block li 48 12037 344 47
+        line 48 12037 344 24 base 16
+          span font 48 12039 328 19
+          span a 48 12039 328 19 link 161
+          text "LG TVs caught spying even when offline or" 48 12039 328 19 serif 19 underline link 161
+        line 48 12061 344 23 base 16
+          span a 48 12063 86 19 link 161
+          span font 48 12063 181 19
+          text "on standby" 48 12063 86 19 serif 19 underline link 161
+          text "  The Verge" 134 12063 95 19 serif 19
+        marker "3. " 32 12041 16 16
+      block li 48 12084 344 48
+        line 48 12084 344 24 base 17
+          span font 48 12087 318 19
+          span a 48 12087 318 19 link 162
+          text "LG TV shown scanning LAN for third-party" 48 12087 318 19 serif 19 underline link 162
+        line 48 12108 344 24 base 17
+          span a 48 12110 200 19 link 162
+          span font 48 12110 318 19
+          text "phones and other devices" 48 12110 200 19 serif 19 underline link 162
+          text "  Ars Technica" 248 12110 118 19 serif 19
+        marker "4. " 32 12089 16 16
+      block li 48 12132 344 47
+        line 48 12132 344 24 base 16
+          span font 48 12134 323 19
+          span a 48 12134 323 19 link 163
+          text "LG Denies Its Televisions Record Ambient" 48 12134 323 19 serif 19 underline link 163
+        line 48 12156 344 23 base 16
+          span a 48 12158 233 19 link 163
+          span font 48 12158 290 19
+          text "Conversations for Ad Targeting" 48 12158 233 19 serif 19 underline link 163
+          text "  CNET" 281 12158 57 19 serif 19
+        marker "5. " 32 12136 16 16
+    block p 8 12195 384 0
+    block p 8 12195 384 0
+    block p 8 12195 384 20
+      line 8 12195 384 20 base 14
+        span small 8 12200 205 13
+        text "Posted on 10 September 2026 | 5:36 pm" 8 12200 205 13 serif 13
+    block h3 8 12234 384 90
+      line 8 12234 384 30 base 21
+        span font 8 12237 366 24
+        span a 8 12237 366 24 link 164
+        text "Too much light during nighttime sleep" 8 12237 366 24 serif 24 bold underline link 164
+      line 8 12264 384 30 base 21
+        span font 8 12267 360 24
+        span a 8 12267 360 24 link 164
+        text "may damage the heart, new research" 8 12267 360 24 serif 24 bold underline link 164
+      line 8 12294 384 30 base 21
+        span a 8 12297 168 24 link 164
+        span font 8 12297 168 24
+        text "finds - NBC News" 8 12297 168 24 serif 24 bold underline link 164
+    block p 8 12343 384 0
+      line 8 12324 384 0 base 17
+        span font 8 12326 0 19
+    block ol 8 12343 384 261
+      block li 48 12343 344 71
+        line 48 12343 344 23 base 16
+          span font 48 12345 328 19
+          span a 48 12345 328 19 link 165
+          text "Too much light during nighttime sleep may" 48 12345 328 19 serif 19 underline link 165
+        line 48 12366 344 24 base 17
+          span a 48 12369 290 19 link 165
+          span font 48 12369 337 19
+          text "damage the heart, new research finds" 48 12369 290 19 serif 19 underline link 165
+          text "  NBC" 338 12369 47 19 serif 19
+        line 48 12390 344 24 base 17
+          span font 48 12393 43 19
+          text "News" 48 12393 43 19 serif 19
+        marker "1. " 36 12347 12 16
+      block li 48 12414 344 47
+        line 48 12414 344 24 base 17
+          span font 48 12416 314 19
+          span a 48 12416 314 19 link 166
+          text "Even low light during sleep may damage" 48 12416 314 19 serif 19 underline link 166
+        line 48 12438 344 23 base 16
+          span a 48 12440 76 19 link 166
+          span font 48 12440 124 19
+          text "your heart" 48 12440 76 19 serif 19 underline link 166
+          text "  CNN" 124 12440 48 19 serif 19
+        marker "2. " 32 12419 16 16
+      block li 48 12461 344 48
+        line 48 12461 344 24 base 17
+          span font 48 12464 328 19
+          span a 48 12464 328 19 link 167
+          text "This sleep habit may be bad for your heart," 48 12464 328 19 serif 19 underline link 167
+        line 48 12485 344 24 base 17
+          span a 48 12488 124 19 link 167
+          span font 48 12488 223 19
+          text "new study finds" 48 12488 124 19 serif 19 underline link 167
+          text "  USA Today" 172 12488 99 19 serif 19
+        marker "3. " 32 12466 16 16
+      block li 48 12509 344 47
+        line 48 12509 344 24 base 17
+          span font 48 12511 304 19
+          span a 48 12511 304 19 link 168
+          text "Nighttime light exposure may alter heart" 48 12511 304 19 serif 19 underline link 168
+        line 48 12533 344 23 base 16
+          span a 48 12535 166 19 link 168
+          span font 48 12535 299 19
+          text "structure and function" 48 12535 166 19 serif 19 underline link 168
+          text "  News-Medical" 214 12535 133 19 serif 19
+        marker "4. " 32 12514 16 16
+      block li 48 12556 344 48
+        line 48 12556 344 24 base 17
+          span font 48 12559 328 19
+          span a 48 12559 328 19 link 169
+          text "The hidden risk to your heart from sleeping" 48 12559 328 19 serif 19 underline link 169
+        line 48 12580 344 24 base 17
+          span a 48 12583 86 19 link 169
+          span font 48 12583 185 19
+          text "in low light" 48 12583 86 19 serif 19 underline link 169
+          text "  News4JAX" 134 12583 99 19 serif 19
+        marker "5. " 32 12561 16 16
+    block p 8 12620 384 0
+    block p 8 12620 384 0
+    block p 8 12620 384 20
+      line 8 12620 384 20 base 14
+        span small 8 12624 205 13
+        text "Posted on 10 September 2026 | 5:26 pm" 8 12624 205 13 serif 13
+    block h3 8 12659 384 60
+      line 8 12659 384 30 base 21
+        span font 8 12662 372 24
+        span a 8 12662 372 24 link 170
+        text "How to watch 9/11 memorial events as" 8 12662 372 24 serif 24 bold underline link 170
+      line 8 12689 384 30 base 21
+        span a 8 12692 330 24 link 170
+        span font 8 12692 330 24
+        text "U.S. marks 25th anniversary - PBS" 8 12692 330 24 serif 24 bold underline link 170
+    block p 8 12737 384 0
+      line 8 12719 384 0 base 16
+        span font 8 12721 0 19
+    block ol 8 12737 384 285
+      block li 48 12737 344 48
+        line 48 12737 344 24 base 17
+          span font 48 12740 328 19
+          span a 48 12740 328 19 link 171
+          text "How to watch 9/11 memorial events as U.S." 48 12740 328 19 serif 19 underline link 171
+        line 48 12761 344 24 base 17
+          span a 48 12764 181 19 link 171
+          span font 48 12764 228 19
+          text "marks 25th anniversary" 48 12764 181 19 serif 19 underline link 171
+          text "  PBS" 229 12764 47 19 serif 19
+        marker "1. " 36 12742 12 16
+      block li 48 12785 344 47
+        line 48 12785 344 24 base 17
+          span font 48 12787 342 19
+          span a 48 12787 342 19 link 172
+          text "'Like an apocalyptic movie': How Americans" 48 12787 342 19 serif 19 underline link 172
+        line 48 12809 344 23 base 16
+          span a 48 12811 200 19 link 172
+          span font 48 12811 295 19
+          text "remember the 9/11 attacks" 48 12811 200 19 serif 19 underline link 172
+          text "  NBC News" 248 12811 95 19 serif 19
+        marker "2. " 32 12790 16 16
+      block li 48 12832 344 72
+        line 48 12832 344 24 base 17
+          span font 48 12835 304 19
+          span a 48 12835 304 19 link 173
+          text "Mistakes, mistrust and misdirection: 25" 48 12835 304 19 serif 19 underline link 173
+        line 48 12856 344 24 base 17
+          span font 48 12859 337 19
+          span a 48 12859 337 19 link 173
+          text "years after 9/11, its dark legacy continues to" 48 12859 337 19 serif 19 underline link 173
+        line 48 12880 344 24 base 17
+          span a 48 12882 48 19 link 173
+          span font 48 12882 166 19
+          text "unfold" 48 12882 48 19 serif 19 underline link 173
+          text "  The Guardian" 96 12882 118 19 serif 19
+        marker "3. " 32 12837 16 16
+      block li 48 12904 344 47
+        line 48 12904 344 23 base 16
+          span a 48 12906 266 19 link 174
+          span font 48 12906 314 19
+          text "Did 9/11 Really Change Everything?" 48 12906 266 19 serif 19 underline link 174
+          text "  The" 314 12906 48 19 serif 19
+        line 48 12927 344 24 base 17
+          span font 48 12930 124 19
+          text "New York Times" 48 12930 124 19 serif 19
+        marker "4. " 32 12908 16 16
+      block li 48 12951 344 71
+        line 48 12951 344 24 base 17
+          span font 48 12954 318 19
+          span a 48 12954 318 19 link 175
+          text "The legacy of 9/11 is complicated, but the" 48 12954 318 19 serif 19 underline link 175
+        line 48 12975 344 24 base 17
+          span font 48 12977 276 19
+          span a 48 12977 276 19 link 175
+          text "heart and generosity of New Yorkers" 48 12977 276 19 serif 19 underline link 175
+        line 48 12999 344 23 base 16
+          span a 48 13001 62 19 link 175
+          span font 48 13001 242 19
+          text "endures" 48 13001 62 19 serif 19 underline link 175
+          text "  New York Daily News" 110 13001 180 19 serif 19
+        marker "5. " 32 12956 16 16
+    block p 8 13038 384 0
+    block p 8 13038 384 0
+    block p 8 13038 384 20
+      line 8 13038 384 20 base 14
+        span small 8 13043 202 13
+        text "Posted on 10 September 2026 | 5:19 pm" 8 13043 202 13 serif 13
+    block h3 8 13077 384 120
+      line 8 13077 384 30 base 21
+        span font 8 13080 354 24
+        span a 8 13080 354 24 link 176
+        text "Trump's $5,000 pledge and the bond" 8 13080 354 24 serif 24 bold underline link 176
+      line 8 13107 384 30 base 21
+        span font 8 13110 378 24
+        span a 8 13110 378 24 link 176
+        text "market revolt shows it's a voter bribe —" 8 13110 378 24 serif 24 bold underline link 176
+      line 8 13137 384 30 base 21
+        span font 8 13140 318 24
+        span a 8 13140 318 24 link 176
+        text "costing every American $8,000 -" 8 13140 318 24 serif 24 bold underline link 176
+      line 8 13167 384 30 base 21
+        span a 8 13170 72 24 link 176
+        span font 8 13170 72 24
+        text "Fortune" 8 13170 72 24 serif 24 bold underline link 176
+    block p 8 13216 384 0
+      line 8 13197 384 0 base 17
+        span font 8 13199 0 19
+    block ol 8 13216 384 309
+      block li 48 13216 344 71
+        line 48 13216 344 24 base 16
+          span font 48 13218 337 19
+          span a 48 13218 337 19 link 177
+          text "Trump's $5,000 pledge and the bond market" 48 13218 337 19 serif 19 underline link 177
+        line 48 13240 344 23 base 16
+          span font 48 13242 304 19
+          span a 48 13242 304 19 link 177
+          text "revolt shows it's a voter bribe — costing" 48 13242 304 19 serif 19 underline link 177
+        line 48 13263 344 24 base 17
+          span a 48 13266 176 19 link 177
+          span font 48 13266 252 19
+          text "every American $8,000" 48 13266 176 19 serif 19 underline link 177
+          text "  Fortune" 224 13266 76 19 serif 19
+        marker "1. " 36 13220 12 16
+      block li 48 13287 344 71
+        line 48 13287 344 24 base 17
+          span font 48 13289 323 19
+          span a 48 13289 323 19 link 178
+          text "Trump's $5,000 dividend plan is his latest" 48 13289 323 19 serif 19 underline link 178
+        line 48 13311 344 24 base 16
+          span font 48 13313 242 19
+          span a 48 13313 242 19 link 178
+          text "affordability pitch — and it has a" 48 13313 242 19 serif 19 underline link 178
+        line 48 13335 344 23 base 16
+          span a 48 13337 147 19 link 178
+          span font 48 13337 299 19
+          text "trillion-dollar catch" 48 13337 147 19 serif 19 underline link 178
+          text "  Business Insider" 195 13337 152 19 serif 19
+        marker "2. " 32 13292 16 16
+      block li 48 13358 344 72
+        line 48 13358 344 24 base 17
+          span font 48 13361 328 19
+          span a 48 13361 328 19 link 179
+          text "'Pretend That I Am Running': 7 Takeaways" 48 13361 328 19 serif 19 underline link 179
+        line 48 13382 344 24 base 17
+          span a 48 13384 271 19 link 179
+          span font 48 13384 318 19
+          text "From the G.O.P. Midterm Convention" 48 13384 271 19 serif 19 underline link 179
+          text "  The" 319 13384 47 19 serif 19
+        line 48 13406 344 24 base 16
+          span font 48 13408 124 19
+          text "New York Times" 48 13408 124 19 serif 19
+        marker "3. " 32 13363 16 16
+      block li 48 13430 344 47
+        line 48 13430 344 23 base 16
+          span font 48 13432 333 19
+          span a 48 13432 333 19 link 180
+          text "$5,000 Checks for Every American? What to" 48 13432 333 19 serif 19 underline link 180
+        line 48 13453 344 24 base 17
+          span a 48 13456 276 19 link 180
+          span font 48 13456 328 19
+          text "Know About Trump's Latest Promise" 48 13456 276 19 serif 19 underline link 180
+          text "  WSJ" 324 13456 52 19 serif 19
+        marker "4. " 32 13434 16 16
+      block li 48 13477 344 48
+        line 48 13477 344 24 base 17
+          span font 48 13479 342 19
+          span a 48 13479 342 19 link 181
+          text "Trump's Disastrous Reign Will Cost You More" 48 13479 342 19 serif 19 underline link 181
+        line 48 13501 344 24 base 16
+          span a 48 13503 95 19 link 181
+          span font 48 13503 290 19
+          text "Than $5,000" 48 13503 95 19 serif 19 underline link 181
+          text "  The American Prospect" 143 13503 195 19 serif 19
+        marker "5. " 32 13482 16 16
+    block p 8 13541 384 0
+    block p 8 13541 384 0
+    block p 8 13541 384 20
+      line 8 13541 384 20 base 14
+        span small 8 13545 202 13
+        text "Posted on 10 September 2026 | 1:34 pm" 8 13545 202 13 serif 13
+    block h3 8 13579 384 90
+      line 8 13579 384 30 base 21
+        span font 8 13582 366 24
+        span a 8 13582 366 24 link 182
+        text "College Football Week 2 Expert Picks," 8 13582 366 24 serif 24 bold underline link 182
+      line 8 13609 384 30 base 21
+        span font 8 13612 348 24
+        span a 8 13612 348 24 link 182
+        text "Predictions For Michigan-Oklahoma" 8 13612 348 24 serif 24 bold underline link 182
+      line 8 13639 384 30 base 21
+        span a 8 13642 216 24 link 182
+        span font 8 13642 216 24
+        text "And More - FOX Sports" 8 13642 216 24 serif 24 bold underline link 182
+    block p 8 13688 384 0
+      line 8 13669 384 0 base 17
+        span font 8 13672 0 19
+    block ol 8 13688 384 309
+      block li 48 13688 344 71
+        line 48 13688 344 24 base 17
+          span font 48 13690 290 19
+          span a 48 13690 290 19 link 183
+          text "College Football Week 2 Expert Picks," 48 13690 290 19 serif 19 underline link 183
+        line 48 13712 344 24 base 16
+          span font 48 13714 309 19
+          span a 48 13714 309 19 link 183
+          text "Predictions For Michigan-Oklahoma And" 48 13714 309 19 serif 19 underline link 183
+        line 48 13736 344 23 base 16
+          span a 48 13738 38 19 link 183
+          span font 48 13738 138 19
+          text "More" 48 13738 38 19 serif 19 underline link 183
+          text "  FOX Sports" 86 13738 100 19 serif 19
+        marker "1. " 36 13693 12 16
+      block li 48 13759 344 48
+        line 48 13759 344 24 base 17
+          span font 48 13762 299 19
+          span a 48 13762 299 19 link 184
+          text "Week 2 GameDay Kickoff: QB issues for" 48 13762 299 19 serif 19 underline link 184
+        line 48 13783 344 24 base 17
+          span a 48 13785 285 19 link 184
+          span font 48 13785 342 19
+          text "Michigan, Buckeyes-Horns and more" 48 13785 285 19 serif 19 underline link 184
+          text "  ESPN" 333 13785 57 19 serif 19
+        marker "2. " 32 13764 16 16
+      block li 48 13807 344 47
+        line 48 13807 344 24 base 16
+          span font 48 13809 342 19
+          span a 48 13809 342 19 link 185
+          text "College football games today: Week 2 Friday" 48 13809 342 19 serif 19 underline link 185
+        line 48 13831 344 23 base 16
+          span a 48 13833 228 19 link 185
+          span font 48 13833 328 19
+          text "schedule, times, TV channels" 48 13833 228 19 serif 19 underline link 185
+          text "  USA Today" 276 13833 100 19 serif 19
+        marker "3. " 32 13811 16 16
+      block li 48 13854 344 72
+        line 48 13854 344 24 base 17
+          span font 48 13857 304 19
+          span a 48 13857 304 19 link 186
+          text "Walk Off In Ohio State, Texas? Alabama" 48 13857 304 19 serif 19 underline link 186
+        line 48 13878 344 24 base 17
+          span font 48 13880 266 19
+          span a 48 13880 266 19 link 186
+          text "Stays Hot? Joel Klatt's Week 2 CFB" 48 13880 266 19 serif 19 underline link 186
+        line 48 13902 344 24 base 16
+          span a 48 13904 43 19 link 186
+          span font 48 13904 143 19
+          text "Picks" 48 13904 43 19 serif 19 underline link 186
+          text "  FOX Sports" 91 13904 100 19 serif 19
+        marker "4. " 32 13859 16 16
+      block li 48 13926 344 71
+        line 48 13926 344 23 base 16
+          span font 48 13928 333 19
+          span a 48 13928 333 19 link 187
+          text "College football picks, Week 2 best bets by" 48 13928 333 19 serif 19 underline link 187
+        line 48 13949 344 24 base 17
+          span font 48 13952 290 19
+          span a 48 13952 290 19 link 187
+          text "Vegas expert: This parlay could return" 48 13952 290 19 serif 19 underline link 187
+        line 48 13973 344 24 base 17
+          span a 48 13975 38 19 link 187
+          span font 48 13975 138 19
+          text "+600" 48 13975 38 19 serif 19 underline link 187
+          text "  CBS Sports" 86 13975 100 19 serif 19
+        marker "5. " 32 13930 16 16
+    block p 8 14013 384 0
+    block p 8 14013 384 0
+    block p 8 14013 384 20
+      line 8 14013 384 20 base 14
+        span small 8 14017 195 13
+        text "Posted on 10 September 2026 | 1:11 pm" 8 14017 195 13 serif 13
+    block h3 8 14051 384 120
+      line 8 14051 384 30 base 21
+        span font 8 14054 366 24
+        span a 8 14054 366 24 link 188
+        text "Missouri Supreme Court finds Hoskins" 8 14054 366 24 serif 24 bold underline link 188
+      line 8 14081 384 30 base 21
+        span font 8 14084 258 24
+        span a 8 14084 258 24 link 188
+        text "'disingenuous' about 2022" 8 14084 258 24 serif 24 bold underline link 188
+      line 8 14111 384 30 base 21
+        span font 8 14114 336 24
+        span a 8 14114 336 24 link 188
+        text "congressional map use decision -" 8 14114 336 24 serif 24 bold underline link 188
+      line 8 14141 384 30 base 21
+        span a 8 14144 114 24 link 188
+        span font 8 14144 114 24
+        text "fox4kc.com" 8 14144 114 24 serif 24 bold underline link 188
+    block p 8 14190 384 0
+      line 8 14171 384 0 base 17
+        span font 8 14174 0 19
+    block ol 8 14190 384 356
+      block li 48 14190 344 71
+        line 48 14190 344 24 base 17
+          span font 48 14193 290 19
+          span a 48 14193 290 19 link 189
+          text "Missouri Supreme Court finds Hoskins" 48 14193 290 19 serif 19 underline link 189
+        line 48 14214 344 24 base 17
+          span font 48 14216 318 19
+          span a 48 14216 318 19 link 189
+          text "'disingenuous' about 2022 congressional" 48 14216 318 19 serif 19 underline link 189
+        line 48 14238 344 23 base 16
+          span a 48 14240 138 19 link 189
+          span font 48 14240 247 19
+          text "map use decision" 48 14240 138 19 serif 19 underline link 189
+          text "  fox4kc.com" 186 14240 109 19 serif 19
+        marker "1. " 36 14195 12 16
+      block li 48 14261 344 72
+        line 48 14261 344 24 base 17
+          span font 48 14264 214 19
+          span a 48 14264 214 19 link 190
+          text "Supreme Court Again Blocks" 48 14264 214 19 serif 19 underline link 190
+        line 48 14285 344 24 base 17
+          span font 48 14288 276 19
+          span a 48 14288 276 19 link 190
+          text "Republican-Backed Missouri Voting" 48 14288 276 19 serif 19 underline link 190
+        line 48 14309 344 24 base 17
+          span a 48 14311 33 19 link 190
+          span font 48 14311 209 19
+          text "Map" 48 14311 33 19 serif 19 underline link 190
+          text "  The New York Times" 81 14311 176 19 serif 19
+        marker "2. " 32 14266 16 16
+      block li 48 14333 344 71
+        line 48 14333 344 23 base 16
+          span font 48 14335 337 19
+          span a 48 14335 337 19 link 191
+          text "The Supreme Court just handed Republicans" 48 14335 337 19 serif 19 underline link 191
+        line 48 14356 344 24 base 17
+          span font 48 14359 242 19
+          span a 48 14359 242 19 link 191
+          text "a surprisingly decisive midterm" 48 14359 242 19 serif 19 underline link 191
+        line 48 14380 344 24 base 17
+          span a 48 14383 33 19 link 191
+          span font 48 14383 119 19
+          text "loss" 48 14383 33 19 serif 19 underline link 191
+          text "  vox.com" 81 14383 86 19 serif 19
+        marker "3. " 32 14337 16 16
+      block li 48 14404 344 71
+        line 48 14404 344 24 base 17
+          span font 48 14406 280 19
+          span a 48 14406 280 19 link 192
+          text "Missouri is poised to revert to former" 48 14406 280 19 serif 19 underline link 192
+        line 48 14428 344 23 base 16
+          span font 48 14430 314 19
+          span a 48 14430 314 19 link 192
+          text "congressional districts after court rejects" 48 14430 314 19 serif 19 underline link 192
+        line 48 14451 344 24 base 17
+          span a 48 14454 152 19 link 192
+          span font 48 14454 238 19
+          text "Trump-backed map" 48 14454 152 19 serif 19 underline link 192
+          text "  AP News" 200 14454 86 19 serif 19
+        marker "4. " 32 14409 16 16
+      block li 48 14475 344 71
+        line 48 14475 344 24 base 17
+          span font 48 14478 309 19
+          span a 48 14478 309 19 link 193
+          text "Missouri Supreme Court: Hoskins was in" 48 14478 309 19 serif 19 underline link 193
+        line 48 14499 344 24 base 17
+          span font 48 14501 314 19
+          span a 48 14501 314 19 link 193
+          text "contempt; contemptuous conduct purged" 48 14501 314 19 serif 19 underline link 193
+        line 48 14523 344 23 base 16
+          span a 48 14525 114 19 link 193
+          span font 48 14525 176 19
+          text "with new order" 48 14525 114 19 serif 19 underline link 193
+          text "  KMBC" 162 14525 62 19 serif 19
+        marker "5. " 32 14480 16 16
+    block p 8 14562 384 0
+    block p 8 14562 384 0
+    block p 8 14562 384 20
+      line 8 14562 384 20 base 14
+        span small 8 14567 208 13
+        text "Posted on 10 September 2026 | 12:48 pm" 8 14567 208 13 serif 13
+    block h3 8 14601 384 120
+      line 8 14601 384 30 base 21
+        span font 8 14604 384 24
+        span a 8 14604 384 24 link 194
+        text "Walking briskly may lower risk of death" 8 14604 384 24 serif 24 bold underline link 194
+      line 8 14631 384 30 base 21
+        span font 8 14634 348 24
+        span a 8 14634 348 24 link 194
+        text "in some adults: Study - ABC News -" 8 14634 348 24 serif 24 bold underline link 194
+      line 8 14661 384 30 base 21
+        span font 8 14664 318 24
+        span a 8 14664 318 24 link 194
+        text "Breaking News, Latest News and" 8 14664 318 24 serif 24 bold underline link 194
+      line 8 14691 384 30 base 21
+        span a 8 14694 66 24 link 194
+        span font 8 14694 66 24
+        text "Videos" 8 14694 66 24 serif 24 bold underline link 194
+    block p 8 14740 384 0
+      line 8 14721 384 0 base 17
+        span font 8 14724 0 19
+    block ol 8 14740 384 285
+      block li 48 14740 344 71
+        line 48 14740 344 24 base 17
+          span font 48 14742 323 19
+          span a 48 14742 323 19 link 195
+          text "Walking briskly may lower risk of death in" 48 14742 323 19 serif 19 underline link 195
+        line 48 14764 344 23 base 16
+          span a 48 14766 147 19 link 195
+          span font 48 14766 328 19
+          text "some adults: Study" 48 14766 147 19 serif 19 underline link 195
+          text "  ABC News - Breaking" 195 14766 181 19 serif 19
+        line 48 14787 344 24 base 17
+          span font 48 14790 238 19
+          text "News, Latest News and Videos" 48 14790 238 19 serif 19
+        marker "1. " 36 14745 12 16
+      block li 48 14811 344 48
+        line 48 14811 344 24 base 17
+          span font 48 14814 337 19
+          span a 48 14814 337 19 link 196
+          text "You may not need 10,000 steps to get health" 48 14814 337 19 serif 19 underline link 196
+        line 48 14835 344 24 base 17
+          span a 48 14837 166 19 link 196
+          span font 48 14837 214 19
+          text "benefits from walking" 48 14837 166 19 serif 19 underline link 196
+          text "  CNN" 214 14837 48 19 serif 19
+        marker "2. " 32 14816 16 16
+      block li 48 14859 344 47
+        line 48 14859 344 23 base 16
+          span font 48 14861 304 19
+          span a 48 14861 304 19 link 197
+          text "How Fast You Walk May Determine How" 48 14861 304 19 serif 19 underline link 197
+        line 48 14882 344 24 base 17
+          span a 48 14885 109 19 link 197
+          span font 48 14885 195 19
+          text "Long You Live" 48 14885 109 19 serif 19 underline link 197
+          text "  nautil.us" 157 14885 86 19 serif 19
+        marker "3. " 32 14863 16 16
+      block li 48 14906 344 48
+        line 48 14906 344 24 base 17
+          span font 48 14909 318 19
+          span a 48 14909 318 19 link 198
+          text "Is Your Step Count Too Low? Try Walking" 48 14909 318 19 serif 19 underline link 198
+        line 48 14930 344 24 base 17
+          span a 48 14932 48 19 link 198
+          span font 48 14932 185 19
+          text "Faster" 48 14932 48 19 serif 19 underline link 198
+          text "  Time Magazine" 96 14932 137 19 serif 19
+        marker "4. " 32 14911 16 16
+      block li 48 14954 344 71
+        line 48 14954 344 23 base 16
+          span font 48 14956 342 19
+          span a 48 14956 342 19 link 199
+          text "Walking an extra 1,000 steps a day may help" 48 14956 342 19 serif 19 underline link 199
+        line 48 14977 344 24 base 17
+          span font 48 14980 128 19
+          span a 48 14980 128 19 link 199
+          text "your heart, study" 48 14980 128 19 serif 19 underline link 199
+        line 48 15001 344 24 base 17
+          span a 48 15004 38 19 link 199
+          span font 48 15004 219 19
+          text "finds" 48 15004 38 19 serif 19 underline link 199
+          text "  washingtonpost.com" 86 15004 181 19 serif 19
+        marker "5. " 32 14958 16 16
+    block p 8 15041 384 0
+    block p 8 15041 384 0
+    block p 8 15041 384 20
+      line 8 15041 384 20 base 14
+        span small 8 15045 208 13
+        text "Posted on 10 September 2026 | 12:27 pm" 8 15045 208 13 serif 13
+    block h3 8 15080 384 90
+      line 8 15080 384 30 base 21
+        span font 8 15083 312 24
+        span a 8 15083 312 24 link 200
+        text "The Closest Planet to Our Sun Is" 8 15083 312 24 serif 24 bold underline link 200
+      line 8 15110 384 30 base 21
+        span font 8 15113 348 24
+        span a 8 15113 348 24 link 200
+        text "Shrinking. Here's What that Means -" 8 15113 348 24 serif 24 bold underline link 200
+      line 8 15140 384 30 base 21
+        span a 8 15143 96 24 link 200
+        span font 8 15143 96 24
+        text "wktv.com" 8 15143 96 24 serif 24 bold underline link 200
+    block p 8 15188 384 0
+      line 8 15170 384 0 base 16
+        span font 8 15172 0 19
+    block ol 8 15188 384 238
+      block li 48 15188 344 48
+        line 48 15188 344 24 base 17
+          span font 48 15191 328 19
+          span a 48 15191 328 19 link 201
+          text "The Closest Planet to Our Sun Is Shrinking." 48 15191 328 19 serif 19 underline link 201
+        line 48 15212 344 24 base 17
+          span a 48 15214 181 19 link 201
+          span font 48 15214 276 19
+          text "Here's What that Means" 48 15214 181 19 serif 19 underline link 201
+          text "  wktv.com" 229 15214 95 19 serif 19
+        marker "1. " 36 15193 12 16
+      block li 48 15236 344 47
+        line 48 15236 344 24 base 16
+          span font 48 15238 328 19
+          span a 48 15238 328 19 link 202
+          text "Scientists are trying to figure out if Mercury" 48 15238 328 19 serif 19 underline link 202
+        line 48 15260 344 23 base 16
+          span a 48 15262 233 19 link 202
+          span font 48 15262 280 19
+          text "is even smaller than expected" 48 15262 233 19 serif 19 underline link 202
+          text "  CNN" 281 15262 47 19 serif 19
+        marker "2. " 32 15240 16 16
+      block li 48 15283 344 48
+        line 48 15283 344 24 base 17
+          span font 48 15286 285 19
+          span a 48 15286 285 19 link 203
+          text "Mercury may be shrinking faster than" 48 15286 285 19 serif 19 underline link 203
+        line 48 15307 344 24 base 17
+          span a 48 15309 152 19 link 203
+          span font 48 15309 247 19
+          text "scientists expected" 48 15309 152 19 serif 19 underline link 203
+          text "  NBC News" 200 15309 95 19 serif 19
+        marker "3. " 32 15288 16 16
+      block li 48 15331 344 47
+        line 48 15331 344 24 base 16
+          span font 48 15333 328 19
+          span a 48 15333 328 19 link 204
+          text "Mercury may have shrunk much more than" 48 15333 328 19 serif 19 underline link 204
+        line 48 15355 344 23 base 16
+          span a 48 15357 219 19 link 204
+          span font 48 15357 337 19
+          text "we thought, new study hints" 48 15357 219 19 serif 19 underline link 204
+          text "  Live Science" 267 15357 118 19 serif 19
+        marker "4. " 32 15335 16 16
+      block li 48 15378 344 48
+        line 48 15378 344 24 base 17
+          span font 48 15381 323 19
+          span a 48 15381 323 19 link 205
+          text "Scientists Drastically Underestimated How" 48 15381 323 19 serif 19 underline link 205
+        line 48 15402 344 24 base 17
+          span a 48 15404 200 19 link 205
+          span font 48 15404 285 19
+          text "Much Mercury Has Shrunk" 48 15404 200 19 serif 19 underline link 205
+          text "  Gizmodo" 248 15404 85 19 serif 19
+        marker "5. " 32 15383 16 16
+    block p 8 15442 384 0
+    block p 8 15442 384 0
+    block p 8 15442 384 20
+      line 8 15442 384 20 base 14
+        span small 8 15446 205 13
+        text "Posted on 10 September 2026 | 9:00 am" 8 15446 205 13 serif 13
+    block h3 8 15481 384 90
+      line 8 15481 384 30 base 21
+        span font 8 15484 354 24
+        span a 8 15484 354 24 link 206
+        text "Spain's spy agency warned of Ceuta" 8 15484 354 24 serif 24 bold underline link 206
+      line 8 15511 384 30 base 21
+        span font 8 15514 264 24
+        span a 8 15514 264 24 link 206
+        text "border breach before crisis," 8 15514 264 24 serif 24 bold underline link 206
+      line 8 15541 384 30 base 21
+        span a 8 15544 348 24 link 206
+        span font 8 15544 348 24
+        text "declassified files show - CBS News" 8 15544 348 24 serif 24 bold underline link 206
+    block p 8 15589 384 0
+      line 8 15571 384 0 base 16
+        span font 8 15573 0 19
+    block ol 8 15589 384 333
+      block li 48 15589 344 72
+        line 48 15589 344 24 base 17
+          span font 48 15592 333 19
+          span a 48 15592 333 19 link 207
+          text "Spain's spy agency warned of Ceuta border" 48 15592 333 19 serif 19 underline link 207
+        line 48 15613 344 24 base 17
+          span font 48 15615 295 19
+          span a 48 15615 295 19 link 207
+          text "breach before crisis, declassified files" 48 15615 295 19 serif 19 underline link 207
+        line 48 15637 344 24 base 16
+          span a 48 15639 43 19 link 207
+          span font 48 15639 138 19
+          text "show" 48 15639 43 19 serif 19 underline link 207
+          text "  CBS News" 91 15639 95 19 serif 19
+        marker "1. " 36 15594 12 16
+      block li 48 15661 344 71
+        line 48 15661 344 23 base 16
+          span font 48 15663 299 19
+          span a 48 15663 299 19 link 208
+          text "Spain's spy agency warned of plans to" 48 15663 299 19 serif 19 underline link 208
+        line 48 15684 344 24 base 17
+          span font 48 15687 328 19
+          span a 48 15687 328 19 link 208
+          text "storm Ceuta before mass migrant crossing," 48 15687 328 19 serif 19 underline link 208
+        line 48 15708 344 24 base 17
+          span a 48 15710 133 19 link 208
+          span font 48 15710 181 19
+          text "documents show" 48 15710 133 19 serif 19 underline link 208
+          text "  CNN" 181 15710 48 19 serif 19
+        marker "2. " 32 15665 16 16
+      block li 48 15732 344 71
+        line 48 15732 344 24 base 16
+          span font 48 15734 299 19
+          span a 48 15734 299 19 link 209
+          text "Spain Declassifies Warning to Morocco" 48 15734 299 19 serif 19 underline link 209
+        line 48 15756 344 23 base 16
+          span a 48 15758 223 19 link 209
+          span font 48 15758 309 19
+          text "About Migrant Crossing Plans" 48 15758 223 19 serif 19 underline link 209
+          text "  The New" 271 15758 86 19 serif 19
+        line 48 15779 344 24 base 17
+          span font 48 15782 86 19
+          text "York Times" 48 15782 86 19 serif 19
+        marker "3. " 32 15736 16 16
+      block li 48 15803 344 48
+        line 48 15803 344 24 base 17
+          span font 48 15805 333 19
+          span a 48 15805 333 19 link 210
+          text "Spanish intelligence warned of Ceuta mass" 48 15805 333 19 serif 19 underline link 210
+        line 48 15827 344 24 base 16
+          span a 48 15829 214 19 link 210
+          span font 48 15829 261 19
+          text "crossing plans before surge" 48 15829 214 19 serif 19 underline link 210
+          text "  BBC" 262 15829 47 19 serif 19
+        marker "4. " 32 15808 16 16
+      block li 48 15851 344 71
+        line 48 15851 344 23 base 16
+          span font 48 15853 280 19
+          span a 48 15853 280 19 link 211
+          text "Spain's spy agency warned of mass" 48 15853 280 19 serif 19 underline link 211
+        line 48 15874 344 24 base 17
+          span a 48 15877 309 19 link 211
+          span font 48 15877 342 19
+          text "crossings into Ceuta before border crisis" 48 15877 309 19 serif 19 underline link 211
+          text "  Al" 357 15877 33 19 serif 19
+        line 48 15898 344 24 base 17
+          span font 48 15900 62 19
+          text "Jazeera" 48 15900 62 19 serif 19
+        marker "5. " 32 15855 16 16
+    block p 8 15938 384 0
+    block p 8 15938 384 0
+    block p 8 15938 384 20
+      line 8 15938 384 20 base 14
+        span small 8 15942 202 13
+        text "Posted on 10 September 2026 | 8:15 am" 8 15942 202 13 serif 13
+    block h3 8 15976 384 60
+      line 8 15976 384 30 base 21
+        span font 8 15979 384 24
+        span a 8 15979 384 24 link 212
+        text "The 9/11 attacks and the crisis of global" 8 15979 384 24 serif 24 bold underline link 212
+      line 8 16006 384 30 base 21
+        span a 8 16009 234 24 link 212
+        span font 8 16009 234 24
+        text "liberalism - Slow Boring" 8 16009 234 24 serif 24 bold underline link 212
+    block p 8 16055 384 0
+      line 8 16036 384 0 base 17
+        span font 8 16039 0 19
+    block ol 8 16055 384 309
+      block li 48 16055 344 48
+        line 48 16055 344 24 base 17
+          span font 48 16058 304 19
+          span a 48 16058 304 19 link 213
+          text "The 9/11 attacks and the crisis of global" 48 16058 304 19 serif 19 underline link 213
+        line 48 16079 344 24 base 17
+          span a 48 16081 76 19 link 213
+          span font 48 16081 185 19
+          text "liberalism" 48 16081 76 19 serif 19 underline link 213
+          text "  Slow Boring" 124 16081 109 19 serif 19
+        marker "1. " 36 16060 12 16
+      block li 48 16103 344 47
+        line 48 16103 344 23 base 16
+          span font 48 16105 318 19
+          span a 48 16105 318 19 link 214
+          text "Opinion | How the Heroic Response to 9/11" 48 16105 318 19 serif 19 underline link 214
+        line 48 16126 344 24 base 17
+          span a 48 16129 81 19 link 214
+          span font 48 16129 257 19
+          text "Went Awry" 48 16129 81 19 serif 19 underline link 214
+          text "  The New York Times" 129 16129 176 19 serif 19
+        marker "2. " 32 16107 16 16
+      block li 48 16150 344 48
+        line 48 16150 344 24 base 17
+          span font 48 16153 309 19
+          span a 48 16153 309 19 link 215
+          text "9/11's national security legacy, 25 years" 48 16153 309 19 serif 19 underline link 215
+        line 48 16174 344 24 base 17
+          span a 48 16176 33 19 link 215
+          span font 48 16176 95 19
+          text "later" 48 16176 33 19 serif 19 underline link 215
+          text "  Axios" 81 16176 62 19 serif 19
+        marker "3. " 32 16155 16 16
+      block li 48 16198 344 71
+        line 48 16198 344 23 base 16
+          span font 48 16200 333 19
+          span a 48 16200 333 19 link 216
+          text "Spies, strategies and missed opportunities:" 48 16200 333 19 serif 19 underline link 216
+        line 48 16221 344 24 base 17
+          span font 48 16224 290 19
+          span a 48 16224 290 19 link 216
+          text "How the lessons of 9/11 are still being" 48 16224 290 19 serif 19 underline link 216
+        line 48 16245 344 24 base 17
+          span a 48 16248 43 19 link 216
+          span font 48 16248 90 19
+          text "learnt" 48 16248 43 19 serif 19 underline link 216
+          text "  BBC" 91 16248 47 19 serif 19
+        marker "4. " 32 16202 16 16
+      block li 48 16269 344 95
+        line 48 16269 344 24 base 17
+          span font 48 16271 280 19
+          span a 48 16271 280 19 link 217
+          text "Federal bulletin issued ahead of 9/11" 48 16271 280 19 serif 19 underline link 217
+        line 48 16293 344 23 base 16
+          span font 48 16295 318 19
+          span a 48 16295 318 19 link 217
+          text "anniversary warns foreign terrorist groups" 48 16295 318 19 serif 19 underline link 217
+        line 48 16316 344 24 base 17
+          span a 48 16319 233 19 link 217
+          span font 48 16319 342 19
+          text "continue to encourage attacks" 48 16319 233 19 serif 19 underline link 217
+          text "  ABC News -" 281 16319 109 19 serif 19
+        line 48 16340 344 24 base 17
+          span font 48 16343 309 19
+          text "Breaking News, Latest News and Videos" 48 16343 309 19 serif 19
+        marker "5. " 32 16274 16 16
+    block p 8 16380 384 0
+    block p 8 16380 384 0
+    block p 8 16380 384 20
+      line 8 16380 384 20 base 14
+        span small 8 16384 205 13
+        text "Posted on 10 September 2026 | 5:02 am" 8 16384 205 13 serif 13
+    block h3 8 16419 384 60
+      line 8 16419 384 30 base 21
+        span font 8 16422 360 24
+        span a 8 16422 360 24 link 218
+        text "Apple Announces macOS Golden Gate" 8 16422 360 24 serif 24 bold underline link 218
+      line 8 16449 384 30 base 21
+        span a 8 16452 264 24 link 218
+        span font 8 16452 264 24
+        text "Release Date - MacRumors" 8 16452 264 24 serif 24 bold underline link 218
+    block p 8 16497 384 0
+      line 8 16479 384 0 base 16
+        span font 8 16481 0 19
+    block ol 8 16497 384 262
+      block li 48 16497 344 48
+        line 48 16497 344 24 base 17
+          span font 48 16500 285 19
+          span a 48 16500 285 19 link 219
+          text "Apple Announces macOS Golden Gate" 48 16500 285 19 serif 19 underline link 219
+        line 48 16521 344 24 base 17
+          span a 48 16524 100 19 link 219
+          span font 48 16524 209 19
+          text "Release Date" 48 16524 100 19 serif 19 underline link 219
+          text "  MacRumors" 148 16524 109 19 serif 19
+        marker "1. " 36 16502 12 16
+      block li 48 16545 344 47
+        line 48 16545 344 24 base 17
+          span font 48 16547 314 19
+          span a 48 16547 314 19 link 220
+          text "Apple iOS 27 release date: When you can" 48 16547 314 19 serif 19 underline link 220
+        line 48 16569 344 23 base 16
+          span a 48 16571 90 19 link 220
+          span font 48 16571 185 19
+          text "download it" 48 16571 90 19 serif 19 underline link 220
+          text "  Mashable" 138 16571 95 19 serif 19
+        marker "2. " 32 16550 16 16
+      block li 48 16592 344 48
+        line 48 16592 344 24 base 17
+          span font 48 16595 328 19
+          span a 48 16595 328 19 link 221
+          text "macOS 27 Golden Gate will be available on" 48 16595 328 19 serif 19 underline link 221
+        line 48 16616 344 24 base 17
+          span a 48 16619 100 19 link 221
+          span font 48 16619 219 19
+          text "September 14" 48 16619 100 19 serif 19 underline link 221
+          text "  AppleInsider" 148 16619 119 19 serif 19
+        marker "3. " 32 16597 16 16
+      block li 48 16640 344 71
+        line 48 16640 344 24 base 17
+          span font 48 16642 309 19
+          span a 48 16642 309 19 link 222
+          text "iOS 27 Is Coming. Here Are the Best New" 48 16642 309 19 serif 19 underline link 222
+        line 48 16664 344 23 base 16
+          span font 48 16666 309 19
+          span a 48 16666 309 19 link 222
+          text "iPhone Features and How to Get the Beta" 48 16666 309 19 serif 19 underline link 222
+        line 48 16687 344 24 base 17
+          span a 48 16690 48 19 link 222
+          span font 48 16690 119 19
+          text "Today" 48 16690 48 19 serif 19 underline link 222
+          text "  PCMag" 96 16690 71 19 serif 19
+        marker "4. " 32 16645 16 16
+      block li 48 16711 344 48
+        line 48 16711 344 24 base 17
+          span font 48 16714 337 19
+          span a 48 16714 337 19 link 223
+          text "This is when iOS 27, iPadOS 27, watchOS 27" 48 16714 337 19 serif 19 underline link 223
+        line 48 16735 344 24 base 17
+          span a 48 16737 228 19 link 223
+          span font 48 16737 333 19
+          text "and macOS Golden Gate arrive" 48 16737 228 19 serif 19 underline link 223
+          text "  Cult of Mac" 276 16737 105 19 serif 19
+        marker "5. " 32 16716 16 16
+    block p 8 16775 384 0
+    block p 8 16775 384 0
+    block p 8 16775 384 20
+      line 8 16775 384 20 base 14
+        span small 8 16779 202 13
+        text "Posted on 10 September 2026 | 3:15 am" 8 16779 202 13 serif 13
+    block h3 8 16813 384 120
+      line 8 16813 384 30 base 21
+        span font 8 16816 366 24
+        span a 8 16816 366 24 link 224
+        text "NASA's newly launched Roman Space" 8 16816 366 24 serif 24 bold underline link 224
+      line 8 16843 384 30 base 21
+        span font 8 16846 300 24
+        span a 8 16846 300 24 link 224
+        text "Telescope will 'directly' image" 8 16846 300 24 serif 24 bold underline link 224
+      line 8 16873 384 30 base 21
+        span font 8 16876 372 24
+        span a 8 16876 372 24 link 224
+        text "exoplanets. But what does that mean?" 8 16876 372 24 serif 24 bold underline link 224
+      line 8 16903 384 30 base 21
+        span a 8 16906 78 24 link 224
+        span font 8 16906 78 24
+        text "- Space" 8 16906 78 24 serif 24 bold underline link 224
+    block p 8 16952 384 0
+      line 8 16933 384 0 base 17
+        span font 8 16936 0 19
+    block ol 8 16952 384 309
+      block li 48 16952 344 71
+        line 48 16952 344 24 base 17
+          span font 48 16954 290 19
+          span a 48 16954 290 19 link 225
+          text "NASA's newly launched Roman Space" 48 16954 290 19 serif 19 underline link 225
+        line 48 16976 344 24 base 16
+          span font 48 16978 333 19
+          span a 48 16978 333 19 link 225
+          text "Telescope will 'directly' image exoplanets." 48 16978 333 19 serif 19 underline link 225
+        line 48 17000 344 23 base 16
+          span a 48 17002 200 19 link 225
+          span font 48 17002 266 19
+          text "But what does that mean?" 48 17002 200 19 serif 19 underline link 225
+          text "  Space" 248 17002 66 19 serif 19
+        marker "1. " 36 16957 12 16
+      block li 48 17023 344 72
+        line 48 17023 344 24 base 17
+          span font 48 17026 295 19
+          span a 48 17026 295 19 link 226
+          text "SpaceX rocket taxi returns after Roman" 48 17026 295 19 serif 19 underline link 226
+        line 48 17047 344 24 base 17
+          span font 48 17049 328 19
+          span a 48 17049 328 19 link 226
+          text "Telescope launch | Space photo of the day" 48 17049 328 19 serif 19 underline link 226
+        line 48 17071 344 24 base 16
+          span a 48 17073 124 19 link 226
+          span font 48 17073 190 19
+          text "for Sept. 8, 2026" 48 17073 124 19 serif 19 underline link 226
+          text "  Space" 172 17073 66 19 serif 19
+        marker "2. " 32 17028 16 16
+      block li 48 17095 344 47
+        line 48 17095 344 23 base 16
+          span font 48 17097 290 19
+          span a 48 17097 290 19 link 227
+          text "Dick Yarbrough: Space probe deepens" 48 17097 290 19 serif 19 underline link 227
+        line 48 17118 344 24 base 17
+          span a 48 17121 190 19 link 227
+          span font 48 17121 323 19
+          text "mystery of God, universe" 48 17121 190 19 serif 19 underline link 227
+          text "  Coastal Courier" 238 17121 133 19 serif 19
+        marker "3. " 32 17099 16 16
+      block li 48 17142 344 48
+        line 48 17142 344 24 base 17
+          span a 48 17144 266 19 link 228
+          span font 48 17144 333 19
+          text "Editorial: Still reaching for the stars" 48 17144 266 19 serif 19 underline link 228
+          text "  Times" 314 17144 67 19 serif 19
+        line 48 17166 344 24 base 16
+          span font 48 17168 43 19
+          text "Union" 48 17168 43 19 serif 19
+        marker "4. " 32 17147 16 16
+      block li 48 17190 344 71
+        line 48 17190 344 23 base 16
+          span font 48 17192 328 19
+          span a 48 17192 328 19 link 229
+          text "CT-made equipment deployed aboard new" 48 17192 328 19 serif 19 underline link 229
+        line 48 17213 344 24 base 17
+          span a 48 17216 171 19 link 229
+          span font 48 17216 323 19
+          text "NASA space telescope" 48 17216 171 19 serif 19 underline link 229
+          text "  Hartford Business" 219 17216 152 19 serif 19
+        line 48 17237 344 24 base 17
+          span font 48 17239 57 19
+          text "Journal" 48 17239 57 19 serif 19
+        marker "5. " 32 17194 16 16
+    block p 8 17277 384 0
+    block p 8 17277 384 0
+    block p 8 17277 384 20
+      line 8 17277 384 20 base 14
+        span small 8 17281 202 13
+        text "Posted on 9 September 2026 | 2:00 pm" 8 17281 202 13 serif 13
+    block p 8 17313 384 0
+    block center 8 17313 384 40
+      block anon 8 17313 384 40
+        line 8 17313 384 20 base 14
+          span small 34 17317 332 13
+          text "v1.0 Powered by Mozilla Readability (Andres Rey PHP Port) and" 34 17317 332 13 serif 13
+        line 8 17333 384 20 base 14
+          span small 174 17337 52 13
+          text "SimplePie" 174 17337 52 13 serif 13
+      block center 8 17353 384 0
+        block p 8 17369 384 0

@@ -18,6 +18,7 @@
 #include "html/html.h"
 #include "page/page.h"
 #include "os64/font_backend.h"
+#include "os64/gui.h"
 #include "os64/text.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -233,6 +234,58 @@ typedef struct {
     uint32_t ink, link_ink, paper;  // XRGB; the dumps name these, never print them
 } flow_env_t;
 
+// ── The laid-out tree ───────────────────────────────────────────────────
+
+typedef enum {
+    FLOW_BOX_BLOCK = 0,     // a block container (node NULL: anonymous)
+    FLOW_BOX_REPLACED,      // a block-level replaced box: a frame
+    FLOW_BOX_TABLE,         // the table's own box; its captions sit outside it
+    FLOW_BOX_CAPTION,
+    FLOW_BOX_COLUMN_GROUP,
+    FLOW_BOX_COLUMN,
+    FLOW_BOX_ROW_GROUP,
+    FLOW_BOX_ROW,
+    FLOW_BOX_CELL,
+    FLOW_BOX_LINE,          // a line box
+    FLOW_BOX_SPAN,          // one inline box's piece on one line
+    FLOW_BOX_TEXT,          // one run of text
+    FLOW_BOX_ATOMIC,        // a replaced inline, or an inline-block
+    FLOW_BOX_MARKER,        // a list marker's text
+} flow_box_kind_t;
+
+typedef struct flow_box flow_box_t;
+
+// One box of the laid-out tree, read-only. Everything here is whole
+// document pixels — x from the page's left, y from its top — rounded once,
+// by the painter's rule, from the layout's 26.6.
+struct flow_box {
+    flow_box_kind_t kind;
+    const os64_html_node_t *node;   // NULL for an anonymous box
+    const flow_style_t *style;
+    // The border box; a TEXT's or MARKER's content area (its baseline less
+    // its ascent, ascent plus descent tall); a SPAN's piece of its line.
+    os64_gui_rect_t rect;
+    // The rect joined with every descendant's: content may overflow its
+    // box (a set height too small, a table that will not squash a word, a
+    // word wider than its line), so a walk that prunes on `rect` would
+    // miss what is drawn.
+    os64_gui_rect_t overflow;
+    int32_t baseline;               // LINE, TEXT, ATOMIC, MARKER: the line's
+    // TEXT, MARKER: the fragment's run, owned by the tree, and its bytes.
+    const os64_text_run_t *run;
+    const char *text;
+    uint32_t length;
+    // TEXT: where those bytes are in the node's processed text — what a
+    // selection maps a pixel back through.
+    uint32_t begin;
+    uint8_t decoration;             // TEXT: FLOW_DECORATION_* drawn across it
+    uint32_t decoration_color;
+    int32_t link;                   // libpage's link this box is or sits in, or -1
+    int32_t control;                // ATOMIC: libpage's control, or -1
+    bool unfinished;                // layout stopped inside it (flow_incomplete)
+    const flow_box_t *parent, *first, *next;
+};
+
 // ── The door ────────────────────────────────────────────────────────────
 
 typedef struct flow_tree flow_tree_t;
@@ -249,6 +302,36 @@ void flow_free(flow_tree_t *tree);
 int32_t flow_height(const flow_tree_t *tree);
 int32_t flow_width(const flow_tree_t *tree);
 bool flow_incomplete(const flow_tree_t *tree);
+
+// The root box: the html element's. NULL for a page with nothing to lay out.
+const flow_box_t *flow_root(const flow_tree_t *tree);
+
+// Every box that meets `viewport`, in painting order (CSS 2.1 Appendix E
+// without z-index or positioning): the block-level boxes first — their
+// backgrounds and borders — then the inline content, spans before the
+// text they sit behind; an atom's own content where the atom is. Pruned
+// on OVERFLOW rects, so painting the viewport costs the boxes it shows.
+void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
+                void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
+
+// The deepest box whose OWN rect holds (x, y), the last painted winning;
+// NULL for none. The face asks libpage what its node means, and a TEXT's
+// run where in the text the pointer is (os64_text_hit).
+const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y);
+
+// A node's first box — where a fragment link scrolls to, where a control's
+// widget goes. NULL for a node with none (hidden, display none, or past
+// where an incomplete layout stopped).
+const flow_box_t *flow_box_for(const flow_tree_t *tree, const os64_html_node_t *node);
+
+// The pictures and the controls, in tree order, each once: an image's box
+// (its alt text's first run when it is laid out as text) so the face can
+// fetch libpage's resolved src, and a control's atom so the face can place
+// a widget on it.
+int32_t flow_nimages(const flow_tree_t *tree);
+const flow_box_t *flow_image(const flow_tree_t *tree, int32_t i);
+int32_t flow_ncontrols(const flow_tree_t *tree);
+const flow_box_t *flow_control(const flow_tree_t *tree, int32_t i);
 
 // The laid-out tree as text, for the harness and a probe in the guest.
 // Like snprintf: answers the length the whole dump needs, writes what fits.

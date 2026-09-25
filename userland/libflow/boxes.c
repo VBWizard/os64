@@ -159,6 +159,15 @@ static bool text_significant(const B *b, const os64_html_node_t *n)
 
 // ── Allocation ──────────────────────────────────────────────────────────
 
+// A box whose content the build could not finish says so, and so does
+// every box above it: they are the path to where memory ran out, and
+// layout must not present them as whole (LAYOUT.md § Proof, rule (c)).
+static void mark_cut(const B *b, FBox *box)
+{
+    if (b->oom && box != NULL)
+        box->unfinished = true;
+}
+
 static void *alloc(B *b, size_t size)
 {
     if (b->oom)
@@ -524,7 +533,10 @@ static void build_container(B *b, FBox *box, const os64_html_node_t *first,
         }
     }
     flow_range(&f, first, stop, scope);
+    // The anonymous block being filled when memory ran out is the cut too.
+    mark_cut(b, f.target);
     end_run(&f);
+    mark_cut(b, box);
 }
 
 // The link a block sits inside when it splits an `a`: `<a href><div>` is
@@ -554,6 +566,7 @@ static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
         if (table != NULL) {
             table->link = enclosing_link(f);
             table_range(b, table, el->first_child, NULL, scope);
+            mark_cut(b, table);
         }
         return;
     }
@@ -729,8 +742,10 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
                 f->anon_table = new_box(b, f->container, FB_TABLE, NULL,
                                         anon_style(b, f->container->style, FLOW_DISPLAY_TABLE));
             }
-            if (f->anon_table != NULL)
+            if (f->anon_table != NULL) {
                 table_range(b, f->anon_table, c, c->next, scope);
+                mark_cut(b, f->anon_table);
+            }
         } else if (block_level(d)) {
             block_box(f, c, s, scope);
         } else {
@@ -854,12 +869,14 @@ static void table_part(B *b, FBox *table, const os64_html_node_t *c, flow_displa
         FBox *row = new_box(b, table, FB_ROW, c, s);
         if (row != NULL)
             row_range(b, row, c->first_child, NULL, scope);
+        mark_cut(b, row);
         break;
     }
     default: {
         FBox *group = new_box(b, table, FB_ROW_GROUP, c, s);
         if (group != NULL)
             rows_range(b, group, AT_GROUP, c->first_child, NULL, scope);
+        mark_cut(b, group);
         break;
     }
     }
@@ -887,6 +904,7 @@ static void rows_range(B *b, FBox *parent, Level level, const os64_html_node_t *
             const os64_html_node_t *end = d == FLOW_DISPLAY_TABLE_CELL
                                               ? c->next : loose_end(b, level, c, stop);
             row_range(b, anon_row, c, end, scope);
+            mark_cut(b, anon_row);
             c = end;
             continue;
         }

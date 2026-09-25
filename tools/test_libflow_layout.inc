@@ -216,9 +216,10 @@ static void layout_cases(void)
         "  block body 8 16 184 20\n"
         "    block ul 8 16 184 20\n"
         "      block li 48 16 144 20\n"
-        "        marker \"\xe2\x80\xa2 \" 36 18 12 16\n"
         "        line 48 16 144 20 base 14\n"
-        "          text \"x\" 48 18 8 16 serif 16\n");
+        "          text \"x\" 48 18 8 16 serif 16\n"
+        // The marker is placed from the first line, so it comes after it.
+        "        marker \"\xe2\x80\xa2 \" 36 18 12 16\n");
 
     // The picture's bottom edge is on the baseline: 30 above it, the text's
     // 6 below it (its descent and half its leading), 36 in all.

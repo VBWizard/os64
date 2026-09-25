@@ -1,0 +1,823 @@
+page 800 2294
+block html 0 0 800 2294
+  block body 8 8 784 2278
+    block div 8 8 784 90
+      table table 8 8 784 80
+        row-group tbody 8 8 784 80
+          row tr 8 8 784 22
+            cell td 8 8 784 22
+              line 9 9 782 20 base 14
+                text " " 9 11 8 16 serif 16
+          row tr 8 30 784 58
+            cell td 8 30 162 58
+              block form 9 31 160 20
+                line 9 31 160 20 base 20
+                  atomic input 9 31 160 20 control 0
+            cell td 170 30 162 58
+              block form 171 31 160 20
+                line 171 31 160 20 base 20
+                  atomic input 171 31 160 20 control 1
+            cell td 332 30 226 58
+              block form 333 31 224 40
+                line 333 31 224 20 base 20
+                  atomic input 397 31 160 20 control 2
+                line 333 51 224 20 base 20
+                  atomic input 397 51 160 20 control 3
+            cell td 558 30 234 58
+              line 559 31 232 20 base 14
+                span a 575 33 136 16 link 0
+                span a 723 33 68 16 link 1
+                text "View in Gopher client" 575 33 136 16 serif 16 underline link 0
+                text " | " 711 33 12 16 serif 16
+                text "HELP! with" 723 33 68 16 serif 16 underline link 1
+              line 559 51 232 20 base 14
+                span a 615 53 36 16 link 1
+                span a 663 53 128 16 link 2
+                span b 663 53 128 16
+                text "proxy" 615 53 36 16 serif 16 underline link 1
+                text " | " 651 53 12 16 serif 16
+                text "www.floodgap.com" 663 53 128 16 serif 16 bold underline link 2
+      block hr 8 96 784 2
+    table table 8 106 784 2044
+      row-group tbody 8 106 784 2044
+        row tr 8 106 784 22
+          cell td 8 106 18 22
+          cell td 26 106 766 22
+            line 27 107 764 20 base 14
+              span nobr 27 109 416 16
+              span tt 27 109 416 16
+              text "Welcome to Floodgap Systems' official gopher server." 27 109 416 16 mono 16
+        row tr 8 128 784 22
+          cell td 8 128 18 22
+          cell td 26 128 766 22
+            line 27 129 764 20 base 14
+              span nobr 27 131 408 16
+              span tt 27 131 408 16
+              text "Floodgap has served the gopher community since 1999" 27 131 408 16 mono 16
+        row tr 8 150 784 22
+          cell td 8 150 18 22
+          cell td 26 150 766 22
+            line 27 151 764 20 base 14
+              span nobr 27 153 232 16
+              span tt 27 153 232 16
+              text "(formerly gopher.ptloma.edu)." 27 153 232 16 mono 16
+        row tr 8 172 784 22
+          cell td 8 172 18 22
+          cell td 26 172 766 22
+            line 27 173 764 20 base 14
+              span nobr 27 175 8 16
+              span tt 27 175 8 16
+              text " " 27 175 8 16 mono 16
+        row tr 8 194 784 22
+          cell td 8 194 18 22
+          cell td 26 194 766 22
+            line 27 195 764 20 base 14
+              span nobr 27 197 432 16
+              span tt 27 197 432 16
+              text "We run Bucktooth 0.2.9 on xinetd as our server system." 27 197 432 16 mono 16
+        row tr 8 216 784 22
+          cell td 8 216 18 22
+          cell td 26 216 766 22
+            line 27 217 764 20 base 14
+              span nobr 27 219 480 16
+              span tt 27 219 480 16
+              text "gopher.floodgap.com is an IBM Power 520 Express with a 2-way" 27 219 480 16 mono 16
+        row tr 8 238 784 22
+          cell td 8 238 18 22
+          cell td 26 238 766 22
+            line 27 239 764 20 base 14
+              span nobr 27 241 472 16
+              span tt 27 241 472 16
+              text "4.2GHz POWER6 CPU and 8GB of RAM, running AIX 6.1 +patches." 27 241 472 16 mono 16
+        row tr 8 260 784 22
+          cell td 8 260 18 22
+          cell td 26 260 766 22
+            line 27 261 764 20 base 14
+              span nobr 27 263 448 16
+              span tt 27 263 448 16
+              text "Send gopher@floodgap.com your questions and suggestions." 27 263 448 16 mono 16
+        row tr 8 282 784 22
+          cell td 8 282 18 22
+          cell td 26 282 766 22
+            line 27 283 764 20 base 14
+              span nobr 27 285 8 16
+              span tt 27 285 8 16
+              text " " 27 285 8 16 mono 16
+        row tr 8 304 784 22
+          cell td 8 304 18 22
+          cell td 26 304 766 22
+            line 27 305 764 20 base 14
+              span nobr 27 307 472 16
+              span tt 27 307 472 16
+              text "***********************************************************" 27 307 472 16 mono 16
+        row tr 8 326 784 22
+          cell td 8 326 18 22
+          cell td 26 326 766 22
+            line 27 327 764 20 base 14
+              span nobr 27 329 472 16
+              span tt 27 329 472 16
+              text "**              OVER 20 YEARS SERVING YOU!               **" 27 329 472 16 mono 16
+        row tr 8 348 784 22
+          cell td 8 348 18 22
+          cell td 26 348 766 22
+            line 27 349 764 20 base 14
+              span nobr 27 351 472 16
+              span tt 27 351 472 16
+              text "**               Plain text is beautiful!                **" 27 351 472 16 mono 16
+        row tr 8 370 784 22
+          cell td 8 370 18 22
+          cell td 26 370 766 22
+            line 27 371 764 20 base 14
+              span nobr 27 373 472 16
+              span tt 27 373 472 16
+              text "***********************************************************" 27 373 472 16 mono 16
+        row tr 8 392 784 22
+          cell td 8 392 18 22
+          cell td 26 392 766 22
+            line 27 393 764 20 base 14
+              span nobr 27 395 8 16
+              span tt 27 395 8 16
+              text " " 27 395 8 16 mono 16
+        row tr 8 414 784 22
+          cell td 8 414 18 22
+            line 9 417 16 16 base 16
+              span a 9 421 16 16 link 3
+              atomic img 9 417 16 16 link 3
+          cell td 26 414 766 22
+            line 27 415 764 20 base 14
+              span a 27 417 280 16 link 4
+              span tt 27 417 280 16
+              text "Does this gopher menu look correct?" 27 417 280 16 mono 16 underline link 4
+        row tr 8 436 784 22
+          cell td 8 436 18 22
+          cell td 26 436 766 22
+            line 27 437 764 20 base 14
+              span nobr 27 439 360 16
+              span tt 27 439 360 16
+              text "(plus using the Floodgap Public Gopher Proxy)" 27 439 360 16 mono 16
+        row tr 8 458 784 22
+          cell td 8 458 18 22
+            line 9 461 16 16 base 16
+              span a 9 465 16 16 link 5
+              atomic img 9 461 16 16 link 5
+          cell td 26 458 766 22
+            line 27 459 764 20 base 14
+              span a 27 461 344 16 link 6
+              span tt 27 461 344 16
+              text "Are you running a bot? Are we blocking you?" 27 461 344 16 mono 16 underline link 6
+        row tr 8 480 784 22
+          cell td 8 480 18 22
+          cell td 26 480 766 22
+            line 27 481 764 20 base 14
+              span nobr 27 483 432 16
+              span tt 27 483 432 16
+              text "Please read this document. Please don't cost us money." 27 483 432 16 mono 16
+        row tr 8 502 784 22
+          cell td 8 502 18 22
+          cell td 26 502 766 22
+            line 27 503 764 20 base 14
+              span nobr 27 505 264 16
+              span tt 27 505 264 16
+              text "(blocklist updated 27 April 2026)" 27 505 264 16 mono 16
+        row tr 8 524 784 22
+          cell td 8 524 18 22
+            line 9 527 16 16 base 16
+              span a 9 531 16 16 link 7
+              atomic img 9 527 16 16 link 7
+          cell td 26 524 766 22
+            line 27 525 764 20 base 14
+              span a 27 527 344 16 link 8
+              span tt 27 527 344 16
+              text "Super-Dimensional Fortress: SDF Gopherspace" 27 527 344 16 mono 16 underline link 8
+        row tr 8 546 784 22
+          cell td 8 546 18 22
+          cell td 26 546 766 22
+            line 27 547 764 20 base 14
+              span nobr 27 549 344 16
+              span tt 27 549 344 16
+              text "Get your own Gopherspace and shell account!" 27 549 344 16 mono 16
+        row tr 8 568 784 22
+          cell td 8 568 18 22
+          cell td 26 568 766 22
+            line 27 569 764 20 base 14
+              span nobr 27 571 8 16
+              span tt 27 571 8 16
+              text " " 27 571 8 16 mono 16
+        row tr 8 590 784 22
+          cell td 8 590 18 22
+          cell td 26 590 766 22
+            line 27 591 764 20 base 14
+              span nobr 27 593 504 16
+              span tt 27 593 504 16
+              text "--- Getting started with Gopher -------------------------------" 27 593 504 16 mono 16
+        row tr 8 612 784 22
+          cell td 8 612 18 22
+            line 9 615 16 16 base 16
+              span a 9 619 16 16 link 9
+              atomic img 9 615 16 16 link 9
+          cell td 26 612 766 22
+            line 27 613 764 20 base 14
+              span a 27 615 344 16 link 10
+              span tt 27 615 344 16
+              text "Getting started with gopher, software, more" 27 615 344 16 mono 16 underline link 10
+        row tr 8 634 784 22
+          cell td 8 634 18 22
+          cell td 26 634 766 22
+            line 27 635 764 20 base 14
+              span nobr 27 637 408 16
+              span tt 27 637 408 16
+              text "(what is Gopherspace? We tell you! And find out how" 27 637 408 16 mono 16
+        row tr 8 656 784 22
+          cell td 8 656 18 22
+          cell td 26 656 766 22
+            line 27 657 764 20 base 14
+              span nobr 27 659 264 16
+              span tt 27 659 264 16
+              text "to create your own Gopher world!)" 27 659 264 16 mono 16
+        row tr 8 678 784 22
+          cell td 8 678 18 22
+          cell td 26 678 766 22
+            line 27 679 764 20 base 14
+              span nobr 27 681 8 16
+              span tt 27 681 8 16
+              text " " 27 681 8 16 mono 16
+        row tr 8 700 784 22
+          cell td 8 700 18 22
+            line 9 703 16 16 base 16
+              span a 9 707 16 16 link 11
+              atomic img 9 703 16 16 link 11
+          cell td 26 700 766 22
+            line 27 701 764 20 base 14
+              span a 27 703 360 16 link 12
+              span tt 27 703 360 16
+              text "Using your web browser to explore Gopherspace" 27 703 360 16 mono 16 underline link 12
+        row tr 8 722 784 22
+          cell td 8 722 18 22
+          cell td 26 722 766 22
+            line 27 723 764 20 base 14
+              span nobr 27 725 232 16
+              span tt 27 725 232 16
+              text "(READ IT! LEARN IT! LOVE IT!)" 27 725 232 16 mono 16
+        row tr 8 744 784 22
+          cell td 8 744 18 22
+          cell td 26 744 766 22
+            line 27 745 764 20 base 14
+              span nobr 27 747 464 16
+              span tt 27 747 464 16
+              text "(useful tips for gopher newbies, updated 17 November 2018)" 27 747 464 16 mono 16
+        row tr 8 766 784 22
+          cell td 8 766 18 22
+          cell td 26 766 766 22
+            line 27 767 764 20 base 14
+              span nobr 27 769 8 16
+              span tt 27 769 8 16
+              text " " 27 769 8 16 mono 16
+        row tr 8 788 784 42
+          cell td 8 788 18 42
+            line 9 801 16 16 base 16
+              span a 9 805 16 16 link 13
+              atomic img 9 801 16 16 link 13
+          cell td 26 788 766 42
+            line 27 789 764 20 base 14
+              span tt 27 791 744 16
+              span a 27 791 744 16 link 14
+              text "The Overbite Project: Gopher clients for mobile and desktop (OverbiteWX, OverbiteNX, Overbite" 27 791 744 16 mono 16 underline link 14
+            line 27 809 764 20 base 14
+              span a 27 811 64 16 link 14
+              span tt 27 811 64 16
+              text "Android)" 27 811 64 16 mono 16 underline link 14
+        row tr 8 830 784 22
+          cell td 8 830 18 22
+          cell td 26 830 766 22
+            line 27 831 764 20 base 14
+              span nobr 27 833 440 16
+              span tt 27 833 440 16
+              text "(download gopher add-ons for Mozilla Firefox/SeaMonkey," 27 833 440 16 mono 16
+        row tr 8 852 784 22
+          cell td 8 852 18 22
+          cell td 26 852 766 22
+            line 27 853 764 20 base 14
+              span nobr 27 855 440 16
+              span tt 27 855 440 16
+              text "mobile clients for Android and more! Put Gopherspace on" 27 855 440 16 mono 16
+        row tr 8 874 784 22
+          cell td 8 874 18 22
+          cell td 26 874 766 22
+            line 27 875 764 20 base 14
+              span nobr 27 877 312 16
+              span tt 27 877 312 16
+              text "your mobile phone or desktop computer!)" 27 877 312 16 mono 16
+        row tr 8 896 784 22
+          cell td 8 896 18 22
+            line 9 899 16 16 base 16
+              span a 9 903 16 16 link 15
+              atomic img 9 899 16 16 link 15
+          cell td 26 896 766 22
+            line 27 897 764 20 base 14
+              span a 27 899 336 16 link 16
+              span tt 27 899 336 16
+              text "Other Gopher clients for various platforms" 27 899 336 16 mono 16 underline link 16
+        row tr 8 918 784 22
+          cell td 8 918 18 22
+          cell td 26 918 766 22
+            line 27 919 764 20 base 14
+              span nobr 27 921 8 16
+              span tt 27 921 8 16
+              text " " 27 921 8 16 mono 16
+        row tr 8 940 784 22
+          cell td 8 940 18 22
+          cell td 26 940 766 22
+            line 27 941 764 20 base 14
+              span nobr 27 943 504 16
+              span tt 27 943 504 16
+              text "--- Find and search for other Gopher sites on the Internet ----" 27 943 504 16 mono 16
+        row tr 8 962 784 22
+          cell td 8 962 18 22
+            line 9 965 16 16 base 16
+              span a 9 969 16 16 link 17
+              atomic img 9 965 16 16 link 17
+          cell td 26 962 766 22
+            line 27 963 764 20 base 14
+              span a 27 965 272 16 link 18
+              span tt 27 965 272 16
+              text "Search Gopherspace with Veronica-2" 27 965 272 16 mono 16 underline link 18
+        row tr 8 984 784 22
+          cell td 8 984 18 22
+          cell td 26 984 766 22
+            line 27 985 764 20 base 14
+              span nobr 27 987 488 16
+              span tt 27 987 488 16
+              text "or search all known titles in Gopherspace with V-2 from here:" 27 987 488 16 mono 16
+        row tr 8 1006 784 22
+          cell td 8 1006 18 22
+            line 9 1009 16 16 base 16
+              span a 9 1013 16 16 link 19
+              atomic img 9 1009 16 16 link 19
+          cell td 26 1006 766 22
+            line 27 1007 764 20 base 14
+              span a 27 1009 136 16 link 20
+              span tt 27 1009 136 16
+              text "Search Veronica-2" 27 1009 136 16 mono 16 underline link 20
+        row tr 8 1028 784 22
+          cell td 8 1028 18 22
+          cell td 26 1028 766 22
+            line 27 1029 764 20 base 14
+              span nobr 27 1031 8 16
+              span tt 27 1031 8 16
+              text " " 27 1031 8 16 mono 16
+        row tr 8 1050 784 22
+          cell td 8 1050 18 22
+            line 9 1053 16 16 base 16
+              span a 9 1057 16 16 link 21
+              atomic img 9 1053 16 16 link 21
+          cell td 26 1050 766 22
+            line 27 1051 764 20 base 14
+              span a 27 1053 424 16 link 22
+              span tt 27 1053 424 16
+              text "All the gopher servers in the world (that we know of)" 27 1053 424 16 mono 16 underline link 22
+        row tr 8 1072 784 22
+          cell td 8 1072 18 22
+          cell td 26 1072 766 22
+            line 27 1073 764 20 base 14
+              span nobr 27 1075 224 16
+              span tt 27 1075 224 16
+              text "(updated with robot updates)" 27 1075 224 16 mono 16
+        row tr 8 1094 784 22
+          cell td 8 1094 18 22
+            line 9 1097 16 16 base 16
+              span a 9 1101 16 16 link 23
+              atomic img 9 1097 16 16 link 23
+          cell td 26 1094 766 22
+            line 27 1095 764 20 base 14
+              span a 27 1097 232 16 link 24
+              span tt 27 1097 232 16
+              text "New Gopher servers since 1999" 27 1097 232 16 mono 16 underline link 24
+        row tr 8 1116 784 22
+          cell td 8 1116 18 22
+          cell td 26 1116 766 22
+            line 27 1117 764 20 base 14
+              span nobr 27 1119 192 16
+              span tt 27 1119 192 16
+              text "(updated 18 August 2026)" 27 1119 192 16 mono 16
+        row tr 8 1138 784 22
+          cell td 8 1138 18 22
+          cell td 26 1138 766 22
+            line 27 1139 764 20 base 14
+              span nobr 27 1141 8 16
+              span tt 27 1141 8 16
+              text " " 27 1141 8 16 mono 16
+        row tr 8 1160 784 22
+          cell td 8 1160 18 22
+          cell td 26 1160 766 22
+            line 27 1161 764 20 base 14
+              span nobr 27 1163 504 16
+              span tt 27 1163 504 16
+              text "--- Get news, weather and more through Gopherspace ------------" 27 1163 504 16 mono 16
+        row tr 8 1182 784 22
+          cell td 8 1182 18 22
+            line 9 1185 16 16 base 16
+              span a 9 1189 16 16 link 25
+              atomic img 9 1185 16 16 link 25
+          cell td 26 1182 766 22
+            line 27 1183 764 20 base 14
+              span a 27 1185 392 16 link 26
+              span tt 27 1185 392 16
+              text "Weather maps and forecasts via Floodgap Groundhog" 27 1185 392 16 mono 16 underline link 26
+        row tr 8 1204 784 22
+          cell td 8 1204 18 22
+          cell td 26 1204 766 22
+            line 27 1205 764 20 base 14
+              span nobr 27 1207 424 16
+              span tt 27 1207 424 16
+              text "(USA and Australia; updates occur throughout the day)" 27 1207 424 16 mono 16
+        row tr 8 1226 784 22
+          cell td 8 1226 18 22
+            line 9 1229 16 16 base 16
+              span a 9 1233 16 16 link 27
+              atomic img 9 1229 16 16 link 27
+          cell td 26 1226 766 22
+            line 27 1227 764 20 base 14
+              span a 27 1229 312 16 link 28
+              span tt 27 1229 312 16
+              text "News and headline feeds via Flood Feeds" 27 1229 312 16 mono 16 underline link 28
+        row tr 8 1248 784 22
+          cell td 8 1248 18 22
+          cell td 26 1248 766 22
+            line 27 1249 764 20 base 14
+              span nobr 27 1251 248 16
+              span tt 27 1251 248 16
+              text "(updates occur daily/regularly)" 27 1251 248 16 mono 16
+        row tr 8 1270 784 22
+          cell td 8 1270 18 22
+            line 9 1273 16 16 base 16
+              span a 9 1277 16 16 link 29
+              atomic img 9 1273 16 16 link 29
+          cell td 26 1270 766 22
+            line 27 1271 764 20 base 14
+              span a 27 1273 256 16 link 30
+              span tt 27 1273 256 16
+              text "Most current Floodgap news feeds" 27 1273 256 16 mono 16 underline link 30
+        row tr 8 1292 784 22
+          cell td 8 1292 18 22
+          cell td 26 1292 766 22
+            line 27 1293 764 20 base 14
+              span nobr 27 1295 328 16
+              span tt 27 1295 328 16
+              text "(today's most updated news and headlines)" 27 1295 328 16 mono 16
+        row tr 8 1314 784 22
+          cell td 8 1314 18 22
+          cell td 26 1314 766 22
+            line 27 1315 764 20 base 14
+              span nobr 27 1317 8 16
+              span tt 27 1317 8 16
+              text " " 27 1317 8 16 mono 16
+        row tr 8 1336 784 22
+          cell td 8 1336 18 22
+          cell td 26 1336 766 22
+            line 27 1337 764 20 base 14
+              span nobr 27 1339 504 16
+              span tt 27 1339 504 16
+              text "--- File archives and downloads -------------------------------" 27 1339 504 16 mono 16
+        row tr 8 1358 784 22
+          cell td 8 1358 18 22
+            line 9 1361 16 16 base 16
+              span a 9 1365 16 16 link 31
+              atomic img 9 1361 16 16 link 31
+          cell td 26 1358 766 22
+            line 27 1359 764 20 base 14
+              span a 27 1361 272 16 link 32
+              span tt 27 1361 272 16
+              text "Floodgap File Archives and Mirrors" 27 1361 272 16 mono 16 underline link 32
+        row tr 8 1380 784 22
+          cell td 8 1380 18 22
+          cell td 26 1380 766 22
+            line 27 1381 764 20 base 14
+              span nobr 27 1383 392 16
+              span tt 27 1383 392 16
+              text "(includes external archives and historical files," 27 1383 392 16 mono 16
+        row tr 8 1402 784 22
+          cell td 8 1402 18 22
+          cell td 26 1402 766 22
+            line 27 1403 764 20 base 14
+              span nobr 27 1405 424 16
+              span tt 27 1405 424 16
+              text "Walnut Creek CP/M-Osborne-Commodore-Beehive archives," 27 1405 424 16 mono 16
+        row tr 8 1424 784 22
+          cell td 8 1424 18 22
+          cell td 26 1424 766 22
+            line 27 1425 764 20 base 14
+              span nobr 27 1427 320 16
+              span tt 27 1427 320 16
+              text "Info-Mac, classic Mac software and more)" 27 1427 320 16 mono 16
+        row tr 8 1446 784 22
+          cell td 8 1446 18 22
+          cell td 26 1446 766 22
+            line 27 1447 764 20 base 14
+              span nobr 27 1449 8 16
+              span tt 27 1449 8 16
+              text " " 27 1449 8 16 mono 16
+        row tr 8 1468 784 22
+          cell td 8 1468 18 22
+          cell td 26 1468 766 22
+            line 27 1469 764 20 base 14
+              span nobr 27 1471 504 16
+              span tt 27 1471 504 16
+              text "--- Fun, games, and other neat things -------------------------" 27 1471 504 16 mono 16
+        row tr 8 1490 784 22
+          cell td 8 1490 18 22
+            line 9 1493 16 16 base 16
+              span a 9 1497 16 16 link 33
+              atomic img 9 1493 16 16 link 33
+          cell td 26 1490 766 22
+            line 27 1491 764 20 base 14
+              span a 27 1493 232 16 link 34
+              span tt 27 1493 232 16
+              text "Floodgap Gopher Fun and Games" 27 1493 232 16 mono 16 underline link 34
+        row tr 8 1512 784 22
+          cell td 8 1512 18 22
+          cell td 26 1512 766 22
+            line 27 1513 764 20 base 14
+              span nobr 27 1515 472 16
+              span tt 27 1515 472 16
+              text "(with xkcd, the Gopher Figlet gateway and the fld.gp Gopher" 27 1515 472 16 mono 16
+        row tr 8 1534 784 22
+          cell td 8 1534 18 22
+          cell td 26 1534 766 22
+            line 27 1535 764 20 base 14
+              span nobr 27 1537 152 16
+              span tt 27 1537 152 16
+              text " Shortener Service)" 27 1537 152 16 mono 16
+        row tr 8 1556 784 22
+          cell td 8 1556 18 22
+            line 9 1559 16 16 base 16
+              span a 9 1563 16 16 link 35
+              atomic img 9 1559 16 16 link 35
+          cell td 26 1556 766 22
+            line 27 1557 764 20 base 14
+              span a 27 1559 296 16 link 36
+              span tt 27 1559 296 16
+              text "Floodgap users and staff gopher pages" 27 1559 296 16 mono 16 underline link 36
+        row tr 8 1578 784 22
+          cell td 8 1578 18 22
+          cell td 26 1578 766 22
+            line 27 1579 764 20 base 14
+              span nobr 27 1581 208 16
+              span tt 27 1581 208 16
+              text "(the usual gang of idiots)" 27 1581 208 16 mono 16
+        row tr 8 1600 784 22
+          cell td 8 1600 18 22
+            line 9 1603 16 16 base 16
+              span a 9 1607 16 16 link 37
+              atomic img 9 1603 16 16 link 37
+          cell td 26 1600 766 22
+            line 27 1601 764 20 base 14
+              span a 27 1603 440 16 link 38
+              span tt 27 1603 440 16
+              text "The New GopherVR: A Virtual Reality View of Gopherspace" 27 1603 440 16 mono 16 underline link 38
+        row tr 8 1622 784 22
+          cell td 8 1622 18 22
+          cell td 26 1622 766 22
+            line 27 1623 764 20 base 14
+              span nobr 27 1625 320 16
+              span tt 27 1625 320 16
+              text "(version 0.5.1 released 24 October 2015)" 27 1625 320 16 mono 16
+        row tr 8 1644 784 22
+          cell td 8 1644 18 22
+          cell td 26 1644 766 22
+            line 27 1645 764 20 base 14
+              span nobr 27 1647 8 16
+              span tt 27 1647 8 16
+              text " " 27 1647 8 16 mono 16
+        row tr 8 1666 784 22
+          cell td 8 1666 18 22
+          cell td 26 1666 766 22
+            line 27 1667 764 20 base 14
+              span nobr 27 1669 504 16
+              span tt 27 1669 504 16
+              text "--- Server software behind the scenes -------------------------" 27 1669 504 16 mono 16
+        row tr 8 1688 784 22
+          cell td 8 1688 18 22
+            line 9 1691 16 16 base 16
+              span a 9 1695 16 16 link 39
+              atomic img 9 1691 16 16 link 39
+          cell td 26 1688 766 22
+            line 27 1689 764 20 base 14
+              span a 27 1691 216 16 link 40
+              span tt 27 1691 216 16
+              text "The Bucktooth gopher server" 27 1691 216 16 mono 16 underline link 40
+        row tr 8 1710 784 22
+          cell td 8 1710 18 22
+          cell td 26 1710 766 22
+            line 27 1711 764 20 base 14
+              span nobr 27 1713 336 16
+              span tt 27 1713 336 16
+              text "(version 0.2.10 released 17 February 2024)" 27 1713 336 16 mono 16
+        row tr 8 1732 784 22
+          cell td 8 1732 18 22
+          cell td 26 1732 766 22
+            line 27 1733 764 20 base 14
+              span nobr 27 1735 8 16
+              span tt 27 1735 8 16
+              text " " 27 1735 8 16 mono 16
+        row tr 8 1754 784 22
+          cell td 8 1754 18 22
+          cell td 26 1754 766 22
+            line 27 1755 764 20 base 14
+              span nobr 27 1757 504 16
+              span tt 27 1757 504 16
+              text "--- Gopherspace advocacy and activism -------------------------" 27 1757 504 16 mono 16
+        row tr 8 1776 784 22
+          cell td 8 1776 18 22
+            line 9 1779 16 16 base 16
+              span a 9 1783 16 16 link 41
+              atomic img 9 1779 16 16 link 41
+          cell td 26 1776 766 22
+            line 27 1777 764 20 base 14
+              span a 27 1779 272 16 link 42
+              span tt 27 1779 272 16
+              text "Floodgap Gopher Statistics Project" 27 1779 272 16 mono 16 underline link 42
+        row tr 8 1798 784 22
+          cell td 8 1798 18 22
+          cell td 26 1798 766 22
+            line 27 1799 764 20 base 14
+              span nobr 27 1801 488 16
+              span tt 27 1801 488 16
+              text "(monthly traffic analysis of the Floodgap Public Gopher Proxy" 27 1801 488 16 mono 16
+        row tr 8 1820 784 22
+          cell td 8 1820 18 22
+          cell td 26 1820 766 22
+            line 27 1821 764 20 base 14
+              span nobr 27 1823 392 16
+              span tt 27 1823 392 16
+              text "for community advocacy purposes; updates monthly)" 27 1823 392 16 mono 16
+        row tr 8 1842 784 22
+          cell td 8 1842 18 22
+          cell td 26 1842 766 22
+            line 27 1843 764 20 base 14
+              span nobr 27 1845 8 16
+              span tt 27 1845 8 16
+              text " " 27 1845 8 16 mono 16
+        row tr 8 1864 784 22
+          cell td 8 1864 18 22
+          cell td 26 1864 766 22
+            line 27 1865 764 20 base 14
+              span nobr 27 1867 504 16
+              span tt 27 1867 504 16
+              text "--- Floodgap specific -----------------------------------------" 27 1867 504 16 mono 16
+        row tr 8 1886 784 22
+          cell td 8 1886 18 22
+            line 9 1889 16 16 base 16
+              span a 9 1893 16 16 link 43
+              atomic img 9 1889 16 16 link 43
+          cell td 26 1886 766 22
+            line 27 1887 764 20 base 14
+              span a 27 1889 256 16 link 44
+              span tt 27 1889 256 16
+              text "Floodgap CSO/ph phonebook server" 27 1889 256 16 mono 16 underline link 44
+        row tr 8 1908 784 22
+          cell td 8 1908 18 22
+            line 9 1911 16 16 base 16
+              span a 9 1915 16 16 link 45
+              atomic img 9 1911 16 16 link 45
+          cell td 26 1908 766 22
+            line 27 1909 764 20 base 14
+              span a 27 1911 456 16 link 46
+              span tt 27 1911 456 16
+              text "Yes, gopher.floodgap.com is the same as gopher.ptloma.edu" 27 1911 456 16 mono 16 underline link 46
+        row tr 8 1930 784 22
+          cell td 8 1930 18 22
+            line 9 1933 16 16 base 16
+              span a 9 1937 16 16 link 47
+              atomic img 9 1933 16 16 link 47
+          cell td 26 1930 766 22
+            line 27 1931 764 20 base 14
+              span a 27 1933 272 16 link 48
+              span tt 27 1933 272 16
+              text "The Floodgap Free Software License" 27 1933 272 16 mono 16 underline link 48
+        row tr 8 1952 784 22
+          cell td 8 1952 18 22
+            line 9 1955 16 16 base 16
+              span a 9 1959 16 16 link 49
+              atomic img 9 1955 16 16 link 49
+          cell td 26 1952 766 22
+            line 27 1953 764 20 base 14
+              span a 27 1955 312 16 link 50
+              span tt 27 1955 312 16
+              text "Where's Floodgap? (not for hatemail ;-)" 27 1955 312 16 mono 16 underline link 50
+        row tr 8 1974 784 22
+          cell td 8 1974 18 22
+            line 9 1977 16 16 base 16
+              span a 9 1981 16 16 link 51
+              atomic img 9 1977 16 16 link 51
+          cell td 26 1974 766 22
+            line 27 1975 764 20 base 14
+              span a 27 1977 408 16 link 52
+              span tt 27 1977 408 16
+              text "What's the temperature in the Floodgap server room?" 27 1977 408 16 mono 16 underline link 52
+        row tr 8 1996 784 22
+          cell td 8 1996 18 22
+            line 9 1999 16 16 base 16
+              span a 9 2003 16 16 link 53
+              atomic img 9 1999 16 16 link 53
+          cell td 26 1996 766 22
+            line 27 1997 764 20 base 14
+              span a 27 1999 296 16 link 54
+              span tt 27 1999 296 16
+              text "\"/usr/bin/tail\" our gopher server log" 27 1999 296 16 mono 16 underline link 54
+        row tr 8 2018 784 22
+          cell td 8 2018 18 22
+            line 9 2021 16 16 base 16
+              span a 9 2025 16 16 link 55
+              atomic img 9 2021 16 16 link 55
+          cell td 26 2018 766 22
+            line 27 2019 764 20 base 14
+              span a 27 2021 360 16 link 56
+              span tt 27 2021 360 16
+              text "RIP, Master gopher at University of Minnesota" 27 2021 360 16 mono 16 underline link 56
+        row tr 8 2040 784 22
+          cell td 8 2040 18 22
+            line 9 2043 16 16 base 16
+              span a 9 2047 16 16 link 57
+              atomic img 9 2043 16 16 link 57
+          cell td 26 2040 766 22
+            line 27 2041 764 20 base 14
+              span a 27 2043 192 16 link 58
+              span tt 27 2043 192 16
+              text "Floodgap.com (Web pages)" 27 2043 192 16 mono 16 underline link 58
+        row tr 8 2062 784 22
+          cell td 8 2062 18 22
+          cell td 26 2062 766 22
+            line 27 2063 764 20 base 14
+              span nobr 27 2065 8 16
+              span tt 27 2065 8 16
+              text " " 27 2065 8 16 mono 16
+        row tr 8 2084 784 22
+          cell td 8 2084 18 22
+          cell td 26 2084 766 22
+            line 27 2085 764 20 base 14
+              span nobr 27 2087 456 16
+              span tt 27 2087 456 16
+              text "Please note that this gopher is no longer affiliated with" 27 2087 456 16 mono 16
+        row tr 8 2106 784 22
+          cell td 8 2106 18 22
+          cell td 26 2106 766 22
+            line 27 2107 764 20 base 14
+              span nobr 27 2109 504 16
+              span tt 27 2109 504 16
+              text "Point Loma Nazarene University. Some areas are rate-limited due" 27 2109 504 16 mono 16
+        row tr 8 2128 784 22
+          cell td 8 2128 18 22
+          cell td 26 2128 766 22
+            line 27 2129 764 20 base 14
+              span nobr 27 2131 104 16
+              span tt 27 2131 104 16
+              text "to spidering." 27 2131 104 16 mono 16
+    block hr 8 2158 784 2
+    table table 8 2168 784 42
+      row-group tbody 8 2168 784 42
+        row tr 8 2168 784 42
+          cell td 8 2168 314 42
+            line 9 2169 312 20 base 14
+              span b 9 2171 76 16
+              span a 9 2171 76 16 link 59
+              span b 97 2171 124 16
+              span a 97 2171 124 16 link 60
+              span a 233 2171 60 16 link 61
+              text "Top of page" 9 2171 76 16 serif 16 bold underline link 59
+              text " | " 85 2171 12 16 serif 16
+              text "Gopher proxy home" 97 2171 124 16 serif 16 bold underline link 60
+              text " | " 221 2171 12 16 serif 16
+              text "Floodgap" 233 2171 60 16 serif 16 underline link 61
+            line 9 2189 312 20 base 14
+              span a 9 2191 84 16 link 61
+              text "home gopher" 9 2191 84 16 serif 16 underline link 61
+          cell td 322 2168 105 42
+            line 323 2169 103 20 base 14
+              text "version 645" 336 2171 76 16 serif 16
+            line 323 2189 103 20 base 14
+              text "port 2" 356 2191 36 16 serif 16
+          cell td 427 2168 365 42
+            line 428 2169 363 20 base 14
+              span i 431 2171 360 16
+              span a 687 2171 104 16 link 62
+              text "All access must be in accordance with " 431 2171 256 16 serif 16 italic
+              text "Floodgap Terms" 687 2171 104 16 serif 16 italic underline link 62
+            line 428 2189 363 20 base 14
+              span a 723 2191 64 16 link 62
+              span i 723 2191 68 16
+              text "of Service" 723 2191 64 16 serif 16 italic underline link 62
+              text "." 787 2191 4 16 serif 16 italic
+    block p 8 2226 784 0
+    block center 8 2226 784 60
+      line 8 2226 784 20 base 14
+        span i 24 2228 104 16
+        span b 672 2228 100 16
+        span a 672 2228 100 16 link 63
+        text "Proxy too slow?" 24 2228 104 16 serif 16 italic
+        text " Get free clients and plugins for your favorite mobile and desktop browsers. Visit the " 128 2228 544 16 serif 16
+        text "Overbite Project" 672 2228 100 16 serif 16 bold underline link 63
+        text "." 772 2228 4 16 serif 16
+      line 8 2246 784 20 base 14
+        text "Simultaneous clients: 1 (capped at 8)" 278 2248 244 16 serif 16
+      line 8 2266 784 20 base 14
+        text "Access to the proxy is limited to 16K/sec and maximum 4MB per access. Please use a full client for larger files." 40 2268 720 16 serif 16

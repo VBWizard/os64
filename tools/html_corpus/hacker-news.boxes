@@ -1,0 +1,1361 @@
+page 800 1410
+block html 0 0 800 1410
+  block body 8 8 784 1394
+    block center 8 8 784 1394
+      table table 67 8 666 1394
+        row-group tbody 67 8 666 1394
+          row tr 67 8 666 20
+            cell td 67 8 666 20
+              table table 67 8 666 20
+                row-group tbody 67 8 666 20
+                  row tr 67 8 666 20
+                    cell td 67 8 26 20
+                      line 67 9 26 18 base 18
+                        span a 67 15 18 16 link 0
+                        atomic img 67 9 18 18 link 0
+                    cell td 93 8 594 20
+                      line 93 8 594 20 base 14
+                        span a 93 10 84 16 link 1
+                        span b 93 10 84 16
+                        span a 177 10 28 16 link 2
+                        span a 217 10 28 16 link 3
+                        span a 257 10 68 16 link 4
+                        span a 337 10 24 16 link 5
+                        span a 373 10 36 16 link 6
+                        span a 421 10 28 16 link 7
+                        span a 461 10 44 16 link 8
+                        span span 93 10 412 16
+                        text "Hacker News" 93 10 84 16 serif 16 bold underline link 1
+                        text "new" 177 10 28 16 serif 16 underline link 2
+                        text " | " 205 10 12 16 serif 16
+                        text "past" 217 10 28 16 serif 16 underline link 3
+                        text " | " 245 10 12 16 serif 16
+                        text "comments" 257 10 68 16 serif 16 underline link 4
+                        text " | " 325 10 12 16 serif 16
+                        text "ask" 337 10 24 16 serif 16 underline link 5
+                        text " | " 361 10 12 16 serif 16
+                        text "show" 373 10 36 16 serif 16 underline link 6
+                        text " | " 409 10 12 16 serif 16
+                        text "jobs" 421 10 28 16 serif 16 underline link 7
+                        text " | " 449 10 12 16 serif 16
+                        text "submit" 461 10 44 16 serif 16 underline link 8
+                    cell td 687 8 46 20
+                      line 687 8 46 20 base 14
+                        span a 687 10 32 16 link 9
+                        span span 687 10 32 16
+                        text "login" 687 10 32 16 serif 16 underline link 9
+          row tr 67 28 666 0
+          row tr 67 28 666 1260
+            cell td 67 28 666 1260
+              table table 67 28 666 1260
+                row-group tbody 67 28 666 1260
+                  row tr 67 28 666 20
+                    cell td 67 28 20 20
+                      line 67 28 20 20 base 14
+                        span span 79 30 8 16
+                        text "1." 79 30 8 16 serif 16
+                    cell td 87 28 0 20
+                      block center 87 28 0 0
+                        block div 87 28 0 0 link 10
+                    cell td 87 28 646 20
+                      line 87 28 646 20 base 14
+                        span a 87 30 432 16 link 11
+                        span span 531 30 84 16
+                        span a 531 30 84 16 link 12
+                        span span 519 30 104 16
+                        span span 87 30 536 16
+                        text "If coding is solved, what now?: Measuring the sloppiness of code" 87 30 432 16 serif 16 underline link 11
+                        text " (" 519 30 12 16 serif 16
+                        text "earendil.com" 531 30 84 16 serif 16 underline link 12
+                        text ")" 615 30 8 16 serif 16
+                  row tr 67 48 666 20
+                    cell td 67 48 20 20
+                    cell td 87 48 646 20
+                      line 87 48 646 20 base 14
+                        span span 87 50 60 16
+                        span a 171 50 40 16 link 13
+                        span a 215 50 100 16 link 14
+                        span span 215 50 100 16
+                        span span 319 50 0 16
+                        span a 327 50 28 16 link 15
+                        span a 367 50 92 16 link 16
+                        span span 87 50 372 16
+                        text "37 points" 87 50 60 16 serif 16
+                        text " by " 147 50 24 16 serif 16
+                        text "doppp" 171 50 40 16 serif 16 underline link 13
+                        text " " 211 50 4 16 serif 16
+                        text "44 minutes ago" 215 50 100 16 serif 16 underline link 14
+                        text " " 315 50 4 16 serif 16
+                        text "| " 319 50 8 16 serif 16
+                        text "hide" 327 50 28 16 serif 16 underline link 15
+                        text " | " 355 50 12 16 serif 16
+                        text "20 comments" 367 50 92 16 serif 16 underline link 16
+                  row tr 67 68 666 0
+                  row tr 67 68 666 20
+                    cell td 67 68 20 20
+                      line 67 68 20 20 base 14
+                        span span 75 70 12 16
+                        text "2." 75 70 12 16 serif 16
+                    cell td 87 68 0 20
+                      block center 87 68 0 0
+                        block div 87 68 0 0 link 17
+                    cell td 87 68 646 20
+                      line 87 68 646 20 base 14
+                        span a 87 70 468 16 link 18
+                        span span 567 70 144 16
+                        span a 567 70 144 16 link 19
+                        span span 555 70 164 16
+                        span span 87 70 632 16
+                        text "The Waymo effect: how AI is quietly making research less collaborative" 87 70 468 16 serif 16 underline link 18
+                        text " (" 555 70 12 16 serif 16
+                        text "researchagenda.news" 567 70 144 16 serif 16 underline link 19
+                        text ")" 711 70 8 16 serif 16
+                  row tr 67 88 666 20
+                    cell td 67 88 20 20
+                    cell td 87 88 646 20
+                      line 87 88 646 20 base 14
+                        span span 87 90 68 16
+                        span a 179 90 112 16 link 20
+                        span a 295 90 76 16 link 21
+                        span span 295 90 76 16
+                        span span 375 90 0 16
+                        span a 383 90 28 16 link 22
+                        span a 423 90 96 16 link 23
+                        span span 87 90 432 16
+                        text "224 points" 87 90 68 16 serif 16
+                        text " by " 155 90 24 16 serif 16
+                        text "JohnHammersley" 179 90 112 16 serif 16 underline link 20
+                        text " " 291 90 4 16 serif 16
+                        text "3 hours ago" 295 90 76 16 serif 16 underline link 21
+                        text " " 371 90 4 16 serif 16
+                        text "| " 375 90 8 16 serif 16
+                        text "hide" 383 90 28 16 serif 16 underline link 22
+                        text " | " 411 90 12 16 serif 16
+                        text "165 comments" 423 90 96 16 serif 16 underline link 23
+                  row tr 67 108 666 0
+                  row tr 67 108 666 20
+                    cell td 67 108 20 20
+                      line 67 108 20 20 base 14
+                        span span 75 110 12 16
+                        text "3." 75 110 12 16 serif 16
+                    cell td 87 108 0 20
+                      block center 87 108 0 0
+                        block div 87 108 0 0 link 24
+                    cell td 87 108 646 20
+                      line 87 108 646 20 base 14
+                        span a 87 110 380 16 link 25
+                        span span 479 110 56 16
+                        span a 479 110 56 16 link 26
+                        span span 467 110 76 16
+                        span span 87 110 456 16
+                        text "Houthis 'take control' of key island in global shipping route" 87 110 380 16 serif 16 underline link 25
+                        text " (" 467 110 12 16 serif 16
+                        text "bbc.com" 479 110 56 16 serif 16 underline link 26
+                        text ")" 535 110 8 16 serif 16
+                  row tr 67 128 666 20
+                    cell td 67 128 20 20
+                    cell td 87 128 646 20
+                      line 87 128 646 20 base 14
+                        span span 87 130 56 16
+                        span a 167 130 84 16 link 27
+                        span a 255 130 100 16 link 28
+                        span span 255 130 100 16
+                        span span 359 130 0 16
+                        span a 367 130 28 16 link 29
+                        span a 407 130 92 16 link 30
+                        span span 87 130 412 16
+                        text "81 points" 87 130 56 16 serif 16
+                        text " by " 143 130 24 16 serif 16
+                        text "consumer451" 167 130 84 16 serif 16 underline link 27
+                        text " " 251 130 4 16 serif 16
+                        text "44 minutes ago" 255 130 100 16 serif 16 underline link 28
+                        text " " 355 130 4 16 serif 16
+                        text "| " 359 130 8 16 serif 16
+                        text "hide" 367 130 28 16 serif 16 underline link 29
+                        text " | " 395 130 12 16 serif 16
+                        text "45 comments" 407 130 92 16 serif 16 underline link 30
+                  row tr 67 148 666 0
+                  row tr 67 148 666 20
+                    cell td 67 148 20 20
+                      line 67 148 20 20 base 14
+                        span span 75 150 12 16
+                        text "4." 75 150 12 16 serif 16
+                    cell td 87 148 0 20
+                      block center 87 148 0 0
+                        block div 87 148 0 0 link 31
+                    cell td 87 148 646 20
+                      line 87 148 646 20 base 14
+                        span a 87 150 188 16 link 32
+                        span span 287 150 92 16
+                        span a 287 150 92 16 link 33
+                        span span 275 150 112 16
+                        span span 87 150 300 16
+                        text "Logo Programming Language" 87 150 188 16 serif 16 underline link 32
+                        text " (" 275 150 12 16 serif 16
+                        text "media.mit.edu" 287 150 92 16 serif 16 underline link 33
+                        text ")" 379 150 8 16 serif 16
+                  row tr 67 168 666 20
+                    cell td 67 168 20 20
+                    cell td 87 168 646 20
+                      line 87 168 646 20 base 14
+                        span span 87 170 60 16
+                        span a 171 170 60 16 link 34
+                        span a 235 170 64 16 link 35
+                        span span 235 170 64 16
+                        span span 303 170 0 16
+                        span a 311 170 28 16 link 36
+                        span a 351 170 84 16 link 37
+                        span span 87 170 348 16
+                        text "25 points" 87 170 60 16 serif 16
+                        text " by " 147 170 24 16 serif 16
+                        text "azhenley" 171 170 60 16 serif 16 underline link 34
+                        text " " 231 170 4 16 serif 16
+                        text "1 hour ago" 235 170 64 16 serif 16 underline link 35
+                        text " " 299 170 4 16 serif 16
+                        text "| " 303 170 8 16 serif 16
+                        text "hide" 311 170 28 16 serif 16 underline link 36
+                        text " | " 339 170 12 16 serif 16
+                        text "3 comments" 351 170 84 16 serif 16 underline link 37
+                  row tr 67 188 666 0
+                  row tr 67 188 666 20
+                    cell td 67 188 20 20
+                      line 67 188 20 20 base 14
+                        span span 75 190 12 16
+                        text "5." 75 190 12 16 serif 16
+                    cell td 87 188 0 20
+                      block center 87 188 0 0
+                        block div 87 188 0 0 link 38
+                    cell td 87 188 646 20
+                      line 87 188 646 20 base 14
+                        span a 87 190 208 16 link 39
+                        span span 307 190 104 16
+                        span a 307 190 104 16 link 40
+                        span span 295 190 124 16
+                        span span 87 190 332 16
+                        text "So you want to use OpenRouter?" 87 190 208 16 serif 16 underline link 39
+                        text " (" 295 190 12 16 serif 16
+                        text "mmoustafa.com" 307 190 104 16 serif 16 underline link 40
+                        text ")" 411 190 8 16 serif 16
+                  row tr 67 208 666 20
+                    cell td 67 208 20 20
+                    cell td 87 208 646 20
+                      line 87 208 646 20 base 14
+                        span span 87 210 68 16
+                        span a 179 210 56 16 link 41
+                        span a 239 210 76 16 link 42
+                        span span 239 210 76 16
+                        span span 319 210 0 16
+                        span a 327 210 28 16 link 43
+                        span a 367 210 92 16 link 44
+                        span span 87 210 372 16
+                        text "353 points" 87 210 68 16 serif 16
+                        text " by " 155 210 24 16 serif 16
+                        text "player85" 179 210 56 16 serif 16 underline link 41
+                        text " " 235 210 4 16 serif 16
+                        text "7 hours ago" 239 210 76 16 serif 16 underline link 42
+                        text " " 315 210 4 16 serif 16
+                        text "| " 319 210 8 16 serif 16
+                        text "hide" 327 210 28 16 serif 16 underline link 43
+                        text " | " 355 210 12 16 serif 16
+                        text "88 comments" 367 210 92 16 serif 16 underline link 44
+                  row tr 67 228 666 0
+                  row tr 67 228 666 20
+                    cell td 67 228 20 20
+                      line 67 228 20 20 base 14
+                        span span 75 230 12 16
+                        text "6." 75 230 12 16 serif 16
+                    cell td 87 228 0 20
+                      block center 87 228 0 0
+                        block div 87 228 0 0 link 45
+                    cell td 87 228 646 20
+                      line 87 228 646 20 base 14
+                        span a 87 230 308 16 link 46
+                        span span 407 230 52 16
+                        span a 407 230 52 16 link 47
+                        span span 395 230 72 16
+                        span span 87 230 380 16
+                        text "Cherenkov Radiation - traveling faster than light" 87 230 308 16 serif 16 underline link 46
+                        text " (" 395 230 12 16 serif 16
+                        text "iaea.org" 407 230 52 16 serif 16 underline link 47
+                        text ")" 459 230 8 16 serif 16
+                  row tr 67 248 666 20
+                    cell td 67 248 20 20
+                    cell td 87 248 646 20
+                      line 87 248 646 20 base 14
+                        span span 87 250 64 16
+                        span a 175 250 60 16 link 48
+                        span a 239 250 76 16 link 49
+                        span span 239 250 76 16
+                        span span 319 250 0 16
+                        span a 327 250 28 16 link 50
+                        span a 367 250 92 16 link 51
+                        span span 87 250 372 16
+                        text "147 points" 87 250 64 16 serif 16
+                        text " by " 151 250 24 16 serif 16
+                        text "andsoitis" 175 250 60 16 serif 16 underline link 48
+                        text " " 235 250 4 16 serif 16
+                        text "5 hours ago" 239 250 76 16 serif 16 underline link 49
+                        text " " 315 250 4 16 serif 16
+                        text "| " 319 250 8 16 serif 16
+                        text "hide" 327 250 28 16 serif 16 underline link 50
+                        text " | " 355 250 12 16 serif 16
+                        text "75 comments" 367 250 92 16 serif 16 underline link 51
+                  row tr 67 268 666 0
+                  row tr 67 268 666 20
+                    cell td 67 268 20 20
+                      line 67 268 20 20 base 14
+                        span span 75 270 12 16
+                        text "7." 75 270 12 16 serif 16
+                    cell td 87 268 0 20
+                      block center 87 268 0 0
+                        block div 87 268 0 0 link 52
+                    cell td 87 268 646 20
+                      line 87 268 646 20 base 14
+                        span a 87 270 396 16 link 53
+                        span span 495 270 84 16
+                        span a 495 270 84 16 link 54
+                        span span 483 270 104 16
+                        span span 87 270 500 16
+                        text "RTK reports token savings, but our cost benchmarks disagree" 87 270 396 16 serif 16 underline link 53
+                        text " (" 483 270 12 16 serif 16
+                        text "quesma.com" 495 270 84 16 serif 16 underline link 54
+                        text ")" 579 270 8 16 serif 16
+                  row tr 67 288 666 20
+                    cell td 67 288 20 20
+                    cell td 87 288 646 20
+                      line 87 288 646 20 base 14
+                        span span 87 290 60 16
+                        span a 171 290 84 16 link 55
+                        span a 259 290 76 16 link 56
+                        span span 259 290 76 16
+                        span span 339 290 0 16
+                        span a 347 290 28 16 link 57
+                        span a 387 290 92 16 link 58
+                        span span 87 290 392 16
+                        text "73 points" 87 290 60 16 serif 16
+                        text " by " 147 290 24 16 serif 16
+                        text "michalwarda" 171 290 84 16 serif 16 underline link 55
+                        text " " 255 290 4 16 serif 16
+                        text "3 hours ago" 259 290 76 16 serif 16 underline link 56
+                        text " " 335 290 4 16 serif 16
+                        text "| " 339 290 8 16 serif 16
+                        text "hide" 347 290 28 16 serif 16 underline link 57
+                        text " | " 375 290 12 16 serif 16
+                        text "42 comments" 387 290 92 16 serif 16 underline link 58
+                  row tr 67 308 666 0
+                  row tr 67 308 666 20
+                    cell td 67 308 20 20
+                      line 67 308 20 20 base 14
+                        span span 75 310 12 16
+                        text "8." 75 310 12 16 serif 16
+                    cell td 87 308 0 20
+                      block center 87 308 0 0
+                        block div 87 308 0 0 link 59
+                    cell td 87 308 646 20
+                      line 87 308 646 20 base 14
+                        span a 87 310 464 16 link 60
+                        span span 563 310 92 16
+                        span a 563 310 92 16 link 61
+                        span span 551 310 112 16
+                        span span 87 310 576 16
+                        text "Re-Engineering YouTube for the Living Room: Bringing \"Chrobalt\" to RDK" 87 310 464 16 serif 16 underline link 60
+                        text " (" 551 310 12 16 serif 16
+                        text "collabora.com" 563 310 92 16 serif 16 underline link 61
+                        text ")" 655 310 8 16 serif 16
+                  row tr 67 328 666 20
+                    cell td 67 328 20 20
+                    cell td 87 328 646 20
+                      line 87 328 646 20 base 14
+                        span span 87 330 52 16
+                        span a 163 330 56 16 link 62
+                        span a 223 330 100 16 link 63
+                        span span 223 330 100 16
+                        span span 327 330 0 16
+                        span a 335 330 28 16 link 64
+                        span a 375 330 52 16 link 65
+                        span span 87 330 340 16
+                        text "6 points" 87 330 52 16 serif 16
+                        text " by " 139 330 24 16 serif 16
+                        text "losgehts" 163 330 56 16 serif 16 underline link 62
+                        text " " 219 330 4 16 serif 16
+                        text "44 minutes ago" 223 330 100 16 serif 16 underline link 63
+                        text " " 323 330 4 16 serif 16
+                        text "| " 327 330 8 16 serif 16
+                        text "hide" 335 330 28 16 serif 16 underline link 64
+                        text " | " 363 330 12 16 serif 16
+                        text "discuss" 375 330 52 16 serif 16 underline link 65
+                  row tr 67 348 666 0
+                  row tr 67 348 666 20
+                    cell td 67 348 20 20
+                      line 67 348 20 20 base 14
+                        span span 75 350 12 16
+                        text "9." 75 350 12 16 serif 16
+                    cell td 87 348 0 20
+                      block center 87 348 0 0
+                        block div 87 348 0 0 link 66
+                    cell td 87 348 646 20
+                      line 87 348 646 20 base 14
+                        span a 87 350 388 16 link 67
+                        span span 487 350 128 16
+                        span a 487 350 128 16 link 68
+                        span span 475 350 148 16
+                        span span 87 350 536 16
+                        text "Shopify is moving from React Native back to Swift and Kotlin" 87 350 388 16 serif 16 underline link 67
+                        text " (" 475 350 12 16 serif 16
+                        text "shopify.engineering" 487 350 128 16 serif 16 underline link 68
+                        text ")" 615 350 8 16 serif 16
+                  row tr 67 368 666 20
+                    cell td 67 368 20 20
+                    cell td 87 368 646 20
+                      line 87 368 646 20 base 14
+                        span span 87 370 68 16
+                        span a 179 370 64 16 link 69
+                        span a 247 370 60 16 link 70
+                        span span 247 370 60 16
+                        span span 311 370 0 16
+                        span a 319 370 28 16 link 71
+                        span a 359 370 100 16 link 72
+                        span span 87 370 372 16
+                        text "1163 points" 87 370 68 16 serif 16
+                        text " by " 155 370 24 16 serif 16
+                        text "fnthawar2" 179 370 64 16 serif 16 underline link 69
+                        text " " 243 370 4 16 serif 16
+                        text "1 day ago" 247 370 60 16 serif 16 underline link 70
+                        text " " 307 370 4 16 serif 16
+                        text "| " 311 370 8 16 serif 16
+                        text "hide" 319 370 28 16 serif 16 underline link 71
+                        text " | " 347 370 12 16 serif 16
+                        text "848 comments" 359 370 100 16 serif 16 underline link 72
+                  row tr 67 388 666 0
+                  row tr 67 388 666 20
+                    cell td 67 388 20 20
+                      line 67 388 20 20 base 14
+                        span span 71 390 16 16
+                        text "10." 71 390 16 16 serif 16
+                    cell td 87 388 0 20
+                      block center 87 388 0 0
+                        block div 87 388 0 0 link 73
+                    cell td 87 388 646 20
+                      line 87 388 646 20 base 14
+                        span a 87 390 308 16 link 74
+                        span span 87 390 308 16
+                        text "Ask HN: Can we please limit the AI news flood?" 87 390 308 16 serif 16 underline link 74
+                  row tr 67 408 666 20
+                    cell td 67 408 20 20
+                    cell td 87 408 646 20
+                      line 87 408 646 20 base 14
+                        span span 87 410 68 16
+                        span a 179 410 48 16 link 75
+                        span a 231 410 64 16 link 76
+                        span span 231 410 64 16
+                        span span 299 410 0 16
+                        span a 307 410 28 16 link 77
+                        span a 347 410 96 16 link 78
+                        span span 87 410 356 16
+                        text "295 points" 87 410 68 16 serif 16
+                        text " by " 155 410 24 16 serif 16
+                        text "cromka" 179 410 48 16 serif 16 underline link 75
+                        text " " 227 410 4 16 serif 16
+                        text "1 hour ago" 231 410 64 16 serif 16 underline link 76
+                        text " " 295 410 4 16 serif 16
+                        text "| " 299 410 8 16 serif 16
+                        text "hide" 307 410 28 16 serif 16 underline link 77
+                        text " | " 335 410 12 16 serif 16
+                        text "159 comments" 347 410 96 16 serif 16 underline link 78
+                  row tr 67 428 666 0
+                  row tr 67 428 666 20
+                    cell td 67 428 20 20
+                      line 67 428 20 20 base 14
+                        span span 75 430 12 16
+                        text "11." 75 430 12 16 serif 16
+                    cell td 87 428 0 20
+                      block center 87 428 0 0
+                        block div 87 428 0 0 link 79
+                    cell td 87 428 646 20
+                      line 87 428 646 20 base 14
+                        span a 87 430 156 16 link 80
+                        span span 255 430 68 16
+                        span a 255 430 68 16 link 81
+                        span span 243 430 88 16
+                        span span 87 430 244 16
+                        text "iPod Classic 6G in QEMU" 87 430 156 16 serif 16 underline link 80
+                        text " (" 243 430 12 16 serif 16
+                        text "reddit.com" 255 430 68 16 serif 16 underline link 81
+                        text ")" 323 430 8 16 serif 16
+                  row tr 67 448 666 20
+                    cell td 67 448 20 20
+                    cell td 87 448 646 20
+                      line 87 448 646 20 base 14
+                        span span 87 450 56 16
+                        span a 167 450 104 16 link 82
+                        span a 275 450 76 16 link 83
+                        span span 275 450 76 16
+                        span span 355 450 0 16
+                        span a 363 450 28 16 link 84
+                        span a 403 450 88 16 link 85
+                        span span 87 450 404 16
+                        text "81 points" 87 450 56 16 serif 16
+                        text " by " 143 450 24 16 serif 16
+                        text "dmonterocrespo" 167 450 104 16 serif 16 underline link 82
+                        text " " 271 450 4 16 serif 16
+                        text "6 hours ago" 275 450 76 16 serif 16 underline link 83
+                        text " " 351 450 4 16 serif 16
+                        text "| " 355 450 8 16 serif 16
+                        text "hide" 363 450 28 16 serif 16 underline link 84
+                        text " | " 391 450 12 16 serif 16
+                        text "12 comments" 403 450 88 16 serif 16 underline link 85
+                  row tr 67 468 666 0
+                  row tr 67 468 666 40
+                    cell td 67 468 20 40
+                      line 67 468 20 20 base 14
+                        span span 71 470 16 16
+                        text "12." 71 470 16 16 serif 16
+                    cell td 87 468 0 40
+                      block center 87 468 0 0
+                        block div 87 468 0 0 link 86
+                    cell td 87 468 646 40
+                      line 87 468 646 20 base 14
+                        span a 87 470 476 16 link 87
+                        span span 87 470 476 16
+                        span span 563 470 0 16
+                        text "Show HN: ClaudeStatsBar: your session is 486k deep and nothing told you" 87 470 476 16 serif 16 underline link 87
+                      line 87 488 646 20 base 14
+                        span span 95 490 172 16
+                        span a 95 490 172 16 link 88
+                        span span 87 490 188 16
+                        span span 87 490 188 16
+                        text "(" 87 490 8 16 serif 16
+                        text "github.com/field-logic-ltd" 95 490 172 16 serif 16 underline link 88
+                        text ")" 267 490 8 16 serif 16
+                  row tr 67 508 666 20
+                    cell td 67 508 20 20
+                    cell td 87 508 646 20
+                      line 87 508 646 20 base 14
+                        span span 87 510 52 16
+                        span a 163 510 32 16 link 89
+                        span a 199 510 100 16 link 90
+                        span span 199 510 100 16
+                        span span 303 510 0 16
+                        span a 311 510 28 16 link 91
+                        span a 351 510 84 16 link 92
+                        span span 87 510 348 16
+                        text "9 points" 87 510 52 16 serif 16
+                        text " by " 139 510 24 16 serif 16
+                        text "edf13" 163 510 32 16 serif 16 underline link 89
+                        text " " 195 510 4 16 serif 16
+                        text "42 minutes ago" 199 510 100 16 serif 16 underline link 90
+                        text " " 299 510 4 16 serif 16
+                        text "| " 303 510 8 16 serif 16
+                        text "hide" 311 510 28 16 serif 16 underline link 91
+                        text " | " 339 510 12 16 serif 16
+                        text "5 comments" 351 510 84 16 serif 16 underline link 92
+                  row tr 67 528 666 0
+                  row tr 67 528 666 20
+                    cell td 67 528 20 20
+                      line 67 528 20 20 base 14
+                        span span 71 530 16 16
+                        text "13." 71 530 16 16 serif 16
+                    cell td 87 528 0 20
+                      block center 87 528 0 0
+                        block div 87 528 0 0 link 93
+                    cell td 87 528 646 20
+                      line 87 528 646 20 base 14
+                        span a 87 530 324 16 link 94
+                        span span 423 530 108 16
+                        span a 423 530 108 16 link 95
+                        span span 411 530 128 16
+                        span span 87 530 452 16
+                        text "Don't let anyone take away your big box of cables" 87 530 324 16 serif 16 underline link 94
+                        text " (" 411 530 12 16 serif 16
+                        text "jim-nielsen.com" 423 530 108 16 serif 16 underline link 95
+                        text ")" 531 530 8 16 serif 16
+                  row tr 67 548 666 20
+                    cell td 67 548 20 20
+                    cell td 87 548 646 20
+                      line 87 548 646 20 base 14
+                        span span 87 550 68 16
+                        span a 179 550 72 16 link 96
+                        span a 255 550 84 16 link 97
+                        span span 255 550 84 16
+                        span span 343 550 0 16
+                        span a 351 550 28 16 link 98
+                        span a 391 550 100 16 link 99
+                        span span 87 550 404 16
+                        text "658 points" 87 550 68 16 serif 16
+                        text " by " 155 550 24 16 serif 16
+                        text "Brajeshwar" 179 550 72 16 serif 16 underline link 96
+                        text " " 251 550 4 16 serif 16
+                        text "22 hours ago" 255 550 84 16 serif 16 underline link 97
+                        text " " 339 550 4 16 serif 16
+                        text "| " 343 550 8 16 serif 16
+                        text "hide" 351 550 28 16 serif 16 underline link 98
+                        text " | " 379 550 12 16 serif 16
+                        text "406 comments" 391 550 100 16 serif 16 underline link 99
+                  row tr 67 568 666 0
+                  row tr 67 568 666 20
+                    cell td 67 568 20 20
+                      line 67 568 20 20 base 14
+                        span span 71 570 16 16
+                        text "14." 71 570 16 16 serif 16
+                    cell td 87 568 0 20
+                      block center 87 568 0 0
+                        block div 87 568 0 0 link 100
+                    cell td 87 568 646 20
+                      line 87 568 646 20 base 14
+                        span a 87 570 312 16 link 101
+                        span span 411 570 136 16
+                        span a 411 570 136 16 link 102
+                        span span 399 570 156 16
+                        span span 87 570 468 16
+                        text "RISC-V Emulator and Linux System from Scratch" 87 570 312 16 serif 16 underline link 101
+                        text " (" 399 570 12 16 serif 16
+                        text "github.com/werwolv" 411 570 136 16 serif 16 underline link 102
+                        text ")" 547 570 8 16 serif 16
+                  row tr 67 588 666 20
+                    cell td 67 588 20 20
+                    cell td 87 588 646 20
+                      line 87 588 646 20 base 14
+                        span span 87 590 60 16
+                        span a 171 590 60 16 link 103
+                        span a 235 590 76 16 link 104
+                        span span 235 590 76 16
+                        span span 315 590 0 16
+                        span a 323 590 28 16 link 105
+                        span a 363 590 84 16 link 106
+                        span span 87 590 360 16
+                        text "22 points" 87 590 60 16 serif 16
+                        text " by " 147 590 24 16 serif 16
+                        text "Bluestein" 171 590 60 16 serif 16 underline link 103
+                        text " " 231 590 4 16 serif 16
+                        text "4 hours ago" 235 590 76 16 serif 16 underline link 104
+                        text " " 311 590 4 16 serif 16
+                        text "| " 315 590 8 16 serif 16
+                        text "hide" 323 590 28 16 serif 16 underline link 105
+                        text " | " 351 590 12 16 serif 16
+                        text "2 comments" 363 590 84 16 serif 16 underline link 106
+                  row tr 67 608 666 0
+                  row tr 67 608 666 20
+                    cell td 67 608 20 20
+                      line 67 608 20 20 base 14
+                        span span 71 610 16 16
+                        text "15." 71 610 16 16 serif 16
+                    cell td 87 608 0 20
+                      block center 87 608 0 0
+                        block div 87 608 0 0 link 107
+                    cell td 87 608 646 20
+                      line 87 608 646 20 base 14
+                        span a 87 610 212 16 link 108
+                        span span 311 610 244 16
+                        span a 311 610 244 16 link 109
+                        span span 299 610 264 16
+                        span span 87 610 476 16
+                        text "Experiment – Projectional Viewer" 87 610 212 16 serif 16 underline link 108
+                        text " (" 299 610 12 16 serif 16
+                        text "programmingsimplicity.substack.com" 311 610 244 16 serif 16 underline link 109
+                        text ")" 555 610 8 16 serif 16
+                  row tr 67 628 666 20
+                    cell td 67 628 20 20
+                    cell td 87 628 646 20
+                      line 87 628 646 20 base 14
+                        span span 87 630 52 16
+                        span a 163 630 76 16 link 110
+                        span a 243 630 76 16 link 111
+                        span span 243 630 76 16
+                        span span 323 630 0 16
+                        span a 331 630 28 16 link 112
+                        span a 371 630 72 16 link 113
+                        span span 87 630 356 16
+                        text "8 points" 87 630 52 16 serif 16
+                        text " by " 139 630 24 16 serif 16
+                        text "surprisetalk" 163 630 76 16 serif 16 underline link 110
+                        text " " 239 630 4 16 serif 16
+                        text "3 hours ago" 243 630 76 16 serif 16 underline link 111
+                        text " " 319 630 4 16 serif 16
+                        text "| " 323 630 8 16 serif 16
+                        text "hide" 331 630 28 16 serif 16 underline link 112
+                        text " | " 359 630 12 16 serif 16
+                        text "1 comment" 371 630 72 16 serif 16 underline link 113
+                  row tr 67 648 666 0
+                  row tr 67 648 666 20
+                    cell td 67 648 20 20
+                      line 67 648 20 20 base 14
+                        span span 71 650 16 16
+                        text "16." 71 650 16 16 serif 16
+                    cell td 87 648 0 20
+                      block center 87 648 0 0
+                        block div 87 648 0 0 link 114
+                    cell td 87 648 646 20
+                      line 87 648 646 20 base 14
+                        span a 87 650 168 16 link 115
+                        span span 267 650 68 16
+                        span a 267 650 68 16 link 116
+                        span span 255 650 88 16
+                        span span 87 650 256 16
+                        text "CSS Curiosities of the Past" 87 650 168 16 serif 16 underline link 115
+                        text " (" 255 650 12 16 serif 16
+                        text "vale.rocks" 267 650 68 16 serif 16 underline link 116
+                        text ")" 335 650 8 16 serif 16
+                  row tr 67 668 666 20
+                    cell td 67 668 20 20
+                    cell td 87 668 646 20
+                      line 87 668 646 20 base 14
+                        span span 87 670 60 16
+                        span a 171 670 72 16 link 117
+                        span a 247 670 76 16 link 118
+                        span span 247 670 76 16
+                        span span 327 670 0 16
+                        span a 335 670 28 16 link 119
+                        span a 375 670 92 16 link 120
+                        span span 87 670 380 16
+                        text "45 points" 87 670 60 16 serif 16
+                        text " by " 147 670 24 16 serif 16
+                        text "robin_reala" 171 670 72 16 serif 16 underline link 117
+                        text " " 243 670 4 16 serif 16
+                        text "6 hours ago" 247 670 76 16 serif 16 underline link 118
+                        text " " 323 670 4 16 serif 16
+                        text "| " 327 670 8 16 serif 16
+                        text "hide" 335 670 28 16 serif 16 underline link 119
+                        text " | " 363 670 12 16 serif 16
+                        text "27 comments" 375 670 92 16 serif 16 underline link 120
+                  row tr 67 688 666 0
+                  row tr 67 688 666 20
+                    cell td 67 688 20 20
+                      line 67 688 20 20 base 14
+                        span span 71 690 16 16
+                        text "17." 71 690 16 16 serif 16
+                    cell td 87 688 0 20
+                      block center 87 688 0 0
+                        block div 87 688 0 0 link 121
+                    cell td 87 688 646 20
+                      line 87 688 646 20 base 14
+                        span a 87 690 124 16 link 122
+                        span span 223 690 152 16
+                        span a 223 690 152 16 link 123
+                        span span 211 690 172 16
+                        span span 87 690 296 16
+                        text "OpenAI Agents API" 87 690 124 16 serif 16 underline link 122
+                        text " (" 211 690 12 16 serif 16
+                        text "developers.openai.com" 223 690 152 16 serif 16 underline link 123
+                        text ")" 375 690 8 16 serif 16
+                  row tr 67 708 666 20
+                    cell td 67 708 20 20
+                    cell td 87 708 646 20
+                      line 87 708 646 20 base 14
+                        span span 87 710 68 16
+                        span a 179 710 32 16 link 124
+                        span a 215 710 80 16 link 125
+                        span span 215 710 80 16
+                        span span 299 710 0 16
+                        span a 307 710 28 16 link 126
+                        span a 347 710 92 16 link 127
+                        span span 87 710 352 16
+                        text "302 points" 87 710 68 16 serif 16
+                        text " by " 155 710 24 16 serif 16
+                        text "aquir" 179 710 32 16 serif 16 underline link 124
+                        text " " 211 710 4 16 serif 16
+                        text "18 hours ago" 215 710 80 16 serif 16 underline link 125
+                        text " " 295 710 4 16 serif 16
+                        text "| " 299 710 8 16 serif 16
+                        text "hide" 307 710 28 16 serif 16 underline link 126
+                        text " | " 335 710 12 16 serif 16
+                        text "161 comments" 347 710 92 16 serif 16 underline link 127
+                  row tr 67 728 666 0
+                  row tr 67 728 666 20
+                    cell td 67 728 20 20
+                      line 67 728 20 20 base 14
+                        span span 71 730 16 16
+                        text "18." 71 730 16 16 serif 16
+                    cell td 87 728 0 20
+                      block center 87 728 0 0
+                        block div 87 728 0 0 link 128
+                    cell td 87 728 646 20
+                      line 87 728 646 20 base 14
+                        span a 87 730 228 16 link 129
+                        span span 327 730 112 16
+                        span a 327 730 112 16 link 130
+                        span span 315 730 132 16
+                        span span 87 730 360 16
+                        text "Working with Git Worktrees in Magit" 87 730 228 16 serif 16 underline link 129
+                        text " (" 315 730 12 16 serif 16
+                        text "emacsredux.com" 327 730 112 16 serif 16 underline link 130
+                        text ")" 439 730 8 16 serif 16
+                  row tr 67 748 666 20
+                    cell td 67 748 20 20
+                    cell td 87 748 646 20
+                      line 87 748 646 20 base 14
+                        span span 87 750 60 16
+                        span a 171 750 44 16 link 131
+                        span a 219 750 76 16 link 132
+                        span span 219 750 76 16
+                        span span 299 750 0 16
+                        span a 307 750 28 16 link 133
+                        span a 347 750 92 16 link 134
+                        span span 87 750 352 16
+                        text "82 points" 87 750 60 16 serif 16
+                        text " by " 147 750 24 16 serif 16
+                        text "srijan4" 171 750 44 16 serif 16 underline link 131
+                        text " " 215 750 4 16 serif 16
+                        text "9 hours ago" 219 750 76 16 serif 16 underline link 132
+                        text " " 295 750 4 16 serif 16
+                        text "| " 299 750 8 16 serif 16
+                        text "hide" 307 750 28 16 serif 16 underline link 133
+                        text " | " 335 750 12 16 serif 16
+                        text "34 comments" 347 750 92 16 serif 16 underline link 134
+                  row tr 67 768 666 0
+                  row tr 67 768 666 20
+                    cell td 67 768 20 20
+                      line 67 768 20 20 base 14
+                        span span 71 770 16 16
+                        text "19." 71 770 16 16 serif 16
+                    cell td 87 768 0 20
+                      block center 87 768 0 0
+                        block div 87 768 0 0 link 135
+                    cell td 87 768 646 20
+                      line 87 768 646 20 base 14
+                        span a 87 770 256 16 link 136
+                        span span 355 770 76 16
+                        span a 355 770 76 16 link 137
+                        span span 343 770 96 16
+                        span span 87 770 352 16
+                        text "Claude is no longer available for minors" 87 770 256 16 serif 16 underline link 136
+                        text " (" 343 770 12 16 serif 16
+                        text "claude.com" 355 770 76 16 serif 16 underline link 137
+                        text ")" 431 770 8 16 serif 16
+                  row tr 67 788 666 20
+                    cell td 67 788 20 20
+                    cell td 87 788 646 20
+                      line 87 788 646 20 base 14
+                        span span 87 790 68 16
+                        span a 179 790 100 16 link 138
+                        span a 283 790 76 16 link 139
+                        span span 283 790 76 16
+                        span span 363 790 0 16
+                        span a 371 790 28 16 link 140
+                        span a 411 790 100 16 link 141
+                        span span 87 790 424 16
+                        text "230 points" 87 790 68 16 serif 16
+                        text " by " 155 790 24 16 serif 16
+                        text "Muhammad523" 179 790 100 16 serif 16 underline link 138
+                        text " " 279 790 4 16 serif 16
+                        text "3 hours ago" 283 790 76 16 serif 16 underline link 139
+                        text " " 359 790 4 16 serif 16
+                        text "| " 363 790 8 16 serif 16
+                        text "hide" 371 790 28 16 serif 16 underline link 140
+                        text " | " 399 790 12 16 serif 16
+                        text "303 comments" 411 790 100 16 serif 16 underline link 141
+                  row tr 67 808 666 0
+                  row tr 67 808 666 20
+                    cell td 67 808 20 20
+                      line 67 808 20 20 base 14
+                        span span 67 810 20 16
+                        text "20." 67 810 20 16 serif 16
+                    cell td 87 808 0 20
+                      block center 87 808 0 0
+                        block div 87 808 0 0 link 142
+                    cell td 87 808 646 20
+                      line 87 808 646 20 base 14
+                        span a 87 810 528 16 link 143
+                        span span 627 810 60 16
+                        span a 627 810 60 16 link 144
+                        span span 615 810 80 16
+                        span span 87 810 608 16
+                        text "Technique for Manipulating Satellite Photos Now Reveals Ancient Images (2025)" 87 810 528 16 serif 16 underline link 143
+                        text " (" 615 810 12 16 serif 16
+                        text "nasa.gov" 627 810 60 16 serif 16 underline link 144
+                        text ")" 687 810 8 16 serif 16
+                  row tr 67 828 666 20
+                    cell td 67 828 20 20
+                    cell td 87 828 646 20
+                      line 87 828 646 20 base 14
+                        span span 87 830 68 16
+                        span a 179 830 44 16 link 145
+                        span a 227 830 84 16 link 146
+                        span span 227 830 84 16
+                        span span 315 830 0 16
+                        span a 323 830 28 16 link 147
+                        span a 363 830 92 16 link 148
+                        span span 87 830 368 16
+                        text "357 points" 87 830 68 16 serif 16
+                        text " by " 155 830 24 16 serif 16
+                        text "gumby" 179 830 44 16 serif 16 underline link 145
+                        text " " 223 830 4 16 serif 16
+                        text "22 hours ago" 227 830 84 16 serif 16 underline link 146
+                        text " " 311 830 4 16 serif 16
+                        text "| " 315 830 8 16 serif 16
+                        text "hide" 323 830 28 16 serif 16 underline link 147
+                        text " | " 351 830 12 16 serif 16
+                        text "58 comments" 363 830 92 16 serif 16 underline link 148
+                  row tr 67 848 666 0
+                  row tr 67 848 666 20
+                    cell td 67 848 20 20
+                      line 67 848 20 20 base 14
+                        span span 71 850 16 16
+                        text "21." 71 850 16 16 serif 16
+                    cell td 87 848 0 20
+                      block center 87 848 0 0
+                        block div 87 848 0 0 link 149
+                    cell td 87 848 646 20
+                      line 87 848 646 20 base 14
+                        span a 87 850 512 16 link 150
+                        span span 611 850 76 16
+                        span a 611 850 76 16 link 151
+                        span span 599 850 96 16
+                        span span 87 850 608 16
+                        text "Mexican student creates an acoustic fire extinguisher to put out fire in seconds" 87 850 512 16 serif 16 underline link 150
+                        text " (" 599 850 12 16 serif 16
+                        text "upsocl.com" 611 850 76 16 serif 16 underline link 151
+                        text ")" 687 850 8 16 serif 16
+                  row tr 67 868 666 20
+                    cell td 67 868 20 20
+                    cell td 87 868 646 20
+                      line 87 868 646 20 base 14
+                        span span 87 870 64 16
+                        span a 175 870 60 16 link 152
+                        span a 239 870 80 16 link 153
+                        span span 239 870 80 16
+                        span span 323 870 0 16
+                        span a 331 870 28 16 link 154
+                        span a 371 870 92 16 link 155
+                        span span 87 870 376 16
+                        text "301 points" 87 870 64 16 serif 16
+                        text " by " 151 870 24 16 serif 16
+                        text "rguiscard" 175 870 60 16 serif 16 underline link 152
+                        text " " 235 870 4 16 serif 16
+                        text "13 hours ago" 239 870 80 16 serif 16 underline link 153
+                        text " " 319 870 4 16 serif 16
+                        text "| " 323 870 8 16 serif 16
+                        text "hide" 331 870 28 16 serif 16 underline link 154
+                        text " | " 359 870 12 16 serif 16
+                        text "97 comments" 371 870 92 16 serif 16 underline link 155
+                  row tr 67 888 666 0
+                  row tr 67 888 666 20
+                    cell td 67 888 20 20
+                      line 67 888 20 20 base 14
+                        span span 67 890 20 16
+                        text "22." 67 890 20 16 serif 16
+                    cell td 87 888 0 20
+                      block center 87 888 0 0
+                        block div 87 888 0 0 link 156
+                    cell td 87 888 646 20
+                      line 87 888 646 20 base 14
+                        span a 87 890 416 16 link 157
+                        span span 515 890 80 16
+                        span a 515 890 80 16 link 158
+                        span span 503 890 100 16
+                        span span 87 890 516 16
+                        text "The Deathray: A simple way for an untrusted site to freeze a Mac" 87 890 416 16 serif 16 underline link 157
+                        text " (" 503 890 12 16 serif 16
+                        text "auberon.xyz" 515 890 80 16 serif 16 underline link 158
+                        text ")" 595 890 8 16 serif 16
+                  row tr 67 908 666 20
+                    cell td 67 908 20 20
+                    cell td 87 908 646 20
+                      line 87 908 646 20 base 14
+                        span span 87 910 68 16
+                        span a 179 910 76 16 link 159
+                        span a 259 910 80 16 link 160
+                        span span 259 910 80 16
+                        span span 343 910 0 16
+                        span a 351 910 28 16 link 161
+                        span a 391 910 96 16 link 162
+                        span span 87 910 400 16
+                        text "238 points" 87 910 68 16 serif 16
+                        text " by " 155 910 24 16 serif 16
+                        text "auberonedu" 179 910 76 16 serif 16 underline link 159
+                        text " " 255 910 4 16 serif 16
+                        text "16 hours ago" 259 910 80 16 serif 16 underline link 160
+                        text " " 339 910 4 16 serif 16
+                        text "| " 343 910 8 16 serif 16
+                        text "hide" 351 910 28 16 serif 16 underline link 161
+                        text " | " 379 910 12 16 serif 16
+                        text "160 comments" 391 910 96 16 serif 16 underline link 162
+                  row tr 67 928 666 0
+                  row tr 67 928 666 20
+                    cell td 67 928 20 20
+                      line 67 928 20 20 base 14
+                        span span 67 930 20 16
+                        text "23." 67 930 20 16 serif 16
+                    cell td 87 928 0 20
+                      block center 87 928 0 0
+                        block div 87 928 0 0 link 163
+                    cell td 87 928 646 20
+                      line 87 928 646 20 base 14
+                        span a 87 930 308 16 link 164
+                        span span 407 930 92 16
+                        span a 407 930 92 16 link 165
+                        span span 395 930 112 16
+                        span span 87 930 420 16
+                        text "Diesel prices in U.S. top $6 a gallon for first time" 87 930 308 16 serif 16 underline link 164
+                        text " (" 395 930 12 16 serif 16
+                        text "cbsnews.com" 407 930 92 16 serif 16 underline link 165
+                        text ")" 499 930 8 16 serif 16
+                  row tr 67 948 666 20
+                    cell td 67 948 20 20
+                    cell td 87 948 646 20
+                      line 87 948 646 20 base 14
+                        span span 87 950 56 16
+                        span a 167 950 24 16 link 166
+                        span a 195 950 96 16 link 167
+                        span span 195 950 96 16
+                        span span 295 950 0 16
+                        span a 303 950 28 16 link 168
+                        span a 343 950 92 16 link 169
+                        span span 87 950 348 16
+                        text "61 points" 87 950 56 16 serif 16
+                        text " by " 143 950 24 16 serif 16
+                        text "ck2" 167 950 24 16 serif 16 underline link 166
+                        text " " 191 950 4 16 serif 16
+                        text "51 minutes ago" 195 950 96 16 serif 16 underline link 167
+                        text " " 291 950 4 16 serif 16
+                        text "| " 295 950 8 16 serif 16
+                        text "hide" 303 950 28 16 serif 16 underline link 168
+                        text " | " 331 950 12 16 serif 16
+                        text "75 comments" 343 950 92 16 serif 16 underline link 169
+                  row tr 67 968 666 0
+                  row tr 67 968 666 20
+                    cell td 67 968 20 20
+                      line 67 968 20 20 base 14
+                        span span 67 970 20 16
+                        text "24." 67 970 20 16 serif 16
+                    cell td 87 968 0 20
+                      block center 87 968 0 0
+                        block div 87 968 0 0 link 170
+                    cell td 87 968 646 20
+                      line 87 968 646 20 base 14
+                        span a 87 970 304 16 link 171
+                        span span 403 970 60 16
+                        span a 403 970 60 16 link 172
+                        span span 391 970 80 16
+                        span span 87 970 384 16
+                        text "An interactive tour of the spanning tree protocol" 87 970 304 16 serif 16 underline link 171
+                        text " (" 391 970 12 16 serif 16
+                        text "bernat.ch" 403 970 60 16 serif 16 underline link 172
+                        text ")" 463 970 8 16 serif 16
+                  row tr 67 988 666 20
+                    cell td 67 988 20 20
+                    cell td 87 988 646 20
+                      line 87 988 646 20 base 14
+                        span span 87 990 60 16
+                        span a 171 990 28 16 link 173
+                        span a 203 990 76 16 link 174
+                        span span 203 990 76 16
+                        span span 283 990 0 16
+                        span a 291 990 28 16 link 175
+                        span a 331 990 84 16 link 176
+                        span span 87 990 328 16
+                        text "42 points" 87 990 60 16 serif 16
+                        text " by " 147 990 24 16 serif 16
+                        text "zdw" 171 990 28 16 serif 16 underline link 173
+                        text " " 199 990 4 16 serif 16
+                        text "6 hours ago" 203 990 76 16 serif 16 underline link 174
+                        text " " 279 990 4 16 serif 16
+                        text "| " 283 990 8 16 serif 16
+                        text "hide" 291 990 28 16 serif 16 underline link 175
+                        text " | " 319 990 12 16 serif 16
+                        text "4 comments" 331 990 84 16 serif 16 underline link 176
+                  row tr 67 1008 666 0
+                  row tr 67 1008 666 40
+                    cell td 67 1008 20 40
+                      line 67 1008 20 20 base 14
+                        span span 67 1010 20 16
+                        text "25." 67 1010 20 16 serif 16
+                    cell td 87 1008 0 40
+                      block center 87 1008 0 0
+                        block div 87 1008 0 0 link 177
+                    cell td 87 1008 646 40
+                      line 87 1008 646 20 base 14
+                        span a 87 1010 540 16 link 178
+                        span span 87 1010 540 16
+                        span span 627 1010 0 16
+                        text "More questions about whether researchers can trust OpenAI with unpublished math" 87 1010 540 16 serif 16 underline link 178
+                      line 87 1028 646 20 base 14
+                        span span 95 1030 196 16
+                        span a 95 1030 196 16 link 179
+                        span span 87 1030 212 16
+                        span span 87 1030 212 16
+                        text "(" 87 1030 8 16 serif 16
+                        text "mathstodon.xyz/andreasthom" 95 1030 196 16 serif 16 underline link 179
+                        text ")" 291 1030 8 16 serif 16
+                  row tr 67 1048 666 20
+                    cell td 67 1048 20 20
+                    cell td 87 1048 646 20
+                      line 87 1048 646 20 base 14
+                        span span 87 1050 68 16
+                        span a 179 1050 36 16 link 180
+                        span a 219 1050 60 16 link 181
+                        span span 219 1050 60 16
+                        span span 283 1050 0 16
+                        span a 291 1050 28 16 link 182
+                        span a 331 1050 96 16 link 183
+                        span span 87 1050 340 16
+                        text "838 points" 87 1050 68 16 serif 16
+                        text " by " 155 1050 24 16 serif 16
+                        text "pred_" 179 1050 36 16 serif 16 underline link 180
+                        text " " 215 1050 4 16 serif 16
+                        text "1 day ago" 219 1050 60 16 serif 16 underline link 181
+                        text " " 279 1050 4 16 serif 16
+                        text "| " 283 1050 8 16 serif 16
+                        text "hide" 291 1050 28 16 serif 16 underline link 182
+                        text " | " 319 1050 12 16 serif 16
+                        text "781 comments" 331 1050 96 16 serif 16 underline link 183
+                  row tr 67 1068 666 0
+                  row tr 67 1068 666 20
+                    cell td 67 1068 20 20
+                      line 67 1068 20 20 base 14
+                        span span 67 1070 20 16
+                        text "26." 67 1070 20 16 serif 16
+                    cell td 87 1068 0 20
+                      block center 87 1068 0 0
+                        block div 87 1068 0 0 link 184
+                    cell td 87 1068 646 20
+                      line 87 1068 646 20 base 14
+                        span a 87 1070 288 16 link 185
+                        span span 387 1070 104 16
+                        span a 387 1070 104 16 link 186
+                        span span 375 1070 124 16
+                        span span 87 1070 412 16
+                        text "Music Theory for the 21st-Century Classroom" 87 1070 288 16 serif 16 underline link 185
+                        text " (" 375 1070 12 16 serif 16
+                        text "pugetsound.edu" 387 1070 104 16 serif 16 underline link 186
+                        text ")" 491 1070 8 16 serif 16
+                  row tr 67 1088 666 20
+                    cell td 67 1088 20 20
+                    cell td 87 1088 646 20
+                      line 87 1088 646 20 base 14
+                        span span 87 1090 68 16
+                        span a 179 1090 36 16 link 187
+                        span a 219 1090 80 16 link 188
+                        span span 219 1090 80 16
+                        span span 303 1090 0 16
+                        span a 311 1090 28 16 link 189
+                        span a 351 1090 92 16 link 190
+                        span span 87 1090 356 16
+                        text "254 points" 87 1090 68 16 serif 16
+                        text " by " 155 1090 24 16 serif 16
+                        text "aanet" 179 1090 36 16 serif 16 underline link 187
+                        text " " 215 1090 4 16 serif 16
+                        text "21 hours ago" 219 1090 80 16 serif 16 underline link 188
+                        text " " 299 1090 4 16 serif 16
+                        text "| " 303 1090 8 16 serif 16
+                        text "hide" 311 1090 28 16 serif 16 underline link 189
+                        text " | " 339 1090 12 16 serif 16
+                        text "118 comments" 351 1090 92 16 serif 16 underline link 190
+                  row tr 67 1108 666 0
+                  row tr 67 1108 666 20
+                    cell td 67 1108 20 20
+                      line 67 1108 20 20 base 14
+                        span span 67 1110 20 16
+                        text "27." 67 1110 20 16 serif 16
+                    cell td 87 1108 0 20
+                      block center 87 1108 0 0
+                        block div 87 1108 0 0 link 191
+                    cell td 87 1108 646 20
+                      line 87 1108 646 20 base 14
+                        span a 87 1110 520 16 link 192
+                        span span 619 1110 56 16
+                        span a 619 1110 56 16 link 193
+                        span span 607 1110 76 16
+                        span span 87 1110 596 16
+                        text "NTSB issues investigative update on B-767 runway excursion accident in Miami" 87 1110 520 16 serif 16 underline link 192
+                        text " (" 607 1110 12 16 serif 16
+                        text "ntsb.gov" 619 1110 56 16 serif 16 underline link 193
+                        text ")" 675 1110 8 16 serif 16
+                  row tr 67 1128 666 20
+                    cell td 67 1128 20 20
+                    cell td 87 1128 646 20
+                      line 87 1128 646 20 base 14
+                        span span 87 1130 64 16
+                        span a 175 1130 60 16 link 194
+                        span a 239 1130 80 16 link 195
+                        span span 239 1130 80 16
+                        span span 323 1130 0 16
+                        span a 331 1130 28 16 link 196
+                        span a 371 1130 100 16 link 197
+                        span span 87 1130 384 16
+                        text "132 points" 87 1130 64 16 serif 16
+                        text " by " 151 1130 24 16 serif 16
+                        text "mckn1ght" 175 1130 60 16 serif 16 underline link 194
+                        text " " 235 1130 4 16 serif 16
+                        text "16 hours ago" 239 1130 80 16 serif 16 underline link 195
+                        text " " 319 1130 4 16 serif 16
+                        text "| " 323 1130 8 16 serif 16
+                        text "hide" 331 1130 28 16 serif 16 underline link 196
+                        text " | " 359 1130 12 16 serif 16
+                        text "232 comments" 371 1130 100 16 serif 16 underline link 197
+                  row tr 67 1148 666 0
+                  row tr 67 1148 666 20
+                    cell td 67 1148 20 20
+                      line 67 1148 20 20 base 14
+                        span span 67 1150 20 16
+                        text "28." 67 1150 20 16 serif 16
+                    cell td 87 1148 0 20
+                      block center 87 1148 0 0
+                        block div 87 1148 0 0 link 198
+                    cell td 87 1148 646 20
+                      line 87 1148 646 20 base 14
+                        span a 87 1150 156 16 link 199
+                        span span 255 1150 108 16
+                        span a 255 1150 108 16 link 200
+                        span span 243 1150 128 16
+                        span span 87 1150 284 16
+                        text "Neki – Sharded Postgres" 87 1150 156 16 serif 16 underline link 199
+                        text " (" 243 1150 12 16 serif 16
+                        text "planetscale.com" 255 1150 108 16 serif 16 underline link 200
+                        text ")" 363 1150 8 16 serif 16
+                  row tr 67 1168 666 20
+                    cell td 67 1168 20 20
+                    cell td 87 1168 646 20
+                      line 87 1168 646 20 base 14
+                        span span 87 1170 68 16
+                        span a 179 1170 88 16 link 201
+                        span a 271 1170 84 16 link 202
+                        span span 271 1170 84 16
+                        span span 359 1170 0 16
+                        span a 367 1170 28 16 link 203
+                        span a 407 1170 96 16 link 204
+                        span span 87 1170 416 16
+                        text "259 points" 87 1170 68 16 serif 16
+                        text " by " 155 1170 24 16 serif 16
+                        text "simon_weber" 179 1170 88 16 serif 16 underline link 201
+                        text " " 267 1170 4 16 serif 16
+                        text "22 hours ago" 271 1170 84 16 serif 16 underline link 202
+                        text " " 355 1170 4 16 serif 16
+                        text "| " 359 1170 8 16 serif 16
+                        text "hide" 367 1170 28 16 serif 16 underline link 203
+                        text " | " 395 1170 12 16 serif 16
+                        text "140 comments" 407 1170 96 16 serif 16 underline link 204
+                  row tr 67 1188 666 0
+                  row tr 67 1188 666 20
+                    cell td 67 1188 20 20
+                      line 67 1188 20 20 base 14
+                        span span 67 1190 20 16
+                        text "29." 67 1190 20 16 serif 16
+                    cell td 87 1188 0 20
+                      block center 87 1188 0 0
+                        block div 87 1188 0 0 link 205
+                    cell td 87 1188 646 20
+                      line 87 1188 646 20 base 14
+                        span a 87 1190 180 16 link 206
+                        span span 279 1190 136 16
+                        span a 279 1190 136 16 link 207
+                        span span 267 1190 156 16
+                        span span 87 1190 336 16
+                        text "Forgejo <=16.0.3 Critical RCE" 87 1190 180 16 serif 16 underline link 206
+                        text " (" 267 1190 12 16 serif 16
+                        text "codeberg.org/forgejo" 279 1190 136 16 serif 16 underline link 207
+                        text ")" 415 1190 8 16 serif 16
+                  row tr 67 1208 666 20
+                    cell td 67 1208 20 20
+                    cell td 87 1208 646 20
+                      line 87 1208 646 20 base 14
+                        span span 87 1210 64 16
+                        span a 175 1210 72 16 link 208
+                        span a 251 1210 84 16 link 209
+                        span span 251 1210 84 16
+                        span span 339 1210 0 16
+                        span a 347 1210 28 16 link 210
+                        span a 387 1210 92 16 link 211
+                        span span 87 1210 392 16
+                        text "199 points" 87 1210 64 16 serif 16
+                        text " by " 151 1210 24 16 serif 16
+                        text "weierstass" 175 1210 72 16 serif 16 underline link 208
+                        text " " 247 1210 4 16 serif 16
+                        text "22 hours ago" 251 1210 84 16 serif 16 underline link 209
+                        text " " 335 1210 4 16 serif 16
+                        text "| " 339 1210 8 16 serif 16
+                        text "hide" 347 1210 28 16 serif 16 underline link 210
+                        text " | " 375 1210 12 16 serif 16
+                        text "77 comments" 387 1210 92 16 serif 16 underline link 211
+                  row tr 67 1228 666 0
+                  row tr 67 1228 666 20
+                    cell td 67 1228 20 20
+                      line 67 1228 20 20 base 14
+                        span span 67 1230 20 16
+                        text "30." 67 1230 20 16 serif 16
+                    cell td 87 1228 0 20
+                      block center 87 1228 0 0
+                        block div 87 1228 0 0 link 212
+                    cell td 87 1228 646 20
+                      line 87 1228 646 20 base 14
+                        span a 87 1230 248 16 link 213
+                        span span 347 1230 128 16
+                        span a 347 1230 128 16 link 214
+                        span span 335 1230 148 16
+                        span span 87 1230 396 16
+                        text "Nine coding harnesses vs. your laptop" 87 1230 248 16 serif 16 underline link 213
+                        text " (" 335 1230 12 16 serif 16
+                        text "nasutton.notion.site" 347 1230 128 16 serif 16 underline link 214
+                        text ")" 475 1230 8 16 serif 16
+                  row tr 67 1248 666 20
+                    cell td 67 1248 20 20
+                    cell td 87 1248 646 20
+                      line 87 1248 646 20 base 14
+                        span span 87 1250 64 16
+                        span a 175 1250 68 16 link 215
+                        span a 247 1250 76 16 link 216
+                        span span 247 1250 76 16
+                        span span 327 1250 0 16
+                        span a 335 1250 28 16 link 217
+                        span a 375 1250 92 16 link 218
+                        span span 87 1250 380 16
+                        text "140 points" 87 1250 64 16 serif 16
+                        text " by " 151 1250 24 16 serif 16
+                        text "nasutton12" 175 1250 68 16 serif 16 underline link 215
+                        text " " 243 1250 4 16 serif 16
+                        text "11 hours ago" 247 1250 76 16 serif 16 underline link 216
+                        text " " 323 1250 4 16 serif 16
+                        text "| " 327 1250 8 16 serif 16
+                        text "hide" 335 1250 28 16 serif 16 underline link 217
+                        text " | " 363 1250 12 16 serif 16
+                        text "46 comments" 375 1250 92 16 serif 16 underline link 218
+                  row tr 67 1268 666 0
+                  row tr 67 1268 666 0
+                  row tr 67 1268 666 20
+                    cell td 67 1268 20 20
+                    cell td 87 1268 646 20
+                      line 87 1268 646 20 base 14
+                        span a 87 1270 32 16 link 219
+                        text "More" 87 1270 32 16 serif 16 underline link 219
+          row tr 67 1288 666 114
+            cell td 67 1288 666 114
+              block anon 67 1288 666 10
+                line 67 1288 666 10 base 10
+                  atomic img 67 1288 0 10
+              table table 67 1298 666 2
+                row-group tbody 67 1298 666 2
+                  row tr 67 1298 666 2
+                    cell td 67 1298 666 2
+              block anon 67 1300 666 20
+                line 67 1300 666 20 base 14
+              block center 67 1320 666 66
+                block anon 67 1320 666 40
+                  line 67 1320 666 20 base 14
+                    span a 180 1322 68 16 link 220
+                    span a 260 1322 24 16 link 221
+                    span a 296 1322 32 16 link 222
+                    span a 340 1322 24 16 link 223
+                    span a 376 1322 52 16 link 224
+                    span a 440 1322 36 16 link 225
+                    span a 488 1322 72 16 link 226
+                    span a 572 1322 48 16 link 227
+                    span span 180 1322 440 16
+                    text "Guidelines" 180 1322 68 16 serif 16 underline link 220
+                    text " | " 248 1322 12 16 serif 16
+                    text "FAQ" 260 1322 24 16 serif 16 underline link 221
+                    text " | " 284 1322 12 16 serif 16
+                    text "Lists" 296 1322 32 16 serif 16 underline link 222
+                    text " | " 328 1322 12 16 serif 16
+                    text "API" 340 1322 24 16 serif 16 underline link 223
+                    text " | " 364 1322 12 16 serif 16
+                    text "Security" 376 1322 52 16 serif 16 underline link 224
+                    text " | " 428 1322 12 16 serif 16
+                    text "Legal" 440 1322 36 16 serif 16 underline link 225
+                    text " | " 476 1322 12 16 serif 16
+                    text "Apply to YC" 488 1322 72 16 serif 16 underline link 226
+                    text " | " 560 1322 12 16 serif 16
+                    text "Contact" 572 1322 48 16 serif 16 underline link 227
+                  line 67 1340 666 20 base 14
+                block form 67 1360 666 26
+                  line 67 1360 666 26 base 20
+                    text "Search: " 294 1368 52 16 serif 16
+                    atomic input 346 1360 160 20 control 0

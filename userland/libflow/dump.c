@@ -421,105 +421,76 @@ int64_t f_boxes_dump(const FBoxes *boxes, char *out, size_t cap)
 
 // ── The laid-out tree ───────────────────────────────────────────────────
 //
-// Document pixels, rounded ONCE by the painter's own rule — to nearest,
-// ties up — and a size as round(end) - round(start), so neighbours abut
-// in the dump exactly as they will on the glass.
+// Printed from the PUBLIC tree, so what the harness checks is what a face
+// reads: whole document pixels, already rounded once by flow.c.
 
-static int64_t px_round(int64_t v)
+static void box_rect(Buf *b, os64_gui_rect_t r)
 {
-    int64_t q = (v + 32) / 64;
-    return (v + 32) % 64 < 0 ? q - 1 : q;
+    putf(b, " %d %d %d %d", (int)r.x, (int)r.y, (int)r.w, (int)r.h);
 }
 
-static void rect(Buf *b, int64_t x, int64_t y, int64_t w, int64_t h)
-{
-    int64_t x0 = px_round(x), y0 = px_round(y);
-    putf(b, " %lld %lld %lld %lld", (long long)x0, (long long)y0,
-         (long long)(px_round(x + w) - x0), (long long)(px_round(y + h) - y0));
-}
-
-static void frag_line(Buf *b, const FFrag *fr, int32_t depth);
-static void layout_box(Buf *b, const FBox *box, int32_t depth);
-
-static void frag_line(Buf *b, const FFrag *fr, int32_t depth)
+static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
 {
     indent(b, depth);
-    switch (fr->kind) {
-    case FF_TEXT:
+    switch (box->kind) {
+    case FLOW_BOX_LINE:
+        puts_(b, "line");
+        box_rect(b, box->rect);
+        putf(b, " base %d", (int)(box->baseline - box->rect.y));
+        break;
+    case FLOW_BOX_SPAN:
+        putf(b, "span %s", node_name(box->node));
+        box_rect(b, box->rect);
+        break;
+    case FLOW_BOX_TEXT:
         puts_(b, "text ");
-        quoted(b, fr->text + fr->begin, fr->end - fr->begin);
-        rect(b, fr->x, fr->y, fr->w, fr->h);
-        putf(b, " %s %d", s_generic[fr->style->family.generic],
-             (int)((fr->style->font_size + 32) / 64));
-        if (fr->style->font_weight >= 600)
+        quoted(b, box->text, box->length);
+        box_rect(b, box->rect);
+        putf(b, " %s %d", s_generic[box->style->family.generic],
+             (int)((box->style->font_size + 32) / 64));
+        if (box->style->font_weight >= 600)
             puts_(b, " bold");
-        if (fr->style->font_style == FLOW_FONT_ITALIC)
+        if (box->style->font_style == FLOW_FONT_ITALIC)
             puts_(b, " italic");
-        if (fr->decoration & FLOW_DECORATION_UNDERLINE)
+        if (box->decoration & FLOW_DECORATION_UNDERLINE)
             puts_(b, " underline");
-        if (fr->decoration & FLOW_DECORATION_LINE_THROUGH)
+        if (box->decoration & FLOW_DECORATION_LINE_THROUGH)
             puts_(b, " line-through");
         break;
-    case FF_ATOMIC:
-        putf(b, "atomic %s", node_name(fr->node));
-        rect(b, fr->x, fr->y, fr->w, fr->h);
-        if (fr->item->control >= 0)
-            putf(b, " control %d", (int)fr->item->control);
+    case FLOW_BOX_ATOMIC:
+        putf(b, "atomic %s", node_name(box->node));
+        box_rect(b, box->rect);
+        if (box->control >= 0)
+            putf(b, " control %d", (int)box->control);
         break;
-    case FF_MARKER:
+    case FLOW_BOX_MARKER:
         puts_(b, "marker ");
-        quoted(b, fr->text, fr->end);
-        rect(b, fr->x, fr->y, fr->w, fr->h);
+        quoted(b, box->text, box->length);
+        box_rect(b, box->rect);
+        break;
+    default:
+        putf(b, "%s %s", s_box[box->kind], node_name(box->node));
+        box_rect(b, box->rect);
         break;
     }
-    if (fr->link >= 0)
-        putf(b, " link %d", (int)fr->link);
-    puts_(b, "\n");
-    if (fr->kind == FF_ATOMIC && fr->item->content != NULL)
-        layout_box(b, fr->item->content, depth + 1);
-}
-
-static void layout_box(Buf *b, const FBox *box, int32_t depth)
-{
-    if (!box->placed)
-        return;
-    indent(b, depth);
-    putf(b, "%s %s", s_box[box->kind], node_name(box->node));
-    rect(b, box->x, box->y, box->w, box->h);
     if (box->link >= 0)
         putf(b, " link %d", (int)box->link);
+    if (box->unfinished)
+        puts_(b, " unfinished");
     puts_(b, "\n");
-    if (box->marker_frag != NULL)
-        frag_line(b, box->marker_frag, depth + 1);
-    for (const FLine *ln = box->lines; ln != NULL; ln = ln->next) {
-        indent(b, depth + 1);
-        puts_(b, "line");
-        rect(b, ln->x, ln->y, ln->w, ln->h);
-        putf(b, " base %lld\n", (long long)(px_round(ln->baseline) - px_round(ln->y)));
-        for (const FSpan *sp = ln->spans; sp != NULL; sp = sp->next) {
-            indent(b, depth + 2);
-            putf(b, "span %s", node_name(sp->inl->node));
-            rect(b, sp->x0, sp->top, sp->x1 - sp->x0, sp->bottom - sp->top);
-            if (sp->inl->link >= 0)
-                putf(b, " link %d", (int)sp->inl->link);
-            puts_(b, "\n");
-        }
-        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next)
-            frag_line(b, fr, depth + 2);
-    }
-    for (const FBox *c = box->first; c != NULL; c = c->next)
-        layout_box(b, c, depth + 1);
+    for (const flow_box_t *c = box->first; c != NULL; c = c->next)
+        tree_lines(b, c, depth + 1);
 }
 
-int64_t f_layout_dump(const FLayout *layout, char *out, size_t cap)
+int64_t f_tree_dump(const flow_box_t *root, int32_t width, int32_t height, bool incomplete,
+                    char *out, size_t cap)
 {
     Buf b = {out, cap, 0};
-    if (layout != NULL && layout->boxes != NULL && layout->boxes->root != NULL) {
-        putf(&b, "page %lld %lld\n", (long long)px_round(layout->width),
-             (long long)px_round(layout->height));
-        layout_box(&b, layout->boxes->root, 0);
+    if (root != NULL) {
+        putf(&b, "page %d %d\n", (int)width, (int)height);
+        tree_lines(&b, root, 0);
     }
-    if (layout != NULL && layout->incomplete)
+    if (incomplete)
         puts_(&b, "incomplete\n");
     if (cap > 0)
         out[b.len < cap ? b.len : cap - 1] = '\0';

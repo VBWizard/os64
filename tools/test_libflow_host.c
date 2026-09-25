@@ -31,11 +31,14 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len)
 // ── Allocation, and failing it on purpose ───────────────────────────────
 
 static size_t allocations, fail_at, live;
+// Fail ONE allocation (the fail_at'th) rather than every one from there
+// on: the shape of a budget the text engine hits while malloc still works.
+static bool fail_single;
 
 void *os64_malloc(size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_at != 0 && (fail_single ? allocations == fail_at : allocations >= fail_at))
         return NULL;
     void *at = malloc(size != 0 ? size : 1);
     if (at != NULL)
@@ -54,7 +57,7 @@ void *os64_calloc(size_t count, size_t size)
 void *os64_realloc(void *ptr, size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_at != 0 && (fail_single ? allocations == fail_at : allocations >= fail_at))
         return NULL;
     void *at = realloc(ptr, size != 0 ? size : 1);
     if (at != NULL && ptr == NULL)
@@ -404,8 +407,28 @@ static void layout_sweep(void)
     os64_html_document_free(doc);
 }
 
+#include "test_libflow_door.inc"
+
 int main(int argc, char **argv)
 {
+    // `--write-corpus`: regenerate tools/html_corpus/*.boxes from the engine.
+    if (argc == 2 && strcmp(argv[1], "--write-corpus") == 0) {
+        text_setup();
+        corpus_dumps(true);
+        text_teardown();
+        return 0;
+    }
+    bool full_fuzz = argc >= 2 && strcmp(argv[1], "--fuzz") == 0;
+    // `--fuzz PAGE K N`: only the full fuzz, of one corpus page, and only
+    // its Kth of N shares — the whole thing is hours in one process.
+    if (full_fuzz && argc == 5) {
+        text_setup();
+        fuzz_share(argv[2], (size_t)atoi(argv[3]), (size_t)atoi(argv[4]));
+        text_teardown();
+        printf("libflow: %d checks, %d failed%s\n", checks, failures,
+               live != 0 ? " (AND LEAKED)" : "");
+        return failures != 0 || live != 0 ? 1 : 0;
+    }
     // `--styles FILE` / `--boxes FILE`: print one page's dump, for reading.
     // `--layout FILE WIDTH`: the laid-out page.
     if (argc == 4 && strcmp(argv[1], "--layout") == 0) {
@@ -443,6 +466,18 @@ int main(int argc, char **argv)
     allocation_sweep();
     boxes_sweep();
     layout_sweep();
+    door_cases();
+    layout_relation_sweep("a page of every family", kSweepPage, 300);
+    {
+        size_t len = 0;
+        char *html = slurp("tools/html_corpus/floodgap.html", &len);
+        if (html != NULL)
+            layout_relation_sweep("floodgap", html, 800);
+        expect("relation sweep: the corpus page is there", html != NULL, NULL);
+        free(html);
+    }
+    corpus_dumps(false);
+    fuzz_share(NULL, 0, full_fuzz ? 1 : 0);
     text_teardown();
     printf("libflow: %d checks, %d failed%s\n", checks, failures,
            live != 0 ? " (AND LEAKED)" : "");

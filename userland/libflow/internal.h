@@ -192,6 +192,9 @@ struct FBox {
     // left edge, y from its top). 64-bit, because a long page is taller
     // than 26.6 can count in 32 bits.
     bool placed;                    // false: layout stopped before this box
+    // Layout stopped INSIDE this box: its rectangle holds what was laid
+    // out before it did (LAYOUT.md § Proof, the allocation sweep).
+    bool unfinished;
     int64_t x, y, w, h;             // the border box
     int64_t border[4], padding[4];  // used widths, top right bottom left
     FLine *lines, *last_line;       // an inline formatting context's lines
@@ -201,6 +204,7 @@ struct FBox {
     // every level above it, and without the memo that is exponential.
     bool intrinsic_known;
     int64_t intrinsic_min, intrinsic_max;
+    uint32_t intrinsic_computed;    // how often; the fuzz asserts at most once
 };
 
 typedef struct {
@@ -247,6 +251,9 @@ struct FSpan {
 struct FLine {
     FLine *next;
     int64_t x, y, w, h, baseline;   // w: the content width it was broken to
+    // Layout stopped while this line was being built: it is kept, empty,
+    // where it would have begun.
+    bool unfinished;
     FFrag *frags, *last_frag;
     FSpan *spans, *last_span;
 };
@@ -282,6 +289,9 @@ typedef struct {
 FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
                   const flow_env_t *env, int32_t width);
 void f_layout_free(FLayout *layout);
-int64_t f_layout_dump(const FLayout *layout, char *out, size_t cap);
+
+// The public tree (flow.c) as text, one line per box (dump.c).
+int64_t f_tree_dump(const flow_box_t *root, int32_t width, int32_t height, bool incomplete,
+                    char *out, size_t cap);
 
 #endif

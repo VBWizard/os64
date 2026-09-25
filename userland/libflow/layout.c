@@ -627,6 +627,9 @@ static bool open_push(L *l, Open *o, const FInline *inl)
 
 static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw, Cursor *cur)
 {
+    // Pass 2 stopped inside this context: its last line was broken without
+    // the items that would have followed, so it is not a line to trust.
+    bool cut = ifc->unfinished;
     Segs s = {0};
     segments(l, ifc, cw, &s);
     Fonts bf;
@@ -652,6 +655,8 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         if (line == NULL)
             break;
         line->x = cx;
+        line->y = cur->y;
+        line->baseline = cur->y;
         line->w = cw;
         if (ifc->last_line != NULL)
             ifc->last_line->next = line;
@@ -898,6 +903,14 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         // Pieces still open run to the line's end and carry on.
         for (size_t k = 0; k < open.n && !l->failed; k++)
             span_add(l, line, open.v[k], open_x[k], pen);
+        if (l->failed) {
+            // Half a line is not a line: kept where it would have begun,
+            // with nothing on it, so what IS on the page is real.
+            line->frags = line->last_frag = NULL;
+            line->spans = line->last_span = NULL;
+            line->unfinished = true;
+            break;
+        }
 
         // No-quirks: every inline box on the line holds its own font's box
         // open, empty or not (in quirks mode an empty one does not, the
@@ -997,6 +1010,12 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         if (height > 0 && cur->first < 0)
             cur->first = line->y;
         start = end;
+    }
+    if (cut && ifc->last_line != NULL) {
+        FLine *last = ifc->last_line;
+        last->frags = last->last_frag = NULL;
+        last->spans = last->last_span = NULL;
+        last->unfinished = true;
     }
     os64_free(s.v);
     os64_free(open.v);
@@ -1202,8 +1221,20 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     } else {
         children(l, styles, b, cx, cw, &in);
     }
-    if (l->failed)
+    if (l->failed) {
+        // Layout stopped inside this box: it holds what was laid out.
+        b->placed = true;
+        b->unfinished = true;
+        b->y = top_open ? (in.first >= 0 ? in.first : cur->y + pm) : y_border;
+        b->h = max64(0, in.y - b->y);
+        // And the parent's cursor stops at its bottom, so every box above
+        // holds what was laid out and the page can be scrolled to it.
+        if (cur->first < 0)
+            cur->first = b->y;
+        cur->y = b->y + b->h;
+        cur->pm = 0;
         return;
+    }
 
     // Nothing inside resolved a position: the box is empty, and its top
     // and bottom margins collapse together with whatever adjoins them.
@@ -1331,6 +1362,7 @@ static Intr intrinsic(L *l, FBox *b)
         return (Intr){b->intrinsic_min, b->intrinsic_max};
     Intr r = {0, 0};
     const flow_style_t *s = b->style;
+    b->intrinsic_computed++;
     if (b->kind == FB_TABLE) {
         r = table_intrinsic(l, b);
     } else if (b->kind == FB_REPLACED) {
@@ -1862,9 +1894,46 @@ static int64_t first_baseline(FBox *cell)
                          : cell->border[FLOW_TOP] + cell->padding[FLOW_TOP];
 }
 
+static void unplace(FBox *b)
+{
+    b->placed = false;
+    for (FBox *c = b->first; c != NULL; c = c->next)
+        unplace(c);
+}
+
+static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw,
+                       Cursor *cur);
+
 // The table: its width and its columns', its captions, its rows and their
-// cells, placed in its containing block like any block.
+// cells, placed in its containing block like any block. One whose build or
+// layout ran out of memory partway keeps its place, empty: its columns
+// would come from only the cells it has, so no line in it breaks where the
+// whole table's would, and none of it is real yet.
 static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw, Cursor *cur)
+{
+    int64_t y = cur->y + max64(cur->pm, len(t->style->margin[FLOW_TOP], cbw));
+    if (t->unfinished) {
+        if (cur->first < 0)
+            cur->first = y;
+        cur->y = y;
+        cur->pm = 0;
+    } else {
+        table_body(l, styles, t, cbx, cbw, cur);
+        if (!l->failed)
+            return;
+    }
+    for (FBox *c = t->first; c != NULL; c = c->next)
+        unplace(c);
+    t->placed = true;
+    t->unfinished = true;
+    if (t->w == 0)
+        t->x = cbx;
+    t->y = y;
+    t->h = 0;
+}
+
+static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw,
+                       Cursor *cur)
 {
     const flow_style_t *s = t->style;
     int64_t hsp = spacing_h(t), vsp = spacing_v(t);
@@ -2137,7 +2206,7 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     if (boxes->root != NULL) {
         Cursor cur = {0, 0, -1};
         block(&l, boxes->styles, boxes->root, 0, w, &cur);
-        out->height = cur.y + cur.pm;
+        out->height = l.failed ? boxes->root->y + boxes->root->h : cur.y + cur.pm;
         out->width = max64(w, right_edge(boxes->root));
     }
     return out;
