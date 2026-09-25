@@ -21,6 +21,7 @@ void *os64_malloc(size_t n)
     return p;
 }
 void os64_free(void *p) { if (p) { assert(live); live--; free(p); } }
+int os64_memcmp(const void *a, const void *b, size_t n) { return memcmp(a,b,n); }
 void *os64_memcpy(void *d, const void *s, size_t n) { return memcpy(d,s,n); }
 void *os64_memset(void *d, int c, size_t n) { return memset(d,c,n); }
 os64_png_status_t os64_png_decode(const uint8_t *p, size_t n, uint64_t c, os64_png_image_t *o)

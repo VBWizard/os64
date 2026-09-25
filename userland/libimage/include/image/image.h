@@ -18,7 +18,8 @@ typedef enum {
                                  // impossible dimensions, bad header)
     OS64_IMAGE_UNSUPPORTED,      // right format, a variant we do not decode
                                  // (compressed BMP, 16-bit PPM samples)
-    OS64_IMAGE_LIMIT             // decoder dimensions, pixel or working-memory cap
+    OS64_IMAGE_LIMIT,            // decoder dimensions, pixel or working-memory cap
+    OS64_IMAGE_END               // sequence exhausted; not a decode failure
 } os64_image_status_t;
 
 typedef struct os64_image {

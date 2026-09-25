@@ -1,1 +1,14 @@
-{ global: os64_image_decode; os64_image_load; os64_image_free; os64_image_status_name; local: *; };
+{
+    global:
+        os64_image_decode;
+        os64_image_load;
+        os64_image_free;
+        os64_image_status_name;
+        os64_image_sequence_decode;
+        os64_image_sequence_load;
+        os64_image_sequence_frame;
+        os64_image_sequence_next;
+        os64_image_sequence_rewind;
+        os64_image_sequence_free;
+    local: *;
+};
