@@ -1,0 +1,4 @@
+textfile.gif: 3711/3711 bytes
+/home/textfile.gif: preparing replacement
+os64get: 1 installed, 0 unchanged, 0 failed
+/home/textfile.gif: 3711 bytes from textfiles.com

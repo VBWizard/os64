@@ -1,8 +1,9 @@
 #ifndef OS64_IMAGE_H
 #define OS64_IMAGE_H
 // libimage: file bytes to owned top-first 0xAARRGGBB pixels. Format detection
-// uses signatures. BMP/PPM live here; libpng/libjpeg own their codecs. JPEG
-// applies EXIF orientation. Drawing and surfaces belong to libdraw.
+// uses signatures. BMP/PPM/GIF live here; libpng/libjpeg own their codecs. JPEG
+// applies EXIF orientation. GIF returns its first raster on a transparent
+// logical-screen-sized canvas. Drawing and surfaces belong to libdraw.
 #include <stddef.h>
 #include <stdint.h>
 

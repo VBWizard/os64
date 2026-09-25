@@ -463,7 +463,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
 APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest),$(LIBHTML_SO)) \
                        $(if $(filter $(1),$(LIBPAGE_PROGRAMS)),$(LIBPAGE_SO)) \
-                       $(if $(filter $(1),gview desktop jpegtest),$(LIBIMAGE_SO)) \
+                       $(if $(filter $(1),gview desktop jpegtest giftest),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
                        $(if $(filter $(1),fonttest texttest),$(LIBFREETYPE_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \

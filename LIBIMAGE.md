@@ -23,7 +23,7 @@ The split is by **codec**, not mechanically by filename extension:
 - `libpng.so` owns PNG parsing and decoding.
 - `libjpeg.so` owns JPEG parsing and decoding. `.jpg` and `.jpeg` are names for
   the same codec, not two libraries.
-- BMP and PPM are small leaf decoders and can live directly in `libimage.so`.
+- BMP, PPM and GIF are small leaf decoders and can live directly in `libimage.so`.
   A shared object apiece would add machinery without buying an independent
   implementation boundary.
 - `libimage.so` owns magic-byte detection, dispatch, common status mapping,
@@ -37,7 +37,7 @@ gview / desktop / future image consumers
                   |
              libimage.so
              |    |    |
-      BMP + PPM   |    +--> libjpeg.so --------+
+      BMP/PPM/GIF |    +--> libjpeg.so --------+
              |    |                             |
              |    +--> libpng.so                |
              |              |                   |
@@ -69,14 +69,16 @@ reason before that machinery exists.
 ## Where the tree stands
 
 `userland/libimage/image.c` owns BMP/PPM decoding, complete-file loading, magic
-selection and status mapping. Its public header is `image/image.h`.
+selection and status mapping. `userland/libimage/gif.c` owns first-frame GIF
+decoding, documented in [GIF.md](GIF.md). The public header is `image/image.h`.
 `gview` and `desktop` link libimage; no image symbols remain in libos64.
 
 `libpng.so` supplies non-interlaced PNG through libgzip's raw inflater.
 `libjpeg.so` supplies the bounded libjpeg-turbo decoder and photo orientation
-recorded in [JPEG.md](JPEG.md). The four formats share the image result below.
-`pngtest` directly checks the PNG codec; `jpegtest` checks JPEG and the common
-image entry points through their shared-library dependencies in ring 3.
+recorded in [JPEG.md](JPEG.md). The five formats share the image result below.
+`giftest` checks GIF decoding and file loading; `pngtest` checks the PNG codec;
+`jpegtest` checks JPEG and the common image entry points through their
+shared-library dependencies in ring 3.
 
 ## The common result
 
@@ -89,7 +91,8 @@ The format-neutral output remains the representation the GUI already speaks:
 - storage owned by the result and released through its library's matching
   free call.
 
-PNG preserves real alpha. JPEG has no alpha and supplies `0xff`. BMP continues
+PNG preserves real alpha; GIF supplies transparent or opaque palette pixels
+on a transparent canvas. JPEG has no alpha and supplies `0xff`. BMP continues
 to supply `0xff` until support for a variant with an actual alpha mask arrives.
 The decoder produces pixels, not a surface: pitch, clipping, blending,
 placement, damage, and publication remain libdraw concerns.

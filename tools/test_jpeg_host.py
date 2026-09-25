@@ -59,7 +59,7 @@ def run(work):
         subprocess.run([str(work/'test'),str(p),str(p.with_suffix('.ref'))],env=env,check=True)
         print('PASS',p.stem,flush=True)
     print('PASS JPEG reference pixels, every truncated prefix, allocation failures and cleanup',flush=True)
-    adjacent = ['userland/libimage/image.c', 'userland/libpng/png.c', 'userland/libgzip/inflate.c',
+    adjacent = ['userland/libimage/image.c', 'userland/libimage/gif.c', 'userland/libpng/png.c', 'userland/libgzip/inflate.c',
                 'userland/libos64/crc32.c', 'userland/libos64/draw.c', 'tools/test_image_host.c']
     extra = ['-I'+str(ROOT/p) for p in ('userland/libimage/include','userland/libpng/include','userland/libgzip/include')]
     subprocess.run(common+includes+extra+['-no-pie','-masm=intel', *[str(ROOT/p) for p in adjacent], *map(str,objects),'-o',str(work/'image-test')],check=True)
