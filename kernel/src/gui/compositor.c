@@ -1121,6 +1121,8 @@ static void route_event_locked(const input_event_t *ev)
 	// did. Only the pointer had nowhere to go.
 	if (!gui_owns_glass()) {
 		switch (ev->type) {
+		case INPUT_EVENT_MOUSE_WHEEL:
+			return;   // GUI wheel queued before a VT switch; text routes at arrival
 		case INPUT_EVENT_MOUSE_MOVE:
 		case INPUT_EVENT_MOUSE_BUTTON_DOWN:
 		case INPUT_EVENT_MOUSE_BUTTON_UP:
@@ -1132,6 +1134,18 @@ static void route_event_locked(const input_event_t *ev)
 	}
 
 	switch (ev->type) {
+	case INPUT_EVENT_MOUSE_WHEEL: {
+		// Window-management gestures own the pointer but do not scroll.
+		if (s_band_window || s_drag_window || s_wm_buttons || s_control_capture.buttons)
+			break;
+		if (s_pointer_window)
+			deliver_mouse_to_window(s_pointer_window, *ev, false);
+		else {
+			window_t *under = wm_topmost_at(ev->mouse.x, ev->mouse.y);
+			if (under) deliver_mouse_to_window(under, *ev, true);
+		}
+		break;
+	}
 	case INPUT_EVENT_MOUSE_MOVE: {
 		// A gesture in progress OWNS the pointer: no hit-testing, no delivery
 		// to whatever the cursor happens to sweep across. Losing this is how

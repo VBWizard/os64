@@ -120,8 +120,10 @@ void os64_ui_listbox_scroll_to(os64_ui_t *ui, os64_ui_listbox_t *list, size_t to
 {
     size_t rows = (size_t)os64_ui_listbox_rows(list, &ui->theme);
     size_t max = list->count > rows ? list->count - rows : 0;
+    size_t before = list->top;
     list->top = top < max ? top : max;
     os64_ui_mark_dirty(ui, &list->w);
+    if (list->top != before && list->on_view) list->on_view(list, list->list_user);
 }
 
 void os64_ui_listbox_set(os64_ui_t *ui, os64_ui_listbox_t *list, size_t count, int selected)
@@ -202,6 +204,10 @@ static bool list_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
 {
     os64_ui_listbox_t *list = (os64_ui_listbox_t *)w;
     switch (ev->type) {
+    case OS64_GUI_EVENT_MOUSE_WHEEL:
+        if (!ev->mouse.dy) return false;
+        os64_ui_listbox_scroll_to(ui, list, ui_scroll_rows(list->top, (int32_t)ev->mouse.dy * 3));
+        return true;
     case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN:
         if (ev->mouse.button != OS64_GUI_MOUSE_LEFT) return false;
         os64_ui_set_focus(ui, w);

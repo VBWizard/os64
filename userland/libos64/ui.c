@@ -317,6 +317,15 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 		}
 		return false;
 	}
+	case OS64_GUI_EVENT_MOUSE_WHEEL: {
+		// Wheel targets the visible widget under the pointer without taking
+		// keyboard focus or changing a button grab. Unhandled wheels bubble.
+		os64_ui_widget_t *w = hit_test(ui->root, ev->mouse.x, ev->mouse.y);
+		for (; w; w = w->parent)
+			if (os64_ui_widget_enabled(w) && w->cls->event && w->cls->event(w, ui, ev))
+				return true;
+		return false;
+	}
 	case OS64_GUI_EVENT_MOUSE_MOVE:
 	case OS64_GUI_EVENT_MOUSE_BUTTON_UP: {
 		update_hover(ui, ev->mouse.x, ev->mouse.y);

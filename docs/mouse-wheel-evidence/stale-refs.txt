@@ -1,0 +1,6 @@
+stale_refs: working tree vs HEAD
+
+== Names this change RETIRED that survive only in prose (read every line):
+   (none)
+
+== No new superlative claims.

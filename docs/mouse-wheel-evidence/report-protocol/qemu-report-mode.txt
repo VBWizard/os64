@@ -1,0 +1,107 @@
+428 (0x0000) AP0: xhci: BAR 0xfebf0000, 8 ports, 64 slots, 32-byte contexts
+428 (0x0000) AP0: xhci: port 1 portsc=0x000202a0
+428 (0x0000) AP0: xhci: port 2 portsc=0x000202a0
+428 (0x0000) AP0: xhci: port 3 portsc=0x000202a0
+428 (0x0000) AP0: xhci: port 4 portsc=0x000202a0
+428 (0x0000) AP0: xhci: port 5 portsc=0x00020ee1
+428 (0x0000) AP0: xhci: port 5 enabled, speed 3
+428 (0x0000) AP0: xhci: port 5 status change (connected)
+428 (0x0000) AP0: xhci: mouse interface 0 SET_PROTOCOL boot accepted
+428 (0x0000) AP0: xhci: HID identity port 5 slot 1 VID:PID 0627:0001 revision 0000
+428 (0x0000) AP0: xhci: mouse descriptor slot 1 length 52 offset 0: 05 01 09 02 a1 01 09 01
+428 (0x0000) AP0: xhci: mouse descriptor slot 1 length 52 offset 8: a1 00 05 09 19 01 29 05
+428 (0x0000) AP0: xhci: mouse descriptor slot 1 length 52 offset 16: 15 00 25 01 95 05 75 01
+428 (0x0000) AP0: xhci: mouse descriptor slot 1 length 52 offset 24: 81 02 95 01 75 03 81 01
+428 (0x0000) AP0: xhci: mouse descriptor slot 1 length 52 offset 32: 05 01 09 30 09 31 09 38
+428 (0x0000) AP0: xhci: mouse descriptor slot 1 length 52 offset 40: 15 81 25 7f 75 08 95 03
+428 (0x0000) AP0: xhci: mouse descriptor slot 1 length 52 offset 48: 81 06 c0 c0 00 00 00 00
+428 (0x0000) AP0: xhci: mouse report protocol ID 0 bytes 4 X 8/8 Y 16/8 wheel 24/8
+428 (0x0000) AP0: USB mouse: port 5 slot 1 ep 1 (interval 6)
+428 (0x0000) AP0: xhci: mouse live — port 5 slot 1 dci 3 mps 4
+428 (0x0000) AP0: xhci: port 6 portsc=0x00020ee1
+428 (0x0000) AP0: xhci: port 6 enabled, speed 3
+428 (0x0000) AP0: xhci: port 6 status change (connected)
+428 (0x0000) AP0: xhci: keyboard interface 0 SET_PROTOCOL boot accepted
+428 (0x0000) AP0: xhci: HID identity port 6 slot 2 VID:PID 0627:0001 revision 0000
+428 (0x0000) AP0: USB keyboard: port 6 slot 2 ep 1 (interval 6)
+428 (0x0000) AP0: xhci: keyboard live — port 6 slot 2 dci 3 mps 8
+2418 (0x0021) AP0: xhci: kbd report m=0x01 keys 00 00 00 00 00 00
+2421 (0x0021) AP0: xhci: kbd report m=0x05 keys 00 00 00 00 00 00
+2424 (0x0021) AP0: xhci: kbd report m=0x05 keys 3b 00 00 00 00 00
+2424 (0x0021) AP0: xhci: kbd report m=0x05 keys 00 00 00 00 00 00
+2427 (0x0021) AP0: xhci: kbd report m=0x01 keys 00 00 00 00 00 00
+2430 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4208 (0x0021) AP0: xhci: kbd report m=0x00 keys 28 00 00 00 00 00
+4210 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4219 (0x0021) AP0: xhci: kbd report m=0x00 keys 06 00 00 00 00 00
+4222 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4226 (0x0021) AP0: xhci: kbd report m=0x00 keys 04 00 00 00 00 00
+4228 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4232 (0x0021) AP0: xhci: kbd report m=0x00 keys 17 00 00 00 00 00
+4235 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4239 (0x0021) AP0: xhci: kbd report m=0x00 keys 2c 00 00 00 00 00
+4242 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4245 (0x0021) AP0: xhci: kbd report m=0x00 keys 38 00 00 00 00 00
+4248 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4252 (0x0021) AP0: xhci: kbd report m=0x00 keys 08 00 00 00 00 00
+4255 (0x002b) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4259 (0x0021) AP0: xhci: kbd report m=0x00 keys 17 00 00 00 00 00
+4262 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4266 (0x0021) AP0: xhci: kbd report m=0x00 keys 06 00 00 00 00 00
+4269 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4272 (0x0021) AP0: xhci: kbd report m=0x00 keys 38 00 00 00 00 00
+4275 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4279 (0x0021) AP0: xhci: kbd report m=0x00 keys 10 00 00 00 00 00
+4282 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4285 (0x0021) AP0: xhci: kbd report m=0x00 keys 08 00 00 00 00 00
+4288 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4292 (0x0021) AP0: xhci: kbd report m=0x00 keys 11 00 00 00 00 00
+4295 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4298 (0x0021) AP0: xhci: kbd report m=0x00 keys 18 00 00 00 00 00
+4301 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4305 (0x0021) AP0: xhci: kbd report m=0x00 keys 37 00 00 00 00 00
+4307 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4311 (0x0021) AP0: xhci: kbd report m=0x00 keys 06 00 00 00 00 00
+4314 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4319 (0x0021) AP0: xhci: kbd report m=0x00 keys 12 00 00 00 00 00
+4321 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4325 (0x0021) AP0: xhci: kbd report m=0x00 keys 11 00 00 00 00 00
+4328 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4332 (0x0021) AP0: xhci: kbd report m=0x00 keys 09 00 00 00 00 00
+4335 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4338 (0x0021) AP0: xhci: kbd report m=0x00 keys 28 00 00 00 00 00
+4341 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+4436 (0x0021) AP0: xhci: mouse report slot 1 len 4 decoded 1 wheel 1 bytes 00 00 00 01 00 00 00 00
+4443 (0x0021) AP0: xhci: mouse report slot 1 len 4 decoded 1 wheel 1 bytes 00 00 00 01 00 00 00 00
+4543 (0x002b) AP0: xhci: mouse report slot 1 len 4 decoded 1 wheel -1 bytes 00 00 00 ff 00 00 00 00
+4551 (0x0021) AP0: xhci: mouse report slot 1 len 4 decoded 1 wheel -1 bytes 00 00 00 ff 00 00 00 00
+10916 (0x0021) AP0: xhci: kbd report m=0x00 keys 04 00 00 00 00 00
+10919 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+10923 (0x0021) AP0: xhci: kbd report m=0x00 keys 13 00 00 00 00 00
+10925 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+10929 (0x0021) AP0: xhci: kbd report m=0x00 keys 13 00 00 00 00 00
+10932 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+10936 (0x0021) AP0: xhci: kbd report m=0x00 keys 08 00 00 00 00 00
+10939 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+10942 (0x0021) AP0: xhci: kbd report m=0x00 keys 04 00 00 00 00 00
+10945 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+10949 (0x0021) AP0: xhci: kbd report m=0x00 keys 15 00 00 00 00 00
+10952 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+10955 (0x0021) AP0: xhci: kbd report m=0x00 keys 04 00 00 00 00 00
+10958 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+10962 (0x002b) AP0: xhci: kbd report m=0x00 keys 11 00 00 00 00 00
+10965 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+10969 (0x0021) AP0: xhci: kbd report m=0x00 keys 06 00 00 00 00 00
+10972 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+10975 (0x0021) AP0: xhci: kbd report m=0x00 keys 08 00 00 00 00 00
+10978 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+10982 (0x0021) AP0: xhci: kbd report m=0x00 keys 28 00 00 00 00 00
+10983 (0x002b) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+10990 (0x0021) AP0: xhci: kbd report m=0x04 keys 00 00 00 00 00 00
+10993 (0x0021) AP0: xhci: kbd report m=0x04 keys 41 00 00 00 00 00
+10996 (0x0021) AP0: xhci: kbd report m=0x04 keys 00 00 00 00 00 00
+10999 (0x0021) AP0: xhci: kbd report m=0x00 keys 00 00 00 00 00 00
+16958 (0x0021) AP0: xhci: mouse report slot 1 len 4 decoded 1 wheel -1 bytes 00 00 00 ff 00 00 00 00
+16968 (0x0021) AP0: xhci: mouse report slot 1 len 4 decoded 1 wheel -1 bytes 00 00 00 ff 00 00 00 00
+17072 (0x0021) AP0: xhci: mouse report slot 1 len 4 decoded 1 wheel 1 bytes 00 00 00 01 00 00 00 00
+17082 (0x0021) AP0: xhci: mouse report slot 1 len 4 decoded 1 wheel 1 bytes 00 00 00 01 00 00 00 00

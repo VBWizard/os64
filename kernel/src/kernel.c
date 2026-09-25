@@ -453,14 +453,9 @@ void kernel_init()
 		inputIrqDest = (uint8_t)gui_compositor_affinity();
 	ioapic_adopt_isa_irq(1, 0x41, inputIrqDest, &kIRQ1UsesLapic);
 
-	// The mouse only matters to the GUI; a text-mode boot skips the whole
-	// AUX-port bring-up (and IRQ12 stays dormant — its IDT entry exists but
-	// nothing routes to it).
-	if (kEnableGUI)
-	{
-		mouse_init();
-		ioapic_adopt_isa_irq(12, 0x4C, inputIrqDest, &kIRQ12UsesLapic);
-	}
+	// The wheel scrolls text VTs on text-only boots as well as GUI boots.
+	mouse_init();
+	ioapic_adopt_isa_irq(12, 0x4C, inputIrqDest, &kIRQ12UsesLapic);
 
 	// The e1000's INTx doorbell rides the same platform moment: the rings
 	// came up back in init_e1000 (long before APIC mode existed), but a PCI

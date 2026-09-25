@@ -271,6 +271,11 @@ typedef struct os64_gui_surface
 #define OS64_GUI_EVENT_POINTER_STATE    11
 // Coalesced session generation, independent of input-ring capacity.
 #define OS64_GUI_EVENT_APPEARANCE       12
+// Wheel notches at the pointer, without changing focus. dy > 0 scrolls down
+// (wheel toward the user); dx > 0 scrolls right. Drivers without tilt use 0.
+// x/y are content-local, and buttons/modifiers are the packet's state.
+#define OS64_GUI_EVENT_MOUSE_WHEEL      13
+_Static_assert(OS64_GUI_EVENT_MOUSE_WHEEL == 13, "wheel event ABI");
 
 // Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
 // key events and — since resize — by mouse events too.
@@ -308,7 +313,7 @@ typedef struct os64_gui_event
         } key;
         struct {
             int32_t x, y;       // CONTENT-local cursor position
-            int16_t dx, dy;     // raw motion delta
+            int16_t dx, dy;     // motion pixels, or signed notches for WHEEL
             uint8_t buttons;    // current button state bitmask
             uint8_t button;     // which button changed (DOWN/UP)
             uint8_t modifiers;  // OS64_GUI_MOD_* at event time

@@ -3,12 +3,13 @@
 // Raw device drivers (keyboard IRQ1, mouse IRQ12) push primitive state here;
 // this file turns it into typed events (KEY_DOWN, MOUSE_MOVE, BUTTON_UP, ...)
 // on one ring the compositor drains each frame. See gui/input.h for the
-// producer/consumer rules — the short version: ISRs enqueue, compositor polls,
-// nobody wakes anybody.
+// producer/consumer rules. Text wheel input changes the focused VT's view
+// without painting; its existing flush handles the pixels.
 
 #include "gui/input.h"
 #include "gui/gui_types.h"
 #include "gui/compositor.h"   // gui_owns_glass — mouse routing (VT8 chapter)
+#include "tty.h"
 #include "driver/system/keyboard.h"   // keyboard_current_modifiers — the pointer's
                                       // view of the keyboard (Ctrl+Alt+drag)
 
@@ -36,8 +37,7 @@ static int32_t s_mouse_x, s_mouse_y;
 // button is down while its count is nonzero.
 static uint32_t s_button_holders[3];
 
-// Gate: stays false when the GUI is off so the always-on keyboard driver's
-// inject calls cost one branch and nothing else.
+// Gate for the GUI ring; text wheel input does not depend on it.
 static volatile bool s_active = false;
 
 void input_init(void)
@@ -148,17 +148,20 @@ static void pointer_locked(input_pointer_source_t *src, int32_t dx, int32_t dy, 
 	}
 }
 
-void input_inject_mouse(input_pointer_source_t *src, int16_t dx, int16_t dy, uint8_t buttons)
+void input_inject_mouse(input_pointer_source_t *src, int16_t dx, int16_t dy,
+                        uint8_t buttons, int16_t wheel)
 {
+	// Text scrollback follows the focused VT at arrival, like Shift+PgUp.
+	// This changes state only; tty_flush_if_dirty paints outside the IRQ.
+	if (wheel && !gui_owns_glass()) {
+		tty_view_wheel(wheel);
+		wheel = 0;
+	}
 	if (!s_active)
 		return;
 
-	// Text VTs took no mouse from 2026-08-19 until 2026-08-21, and the reason
-	// given was "there is no consumer". THERE IS ONE NOW: vt_select.c, the
-	// gpm-lineage console selection this comment promised. Events are
-	// enqueued unconditionally; the compositor decides at the far end of the
-	// ring whether they belong to a window or to the focused terminal, which
-	// is the only place that knows who holds the glass at drain time.
+	// Motion and buttons share the compositor's routing to windows or text
+	// selection. Text wheel input above also works without that consumer.
 
 	// The keyboard state that was true when this packet arrived. Sampled ONCE
 	// for the whole packet so the move and the button edges it may also carry
@@ -169,6 +172,14 @@ void input_inject_mouse(input_pointer_source_t *src, int16_t dx, int16_t dy, uin
 
 	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);
 	pointer_locked(src, dx, dy, buttons, modifiers);
+	if (wheel) {
+		input_event_t ev = {
+			.type = INPUT_EVENT_MOUSE_WHEEL,
+			.mouse = { .x = s_mouse_x, .y = s_mouse_y, .dy = wheel,
+			           .buttons = buttons_held(), .modifiers = modifiers },
+		};
+		enqueue_locked(&ev);
+	}
 	spinlock_release_irqrestore(&s_input_lock, flags);
 }
 

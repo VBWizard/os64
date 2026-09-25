@@ -179,6 +179,17 @@ static bool scrollbar_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	int32_t m = sb->horizontal ? ev->mouse.x : ev->mouse.y;
 
 	switch (ev->type) {
+	case OS64_GUI_EVENT_MOUSE_WHEEL: {
+		// A vertical wheel over a horizontal bar moves along that bar.
+		int64_t delta = sb->horizontal && ev->mouse.dx ? ev->mouse.dx : ev->mouse.dy;
+		if (!delta) return false;
+		int64_t range = sb->total > sb->visible ? sb->total - sb->visible : 0;
+		int64_t pos = sb->pos;
+		if (delta > 0) pos = delta > range - pos ? range : pos + delta;
+		else pos = -delta > pos ? 0 : pos + delta;
+		scrollbar_moved(sb, ui, pos);
+		return true;
+	}
 	case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN: {
 		if (sb->total <= sb->visible)
 			return true;   // full thumb: nothing to move, but the click is ours
@@ -1688,6 +1699,10 @@ static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	size_t count = tv_count(tv);
 
 	switch (ev->type) {
+	case OS64_GUI_EVENT_MOUSE_WHEEL:
+		if (!ev->mouse.dy) return false;
+		os64_ui_textview_scroll_to(ui, tv, ui_scroll_rows(tv->top, (int32_t)ev->mouse.dy * 3));
+		return true;
 	case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN:
 		os64_ui_set_focus(ui, w);
 		if (tv_place_from_point(tv, ui, ev->mouse.x, ev->mouse.y)) {

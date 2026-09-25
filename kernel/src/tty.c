@@ -64,6 +64,7 @@ extern volatile uint64_t kTicksSinceStart;
 // never scrolls — prompt echo, line editing, the cursor dance — still lands
 // on the glass immediately; only scrolls defer.
 //
+// Wheel input also marks the glass stale after moving the history view.
 // s_glassStale is written under the FOCUSED tty's lock (writers) and cleared
 // by any full repaint (tty_repaint_locked, which every clearer runs under
 // some t->lock). A focus switch can race a writer's set with its clear —
@@ -642,8 +643,8 @@ void tty_write(tty_t *t, const char *bytes, size_t length)
 }
 
 // The repaint rider (called from processSignals, right beside the renderer's
-// renderer_flush_if_dirty — same gait, one layer up): if a write burst left
-// the glass stale and the ~30Hz window has passed, repaint the focused
+// renderer_flush_if_dirty — same gait, one layer up): if output or a wheel
+// changed the visible grid and the ~30Hz window has passed, repaint the focused
 // terminal from its grid. The unlocked s_glassStale peek is safe for the
 // same reason the renderer's is — a stale read costs one pass, and the
 // locked re-check decides for real. Lock order matches every other door:
@@ -662,8 +663,12 @@ void tty_flush_if_dirty(void)
 	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
 	// Re-check focus under the lock. Repaint uses tty_visible_line, so a
 	// paper change also refreshes history without changing view_offset.
-	if (s_glassStale && kTTYFocused == t)
+	if (s_glassStale && kTTYFocused == t) {
 		tty_repaint_locked(t);   // clears s_glassStale itself
+		// Like tty_repaint_focused: notify overlays even if they already
+		// painted this view, or opposite wheel steps restored its offset.
+		t->generation++;
+	}
 	spinlock_release_irqrestore(&t->lock, flags);
 }
 
@@ -860,6 +865,24 @@ void tty_view_scroll(int dir)
 	}
 	if (t->view_offset != was)
 		tty_repaint_locked(t);
+	spinlock_release_irqrestore(&t->lock, flags);
+}
+
+void tty_view_wheel(int16_t notches)
+{
+	tty_t *t = kTTYFocused;
+	if (!notches || !kTTYReady || kTTYDirect || !t || t->is_pty || t->index >= 7)
+		return;
+	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+	if (kTTYFocused == t) {
+		int64_t offset = (int64_t)t->view_offset - (int32_t)notches * 3;
+		if (offset < 0) offset = 0;
+		if (offset > t->hist_lines) offset = t->hist_lines;
+		if ((uint32_t)offset != t->view_offset) {
+			t->view_offset = (uint32_t)offset;
+			s_glassStale = true;
+		}
+	}
 	spinlock_release_irqrestore(&t->lock, flags);
 }
 

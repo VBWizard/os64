@@ -167,6 +167,15 @@ static bool slider_event(os64_ui_widget_t *w, os64_ui_t *ui,
 {
     os64_ui_slider_t *sl = (os64_ui_slider_t *)w;
     switch (ev->type) {
+    case OS64_GUI_EVENT_MOUSE_WHEEL: {
+        int32_t notches = ev->mouse.dx ? ev->mouse.dx : -(int32_t)ev->mouse.dy;
+        if (!notches) return false;
+        // Match arrow-key steps without taking focus. A pointer drag owns
+        // its gesture until release; consume the wheel without changing it.
+        if (!ui->grab)
+            slider_change(ui, sl, (int64_t)sl->value + (int64_t)notches * sl->step);
+        return true;
+    }
     case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN: {
         if (ev->mouse.button != OS64_GUI_MOUSE_LEFT) return false;
         os64_ui_set_focus(ui, w);

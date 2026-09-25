@@ -1,6 +1,16 @@
 #ifndef OS64_UI_INTERNAL_H
 #define OS64_UI_INTERNAL_H
 #include "os64/ui.h"
+// Apply signed row motion without wrapping at either end of size_t.
+static inline size_t ui_scroll_rows(size_t top, int32_t delta)
+{
+	if (delta < 0) {
+		size_t amount = (size_t)-(int64_t)delta;
+		return top > amount ? top - amount : 0;
+	}
+	size_t amount = (size_t)delta;
+	return amount > SIZE_MAX - top ? SIZE_MAX : top + amount;
+}
 // Shared escape-burst decoder for text widgets and numeric controls.
 typedef enum
 {

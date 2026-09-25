@@ -70,6 +70,13 @@ static bool show_candidate(const os64_font_config_t *candidate)
 static const char *font_label(size_t i, void *user)
 { (void)user; return catalog && i < catalog->count ? labels[i] : ""; }
 
+static void font_view(os64_ui_listbox_t *list, void *user)
+{
+    (void)user;
+    os64_ui_scrollbar_set(editor, &scroll, (int64_t)list->count,
+        os64_ui_listbox_rows(list, &editor->theme), (int64_t)list->top);
+}
+
 static void controls(void)
 {
     int chosen = os64_font_catalog_find(catalog, draft.roles[role].face[0]);
@@ -245,6 +252,7 @@ void font_page_init(os64_ui_t *ui, os64_ui_t *sample, os64_ui_widget_t *page,
         os64_ui_button(&roles[r], "", select_role, (void *)(uintptr_t)r); add(page, &roles[r]);
     }
     os64_ui_listbox(&fonts, 0, font_label, select_font, NULL); add(page, &fonts.w);
+    fonts.on_view = font_view;
     os64_ui_scrollbar(&scroll, scrolled, NULL); add(page, &scroll.w);
     os64_ui_label(&selected, selected_text); add(page, &selected);
     os64_ui_label(&size_label, size_text); add(page, &size_label);

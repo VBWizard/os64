@@ -1,4 +1,4 @@
-// xhci.c — xHCI controller + USB HID boot-protocol keyboard and mouse.
+// xhci.c — xHCI controller, boot keyboard and descriptor-aware mouse input.
 // The design rationale and v1 limits live in xhci.h; this file is the
 // machine. Register/TRB layouts follow the xHCI 1.x specification;
 // section references below are to that spec.
@@ -26,6 +26,7 @@
 #include "driver/system/hid_keyboard.h"   // the boot-keyboard interpreter every HID keyboard shares
 #include "gui/input.h"
 #include "driver/system/usb/xhci.h"
+#include "driver/system/hid_mouse.h"
 
 extern pci_device_t* kPCIDeviceHeaders;
 extern pci_device_t* kPCIDeviceFunctions;
@@ -79,6 +80,8 @@ extern bool kUSBQuiet;   // USBQUIET — the opt-in 2.4GHz hygiene flashlight
 #define TRB_ADDRESS_DEVICE   11
 #define TRB_CONFIG_ENDPOINT  12
 #define TRB_EVALUATE_CONTEXT 13
+#define TRB_RESET_ENDPOINT 14
+#define TRB_SET_TR_DEQUEUE 16
 #define TRB_EV_TRANSFER      32
 #define TRB_EV_CMD_COMPLETE  33
 #define TRB_EV_PORT_STATUS   34
@@ -116,8 +119,8 @@ typedef enum {
 	HID_MOUSE,
 } hid_kind_t;
 
-// One HID device attached directly to a root port. Boot keyboards and boot
-// mice use the same xHCI machinery; only their fixed report decoders differ.
+// One HID interface attached directly to a root port. Keyboards use boot
+// reports; mice use a parsed layout when available, with boot fallback.
 typedef struct {
 	bool         present;
 	hid_kind_t   kind;
@@ -132,11 +135,18 @@ typedef struct {
 	uint64_t     input_ctx_phys;
 	uint8_t     *reports;
 	uint64_t     reports_phys;
+	uint32_t     report_bytes;           // transfer length, bounded by endpoint MPS
 
 	// Boot-keyboard state (hid_keyboard.h). Unused (and zero) for a mouse.
 	hid_keyboard_t kbd;
-	// Boot-mouse buttons (gui/input.h). Unused (and zero) for a keyboard.
+	// Mouse buttons (gui/input.h). Unused (and zero) for a keyboard.
 	input_pointer_source_t pointer;
+	// Bounded DEBUG_USB evidence: one sample per length and eight nonzero
+	// wheel samples, so pointer movement cannot exhaust wheel samples.
+	uint64_t     mouse_lengths_seen;
+	uint8_t      mouse_wheel_samples;
+	bool         mouse_report_protocol;
+	hid_mouse_layout_t mouse_layout;
 } xhci_hid_t;
 
 // One controller. The P5 may place its keyboard and mouse on different xHCI
@@ -173,7 +183,7 @@ typedef struct {
 
 #define MAX_XHCI_CONTROLLERS 8
 #define HID_INFLIGHT 8
-#define HID_REPORT_BYTES 8
+#define HID_REPORT_BYTES HID_MOUSE_REPORT_BYTES
 
 static xhci_t s_controllers[MAX_XHCI_CONTROLLERS];
 static uint32_t s_controller_count;
@@ -404,11 +414,42 @@ static bool xhci_control_request(xhci_hid_t *dev,
 	return ok;
 }
 
-// HID boot mouse report: buttons, signed X, signed Y. HID Y is already in
-// screen orientation (positive is down), unlike the PS/2 packet decoder.
-static void hid_process_mouse_report(xhci_hid_t *dev, const uint8_t *rep)
+// Decode before injecting: unrelated report IDs and truncated reports must
+// not synthesize movement or release buttons. HID Y is screen-positive;
+// the wheel has the opposite sign to os64's positive-down convention.
+static void hid_process_mouse_report(xhci_hid_t *dev, const uint8_t *rep, uint32_t length)
 {
-	input_inject_mouse(&dev->pointer, (int8_t)rep[1], (int8_t)rep[2], rep[0] & 0x07);
+    hid_mouse_sample_t sample;
+    bool decoded = false;
+    if (dev->mouse_report_protocol) {
+        decoded = hid_mouse_decode(&dev->mouse_layout, rep, length, &sample);
+    } else if (length >= 3) {
+        sample = (hid_mouse_sample_t){.buttons = rep[0] & 7,
+            .x = (int8_t)rep[1], .y = (int8_t)rep[2],
+            .wheel = length >= 4 ? (int8_t)rep[3] : 0};
+        decoded = true;
+    }
+    if ((kDebugLevel & DEBUG_USB) && length && length <= HID_REPORT_BYTES) {
+        uint64_t length_bit = 1ull << (length - 1);
+        bool new_length = !(dev->mouse_lengths_seen & length_bit);
+        bool wheel = decoded && sample.wheel && dev->mouse_wheel_samples < 8;
+        if (new_length || wheel) {
+            uint8_t bytes[8] = {0};
+            memcpy(bytes, rep, length < sizeof(bytes) ? length : sizeof(bytes));
+            dev->mouse_lengths_seen |= length_bit;
+            if (wheel) dev->mouse_wheel_samples++;
+            // At most eight raw bytes; bytes beyond len are zero padding.
+            printd(DEBUG_USB, "xhci: mouse report slot %u len %u decoded %u wheel %d bytes %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                   dev->slot, length, decoded, decoded ? sample.wheel : 0,
+                   bytes[0], bytes[1], bytes[2], bytes[3],
+                   bytes[4], bytes[5], bytes[6], bytes[7]);
+        }
+    }
+    if (!decoded) return;
+    // Negating the most negative 16-bit wheel value needs a wider temporary.
+    int32_t wheel = -(int32_t)sample.wheel;
+    if (wheel > 32767) wheel = 32767;
+    input_inject_mouse(&dev->pointer, sample.x, sample.y, sample.buttons, (int16_t)wheel);
 }
 
 // A device that stops reporting while holding something must let go of it:
@@ -432,7 +473,7 @@ static void xhci_hid_lost(xhci_hid_t *dev)
 static void xhci_arm_report_trb(xhci_hid_t *dev, uint32_t buf_index)
 {
 	uint64_t buf_phys = dev->reports_phys + buf_index * HID_REPORT_BYTES;
-	ring_push(&dev->intr, buf_phys, HID_REPORT_BYTES,
+	ring_push(&dev->intr, buf_phys, dev->report_bytes,
 	          TRB_TYPE(TRB_NORMAL) | TRB_IOC);
 	mmio_w32((uint8_t *)s_hc->db, 4 * dev->slot, dev->dci);
 }
@@ -481,13 +522,13 @@ static void xhci_handle_transfer_event(xhci_trb_t *ev)
 		return;
 
 	uint32_t residual = ev->status & 0xFFFFFF;
-	if (residual <= HID_REPORT_BYTES) {
-		uint32_t actual = HID_REPORT_BYTES - residual;
+	if (residual <= dev->report_bytes) {
+		uint32_t actual = dev->report_bytes - residual;
 		const uint8_t *report = dev->reports + buf_index * HID_REPORT_BYTES;
 		if (dev->kind == HID_KEYBOARD && actual >= 8)
 			hid_keyboard_report(&dev->kbd, report);
-		else if (dev->kind == HID_MOUSE && actual >= 3)
-			hid_process_mouse_report(dev, report);
+		else if (dev->kind == HID_MOUSE)
+			hid_process_mouse_report(dev, report, actual);
 	}
 	xhci_arm_report_trb(dev, buf_index);   // hand the same buffer back
 }
@@ -565,7 +606,7 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 	}
 
 	// 5. Configuration descriptor: find a HID boot keyboard (protocol 1) or
-	//    boot mouse (protocol 2) that this controller does not already own.
+	//    boot mouse (protocol 2) that has not already been claimed.
 	uint8_t cfg[256];
 	memset(cfg, 0, sizeof(cfg));
 	if (!xhci_control_request(&candidate, 0x80, 6, 0x0200, 0, cfg, 9))
@@ -580,8 +621,10 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 	int32_t iface_num = -1;
 	bool matching_iface = false;
 	uint32_t ep_addr = 0, ep_mps = 0, ep_interval = 0;
+	uint16_t report_length = 0;
 	for (uint16_t off = 0; off + 1 < total && cfg[off] != 0; off += cfg[off]) {
 		uint8_t len = cfg[off], type = cfg[off + 1];
+		if (len < 2 || len > total - off) return false;
 		if (type == 4 && len >= 9) {
 			// v1 binds one HID interface per physical device. Once its
 			// interrupt endpoint is known, do not let a later interface on a
@@ -590,6 +633,7 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 			if (ep_addr != 0)
 				break;
 			matching_iface = false;
+			report_length = 0;
 			if (cfg[off + 5] == 3 && cfg[off + 6] == 1) {
 				uint8_t protocol = cfg[off + 7];
 				if (protocol == 1 && !s_keyboard_claimed) {
@@ -602,6 +646,13 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 				if (matching_iface)
 					iface_num = cfg[off + 2];
 			}
+		} else if (type == 0x21 && len >= 6 && matching_iface) {
+            if (cfg[off + 5] > (len - 6) / 3) return false;
+            for (unsigned n = 0; n < cfg[off + 5]; ++n) {
+                unsigned at = off + 6 + n * 3;
+                if (cfg[at] == 0x22)
+                    report_length = cfg[at + 1] | (cfg[at + 2] << 8);
+            }
 		} else if (type == 5 && len >= 7 && matching_iface &&
 		         (cfg[off + 2] & 0x80) &&
 		         (cfg[off + 3] & 0x3) == 3 && ep_addr == 0) {
@@ -621,6 +672,11 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 		return false;
 	}
 
+    // Stop each TD within one interrupt packet: requesting more than MPS
+    // can combine successive full-size reports into one completion.
+    if (!ep_mps) return false;
+    candidate.report_bytes = ep_mps < HID_REPORT_BYTES ? ep_mps : HID_REPORT_BYTES;
+
 	// 6. Configure + boot protocol + idle.
 	if (!xhci_control_request(&candidate, 0x00, 9 /*SET_CONFIGURATION*/,
 	                          config_value, 0, NULL, 0))
@@ -632,9 +688,64 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 	bool boot_protocol = xhci_control_request(&candidate, 0x21,
 	                          0x0B /*SET_PROTOCOL*/, 0 /*boot*/,
 	                          (uint16_t)iface_num, NULL, 0);
+	printd(DEBUG_USB, "xhci: %s interface %u SET_PROTOCOL boot %s\n",
+	       candidate.kind == HID_MOUSE ? "mouse" : "keyboard", (uint16_t)iface_num,
+	       boot_protocol ? "accepted" : "failed");
 	if (boot_protocol && candidate.kind == HID_KEYBOARD)
 		xhci_control_request(&candidate, 0x21, 0x0A /*SET_IDLE*/, 0,
 		                     (uint16_t)iface_num, NULL, 0);
+	// Identification is diagnostic only. Avoid another EP0 request after a
+	// protocol STALL; the endpoint may remain halted in that case.
+	if (boot_protocol && (kDebugLevel & DEBUG_USB)) {
+		memset(desc, 0, sizeof(desc));
+		if (xhci_control_request(&candidate, 0x80, 6, 0x0100, 0, desc, sizeof(desc)) &&
+		    desc[0] == sizeof(desc) && desc[1] == 1)
+			printd(DEBUG_USB, "xhci: HID identity port %u slot %u VID:PID %04x:%04x revision %04x\n",
+			       port, slot, desc[8] | (desc[9] << 8), desc[10] | (desc[11] << 8),
+			       desc[12] | (desc[13] << 8));
+	}
+
+    // Boot mode is established before probing the report descriptor. A
+    // rejected descriptor leaves the working boot decoder in place.
+    if (boot_protocol && candidate.kind == HID_MOUSE && report_length &&
+        report_length <= HID_MOUSE_DESCRIPTOR_BYTES) {
+        uint8_t report_desc[HID_MOUSE_DESCRIPTOR_BYTES] = {0};
+        bool got = xhci_control_request(&candidate, 0x81, 6, 0x2200,
+                                       (uint16_t)iface_num, report_desc, report_length);
+        if (got && (kDebugLevel & DEBUG_USB)) {
+            for (unsigned off = 0; off < report_length; off += 8) {
+                uint8_t bytes[8] = {0};
+                unsigned n = report_length - off;
+                memcpy(bytes, report_desc + off, n < 8 ? n : 8);
+                printd(DEBUG_USB, "xhci: mouse descriptor slot %u length %u offset %u: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                       slot, report_length, off, bytes[0], bytes[1], bytes[2], bytes[3],
+                       bytes[4], bytes[5], bytes[6], bytes[7]);
+            }
+        }
+        if (got && hid_mouse_parse(report_desc, report_length, &candidate.mouse_layout) &&
+            candidate.mouse_layout.max_bytes <= ep_mps) {
+            if (xhci_control_request(&candidate, 0x21, 0x0B, 1 /*report*/,
+                                     (uint16_t)iface_num, NULL, 0)) {
+                candidate.mouse_report_protocol = true;
+                const hid_mouse_layout_t *m = &candidate.mouse_layout;
+                printd(DEBUG_USB, "xhci: mouse report protocol ID %u bytes %u X %u/%u Y %u/%u wheel %u/%u\n",
+                       m->report_id, m->bytes, m->x.bit, m->x.size,
+                       m->y.bit, m->y.size, m->wheel.bit, m->wheel.size);
+            } else {
+                // A STALL halts EP0. Reset it and skip the failed TD before
+                // explicitly restoring boot mode; never guess the active mode.
+                if (s_hc->xfer_cc != 6 ||
+                    xhci_run_command(0, 0, TRB_TYPE(TRB_RESET_ENDPOINT) | (1u << 16) | (slot << 24)) != TRB_CC_SUCCESS ||
+                    xhci_run_command(candidate.ep0.phys + candidate.ep0.enqueue * sizeof(xhci_trb_t) + candidate.ep0.cycle,
+                        0, TRB_TYPE(TRB_SET_TR_DEQUEUE) | (1u << 16) | (slot << 24)) != TRB_CC_SUCCESS ||
+                    !xhci_control_request(&candidate, 0x21, 0x0B, 0, (uint16_t)iface_num, NULL, 0))
+                    return false;
+            }
+        }
+    }
+    if (candidate.kind == HID_MOUSE && !candidate.mouse_report_protocol) {
+        printd(DEBUG_USB, "xhci: mouse using boot layout (descriptor length %u)\n", report_length);
+    }
 
 	// 7. The interrupt-IN endpoint: DCI = ep*2+1 for IN.
 	uint32_t dci = ep_addr * 2 + 1;
@@ -663,7 +774,7 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 	ep[1] = (7u << 3) | (3u << 1) | (ep_mps << 16);    // type 7: interrupt IN, CErr 3
 	ep[2] = (uint32_t)(candidate.intr.phys | 1);        // TR dequeue | DCS
 	ep[3] = (uint32_t)(candidate.intr.phys >> 32);
-	ep[4] = (ep_mps << 16) | HID_REPORT_BYTES;          // max ESIT | avg TRB len
+	ep[4] = (ep_mps << 16) | candidate.report_bytes;          // max ESIT | avg TRB len
 
 	if (xhci_run_command(candidate.input_ctx_phys, 0,
 	        TRB_TYPE(TRB_CONFIG_ENDPOINT) | (slot << 24)) != TRB_CC_SUCCESS) {

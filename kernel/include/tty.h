@@ -146,7 +146,7 @@ typedef struct tty
 	volatile bool spawnRequested;      // set by a keystroke, served by kworker
 
 	// ── Change tracking (all ttys; PTY.md's snapshot poll reads it) ─────────
-	// Bumped on grid mutations and geometry changes. A GRID master polls at
+	// Bumped on grid/geometry changes and repaint invalidation. A GRID master polls at
 	// frame cadence and copies cells only when it moved; VTs carry it too
 	// because the counter is free and a future dirty-aware consumer (the
 	// client-notification seam) will want it everywhere.
@@ -287,6 +287,9 @@ int tty_set_raw(tty_t *t, struct task *caller, bool raw);
 void tty_focus(uint32_t index);        // Alt+F1..F8 — direct select
 void tty_focus_step(int dir);          // Alt+←/→ — walk the ring, wrapping
 void tty_view_scroll(int dir);         // Shift+PgUp(+1)/PgDn(-1) — half screens
+// Mouse notches (positive down), three rows each on VT1..VT7. IRQ-safe:
+// updates the viewport and defers painting to tty_flush_if_dirty.
+void tty_view_wheel(int16_t notches);
 
 // ── Shells and the summons ──────────────────────────────────────────────────
 // Seat a controlling shell on a tty (LIVE, foreground, the works).

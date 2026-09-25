@@ -204,6 +204,13 @@ static void font_changed(os64_ui_listbox_t *w,void *u)
     if(os64_streq(entry->path,"builtin"))next.font.size=16;
     (void)accept(&next,NULL);
 }
+static void list_view(os64_ui_listbox_t *list,void *u)
+{
+    (void)u;
+    os64_ui_scrollbar_t *bar=list==&fonts?&font_scroll:&saved_scroll;
+    os64_ui_scrollbar_set(&ui,bar,(int64_t)list->count,
+        os64_ui_listbox_rows(list,&ui.theme),(int64_t)list->top);
+}
 static void font_scrolled(os64_ui_scrollbar_t *w,void *u)
 {(void)u;os64_ui_listbox_scroll_to(&ui,&fonts,(size_t)w->pos);}
 static void slot_changed(os64_ui_listbox_t *w,void *u)
@@ -712,7 +719,7 @@ static void build_ui(void)
     add_button(UNDO,&root,"Undo");add_button(APPLY,&root,"Apply to session");
     add_button(DISCARD_CLOSE,&root,"Discard & close");add_button(CANCEL_CLOSE,&root,"Keep editing");
     add_label(&font_label,&pages[0],"Title font (independent of interface)");add_label(&font_path,&pages[0],font_text);add_label(&size_label,&pages[0],size_text);
-    os64_ui_listbox(&fonts,0,font_at,font_changed,NULL);os64_ui_add_child(&pages[0],&fonts.w);
+    os64_ui_listbox(&fonts,0,font_at,font_changed,NULL);fonts.on_view=list_view;os64_ui_add_child(&pages[0],&fonts.w);
     os64_ui_scrollbar(&font_scroll,font_scrolled,NULL);os64_ui_add_child(&pages[0],&font_scroll.w);
     add_button(FONT_LESS,&pages[0],"-");add_button(FONT_MORE,&pages[0],"+");add_button(COPY_FONT,&pages[0],"Copy interface font");add_button(ALIGN,&pages[0],"");add_button(REFRESH_FONTS,&pages[0],"Refresh fonts");
     for(unsigned i=0;i<4;++i){os64_ui_checkbox(&includes[i],action_names[i+1],false,include_changed,(void *)(uintptr_t)(i+1));os64_ui_add_child(&pages[1],&includes[i].w);}
@@ -727,7 +734,7 @@ static void build_ui(void)
     add_button(SET_HEX,&pages[2],"Set");
     add_button(COLOR_FIRST,&pages[2],"Color 1");add_button(COLOR_SECOND,&pages[2],"Color 2");
     add_label(&saved_label,&pages[3],"Personal + included compositions");
-    os64_ui_listbox(&saved_list,0,saved_at,saved_changed,NULL);os64_ui_add_child(&pages[3],&saved_list.w);
+    os64_ui_listbox(&saved_list,0,saved_at,saved_changed,NULL);saved_list.on_view=list_view;os64_ui_add_child(&pages[3],&saved_list.w);
     os64_ui_scrollbar(&saved_scroll,saved_scrolled,NULL);os64_ui_add_child(&pages[3],&saved_scroll.w);
     add_label(&name_label,&pages[3],"Composition name");
     os64_ui_textfield(&name_field,saved_name,sizeof(saved_name),NULL,NULL,NULL);os64_ui_add_child(&pages[3],&name_field.w);
