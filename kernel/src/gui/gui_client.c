@@ -37,16 +37,14 @@ extern uintptr_t kHHDMOffset;
 
 // ── The ABI layout lock (kernel side) ───────────────────────────────────────
 // abi/include/os64/gui.h defines ring 3's view of rect_t / surface_t /
-// input_event_t and asserts these SAME numbers on its side. The two headers
-// never include each other (the kernel's stay kernel-clean, the ABI's stays
-// freestanding); these literals are the handshake. If either definition
-// drifts — a field added, a type widened — one of the two builds refuses,
-// which is the ext2-superblock trick applied to a syscall boundary: layouts
-// two parties must agree on get a tripwire, not trust.
+// input_event_t. Both sides assert the sizes and offsets at this boundary;
+// input.h also checks event numbers against the public constants.
 _Static_assert(GUI_WINDOW_TITLE_UTF8 == OS64_GUI_WINDOW_TITLE_UTF8, "title encoding ABI");
 _Static_assert(sizeof(rect_t) == 16, "rect_t drifted from the GUI ABI (os64/gui.h)");
 _Static_assert(sizeof(surface_t) == 24, "surface_t drifted from the GUI ABI (os64/gui.h)");
 _Static_assert(sizeof(input_event_t) == 32, "input_event_t drifted from the GUI ABI (os64/gui.h)");
+_Static_assert(__builtin_offsetof(input_event_t, doorbell.mask) == 4,
+               "input_event_t doorbell moved — GUI ABI break");
 _Static_assert(__builtin_offsetof(input_event_t, key) == 4,
                "input_event_t union moved — GUI ABI break");
 _Static_assert(__builtin_offsetof(input_event_t, tick) == 24,
@@ -579,6 +577,24 @@ int64_t gui_screen_info(uint32_t *width, uint32_t *height)
 		*width = kFrameBuffer.width;
 	if (height)
 		*height = kFrameBuffer.height;
+	return 0;
+}
+
+int64_t gui_event_ring(int64_t handle, uint32_t mask)
+{
+	if (mask == 0)
+		return GUI_ERR_BAD_ARGS;
+	int64_t err;
+	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	window_t *win = handle_lookup_owned(handle, &err);
+	if (!win) {
+		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		return err;
+	}
+	input_event_t ev = {.type = INPUT_EVENT_DOORBELL,
+		.doorbell = {.mask = mask}, .tick = kTicksSinceStart};
+	wm_deliver_event(win, &ev);
+	spinlock_release_irqrestore(&kGuiLock, irqflags);
 	return 0;
 }
 

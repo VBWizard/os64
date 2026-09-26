@@ -1,0 +1,4 @@
+testrun - fixtures matching 'doorbelltest'
+doorbelltest: PASS (0 failures)
+  PASS  /tests/doorbelltest
+1 passed, 0 failed, 0 skipped

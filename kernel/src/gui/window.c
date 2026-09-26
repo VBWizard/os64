@@ -816,7 +816,7 @@ void wm_deliver_event(window_t *w, const input_event_t *ev)
 
 	// Aim a wake at a parked event_wait-er. Runs in THREAD context under
 	// kGuiLock — the compositor's thread, or a client's own thread inside a
-	// create/destroy syscall or appearance publication, since those deliver
+	// create/destroy/ring syscall or appearance publication, since those deliver
 	// from there. Never an ISR under either, which is what invariant 4 needs.
 	// The wake takes only the scheduler queue lock inside, no trigger: the
 	// woken thread runs on the next scheduler pass, which is the latency

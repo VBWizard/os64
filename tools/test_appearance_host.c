@@ -378,6 +378,64 @@ static void queue_preserves_final_pointer(void)
     assert(out.type == INPUT_EVENT_WINDOW_FOCUS && !gui_event_queue_pending(&q));
 }
 
+static const os64_gui_event_t *doorbell_received;
+static void record_doorbell(os64_ui_t *ui, const os64_gui_event_t *event)
+{
+    assert(ui);
+    doorbell_received = event;
+}
+
+static void doorbell_contracts(void)
+{
+    gui_event_queue_t q = {0};
+    input_event_t ev = {.type = INPUT_EVENT_KEY_DOWN}, out;
+    for (unsigned i = 0; i < GUI_WINDOW_EVENTS_MAX - 1; ++i) {
+        ev.key.scancode = (uint8_t)i;
+        assert(gui_event_queue_push(&q, &ev) == 1);
+    }
+    assert(gui_event_queue_push(&q, &ev) == 0);
+    for (unsigned i = 0; i < 1000; ++i) {
+        ev = (input_event_t){.type = INPUT_EVENT_DOORBELL,
+            .doorbell = {.mask = 1u << (i % 3)}, .tick = i};
+        assert(gui_event_queue_push(&q, &ev) == 1);
+    }
+    assert(gui_event_queue_pop(&q, &out));
+    assert(out.type == INPUT_EVENT_DOORBELL && out.doorbell.mask == 7 && out.tick == 999);
+    // Keep ringing while input drains: neither channel may starve the other.
+    for (unsigned i = 0; i < GUI_WINDOW_EVENTS_MAX - 1; ++i) {
+        ev.doorbell.mask = 0x80000000u;
+        assert(gui_event_queue_push(&q, &ev) == 1);
+        assert(gui_event_queue_pop(&q, &out));
+        assert(out.type == INPUT_EVENT_KEY_DOWN && out.key.scancode == i);
+        assert(gui_event_queue_pending(&q));
+        assert(gui_event_queue_pop(&q, &out));
+        assert(out.type == INPUT_EVENT_DOORBELL && out.doorbell.mask == 0x80000000u);
+    }
+    assert(!gui_event_queue_pending(&q) && !gui_event_queue_pop(&q, &out));
+    ev.doorbell.mask = 2;
+    assert(gui_event_queue_push(&q, &ev) == 1);
+    assert(gui_event_queue_pending(&q));
+    assert(gui_event_queue_pop(&q, &out) && out.doorbell.mask == 2);
+    assert(!gui_event_queue_pending(&q));
+
+    os64_ui_t ui;
+    memset(&ui, 0xa5, sizeof(ui));
+    os64_ui_init(&ui, NULL);
+    assert(ui.on_doorbell == NULL);
+    os64_gui_event_t bell = {.type = OS64_GUI_EVENT_DOORBELL,
+        .doorbell = {.mask = 0x80000007u}, .tick = 123};
+    assert(!os64_ui_dispatch(&ui, &bell));
+    ui.on_doorbell = record_doorbell;
+    assert(os64_ui_dispatch(&ui, &bell) && doorbell_received == &bell);
+    // A populated tree also leaves notification delivery to the application.
+    os64_ui_widget_t root = {0};
+    ui.root = &root;
+    doorbell_received = NULL;
+    assert(os64_ui_dispatch(&ui, &bell) && doorbell_received == &bell);
+    assert(!ui.focus && !ui.grab && !ui.hover && !ui.any_dirty);
+    puts("doorbell: coalescing, full ring, input fairness, mask reset and libui delivery passed");
+}
+
 static char sample_line[32];
 static size_t sample_lines(void *u) { (void)u; return 1; }
 static const char *sample_get(void *u, size_t i, size_t *len)
@@ -746,6 +804,7 @@ static void picker_contracts(void)
 
 int main(void)
 {
+    doorbell_contracts();
     rounded_and_color_contracts();
     picker_feedback_contracts();
     picker_contracts();
