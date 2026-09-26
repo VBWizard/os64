@@ -272,9 +272,9 @@ LIBFETCH_PROGRAMS := os64get wend worktest fetchhooktest fetchposttest
 # and a prelink slot that collides or a `.so` that will not resolve is worth
 # finding on the boot that ships the library rather than on the one that
 # starts using it. The calls arrive with the renderer's lift.
-LIBPAGE_PROGRAMS := wend pagetest flowdump
-# Where a page is laid out: the layout library's probe, and the browser to come.
-LIBFLOW_PROGRAMS := flowdump
+LIBPAGE_PROGRAMS := wend pagetest flowdump yonder
+# Where a page is laid out: the layout library's probe, and the browser.
+LIBFLOW_PROGRAMS := flowdump yonder
 
 # pngtest directly checks the codec; gview and desktop use libimage.
 # libpng carries its own DT_NEEDED edge on
@@ -464,12 +464,12 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
-APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest flowdump),$(LIBHTML_SO)) \
+APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest flowdump yonder),$(LIBHTML_SO)) \
                        $(if $(filter $(1),$(LIBFLOW_PROGRAMS)),$(LIBFLOW_SO)) \
                        $(if $(filter $(1),$(LIBPAGE_PROGRAMS)),$(LIBPAGE_SO)) \
                        $(if $(filter $(1),gview desktop jpegtest giftest),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
-                       $(if $(filter $(1),fonttest texttest flowdump),$(LIBFREETYPE_SO)) \
+                       $(if $(filter $(1),fonttest texttest flowdump yonder),$(LIBFREETYPE_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
                        $(if $(filter $(1),$(LIBFETCH_PROGRAMS)),$(LIBFETCH_SO)) \

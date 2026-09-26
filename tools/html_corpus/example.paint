@@ -1,0 +1,7 @@
+fill 0 0 800 600 #fefefe
+text "Example Domain" 8 49 #101010
+text "This domain is for use in documentation examples without needing permission. Avoid use in operations." 8 97 #101010
+text "Learn more" 8 133 #1010ee
+fill 8 134 72 1 #1010ee
+-- 3000
+fill 0 3000 800 600 #fefefe
