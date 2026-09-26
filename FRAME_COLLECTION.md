@@ -45,7 +45,7 @@ Regenerate with `python3 tools/generate_frame_collection.py`; verify with
 Chris's Windows command, with the included collection appended:
 
 ```bat
-python3.exe "%W%\tools\os64serve.py" "%W%\userland\bin" "%W%\userland\bin\tests=tests" "%W%\kernel\bin=kernelbin" "%W%\etc" "\\wsl$\Ubuntu-big2\home\yogi\src\os64\etc\fonts=fonts" "%W%\frames=frames"
+python3.exe "%W%\tools\os64serve.py" "%W%\userland\bin" "%W%\userland\bin\tests=tests" "%W%\userland\bin\pages=pages" "%W%\kernel\bin=kernelbin" "%W%\etc" "\\wsl$\Ubuntu-big2\home\yogi\src\os64\etc\fonts=fonts" "%W%\frames=frames"
 ```
 
 Add `@frames = /etc/frames` to the effective P5 routing file before the first

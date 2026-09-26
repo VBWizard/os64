@@ -221,11 +221,21 @@ FONT_FIXTURE_FILES := DejaVuSans.ttf DejaVuSansMono.ttf \
 FONT_FIXTURES      := $(addprefix $(FONT_FIXTURE_DIR)/,$(FONT_FIXTURE_FILES))
 FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSans.ttf DejaVuSansMono.ttf)
 
-# The real pages the layout library is tested on, so /tests/flowdump has
-# something to lay out on a machine with no network. Where each came from
-# is in tools/html_corpus/SOURCES.json.
-# Pages, and the style sheets libgarb is proven on, side by side in /tests/pages.
+# The real pages the layout library is tested on, and the style sheets
+# libgarb is, side by side in /tests/pages, so /tests/flowdump and
+# /tests/garbdump have something to read on a machine with no network. Where
+# each page came from is in tools/html_corpus/SOURCES.json.
 PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css)
+
+# The same fixtures for the wire, staged alone: os64serve serves a directory
+# whole, and tools/html_corpus also holds the host harness's expected dumps,
+# which mean nothing on os64. Served as the `pages` lot (os64get.conf).
+PAGES_STAGE  := userland/bin/pages
+PAGES_STAGED := $(addprefix $(PAGES_STAGE)/,$(notdir $(PAGE_FIXTURES)))
+$(PAGES_STAGE)/%: tools/html_corpus/%
+	@mkdir -p $(PAGES_STAGE) && cp $< $@
+$(PAGES_STAGE)/%: tools/garb_corpus/%
+	@mkdir -p $(PAGES_STAGE) && cp $< $@
 
 # Prepared compositions carry their own glyphs and finish tiles.
 FRAME_COMPOSITIONS := $(wildcard frames/*.frame)
@@ -253,10 +263,10 @@ endif
 
 
 .PHONY: all
-all: $(IMAGE_NAME).iso
+all: $(IMAGE_NAME).iso $(PAGES_STAGED)
 
 .PHONY: all-hdd
-all-hdd: $(IMAGE_NAME).hdd
+all-hdd: $(IMAGE_NAME).hdd $(PAGES_STAGED)
 
 # The sub-makes are the authority on whether these need rebuilding, so recurse
 # unconditionally — but let the FILE TIMESTAMPS decide what happens downstream.
