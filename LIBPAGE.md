@@ -62,10 +62,9 @@ and not a tidier `render.c`.
   POINTERS into it and never copies text it can point at. libos64's URL
   parser (`os64/url.h`) is the only URL code; libpage calls it and never
   re-implements a byte of it.
-- libfetch carries what libpage builds. Today it sends no request body, so a
-  POST is a REFUSAL BY NAME at the face; the body is still built and the
-  corpus checks its bytes, so the day libfetch grows a body (a Fable-tier
-  slice, LIBFETCH.md) nothing here changes.
+- libfetch carries the request body and content type libpage builds; the
+  request owns those bytes through the synchronous fetch open. The corpus
+  checks the bytes of all three enctypes independently of the transport.
 
 Both faces link it. That is the point: the graphical browser inherits every
 rule below byte for byte, because a form is submitted identically whether it
@@ -249,8 +248,8 @@ from the selected encoding); `multipart/form-data` (RFC 7578 — a
 boundary, one part per entry, a file part carries `filename`);
 `text/plain` (`name=value` lines, CRLF). An invalid `enctype` or
 `formenctype` is urlencoded, which is what the standard says an invalid
-value means. The body is built for POST even though libfetch cannot yet
-carry it: the corpus checks bytes, not intentions.
+value means. The body is built for POST and passed unchanged to libfetch; the corpus
+checks the bytes of each enctype.
 
 **F. Method, action, and where the data goes** (§4.10.21.3 steps 17-22).
 One door: `page_activate` (below) applies the standard's table. Method is
@@ -511,7 +510,6 @@ marked throwaway.
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| POST on the wire | libfetch sends no body (Fable-tier slice) | the body exists and is checked; the first login worth doing |
 | `file` inputs with a file | no face can pick one | the graphical browser's file dialog |
 | Constraint validation beyond `required`/length | typed-value families are their own table | the first page whose `pattern` matters |
 | Cookies, `Referer` | libfetch's, not the page's | the first site that needs a session |
@@ -526,8 +524,8 @@ marked throwaway.
   the wrap, the fold and the cells, and draws each control as the model
   says it stands. A spot is a place on the screen and an index into the
   model, nothing else. The face keeps drawing, the edit prompt, history,
-  confirm and its type-ahead discipline, the scheme list, the POST refusal
-  by name, and rendering a request's `reason`.
+  confirm and its type-ahead discipline, the scheme list, submitting the request,
+  and rendering a request's `reason`.
 - **The graphical browser**: links against the same library and adds
   nothing to it that is about pixels.
 - **libhtml**: supplies the parser's `form_owner` insertion record, the

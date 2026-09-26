@@ -177,6 +177,29 @@ void http_url_to_os64(const http_url_t *url, os64_url_t *out)
     out->port = url->port != scheme_default_port(url->scheme) ? url->port : 0;
 }
 
+// A second spelling of framing or routing would let a peer parse a
+// different message from the one whose bytes we send. Body metadata is
+// reserved too, so POST -> GET cannot leave a stale representation header.
+static bool request_reserved(const char *name, size_t len)
+{
+    static const char *const owned[] = {
+        "host", "content-length", "content-type", "content-encoding",
+        "content-language", "content-location", "transfer-encoding",
+        "connection", "expect", "trailer", "te", "upgrade",
+        "accept-encoding", "user-agent", "accept"
+    };
+    for (size_t i = 0; i < sizeof(owned) / sizeof(owned[0]); i++) {
+        if (os64_strlen(owned[i]) != len)
+            continue;
+        size_t j = 0;
+        while (j < len && to_lower(name[j]) == owned[i][j])
+            j++;
+        if (j == len)
+            return true;
+    }
+    return false;
+}
+
 // A caller-supplied header value, judged byte by byte. `whole_lines` is for
 // extra_headers, where CR LF is the line ending the caller wrote and is
 // legal only as the pair, at a line's end: a lone LF, a lone CR, or a CR
@@ -203,7 +226,7 @@ static bool extras_clean(const char *text, bool whole_lines)
         const char *name = p;
         while (is_token_byte(*p))
             p++;
-        if (p == name || *p != ':')
+        if (p == name || *p != ':' || request_reserved(name, (size_t)(p - name)))
             return false;
         p++;
         while (*p != '\0' && *p != '\r' && *p != '\n') {
@@ -222,7 +245,12 @@ bool http_request_extras_ok(const http_request_extras_t *extras)
 {
     if (extras == NULL)
         return true;
-    return extras_clean(extras->user_agent, false) && extras_clean(extras->accept, false) &&
+    if (extras->method != HTTP_METHOD_GET && extras->method != HTTP_METHOD_POST)
+        return false;
+    if (extras->method == HTTP_METHOD_GET && (extras->body_len || extras->content_type))
+        return false;
+    return extras_clean(extras->content_type, false) &&
+           extras_clean(extras->user_agent, false) && extras_clean(extras->accept, false) &&
            extras_clean(extras->extra_headers, true);
 }
 
@@ -259,6 +287,11 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
         requestTarget = target;
     }
 
+    char length[64] = {0};
+    if (extras->method == HTTP_METHOD_POST)
+        os64_snprintf(length, sizeof(length), "Content-Length: %lu\r\n",
+                      (uint64_t)extras->body_len);
+
     // Name both codings this client can turn back into the representation.
     // A missing Accept-Encoding means any coding may be acceptable; an
     // explicit list lets a server choose gzip without licensing br, compress,
@@ -266,21 +299,26 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
     // The caller's headers go between the fixed ones and the blank line, in
     // the order given; the blank line is written LAST and only here.
     int32_t n = os64_snprintf(out, cap,
-                              "GET %s HTTP/1.1\r\n"
+                              "%s %s HTTP/1.1\r\n"
                               "Host: %s\r\n"
                               "%s%s%s"
                               "%s%s%s"
                               "Accept-Encoding: gzip, identity\r\n"
                               "Connection: close\r\n"
+                              "%s%s%s%s"
                               "%s"
                               "\r\n",
-                              requestTarget, host,
+                              extras->method == HTTP_METHOD_POST ? "POST" : "GET", requestTarget, host,
                               extras->user_agent ? "User-Agent: " : "",
                               extras->user_agent ? extras->user_agent : "",
                               extras->user_agent ? "\r\n" : "",
                               extras->accept ? "Accept: " : "",
                               extras->accept ? extras->accept : "",
                               extras->accept ? "\r\n" : "",
+                              length,
+                              extras->content_type ? "Content-Type: " : "",
+                              extras->content_type ? extras->content_type : "",
+                              extras->content_type ? "\r\n" : "",
                               extras->extra_headers ? extras->extra_headers : "");
     return n > 0 && (size_t)n < cap;
 }

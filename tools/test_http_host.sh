@@ -56,6 +56,27 @@ def run(args):
     return verdict, fields, text
 
 
+# Python's HTTP client independently renders each known-length upload.
+# Compare the head as parsed fields; order is not semantically significant.
+class Capture:
+    def __init__(self): self.wire = bytearray()
+    def sendall(self, data): self.wire.extend(data)
+
+for length in (0, 1, 17, 8192, 70000):
+    for ctype in ("application/x-www-form-urlencoded", "multipart/form-data; boundary=abc-123"):
+        ref = http.client.HTTPConnection("example.test")
+        ref.sock = Capture()
+        ref.request("POST", "/form", bytes(length),
+                    {"Content-Type": ctype, "Connection": "close", "Accept-Encoding": "gzip, identity"})
+        ours = subprocess.run([exe, "post", str(length), ctype], capture_output=True, check=True).stdout
+        expected = bytes(ref.sock.wire).split(b"\r\n\r\n")[0] + b"\r\n\r\n"
+        def parts(head):
+            line, rest = head.split(b"\r\n", 1)
+            return line, list(http.client.parse_headers(io.BytesIO(rest)).items())
+        a, ah = parts(ours)
+        b, bh = parts(expected)
+        if a != b or sorted(ah) != sorted(bh): fail("POST request", (ours, expected))
+
 # ── URLs ────────────────────────────────────────────────────────────────
 # The well-formed ones are checked against urllib.parse: same host, same
 # port, same path-with-query, fragment gone.

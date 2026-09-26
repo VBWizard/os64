@@ -95,7 +95,7 @@ typedef struct {
     bool     open;
     const peer_t *peer;
     size_t   served;
-    char     request[8192];
+    char     request[131072];
     size_t   reqlen;
 } conn_t;
 static conn_t conns[16];
@@ -133,7 +133,9 @@ int64_t os64_dial(const char *dialstring)
 const char *os64_dial_reason(int64_t err) { return err == -3 ? "connection refused" : "no such host"; }
 // Every request in the order it was sent, kept past its connection's close
 // (slots are reused hop to hop, so `conns[]` alone holds only the latest).
-static char history[16][8192];
+static char history[16][131072];
+static size_t write_limit, write_stop;
+static bool upload_cancel;
 int64_t os64_close(int32_t h)
 {
     assert(h >= 100 && h < 116 && conns[h - 100].open);
@@ -177,6 +179,8 @@ int64_t os64_write_for(int32_t h, const void *buf, size_t n, uint64_t ms)
 {
     (void)ms;
     conn_t *c = &conns[h - 100];
+    if (write_stop && c->reqlen >= write_stop) return -1;
+    if (write_limit && n > write_limit) n = write_limit;
     assert(c->open && c->reqlen + n < sizeof(c->request));
     memcpy(c->request + c->reqlen, buf, n);
     c->reqlen += n;
@@ -207,14 +211,15 @@ os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
 }
 os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t, uint64_t ms)
 {
-    now_ms += ms;
+    now_ms += write_limit ? 0 : ms;
     if (t->closing) return t->status = OS64_TLS_CLEAN_EOF;
     return t->status == OS64_TLS_OK ? OS64_TLS_NEED_PROGRESS : t->status;
 }
 os64_tls_transfer_t os64_tls_transport_write(os64_tls_transport *t, const void *p, size_t n)
 {
-    os64_write_for(t->handle, p, n, 0);
-    return (os64_tls_transfer_t){ OS64_TLS_OK, n };
+    int64_t sent = os64_write_for(t->handle, p, n, 0);
+    return (os64_tls_transfer_t){ sent < 0 ? OS64_TLS_TRANSPORT : OS64_TLS_OK,
+                                 sent < 0 ? 0 : (size_t)sent };
 }
 os64_tls_transfer_t os64_tls_transport_read(os64_tls_transport *t, void *p, size_t n)
 {
@@ -292,6 +297,7 @@ static void reset(void)
     memset(conns, 0, sizeof(conns));
     dials = closes = tls_creates = tls_frees = trust_loads = trust_frees = 0;
     now_ms = 0; chunk_mode = 0; fail_next_malloc = false;
+    write_limit = write_stop = 0; upload_cancel = false;
 }
 
 // Read the whole body into `out`, returning the byte count; the fetch's
@@ -1049,6 +1055,110 @@ static void case_round7(void)
     }
 }
 
+
+// Byte-exact uploads, including binary bytes, partial writes and redirects.
+static os64_fetch_method_t seen_from, seen_to;
+static os64_fetch_verdict_t post_hop(void *ctx, const os64_fetch_hop_t *hop)
+{
+    (void)ctx;
+    seen_from = hop->from_method;
+    seen_to = hop->to_method;
+    return OS64_FETCH_HOP_DEFAULT;
+}
+static bool cancel_upload(void *ctx)
+{
+    (void)ctx;
+    return upload_cancel && conns[0].reqlen > 600;
+}
+static void case_post(void)
+{
+    static unsigned char body[70000];
+    for (size_t i = 0; i < sizeof(body); i++) body[i] = (unsigned char)i;
+    const char *type = "multipart/form-data; boundary=abc-123";
+    for (int mode = 0; mode < 3; mode++) {
+        for (int tls = 0; tls < 2; tls++) {
+            reset(); chunk_mode = mode; write_limit = mode == 1 ? 1 : mode == 2 ? 37 : 0;
+            peer_add("post.test", tls ? 443 : 80, reply_len("200 OK", "", page));
+            os64_fetch_options_t opt = { .method = OS64_FETCH_METHOD_POST,
+                .body = body, .body_len = sizeof(body), .content_type = type };
+            os64_fetch_t *f = os64_fetch_open(tls ? "https://post.test/form" : "http://post.test/form", &opt);
+            CHECK(os64_fetch_status(f) == OS64_FETCH_OK);
+            const char *req = request_n(0), *bytes = strstr(req, "\r\n\r\n") + 4;
+            CHECK(strncmp(req, "POST /form HTTP/1.1\r\n", strlen("POST /form HTTP/1.1\r\n")) == 0);
+            CHECK(strstr(req, "Content-Length: 70000\r\n") != NULL);
+            CHECK(strstr(req, "Content-Type: multipart/form-data; boundary=abc-123\r\n") != NULL);
+            CHECK(conns[0].reqlen == (size_t)(bytes - req) + sizeof(body));
+            CHECK(memcmp(bytes, body, sizeof(body)) == 0);
+            os64_fetch_close(f);
+            CHECK(dials == 1 && closes == 1);
+        }
+        int codes[] = {301, 302, 303, 307, 308};
+        for (size_t i = 0; i < sizeof(codes)/sizeof(codes[0]); i++) {
+            reset(); chunk_mode = mode; write_limit = 17;
+            char status[32]; snprintf(status, sizeof(status), "%d Redirect", codes[i]);
+            peer_add("post.test", 80, reply_len(status, "Location: http://next.test/\r\n", ""));
+            peer_add("next.test", 80, reply_len("200 OK", "", page));
+            os64_fetch_options_t opt = { .method = OS64_FETCH_METHOD_POST,
+                .body = body, .body_len = sizeof(body), .content_type = type, .on_hop = post_hop };
+            os64_fetch_t *f = os64_fetch_open("http://post.test/", &opt);
+            CHECK(os64_fetch_status(f) == OS64_FETCH_OK && dials == 2);
+            bool replay = codes[i] >= 307;
+            CHECK(seen_from == OS64_FETCH_METHOD_POST &&
+                  seen_to == (replay ? OS64_FETCH_METHOD_POST : OS64_FETCH_METHOD_GET));
+            const char *req = request_n(1), *bytes = strstr(req, "\r\n\r\n") + 4;
+            CHECK(strncmp(req, replay ? "POST / HTTP" : "GET / HTTP", replay ? 11 : 10) == 0);
+            if (replay) {
+                CHECK(memcmp(bytes, body, sizeof(body)) == 0);
+                CHECK(strstr(req, "Content-Length: 70000\r\n") != NULL);
+            } else {
+                CHECK(*bytes == '\0');
+                CHECK(strstr(req, "Content-Length:") == NULL && strstr(req, "Content-Type:") == NULL);
+            }
+            os64_fetch_close(f); CHECK(closes == 2);
+        }
+    }
+    reset();
+    peer_add("post.test", 80, reply_len("303 See Other", "Location: /\r\n", ""));
+    os64_fetch_options_t opt = { .method = OS64_FETCH_METHOD_POST, .on_hop = post_hop };
+    os64_fetch_t *f = os64_fetch_open("http://post.test/", &opt);
+    // POST -> GET follows the same URL. Its next GET -> GET is a loop.
+    CHECK(dials == 2 && os64_fetch_detail(f)->hop.kind == OS64_FETCH_HOP_SELF);
+    CHECK(strstr(request_n(0), "Content-Length: 0\r\n") != NULL);
+    CHECK(strstr(request_n(1), "Content-Length:") == NULL);
+    os64_fetch_close(f);
+
+    const char *bad[] = {"Content-Length: 0\r\n", "tRaNsFeR-EnCoDiNg: chunked\r\n",
+        "Host: thief.test\r\n", "Content-Type: bad\r\n", "Expect: 100-continue\r\n",
+        "Connection: keep-alive\r\n", "Content-Encoding: gzip\r\n", "Trailer: X\r\n"};
+    for (size_t i = 0; i < sizeof(bad)/sizeof(bad[0]); i++) {
+        reset(); opt = (os64_fetch_options_t){ .extra_headers = bad[i] };
+        f = os64_fetch_open("http://post.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_REQUEST_FAILED && dials == 0);
+        os64_fetch_close(f);
+    }
+    for (int i = 0; i < 5; i++) {
+        reset(); opt = (os64_fetch_options_t){0};
+        if (i == 0) opt.method = (os64_fetch_method_t)99;
+        if (i == 1) { opt.method = OS64_FETCH_METHOD_POST; opt.body_len = 1; }
+        if (i == 2) opt.body = body;
+        if (i == 3) opt.content_type = "text/plain";
+        if (i == 4) { opt.method = OS64_FETCH_METHOD_POST; opt.content_type = "x\r\nHost: evil"; }
+        f = os64_fetch_open("http://post.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_REQUEST_FAILED && dials == 0);
+        os64_fetch_close(f);
+    }
+    for (int cancel = 0; cancel < 2; cancel++) {
+        reset(); write_limit = 17; write_stop = cancel ? 0 : 700; upload_cancel = cancel;
+        peer_add("post.test", 80, reply_len("200 OK", "", page));
+        opt = (os64_fetch_options_t){ .method = OS64_FETCH_METHOD_POST,
+            .body = body, .body_len = sizeof(body), .cancelled = cancel_upload };
+        f = os64_fetch_open("http://post.test/", &opt);
+        CHECK(os64_fetch_status(f) == (cancel ? OS64_FETCH_INTERRUPTED : OS64_FETCH_REQUEST_FAILED));
+        CHECK(dials == 1 && closes == 1); // an uncertain POST is not retried
+        os64_fetch_close(f);
+    }
+}
+
 int main(int argc, char **argv)
 {
     unsigned seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 12345u;
@@ -1070,6 +1180,7 @@ int main(int argc, char **argv)
     case_round5();
     case_round6();
     case_round7();
+    case_post();
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }

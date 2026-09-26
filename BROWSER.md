@@ -726,9 +726,9 @@ SUBMISSION, and libpage answers what that sends: the form's default
 button, with its name and whatever it overrules, even where that button
 stands out of sight.
 
-**A POST is refused by name**, because libfetch sends no body and sending
-the same form as a GET would put a password in an address that servers
-and proxies write down. **Every navigation a page asks for — a link, a
+**POST forms send the body and content type libpage built through
+libfetch.** Reload and Back fetch the stored URL using GET; submitted
+bodies are not retained in history. **Every navigation a page asks for — a link, a
 form, a declared refresh — goes through one function** (`perform` in
 wend.c), which holds this browser's own list of the schemes it fetches and
 the person's decisions.
@@ -784,10 +784,9 @@ Codex round is Chris's call.
 
 | What | Why deferred | Trigger |
 |---|---|---|
-| POST forms | libfetch sends no request body, and that is fetch machinery — Fable-tier by the campaign's own split. A form that posts is refused BY NAME rather than turned into a GET, because a login quietly sent as a query puts a password in somebody's server log | the first thing worth doing that only posts |
 | PICKING more than one answer from a `select multiple` | one answer is what the keys can express — Enter steps a list, and there is no screen on which to hold several open. What the page itself marked IS sent, every option of it; touching the list replaces the lot with the one thing a key can say | a page whose meaning needs two answers a person chose |
 | A `text/plain` body in a charset outside the UTF-8 and windows-1252 families | libhtml owns the encoding ladder and only markup goes through it. Raw text reads the reply's label for UTF-8 — or, where the reply named no charset at all, a leading UTF-8 byte order mark, which is the file saying it itself — and takes everything else as windows-1252, which is the same answer libhtml gives the markup half — so both halves agree, and a Shift-JIS `.txt` reads as mojibake in a page and in a text file alike, rather than as a refusal in neither | the first text file worth reading that says it is something else |
-| A file-upload control | it is a POST with a body made of parts, so it waits on the row above and on a file picker this browser has no screen for | a page worth uploading to |
+| A file-upload control | it is a POST with a body made of parts, and needs a file picker this browser has no screen for | a page worth uploading to |
 | Editing longer than a status row, or text the glass cannot draw | a box is edited on the bottom row as its Latin-1 shadow, so a long value is a scrolling window onto itself and a value the fold would change is offered only to be REPLACED; fine for a query, thin for a comment | the first time somebody writes prose into a page, or needs to edit a word this terminal cannot show |
 | XHTML parsed by the HTML parser | there is no XML parser here, and the HTML tree builder reads all but the constructs XML spells differently — a self-closing `<script/>` ends where XML says and not where HTML does, so the text after it is swallowed. Refusing `application/xhtml+xml` outright would turn every XHTML page into "that is not a page", which is worse for a reader than a rare page with a swallowed tail | an XHTML page worth reading that the HTML rules mangle |
 | `gopher://` links | libfetch's gopher scheme is booked; the gopher client still owns the protocol | the browser's first gopher link |

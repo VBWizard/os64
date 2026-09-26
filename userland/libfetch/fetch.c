@@ -31,6 +31,8 @@ struct os64_fetch {
     char user_agent[OS64_FETCH_AGENT_MAX];
     char accept[OS64_FETCH_ACCEPT_MAX];
     char extra[OS64_FETCH_EXTRA_MAX];
+    char content_type[OS64_FETCH_CONTENT_TYPE_MAX];
+    os64_fetch_method_t method; // current request; opt.method is the initial method
 
     // One conversation with the world: the connection, the stream reading
     // it, and the head that came back. A redirect throws all three away and
@@ -105,12 +107,9 @@ static bool same_address(const http_url_t *a, const http_url_t *b)
     return same_address_origin(a, b) && os64_streq(a->path, b->path);
 }
 
-// 301/302 and 307/308 differ only in what a client may do to the METHOD:
-// the older pair were so widely implemented as "retry it as a GET" that the
-// newer pair had to be invented to mean "and keep the method you had". This
-// library only ever sends GET, so all four say the same thing to it — and
-// 303 (See Other), whose entire meaning is "GET this other thing instead",
-// says it too.
+// Browser redirect semantics: POST becomes GET on 301/302/303, while
+// 307/308 replay the method and borrowed bytes. The hop describes the
+// proposed change before the caller decides whether to send it.
 //
 // The 3xx codes deliberately NOT here, each a final answer the caller sees:
 //   300 Multiple Choices — a list for a person to pick from; its Location is
@@ -149,6 +148,11 @@ static void hop_read(os64_fetch_t *f, os64_fetch_hop_t *hop, http_url_t *target,
 {
     os64_memset(hop, 0, sizeof(*hop));
     hop->status = f->reply.status;
+    hop->from_method = f->method;
+    hop->to_method = f->method;
+    if (f->method == OS64_FETCH_METHOD_POST &&
+        (hop->status == 301 || hop->status == 302 || hop->status == 303))
+        hop->to_method = OS64_FETCH_METHOD_GET;
     os64_strcopy(hop->reason, sizeof(hop->reason), f->reply.reason);
     hop->number = f->head.hops + 1;
     proxy_facts(&f->proxy, &hop->from_via_proxy, hop->from_proxy_host,
@@ -192,10 +196,9 @@ static void hop_read(os64_fetch_t *f, os64_fetch_hop_t *hop, http_url_t *target,
     }
     url_filled(target, &hop->target);
 
-    // A REDIRECT TO THE ADDRESS THAT JUST ANSWERED is a server that has lost
-    // its place, and the hop limit would eventually say so — five requests
-    // later, in words about counting rather than about what happened.
-    if (same_address(&f->current, target)) {
+    // The same URL after POST -> GET is a new request, a common form flow.
+    // Repeating both URL and method is the loop the default policy stops.
+    if (same_address(&f->current, target) && hop->from_method == hop->to_method) {
         hop->kind = OS64_FETCH_HOP_SELF;
         return;
     }
@@ -460,13 +463,17 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         f->connected = true;
 
         // ── Ask ─────────────────────────────────────────────────────────
-        char request[HTTP_LINE_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX + OS64_FETCH_EXTRA_MAX];
+        char request[HTTP_LINE_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX + OS64_FETCH_EXTRA_MAX + OS64_FETCH_CONTENT_TYPE_MAX + 64];
         char extraForHop[OS64_FETCH_EXTRA_MAX];
         extras_for_hop(f, extraForHop, sizeof(extraForHop));
         http_request_extras_t extras = {
             .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
             .accept        = f->accept[0] ? f->accept : NULL,
             .extra_headers = extraForHop[0] ? extraForHop : NULL,
+            .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
+            .body_len = f->method == OS64_FETCH_METHOD_POST ? f->opt.body_len : 0,
+            .content_type = f->method == OS64_FETCH_METHOD_POST && f->content_type[0]
+                                ? f->content_type : NULL,
         };
         if (!http_request(request, sizeof(request), &f->current, f->proxy.inUse, &extras)) {
             os64_strcopy(f->detail.why, sizeof(f->detail.why),
@@ -475,6 +482,13 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         }
         if (!fetch_transport_write(&f->io, request, os64_strlen(request))) {
             os64_strcopy(f->detail.why, sizeof(f->detail.why), "could not send the request");
+            tls_snapshot(f);
+            return drop_connection(f, OS64_FETCH_REQUEST_FAILED);
+        }
+
+        if (f->method == OS64_FETCH_METHOD_POST && f->opt.body_len &&
+            !fetch_transport_write(&f->io, f->opt.body, f->opt.body_len)) {
+            os64_strcopy(f->detail.why, sizeof(f->detail.why), "could not send the request body");
             tls_snapshot(f);
             return drop_connection(f, OS64_FETCH_REQUEST_FAILED);
         }
@@ -538,6 +552,7 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
             f->current = target;
         else
             http_url_parse(hop.whole, &f->current);   // DOWNGRADE/SELF: parsed OK in hop_read
+        f->method = hop.to_method;
         f->proxy = carrier;
         f->head.hops = hop.number;
     }
@@ -815,6 +830,15 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
         f->opt.max_hops = OS64_FETCH_HOPS_DEFAULT;
     f->trust = f->opt.trust;              // caller-owned: trust_owned stays false
     f->io.handle = -1;
+    f->method = f->opt.method;
+    if ((f->method != OS64_FETCH_METHOD_GET && f->method != OS64_FETCH_METHOD_POST) ||
+        (f->opt.body_len && !f->opt.body) ||
+        (f->method == OS64_FETCH_METHOD_GET &&
+         (f->opt.body || f->opt.body_len || f->opt.content_type))) {
+        os64_strcopy(f->detail.why, sizeof(f->detail.why), "invalid request method or body options");
+        f->status = OS64_FETCH_REQUEST_FAILED;
+        return f;
+    }
 
     // The caller's strings, copied now so they need not outlive the call;
     // one that does not fit is a header this library will not send.
@@ -822,6 +846,8 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
          os64_strcopy(f->user_agent, sizeof(f->user_agent), opt->user_agent) >= sizeof(f->user_agent)) ||
         (opt && opt->accept &&
          os64_strcopy(f->accept, sizeof(f->accept), opt->accept) >= sizeof(f->accept)) ||
+        (opt && opt->content_type &&
+         os64_strcopy(f->content_type, sizeof(f->content_type), opt->content_type) >= sizeof(f->content_type)) ||
         (opt && opt->extra_headers &&
          os64_strcopy(f->extra, sizeof(f->extra), opt->extra_headers) >= sizeof(f->extra))) {
         os64_strcopy(f->detail.why, sizeof(f->detail.why), "a request header is longer than this will send");
@@ -835,10 +861,13 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
         .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
         .accept        = f->accept[0] ? f->accept : NULL,
         .extra_headers = f->extra[0] ? f->extra : NULL,
+        .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
+        .body_len = f->opt.body_len,
+        .content_type = f->content_type[0] ? f->content_type : NULL,
     };
     if (!http_request_extras_ok(&extras)) {
         os64_strcopy(f->detail.why, sizeof(f->detail.why),
-                     "a request header holds a byte a header cannot (a bare CR or LF, or a control byte)");
+                     "a request header is malformed or reserved by libfetch");
         f->status = OS64_FETCH_REQUEST_FAILED;
         return f;
     }
@@ -872,6 +901,9 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
     f->origin_proxy = f->proxy;      // and who was chosen to carry it: what a proxy credential is for
 
     f->status = ask(f);
+    f->opt.body = NULL; // the borrowed upload is no longer needed after open
+    f->opt.body_len = 0;
+    f->opt.content_type = NULL;
     if (f->have_head) {
         // OK, REDIRECT_STOPPED, TOO_MANY_HOPS: a head and a positioned
         // connection. The body is prepared now so read() has nothing left

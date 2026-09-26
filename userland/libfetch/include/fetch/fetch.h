@@ -60,6 +60,9 @@ typedef enum {
 
 const char *os64_fetch_status_name(os64_fetch_status_t status);
 
+// GET is zero for existing zero-initialized callers.
+typedef enum { OS64_FETCH_METHOD_GET = 0, OS64_FETCH_METHOD_POST } os64_fetch_method_t;
+
 // ── Redirects ───────────────────────────────────────────────────────────
 
 // What a hop IS, worked out by the library before anybody decides anything:
@@ -67,14 +70,14 @@ const char *os64_fetch_status_name(os64_fetch_status_t status);
 // judged. WHOLE is a target with a road to it; every other kind names what
 // is wrong with it. The default verdict follows WHOLE and stops on the rest.
 typedef enum {
-    OS64_FETCH_HOP_WHOLE = 0,   // a whole, fetchable, different address, and a proxy or a direct road
+    OS64_FETCH_HOP_WHOLE = 0,   // a whole, fetchable, different request, and a proxy or a direct road
     OS64_FETCH_HOP_NONE,        // the redirect does not say where to
     OS64_FETCH_HOP_TOO_LONG,    // the address it spells is longer than this will hold
     OS64_FETCH_HOP_UNUSABLE,    // it spells something that is not a usable address (detail: parse)
     OS64_FETCH_HOP_SCHEME,      // an address of a kind this library does not fetch (mailto:, ftp://)
     OS64_FETCH_HOP_DOWNGRADE,   // an HTTPS origin redirected to unencrypted HTTP
     OS64_FETCH_HOP_PROXY,       // the proxy setting that would carry it is unusable (why)
-    OS64_FETCH_HOP_SELF,        // it points back at the address that just answered
+    OS64_FETCH_HOP_SELF,        // same address AND method as the request that just answered
 } os64_fetch_hop_kind_t;
 
 // The caller's say. DEFAULT = the library's policy (follow WHOLE, stop on
@@ -107,6 +110,7 @@ typedef struct {
     char     from_proxy_host[OS64_URL_HOST_MAX];   // warning about a proxied first leg needs
     uint16_t from_proxy_port;         // it even when the final head went direct
     char     why[OS64_FETCH_WHY_MAX]; // PROXY: what is wrong with the setting
+    os64_fetch_method_t from_method, to_method; // proposed transition, even if stopped
 } os64_fetch_hop_t;
 
 // ── What came back ──────────────────────────────────────────────────────
@@ -181,6 +185,7 @@ typedef struct {
 #define OS64_FETCH_AGENT_MAX    128
 #define OS64_FETCH_ACCEPT_MAX   128
 #define OS64_FETCH_EXTRA_MAX    1024
+#define OS64_FETCH_CONTENT_TYPE_MAX 256
 
 typedef struct {
     // Request headers, each optional (NULL = not sent). They are COPIED at
@@ -188,6 +193,7 @@ typedef struct {
     // is judged by http.h's field-byte rule and a bad one is REQUEST_FAILED.
     const char *user_agent;
     const char *accept;
+    // Reserved framing/routing/body headers are rejected (http.h lists them).
     const char *extra_headers;     // "Name: value\r\n" lines, already terminated. Cookie and
                                    // Authorization are sent to the TYPED origin and to hops
                                    // that stay on it (scheme, host, port), never to a hop
@@ -210,6 +216,15 @@ typedef struct {
     // the fetch as INTERRUPTED. NULL = never (interrupted waits are retried).
     bool (*cancelled)(void *ctx);
     void *ctx;
+    // POST bytes are borrowed, immutable and needed through open, including
+    // 307/308 replay. NULL body is legal only when body_len is zero. GET
+    // requires NULL body/content_type and zero body_len. A failed upload is
+    // not retried: the server may already have acted. 301/302/303 turn POST
+    // into GET without body metadata; 307/308 preserve it. on_hop can refuse.
+    os64_fetch_method_t method;
+    const void *body;
+    size_t body_len;
+    const char *content_type;     // optional; < CONTENT_TYPE_MAX, copied at open
 } os64_fetch_options_t;
 
 // ── The calls ───────────────────────────────────────────────────────────

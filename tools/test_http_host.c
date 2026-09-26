@@ -274,6 +274,16 @@ static int do_absolute(const char *baseText, const char *location)
 
 int main(int argc, char **argv)
 {
+    if (argc == 4 && strcmp(argv[1], "post") == 0) {
+        http_url_t url;
+        char request[8192];
+        http_request_extras_t opt = { .method = HTTP_METHOD_POST,
+            .body_len = (size_t)strtoull(argv[2], NULL, 10), .content_type = argv[3] };
+        if (http_url_parse("http://example.test/form", &url) != HTTP_URL_OK ||
+            !http_request(request, sizeof(request), &url, false, &opt)) return 1;
+        fputs(request, stdout);
+        return 0;
+    }
     if (argc >= 3 && strcmp(argv[1], "url") == 0)
         return do_url(argv[2]);
 
