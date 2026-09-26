@@ -7,7 +7,7 @@
 
 struct os64_tls_transport { unsigned flags; os64_tls_status_t status; bool closing; };
 static struct os64_tls_transport transport;
-static uint64_t now, waits[128];
+static uint64_t now, waits[4096];
 static unsigned closes, frees, steps, writes, reads;
 static bool cancel, fail_clock, create_fail, stall, interrupt_once, cancel_wait, drift, change_clock, rewind_clock;
 static os64_tls_status_t read_status;
@@ -21,7 +21,7 @@ int64_t os64_close(int32_t h) { assert(h==7); closes++; return 0; }
 int32_t os64_hprintf(int32_t h,const char *f,...) { (void)h;(void)f;return 0; }
 const char *os64_tls_status_name(os64_tls_status_t s) { (void)s;return "test"; }
 static void wait_for(uint64_t ms)
-{ assert(steps<128 && ms>0 && ms<=FETCH_IDLE_MS_DEFAULT); waits[steps++]=ms; now+=1000; if(cancel_wait) cancel=true; if(change_clock) drift=true; if(rewind_clock) now=0; }
+{ assert(steps<4096 && ms>0 && ms<=FETCH_IDLE_MS_DEFAULT); waits[steps++]=ms; now+=ms < 1000 ? ms : 1000; if(cancel_wait) cancel=true; if(change_clock) drift=true; if(rewind_clock) now=0; }
 int64_t os64_write_for(int32_t h,const void *p,size_t n,uint64_t ms)
 {
     assert(h==7); writes++;
@@ -33,6 +33,7 @@ int64_t os64_write_for(int32_t h,const void *p,size_t n,uint64_t ms)
 int64_t os64_read_for(int32_t h,void *p,size_t n,uint64_t ms)
 {
     assert(h==7);reads++;
+    if(!ms && !ready) return OS64_ERR_TIMEOUT;
     if(stall) { wait_for(ms); return OS64_ERR_TIMEOUT; }
     if(interrupt_once) { interrupt_once=false; wait_for(ms); return OS64_INTERRUPTED; }
     if(n>ready)n=ready;
@@ -67,6 +68,7 @@ os64_tls_transfer_t os64_tls_transport_read(os64_tls_transport *t,void *p,size_t
     if(t->status!=OS64_TLS_OK) return (os64_tls_transfer_t){t->status,0};
     if(n>ready)n=ready;
     memset(p,'x',n);ready-=n;
+    if(!ready) t->flags &= ~OS64_TLS_RECV_PLAIN;
     t->status=read_status;
     return (os64_tls_transfer_t){read_status,n};
 }
@@ -83,6 +85,11 @@ static fetch_transport_t open_io(bool tls)
     transport=(struct os64_tls_transport){.flags=OS64_TLS_HANDSHAKE_DONE|OS64_TLS_SEND_PLAIN};
     fetch_transport_t io;os64_tls_config_t c={0};assert(fetch_transport_open(&io,7,tls?&c:NULL,0,cancelled_p,NULL));return io;
 }
+static bool write_all(fetch_transport_t *io, const void *p, size_t n)
+{
+    size_t accepted = 0;
+    return fetch_transport_write(io, p, n, &accepted) == FETCH_WRITE_DONE;
+}
 int main(void)
 {
     fetch_transport_t failed = open_io(true);
@@ -95,12 +102,12 @@ int main(void)
     for(unsigned tls=0;tls<2;tls++) {
         fetch_transport_t io=open_io(tls);
         interrupt_once=!tls;
-        assert(fetch_transport_write(&io,"abcdef",6));assert(sent==6 && !memcmp(captured,"abcdef",6));
+        assert(write_all(&io,"abcdef",6));assert(sent==6 && !memcmp(captured,"abcdef",6));
         fetch_transport_close(&io,true);fetch_transport_close(&io,false);assert(closes==1 && frees==tls);
 
         io=open_io(tls);stall=true;
-        assert(!fetch_transport_write(&io,"abc",3));assert(io.silent && now==FETCH_IDLE_MS_DEFAULT && steps==30);
-        assert(waits[0]==30000 && waits[29]==1000);fetch_transport_close(&io,false);assert(closes==1);
+        assert(!write_all(&io,"abc",3));assert(io.silent && now==FETCH_IDLE_MS_DEFAULT && steps==(tls ? 30u : 3000u));
+        assert(waits[0]==(tls ? 30000u : 10u) && waits[steps-1]==(tls ? 1000u : 10u));fetch_transport_close(&io,false);assert(closes==1);
 
         io=open_io(tls);stall=true;char buf[8];
         assert(fetch_transport_read(&io,buf,sizeof buf)<0);assert(io.silent && now==FETCH_IDLE_MS_DEFAULT);
@@ -119,7 +126,7 @@ int main(void)
         fetch_transport_close(&io,false);
 
         io=open_io(tls);fail_clock=true;
-        assert(!fetch_transport_write(&io,"a",1));assert(io.error.status==OS64_TLS_BAD_TIME);fetch_transport_close(&io,false);
+        assert(!write_all(&io,"a",1));assert(io.error.status==OS64_TLS_BAD_TIME);fetch_transport_close(&io,false);
     }
     fetch_transport_t io=open_io(false);char buf[8];ready=3;interrupt_once=true;
     assert(fetch_transport_read(&io,buf,sizeof buf)==3 && steps==1 && io.error.status==OS64_TLS_OK);
@@ -136,8 +143,18 @@ int main(void)
     io=open_io(true);read_status=OS64_TLS_CLEAN_EOF;
     assert(fetch_transport_read(&io,buf,sizeof buf)==0);assert(fetch_transport_complete(&io,false));fetch_transport_close(&io,true);
 
-    io=open_io(true);transport.flags|=OS64_TLS_RECV_PLAIN;
-    assert(!fetch_transport_write(&io,"abc",3));assert(io.error.status==OS64_TLS_LIMIT);fetch_transport_close(&io,false);
+    for (unsigned tls = 0; tls < 2; tls++) {
+        io=open_io(tls);ready=3;transport.flags|=OS64_TLS_RECV_PLAIN;
+        size_t accepted=0;
+        assert(fetch_transport_write(&io,"abc",3,&accepted)==FETCH_WRITE_RESPONSE);
+        assert(accepted==0 && io.error.status==OS64_TLS_OK);
+        size_t got=0;
+        while(got<3) { int64_t n=fetch_transport_read(&io,buf+got,3-got); assert(n>0); got+=(size_t)n; }
+        assert(!memcmp(buf,"xxx",3));
+        assert(fetch_transport_write(&io,"abc",3,&accepted)==FETCH_WRITE_DONE);
+        assert(accepted==3 && sent==3 && !memcmp(captured,"abc",3));
+        fetch_transport_close(&io,false);
+    }
 
     io=open_io(false);fetch_transport_close(&io,false);closes=0;create_fail=true;os64_tls_config_t c={0};
     assert(!fetch_transport_open(&io,7,&c,0,cancelled_p,NULL));fetch_transport_close(&io,false);assert(closes==1 && frees==0);

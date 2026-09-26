@@ -231,6 +231,10 @@ typedef enum {
 // ends them. On return the stream is positioned at the first byte of the
 // body — including any body bytes that arrived in the same read as the head.
 http_head_result_t http_head_read(http_stream_t *s, http_response_t *out);
+#define HTTP_INTERIM_MAX 8
+// Read one head, including informational replies, to interleave upload and
+// response processing. The caller bounds the number of interim heads.
+http_head_result_t http_head_read_one(http_stream_t *s, http_response_t *out);
 
 const char *http_head_reason(http_head_result_t rc);
 

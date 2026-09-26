@@ -50,6 +50,12 @@ Routes, and what each is FOR:
     /redirect/N     301 -> /redirect/N-1, then /hello.txt  a trail, and the hop cap
     /redirect-page  302 -> hello.txt (page-relative)        RFC 3986 §5.2's merge
     /post-form      HTML form for wend POST submission
+    /post-early     413 before reading the body (early upload response)
+    /post-continue  100 then read and echo the complete POST body
+    /post-pdf-form, /post-get-pdf-form, /post-down-form  wend review probes
+    /post-pdf       PDF media type, distinguishes POST from GET
+    /post-get-pdf   303 -> /post-pdf
+    /post-down     307 -> plain HTTP /post-pdf (loopback fixture only)
     /post-echo      echoes method, content type, length and request body
     /303-after-post POST -> GET redirect to /post-echo
     /307-after-post POST replay redirect to /post-echo
@@ -98,6 +104,7 @@ import socketserver
 import sys
 import time
 import zlib
+from urllib.parse import urlsplit
 
 USAGE = "python3 httptestd.py [--port N] [--dump DIR]"
 
@@ -224,6 +231,17 @@ class Handler(socketserver.StreamRequestHandler):
                 (lengths and (len(lengths[0]) > 20 or not lengths[0].isascii() or not lengths[0].isdecimal()))):
             self.send(head(400, "Bad Request", [("Content-Length", 0)]))
             return
+        path = parts[1] if len(parts) >= 2 else "/"
+        parsed = urlsplit(path)
+        route, query = parsed.path, parsed.query
+        if route == "/post-early":
+            print(f"  EARLY {visible(request)}", flush=True)
+            self.send(head(413, "Content Too Large", [("Content-Length", 9)]) + b"too large")
+            # Keep the response readable while the client abandons its upload.
+            time.sleep(1)
+            return
+        if route == "/post-continue":
+            self.send(head(100, "Continue", []))
         length = int(lengths[0]) if lengths else 0
         if length > 1024 * 1024:
             self.send(head(413, "Content Too Large", [("Content-Length", 0)]))
@@ -239,11 +257,7 @@ class Handler(socketserver.StreamRequestHandler):
             print(f"  POST bytes={len(body)} crc32={zlib.crc32(body):08x} "
                   f"type={visible(content_type)}", flush=True)
 
-        path = parts[1] if len(parts) >= 2 else "/"
         print(f"  {visible(request)}", flush=True)
-
-        route = path.split("?", 1)[0]
-        query = path.split("?", 1)[1] if "?" in path else ""
 
         if route == "/":
             # The map, served by the territory: this module's own docstring,
@@ -251,6 +265,21 @@ class Handler(socketserver.StreamRequestHandler):
             # text and cannot disagree about what a route is for.
             self.send(head(200, "OK", [("Content-Type", "text/plain; charset=utf-8"),
                                        ("Content-Length", len(INDEX))]) + INDEX)
+        elif route in ("/post-pdf-form", "/post-get-pdf-form", "/post-down-form"):
+            action = route.removesuffix("-form")
+            result = (f'<html><body><form method="post" action="{action}">'
+                      '<input type="hidden" name="secret" value="donuts">'
+                      '<input type="submit" value="Submit"></form></body></html>').encode()
+            self.send(head(200, "OK", [("Content-Type", "text/html"), ("Content-Length", len(result))]) + result)
+        elif route == "/post-pdf":
+            result = method.encode()
+            self.send(head(200, "OK", [("Content-Type", "application/pdf"), ("Content-Length", len(result))]) + result)
+        elif route == "/post-get-pdf":
+            self.send(head(303, "See Other", [("Location", "/post-pdf"), ("Content-Length", 0)]))
+        elif route == "/post-down":
+            # Only redirect to the QEMU loopback fixture, never reflected input.
+            target = f"http://10.0.2.2:{self.server.server_address[1]}/post-pdf"
+            self.send(head(307, "Redirect", [("Location", target), ("Content-Length", 0)]))
         elif route == "/post-form":
             body = (b'<html><title>POST probe</title><body><form method="post" action="/post-echo">'
                     b'<input type="hidden" name="snack" value="chocolate donuts">'
@@ -258,7 +287,7 @@ class Handler(socketserver.StreamRequestHandler):
                     b'</form></body></html>')
             self.send(head(200, "OK", [("Content-Type", "text/html"),
                                       ("Content-Length", len(body))]) + body)
-        elif route == "/post-echo":
+        elif route in ("/post-echo", "/post-continue"):
             result = (f"method={method}\ncontent-type={content_type}\nbytes={len(body)}\n".encode("latin-1")
                       + body)
             self.send(head(200, "OK", [("Content-Type", "text/plain"),

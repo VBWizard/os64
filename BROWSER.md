@@ -463,8 +463,10 @@ exit. Colour and attributes are the SGR subset the terminal draws
    **(departure: the spec said `text/plain`, and every other `text/*` is
    a document a person can read — markdown, a stylesheet, a CSV — where
    the alternative was refusing it as "not a page")**; anything else is
-   not a page — say what it is and offer `os64get '<url>'` to save it,
-   quoted the way os64get's `print_by_hand` quotes an address (husk
+   not a page — say what it is. For a GET response, offer
+   `os64get '<url>'` to save it; for a POST response, explain that wend
+   cannot display or save it (a new GET would be a different request). The
+   GET address is quoted the way os64get's `print_by_hand` quotes an address (husk
    splits at `;`). **A text body's high bytes are read as UTF-8 only
    when the reply's charset says so (departure)**: the old web's `.txt`
    files are Latin-1, and decoding those as UTF-8 turns every accented

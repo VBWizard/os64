@@ -135,6 +135,7 @@ typedef struct {
     bool     via_proxy;                       // the facts behind "this is not end-to-end"
     char     proxy_host[OS64_URL_HOST_MAX];
     uint16_t proxy_port;
+    os64_fetch_method_t method;               // request that produced this head, after redirects
 } os64_fetch_head_t;
 
 // Counters a caller reads between reads, for a meter or a status line.

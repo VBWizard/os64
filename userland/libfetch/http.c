@@ -686,7 +686,7 @@ static http_head_result_t overlong_verdict(const char *prefix)
     return HTTP_HEAD_OK;              // genuinely nothing depends on it
 }
 
-static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
+http_head_result_t http_head_read_one(http_stream_t *s, http_response_t *out)
 {
     char line[HTTP_LINE_MAX];
     size_t consumed = 0;
@@ -736,7 +736,8 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
             // a guess. (Codex review round 6, 2026-09-03.)
             if (out->hasLength && out->transferEncoding[0] != '\0')
                 return HTTP_HEAD_CONFLICT;
-            return HTTP_HEAD_OK;
+            // 101 switches protocols; no HTTP response follows it.
+            return out->status == 101 ? HTTP_HEAD_SWITCHED : HTTP_HEAD_OK;
         }
 
         if (fields >= HTTP_HEADERS_MAX)
@@ -762,22 +763,13 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
 // real one — and a client that mistook one for the response would save an
 // empty file and call it a page. They are read and discarded, but not
 // forever: a peer that only ever clears its throat is a peer to hang up on.
-#define HTTP_INTERIM_MAX 8
 
 http_head_result_t http_head_read(http_stream_t *s, http_response_t *out)
 {
     for (int i = 0; i <= HTTP_INTERIM_MAX; i++) {
-        http_head_result_t rc = head_read_once(s, out);
+        http_head_result_t rc = http_head_read_one(s, out);
         if (rc != HTTP_HEAD_OK)
             return rc;
-        // 101 IS NOT INTERIM. After it the connection speaks whatever was
-        // upgraded to, so reading on for "the real reply" would parse a
-        // foreign protocol as an HTTP head — and hang on the idle deadline
-        // when it is not one, or accept it as the download when its first
-        // bytes happen to look like a status line. Nothing was asked for, so
-        // there is nothing to follow. (Codex review round 7, 2026-09-03.)
-        if (out->status == 101)
-            return HTTP_HEAD_SWITCHED;
         if (out->status < 100 || out->status >= 200)
             return HTTP_HEAD_OK;
     }

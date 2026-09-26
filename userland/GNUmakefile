@@ -265,7 +265,7 @@ TELNET_ENGINE_OBJ      := $(OBJ)/apps/telnet/telnet_protocol.c.o
 LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd
 
 # Programs that download: they name libfetch and get its whole closure.
-LIBFETCH_PROGRAMS := os64get wend worktest
+LIBFETCH_PROGRAMS := os64get wend worktest fetchposttest
 # What a page MEANS is a browser's edge and nobody else's (LIBPAGE.md).
 # `wend` declares the edge before it CALLS anything through it, which is
 # deliberate: the library is otherwise on the image with nothing loading it,
