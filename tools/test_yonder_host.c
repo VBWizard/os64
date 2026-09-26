@@ -21,6 +21,7 @@
 #include "bar.h"
 #include "mail.h"
 #include "paint.h"
+#include "scale.h"
 #include "test_libflow_fonts.h"
 #include "os64/syscall_numbers.h"
 
@@ -306,6 +307,70 @@ static void paint_case(const char *name, const char *html, int32_t width, os64_g
 
 #include "test_yonder_cases.inc"
 
+// ── Pictures into their boxes ───────────────────────────────────────────
+//
+// Each expected pixel worked by hand. Column x of a box w wide takes the
+// source column floor((2x+1) * sw / 2w): the source pixel under its middle.
+
+static bool pixels_are(const uint32_t *got, const uint32_t *want, int n)
+{
+    for (int i = 0; i < n; i++)
+        if (got[i] != want[i])
+            return false;
+    return true;
+}
+
+static void scale_cases(void)
+{
+    const uint32_t A = 0xff112233u, B = 0xff445566u, C = 0xff778899u;
+    uint32_t dst[16] = {0};
+    const uint32_t two[4] = {A, B, C, A};
+    yonder_draw_picture(dst, 4, (os64_gui_rect_t){0, 0, 4, 4}, (os64_gui_rect_t){1, 1, 2, 2}, two, 2, 2);
+    const uint32_t copied[16] = {0, 0, 0, 0, 0, A, B, 0, 0, C, A, 0, 0, 0, 0, 0};
+    expect("picture: a box its own size is a copy", pixels_are(dst, copied, 16), NULL);
+
+    uint32_t row[4] = {0};
+    const uint32_t ab[2] = {A, B};
+    yonder_draw_picture(row, 4, (os64_gui_rect_t){0, 0, 4, 1}, (os64_gui_rect_t){0, 0, 4, 1}, ab, 2, 1);
+    const uint32_t doubled[4] = {A, A, B, B};
+    expect("picture: twice as wide doubles each column", pixels_are(row, doubled, 4), NULL);
+
+    uint32_t pair[2] = {0};
+    const uint32_t abc[3] = {A, B, C};
+    yonder_draw_picture(pair, 2, (os64_gui_rect_t){0, 0, 2, 1}, (os64_gui_rect_t){0, 0, 2, 1}, abc, 3, 1);
+    const uint32_t shrunk[2] = {A, C};
+    expect("picture: three into two takes the columns under the middles",
+           pixels_are(pair, shrunk, 2), NULL);
+
+    // 0x80 red over opaque blue: red (255*128 + 127) / 255 = 128, blue
+    // (255*127 + 127) / 255 = 127.
+    uint32_t blend[1] = {0xff0000ffu};
+    const uint32_t red_half[1] = {0x80ff0000u};
+    yonder_draw_picture(blend, 1, (os64_gui_rect_t){0, 0, 1, 1}, (os64_gui_rect_t){0, 0, 1, 1}, red_half, 1, 1);
+    expect("picture: half-transparent red over blue", blend[0] == 0xff80007fu, NULL);
+
+    uint32_t clear[1] = {0xff0000ffu};
+    const uint32_t none[1] = {0x00ff0000u};
+    yonder_draw_picture(clear, 1, (os64_gui_rect_t){0, 0, 1, 1}, (os64_gui_rect_t){0, 0, 1, 1}, none, 1, 1);
+    expect("picture: a transparent pixel leaves what is beneath", clear[0] == 0xff0000ffu, NULL);
+
+    // A 4x4 picture in a 4x4 box, clipped to the middle 2x2: only those
+    // four pixels are written, each the source's own.
+    uint32_t src[16], clip[16] = {0};
+    for (int i = 0; i < 16; i++)
+        src[i] = 0xff000000u | (uint32_t)i;
+    yonder_draw_picture(clip, 4, (os64_gui_rect_t){1, 1, 2, 2}, (os64_gui_rect_t){0, 0, 4, 4}, src, 4, 4);
+    const uint32_t cut[16] = {0, 0, 0, 0, 0, src[5], src[6], 0, 0, src[9], src[10], 0, 0, 0, 0, 0};
+    expect("picture: a clip cuts all four sides", pixels_are(clip, cut, 16), NULL);
+
+    // A box partly off the surface's left and top: the clip is what keeps
+    // the writes inside it.
+    uint32_t edge[4] = {0};
+    yonder_draw_picture(edge, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){-2, -2, 4, 4}, src, 4, 4);
+    const uint32_t shifted[4] = {src[10], src[11], src[14], src[15]};
+    expect("picture: a box hanging off the top left", pixels_are(edge, shifted, 4), NULL);
+}
+
 // ── The question bar: no click made before a question may answer it ─────
 
 static void bar_cases(void)
@@ -511,6 +576,7 @@ int main(int argc, char **argv)
         corpus(true);
     } else {
         paint_cases();
+        scale_cases();
         bar_cases();
         mail_cases();
         corpus(false);
