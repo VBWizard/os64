@@ -19,7 +19,10 @@
 // ONE handle type for everything (files, pipes, later windows) — a handle is a
 // tagged reference to a kernel object, and read/write dispatch on the tag.
 
-#define TASK_MAX_HANDLES 16
+// Room for a program that works in parallel: a work pool's pipes and
+// threads, and then a socket per fetch in flight, is well past sixteen
+// before much has been fetched. A slot costs 16 bytes of task_t.
+#define TASK_MAX_HANDLES 64
 
 typedef enum handle_type
 {

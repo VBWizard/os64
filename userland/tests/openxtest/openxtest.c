@@ -85,12 +85,15 @@ static bool race_claim(const char *path)
     return ok && removed;
 }
 
+// Fills the table, however big the kernel makes it, then asks for one more.
+#define HELD_MAX 1024
+
 static bool handle_full_creates_nothing(const char *path)
 {
     os64_unlink(path);
-    int32_t held[13];
+    static int32_t held[HELD_MAX];
     int count = 0;
-    while (count < 13)
+    while (count < HELD_MAX)
     {
         held[count] = (int32_t)os64_open("/bin/hello", "r");
         if (held[count] < 0)
@@ -99,7 +102,7 @@ static bool handle_full_creates_nothing(const char *path)
     }
 
     int64_t refused = os64_open(path, "x");
-    bool ok = count == 13 && refused < 0 && missing(path);
+    bool ok = count > 0 && count < HELD_MAX && refused < 0 && missing(path);
     if (refused >= 0)
         os64_close((int32_t)refused);
     while (count > 0)
