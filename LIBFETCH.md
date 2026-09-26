@@ -160,6 +160,10 @@ typedef struct {
   checked for field bytes. Invalid method/body/header options fail before
   dialing. A send failure closes the connection without retrying a request
   the server may already have acted on. Cancellation applies during upload.
+  Upload `idle_ms` restarts after accepted bytes or TLS transport progress,
+  including ciphertext drain. Empty/interrupted waits do not restart it;
+  a steadily progressing upload may exceed 30 seconds overall. Read calls
+  and the TLS handshake retain their bounded per-operation budgets.
   An early final response stops the upload and remains readable (for example,
   a 401 or 413). Informational 100/103 replies resume at the accepted byte;
   the eight-interim-head bound also applies while uploading. This does not

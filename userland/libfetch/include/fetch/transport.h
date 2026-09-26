@@ -27,7 +27,7 @@ typedef struct {
     bool encrypted, silent;
     bool have_lookahead;
     unsigned char lookahead; // preserves a plain TCP response discovered during upload
-    uint32_t idle_ms;                // the deadline every wait is measured against
+    uint32_t idle_ms;                // upload idle limit; per-read and handshake budget
     bool (*cancelled)(void *ctx);
     void *cancel_ctx;
 } fetch_transport_t;
@@ -41,6 +41,8 @@ bool fetch_transport_open(fetch_transport_t *io, int32_t handle,
 typedef enum { FETCH_WRITE_ERROR, FETCH_WRITE_DONE, FETCH_WRITE_RESPONSE } fetch_write_result_t;
 // Resume at *sent, advancing it only for accepted bytes. RESPONSE leaves the
 // response unread for the HTTP parser; an interim head permits another call.
+// Accepted bytes and successful TLS progress renew the upload idle budget;
+// empty/interrupted waits retain it, including while draining ciphertext.
 fetch_write_result_t fetch_transport_write(fetch_transport_t *io, const void *data,
                                            size_t length, size_t *sent);
 // http_source_fn's shape: `context` is the fetch_transport_t.

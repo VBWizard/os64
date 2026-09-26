@@ -42,8 +42,8 @@ static bool start_budget(fetch_transport_t *io, budget_t *budget)
     return true;
 }
 
-// Fixed 30-second operations need no absolute tick addition (and therefore
-// no overflow near the end of the clock). Round remaining patience upward.
+// Measure elapsed ticks without adding an absolute deadline, avoiding
+// overflow near the end of the clock. Round remaining patience upward.
 static uint64_t patience(fetch_transport_t *io, budget_t *budget)
 {
     os64_ticks_t now;
@@ -62,6 +62,15 @@ static uint64_t patience(fetch_transport_t *io, budget_t *budget)
     return ((limit - elapsed) * 1000u + budget->rate - 1u) / budget->rate;
 }
 
+// Upload progress renews idle patience only after checking the existing
+// clock sequence, deadline and cancellation. Empty/interrupted waits do not.
+static bool upload_progress(fetch_transport_t *io, budget_t *budget)
+{
+    if (!patience(io, budget)) return false;
+    budget->start = budget->last;
+    return true;
+}
+
 bool fetch_transport_open(fetch_transport_t *io, int32_t handle,
                           const os64_tls_config_t *config, uint32_t idle_ms,
                           bool (*cancel_fn)(void *ctx), void *cancel_ctx)
@@ -71,10 +80,8 @@ bool fetch_transport_open(fetch_transport_t *io, int32_t handle,
                               .cancelled = cancel_fn, .cancel_ctx = cancel_ctx};
     if (cancelled(io)) goto fail;
     if (!config) return true;
-    // The handshake runs under the SAME idle budget as every other wait:
-    // the transport's own deadline is told the number too, so a peer that
-    // accepts the connection and says nothing costs `idle_ms`, not the
-    // transport's default (Codex, PR #92).
+    // Handshake patience is a total deadline using idle_ms. Give the TLS
+    // transport the same limit so a silent peer cannot outwait the caller.
     const os64_tls_transport_limits_t limits = {
         .handshake_ms = io->idle_ms, .shutdown_ms = OS64_TLS_TRANSPORT_SHUTDOWN_MS
     };
@@ -118,7 +125,8 @@ fetch_write_result_t fetch_transport_write(fetch_transport_t *io, const void *da
                 io->have_lookahead = true;
                 return FETCH_WRITE_RESPONSE;
             }
-            if (n != OS64_INTERRUPTED && n != OS64_ERR_TIMEOUT) {
+            if (n == OS64_INTERRUPTED) continue;
+            if (n != OS64_ERR_TIMEOUT) {
                 remember(io, OS64_TLS_TRANSPORT); return FETCH_WRITE_ERROR;
             }
             if (*sent == length) return FETCH_WRITE_DONE;
@@ -130,6 +138,7 @@ fetch_write_result_t fetch_transport_write(fetch_transport_t *io, const void *da
                 remember(io, OS64_TLS_TRANSPORT); return FETCH_WRITE_ERROR;
             }
             *sent += (size_t)n;
+            if (!upload_progress(io, &budget)) return FETCH_WRITE_ERROR;
             continue;
         }
         os64_tls_state_t state = os64_tls_transport_state(io->tls);
@@ -143,6 +152,7 @@ fetch_write_result_t fetch_transport_write(fetch_transport_t *io, const void *da
             *sent += moved.transferred;
             remember(io, moved.status);
             if (!live(moved.status)) return FETCH_WRITE_ERROR;
+            if (moved.transferred && !upload_progress(io, &budget)) return FETCH_WRITE_ERROR;
         }
         if (*sent == length && !flushed) {
             remember(io, os64_tls_transport_flush(io->tls));
@@ -155,7 +165,11 @@ fetch_write_result_t fetch_transport_write(fetch_transport_t *io, const void *da
         if (flushed && !(state.flags & OS64_TLS_SEND_CIPHER)) return FETCH_WRITE_DONE;
         wait = patience(io, &budget);
         if (!wait) return FETCH_WRITE_ERROR;
-        remember(io, os64_tls_transport_step(io->tls, wait));
+        os64_tls_status_t stepped = os64_tls_transport_step(io->tls, wait);
+        remember(io, stepped);
+        // OK means the transport advanced, including pending ciphertext.
+        // NEED_PROGRESS can mean an empty or interrupted wait, not progress.
+        if (stepped == OS64_TLS_OK && !upload_progress(io, &budget)) return FETCH_WRITE_ERROR;
     }
 }
 
