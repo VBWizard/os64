@@ -10,7 +10,9 @@
 // THE RENDERER IS THROWAWAY AND THE REST IS NOT (BROWSER.md § The face).
 // render.c walks and prints; it does not lay out, and the graphical browser
 // will not inherit it. What that browser does inherit is everything under
-// it: the fetch, the parse, the model, and the navigator in this file.
+// it: the fetch, the parse, the model, and the session — the history, the
+// loading, the judgements about what a page asks for — which is libway's,
+// so this file is the terminal half of wend and nothing more.
 //
 // NO ESCAPE SEQUENCE FROM THE WIRE REACHES THE TERMINAL, and it takes two
 // guards because there are two kinds of stranger's bytes here. PAGE TEXT is
@@ -33,6 +35,7 @@
 
 #include "fetch/fetch.h"
 #include "html/html.h"
+#include "way/way.h"
 #include "page/page.h"
 #include "os64/args.h"
 #include "os64/fmt.h"
@@ -60,8 +63,7 @@
 // swallowed tail. Booked in BROWSER.md.
 #define WEND_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
 
-#define WEND_HISTORY_MAX 64
-#define WEND_STATUS_MAX  512
+#define WEND_STATUS_MAX  WAY_SENTENCE_MAX
 
 // Exit codes in os64get's and the gopher client's shape: a number a script
 // can act on, each naming a different thing to go and fix. They apply to the
@@ -74,45 +76,25 @@
 
 // ── Where we are ────────────────────────────────────────────────────────
 
-// A page, and everything needed to draw it again at a different width. The
-// TREE is kept, not just the lines: a resize re-wraps from the parse instead
-// of asking the network for a page we already have.
+// A page and where the reader is on it. The page itself — the tree or the
+// text, what it means, the reader's `details` — is libway's, kept whole so a
+// resize re-wraps from the parse instead of asking the network for a page we
+// already have. The lines are this face's, drawn from it at the current
+// width.
 typedef struct {
-    char     url[OS64_FETCH_URL_MAX];   // the address the body came from
-    os64_html_document_t *doc;          // HTML: the tree, kept for re-wrapping
-    char    *text;                      // text/plain: the bytes, same reason
-    size_t   textlen;
-    bool     text_utf8;
+    way_page_t way;
     wend_page_t *page;                  // the lines, at the current width
-    // WHAT THE PAGE MEANS, as opposed to how it reads (LIBPAGE.md): where
-    // every link goes, what every control holds, what a form sends. Built
-    // once per page because it does not depend on the width, and it is where
-    // a person's edits are kept — so a re-wrap throws the lines away and
-    // draws them again from this, and what was typed into a search box
-    // survives it.
-    os64_page_t *model;
-    bool refresh_handled;             // per loaded document, including refused attempts
-    // The `details` the reader has opened or closed — their state, not the
-    // page's, so it lives here and survives a re-wrap like an edit does.
-    const os64_html_node_t **flipped;
-    int32_t nflipped, flippedcap;
     int32_t  top;                       // first visible row
     int32_t  sel;                       // the selected spot, -1 for none
-    char     note[WEND_STATUS_MAX];     // what this page's status row says
 } view_t;
 
-typedef struct {
-    char    url[OS64_FETCH_URL_MAX];
-    int32_t top, sel;
-} crumb_t;
-
-static crumb_t s_history[WEND_HISTORY_MAX];
-static int32_t s_depth;
+// The session: the history, and the transient sentence on the status row,
+// which libway writes as well as this file.
+static way_session_t s_way;
 
 static int32_t s_rows = 25;
 static int32_t s_cols = 80;
 static int64_t s_keys = OS64_STDIN;
-static char    s_status[WEND_STATUS_MAX];
 static bool    s_raw;
 static bool    s_raw_refused;         // raw mode was refused; not yet said
 
@@ -559,7 +541,7 @@ static void status_set(const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
-    os64_vsnprintf(s_status, sizeof(s_status), fmt, args);
+    os64_vsnprintf(s_way.status, sizeof(s_way.status), fmt, args);
     va_end(args);
 }
 
@@ -577,21 +559,9 @@ static void bar_paint(int32_t row, const char *text)
 
 static void status_paint(const char *text) { bar_paint(s_rows, text); }
 
-// Say something and paint it NOW, without waiting for the next full draw: a
-// fetch takes as long as the network takes, and a person deserves to see what
-// is being fetched while it happens.
-static void status_show(const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    os64_vsnprintf(s_status, sizeof(s_status), fmt, args);
-    va_end(args);
-    status_paint(s_status);
-}
-
 // ── What the library asks us ────────────────────────────────────────────
 
-// Whether to stop. Asked by libfetch before every wait, which is also the
+// Whether to stop. Asked (through libway) by libfetch before every wait, which is also the
 // only chance this program gets to look at the keyboard while a fetch is in
 // flight — so this is where a raw-mode Ctrl+C is noticed. Anything else
 // typed was typed AHEAD and is still owed to whoever asks next.
@@ -625,44 +595,27 @@ static bool fetch_cancelled(void *ctx)
     return s_cancel != 0;
 }
 
-// A DOWNGRADE IS A PERSON'S DECISION, which is the whole reason libfetch
-// takes a callback: a script may not follow https into http, and somebody at
-// a keyboard may. Every other hop takes the library's own verdict.
-static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
+// How libway reaches the person: the same question row, the same fetch
+// supervision, the status row painted while a page loads.
+static bool face_confirm(void *ctx, const char *question, bool security, const char *refused)
 {
     (void)ctx;
-    if (hop->kind != OS64_FETCH_HOP_DOWNGRADE)
-        return OS64_FETCH_HOP_DEFAULT;
-    char question[WEND_STATUS_MAX];
-    os64_snprintf(question, sizeof(question),
-                  hop->to_method == OS64_FETCH_METHOD_POST
-                    ? " Resend form data unencrypted to %s? (y/n) "
-                    : " %s sends you to unencrypted http - follow? (y/n) ",
-                  hop->target.host);
-    bool yes = confirm(question, true, " stopped at the unencrypted hop");
-    if (yes)
-        status_set(" following an unencrypted hop");
-    return yes ? OS64_FETCH_HOP_FOLLOW : OS64_FETCH_HOP_STOP;
+    return confirm(question, security, refused);
+}
+
+static void face_progress(void *ctx, const char *sentence)
+{
+    (void)ctx;
+    status_paint(sentence);
 }
 
 // ── A page ──────────────────────────────────────────────────────────────
 
 static void view_clear(view_t *v)
 {
-    // The model points into the tree, so it goes first.
-    os64_page_free(v->model);
-    if (v->doc)
-        os64_html_document_free(v->doc);
-    os64_free(v->text);
+    way_page_clear(&v->way);
     wend_page_free(v->page);
-    os64_free(v->flipped);
-    v->flipped = NULL;
-    v->nflipped = v->flippedcap = 0;
-    v->model = NULL;
-    v->doc = NULL;
-    v->text = NULL;
     v->page = NULL;
-    v->textlen = 0;
 }
 
 // Wrap the page this view is holding to the current width. The tree (or the
@@ -671,137 +624,12 @@ static void view_clear(view_t *v)
 static void view_layout(view_t *v)
 {
     wend_page_free(v->page);
-    v->page = v->doc ? wend_render_html(v->doc, v->model, s_cols,
-                                        (const os64_html_node_t *const *)v->flipped,
-                                        v->nflipped)
-                     : wend_render_text(v->text, v->textlen, v->text_utf8, s_cols);
+    v->page = v->way.doc ? wend_render_html(v->way.doc, v->way.model, s_cols,
+                                        (const os64_html_node_t *const *)v->way.flipped,
+                                        v->way.nflipped)
+                     : wend_render_text(v->way.text, v->way.textlen, v->way.text_utf8, s_cols);
     if (!v->page)
         status_set(" out of memory laying the page out at %d columns", (int)s_cols);
-}
-
-// A media type from libfetch is already lowercased, so these compare
-// verbatim.
-static bool type_is_text(const char *type)
-{
-    return type[0] == 't' && type[1] == 'e' && type[2] == 'x' && type[3] == 't'
-           && type[4] == '/';
-}
-
-// Read the body into the tree. Feeding stops at the parser's first refusal —
-// which still leaves a document, because a page that was too large or too
-// deep is a page you can read the beginning of.
-static os64_html_document_t *parse_body(os64_fetch_t *f, const char *charset,
-                                        const char *url)
-{
-    os64_html_options_t opt = os64_html_options_default();
-    opt.charset = charset && charset[0] ? charset : NULL;
-    os64_html_parser_t *p = os64_html_parser_new(&opt);
-    if (!p)
-        return NULL;
-    char buf[8192];
-    uint64_t shown = 0;
-    for (;;) {
-        int64_t n = os64_fetch_read(f, buf, sizeof(buf));
-        if (n <= 0)
-            break;
-        if (os64_html_parser_feed(p, buf, (size_t)n) != OS64_HTML_OK)
-            break;
-        const os64_fetch_progress_t *progress = os64_fetch_progress(f);
-        if (progress->produced >= shown + 64u * 1024u) {
-            shown = progress->produced;
-            status_show(" reading %lu KB of %s", (unsigned long)(shown / 1024), url);
-        }
-    }
-    return os64_html_parser_finish(p);
-}
-
-// Read the body as bytes. The cap is the parser's, because a page is a page
-// whichever way it is written.
-static char *read_body(os64_fetch_t *f, size_t cap, size_t *len, const char *url,
-                       bool *whole)
-{
-    size_t at = 0, size = 16u * 1024u;
-    *len = 0;
-    *whole = true;
-    char *text = os64_malloc(size);
-    if (!text)
-        return NULL;
-    uint64_t shown = 0;
-    for (;;) {
-        if (at == size) {
-            if (size >= cap) {
-                // ASK FOR THE BYTE THAT WOULD CROSS THE CAP. libfetch refuses
-                // a body at `max_body` on the read that would pass it, not
-                // before, so stopping at a full buffer leaves the fetch
-                // reporting OK and this page claiming to be whole when it is
-                // the first 8 MB of something longer.
-                char probe;
-                (void)os64_fetch_read(f, &probe, 1);
-                break;
-            }
-            size_t want = size * 2 > cap ? cap : size * 2;
-            char *grown = os64_realloc(text, want);
-            if (!grown) {
-                // OUR failure, not the server's: libfetch will report OK
-                // because no read of ours ever failed, so the truncation has
-                // to be carried out of here by hand.
-                *whole = false;
-                break;
-            }
-            text = grown;
-            size = want;
-        }
-        int64_t n = os64_fetch_read(f, text + at, size - at);
-        if (n <= 0)
-            break;
-        at += (size_t)n;
-        if (at >= shown + 64u * 1024u) {
-            shown = at;
-            status_show(" reading %lu KB of %s", (unsigned long)(shown / 1024), url);
-        }
-    }
-    *len = at;
-    return text;
-}
-
-// What the reply's own charset label says about a text/plain body. UTF-8 is
-// the modern answer, and everything else is read as windows-1252 — which is
-// what libhtml does with the markup half of the same web, so a smart quote
-// cannot draw as `"` in a page and as `?` in the text file beside it. The
-// label is asked of libhtml's own table, so every spelling of UTF-8 the
-// markup half knows (`unicode-1-1-utf-8` among them) is known here too. A
-// server that says nothing about a .txt file written in 1994 is not talking
-// about UTF-8. A label naming an encoding in neither family is booked in
-// BROWSER.md; it reads as windows-1252 rather than as a refusal.
-//
-// BUT A FILE MAY SAY IT ITSELF. The three bytes `EF BB BF` are a UTF-8 byte
-// order mark, put there to be read by whatever opens the file, and a server
-// that mentioned no charset has not contradicted them. Taken as
-// windows-1252 they draw as `ï»¿` and every accented character after them
-// breaks into pieces. The mark itself needs no skipping: the fold spells
-// U+FEFF as nothing.
-static bool charset_is_utf8(const char *charset)
-{
-    const char *named = os64_html_encoding_for_label(charset, os64_strlen(charset));
-    return named != NULL && os64_streq(named, "utf-8");
-}
-
-static bool bytes_begin_utf8(const char *text, size_t len)
-{
-    return text && len >= 3 && (unsigned char)text[0] == 0xEF
-           && (unsigned char)text[1] == 0xBB && (unsigned char)text[2] == 0xBF;
-}
-
-// Whether an address can be offered inside single quotes as a command to
-// type. Quoted because husk splits a line at `;`; refused when the address
-// holds a quote itself, because a page chose it, and a quote in it would
-// end the quoting and run whatever the page wrote after it.
-static bool shell_quotable(const char *address)
-{
-    for (const char *q = address; *q != '\0'; q++)
-        if (*q == '\'')
-            return false;
-    return true;
 }
 
 // Fetch, parse and lay out one address. The view is built beside the one on
@@ -809,119 +637,16 @@ static bool shell_quotable(const char *address)
 // will not load leaves the previous page where it is, with the reason under
 // it (BROWSER.md § The face).
 // `why` is the fetch's own verdict when there was one, for the caller that
-// has to turn it into an exit code. NULL when nobody is asking.
+// has to turn it into an exit code. NULL when nobody is asking. `request`
+// is the form being sent, NULL for a GET.
 static bool load(const char *url, view_t *out, os64_fetch_status_t *why,
                  const os64_page_request_t *request)
 {
-    bool short_of_memory = false;        // a truncation of OURS, not the wire's
-    if (why)
-        *why = OS64_FETCH_OK;
-    status_show(" fetching %s", url);
     s_cancel = 0;
-
-    os64_html_options_t limits = os64_html_options_default();
-    os64_fetch_options_t opt = { 0 };
-    opt.user_agent = WEND_AGENT;
-    opt.accept = WEND_ACCEPT;
-    opt.max_body = limits.max_bytes;     // the same page, the same cap
-    opt.cancelled = fetch_cancelled;
-    opt.on_hop = hop_ask;
-    if (request && request->method == OS64_PAGE_METHOD_POST) {
-        opt.method = OS64_FETCH_METHOD_POST;
-        opt.body = request->body;
-        opt.body_len = request->body_len;
-        opt.content_type = request->content_type;
-    }
-
-    os64_fetch_t *f = os64_fetch_open(url, &opt);
-    if (!f) {
-        status_set(" out of memory fetching %s", url);
+    if (!way_load(&s_way, url, request, &out->way, why))
         return false;
-    }
-    const os64_fetch_head_t *head = os64_fetch_head(f);
-    if (!head) {
-        if (why)
-            *why = os64_fetch_status(f);
-        status_set(" %s", os64_fetch_reason(f));
-        os64_fetch_close(f);
-        return false;
-    }
-
-    // A 404 IS A PAGE AND IS SHOWN AS ONE. The status goes in the note, not
-    // in a refusal: servers say a great deal in the body of a reply a
-    // downloader would throw away.
-    const char *type = head->content_type;
-    bool html = type[0] == '\0' || os64_streq(type, "text/html")
-                || os64_streq(type, "application/xhtml+xml");
-    bool plain = !html && type_is_text(type);
-    if (!html && !plain) {
-        // A new GET cannot recover a response generated by POST.
-        if (head->method == OS64_FETCH_METHOD_POST)
-            status_set(" that is %s - wend cannot display or save this POST response", type);
-        else if (shell_quotable(head->url_text))
-            status_set(" that is %s, not a page - save it with:  os64get '%s'",
-                       type, head->url_text);
-        else
-            status_set(" that is %s, not a page - and its address holds a quote,"
-                       " so save it by hand", type);
-        os64_fetch_close(f);
-        return false;
-    }
-
-    os64_strcopy(out->url, sizeof(out->url), head->url_text);
     out->sel = -1;
     out->top = 0;
-
-    if (html) {
-        out->doc = parse_body(f, head->charset, url);
-        if (!out->doc) {
-            status_set(" out of memory reading %s", url);
-            os64_fetch_close(f);
-            return false;
-        }
-        // WHAT THE PAGE MEANS, from the tree and the address it came from —
-        // `<base href>` included, which libpage reads. A page it cannot build
-        // a model of is still a page worth reading, so this is not a failure
-        // to return: what it costs is the links and boxes, which are drawn
-        // and cannot be used, and the status row says so.
-        out->model = os64_page_build(out->doc, head->url_text, NULL);
-    } else {
-        bool whole = true;
-        out->text = read_body(f, limits.max_bytes, &out->textlen, url, &whole);
-        if (!whole)
-            short_of_memory = true;
-        out->text_utf8 = head->charset[0] != '\0'
-                             ? charset_is_utf8(head->charset)
-                             : bytes_begin_utf8(out->text, out->textlen);
-        if (!out->text) {
-            status_set(" out of memory reading %s", url);
-            os64_fetch_close(f);
-            return false;
-        }
-    }
-
-    // EVERY WAY A PAGE CAN BE INCOMPLETE GETS A SENTENCE, because half a
-    // page that says so is worth reading and half a page that pretends to be
-    // whole is not.
-    char trouble[WEND_STATUS_MAX];
-    trouble[0] = '\0';
-    os64_fetch_status_t st = os64_fetch_status(f);
-    if (why)
-        *why = st;
-    if (short_of_memory)
-        os64_strcopy(trouble, sizeof(trouble),
-                     " - this machine ran out of memory partway, so the page"
-                     " stops where it does");
-    else if (st != OS64_FETCH_OK)
-        os64_snprintf(trouble, sizeof(trouble), " - %s", os64_fetch_reason(f));
-    else if (out->doc && out->doc->refusal)
-        os64_snprintf(trouble, sizeof(trouble), " - the page is bigger than this"
-                      " browser will parse (%s)",
-                      os64_html_status_name(out->doc->refusal));
-    os64_snprintf(out->note, sizeof(out->note), "%ld%s%s%s", (long)head->status,
-                  head->reason[0] ? " " : "", head->reason, trouble);
-    os64_fetch_close(f);
-
     view_layout(out);
     if (!out->page) {
         view_clear(out);                 // view_layout said why
@@ -929,7 +654,7 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why,
     }
     if (out->page->incomplete)
         status_set(" out of memory partway through the page - what is here is real");
-    else if (out->doc && (!out->model || os64_page_incomplete(out->model)))
+    else if (out->way.doc && (!out->way.model || os64_page_incomplete(out->way.model)))
         status_set(" out of memory understanding the page - its links and boxes"
                    " may not work");
     else if (out->page->nlines == 0)
@@ -939,7 +664,7 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why,
         // sent nothing" and "this browser is broken".
         status_set(" that answer has nothing in it this browser can show");
     else
-        s_status[0] = '\0';
+        s_way.status[0] = '\0';
     return true;
 }
 
@@ -987,7 +712,7 @@ static void draw(const view_t *v)
     const wend_page_t *page = v->page;
 
     // A page with no title of its own is named by where it came from.
-    bar_paint(1, page && page->title[0] ? page->title : v->url);
+    bar_paint(1, page && page->title[0] ? page->title : v->way.url);
 
     int32_t rows = content_rows();
     for (int32_t row = 0; row < rows; row++) {
@@ -1000,8 +725,8 @@ static void draw(const view_t *v)
 
     // The transient sentence outranks the standing one: what just happened
     // matters more than where you are, until the next key.
-    if (s_status[0] != '\0') {
-        status_paint(s_status);
+    if (s_way.status[0] != '\0') {
+        status_paint(s_way.status);
     } else {
         char line[WEND_STATUS_MAX];
         int32_t last = page ? v->top + rows : 0;
@@ -1009,7 +734,7 @@ static void draw(const view_t *v)
             last = page->nlines;
         os64_snprintf(line, sizeof(line), " %d-%d/%d  %s  %s",
                       page && page->nlines ? v->top + 1 : 0, last,
-                      page ? page->nlines : 0, v->note, v->url);
+                      page ? page->nlines : 0, v->way.note, v->way.url);
         status_paint(line);
     }
     cursor_to(s_rows, s_cols);
@@ -1118,19 +843,20 @@ static void move_selection(view_t *v, int32_t step)
     scroll_to_spot(v);
 }
 
+// Where the reader is, in the form libway keeps for the history: the row at
+// the top and the selected spot.
+static way_position_t position_of(const view_t *v)
+{
+    way_position_t p = {{0}};
+    os64_memcpy(p.bytes, &v->top, sizeof(v->top));
+    os64_memcpy(p.bytes + sizeof(v->top), &v->sel, sizeof(v->sel));
+    return p;
+}
+
 static void history_push(const view_t *v)
 {
-    if (s_depth >= WEND_HISTORY_MAX) {
-        // Drop the OLDEST crumb rather than refuse to go forward: somebody
-        // sixty-four pages in wants the sixty-fifth more than the first.
-        for (int32_t i = 1; i < WEND_HISTORY_MAX; i++)
-            s_history[i - 1] = s_history[i];
-        s_depth = WEND_HISTORY_MAX - 1;
-    }
-    os64_strcopy(s_history[s_depth].url, sizeof(s_history[s_depth].url), v->url);
-    s_history[s_depth].top = v->top;
-    s_history[s_depth].sel = v->sel;
-    s_depth++;
+    way_position_t where = position_of(v);
+    way_remember(&s_way, v->way.url, &where);
 }
 
 // Go somewhere. The new page is built beside the old one and only replaces
@@ -1149,26 +875,6 @@ static bool go(view_t *v, const char *url, bool remember, const os64_page_reques
     return true;
 }
 
-// Open or close a `details` for the reader. False on no memory.
-static bool details_flip(view_t *v, const os64_html_node_t *details)
-{
-    for (int32_t i = 0; i < v->nflipped; i++)
-        if (v->flipped[i] == details) {
-            v->flipped[i] = v->flipped[--v->nflipped];   // flipped back
-            return true;
-        }
-    if (v->nflipped == v->flippedcap) {
-        int32_t cap = v->flippedcap ? v->flippedcap * 2 : 8;
-        const os64_html_node_t **grown = os64_realloc(v->flipped, (size_t)cap * sizeof(*grown));
-        if (grown == NULL)
-            return false;
-        v->flipped = grown;
-        v->flippedcap = cap;
-    }
-    v->flipped[v->nflipped++] = details;
-    return true;
-}
-
 static void edit_commit(view_t *v);
 
 // A TARGET FOLDED INSIDE A CLOSED `details` IS OPENED TO, the way a browser
@@ -1180,8 +886,8 @@ static bool details_reveal(view_t *v, const os64_html_node_t *node)
     for (const os64_html_node_t *up = node->parent; up != NULL; up = up->parent)
         if (up->kind == OS64_HTML_ELEMENT && up->ns == OS64_HTML_NS_HTML &&
             up->tag == OS64_HTML_TAG_DETAILS &&
-            !wend_details_open(up, (const os64_html_node_t *const *)v->flipped, v->nflipped) &&
-            details_flip(v, up))
+            !wend_details_open(up, (const os64_html_node_t *const *)v->way.flipped, v->way.nflipped) &&
+            way_details_flip(&v->way, up))
             opened = true;
     if (!opened)
         return false;
@@ -1218,7 +924,7 @@ static void jump_to_node(view_t *v, const os64_html_node_t *node)
 static void jump_to_fragment(view_t *v, const char *name)
 {
     const os64_html_node_t *node = NULL;
-    os64_page_reason_t reason = os64_page_resolve_fragment(v->model, name, &node);
+    os64_page_reason_t reason = os64_page_resolve_fragment(v->way.model, name, &node);
     if (reason != OS64_PAGE_REASON_OK) {
         status_set(" %s", os64_page_reason_name(reason));
         return;
@@ -1228,58 +934,17 @@ static void jump_to_fragment(view_t *v, const char *name)
 
 // ── Doing what a page asks ──────────────────────────────────────────────
 //
-// EVERY FETCH A PAGE ASKS FOR ENDS HERE: a link followed, a form sent, a
-// refresh the document declares. (A move within the page is no fetch and
-// never comes here.) libpage has already decided where each one goes and says what it knows about it; what is left is this browser's
-// own list of what it can carry, and the person's decision where one is
-// owed. One door, because the same rules written once per road are how a
-// road comes to miss one.
-
-// WHO IS ASKED BEFORE AN ENCRYPTED PAGE'S REQUEST GOES OUT IN THE CLEAR.
-// Nobody for a link: a person pressed it, and where it goes is written on
-// the page. A person for a form, because what goes is what they typed, and
-// for a refresh, because the page chose the destination and nobody pressed
-// anything. libfetch's downgrade callback cannot see either: it judges the
-// redirects inside one fetch, and each of these starts a new fetch where the
-// page said.
-typedef enum {
-    ASK_NEVER = 0,
-    ASK_SEND,         // a form: "shall what you typed go in clear?"
-    ASK_GO,           // a refresh: "shall I take you there?"
-} ask_t;
+// Every fetch a page asks for is judged by libway (way_judge): this
+// browser's list of what it carries, and the question owed before anything
+// goes out in clear. What is left here is going there, and finding the
+// `#name` on the page that arrives.
 
 // Perform a NAVIGATE. True when the view moved. The request's strings are
 // its own, so they outlive the view `go` replaces.
-static bool perform(view_t *v, const os64_page_request_t *request, bool remember, ask_t ask)
+static bool perform(view_t *v, const os64_page_request_t *request, bool remember, way_ask_t ask)
 {
-    // WHICH SCHEMES THIS BROWSER FOLLOWS IS ITS OWN LIST, which is why
-    // libpage states the scheme instead of keeping one.
-    if (os64_streq(request->scheme, "gopher")) {
-        if (shell_quotable(request->url))
-            status_set(" that is gopherspace - read it with:  gopher '%s'", request->url);
-        else
-            status_set(" that is gopherspace - and its address holds a quote,"
-                       " so open it in gopher by hand");
+    if (!way_may_go(&s_way, request, ask))
         return false;
-    }
-    if (!os64_streq(request->scheme, "http") && !os64_streq(request->scheme, "https")) {
-        status_set(" that is a %s: address, which wend does not fetch", request->scheme);
-        return false;
-    }
-    if (ask != ASK_NEVER && request->downgrade) {
-        char question[WEND_STATUS_MAX];
-        os64_url_t target;
-        const char *host = os64_url_parse(request->url, &target) == OS64_URL_OK
-                               ? target.host : "that address";
-        if (ask == ASK_SEND)
-            os64_snprintf(question, sizeof(question),
-                          " %s would get this unencrypted - send it? (y/n) ", host);
-        else
-            os64_snprintf(question, sizeof(question),
-                          " this encrypted page sends you to %s unencrypted - go? (y/n) ", host);
-        if (!confirm(question, true, ask == ASK_SEND ? " not sent" : " stayed here"))
-            return false;
-    }
     if (!go(v, request->url, remember, request))
         return false;
     // The new page's own model finds the section: the `#name` was asked of
@@ -1289,82 +954,28 @@ static bool perform(view_t *v, const os64_page_request_t *request, bool remember
     return true;
 }
 
-// ── A page that asks to send you somewhere ──────────────────────────────
-//
-// `<meta http-equiv="refresh">` is a navigation the DOCUMENT declares, and
-// following it is what makes a search engine's result links work: the HTML
-// endpoints wrap every link in a click logger that answers 200 with no
-// redirect, a script for a browser that runs one, and this for a browser
-// that does not. libpage says whether one is declared and where to; the
-// three rules about whether to OBEY are here, because they are about a
-// person reading rather than about a page.
-// A chain of these can go on forever, so it is capped the way a chain of
-// redirects is — and for the same reason, which is that nobody reading can
-// tell the difference between a slow one and a stuck one.
-#define WEND_REFRESH_MAX 5
-
-// ONE HOP OF A CHAIN. True means the view moved and the page it moved to has
-// not been looked at yet, so the caller asks again: a redirector that lands
-// on another redirector must not need a keypress between them, which is
-// what following only one per trip through the key loop would have meant.
+// ONE HOP OF A DECLARED REFRESH'S CHAIN, judged by libway. True means the
+// view moved and the page it moved to has not been looked at yet, so the
+// caller asks again: a redirector that lands on another redirector must not
+// need a keypress between them, which is what following only one per trip
+// through the key loop would have meant.
 static bool refresh_once(view_t *v, int32_t *chain)
 {
-    if (v->refresh_handled)
-        return false;
-    const os64_page_refresh_t *refresh = v->model ? os64_page_refresh(v->model) : NULL;
-    v->refresh_handled = true;
-    if (refresh == NULL)
-        return false;                    // an ordinary page ends the chain
-    if (refresh->url.refused != OS64_PAGE_REASON_OK) {
-        status_set(" refresh: %s", os64_page_reason_name(refresh->url.refused));
-        return false;
-    }
-    // A DELAY IS A PERSON'S PATIENCE TO SPEND. wend has no timer in its key
-    // loop and a page that moves under a reader mid-sentence is hostile, so
-    // a delayed refresh is reported and left for them to act on. The "you
-    // will be redirected in five seconds" page always carries a link too.
-    if (refresh->seconds != 0) {
-        if (refresh->names_this_document)
-            status_set(" this page asks to reload itself every %u seconds",
-                       (unsigned)refresh->seconds);
-        else
-            status_set(" this page asks to send you to %s in %u seconds - press g to go",
-                       refresh->url.url, (unsigned)refresh->seconds);
-        return false;
-    }
-    // A same-document refresh without a fragment would reload in a loop.
-    // A fragment instead moves within this document and is handled below.
-    if (refresh->names_this_document && !refresh->url.has_fragment) {
-        status_set(" this page asks to reload itself immediately, which wend does not do");
-        return false;
-    }
-    if (++*chain > WEND_REFRESH_MAX) {
-        status_set(" this page is the end of a chain of redirects too long to follow");
-        return false;
-    }
-    os64_page_what_t what = { OS64_PAGE_ACTIVATE_REFRESH, 0, 0, 0 };
     os64_page_request_t request;
-    os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
     bool moved = false;
-    if (verdict == OS64_PAGE_FRAGMENT)
-        jump_to_node(v, request.anchor);
-    else if (verdict == OS64_PAGE_NAVIGATE)
-        // Redirectors do not occupy a history entry.
-        moved = perform(v, &request, false, ASK_GO);
-    else
-        status_set(" this page asks to send you somewhere it does not name properly");
+    switch (way_refresh_step(&s_way, &v->way, chain, &request)) {
+        case WAY_REFRESH_JUMP:
+            jump_to_node(v, request.anchor);
+            break;
+        case WAY_REFRESH_GO:
+            // Redirectors do not occupy a history entry.
+            moved = perform(v, &request, false, WAY_ASK_GO);
+            break;
+        case WAY_REFRESH_NONE:
+            return false;
+    }
     os64_page_request_free(&request);
     return moved;
-}
-
-// The address a page asks to send the reader to after a delay, or NULL.
-static const char *delayed_refresh(const view_t *v)
-{
-    const os64_page_refresh_t *refresh = v->model ? os64_page_refresh(v->model) : NULL;
-    if (refresh == NULL || refresh->seconds == 0 || refresh->names_this_document ||
-        refresh->url.refused != OS64_PAGE_REASON_OK || refresh->url.url == NULL)
-        return NULL;
-    return refresh->url.url;
 }
 
 static void refresh_if_declared(view_t *v)
@@ -1378,12 +989,12 @@ static void follow_link(view_t *v, int32_t index)
 {
     os64_page_what_t what = { OS64_PAGE_ACTIVATE_LINK, v->page->spots[index].link, 0, 0 };
     os64_page_request_t request;
-    os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
+    os64_page_verdict_t verdict = os64_page_activate(v->way.model, what, &request);
     v->sel = index;
     if (verdict == OS64_PAGE_FRAGMENT)
         jump_to_node(v, request.anchor);   // a place in this page: a move, no fetch
     else if (verdict == OS64_PAGE_NAVIGATE)
-        perform(v, &request, true, ASK_NEVER);
+        perform(v, &request, true, WAY_ASK_NEVER);
     else
         status_set(" %s", os64_page_reason_name(request.reason));
     os64_page_request_free(&request);
@@ -1399,9 +1010,9 @@ static void form_send(view_t *v, int32_t control, os64_page_activation_t how)
 {
     os64_page_what_t what = { how, control, 0, 0 };
     os64_page_request_t request;
-    os64_page_verdict_t verdict = os64_page_activate(v->model, what, &request);
+    os64_page_verdict_t verdict = os64_page_activate(v->way.model, what, &request);
     if (verdict == OS64_PAGE_NAVIGATE) {
-        perform(v, &request, true, ASK_SEND);
+        perform(v, &request, true, WAY_ASK_SEND);
     } else if (verdict == OS64_PAGE_FRAGMENT) {
         jump_to_node(v, request.anchor);
     } else {
@@ -1433,7 +1044,7 @@ static void form_send(view_t *v, int32_t control, os64_page_activation_t how)
 // overrules, wherever on the page that button stands.
 static void form_send_if_alone(view_t *v, int32_t control)
 {
-    const os64_page_control_t *c = os64_page_control(v->model, control);
+    const os64_page_control_t *c = os64_page_control(v->way.model, control);
     if (c == NULL || c->form < 0 || v->page == NULL)
         return;
     int32_t answers = 0;
@@ -1441,7 +1052,7 @@ static void form_send_if_alone(view_t *v, int32_t control)
         const wend_spot_t *spot = &v->page->spots[i];
         if (spot->kind == WEND_SPOT_LINK || spot->kind == WEND_SPOT_SUBMIT)
             continue;
-        const os64_page_control_t *other = os64_page_control(v->model, spot->control);
+        const os64_page_control_t *other = os64_page_control(v->way.model, spot->control);
         if (other != NULL && other->form == c->form && !other->readonly)
             answers++;
     }
@@ -1510,7 +1121,7 @@ static bool edit_refused(int64_t rc)
 static void field_type(view_t *v, int32_t index)
 {
     int32_t control = v->page->spots[index].control;
-    const os64_page_control_t *c = os64_page_control(v->model, control);
+    const os64_page_control_t *c = os64_page_control(v->way.model, control);
     if (c == NULL)
         return;
     if (c->readonly) {
@@ -1547,7 +1158,7 @@ static void field_type(view_t *v, int32_t index)
         return;
     }
     size_t len = typed_to_value(shown, stored, sizeof(stored));
-    if (edit_refused(os64_page_set_text(v->model, control, stored, len)))
+    if (edit_refused(os64_page_set_text(v->way.model, control, stored, len)))
         return;
     edit_commit(v);
     // ENTER IN A SEARCH BOX SENDS IT: a form whose only box you can type in
@@ -1559,8 +1170,8 @@ static void field_type(view_t *v, int32_t index)
 static void check_toggle(view_t *v, int32_t index)
 {
     int32_t control = v->page->spots[index].control;
-    const os64_page_control_t *c = os64_page_control(v->model, control);
-    if (c == NULL || edit_refused(os64_page_set_checked(v->model, control, !c->checked)))
+    const os64_page_control_t *c = os64_page_control(v->way.model, control);
+    if (c == NULL || edit_refused(os64_page_set_checked(v->way.model, control, !c->checked)))
         return;
     edit_commit(v);
 }
@@ -1569,7 +1180,7 @@ static void check_toggle(view_t *v, int32_t index)
 // radio — and which radios are a group is the model's answer.
 static void radio_pick(view_t *v, int32_t index)
 {
-    if (edit_refused(os64_page_set_checked(v->model, v->page->spots[index].control, true)))
+    if (edit_refused(os64_page_set_checked(v->way.model, v->page->spots[index].control, true)))
         return;
     edit_commit(v);
 }
@@ -1586,7 +1197,7 @@ static void radio_pick(view_t *v, int32_t index)
 static void choice_cycle(view_t *v, int32_t index)
 {
     int32_t control = v->page->spots[index].control;
-    const os64_page_control_t *c = os64_page_control(v->model, control);
+    const os64_page_control_t *c = os64_page_control(v->way.model, control);
     if (c == NULL || c->noptions == 0)
         return;
     // Step from what the row shows, to the next option the page will take.
@@ -1606,12 +1217,12 @@ static void choice_cycle(view_t *v, int32_t index)
         status_set(" that list offers nothing else");
         return;
     }
-    if (edit_refused(os64_page_set_chosen(v->model, control, next, true)))
+    if (edit_refused(os64_page_set_chosen(v->way.model, control, next, true)))
         return;
     if (c->multiple)
         for (int32_t i = 0; i < c->noptions; i++)
             if (i != next && c->options[i].selected &&
-                edit_refused(os64_page_set_chosen(v->model, control, i, false)))
+                edit_refused(os64_page_set_chosen(v->way.model, control, i, false)))
                 break;
     edit_commit(v);
 }
@@ -1640,7 +1251,7 @@ static void activate(view_t *v, int32_t index)
         case WEND_SPOT_CHOICE: choice_cycle(v, index); break;
         case WEND_SPOT_SUBMIT: form_send(v, spot->control, OS64_PAGE_ACTIVATE_CONTROL); break;
         case WEND_SPOT_TOGGLE:
-            if (!details_flip(v, spot->node))
+            if (!way_details_flip(&v->way, spot->node))
                 status_set(" out of memory opening that");
             else
                 edit_commit(v);
@@ -1650,16 +1261,14 @@ static void activate(view_t *v, int32_t index)
 
 static void back(view_t *v)
 {
-    if (s_depth == 0) {
-        status_set(" this is where you came in");
+    way_crumb_t crumb;
+    if (!way_last(&s_way, &crumb))
         return;
-    }
-    crumb_t crumb = s_history[s_depth - 1];
     view_t next = { 0 };
     next.sel = -1;
     if (!load(crumb.url, &next, NULL, NULL))
         return;                          // the history is untouched; the row says why
-    s_depth--;
+    way_forget_last(&s_way);
     view_clear(v);
     *v = next;
     // Where you were on that page, as near as the page you get back allows.
@@ -1668,23 +1277,12 @@ static void back(view_t *v)
     // page loses a story, a search reruns. So the remembered selection is a
     // hint that has to be checked against what actually came back, not a
     // position that can be trusted into an array.
-    v->top = crumb.top;
-    v->sel = crumb.sel < v->page->nspots ? crumb.sel : -1;
+    int32_t top, sel;
+    os64_memcpy(&top, crumb.position.bytes, sizeof(top));
+    os64_memcpy(&sel, crumb.position.bytes + sizeof(top), sizeof(sel));
+    v->top = top;
+    v->sel = sel < v->page->nspots ? sel : -1;
     scroll_clamp(v);
-}
-
-// An address a person typed. A bare `host/path` means http, the way a bare
-// host means gopher to the gopher client: guessing what a word means belongs
-// to whoever is entitled to guess, and here that is the browser.
-// AN ADDRESS THAT DOES NOT FIT IS REFUSED, NOT TRIMMED. A truncated URL is
-// not a shorter way of saying the same thing — it is a different address,
-// and one nobody typed.
-static bool typed_address(const char *typed, char *out, size_t cap)
-{
-    for (const char *p = typed; *p != '\0' && *p != '/'; p++)
-        if (p[0] == ':' && p[1] == '/' && p[2] == '/')
-            return os64_strcopy(out, cap, typed) < cap;
-    return (size_t)os64_snprintf(out, cap, "http://%s", typed) < cap;
 }
 
 // ── The keys, written down ──────────────────────────────────────────────
@@ -1733,11 +1331,11 @@ static void help_show(void)
 {
     view_t help = { 0 };
     help.sel = -1;
-    os64_strcopy(help.url, sizeof(help.url), "the keys");
-    os64_strcopy(help.note, sizeof(help.note), "any other key returns");
-    help.text = (char *)WEND_KEYS;     // borrowed; never freed with the view
-    help.textlen = sizeof(WEND_KEYS) - 1;
-    help.text_utf8 = true;
+    os64_strcopy(help.way.url, sizeof(help.way.url), "the keys");
+    os64_strcopy(help.way.note, sizeof(help.way.note), "any other key returns");
+    help.way.text = (char *)WEND_KEYS;     // borrowed; never freed with the view
+    help.way.textlen = sizeof(WEND_KEYS) - 1;
+    help.way.text_utf8 = true;
     view_layout(&help);
 
     for (;;) {
@@ -1750,7 +1348,7 @@ static void help_show(void)
         draw(&help);
         char literal;
         key_t k = key_read(&literal);
-        s_status[0] = '\0';
+        s_way.status[0] = '\0';
         if (k == KEY_UP)        scroll_by(&help, -1);
         else if (k == KEY_DOWN) scroll_by(&help, 1);
         else if (k == KEY_PGUP) scroll_by(&help, -content_rows());
@@ -1780,7 +1378,7 @@ static int32_t session(const char *start)
         // could parse is the typist's to mend; everything else is the
         // network's, the server's or this machine's.
         screen_restore();
-        os64_hprintf(OS64_STDERR, "wend:%s\n", s_status);
+        os64_hprintf(OS64_STDERR, "wend:%s\n", s_way.status);
         return (why == OS64_FETCH_BAD_URL || why == OS64_FETCH_UNSUPPORTED_SCHEME)
                ? WEND_BAD_URL : WEND_FAILED;
     }
@@ -1812,7 +1410,7 @@ static int32_t session(const char *start)
         if (s_raw_refused) {
             s_raw_refused = false;
             char page_said[WEND_STATUS_MAX];
-            os64_strcopy(page_said, sizeof(page_said), s_status);
+            os64_strcopy(page_said, sizeof(page_said), s_way.status);
             status_set("%s%s this terminal will not go raw - Ctrl+C interrupts instead",
                        page_said, page_said[0] ? " -" : "");
         }
@@ -1822,7 +1420,7 @@ static int32_t session(const char *start)
         key_t k = key_read(&literal);
         if (k == KEY_NONE)
             continue;                    // a signal, or half an escape sequence
-        s_status[0] = '\0';              // the last sentence was about the last state
+        s_way.status[0] = '\0';              // the last sentence was about the last state
 
         bool keeps_number = false;
         switch (k) {
@@ -1878,7 +1476,7 @@ static int32_t session(const char *start)
                     case 'r':
                         // Again, and not into the history: you have not gone
                         // anywhere.
-                        go(&view, view.url, false, NULL);
+                        go(&view, view.way.url, false, NULL);
                         break;
                     case 'g': {
                         // An address is typed fresh — unless the page asked
@@ -1888,7 +1486,7 @@ static int32_t session(const char *start)
                         // reader's own decision to go.
                         char typed[OS64_FETCH_URL_MAX];
                         typed[0] = '\0';
-                        const char *later = delayed_refresh(&view);
+                        const char *later = way_delayed_refresh(&view.way);
                         if (later != NULL && os64_strlen(later) < sizeof(typed))
                             os64_strcopy(typed, sizeof(typed), later);
                         if (prompt(" go to: ", typed, sizeof(typed), false) != PROMPT_TYPED) {
@@ -1896,7 +1494,7 @@ static int32_t session(const char *start)
                             break;
                         }
                         char whole[OS64_FETCH_URL_MAX];
-                        if (!typed_address(typed, whole, sizeof(whole))) {
+                        if (!way_typed_address(typed, whole, sizeof(whole))) {
                             status_set(" that address is longer than one may be");
                             break;
                         }
@@ -1980,7 +1578,7 @@ int main(int argc, char **argv)
         where = "example.com";           // the page that is always there
 
     char start[OS64_FETCH_URL_MAX];
-    if (!typed_address(where, start, sizeof(start))) {
+    if (!way_typed_address(where, start, sizeof(start))) {
         os64_hprintf(OS64_STDERR, "wend: that address is longer than one may be\n");
         return WEND_BAD_URL;
     }
@@ -1996,6 +1594,11 @@ int main(int argc, char **argv)
     os64_signal_set_handler(OS64_SIGWINCH, on_resize);
     os64_signal_set_handler(OS64_SIGHUP, on_hangup);
     os64_signal_set_handler(OS64_SIGTERM, on_hangup);
+
+    s_way.name = "wend";
+    s_way.agent = WEND_AGENT;
+    s_way.accept = WEND_ACCEPT;
+    s_way.face = (way_face_t){NULL, face_confirm, fetch_cancelled, face_progress};
 
     geometry();
     raw_acquire();

@@ -414,7 +414,10 @@ names three models offered. To wend is to go somewhere by an indirect and
 curious route, and it is old enough that its past tense wandered off to
 become the "went" everybody uses for a verb that now has no present tense of
 its own. Nobody marches through the web. It lives in `userland/apps/wend/` —
-`wend.c` is the session, `render.c` the tree walk.
+`wend.c` is the terminal half, `render.c` the tree walk — and its session
+(the history, the loading, every judgement about what a page asks for) is
+`userland/libway/`, lifted out for yonder by packet 06 with wend's
+behaviour unchanged.
 
 What follows is what it does. Where the build departed from the spec this
 section began as, the departure is marked **(departure)** and argued where
@@ -641,8 +644,9 @@ lives beside its renderer; the decode helpers are libos64's
 (`os64_utf8_decode` / `os64_utf8_encode`, `str.h`), because every future
 consumer of the tree needs them.
 
-**The navigator.** A history stack of addresses with the scroll position
-and selection at the time of leaving, exactly `history_push`'s shape;
+**The navigator.** A history stack of addresses with where the reader was
+at the time of leaving — libway's crumbs, whose position is an opaque blob
+the face fills (wend's row and selection, yonder's scroll offset);
 `b` (and Backspace) pops it and refetches — a cache is the graphical
 browser's problem.
 
@@ -731,8 +735,8 @@ stands out of sight.
 **POST forms send the body and content type libpage built through
 libfetch.** Reload and Back fetch the stored URL using GET; submitted
 bodies are not retained in history. **Every navigation a page asks for — a link, a
-form, a declared refresh — goes through one function** (`perform` in
-wend.c), which holds this browser's own list of the schemes it fetches and
+form, a declared refresh — is judged in one place** (`way_judge` in
+libway), which holds this browser's own list of the schemes it fetches and
 the person's decisions.
 
 **A form off an HTTPS page whose action is plain `http` asks first**, and
