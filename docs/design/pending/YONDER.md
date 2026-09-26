@@ -592,8 +592,9 @@ all moving; yonder's CPU time over 20 seconds — 1.5 s with them on screen
 colour, a cell with a half-transparent picture over yellow, and a cell
 whose picture moves, all scrolling with the page. Live: the 1996 Space Jam
 site on its starfield, 13 of 13 pictures; theoldnet's GIFs moving on the
-P5 (Chris), all but `bullet02.gif`, which libimage refuses whole
-(BROWSER_DEBTS.md).
+P5 (Chris). Its `bullet02.gif`, which ends with a timing block for a frame
+that never comes, moves since Quinn's libimage fix (PR #142): a local GIF
+of the same shape cycles through its seven frames in the guest.
 
 **Sixteen handles were not enough.** The ticker's pipe and thread took
 yonder to fourteen of the kernel's sixteen before its first fetch, and the
