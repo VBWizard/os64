@@ -110,6 +110,12 @@ cells or pixels.
   than fetching the page it sits on as a picture. Where a picture comes
   from is a fact about the page; how big it is stays on the node, for
   whoever lays the page out (LAYOUT.md).
+- **Backgrounds**: every `body`, `table`, `thead`, `tbody`, `tfoot`, `tr`,
+  `td` and `th` whose `background` attribute is not empty — the Rendering
+  chapter's `background-image` for the old web — with the address resolved
+  against the base, for the reason a picture's is. The attribute on any
+  other element is nobody's, and is not listed. A face with nowhere to put
+  a picture behind text (wend) reads none of them.
 - **Anchors**: every `id` and every old-style `<a name>`, the names a
   fragment is matched against, with the match made on the DECODED fragment
   (round 7: a heading with a space in its name).

@@ -54,7 +54,8 @@
 #define TRIP_RESERVE (80u << 20)
 #define POOL_BUDGET  (768u << 20)
 
-// Decoded pixels a page may keep; past it a picture draws as its frame.
+// What a page's pictures may cost to keep — a still one's pixels, a moving
+// one's whole sequence; past it a picture draws as its frame.
 #define PICTURES_KEPT_MAX ((size_t)256u << 20)
 
 // The window's doorbell bits: the pool's completions, and a navigation's
@@ -224,10 +225,11 @@ typedef struct {
     os64_page_t *plain_model;
     flow_tree_t *tree;
     int32_t laid_width;
-    // The pictures, and for each of libpage's pictures (os64_page_image)
-    // which of these it is, -1 for one that will not be fetched.
+    // The pictures, one per address, and for each of libpage's pictures
+    // (os64_page_image) and backgrounds (os64_page_background) which of
+    // these it is, -1 for one that will not be fetched.
     Picture *pics;
-    int32_t npics, *pic_of;
+    int32_t npics, *pic_of, *bg_of;
     int32_t waiting, not_kept;
     size_t kept_bytes;
     // The form whose reply this is, when the reply was to a POST: what
@@ -270,6 +272,7 @@ static void page_clear(Page *p)
     }
     os64_free(p->pics);
     os64_free(p->pic_of);
+    os64_free(p->bg_of);
     flow_free(p->tree);
     os64_page_free(p->plain_model);
     os64_html_document_free(p->plain);
@@ -1051,64 +1054,70 @@ static void open_address(const char *typed, NavKind kind, const way_position_t *
 
 // ── Pictures ────────────────────────────────────────────────────────────
 
-// Fetches the page's pictures, one job per address, in tree order: libpage's
-// list is the record. A picture whose address was refused, or names a
-// scheme nothing here fetches, is never asked for.
+// The picture at `url`, fetched once however many times the page names it:
+// its index in the page's table, or -1 for an address nothing here fetches.
+// A job the pool will not take leaves its picture to keep its frame.
+static int32_t picture_for(Page *p, const char *url)
+{
+    if (url == NULL)
+        return -1;
+    bool fetchable = os64_strlen(url) > 7 &&
+                     (os64_memcmp(url, "http://", 7) == 0 ||
+                      (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
+                      os64_memcmp(url, "file://", 7) == 0);
+    if (!fetchable)
+        return -1;
+    for (int32_t k = 0; k < p->npics; k++)
+        if (os64_streq(p->pics[k].url, url))
+            return k;
+    Picture *pic = &p->pics[p->npics];
+    pic->url = url;
+    pic->state = PIC_FAILED;
+    yonder_picture_job_t *job = os64_calloc(1, sizeof(*job));
+    if (job != NULL) {
+        job->kind = YONDER_JOB_PICTURE;
+        job->index = p->npics;
+        job->generation = g.page_serial;
+        job->agent = g.way.agent;
+        os64_strcopy(job->url, sizeof(job->url), url);
+        os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
+        pic->id = os64_work_submit(g.pool, &work);
+        if (pic->id != 0) {
+            pic->state = PIC_WAITING;
+            p->waiting++;
+        } else {
+            os64_free(job);     // the table is full: this one keeps its frame
+        }
+    }
+    return p->npics++;
+}
+
+// Fetches the page's pictures and the pictures behind its boxes, one job
+// per address, in tree order: libpage's lists are the record. A picture
+// whose address was refused, or names a scheme nothing here fetches, is
+// never asked for.
 static void pictures_start(Page *p)
 {
     const os64_page_t *model = page_model(p);
     int32_t n = model != NULL ? os64_page_nimages(model) : 0;
-    if (n <= 0 || g.pool == NULL)
+    int32_t nb = model != NULL ? os64_page_nbackgrounds(model) : 0;
+    if (n + nb <= 0 || g.pool == NULL)
         return;
-    p->pic_of = os64_calloc((size_t)n, sizeof(*p->pic_of));
-    p->pics = os64_calloc((size_t)n, sizeof(*p->pics));
-    if (p->pic_of == NULL || p->pics == NULL) {
+    p->pic_of = os64_calloc((size_t)(n > 0 ? n : 1), sizeof(*p->pic_of));
+    p->bg_of = os64_calloc((size_t)(nb > 0 ? nb : 1), sizeof(*p->bg_of));
+    p->pics = os64_calloc((size_t)(n + nb), sizeof(*p->pics));
+    if (p->pic_of == NULL || p->bg_of == NULL || p->pics == NULL) {
         os64_free(p->pic_of);
+        os64_free(p->bg_of);
         os64_free(p->pics);
-        p->pic_of = NULL;
+        p->pic_of = p->bg_of = NULL;
         p->pics = NULL;
         return;
     }
-    for (int32_t i = 0; i < n; i++) {
-        p->pic_of[i] = -1;
-        const char *url = os64_page_image(model, i)->src.url;
-        if (url == NULL)
-            continue;
-        bool fetchable = os64_strlen(url) > 7 &&
-                         (os64_memcmp(url, "http://", 7) == 0 ||
-                          (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
-                          os64_memcmp(url, "file://", 7) == 0);
-        if (!fetchable)
-            continue;
-        int32_t same = -1;
-        for (int32_t k = 0; k < p->npics && same < 0; k++)
-            if (os64_streq(p->pics[k].url, url))
-                same = k;
-        if (same >= 0) {
-            p->pic_of[i] = same;
-            continue;
-        }
-        Picture *pic = &p->pics[p->npics];
-        pic->url = url;
-        pic->state = PIC_FAILED;
-        yonder_picture_job_t *job = os64_calloc(1, sizeof(*job));
-        if (job != NULL) {
-            job->kind = YONDER_JOB_PICTURE;
-            job->index = p->npics;
-            job->generation = g.page_serial;
-            job->agent = g.way.agent;
-            os64_strcopy(job->url, sizeof(job->url), url);
-            os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
-            pic->id = os64_work_submit(g.pool, &work);
-            if (pic->id != 0) {
-                pic->state = PIC_WAITING;
-                p->waiting++;
-            } else {
-                os64_free(job);     // the table is full: this one keeps its frame
-            }
-        }
-        p->pic_of[i] = p->npics++;
-    }
+    for (int32_t i = 0; i < n; i++)
+        p->pic_of[i] = picture_for(p, os64_page_image(model, i)->src.url);
+    for (int32_t i = 0; i < nb; i++)
+        p->bg_of[i] = picture_for(p, os64_page_background(model, i)->src.url);
 }
 
 // The page is being left: its pictures still on their way are cancelled,
@@ -1207,6 +1216,16 @@ static uint64_t frame_delay(const Picture *pic)
     return ms <= 10 ? FRAME_FLOOR_MS : ms;
 }
 
+// Marks a part of the view, in page coordinates, for repainting: libui
+// marks a widget's bounds, so a stand-in with the part's is how.
+static void mark_part(os64_gui_rect_t r)
+{
+    os64_ui_widget_t part = {0};
+    part.bounds = (os64_gui_rect_t){g.view.bounds.x + r.x - g.sx, g.view.bounds.y + r.y - g.sy,
+                                    r.w, r.h};
+    os64_ui_mark_dirty(&g.ui, &part);
+}
+
 // Whether any box showing picture `k` meets the view — one scrolled away is
 // not advanced, since decoding a frame nobody sees is only cost — and, when
 // `mark`, each such box's part of the glass marked for repainting.
@@ -1218,20 +1237,30 @@ static bool picture_on_screen(int32_t k, bool mark)
         return false;
     os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}, meet;
     bool seen = false;
-    for (int32_t i = 0; i < flow_nimages(p->tree); i++) {
+    for (int32_t i = 0; p->pic_of != NULL && i < flow_nimages(p->tree); i++) {
         const flow_box_t *b = flow_image(p->tree, i);
         int32_t at = os64_page_image_for(model, b->node);
         if (at < 0 || p->pic_of[at] != k || !os64_rect_intersect(b->rect, view, &meet))
             continue;
         seen = true;
         if (!mark)
-            break;
-        // libui marks a widget's bounds; a stand-in with this box's is how a
-        // part of the view is marked.
-        os64_ui_widget_t part = {0};
-        part.bounds = (os64_gui_rect_t){g.view.bounds.x + meet.x - g.sx,
-                                        g.view.bounds.y + meet.y - g.sy, meet.w, meet.h};
-        os64_ui_mark_dirty(&g.ui, &part);
+            return true;
+        mark_part(meet);
+    }
+    // Behind a box: the body's picture is the canvas's, behind the whole
+    // view; any other is behind its own box.
+    for (int32_t i = 0; p->bg_of != NULL && i < os64_page_nbackgrounds(model); i++) {
+        if (p->bg_of[i] != k)
+            continue;
+        const os64_html_node_t *node = os64_page_background(model, i)->node;
+        const flow_box_t *b = flow_box_for(p->tree, node);
+        bool canvas = node->tag == OS64_HTML_TAG_BODY;
+        if (b == NULL || (!canvas && !os64_rect_intersect(b->rect, view, &meet)))
+            continue;
+        seen = true;
+        if (!mark)
+            return true;
+        mark_part(canvas ? view : meet);
     }
     return seen;
 }
@@ -1750,6 +1779,28 @@ static void glass_text(void *ctx, const flow_box_t *b, os64_gui_rect_t clip, uin
                    0xff000000u | colour);
 }
 
+// A picture behind a box: libpage's list says whether there is one, and
+// one that has arrived is tiled, unscaled, over the box's colour.
+static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area, int32_t ox,
+                           int32_t oy, os64_gui_rect_t clip)
+{
+    (void)clip;
+    const Glass *gl = ctx;
+    const Page *p = &g.page;
+    int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
+    if (i < 0)
+        return false;
+    if (area == NULL || p->bg_of == NULL || p->bg_of[i] < 0 ||
+        p->pics[p->bg_of[i]].state != PIC_SHOWN)
+        return true;
+    uint32_t w, h;
+    const uint32_t *px = picture_pixels(&p->pics[p->bg_of[i]], &w, &h);
+    os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
+    yonder_tile_picture(gl->surf->pixels, gl->surf->pitch_px, gl->clip, on, ox + gl->dx,
+                        oy + gl->dy, px, w, h);
+    return true;
+}
+
 // A picture that arrived is drawn into its box, scaled and blended
 // (scale.c); one on its way, or that will not come, keeps its frame.
 static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
@@ -1807,7 +1858,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | PAGE_PAPER);
         return;
     }
-    yonder_verbs_t v = {&gl, glass_fill, glass_text, glass_image, glass_control};
+    yonder_verbs_t v = {&gl, glass_fill, glass_text, glass_image, glass_control, glass_backdrop};
     yonder_paint(g.page.tree,
                  (os64_gui_rect_t){part.x - gl.dx, part.y - gl.dy, part.w, part.h}, PAGE_PAPER, &v);
 }

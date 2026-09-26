@@ -347,6 +347,21 @@ int32_t os64_page_nimages(const os64_page_t *page);
 const os64_page_image_t *os64_page_image(const os64_page_t *page, int32_t i);
 int32_t os64_page_image_for(const os64_page_t *page, const os64_html_node_t *node);
 
+// ── The pictures a page puts behind things ──────────────────────────────
+//
+// The `background` attribute of `body`, `table`, `thead`, `tbody`, `tfoot`,
+// `tr`, `td` and `th` — the Rendering chapter's `background-image` for the
+// old web. Resolved here for the same reason a picture's `src` is. An empty
+// attribute names nothing and is not listed, as an empty `src` is not.
+typedef struct {
+    const os64_html_node_t *node;   // the element the picture is behind
+    os64_page_ref_t src;            // resolved against the base; refused says why
+} os64_page_background_t;
+
+int32_t os64_page_nbackgrounds(const os64_page_t *page);
+const os64_page_background_t *os64_page_background(const os64_page_t *page, int32_t i);
+int32_t os64_page_background_for(const os64_page_t *page, const os64_html_node_t *node);
+
 // Decoded fragment lookup: IDs take precedence over legacy <a name> matches;
 // first in tree order wins within each group. NULL means absent or incomplete.
 // Use resolve_fragment for navigation, including the empty and "top" fallbacks.

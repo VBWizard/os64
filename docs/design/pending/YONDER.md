@@ -573,16 +573,32 @@ body's background is the CANVAS's, as its colour already is (CSS 2.1
 §14.2): tiled from the page's top-left across the whole page, so it
 scrolls with the page, as the attribute always did.
 
-**Evidence, planned.** The host: the tiler against hand-worked pixels
-(whole tiles, a tile cut by the clip, a box that is not a multiple of the
-tile, a transparent tile over a colour); libpage's background list for each
-element, a relative address under a `<base>`, an empty attribute naming
-nothing; the painter's recordings with the new verb. The guest:
-theoldnet's four GIFs moving (bullet02 still waiting on libimage's row in
-BROWSER_DEBTS.md), a once-through GIF stopping on its last frame, a
-scrolled-away GIF frozen and resuming, a covered window going quiet; a
-local page on a tiled body background with a cell of its own; and an old
-page on the live web that was built on one.
+**Evidence, as run.** The host: the tiler against hand-worked pixels
+(whole tiles and a cut last one, a clip that does not move the tiles, an
+origin outside the area, a half-transparent tile over a colour); libpage's
+list for every element that takes the attribute, a relative address under
+a `<base>`, empty attributes and a `div`'s not listed, an address that
+will not resolve listed as refused, and the fail-every-allocation sweep;
+the painter's recordings — the body's picture as the canvas's with and
+without a colour, tiled from the page's corner in a scrolled view, and a
+cell's picture over its colour from its own corner. Counts: yonder 59,
+libpage 178722, libflow 10485, libway 75, none failed.
+
+The guest, on a local server: a looping GIF, a play-once GIF stopped on
+its last frame, a zero-delay GIF, and a scaled copy sharing its sequence,
+all moving; yonder's CPU time over 20 seconds — 1.5 s with them on screen
+(7.5 s before the view painted only its dirty part), 0.0 s scrolled away,
+0.1 s behind a maximized terminal. A page on a tiled body picture with no
+colour, a cell with a half-transparent picture over yellow, and a cell
+whose picture moves, all scrolling with the page. Live: the 1996 Space Jam
+site on its starfield, 13 of 13 pictures; theoldnet's GIFs moving on the
+P5 (Chris), all but `bullet02.gif`, which libimage refuses whole
+(BROWSER_DEBTS.md).
+
+**Sixteen handles were not enough.** The ticker's pipe and thread took
+yonder to fourteen of the kernel's sixteen before its first fetch, and the
+page failed with "out of handles or ports"; the table is 64 now
+(`kernel/include/handle.h`).
 
 ## Booked, with their triggers
 

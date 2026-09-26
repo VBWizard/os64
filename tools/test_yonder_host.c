@@ -229,6 +229,7 @@ typedef struct {
     Out out;
     os64_gui_rect_t view;
     bool escaped;           // a fill reached past the viewport
+    const os64_page_t *page;
 } Rec;
 
 static void rec_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
@@ -262,6 +263,21 @@ static void rec_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
     out(&rec->out, "control %d %d %d %d %d\n", b->control, c.x, c.y, c.w, c.h);
 }
 
+// A box has a picture behind it when libpage lists one for its element;
+// the recording says where it would be tiled, and from where.
+static bool rec_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area, int32_t ox,
+                         int32_t oy, os64_gui_rect_t clip)
+{
+    (void)clip;
+    Rec *rec = ctx;
+    if (b->node == NULL || os64_page_background_for(rec->page, b->node) < 0)
+        return false;
+    if (area != NULL)
+        out(&rec->out, "backdrop %d %d %d %d from %d %d\n", area->x, area->y, area->w, area->h, ox,
+            oy);
+    return true;
+}
+
 static const char *kPage = "http://host/dir/page.html";
 
 static os64_html_document_t *parse(const char *html, size_t len)
@@ -282,9 +298,9 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     os64_html_document_t *doc = parse(html, len);
     os64_page_t *page = os64_page_build(doc, kPage, NULL);
     flow_tree_t *t = flow_layout(doc, page, width, &kEnv);
-    Rec rec = {{0}, view, false};
+    Rec rec = {{0}, view, false, page};
     out(&rec.out, "%s", "");
-    yonder_verbs_t v = {&rec, rec_fill, rec_text, rec_image, rec_control};
+    yonder_verbs_t v = {&rec, rec_fill, rec_text, rec_image, rec_control, rec_backdrop};
     if (t != NULL)
         yonder_paint(t, view, kEnv.paper, &v);
     if (escaped != NULL)
@@ -369,6 +385,47 @@ static void scale_cases(void)
     yonder_draw_picture(edge, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){-2, -2, 4, 4}, src, 4, 4);
     const uint32_t shifted[4] = {src[10], src[11], src[14], src[15]};
     expect("picture: a box hanging off the top left", pixels_are(edge, shifted, 4), NULL);
+
+    // Tiling a 2x2 picture {A,B / C,A} unscaled from the area's corner.
+    uint32_t tiles[25] = {0};
+    yonder_tile_picture(tiles, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5}, 0, 0,
+                        two, 2, 2);
+    const uint32_t tiled[25] = {A, B, A, B, A, C, A, C, A, C, A, B, A, B, A,
+                                C, A, C, A, C, A, B, A, B, A};
+    expect("tile: whole copies, and the last cut at the area's edge", pixels_are(tiles, tiled, 25),
+           NULL);
+
+    // The same area, clipped to its middle: the tiles stay where the
+    // origin put them, and nothing outside the clip is written.
+    uint32_t cut_tiles[25] = {0};
+    yonder_tile_picture(cut_tiles, 5, (os64_gui_rect_t){1, 1, 3, 3}, (os64_gui_rect_t){0, 0, 5, 5},
+                        0, 0, two, 2, 2);
+    bool inside_same = true, outside_clear = true;
+    for (int y = 0; y < 5; y++)
+        for (int x = 0; x < 5; x++) {
+            bool in = x >= 1 && x < 4 && y >= 1 && y < 4;
+            if (in && cut_tiles[y * 5 + x] != tiled[y * 5 + x])
+                inside_same = false;
+            if (!in && cut_tiles[y * 5 + x] != 0)
+                outside_clear = false;
+        }
+    expect("tile: a clip does not move the tiles", inside_same && outside_clear, NULL);
+
+    // An origin above and left of the area (the canvas's, for a body the
+    // view is scrolled into): the area starts one pixel into a tile.
+    uint32_t shifted_tiles[4] = {0};
+    yonder_tile_picture(shifted_tiles, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){0, 0, 2, 2},
+                        -1, -3, two, 2, 2);
+    const uint32_t from_origin[4] = {A, C, B, A};
+    expect("tile: an origin outside the area lays the tiles from there",
+           pixels_are(shifted_tiles, from_origin, 4), NULL);
+
+    uint32_t over_blue[2] = {0xff0000ffu, 0xff0000ffu};
+    const uint32_t half_and_none[2] = {0x80ff0000u, 0x00ff0000u};
+    yonder_tile_picture(over_blue, 2, (os64_gui_rect_t){0, 0, 2, 1}, (os64_gui_rect_t){0, 0, 2, 1}, 0,
+                        0, half_and_none, 2, 1);
+    expect("tile: blended by alpha over the colour beneath",
+           over_blue[0] == 0xff80007fu && over_blue[1] == 0xff0000ffu, NULL);
 }
 
 // ── The question bar: no click made before a question may answer it ─────

@@ -90,12 +90,14 @@ struct os64_page {
     int32_t ncontrols, controlcap;
     os64_page_image_t *images;
     int32_t nimages, imagecap;
+    os64_page_background_t *backgrounds;
+    int32_t nbackgrounds, backgroundcap;
 
     PInitial *initial;             // per control, captured after group normalization
     PEdit *edits;
     int32_t nedits, editcap;
 
-    PPtrMap link_map, form_map, control_map, edit_map, image_map;
+    PPtrMap link_map, form_map, control_map, edit_map, image_map, background_map;
     // A fragment matches an `id` FIRST and an old-style `<a name>` second,
     // whatever tree order says, so the two cannot share one table.
     PStrMap id_map, aname_map;

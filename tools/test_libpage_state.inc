@@ -518,6 +518,55 @@ static void state_images(void)
     os64_html_document_free(doc);
 }
 
+// The pictures a page puts behind things: the `background` attribute of
+// the body and the table elements, resolved against the base; an empty one
+// names nothing, and the attribute on any other element is not the
+// Rendering chapter's and is not listed.
+static void state_backgrounds(void)
+{
+    os64_html_document_t *doc = parse(
+        "<head><base href=\"http://pics/lib/\"></head><body background=\" sky.gif \">"
+        "<table background=/wall.png><thead background=h.gif><tr><th background=th.gif>x"
+        "<tbody background=b.gif><tr background=\"\"><td background=td.jpg>y"
+        "<td background=\"   \">z<tfoot background=f.gif></table>"
+        "<div background=no.gif>not this</div><p background=nor.gif>nor this"
+        "<table><tr background=\"http://[bad\"><td>w</table>"
+        "</body>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    static const struct { os64_html_tag_t tag; const char *url; } want[] = {
+        {OS64_HTML_TAG_BODY, "http://pics/lib/sky.gif"},
+        {OS64_HTML_TAG_TABLE, "http://pics/wall.png"},
+        {OS64_HTML_TAG_THEAD, "http://pics/lib/h.gif"},
+        {OS64_HTML_TAG_TH, "http://pics/lib/th.gif"},
+        {OS64_HTML_TAG_TBODY, "http://pics/lib/b.gif"},
+        {OS64_HTML_TAG_TD, "http://pics/lib/td.jpg"},
+        {OS64_HTML_TAG_TFOOT, "http://pics/lib/f.gif"},
+    };
+    int32_t n = (int32_t)(sizeof(want) / sizeof(want[0]));
+    state_expect("backgrounds: the body's and the table elements', empty ones not, a div's not",
+                 os64_page_nbackgrounds(page) == n + 1);
+    for (int32_t i = 0; i < n; i++) {
+        const os64_page_background_t *b = os64_page_background(page, i);
+        state_expect("backgrounds: in tree order, resolved against the base, space trimmed",
+                     b != NULL && b->node != NULL && b->node->tag == want[i].tag &&
+                     b->src.url != NULL && strcmp(b->src.url, want[i].url) == 0 &&
+                     os64_page_background_for(page, b->node) == i);
+    }
+    const os64_page_background_t *bad = os64_page_background(page, n);
+    state_expect("backgrounds: an address that will not resolve is listed, refused",
+                 bad != NULL && bad->node->tag == OS64_HTML_TAG_TR && bad->src.url == NULL &&
+                 bad->src.refused != OS64_PAGE_REASON_OK);
+    state_expect("backgrounds: out of range is NULL",
+                 os64_page_background(page, -1) == NULL &&
+                 os64_page_background(page, n + 1) == NULL &&
+                 os64_page_background_for(page, NULL) < 0 &&
+                 os64_page_background_for(NULL, NULL) < 0 && os64_page_nbackgrounds(NULL) == 0);
+    state_expect("backgrounds: not pictures",
+                 os64_page_nimages(page) == 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 // What a page writes in an href is percent-encoded part by part, as every
 // browser does: a path in UTF-8, a query in the document's encoding, a
 // fragment left for the matcher.
@@ -662,6 +711,7 @@ static void state_cases(void)
     state_frames();
     state_iframes();
     state_images();
+    state_backgrounds();
     state_reference_bytes();
     state_group_reset();
     state_sanitizers();

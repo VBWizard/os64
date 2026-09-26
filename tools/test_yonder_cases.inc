@@ -22,6 +22,22 @@ static void paint_cases(void)
                "fill 0 0 100 50 #fefefe\n"
                "text \"Hi\" 8 30 #101010\n");
 
+    // A picture behind the body is the canvas's too, colour or none: tiled
+    // across the whole viewport from the page's corner, so a view scrolled
+    // down 20 still tiles from (0, 0). The body does not draw it again.
+    paint_case("canvas: the body's picture, with no colour, over the paper",
+               "<!doctype html><body background=sky.gif><p>Hi", 100,
+               (os64_gui_rect_t){0, 0, 100, 50},
+               "fill 0 0 100 50 #fefefe\n"
+               "backdrop 0 0 100 50 from 0 0\n"
+               "text \"Hi\" 8 30 #101010\n");
+    paint_case("canvas: the body's picture over its colour, scrolled",
+               "<!doctype html><body bgcolor=#ffff00 background=sky.gif><p>Hi", 100,
+               (os64_gui_rect_t){0, 20, 100, 50},
+               "fill 0 20 100 50 #ffff00\n"
+               "backdrop 0 20 100 50 from 0 0\n"
+               "text \"Hi\" 8 30 #101010\n");
+
     // table border=2 is a 2px outset in the ink; its cell a 1px inset.
     // Outset: top and left the lighter tone, bottom and right the darker.
     // Row 1 of the top gives up one column at each end (ceil(1*2/2)), and
@@ -64,6 +80,17 @@ static void paint_cases(void)
                "fill 0 0 200 50 #fefefe\n"
                "fill 10 10 22 22 #ff6600\n"
                "fill 22 10 10 22 #00ff00\n"
+               "text \"x\" 11 25 #101010\n"
+               "text \"y\" 23 25 #101010\n");
+    // A cell's picture over its colour, tiled from its border box's corner.
+    paint_case("tables: a cell's picture over its colour",
+               "<!doctype html><table><tr bgcolor=#ff6600><td>x<td bgcolor=#00ff00 background=c.gif>y"
+               "</table>",
+               200, (os64_gui_rect_t){0, 0, 200, 50},
+               "fill 0 0 200 50 #fefefe\n"
+               "fill 10 10 22 22 #ff6600\n"
+               "fill 22 10 10 22 #00ff00\n"
+               "backdrop 22 10 10 22 from 22 10\n"
                "text \"x\" 11 25 #101010\n"
                "text \"y\" 23 25 #101010\n");
 

@@ -685,6 +685,33 @@ static void add_image(os64_page_t *page, const os64_html_node_t *n)
     page->nimages++;
 }
 
+static bool takes_background(const os64_html_node_t *n)
+{
+    return p_is(n, OS64_HTML_TAG_BODY) || p_is(n, OS64_HTML_TAG_TABLE) ||
+           p_is(n, OS64_HTML_TAG_THEAD) || p_is(n, OS64_HTML_TAG_TBODY) ||
+           p_is(n, OS64_HTML_TAG_TFOOT) || p_is(n, OS64_HTML_TAG_TR) ||
+           p_is(n, OS64_HTML_TAG_TD) || p_is(n, OS64_HTML_TAG_TH);
+}
+
+static void add_background(os64_page_t *page, const os64_html_node_t *n)
+{
+    const char *src = p_attr(n, "background");
+    if (src == NULL || blank(src))
+        return;
+    if (!p_grow((void **)&page->backgrounds, &page->backgroundcap, page->nbackgrounds,
+                sizeof(*page->backgrounds))) {
+        page->incomplete = true;
+        return;
+    }
+    os64_page_background_t *b = &page->backgrounds[page->nbackgrounds];
+    os64_memset(b, 0, sizeof(*b));
+    b->node = n;
+    p_resolve(page, src, &b->src);
+    if (!p_ptrmap_put(&page->background_map, n, page->nbackgrounds))
+        page->incomplete = true;
+    page->nbackgrounds++;
+}
+
 static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_element_t element,
                         bool fieldset_off)
 {
@@ -821,6 +848,8 @@ static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off)
         if (p_is(n, OS64_HTML_TAG_IMG) ||
             (p_is(n, OS64_HTML_TAG_INPUT) && p_input_type(n) == OS64_PAGE_INPUT_IMAGE))
             add_image(page, n);
+        if (takes_background(n))
+            add_background(page, n);
         // A `meta` inside `noscript` counts, and that is the case that
         // matters: with scripting off those contents ARE the document's,
         // which is the whole reason the element exists.
@@ -998,6 +1027,7 @@ void os64_page_free(os64_page_t *page)
     os64_free(page->forms);
     os64_free(page->controls);
     os64_free(page->images);
+    os64_free(page->backgrounds);
     os64_free(page->radio_next);
     os64_free(page->group_head);
     os64_free(page->group_next);
@@ -1007,6 +1037,7 @@ void os64_page_free(os64_page_t *page)
     p_ptrmap_free(&page->control_map);
     p_ptrmap_free(&page->edit_map);
     p_ptrmap_free(&page->image_map);
+    p_ptrmap_free(&page->background_map);
     p_strmap_free(&page->id_map);
     p_strmap_free(&page->aname_map);
     p_strmap_free(&page->radio_map);
@@ -1097,6 +1128,23 @@ const os64_page_image_t *os64_page_image(const os64_page_t *page, int32_t i)
 int32_t os64_page_image_for(const os64_page_t *page, const os64_html_node_t *node)
 {
     return page != NULL ? p_ptrmap_get(&page->image_map, node) : -1;
+}
+
+int32_t os64_page_nbackgrounds(const os64_page_t *page)
+{
+    return page != NULL ? page->nbackgrounds : 0;
+}
+
+const os64_page_background_t *os64_page_background(const os64_page_t *page, int32_t i)
+{
+    if (page == NULL || i < 0 || i >= page->nbackgrounds)
+        return NULL;
+    return &page->backgrounds[i];
+}
+
+int32_t os64_page_background_for(const os64_page_t *page, const os64_html_node_t *node)
+{
+    return page != NULL ? p_ptrmap_get(&page->background_map, node) : -1;
 }
 
 const os64_html_node_t *os64_page_anchor(const os64_page_t *page, const char *decoded_fragment)

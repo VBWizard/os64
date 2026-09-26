@@ -127,12 +127,17 @@ static void borders(const Painter *p, const flow_box_t *b)
     }
 }
 
-// A box's background and borders: every block-level box, and an atom.
+// A box's background and borders: every block-level box, and an atom. Its
+// picture goes over its colour and under its borders, tiled from the
+// border box's corner.
 static void frame(const Painter *p, const flow_box_t *b)
 {
     const flow_style_t *s = b->style;
-    if (s->has_background && b != p->canvas_owner)
-        fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, s->background);
+    if (b != p->canvas_owner) {
+        if (s->has_background)
+            fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, s->background);
+        (void)p->v->backdrop(p->v->ctx, b, &b->rect, b->rect.x, b->rect.y, p->view);
+    }
     borders(p, b);
 }
 
@@ -254,15 +259,22 @@ static void paint_box(void *ctx, const flow_box_t *b)
     }
 }
 
-// The root's background, or else the body's, is the canvas's.
-static const flow_box_t *canvas_owner(const flow_box_t *root)
+// Whether a box has any background: a colour, or a picture behind it.
+static bool has_background(const Painter *p, const flow_box_t *b)
 {
-    if (root->style->has_background)
+    return b->style->has_background ||
+           p->v->backdrop(p->v->ctx, b, NULL, 0, 0, p->view);
+}
+
+// The root's background, or else the body's, is the canvas's.
+static const flow_box_t *canvas_owner(const Painter *p, const flow_box_t *root)
+{
+    if (has_background(p, root))
         return root;
     for (const flow_box_t *c = root->first; c != NULL; c = c->next)
         if (c->node != NULL && c->node->kind == OS64_HTML_ELEMENT &&
             c->node->tag == OS64_HTML_TAG_BODY)
-            return c->style->has_background ? c : NULL;
+            return has_background(p, c) ? c : NULL;
     return NULL;
 }
 
@@ -272,9 +284,14 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, uint32_t pa
     Painter p = {verbs, viewport, NULL};
     const flow_box_t *root = flow_root(tree);
     if (root != NULL)
-        p.canvas_owner = canvas_owner(root);
+        p.canvas_owner = canvas_owner(&p, root);
+    const flow_box_t *owner = p.canvas_owner;
     fill(&p, viewport.x, viewport.y, viewport.w, viewport.h,
-         p.canvas_owner != NULL ? p.canvas_owner->style->background : paper);
+         owner != NULL && owner->style->has_background ? owner->style->background : paper);
+    // The canvas's picture is tiled from the page's own corner, so it
+    // scrolls with the page.
+    if (owner != NULL)
+        (void)verbs->backdrop(verbs->ctx, owner, &viewport, 0, 0, viewport);
     if (root != NULL)
         flow_visit(tree, viewport, paint_box, &p);
 }
