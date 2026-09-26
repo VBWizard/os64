@@ -151,7 +151,7 @@ typedef struct {
     const char *content_type;      // optional for POST; boundary kept verbatim
     bool (*headers_for)(void *ctx, const os64_url_t *url, bool encrypted,
                         char *out, size_t cap);
-    void (*on_set_cookie)(void *ctx, const os64_url_t *url,
+    void (*on_set_cookie)(void *ctx, const os64_url_t *url, bool encrypted,
                           const char *value, size_t len);
 } os64_fetch_options_t;
 ```
@@ -164,9 +164,14 @@ typedef struct {
   checked for field bytes. Invalid method/body/header options fail before
   dialing. A send failure closes the connection without retrying a request
   the server may already have acted on. Cancellation applies during upload.
+  An early final response stops the upload and remains readable (for example,
+  a 401 or 413). Informational 100/103 replies resume at the accepted byte;
+  the eight-interim-head bound also applies while uploading. This does not
+  send `Expect: 100-continue` or wait for permission before sending a body.
 - **POST follows the browser redirect table:** 301/302/303 become GET and
   drop the body and its metadata; 307/308 resend POST unchanged.
   `on_hop` receives `from_method` and `to_method` before its verdict.
+  The returned head's `method` identifies the request that produced it.
   A POST redirected to GET at the same URL is a new request, not SELF.
   Cross-origin 307/308 can replay the body; callers can stop that in
   `on_hop`. HTTPS downgrades still require an explicit FOLLOW.
@@ -351,11 +356,15 @@ one resident libfetch serving two programs at once.
 
 `perform` passes libpage's POST body and content type through `load` to
 libfetch; the request remains alive until the synchronous open completes.
-The existing HTTPS-to-HTTP form confirmation remains in place. Reload and
+The HTTPS-to-HTTP form confirmation also covers 307/308 replay and explicitly
+warns that the form data will be sent unencrypted. For an undisplayable POST
+response, wend reports that it cannot display or save it; a fresh `os64get`
+GET cannot recover those bytes. A POST redirected to GET can still offer the
+GET download command. Reload and
 Back fetch the stored URL using GET; wend does not retain or replay a
 submitted form from history. Cookies are a separate navigator concern.
 
-The options and hop structs grew: rebuild libfetch and its callers together.
+The options, hop and head structs grew: rebuild libfetch and its callers together.
 The zero-initialized source API remains GET; old binaries compiled against
 a shorter options struct are not ABI compatible with this library.
 
@@ -398,9 +407,14 @@ leading field whitespace is ignored. This includes a plain proxy transport
 for an HTTPS URL: `encrypted` describes the wire, not the spelling of the
 URL. Other referrer decisions belong to the navigator.
 
-`on_set_cookie` receives the VALUE, with surrounding space/tab removed:
-no field name, colon or CRLF. Repeated fields arrive separately in wire
-order, including any comma in Expires. Delivery excludes 1xx responses and
+`on_set_cookie` receives the originating URL, the actual connection's
+`encrypted` flag, and the VALUE with surrounding space/tab removed. HTTPS
+through a plain `$https_proxy` reports false even though the URL's scheme
+is HTTPS. The libway session must use this flag for Secure-cookie acceptance;
+libfetch delivers the original attribute without parsing or storing it.
+
+The value excludes the field name, colon and CRLF. Repeated fields arrive
+separately in wire order, including any comma in Expires. Delivery excludes 1xx responses and
 trailers. The parser retains its 2048-byte line buffer: an oversized
 Set-Cookie line is omitted whole, never delivered truncated. Earlier
 callbacks are not rolled back if a later header or read fails. A TLS authentication/protocol
@@ -411,8 +425,10 @@ This is a streaming interface, not a transaction on the whole response.
 The lower-level `http_head_read_with_headers` offers the same complete
 fields (name and value separately) before header-specific framing checks,
 including unknown fields; it is the reusable seam for future consumers.
-`http_head_read` remains the no-callback wrapper. Header and line budgets
-remain `HTTP_HEAD_MAX`, `HTTP_HEADERS_MAX` and `HTTP_LINE_MAX`.
+`http_head_read` remains the no-callback wrapper. The
+`http_head_read_one_with_headers` variant returns after one head, including
+an interim reply, so uploads can resume between replies. Header and line
+budgets remain `HTTP_HEAD_MAX`, `HTTP_HEADERS_MAX` and `HTTP_LINE_MAX`.
 
 A minimal callback that already has a correctly selected cookie can compose
 its field like this; a real navigator must first apply its jar's rules:

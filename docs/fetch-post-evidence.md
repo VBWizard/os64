@@ -46,4 +46,32 @@ retransmits and local drops were zero.
 This is guest evidence, not P5 evidence. Cookies and connection reuse are
 separate work. Reload and Back use GET and do not replay a submitted body.
 Rebuild/deploy libfetch and its callers together because the options and
-hop structures grew.
+hop and head structures grew.
+
+## PR #140 review follow-up
+
+All three findings addressed: early upload responses, explicit unencrypted
+form replay consent, and method-aware download advice.
+
+- Host fetch suite: 641 checks per seed, two seeds under ASan/UBSan with
+  leak detection. Early 401/413 while TLS output is pending and over plain
+  TCP; 100/103 followed by an upload-dependent final response; interim and
+  final heads together; exact upload prefixes/resumption without duplicates;
+  full/one-byte/random reads. Final method checked across all five redirects.
+- Transport, HTTP parser and wend host suites passed. Wend: 177954 checks,
+  zero failures or live blocks. Strict full build and whitespace/stale-reference
+  checks passed.
+- Eight-core QEMU: `fetchposttest http://10.0.2.2:58080` passed with zero
+  failures. A 413 sent before the server reads the request body remained
+  readable; 100 Continue resumed a 70000-byte upload (CRC32 `634f3d0d`).
+- Wend screens checked: POST PDF says it cannot display/save this POST
+  response; POST -> 303 -> GET PDF still offers the GET download command.
+  A 307 from an HTTPS URL asked `Resend form data unencrypted to 10.0.2.2?`;
+  answering no produced no request to the redirect target. The HTTPS URL
+  used the supported plain proxy for this controlled fixture, not native TLS.
+- Guest TCP snapshot: nine connections opened/reaped, no retransmits,
+  no local drops, no inflight or queued sends on the remaining CLOSED row.
+  One reset/refusal was counted during the early-rejection run.
+
+Native TLS upload timing is covered by the scripted host seam; this round
+has no new native-TLS guest or P5 evidence.

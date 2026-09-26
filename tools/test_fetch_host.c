@@ -70,6 +70,8 @@ typedef struct {
     bool        refuse;        // the dial fails
     bool        silent;        // never answers a read
     size_t      silent_after;  // ...or goes silent after this many bytes
+    size_t      early_after;   // expose response once this many request bytes arrive
+    size_t      interim_len;   // stop here until the complete upload arrives
     bool        tls_bad_prefix; // authenticated bytes accompanied by protocol failure
     bool        tls_truncate;  // (https) the record layer ends without close_notify
 } peer_t;
@@ -153,13 +155,31 @@ static const char *request_n(int i)
     for (int h = 0; h < 16; h++) if (conns[h].open) return conns[h].request;
     return "";
 }
+static bool upload_complete(const conn_t *c)
+{
+    const char *body = strstr(c->request, "\r\n\r\n");
+    const char *length = strstr(c->request, "Content-Length: ");
+    return body && c->reqlen >= (size_t)(body + 4 - c->request) +
+        (length ? strtoul(length + strlen("Content-Length: "), NULL, 10) : 0);
+}
+static bool early_ready(const conn_t *c)
+{
+    return c->peer->early_after && c->reqlen >= c->peer->early_after &&
+        c->served < c->peer->len &&
+        (!c->peer->interim_len || c->served < c->peer->interim_len || upload_complete(c));
+}
 static int64_t conn_read(conn_t *c, void *buf, size_t cap, uint64_t wait_ms, bool *timed_out)
 {
     *timed_out = false;
     if (c->peer->silent || (c->peer->silent_after && c->served >= c->peer->silent_after)) {
         now_ms += wait_ms; *timed_out = true; return 0;
     }
+    if (c->peer->interim_len && c->served >= c->peer->interim_len && !upload_complete(c)) {
+        now_ms += wait_ms; *timed_out = true; return 0;
+    }
     size_t left = c->peer->len - c->served;
+    if (c->peer->interim_len && c->served < c->peer->interim_len && !upload_complete(c))
+        left = c->peer->interim_len - c->served;
     if (left == 0) return 0;
     size_t n = chunk_of(cap < left ? cap : left);
     if (c->peer->silent_after && c->served + n > c->peer->silent_after)
@@ -172,6 +192,7 @@ int64_t os64_read_for(int32_t h, void *buf, size_t cap, uint64_t ms)
 {
     conn_t *c = &conns[h - 100];
     assert(c->open);
+    if (!ms && !early_ready(c)) return OS64_ERR_TIMEOUT;
     bool timed_out;
     int64_t n = conn_read(c, buf, cap, ms, &timed_out);
     return timed_out ? OS64_ERR_TIMEOUT : n;
@@ -207,7 +228,8 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
 }
 os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
 {
-    return (os64_tls_state_t){ .status = t->status, .flags = OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN,
+    return (os64_tls_state_t){ .status = t->status, .flags = OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN |
+                                   (early_ready(&conns[t->handle - 100]) ? OS64_TLS_RECV_PLAIN | OS64_TLS_SEND_CIPHER : 0),
                                .policy_reason = 0, .upstream_error = 0, .alpn = "http/1.1" };
 }
 os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t, uint64_t ms)
@@ -342,6 +364,7 @@ static void case_plain(int mode)
     CHECK(h->has_length && h->length == strlen(page) && h->encoding[0] == '\0');
     CHECK(strcmp(h->url_text, "http://example.test/index.html") == 0 && h->url.port == 80);
     CHECK(!h->encrypted && !h->via_proxy && h->hops == 0);
+    CHECK(h->method == OS64_FETCH_METHOD_GET);
     const char *req = request_of(0);
     CHECK(strstr(req, "GET /index.html HTTP/1.1\r\nHost: example.test\r\n") == req);
     CHECK(strstr(req, "User-Agent: harness/1\r\n") && strstr(req, "Accept: text/html\r\n"));
@@ -1105,6 +1128,7 @@ static void case_post(void)
             os64_fetch_t *f = os64_fetch_open("http://post.test/", &opt);
             CHECK(os64_fetch_status(f) == OS64_FETCH_OK && dials == 2);
             bool replay = codes[i] >= 307;
+            CHECK(os64_fetch_head(f)->method == (replay ? OS64_FETCH_METHOD_POST : OS64_FETCH_METHOD_GET));
             CHECK(seen_from == OS64_FETCH_METHOD_POST &&
                   seen_to == (replay ? OS64_FETCH_METHOD_POST : OS64_FETCH_METHOD_GET));
             const char *req = request_n(1), *bytes = strstr(req, "\r\n\r\n") + 4;
@@ -1161,17 +1185,53 @@ static void case_post(void)
     }
 }
 
+// A server can answer while ciphertext is pending, or stop reading a plain
+// upload. Interim replies must resume exactly; final replies stop sending.
+static void case_early_post(void)
+{
+    static unsigned char body[70000];
+    for (size_t i=0; i<sizeof(body); i++) body[i]=(unsigned char)i;
+    for (int mode=0; mode<3; mode++) for (int tls=0; tls<2; tls++) {
+        for (int kind=0; kind<5; kind++) {
+            reset(); chunk_mode=mode; write_limit=37;
+            const char *interim = kind==2 ? "HTTP/1.1 100 Continue\r\n\r\n" :
+                                          "HTTP/1.1 103 Early Hints\r\nLink: </a>\r\n\r\n";
+            char reply[512];
+            snprintf(reply,sizeof(reply),"%sHTTP/1.1 %s\r\nContent-Length: 5\r\n\r\nhello",
+                     kind>=2 ? interim : "", kind==0 ? "401 Unauthorized" :
+                     kind==1 || kind==4 ? "413 Content Too Large" : "200 OK");
+            peer_t *peer=peer_add("early.test",tls ? 443 : 80,reply);
+            peer->early_after=600;
+            if(kind==2 || kind==3) peer->interim_len=strlen(interim);
+            os64_fetch_options_t opt={.method=OS64_FETCH_METHOD_POST,.body=body,.body_len=sizeof(body)};
+            os64_fetch_t *f=os64_fetch_open(tls ? "https://early.test/" : "http://early.test/",&opt);
+            CHECK(os64_fetch_status(f)==OS64_FETCH_OK);
+            CHECK(os64_fetch_head(f)->status==(kind==0 ? 401 : kind==1 || kind==4 ? 413 : 200));
+            CHECK(os64_fetch_head(f)->method==OS64_FETCH_METHOD_POST);
+            const char *req=request_n(0), *bytes=strstr(req,"\r\n\r\n")+4;
+            size_t uploaded=conns[0].reqlen-(size_t)(bytes-req);
+            CHECK((kind==2 || kind==3) ? uploaded==sizeof(body) : uploaded<sizeof(body));
+            CHECK(memcmp(bytes,body,uploaded)==0);
+            unsigned char out[16];
+            CHECK(slurp(f,out,sizeof(out),0)==5 && !memcmp(out,"hello",5));
+            CHECK(os64_fetch_status(f)==OS64_FETCH_OK);
+            os64_fetch_close(f); CHECK(dials==1 && closes==1);
+        }
+    }
+}
 
 typedef struct {
     unsigned asked, received, hops;
     const char *output;
     bool fail, unterminated, chain, encrypted, cancelled, cancel_header, cancel_cookie;
     char values[8][HTTP_LINE_MAX], hosts[8][OS64_URL_HOST_MAX];
+    bool received_encrypted[8];
 } cookie_test_t;
-static void cookie_received(void *ctx, const os64_url_t *url, const char *value, size_t len)
+static void cookie_received(void *ctx, const os64_url_t *url, bool encrypted, const char *value, size_t len)
 {
     cookie_test_t *t = ctx;
     CHECK(t->received < 8 && len < HTTP_LINE_MAX && url->port != 0);
+    t->received_encrypted[t->received] = encrypted;
     memcpy(t->values[t->received], value, len);
     t->values[t->received][len] = 0;
     snprintf(t->hosts[t->received], sizeof(t->hosts[0]), "%s", url->host);
@@ -1275,6 +1335,24 @@ static void case_cookies(void)
             os64_fetch_close(f);
         }
     }
+    // Set-Cookie must expose wire security even when the URL says HTTPS.
+    // No jar lives here: the callback receives the unchanged Secure attribute
+    // plus the fact libway needs to decide whether to accept it.
+    for (int mode = 0; mode < 3; mode++) for (int transport = 0; transport < 3; transport++) {
+        reset(); chunk_mode = mode;
+        if (transport == 2) set_env("https_proxy", "http://proxy.test:3128/");
+        peer_add(transport == 2 ? "proxy.test" : "a.test", transport == 2 ? 3128 : transport == 1 ? 443 : 80,
+                 reply_len("200 OK", "Set-Cookie: session=secret; Secure\r\n", page));
+        cookie_test_t t = {0};
+        os64_fetch_options_t opt = {.on_set_cookie = cookie_received, .ctx = &t};
+        os64_fetch_t *f = os64_fetch_open(transport ? "https://a.test/" : "http://a.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && t.received == 1);
+        CHECK(t.received_encrypted[0] == (transport == 1));
+        CHECK(os64_fetch_head(f)->encrypted == t.received_encrypted[0]);
+        CHECK(strcmp(t.values[0], "session=secret; Secure") == 0 && strcmp(t.hosts[0], "a.test") == 0);
+        CHECK(strcmp(os64_fetch_head(f)->url.scheme, transport ? "https" : "http") == 0);
+        os64_fetch_close(f);
+    }
     // A protocol error accompanying plaintext must not set a cookie from
     // that read, even when the HTTP head itself fits in the prefix.
     reset(); cookie_test_t terminal = {0};
@@ -1327,6 +1405,7 @@ int main(int argc, char **argv)
     case_round7();
     case_post();
     case_cookies();
+    case_early_post();
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }

@@ -99,47 +99,62 @@ fail:
     return false;
 }
 
-bool fetch_transport_write(fetch_transport_t *io, const void *data, size_t length)
+fetch_write_result_t fetch_transport_write(fetch_transport_t *io, const void *data,
+                                           size_t length, size_t *sent)
 {
     budget_t budget;
-    if (!start_budget(io, &budget)) return false;
+    if (!start_budget(io, &budget)) return FETCH_WRITE_ERROR;
     const unsigned char *bytes = data;
-    size_t sent = 0;
     bool flushed = false;
     for (;;) {
         uint64_t wait = patience(io, &budget);
-        if (!wait || !live(io->error.status)) return false;
+        if (!wait || !live(io->error.status)) return FETCH_WRITE_ERROR;
         if (!io->tls) {
-            if (sent == length) return true;
-            int64_t n = os64_write_for(io->handle, bytes + sent, length - sent, wait);
-            if (n == OS64_INTERRUPTED || n == OS64_ERR_TIMEOUT) continue;
-            if (n <= 0 || (uint64_t)n > length - sent) {
-                remember(io, OS64_TLS_TRANSPORT); return false;
+            if (io->have_lookahead) return FETCH_WRITE_RESPONSE;
+            // Readiness is checked between bounded writes so a server that
+            // rejects an upload cannot deadlock us by ceasing to read it.
+            int64_t n = os64_read_for(io->handle, &io->lookahead, 1, 0);
+            if (n == 1) {
+                io->have_lookahead = true;
+                return FETCH_WRITE_RESPONSE;
             }
-            sent += (size_t)n;
+            if (n != OS64_INTERRUPTED && n != OS64_ERR_TIMEOUT) {
+                remember(io, OS64_TLS_TRANSPORT); return FETCH_WRITE_ERROR;
+            }
+            if (*sent == length) return FETCH_WRITE_DONE;
+            size_t part = length - *sent;
+            if (part > 4096) part = 4096;
+            n = os64_write_for(io->handle, bytes + *sent, part, wait < 10 ? wait : 10);
+            if (n == OS64_INTERRUPTED || n == OS64_ERR_TIMEOUT) continue;
+            if (n <= 0 || (uint64_t)n > part) {
+                remember(io, OS64_TLS_TRANSPORT); return FETCH_WRITE_ERROR;
+            }
+            *sent += (size_t)n;
             continue;
-        }
-        if (sent < length) {
-            os64_tls_transfer_t moved = os64_tls_transport_write(io->tls, bytes + sent, length - sent);
-            sent += moved.transferred;
-            remember(io, moved.status);
-            if (!live(moved.status)) return false;
-        }
-        if (sent == length && !flushed) {
-            remember(io, os64_tls_transport_flush(io->tls));
-            flushed = true;
         }
         os64_tls_state_t state = os64_tls_transport_state(io->tls);
         remember(io, state.status);
-        if (!live(io->error.status) || !patience(io, &budget)) return false;
-        if (flushed && !(state.flags & OS64_TLS_SEND_CIPHER)) return true;
-        // A peer responding before the request is submitted must not force
-        // us to discard response bytes or spin on caller-service backpressure.
-        if (state.flags & OS64_TLS_RECV_PLAIN) {
-            remember(io, OS64_TLS_LIMIT); return false;
+        if (!live(io->error.status)) return FETCH_WRITE_ERROR;
+        // Application input is backpressure, not a TLS failure. Let HTTP
+        // decide whether this ends the upload or permits it to continue.
+        if (state.flags & OS64_TLS_RECV_PLAIN) return FETCH_WRITE_RESPONSE;
+        if (*sent < length) {
+            os64_tls_transfer_t moved = os64_tls_transport_write(io->tls, bytes + *sent, length - *sent);
+            *sent += moved.transferred;
+            remember(io, moved.status);
+            if (!live(moved.status)) return FETCH_WRITE_ERROR;
         }
+        if (*sent == length && !flushed) {
+            remember(io, os64_tls_transport_flush(io->tls));
+            flushed = true;
+        }
+        state = os64_tls_transport_state(io->tls);
+        remember(io, state.status);
+        if (!live(io->error.status) || !patience(io, &budget)) return FETCH_WRITE_ERROR;
+        if (state.flags & OS64_TLS_RECV_PLAIN) return FETCH_WRITE_RESPONSE;
+        if (flushed && !(state.flags & OS64_TLS_SEND_CIPHER)) return FETCH_WRITE_DONE;
         wait = patience(io, &budget);
-        if (!wait) return false;
+        if (!wait) return FETCH_WRITE_ERROR;
         remember(io, os64_tls_transport_step(io->tls, wait));
     }
 }
@@ -148,6 +163,12 @@ int64_t fetch_transport_read(void *context, void *data, size_t capacity)
 {
     fetch_transport_t *io = context;
     if (cancelled(io)) return OS64_INTERRUPTED;
+    if (!capacity) return 0;
+    if (io->have_lookahead) {
+        *(unsigned char *)data = io->lookahead;
+        io->have_lookahead = false;
+        return 1;
+    }
     if (io->error.status == OS64_TLS_CLEAN_EOF) return 0;
     if (!live(io->error.status)) return -1;
     budget_t budget;

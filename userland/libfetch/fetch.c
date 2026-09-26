@@ -430,7 +430,7 @@ static void response_header(void *ctx, const char *name, size_t name_len,
         return;
     os64_url_t url;
     url_filled(&f->current, &url);
-    f->opt.on_set_cookie(f->opt.ctx, &url, value, value_len);
+    f->opt.on_set_cookie(f->opt.ctx, &url, f->io.encrypted, value, value_len);
 }
 
 // ── The head: dial, ask, read, and follow ───────────────────────────────
@@ -439,6 +439,7 @@ static void head_fill(os64_fetch_t *f)
 {
     os64_fetch_head_t *h = &f->head;
     h->status = f->reply.status;
+    h->method = f->method;
     os64_strcopy(h->reason, sizeof(h->reason), f->reply.reason);
     os64_strcopy(h->content_type, sizeof(h->content_type), f->reply.contentType);
     os64_strcopy(h->charset, sizeof(h->charset), f->reply.charset);
@@ -576,23 +577,39 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         }
         f->connected = true;
 
-        if (!fetch_transport_write(&f->io, request, os64_strlen(request))) {
-            os64_strcopy(f->detail.why, sizeof(f->detail.why), "could not send the request");
-            tls_snapshot(f);
-            return drop_connection(f, OS64_FETCH_REQUEST_FAILED);
-        }
-
-        if (f->method == OS64_FETCH_METHOD_POST && f->opt.body_len &&
-            !fetch_transport_write(&f->io, f->opt.body, f->opt.body_len)) {
-            os64_strcopy(f->detail.why, sizeof(f->detail.why), "could not send the request body");
-            tls_snapshot(f);
-            return drop_connection(f, OS64_FETCH_REQUEST_FAILED);
-        }
-
-        // ── The reply's head ────────────────────────────────────────────
+        // Upload and response heads share the connection. A final response
+        // ends the upload; an interim response resumes at the accepted byte.
         http_stream_init(&f->stream, fetch_transport_read, &f->io);
-        http_head_result_t hrc = http_head_read_with_headers(&f->stream, &f->reply,
-                                                              response_header, f);
+        size_t head_sent = 0, body_sent = 0;
+        bool head_done = false, body_done = f->method != OS64_FETCH_METHOD_POST || !f->opt.body_len;
+        unsigned interim = 0;
+        http_head_result_t hrc;
+        for (;;) {
+            // A read may contain an interim head followed by a final one.
+            // Consume those buffered bytes before sending more of the body.
+            if (f->stream.next == f->stream.have) {
+                fetch_write_result_t written = FETCH_WRITE_DONE;
+                if (!head_done) {
+                    written = fetch_transport_write(&f->io, request, os64_strlen(request), &head_sent);
+                    head_done = written == FETCH_WRITE_DONE;
+                }
+                if (written == FETCH_WRITE_DONE && !body_done) {
+                    written = fetch_transport_write(&f->io, f->opt.body, f->opt.body_len, &body_sent);
+                    body_done = written == FETCH_WRITE_DONE;
+                }
+                if (written == FETCH_WRITE_ERROR) {
+                    os64_strcopy(f->detail.why, sizeof(f->detail.why), "could not send the request");
+                    tls_snapshot(f);
+                    return drop_connection(f, OS64_FETCH_REQUEST_FAILED);
+                }
+            }
+            hrc = http_head_read_one_with_headers(&f->stream, &f->reply, response_header, f);
+            if (hrc != HTTP_HEAD_OK || f->reply.status >= 200) break;
+            if (++interim > HTTP_INTERIM_MAX) {
+                hrc = HTTP_HEAD_TOO_MUCH;
+                break;
+            }
+        }
         if (hrc != HTTP_HEAD_OK) {
             f->detail.head = hrc;
             tls_snapshot(f);

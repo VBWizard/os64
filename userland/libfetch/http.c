@@ -690,7 +690,7 @@ static http_head_result_t overlong_verdict(const char *prefix)
     return HTTP_HEAD_OK;              // optional metadata is omitted whole
 }
 
-static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out,
+http_head_result_t http_head_read_one_with_headers(http_stream_t *s, http_response_t *out,
                                           http_header_fn on_header, void *ctx)
 {
     char line[HTTP_LINE_MAX];
@@ -741,7 +741,8 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out,
             // a guess. (Codex review round 6, 2026-09-03.)
             if (out->hasLength && out->transferEncoding[0] != '\0')
                 return HTTP_HEAD_CONFLICT;
-            return HTTP_HEAD_OK;
+            // 101 switches protocols; no HTTP response follows it.
+            return out->status == 101 ? HTTP_HEAD_SWITCHED : HTTP_HEAD_OK;
         }
 
         if (fields >= HTTP_HEADERS_MAX)
@@ -763,32 +764,28 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out,
     }
 }
 
-// A 1xx is an INTERIM answer — the server clearing its throat before the
-// real one — and a client that mistook one for the response would save an
-// empty file and call it a page. They are read and discarded, but not
-// forever: a peer that only ever clears its throat is a peer to hang up on.
-#define HTTP_INTERIM_MAX 8
+http_head_result_t http_head_read_one(http_stream_t *s, http_response_t *out)
+{
+    return http_head_read_one_with_headers(s, out, NULL, NULL);
+}
 
 http_head_result_t http_head_read(http_stream_t *s, http_response_t *out)
 {
     return http_head_read_with_headers(s, out, NULL, NULL);
 }
 
+// A 1xx is an INTERIM answer — the server clearing its throat before the
+// real one — and a client that mistook one for the response would save an
+// empty file and call it a page. They are read and discarded, but not
+// forever: a peer that only ever clears its throat is a peer to hang up on.
+
 http_head_result_t http_head_read_with_headers(http_stream_t *s, http_response_t *out,
                                                http_header_fn on_header, void *ctx)
 {
     for (int i = 0; i <= HTTP_INTERIM_MAX; i++) {
-        http_head_result_t rc = head_read_once(s, out, on_header, ctx);
+        http_head_result_t rc = http_head_read_one_with_headers(s, out, on_header, ctx);
         if (rc != HTTP_HEAD_OK)
             return rc;
-        // 101 IS NOT INTERIM. After it the connection speaks whatever was
-        // upgraded to, so reading on for "the real reply" would parse a
-        // foreign protocol as an HTTP head — and hang on the idle deadline
-        // when it is not one, or accept it as the download when its first
-        // bytes happen to look like a status line. Nothing was asked for, so
-        // there is nothing to follow. (Codex review round 7, 2026-09-03.)
-        if (out->status == 101)
-            return HTTP_HEAD_SWITCHED;
         if (out->status < 100 || out->status >= 200)
             return HTTP_HEAD_OK;
     }

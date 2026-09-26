@@ -1,6 +1,6 @@
 # libfetch cookie/Referer hook evidence
 
-Branch: `codex/fetch-cookies`, based on `codex/fetch-post` (`eea36691`).
+Branch: `codex/fetch-cookies`, based on `codex/fetch-post` (`22da1a68`).
 This is userland work; the kernel is unchanged.
 
 - Strict full `make -j8`: passed (the existing legacy ELF fixture RWX
@@ -64,3 +64,30 @@ The inherited 2048-byte response-line buffer omits oversized cookies whole;
 request callback output is bounded to 1024 bytes. Those limits are explicit
 in the API contract and tested. Cookie storage/matching/referrer policy
 belong to the navigator, and connection reuse is a separate feature.
+
+## PR #141 review follow-up
+
+The cookie callback receives `bool encrypted` after the originating URL.
+The value comes from the actual transport, false for HTTPS URLs fetched
+through a plain proxy. The jar and Secure-cookie acceptance policy remain
+libway's responsibility. Rebuild callback implementations for this signature.
+The parent POST review fixes are merged into this branch.
+
+- Combined host suite: 777 checks per seed, two seeds under ASan/UBSan with
+  leak detection. Secure-cookie values arrive unchanged with true for direct
+  TLS and false for direct HTTP or HTTPS-via-plain-proxy, across full,
+  one-byte and random reads. Inherited early-response tests also pass.
+- HTTP differential/observer and transport suites passed; strict full build,
+  `git diff --check` and stale-reference checks passed.
+- Eight-core QEMU: `fetchhooktest` passed on direct HTTP and again on an
+  HTTPS URL using `--proxy` with `$https_proxy` pointing to the fixture.
+  Both response callbacks asserted false encryption; cookie redirect order,
+  Referer stripping, missing-cookie refusal and POST redirects still passed.
+- `fetchposttest` passed on the combined build. The early-413 connection
+  sent 8318 bytes total, abandoning the remainder of the 70000-byte body;
+  the 100-Continue upload arrived complete with CRC32 `634f3d0d`.
+- TCP snapshot: 20 connections opened, 18 reaped, remaining rows CLOSED and
+  TIME_WAIT, detached with no queued/inflight sends. Zero retransmits,
+  resets, connect timeouts or local drops.
+
+This adds plain-proxy guest evidence, not native-TLS guest or P5 coverage.

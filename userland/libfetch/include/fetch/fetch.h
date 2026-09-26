@@ -135,6 +135,7 @@ typedef struct {
     bool     via_proxy;                       // the facts behind "this is not end-to-end"
     char     proxy_host[OS64_URL_HOST_MAX];
     uint16_t proxy_port;
+    os64_fetch_method_t method;               // request that produced this head, after redirects
 } os64_fetch_head_t;
 
 // Counters a caller reads between reads, for a meter or a status line.
@@ -239,8 +240,10 @@ typedef struct {
     // individually and before on_hop/headers_for for a redirect destination.
     // Value and URL are borrowed for the call. No 1xx/trailer delivery;
     // oversized lines (HTTP_LINE_MAX) are omitted whole. Earlier calls stand
-    // even if a later header fails. No cookie parsing/storage is done here.
-    void (*on_set_cookie)(void *ctx, const os64_url_t *from_url,
+    // even if a later header fails. encrypted describes the actual connection:
+    // false for plain HTTPS proxies too. The session applies Secure-cookie
+    // policy using this fact; no cookie parsing/storage is done here.
+    void (*on_set_cookie)(void *ctx, const os64_url_t *from_url, bool encrypted,
                           const char *value, size_t len);
     // These callbacks run inside open on its thread, using ctx. Copy anything
     // needed afterward; do not re-enter this fetch. cancellation uses ctx

@@ -7,10 +7,11 @@ static unsigned failures;
 #define CHECK(c) do { if (!(c)) { os64_printf("fetchhooktest: FAIL line %d: %s\n", __LINE__, #c); failures++; } } while (0)
 typedef struct { unsigned received, asked, hops; bool session; } state_t;
 
-static void got_cookie(void *ctx, const os64_url_t *url, const char *value, size_t len)
+static void got_cookie(void *ctx, const os64_url_t *url, bool encrypted, const char *value, size_t len)
 {
     state_t *state = ctx;
     CHECK(os64_streq(url->path, "/set-cookie"));
+    CHECK(!encrypted);
     const char *want = state->received == 0 ? "session=donuts; Path=/; HttpOnly" : "taste=chocolate; Path=/";
     CHECK(len == os64_strlen(want) && os64_memcmp(value, want, len) == 0);
     state->received++;
@@ -59,13 +60,13 @@ static void fetch(const char *base, const char *path, const os64_fetch_options_t
 }
 int main(int argc, char **argv)
 {
-    if (argc != 2) {
-        os64_printf("usage: fetchhooktest http://host:port (tools/httptestd.py)\n");
+    if (argc < 2 || argc > 3 || (argc == 3 && !os64_streq(argv[2], "--proxy"))) {
+        os64_printf("usage: fetchhooktest URL [--proxy] (tools/httptestd.py; plain proxy only)\n");
         return 2;
     }
     state_t state = {0};
     os64_fetch_options_t opt = { .headers_for = headers, .on_set_cookie = got_cookie,
-        .on_hop = hop, .ctx = &state, .no_proxy = true, .idle_ms = 3000 };
+        .on_hop = hop, .ctx = &state, .no_proxy = argc == 2, .idle_ms = 3000 };
     fetch(argv[1], "/set-cookie", &opt, 200, "cookie accepted\n");
     CHECK(state.asked == 2 && state.received == 2 && state.hops == 1);
     // The two source forms of Referer are both stripped on this plain wire.

@@ -80,11 +80,11 @@ address the jar's domain and path rules are about:
 bool (*headers_for)(void *ctx, const os64_url_t *hop_url, bool encrypted,
                     char *out, size_t cap);
 
-// Called once per Set-Cookie line of each hop's head, as the head is
-// parsed, with the URL that answered — before the redirect is followed,
-// so a login's 302 that sets the session and sends you on is heard.
-void (*on_set_cookie)(void *ctx, const os64_url_t *from_url,
-                      const char *line, size_t len);
+// Each final-head Set-Cookie value, before following redirects.
+// encrypted is the actual connection's security, false for plain proxies
+// even with an HTTPS URL. The session uses it for Secure-cookie policy.
+void (*on_set_cookie)(void *ctx, const os64_url_t *from_url, bool encrypted,
+                      const char *value, size_t len);
 ```
 
 `headers_for` REPLACES the credential rule for `Cookie` (the jar decides
