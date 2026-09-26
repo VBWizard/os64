@@ -195,9 +195,6 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len)
 
 // ── Pages ───────────────────────────────────────────────────────────────
 
-// A page as the window holds it: libway's page (the tree, what it means,
-// the reader's flips) and its layout at the width it was laid out at. A
-// text/plain page has no tree of its own, so it is given one.
 // A picture of the page's, one per ADDRESS: forty spacer GIFs are one
 // fetch. Its address is the page model's, which lives as long as it does.
 typedef enum { PIC_WAITING, PIC_SHOWN, PIC_FAILED, PIC_NOT_KEPT } PictureState;
@@ -209,6 +206,9 @@ typedef struct {
     os64_work_id_t id;              // while WAITING
 } Picture;
 
+// A page as the window holds it: libway's page (the tree, what it means,
+// the reader's flips) and its layout at the width it was laid out at. A
+// text/plain page has no tree of its own, so it is given one.
 typedef struct {
     way_page_t way;
     os64_html_document_t *plain;
@@ -221,6 +221,9 @@ typedef struct {
     int32_t npics, *pic_of;
     int32_t waiting, not_kept;
     size_t kept_bytes;
+    // The form whose reply this is, when the reply was to a POST: what
+    // Reload sends again. Its url is NULL otherwise.
+    os64_page_request_t sent;
 } Page;
 
 static const os64_html_document_t *page_doc(const Page *p)
@@ -243,6 +246,7 @@ static void page_clear(Page *p)
     os64_page_free(p->plain_model);
     os64_html_document_free(p->plain);
     way_page_clear(&p->way);
+    os64_page_request_free(&p->sent);
     os64_memset(p, 0, sizeof(*p));
 }
 
@@ -266,20 +270,6 @@ static bool page_from_text(Page *p)
     return p->plain != NULL && p->plain_model != NULL;
 }
 
-// The size libflow asks of a picture: the one that arrived, or unknown.
-// `ctx` is the page being laid out — the one on screen, or one being built
-// beside it — so a picture is never measured from the wrong page.
-static bool picture_size(void *ctx, const os64_html_node_t *node, int32_t *w, int32_t *h)
-{
-    const Page *p = ctx;
-    int32_t i = p->pic_of != NULL ? os64_page_image_for(page_model(p), node) : -1;
-    if (i < 0 || p->pic_of[i] < 0 || p->pics[p->pic_of[i]].state != PIC_SHOWN)
-        return false;
-    *w = (int32_t)p->pics[p->pic_of[i]].image.width;
-    *h = (int32_t)p->pics[p->pic_of[i]].image.height;
-    return true;
-}
-
 static flow_tree_t *layout_tree(Page *p, int32_t width)
 {
     s_env.ctx = p;
@@ -298,6 +288,25 @@ typedef enum {
 
 // Whose question the bar is showing.
 typedef enum { ASK_NONE = 0, ASK_WORKER, ASK_REQUEST } Asker;
+
+// A control's widget (YONDER.md § Y4). The storage never moves once the
+// widget is in the window's tree, so a page's are allocated together.
+typedef enum { FW_TEXT, FW_PASSWORD, FW_CHECK, FW_BUTTON, FW_LIST, FW_FILE } FormKind;
+
+typedef struct {
+    FormKind kind;
+    int32_t control;                // libpage's index
+    union {
+        os64_ui_textfield_t field;
+        os64_ui_checkbox_t check;
+        os64_ui_widget_t button;
+        os64_ui_listbox_t list;
+    } u;
+    os64_ui_widget_t *w;
+    char text[512];                 // a field's buffer, a button's caption
+    char secret[512];               // a password's value: the field shows bullets
+    size_t secret_len;
+} FormWidget;
 
 static struct {
     int64_t win;
@@ -355,7 +364,72 @@ static struct {
     bool pictures_moved;
     os64_ticks_t pictures_laid;
     uint64_t laid_ms;               // the last layout's time, for the status line
+    // The page's control widgets, after every permanent widget in the
+    // window's tree; `by_control` finds one from libpage's index.
+    FormWidget *fw;
+    int32_t nfw, *by_control, ncontrols;
 } g;   // zeroed: the session's histories are large, and .data would carry them in the file
+
+// A select's list shows this many rows when the page does not say: enough
+// to pick with the pointer, since yonder has no drop-down (YONDER.md § Y4).
+#define SELECT_ROWS 4
+
+// A select's box: the rows its list shows, as wide as its longest option.
+// Measured in the window's own face, the one its widget paints in.
+static void select_size(const os64_page_control_t *c, const os64_html_node_t *node,
+                        int32_t *w, int32_t *h)
+{
+    const os64_html_attr_t *size = os64_html_attr(node, "size");
+    int32_t rows = size != NULL && size->value != NULL ? (int32_t)os64_atoi(size->value) : 0;
+    if (rows <= 1)
+        rows = c->noptions < SELECT_ROWS ? c->noptions : SELECT_ROWS;
+    if (rows < 1)
+        rows = 1;
+    int32_t widest = 0;
+    for (int32_t k = 0; k < c->noptions; k++) {
+        int32_t px = 0;
+        const char *label = c->options[k].label != NULL ? c->options[k].label : "";
+        if (os64_ui_text_measure(&g.ui, OS64_FONT_ROLE_UI, label, os64_strlen(label), &px) ==
+                OS64_FONT_OK && px > widest)
+            widest = px;
+    }
+    // The listbox's own arithmetic: a two-pixel frame, rows eight pixels
+    // taller than the face's, labels six pixels in.
+    *h = rows * (os64_ui_font_row_height(&g.ui, OS64_FONT_ROLE_UI) + 8) + 4;
+    *w = widest + 2 * 6 + 4;
+    if (*w < 48)
+        *w = 48;
+}
+
+// The size libflow asks of a replaced box. A picture: the one that
+// arrived, or unknown. A control yonder draws as a widget: the size that
+// widget needs, since libflow's own guess is a text field's for every
+// control, and a tick drawn across ten ems is a slab while a list one line
+// high shows no rows at all. `ctx` is the page being laid out — the one on
+// screen, or one being built beside it — so nothing is measured from the
+// wrong page.
+static bool replaced_size(void *ctx, const os64_html_node_t *node, int32_t *w, int32_t *h)
+{
+    const Page *p = ctx;
+    const os64_page_t *model = page_model(p);
+    int32_t control = model != NULL ? os64_page_control_for(model, node) : -1;
+    const os64_page_control_t *c = control >= 0 ? os64_page_control(model, control) : NULL;
+    if (c != NULL && (c->input == OS64_PAGE_INPUT_CHECKBOX || c->input == OS64_PAGE_INPUT_RADIO) &&
+        g.ui.theme.checkbox_size > 0) {
+        *w = *h = g.ui.theme.checkbox_size;
+        return true;
+    }
+    if (c != NULL && c->element == OS64_PAGE_EL_SELECT) {
+        select_size(c, node, w, h);
+        return true;
+    }
+    int32_t i = p->pic_of != NULL ? os64_page_image_for(model, node) : -1;
+    if (i < 0 || p->pic_of[i] < 0 || p->pics[p->pic_of[i]].state != PIC_SHOWN)
+        return false;
+    *w = (int32_t)p->pics[p->pic_of[i]].image.width;
+    *h = (int32_t)p->pics[p->pic_of[i]].image.height;
+    return true;
+}
 
 // A sentence in the house's status-row voice starts with a space; a line
 // of its own does not need it.
@@ -419,6 +493,7 @@ static void sync_bars(void)
 }
 
 static void hover(int32_t x, int32_t y);
+static void forms_place(void);
 
 static void scroll_to(int32_t x, int32_t y)
 {
@@ -427,6 +502,7 @@ static void scroll_to(int32_t x, int32_t y)
     clamp_scroll();
     sync_bars();
     os64_ui_mark_dirty(&g.ui, &g.view);
+    forms_place();
     // The page moved under a pointer that did not: what it rests on now.
     hover(g.pointer_x, g.pointer_y);
 }
@@ -544,6 +620,7 @@ static void relayout(bool again)
     }
     clamp_scroll();
     sync_bars();
+    forms_place();
     say_laid_out(ms_between(&t0, &t1));
     os64_ui_mark_dirty(&g.ui, &g.view);
 }
@@ -552,6 +629,8 @@ static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask
 static void buttons_follow(void);
 static void pictures_start(Page *p);
 static void pictures_leave(Page *p);
+static void forms_build(void);
+static void forms_drop(void);
 static void open_address(const char *url, NavKind kind, const way_position_t *crumb,
                          os64_page_request_t *request);
 
@@ -607,11 +686,13 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
             way_went_forward(&g.way, g.page.way.url, &here);
     }
     pictures_leave(&g.page);
+    forms_drop();
     page_clear(&g.page);
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
     g.page_serial++;
     pictures_start(&g.page);
+    forms_build();
     g.hover_link = g.pressed_link = -1;
     if (kind == NAV_BACK || kind == NAV_FORWARD)
         position_restore(crumb);
@@ -620,6 +701,7 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     else
         g.sx = g.sy = 0;
     sync_bars();
+    forms_place();
     os64_ui_textfield_set(&g.ui, &g.field, g.page.way.url);
     say_laid_out(ms_between(&t0, &t1));
     if (fragment != NULL)
@@ -857,6 +939,64 @@ static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask
     }
 }
 
+// A copy of a request, owning its own storage as libpage's do, so that
+// os64_page_request_free takes it apart. False when memory ran out.
+static bool request_copy(const os64_page_request_t *from, os64_page_request_t *to)
+{
+    *to = *from;
+    to->url = to->fragment = to->content_type = NULL;
+    to->body = NULL;
+    to->has_fragment = false;
+    to->anchor = NULL;
+    size_t n = os64_strlen(from->url) + 1;
+    char *url = os64_malloc(n);
+    char *type = from->content_type != NULL ? os64_malloc(os64_strlen(from->content_type) + 1)
+                                            : NULL;
+    void *body = from->body_len > 0 ? os64_malloc(from->body_len) : NULL;
+    if (url == NULL || (from->content_type != NULL && type == NULL) ||
+        (from->body_len > 0 && body == NULL)) {
+        os64_free(url);
+        os64_free(type);
+        os64_free(body);
+        to->body_len = 0;
+        return false;
+    }
+    os64_memcpy(url, from->url, n);
+    if (type != NULL)
+        os64_strcopy(type, os64_strlen(from->content_type) + 1, from->content_type);
+    if (body != NULL)
+        os64_memcpy(body, from->body, from->body_len);
+    to->url = url;
+    to->content_type = type;
+    to->body = body;
+    return true;
+}
+
+// Reload on the reply to a form: the form sent again, which is asked
+// first, since whatever it did — an order, a post — it does twice. When
+// the form goes out in the clear, libway's own question is the one put:
+// it says that, and a yes to it is a yes to sending.
+static void resend_form(void)
+{
+    os64_page_request_t again;
+    if (!request_copy(&g.page.sent, &again)) {
+        status_rest("Out of memory sending that form again.");
+        return;
+    }
+    way_judgement_t j = way_judge(&g.way, &again, WAY_ASK_SEND);
+    if (j.kind == WAY_REFUSE) {
+        os64_page_request_free(&again);
+        say_way();
+        return;
+    }
+    bar_ask(ASK_REQUEST, ++g.asked,
+            j.kind == WAY_QUESTION ? j.question
+                                   : "This page is the reply to a form. Send the form again?");
+    g.pending = again;
+    g.pending_kind = NAV_RELOAD;
+    g.pending_refused = j.kind == WAY_QUESTION ? j.refused : "The form was not sent again.";
+}
+
 // An address a person gave: a path is a file, anything else libway's.
 static void open_address(const char *typed, NavKind kind, const way_position_t *crumb,
                          os64_page_request_t *request)
@@ -1015,6 +1155,348 @@ static void pictures_settle(void)
     relayout(true);
 }
 
+// ── Forms ───────────────────────────────────────────────────────────────
+
+static FormWidget *form_widget(int32_t control)
+{
+    return g.by_control != NULL && control >= 0 && control < g.ncontrols &&
+                   g.by_control[control] >= 0
+               ? &g.fw[g.by_control[control]]
+               : NULL;
+}
+
+// A button's caption: its value, or the element's own text for a `button`,
+// or the name the standard gives a submit or reset with neither.
+static void button_caption(const os64_page_control_t *c, char *out, size_t cap)
+{
+    out[0] = '\0';
+    if (c->element == OS64_PAGE_EL_BUTTON) {
+        size_t at = 0;
+        bool space = false;
+        for (const os64_html_node_t *n = c->node->first_child; n != NULL && at + 2 < cap; n = n->next)
+            for (size_t i = 0; n->kind == OS64_HTML_TEXT && i < n->text_len && at + 2 < cap; i++) {
+                char ch = n->text[i];
+                if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f') {
+                    space = at > 0;
+                    continue;
+                }
+                if (space)
+                    out[at++] = ' ';
+                space = false;
+                out[at++] = ch;
+            }
+        out[at] = '\0';
+    } else if (c->value_len > 0) {
+        size_t n = c->value_len < cap - 1 ? c->value_len : cap - 1;
+        os64_memcpy(out, c->value, n);
+        out[n] = '\0';
+    }
+    if (out[0] == '\0')
+        os64_strcopy(out, cap, c->input == OS64_PAGE_INPUT_RESET ? "Reset"
+                               : c->input == OS64_PAGE_INPUT_FILE ? "Choose a file"
+                               : c->submits ? "Submit" : "Button");
+}
+
+static const char *option_label(size_t i, void *user)
+{
+    const FormWidget *fw = user;
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), fw->control);
+    return c != NULL && (int32_t)i < c->noptions && c->options[i].label != NULL
+               ? c->options[i].label : "";
+}
+
+static void form_send(int32_t control, os64_page_activation_t how);
+
+static void field_submitted(os64_ui_textfield_t *tf, void *user)
+{
+    (void)tf;
+    form_send(((FormWidget *)user)->control, OS64_PAGE_ACTIVATE_IMPLICIT);
+}
+
+static void field_cancelled(os64_ui_textfield_t *tf, void *user)
+{
+    (void)tf;
+    (void)user;
+    os64_ui_set_focus(&g.ui, &g.view);
+}
+
+static void forms_sync_from_model(void);
+
+// A tick: the model's, then every tick's again — a radio's group is
+// libpage's, so picking one may have cleared others.
+static void check_changed(os64_ui_checkbox_t *cb, void *user)
+{
+    const FormWidget *fw = user;
+    if (os64_page_set_checked(page_model(&g.page), fw->control, cb->checked) < 0)
+        status_rest("the page keeps that one as it is");
+    forms_sync_from_model();
+}
+
+static void list_changed(os64_ui_listbox_t *list, void *user)
+{
+    const FormWidget *fw = user;
+    if (list->selected >= 0)
+        (void)os64_page_set_chosen(page_model(&g.page), fw->control, (int32_t)list->selected, true);
+    forms_sync_from_model();
+}
+
+static void button_clicked(os64_ui_widget_t *w, void *user)
+{
+    (void)w;
+    const FormWidget *fw = user;
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), fw->control);
+    if (c != NULL && c->resets) {
+        (void)os64_page_reset(page_model(&g.page), c->form);
+        forms_sync_from_model();
+        return;
+    }
+    form_send(fw->control, OS64_PAGE_ACTIVATE_CONTROL);
+}
+
+// A password field shows one bullet per character of the value yonder keeps.
+static void password_show(FormWidget *fw)
+{
+    char bullets[sizeof(fw->text)];
+    size_t n = 0;
+    for (size_t i = 0; i < fw->secret_len && n + 1 < sizeof(bullets); i++)
+        if (((unsigned char)fw->secret[i] & 0xc0) != 0x80)   // one per character
+            bullets[n++] = '*';
+    bullets[n] = '\0';
+    os64_ui_textfield_set(&g.ui, &fw->u.field, bullets);
+}
+
+// Every widget shows what the model holds: after a tick changed a group, a
+// reset, or the page arriving.
+static void forms_sync_from_model(void)
+{
+    const os64_page_t *model = page_model(&g.page);
+    for (int32_t i = 0; i < g.nfw; i++) {
+        FormWidget *fw = &g.fw[i];
+        const os64_page_control_t *c = os64_page_control(model, fw->control);
+        if (c == NULL)
+            continue;
+        switch (fw->kind) {
+        case FW_TEXT:
+            os64_ui_textfield_set(&g.ui, &fw->u.field, c->value);
+            break;
+        case FW_PASSWORD: {
+            size_t n = c->value_len < sizeof(fw->secret) ? c->value_len : sizeof(fw->secret) - 1;
+            os64_memcpy(fw->secret, c->value, n);
+            fw->secret_len = n;
+            password_show(fw);
+            break;
+        }
+        case FW_CHECK:
+            os64_ui_checkbox_set(&g.ui, &fw->u.check, c->checked);
+            break;
+        case FW_LIST: {
+            int selected = -1;
+            for (int32_t k = 0; k < c->noptions && selected < 0; k++)
+                if (c->options[k].selected)
+                    selected = k;
+            os64_ui_listbox_set(&g.ui, &fw->u.list, (size_t)c->noptions, selected);
+            break;
+        }
+        default:
+            break;
+        }
+    }
+}
+
+// Text fields tell nobody when they change, so what they hold is written
+// to the model before anything reads it to send.
+static void forms_flush(void)
+{
+    os64_page_t *model = page_model(&g.page);
+    for (int32_t i = 0; i < g.nfw; i++) {
+        FormWidget *fw = &g.fw[i];
+        const os64_page_control_t *c = os64_page_control(model, fw->control);
+        if (c == NULL || c->readonly || c->disabled)
+            continue;
+        const char *v = fw->kind == FW_PASSWORD ? fw->secret : fw->text;
+        size_t n = fw->kind == FW_PASSWORD ? fw->secret_len : os64_strlen(fw->text);
+        if ((fw->kind == FW_TEXT || fw->kind == FW_PASSWORD) &&
+            (n != c->value_len || os64_memcmp(v, c->value, n) != 0))
+            (void)os64_page_set_text(model, fw->control, v, n);
+    }
+}
+
+// Sends a form: the button pressed (CONTROL) or Enter in a field (IMPLICIT).
+// libpage decides what goes and where; libway judges it; an INVALID
+// refusal puts the focus on the control that failed.
+static void form_send(int32_t control, os64_page_activation_t how)
+{
+    forms_flush();
+    os64_page_what_t what = {how, control, 0, 0};
+    os64_page_request_t request;
+    os64_page_verdict_t verdict = os64_page_activate(page_model(&g.page), what, &request);
+    if (verdict == OS64_PAGE_NAVIGATE) {
+        g.chain = 0;
+        request_navigate(&request, NAV_GO, WAY_ASK_SEND);
+        return;
+    }
+    if (verdict == OS64_PAGE_FRAGMENT) {
+        scroll_to_node(request.anchor);
+    } else {
+        status_rest(os64_page_reason_name(request.reason));
+        FormWidget *failed = request.reason == OS64_PAGE_REASON_INVALID
+                                 ? form_widget(request.control) : NULL;
+        if (failed != NULL && !failed->w->hidden)
+            os64_ui_set_focus(&g.ui, failed->w);
+    }
+    os64_page_request_free(&request);
+}
+
+// The keys of a focused password field, taken before libui sees them: its
+// field holds bullets, so yonder edits the value itself. True when taken.
+static bool password_key(const os64_gui_event_t *ev)
+{
+    if (ev->type != OS64_GUI_EVENT_KEY_DOWN || g.ui.focus == NULL)
+        return false;
+    FormWidget *fw = NULL;
+    for (int32_t i = 0; i < g.nfw && fw == NULL; i++)
+        if (g.fw[i].kind == FW_PASSWORD && g.fw[i].w == g.ui.focus)
+            fw = &g.fw[i];
+    if (fw == NULL)
+        return false;
+    unsigned char a = (unsigned char)ev->key.ascii;
+    if (a == '\t')
+        return false;                           // traversal is libui's
+    if (a == '\r' || a == '\n') {
+        form_send(fw->control, OS64_PAGE_ACTIVATE_IMPLICIT);
+    } else if (a == '\b' || a == 0x7f) {
+        while (fw->secret_len > 0 &&
+               ((unsigned char)fw->secret[--fw->secret_len] & 0xc0) == 0x80)
+            ;
+        password_show(fw);
+    } else if (a >= 0x20 && fw->secret_len + 4 < sizeof(fw->secret)) {
+        // A key's byte is Latin-1; the value is UTF-8.
+        fw->secret_len += os64_utf8_encode(a, fw->secret + fw->secret_len);
+        password_show(fw);
+    }
+    return true;                                // arrows, selection, the rest: swallowed
+}
+
+// The page's controls, one widget each, after the window's own widgets.
+static void forms_build(void)
+{
+    const os64_page_t *model = page_model(&g.page);
+    int32_t n = g.page.tree != NULL ? flow_ncontrols(g.page.tree) : 0;
+    g.ncontrols = model != NULL ? os64_page_ncontrols(model) : 0;
+    if (n <= 0 || g.ncontrols <= 0)
+        return;
+    g.fw = os64_calloc((size_t)n, sizeof(*g.fw));
+    g.by_control = os64_calloc((size_t)g.ncontrols, sizeof(*g.by_control));
+    if (g.fw == NULL || g.by_control == NULL) {
+        os64_free(g.fw);
+        os64_free(g.by_control);
+        g.fw = NULL;
+        g.by_control = NULL;
+        status_rest("Out of memory making this page's controls; they are drawn but cannot be used.");
+        return;
+    }
+    for (int32_t k = 0; k < g.ncontrols; k++)
+        g.by_control[k] = -1;
+    for (int32_t i = 0; i < n; i++) {
+        const flow_box_t *b = flow_control(g.page.tree, i);
+        const os64_page_control_t *c = b != NULL ? os64_page_control(model, b->control) : NULL;
+        if (c == NULL || g.by_control[b->control] >= 0)
+            continue;
+        FormWidget *fw = &g.fw[g.nfw];
+        fw->control = b->control;
+        if (c->element == OS64_PAGE_EL_SELECT) {
+            fw->kind = FW_LIST;
+            os64_ui_listbox(&fw->u.list, (size_t)c->noptions, option_label, list_changed, fw);
+            fw->w = &fw->u.list.w;
+        } else if (c->element == OS64_PAGE_EL_BUTTON || c->submits || c->resets ||
+                   c->input == OS64_PAGE_INPUT_BUTTON || c->input == OS64_PAGE_INPUT_FILE) {
+            fw->kind = c->input == OS64_PAGE_INPUT_FILE ? FW_FILE : FW_BUTTON;
+            button_caption(c, fw->text, sizeof(fw->text));
+            os64_ui_button(&fw->u.button, fw->text, button_clicked, fw);
+            fw->w = &fw->u.button;
+        } else if (c->input == OS64_PAGE_INPUT_CHECKBOX || c->input == OS64_PAGE_INPUT_RADIO) {
+            fw->kind = FW_CHECK;
+            os64_ui_checkbox(&fw->u.check, "", c->checked, check_changed, fw);
+            fw->w = &fw->u.check.w;
+        } else if (c->input == OS64_PAGE_INPUT_IMAGE) {
+            continue;                   // a picture: a click on it sends the form
+        } else {
+            fw->kind = c->input == OS64_PAGE_INPUT_PASSWORD ? FW_PASSWORD : FW_TEXT;
+            os64_ui_textfield(&fw->u.field, fw->text, sizeof(fw->text), field_submitted,
+                              field_cancelled, fw);
+            fw->w = &fw->u.field.w;
+        }
+        fw->w->hidden = true;
+        g.by_control[b->control] = g.nfw++;
+        os64_ui_add_child(&g.root, fw->w);
+        os64_ui_set_enabled(&g.ui, fw->w,
+                            !c->disabled && !c->readonly && fw->kind != FW_FILE);
+    }
+    forms_place();                      // bounds first: a field's scroll is judged by them
+    forms_sync_from_model();
+}
+
+// Every control's widget at its box on the glass — or hidden, when its box
+// is not wholly inside the page view, because libui does not clip a child
+// to its parent and a widget half out of the view would paint over the
+// toolbar. The painter draws the frame of a hidden one.
+static void forms_place(void)
+{
+    if (g.page.tree == NULL)
+        return;
+    const os64_gui_rect_t v = g.view.bounds;
+    int32_t n = flow_ncontrols(g.page.tree);
+    for (int32_t i = 0; i < n; i++) {
+        const flow_box_t *b = flow_control(g.page.tree, i);
+        FormWidget *fw = b != NULL ? form_widget(b->control) : NULL;
+        if (fw == NULL)
+            continue;
+        os64_gui_rect_t r = {v.x + b->rect.x - g.sx, v.y + b->rect.y - g.sy, b->rect.w, b->rect.h};
+        bool inside = r.x >= v.x && r.y >= v.y && r.x + r.w <= v.x + v.w &&
+                      r.y + r.h <= v.y + v.h && r.w > 0 && r.h > 0;
+        if (!inside) {
+            if (!fw->w->hidden)
+                os64_ui_set_hidden(&g.ui, fw->w, true);
+            fw->w->bounds = r;          // a field scrolls its text by its width
+            continue;
+        }
+        bool moved = r.x != fw->w->bounds.x || r.y != fw->w->bounds.y ||
+                     r.w != fw->w->bounds.w || r.h != fw->w->bounds.h;
+        if (moved && !fw->w->hidden)
+            os64_ui_mark_dirty(&g.ui, fw->w);
+        fw->w->bounds = r;
+        if (fw->w->hidden)
+            os64_ui_set_hidden(&g.ui, fw->w, false);
+        else if (moved)
+            os64_ui_mark_dirty(&g.ui, fw->w);
+    }
+}
+
+// The page's controls leave with it: interaction first (focus, hover and a
+// press grab must not outlive the widget they name), then each widget's
+// text runs the way libui's own teardown releases them, then the list.
+static void forms_drop(void)
+{
+    if (g.fw == NULL)
+        return;
+    os64_ui_cancel_interaction(&g.ui);
+    for (int32_t i = 0; i < g.nfw; i++) {
+        os64_ui_widget_t *w = g.fw[i].w;
+        if (w->cls != NULL && w->cls->destroy != NULL)
+            w->cls->destroy(w);
+        os64_ui_run_release(w->run);
+        os64_ui_run_release(w->run_staged);
+        w->run = w->run_staged = NULL;
+    }
+    g.status.next_sibling = NULL;       // the permanent widgets end at the status line
+    os64_free(g.fw);
+    os64_free(g.by_control);
+    g.fw = NULL;
+    g.by_control = NULL;
+    g.nfw = g.ncontrols = 0;
+    os64_ui_mark_dirty(&g.ui, &g.root);
+}
+
 // ── The doorbell ────────────────────────────────────────────────────────
 
 // A job the pool finished. Only the current navigation's is looked at; any
@@ -1049,6 +1531,12 @@ static void reaped(os64_work_id_t id, void *job, void *product)
         os64_memset(&fresh, 0, sizeof(fresh));
         fresh.way = a->page;
         os64_memset(&a->page, 0, sizeof(a->page));
+        yonder_trip_t *trip = job;
+        if (fresh.way.posted && trip->has_request) {
+            fresh.sent = trip->request;     // moved: the job's release frees nothing
+            trip->has_request = false;
+            os64_memset(&trip->request, 0, sizeof(trip->request));
+        }
         if (fresh.way.doc == NULL && !page_from_text(&fresh)) {
             page_clear(&fresh);
             status_rest("Out of memory reading that text.");
@@ -1160,12 +1648,17 @@ static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
     glass_fill(ctx, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xa0a0a0);
 }
 
-// A control is drawn inert until it becomes a widget (slice Y4): a white
-// well with a sunken edge.
+static FormWidget *form_widget(int32_t control);
+
+// A control whose widget is showing draws itself; one hidden (its box not
+// wholly in the view), or with no widget, is drawn inert: a white well with
+// a sunken edge.
 static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
-    (void)b;
     (void)clip;
+    const FormWidget *fw = form_widget(b->control);
+    if (fw != NULL && !fw->w->hidden)
+        return;
     glass_fill(ctx, c, 0xffffff);
     glass_fill(ctx, (os64_gui_rect_t){c.x, c.y, c.w, 1}, 0x808080);
     glass_fill(ctx, (os64_gui_rect_t){c.x, c.y, 1, c.h}, 0x808080);
@@ -1263,6 +1756,20 @@ static void follow_link(int32_t link)
     }
 }
 
+// An `input type=image` is a picture that sends its form: libflow gave it
+// an atom, and a click on it presses it.
+static void picture_button_at(int32_t x, int32_t y)
+{
+    os64_gui_rect_t v = g.view.bounds;
+    if (g.page.tree == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
+        return;
+    const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy);
+    const os64_page_control_t *c =
+        b != NULL && b->control >= 0 ? os64_page_control(page_model(&g.page), b->control) : NULL;
+    if (c != NULL && c->input == OS64_PAGE_INPUT_IMAGE && !c->disabled)
+        form_send(b->control, OS64_PAGE_ACTIVATE_CONTROL);
+}
+
 static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_t *ev)
 {
     (void)ui;
@@ -1284,6 +1791,8 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
         int32_t link = link_at(ev->mouse.x, ev->mouse.y);
         if (link >= 0 && link == g.pressed_link && ev->mouse.button == OS64_GUI_MOUSE_LEFT)
             follow_link(link);
+        else if (ev->mouse.button == OS64_GUI_MOUSE_LEFT)
+            picture_button_at(ev->mouse.x, ev->mouse.y);
         g.pressed_link = -1;
         return true;
     }
@@ -1375,6 +1884,10 @@ static void click_reload(os64_ui_widget_t *w, void *user)
     if (g.page.tree == NULL)
         return;
     g.chain = 0;
+    if (g.page.sent.url != NULL) {
+        resend_form();
+        return;
+    }
     char url[OS64_FETCH_URL_MAX];
     os64_strcopy(url, sizeof(url), g.page.way.url);
     start_trip(url, NULL, NAV_RELOAD, NULL);
@@ -1441,6 +1954,7 @@ static void on_resize(os64_ui_t *ui)
     g.relayout_due = true;
     clamp_scroll();
     sync_bars();
+    forms_place();
     os64_ui_mark_dirty(&g.ui, &g.root);
 }
 
@@ -1607,7 +2121,7 @@ int main(int argc, char **argv)
         return 1;
     }
     g.hover_link = g.pressed_link = -1;
-    s_env.replaced_size = picture_size;
+    s_env.replaced_size = replaced_size;
     g.way.name = "yonder";
     g.way.agent = YONDER_AGENT;
     g.way.accept = YONDER_ACCEPT;
@@ -1676,7 +2190,7 @@ int main(int argc, char **argv)
                 hover(ev.mouse.x, ev.mouse.y);
             else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
                 hover(ev.pointer.inside ? ev.pointer.x : -1, ev.pointer.inside ? ev.pointer.y : -1);
-            if (!bar_event(&ev))
+            if (!bar_event(&ev) && !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
         } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
         if (g.relayout_due) {
@@ -1703,6 +2217,7 @@ int main(int argc, char **argv)
     if (g.asker == ASK_REQUEST)
         os64_page_request_free(&g.pending);
     yonder_mail_drop(g.nav.mail);
+    forms_drop();
     page_clear(&g.page);
     os64_ui_font_release(&g.ui);
     for (int i = 0; i < s_faces.nopen; i++)

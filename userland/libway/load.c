@@ -60,10 +60,29 @@ static void show(way_leg_t *s)
 
 // A media type from libfetch is already lowercased, so these compare
 // verbatim.
+static bool ends_with(const char *s, const char *tail)
+{
+    size_t n = os64_strlen(s), t = os64_strlen(tail);
+    return n >= t && os64_streq(s + n - t, tail);
+}
+
+// JSON by its own type or a `+json` suffix (application/ld+json and the
+// rest). RFC 8259 makes it UTF-8, so no charset still means UTF-8.
+static bool type_is_json(const char *type)
+{
+    return os64_streq(type, "application/json") || ends_with(type, "+json");
+}
+
+// A body a person reads as it is: text/*, and the application/ types that
+// are text in all but name — JSON (what an API, and httpbin, answers a
+// form with), JavaScript, and XML — which a browser shows rather than
+// offering to save.
 static bool type_is_text(const char *type)
 {
-    return type[0] == 't' && type[1] == 'e' && type[2] == 'x' && type[3] == 't'
-           && type[4] == '/';
+    return (type[0] == 't' && type[1] == 'e' && type[2] == 'x' && type[3] == 't'
+            && type[4] == '/')
+           || type_is_json(type) || os64_streq(type, "application/javascript")
+           || os64_streq(type, "application/xml") || ends_with(type, "+xml");
 }
 
 // Read the body into the tree. Feeding stops at the parser's first refusal —
@@ -237,6 +256,7 @@ bool way_load(way_leg_t *s, const char *url, const os64_page_request_t *request,
     }
 
     os64_strcopy(out->url, sizeof(out->url), head->url_text);
+    out->posted = head->method == OS64_FETCH_METHOD_POST;
 
     if (html) {
         out->doc = parse_body(s, f, head->charset, url);
@@ -258,7 +278,7 @@ bool way_load(way_leg_t *s, const char *url, const os64_page_request_t *request,
             short_of_memory = true;
         out->text_utf8 = head->charset[0] != '\0'
                              ? charset_is_utf8(head->charset)
-                             : bytes_begin_utf8(out->text, out->textlen);
+                             : type_is_json(type) || bytes_begin_utf8(out->text, out->textlen);
         if (!out->text) {
             leg_say(s, " out of memory reading %s", url);
             os64_fetch_close(f);

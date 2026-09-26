@@ -156,7 +156,7 @@ in-house (CLAUDE.md's reviewer-to-risk rule).
 | Y2 | Packet 06: the navigator out of `wend` into its library | the packet's own evidence; `wend`'s acceptance passes unchanged |
 | Y3 | The network, through libway on packet 07's pool: http and https, a click follows a link, back, forward, reload and stop, a fragment scrolls to its target, declared refreshes, POST (Quinn's packet 05 carried across from wend), the questions asked in the window | § Y3 below |
 | Y3b | libway's cookie jar and `Referer`, on packet 05's hooks, for both browsers | libway's host harness; logging in to a real site |
-| Y4 | Forms: every control libflow placed becomes a real libui widget at its box, moved when the page scrolls and hidden when it leaves the view (libui does not clip a child to its parent), submitted with GET through libpage's form model | a search form on the live web, typed and submitted |
+| Y4 | Forms: every control libflow placed becomes a real libui widget at its box, moved when the page scrolls and hidden when it leaves the view (libui does not clip a child to its parent), submitted through libpage's form model, GET or POST | § Y4 below |
 | Y5 | Images: fetched in parallel on the pool, decoded, drawn scaled and blended, the page laid out again when a size arrives | § Y5 below |
 
 Y1 needs none of the open packets, which is why it came first. Packets 06
@@ -326,6 +326,111 @@ guest: a question asked on the window's own thread (a form or refresh
 leaving https), for want of an https page with such a form — its judgement
 is libway's harness's and its bar is the same bar.
 
+## Y4 — forms
+
+Mosaic drew its forms with Motif widgets embedded in the page; yonder
+does the same with libui's. Chris's order: forms after pictures, before
+cookies.
+
+**One widget per control libflow placed**, made when the page arrives and
+let go with it. They are children of the window's root, after the window's
+own widgets, so a page's widgets leave together: libui has no call that
+removes a widget, so the list is cut back to the window's own after
+interaction is cancelled (focus, hover and a press grab must not outlive the widget
+they point at) and each widget's retained text runs are released the way
+libui's own teardown releases them (the class's `destroy`, then `run` and
+`run_staged`) — a run left behind would hold the window's text context busy
+for good.
+
+| The control | Its widget |
+|---|---|
+| text, search, email, url, tel, number, and the date/time types; a `textarea` | a text field (a textarea is one line in this slice; booked) |
+| password | a text field that only ever holds bullets: yonder takes the keys for it itself (below) |
+| checkbox, radio | a checkbox; a radio's group is libpage's, and picking one refreshes the rest |
+| submit, button, reset, `button` | a button labelled with its value |
+| `select` | a list box, one row per option, the page's choice selected; it shows the rows its `size` asks for, else up to four — enough to pick with the pointer, since a drop-down is booked |
+| file | a disabled button — nothing here can choose a file yet (booked) |
+| hidden | nothing: libflow gave it no box |
+
+**A control's box is the widget's size.** libflow's size for a control it
+knows nothing about is a text field's — ten ems by a line — and a tick
+drawn across that is a slab, a list one line high shows no rows at all. So
+yonder answers libflow's `replaced_size` for them as it does for pictures:
+a checkbox or radio is the theme's tick square; a select is its rows at the
+list box's own pitch, as wide as its longest option in the window's face.
+The page's own `width` and `height` still win, as they do for a picture.
+
+**Where the widget is.** On every paint that moves the page — a scroll, a
+relayout, an arrival — each widget is put at its control's box on the
+glass. libui does not clip a child to its parent, so a widget whose box is
+not WHOLLY inside the page view is hidden, and the painter draws the inert
+frame in its place (the painter draws a control's frame only for a hidden
+widget). Disabled controls get disabled widgets; a readonly one, a disabled
+text field.
+
+**The values are the page model's.** A checkbox, radio or list writes its
+change to libpage at once (`os64_page_set_checked`, `os64_page_set_chosen`).
+A text field has no change callback, so every text field's contents are
+written to libpage (`os64_page_set_text`) before anything is sent — the
+model is what a submission reads.
+
+**Sending.** A button that submits activates its control
+(`OS64_PAGE_ACTIVATE_CONTROL`); Enter in a text field is the standard's
+IMPLICIT SUBMISSION (`OS64_PAGE_ACTIVATE_IMPLICIT`), and libpage decides
+whether the form has a default button and whether a field blocks it. A
+NAVIGATE goes through `way_judge` with `WAY_ASK_SEND` — the question bar
+for a form leaving https — and POST travels as Y3 carries it. A refusal is
+libpage's sentence on the status line, and an INVALID one puts the focus on
+the control that failed.
+
+**A password is never on the glass.** libui's text field does not mask, so
+yonder keeps a password's value itself and feeds the field one bullet per
+character: typed characters append, Backspace removes the last, Enter
+submits, Tab moves on, and everything else — arrows, selection, paste — is
+swallowed, because a field that holds only bullets cannot edit in the
+middle of a value it does not show. The value reaches libpage like any
+other text field's.
+
+**Reload on the reply to a form sends the form again, and asks first.** A
+POST's reply cannot be fetched again by its address (Y3's rule), and
+whatever the form did — an order, a post — it does twice. So the page
+keeps the request that produced it, MOVED out of the job when the reply
+arrives, and libway says whether the reply was to a POST by the FINAL
+method (`way_page_t.posted`): a 303 turned the POST into a GET, and that
+page is an address like any other. Reload puts "Send the form again?" in
+the bar — or libway's own warning, when the form would go out in the
+clear, because a yes to that is a yes to sending. Back and Forward to such
+a reply fetch its address, as wend does (booked).
+
+**What a browser shows as text** (libway, riding along at Chris's ask):
+`text/*`, and the application types that are text in all but name — JSON
+and `+json` (what an API, and httpbin, answers a form with), JavaScript,
+XML and `+xml`. JSON with no charset is read as UTF-8, its RFC's rule. This
+is what arrives as the PAGE: yonder fetches no script a page names, so a
+page's scripts never reach the glass.
+
+**Evidence, as run.** The guest, against a local server that echoes what
+it is sent: a page of every kind of control drawn as widgets at their
+boxes (ticks square, the list showing its three options with the page's
+choice selected, fields holding the page's values). A password typed and
+shown as six bullets; L picked from a radio group (M cleared); `blue`
+picked; the tick cleared; sent with the required field empty — refused,
+"a field the form requires is not filled in", the focus on that field.
+Filled and sent with Enter: the server logged
+`/echo?who=Ada&pw=s3cret&size=l&colour=blue&needed=yes+please`, exactly —
+the unticked box absent, the password whole. The POST form: body
+`note=hello+there`, `application/x-www-form-urlencoded`. Reload on its
+reply: the question; No — "The form was not sent again.", nothing in the
+server's log; Yes — the same body posted a second time. A form posted to
+`https://httpbin.org/post` from an http page: httpbin's JSON echo shown as
+text, the field, length, type and yonder's agent in it. A UTF-8 JSON reply
+with no charset: `café`, right. A tall page of fields scrolled one step:
+the field crossing the view's top edge hidden and drawn as its frame, the
+toolbar untouched. The host harnesses, unchanged in count: libflow 10485,
+yonder 49, libway 75, wend's renderer 177954, none failed. Not run: an
+https page's form sending to http (the question is `way_judge`'s, proven
+in Y3), and a search on the live web.
+
 ## Y5 — pictures
 
 Chris's order after Y3: pictures first (almost every page he visited had
@@ -405,6 +510,8 @@ pictures, the next page's count untouched by the late arrivals.
 | Links on a page from disk | a relative address does not resolve against a `file:` page | Y3, where pages come from the network |
 | Serif, bold, italic | packet 04 | 04 merged |
 | POST and cookies, logging in | packet 05 | 05 merged |
+| A multi-line textarea, a drop-down select, several choices in a multiple select, a file chooser | each is a widget libui does not have yet (a multi-line field sized to its box, a popup list, a multiple-selection list, a file dialog) | the first form that needs one |
+| Back and Forward to the reply to a form | the history holds addresses, so going back to a POST's reply fetches its address, which a server may answer with something else; Chrome shows a "resubmit?" page there | a page where going back to a reply matters |
 | Animated GIFs | libimage decodes sequences (GIF_ANIMATION.md); a page view that repaints on a timer is a new loop for the window | the first page whose animation is the point |
 | SVG pictures | libimage decodes raster formats; SVG is a vector language with a renderer of its own | the modern web's logos, which are mostly SVG |
 | `data:` pictures, and `background=` | a data: address needs no fetch but a decoder of its own; a background image is a fill the painter does not tile yet | a page that needs one |
