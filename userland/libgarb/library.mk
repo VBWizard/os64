@@ -1,7 +1,7 @@
 # libgarb is the page's garb (GARB.md): CSS, parsed and cascaded. It records
 # DT_NEEDED edges on libhtml (the encoding labels today, the tree the
 # cascade walks) and libos64 (strings, arenas, the formatter).
-LIBGARB_SRCS := libgarb/tokenize.c libgarb/parse.c libgarb/decode.c libgarb/dump.c
+LIBGARB_SRCS := libgarb/tokenize.c libgarb/parse.c libgarb/decode.c libgarb/dump.c libgarb/select.c
 LIBGARB_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBGARB_SRCS))
 LIBGARB_SO := $(BIN)/libgarb.so
 # -O2, libhtml's reasoning: a 2026 page brings hundreds of kilobytes of CSS,

@@ -13,6 +13,8 @@
 #include <string.h>
 
 #include "garb/garb.h"
+#include "garb/select.h"
+#include "html/html.h"
 
 // ── Allocation, and failing it on purpose ───────────────────────────────
 
@@ -145,6 +147,78 @@ static void one(const char *mode, const char *text, size_t len, const char *prot
     garb_free(&r);
 }
 
+// ── Selectors ───────────────────────────────────────────────────────────
+
+// §6 An+B, for the suite's An+B.json.
+static void an_plus_b(const char *text, size_t len)
+{
+    garb_parsed_t r;
+    int32_t a, b;
+    if (garb_parse_values(text, len, &r) == GARB_OK && garb_an_plus_b(r.values, r.nvalues, &a, &b))
+        printf("[%d, %d]\n", (int)a, (int)b);
+    else
+        puts("null");
+    garb_free(&r);
+}
+
+// Every element in document order, template contents aside.
+static const os64_html_node_t **s_elements;
+static size_t s_nelements, s_elcap;
+
+static void collect(const os64_html_node_t *n)
+{
+    for (; n != NULL; n = n->next) {
+        if (n->kind == OS64_HTML_ELEMENT) {
+            if (s_nelements == s_elcap) {
+                s_elcap = s_elcap ? s_elcap * 2 : 256;
+                s_elements = realloc(s_elements, s_elcap * sizeof(*s_elements));
+            }
+            s_elements[s_nelements++] = n;
+        }
+        collect(n->first_child);
+    }
+}
+
+// A page, and a selector list per line: for each list, null when it is
+// invalid, else each selector's [a, b, c, pseudo, [indices it matches]].
+static void select_page(const char *html, size_t hlen, const char *lists)
+{
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, html, hlen);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    s_nelements = 0;
+    collect(doc->document->first_child);
+    for (const char *line = lists; *line != '\0';) {
+        const char *end = strchr(line, '\n');
+        size_t n = end != NULL ? (size_t)(end - line) : strlen(line);
+        garb_parsed_t r;
+        garb_parse_values(line, n, &r);
+        garb_selectors_t *sel = garb_selectors_parse(&r, r.values, r.nvalues, doc->quirks);
+        if (sel == NULL) {
+            puts("null");
+        } else {
+            fputs("[", stdout);
+            for (int32_t i = 0; i < garb_selectors_count(sel); i++) {
+                uint32_t sp = garb_selector_specificity(sel, i);
+                printf("%s[%u, %u, %u, %d, [", i ? ", " : "", sp >> 20, (sp >> 10) & 1023,
+                       sp & 1023, (int)garb_selector_pseudo(sel, i));
+                bool first = true;
+                for (size_t k = 0; k < s_nelements; k++)
+                    if (garb_selector_matches(sel, i, s_elements[k])) {
+                        printf("%s%zu", first ? "" : ", ", k);
+                        first = false;
+                    }
+                fputs("]]", stdout);
+            }
+            puts("]");
+        }
+        garb_free(&r);
+        line = end != NULL ? end + 1 : line + n;
+    }
+    os64_html_document_free(doc);
+}
+
 // ── The allocation sweep ────────────────────────────────────────────────
 
 static void parse_all(const char *text, size_t len)
@@ -157,10 +231,12 @@ static void parse_all(const char *text, size_t len)
             continue;
         garb_item_t *items;
         int32_t n;
-        if (rule->at)
+        if (rule->at) {
             (void)garb_rules_of(&r, rule->block, rule->nblock, &items, &n);
-        else
-            (void)garb_items_of(&r, rule->block, rule->nblock, &items, &n);
+            continue;
+        }
+        (void)garb_items_of(&r, rule->block, rule->nblock, &items, &n);
+        (void)garb_selectors_parse(&r, rule->prelude, rule->nprelude, OS64_HTML_NO_QUIRKS);
     }
     garb_free(&r);
 }
@@ -210,7 +286,12 @@ int main(int argc, char **argv)
             break;
         char *protocol = field(&plen, &pabsent);
         char *environment = field(&elen, &eabsent);
-        one(argv[1], text, len, pabsent ? NULL : protocol, eabsent ? NULL : environment);
+        if (strcmp(argv[1], "anplusb") == 0)
+            an_plus_b(text, len);
+        else if (strcmp(argv[1], "select") == 0)
+            select_page(text, len, protocol);
+        else
+            one(argv[1], text, len, pabsent ? NULL : protocol, eabsent ? NULL : environment);
         fflush(stdout);
         free(text);
         free(protocol);

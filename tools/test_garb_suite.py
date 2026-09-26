@@ -123,7 +123,23 @@ def main():
                           f'\n  got  {json.dumps(got)[:400]}')
     print(f'css-parsing-tests: {total} cases, {failed} failed, '
           f'{skipped} skipped (unicode-range tokens, encodings not read)')
-    sys.exit(1 if failed else 0)
+
+    # An+B (Syntax §6), which Selectors reads nth-child() with.
+    cases = json.loads((SUITE / 'An+B.json').read_text(encoding='utf-8'))
+    pairs = list(zip(cases[0::2], cases[1::2]))
+    feed = b''.join(record(given.encode('utf-8')) + b'-1\n-1\n' for given, _ in pairs)
+    run = subprocess.run([driver, 'anplusb'], input=feed, capture_output=True)
+    lines = run.stdout.decode().splitlines()
+    anb_failed = 0
+    for (given, want), line in zip(pairs, lines):
+        if json.loads(line) != want:
+            anb_failed += 1
+            print(f'FAIL An+B: {given!r} want {want} got {line}')
+    if run.returncode != 0 or len(lines) != len(pairs):
+        print(f'FAIL An+B: the driver answered {len(lines)} of {len(pairs)}')
+        anb_failed += 1
+    print(f'An+B: {len(pairs)} cases, {anb_failed} failed')
+    sys.exit(1 if failed or anb_failed else 0)
 
 
 if __name__ == '__main__':

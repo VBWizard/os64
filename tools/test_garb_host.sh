@@ -18,7 +18,7 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/libos64/include -I userland -I abi/include \
    tools/test_garb_host.c \
    userland/libgarb/tokenize.c userland/libgarb/parse.c userland/libgarb/decode.c \
-   userland/libgarb/dump.c \
+   userland/libgarb/dump.c userland/libgarb/select.c \
    userland/libhtml/core.c userland/libhtml/encoding.c \
    userland/libhtml/tokenizer.c userland/libhtml/tree.c \
    userland/libos64/str.c userland/libos64/fmt.c userland/libos64/arena.c \

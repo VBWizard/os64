@@ -61,7 +61,7 @@ that the properties libflow lays out can reach.
 | Module | Level | Pile | How much |
 |---|---|---|---|
 | CSS Syntax | 3 | 1 | Whole: the tokenizer, the parser, error recovery exactly as written (an invalid declaration is dropped and parsing goes on — the rule that lets a 2026 sheet run in a browser that knows 1998's properties) |
-| Selectors | 3, and 4's `:is()`, `:where()`, `:not(<list>)` | 1 | Whole for Level 3; `:hover`, `:focus` and `:active` never match until a face restyles on them (booked); `:visited` never matches, by privacy as the browsers do; `:has()` booked |
+| Selectors | 3, and 4's `:is()`, `:where()`, `:not(<list>)`, `:has()`, `nth-child(… of S)` | 1 | Whole for Level 3; `:hover`, `:focus`, `:active`, `:focus-within`, `:focus-visible` and `:target` never match until a face restyles on them (booked); `:visited` never matches, by privacy as the browsers do; `:has()` matched by brute force; a namespace prefix other than `*` or none needs `@namespace` (booked) |
 | CSS Cascading and Inheritance | 4 | 1 | Origins (user agent = libflow's chapter, author), importance, specificity, order of appearance, `style` attributes, `inherit`/`initial`/`unset`/`revert`, shorthands expanding to longhands, `@import`; Level 5's `@layer` booked |
 | CSS Custom Properties | 1 | 1 | Whole: `--name` inherited, `var()` with fallback, cycles invalid at computed-value time |
 | CSS Values and Units | 3, and 4's `min()`/`max()`/`clamp()` | 1 | `px`, `em`, `rem`, `ex`, `ch`, `%`, `vw`, `vh`, `vmin`, `vmax`, `pt`, `pc`, `cm`, `mm`, `in`, `q`; `calc()` |
@@ -140,7 +140,9 @@ parser slice against the corpus, and each is a named constant.
 |---|---|---|
 | G0 | This document; libpage's list of sheets (`<style>` and `<link rel=stylesheet>` in document order, resolved, with `media`) | libpage's harness and allocation sweep |
 | G1 | The parser: CSS Syntax 3's tokenizer and parser, the sheet's object model (rules, selectors, declarations as component values), error recovery | a dump per sheet, hand-checked; the Syntax module's own examples; every allocation failed; a fuzzer against Python's `tinycss2` as the differential reference |
-| G2 | The cascade: selectors and specificity, bucketing, importance and order, `style` attributes, shorthands, custom properties and `var()`, media queries, values and units, colours | a cascade dump per element for fixtures worked by hand |
+| G2a | Selectors: parsing from a prelude, specificity, matching against libhtml's tree, the rule hash's key, An+B | css-parsing-tests' An+B; a differential against cssselect2 over html5lib on the corpus pages |
+| G2b | Values: the property table, each pile-1 property's grammar, shorthands expanded, lengths, `calc()`, colours | css-parsing-tests' colour files; grammar cases worked by hand |
+| G2c | The cascade: the rule hash, importance and order, `style` attributes, custom properties and `var()`, media queries | a cascade dump per element for fixtures worked by hand |
 | G3 | libflow applies it: every field it holds today from an author rule, `inherit`/`initial`/`unset`; `<style>` pages in yonder and in `flowdump` | libflow's harness with author sheets; the corpus unchanged where there is no CSS |
 | G4 | yonder fetches `<link>` sheets and `@import`s, waits for them, lays out again when a late one arrives | the guest, against a local server, and danlegt.com read as far as pile 1 carries it |
 | G5 | The cheap new properties in libflow (the table's row) | libflow's harness |
@@ -164,13 +166,32 @@ a top-level rule whose prelude begins `--x:` is thrown away. In the guest,
 `/tests/garbdump /tests/pages/sweep.css` prints the sheet and every rule's
 block.
 
+**G2a, as run.** An+B: css-parsing-tests' 128 cases pass. Selectors:
+`tools/test_garb_select.py` parses each corpus page on both sides (libhtml
+there, html5lib here) and compares every selector's validity,
+specificity, pseudo-element and matched elements with cssselect2 — a
+catalogue of 123 covering every feature and its refusals, and 400
+generated per page from the page's own names: 3,138 comparisons, none
+differ. 70 answers stand on the standard against the reference, each named
+in the runner with its section: `:link` and `:any-link` are `a` and `area`
+only, `:enabled` is form controls only, `type` is on HTML's list of
+attribute values compared without case, `nth-child(… of S)` weighs its
+argument (and cssselect2 matches nothing when S is a list), `:is()`'s list
+forgives, a user-action pseudo-class may follow a pseudo-element, and the
+pseudo-classes cssselect2 does not know (`:required`, `:optional`,
+`:read-only`, `:read-write`), checked on a small page by hand. On
+danlegt.com's own page (a local copy): 923 generated selectors, and all
+896 of its sheets' real selectors — 878 valid, the rest its vendor
+pseudo-elements, refused on both sides — agree.
+
 ## Booked before the first line
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | `:hover`, `:focus`, `:active` | a restyle on every pointer move is a relayout, and the face does not relayout on hover | pile 1 proven, and a page whose menus only exist on hover |
 | `@layer` (Cascade 5) | Level 4 first; a layer is an order within an origin | the first page whose sheets use it |
-| `:has()` | matching becomes whole-tree; its cost wants its own design | a page that needs it to be readable |
+| `:has()` by brute force | each candidate scans its subtree or its following siblings, a whole page for `:root:has(…)` | a page whose cascade is slow, measured |
+| `@namespace` | a prefix other than `*` or none makes a selector invalid, so its rule drops | a page whose sheets declare one |
 | wend honouring `display: none` | libgarb proven in one face before a second leans on it | pile 1 proven |
 | User stylesheets | a person's own sheet is the user origin; nobody has asked | a person who asks |
 | `unicode-range` | the draft reads it from component values, in `@font-face`, not as a token | pile 3's web fonts |
