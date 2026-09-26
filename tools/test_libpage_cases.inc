@@ -1254,7 +1254,9 @@ static void family_k(void)
 // ── The pathological page, and the allocation sweep ─────────────────────
 
 static const char *kPathological =
-    "<html><body><ul><li><ul><li><ul><li><ul><li><ul><li><pre>"
+    "<html><head><link rel=stylesheet href=a.css><style>p{}</style></head>"
+    "<body background=b.gif><table background=t.gif><tr><td background=c.gif>x</table>"
+    "<ul><li><ul><li><ul><li><ul><li><ul><li><pre>"
     "  kept   spaces  \n</pre></ul></ul></ul></ul></ul>"
     "<table><form action=/outer><tr><td><input name=intable value=1>"
     "<form action=/inner><input name=inner value=2></form></td></tr></form></table>"

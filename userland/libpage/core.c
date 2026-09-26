@@ -712,6 +712,64 @@ static void add_background(os64_page_t *page, const os64_html_node_t *n)
     page->nbackgrounds++;
 }
 
+// Whether the space-separated `list` holds `token`, ignoring ASCII case:
+// how `rel` is read.
+static bool has_token(const char *list, const char *token)
+{
+    size_t n = os64_strlen(token);
+    for (const char *p = list; p != NULL && *p != '\0';) {
+        while (*p != '\0' && space(*p))
+            p++;
+        const char *start = p;
+        while (*p != '\0' && !space(*p))
+            p++;
+        if ((size_t)(p - start) == n) {
+            bool same = true;
+            for (size_t i = 0; i < n && same; i++) {
+                char a = start[i], b = token[i];
+                if (a >= 'A' && a <= 'Z')
+                    a = (char)(a - 'A' + 'a');
+                same = a == b;
+            }
+            if (same)
+                return true;
+        }
+    }
+    return false;
+}
+
+// A `type` naming CSS: absent, empty, or text/css in any case.
+static bool css_type(const os64_html_node_t *n)
+{
+    const char *type = p_attr(n, "type");
+    return type == NULL || type[0] == '\0' || os64_streq_nocase(type, "text/css");
+}
+
+static void add_sheet(os64_page_t *page, const os64_html_node_t *n)
+{
+    bool linked = p_is(n, OS64_HTML_TAG_LINK);
+    if (!css_type(n))
+        return;
+    if (linked) {
+        const char *rel = p_attr(n, "rel"), *href = p_attr(n, "href");
+        if (rel == NULL || !has_token(rel, "stylesheet") || has_token(rel, "alternate") ||
+            href == NULL || blank(href) || p_has_attr(n, "disabled"))
+            return;
+    }
+    if (!p_grow((void **)&page->sheets, &page->sheetcap, page->nsheets, sizeof(*page->sheets))) {
+        page->incomplete = true;
+        return;
+    }
+    os64_page_sheet_t *s = &page->sheets[page->nsheets];
+    os64_memset(s, 0, sizeof(*s));
+    s->node = n;
+    s->linked = linked;
+    if (linked)
+        p_resolve(page, p_attr(n, "href"), &s->href);
+    s->media = p_attr(n, "media");
+    page->nsheets++;
+}
+
 static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_element_t element,
                         bool fieldset_off)
 {
@@ -850,6 +908,8 @@ static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off)
             add_image(page, n);
         if (takes_background(n))
             add_background(page, n);
+        if (p_is(n, OS64_HTML_TAG_STYLE) || p_is(n, OS64_HTML_TAG_LINK))
+            add_sheet(page, n);
         // A `meta` inside `noscript` counts, and that is the case that
         // matters: with scripting off those contents ARE the document's,
         // which is the whole reason the element exists.
@@ -1028,6 +1088,7 @@ void os64_page_free(os64_page_t *page)
     os64_free(page->controls);
     os64_free(page->images);
     os64_free(page->backgrounds);
+    os64_free(page->sheets);
     os64_free(page->radio_next);
     os64_free(page->group_head);
     os64_free(page->group_next);
@@ -1145,6 +1206,18 @@ const os64_page_background_t *os64_page_background(const os64_page_t *page, int3
 int32_t os64_page_background_for(const os64_page_t *page, const os64_html_node_t *node)
 {
     return page != NULL ? p_ptrmap_get(&page->background_map, node) : -1;
+}
+
+int32_t os64_page_nsheets(const os64_page_t *page)
+{
+    return page != NULL ? page->nsheets : 0;
+}
+
+const os64_page_sheet_t *os64_page_sheet(const os64_page_t *page, int32_t i)
+{
+    if (page == NULL || i < 0 || i >= page->nsheets)
+        return NULL;
+    return &page->sheets[i];
 }
 
 const os64_html_node_t *os64_page_anchor(const os64_page_t *page, const char *decoded_fragment)

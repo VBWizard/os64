@@ -567,6 +567,60 @@ static void state_backgrounds(void)
     os64_html_document_free(doc);
 }
 
+// The page's style sheets, in document order: a `style` and a
+// `link rel=stylesheet`, the rel read as tokens without regard to case,
+// alternates and disabled links off, another language's `type` not ours,
+// an empty href naming nothing, an SVG `style` SVG's, `template` inert.
+static void state_sheets(void)
+{
+    os64_html_document_t *doc = parse(
+        "<head><base href=\"http://css/lib/\">"
+        "<link rel=stylesheet href=a.css>"
+        "<style media=\"screen and (max-width: 600px)\">p{}</style>"
+        "<link rel=\"Preload  STYLESHEET\" href=/b.css media=print>"
+        "<link rel=\"alternate stylesheet\" href=alt.css>"
+        "<link rel=stylesheet href=off.css disabled>"
+        "<link rel=stylesheet href=\"  \">"
+        "<link rel=stylesheet type=text/less href=x.less>"
+        "<style type=text/plain>not css</style>"
+        "<link rel=icon href=fav.ico>"
+        "<style type=\"TEXT/CSS\">q{}</style>"
+        "</head><body><link rel=stylesheet href=\"http://[bad\">"
+        "<svg><style>circle{}</style></svg>"
+        "<template><style>t{}</style></template>"
+        "<style>late{}</style></body>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    state_expect("sheets: the style elements and stylesheet links, and only those",
+                 os64_page_nsheets(page) == 6);
+    const os64_page_sheet_t *s = os64_page_sheet(page, 0);
+    state_expect("sheets: a link, resolved against the base, no media",
+                 s != NULL && s->linked && s->href.url != NULL &&
+                 strcmp(s->href.url, "http://css/lib/a.css") == 0 && s->media == NULL);
+    s = os64_page_sheet(page, 1);
+    state_expect("sheets: a style element in its place, its media as written",
+                 s != NULL && !s->linked && s->node->tag == OS64_HTML_TAG_STYLE && s->media != NULL &&
+                 strcmp(s->media, "screen and (max-width: 600px)") == 0 && s->href.url == NULL);
+    s = os64_page_sheet(page, 2);
+    state_expect("sheets: rel is tokens, in any case",
+                 s != NULL && s->linked && strcmp(s->href.url, "http://css/b.css") == 0 &&
+                 s->media != NULL && strcmp(s->media, "print") == 0);
+    s = os64_page_sheet(page, 3);
+    state_expect("sheets: a type of text/css in any case is CSS",
+                 s != NULL && !s->linked && s->node->first_child != NULL);
+    s = os64_page_sheet(page, 4);
+    state_expect("sheets: an address that will not resolve is listed, refused",
+                 s != NULL && s->linked && s->href.url == NULL &&
+                 s->href.refused != OS64_PAGE_REASON_OK);
+    s = os64_page_sheet(page, 5);
+    state_expect("sheets: one in the body counts, last",
+                 s != NULL && !s->linked && s->node->tag == OS64_HTML_TAG_STYLE);
+    state_expect("sheets: out of range is NULL",
+                 os64_page_sheet(page, -1) == NULL && os64_page_sheet(page, 6) == NULL &&
+                 os64_page_nsheets(NULL) == 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 // What a page writes in an href is percent-encoded part by part, as every
 // browser does: a path in UTF-8, a query in the document's encoding, a
 // fragment left for the matcher.
@@ -712,6 +766,7 @@ static void state_cases(void)
     state_iframes();
     state_images();
     state_backgrounds();
+    state_sheets();
     state_reference_bytes();
     state_group_reset();
     state_sanitizers();

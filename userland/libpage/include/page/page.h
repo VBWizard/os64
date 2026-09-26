@@ -362,6 +362,28 @@ int32_t os64_page_nbackgrounds(const os64_page_t *page);
 const os64_page_background_t *os64_page_background(const os64_page_t *page, int32_t i);
 int32_t os64_page_background_for(const os64_page_t *page, const os64_html_node_t *node);
 
+// ── The page's style sheets ─────────────────────────────────────────────
+//
+// Every sheet the page names, in DOCUMENT ORDER, which is the order the
+// cascade ranks them in (GARB.md): a `style` element, whose text is its
+// children as libhtml keeps them, and a `link` whose `rel` holds the token
+// `stylesheet` and not `alternate` (an alternate sheet is off until a
+// person picks it), with an `href` that is not empty, resolved against the
+// base for the reason every reference is. A `type` that is neither empty
+// nor `text/css` names a language this browser does not read, and a
+// `disabled` link is off: neither is listed. `media` is as written, NULL
+// when absent — judging it is the cascade's, since a resize changes the
+// answer. HTML elements only: an SVG `style` styles SVG.
+typedef struct {
+    const os64_html_node_t *node;   // the `style` or the `link`
+    bool linked;                    // a `link`: its sheet is at `href`
+    os64_page_ref_t href;           // a `link`'s, resolved; refused says why
+    const char *media;
+} os64_page_sheet_t;
+
+int32_t os64_page_nsheets(const os64_page_t *page);
+const os64_page_sheet_t *os64_page_sheet(const os64_page_t *page, int32_t i);
+
 // Decoded fragment lookup: IDs take precedence over legacy <a name> matches;
 // first in tree order wins within each group. NULL means absent or incomplete.
 // Use resolve_fragment for navigation, including the empty and "top" fallbacks.
