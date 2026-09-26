@@ -27,6 +27,7 @@
 #include "fetch/fetch.h"
 #include "html/html.h"
 #include "page/page.h"
+#include "way/jar.h"
 
 #pragma GCC visibility push(default)
 
@@ -112,6 +113,10 @@ typedef struct {
     // anything new empties it.
     way_crumb_t forward[WAY_HISTORY_MAX];
     int32_t ahead;
+    // The browser's cookies (way/jar.h), shared by every fetch it makes on
+    // any thread; the one thing a load writes that is not its own. NULL
+    // keeps none and sends none.
+    way_jar_t *jar;
 } way_session_t;
 
 // ONE LOAD'S WORTH OF THE SESSION. A load reads the browser's identity
@@ -123,6 +128,10 @@ typedef struct {
     const way_session_t *session;
     way_face_t face;
     char status[WAY_SENTENCE_MAX];
+    // The page this load was asked for from — a link followed, a form sent,
+    // a refresh — which its Referer names (way_referrer). Empty for an
+    // address typed, Back, Forward and Reload.
+    char referrer[OS64_FETCH_URL_MAX];
 } way_leg_t;
 
 // A leg for `session`, with the session's own face and an empty sentence.
@@ -140,6 +149,20 @@ way_leg_t way_leg(const way_session_t *session);
 // page into an exit code.
 bool way_load(way_leg_t *leg, const char *url, const os64_page_request_t *request,
               way_page_t *out, os64_fetch_status_t *why);
+
+// For a fetch a face makes itself — a picture a page names — the same
+// cookies and Referer a page's own fetch carries. way_fetch_hooks takes
+// over `opt`'s headers_for, on_set_cookie, cancelled and ctx: the caller's
+// own cancellation goes in the hooks instead, and the hooks must live
+// until the fetch is closed.
+typedef struct {
+    way_jar_t *jar;
+    char referrer[OS64_FETCH_URL_MAX];      // "" for none
+    bool (*cancelled)(void *ctx);
+    void *cancel_ctx;
+} way_hooks_t;
+
+void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt);
 
 // ── Pages ───────────────────────────────────────────────────────────────
 

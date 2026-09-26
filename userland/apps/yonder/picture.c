@@ -99,8 +99,9 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
     opt.user_agent = j->agent;
     opt.accept = PICTURE_ACCEPT;
     opt.max_body = OS64_IMAGE_CAP_DEFAULT;
-    opt.cancelled = cancelled;
-    opt.ctx = ctx;
+    j->hooks.cancelled = cancelled;
+    j->hooks.cancel_ctx = ctx;
+    way_fetch_hooks(&j->hooks, &opt);
     os64_fetch_t *f = os64_fetch_open(j->url, &opt);
     p->status = OS64_IMAGE_IO_ERROR;
     if (f == NULL)

@@ -155,7 +155,7 @@ in-house (CLAUDE.md's reviewer-to-risk rule).
 | Y1 | The page view on a LOCAL FILE: `yonder /tests/pages/hacker-news.html`, or a path typed in the address field. The painter and its four verbs, the canvas rule, borders and bevels, decorations, markers as shapes, scrolling in both directions, resize with the anchor, the status line on hover | `tools/test_yonder_host.sh`: hand-computed recordings for fixtures and a corpus regression; guest screendumps read |
 | Y2 | Packet 06: the navigator out of `wend` into its library | the packet's own evidence; `wend`'s acceptance passes unchanged |
 | Y3 | The network, through libway on packet 07's pool: http and https, a click follows a link, back, forward, reload and stop, a fragment scrolls to its target, declared refreshes, POST (Quinn's packet 05 carried across from wend), the questions asked in the window | § Y3 below |
-| Y3b | libway's cookie jar and `Referer`, on packet 05's hooks, for both browsers | libway's host harness; logging in to a real site |
+| Y3b | libway's cookie jar and `Referer`, on packet 05's hooks, for both browsers | § Y3b below |
 | Y4 | Forms: every control libflow placed becomes a real libui widget at its box, moved when the page scrolls and hidden when it leaves the view (libui does not clip a child to its parent), submitted through libpage's form model, GET or POST | § Y4 below |
 | Y5 | Images: fetched in parallel on the pool, decoded, drawn scaled and blended, the page laid out again when a size arrives | § Y5 below |
 | Y5b | Moving pictures and pictures behind: GIF animation on a frame clock that sleeps when nothing can be seen, and the `background` attribute of the body and of tables, tiled | § Y5b below |
@@ -326,6 +326,95 @@ Forward and delayed hint. wend's walk again: identical. Not run in the
 guest: a question asked on the window's own thread (a form or refresh
 leaving https), for want of an https page with such a form — its judgement
 is libway's harness's and its bar is the same bar.
+
+## Y3b — cookies, and where a request came from
+
+A daily-driver browser logs in, and logging in is a cookie: the server
+sets one on the reply to the form and asks for it back on every page
+after. Packet 05 gave libfetch the two doors — `on_set_cookie` hands over
+each `Set-Cookie` with the URL that set it, `headers_for` asks for the
+`Cookie` and `Referer` lines of each hop — and left the JAR to the
+navigator. This is the jar.
+
+**The jar is libway's, and one per browser.** `way_jar_t` sits beside the
+history in the session, so wend and yonder both have one, and it is
+shared by everything the browser fetches: a page on a worker, the
+pictures on the other workers, all at once. So it carries its own lock,
+and it is the one thing in the session a leg writes. Nothing about it
+knows a clock or a network: every question takes the URL, whether the
+connection is encrypted, and the time, so the host harness asks it all
+of RFC 6265 without either.
+
+**What it keeps is RFC 6265 as the browsers ship it** (the 6265bis draft
+where the two differ, because that is what a server written this decade
+expects):
+
+- a `Set-Cookie` is a name and a value and its attributes; a value with
+  no `=` is a nameless cookie, as browsers take it;
+- `Max-Age` outranks `Expires`, `Expires` is read by §5.1.1's own
+  forgiving date algorithm (the web writes dates every way there is), a
+  cookie with neither lives as long as the browser runs, and one whose
+  time has passed deletes the one it names;
+- `Domain` widens a cookie to the subdomains of a domain the setting host
+  is in, and nothing else; without it the cookie is the host's alone;
+- `Path` scopes it, defaulting to the directory of the address that set
+  it;
+- `Secure` is only set, and only sent, over an encrypted connection — the
+  fact libfetch reports, not the scheme in an address — and an unencrypted
+  reply cannot overwrite a secure cookie of the same name; the `__Secure-`
+  and `__Host-` prefixes are held to their promises;
+- `HttpOnly` and `SameSite` are kept and change nothing: no script can
+  read a cookie here, and `SameSite` is booked below with what it needs.
+
+Limits are the browsers': 4096 bytes a cookie, 180 a domain, 3000 in all;
+past a limit the oldest goes.
+
+**Sent in the order the RFC gives** (the longest path first, then the
+oldest), whole cookies only. libfetch gives a hop 1024 bytes for its
+`Cookie` and `Referer` lines together; the cookies come first, because a
+login depends on them and not on a Referer, and what does not fit is left
+off whole (the limit is booked with libfetch, in BROWSER_DEBTS.md).
+
+**The `Referer` is the browsers' default policy,
+strict-origin-when-cross-origin**: the whole address of the page a request
+came from (no fragment) when it goes to the same scheme, host and port;
+just its origin when it goes elsewhere; nothing when an encrypted page's
+request goes out in the clear. It goes with a link followed, a form sent,
+a refresh the page declared, and every picture the page names; not with
+an address typed, Back or Forward, or a Reload. A page's own
+`Referrer-Policy` is not read yet (booked).
+
+**No questions, and nothing kept past the browser.** A cookie is a server
+remembering a person the way that person asked it to by logging in, so
+nothing is asked. And nothing is written to disk in this slice: the jar
+lives as long as the browser, so logging in lasts until yonder is closed.
+
+**Evidence, as run.** libway's host harness, 73 new checks under ASan and
+UBSan: §5.1.1's dates in HTTP's three spellings and on nonsense, a leap day
+and a day that does not exist; scope by path (not above, not a sibling
+spelled alike, the query ignored) and by domain (a subdomain yes, a name
+that merely ends alike no; another domain, a bare suffix and a narrower
+name refused; an address takes only itself); the secure rules and both
+prefixes in either case; `Max-Age` over `Expires`, deletion by either,
+unreadable values ignored; replacement keeping a cookie's age; text trimmed,
+nameless values, control bytes refused, the 4096-byte line; the order, whole
+cookies into a cap, a hop's lines with the Referer yielding to the cookies;
+both limits; every allocation failed in turn. Five mutants of `jar.c`
+(secure sent in the clear, the dot of a domain match, the path boundary,
+the downgrade Referer, a secure cookie set in the clear) are all caught.
+Counts: libway 148.
+
+The guest, against a local login in miniature that logs each request's
+`Cookie` and `Referer`: Members refused with no cookie, its Referer the
+front door; Back with none; the form posted with the front door as its
+Referer, its 302 setting the session and a second cookie, the page it led
+to sent both; the badge picture fetched with the cookie and the members
+page as its Referer, drawn; Log out's `Max-Age=0` deleting the session and
+leaving the other, Members refused again. wend through the same jar:
+httptestd's `/set-cookie` 302 to `/needs-cookie`, "cookie accepted". Live,
+over https: `httpbin.org/cookies/set` setting two cookies on its redirect,
+and its `/cookies` echoing both back. Not run: logging in to a site that
+needs a real account.
 
 ## Y4 — forms
 
@@ -605,6 +694,10 @@ page failed with "out of handles or ports"; the table is 64 now
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
+| Cookies kept across restarts | the jar is the browser's memory of a login and lives as long as it; a file of them is a file of credentials, and wants a decision about where it lives and who may read it | Chris asks to stay logged in |
+| `SameSite`, and the public-suffix list | `SameSite` is judged by SITE, the registrable domain, which needs the list of suffixes under which anyone may register (co.uk, github.io); without it a `Domain=` on a host under such a suffix is taken as the host's own, and a form on another site sends the cookies of the site it posts to | before yonder is the browser a person logs in to their bank with |
+| A way to see and clear cookies | nothing in the window lists them yet | the first time a site needs its cookies cleared |
+| A page's `Referrer-Policy` | the default is the browsers' own and sends no more than they do | a page that asks for less |
 | A hand pointer over links | the compositor draws one fixed arrow; a pointer shape is a kernel and ABI change | somebody misses it more than the status line answers it |
 | Retitling a window | there is no call for it; a window is named at creation | a page opened from the address field wants its name |
 | Unequal border widths, tested | the diagonal corner rule is exercised only where sides differ, and no producer sets one side alone until the cascade (a mutation to the corner arithmetic survives today for that reason) | the cascade |
@@ -612,7 +705,6 @@ page failed with "out of handles or ports"; the table is 64 now
 | Layout time on big pages | On the P5, Wikipedia (800 KB) lays out in 600 ms; fetch.spec.whatwg.org (1.9 MB) takes 4 s to load and 6 s to lay out again at full screen (Chris, 2026-09-25) | a libflow profiling slice, with those two pages as its benchmark |
 | Links on a page from disk | a relative address does not resolve against a `file:` page | Y3, where pages come from the network |
 | Serif, bold, italic | packet 04 | 04 merged |
-| POST and cookies, logging in | packet 05 | 05 merged |
 | A multi-line textarea, a drop-down select, several choices in a multiple select, a file chooser | each is a widget libui does not have yet (a multi-line field sized to its box, a popup list, a multiple-selection list, a file dialog) | the first form that needs one |
 | Back and Forward to the reply to a form | the history holds addresses, so going back to a POST's reply fetches its address, which a server may answer with something else; Chrome shows a "resubmit?" page there | a page where going back to a reply matters |
 | SVG pictures | libimage decodes raster formats; SVG is a vector language with a renderer of its own | the modern web's logos, which are mostly SVG |

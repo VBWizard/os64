@@ -19,7 +19,7 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/libgzip/include -I userland/libtls/include \
    -I userland/libhtml/include -I userland/libos64/include -I userland \
    -I userland/libpage/include -I userland/libpage/upstream/ryu -I abi/include \
-   tools/test_way_host.c userland/libway/session.c \
+   tools/test_way_host.c userland/libway/session.c userland/libway/jar.c \
    userland/libpage/core.c userland/libpage/resolve.c userland/libpage/value.c \
    userland/libpage/number.c userland/libpage/range.c userland/libpage/upstream/ryu/ryu/d2s.c \
    userland/libpage/submit.c userland/libpage/encode.c userland/libpage/refresh.c \

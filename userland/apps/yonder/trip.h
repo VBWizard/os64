@@ -20,6 +20,7 @@ typedef struct {
     // lives exactly as long as the job that sends it.
     os64_page_request_t request;
     bool has_request;
+    char referrer[OS64_FETCH_URL_MAX];      // the page it was asked for from, or ""
 } yonder_trip_t;
 
 // The job's product: the page that arrived, or why none did.

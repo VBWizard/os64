@@ -5,6 +5,7 @@
 #include <stdarg.h>
 
 #include "internal.h"
+#include "os64/date.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/str.h"
@@ -25,6 +26,59 @@ static bool fetch_cancelled(void *ctx)
 {
     way_leg_t *s = ctx;
     return s->face.cancelled != NULL && s->face.cancelled(s->face.ctx);
+}
+
+// The wall clock a cookie's expiry is judged by, in UTC seconds.
+static int64_t now_utc(void)
+{
+    os64_time_t t;
+    return os64_time(&t) == 0 ? t.epoch : 0;
+}
+
+// Each hop's Cookie and Referer, from the browser's jar and the page the
+// load was asked for from.
+static bool leg_headers(void *ctx, const os64_url_t *hop, bool encrypted, char *out, size_t cap)
+{
+    way_leg_t *s = ctx;
+    (void)way_hop_headers(s->session->jar, s->referrer, hop, encrypted, now_utc(), out, cap);
+    return true;
+}
+
+static void leg_cookie(void *ctx, const os64_url_t *from, bool encrypted, const char *value,
+                       size_t len)
+{
+    way_leg_t *s = ctx;
+    way_jar_hear(s->session->jar, from, encrypted, value, len, now_utc());
+}
+
+// The same two for a fetch a face makes itself, whose cancellation rides
+// in the hooks because libfetch has one context for all of them.
+static bool hooks_cancelled(void *ctx)
+{
+    way_hooks_t *h = ctx;
+    return h->cancelled != NULL && h->cancelled(h->cancel_ctx);
+}
+
+static bool hooks_headers(void *ctx, const os64_url_t *hop, bool encrypted, char *out, size_t cap)
+{
+    way_hooks_t *h = ctx;
+    (void)way_hop_headers(h->jar, h->referrer, hop, encrypted, now_utc(), out, cap);
+    return true;
+}
+
+static void hooks_cookie(void *ctx, const os64_url_t *from, bool encrypted, const char *value,
+                         size_t len)
+{
+    way_hooks_t *h = ctx;
+    way_jar_hear(h->jar, from, encrypted, value, len, now_utc());
+}
+
+void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt)
+{
+    opt->headers_for = hooks_headers;
+    opt->on_set_cookie = hooks_cookie;
+    opt->cancelled = hooks_cancelled;
+    opt->ctx = hooks;
 }
 
 // A DOWNGRADE IS A PERSON'S DECISION, which is the whole reason libfetch
@@ -209,6 +263,8 @@ bool way_load(way_leg_t *s, const char *url, const os64_page_request_t *request,
     opt.max_body = limits.max_bytes;     // the same page, the same cap
     opt.cancelled = fetch_cancelled;
     opt.on_hop = hop_ask;
+    opt.headers_for = leg_headers;
+    opt.on_set_cookie = leg_cookie;
     opt.ctx = s;
     if (request != NULL && request->method == OS64_PAGE_METHOD_POST) {
         opt.method = OS64_FETCH_METHOD_POST;

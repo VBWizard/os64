@@ -928,6 +928,10 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     trip->window = g.win;
     trip->mail_bell = BELL_MAIL;
     os64_strcopy(trip->url, sizeof(trip->url), url);
+    // What the page asked for names the page in its Referer; a Reload,
+    // even one sending a form again, names nothing.
+    if (request != NULL && kind != NAV_RELOAD && g.page.tree != NULL)
+        os64_strcopy(trip->referrer, sizeof(trip->referrer), g.page.way.url);
     g.nav.has_fragment = false;
     if (request != NULL) {
         g.nav.has_fragment = request->has_fragment;
@@ -1080,6 +1084,8 @@ static int32_t picture_for(Page *p, const char *url)
         job->generation = g.page_serial;
         job->agent = g.way.agent;
         os64_strcopy(job->url, sizeof(job->url), url);
+        job->hooks.jar = g.way.jar;
+        os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
         os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
         pic->id = os64_work_submit(g.pool, &work);
         if (pic->id != 0) {
@@ -2312,6 +2318,7 @@ int main(int argc, char **argv)
     g.way.agent = YONDER_AGENT;
     g.way.accept = YONDER_ACCEPT;
     g.way.delayed_hint = " - it is in the address field; press Enter to go";
+    g.way.jar = way_jar_new();          // NULL keeps no cookies: the pages still load
 
     os64_ui_init(&g.ui, &g.ctx);
     g.ui.on_resize = on_resize;
@@ -2411,6 +2418,7 @@ int main(int argc, char **argv)
     yonder_mail_drop(g.nav.mail);
     forms_drop();
     page_clear(&g.page);
+    way_jar_free(g.way.jar);
     os64_ui_font_release(&g.ui);
     for (int i = 0; i < s_faces.nopen; i++)
         os64_text_font_release(s_faces.open[i].font);

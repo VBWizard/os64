@@ -11,6 +11,7 @@
 #include "image/image.h"
 #include "image/sequence.h"
 #include "jobs.h"
+#include "way/way.h"
 
 // What one picture job may cost, declared to the pool: libimage's file cap,
 // and libjpeg's decoder memory cap — which also covers, by arithmetic
@@ -24,6 +25,9 @@ typedef struct {
     uint64_t generation;            // the page it belongs to
     const char *agent;              // the browser's, read-only for the run
     char url[OS64_FETCH_URL_MAX];
+    // The browser's cookies and the page's address for the Referer: a
+    // picture is fetched as the page is (YONDER.md § Y3b).
+    way_hooks_t hooks;
 } yonder_picture_job_t;
 
 // The picture: a still image, or — a GIF with more than one frame — a

@@ -3,7 +3,7 @@
 # apart from whatever draws them. It records DT_NEEDED edges on libfetch
 # (the I/O half), libpage (what a page asks), libhtml (the tree a page
 # is) and libos64.
-LIBWAY_SRCS := libway/session.c libway/load.c
+LIBWAY_SRCS := libway/session.c libway/load.c libway/jar.c
 LIBWAY_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBWAY_SRCS))
 LIBWAY_SO := $(BIN)/libway.so
 LIBWAY_CFLAGS = $(LIBOS64_CFLAGS) -O2 -fvisibility=hidden -I$(CURDIR)/libway/include

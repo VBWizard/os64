@@ -642,14 +642,17 @@ static void view_layout(view_t *v)
 // it (BROWSER.md § The face).
 // `why` is the fetch's own verdict when there was one, for the caller that
 // has to turn it into an exit code. NULL when nobody is asking. `request`
-// is the form being sent, NULL for a GET.
+// is the form being sent, NULL for a GET. `referrer` is the page a link,
+// form or refresh was on, which the Referer names; NULL for none.
 static bool load(const char *url, view_t *out, os64_fetch_status_t *why,
-                 const os64_page_request_t *request)
+                 const os64_page_request_t *request, const char *referrer)
 {
     s_cancel = 0;
     // One leg per load, on this thread: wend waits for its pages, so the
     // leg's sentence simply becomes the status row's.
     way_leg_t leg = way_leg(&s_way);
+    if (referrer != NULL)
+        os64_strcopy(leg.referrer, sizeof(leg.referrer), referrer);
     bool loaded = way_load(&leg, url, request, &out->way, why);
     os64_strcopy(s_way.status, sizeof(s_way.status), leg.status);
     if (!loaded)
@@ -875,7 +878,8 @@ static bool go(view_t *v, const char *url, bool remember, const os64_page_reques
 {
     view_t next = { 0 };
     next.sel = -1;
-    if (!load(url, &next, NULL, request))
+    // A request is something the page asked for, so it names the page.
+    if (!load(url, &next, NULL, request, request != NULL ? v->way.url : NULL))
         return false;
     if (remember)
         history_push(v);
@@ -1275,7 +1279,7 @@ static void back(view_t *v)
         return;
     view_t next = { 0 };
     next.sel = -1;
-    if (!load(crumb.url, &next, NULL, NULL))
+    if (!load(crumb.url, &next, NULL, NULL, NULL))
         return;                          // the history is untouched; the row says why
     way_forget_last(&s_way);
     view_clear(v);
@@ -1381,7 +1385,7 @@ static int32_t session(const char *start)
     view_t view = { 0 };
     view.sel = -1;
     os64_fetch_status_t why = OS64_FETCH_OK;
-    if (!load(start, &view, &why, NULL)) {
+    if (!load(start, &view, &why, NULL, NULL)) {
         // THE FIRST PAGE IS THE COMMAND, and a command that failed owes an
         // exit code that says which thing to go and fix. An address nobody
         // could parse is the typist's to mend; everything else is the
@@ -1605,6 +1609,7 @@ int main(int argc, char **argv)
     os64_signal_set_handler(OS64_SIGTERM, on_hangup);
 
     s_way.name = "wend";
+    s_way.jar = way_jar_new();          // NULL keeps no cookies: the pages still load
     s_way.agent = WEND_AGENT;
     s_way.accept = WEND_ACCEPT;
     s_way.delayed_hint = " - press g to go";
