@@ -3,7 +3,7 @@
 *The design record for the userland graphics stack: how a ring-3 program
 draws into its window without touching a pixel — and eventually without
 touching a primitive. Companion to GRAPHICS.md (which designs the KERNEL
-side: compositor, windows, the 7-syscall boundary) and LIBOS64.md (the C
+side: compositor, windows, the GUI syscall boundary) and LIBOS64.md (the C
 library this links beside). Design settled 2026-07-10. Naming — `libdraw`
 for the drawing core, `libui` for the toolkit — deliberately echoes Plan 9's
 `libdraw`: minimalist lineage, zero Win32 baggage.*
@@ -24,11 +24,15 @@ One of each mode, all in `userland/apps/`:
 worth reading, but it is a FIXTURE: it proves the toolkit, where gclock
 teaches the app author.)
 
+For background work that needs to wake a window, see
+[Window doorbell](GUI_DOORBELL.md#using-the-callback): callback setup,
+worker notification, result handoff, repainting and shutdown order.
+
 ## What this is
 
 The library that turns os64's raw window surface into something a person
 wants to program against. GRAPHICS.md hands an app a shared pixel canvas,
-seven syscalls, and `publish(damage)`; by itself that means hand-blitting
+window syscalls, and `publish(damage)`; by itself that means hand-blitting
 every line and glyph forever. libdraw/libui exists so **no app author ever
 sets a pixel by hand, and eventually never draws a primitive by hand
 either.**
@@ -43,7 +47,7 @@ tested kernel code** into ring 3, not a new rasterizer.
 
 | Layer | Name | Job | Kills |
 |---|---|---|---|
-| L0 | (libos64) | window lifecycle + shared canvas + events — thin wrappers over syscalls 16-22 | — |
+| L0 | (libos64) | window lifecycle + shared canvas + events — thin wrappers over GUI syscalls | — |
 | L1 | **libdraw** | immediate-mode drawing on the canvas: primitives, text, clipping, a draw context, a real-time frame loop | pixel-pushing |
 | L2 | **libui** | retained widgets on top of L1: widget/container/dispatch model | primitive-pushing |
 
@@ -59,8 +63,11 @@ Syscalls 16-22: `window_create`, `window_destroy`, `window_get_surface`
 `event_poll`, `screen_info`, `event_wait`. Drawing happens in the app's
 address space on that canvas — **zero syscalls per draw**; only `publish`
 crosses to the kernel, and the compositor snapshots the damage rect for a
-tear-free frame (GRAPHICS.md "Atomic frames"). libdraw never talks to the
-compositor except through `publish`.
+tear-free frame (GRAPHICS.md "Atomic frames"). Window operations use the
+public GUI wrappers; drawing primitives stay in userland.
+
+The boundary also provides `window_get_state` (48),
+`window_set_min_size` (57), and `event_ring` (58).
 
 ## L1 — libdraw (the drawing core)
 

@@ -1,6 +1,6 @@
 // os64/gui.h — the GUI boundary, as ring 3 sees it (L0 of LIBDRAW.md).
 //
-// Everything that crosses syscalls 16-22 is defined HERE for userland: the
+// The GUI syscall boundary is defined here for userland: the
 // three structs (rect, surface, input event), the window flags, the error
 // values, the color constants, and thin inline wrappers over the raw
 // syscalls. The kernel keeps its own headers (gui/gui_types.h, gui/input.h
@@ -275,6 +275,9 @@ typedef struct os64_gui_surface
 // (wheel toward the user); dx > 0 scrolls right. Drivers without tilt use 0.
 // x/y are content-local, and buttons/modifiers are the packet's state.
 #define OS64_GUI_EVENT_MOUSE_WHEEL      13
+// Worker notification, coalesced by OR outside the input ring. The mask is
+// application-defined; drain the shared work record when this arrives.
+#define OS64_GUI_EVENT_DOORBELL         14
 _Static_assert(OS64_GUI_EVENT_MOUSE_WHEEL == 13, "wheel event ABI");
 
 // Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
@@ -333,6 +336,9 @@ typedef struct os64_gui_event
             // Split words preserve the event union's four-byte ABI alignment.
             uint32_t generation_lo, generation_hi;
         } appearance;
+        struct {
+            uint32_t mask;
+        } doorbell;
     };
     uint64_t tick;              // kTicksSinceStart at enqueue
 } os64_gui_event_t;
@@ -397,6 +403,19 @@ static inline int64_t os64_gui_event_poll(int64_t handle,
                                   (uint64_t)handle, (uint64_t)out);
 }
 
+// Notify a window owned by this task, including from a worker thread.
+// Returns 0 or a negative OS64_GUI_ERR_*; zero mask is BAD_ARGS. Pending
+// masks are ORed, survive input-ring overflow, and wake event_wait (also
+// its NULL-output form). tick records the latest coalesced ring. This is a
+// hint to inspect shared state, not a count or payload queue. Synchronize
+// that state separately, and join workers before destroying their window:
+// window handles may be reused after destruction.
+static inline int64_t os64_gui_event_ring(int64_t handle, uint32_t mask)
+{
+    return (int64_t)os64_syscall2(SYSCALL_GUI_EVENT_RING,
+                                  (uint64_t)handle, mask);
+}
+
 // Where is my window, and what state is it in? Fills *out with the FRAME
 // rect and the live flag word.
 //
@@ -459,6 +478,8 @@ static inline int64_t os64_gui_event_wait(int64_t handle,
 _Static_assert(sizeof(os64_gui_rect_t) == 16, "gui rect ABI: 16 bytes");
 _Static_assert(sizeof(os64_gui_surface_t) == 24, "gui surface ABI: 24 bytes");
 _Static_assert(sizeof(os64_gui_event_t) == 32, "gui event ABI: 32 bytes");
+_Static_assert(__builtin_offsetof(os64_gui_event_t, doorbell.mask) == 4,
+               "gui event ABI: doorbell at offset 4");
 _Static_assert(__builtin_offsetof(os64_gui_event_t, key) == 4,
                "gui event ABI: union at offset 4");
 _Static_assert(__builtin_offsetof(os64_gui_event_t, tick) == 24,

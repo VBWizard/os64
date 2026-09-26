@@ -376,6 +376,11 @@ struct os64_ui
     // of saying it asked nicely once.
     void (*on_close)(os64_ui_t *ui);
     bool             quit;       // set by the default close handling; read by os64_ui_run
+    // Runs on the UI thread before widget routing, even without a root.
+    // The event is borrowed for this call. NULL leaves it unhandled for
+    // applications with their own dispatch loop; no widget receives it.
+    // Set after os64_ui_init. Usage and worker lifetime: GUI_DOORBELL.md.
+    void (*on_doorbell)(os64_ui_t *ui, const os64_gui_event_t *event);
 };
 
 // ── the window's fonts (F4; FONT_PROVIDER.md is the contract) ───────────────
@@ -669,7 +674,8 @@ void os64_ui_mark_dirty(os64_ui_t *ui, os64_ui_widget_t *w);
 // cancels). Key events go to `focus`, with Tab traversal unless the focused
 // control accepts literal tabs (Ctrl+Tab traverses there). Hover state updates
 // on motion; ungrabbed moves are not sent to widget event handlers.
-// Returns true if the toolkit or a widget consumed the event.
+// Doorbells go to on_doorbell unchanged. Returns true if the toolkit,
+// application callback or a widget consumed the event.
 bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev);
 
 // Repaint whatever is dirty and publish exactly that rect. No-op when clean.

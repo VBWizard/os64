@@ -69,6 +69,7 @@ void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
 	ui->dirty = (os64_gui_rect_t){0, 0, 0, 0};
 	ui->on_resize = (void (*)(os64_ui_t *))0;
 	ui->on_close = (void (*)(os64_ui_t *))0;
+	ui->on_doorbell = NULL;
 	ui->quit = false;
 	ui->font = (void *)0;
 	ui->font_session = NULL;
@@ -259,6 +260,11 @@ static void update_hover(os64_ui_t *ui, int32_t x, int32_t y)
 
 bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 {
+	if (ev->type == OS64_GUI_EVENT_DOORBELL) {
+		if (!ui->on_doorbell) return false;
+		ui->on_doorbell(ui, ev);
+		return true;
+	}
 	if (ev->type == OS64_GUI_EVENT_APPEARANCE) {
 		if (ui->follow_session && ui->font_session) ui->font_session(ui);
 		if (ui->follow_session && os64_ui_theme_session(&ui->theme,

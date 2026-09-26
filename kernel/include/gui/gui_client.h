@@ -65,6 +65,10 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage);
 // Mouse coordinates in events are CONTENT-local.
 int64_t gui_event_poll(int64_t handle, input_event_t *out);
 
+// Coalesce a nonzero mask for a window owned by the calling task and wake
+// its event waiter. No user pointers; GUI_ERR_* on failure, zero on success.
+int64_t gui_event_ring(int64_t handle, uint32_t mask);
+
 // Block until an event arrives on the window (1 = event copied out), the
 // window dies under us (GUI_ERR_INVALID_HANDLE), or the caller has a signal
 // pending that ends the wait (GUI_ERR_INTERRUPTED — signal_park_must_end:
