@@ -49,6 +49,10 @@ Routes, and what each is FOR:
     /redirect       301 -> /hello.txt                      the ordinary hop
     /redirect/N     301 -> /redirect/N-1, then /hello.txt  a trail, and the hop cap
     /redirect-page  302 -> hello.txt (page-relative)        RFC 3986 §5.2's merge
+    /set-cookie     two cookies on a 302 -> /needs-cookie
+    /needs-cookie   200 with session=donuts, 403 without
+    /referer        echoes the Referer field (or an empty line)
+    /downgrade      redirects to plain HTTP /referer
     /post-form      HTML form for wend POST submission
     /post-early     413 before reading the body (early upload response)
     /post-continue  100 then read and echo the complete POST body
@@ -265,6 +269,28 @@ class Handler(socketserver.StreamRequestHandler):
             # text and cannot disagree about what a route is for.
             self.send(head(200, "OK", [("Content-Type", "text/plain; charset=utf-8"),
                                        ("Content-Length", len(INDEX))]) + INDEX)
+        elif route == "/set-cookie":
+            self.send(head(302, "Found", [("Set-Cookie", "session=donuts; Path=/; HttpOnly"),
+                                         ("Set-Cookie", "taste=chocolate; Path=/"),
+                                         ("Location", "/needs-cookie"), ("Content-Length", 0)]))
+        elif route == "/needs-cookie":
+            tokens = [token.strip() for line in self.headers.get("cookie", []) for token in line.split(";")]
+            allowed = "session=donuts" in tokens
+            result = b"cookie accepted\n" if allowed else b"cookie missing\n"
+            print(f"  cookie accepted={allowed}", flush=True)
+            self.send(head(200 if allowed else 403, "OK" if allowed else "Forbidden",
+                           [("Content-Type", "text/plain"), ("Content-Length", len(result))]) + result)
+        elif route == "/referer":
+            result = (self.headers.get("referer", [""])[0] + "\n").encode("latin-1")
+            self.send(head(200, "OK", [("Content-Type", "text/plain"), ("Content-Length", len(result))]) + result)
+        elif route == "/downgrade":
+            # Host came from the client: validate before reflecting into a
+            # Location field. Only the local fixture authority is needed.
+            host = self.headers.get("host", [""])[0]
+            if not host or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:" for c in host):
+                self.send(head(400, "Bad Request", [("Content-Length", 0)]))
+                return
+            self.send(head(302, "Found", [("Location", f"http://{host}/referer"), ("Content-Length", 0)]))
         elif route in ("/post-pdf-form", "/post-get-pdf-form", "/post-down-form"):
             action = route.removesuffix("-form")
             result = (f'<html><body><form method="post" action="{action}">'

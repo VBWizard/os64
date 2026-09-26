@@ -24,7 +24,7 @@
 //
 // DELIBERATELY NOT HERE, each a rung of BROWSER.md's ladder or a ruling of
 // its own: content codings beyond gzip, transfer codings other than chunked,
-// authentication, cookies, keep-alive, IPv6 literals. What is missing is
+// authentication policy, cookie storage, keep-alive, IPv6 literals. What is missing is
 // REFUSED BY NAME rather than mis-read: a response this code cannot honestly
 // turn into bytes for a consumer must never become those bytes. gzip
 // decoding stays in fetch.c because http.c is the transport parser; libgzip
@@ -46,15 +46,10 @@
 
 #include "os64/url.h"       // the common URL grammar, shared with gopher
 
-// A header line longer than this is DROPPED rather than fatal — but only
-// after the line's NAME has been read out of the truncated prefix and found
-// to be one nothing depends on. Refusing every over-long line would cost the
-// fetch over somebody's enormous Set-Cookie, which os64get does not even
-// read; dropping one blindly would let a server hide `Transfer-Encoding:
-// chunked` behind three kilobytes of legal whitespace and get raw chunk
-// framing published as the file. See overlong_verdict: a header the fetch
-// DEPENDS ON — how a body is framed and coded, or where a redirect points —
-// refuses the reply instead.
+// Oversized optional fields with readable names are omitted whole, including
+// Set-Cookie: truncating one could change its meaning. Framing, coding and
+// Location fields must fit; dropping those could change the body's framing
+// or hide a conflicting redirect. See overlong_verdict for that distinction.
 #define HTTP_LINE_MAX      2048
 // ...but the DROPPING is bounded, or a peer that talks forever and never
 // sends a newline is read forever. HTTP_HEAD_MAX is the whole head's budget
@@ -138,8 +133,8 @@ const char *http_url_reason(http_url_result_t rc);
 // request without one; `Accept` because content negotiation is how a server
 // chooses HTML over JSON; `extra_headers` as whole "Name: value\r\n" lines
 // for Referer, Range, Cookie — headers, not machinery. Every byte of all
-// header values is judged by the field-byte rule (`is_field_byte`: no CR, LF or
-// control byte), and a bad one refuses the request — a header a caller
+// header values is judged by the field-byte rule (`is_field_byte`: HTAB,
+// printable ASCII and obs-text), and a bad one refuses the request — a header a caller
 // composes from page content is a header an attacker composes, and a bare
 // LF in one is the request-splitting shape. Returns false if the request
 // will not fit or a header fails that rule; the caller cannot tell the two
@@ -235,6 +230,21 @@ http_head_result_t http_head_read(http_stream_t *s, http_response_t *out);
 // Read one head, including informational replies, to interleave upload and
 // response processing. The caller bounds the number of interim heads.
 http_head_result_t http_head_read_one(http_stream_t *s, http_response_t *out);
+
+// A complete, syntactically valid field, before header-specific framing
+// checks. Name and OWS-trimmed value are borrowed through this call only;
+// duplicate fields arrive separately, in wire order. Only final (>= 200)
+// response heads are offered, not interim heads or trailers. Oversized
+// optional fields are omitted whole; framing/redirect fields fail the head.
+// A later head failure does not undo callbacks already made.
+typedef void (*http_header_fn)(void *ctx, const char *name, size_t name_len,
+                               const char *value, size_t value_len);
+http_head_result_t http_head_read_with_headers(http_stream_t *s, http_response_t *out,
+                                               http_header_fn on_header, void *ctx);
+
+// One-head form for upload/response interleaving, with the same observer rules.
+http_head_result_t http_head_read_one_with_headers(http_stream_t *s, http_response_t *out,
+                                                   http_header_fn on_header, void *ctx);
 
 const char *http_head_reason(http_head_result_t rc);
 
