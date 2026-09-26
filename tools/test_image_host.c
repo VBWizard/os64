@@ -1,4 +1,4 @@
-// test_image_host.c — HOST-side unit test for libimage and libdraw's blit.
+// test_image_host.c — HOST-side unit test for libimage and libdraw's copy/blend.
 //
 // Both are pure computation over buffers — no syscalls, no windows — which
 // is exactly why image.c was split into a `load` half (file I/O) and a
@@ -595,6 +595,102 @@ static void test_blit(void)
     eq_u32(dst_at(0, 0), 0xff111111u, "blit: zero size and NULL source are no-ops");
 }
 
+// Floating-point reference independent of the production integer rounding.
+static uint32_t blend_reference(uint32_t src, uint32_t dst)
+{
+    unsigned a = src >> 24;
+    if (!a) return dst;
+    double coverage = a / 255.0;
+    uint32_t out = 0xff000000u;
+    for (unsigned shift = 0; shift < 24; shift += 8) {
+        double s = (src >> shift) & 255, d = (dst >> shift) & 255;
+        out |= (uint32_t)(s * coverage + d * (1.0 - coverage) + 0.5) << shift;
+    }
+    return out;
+}
+
+static void test_blend(void)
+{
+    printf("blend (straight alpha, rounding, clipping, pitch, guards)\n");
+    uint32_t src[] = {0x00ff0080, 0x01ff0080, 0x80ff0080, 0xfeff0080, 0xffff0080};
+    uint32_t expected[] = {0x12326496, 0xff336496, 0xff99328b, 0xfffe0080, 0xffff0080};
+    uint32_t out[5];
+    for (unsigned i = 0; i < 5; i++) out[i] = 0x12326496;
+    os64_gui_surface_t d = {out, 5, 1, 5};
+    os64_draw_blend(&d, 0, 0, src, 5, 1, 5);
+    ok(!memcmp(out, expected, sizeof out), "blend: exact alpha 0,1,128,254,255 and reserved-byte policy");
+
+    // For each alpha, cover the complete source/background channel domain.
+    // Complement green and permute blue to catch swapped-channel arithmetic.
+    enum { CHANNEL_PAIRS = 256 * 256 };
+    uint32_t *source = malloc(CHANNEL_PAIRS * 4), *dest = malloc(CHANNEL_PAIRS * 4);
+    if (!source || !dest) { free(source); free(dest); ok(0, "blend test buffers"); return; }
+    d = (os64_gui_surface_t){dest, CHANNEL_PAIRS, 1, CHANNEL_PAIRS};
+    bool good = true;
+    for (unsigned a = 0; a < 256 && good; a++) {
+        for (unsigned s = 0; s < 256; s++) for (unsigned b = 0; b < 256; b++) {
+            size_t i = s * 256 + b;
+            source[i] = (a << 24) | (s << 16) | ((255-s) << 8) | (s ^ 85);
+            dest[i] = 0x42000000u | (b << 16) | ((255-b) << 8) | (b ^ 170);
+        }
+        os64_draw_blend(&d, 0, 0, source, CHANNEL_PAIRS, 1, CHANNEL_PAIRS);
+        for (unsigned s = 0; s < 256 && good; s++) for (unsigned b = 0; b < 256; b++) {
+            uint32_t back = 0x42000000u | (b << 16) | ((255-b) << 8) | (b ^ 170);
+            if (dest[s*256+b] != blend_reference(source[s*256+b], back)) { good=false; break; }
+        }
+    }
+    ok(good, "blend: all 16,777,216 alpha/source/background channel combinations");
+    free(source); free(dest);
+
+    enum { SW=4, SH=3, SP=7, GUARD=4 };
+    uint32_t parent[SP * 5];
+    const unsigned alphas[] = {0, 255, 128, 1, 254};
+    for (unsigned i=0; i<SP*5; i++) parent[i]=(alphas[i%5]<<24) | (i*0x050b13u & 0xffffff);
+    const uint32_t *sub = parent + SP + 1;
+    uint32_t guarded[GUARD + DST_PITCH*DST_H + GUARD], ref[sizeof guarded/sizeof *guarded];
+    const int32_t places[][2] = {{2,1},{-2,-1},{-1,2},{2,-1},{9,2},{2,5},{9,5},
+                                {-4,0},{0,-3},{10,0},{0,6},{INT32_MIN,INT32_MIN},{INT32_MAX,INT32_MAX}};
+    good = true;
+    for (unsigned p=0; p<sizeof places/sizeof *places; p++) {
+        for (unsigned i=0; i<sizeof guarded/sizeof *guarded; i++) guarded[i]=0x271d354bu+i;
+        memcpy(ref,guarded,sizeof guarded);
+        d=(os64_gui_surface_t){guarded+GUARD,DST_W,DST_H,DST_PITCH};
+        int32_t x=places[p][0], y=places[p][1];
+        for (unsigned dy=0; dy<DST_H; dy++) for (unsigned dx=0; dx<DST_W; dx++) {
+            int64_t sx=(int64_t)dx-x, sy=(int64_t)dy-y;
+            if (sx>=0 && sx<SW && sy>=0 && sy<SH) {
+                size_t i=GUARD+dy*DST_PITCH+dx;
+                ref[i]=blend_reference(sub[sy*SP+sx],ref[i]);
+            }
+        }
+        os64_draw_blend(&d,x,y,sub,SW,SH,SP);
+        if (memcmp(guarded,ref,sizeof guarded)) good=false;
+    }
+    ok(good, "blend: four-edge/negative/extreme clipping, source subimage, destination padding and guards");
+
+    memcpy(ref,guarded,sizeof guarded);
+    os64_draw_blend(NULL,0,0,sub,SW,SH,SP);
+    os64_draw_blend(&d,0,0,NULL,SW,SH,SP);
+    os64_draw_blend(&d,0,0,sub,0,SH,SP);
+    os64_draw_blend(&d,0,0,sub,SW,0,SP);
+    os64_draw_blend(&d,0,0,sub,SW,SH,SW-1);
+    os64_draw_blend(&d,0,0,sub,UINT32_MAX,SH,UINT32_MAX);
+    os64_draw_blend(&d,0,0,sub,SW,UINT32_MAX,SP);
+    ok(!memcmp(guarded,ref,sizeof guarded), "blend: invalid requests do not touch destination");
+
+    uint32_t opaque[SW*SH], copy[DST_PITCH*DST_H];
+    for (unsigned i=0;i<SW*SH;i++) opaque[i]=0xff112233u+i;
+    d=make_dst();
+    os64_draw_blit(&d,-1,1,opaque,SW,SH,SW);
+    memcpy(copy,dst_pixels,sizeof copy);
+    d=make_dst();
+    os64_draw_blend(&d,-1,1,opaque,SW,SH,SW);
+    ok(!memcmp(copy,dst_pixels,sizeof copy), "blend: opaque rows match blit byte-for-byte");
+    d=make_dst();
+    os64_draw_blit(&d,0,0,src,5,1,5);
+    ok(!memcmp(dst_pixels,src,sizeof src), "blit still copies alpha-zero and partial-alpha words verbatim");
+}
+
 // A tiny hand-authored GIF: red, green / green, red. The LZW stream is
 // Clear, 0, 1, Clear, 1, 0, EOI, packed in three-bit codes.
 static void test_gif(void)
@@ -648,10 +744,11 @@ static void test_gif(void)
 
 int main(void)
 {
-    printf("libimage + libdraw blit — host tests\n\n");
+    printf("libimage + libdraw copy/blend — host tests\n\n");
     test_formats();
     test_refusals();
     test_blit();
+    test_blend();
     test_gif();
     printf("\n%d checks, %d failures\n", checks, failures);
     if (failures == 0)

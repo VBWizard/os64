@@ -90,11 +90,11 @@ VT. Visible waits are sliced at 20 ms so long-delay frames remain responsive
 to close, resize and pause. Slow decoding lengthens playback rather than
 skipping disposal operations or running catch-up bursts.
 
-Gview leaves fully transparent runs as its neutral mat and blits painted
-runs, clipping the scan to visible pixels. This handles GIF's binary alpha.
-Fractional-alpha PNG blending remains the separate source-over drawing task;
-the ordinary blit primitive is unchanged. No kernel or libos64 changes are
-needed for playback.
+Gview uses [source-over drawing](SOURCE_OVER.md) to composite straight-alpha
+image pixels over its neutral mat. Transparent GIF pixels leave the mat
+untouched, opaque pixels copy, and fractional-alpha PNG pixels blend. The
+sequence API owns decoding; the shared drawing operation owns clipping and
+pixel blending. The ordinary blit primitive retains its copy semantics.
 
 ## Proof
 

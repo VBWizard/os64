@@ -70,14 +70,25 @@ void os64_draw_round_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
 // is what makes "center an image larger than the window" work with no
 // arithmetic at the call site.
 //
-// OPAQUE COPY — the source's alpha byte is not consulted. libpng preserves
-// real alpha now, but this call still copies those pixels verbatim; it does
-// not composite them over the destination. Source-over is a distinct libdraw
-// operation booked in DEBTS for the browser and launcher rather than a silent
-// semantic change to the blit every existing background relies on.
+// OPAQUE COPY — the source's alpha byte is not consulted. Pixels are copied
+// verbatim; use os64_draw_blend to composite straight-alpha image pixels.
 void os64_draw_blit(os64_gui_surface_t *dst, int32_t x, int32_t y,
                     const uint32_t *src, uint32_t w, uint32_t h,
                     uint32_t src_pitch_px);
+
+// Source-over from straight-alpha 0xAARRGGBB onto an opaque RGB canvas.
+// Placement, clipping and source pitch have the same meaning as blit.
+// Source and destination storage must not overlap. Both buffers must cover
+// their declared dimensions/strides; dst is a valid GUI surface.
+// RGB mixes in encoded byte space, with nearest-integer rounding:
+// (src_channel * alpha + dst_channel * (255-alpha) + 127) / 255.
+// Alpha 0 leaves the entire destination word untouched; alpha 255 copies
+// the source word. Intermediate alpha writes 0xFF in the reserved high byte.
+// Destination alpha is not interpreted; this is not RGBA-to-RGBA blending.
+// NULL dst/src, zero size, pitch < w, or axes above INT32_MAX are no-ops.
+void os64_draw_blend(os64_gui_surface_t *dst, int32_t x, int32_t y,
+                     const uint32_t *src, uint32_t w, uint32_t h,
+                     uint32_t src_pitch_px);
 
 // Text: the embedded PSF1 face (os64/font_psf1.h — the console's own,
 // 8x16, opaque fg-on-bg cells). Pen-advance only; wrapping and flow are

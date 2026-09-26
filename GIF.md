@@ -99,8 +99,8 @@ Build and runtime results are recorded in
 The `*.gif` rule in `etc/os64get.conf` routes valet downloads to `/home/images`.
 `gview` uses the incremental sequence API described in
 [GIF_ANIMATION.md](GIF_ANIMATION.md), including frame disposal, delays and
-looping. Fully transparent runs show the viewer's mat. Fractional-alpha
-compositing remains the separate source-over drawing feature.
+looping. The shared [source-over drawing operation](SOURCE_OVER.md) shows the
+viewer's mat through transparent GIF pixels and blends fractional-alpha PNGs.
 
 The first-picture API described here does not animate or return partial
 images. Sequence playback is a separate opt-in API; Plain Text rendering,

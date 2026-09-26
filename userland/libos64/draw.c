@@ -116,6 +116,47 @@ void os64_draw_blit(os64_gui_surface_t *dst, int32_t x, int32_t y,
     }
 }
 
+void os64_draw_blend(os64_gui_surface_t *dst, int32_t x, int32_t y,
+                     const uint32_t *src, uint32_t w, uint32_t h,
+                     uint32_t src_pitch_px)
+{
+    if (!dst || !src || !w || !h || src_pitch_px < w ||
+        w > INT32_MAX || h > INT32_MAX)
+        return;
+    os64_gui_rect_t want = {x, y, (int32_t)w, (int32_t)h}, c;
+    if (!os64_rect_intersect(want, surface_bounds(dst), &c))
+        return;
+    // Derive source offsets after clipping, keeping extreme offscreen
+    // origins out of pointer arithmetic just as the copy operation does.
+    uint32_t skip_x = (uint32_t)((int64_t)c.x - x);
+    uint32_t skip_y = (uint32_t)((int64_t)c.y - y);
+    for (int32_t row = 0; row < c.h; row++) {
+        const uint32_t *s = src + (size_t)(skip_y + (uint32_t)row) * src_pitch_px + skip_x;
+        uint32_t *d = surface_row(dst, c.y + row) + c.x;
+        int32_t col = 0;
+        while (col < c.w) {
+            uint32_t pixel = s[col], alpha = pixel >> 24;
+            if (!alpha) {
+                col++;
+                continue;
+            }
+            // Opaque runs need neither destination reads nor blend arithmetic.
+            if (alpha == 255) {
+                do {
+                    d[col] = s[col];
+                    col++;
+                } while (col < c.w && (s[col] >> 24) == 255);
+                continue;
+            }
+            uint32_t back = d[col], inv = 255 - alpha;
+            uint32_t r = (((pixel >> 16) & 255) * alpha + ((back >> 16) & 255) * inv + 127) / 255;
+            uint32_t g = (((pixel >> 8) & 255) * alpha + ((back >> 8) & 255) * inv + 127) / 255;
+            uint32_t b = ((pixel & 255) * alpha + (back & 255) * inv + 127) / 255;
+            d[col++] = 0xff000000u | (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
 void os64_draw_vline(os64_gui_surface_t *dst, int32_t x, int32_t y,
                      int32_t len, uint32_t color)
 {

@@ -64,17 +64,15 @@ compositor except through `publish`.
 
 ## L1 — libdraw (the drawing core)
 
-**A near-direct port of `surface.c`.** Everything except
-`surface_flush_rect` comes across (apps never flush hardware — they
-publish). Shared types (`rect_t`, `surface_t`, XRGB8888, the color
-constants, `rect_union`/`intersect`/`contains`) come from the dependency-
-free types header, dual-homed into `abi/include/` so kernel and userland
-share ONE definition.
+**Software drawing into userland canvases.** The primitives in `os64/draw.h`
+operate on GUI surfaces and clip to their bounds. Applications publish
+finished pixels through `os64_draw_publish`; the kernel compositor flushes
+the display.
 
-The ported primitives, all clipping to the surface (a caller may pass rects
-hanging off any edge):
-`fill_rect`, `blit`, `blit_masked` (shaped art — the cursor uses it),
-`draw_hline`/`draw_vline`, `draw_rect` (outline), `draw_text` (glyph run).
+The userland operations include rectangle fills/outlines, rounded rectangles,
+lines, text, verbatim `os64_draw_blit`, and straight-alpha `os64_draw_blend`.
+The kernel cursor uses `surface_blit_masked` separately; that mask operation
+is not part of the userland drawing API.
 
 **The draw context (`draw_ctx`)** — decided per #4: a light handle holding
 the target surface, a clip rect, current fg/bg, and a text pen position. It
@@ -300,8 +298,9 @@ App-driven from the very first line.
 
 - L2 widget catalog expansion (applications and the Workshop gallery).
 - Proportional / multiple fonts (present scope is one embedded bitmap font).
-- Alpha/translucency (GRAPHICS.md future item; `blit_masked` already does
-  shaped, not blended).
+- Window translucency remains GRAPHICS.md's compositor work. Straight-alpha
+  images over opaque canvases use `os64_draw_blend`; see
+  [SOURCE_OVER.md](SOURCE_OVER.md).
 - ~~The `SMP_MAGIC_NUMBER` wake-cadence fix~~ — DONE 2026-07-11; the frame
   ceiling is now ~100 fps (SCHEDULER.md autopsy).
 - Everything rides the userland roadmap: libos64 scaffolding → the GUI
