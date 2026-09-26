@@ -193,6 +193,9 @@ typedef struct {
     // is judged by http.h's field-byte rule and a bad one is REQUEST_FAILED.
     const char *user_agent;
     const char *accept;
+    // HTTPS Referer is stripped on an unencrypted connection, from either
+    // header source. Callback cookies use the actual hop URL; static cookies
+    // retain the initial-origin rule below.
     // Reserved framing/routing/body headers are rejected (http.h lists them).
     const char *extra_headers;     // "Name: value\r\n" lines, already terminated. Cookie and
                                    // Authorization are sent to the TYPED origin and to hops
@@ -225,6 +228,23 @@ typedef struct {
     const void *body;
     size_t body_len;
     const char *content_type;     // optional; < CONTENT_TYPE_MAX, copied at open
+    // Per-hop Cookie/Referer fields, as NUL-terminated "Name: value\r\n"
+    // lines within cap. Called before dialing, including the first request.
+    // Only these two field names are accepted; duplicates within this block
+    // or with retained static fields refuse the hop. False or bad output is
+    // REQUEST_FAILED. encrypted describes the actual transport, not just URL.
+    bool (*headers_for)(void *ctx, const os64_url_t *hop_url, bool encrypted,
+                        char *out, size_t cap);
+    // Each final-head Set-Cookie VALUE (no name/colon/CRLF), OWS trimmed,
+    // individually and before on_hop/headers_for for a redirect destination.
+    // Value and URL are borrowed for the call. No 1xx/trailer delivery;
+    // oversized lines (HTTP_LINE_MAX) are omitted whole. Earlier calls stand
+    // even if a later header fails. No cookie parsing/storage is done here.
+    void (*on_set_cookie)(void *ctx, const os64_url_t *from_url,
+                          const char *value, size_t len);
+    // These callbacks run inside open on its thread, using ctx. Copy anything
+    // needed afterward; do not re-enter this fetch. cancellation uses ctx
+    // during reads/close as well, so that context must live through close.
 } os64_fetch_options_t;
 
 // ── The calls ───────────────────────────────────────────────────────────

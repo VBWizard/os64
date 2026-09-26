@@ -130,7 +130,7 @@ void          os64_fetch_close(os64_fetch_t *f);
   its reason. os64get keeps its own sentences where they are more
   specific; the browser starts with these.
 
-### Options, and the two callbacks
+### Options and callbacks
 
 ```c
 typedef struct {
@@ -149,6 +149,10 @@ typedef struct {
     const void *body;              // borrowed, immutable through open
     size_t body_len;
     const char *content_type;      // optional for POST; boundary kept verbatim
+    bool (*headers_for)(void *ctx, const os64_url_t *url, bool encrypted,
+                        char *out, size_t cap);
+    void (*on_set_cookie)(void *ctx, const os64_url_t *url,
+                          const char *value, size_t len);
 } os64_fetch_options_t;
 ```
 
@@ -178,10 +182,10 @@ typedef struct {
   designed.** `User-Agent` because a meaningful fraction of the web
   refuses a request without one; `Accept` because content negotiation is
   how a server chooses HTML over JSON; `extra_headers` for `Referer`, and
-  later `Range` and `Cookie`, which are headers and not new machinery.
-  The field-byte rule (no CR, LF, or control byte in a name or value —
-  the request-splitting shape, `is_field_byte` in http.c) is applied to
-  all three and refuses by name, because a header the caller composes
+  `Range` and static `Cookie` values. Per-URL cookies use `headers_for`.
+  Names must be HTTP tokens; values permit HTAB, printable ASCII and
+  obs-text, with CRLF used only between complete fields. The checks in
+  `http_request_extras_ok` reject request-splitting shapes, because a header the caller composes
   from page content is a header an attacker composes. **And a credential
   is for whoever it was given for.** `Cookie` and `Authorization` are the
   origin's: they go to the typed origin and to hops that stay on it (same
@@ -339,7 +343,7 @@ one resident libfetch serving two programs at once.
 | `gopher://` as a libfetch scheme | the gopher client's own wire code works and its menu parser is the UI's; moving it buys nothing until a second program wants gopher bytes | the browser's first `gopher://` link |
 | Keep-alive / a connection pool | not spoken today; the object is a FETCH, not a connection, so a pool slides underneath without an API change | `/sys/net/tcp` showing a page's image fetches paying a handshake apiece |
 | `Range:` and resume (BROWSER.md 3e) | `extra_headers` can carry the header; 206 semantics and the resume discipline want a consumer | a download worth resuming |
-| Cookies | a header the browser composes; the jar is the navigator's, not the fetch's | the first site that will not show a page without one |
+| Cookie jar | per-hop request and response hooks exist; storage and domain/path/expiry policy belong to the navigator | the first site that will not show a page without one |
 | A `data:` scheme | inline images in HTML use it; it is a decoder, not a fetch | the graphical browser's first inline image |
 | Progressive `open` (head available before the body starts, on a non-blocking loop) | every consumer today runs a fetch on a thread | a single-threaded UI that must not block |
 
@@ -354,3 +358,70 @@ submitted form from history. Cookies are a separate navigator concern.
 The options and hop structs grew: rebuild libfetch and its callers together.
 The zero-initialized source API remains GET; old binaries compiled against
 a shorter options struct are not ABI compatible with this library.
+
+## Per-hop cookie and Referer handoff
+
+The library carries fields; the navigator owns cookie parsing, storage,
+matching, expiration and referrer policy. There is no cookie jar in libfetch.
+The callbacks and `on_hop` run synchronously on the thread calling `open`,
+with the options' `ctx`. They must not re-enter the same fetch. URLs and
+header values passed to callbacks are borrowed for that call; copy anything
+needed later. `cancelled` also uses `ctx` during reads and close, so its
+context must outlive the fetch.
+
+For each request, including the first:
+
+1. Resolve that request's proxy and actual encryption state.
+2. Filter static credentials using the initial origin/proxy rules above.
+3. Call `headers_for(ctx, &url, encrypted, out, cap)` before dialing.
+   The URL is that hop's URL, with its effective port filled in.
+4. Validate and append the callback's fields, then render and send.
+5. Deliver final-head `Set-Cookie` values as they arrive. A redirect's
+   cookies arrive before `on_hop` and before the next `headers_for` call.
+
+`headers_for` writes zero or one Cookie line and zero or one Referer line,
+as `Name: value\r\n`, with a NUL within the supplied capacity (1024 bytes).
+No other names are accepted. This keeps the callback from bypassing the
+static Authorization/Proxy-Authorization rules or overriding framing.
+An empty output means no fields. Return false if composition fails or
+would truncate. False, invalid bytes, an unterminated block, or duplicate
+fields within the callback or against retained static fields yields
+`REQUEST_FAILED` before that hop dials. Callback cookies are selected for
+this hop, so they are not restricted to the original origin; static cookies
+still are. Static Cookie/Referer duplicates retain their existing behavior.
+
+An HTTPS Referer is removed on an unencrypted transport, whichever header
+source supplied it. Scheme/name matching is ASCII case insensitive and
+leading field whitespace is ignored. This includes a plain proxy transport
+for an HTTPS URL: `encrypted` describes the wire, not the spelling of the
+URL. Other referrer decisions belong to the navigator.
+
+`on_set_cookie` receives the VALUE, with surrounding space/tab removed:
+no field name, colon or CRLF. Repeated fields arrive separately in wire
+order, including any comma in Expires. Delivery excludes 1xx responses and
+trailers. The parser retains its 2048-byte line buffer: an oversized
+Set-Cookie line is omitted whole, never delivered truncated. Earlier
+callbacks are not rolled back if a later header or read fails. A TLS authentication/protocol
+error already accompanying a read suppresses delivery from that read;
+missing TLS closure alone is tolerated for framed HTTP.
+This is a streaming interface, not a transaction on the whole response.
+
+The lower-level `http_head_read_with_headers` offers the same complete
+fields (name and value separately) before header-specific framing checks,
+including unknown fields; it is the reusable seam for future consumers.
+`http_head_read` remains the no-callback wrapper. Header and line budgets
+remain `HTTP_HEAD_MAX`, `HTTP_HEADERS_MAX` and `HTTP_LINE_MAX`.
+
+A minimal callback that already has a correctly selected cookie can compose
+its field like this; a real navigator must first apply its jar's rules:
+
+```c
+int32_t n = os64_snprintf(out, cap, "Cookie: %s\r\n", selected_cookie);
+return n >= 0 && (size_t)n < cap;
+```
+
+`/tests/fetchhooktest http://10.0.2.2:58080` exercises these seams against
+`tools/httptestd.py --port 58080`: cookie receipt on a 302 before the next
+request, 200 with/403 without the selected cookie, both Referer sources,
+and POST -> GET/replay. It is an explicit network fixture, outside the
+unattended `testrun` list because it requires that server.

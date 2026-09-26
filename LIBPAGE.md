@@ -512,7 +512,7 @@ marked throwaway.
 |---|---|---|
 | `file` inputs with a file | no face can pick one | the graphical browser's file dialog |
 | Constraint validation beyond `required`/length | typed-value families are their own table | the first page whose `pattern` matters |
-| Cookies, `Referer` | libfetch's, not the page's | the first site that needs a session |
+| Cookie storage, referrer policy | navigator-owned; libfetch provides per-hop header hooks | the first site that needs a session |
 | `os64_page_rebuild` — re-walk a changed tree, re-key the edits that survive | nothing can change a tree yet (ruling 2); a verb with no caller is speculative | the engine — the edit table is already keyed by node so the verb costs a walk, not a redesign |
 | An SVG or MathML `a` is not a link | a foreign element is not an HTML one however it is spelled, and no text face draws SVG. The walk DESCENDS into foreign subtrees, so HTML inside a `foreignObject` is still seen; it is the foreign element itself that is passed over | the graphical browser, which draws SVG and will meet a link inside one |
 | `pattern`, `min`/`max`/`step`, and the typed-value checks | family I's draft one, as this document booked it | the first page whose `pattern` matters |

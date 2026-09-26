@@ -496,7 +496,8 @@ static http_head_result_t coding_take(char *slot, size_t cap, const char *value,
     return HTTP_HEAD_OK;
 }
 
-static http_head_result_t header_take(char *line, http_response_t *out)
+static http_head_result_t header_take(char *line, http_response_t *out,
+                                       http_header_fn on_header, void *ctx)
 {
     // THE NAME IS A TOKEN, judged by the same is_token_byte the over-long
     // path uses — which is the point, because these two used to judge it
@@ -526,6 +527,9 @@ static http_head_result_t header_take(char *line, http_response_t *out)
     for (size_t i = 0; i < vlen; i++)
         if (!is_field_byte(value[i]))
             return HTTP_HEAD_SYNTAX;  // a Location that would clear the screen
+
+    if (on_header && out->status >= 200)
+        on_header(ctx, line, (size_t)(colon - line), value, vlen);
 
     if (os64_streq_nocase(line, "Content-Length")) {
         uint64_t length = 0;
@@ -638,8 +642,8 @@ static http_head_result_t header_take(char *line, http_response_t *out)
 
 // WHAT WAS THAT LINE, before we throw it away. An over-long header is
 // dropped rather than fatal (see HTTP_LINE_MAX in http.h), and that is safe
-// only for a header nothing depends on. It is NOT safe for the headers that
-// decide how the body is framed and coded: a server chooses the length of
+// for optional metadata: the observer receives no truncated value. It is
+// NOT safe for the headers that decide how the body is framed and coded: a server chooses the length of
 // its own header lines, so `Transfer-Encoding:` followed by three kilobytes
 // of the optional whitespace RFC 7230 permits and then `chunked` would be
 // dropped, leave the reply looking unframed, and end with raw chunk lengths
@@ -683,10 +687,11 @@ static http_head_result_t overlong_verdict(const char *prefix)
         os64_streq_nocase(name, "Location"))
         return HTTP_HEAD_FRAMING;
 
-    return HTTP_HEAD_OK;              // genuinely nothing depends on it
+    return HTTP_HEAD_OK;              // optional metadata is omitted whole
 }
 
-static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
+static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out,
+                                          http_header_fn on_header, void *ctx)
 {
     char line[HTTP_LINE_MAX];
     size_t consumed = 0;
@@ -745,14 +750,14 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
 
         if (r == LINE_LONG)
         {
-            // Dropped, but only once we know nothing depends on it.
+            // Omit oversized metadata; framing and redirect fields must fit.
             http_head_result_t verdict = overlong_verdict(line);
             if (verdict != HTTP_HEAD_OK)
                 return verdict;
             continue;
         }
 
-        http_head_result_t rc = header_take(line, out);
+        http_head_result_t rc = header_take(line, out, on_header, ctx);
         if (rc != HTTP_HEAD_OK)
             return rc;
     }
@@ -766,8 +771,14 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
 
 http_head_result_t http_head_read(http_stream_t *s, http_response_t *out)
 {
+    return http_head_read_with_headers(s, out, NULL, NULL);
+}
+
+http_head_result_t http_head_read_with_headers(http_stream_t *s, http_response_t *out,
+                                               http_header_fn on_header, void *ctx)
+{
     for (int i = 0; i <= HTTP_INTERIM_MAX; i++) {
-        http_head_result_t rc = head_read_once(s, out);
+        http_head_result_t rc = head_read_once(s, out, on_header, ctx);
         if (rc != HTTP_HEAD_OK)
             return rc;
         // 101 IS NOT INTERIM. After it the connection speaks whatever was

@@ -279,10 +279,9 @@ static bool hop_followed(os64_fetch_t *f, os64_fetch_hop_t *hop, fetch_proxy_t *
 // direct request, where it would hand the proxy's credential to the
 // destination. Without the first rule a 302 off the origin would collect
 // the caller's session; without the second a `no_proxy` match would leak
-// the proxy password to the site. Everything else in the block (Referer,
-// Range, Accept-Language) is nobody's credential and rides along. (Codex,
-// PR #92 rd4 and rd5.) The block is already validated line by line, so
-// the walk below can trust its shape.
+// the proxy password to the site. Other fields ride along; HTTPS Referer
+// is stripped on an unencrypted connection, including a plain proxy.
+// The block is validated line by line, so the walk can trust its shape.
 typedef enum { HEADER_FREE, HEADER_ORIGINS, HEADER_PROXYS } header_owner_t;
 
 static bool name_is(const char *line, size_t nameLen, const char *want)
@@ -308,7 +307,24 @@ static header_owner_t header_owner(const char *line, size_t nameLen)
     return HEADER_FREE;
 }
 
-static void extras_for_hop(const os64_fetch_t *f, char *out, size_t cap)
+static bool referer_downgrade(const char *line, const char *colon, bool encrypted)
+{
+    if (encrypted || !name_is(line, (size_t)(colon - line), "referer"))
+        return false;
+    const char *value = colon + 1;
+    while (*value == ' ' || *value == '\t')
+        value++;
+    // Compare through the colon too: https-like host names are not schemes.
+    const char *scheme = "https:";
+    for (size_t i = 0; scheme[i]; i++) {
+        char c = value[i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c + ('a' - 'A'));
+        if (c != scheme[i]) return false;
+    }
+    return true;
+}
+
+static void extras_for_hop(const os64_fetch_t *f, char *out, size_t cap, bool encrypted)
 {
     out[0] = '\0';
     if (f->extra[0] == '\0')
@@ -333,7 +349,7 @@ static void extras_for_hop(const os64_fetch_t *f, char *out, size_t cap)
         bool keep = owner == HEADER_FREE ||
                     (owner == HEADER_ORIGINS && originOk) ||
                     (owner == HEADER_PROXYS && proxyOk);
-        if (keep && used + len < cap) {
+        if (keep && !referer_downgrade(line, colon, encrypted) && used + len < cap) {
             for (size_t i = 0; i < len; i++)
                 out[used + i] = line[i];
             used += len;
@@ -341,6 +357,80 @@ static void extras_for_hop(const os64_fetch_t *f, char *out, size_t cap)
         }
         p = end;
     }
+}
+
+// Add the navigator's per-URL fields after static credential filtering.
+// Validate the entire callback block before emitting any of it. A jar owns
+// Cookie selection; accepting arbitrary fields here would bypass the
+// Authorization and proxy-credential rules of the static block.
+static bool request_extras(os64_fetch_t *f, char *out, size_t cap, bool encrypted)
+{
+    extras_for_hop(f, out, cap, encrypted);
+    if (!f->opt.headers_for)
+        return true;
+    char dynamic[OS64_FETCH_EXTRA_MAX];
+    os64_memset(dynamic, 0xff, sizeof(dynamic));
+    dynamic[0] = '\0';
+    os64_url_t url;
+    url_filled(&f->current, &url);
+    if (!f->opt.headers_for(f->opt.ctx, &url, encrypted, dynamic, sizeof(dynamic)))
+        return false;
+    size_t len = 0;
+    while (len < sizeof(dynamic) && dynamic[len]) len++;
+    if (len == sizeof(dynamic))
+        return false;
+    http_request_extras_t check = { .extra_headers = dynamic };
+    if (!http_request_extras_ok(&check))
+        return false;
+    unsigned seen = 0;
+    // Static duplicates retain their old behavior. Only a field supplied by
+    // the callback conflicts with a retained static copy of that field.
+    for (const char *p = out; *p;) {
+        const char *colon = p;
+        while (*colon != ':') colon++;
+        if (name_is(p, (size_t)(colon - p), "cookie")) seen |= 1;
+        if (name_is(p, (size_t)(colon - p), "referer")) seen |= 2;
+        while (!(p[0] == '\r' && p[1] == '\n')) p++;
+        p += 2;
+    }
+    size_t used = os64_strlen(out);
+    for (const char *p = dynamic; *p;) {
+        const char *colon = p;
+        while (*colon != ':') colon++;
+        unsigned field = name_is(p, (size_t)(colon - p), "cookie") ? 1 :
+                         name_is(p, (size_t)(colon - p), "referer") ? 2 : 0;
+        if (!field || (seen & field))
+            return false;
+        seen |= field;
+        const char *end = colon;
+        while (!(end[0] == '\r' && end[1] == '\n')) end++;
+        end += 2;
+        size_t n = (size_t)(end - p);
+        if (!referer_downgrade(p, colon, encrypted)) {
+            if (n >= cap - used) return false;
+            os64_memcpy(out + used, p, n);
+            used += n;
+            out[used] = '\0';
+        }
+        p = end;
+    }
+    return true;
+}
+
+static void response_header(void *ctx, const char *name, size_t name_len,
+                             const char *value, size_t value_len)
+{
+    os64_fetch_t *f = ctx;
+    if (!f->opt.on_set_cookie || !name_is(name, name_len, "set-cookie"))
+        return;
+    // Apply the authenticated-prefix check used before redirects. TLS
+    // authentication/protocol errors suppress delivery; missing closure alone
+    // is tolerated for framed HTTP. Later reads can still fail.
+    if (!fetch_transport_complete(&f->io, true))
+        return;
+    os64_url_t url;
+    url_filled(&f->current, &url);
+    f->opt.on_set_cookie(f->opt.ctx, &url, value, value_len);
 }
 
 // ── The head: dial, ask, read, and follow ───────────────────────────────
@@ -398,6 +488,30 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
             return OS64_FETCH_INTERRUPTED;
 
         bool encrypted = os64_streq(f->current.scheme, "https") && !f->proxy.inUse;
+        // Compose before dialing so a refused callback costs no connection.
+        char request[HTTP_LINE_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX + 2 * OS64_FETCH_EXTRA_MAX + OS64_FETCH_CONTENT_TYPE_MAX + 64];
+        char extraForHop[2 * OS64_FETCH_EXTRA_MAX];
+        if (!request_extras(f, extraForHop, sizeof(extraForHop), encrypted)) {
+            os64_strcopy(f->detail.why, sizeof(f->detail.why), "per-hop headers were refused or malformed");
+            return cancelled(f) ? OS64_FETCH_INTERRUPTED : OS64_FETCH_REQUEST_FAILED;
+        }
+        if (f->opt.headers_for && cancelled(f))
+            return OS64_FETCH_INTERRUPTED;
+        http_request_extras_t extras = {
+            .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
+            .accept        = f->accept[0] ? f->accept : NULL,
+            .extra_headers = extraForHop[0] ? extraForHop : NULL,
+            .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
+            .body_len = f->method == OS64_FETCH_METHOD_POST ? f->opt.body_len : 0,
+            .content_type = f->method == OS64_FETCH_METHOD_POST && f->content_type[0]
+                                ? f->content_type : NULL,
+        };
+        if (!http_request(request, sizeof(request), &f->current, f->proxy.inUse, &extras)) {
+            os64_strcopy(f->detail.why, sizeof(f->detail.why),
+                         "the request does not fit, or a header holds a byte a header cannot");
+            return OS64_FETCH_REQUEST_FAILED;
+        }
+
         if (encrypted && f->trust == NULL) {
             os64_tls_store_status_t loaded =
                 os64_tls_trust_reload(&f->trust, &f->detail.store_report);
@@ -462,24 +576,6 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         }
         f->connected = true;
 
-        // ── Ask ─────────────────────────────────────────────────────────
-        char request[HTTP_LINE_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX + OS64_FETCH_EXTRA_MAX + OS64_FETCH_CONTENT_TYPE_MAX + 64];
-        char extraForHop[OS64_FETCH_EXTRA_MAX];
-        extras_for_hop(f, extraForHop, sizeof(extraForHop));
-        http_request_extras_t extras = {
-            .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
-            .accept        = f->accept[0] ? f->accept : NULL,
-            .extra_headers = extraForHop[0] ? extraForHop : NULL,
-            .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
-            .body_len = f->method == OS64_FETCH_METHOD_POST ? f->opt.body_len : 0,
-            .content_type = f->method == OS64_FETCH_METHOD_POST && f->content_type[0]
-                                ? f->content_type : NULL,
-        };
-        if (!http_request(request, sizeof(request), &f->current, f->proxy.inUse, &extras)) {
-            os64_strcopy(f->detail.why, sizeof(f->detail.why),
-                         "the request does not fit, or a header holds a byte a header cannot");
-            return drop_connection(f, OS64_FETCH_REQUEST_FAILED);
-        }
         if (!fetch_transport_write(&f->io, request, os64_strlen(request))) {
             os64_strcopy(f->detail.why, sizeof(f->detail.why), "could not send the request");
             tls_snapshot(f);
@@ -495,7 +591,8 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
 
         // ── The reply's head ────────────────────────────────────────────
         http_stream_init(&f->stream, fetch_transport_read, &f->io);
-        http_head_result_t hrc = http_head_read(&f->stream, &f->reply);
+        http_head_result_t hrc = http_head_read_with_headers(&f->stream, &f->reply,
+                                                              response_header, f);
         if (hrc != HTTP_HEAD_OK) {
             f->detail.head = hrc;
             tls_snapshot(f);
@@ -515,8 +612,9 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
             return drop_connection(f, OS64_FETCH_BAD_HEAD);
         }
 
-        // A final authenticated prefix can accompany a terminal TLS error.
-        // Check it before acting on headers, including redirect destinations.
+        // An authenticated prefix can accompany a TLS protocol failure.
+        // Check before following redirects; missing closure alone is tolerated
+        // for framed HTTP. Cookie delivery applies this check as lines arrive.
         // It is a BAD_HEAD, not a TLS_FAILED: the handshake succeeded and the
         // head arrived, and what is untrustworthy is the reply as a whole —
         // the reason carries the transport's verdict in its tail.

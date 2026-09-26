@@ -159,6 +159,13 @@ static int do_url(const char *text)
     return 0;
 }
 
+static bool emit_headers;
+static void print_header(void *ctx, const char *name, size_t name_len, const char *value, size_t len)
+{
+    (void)ctx;
+    printf("header=%.*s\t%.*s\n", (int)name_len, name, (int)len, value);
+}
+
 static int do_head(const char *path, size_t chunk, size_t sip, size_t breakAt,
                    const char *bodyPath)
 {
@@ -179,7 +186,8 @@ static int do_head(const char *path, size_t chunk, size_t sip, size_t breakAt,
     http_stream_init(&stream, mem_read, &source);
 
     http_response_t reply;
-    http_head_result_t rc = http_head_read(&stream, &reply);
+    http_head_result_t rc = http_head_read_with_headers(&stream, &reply,
+                                                         emit_headers ? print_header : NULL, NULL);
     printf("%s\n", head_result_name(rc));
     if (rc != HTTP_HEAD_OK) {
         free(bytes);
@@ -290,7 +298,8 @@ int main(int argc, char **argv)
     if (argc >= 4 && strcmp(argv[1], "absolute") == 0)
         return do_absolute(argv[2], argv[3]);
 
-    if (argc >= 7 && strcmp(argv[1], "head") == 0)
+    emit_headers = argc >= 2 && strcmp(argv[1], "headers") == 0;
+    if (argc >= 7 && (strcmp(argv[1], "head") == 0 || emit_headers))
         return do_head(argv[2], (size_t)strtoul(argv[3], NULL, 0),
                        (size_t)strtoul(argv[4], NULL, 0),
                        (size_t)strtoul(argv[5], NULL, 0), argv[6]);

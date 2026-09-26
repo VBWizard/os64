@@ -793,7 +793,7 @@ Codex round is Chris's call.
 | Column-aligned tables | rows read fine for the old web's layout tables; alignment is layout, the graphical browser's boss | a data table that is unreadable as rows |
 | CP437 / a second charset on the glass | the face is Latin-1; art pages are the gopher client's | a page whose meaning needs box drawing |
 | A page cache for `b` | refetching is honest and simple; a cache is a lifetime problem for later | when back-and-forth on a slow link hurts |
-| Cookies | libfetch's row; the jar is the navigator's when it comes | the first site that will not show a page without one |
+| Cookie jar | libfetch has per-hop wire hooks; the navigator owns storage and matching | the first site that will not show a page without one |
 
 ## NOT in the ladder's lane (Fable-tier — do not start these)
 

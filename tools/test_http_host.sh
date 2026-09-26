@@ -77,6 +77,20 @@ for length in (0, 1, 17, 8192, 70000):
         b, bh = parts(expected)
         if a != b or sorted(ah) != sorted(bh): fail("POST request", (ours, expected))
 
+# Duplicate Set-Cookie values must survive independently, including commas
+# inside Expires; the parser hook also carries headers it does not interpret.
+fields = (b"Set-Cookie: one=1; Expires=Wed, 09 Jun 2027 10:18:14 GMT\r\n"
+          b"sEt-CoOkIe:\ttwo=2; Path=/ \t\r\nX-Download: name.txt\r\nContent-Length: 0\r\n\r\n")
+fixture = work / "cookies.http"
+fixture.write_bytes(b"HTTP/1.1 200 OK\r\n" + fields)
+expected = [(k, v.strip(" \t")) for k, v in http.client.parse_headers(io.BytesIO(fields)).items()]
+for chunk in (1, 2, 3, 7, 17, 255, 8192):
+    done = subprocess.run([exe, "headers", str(fixture), str(chunk), "17", "0", str(work / "cookie.body")],
+                          capture_output=True, check=True)
+    got = [tuple(line[7:].split("\t", 1)) for line in done.stdout.decode("latin-1").splitlines()
+           if line.startswith("header=")]
+    if got != expected: fail("individual headers", (chunk, got, expected))
+
 # ── URLs ────────────────────────────────────────────────────────────────
 # The well-formed ones are checked against urllib.parse: same host, same
 # port, same path-with-query, fragment gone.

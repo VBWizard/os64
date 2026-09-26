@@ -70,6 +70,7 @@ typedef struct {
     bool        refuse;        // the dial fails
     bool        silent;        // never answers a read
     size_t      silent_after;  // ...or goes silent after this many bytes
+    bool        tls_bad_prefix; // authenticated bytes accompanied by protocol failure
     bool        tls_truncate;  // (https) the record layer ends without close_notify
 } peer_t;
 
@@ -232,7 +233,8 @@ os64_tls_transfer_t os64_tls_transport_read(os64_tls_transport *t, void *p, size
         t->status = c->peer->tls_truncate ? OS64_TLS_TRUNCATED : OS64_TLS_CLEAN_EOF;
         return (os64_tls_transfer_t){ t->status, 0 };
     }
-    return (os64_tls_transfer_t){ OS64_TLS_OK, (size_t)got };
+    if (c->peer->tls_bad_prefix) t->status = OS64_TLS_PROTOCOL;
+    return (os64_tls_transfer_t){ t->status, (size_t)got };
 }
 os64_tls_status_t os64_tls_transport_flush(os64_tls_transport *t) { return t->status; }
 os64_tls_status_t os64_tls_transport_begin_close(os64_tls_transport *t) { t->closing = true; return t->status; }
@@ -1159,6 +1161,149 @@ static void case_post(void)
     }
 }
 
+
+typedef struct {
+    unsigned asked, received, hops;
+    const char *output;
+    bool fail, unterminated, chain, encrypted, cancelled, cancel_header, cancel_cookie;
+    char values[8][HTTP_LINE_MAX], hosts[8][OS64_URL_HOST_MAX];
+} cookie_test_t;
+static void cookie_received(void *ctx, const os64_url_t *url, const char *value, size_t len)
+{
+    cookie_test_t *t = ctx;
+    CHECK(t->received < 8 && len < HTTP_LINE_MAX && url->port != 0);
+    memcpy(t->values[t->received], value, len);
+    t->values[t->received][len] = 0;
+    snprintf(t->hosts[t->received], sizeof(t->hosts[0]), "%s", url->host);
+    t->received++;
+    if (t->cancel_cookie) t->cancelled = true;
+}
+static bool cookie_headers(void *ctx, const os64_url_t *url, bool encrypted, char *out, size_t cap)
+{
+    cookie_test_t *t = ctx;
+    t->asked++; t->encrypted = encrypted;
+    if (t->cancel_header) t->cancelled = true;
+    if (t->fail) return false;
+    if (t->unterminated) { memset(out, 'x', cap); return true; }
+    if (t->chain) {
+        if (t->asked == 1) {
+            CHECK(strcmp(url->host, "a.test") == 0 && t->received == 0 && t->hops == 0);
+            snprintf(out, cap, "Cookie: first=1\r\n");
+        } else {
+            CHECK(strcmp(url->host, "b.test") == 0 && t->received == 2 && t->hops == 1);
+            snprintf(out, cap, "Cookie: second=2\r\n");
+        }
+    } else {
+        snprintf(out, cap, "%s", t->output ? t->output : "");
+    }
+    return true;
+}
+static os64_fetch_verdict_t cookie_hop(void *ctx, const os64_fetch_hop_t *hop)
+{
+    cookie_test_t *t = ctx;
+    CHECK(t->received == 2 && hop->status == 302);
+    t->hops++;
+    return OS64_FETCH_HOP_DEFAULT;
+}
+static bool cookie_cancel(void *ctx) { return ((cookie_test_t *)ctx)->cancelled; }
+static void case_cookies(void)
+{
+    for (int mode = 0; mode < 3; mode++) {
+        reset(); chunk_mode = mode;
+        peer_add("a.test", 80, reply_len("302 Found",
+            "Set-Cookie: one=1; Expires=Wed, 09 Jun 2027 10:18:14 GMT\r\n"
+            "sEt-CoOkIe:\t two=2; Path=/ \t\r\nLocation: http://b.test/next\r\n", ""));
+        peer_add("b.test", 80, reply_len("200 OK", "Set-Cookie: three=3\r\n", page));
+        cookie_test_t t = { .chain = true };
+        os64_fetch_options_t opt = { .headers_for = cookie_headers, .on_set_cookie = cookie_received,
+            .on_hop = cookie_hop, .ctx = &t, .extra_headers = "Authorization: secret\r\n" };
+        os64_fetch_t *f = os64_fetch_open("http://a.test/login", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && t.asked == 2 && t.received == 3);
+        CHECK(strcmp(t.values[0], "one=1; Expires=Wed, 09 Jun 2027 10:18:14 GMT") == 0);
+        CHECK(strcmp(t.values[1], "two=2; Path=/") == 0 && strcmp(t.values[2], "three=3") == 0);
+        CHECK(strcmp(t.hosts[0], "a.test") == 0 && strcmp(t.hosts[1], "a.test") == 0 && strcmp(t.hosts[2], "b.test") == 0);
+        CHECK(strstr(request_n(0), "Cookie: first=1\r\n") && strstr(request_n(0), "Authorization: secret\r\n"));
+        CHECK(strstr(request_n(1), "Cookie: second=2\r\n") && !strstr(request_n(1), "Authorization:"));
+        os64_fetch_close(f); CHECK(closes == 2);
+
+        // 1xx and trailers cannot set a cookie; an oversized cookie is
+        // ignored whole rather than shortened into a different value.
+        reset(); chunk_mode = mode;
+        char wire[7000];
+        size_t n = (size_t)snprintf(wire, sizeof(wire), "HTTP/1.1 103 Early Hints\r\nSet-Cookie: interim=1\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nSet-Cookie: large=");
+        memset(wire + n, 'a', 4000); n += 4000;
+        snprintf(wire + n, sizeof(wire) - n, "\r\nSet-Cookie: kept=1\r\n\r\n1\r\nx\r\n0\r\nSet-Cookie: trailer=1\r\n\r\n");
+        peer_add("a.test", 80, wire); t = (cookie_test_t){0};
+        opt = (os64_fetch_options_t){ .on_set_cookie = cookie_received, .ctx = &t };
+        f = os64_fetch_open("http://a.test/", &opt);
+        uint8_t out[10];
+        CHECK(slurp(f, out, sizeof(out), 0) == 1 && os64_fetch_status(f) == OS64_FETCH_OK);
+        CHECK(t.received == 1 && strcmp(t.values[0], "kept=1") == 0);
+        os64_fetch_close(f);
+    }
+    const char *bad[] = {"Cookie: x\n", "Cookie: x\r\n\r\n", "Authorization: leak\r\n",
+        "Proxy-Authorization: leak\r\n", "Host: evil\r\n", "Content-Length: 0\r\n",
+        "Cookie: a\r\ncookie: b\r\n", "Referer: a\r\nReferer: b\r\n"};
+    for (size_t i = 0; i < sizeof(bad)/sizeof(bad[0]) + 3; i++) {
+        reset(); cookie_test_t t = {0};
+        if (i < sizeof(bad)/sizeof(bad[0])) t.output = bad[i];
+        else if (i == sizeof(bad)/sizeof(bad[0])) t.unterminated = true;
+        else if (i == sizeof(bad)/sizeof(bad[0]) + 1) t.fail = true;
+        else t.output = "Cookie: duplicate\r\n";
+        os64_fetch_options_t opt = { .headers_for = cookie_headers, .ctx = &t };
+        if (i == sizeof(bad)/sizeof(bad[0]) + 2) opt.extra_headers = "Cookie: static\r\n";
+        os64_fetch_t *f = os64_fetch_open("http://a.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_REQUEST_FAILED && dials == 0 && t.asked == 1);
+        os64_fetch_close(f);
+    }
+    // Both sources, secure/direct vs unencrypted HTTP and HTTPS-via-proxy.
+    for (int dynamic = 0; dynamic < 2; dynamic++) {
+        for (int transport = 0; transport < 3; transport++) {
+            reset();
+            if (transport == 2) set_env("https_proxy", "http://proxy.test:3128/");
+            peer_add(transport == 2 ? "proxy.test" : "a.test", transport == 2 ? 3128 : transport == 1 ? 443 : 80,
+                     reply_len("200 OK", "", page));
+            cookie_test_t t = { .output = "rEfErEr:\tHtTpS://from.test/private\r\n" };
+            os64_fetch_options_t opt = { .ctx = &t };
+            if (dynamic) opt.headers_for = cookie_headers;
+            else opt.extra_headers = t.output;
+            os64_fetch_t *f = os64_fetch_open(transport ? "https://a.test/" : "http://a.test/", &opt);
+            CHECK(os64_fetch_status(f) == OS64_FETCH_OK);
+            CHECK((strstr(request_n(0), "HtTpS://from.test/private") != NULL) == (transport == 1));
+            if (dynamic) CHECK(t.encrypted == (transport == 1));
+            os64_fetch_close(f);
+        }
+    }
+    // A protocol error accompanying plaintext must not set a cookie from
+    // that read, even when the HTTP head itself fits in the prefix.
+    reset(); cookie_test_t terminal = {0};
+    peer_t *bad_tls = peer_add("a.test", 443, reply_len("200 OK", "Set-Cookie: bad=1\r\n", ""));
+    bad_tls->tls_bad_prefix = true;
+    os64_fetch_options_t guarded = { .on_set_cookie = cookie_received, .ctx = &terminal };
+    os64_fetch_t *guard = os64_fetch_open("https://a.test/", &guarded);
+    CHECK(os64_fetch_status(guard) == OS64_FETCH_BAD_HEAD && terminal.received == 0);
+    os64_fetch_close(guard);
+    for (int where = 0; where < 2; where++) {
+        reset(); cookie_test_t stop = { .cancel_header = where == 0, .cancel_cookie = where == 1 };
+        peer_add("a.test", 80, reply_len("302 Found", "Set-Cookie: first=1\r\nSet-Cookie: second=2\r\nLocation: http://b.test/\r\n", ""));
+        guarded = (os64_fetch_options_t){ .headers_for = cookie_headers, .on_set_cookie = cookie_received,
+                                        .cancelled = cookie_cancel, .ctx = &stop };
+        guard = os64_fetch_open("http://a.test/", &guarded);
+        CHECK(os64_fetch_status(guard) == OS64_FETCH_INTERRUPTED);
+        CHECK(dials == where && closes == where && stop.received == (unsigned)where);
+        os64_fetch_close(guard);
+    }
+    // Later malformed fields fail the fetch, but prior cookie delivery is
+    // deliberately streaming, not a transaction that can be rolled back.
+    reset(); cookie_test_t t = {0};
+    peer_add("a.test", 80, "HTTP/1.1 200 OK\r\nSet-Cookie: kept=1\r\nBad Header: x\r\n\r\n");
+    os64_fetch_options_t opt = { .on_set_cookie = cookie_received, .ctx = &t, .cancelled = cookie_cancel };
+    os64_fetch_t *f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_BAD_HEAD && t.received == 1);
+    os64_fetch_close(f);
+}
+
 int main(int argc, char **argv)
 {
     unsigned seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 12345u;
@@ -1181,6 +1326,7 @@ int main(int argc, char **argv)
     case_round6();
     case_round7();
     case_post();
+    case_cookies();
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }

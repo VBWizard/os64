@@ -6,6 +6,14 @@ machinery — streams, heads, bodies, buffer ownership across a read
 boundary — so it is Fable-tier by BROWSER.md's own split, and Codex rounds
 are Chris's call. Written as a packet so the board shows it.*
 
+## Delivery
+
+Implemented in two dependent slices: `codex/fetch-post`, then
+`codex/fetch-cookies`. The public API is in `fetch.h` and `http.h`;
+LIBFETCH.md records the ownership and callback contracts. Evidence is in
+`docs/fetch-post-evidence.md` and `docs/fetch-cookies-evidence.md`.
+The cookie jar and connection reuse remain outside this packet.
+
 ## Starting point for this packet
 
 - `os64_fetch_open(url, opt)` sends GET only. `http_request` (`http.c`)
