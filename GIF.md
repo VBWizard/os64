@@ -27,8 +27,11 @@ library, kernel code, or libos64 dependency on an image codec.
   including a used transparent index outside that table.
 - A structure pass validates block lengths, fixed extension headers, image
   rectangles, code-size bytes, and a final trailer before pixel allocation.
-  Bytes after the trailer are refused. Duplicate or dangling graphic controls,
-  reserved image/GCE bits, and reserved disposal methods are malformed.
+  Bytes after the trailer are refused. Duplicate graphic controls, reserved
+  image/GCE bits, and reserved disposal methods are malformed. A well-formed
+  unused graphic control before the trailer is tolerated for legacy encoder
+  compatibility, including when separated from the trailer by a comment.
+  Its settings do not affect the preceding frame or create another frame.
 - Comment, Application, Plain Text, and unknown extensions are skipped by
   their sub-block framing. Plain Text is not drawn. It consumes pending graphic
   control settings, as do unknown labels in the graphic-rendering range;
