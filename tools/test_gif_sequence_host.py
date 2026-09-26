@@ -48,7 +48,7 @@ def reference(data,path):
 
 def guest_vectors(work, destination):
     lines=['// Generated from tools/test_gif_sequence_host.py; composed frames cross-checked with Pillow.']
-    for i,name in enumerate(['disposal-2-loop-1','restore-chain']):
+    for i,name in enumerate(['disposal-2-loop-1','restore-chain','trailing-gce-comment']):
         for ext,label in [('gif','data'),('seq','expected')]:
             data=(work/(name+'.'+ext)).read_bytes()
             lines.append(f'static const uint8_t sequence_{label}_{i}[] = {{')
@@ -93,6 +93,15 @@ def run(work, real):
     check('local-palette-change',animation(3,3,[local[0],bytes(changed)],1))
     frames=[frame(2,2,[1]*4),frame(2,2,[2]*4,disposal=3)]
     valid=animation(2,2,frames,0)
+    trailing_control=b'!\xf9\x04\x09\x7b\0\x02\0'
+    for suffix in (b'', b'!\xfe'+base.blocks(b'encoder comment')):
+        name='trailing-gce-comment' if suffix else 'trailing-gce'
+        data=valid[:-1]+trailing_control+suffix+b';'
+        check(name,data,expected=valid)
+        check(name+'-junk',data+b'junk',6)
+        check(name+'-missing-trailer',data[:-1],6)
+        check(name+'-no-raster',valid[:25]+trailing_control+suffix+b';',6)
+    check('trailing-gce-bad-terminator',valid[:-1]+trailing_control[:-1]+b'\x01;',6)
     bad=bytearray(frames[1]);bad[-2]=0 # Remove EOI from this later frame.
     check('later-corruption',animation(2,2,[frames[0],bad],0),expected=valid,bad=True)
     check('bad-gce',base.gif(1,1,extensions=b'!\xf9\x04\x02\0\0\0\0'),7)
