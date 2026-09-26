@@ -75,3 +75,23 @@ form replay consent, and method-aware download advice.
 
 Native TLS upload timing is covered by the scripted host seam; this round
 has no new native-TLS guest or P5 evidence.
+
+## PR #140 second review follow-up
+
+The upload budget is now an idle deadline: accepted request bytes and
+successful TLS transport steps renew it, including ciphertext drain after
+plaintext acceptance. Empty or interrupted waits do not renew it. Clock
+rate/monotonicity and cancellation are checked before renewing. Handshake
+and read budgets retain their existing per-operation behavior.
+An interrupted plain response poll returns to the cancellation check before
+any further write.
+
+Both new regression cases failed against `22da1a68` before the correction:
+continuous upload timed out, and a cancelled response poll queued bytes.
+They pass afterward under ASan/UBSan. Transport tests also cover forty-second
+plain/TLS uploads, forty-second ciphertext drain, a stall after progress,
+clock-rate change and backward time during successful TLS progress, and the
+existing timeout/ownership/early-response cases. The driver suite passed
+641 checks per seed over two seeds with leak detection. Strict full build,
+whitespace and stale-reference checks passed. These timing/cancellation
+claims use deterministic host seams; the prior guest evidence remains above.

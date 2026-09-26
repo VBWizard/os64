@@ -11,7 +11,10 @@ static uint64_t now, waits[4096];
 static unsigned closes, frees, steps, writes, reads;
 static bool cancel, fail_clock, create_fail, stall, interrupt_once, cancel_wait, drift, change_clock, rewind_clock;
 static os64_tls_status_t read_status;
-static size_t ready, sent;
+static size_t ready, sent, stall_after;
+static unsigned drain_steps;
+static bool cancel_poll;
+static uint64_t last_accept;
 static char captured[128];
 
 static bool cancelled_p(void *ctx) { (void)ctx; return cancel; }
@@ -28,11 +31,14 @@ int64_t os64_write_for(int32_t h,const void *p,size_t n,uint64_t ms)
     if(stall) { wait_for(ms); return OS64_ERR_TIMEOUT; }
     if(interrupt_once) { interrupt_once=false; wait_for(ms); return OS64_INTERRUPTED; }
     if(n>2)n=2;
-    memcpy(captured+sent,p,n);sent+=n;now+=1000;return (int64_t)n;
+    memcpy(captured+sent,p,n);sent+=n;now+=1000;last_accept=now;
+    if(stall_after && sent>=stall_after) stall=true;
+    return (int64_t)n;
 }
 int64_t os64_read_for(int32_t h,void *p,size_t n,uint64_t ms)
 {
     assert(h==7);reads++;
+    if(!ms && cancel_poll) { cancel=true; return OS64_INTERRUPTED; }
     if(!ms && !ready) return OS64_ERR_TIMEOUT;
     if(stall) { wait_for(ms); return OS64_ERR_TIMEOUT; }
     if(interrupt_once) { interrupt_once=false; wait_for(ms); return OS64_INTERRUPTED; }
@@ -50,16 +56,19 @@ os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t,uint64_t ms)
     if(t->closing) return t->status=OS64_TLS_CLEAN_EOF;
     if(!stall) {
         t->flags|=OS64_TLS_HANDSHAKE_DONE|OS64_TLS_SEND_PLAIN;
-        t->flags&=~OS64_TLS_SEND_CIPHER;
+        if(drain_steps) drain_steps--;
+        if(!drain_steps) t->flags&=~OS64_TLS_SEND_CIPHER;
+        return OS64_TLS_OK;
     }
     return OS64_TLS_NEED_PROGRESS;
 }
 os64_tls_transfer_t os64_tls_transport_write(os64_tls_transport *t,const void *p,size_t n)
 {
     writes++;
-    if(stall) return (os64_tls_transfer_t){OS64_TLS_NEED_PROGRESS,0};
+    if(stall || (t->flags & OS64_TLS_SEND_CIPHER)) return (os64_tls_transfer_t){OS64_TLS_NEED_PROGRESS,0};
     if(n>2)n=2;
-    memcpy(captured+sent,p,n);sent+=n;t->flags|=OS64_TLS_SEND_CIPHER;
+    memcpy(captured+sent,p,n);sent+=n;t->flags|=OS64_TLS_SEND_CIPHER;last_accept=now;
+    if(stall_after && sent>=stall_after) stall=true;
     return (os64_tls_transfer_t){OS64_TLS_OK,n};
 }
 os64_tls_transfer_t os64_tls_transport_read(os64_tls_transport *t,void *p,size_t n)
@@ -79,7 +88,7 @@ void os64_tls_transport_free(os64_tls_transport *t) {assert(t==&transport);frees
 
 static fetch_transport_t open_io(bool tls)
 {
-    now=0;closes=frees=steps=writes=reads=0;sent=ready=0;
+    now=last_accept=0;closes=frees=steps=writes=reads=drain_steps=0;sent=ready=stall_after=0;cancel_poll=false;
     cancel=fail_clock=create_fail=stall=interrupt_once=cancel_wait=drift=change_clock=rewind_clock=false;
     read_status=OS64_TLS_OK;
     transport=(struct os64_tls_transport){.flags=OS64_TLS_HANDSHAKE_DONE|OS64_TLS_SEND_PLAIN};
@@ -90,8 +99,60 @@ static bool write_all(fetch_transport_t *io, const void *p, size_t n)
     size_t accepted = 0;
     return fetch_transport_write(io, p, n, &accepted) == FETCH_WRITE_DONE;
 }
-int main(void)
+static void upload_idle(void)
 {
+    char body[80]; memset(body,'u',sizeof(body));
+    for(unsigned tls=0;tls<2;tls++) {
+        // Forty seconds of small successful writes is not thirty idle seconds.
+        fetch_transport_t io=open_io(tls);
+        assert(write_all(&io,body,sizeof(body)));
+        assert(now>FETCH_IDLE_MS_DEFAULT && sent==sizeof(body));
+        assert(!memcmp(captured,body,sizeof(body)) && !io.silent);
+        fetch_transport_close(&io,false);
+
+        // Positive progress followed by a stall gets one idle budget after
+        // the last accepted bytes, not a fresh budget on each empty retry.
+        io=open_io(tls);stall_after=10;
+        assert(!write_all(&io,body,sizeof(body)));
+        assert(sent==10 && io.silent && now-last_accept==FETCH_IDLE_MS_DEFAULT);
+        fetch_transport_close(&io,false);
+    }
+    // All plaintext is accepted, but ciphertext drains for forty seconds.
+    fetch_transport_t io=open_io(true);drain_steps=40;
+    assert(write_all(&io,body,2));
+    assert(sent==2 && steps==40 && now==40000 && !io.silent);
+    fetch_transport_close(&io,false);
+
+    // Resetting the idle origin must not mask clock corruption during a
+    // successful TLS progress step.
+    io=open_io(true);change_clock=true;
+    assert(!write_all(&io,body,2) && io.error.status==OS64_TLS_BAD_TIME);
+    fetch_transport_close(&io,false);
+    io=open_io(true);now=5000;rewind_clock=true;
+    assert(!write_all(&io,body,2) && io.error.status==OS64_TLS_BAD_TIME);
+    fetch_transport_close(&io,false);
+    puts("PASS progressing uploads, stalled uploads, TLS drain and clock guards");
+}
+static void interrupted_poll(void)
+{
+    fetch_transport_t io=open_io(false);cancel_poll=true;
+    size_t accepted=0;
+    assert(fetch_transport_write(&io,"secret",6,&accepted)==FETCH_WRITE_ERROR);
+    assert(io.error.status==OS64_TLS_CANCELLED && accepted==0 && sent==0 && writes==0);
+    fetch_transport_close(&io,false);
+    puts("PASS interrupted response poll cancels before a write");
+}
+int main(int argc, char **argv)
+
+{
+    if(argc==2) {
+        if(!strcmp(argv[1],"upload-idle")) upload_idle();
+        else if(!strcmp(argv[1],"poll-cancel")) interrupted_poll();
+        else return 2;
+        return 0;
+    }
+    upload_idle();
+    interrupted_poll();
     fetch_transport_t failed = open_io(true);
     transport.status = OS64_TLS_CERTIFICATE;
     assert(!fetch_transport_complete(&failed, true));
