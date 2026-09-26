@@ -14,6 +14,7 @@
 
 #include "garb/garb.h"
 #include "garb/select.h"
+#include "garb/values.h"
 #include "html/html.h"
 
 // ── Allocation, and failing it on purpose ───────────────────────────────
@@ -161,6 +162,61 @@ static void an_plus_b(const char *text, size_t len)
     garb_free(&r);
 }
 
+// ── Values ──────────────────────────────────────────────────────────────
+
+// A colour as Color 4 serializes it, or null: the suite's color_*.json.
+static void color(const char *text, size_t len)
+{
+    garb_parsed_t r;
+    garb_color_t c;
+    garb_parse_values(text, len, &r);
+    if (!garb_read_color(r.values, r.nvalues, &c)) {
+        puts("null");
+    } else if (c.current) {
+        puts("\"currentcolor\"");
+    } else {
+        garb_val_t v = {0};
+        v.kind = GARB_V_COLOR;
+        v.color = c;
+        char b[128];
+        garb_val_dump(&v, b, sizeof(b));
+        printf("\"%s\"\n", b);
+    }
+    garb_free(&r);
+}
+
+// One declaration: the longhands it sets, `invalid`, or `unknown`; with
+// `quirks` first on the line, read as quirks mode reads it.
+static void declaration(const char *text, size_t len)
+{
+    bool quirks = len > 7 && memcmp(text, "quirks ", 7) == 0;
+    if (quirks) {
+        text += 7;
+        len -= 7;
+    }
+    garb_parsed_t r;
+    if (garb_parse_one_declaration(text, len, &r) != GARB_OK) {
+        puts("unparsable");
+        garb_free(&r);
+        return;
+    }
+    garb_set_t sets[GARB_SETS_MAX];
+    int32_t n = garb_read_declaration(&r, &r.decl, quirks, sets);
+    if (n < 0) {
+        puts("invalid");
+    } else if (n == 0) {
+        puts("unknown");
+    } else {
+        for (int32_t i = 0; i < n; i++) {
+            char b[512];
+            garb_val_dump(&sets[i].value, b, sizeof(b));
+            printf("%s%s: %s", i ? "; " : "", garb_prop_name(sets[i].prop), b);
+        }
+        putchar('\n');
+    }
+    garb_free(&r);
+}
+
 // Every element in document order, template contents aside.
 static const os64_html_node_t **s_elements;
 static size_t s_nelements, s_elcap;
@@ -237,6 +293,10 @@ static void parse_all(const char *text, size_t len)
         }
         (void)garb_items_of(&r, rule->block, rule->nblock, &items, &n);
         (void)garb_selectors_parse(&r, rule->prelude, rule->nprelude, OS64_HTML_NO_QUIRKS);
+        garb_set_t sets[GARB_SETS_MAX];
+        for (int32_t k = 0; k < n; k++)
+            if (items[k].kind == GARB_ITEM_DECL)
+                (void)garb_read_declaration(&r, &items[k].decl, false, sets);
     }
     garb_free(&r);
 }
@@ -288,6 +348,10 @@ int main(int argc, char **argv)
         char *environment = field(&elen, &eabsent);
         if (strcmp(argv[1], "anplusb") == 0)
             an_plus_b(text, len);
+        else if (strcmp(argv[1], "color") == 0)
+            color(text, len);
+        else if (strcmp(argv[1], "decl") == 0)
+            declaration(text, len);
         else if (strcmp(argv[1], "select") == 0)
             select_page(text, len, protocol);
         else

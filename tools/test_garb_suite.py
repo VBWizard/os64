@@ -139,7 +139,67 @@ def main():
         print(f'FAIL An+B: the driver answered {len(lines)} of {len(pairs)}')
         anb_failed += 1
     print(f'An+B: {len(pairs)} cases, {anb_failed} failed')
-    sys.exit(1 if failed or anb_failed else 0)
+
+    # Colours (Color 4 § 4-8) in the forms GARB.md takes: names, hex, rgb(),
+    # hsl(), hwb(). lab(), lch(), oklab(), oklch() and color() are booked,
+    # so their files are not run. Channels compare to 1e-4: the suite prints
+    # six decimals of arithmetic the library does its own way.
+    color_failed = color_total = 0
+    for name in ['color_keywords_3', 'color_keywords_4', 'color_hexadecimal_3',
+                 'color_hexadecimal_4', 'color_hsl_3', 'color_hsl_4', 'color_hwb_4']:
+        cases = json.loads((SUITE / f'{name}.json').read_text(encoding='utf-8'))
+        pairs = list(zip(cases[0::2], cases[1::2]))
+        feed = b''.join(record(given.encode('utf-8')) + b'-1\n-1\n' for given, _ in pairs)
+        run = subprocess.run([driver, 'color'], input=feed, capture_output=True)
+        lines = run.stdout.decode().splitlines()
+        if run.returncode != 0 or len(lines) != len(pairs):
+            print(f'FAIL {name}: the driver answered {len(lines)} of {len(pairs)}')
+            color_failed += 1
+            continue
+        for (given, want), line in zip(pairs, lines):
+            color_total += 1
+            if not same_color(json.loads(line), want):
+                color_failed += 1
+                if color_failed <= 20:
+                    print(f'FAIL {name}: {given!r} want {want} got {line}')
+    print(f'colours: {color_total} cases, {color_failed} failed')
+
+    # Property grammars, worked by hand (tools/garb_corpus/declarations.txt).
+    cases = []
+    for line in (SUITE.parent / 'garb_corpus' / 'declarations.txt').read_text().splitlines():
+        if line.startswith('IN: '):
+            cases.append([line[4:], None])
+        elif line.startswith('OUT: '):
+            cases[-1][1] = line[5:]
+    feed = b''.join(record(given.encode('utf-8')) + b'-1\n-1\n' for given, _ in cases)
+    run = subprocess.run([driver, 'decl'], input=feed, capture_output=True)
+    lines = run.stdout.decode().splitlines()
+    decl_failed = 0
+    for (given, want), line in zip(cases, lines):
+        if line != want:
+            decl_failed += 1
+            print(f'FAIL declaration: {given}\n  want {want}\n  got  {line}')
+    if run.returncode != 0 or len(lines) != len(cases):
+        print(f'FAIL declarations: the driver answered {len(lines)} of {len(cases)}')
+        decl_failed += 1
+    print(f'declarations: {len(cases)} cases, {decl_failed} failed')
+    sys.exit(1 if failed or anb_failed or color_failed or decl_failed else 0)
+
+
+def channels(text):
+    if not isinstance(text, str) or '(' not in text:
+        return None
+    head, body = text.split('(', 1)
+    return head, [float(x) for x in body.rstrip(')').split(',')]
+
+
+def same_color(got, want):
+    if got is None or want is None or got == want:
+        return got == want
+    g, w = channels(got), channels(want)
+    if g is None or w is None or g[0] != w[0] or len(g[1]) != len(w[1]):
+        return False
+    return all(abs(a - b) <= 1e-4 for a, b in zip(g[1], w[1]))
 
 
 if __name__ == '__main__':

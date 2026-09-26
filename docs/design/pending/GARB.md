@@ -64,9 +64,10 @@ that the properties libflow lays out can reach.
 | Selectors | 3, and 4's `:is()`, `:where()`, `:not(<list>)`, `:has()`, `nth-child(… of S)` | 1 | Whole for Level 3; `:hover`, `:focus`, `:active`, `:focus-within`, `:focus-visible` and `:target` never match until a face restyles on them (booked); `:visited` never matches, by privacy as the browsers do; `:has()` matched by brute force; a namespace prefix other than `*` or none needs `@namespace` (booked) |
 | CSS Cascading and Inheritance | 4 | 1 | Origins (user agent = libflow's chapter, author), importance, specificity, order of appearance, `style` attributes, `inherit`/`initial`/`unset`/`revert`, shorthands expanding to longhands, `@import`; Level 5's `@layer` booked |
 | CSS Custom Properties | 1 | 1 | Whole: `--name` inherited, `var()` with fallback, cycles invalid at computed-value time |
-| CSS Values and Units | 3, and 4's `min()`/`max()`/`clamp()` | 1 | `px`, `em`, `rem`, `ex`, `ch`, `%`, `vw`, `vh`, `vmin`, `vmax`, `pt`, `pc`, `cm`, `mm`, `in`, `q`; `calc()` |
+| Environment Variables | 1 | 1 | `env()` replaced as `var()` is; this machine defines none of the variables, so its fallback is what a page gets |
+| CSS Values and Units | 3, and 4's `min()`/`max()`/`clamp()` | 1 | `px`, `em`, `rem`, `ex`, `ch`, `%`, `vw`, `vh`, `vmin`, `vmax`, `pt`, `pc`, `cm`, `mm`, `in`, `q`; `calc()`. Level 4's small, large and dynamic viewport units are the viewport's (yonder has no toolbar that comes and goes), and Containment 3's container units fall back to it as the specification says for an element with no container |
 | Media Queries | 4 | 1 | `@media` and `<link media>`: media types, `width`/`height` in both spellings (`max-width:` and `width <=`), `orientation`, `prefers-color-scheme` (light), `prefers-reduced-motion` (reduce), `and`/`not`/`only`/`,` |
-| CSS Color | 4 | 1 | Named colours, `#rgb[a]`/`#rrggbb[aa]`, `rgb()`/`rgba()`/`hsl()`/`hsla()` in both syntaxes, `transparent`, `currentColor`. libflow's colours are opaque XRGB; alpha is honoured as opaque or fully transparent until pile 3 blends (booked there) |
+| CSS Color | 4 | 1 | Named colours, `#rgb[a]`/`#rrggbb[aa]`, `rgb()`/`rgba()`/`hsl()`/`hsla()` in both syntaxes, `hwb()`, `transparent`, `currentColor`. `lab()`, `lch()`, `oklab()`, `oklch()` and `color()` are booked: a declaration using one is invalid, so the page's fallback before it stands. libflow's colours are opaque XRGB; alpha is honoured as opaque or fully transparent until pile 3 blends (booked there) |
 | CSS 2.1 properties | — | 1 | Every property libflow's struct already holds, and their shorthands: `display`, `font`/`font-*`, `color`, `background`/`background-color`, `margin`, `padding`, `border`/`border-*`, `width`, `height`, `text-align`, `vertical-align`, `white-space`, `text-decoration`, `visibility`, `list-style`/`list-style-*`, `border-spacing`, `border-collapse`, `caption-side`, `float`, `clear` |
 | New in libflow, still pile 1 | — | 1 | The cheap ones that make modern pages readable: `box-sizing`, `min-`/`max-width`/`-height`, `line-height`, `text-indent`, `text-transform`, `overflow` (clipping), `background-image`/`-repeat`/`-position` (Y5b's tiler), `white-space: pre-line` |
 | Positioned layout | 3 | 2 | `position`, offsets, `z-index`, stacking contexts |
@@ -184,6 +185,22 @@ danlegt.com's own page (a local copy): 923 generated selectors, and all
 896 of its sheets' real selectors — 878 valid, the rest its vendor
 pseudo-elements, refused on both sides — agree.
 
+**G2b, as run.** Colour: css-parsing-tests' keyword, hexadecimal, hsl and
+hwb files, 1,822 cases, all pass (channels to 1e-4; the suite prints six
+decimals of its own arithmetic). Grammars: 157 declarations worked by hand
+from the specifications (`tools/garb_corpus/declarations.txt`) — the box,
+borders, sizes and `calc()`, colours, display, fonts and the `font`
+shorthand, text, lists, tables, `background` with its layers and positions,
+the CSS-wide keywords reaching every longhand of a shorthand, quirks mode's
+unitless lengths — all pass; eight mutants of the grammar code are all
+caught, three of them only after cases were added for them (a `+` without
+white space before it, legacy `rgb()` mixing numbers and percentages, a
+negative percentage). Real-world: danlegt.com's 3,766 declarations — 2,048
+read, 1,655 name properties libgarb does not read yet, and the 63 held
+over for the cascade are exactly those with `var()` or `env()`. That run
+found four gaps before this commit: the dynamic and container units, env(),
+and background layer lists.
+
 ## Booked before the first line
 
 | Debt | Why it waits | Trigger |
@@ -195,5 +212,8 @@ pseudo-elements, refused on both sides — agree.
 | wend honouring `display: none` | libgarb proven in one face before a second leans on it | pile 1 proven |
 | User stylesheets | a person's own sheet is the user origin; nobody has asked | a person who asks |
 | `unicode-range` | the draft reads it from component values, in `@font-face`, not as a token | pile 3's web fonts |
+| `lab()`, `lch()`, `oklab()`, `oklch()`, `color()` | each needs its colour space converted to sRGB and gamut-mapped (Color 4 § 13) | a page whose colours are only written that way |
+| Every layer of a background | yonder draws one picture behind a box, so the first layer of a list is kept and the rest are only checked | a page whose look depends on a lower layer |
+| Quirks mode's hashless colour (`color: ff0000`) | quirks mode's unitless lengths are read; its colours without a `#` are not yet | a quirks-mode page written that way |
 | Encodings beyond libhtml's | a sheet in ISO-8859-2 or Shift_JIS keeps its ASCII and loses the rest | the first sheet whose text is not ASCII and not UTF-8 |
 | Alpha blending of colours | libflow's colours are opaque | pile 3 |

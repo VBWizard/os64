@@ -1,0 +1,340 @@
+# libgarb's property grammars (GARB.md, G2b), worked by hand from the
+# specifications: each IN is one declaration, each OUT the longhands it
+# sets, `invalid` when the value does not fit its property's grammar, or
+# `unknown` for a property libgarb does not read. `quirks` before an IN
+# reads it as quirks mode does. Run by tools/test_garb_suite.py.
+
+# ── The box (CSS 2.1 § 8) ──
+IN: margin: 10px
+OUT: margin-top: 10px; margin-right: 10px; margin-bottom: 10px; margin-left: 10px
+IN: margin: 1px 2px
+OUT: margin-top: 1px; margin-right: 2px; margin-bottom: 1px; margin-left: 2px
+IN: margin: 1px 2px 3px
+OUT: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; margin-left: 2px
+IN: margin: 1px 2px 3px 4px
+OUT: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; margin-left: 4px
+IN: margin: 0 auto
+OUT: margin-top: 0px; margin-right: auto; margin-bottom: 0px; margin-left: auto
+IN: margin: -5px 10%
+OUT: margin-top: -5px; margin-right: 10%; margin-bottom: -5px; margin-left: 10%
+IN: margin: 0.5em 1e2px
+OUT: margin-top: 0.5em; margin-right: 100px; margin-bottom: 0.5em; margin-left: 100px
+IN: margin: 1px 2px 3px 4px 5px
+OUT: invalid
+IN: margin: red
+OUT: invalid
+IN: margin-top: 1.5EM
+OUT: margin-top: 1.5em
+IN: margin: inherit
+OUT: margin-top: inherit; margin-right: inherit; margin-bottom: inherit; margin-left: inherit
+IN: margin: inherit 1px
+OUT: invalid
+IN: padding: 0
+OUT: padding-top: 0px; padding-right: 0px; padding-bottom: 0px; padding-left: 0px
+IN: padding: -1px
+OUT: invalid
+IN: padding: 5
+OUT: invalid
+IN: quirks padding: 5
+OUT: padding-top: 5px; padding-right: 5px; padding-bottom: 5px; padding-left: 5px
+IN: quirks margin-top: 7
+OUT: margin-top: 7px
+IN: quirks color: 7
+OUT: invalid
+
+# ── Borders (Backgrounds 3 § 4) ──
+IN: border: 1px solid red
+OUT: border-top-width: 1px; border-top-style: solid; border-top-color: rgb(255, 0, 0); border-right-width: 1px; border-right-style: solid; border-right-color: rgb(255, 0, 0); border-bottom-width: 1px; border-bottom-style: solid; border-bottom-color: rgb(255, 0, 0); border-left-width: 1px; border-left-style: solid; border-left-color: rgb(255, 0, 0)
+IN: border: solid
+OUT: border-top-width: medium; border-top-style: solid; border-top-color: currentcolor; border-right-width: medium; border-right-style: solid; border-right-color: currentcolor; border-bottom-width: medium; border-bottom-style: solid; border-bottom-color: currentcolor; border-left-width: medium; border-left-style: solid; border-left-color: currentcolor
+IN: border: red red
+OUT: invalid
+IN: border-top: thick double #00f
+OUT: border-top-width: thick; border-top-style: double; border-top-color: rgb(0, 0, 255)
+IN: border-left: none
+OUT: border-left-width: medium; border-left-style: none; border-left-color: currentcolor
+IN: border-width: thin medium
+OUT: border-top-width: thin; border-right-width: medium; border-bottom-width: thin; border-left-width: medium
+IN: border-style: dotted
+OUT: border-top-style: dotted; border-right-style: dotted; border-bottom-style: dotted; border-left-style: dotted
+IN: border-color: red green blue yellow
+OUT: border-top-color: rgb(255, 0, 0); border-right-color: rgb(0, 128, 0); border-bottom-color: rgb(0, 0, 255); border-left-color: rgb(255, 255, 0)
+IN: border-left-width: -1px
+OUT: invalid
+IN: border-bottom-style: wavy
+OUT: invalid
+IN: border: initial
+OUT: border-top-width: initial; border-right-width: initial; border-bottom-width: initial; border-left-width: initial; border-top-style: initial; border-right-style: initial; border-bottom-style: initial; border-left-style: initial; border-top-color: initial; border-right-color: initial; border-bottom-color: initial; border-left-color: initial
+
+# ── Sizes and calc() (Sizing 3, Values 3 § 8, Values 4 § 10) ──
+IN: width: auto
+OUT: width: auto
+IN: width: 50%
+OUT: width: 50%
+IN: width: -10px
+OUT: invalid
+IN: width: -10%
+OUT: invalid
+IN: padding-left: -5%
+OUT: invalid
+IN: width: 10
+OUT: invalid
+IN: quirks width: 10
+OUT: width: 10px
+IN: width: fit-content
+OUT: width: fit-content
+IN: width: 10PX
+OUT: width: 10px
+IN: max-width: none
+OUT: max-width: none
+IN: min-height: auto
+OUT: min-height: auto
+IN: width: calc(100% - 20px)
+OUT: width: calc(100% - 20px)
+IN: width: calc(10px + 5)
+OUT: invalid
+IN: width: calc(10px+5px)
+OUT: invalid
+IN: width: calc(10px+ 5px)
+OUT: invalid
+IN: width: calc(1em - 5px)
+OUT: width: calc(1em - 5px)
+IN: width: calc(2 * 10px)
+OUT: width: calc(2 * 10px)
+IN: width: calc(10px / 2)
+OUT: width: calc(10px / 2)
+IN: width: calc(10px / 2px)
+OUT: invalid
+IN: width: calc(10px * 2px)
+OUT: invalid
+IN: width: calc((100% - 10px) / 3)
+OUT: width: calc((100% - 10px) / 3)
+IN: height: min(50vh, 300px)
+OUT: height: min(50vh, 300px)
+IN: height: clamp(10px, 5vw + 1em, 40px)
+OUT: height: clamp(10px, 5vw + 1em, 40px)
+IN: height: clamp(10px, 40px)
+OUT: invalid
+IN: height: 100dvh
+OUT: height: 100vh
+IN: font-size: clamp(12px, 2.3cqw, 14px)
+OUT: font-size: clamp(12px, 2.3vw, 14px)
+IN: width: calc(100vw - env(safe-area-inset-left, 0px))
+OUT: invalid
+IN: box-sizing: border-box
+OUT: box-sizing: border-box
+
+# ── Colours (Color 4) ──
+IN: color: red
+OUT: color: rgb(255, 0, 0)
+IN: color: RED
+OUT: color: rgb(255, 0, 0)
+IN: color: #abc
+OUT: color: rgb(170, 187, 204)
+IN: color: rgb(10 20 30 / 50%)
+OUT: color: rgba(10, 20, 30, 0.5)
+IN: color: rgb(255, 50%, 0)
+OUT: invalid
+IN: color: rgb(255 50% 0)
+OUT: color: rgb(255, 127.5, 0)
+IN: color: rgba(100%, 0%, 0%, .25)
+OUT: color: rgba(255, 0, 0, 0.25)
+IN: color: currentColor
+OUT: color: currentcolor
+IN: color: transparent
+OUT: color: rgba(0, 0, 0, 0)
+IN: color: lab(50 20 30)
+OUT: invalid
+IN: color: red blue
+OUT: invalid
+IN: color: inherit
+OUT: color: inherit
+IN: background-color: #fff8
+OUT: background-color: rgba(255, 255, 255, 0.533333)
+
+# ── Display and flow ──
+IN: display: block
+OUT: display: block
+IN: display: BLOCK
+OUT: display: block
+IN: display: inline-flex
+OUT: display: inline-flex
+IN: display: run-in
+OUT: invalid
+IN: float: left
+OUT: float: left
+IN: clear: both
+OUT: clear: both
+IN: overflow: hidden
+OUT: overflow-x: hidden; overflow-y: hidden
+IN: overflow: hidden auto
+OUT: overflow-x: hidden; overflow-y: auto
+IN: overflow: sideways
+OUT: invalid
+IN: visibility: hidden
+OUT: visibility: hidden
+
+# ── Fonts (Fonts 4 § 2-3) ──
+IN: font-family: Arial
+OUT: font-family: "Arial"
+IN: font-family: "Times New Roman", serif
+OUT: font-family: "Times New Roman", serif
+IN: font-family: Helvetica   Neue, sans-serif
+OUT: font-family: "Helvetica Neue", sans-serif
+IN: font-family: inherit
+OUT: font-family: inherit
+IN: font-family: Arial, inherit
+OUT: invalid
+IN: font-family: 10px
+OUT: invalid
+IN: font-family: Arial,
+OUT: invalid
+IN: font-size: 12px
+OUT: font-size: 12px
+IN: font-size: larger
+OUT: font-size: larger
+IN: font-size: 150%
+OUT: font-size: 150%
+IN: font-size: -1px
+OUT: invalid
+IN: quirks font-size: 12
+OUT: font-size: 12px
+IN: font-weight: bold
+OUT: font-weight: bold
+IN: font-weight: 700
+OUT: font-weight: 700
+IN: font-weight: 1001
+OUT: invalid
+IN: font-weight: 0
+OUT: invalid
+IN: font-style: oblique 10deg
+OUT: font-style: oblique
+IN: line-height: 1.5
+OUT: line-height: 1.5
+IN: line-height: 120%
+OUT: line-height: 120%
+IN: line-height: -1
+OUT: invalid
+IN: font: 12px Arial
+OUT: font-style: normal; font-variant: normal; font-weight: normal; font-size: 12px; line-height: normal; font-family: "Arial"
+IN: font: bold italic 13px/1.4 "MS Sans Serif", Tahoma, sans-serif
+OUT: font-style: italic; font-variant: normal; font-weight: bold; font-size: 13px; line-height: 1.4; font-family: "MS Sans Serif", "Tahoma", sans-serif
+IN: font: italic small-caps 700 condensed 16px serif
+OUT: font-style: italic; font-variant: small-caps; font-weight: 700; font-size: 16px; line-height: normal; font-family: serif
+IN: font: 12px
+OUT: invalid
+IN: font: Arial 12px
+OUT: invalid
+IN: font: bold bold 12px x
+OUT: invalid
+IN: font: menu
+OUT: font-family: system-ui; font-size: medium; font-weight: normal; font-style: normal; font-variant: normal; line-height: normal
+IN: font: inherit
+OUT: font-style: inherit; font-variant: inherit; font-weight: inherit; font-size: inherit; line-height: inherit; font-family: inherit
+
+# ── Text ──
+IN: text-align: center
+OUT: text-align: center
+IN: text-align: -webkit-center
+OUT: invalid
+IN: vertical-align: middle
+OUT: vertical-align: middle
+IN: vertical-align: -2px
+OUT: vertical-align: -2px
+IN: white-space: pre-line
+OUT: white-space: pre-line
+IN: text-decoration: underline
+OUT: text-decoration-line: underline
+IN: text-decoration: none
+OUT: text-decoration-line: none
+IN: text-decoration: underline overline
+OUT: text-decoration-line: underline overline
+IN: text-decoration: underline red wavy
+OUT: text-decoration-line: underline
+IN: text-decoration: underline underline
+OUT: invalid
+IN: text-indent: -10px
+OUT: text-indent: -10px
+IN: text-indent: 5% hanging
+OUT: text-indent: 5%
+IN: text-transform: uppercase
+OUT: text-transform: uppercase
+
+# ── Lists and tables ──
+IN: list-style: none
+OUT: list-style-type: none; list-style-position: outside; list-style-image: none
+IN: list-style: square inside
+OUT: list-style-type: square; list-style-position: inside; list-style-image: none
+IN: list-style: url(dot.gif)
+OUT: list-style-type: disc; list-style-position: outside; list-style-image: url(dot.gif)
+IN: list-style: none url(x.png)
+OUT: list-style-type: none; list-style-position: outside; list-style-image: url(x.png)
+IN: list-style-type: Decimal
+OUT: list-style-type: decimal
+IN: list-style-type: "-"
+OUT: list-style-type: "-"
+IN: border-spacing: 2px
+OUT: border-spacing: 2px 2px
+IN: border-spacing: 1px 3px
+OUT: border-spacing: 1px 3px
+IN: border-spacing: -1px
+OUT: invalid
+IN: border-collapse: collapse
+OUT: border-collapse: collapse
+IN: caption-side: bottom
+OUT: caption-side: bottom
+
+# ── Backgrounds (Backgrounds 3 § 3) ──
+IN: background: red
+OUT: background-color: rgb(255, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+IN: background: url(bg.gif) no-repeat center
+OUT: background-color: rgba(0, 0, 0, 0); background-image: url(bg.gif); background-repeat: no-repeat; background-position-x: 50%; background-position-y: 50%
+IN: background: #008080 url(bg.gif) repeat
+OUT: background-color: rgb(0, 128, 128); background-image: url(bg.gif); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+IN: background: url(a.png) right 10px top / cover no-repeat, blue
+OUT: background-color: rgb(0, 0, 255); background-image: url(a.png); background-repeat: no-repeat; background-position-x: calc(100% - 10px); background-position-y: 0%
+IN: background: linear-gradient(red, blue)
+OUT: background-color: rgba(0, 0, 0, 0); background-image: linear-gradient(...); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+IN: background: red, blue
+OUT: invalid
+IN: background: none
+OUT: background-color: rgba(0, 0, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+IN: background-position: right bottom
+OUT: background-position-x: 100%; background-position-y: 100%
+IN: background-position: top
+OUT: background-position-x: 50%; background-position-y: 0%
+IN: background-position: 10px 20px
+OUT: background-position-x: 10px; background-position-y: 20px
+IN: background-position: left 10px top 20px
+OUT: background-position-x: 10px; background-position-y: 20px
+IN: background-position: top left
+OUT: background-position-x: 0%; background-position-y: 0%
+IN: background-position: bottom 10px right
+OUT: background-position-x: 100%; background-position-y: calc(100% - 10px)
+IN: background-position: left right
+OUT: invalid
+IN: background-position: 10px top
+OUT: background-position-x: 10px; background-position-y: 0%
+IN: background-image: url("x.png")
+OUT: background-image: url(x.png)
+IN: background-repeat: no-repeat repeat
+OUT: background-repeat: repeat-y
+IN: background-image: url(a.png), linear-gradient(red, blue)
+OUT: background-image: url(a.png)
+IN: background-image: url(a.png), 10px
+OUT: invalid
+IN: background-position: 0 0, 17px 11px, 50% 50%
+OUT: background-position-x: 0px; background-position-y: 0px
+IN: background-position-x: right 5px
+OUT: background-position-x: calc(100% - 5px)
+
+# ── What libgarb does not read here ──
+IN: position: absolute
+OUT: unknown
+IN: grid-template-columns: 1fr
+OUT: unknown
+IN: --panel: 10px
+OUT: unknown
+# A value holding var() is the cascade's to read, once the variable is known.
+IN: color: var(--x)
+OUT: invalid
