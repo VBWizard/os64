@@ -361,8 +361,10 @@ a shorter options struct are not ABI compatible with this library.
 
 ## Per-hop cookie and Referer handoff
 
-The library carries fields; the navigator owns cookie parsing, storage,
-matching, expiration and referrer policy. There is no cookie jar in libfetch.
+The library carries fields; the navigator session, libway (packet 06), owns
+cookie parsing, storage, matching, expiration and Referer composition/policy.
+The jar belongs to each libway session; wend and yonder share that implementation.
+There is no cookie jar in libfetch or in wend's packet 05 integration.
 The callbacks and `on_hop` run synchronously on the thread calling `open`,
 with the options' `ctx`. They must not re-enter the same fetch. URLs and
 header values passed to callbacks are borrowed for that call; copy anything

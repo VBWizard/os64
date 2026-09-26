@@ -12,6 +12,9 @@ Implemented in two dependent slices: `codex/fetch-post`, then
 `codex/fetch-cookies`. The public API is in `fetch.h` and `http.h`;
 LIBFETCH.md records the ownership and callback contracts. Evidence is in
 `docs/fetch-post-evidence.md` and `docs/fetch-cookies-evidence.md`.
+The cookie jar and Referer composition belong to the libway session from
+packet 06, shared by wend and yonder. This packet provides their wire hooks;
+wend's integration adds POST submission, not a private cookie jar.
 The cookie jar and connection reuse remain outside this packet.
 
 ## Starting point for this packet
