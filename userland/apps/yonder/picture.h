@@ -9,6 +9,7 @@
 
 #include "fetch/fetch.h"
 #include "image/image.h"
+#include "image/sequence.h"
 #include "jobs.h"
 
 // What one picture job may cost, declared to the pool: libimage's file cap,
@@ -25,9 +26,14 @@ typedef struct {
     char url[OS64_FETCH_URL_MAX];
 } yonder_picture_job_t;
 
+// The picture: a still image, or — a GIF with more than one frame — a
+// sequence, its first frame ready (YONDER.md § Y5b). `cost` is what
+// keeping it costs, in bytes, for the page's account.
 typedef struct {
     os64_image_status_t status;     // OK, or why there is no picture
-    os64_image_t image;
+    os64_image_t image;             // when `sequence` is NULL
+    os64_image_sequence_t *sequence;
+    size_t cost;
 } yonder_picture_t;
 
 int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);
