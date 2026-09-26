@@ -24,12 +24,9 @@
 // have imagined: the ability to hand a whole region back to the operating
 // system from the middle of the heap.
 //
-// THREADS. Threads in a task share one address space and therefore share
-// this heap, so every entry point takes gHeapLock. That makes malloc the
-// first genuine consumer of shared mutable state in os64 userland (DEBTS'
-// thread rows predicted it would be), which is why the lock lives here,
-// sized to its one consumer, rather than in a general mutex API designed
-// before anything needed one.
+// Threads share the regions, free list and accounting. Allocator operations
+// protect that state with gLock, using the shared spin-and-yield primitive
+// in os64/lock.h. Runtime initialization precedes thread creation.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -39,6 +36,7 @@
 #include "os64/io.h"       // os64_write, os64_serial_log
 #include "os64/fmt.h"      // os64_snprintf
 #include "os64/mem.h"      // os64_map / os64_unmap / os64_heap_publish
+#include "os64/lock.h"
 #include "os64/proc.h"     // os64_exit, os64_yield, os64_getenv
 #include "os64/str.h"      // os64_memset / os64_memcpy / os64_streq
 
@@ -164,7 +162,7 @@ static heap_region_t *gRegions;      // the ledger, newest first
 static heap_free_t   *gFreeList;     // one list, first-fit (Chris's ruling)
 static bool           gInited;
 static bool           gCheckAlways;  // HEAPCHECK=1 in the environment
-static volatile uint32_t gLock;
+static os64_lock_t gLock = OS64_LOCK_INIT;
 
 // The report the kernel renders as /proc/<pid>/heap. Its ADDRESS is what gets
 // registered, so it must be a plain global: .bss, fixed for the life of the
@@ -173,37 +171,11 @@ static os64_heap_report_t gReport;
 
 // ── The lock ────────────────────────────────────────────────────────────────
 //
-// Test-and-set, spin a little, then yield. Deliberately NOT a general mutex:
-// os64's mutex will be designed when a program (not a library) needs one, and
-// designing it here — for a critical section measured in dozens of
-// instructions — would be designing it for the wrong customer. The spin count
-// is small because the holder never blocks: no syscall is made with this lock
-// held except the map/unmap that grows or shrinks the heap.
+// Shared spin-and-yield lock; heap metadata stays protected through the
+// map/unmap operations that grow or shrink its regions.
 
-#define HEAP_SPINS_BEFORE_YIELD 64
-
-static void heap_lock(void)
-{
-	for (;;)
-	{
-		if (__atomic_exchange_n(&gLock, 1u, __ATOMIC_ACQUIRE) == 0u)
-			return;
-
-		for (int i = 0; i < HEAP_SPINS_BEFORE_YIELD; i++)
-		{
-			if (__atomic_load_n(&gLock, __ATOMIC_RELAXED) == 0u)
-				break;
-			__asm__ volatile("pause");
-		}
-		if (__atomic_load_n(&gLock, __ATOMIC_RELAXED) != 0u)
-			os64_yield();
-	}
-}
-
-static void heap_unlock(void)
-{
-	__atomic_store_n(&gLock, 0u, __ATOMIC_RELEASE);
-}
+static void heap_lock(void) { os64_lock_acquire(&gLock); }
+static void heap_unlock(void) { os64_lock_release(&gLock); }
 
 // ── Complaint and death ─────────────────────────────────────────────────────
 

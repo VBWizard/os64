@@ -1,0 +1,7 @@
+textspawn: batch 0 count 50 ticks 43 hz 100 warmup
+textspawn: batch 1 count 50 ticks 63 hz 100
+textspawn: batch 2 count 50 ticks 111 hz 100
+textspawn: batch 3 count 50 ticks 188 hz 100
+textspawn: batch 4 count 50 ticks 53 hz 100
+textspawn: batch 5 count 50 ticks 83 hz 100
+textspawn: PASS

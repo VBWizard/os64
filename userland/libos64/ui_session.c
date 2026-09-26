@@ -1,4 +1,5 @@
 #include "os64/ui.h"
+#include "os64/lock.h"
 #include "os64/appearance.h"
 #include "os64/io.h"
 #include "os64/proc.h"
@@ -15,7 +16,7 @@
 // Serialize reads, validation, and publication so sibling window threads do
 // not race the cache. Call from ordinary event loops, not signal handlers.
 // Contenders yield because the holder performs bounded file I/O and parsing.
-static unsigned s_lock;
+static os64_lock_t s_lock = OS64_LOCK_INIT;
 static bool s_observed;
 static uint64_t s_seen, s_usable, s_fields;
 static bool s_inherited;
@@ -30,11 +31,11 @@ static int publish_fonts_locked(const os64_font_config_t *, uint64_t *published)
 
 static void session_lock(void)
 {
-    while (__atomic_exchange_n(&s_lock, 1u, __ATOMIC_ACQUIRE)) os64_yield();
+    os64_lock_acquire(&s_lock);
 }
 static void session_unlock(void)
 {
-    __atomic_store_n(&s_lock, 0u, __ATOMIC_RELEASE);
+    os64_lock_release(&s_lock);
 }
 
 static int refresh_locked(uint64_t hint)

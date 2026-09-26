@@ -10,8 +10,8 @@ together.*
 ## Where it stands
 
 Half A is implemented on `codex/gui-doorbell`; its API and validation
-record are in [GUI_DOORBELL.md](../../GUI_DOORBELL.md). Half B remains
-the next implementation slice. The substrate notes below describe the
+record are in [GUI_DOORBELL.md](../../GUI_DOORBELL.md). Half B is implemented
+on `codex/work-pool`; [WORK.md](../../WORK.md) describes its API. The substrate notes below describe the
 starting point for this packet.
 
 - **libfetch blocks.** `os64_fetch_open` dials, handshakes and reads the
@@ -68,7 +68,7 @@ the syscall table, and libui's delivery of the new event to the
 application. Fable-tier for review: it is a ring boundary and a queue the
 compositor writes under `kGuiLock`.
 
-**Half B (libos64): the work pool, and it knows NOTHING about fetching.**
+**Half B (libos64 + timed pipe read plumbing): the work pool, and it knows NOTHING about fetching.**
 Own `os64/work.h` + `work.c` and `os64/lock.h` in libos64, a test
 application under `/tests`, and the thread-safety audit below. General
 job scheduling is the library's; every fetch-specific policy — the trust
@@ -133,7 +133,8 @@ for in 1973 — so the pool needs no new kernel verb: the UI thread writes
 ONE BYTE per job into the pipe, a worker's blocking read takes a byte and
 claims the oldest queued job from the table under the lock, and closing
 the pipe's write end is how the pool is told to finish (each worker reads
-0 and returns). **A submit never blocks the UI**: a pipe write blocks
+0 and returns). **Submit does not wait for a worker or pipe capacity**:
+the metadata lock may briefly contend, but a pipe write waits for capacity
 only when the pipe is full, so the job table holds at most `PIPE_CAPACITY`
 (64 KiB today, one byte a job) entries and a submit past a FULL TABLE is
 refused with a zero id rather than written — the caller keeps its
@@ -141,16 +142,15 @@ own list and resubmits on the next reap, which yonder does with its
 image list. The pool's SHARED STATE — the job table — is guarded by the
 spin-and-yield lock the heap and ui_session already carry privately,
 lifted into one shared header (`os64/lock.h`: acquire, release, try —
-deliberately not a mutex with a sleeper list, since the sections here
-are a few dozen instructions and thread.h's warning about designing a
-mutex for the wrong customer stands). The API is what a general
+with no sleeper list; the pool's critical sections scan at most 256
+fixed slots). The API is what a general
 consumer needs and no more:
 
 The creating UI thread owns the public pool operations: submit, cancel,
 reap and destroy are serialized on that thread. Workers run callbacks
 and use the internal queue machinery; callbacks must not re-enter this
 pool's public operations. Pipe I/O, `run` and `release` execute outside
-the table lock. Creation requires `1 <= workers <= PIPE_CAPACITY` and
+the table lock. Creation requires `1 <= workers <= 32`, below `PIPE_CAPACITY` and
 fails cleanly if its threads, tables or pipes cannot be allocated.
 
 ```c
@@ -203,11 +203,10 @@ named in review:**
   happens when the message is lost and the honest answer must be
   "nothing".
 - **Bounded workers, bounded memory, and the bound is DECLARED — and
-  CHARGED UNTIL THE BYTES LEAVE THE POOL.** Four workers by default (a
+  CHARGED UNTIL THE BYTES LEAVE THE POOL.** Four workers are the recommended starting point (a
   page's images arrive in parallel enough; forty threads for forty images
   is forty kernel stacks for nothing). Every job declares `reserve`, its
-  peak bytes; a job too big for the cap alone is refused at submit by
-  name; admission waits until the charged total plus the job's fits
+  peak bytes; a job too big for the cap alone is refused at submit; admission waits until the charged total plus the job's fits
   under `reserve_cap`. The charge is taken at ADMISSION and dropped when
   the job LEAVES — at reap, when ownership of the product passes to the
   caller, or at the pool's own `release` — and NOT when `run` returns: a
@@ -222,7 +221,10 @@ named in review:**
   and pixel caps make that a number: a decoded image is larger than its
   file, and the reservation says so). The pool counts what it was told
   and nothing else; a job that lies about its reserve is the job's bug,
-  and the audit says so.
+  and the audit says so. Pool metadata, worker stacks and inputs allocated
+  before submission are outside this charge; callers bound queued input
+  storage separately. Include library contexts and scratch in the declared
+  callback budget.
 - **Space notifications carry bounded credits.** A worker that cannot
   admit its job checks the predicate and records itself as waiting under
   the table lock, then unlocks and reads ONE byte from a second, shared
@@ -306,8 +308,9 @@ named in review:**
   wants the product must not
   cancel. That one sentence is the whole ownership rule for the
   cancelled half.
-- **Ids carry a generation.** A slot's generation increments on every
-  reuse; an id whose generation does not match its slot is refused by
+- **Ids carry a generation.** The implementation packs a pool-wide 56-bit
+  submission serial and an 8-bit slot index. It refuses at serial exhaustion;
+  each reuse therefore has a different generation; an id whose generation does not match its slot is refused by
   cancel. Reap returns the completed job's id so the caller can associate
   it with its request; it does not take an id to look up. A face that
   navigated away cancels its page's jobs by the ids it holds and forgets
@@ -357,9 +360,10 @@ grep that proved it: libfetch, libtls (BearSSL's contexts are per
 connection; its trust anchors are read-only), libos64's `dial` and the
 DNS resolver (`resolve.c` — its cache, if it has one, is the one place a
 static is likely; a lock or a per-thread answer, decided in the report),
-`url.c`, `str.c`, libimage and the three codecs, libgzip. A non-const
-static found anywhere on that path is a finding, fixed or locked before
-the pool ships. The heap's comment is corrected to the lock's real name
+`url.c`, `str.c`, libimage and the three codecs, libgzip. Shared mutable state found on that path needs synchronization or a
+per-job owner before the pool ships. An immutable pointer table can reside
+in a writable section; the audit must inspect writes and lifetimes, not
+just qualifiers. The heap's comment is corrected to the lock's real name
 in the same change.
 
 ## Required evidence
@@ -418,7 +422,7 @@ in the same change.
   application against `tools/httptestd.py` over slirp — twenty URLs
   through four workers, all twenty bodies CRC-checked against the
   server's (the valet dialect's CRC is right there); a cancel mid-body
-  through `/slow` leaving the other nineteen whole; `/sys/net/tcp` read
+  through `/slow.txt` leaving the other nineteen whole; `/sys/net/tcp` read
   after, twenty connections in the morgue, no leak in `/sys/openfiles`.
   Under a libui window with the frame clock, the window repainting each
   arrival — screendump, because that is the whole point.
@@ -430,7 +434,7 @@ in the same change.
 
 | What | Why | Trigger |
 |---|---|---|
-| A general mutex with a sleeper list, condition variables | the spin-and-yield lock covers sections of a few dozen instructions and the pipe covers every WAIT; a sleeping mutex is a scheduler feature with a design of its own | a critical section long enough that a yield-spin measurably burns a core |
+| A general mutex with a sleeper list, condition variables | the spin-and-yield lock covers bounded scans of 256 slots and the pipe covers every WAIT; a sleeping mutex is a scheduler feature with a design of its own | a critical section long enough that a yield-spin measurably burns a core |
 | A non-blocking libfetch | threads make it unnecessary and it is a rewrite of Fable-tier machinery | never for yonder; a single-threaded consumer that cannot have threads |
 | Per-host connection limits (browsers' six) | `Connection: close` and four workers bound it already; the README's keep-alive note owns the day this matters | `/sys/net/tcp` says a host is refusing parallel connections |
 | Priority between jobs (the document before its images, images in view before those below) | one queue, FIFO, and the document is submitted first; a priority queue is a change to the pool's pipe, which carries no order but arrival | a page where the fold's images arrive last, measured |
@@ -487,3 +491,27 @@ publication and rollback serial, and the required evidence now pauses
 execution at the transitions those proofs depend on. The doorbell and
 generic pool remain separate implementation changes; these are design
 contracts and required tests, not a report of implemented validation.
+
+
+## Implementation refinements
+
+The pool fixes its table at 256 slots and permits 1–32 workers. Its bounded
+scans replace the initial estimate of a few dozen instructions per lock
+hold. Public calls remain serialized on the creating thread; pipe I/O and
+callbacks remain outside the table lock. The serial is pool-wide and stops
+before wrap. `os64_work_pool_error` reports sticky infrastructure failure
+separately from a job's verdict, so private-pipe failures have an explicit
+owner-visible outcome and cleanup path.
+
+Guest integration found that the kernel's pipe reader already accepted a
+deadline, but the read syscall rejected finite patience for pipe handles
+and passed a zero deadline. Half B therefore also wires existing timed
+pipe reads through syscall read, translates PIPE_ERR_TIMEOUT, and tests
+poll, finite timeout, buffered data and EOF at the ABI boundary. No new
+syscall is added. The earlier assumption that this slice was entirely
+userland was incorrect.
+
+The thread-safety audit is in [work-pool-evidence/audit.md](../work-pool-evidence/audit.md).
+The public guide and ownership examples are in [WORK.md](../../WORK.md).
+
+Validation results and reproducible commands: [work-pool evidence](../work-pool-evidence/README.md).

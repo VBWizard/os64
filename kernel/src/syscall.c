@@ -1861,18 +1861,12 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 	// (every honoring path checks for data BEFORE the clock, so a poll still
 	// delivers whatever already arrived).
 	//
-	// THE HONOR ROLL, joined at the merge of 2026-08-05: the console (grown
-	// on the userland branch for top's 'q') AND the three dialed net handles
-	// (grown on the net branch for ping's patience). Two branches solved the
-	// same problem for different consumers in the same week; this list is
-	// where they meet. Everywhere else a finite timeout is REFUSED rather
-	// than silently ignored — the tripwire doctrine: a pipe read that accepts
-	// a patience it won't keep is a lie with a delay. Pipes and files grow it
-	// the day a real consumer demands it there.
+	// Only handle types with deadline-aware readers accept finite patience.
+	// A refusal is safer than silently blocking past the caller's deadline.
 	uint64_t deadline = 0;
 	if (timeout_ms != OS64_WAIT_FOREVER)
 	{
-		if (h->type != HANDLE_CONSOLE_IN &&
+		if (h->type != HANDLE_CONSOLE_IN && h->type != HANDLE_PIPE_READ &&
 		    h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
 		    h->type != HANDLE_NET_ICMP && h->type != HANDLE_NET_LISTENER &&
 		    h->type != HANDLE_PTY_MASTER &&   // a STREAM master; GRID refuses the read itself
@@ -2045,13 +2039,15 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			break;
 
 		case HANDLE_PIPE_READ:
-			// Blocks until >=1 byte is available, OR the last writer closes —
-			// which returns 0, and 0 is EOF. (EOF is the absence of writers.)
+			// Waits for bytes, EOF, a signal or the caller's deadline.
+			// The last writer closing gives EOF once buffered bytes drain.
 			// Copying into a KERNEL buffer, not straight to user space, for the
 			// same reason write() does the reverse: pipe_read copies under the
 			// pipe spinlock with interrupts off, and touching user memory there
 			// could demand-page into a deadlock.
-			got = pipe_read((pipe_t *)h->object, kbuf, want, 0);   // no deadline: a plain pipe read blocks
+			got = pipe_read((pipe_t *)h->object, kbuf, want, deadline);
+			if (got == PIPE_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
 			if (got == PIPE_ERR_INTERRUPTED)
 			{
 				// A signal ended the wait on (or the way into) a pipe read:

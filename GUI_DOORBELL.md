@@ -3,8 +3,9 @@
 A worker thread can wake its application's GUI event loop with
 `os64_gui_event_ring(window, mask)`. The caller must belong to the task
 that owns the window. This is the first slice of
-[the concurrency packet](docs/yonder/07-concurrency.md); the generic work
-pool and browser fetching policies are separate work.
+[the concurrency packet](docs/completed/07-concurrency.md); the generic work
+pool is documented in [WORK.md](WORK.md). Browser fetching policies belong
+to Yonder.
 
 ## Using the callback
 
@@ -157,3 +158,6 @@ independent code review remain outstanding.
 
 Guest output is retained in
 [the doorbell evidence](docs/gui-doorbell-evidence/guest.txt).
+
+For bounded jobs, cooperative cancellation and result ownership, use the
+[background work pool](WORK.md); it rings this doorbell when its table changes.

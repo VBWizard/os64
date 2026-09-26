@@ -1,0 +1,13 @@
+# path mount ident handles
+/bin/cat / 56 0
+/home/work-handles-after.txt /home 642 1
+/lib/libjpeg.so / 233 0
+/lib/libgzip.so / 230 0
+/lib/libpng.so / 231 0
+/lib/libimage.so / 234 0
+/bin/desktop / 63 0
+/bin/cron / 61 0
+/bin/husk / 87 0
+/lib/libfreetype.so / 238 0
+/lib/libos64.so / 229 0
+/bin/logd / 91 0
