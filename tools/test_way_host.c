@@ -104,6 +104,7 @@ static way_session_t session(void)
     way_session_t s;
     memset(&s, 0, sizeof(s));
     s.name = "wend";
+    s.delayed_hint = " - press g to go";
     s.face.confirm = face_confirm;
     return s;
 }
@@ -181,11 +182,11 @@ static void judgements(void)
     judge_case("judge: a POST leaving https for http asks first",
                "<form method=post action=http://e.org/p><input type=submit></form>",
                "https://h/p", OS64_PAGE_ACTIVATE_CONTROL, WAY_ASK_SEND, WAY_QUESTION, "",
-               " e.org would get this unencrypted - send it? (y/n) ");
+               " e.org would get this unencrypted - send it?");
     judge_case("judge: a form leaving https for http asks first",
                "<form action=http://e.org/s><input type=submit></form>", "https://h/p",
                OS64_PAGE_ACTIVATE_CONTROL, WAY_ASK_SEND, WAY_QUESTION, "",
-               " e.org would get this unencrypted - send it? (y/n) ");
+               " e.org would get this unencrypted - send it?");
     judge_case("judge: a link leaving https for http does not ask",
                "<a href=http://e.org/>e</a>", "https://h/p", OS64_PAGE_ACTIVATE_LINK,
                WAY_ASK_NEVER, WAY_FETCH, "", NULL);
@@ -303,6 +304,51 @@ static void history(void)
                strcmp(crumb.url, "http://h/63") == 0, NULL);
 }
 
+// Back and Forward: the page Back leaves is where Forward goes, Forward's
+// arrival puts the page it left back on the history, and following
+// anything new empties what was ahead.
+static void forward(void)
+{
+    way_session_t s = session();
+    way_position_t at;
+    memset(&at, 0, sizeof(at));
+    way_crumb_t crumb;
+    expect("forward: nowhere to go at first",
+           !way_next(&s, &crumb) && strcmp(s.status, " there is nowhere forward to go") == 0,
+           s.status);
+    way_remember(&s, "http://h/a", &at);    // a -> b
+    way_remember(&s, "http://h/b", &at);    // b -> c
+    at.bytes[0] = 7;
+    way_went_back(&s, "http://h/c", &at);   // back from c to b
+    expect("forward: Back leaves the page ahead",
+           s.depth == 1 && way_next(&s, &crumb) && strcmp(crumb.url, "http://h/c") == 0 &&
+               crumb.position.bytes[0] == 7, NULL);
+    way_went_back(&s, "http://h/b", &at);   // back from b to a
+    expect("forward: two back, two ahead, newest last",
+           s.depth == 0 && s.ahead == 2 && way_next(&s, &crumb) &&
+               strcmp(crumb.url, "http://h/b") == 0, NULL);
+    way_went_forward(&s, "http://h/a", &at);  // forward from a to b
+    expect("forward: Forward puts the page left back on the history",
+           s.depth == 1 && strcmp(s.history[0].url, "http://h/a") == 0 && s.ahead == 1 &&
+               way_next(&s, &crumb) && strcmp(crumb.url, "http://h/c") == 0, NULL);
+    way_remember(&s, "http://h/b", &at);      // b -> somewhere new
+    expect("forward: a new way empties what was ahead", s.ahead == 0 && s.depth == 2, NULL);
+
+    // The delayed refresh's sentence carries the face's own offer.
+    way_page_t p = page_of("<meta http-equiv=refresh content=\"5; url=/x\">", "http://h/p");
+    s.delayed_hint = NULL;
+    int32_t chain = 0;
+    os64_page_request_t request;
+    way_refresh_step(&s, &p, &chain, &request);
+    expect_said("refresh: a face with nothing to offer offers nothing", &s,
+                " this page asks to send you to http://h/x in 5 seconds");
+    way_page_clear(&p);
+
+    way_leg_t leg = way_leg(&s);
+    expect("leg: the session's identity and face, an empty sentence",
+           leg.session == &s && leg.face.confirm == face_confirm && leg.status[0] == '\0', NULL);
+}
+
 // ── Typed addresses and details ─────────────────────────────────────────
 
 static void typed(void)
@@ -386,6 +432,7 @@ int main(void)
     judgements();
     refreshes();
     history();
+    forward();
     typed();
     sweep();
     expect("nothing leaked", live == 0, NULL);

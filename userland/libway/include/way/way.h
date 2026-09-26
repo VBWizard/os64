@@ -12,9 +12,13 @@
 // pure over a page and a session, which is what lets a host harness drive
 // every judgement with no network under it.
 //
-// SENTENCES. What the library has to say lands in `session->status`, the
-// face's transient line, in the house's status-row voice (a leading space,
-// no full stop). A face that shows it elsewhere trims what it likes.
+// SENTENCES. What the library has to say lands in `session->status` (or a
+// leg's, for a load), the face's transient line, in the house's status-row
+// voice (a leading space, no full stop). A face that shows it elsewhere
+// trims what it likes.
+//
+// THREADS. A session belongs to the thread that made it. A load may run on
+// another, through a way_leg_t: see way_load.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -69,14 +73,15 @@ typedef struct {
 // How the library reaches the person.
 typedef struct {
     void *ctx;
-    // Ask a yes/no question. `security` marks one where a stale or
-    // unverifiable answer could send something in clear; `refused` is the
-    // sentence for a no, NULL for none. The face owns how an answer is
-    // shown to be FRESH.
+    // Ask a yes/no question. The question says nothing about HOW to answer
+    // — a terminal's "(y/n)" is not a window's pair of buttons — so the face
+    // adds its own. `security` marks one where a stale or unverifiable
+    // answer could send something in clear; `refused` is the sentence for a
+    // no, NULL for none. The face owns how an answer is shown to be FRESH.
     bool (*confirm)(void *ctx, const char *question, bool security, const char *refused);
     // Whether to stop the fetch in flight. Asked before every wait.
     bool (*cancelled)(void *ctx);
-    // Show `session->status` NOW: a fetch takes as long as the network
+    // Show the load's sentence NOW: a fetch takes as long as the network
     // takes, and a person deserves to see what is being fetched while it
     // happens. NULL shows nothing until the face next draws.
     void (*progress)(void *ctx, const char *sentence);
@@ -91,24 +96,45 @@ typedef struct {
     const char *name;                   // how a sentence names this browser: "wend"
     const char *agent;                  // the User-Agent it sends
     const char *accept;                 // the Accept list, what it can render
+    // What the face offers for a page that asks to send the reader on after
+    // a delay, appended to the sentence saying so: wend's " - press g to
+    // go". NULL or "" offers nothing.
+    const char *delayed_hint;
     way_face_t face;
     char status[WAY_SENTENCE_MAX];      // the transient sentence
     way_crumb_t history[WAY_HISTORY_MAX];
     int32_t depth;
+    // Where Forward goes: the pages Back left, newest last. Following
+    // anything new empties it.
+    way_crumb_t forward[WAY_HISTORY_MAX];
+    int32_t ahead;
 } way_session_t;
+
+// ONE LOAD'S WORTH OF THE SESSION. A load reads the browser's identity
+// (name, agent, accept — set before the first load and never changed while
+// one runs) and writes only its own sentence, and reaches the person only
+// through its own face. So a face may run way_load on a thread other than
+// the session's: the leg is the whole of what the two share.
+typedef struct {
+    const way_session_t *session;
+    way_face_t face;
+    char status[WAY_SENTENCE_MAX];
+} way_leg_t;
+
+// A leg for `session`, with the session's own face and an empty sentence.
+way_leg_t way_leg(const way_session_t *session);
 
 // ── The I/O half ────────────────────────────────────────────────────────
 
 // Fetch and parse one address into `out`, which the caller zeroed.
 // `request` is the form a page is sending, or NULL for a GET of `url`: a
 // POST's body and content type go out with it, and must stay alive until
-// this returns. False
-// when there is nothing to show, with the reason in `session->status` and
-// `out` empty. True leaves the page in `out` and its note written; the face
-// lays it out and clears `session->status` or says what laying out found.
-// `why` (may be NULL) is the fetch's own verdict, for a face that turns a
-// failed first page into an exit code.
-bool way_load(way_session_t *session, const char *url, const os64_page_request_t *request,
+// this returns. False when there is nothing to show, with the reason in
+// `leg->status` and `out` empty. True leaves the page in `out` and its note
+// written; the face lays it out and says what laying out found. `why` (may
+// be NULL) is the fetch's own verdict, for a face that turns a failed first
+// page into an exit code.
+bool way_load(way_leg_t *leg, const char *url, const os64_page_request_t *request,
               way_page_t *out, os64_fetch_status_t *why);
 
 // ── Pages ───────────────────────────────────────────────────────────────
@@ -121,14 +147,23 @@ bool way_details_flip(way_page_t *page, const os64_html_node_t *details);
 
 // ── The history ─────────────────────────────────────────────────────────
 
-// Remembers the page being left, and where on it the person was.
+// Remembers the page being left, and where on it the person was. This is
+// a NEW way, so Forward has nowhere left to go.
 void way_remember(way_session_t *session, const char *url, const way_position_t *where);
 
 // The crumb Back would return to. False, with the sentence, when there is
-// none. The crumb stays until way_forget_last: Back is a fetch, and one
-// that fails must leave the history as it was.
+// none. The crumb stays until the face says it went: Back is a fetch, and
+// one that fails must leave the history as it was.
 bool way_last(way_session_t *session, way_crumb_t *out);
+// Back arrived and nothing is kept for Forward (wend has no Forward).
 void way_forget_last(way_session_t *session);
+// Back arrived: the crumb is spent, and the page left is where Forward goes.
+void way_went_back(way_session_t *session, const char *url, const way_position_t *where);
+
+// The crumb Forward would go to, and its arrival, the mirror of Back's:
+// the page left joins the history without emptying what is ahead.
+bool way_next(way_session_t *session, way_crumb_t *out);
+void way_went_forward(way_session_t *session, const char *url, const way_position_t *where);
 
 // ── Judgements: what to do about a request a page makes ────────────────
 

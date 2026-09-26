@@ -4,23 +4,64 @@
 // tools/test_yonder_cases.inc are worked out by hand (YONDER.md § Slices);
 // the corpus .paint files beside the pages are regression, not proof.
 
+#define _DEFAULT_SOURCE
+#include <fcntl.h>
+#include <poll.h>
+#include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "html/html.h"
 #include "page/page.h"
 #include "flow/flow.h"
 #include "os64/text.h"
+#include "bar.h"
+#include "mail.h"
 #include "paint.h"
 #include "test_libflow_fonts.h"
+#include "os64/syscall_numbers.h"
 
+// The formatter's writes to the terminal go nowhere; a mailbox's pipe is a
+// real one, so its bytes really travel.
 int64_t os64_write(int32_t handle, const void *buf, size_t len)
 {
-    (void)handle;
-    (void)buf;
-    return (int64_t)len;
+    if (handle <= 2)
+        return (int64_t)len;
+    return (int64_t)write(handle, buf, len);
+}
+
+int64_t os64_pipe(int32_t h[2])
+{
+    int fds[2];
+    if (pipe(fds) != 0)
+        return -1;
+    h[0] = fds[0];
+    h[1] = fds[1];
+    return 0;
+}
+
+int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms)
+{
+    struct pollfd p = {handle, POLLIN, 0};
+    int got = poll(&p, 1, (int)timeout_ms);
+    if (got == 0)
+        return OS64_ERR_TIMEOUT;
+    if (got < 0)
+        return -1;
+    return (int64_t)read(handle, buf, len);
+}
+
+int64_t os64_close(int32_t handle)
+{
+    return close(handle);
+}
+
+void os64_yield(void)
+{
+    sched_yield();
 }
 
 static size_t live;
@@ -265,6 +306,116 @@ static void paint_case(const char *name, const char *html, int32_t width, os64_g
 
 #include "test_yonder_cases.inc"
 
+// ── The question bar: no click made before a question may answer it ─────
+
+static void bar_cases(void)
+{
+    yonder_bar_t b = {0};
+    yonder_bar_raise(&b, 1);
+    yonder_bar_press(&b, BAR_ON_YES);
+    yonder_bar_settled(&b);
+    expect("bar: a press before arming does not complete after it",
+           yonder_bar_release(&b, BAR_ON_YES) == BAR_NOTHING, NULL);
+
+    yonder_bar_press(&b, BAR_ON_YES);
+    expect("bar: a press and release on Yes while armed is Yes",
+           yonder_bar_release(&b, BAR_ON_YES) == BAR_YES, NULL);
+
+    yonder_bar_press(&b, BAR_ON_YES);
+    expect("bar: pressed on Yes, released on No, is nothing",
+           yonder_bar_release(&b, BAR_ON_NO) == BAR_NOTHING, NULL);
+
+    yonder_bar_press(&b, BAR_ON_NO);
+    expect("bar: No is No", yonder_bar_release(&b, BAR_ON_NO) == BAR_NO, NULL);
+
+    yonder_bar_press(&b, BAR_ON_YES);
+    yonder_bar_raise(&b, 2);
+    yonder_bar_settled(&b);
+    expect("bar: a press on a replaced question does not answer the new one",
+           yonder_bar_release(&b, BAR_ON_YES) == BAR_NOTHING && b.number == 2, NULL);
+
+    yonder_bar_t down = {0};
+    yonder_bar_press(&down, BAR_ON_YES);
+    yonder_bar_raise(&down, 3);
+    expect("bar: a press queued before the question existed is nothing",
+           yonder_bar_release(&down, BAR_ON_YES) == BAR_NOTHING, NULL);
+    expect("bar: Escape is No, armed or not", yonder_bar_escape(&down) == BAR_NO, NULL);
+    yonder_bar_lower(&down);
+    expect("bar: nothing answers a bar that is down",
+           yonder_bar_escape(&down) == BAR_NOTHING &&
+               yonder_bar_press(&down, BAR_ON_YES) == BAR_NOTHING &&
+               yonder_bar_release(&down, BAR_ON_YES) == BAR_NOTHING, NULL);
+}
+
+// ── The mailbox ─────────────────────────────────────────────────────────
+
+static bool never(void *ctx)
+{
+    (void)ctx;
+    return false;
+}
+
+static bool always(void *ctx)
+{
+    (void)ctx;
+    return true;
+}
+
+// How many descriptors this process has open: a mailbox holds its pipe's
+// two until the last reference goes.
+static int open_fds(void)
+{
+    int n = 0;
+    for (int fd = 0; fd < 1024; fd++)
+        n += fcntl(fd, F_GETFD) != -1;
+    return n;
+}
+
+static void mail_cases(void)
+{
+    // The window and the job each hold it, and a drop does not know which
+    // side it is: it stays whole, pipe and all, until the last one goes.
+    {
+        size_t before = live;
+        int fds = open_fds();
+        yonder_mail_t *m = yonder_mail_new(7);
+        yonder_mail_hold(m);
+        yonder_mail_progress(m, "first");
+        yonder_mail_drop(m);
+        char out[64];
+        bool still = yonder_mail_take_progress(m, out, sizeof(out)) &&
+                     strcmp(out, "first") == 0 && yonder_mail_generation(m) == 7 &&
+                     open_fds() == fds + 2;
+        yonder_mail_drop(m);
+        expect("mail: whole until the last holder lets go, then gone with its pipe",
+               still && live == before && open_fds() == fds, NULL);
+    }
+
+    yonder_mail_t *m = yonder_mail_new(1);
+    yonder_mail_progress(m, "reading 64 KB");
+    yonder_mail_progress(m, "reading 128 KB");
+    char out[64];
+    expect("mail: progress is the newest, once",
+           yonder_mail_take_progress(m, out, sizeof(out)) && strcmp(out, "reading 128 KB") == 0 &&
+               !yonder_mail_take_progress(m, out, sizeof(out)), NULL);
+
+    uint32_t first = yonder_mail_ask(m, "one?");
+    uint32_t second = yonder_mail_ask(m, "two?");
+    uint32_t number = 0;
+    expect("mail: the window sees the newest question and its number",
+           yonder_mail_take_question(m, &number, out, sizeof(out)) && number == second &&
+               strcmp(out, "two?") == 0, NULL);
+    yonder_mail_answer(m, first, true);     // an answer to another question
+    yonder_mail_answer(m, second, false);
+    expect("mail: only the answer to THIS question is taken",
+           yonder_mail_wait(m, second, never, NULL) == false, NULL);
+    yonder_mail_answer(m, second, true);
+    expect("mail: yes is yes", yonder_mail_wait(m, second, never, NULL) == true, NULL);
+    expect("mail: a cancelled wait ends, unanswered, as No",
+           yonder_mail_wait(m, yonder_mail_ask(m, "three?"), always, NULL) == false, NULL);
+    yonder_mail_drop(m);
+}
+
 // ── The corpus ──────────────────────────────────────────────────────────
 
 static const char *const kCorpus[] = {
@@ -360,6 +511,8 @@ int main(int argc, char **argv)
         corpus(true);
     } else {
         paint_cases();
+        bar_cases();
+        mail_cases();
         corpus(false);
     }
     for (int i = 0; i < s_nfonts; i++)

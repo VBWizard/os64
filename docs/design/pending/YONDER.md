@@ -9,17 +9,17 @@ a window you can read the web in.*
 
 ## What it is
 
-`yonder` is a libui program. It links libhtml, libpage and libflow
-unchanged (and libfetch and the navigator library once there is a network
-to reach) and adds exactly two things of its own: a PAGE VIEW widget that
-paints a flow tree and scrolls it, and the window around it — a toolbar
-(back, forward, reload, the address field) above the view and a status
-line below it.
+`yonder` is a libui program. It links libhtml, libpage, libflow and libway
+(and libfetch through libway) unchanged, and adds what a window needs of
+its own: a PAGE VIEW widget that paints a flow tree and scrolls it, the
+window around it — a toolbar (back, forward, reload, stop, the address
+field) above the view, a question bar and a status line below it — and
+the running of its fetches on a work pool (§ Y3).
 
 Nothing about a page's meaning or geometry is decided here. The view asks
-libflow where a box is, libpage what a node means, and the navigator what
-to do about a click; it decides only how things LOOK on the glass and how
-a person moves around them.
+libflow where a box is, libpage what a node means, and libway what to do
+about a click; it decides only how things LOOK on the glass and how a
+person moves around them.
 
 ## The window
 
@@ -154,20 +154,177 @@ in-house (CLAUDE.md's reviewer-to-risk rule).
 |---|---|---|
 | Y1 | The page view on a LOCAL FILE: `yonder /tests/pages/hacker-news.html`, or a path typed in the address field. The painter and its four verbs, the canvas rule, borders and bevels, decorations, markers as shapes, scrolling in both directions, resize with the anchor, the status line on hover | `tools/test_yonder_host.sh`: hand-computed recordings for fixtures and a corpus regression; guest screendumps read |
 | Y2 | Packet 06: the navigator out of `wend` into its library | the packet's own evidence; `wend`'s acceptance passes unchanged |
-| Y3 | The network, through the navigator: http and https, a click follows a link, back and forward, reload, a fragment scrolls to `flow_box_for` its target, the navigator's sentences on the status line | guest: the corpus pages live, a fragment link, a redirect, a refused scheme, back after a dead link |
+| Y3 | The network, through libway on packet 07's pool: http and https, a click follows a link, back, forward, reload and stop, a fragment scrolls to its target, declared refreshes, POST (Quinn's packet 05 carried across from wend), the questions asked in the window | § Y3 below |
+| Y3b | libway's cookie jar and `Referer`, on packet 05's hooks, for both browsers | libway's host harness; logging in to a real site |
 | Y4 | Forms: every control libflow placed becomes a real libui widget at its box, moved when the page scrolls and hidden when it leaves the view (libui does not clip a child to its parent), submitted with GET through libpage's form model | a search form on the live web, typed and submitted |
 | Y5 | Images: fetched in parallel, decoded, blended, the page laid out again when a size arrives | the corpus pages with their pictures |
 
-Y1 needs none of the open packets, which is why it comes first. The rest
-wait on what the packets list: Y3 on 06 (Y2) and on packet 07; Y4's POST
-on 05; Y5 on 07's pool and on source-over blending.
+Y1 needs none of the open packets, which is why it came first. Packets 06
+(Y2), 07 (the pool and the doorbell), 02 (blending) and 03 (GIF) are in;
+05 (libfetch's request body and cookie hooks) is in review, and Y3 starts
+once it merges.
 
-**Y3 fetches on 07's pool and hears it through 07's doorbell**, so the
-window keeps painting, scrolling and answering its close box while a page
-loads. Should Y3 be ready before 07 is merged, the fallback is a fetch on
-the UI thread whose `cancelled()` polls the window's own events without
-waiting — Escape and the close box still end it; the page just does not
-repaint meanwhile — booked below with 07's merge as its trigger.
+## Y3 — the network
+
+**The window never waits for the network.** A navigation is a job on
+packet 07's pool (`os64/work.h`); the window keeps painting, scrolling and
+answering its close box while a page loads, and hears the job through
+07's doorbell (`on_doorbell`, `OS64_GUI_EVENT_DOORBELL`). One pool, made
+at start with four workers, which Y5's pictures will share.
+
+**What runs where.** The worker does `way_load`: the fetch, the parse, the
+model — libfetch, libhtml and libpage are pure over their buffers and the
+heap is thread-safe (07's audit). Everything else happens on the UI
+thread: layout, because every page shares one text context and a context
+is not for two threads at once; the history; the painting. The job's
+product is the arrived `way_page_t` with its fetch verdict and sentence;
+on the bell, the UI thread reaps it, lays it out BESIDE the page on
+screen, and swaps only when the layout exists (the rule wend has always
+kept, now in two faces).
+
+**A load gets its own leg of the session.** `way_load` writes its
+sentences into the session and reaches the person through its face, and a
+worker must not share either with the UI thread. So libway splits the
+session: the browser's identity (name, agent, accept) and the history stay
+in `way_session_t`, owned by the UI thread; a load runs on a `way_leg_t` —
+the identity by pointer, read-only, and its own face and its own sentence.
+wend builds a leg for each load and runs it where it always has, so its
+screens do not change; yonder builds one per job. (A leg of a journey, the
+part between two stops.)
+
+**The mailbox outlives whoever lets go of it last.** Progress and a
+question travel between a job and the window through a MAILBOX, and the
+job cannot own it: cancelling a job hands it to the pool's `release`,
+which may free it at once — immediately, if the job had already finished
+— and a lock protects concurrent access, not freed memory. So the mailbox
+is its own object, REFERENCE-COUNTED, one reference held by the window's
+navigation and one by the job; each side drops its own (the window when
+the navigation is superseded or reaped, the job in `release`), and the
+last to let go frees it and closes its answer pipe. Every mailbox carries
+the GENERATION of the navigation that made it, and every bell the window
+hears is checked against the current generation: a progress sentence or
+a question from an obsolete job is dropped unread.
+
+**Progress, cancel and the one navigation.** The job's face has three
+answers:
+
+- `progress` copies the sentence into the mailbox under its
+  `os64_lock_t` and rings the PROGRESS bit; the status line shows the
+  latest one on the next bell. Coalescing is right here: a person wants
+  the newest byte count, not every one.
+- `cancelled` is the POOL's predicate — the one `run` is handed — and
+  nothing else. Stop, a new navigation and the close box cancel through
+  `os64_work_cancel`, and the pool also cancels on its own infrastructure
+  failures and at destroy; a private flag would hear the first three and
+  miss the rest, and a fetch or a question still waiting at destroy would
+  hang it. Only one navigation is in flight: starting another cancels the
+  one before, and a reap for any id but the current one is released
+  unread — a cancelled job can finish before it notices.
+- `confirm` is the hard one, below.
+
+**A question asked on a worker is answered in the window.** libfetch's
+downgrade hop asks mid-fetch, on the worker. The worker publishes the
+question in the mailbox with a QUESTION NUMBER, rings the QUESTION bit, and
+waits on the mailbox's answer pipe — `os64_read_for` in 100 ms steps,
+asking the pool's predicate between them, because 07's rule is that a
+worker must never wait on something that cancellation cannot end. The UI
+thread shows the QUESTION BAR — the question and two buttons, Yes and No,
+above the status line — and writes the answer down the pipe TOGETHER WITH
+the question's number; an answer carrying any other number is not an
+answer to this question and the worker keeps waiting. Stop, a new
+navigation and the close box CANCEL the job rather than answer it, and the
+cancel ends the wait unanswered, which is No; a question replaced by a
+newer one is answered No.
+
+**A question asked on the UI thread is not a nested loop.** A form that
+leaves https for http, or a refresh that does, is judged BEFORE any job
+exists: `way_judge` returns the question instead of asking it, the window
+shows the same bar, and the navigation starts only when Yes is clicked —
+the bar's continuation is the request. So `way_may_go`, the blocking
+convenience, stays wend's; yonder asks and acts in two steps.
+
+**What makes an answer fresh** is the face's to say (libway's contract),
+and a click is NOT fresh by itself: a doorbell can be handed over ahead
+of mouse events queued before it, so a press made before the question
+existed could land on a Yes that appeared under the pointer. So the bar is
+born DISARMED (its buttons greyed). It arms only once the window has
+PAINTED it and then found its event queue EMPTY — everything waiting
+before that may have been done before the bar could be seen, so it is
+dispatched to a disarmed bar first — and Yes answers only a press AND
+release that both arrive while it is armed (`bar.c`, pure and
+host-tested). The bar reads its own clicks before libui does, so a
+button's own click never answers. Each bar is bound to its question's
+number, so a bar replaced by a newer question cannot answer the newer
+one. The keyboard's Enter is not bound to Yes; Escape is No.
+
+**A question says nothing about how to answer it.** libway's questions end
+at the question mark; wend adds its " (y/n) " (its row reads exactly as it
+did) and yonder has its buttons.
+
+**The toolbar.** Back, Forward, Reload and Stop beside the address field;
+Stop is lit while a page loads and Reload while one is shown. The address
+field takes
+what `way_typed_address` takes, and a path that begins with `/` is still a
+file, read as in Y1.
+
+**Forward is libway's**, decided now that a face asks (packet 06 booked
+it). The history grows a second stack: going Back pushes the page left
+onto it, following anything new clears it, going Forward pops it. wend
+has no Forward key and calls neither new function, so nothing changes for
+it. The position in each crumb is yonder's scroll offset, checked against
+the page that comes back before it is used.
+
+**Links.** A click — press and release on the same link — asks libpage
+(`os64_page_activate`): a FRAGMENT scrolls to `flow_box_for` its anchor
+with no fetch; a NAVIGATE goes through `way_judge`; a refusal is the
+status line's sentence. A control is Y4's; clicking one says so.
+
+**Declared refreshes** are judged on arrival, as wend does:
+`way_refresh_step`, a chain counted from the last navigation a person
+started, a JUMP a scroll, a GO a new job that leaves no history entry. The
+delayed-refresh sentence names wend's key today ("press g to go"); libway
+takes the hint from the face instead (`session->delayed_hint`), so wend's
+row reads exactly as it does and yonder's says what yonder offers.
+
+**A text/plain page** arrives as bytes. It is laid out by handing libhtml
+`<plaintext>` and then the bytes, in the encoding libway chose — the
+standard's own element for "everything after this is text", so libflow
+sees a `pre` and nothing new is needed.
+
+**POST.** Quinn's packet 05 gives libfetch a request body and wend a POST
+submission. Y3's rebase carries that behaviour into libway — `way_judge`
+stops refusing POST, `way_load` takes the method and body — so both faces
+have it, and Quinn reads the port. Three of her rules travel with it: the
+explicit warning before a POST is REPLAYED unencrypted; the download
+advice ("save it with os64get") judged on the FINAL method, because a
+reply to a POST cannot be fetched again by an address alone; and the
+request body kept alive for the whole asynchronous fetch — it belongs to
+the job's input, released by the pool's `release` and not before.
+
+**Evidence, as run.** In the guest, yonder walked the local rules server
+that proved Y2 — links clicked, the toolbar clicked — and the server's log
+matched wend's walk request for request: gopher and mailto refused in
+yonder's words, a 404 shown as a page, text/plain drawn, a picture refused
+with its os64get command, a redirector followed and skipped by Back, a
+delayed refresh offered in the address field, a chain stopped at its sixth
+page, a self-refresh refused; a fragment link scrolled with no request;
+Back and Forward fetched what they should. `httptestd.py`'s `/stall`
+(half a head, then silence) kept the window painting and scrolling while it
+hung, and Stop ended it at once ("stopped"). Against the HTTPS test peer
+(`tools/test_os64get_https_peer.py`, its roots and host names written into
+the guest's /home), `/downgrade` put the worker's question in the bar;
+Yes followed it to plain http, No stopped at the hop (libfetch hands the
+redirect itself back as the page, as wend shows it), and closing the
+window with the question up and its worker waiting shut it within three
+seconds. On the host: the bar's arming fed the sequences that must not
+answer (a press before the question, a press before arming with its
+release after, a press on a replaced question); the mailbox whole until
+its last holder lets go, then gone with its pipe; the answer bound to its
+question's number; a cancelled wait ending as No; and libway's leg,
+Forward and delayed hint. wend's walk again: identical. Not run in the
+guest: a question asked on the window's own thread (a form or refresh
+leaving https), for want of an https page with such a form — its judgement
+is libway's harness's and its bar is the same bar.
 
 ## Booked, with their triggers
 
@@ -177,11 +334,12 @@ repaint meanwhile — booked below with 07's merge as its trigger.
 | Retitling a window | there is no call for it; a window is named at creation | a page opened from the address field wants its name |
 | Unequal border widths, tested | the diagonal corner rule is exercised only where sides differ, and no producer sets one side alone until the cascade (a mutation to the corner arithmetic survives today for that reason) | the cascade |
 | An inline box's borders | the public tree does not mark a span's first and last piece | a page that needs them |
-| Layout time on big pages | Wikipedia (800 KB) lays out in 600 ms on the P5 (4 s under QEMU's emulated CPU), and the window blocks while it does | a page that makes a person wait: a libflow profiling slice, or layout on a worker once packet 07's pool is in |
+| Layout time on big pages | On the P5, Wikipedia (800 KB) lays out in 600 ms; fetch.spec.whatwg.org (1.9 MB) takes 4 s to load and 6 s to lay out again at full screen (Chris, 2026-09-25) | a libflow profiling slice, with those two pages as its benchmark |
 | Links on a page from disk | a relative address does not resolve against a `file:` page | Y3, where pages come from the network |
 | Serif, bold, italic | packet 04 | 04 merged |
 | POST and cookies, logging in | packet 05 | 05 merged |
-| A window that repaints while it fetches, IF Y3 arrives before packet 07 | the fallback above | 07 merged |
+| Layout on a worker | every page shares one text context, which one thread uses at a time; a worker would need its own, with its own fonts opened | a page whose layout makes the window stop answering for long enough to matter (fetch.spec.whatwg.org takes 6 s to lay out again at full screen on the P5) |
+| Cookies and `Referer` | slice Y3b: libway's jar on packet 05's hooks. `on_set_cookie` carries whether the reply came over an encrypted connection (Quinn, 2026-09-25), so the jar enforces `Secure` itself — libfetch hands over the facts, libway owns the policy | packet 05 merged and Y3 in |
 | Selecting and copying text | `flow_hit` and the run's own hit test give the pieces; the drag, the highlight and the clipboard are a slice of their own | the first time Chris wants to quote a page |
 | Find in page | a walk of the tree's text boxes | same |
 | Keyboard link navigation (Tab through links) | a focus ring over boxes | same |

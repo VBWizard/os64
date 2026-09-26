@@ -18,6 +18,15 @@ void way_say(way_session_t *s, const char *fmt, ...)
     va_end(args);
 }
 
+way_leg_t way_leg(const way_session_t *s)
+{
+    way_leg_t leg;
+    os64_memset(&leg, 0, sizeof(leg));
+    leg.session = s;
+    leg.face = s->face;
+    return leg;
+}
+
 // ── Pages ───────────────────────────────────────────────────────────────
 
 void way_page_clear(way_page_t *p)
@@ -57,18 +66,24 @@ bool way_details_flip(way_page_t *p, const os64_html_node_t *details)
 
 // ── The history ─────────────────────────────────────────────────────────
 
-void way_remember(way_session_t *s, const char *url, const way_position_t *where)
+static void push(way_crumb_t *stack, int32_t *depth, const char *url, const way_position_t *where)
 {
-    if (s->depth >= WAY_HISTORY_MAX) {
-        // Drop the OLDEST crumb rather than refuse to go forward: somebody
+    if (*depth >= WAY_HISTORY_MAX) {
+        // Drop the OLDEST crumb rather than refuse to go on: somebody
         // sixty-four pages in wants the sixty-fifth more than the first.
         for (int32_t i = 1; i < WAY_HISTORY_MAX; i++)
-            s->history[i - 1] = s->history[i];
-        s->depth = WAY_HISTORY_MAX - 1;
+            stack[i - 1] = stack[i];
+        *depth = WAY_HISTORY_MAX - 1;
     }
-    os64_strcopy(s->history[s->depth].url, sizeof(s->history[s->depth].url), url);
-    s->history[s->depth].position = *where;
-    s->depth++;
+    os64_strcopy(stack[*depth].url, sizeof(stack[*depth].url), url);
+    stack[*depth].position = *where;
+    (*depth)++;
+}
+
+void way_remember(way_session_t *s, const char *url, const way_position_t *where)
+{
+    push(s->history, &s->depth, url, where);
+    s->ahead = 0;
 }
 
 bool way_last(way_session_t *s, way_crumb_t *out)
@@ -85,6 +100,29 @@ void way_forget_last(way_session_t *s)
 {
     if (s->depth > 0)
         s->depth--;
+}
+
+void way_went_back(way_session_t *s, const char *url, const way_position_t *where)
+{
+    way_forget_last(s);
+    push(s->forward, &s->ahead, url, where);
+}
+
+bool way_next(way_session_t *s, way_crumb_t *out)
+{
+    if (s->ahead == 0) {
+        way_say(s, " there is nowhere forward to go");
+        return false;
+    }
+    *out = s->forward[s->ahead - 1];
+    return true;
+}
+
+void way_went_forward(way_session_t *s, const char *url, const way_position_t *where)
+{
+    if (s->ahead > 0)
+        s->ahead--;
+    push(s->history, &s->depth, url, where);
 }
 
 // ── Judgements ──────────────────────────────────────────────────────────
@@ -132,10 +170,10 @@ way_judgement_t way_judge(way_session_t *s, const os64_page_request_t *request, 
                                ? target.host : "that address";
         if (ask == WAY_ASK_SEND)
             os64_snprintf(j.question, sizeof(j.question),
-                          " %s would get this unencrypted - send it? (y/n) ", host);
+                          " %s would get this unencrypted - send it?", host);
         else
             os64_snprintf(j.question, sizeof(j.question),
-                          " this encrypted page sends you to %s unencrypted - go? (y/n) ", host);
+                          " this encrypted page sends you to %s unencrypted - go?", host);
         j.kind = WAY_QUESTION;
         j.security = true;
         j.refused = ask == WAY_ASK_SEND ? " not sent" : " stayed here";
@@ -187,8 +225,8 @@ way_refresh_t way_refresh_step(way_session_t *s, way_page_t *page, int32_t *chai
             way_say(s, " this page asks to reload itself every %u seconds",
                     (unsigned)refresh->seconds);
         else
-            way_say(s, " this page asks to send you to %s in %u seconds - press g to go",
-                    refresh->url.url, (unsigned)refresh->seconds);
+            way_say(s, " this page asks to send you to %s in %u seconds%s", refresh->url.url,
+                    (unsigned)refresh->seconds, s->delayed_hint ? s->delayed_hint : "");
         return WAY_REFRESH_NONE;
     }
     // A same-document refresh without a fragment would reload in a loop.

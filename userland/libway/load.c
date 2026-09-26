@@ -1,17 +1,29 @@
 // load.c — the I/O half of a browsing session: an address in, a page out,
 // through libfetch. Everything a face sees of it arrives as a sentence in
-// session->status or a question through the face's confirm.
+// the leg's status or a question through the leg's face.
+
+#include <stdarg.h>
 
 #include "internal.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/str.h"
 
+// A load's sentences are its leg's, never the session's: the leg may be on
+// another thread than the session (way.h § THREADS).
+__attribute__((format(printf, 2, 3))) static void leg_say(way_leg_t *s, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    os64_vsnprintf(s->status, sizeof(s->status), fmt, args);
+    va_end(args);
+}
+
 // ── What libfetch asks us ───────────────────────────────────────────────
 
 static bool fetch_cancelled(void *ctx)
 {
-    way_session_t *s = ctx;
+    way_leg_t *s = ctx;
     return s->face.cancelled != NULL && s->face.cancelled(s->face.ctx);
 }
 
@@ -20,7 +32,7 @@ static bool fetch_cancelled(void *ctx)
 // a keyboard may. Every other hop takes the library's own verdict.
 static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
 {
-    way_session_t *s = ctx;
+    way_leg_t *s = ctx;
     if (hop->kind != OS64_FETCH_HOP_DOWNGRADE)
         return OS64_FETCH_HOP_DEFAULT;
     char question[WAY_SENTENCE_MAX];
@@ -28,17 +40,17 @@ static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
     // what somebody typed, not just an address.
     os64_snprintf(question, sizeof(question),
                   hop->to_method == OS64_FETCH_METHOD_POST
-                      ? " Resend form data unencrypted to %s? (y/n) "
-                      : " %s sends you to unencrypted http - follow? (y/n) ",
+                      ? " Resend form data unencrypted to %s?"
+                      : " %s sends you to unencrypted http - follow?",
                   hop->target.host);
     bool yes = s->face.confirm(s->face.ctx, question, true, " stopped at the unencrypted hop");
     if (yes)
-        way_say(s, " following an unencrypted hop");
+        leg_say(s, " following an unencrypted hop");
     return yes ? OS64_FETCH_HOP_FOLLOW : OS64_FETCH_HOP_STOP;
 }
 
 // Says something and has the face show it now.
-static void show(way_session_t *s)
+static void show(way_leg_t *s)
 {
     if (s->face.progress != NULL)
         s->face.progress(s->face.ctx, s->status);
@@ -57,7 +69,7 @@ static bool type_is_text(const char *type)
 // Read the body into the tree. Feeding stops at the parser's first refusal —
 // which still leaves a document, because a page that was too large or too
 // deep is a page you can read the beginning of.
-static os64_html_document_t *parse_body(way_session_t *s, os64_fetch_t *f, const char *charset,
+static os64_html_document_t *parse_body(way_leg_t *s, os64_fetch_t *f, const char *charset,
                                         const char *url)
 {
     os64_html_options_t opt = os64_html_options_default();
@@ -76,7 +88,7 @@ static os64_html_document_t *parse_body(way_session_t *s, os64_fetch_t *f, const
         const os64_fetch_progress_t *progress = os64_fetch_progress(f);
         if (progress->produced >= shown + 64u * 1024u) {
             shown = progress->produced;
-            way_say(s, " reading %lu KB of %s", (unsigned long)(shown / 1024), url);
+            leg_say(s, " reading %lu KB of %s", (unsigned long)(shown / 1024), url);
             show(s);
         }
     }
@@ -85,7 +97,7 @@ static os64_html_document_t *parse_body(way_session_t *s, os64_fetch_t *f, const
 
 // Read the body as bytes. The cap is the parser's, because a page is a page
 // whichever way it is written.
-static char *read_body(way_session_t *s, os64_fetch_t *f, size_t cap, size_t *len,
+static char *read_body(way_leg_t *s, os64_fetch_t *f, size_t cap, size_t *len,
                        const char *url, bool *whole)
 {
     size_t at = 0, size = 16u * 1024u;
@@ -125,7 +137,7 @@ static char *read_body(way_session_t *s, os64_fetch_t *f, size_t cap, size_t *le
         at += (size_t)n;
         if (at >= shown + 64u * 1024u) {
             shown = at;
-            way_say(s, " reading %lu KB of %s", (unsigned long)(shown / 1024), url);
+            leg_say(s, " reading %lu KB of %s", (unsigned long)(shown / 1024), url);
             show(s);
         }
     }
@@ -162,19 +174,19 @@ static bool bytes_begin_utf8(const char *text, size_t len)
 
 // ── Loading ─────────────────────────────────────────────────────────────
 
-bool way_load(way_session_t *s, const char *url, const os64_page_request_t *request,
+bool way_load(way_leg_t *s, const char *url, const os64_page_request_t *request,
               way_page_t *out, os64_fetch_status_t *why)
 {
     bool short_of_memory = false;        // a truncation of OURS, not the wire's
     if (why)
         *why = OS64_FETCH_OK;
-    way_say(s, " fetching %s", url);
+    leg_say(s, " fetching %s", url);
     show(s);
 
     os64_html_options_t limits = os64_html_options_default();
     os64_fetch_options_t opt = {0};
-    opt.user_agent = s->agent;
-    opt.accept = s->accept;
+    opt.user_agent = s->session->agent;
+    opt.accept = s->session->accept;
     opt.max_body = limits.max_bytes;     // the same page, the same cap
     opt.cancelled = fetch_cancelled;
     opt.on_hop = hop_ask;
@@ -188,14 +200,14 @@ bool way_load(way_session_t *s, const char *url, const os64_page_request_t *requ
 
     os64_fetch_t *f = os64_fetch_open(url, &opt);
     if (!f) {
-        way_say(s, " out of memory fetching %s", url);
+        leg_say(s, " out of memory fetching %s", url);
         return false;
     }
     const os64_fetch_head_t *head = os64_fetch_head(f);
     if (!head) {
         if (why)
             *why = os64_fetch_status(f);
-        way_say(s, " %s", os64_fetch_reason(f));
+        leg_say(s, " %s", os64_fetch_reason(f));
         os64_fetch_close(f);
         return false;
     }
@@ -212,13 +224,13 @@ bool way_load(way_session_t *s, const char *url, const os64_page_request_t *requ
         // reply was to a POST, which a new GET of the address cannot fetch
         // again. The FINAL method decides: a redirect may have turned it.
         if (head->method == OS64_FETCH_METHOD_POST)
-            way_say(s, " that is %s - %s cannot display or save this POST response",
-                    type, s->name);
+            leg_say(s, " that is %s - %s cannot display or save this POST response",
+                    type, s->session->name);
         else if (way_shell_quotable(head->url_text))
-            way_say(s, " that is %s, not a page - save it with:  os64get '%s'",
+            leg_say(s, " that is %s, not a page - save it with:  os64get '%s'",
                     type, head->url_text);
         else
-            way_say(s, " that is %s, not a page - and its address holds a quote,"
+            leg_say(s, " that is %s, not a page - and its address holds a quote,"
                        " so save it by hand", type);
         os64_fetch_close(f);
         return false;
@@ -229,7 +241,7 @@ bool way_load(way_session_t *s, const char *url, const os64_page_request_t *requ
     if (html) {
         out->doc = parse_body(s, f, head->charset, url);
         if (!out->doc) {
-            way_say(s, " out of memory reading %s", url);
+            leg_say(s, " out of memory reading %s", url);
             os64_fetch_close(f);
             return false;
         }
@@ -248,7 +260,7 @@ bool way_load(way_session_t *s, const char *url, const os64_page_request_t *requ
                              ? charset_is_utf8(head->charset)
                              : bytes_begin_utf8(out->text, out->textlen);
         if (!out->text) {
-            way_say(s, " out of memory reading %s", url);
+            leg_say(s, " out of memory reading %s", url);
             os64_fetch_close(f);
             return false;
         }
