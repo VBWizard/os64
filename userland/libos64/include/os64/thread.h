@@ -7,8 +7,8 @@
 // with the program that started it: the same address space, the same
 // heap, the same globals, the same open handles. That sharing is the
 // definition, and it is also the whole danger — two threads touching one
-// variable need a lock, and os64 has no locks yet (deliberately: locks
-// get designed when a real consumer needs one, not before).
+// variable need synchronization. <os64/lock.h> provides a spin-and-yield
+// lock for bounded critical sections; <os64/work.h> owns worker jobs.
 //
 //     int64_t burn(void *arg) { ...spin... return 0; }
 //

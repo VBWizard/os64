@@ -90,6 +90,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/sleep_test",      NULL, 0x51EE600D,  0,          "sleep parks at least as long as asked" },
     { "/tests/memory_test",     NULL, 0xF3EE600D,  0,          "the memory syscall's snapshot" },
     { "/tests/threadtest",      NULL, 0x1B2EAD00,  0,          "threads: create, argument, join, shared address space" },
+    { "/tests/worktest",        NULL, 0x600C0000,  0x600C0002, "Worker pool: ownership, admission, cancellation, shutdown" },
     { "/tests/doorbelltest",    NULL, 0x600B0000,  0x600B0002, "GUI doorbell: owner, coalescing, overflow, worker wake, libui" },
     { "/tests/pintest",         NULL, 0x91A70000,  0,          "a handle closed by a sibling thread under a parked read: pipe, pty master, thread handle" },
     { "/tests/streamseat",      NULL, 0x57EA0000,  0,          "STREAM EOF refuses another seat; failed load and GRID reuse" },

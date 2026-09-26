@@ -72,11 +72,10 @@
 // meaning of zero is unsayable. Honored: the poll()/select() tradition
 // (0 = now, forever spelled out), which is the family this call belongs to.
 //
-// The timeout is REFUSED (not silently ignored) on handles that don't honor
-// it — a pipe read that accepts a patience it won't keep is a lie with a
-// delay. The console honors it today; pipes and the net's conn handles grow
-// or carry it the day their consumers demand (the net branch already
-// speaks this contract on udp/tcp/icmp).
+// Finite patience is supported by console input, pipes, UDP/TCP/ICMP,
+// listeners, STREAM PTY masters, and glass readers. Other handles refuse
+// it rather than silently blocking. Ready pipe bytes and EOF precede the
+// deadline check: a zero-time poll can still return either.
 #define OS64_WAIT_FOREVER  UINT64_C(0xFFFFFFFFFFFFFFFF)   // ((uint64_t)-1)
 
 // The empty-wait verdict: the deadline expired with nothing to show. Shares

@@ -26,6 +26,8 @@
 #include "os64/walk.h"   // os64_walk — one callback-driven directory-tree traversal
 #include "os64/date.h"   // os64_time/os64_date_now — the wall clock and calendar
 #include "os64/klog_read.h"  // os64_klog_read — the kernel log, for the log daemon
+#include "os64/lock.h"
+#include "os64/work.h"
 #include "os64/thread.h"     // os64_thread — a second line of execution
 #include "os64/dial.h"       // os64_dial("udp!10.0.2.2!53") — the network in one call
 #include "os64/crc32.h"      // os64_crc32 — telling a good transfer from a plausible one

@@ -69,12 +69,9 @@ int64_t os64_read(int32_t handle, void *buf, size_t len);
 // FOREVER for its first few weeks — SO_RCVTIMEO's wart — until the console
 // learned patience and top needed zero's honest meaning for its 'q' key.
 //
-// Granularity is the scheduler tick (10ms), so a timeout_ms of 1..10 is one
-// tick of patience, not a microsecond fuse. HONORED BY: the console, and
-// dialed net handles (udp/tcp/icmp) — the two branches that grew this
-// independently, joined at the merge of 2026-08-05. Every other handle
-// REFUSES a finite patience (negative return) rather than silently
-// blocking, until a real consumer earns it there.
+// Granularity is the active scheduler tick. Console input, pipes, network
+// connections/listeners, STREAM PTY masters and glass honor finite patience;
+// other handle types refuse it. Pipe bytes and EOF precede the deadline.
 int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms);
 
 // Read one LINE from `handle` into `buf` (cap bytes INCLUDING the

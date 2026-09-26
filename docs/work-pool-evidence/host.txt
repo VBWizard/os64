@@ -1,0 +1,10 @@
+work: completion order, products, partial creation PASS
+work: cap through DONE, FIFO, stale ids, cancellation PASS
+work: claimed older job holds younger admission PASS
+work: full table refuses, queued cancellation, destroy ten PASS
+work: 140000 notifications, P/R credits, timeout, failed writes PASS
+work: destroy retains space handles through in-flight writer PASS
+work: submit rollback, read-before-claim, 1000 cancel/reuse PASS
+work: permanent publication failure retains caller ownership PASS
+work: interrupted read retries; permanent read failure cancels safely PASS
+work host: PASS (1304 doorbells, zero live allocations/handles)
