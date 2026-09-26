@@ -522,9 +522,8 @@ static void render_checks(void)
 
 // ── What a form would send ──────────────────────────────────────────────
 
-// What a spot's activation should come to. A form is sent, refused as a
-// POST (libfetch sends no body), in no form at all, or refused because what
-// it names will not fit or will not resolve.
+// What a spot activates: a GET address, a POST body, no form, or a
+// refusal because its target will not fit or resolve.
 typedef enum {
     WANT_SENT = 0,
     WANT_NO_FORM,
@@ -694,7 +693,7 @@ static void form_checks(void)
     expect_url("which button", "<form action=/s><input type=submit name=go value=up>"
                "<input type=submit name=go value=down></form>",
                1, WANT_SENT, "http://host/s?go=down");
-    expect_url("post refused", "<form action=/s method=POST><input name=pw>"
+    expect_url("post request", "<form action=/s method=POST><input name=pw>"
                "<input type=submit></form>", 1, WANT_POST, NULL);
     expect_url("no form", "<input name=loose>", 0, WANT_NO_FORM, NULL);
     // A `dialog` form CLOSES A DIALOG and no server hears of it — whoever
@@ -1214,7 +1213,7 @@ static void form_edge_checks(void)
     // A SUBMIT CONTROL NOBODY CAN PRESS IS STILL THE FORM'S DEFAULT BUTTON,
     // and finishing the form's one box presses it — method, action and all.
     // Out of sight, it still decides that the first form POSTS (which wend
-    // refuses by name) and that the second goes where the second says.
+    // sends with a body) and that the second goes where the second says.
     expect_url("hidden default button posts", "<form action=/s>"
                "<div hidden><button formmethod=post>Go</button></div>"
                "<input name=q value=x></form>", 0, WANT_POST, NULL);

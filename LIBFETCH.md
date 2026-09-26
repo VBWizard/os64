@@ -145,9 +145,44 @@ typedef struct {
     os64_fetch_verdict_t (*on_hop)(void *ctx, const os64_fetch_hop_t *hop);  // NULL = the default verdicts
     bool (*cancelled)(void *ctx);  // NULL = never
     void *ctx;
+    os64_fetch_method_t method;    // GET = 0, or POST
+    const void *body;              // borrowed, immutable through open
+    size_t body_len;
+    const char *content_type;      // optional for POST; boundary kept verbatim
 } os64_fetch_options_t;
 ```
 
+- **POST sends the caller's bytes without a second body allocation.**
+  The body must stay alive and unchanged through `open`, including replay
+  on 307/308. NULL is legal for a zero-length POST, which sends
+  `Content-Length: 0`. GET requires no body or content type. Content type
+  is optional, copied with a 256-byte storage bound (including NUL), and
+  checked for field bytes. Invalid method/body/header options fail before
+  dialing. A send failure closes the connection without retrying a request
+  the server may already have acted on. Cancellation applies during upload.
+  Upload `idle_ms` restarts after accepted bytes or TLS transport progress,
+  including ciphertext drain. Empty/interrupted waits do not restart it;
+  a steadily progressing upload may exceed 30 seconds overall. Read calls
+  and the TLS handshake retain their bounded per-operation budgets.
+  An early final response stops the upload and remains readable (for example,
+  a 401 or 413). Informational 100/103 replies resume at the accepted byte;
+  the eight-interim-head bound also applies while uploading. This does not
+  send `Expect: 100-continue` or wait for permission before sending a body.
+- **POST follows the browser redirect table:** 301/302/303 become GET and
+  drop the body and its metadata; 307/308 resend POST unchanged.
+  `on_hop` receives `from_method` and `to_method` before its verdict.
+  The returned head's `method` identifies the request that produced it.
+  A POST redirected to GET at the same URL is a new request, not SELF.
+  Cross-origin 307/308 can replay the body; callers can stop that in
+  `on_hop`. HTTPS downgrades still require an explicit FOLLOW.
+  This follows [Fetch's redirect algorithm](https://fetch.spec.whatwg.org/#http-redirect-fetch).
+- **The renderer owns framing and routing.** `extra_headers` rejects
+  Host, Content-Length, Transfer-Encoding, Connection, Expect, Trailer,
+  TE, Upgrade, Accept-Encoding, User-Agent and Accept, and the body fields
+  Content-Type, Content-Encoding, Content-Language and Content-Location.
+  Use the dedicated options for supported fields. This avoids ambiguous
+  request framing and stale body metadata after a redirect.
+  Length handling follows [RFC 9110 section 8.6](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.6).
 - **Request headers exist because the browser is the customer being
   designed.** `User-Agent` because a meaningful fraction of the web
   refuses a request without one; `Accept` because content negotiation is
@@ -170,12 +205,12 @@ typedef struct {
   hop**, followed or not. The library does the arithmetic first — resolves
   the `Location` against the current address, parses it, and fills the
   hop with the facts: the whole target, its parse result, whether it is a
-  DOWNGRADE (https → http), a SELF (the address that just answered), an
+  DOWNGRADE (https → http), a SELF (the same address and method that just answered), an
   UNFETCHABLE scheme (`mailto:`, `ftp://`), which proxy would carry it,
   the hop count. The default verdict, applied when `on_hop` is NULL or
   returns `OS64_FETCH_HOP_DEFAULT`, is os64get's policy today: follow
   301/302/303/307/308 to a whole, fetchable, different, non-downgraded
-  address within the hop cap; stop on anything else. os64get's callback
+  request within the hop cap; stop on anything else. os64get's callback
   narrates each followed hop (its `-> address` line, silenced by `-q`)
   and otherwise returns DEFAULT. The browser's callback can allow a
   downgrade after warning, because a person at a keyboard may choose
@@ -316,3 +351,19 @@ one resident libfetch serving two programs at once.
 | Cookies | a header the browser composes; the jar is the navigator's, not the fetch's | the first site that will not show a page without one |
 | A `data:` scheme | inline images in HTML use it; it is a decoder, not a fetch | the graphical browser's first inline image |
 | Progressive `open` (head available before the body starts, on a non-blocking loop) | every consumer today runs a fetch on a thread | a single-threaded UI that must not block |
+
+### Form submission in wend
+
+`perform` passes libpage's POST body and content type through `load` to
+libfetch; the request remains alive until the synchronous open completes.
+The HTTPS-to-HTTP form confirmation also covers 307/308 replay and explicitly
+warns that the form data will be sent unencrypted. For an undisplayable POST
+response, wend reports that it cannot display or save it; a fresh `os64get`
+GET cannot recover those bytes. A POST redirected to GET can still offer the
+GET download command. Reload and
+Back fetch the stored URL using GET; wend does not retain or replay a
+submitted form from history. Cookies are a separate navigator concern.
+
+The options, hop and head structs grew: rebuild libfetch and its callers together.
+The zero-initialized source API remains GET; old binaries compiled against
+a shorter options struct are not ABI compatible with this library.

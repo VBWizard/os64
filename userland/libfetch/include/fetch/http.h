@@ -138,21 +138,31 @@ const char *http_url_reason(http_url_result_t rc);
 // request without one; `Accept` because content negotiation is how a server
 // chooses HTML over JSON; `extra_headers` as whole "Name: value\r\n" lines
 // for Referer, Range, Cookie — headers, not machinery. Every byte of all
-// three is judged by the field-byte rule (`is_field_byte`: no CR, LF or
+// header values is judged by the field-byte rule (`is_field_byte`: no CR, LF or
 // control byte), and a bad one refuses the request — a header a caller
 // composes from page content is a header an attacker composes, and a bare
 // LF in one is the request-splitting shape. Returns false if the request
 // will not fit or a header fails that rule; the caller cannot tell the two
 // apart and does not need to, since neither is the server's doing.
+typedef enum { HTTP_METHOD_GET = 0, HTTP_METHOD_POST } http_method_t;
+
 typedef struct {
     const char *user_agent;
     const char *accept;
     const char *extra_headers;   // "Name: value\r\n" lines, already terminated
+    http_method_t method;       // zero-initialized options send GET
+    size_t body_len;            // POST: sent as Content-Length, including zero
+    const char *content_type;   // POST: optional, boundary preserved verbatim
 } http_request_extras_t;
 
 bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm,
                   const http_request_extras_t *extras);
 
+// Framing, routing and body metadata belong to the renderer. extra_headers
+// cannot supply Host, Content-Length, Content-Type, Content-Encoding,
+// Content-Language, Content-Location, Transfer-Encoding, Connection, Expect,
+// Trailer, TE, Upgrade, Accept-Encoding, User-Agent or Accept.
+// GET rejects body_len/content_type; POST permits an empty body.
 // The field-byte judgement on its own, so a caller can refuse a bad header
 // BEFORE dialling anybody about it. http_request applies it again.
 bool http_request_extras_ok(const http_request_extras_t *extras);
@@ -221,6 +231,10 @@ typedef enum {
 // ends them. On return the stream is positioned at the first byte of the
 // body — including any body bytes that arrived in the same read as the head.
 http_head_result_t http_head_read(http_stream_t *s, http_response_t *out);
+#define HTTP_INTERIM_MAX 8
+// Read one head, including informational replies, to interleave upload and
+// response processing. The caller bounds the number of interim heads.
+http_head_result_t http_head_read_one(http_stream_t *s, http_response_t *out);
 
 const char *http_head_reason(http_head_result_t rc);
 

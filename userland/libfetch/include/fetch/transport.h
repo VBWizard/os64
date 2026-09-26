@@ -25,7 +25,9 @@ typedef struct {
         int upstream_error;
     } error;
     bool encrypted, silent;
-    uint32_t idle_ms;                // the deadline every wait is measured against
+    bool have_lookahead;
+    unsigned char lookahead; // preserves a plain TCP response discovered during upload
+    uint32_t idle_ms;                // upload idle limit; per-read and handshake budget
     bool (*cancelled)(void *ctx);
     void *cancel_ctx;
 } fetch_transport_t;
@@ -36,7 +38,13 @@ typedef struct {
 bool fetch_transport_open(fetch_transport_t *io, int32_t handle,
                           const os64_tls_config_t *config, uint32_t idle_ms,
                           bool (*cancel_fn)(void *ctx), void *cancel_ctx);
-bool fetch_transport_write(fetch_transport_t *io, const void *data, size_t length);
+typedef enum { FETCH_WRITE_ERROR, FETCH_WRITE_DONE, FETCH_WRITE_RESPONSE } fetch_write_result_t;
+// Resume at *sent, advancing it only for accepted bytes. RESPONSE leaves the
+// response unread for the HTTP parser; an interim head permits another call.
+// Accepted bytes and successful TLS progress renew the upload idle budget;
+// empty/interrupted waits retain it, including while draining ciphertext.
+fetch_write_result_t fetch_transport_write(fetch_transport_t *io, const void *data,
+                                           size_t length, size_t *sent);
 // http_source_fn's shape: `context` is the fetch_transport_t.
 int64_t fetch_transport_read(void *context, void *data, size_t capacity);
 // Validate transport status at a completed HTTP boundary (headers or body).
