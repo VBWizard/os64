@@ -205,7 +205,7 @@ USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
 # dependencies. The set goes on both volumes that currently carry /bin — the
 # ext2 root and the FAT lifeboat — with independent copies so damage to one
 # volume does not also eat the repair environment's libraries.
-USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libfreetype.so
+USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libgarb.so userland/bin/libfreetype.so
 
 # The font fixtures /tests/fonttest reads: two TrueType faces and two
 # OpenType/CFF ones, with their licences beside them. They land in /tests
@@ -224,7 +224,8 @@ FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSans.ttf DejaVuSans
 # The real pages the layout library is tested on, so /tests/flowdump has
 # something to lay out on a machine with no network. Where each came from
 # is in tools/html_corpus/SOURCES.json.
-PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html)
+# Pages, and the style sheets libgarb is proven on, side by side in /tests/pages.
+PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css)
 
 # Prepared compositions carry their own glyphs and finish tiles.
 FRAME_COMPOSITIONS := $(wildcard frames/*.frame)

@@ -1,0 +1,19 @@
+@charset "utf-8";
+/* The allocation sweep's sheet: one of most things a sheet can hold. */
+@import url("print.css") print;
+:root { --panel-color: #c0c0c0; --pad: calc(4px + 1em); }
+html, body { margin: 0; padding: 0 }
+body { font: 13px/1.4 "MS Sans Serif", Tahoma, sans-serif; background: #008080 url(bg.gif) repeat; }
+a:link, a:visited { color: #00e !important; text-decoration: underline }
+.panel > .title::before { content: "\2605  Welcome, \"friend\""; }
+#main[data-state~="open"] .item:nth-child(2n+1):not(.hidden) { display: flex; gap: 8px }
+@media screen and (max-width: 600px) {
+  .panel { width: 100%; margin: var(--pad, 8px) auto; }
+  @supports (display: grid) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+}
+.card { &:hover { transform: translate(-2px, 1.5e1px) rotate(3deg) } color: rgb(10 20 30 / 50%) }
+@font-face { font-family: "Pixel"; src: url(pixel.woff2) format("woff2"); }
+@keyframes blink { 0% { opacity: 1 } 50% { opacity: 0 } }
+.bad { color: red; width: 10px 20px {oops}; } } .after { color: \62 lue }
+<!-- .cdo { x: y } -->
+.unterminated { content: "abc
