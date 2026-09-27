@@ -15,6 +15,7 @@
 #include "garb/garb.h"
 #include "garb/select.h"
 #include "garb/values.h"
+#include "garb/cascade.h"
 #include "html/html.h"
 
 // ── Allocation, and failing it on purpose ───────────────────────────────
@@ -275,12 +276,81 @@ static void select_page(const char *html, size_t hlen, const char *lists)
     os64_html_document_free(doc);
 }
 
+// ── The cascade ─────────────────────────────────────────────────────────
+
+// "WIDTHxHEIGHT query…": whether the query holds in that viewport.
+static void media(const char *text)
+{
+    garb_env_t env = {0, 0};
+    int used = 0;
+    if (sscanf(text, "%lfx%lf %n", &env.width, &env.height, &used) < 2) {
+        puts("bad case");
+        return;
+    }
+    puts(garb_media_text_matches(text + used, env) ? "true" : "false");
+}
+
+// The page's style elements as sheets, in document order — libpage's list,
+// done by hand here so the harness needs no libpage.
+static void collect_styles(const os64_html_node_t *n, garb_parsed_t *sheets, garb_sheet_in_t *in,
+                           int32_t *count)
+{
+    for (; n != NULL && *count < 64; n = n->next) {
+        if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML && n->name != NULL &&
+            strcmp(n->name, "style") == 0) {
+            const char *text = n->first_child != NULL && n->first_child->kind == OS64_HTML_TEXT
+                                   ? n->first_child->text : "";
+            size_t len = n->first_child != NULL ? n->first_child->text_len : 0;
+            garb_parse_sheet_text(text, len, &sheets[*count]);
+            const os64_html_attr_t *m = os64_html_attr(n, "media");
+            in[*count].sheet = &sheets[*count];
+            in[*count].media = m != NULL ? m->value : NULL;
+            (*count)++;
+        }
+        collect_styles(n->first_child, sheets, in, count);
+    }
+}
+
+// A page and "WIDTHxHEIGHT": every element's author winners.
+static void cascade(const char *html, size_t hlen, const char *viewport)
+{
+    garb_env_t env = {800, 600};
+    if (viewport != NULL)
+        sscanf(viewport, "%lfx%lf", &env.width, &env.height);
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, html, hlen);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    static garb_parsed_t sheets[64];
+    garb_sheet_in_t in[64];
+    int32_t n = 0;
+    collect_styles(doc->document, sheets, in, &n);
+    garb_cascade_t *c = garb_cascade(in, n, doc, env);
+    size_t need = garb_cascade_dump(c, doc, NULL, 0) + 1;
+    char *out = malloc(need);
+    garb_cascade_dump(c, doc, out, need);
+    fputs(out, stdout);
+    puts(garb_cascade_incomplete(c) ? "(incomplete)" : "(end)");
+    free(out);
+    garb_cascade_free(c);
+    for (int32_t k = 0; k < n; k++)
+        garb_free(&sheets[k]);
+    os64_html_document_free(doc);
+}
+
 // ── The allocation sweep ────────────────────────────────────────────────
+
+static os64_html_document_t *s_sweep_doc;
 
 static void parse_all(const char *text, size_t len)
 {
     garb_parsed_t r;
     (void)garb_parse_sheet((const uint8_t *)text, len, NULL, NULL, &r);
+    // The whole sheet cascaded over a small page, custom properties and a
+    // style attribute included.
+    garb_sheet_in_t in = {&r, NULL};
+    garb_env_t env = {800, 600};
+    garb_cascade_free(garb_cascade(&in, 1, s_sweep_doc, env));
     for (int32_t i = 0; i < r.nitems; i++) {
         const garb_rule_t *rule = r.items[i].rule;
         if (r.items[i].kind != GARB_ITEM_RULE || rule == NULL || !rule->has_block)
@@ -309,6 +379,15 @@ static int sweep(const char *path)
     static char text[1 << 20];
     size_t len = fread(text, 1, sizeof(text), f);
     fclose(f);
+    static const char kPage[] =
+        "<!doctype html><html><body class=panel><div id=main class='item x' data-state=open>"
+        "<div class=title style='color: red; --pad: 3px; margin: var(--pad)'>t</div>"
+        "<a href=/>link</a><div class=grid>g</div><p class=card>c</div>";
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, kPage, sizeof(kPage) - 1);
+    s_sweep_doc = os64_html_parser_finish(hp);
+    size_t before = live;
     allocations = 0;
     fail_at = 0;
     parse_all(text, len);
@@ -319,12 +398,13 @@ static int sweep(const char *path)
         fail_at = at;
         parse_all(text, len);
         fail_at = 0;
-        if (live != 0) {
-            fprintf(stderr, "FAIL sweep: %zu leaked with failure at %zu\n", live, at);
+        if (live != before) {
+            fprintf(stderr, "FAIL sweep: %zu leaked with failure at %zu\n", live - before, at);
             failures++;
-            live = 0;
+            live = before;
         }
     }
+    os64_html_document_free(s_sweep_doc);
     printf("libgarb sweep: each of %zu allocations failed in turn, %s\n", worst,
            failures == 0 ? "nothing leaked" : "LEAKS");
     return failures == 0 ? 0 : 1;
@@ -352,6 +432,10 @@ int main(int argc, char **argv)
             color(text, len);
         else if (strcmp(argv[1], "decl") == 0)
             declaration(text, len);
+        else if (strcmp(argv[1], "media") == 0)
+            media(text);
+        else if (strcmp(argv[1], "cascade") == 0)
+            cascade(text, len, pabsent ? NULL : protocol);
         else if (strcmp(argv[1], "select") == 0)
             select_page(text, len, protocol);
         else

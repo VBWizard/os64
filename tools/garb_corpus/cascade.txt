@@ -1,0 +1,184 @@
+# The cascade (GARB.md, G2c), worked by hand from Cascade 4, Custom
+# Properties 1, Media Queries 4 and Conditional Rules 3. Each PAGE is laid
+# before a VIEWPORT; WANT is every element's author winners in document
+# order, props in libgarb's order, ending (end). A page without a doctype is
+# in quirks mode.
+
+# Specificity outranks order; order breaks a tie.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p { color: red }
+.a { color: green }
+#x { color: blue }
+p.a { color: yellow }
+p { margin-top: 1px }
+p { margin-top: 2px }
+</style>
+<p>one<p class=a>two<p id=x class=a>three
+WANT
+p: color: rgb(255, 0, 0); margin-top: 2px
+p: color: rgb(255, 255, 0); margin-top: 2px
+p#x: color: rgb(0, 0, 255); margin-top: 2px
+(end)
+END
+
+# !important above normal; the style attribute above every sheet at the same
+# importance.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p { color: red !important; margin-left: 1px }
+#y { color: blue; margin-left: 3px }
+</style>
+<p id=y style="color: green; margin-left: 5px">a</p>
+<p style="color: purple !important">b</p>
+WANT
+p#y: color: rgb(255, 0, 0); margin-left: 5px
+p: color: rgb(128, 0, 128); margin-left: 1px
+(end)
+END
+
+# An invalid declaration is as if never written: the one before it stands.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+div { margin: 1px 2px; margin-left: 9px; color: red; color: bogus; width: 10px; width: calc(1px + ) }
+</style>
+<div>x</div>
+WANT
+div: color: rgb(255, 0, 0); margin-top: 1px; margin-right: 2px; margin-bottom: 1px; margin-left: 9px; width: 10px
+(end)
+END
+
+# var(): inherited custom properties, a fallback, a chain, a cycle and an
+# undefined name (both invalid at computed-value time: the property acts as
+# unset, and does not fall back to what it overrode), and shadowing.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+:root { --main: #00f; --pad: 4px; --loop: var(--loop); --a: var(--b); --b: 7px }
+p { color: var(--main); padding: var(--pad) 0; margin-top: var(--missing, 3px); margin-left: var(--a) }
+.bad { color: var(--loop); width: var(--nope) }
+.shadow { --main: red }
+</style>
+<p>1<p class=bad>2<p class=shadow>3
+WANT
+p: color: rgb(0, 0, 255); margin-top: 3px; margin-left: 7px; padding-top: 4px; padding-right: 0px; padding-bottom: 4px; padding-left: 0px
+p: color: unset; margin-top: 3px; margin-left: 7px; padding-top: 4px; padding-right: 0px; padding-bottom: 4px; padding-left: 0px; width: unset
+p: color: rgb(255, 0, 0); margin-top: 3px; margin-left: 7px; padding-top: 4px; padding-right: 0px; padding-bottom: 4px; padding-left: 0px
+(end)
+END
+
+# @media, @supports, and a style element's media.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p { color: red }
+@media (max-width: 500px) { p { color: green } }
+@media screen and (min-width: 600px) { p { color: blue } }
+@supports (display: grid) { p { margin-top: 1px } }
+@supports not (display: nonsense) { p { margin-left: 2px } }
+@supports (foo: bar) { p { margin-right: 3px } }
+</style>
+<style media="print">p { width: 1px }</style>
+<style media="(min-width: 700px)">p { height: 2px }</style>
+<p>x
+WANT
+p: color: rgb(0, 0, 255); margin-top: 1px; margin-left: 2px; height: 2px
+(end)
+END
+
+# The same page, narrower.
+VIEWPORT 400x600
+PAGE
+<!doctype html><style>
+p { color: red }
+@media (max-width: 500px) { p { color: green } }
+@media screen and (min-width: 600px) { p { color: blue } }
+</style>
+<style media="(min-width: 700px)">p { height: 2px }</style>
+<p>x
+WANT
+p: color: rgb(0, 128, 0)
+(end)
+END
+
+# Combinators; a pseudo-element's rule and a :hover rule reach nothing here;
+# a CSS-wide keyword wins like any value.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+ul li { color: red } ul > li { margin-top: 1px } li + li { margin-left: 2px }
+li::before { color: blue } li:hover { color: green } li { display: inherit }
+</style>
+<ul><li>a<li>b</ul>
+WANT
+li: display: inherit; color: rgb(255, 0, 0); margin-top: 1px
+li: display: inherit; color: rgb(255, 0, 0); margin-top: 1px; margin-left: 2px
+(end)
+END
+
+# Quirks mode: classes and ids match without case, and a bare number is
+# pixels where the Quirks standard allows it.
+VIEWPORT 800x600
+PAGE
+<style>.Big { width: 100 } #Main { height: 5 }</style><div class=big id=main>x</div>
+WANT
+div#main: width: 100px; height: 5px
+(end)
+END
+
+# The same without quirks: neither selector matches, and the bare number is
+# invalid anyway.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>.Big { color: red } div { width: 100 }</style><div class=big>x</div>
+WANT
+(end)
+END
+
+# An invalid selector drops the whole rule; a rule with a list matches at
+# its heaviest selector.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p, p:nonsense { color: red }
+#z, p { color: blue }
+p.q { color: green }
+</style>
+<p id=z class=q>x
+WANT
+p#z: color: rgb(0, 0, 255)
+(end)
+END
+
+# A rule matched through two of its selectors weighs as the heavier, even
+# when the lighter is found first (.q files under the class, #main p under
+# the element name, which is looked at later).
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+.q, #main p { color: blue }
+p.q.r { color: green }
+</style>
+<div id=main><p class="q r">x</div>
+WANT
+p: color: rgb(0, 0, 255)
+(end)
+END
+
+# A cycle is the guaranteed-invalid value, so a var() naming it takes its
+# fallback; env() names nothing here, so with no fallback the whole
+# declaration fails and its longhands act as unset.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+:root { --loop: var(--loop) }
+p { height: var(--loop, 6px); margin: 1px env(nope); width: env(nope, 3px) }
+</style>
+<p>x
+WANT
+p: margin-top: unset; margin-right: unset; margin-bottom: unset; margin-left: unset; width: 3px; height: 6px
+(end)
+END

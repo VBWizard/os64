@@ -1143,6 +1143,19 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     return false;
 }
 
+int32_t prop_longhands(const char *name, size_t len, garb_prop_t *out)
+{
+    for (size_t k = 0; k < sizeof(kLonghands) / sizeof(kLonghands[0]); k++)
+        if (ieq(name, len, kProps[kLonghands[k].prop].name)) {
+            out[0] = kLonghands[k].prop;
+            return 1;
+        }
+    for (size_t k = 0; k < sizeof(kShorthands) / sizeof(kShorthands[0]); k++)
+        if (ieq(name, len, kShorthands[k].name))
+            return shorthand_longhands(kShorthands[k].sh, out);
+    return 0;
+}
+
 // ── Declarations ────────────────────────────────────────────────────────
 
 // var() and env() alike: each is replaced before the value can be read

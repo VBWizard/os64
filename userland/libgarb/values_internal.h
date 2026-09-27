@@ -36,4 +36,9 @@ bool vc_image(VCur *c, garb_val_t *out);
 bool read_color_value(const garb_value_t *t, garb_color_t *out);
 const garb_calc_t *read_calc(Arena *a, const garb_value_t *f, int accept, int *type);
 
+// The longhands a property name sets — itself for a longhand, all of them
+// for a shorthand — into `out` (GARB_SETS_MAX long). 0 for a name libgarb
+// does not read.
+int32_t prop_longhands(const char *name, size_t len, garb_prop_t *out);
+
 #endif

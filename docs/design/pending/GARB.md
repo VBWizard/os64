@@ -201,6 +201,24 @@ over for the cascade are exactly those with `var()` or `env()`. That run
 found four gaps before this commit: the dynamic and container units, env(),
 and background layer lists.
 
+**G2c, as run.** Media Queries 4: 55 queries worked by hand against a stated
+viewport (`tools/garb_corpus/media.txt`) — types, `not`/`only`, plain,
+`min-`/`max-` and range forms, the machine's own answers, and Level 4's
+third value (an unknown feature is UNKNOWN, and so is its negation). The
+cascade: 12 pages worked by hand (`tools/garb_corpus/cascade.txt`) —
+specificity over order, importance, the `style` attribute in all four
+combinations, invalid declarations leaving the one before them, `var()`
+with fallbacks, chains, a cycle and shadowing, env(), `@media`,
+`@supports` and a `style` element's `media`, the same page narrower,
+combinators, pseudo-element and `:hover` rules reaching nothing, quirks
+mode's case-free names and unitless lengths, a rule matched through two of
+its selectors at the heavier. All pass; eight mutants of the cascade and
+media code are all caught, five of them only after cases were added for
+them. The allocation sweep now cascades the corpus sheet over a page, 24
+allocations failed in turn, nothing leaked. danlegt.com, its 28 sheets
+inlined in order, cascades in 0.03 s on the host: 471 elements with author
+winners, hand-checked against the rules for the body and `#motd`.
+
 ## Booked before the first line
 
 | Debt | Why it waits | Trigger |
@@ -211,6 +229,9 @@ and background layer lists.
 | `@namespace` | a prefix other than `*` or none makes a selector invalid, so its rule drops | a page whose sheets declare one |
 | wend honouring `display: none` | libgarb proven in one face before a second leans on it | pile 1 proven |
 | User stylesheets | a person's own sheet is the user origin; nobody has asked | a person who asks |
+| CSS Nesting | a style rule's nested rules are parsed (G1) and not cascaded; only its declarations count | the first page whose sheets nest |
+| `@layer`'s order | a layer's rules are cascaded as if unlayered, so a layered rule may beat an unlayered one it should lose to | a page whose sheets use layers against each other |
+| Pseudo-elements' styles | rules for `::before` and the rest are matched and set aside: nothing generates their boxes yet | G5's generated content |
 | `unicode-range` | the draft reads it from component values, in `@font-face`, not as a token | pile 3's web fonts |
 | `lab()`, `lch()`, `oklab()`, `oklch()`, `color()` | each needs its colour space converted to sRGB and gamut-mapped (Color 4 § 13) | a page whose colours are only written that way |
 | Every layer of a background | yonder draws one picture behind a box, so the first layer of a list is kept and the rest are only checked | a page whose look depends on a lower layer |

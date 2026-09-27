@@ -12,14 +12,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# libos64's str.c defines memset itself, as the freestanding build needs:
+# without -fno-builtin and -fno-tree-loop-distribute-patterns an optimizing
+# host compiler may turn os64_memset's loop into a call to memset — that
+# memset — and recurse until the stack or the machine runs out.
 cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
-   -fno-sanitize-recover=all \
+   -fno-sanitize-recover=all -fno-builtin -fno-tree-loop-distribute-patterns \
    -I userland/libgarb/include -I userland/libgarb -I userland/libhtml/include \
    -I userland/libos64/include -I userland -I abi/include \
    tools/test_garb_host.c \
    userland/libgarb/tokenize.c userland/libgarb/parse.c userland/libgarb/decode.c \
    userland/libgarb/dump.c userland/libgarb/select.c \
    userland/libgarb/values.c userland/libgarb/props.c \
+   userland/libgarb/media.c userland/libgarb/cascade.c \
    userland/libhtml/core.c userland/libhtml/encoding.c \
    userland/libhtml/tokenizer.c userland/libhtml/tree.c \
    userland/libos64/str.c userland/libos64/fmt.c userland/libos64/arena.c \
