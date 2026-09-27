@@ -224,6 +224,9 @@ typedef struct {
     void *ctx;
     // Fonts: the face's resolver; on the host, the fake backend. `families`
     // is a style's list — names as the page wrote them, then a generic.
+    // The list it answers is BORROWED until the next call: libflow lays out
+    // what it needs with one list before it asks again, and a run laid out
+    // with the fonts retains them for as long as the run lives.
     os64_font_status_t (*fonts)(void *ctx, const flow_family_list_t *families,
                                 bool bold, bool italic, uint32_t px,
                                 os64_text_font_t *const **list, size_t *count,

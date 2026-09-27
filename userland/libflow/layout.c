@@ -796,16 +796,18 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 uint32_t b1 = e->s1;
                 if (spread || (at_tail && e->collapsible))
                     b1 = e->b1;
+                // The tab stops first: they ask for the block's fonts, and
+                // a font list is good only until the next request.
+                bool pre = g->style->white_space == FLOW_WS_PRE ||
+                           g->style->white_space == FLOW_WS_PRE_WRAP;
+                int64_t tabs = 0;
+                for (uint32_t t = b0; t < b1 && pre; t++)
+                    if (g->text[t] == '\t') {
+                        tabs = tab_interval_for(l, ifc->style);
+                        break;
+                    }
                 Fonts f;
                 if (b1 > b0 && fonts_for(l, g->style, &f)) {
-                    bool pre = g->style->white_space == FLOW_WS_PRE ||
-                               g->style->white_space == FLOW_WS_PRE_WRAP;
-                    int64_t tabs = 0;
-                    for (uint32_t t = b0; t < b1 && pre; t++)
-                        if (g->text[t] == '\t') {
-                            tabs = tab_interval_for(l, ifc->style);
-                            break;
-                        }
                     // Tabs stop where the LINE's stops are, whatever this
                     // fragment starts after.
                     os64_text_run_t *run = run_of(l, &f, g->text + b0, b1 - b0,
