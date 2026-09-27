@@ -60,6 +60,26 @@ bool f_eq_nocase(const char *a, const char *b);
 
 // ── Pass 1: the computed styles (style.c) ───────────────────────────────
 
+// The colour each decoration is drawn in: the colour of the innermost
+// element that asked for it, so `<u><font color=red><s>` underlines in the
+// u's colour and strikes through in red. A kind not drawn has no colour
+// worth reading.
+typedef struct {
+    uint32_t underline, line_through;
+} FDecorationColors;
+
+// An element's decorations and colours taking on the ones propagated to it:
+// the kinds it already draws keep its own colour.
+static inline void f_decoration_inherit(uint8_t *bits, FDecorationColors *colors,
+                                        uint8_t up_bits, FDecorationColors up)
+{
+    if (!(*bits & FLOW_DECORATION_UNDERLINE) && (up_bits & FLOW_DECORATION_UNDERLINE))
+        colors->underline = up.underline;
+    if (!(*bits & FLOW_DECORATION_LINE_THROUGH) && (up_bits & FLOW_DECORATION_LINE_THROUGH))
+        colors->line_through = up.line_through;
+    *bits |= up_bits;
+}
+
 typedef struct {
     flow_style_t style;
     // Pass 2's question, answered bottom-up here: does this element make,
@@ -74,10 +94,10 @@ typedef struct {
     // element is or sits in, or -1. The decorations drawn across its
     // content: its own and every ancestor's up to an atomic inline or (full
     // quirks, the Quirks standard's 3.11) a table, which keep their own and
-    // stop the rest — in the innermost decorating element's colour.
+    // stop the rest — each kind in its own colour (FDecorationColors).
     int32_t link;
     uint8_t decoration;
-    uint32_t decoration_color;
+    FDecorationColors decoration_colors;
     // How many of this element and its ancestors are lists (`ul ol menu
     // dir`), lists or `dl`s, and `li`s: the chapter's descendant selectors
     // for its children, by the same bargain.
@@ -246,9 +266,10 @@ struct FFrag {
     const char *text;               // TEXT, MARKER: the bytes the run was laid out from
     uint32_t begin, end;            // TEXT: the byte range in the item's text
     int64_t x, y, w, h;             // TEXT, MARKER: the content area; ATOMIC: the border box
+    int64_t hang;                   // TEXT: the width at its end of pre-wrap spaces that hang
     int64_t baseline;               // absolute
     uint8_t decoration;             // FLOW_DECORATION_* drawn across it
-    uint32_t decoration_color;
+    FDecorationColors decoration_colors;
     int32_t link;                   // the link it sits in, or -1
 };
 

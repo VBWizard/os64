@@ -426,6 +426,46 @@ static bool fragment_ends(const char *html, const char *text, const char *tail)
     return found;
 }
 
+// The first text fragment whose text starts with `text`, found by walking
+// the laid-out boxes, or NULL.
+static const FFrag *find_frag(const FBox *b, const char *text)
+{
+    for (const FLine *ln = b != NULL ? b->lines : NULL; ln != NULL; ln = ln->next)
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next)
+            if (fr->kind == FF_TEXT && fr->end > fr->begin &&
+                strncmp(fr->text + fr->begin, text, strlen(text)) == 0)
+                return fr;
+    for (const FBox *c = b != NULL ? b->first : NULL; c != NULL; c = c->next) {
+        const FFrag *fr = find_frag(c, text);
+        if (fr != NULL)
+            return fr;
+    }
+    return NULL;
+}
+
+// Codex #147 round 3: each decoration is drawn in the colour of the element
+// that asked for it — the u's underline in ink, the s's line-through red.
+static void decoration_colour_cases(void)
+{
+    os64_html_document_t *doc =
+        parse("<!doctype html><u><font color=red><s>x</s></font></u>");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    FStyles *styles = f_style_build(doc, page, &kEnv);
+    FBoxes *boxes = f_boxes_build(doc, page, styles, &kEnv);
+    FLayout *lay = f_layout(boxes, doc, page, &kEnv, 400);
+    const FFrag *fr = lay != NULL ? find_frag(boxes->root, "x") : NULL;
+    expect("each decoration keeps the colour of the element that drew it",
+           fr != NULL &&
+               fr->decoration == (FLOW_DECORATION_UNDERLINE | FLOW_DECORATION_LINE_THROUGH) &&
+               fr->decoration_colors.underline == kEnv.ink &&
+               fr->decoration_colors.line_through == 0xFF0000, NULL);
+    f_layout_free(lay);
+    f_boxes_free(boxes);
+    f_style_free(styles);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 // Decorations propagate to every descendant but stop at an atom's content
 // and, in full quirks, at a table; the atom's own and the table's own
 // still reach inside. Pass 1 answers this per element (FStyled).
@@ -449,6 +489,21 @@ static void paint_cases(void)
 
 static void limit_cases(void)
 {
+    // Codex #147 round 3: percentages of percentages, three tables deep,
+    // overflowed int64_t (UBSan aborts this harness on it). Every length is
+    // held to what a face can read, so the page is as wide as that allows.
+    {
+        os64_html_document_t *doc = parse("<!doctype html><table width=1000000%><tr><td>"
+                                          "<table width=1000000%><tr><td>"
+                                          "<table width=1000000%><tr><td>x</table></table></table>");
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        flow_tree_t *t = flow_layout(doc, page, 800, &kEnv);
+        expect("nested percentages are held, not overflowed",
+               t != NULL && !flow_incomplete(t) && flow_width(t) == INT32_MAX, NULL);
+        flow_free(t);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
     // Depth is libflow's own bound (F_DEPTH_MAX), whatever the parser was
     // told to allow: past it the build stops and says so, and inside it
     // the page is whole. html and body are two of the descents, so the
@@ -600,6 +655,7 @@ int main(int argc, char **argv)
     boxes_sweep();
     layout_sweep();
     paint_cases();
+    decoration_colour_cases();
     limit_cases();
     text_teardown();
     printf("libflow: %d checks, %d failed%s\n", checks, failures,
