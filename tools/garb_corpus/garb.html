@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+<head>
+<title>libgarb: the page's own sheet</title>
+<style>
+:root { --accent: #2a6f97; --paper: #fdf6e3; --gap: 12px }
+body { background: var(--paper); color: #333; margin: 0; font-family: Verdana, sans-serif }
+h1 { background: var(--accent); color: white; margin: 0; padding: var(--gap) calc(var(--gap) * 2) }
+.card { border: 3px solid var(--accent); margin: var(--gap) auto; padding: 0.5em 1em;
+        width: calc(100% - 6 * var(--gap)); background: white }
+.card h2 { font-size: 120%; color: var(--accent); margin: 0 0 0.25em }
+.warn { border-color: #b33; background-color: #fbeaea }
+.warn h2 { color: #b33 }
+p.small { font-size: small; text-align: right; color: #777 }
+code { font-family: "Courier New", monospace; background: #eee }
+ul.plain { list-style: square inside; padding: 0 }
+.gone { display: none }
+table { border-collapse: collapse; margin: 0 auto }
+td, th { border: 1px solid #999; padding: 4px 10px }
+th { background: #ddd }
+.pill { display: inline-block; background: var(--accent); color: white;
+        padding: 2px 10px; margin: 0 4px 4px 0; border: 1px solid #144 }
+.tuck { margin-top: -8px; background: #eef; border-top: 2px dashed var(--accent) }
+.wide-only { color: green }
+.narrow-only { display: none; color: purple }
+@media (max-width: 600px) {
+  .wide-only { display: none }
+  .narrow-only { display: block }
+  h1 { font-size: 1.2em }
+}
+</style>
+</head>
+<body>
+<h1>libgarb, first light</h1>
+<div class="card">
+  <h2>Colours, borders and boxes</h2>
+  <p>This card has a 3px border in <code>--accent</code>, a white background, and is
+  <code>calc(100% - 72px)</code> wide, centred with <code>margin: auto</code>.</p>
+  <p class="small">A small, grey, right-aligned line.</p>
+</div>
+<div class="card warn">
+  <h2>A second class wins</h2>
+  <p>The <code>.warn</code> rule comes later with the same weight, so its red border and
+  pink background win over <code>.card</code>'s.</p>
+  <p class="gone">If you can read this, display: none did not apply.</p>
+</div>
+<div class="card">
+  <h2>Lists and tables</h2>
+  <ul class="plain"><li>square markers</li><li>inside the box</li></ul>
+  <table><tr><th>Property</th><th>Value</th></tr>
+  <tr><td>border-collapse</td><td>collapse</td></tr>
+  <tr><td style="color: #b33; font-weight: bold">style attribute</td><td>outranks every rule</td></tr></table>
+</div>
+<div class="card">
+  <h2>Inline-blocks and a negative margin</h2>
+  <p>Pills: <span class="pill">one</span><span class="pill">two words</span><span class="pill">three</span> and text after them, on the same baseline.</p>
+  <p class="tuck">This paragraph's top margin is -8px: it tucks up under the one above.</p>
+</div>
+<div class="card">
+  <h2>Media queries</h2>
+  <p class="wide-only">The window is wider than 600px: this line is green.</p>
+  <p class="narrow-only">The window is 600px or narrower: this line is purple, and the title shrank.</p>
+</div>
+</body>
+</html>

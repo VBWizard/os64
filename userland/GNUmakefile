@@ -277,8 +277,9 @@ LIBPAGE_PROGRAMS := wend pagetest flowdump yonder
 LIBFLOW_PROGRAMS := flowdump yonder
 # A browsing session (libway): the browsers.
 LIBWAY_PROGRAMS := wend yonder
-# The page's garb (libgarb): its probe.
-LIBGARB_PROGRAMS := garbdump
+# The page's garb (libgarb): its probe, and whoever parses a page's sheets
+# and cascades them for libflow.
+LIBGARB_PROGRAMS := garbdump flowdump yonder
 
 # pngtest directly checks the codec; gview and desktop use libimage.
 # libpng carries its own DT_NEEDED edge on
@@ -359,9 +360,9 @@ include libfreetype/shared.mk
 include libimage/shared.mk
 include libhtml/library.mk
 include libpage/library.mk
+include libgarb/library.mk
 include libflow/library.mk
 include libway/library.mk
-include libgarb/library.mk
 
 # Source membership and the population used for prelink placement live here.
 $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBFREETYPE_SO): GNUmakefile

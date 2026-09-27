@@ -11,9 +11,10 @@
 // arrive through the callbacks in flow_env_t, which is what lets the whole
 // library run on the host against the fake font backend.
 //
-// THE DOCUMENT AND THE MODEL MUST OUTLIVE WHATEVER IS BUILT FROM THEM. A
-// style points into the tree for the family names a page wrote; nothing
-// is copied that can be pointed at.
+// THE DOCUMENT, THE MODEL AND THE CASCADE MUST OUTLIVE WHATEVER IS BUILT
+// FROM THEM. A style points into the tree, or into the cascade's sheets,
+// for the family names a page wrote; nothing is copied that can be pointed
+// at.
 
 #include "html/html.h"
 #include "page/page.h"
@@ -44,6 +45,9 @@ typedef enum {
 typedef struct {
     flow_length_kind_t kind;
     int32_t value;
+    // PERCENT: flow_unit_t added once the percentage is resolved — what a
+    // `calc(100% - 2em)` computes to. Zero otherwise.
+    flow_unit_t offset;
 } flow_length_t;
 
 // Box sides, in CSS's own order.
@@ -52,12 +56,10 @@ enum { FLOW_TOP = 0, FLOW_RIGHT = 1, FLOW_BOTTOM = 2, FLOW_LEFT = 3 };
 // ── The computed style ──────────────────────────────────────────────────
 //
 // EVERY FIELD IS ONE CSS PROPERTY'S COMPUTED VALUE, in the property's own
-// units and with its own initial value, because a cascade arriving later is
-// a second producer of this same struct (LAYOUT.md § The ruling). A field
-// is here when the first producer — the Rendering chapter and the
-// presentational attributes — can set it; a property nothing sets yet
-// arrives with the producer that sets it, and no field here changes its
-// meaning when one does.
+// units and with its own initial value, because the page's own sheets
+// (libgarb's cascade) are a second producer of this same struct (LAYOUT.md
+// § The ruling). A property arrives here with the first producer that can
+// set it, and no field changes its meaning when another producer does.
 
 typedef enum {
     FLOW_DISPLAY_INLINE = 0,        // the initial value
@@ -177,7 +179,7 @@ typedef struct {
     flow_display_t display;
 
     flow_family_list_t family;
-    uint16_t font_weight;           // 100..900: 400 normal, 700 bold
+    uint16_t font_weight;           // 1..1000: 400 normal, 700 bold
     flow_font_style_t font_style;
     flow_unit_t font_size;
 
@@ -232,6 +234,10 @@ typedef struct {
     uint32_t viewport_font_px;      // `medium`; 16 unless the face says otherwise
     flow_generic_t default_generic; // the family a page that names none is drawn in
     uint32_t ink, link_ink, paper;  // XRGB; the dumps name these, never print them
+    // The page's own sheets, cascaded against this document (garb/cascade.h),
+    // or NULL for none: their winners are computed after the Rendering
+    // chapter and the presentational hints, which they outrank.
+    const struct garb_cascade *cascade;
 } flow_env_t;
 
 // ── The laid-out tree ───────────────────────────────────────────────────

@@ -15,14 +15,15 @@ Two things were decided 2026-09-24 and every section below is one of them
 applied:
 
 1. **The visual formatting model is built to CSS 2.1 WHOLE; the cascade
-   is not built yet.** The box model, margins, line boxes, white-space,
+   is not built here.** The box model, margins, line boxes, white-space,
    the table algorithm: these are the standard's whatever produces the
    styles, and LIBPAGE.md's lesson was that a half-rule in a durable layer
    costs review rounds until it is finished. What produces the styles in
    the first cut is the WHATWG standard's Rendering chapter — which is
    written AS a stylesheet — hand-compiled into a computed-style struct,
-   presentational attributes included. The cascade arrives later as a
-   SECOND PRODUCER of the same struct: selectors, specificity and author
+   presentational attributes included. The cascade — libgarb's, GARB.md,
+   computed in `style.c` after the chapter and the hints — is a SECOND
+   PRODUCER of the same struct: selectors, specificity and author
    sheets are a feature, and the campaign's stance ("build it when
    something asks") governs features. **The design test for every field
    in the struct: it is a field the first producer can SET, held in the
@@ -175,7 +176,7 @@ so a cascade slots in above this struct with no field renamed:
 |---|---|---|
 | `display` | inline, block, list-item, inline-block (form controls, `meter`, `progress`, `marquee`), table, table-caption, table-row-group, table-header-group, table-footer-group, table-row, table-cell, table-column-group, table-column, contents (`slot`, and an SVG or MathML element, whose HTML descendants still render), none | no |
 | `family` | a list of names as the page wrote them (slices of the attribute, never copied), ending in a generic: serif, sans, mono | yes |
-| `font_weight`, `font_style`, `font_size` | 100..900 (`bolder` by CSS Fonts' table); normal or italic; 26.6 px | yes |
+| `font_weight`, `font_style`, `font_size` | 1..1000 (`bolder` and `lighter` by CSS Fonts' table); normal or italic; 26.6 px | yes |
 | `color`, `background` | XRGB; background may be absent (transparent) | color yes, background no |
 | `margin[4]`, `padding[4]` | px, percent, or (margins) `auto` | no |
 | `border_width[4]`, `border_style[4]`, `border_color[4]` | 26.6 px, computed to 0 where the style is none or hidden; none, hidden, solid, inset, outset, groove; XRGB with `currentColor` resolved | no |
@@ -270,8 +271,8 @@ is a fixture. The rest are full-quirks and geometry: percentage heights
 (3.5), `html` and `body` filling the viewport (3.6, 3.7), text decoration
 not reaching into tables (3.11), and the table quirks (3.8, 3.9, 3.10,
 3.13). The hashless-hex and unitless-length quirks are CSS parsing, the
-cascade's. The quirk switch lives in the producers, so a cascade that
-arrives inherits it.
+cascade's. The quirk switch lives in the producers: libgarb reads the
+document's quirks mode for itself.
 
 Inheritance walks parent to child, iteratively over the tree's parent
 pointers; `em` and percent font sizes resolve against the parent's
@@ -314,9 +315,11 @@ block-level (a frameset stacks its frames); the rest are atomic inlines.
 A frame and an iframe are drawn as the link libpage lists for them,
 `wend`'s departure kept, because a frameset page has no other content
 (libpage lists an iframe only when its `src` names something; an empty
-one is the blank page and draws nothing to follow). A `marquee`, the one
-inline-block that is not replaced, is an atom with a block container of
-its own inside it. `object`, `video` and `canvas` show their fallback
+one is the blank page and draws nothing to follow). An inline-block that
+is not replaced — a `marquee`, or whatever a page's sheet makes one — is
+an atom with a block container of its own inside it: its set width, or
+shrink-to-fit (§10.3.9) — a marquee as wide as its line — and on its last
+line's baseline (§10.8.1). `object`, `video` and `canvas` show their fallback
 content, since nothing plays them; `embed` and `audio` have none and make
 nothing, and neither do `source`, `track` and `keygen`. `hr` is not
 special: it is an empty block whose borders are the rule, which is what
@@ -417,12 +420,9 @@ that is too small still shows the content (no overflow clipping in the
 first cut — `overflow` is the cascade's and booked). **Vertical margins
 collapse** (§8.3.1) between siblings, between a parent and its first or
 last child when nothing separates them, and through an empty block — the
-whole rule, with one stated simplification: NEGATIVE margins cannot arise
-from any presentational attribute, so the first cut asserts they are
-zero and the collapsing arithmetic is written for non-negative values.
-The day the cascade brings a negative margin, the assertion names this
-paragraph and the arithmetic grows the `max(positive) + min(negative)`
-rule.
+whole rule, negative margins included: margins that adjoin are held as
+their largest positive and their most negative, and summed where a box is
+placed (`Margins`, layout.c).
 
 **Inline formatting** (§9.4.2, §10.8): a block container's inline content
 is broken into line boxes as wide as the content width. Each line has the
@@ -571,9 +571,9 @@ first line's baseline; `list-style: none` (a `menu` in a nav) draws none.
 degrades honestly:** `float` and `clear` are recorded and ignored, so an
 `<img align=left>` sits inline at its baseline and the text runs after it
 rather than beside it — the page still reads, in order; `position`,
-`z-index`, `overflow`, `display: inline-block` from a cascade,
-`inline-table` — none can arise from a presentational attribute, so the
-first producer never asks for them. Each is a row in the booked table.
+`z-index`, `overflow` and `inline-table` are not laid out (GARB.md §
+Booked says what the cascade does with each). Each is a row in the booked
+table.
 
 ## The dump
 
@@ -856,8 +856,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Floats and `clear` (`align=left/right` on `img`/`table`, `<br clear>`) | the float rules (§9.5) are a second placement pass with their own line-box shortening; the struct records them so the cascade and the first cut agree on the field | the first page whose layout is unreadable without a float — image-beside-text pages of the old web will vote early |
-| Negative margins | no presentational attribute produces one; the collapsing arithmetic asserts non-negative and names this row | the cascade's first `margin: -` |
-| `position`, `z-index`, `overflow`, `inline-block` from a cascade, `inline-table` | none can arise from the first producer | the cascade |
+| `position`, `z-index`, `overflow`, `inline-table` | none can arise from the first producer; from the cascade, `inline-table` is laid out as a table and the rest are not read into the struct | pile 2 (GARB.md) |
 | Collapsing borders (§17.6.2) | a table with `rules` or `frame` records `border-collapse: collapse`; it is laid out with no spacing and its borders drawn separately | the first ruled table that reads wrong for it |
 | A range-draw on a measuring run (F2 ask) | halves layout work and run memory; works without it | a page whose layout time is visible, measured, or a page that hits the memory cap through runs |
 | Incremental relayout | ruling 2 says rebuild; the face paces it | the engine, or a page whose rebuild is visibly slow |

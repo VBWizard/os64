@@ -30,6 +30,11 @@ typedef struct {
     const char *media;
 } garb_sheet_in_t;
 
+// A `style` element's sheet: its child text content (HTML § 4.2.6), which
+// libhtml may keep as more than one text node, parsed into `out`. The parse
+// keeps no pointer into the tree.
+garb_status_t garb_parse_style_element(const os64_html_node_t *style, garb_parsed_t *out);
+
 typedef struct garb_cascade garb_cascade_t;
 
 // An element's author-origin winners: one per property, in no particular
@@ -46,6 +51,9 @@ typedef struct {
 garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
                              const os64_html_document_t *doc, garb_env_t env);
 bool garb_cascade_incomplete(const garb_cascade_t *c);
+// The viewport the cascade was judged against: what a `vw` or `vh` in its
+// winners is a hundredth of.
+garb_env_t garb_cascade_env(const garb_cascade_t *c);
 // `element`'s winners; an element no author rule reached has none.
 garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *element);
 void garb_cascade_free(garb_cascade_t *c);

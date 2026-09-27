@@ -15,6 +15,7 @@
 #include "html/html.h"
 #include "page/page.h"
 #include "flow/flow.h"
+#include "garb/cascade.h"
 #include "internal.h"
 #include "os64/text.h"
 #include "test_libflow_fonts.h"
@@ -220,6 +221,100 @@ static char *style_dump_of(const char *html)
     return text;
 }
 
+// A page with its `style` sheets through libgarb, cascaded at `width` x
+// `height` — what yonder does for a page. The sheets and the cascade
+// outlive what is styled or laid out with them.
+typedef struct {
+    os64_html_document_t *doc;
+    os64_page_t *page;
+    garb_parsed_t sheets[16];
+    int32_t n;
+    garb_cascade_t *cascade;
+    flow_env_t env;
+} Sheeted;
+
+static void sheeted_open(Sheeted *p, const char *html, double width, double height)
+{
+    memset(p, 0, sizeof(*p));
+    p->doc = parse(html);
+    p->page = os64_page_build(p->doc, kPage, NULL);
+    garb_sheet_in_t in[16];
+    for (int32_t i = 0; i < os64_page_nsheets(p->page) && p->n < 16; i++) {
+        const os64_page_sheet_t *sh = os64_page_sheet(p->page, i);
+        if (sh->linked)
+            continue;
+        garb_parse_style_element(sh->node, &p->sheets[p->n]);
+        in[p->n] = (garb_sheet_in_t){&p->sheets[p->n], sh->media};
+        p->n++;
+    }
+    p->cascade = garb_cascade(in, p->n, p->doc, (garb_env_t){width, height});
+    p->env = kEnv;
+    p->env.cascade = p->cascade;
+}
+
+static void sheeted_close(Sheeted *p)
+{
+    garb_cascade_free(p->cascade);
+    for (int32_t k = 0; k < p->n; k++)
+        garb_free(&p->sheets[k]);
+    os64_page_free(p->page);
+    os64_html_document_free(p->doc);
+}
+
+static char *cascade_dump_of(const char *html, double width, double height)
+{
+    Sheeted p;
+    sheeted_open(&p, html, width, height);
+    FStyles *styles = f_style_build(p.doc, p.page, &p.env);
+    char *text = NULL;
+    if (styles != NULL) {
+        int64_t need = f_style_dump(styles, NULL, 0);
+        text = malloc((size_t)need + 1);
+        f_style_dump(styles, text, (size_t)need + 1);
+    }
+    f_style_free(styles);
+    sheeted_close(&p);
+    return text;
+}
+
+static char *cascade_layout_of(const char *html, int32_t width)
+{
+    Sheeted p;
+    sheeted_open(&p, html, width, 600);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, width, &p.env);
+    char *text = NULL;
+    if (tree != NULL) {
+        int64_t need = flow_dump(tree, NULL, 0);
+        text = malloc((size_t)need + 1);
+        flow_dump(tree, text, (size_t)need + 1);
+    }
+    flow_free(tree);
+    sheeted_close(&p);
+    return text;
+}
+
+static void cascade_layout_case(const char *name, const char *html, int32_t width,
+                                const char *expected)
+{
+    char *got = cascade_layout_of(html, width);
+    bool ok = got != NULL && strcmp(got, expected) == 0;
+    expect(name, ok, NULL);
+    if (!ok)
+        fprintf(stderr, "---- expected\n%s---- got\n%s----\n", expected, got ? got : "(null)\n");
+    free(got);
+}
+
+static void cascade_case(const char *name, double width, const char *html,
+                         const char *expected)
+{
+    char *got = cascade_dump_of(html, width, 600);
+    bool ok = got != NULL && strcmp(got, expected) == 0;
+    expect(name, ok, NULL);
+    if (!ok)
+        fprintf(stderr, "---- expected\n%s---- got\n%s----\n", expected, got ? got : "(null)\n");
+    free(got);
+}
+
 static void style_case(const char *name, const char *html, const char *expected)
 {
     char *got = style_dump_of(html);
@@ -235,6 +330,7 @@ static void style_case(const char *name, const char *html, const char *expected)
 #include "test_libflow_boxes.inc"
 #include "test_libflow_layout.inc"
 #include "test_libflow_tables.inc"
+#include "test_libflow_cascade.inc"
 
 // ── The corpus, and the allocation sweep ────────────────────────────────
 
@@ -368,6 +464,59 @@ static void allocation_sweep(void)
     free(html);
 }
 
+// The same over a page whose sheets name families, which the style pass
+// allocates for: the cascade is built once, outside the sweep, as yonder
+// builds it before any layout.
+static void cascade_sweep(void)
+{
+    static const char kHtml[] =
+        "<!doctype html><style>body { font-family: Verdana, sans-serif; margin: 1em }"
+        " p { font-family: 'Courier New', monospace; color: inherit } .x { width: calc(50% + 1em) }"
+        "</style><p>a<p class=x>b<span style='font-family: Georgia'>c</span>";
+    os64_html_document_t *doc = parse(kHtml);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    const os64_page_sheet_t *sh = os64_page_sheet(page, 0);
+    garb_parsed_t sheet;
+    garb_parse_style_element(sh->node, &sheet);
+    garb_sheet_in_t in = {&sheet, NULL};
+    garb_cascade_t *c = garb_cascade(&in, 1, doc, (garb_env_t){800, 600});
+    flow_env_t env = kEnv;
+    env.cascade = c;
+    char *whole = cascade_dump_of(kHtml, 800, 600);
+    size_t base_live = live;
+    allocations = 0;
+    FStyles *st = f_style_build(doc, page, &env);
+    size_t count = allocations;
+    f_style_free(st);
+    size_t tried = 0;
+    for (size_t at = 1; at <= count; at++) {
+        allocations = 0;
+        fail_at = at;
+        st = f_style_build(doc, page, &env);
+        fail_at = 0;
+        tried++;
+        if (st != NULL) {
+            int64_t need = f_style_dump(st, NULL, 0);
+            char *got = malloc((size_t)need + 1);
+            f_style_dump(st, got, (size_t)need + 1);
+            expect("cascade sweep: a build that succeeds is whole", strcmp(got, whole) == 0, NULL);
+            free(got);
+        }
+        f_style_free(st);
+        if (live != base_live) {
+            expect("cascade sweep: nothing leaked", false, NULL);
+            break;
+        }
+    }
+    printf("libflow cascade sweep: each of %zu allocations failed in turn, nothing leaked\n",
+           tried);
+    free(whole);
+    garb_cascade_free(c);
+    garb_free(&sheet);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 // Every allocation of a whole layout fails in turn: NULL, or a tree that
 // says it is incomplete, or the whole one — never a crash, never a leak.
 static void layout_sweep(void)
@@ -458,12 +607,14 @@ int main(int argc, char **argv)
     text_setup();
     attrs_cases();
     style_cases();
+    cascade_cases();
     boxes_cases();
     layout_cases();
     table_cases();
     table_bounds();
     corpus();
     allocation_sweep();
+    cascade_sweep();
     boxes_sweep();
     layout_sweep();
     door_cases();
