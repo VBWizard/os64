@@ -40,11 +40,25 @@ static int64_t round_px(int64_t v)
     return (v + 32) % 64 < 0 ? q - 1 : q;
 }
 
+// A face reads whole pixels in int32_t, and a page can reach past that
+// (flow_height holds it to INT32_MAX): an edge is held to the range, and a
+// size between two edges to INT32_MAX, so what lies past the last pixel
+// sits on it rather than wrapping round to the top of the page.
+static int32_t edge32(int64_t px)
+{
+    return px > INT32_MAX ? INT32_MAX : px < INT32_MIN ? INT32_MIN : (int32_t)px;
+}
+
+static os64_gui_rect_t rect_from(int64_t x0, int64_t y0, int64_t x1, int64_t y1)
+{
+    int64_t w = (int64_t)edge32(x1) - edge32(x0), h = (int64_t)edge32(y1) - edge32(y0);
+    return (os64_gui_rect_t){edge32(x0), edge32(y0), (int32_t)(w > INT32_MAX ? INT32_MAX : w),
+                             (int32_t)(h > INT32_MAX ? INT32_MAX : h)};
+}
+
 static os64_gui_rect_t rect_of(int64_t x, int64_t y, int64_t w, int64_t h)
 {
-    int64_t x0 = round_px(x), y0 = round_px(y);
-    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(round_px(x + w) - x0),
-                             (int32_t)(round_px(y + h) - y0)};
+    return rect_from(round_px(x), round_px(y), round_px(x + w), round_px(y + h));
 }
 
 static os64_gui_rect_t join(os64_gui_rect_t a, os64_gui_rect_t b)
@@ -52,7 +66,7 @@ static os64_gui_rect_t join(os64_gui_rect_t a, os64_gui_rect_t b)
     int64_t x0 = a.x < b.x ? a.x : b.x, y0 = a.y < b.y ? a.y : b.y;
     int64_t x1 = (int64_t)a.x + a.w > (int64_t)b.x + b.w ? (int64_t)a.x + a.w : (int64_t)b.x + b.w;
     int64_t y1 = (int64_t)a.y + a.h > (int64_t)b.y + b.h ? (int64_t)a.y + a.h : (int64_t)b.y + b.h;
-    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
+    return rect_from(x0, y0, x1, y1);
 }
 
 static bool push_list(Build *bd, const flow_box_t ***v, int32_t *n, int32_t *cap,
@@ -128,7 +142,7 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
         return;
     b->rect = rect_of(fr->x, fr->y, fr->w, fr->h);
     b->overflow = b->rect;
-    b->baseline = (int32_t)round_px(fr->baseline);
+    b->baseline = edge32(round_px(fr->baseline));
     b->link = fr->link;
     b->decoration = fr->decoration;
     b->decoration_color = fr->decoration_color;
@@ -170,7 +184,7 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
             break;
         line->rect = rect_of(ln->x, ln->y, ln->w, ln->h);
         line->overflow = line->rect;
-        line->baseline = (int32_t)round_px(ln->baseline);
+        line->baseline = edge32(round_px(ln->baseline));
         line->unfinished = ln->unfinished;
         flow_box_t *pieces = NULL;
         for (const FSpan *sp = ln->spans; sp != NULL && !bd->failed; sp = sp->next) {

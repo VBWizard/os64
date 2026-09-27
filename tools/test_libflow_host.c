@@ -451,6 +451,16 @@ static void paint_cases(void)
                          "text \"m\"", "serif 16 line-through"), NULL);
 }
 
+static int32_t lowest_y(const flow_box_t *b)
+{
+    int32_t y = b != NULL ? b->rect.y : 0;
+    for (const flow_box_t *c = b != NULL ? b->first : NULL; c != NULL; c = c->next) {
+        int32_t k = lowest_y(c);
+        y = k < y ? k : y;
+    }
+    return y;
+}
+
 static void limit_cases(void)
 {
     // Depth is libflow's own bound (F_DEPTH_MAX), whatever the parser was
@@ -505,6 +515,14 @@ static void limit_cases(void)
     flow_tree_t *t = flow_layout(doc, page, 200, &kEnv);
     expect("a page past INT32_MAX is held to it",
            t != NULL && !flow_incomplete(t) && flow_height(t) == INT32_MAX, NULL);
+    // And so is every box a face reads: the last picture sits on the last
+    // pixel, and nothing wraps round to a negative y.
+    const flow_box_t *last = t != NULL ? flow_image(t, flow_nimages(t) - 1) : NULL;
+    expect("a box past INT32_MAX sits on the last pixel",
+           last != NULL && flow_nimages(t) == 2200 && last->rect.y == INT32_MAX &&
+               last->rect.h == 0, NULL);
+    expect("no box of a page past INT32_MAX wraps above it",
+           t != NULL && lowest_y(flow_root(t)) >= 0, NULL);
     flow_free(t);
     os64_page_free(page);
     os64_html_document_free(doc);
