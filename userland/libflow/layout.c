@@ -180,12 +180,15 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
         }
         return r;
     }
-    if (w_set || h_set) {
+    // A picture whose size is not known yet is guessed square from the
+    // side the page gave, until it arrives; anything else keeps its own
+    // default on the side the page left unset (a frame's 300 by 150).
+    bool img = node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG;
+    if (img && (w_set || h_set)) {
         r.w = w_set ? w : h;
         r.h = h_set ? h : w;
         return r;
     }
-    bool img = node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG;
     if (img) {
         const os64_html_attr_t *alt = os64_html_attr(node, "alt");
         if (alt != NULL && alt->value != NULL && alt->value[0] != '\0') {
@@ -200,11 +203,15 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     if (frame) {
         r.w = 300 * 64;
         r.h = 150 * 64;
-        return r;
+    } else {
+        Fonts f;
+        r.w = (int64_t)s->font_size * 10;
+        r.h = fonts_for(l, s, &f) ? f.info.line_height : s->font_size;
     }
-    Fonts f;
-    r.w = (int64_t)s->font_size * 10;
-    r.h = fonts_for(l, s, &f) ? f.info.line_height : s->font_size;
+    if (w_set)
+        r.w = w;
+    if (h_set)
+        r.h = h;
     return r;
 }
 
@@ -424,8 +431,27 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             if (it->content == NULL)
                 r = replaced_size(l, it->node, st, cw);
             if (r.alt) {
+                // The alt text stands where the picture would, as text:
+                // under collapsing white-space its spaces collapse too.
                 const char *alt = os64_html_attr(it->node, "alt")->value;
-                text_segments(l, s, it, alt, (uint32_t)os64_strlen(alt), st, tabs);
+                uint32_t n = (uint32_t)os64_strlen(alt);
+                if (st->white_space == FLOW_WS_NORMAL || st->white_space == FLOW_WS_NOWRAP) {
+                    char *copy = alloc(l, n);
+                    if (copy == NULL)
+                        break;
+                    uint32_t m = 0;
+                    for (uint32_t i = 0; i < n; i++) {
+                        bool sp = alt[i] == ' ' || alt[i] == '\t' || alt[i] == '\n' ||
+                                  alt[i] == '\r' || alt[i] == '\f';
+                        if (!sp)
+                            copy[m++] = alt[i];
+                        else if (m == 0 || copy[m - 1] != ' ')
+                            copy[m++] = ' ';
+                    }
+                    alt = copy;
+                    n = m;
+                }
+                text_segments(l, s, it, alt, n, st, tabs);
                 break;
             }
             Seg *g = seg_add(l, s, SG_ATOM);
@@ -623,6 +649,16 @@ static bool open_push(L *l, Open *o, const FInline *inl)
     return true;
 }
 
+// How many of a justified line's gaps end at or before pen position `x`:
+// how many widenings a fragment or an inline box's edge there moves by.
+static int64_t gaps_before(const int64_t *gap_at, size_t gaps, int64_t x)
+{
+    int64_t n = 0;
+    for (size_t i = 0; i < gaps && gap_at[i] <= x; i++)
+        n++;
+    return n;
+}
+
 static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw, Cursor *cur)
 {
     Segs s = {0};
@@ -633,6 +669,8 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
     // The x each open inline's piece on the current line starts at.
     int64_t *open_x = NULL;
     size_t open_x_cap = 0;
+    int64_t *gap_at = NULL;             // where each justified gap ends, in pen x
+    size_t gap_cap = 0;
 
     flow_text_align_t align = ifc->style->text_align;
     bool justify = align == FLOW_ALIGN_JUSTIFY || align == FLOW_ALIGN_HTML_JUSTIFY;
@@ -678,7 +716,9 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
             open_x[k] = 0;
 
         // Horizontal: lay the fragments down from 0; alignment shifts
-        // them after, once the line's width is known.
+        // them after, once the line's width is known. Where each gap a
+        // justified line may grow ends is kept, so what comes after it —
+        // a fragment, an inline box's edge — moves by the gaps before it.
         int64_t pen = 0, used = 0;
         size_t gaps = 0;
         bool content = false, has_text = false, has_break = false;
@@ -767,7 +807,17 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 }
                 if (spread && !at_tail && e->s1 > e->b1) {
                     pen += e->sw;
-                    gaps++;
+                    if (gaps == gap_cap) {
+                        size_t cap = gap_cap ? gap_cap * 2 : 16;
+                        int64_t *grown = os64_realloc(gap_at, cap * sizeof(*grown));
+                        if (grown == NULL) {
+                            fail(l);
+                            break;
+                        }
+                        gap_at = grown;
+                        gap_cap = cap;
+                    }
+                    gap_at[gaps++] = pen;
                 }
                 j = k;
                 break;
@@ -899,8 +949,8 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
             span_add(l, line, open.v[k], open_x[k], pen);
 
         // No-quirks: every inline box on the line holds its own font's box
-        // open, empty or not (in quirks mode an empty one does not, the
-        // Quirks standard's 3.3).
+        // open, empty or not, on a line that is not itself empty (in quirks
+        // mode an empty one does not, the Quirks standard's 3.3).
         if (!l->any_quirks)
             for (FSpan *sp = line->spans; sp != NULL; sp = sp->next) {
                 Fonts f;
@@ -915,7 +965,18 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
 
         // Vertical (§10.8): the line is as tall as what sits on its
         // baseline, then as tall as anything aligned to its top or bottom.
-        bool empty = !has_text && !content && !has_break;
+        // A line with no text, no break and nothing inline with a margin,
+        // padding or border of its own is zero-height (CSS 2.1 § 9.4.2):
+        // `<p><span></span></p>` makes no line at all.
+        bool framed = false;
+        for (FSpan *sp = line->spans; sp != NULL && !framed; sp = sp->next)
+            for (int k = 0; k < 4 && !framed; k++) {
+                const flow_style_t *ss = sp->inl->style;
+                framed = len(ss->margin[k], cw) != 0 || len(ss->padding[k], cw) != 0 ||
+                         (ss->border_width[k] != 0 && ss->border_style[k] != FLOW_BORDER_NONE &&
+                          ss->border_style[k] != FLOW_BORDER_HIDDEN);
+            }
+        bool empty = !has_text && !content && !has_break && !framed;
         int64_t height = any ? ext.bottom - ext.top : 0;
         int64_t baseline_off = any ? -ext.top : 0;
         for (FFrag *fr = line->frags; fr != NULL; fr = fr->next) {
@@ -942,7 +1003,8 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
             if (cur->first < 0)
                 cur->first = cur->y;
         }
-        line->y = cur->y;
+        // An empty line resolves no margins, but it sits where a line would.
+        line->y = height > 0 ? cur->y : cur->y + cur->pm;
         line->h = height;
         line->baseline = line->y + baseline_off;
 
@@ -960,12 +1022,8 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         }
         int64_t per_gap = justify && !last && !forced && gaps > 0 && extra > 0
                               ? extra / (int64_t)gaps : 0;
-        size_t gap_index = 0;
         for (FFrag *fr = line->frags; fr != NULL; fr = fr->next) {
-            int64_t dx = shift + per_gap * (int64_t)gap_index;
-            if (per_gap > 0 && fr->kind == FF_TEXT)
-                gap_index++;
-            fr->x += cx + dx;
+            fr->x += cx + shift + per_gap * gaps_before(gap_at, gaps, fr->x);
             if (fr->kind == FF_ATOMIC) {
                 flow_vertical_align_t va = fr->style->vertical_align;
                 int64_t mt = len(fr->style->margin[FLOW_TOP], cw);
@@ -984,8 +1042,8 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
             fr->baseline = line->baseline;
         }
         for (FSpan *sp = line->spans; sp != NULL; sp = sp->next) {
-            sp->x0 += cx + shift;
-            sp->x1 += cx + shift;
+            sp->x0 += cx + shift + per_gap * gaps_before(gap_at, gaps, sp->x0);
+            sp->x1 += cx + shift + per_gap * gaps_before(gap_at, gaps, sp->x1);
             Fonts f;
             if (fonts_for(l, sp->inl->style, &f)) {
                 sp->top = line->baseline - f.info.ascent;
@@ -1000,6 +1058,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
     os64_free(s.v);
     os64_free(open.v);
     os64_free(open_x);
+    os64_free(gap_at);
 }
 
 // ── Block formatting ────────────────────────────────────────────────────
@@ -1133,11 +1192,16 @@ static void place_marker(L *l, FBox *b, int64_t content_x, int64_t content_y)
     fr->run = run;
     fr->text = b->marker;
     fr->end = b->marker_len;
+    // The marker belongs to its item, so it is in whatever link the item
+    // sits in: the nearest box up that says (FBox.link).
     fr->link = -1;
+    for (const FBox *up = b; up != NULL && fr->link < 0; up = up->parent)
+        fr->link = up->link;
     fr->w = v.advance_x;
     fr->h = v.ascent + v.descent;
     fr->x = content_x - fr->w;
-    fr->baseline = first != NULL ? first->baseline : content_y + v.ascent;
+    Extent fb = font_box(v.ascent, v.descent, v.line_height);
+    fr->baseline = first != NULL ? first->baseline : content_y - fb.top;
     fr->y = fr->baseline - v.ascent;
     b->marker_frag = fr;
 }
@@ -1216,6 +1280,21 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     }
     if (l->failed)
         return;
+
+    // An item with nothing in it still shows its marker, and the marker
+    // stands on a line: the item holds one line of its own font, as a line
+    // with content would, margins above resolved there.
+    if (b->marker != NULL && (top_open ? in.first < 0 : in.y == content_top)) {
+        Fonts f;
+        if (fonts_for(l, s, &f)) {
+            Extent fb = font_box(f.info.ascent, f.info.descent, f.info.line_height);
+            in.y += in.pm;
+            in.pm = 0;
+            if (in.first < 0)
+                in.first = in.y;
+            in.y += fb.bottom - fb.top;
+        }
+    }
 
     // Nothing inside resolved a position: the box is empty, and its top
     // and bottom margins collapse together with whatever adjoins them.

@@ -288,4 +288,89 @@ static void layout_cases(void)
         "block html 0 0 100 18\n"
         "  block body 8 8 84 2\n"
         "    block hr 8 8 84 2\n");
+
+    // Codex #147. Justification grows only real gaps: "a" and "b" are one
+    // word across an element boundary, so "b" stays against "a". "ab c d"
+    // is 40 of 44; two gaps share the 4, so "c" moves 2 and "d" 4 and the
+    // line ends flush at 52. The <b> box's edges are before the first gap.
+    layout_case("justify grows gaps, not element boundaries",
+        "<!doctype html><p align=justify>a<b>b</b> c d e f g</p>", 60,
+        "page 60 72\n"
+        "block html 0 0 60 72\n"
+        "  block body 8 16 44 40\n"
+        "    block p 8 16 44 40\n"
+        "      line 8 16 44 20 base 14\n"
+        "        span b 16 18 8 16\n"
+        "        text \"a\" 8 18 8 16 serif 16\n"
+        "        text \"b\" 16 18 8 16 serif 16 bold\n"
+        "        text \"c\" 30 18 8 16 serif 16\n"
+        "        text \"d\" 44 18 8 16 serif 16\n"
+        "      line 8 36 44 20 base 14\n"
+        "        text \"e f g\" 8 38 28 16 serif 16\n");
+
+    // A line holding only an empty inline is zero-height (CSS 2.1 § 9.4.2),
+    // so the first p is too, its margins collapsing through it: the second
+    // p is at 16. The empty line sits where a line would, at 16.
+    layout_case("an empty inline makes no line",
+        "<!doctype html><p><span></span></p><p>x</p>", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 0\n"
+        "      line 8 16 184 0 base 14\n"
+        "        span span 8 18 0 16\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"x\" 8 18 8 16 serif 16\n");
+
+    // An empty item still shows its bullet, on a line of its own font:
+    // 20 tall, the marker's baseline 14 down, and the next item below it.
+    layout_case("an empty list item holds its marker's line",
+        "<!doctype html><ul><li><li>x</ul>", 200,
+        "page 200 72\n"
+        "block html 0 0 200 72\n"
+        "  block body 8 16 184 40\n"
+        "    block ul 8 16 184 40\n"
+        "      block li 48 16 144 20\n"
+        "        marker \"\xe2\x80\xa2 \" 36 18 12 16\n"
+        "      block li 48 36 144 20\n"
+        "        marker \"\xe2\x80\xa2 \" 36 38 12 16\n"
+        "        line 48 36 144 20 base 14\n"
+        "          text \"x\" 48 38 8 16 serif 16\n");
+
+    // A frame the page sized on one side keeps 300 by 150 on the other:
+    // 600 x 150 and 300 x 50, each in its 2px inset border.
+    layout_case("a frame keeps its default on the side left unset",
+        "<!doctype html><iframe width=600></iframe><iframe height=50></iframe>", 1000,
+        "page 1000 176\n"
+        "block html 0 0 1000 176\n"
+        "  block body 8 8 984 160\n"
+        "    line 8 8 984 160 base 154\n"
+        "      atomic iframe 8 8 604 154\n"
+        "      atomic iframe 612 108 304 54\n");
+
+    // A missing picture's alt text collapses its spaces as text does:
+    // "a b" is 8 + 4 + 8.
+    layout_case("alt text collapses its white space",
+        "<!doctype html><p>q<img src=missing.png alt='a   b'>z", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"q\" 8 18 8 16 serif 16\n"
+        "        text \"a b\" 16 18 20 16 serif 16\n"
+        "        text \"z\" 36 18 8 16 serif 16\n");
+
+    // An outside marker is in the link its item sits in.
+    layout_case("a marker keeps its item's link",
+        "<!doctype html><a href=x><ul><li>foo</li></ul></a>", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block ul 8 16 184 20 link 0\n"
+        "      block li 48 16 144 20\n"
+        "        marker \"\xe2\x80\xa2 \" 36 18 12 16 link 0\n"
+        "        line 48 16 144 20 base 14\n"
+        "          text \"foo\" 48 18 20 16 serif 16 underline link 0\n");
 }
