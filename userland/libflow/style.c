@@ -2087,12 +2087,10 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->lists_or_dls = (up != NULL ? up->lists_or_dls : 0) + is_list_or_dl(n);
     out->items = (up != NULL ? up->items : 0) + is_li(n);
     out->decoration = sp.s.text_decoration;
-    out->decoration_color = sp.s.color;
-    if (up != NULL && !decoration_edge(n, &sp.s, c->quirks)) {
-        if (out->decoration == 0)
-            out->decoration_color = up->decoration_color;
-        out->decoration |= up->decoration;
-    }
+    out->decoration_colors = (FDecorationColors){sp.s.color, sp.s.color};
+    if (up != NULL && !decoration_edge(n, &sp.s, c->quirks))
+        f_decoration_inherit(&out->decoration, &out->decoration_colors, up->decoration,
+                             up->decoration_colors);
     if (!f_map_put(&c->out->map, n, out))
         return NULL;
     return out;

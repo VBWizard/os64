@@ -66,13 +66,30 @@ typedef struct {
     int64_t first;      // -1 until content resolves the pending margins
 } Cursor;
 
+// The longest length layout resolves, in 26.6: as many pixels as a face
+// can read. A page can nest percentages of percentages (`width=1000000%`
+// three tables deep) past anything int64_t holds; held here, a length times
+// a percentage, and the sum of every length on a path through the page,
+// stay far inside it.
+#define LEN_MAX ((int64_t)INT32_MAX * 64)
+
+static int64_t hold_len(int64_t v)
+{
+    return v > LEN_MAX ? LEN_MAX : v < -LEN_MAX ? -LEN_MAX : v;
+}
+
 // A length against a containing block's width; auto reads as 0, and the
-// caller that cares asks first.
+// caller that cares asks first. A percentage is a count of 1/64 percent,
+// so it divides by 6400, taken in two parts that cannot overflow, and a
+// calc()'s pixel offset is added to it.
 static int64_t len(flow_length_t l, int64_t base)
 {
     switch (l.kind) {
-    case FLOW_LENGTH_PX: return l.value;
-    case FLOW_LENGTH_PERCENT: return base * l.value / (100 * 64) + l.offset;
+    case FLOW_LENGTH_PX: return hold_len(l.value);
+    case FLOW_LENGTH_PERCENT: {
+        int64_t b = hold_len(base);
+        return hold_len(b / 6400 * l.value + b % 6400 * l.value / 6400 + hold_len(l.offset));
+    }
     case FLOW_LENGTH_AUTO: break;
     }
     return 0;
@@ -203,8 +220,9 @@ typedef struct {
     bool none;              // not there at all: a missing picture whose alt is empty
 } Replaced;
 
-// CSS 2.1 §10.3.2 and §10.6.2: the size the page gave, else the one the
-// face measured (scaled to keep its shape when the page gave one side),
+// CSS 2.1 §10.3.2 and §10.6.2: the size the page gave — a percentage
+// height reads as unset (LAYOUT.md § Booked) — else the one the face
+// measured (scaled to keep its shape when the page gave one side),
 // else the chapter's rule for a picture that has not arrived — its alt
 // text inline when it has one, nothing when its alt is empty, a small
 // icon when it has none — and a sensible box for anything else: a frame's
@@ -278,7 +296,7 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
 
 typedef struct {
     uint8_t decoration;
-    uint32_t color;
+    FDecorationColors colors;
     int32_t link;
 } Paint;
 
@@ -296,16 +314,14 @@ static Paint paint_for(const L *l, const FStyles *styles, const os64_html_node_t
         e = e->parent;
     const FStyled *st = e != NULL ? f_style_of(styles, e) : NULL;
     if (st == NULL)
-        return (Paint){0, 0, -1};
-    Paint p = {st->decoration, st->decoration_color, st->link};
+        return (Paint){0, {0, 0}, -1};
+    Paint p = {st->decoration, st->decoration_colors, st->link};
     bool quirks_table = l->quirks && e->ns == OS64_HTML_NS_HTML && e->tag == OS64_HTML_TAG_TABLE;
     if (e == atom && !quirks_table) {
         const FStyled *up = f_style_of(styles, e->parent);
-        if (up != NULL) {
-            if (p.decoration == 0)
-                p.color = up->decoration_color;
-            p.decoration |= up->decoration;
-        }
+        if (up != NULL)
+            f_decoration_inherit(&p.decoration, &p.colors, up->decoration,
+                                 up->decoration_colors);
     }
     return p;
 }
@@ -330,6 +346,11 @@ typedef struct {
     bool wrap_after;        // a soft wrap opportunity follows
     bool collapsible;       // WORD: its spaces vanish at a line's end
     bool hang;              // WORD: its spaces stay but do not count (pre-wrap)
+    bool keep_round;        // ATOM: a quirks-mode picture, no opportunity either side
+    // WORD whose spaces hold a tab: the stops (the block's interval) and a
+    // space's advance, so the spaces are measured where the line puts them
+    // — a tab's width depends on the pen it starts from.
+    int64_t tab_interval, space_w;
     Replaced atom;          // ATOM: its content box
     int64_t frame_w, frame_h, ml, mr, mt, mb;   // ATOM: border+padding, margins
 } Seg;
@@ -364,11 +385,26 @@ static bool wraps(flow_white_space_t ws)
     return ws == FLOW_WS_NORMAL || ws == FLOW_WS_PRE_WRAP;
 }
 
+// A space's advance in these fonts, for spaces with no other measure.
+static int64_t space_advance(L *l, const Fonts *f)
+{
+    os64_font_status_t why;
+    os64_text_run_t *run = run_try(l, f, " ", 1, 0, &why);
+    if (run == NULL)
+        return 0;
+    int64_t w = caret_x(run, 1);
+    os64_text_run_release(run);
+    return w;
+}
+
 // A text's words: measured ONCE, then cut at its spaces. A text longer than
 // the engine takes in one run (OS64_TEXT_BYTES_MAX) is measured in WINDOWS
 // cut after a space, so a word never straddles two; a window with no space
 // in it is cut at a character boundary, and the word it splits stays one
 // word — two segments with no opportunity between them. Never a refusal.
+// Spaces holding a tab are the exception to "once": a tab is as wide as
+// the way to the line's next stop, so the breaker walks them where the
+// line puts them (spaces_width).
 static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint32_t n,
                           const flow_style_t *style, int64_t tab_interval)
 {
@@ -376,7 +412,7 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
     if (n == 0 || !fonts_for(l, style, &f))
         return;
     flow_white_space_t ws = style->white_space;
-    bool collapsible = ws == FLOW_WS_NORMAL || ws == FLOW_WS_NOWRAP;
+    bool collapsible = f_collapsible(ws);
     bool whole = ws == FLOW_WS_PRE || ws == FLOW_WS_NOWRAP;
     for (uint32_t w0 = 0; w0 < n && !l->failed;) {
         uint32_t w1 = n;
@@ -444,6 +480,16 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
                 int64_t x0 = caret_x(run, b0 - w0), x1 = caret_x(run, b1 - w0);
                 g->w = x1 - x0;
                 g->sw = caret_x(run, at - w0) - x1;
+                for (uint32_t t = b1; t < at; t++)
+                    if (text[t] == '\t')
+                        g->tab_interval = tab_interval > 0 ? tab_interval : 64 * 8;
+                for (uint32_t t = b1; t < at && g->tab_interval > 0; t++)
+                    if (text[t] == ' ') {
+                        g->space_w = caret_x(run, t + 1 - w0) - caret_x(run, t - w0);
+                        break;
+                    }
+                if (g->tab_interval > 0 && g->space_w == 0)
+                    g->space_w = space_advance(l, &f);
             }
         }
         os64_text_run_release(run);
@@ -514,14 +560,20 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     char *copy = alloc(l, n);
                     if (copy == NULL)
                         break;
-                    // Against the text beside it too: a space after a space
-                    // the text before already ends in, or before one the
-                    // next text starts with, is the same space.
-                    const Seg *prev = s->n > 0 ? &s->v[s->n - 1] : NULL;
+                    // Against the text beside it too, across inline edges
+                    // (`a <b><img alt=" b"></b>`): a space after a space the
+                    // text before already ends in, or before one the next
+                    // text starts with, is the same space.
+                    const Seg *prev = NULL;
+                    for (size_t k = s->n; k > 0 && prev == NULL; k--)
+                        if (s->v[k - 1].kind != SG_OPEN && s->v[k - 1].kind != SG_CLOSE)
+                            prev = &s->v[k - 1];
                     bool space = prev != NULL && prev->kind == SG_WORD && prev->collapsible &&
                                  prev->s1 > prev->b1;
                     uint32_t m = f_collapse_white(alt, n, copy, &space);
                     const FItem *next = it->next;
+                    while (next != NULL && (next->kind == FI_OPEN || next->kind == FI_CLOSE))
+                        next = next->next;
                     if (m > 0 && copy[m - 1] == ' ' && next != NULL && next->kind == FI_TEXT &&
                         next->len > 0 && next->text[0] == ' ' &&
                         f_collapsible(next->style->white_space))
@@ -570,7 +622,8 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             }
             g->atom = r;
             g->w = g->ml + fw + r.w + g->mr;
-            bool wrap = wraps(st->white_space) && !quirk_no_wrap_round(l, ifc, it);
+            g->keep_round = quirk_no_wrap_round(l, ifc, it);
+            bool wrap = wraps(st->white_space) && !g->keep_round;
             g->wrap_after = wrap;
             if (wrap && s->n >= 2 && s->v[s->n - 2].kind != SG_BREAK)
                 s->v[s->n - 2].wrap_after = true;
@@ -619,13 +672,63 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             g->style = it->style;
             g->b1 = g->s1 = it->len;
             g->w = w;
+            // The marker ends in its suffix space, and the break after it is
+            // the item's to allow: the item is the nearest box holding both
+            // the space and the text that follows (CSS Text 3 § 5).
+            g->wrap_after = it->len > 0 && it->text[it->len - 1] == ' ' &&
+                            wraps(it->style->white_space);
             break;
         }
+        }
+    }
+    // A quirks-mode picture keeps no opportunity either side of it, and
+    // the whitespace between two slices is one of its sides: the
+    // opportunity before it ends whatever precedes it, and the one after it
+    // is the whitespace that follows. Inline edges hold none of their own.
+    for (size_t j = 0; j < s->n; j++) {
+        if (!s->v[j].keep_round)
+            continue;
+        for (size_t k = j; k > 0; k--) {
+            Seg *p = &s->v[k - 1];
+            if (p->kind == SG_OPEN || p->kind == SG_CLOSE)
+                continue;
+            if (p->kind != SG_BREAK)
+                p->wrap_after = false;
+            break;
+        }
+        for (size_t k = j + 1; k < s->n; k++) {
+            Seg *n = &s->v[k];
+            if (n->kind == SG_OPEN || n->kind == SG_CLOSE)
+                continue;
+            if (n->kind == SG_WORD && n->b1 == n->b0)
+                n->wrap_after = false;
+            break;
         }
     }
 }
 
 // ── Inline formatting: lines ────────────────────────────────────────────
+
+// A word's spaces, starting at line position `x`: measured once where they
+// hold no tab, and walked from `x` where they do, each tab to the line's
+// next stop as the text engine places it (the line starts at 0).
+static int64_t spaces_width(const Seg *g, int64_t x)
+{
+    if (g->tab_interval <= 0)
+        return g->sw;
+    int64_t at = x;
+    for (uint32_t t = g->b1; t < g->s1; t++) {
+        if (g->text[t] == '\t') {
+            int64_t k = at / g->tab_interval;
+            if (at < 0 && at % g->tab_interval != 0)
+                k--;
+            at = (k + 1) * g->tab_interval;
+        } else {
+            at += g->space_w;
+        }
+    }
+    return at - x;
+}
 
 // Greedy line breaking (CSS 2.1 §9.4.2): as much as fits, breaking at the
 // LAST soft wrap opportunity before what does not; a word wider than the
@@ -656,7 +759,7 @@ static size_t break_line(const Segs *s, size_t start, int64_t avail, bool *force
         if (g->wrap_after && content)
             brk = j;
         if (g->kind == SG_WORD)
-            pen += g->sw;
+            pen += spaces_width(g, pen);
     }
     return s->n;
 }
@@ -920,12 +1023,18 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     Paint p = paint_for(l, styles, g->item->node,
                                         g->item->kind == FI_ATOMIC ? g->item->node : NULL);
                     fr->decoration = p.decoration;
-                    fr->decoration_color = p.color;
+                    fr->decoration_colors = p.colors;
                     fr->link = p.link;
                     Extent fb = font_box(v.ascent, v.descent, v.line_height);
                     extend(&ext, &any, fb.top, fb.bottom);
+                    // Pre-wrap spaces ending a line hang: they are drawn, and
+                    // count for nothing — not the line's width, not the page's.
+                    if (at_tail && e->hang && !spread && e->b1 > b0)
+                        fr->hang = v.advance_x - caret_x(run, e->b1 - b0);
+                    else if (at_tail && e->hang && !spread)
+                        fr->hang = v.advance_x;
                     pen += v.advance_x;
-                    used = at_tail && e->hang && !spread ? pen - e->sw : pen;
+                    used = pen - fr->hang;
                     has_text = true;
                     content = true;
                 }
@@ -1030,7 +1139,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 // decorations, as the text beside it is.
                 Paint mp = paint_for(l, styles, g->item->node, NULL);
                 fr->decoration = mp.decoration;
-                fr->decoration_color = mp.color;
+                fr->decoration_colors = mp.colors;
                 fr->link = mp.link;
                 Extent fb = font_box(v.ascent, v.descent, v.line_height);
                 extend(&ext, &any, fb.top, fb.bottom);
@@ -1276,7 +1385,8 @@ static int64_t html_align_shift(const FBox *b, int64_t rem)
 }
 
 // §10.3.3: margin + border + padding + width = the containing block, auto
-// margins sharing what a set width leaves over.
+// margins sharing what a set width leaves over — and zero when it leaves
+// nothing, the box overflowing to the right rather than off the left.
 static int64_t widths(FBox *b, int64_t cbw, int64_t forced_w, int64_t *ml_out)
 {
     const flow_style_t *s = b->style;
@@ -1302,7 +1412,7 @@ static int64_t widths(FBox *b, int64_t cbw, int64_t forced_w, int64_t *ml_out)
         if (ml_auto && mr_auto)
             ml = rem > 0 ? rem / 2 : 0;
         else if (ml_auto)
-            ml = rem;
+            ml = rem > 0 ? rem : 0;
         else if (!mr_auto)
             ml += html_align_shift(b, rem);
     }
@@ -1517,9 +1627,10 @@ static int64_t vframe(const FBox *b, int64_t base)
 }
 
 // An inline formatting context's two widths: its widest word — a run of
-// segments with no opportunity between them, across nodes — and its
-// widest line when only forced breaks break it. A trailing space counts in
-// neither.
+// segments with no opportunity between them, across nodes, spaces inside
+// the run included — and its widest line when only forced breaks break it.
+// A trailing space counts in neither, and a tab is as wide as the way to
+// the line's next stop.
 static Intr ifc_intrinsic(L *l, FBox *ifc)
 {
     Segs s = {0};
@@ -1538,10 +1649,15 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
                 space = 0;
             }
             if (g->kind == SG_WORD && g->s1 > g->b1) {
+                int64_t sw = spaces_width(g, line + space);
+                // Spaces no opportunity follows are inside the word (a
+                // quirks-mode row of slices and the whitespace between).
+                if (!g->wrap_after)
+                    word += sw;
                 if (g->collapsible || g->hang)
-                    space += g->sw;
+                    space += sw;
                 else
-                    line += g->sw;
+                    line += sw;
             }
             break;
         case SG_BREAK:
@@ -2388,7 +2504,7 @@ static int64_t right_edge(const FBox *b)
     int64_t r = b->placed ? b->x + b->w : 0;
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
-            r = max64(r, fr->x + fr->w);
+            r = max64(r, fr->x + fr->w - fr->hang);
             if (fr->kind == FF_ATOMIC && fr->item->content != NULL)
                 r = max64(r, right_edge(fr->item->content));
         }
@@ -2425,7 +2541,10 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     out->quirks = doc != NULL ? doc->quirks : OS64_HTML_NO_QUIRKS;
     out->model = model;
     out->boxes = boxes;
-    out->incomplete = boxes->incomplete;
+    // Whole means whole from the bytes up: a page the parser or the model
+    // stopped short of is a prefix however well it lays out.
+    out->incomplete = boxes->incomplete || (doc != NULL && doc->refusal != 0) ||
+                      (model != NULL && os64_page_incomplete(model));
     L l = {out, env, model, out->quirks == OS64_HTML_QUIRKS,
            out->quirks != OS64_HTML_NO_QUIRKS, false};
     int64_t w = (int64_t)width * 64;

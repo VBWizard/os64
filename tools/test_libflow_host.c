@@ -579,6 +579,69 @@ static bool fragment_ends(const char *html, const char *text, const char *tail)
     return found;
 }
 
+// The first text fragment whose text starts with `text`, found by walking
+// the laid-out boxes, or NULL.
+static const FFrag *find_frag(const FBox *b, const char *text)
+{
+    for (const FLine *ln = b != NULL ? b->lines : NULL; ln != NULL; ln = ln->next)
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next)
+            if (fr->kind == FF_TEXT && fr->end > fr->begin &&
+                strncmp(fr->text + fr->begin, text, strlen(text)) == 0)
+                return fr;
+    for (const FBox *c = b != NULL ? b->first : NULL; c != NULL; c = c->next) {
+        const FFrag *fr = find_frag(c, text);
+        if (fr != NULL)
+            return fr;
+    }
+    return NULL;
+}
+
+// The first public TEXT box whose text starts with `text`, or NULL.
+static const flow_box_t *public_text(const flow_box_t *b, const char *text)
+{
+    if (b == NULL)
+        return NULL;
+    if (b->kind == FLOW_BOX_TEXT && b->length >= strlen(text) &&
+        strncmp(b->text, text, strlen(text)) == 0)
+        return b;
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
+        const flow_box_t *found = public_text(c, text);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
+// Codex #147 round 3: each decoration is drawn in the colour of the element
+// that asked for it — the u's underline in ink, the s's line-through red.
+static void decoration_colour_cases(void)
+{
+    os64_html_document_t *doc =
+        parse("<!doctype html><u><font color=red><s>x</s></font></u>");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    FStyles *styles = f_style_build(doc, page, &kEnv);
+    FBoxes *boxes = f_boxes_build(doc, page, styles, &kEnv);
+    FLayout *lay = f_layout(boxes, doc, page, &kEnv, 400);
+    const FFrag *fr = lay != NULL ? find_frag(boxes->root, "x") : NULL;
+    expect("each decoration keeps the colour of the element that drew it",
+           fr != NULL &&
+               fr->decoration == (FLOW_DECORATION_UNDERLINE | FLOW_DECORATION_LINE_THROUGH) &&
+               fr->decoration_colors.underline == kEnv.ink &&
+               fr->decoration_colors.line_through == 0xFF0000, NULL);
+    f_layout_free(lay);
+    f_boxes_free(boxes);
+    f_style_free(styles);
+    // And the public box a painter reads says the same.
+    flow_tree_t *t = flow_layout(doc, page, 400, &kEnv);
+    const flow_box_t *x = t != NULL ? public_text(flow_root(t), "x") : NULL;
+    expect("the public box carries each decoration's colour",
+           x != NULL && x->underline_color == kEnv.ink && x->line_through_color == 0xFF0000,
+           NULL);
+    flow_free(t);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 // Decorations propagate to every descendant but stop at an atom's content
 // and, in full quirks, at a table; the atom's own and the table's own
 // still reach inside. Pass 1 answers this per element (FStyled).
@@ -612,6 +675,39 @@ static int32_t lowest_y(const flow_box_t *b)
 
 static void limit_cases(void)
 {
+    // Codex #147 round 4: a document libhtml stopped short of is not whole,
+    // however well its prefix lays out.
+    {
+        os64_html_options_t opt = os64_html_options_default();
+        opt.charset = "utf-8";
+        opt.max_bytes = 32;
+        os64_html_parser_t *p = os64_html_parser_new(&opt);
+        const char *html = "<!doctype html><p>one two three four five six seven";
+        os64_html_parser_feed(p, html, strlen(html));
+        os64_html_document_t *doc = os64_html_parser_finish(p);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        flow_tree_t *t = flow_layout(doc, page, 400, &kEnv);
+        expect("a page the parser refused partway is incomplete",
+               doc != NULL && doc->refusal != 0 && t != NULL && flow_incomplete(t), NULL);
+        flow_free(t);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    // Codex #147 round 3: percentages of percentages, three tables deep,
+    // overflowed int64_t (UBSan aborts this harness on it). Every length is
+    // held to what a face can read, so the page is as wide as that allows.
+    {
+        os64_html_document_t *doc = parse("<!doctype html><table width=1000000%><tr><td>"
+                                          "<table width=1000000%><tr><td>"
+                                          "<table width=1000000%><tr><td>x</table></table></table>");
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        flow_tree_t *t = flow_layout(doc, page, 800, &kEnv);
+        expect("nested percentages are held, not overflowed",
+               t != NULL && !flow_incomplete(t) && flow_width(t) == INT32_MAX, NULL);
+        flow_free(t);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
     // Depth is libflow's own bound (F_DEPTH_MAX), whatever the parser was
     // told to allow: past it the build stops and says so, and inside it
     // the page is whole. html and body are two of the descents, so the
@@ -715,10 +811,19 @@ static void layout_sweep(void)
         flow_tree_t *t = flow_layout(doc, page, 300, &kEnv);
         fail_at = 0;
         tried++;
-        if (t == NULL)
+        if (t == NULL) {
             nulls++;
-        else if (flow_incomplete(t))
+        } else if (flow_incomplete(t)) {
             partial++;
+            // Codex #147 round 4: what was laid out before the failure is
+            // reachable — the root holds it, however late the failure came.
+            int64_t need = flow_dump(t, NULL, 0);
+            char *text = malloc((size_t)need + 1);
+            flow_dump(t, text, (size_t)need + 1);
+            if (strstr(text, "block html ") == NULL)
+                expect("layout sweep: a partial tree keeps its root", false, NULL);
+            free(text);
+        }
         else
             expect("layout sweep: a failure is visible", false, NULL);
         flow_free(t);
@@ -796,6 +901,7 @@ int main(int argc, char **argv)
     layout_sweep();
     door_cases();
     paint_cases();
+    decoration_colour_cases();
     limit_cases();
     layout_relation_sweep("a page of every family", kSweepPage, 300);
     {
