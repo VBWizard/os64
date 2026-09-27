@@ -145,7 +145,8 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
     b->baseline = edge32(round_px(fr->baseline));
     b->link = fr->link;
     b->decoration = fr->decoration;
-    b->decoration_color = fr->decoration_color;
+    b->underline_color = fr->decoration_colors.underline;
+    b->line_through_color = fr->decoration_colors.line_through;
     if (fr->kind != FF_ATOMIC) {
         b->run = fr->run;
         b->text = fr->text + fr->begin;
