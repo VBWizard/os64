@@ -221,8 +221,9 @@ int main(int argc, char **argv)
         // built at another tick would otherwise be told a false number.
         os64_ticks_t rate = {0, 0};
         uint32_t per_second = os64_ticks(&rate) < 0 ? 0 : rate.per_second;
-        os64_printf("ping: this kernel has no microsecond clock; round trips are tick-resolution (%u ms)\n",
-                    per_second ? 1000u / per_second : 0u);
+        uint32_t tick_us = per_second ? 1000000u / per_second : 0u;   // in us, so a tick faster than 1 kHz is not "0 ms"
+        os64_printf("ping: this kernel has no microsecond clock; round trips are tick-resolution (%u.%03u ms)\n",
+                    tick_us / 1000u, tick_us % 1000u);
     }
 
     uint32_t sent = 0;

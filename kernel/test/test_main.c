@@ -4921,10 +4921,13 @@ static bool test_net_udp_conn(void)
         net_device_rx(dev, f, (uint16_t)n);                                   \
     } while (0)
 
-    // In from the PEER: must queue and read back verbatim.
+    // In from the PEER: must queue and read back verbatim. The frame is
+    // injected synchronously, so the read never parks — but a deadline
+    // anyway, because a demux that stopped delivering must FAIL this
+    // test, not hang the suite on a wait that can never end.
     CONN_FRAME(5555, msg1, 14);
     char buf[64];
-    long got = udp_conn_read(conn, buf, sizeof(buf), 0);
+    long got = udp_conn_read(conn, buf, sizeof(buf), kTicksSinceStart + 10);
     if (got != 14 || memcmp(buf, msg1, 14) != 0) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - readback got %ld (delivered=%lu)\n",
                got, conn->rx_delivered);
@@ -4946,7 +4949,7 @@ static bool test_net_udp_conn(void)
     // Truncation contract: a 14-byte datagram read into an 8-byte buffer
     // returns 8 and the tail DROPS — one datagram, one read, no carryover.
     CONN_FRAME(5555, msg1, 14);
-    got = udp_conn_read(conn, buf, 8, 0);
+    got = udp_conn_read(conn, buf, 8, kTicksSinceStart + 10);
     if (got != 8 || conn->count != 0) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - truncation contract broken (got %ld, queued %u)\n",
                got, conn->count);
