@@ -373,4 +373,57 @@ static void layout_cases(void)
         "        marker \"\xe2\x80\xa2 \" 36 18 12 16 link 0\n"
         "        line 48 16 144 20 base 14\n"
         "          text \"foo\" 48 18 20 16 serif 16 underline link 0\n");
+
+    // Codex #147 round 2. Alt text collapses against the text beside it:
+    // "a " already ends in a space, so " b" loses its own, and " c" keeps
+    // one. 12, 8 and 12 wide.
+    layout_case("alt text collapses against its neighbours",
+        "<!doctype html><p>a <img src=missing.png alt=\" b\"> c", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"a \" 8 18 12 16 serif 16\n"
+        "        text \"b\" 20 18 8 16 serif 16\n"
+        "        text \" c\" 28 18 12 16 serif 16\n");
+
+    // An inside marker is in its item's link, as its text is.
+    layout_case("an inside marker keeps its item's link",
+        "<!doctype html><a href=x><details><summary>x</summary></details></a>", 200,
+        "page 200 36\n"
+        "block html 0 0 200 36\n"
+        "  block body 8 8 184 20\n"
+        "    block details 8 8 184 20 link 0\n"
+        "      block summary 8 8 184 20\n"
+        "        line 8 8 184 20 base 14\n"
+        "          marker \"\xe2\x96\xb8 \" 8 10 12 16 link 0\n"
+        "          text \"x\" 20 10 8 16 serif 16 underline link 0\n");
+
+    // The page is as tall as what is drawn: the cell (1 + 20 + 1) overflows
+    // the 1px table box this slice stacks as a block, so the page ends at
+    // the cell's bottom, 8 + 22, not the body's 8 + 1 + 8.
+    layout_case("the page reaches what overflows a set height",
+        "<!doctype html><table height=1><tr><td>x</table>", 200,
+        "page 200 30\n"
+        "block html 0 0 200 17\n"
+        "  block body 8 8 184 1\n"
+        "    table table 8 8 184 1\n"
+        "      row-group tbody 8 8 184 22\n"
+        "        row tr 8 8 184 22\n"
+        "          cell td 8 8 184 22\n"
+        "            line 9 9 182 20 base 14\n"
+        "              text \"x\" 9 11 8 16 serif 16\n");
+
+    // A missing picture whose alt is empty is decoration: no line at all,
+    // so its p is empty and the next p's margin collapses through it.
+    layout_case("a missing picture with an empty alt takes no space",
+        "<!doctype html><p><img src=missing.png alt=\"\"></p><p>x</p>", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 0\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"x\" 8 18 8 16 serif 16\n");
 }

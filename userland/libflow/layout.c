@@ -132,6 +132,28 @@ static os64_text_run_t *run_of(L *l, const Fonts *f, const char *text, uint32_t 
     return run;
 }
 
+// The widest a run may be: the engine's coordinates are signed 32-bit 26.6,
+// and a text inside the byte cap can still be wider than that (a million
+// 48px M's). Half the range, so a run's end never nears it.
+#define RUN_ADVANCE_MAX ((int64_t)INT32_MAX / 2)
+
+// A measuring run, or NULL with the engine's reason, failing nothing: the
+// caller decides whether LIMIT means "try less".
+static os64_text_run_t *run_try(L *l, const Fonts *f, const char *text, uint32_t n,
+                                int64_t tab_interval, os64_font_status_t *why)
+{
+    os64_text_layout_t opt = {
+        .encoding = OS64_TEXT_UTF8_WESTERN_V1,
+        .fonts = f->list,
+        .font_count = f->count,
+        .tab_origin = 0,
+        .tab_interval = (os64_font_pos_t)(tab_interval > 0 ? tab_interval : 64 * 8),
+    };
+    os64_text_run_t *run = NULL;
+    *why = os64_text_layout(l->env->text, (const uint8_t *)text, n, &opt, &run);
+    return *why == OS64_FONT_OK ? run : NULL;
+}
+
 static int64_t caret_x(const os64_text_run_t *run, uint32_t byte)
 {
     os64_text_caret_t c;
@@ -145,6 +167,7 @@ static int64_t caret_x(const os64_text_run_t *run, uint32_t byte)
 typedef struct {
     int64_t w, h;           // the content box
     bool alt;               // not a box at all: laid out as its alt text
+    bool none;              // not there at all: a missing picture whose alt is empty
 } Replaced;
 
 // CSS 2.1 §10.3.2 and §10.6.2: the size the page gave, else the one the
@@ -156,7 +179,7 @@ typedef struct {
 static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_style_t *s,
                               int64_t cbw)
 {
-    Replaced r = {0, 0, false};
+    Replaced r = {0, 0, false, false};
     bool w_set = s->width.kind != FLOW_LENGTH_AUTO;
     bool h_set = s->height.kind == FLOW_LENGTH_PX;
     int64_t w = len(s->width, cbw), h = h_set ? s->height.value : 0;
@@ -195,6 +218,9 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
             r.alt = true;
         } else if (alt == NULL) {
             r.w = r.h = 16 * 64;
+        } else {
+            // An empty alt says the picture is decoration: it takes no space.
+            r.none = true;
         }
         return r;
     }
@@ -341,10 +367,26 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
             }
         }
         // A measuring run lives only as long as it takes to read its carets:
-        // a million-byte window costs tens of megabytes of the budget.
-        os64_text_run_t *run = run_of(l, &f, text + w0, w1 - w0, 0, tab_interval);
-        if (run == NULL)
+        // a million-byte window costs tens of megabytes of the budget. One
+        // too WIDE for the engine's coordinates is halved at a character
+        // boundary until it fits, so long text is still never refused.
+        os64_text_run_t *run = NULL;
+        for (;;) {
+            os64_font_status_t why;
+            run = l->failed ? NULL : run_try(l, &f, text + w0, w1 - w0, tab_interval, &why);
+            if (run != NULL || l->failed || why != OS64_FONT_LIMIT)
+                break;
+            uint32_t half = w0 + (w1 - w0) / 2;
+            while (half > w0 && ((unsigned char)text[half] & 0xC0) == 0x80)
+                half--;
+            if (half == w0)
+                break;
+            w1 = half;
+        }
+        if (run == NULL) {
+            fail(l);
             return;
+        }
         if (whole) {
             // No opportunity inside: one word per window, its trailing
             // collapsible space still removable at a line's end.
@@ -427,7 +469,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
         }
         case FI_ATOMIC: {
             const flow_style_t *st = it->style;
-            Replaced r = {0, 0, false};
+            Replaced r = {0, 0, false, false};
             if (it->content == NULL)
                 r = replaced_size(l, it->node, st, cw);
             if (r.alt) {
@@ -448,12 +490,29 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                         else if (m == 0 || copy[m - 1] != ' ')
                             copy[m++] = ' ';
                     }
+                    // And against the text beside it: a space after a space
+                    // it already has, or before one the next text starts
+                    // with, is the same space.
+                    const Seg *prev = s->n > 0 ? &s->v[s->n - 1] : NULL;
+                    if (m > 0 && copy[0] == ' ' && prev != NULL && prev->kind == SG_WORD &&
+                        prev->collapsible && prev->s1 > prev->b1) {
+                        copy++;
+                        m--;
+                    }
+                    const FItem *next = it->next;
+                    if (m > 0 && copy[m - 1] == ' ' && next != NULL && next->kind == FI_TEXT &&
+                        next->len > 0 && next->text[0] == ' ' &&
+                        (next->style->white_space == FLOW_WS_NORMAL ||
+                         next->style->white_space == FLOW_WS_NOWRAP))
+                        m--;
                     alt = copy;
                     n = m;
                 }
                 text_segments(l, s, it, alt, n, st, tabs);
                 break;
             }
+            if (r.none)
+                break;
             Seg *g = seg_add(l, s, SG_ATOM);
             if (g == NULL)
                 return;
@@ -745,13 +804,18 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 if (!content && g->b1 == g->b0 && g->collapsible)
                     break;
                 bool spread = justify && !last && !forced;
-                // A fragment is one run, so it stops short of the run cap.
                 size_t k = j;
+                // It stops short of the run cap, and of the widest run the
+                // engine's coordinates hold.
+                int64_t wide = g->w + g->sw;
                 if (!spread)
                     while (k + 1 < end && s.v[k + 1].kind == SG_WORD &&
                            s.v[k + 1].item == g->item && s.v[k + 1].text == g->text &&
-                           s.v[k + 1].s1 - g->b0 <= OS64_TEXT_BYTES_MAX)
+                           s.v[k + 1].s1 - g->b0 <= OS64_TEXT_BYTES_MAX &&
+                           wide + s.v[k + 1].w + s.v[k + 1].sw <= RUN_ADVANCE_MAX) {
+                        wide += s.v[k + 1].w + s.v[k + 1].sw;
                         k++;
+                    }
                 const Seg *e = &s.v[k];
                 bool at_tail = tail == SIZE_MAX || k >= tail;
                 uint32_t b0 = g->b0;
@@ -893,6 +957,12 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 fr->w = v.advance_x;
                 fr->h = v.ascent + v.descent;
                 fr->y = -v.ascent;
+                // In its item's line, so in the item's link and under its
+                // decorations, as the text beside it is.
+                Paint mp = paint_for(l, styles, g->item->node, NULL);
+                fr->decoration = mp.decoration;
+                fr->decoration_color = mp.color;
+                fr->link = mp.link;
                 Extent fb = font_box(v.ascent, v.descent, v.line_height);
                 extend(&ext, &any, fb.top, fb.bottom);
                 pen += v.advance_x;
@@ -1239,7 +1309,7 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     if (l->failed)
         return;
     const flow_style_t *s = b->style;
-    Replaced rep = {0, 0, false};
+    Replaced rep = {0, 0, false, false};
     int64_t forced_w = -1;
     if (b->kind == FB_REPLACED) {
         rep = replaced_size(l, b->node, s, cbw);
@@ -1352,6 +1422,22 @@ static int64_t right_edge(const FBox *b)
     return r;
 }
 
+// How far down anything is drawn: a box's own bottom, and anything inside
+// it that overflows a height the page set.
+static int64_t bottom_edge(const FBox *b)
+{
+    int64_t r = b->placed ? b->y + b->h : 0;
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
+            r = max64(r, fr->y + fr->h);
+            if (fr->kind == FF_ATOMIC && fr->item->content != NULL)
+                r = max64(r, bottom_edge(fr->item->content));
+        }
+    for (const FBox *c = b->first; c != NULL; c = c->next)
+        r = max64(r, bottom_edge(c));
+    return r;
+}
+
 FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
                   const flow_env_t *env, int32_t width)
 {
@@ -1372,7 +1458,7 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     if (boxes->root != NULL) {
         Cursor cur = {0, 0, -1};
         block(&l, boxes->styles, boxes->root, 0, w, &cur);
-        out->height = cur.y + cur.pm;
+        out->height = max64(cur.y + cur.pm, bottom_edge(boxes->root));
         out->width = max64(w, right_edge(boxes->root));
     }
     return out;

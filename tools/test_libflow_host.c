@@ -366,6 +366,46 @@ static void allocation_sweep(void)
 
 // Every allocation of a whole layout fails in turn: NULL, or a tree that
 // says it is incomplete, or the whole one — never a crash, never a leak.
+// Codex #147 round 2: a page taller than an int32_t, and a text wider than
+// the engine's signed 26.6 coordinates.
+static void limit_cases(void)
+{
+    // 2,200 pictures a million pixels tall, one a line: 2.2e9 px of page,
+    // which flow_height holds to INT32_MAX rather than wrapping negative.
+    size_t cap = 2200 * 48 + 64, at = 0;
+    char *html = malloc(cap);
+    at += (size_t)snprintf(html + at, cap - at, "<!doctype html>");
+    for (int i = 0; i < 2200; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<img src=known.png height=1000000><br>");
+    os64_html_document_t *doc = parse(html);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    flow_tree_t *t = flow_layout(doc, page, 200, &kEnv);
+    expect("a page past INT32_MAX is held to it",
+           t != NULL && !flow_incomplete(t) && flow_height(t) == INT32_MAX, NULL);
+    flow_free(t);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    free(html);
+
+    // A million M's at 48px (<font size=7>) are inside the engine's byte
+    // cap and 36 million pixels wide: the window is halved until a run
+    // fits, and the page lays out whole, as wide as the word.
+    size_t n = 1000000;
+    html = malloc(n + 64);
+    at = (size_t)snprintf(html, 64, "<!doctype html><font size=7>");
+    memset(html + at, 'M', n);
+    html[at + n] = '\0';
+    doc = parse(html);
+    page = os64_page_build(doc, kPage, NULL);
+    t = flow_layout(doc, page, 800, &kEnv);
+    expect("a word wider than the engine's coordinates is still laid out",
+           t != NULL && !flow_incomplete(t) && flow_width(t) > 1000000, NULL);
+    flow_free(t);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    free(html);
+}
+
 static void layout_sweep(void)
 {
     const char *html =
@@ -440,6 +480,7 @@ int main(int argc, char **argv)
     allocation_sweep();
     boxes_sweep();
     layout_sweep();
+    limit_cases();
     text_teardown();
     printf("libflow: %d checks, %d failed%s\n", checks, failures,
            live != 0 ? " (AND LEAKED)" : "");
