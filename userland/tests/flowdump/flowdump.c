@@ -162,9 +162,9 @@ static char *dump_of(const flow_tree_t *t)
 static int32_t count(const char *text, const char *word)
 {
     int32_t n = 0;
-    size_t wl = os64_strlen(word);
-    for (const char *p = text; *p != '\0'; p++)
-        if (os64_memcmp(p, word, wl) == 0)
+    size_t wl = os64_strlen(word), tl = os64_strlen(text);
+    for (size_t i = 0; i + wl <= tl; i++)
+        if (os64_memcmp(text + i, word, wl) == 0)
             n++;
     return n;
 }
@@ -172,17 +172,19 @@ static int32_t count(const char *text, const char *word)
 // The first `text` line's height after `tag` in a dump: its content area.
 static int32_t text_height_after(const char *dump, const char *tag)
 {
-    const char *at = dump;
+    // Every comparison stays inside the dump: a fixed-length compare near
+    // its end would read past the NUL.
+    const char *at = dump, *end = dump + os64_strlen(dump);
     size_t tl = os64_strlen(tag);
-    while (*at != '\0' && os64_memcmp(at, tag, tl) != 0)
+    while (at + tl <= end && os64_memcmp(at, tag, tl) != 0)
         at++;
-    while (*at != '\0' && os64_memcmp(at, "text \"", 6) != 0)
+    while (at + 6 <= end && os64_memcmp(at, "text \"", 6) != 0)
         at++;
-    if (*at == '\0')
+    if (at + 6 > end)
         return -1;
     at += 6;
-    while (*at != '\0' && *at != '"')
-        at += *at == '\\' ? 2 : 1;
+    while (at < end && *at != '"')
+        at += *at == '\\' && at + 1 < end ? 2 : 1;
     int32_t field[4] = {0}, k = 0;
     while (*at != '\0' && k < 4) {
         while (*at == ' ' || *at == '"')
