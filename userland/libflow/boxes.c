@@ -16,8 +16,10 @@
 // children are built, from pass 1's holds-block bits, so a build that stops
 // early is a prefix of the whole build (LAYOUT.md § Proof).
 //
-// Recursion follows the element tree, so it is bounded by libhtml's
-// max_depth; a frame of it is small.
+// Recursion follows the element tree. Its depth is bounded HERE, by
+// F_DEPTH_MAX, not by libhtml's max_depth, which is the caller's option:
+// every later pass recurses along the boxes this builds, so this is the
+// bound that keeps the whole layout inside a thread's stack.
 
 #include "internal.h"
 #include "os64/fmt.h"
@@ -28,7 +30,8 @@ typedef struct {
     const FStyles *styles;
     const flow_env_t *env;
     FBoxes *out;
-    bool oom;
+    int32_t depth;      // descents open, each costed as a block level (F_DEPTH_MAX)
+    bool stopped;       // memory ran out, or the page is nested past F_DEPTH_MAX
 } B;
 
 // A list's counter: the number the next item wears.
@@ -76,9 +79,27 @@ static bool css_space(char c)
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
-static bool collapsible(flow_white_space_t ws)
+bool f_collapsible(flow_white_space_t ws)
 {
     return ws == FLOW_WS_NORMAL || ws == FLOW_WS_NOWRAP;
+}
+
+uint32_t f_collapse_white(const char *in, uint32_t n, char *out, bool *space)
+{
+    uint32_t len = 0;
+    bool sp = *space;
+    for (uint32_t i = 0; i < n; i++) {
+        if (css_space(in[i])) {
+            if (!sp)
+                out[len++] = ' ';
+            sp = true;
+        } else {
+            out[len++] = in[i];
+            sp = false;
+        }
+    }
+    *space = sp;
+    return len;
 }
 
 // Replaced elements: laid out at a size the face supplies, their insides
@@ -149,7 +170,7 @@ static bool text_significant(const B *b, const os64_html_node_t *n)
     const flow_style_t *s = text_style(b, n);
     if (s == NULL || n->text_len == 0)
         return false;
-    if (!collapsible(s->white_space))
+    if (!f_collapsible(s->white_space))
         return true;
     for (size_t i = 0; i < n->text_len; i++)
         if (!css_space(n->text[i]))
@@ -157,27 +178,56 @@ static bool text_significant(const B *b, const os64_html_node_t *n)
     return false;
 }
 
+// ── Depth ───────────────────────────────────────────────────────────────
+
+// Every recursive descent of the build opens with descend() and closes with
+// ascend(), and a descent that costs more stack than a block level opens
+// more than one. Past F_DEPTH_MAX the build stops, as it does when memory
+// runs out, so what it made is still a prefix of the whole build.
+static bool descend(B *b)
+{
+    if (b->stopped)
+        return false;
+    if (b->depth >= F_DEPTH_MAX) {
+        b->stopped = true;
+        return false;
+    }
+    b->depth++;
+    return true;
+}
+
+static void ascend(B *b)
+{
+    b->depth--;
+}
+
 // ── Allocation ──────────────────────────────────────────────────────────
 
 // A box whose content the build could not finish says so, and so does
-// every box above it: they are the path to where memory ran out, and
+// every box above it: they are the path to where the build stopped, and
 // layout must not present them as whole (LAYOUT.md § Proof, rule (c)).
 static void mark_cut(const B *b, FBox *box)
 {
-    if (b->oom && box != NULL)
+    if (b->stopped && box != NULL)
         box->unfinished = true;
 }
 
 static void *alloc(B *b, size_t size)
 {
-    if (b->oom)
+    if (b->stopped)
         return NULL;
     void *p = f_arena_alloc(&b->out->arena, size);
     if (p == NULL)
-        b->oom = true;
+        b->stopped = true;
     return p;
 }
 
+// A box is in the link its node is or sits in (FStyled.link), read off the
+// element tree and not the inline edges open where the box is built,
+// because a link has no edge a box could fall outside: `<a href><div>` is a
+// clickable block once the `a` is split round it, and an inline-block's
+// content is inside the `a` its atom is. A box with no node of its own —
+// an anonymous block, an anonymous table part — is in its parent's.
 static FBox *new_box(B *b, FBox *parent, f_box_kind_t kind, const os64_html_node_t *node,
                      const flow_style_t *style)
 {
@@ -187,7 +237,8 @@ static FBox *new_box(B *b, FBox *parent, f_box_kind_t kind, const os64_html_node
     box->kind = kind;
     box->node = node;
     box->style = style;
-    box->link = -1;
+    const FStyled *st = node != NULL ? styled(b, node) : NULL;
+    box->link = st != NULL ? st->link : parent != NULL ? parent->link : -1;
     box->parent = parent;
     // Attached at once, so a build that stops here leaves a tree that is
     // whole up to this box.
@@ -232,7 +283,7 @@ static FItem *new_item(B *b, FBox *ifc, f_item_kind_t kind, const os64_html_node
 
 static void reopen(Flow *f, Frame *fr)
 {
-    if (fr == NULL || f->b->oom)
+    if (fr == NULL || f->b->stopped)
         return;
     reopen(f, fr->up);
     FItem *item = new_item(f->b, f->target, FI_OPEN, fr->inl->node, fr->inl->style);
@@ -251,7 +302,7 @@ static void reopen(Flow *f, Frame *fr)
 // opened again inside it.
 static FBox *target(Flow *f)
 {
-    if (f->target != NULL || f->b->oom)
+    if (f->target != NULL || f->b->stopped)
         return f->target;
     f->anon_table = NULL;
     FBox *anon = new_box(f->b, f->container, FB_BLOCK, NULL,
@@ -271,7 +322,7 @@ static void end_run(Flow *f)
 {
     if (!f->mixed || f->target == NULL)
         return;
-    for (Frame *fr = f->open; fr != NULL && !f->b->oom; fr = fr->up) {
+    for (Frame *fr = f->open; fr != NULL && !f->b->stopped; fr = fr->up) {
         if (fr->inl->open_in != f->target)
             continue;
         FItem *item = new_item(f->b, f->target, FI_CLOSE, fr->inl->node, fr->inl->style);
@@ -310,12 +361,12 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     const flow_style_t *s = text_style(b, n);
     if (s == NULL || n->text_len == 0)
         return;
-    if (!collapsible(s->white_space)) {
+    if (!f_collapsible(s->white_space)) {
         FBox *ifc = target(f);
         if (ifc == NULL)
             return;
         uint32_t start = 0;
-        for (uint32_t i = 0; i <= (uint32_t)n->text_len && !b->oom; i++) {
+        for (uint32_t i = 0; i <= (uint32_t)n->text_len && !b->stopped; i++) {
             if (i < n->text_len && n->text[i] != '\n')
                 continue;
             if (i > start)
@@ -342,18 +393,8 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     char *copy = alloc(b, n->text_len);
     if (copy == NULL)
         return;
-    uint32_t len = 0;
     bool space = ifc->collapse_space;
-    for (size_t i = 0; i < n->text_len; i++) {
-        if (css_space(n->text[i])) {
-            if (!space)
-                copy[len++] = ' ';
-            space = true;
-        } else {
-            copy[len++] = n->text[i];
-            space = false;
-        }
-    }
+    uint32_t len = f_collapse_white(n->text, (uint32_t)n->text_len, copy, &space);
     ifc->collapse_space = space;
     // Point into the tree when processing changed nothing: the box tree
     // copies no text it can point at.
@@ -533,21 +574,10 @@ static void build_container(B *b, FBox *box, const os64_html_node_t *first,
         }
     }
     flow_range(&f, first, stop, scope);
-    // The anonymous block being filled when memory ran out is the cut too.
+    // The anonymous block being filled when the build stopped is the cut too.
     mark_cut(b, f.target);
     end_run(&f);
     mark_cut(b, box);
-}
-
-// The link a block sits inside when it splits an `a`: `<a href><div>` is
-// a clickable block on every page that writes it, and once the `a` is
-// split round the block no inline edge is left to say so.
-static int32_t enclosing_link(const Flow *f)
-{
-    for (const Frame *fr = f->open; fr != NULL; fr = fr->up)
-        if (fr->inl->link >= 0)
-            return fr->inl->link;
-    return -1;
 }
 
 static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
@@ -556,15 +586,12 @@ static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
     end_run(f);
     f->anon_table = NULL;
     if (replaced(el)) {
-        FBox *box = new_box(b, f->container, FB_REPLACED, el, &s->style);
-        if (box != NULL && b->model != NULL)
-            box->link = os64_page_link_for(b->model, el);
+        new_box(b, f->container, FB_REPLACED, el, &s->style);
         return;
     }
     if (s->style.display == FLOW_DISPLAY_TABLE) {
         FBox *table = new_box(b, f->container, FB_TABLE, el, &s->style);
         if (table != NULL) {
-            table->link = enclosing_link(f);
             table_range(b, table, el->first_child, NULL, scope);
             mark_cut(b, table);
         }
@@ -601,13 +628,12 @@ static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
             scope->next += scope->down ? -1 : 1;
         }
         marker = marker_text(b, s->style.list_style_type, value, &marker_len);
-        if (b->oom)
+        if (b->stopped)
             return;
     }
     FBox *box = new_box(b, f->container, FB_BLOCK, el, &s->style);
     if (box == NULL)
         return;
-    box->link = enclosing_link(f);
     const char *inside = NULL;
     uint32_t inside_len = 0;
     if (marker != NULL && s->style.list_style_position == FLOW_LIST_INSIDE) {
@@ -634,13 +660,18 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
         }
         ifc->collapse_space = false;
         // An inline-block that is not replaced (a marquee) is a block of its
-        // own, laid out inside the atom.
+        // own, laid out inside the atom. Its content costs two descents: a
+        // level of it holds a line's frame as well as a block's, twice a
+        // block level's stack (LAYOUT.md § Bounds).
         if (!replaced(el)) {
             FBox *content = new_box(b, NULL, FB_BLOCK, el, &s->style);
             if (content != NULL) {
                 content->parent = ifc;
                 item->content = content;
-                build_container(b, content, el->first_child, NULL, scope, NULL, 0);
+                if (descend(b)) {
+                    build_container(b, content, el->first_child, NULL, scope, NULL, 0);
+                    ascend(b);
+                }
             }
         }
         return;
@@ -714,7 +745,9 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
                        Scope *scope)
 {
     B *b = f->b;
-    for (const os64_html_node_t *c = first; c != stop && !b->oom; c = c->next) {
+    if (!descend(b))
+        return;
+    for (const os64_html_node_t *c = first; c != stop && !b->stopped; c = c->next) {
         if (c->kind == OS64_HTML_TEXT) {
             if (foreign_text(c) || hidden_by_details(c))
                 continue;
@@ -753,6 +786,7 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
             inline_element(f, c, s, scope);
         }
     }
+    ascend(b);
 }
 
 // ── Tables (CSS 2.1 §17.2.1) ────────────────────────────────────────────
@@ -820,7 +854,9 @@ static FBox *anon_part(B *b, FBox *parent, f_box_kind_t kind, flow_display_t dis
 static void row_range(B *b, FBox *row, const os64_html_node_t *first,
                       const os64_html_node_t *stop, Scope *scope)
 {
-    for (const os64_html_node_t *c = first; c != stop && !b->oom;) {
+    if (!descend(b))
+        return;
+    for (const os64_html_node_t *c = first; c != stop && !b->stopped;) {
         if (structural(AT_ROW, c, display_of(b, c))) {
             FBox *cell = new_box(b, row, FB_CELL, c, &styled(b, c)->style);
             if (cell != NULL)
@@ -836,6 +872,7 @@ static void row_range(B *b, FBox *row, const os64_html_node_t *first,
             c = c->next;
         }
     }
+    ascend(b);
 }
 
 static void rows_range(B *b, FBox *parent, Level level, const os64_html_node_t *first,
@@ -887,8 +924,10 @@ static void table_part(B *b, FBox *table, const os64_html_node_t *c, flow_displa
 static void rows_range(B *b, FBox *parent, Level level, const os64_html_node_t *first,
                        const os64_html_node_t *stop, Scope *scope)
 {
+    if (!descend(b))
+        return;
     FBox *anon_row = NULL;
-    for (const os64_html_node_t *c = first; c != stop && !b->oom;) {
+    for (const os64_html_node_t *c = first; c != stop && !b->stopped;) {
         flow_display_t d = display_of(b, c);
         if (structural(level, c, d) && d != FLOW_DISPLAY_TABLE_CELL) {
             anon_row = NULL;
@@ -900,7 +939,7 @@ static void rows_range(B *b, FBox *parent, Level level, const os64_html_node_t *
             if (anon_row == NULL)
                 anon_row = anon_part(b, parent, FB_ROW, FLOW_DISPLAY_TABLE_ROW);
             if (anon_row == NULL)
-                return;
+                break;
             const os64_html_node_t *end = d == FLOW_DISPLAY_TABLE_CELL
                                               ? c->next : loose_end(b, level, c, stop);
             row_range(b, anon_row, c, end, scope);
@@ -910,6 +949,7 @@ static void rows_range(B *b, FBox *parent, Level level, const os64_html_node_t *
         }
         c = c->next;
     }
+    ascend(b);
 }
 
 static void table_range(B *b, FBox *table, const os64_html_node_t *first,
@@ -929,7 +969,7 @@ FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
     if (out == NULL)
         return NULL;
     out->styles = styles;
-    B b = {doc, model, styles, env, out, false};
+    B b = {doc, model, styles, env, out, 0, false};
     const os64_html_node_t *html = doc->html;
     const FStyled *root = html != NULL ? styled(&b, html) : NULL;
     if (root != NULL && root->style.display != FLOW_DISPLAY_NONE) {
@@ -938,7 +978,7 @@ FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
         if (out->root != NULL)
             build_container(&b, out->root, html->first_child, NULL, &scope, NULL, 0);
     }
-    out->incomplete = b.oom;
+    out->incomplete = b.stopped;
     return out;
 }
 
