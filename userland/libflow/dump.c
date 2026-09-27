@@ -188,6 +188,15 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, " bg=");
         color(b, env, s->background);
     }
+    if (s->background_image != NULL) {
+        static const char *const kRepeat[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
+        puts_(b, " bg-image=\"");
+        put(b, s->background_image, s->background_image_len);
+        putf(b, "\"@%d %s ", (int)s->background_sheet, kRepeat[s->background_repeat]);
+        length(b, s->background_position[0]);
+        puts_(b, "/");
+        length(b, s->background_position[1]);
+    }
     bool margins = false, paddings = false, borders = false;
     for (int i = 0; i < 4; i++) {
         margins |= !is_zero(s->margin[i]);

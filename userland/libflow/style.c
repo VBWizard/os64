@@ -36,6 +36,8 @@ static Len px(int32_t n) { return (Len){L_PX, n * FLOW_UNITS_PER_PX, 0}; }
 static Len em(int32_t thousandths) { return (Len){L_EM, thousandths, 0}; }
 static const Len kAuto = {L_AUTO, 0, 0};
 
+static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset);
+
 // How the font size was written, resolved against the parent's.
 typedef enum {
     FS_INHERIT = 0,
@@ -301,6 +303,8 @@ static flow_style_t initial(const Ctx *c)
     s.font_style = FLOW_FONT_NORMAL;
     s.font_size = (flow_unit_t)c->env->viewport_font_px * FLOW_UNITS_PER_PX;
     s.color = c->env->ink;
+    s.background_position[0] = s.background_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 0, 0};
+    s.background_sheet = -1;
     // Margins and padding start at 0px — NOT at zero bytes, which is `auto`.
     for (int i = 0; i < 4; i++) {
         s.margin[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
@@ -1240,6 +1244,7 @@ typedef struct {
     const flow_style_t *parent;
     flow_unit_t font;           // the element's own font size, once it is known
     garb_env_t view;
+    int32_t sheet;              // the winner being read: the sheet it came from
 } Author;
 
 static bool word(const garb_val_t *v, const char *w)
@@ -1641,6 +1646,14 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->has_background = s->has_background;
         d->background = s->background;
         break;
+    case GARB_BACKGROUND_IMAGE:
+        d->background_image = s->background_image;
+        d->background_image_len = s->background_image_len;
+        d->background_sheet = s->background_sheet;
+        break;
+    case GARB_BACKGROUND_REPEAT: d->background_repeat = s->background_repeat; break;
+    case GARB_BACKGROUND_POSITION_X: d->background_position[0] = s->background_position[0]; break;
+    case GARB_BACKGROUND_POSITION_Y: d->background_position[1] = s->background_position[1]; break;
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         dst->margin[side(prop, GARB_MARGIN_TOP)] = src->margin[side(prop, GARB_MARGIN_TOP)];
         break;
@@ -1791,6 +1804,31 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             s->background = xrgb(v->color, a->c->env->paper);
         }
         break;
+    case GARB_BACKGROUND_IMAGE:
+        // A gradient is an image libflow cannot draw yet: no picture
+        // (GARB.md § Booked).
+        s->background_image = NULL;
+        s->background_image_len = 0;
+        s->background_sheet = -1;
+        if (v->kind == GARB_V_URL && v->len > 0) {
+            s->background_image = v->text;
+            s->background_image_len = (uint32_t)v->len;
+            s->background_sheet = a->sheet;
+        }
+        break;
+    case GARB_BACKGROUND_REPEAT: {
+        static const char *const words[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->background_repeat = (flow_repeat_t)i;
+        break;
+    }
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
+        Len l;
+        if (author_len(a, v, false, &l))
+            s->background_position[p == GARB_BACKGROUND_POSITION_Y] =
+                resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0});
+        break;
+    }
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         author_len(a, v, true, &sp->margin[side(p, GARB_MARGIN_TOP)]);
         break;
@@ -1982,7 +2020,7 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     garb_style_t st = garb_style_for(c->env->cascade, n);
     if (st.n == 0)
         return true;
-    Author a = {c, parent, 0, garb_cascade_env(c->env->cascade)};
+    Author a = {c, parent, 0, garb_cascade_env(c->env->cascade), -1};
     Spec init, inh;
     bool have_init = false, have_inh = false;
     // font-size and color before the rest: every other em on the element
@@ -1990,6 +2028,7 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     for (int pass = 0; pass < 2; pass++) {
         for (int32_t i = 0; i < st.n; i++) {
             const garb_set_t *set = &st.sets[i];
+            a.sheet = st.sheet != NULL ? st.sheet[i] : -1;
             bool font = set->prop == GARB_FONT_SIZE;
             bool first = font || set->prop == GARB_COLOR;
             if (first != (pass == 0))

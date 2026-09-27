@@ -33,6 +33,13 @@ typedef struct {
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, uint32_t paper,
                   const yonder_verbs_t *verbs);
 
+// Where a sheet's picture behind `box` starts, and on which axes it
+// repeats (CSS Backgrounds 3 § 3.4, § 3.6): its position from the box's
+// corner, a percentage being of the room the `iw` x `ih` picture leaves
+// there — so 100% puts it against the far edge, 50% in the middle.
+void yonder_background_place(const flow_box_t *box, uint32_t iw, uint32_t ih, int32_t *ox,
+                             int32_t *oy, bool *repeat_x, bool *repeat_y);
+
 // The two tones a bevelled border is drawn in, from its colour.
 uint32_t yonder_lighter(uint32_t colour);
 uint32_t yonder_darker(uint32_t colour);

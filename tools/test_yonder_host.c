@@ -425,7 +425,7 @@ static void scale_cases(void)
     // Tiling a 2x2 picture {A,B / C,A} unscaled from the area's corner.
     uint32_t tiles[25] = {0};
     yonder_tile_picture(tiles, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5}, 0, 0,
-                        two, 2, 2);
+                        true, true, two, 2, 2);
     const uint32_t tiled[25] = {A, B, A, B, A, C, A, C, A, C, A, B, A, B, A,
                                 C, A, C, A, C, A, B, A, B, A};
     expect("tile: whole copies, and the last cut at the area's edge", pixels_are(tiles, tiled, 25),
@@ -435,7 +435,7 @@ static void scale_cases(void)
     // origin put them, and nothing outside the clip is written.
     uint32_t cut_tiles[25] = {0};
     yonder_tile_picture(cut_tiles, 5, (os64_gui_rect_t){1, 1, 3, 3}, (os64_gui_rect_t){0, 0, 5, 5},
-                        0, 0, two, 2, 2);
+                        0, 0, true, true, two, 2, 2);
     bool inside_same = true, outside_clear = true;
     for (int y = 0; y < 5; y++)
         for (int x = 0; x < 5; x++) {
@@ -451,7 +451,7 @@ static void scale_cases(void)
     // view is scrolled into): the area starts one pixel into a tile.
     uint32_t shifted_tiles[4] = {0};
     yonder_tile_picture(shifted_tiles, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){0, 0, 2, 2},
-                        -1, -3, two, 2, 2);
+                        -1, -3, true, true, two, 2, 2);
     const uint32_t from_origin[4] = {A, C, B, A};
     expect("tile: an origin outside the area lays the tiles from there",
            pixels_are(shifted_tiles, from_origin, 4), NULL);
@@ -459,9 +459,43 @@ static void scale_cases(void)
     uint32_t over_blue[2] = {0xff0000ffu, 0xff0000ffu};
     const uint32_t half_and_none[2] = {0x80ff0000u, 0x00ff0000u};
     yonder_tile_picture(over_blue, 2, (os64_gui_rect_t){0, 0, 2, 1}, (os64_gui_rect_t){0, 0, 2, 1}, 0,
-                        0, half_and_none, 2, 1);
+                        0, true, true, half_and_none, 2, 1);
     expect("tile: blended by alpha over the colour beneath",
            over_blue[0] == 0xff80007fu && over_blue[1] == 0xff0000ffu, NULL);
+
+    // repeat-x at (1, 2) in a 5x5 area: the one row of tiles, two tall
+    // from y 2, laid from x 1 both ways; no-repeat: the one copy at (1, 2).
+    uint32_t strip[25] = {0};
+    yonder_tile_picture(strip, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5}, 1, 2,
+                        true, false, two, 2, 2);
+    const uint32_t row_want[25] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, B, A, B, A, B,
+                                   A, C, A, C, A, 0, 0, 0, 0, 0};
+    expect("tile: repeat-x draws one row of tiles", pixels_are(strip, row_want, 25), NULL);
+    uint32_t one[25] = {0};
+    yonder_tile_picture(one, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5}, 1, 2,
+                        false, false, two, 2, 2);
+    const uint32_t one_want[25] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, A, B, 0, 0,
+                                   0, C, A, 0, 0, 0, 0, 0, 0, 0};
+    expect("tile: no-repeat draws the one copy", pixels_are(one, one_want, 25), NULL);
+
+    // A sheet's picture, 20x10, behind a 100x50 box at (10, 20):
+    // `right 10px center repeat-x` is calc(100% - 10px) and 50%, so x is
+    // 10 + (100 - 20) - 10 = 80 and y is 20 + (50 - 10) / 2 = 40.
+    flow_style_t st;
+    memset(&st, 0, sizeof(st));
+    st.background_position[0] = (flow_length_t){FLOW_LENGTH_PERCENT, 100 * 64, -10 * 64};
+    st.background_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    st.background_repeat = FLOW_REPEAT_X;
+    flow_box_t box;
+    memset(&box, 0, sizeof(box));
+    box.style = &st;
+    box.rect = (os64_gui_rect_t){10, 20, 100, 50};
+    int32_t ox = 0, oy = 0;
+    bool rx = false, ry = true;
+    yonder_background_place(&box, 20, 10, &ox, &oy, &rx, &ry);
+    expect("background: a position from the far edge, and one centred", ox == 80 && oy == 40,
+           NULL);
+    expect("background: repeat-x repeats across and not down", rx && !ry, NULL);
 }
 
 // ── The question bar: no click made before a question may answer it ─────

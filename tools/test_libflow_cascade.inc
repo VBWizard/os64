@@ -119,6 +119,17 @@ static void cascade_cases(void)
         "      span inline size=20\n"
         "    p block margin=16/0/16/0 line-height=1.500 transform=uppercase\n");
 
+    // A background picture keeps its url() as written and the sheet it
+    // came from (0: the page's first sheet; -1: a style attribute, which
+    // wins here). `right 10px bottom` is calc(100% - 10px) and 100%.
+    cascade_case("background pictures, their repeat and position", 800,
+        "<!doctype html><style>body { background: url(sky.png) no-repeat right 10px bottom }"
+        " p { background-image: url(a.gif) }</style>"
+        "<p style='background: url(b.gif) repeat-x 5px 50%'>x</p>",
+        PAGE_OPEN
+        "  body block bg-image=\"sky.png\"@0 no-repeat 100%-10/100% margin=8/8/8/8 holds-block\n"
+        "    p block bg-image=\"b.gif\"@-1 repeat-x 5/50% margin=16/0/16/0\n");
+
     // The layout dumps are test_libflow_layout.inc's: 16px text is 20
     // tall with its content area 2 below the line's top.
 

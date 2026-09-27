@@ -192,6 +192,7 @@ typedef enum { FLOW_SEPARATE = 0, FLOW_COLLAPSE_BORDERS } flow_border_collapse_t
 typedef enum { FLOW_CAPTION_TOP = 0, FLOW_CAPTION_BOTTOM } flow_caption_side_t;
 typedef enum { FLOW_FLOAT_NONE = 0, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT } flow_float_t;
 typedef enum { FLOW_CONTENT_BOX = 0, FLOW_BORDER_BOX } flow_box_sizing_t;
+typedef enum { FLOW_REPEAT = 0, FLOW_REPEAT_X, FLOW_REPEAT_Y, FLOW_NO_REPEAT } flow_repeat_t;
 typedef enum {
     FLOW_OVERFLOW_VISIBLE = 0,
     FLOW_OVERFLOW_HIDDEN,
@@ -212,6 +213,19 @@ typedef struct {
     uint32_t color;                 // XRGB
     bool has_background;            // false = transparent
     uint32_t background;            // XRGB
+    // A picture behind the box from the page's own sheets (CSS Backgrounds
+    // 3 § 3): its url() as written, not terminated, and the index in the
+    // cascade's input of the sheet it was written in (-1 for a `style`
+    // attribute), which the face resolves it against and fetches. NULL
+    // for none. A `background` ATTRIBUTE's picture is libpage's list, and
+    // a sheet's outranks it.
+    const char *background_image;
+    uint32_t background_image_len;
+    int32_t background_sheet;
+    flow_repeat_t background_repeat;
+    // From the box's top-left corner: PX, or PERCENT of the room the
+    // picture leaves (a picture at 100% sits against the far edge).
+    flow_length_t background_position[2];
 
     flow_length_t margin[4];        // PX, PERCENT or AUTO
     flow_length_t padding[4];       // PX or PERCENT

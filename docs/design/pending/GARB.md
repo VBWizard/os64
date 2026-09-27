@@ -280,6 +280,33 @@ disk; and https://danlegt.com/ fetches its linked sheets and is dressed by
 them as far as pile 1 carries it. Stop during the wait is not proven in
 the guest: the monitor's pace lands the press after the 3 s.
 
+**G5, as run.** The cheap properties, in four commits. **G5a**
+`box-sizing` and `min-`/`max-width`/`-height` (CSS 2.1 § 10.4: a width that
+breaks a limit is worked again with the limit as the width set, so
+`max-width: 40em; margin: 0 auto` centres; a min-height stops margins
+collapsing through, § 8.3.1; a picture keeps its ratio in the dimension
+the page left it, `img { max-width: 100% }`). **G5b** `line-height` (every
+inline box's leading, split above and below, § 10.8.1), `text-indent`,
+`text-transform` (ASCII and Latin-1, whose case changes keep their UTF-8
+length, so selection offsets hold) and `white-space: pre-line`. **G5c**
+`overflow`: `hidden` and `clip` cut what is inside to the padding box —
+drawing, hit-testing and the page's extent — and a scrolling or hiding box
+starts a block formatting context; `auto` and `scroll` are laid out as
+containers and drawn unclipped until yonder scrolls a box. **G5d**
+background pictures from a sheet: libgarb's winners now say which sheet
+each came from, so yonder resolves a url() against THAT sheet (after its
+redirects), or the page's base for a `style` attribute, fetches it with the
+page's pictures, and tiles it with `background-repeat` and
+`background-position` (a percentage of the room the picture leaves). Host:
+libflow 10507 checks (11 layouts and style dumps worked by hand across the
+four), yonder 65 (a painted clip, the tiler's two new modes and the
+placement arithmetic by hand — which caught a negative offset rounding the
+wrong way), garb 15 cascade pages; the 12 corpus dumps unchanged. Guest: a
+page whose linked sheet names pictures relative to itself draws its
+checkered canvas, a `repeat-x` band, a `no-repeat` dot at `right 10px
+center`, a 400px line cut at its 120px `overflow: hidden` box, and a
+`style` attribute's picture resolved against the page.
+
 ## Booked before the first line
 
 | Debt | Why it waits | Trigger |
@@ -312,6 +339,7 @@ the guest: the monitor's pace lands the press after the 3 s.
 | `text-transform` past Latin-1, `ß`/`ÿ`, and `capitalize` across element boundaries; `text-indent`'s `hanging` and `each-line` | a case change that alters a letter's UTF-8 length would move every offset a selection maps through; a word's start is judged per text item; the two keywords are read and not drawn | a page in a script with case, or one that needs them |
 | A string list marker, and counter styles beyond the ten | libflow draws its ten marker kinds; any other name is decimal, as Counter Styles 3 says of an undefined one, and a string is ignored | G5's generated content |
 | A table column's `calc()` width | a column keeps a percentage's share of the table and no fixed part, so `calc(20% + 10px)` on a cell is 20% | a page whose tables are sized that way |
-| `font-variant`, background pictures and positions | read by libgarb, not yet held by libflow | G5 |
+| `font-variant: small-caps` | read by libgarb and not drawn: it needs a face's small capitals, or capitals made smaller, and yonder has one face today | brief 04's faces |
+| `background-size`, `-origin`, `-clip`, `-attachment`, and a gradient as a picture | a sheet's picture is drawn at its own size, positioned from the border box's corner, under the whole border box, and scrolls with the page; a gradient is no picture | pile 3 |
 | Scrolling boxes: `overflow: auto` and `scroll` | they are laid out as the containers they are (their own block formatting context) but drawn unclipped, since yonder does not scroll a box, and a clipped one would hide what is past its edge with no way to reach it | yonder scrolls a box (wheel over it, and a bar) |
 | The viewport's own overflow, and form controls inside a clipping box | the root's (or the body's) `overflow` is the viewport's and yonder always scrolls the page; a control is a widget of its own over the page and is not cut by an ancestor's clip | a page that hides its viewport's overflow on purpose (a modal), or a form inside a box that clips |
