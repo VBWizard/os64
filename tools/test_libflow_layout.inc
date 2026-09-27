@@ -417,6 +417,75 @@ static void layout_cases(void)
         "          line 8 8 184 20 base 14\n"
         "            text \"hi\" 8 10 12 16 serif 16 link 0\n");
 
+    // Codex #147 round 3. A right-aligned rule wider than its containing
+    // block: the auto left margin is zero (§10.3.3), so the rule starts at
+    // the content edge and overflows to the right, 8 + 1000 + 2 of border.
+    layout_case("an over-wide box's auto margin is zero",
+        "<!doctype html><hr align=right width=1000>", 800,
+        "page 1010 18\n"
+        "block html 0 0 800 18\n"
+        "  block body 8 8 784 2\n"
+        "    block hr 8 8 1002 2\n");
+
+    // Codex #147 round 3. An inside marker ends in its suffix space, and the
+    // break after it is the item's: in 15px the marker (12) fits the first
+    // line and the x (8) goes to the next.
+    layout_case("a line may break after an inside marker",
+        "<!doctype html><details><summary>x</summary></details>", 31,
+        "page 31 56\n"
+        "block html 0 0 31 56\n"
+        "  block body 8 8 15 40\n"
+        "    block details 8 8 15 40\n"
+        "      block summary 8 8 15 40\n"
+        "        line 8 8 15 20 base 14\n"
+        "          marker \"\xe2\x96\xb8 \" 8 10 12 16\n"
+        "        line 8 28 15 20 base 14\n"
+        "          text \"x\" 8 30 8 16 serif 16\n");
+
+    // Codex #147 round 3. Pre-wrap spaces ending a line hang: drawn (x and
+    // a hundred 8px spaces, 808 wide) but counted for nothing, so the page
+    // stays as wide as the viewport.
+    layout_case("hanging pre-wrap spaces do not widen the page",
+        "<!doctype html><pre wrap>x                                                                                                    </pre>", 100,
+        "page 100 52\n"
+        "block html 0 0 100 52\n"
+        "  block body 8 16 84 20\n"
+        "    block pre 8 16 84 20\n"
+        "      line 8 16 84 20 base 14\n"
+        "        text \"x                                                                                                    \" 8 18 808 16 mono 16\n");
+
+    // Codex #147 round 3. A tab is as wide as the way to the line's next
+    // stop, measured where the line puts it: after the 8px x the tab runs to
+    // 64 and the y ends at 72, exactly the content width, so it fits.
+    layout_case("a tab is measured from where the line puts it",
+        "<!doctype html><pre wrap><b>x</b>\ty</pre>", 88,
+        "page 88 52\n"
+        "block html 0 0 88 52\n"
+        "  block body 8 16 72 20\n"
+        "    block pre 8 16 72 20\n"
+        "      line 8 16 72 20 base 14\n"
+        "        span b 8 18 8 16\n"
+        "        text \"x\" 8 18 8 16 mono 16 bold\n"
+        "        text \"\\ty\" 16 18 64 16 mono 16\n");
+
+    // Codex #147 round 3. Sliced images in an auto-width cell, full quirks:
+    // the newline between them is no opportunity either, so the row stays a
+    // row and overflows: 9 + 100 + a 4px space + 100 = 213.
+    layout_case("quirks: whitespace between sliced images does not break them",
+        "<table><tr><td><img src=known.png width=100 height=10>\n"
+        "<img src=known.png width=100 height=10></table>", 150,
+        "page 213 38\n"
+        "block html 0 0 150 38\n"
+        "  block body 8 8 134 22\n"
+        "    table table 8 8 134 22\n"
+        "      row-group tbody 8 8 134 22\n"
+        "        row tr 8 8 134 22\n"
+        "          cell td 8 8 134 22\n"
+        "            line 9 9 132 20 base 14\n"
+        "              atomic img 9 13 100 10\n"
+        "              text \" \" 109 11 4 16 serif 16\n"
+        "              atomic img 113 13 100 10\n");
+
     // An inside marker is in its item's link, as its text is.
     layout_case("an inside marker keeps its item's link",
         "<!doctype html><a href=x><details><summary>x</summary></details></a>", 200,
