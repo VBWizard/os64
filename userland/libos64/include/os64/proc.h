@@ -219,4 +219,18 @@ int64_t os64_sleep(uint64_t ms);
 //     /* uptime seconds = t.ticks / t.per_second */
 int64_t os64_ticks(os64_ticks_t *out);
 
+// The same stopwatch with a finer face: microseconds since boot, as one
+// number. Read from the CPU's cycle counter, so it keeps counting through
+// the interrupts-off windows that cost the tick clock whole ticks under
+// load — measure an INTERVAL with this (a round trip, a benchmark), and use
+// os64_ticks for a CPU% (os64/ticks.h says why the two are not the same
+// clock). Never negative on a kernel that has the call; a lifeboat kernel
+// without it answers the dispatcher's negative verdict, and that is the
+// only failure there is.
+//
+//     int64_t t0 = os64_micros();
+//     ...
+//     int64_t elapsed_us = os64_micros() - t0;
+int64_t os64_micros(void);
+
 #endif // OS64_PROC_H

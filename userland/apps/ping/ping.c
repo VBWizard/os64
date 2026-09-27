@@ -3,13 +3,19 @@
 // The kernel owns the wire and the ICMP conversation machinery; this app just
 // speaks the handle model already wired into libos64: dial an ICMP handle,
 // write an echo request, read the echoed payload back, and report the RTT in
-// scheduler ticks. The current stack is still polled, so the resolution is a
-// single tick (10ms) — exactly the shape the note promised.
+// milliseconds with three decimals — the spelling every ping since Muuss's
+// 1983 original has used. The stamp is os64_micros (the stopwatch's fine
+// face) on a kernel that has it, and the tick clock scaled up on one that
+// does not, which main() says out loud. The reply wakes this program when
+// it lands (ARRIVAL_WAKE.md), so what prints is what the card and the wire
+// cost — on a card drained only at the tick (virtio), that includes the
+// wait for the tick.
 
 #include "os64/os64.h"
 typedef struct {
     uint32_t seq;
-    uint32_t sent_tick;
+    uint32_t _pad;
+    uint64_t sent_us;   // os64_micros at the write — subtracted when it comes home
 } ping_payload_t;
 
 static char ipString[16] = {0}; // Max = 15 chars xxx.yyy.zzz.aaa
@@ -44,6 +50,18 @@ static uint64_t ticks_to_ms_ceil(uint64_t ticks, uint32_t ticks_per_second)
     return (ticks * 1000u + ticks_per_second - 1u) / ticks_per_second;
 }
 
+// Microseconds since boot: the fine face when the kernel has one, the tick
+// clock scaled up when it does not (main() has already said which).
+static uint64_t stopwatch_us(bool fine_clock)
+{
+    if (fine_clock)
+        return (uint64_t)os64_micros();
+    os64_ticks_t t = {0, 0};
+    if (os64_ticks(&t) < 0 || t.per_second == 0)
+        return 0;
+    return t.ticks * 1000000u / t.per_second;
+}
+
 static void print_summary(const char *target, uint32_t sent, uint32_t received,
                           uint64_t rtt_min, uint64_t rtt_total,
                           uint64_t rtt_max)
@@ -56,12 +74,15 @@ static void print_summary(const char *target, uint32_t sent, uint32_t received,
                 sent, sent == 1 ? "" : "s", received, loss_percent);
     if (received != 0)
     {
-        uint64_t average_tenths = (rtt_total * 10u + received / 2u) / received;
-        os64_printf("round-trip min/avg/max = %llu/%llu.%llu/%llu ticks\n",
-                    (unsigned long long)rtt_min,
-                    (unsigned long long)(average_tenths / 10u),
-                    (unsigned long long)(average_tenths % 10u),
-                    (unsigned long long)rtt_max);
+        // Every figure is microseconds; printed as ms with three decimals.
+        uint64_t average_us = (rtt_total + received / 2u) / received;
+        os64_printf("round-trip min/avg/max = %llu.%03llu/%llu.%03llu/%llu.%03llu ms\n",
+                    (unsigned long long)(rtt_min / 1000u),
+                    (unsigned long long)(rtt_min % 1000u),
+                    (unsigned long long)(average_us / 1000u),
+                    (unsigned long long)(average_us % 1000u),
+                    (unsigned long long)(rtt_max / 1000u),
+                    (unsigned long long)(rtt_max % 1000u));
     }
 }
 
@@ -189,6 +210,14 @@ int main(int argc, char **argv)
                 forever ? " forever" : "",
                 ipString);
 
+    // The stopwatch's fine face is syscall 59; a kernel without it (a
+    // lifeboat, or a /bin refreshed ahead of its kernel) answers a negative
+    // verdict, and a ping that quietly printed 0.000 ms from that would be
+    // lying with three decimals. Say so once, and measure in ticks instead.
+    bool fine_clock = os64_micros() >= 0;
+    if (!fine_clock)
+        os64_printf("ping: this kernel has no microsecond clock; round trips are tick-resolution (10 ms)\n");
+
     uint32_t sent = 0;
     uint32_t received = 0;
     uint32_t seq = 1;
@@ -212,7 +241,8 @@ int main(int argc, char **argv)
 
         ping_payload_t payload;
         payload.seq = seq;
-        payload.sent_tick = (uint32_t)start.ticks;
+        payload._pad = 0;
+        payload.sent_us = stopwatch_us(fine_clock);
 
         int64_t written = os64_write((int32_t)handle, &payload, sizeof(payload));
         os64_ticks_t finish = {0, 0};
@@ -286,18 +316,25 @@ int main(int argc, char **argv)
                     continue;
                 }
 
-                uint64_t elapsed = finish.ticks - (uint64_t)reply.sent_tick;
+                // The stopwatch reads the CPU's cycle counter, which is
+                // assumed synchronized across cores; a migration across an
+                // unsynchronized pair would read as a negative round trip.
+                // Clamp and SAY so — a 584-million-year RTT helps nobody.
+                uint64_t now_us = stopwatch_us(fine_clock);
+                bool backwards = now_us < reply.sent_us;
+                uint64_t elapsed = backwards ? 0 : now_us - reply.sent_us;
                 if (received == 0 || elapsed < rtt_min)
                     rtt_min = elapsed;
                 if (received == 0 || elapsed > rtt_max)
                     rtt_max = elapsed;
                 rtt_total += elapsed;
                 received++;
-                os64_printf("reply %u from %s: %llu tick%s\n",
+                os64_printf("reply %u from %s: time=%llu.%03llu ms%s\n",
                             seq,
                             ipString,
-                            (unsigned long long)elapsed,
-                            elapsed == 1 ? "" : "s");
+                            (unsigned long long)(elapsed / 1000u),
+                            (unsigned long long)(elapsed % 1000u),
+                            backwards ? " (clock ran backwards)" : "");
                 break;
             }
         }

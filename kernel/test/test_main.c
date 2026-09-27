@@ -50,6 +50,7 @@
 #include "driver/net/udp_conn.h"
 #include "driver/net/tcp.h"
 #include "driver/net/icmp_conn.h"
+#include "driver/system/x86_64.h"   // rdtsc — the arrival-wake figure in test_net_icmp_conn
 #include "os64/net.h"                // OS64_NET_ERR_* — refusals carry reasons (abi)
 #include "fpu.h"
 
@@ -5029,6 +5030,37 @@ static bool test_net_icmp_conn(void)
         return false;
     }
 
+    // THE ARRIVAL WAKE (ARRIVAL_WAKE.md): from icmp_conn_deliver's enqueue
+    // stamp to this thread running again is the kernel's own wake-up
+    // latency — the part of a round trip that is the scheduler's, not the
+    // wire's. Woken on arrival it is microseconds. Woken by the sweep it
+    // is the next scheduler pass — which on an idle machine knet's own
+    // park provokes at once (measured 15-128 us with the arrival wake
+    // disabled), so this figure cannot tell the two apart here; what it
+    // catches is a reader woken by nothing but its backstop second. The
+    // MIN over several echoes is the figure: one sample can land in the
+    // registered-not-yet-parked window the sweep exists for, and one can
+    // eat host scheduling jitter, but not all of them.
+    uint64_t wake_min_us = ~0UL, wake_max_us = 0;
+    for (int i = 0; i < 8; i++) {
+        if (icmp_conn_write(c, out, sizeof(out)) != (long)sizeof(out) ||
+            icmp_conn_read(c, in, sizeof(in), 0) != (long)sizeof(out)) {
+            printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - echo %d of the wake measurement failed\n", i);
+            icmp_conn_close(c);
+            return false;
+        }
+        uint64_t per_us = kCPUCyclesPerSecond / 1000000;
+        uint64_t wake_us = per_us ? (rdtsc() - c->last_arrival_tsc) / per_us : 0;
+        if (wake_us < wake_min_us) wake_min_us = wake_us;
+        if (wake_us > wake_max_us) wake_max_us = wake_us;
+    }
+    if (wake_min_us >= 1000) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - best enqueue-to-reader wake was %lu us over 8 echoes "
+               "(neither the arrival wake nor the sweep woke it; that is the backstop)\n", wake_min_us);
+        icmp_conn_close(c);
+        return false;
+    }
+
     // The once-a-minute regression, on demand: flush the ARP cache so this
     // next echo starts from a cold neighbor table — exactly what the 60s
     // lazy TTL does to a long-running ping. The write must RIDE OUT the
@@ -5050,8 +5082,8 @@ static bool test_net_icmp_conn(void)
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_net_icmp_conn (%ld bytes echoed by %u.%u.%u.%u in %lu ticks; "
-           "cold-cache echo survived the ARP re-ask)\n",
-           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt);
+           "arrival wake %lu-%lu us over 8 echoes; cold-cache echo survived the ARP re-ask)\n",
+           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt, wake_min_us, wake_max_us);
     return true;
 }
 

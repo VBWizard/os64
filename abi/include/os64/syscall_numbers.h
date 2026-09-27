@@ -106,6 +106,15 @@
 // calendar — see the header for the doctrine and the everyday arithmetic.
 #define SYSCALL_TICKS      26
 
+// micros() — the same stopwatch with finer graduations: microseconds since
+// boot, returned in RAX. No arguments, no struct: one number in the unit
+// the caller wants. Read from the CPU's cycle counter at the rate the boot
+// calibrated, so it counts what the tick clock loses under load (the two
+// drift apart by exactly those lost ticks — os64/ticks.h). A kernel without
+// this call answers the dispatcher's negative verdict for an unknown
+// number, which is how a program on a lifeboat kernel finds out.
+#define SYSCALL_MICROS     59
+
 // memory(out) — fill an os64_memory_t (os64/memory.h) with the physical
 // memory picture: total/usable/free/reclaimable/available + largest free
 // extent + live page size. One atomic snapshot under the allocator lock.

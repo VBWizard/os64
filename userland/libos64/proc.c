@@ -146,6 +146,11 @@ int64_t os64_ticks(os64_ticks_t *out)
     return (long)os64_syscall1(SYSCALL_TICKS, (uint64_t)out);
 }
 
+int64_t os64_micros(void)
+{
+    return (int64_t)os64_syscall0(SYSCALL_MICROS);
+}
+
 int64_t os64_setenv(const char *key, const char *value)
 {
     // NULL value would mean "unset" at the syscall — os64_unsetenv is the
