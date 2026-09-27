@@ -197,6 +197,10 @@ struct FBox {
     bool unfinished;
     int64_t x, y, w, h;             // the border box
     int64_t border[4], padding[4];  // used widths, top right bottom left
+    // An inline-block's own block: the content width its atom was given on
+    // its line, which it takes as its width rather than sizing itself
+    // again. -1 for every other box.
+    int64_t atom_width;
     FLine *lines, *last_line;       // an inline formatting context's lines
     FFrag *marker_frag;             // an outside marker, placed
     // The box's min-content and max-content border-box widths, found once

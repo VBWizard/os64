@@ -99,6 +99,14 @@ static void cascade_cases(void)
         "    p block font=\"Courier New\",\"Arial\",mono weight=700 margin=0/0/16/0\n"
         "      q inline font=\"Georgia\",serif\n");
 
+    // The limits and box-sizing as the struct holds them; `none` is none.
+    cascade_case("min-width, max-width, box-sizing", 800,
+        "<!doctype html><style>div { min-width: 10px; max-width: 50%; max-height: none;"
+        " min-height: 2em; box-sizing: border-box }</style><div>x</div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block min-width=10 max-width=50% min-height=32 border-box\n");
+
     // The layout dumps are test_libflow_layout.inc's: 16px text is 20
     // tall with its content area 2 below the line's top.
 
@@ -166,4 +174,58 @@ static void cascade_cases(void)
         "          block marquee 0 52 200 20\n"
         "            line 0 52 200 20 base 14\n"
         "              text \"m\" 0 54 12 16 serif 16\n");
+
+    // G5: box-sizing and the limits (CSS 2.1 § 10.4, CSS Sizing 3 § 4.1).
+    // The div's frame is 2 + 3 a side, 10; auto would make it 190 wide,
+    // max-width holds it to 100, and then its auto margins share the 90
+    // left over: 45 each. Its text starts 5 in, at 50, 7 down. The p is 50
+    // wide AS A BORDER BOX: its content 50 - 12 = 38, starting 6 in.
+    cascade_layout_case("max-width centres with auto margins; border-box",
+        "<!doctype html><style>body { margin: 0 } div { max-width: 100px; margin: 0 auto;"
+        " border: 2px solid; padding: 3px } p { margin: 0; width: 50px;"
+        " box-sizing: border-box; padding: 5px; border: 1px solid }</style>"
+        "<div>x</div><p>y</p>",
+        200,
+        "page 200 62\n"
+        "block html 0 0 200 62\n"
+        "  block body 0 0 200 62\n"
+        "    block div 45 0 110 30\n"
+        "      line 50 5 100 20 base 14\n"
+        "        text \"x\" 50 7 8 16 serif 16\n"
+        "    block p 0 30 50 32\n"
+        "      line 6 36 38 20 base 14\n"
+        "        text \"y\" 6 38 8 16 serif 16\n");
+
+    // A min-height stops the bottom margin collapsing through (§ 8.3.1):
+    // the first p's 10 still collapses up through the div and body (to y
+    // 10), but its bottom 10 stays inside the div, whose content is
+    // 20 + 10 = 30, held up to 50. The next p is 10 below that, at 70.
+    cascade_layout_case("min-height holds a box open",
+        "<!doctype html><style>body { margin: 0 } div { min-height: 50px }"
+        " p { margin: 10px 0 }</style><div><p>a</p></div><p>b</p>",
+        200,
+        "page 200 100\n"
+        "block html 0 0 200 100\n"
+        "  block body 0 10 200 80\n"
+        "    block div 0 10 200 50\n"
+        "      block p 0 10 200 20\n"
+        "        line 0 10 200 20 base 14\n"
+        "          text \"a\" 0 12 8 16 serif 16\n"
+        "    block p 0 70 200 20\n"
+        "      line 0 70 200 20 base 14\n"
+        "        text \"b\" 0 72 8 16 serif 16\n");
+
+    // `img { max-width: 100% }` in a 20px box: the 40x30 picture is held
+    // to 20 wide and keeps its ratio, 15 tall. On its line with the
+    // strut (14 above the baseline, 6 below) it makes the line 21.
+    cascade_layout_case("a picture's max-width keeps its ratio",
+        "<!doctype html><style>body { margin: 0 } div { width: 20px }"
+        " img { max-width: 100% }</style><div><img src=known.png></div>",
+        200,
+        "page 200 21\n"
+        "block html 0 0 200 21\n"
+        "  block body 0 0 200 21\n"
+        "    block div 0 0 20 21\n"
+        "      line 0 0 20 21 base 15\n"
+        "        atomic img 0 0 20 15\n");
 }

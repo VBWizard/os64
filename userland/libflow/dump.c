@@ -223,6 +223,16 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, " height=");
         length(b, s->height);
     }
+    static const char *const kLimits[4] = {" min-width=", " max-width=", " min-height=",
+                                           " max-height="};
+    const flow_length_t limits[4] = {s->min_width, s->max_width, s->min_height, s->max_height};
+    for (int i = 0; i < 4; i++)
+        if (!length_eq(limits[i], automatic)) {
+            puts_(b, kLimits[i]);
+            length(b, limits[i]);
+        }
+    if (s->box_sizing == FLOW_BORDER_BOX)
+        puts_(b, " border-box");
     if (s->text_align != parent->text_align)
         putf(b, " align=%s", s_align[s->text_align]);
     if (s->vertical_align != FLOW_VALIGN_BASELINE)

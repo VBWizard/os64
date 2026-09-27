@@ -188,6 +188,7 @@ static FBox *new_box(B *b, FBox *parent, f_box_kind_t kind, const os64_html_node
     box->node = node;
     box->style = style;
     box->link = -1;
+    box->atom_width = -1;
     box->parent = parent;
     // Attached at once, so a build that stops here leaves a tree that is
     // whole up to this box.

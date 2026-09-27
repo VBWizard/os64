@@ -49,6 +49,7 @@ typedef enum {
 typedef struct {
     flow_style_t s;             // everything that needs no font to resolve
     Len margin[4], padding[4], width, height;
+    Len min_width, max_width, min_height, max_height;
     FsKind fs_kind;
     int32_t fs_v;
     bool border_color_set[4];
@@ -1664,6 +1665,11 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     }
     case GARB_WIDTH: dst->width = src->width; break;
     case GARB_HEIGHT: dst->height = src->height; break;
+    case GARB_MIN_WIDTH: dst->min_width = src->min_width; break;
+    case GARB_MAX_WIDTH: dst->max_width = src->max_width; break;
+    case GARB_MIN_HEIGHT: dst->min_height = src->min_height; break;
+    case GARB_MAX_HEIGHT: dst->max_height = src->max_height; break;
+    case GARB_BOX_SIZING: d->box_sizing = s->box_sizing; break;
     case GARB_FONT_FAMILY: d->family = s->family; break;
     case GARB_FONT_SIZE:
         dst->fs_kind = src->fs_kind;
@@ -1715,6 +1721,7 @@ static void initial_spec(const Ctx *c, Spec *out)
         out->border_px[i] = 3 * FLOW_UNITS_PER_PX;     // medium
     }
     out->width = out->height = kAuto;
+    out->min_width = out->max_width = out->min_height = out->max_height = kAuto;
     out->fs_kind = FS_KEYWORD;
     out->fs_v = 3;                                      // medium
 }
@@ -1736,6 +1743,10 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
     }
     out->width = len_of(parent->width);
     out->height = len_of(parent->height);
+    out->min_width = len_of(parent->min_width);
+    out->max_width = len_of(parent->max_width);
+    out->min_height = len_of(parent->min_height);
+    out->max_height = len_of(parent->max_height);
     out->fs_kind = FS_PX;
     out->fs_v = parent->font_size;
 }
@@ -1790,16 +1801,23 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         sp->border_color_set[i] = !v->color.current;
         s->border_color[i] = xrgb(v->color, a->c->env->paper);
         break;
-    case GARB_WIDTH: case GARB_HEIGHT: {
-        Len *l = p == GARB_WIDTH ? &sp->width : &sp->height;
-        // The content-sized keywords are auto until libflow sizes by content
-        // on request (GARB.md § Booked).
+    case GARB_WIDTH: case GARB_HEIGHT: case GARB_MIN_WIDTH: case GARB_MAX_WIDTH:
+    case GARB_MIN_HEIGHT: case GARB_MAX_HEIGHT: {
+        Len *l = p == GARB_WIDTH ? &sp->width : p == GARB_HEIGHT ? &sp->height
+               : p == GARB_MIN_WIDTH ? &sp->min_width : p == GARB_MAX_WIDTH ? &sp->max_width
+               : p == GARB_MIN_HEIGHT ? &sp->min_height : &sp->max_height;
+        // `auto`, a limit's `none`, and the content-sized keywords — which
+        // are auto until libflow sizes by content on request (GARB.md §
+        // Booked) — are all no size of the page's own.
         if (v->kind == GARB_V_KEYWORD)
             *l = kAuto;
         else
             author_len(a, v, true, l);
         break;
     }
+    case GARB_BOX_SIZING:
+        s->box_sizing = word(v, "border-box") ? FLOW_BORDER_BOX : FLOW_CONTENT_BOX;
+        break;
     case GARB_FONT_FAMILY: return author_family(a, v, &s->family);
     case GARB_FONT_SIZE: break;         // read first, by author()
     case GARB_FONT_WEIGHT: author_font_weight(a, sp, v); break;
@@ -2005,6 +2023,10 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent)
     }
     s->width = resolve(sp->width, s->font_size, automatic);
     s->height = resolve(sp->height, s->font_size, automatic);
+    s->min_width = resolve(sp->min_width, s->font_size, automatic);
+    s->max_width = resolve(sp->max_width, s->font_size, automatic);
+    s->min_height = resolve(sp->min_height, s->font_size, automatic);
+    s->max_height = resolve(sp->max_height, s->font_size, automatic);
 }
 
 // ── The walk ────────────────────────────────────────────────────────────

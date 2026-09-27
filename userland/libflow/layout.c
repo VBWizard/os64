@@ -78,6 +78,42 @@ static int64_t len(flow_length_t l, int64_t base)
     return 0;
 }
 
+// A width or height the page gave, as the content box's: a border-box one
+// less its frame (CSS Sizing 3 § 4.1), and never below zero.
+static int64_t content_of(const flow_style_t *s, flow_length_t v, int64_t base, int64_t frame)
+{
+    int64_t x = len(v, base) - (s->box_sizing == FLOW_BORDER_BOX ? frame : 0);
+    return x > 0 ? x : 0;
+}
+
+// A content width held to max-width and then min-width (§10.4): when the
+// two disagree, the minimum wins. Measured against no containing block
+// (`base` 0, an intrinsic width), a percentage limit binds nothing.
+static bool binds(flow_length_t limit, int64_t base)
+{
+    return limit.kind == FLOW_LENGTH_PX || (limit.kind == FLOW_LENGTH_PERCENT && base > 0);
+}
+
+static int64_t clamp_width(const flow_style_t *s, int64_t w, int64_t base, int64_t frame)
+{
+    if (binds(s->max_width, base))
+        w = min64(w, content_of(s, s->max_width, base, frame));
+    if (binds(s->min_width, base))
+        w = max64(w, content_of(s, s->min_width, base, frame));
+    return w;
+}
+
+// The same for a height. Only a length binds: a percentage would need a
+// containing block of known height, and libflow sizes heights by content.
+static int64_t clamp_height(const flow_style_t *s, int64_t h, int64_t frame)
+{
+    if (s->max_height.kind == FLOW_LENGTH_PX)
+        h = min64(h, content_of(s, s->max_height, 0, frame));
+    if (s->min_height.kind == FLOW_LENGTH_PX)
+        h = max64(h, content_of(s, s->min_height, 0, frame));
+    return h;
+}
+
 static void fail(L *l)
 {
     l->failed = true;
@@ -188,7 +224,11 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     Replaced r = {0, 0, false};
     bool w_set = s->width.kind != FLOW_LENGTH_AUTO;
     bool h_set = s->height.kind == FLOW_LENGTH_PX;
-    int64_t w = len(s->width, cbw), h = h_set ? s->height.value : 0;
+    int64_t fw = s->border_width[FLOW_LEFT] + s->border_width[FLOW_RIGHT] +
+                 len(s->padding[FLOW_LEFT], cbw) + len(s->padding[FLOW_RIGHT], cbw);
+    int64_t fh = s->border_width[FLOW_TOP] + s->border_width[FLOW_BOTTOM] +
+                 len(s->padding[FLOW_TOP], cbw) + len(s->padding[FLOW_BOTTOM], cbw);
+    int64_t w = content_of(s, s->width, cbw, fw), h = h_set ? content_of(s, s->height, 0, fh) : 0;
     int32_t iw = 0, ih = 0;
     bool known = l->env->replaced_size != NULL &&
                  l->env->replaced_size(l->env->ctx, node, &iw, &ih) && iw >= 0 && ih >= 0;
@@ -206,6 +246,22 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
         } else {
             r.w = kw;
             r.h = kh;
+        }
+        // §10.4's limits, the picture's own ratio kept in whichever
+        // dimension the page left to it (`img { max-width: 100% }`). The
+        // rest of §10.4's table — both limits binding at once against the
+        // ratio — is booked (GARB.md § Booked).
+        int64_t held = clamp_width(s, r.w, cbw, fw);
+        if (held != r.w) {
+            if (!h_set && r.w > 0)
+                r.h = r.h * held / r.w;
+            r.w = held;
+        }
+        held = clamp_height(s, r.h, fh);
+        if (held != r.h) {
+            if (!w_set && r.h > 0)
+                r.w = r.w * held / r.h;
+            r.h = held;
         }
         return r;
     }
@@ -491,12 +547,13 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                 if (it->node->tag == OS64_HTML_TAG_MARQUEE) {
                     r.w = room;
                 } else if (st->width.kind != FLOW_LENGTH_AUTO) {
-                    r.w = max64(0, len(st->width, cw));
+                    r.w = content_of(st, st->width, cw, fw);
                 } else {
                     Intr in = intrinsic(l, it->content);
                     r.w = min64(max64(in.min - fw, room), in.max - fw);
                     r.w = max64(0, r.w);
                 }
+                r.w = clamp_width(st, r.w, cw, fw);
             }
             g->atom = r;
             g->w = g->ml + fw + r.w + g->mr;
@@ -861,14 +918,13 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 int64_t content_h = g->atom.h;
                 if (g->item->content != NULL) {
                     // Laid out where it will not collide, measured, and
-                    // moved into place once the line is placed. The block
-                    // is the element's own box, so it sizes itself again:
-                    // a set width against the line, as it was measured,
-                    // and an auto one to fill exactly the atom's width.
+                    // moved into place once the line is placed: at the
+                    // width its atom was given, against the line, as it
+                    // was measured.
                     Cursor c = {0, kNoMargins, -1};
-                    int64_t cbw = g->style->width.kind != FLOW_LENGTH_AUTO
-                                      ? cw : g->ml + g->frame_w + g->atom.w + g->mr;
-                    block(l, styles, g->item->content, 0, cbw, &c);
+                    g->item->content->atom_width = g->atom.w;
+                    block(l, styles, g->item->content, 0, cw, &c);
+                    g->item->content->atom_width = -1;
                     content_h = g->item->content->placed ? g->item->content->h - g->frame_h : 0;
                 }
                 fr->h = g->frame_h + content_h;
@@ -1164,7 +1220,9 @@ static int64_t html_align_shift(const FBox *b, int64_t rem)
 }
 
 // §10.3.3: margin + border + padding + width = the containing block, auto
-// margins sharing what a set width leaves over.
+// margins sharing what a set width leaves over. §10.4: a width that breaks
+// max-width or min-width is worked again with the limit as the width the
+// page set — which is how `max-width: 40em; margin: 0 auto` centres.
 static int64_t widths(FBox *b, int64_t cbw, int64_t forced_w, int64_t *ml_out)
 {
     const flow_style_t *s = b->style;
@@ -1180,12 +1238,18 @@ static int64_t widths(FBox *b, int64_t cbw, int64_t forced_w, int64_t *ml_out)
     int64_t mr = mr_auto ? 0 : len(s->margin[FLOW_RIGHT], cbw);
     bool w_auto = forced_w < 0 && s->width.kind == FLOW_LENGTH_AUTO;
     int64_t w;
-    if (w_auto) {
-        w = cbw - ml - mr - frame;
-        if (w < 0)
-            w = 0;
-    } else {
-        w = forced_w >= 0 ? forced_w : len(s->width, cbw);
+    if (w_auto)
+        w = max64(0, cbw - ml - mr - frame);
+    else
+        w = forced_w >= 0 ? forced_w : content_of(s, s->width, cbw, frame);
+    if (forced_w < 0) {
+        int64_t held = clamp_width(s, w, cbw, frame);
+        if (held != w) {
+            w = held;
+            w_auto = false;
+        }
+    }
+    if (!w_auto) {
         int64_t rem = cbw - (ml + mr + frame + w);
         if (ml_auto && mr_auto)
             ml = rem > 0 ? rem / 2 : 0;
@@ -1267,6 +1331,8 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     if (b->kind == FB_REPLACED) {
         rep = replaced_size(l, b->node, s, cbw);
         forced_w = rep.w;
+    } else if (b->atom_width >= 0) {
+        forced_w = b->atom_width;
     }
     int64_t ml;
     int64_t cw = widths(b, cbw, forced_w, &ml);
@@ -1274,8 +1340,14 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     bool root = bfc_root(b);
     bool top_open = !root && b->border[FLOW_TOP] == 0 && b->padding[FLOW_TOP] == 0;
     bool height_auto = s->height.kind != FLOW_LENGTH_PX;
-    bool bottom_open = !root && height_auto && b->border[FLOW_BOTTOM] == 0 &&
+    // §8.3.1: a bottom margin meets the last child's, and a box's two
+    // margins meet each other, only across a height of auto and a
+    // min-height of zero.
+    bool min_height = s->min_height.kind == FLOW_LENGTH_PX && s->min_height.value > 0;
+    bool bottom_open = !root && height_auto && !min_height && b->border[FLOW_BOTTOM] == 0 &&
                        b->padding[FLOW_BOTTOM] == 0;
+    int64_t vframe_px = b->border[FLOW_TOP] + b->padding[FLOW_TOP] + b->padding[FLOW_BOTTOM] +
+                        b->border[FLOW_BOTTOM];
 
     b->x = cbx + ml;
     b->w = b->border[FLOW_LEFT] + b->padding[FLOW_LEFT] + cw + b->padding[FLOW_RIGHT] +
@@ -1334,7 +1406,7 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     int64_t content_h;
     Margins pm_out;
     if (!height_auto) {
-        content_h = s->height.value;
+        content_h = content_of(s, s->height, 0, vframe_px);
         pm_out = margin_of(mb);
     } else if (bottom_open) {
         content_h = in.y - content_top;
@@ -1343,8 +1415,8 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
         content_h = in.y + margins_sum(in.pm) - content_top;
         pm_out = margin_of(mb);
     }
-    if (content_h < 0)
-        content_h = 0;
+    // Content taller than a max-height is drawn past it.
+    content_h = clamp_height(s, max64(0, content_h), vframe_px);
     b->placed = true;
     b->y = y_border;
     b->h = b->border[FLOW_TOP] + b->padding[FLOW_TOP] + content_h + b->padding[FLOW_BOTTOM] +
@@ -1456,11 +1528,23 @@ static Intr intrinsic(L *l, FBox *b)
             }
         }
         // A width the page set is both, for anything but a cell, whose
-        // width is its column's business.
-        if (s->width.kind == FLOW_LENGTH_PX && b->kind != FB_CELL)
-            r.min = r.max = s->width.value;
-        r.min += hframe(b, 0);
-        r.max += hframe(b, 0);
+        // width is its column's business; so is a limit in pixels (a
+        // percentage of a width not known yet binds nothing).
+        int64_t frame = hframe(b, 0);
+        if (b->kind != FB_CELL) {
+            if (s->width.kind == FLOW_LENGTH_PX)
+                r.min = r.max = content_of(s, s->width, 0, frame);
+            if (s->max_width.kind == FLOW_LENGTH_PX) {
+                r.min = min64(r.min, content_of(s, s->max_width, 0, frame));
+                r.max = min64(r.max, content_of(s, s->max_width, 0, frame));
+            }
+            if (s->min_width.kind == FLOW_LENGTH_PX) {
+                r.min = max64(r.min, content_of(s, s->min_width, 0, frame));
+                r.max = max64(r.max, content_of(s, s->min_width, 0, frame));
+            }
+        }
+        r.min += frame;
+        r.max += frame;
     }
     b->intrinsic_known = true;
     b->intrinsic_min = r.min;

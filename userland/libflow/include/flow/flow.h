@@ -173,6 +173,7 @@ typedef enum { FLOW_VISIBLE = 0, FLOW_HIDDEN, FLOW_COLLAPSE } flow_visibility_t;
 typedef enum { FLOW_SEPARATE = 0, FLOW_COLLAPSE_BORDERS } flow_border_collapse_t;
 typedef enum { FLOW_CAPTION_TOP = 0, FLOW_CAPTION_BOTTOM } flow_caption_side_t;
 typedef enum { FLOW_FLOAT_NONE = 0, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT } flow_float_t;
+typedef enum { FLOW_CONTENT_BOX = 0, FLOW_BORDER_BOX } flow_box_sizing_t;
 typedef enum { FLOW_CLEAR_NONE = 0, FLOW_CLEAR_LEFT, FLOW_CLEAR_RIGHT, FLOW_CLEAR_BOTH } flow_clear_t;
 
 typedef struct {
@@ -195,6 +196,13 @@ typedef struct {
     flow_border_style_t border_style[4];
     uint32_t border_color[4];       // XRGB; `currentColor` resolved
     flow_length_t width, height;    // AUTO, PX or PERCENT
+    // The limits: PX or PERCENT, AUTO for none (`min-*: auto` is none too,
+    // outside flex and grid). A percentage on a height limit binds
+    // nothing, as a percentage height does not.
+    flow_length_t min_width, max_width, min_height, max_height;
+    // Whether width, height and their limits measure the content box or
+    // the border box (CSS Sizing 3 § 4.1).
+    flow_box_sizing_t box_sizing;
 
     flow_text_align_t text_align;
     flow_vertical_align_t vertical_align;
