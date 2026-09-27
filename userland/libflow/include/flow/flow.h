@@ -253,8 +253,8 @@ typedef struct {
     flow_length_t text_indent;      // PX or PERCENT: the first line's; AUTO reads as 0
     flow_text_transform_t text_transform;
     // This element's own decorations. CSS draws an ancestor's across its
-    // inline descendants too, in the ancestor's colour, which is a fact
-    // layout derives and not a property of the descendant.
+    // descendants too, each in the colour of the element that drew it,
+    // which is a fact libflow derives and not a property of the descendant.
     uint8_t text_decoration;
     flow_visibility_t visibility;
 
@@ -346,7 +346,9 @@ struct flow_box {
     os64_gui_rect_t clip;
     bool clipped;
     uint8_t decoration;             // TEXT: FLOW_DECORATION_* drawn across it
-    uint32_t decoration_color;
+    // TEXT: each drawn decoration's colour, the colour of the element that
+    // drew it — an underline and a line-through may differ.
+    uint32_t underline_color, line_through_color;
     int32_t link;                   // libpage's link this box is or sits in, or -1
     int32_t control;                // ATOMIC: libpage's control, or -1
     bool unfinished;                // layout stopped inside it (flow_incomplete)
@@ -359,7 +361,9 @@ typedef struct flow_tree flow_tree_t;
 
 // Styles, boxes and lays out the page at `width` CSS pixels. NULL on no
 // memory only; otherwise a tree whose `incomplete` says whether it is
-// whole. Every call is a whole rebuild (LAYOUT.md, ruling 2).
+// whole — a document libhtml refused partway, or a model libpage could not
+// finish, is not, however it lays out. Every call is a whole rebuild
+// (LAYOUT.md, ruling 2).
 flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *model,
                          int32_t width, const flow_env_t *env);
 void flow_free(flow_tree_t *tree);
