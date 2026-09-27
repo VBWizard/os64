@@ -469,22 +469,23 @@ static void layout_cases(void)
         "        text \"\\ty\" 16 18 64 16 mono 16\n");
 
     // Codex #147 round 3. Sliced images in an auto-width cell, full quirks:
-    // the newline between them is no opportunity either, so the row stays a
-    // row and overflows: 9 + 100 + a 4px space + 100 = 213.
+    // the newline between them is no opportunity either, so the row is one
+    // word and the cell is as wide as it: 100 + a 4px space + 100 = 204,
+    // with the cell's 1px padding and the table's 2px spacing round it.
     layout_case("quirks: whitespace between sliced images does not break them",
         "<table><tr><td><img src=known.png width=100 height=10>\n"
         "<img src=known.png width=100 height=10></table>", 150,
-        "page 213 38\n"
-        "block html 0 0 150 38\n"
-        "  block body 8 8 134 22\n"
-        "    table table 8 8 134 22\n"
-        "      row-group tbody 8 8 134 22\n"
-        "        row tr 8 8 134 22\n"
-        "          cell td 8 8 134 22\n"
-        "            line 9 9 132 20 base 14\n"
-        "              atomic img 9 13 100 10\n"
-        "              text \" \" 109 11 4 16 serif 16\n"
-        "              atomic img 113 13 100 10\n");
+        "page 218 42\n"
+        "block html 0 0 150 42\n"
+        "  block body 8 8 134 26\n"
+        "    table table 8 8 210 26\n"
+        "      row-group tbody 10 10 206 22\n"
+        "        row tr 10 10 206 22\n"
+        "          cell td 10 10 206 22\n"
+        "            line 11 11 204 20 base 14\n"
+        "              atomic img 11 15 100 10\n"
+        "              text \" \" 111 13 4 16 serif 16\n"
+        "              atomic img 115 15 100 10\n");
 
     // An inside marker is in its item's link, as its text is.
     layout_case("an inside marker keeps its item's link",

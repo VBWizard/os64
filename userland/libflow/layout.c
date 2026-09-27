@@ -1516,9 +1516,10 @@ static int64_t vframe(const FBox *b, int64_t base)
 }
 
 // An inline formatting context's two widths: its widest word — a run of
-// segments with no opportunity between them, across nodes — and its
-// widest line when only forced breaks break it. A trailing space counts in
-// neither.
+// segments with no opportunity between them, across nodes, spaces inside
+// the run included — and its widest line when only forced breaks break it.
+// A trailing space counts in neither, and a tab is as wide as the way to
+// the line's next stop.
 static Intr ifc_intrinsic(L *l, FBox *ifc)
 {
     Segs s = {0};
@@ -1537,10 +1538,15 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
                 space = 0;
             }
             if (g->kind == SG_WORD && g->s1 > g->b1) {
+                int64_t sw = spaces_width(g, line + space);
+                // Spaces no opportunity follows are inside the word (a
+                // quirks-mode row of slices and the whitespace between).
+                if (!g->wrap_after)
+                    word += sw;
                 if (g->collapsible || g->hang)
-                    space += g->sw;
+                    space += sw;
                 else
-                    line += g->sw;
+                    line += sw;
             }
             break;
         case SG_BREAK:
