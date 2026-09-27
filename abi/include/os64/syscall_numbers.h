@@ -110,7 +110,9 @@
 // boot, returned in RAX. No arguments, no struct: one number in the unit
 // the caller wants. Read from the CPU's cycle counter at the rate the boot
 // calibrated, so it counts what the tick clock loses under load (the two
-// drift apart by exactly those lost ticks — os64/ticks.h). A kernel without
+// drift apart by exactly those lost ticks — os64/ticks.h), and folded
+// through a high-water mark so no core can ever be handed a smaller value
+// than another was. A kernel without
 // this call answers the dispatcher's negative verdict for an unknown
 // number, which is how a program on a lifeboat kernel finds out.
 #define SYSCALL_MICROS     59

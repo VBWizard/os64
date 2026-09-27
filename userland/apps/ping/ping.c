@@ -216,7 +216,14 @@ int main(int argc, char **argv)
     // lying with three decimals. Say so once, and measure in ticks instead.
     bool fine_clock = os64_micros() >= 0;
     if (!fine_clock)
-        os64_printf("ping: this kernel has no microsecond clock; round trips are tick-resolution (10 ms)\n");
+    {
+        // The tick's length is the LIVE rate's, read, not assumed: a kernel
+        // built at another tick would otherwise be told a false number.
+        os64_ticks_t rate = {0, 0};
+        uint32_t per_second = os64_ticks(&rate) < 0 ? 0 : rate.per_second;
+        os64_printf("ping: this kernel has no microsecond clock; round trips are tick-resolution (%u ms)\n",
+                    per_second ? 1000u / per_second : 0u);
+    }
 
     uint32_t sent = 0;
     uint32_t received = 0;
@@ -316,10 +323,11 @@ int main(int argc, char **argv)
                     continue;
                 }
 
-                // The stopwatch reads the CPU's cycle counter, which is
-                // assumed synchronized across cores; a migration across an
-                // unsynchronized pair would read as a negative round trip.
-                // Clamp and SAY so — a 584-million-year RTT helps nobody.
+                // The kernel's micros() never runs backward (it is folded
+                // through a high-water mark), and the tick fallback cannot
+                // either; this guard is the belt under both, because a
+                // negative interval printed unsigned is a 584-million-year
+                // round trip, and if it ever fires the message says why.
                 uint64_t now_us = stopwatch_us(fine_clock);
                 bool backwards = now_us < reply.sent_us;
                 uint64_t elapsed = backwards ? 0 : now_us - reply.sent_us;

@@ -224,9 +224,11 @@ int64_t os64_ticks(os64_ticks_t *out);
 // the interrupts-off windows that cost the tick clock whole ticks under
 // load — measure an INTERVAL with this (a round trip, a benchmark), and use
 // os64_ticks for a CPU% (os64/ticks.h says why the two are not the same
-// clock). Never negative on a kernel that has the call; a lifeboat kernel
-// without it answers the dispatcher's negative verdict, and that is the
-// only failure there is.
+// clock). Never negative and never smaller than a previous answer, on any
+// core — the kernel folds every read through a high-water mark, so a
+// machine whose cores' counters disagree can stall this clock but not run
+// it backward. A lifeboat kernel without the call answers the dispatcher's
+// negative verdict, and that is the only failure there is.
 //
 //     int64_t t0 = os64_micros();
 //     ...

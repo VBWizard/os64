@@ -5013,13 +5013,19 @@ static bool test_net_icmp_conn(void)
         return false;
     }
 
+    // Every read here is BOUNDED (Codex #145): this is a live echo across
+    // a real or emulated wire, and a dropped reply against a zero deadline
+    // is "wait forever" — a suite that hangs on packet loss is worse than
+    // one that fails. Two seconds is a hundred round trips of slack.
+    #define ECHO_PATIENCE (kTicksSinceStart + 2 * TICKS_PER_SECOND)
     uint8_t in[64];
-    long got = icmp_conn_read(c, in, sizeof(in), 0);
+    long got = icmp_conn_read(c, in, sizeof(in), ECHO_PATIENCE);
     uint64_t rtt = kTicksSinceStart - stamp;
 
     if (got != (long)sizeof(out)) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - read returned %ld, expected %u\n",
-               got, (uint32_t)sizeof(out));
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - read returned %ld, expected %u%s\n",
+               got, (uint32_t)sizeof(out),
+               got == ICMP_CONN_ERR_TIMEOUT ? " (no reply within 2 s)" : "");
         icmp_conn_close(c);
         return false;
     }
@@ -5041,11 +5047,21 @@ static bool test_net_icmp_conn(void)
     // MIN over several echoes is the figure: one sample can land in the
     // registered-not-yet-parked window the sweep exists for, and one can
     // eat host scheduling jitter, but not all of them.
+    // A lost reply is a lost SAMPLE, not a failed test: UDP-honest echo can
+    // drop, and the figure is a minimum, which survives losing a few. Half
+    // the samples lost is a different problem and is reported as one.
     uint64_t wake_min_us = ~0UL, wake_max_us = 0;
+    int samples = 0, lost = 0;
     for (int i = 0; i < 8; i++) {
-        if (icmp_conn_write(c, out, sizeof(out)) != (long)sizeof(out) ||
-            icmp_conn_read(c, in, sizeof(in), 0) != (long)sizeof(out)) {
-            printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - echo %d of the wake measurement failed\n", i);
+        if (icmp_conn_write(c, out, sizeof(out)) != (long)sizeof(out)) {
+            printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - write %d of the wake measurement failed\n", i);
+            icmp_conn_close(c);
+            return false;
+        }
+        long r = icmp_conn_read(c, in, sizeof(in), ECHO_PATIENCE);
+        if (r == ICMP_CONN_ERR_TIMEOUT) { lost++; continue; }
+        if (r != (long)sizeof(out)) {
+            printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - read %d of the wake measurement returned %ld\n", i, r);
             icmp_conn_close(c);
             return false;
         }
@@ -5053,6 +5069,13 @@ static bool test_net_icmp_conn(void)
         uint64_t wake_us = per_us ? (rdtsc() - c->last_arrival_tsc) / per_us : 0;
         if (wake_us < wake_min_us) wake_min_us = wake_us;
         if (wake_us > wake_max_us) wake_max_us = wake_us;
+        samples++;
+    }
+    if (samples < 4) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - only %d of 8 echoes came back within 2 s (%d lost); "
+               "the wire, not the wake, is the problem\n", samples, lost);
+        icmp_conn_close(c);
+        return false;
     }
     if (wake_min_us >= 1000) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - best enqueue-to-reader wake was %lu us over 8 echoes "
@@ -5074,16 +5097,18 @@ static bool test_net_icmp_conn(void)
         icmp_conn_close(c);
         return false;
     }
-    got = icmp_conn_read(c, in, sizeof(in), 0);
+    got = icmp_conn_read(c, in, sizeof(in), ECHO_PATIENCE);
+    #undef ECHO_PATIENCE
     icmp_conn_close(c);
     if (got != (long)sizeof(out)) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - cold-cache echo read returned %ld\n", got);
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - cold-cache echo read returned %ld%s\n", got,
+               got == ICMP_CONN_ERR_TIMEOUT ? " (no reply within 2 s)" : "");
         return false;
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_net_icmp_conn (%ld bytes echoed by %u.%u.%u.%u in %lu ticks; "
-           "arrival wake %lu-%lu us over 8 echoes; cold-cache echo survived the ARP re-ask)\n",
-           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt, wake_min_us, wake_max_us);
+           "arrival wake %lu-%lu us over %d echoes, %d lost; cold-cache echo survived the ARP re-ask)\n",
+           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt, wake_min_us, wake_max_us, samples, lost);
     return true;
 }
 

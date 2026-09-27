@@ -4632,10 +4632,21 @@ static uint64_t syscall_ticks(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // (DEBTS § wall-clock hardening); this reads a counter and loses none. The
 // two drift apart by exactly the lost ticks. A program measuring an
 // interval wants this one; a CPU% that divides two tick deltas wants ticks.
-// Assumes the TSC is invariant and synchronized across cores — every
-// single-package machine since ~2008, and the assumption the accounting
-// already makes; the tell if it is ever false is an interval that comes
-// out negative across a migration.
+//
+// MONOTONIC BY CONSTRUCTION, not by assumption. kBootTSC was read on the
+// BSP; this rdtsc runs on whatever core the caller is on, and the house
+// rule (nvme.c's completion poll) is that a TSC read on one core may not
+// be compared with one from another — QEMU and WSL2 have both been seen
+// to hand cores counters with different offsets. So the raw figure is
+// never returned as-is: it is folded through a global high-water mark
+// (compare-and-swap, the only cross-core state), and a caller can only
+// ever see a value at least as large as the last one anybody was given.
+// A core whose counter lags therefore STALLS the clock by its offset
+// rather than running it backward, and a core behind the boot anchor
+// reads 0 rather than 2^64 - offset. A stall is still a wrong interval on
+// a desynchronized machine; the boot-time sync check that would make it a
+// right one is booked (DEBTS § micros).
+static volatile uint64_t s_micros_high_water;
 static uint64_t syscall_micros(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
@@ -4644,10 +4655,20 @@ static uint64_t syscall_micros(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	uint64_t cps = kCPUCyclesPerSecond;
 	if (cps == 0)
 		return 0;   // asked before calibration — nothing has, but 0 beats a divide fault
-	uint64_t cycles = rdtsc() - kBootTSC;
+	uint64_t now = rdtsc();
+	uint64_t cycles = now > kBootTSC ? now - kBootTSC : 0;
 	uint64_t seconds = cycles / cps;
 	uint64_t rest = cycles % cps;
-	return seconds * 1000000UL + (rest * 1000000UL) / cps;
+	uint64_t us = seconds * 1000000UL + (rest * 1000000UL) / cps;
+
+	for (;;)
+	{
+		uint64_t seen = s_micros_high_water;
+		if (us <= seen)
+			return seen;   // behind somebody's reading: hand out theirs, never less
+		if (__sync_bool_compare_and_swap(&s_micros_high_water, seen, us))
+			return us;
+	}
 }
 
 // memory(out) — the physical memory picture, one atomic snapshot. free/used/

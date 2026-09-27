@@ -95,18 +95,25 @@ useful together, so it fills a struct. Microseconds are one number, already
 in the unit the reader wants. A register is the honest shape: it cannot be
 handed a bad pointer, and it cannot be half-filled.
 
-**What it counts, and what it assumes.** `rdtsc` minus a boot anchor,
+**What it counts, and what it promises.** `rdtsc` minus a boot anchor,
 divided at `kCPUCyclesPerSecond` in two steps (whole seconds, then the
 remainder) so the multiply cannot overflow at any uptime. The rate is
 ±0.33% at the default 3-second calibration window (TSCCAL=15 for ±0.07%),
-which is a scale error on absolute durations and nothing else. It assumes
-the TSC is invariant and synchronized across cores — true of every
-single-package machine the kernel runs on (QEMU, the P5) and of Intel and
-AMD parts since roughly 2008, and the same assumption the accounting
-already makes when it stamps `acctLastDispatchTSC` on one core and prints
-it from another. The tell if it is ever false: an interval measured across
-a migration comes out negative. `ping` clamps a negative RTT to zero and
-says so rather than printing a 584-million-year round trip.
+which is a scale error on absolute durations and nothing else. The anchor
+was read on the BSP and the read runs on the caller's core, and the house
+rule (nvme.c's completion poll) is that a TSC from one core may not be
+compared with one from another: QEMU and WSL2 have both handed cores
+counters with different offsets. So the promise is made by CONSTRUCTION,
+not assumption: every value is folded through a global high-water mark
+(one compare-and-swap), a caller can only ever see a figure at least as
+large as the last one anybody was given, and a core behind the anchor
+reads 0 rather than wrapping. A lagging core STALLS the clock by its
+offset; it cannot run it backward. That is an interval off by at most the
+offset on a machine with the defect, and the boot-time sync check that
+would make it exact is booked in DEBTS. (The first draft of this document
+called synchronization a declared assumption; Codex's first round pointed
+at the nvme.c rule, and the assumption became a mechanism.) `ping` keeps a
+belt under it — a negative interval clamps to zero and says so.
 
 **Two clocks that can disagree, stated.** `ticks` counts interrupts the
 BSP received; `micros` reads a counter. Under load the tick clock LOSES
@@ -215,3 +222,22 @@ matters.
 
 Kernel concurrency, but a copied and proven shape with two callers, both
 threads. Reviewed here and merged on Chris's test; no outside round.
+
+## Review (PR #145)
+
+Round 1 (Codex, on 35aaed72): three findings, all taken.
+
+1. **P1 — `micros()` compared TSC readings across cores.** The design had
+   called synchronization a declared assumption; nvme.c's completion poll
+   already carried the house rule that a cross-core TSC comparison is not
+   safe on QEMU/WSL2. Cure: the global high-water mark above — the clock
+   can stall on a desynchronized machine, never run backward or wrap. The
+   boot-time sync check stays booked in DEBTS.
+2. **P2 — `ping`'s fallback message said "10 ms" regardless of the
+   kernel's live tick rate.** It now derives the tick length from
+   `os64_ticks_t.per_second`, the rate the ABI promises to report live.
+3. **P2 — the eight measurement echoes read with a zero deadline, so one
+   dropped reply would hang the post-boot suite.** Every echo read in the
+   test — the two that predate this slice included — now waits two
+   seconds at most; a lost reply is a lost sample, and the test fails
+   cleanly if fewer than half come back.
