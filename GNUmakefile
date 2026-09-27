@@ -209,8 +209,8 @@ USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/li
 
 # The font fixtures /tests/fonttest reads: two TrueType faces and two
 # OpenType/CFF ones, with their licences beside them. They land in /tests
-# as test inputs. The product selection below reuses two pinned, licensed
-# files and installs independent copies in /etc/fonts.
+# as test inputs. The product selection ships the complete DejaVu serif,
+# sans and mono families as independent copies in /etc/fonts.
 # userland/libfreetype/fixtures/FIXTURES.md records where each file came
 # from, its digest, and what licence it travels under.
 FONT_FIXTURE_DIR   := userland/libfreetype/fixtures
@@ -219,7 +219,11 @@ FONT_FIXTURE_FILES := DejaVuSans.ttf DejaVuSansMono.ttf \
                       LICENSE-DejaVu.txt LICENSE-SourceCodePro.txt \
                       LICENSE-SourceSans3.txt
 FONT_FIXTURES      := $(addprefix $(FONT_FIXTURE_DIR)/,$(FONT_FIXTURE_FILES))
-FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSans.ttf DejaVuSansMono.ttf)
+FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSerif.ttf DejaVuSerif-Bold.ttf \
+                      DejaVuSerif-Italic.ttf DejaVuSerif-BoldItalic.ttf \
+                      DejaVuSans.ttf DejaVuSans-Bold.ttf DejaVuSans-Oblique.ttf \
+                      DejaVuSans-BoldOblique.ttf DejaVuSansMono.ttf DejaVuSansMono-Bold.ttf \
+                      DejaVuSansMono-Oblique.ttf DejaVuSansMono-BoldOblique.ttf)
 
 # Prepared compositions carry their own glyphs and finish tiles.
 FRAME_COMPOSITIONS := $(wildcard frames/*.frame)
@@ -447,7 +451,7 @@ userland:
 # that rides it changes.
 TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
 
-$(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(FONT_FIXTURES) $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf GNUmakefile
+$(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(FONT_FIXTURES) $(FONT_PRODUCT) $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -515,7 +519,7 @@ $(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENS
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.

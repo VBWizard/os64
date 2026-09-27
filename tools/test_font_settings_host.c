@@ -16,6 +16,8 @@
 #include <sched.h>
 #include "os64/appearance.h"
 #include "os64/font_settings.h"
+void os64_debug_log(const char *s) { (void)s; }
+
 static char session[OS64_APPEARANCE_MAX + 1] = "generation = 0\n";
 static size_t session_size = 15, session_pos;
 static uint64_t session_generation;
@@ -114,7 +116,7 @@ int main(int argc, char **argv)
     assert(os64_font_config_install(context,&desired,OS64_FONT_ROLE_DOCUMENT,installed,&error) == OS64_FONT_CONFIG_FACE);
     clean_staging();
 
-    const char *initial = "# Preserve my font comment\nui.face = builtin\nui.fallback.2 = fonts/DejaVuSans.ttf\nUI.fallback.2 = fonts/DejaVuSans.ttf\n";
+    const char *initial = "family.serif = fonts/Web.ttf  # keep web choice\nfamily.serif.bold = fonts/Web-Bold.ttf\n# Preserve my font comment\nui.face = builtin\nui.fallback.2 = fonts/DejaVuSans.ttf\nUI.fallback.2 = fonts/DejaVuSans.ttf\n";
     raw("fonts.conf",initial,strlen(initial));
     const char *future = "# Theme comment\nfuture.texture = linen  # exact\n";
     raw("theme.conf",future,strlen(future));
@@ -127,6 +129,8 @@ int main(int argc, char **argv)
     path_join(confpath,sizeof(confpath),root,"fonts.conf");
     char before[8192],after[8192]; read_file(confpath,before,sizeof(before));
     assert(strstr(before,"# Preserve my font comment\n"));
+    assert(strstr(before,"family.serif = fonts/Web.ttf  # keep web choice\nfamily.serif.bold = fonts/Web-Bold.ttf\n"));
+    assert(!strstr(session,"fonts.family."));
     assert(!strstr(before,"fallback.2"));
     assert(strstr(before,destination));
     assert(!os64_font_settings_apply(context,&config,NULL,&error));
