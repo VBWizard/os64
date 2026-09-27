@@ -718,16 +718,20 @@ LIBPAGE.md's rule restated for geometry:
   context, one page laying out at a time, and that is the reason for the
   split beyond memory. Tabs, when they come, share the page context and
   its budget, or the design here is revisited with that consumer in hand.
-- **Depth.** Node depth is libhtml's `max_depth`. BOX depth is larger —
-  a nested table adds a table box, a row-group, a row, a cell and
-  possibly anonymous boxes per level — but by at most a constant per
-  node, so it is bounded by a multiple of `max_depth`, and the walk is
-  either iterative or written against that bound. The intrinsic-sizing
-  RECURSION is bounded by table NESTING, which is at most a third of the
-  node depth (a nested table is at least `table > tr > td` deeper), and
-  is written as a recursion only because that bound is stated here. A
-  page as deep as libhtml allows lays out without a stack the width of
-  the page.
+- **Depth is libflow's own bound, not the parser's.** libhtml's
+  `max_depth` is an option its CALLER sets, so it cannot be what keeps
+  layout inside a stack. The box build counts its descents — each
+  element level, and each part a table adds (row group, row), anonymous
+  ones included — and at `F_DEPTH_MAX` (512) it stops exactly as it does
+  when memory runs out: the tree is `incomplete`, and what it holds is a
+  prefix of the whole build. Every pass after the build recurses along
+  the boxes, so that one count bounds them all. The intrinsic-sizing
+  RECURSION is bounded by table NESTING, which is at most a third of it
+  (a nested table is at least `table > tr > td` deeper). Measured at the
+  shipped `-O2`, the deepest page the bound admits lays out in under
+  640KB of stack, and a thread has 1MB; the host suite lays out a page
+  nested past the bound and asserts it comes back incomplete rather than
+  crashing.
 - **Nothing blocks and nothing is cached across calls.** Every layout is
   from scratch; the face owns the pacing.
 - **The run cap** (1 MiB per run) is honoured by windowing a long text

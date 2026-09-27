@@ -68,6 +68,20 @@ typedef struct {
     // one), which is what makes its container MIX and the inline SPLIT
     // (LAYOUT.md § Pass 2). Not a style property: no cascade writes it.
     bool holds_block;
+    // What walking up from this element would say, answered here once,
+    // parent before child, so a later pass asks in constant time and the
+    // layout stays linear in the page (LAYOUT.md § Bounds). The link this
+    // element is or sits in, or -1. The decorations drawn across its
+    // content: its own and every ancestor's up to an atomic inline or (full
+    // quirks, the Quirks standard's 3.11) a table, which keep their own and
+    // stop the rest — in the innermost decorating element's colour.
+    int32_t link;
+    uint8_t decoration;
+    uint32_t decoration_color;
+    // How many of this element and its ancestors are lists (`ul ol menu
+    // dir`), lists or `dl`s, and `li`s: the chapter's descendant selectors
+    // for its children, by the same bargain.
+    int32_t lists, lists_or_dls, items;
 } FStyled;
 
 typedef struct {
@@ -110,6 +124,13 @@ int64_t f_style_dump(const FStyles *styles, char *out, size_t cap);
 // inline boxes, atomic inlines, breaks — because a line is broken across
 // that sequence and not per node: `foo<b>bar</b>` is one word in two nodes
 // (LAYOUT.md § Pass 3).
+
+// How deep the box build descends — element levels, plus the parts of a
+// table — before it stops and reports the page incomplete. Every pass
+// after it recurses along the boxes, so this is what bounds the stack a
+// layout needs, whatever nesting the parser was told to allow; it is
+// sized to leave a thread's stack room to spare (LAYOUT.md § Bounds).
+#define F_DEPTH_MAX 512
 
 typedef enum {
     FB_BLOCK = 0,       // a block container; node NULL for an anonymous one
@@ -183,9 +204,8 @@ struct FBox {
     // an item. NULL when the item has none.
     const char *marker;
     uint32_t marker_len;
-    // The link this box IS (a frame) or sits inside (a block that split an
-    // `a`, which has no inline edge left to carry it), or -1. A box deeper
-    // down is found by walking up to one that says.
+    // The link this box IS (a frame) or sits inside, however deep, or -1:
+    // every box carries its own, an anonymous one its parent's.
     int32_t link;
 
     // ── Pass 3's geometry, in 26.6 document coordinates (x from the page's
@@ -202,8 +222,9 @@ typedef struct {
     FArena arena;
     const FStyles *styles;          // what the boxes' styles came from
     FBox *root;
-    // Memory ran out partway: every box and item present is real, and the
-    // build stopped at the first thing it could not make.
+    // Memory ran out partway, or the page nests past F_DEPTH_MAX: every
+    // box and item present is real, and the build stopped at the first
+    // thing it could not make.
     bool incomplete;
 } FBoxes;
 
@@ -250,6 +271,14 @@ struct FLine {
 FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
                       const FStyles *styles, const flow_env_t *env);
 void f_boxes_free(FBoxes *boxes);
+// CSS white space processing (CSS 2.1 §16.6.1), for every text the page
+// is laid out as — a text node's, and a missing picture's alt. Whether a
+// white-space value collapses spaces; then `n` bytes of `in` into `out`
+// (room for `n`), each run of spaces, tabs and line breaks one space, and
+// none at the start when `*space` says the text before ended in one. It
+// leaves `*space` saying whether this one does, and returns the length.
+bool f_collapsible(flow_white_space_t ws);
+uint32_t f_collapse_white(const char *in, uint32_t n, char *out, bool *space);
 // One line per box and per item, indented by depth; the same contract as
 // f_style_dump.
 int64_t f_boxes_dump(const FBoxes *boxes, char *out, size_t cap);

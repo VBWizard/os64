@@ -8,8 +8,8 @@
 // table — and kept in 26.6 until the dump rounds it (LAYOUT.md § Rounding).
 //
 // Positions are 64-bit: a long page is taller than a 32-bit 26.6 count.
-// Recursion follows the box tree, whose depth is a constant multiple of
-// libhtml's max_depth (LAYOUT.md § Bounds).
+// Recursion follows the box tree, whose depth the build holds to
+// F_DEPTH_MAX (LAYOUT.md § Bounds).
 
 #include "internal.h"
 
@@ -111,18 +111,22 @@ static bool keep_run(L *l, os64_text_run_t *run)
 }
 
 // One run of the text engine. `tab_origin` is where the line's tab stops
-// start, relative to the run's own origin.
+// start, relative to the run's own origin. The stops repeat every
+// interval, so the origin is handed over reduced modulo it: the same stops,
+// in the engine's 32-bit coordinates however far along the line the run
+// starts.
 static os64_text_run_t *run_of(L *l, const Fonts *f, const char *text, uint32_t n,
                                int64_t tab_origin, int64_t tab_interval)
 {
     if (l->failed)
         return NULL;
+    int64_t interval = tab_interval > 0 ? tab_interval : 64 * 8;
     os64_text_layout_t opt = {
         .encoding = OS64_TEXT_UTF8_WESTERN_V1,
         .fonts = f->list,
         .font_count = f->count,
-        .tab_origin = (os64_font_pos_t)tab_origin,
-        .tab_interval = (os64_font_pos_t)(tab_interval > 0 ? tab_interval : 64 * 8),
+        .tab_origin = (os64_font_pos_t)(tab_origin % interval),
+        .tab_interval = (os64_font_pos_t)interval,
     };
     os64_text_run_t *run = NULL;
     if (os64_text_layout(l->env->text, (const uint8_t *)text, n, &opt, &run) != OS64_FONT_OK) {
@@ -250,36 +254,29 @@ typedef struct {
 } Paint;
 
 // What a fragment is drawn with that its own style does not say: the
-// decorations of every ancestor, in the innermost decorating element's
-// colour — they propagate through inline AND block descendants, but not
-// into an atomic inline's content, nor (quirks mode, the Quirks standard's
-// 3.11) into a table — and the link it sits in.
+// decorations propagated to it and the link it sits in, which pass 1
+// answered for its element (FStyled). An atom's own fragment is decorated
+// by what surrounds it — the edge an atom makes keeps its ancestors'
+// decorations off its CONTENT, not off the atom — unless it is a table in
+// full quirks, which keeps them off both.
 static Paint paint_for(const L *l, const FStyles *styles, const os64_html_node_t *n,
                        const os64_html_node_t *atom)
 {
-    Paint p = {0, 0, -1};
-    bool colored = false;
-    for (const os64_html_node_t *a = n; a != NULL; a = a->parent) {
-        if (a->kind != OS64_HTML_ELEMENT)
-            continue;
-        if (p.link < 0 && l->model != NULL && a->ns == OS64_HTML_NS_HTML &&
-            (a->tag == OS64_HTML_TAG_A || a->tag == OS64_HTML_TAG_AREA))
-            p.link = os64_page_link_for(l->model, a);
-        const FStyled *st = f_style_of(styles, a);
-        if (st == NULL)
-            continue;
-        if (st->style.text_decoration != 0) {
-            p.decoration |= st->style.text_decoration;
-            if (!colored) {
-                p.color = st->style.color;
-                colored = true;
-            }
+    const os64_html_node_t *e = n;
+    while (e != NULL && e->kind != OS64_HTML_ELEMENT)
+        e = e->parent;
+    const FStyled *st = e != NULL ? f_style_of(styles, e) : NULL;
+    if (st == NULL)
+        return (Paint){0, 0, -1};
+    Paint p = {st->decoration, st->decoration_color, st->link};
+    bool quirks_table = l->quirks && e->ns == OS64_HTML_NS_HTML && e->tag == OS64_HTML_TAG_TABLE;
+    if (e == atom && !quirks_table) {
+        const FStyled *up = f_style_of(styles, e->parent);
+        if (up != NULL) {
+            if (p.decoration == 0)
+                p.color = up->decoration_color;
+            p.decoration |= up->decoration;
         }
-        // An atom's own decorations reach its content; nothing above it does.
-        if (a != atom && st->style.display == FLOW_DISPLAY_INLINE_BLOCK)
-            break;
-        if (l->quirks && a->ns == OS64_HTML_NS_HTML && a->tag == OS64_HTML_TAG_TABLE)
-            break;
     }
     return p;
 }
@@ -477,33 +474,21 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                 // under collapsing white-space its spaces collapse too.
                 const char *alt = os64_html_attr(it->node, "alt")->value;
                 uint32_t n = (uint32_t)os64_strlen(alt);
-                if (st->white_space == FLOW_WS_NORMAL || st->white_space == FLOW_WS_NOWRAP) {
+                if (f_collapsible(st->white_space)) {
                     char *copy = alloc(l, n);
                     if (copy == NULL)
                         break;
-                    uint32_t m = 0;
-                    for (uint32_t i = 0; i < n; i++) {
-                        bool sp = alt[i] == ' ' || alt[i] == '\t' || alt[i] == '\n' ||
-                                  alt[i] == '\r' || alt[i] == '\f';
-                        if (!sp)
-                            copy[m++] = alt[i];
-                        else if (m == 0 || copy[m - 1] != ' ')
-                            copy[m++] = ' ';
-                    }
-                    // And against the text beside it: a space after a space
-                    // it already has, or before one the next text starts
-                    // with, is the same space.
+                    // Against the text beside it too: a space after a space
+                    // the text before already ends in, or before one the
+                    // next text starts with, is the same space.
                     const Seg *prev = s->n > 0 ? &s->v[s->n - 1] : NULL;
-                    if (m > 0 && copy[0] == ' ' && prev != NULL && prev->kind == SG_WORD &&
-                        prev->collapsible && prev->s1 > prev->b1) {
-                        copy++;
-                        m--;
-                    }
+                    bool space = prev != NULL && prev->kind == SG_WORD && prev->collapsible &&
+                                 prev->s1 > prev->b1;
+                    uint32_t m = f_collapse_white(alt, n, copy, &space);
                     const FItem *next = it->next;
                     if (m > 0 && copy[m - 1] == ' ' && next != NULL && next->kind == FI_TEXT &&
                         next->len > 0 && next->text[0] == ' ' &&
-                        (next->style->white_space == FLOW_WS_NORMAL ||
-                         next->style->white_space == FLOW_WS_NOWRAP))
+                        f_collapsible(next->style->white_space))
                         m--;
                     alt = copy;
                     n = m;
@@ -530,9 +515,10 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             g->frame_w = fw;
             g->frame_h = fh;
             // An atom with content of its own (a marquee) is as wide as
-            // the line; its height comes from laying it out.
+            // the line; its height comes from laying it out. Margins and a
+            // frame wider than the line leave it no content, never less.
             if (it->content != NULL)
-                r.w = cw - fw - g->ml - g->mr;
+                r.w = cw - fw - g->ml - g->mr > 0 ? cw - fw - g->ml - g->mr : 0;
             g->atom = r;
             g->w = g->ml + fw + r.w + g->mr;
             bool wrap = wraps(st->white_space) && !quirk_no_wrap_round(l, ifc, it);
@@ -1241,7 +1227,8 @@ static void first_line_of(FBox *b, FLine **out)
 
 // An outside marker: right-aligned against the item's content edge, on
 // its first line's baseline — or where one would be — in the item's font.
-static void place_marker(L *l, FBox *b, int64_t content_x, int64_t content_y)
+static void place_marker(L *l, const FStyles *styles, FBox *b, int64_t content_x,
+                         int64_t content_y)
 {
     Fonts f;
     if (!fonts_for(l, b->style, &f))
@@ -1263,10 +1250,9 @@ static void place_marker(L *l, FBox *b, int64_t content_x, int64_t content_y)
     fr->text = b->marker;
     fr->end = b->marker_len;
     // The marker belongs to its item, so it is in whatever link the item
-    // sits in: the nearest box up that says (FBox.link).
-    fr->link = -1;
-    for (const FBox *up = b; up != NULL && fr->link < 0; up = up->parent)
-        fr->link = up->link;
+    // sits in. It takes none of the item's decorations: an outside marker
+    // is not in the line they are drawn across.
+    fr->link = paint_for(l, styles, b->node, NULL).link;
     fr->w = v.advance_x;
     fr->h = v.ascent + v.descent;
     fr->x = content_x - fr->w;
@@ -1374,7 +1360,7 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
         b->h = 0;
         cur->pm = max64(pm, max64(in.pm, mb));
         if (b->marker != NULL)
-            place_marker(l, b, cx, b->y);
+            place_marker(l, styles, b, cx, b->y);
         return;
     }
     if (top_open) {
@@ -1403,7 +1389,7 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     if (cur->first < 0)
         cur->first = y_border;
     if (b->marker != NULL)
-        place_marker(l, b, cx, y_border + b->border[FLOW_TOP] + b->padding[FLOW_TOP]);
+        place_marker(l, styles, b, cx, y_border + b->border[FLOW_TOP] + b->padding[FLOW_TOP]);
 }
 
 // ── The layout ──────────────────────────────────────────────────────────

@@ -369,7 +369,7 @@ static void layout_cases(void)
         "block html 0 0 200 52\n"
         "  block body 8 16 184 20\n"
         "    block ul 8 16 184 20 link 0\n"
-        "      block li 48 16 144 20\n"
+        "      block li 48 16 144 20 link 0\n"
         "        marker \"\xe2\x80\xa2 \" 36 18 12 16 link 0\n"
         "        line 48 16 144 20 base 14\n"
         "          text \"foo\" 48 18 20 16 serif 16 underline link 0\n");
@@ -388,6 +388,24 @@ static void layout_cases(void)
         "        text \"b\" 20 18 8 16 serif 16\n"
         "        text \" c\" 28 18 12 16 serif 16\n");
 
+    // A link has no edge an inline-block's content could fall outside: the
+    // text in a linked marquee is the link, though the `a`'s underline
+    // stops at the atom (decorations do not reach an atom's content). The
+    // marquee's overflow is hidden, so its baseline is its bottom edge, 20;
+    // the 16px strut hangs 6 below it, and the `a`'s own box is the strut's
+    // font box on that baseline: 8 + 20 - 12 = 16.
+    layout_case("an inline-block's content is in the link its atom is",
+        "<!doctype html><a href=x><marquee>hi</marquee></a>", 200,
+        "page 200 42\n"
+        "block html 0 0 200 42\n"
+        "  block body 8 8 184 26\n"
+        "    line 8 8 184 26 base 20\n"
+        "      span a 8 16 184 16 link 0\n"
+        "      atomic marquee 8 8 184 20 link 0\n"
+        "        block marquee 8 8 184 20 link 0\n"
+        "          line 8 8 184 20 base 14\n"
+        "            text \"hi\" 8 10 12 16 serif 16 link 0\n");
+
     // An inside marker is in its item's link, as its text is.
     layout_case("an inside marker keeps its item's link",
         "<!doctype html><a href=x><details><summary>x</summary></details></a>", 200,
@@ -395,7 +413,7 @@ static void layout_cases(void)
         "block html 0 0 200 36\n"
         "  block body 8 8 184 20\n"
         "    block details 8 8 184 20 link 0\n"
-        "      block summary 8 8 184 20\n"
+        "      block summary 8 8 184 20 link 0\n"
         "        line 8 8 184 20 base 14\n"
         "          marker \"\xe2\x96\xb8 \" 8 10 12 16 link 0\n"
         "          text \"x\" 20 10 8 16 serif 16 underline link 0\n");
