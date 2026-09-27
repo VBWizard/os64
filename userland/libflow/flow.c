@@ -257,14 +257,22 @@ bool flow_incomplete(const flow_tree_t *tree)
     return tree != NULL && tree->incomplete;
 }
 
+// Whole pixels, rounded up, held to what an int32_t can say: a page may be
+// taller than that in 26.6 (thousands of height=1000000 cells).
+static int32_t whole_px(int64_t u)
+{
+    int64_t px = (u + 63) / 64;
+    return px > INT32_MAX ? INT32_MAX : px < 0 ? 0 : (int32_t)px;
+}
+
 int32_t flow_height(const flow_tree_t *tree)
 {
-    return tree != NULL ? (int32_t)round_px(tree->layout->height) : 0;
+    return tree != NULL ? whole_px(tree->layout->height) : 0;
 }
 
 int32_t flow_width(const flow_tree_t *tree)
 {
-    return tree != NULL ? (int32_t)round_px(tree->layout->width) : 0;
+    return tree != NULL ? whole_px(tree->layout->width) : 0;
 }
 
 const flow_box_t *flow_root(const flow_tree_t *tree)
