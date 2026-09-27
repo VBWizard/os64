@@ -370,6 +370,183 @@ static void allocation_sweep(void)
 
 // Every allocation of a whole layout fails in turn: NULL, or a tree that
 // says it is incomplete, or the whole one — never a crash, never a leak.
+// Codex #147 round 2: a page taller than an int32_t, and a text wider than
+// the engine's signed 26.6 coordinates.
+// `open` repeated n times round an `x`, each closed by `close`, parsed
+// allowing `max_depth` open elements.
+static os64_html_document_t *nested(const char *open, const char *close, int n, size_t max_depth)
+{
+    size_t cap = (strlen(open) + strlen(close)) * (size_t)n + 64, at = 0;
+    char *html = malloc(cap);
+    at += (size_t)snprintf(html, cap, "<!doctype html>");
+    for (int i = 0; i < n; i++)
+        at += (size_t)snprintf(html + at, cap - at, "%s", open);
+    at += (size_t)snprintf(html + at, cap - at, "x");
+    for (int i = 0; i < n; i++)
+        at += (size_t)snprintf(html + at, cap - at, "%s", close);
+    os64_html_options_t opt = os64_html_options_default();
+    opt.charset = "utf-8";
+    opt.max_depth = max_depth;
+    os64_html_parser_t *p = os64_html_parser_new(&opt);
+    os64_html_document_t *doc = NULL;
+    if (p != NULL) {
+        os64_html_parser_feed(p, html, strlen(html));
+        doc = os64_html_parser_finish(p);
+    }
+    free(html);
+    return doc;
+}
+
+// Whether a page nested n deep lays out whole (1), incomplete (0), or not
+// at all (-1).
+static int nested_whole(const char *open, const char *close, int n, size_t max_depth)
+{
+    os64_html_document_t *doc = nested(open, close, n, max_depth);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    flow_tree_t *t = flow_layout(doc, page, 800, &kEnv);
+    int whole = t == NULL ? -1 : !flow_incomplete(t);
+    flow_free(t);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    return whole;
+}
+
+// Whether the laid-out page has a fragment line ending in `tail` — the
+// decorations and link after its geometry — for a case about paint, not
+// position.
+static bool fragment_ends(const char *html, const char *text, const char *tail)
+{
+    char *dump = layout_dump_of(html, 400);
+    bool found = false;
+    for (char *line = dump; line != NULL && *line != '\0' && !found;) {
+        char *end = strchr(line, '\n');
+        size_t len = end != NULL ? (size_t)(end - line) : strlen(line);
+        char *at = strstr(line, text);
+        found = at != NULL && at < line + len && len >= strlen(tail) &&
+                strncmp(line + len - strlen(tail), tail, strlen(tail)) == 0;
+        line = end != NULL ? end + 1 : NULL;
+    }
+    free(dump);
+    return found;
+}
+
+// Decorations propagate to every descendant but stop at an atom's content
+// and, in full quirks, at a table; the atom's own and the table's own
+// still reach inside. Pass 1 answers this per element (FStyled).
+static void paint_cases(void)
+{
+    expect("an underline reaches a table's text in no-quirks mode",
+           fragment_ends("<!doctype html><u><table><tr><td>t</table></u>",
+                         "text \"t\"", "serif 16 underline"), NULL);
+    expect("an underline stops at a table in full quirks",
+           fragment_ends("<u><table><tr><td>t</table></u>", "text \"t\"", "serif 16"), NULL);
+    expect("a table's own decoration still reaches its text in full quirks",
+           fragment_ends("<u><table><tr><td><s>t</s></table></u>",
+                         "text \"t\"", "serif 16 line-through"), NULL);
+    expect("an underline stops at an inline-block's content",
+           fragment_ends("<!doctype html><u><marquee>m</marquee></u>", "text \"m\"",
+                         "serif 16"), NULL);
+    expect("decorations inside an inline-block are its own",
+           fragment_ends("<!doctype html><u><marquee><s>m</s></marquee></u>",
+                         "text \"m\"", "serif 16 line-through"), NULL);
+}
+
+static int32_t lowest_y(const flow_box_t *b)
+{
+    int32_t y = b != NULL ? b->rect.y : 0;
+    for (const flow_box_t *c = b != NULL ? b->first : NULL; c != NULL; c = c->next) {
+        int32_t k = lowest_y(c);
+        y = k < y ? k : y;
+    }
+    return y;
+}
+
+static void limit_cases(void)
+{
+    // Depth is libflow's own bound (F_DEPTH_MAX), whatever the parser was
+    // told to allow: past it the build stops and says so, and inside it
+    // the page is whole. html and body are two of the descents, so the
+    // innermost of n divs opens descent 2 + n.
+    expect("a page nested exactly to the depth bound is whole",
+           nested_whole("<div>", "</div>", F_DEPTH_MAX - 2, 4096) == 1, NULL);
+    expect("one level past the depth bound is incomplete",
+           nested_whole("<div>", "</div>", F_DEPTH_MAX - 1, 4096) == 0, NULL);
+    expect("a page nested past the depth bound is incomplete, not a crash",
+           nested_whole("<div>", "</div>", 2000, 4096) == 0, NULL);
+    // An inline-block's content is two descents: the innermost of j
+    // marquees opens descent 2 + 2j.
+    expect("inline-blocks nested exactly to the bound are whole",
+           nested_whole("<marquee>", "</marquee>", (F_DEPTH_MAX - 2) / 2, 4096) == 1, NULL);
+    expect("an inline-block level costs two descents",
+           nested_whole("<marquee>", "</marquee>", (F_DEPTH_MAX - 2) / 2 + 1, 4096) == 0, NULL);
+    expect("inline nesting counts against the same bound",
+           nested_whole("<span>", "</span>", 2000, 4096) == 0, NULL);
+    expect("tables nested past the bound are incomplete",
+           nested_whole("<table><tr><td>", "</table>", 700, 4096) == 0, NULL);
+
+    // A tab 34 million pixels along a pre line, past where the line's
+    // stops fit the engine's 32-bit 26.6. At 48px the monospace space is
+    // 24, so a stop every 192; the pen after the pictures and the x is
+    // 34,000,024, the next stop 34,000,128, and the fragment that holds
+    // the tab and the y is 34,000,128 - 34,000,024 + 24 = 128 wide.
+    // (192 is not a power of two: at the default size the stops repeat
+    // every 64px, 2^12 in 26.6, and a wrapped origin lands on them anyway.)
+    size_t tcap = 34 * 48 + 128, tat = 0;
+    char *tabs = malloc(tcap);
+    tat += (size_t)snprintf(tabs, tcap, "<!doctype html><font size=7><pre>");
+    for (int i = 0; i < 34; i++)
+        tat += (size_t)snprintf(tabs + tat, tcap - tat, "<img src=known.png width=1000000 height=1>");
+    snprintf(tabs + tat, tcap - tat, "<b>x</b>\ty</pre></font>");
+    char *got = layout_dump_of(tabs, 800);
+    expect("a tab far along a line still stops where the line's stops are",
+           got != NULL && strstr(got, "text \"\\ty\" 34000032 54 128 48 mono 48\n") != NULL, NULL);
+    free(got);
+    free(tabs);
+
+    // 2,200 pictures a million pixels tall, one a line: 2.2e9 px of page,
+    // which flow_height holds to INT32_MAX rather than wrapping negative.
+    size_t cap = 2200 * 48 + 64, at = 0;
+    char *html = malloc(cap);
+    at += (size_t)snprintf(html + at, cap - at, "<!doctype html>");
+    for (int i = 0; i < 2200; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<img src=known.png height=1000000><br>");
+    os64_html_document_t *doc = parse(html);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    flow_tree_t *t = flow_layout(doc, page, 200, &kEnv);
+    expect("a page past INT32_MAX is held to it",
+           t != NULL && !flow_incomplete(t) && flow_height(t) == INT32_MAX, NULL);
+    // And so is every box a face reads: the last picture sits on the last
+    // pixel, and nothing wraps round to a negative y.
+    const flow_box_t *last = t != NULL ? flow_image(t, flow_nimages(t) - 1) : NULL;
+    expect("a box past INT32_MAX sits on the last pixel",
+           last != NULL && flow_nimages(t) == 2200 && last->rect.y == INT32_MAX &&
+               last->rect.h == 0, NULL);
+    expect("no box of a page past INT32_MAX wraps above it",
+           t != NULL && lowest_y(flow_root(t)) >= 0, NULL);
+    flow_free(t);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    free(html);
+
+    // A million M's at 48px (<font size=7>) are inside the engine's byte
+    // cap and 36 million pixels wide: the window is halved until a run
+    // fits, and the page lays out whole, as wide as the word.
+    size_t n = 1000000;
+    html = malloc(n + 64);
+    at = (size_t)snprintf(html, 64, "<!doctype html><font size=7>");
+    memset(html + at, 'M', n);
+    html[at + n] = '\0';
+    doc = parse(html);
+    page = os64_page_build(doc, kPage, NULL);
+    t = flow_layout(doc, page, 800, &kEnv);
+    expect("a word wider than the engine's coordinates is still laid out",
+           t != NULL && !flow_incomplete(t) && flow_width(t) > 1000000, NULL);
+    flow_free(t);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    free(html);
+}
+
 static void layout_sweep(void)
 {
     const char *html =
@@ -467,6 +644,8 @@ int main(int argc, char **argv)
     boxes_sweep();
     layout_sweep();
     door_cases();
+    paint_cases();
+    limit_cases();
     layout_relation_sweep("a page of every family", kSweepPage, 300);
     {
         size_t len = 0;
