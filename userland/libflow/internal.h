@@ -125,11 +125,12 @@ int64_t f_style_dump(const FStyles *styles, char *out, size_t cap);
 // that sequence and not per node: `foo<b>bar</b>` is one word in two nodes
 // (LAYOUT.md § Pass 3).
 
-// How deep the box build descends — element levels, plus the parts of a
-// table — before it stops and reports the page incomplete. Every pass
-// after it recurses along the boxes, so this is what bounds the stack a
-// layout needs, whatever nesting the parser was told to allow; it is
-// sized to leave a thread's stack room to spare (LAYOUT.md § Bounds).
+// How deep the box build descends — element levels, the parts of a table,
+// and an inline-block's content twice — before it stops and reports the
+// page incomplete. Every pass after it recurses along the boxes, so this is
+// what bounds the stack a layout needs, whatever nesting the parser was
+// told to allow; it is sized to leave a thread's stack room to spare
+// (LAYOUT.md § Bounds).
 #define F_DEPTH_MAX 512
 
 typedef enum {

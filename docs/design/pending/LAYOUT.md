@@ -720,18 +720,23 @@ LIBPAGE.md's rule restated for geometry:
   its budget, or the design here is revisited with that consumer in hand.
 - **Depth is libflow's own bound, not the parser's.** libhtml's
   `max_depth` is an option its CALLER sets, so it cannot be what keeps
-  layout inside a stack. The box build counts its descents — each
-  element level, and each part a table adds (row group, row), anonymous
-  ones included — and at `F_DEPTH_MAX` (512) it stops exactly as it does
-  when memory runs out: the tree is `incomplete`, and what it holds is a
-  prefix of the whole build. Every pass after the build recurses along
+  layout inside a stack. The box build counts its descents, each costed
+  as a block level's stack — an element level, each part a table adds
+  (row group, row), anonymous ones included, and an inline-block's
+  content TWICE, since a level of it holds a line's frame as well as a
+  block's — and at `F_DEPTH_MAX` (512) it stops exactly as it does when
+  memory runs out: the tree is `incomplete`, and what it holds is a
+  prefix of the whole build. libhtml refuses past its own limit the same
+  way, rather than flattening. Every pass after the build recurses along
   the boxes, so that one count bounds them all. The intrinsic-sizing
   RECURSION is bounded by table NESTING, which is at most a third of it
   (a nested table is at least `table > tr > td` deeper). Measured at the
-  shipped `-O2`, the deepest page the bound admits lays out in under
-  640KB of stack, and a thread has 1MB; the host suite lays out a page
-  nested past the bound and asserts it comes back incomplete rather than
-  crashing.
+  shipped `-O2` with the whole stack's slices in, a block chain 512
+  deep and a table nest at the bound lay out in under 448KB, and a
+  chain of inline-blocks, which needed 640-768KB before it was charged
+  double, now stops at half the depth; a thread has 1MB. The host suite
+  lays out pages nested to and past the bound, both kinds, and asserts
+  where each stops.
 - **Nothing blocks and nothing is cached across calls.** Every layout is
   from scratch; the face owns the pacing.
 - **The run cap** (1 MiB per run) is honoured by windowing a long text

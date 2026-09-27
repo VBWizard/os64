@@ -30,7 +30,7 @@ typedef struct {
     const FStyles *styles;
     const flow_env_t *env;
     FBoxes *out;
-    int32_t depth;      // descents open: element levels and the table parts
+    int32_t depth;      // descents open, each costed as a block level (F_DEPTH_MAX)
     bool stopped;       // memory ran out, or the page is nested past F_DEPTH_MAX
 } B;
 
@@ -181,8 +181,9 @@ static bool text_significant(const B *b, const os64_html_node_t *n)
 // ── Depth ───────────────────────────────────────────────────────────────
 
 // Every recursive descent of the build opens with descend() and closes with
-// ascend(). Past F_DEPTH_MAX the build stops, as it does when memory runs
-// out, so what it made is still a prefix of the whole build.
+// ascend(), and a descent that costs more stack than a block level opens
+// more than one. Past F_DEPTH_MAX the build stops, as it does when memory
+// runs out, so what it made is still a prefix of the whole build.
 static bool descend(B *b)
 {
     if (b->stopped)
@@ -645,13 +646,18 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
         }
         ifc->collapse_space = false;
         // An inline-block that is not replaced (a marquee) is a block of its
-        // own, laid out inside the atom.
+        // own, laid out inside the atom. Its content costs two descents: a
+        // level of it holds a line's frame as well as a block's, twice a
+        // block level's stack (LAYOUT.md § Bounds).
         if (!replaced(el)) {
             FBox *content = new_box(b, NULL, FB_BLOCK, el, &s->style);
             if (content != NULL) {
                 content->parent = ifc;
                 item->content = content;
-                build_container(b, content, el->first_child, NULL, scope, NULL, 0);
+                if (descend(b)) {
+                    build_container(b, content, el->first_child, NULL, scope, NULL, 0);
+                    ascend(b);
+                }
             }
         }
         return;

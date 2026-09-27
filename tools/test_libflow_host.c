@@ -459,6 +459,12 @@ static void limit_cases(void)
            nested_whole("<div>", "</div>", F_DEPTH_MAX - 1, 4096) == 0, NULL);
     expect("a page nested past the depth bound is incomplete, not a crash",
            nested_whole("<div>", "</div>", 2000, 4096) == 0, NULL);
+    // An inline-block's content is two descents: the innermost of j
+    // marquees opens descent 2 + 2j.
+    expect("inline-blocks nested exactly to the bound are whole",
+           nested_whole("<marquee>", "</marquee>", (F_DEPTH_MAX - 2) / 2, 4096) == 1, NULL);
+    expect("an inline-block level costs two descents",
+           nested_whole("<marquee>", "</marquee>", (F_DEPTH_MAX - 2) / 2 + 1, 4096) == 0, NULL);
     expect("inline nesting counts against the same bound",
            nested_whole("<span>", "</span>", 2000, 4096) == 0, NULL);
     expect("tables nested past the bound are incomplete",
