@@ -150,4 +150,17 @@ static void paint_cases(void)
            yonder_lighter(0x000000) == 0x7f7f7f && yonder_darker(0xffffff) == 0x7f7f7f &&
                yonder_lighter(0x808080) == 0xbfbfbf && yonder_darker(0x808080) == 0x404040,
            NULL);
+
+    // overflow: hidden (GARB.md, G5): the p is 100 wide in a 50-by-10 div
+    // that hides, so its red is cut to the div's padding box, and its
+    // text — drawn whole by its verb — is handed that box as its clip.
+    paint_page_case("overflow: hidden cuts what is inside it",
+                    "<!doctype html><style>body { margin: 0 } div { width: 50px; height: 10px;"
+                    " overflow: hidden; background: #00ff00 } p { margin: 0; width: 100px;"
+                    " background: #ff0000 }</style><div><p>ab cd ef</p></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 0 0 50 10 #00ff00\n"
+                    "fill 0 0 50 10 #ff0000\n"
+                    "text \"ab cd ef\" 0 14 #101010 clip 0 0 50 10\n");
 }

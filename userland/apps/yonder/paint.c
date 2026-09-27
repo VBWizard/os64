@@ -218,9 +218,23 @@ static bool is_picture(const flow_box_t *b)
 
 static void paint_box(void *ctx, const flow_box_t *b)
 {
-    const Painter *p = ctx;
+    const Painter *outer = ctx;
     if (b->style->visibility != FLOW_VISIBLE)
         return;
+    // A box an ancestor's `overflow` clips is drawn only inside the clip:
+    // every verb is handed the view, so the view is narrowed.
+    Painter clipped = *outer;
+    const Painter *p = outer;
+    if (b->clipped) {
+        os64_gui_rect_t v = outer->view, c = b->clip;
+        int32_t x0 = max32(v.x, c.x), y0 = max32(v.y, c.y);
+        int64_t x1 = (int64_t)v.x + v.w < (int64_t)c.x + c.w ? (int64_t)v.x + v.w : (int64_t)c.x + c.w;
+        int64_t y1 = (int64_t)v.y + v.h < (int64_t)c.y + c.h ? (int64_t)v.y + v.h : (int64_t)c.y + c.h;
+        if (x1 <= x0 || y1 <= y0)
+            return;
+        clipped.view = (os64_gui_rect_t){x0, y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
+        p = &clipped;
+    }
     switch (b->kind) {
     case FLOW_BOX_LINE:
         return;

@@ -287,4 +287,36 @@ static void cascade_cases(void)
         "        text \"a b\" 0 62 20 16 serif 16\n"
         "      line 0 80 200 20 base 14\n"
         "        text \"c\" 0 82 8 16 serif 16\n");
+
+    // overflow (CSS Overflow 3). The div hides: its content is cut to its
+    // padding box, 50 by 10, which every box inside carries as its clip;
+    // and it starts a block formatting context, so the p's 5px top margin
+    // stays inside it instead of moving it down. Its own overflow stops at
+    // its border box, so the page is the div's 10 tall.
+    cascade_layout_case("overflow: hidden clips, and holds a margin in",
+        "<!doctype html><style>body { margin: 0 } div { width: 50px; height: 10px;"
+        " overflow: hidden } p { margin: 5px 0 0; width: 100px }</style>"
+        "<div><p>ab cd ef</p></div>",
+        200,
+        "page 200 10\n"
+        "block html 0 0 200 10\n"
+        "  block body 0 0 200 10\n"
+        "    block div 0 0 50 10\n"
+        "      block p 0 5 100 20 clip 0 0 50 10\n"
+        "        line 0 5 100 20 base 14 clip 0 0 50 10\n"
+        "          text \"ab cd ef\" 0 7 52 16 serif 16 clip 0 0 50 10\n");
+
+    // overflow-x alone: the y axis computes to auto, which is drawn
+    // unclipped, so the clip is x's and the y span is everything.
+    cascade_layout_case("overflow-x: hidden clips one axis",
+        "<!doctype html><style>body { margin: 0 } div { width: 30px; overflow-x: hidden }"
+        " p { margin: 0; width: 60px }</style><div><p>ab</p></div>",
+        200,
+        "page 200 20\n"
+        "block html 0 0 200 20\n"
+        "  block body 0 0 200 20\n"
+        "    block div 0 0 30 20\n"
+        "      block p 0 0 60 20 clip 0 -1073741824 30 2147483647\n"
+        "        line 0 0 60 20 base 14 clip 0 -1073741824 30 2147483647\n"
+        "          text \"ab\" 0 2 16 16 serif 16 clip 0 -1073741824 30 2147483647\n");
 }

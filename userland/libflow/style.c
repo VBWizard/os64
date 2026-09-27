@@ -1674,6 +1674,8 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_MIN_HEIGHT: dst->min_height = src->min_height; break;
     case GARB_MAX_HEIGHT: dst->max_height = src->max_height; break;
     case GARB_BOX_SIZING: d->box_sizing = s->box_sizing; break;
+    case GARB_OVERFLOW_X: d->overflow_x = s->overflow_x; break;
+    case GARB_OVERFLOW_Y: d->overflow_y = s->overflow_y; break;
     case GARB_FONT_FAMILY: d->family = s->family; break;
     case GARB_FONT_SIZE:
         dst->fs_kind = src->fs_kind;
@@ -1850,6 +1852,12 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         static const char *const words[] = {"none", "uppercase", "lowercase", "capitalize"};
         i = pick(v, words, F_ARRAY(words));
         s->text_transform = i >= 0 ? (flow_text_transform_t)i : FLOW_TRANSFORM_NONE;
+        break;
+    }
+    case GARB_OVERFLOW_X: case GARB_OVERFLOW_Y: {
+        static const char *const words[] = {"visible", "hidden", "clip", "scroll", "auto"};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            *(p == GARB_OVERFLOW_X ? &s->overflow_x : &s->overflow_y) = (flow_overflow_t)i;
         break;
     }
     case GARB_BOX_SIZING:
@@ -2059,6 +2067,14 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent)
     }
     s->width = resolve(sp->width, s->font_size, automatic);
     s->height = resolve(sp->height, s->font_size, automatic);
+    // CSS Overflow 3 § 3: visible and clip do not stand beside an axis
+    // that scrolls or hides.
+    bool x_scrolls = s->overflow_x != FLOW_OVERFLOW_VISIBLE && s->overflow_x != FLOW_OVERFLOW_CLIP;
+    bool y_scrolls = s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP;
+    if (x_scrolls != y_scrolls) {
+        flow_overflow_t *other = x_scrolls ? &s->overflow_y : &s->overflow_x;
+        *other = *other == FLOW_OVERFLOW_VISIBLE ? FLOW_OVERFLOW_AUTO : FLOW_OVERFLOW_HIDDEN;
+    }
     if (sp->text_indent.kind != L_UNSET)
         s->text_indent = resolve(sp->text_indent, s->font_size, zero);
     s->min_width = resolve(sp->min_width, s->font_size, automatic);

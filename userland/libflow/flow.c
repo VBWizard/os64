@@ -117,15 +117,110 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
     return b;
 }
 
-static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, flow_box_t **last);
+// ── Clipping (CSS Overflow 3) ───────────────────────────────────────────
 
-static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box_t **last)
+// What a box's ancestors let it draw: on each axis either everything, or
+// the span where their clipping padding boxes meet.
+typedef struct {
+    os64_gui_rect_t r;
+    bool x, y;          // clipped on that axis
+} Clip;
+
+static const Clip kNoClip = {{0, 0, 0, 0}, false, false};
+
+static void set_clip(flow_box_t *b, Clip c)
+{
+    b->clipped = c.x || c.y;
+    if (!b->clipped)
+        return;
+    // An axis nothing clips is as wide as a rectangle can say.
+    b->clip = c.r;
+    if (!c.x) {
+        b->clip.x = INT32_MIN / 2;
+        b->clip.w = INT32_MAX;
+    }
+    if (!c.y) {
+        b->clip.y = INT32_MIN / 2;
+        b->clip.h = INT32_MAX;
+    }
+}
+
+static void meet_axis(int32_t *at, int32_t *len, int32_t other_at, int32_t other_len)
+{
+    int64_t a0 = *at > other_at ? *at : other_at;
+    int64_t a1 = (int64_t)*at + *len < (int64_t)other_at + other_len ? (int64_t)*at + *len
+                                                                    : (int64_t)other_at + other_len;
+    *at = (int32_t)a0;
+    *len = (int32_t)(a1 > a0 ? a1 - a0 : 0);
+}
+
+// Which axes a box clips its content on. `hidden` and `clip` do; `scroll`
+// and `auto` are drawn unclipped, because yonder does not yet scroll a
+// box and a clipped one would hide what it holds past its edge with no way
+// to reach it (GARB.md § Booked). The root's overflow, or the body's when
+// the root's is visible, is the viewport's (CSS Overflow 3 § 3.3), and
+// clips neither.
+static bool clips_axis(flow_overflow_t o)
+{
+    return o == FLOW_OVERFLOW_HIDDEN || o == FLOW_OVERFLOW_CLIP;
+}
+
+static bool viewport_overflow(const FBox *src)
+{
+    if (src->parent == NULL)
+        return true;
+    const flow_style_t *root = src->parent->style;
+    return src->parent->parent == NULL && src->node != NULL &&
+           src->node->kind == OS64_HTML_ELEMENT && src->node->tag == OS64_HTML_TAG_BODY &&
+           root->overflow_x == FLOW_OVERFLOW_VISIBLE && root->overflow_y == FLOW_OVERFLOW_VISIBLE;
+}
+
+// Whether a box clips its own content on the x axis (or else the y).
+static bool clips_own(const FBox *src, bool x_axis)
+{
+    return src->node != NULL && !viewport_overflow(src) &&
+           clips_axis(x_axis ? src->style->overflow_x : src->style->overflow_y);
+}
+
+// The clip a box hands its content: its own, met with its padding box on
+// the axes it clips.
+static Clip inner_clip(const FBox *src, Clip c)
+{
+    bool x = clips_own(src, true), y = clips_own(src, false);
+    if (!x && !y)
+        return c;
+    os64_gui_rect_t pad = rect_of(src->x + src->border[FLOW_LEFT], src->y + src->border[FLOW_TOP],
+                                  src->w - src->border[FLOW_LEFT] - src->border[FLOW_RIGHT],
+                                  src->h - src->border[FLOW_TOP] - src->border[FLOW_BOTTOM]);
+    if (x) {
+        if (c.x)
+            meet_axis(&c.r.x, &c.r.w, pad.x, pad.w);
+        else
+            c.r.x = pad.x, c.r.w = pad.w;
+        c.x = true;
+    }
+    if (y) {
+        if (c.y)
+            meet_axis(&c.r.y, &c.r.h, pad.y, pad.h);
+        else
+            c.r.y = pad.y, c.r.h = pad.h;
+        c.y = true;
+    }
+    return c;
+}
+
+static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, flow_box_t **last,
+                              Clip clip);
+
+static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box_t **last,
+                        Clip clip)
 {
     flow_box_kind_t kind = fr->kind == FF_TEXT ? FLOW_BOX_TEXT
                          : fr->kind == FF_ATOMIC ? FLOW_BOX_ATOMIC : FLOW_BOX_MARKER;
     flow_box_t *b = add(bd, parent, last, kind, fr->node, fr->style);
     if (b == NULL)
         return;
+    set_clip(b, clip);
     b->rect = rect_of(fr->x, fr->y, fr->w, fr->h);
     b->overflow = b->rect;
     b->baseline = (int32_t)round_px(fr->baseline);
@@ -143,7 +238,7 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
             push_list(bd, &bd->t->controls, &bd->t->ncontrols, &bd->t->cap_controls, b);
         if (fr->item->content != NULL && fr->item->content->placed) {
             flow_box_t *inner_last = NULL;
-            flow_box_t *inner = public_box(bd, fr->item->content, b, &inner_last);
+            flow_box_t *inner = public_box(bd, fr->item->content, b, &inner_last, clip);
             if (inner != NULL)
                 b->overflow = join(b->overflow, inner->overflow);
         }
@@ -154,11 +249,14 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
 // then its fragments), its child boxes, then an outside marker — the
 // order a partial layout grows in, so a tree cut short is a prefix of the
 // whole one.
-static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, flow_box_t **last)
+static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, flow_box_t **last,
+                              Clip clip)
 {
     flow_box_t *b = add(bd, parent, last, (flow_box_kind_t)src->kind, src->node, src->style);
     if (b == NULL)
         return NULL;
+    set_clip(b, clip);
+    Clip in = inner_clip(src, clip);
     b->rect = rect_of(src->x, src->y, src->w, src->h);
     b->overflow = b->rect;
     b->link = src->link;
@@ -168,6 +266,7 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
         flow_box_t *line = add(bd, b, &kids, FLOW_BOX_LINE, NULL, src->style);
         if (line == NULL)
             break;
+        set_clip(line, in);
         line->rect = rect_of(ln->x, ln->y, ln->w, ln->h);
         line->overflow = line->rect;
         line->baseline = (int32_t)round_px(ln->baseline);
@@ -177,6 +276,7 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
             flow_box_t *span = add(bd, line, &pieces, FLOW_BOX_SPAN, sp->inl->node, sp->inl->style);
             if (span == NULL)
                 break;
+            set_clip(span, in);
             span->rect = rect_of(sp->x0, sp->top, sp->x1 - sp->x0, sp->bottom - sp->top);
             span->overflow = span->rect;
             span->baseline = line->baseline;
@@ -184,7 +284,7 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
             line->overflow = join(line->overflow, span->overflow);
         }
         for (const FFrag *fr = ln->frags; fr != NULL && !bd->failed; fr = fr->next) {
-            public_frag(bd, fr, line, &pieces);
+            public_frag(bd, fr, line, &pieces, in);
             if (pieces != NULL)
                 line->overflow = join(line->overflow, pieces->overflow);
         }
@@ -193,16 +293,25 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     for (const FBox *c = src->first; c != NULL && !bd->failed; c = c->next) {
         if (!c->placed)
             continue;
-        flow_box_t *child = public_box(bd, c, b, &kids);
+        flow_box_t *child = public_box(bd, c, b, &kids, in);
         if (child != NULL)
             b->overflow = join(b->overflow, child->overflow);
     }
     // A marker comes after the box's content, so an unfinished box, whose
     // content stopped short, has not reached it.
     if (src->marker_frag != NULL && !src->unfinished && !bd->failed) {
-        public_frag(bd, src->marker_frag, b, &kids);
+        public_frag(bd, src->marker_frag, b, &kids, in);
         if (kids != NULL)
             b->overflow = join(b->overflow, kids->overflow);
+    }
+    // What it clips does not reach past its border box on that axis.
+    if (clips_own(src, true)) {
+        b->overflow.x = b->rect.x;
+        b->overflow.w = b->rect.w;
+    }
+    if (clips_own(src, false)) {
+        b->overflow.y = b->rect.y;
+        b->overflow.h = b->rect.h;
     }
     return b;
 }
@@ -241,7 +350,7 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     if (root != NULL && root->placed) {
         Build bd = {tree, false};
         flow_box_t *none = NULL;
-        tree->root = public_box(&bd, root, NULL, &none);
+        tree->root = public_box(&bd, root, NULL, &none, kNoClip);
         // Out of memory for the public boxes is out of memory for the
         // page: nothing half-built is handed over.
         if (bd.failed) {
@@ -347,7 +456,8 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
 
 static const flow_box_t *hit(const flow_box_t *b, int32_t x, int32_t y)
 {
-    if (!holds(b->overflow, x, y))
+    // What is clipped away is not there to be pointed at.
+    if (!holds(b->overflow, x, y) || (b->clipped && !holds(b->clip, x, y)))
         return NULL;
     const flow_box_t *found = NULL;
     for (const flow_box_t *c = b->first; c != NULL; c = c->next) {

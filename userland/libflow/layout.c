@@ -1210,14 +1210,19 @@ static void translate(FBox *b, int64_t dx, int64_t dy)
 }
 
 // A box whose margins never collapse with its content's: the root, a
-// table and its cells and captions, a replaced block, and an atom's
-// content — each starts a block formatting context of its own (§9.4.1,
+// table and its cells and captions, a replaced block, an atom's content,
+// and a block whose overflow scrolls or hides (CSS Overflow 3 § 3; `clip`
+// does not) — each starts a block formatting context of its own (§9.4.1,
 // §8.3.1).
 static bool bfc_root(const FBox *b)
 {
+    const flow_style_t *s = b->style;
+    bool scroller = b->node != NULL &&
+                    ((s->overflow_x != FLOW_OVERFLOW_VISIBLE && s->overflow_x != FLOW_OVERFLOW_CLIP) ||
+                     (s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP));
     return b->parent == NULL || b->kind == FB_TABLE || b->kind == FB_CELL ||
-           b->kind == FB_CAPTION || b->kind == FB_REPLACED ||
-           (b->kind == FB_BLOCK && b->node != NULL && b->style->display == FLOW_DISPLAY_INLINE_BLOCK);
+           b->kind == FB_CAPTION || b->kind == FB_REPLACED || scroller ||
+           (b->kind == FB_BLOCK && b->node != NULL && s->display == FLOW_DISPLAY_INLINE_BLOCK);
 }
 
 // The HTML alignments reach a block child whose margins are both set, that

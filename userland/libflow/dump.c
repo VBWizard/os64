@@ -234,6 +234,9 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         }
     if (s->box_sizing == FLOW_BORDER_BOX)
         puts_(b, " border-box");
+    static const char *const kOverflow[] = {"visible", "hidden", "clip", "scroll", "auto"};
+    if (s->overflow_x != FLOW_OVERFLOW_VISIBLE || s->overflow_y != FLOW_OVERFLOW_VISIBLE)
+        putf(b, " overflow=%s/%s", kOverflow[s->overflow_x], kOverflow[s->overflow_y]);
     if (s->text_align != parent->text_align)
         putf(b, " align=%s", s_align[s->text_align]);
     if (s->vertical_align != FLOW_VALIGN_BASELINE)
@@ -508,6 +511,10 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
         putf(b, " link %d", (int)box->link);
     if (box->unfinished)
         puts_(b, " unfinished");
+    if (box->clipped) {
+        puts_(b, " clip");
+        box_rect(b, box->clip);
+    }
     puts_(b, "\n");
     for (const flow_box_t *c = box->first; c != NULL; c = c->next)
         tree_lines(b, c, depth + 1);

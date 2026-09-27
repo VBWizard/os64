@@ -2112,7 +2112,8 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
 // ── The page view ───────────────────────────────────────────────────────
 //
 // The verbs, executed: page coordinates moved onto the glass by the scroll
-// and the view's origin, and cut to the part of the view being painted (a
+// and the view's origin, and cut to the part of the view being painted —
+// and, for what a verb draws whole, to the clip the painter hands it (a
 // paint hook is handed no clip; libui's primitives clip only to the canvas).
 
 typedef struct {
@@ -2139,11 +2140,16 @@ static void glass_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
         os64_draw_fill_rect(gl->surf, r, 0xff000000u | colour);
 }
 
+// The verbs that draw something whole — a run, a picture — cut it to
+// `clip`, the painter's view narrowed by any `overflow` that clips the box,
+// met with what is being painted.
 static void glass_text(void *ctx, const flow_box_t *b, os64_gui_rect_t clip, uint32_t colour)
 {
-    (void)clip;
     const Glass *gl = ctx;
-    os64_text_draw(b->run, gl->surf, gl->clip, b->rect.x + gl->dx, b->baseline + gl->dy,
+    os64_gui_rect_t cut = on_glass(gl, clip);
+    if (cut.w <= 0 || cut.h <= 0)
+        return;
+    os64_text_draw(b->run, gl->surf, cut, b->rect.x + gl->dx, b->baseline + gl->dy,
                    0xff000000u | colour);
 }
 
@@ -2152,7 +2158,6 @@ static void glass_text(void *ctx, const flow_box_t *b, os64_gui_rect_t clip, uin
 static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area, int32_t ox,
                            int32_t oy, os64_gui_rect_t clip)
 {
-    (void)clip;
     const Glass *gl = ctx;
     const Page *p = &g.page;
     int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
@@ -2164,8 +2169,10 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t
     uint32_t w, h;
     const uint32_t *px = picture_pixels(&p->pics[p->bg_of[i]], &w, &h);
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
-    yonder_tile_picture(gl->surf->pixels, gl->surf->pitch_px, gl->clip, on, ox + gl->dx,
-                        oy + gl->dy, px, w, h);
+    os64_gui_rect_t cut = on_glass(gl, clip);
+    if (cut.w > 0 && cut.h > 0)
+        yonder_tile_picture(gl->surf->pixels, gl->surf->pitch_px, cut, on, ox + gl->dx,
+                            oy + gl->dy, px, w, h);
     return true;
 }
 
@@ -2173,25 +2180,30 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t
 // (scale.c); one on its way, or that will not come, keeps its frame.
 static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
-    (void)clip;
     const Glass *gl = ctx;
+    os64_gui_rect_t cut = on_glass(gl, clip);
+    if (cut.w <= 0 || cut.h <= 0)
+        return;
     const Page *p = &g.page;
     int32_t i = p->pic_of != NULL ? os64_page_image_for(page_model(p), b->node) : -1;
     if (i >= 0 && p->pic_of[i] >= 0 && p->pics[p->pic_of[i]].state == PIC_SHOWN) {
         uint32_t w, h;
         const uint32_t *px = picture_pixels(&p->pics[p->pic_of[i]], &w, &h);
         os64_gui_rect_t box = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
-        yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, gl->clip, box, px, w, h);
+        yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, px, w, h);
         return;
     }
-    os64_gui_rect_t r = on_glass(gl, c);
+    // The frame of one still coming, cut the same way.
+    Glass narrow = *gl;
+    narrow.clip = cut;
+    os64_gui_rect_t r = on_glass(&narrow, c);
     if (r.w <= 0 || r.h <= 0)
         return;
     os64_draw_fill_rect(gl->surf, r, 0xffe8e8e8u);
-    glass_fill(ctx, (os64_gui_rect_t){c.x, c.y, c.w, 1}, 0xa0a0a0);
-    glass_fill(ctx, (os64_gui_rect_t){c.x, c.y + c.h - 1, c.w, 1}, 0xa0a0a0);
-    glass_fill(ctx, (os64_gui_rect_t){c.x, c.y, 1, c.h}, 0xa0a0a0);
-    glass_fill(ctx, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xa0a0a0);
+    glass_fill(&narrow, (os64_gui_rect_t){c.x, c.y, c.w, 1}, 0xa0a0a0);
+    glass_fill(&narrow, (os64_gui_rect_t){c.x, c.y + c.h - 1, c.w, 1}, 0xa0a0a0);
+    glass_fill(&narrow, (os64_gui_rect_t){c.x, c.y, 1, c.h}, 0xa0a0a0);
+    glass_fill(&narrow, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xa0a0a0);
 }
 
 static FormWidget *form_widget(int32_t control);

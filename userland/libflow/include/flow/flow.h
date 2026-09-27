@@ -192,6 +192,13 @@ typedef enum { FLOW_SEPARATE = 0, FLOW_COLLAPSE_BORDERS } flow_border_collapse_t
 typedef enum { FLOW_CAPTION_TOP = 0, FLOW_CAPTION_BOTTOM } flow_caption_side_t;
 typedef enum { FLOW_FLOAT_NONE = 0, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT } flow_float_t;
 typedef enum { FLOW_CONTENT_BOX = 0, FLOW_BORDER_BOX } flow_box_sizing_t;
+typedef enum {
+    FLOW_OVERFLOW_VISIBLE = 0,
+    FLOW_OVERFLOW_HIDDEN,
+    FLOW_OVERFLOW_CLIP,
+    FLOW_OVERFLOW_SCROLL,
+    FLOW_OVERFLOW_AUTO,
+} flow_overflow_t;
 typedef enum { FLOW_CLEAR_NONE = 0, FLOW_CLEAR_LEFT, FLOW_CLEAR_RIGHT, FLOW_CLEAR_BOTH } flow_clear_t;
 
 typedef struct {
@@ -221,6 +228,9 @@ typedef struct {
     // Whether width, height and their limits measure the content box or
     // the border box (CSS Sizing 3 § 4.1).
     flow_box_sizing_t box_sizing;
+    // Computed as CSS Overflow 3 § 3 says: a visible or clip axis beside
+    // one that scrolls or hides becomes auto or hidden.
+    flow_overflow_t overflow_x, overflow_y;
 
     flow_text_align_t text_align;
     flow_vertical_align_t vertical_align;
@@ -316,6 +326,11 @@ struct flow_box {
     // TEXT: where those bytes are in the node's processed text — what a
     // selection maps a pixel back through.
     uint32_t begin;
+    // What of this box may be drawn: the padding boxes of the ancestors
+    // whose `overflow` clips, met together, on the axes they clip. When
+    // `clipped` is false nothing clips it and `clip` means nothing.
+    os64_gui_rect_t clip;
+    bool clipped;
     uint8_t decoration;             // TEXT: FLOW_DECORATION_* drawn across it
     uint32_t decoration_color;
     int32_t link;                   // libpage's link this box is or sits in, or -1
@@ -352,8 +367,8 @@ const flow_box_t *flow_root(const flow_tree_t *tree);
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 
-// The deepest box whose OWN rect holds (x, y), the last painted winning;
-// NULL for none. The face asks libpage what its node means, and a TEXT's
+// The deepest box whose OWN rect holds (x, y), the last painted winning,
+// and which no ancestor clips away there; NULL for none. The face asks libpage what its node means, and a TEXT's
 // run where in the text the pointer is (os64_text_hit).
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y);
 
