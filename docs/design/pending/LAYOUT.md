@@ -185,7 +185,7 @@ so a cascade slots in above this struct with no field renamed:
 | `vertical_align` | baseline, sub, super, top, text-top, middle, bottom, and html-middle (`align=middle` on a picture: its middle on the baseline, not CSS's baseline plus half an x-height) | no |
 | `white_space` | normal, pre, nowrap, pre-wrap | yes |
 | `list_style_type`, `list_style_position` | disc, circle, square, decimal, lower/upper-alpha, lower/upper-roman, disclosure-closed/open, none; outside or inside | yes |
-| `text_decoration` | underline, line-through — this element's own; an ancestor's reaching its inline descendants is derived at layout, in the ancestor's colour | no |
+| `text_decoration` | underline, line-through — this element's own; what an ancestor's reaches its descendants is derived beside the style, parent before child, each kind in the colour of the element that drew it | no |
 | `visibility` | visible, hidden, collapse | yes |
 | `border_spacing[2]`, `border_collapse`, `caption_side` | tables | yes |
 | `float_side`, `clear` | recorded from `align=left/right` and `<br clear>` so the struct is complete — NOT ACTED ON in the first cut (booked below) | no |
@@ -268,7 +268,7 @@ table cells touch, and a page made of sliced images (the old web's whole
 navigation idiom) shows gaps between the slices without it. Hacker News in
 the corpus has no doctype and runs in full quirks; a sliced-image table
 is a fixture. The rest are full-quirks and geometry: percentage heights
-(3.5), `html` and `body` filling the viewport (3.6, 3.7), text decoration
+(3.5, booked below), `html` and `body` filling the viewport (3.6, 3.7), text decoration
 not reaching into tables (3.11), and the table quirks (3.8, 3.9, 3.10,
 3.13). The hashless-hex and unitless-length quirks are CSS parsing, the
 cascade's. The quirk switch lives in the producers: libgarb reads the
@@ -717,16 +717,25 @@ LIBPAGE.md's rule restated for geometry:
   context, one page laying out at a time, and that is the reason for the
   split beyond memory. Tabs, when they come, share the page context and
   its budget, or the design here is revisited with that consumer in hand.
-- **Depth.** Node depth is libhtml's `max_depth`. BOX depth is larger —
-  a nested table adds a table box, a row-group, a row, a cell and
-  possibly anonymous boxes per level — but by at most a constant per
-  node, so it is bounded by a multiple of `max_depth`, and the walk is
-  either iterative or written against that bound. The intrinsic-sizing
-  RECURSION is bounded by table NESTING, which is at most a third of the
-  node depth (a nested table is at least `table > tr > td` deeper), and
-  is written as a recursion only because that bound is stated here. A
-  page as deep as libhtml allows lays out without a stack the width of
-  the page.
+- **Depth is libflow's own bound, not the parser's.** libhtml's
+  `max_depth` is an option its CALLER sets, so it cannot be what keeps
+  layout inside a stack. The box build counts its descents, each costed
+  as a block level's stack — an element level, each part a table adds
+  (row group, row), anonymous ones included, and an inline-block's
+  content TWICE, since a level of it holds a line's frame as well as a
+  block's — and at `F_DEPTH_MAX` (512) it stops exactly as it does when
+  memory runs out: the tree is `incomplete`, and what it holds is a
+  prefix of the whole build. libhtml refuses past its own limit the same
+  way, rather than flattening. Every pass after the build recurses along
+  the boxes, so that one count bounds them all. The intrinsic-sizing
+  RECURSION is bounded by table NESTING, which is at most a third of it
+  (a nested table is at least `table > tr > td` deeper). Measured at the
+  shipped `-O2` with the whole stack's slices in, a block chain 512
+  deep and a table nest at the bound lay out in under 448KB, and a
+  chain of inline-blocks, which needed 640-768KB before it was charged
+  double, now stops at half the depth; a thread has 1MB. The host suite
+  lays out pages nested to and past the bound, both kinds, and asserts
+  where each stops.
 - **Nothing blocks and nothing is cached across calls.** Every layout is
   from scratch; the face owns the pacing.
 - **The run cap** (1 MiB per run) is honoured by windowing a long text
@@ -862,6 +871,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Incremental relayout | ruling 2 says rebuild; the face paces it | the engine, or a page whose rebuild is visibly slow |
 | Selection and copy | needs the fragment byte ranges (kept) and a face gesture | yonder's second slice |
 | `:visited` colour | the history lives in the navigator | packet 06's history and a face rule |
+| Percentage heights (CSS 2.1 §10.5, and the Quirks standard's 3.5) | read as `auto` everywhere, pictures included; one resolved inside a table cell needs the cell's height before its content is laid out — the second layout pass Blink runs for exactly this — and the definite-ancestor case belongs to the same slice | a page shaped by `height=100%` pictures in cells, or the cascade's `height: 100%` chains |
 | `sub`/`sup` vertical shift | one `vertical-align` value each, cheap, and the first cut's fixtures do not cover it | the first page that reads wrong without it (footnotes) |
 | Soft hyphen breaks, CJK and script-aware breaking, bidi/RTL layout | the text profile is Western v1; bidi classes exist in libos64 for `dirname`, the layout half is a real slice | a page in one of those scripts worth reading |
 | `marquee` | the Rendering chapter has it; it is a timer in a face | a page whose meaning scrolls, which is none |
