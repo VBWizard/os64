@@ -233,6 +233,9 @@ struct FBox {
     // left edge, y from its top). 64-bit, because a long page is taller
     // than 26.6 can count in 32 bits.
     bool placed;                    // false: layout stopped before this box
+    // Layout stopped INSIDE this box: its rectangle holds what was laid
+    // out before it did (LAYOUT.md § Proof, the allocation sweep).
+    bool unfinished;
     int64_t x, y, w, h;             // the border box
     int64_t border[4], padding[4];  // used widths, top right bottom left
     FLine *lines, *last_line;       // an inline formatting context's lines
