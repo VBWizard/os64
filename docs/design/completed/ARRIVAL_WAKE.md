@@ -241,3 +241,15 @@ Round 1 (Codex, on 35aaed72): three findings, all taken.
    test — the two that predate this slice included — now waits two
    seconds at most; a lost reply is a lost sample, and the test fails
    cleanly if fewer than half come back.
+
+Round 2 (on d3bb2021): one finding, taken — the sibling of round 1's P1
+that the fix had missed.
+
+4. **P2 — the test's own figure was a cross-core TSC delta.** The stamp
+   is knet's, on the BSP; the woken reader is nudged onto whichever AP is
+   idle, so `rdtsc() - last_arrival_tsc` compared two cores' counters —
+   the very rule the syscall had just been fixed for. The test thread now
+   pins itself to the BSP for the measurement, parks once so the move has
+   happened before the first stamp, and restores its affinity after; a
+   pinned wake on knet's own core is picked by the pass knet's park
+   provokes, so the figure measures the same thing on one clock.

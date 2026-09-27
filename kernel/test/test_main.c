@@ -5050,26 +5050,52 @@ static bool test_net_icmp_conn(void)
     // A lost reply is a lost SAMPLE, not a failed test: UDP-honest echo can
     // drop, and the figure is a minimum, which survives losing a few. Half
     // the samples lost is a different problem and is reported as one.
+    //
+    // BOTH ENDS OF THE SUBTRACTION COME FROM ONE CORE'S TSC (Codex #145
+    // rd2, nvme.c's rule): the stamp is knet's, on the BSP, and the wake
+    // would otherwise recruit whichever AP is idle — a cross-core TSC
+    // delta, which QEMU and WSL2 have both been seen to offset. So this
+    // thread is pinned to the BSP for the measurement and parks once
+    // first, so that it has actually moved there before the first stamp;
+    // every rdtsc below then runs on the core that took the stamp. The
+    // pin costs nothing the figure cares about — a pinned wake on knet's
+    // own core is picked by the pass knet's park provokes, the same pass
+    // that would have run the sweep.
+    thread_t *self = get_core_local_storage()->currentThread;
+    uint64_t affinity_before = self->mp_apic;
+    self->mp_apic = BOOTSTRAP_PROCESSOR_ID;
+    __sync_synchronize();
+    nap(10);
     uint64_t wake_min_us = ~0UL, wake_max_us = 0;
     int samples = 0, lost = 0;
-    for (int i = 0; i < 8; i++) {
+    const char *measure_fail = NULL;
+    uint32_t measured_on = 0;
+    for (int i = 0; i < 8 && measure_fail == NULL; i++) {
         if (icmp_conn_write(c, out, sizeof(out)) != (long)sizeof(out)) {
-            printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - write %d of the wake measurement failed\n", i);
-            icmp_conn_close(c);
-            return false;
+            measure_fail = "write";
+            break;
         }
         long r = icmp_conn_read(c, in, sizeof(in), ECHO_PATIENCE);
         if (r == ICMP_CONN_ERR_TIMEOUT) { lost++; continue; }
         if (r != (long)sizeof(out)) {
-            printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - read %d of the wake measurement returned %ld\n", i, r);
-            icmp_conn_close(c);
-            return false;
+            measure_fail = "read";
+            break;
         }
         uint64_t per_us = kCPUCyclesPerSecond / 1000000;
-        uint64_t wake_us = per_us ? (rdtsc() - c->last_arrival_tsc) / per_us : 0;
+        uint64_t stamp_tsc = c->last_arrival_tsc;
+        uint64_t now_tsc = rdtsc();
+        measured_on = get_core_local_storage()->apic_id;   // printed, so the pin is checkable in every log
+        uint64_t wake_us = (per_us && now_tsc > stamp_tsc) ? (now_tsc - stamp_tsc) / per_us : 0;
         if (wake_us < wake_min_us) wake_min_us = wake_us;
         if (wake_us > wake_max_us) wake_max_us = wake_us;
         samples++;
+    }
+    self->mp_apic = affinity_before;   // the pin was the measurement's, not the test's
+    __sync_synchronize();
+    if (measure_fail != NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - a %s in the wake measurement failed\n", measure_fail);
+        icmp_conn_close(c);
+        return false;
     }
     if (samples < 4) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - only %d of 8 echoes came back within 2 s (%d lost); "
@@ -5107,8 +5133,8 @@ static bool test_net_icmp_conn(void)
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_net_icmp_conn (%ld bytes echoed by %u.%u.%u.%u in %lu ticks; "
-           "arrival wake %lu-%lu us over %d echoes, %d lost; cold-cache echo survived the ARP re-ask)\n",
-           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt, wake_min_us, wake_max_us, samples, lost);
+           "arrival wake %lu-%lu us over %d echoes, %d lost, measured on APIC %u; cold-cache echo survived the ARP re-ask)\n",
+           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt, wake_min_us, wake_max_us, samples, lost, measured_on);
     return true;
 }
 
