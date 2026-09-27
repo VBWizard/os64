@@ -9,14 +9,15 @@
 // a heading taller than a paragraph, a long paragraph wrapping into more
 // lines at a narrower width, every run released.
 //
-// The faces are the two the image ships, /etc/fonts/DejaVuSans.ttf and
-// DejaVuSansMono.ttf; serif and bold ask for sans until the web faces
-// arrive (docs/yonder/04-web-faces.md).
+// The faces are yonder's: the provider's family cache (brief 04), serif,
+// sans and mono in all four styles, from fonts.conf or the shipped DejaVu.
 
 #include "html/html.h"
 #include "page/page.h"
 #include "flow/flow.h"
 #include "garb/cascade.h"
+#include "os64/font_config.h"
+#include "os64/font_provider.h"
 #include "os64/os64.h"
 #include "os64/text.h"
 #include "os64/slurp.h"
@@ -48,66 +49,37 @@ static void text_free(void *ctx, void *p, size_t n)
 }
 
 static os64_text_context_t *s_text;
-static uint8_t *s_sans, *s_mono;
-static size_t s_sans_len, s_mono_len;
+static os64_font_family_cache_t *s_families;
 
-static struct {
-    bool mono;
-    uint32_t px;
-    os64_text_font_t *font;
-    os64_font_face_info_t info;
-} s_fonts[64];
-static int s_nfonts;
-
+// yonder's callback, the same way: the list is borrowed until the next
+// call, the metrics are the primary face's with a line at least its ascent
+// and descent tall.
 static os64_font_status_t fonts(void *ctx, const flow_family_list_t *families, bool bold,
                                 bool italic, uint32_t px, os64_text_font_t *const **list,
                                 size_t *count, os64_font_face_info_t *primary)
 {
     (void)ctx;
-    (void)bold;
-    (void)italic;
-    bool mono = families->generic == FLOW_GENERIC_MONO;
-    int i = 0;
-    while (i < s_nfonts && !(s_fonts[i].mono == mono && s_fonts[i].px == px))
-        i++;
-    if (i == s_nfonts) {
-        if (s_nfonts == 64)
-            return OS64_FONT_LIMIT;
-        os64_font_face_options_t o = {px, OS64_FONT_HINT_NORMAL};
-        os64_font_status_t st = os64_text_font_open(s_text, mono ? s_mono : s_sans,
-                                                    mono ? s_mono_len : s_sans_len, &o,
-                                                    &s_fonts[i].font);
-        if (st != OS64_FONT_OK)
-            return st;
-        // The face's metrics, read the way the engine reports them: an
-        // empty run carries its primary face's.
-        os64_text_layout_t lo = {.fonts = &s_fonts[i].font, .font_count = 1,
-                                 .tab_interval = 64 * 8};
-        os64_text_run_t *run = NULL;
-        st = os64_text_layout(s_text, NULL, 0, &lo, &run);
-        if (st != OS64_FONT_OK)
-            return st;
-        os64_text_run_view_t v;
-        os64_text_run_view(run, &v);
-        os64_memset(&s_fonts[i].info, 0, sizeof(s_fonts[i].info));
-        s_fonts[i].info.ascent = v.ascent;
-        s_fonts[i].info.descent = v.descent;
-        s_fonts[i].info.line_height = v.line_height;
-        os64_text_run_release(run);
-        s_fonts[i].mono = mono;
-        s_fonts[i].px = px;
-        s_nfonts++;
-    }
-    *list = &s_fonts[i].font;
-    *count = 1;
-    *primary = s_fonts[i].info;
+    os64_font_family_list_t asked = {
+        .names = (const os64_font_family_name_t *)families->names,
+        .count = families->count,
+        .generic = (os64_font_family_t)families->generic,
+    };
+    os64_font_role_view_t view;
+    os64_font_status_t st = os64_font_family_open(s_families, &asked, bold, italic, px, &view);
+    if (st != OS64_FONT_OK)
+        return st;
+    *list = view.fonts;
+    *count = view.font_count;
+    *primary = view.primary;
+    if (primary->line_height < primary->ascent + primary->descent)
+        primary->line_height = primary->ascent + primary->descent;
     return OS64_FONT_OK;
 }
 
 static flow_env_t s_env = {
     .fonts = fonts,
     .viewport_font_px = 16,
-    .default_generic = FLOW_GENERIC_SANS,
+    .default_generic = FLOW_GENERIC_SERIF,
     .ink = 0x000000,
     .link_ink = 0x0000ee,
     .paper = 0xffffff,
@@ -115,23 +87,22 @@ static flow_env_t s_env = {
 
 static void setup(void)
 {
-    require(os64_slurp("/etc/fonts/DejaVuSans.ttf", OS64_FONT_FILE_MAX, &s_sans, &s_sans_len) ==
-                OS64_SLURP_OK, "no /etc/fonts/DejaVuSans.ttf");
-    require(os64_slurp("/etc/fonts/DejaVuSansMono.ttf", OS64_FONT_FILE_MAX, &s_mono,
-                       &s_mono_len) == OS64_SLURP_OK, "no /etc/fonts/DejaVuSansMono.ttf");
     os64_text_options_t o = {.memory = {NULL, text_alloc, text_free},
                              .backend = os64_freetype_backend_v1()};
     require(os64_text_create(&o, &s_text) == OS64_FONT_OK, "no text context");
     s_env.text = s_text;
+    os64_font_config_t config;
+    os64_font_config_error_t error;
+    require(os64_font_config_read(&config, &error) == OS64_FONT_CONFIG_OK &&
+                os64_font_config_family_prepare(s_text, &config, &s_families, &error) ==
+                    OS64_FONT_CONFIG_OK,
+            "the font families will not open (see fonts.conf)");
 }
 
 static void teardown(void)
 {
-    for (int i = 0; i < s_nfonts; i++)
-        os64_text_font_release(s_fonts[i].font);
+    os64_font_family_cache_destroy(s_families);
     require(os64_text_destroy(s_text) == OS64_FONT_OK, "a run outlived its tree");
-    os64_free(s_sans);
-    os64_free(s_mono);
 }
 
 static os64_html_document_t *parse(const char *html, size_t len)

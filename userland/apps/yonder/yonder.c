@@ -10,6 +10,8 @@
 // how the page looks on the glass, how a person moves around it, and how
 // the window hears a fetch it never waits for.
 
+#include <stddef.h>
+
 #include "html/html.h"
 #include "page/page.h"
 #include "flow/flow.h"
@@ -19,6 +21,8 @@
 #include "os64/draw.h"
 #include "os64/fmt.h"
 #include "os64/font_backend.h"
+#include "os64/font_config.h"
+#include "os64/font_provider.h"
 #include "os64/mem.h"
 #include "os64/proc.h"
 #include "os64/slurp.h"
@@ -74,9 +78,9 @@
 // ── The page's fonts ────────────────────────────────────────────────────
 //
 // ONE text context for every page, apart from libui's chrome context
-// (LAYOUT.md § Bounds), with each (generic, size) opened once on it. Until
-// the web faces arrive (docs/yonder/04-web-faces.md) serif, bold and
-// italic are drawn in the regular sans.
+// (LAYOUT.md § Bounds), and on it the provider's family cache (brief 04):
+// serif, sans and mono, each regular, bold, italic and bold italic, at any
+// size, from `fonts.conf`'s family lines or the shipped DejaVu faces.
 
 static void *text_alloc(void *ctx, size_t n)
 {
@@ -91,65 +95,45 @@ static void text_free(void *ctx, void *p, size_t n)
     os64_free(p);
 }
 
-#define FACES_MAX 64
-
 static struct {
     os64_text_context_t *text;
-    uint8_t *sans, *mono;
-    size_t sans_len, mono_len;
-    struct {
-        bool mono;
-        uint32_t px;
-        os64_text_font_t *font;
-        os64_font_face_info_t info;
-    } open[FACES_MAX];
-    int nopen;
+    os64_font_family_cache_t *families;
 } s_faces;
 
+// libflow's family list and the provider's are the same shape in the same
+// generic order, so a style's list is handed over as it is.
+_Static_assert(sizeof(flow_family_name_t) == sizeof(os64_font_family_name_t) &&
+               offsetof(flow_family_name_t, name) == offsetof(os64_font_family_name_t, name) &&
+               offsetof(flow_family_name_t, len) == offsetof(os64_font_family_name_t, len),
+               "a family name is one shape on both sides");
+_Static_assert((int)FLOW_GENERIC_SERIF == (int)OS64_FONT_FAMILY_SERIF &&
+               (int)FLOW_GENERIC_SANS == (int)OS64_FONT_FAMILY_SANS &&
+               (int)FLOW_GENERIC_MONO == (int)OS64_FONT_FAMILY_MONO,
+               "the generics are in one order on both sides");
+
+// The list is borrowed until the next call, which is libflow's contract
+// for this callback too (flow_env_t.fonts). The metrics are the primary
+// face's, as an empty run would report them: a line at least as tall as
+// its ascent and descent.
 static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *families, bool bold,
                                      bool italic, uint32_t px, os64_text_font_t *const **list,
                                      size_t *count, os64_font_face_info_t *primary)
 {
     (void)ctx;
-    (void)bold;
-    (void)italic;
-    bool mono = families->generic == FLOW_GENERIC_MONO;
-    int i = 0;
-    while (i < s_faces.nopen && !(s_faces.open[i].mono == mono && s_faces.open[i].px == px))
-        i++;
-    if (i == s_faces.nopen) {
-        if (s_faces.nopen == FACES_MAX)
-            return OS64_FONT_LIMIT;
-        os64_font_face_options_t o = {px, OS64_FONT_HINT_NORMAL};
-        os64_font_status_t st = os64_text_font_open(
-            s_faces.text, mono ? s_faces.mono : s_faces.sans,
-            mono ? s_faces.mono_len : s_faces.sans_len, &o, &s_faces.open[i].font);
-        if (st != OS64_FONT_OK)
-            return st;
-        // The face's metrics as the engine reports them: an empty run
-        // carries its primary face's.
-        os64_text_layout_t lo = {.fonts = &s_faces.open[i].font, .font_count = 1,
-                                 .tab_interval = 64 * 8};
-        os64_text_run_t *run = NULL;
-        st = os64_text_layout(s_faces.text, NULL, 0, &lo, &run);
-        if (st != OS64_FONT_OK) {
-            os64_text_font_release(s_faces.open[i].font);
-            return st;
-        }
-        os64_text_run_view_t v;
-        os64_text_run_view(run, &v);
-        os64_memset(&s_faces.open[i].info, 0, sizeof(s_faces.open[i].info));
-        s_faces.open[i].info.ascent = v.ascent;
-        s_faces.open[i].info.descent = v.descent;
-        s_faces.open[i].info.line_height = v.line_height;
-        os64_text_run_release(run);
-        s_faces.open[i].mono = mono;
-        s_faces.open[i].px = px;
-        s_faces.nopen++;
-    }
-    *list = &s_faces.open[i].font;
-    *count = 1;
-    *primary = s_faces.open[i].info;
+    os64_font_family_list_t asked = {
+        .names = (const os64_font_family_name_t *)families->names,
+        .count = families->count,
+        .generic = (os64_font_family_t)families->generic,
+    };
+    os64_font_role_view_t view;
+    os64_font_status_t st = os64_font_family_open(s_faces.families, &asked, bold, italic, px, &view);
+    if (st != OS64_FONT_OK)
+        return st;
+    *list = view.fonts;
+    *count = view.font_count;
+    *primary = view.primary;
+    if (primary->line_height < primary->ascent + primary->descent)
+        primary->line_height = primary->ascent + primary->descent;
     return OS64_FONT_OK;
 }
 
@@ -164,17 +148,17 @@ static flow_env_t s_env = {
 
 static const char *faces_open(void)
 {
-    if (os64_slurp("/etc/fonts/DejaVuSans.ttf", OS64_FONT_FILE_MAX, &s_faces.sans,
-                   &s_faces.sans_len) != OS64_SLURP_OK)
-        return "no /etc/fonts/DejaVuSans.ttf";
-    if (os64_slurp("/etc/fonts/DejaVuSansMono.ttf", OS64_FONT_FILE_MAX, &s_faces.mono,
-                   &s_faces.mono_len) != OS64_SLURP_OK)
-        return "no /etc/fonts/DejaVuSansMono.ttf";
     os64_text_options_t o = {.memory = {NULL, text_alloc, text_free},
                              .backend = os64_freetype_backend_v1()};
     if (os64_text_create(&o, &s_faces.text) != OS64_FONT_OK)
         return "no text context for the page";
     s_env.text = s_faces.text;
+    os64_font_config_t config;
+    os64_font_config_error_t error;
+    if (os64_font_config_read(&config, &error) != OS64_FONT_CONFIG_OK ||
+        os64_font_config_family_prepare(s_faces.text, &config, &s_faces.families, &error) !=
+            OS64_FONT_CONFIG_OK)
+        return "the page's font families will not open (see fonts.conf)";
     return NULL;
 }
 
@@ -2899,8 +2883,7 @@ int main(int argc, char **argv)
     page_clear(&g.coming.page);
     way_jar_free(g.way.jar);
     os64_ui_font_release(&g.ui);
-    for (int i = 0; i < s_faces.nopen; i++)
-        os64_text_font_release(s_faces.open[i].font);
+    os64_font_family_cache_destroy(s_faces.families);
     os64_text_destroy(s_faces.text);
     os64_gui_window_destroy(g.win);
     return 0;
