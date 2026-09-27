@@ -347,8 +347,16 @@ static void fuzz_one(const char *what, const char *html, size_t len)
     for (size_t w = 0; w < sizeof(widths) / sizeof(widths[0]); w++) {
         flow_tree_t *t = flow_layout(doc, page, widths[w], &kEnv);
         fuzz_trees++;
-        if (t == NULL || flow_incomplete(t)) {
-            expect("fuzz: laid out whole", false, what);
+        // Whole exactly when the bytes were: a document the parser refused
+        // (a mutation nested past its limit), or a model libpage could not
+        // finish, lays out as the incomplete prefix it is.
+        bool cut = doc == NULL || doc->refusal != 0 || os64_page_incomplete(page);
+        if (t == NULL || flow_incomplete(t) != cut) {
+            char detail[160];
+            snprintf(detail, sizeof(detail), "%s (refusal %lld, model incomplete %d)", what,
+                     doc != NULL ? (long long)doc->refusal : -1LL,
+                     (int)os64_page_incomplete(page));
+            expect("fuzz: laid out whole unless the input was cut", false, detail);
             flow_free(t);
             continue;
         }
