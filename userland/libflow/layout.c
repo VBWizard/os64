@@ -524,14 +524,20 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     char *copy = alloc(l, n);
                     if (copy == NULL)
                         break;
-                    // Against the text beside it too: a space after a space
-                    // the text before already ends in, or before one the
-                    // next text starts with, is the same space.
-                    const Seg *prev = s->n > 0 ? &s->v[s->n - 1] : NULL;
+                    // Against the text beside it too, across inline edges
+                    // (`a <b><img alt=" b"></b>`): a space after a space the
+                    // text before already ends in, or before one the next
+                    // text starts with, is the same space.
+                    const Seg *prev = NULL;
+                    for (size_t k = s->n; k > 0 && prev == NULL; k--)
+                        if (s->v[k - 1].kind != SG_OPEN && s->v[k - 1].kind != SG_CLOSE)
+                            prev = &s->v[k - 1];
                     bool space = prev != NULL && prev->kind == SG_WORD && prev->collapsible &&
                                  prev->s1 > prev->b1;
                     uint32_t m = f_collapse_white(alt, n, copy, &space);
                     const FItem *next = it->next;
+                    while (next != NULL && (next->kind == FI_OPEN || next->kind == FI_CLOSE))
+                        next = next->next;
                     if (m > 0 && copy[m - 1] == ' ' && next != NULL && next->kind == FI_TEXT &&
                         next->len > 0 && next->text[0] == ' ' &&
                         f_collapsible(next->style->white_space))
@@ -2458,7 +2464,10 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     out->quirks = doc != NULL ? doc->quirks : OS64_HTML_NO_QUIRKS;
     out->model = model;
     out->boxes = boxes;
-    out->incomplete = boxes->incomplete;
+    // Whole means whole from the bytes up: a page the parser or the model
+    // stopped short of is a prefix however well it lays out.
+    out->incomplete = boxes->incomplete || (doc != NULL && doc->refusal != 0) ||
+                      (model != NULL && os64_page_incomplete(model));
     L l = {out, env, model, out->quirks == OS64_HTML_QUIRKS,
            out->quirks != OS64_HTML_NO_QUIRKS, false};
     int64_t w = (int64_t)width * 64;
