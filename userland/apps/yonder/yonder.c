@@ -146,6 +146,63 @@ static flow_env_t s_env = {
     .paper = PAGE_PAPER,
 };
 
+// The shipped DejaVu set, as fonts.conf's defaults name it: what yonder
+// falls back on when the configured families will not all open.
+static const char *const kShipped[OS64_FONT_FAMILY_COUNT][OS64_FONT_FAMILY_STYLES] = {
+    {"/etc/fonts/DejaVuSerif.ttf", "/etc/fonts/DejaVuSerif-Bold.ttf",
+     "/etc/fonts/DejaVuSerif-Italic.ttf", "/etc/fonts/DejaVuSerif-BoldItalic.ttf"},
+    {"/etc/fonts/DejaVuSans.ttf", "/etc/fonts/DejaVuSans-Bold.ttf",
+     "/etc/fonts/DejaVuSans-Oblique.ttf", "/etc/fonts/DejaVuSans-BoldOblique.ttf"},
+    {"/etc/fonts/DejaVuSansMono.ttf", "/etc/fonts/DejaVuSansMono-Bold.ttf",
+     "/etc/fonts/DejaVuSansMono-Oblique.ttf", "/etc/fonts/DejaVuSansMono-BoldOblique.ttf"},
+};
+
+// Whatever of the shipped set is readable: a missing style takes its
+// family's regular, a missing family the sans regular, and with none of
+// them the engine's bitmap face — a page drawn plainly rather than no
+// yonder at all. Says on the terminal what was missing.
+static bool faces_fallback(void)
+{
+    uint8_t *bytes[OS64_FONT_FAMILY_COUNT][OS64_FONT_FAMILY_STYLES] = {{0}};
+    size_t len[OS64_FONT_FAMILY_COUNT][OS64_FONT_FAMILY_STYLES] = {{0}};
+    int missing = 0;
+    const char *first = NULL;
+    for (int f = 0; f < (int)OS64_FONT_FAMILY_COUNT; f++)
+        for (int st = 0; st < (int)OS64_FONT_FAMILY_STYLES; st++)
+            if (os64_slurp(kShipped[f][st], OS64_FONT_FILE_MAX, &bytes[f][st], &len[f][st]) !=
+                OS64_SLURP_OK) {
+                bytes[f][st] = NULL;
+                missing++;
+                if (first == NULL)
+                    first = kShipped[f][st];
+            }
+    os64_font_family_spec_t specs[OS64_FONT_FAMILY_COUNT];
+    os64_memset(specs, 0, sizeof(specs));
+    for (int f = 0; f < (int)OS64_FONT_FAMILY_COUNT; f++)
+        for (int st = 0; st < (int)OS64_FONT_FAMILY_STYLES; st++) {
+            int from_f = f, from_s = st;
+            if (bytes[from_f][from_s] == NULL)
+                from_s = 0;
+            if (bytes[from_f][from_s] == NULL)
+                from_f = OS64_FONT_FAMILY_SANS;
+            if (bytes[from_f][from_s] != NULL)
+                specs[f].styles[st] = (os64_font_source_t){OS64_FONT_SOURCE_OUTLINE,
+                                                           bytes[from_f][from_s],
+                                                           len[from_f][from_s]};
+        }
+    // The cache keeps its own copy of every file it takes.
+    bool ok = os64_font_family_cache_create(s_faces.text, specs, &s_faces.families, NULL, NULL) ==
+              OS64_FONT_OK;
+    for (int f = 0; f < (int)OS64_FONT_FAMILY_COUNT; f++)
+        for (int st = 0; st < (int)OS64_FONT_FAMILY_STYLES; st++)
+            os64_free(bytes[f][st]);
+    if (ok && missing > 0)
+        os64_printf("yonder: %d of 12 faces missing from /etc/fonts (the first: %s); their "
+                    "families are drawn in what is there. `os64get` the fonts lot to fill them.\n",
+                    missing, first);
+    return ok;
+}
+
 static const char *faces_open(void)
 {
     os64_text_options_t o = {.memory = {NULL, text_alloc, text_free},
@@ -155,11 +212,14 @@ static const char *faces_open(void)
     s_env.text = s_faces.text;
     os64_font_config_t config;
     os64_font_config_error_t error;
-    if (os64_font_config_read(&config, &error) != OS64_FONT_CONFIG_OK ||
-        os64_font_config_family_prepare(s_faces.text, &config, &s_faces.families, &error) !=
+    if (os64_font_config_read(&config, &error) == OS64_FONT_CONFIG_OK &&
+        os64_font_config_family_prepare(s_faces.text, &config, &s_faces.families, &error) ==
             OS64_FONT_CONFIG_OK)
-        return "the page's font families will not open (see fonts.conf)";
-    return NULL;
+        return NULL;
+    if (error.line > 0)
+        os64_printf("yonder: fonts.conf line %u names a face that will not open; using the "
+                    "shipped faces\n", (unsigned)error.line);
+    return faces_fallback() ? NULL : "no faces for the page, not even the built-in one";
 }
 
 // A file arrives with no Content-Type to name its encoding, and a page

@@ -242,6 +242,14 @@ $(PAGES_STAGE)/%: tools/html_corpus/%
 $(PAGES_STAGE)/%: tools/garb_corpus/%
 	@mkdir -p $(PAGES_STAGE) && cp $< $@
 
+# The faces the image ships in /etc/fonts, staged alone for the wire: a
+# machine refreshed over the network (the P5) has no other way to receive
+# them. Served from here they install by suffix (os64get.conf's *.ttf rule).
+FONTS_STAGE  := userland/bin/fonts
+FONTS_STAGED := $(addprefix $(FONTS_STAGE)/,$(notdir $(FONT_PRODUCT)))
+$(FONTS_STAGE)/%: $(FONT_FIXTURE_DIR)/%
+	@mkdir -p $(FONTS_STAGE) && cp $< $@
+
 # Prepared compositions carry their own glyphs and finish tiles.
 FRAME_COMPOSITIONS := $(wildcard frames/*.frame)
 
@@ -268,10 +276,10 @@ endif
 
 
 .PHONY: all
-all: $(IMAGE_NAME).iso $(PAGES_STAGED)
+all: $(IMAGE_NAME).iso $(PAGES_STAGED) $(FONTS_STAGED)
 
 .PHONY: all-hdd
-all-hdd: $(IMAGE_NAME).hdd $(PAGES_STAGED)
+all-hdd: $(IMAGE_NAME).hdd $(PAGES_STAGED) $(FONTS_STAGED)
 
 # The sub-makes are the authority on whether these need rebuilding, so recurse
 # unconditionally — but let the FILE TIMESTAMPS decide what happens downstream.
