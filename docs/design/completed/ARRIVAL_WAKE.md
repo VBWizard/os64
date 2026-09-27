@@ -253,3 +253,6 @@ that the fix had missed.
    happened before the first stamp, and restores its affinity after; a
    pinned wake on knet's own core is picked by the pass knet's park
    provokes, so the figure measures the same thing on one clock.
+
+Round 3 (on cb917ef3, after a sibling sweep that bounded two more test
+reads and fixed the fallback line's tick arithmetic): clean.
