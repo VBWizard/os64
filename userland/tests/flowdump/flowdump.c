@@ -161,7 +161,7 @@ static void sheets_open(Sheets *sh, const os64_html_document_t *doc, const os64_
         if (one->linked)
             continue;
         garb_parse_style_element(one->node, &sh->parsed[sh->n]);
-        sh->in[sh->n] = (garb_sheet_in_t){&sh->parsed[sh->n], one->media};
+        sh->in[sh->n] = (garb_sheet_in_t){.sheet = &sh->parsed[sh->n], .media = one->media};
         sh->n++;
     }
     sh->cascade = garb_cascade(sh->in, sh->n, doc, (garb_env_t){width, 600});

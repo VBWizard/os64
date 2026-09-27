@@ -23,11 +23,37 @@ typedef struct {
     double width, height;           // the viewport, in CSS pixels
 } garb_env_t;
 
-// One sheet, in the order the page names it: a parse the caller owns (it
-// must outlive the cascade), and the `media` its element gave, or NULL.
+// An `@import` (Cascade 4 § 2.1): the address as written — resolved
+// against the IMPORTING sheet's address by whoever fetches it — and the
+// conditions on it, as component values pointing into the importing
+// sheet's parse.
+typedef struct {
+    const char *url;
+    size_t len;
+    const garb_value_t *media;      // a media query list; none holds always
+    int32_t nmedia;
+    bool has_supports;              // `supports(…)`: its argument
+    const garb_value_t *supports;
+    int32_t nsupports;
+} garb_import_t;
+
+// The @imports of `sheet` that count, in order: those written before any
+// rule but @charset and a @layer statement, each with an address. Answers
+// how many there are and writes at most `cap` of them.
+int32_t garb_sheet_imports(const garb_parsed_t *sheet, garb_import_t *out, int32_t cap);
+
+// One sheet, in cascade order: a parse the caller owns (it must outlive
+// the cascade), and the `media` its element gave, or NULL. An imported
+// sheet comes BEFORE the sheet importing it — its rules are the importer's
+// first — and says so: `via` is its @import, `parent` the importer's index
+// in the same array. It applies when its @import's conditions hold and the
+// importer applies. `via` is NULL for a sheet the page names itself, and
+// is read only during garb_cascade.
 typedef struct {
     garb_parsed_t *sheet;
     const char *media;
+    const garb_import_t *via;
+    int32_t parent;
 } garb_sheet_in_t;
 
 // A `style` element's sheet: its child text content (HTML § 4.2.6), which

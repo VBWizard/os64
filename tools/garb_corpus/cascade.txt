@@ -182,3 +182,77 @@ WANT
 p: margin-top: unset; margin-right: unset; margin-bottom: unset; margin-left: unset; width: 3px; height: 6px
 (end)
 END
+
+# @import (Cascade 4 § 2.1). A sheet the page's sheet imports is written
+# after the page here, under a `@@SHEET <address>` line, and found by the
+# address as written. An imported sheet's rules come BEFORE its importer's:
+# a.css's blue loses to the page's own red, and a1.css (imported by a.css)
+# comes before a.css, so a.css's margin-top wins over a1's. b.css's media
+# does not hold at 800; c.css's supports() does; d.css's does not; e.css is
+# imported after a rule, which makes the @import nothing.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@charset "utf-8";
+@import "a.css";
+@import url(b.css) screen and (max-width: 500px);
+@import "c.css" supports(display: grid);
+@import "d.css" supports(foo: bar);
+p { color: red }
+@import "e.css";
+</style><p>x
+@@SHEET a.css
+@import "a1.css";
+p { margin-top: 1px; color: blue }
+@@SHEET a1.css
+p { margin-left: 5px; margin-top: 9px }
+@@SHEET b.css
+p { margin-right: 2px }
+@@SHEET c.css
+p { padding-top: 3px }
+@@SHEET d.css
+p { padding-left: 4px }
+@@SHEET e.css
+p { width: 1px }
+WANT
+p: color: rgb(255, 0, 0); margin-top: 1px; margin-left: 5px; padding-top: 3px
+(end)
+END
+
+# The same at 400: b.css's media holds now.
+VIEWPORT 400x600
+PAGE
+<!doctype html><style>
+@import "a.css";
+@import url(b.css) screen and (max-width: 500px);
+</style><p>x
+@@SHEET a.css
+@import "a1.css";
+p { margin-top: 1px }
+@@SHEET a1.css
+p { margin-left: 5px }
+@@SHEET b.css
+p { margin-right: 2px }
+WANT
+p: margin-top: 1px; margin-right: 2px; margin-left: 5px
+(end)
+END
+
+# An imported sheet applies only where its importer does: the print sheet's
+# import, and the import's own import, are nothing on a screen. A layer name
+# on an @import is passed over (layers are cascaded as unlayered).
+VIEWPORT 800x600
+PAGE
+<!doctype html><style media="print">@import "a.css";</style>
+<style>@import "c.css" layer(base);</style><p>x
+@@SHEET a.css
+@import "a1.css";
+p { margin-top: 1px }
+@@SHEET a1.css
+p { margin-left: 5px }
+@@SHEET c.css
+p { padding-top: 3px }
+WANT
+p: padding-top: 3px
+(end)
+END

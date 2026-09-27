@@ -244,7 +244,7 @@ static void sheeted_open(Sheeted *p, const char *html, double width, double heig
         if (sh->linked)
             continue;
         garb_parse_style_element(sh->node, &p->sheets[p->n]);
-        in[p->n] = (garb_sheet_in_t){&p->sheets[p->n], sh->media};
+        in[p->n] = (garb_sheet_in_t){.sheet = &p->sheets[p->n], .media = sh->media};
         p->n++;
     }
     p->cascade = garb_cascade(in, p->n, p->doc, (garb_env_t){width, height});
@@ -478,7 +478,7 @@ static void cascade_sweep(void)
     const os64_page_sheet_t *sh = os64_page_sheet(page, 0);
     garb_parsed_t sheet;
     garb_parse_style_element(sh->node, &sheet);
-    garb_sheet_in_t in = {&sheet, NULL};
+    garb_sheet_in_t in = {.sheet = &sheet};
     garb_cascade_t *c = garb_cascade(&in, 1, doc, (garb_env_t){800, 600});
     flow_env_t env = kEnv;
     env.cascade = c;

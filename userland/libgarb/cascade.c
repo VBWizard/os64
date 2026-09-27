@@ -416,6 +416,97 @@ static bool supports(garb_cascade_t *c, garb_parsed_t *owner, const garb_value_t
     return r && speek(&s) == NULL;
 }
 
+// ── @import (Cascade 4 § 2.1) ───────────────────────────────────────────
+
+// `@import <url> [layer | layer(…)]? [supports(…)]? <media-query-list>?`:
+// false for a prelude that is not one.
+static bool read_import(const garb_rule_t *r, garb_import_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    VCur c = {r->prelude, r->nprelude, 0};
+    const garb_value_t *t = vc_peek(&c);
+    garb_val_t url;
+    if (t != NULL && t->kind == GARB_STRING) {
+        out->url = t->text;
+        out->len = t->len;
+        c.i++;
+    } else if (vc_url(&c, &url)) {
+        out->url = url.text;
+        out->len = url.len;
+    } else {
+        return false;
+    }
+    // Layers are cascaded as unlayered (GARB.md § Booked): the name is
+    // passed over.
+    t = vc_peek(&c);
+    if (t != NULL && ((t->kind == GARB_IDENT && ieq(t->text, t->len, "layer")) ||
+                      (t->kind == GARB_FUNCTION && ieq(t->text, t->len, "layer"))))
+        c.i++;
+    t = vc_peek(&c);
+    if (t != NULL && t->kind == GARB_FUNCTION && ieq(t->text, t->len, "supports")) {
+        out->has_supports = true;
+        out->supports = t->children;
+        out->nsupports = t->nchildren;
+        c.i++;
+    }
+    (void)vc_peek(&c);
+    out->media = c.i < c.n ? &c.v[c.i] : NULL;
+    out->nmedia = c.n - c.i;
+    return true;
+}
+
+int32_t garb_sheet_imports(const garb_parsed_t *sheet, garb_import_t *out, int32_t cap)
+{
+    int32_t n = 0;
+    for (int32_t i = 0; sheet != NULL && i < sheet->nitems; i++) {
+        if (sheet->items[i].kind != GARB_ITEM_RULE)
+            continue;
+        const garb_rule_t *r = sheet->items[i].rule;
+        if (at(r, "charset") || (at(r, "layer") && !r->has_block))
+            continue;
+        if (!at(r, "import"))
+            break;
+        garb_import_t one;
+        if (r->has_block || !read_import(r, &one))
+            continue;
+        if (n < cap)
+            out[n] = one;
+        n++;
+    }
+    return n;
+}
+
+// Whether sheet `s` of the list applies: its element's media, and for an
+// imported one its @import's media and supports() and its importer's.
+static bool sheet_applies(garb_cascade_t *c, const garb_sheet_in_t *sheets, int32_t n,
+                          int32_t s, int depth)
+{
+    const garb_sheet_in_t *in = &sheets[s];
+    if (in->sheet == NULL || !garb_media_text_matches(in->media, c->env))
+        return false;
+    if (in->via == NULL)
+        return true;
+    if (depth > NEST_MAX || in->parent <= s || in->parent >= n) {
+        c->incomplete = true;
+        return false;
+    }
+    const garb_import_t *im = in->via;
+    if (!garb_media_matches(im->media, im->nmedia, c->env))
+        return false;
+    if (im->has_supports) {
+        // supports()'s argument is a condition or a declaration: read as
+        // the inside of a parenthesis, which is where both may stand.
+        garb_value_t paren = {0};
+        paren.kind = GARB_BLOCK;
+        paren.open = '(';
+        paren.children = (garb_value_t *)im->supports;
+        paren.nchildren = im->nsupports;
+        if (!supports(c, sheets[in->parent].sheet, &paren, 1))
+            return false;
+    }
+    return sheet_applies(c, sheets, n, in->parent, depth + 1);
+}
+
 // ── Where an element's answer is kept ───────────────────────────────────
 
 static uint32_t hash_ptr(const void *p)
@@ -864,7 +955,7 @@ garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
     uint32_t order = 0;
     for (int32_t s = 0; s < n; s++) {
         garb_parsed_t *sheet = sheets[s].sheet;
-        if (sheet == NULL || !garb_media_text_matches(sheets[s].media, env))
+        if (!sheet_applies(c, sheets, n, s, 0))
             continue;
         add_rules(c, sheet, sheet->items, sheet->nitems, &order, 0);
     }

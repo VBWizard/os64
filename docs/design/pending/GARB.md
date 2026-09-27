@@ -251,6 +251,35 @@ later class winning, `display: none`, square markers inside, a collapsed
 table, a style attribute, a row of inline-block pills, a negative margin,
 and the media query flipping between `flowdump garb.html 800` and `500`.
 
+**G4, as run.** libgarb reads `@import` (`garb_sheet_imports`: the
+address, a `layer` passed over, `supports()`, the media list; only before
+every rule but `@charset` and a `@layer` statement), and the cascade takes
+an imported sheet where its rules belong — before its importer's — applying
+only when its own media and `supports()` hold and its importer applies.
+`tools/garb_corpus/cascade.txt` adds 3 pages whose sheets `@import` sheets
+supplied beside them (`@@SHEET <address>`), worked by hand: order against
+the importer, a nested import, media at two widths, `supports()` both
+ways, an import after a rule, an import under a print sheet; three mutants
+of the new code are each caught. yonder fetches linked sheets and imports
+on the work pool (`sheet.c`: `text/css` only, but for a same-origin sheet
+on a quirks page; parsed on the worker in the protocol's charset, else the
+document's), resolves an import against its sheet's address after
+redirects, and never follows one already on its importing chain. A page
+that names sheets waits for them, the old page on screen, for up to 3 s;
+a sheet later than that is laid in when it lands; Stop shows the page with
+what came. Fixing this found libpage refusing every relative reference on
+a `file:///` page — `os64/url.h` reads its empty host as none — so a page
+read from disk could not name a picture or a sheet beside it; libpage now
+reads an empty file host as this machine (LIBPAGE.md § A), with 9 new
+libpage checks. In the guest, against a local server: an imported sheet,
+a nested relative import, both import loops fetched once, a `text/plain`
+sheet and a print sheet ignored, an alternate never fetched, a 20 s sheet
+shown bare at 3 s and laid in when it landed; `yonder
+/tests/pages/garb.html` draws its linked sheet and that sheet's import from
+disk; and https://danlegt.com/ fetches its linked sheets and is dressed by
+them as far as pile 1 carries it. Stop during the wait is not proven in
+the guest: the monitor's pace lands the press after the 3 s.
+
 ## Booked before the first line
 
 | Debt | Why it waits | Trigger |
@@ -266,6 +295,9 @@ and the media query flipping between `flowdump garb.html 800` and `500`.
 | Pseudo-elements' styles | rules for `::before` and the rest are matched and set aside: nothing generates their boxes yet | G5's generated content |
 | `unicode-range` | the draft reads it from component values, in `@font-face`, not as a token | pile 3's web fonts |
 | `lab()`, `lch()`, `oklab()`, `oklch()`, `color()` | each needs its colour space converted to sRGB and gamut-mapped (Color 4 § 13) | a page whose colours are only written that way |
+| A cache of sheets | a sheet is fetched again for every page that names it, and on every visit | a site whose sheets are slow to come again, measured |
+| An imported sheet's Referer | it names the page, not the sheet that imported it | a server that refuses an import for it |
+| More than 64 sheets on a page, or 16 `@import`s in one sheet | the rest are not fetched | a page that needs them |
 | Every layer of a background | yonder draws one picture behind a box, so the first layer of a list is kept and the rest are only checked | a page whose look depends on a lower layer |
 | Quirks mode's hashless colour (`color: ff0000`) | quirks mode's unitless lengths are read; its colours without a `#` are not yet | a quirks-mode page written that way |
 | Encodings beyond libhtml's | a sheet in ISO-8859-2 or Shift_JIS keeps its ASCII and loses the rest | the first sheet whose text is not ASCII and not UTF-8 |
