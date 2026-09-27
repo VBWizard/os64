@@ -321,6 +321,12 @@ bool os64_page_incomplete(const os64_page_t *page);
 // The address every reference resolved against: `<base href>` when the page
 // carries one, else where the page came from. Never NULL.
 const char *os64_page_base(const os64_page_t *page);
+// `reference` resolved against `base` by the rule the page resolves its own
+// by, canonical — for an address a page's resources name in turn, as a
+// style sheet's @import does against the sheet's own address. False when
+// either will not resolve (an opaque base, an address with no host) or the
+// answer will not fit in `cap`.
+bool os64_page_url_absolute(const char *base, const char *reference, char *out, size_t cap);
 // Where the page came from, canonical. Never NULL.
 const char *os64_page_document_url(const os64_page_t *page);
 
