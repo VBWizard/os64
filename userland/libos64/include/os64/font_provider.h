@@ -1,5 +1,6 @@
 #ifndef OS64_FONT_PROVIDER_H
 #define OS64_FONT_PROVIDER_H
+#include <stdbool.h>
 
 /* F2.5's in-memory provider boundary. FONT_PROVIDER.md defines ownership,
  * row geometry, F5 resolution responsibilities and consumer transactions. */
@@ -72,6 +73,48 @@ os64_font_status_t os64_font_set_retain(os64_font_set_t *);
 void os64_font_set_release(os64_font_set_t *); /* NULL is a no-op */
 os64_font_status_t os64_font_set_view(const os64_font_set_t *, os64_font_role_t,
     os64_font_role_view_t *out);
+
+typedef enum {
+    OS64_FONT_FAMILY_SERIF = 0,
+    OS64_FONT_FAMILY_SANS,
+    OS64_FONT_FAMILY_MONO,
+    OS64_FONT_FAMILY_COUNT
+} os64_font_family_t;
+#define OS64_FONT_FAMILY_STYLES 4u /* regular, bold, italic, bolditalic */
+#define OS64_FONT_FAMILY_CACHE_MAX 32u
+typedef struct {
+    const char *name; /* borrowed bytes; need not be NUL-terminated */
+    uint32_t len;
+} os64_font_family_name_t;
+typedef struct {
+    const os64_font_family_name_t *names; /* page order; matching uses generic */
+    uint32_t count;
+    os64_font_family_t generic; /* the generic tail, separate from named faces */
+} os64_font_family_list_t;
+typedef struct {
+    os64_font_source_t styles[OS64_FONT_FAMILY_STYLES];
+    os64_font_source_t fallbacks[OS64_FONT_CONFIG_FALLBACK_MAX];
+    size_t fallback_count;
+} os64_font_family_spec_t;
+typedef struct os64_font_family_cache os64_font_family_cache_t;
+/* Copy resolved sources into the context's budget, deduplicating identical
+ * input spans. No I/O. Keeps context destruction BUSY even before first open.
+ * Zero specs select bitmap faces; outline styles accept 1..FONT_PIXEL_MAX.
+ * On failure *out is NULL; error indices identify a family and a source
+ * (styles 0..3, configured fallbacks 4..5), or COUNT/SIZE_MAX for storage. */
+os64_font_status_t os64_font_family_cache_create(os64_text_context_t *,
+    const os64_font_family_spec_t [OS64_FONT_FAMILY_COUNT],
+    os64_font_family_cache_t **out, os64_font_family_t *family, size_t *source);
+void os64_font_family_cache_destroy(os64_font_family_cache_t *);
+/* Serialized with the text context. The returned list is borrowed until the
+ * next open on this cache (including a failed open), or cache destruction.
+ * Lay out runs before asking again: runs retain fonts independently of LRU
+ * eviction. At most 32 entries are held; a LIMIT evicts oldest entries and
+ * retries. Fonts retained by runs can still exhaust the engine's face limit.
+ * Failure clears out. Named families are carried but not matched. */
+os64_font_status_t os64_font_family_open(os64_font_family_cache_t *,
+    const os64_font_family_list_t *, bool bold, bool italic,
+    uint32_t pixel_height, os64_font_role_view_t *out);
 
 /* All set/context/run calls need caller serialization. A view is borrowed until
  * set release. Do not release its font handles. A retained set keeps its context
