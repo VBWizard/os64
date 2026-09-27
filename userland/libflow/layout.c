@@ -20,6 +20,9 @@ typedef struct {
     bool quirks;        // full quirks
     bool any_quirks;    // quirks or limited quirks
     bool failed;
+    // A list item whose outside marker has no line yet: the next line with
+    // content is its first, and holds the marker's font box as well.
+    const FBox *marker_line;
 } L;
 
 // The flow of one block formatting context: where the next box goes, the
@@ -964,7 +967,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     content = true;
                 }
                 if (spread && !at_tail && e->s1 > e->b1) {
-                    pen += e->sw;
+                    pen += spaces_width(e, pen);
                     if (gaps == gap_cap) {
                         size_t cap = gap_cap ? gap_cap * 2 : 16;
                         int64_t *grown = os64_realloc(gap_at, cap * sizeof(*grown));
@@ -1141,8 +1144,28 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                           ss->border_style[k] != FLOW_BORDER_HIDDEN);
             }
         bool empty = !has_text && !content && !has_break && !framed;
+        // An outside marker stands on its item's first line with content,
+        // so that line is as tall as the marker's font as well — in quirks
+        // mode a line of nothing but a small picture has no strut of its
+        // own to hold it.
+        if (l->marker_line != NULL && !empty) {
+            Fonts mf;
+            if (fonts_for(l, l->marker_line->style, &mf)) {
+                Extent mb = font_box(mf.info.ascent, mf.info.descent, mf.info.line_height);
+                extend(&ext, &any, mb.top, mb.bottom);
+            }
+            l->marker_line = NULL;
+        }
         int64_t height = any ? ext.bottom - ext.top : 0;
         int64_t baseline_off = any ? -ext.top : 0;
+        // A box aligned to the top or the bottom asks only that the line be
+        // as tall as it, so the line is the tallest of the three, whatever
+        // their order (§10.8: as short as it can be). Where the baseline
+        // then sits is the one freedom left: what a bottom-aligned box adds
+        // goes above it, what a top-aligned box adds below — each alone is
+        // what every engine does, and together the bottom's share is taken
+        // first.
+        int64_t tallest_top = 0, tallest_bottom = 0;
         for (FFrag *fr = line->frags; fr != NULL; fr = fr->next) {
             if (fr->kind != FF_ATOMIC)
                 continue;
@@ -1151,12 +1174,14 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 continue;
             int64_t hm = len(fr->style->margin[FLOW_TOP], cw) + fr->h +
                          len(fr->style->margin[FLOW_BOTTOM], cw);
-            if (hm > height) {
-                if (va == FLOW_VALIGN_BOTTOM)
-                    baseline_off += hm - height;
-                height = hm;
-            }
+            if (va == FLOW_VALIGN_TOP)
+                tallest_top = max64(tallest_top, hm);
+            else
+                tallest_bottom = max64(tallest_bottom, hm);
         }
+        if (tallest_bottom > height)
+            baseline_off += tallest_bottom - height;
+        height = max64(height, max64(tallest_top, tallest_bottom));
         if (empty)
             height = 0;
 
@@ -1436,6 +1461,11 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     }
     int64_t content_top = in.y;
 
+    // An outside marker waits for its item's first line with content; an
+    // inner item's marker, arriving first, takes that line for its own.
+    const FBox *outer_marker = l->marker_line;
+    if (b->marker != NULL)
+        l->marker_line = b;
     if (b->kind == FB_REPLACED) {
         in.y += rep.h;
     } else if (b->ifc) {
@@ -1443,6 +1473,8 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     } else {
         children(l, styles, b, cx, cw, &in);
     }
+    if (b->marker != NULL && l->marker_line == b)
+        l->marker_line = outer_marker;
     if (l->failed) {
         // Layout stopped inside this box: it holds what was laid out.
         b->placed = true;
@@ -1562,7 +1594,7 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     out->incomplete = boxes->incomplete || (doc != NULL && doc->refusal != 0) ||
                       (model != NULL && os64_page_incomplete(model));
     L l = {out, env, model, out->quirks == OS64_HTML_QUIRKS,
-           out->quirks != OS64_HTML_NO_QUIRKS, false};
+           out->quirks != OS64_HTML_NO_QUIRKS, false, NULL};
     int64_t w = (int64_t)width * 64;
     out->width = w;
     if (boxes->root != NULL) {

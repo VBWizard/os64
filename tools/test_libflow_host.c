@@ -8,6 +8,7 @@
 
 #include <stdarg.h>
 #include <stdint.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -487,6 +488,21 @@ static void paint_cases(void)
                          "text \"m\"", "serif 16 line-through"), NULL);
 }
 
+typedef struct {
+    const os64_html_document_t *doc;
+    const os64_page_t *page;
+    int whole;
+} Deep;
+
+static void *deep_layout(void *arg)
+{
+    Deep *d = arg;
+    flow_tree_t *t = flow_layout(d->doc, d->page, 800, &kEnv);
+    d->whole = t == NULL ? -1 : !flow_incomplete(t);
+    flow_free(t);
+    return NULL;
+}
+
 static void limit_cases(void)
 {
     // Codex #147 round 4: a document libhtml stopped short of is not whole,
@@ -540,6 +556,26 @@ static void limit_cases(void)
            nested_whole("<marquee>", "</marquee>", (F_DEPTH_MAX - 2) / 2 + 1, 4096) == 0, NULL);
     expect("inline nesting counts against the same bound",
            nested_whole("<span>", "</span>", 2000, 4096) == 0, NULL);
+    // Codex #147 round 5: display: contents is walked before any box is
+    // made (the mixing scan), and that walk is charged too — a chain far
+    // past the bound stops the build instead of the stack. The layout runs
+    // on a thread with a small stack; the parser and libpage do not.
+    {
+        os64_html_document_t *doc = nested("<slot>", "</slot>", 20000, 40000);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        Deep d = {doc, page, -1};
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 512 * 1024);
+        pthread_t th;
+        bool ran = pthread_create(&th, &attr, deep_layout, &d) == 0;
+        if (ran)
+            pthread_join(th, NULL);
+        expect("a display-contents chain past the bound is incomplete, not a crash",
+               ran && d.whole == 0, NULL);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
     expect("tables nested past the bound are incomplete",
            nested_whole("<table><tr><td>", "</table>", 700, 4096) == 0, NULL);
 
