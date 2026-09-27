@@ -39,6 +39,7 @@
 #include "memory/mmap.h"   // MAP_ANONYMOUS (map()'s regions are anonymous)
 #include "CONFIG.h"        // TICKS_PER_SECOND — sleep()'s ms→ticks boundary
 #include "os64/ticks.h"    // os64_ticks_t — the ticks() out-struct (abi)
+#include "driver/system/x86_64.h"   // rdtsc — micros() reads the counter
 #include "os64/memory.h"   // os64_memory_t — the memory() out-struct (abi)
 #include "os64/time.h"     // os64_time_t — the time() out-struct (abi)
 #include "os64/pty.h"      // os64_pty_header_t/_cell_t — pty_snapshot's out-structs (abi)
@@ -60,6 +61,8 @@ extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kSystemCurrentTime;   // UTC epoch seconds (timer IRQ advances it)
 extern volatile uint64_t irq0_current_count;   // ticks into the current second (same IRQ)
 extern uint64_t kTicksPerSecond;
+extern uint64_t kCPUCyclesPerSecond;   // the TSC's rate, fixed at boot — micros() converts at it
+extern uint64_t kBootTSC;              // micros()'s zero (kernel.c stamps it first thing)
 extern int kTimeZoneOffsetMinutes;             // configured standard offset, east of UTC
 extern task_t *kKernelTask;        // never a pty seat — pty_resize's walk skips it
 extern uint64_t kTotalMemory;      // installed RAM (memmap.c, Limine map sum)
@@ -142,6 +145,8 @@ static uint64_t syscall_reap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_ticks(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_micros(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_memory(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -243,6 +248,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_REAP,      "reap",      syscall_reap,      false, 0x01),  // arg0 = exit-code out ptr
 	SYSCALL_DEFINE(SYSCALL_SLEEP,     "sleep",     syscall_sleep,     false, 0x00),  // arg0 = milliseconds (a value, no pointers)
 	SYSCALL_DEFINE(SYSCALL_TICKS,     "ticks",     syscall_ticks,     false, 0x01),  // arg0 = os64_ticks_t out ptr
+	SYSCALL_DEFINE(SYSCALL_MICROS,    "micros",    syscall_micros,    false, 0x00),  // no args; the count comes back in RAX
 	SYSCALL_DEFINE(SYSCALL_MEMORY,    "memory",    syscall_memory,    false, 0x01),  // arg0 = os64_memory_t out ptr
 	SYSCALL_DEFINE(SYSCALL_PRINTAT,   "printat",   syscall_printat,   false, 0x04),  // arg0 = x cell, arg1 = y cell, arg2 = string
 	SYSCALL_DEFINE(SYSCALL_TIME,      "time",      syscall_time,      false, 0x01),  // arg0 = os64_time_t out ptr
@@ -4606,6 +4612,63 @@ static uint64_t syscall_ticks(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!copy_to_user_buffer(user_out, &t, sizeof(t)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	return 0;
+}
+
+// micros() — the same stopwatch as ticks(), read from the CPU's cycle
+// counter instead of the tick count: microseconds since boot, in RAX. No
+// pointer and no struct, because one number in the unit the caller wants
+// has nothing to fill in and nothing to get wrong (ARRIVAL_WAKE.md says why
+// this is a new call and not a field on os64_ticks_t: the struct is sized
+// by the caller at compile time, and growing it clobbers every binary
+// built before the growth).
+//
+// The rate is kCPUCyclesPerSecond, fixed for the life of the boot
+// (kernel.c says why a moving rate is worse). Divided in two steps — whole
+// seconds, then the remainder — so the multiply cannot overflow at any
+// uptime: cycles × 1,000,000 passes 2^64 within a couple of hours on a
+// 3GHz part.
+//
+// ticks() counts interrupts the BSP received and LOSES some under load
+// (DEBTS § wall-clock hardening); this reads a counter and loses none. The
+// two drift apart by exactly the lost ticks. A program measuring an
+// interval wants this one; a CPU% that divides two tick deltas wants ticks.
+//
+// MONOTONIC BY CONSTRUCTION, not by assumption. kBootTSC was read on the
+// BSP; this rdtsc runs on whatever core the caller is on, and the house
+// rule (nvme.c's completion poll) is that a TSC read on one core may not
+// be compared with one from another — QEMU and WSL2 have both been seen
+// to hand cores counters with different offsets. So the raw figure is
+// never returned as-is: it is folded through a global high-water mark
+// (compare-and-swap, the only cross-core state), and a caller can only
+// ever see a value at least as large as the last one anybody was given.
+// A core whose counter lags therefore STALLS the clock by its offset
+// rather than running it backward, and a core behind the boot anchor
+// reads 0 rather than 2^64 - offset. A stall is still a wrong interval on
+// a desynchronized machine; the boot-time sync check that would make it a
+// right one is booked (DEBTS § micros).
+static volatile uint64_t s_micros_high_water;
+static uint64_t syscall_micros(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	uint64_t cps = kCPUCyclesPerSecond;
+	if (cps == 0)
+		return 0;   // asked before calibration — nothing has, but 0 beats a divide fault
+	uint64_t now = rdtsc();
+	uint64_t cycles = now > kBootTSC ? now - kBootTSC : 0;
+	uint64_t seconds = cycles / cps;
+	uint64_t rest = cycles % cps;
+	uint64_t us = seconds * 1000000UL + (rest * 1000000UL) / cps;
+
+	for (;;)
+	{
+		uint64_t seen = s_micros_high_water;
+		if (us <= seen)
+			return seen;   // behind somebody's reading: hand out theirs, never less
+		if (__sync_bool_compare_and_swap(&s_micros_high_water, seen, us))
+			return us;
+	}
 }
 
 // memory(out) — the physical memory picture, one atomic snapshot. free/used/
