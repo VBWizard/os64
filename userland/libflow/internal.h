@@ -7,6 +7,19 @@
 
 #define F_ARRAY(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))
 
+// White-space's two questions (CSS Text 3 § 3), answered in one place so
+// the box builder and layout agree: does a run of spaces collapse, and
+// may a line wrap?
+static inline bool f_ws_collapses(flow_white_space_t ws)
+{
+    return ws == FLOW_WS_NORMAL || ws == FLOW_WS_NOWRAP || ws == FLOW_WS_PRE_LINE;
+}
+
+static inline bool f_ws_wraps(flow_white_space_t ws)
+{
+    return ws == FLOW_WS_NORMAL || ws == FLOW_WS_PRE_WRAP || ws == FLOW_WS_PRE_LINE;
+}
+
 // ── Storage ─────────────────────────────────────────────────────────────
 //
 // Everything a layout builds lives until the layout is freed and is never
@@ -158,13 +171,14 @@ struct FItem {
     const flow_style_t *style;      // what the item is drawn in
     // TEXT, MARKER: the bytes to lay out. For page text, a slice of the
     // node's processed copy starting `offset` bytes in — the range a
-    // selection maps back through.
+    // selection maps back through — or, under text-transform, a copy of
+    // that slice with its case changed and its length kept.
     const char *text;
     uint32_t len, offset;
     bool generated;                 // TEXT the sheet made: a quote mark, a ruby parenthesis
     bool continuation;              // OPEN: an earlier piece exists; CLOSE: a block split it here
     FInline *inl;                   // OPEN, CLOSE
-    FBox *content;                  // ATOMIC with a block of its own (a marquee)
+    FBox *content;                  // ATOMIC: an inline-block's own block; NULL when replaced
     int32_t link, control;          // ATOMIC: libpage's indexes, or -1
 };
 

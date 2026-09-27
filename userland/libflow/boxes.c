@@ -76,10 +76,6 @@ static bool css_space(char c)
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
-static bool collapsible(flow_white_space_t ws)
-{
-    return ws == FLOW_WS_NORMAL || ws == FLOW_WS_NOWRAP;
-}
 
 // Replaced elements: laid out at a size the face supplies, their insides
 // its widget or its picture.
@@ -149,10 +145,11 @@ static bool text_significant(const B *b, const os64_html_node_t *n)
     const flow_style_t *s = text_style(b, n);
     if (s == NULL || n->text_len == 0)
         return false;
-    if (!collapsible(s->white_space))
+    if (!f_ws_collapses(s->white_space))
         return true;
+    // Under pre-line a line break is kept, so it is content.
     for (size_t i = 0; i < n->text_len; i++)
-        if (!css_space(n->text[i]))
+        if (!css_space(n->text[i]) || (n->text[i] == '\n' && s->white_space == FLOW_WS_PRE_LINE))
             return true;
     return false;
 }
@@ -285,10 +282,55 @@ static void end_run(Flow *f)
     f->target = NULL;
 }
 
+// text-transform (CSS Text 3 § 2.1), on the letters whose other case is
+// the same length in UTF-8 — ASCII's and Latin-1's — so an item keeps its
+// offsets into its node. A letter whose other case is longer (ß, ÿ) and
+// every letter past Latin-1 is left as it is (GARB.md § Booked).
+// `capitalize` raises the first letter after a space, or at `word_start`.
+static void transform(char *t, uint32_t n, flow_text_transform_t how, bool word_start)
+{
+    for (uint32_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)t[i];
+        bool up = how == FLOW_TRANSFORM_UPPERCASE || (how == FLOW_TRANSFORM_CAPITALIZE && word_start);
+        bool down = how == FLOW_TRANSFORM_LOWERCASE;
+        if (c < 0x80) {
+            if (up && c >= 'a' && c <= 'z')
+                t[i] = (char)(c - 32);
+            else if (down && c >= 'A' && c <= 'Z')
+                t[i] = (char)(c + 32);
+            word_start = css_space((char)c);
+        } else if (c == 0xC3 && i + 1 < n) {
+            // U+00C0..U+00FF: the second byte's 0x20 bit is the case, but
+            // for × and ÷ (0x97, 0xB7), ß (0x9F) and ÿ (0xBF).
+            unsigned char d = (unsigned char)t[i + 1];
+            if (up && d >= 0xA0 && d <= 0xBE && d != 0xB7)
+                t[i + 1] = (char)(d - 0x20);
+            else if (down && d >= 0x80 && d <= 0x9E && d != 0x97)
+                t[i + 1] = (char)(d + 0x20);
+            i++;
+            word_start = false;
+        } else if (c >= 0xC0) {
+            word_start = false;
+        }
+    }
+}
+
 static void text_item(Flow *f, FBox *ifc, const os64_html_node_t *node,
                       const flow_style_t *style, const char *text, uint32_t len,
                       uint32_t offset, bool generated)
 {
+    if (!generated && len > 0 && style->text_transform != FLOW_TRANSFORM_NONE) {
+        char *copy = alloc(f->b, len);
+        if (copy == NULL)
+            return;
+        os64_memcpy(copy, text, len);
+        const FItem *last = ifc->last_item;
+        bool word_start = last == NULL || last->kind == FI_BREAK ||
+                          (last->kind == FI_TEXT && last->len > 0 &&
+                           css_space(last->text[last->len - 1]));
+        transform(copy, len, style->text_transform, word_start);
+        text = copy;
+    }
     FItem *item = new_item(f->b, ifc, FI_TEXT, node, style);
     if (item == NULL)
         return;
@@ -298,8 +340,9 @@ static void text_item(Flow *f, FBox *ifc, const os64_html_node_t *node,
     item->generated = generated;
 }
 
-// White-space processing (CSS 2.1 §16.6.1), once, here. Under `normal` and
-// `nowrap` a tab, a newline or a run of either becomes one space, and a
+// White-space processing (CSS 2.1 §16.6.1), once, here. Under `normal`,
+// `nowrap` and `pre-line` a tab, a newline or a run of either becomes one
+// space — but `pre-line` keeps each newline as a forced break — and a
 // space that follows a collapsible space ANYWHERE in the same inline
 // formatting context — across element boundaries — is removed; a context
 // starts as if after a space, which is the rule removing a line's leading
@@ -311,7 +354,7 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     const flow_style_t *s = text_style(b, n);
     if (s == NULL || n->text_len == 0)
         return;
-    if (!collapsible(s->white_space)) {
+    if (!f_ws_collapses(s->white_space)) {
         FBox *ifc = target(f);
         if (ifc == NULL)
             return;
@@ -343,9 +386,23 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     char *copy = alloc(b, n->text_len);
     if (copy == NULL)
         return;
-    uint32_t len = 0;
+    uint32_t len = 0, seg = 0;
     bool space = ifc->collapse_space;
     for (size_t i = 0; i < n->text_len; i++) {
+        if (n->text[i] == '\n' && s->white_space == FLOW_WS_PRE_LINE) {
+            // A kept line break: the text before it is an item, less a
+            // space just before the break (CSS Text 3 § 4.1.1), and the
+            // next line starts as if after a space.
+            if (len > seg && copy[len - 1] == ' ')
+                len--;
+            if (len > seg)
+                text_item(f, ifc, n, s, copy + seg, len - seg, seg, false);
+            if (new_item(b, ifc, FI_BREAK, NULL, s) == NULL)
+                return;
+            seg = len;
+            space = true;
+            continue;
+        }
         if (css_space(n->text[i])) {
             if (!space)
                 copy[len++] = ' ';
@@ -360,8 +417,8 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     // copies no text it can point at.
     const char *text = len == n->text_len && os64_memcmp(copy, n->text, len) == 0 ? n->text
                                                                                : copy;
-    if (len > 0)
-        text_item(f, ifc, n, s, text, len, 0, false);
+    if (len > seg)
+        text_item(f, ifc, n, s, text + seg, len - seg, seg, false);
 }
 
 static void generated(Flow *f, const os64_html_node_t *el, const flow_style_t *s,

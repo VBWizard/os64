@@ -308,7 +308,8 @@ the guest: the monitor's pace lands the press after the 3 s.
 | `box-sizing` and the limits on tables and cells; §10.4's table for a picture held by two limits against its ratio | a table's width comes from its columns and a cell's from its column, and neither reads them yet; a picture is held by width then height, keeping its ratio in the dimension the page left it | a page whose tables or pictures read wrong for it |
 | A percentage `height`, `min-height` or `max-height` | libflow sizes heights by content, so there is no containing block of known height for one to be a percentage of; each binds nothing | pile 2 |
 | `vertical-align` by a length, and `text-bottom` | libflow aligns by keyword: a length or percentage is baseline, `text-bottom` is bottom | G5 |
-| `white-space: pre-line` | libflow has no mode that collapses spaces and keeps line breaks: drawn as `normal` (`break-spaces` as `pre-wrap`) | G5 |
+| `white-space: break-spaces` | drawn as `pre-wrap`: a space it keeps at a line's end hangs instead of taking room | a page whose preformatted text reads wrong for it |
+| `text-transform` past Latin-1, `ß`/`ÿ`, and `capitalize` across element boundaries; `text-indent`'s `hanging` and `each-line` | a case change that alters a letter's UTF-8 length would move every offset a selection maps through; a word's start is judged per text item; the two keywords are read and not drawn | a page in a script with case, or one that needs them |
 | A string list marker, and counter styles beyond the ten | libflow draws its ten marker kinds; any other name is decimal, as Counter Styles 3 says of an undefined one, and a string is ignored | G5's generated content |
 | A table column's `calc()` width | a column keeps a percentage's share of the table and no fixed part, so `calc(20% + 10px)` on a cell is 20% | a page whose tables are sized that way |
-| `line-height`, `text-indent`, `text-transform`, `font-variant`, `overflow`, background pictures and positions | read by libgarb, not yet held by libflow | G5 |
+| `font-variant`, `overflow`, background pictures and positions | read by libgarb, not yet held by libflow | G5 |

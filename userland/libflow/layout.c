@@ -385,11 +385,6 @@ static Seg *seg_add(L *l, Segs *s, SegKind kind)
     return g;
 }
 
-static bool wraps(flow_white_space_t ws)
-{
-    return ws == FLOW_WS_NORMAL || ws == FLOW_WS_PRE_WRAP;
-}
-
 // A text's words: measured ONCE, then cut at its spaces. A text longer than
 // the engine takes in one run (OS64_TEXT_BYTES_MAX) is measured in WINDOWS
 // cut after a space, so a word never straddles two; a window with no space
@@ -402,7 +397,7 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
     if (n == 0 || !fonts_for(l, style, &f))
         return;
     flow_white_space_t ws = style->white_space;
-    bool collapsible = ws == FLOW_WS_NORMAL || ws == FLOW_WS_NOWRAP;
+    bool collapsible = f_ws_collapses(ws);
     bool whole = ws == FLOW_WS_PRE || ws == FLOW_WS_NOWRAP;
     for (uint32_t w0 = 0; w0 < n && !l->failed;) {
         uint32_t w1 = n;
@@ -504,8 +499,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
     for (const FItem *it = ifc->items; it != NULL && !l->failed; it = it->next) {
         switch (it->kind) {
         case FI_TEXT: {
-            if (tabs == 0 && !(it->style->white_space == FLOW_WS_NORMAL ||
-                               it->style->white_space == FLOW_WS_NOWRAP))
+            if (tabs == 0 && !f_ws_collapses(it->style->white_space))
                 tabs = tab_interval_for(l, ifc->style);
             text_segments(l, s, it, it->text, it->len, it->style, tabs);
             break;
@@ -557,7 +551,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             }
             g->atom = r;
             g->w = g->ml + fw + r.w + g->mr;
-            bool wrap = wraps(st->white_space) && !quirk_no_wrap_round(l, ifc, it);
+            bool wrap = f_ws_wraps(st->white_space) && !quirk_no_wrap_round(l, ifc, it);
             g->wrap_after = wrap;
             if (wrap && s->n >= 2 && s->v[s->n - 2].kind != SG_BREAK)
                 s->v[s->n - 2].wrap_after = true;
@@ -668,8 +662,15 @@ static void extend(Extent *e, bool *any, int64_t top, int64_t bottom)
 
 // An inline box's height is its line-height, the content area centred in
 // it with half the leading above and half below (§10.8.1).
-static Extent font_box(int64_t ascent, int64_t descent, int64_t line_height)
+// An inline box's extent about its baseline (CSS 2.1 § 10.8.1): its
+// ascent and descent with the leading — line-height less the two — split
+// above and below. `normal` is the face's own line height; a leading may
+// be negative, and then the box is shorter than its glyphs.
+static Extent font_box(const flow_style_t *s, int64_t ascent, int64_t descent, int64_t normal)
 {
+    int64_t line_height = s->line_height.kind == FLOW_LINE_NUMBER
+                              ? (int64_t)s->font_size * s->line_height.value / 1000
+                        : s->line_height.kind == FLOW_LINE_PX ? s->line_height.value : normal;
     int64_t half = (line_height - ascent - descent) / 2;
     return (Extent){-ascent - half, descent + (line_height - ascent - descent - half)};
 }
@@ -751,6 +752,16 @@ static bool last_baseline(const FBox *b, int64_t *out)
     return found;
 }
 
+// The indent of a context's first line (CSS Text 3 § 8.1): an element's
+// own, and an anonymous block's only when it holds its parent's first
+// line — the one before any block child.
+static int64_t first_line_indent(const FBox *ifc, int64_t cw)
+{
+    if (ifc->node == NULL && (ifc->parent == NULL || ifc->parent->first != ifc))
+        return 0;
+    return len(ifc->style->text_indent, cw);
+}
+
 static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw, Cursor *cur)
 {
     // Pass 2 stopped inside this context: its last line was broken without
@@ -767,10 +778,13 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
 
     flow_text_align_t align = ifc->style->text_align;
     bool justify = align == FLOW_ALIGN_JUSTIFY || align == FLOW_ALIGN_HTML_JUSTIFY;
+    // text-indent: the first line of an element's own text starts this far
+    // in, and has that much less room.
+    int64_t indent = first_line_indent(ifc, cw);
 
     for (size_t start = 0; start < s.n && !l->failed;) {
         bool forced;
-        size_t end = break_line(&s, start, cw, &forced);
+        size_t end = break_line(&s, start, cw - indent, &forced);
         // An inline that closes right where a break falls closes on this
         // line, not as an empty piece on the next.
         while (end < s.n && s.v[end].kind == SG_CLOSE)
@@ -809,9 +823,11 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         for (size_t k = 0; k < open.n; k++)
             open_x[k] = 0;
 
-        // Horizontal: lay the fragments down from 0; alignment shifts
-        // them after, once the line's width is known.
-        int64_t pen = 0, used = 0;
+        // Horizontal: lay the fragments down from 0, or from the first
+        // line's indent; alignment shifts them after, once the line's
+        // width is known.
+        int64_t pen = indent, used = indent;
+        indent = 0;
         size_t gaps = 0;
         bool content = false, has_text = false, has_break = false;
         Extent brk_box = {0, 0};
@@ -821,7 +837,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         // as tall as its neighbours. Quirks and limited-quirks modes make
         // none (the Quirks standard's 3.4) — the sliced-image fix.
         if (have_block_font && !l->any_quirks) {
-            Extent strut = font_box(bf.info.ascent, bf.info.descent, bf.info.line_height);
+            Extent strut = font_box(ifc->style, bf.info.ascent, bf.info.descent, bf.info.line_height);
             extend(&ext, &any, strut.top, strut.bottom);
         }
 
@@ -892,7 +908,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     fr->decoration = p.decoration;
                     fr->decoration_color = p.color;
                     fr->link = p.link;
-                    Extent fb = font_box(v.ascent, v.descent, v.line_height);
+                    Extent fb = font_box(g->style, v.ascent, v.descent, v.line_height);
                     extend(&ext, &any, fb.top, fb.bottom);
                     pen += v.advance_x;
                     used = at_tail && e->hang && !spread ? pen - e->sw : pen;
@@ -985,7 +1001,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 fr->w = v.advance_x;
                 fr->h = v.ascent + v.descent;
                 fr->y = -v.ascent;
-                Extent fb = font_box(v.ascent, v.descent, v.line_height);
+                Extent fb = font_box(g->style, v.ascent, v.descent, v.line_height);
                 extend(&ext, &any, fb.top, fb.bottom);
                 pen += v.advance_x;
                 used = pen;
@@ -1027,7 +1043,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 // sliced images must not open a gap under the first.
                 Fonts f;
                 if (fonts_for(l, g->style, &f)) {
-                    brk_box = font_box(f.info.ascent, f.info.descent, f.info.line_height);
+                    brk_box = font_box(g->style, f.info.ascent, f.info.descent, f.info.line_height);
                     has_break = true;
                 }
                 break;
@@ -1055,7 +1071,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
             for (FSpan *sp = line->spans; sp != NULL; sp = sp->next) {
                 Fonts f;
                 if (fonts_for(l, sp->inl->style, &f)) {
-                    Extent fb = font_box(f.info.ascent, f.info.descent, f.info.line_height);
+                    Extent fb = font_box(sp->inl->style, f.info.ascent, f.info.descent, f.info.line_height);
                     extend(&ext, &any, fb.top, fb.bottom);
                 }
             }
@@ -1465,7 +1481,9 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
     Segs s = {0};
     segments(l, ifc, 0, &s);
     Intr r = {0, 0};
-    int64_t word = 0, line = 0, space = 0;
+    // The first line's indent is part of its first word and of the line,
+    // a percentage of a width not known yet counting as nothing.
+    int64_t word = max64(0, first_line_indent(ifc, 0)), line = word, space = 0;
     for (size_t i = 0; i < s.n; i++) {
         const Seg *g = &s.v[i];
         switch (g->kind) {

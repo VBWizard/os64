@@ -107,6 +107,18 @@ static void cascade_cases(void)
         "  body block margin=8/8/8/8 holds-block\n"
         "    div block min-width=10 max-width=50% min-height=32 border-box\n");
 
+    // 150% of the div's 10px computes to 15px, which the span inherits
+    // as 15px whatever its own size; 1.5 stays a number. 2em of 10 is 20.
+    cascade_case("line-height, text-indent, text-transform as they inherit", 800,
+        "<!doctype html><style>div { line-height: 150%; font-size: 10px; text-indent: 2em }"
+        " span { font-size: 20px } p { line-height: 1.5; text-transform: uppercase }</style>"
+        "<div>x<span>y</span></div><p>z</p>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block size=10 line-height=15 indent=20\n"
+        "      span inline size=20\n"
+        "    p block margin=16/0/16/0 line-height=1.500 transform=uppercase\n");
+
     // The layout dumps are test_libflow_layout.inc's: 16px text is 20
     // tall with its content area 2 below the line's top.
 
@@ -228,4 +240,51 @@ static void cascade_cases(void)
         "    block div 0 0 20 21\n"
         "      line 0 0 20 21 base 15\n"
         "        atomic img 0 0 20 15\n");
+
+    // line-height (CSS 2.1 § 10.8.1). The face's ascent and descent are 16
+    // of it; the rest is leading, half above and half below. 30px: 7
+    // each way, so the line is 30 with its baseline 12 + 7 = 19 down and
+    // the text's top at 7. A number, 2, is 32 of a 16px font: 8 each way,
+    // baseline 20, the line from 30 to 62.
+    cascade_layout_case("line-height as a length and as a number",
+        "<!doctype html><style>body { margin: 0 } p { margin: 0; line-height: 30px }"
+        " div { line-height: 2 }</style><p>a</p><div>b</div>",
+        200,
+        "page 200 62\n"
+        "block html 0 0 200 62\n"
+        "  block body 0 0 200 62\n"
+        "    block p 0 0 200 30\n"
+        "      line 0 0 200 30 base 19\n"
+        "        text \"a\" 0 7 8 16 serif 16\n"
+        "    block div 0 30 200 32\n"
+        "      line 0 30 200 32 base 20\n"
+        "        text \"b\" 0 38 8 16 serif 16\n");
+
+    // text-indent moves each p's first line 20 in; text-transform changes
+    // the letters and not their places (every letter here is 8 wide, the
+    // space 4: "Ab Cd" is 36). pre-line collapses the spaces, drops the one
+    // before the newline, and breaks there: "a b", then "c".
+    cascade_layout_case("text-indent, text-transform, pre-line",
+        "<!doctype html><style>body { margin: 0 } p { margin: 0; text-indent: 20px }"
+        " .u { text-transform: uppercase } .c { text-transform: capitalize }"
+        " div { white-space: pre-line }</style>"
+        "<p>ab</p><p class=u>ab</p><p class=c>ab cd</p><div>a   b \n  c</div>",
+        200,
+        "page 200 100\n"
+        "block html 0 0 200 100\n"
+        "  block body 0 0 200 100\n"
+        "    block p 0 0 200 20\n"
+        "      line 0 0 200 20 base 14\n"
+        "        text \"ab\" 20 2 16 16 serif 16\n"
+        "    block p 0 20 200 20\n"
+        "      line 0 20 200 20 base 14\n"
+        "        text \"AB\" 20 22 16 16 serif 16\n"
+        "    block p 0 40 200 20\n"
+        "      line 0 40 200 20 base 14\n"
+        "        text \"Ab Cd\" 20 42 36 16 serif 16\n"
+        "    block div 0 60 200 40\n"
+        "      line 0 60 200 20 base 14\n"
+        "        text \"a b\" 0 62 20 16 serif 16\n"
+        "      line 0 80 200 20 base 14\n"
+        "        text \"c\" 0 82 8 16 serif 16\n");
 }

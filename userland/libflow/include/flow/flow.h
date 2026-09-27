@@ -146,7 +146,25 @@ typedef enum {
     FLOW_WS_PRE,
     FLOW_WS_NOWRAP,
     FLOW_WS_PRE_WRAP,
+    FLOW_WS_PRE_LINE,               // spaces collapse, line breaks are kept
 } flow_white_space_t;
+
+// `line-height` as it inherits (CSS 2.1 § 10.8.1): `normal` is the face's
+// own; a number is a factor of each element's own font size and inherits
+// as the number; a length or a percentage computes to pixels and inherits
+// as those.
+typedef enum { FLOW_LINE_NORMAL = 0, FLOW_LINE_NUMBER, FLOW_LINE_PX } flow_line_height_kind_t;
+typedef struct {
+    flow_line_height_kind_t kind;
+    int32_t value;                  // NUMBER: thousandths; PX: flow_unit_t
+} flow_line_height_t;
+
+typedef enum {
+    FLOW_TRANSFORM_NONE = 0,
+    FLOW_TRANSFORM_UPPERCASE,
+    FLOW_TRANSFORM_LOWERCASE,
+    FLOW_TRANSFORM_CAPITALIZE,
+} flow_text_transform_t;
 
 typedef enum {
     FLOW_LIST_DISC = 0,
@@ -207,6 +225,9 @@ typedef struct {
     flow_text_align_t text_align;
     flow_vertical_align_t vertical_align;
     flow_white_space_t white_space;
+    flow_line_height_t line_height;
+    flow_length_t text_indent;      // PX or PERCENT: the first line's; AUTO reads as 0
+    flow_text_transform_t text_transform;
     // This element's own decorations. CSS draws an ancestor's across its
     // inline descendants too, in the ancestor's colour, which is a fact
     // layout derives and not a property of the descendant.

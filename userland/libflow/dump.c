@@ -103,7 +103,8 @@ static const char *const s_align[] = {"left", "right", "center", "justify", "htm
                                       "html-right", "html-center", "html-justify"};
 static const char *const s_valign[] = {"baseline", "sub", "super", "top", "text-top",
                                        "middle", "bottom", "html-middle"};
-static const char *const s_ws[] = {"normal", "pre", "nowrap", "pre-wrap"};
+static const char *const s_ws[] = {"normal", "pre", "nowrap", "pre-wrap", "pre-line"};
+static const char *const s_transform[] = {"none", "uppercase", "lowercase", "capitalize"};
 static const char *const s_list[] = {"disc", "circle", "square", "decimal", "lower-alpha",
                                      "upper-alpha", "lower-roman", "upper-roman",
                                      "disclosure-closed", "disclosure-open", "none"};
@@ -239,6 +240,22 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         putf(b, " valign=%s", s_valign[s->vertical_align]);
     if (s->white_space != parent->white_space)
         putf(b, " ws=%s", s_ws[s->white_space]);
+    if (s->line_height.kind != parent->line_height.kind ||
+        s->line_height.value != parent->line_height.value) {
+        puts_(b, " line-height=");
+        if (s->line_height.kind == FLOW_LINE_NORMAL)
+            puts_(b, "normal");
+        else if (s->line_height.kind == FLOW_LINE_NUMBER)
+            putf(b, "%d.%03d", (int)(s->line_height.value / 1000), (int)(s->line_height.value % 1000));
+        else
+            unit(b, s->line_height.value);
+    }
+    if (!length_eq(s->text_indent, parent->text_indent)) {
+        puts_(b, " indent=");
+        length(b, s->text_indent);
+    }
+    if (s->text_transform != parent->text_transform)
+        putf(b, " transform=%s", s_transform[s->text_transform]);
     if (s->text_decoration & FLOW_DECORATION_UNDERLINE)
         puts_(b, " underline");
     if (s->text_decoration & FLOW_DECORATION_LINE_THROUGH)

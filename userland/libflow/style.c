@@ -50,6 +50,7 @@ typedef struct {
     flow_style_t s;             // everything that needs no font to resolve
     Len margin[4], padding[4], width, height;
     Len min_width, max_width, min_height, max_height;
+    Len text_indent;                // UNSET: as inherited
     FsKind fs_kind;
     int32_t fs_v;
     bool border_color_set[4];
@@ -325,6 +326,9 @@ static flow_style_t inherit(const Ctx *c, const flow_style_t *parent)
     s.color = parent->color;
     s.text_align = parent->text_align;
     s.white_space = parent->white_space;
+    s.line_height = parent->line_height;
+    s.text_indent = parent->text_indent;
+    s.text_transform = parent->text_transform;
     s.visibility = parent->visibility;
     s.list_style_type = parent->list_style_type;
     s.list_style_position = parent->list_style_position;
@@ -1684,6 +1688,12 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_TEXT_ALIGN: d->text_align = s->text_align; break;
     case GARB_VERTICAL_ALIGN: d->vertical_align = s->vertical_align; break;
     case GARB_WHITE_SPACE: d->white_space = s->white_space; break;
+    case GARB_LINE_HEIGHT: d->line_height = s->line_height; break;
+    case GARB_TEXT_INDENT:
+        dst->text_indent = src->text_indent;
+        d->text_indent = s->text_indent;
+        break;
+    case GARB_TEXT_TRANSFORM: d->text_transform = s->text_transform; break;
     case GARB_TEXT_DECORATION_LINE: d->text_decoration = s->text_decoration; break;
     case GARB_VISIBILITY: d->visibility = s->visibility; break;
     case GARB_LIST_STYLE_TYPE: d->list_style_type = s->list_style_type; break;
@@ -1722,6 +1732,7 @@ static void initial_spec(const Ctx *c, Spec *out)
     }
     out->width = out->height = kAuto;
     out->min_width = out->max_width = out->min_height = out->max_height = kAuto;
+    out->text_indent = px(0);
     out->fs_kind = FS_KEYWORD;
     out->fs_v = 3;                                      // medium
 }
@@ -1747,6 +1758,7 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
     out->max_width = len_of(parent->max_width);
     out->min_height = len_of(parent->min_height);
     out->max_height = len_of(parent->max_height);
+    out->text_indent = len_of(parent->text_indent);
     out->fs_kind = FS_PX;
     out->fs_v = parent->font_size;
 }
@@ -1815,6 +1827,31 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             author_len(a, v, true, l);
         break;
     }
+    case GARB_LINE_HEIGHT:
+        if (word(v, "normal")) {
+            s->line_height = (flow_line_height_t){FLOW_LINE_NORMAL, 0};
+        } else if (v->kind == GARB_V_NUMBER && v->number >= 0) {
+            s->line_height = (flow_line_height_t){FLOW_LINE_NUMBER, round_i32(v->number * 1000)};
+        } else if (v->kind == GARB_V_PERCENTAGE && v->number >= 0) {
+            s->line_height = (flow_line_height_t){FLOW_LINE_PX,
+                                                  round_i32(a->font * v->number / 100)};
+        } else {
+            Len l;
+            if (author_len(a, v, false, &l) && l.kind == L_PX && l.v >= 0)
+                s->line_height = (flow_line_height_t){FLOW_LINE_PX, l.v};
+        }
+        break;
+    case GARB_TEXT_INDENT:
+        // `hanging` and `each-line` are read and not drawn.
+        if (v->kind == GARB_V_LENGTH || v->kind == GARB_V_PERCENTAGE || v->kind == GARB_V_CALC)
+            author_len(a, v, false, &sp->text_indent);
+        break;
+    case GARB_TEXT_TRANSFORM: {
+        static const char *const words[] = {"none", "uppercase", "lowercase", "capitalize"};
+        i = pick(v, words, F_ARRAY(words));
+        s->text_transform = i >= 0 ? (flow_text_transform_t)i : FLOW_TRANSFORM_NONE;
+        break;
+    }
     case GARB_BOX_SIZING:
         s->box_sizing = word(v, "border-box") ? FLOW_BORDER_BOX : FLOW_CONTENT_BOX;
         break;
@@ -1850,13 +1887,12 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     }
     case GARB_WHITE_SPACE: {
-        // pre-line collapses spaces and keeps line breaks, which libflow has
-        // no mode for: it is drawn as normal, and break-spaces as pre-wrap
-        // (GARB.md § Booked).
+        // break-spaces is drawn as pre-wrap: a space it keeps at a line's
+        // end hangs rather than taking room (GARB.md § Booked).
         static const char *const words[] = {"normal", "pre", "nowrap", "pre-wrap",
                                             "pre-line", "break-spaces"};
         static const flow_white_space_t as[] = {FLOW_WS_NORMAL, FLOW_WS_PRE, FLOW_WS_NOWRAP,
-                                                FLOW_WS_PRE_WRAP, FLOW_WS_NORMAL,
+                                                FLOW_WS_PRE_WRAP, FLOW_WS_PRE_LINE,
                                                 FLOW_WS_PRE_WRAP};
         if ((i = pick(v, words, F_ARRAY(words))) >= 0)
             s->white_space = as[i];
@@ -2023,6 +2059,8 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent)
     }
     s->width = resolve(sp->width, s->font_size, automatic);
     s->height = resolve(sp->height, s->font_size, automatic);
+    if (sp->text_indent.kind != L_UNSET)
+        s->text_indent = resolve(sp->text_indent, s->font_size, zero);
     s->min_width = resolve(sp->min_width, s->font_size, automatic);
     s->max_width = resolve(sp->max_width, s->font_size, automatic);
     s->min_height = resolve(sp->min_height, s->font_size, automatic);
