@@ -87,10 +87,11 @@ What each kind of box draws:
   inline box's borders open on its first piece and close on its last,
   which the public tree does not say (booked).
 - **Text:** the run through `os64_text_draw` at the box's baseline in the
-  style's colour, then its decorations from the box's `decoration` and
-  `decoration_color`: underline one thickness below the baseline,
-  line-through 3/10 of the size above it, a thickness of a sixteenth of
-  the size and never less than a pixel.
+  style's colour, then its decorations from the box's `decoration`, each
+  in its own colour (`underline_color`, `line_through_color` — the colour
+  of the element that drew it): underline one thickness below the
+  baseline, line-through 3/10 of the size above it, a thickness of a
+  sixteenth of the size and never less than a pixel.
 - **Marker:** a numbered one is its text. Disc, circle and square are
   drawn as SHAPES, the way browsers draw them: the text engine's Western
   profile does not reach the geometric-shapes block, and a face without
