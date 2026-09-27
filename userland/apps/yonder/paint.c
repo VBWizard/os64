@@ -163,9 +163,9 @@ static void decorations(const Painter *p, const flow_box_t *b)
     int32_t size = px(b->style->font_size);
     int32_t thick = max32(1, size / 16);
     if (b->decoration & FLOW_DECORATION_UNDERLINE)
-        fill(p, b->rect.x, b->baseline + thick, b->rect.w, thick, b->decoration_color);
+        fill(p, b->rect.x, b->baseline + thick, b->rect.w, thick, b->underline_color);
     if (b->decoration & FLOW_DECORATION_LINE_THROUGH)
-        fill(p, b->rect.x, b->baseline - size * 3 / 10, b->rect.w, thick, b->decoration_color);
+        fill(p, b->rect.x, b->baseline - size * 3 / 10, b->rect.w, thick, b->line_through_color);
 }
 
 // Disc, circle and square are drawn as shapes, the way browsers draw them,
