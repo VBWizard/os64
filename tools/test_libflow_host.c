@@ -447,6 +447,22 @@ static const FFrag *find_frag(const FBox *b, const char *text)
     return NULL;
 }
 
+// The first public TEXT box whose text starts with `text`, or NULL.
+static const flow_box_t *public_text(const flow_box_t *b, const char *text)
+{
+    if (b == NULL)
+        return NULL;
+    if (b->kind == FLOW_BOX_TEXT && b->length >= strlen(text) &&
+        strncmp(b->text, text, strlen(text)) == 0)
+        return b;
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
+        const flow_box_t *found = public_text(c, text);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
 // Codex #147 round 3: each decoration is drawn in the colour of the element
 // that asked for it — the u's underline in ink, the s's line-through red.
 static void decoration_colour_cases(void)
@@ -466,6 +482,13 @@ static void decoration_colour_cases(void)
     f_layout_free(lay);
     f_boxes_free(boxes);
     f_style_free(styles);
+    // And the public box a painter reads says the same.
+    flow_tree_t *t = flow_layout(doc, page, 400, &kEnv);
+    const flow_box_t *x = t != NULL ? public_text(flow_root(t), "x") : NULL;
+    expect("the public box carries each decoration's colour",
+           x != NULL && x->underline_color == kEnv.ink && x->line_through_color == 0xFF0000,
+           NULL);
+    flow_free(t);
     os64_page_free(page);
     os64_html_document_free(doc);
 }
