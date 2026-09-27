@@ -299,6 +299,21 @@ static void cascade_cases(void)
         "      line 0 80 200 20 base 14\n"
         "        text \"c\" 0 82 8 16 serif 16\n");
 
+    // An atom whose margins outrun the line has no content width, never a
+    // negative one: 150 + 150 of margin in 184 leaves the marquee 0 wide at
+    // 8 + 150, its x overflowing it.
+    cascade_layout_case("an inline-block's margins wider than the line leave it no width",
+        "<!doctype html><style>marquee { margin: 0 150px }</style><marquee>x</marquee>",
+        200,
+        "page 200 36\n"
+        "block html 0 0 200 36\n"
+        "  block body 8 8 184 20\n"
+        "    line 8 8 184 20 base 14\n"
+        "      atomic marquee 158 8 0 20\n"
+        "        block marquee 158 8 0 20\n"
+        "          line 158 8 0 20 base 14\n"
+        "            text \"x\" 158 10 8 16 serif 16\n");
+
     // overflow (CSS Overflow 3). The div hides: its content is cut to its
     // padding box, 50 by 10, which every box inside carries as its clip;
     // and it starts a block formatting context, so the p's 5px top margin

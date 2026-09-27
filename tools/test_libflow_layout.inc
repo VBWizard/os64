@@ -300,4 +300,245 @@ static void layout_cases(void)
         "block html 0 0 100 18\n"
         "  block body 8 8 84 2\n"
         "    block hr 8 8 84 2\n");
+
+    // Codex #147. Justification grows only real gaps: "a" and "b" are one
+    // word across an element boundary, so "b" stays against "a". "ab c d"
+    // is 40 of 44; two gaps share the 4, so "c" moves 2 and "d" 4 and the
+    // line ends flush at 52. The <b> box's edges are before the first gap.
+    layout_case("justify grows gaps, not element boundaries",
+        "<!doctype html><p align=justify>a<b>b</b> c d e f g</p>", 60,
+        "page 60 72\n"
+        "block html 0 0 60 72\n"
+        "  block body 8 16 44 40\n"
+        "    block p 8 16 44 40\n"
+        "      line 8 16 44 20 base 14\n"
+        "        span b 16 18 8 16\n"
+        "        text \"a\" 8 18 8 16 serif 16\n"
+        "        text \"b\" 16 18 8 16 serif 16 bold\n"
+        "        text \"c\" 30 18 8 16 serif 16\n"
+        "        text \"d\" 44 18 8 16 serif 16\n"
+        "      line 8 36 44 20 base 14\n"
+        "        text \"e f g\" 8 38 28 16 serif 16\n");
+
+    // A line holding only an empty inline is zero-height (CSS 2.1 § 9.4.2),
+    // so the first p is too, its margins collapsing through it: the second
+    // p is at 16. The empty line sits where a line would, at 16.
+    layout_case("an empty inline makes no line",
+        "<!doctype html><p><span></span></p><p>x</p>", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 0\n"
+        "      line 8 16 184 0 base 14\n"
+        "        span span 8 18 0 16\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"x\" 8 18 8 16 serif 16\n");
+
+    // An empty item still shows its bullet, on a line of its own font:
+    // 20 tall, the marker's baseline 14 down, and the next item below it.
+    layout_case("an empty list item holds its marker's line",
+        "<!doctype html><ul><li><li>x</ul>", 200,
+        "page 200 72\n"
+        "block html 0 0 200 72\n"
+        "  block body 8 16 184 40\n"
+        "    block ul 8 16 184 40\n"
+        "      block li 48 16 144 20\n"
+        "        marker \"\xe2\x80\xa2 \" 36 18 12 16\n"
+        "      block li 48 36 144 20\n"
+        "        line 48 36 144 20 base 14\n"
+        "          text \"x\" 48 38 8 16 serif 16\n"
+        "        marker \"\xe2\x80\xa2 \" 36 38 12 16\n");
+
+    // A frame the page sized on one side keeps 300 by 150 on the other:
+    // 600 x 150 and 300 x 50, each in its 2px inset border.
+    layout_case("a frame keeps its default on the side left unset",
+        "<!doctype html><iframe width=600></iframe><iframe height=50></iframe>", 1000,
+        "page 1000 176\n"
+        "block html 0 0 1000 176\n"
+        "  block body 8 8 984 160\n"
+        "    line 8 8 984 160 base 154\n"
+        "      atomic iframe 8 8 604 154\n"
+        "      atomic iframe 612 108 304 54\n");
+
+    // A missing picture's alt text collapses its spaces as text does:
+    // "a b" is 8 + 4 + 8.
+    layout_case("alt text collapses its white space",
+        "<!doctype html><p>q<img src=missing.png alt='a   b'>z", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"q\" 8 18 8 16 serif 16\n"
+        "        text \"a b\" 16 18 20 16 serif 16\n"
+        "        text \"z\" 36 18 8 16 serif 16\n");
+
+    // An outside marker is in the link its item sits in.
+    layout_case("a marker keeps its item's link",
+        "<!doctype html><a href=x><ul><li>foo</li></ul></a>", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block ul 8 16 184 20 link 0\n"
+        "      block li 48 16 144 20 link 0\n"
+        "        line 48 16 144 20 base 14\n"
+        "          text \"foo\" 48 18 20 16 serif 16 underline link 0\n"
+        "        marker \"\xe2\x80\xa2 \" 36 18 12 16 link 0\n");
+
+    // Codex #147 round 2. Alt text collapses against the text beside it:
+    // "a " already ends in a space, so " b" loses its own, and " c" keeps
+    // one. 12, 8 and 12 wide.
+    layout_case("alt text collapses against its neighbours",
+        "<!doctype html><p>a <img src=missing.png alt=\" b\"> c", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"a \" 8 18 12 16 serif 16\n"
+        "        text \"b\" 20 18 8 16 serif 16\n"
+        "        text \" c\" 28 18 12 16 serif 16\n");
+
+    // A link has no edge an inline-block's content could fall outside: the
+    // text in a linked marquee is the link, though the `a`'s underline
+    // stops at the atom (decorations do not reach an atom's content). The
+    // marquee's baseline is its last line's (CSS 2.1 § 10.8.1), 14 down,
+    // so it sits on the line's top; the `a`'s own box is the strut's font
+    // box on that baseline: 8 + 14 - 12 = 10.
+    layout_case("an inline-block's content is in the link its atom is",
+        "<!doctype html><a href=x><marquee>hi</marquee></a>", 200,
+        "page 200 36\n"
+        "block html 0 0 200 36\n"
+        "  block body 8 8 184 20\n"
+        "    line 8 8 184 20 base 14\n"
+        "      span a 8 10 184 16 link 0\n"
+        "      atomic marquee 8 8 184 20 link 0\n"
+        "        block marquee 8 8 184 20 link 0\n"
+        "          line 8 8 184 20 base 14\n"
+        "            text \"hi\" 8 10 12 16 serif 16 link 0\n");
+
+    // Codex #147 round 3. A right-aligned rule wider than its containing
+    // block: the auto left margin is zero (§10.3.3), so the rule starts at
+    // the content edge and overflows to the right, 8 + 1000 + 2 of border.
+    layout_case("an over-wide box's auto margin is zero",
+        "<!doctype html><hr align=right width=1000>", 800,
+        "page 1010 18\n"
+        "block html 0 0 800 18\n"
+        "  block body 8 8 784 2\n"
+        "    block hr 8 8 1002 2\n");
+
+    // Codex #147 round 3. An inside marker ends in its suffix space, and the
+    // break after it is the item's: in 15px the marker (12) fits the first
+    // line and the x (8) goes to the next.
+    layout_case("a line may break after an inside marker",
+        "<!doctype html><details><summary>x</summary></details>", 31,
+        "page 31 56\n"
+        "block html 0 0 31 56\n"
+        "  block body 8 8 15 40\n"
+        "    block details 8 8 15 40\n"
+        "      block summary 8 8 15 40\n"
+        "        line 8 8 15 20 base 14\n"
+        "          marker \"\xe2\x96\xb8 \" 8 10 12 16\n"
+        "        line 8 28 15 20 base 14\n"
+        "          text \"x\" 8 30 8 16 serif 16\n");
+
+    // Codex #147 round 3. Pre-wrap spaces ending a line hang: drawn (x and
+    // a hundred 8px spaces, 808 wide) but counted for nothing, so the page
+    // stays as wide as the viewport.
+    layout_case("hanging pre-wrap spaces do not widen the page",
+        "<!doctype html><pre wrap>x                                                                                                    </pre>", 100,
+        "page 100 52\n"
+        "block html 0 0 100 52\n"
+        "  block body 8 16 84 20\n"
+        "    block pre 8 16 84 20\n"
+        "      line 8 16 84 20 base 14\n"
+        "        text \"x                                                                                                    \" 8 18 808 16 mono 16\n");
+
+    // Codex #147 round 3. A tab is as wide as the way to the line's next
+    // stop, measured where the line puts it: after the 8px x the tab runs to
+    // 64 and the y ends at 72, exactly the content width, so it fits.
+    layout_case("a tab is measured from where the line puts it",
+        "<!doctype html><pre wrap><b>x</b>\ty</pre>", 88,
+        "page 88 52\n"
+        "block html 0 0 88 52\n"
+        "  block body 8 16 72 20\n"
+        "    block pre 8 16 72 20\n"
+        "      line 8 16 72 20 base 14\n"
+        "        span b 8 18 8 16\n"
+        "        text \"x\" 8 18 8 16 mono 16 bold\n"
+        "        text \"\\ty\" 16 18 64 16 mono 16\n");
+
+    // Codex #147 round 3. Sliced images in an auto-width cell, full quirks:
+    // the newline between them is no opportunity either, so the row is one
+    // word and the cell is as wide as it: 100 + a 4px space + 100 = 204,
+    // with the cell's 1px padding and the table's 2px spacing round it.
+    layout_case("quirks: whitespace between sliced images does not break them",
+        "<table><tr><td><img src=known.png width=100 height=10>\n"
+        "<img src=known.png width=100 height=10></table>", 150,
+        "page 218 42\n"
+        "block html 0 0 150 42\n"
+        "  block body 8 8 134 26\n"
+        "    table table 8 8 210 26\n"
+        "      row-group tbody 10 10 206 22\n"
+        "        row tr 10 10 206 22\n"
+        "          cell td 10 10 206 22\n"
+        "            line 11 11 204 20 base 14\n"
+        "              atomic img 11 15 100 10\n"
+        "              text \" \" 111 13 4 16 serif 16\n"
+        "              atomic img 115 15 100 10\n");
+
+    // Codex #147 round 4. Alt text collapses against its neighbours across
+    // inline edges: " b " inside a <b> between "a " and " c" is just the b.
+    layout_case("alt text collapses across inline edges",
+        "<!doctype html><p>a <b><img src=missing.png alt=\" b \"></b> c", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        span b 20 18 8 16\n"
+        "        text \"a \" 8 18 12 16 serif 16\n"
+        "        text \"b\" 20 18 8 16 serif 16 bold\n"
+        "        text \" c\" 28 18 12 16 serif 16\n");
+
+    // An inside marker is in its item's link, as its text is.
+    layout_case("an inside marker keeps its item's link",
+        "<!doctype html><a href=x><details><summary>x</summary></details></a>", 200,
+        "page 200 36\n"
+        "block html 0 0 200 36\n"
+        "  block body 8 8 184 20\n"
+        "    block details 8 8 184 20 link 0\n"
+        "      block summary 8 8 184 20 link 0\n"
+        "        line 8 8 184 20 base 14\n"
+        "          marker \"\xe2\x96\xb8 \" 8 10 12 16 link 0\n"
+        "          text \"x\" 20 10 8 16 serif 16 underline link 0\n");
+
+    // A table's height is a least height (CSS 2.1 § 17.5.3): the row is
+    // 1 + 20 + 1, so the table is that and its 2px of spacing a side, 26
+    // tall, not 1. The cell is "x" and 1px of padding a side, 10 wide; the
+    // table 14.
+    layout_case("a table's set height is its least",
+        "<!doctype html><table height=1><tr><td>x</table>", 200,
+        "page 200 42\n"
+        "block html 0 0 200 42\n"
+        "  block body 8 8 184 26\n"
+        "    table table 8 8 14 26\n"
+        "      row-group tbody 10 10 10 22\n"
+        "        row tr 10 10 10 22\n"
+        "          cell td 10 10 10 22\n"
+        "            line 11 11 8 20 base 14\n"
+        "              text \"x\" 11 13 8 16 serif 16\n");
+
+    // A missing picture whose alt is empty is decoration: no line at all,
+    // so its p is empty and the next p's margin collapses through it.
+    layout_case("a missing picture with an empty alt takes no space",
+        "<!doctype html><p><img src=missing.png alt=\"\"></p><p>x</p>", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 0\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"x\" 8 18 8 16 serif 16\n");
 }
