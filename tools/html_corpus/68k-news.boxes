@@ -69,8 +69,8 @@ block html 0 0 800 10543
         span font 8 227 96 24
         text "Mashable" 8 227 96 24 serif 24 bold underline link 12
     block p 8 272 784 0
-      line 8 254 784 0 base 16
-        span font 8 256 0 19
+      line 8 272 784 0 base 17
+        span font 8 275 0 19
     block ol 8 272 784 119
       block li 48 272 744 24
         line 48 272 744 24 base 17
@@ -119,8 +119,8 @@ block html 0 0 800 10543
         span font 8 449 768 24
         text "Trump shadow looms large over Brics as Modi hosts Putin and Xi in Delhi - BBC" 8 449 768 24 serif 24 bold underline link 18
     block p 8 495 784 0
-      line 8 476 784 0 base 16
-        span font 8 478 0 19
+      line 8 495 784 0 base 16
+        span font 8 497 0 19
     block ol 8 495 784 118
       block li 48 495 744 23
         line 48 495 744 23 base 16
@@ -169,8 +169,8 @@ block html 0 0 800 10543
         span font 8 671 594 24
         text "Yemen's Houthis seize strategic Red Sea port of Mokha - BBC" 8 671 594 24 serif 24 bold underline link 24
     block p 8 717 784 0
-      line 8 698 784 0 base 17
-        span font 8 700 0 19
+      line 8 717 784 0 base 16
+        span font 8 719 0 19
     block ol 8 717 784 119
       block li 48 717 744 24
         line 48 717 744 24 base 16
@@ -223,8 +223,8 @@ block html 0 0 800 10543
         span font 8 923 198 24
         text "The New York Times" 8 923 198 24 serif 24 bold underline link 30
     block p 8 969 784 0
-      line 8 950 784 0 base 17
-        span font 8 953 0 19
+      line 8 969 784 0 base 17
+        span font 8 971 0 19
     block ol 8 969 784 214
       block li 48 969 744 47
         line 48 969 744 24 base 17
@@ -291,8 +291,8 @@ block html 0 0 800 10543
         span font 8 1270 54 24
         text "- NPR" 8 1270 54 24 serif 24 bold underline link 36
     block p 8 1316 784 0
-      line 8 1297 784 0 base 17
-        span font 8 1300 0 19
+      line 8 1316 784 0 base 17
+        span font 8 1319 0 19
     block ol 8 1316 784 214
       block li 48 1316 744 24
         line 48 1316 744 24 base 17
@@ -360,8 +360,8 @@ block html 0 0 800 10543
         span font 8 1618 60 24
         text "Yahoo" 8 1618 60 24 serif 24 bold underline link 42
     block p 8 1663 784 0
-      line 8 1645 784 0 base 16
-        span font 8 1647 0 19
+      line 8 1663 784 0 base 17
+        span font 8 1666 0 19
     block ol 8 1663 784 167
       block li 48 1663 744 24
         line 48 1663 744 24 base 17
@@ -422,8 +422,8 @@ block html 0 0 800 10543
         span font 8 1917 300 24
         text "ripple through economy - CNBC" 8 1917 300 24 serif 24 bold underline link 48
     block p 8 1963 784 0
-      line 8 1944 784 0 base 17
-        span font 8 1947 0 19
+      line 8 1963 784 0 base 17
+        span font 8 1965 0 19
     block ol 8 1963 784 166
       block li 48 1963 744 48
         line 48 1963 744 24 base 17
@@ -484,8 +484,8 @@ block html 0 0 800 10543
         span font 8 2217 54 24
         text "News" 8 2217 54 24 serif 24 bold underline link 54
     block p 8 2263 784 0
-      line 8 2244 784 0 base 17
-        span font 8 2246 0 19
+      line 8 2263 784 0 base 16
+        span font 8 2265 0 19
     block ol 8 2263 784 142
       block li 48 2263 744 23
         line 48 2263 744 23 base 16
@@ -541,8 +541,8 @@ block html 0 0 800 10543
         span font 8 2493 156 24
         text "New York Times" 8 2493 156 24 serif 24 bold underline link 60
     block p 8 2539 784 0
-      line 8 2520 784 0 base 17
-        span font 8 2522 0 19
+      line 8 2539 784 0 base 16
+        span font 8 2541 0 19
     block ol 8 2539 784 142
       block li 48 2539 744 23
         line 48 2539 744 23 base 16
@@ -599,8 +599,8 @@ block html 0 0 800 10543
         span font 8 2769 48 24
         text "ESPN" 8 2769 48 24 serif 24 bold underline link 66
     block p 8 2815 784 0
-      line 8 2796 784 0 base 16
-        span font 8 2798 0 19
+      line 8 2815 784 0 base 16
+        span font 8 2817 0 19
     block ol 8 2815 784 166
       block li 48 2815 744 23
         line 48 2815 744 23 base 16
@@ -700,8 +700,8 @@ block html 0 0 800 10543
         span font 8 3347 240 24
         text "Bizarre Moment - Forbes" 8 3347 240 24 serif 24 bold underline link 77
     block p 8 3392 784 0
-      line 8 3374 784 0 base 16
-        span font 8 3376 0 19
+      line 8 3392 784 0 base 17
+        span font 8 3395 0 19
     block ol 8 3392 784 167
       block li 48 3392 744 48
         line 48 3392 744 24 base 17
@@ -762,8 +762,8 @@ block html 0 0 800 10543
         span font 8 3646 246 24
         text "- The Hollywood Reporter" 8 3646 246 24 serif 24 bold underline link 83
     block p 8 3692 784 0
-      line 8 3673 784 0 base 17
-        span font 8 3676 0 19
+      line 8 3692 784 0 base 17
+        span font 8 3694 0 19
     block ol 8 3692 784 143
       block li 48 3692 744 48
         line 48 3692 744 24 base 17
@@ -819,8 +819,8 @@ block html 0 0 800 10543
         span font 8 3922 204 24
         text "washingtonpost.com" 8 3922 204 24 serif 24 bold underline link 89
     block p 8 3968 784 0
-      line 8 3949 784 0 base 17
-        span font 8 3952 0 19
+      line 8 3968 784 0 base 17
+        span font 8 3970 0 19
     block ol 8 3968 784 166
       block li 48 3968 744 24
         line 48 3968 744 24 base 17
@@ -903,8 +903,8 @@ block html 0 0 800 10543
         span font 8 4373 630 24
         text "Brock Purdy, 49ers dominate Rams 27-7 in Australia - NBC Sports" 8 4373 630 24 serif 24 bold underline link 98
     block p 8 4419 784 0
-      line 8 4400 784 0 base 17
-        span font 8 4402 0 19
+      line 8 4419 784 0 base 16
+        span font 8 4421 0 19
     block ol 8 4419 784 166
       block li 48 4419 744 23
         line 48 4419 744 23 base 16
@@ -961,8 +961,8 @@ block html 0 0 800 10543
         span font 8 4643 732 24
         text "Hong Kong's Tiananmen vigil organizers handed lengthy prison terms - CNN" 8 4643 732 24 serif 24 bold underline link 104
     block p 8 4688 784 0
-      line 8 4670 784 0 base 16
-        span font 8 4672 0 19
+      line 8 4688 784 0 base 17
+        span font 8 4691 0 19
     block ol 8 4688 784 167
       block li 48 4688 744 24
         line 48 4688 744 24 base 17
@@ -1022,8 +1022,8 @@ block html 0 0 800 10543
         span font 8 4942 198 24
         text "The New York Times" 8 4942 198 24 serif 24 bold underline link 110
     block p 8 4988 784 0
-      line 8 4969 784 0 base 17
-        span font 8 4972 0 19
+      line 8 4988 784 0 base 17
+        span font 8 4990 0 19
     block ol 8 4988 784 143
       block li 48 4988 744 48
         line 48 4988 744 24 base 17
@@ -1079,8 +1079,8 @@ block html 0 0 800 10543
         span font 8 5218 126 24
         text "Boston Globe" 8 5218 126 24 serif 24 bold underline link 116
     block p 8 5264 784 0
-      line 8 5245 784 0 base 17
-        span font 8 5248 0 19
+      line 8 5264 784 0 base 17
+        span font 8 5266 0 19
     block ol 8 5264 784 190
       block li 48 5264 744 24
         line 48 5264 744 24 base 17
@@ -1143,8 +1143,8 @@ block html 0 0 800 10543
         span font 8 5542 204 24
         text "straight' - USA Today" 8 5542 204 24 serif 24 bold underline link 122
     block p 8 5587 784 0
-      line 8 5569 784 0 base 16
-        span font 8 5571 0 19
+      line 8 5587 784 0 base 17
+        span font 8 5590 0 19
     block ol 8 5587 784 190
       block li 48 5587 744 24
         line 48 5587 744 24 base 17
@@ -1205,8 +1205,8 @@ block html 0 0 800 10543
         span font 8 5835 744 24
         text "Apple's foldable iPhone poses a $1,999 question: Who is it for? - reuters.com" 8 5835 744 24 serif 24 bold underline link 128
     block p 8 5881 784 0
-      line 8 5862 784 0 base 17
-        span font 8 5864 0 19
+      line 8 5881 784 0 base 16
+        span font 8 5883 0 19
     block ol 8 5881 784 119
       block li 48 5881 744 24
         line 48 5881 744 24 base 16
@@ -1259,8 +1259,8 @@ block html 0 0 800 10543
         span font 8 6087 528 24
         text "her outspoken political beliefs - Entertainment Weekly" 8 6087 528 24 serif 24 bold underline link 134
     block p 8 6133 784 0
-      line 8 6114 784 0 base 17
-        span font 8 6117 0 19
+      line 8 6133 784 0 base 17
+        span font 8 6135 0 19
     block ol 8 6133 784 190
       block li 48 6133 744 48
         line 48 6133 744 24 base 17
@@ -1325,8 +1325,8 @@ block html 0 0 800 10543
         span font 8 6411 72 24
         text "Politico" 8 6411 72 24 serif 24 bold underline link 140
     block p 8 6456 784 0
-      line 8 6438 784 0 base 16
-        span font 8 6440 0 19
+      line 8 6456 784 0 base 17
+        span font 8 6459 0 19
     block ol 8 6456 784 119
       block li 48 6456 744 24
         line 48 6456 744 24 base 17
@@ -1379,8 +1379,8 @@ block html 0 0 800 10543
         span font 8 6663 144 24
         text "County - WGAL" 8 6663 144 24 serif 24 bold underline link 146
     block p 8 6709 784 0
-      line 8 6690 784 0 base 17
-        span font 8 6692 0 19
+      line 8 6709 784 0 base 16
+        span font 8 6711 0 19
     block ol 8 6709 784 142
       block li 48 6709 744 23
         line 48 6709 744 23 base 16
@@ -1437,8 +1437,8 @@ block html 0 0 800 10543
         span font 8 6939 198 24
         text "Coprolite - sci.news" 8 6939 198 24 serif 24 bold underline link 152
     block p 8 6985 784 0
-      line 8 6966 784 0 base 16
-        span font 8 6968 0 19
+      line 8 6985 784 0 base 16
+        span font 8 6987 0 19
     block ol 8 6985 784 166
       block li 48 6985 744 47
         line 48 6985 744 23 base 16
@@ -1495,8 +1495,8 @@ block html 0 0 800 10543
         span font 8 7209 768 24
         text "LG defends smart-TV features amid audio surveillance allegations - Al Jazeera" 8 7209 768 24 serif 24 bold underline link 158
     block p 8 7254 784 0
-      line 8 7236 784 0 base 16
-        span font 8 7238 0 19
+      line 8 7254 784 0 base 17
+        span font 8 7257 0 19
     block ol 8 7254 784 143
       block li 48 7254 744 24
         line 48 7254 744 24 base 17
@@ -1553,8 +1553,8 @@ block html 0 0 800 10543
         span font 8 7484 168 24
         text "finds - NBC News" 8 7484 168 24 serif 24 bold underline link 164
     block p 8 7530 784 0
-      line 8 7511 784 0 base 17
-        span font 8 7514 0 19
+      line 8 7530 784 0 base 17
+        span font 8 7533 0 19
     block ol 8 7530 784 119
       block li 48 7530 744 24
         line 48 7530 744 24 base 17
@@ -1603,8 +1603,8 @@ block html 0 0 800 10543
         span font 8 7707 708 24
         text "How to watch 9/11 memorial events as U.S. marks 25th anniversary - PBS" 8 7707 708 24 serif 24 bold underline link 170
     block p 8 7752 784 0
-      line 8 7734 784 0 base 16
-        span font 8 7736 0 19
+      line 8 7752 784 0 base 17
+        span font 8 7755 0 19
     block ol 8 7752 784 167
       block li 48 7752 744 24
         line 48 7752 744 24 base 17
@@ -1664,8 +1664,8 @@ block html 0 0 800 10543
         span font 8 8006 396 24
         text "costing every American $8,000 - Fortune" 8 8006 396 24 serif 24 bold underline link 176
     block p 8 8052 784 0
-      line 8 8033 784 0 base 17
-        span font 8 8036 0 19
+      line 8 8052 784 0 base 17
+        span font 8 8054 0 19
     block ol 8 8052 784 190
       block li 48 8052 744 48
         line 48 8052 744 24 base 17
@@ -1729,8 +1729,8 @@ block html 0 0 800 10543
         span font 8 8330 174 24
         text "More - FOX Sports" 8 8330 174 24 serif 24 bold underline link 182
     block p 8 8376 784 0
-      line 8 8357 784 0 base 16
-        span font 8 8359 0 19
+      line 8 8376 784 0 base 16
+        span font 8 8378 0 19
     block ol 8 8376 784 166
       block li 48 8376 744 47
         line 48 8376 744 23 base 16
@@ -1789,8 +1789,8 @@ block html 0 0 800 10543
         span font 8 8629 312 24
         text "map use decision - fox4kc.com" 8 8629 312 24 serif 24 bold underline link 188
     block p 8 8675 784 0
-      line 8 8656 784 0 base 17
-        span font 8 8659 0 19
+      line 8 8675 784 0 base 17
+        span font 8 8678 0 19
     block ol 8 8675 784 190
       block li 48 8675 744 48
         line 48 8675 744 24 base 17
@@ -1855,8 +1855,8 @@ block html 0 0 800 10543
         span font 8 8953 390 24
         text "Breaking News, Latest News and Videos" 8 8953 390 24 serif 24 bold underline link 194
     block p 8 8999 784 0
-      line 8 8980 784 0 base 17
-        span font 8 8982 0 19
+      line 8 8999 784 0 base 16
+        span font 8 9001 0 19
     block ol 8 8999 784 142
       block li 48 8999 744 47
         line 48 8999 744 23 base 16
@@ -1908,8 +1908,8 @@ block html 0 0 800 10543
         span font 8 9199 768 24
         text "The Closest Planet to Our Sun Is Shrinking. Here's What that Means - wktv.com" 8 9199 768 24 serif 24 bold underline link 200
     block p 8 9245 784 0
-      line 8 9226 784 0 base 16
-        span font 8 9228 0 19
+      line 8 9245 784 0 base 16
+        span font 8 9247 0 19
     block ol 8 9245 784 118
       block li 48 9245 744 23
         line 48 9245 744 23 base 16
@@ -1962,8 +1962,8 @@ block html 0 0 800 10543
         span font 8 9451 222 24
         text "files show - CBS News" 8 9451 222 24 serif 24 bold underline link 206
     block p 8 9497 784 0
-      line 8 9478 784 0 base 17
-        span font 8 9480 0 19
+      line 8 9497 784 0 base 16
+        span font 8 9499 0 19
     block ol 8 9497 784 166
       block li 48 9497 744 47
         line 48 9497 744 24 base 16
@@ -2019,8 +2019,8 @@ block html 0 0 800 10543
         span font 8 9721 624 24
         text "The 9/11 attacks and the crisis of global liberalism - Slow Boring" 8 9721 624 24 serif 24 bold underline link 212
     block p 8 9766 784 0
-      line 8 9748 784 0 base 16
-        span font 8 9750 0 19
+      line 8 9766 784 0 base 17
+        span font 8 9769 0 19
     block ol 8 9766 784 143
       block li 48 9766 744 24
         line 48 9766 744 24 base 17
@@ -2073,8 +2073,8 @@ block html 0 0 800 10543
         span font 8 9967 630 24
         text "Apple Announces macOS Golden Gate Release Date - MacRumors" 8 9967 630 24 serif 24 bold underline link 218
     block p 8 10012 784 0
-      line 8 9994 784 0 base 16
-        span font 8 9996 0 19
+      line 8 10012 784 0 base 17
+        span font 8 10015 0 19
     block ol 8 10012 784 143
       block li 48 10012 744 24
         line 48 10012 744 24 base 17
@@ -2131,8 +2131,8 @@ block html 0 0 800 10543
         span font 8 10243 456 24
         text "exoplanets. But what does that mean? - Space" 8 10243 456 24 serif 24 bold underline link 224
     block p 8 10288 784 0
-      line 8 10270 784 0 base 16
-        span font 8 10272 0 19
+      line 8 10288 784 0 base 17
+        span font 8 10291 0 19
     block ol 8 10288 784 167
       block li 48 10288 744 48
         line 48 10288 744 24 base 17

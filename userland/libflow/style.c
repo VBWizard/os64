@@ -118,15 +118,6 @@ static bool is_row_group(const os64_html_node_t *n)
     return is(n, OS64_HTML_TAG_THEAD) || is(n, OS64_HTML_TAG_TBODY) || is(n, OS64_HTML_TAG_TFOOT);
 }
 
-static int32_t count_ancestors(const os64_html_node_t *n, bool (*match)(const os64_html_node_t *))
-{
-    int32_t count = 0;
-    for (const os64_html_node_t *p = n->parent; p != NULL; p = p->parent)
-        if (match(p))
-            count++;
-    return count;
-}
-
 static bool is_li(const os64_html_node_t *n)
 {
     return is(n, OS64_HTML_TAG_LI);
@@ -135,6 +126,20 @@ static bool is_li(const os64_html_node_t *n)
 static bool is_list_or_dl(const os64_html_node_t *n)
 {
     return is_list(n) || is(n, OS64_HTML_TAG_DL);
+}
+
+// The chapter's descendant selectors (`ul ul`, `li ul`), answered from the
+// parent's record — which counts itself and everything above it
+// (FStyled.lists) — rather than by walking up from every element.
+static const FStyled *above(const Ctx *c, const os64_html_node_t *n)
+{
+    return f_map_get(&c->out->map, n->parent);
+}
+
+static int32_t lists_above(const Ctx *c, const os64_html_node_t *n)
+{
+    const FStyled *up = above(c, n);
+    return up != NULL ? up->lists : 0;
 }
 
 // The table a cell belongs to by the chapter's selectors: `table > tr > td`
@@ -660,7 +665,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         if (n->tag == OS64_HTML_TAG_OL) {
             s->list_style_type = FLOW_LIST_DECIMAL;
         } else {
-            int32_t depth = count_ancestors(n, is_list);
+            int32_t depth = lists_above(c, n);
             s->list_style_type = depth >= 2 ? FLOW_LIST_SQUARE
                                : depth == 1 ? FLOW_LIST_CIRCLE : FLOW_LIST_DISC;
         }
@@ -751,7 +756,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         s->display = FLOW_DISPLAY_NONE;
 
     // §15.3.7: a list inside a list keeps no block margins.
-    if ((is_list_or_dl(n)) && count_ancestors(n, is_list_or_dl) > 0)
+    if (is_list_or_dl(n) && above(c, n) != NULL && above(c, n)->lists_or_dls > 0)
         margin_block(sp, px(0));
     // `dd { margin-inline-start: 40px }`
     if (is(n, OS64_HTML_TAG_DD))
@@ -823,10 +828,10 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         }
         // `li { inside }`, `li :is(lists) { outside }`, and
         // `:is(lists) :is(lists, li) { unset }` — the last wins on order.
-        bool in_list = count_ancestors(n, is_list) > 0;
+        bool in_list = lists_above(c, n) > 0;
         if (is_li(n) && !in_list)
             s->list_style_position = FLOW_LIST_INSIDE;
-        if (is_list(n) && !in_list && count_ancestors(n, is_li) > 0)
+        if (is_list(n) && !in_list && above(c, n) != NULL && above(c, n)->items > 0)
             s->list_style_position = FLOW_LIST_OUTSIDE;
     }
 }
@@ -2020,6 +2025,14 @@ static bool first_summary(const os64_html_node_t *n)
     return true;
 }
 
+// Whether an element keeps its ancestors' decorations off its content (an
+// atomic inline; a table, in full quirks) — its own still reach it.
+static bool decoration_edge(const os64_html_node_t *n, const flow_style_t *s, bool quirks)
+{
+    return s->display == FLOW_DISPLAY_INLINE_BLOCK ||
+           (quirks && n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_TABLE);
+}
+
 static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
 {
     const FStyled *up = f_map_get(&c->out->map, n->parent);
@@ -2067,6 +2080,19 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->style = sp.s;
     if (n == c->doc->html)
         c->root_font = sp.s.font_size;
+    out->link = c->model != NULL ? os64_page_link_for(c->model, n) : -1;
+    if (out->link < 0 && up != NULL)
+        out->link = up->link;
+    out->lists = (up != NULL ? up->lists : 0) + is_list(n);
+    out->lists_or_dls = (up != NULL ? up->lists_or_dls : 0) + is_list_or_dl(n);
+    out->items = (up != NULL ? up->items : 0) + is_li(n);
+    out->decoration = sp.s.text_decoration;
+    out->decoration_color = sp.s.color;
+    if (up != NULL && !decoration_edge(n, &sp.s, c->quirks)) {
+        if (out->decoration == 0)
+            out->decoration_color = up->decoration_color;
+        out->decoration |= up->decoration;
+    }
     if (!f_map_put(&c->out->map, n, out))
         return NULL;
     return out;
