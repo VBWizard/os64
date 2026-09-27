@@ -1,12 +1,13 @@
 // du.c — summarize apparent file sizes beneath directory trees.
 
 #include "os64/os64.h"
+#include "os64/walk.h"
 
 #define DU_PATH_MAX       256
 #define DU_MAX_OPERANDS   512
-// A task owns sixteen handles. Standard input/output/error plus twelve open
-// directory ancestors leaves one honest spare instead of failing mysteriously.
-#define DU_MAX_TREE_DEPTH 12
+// One open directory ancestor per level: the walk's depth (os64/walk.h),
+// which leaves room in the handle table.
+#define DU_MAX_TREE_DEPTH OS64_WALK_MAX_DEPTH
 
 typedef struct {
     bool humanReadable;
