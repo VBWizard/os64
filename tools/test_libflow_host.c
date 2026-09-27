@@ -489,6 +489,24 @@ static void paint_cases(void)
 
 static void limit_cases(void)
 {
+    // Codex #147 round 4: a document libhtml stopped short of is not whole,
+    // however well its prefix lays out.
+    {
+        os64_html_options_t opt = os64_html_options_default();
+        opt.charset = "utf-8";
+        opt.max_bytes = 32;
+        os64_html_parser_t *p = os64_html_parser_new(&opt);
+        const char *html = "<!doctype html><p>one two three four five six seven";
+        os64_html_parser_feed(p, html, strlen(html));
+        os64_html_document_t *doc = os64_html_parser_finish(p);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        flow_tree_t *t = flow_layout(doc, page, 400, &kEnv);
+        expect("a page the parser refused partway is incomplete",
+               doc != NULL && doc->refusal != 0 && t != NULL && flow_incomplete(t), NULL);
+        flow_free(t);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
     // Codex #147 round 3: percentages of percentages, three tables deep,
     // overflowed int64_t (UBSan aborts this harness on it). Every length is
     // held to what a face can read, so the page is as wide as that allows.
@@ -599,10 +617,19 @@ static void layout_sweep(void)
         flow_tree_t *t = flow_layout(doc, page, 300, &kEnv);
         fail_at = 0;
         tried++;
-        if (t == NULL)
+        if (t == NULL) {
             nulls++;
-        else if (flow_incomplete(t))
+        } else if (flow_incomplete(t)) {
             partial++;
+            // Codex #147 round 4: what was laid out before the failure is
+            // reachable — the root holds it, however late the failure came.
+            int64_t need = flow_dump(t, NULL, 0);
+            char *text = malloc((size_t)need + 1);
+            flow_dump(t, text, (size_t)need + 1);
+            if (strstr(text, "block html ") == NULL)
+                expect("layout sweep: a partial tree keeps its root", false, NULL);
+            free(text);
+        }
         else
             expect("layout sweep: a failure is visible", false, NULL);
         flow_free(t);

@@ -475,6 +475,20 @@ static void layout_cases(void)
         "              text \" \" 109 11 4 16 serif 16\n"
         "              atomic img 113 13 100 10\n");
 
+    // Codex #147 round 4. Alt text collapses against its neighbours across
+    // inline edges: " b " inside a <b> between "a " and " c" is just the b.
+    layout_case("alt text collapses across inline edges",
+        "<!doctype html><p>a <b><img src=missing.png alt=\" b \"></b> c", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        span b 20 18 8 16\n"
+        "        text \"a \" 8 18 12 16 serif 16\n"
+        "        text \"b\" 20 18 8 16 serif 16 bold\n"
+        "        text \" c\" 28 18 12 16 serif 16\n");
+
     // An inside marker is in its item's link, as its text is.
     layout_case("an inside marker keeps its item's link",
         "<!doctype html><a href=x><details><summary>x</summary></details></a>", 200,
