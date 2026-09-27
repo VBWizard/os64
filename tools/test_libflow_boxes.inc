@@ -153,6 +153,8 @@ static void boxes_cases(void)
         "        close b\n"
         "        close a\n");
 
+    // Every box inside the link carries it, the table's parts included:
+    // the deepest box under the pointer is the one a face asks.
     boxes_case("a block that splits a link carries the link",
         "<!doctype html><center><a href=vote><div></div></a></center>"
         "<a href=x><table><tr><td>t</table></a>",
@@ -161,9 +163,9 @@ static void boxes_cases(void)
         "    block center\n"
         "      block div link 0\n"
         "    table table link 1\n"
-        "      row-group tbody\n"
-        "        row tr\n"
-        "          cell td\n"
+        "      row-group tbody link 1\n"
+        "        row tr link 1\n"
+        "          cell td link 1\n"
         "            text \"t\"\n");
 
     boxes_case("an empty inline beside a block opens no run",
