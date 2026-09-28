@@ -12,10 +12,12 @@
 // `--numbers` dumps numbers past int64_t's reach and past a double's.
 
 #include <pthread.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "garb/garb.h"
 
@@ -162,10 +164,13 @@ static void parse_all(const char *text, size_t len)
             continue;
         garb_item_t *items;
         int32_t n;
-        if (rule->at)
-            (void)garb_rules_of(&r, rule->block, rule->nblock, &items, &n);
-        else
-            (void)garb_items_of(&r, rule->block, rule->nblock, &items, &n);
+        bool whole = rule->at ? garb_rules_of(&r, rule->block, rule->nblock, &items, &n)
+                              : garb_items_of(&r, rule->block, rule->nblock, &items, &n);
+        // A short reparse is never silent: its owner says so too.
+        if (!whole && !r.incomplete) {
+            fprintf(stderr, "FAIL sweep: a reparse came out short and the sheet says whole\n");
+            exit(1);
+        }
     }
     garb_free(&r);
 }
@@ -320,6 +325,94 @@ static int sweep_ones(void)
     return failures;
 }
 
+// Every list entry point, every allocation failing in turn, over texts
+// where a token is PEEKED and the next one outgrows the tokenizer's first
+// buffer: the growth fails with a lookahead cached, and recovery restores
+// it. The parse must end — a spin is caught by the alarm — publish a prefix
+// of the whole parse's list, and leak nothing.
+typedef garb_status_t (*ListParse)(const char *, size_t, garb_parsed_t *);
+
+static int32_t list_dumps(ListParse parse, const char *text, char ***dumps)
+{
+    garb_parsed_t r;
+    (void)parse(text, strlen(text), &r);
+    int32_t n = parse == garb_parse_values ? r.nvalues : r.nitems;
+    *dumps = calloc((size_t)(n > 0 ? n : 1), sizeof(char *));
+    for (int32_t i = 0; i < n; i++) {
+        size_t need = parse == garb_parse_values ? garb_dump_values(&r.values[i], 1, NULL, 0)
+                                                 : garb_dump_items(&r.items[i], 1, NULL, 0);
+        (*dumps)[i] = malloc(need + 1);
+        if (parse == garb_parse_values)
+            garb_dump_values(&r.values[i], 1, (*dumps)[i], need + 1);
+        else
+            garb_dump_items(&r.items[i], 1, (*dumps)[i], need + 1);
+    }
+    garb_free(&r);
+    return n;
+}
+
+static void sweep_hung(int sig)
+{
+    (void)sig;
+    static const char msg[] = "FAIL sweep: a parse under allocation failure never ended\n";
+    (void)!write(2, msg, sizeof(msg) - 1);
+    _exit(1);
+}
+
+static int sweep_lists(void)
+{
+    static const struct { const char *what; ListParse parse; } modes[] = {
+        {"sheet", garb_parse_sheet_text}, {"rules", garb_parse_rules},
+        {"block", garb_parse_block}, {"declarations", garb_parse_declaration_list},
+        {"values", garb_parse_values},
+    };
+#define LONG "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    static const char *const texts[] = {
+        "a " LONG, "a:b; c " LONG " d:e", "@x a " LONG ";", "a { b " LONG " }",
+        "a:b; " LONG ": c", "(a " LONG ")", "a b; c:d; @e " LONG " { f:g }",
+    };
+#undef LONG
+    signal(SIGALRM, sweep_hung);
+    int failures = 0;
+    for (size_t m = 0; m < sizeof(modes) / sizeof(modes[0]); m++) {
+        for (size_t t = 0; t < sizeof(texts) / sizeof(texts[0]); t++) {
+            allocations = 0;
+            fail_at = 0;
+            char **whole;
+            int32_t nwhole = list_dumps(modes[m].parse, texts[t], &whole);
+            size_t worst = allocations;
+            for (size_t at = 1; at <= worst; at++) {
+                allocations = 0;
+                fail_at = at;
+                alarm(10);
+                char **part;
+                int32_t npart = list_dumps(modes[m].parse, texts[t], &part);
+                alarm(0);
+                fail_at = 0;
+                bool prefix = npart <= nwhole;
+                for (int32_t i = 0; prefix && i < npart; i++)
+                    prefix = strcmp(part[i], whole[i]) == 0;
+                if (!prefix) {
+                    fprintf(stderr, "FAIL sweep %s \"%s\": failure at %zu is not a prefix\n",
+                            modes[m].what, texts[t], at);
+                    failures++;
+                }
+                free_dumps(part, npart);
+                if (live != 0) {
+                    fprintf(stderr, "FAIL sweep %s: %zu leaked with failure at %zu\n",
+                            modes[m].what, live, at);
+                    failures++;
+                    live = 0;
+                }
+            }
+            free_dumps(whole, nwhole);
+        }
+    }
+    printf("libgarb sweep, every list parse: every allocation failed in turn, %s\n",
+           failures == 0 ? "each ended with a prefix, nothing leaked" : "FAILED");
+    return failures;
+}
+
 static int sweep(const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -336,6 +429,7 @@ static int sweep(const char *path)
         "a { b: c } xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\xc3\xa9 { d: e }";
     failures += sweep_text("a long identifier", long_ident, sizeof(long_ident) - 1);
     failures += sweep_ones();
+    failures += sweep_lists();
     return failures == 0 ? 0 : 1;
 }
 

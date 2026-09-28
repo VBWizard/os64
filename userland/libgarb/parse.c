@@ -58,9 +58,20 @@ static void push_item(Parse *p, Items *l, const garb_item_t *it)
 
 // ── The input ───────────────────────────────────────────────────────────
 
+// A spent parse's input has ended for every reader: a token peeked (or
+// restored by a mark) before memory ran out is dropped, or a loop that
+// peeks it would never see the EOF its next read returns.
+static bool in_ended(Input *in)
+{
+    if (in->owner == NULL || !p_spent(in->owner))
+        return false;
+    in->have_peek = false;
+    return true;
+}
+
 static Tok in_next(Input *in)
 {
-    if (in->owner != NULL && p_spent(in->owner))
+    if (in_ended(in))
         return (Tok){T_EOF, {0}};
     if (in->have_peek) {
         in->have_peek = false;
@@ -80,6 +91,8 @@ static Tok in_next(Input *in)
 
 static Tok in_peek(Input *in)
 {
+    if (in_ended(in))
+        return (Tok){T_EOF, {0}};
     if (!in->have_peek) {
         in->peeked = in_next(in);
         in->have_peek = true;
