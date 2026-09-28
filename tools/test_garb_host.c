@@ -3,10 +3,10 @@
 // Its jobs. As a DRIVER (`garb_driver MODE`) it reads records on stdin —
 // css-parsing-tests' inputs, framed by tools/test_garb_suite.py — and prints
 // one JSON line per record, in the suite's representation, for the runner to
-// compare. As a TEST (`garb_driver --sweep FILE`) it parses a sheet, and
-// then single rules, declarations and values, with every allocation failing
-// in turn, and asserts nothing leaks, nothing crashes, and what comes back
-// is true of the whole text. And two probes: `--deep`
+// compare. As a TEST (`garb_driver --sweep FILE`) it runs every entry
+// point — the sheet, each list, each single item — with every allocation
+// failing in turn, and asserts each parse ends, nothing leaks, and what
+// comes back is true of the whole text. And two probes: `--deep`
 // parses a million nested `(` on a thread with a small stack (past the
 // depth bound the parser must find the end without recursing), and
 // `--numbers` dumps numbers past int64_t's reach and past a double's.

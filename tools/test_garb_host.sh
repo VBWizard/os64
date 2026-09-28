@@ -1,8 +1,8 @@
 #!/bin/bash
 # libgarb's parser on the host, under the sanitizers (GARB.md § Slices, G1):
 # css-parsing-tests through the driver, then every allocation failed in turn
-# over a real 2026 sheet and over single items, then a million nested ( on a small stack and
-# numbers past int64_t's reach.
+# over a real 2026 sheet and through every entry point, then a million
+# nested ( on a small stack and numbers past int64_t's reach.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
