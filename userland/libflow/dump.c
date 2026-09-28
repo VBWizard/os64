@@ -1,5 +1,5 @@
-// dump.c — a page's layout as text, for the host harness and for a probe
-// in the guest: a change to the engine is a diff to a file.
+// dump.c — what libflow makes of a page, as text, for the host harness and
+// for a probe in the guest: a change to the engine is a diff to a file.
 
 #include "internal.h"
 #include "os64/fmt.h"

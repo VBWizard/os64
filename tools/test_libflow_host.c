@@ -1,5 +1,5 @@
-// test_libflow_host.c — markup in, the page's styles and boxes out, checked
-// on the host against dumps computed by hand from the standard.
+// test_libflow_host.c — markup in, what libflow makes of it out, checked on
+// the host against dumps computed by hand from the standard.
 //
 // THIS FILE IS THE DURABLE ARTEFACT (LAYOUT.md § Proof before integration).
 // Every expected dump here was worked out from the Rendering chapter and

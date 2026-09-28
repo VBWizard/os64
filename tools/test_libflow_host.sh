@@ -1,5 +1,6 @@
 #!/bin/bash
-# libflow on the host, under the sanitizers: markup in, styles and boxes out.
+# libflow on the host, under the sanitizers: markup in, what libflow makes
+# of it out.
 #
 # The expected dumps in tools/test_libflow_*.inc are computed BY HAND from
 # the standard, never captured from the engine (LAYOUT.md § Proof), so a

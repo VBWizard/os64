@@ -788,16 +788,15 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         if (ruled || framed)
             border_color(sp, 0x000000);
     }
+    // The cells' half of the same rule names `rules` alone: a table's
+    // `frame` blackens the table's own border, not its cells'.
     if (is(n, OS64_HTML_TAG_TD) || is(n, OS64_HTML_TAG_TH)) {
         const os64_html_node_t *table = cell_table(n);
         const char *rules = table != NULL ? attr(table, "rules") : NULL;
-        const char *frame = table != NULL ? attr(table, "frame") : NULL;
-        if (rules != NULL || frame != NULL) {
-            static const char *const any[] = {"none", "groups", "rows", "cols", "all"};
-            for (int32_t i = 0; i < F_ARRAY(any); i++)
-                if (f_eq_nocase(rules, any[i]))
-                    border_color(sp, 0x000000);
-        }
+        static const char *const any[] = {"none", "groups", "rows", "cols", "all"};
+        for (int32_t i = 0; i < F_ARRAY(any); i++)
+            if (f_eq_nocase(rules, any[i]))
+                border_color(sp, 0x000000);
     }
 
     // §15.3.9 is prose and applies after the hints; §15.3.7's and §15.3.8's

@@ -153,6 +153,17 @@ static void style_cases(void)
         "        tr table-row valign=middle holds-block\n"
         "          td table-cell padding=1/1/1/1 border=1:inset:ink valign=middle\n");
 
+    // The chapter's `border-color: black` names the table for `rules` or
+    // `frame`, and its cells for `rules` alone.
+    style_case("tables: frame blackens the table's border, not its cells'",
+        "<!doctype html><table border=1 frame=box><tr><td>a</table>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    table table border=1:outset:#000000 spacing=2/2 holds-block\n"
+        "      tbody table-row-group valign=middle holds-block\n"
+        "        tr table-row valign=middle holds-block\n"
+        "          td table-cell padding=1/1/1/1 border=1:inset:ink valign=middle\n");
+
     style_case("alignment: center and div align reach the blocks inside",
         "<!doctype html><center><div align=right><table align=center><tr><th>x"
         "<td align=left>y</table></div></center>",
