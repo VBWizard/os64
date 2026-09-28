@@ -4,12 +4,13 @@
 // css-parsing-tests' inputs, framed by tools/test_garb_suite.py — and prints
 // one JSON line per record, in the suite's representation, for the runner to
 // compare. As a TEST (`garb_driver --sweep FILE`) it runs every entry
-// point — the sheet, each list, each single item, a selector list — with
-// every allocation failing in turn, and asserts each parse ends, nothing
-// leaks, and what comes back is true of the whole text or says it is not. And two probes: `--deep`
-// parses a million nested `(` on a thread with a small stack (past the
-// depth bound the parser must find the end without recursing), and
-// `--numbers` dumps numbers past int64_t's reach and past a double's.
+// point — the sheet, each list, each single item, a selector list, the
+// cascade — with allocations failing in turn, and asserts each parse ends,
+// nothing leaks, and what comes back is true of the whole text or says it
+// is not. And two probes: `--deep` parses a million nested `(` on a thread
+// with a small stack (past the depth bound the parser must find the end
+// without recursing), and `--numbers` dumps numbers past int64_t's reach
+// and past a double's.
 
 #include <pthread.h>
 #include <signal.h>
@@ -28,11 +29,19 @@
 // ── Allocation, and failing it on purpose ───────────────────────────────
 
 static size_t allocations, fail_at, live;
+// Fail only allocation fail_at, the rest succeeding: the failure that a
+// later success would otherwise paper over.
+static bool fail_single;
+
+static bool fail_now(void)
+{
+    return fail_at != 0 && (fail_single ? allocations == fail_at : allocations >= fail_at);
+}
 
 void *os64_malloc(size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_now())
         return NULL;
     void *at = malloc(size != 0 ? size : 1);
     if (at != NULL)
@@ -51,7 +60,7 @@ void *os64_calloc(size_t count, size_t size)
 void *os64_realloc(void *ptr, size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_now())
         return NULL;
     void *at = realloc(ptr, size != 0 ? size : 1);
     if (at != NULL && ptr == NULL)
@@ -699,6 +708,60 @@ static int sweep_selectors(void)
     return failures;
 }
 
+// The cascade with each single allocation failing, the rest succeeding —
+// in the sheet's parse, a rule block read again, a selector list, a value,
+// a style attribute: its answer is the whole cascade's, or it says it is
+// incomplete. A short read that a later success papers over is the case.
+static char *cascade_answer(const char *text, size_t len, bool *incomplete)
+{
+    garb_parsed_t r;
+    (void)garb_parse_sheet((const uint8_t *)text, len, NULL, NULL, &r);
+    garb_sheet_in_t in = {&r, NULL};
+    garb_env_t env = {800, 600};
+    garb_cascade_t *c = garb_cascade(&in, 1, s_sweep_doc, env);
+    size_t need = garb_cascade_dump(c, s_sweep_doc, NULL, 0) + 1;
+    char *out = malloc(need);
+    garb_cascade_dump(c, s_sweep_doc, out, need);
+    *incomplete = garb_cascade_incomplete(c);
+    garb_cascade_free(c);
+    garb_free(&r);
+    return out;
+}
+
+static int sweep_cascade(const char *what, const char *text, size_t len)
+{
+    allocations = 0;
+    fail_at = 0;
+    bool inc;
+    char *whole = cascade_answer(text, len, &inc);
+    size_t worst = allocations;
+    int failures = 0;
+    fail_single = true;
+    for (size_t at = 1; at <= worst; at++) {
+        allocations = 0;
+        fail_at = at;
+        char *part = cascade_answer(text, len, &inc);
+        fail_at = 0;
+        if (strcmp(part, whole) != 0 && !inc) {
+            fprintf(stderr, "FAIL sweep cascade %s: failure at %zu changed the answer and it "
+                    "says it is whole\n", what, at);
+            failures++;
+        }
+        free(part);
+        if (live != s_live_base) {
+            fprintf(stderr, "FAIL sweep cascade %s: %zu leaked with failure at %zu\n", what,
+                    live - s_live_base, at);
+            failures++;
+            live = s_live_base;
+        }
+    }
+    fail_single = false;
+    free(whole);
+    printf("libgarb sweep, cascade over %s: each of %zu allocations failed alone, %s\n", what,
+           worst, failures == 0 ? "each answer the whole one or marked incomplete" : "FAILED");
+    return failures;
+}
+
 static int sweep(const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -726,6 +789,7 @@ static int sweep(const char *path)
     failures += sweep_ones();
     failures += sweep_lists();
     failures += sweep_selectors();
+    failures += sweep_cascade(path, text, len);
     os64_html_document_free(s_sweep_doc);
     s_live_base = 0;
     return failures == 0 ? 0 : 1;
