@@ -16,11 +16,14 @@
 
 bool p_push(Parse *p, void **list, int32_t *n, int32_t *cap, size_t size, const void *item)
 {
+    if (p_spent(p))
+        return false;
     if (*n == *cap) {
         int32_t grown = *cap > 0 ? *cap * 2 : 4;
         void *bigger = os64_arena_alloc(p->arena, (size_t)grown * size);
         if (bigger == NULL) {
             p->incomplete = true;
+            p->spent = true;
             return false;
         }
         if (*n > 0)
@@ -55,14 +58,30 @@ static void push_item(Parse *p, Items *l, const garb_item_t *it)
 
 // ── The input ───────────────────────────────────────────────────────────
 
+// A spent parse's input has ended for every reader: a token peeked (or
+// restored by a mark) before memory ran out is dropped, or a loop that
+// peeks it would never see the EOF its next read returns.
+static bool in_ended(Input *in)
+{
+    if (in->owner == NULL || !p_spent(in->owner))
+        return false;
+    in->have_peek = false;
+    return true;
+}
+
 static Tok in_next(Input *in)
 {
+    if (in_ended(in))
+        return (Tok){T_EOF, {0}};
     if (in->have_peek) {
         in->have_peek = false;
         return in->peeked;
     }
-    if (in->tz != NULL)
-        return tz_next(in->tz);
+    if (in->tz != NULL) {
+        // A token whose text could not be built whole is not a token.
+        Tok t = tz_next(in->tz);
+        return in->tz->short_of_memory ? (Tok){T_EOF, {0}} : t;
+    }
     if (in->at < in->n) {
         Tok t = {T_VALUE, in->values[in->at++]};
         return t;
@@ -72,6 +91,8 @@ static Tok in_next(Input *in)
 
 static Tok in_peek(Input *in)
 {
+    if (in_ended(in))
+        return (Tok){T_EOF, {0}};
     if (!in->have_peek) {
         in->peeked = in_next(in);
         in->have_peek = true;
@@ -155,22 +176,64 @@ static bool ascii_is(const char *s, size_t len, const char *word)
 
 static garb_value_t consume_component_value(Parse *p, Input *in, Tok t);
 
+// Past the depth bound a block's contents are read only to find its end,
+// and without recursing: what nests there nests as deep as the text does
+// (eight megabytes of `(`), so the closers still owed are kept on a list,
+// innermost last — a `)` inside a `[` is not the `[`'s end (§5.4.9) — and
+// the stack stays as deep as the bound. A list that cannot grow spends the
+// parse, like any allocation that fails.
+static void skip_contents(Parse *p, Input *in, char end)
+{
+    char *owed = NULL;
+    size_t n = 0, cap = 0;
+    char want = end;
+    for (;;) {
+        Tok t = in_next(in);
+        if (t.kind == T_EOF)
+            break;
+        if (is_close(&t, want)) {
+            if (n == 0)
+                break;
+            want = owed[--n];
+            continue;
+        }
+        if (t.kind != T_OPEN && t.kind != T_FUNCTION)
+            continue;
+        if (n == cap) {
+            size_t cap2 = cap != 0 ? cap * 2 : 64;
+            char *grown = os64_realloc(owed, cap2);
+            if (grown == NULL) {
+                p->spent = true;
+                break;
+            }
+            owed = grown;
+            cap = cap2;
+        }
+        owed[n++] = want;
+        want = t.kind == T_OPEN ? closer(t.v.open) : ')';
+    }
+    os64_free(owed);
+    p->incomplete = true;
+}
+
 // A block or function's contents, up to `end` (or the input's end). Past
 // the depth bound they are read to find the end, and not kept.
 static void consume_contents(Parse *p, Input *in, char end, garb_value_t *into)
 {
     Values kids = {0};
-    bool keep = p->depth < GARB_DEPTH_MAX;
-    if (!keep)
-        p->incomplete = true;
+    if (p->depth >= GARB_DEPTH_MAX) {
+        skip_contents(p, in, end);
+        into->children = NULL;
+        into->nchildren = 0;
+        return;
+    }
     p->depth++;
     for (;;) {
         Tok t = in_next(in);
         if (t.kind == T_EOF || is_close(&t, end))
             break;
         garb_value_t v = consume_component_value(p, in, t);
-        if (keep)
-            push_value(p, &kids, &v);
+        push_value(p, &kids, &v);
     }
     p->depth--;
     into->children = kids.v;
@@ -292,8 +355,10 @@ static bool consume_declaration(Parse *p, Input *in, bool nested, bool whole, ga
 static garb_rule_t *new_rule(Parse *p)
 {
     garb_rule_t *r = os64_arena_calloc(p->arena, 1, sizeof(*r));
-    if (r == NULL)
+    if (r == NULL) {
         p->incomplete = true;
+        p->spent = true;
+    }
     return r;
 }
 
@@ -488,6 +553,8 @@ static bool start(garb_parsed_t *out, Parse *p)
     os64_memset(out, 0, sizeof(*out));
     p->arena = os64_arena_create(0, GARB_ARENA_MAX);
     p->incomplete = false;
+    p->spent = false;
+    p->tz = NULL;
     p->depth = 0;
     out->arena = p->arena;
     return p->arena != NULL;
@@ -500,7 +567,8 @@ static garb_status_t finish(garb_parsed_t *out, Parse *p, Tokenizer *tz, garb_st
             p->incomplete = true;
         tz_close(tz);
     }
-    out->incomplete = p->incomplete;
+    // Refused whole is short too: nothing came back of what the text held.
+    out->incomplete = p->incomplete || st == GARB_NO_MEMORY || st == GARB_TOO_BIG;
     return st;
 }
 
@@ -510,6 +578,7 @@ static garb_status_t run(Mode mode, Parse *p, Input *in, garb_parsed_t *out)
 {
     Items items = {0};
     Values values = {0};
+    garb_status_t st = GARB_OK;
     switch (mode) {
     case M_SHEET:
     case M_RULES:
@@ -533,52 +602,69 @@ static garb_status_t run(Mode mode, Parse *p, Input *in, garb_parsed_t *out)
     case M_ONE_RULE: {
         skip_ws(in);
         Tok t = in_peek(in);
-        if (t.kind == T_EOF)
-            return GARB_EMPTY;
+        if (t.kind == T_EOF) {
+            st = GARB_EMPTY;
+            break;
+        }
         garb_rule_t *r = is_kind(&t, GARB_AT_KEYWORD) ? consume_at_rule(p, in, false)
                                                        : consume_qualified_rule(p, in, false, false);
-        if (r == NULL)
-            return GARB_INVALID;
         skip_ws(in);
-        if (in_peek(in).kind != T_EOF)
-            return GARB_EXTRA_INPUT;
-        out->rule = r;
+        if (r == NULL)
+            st = GARB_INVALID;
+        else if (in_peek(in).kind != T_EOF)
+            st = GARB_EXTRA_INPUT;
+        else
+            out->rule = r;
         break;
     }
     case M_ONE_DECL: {
         skip_ws(in);
         Tok t = in_peek(in);
         if (t.kind == T_EOF)
-            return GARB_EMPTY;
-        if (!consume_declaration(p, in, false, true, &out->decl))
-            return GARB_INVALID;
+            st = GARB_EMPTY;
+        else if (!consume_declaration(p, in, false, true, &out->decl))
+            st = GARB_INVALID;
         break;
     }
     case M_ONE_VALUE: {
         skip_ws(in);
         Tok t = in_next(in);
-        if (t.kind == T_EOF)
-            return GARB_EMPTY;
+        if (t.kind == T_EOF) {
+            st = GARB_EMPTY;
+            break;
+        }
         garb_value_t v = consume_component_value(p, in, t);
         skip_ws(in);
         if (in_peek(in).kind != T_EOF)
-            return GARB_EXTRA_INPUT;
-        push_value(p, &values, &v);
+            st = GARB_EXTRA_INPUT;
+        else
+            push_value(p, &values, &v);
         break;
     }
+    }
+    // A single item is published whole or not at all, and a spent parse
+    // decides nothing: the EOF that ended it may be where memory ran out,
+    // not where the text did, so EMPTY, EXTRA_INPUT and INVALID are no
+    // more true of it than OK is.
+    if (p_spent(p) && (mode == M_ONE_RULE || mode == M_ONE_DECL || mode == M_ONE_VALUE)) {
+        out->rule = NULL;
+        os64_memset(&out->decl, 0, sizeof(out->decl));
+        return GARB_NO_MEMORY;
     }
     out->items = items.v;
     out->nitems = items.n;
     out->values = values.v;
     out->nvalues = values.n;
-    return GARB_OK;
+    return st;
 }
 
 static garb_status_t parse_text(Mode mode, const char *text, size_t len, garb_parsed_t *out)
 {
     Parse p;
-    if (!start(out, &p))
+    if (!start(out, &p)) {
+        out->incomplete = true;
         return GARB_NO_MEMORY;
+    }
     if (len > GARB_SHEET_MAX)
         return finish(out, &p, NULL, GARB_TOO_BIG);
     Tokenizer tz;
@@ -586,8 +672,10 @@ static garb_status_t parse_text(Mode mode, const char *text, size_t len, garb_pa
         tz_close(&tz);
         return finish(out, &p, NULL, GARB_NO_MEMORY);
     }
+    p.tz = &tz;
     Input in = {0};
     in.tz = &tz;
+    in.owner = &p;
     garb_status_t st = run(mode, &p, &in, out);
     return finish(out, &p, &tz, st);
 }
@@ -636,10 +724,11 @@ garb_status_t garb_parse_one_value(const char *text, size_t len, garb_parsed_t *
 static bool reparse(Mode mode, garb_parsed_t *owner, const garb_value_t *values, int32_t n,
                     garb_item_t **items, int32_t *nitems)
 {
-    Parse p = {owner->arena, false, 0};
+    Parse p = {owner->arena, false, false, NULL, 0};
     Input in = {0};
     in.values = values;
     in.n = n;
+    in.owner = &p;
     garb_parsed_t tmp = {0};
     garb_status_t st = run(mode, &p, &in, &tmp);
     if (p.incomplete)

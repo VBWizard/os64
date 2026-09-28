@@ -937,6 +937,260 @@ static void hostile_corpus(void)
     }
 }
 
+// Tables at the edges of their arithmetic: random nests of tables whose
+// widths, heights, spacing and spans take the extremes a page may write,
+// holding pictures the hostile face measures, laid out under UBSan. Any
+// share, sum or product that overflows aborts the harness.
+static uint64_t s_tfuzz = 0x7AB1E5F022ull;
+
+static uint32_t tpick(uint32_t n)
+{
+    s_tfuzz ^= s_tfuzz << 13;
+    s_tfuzz ^= s_tfuzz >> 7;
+    s_tfuzz ^= s_tfuzz << 17;
+    return (uint32_t)(s_tfuzz % n);
+}
+
+static void tfuzz_table(char *out, size_t cap, size_t *at, int depth)
+{
+    static const char *const widths[] = {"", " width=1", " width=1000000", " width=50%",
+                                         " width=1000000%", " width=100%"};
+    static const char *const heights[] = {"", " height=1000000", " height=1"};
+    static const char *const spacing[] = {"", " cellspacing=1000000", " cellpadding=1000000"};
+    *at += (size_t)snprintf(out + *at, cap - *at, "<table%s%s%s>", widths[tpick(6)],
+                            heights[tpick(3)], spacing[tpick(3)]);
+    int rows = 1 + (int)tpick(3);
+    for (int r = 0; r < rows && *at < cap - 512; r++) {
+        *at += (size_t)snprintf(out + *at, cap - *at, "<tr%s>", heights[tpick(3)]);
+        int cells = 1 + (int)tpick(4);
+        for (int c = 0; c < cells && *at < cap - 512; c++) {
+            *at += (size_t)snprintf(out + *at, cap - *at, "<td%s colspan=%u rowspan=%u>",
+                                    widths[tpick(6)], 1 + tpick(3), 1 + tpick(2));
+            switch (tpick(4)) {
+            case 0:
+                if (depth < 3)
+                    tfuzz_table(out, cap, at, depth + 1);
+                break;
+            case 1:
+                *at += (size_t)snprintf(out + *at, cap - *at, "<img src=%s.png%s>",
+                                        tpick(2) ? "tall" : "wide", widths[tpick(6)]);
+                break;
+            case 2:
+                *at += (size_t)snprintf(out + *at, cap - *at, "words that wrap");
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    *at += (size_t)snprintf(out + *at, cap - *at, "</table>");
+}
+
+// Every table in a laid-out tree holds its grid: no row reaches past the
+// table's own box. Returns the first offending table's node, or NULL.
+static const FBox *grid_outgrows(const FBox *b)
+{
+    if (b == NULL || !b->placed)
+        return NULL;
+    if (b->kind == FB_TABLE)
+        for (const FBox *g = b->first; g != NULL; g = g->next) {
+            const FBox *rows = g->kind == FB_ROW_GROUP ? g->first : g;
+            for (const FBox *r = rows; r != NULL; r = g->kind == FB_ROW_GROUP ? r->next : NULL)
+                if (r->kind == FB_ROW && r->placed && r->x + r->w > b->x + b->w)
+                    return b;
+        }
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next)
+            if (fr->kind == FF_ATOMIC && fr->item->content != NULL) {
+                const FBox *hit = grid_outgrows(fr->item->content);
+                if (hit != NULL)
+                    return hit;
+            }
+    for (const FBox *c = b->first; c != NULL; c = c->next) {
+        const FBox *hit = grid_outgrows(c);
+        if (hit != NULL)
+            return hit;
+    }
+    return NULL;
+}
+
+static void table_fuzz(size_t pages)
+{
+    flow_env_t env = kEnv;
+    env.replaced_size = hostile_oracle;
+    char *html = malloc(65536);
+    for (size_t i = 0; i < pages; i++) {
+        size_t at = (size_t)snprintf(html, 65536, "%s", tpick(2) ? "<!doctype html>" : "");
+        tfuzz_table(html, 65536, &at, 0);
+        os64_html_document_t *doc = parse(html);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        static const int32_t widths[] = {800, 0};
+        for (int k = 0; k < F_ARRAY(widths); k++) {
+            flow_tree_t *t = flow_layout(doc, page, widths[k], &env);
+            if (t == NULL || flow_incomplete(t) || flow_height(t) < 0 || flow_width(t) < widths[k])
+                expect("table fuzz: laid out whole, sizes held", false, html);
+            flow_free(t);
+            // And the invariant the table review kept finding the edges of:
+            // whatever its columns are, no table's grid outgrows it.
+            FStyles *st = f_style_build(doc, page, &env);
+            FBoxes *bx = st != NULL ? f_boxes_build(doc, page, st, &env) : NULL;
+            FLayout *lay = bx != NULL ? f_layout(bx, doc, page, &env, widths[k]) : NULL;
+            if (lay != NULL && grid_outgrows(bx->root) != NULL)
+                expect("table fuzz: no table's grid outgrows it", false, html);
+            f_layout_free(lay);
+            f_boxes_free(bx);
+            f_style_free(st);
+        }
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    free(html);
+    expect("table fuzz ran", true, NULL);
+    printf("libflow table fuzz: %zu pages of extreme tables, laid out under UBSan\n", pages);
+}
+
+// Whether the laid-out page holds every one of `lines` (whole dump lines,
+// indentation stripped) — for a case about a few boxes of a larger tree.
+static bool has_lines(const char *html, int32_t width, const char *const *lines, int n)
+{
+    char *dump = layout_dump_of(html, width);
+    bool all = dump != NULL;
+    for (int i = 0; i < n && all; i++) {
+        size_t len = strlen(lines[i]);
+        bool found = false;
+        for (const char *p = dump; *p != '\0' && !found;) {
+            const char *e = strchr(p, '\n');
+            const char *q = p;
+            while (*q == ' ')
+                q++;
+            size_t have = e != NULL ? (size_t)(e - q) : strlen(q);
+            found = have == len && strncmp(q, lines[i], len) == 0;
+            p = e != NULL ? e + 1 : p + strlen(p);
+        }
+        all = found;
+    }
+    free(dump);
+    return all;
+}
+
+// Codex, the table slice's first review, each worked by hand: a table 200
+// wide with no spacing or padding, at the body's 8.
+static void table_review_cases(void)
+{
+    static const char *const col_pct[] = {"cell td 8 8 150 20", "cell td 158 8 50 20"};
+    expect("a col's percentage width reaches its column",
+           has_lines("<!doctype html><table width=200 cellspacing=0 cellpadding=0>"
+                     "<col width=75%><col><tr><td>a<td>b</table>", 400, col_pct, 2), NULL);
+    static const char *const span_pct[] = {"cell td 8 8 150 20", "cell td 8 28 75 20",
+                                           "cell td 83 28 75 20", "cell td 158 28 50 20"};
+    expect("a spanning cell's percentage is shared by its columns",
+           has_lines("<!doctype html><table width=200 cellspacing=0 cellpadding=0>"
+                     "<tr><td colspan=2 width=75%>s<td>c<tr><td>a<td>b<td>c</table>", 400,
+                     span_pct, 4), NULL);
+    static const char *const group[] = {"cell td 8 8 50 20", "cell td 58 8 50 20",
+                                        "cell td 108 8 100 20"};
+    expect("an empty colgroup's width is each of its columns'",
+           has_lines("<!doctype html><table width=200 cellspacing=0 cellpadding=0>"
+                     "<colgroup span=2 width=50></colgroup><tr><td>a<td>b<td>c</table>", 400,
+                     group, 3), NULL);
+    // 30% of 200 is 60, the col's own 100 stands, and the third takes 40.
+    static const char *const inherit[] = {"cell td 8 8 60 20", "cell td 68 8 100 20",
+                                          "cell td 168 8 40 20"};
+    expect("a col with no width takes its group's",
+           has_lines("<!doctype html><table width=200 cellspacing=0 cellpadding=0>"
+                     "<colgroup width=30%><col><col width=100></colgroup><tr><td>a<td>b<td>c"
+                     "</table>", 400, inherit, 3), NULL);
+    // A four-row span in column 1, crossed on row 2 by a two-row span: row
+    // 4's second cell goes to column 2, not onto the span.
+    static const char *const hold[] = {"cell td 16 8 8 60", "cell td 24 48 8 20"};
+    expect("a rowspan's hold is never shortened by a span crossing it",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr><td>a"
+                     "<td rowspan=4>B<tr><td colspan=2 rowspan=2>C<tr><tr><td>d<td>e</table>",
+                     400, hold, 2), NULL);
+    // Baselines: the p's line sits 30 down (its 16px margin and 14), the
+    // five lines' first 14 down; below the shared baseline the tall cell
+    // needs 100 - 14 = 86, so the row is 30 + 86 = 116 and holds it moved.
+    static const char *const row[] = {"row tr 8 8 20 116", "row tr 8 124 20 20"};
+    expect("a baseline row is sized for its cells where the baseline puts them",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
+                     "<td><p>x</p><td>a<br>b<br>c<br>d<br>e<tr><td>n<td>m</table>", 400, row, 2),
+           NULL);
+    // Two 100px preferences in a 44px containing block: each column gives
+    // back toward its least (8), 8 + 28 x 92 / 184 = 22, and the grid is
+    // the table's 44.
+    static const char *const fixed[] = {"table table 8 8 44 20", "cell td 8 8 22 20",
+                                        "cell td 30 8 22 20"};
+    expect("set widths give way when the table cannot hold them",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr><td width=100>a"
+                     "<td width=100>b</table>", 60, fixed, 3), NULL);
+    // A cell with no line: its baseline is the bottom of its content, 100,
+    // so the x moves down 100 - 14 and the row is 100 + (20 - 14).
+    static const char *const empty[] = {"row tr 8 8 8 106", "text \"x\" 8 96 8 16 serif 16"};
+    expect("a cell with no line has its baseline at its content's bottom",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
+                     "<td height=100></td><td>x</table>", 400, empty, 2), NULL);
+    // A nested table's baseline is its first row as shown: the tbody, not
+    // the tfoot written before it — the x shares the B's baseline, 50.
+    static const char *const shown[] = {"text \"x\" 8 38 8 16 serif 16"};
+    // Round 2. A nested table's baseline is its first row's as its layout
+    // shared it: the 48px B's (50), not the top-aligned t's (22).
+    static const char *const row_base[] = {"text \"x\" 8 38 8 16 serif 16"};
+    expect("a nested table's baseline is its first row's shared one",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
+                     "<td>x<td><table cellspacing=0 cellpadding=0><tr><td valign=top>t"
+                     "<td valign=baseline><font size=7>B</font></table></table>", 400, row_base, 1),
+           NULL);
+    // An inline-block is measured from its content: the marquee's cell is
+    // its text's 68 wide, and the next cell starts after it. The marquee sits
+    // on its own line's baseline, so the row is its 20.
+    static const char *const atom[] = {"cell td 8 8 68 20", "cell td 76 8 8 20"};
+    expect("an inline-block's cell is as wide as its content",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr><td>"
+                     "<marquee>abcdefghij</marquee><td>x</table>", 400, atom, 2), NULL);
+    // Quirks: an empty table is nothing — no width to scroll to, no margin
+    // between the paragraphs it sits among.
+    static const char *const empty_table[] = {"page 400 80", "table table 8 28 0 0",
+                                              "block p 8 44 384 20"};
+    expect("quirks: a table with no rows is nothing at all",
+           has_lines("<p>a</p><table width=1000000 border=5><tbody></tbody></table><p>b</p>", 400,
+                     empty_table, 3), NULL);
+    // Round 3. An empty first row is still the first row: its bottom is
+    // the nested table's baseline, so the x does not move down to the B.
+    static const char *const empty_row[] = {"text \"x\" 8 10 8 16 serif 16",
+                                            "row tr 16 22 24 0"};
+    expect("a nested table whose first row is empty takes its baseline from it",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
+                     "<td>x<td><table cellspacing=0 cellpadding=0><tr></tr><tr><td>"
+                     "<font size=7>B</font></table></table>", 400, empty_row, 2), NULL);
+    // A set height is a table's least with no rows to share it: the p comes
+    // after 100 of it, 8 + 100 + 16.
+    static const char *const tall_empty[] = {"table table 8 8 0 100", "block p 8 124 384 20"};
+    expect("a table with no rows is as tall as it is set",
+           has_lines("<!doctype html><table height=100></table><p>after</p>", 400, tall_empty, 2),
+           NULL);
+    // Round 4. A 75% column beside a 64px least: the table is its least,
+    // 128, and the percentage gives back so the row is the table's 128.
+    static const char *const pct_room[] = {"table table 8 8 128 20", "row tr 8 8 128 20",
+                                           "cell td 8 8 64 20", "cell td 72 8 64 20"};
+    expect("a percentage column leaves the others their least",
+           has_lines("<!doctype html><table width=120 cellspacing=0 cellpadding=0><tr>"
+                     "<td width=75%><img src=known.png width=64 height=1><td>"
+                     "<img src=known.png width=64 height=1></table>", 400, pct_room, 4), NULL);
+    // Round 6. A row group's set height is its rows' least together: they
+    // need 20 and 40, the group asks 100, and the 40 more goes 13 and 27.
+    static const char *const group_h[] = {"row-group tbody 8 8 16 100", "row tr 8 8 16 33",
+                                          "row tr 8 41 16 67", "block p 8 124 384 20"};
+    expect("a row group's set height reaches its rows",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tbody height=100>"
+                     "<tr><td>x<tr><td>yy<br>y</tbody></table><p>after</p>", 400, group_h, 4),
+           NULL);
+    expect("a table's baseline is its first row as shown",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
+                     "<td>x<td><table cellspacing=0 cellpadding=0><tfoot><tr><td>f<br>f2"
+                     "</tfoot><tbody><tr><td><font size=7>B</font></tbody></table></table>",
+                     400, shown, 1), NULL);
+}
+
 static void layout_sweep(void)
 {
     const char *html =
@@ -1041,6 +1295,8 @@ int main(int argc, char **argv)
     table_bounds();
     corpus();
     hostile_corpus();
+    table_review_cases();
+    table_fuzz(3000);
     allocation_sweep();
     cascade_sweep();
     boxes_sweep();
@@ -1050,6 +1306,11 @@ int main(int argc, char **argv)
     decoration_colour_cases();
     limit_cases();
     layout_relation_sweep("a page of every family", kSweepPage, 300);
+    // A tall first cell in a table the failure stops: its lines, not
+    // placed, must not reach the page's edges.
+    layout_relation_sweep("a tall cell in a table that stops",
+        "<!doctype html><table><tr><td>a<br>b<br>c<br>d<br>e<br>f<br>g<br>h<br>i<br>j"
+        "<td>x<br>y<br>z</table>", 300);
     {
         size_t len = 0;
         char *html = slurp("tools/html_corpus/floodgap.html", &len);

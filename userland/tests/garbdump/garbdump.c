@@ -54,8 +54,9 @@ int main(int argc, char **argv)
             continue;
         garb_item_t *items;
         int32_t n;
-        (void)garb_items_of(&sheet, r->block, r->nblock, &items, &n);
-        os64_printf("rule %d:\n", (int)i);
+        // A block read short is shown as the prefix it is, never as whole.
+        bool whole = garb_items_of(&sheet, r->block, r->nblock, &items, &n);
+        os64_printf("rule %d:%s\n", (int)i, whole ? "" : " (incomplete)");
         print_dump(garb_dump_items, items, n);
     }
     garb_free(&sheet);
