@@ -1420,6 +1420,8 @@ static void translate(FBox *b, int64_t dx, int64_t dy)
         return;
     b->x += dx;
     b->y += dy;
+    if (b->has_baseline)
+        b->baseline += dy;
     for (FLine *ln = b->lines; ln != NULL; ln = ln->next) {
         ln->x += dx;
         ln->y += dy;
@@ -1509,16 +1511,56 @@ static int64_t widths(FBox *b, int64_t cbw, int64_t forced_w, int64_t *ml_out)
     return w;
 }
 
-// The first line with height anywhere inside a box, in order.
-static void first_line_of(FBox *b, FLine **out)
+// A table's first header group, which is shown first, and its first footer
+// group, which is shown last, whatever their places in the source (CSS 2.1
+// § 17.2); every other group and row keeps its order between them.
+static void table_ends(const FBox *t, FBox **head, FBox **foot)
 {
-    for (FLine *ln = b->lines; ln != NULL; ln = ln->next)
+    *head = *foot = NULL;
+    for (FBox *c = t->first; c != NULL; c = c->next) {
+        if (c->kind != FB_ROW_GROUP)
+            continue;
+        if (*head == NULL && c->style->display == FLOW_DISPLAY_TABLE_HEADER_GROUP)
+            *head = c;
+        if (*foot == NULL && c->style->display == FLOW_DISPLAY_TABLE_FOOTER_GROUP)
+            *foot = c;
+    }
+}
+
+// The first baseline inside a box, in the order it is shown: a line's, or
+// a table row's as its layout decided it — a nested table's baseline is its
+// first row's, the one that row's cells share, not whatever line its first
+// cell holds. A table's rows are walked header group first and footer
+// group last, and its captions not at all.
+static bool first_baseline_in(const FBox *b, int64_t *out)
+{
+    if (!b->placed)
+        return false;
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         if (ln->h > 0) {
-            *out = ln;
-            return;
+            *out = ln->baseline;
+            return true;
         }
-    for (FBox *c = b->first; c != NULL && *out == NULL; c = c->next)
-        first_line_of(c, out);
+    if (b->kind == FB_ROW) {
+        if (b->has_baseline)
+            *out = b->baseline;
+        return b->has_baseline;
+    }
+    if (b->kind == FB_TABLE) {
+        FBox *head, *foot;
+        table_ends(b, &head, &foot);
+        if (head != NULL && first_baseline_in(head, out))
+            return true;
+        for (const FBox *c = b->first; c != NULL; c = c->next)
+            if ((c->kind == FB_ROW_GROUP || c->kind == FB_ROW) && c != head && c != foot &&
+                first_baseline_in(c, out))
+                return true;
+        return foot != NULL && first_baseline_in(foot, out);
+    }
+    for (const FBox *c = b->first; c != NULL; c = c->next)
+        if (first_baseline_in(c, out))
+            return true;
+    return false;
 }
 
 // An outside marker: right-aligned against the item's content edge, on
@@ -1537,8 +1579,8 @@ static void place_marker(L *l, const FStyles *styles, FBox *b, int64_t content_x
         return;
     os64_text_run_view_t v;
     os64_text_run_view(run, &v);
-    FLine *first = NULL;
-    first_line_of(b, &first);
+    int64_t first = 0;
+    bool has_first = first_baseline_in(b, &first);
     fr->kind = FF_MARKER;
     fr->node = b->node;
     fr->style = b->style;
@@ -1553,7 +1595,7 @@ static void place_marker(L *l, const FStyles *styles, FBox *b, int64_t content_x
     fr->h = v.ascent + v.descent;
     fr->x = content_x - fr->w;
     Extent fb = font_box(v.ascent, v.descent, v.line_height);
-    fr->baseline = first != NULL ? first->baseline : content_y - fb.top;
+    fr->baseline = has_first ? first : content_y - fb.top;
     fr->y = fr->baseline - v.ascent;
     b->marker_frag = fr;
 }
@@ -1746,10 +1788,20 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
         switch (g->kind) {
         case SG_WORD:
         case SG_ATOM:
-        case SG_MARKER:
-            word += g->w;
-            if (g->w > 0 || g->kind != SG_WORD) {
-                line += space + g->w;
+        case SG_MARKER: {
+            // An atom with content of its own is measured from it: segments
+            // made at no width give it none, and it lays out as wide as the
+            // line it is given, so what it can be and wants to be are its
+            // content's, with its margins round them.
+            int64_t wmin = g->w, wmax = g->w;
+            if (g->kind == SG_ATOM && g->item->content != NULL) {
+                Intr ci = intrinsic(l, g->item->content);
+                wmin = g->ml + ci.min + g->mr;
+                wmax = g->ml + ci.max + g->mr;
+            }
+            word += wmin;
+            if (wmax > 0 || g->kind != SG_WORD) {
+                line += space + wmax;
                 space = 0;
             }
             if (g->kind == SG_WORD && g->s1 > g->b1) {
@@ -1764,6 +1816,7 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
                     line += sw;
             }
             break;
+        }
         case SG_BREAK:
             r.max = max64(r.max, line);
             line = space = 0;
@@ -1846,9 +1899,77 @@ typedef struct {
     GCell *cells;
     int32_t ncells, cap_cells;
     int32_t ncols;
-    int64_t *busy;          // per column: rows, this one included, a rowspan still holds
-    int32_t cap_busy;
+    // The rowspans' holds: per column, the first row a hold no longer
+    // reaches (0: never held), as the leaves of a min-tree, so the next free
+    // slot is found in log(columns) and not by walking every held column —
+    // a page of long holds over wide columns would otherwise cost rows x
+    // columns. As many leaves as the columns holds reach, to a power of two,
+    // grown as they reach further: a page of small tables pays for small
+    // trees. NULL until the table's first rowspan.
+    int64_t *holds;
+    int32_t hold_leaves;
 } Grid;
+
+// The first column from `c` that no hold reaches on row `r`.
+static int32_t hold_free(const int64_t *t, int32_t node, int32_t lo, int32_t hi, int32_t c,
+                         int64_t r)
+{
+    if (hi <= c || t[node] > r)
+        return -1;
+    if (hi - lo == 1)
+        return lo;
+    int32_t mid = lo + (hi - lo) / 2;
+    int32_t k = hold_free(t, 2 * node, lo, mid, c, r);
+    return k >= 0 ? k : hold_free(t, 2 * node + 1, mid, hi, c, r);
+}
+
+static int32_t next_free(const Grid *g, int32_t c, int64_t r)
+{
+    if (g->holds == NULL || c >= g->hold_leaves)
+        return c;
+    int32_t k = hold_free(g->holds, 1, 0, g->hold_leaves, c, r);
+    return k >= 0 ? k : g->hold_leaves;
+}
+
+// Room in the tree for column `k`: the leaves doubled until it has one, the
+// old leaves kept and the levels above them made again.
+static bool hold_room(L *l, Grid *g, int32_t k)
+{
+    if (g->holds != NULL && k < g->hold_leaves)
+        return true;
+    int32_t n = g->hold_leaves > 0 ? g->hold_leaves : 16;
+    while (n <= k)
+        n *= 2;
+    int64_t *t = os64_calloc(2 * (size_t)n, sizeof(int64_t));
+    if (t == NULL) {
+        fail(l);
+        return false;
+    }
+    for (int32_t j = 0; j < g->hold_leaves; j++)
+        t[n + j] = g->holds[g->hold_leaves + j];
+    for (int32_t at = n - 1; at >= 1; at--)
+        t[at] = t[2 * at] < t[2 * at + 1] ? t[2 * at] : t[2 * at + 1];
+    os64_free(g->holds);
+    g->holds = t;
+    g->hold_leaves = n;
+    return true;
+}
+
+// Column `k` held until row `until`, if that is longer than it was.
+static void hold_until(Grid *g, int32_t k, int64_t until)
+{
+    int64_t *t = g->holds;
+    int32_t at = g->hold_leaves + k;
+    if (until <= t[at])
+        return;
+    t[at] = until;
+    for (at /= 2; at >= 1; at /= 2) {
+        int64_t m = t[2 * at] < t[2 * at + 1] ? t[2 * at] : t[2 * at + 1];
+        if (t[at] == m)
+            break;
+        t[at] = m;
+    }
+}
 
 static bool grow(L *l, void **v, int32_t *cap, int32_t want, size_t size)
 {
@@ -1903,15 +2024,8 @@ static void add_rows(L *l, Grid *g, FBox *group, FBox *first_row_alone)
 static bool grid_build(L *l, FBox *t, Grid *g)
 {
     os64_memset(g, 0, sizeof(*g));
-    FBox *head = NULL, *foot = NULL;
-    for (FBox *c = t->first; c != NULL; c = c->next) {
-        if (c->kind != FB_ROW_GROUP)
-            continue;
-        if (head == NULL && c->style->display == FLOW_DISPLAY_TABLE_HEADER_GROUP)
-            head = c;
-        if (foot == NULL && c->style->display == FLOW_DISPLAY_TABLE_FOOTER_GROUP)
-            foot = c;
-    }
+    FBox *head, *foot;
+    table_ends(t, &head, &foot);
     if (head != NULL)
         add_rows(l, g, head, NULL);
     for (FBox *c = t->first; c != NULL && !l->failed; c = c->next) {
@@ -1929,14 +2043,12 @@ static bool grid_build(L *l, FBox *t, Grid *g)
     if (l->failed)
         return false;
 
-    int32_t active = 0;
     for (int32_t r = 0; r < g->nrows && !l->failed; r++) {
         int32_t c = 0;
         for (FBox *cell = g->rows[r].box->first; cell != NULL; cell = cell->next) {
             if (cell->kind != FB_CELL)
                 continue;
-            while (c < g->cap_busy && g->busy[c] > 0)
-                c++;
+            c = next_free(g, c, r);
             int32_t cs = span_attr(cell, "colspan", COLSPAN_MAX, 1);
             int32_t rs = span_attr(cell, "rowspan", ROWSPAN_MAX, g->rows[r].group_end - r);
             if (r + rs > g->rows[r].group_end)
@@ -1945,25 +2057,20 @@ static bool grid_build(L *l, FBox *t, Grid *g)
                 continue;
             if (c + cs > COLUMNS_MAX)
                 cs = COLUMNS_MAX - c;
-            if (!grow(l, (void **)&g->busy, &g->cap_busy, c + cs, sizeof(int64_t)) ||
-                !grow(l, (void **)&g->cells, &g->cap_cells, g->ncells + 1, sizeof(GCell)))
+            if (!grow(l, (void **)&g->cells, &g->cap_cells, g->ncells + 1, sizeof(GCell)))
+                return false;
+            if (rs > 1 && !hold_room(l, g, c + cs - 1))
                 return false;
             g->cells[g->ncells++] = (GCell){cell, r, c, rs, cs};
-            if (rs > 1) {
+            // A hold only ever lengthens: a cell whose span crosses a
+            // longer hold leaves it as it was.
+            if (rs > 1)
                 for (int32_t k = c; k < c + cs; k++)
-                    g->busy[k] = rs;
-                active += cs;
-            }
+                    hold_until(g, k, r + rs);
             c += cs;
             if (c > g->ncols)
                 g->ncols = c;
         }
-        // One row down: every spanning cell holds one row fewer, and a
-        // column whose count reaches none is free again.
-        if (active > 0)
-            for (int32_t k = 0; k < g->cap_busy; k++)
-                if (g->busy[k] > 0 && --g->busy[k] == 0)
-                    active--;
     }
     // Columns the table declares count even where no cell reaches.
     int32_t declared = 0;
@@ -1988,7 +2095,7 @@ static void grid_free(Grid *g)
 {
     os64_free(g->rows);
     os64_free(g->cells);
-    os64_free(g->busy);
+    os64_free(g->holds);
 }
 
 // ── Columns ─────────────────────────────────────────────────────────────
@@ -1996,7 +2103,7 @@ static void grid_free(Grid *g)
 typedef struct {
     int64_t min, max;
     int64_t fixed;          // a width the page gave, or -1
-    int64_t pct;            // a percentage the page gave, in 1/64ths, or -1
+    int64_t pct;            // a percentage the page gave, in 1/64ths, or -1 (a span's share)
     int64_t width, x;
 } Col;
 
@@ -2024,7 +2131,7 @@ static void spread(Col *cols, int32_t c, int32_t n, int64_t want, bool to_max)
         return;
     int64_t extra = want - have, given = 0;
     for (int32_t k = c; k < c + n; k++) {
-        int64_t share = weight > 0 ? extra * cols[k].max / weight : extra / n;
+        int64_t share = weight > 0 ? mul_div(extra, cols[k].max, weight) : extra / n;
         if (k == c + n - 1)
             share = extra - given;
         given += share;
@@ -2034,6 +2141,37 @@ static void spread(Col *cols, int32_t c, int32_t n, int64_t want, bool to_max)
             cols[k].min += share;
         if (cols[k].max < cols[k].min)
             cols[k].max = cols[k].min;
+    }
+}
+
+// A spanning cell's percentage over its columns: what the columns that
+// have percentages already hold counts toward it, and the rest goes to the
+// ones that have none, in proportion to what they want at most, or evenly
+// (the automatic table layout's rule for spans, as for pixels).
+static void spread_pct(Col *cols, int32_t c, int32_t n, int64_t pct)
+{
+    int64_t have = 0, weight = 0;
+    int32_t free_cols = 0;
+    for (int32_t k = c; k < c + n; k++) {
+        if (cols[k].pct >= 0) {
+            have += cols[k].pct;
+        } else {
+            weight += cols[k].max;
+            free_cols++;
+        }
+    }
+    if (pct <= have || free_cols == 0)
+        return;
+    int64_t extra = pct - have, given = 0;
+    int32_t seen = 0;
+    for (int32_t k = c; k < c + n; k++) {
+        if (cols[k].pct >= 0)
+            continue;
+        int64_t share = weight > 0 ? mul_div(extra, cols[k].max, weight) : extra / free_cols;
+        if (++seen == free_cols)
+            share = extra - given;
+        given += share;
+        cols[k].pct = share;
     }
 }
 
@@ -2048,19 +2186,26 @@ static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
     }
     for (int32_t k = 0; k < g->ncols; k++)
         cols[k].fixed = cols[k].pct = -1;
-    // A `col` sets the width of the columns it spans.
+    // A `col` sets the width of the columns it spans, in pixels or as a
+    // percentage; one with no width takes its group's, and a group with no
+    // `col` in it sets its own `span` of columns (HTML 4's default width).
     int32_t k = 0;
     for (FBox *c = t->first; c != NULL && k < g->ncols; c = c->next) {
-        if (c->kind == FB_COLUMN_GROUP && c->first == NULL)
-            k += span_attr(c, "span", COLSPAN_MAX, 1);
         if (c->kind != FB_COLUMN && c->kind != FB_COLUMN_GROUP)
             continue;
-        for (FBox *col = c->kind == FB_COLUMN ? c : c->first; col != NULL;
-             col = c->kind == FB_COLUMN ? NULL : col->next) {
+        bool lone_group = c->kind == FB_COLUMN_GROUP && c->first == NULL;
+        for (FBox *col = c->kind == FB_COLUMN || lone_group ? c : c->first; col != NULL;
+             col = c->kind == FB_COLUMN || lone_group ? NULL : col->next) {
             int32_t n = span_attr(col, "span", COLSPAN_MAX, 1);
-            for (int32_t j = 0; j < n && k < g->ncols; j++, k++)
-                if (col->style->width.kind == FLOW_LENGTH_PX)
-                    cols[k].fixed = col->style->width.value;
+            flow_length_t w = col->style->width;
+            if (w.kind == FLOW_LENGTH_AUTO && col != c)
+                w = c->style->width;
+            for (int32_t j = 0; j < n && k < g->ncols; j++, k++) {
+                if (w.kind == FLOW_LENGTH_PX)
+                    cols[k].fixed = w.value;
+                else if (w.kind == FLOW_LENGTH_PERCENT)
+                    cols[k].pct = w.value;
+            }
         }
     }
 
@@ -2108,16 +2253,21 @@ static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
         if (cols[i].max < cols[i].min)
             cols[i].max = cols[i].min;
     }
-    // Narrowest span first, sorted by counting: a span is at most
-    // COLSPAN_MAX, so the order costs the cells and not their square.
-    int32_t *starts = nspanning > 0 ? os64_calloc(COLSPAN_MAX + 2, sizeof(int32_t)) : NULL;
+    // Narrowest span first, sorted by counting, with a count per span up to
+    // the widest there is: the order costs the cells, not their square, and
+    // a table's buckets are its own spans' (COLSPAN_MAX's for every table
+    // was a page of small tables zeroing four kilobytes each).
+    int32_t widest = 0;
+    for (int32_t i = 0; i < nspanning; i++)
+        widest = spanning[i].cols > widest ? spanning[i].cols : widest;
+    int32_t *starts = nspanning > 0 ? os64_calloc((size_t)widest + 2, sizeof(int32_t)) : NULL;
     GCell *ordered = nspanning > 0 ? os64_malloc((size_t)nspanning * sizeof(GCell)) : NULL;
     if (nspanning > 0 && (starts == NULL || ordered == NULL))
         fail(l);
     if (ordered != NULL && starts != NULL) {
         for (int32_t i = 0; i < nspanning; i++)
             starts[spanning[i].cols + 1]++;
-        for (int32_t v = 1; v <= COLSPAN_MAX + 1; v++)
+        for (int32_t v = 1; v <= widest + 1; v++)
             starts[v] += starts[v - 1];
         for (int32_t i = 0; i < nspanning; i++)
             ordered[starts[spanning[i].cols]++] = spanning[i];
@@ -2132,6 +2282,8 @@ static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
             cmax = max64(ci.min, s->width.value + hframe(gc->cell, 0));
         spread(cols, gc->col, gc->cols, ci.min - gaps, false);
         spread(cols, gc->col, gc->cols, cmax - gaps, true);
+        if (s->width.kind == FLOW_LENGTH_PERCENT)
+            spread_pct(cols, gc->col, gc->cols, s->width.value);
     }
     os64_free(starts);
     os64_free(ordered);
@@ -2183,10 +2335,11 @@ static Intr table_intrinsic(L *l, FBox *t)
 }
 
 // Share the grid's width among the columns: a percentage column its share
-// of it, a fixed column its width, and the rest from each auto column's
-// least toward its most in proportion to how far apart the two are; what
-// is left over goes to the auto columns, else to the others. Never below a
-// column's least: a table overflows before it squashes a word.
+// of it, a fixed column its width (each kind giving back toward its least
+// when the others' least leaves it less room), and the rest from each auto
+// column's least toward its most in proportion to how far apart the two
+// are; what is left over goes to the auto columns, else to the others.
+// Never below a column's least: a table overflows before it squashes a word.
 static void distribute(Col *cols, int32_t n, int64_t w)
 {
     if (n == 0)
@@ -2201,7 +2354,7 @@ static void distribute(Col *cols, int32_t n, int64_t w)
         Col *c = &cols[k];
         if (c->pct >= 0) {
             int64_t pct = pct_total > 100 * 64 ? c->pct * (100 * 64) / pct_total : c->pct;
-            c->width = max64(c->min, w * pct / (100 * 64));
+            c->width = max64(c->min, mul_div(w, pct, 100 * 64));
             taken += c->width;
         } else if (c->fixed >= 0) {
             c->width = max64(c->min, c->fixed);
@@ -2212,6 +2365,48 @@ static void distribute(Col *cols, int32_t n, int64_t w)
             nauto++;
         }
     }
+    // The grid never outgrows the table, whatever kind its columns are
+    // (an auto-width table takes its containing block's width when its
+    // preferences do not fit it). Each kind is held in turn to the room the
+    // others' least leaves it, giving back toward its own least in
+    // proportion to what each column can give: the percentage columns first,
+    // then the set widths. The table is never narrower than every column's
+    // least together, so each kind always has its own least's room.
+    int64_t pct_want = 0, pct_least = 0, fixed_want = 0, fixed_least = 0;
+    for (int32_t k = 0; k < n; k++) {
+        if (cols[k].pct >= 0) {
+            pct_want += cols[k].width;
+            pct_least += cols[k].min;
+        } else if (cols[k].fixed >= 0) {
+            fixed_want += cols[k].width;
+            fixed_least += cols[k].min;
+        }
+    }
+    int64_t pct_room = w - fixed_least - amin;
+    if (pct_want > pct_room && pct_want > pct_least) {
+        int64_t give = max64(0, pct_room - pct_least);
+        for (int32_t k = 0; k < n; k++)
+            if (cols[k].pct >= 0)
+                cols[k].width = cols[k].min + mul_div(cols[k].width - cols[k].min, give,
+                                                      pct_want - pct_least);
+    }
+    int64_t pct_taken = 0;
+    for (int32_t k = 0; k < n; k++)
+        if (cols[k].pct >= 0)
+            pct_taken += cols[k].width;
+    taken = pct_taken + fixed_want;
+    int64_t room = w - pct_taken - amin;
+    if (fixed_want > room && fixed_want > fixed_least) {
+        int64_t give = max64(0, room - fixed_least);
+        for (int32_t k = 0; k < n; k++)
+            if (cols[k].pct < 0 && cols[k].fixed >= 0)
+                cols[k].width = cols[k].min + mul_div(cols[k].width - cols[k].min, give,
+                                                      fixed_want - fixed_least);
+        taken = pct_taken;
+        for (int32_t k = 0; k < n; k++)
+            if (cols[k].pct < 0 && cols[k].fixed >= 0)
+                taken += cols[k].width;
+    }
     int64_t a = w - taken;
     if (nauto > 0) {
         for (int32_t k = 0; k < n; k++) {
@@ -2221,7 +2416,7 @@ static void distribute(Col *cols, int32_t n, int64_t w)
             if (a >= amax)
                 c->width = c->max;
             else if (a > amin && amax > amin)
-                c->width = c->min + (c->max - c->min) * (a - amin) / (amax - amin);
+                c->width = c->min + mul_div(c->max - c->min, a - amin, amax - amin);
             else
                 c->width = c->min;
         }
@@ -2250,7 +2445,7 @@ static void distribute(Col *cols, int32_t n, int64_t w)
         if (!(nauto == 0 || (cols[k].pct < 0 && cols[k].fixed < 0)))
             continue;
         int64_t wk = nauto > 0 ? cols[k].max : cols[k].width;
-        int64_t share = weight > 0 ? extra * wk / weight : extra / eligible;
+        int64_t share = weight > 0 ? mul_div(extra, wk, weight) : extra / eligible;
         if (k == last)
             share = extra - given;
         given += share;
@@ -2316,12 +2511,15 @@ static int64_t cell_layout(L *l, const FStyles *styles, FBox *cell, int64_t x, i
     return h;
 }
 
+// A cell's baseline, from its top, as laid out before its row stretches
+// it (CSS 2.1 § 17.5.3): its first line's, or where there is none, the
+// bottom of its content edge.
 static int64_t first_baseline(FBox *cell)
 {
-    FLine *first = NULL;
-    first_line_of(cell, &first);
-    return first != NULL ? first->baseline - cell->y
-                         : cell->border[FLOW_TOP] + cell->padding[FLOW_TOP];
+    int64_t first = 0;
+    return first_baseline_in(cell, &first)
+               ? first - cell->y
+               : cell->h - cell->border[FLOW_BOTTOM] - cell->padding[FLOW_BOTTOM];
 }
 
 static void unplace(FBox *b)
@@ -2334,6 +2532,19 @@ static void unplace(FBox *b)
 static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw,
                        Cursor *cur);
 
+static bool table_is_empty(const FBox *t)
+{
+    for (const FBox *c = t->first; c != NULL; c = c->next) {
+        if (c->kind == FB_CAPTION || c->kind == FB_ROW)
+            return false;
+        if (c->kind == FB_ROW_GROUP)
+            for (const FBox *r = c->first; r != NULL; r = r->next)
+                if (r->kind == FB_ROW)
+                    return false;
+    }
+    return true;
+}
+
 // The table: its width and its columns', its captions, its rows and their
 // cells, placed in its containing block like any block. One whose build or
 // layout ran out of memory partway keeps its place, empty: its columns
@@ -2341,6 +2552,20 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
 // whole table's would, and none of it is real yet.
 static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw, Cursor *cur)
 {
+    // A table with no rows and no captions in quirks mode is nothing at all
+    // (the Quirks standard's 3.10): no width, no height, no border, and the
+    // flow goes on as if it were not there.
+    if (l->quirks && table_is_empty(t)) {
+        for (FBox *c = t->first; c != NULL; c = c->next)
+            unplace(c);
+        t->placed = true;
+        t->x = cbx;
+        t->y = cur->y;
+        t->w = t->h = 0;
+        for (int i = 0; i < 4; i++)
+            t->border[i] = t->padding[i] = 0;
+        return;
+    }
     int64_t y = cur->y + margins_sum(margins_join(cur->pm,
                                                   margin_of(len(t->style->margin[FLOW_TOP], cbw))));
     if (t->unfinished) {
@@ -2361,6 +2586,64 @@ static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw
         t->x = cbx;
     t->y = y;
     t->h = 0;
+}
+
+// Row heights under range adds and range sums: two Fenwick trees, in
+// uint64_t because the second accumulates value x row terms that may pass
+// int64_t on their way even when every sum asked for fits; the arithmetic
+// is exact modulo 2^64, so a sum that fits comes back exact.
+typedef struct {
+    uint64_t *a, *b;
+    int32_t n;
+} RowSums;
+
+static void rowsums_point(uint64_t *t, int32_t n, int32_t i, uint64_t v)
+{
+    for (; i <= n; i += i & -i)
+        t[i] += v;
+}
+
+static uint64_t rowsums_prefix_of(const uint64_t *t, int32_t i)
+{
+    uint64_t v = 0;
+    for (; i > 0; i -= i & -i)
+        v += t[i];
+    return v;
+}
+
+// Rows [r0, r1] each grow by v.
+static void rowsums_add(RowSums *s, int32_t r0, int32_t r1, int64_t v)
+{
+    uint64_t u = (uint64_t)v;
+    rowsums_point(s->a, s->n, r0 + 1, u);
+    rowsums_point(s->a, s->n, r1 + 2, (uint64_t)0 - u);
+    rowsums_point(s->b, s->n, r0 + 1, u * (uint64_t)r0);
+    rowsums_point(s->b, s->n, r1 + 2, (uint64_t)0 - u * (uint64_t)(r1 + 1));
+}
+
+static uint64_t rowsums_prefix(const RowSums *s, int32_t count)
+{
+    return rowsums_prefix_of(s->a, count) * (uint64_t)count - rowsums_prefix_of(s->b, count);
+}
+
+// The heights of rows [r0, r1] together.
+static int64_t rowsums_sum(const RowSums *s, int32_t r0, int32_t r1)
+{
+    return (int64_t)(rowsums_prefix(s, r1 + 1) - rowsums_prefix(s, r0));
+}
+
+static bool rowsums_init(L *l, RowSums *s, const int64_t *rh, int32_t n)
+{
+    s->n = n + 1;
+    s->a = os64_calloc((size_t)n + 2, sizeof(uint64_t));
+    s->b = os64_calloc((size_t)n + 2, sizeof(uint64_t));
+    if (s->a == NULL || s->b == NULL) {
+        fail(l);
+        return false;
+    }
+    for (int32_t r = 0; r < n; r++)
+        rowsums_add(s, r, r, rh[r]);
+    return true;
 }
 
 static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw,
@@ -2434,6 +2717,16 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
     for (int32_t r = 0; r < g.nrows; r++)
         if (g.rows[r].box->style->height.kind == FLOW_LENGTH_PX)
             rh[r] = g.rows[r].box->style->height.value;
+    // Each cell laid out at its width, and its baseline taken then, before
+    // any row stretches it. A row is as tall as its tallest cell, and as
+    // tall as its baseline cells need: the most any has above the shared
+    // baseline plus the most any has below it (§17.5.3) — sized before the
+    // cells are moved, so a moved cell never reaches into the next row.
+    int64_t *base = os64_calloc((size_t)(g.ncells > 0 ? g.ncells : 1), sizeof(int64_t));
+    int64_t *row_base = os64_calloc((size_t)(g.nrows > 0 ? g.nrows : 1), sizeof(int64_t));
+    int64_t *below = os64_calloc((size_t)(g.nrows > 0 ? g.nrows : 1), sizeof(int64_t));
+    if (base == NULL || row_base == NULL || below == NULL)
+        fail(l);
     for (int32_t i = 0; i < g.ncells && !l->failed; i++) {
         GCell *gc = &g.cells[i];
         int64_t w = (int64_t)(gc->cols - 1) * hsp;
@@ -2442,38 +2735,97 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
         int64_t h = cell_layout(l, styles, gc->cell, cols[gc->col].x, w, inner_w);
         if (gc->rows == 1)
             rh[gc->row] = max64(rh[gc->row], h);
+        if (!l->failed)
+            base[i] = first_baseline(gc->cell);
+        if (!l->failed && gc->cell->style->vertical_align == FLOW_VALIGN_BASELINE)
+            row_base[gc->row] = max64(row_base[gc->row], base[i]);
     }
     for (int32_t i = 0; i < g.ncells && !l->failed; i++) {
         GCell *gc = &g.cells[i];
+        if (gc->rows == 1 && gc->cell->style->vertical_align == FLOW_VALIGN_BASELINE)
+            below[gc->row] = max64(below[gc->row], gc->cell->h - base[i]);
+    }
+    for (int32_t r = 0; r < g.nrows && !l->failed; r++)
+        if (below[r] > 0 || row_base[r] > 0)
+            rh[r] = max64(rh[r], row_base[r] + below[r]);
+    // Rowspans: what each spanning cell's rows already have, and its excess
+    // spread over them, in a range-add, range-sum tree over the row heights
+    // — a cell costs log(rows), not its span, which a first row of long
+    // spans over thousands of empty rows made rows x cells.
+    RowSums rs = {0};
+    bool spanning = false;
+    for (int32_t i = 0; i < g.ncells && !spanning; i++)
+        spanning = g.cells[i].rows > 1;
+    if (spanning && !l->failed && !rowsums_init(l, &rs, rh, g.nrows))
+        spanning = false;
+    for (int32_t i = 0; i < g.ncells && spanning && !l->failed; i++) {
+        GCell *gc = &g.cells[i];
         if (gc->rows == 1)
             continue;
-        int64_t have = (int64_t)(gc->rows - 1) * vsp;
-        for (int32_t r = gc->row; r < gc->row + gc->rows; r++)
-            have += rh[r];
-        if (gc->cell->h > have) {
-            int64_t extra = gc->cell->h - have, each = extra / gc->rows;
-            for (int32_t r = gc->row; r < gc->row + gc->rows; r++)
-                rh[r] += r == gc->row + gc->rows - 1 ? extra - each * (gc->rows - 1) : each;
+        int32_t last = gc->row + gc->rows - 1;
+        int64_t have = (int64_t)(gc->rows - 1) * vsp + rowsums_sum(&rs, gc->row, last);
+        // A spanning baseline cell moves down to its first row's baseline,
+        // and the rows it spans hold it where it goes.
+        int64_t need = gc->cell->h;
+        if (gc->cell->style->vertical_align == FLOW_VALIGN_BASELINE)
+            need += row_base[gc->row] - base[i];
+        if (need > have) {
+            int64_t extra = need - have, each = extra / gc->rows;
+            rowsums_add(&rs, gc->row, last, each);
+            rowsums_add(&rs, last, last, extra - each * gc->rows);
         }
+    }
+    if (spanning && !l->failed)
+        for (int32_t r = 0; r < g.nrows; r++)
+            rh[r] = rowsums_sum(&rs, r, r);
+    os64_free(rs.a);
+    os64_free(rs.b);
+    // A row group's set height is its rows' least together: what they lack
+    // of it goes to them in proportion to their heights, else evenly, the
+    // rule a set table height follows.
+    for (int32_t r0 = 0; r0 < g.nrows && !l->failed;) {
+        int32_t r1 = g.rows[r0].group_end;
+        const FBox *group = g.rows[r0].box->parent;
+        if (group != NULL && group->kind == FB_ROW_GROUP &&
+            group->style->height.kind == FLOW_LENGTH_PX) {
+            int64_t have = (int64_t)(r1 - r0 - 1) * vsp;
+            for (int32_t r = r0; r < r1; r++)
+                have += rh[r];
+            int64_t total = have - (int64_t)(r1 - r0 - 1) * vsp;
+            if (group->style->height.value > have) {
+                int64_t extra = group->style->height.value - have, given = 0;
+                for (int32_t r = r0; r < r1; r++) {
+                    int64_t share = total > 0 ? mul_div(extra, rh[r], total) : extra / (r1 - r0);
+                    if (r == r1 - 1)
+                        share = extra - given;
+                    given += share;
+                    rh[r] += share;
+                }
+            }
+        }
+        r0 = r1 > r0 ? r1 : r0 + 1;
     }
     int64_t top = y + t->border[FLOW_TOP] + t->padding[FLOW_TOP];
     int64_t grid_h = g.nrows > 0 ? (int64_t)(g.nrows + 1) * vsp : 0;
     for (int32_t r = 0; r < g.nrows; r++)
         grid_h += rh[r];
-    // A set height (border-box) is a least height; rows share the rest in
-    // proportion to their heights.
+    // A set height (border-box) is a least height, rows or none; rows share
+    // the rest in proportion to their heights.
     int64_t vf = vframe(t, cbw);
     if (s->height.kind == FLOW_LENGTH_PX && s->height.value - vf > grid_h && g.nrows > 0) {
         int64_t extra = s->height.value - vf - grid_h, total = grid_h - (int64_t)(g.nrows + 1) * vsp;
         int64_t given = 0;
         for (int32_t r = 0; r < g.nrows; r++) {
-            int64_t share = total > 0 ? extra * rh[r] / total : extra / g.nrows;
+            int64_t share = total > 0 ? mul_div(extra, rh[r], total) : extra / g.nrows;
             if (r == g.nrows - 1)
                 share = extra - given;
             given += share;
             rh[r] += share;
         }
         grid_h += extra;
+    } else if (s->height.kind == FLOW_LENGTH_PX && s->height.value - vf > grid_h) {
+        // No rows to share it: a set height is still the table's least.
+        grid_h = s->height.value - vf;
     }
     int64_t yy = top + vsp;
     for (int32_t r = 0; r < g.nrows; r++) {
@@ -2483,34 +2835,54 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
 
     // Cells to their rows, and their content to where `valign` puts it —
     // baseline cells sharing their row's lowest first baseline.
-    int64_t *row_base = os64_calloc((size_t)(g.nrows > 0 ? g.nrows : 1), sizeof(int64_t));
-    if (row_base == NULL)
-        fail(l);
-    for (int32_t i = 0; i < g.ncells && row_base != NULL; i++) {
-        GCell *gc = &g.cells[i];
-        if (gc->cell->style->vertical_align == FLOW_VALIGN_BASELINE)
-            row_base[gc->row] = max64(row_base[gc->row], first_baseline(gc->cell));
-    }
-    for (int32_t i = 0; i < g.ncells && row_base != NULL && !l->failed; i++) {
+    for (int32_t i = 0; i < g.ncells && !l->failed; i++) {
         GCell *gc = &g.cells[i];
         FBox *cell = gc->cell;
         int64_t natural = cell->h;
-        int64_t h = (int64_t)(gc->rows - 1) * vsp;
-        for (int32_t r = gc->row; r < gc->row + gc->rows; r++)
-            h += rh[r];
+        // The rows it spans, from their tops: no walk over the span.
+        int32_t last = gc->row + gc->rows - 1;
+        int64_t h = ry[last] + rh[last] - ry[gc->row];
         translate(cell, 0, ry[gc->row] - cell->y);
         cell->h = h;
         int64_t shift = 0;
         switch (cell->style->vertical_align) {
         case FLOW_VALIGN_MIDDLE: shift = (h - natural) / 2; break;
         case FLOW_VALIGN_BOTTOM: shift = h - natural; break;
-        case FLOW_VALIGN_BASELINE: shift = row_base[gc->row] - first_baseline(cell); break;
+        case FLOW_VALIGN_BASELINE: shift = row_base[gc->row] - base[i]; break;
         default: break;
         }
-        if (shift > 0)
+        if (shift > 0) {
             translate_content(cell, shift);
+            base[i] += shift;
+        }
     }
+    // Each row's baseline, for a table this one is nested in: the one its
+    // baseline cells share, else its first cell's where valign put it, else
+    // (no cells) its bottom.
+    for (int32_t i = 0; i < g.ncells && !l->failed; i++) {
+        GCell *gc = &g.cells[i];
+        if (gc->cell->style->vertical_align == FLOW_VALIGN_BASELINE) {
+            g.rows[gc->row].box->has_baseline = true;
+            g.rows[gc->row].box->baseline = ry[gc->row] + row_base[gc->row];
+        }
+    }
+    for (int32_t i = 0; i < g.ncells && !l->failed; i++) {
+        FBox *row = g.rows[g.cells[i].row].box;
+        if (!row->has_baseline) {
+            row->has_baseline = true;
+            row->baseline = ry[g.cells[i].row] + base[i];
+        }
+    }
+    // A row with no cells has its bottom as its baseline, so a table whose
+    // first row is empty still takes its baseline from that row.
+    for (int32_t r = 0; r < g.nrows && !l->failed; r++)
+        if (!g.rows[r].box->has_baseline) {
+            g.rows[r].box->has_baseline = true;
+            g.rows[r].box->baseline = ry[r] + rh[r];
+        }
+    os64_free(base);
     os64_free(row_base);
+    os64_free(below);
 
     // Rows, row groups and columns: the rectangles their cells make.
     int64_t row_x = gx + hsp, row_w = 0;
@@ -2575,17 +2947,10 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
         }
     }
 
-    // The table box itself. A table with no rows and no captions in quirks
-    // mode is nothing at all (the Quirks standard's 3.10).
-    bool has_caption = false;
-    for (FBox *c = t->first; c != NULL; c = c->next)
-        has_caption |= c->kind == FB_CAPTION;
+    // The table box itself.
     t->placed = true;
     t->y = y;
-    t->h = l->quirks && g.nrows == 0 && !has_caption ? 0 : vf + grid_h;
-    if (t->h == 0)
-        for (int i = 0; i < 4; i++)
-            t->border[i] = 0;
+    t->h = vf + grid_h;
 
     // Bottom captions, then the flow goes on below it all.
     cc = (Cursor){t->y + t->h, kNoMargins, t->y + t->h};
@@ -2603,9 +2968,13 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
 
 // ── The layout ──────────────────────────────────────────────────────────
 
+// What is not placed is not on the page — a failed table's unplaced cells
+// keep their lines, and those reach no edge.
 static int64_t right_edge(const FBox *b)
 {
-    int64_t r = b->placed ? b->x + b->w : 0;
+    if (!b->placed)
+        return 0;
+    int64_t r = b->x + b->w;
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
             r = max64(r, fr->x + fr->w - fr->hang);
@@ -2621,7 +2990,9 @@ static int64_t right_edge(const FBox *b)
 // it that overflows a height the page set.
 static int64_t bottom_edge(const FBox *b)
 {
-    int64_t r = b->placed ? b->y + b->h : 0;
+    if (!b->placed)
+        return 0;
+    int64_t r = b->y + b->h;
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
             r = max64(r, fr->y + fr->h);

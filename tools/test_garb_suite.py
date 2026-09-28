@@ -8,7 +8,9 @@ Python's correctly-rounded float(); the tokenizer computes its own).
 The suite keeps two token kinds CSS Syntax Level 3 no longer has — the
 attribute match operators (`~=` …) as single tokens, and `unicode-range` —
 so its expectations are brought to the specification before comparing: a
-match operator is the two delimiters the tokenizer now makes of it, and a
+match operator standing as a token (never one spelled inside a string or
+another token's payload) is the two delimiters the tokenizer now makes of
+it, and a
 case with a unicode-range is skipped by name. It also predates the draft's
 trimming of a declaration's value, so the white space at either end of an
 expected value is taken off. A case in an encoding the
@@ -28,17 +30,72 @@ MATCH = {'~=', '|=', '^=', '$=', '*=', '||'}
 READ = {'utf-8', 'utf-16le', 'utf-16be', 'windows-1252'}
 
 
+# A node is a list whose first element names its kind. A scalar node's
+# other elements are PAYLOAD — a string's text, an ident's name — and are
+# never tokens, whatever they spell; the rest hold component values at the
+# positions given here (None: every position past the kind).
+SCALAR = {'ident', 'at-keyword', 'hash', 'string', 'url', 'number', 'percentage',
+          'dimension', 'unicode-range', 'error'}
+VALUE_LISTS = {'{}': None, '[]': None, '()': None, 'function': 2,
+               'declaration': (2,), 'qualified rule': (1, 2), 'at-rule': (2, 3)}
+
+
+def spec_values(xs):
+    """A list of component values, its match tokens as two delimiters."""
+    out = []
+    for y in xs:
+        if isinstance(y, str) and y in MATCH:
+            out.extend([y[0], y[1]])
+        else:
+            out.append(spec_form(y))
+    return out
+
+
 def spec_form(x):
     """The suite's expectation, with match tokens as two delimiters."""
-    if isinstance(x, list):
-        out = []
-        for y in x:
-            if isinstance(y, str) and y in MATCH:
-                out.extend([y[0], y[1]])
-            else:
-                out.append(spec_form(y))
-        return out
-    return x
+    if not isinstance(x, list):
+        return x
+    kind = x[0] if x and isinstance(x[0], str) else None
+    if kind in SCALAR:
+        return x
+    if kind in VALUE_LISTS:
+        where = VALUE_LISTS[kind]
+        if where is None:
+            return [kind] + spec_values(x[1:])
+        if isinstance(where, int):
+            return x[:where] + spec_values(x[where:])
+        return [spec_values(y) if i in where and isinstance(y, list) else y
+                for i, y in enumerate(x)]
+    # A list of rules and declarations, or of component values.
+    return spec_values(x)
+
+
+def payloads(x):
+    """Every scalar node's payload, in order: what spec_form must not touch."""
+    if not isinstance(x, list):
+        return []
+    if x and isinstance(x[0], str) and x[0] in SCALAR:
+        return [repr(x)]
+    return [p for y in x for p in payloads(y)]
+
+
+def spec_form_selftest():
+    """spec_form changes match tokens and nothing else."""
+    cases = [
+        (['string', '~='], ['string', '~=']),
+        (['url', '|='], ['url', '|=']),
+        (['{}', '~=', ['string', '*=']], ['{}', '~', '=', ['string', '*=']]),
+        (['function', 'f', '^=', ' '], ['function', 'f', '^', '=', ' ']),
+        (['declaration', 'a', ['$=', ['ident', '||']], False],
+         ['declaration', 'a', ['$', '=', ['ident', '||']], False]),
+        ([['qualified rule', ['a', '||'], ['~=']]],
+         [['qualified rule', ['a', '|', '|'], ['~', '=']]]),
+        (['||', ['error', '~=']], ['|', '|', ['error', '~=']]),
+    ]
+    for given, want in cases:
+        got = spec_form(given)
+        if got != want:
+            sys.exit(f'spec_form self-test: {given!r} -> {got!r}, want {want!r}')
 
 
 def trim_declarations(x):
@@ -85,6 +142,7 @@ def label(value):
 
 def main():
     driver = sys.argv[1]
+    spec_form_selftest()
     total = failed = skipped = 0
     for name in FILES:
         cases = json.loads((SUITE / f'{name}.json').read_text(encoding='utf-8'))
@@ -115,7 +173,10 @@ def main():
                 skipped += 1
                 continue
             got = json.loads(line)
-            want = trim_declarations(spec_form(want))
+            spec = spec_form(want)
+            if payloads(spec) != payloads(want):
+                sys.exit(f'spec_form rewrote a payload in {name}: {given!r}')
+            want = trim_declarations(spec)
             if not same(got, want):
                 failed += 1
                 if failed <= 40:

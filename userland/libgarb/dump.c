@@ -1,6 +1,8 @@
 // dump.c — a parse as JSON in css-parsing-tests' representation: what the
 // harness diffs against the suite, and what a probe in the guest prints.
 
+#include <float.h>
+
 #include "internal.h"
 #include "os64/fmt.h"
 #include "os64/str.h"
@@ -46,7 +48,10 @@ static void str(Out *o, const char *s, size_t n)
 }
 
 // A number JSON can hold: an integer as one, anything else to seventeen
-// significant digits, which is a double's whole precision.
+// significant digits. The digits are made by dividing and multiplying by
+// ten, so the last of them can be off by a unit; what compares these dumps
+// does so to a relative 1e-12, and a finite double is always written as a
+// finite number — infinity only for an infinity, tested exactly.
 static void num(Out *o, double v)
 {
     char b[48];
@@ -54,11 +59,12 @@ static void num(Out *o, double v)
         puts_(o, "NaN");
         return;
     }
-    if (v > 1.7e308 || v < -1.7e308) {
+    if (v > DBL_MAX || v < -DBL_MAX) {
         puts_(o, v > 0 ? "Infinity" : "-Infinity");
         return;
     }
-    if (v == (double)(int64_t)v && v < 1e15 && v > -1e15) {
+    // The range first: a double past int64_t's cannot be cast to one at all.
+    if (v < 1e15 && v > -1e15 && v == (double)(int64_t)v) {
         os64_snprintf(b, sizeof(b), "%ld", (long)(int64_t)v);
         puts_(o, b);
         return;

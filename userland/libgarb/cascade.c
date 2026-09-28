@@ -770,6 +770,7 @@ static int32_t inline_decls(garb_cascade_t *c, const os64_html_node_t *el, Decl 
     garb_parsed_t *p = &c->attrs[c->nattrs];
     if (garb_parse_block(a->value, os64_strlen(a->value), p) != GARB_OK) {
         garb_free(p);
+        c->incomplete = true;           // a style the page gave was not read
         return 0;
     }
     c->nattrs++;
@@ -995,7 +996,17 @@ garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
             x = x->parent;
         x = x != NULL ? x->next : NULL;
     }
-    if (c->self.incomplete)
+    // What the cascade read ran short wherever it was read: a sheet's own
+    // parse, and the rule blocks, selectors and values read from it since,
+    // each mark the parse they belong to. Any of them short in a sheet the
+    // cascade used, or in a style attribute, and the cascade is short.
+    bool short_read = c->self.incomplete;
+    for (int32_t s = 0; s < n; s++)
+        short_read |= sheets[s].sheet != NULL && sheets[s].sheet->incomplete &&
+                      garb_media_text_matches(sheets[s].media, env);
+    for (int32_t i = 0; i < c->nattrs; i++)
+        short_read |= c->attrs[i].incomplete;
+    if (short_read)
         c->incomplete = true;
     return c;
 }
