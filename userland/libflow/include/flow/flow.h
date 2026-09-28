@@ -11,9 +11,11 @@
 // arrive through the callbacks in flow_env_t, which is what lets the whole
 // library run on the host against the fake font backend.
 //
-// THE DOCUMENT AND THE MODEL MUST OUTLIVE WHATEVER IS BUILT FROM THEM. A
-// style points into the tree for the family names a page wrote; nothing
-// is copied that can be pointed at.
+// THE DOCUMENT, THE MODEL AND THE TEXT CONTEXT MUST OUTLIVE WHATEVER IS
+// BUILT FROM THEM. A style points into the tree for the family names a page
+// wrote, and nothing is copied that can be pointed at; every text
+// fragment's run lives on `env->text`, and freeing the layout releases each
+// run against it.
 
 #include "html/html.h"
 #include "page/page.h"
@@ -231,7 +233,15 @@ typedef struct {
     uint32_t viewport_font_px;      // `medium`; 16 unless the face says otherwise
     flow_generic_t default_generic; // the family a page that names none is drawn in
     uint32_t ink, link_ink, paper;  // XRGB; the dumps name these, never print them
+    // What each of the two arenas a page can MULTIPLY may hold, in bytes:
+    // the boxes (an inline split round a block reopens every inline open
+    // there) and the lines laid out from them. 0 is FLOW_ARENA_DEFAULT. The
+    // budget is the caller's, as libhtml's max_arena_bytes is; a layout that
+    // reaches it stops and says `incomplete`, and what it holds is real.
+    size_t max_arena_bytes;
 } flow_env_t;
+
+#define FLOW_ARENA_DEFAULT ((size_t)64 << 20)
 
 // ── The door ────────────────────────────────────────────────────────────
 
