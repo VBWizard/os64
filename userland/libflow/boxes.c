@@ -586,7 +586,7 @@ typedef struct {
     bool block, inline_content;
 } Mix;
 
-static void scan(const B *b, const os64_html_node_t *first, const os64_html_node_t *stop,
+static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *stop,
                  Mix *m)
 {
     for (const os64_html_node_t *c = first; c != stop && !(m->block && m->inline_content);
@@ -602,7 +602,12 @@ static void scan(const B *b, const os64_html_node_t *first, const os64_html_node
         if (s == NULL || s->style.display == FLOW_DISPLAY_NONE)
             continue;
         if (s->style.display == FLOW_DISPLAY_CONTENTS) {
+            // A box-less element's children are its parent's, so the scan
+            // goes into them — a descent like any other, and charged as one.
+            if (!descend(b))
+                return;
             scan(b, c->first_child, NULL, m);
+            ascend(b);
         } else if (block_level(s->style.display)) {
             m->block = true;
         } else {
