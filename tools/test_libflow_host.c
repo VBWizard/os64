@@ -8,6 +8,7 @@
 
 #include <stdarg.h>
 #include <stdint.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -145,13 +146,26 @@ static os64_font_status_t test_fonts(void *ctx, const flow_family_list_t *famili
     return OS64_FONT_OK;
 }
 
-// The face's measure of a picture: one whose src says "known" is 40x30;
-// everything else has not arrived.
+// The face's measure of a picture: one whose src says "known" is 40x30,
+// "tall" and "wide" are the most skewed a face may report (1 by INT32_MAX
+// and back), and everything else has not arrived.
 static bool test_oracle(void *ctx, const os64_html_node_t *node, int32_t *w, int32_t *h)
 {
     (void)ctx;
     const os64_html_attr_t *src = os64_html_attr(node, "src");
-    if (src == NULL || src->value == NULL || strstr(src->value, "known") == NULL)
+    if (src == NULL || src->value == NULL)
+        return false;
+    if (strstr(src->value, "tall") != NULL) {
+        *w = 1;
+        *h = INT32_MAX;
+        return true;
+    }
+    if (strstr(src->value, "wide") != NULL) {
+        *w = INT32_MAX;
+        *h = 1;
+        return true;
+    }
+    if (strstr(src->value, "known") == NULL)
         return false;
     *w = 40;
     *h = 30;
@@ -673,8 +687,75 @@ static int32_t lowest_y(const flow_box_t *b)
     return y;
 }
 
+typedef struct {
+    const os64_html_document_t *doc;
+    const os64_page_t *page;
+    int whole;
+} Deep;
+
+static void *deep_layout(void *arg)
+{
+    Deep *d = arg;
+    flow_tree_t *t = flow_layout(d->doc, d->page, 800, &kEnv);
+    d->whole = t == NULL ? -1 : !flow_incomplete(t);
+    flow_free(t);
+    return NULL;
+}
+
 static void limit_cases(void)
 {
+    // Codex #147 round 6: an item whose first content is a nested list
+    // shares that list's first line, and both markers stand on it. The
+    // 48px outer bullet's font box (60 tall, baseline 42) holds the line
+    // open, so the bullet sits inside its item, 48 + 42 - 36 = 54.
+    {
+        char *got = layout_dump_of("<!doctype html><font size=7><ul><li><font size=1><ul><li>x"
+                                   "</ul></font><li>y</ul></font>", 300);
+        expect("every marker waiting on a shared first line holds it open",
+               got != NULL && strstr(got, "      block li 48 48 244 60\n") != NULL &&
+                   strstr(got, "        marker \"\xe2\x80\xa2 \" 12 54 36 48\n") != NULL,
+               got);
+        free(got);
+    }
+    // Codex #147 round 6: a picture's shape scales one side by the other,
+    // and the face may report 1 by INT32_MAX; with a width of a million
+    // percent three tables deep the product overflowed int64_t. Both
+    // skews, both sides given, under UBSan: held, not wrapped.
+    {
+        static const char *const pages[] = {
+            "<!doctype html><table width=1000000%><tr><td><table width=1000000%><tr><td>"
+            "<table width=1000000%><tr><td><img src=tall.png width=1000000%></table></table></table>",
+            "<!doctype html><img src=wide.png height=1000000>",
+            "<!doctype html><img src=tall.png width=1000000>",
+        };
+        for (int i = 0; i < F_ARRAY(pages); i++) {
+            os64_html_document_t *doc = parse(pages[i]);
+            os64_page_t *page = os64_page_build(doc, kPage, NULL);
+            flow_tree_t *t = flow_layout(doc, page, 800, &kEnv);
+            expect("a skewed picture's shape is held, not overflowed",
+                   t != NULL && !flow_incomplete(t) && flow_height(t) > 0 && flow_width(t) > 0,
+                   pages[i]);
+            flow_free(t);
+            os64_page_free(page);
+            os64_html_document_free(doc);
+        }
+    }
+    // Found auditing the same invariant: a font size compounds down the tree
+    // (each <big> is 6/5 of its parent's), and 150 of them wrapped negative.
+    // It is held to F_INT_MAX pixels, and drawn at the largest the engine can.
+    {
+        size_t bcap = 150 * 5 + 64, bat = 0;
+        char *bigs = malloc(bcap);
+        bat += (size_t)snprintf(bigs, bcap, "<!doctype html>");
+        for (int i = 0; i < 150; i++)
+            bat += (size_t)snprintf(bigs + bat, bcap - bat, "<big>");
+        snprintf(bigs + bat, bcap - bat, "x");
+        char *got = layout_dump_of(bigs, 400);
+        expect("a compounded font size is held, not wrapped negative",
+               got != NULL && strstr(got, " serif 1000000\n") != NULL, NULL);
+        free(got);
+        free(bigs);
+    }
     // Codex #147 round 4: a document libhtml stopped short of is not whole,
     // however well its prefix lays out.
     {
@@ -726,6 +807,26 @@ static void limit_cases(void)
            nested_whole("<marquee>", "</marquee>", (F_DEPTH_MAX - 2) / 2 + 1, 4096) == 0, NULL);
     expect("inline nesting counts against the same bound",
            nested_whole("<span>", "</span>", 2000, 4096) == 0, NULL);
+    // Codex #147 round 5: display: contents is walked before any box is
+    // made (the mixing scan), and that walk is charged too — a chain far
+    // past the bound stops the build instead of the stack. The layout runs
+    // on a thread with a small stack; the parser and libpage do not.
+    {
+        os64_html_document_t *doc = nested("<slot>", "</slot>", 20000, 40000);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        Deep d = {doc, page, -1};
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 512 * 1024);
+        pthread_t th;
+        bool ran = pthread_create(&th, &attr, deep_layout, &d) == 0;
+        if (ran)
+            pthread_join(th, NULL);
+        expect("a display-contents chain past the bound is incomplete, not a crash",
+               ran && d.whole == 0, NULL);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
     expect("tables nested past the bound are incomplete",
            nested_whole("<table><tr><td>", "</table>", 700, 4096) == 0, NULL);
 
@@ -790,6 +891,50 @@ static void limit_cases(void)
     os64_page_free(page);
     os64_html_document_free(doc);
     free(html);
+}
+
+// A face at its most hostile: every picture measured at an extreme — a
+// sliver as tall or as wide as an int32_t holds, the largest square, or
+// nothing — chosen by the node, so each page gets a mix.
+static bool hostile_oracle(void *ctx, const os64_html_node_t *node, int32_t *w, int32_t *h)
+{
+    (void)ctx;
+    switch (((uintptr_t)node >> 4) % 4) {
+    case 0: *w = 1; *h = INT32_MAX; break;
+    case 1: *w = INT32_MAX; *h = 1; break;
+    case 2: *w = INT32_MAX; *h = INT32_MAX; break;
+    default: *w = 0; *h = 0; break;
+    }
+    return true;
+}
+
+// Every corpus page under the hostile oracle, at a page's width and at
+// none, under UBSan: whatever the face says, the geometry holds its range
+// (the harness aborts on any overflow) and the page's size is a size.
+static void hostile_corpus(void)
+{
+    flow_env_t env = kEnv;
+    env.replaced_size = hostile_oracle;
+    for (size_t i = 0; i < sizeof(kCorpus) / sizeof(kCorpus[0]); i++) {
+        char path[256];
+        snprintf(path, sizeof(path), "tools/html_corpus/%s.html", kCorpus[i]);
+        size_t len = 0;
+        char *html = slurp(path, &len);
+        if (html == NULL)
+            continue;
+        os64_html_document_t *doc = parse(html);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        static const int32_t widths[] = {800, 0};
+        for (int k = 0; k < F_ARRAY(widths); k++) {
+            flow_tree_t *t = flow_layout(doc, page, widths[k], &env);
+            expect("a hostile face's measures are held", t != NULL && !flow_incomplete(t) &&
+                   flow_height(t) >= 0 && flow_width(t) >= widths[k], path);
+            flow_free(t);
+        }
+        os64_page_free(page);
+        os64_html_document_free(doc);
+        free(html);
+    }
 }
 
 static void layout_sweep(void)
@@ -895,6 +1040,7 @@ int main(int argc, char **argv)
     table_cases();
     table_bounds();
     corpus();
+    hostile_corpus();
     allocation_sweep();
     cascade_sweep();
     boxes_sweep();
