@@ -451,7 +451,10 @@ the library.
 with `width` and `height` attributes gets a box of that size, an image
 with neither is laid out AS ITS ALT TEXT inline (the standard's rendering
 of an unavailable image with alt, and the reason a page of missing images
-still reads), and an image with empty alt and no size takes no space. A
+still reads), an image with empty alt and no size takes no space, and
+one with no alt at all and no size is a small box the size of the
+broken-image icon, 16 pixels square (the chapter's rendering of an
+unavailable image that says nothing about itself). A
 form control with an unknown size (the face has not measured it) gets a
 placeholder the size of one row of its font, which the face will correct
 on the next layout — the oracle is the truth and the engine never caches
@@ -747,6 +750,10 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
   early can still move when its line completes; (c) every unfinished box
   is an ancestor of the last box. Heights and table widths of unfinished
   ancestors, and the geometry under an unfinished line, are not compared.
+  (a) holds inside tables too, because a table cut short in either pass
+  keeps its place with no rows: its columns would come from only the
+  cells it has, so no line in it would break where the whole table's
+  does, and none of it enters the partial tree to be compared.
 - **Fuzz**: every corpus page truncated at every 64 bytes and tag-soup
   mutations of them, under ASan/UBSan, asserting the invariants of a box
   tree (every child's overflow rect inside its parent's OVERFLOW rect —
