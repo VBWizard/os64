@@ -501,6 +501,92 @@ static void layout_cases(void)
         "        text \"b\" 20 18 8 16 serif 16 bold\n"
         "        text \" c\" 28 18 12 16 serif 16\n");
 
+    // Codex #147 round 5. A justified line lays a tab down from its live pen
+    // too: x, the tab to 64, and y ending at 72, the line's edge.
+    layout_case("a justified line's tab lands on the line's stop",
+        "<!doctype html><div align=justify><pre wrap><b>x</b>\ty zzzzzzzzz</pre></div>", 88,
+        "page 88 72\n"
+        "block html 0 0 88 72\n"
+        "  block body 8 16 72 40\n"
+        "    block div 8 16 72 40\n"
+        "      block pre 8 16 72 40\n"
+        "        line 8 16 72 20 base 14\n"
+        "          span b 8 18 8 16\n"
+        "          text \"x\" 8 18 8 16 mono 16 bold\n"
+        "          text \"y\" 72 18 8 16 mono 16\n"
+        "        line 8 36 72 20 base 14\n"
+        "          text \"zzzzzzzzz\" 8 38 72 16 mono 16\n");
+
+    // Codex #147 round 5. Top- and bottom-aligned boxes each ask only that
+    // the line be as tall as they are: 120, with the bottom's 100 extra
+    // above the text's 14, so the baseline is 114 whichever comes first.
+    layout_case("top and bottom alignment does not depend on order",
+        "<!doctype html><img src=known.png width=10 height=100 align=top>"
+        "<img src=known.png width=10 height=120 align=bottom>x", 400,
+        "page 400 136\n"
+        "block html 0 0 400 136\n"
+        "  block body 8 8 384 120\n"
+        "    line 8 8 384 120 base 114\n"
+        "      atomic img 8 8 10 100\n"
+        "      atomic img 18 8 10 120\n"
+        "      text \"x\" 28 110 8 16 serif 16\n");
+    layout_case("top and bottom alignment does not depend on order, reversed",
+        "<!doctype html><img src=known.png width=10 height=120 align=bottom>"
+        "<img src=known.png width=10 height=100 align=top>x", 400,
+        "page 400 136\n"
+        "block html 0 0 400 136\n"
+        "  block body 8 8 384 120\n"
+        "    line 8 8 384 120 base 114\n"
+        "      atomic img 8 8 10 120\n"
+        "      atomic img 18 8 10 100\n"
+        "      text \"x\" 28 110 8 16 serif 16\n");
+
+    // Codex #147 round 5. An outside marker holds its item's first line open
+    // as text would: in quirks mode a line of nothing but a 1px top-aligned
+    // picture takes the marker's 20px font box, and the bullet sits inside.
+    layout_case("quirks: an outside marker holds its first line open",
+        "<ul><li><img src=known.png width=1 height=1 align=top></ul>", 200,
+        "page 200 44\n"
+        "block html 0 0 200 44\n"
+        "  block body 8 8 184 20\n"
+        "    block ul 8 8 184 20\n"
+        "      block li 48 8 144 20\n"
+        "        marker \"\xe2\x80\xa2 \" 36 10 12 16\n"
+        "        line 48 8 144 20 base 14\n"
+        "          atomic img 48 8 1 1\n");
+
+    // Codex #147 round 6. A missing picture with no alt draws nothing, and
+    // is nothing to the spaces round it: "a " and " b" share one space, as
+    // they do when the alt collapses to nothing, and across inline edges.
+    layout_case("an omitted picture is transparent to white space",
+        "<!doctype html><p>a <img src=missing.png alt=\"\"> b", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"a \" 8 18 12 16 serif 16\n"
+        "        text \"b\" 20 18 8 16 serif 16\n");
+    layout_case("a picture whose alt collapses to nothing is transparent to white space",
+        "<!doctype html><p>a <img src=missing.png alt=\" \"> b", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"a \" 8 18 12 16 serif 16\n"
+        "        text \"b\" 20 18 8 16 serif 16\n");
+    layout_case("an omitted picture inside an inline is transparent to white space",
+        "<!doctype html><p>a <b><img src=missing.png alt=\"\"></b> b", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        span b 20 18 0 16\n"
+        "        text \"a \" 8 18 12 16 serif 16\n"
+        "        text \"b\" 20 18 8 16 serif 16\n");
+
     // An inside marker is in its item's link, as its text is.
     layout_case("an inside marker keeps its item's link",
         "<!doctype html><a href=x><details><summary>x</summary></details></a>", 200,

@@ -8,6 +8,7 @@
 
 #include <stdarg.h>
 #include <stdint.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,11 +32,14 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len)
 // ── Allocation, and failing it on purpose ───────────────────────────────
 
 static size_t allocations, fail_at, live;
+// Fail ONE allocation (the fail_at'th) rather than every one from there
+// on: the shape of a budget the text engine hits while malloc still works.
+static bool fail_single;
 
 void *os64_malloc(size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_at != 0 && (fail_single ? allocations == fail_at : allocations >= fail_at))
         return NULL;
     void *at = malloc(size != 0 ? size : 1);
     if (at != NULL)
@@ -54,7 +58,7 @@ void *os64_calloc(size_t count, size_t size)
 void *os64_realloc(void *ptr, size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_at != 0 && (fail_single ? allocations == fail_at : allocations >= fail_at))
         return NULL;
     void *at = realloc(ptr, size != 0 ? size : 1);
     if (at != NULL && ptr == NULL)
@@ -141,13 +145,26 @@ static os64_font_status_t test_fonts(void *ctx, const flow_family_list_t *famili
     return OS64_FONT_OK;
 }
 
-// The face's measure of a picture: one whose src says "known" is 40x30;
-// everything else has not arrived.
+// The face's measure of a picture: one whose src says "known" is 40x30,
+// "tall" and "wide" are the most skewed a face may report (1 by INT32_MAX
+// and back), and everything else has not arrived.
 static bool test_oracle(void *ctx, const os64_html_node_t *node, int32_t *w, int32_t *h)
 {
     (void)ctx;
     const os64_html_attr_t *src = os64_html_attr(node, "src");
-    if (src == NULL || src->value == NULL || strstr(src->value, "known") == NULL)
+    if (src == NULL || src->value == NULL)
+        return false;
+    if (strstr(src->value, "tall") != NULL) {
+        *w = 1;
+        *h = INT32_MAX;
+        return true;
+    }
+    if (strstr(src->value, "wide") != NULL) {
+        *w = INT32_MAX;
+        *h = 1;
+        return true;
+    }
+    if (strstr(src->value, "known") == NULL)
         return false;
     *w = 40;
     *h = 30;
@@ -488,8 +505,75 @@ static void paint_cases(void)
                          "text \"m\"", "serif 16 line-through"), NULL);
 }
 
+typedef struct {
+    const os64_html_document_t *doc;
+    const os64_page_t *page;
+    int whole;
+} Deep;
+
+static void *deep_layout(void *arg)
+{
+    Deep *d = arg;
+    flow_tree_t *t = flow_layout(d->doc, d->page, 800, &kEnv);
+    d->whole = t == NULL ? -1 : !flow_incomplete(t);
+    flow_free(t);
+    return NULL;
+}
+
 static void limit_cases(void)
 {
+    // Codex #147 round 6: an item whose first content is a nested list
+    // shares that list's first line, and both markers stand on it. The
+    // 48px outer bullet's font box (60 tall, baseline 42) holds the line
+    // open, so the bullet sits inside its item, 48 + 42 - 36 = 54.
+    {
+        char *got = layout_dump_of("<!doctype html><font size=7><ul><li><font size=1><ul><li>x"
+                                   "</ul></font><li>y</ul></font>", 300);
+        expect("every marker waiting on a shared first line holds it open",
+               got != NULL && strstr(got, "      block li 48 48 244 60\n"
+                                          "        marker \"\xe2\x80\xa2 \" 12 54 36 48\n") != NULL,
+               got);
+        free(got);
+    }
+    // Codex #147 round 6: a picture's shape scales one side by the other,
+    // and the face may report 1 by INT32_MAX; with a width of a million
+    // percent three tables deep the product overflowed int64_t. Both
+    // skews, both sides given, under UBSan: held, not wrapped.
+    {
+        static const char *const pages[] = {
+            "<!doctype html><table width=1000000%><tr><td><table width=1000000%><tr><td>"
+            "<table width=1000000%><tr><td><img src=tall.png width=1000000%></table></table></table>",
+            "<!doctype html><img src=wide.png height=1000000>",
+            "<!doctype html><img src=tall.png width=1000000>",
+        };
+        for (int i = 0; i < F_ARRAY(pages); i++) {
+            os64_html_document_t *doc = parse(pages[i]);
+            os64_page_t *page = os64_page_build(doc, kPage, NULL);
+            flow_tree_t *t = flow_layout(doc, page, 800, &kEnv);
+            expect("a skewed picture's shape is held, not overflowed",
+                   t != NULL && !flow_incomplete(t) && flow_height(t) > 0 && flow_width(t) > 0,
+                   pages[i]);
+            flow_free(t);
+            os64_page_free(page);
+            os64_html_document_free(doc);
+        }
+    }
+    // Found auditing the same invariant: a font size compounds down the tree
+    // (each <big> is 6/5 of its parent's), and 150 of them wrapped negative.
+    // It is held to F_INT_MAX pixels, and drawn at the largest the engine can.
+    {
+        size_t bcap = 150 * 5 + 64, bat = 0;
+        char *bigs = malloc(bcap);
+        bat += (size_t)snprintf(bigs, bcap, "<!doctype html>");
+        for (int i = 0; i < 150; i++)
+            bat += (size_t)snprintf(bigs + bat, bcap - bat, "<big>");
+        snprintf(bigs + bat, bcap - bat, "x");
+        char *got = layout_dump_of(bigs, 400);
+        expect("a compounded font size is held, not wrapped negative",
+               got != NULL && strstr(got, " serif 1000000\n") != NULL, NULL);
+        free(got);
+        free(bigs);
+    }
     // Codex #147 round 4: a document libhtml stopped short of is not whole,
     // however well its prefix lays out.
     {
@@ -541,6 +625,26 @@ static void limit_cases(void)
            nested_whole("<marquee>", "</marquee>", (F_DEPTH_MAX - 2) / 2 + 1, 4096) == 0, NULL);
     expect("inline nesting counts against the same bound",
            nested_whole("<span>", "</span>", 2000, 4096) == 0, NULL);
+    // Codex #147 round 5: display: contents is walked before any box is
+    // made (the mixing scan), and that walk is charged too — a chain far
+    // past the bound stops the build instead of the stack. The layout runs
+    // on a thread with a small stack; the parser and libpage do not.
+    {
+        os64_html_document_t *doc = nested("<slot>", "</slot>", 20000, 40000);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        Deep d = {doc, page, -1};
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 512 * 1024);
+        pthread_t th;
+        bool ran = pthread_create(&th, &attr, deep_layout, &d) == 0;
+        if (ran)
+            pthread_join(th, NULL);
+        expect("a display-contents chain past the bound is incomplete, not a crash",
+               ran && d.whole == 0, NULL);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
     expect("tables nested past the bound are incomplete",
            nested_whole("<table><tr><td>", "</table>", 700, 4096) == 0, NULL);
 
@@ -597,6 +701,246 @@ static void limit_cases(void)
     os64_page_free(page);
     os64_html_document_free(doc);
     free(html);
+}
+
+// ── The relation sweep (LAYOUT.md § Proof) ─────────────────────────────
+//
+// A laid-out tree flattened in the order it is made: each box, its lines,
+// each line's fragments (an atom's content under its fragment) and spans,
+// its child boxes, and its marker last.
+typedef struct {
+    int kind;                   // 1 box, 2 line, 3 fragment, 4 span, 5 marker
+    const void *what;           // the node it stands for
+    uint32_t begin, end;
+    int64_t x, y, w, h;
+    bool unfinished;
+    int32_t parent;
+} RelItem;
+
+typedef struct {
+    RelItem *v;
+    size_t n, cap;
+} Rel;
+
+static int32_t rel_add(Rel *r, RelItem it)
+{
+    if (r->n == r->cap) {
+        r->cap = r->cap ? r->cap * 2 : 64;
+        r->v = realloc(r->v, r->cap * sizeof(*r->v));
+    }
+    r->v[r->n] = it;
+    return (int32_t)r->n++;
+}
+
+static void rel_box(Rel *r, const FBox *b, int32_t parent);
+
+static void rel_lines(Rel *r, const FBox *b, int32_t me)
+{
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next) {
+        int32_t li = rel_add(r, (RelItem){2, b->node, 0, 0, ln->x, ln->y, ln->w, ln->h, false, me});
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
+            int32_t fi = rel_add(r, (RelItem){3, fr->node, fr->begin, fr->end, fr->x, fr->y,
+                                              fr->w, fr->h, false, li});
+            if (fr->kind == FF_ATOMIC && fr->item->content != NULL)
+                rel_box(r, fr->item->content, fi);
+        }
+        for (const FSpan *sp = ln->spans; sp != NULL; sp = sp->next)
+            rel_add(r, (RelItem){4, sp->inl->node, 0, 0, sp->x0, sp->top, sp->x1 - sp->x0,
+                                 sp->bottom - sp->top, false, li});
+    }
+}
+
+static void rel_box(Rel *r, const FBox *b, int32_t parent)
+{
+    if (b == NULL || !b->placed)
+        return;
+    int32_t me = rel_add(r, (RelItem){1, b->node, 0, 0, b->x, b->y, b->w, b->h,
+                                      b->unfinished, parent});
+    rel_lines(r, b, me);
+    for (const FBox *c = b->first; c != NULL; c = c->next)
+        rel_box(r, c, me);
+    // Last, as it is made: a marker is placed after its box's content.
+    if (b->marker_frag != NULL)
+        rel_add(r, (RelItem){5, b->node, 0, 0, b->marker_frag->x, b->marker_frag->y,
+                             b->marker_frag->w, b->marker_frag->h, false, me});
+}
+
+static bool rel_under_unfinished(const Rel *r, size_t i)
+{
+    for (size_t k = i + 1; k < r->n; k++) {
+        int32_t up = r->v[k].parent;
+        while (up >= 0 && (size_t)up > i)
+            up = r->v[up].parent;
+        if (up != (int32_t)i)
+            break;
+        if (r->v[k].unfinished)
+            return true;
+    }
+    return false;
+}
+
+// Every single allocation of pass 3 fails in turn, the rest succeeding.
+// A partial tree is held to what the whole one says: (a) its pre-order is
+// a prefix of the whole's, (b) everything finished is where the whole puts
+// it, (c) the unfinished boxes are the path to the last thing it holds —
+// and the page is as tall as what it holds.
+static void layout_relation_sweep(const char *what, const char *html, int32_t width)
+{
+    os64_html_document_t *doc = parse(html);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    FStyles *styles = f_style_build(doc, page, &kEnv);
+    // Layout writes its geometry into the boxes, so every run gets its own,
+    // built with nothing failing.
+    FBoxes *boxes = f_boxes_build(doc, page, styles, &kEnv);
+    FLayout *whole = f_layout(boxes, doc, page, &kEnv, width);
+    Rel w = {0};
+    rel_box(&w, boxes->root, -1);
+    RelItem *wv = w.v;
+    size_t wn = w.n;
+    f_layout_free(whole);
+    f_boxes_free(boxes);
+    boxes = f_boxes_build(doc, page, styles, &kEnv);
+    size_t base_live = live;
+    allocations = 0;
+    FLayout *probe = f_layout(boxes, doc, page, &kEnv, width);
+    size_t count = allocations;
+    f_layout_free(probe);
+    f_boxes_free(boxes);
+    boxes = NULL;
+    size_t partial = 0, nulls = 0, compared = 0;
+    bool ok_a = true, ok_b = true, ok_c = true, ok_h = true;
+    char detail[200] = "";
+    fail_single = true;
+    for (size_t at = 1; at <= count; at++) {
+        boxes = f_boxes_build(doc, page, styles, &kEnv);
+        base_live = live;
+        allocations = 0;
+        fail_at = at;
+        FLayout *t = f_layout(boxes, doc, page, &kEnv, width);
+        fail_at = 0;
+        if (t == NULL) {
+            nulls++;
+        } else if (t->incomplete) {
+            partial++;
+            Rel p = {0};
+            rel_box(&p, boxes->root, -1);
+            bool prefix = p.n <= wn;
+            for (size_t i = 0; prefix && i < p.n; i++)
+                prefix = p.v[i].kind == wv[i].kind && p.v[i].what == wv[i].what &&
+                         p.v[i].begin == wv[i].begin &&
+                         (p.v[i].unfinished || wv[i].unfinished || p.v[i].end == wv[i].end);
+            if (!prefix && ok_a) {
+                size_t i = 0;
+                while (i < p.n && i < wn && p.v[i].kind == wv[i].kind && p.v[i].what == wv[i].what &&
+                       p.v[i].begin == wv[i].begin &&
+                       (p.v[i].unfinished || wv[i].unfinished || p.v[i].end == wv[i].end))
+                    i++;
+                snprintf(detail, sizeof(detail),
+                         "(a) at failure %zu: item %zu of %zu (whole %zu): kind %d +%u..%u, whole "
+                         "kind %d +%u..%u", at, i, p.n, wn, i < p.n ? p.v[i].kind : -1,
+                         i < p.n ? p.v[i].begin : 0, i < p.n ? p.v[i].end : 0,
+                         i < wn ? wv[i].kind : -1, i < wn ? wv[i].begin : 0, i < wn ? wv[i].end : 0);
+            }
+            ok_a &= prefix;
+            for (size_t i = 0; prefix && i < p.n; i++) {
+                if (p.v[i].unfinished || rel_under_unfinished(&p, i))
+                    continue;
+                bool same = p.v[i].x == wv[i].x && p.v[i].y == wv[i].y &&
+                            p.v[i].w == wv[i].w && p.v[i].h == wv[i].h;
+                if (!same && ok_b)
+                    snprintf(detail, sizeof(detail), "(b) at failure %zu: item %zu kind %d",
+                             at, i, p.v[i].kind);
+                ok_b &= same;
+                compared++;
+            }
+            for (size_t i = 0; i < p.n; i++) {
+                if (!p.v[i].unfinished)
+                    continue;
+                int32_t up = (int32_t)p.n - 1;
+                while (up >= 0 && (size_t)up != i)
+                    up = p.v[up].parent;
+                if (up != (int32_t)i && ok_c)
+                    snprintf(detail, sizeof(detail), "(c) at failure %zu", at);
+                ok_c &= up == (int32_t)i;
+            }
+            int64_t bottom = 0;
+            for (size_t i = 0; i < p.n; i++)
+                if (p.v[i].kind == 1 && p.v[i].y + p.v[i].h > bottom)
+                    bottom = p.v[i].y + p.v[i].h;
+            if (t->height < bottom && ok_h)
+                snprintf(detail, sizeof(detail), "height at failure %zu", at);
+            ok_h &= t->height >= bottom;
+            free(p.v);
+        }
+        f_layout_free(t);
+        bool leaked = live != base_live;
+        f_boxes_free(boxes);
+        boxes = NULL;
+        if (leaked) {
+            expect("relation sweep: nothing leaked", false, what);
+            break;
+        }
+    }
+    fail_single = false;
+    char name[96];
+    snprintf(name, sizeof(name), "relation sweep %s: (a) a prefix of the whole", what);
+    expect(name, ok_a, detail);
+    snprintf(name, sizeof(name), "relation sweep %s: (b) what finished is where it will be", what);
+    expect(name, ok_b, detail);
+    snprintf(name, sizeof(name), "relation sweep %s: (c) the unfinished lead to the last", what);
+    expect(name, ok_c, detail);
+    snprintf(name, sizeof(name), "relation sweep %s: as tall as what it holds", what);
+    expect(name, ok_h, detail);
+    printf("libflow relation sweep, %s: %zu failures: %zu NULL, %zu partial trees held to "
+           "(a)(b)(c), %zu finished items compared\n", what, count, nulls, partial, compared);
+    free(wv);
+    f_style_free(styles);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
+// A face at its most hostile: every picture measured at an extreme — a
+// sliver as tall or as wide as an int32_t holds, the largest square, or
+// nothing — chosen by the node, so each page gets a mix.
+static bool hostile_oracle(void *ctx, const os64_html_node_t *node, int32_t *w, int32_t *h)
+{
+    (void)ctx;
+    switch (((uintptr_t)node >> 4) % 4) {
+    case 0: *w = 1; *h = INT32_MAX; break;
+    case 1: *w = INT32_MAX; *h = 1; break;
+    case 2: *w = INT32_MAX; *h = INT32_MAX; break;
+    default: *w = 0; *h = 0; break;
+    }
+    return true;
+}
+
+// Every corpus page under the hostile oracle, at a page's width and at
+// none, under UBSan: whatever the face says, the geometry holds its range
+// (the harness aborts on any overflow) and the page's size is a size.
+static void hostile_corpus(void)
+{
+    flow_env_t env = kEnv;
+    env.replaced_size = hostile_oracle;
+    for (size_t i = 0; i < sizeof(kCorpus) / sizeof(kCorpus[0]); i++) {
+        char path[256];
+        snprintf(path, sizeof(path), "tools/html_corpus/%s.html", kCorpus[i]);
+        size_t len = 0;
+        char *html = slurp(path, &len);
+        if (html == NULL)
+            continue;
+        os64_html_document_t *doc = parse(html);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        static const int32_t widths[] = {800, 0};
+        for (int k = 0; k < F_ARRAY(widths); k++) {
+            flow_tree_t *t = flow_layout(doc, page, widths[k], &env);
+            expect("a hostile face's measures are held", t != NULL && !flow_incomplete(t) &&
+                   flow_height(t) >= 0 && flow_width(t) >= widths[k], path);
+            flow_free(t);
+        }
+        os64_page_free(page);
+        os64_html_document_free(doc);
+        free(html);
+    }
 }
 
 static void layout_sweep(void)
@@ -681,9 +1025,24 @@ int main(int argc, char **argv)
     table_cases();
     table_bounds();
     corpus();
+    hostile_corpus();
     allocation_sweep();
     boxes_sweep();
     layout_sweep();
+    layout_relation_sweep("a page of every family",
+        "<!doctype html><h1>T</h1><p>one <b>two</b> three<br>four <img src=known.png>"
+        "<ul><li>a<li>b</ul><table border=1><tr><td>c1<td>c2</table><pre>x\ty</pre>"
+        "<font face=arial><p>in</p>out</font><p>last words here <a href=x>link <i>it</i></a>"
+        "<div align=justify>justified words across a line that wraps more than once</div>"
+        "<marquee>m <b>q</b></marquee><ol><li><p>para</p><li>item</ol><q>quoted</q>", 300);
+    {
+        size_t len = 0;
+        char *html = slurp("tools/html_corpus/floodgap.html", &len);
+        if (html != NULL)
+            layout_relation_sweep("floodgap", html, 800);
+        expect("relation sweep: the corpus page is there", html != NULL, NULL);
+        free(html);
+    }
     paint_cases();
     decoration_colour_cases();
     limit_cases();
