@@ -169,6 +169,73 @@ static void parse_all(const char *text, size_t len)
     garb_free(&r);
 }
 
+// The sheet's top-level items, each dumped on its own, into `dumps`: what
+// the prefix check compares. Returns how many.
+static int32_t item_dumps(const char *text, size_t len, char ***dumps)
+{
+    garb_parsed_t r;
+    (void)garb_parse_sheet((const uint8_t *)text, len, NULL, NULL, &r);
+    *dumps = calloc((size_t)(r.nitems > 0 ? r.nitems : 1), sizeof(char *));
+    for (int32_t i = 0; i < r.nitems; i++) {
+        size_t n = garb_dump_items(&r.items[i], 1, NULL, 0);
+        (*dumps)[i] = malloc(n + 1);
+        garb_dump_items(&r.items[i], 1, (*dumps)[i], n + 1);
+    }
+    int32_t n = r.nitems;
+    garb_free(&r);
+    return n;
+}
+
+static void free_dumps(char **dumps, int32_t n)
+{
+    for (int32_t i = 0; i < n; i++)
+        free(dumps[i]);
+    free(dumps);
+}
+
+// Every allocation fails in turn: nothing leaks, nothing crashes, and what
+// comes back is a PREFIX of the whole result — each item it has is the
+// whole parse's item, dumped the same. The first failure ends the parse,
+// so nothing cut short is published (a token half-built, a declaration
+// missing a value).
+static int sweep_text(const char *what, const char *text, size_t len)
+{
+    allocations = 0;
+    fail_at = 0;
+    parse_all(text, len);
+    size_t worst = allocations;
+    char **whole;
+    int32_t nwhole = item_dumps(text, len, &whole);
+    int failures = 0;
+    for (size_t at = 1; at <= worst; at++) {
+        allocations = 0;
+        fail_at = at;
+        parse_all(text, len);
+        allocations = 0;
+        char **part;
+        int32_t npart = item_dumps(text, len, &part);
+        fail_at = 0;
+        bool prefix = npart <= nwhole;
+        for (int32_t i = 0; prefix && i < npart; i++)
+            prefix = strcmp(part[i], whole[i]) == 0;
+        if (!prefix) {
+            fprintf(stderr, "FAIL sweep %s: failure at %zu is not a prefix of the whole\n", what,
+                    at);
+            failures++;
+        }
+        free_dumps(part, npart);
+        if (live != 0) {
+            fprintf(stderr, "FAIL sweep %s: %zu leaked with failure at %zu\n", what, live, at);
+            failures++;
+            live = 0;
+        }
+    }
+    free_dumps(whole, nwhole);
+    printf("libgarb sweep, %s: each of %zu allocations failed in turn, %s\n", what, worst,
+           failures == 0 ? "every result a prefix, nothing leaked" : "FAILED");
+    return failures;
+}
+
 static int sweep(const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -177,24 +244,13 @@ static int sweep(const char *path)
     static char text[1 << 20];
     size_t len = fread(text, 1, sizeof(text), f);
     fclose(f);
-    allocations = 0;
-    fail_at = 0;
-    parse_all(text, len);
-    size_t worst = allocations;
-    int failures = 0;
-    for (size_t at = 1; at <= worst; at++) {
-        allocations = 0;
-        fail_at = at;
-        parse_all(text, len);
-        fail_at = 0;
-        if (live != 0) {
-            fprintf(stderr, "FAIL sweep: %zu leaked with failure at %zu\n", live, at);
-            failures++;
-            live = 0;
-        }
-    }
-    printf("libgarb sweep: each of %zu allocations failed in turn, %s\n", worst,
-           failures == 0 ? "nothing leaked" : "LEAKS");
+    int failures = sweep_text(path, text, len);
+    // A token that outgrows the tokenizer's first buffer (64 bytes) with a
+    // two-byte character across the boundary: the growth fails between the
+    // character's bytes, and that token must never be published.
+    static const char long_ident[] =
+        "a { b: c } xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\xc3\xa9 { d: e }";
+    failures += sweep_text("a long identifier", long_ident, sizeof(long_ident) - 1);
     return failures == 0 ? 0 : 1;
 }
 
@@ -242,11 +298,14 @@ static int deep(void)
 // range before it casts (float-cast-overflow is on in this harness).
 static int numbers(void)
 {
-    const char *text = "1e19 -1e19 99999999999999999999 1e300 -1e300 1e999 5e-324";
+    const char *text = "1e19 -1e19 99999999999999999999 1e300 -1e300 1e999 5e-324 1.71e308";
     garb_parsed_t r;
     garb_status_t st = garb_parse_values(text, strlen(text), &r);
     size_t n = garb_dump_values(r.values, r.nvalues, s_out, sizeof(s_out));
-    int ok = st == GARB_OK && n > 0 && strstr(s_out, "Infinity") != NULL;
+    // 1e999 is an infinity and dumps as one; 1.71e308 is finite (below
+    // DBL_MAX) and must not: exactly one Infinity in the dump.
+    const char *inf = strstr(s_out, "Infinity");
+    int ok = st == GARB_OK && n > 0 && inf != NULL && strstr(inf + 1, "Infinity") == NULL;
     printf("libgarb numbers: past int64_t and past a double: %s\n", ok ? "dumped" : "FAILED");
     garb_free(&r);
     return ok ? 0 : 1;

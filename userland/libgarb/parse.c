@@ -16,11 +16,14 @@
 
 bool p_push(Parse *p, void **list, int32_t *n, int32_t *cap, size_t size, const void *item)
 {
+    if (p_spent(p))
+        return false;
     if (*n == *cap) {
         int32_t grown = *cap > 0 ? *cap * 2 : 4;
         void *bigger = os64_arena_alloc(p->arena, (size_t)grown * size);
         if (bigger == NULL) {
             p->incomplete = true;
+            p->spent = true;
             return false;
         }
         if (*n > 0)
@@ -57,12 +60,17 @@ static void push_item(Parse *p, Items *l, const garb_item_t *it)
 
 static Tok in_next(Input *in)
 {
+    if (in->owner != NULL && p_spent(in->owner))
+        return (Tok){T_EOF, {0}};
     if (in->have_peek) {
         in->have_peek = false;
         return in->peeked;
     }
-    if (in->tz != NULL)
-        return tz_next(in->tz);
+    if (in->tz != NULL) {
+        // A token whose text could not be built whole is not a token.
+        Tok t = tz_next(in->tz);
+        return in->tz->short_of_memory ? (Tok){T_EOF, {0}} : t;
+    }
     if (in->at < in->n) {
         Tok t = {T_VALUE, in->values[in->at++]};
         return t;
@@ -159,8 +167,8 @@ static garb_value_t consume_component_value(Parse *p, Input *in, Tok t);
 // and without recursing: what nests there nests as deep as the text does
 // (eight megabytes of `(`), so the closers still owed are kept on a list,
 // innermost last — a `)` inside a `[` is not the `[`'s end (§5.4.9) — and
-// the stack stays as deep as the bound. A list that cannot grow ends the
-// read at the input's end; the parse already says it is incomplete.
+// the stack stays as deep as the bound. A list that cannot grow spends the
+// parse, like any allocation that fails.
 static void skip_contents(Parse *p, Input *in, char end)
 {
     char *owed = NULL;
@@ -182,8 +190,7 @@ static void skip_contents(Parse *p, Input *in, char end)
             size_t cap2 = cap != 0 ? cap * 2 : 64;
             char *grown = os64_realloc(owed, cap2);
             if (grown == NULL) {
-                while (in_next(in).kind != T_EOF)
-                    ;
+                p->spent = true;
                 break;
             }
             owed = grown;
@@ -335,8 +342,10 @@ static bool consume_declaration(Parse *p, Input *in, bool nested, bool whole, ga
 static garb_rule_t *new_rule(Parse *p)
 {
     garb_rule_t *r = os64_arena_calloc(p->arena, 1, sizeof(*r));
-    if (r == NULL)
+    if (r == NULL) {
         p->incomplete = true;
+        p->spent = true;
+    }
     return r;
 }
 
@@ -531,6 +540,8 @@ static bool start(garb_parsed_t *out, Parse *p)
     os64_memset(out, 0, sizeof(*out));
     p->arena = os64_arena_create(0, GARB_ARENA_MAX);
     p->incomplete = false;
+    p->spent = false;
+    p->tz = NULL;
     p->depth = 0;
     out->arena = p->arena;
     return p->arena != NULL;
@@ -614,6 +625,12 @@ static garb_status_t run(Mode mode, Parse *p, Input *in, garb_parsed_t *out)
     out->nitems = items.n;
     out->values = values.v;
     out->nvalues = values.n;
+    // One rule or one declaration is published whole or not at all.
+    if (p_spent(p) && (mode == M_ONE_RULE || mode == M_ONE_DECL)) {
+        out->rule = NULL;
+        os64_memset(&out->decl, 0, sizeof(out->decl));
+        return GARB_NO_MEMORY;
+    }
     return GARB_OK;
 }
 
@@ -629,8 +646,10 @@ static garb_status_t parse_text(Mode mode, const char *text, size_t len, garb_pa
         tz_close(&tz);
         return finish(out, &p, NULL, GARB_NO_MEMORY);
     }
+    p.tz = &tz;
     Input in = {0};
     in.tz = &tz;
+    in.owner = &p;
     garb_status_t st = run(mode, &p, &in, out);
     return finish(out, &p, &tz, st);
 }
@@ -679,10 +698,11 @@ garb_status_t garb_parse_one_value(const char *text, size_t len, garb_parsed_t *
 static bool reparse(Mode mode, garb_parsed_t *owner, const garb_value_t *values, int32_t n,
                     garb_item_t **items, int32_t *nitems)
 {
-    Parse p = {owner->arena, false, 0};
+    Parse p = {owner->arena, false, false, NULL, 0};
     Input in = {0};
     in.values = values;
     in.n = n;
+    in.owner = &p;
     garb_parsed_t tmp = {0};
     garb_status_t st = run(mode, &p, &in, &tmp);
     if (p.incomplete)
