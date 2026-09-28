@@ -688,7 +688,13 @@ LIBPAGE.md's rule restated for geometry:
   suite lays out a table nested forty deep AND a table whose cells all
   span, and asserts the layout count against the linear bound in both.
   The measuring run per text piece is laid out once per layout;
-  fragments once per line.
+  fragments once per line. **A question about an element's ancestors or
+  siblings is answered from its parent's record, never by a walk**: pass
+  1 keeps what the chapter's descendant selectors ask (lists, list items,
+  `nobr`, `q` depth, a link, decorations) on each element as it styles
+  it, parent before child, and a child that answers for its parent (an
+  `rp`) sets the parent's bit. A walk per element is quadratic on a deep
+  or a wide page; the host suite builds one of each under an alarm.
 - **Memory is the text engine's budget plus the boxes, and REBUILDING
   DOUBLES THE PEAK.** Runs are the big cost (a glyph placement is tens of
   bytes) and they live in the text context the face hands in, which has
