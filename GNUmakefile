@@ -230,12 +230,19 @@ PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css)
 # The same fixtures for the wire, staged alone: os64serve serves a directory
 # whole, and tools/html_corpus also holds the host harness's expected dumps,
 # which mean nothing on os64. Served as the `pages` lot (os64get.conf).
+# The directory holds exactly the list: os64serve offers whatever is in it,
+# so a fixture renamed or deleted from the corpus is removed here too, not
+# left to be served and installed as if it were still one.
 PAGES_STAGE  := userland/bin/pages
 PAGES_STAGED := $(addprefix $(PAGES_STAGE)/,$(notdir $(PAGE_FIXTURES)))
+PAGES_RETIRED = $(filter-out $(PAGES_STAGED),$(wildcard $(PAGES_STAGE)/*))
 $(PAGES_STAGE)/%: tools/html_corpus/%
 	@mkdir -p $(PAGES_STAGE) && cp $< $@
 $(PAGES_STAGE)/%: tools/garb_corpus/%
 	@mkdir -p $(PAGES_STAGE) && cp $< $@
+.PHONY: stage-pages
+stage-pages: $(PAGES_STAGED)
+	$(if $(strip $(PAGES_RETIRED)),rm -f $(PAGES_RETIRED))
 
 # Prepared compositions carry their own glyphs and finish tiles.
 FRAME_COMPOSITIONS := $(wildcard frames/*.frame)
@@ -263,10 +270,10 @@ endif
 
 
 .PHONY: all
-all: $(IMAGE_NAME).iso $(PAGES_STAGED)
+all: $(IMAGE_NAME).iso stage-pages
 
 .PHONY: all-hdd
-all-hdd: $(IMAGE_NAME).hdd $(PAGES_STAGED)
+all-hdd: $(IMAGE_NAME).hdd stage-pages
 
 # The sub-makes are the authority on whether these need rebuilding, so recurse
 # unconditionally — but let the FILE TIMESTAMPS decide what happens downstream.

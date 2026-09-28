@@ -265,8 +265,8 @@ static double consume_number(Tokenizer *tz, bool *integer)
         sign = c == '-' ? -1 : 1;
         buf_cp(tz, consume(tz));
     }
-    // Digits past what 19 decimal places hold only move the exponent: the
-    // value is kept to a double's precision either way.
+    // Digits past what 19 decimal places hold only move the exponent: a
+    // double keeps fewer than that.
     while (digit(peek(tz, 0))) {
         uint32_t d = consume(tz);
         buf_cp(tz, d);
@@ -305,8 +305,10 @@ static double consume_number(Tokenizer *tz, bool *integer)
     }
     int32_t e = esign * exponent + scale;
     double v = (double)mantissa;
+    // Within a few units in the last place, not correctly rounded: at the
+    // very ends of a double's range a number can reach infinity or zero a
+    // little early (BROWSER_DEBTS.md). The text keeps what was written.
     if (mantissa != 0) {
-        // Past a double's range the value is its infinity or its zero.
         if (e > 400)
             v = 1e308 * 10.0;
         else if (e < -400)
@@ -314,7 +316,7 @@ static double consume_number(Tokenizer *tz, bool *integer)
         else if (e < -300)
             v = v * pow10(e + 300) * 1e-300;
         else if (e < 0 && e >= -22)
-            v = v / pow10(-e);          // 10^22 and below are exact: one rounding
+            v = v / pow10(-e);          // 10^22 and below are exact
         else
             v = v * pow10(e);
     }

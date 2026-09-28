@@ -696,7 +696,7 @@ static List *parse_list(Cur *c, bool forgiving, bool relative)
 garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t *prelude,
                                        int32_t n, os64_html_quirks_t quirks)
 {
-    Parse p = {owner->arena, false, 0};
+    Parse p = {.arena = owner->arena};
     Cur c = {prelude, n, 0, &p, false};
     garb_selectors_t *s = os64_arena_calloc(owner->arena, 1, sizeof(*s));
     if (s == NULL) {
