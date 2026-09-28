@@ -82,3 +82,19 @@ mapping tests and matching driver change; the QEMU keyboard interaction used
 PS/2. Allocation-budget refusal was tested in the kernel, not by exhausting
 physical memory through the dialog. Save-error reporting was inspected in code;
 the graphical save test used a writable configuration file.
+
+## Fable round 2
+
+The UI branch incorporates kernel correction `6c23b2ad`. Its full build passed,
+as did the ASan/UBSan gterm harness (2,406,622 checks, 4,482 allocation denial
+cases, zero live bytes). The refreshed eight-core guest passed [27 PTY checks](round2-pty.txt),
+including quota saturation, verified zero-capacity fallback, resize without
+re-enabling history, and a nonzero shrink at the quota.
+
+At a 24-pixel Terminal font, the old UI (`93331ec8`) opened with **98 columns**
+when `scroll.w = 40`. Initializing the theme before creating the window restores
+**100 columns**, also verified with `scroll.w = 4`. The existing font fixture
+runs the production gterm startup and reports both grid and child PTY geometry.
+[Before/after log](round2-grid.txt), [before](round2-width-before.png),
+[40-pixel correction](round2-width40.png), [4-pixel correction](round2-width4.png).
+Settings still opens with the Interface font. No new P5 run was performed.

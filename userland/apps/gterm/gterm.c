@@ -483,8 +483,11 @@ int main(int argc, char **argv)
 	if (title[0] == 0)
 		title = "gterm";
 
+	// Load the session metrics before sizing; the initial grid and later
+	// layout must reserve the same themed scrollbar width.
+	os64_ui_init(&gUi,NULL);
 	int64_t win = os64_gui_window_create_content(title, initial_x, initial_y,
-										 content_w+20, content_h, OS64_GUI_CREATE_FIT_SCREEN | OS64_GUI_WINDOW_HAS_SETTINGS);
+										 content_w+(uint32_t)gUi.theme.scroll_w, content_h, OS64_GUI_CREATE_FIT_SCREEN | OS64_GUI_WINDOW_HAS_SETTINGS);
 	if (win <= 0)
 	{
 		os64_printf("gterm: no GUI here (window_create %ld)\n", (long)win);
@@ -501,7 +504,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-    os64_ui_init(&gUi,&ctx);
+    gUi.ctx=&ctx;
     gRoot=(os64_ui_widget_t){.cls=&terminal_root};
     os64_ui_set_root(&gUi,&gRoot);
     os64_ui_scrollbar(&gScroll,scrolled,NULL);os64_ui_add_child(&gRoot,&gScroll.w);

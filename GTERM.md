@@ -67,7 +67,8 @@ The [kernel contracts](TERMINAL_CONTRACTS.md) define the 128 MiB retained-row
 quota and distinct quota, memory, and contention refusals. Live grids are exempt
 from the history quota; a new terminal can start with no history when its
 requested capacity is refused. Settings reports the refusal reason and keeps
-the current limit. Ordinary physical memory exhaustion can still prevent a
+the current limit. Reducing retention does not fail on quota grounds, though
+its allocation can still be refused. Ordinary physical memory exhaustion can still prevent a
 terminal from opening.
 
 Settings are an app opt-in titlebar action, not kernel-owned preferences. The

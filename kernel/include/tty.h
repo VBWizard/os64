@@ -80,6 +80,7 @@ typedef struct tty
 	uint32_t hist_lines;               // valid history lines above screen_top
 	uint64_t live_line, view_epoch;    // GRID PTY logical row identity / geometry epoch
 	uint32_t history_limit;
+	bool history_replacing;            // replacement owns this ring's quota credit
 	bool history_configured;           // false retains legacy rows*3 retention
 	size_t history_bytes;                 // charged retained rows; excludes live grid
 	uint32_t view_offset;              // >0 = viewing history, this many lines up

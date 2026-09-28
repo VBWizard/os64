@@ -181,9 +181,13 @@ bool test_pty_history(void)
         ok &= fresh && fresh->total_lines==256 && fresh->history_bytes==0;
         if(fresh){
             ok &= tty_pty_history(fresh,1)==OS64_PTY_ERR_HISTORY_BUDGET;
-            ok &= tty_pty_history(fresh,0)>=0 && tty_resize(fresh,500,250)==1;
+            ok &= fresh->history_configured && fresh->history_limit==0;
+            ok &= tty_resize(fresh,500,250)==1 && fresh->total_lines==250;
             pty_master_close(fresh);
         }
+        before=many[0]->cells;
+        before[0].ch='Q';
+        ok &= tty_pty_history(many[0],9999)==1 && many[0]->cells[0].ch=='Q';
     }
     while(count)pty_master_close(many[--count]);
     t=pty_create_slave(512,2,PTY_MODE_GRID);

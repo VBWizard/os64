@@ -120,7 +120,9 @@ The consumer keeps a logical first-row anchor and geometry epoch. New output
 preserves that anchor until eviction; a geometry change returns to live output.
 The dialog distinguishes invalid input, history quota exhaustion, memory
 refusal, and retryable contention. The 128 MiB quota charges retained rows,
-including temporary replacement history; live grids are exempt. A refused
+including temporary replacement history. Non-growing replacements may exceed
+that quota temporarily so reducing retention is not refused on quota grounds;
+live grids are exempt. A refused
 initial history request reads the actual capacity, including the live-only
 fallback. Kernel implementation details and tests live with the foundation.
 
