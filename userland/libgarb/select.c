@@ -71,9 +71,16 @@ struct garb_selectors {
 typedef struct {
     const garb_value_t *v;
     int32_t n, i;
+    // Shared by every nested reading (an attribute, :is's list), so an
+    // allocation that fails anywhere spends it for all of them: a selector
+    // is then neither valid nor invalid, and the parse says so.
     Parse *p;
-    bool failed;
 } Cur;
+
+static bool failed(const Cur *c)
+{
+    return p_spent(c->p);
+}
 
 static const garb_value_t *peek(Cur *c, int32_t ahead)
 {
@@ -138,8 +145,7 @@ static bool is_ident(const garb_value_t *v, const char *word)
 
 static void push_simple(Cur *c, Compound *cp, const Simple *s)
 {
-    if (!p_push(c->p, (void **)&cp->s, &cp->n, &cp->cap, sizeof(*s), s))
-        c->failed = true;
+    (void)p_push(c->p, (void **)&cp->s, &cp->n, &cp->cap, sizeof(*s), s);
 }
 
 // ── §6 An+B ─────────────────────────────────────────────────────────────
@@ -286,11 +292,8 @@ static List *parse_list(Cur *c, bool forgiving, bool relative);
 // A list from a function's arguments.
 static List *sub_list(Cur *outer, const garb_value_t *v, int32_t n, bool forgiving, bool relative)
 {
-    Cur c = {v, n, 0, outer->p, false};
-    List *l = parse_list(&c, forgiving, relative);
-    if (c.failed)
-        outer->failed = true;
-    return l;
+    Cur c = {v, n, 0, outer->p};
+    return parse_list(&c, forgiving, relative);
 }
 
 static bool pseudo_element_named(const char *s, size_t n, garb_pseudo_t *out)
@@ -333,7 +336,7 @@ static bool pseudo_class_named(const char *s, size_t n, PKind *out)
 // `[ … ]`, its contents.
 static bool parse_attr(Cur *outer, const garb_value_t *v, int32_t n, Simple *s)
 {
-    Cur c = {v, n, 0, outer->p, false};
+    Cur c = {v, n, 0, outer->p};
     s->kind = S_ATTR;
     s->ci = -1;
     skip_ws(&c);
@@ -556,7 +559,7 @@ static bool parse_compound(Cur *c, Compound *cp, garb_pseudo_t *pseudo)
         push_simple(c, cp, &s);
         any = true;
     }
-    return any && !c->failed;
+    return any && !failed(c);
 }
 
 static bool combinator(const garb_value_t *t, Comb *out)
@@ -671,17 +674,15 @@ static List *parse_list(Cur *c, bool forgiving, bool relative)
 {
     List *l = os64_arena_calloc(c->p->arena, 1, sizeof(*l));
     if (l == NULL) {
-        c->failed = true;
+        c->p->spent = true;
         return NULL;
     }
     for (;;) {
         Complex x;
-        if (parse_complex(c, relative, &x) && !c->failed) {
-            if (!p_push(c->p, (void **)&l->v, &l->n, &l->cap, sizeof(x), &x)) {
-                c->failed = true;
+        if (parse_complex(c, relative, &x) && !failed(c)) {
+            if (!p_push(c->p, (void **)&l->v, &l->n, &l->cap, sizeof(x), &x))
                 return NULL;
-            }
-        } else if (!forgiving || c->failed) {
+        } else if (!forgiving || failed(c)) {
             return NULL;
         }
         // To the next comma at this level.
@@ -697,15 +698,17 @@ garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t 
                                        int32_t n, os64_html_quirks_t quirks)
 {
     Parse p = {.arena = owner->arena};
-    Cur c = {prelude, n, 0, &p, false};
+    Cur c = {prelude, n, 0, &p};
     garb_selectors_t *s = os64_arena_calloc(owner->arena, 1, sizeof(*s));
     if (s == NULL) {
         owner->incomplete = true;
         return NULL;
     }
     List *l = parse_list(&c, false, false);
-    if (c.failed)
+    if (failed(&c)) {
         owner->incomplete = true;
+        return NULL;
+    }
     if (l == NULL || l->n == 0)
         return NULL;
     s->list = *l;

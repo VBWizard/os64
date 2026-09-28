@@ -38,7 +38,9 @@ typedef enum {
 // A selector list from a style rule's prelude, into `owner`'s arena. NULL
 // when the list is invalid — and then, as the standard says, the whole
 // rule is dropped: one selector the engine does not know takes its
-// neighbours in the list with it. `quirks` is the document's mode, which
+// neighbours in the list with it. NULL too when memory ran out partway,
+// and then `owner` is marked incomplete: a list read short is neither
+// valid nor invalid. `quirks` is the document's mode, which
 // makes class and id names match without regard to case.
 garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t *prelude,
                                        int32_t n, os64_html_quirks_t quirks);
