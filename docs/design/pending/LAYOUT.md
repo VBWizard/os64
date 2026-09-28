@@ -519,7 +519,8 @@ margins; an `hr` is an ordinary empty block whose borders are the rule.
 The grid first: rows in the order they are drawn (the first header group
 first, the first footer group last, every other group and every run of
 groupless rows between), each cell given its slot past the slots rowspans
-from above still hold, with the standard's clamps — `colspan` 1..1000,
+from above still hold (a hold only ever lengthens: a cell whose span
+crosses a longer rowspan leaves it as it was), with the standard's clamps — `colspan` 1..1000,
 `rowspan` 1..65534 and 0 meaning "to the end of the row group" — and a
 rowspan never reaching past its group. Declared columns (`col span`, a
 `colgroup`'s own span when it has no `col`s) count where no cell reaches.
@@ -527,37 +528,63 @@ rowspan never reaching past its group. Declared columns (`col span`, a
 Then the widths. Every cell's MIN-CONTENT width (the widest thing that
 cannot break — a word across nodes, a replaced box — plus its padding and
 border) and MAX-CONTENT width (its content with only forced breaks) are
-READ from its item sequence rather than found by laying it out, and kept
-on the box: a table nested forty deep costs each of its contexts a
+READ from its item sequence rather than found by laying it out — an
+inline-block in it measured from its own content, since it lays out as
+wide as the line it is given and a line of no width gives it none — and
+kept on the box: a table nested forty deep costs each of its contexts a
 constant number of measurements, not three to the power of its depth
 (*Bounds*; the harness asserts the count). A cell's set width is what it
 wants at most, never less than it can be. Columns take their one-column
-cells' widths and `col` widths; spanning cells then spread what their
+cells' widths and their `col` widths, in pixels or percentages (a `col`
+with none takes its `colgroup`'s, and a `colgroup` with no `col`s gives
+its own to each column it spans); spanning cells then spread what their
 columns lack over them, narrowest span first, in proportion to what each
 column wants at most — the rule Netscape's engine used and every engine
-since. The table's width: a set width (`table { box-sizing: border-box }`,
+since — and a spanning cell's percentage goes, less what its columns'
+own percentages already hold, to those of them that have none. The table's width: a set width (`table { box-sizing: border-box }`,
 so it is the border box) and never less than its least; otherwise its
 most when that fits the containing block, else what the block has, and
 never less than its least — it overflows rather than squash a word.
 The grid's width is then shared: a percentage column its share, a fixed
-column its width, the auto columns from least toward most in proportion
-to how far apart the two are, and what is left over to the auto columns
-in proportion to what they want (else to the others), never a column
-below its least.
+column its width — and the grid never outgrows its table, whatever kind
+its columns are: each kind in turn, the percentage columns and then the
+fixed ones, is held to the room the others' least leaves it, giving
+back toward its own least in proportion to what each column can give
+(the table is never narrower than every column's least, so each kind
+has that room; the harness's table fuzzer asserts it of every table it
+lays out) — the auto columns from least
+toward most in proportion to how far apart the two are, and what is left
+over to the auto columns in proportion to what they want (else to the
+others), never a column below its least. Every share is taken exact or
+held (`mul_div`): a nested table's most is a length as long as a face can
+read, and its column's share of a spread multiplies it by another.
 
-Then the heights: each cell laid out ONCE at its final width; a row as
-tall as its tallest one-row cell and its own set height; a rowspan's
-excess spread evenly over its rows; a set table height's excess shared by
-the rows in proportion. `valign` places a cell's content in its rows —
-top, middle (the sheet's default for a table's rows), bottom, or
-baseline, which lines the first baselines of a row's baseline cells up.
+Then the heights: each cell laid out ONCE at its final width, and its
+baseline taken then — its first line's, or the bottom of its content
+where it has none (§17.5.3), and a nested table's is the baseline its
+first row AS SHOWN was given (the header group first and the footer group
+last), empty or not: the one that row's baseline cells share, else its
+first cell's where `valign` put it, else its bottom, recorded on the row
+when its table lays it out; a row as tall
+as its tallest one-row cell, its own set height, and what its baseline
+cells need — the most any has above the shared baseline plus the most any
+has below it, so a cell moved to the baseline never reaches into the
+next row; a rowspan's excess (a baseline cell's move included) spread
+evenly over its rows; a row group's set height its rows' least together,
+what they lack of it shared by them in proportion; a set table height's excess shared by the rows in
+proportion, or, with no rows to share it, the table's least all the
+same. `valign` places a cell's content in its rows — top, middle (the
+sheet's default for a table's rows), bottom, or baseline, which lines
+the first baselines of a row's baseline cells up.
 Captions sit above (or below, `caption-side`) the table's box, as wide
 as it; `border-spacing` separates cells and `cellpadding` pads them; the
 `border` attribute draws the old web's outset frame and inset cells. The
 collapsing border model is recorded, draws no spacing, and draws its
 borders separately (booked). Quirks mode: a picture in an auto-width cell
 has no wrap opportunity either side (3.8), a nowrap cell's pixel width is
-its least (3.9), a table with no rows and no captions is nothing (3.10),
+its least (3.9), a table with no rows and no captions is nothing — no
+width, no height, no border, and the flow goes on as if it were not
+there (3.10),
 a cell's set height counts its border and padding (3.13). A cell that
 would start past the ten-thousandth column is not laid out: the one
 limit here the standard does not have, so a page of spans costs what its
@@ -681,7 +708,20 @@ LIBPAGE.md's rule restated for geometry:
   are applied at pass 2: `colspan` above 1000 is 1000, `rowspan` above
   65534 is 65534, `rowspan=0` means "to the end of the row group" and is
   resolved to that number when the group is complete. With the clamp the
-  spreading work is bounded by cells × 1000 and stated as such. The host
+  spreading work is bounded by cells × 1000 and stated as such. Finding
+  each cell its slot past the rowspans still holding columns is a descent
+  of a min-tree over where each column's hold ends (log of the columns
+  per cell, and per column a hold covers), never a walk of the held
+  columns per row — which made a few long spans over wide columns cost
+  rows × columns. The tree has as many leaves as the columns holds reach
+  and grows as they reach further, and the spans' counting sort as many
+  buckets as the widest span: a table's working memory is its own
+  size, so a page of ten thousand small tables costs small tables. A
+  rowspan's share of its rows' heights is summed and spread in a
+  range-add, range-sum tree over the row heights (log of the rows per
+  cell), and a cell's height at placement comes from its rows' tops: no
+  step walks the rows a span covers, which made a first row of long
+  spans over thousands of empty rows cost rows × cells. The host
   suite lays out a table nested forty deep AND a table whose cells all
   span, and asserts the layout count against the linear bound in both.
   The measuring run per text piece is laid out once per layout;
@@ -829,10 +869,12 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
   as its twin in the whole tree — a line's height, baseline and
   alignment depend on what lands on it later, so a fragment that finished
   early can still move when its line completes; (c) every unfinished box
-  is an ancestor of the last box. Heights and table widths of unfinished
-  ancestors, and the geometry under an unfinished line, are not compared.
-  Beside the three, a partial page is as tall as the blocks it holds, so
-  what did lay out can be scrolled to. What makes it all hold: pass 2
+  is an ancestor of the last box; (d) nothing that was not placed reaches
+  the page's edges — a partial page is no taller or wider than what it
+  holds. Heights and table widths of unfinished ancestors, and the
+  geometry under an unfinished line, are not compared. Beside the four,
+  a partial page is as tall as the blocks it holds, so what did lay out
+  can be scrolled to. What makes it all hold: pass 2
   marks the box it was filling when memory ran out and every box above
   it; a line cut short is kept EMPTY where it would have begun; a table
   cut short in either pass keeps its place with no rows, because its
