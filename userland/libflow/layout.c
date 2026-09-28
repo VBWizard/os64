@@ -2228,9 +2228,39 @@ static int64_t first_baseline(FBox *cell)
                          : cell->border[FLOW_TOP] + cell->padding[FLOW_TOP];
 }
 
+static void unplace(FBox *b)
+{
+    b->placed = false;
+    for (FBox *c = b->first; c != NULL; c = c->next)
+        unplace(c);
+}
+
+static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw,
+                       Cursor *cur);
+
 // The table: its width and its columns', its captions, its rows and their
-// cells, placed in its containing block like any block.
+// cells, placed in its containing block like any block. One whose layout
+// ran out of memory partway keeps its place, empty: its columns would come
+// from only the cells it has, so no line in it breaks where the whole
+// table's would, and none of it is real yet.
 static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw, Cursor *cur)
+{
+    int64_t y = cur->y + max64(cur->pm, len(t->style->margin[FLOW_TOP], cbw));
+    table_body(l, styles, t, cbx, cbw, cur);
+    if (!l->failed)
+        return;
+    for (FBox *c = t->first; c != NULL; c = c->next)
+        unplace(c);
+    t->placed = true;
+    t->unfinished = true;
+    if (t->w == 0)
+        t->x = cbx;
+    t->y = y;
+    t->h = 0;
+}
+
+static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw,
+                       Cursor *cur)
 {
     const flow_style_t *s = t->style;
     int64_t hsp = spacing_h(t), vsp = spacing_v(t);
