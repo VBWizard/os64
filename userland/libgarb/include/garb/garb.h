@@ -114,7 +114,9 @@ struct garb_rule {
 
 typedef enum {
     GARB_OK = 0,
-    GARB_NO_MEMORY,         // nothing came back at all
+    // Nothing came back at all. A list that runs short partway answers OK
+    // with `incomplete`; a single item has no partway, so it answers this.
+    GARB_NO_MEMORY,
     GARB_TOO_BIG,           // the input is past GARB_SHEET_MAX
     // The single-item parses (§5.3.x): nothing there, or more than one.
     GARB_EMPTY,

@@ -564,6 +564,7 @@ static garb_status_t run(Mode mode, Parse *p, Input *in, garb_parsed_t *out)
 {
     Items items = {0};
     Values values = {0};
+    garb_status_t st = GARB_OK;
     switch (mode) {
     case M_SHEET:
     case M_RULES:
@@ -587,51 +588,60 @@ static garb_status_t run(Mode mode, Parse *p, Input *in, garb_parsed_t *out)
     case M_ONE_RULE: {
         skip_ws(in);
         Tok t = in_peek(in);
-        if (t.kind == T_EOF)
-            return GARB_EMPTY;
+        if (t.kind == T_EOF) {
+            st = GARB_EMPTY;
+            break;
+        }
         garb_rule_t *r = is_kind(&t, GARB_AT_KEYWORD) ? consume_at_rule(p, in, false)
                                                        : consume_qualified_rule(p, in, false, false);
-        if (r == NULL)
-            return GARB_INVALID;
         skip_ws(in);
-        if (in_peek(in).kind != T_EOF)
-            return GARB_EXTRA_INPUT;
-        out->rule = r;
+        if (r == NULL)
+            st = GARB_INVALID;
+        else if (in_peek(in).kind != T_EOF)
+            st = GARB_EXTRA_INPUT;
+        else
+            out->rule = r;
         break;
     }
     case M_ONE_DECL: {
         skip_ws(in);
         Tok t = in_peek(in);
         if (t.kind == T_EOF)
-            return GARB_EMPTY;
-        if (!consume_declaration(p, in, false, true, &out->decl))
-            return GARB_INVALID;
+            st = GARB_EMPTY;
+        else if (!consume_declaration(p, in, false, true, &out->decl))
+            st = GARB_INVALID;
         break;
     }
     case M_ONE_VALUE: {
         skip_ws(in);
         Tok t = in_next(in);
-        if (t.kind == T_EOF)
-            return GARB_EMPTY;
+        if (t.kind == T_EOF) {
+            st = GARB_EMPTY;
+            break;
+        }
         garb_value_t v = consume_component_value(p, in, t);
         skip_ws(in);
         if (in_peek(in).kind != T_EOF)
-            return GARB_EXTRA_INPUT;
-        push_value(p, &values, &v);
+            st = GARB_EXTRA_INPUT;
+        else
+            push_value(p, &values, &v);
         break;
     }
+    }
+    // A single item is published whole or not at all, and a spent parse
+    // decides nothing: the EOF that ended it may be where memory ran out,
+    // not where the text did, so EMPTY, EXTRA_INPUT and INVALID are no
+    // more true of it than OK is.
+    if (p_spent(p) && (mode == M_ONE_RULE || mode == M_ONE_DECL || mode == M_ONE_VALUE)) {
+        out->rule = NULL;
+        os64_memset(&out->decl, 0, sizeof(out->decl));
+        return GARB_NO_MEMORY;
     }
     out->items = items.v;
     out->nitems = items.n;
     out->values = values.v;
     out->nvalues = values.n;
-    // One rule or one declaration is published whole or not at all.
-    if (p_spent(p) && (mode == M_ONE_RULE || mode == M_ONE_DECL)) {
-        out->rule = NULL;
-        os64_memset(&out->decl, 0, sizeof(out->decl));
-        return GARB_NO_MEMORY;
-    }
-    return GARB_OK;
+    return st;
 }
 
 static garb_status_t parse_text(Mode mode, const char *text, size_t len, garb_parsed_t *out)

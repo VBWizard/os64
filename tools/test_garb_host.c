@@ -3,9 +3,10 @@
 // Its jobs. As a DRIVER (`garb_driver MODE`) it reads records on stdin —
 // css-parsing-tests' inputs, framed by tools/test_garb_suite.py — and prints
 // one JSON line per record, in the suite's representation, for the runner to
-// compare. As a TEST (`garb_driver --sweep FILE`) it parses a sheet with
-// every allocation failing in turn and asserts nothing leaks and nothing
-// crashes: a result that came out short says so. And two probes: `--deep`
+// compare. As a TEST (`garb_driver --sweep FILE`) it parses a sheet, and
+// then single rules, declarations and values, with every allocation failing
+// in turn, and asserts nothing leaks, nothing crashes, and what comes back
+// is true of the whole text. And two probes: `--deep`
 // parses a million nested `(` on a thread with a small stack (past the
 // depth bound the parser must find the end without recursing), and
 // `--numbers` dumps numbers past int64_t's reach and past a double's.
@@ -236,6 +237,89 @@ static int sweep_text(const char *what, const char *text, size_t len)
     return failures;
 }
 
+// A single item has no prefix to be: under every allocation failure the
+// answer is the whole parse's — its status and, when OK, its item dumped
+// the same — or NO_MEMORY with nothing published. A status reached from a
+// parse that ran out is a claim about text the parser never read.
+typedef garb_status_t (*OneParse)(const char *, size_t, garb_parsed_t *);
+
+static garb_status_t one_dump(OneParse parse, const char *text, char **dump, garb_parsed_t *r)
+{
+    garb_status_t st = parse(text, strlen(text), r);
+    *dump = NULL;
+    if (st != GARB_OK)
+        return st;
+    size_t n = parse == garb_parse_one_rule ? garb_dump_rule(r->rule, NULL, 0)
+             : parse == garb_parse_one_declaration ? garb_dump_decl(&r->decl, NULL, 0)
+             : garb_dump_values(r->values, r->nvalues, NULL, 0);
+    *dump = malloc(n + 1);
+    if (parse == garb_parse_one_rule)
+        garb_dump_rule(r->rule, *dump, n + 1);
+    else if (parse == garb_parse_one_declaration)
+        garb_dump_decl(&r->decl, *dump, n + 1);
+    else
+        garb_dump_values(r->values, r->nvalues, *dump, n + 1);
+    return st;
+}
+
+static int sweep_one(const char *what, OneParse parse, const char *text)
+{
+    allocations = 0;
+    fail_at = 0;
+    garb_parsed_t r;
+    char *whole;
+    garb_status_t whole_st = one_dump(parse, text, &whole, &r);
+    garb_free(&r);
+    size_t worst = allocations;
+    int failures = 0;
+    for (size_t at = 1; at <= worst; at++) {
+        allocations = 0;
+        fail_at = at;
+        char *part;
+        garb_status_t st = one_dump(parse, text, &part, &r);
+        fail_at = 0;
+        bool nothing = r.rule == NULL && r.decl.name == NULL && r.nvalues == 0;
+        bool ok = st == GARB_NO_MEMORY ? nothing
+                : st == whole_st && (st != GARB_OK || strcmp(part, whole) == 0);
+        if (!ok) {
+            fprintf(stderr, "FAIL sweep %s \"%s\": failure at %zu answered %d, the whole %d\n",
+                    what, text, at, (int)st, (int)whole_st);
+            failures++;
+        }
+        free(part);
+        garb_free(&r);
+        if (live != 0) {
+            fprintf(stderr, "FAIL sweep %s: %zu leaked with failure at %zu\n", what, live, at);
+            failures++;
+            live = 0;
+        }
+    }
+    free(whole);
+    return failures;
+}
+
+static int sweep_ones(void)
+{
+    // Each shape of answer: OK, EMPTY, EXTRA_INPUT, INVALID, and items
+    // whose values nest, since a nested list is where a push fails late.
+    static const char *const rules[] = {"a { b: c }", "@media x { a { b: c } }", "@import x;",
+                                        "", "  ", "a {} b {}", "@x", "a", "a { (b [c {d}]) }"};
+    static const char *const decls[] = {"b: c d e", "b: f(1, 2) !important", "", " ", "b",
+                                        "b: (c [d {e}])", "1: 2"};
+    static const char *const values[] = {"a", "(a b c)", "f(1, [2 {3}])", "", " ", "a b",
+                                         "{a: (b)}", "\"str\""};
+    int failures = 0;
+    for (size_t i = 0; i < sizeof(rules) / sizeof(rules[0]); i++)
+        failures += sweep_one("one rule", garb_parse_one_rule, rules[i]);
+    for (size_t i = 0; i < sizeof(decls) / sizeof(decls[0]); i++)
+        failures += sweep_one("one declaration", garb_parse_one_declaration, decls[i]);
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++)
+        failures += sweep_one("one value", garb_parse_one_value, values[i]);
+    printf("libgarb sweep, single items: every allocation failed in turn, %s\n",
+           failures == 0 ? "each answer whole or NO_MEMORY, nothing leaked" : "FAILED");
+    return failures;
+}
+
 static int sweep(const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -251,6 +335,7 @@ static int sweep(const char *path)
     static const char long_ident[] =
         "a { b: c } xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\xc3\xa9 { d: e }";
     failures += sweep_text("a long identifier", long_ident, sizeof(long_ident) - 1);
+    failures += sweep_ones();
     return failures == 0 ? 0 : 1;
 }
 
