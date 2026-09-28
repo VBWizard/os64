@@ -1100,6 +1100,27 @@ static void table_review_cases(void)
     // A nested table's baseline is its first row as shown: the tbody, not
     // the tfoot written before it — the x shares the B's baseline, 50.
     static const char *const shown[] = {"text \"x\" 8 38 8 16 serif 16"};
+    // Round 2. A nested table's baseline is its first row's as its layout
+    // shared it: the 48px B's (50), not the top-aligned t's (22).
+    static const char *const row_base[] = {"text \"x\" 8 38 8 16 serif 16"};
+    expect("a nested table's baseline is its first row's shared one",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
+                     "<td>x<td><table cellspacing=0 cellpadding=0><tr><td valign=top>t"
+                     "<td valign=baseline><font size=7>B</font></table></table>", 400, row_base, 1),
+           NULL);
+    // An inline-block is measured from its content: the marquee's cell is
+    // its text's 68 wide, and the next cell starts after it.
+    static const char *const atom[] = {"cell td 8 8 68 26", "cell td 76 8 8 26"};
+    expect("an inline-block's cell is as wide as its content",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr><td>"
+                     "<marquee>abcdefghij</marquee><td>x</table>", 400, atom, 2), NULL);
+    // Quirks: an empty table is nothing — no width to scroll to, no margin
+    // between the paragraphs it sits among.
+    static const char *const empty_table[] = {"page 400 80", "table table 8 28 0 0",
+                                              "block p 8 44 384 20"};
+    expect("quirks: a table with no rows is nothing at all",
+           has_lines("<p>a</p><table width=1000000 border=5><tbody></tbody></table><p>b</p>", 400,
+                     empty_table, 3), NULL);
     expect("a table's baseline is its first row as shown",
            has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
                      "<td>x<td><table cellspacing=0 cellpadding=0><tfoot><tr><td>f<br>f2"

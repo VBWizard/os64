@@ -1323,6 +1323,8 @@ static void translate(FBox *b, int64_t dx, int64_t dy)
         return;
     b->x += dx;
     b->y += dy;
+    if (b->has_baseline)
+        b->baseline += dy;
     for (FLine *ln = b->lines; ln != NULL; ln = ln->next) {
         ln->x += dx;
         ln->y += dy;
@@ -1428,30 +1430,38 @@ static void table_ends(const FBox *t, FBox **head, FBox **foot)
     }
 }
 
-// The first line with height anywhere inside a box, in the order it is
-// shown: a table's in its rows' visual order, and its captions not at all
-// (a table's baseline is its first row's).
-static void first_line_of(FBox *b, FLine **out)
+// The first baseline inside a box, in the order it is shown: a line's, or
+// a table row's as its layout decided it — a nested table's baseline is its
+// first row's, the one that row's cells share, not whatever line its first
+// cell holds. A table's rows are walked header group first and footer
+// group last, and its captions not at all.
+static bool first_baseline_in(const FBox *b, int64_t *out)
 {
-    for (FLine *ln = b->lines; ln != NULL; ln = ln->next)
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         if (ln->h > 0) {
-            *out = ln;
-            return;
+            *out = ln->baseline;
+            return true;
         }
+    if (b->kind == FB_ROW) {
+        if (b->has_baseline)
+            *out = b->baseline;
+        return b->has_baseline;
+    }
     if (b->kind == FB_TABLE) {
         FBox *head, *foot;
         table_ends(b, &head, &foot);
-        if (head != NULL)
-            first_line_of(head, out);
-        for (FBox *c = b->first; c != NULL && *out == NULL; c = c->next)
-            if ((c->kind == FB_ROW_GROUP || c->kind == FB_ROW) && c != head && c != foot)
-                first_line_of(c, out);
-        if (*out == NULL && foot != NULL)
-            first_line_of(foot, out);
-        return;
+        if (head != NULL && first_baseline_in(head, out))
+            return true;
+        for (const FBox *c = b->first; c != NULL; c = c->next)
+            if ((c->kind == FB_ROW_GROUP || c->kind == FB_ROW) && c != head && c != foot &&
+                first_baseline_in(c, out))
+                return true;
+        return foot != NULL && first_baseline_in(foot, out);
     }
-    for (FBox *c = b->first; c != NULL && *out == NULL; c = c->next)
-        first_line_of(c, out);
+    for (const FBox *c = b->first; c != NULL; c = c->next)
+        if (first_baseline_in(c, out))
+            return true;
+    return false;
 }
 
 // An outside marker: right-aligned against the item's content edge, on
@@ -1470,8 +1480,8 @@ static void place_marker(L *l, const FStyles *styles, FBox *b, int64_t content_x
         return;
     os64_text_run_view_t v;
     os64_text_run_view(run, &v);
-    FLine *first = NULL;
-    first_line_of(b, &first);
+    int64_t first = 0;
+    bool has_first = first_baseline_in(b, &first);
     fr->kind = FF_MARKER;
     fr->node = b->node;
     fr->style = b->style;
@@ -1486,7 +1496,7 @@ static void place_marker(L *l, const FStyles *styles, FBox *b, int64_t content_x
     fr->h = v.ascent + v.descent;
     fr->x = content_x - fr->w;
     Extent fb = font_box(v.ascent, v.descent, v.line_height);
-    fr->baseline = first != NULL ? first->baseline : content_y - fb.top;
+    fr->baseline = has_first ? first : content_y - fb.top;
     fr->y = fr->baseline - v.ascent;
     b->marker_frag = fr;
 }
@@ -1683,10 +1693,20 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
         switch (g->kind) {
         case SG_WORD:
         case SG_ATOM:
-        case SG_MARKER:
-            word += g->w;
-            if (g->w > 0 || g->kind != SG_WORD) {
-                line += space + g->w;
+        case SG_MARKER: {
+            // An atom with content of its own is measured from it: segments
+            // made at no width give it none, and it lays out as wide as the
+            // line it is given, so what it can be and wants to be are its
+            // content's, with its margins round them.
+            int64_t wmin = g->w, wmax = g->w;
+            if (g->kind == SG_ATOM && g->item->content != NULL) {
+                Intr ci = intrinsic(l, g->item->content);
+                wmin = g->ml + ci.min + g->mr;
+                wmax = g->ml + ci.max + g->mr;
+            }
+            word += wmin;
+            if (wmax > 0 || g->kind != SG_WORD) {
+                line += space + wmax;
                 space = 0;
             }
             if (g->kind == SG_WORD && g->s1 > g->b1) {
@@ -1701,6 +1721,7 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
                     line += sw;
             }
             break;
+        }
         case SG_BREAK:
             r.max = max64(r.max, line);
             line = space = 0;
@@ -1782,9 +1803,53 @@ typedef struct {
     GCell *cells;
     int32_t ncells, cap_cells;
     int32_t ncols;
-    int64_t *busy;          // per column: rows, this one included, a rowspan still holds
-    int32_t cap_busy;
+    // The rowspans' holds: per column, the first row a hold no longer
+    // reaches (0: never held), as the leaves of a min-tree, so the next free
+    // slot is found in log(columns) and not by walking every held column —
+    // a page of long holds over wide columns would otherwise cost rows x
+    // columns. NULL until the table's first rowspan.
+    int64_t *holds;
 } Grid;
+
+#define HOLD_LEAVES 16384   // COLUMNS_MAX, to a power of two
+_Static_assert(HOLD_LEAVES >= COLUMNS_MAX && (HOLD_LEAVES & (HOLD_LEAVES - 1)) == 0,
+               "every column a cell can reach has a leaf, in a tree of whole levels");
+
+// The first column from `c` that no hold reaches on row `r`.
+static int32_t hold_free(const int64_t *t, int32_t node, int32_t lo, int32_t hi, int32_t c,
+                         int64_t r)
+{
+    if (hi <= c || t[node] > r)
+        return -1;
+    if (hi - lo == 1)
+        return lo;
+    int32_t mid = lo + (hi - lo) / 2;
+    int32_t k = hold_free(t, 2 * node, lo, mid, c, r);
+    return k >= 0 ? k : hold_free(t, 2 * node + 1, mid, hi, c, r);
+}
+
+static int32_t next_free(const Grid *g, int32_t c, int64_t r)
+{
+    if (g->holds == NULL || c >= HOLD_LEAVES)
+        return c;
+    int32_t k = hold_free(g->holds, 1, 0, HOLD_LEAVES, c, r);
+    return k >= 0 ? k : HOLD_LEAVES;
+}
+
+// Column `k` held until row `until`, if that is longer than it was.
+static void hold_until(int64_t *t, int32_t k, int64_t until)
+{
+    int32_t at = HOLD_LEAVES + k;
+    if (until <= t[at])
+        return;
+    t[at] = until;
+    for (at /= 2; at >= 1; at /= 2) {
+        int64_t m = t[2 * at] < t[2 * at + 1] ? t[2 * at] : t[2 * at + 1];
+        if (t[at] == m)
+            break;
+        t[at] = m;
+    }
+}
 
 static bool grow(L *l, void **v, int32_t *cap, int32_t want, size_t size)
 {
@@ -1858,14 +1923,12 @@ static bool grid_build(L *l, FBox *t, Grid *g)
     if (l->failed)
         return false;
 
-    int32_t active = 0;
     for (int32_t r = 0; r < g->nrows && !l->failed; r++) {
         int32_t c = 0;
         for (FBox *cell = g->rows[r].box->first; cell != NULL; cell = cell->next) {
             if (cell->kind != FB_CELL)
                 continue;
-            while (c < g->cap_busy && g->busy[c] > 0)
-                c++;
+            c = next_free(g, c, r);
             int32_t cs = span_attr(cell, "colspan", COLSPAN_MAX, 1);
             int32_t rs = span_attr(cell, "rowspan", ROWSPAN_MAX, g->rows[r].group_end - r);
             if (r + rs > g->rows[r].group_end)
@@ -1874,29 +1937,25 @@ static bool grid_build(L *l, FBox *t, Grid *g)
                 continue;
             if (c + cs > COLUMNS_MAX)
                 cs = COLUMNS_MAX - c;
-            if (!grow(l, (void **)&g->busy, &g->cap_busy, c + cs, sizeof(int64_t)) ||
-                !grow(l, (void **)&g->cells, &g->cap_cells, g->ncells + 1, sizeof(GCell)))
+            if (!grow(l, (void **)&g->cells, &g->cap_cells, g->ncells + 1, sizeof(GCell)))
                 return false;
-            g->cells[g->ncells++] = (GCell){cell, r, c, rs, cs};
-            // A hold only ever lengthens: a cell whose span crosses a column
-            // a longer rowspan still holds leaves that hold as it was.
-            if (rs > 1)
-                for (int32_t k = c; k < c + cs; k++) {
-                    if (g->busy[k] == 0)
-                        active++;
-                    if (rs > g->busy[k])
-                        g->busy[k] = rs;
+            if (rs > 1 && g->holds == NULL) {
+                g->holds = os64_calloc(2 * HOLD_LEAVES, sizeof(int64_t));
+                if (g->holds == NULL) {
+                    fail(l);
+                    return false;
                 }
+            }
+            g->cells[g->ncells++] = (GCell){cell, r, c, rs, cs};
+            // A hold only ever lengthens: a cell whose span crosses a
+            // longer hold leaves it as it was.
+            if (rs > 1)
+                for (int32_t k = c; k < c + cs; k++)
+                    hold_until(g->holds, k, r + rs);
             c += cs;
             if (c > g->ncols)
                 g->ncols = c;
         }
-        // One row down: every spanning cell holds one row fewer, and a
-        // column whose count reaches none is free again.
-        if (active > 0)
-            for (int32_t k = 0; k < g->cap_busy; k++)
-                if (g->busy[k] > 0 && --g->busy[k] == 0)
-                    active--;
     }
     // Columns the table declares count even where no cell reaches.
     int32_t declared = 0;
@@ -1921,7 +1980,7 @@ static void grid_free(Grid *g)
 {
     os64_free(g->rows);
     os64_free(g->cells);
-    os64_free(g->busy);
+    os64_free(g->holds);
 }
 
 // ── Columns ─────────────────────────────────────────────────────────────
@@ -2319,10 +2378,10 @@ static int64_t cell_layout(L *l, const FStyles *styles, FBox *cell, int64_t x, i
 // bottom of its content edge.
 static int64_t first_baseline(FBox *cell)
 {
-    FLine *first = NULL;
-    first_line_of(cell, &first);
-    return first != NULL ? first->baseline - cell->y
-                         : cell->h - cell->border[FLOW_BOTTOM] - cell->padding[FLOW_BOTTOM];
+    int64_t first = 0;
+    return first_baseline_in(cell, &first)
+               ? first - cell->y
+               : cell->h - cell->border[FLOW_BOTTOM] - cell->padding[FLOW_BOTTOM];
 }
 
 static void unplace(FBox *b)
@@ -2335,6 +2394,19 @@ static void unplace(FBox *b)
 static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw,
                        Cursor *cur);
 
+static bool table_is_empty(const FBox *t)
+{
+    for (const FBox *c = t->first; c != NULL; c = c->next) {
+        if (c->kind == FB_CAPTION || c->kind == FB_ROW)
+            return false;
+        if (c->kind == FB_ROW_GROUP)
+            for (const FBox *r = c->first; r != NULL; r = r->next)
+                if (r->kind == FB_ROW)
+                    return false;
+    }
+    return true;
+}
+
 // The table: its width and its columns', its captions, its rows and their
 // cells, placed in its containing block like any block. One whose layout
 // ran out of memory partway keeps its place, empty: its columns would come
@@ -2342,6 +2414,20 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
 // table's would, and none of it is real yet.
 static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw, Cursor *cur)
 {
+    // A table with no rows and no captions in quirks mode is nothing at all
+    // (the Quirks standard's 3.10): no width, no height, no border, and the
+    // flow goes on as if it were not there.
+    if (l->quirks && table_is_empty(t)) {
+        for (FBox *c = t->first; c != NULL; c = c->next)
+            unplace(c);
+        t->placed = true;
+        t->x = cbx;
+        t->y = cur->y;
+        t->w = t->h = 0;
+        for (int i = 0; i < 4; i++)
+            t->border[i] = t->padding[i] = 0;
+        return;
+    }
     int64_t y = cur->y + max64(cur->pm, len(t->style->margin[FLOW_TOP], cbw));
     table_body(l, styles, t, cbx, cbw, cur);
     if (!l->failed)
@@ -2519,8 +2605,26 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
         case FLOW_VALIGN_BASELINE: shift = row_base[gc->row] - base[i]; break;
         default: break;
         }
-        if (shift > 0)
+        if (shift > 0) {
             translate_content(cell, shift);
+            base[i] += shift;
+        }
+    }
+    // Each row's baseline, for a table this one is nested in: the one its
+    // baseline cells share, else its first cell's where valign put it.
+    for (int32_t i = 0; i < g.ncells && !l->failed; i++) {
+        GCell *gc = &g.cells[i];
+        if (gc->cell->style->vertical_align == FLOW_VALIGN_BASELINE) {
+            g.rows[gc->row].box->has_baseline = true;
+            g.rows[gc->row].box->baseline = ry[gc->row] + row_base[gc->row];
+        }
+    }
+    for (int32_t i = 0; i < g.ncells && !l->failed; i++) {
+        FBox *row = g.rows[g.cells[i].row].box;
+        if (!row->has_baseline) {
+            row->has_baseline = true;
+            row->baseline = ry[g.cells[i].row] + base[i];
+        }
     }
     os64_free(base);
     os64_free(row_base);
@@ -2589,17 +2693,10 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
         }
     }
 
-    // The table box itself. A table with no rows and no captions in quirks
-    // mode is nothing at all (the Quirks standard's 3.10).
-    bool has_caption = false;
-    for (FBox *c = t->first; c != NULL; c = c->next)
-        has_caption |= c->kind == FB_CAPTION;
+    // The table box itself.
     t->placed = true;
     t->y = y;
-    t->h = l->quirks && g.nrows == 0 && !has_caption ? 0 : vf + grid_h;
-    if (t->h == 0)
-        for (int i = 0; i < 4; i++)
-            t->border[i] = 0;
+    t->h = vf + grid_h;
 
     // Bottom captions, then the flow goes on below it all.
     cc = (Cursor){t->y + t->h, 0, t->y + t->h};
