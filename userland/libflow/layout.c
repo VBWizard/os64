@@ -1930,7 +1930,7 @@ static void spread(Col *cols, int32_t c, int32_t n, int64_t want, bool to_max)
         return;
     int64_t extra = want - have, given = 0;
     for (int32_t k = c; k < c + n; k++) {
-        int64_t share = weight > 0 ? extra * cols[k].max / weight : extra / n;
+        int64_t share = weight > 0 ? mul_div(extra, cols[k].max, weight) : extra / n;
         if (k == c + n - 1)
             share = extra - given;
         given += share;
@@ -2125,7 +2125,7 @@ static void distribute(Col *cols, int32_t n, int64_t w)
             if (a >= amax)
                 c->width = c->max;
             else if (a > amin && amax > amin)
-                c->width = c->min + (c->max - c->min) * (a - amin) / (amax - amin);
+                c->width = c->min + mul_div(c->max - c->min, a - amin, amax - amin);
             else
                 c->width = c->min;
         }
@@ -2154,7 +2154,7 @@ static void distribute(Col *cols, int32_t n, int64_t w)
         if (!(nauto == 0 || (cols[k].pct < 0 && cols[k].fixed < 0)))
             continue;
         int64_t wk = nauto > 0 ? cols[k].max : cols[k].width;
-        int64_t share = weight > 0 ? extra * wk / weight : extra / eligible;
+        int64_t share = weight > 0 ? mul_div(extra, wk, weight) : extra / eligible;
         if (k == last)
             share = extra - given;
         given += share;
@@ -2363,7 +2363,7 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
         int64_t extra = s->height.value - vf - grid_h, total = grid_h - (int64_t)(g.nrows + 1) * vsp;
         int64_t given = 0;
         for (int32_t r = 0; r < g.nrows; r++) {
-            int64_t share = total > 0 ? extra * rh[r] / total : extra / g.nrows;
+            int64_t share = total > 0 ? mul_div(extra, rh[r], total) : extra / g.nrows;
             if (r == g.nrows - 1)
                 share = extra - given;
             given += share;

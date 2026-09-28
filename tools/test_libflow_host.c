@@ -943,6 +943,80 @@ static void hostile_corpus(void)
     }
 }
 
+// Tables at the edges of their arithmetic: random nests of tables whose
+// widths, heights, spacing and spans take the extremes a page may write,
+// holding pictures the hostile face measures, laid out under UBSan. Any
+// share, sum or product that overflows aborts the harness.
+static uint64_t s_tfuzz = 0x7AB1E5F022ull;
+
+static uint32_t tpick(uint32_t n)
+{
+    s_tfuzz ^= s_tfuzz << 13;
+    s_tfuzz ^= s_tfuzz >> 7;
+    s_tfuzz ^= s_tfuzz << 17;
+    return (uint32_t)(s_tfuzz % n);
+}
+
+static void tfuzz_table(char *out, size_t cap, size_t *at, int depth)
+{
+    static const char *const widths[] = {"", " width=1", " width=1000000", " width=50%",
+                                         " width=1000000%", " width=100%"};
+    static const char *const heights[] = {"", " height=1000000", " height=1"};
+    static const char *const spacing[] = {"", " cellspacing=1000000", " cellpadding=1000000"};
+    *at += (size_t)snprintf(out + *at, cap - *at, "<table%s%s%s>", widths[tpick(6)],
+                            heights[tpick(3)], spacing[tpick(3)]);
+    int rows = 1 + (int)tpick(3);
+    for (int r = 0; r < rows && *at < cap - 512; r++) {
+        *at += (size_t)snprintf(out + *at, cap - *at, "<tr%s>", heights[tpick(3)]);
+        int cells = 1 + (int)tpick(4);
+        for (int c = 0; c < cells && *at < cap - 512; c++) {
+            *at += (size_t)snprintf(out + *at, cap - *at, "<td%s colspan=%u rowspan=%u>",
+                                    widths[tpick(6)], 1 + tpick(3), 1 + tpick(2));
+            switch (tpick(4)) {
+            case 0:
+                if (depth < 3)
+                    tfuzz_table(out, cap, at, depth + 1);
+                break;
+            case 1:
+                *at += (size_t)snprintf(out + *at, cap - *at, "<img src=%s.png%s>",
+                                        tpick(2) ? "tall" : "wide", widths[tpick(6)]);
+                break;
+            case 2:
+                *at += (size_t)snprintf(out + *at, cap - *at, "words that wrap");
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    *at += (size_t)snprintf(out + *at, cap - *at, "</table>");
+}
+
+static void table_fuzz(size_t pages)
+{
+    flow_env_t env = kEnv;
+    env.replaced_size = hostile_oracle;
+    char *html = malloc(65536);
+    for (size_t i = 0; i < pages; i++) {
+        size_t at = (size_t)snprintf(html, 65536, "%s", tpick(2) ? "<!doctype html>" : "");
+        tfuzz_table(html, 65536, &at, 0);
+        os64_html_document_t *doc = parse(html);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        static const int32_t widths[] = {800, 0};
+        for (int k = 0; k < F_ARRAY(widths); k++) {
+            flow_tree_t *t = flow_layout(doc, page, widths[k], &env);
+            if (t == NULL || flow_incomplete(t) || flow_height(t) < 0 || flow_width(t) < widths[k])
+                expect("table fuzz: laid out whole, sizes held", false, html);
+            flow_free(t);
+        }
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    free(html);
+    expect("table fuzz ran", true, NULL);
+    printf("libflow table fuzz: %zu pages of extreme tables, laid out under UBSan\n", pages);
+}
+
 static void layout_sweep(void)
 {
     const char *html =
@@ -1026,6 +1100,7 @@ int main(int argc, char **argv)
     table_bounds();
     corpus();
     hostile_corpus();
+    table_fuzz(3000);
     allocation_sweep();
     boxes_sweep();
     layout_sweep();
