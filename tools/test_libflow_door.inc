@@ -129,7 +129,7 @@ static void door_cases(void)
     os64_html_document_free(doc);
 }
 
-// ── The allocation sweep: rules (a), (b), (c) of LAYOUT.md § Proof ────────
+// ── The allocation sweep: rules (a) to (d) of LAYOUT.md § Proof ─────────
 
 typedef struct {
     const flow_box_t **v;
@@ -178,7 +178,7 @@ static const char kSweepPage[] =
     "<table><caption>c</caption><tr><td rowspan=2>r<td>x<tr><td>y</table>"
     "<marquee>m <b>q</b></marquee><ol><li><p>para</p><li>item</ol><q>quoted</q>";
 
-// Beside (a)(b)(c), a partial page is as tall as the blocks it holds, so
+// Beside (a) to (d), a partial page is as tall as the blocks it holds, so
 // what did lay out can be scrolled to.
 static void layout_relation_sweep(const char *what, const char *html, int32_t width)
 {
@@ -264,6 +264,20 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
                      flow_height(t), (long long)bottom, p.v[0]->rect.y, p.v[0]->rect.h,
                      p.v[0]->unfinished ? " unfinished" : "");
             expect(name, flow_height(t) >= bottom, detail);
+            // (d) and no taller or wider than what it holds: nothing that is
+            // not placed reaches the page's edges. In pixels, give or take
+            // one: a rectangle's edges round to the nearest pixel and the
+            // page's size rounds up, so the canvas holds all of what it has.
+            snprintf(name, sizeof(name), "sweep %zu: (d) nothing unplaced reaches an edge", at);
+            int64_t reach_y = 0, reach_x = width;
+            for (size_t i = 0; i < p.n; i++) {
+                const os64_gui_rect_t *r = &p.v[i]->rect;
+                reach_y = r->y + r->h > reach_y ? r->y + r->h : reach_y;
+                reach_x = r->x + r->w > reach_x ? r->x + r->w : reach_x;
+            }
+            snprintf(detail, sizeof(detail), "page %d x %d, holds %lld x %lld", flow_width(t),
+                     flow_height(t), (long long)reach_x, (long long)reach_y);
+            expect(name, flow_height(t) <= reach_y + 1 && flow_width(t) <= reach_x + 1, detail);
             free(p.v);
             free(p.parent);
         } else {
@@ -279,7 +293,7 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
         }
     }
     fail_single = false;
-    printf("libflow relation sweep, %s: %zu failures: %zu NULL, %zu partial trees held to (a)(b)(c), "
+    printf("libflow relation sweep, %s: %zu failures: %zu NULL, %zu partial trees held to (a)-(d), "
            "%zu finished boxes compared\n", what, count, nulls, partial, compared);
     free(w.v);
     free(w.parent);

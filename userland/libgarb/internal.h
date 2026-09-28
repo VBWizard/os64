@@ -47,24 +47,40 @@ Tok tz_next(Tokenizer *tz);
 
 // ── The parser's input: text, or component values already parsed ───────
 
+// ── A parse's arena and its state ───────────────────────────────────────
+//
+// THE FIRST ALLOCATION THAT FAILS ENDS THE PARSE, whether it is the arena's
+// or the tokenizer's scratch buffer: from then the input reads as its end
+// and nothing more is pushed into any list, so whatever was being built —
+// a token cut short, a declaration missing a value, the rule round it — is
+// never published. What comes back was finished before the failure: real,
+// and less of it. (Depth is a different stop: past GARB_DEPTH_MAX contents
+// are dropped by design and the parse goes on.)
+
+typedef struct {
+    os64_arena_t *arena;
+    bool incomplete;
+    bool spent;             // an allocation failed: nothing more is read or kept
+    Tokenizer *tz;          // the text's tokenizer, whose buffer can fail too
+    int32_t depth;
+} Parse;
+
+static inline bool p_spent(const Parse *p)
+{
+    return p->spent || (p->tz != NULL && p->tz->short_of_memory);
+}
+
 typedef struct {
     Tokenizer *tz;          // or:
     const garb_value_t *values;
     int32_t n, at;
     Tok peeked;
     bool have_peek;
+    const Parse *owner;     // spent: the input has ended
 } Input;
 
-// ── A parse's arena and its state ───────────────────────────────────────
-
-typedef struct {
-    os64_arena_t *arena;
-    bool incomplete;
-    int32_t depth;
-} Parse;
-
-// Appending to a list held in the arena: the list doubles, and a list that
-// cannot grow is left as it was and the parse marked incomplete.
+// Appending to a list held in the arena: the list doubles. Once the parse
+// is spent nothing is appended, and a list that cannot grow spends it.
 bool p_push(Parse *p, void **list, int32_t *n, int32_t *cap, size_t size, const void *item);
 
 #endif
