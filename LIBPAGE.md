@@ -103,7 +103,7 @@ cells or pixels.
   whether the reference asked for a fragment at all (the text cannot tell
   `href="#"` from `href=""`); whether it names THIS document (a move, not a
   fetch).
-- **Images**: every `img` and `input type=image` whose `src` is not empty,
+- **Images**: every `img` and `input type=image` whose `src` names something,
   with the `src` resolved against the base and the `alt` as written (NULL
   when absent — `alt=""` says "decoration" and absence says nothing). An
   empty or blank `src` is not listed: such an image is drawn broken rather
