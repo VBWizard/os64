@@ -546,10 +546,13 @@ so it is the border box) and never less than its least; otherwise its
 most when that fits the containing block, else what the block has, and
 never less than its least — it overflows rather than squash a word.
 The grid's width is then shared: a percentage column its share, a fixed
-column its width — which is what it wants at most, so when the fixed
-columns and the auto columns' least do not fit the table's width they
-give back toward their own least, in proportion to what each can give,
-and the grid never outgrows its table — the auto columns from least
+column its width — and the grid never outgrows its table, whatever kind
+its columns are: each kind in turn, the percentage columns and then the
+fixed ones, is held to the room the others' least leaves it, giving
+back toward its own least in proportion to what each column can give
+(the table is never narrower than every column's least, so each kind
+has that room; the harness's table fuzzer asserts it of every table it
+lays out) — the auto columns from least
 toward most in proportion to how far apart the two are, and what is left
 over to the auto columns in proportion to what they want (else to the
 others), never a column below its least. Every share is taken exact or

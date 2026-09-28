@@ -1006,6 +1006,34 @@ static void tfuzz_table(char *out, size_t cap, size_t *at, int depth)
     *at += (size_t)snprintf(out + *at, cap - *at, "</table>");
 }
 
+// Every table in a laid-out tree holds its grid: no row reaches past the
+// table's own box. Returns the first offending table's node, or NULL.
+static const FBox *grid_outgrows(const FBox *b)
+{
+    if (b == NULL || !b->placed)
+        return NULL;
+    if (b->kind == FB_TABLE)
+        for (const FBox *g = b->first; g != NULL; g = g->next) {
+            const FBox *rows = g->kind == FB_ROW_GROUP ? g->first : g;
+            for (const FBox *r = rows; r != NULL; r = g->kind == FB_ROW_GROUP ? r->next : NULL)
+                if (r->kind == FB_ROW && r->placed && r->x + r->w > b->x + b->w)
+                    return b;
+        }
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next)
+            if (fr->kind == FF_ATOMIC && fr->item->content != NULL) {
+                const FBox *hit = grid_outgrows(fr->item->content);
+                if (hit != NULL)
+                    return hit;
+            }
+    for (const FBox *c = b->first; c != NULL; c = c->next) {
+        const FBox *hit = grid_outgrows(c);
+        if (hit != NULL)
+            return hit;
+    }
+    return NULL;
+}
+
 static void table_fuzz(size_t pages)
 {
     flow_env_t env = kEnv;
@@ -1022,6 +1050,16 @@ static void table_fuzz(size_t pages)
             if (t == NULL || flow_incomplete(t) || flow_height(t) < 0 || flow_width(t) < widths[k])
                 expect("table fuzz: laid out whole, sizes held", false, html);
             flow_free(t);
+            // And the invariant the table review kept finding the edges of:
+            // whatever its columns are, no table's grid outgrows it.
+            FStyles *st = f_style_build(doc, page, &env);
+            FBoxes *bx = st != NULL ? f_boxes_build(doc, page, st, &env) : NULL;
+            FLayout *lay = bx != NULL ? f_layout(bx, doc, page, &env, widths[k]) : NULL;
+            if (lay != NULL && grid_outgrows(bx->root) != NULL)
+                expect("table fuzz: no table's grid outgrows it", false, html);
+            f_layout_free(lay);
+            f_boxes_free(bx);
+            f_style_free(st);
         }
         os64_page_free(page);
         os64_html_document_free(doc);
@@ -1149,6 +1187,14 @@ static void table_review_cases(void)
     expect("a table with no rows is as tall as it is set",
            has_lines("<!doctype html><table height=100></table><p>after</p>", 400, tall_empty, 2),
            NULL);
+    // Round 4. A 75% column beside a 64px least: the table is its least,
+    // 128, and the percentage gives back so the row is the table's 128.
+    static const char *const pct_room[] = {"table table 8 8 128 20", "row tr 8 8 128 20",
+                                           "cell td 8 8 64 20", "cell td 72 8 64 20"};
+    expect("a percentage column leaves the others their least",
+           has_lines("<!doctype html><table width=120 cellspacing=0 cellpadding=0><tr>"
+                     "<td width=75%><img src=known.png width=64 height=1><td>"
+                     "<img src=known.png width=64 height=1></table>", 400, pct_room, 4), NULL);
     expect("a table's baseline is its first row as shown",
            has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
                      "<td>x<td><table cellspacing=0 cellpadding=0><tfoot><tr><td>f<br>f2"

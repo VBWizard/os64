@@ -2239,10 +2239,10 @@ static Intr table_intrinsic(L *l, FBox *t)
 }
 
 // Share the grid's width among the columns: a percentage column its share
-// of it, a fixed column its width (giving back toward its least when the
-// fixed and the auto columns' least do not fit), and the rest from each
-// auto column's least toward its most in proportion to how far apart the
-// two are; what is left over goes to the auto columns, else to the others.
+// of it, a fixed column its width (each kind giving back toward its least
+// when the others' least leaves it less room), and the rest from each auto
+// column's least toward its most in proportion to how far apart the two
+// are; what is left over goes to the auto columns, else to the others.
 // Never below a column's least: a table overflows before it squashes a word.
 static void distribute(Col *cols, int32_t n, int64_t w)
 {
@@ -2269,20 +2269,36 @@ static void distribute(Col *cols, int32_t n, int64_t w)
             nauto++;
         }
     }
-    // Set widths are what their columns want at most: when they and the
-    // auto columns' least do not fit what the table chose, they give back
-    // toward their own least, in proportion to what each can give, so the
-    // grid never outgrows the table (an auto-width table takes its
-    // containing block's width when its preferences do not fit it).
-    int64_t fixed_want = 0, fixed_least = 0, pct_taken = 0;
+    // The grid never outgrows the table, whatever kind its columns are
+    // (an auto-width table takes its containing block's width when its
+    // preferences do not fit it). Each kind is held in turn to the room the
+    // others' least leaves it, giving back toward its own least in
+    // proportion to what each column can give: the percentage columns first,
+    // then the set widths. The table is never narrower than every column's
+    // least together, so each kind always has its own least's room.
+    int64_t pct_want = 0, pct_least = 0, fixed_want = 0, fixed_least = 0;
     for (int32_t k = 0; k < n; k++) {
         if (cols[k].pct >= 0) {
-            pct_taken += cols[k].width;
+            pct_want += cols[k].width;
+            pct_least += cols[k].min;
         } else if (cols[k].fixed >= 0) {
             fixed_want += cols[k].width;
             fixed_least += cols[k].min;
         }
     }
+    int64_t pct_room = w - fixed_least - amin;
+    if (pct_want > pct_room && pct_want > pct_least) {
+        int64_t give = max64(0, pct_room - pct_least);
+        for (int32_t k = 0; k < n; k++)
+            if (cols[k].pct >= 0)
+                cols[k].width = cols[k].min + mul_div(cols[k].width - cols[k].min, give,
+                                                      pct_want - pct_least);
+    }
+    int64_t pct_taken = 0;
+    for (int32_t k = 0; k < n; k++)
+        if (cols[k].pct >= 0)
+            pct_taken += cols[k].width;
+    taken = pct_taken + fixed_want;
     int64_t room = w - pct_taken - amin;
     if (fixed_want > room && fixed_want > fixed_least) {
         int64_t give = max64(0, room - fixed_least);
