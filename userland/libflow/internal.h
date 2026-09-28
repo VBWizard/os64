@@ -100,8 +100,10 @@ typedef struct {
     FDecorationColors decoration_colors;
     // How many of this element and its ancestors are lists (`ul ol menu
     // dir`), lists or `dl`s, and `li`s: the chapter's descendant selectors
-    // for its children, by the same bargain.
+    // for its children, by the same bargain. And whether one of them is a
+    // `nobr`, which is what `nobr wbr` asks.
     int32_t lists, lists_or_dls, items;
+    bool in_nobr;
 } FStyled;
 
 typedef struct {

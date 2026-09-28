@@ -59,7 +59,7 @@ typedef struct {
     const os64_page_t *model;
     const flow_env_t *env;
     FStyles *out;
-    bool quirks, any_quirks;    // full quirks; quirks or limited quirks
+    bool quirks;                // full quirks mode
     // `body link=` recolours every link, and the body is styled before any
     // link it contains is.
     bool has_body_link;
@@ -541,15 +541,23 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         s->display = FLOW_DISPLAY_NONE;
         return;
     }
+    // §15.3.3 `[popover]:not(:popover-open):not(dialog[open])`: opening a
+    // popover takes script, which this browser does not run, so every one
+    // but an open dialog is hidden, as a browser shows it until something
+    // opens it.
+    if (has(n, "popover") && !(is(n, OS64_HTML_TAG_DIALOG) && has(n, "open"))) {
+        s->display = FLOW_DISPLAY_NONE;
+        return;
+    }
     // `noscript` is shown: this browser runs no script, so the
     // `@media (scripting)` rule that hides it does not apply.
 
     switch (n->tag) {
     // §15.3.2 The page, §15.3.3 Flow content.
     case OS64_HTML_TAG_HTML: case OS64_HTML_TAG_BODY:
-    case OS64_HTML_TAG_ADDRESS: case OS64_HTML_TAG_CENTER: case OS64_HTML_TAG_DIV:
+    case OS64_HTML_TAG_CENTER: case OS64_HTML_TAG_DIV:
     case OS64_HTML_TAG_FIGCAPTION: case OS64_HTML_TAG_FOOTER: case OS64_HTML_TAG_FORM:
-    case OS64_HTML_TAG_HEADER: case OS64_HTML_TAG_LEGEND: case OS64_HTML_TAG_MAIN:
+    case OS64_HTML_TAG_HEADER: case OS64_HTML_TAG_MAIN:
     case OS64_HTML_TAG_SEARCH:
     // §15.3.6 Sections and headings.
     case OS64_HTML_TAG_ARTICLE: case OS64_HTML_TAG_ASIDE: case OS64_HTML_TAG_HGROUP:
@@ -565,6 +573,10 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     // frameset is a block they stack in.
     case OS64_HTML_TAG_FRAMESET: case OS64_HTML_TAG_FRAME:
         s->display = FLOW_DISPLAY_BLOCK;
+        break;
+    case OS64_HTML_TAG_ADDRESS:
+        s->display = FLOW_DISPLAY_BLOCK;
+        s->font_style = FLOW_FONT_ITALIC;
         break;
     case OS64_HTML_TAG_BLOCKQUOTE: case OS64_HTML_TAG_FIGURE:
         s->display = FLOW_DISPLAY_BLOCK;
@@ -639,6 +651,17 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     case OS64_HTML_TAG_NOBR:
         s->white_space = FLOW_WS_NOWRAP;
         break;
+    // `nobr wbr { white-space: normal }`: the one break a nowrap run
+    // allows, which pass 3 honours only if the wbr's own style says so.
+    case OS64_HTML_TAG_WBR: {
+        const FStyled *up = f_map_get(&c->out->map, n->parent);
+        if (up != NULL && up->in_nobr)
+            s->white_space = FLOW_WS_NORMAL;
+        break;
+    }
+    // `ruby` and `rt` are the chapter's `display: ruby` and `ruby-text`,
+    // which this struct does not have: both are laid out inline, the
+    // annotation reading after its base (LAYOUT.md § Booked).
 
     // §15.3.6 headings.
     case OS64_HTML_TAG_H1: case OS64_HTML_TAG_H2: case OS64_HTML_TAG_H3:
@@ -710,6 +733,8 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         break;
 
     // §15.3.10 Form controls: laid out as boxes the face's widgets fill.
+    // The chapter's `text-align` for controls and `white-space` for a
+    // textarea place the text INSIDE the widget, which the face draws.
     case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_SELECT:
     case OS64_HTML_TAG_TEXTAREA: case OS64_HTML_TAG_METER: case OS64_HTML_TAG_PROGRESS:
         s->display = FLOW_DISPLAY_INLINE_BLOCK;
@@ -740,6 +765,10 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         sp->padding[FLOW_TOP] = em(350);
         sp->padding[FLOW_BOTTOM] = em(625);
         sp->padding[FLOW_LEFT] = sp->padding[FLOW_RIGHT] = em(750);
+        break;
+    case OS64_HTML_TAG_LEGEND:
+        s->display = FLOW_DISPLAY_BLOCK;
+        sp->padding[FLOW_LEFT] = sp->padding[FLOW_RIGHT] = px(2);
         break;
 
     // §15.4.1 Embedded content.
@@ -798,16 +827,15 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         if (ruled || framed)
             border_color(sp, 0x000000);
     }
+    // The cells' half of the same rule names `rules` alone: a table's
+    // `frame` blackens the table's own border, not its cells'.
     if (is(n, OS64_HTML_TAG_TD) || is(n, OS64_HTML_TAG_TH)) {
         const os64_html_node_t *table = cell_table(n);
         const char *rules = table != NULL ? attr(table, "rules") : NULL;
-        const char *frame = table != NULL ? attr(table, "frame") : NULL;
-        if (rules != NULL || frame != NULL) {
-            static const char *const any[] = {"none", "groups", "rows", "cols", "all"};
-            for (int32_t i = 0; i < F_ARRAY(any); i++)
-                if (f_eq_nocase(rules, any[i]))
-                    border_color(sp, 0x000000);
-        }
+        static const char *const any[] = {"none", "groups", "rows", "cols", "all"};
+        for (int32_t i = 0; i < F_ARRAY(any); i++)
+            if (f_eq_nocase(rules, any[i]))
+                border_color(sp, 0x000000);
     }
 
     // §15.3.9 is prose and applies after the hints; §15.3.7's and §15.3.8's
@@ -1180,7 +1208,8 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
     // §15.3.4: a link's colour, where libpage says the node IS a link. The
     // user-agent rule is `:link`, and `body link=` is a hint on the same
     // selector, so it wins over the sheet and loses to anything the link's
-    // own descendants say.
+    // own descendants say. `:visited` and `:active` are states of a
+    // browsing session, not of the page, and pass 1 sees only the page.
     if ((is(n, OS64_HTML_TAG_A) || is(n, OS64_HTML_TAG_AREA)) && c->model != NULL &&
         os64_page_link_for(c->model, n) >= 0) {
         s->color = c->has_body_link ? c->body_link : c->env->link_ink;
@@ -1321,6 +1350,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->lists = (up != NULL ? up->lists : 0) + is_list(n);
     out->lists_or_dls = (up != NULL ? up->lists_or_dls : 0) + is_list_or_dl(n);
     out->items = (up != NULL ? up->items : 0) + is_li(n);
+    out->in_nobr = (up != NULL && up->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
     out->decoration = sp.s.text_decoration;
     out->decoration_colors = (FDecorationColors){sp.s.color, sp.s.color};
     if (up != NULL && !decoration_edge(n, &sp.s, c->quirks))
@@ -1362,8 +1392,8 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
         return NULL;
     out->doc = doc;
     out->env = env;
-    Ctx c = {doc, model, env, out, doc->quirks == OS64_HTML_QUIRKS,
-             doc->quirks != OS64_HTML_NO_QUIRKS, false, 0};
+    Ctx c = {.doc = doc, .model = model, .env = env, .out = out,
+             .quirks = doc->quirks == OS64_HTML_QUIRKS};
 
     // Pre-order down, and each element FINISHED on the way back up, when
     // everything under it has been styled — which is when its holds_block
@@ -1409,7 +1439,7 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
 void f_style_anonymous(const FStyles *styles, const flow_style_t *parent,
                        flow_display_t display, flow_style_t *out)
 {
-    Ctx c = {styles->doc, NULL, styles->env, NULL, false, false, false, 0};
+    Ctx c = {.doc = styles->doc, .env = styles->env};
     *out = inherit(&c, parent);
     out->display = display;
     for (int i = 0; i < 4; i++)

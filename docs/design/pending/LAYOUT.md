@@ -193,25 +193,27 @@ Lengths are 26.6 fixed point — the text engine's unit — so a margin of
 `0.67em` on a 32px heading is 1372/64 px and nothing rounds until a box
 coordinate is written (*Rounding*, below).
 
-**The first producer** is `style.c`: the Rendering chapter's sheet, section
-by section, each rule naming its section so the file can be held against
-the standard line by line — the hidden elements, `body`'s 8px, `p`'s 1em,
-the headings (size in the parent's em, margins in their own), `blockquote`
-and `figure`, the monospace and `white-space: pre` elements, the phrasing
-elements (italic, `bolder`, `larger`/`smaller` by CSS Fonts' 6/5 ratio,
-`sub`/`sup`, `mark`, the decorations, `nobr`), the lists (with the nesting
-rules that make a nested `ul` circle and a third level square and take
-nested lists' block margins away), the tables (`border-spacing: 2px`,
-cells' 1px padding, `th` bold and centred when its row's alignment was
-never set, rows and cells taking `vertical-align` from their group), `hr`
-(gray, a 1px inset border all round, `0.5em auto` margins), `fieldset`,
-`iframe`'s 2px inset border, form controls as inline-blocks, `details`
-(the first `summary` is the disclosure; the rest of a closed one is not
-drawn), an open `dialog` laid out where it stands (positioning is booked),
-and a `form` the parser left inside table structure displayed `none`.
-`wbr` is a break opportunity and nothing else; pass 3 reads it as the one
-element boundary that IS a break. `noscript` is SHOWN — the chapter hides
-it only when scripting is on.
+**The first producer** is `style.c`: the Rendering chapter's sheet,
+section by section, each rule naming its section so the file can be held
+against the standard line by line — the hidden elements (and every
+`[popover]` but an open dialog: only script opens one), `body`'s 8px,
+`p`'s 1em, the headings (size in the parent's em, margins in their own),
+`blockquote` and `figure`, `address` italic, the monospace and
+`white-space: pre` elements, the phrasing elements (italic, `bolder`,
+`larger`/`smaller` by CSS Fonts' 6/5 ratio, `sub`/`sup`, `mark`, the
+decorations, `nobr`, and a `wbr` inside one breaking after all), the lists
+(with the nesting rules that make a nested `ul` circle and a third level
+square and take nested lists' block margins away), the tables
+(`border-spacing: 2px`, cells' 1px padding, `th` bold and centred when its
+row's alignment was never set, rows and cells taking `vertical-align` from
+their group), `hr` (gray, a 1px inset border all round, `0.5em auto`
+margins), `fieldset` and `legend`, `iframe`'s 2px inset border, form
+controls as inline-blocks, `details` (the first `summary` is the
+disclosure; the rest of a closed one is not drawn), an open `dialog` laid
+out where it stands (positioning is booked), and a `form` the parser left
+inside table structure displayed `none`. `wbr` is a break opportunity and
+nothing else; pass 3 reads it as the one element boundary that IS a break.
+`noscript` is SHOWN — the chapter hides it only when scripting is on.
 
 Then the PRESENTATIONAL ATTRIBUTES, as the chapter maps them: `body`'s
 margins (`marginheight`/`topmargin` vertical, `marginwidth`/`leftmargin`
@@ -826,6 +828,10 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
   early can still move when its line completes; (c) every unfinished box
   is an ancestor of the last box. Heights and table widths of unfinished
   ancestors, and the geometry under an unfinished line, are not compared.
+  (a) holds inside tables too, because a table cut short in either pass
+  keeps its place with no rows: its columns would come from only the
+  cells it has, so no line in it would break where the whole table's
+  does, and none of it enters the partial tree to be compared.
 - **Fuzz**: every corpus page truncated at every 64 bytes and tag-soup
   mutations of them, under ASan/UBSan, asserting the invariants of a box
   tree (every child's overflow rect inside its parent's OVERFLOW rect —
