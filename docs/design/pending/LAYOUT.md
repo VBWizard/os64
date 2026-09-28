@@ -741,7 +741,12 @@ LIBPAGE.md's rule restated for geometry:
   rows × columns. The tree has as many leaves as the columns holds reach
   and grows as they reach further, and the spans' counting sort as many
   buckets as the widest span: a table's working memory is its own
-  size, so a page of ten thousand small tables costs small tables. The host
+  size, so a page of ten thousand small tables costs small tables. A
+  rowspan's share of its rows' heights is summed and spread in a
+  range-add, range-sum tree over the row heights (log of the rows per
+  cell), and a cell's height at placement comes from its rows' tops: no
+  step walks the rows a span covers, which made a first row of long
+  spans over thousands of empty rows cost rows × cells. The host
   suite lays out a table nested forty deep AND a table whose cells all
   span, and asserts the layout count against the linear bound in both.
   The measuring run per text piece is laid out once per layout;

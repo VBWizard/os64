@@ -2484,6 +2484,64 @@ static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw
     t->h = 0;
 }
 
+// Row heights under range adds and range sums: two Fenwick trees, in
+// uint64_t because the second accumulates value x row terms that may pass
+// int64_t on their way even when every sum asked for fits; the arithmetic
+// is exact modulo 2^64, so a sum that fits comes back exact.
+typedef struct {
+    uint64_t *a, *b;
+    int32_t n;
+} RowSums;
+
+static void rowsums_point(uint64_t *t, int32_t n, int32_t i, uint64_t v)
+{
+    for (; i <= n; i += i & -i)
+        t[i] += v;
+}
+
+static uint64_t rowsums_prefix_of(const uint64_t *t, int32_t i)
+{
+    uint64_t v = 0;
+    for (; i > 0; i -= i & -i)
+        v += t[i];
+    return v;
+}
+
+// Rows [r0, r1] each grow by v.
+static void rowsums_add(RowSums *s, int32_t r0, int32_t r1, int64_t v)
+{
+    uint64_t u = (uint64_t)v;
+    rowsums_point(s->a, s->n, r0 + 1, u);
+    rowsums_point(s->a, s->n, r1 + 2, (uint64_t)0 - u);
+    rowsums_point(s->b, s->n, r0 + 1, u * (uint64_t)r0);
+    rowsums_point(s->b, s->n, r1 + 2, (uint64_t)0 - u * (uint64_t)(r1 + 1));
+}
+
+static uint64_t rowsums_prefix(const RowSums *s, int32_t count)
+{
+    return rowsums_prefix_of(s->a, count) * (uint64_t)count - rowsums_prefix_of(s->b, count);
+}
+
+// The heights of rows [r0, r1] together.
+static int64_t rowsums_sum(const RowSums *s, int32_t r0, int32_t r1)
+{
+    return (int64_t)(rowsums_prefix(s, r1 + 1) - rowsums_prefix(s, r0));
+}
+
+static bool rowsums_init(L *l, RowSums *s, const int64_t *rh, int32_t n)
+{
+    s->n = n + 1;
+    s->a = os64_calloc((size_t)n + 2, sizeof(uint64_t));
+    s->b = os64_calloc((size_t)n + 2, sizeof(uint64_t));
+    if (s->a == NULL || s->b == NULL) {
+        fail(l);
+        return false;
+    }
+    for (int32_t r = 0; r < n; r++)
+        rowsums_add(s, r, r, rh[r]);
+    return true;
+}
+
 static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw,
                        Cursor *cur)
 {
@@ -2586,13 +2644,22 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
     for (int32_t r = 0; r < g.nrows && !l->failed; r++)
         if (below[r] > 0 || row_base[r] > 0)
             rh[r] = max64(rh[r], row_base[r] + below[r]);
-    for (int32_t i = 0; i < g.ncells && !l->failed; i++) {
+    // Rowspans: what each spanning cell's rows already have, and its excess
+    // spread over them, in a range-add, range-sum tree over the row heights
+    // — a cell costs log(rows), not its span, which a first row of long
+    // spans over thousands of empty rows made rows x cells.
+    RowSums rs = {0};
+    bool spanning = false;
+    for (int32_t i = 0; i < g.ncells && !spanning; i++)
+        spanning = g.cells[i].rows > 1;
+    if (spanning && !l->failed && !rowsums_init(l, &rs, rh, g.nrows))
+        spanning = false;
+    for (int32_t i = 0; i < g.ncells && spanning && !l->failed; i++) {
         GCell *gc = &g.cells[i];
         if (gc->rows == 1)
             continue;
-        int64_t have = (int64_t)(gc->rows - 1) * vsp;
-        for (int32_t r = gc->row; r < gc->row + gc->rows; r++)
-            have += rh[r];
+        int32_t last = gc->row + gc->rows - 1;
+        int64_t have = (int64_t)(gc->rows - 1) * vsp + rowsums_sum(&rs, gc->row, last);
         // A spanning baseline cell moves down to its first row's baseline,
         // and the rows it spans hold it where it goes.
         int64_t need = gc->cell->h;
@@ -2600,10 +2667,15 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
             need += row_base[gc->row] - base[i];
         if (need > have) {
             int64_t extra = need - have, each = extra / gc->rows;
-            for (int32_t r = gc->row; r < gc->row + gc->rows; r++)
-                rh[r] += r == gc->row + gc->rows - 1 ? extra - each * (gc->rows - 1) : each;
+            rowsums_add(&rs, gc->row, last, each);
+            rowsums_add(&rs, last, last, extra - each * gc->rows);
         }
     }
+    if (spanning && !l->failed)
+        for (int32_t r = 0; r < g.nrows; r++)
+            rh[r] = rowsums_sum(&rs, r, r);
+    os64_free(rs.a);
+    os64_free(rs.b);
     int64_t top = y + t->border[FLOW_TOP] + t->padding[FLOW_TOP];
     int64_t grid_h = g.nrows > 0 ? (int64_t)(g.nrows + 1) * vsp : 0;
     for (int32_t r = 0; r < g.nrows; r++)
@@ -2638,9 +2710,9 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
         GCell *gc = &g.cells[i];
         FBox *cell = gc->cell;
         int64_t natural = cell->h;
-        int64_t h = (int64_t)(gc->rows - 1) * vsp;
-        for (int32_t r = gc->row; r < gc->row + gc->rows; r++)
-            h += rh[r];
+        // The rows it spans, from their tops: no walk over the span.
+        int32_t last = gc->row + gc->rows - 1;
+        int64_t h = ry[last] + rh[last] - ry[gc->row];
         translate(cell, 0, ry[gc->row] - cell->y);
         cell->h = h;
         int64_t shift = 0;
