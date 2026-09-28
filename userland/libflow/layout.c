@@ -1661,6 +1661,7 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     if (out == NULL)
         return NULL;
     out->env = env;
+    out->arena.cap = f_arena_budget(env);
     out->quirks = doc != NULL ? doc->quirks : OS64_HTML_NO_QUIRKS;
     out->model = model;
     out->boxes = boxes;

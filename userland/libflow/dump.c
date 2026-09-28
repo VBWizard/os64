@@ -356,6 +356,7 @@ static void quoted(Buf *b, const char *s, uint32_t len)
 static const char *const s_box[] = {
     "block", "replaced", "table", "caption", "column-group", "column", "row-group", "row", "cell",
 };
+_Static_assert(F_ARRAY(s_box) == FB_CELL + 1, "s_box");
 
 static void box_lines(Buf *b, const FBox *box, int32_t depth);
 

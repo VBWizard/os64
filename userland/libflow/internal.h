@@ -15,9 +15,20 @@
 typedef struct FBlock FBlock;
 typedef struct {
     FBlock *blocks;
+    // Bytes the blocks hold, and the most they may: flow_env_t's
+    // max_arena_bytes for the arenas a page can multiply (boxes, lines). A
+    // block past it is refused like one malloc cannot supply, so such a page
+    // stops as `incomplete`.
+    size_t reserved, cap;
 } FArena;
 
-void *f_arena_alloc(FArena *arena, size_t size);    // zeroed; NULL on no memory
+// The byte budget a multiplied arena takes from the environment.
+static inline size_t f_arena_budget(const flow_env_t *env)
+{
+    return env != NULL && env->max_arena_bytes != 0 ? env->max_arena_bytes : FLOW_ARENA_DEFAULT;
+}
+
+void *f_arena_alloc(FArena *arena, size_t size);    // zeroed; NULL on no memory or budget
 void f_arena_free(FArena *arena);
 
 // A node to the record built for it. Open addressing over a power-of-two

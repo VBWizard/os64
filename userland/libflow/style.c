@@ -1396,6 +1396,11 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
         return NULL;
     out->doc = doc;
     out->env = env;
+    // One record per element and the family names a `face` wrote: bounded
+    // by the document libhtml admitted, never multiplied, so no budget —
+    // pass 1 is all or nothing, and a cap here would blank a large page
+    // that the boxes' budget would merely cut short.
+    out->arena.cap = SIZE_MAX;
     Ctx c = {.doc = doc, .model = model, .env = env, .out = out,
              .quirks = doc->quirks == OS64_HTML_QUIRKS};
 

@@ -180,9 +180,10 @@ static bool text_significant(const B *b, const os64_html_node_t *n)
 
 // ── Depth ───────────────────────────────────────────────────────────────
 
-// Every recursive descent of the build opens with descend() and closes with
-// ascend(), and a descent that costs more stack than a block level opens
-// more than one. Past F_DEPTH_MAX the build stops, as it does when memory
+// Every recursive descent of the build over the TREE opens with descend()
+// and closes with ascend(), and a descent that costs more stack than a
+// block level opens more than one. reopen() recurses too, over the inlines
+// open at a point, which the descents that opened them already count. Past F_DEPTH_MAX the build stops, as it does when memory
 // runs out, so what it made is still a prefix of the whole build.
 static bool descend(B *b)
 {
@@ -381,16 +382,27 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     FBox *ifc = target(f);
     if (ifc == NULL)
         return;
-    char *copy = alloc(b, n->text_len);
-    if (copy == NULL)
-        return;
+    // Point into the tree when processing changes nothing — no tab or
+    // newline, no space after a space, no leading space after one — and
+    // copy only when it does: the box tree copies no text it can point at.
     bool space = ifc->collapse_space;
-    uint32_t len = f_collapse_white(n->text, (uint32_t)n->text_len, copy, &space);
+    bool changes = false;
+    for (size_t i = 0; i < n->text_len && !changes; i++) {
+        char ch = n->text[i];
+        changes = css_space(ch) && (ch != ' ' || (i == 0 ? space : n->text[i - 1] == ' '));
+    }
+    const char *text = n->text;
+    uint32_t len = (uint32_t)n->text_len;
+    if (changes) {
+        char *copy = alloc(b, n->text_len);
+        if (copy == NULL)
+            return;
+        len = f_collapse_white(n->text, (uint32_t)n->text_len, copy, &space);
+        text = copy;
+    } else if (len > 0) {
+        space = n->text[len - 1] == ' ';
+    }
     ifc->collapse_space = space;
-    // Point into the tree when processing changed nothing: the box tree
-    // copies no text it can point at.
-    const char *text = len == n->text_len && os64_memcmp(copy, n->text, len) == 0 ? n->text
-                                                                               : copy;
     if (len > 0)
         text_item(f, ifc, n, s, text, len, 0, false);
 }
@@ -954,6 +966,7 @@ FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
     if (out == NULL)
         return NULL;
     out->styles = styles;
+    out->arena.cap = f_arena_budget(env);
     B b = {doc, model, styles, env, out, 0, false};
     const os64_html_node_t *html = doc->html;
     const FStyled *root = html != NULL ? styled(&b, html) : NULL;

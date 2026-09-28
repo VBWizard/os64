@@ -521,11 +521,16 @@ static void *deep_layout(void *arg)
     return NULL;
 }
 
+// What the alarm is guarding, named in its failure.
+static const char *s_cost_case = "";
+
 static void cost_hung(int sig)
 {
     (void)sig;
-    static const char msg[] = "FAIL a descendant or sibling question walks: the build never ended\n";
+    static const char msg[] = "FAIL the build never ended: ";
     (void)!write(2, msg, sizeof(msg) - 1);
+    (void)!write(2, s_cost_case, strlen(s_cost_case));
+    (void)!write(2, "\n", 1);
     _exit(1);
 }
 
@@ -545,15 +550,54 @@ static void cost_cases(void)
     for (int i = 0; i < 400; i++)
         at += (size_t)sprintf(html + at, "<q>");
     sprintf(html + at, "x");
+    // The question here is time, not memory: a budget the page cannot
+    // reach, so a walk would show as the alarm and not as a stop.
+    flow_env_t roomy = kEnv;
+    roomy.max_arena_bytes = (size_t)1 << 30;
     signal(SIGALRM, cost_hung);
+    s_cost_case = "a descendant or sibling question walks";
     alarm(60);
     os64_html_document_t *doc = parse(html);
     os64_page_t *page = os64_page_build(doc, kPage, NULL);
-    FStyles *styles = f_style_build(doc, page, &kEnv);
-    FBoxes *boxes = styles != NULL ? f_boxes_build(doc, page, styles, &kEnv) : NULL;
+    FStyles *styles = f_style_build(doc, page, &roomy);
+    FBoxes *boxes = styles != NULL ? f_boxes_build(doc, page, styles, &roomy) : NULL;
     alarm(0);
     expect("a ruby of 100000 annotations and 400 nested quotes build whole",
            boxes != NULL && !boxes->incomplete, NULL);
+    f_boxes_free(boxes);
+    f_style_free(styles);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    free(html);
+
+    // A page that multiplies its records: 400 inlines open, then a block
+    // interrupting the run 60000 times, each reopening all 400 — 3.7 GB of
+    // boxes unbounded. At the budget the box build stops, incomplete, having
+    // reserved no more than the budget, and the layout of what it holds
+    // stays inside its own. Pass 1 is not budgeted: one record an element.
+    n = 60000;
+    html = malloc(n * 16 + 4096);
+    at = (size_t)sprintf(html, "<!doctype html>");
+    for (int i = 0; i < 400; i++)
+        at += (size_t)sprintf(html + at, "<b>");
+    for (size_t i = 0; i < n; i++)
+        at += (size_t)sprintf(html + at, "x<div></div>");
+    flow_env_t tight = kEnv;
+    tight.max_arena_bytes = (size_t)16 << 20;
+    s_cost_case = "a page that multiplies its boxes met no budget";
+    alarm(60);
+    doc = parse(html);
+    page = os64_page_build(doc, kPage, NULL);
+    styles = f_style_build(doc, page, &tight);
+    boxes = styles != NULL ? f_boxes_build(doc, page, styles, &tight) : NULL;
+    FLayout *lay = boxes != NULL ? f_layout(boxes, doc, page, &tight, 800) : NULL;
+    alarm(0);
+    expect("a page that multiplies its boxes stops at the budget, incomplete",
+           boxes != NULL && boxes->incomplete && boxes->arena.reserved <= tight.max_arena_bytes,
+           NULL);
+    expect("and what it holds lays out inside the budget too",
+           lay != NULL && lay->incomplete && lay->arena.reserved <= tight.max_arena_bytes, NULL);
+    f_layout_free(lay);
     f_boxes_free(boxes);
     f_style_free(styles);
     os64_page_free(page);

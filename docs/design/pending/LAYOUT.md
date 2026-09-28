@@ -698,7 +698,16 @@ LIBPAGE.md's rule restated for geometry:
 - **Memory is the text engine's budget plus the boxes, and REBUILDING
   DOUBLES THE PEAK.** Runs are the big cost (a glyph placement is tens of
   bytes) and they live in the text context the face hands in, which has
-  one `memory_cap` and is caller-serialised. A rebuild builds the NEW
+  one `memory_cap` and is caller-serialised. The boxes and the lines have
+  a budget of their own, `flow_env_t.max_arena_bytes` for each arena
+  (`FLOW_ARENA_DEFAULT`, 64 MiB, when the face sets none), because a page
+  can MULTIPLY them: an inline split round a block reopens every inline
+  still open there, so 400 open `<b>`s and 60000 interrupting `<div>`s
+  asked for 3.7 GB of boxes from a 706 KB page. At the budget the build
+  stops as it does at `F_DEPTH_MAX`, `incomplete`, what it holds real. The
+  largest corpus page (wikipedia) holds about 5 MB in either. The styles
+  are not budgeted: one record an element, bounded by the document
+  libhtml admitted, and all or nothing. A rebuild builds the NEW
   tree while the OLD one is still retained — the face must keep the old
   tree until the new one exists, or a rebuild that fails leaves it with
   nothing to paint — so the peak is two layouts of the page, and a page
