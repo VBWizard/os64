@@ -205,7 +205,7 @@ USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
 # dependencies. The set goes on both volumes that currently carry /bin — the
 # ext2 root and the FAT lifeboat — with independent copies so damage to one
 # volume does not also eat the repair environment's libraries.
-USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libfreetype.so
+USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libgarb.so userland/bin/libfreetype.so
 
 # The font fixtures /tests/fonttest reads: two TrueType faces and two
 # OpenType/CFF ones, with their licences beside them. They land in /tests
@@ -221,10 +221,28 @@ FONT_FIXTURE_FILES := DejaVuSans.ttf DejaVuSansMono.ttf \
 FONT_FIXTURES      := $(addprefix $(FONT_FIXTURE_DIR)/,$(FONT_FIXTURE_FILES))
 FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSans.ttf DejaVuSansMono.ttf)
 
-# The real pages the layout library is tested on, so /tests/flowdump has
-# something to lay out on a machine with no network. Where each came from
-# is in tools/html_corpus/SOURCES.json.
-PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html)
+# The real pages the layout library is tested on, and the style sheets
+# libgarb is, side by side in /tests/pages, so /tests/flowdump and
+# /tests/garbdump have something to read on a machine with no network. Where
+# each page came from is in tools/html_corpus/SOURCES.json.
+PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css)
+
+# The same fixtures for the wire, staged alone: os64serve serves a directory
+# whole, and tools/html_corpus also holds the host harness's expected dumps,
+# which mean nothing on os64. Served as the `pages` lot (os64get.conf).
+# The directory holds exactly the list: os64serve offers whatever is in it,
+# so a fixture renamed or deleted from the corpus is removed here too, not
+# left to be served and installed as if it were still one.
+PAGES_STAGE  := userland/bin/pages
+PAGES_STAGED := $(addprefix $(PAGES_STAGE)/,$(notdir $(PAGE_FIXTURES)))
+PAGES_RETIRED = $(filter-out $(PAGES_STAGED),$(wildcard $(PAGES_STAGE)/*))
+$(PAGES_STAGE)/%: tools/html_corpus/%
+	@mkdir -p $(PAGES_STAGE) && cp $< $@
+$(PAGES_STAGE)/%: tools/garb_corpus/%
+	@mkdir -p $(PAGES_STAGE) && cp $< $@
+.PHONY: stage-pages
+stage-pages: $(PAGES_STAGED)
+	$(if $(strip $(PAGES_RETIRED)),rm -f $(PAGES_RETIRED))
 
 # Prepared compositions carry their own glyphs and finish tiles.
 FRAME_COMPOSITIONS := $(wildcard frames/*.frame)
@@ -252,10 +270,10 @@ endif
 
 
 .PHONY: all
-all: $(IMAGE_NAME).iso
+all: $(IMAGE_NAME).iso stage-pages
 
 .PHONY: all-hdd
-all-hdd: $(IMAGE_NAME).hdd
+all-hdd: $(IMAGE_NAME).hdd stage-pages
 
 # The sub-makes are the authority on whether these need rebuilding, so recurse
 # unconditionally — but let the FILE TIMESTAMPS decide what happens downstream.

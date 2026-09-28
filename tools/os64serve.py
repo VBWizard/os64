@@ -2,7 +2,7 @@
 r"""Serve build files to os64get. Run on the build PC; stop with Ctrl+C.
 
 Usage, from the repository root:
-    python3 tools/os64serve.py userland/bin userland/bin/tests=tests kernel/bin=kernelbin etc frames=frames
+    python3 tools/os64serve.py userland/bin userland/bin/tests=tests userland/bin/pages=pages kernel/bin=kernelbin etc frames=frames
 
 Options:
     [PATH|PATH=LOT ...] [--port 6464] [--bind 0.0.0.0]

@@ -24,7 +24,7 @@ Finish the build on the host, then start the server from the repository root:
 
 ```sh
 make
-python3 tools/os64serve.py userland/bin userland/bin/tests=tests kernel/bin=kernelbin etc frames=frames
+python3 tools/os64serve.py userland/bin userland/bin/tests=tests userland/bin/pages=pages kernel/bin=kernelbin etc frames=frames
 ```
 
 This offers applications, shared libraries, test programs, the kernel and
@@ -35,6 +35,10 @@ Serving `userland/bin` alone does not include its `tests` subdirectory.
 The `frames` lot routes to `/etc/frames`. On an existing installation, add
 `@frames = /etc/frames` to the effective `os64get.conf` before the first bulk
 refresh; see [the collection update instructions](../../../../FRAME_COLLECTION.md#p5-update).
+The `pages` lot is the page and style-sheet fixtures (`/tests/pages`), which
+`make` stages in `userland/bin/pages` apart from the host harness's expected
+dumps; an existing installation with its own `/home/os64get.conf` needs
+`@pages = /tests/pages` added to it, or they fall through to `/bin`.
 
 On os64, replace `HOST` with the build PC's reachable hostname or IPv4 address:
 
@@ -314,6 +318,7 @@ cd /mnt/c/temp
 python3.exe '\\wsl$\<distro>\home\<you>\src\os64\tools\os64serve.py' \
   '\\wsl$\<distro>\home\<you>\src\os64\userland\bin' \
   '\\wsl$\<distro>\home\<you>\src\os64\userland\bin\tests=tests' \
+  '\\wsl$\<distro>\home\<you>\src\os64\userland\bin\pages=pages' \
   '\\wsl$\<distro>\home\<you>\src\os64\kernel\bin=kernelbin' \
   '\\wsl$\<distro>\home\<you>\src\os64\etc' \
   '\\wsl$\<distro>\home\<you>\src\os64\frames=frames'

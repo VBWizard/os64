@@ -148,6 +148,22 @@ parser slice against the corpus, and each is a named constant.
 Pile 2 and pile 3 are designed in their own sections when pile 1 is
 proven, with danlegt.com re-measured then to order them.
 
+**G1, as run.** `tools/test_garb_host.sh`, under ASan and UBSan:
+css-parsing-tests (vendored, CC0) — all 177 parser cases pass, with 20
+skipped by rule: 9 whose answer is a `unicode-range` token, which the
+current draft no longer makes, and 11 in ISO-8859-2 and -5, which libhtml
+does not read either. The suite predates two things the draft does — a
+match operator is two delimiters, a declaration's value is trimmed — and
+the runner brings its answers up to the draft before comparing. Then every
+allocation failed in turn over the corpus sheet, nothing leaked.
+`tools/test_garb_differential.py` against tinycss2 1.4: the corpus sheet,
+its 21 blocks and 15,000 mutations of it agree; so do danlegt.com's 28
+sheets (172 KB), their 1,117 blocks and 9,000 mutations of them (run from a
+local copy, never checked in). One more draft rule the reference predates:
+a top-level rule whose prelude begins `--x:` is thrown away. In the guest,
+`/tests/garbdump /tests/pages/sweep.css` prints the sheet and every rule's
+block.
+
 ## Booked before the first line
 
 | Debt | Why it waits | Trigger |
@@ -157,4 +173,6 @@ proven, with danlegt.com re-measured then to order them.
 | `:has()` | matching becomes whole-tree; its cost wants its own design | a page that needs it to be readable |
 | wend honouring `display: none` | libgarb proven in one face before a second leans on it | pile 1 proven |
 | User stylesheets | a person's own sheet is the user origin; nobody has asked | a person who asks |
+| `unicode-range` | the draft reads it from component values, in `@font-face`, not as a token | pile 3's web fonts |
+| Encodings beyond libhtml's | a sheet in ISO-8859-2 or Shift_JIS keeps its ASCII and loses the rest | the first sheet whose text is not ASCII and not UTF-8 |
 | Alpha blending of colours | libflow's colours are opaque | pile 3 |
