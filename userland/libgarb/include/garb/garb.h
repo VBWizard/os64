@@ -114,7 +114,9 @@ struct garb_rule {
 
 typedef enum {
     GARB_OK = 0,
-    GARB_NO_MEMORY,         // nothing came back at all
+    // Nothing came back at all. A list that runs short partway answers OK
+    // with `incomplete`; a single item has no partway, so it answers this.
+    GARB_NO_MEMORY,
     GARB_TOO_BIG,           // the input is past GARB_SHEET_MAX
     // The single-item parses (§5.3.x): nothing there, or more than one.
     GARB_EMPTY,
@@ -172,8 +174,10 @@ garb_status_t garb_parse_one_rule(const char *text, size_t len, garb_parsed_t *o
 garb_status_t garb_parse_one_declaration(const char *text, size_t len, garb_parsed_t *out);
 garb_status_t garb_parse_one_value(const char *text, size_t len, garb_parsed_t *out);
 
-// An at-rule's block, read as rules or as a block's contents, into the
-// arena of the parse it came from, so the answer lives and dies with it.
+// A rule's block, read as rules or as a block's contents, into the arena of
+// the parse it came from, so the answer lives and dies with it. False when
+// the answer came out short (the owner is marked incomplete too): what is
+// in `items` is then a prefix, and a reader that shows it says so.
 bool garb_rules_of(garb_parsed_t *owner, const garb_value_t *values, int32_t n,
                    garb_item_t **items, int32_t *nitems);
 bool garb_items_of(garb_parsed_t *owner, const garb_value_t *values, int32_t n,
