@@ -1188,7 +1188,8 @@ system has to know:
 Applications opt in at window creation with `OS64_GUI_WINDOW_HAS_SETTINGS`.
 The Settings titlebar action, or Ctrl+Alt+S, delivers
 `OS64_GUI_EVENT_SETTINGS` (15) to that window. The application owns its
-settings dialog and policy. `os64_gui_window_focus` (syscall 62) restores/focuses an owned ordinary
+settings dialog and policy; `os64/ui_settings.h` supplies a reusable modeless
+window. `os64_gui_window_focus` (syscall 62) restores/focuses an owned ordinary
 window within its stacking band, allowing repeated Settings requests to reveal
 the same draft. Desktop and popup windows are refused by that focus call.
 

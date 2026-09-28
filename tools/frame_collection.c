@@ -69,6 +69,7 @@ static frame_draft_t composition(unsigned i)
         h->buttons[2].face=0xff55c8d1;h->symbols[0]=(os64_decor_symbol_t){0xff102735,0xff233b47};
         break;
     }
+    h->buttons[h->button_count++]=(os64_decor_button_t){OS64_DECOR_SETTINGS,1,OS64_DECOR_BARE,0};
     return d;
 }
 static void write_file(const char *path,const void *data,size_t size)
