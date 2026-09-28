@@ -1,12 +1,16 @@
 // test_garb_host.c — libgarb's parser on the host, under the sanitizers.
 //
-// Two jobs. As a DRIVER (`garb_driver MODE`) it reads records on stdin —
+// Its jobs. As a DRIVER (`garb_driver MODE`) it reads records on stdin —
 // css-parsing-tests' inputs, framed by tools/test_garb_suite.py — and prints
 // one JSON line per record, in the suite's representation, for the runner to
 // compare. As a TEST (`garb_driver --sweep FILE`) it parses a sheet with
 // every allocation failing in turn and asserts nothing leaks and nothing
-// crashes: a result that came out short says so.
+// crashes: a result that came out short says so. And two probes: `--deep`
+// parses a million nested `(` on a thread with a small stack (past the
+// depth bound the parser must find the end without recursing), and
+// `--numbers` dumps numbers past int64_t's reach and past a double's.
 
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -194,8 +198,66 @@ static int sweep(const char *path)
     return failures == 0 ? 0 : 1;
 }
 
+typedef struct {
+    const char *text;
+    size_t len;
+    garb_status_t st;
+    bool incomplete;
+} Deep;
+
+static void *deep_parse(void *arg)
+{
+    Deep *d = arg;
+    garb_parsed_t r = {0};
+    d->st = garb_parse_sheet_text(d->text, d->len, &r);
+    d->incomplete = r.incomplete;
+    garb_free(&r);
+    return NULL;
+}
+
+static int deep(void)
+{
+    size_t n = 1000000, cap = n + 64, at = 0;
+    char *text = malloc(cap);
+    at += (size_t)snprintf(text, cap, "a { b: ");
+    memset(text + at, '(', n);
+    at += n;
+    at += (size_t)snprintf(text + at, cap - at, " }");
+    Deep d = {text, at, GARB_OK, false};
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 512 * 1024);
+    pthread_t th;
+    int ok = pthread_create(&th, &attr, deep_parse, &d) == 0;
+    if (ok)
+        pthread_join(th, NULL);
+    ok = ok && d.st == GARB_OK && d.incomplete;
+    printf("libgarb deep: a million nested ( on a 512K stack: %s\n",
+           ok ? "parsed, and says it is incomplete" : "FAILED");
+    free(text);
+    return ok ? 0 : 1;
+}
+
+// Numbers between int64_t's reach and a double's: the dump must test the
+// range before it casts (float-cast-overflow is on in this harness).
+static int numbers(void)
+{
+    const char *text = "1e19 -1e19 99999999999999999999 1e300 -1e300 1e999 5e-324";
+    garb_parsed_t r;
+    garb_status_t st = garb_parse_values(text, strlen(text), &r);
+    size_t n = garb_dump_values(r.values, r.nvalues, s_out, sizeof(s_out));
+    int ok = st == GARB_OK && n > 0 && strstr(s_out, "Infinity") != NULL;
+    printf("libgarb numbers: past int64_t and past a double: %s\n", ok ? "dumped" : "FAILED");
+    garb_free(&r);
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--deep") == 0)
+        return deep();
+    if (argc == 2 && strcmp(argv[1], "--numbers") == 0)
+        return numbers();
     if (argc == 3 && strcmp(argv[1], "--sweep") == 0)
         return sweep(argv[2]);
     if (argc != 2) {

@@ -58,7 +58,8 @@ static void num(Out *o, double v)
         puts_(o, v > 0 ? "Infinity" : "-Infinity");
         return;
     }
-    if (v == (double)(int64_t)v && v < 1e15 && v > -1e15) {
+    // The range first: a double past int64_t's cannot be cast to one at all.
+    if (v < 1e15 && v > -1e15 && v == (double)(int64_t)v) {
         os64_snprintf(b, sizeof(b), "%ld", (long)(int64_t)v);
         puts_(o, b);
         return;

@@ -155,22 +155,65 @@ static bool ascii_is(const char *s, size_t len, const char *word)
 
 static garb_value_t consume_component_value(Parse *p, Input *in, Tok t);
 
+// Past the depth bound a block's contents are read only to find its end,
+// and without recursing: what nests there nests as deep as the text does
+// (eight megabytes of `(`), so the closers still owed are kept on a list,
+// innermost last — a `)` inside a `[` is not the `[`'s end (§5.4.9) — and
+// the stack stays as deep as the bound. A list that cannot grow ends the
+// read at the input's end; the parse already says it is incomplete.
+static void skip_contents(Parse *p, Input *in, char end)
+{
+    char *owed = NULL;
+    size_t n = 0, cap = 0;
+    char want = end;
+    for (;;) {
+        Tok t = in_next(in);
+        if (t.kind == T_EOF)
+            break;
+        if (is_close(&t, want)) {
+            if (n == 0)
+                break;
+            want = owed[--n];
+            continue;
+        }
+        if (t.kind != T_OPEN && t.kind != T_FUNCTION)
+            continue;
+        if (n == cap) {
+            size_t cap2 = cap != 0 ? cap * 2 : 64;
+            char *grown = os64_realloc(owed, cap2);
+            if (grown == NULL) {
+                while (in_next(in).kind != T_EOF)
+                    ;
+                break;
+            }
+            owed = grown;
+            cap = cap2;
+        }
+        owed[n++] = want;
+        want = t.kind == T_OPEN ? closer(t.v.open) : ')';
+    }
+    os64_free(owed);
+    p->incomplete = true;
+}
+
 // A block or function's contents, up to `end` (or the input's end). Past
 // the depth bound they are read to find the end, and not kept.
 static void consume_contents(Parse *p, Input *in, char end, garb_value_t *into)
 {
     Values kids = {0};
-    bool keep = p->depth < GARB_DEPTH_MAX;
-    if (!keep)
-        p->incomplete = true;
+    if (p->depth >= GARB_DEPTH_MAX) {
+        skip_contents(p, in, end);
+        into->children = NULL;
+        into->nchildren = 0;
+        return;
+    }
     p->depth++;
     for (;;) {
         Tok t = in_next(in);
         if (t.kind == T_EOF || is_close(&t, end))
             break;
         garb_value_t v = consume_component_value(p, in, t);
-        if (keep)
-            push_value(p, &kids, &v);
+        push_value(p, &kids, &v);
     }
     p->depth--;
     into->children = kids.v;
