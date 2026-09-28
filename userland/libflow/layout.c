@@ -657,10 +657,13 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             break;
         }
         case FI_WBR: {
+            // A break opportunity where its own white-space allows one: a
+            // wbr inside `nobr` is `normal` (pass 1), one in a nowrap or
+            // pre run is not.
             Seg *g = seg_add(l, s, SG_WBR);
             if (g != NULL) {
                 g->item = it;
-                g->wrap_after = true;
+                g->wrap_after = wraps(it->style->white_space);
             }
             break;
         }
