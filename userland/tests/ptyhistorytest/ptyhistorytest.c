@@ -114,9 +114,39 @@ int main(int argc,char **argv)
         }
     }
     check(refused && preserved,"quota has distinct error and preserves refused grid");
+    // Discover remaining quota rather than assuming no other terminal owns
+    // history. Drop each probe before the next so growth's overlap charge
+    // cannot turn this into a search for only half the remaining capacity.
+    bool filled=many[3]>=0 && os64_pty_history(many[3],0)==0;
+    uint32_t low=0,high=OS64_PTY_HISTORY_MAX;
+    while(filled && low<high){
+        uint32_t probe=low+(high-low+1)/2;
+        int64_t result=os64_pty_history(many[3],probe);
+        if(result==0)low=probe;
+        else if(result==OS64_PTY_ERR_HISTORY_BUDGET)high=probe-1;
+        else filled=false;
+        filled &= os64_pty_history(many[3],0)==0;
+    }
+    filled &= many[3]>=0 && os64_pty_history(many[3],low)==0;
+    check(filled,"fill remaining quota to less than one 512-column history row");
     int64_t fresh=os64_pty_create(512,256);
-    check(fresh>=0,"new live terminal survives aggregate history refusal");
-    if(fresh>=0)os64_close((int32_t)fresh);
+    os64_pty_viewport_t born={0};
+    check(filled && fresh>=0 && os64_pty_viewport(fresh,&born,NULL,0,0,0)==0 &&
+        born.history_limit==0,"new terminal actually uses live-only fallback");
+    if(fresh>=0){
+        check(os64_pty_resize(fresh,500,250)==0 &&
+            os64_pty_viewport(fresh,&born,NULL,0,0,0)==0 &&
+            born.history_limit==0 && born.screen.cols==500 && born.screen.rows==250,
+            "live-only fallback resizes without enabling history");
+        os64_close((int32_t)fresh);
+    }
+    os64_pty_cell_t oldcell,newcell;os64_pty_viewport_t shrink_before,shrink_after;
+    bool snapshot=many[0]>=0 && os64_pty_viewport(many[0],&shrink_before,&oldcell,1,
+        OS64_PTY_VIEW_LIVE,0)==1;
+    check(snapshot && os64_pty_history(many[0],9999)==0 &&
+        os64_pty_viewport(many[0],&shrink_after,&newcell,1,OS64_PTY_VIEW_LIVE,0)==1 &&
+        shrink_after.history_limit==9999 && !os64_memcmp(&oldcell,&newcell,sizeof(oldcell)),
+        "shrink succeeds at the quota and preserves live cells");
     for(unsigned i=0;i<4;++i)if(many[i]>=0)os64_close((int32_t)many[i]);
     os64_close((int32_t)fd);
     fd=os64_pty_create_stream(12,4);

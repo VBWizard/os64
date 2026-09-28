@@ -1141,15 +1141,17 @@ static spinlock_t kPtyListLock = 0;
 static uint32_t kPtyNextIndex = 0;
 
 // Charge retained rows in both old and replacement rings until the old ring
-// is freed. Live grids are outside this quota; physical exhaustion can still
-// refuse them through kmalloc_try.
+// is freed. A non-growing replacement may temporarily exceed the quota, using
+// its old ring as credit; one replacement per PTY keeps that credit exclusive.
+// Live grids are exempt. Physical exhaustion can still refuse allocations.
 #define PTY_HISTORY_BUDGET (128UL * 1024 * 1024)
 static size_t s_pty_history_bytes;
-static tty_cell_t *pty_grid_alloc(size_t bytes, size_t history_bytes, int *why)
+static tty_cell_t *pty_grid_alloc(size_t bytes, size_t history_bytes, size_t old_charge, int *why)
 {
 	size_t used = __atomic_load_n(&s_pty_history_bytes, __ATOMIC_RELAXED);
 	do {
-		if (history_bytes > PTY_HISTORY_BUDGET - used) {
+		if (history_bytes > old_charge &&
+		    (used >= PTY_HISTORY_BUDGET || history_bytes > PTY_HISTORY_BUDGET - used)) {
 			*why = OS64_PTY_ERR_HISTORY_BUDGET;
 			return NULL;
 		}
@@ -1188,12 +1190,16 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 		t->history_bytes = (size_t)(t->total_lines - rows) * cols * sizeof(tty_cell_t);
 		int why = 0;
 		t->cells = pty_grid_alloc((size_t)t->total_lines * cols * sizeof(tty_cell_t),
-		                          t->history_bytes, &why);
+		                          t->history_bytes, 0, &why);
 		if (!t->cells) {
 			// Optional legacy history must not prevent a live terminal's birth.
 			t->total_lines = rows;
 			t->history_bytes = 0;
-			t->cells = pty_grid_alloc((size_t)rows * cols * sizeof(tty_cell_t), 0, &why);
+			t->history_configured = true;
+			t->history_limit = 0;
+			printd(DEBUG_TASK, "pty: %ux%u live-only fallback (history refused: %d)\n",
+			       cols, rows, why);
+			t->cells = pty_grid_alloc((size_t)rows * cols * sizeof(tty_cell_t), 0, 0, &why);
 		}
 		if (!t->cells) { kfree(t); return NULL; }
 	}
@@ -1229,6 +1235,16 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 	return t;
 }
 
+// Release replacement ownership after freeing its old or refused allocation,
+// so a sibling cannot reuse the same quota credit while that charge is live.
+static void tty_reconfigure_done(tty_t *t)
+{
+	if (!t->is_pty) return;
+	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+	t->history_replacing = false;
+	spinlock_release_irqrestore(&t->lock, flags);
+}
+
 // Geometry follows the window; STREAM has no cells to rebuild. A GRID
 // resize preserves text under the policy in tty.h.
 //
@@ -1240,10 +1256,10 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 // landed. Cells are copied row by row, min(old cols, new cols) each, so
 // the left edge is what every line keeps.
 static int tty_reconfigure(tty_t *t, uint32_t cols, uint32_t rows,
-						   bool configure_history, uint32_t history)
+                           bool configure_history, uint32_t history)
 {
 	if (!t || (configure_history && (!t->is_pty || t->pty_mode != PTY_MODE_GRID ||
-									history > OS64_PTY_HISTORY_MAX)) ||
+                                    history > OS64_PTY_HISTORY_MAX)) ||
 		(!configure_history && (cols < 2 || rows < 2 || cols > 512 || rows > 256)))
 		return -1;
 	unsigned attempts = 0;
@@ -1268,6 +1284,12 @@ retry:
 		spinlock_release_irqrestore(&t->lock, flags);
 		return 1;
 	}
+	if (t->is_pty && t->history_replacing) {
+		spinlock_release_irqrestore(&t->lock, flags);
+		goto retry;
+	}
+	if (t->is_pty) t->history_replacing = true;
+	size_t old_charge = t->history_bytes;
 	spinlock_release_irqrestore(&t->lock, flags);
 
 	uint32_t new_total = rows + limit;
@@ -1275,13 +1297,17 @@ retry:
 	// Allocate outside the tty lock; no allocator/tty lock nesting.
 	size_t history_bytes = (size_t)limit * cols * sizeof(tty_cell_t);
 	int why = 0;
-	tty_cell_t *fresh = t->is_pty ? pty_grid_alloc(bytes, history_bytes, &why) : kmalloc(bytes);
-	if (!fresh) return why;
+	tty_cell_t *fresh = t->is_pty ? pty_grid_alloc(bytes, history_bytes, old_charge, &why) : kmalloc(bytes);
+	if (!fresh) {
+		tty_reconfigure_done(t);
+		return why;
+	}
 	flags = spinlock_acquire_irqsave(&t->lock);
 	if (t->cols != prior_cols || t->rows != prior_rows ||
 		t->history_configured != configured || t->history_limit != prior_limit) {
 		spinlock_release_irqrestore(&t->lock, flags);
 		if (t->is_pty) pty_grid_free(fresh, history_bytes); else kfree(fresh);
+		tty_reconfigure_done(t);
 		goto retry;
 	}
 
@@ -1338,6 +1364,7 @@ retry:
 
 	spinlock_release_irqrestore(&t->lock, flags);
 	if (t->is_pty) pty_grid_free(old, old_bytes); else kfree(old);
+	tty_reconfigure_done(t);
 	return 1;
 }
 

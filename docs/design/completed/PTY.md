@@ -412,8 +412,11 @@ call in the resize arm, verified on glass by dragging a gterm and watching
 independent of live-screen height. It preserves newest history when shrinking
 and sends no SIGWINCH. Unconfigured clients request the legacy three-screen
 history policy. The 128 MiB aggregate ceiling charges retained rows, including
-old and replacement history until the old ring is freed. Live grids are exempt:
-a new GRID falls back to no history if its optional legacy ring is refused.
+old and replacement history until the old ring is freed. Non-growing
+replacements can temporarily exceed the quota; exclusive per-PTY replacement
+ownership bounds the overlap and growth refuses while over quota. Live grids are exempt:
+a new GRID falls back to configured zero history if its optional legacy ring is
+refused, logs that fallback, and preserves the zero limit across resizes.
 Physical memory exhaustion can still refuse the live grid. Explicit capacity
 changes return distinct quota, memory, and contention errors without mutation.
 

@@ -37,17 +37,22 @@ live cells; shrinking retains the newest rows. It does not deliver SIGWINCH.
 and sends SIGWINCH only after a successful geometry change.
 
 A global 128 MiB quota charges retained rows, including both old and replacement
-history until the old ring is freed. Live cells and viewport scratch are outside
+history until the old ring is freed. Non-growing replacements bypass quota
+refusal: their temporary overlap may take total history above 128 MiB, bounded
+by twice that quota while replacements are in flight. Each PTY reserves its
+old charge for one replacement at a time; growth refuses while usage is over
+the quota. Live cells and viewport scratch are outside
 that quota. A fresh GRID requests legacy three-screen history but falls back to
-a live-only ring if that allocation is refused. Physical or metadata exhaustion
+a live-only ring if that allocation is refused, records zero as its configured
+limit so later resizes stay live-only, and logs the fallback under `DEBUG_TASK`. Physical or metadata exhaustion
 can still refuse the terminal itself. At 512 columns the maximum history is
 40,960,000 bytes; adding a 256-row live grid makes a 42,008,576-byte allocation.
 
 Replacement is allocated outside the terminal lock, then geometry and capacity
-are revalidated under the lock before copying and publication. Four lost races
-return BUSY. Output arriving during allocation is copied from current state.
-Shrinking can itself refuse because replacement history temporarily needs quota;
-setting zero needs no history quota. A refused call publishes no change, though
+are revalidated under the lock before copying and publication. Four attempts
+blocked by another replacement or lost to revalidation return BUSY. Output arriving during allocation is copied from current state.
+Shrinking does not refuse on quota grounds, including nonzero reductions;
+physical/metadata/page-table exhaustion can still refuse its new allocation. A refused call publishes no change, though
 other callers may concurrently change the terminal.
 
 | Result | Meaning |
@@ -104,10 +109,23 @@ ASan/UBSan host runs passed 4,107 allocator and 4,636 paging checks, plus the
 shared decoration suite. `ASAN_OPTIONS=detect_leaks=0` disables unsupported
 ptrace leak discovery; the harnesses free their allocated test storage.
 
-An eight-core QEMU GUI guest passed [24 PTY checks](docs/terminal-contracts/pty.txt),
+An eight-core QEMU GUI guest passed [27 PTY checks](docs/terminal-contracts/pty.txt),
 [11 focus checks](docs/terminal-contracts/focus.txt), and [4 minimized-window
 restore checks](docs/terminal-contracts/restore.txt). The [kernel harness](docs/terminal-contracts/kernel-tests.txt)
 reported 31 preboot, 34 postboot, and 3 late passes with zero failures; its
 NIC-dependent and unmounted-secondary-filesystem checks skipped.
 `git diff --check` passed. `tools/stale_refs.sh` found references to
 `PAGING_ARENA.md`, which remains present in `docs/design/completed/`.
+
+### Fable round 2
+
+`tools/test_pty_budget_host.py` reproduces the original fallback-resize and
+shrink refusals against the production TTY source, then checks the corrected
+paths, fallback diagnostics, exclusive replacement credit, growth while over
+quota, and rollback after allocation failure. Its 22 checks pass under ASan/UBSan.
+The guest test now fills remaining quota dynamically and verifies viewport
+capacity zero before exercising resize, rather than merely creating another PTY.
+
+Round 2 passed the strict full build, 27 guest PTY checks, and the eight-core
+kernel harness (31/34/3 reported passes, zero failures; device skips retained).
+[Before/after budget receipt](docs/terminal-contracts/budget-host.txt).

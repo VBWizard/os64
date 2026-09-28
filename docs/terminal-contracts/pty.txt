@@ -20,6 +20,9 @@ ptyhistorytest: PASS growing from zero preserves the live cells
 ptyhistorytest: PASS coherent bounded snapshots during concurrent resize and capacity changes
 ptyhistorytest: PASS reject wide geometry before narrowing
 ptyhistorytest: PASS quota has distinct error and preserves refused grid
-ptyhistorytest: PASS new live terminal survives aggregate history refusal
+ptyhistorytest: PASS fill remaining quota to less than one 512-column history row
+ptyhistorytest: PASS new terminal actually uses live-only fallback
+ptyhistorytest: PASS live-only fallback resizes without enabling history
+ptyhistorytest: PASS shrink succeeds at the quota and preserves live cells
 ptyhistorytest: PASS STREAM refuses grid operations
-ptyhistorytest: 24 checks, 0 failures
+ptyhistorytest: 27 checks, 0 failures
