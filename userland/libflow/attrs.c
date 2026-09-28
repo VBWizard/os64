@@ -90,7 +90,9 @@ f_dim_kind_t f_parse_dimension(const char *s, bool nonzero, int32_t *out)
     if (whole > F_INT_MAX)
         whole = F_INT_MAX;
     int64_t frac64 = 0;
-    if (*s == '.' && digit(s[1])) {
+    // The `.` is passed whether or not a fraction follows it: `7.%` is 7%,
+    // because the suffix is read where the dot left off.
+    if (*s == '.') {
         s++;
         // Enough digits to settle a 1/64th; the rest cannot move it.
         int64_t num = 0, den = 1;

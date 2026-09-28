@@ -68,6 +68,9 @@ typedef struct {
     // one), which is what makes its container MIX and the inline SPLIT
     // (LAYOUT.md § Pass 2). Not a style property: no cascade writes it.
     bool holds_block;
+    // The element is a `nobr` or inside one — what `nobr wbr` asks, kept
+    // here so the question costs a look at the parent, not a walk up.
+    bool in_nobr;
 } FStyled;
 
 typedef struct {

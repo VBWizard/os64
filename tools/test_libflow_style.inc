@@ -218,6 +218,25 @@ static void style_cases(void)
         "    dialog block bg=paper padding=16/16/16/16 border=3:solid:ink\n"
         "    embed inline width=0 height=0\n");
 
+    // Four rules of the sheet, each by its §: `address` italic (15.3.3),
+    // `legend` 2px inline padding (15.3.12), `[popover]` hidden unless an
+    // open dialog (15.3.3; nothing opens one without script), and
+    // `nobr wbr` normal (15.3.4) — inside a nobr only.
+    style_case("address, legend, popover, nobr wbr",
+        "<!doctype html><address>a</address><legend>L</legend><div popover>p</div>"
+        "<dialog popover>c</dialog><dialog popover open>o</dialog>"
+        "<nobr>x<wbr>y</nobr><wbr>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    address block italic\n"
+        "    legend block padding=0/2/0/2\n"
+        "    div none\n"
+        "    dialog none\n"
+        "    dialog block bg=paper padding=16/16/16/16 border=3:solid:ink\n"
+        "    nobr inline ws=nowrap\n"
+        "      wbr inline ws=normal\n"
+        "    wbr inline\n");
+
     style_case("details: the first summary is the disclosure",
         "<!doctype html><details><summary>S</summary><p>hidden</p></details>"
         "<details open><summary>T</summary><p>shown</p></details>",
