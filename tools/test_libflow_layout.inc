@@ -156,6 +156,17 @@ static void layout_cases(void)
         free(big);
     }
 
+    // The </b> after the <br> closes on the <br>'s line: no empty line.
+    layout_case("an inline closing after a break closes on that line",
+        "<!doctype html><p><b>a<br></b>", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        span b 8 18 8 16\n"
+        "        text \"a\" 8 18 8 16 serif 16 bold\n");
+
     // 32px: ascent 24, descent 8, line 40, so 4 of leading above: the
     // baseline is 28 down. The margin is 0.67em of 32 = 1372/64 = 21.44,
     // which collapses with body's 8; the page is 21.44 + 40 + 21.44.
@@ -458,22 +469,23 @@ static void layout_cases(void)
         "        text \"\\ty\" 16 18 64 16 mono 16\n");
 
     // Codex #147 round 3. Sliced images in an auto-width cell, full quirks:
-    // the newline between them is no opportunity either, so the row stays a
-    // row and overflows: 9 + 100 + a 4px space + 100 = 213.
+    // the newline between them is no opportunity either, so the row is one
+    // word and the cell is as wide as it: 100 + a 4px space + 100 = 204,
+    // with the cell's 1px padding and the table's 2px spacing round it.
     layout_case("quirks: whitespace between sliced images does not break them",
         "<table><tr><td><img src=known.png width=100 height=10>\n"
         "<img src=known.png width=100 height=10></table>", 150,
-        "page 213 38\n"
-        "block html 0 0 150 38\n"
-        "  block body 8 8 134 22\n"
-        "    table table 8 8 134 22\n"
-        "      row-group tbody 8 8 134 22\n"
-        "        row tr 8 8 134 22\n"
-        "          cell td 8 8 134 22\n"
-        "            line 9 9 132 20 base 14\n"
-        "              atomic img 9 13 100 10\n"
-        "              text \" \" 109 11 4 16 serif 16\n"
-        "              atomic img 113 13 100 10\n");
+        "page 218 42\n"
+        "block html 0 0 150 42\n"
+        "  block body 8 8 134 26\n"
+        "    table table 8 8 210 26\n"
+        "      row-group tbody 10 10 206 22\n"
+        "        row tr 10 10 206 22\n"
+        "          cell td 10 10 206 22\n"
+        "            line 11 11 204 20 base 14\n"
+        "              atomic img 11 15 100 10\n"
+        "              text \" \" 111 13 4 16 serif 16\n"
+        "              atomic img 115 15 100 10\n");
 
     // Codex #147 round 4. Alt text collapses against its neighbours across
     // inline edges: " b " inside a <b> between "a " and " c" is just the b.
@@ -587,20 +599,21 @@ static void layout_cases(void)
         "          marker \"\xe2\x96\xb8 \" 8 10 12 16 link 0\n"
         "          text \"x\" 20 10 8 16 serif 16 underline link 0\n");
 
-    // The page is as tall as what is drawn: the cell (1 + 20 + 1) overflows
-    // the 1px table box this slice stacks as a block, so the page ends at
-    // the cell's bottom, 8 + 22, not the body's 8 + 1 + 8.
-    layout_case("the page reaches what overflows a set height",
+    // A table's height is a least height (CSS 2.1 § 17.5.3): the row is
+    // 1 + 20 + 1, so the table is that and its 2px of spacing a side, 26
+    // tall, not 1. The cell is "x" and 1px of padding a side, 10 wide; the
+    // table 14.
+    layout_case("a table's set height is its least",
         "<!doctype html><table height=1><tr><td>x</table>", 200,
-        "page 200 30\n"
-        "block html 0 0 200 17\n"
-        "  block body 8 8 184 1\n"
-        "    table table 8 8 184 1\n"
-        "      row-group tbody 8 8 184 22\n"
-        "        row tr 8 8 184 22\n"
-        "          cell td 8 8 184 22\n"
-        "            line 9 9 182 20 base 14\n"
-        "              text \"x\" 9 11 8 16 serif 16\n");
+        "page 200 42\n"
+        "block html 0 0 200 42\n"
+        "  block body 8 8 184 26\n"
+        "    table table 8 8 14 26\n"
+        "      row-group tbody 10 10 10 22\n"
+        "        row tr 10 10 10 22\n"
+        "          cell td 10 10 10 22\n"
+        "            line 11 11 8 20 base 14\n"
+        "              text \"x\" 11 13 8 16 serif 16\n");
 
     // A missing picture whose alt is empty is decoration: no line at all,
     // so its p is empty and the next p's margin collapses through it.
