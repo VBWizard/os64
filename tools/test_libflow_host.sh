@@ -24,7 +24,10 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/libpage/upstream/ryu \
    tools/test_libflow_host.c \
    userland/libflow/store.c userland/libflow/attrs.c userland/libflow/style.c \
-   userland/libflow/dump.c userland/libflow/boxes.c \
+   userland/libflow/dump.c userland/libflow/boxes.c userland/libflow/layout.c \
+   userland/libflow/flow.c tools/test_libflow_fonts.c \
+   userland/libos64/text.c userland/libos64/text_cache.c userland/libos64/text_decode.c \
+   userland/libos64/text_bitmap.c \
    userland/libpage/core.c userland/libpage/resolve.c userland/libpage/value.c \
    userland/libpage/number.c userland/libpage/range.c userland/libpage/upstream/ryu/ryu/d2s.c \
    userland/libpage/submit.c userland/libpage/encode.c userland/libpage/refresh.c \

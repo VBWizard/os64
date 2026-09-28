@@ -60,6 +60,26 @@ bool f_eq_nocase(const char *a, const char *b);
 
 // ── Pass 1: the computed styles (style.c) ───────────────────────────────
 
+// The colour each decoration is drawn in: the colour of the innermost
+// element that asked for it, so `<u><font color=red><s>` underlines in the
+// u's colour and strikes through in red. A kind not drawn has no colour
+// worth reading.
+typedef struct {
+    uint32_t underline, line_through;
+} FDecorationColors;
+
+// An element's decorations and colours taking on the ones propagated to it:
+// the kinds it already draws keep its own colour.
+static inline void f_decoration_inherit(uint8_t *bits, FDecorationColors *colors,
+                                        uint8_t up_bits, FDecorationColors up)
+{
+    if (!(*bits & FLOW_DECORATION_UNDERLINE) && (up_bits & FLOW_DECORATION_UNDERLINE))
+        colors->underline = up.underline;
+    if (!(*bits & FLOW_DECORATION_LINE_THROUGH) && (up_bits & FLOW_DECORATION_LINE_THROUGH))
+        colors->line_through = up.line_through;
+    *bits |= up_bits;
+}
+
 typedef struct {
     flow_style_t style;
     // Pass 2's question, answered bottom-up here: does this element make,
@@ -68,6 +88,20 @@ typedef struct {
     // one), which is what makes its container MIX and the inline SPLIT
     // (LAYOUT.md § Pass 2). Not a style property: no cascade writes it.
     bool holds_block;
+    // What walking up from this element would say, answered here once,
+    // parent before child, so a later pass asks in constant time and the
+    // layout stays linear in the page (LAYOUT.md § Bounds). The link this
+    // element is or sits in, or -1. The decorations drawn across its
+    // content: its own and every ancestor's up to an atomic inline or (full
+    // quirks, the Quirks standard's 3.11) a table, which keep their own and
+    // stop the rest — each kind in its own colour (FDecorationColors).
+    int32_t link;
+    uint8_t decoration;
+    FDecorationColors decoration_colors;
+    // How many of this element and its ancestors are lists (`ul ol menu
+    // dir`), lists or `dl`s, and `li`s: the chapter's descendant selectors
+    // for its children, by the same bargain.
+    int32_t lists, lists_or_dls, items;
 } FStyled;
 
 typedef struct {
@@ -111,6 +145,14 @@ int64_t f_style_dump(const FStyles *styles, char *out, size_t cap);
 // that sequence and not per node: `foo<b>bar</b>` is one word in two nodes
 // (LAYOUT.md § Pass 3).
 
+// How deep the box build descends — element levels, the parts of a table,
+// and an inline-block's content twice — before it stops and reports the
+// page incomplete. Every pass after it recurses along the boxes, so this is
+// what bounds the stack a layout needs, whatever nesting the parser was
+// told to allow; it is sized to leave a thread's stack room to spare
+// (LAYOUT.md § Bounds).
+#define F_DEPTH_MAX 512
+
 typedef enum {
     FB_BLOCK = 0,       // a block container; node NULL for an anonymous one
     FB_REPLACED,        // a block-level replaced box: a frame
@@ -134,6 +176,8 @@ typedef enum {
 } f_item_kind_t;
 
 typedef struct FBox FBox;
+typedef struct FLine FLine;
+typedef struct FFrag FFrag;
 
 // One record per inline element, shared by every piece a block splits it
 // into, so a face paints a split `<a>` as one link.
@@ -181,26 +225,109 @@ struct FBox {
     // an item. NULL when the item has none.
     const char *marker;
     uint32_t marker_len;
-    // The link this box IS (a frame) or sits inside (a block that split an
-    // `a`, which has no inline edge left to carry it), or -1. A box deeper
-    // down is found by walking up to one that says.
+    // The link this box IS (a frame) or sits inside, however deep, or -1:
+    // every box carries its own, an anonymous one its parent's.
     int32_t link;
+
+    // ── Pass 3's geometry, in 26.6 document coordinates (x from the page's
+    // left edge, y from its top). 64-bit, because a long page is taller
+    // than 26.6 can count in 32 bits.
+    bool placed;                    // false: layout stopped before this box
+    // Layout stopped INSIDE this box: its rectangle holds what was laid
+    // out before it did (LAYOUT.md § Proof, the allocation sweep).
+    bool unfinished;
+    int64_t x, y, w, h;             // the border box
+    int64_t border[4], padding[4];  // used widths, top right bottom left
+    FLine *lines, *last_line;       // an inline formatting context's lines
+    FFrag *marker_frag;             // an outside marker, placed
 };
 
 typedef struct {
     FArena arena;
+    const FStyles *styles;          // what the boxes' styles came from
     FBox *root;
-    // Memory ran out partway: every box and item present is real, and the
-    // build stopped at the first thing it could not make.
+    // Memory ran out partway, or the page nests past F_DEPTH_MAX: every
+    // box and item present is real, and the build stopped at the first
+    // thing it could not make.
     bool incomplete;
 } FBoxes;
+
+// ── Pass 3: lines and fragments (layout.c) ──────────────────────────────
+
+typedef enum { FF_TEXT = 0, FF_ATOMIC, FF_MARKER } f_frag_kind_t;
+
+// What one line holds: a text fragment is one run of the text engine; an
+// atomic fragment is a replaced box or an inline-block; a marker fragment
+// is a list marker's text.
+struct FFrag {
+    FFrag *next;
+    f_frag_kind_t kind;
+    const FItem *item;              // TEXT, ATOMIC; a MARKER drawn inside
+    const os64_html_node_t *node;
+    const flow_style_t *style;
+    os64_text_run_t *run;           // TEXT, MARKER: owned, released with the tree
+    const char *text;               // TEXT, MARKER: the bytes the run was laid out from
+    uint32_t begin, end;            // TEXT: the byte range in the item's text
+    int64_t x, y, w, h;             // TEXT, MARKER: the content area; ATOMIC: the border box
+    int64_t hang;                   // TEXT: the width at its end of pre-wrap spaces that hang
+    int64_t baseline;               // absolute
+    uint8_t decoration;             // FLOW_DECORATION_* drawn across it
+    FDecorationColors decoration_colors;
+    int32_t link;                   // the link it sits in, or -1
+};
+
+// One inline box's piece on one line: what a link's underline or a
+// background is drawn behind.
+typedef struct FSpan FSpan;
+struct FSpan {
+    FSpan *next;
+    const FInline *inl;
+    int64_t x0, x1, top, bottom;
+};
+
+struct FLine {
+    FLine *next;
+    int64_t x, y, w, h, baseline;   // w: the content width it was broken to
+    FFrag *frags, *last_frag;
+    FSpan *spans, *last_span;
+};
 
 // NULL only when there is not memory for the tree itself.
 FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
                       const FStyles *styles, const flow_env_t *env);
 void f_boxes_free(FBoxes *boxes);
+// CSS white space processing (CSS 2.1 §16.6.1), for every text the page
+// is laid out as — a text node's, and a missing picture's alt. Whether a
+// white-space value collapses spaces; then `n` bytes of `in` into `out`
+// (room for `n`), each run of spaces, tabs and line breaks one space, and
+// none at the start when `*space` says the text before ended in one. It
+// leaves `*space` saying whether this one does, and returns the length.
+bool f_collapsible(flow_white_space_t ws);
+uint32_t f_collapse_white(const char *in, uint32_t n, char *out, bool *space);
 // One line per box and per item, indented by depth; the same contract as
 // f_style_dump.
 int64_t f_boxes_dump(const FBoxes *boxes, char *out, size_t cap);
+
+typedef struct {
+    const flow_env_t *env;
+    os64_html_quirks_t quirks;
+    const os64_page_t *model;
+    FBoxes *boxes;
+    FArena arena;                   // lines, fragments, spans
+    // Every run a fragment holds, so freeing the tree releases each once.
+    os64_text_run_t **runs;
+    size_t nruns, cap_runs;
+    int64_t width, height;          // the page's, 26.6
+    // The text engine or the allocator refused partway: what is placed is
+    // real, and nothing after the refusal is.
+    bool incomplete;
+} FLayout;
+
+// Lays the box tree out at `width` CSS pixels. NULL only when there is not
+// memory for the layout record.
+FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
+                  const flow_env_t *env, int32_t width);
+void f_layout_free(FLayout *layout);
+int64_t f_layout_dump(const FLayout *layout, char *out, size_t cap);
 
 #endif
