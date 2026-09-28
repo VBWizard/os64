@@ -98,9 +98,9 @@ window. The harness renders the corpus and diffs box coordinates.
   followed by a generic (serif, sans, mono) — packet 04's family API in
   the guest (which matches no name in its first cut and takes the generic
   tail; that is the resolver's business, and the day it matches names
-  nothing here changes), `tools/fonts/`'s fake backend on the host, which
-  is what makes the dumps deterministic across machines and FreeType
-  versions.
+  nothing here changes), and on the host the harness's own backend
+  (`tools/test_libflow_fonts.c`), which is what makes the dumps
+  deterministic across machines and FreeType versions.
 - **A replaced-size oracle**: a callback answering `node → (w, h, known)`
   for images and form controls, because an image's intrinsic size arrives
   from a fetch the engine never sees, and a control's natural size is the
@@ -138,8 +138,8 @@ rect. Boxes are:
 - **Inline boxes** (`b`, `a`, `span`…) as ranges over the fragments they
   contain on each line: what a link underline or a background is painted
   behind. An inline box that spans lines has one fragment range per line.
-- **Replaced boxes**: an image, a form control, a frame's placeholder, an
-  `hr` (a replaced box the engine paints itself, described in the dump).
+- **Replaced boxes**: an image, a form control, a frame's or an iframe's
+  placeholder, a meter or a progress bar.
 - **Table boxes**: table, caption, row group, row, cell, with the column
   widths the algorithm settled on carried on the table.
 - **List markers**: outside the `li`'s content, positioned; their text
@@ -184,7 +184,7 @@ so a cascade slots in above this struct with no field renamed:
 | `vertical_align` | baseline, sub, super, top, text-top, middle, bottom, and html-middle (`align=middle` on a picture: its middle on the baseline, not CSS's baseline plus half an x-height) | no |
 | `white_space` | normal, pre, nowrap, pre-wrap | yes |
 | `list_style_type`, `list_style_position` | disc, circle, square, decimal, lower/upper-alpha, lower/upper-roman, disclosure-closed/open, none; outside or inside | yes |
-| `text_decoration` | underline, line-through — this element's own; an ancestor's reaching its inline descendants is derived at layout, in the ancestor's colour | no |
+| `text_decoration` | underline, line-through — this element's own; what an ancestor's reaches its descendants is derived beside the style, parent before child, each kind in the colour of the element that drew it | no |
 | `visibility` | visible, hidden, collapse | yes |
 | `border_spacing[2]`, `border_collapse`, `caption_side` | tables | yes |
 | `float_side`, `clear` | recorded from `align=left/right` and `<br clear>` so the struct is complete — NOT ACTED ON in the first cut (booked below) | no |
@@ -269,7 +269,7 @@ table cells touch, and a page made of sliced images (the old web's whole
 navigation idiom) shows gaps between the slices without it. Hacker News in
 the corpus has no doctype and runs in full quirks; a sliced-image table
 is a fixture. The rest are full-quirks and geometry: percentage heights
-(3.5), `html` and `body` filling the viewport (3.6, 3.7), text decoration
+(3.5, booked below), `html` and `body` filling the viewport (3.6, 3.7), text decoration
 not reaching into tables (3.11), and the table quirks (3.8, 3.9, 3.10,
 3.13). The hashless-hex and unitless-length quirks are CSS parsing, the
 cascade's. The quirk switch lives in the producers, so a cascade that
@@ -287,36 +287,71 @@ allows.
 
 ### Pass 2 — boxes: tree + style → box tree
 
-The walk `wend`'s renderer does, without the drawing: `display: none`
-subtrees are skipped whole (their controls still belong to libpage's
-model, which is what makes a hidden field submit); `template` contents
-are the fragment branch and are skipped; comments and `head` are skipped;
-`noscript` contents are shown (we run no script). Foreign elements (SVG,
-MathML) generate no boxes of their own and their HTML descendants are
-walked, `wend`'s rule. A `frame` becomes a replaced box the face draws as
-the link libpage already lists, `wend`'s departure kept, because a
-frameset page has no other content — and an `iframe` becomes the same
-kind of box, drawn as a link to its `src` (libpage lists an iframe with a
-non-empty `src` as a link for exactly this face). An iframe with an empty
-`src` is the blank page: its box is laid out at its size and draws
-nothing to follow.
+**What makes a box.** A block-level element makes a block-level box; an
+inline element makes no box of its own here, only the OPENING and
+CLOSING EDGES of an inline box in its container's item sequence;
+`display: contents` makes nothing and its children are its parent's;
+`display: none` makes nothing and nothing inside it does either (its
+controls still belong to libpage's model, which is what makes a hidden
+field submit). `template` contents are the fragment branch and are never
+reached; comments make nothing; `noscript` is shown (we run no script).
+Foreign elements (SVG, MathML) are `contents`: their HTML descendants are
+walked and their own text is not drawn, `wend`'s rule — a formula's
+tokens in reading order would say something the page does not. A closed
+`details` shows its first `summary` and nothing else, text included.
 
-Text nodes get **white-space processing** (CSS 2.1 §16.6.1) HERE, once,
-into a collapsed copy the box owns: under `normal` and `nowrap`, runs of
-spaces, tabs and newlines become one space, a space at a line's start or
-end is removed at layout, leading and trailing collapsible space across
-element boundaries obeys the standard's "segment break" rules; under `pre`
-and `pre-wrap` bytes are kept and a newline ends a line; tabs under `pre`
-land on eight-column stops the way the terminal and the textview place
-them. libhtml kept the bytes verbatim so this pass could read them; the
-copy is what the text fragments' byte ranges index.
+**The item sequence.** A block container whose content is inline holds,
+instead of children, its inline formatting context as ONE flat sequence —
+text pieces, the open and close edges of inline boxes, atomic inlines,
+`br`s and preserved newlines, `wbr`s, an inside list marker — because a
+line is broken across that sequence and not per node (pass 3). An inline
+box is one record shared by every OPEN that names it, so a split `<a>`
+is one link to paint.
+
+**Replaced elements are atomic**: `img`, `input` (except hidden),
+`button`, `select`, `textarea`, `iframe`, `meter`, `progress` and `frame`
+are laid out at a size the face supplies and never walked inside — a
+button's label and a select's options are its widget's. `frame` is
+block-level (a frameset stacks its frames); the rest are atomic inlines.
+A frame and an iframe are drawn as the link libpage lists for them,
+`wend`'s departure kept, because a frameset page has no other content
+(libpage lists an iframe only when its `src` names something; an empty
+one is the blank page and draws nothing to follow). A `marquee`, the one
+inline-block that is not replaced, is an atom with a block container of
+its own inside it. `object`, `video` and `canvas` show their fallback
+content, since nothing plays them; `embed` and `audio` have none and make
+nothing, and neither do `source`, `track` and `keygen`. `hr` is not
+special: it is an empty block whose borders are the rule, which is what
+the chapter's sheet says it is.
+
+Text gets **white-space processing** (CSS 2.1 §16.6.1) HERE, once, into
+the item: under `normal` and `nowrap`, a run of spaces, tabs and newlines
+becomes one space, and a collapsible space that follows another ANYWHERE
+in the same inline formatting context — across element boundaries — is
+removed; a context starts as if after a space, which is the rule that
+removes a line's leading space applied to its first line. A line's
+TRAILING space stays for pass 3, which removes it where a line ends.
+Under `pre` and `pre-wrap` every byte is kept and a newline is a forced
+break, so a preformatted text node becomes a text item per line — the
+engine refuses a literal LF (*Line breaking*, below). A text item POINTS
+into the tree when processing changed nothing and owns a copy when it
+did; its offset into the node's processed text is what a selection maps
+a pixel back through. Tabs under `pre` land on eight-column stops the
+way the terminal and the textview place them (pass 3).
+
+**Generated content** is the sheet's: `q` draws its quotation marks,
+nested levels alternating “double” and ‘single’, and an `rt` whose
+`ruby` has no `rp` is drawn in parentheses — the chapter's fallback for a
+browser that lays out no ruby.
 
 **Anonymous boxes**, the two kinds CSS 2.1 requires. The first: a block
 container whose children mix inline content and block boxes wraps each
 inline run in an anonymous block (§9.2.1.1). A text node of nothing but
 collapsible white space is not inline content for this purpose (the
 newline between two `<p>`s makes no wrapper), which is why the question
-is asked after pass 1 knows each node's `white-space`.
+is asked after pass 1 knows each node's `white-space`. An anonymous block
+is made on the first CONTENT of a run and never before, so a run of
+nothing but collapsible space — or an empty `<span>` — makes no box.
 
 **A block INSIDE an inline is the old web's normal case, not an edge
 case**, and §9.2.1.1's second paragraph is the rule for it: the inline
@@ -329,37 +364,48 @@ keeps them nested exactly as written, because a `<p>` does not close a
 `<font>`; `<a href><div>…</div></a>` is the same shape today. A container
 whose only child is that `<font>` therefore MIXES, even though every one
 of its children is inline — the blocks are a level down. So pass 1
-computes, bottom-up, one bit per element: **contains an in-flow block**
-(itself a block-level box, or an inline whose subtree holds one, not
-looking past a block, which answers for its own subtree). The mixing
-decision reads that bit on each child, and an inline child with the bit
-set is split rather than wrapped whole. The pieces of a split inline are
-one inline box for painting purposes — its per-line fragment ranges
-simply continue into the next anonymous block — and its link or control
-index is on every piece.
+computes, bottom-up, one bit per element: **holds a block** (an inline
+with a block-level child, or with an inline child that holds one; a
+block answers for its own subtree). The mixing decision reads that bit on
+each child, and an inline child with the bit set is split rather than
+wrapped whole: at the block, every inline open around that point is
+CLOSED (marked `split`), and after it the same inlines are OPENED again,
+outermost first (marked `continued`). A block that splits a LINK carries
+the link's index itself, since no inline edge is left to say so — Hacker
+News's upvote arrow is `<a href><div></div></a>`, and a click on it must
+still go somewhere.
 
 Whether a container mixes is decided BEFORE its children are built, from
 those bits (each child is read once by its parent, and the bit was
 computed once by pass 1, so the cost is linear), so the wrapper exists
 from the first inline child rather than being made retroactively when a
-block sibling turns up. That is what lets a build that stops early still
-be a prefix of the whole build (*Proof*).
+block sibling turns up. With boxes and items attached the moment they
+are made and nothing ever discarded, a build that stops early is a
+PREFIX of the whole build (*Proof*); the one allocation that would break
+that — a list item's marker text — is made before its box.
 
 The second kind: table structure that is missing gets anonymous table
-objects (§17.2.1) — a cell whose parent is not a row, a row outside a row
-group. libhtml's tree builder already repairs most table markup, so the
-second kind is rare here and is implemented because the rule is the
-standard's, not because the corpus has a case (it will get one).
+objects (§17.2.1), level by level. Collapsible space between table parts
+belongs to none of them; in a table or a row group, a cell or other loose
+content gets an anonymous row (consecutive ones sharing it); in a row,
+loose content gets an anonymous cell, which lays its run out like any
+block container — so a table part inside it gets an anonymous table of
+its own, and so does an internal table box found in ordinary flow.
+libhtml's tree builder already repairs table markup, so these are rare
+here and are implemented because the rule is the standard's.
 
-`li` under `ul`/`ol`/`menu`/`dir` gets its marker box; a `list-item` with
-no list parent still gets one (the standard's rule; the marker is a
-bullet). Counters walk `ol start`, `li value` and `reversed` exactly as
-`wend` counts them today — that code moves, it is not rewritten.
-
-`img`, `input` (except hidden), `button`, `select`, `textarea`, `iframe`,
-`embed`/`object` (drawn as their fallback content, since nothing plays
-them), `hr` and `frame` are **replaced boxes**; the walk records them in
-the two lists the face reads.
+**List markers.** An element displayed `list-item` gets a marker: its
+text is generated here (CSS Counter Styles' symbols and suffixes — `• `,
+`◦ `, `▪ `, `3. `, `c. `, `iv. `, the disclosure triangles — with a number
+a style cannot spell falling back to decimal), drawn OUTSIDE by pass 3
+from the box, or INSIDE as the first item of the item's content, where it
+is inline content and can mix the item. The counters are the chapter's
+sheet: `ol`, `ul` and `menu` reset the list-item counter (NOT `dir`, which
+is `wend`'s one departure from the sheet, corrected here), `ol start`
+names the first number and `li value` the current one, and `ol reversed`
+counts down from `start` or from how many items the list holds — its
+items, not a nested list's. A `summary` is a list item that counts
+nothing.
 
 ### Pass 3 — layout: box tree + width → rectangles
 
@@ -389,8 +435,12 @@ height as their neighbours. Fragments align by BASELINE by default; a
 replaced box or a fragment with `vertical-align` top/middle/bottom aligns
 as it says; the line's height is the span from the highest top to the
 lowest bottom of what is on it, strut included. `text-align` places the
-line's fragments; `br` ends a line; under `nowrap` nothing breaks; under
-`pre` only a newline does.
+line's fragments (justify grows the gaps of every line but the last and
+one a `br` ends); `br` ends a line and holds it open with its own font's
+box — which is what makes `a<br><br>b`'s blank line — except that in
+either quirks mode a `br` beside other content holds nothing open, or a
+`<br>` between two sliced images would open a gap under the first; under
+`nowrap` nothing breaks; under `pre` only a newline does.
 
 **Line breaking** is done over the INLINE FORMATTING CONTEXT'S ITEM
 SEQUENCE, never per node: a block container's inline content is
@@ -409,8 +459,12 @@ than the engine's run cap, 1 MiB, is measured in windows cut at spaces —
 and the run's carets give the pen position at every byte, so a word that
 spans pieces is the sum of its parts' caret distances (kerning across
 the boundary is not attempted, and neither is it by the engines that
-matter). A word wider than the line is broken at the last caret that
-fits, `wend`'s rule. Each line's fragment of each piece is then laid out
+matter). A word wider than the line goes on a line of its own and
+OVERFLOWS it, CSS's `overflow-wrap: normal` — the page grows wider and
+`flow_width` says so; `wend` cuts such a word at the margin because a
+terminal cannot scroll sideways, and a browser window can. A fragment is
+one run, so the words of a line are grouped into fragments that stop
+short of the run cap. Each line's fragment of each piece is then laid out
 as its own run, so the face can paint it with one `os64_text_draw` and
 hit-test it with `os64_text_hit`. That is two layouts per text piece and
 the memory of one run per line-fragment; it works with the engine as it
@@ -449,19 +503,19 @@ baselines, being positions, round to nearest like an origin. Everything
 that reaches a `flow_box_t` is an integer pixel; nothing in 26.6 leaves
 the library.
 
-**Replaced boxes** take the oracle's size; when it is unknown, an image
-with `width` and `height` attributes gets a box of that size, an image
-with neither is laid out AS ITS ALT TEXT inline (the standard's rendering
-of an unavailable image with alt, and the reason a page of missing images
-still reads), an image with empty alt and no size takes no space, and
-one with no alt at all and no size is a small box the size of the
-broken-image icon, 16 pixels square (the chapter's rendering of an
-unavailable image that says nothing about itself). A
-form control with an unknown size (the face has not measured it) gets a
-placeholder the size of one row of its font, which the face will correct
-on the next layout — the oracle is the truth and the engine never caches
-it. `hspace`/`vspace` are margins; `hr` is a replaced block of the
-content width and a 2 px rule.
+**Replaced boxes** take the size the page gave (`width`/`height`), else
+the oracle's, scaled to keep its shape when the page gave one side
+(CSS 2.1 §10.3.2, §10.6.2). When neither knows, the chapter's rule for a
+picture that has not arrived: with alt text it is laid out AS ITS ALT
+TEXT inline, breaking like any text (the reason a page of missing images
+still reads); with an empty alt it takes no space; with no alt at all it
+is the chapter's small icon, 16x16. A frame or an iframe with no size is
+CSS's default 300x150. A form control the face has not measured gets a
+placeholder ten ems wide and one line of its font high, which the face
+corrects on the next layout — the oracle is the truth and the engine
+never caches it. A replaced box sits on the baseline by its bottom margin
+edge, or where its `vertical-align` puts it. `hspace`/`vspace` are
+margins; an `hr` is an ordinary empty block whose borders are the rule.
 
 **Tables** (§17.5, automatic layout §17.5.2.2): for every column the
 MIN-CONTENT width (the widest thing that cannot break: the longest word,
@@ -501,33 +555,46 @@ first producer never asks for them. Each is a row in the booked table.
 ## The dump
 
 The harness's artefact and the reviewer's view of a page — one line per
-box, indented by depth, coordinates in document pixels, text quoted, so a
-layout change is a diff to a page and not "it looks different":
+box, per line box and per fragment, indented by depth, coordinates in
+document pixels rounded by the painter's rule, text quoted, so a layout
+change is a diff to a page and not "it looks different". This is a page
+flowdump laid out in the guest with the real DejaVu faces:
 
 ```
-block body 8 16 784 1302
-  block p 8 16 784 57 margin 16/16
-    line 8 16 784 19
-      text "The Floodgap Gopher" 8 16 152 19 sans 16 baseline 14
-      text "is" 164 16 14 19 sans 16 baseline 14
-      inline a 8 16 ... link 3
-  table 8 89 600 240 cols 120 360 120 spacing 2
-    row 10 91 596 24
-      cell td 10 91 120 24 valign middle
-        line 11 92 118 19
-          text "Name" 11 92 40 19 sans 16 bold baseline 14
-  img 8 337 200 150 known
-  control input 216 337 180 22 control 4
-  marker "3." 24 512 16 19
+page 500 156
+block html 0 0 500 156
+  block body 8 8 484 132
+    block h1 8 8 484 38
+      line 8 8 484 38 base 30
+        text "Hello" 8 8 82 38 sans 32 bold
+    block p 8 67 484 19
+      line 8 67 484 19 base 15
+        span b 118 67 54 19
+        text "os64 lays out " 8 67 110 19 sans 16
+        text "its first" 118 67 54 19 sans 16 bold
+        text " page." 172 67 50 19 sans 16
+    block ul 8 102 484 38
+      block li 48 102 444 19
+        marker "• " 34 102 14 19
+        line 48 102 444 19 base 15
+          text "one" 48 102 30 19 sans 16
 ```
 
-(The body's 8 px margin and the paragraph's 16 px collapse into one, so
-both boxes start at 16: the dump is where a margin that did not collapse
-shows up as a number.) Rendered at 800 px and at 400 px (wrapping is where a layout engine goes
-wrong, and a page that fits proves nothing), under the fake backend, so
-the numbers are the algorithm's and not FreeType's hinting. The fake
-backend's metrics are fixed and documented in `tools/fonts/`; a case that
-needs a kerned pair or a fallback face uses the ones it defines.
+`page` is the laid-out width and height. A box is `x y w h` of its border
+box; a `line` adds how far below its top the baseline lies; a `text`
+fragment's rectangle is its content area (the baseline less the ascent,
+ascent plus descent tall), then the face, size and what decorates it; a
+`span` is one inline box's piece on one line; an `atomic` is a replaced
+box's border box. (That page has no doctype, so the heading's top margin
+at the top of the body is the quirks-mode zero.)
+
+The host harness renders against its own backend,
+`tools/test_libflow_fonts.c`, whose every metric is a simple fraction of
+the pixel size — at 16 px an ascent of 12, a descent of 4, a line of 20,
+advances of 4, 8 or 12 — so each expected dump is worked out with a
+pencil and the numbers are the algorithm's, not FreeType's hinting.
+`tools/fonts/`' fake backend proves the text engine and deliberately does
+not scale with size, which a layout test needs it to.
 
 ## The one door
 
@@ -535,7 +602,7 @@ needs a kerned pair or a fallback face uses the ones it defines.
 typedef struct flow_tree flow_tree_t;
 
 typedef struct {
-    // Fonts: the face's resolver. On the host, the fake backend.
+    // Fonts: the face's resolver. On the host, the harness's backend.
     void *ctx;
     // `families` is the struct's list: names as the page wrote them,
     // then a generic. A resolver that matches no name takes the generic.
@@ -621,11 +688,26 @@ LIBPAGE.md's rule restated for geometry:
   suite lays out a table nested forty deep AND a table whose cells all
   span, and asserts the layout count against the linear bound in both.
   The measuring run per text piece is laid out once per layout;
-  fragments once per line.
+  fragments once per line. **A question about an element's ancestors or
+  siblings is answered from its parent's record, never by a walk**: pass
+  1 keeps what the chapter's descendant selectors ask (lists, list items,
+  `nobr`, `q` depth, a link, decorations) on each element as it styles
+  it, parent before child, and a child that answers for its parent (an
+  `rp`) sets the parent's bit. A walk per element is quadratic on a deep
+  or a wide page; the host suite builds one of each under an alarm.
 - **Memory is the text engine's budget plus the boxes, and REBUILDING
   DOUBLES THE PEAK.** Runs are the big cost (a glyph placement is tens of
   bytes) and they live in the text context the face hands in, which has
-  one `memory_cap` and is caller-serialised. A rebuild builds the NEW
+  one `memory_cap` and is caller-serialised. The boxes and the lines have
+  a budget of their own, `flow_env_t.max_arena_bytes` for each arena
+  (`FLOW_ARENA_DEFAULT`, 64 MiB, when the face sets none), because a page
+  can MULTIPLY them: an inline split round a block reopens every inline
+  still open there, so 400 open `<b>`s and 60000 interrupting `<div>`s
+  asked for 3.7 GB of boxes from a 706 KB page. At the budget the build
+  stops as it does at `F_DEPTH_MAX`, `incomplete`, what it holds real. The
+  largest corpus page (wikipedia) holds about 5 MB in either. The styles
+  are not budgeted: one record an element, bounded by the document
+  libhtml admitted, and all or nothing. A rebuild builds the NEW
   tree while the OLD one is still retained — the face must keep the old
   tree until the new one exists, or a rebuild that fails leaves it with
   nothing to paint — so the peak is two layouts of the page, and a page
@@ -653,16 +735,25 @@ LIBPAGE.md's rule restated for geometry:
   context, one page laying out at a time, and that is the reason for the
   split beyond memory. Tabs, when they come, share the page context and
   its budget, or the design here is revisited with that consumer in hand.
-- **Depth.** Node depth is libhtml's `max_depth`. BOX depth is larger —
-  a nested table adds a table box, a row-group, a row, a cell and
-  possibly anonymous boxes per level — but by at most a constant per
-  node, so it is bounded by a multiple of `max_depth`, and the walk is
-  either iterative or written against that bound. The intrinsic-sizing
-  RECURSION is bounded by table NESTING, which is at most a third of the
-  node depth (a nested table is at least `table > tr > td` deeper), and
-  is written as a recursion only because that bound is stated here. A
-  page as deep as libhtml allows lays out without a stack the width of
-  the page.
+- **Depth is libflow's own bound, not the parser's.** libhtml's
+  `max_depth` is an option its CALLER sets, so it cannot be what keeps
+  layout inside a stack. The box build counts its descents, each costed
+  as a block level's stack — an element level, each part a table adds
+  (row group, row), anonymous ones included, and an inline-block's
+  content TWICE, since a level of it holds a line's frame as well as a
+  block's — and at `F_DEPTH_MAX` (512) it stops exactly as it does when
+  memory runs out: the tree is `incomplete`, and what it holds is a
+  prefix of the whole build. libhtml refuses past its own limit the same
+  way, rather than flattening. Every pass after the build recurses along
+  the boxes, so that one count bounds them all. The intrinsic-sizing
+  RECURSION is bounded by table NESTING, which is at most a third of it
+  (a nested table is at least `table > tr > td` deeper). Measured at the
+  shipped `-O2` with the whole stack's slices in, a block chain 512
+  deep and a table nest at the bound lay out in under 448KB, and a
+  chain of inline-blocks, which needed 640-768KB before it was charged
+  double, now stops at half the depth; a thread has 1MB. The host suite
+  lays out pages nested to and past the bound, both kinds, and asserts
+  where each stops.
 - **Nothing blocks and nothing is cached across calls.** Every layout is
   from scratch; the face owns the pacing.
 - **The run cap** (1 MiB per run) is honoured by windowing a long text
@@ -709,6 +800,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 - **Block**: nested margins collapsing every way §8.3.1 lists, padding and
   border stopping a collapse, an empty block collapsing through, `auto`
   margins centring, percent widths, a set height smaller than content,
+  `hr` under every `align` and `size`,
   and a block inside an inline — `<font>` round `<p>`s and a `<table>`,
   `<a>` round a `<div>`, the split inline's pieces and its underline
   ranges continuing across them.
@@ -725,8 +817,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 - **Lists**: every marker style, `start`/`value`/`reversed`, nesting,
   a `menu` with `list-style: none`.
 - **Replaced**: known and unknown image sizes, attrs with and without
-  alt, controls with and without an oracle answer, `hr` under every
-  `align`.
+  alt, controls with and without an oracle answer.
 - **Quirks**: the same page under all THREE modes — no-quirks,
   limited-quirks, quirks — with the margins full quirks changes and the
   sliced-image table that limited-quirks keeps gapless and no-quirks does
@@ -778,6 +869,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Incremental relayout | ruling 2 says rebuild; the face paces it | the engine, or a page whose rebuild is visibly slow |
 | Selection and copy | needs the fragment byte ranges (kept) and a face gesture | yonder's second slice |
 | `:visited` colour | the history lives in the navigator | packet 06's history and a face rule |
+| Percentage heights (CSS 2.1 §10.5, and the Quirks standard's 3.5) | read as `auto` everywhere, pictures included; one resolved inside a table cell needs the cell's height before its content is laid out — the second layout pass Blink runs for exactly this — and the definite-ancestor case belongs to the same slice | a page shaped by `height=100%` pictures in cells, or the cascade's `height: 100%` chains |
 | `sub`/`sup` vertical shift | one `vertical-align` value each, cheap, and the first cut's fixtures do not cover it | the first page that reads wrong without it (footnotes) |
 | Soft hyphen breaks, CJK and script-aware breaking, bidi/RTL layout | the text profile is Western v1; bidi classes exist in libos64 for `dirname`, the layout half is a real slice | a page in one of those scripts worth reading |
 | `marquee` | the Rendering chapter has it; it is a timer in a face | a page whose meaning scrolls, which is none |

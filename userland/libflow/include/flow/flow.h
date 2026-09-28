@@ -11,9 +11,11 @@
 // arrive through the callbacks in flow_env_t, which is what lets the whole
 // library run on the host against the fake font backend.
 //
-// THE DOCUMENT AND THE MODEL MUST OUTLIVE WHATEVER IS BUILT FROM THEM. A
-// style points into the tree for the family names a page wrote; nothing
-// is copied that can be pointed at.
+// THE DOCUMENT, THE MODEL AND THE TEXT CONTEXT MUST OUTLIVE WHATEVER IS
+// BUILT FROM THEM. A style points into the tree for the family names a page
+// wrote, and nothing is copied that can be pointed at; every text
+// fragment's run lives on `env->text`, and freeing the layout releases each
+// run against it.
 
 #include "html/html.h"
 #include "page/page.h"
@@ -231,7 +233,38 @@ typedef struct {
     uint32_t viewport_font_px;      // `medium`; 16 unless the face says otherwise
     flow_generic_t default_generic; // the family a page that names none is drawn in
     uint32_t ink, link_ink, paper;  // XRGB; the dumps name these, never print them
+    // What each of the two arenas a page can MULTIPLY may hold, in bytes:
+    // the boxes (an inline split round a block reopens every inline open
+    // there) and the lines laid out from them. 0 is FLOW_ARENA_DEFAULT. The
+    // budget is the caller's, as libhtml's max_arena_bytes is; a layout that
+    // reaches it stops and says `incomplete`, and what it holds is real.
+    size_t max_arena_bytes;
 } flow_env_t;
+
+#define FLOW_ARENA_DEFAULT ((size_t)64 << 20)
+
+// ── The door ────────────────────────────────────────────────────────────
+
+typedef struct flow_tree flow_tree_t;
+
+// Styles, boxes and lays out the page at `width` CSS pixels. NULL on no
+// memory only; otherwise a tree whose `incomplete` says whether it is
+// whole — a document libhtml refused partway, or a model libpage could not
+// finish, is not, however it lays out. Every call is a whole rebuild
+// (LAYOUT.md, ruling 2).
+flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *model,
+                         int32_t width, const flow_env_t *env);
+void flow_free(flow_tree_t *tree);
+
+// The page's size in whole pixels: its height, and its width — at least
+// the width laid out at, more where a word or a table would not fit.
+int32_t flow_height(const flow_tree_t *tree);
+int32_t flow_width(const flow_tree_t *tree);
+bool flow_incomplete(const flow_tree_t *tree);
+
+// The laid-out tree as text, for the harness and a probe in the guest.
+// Like snprintf: answers the length the whole dump needs, writes what fits.
+int64_t flow_dump(const flow_tree_t *tree, char *out, size_t cap);
 
 #pragma GCC visibility pop
 

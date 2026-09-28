@@ -115,15 +115,6 @@ static bool is_row_group(const os64_html_node_t *n)
     return is(n, OS64_HTML_TAG_THEAD) || is(n, OS64_HTML_TAG_TBODY) || is(n, OS64_HTML_TAG_TFOOT);
 }
 
-static int32_t count_ancestors(const os64_html_node_t *n, bool (*match)(const os64_html_node_t *))
-{
-    int32_t count = 0;
-    for (const os64_html_node_t *p = n->parent; p != NULL; p = p->parent)
-        if (match(p))
-            count++;
-    return count;
-}
-
 static bool is_li(const os64_html_node_t *n)
 {
     return is(n, OS64_HTML_TAG_LI);
@@ -132,6 +123,20 @@ static bool is_li(const os64_html_node_t *n)
 static bool is_list_or_dl(const os64_html_node_t *n)
 {
     return is_list(n) || is(n, OS64_HTML_TAG_DL);
+}
+
+// The chapter's descendant selectors (`ul ul`, `li ul`), answered from the
+// parent's record — which counts itself and everything above it
+// (FStyled.lists) — rather than by walking up from every element.
+static const FStyled *above(const Ctx *c, const os64_html_node_t *n)
+{
+    return f_map_get(&c->out->map, n->parent);
+}
+
+static int32_t lists_above(const Ctx *c, const os64_html_node_t *n)
+{
+    const FStyled *up = above(c, n);
+    return up != NULL ? up->lists : 0;
 }
 
 // The table a cell belongs to by the chapter's selectors: `table > tr > td`
@@ -339,9 +344,14 @@ static const struct { int32_t num, den; } s_keyword[8] = {
     {3, 5}, {3, 4}, {8, 9}, {1, 1}, {6, 5}, {3, 2}, {2, 1}, {3, 1},
 };
 
+// A size times a ratio, held to F_INT_MAX pixels either way: sizes compound
+// down the tree (each nested <big> is 6/5 of its parent's), so a page can
+// ask for more than a 26.6 int32_t holds, and a wrapped one is negative.
 static int32_t scale(int32_t v, int32_t num, int32_t den)
 {
-    return (int32_t)(((int64_t)v * num + den / 2) / den);
+    int64_t r = ((int64_t)v * num + den / 2) / den;
+    int64_t most = (int64_t)F_INT_MAX * FLOW_UNITS_PER_PX;
+    return (int32_t)(r > most ? most : r < -most ? -most : r);
 }
 
 static flow_unit_t font_size(const Ctx *c, const Spec *sp, const flow_style_t *parent)
@@ -680,7 +690,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         if (n->tag == OS64_HTML_TAG_OL) {
             s->list_style_type = FLOW_LIST_DECIMAL;
         } else {
-            int32_t depth = count_ancestors(n, is_list);
+            int32_t depth = lists_above(c, n);
             s->list_style_type = depth >= 2 ? FLOW_LIST_SQUARE
                                : depth == 1 ? FLOW_LIST_CIRCLE : FLOW_LIST_DISC;
         }
@@ -777,7 +787,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         s->display = FLOW_DISPLAY_NONE;
 
     // §15.3.7: a list inside a list keeps no block margins.
-    if ((is_list_or_dl(n)) && count_ancestors(n, is_list_or_dl) > 0)
+    if (is_list_or_dl(n) && above(c, n) != NULL && above(c, n)->lists_or_dls > 0)
         margin_block(sp, px(0));
     // `dd { margin-inline-start: 40px }`
     if (is(n, OS64_HTML_TAG_DD))
@@ -848,10 +858,10 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         }
         // `li { inside }`, `li :is(lists) { outside }`, and
         // `:is(lists) :is(lists, li) { unset }` — the last wins on order.
-        bool in_list = count_ancestors(n, is_list) > 0;
+        bool in_list = lists_above(c, n) > 0;
         if (is_li(n) && !in_list)
             s->list_style_position = FLOW_LIST_INSIDE;
-        if (is_list(n) && !in_list && count_ancestors(n, is_li) > 0)
+        if (is_list(n) && !in_list && above(c, n) != NULL && above(c, n)->items > 0)
             s->list_style_position = FLOW_LIST_OUTSIDE;
     }
 }
@@ -1289,6 +1299,14 @@ static bool first_summary(const os64_html_node_t *n)
     return true;
 }
 
+// Whether an element keeps its ancestors' decorations off its content (an
+// atomic inline; a table, in full quirks) — its own still reach it.
+static bool decoration_edge(const os64_html_node_t *n, const flow_style_t *s, bool quirks)
+{
+    return s->display == FLOW_DISPLAY_INLINE_BLOCK ||
+           (quirks && n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_TABLE);
+}
+
 static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
 {
     const FStyled *up = f_map_get(&c->out->map, n->parent);
@@ -1326,7 +1344,22 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     }
     finish(c, &sp, parent);
     out->style = sp.s;
+    out->link = c->model != NULL ? os64_page_link_for(c->model, n) : -1;
+    if (out->link < 0 && up != NULL)
+        out->link = up->link;
+    out->lists = (up != NULL ? up->lists : 0) + is_list(n);
+    out->lists_or_dls = (up != NULL ? up->lists_or_dls : 0) + is_list_or_dl(n);
+    out->items = (up != NULL ? up->items : 0) + is_li(n);
     out->in_nobr = (up != NULL && up->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
+    out->quotes = (up != NULL ? up->quotes : 0) + is(n, OS64_HTML_TAG_Q);
+    FStyled *holder = f_map_get(&c->out->map, n->parent);
+    if (holder != NULL && is(n, OS64_HTML_TAG_RP))
+        holder->has_rp = true;
+    out->decoration = sp.s.text_decoration;
+    out->decoration_colors = (FDecorationColors){sp.s.color, sp.s.color};
+    if (up != NULL && !decoration_edge(n, &sp.s, c->quirks))
+        f_decoration_inherit(&out->decoration, &out->decoration_colors, up->decoration,
+                             up->decoration_colors);
     if (!f_map_put(&c->out->map, n, out))
         return NULL;
     return out;
@@ -1363,7 +1396,13 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
         return NULL;
     out->doc = doc;
     out->env = env;
-    Ctx c = {doc, model, env, out, doc->quirks == OS64_HTML_QUIRKS, false, 0};
+    // One record per element and the family names a `face` wrote: bounded
+    // by the document libhtml admitted, never multiplied, so no budget —
+    // pass 1 is all or nothing, and a cap here would blank a large page
+    // that the boxes' budget would merely cut short.
+    out->arena.cap = SIZE_MAX;
+    Ctx c = {.doc = doc, .model = model, .env = env, .out = out,
+             .quirks = doc->quirks == OS64_HTML_QUIRKS};
 
     // Pre-order down, and each element FINISHED on the way back up, when
     // everything under it has been styled — which is when its holds_block
@@ -1404,6 +1443,16 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
         }
     }
     return out;
+}
+
+void f_style_anonymous(const FStyles *styles, const flow_style_t *parent,
+                       flow_display_t display, flow_style_t *out)
+{
+    Ctx c = {.doc = styles->doc, .env = styles->env};
+    *out = inherit(&c, parent);
+    out->display = display;
+    for (int i = 0; i < 4; i++)
+        out->border_color[i] = out->color;
 }
 
 const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node)

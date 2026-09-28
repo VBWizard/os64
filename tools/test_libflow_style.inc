@@ -324,6 +324,22 @@ static void style_cases(void)
         "    ul block margin=16/0/16/0 padding=0/0/0/40 holds-block\n"
         "      li list-item\n");
 
+    // The descendant selectors, read from what is above: a list under the
+    // stray li is `li :is(lists)`, outside, and keeps its margins — no list
+    // or dl is above it; the ul under the dl loses them, and is still
+    // outside, being under the li and in no list.
+    style_case("quirks: a list's selectors count what is above it",
+        "<li>a<ul><li>b</ul><dl><dd><ul><li>c</ul></dl>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    li list-item list-inside holds-block\n"
+        "      ul block margin=16/0/16/0 padding=0/0/0/40 list-outside holds-block\n"
+        "        li list-item\n"
+        "      dl block margin=16/0/16/0 holds-block\n"
+        "        dd block margin=0/0/0/40 holds-block\n"
+        "          ul block padding=0/0/0/40 list-outside holds-block\n"
+        "            li list-item\n");
+
     style_case("quirks: an image floated by align keeps 3px",
         "<img align=left><img align=right hspace=0>",
         PAGE_OPEN
