@@ -20,9 +20,13 @@ typedef struct {
     bool quirks;        // full quirks
     bool any_quirks;    // quirks or limited quirks
     bool failed;
-    // A list item whose outside marker has no line yet: the next line with
-    // content is its first, and holds the marker's font box as well.
-    const FBox *marker_line;
+    // The list items whose outside markers have no line yet, outermost
+    // first: the next line with content is the first line of every one of
+    // them (an item that starts with a nested list shares the nested item's
+    // first line), and holds each marker's font box. They nest no deeper
+    // than the build does.
+    const FBox *markers[F_DEPTH_MAX];
+    int32_t nmarkers;
 } L;
 
 // The flow of one block formatting context: where the next box goes, the
@@ -50,6 +54,31 @@ static int64_t max64(int64_t a, int64_t b)
 static int64_t hold_len(int64_t v)
 {
     return v > LEN_MAX ? LEN_MAX : v < -LEN_MAX ? -LEN_MAX : v;
+}
+
+// a * b / c for a, b >= 0 and c > 0, exact where it fits and held to
+// LEN_MAX where it does not: a picture's shape scales one side by the
+// other, and the face may report a side as long as an int32_t. The 128-bit
+// product is one instruction; its division is done here by hand, because
+// dividing an __int128 calls a libgcc routine userland does not link.
+static int64_t mul_div(int64_t a, int64_t b, int64_t c)
+{
+    int64_t p;
+    if (!__builtin_mul_overflow(a, b, &p))
+        return hold_len(p / c);
+    unsigned __int128 n = (unsigned __int128)(uint64_t)a * (uint64_t)b;
+    uint64_t hi = (uint64_t)(n >> 64), lo = (uint64_t)n;
+    if (hi >= (uint64_t)c)
+        return LEN_MAX;             // the quotient needs more than 64 bits
+    uint64_t q = 0, r = hi;
+    for (int i = 63; i >= 0; i--) {
+        r = (r << 1) | ((lo >> i) & 1);
+        if (r >= (uint64_t)c) {
+            r -= (uint64_t)c;
+            q |= (uint64_t)1 << i;
+        }
+    }
+    return q > (uint64_t)LEN_MAX ? LEN_MAX : (int64_t)q;
 }
 
 // A length against a containing block's width; auto reads as 0, and the
@@ -206,7 +235,7 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     Replaced r = {0, 0, false, false};
     bool w_set = s->width.kind != FLOW_LENGTH_AUTO;
     bool h_set = s->height.kind == FLOW_LENGTH_PX;
-    int64_t w = len(s->width, cbw), h = h_set ? s->height.value : 0;
+    int64_t w = max64(0, len(s->width, cbw)), h = h_set ? max64(0, hold_len(s->height.value)) : 0;
     int32_t iw = 0, ih = 0;
     bool known = l->env->replaced_size != NULL &&
                  l->env->replaced_size(l->env->ctx, node, &iw, &ih) && iw >= 0 && ih >= 0;
@@ -217,10 +246,10 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
             r.h = h;
         } else if (w_set) {
             r.w = w;
-            r.h = kw > 0 ? w * kh / kw : kh;
+            r.h = kw > 0 ? mul_div(w, kh, kw) : kh;
         } else if (h_set) {
             r.h = h;
-            r.w = kh > 0 ? h * kw / kh : kw;
+            r.w = kh > 0 ? mul_div(h, kw, kh) : kw;
         } else {
             r.w = kw;
             r.h = kh;
@@ -331,6 +360,11 @@ typedef struct {
 typedef struct {
     Seg *v;
     size_t n, cap;
+    // Something that draws nothing (a missing picture with no alt, an alt
+    // that collapsed to nothing) stood after a collapsible space: the next
+    // text's leading space is the same space and collapses into it. Pass 2
+    // could not know — the picture's absence is the face's, at layout.
+    bool drop_space;
 } Segs;
 
 static Seg *seg_add(L *l, Segs *s, SegKind kind)
@@ -350,7 +384,22 @@ static Seg *seg_add(L *l, Segs *s, SegKind kind)
     Seg *g = &s->v[s->n++];
     os64_memset(g, 0, sizeof(*g));
     g->kind = kind;
+    if (kind != SG_OPEN && kind != SG_CLOSE)
+        s->drop_space = false;
     return g;
+}
+
+// Whether the text before the end of the segments, across inline edges,
+// ends in a space that collapses.
+static bool ends_in_space(const Segs *s)
+{
+    for (size_t k = s->n; k > 0; k--) {
+        const Seg *p = &s->v[k - 1];
+        if (p->kind == SG_OPEN || p->kind == SG_CLOSE)
+            continue;
+        return p->kind == SG_WORD && p->collapsible && p->s1 > p->b1;
+    }
+    return false;
 }
 
 static bool wraps(flow_white_space_t ws)
@@ -387,6 +436,11 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
     flow_white_space_t ws = style->white_space;
     bool collapsible = f_collapsible(ws);
     bool whole = ws == FLOW_WS_PRE || ws == FLOW_WS_NOWRAP;
+    uint32_t lead = 0;
+    if (s->drop_space && collapsible)
+        while (lead < n && text[lead] == ' ')
+            lead++;
+    s->drop_space = false;
     for (uint32_t w0 = 0; w0 < n && !l->failed;) {
         uint32_t w1 = n;
         if (n - w0 > OS64_TEXT_BYTES_MAX) {
@@ -425,19 +479,21 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
         if (whole) {
             // No opportunity inside: one word per window, its trailing
             // collapsible space still removable at a line's end.
+            uint32_t b0 = w0 == 0 ? lead : w0;
             uint32_t end = w1;
             if (collapsible && w1 == n)
-                while (end > w0 && text[end - 1] == ' ')
+                while (end > b0 && text[end - 1] == ' ')
                     end--;
             Seg *g = seg_add(l, s, SG_WORD);
             if (g != NULL) {
                 *g = (Seg){.kind = SG_WORD, .item = it, .text = text, .style = style,
-                           .b0 = w0, .b1 = end, .s1 = w1, .collapsible = collapsible};
-                g->w = caret_x(run, end - w0);
-                g->sw = caret_x(run, w1 - w0) - g->w;
+                           .b0 = b0, .b1 = end, .s1 = w1, .collapsible = collapsible};
+                int64_t x0 = caret_x(run, b0 - w0);
+                g->w = caret_x(run, end - w0) - x0;
+                g->sw = caret_x(run, w1 - w0) - x0 - g->w;
             }
         } else {
-            for (uint32_t at = w0; at < w1;) {
+            for (uint32_t at = w0 == 0 ? lead : w0; at < w1;) {
                 uint32_t b0 = at;
                 while (at < w1 && text[at] != ' ' && text[at] != '\t')
                     at++;
@@ -530,12 +586,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     // (`a <b><img alt=" b"></b>`): a space after a space the
                     // text before already ends in, or before one the next
                     // text starts with, is the same space.
-                    const Seg *prev = NULL;
-                    for (size_t k = s->n; k > 0 && prev == NULL; k--)
-                        if (s->v[k - 1].kind != SG_OPEN && s->v[k - 1].kind != SG_CLOSE)
-                            prev = &s->v[k - 1];
-                    bool space = prev != NULL && prev->kind == SG_WORD && prev->collapsible &&
-                                 prev->s1 > prev->b1;
+                    bool space = ends_in_space(s);
                     uint32_t m = f_collapse_white(alt, n, copy, &space);
                     const FItem *next = it->next;
                     while (next != NULL && (next->kind == FI_OPEN || next->kind == FI_CLOSE))
@@ -547,11 +598,17 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     alt = copy;
                     n = m;
                 }
+                if (n == 0) {
+                    s->drop_space = ends_in_space(s);
+                    break;
+                }
                 text_segments(l, s, it, alt, n, st, tabs);
                 break;
             }
-            if (r.none)
+            if (r.none) {
+                s->drop_space = ends_in_space(s);
                 break;
+            }
             Seg *g = seg_add(l, s, SG_ATOM);
             if (g == NULL)
                 return;
@@ -835,16 +892,14 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 end++;
         bool last = end >= s.n;
 
+        // A line joins its context only once it is whole — every fragment
+        // and span placed — so a layout that stops partway leaves no half
+        // line in the tree, only the lines before it.
         FLine *line = alloc(l, sizeof(*line));
         if (line == NULL)
             break;
         line->x = cx;
         line->w = cw;
-        if (ifc->last_line != NULL)
-            ifc->last_line->next = line;
-        else
-            ifc->lines = line;
-        ifc->last_line = line;
 
         // The last segment with content, whose collapsible spaces go.
         size_t tail = SIZE_MAX;
@@ -1148,13 +1203,15 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         // so that line is as tall as the marker's font as well — in quirks
         // mode a line of nothing but a small picture has no strut of its
         // own to hold it.
-        if (l->marker_line != NULL && !empty) {
-            Fonts mf;
-            if (fonts_for(l, l->marker_line->style, &mf)) {
-                Extent mb = font_box(mf.info.ascent, mf.info.descent, mf.info.line_height);
-                extend(&ext, &any, mb.top, mb.bottom);
+        if (l->nmarkers > 0 && !empty) {
+            for (int32_t k = 0; k < l->nmarkers; k++) {
+                Fonts mf;
+                if (fonts_for(l, l->markers[k]->style, &mf)) {
+                    Extent mb = font_box(mf.info.ascent, mf.info.descent, mf.info.line_height);
+                    extend(&ext, &any, mb.top, mb.bottom);
+                }
             }
-            l->marker_line = NULL;
+            l->nmarkers = 0;
         }
         int64_t height = any ? ext.bottom - ext.top : 0;
         int64_t baseline_off = any ? -ext.top : 0;
@@ -1239,6 +1296,13 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 sp->bottom = line->baseline + f.info.descent;
             }
         }
+        if (l->failed)
+            break;
+        if (ifc->last_line != NULL)
+            ifc->last_line->next = line;
+        else
+            ifc->lines = line;
+        ifc->last_line = line;
         cur->y += height;
         if (height > 0 && cur->first < 0)
             cur->first = line->y;
@@ -1461,11 +1525,10 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     }
     int64_t content_top = in.y;
 
-    // An outside marker waits for its item's first line with content; an
-    // inner item's marker, arriving first, takes that line for its own.
-    const FBox *outer_marker = l->marker_line;
-    if (b->marker != NULL)
-        l->marker_line = b;
+    // An outside marker waits for its item's first line with content.
+    bool waiting = b->marker != NULL && l->nmarkers < F_DEPTH_MAX;
+    if (waiting)
+        l->markers[l->nmarkers++] = b;
     if (b->kind == FB_REPLACED) {
         in.y += rep.h;
     } else if (b->ifc) {
@@ -1473,8 +1536,11 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     } else {
         children(l, styles, b, cx, cw, &in);
     }
-    if (b->marker != NULL && l->marker_line == b)
-        l->marker_line = outer_marker;
+    // A marker still waiting when its item ends had no line with content
+    // (an empty item holds a line of its own below); it stops waiting.
+    // Inner items have taken theirs off already, so it is on top.
+    if (waiting && l->nmarkers > 0 && l->markers[l->nmarkers - 1] == b)
+        l->nmarkers--;
     if (l->failed) {
         // Layout stopped inside this box: it holds what was laid out.
         b->placed = true;
@@ -1514,6 +1580,8 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
         cur->pm = max64(pm, max64(in.pm, mb));
         if (b->marker != NULL)
             place_marker(l, styles, b, cx, b->y);
+        if (l->failed)
+            b->unfinished = true;
         return;
     }
     if (top_open) {
@@ -1543,6 +1611,10 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
         cur->first = y_border;
     if (b->marker != NULL)
         place_marker(l, styles, b, cx, y_border + b->border[FLOW_TOP] + b->padding[FLOW_TOP]);
+    // The marker is the last of a box's own work: a layout that stopped
+    // there stopped inside this box.
+    if (l->failed)
+        b->unfinished = true;
 }
 
 // ── The layout ──────────────────────────────────────────────────────────
@@ -1594,7 +1666,7 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     out->incomplete = boxes->incomplete || (doc != NULL && doc->refusal != 0) ||
                       (model != NULL && os64_page_incomplete(model));
     L l = {out, env, model, out->quirks == OS64_HTML_QUIRKS,
-           out->quirks != OS64_HTML_NO_QUIRKS, false, NULL};
+           out->quirks != OS64_HTML_NO_QUIRKS, false, {NULL}, 0};
     int64_t w = (int64_t)width * 64;
     out->width = w;
     if (boxes->root != NULL) {

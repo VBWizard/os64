@@ -543,6 +543,38 @@ static void layout_cases(void)
         "        line 48 8 144 20 base 14\n"
         "          atomic img 48 8 1 1\n");
 
+    // Codex #147 round 6. A missing picture with no alt draws nothing, and
+    // is nothing to the spaces round it: "a " and " b" share one space, as
+    // they do when the alt collapses to nothing, and across inline edges.
+    layout_case("an omitted picture is transparent to white space",
+        "<!doctype html><p>a <img src=missing.png alt=\"\"> b", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"a \" 8 18 12 16 serif 16\n"
+        "        text \"b\" 20 18 8 16 serif 16\n");
+    layout_case("a picture whose alt collapses to nothing is transparent to white space",
+        "<!doctype html><p>a <img src=missing.png alt=\" \"> b", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        text \"a \" 8 18 12 16 serif 16\n"
+        "        text \"b\" 20 18 8 16 serif 16\n");
+    layout_case("an omitted picture inside an inline is transparent to white space",
+        "<!doctype html><p>a <b><img src=missing.png alt=\"\"></b> b", 200,
+        "page 200 52\n"
+        "block html 0 0 200 52\n"
+        "  block body 8 16 184 20\n"
+        "    block p 8 16 184 20\n"
+        "      line 8 16 184 20 base 14\n"
+        "        span b 20 18 0 16\n"
+        "        text \"a \" 8 18 12 16 serif 16\n"
+        "        text \"b\" 20 18 8 16 serif 16\n");
+
     // An inside marker is in its item's link, as its text is.
     layout_case("an inside marker keeps its item's link",
         "<!doctype html><a href=x><details><summary>x</summary></details></a>", 200,
