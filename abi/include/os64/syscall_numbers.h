@@ -654,6 +654,8 @@ typedef enum os64_shutdown_mode
 // The master's verb — it owns the geometry. A program that hears the signal
 // asks /proc/self/tty for the new size (RE-OPEN it: procfs renders at open).
 #define SYSCALL_PTY_RESIZE   51
+#define SYSCALL_PTY_HISTORY  60
+#define SYSCALL_PTY_VIEWPORT 61
 
 // mount(what, where) / unmount(where): the namespace verbs (2026-08-30).
 // `what` is a GPT partition name or GUID — never a device path (os64/mount.h
@@ -708,6 +710,7 @@ typedef enum os64_shutdown_mode
 
 // Owner-set minimum content dimensions; see os64/gui.h.
 #define SYSCALL_GUI_WINDOW_SET_MIN_SIZE 57
+#define SYSCALL_GUI_WINDOW_FOCUS 62
 
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.

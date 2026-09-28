@@ -106,6 +106,8 @@ static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pty_create_stream(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_pty_history(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_pty_viewport(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -190,6 +192,12 @@ static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uin
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_window_focus(uint64_t a0,uint64_t a1,uint64_t a2,
+    uint64_t a3,uint64_t a4,uint64_t a5)
+{
+    (void)a1;(void)a2;(void)a3;(void)a4;(void)a5;
+    return (uint64_t)gui_window_focus((int64_t)a0);
+}
 static uint64_t syscall_gui_window_set_min_size(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -265,6 +273,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_RENAME,      "rename",      syscall_rename,      false, 0x03),  // legacy arg0/1 = paths; every trailing register is ignored
 	SYSCALL_DEFINE(SYSCALL_PTY_CREATE,   "pty_create",   syscall_pty_create,   false, 0x00),  // args: cols, rows — values, no pointers (GRID)
 	SYSCALL_DEFINE(SYSCALL_PTY_CREATE_STREAM, "pty_create_stream", syscall_pty_create_stream, false, 0x00),  // args: cols, rows (STREAM)
+    SYSCALL_DEFINE(SYSCALL_PTY_HISTORY, "pty_history", syscall_pty_history, false, 0),
+    SYSCALL_DEFINE(SYSCALL_PTY_VIEWPORT, "pty_viewport", syscall_pty_viewport, false, 0x02),
 	SYSCALL_DEFINE(SYSCALL_PTY_SNAPSHOT, "pty_snapshot", syscall_pty_snapshot, false, 0x02),  // arg1 = header out; arg2 = cells out, NULLABLE (max_cells 0 = header-only probe — handler validates)
 	SYSCALL_DEFINE(SYSCALL_PTY_RESIZE,   "pty_resize",   syscall_pty_resize,   false, 0x00),  // args: master handle, cols, rows — values, no pointers
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
@@ -293,6 +303,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_POLL,         "gui_event_poll",         syscall_gui_event_poll,         false, 0x02),  // arg1 = input_event_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_SCREEN_INFO,        "gui_screen_info",        syscall_gui_screen_info,        false, 0x00),  // arg0/arg1 = uint32_t outs, EITHER may be NULL (handler validates)
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x00),  // arg1 = input_event_t out OR NULL (nullable: NULL = wait, don't take — handler validates); BLOCKS (like read)
+    SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_FOCUS,"gui_window_focus",syscall_gui_window_focus,false,0),
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_MIN_SIZE, "gui_window_set_min_size", syscall_gui_window_set_min_size, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_STATE,   "gui_window_get_state",   syscall_gui_window_get_state,   false, 0x02),  // arg1 = os64_gui_window_state_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_RING,         "gui_event_ring",         syscall_gui_event_ring,         false, 0x00),  // scalar window handle and mask
@@ -2422,6 +2433,55 @@ static uint64_t syscall_pty_create_stream(uint64_t arg0, uint64_t arg1, uint64_t
 	return syscall_pty_create_common((uint32_t)arg0, (uint32_t)arg1, PTY_MODE_STREAM);
 }
 
+static uint64_t syscall_pty_history(uint64_t master, uint64_t lines, uint64_t a2,
+    uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a2; (void)a3; (void)a4; (void)a5;
+    task_t *task = get_core_local_storage()->task;
+    handle_t pin;
+    if (lines > OS64_PTY_HISTORY_MAX || !task || !handle_pin(task, (int)master, &pin))
+        return SYSCALL_RESULT_INVALID;
+    uint64_t result = SYSCALL_RESULT_INVALID;
+    if (pin.type == HANDLE_PTY_MASTER) {
+        int changed = tty_pty_history(pin.object, (uint32_t)lines);
+        result = changed < 0 ? (uint64_t)(int64_t)changed : 0;
+    }
+    handle_unpin(&pin);
+    return result;
+}
+
+static uint64_t syscall_pty_viewport(uint64_t master, uint64_t header, uint64_t cells,
+    uint64_t max_cells, uint64_t first, uint64_t epoch)
+{
+    if (max_cells > 512 * 256 || (max_cells && !cells)) return SYSCALL_RESULT_INVALID;
+    task_t *task = get_core_local_storage()->task;
+    handle_t pin;
+    if (!task || !handle_pin(task, (int)master, &pin)) return SYSCALL_RESULT_INVALID;
+    uint64_t result = SYSCALL_RESULT_INVALID;
+    os64_pty_cell_t *scratch = NULL;
+    if (pin.type != HANDLE_PTY_MASTER) goto done;
+    tty_t *t = pin.object;
+    if (t->pty_mode != PTY_MODE_GRID) goto done;
+    // Bound scratch by the caller's explicit capacity, then clamp the copy
+    // under the grid lock. A concurrent resize cannot overrun this buffer.
+    if (max_cells) {
+        scratch = kmalloc_try(max_cells * sizeof(*scratch));
+        if (!scratch) { result = (uint64_t)(int64_t)OS64_PTY_ERR_NO_MEMORY; goto done; }
+    }
+    os64_pty_viewport_t v;
+    uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+    uint32_t n = tty_pty_view_locked(t, &v, scratch, (uint32_t)max_cells, first, epoch);
+    spinlock_release_irqrestore(&t->lock, flags);
+    result = n;
+    if (!copy_to_user_buffer((void *)header, &v, sizeof(v)) ||
+        (n && !copy_to_user_buffer((void *)cells, scratch, (size_t)n * sizeof(*scratch))))
+        result = SYSCALL_RESULT_BAD_USER_DATA;
+done:
+    kfree(scratch);
+    handle_unpin(&pin);
+    return result;
+}
+
 // pty_snapshot(master, header out, cells out, max_cells) -> cells copied.
 // max_cells == 0 is the cheap poll: header only (generation + HUNGUP), no
 // cell traffic — what a terminal calls at frame cadence. The full copy goes
@@ -2522,7 +2582,9 @@ static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2
 	return r;
 }
 
-// pty_resize(master, cols, rows) -> 0. The SIGWINCH slice (PTY.md § Resize).
+// pty_resize -> 0, INVALID, or OS64_PTY_ERR_HISTORY_BUDGET/NO_MEMORY/BUSY.
+// Refused calls leave geometry and cells untouched and send no SIGWINCH.
+// The SIGWINCH slice (PTY.md § Resize).
 // The MASTER's verb, because the master owns the geometry: a terminal window
 // that grew tells its slave the new size, and the slave learns — it does not
 // decide. tty_resize changes geometry and generation, carrying text and
@@ -2563,12 +2625,16 @@ static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 	tty_t *t = (tty_t *)pinned.object;
 
+	if (arg1 > 512 || arg2 > 256) {
+		handle_unpin(&pinned);
+		return SYSCALL_RESULT_INVALID;
+	}
 	uint32_t cols = (uint32_t)arg1, rows = (uint32_t)arg2;
 	int changed = tty_resize(t, cols, rows);
 	if (changed <= 0)
 	{
 		handle_unpin(&pinned);
-		return changed < 0 ? SYSCALL_RESULT_INVALID : 0;
+		return changed < 0 ? (uint64_t)(int64_t)changed : 0;
 	}
 
 	uint32_t seats = 0, told = 0;
