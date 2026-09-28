@@ -344,9 +344,14 @@ static const struct { int32_t num, den; } s_keyword[8] = {
     {3, 5}, {3, 4}, {8, 9}, {1, 1}, {6, 5}, {3, 2}, {2, 1}, {3, 1},
 };
 
+// A size times a ratio, held to F_INT_MAX pixels either way: sizes compound
+// down the tree (each nested <big> is 6/5 of its parent's), so a page can
+// ask for more than a 26.6 int32_t holds, and a wrapped one is negative.
 static int32_t scale(int32_t v, int32_t num, int32_t den)
 {
-    return (int32_t)(((int64_t)v * num + den / 2) / den);
+    int64_t r = ((int64_t)v * num + den / 2) / den;
+    int64_t most = (int64_t)F_INT_MAX * FLOW_UNITS_PER_PX;
+    return (int32_t)(r > most ? most : r < -most ? -most : r);
 }
 
 static flow_unit_t font_size(const Ctx *c, const Spec *sp, const flow_style_t *parent)
