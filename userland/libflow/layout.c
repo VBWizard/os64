@@ -2676,6 +2676,31 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
             rh[r] = rowsums_sum(&rs, r, r);
     os64_free(rs.a);
     os64_free(rs.b);
+    // A row group's set height is its rows' least together: what they lack
+    // of it goes to them in proportion to their heights, else evenly, the
+    // rule a set table height follows.
+    for (int32_t r0 = 0; r0 < g.nrows && !l->failed;) {
+        int32_t r1 = g.rows[r0].group_end;
+        const FBox *group = g.rows[r0].box->parent;
+        if (group != NULL && group->kind == FB_ROW_GROUP &&
+            group->style->height.kind == FLOW_LENGTH_PX) {
+            int64_t have = (int64_t)(r1 - r0 - 1) * vsp;
+            for (int32_t r = r0; r < r1; r++)
+                have += rh[r];
+            int64_t total = have - (int64_t)(r1 - r0 - 1) * vsp;
+            if (group->style->height.value > have) {
+                int64_t extra = group->style->height.value - have, given = 0;
+                for (int32_t r = r0; r < r1; r++) {
+                    int64_t share = total > 0 ? mul_div(extra, rh[r], total) : extra / (r1 - r0);
+                    if (r == r1 - 1)
+                        share = extra - given;
+                    given += share;
+                    rh[r] += share;
+                }
+            }
+        }
+        r0 = r1 > r0 ? r1 : r0 + 1;
+    }
     int64_t top = y + t->border[FLOW_TOP] + t->padding[FLOW_TOP];
     int64_t grid_h = g.nrows > 0 ? (int64_t)(g.nrows + 1) * vsp : 0;
     for (int32_t r = 0; r < g.nrows; r++)

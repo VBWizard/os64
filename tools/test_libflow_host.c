@@ -1195,6 +1195,14 @@ static void table_review_cases(void)
            has_lines("<!doctype html><table width=120 cellspacing=0 cellpadding=0><tr>"
                      "<td width=75%><img src=known.png width=64 height=1><td>"
                      "<img src=known.png width=64 height=1></table>", 400, pct_room, 4), NULL);
+    // Round 6. A row group's set height is its rows' least together: they
+    // need 20 and 40, the group asks 100, and the 40 more goes 13 and 27.
+    static const char *const group_h[] = {"row-group tbody 8 8 16 100", "row tr 8 8 16 33",
+                                          "row tr 8 41 16 67", "block p 8 124 384 20"};
+    expect("a row group's set height reaches its rows",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tbody height=100>"
+                     "<tr><td>x<tr><td>yy<br>y</tbody></table><p>after</p>", 400, group_h, 4),
+           NULL);
     expect("a table's baseline is its first row as shown",
            has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
                      "<td>x<td><table cellspacing=0 cellpadding=0><tfoot><tr><td>f<br>f2"

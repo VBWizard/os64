@@ -570,7 +570,8 @@ as its tallest one-row cell, its own set height, and what its baseline
 cells need — the most any has above the shared baseline plus the most any
 has below it, so a cell moved to the baseline never reaches into the
 next row; a rowspan's excess (a baseline cell's move included) spread
-evenly over its rows; a set table height's excess shared by the rows in
+evenly over its rows; a row group's set height its rows' least together,
+what they lack of it shared by them in proportion; a set table height's excess shared by the rows in
 proportion, or, with no rows to share it, the table's least all the
 same. `valign` places a cell's content in its rows — top, middle (the
 sheet's default for a table's rows), bottom, or baseline, which lines
