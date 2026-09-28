@@ -560,16 +560,18 @@ Then the heights: each cell laid out ONCE at its final width, and its
 baseline taken then — its first line's, or the bottom of its content
 where it has none (§17.5.3), and a nested table's is the baseline its
 first row AS SHOWN was given (the header group first and the footer group
-last): the one that row's baseline cells share, else its first cell's
-where `valign` put it, recorded on the row when its table lays it out; a row as tall
+last), empty or not: the one that row's baseline cells share, else its
+first cell's where `valign` put it, else its bottom, recorded on the row
+when its table lays it out; a row as tall
 as its tallest one-row cell, its own set height, and what its baseline
 cells need — the most any has above the shared baseline plus the most any
 has below it, so a cell moved to the baseline never reaches into the
 next row; a rowspan's excess (a baseline cell's move included) spread
 evenly over its rows; a set table height's excess shared by the rows in
-proportion. `valign` places a cell's content in its rows — top, middle
-(the sheet's default for a table's rows), bottom, or baseline, which
-lines the first baselines of a row's baseline cells up.
+proportion, or, with no rows to share it, the table's least all the
+same. `valign` places a cell's content in its rows — top, middle (the
+sheet's default for a table's rows), bottom, or baseline, which lines
+the first baselines of a row's baseline cells up.
 Captions sit above (or below, `caption-side`) the table's box, as wide
 as it; `border-spacing` separates cells and `cellpadding` pads them; the
 `border` attribute draws the old web's outset frame and inset cells. The
@@ -733,7 +735,10 @@ LIBPAGE.md's rule restated for geometry:
   of a min-tree over where each column's hold ends (log of the columns
   per cell, and per column a hold covers), never a walk of the held
   columns per row — which made a few long spans over wide columns cost
-  rows × columns. The host
+  rows × columns. The tree has as many leaves as the columns holds reach
+  and grows as they reach further, and the spans' counting sort as many
+  buckets as the widest span: a table's working memory is its own
+  size, so a page of ten thousand small tables costs small tables. The host
   suite lays out a table nested forty deep AND a table whose cells all
   span, and asserts the layout count against the linear bound in both.
   The measuring run per text piece is laid out once per layout;

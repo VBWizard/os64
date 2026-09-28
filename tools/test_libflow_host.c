@@ -808,7 +808,7 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
     f_boxes_free(boxes);
     boxes = NULL;
     size_t partial = 0, nulls = 0, compared = 0;
-    bool ok_a = true, ok_b = true, ok_c = true, ok_h = true;
+    bool ok_a = true, ok_b = true, ok_c = true, ok_h = true, ok_d = true;
     char detail[200] = "";
     fail_single = true;
     for (size_t at = 1; at <= count; at++) {
@@ -870,6 +870,18 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
             if (t->height < bottom && ok_h)
                 snprintf(detail, sizeof(detail), "height at failure %zu", at);
             ok_h &= t->height >= bottom;
+            // (d) and no taller or wider than what it holds: nothing that is
+            // not placed reaches the page's edges.
+            int64_t reach_y = 0, reach_x = (int64_t)width * 64;
+            for (size_t i = 0; i < p.n; i++) {
+                reach_y = p.v[i].y + p.v[i].h > reach_y ? p.v[i].y + p.v[i].h : reach_y;
+                reach_x = p.v[i].x + p.v[i].w > reach_x ? p.v[i].x + p.v[i].w : reach_x;
+            }
+            if ((t->height > reach_y || t->width > reach_x) && ok_d)
+                snprintf(detail, sizeof(detail), "(d) at failure %zu: page %lld x %lld, holds %lld x %lld",
+                         at, (long long)t->width, (long long)t->height, (long long)reach_x,
+                         (long long)reach_y);
+            ok_d &= t->height <= reach_y && t->width <= reach_x;
             free(p.v);
         }
         f_layout_free(t);
@@ -891,6 +903,8 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
     expect(name, ok_c, detail);
     snprintf(name, sizeof(name), "relation sweep %s: as tall as what it holds", what);
     expect(name, ok_h, detail);
+    snprintf(name, sizeof(name), "relation sweep %s: (d) nothing unplaced reaches an edge", what);
+    expect(name, ok_d, detail);
     printf("libflow relation sweep, %s: %zu failures: %zu NULL, %zu partial trees held to "
            "(a)(b)(c), %zu finished items compared\n", what, count, nulls, partial, compared);
     free(wv);
@@ -1121,6 +1135,20 @@ static void table_review_cases(void)
     expect("quirks: a table with no rows is nothing at all",
            has_lines("<p>a</p><table width=1000000 border=5><tbody></tbody></table><p>b</p>", 400,
                      empty_table, 3), NULL);
+    // Round 3. An empty first row is still the first row: its bottom is
+    // the nested table's baseline, so the x does not move down to the B.
+    static const char *const empty_row[] = {"text \"x\" 8 10 8 16 serif 16",
+                                            "row tr 16 22 24 0"};
+    expect("a nested table whose first row is empty takes its baseline from it",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
+                     "<td>x<td><table cellspacing=0 cellpadding=0><tr></tr><tr><td>"
+                     "<font size=7>B</font></table></table>", 400, empty_row, 2), NULL);
+    // A set height is a table's least with no rows to share it: the p comes
+    // after 100 of it, 8 + 100 + 16.
+    static const char *const tall_empty[] = {"table table 8 8 0 100", "block p 8 124 384 20"};
+    expect("a table with no rows is as tall as it is set",
+           has_lines("<!doctype html><table height=100></table><p>after</p>", 400, tall_empty, 2),
+           NULL);
     expect("a table's baseline is its first row as shown",
            has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
                      "<td>x<td><table cellspacing=0 cellpadding=0><tfoot><tr><td>f<br>f2"
@@ -1222,6 +1250,11 @@ int main(int argc, char **argv)
         "<font face=arial><p>in</p>out</font><p>last words here <a href=x>link <i>it</i></a>"
         "<div align=justify>justified words across a line that wraps more than once</div>"
         "<marquee>m <b>q</b></marquee><ol><li><p>para</p><li>item</ol><q>quoted</q>", 300);
+    // A tall first cell in a table the failure stops: its lines, not
+    // placed, must not reach the page's edges.
+    layout_relation_sweep("a tall cell in a table that stops",
+        "<!doctype html><table><tr><td>a<br>b<br>c<br>d<br>e<br>f<br>g<br>h<br>i<br>j"
+        "<td>x<br>y<br>z</table>", 300);
     {
         size_t len = 0;
         char *html = slurp("tools/html_corpus/floodgap.html", &len);

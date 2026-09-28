@@ -238,7 +238,8 @@ struct FBox {
     bool unfinished;
     int64_t x, y, w, h;             // the border box
     // A table row: the baseline its layout gave it (the one its baseline
-    // cells share, else its first cell's), absolute, when it has cells.
+    // cells share, else its first cell's, else its bottom), absolute, once
+    // it is laid out.
     bool has_baseline;
     int64_t baseline;
     int64_t border[4], padding[4];  // used widths, top right bottom left
