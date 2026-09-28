@@ -237,6 +237,7 @@ static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 		// The old top line is now history; hist_lines grows until the ring's
 		// capacity is reached, after which the oldest line pays for each new one.
 		t->screen_top = (t->screen_top + 1) % t->total_lines;
+		t->live_line++;
 		if (t->hist_lines < t->total_lines - t->rows)
 			t->hist_lines++;
 		tty_erase_span(t, tty_row_line(t, t->rows - 1), 0, t->cols);
@@ -1139,6 +1140,34 @@ tty_t * volatile kPtyList = NULL;
 static spinlock_t kPtyListLock = 0;
 static uint32_t kPtyNextIndex = 0;
 
+// Charge retained rows in both old and replacement rings until the old ring
+// is freed. Live grids are outside this quota; physical exhaustion can still
+// refuse them through kmalloc_try.
+#define PTY_HISTORY_BUDGET (128UL * 1024 * 1024)
+static size_t s_pty_history_bytes;
+static tty_cell_t *pty_grid_alloc(size_t bytes, size_t history_bytes, int *why)
+{
+	size_t used = __atomic_load_n(&s_pty_history_bytes, __ATOMIC_RELAXED);
+	do {
+		if (history_bytes > PTY_HISTORY_BUDGET - used) {
+			*why = OS64_PTY_ERR_HISTORY_BUDGET;
+			return NULL;
+		}
+	} while (!__atomic_compare_exchange_n(&s_pty_history_bytes, &used,
+	           used + history_bytes, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED));
+	tty_cell_t *cells = kmalloc_try(bytes);
+	if (!cells) {
+		__atomic_fetch_sub(&s_pty_history_bytes, history_bytes, __ATOMIC_RELAXED);
+		*why = OS64_PTY_ERR_NO_MEMORY;
+	}
+	return cells;
+}
+static void pty_grid_free(tty_cell_t *cells, size_t history_bytes)
+{
+	kfree(cells);
+	__atomic_fetch_sub(&s_pty_history_bytes, history_bytes, __ATOMIC_RELAXED);
+}
+
 tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 {
 	// Bounds are sanity, not policy: a 1-cell terminal is a caller bug, and
@@ -1148,18 +1177,27 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 	if (mode != PTY_MODE_GRID && mode != PTY_MODE_STREAM)
 		return NULL;
 
-	// Zeroed at the allocator choke point, and never NULL: the allocator
-	// panics by name on exhaustion (allocator.c), so the fence above is this
-	// function's only refusal — same as tty_resize.
-	tty_t *t = kmalloc(sizeof(tty_t));
+	tty_t *t = kmalloc_try(sizeof(tty_t));
+	if (!t) return NULL;
+	t->view_epoch = 1;
 	t->cols = cols;
 	t->rows = rows;
 	if (mode == PTY_MODE_GRID)
 	{
 		t->total_lines = rows * TTY_SCROLLBACK_SCREENS;
-		t->cells = kmalloc((size_t)t->total_lines * cols * sizeof(tty_cell_t));
+		t->history_bytes = (size_t)(t->total_lines - rows) * cols * sizeof(tty_cell_t);
+		int why = 0;
+		t->cells = pty_grid_alloc((size_t)t->total_lines * cols * sizeof(tty_cell_t),
+		                          t->history_bytes, &why);
+		if (!t->cells) {
+			// Optional legacy history must not prevent a live terminal's birth.
+			t->total_lines = rows;
+			t->history_bytes = 0;
+			t->cells = pty_grid_alloc((size_t)rows * cols * sizeof(tty_cell_t), 0, &why);
+		}
+		if (!t->cells) { kfree(t); return NULL; }
 	}
-	// kmalloc zeroes, which is already right for the attributes, the
+	// The allocator zeroes, which is already right for the attributes, the
 	// background and the escape reader. The two that are NOT zero say so:
 	// the pen's colour did not come from the palette, and the paper starts
 	// as the console's.
@@ -1201,15 +1239,24 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode)
 // contiguously in the fresh ring, and set screen_top to where the screen
 // landed. Cells are copied row by row, min(old cols, new cols) each, so
 // the left edge is what every line keeps.
-int tty_resize(tty_t *t, uint32_t cols, uint32_t rows)
+static int tty_reconfigure(tty_t *t, uint32_t cols, uint32_t rows,
+						   bool configure_history, uint32_t history)
 {
-	// Same fence as pty_create_slave: sanity, not policy.
-	if (t == NULL || cols < 2 || rows < 2 || cols > 512 || rows > 256)
+	if (!t || (configure_history && (!t->is_pty || t->pty_mode != PTY_MODE_GRID ||
+									history > OS64_PTY_HISTORY_MAX)) ||
+		(!configure_history && (cols < 2 || rows < 2 || cols > 512 || rows > 256)))
 		return -1;
-
+	unsigned attempts = 0;
+retry:
+	if (++attempts > 4) return OS64_PTY_ERR_BUSY;
 	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
-	if (t->cols == cols && t->rows == rows)
-	{
+	if (configure_history) { cols = t->cols; rows = t->rows; }
+	bool configured = t->history_configured;
+	uint32_t prior_limit = t->history_limit, prior_cols = t->cols, prior_rows = t->rows;
+	uint32_t limit = configure_history ? history :
+		(configured ? prior_limit : rows * (TTY_SCROLLBACK_SCREENS - 1));
+	if (t->cols == cols && t->rows == rows &&
+		(!configure_history || (configured && prior_limit == limit))) {
 		spinlock_release_irqrestore(&t->lock, flags);
 		return 0;
 	}
@@ -1223,24 +1270,19 @@ int tty_resize(tty_t *t, uint32_t cols, uint32_t rows)
 	}
 	spinlock_release_irqrestore(&t->lock, flags);
 
-	uint32_t new_total = rows * TTY_SCROLLBACK_SCREENS;
-	// Allocate OUTSIDE the grid lock: kmalloc takes the allocator's own
-	// interrupts-off lock, and holding one spinlock while waiting on another
-	// is how lock orders get invented by accident. Zeroed at the choke point,
-	// so every cell a copy does not reach is already blank. No NULL check,
-	// because there is nothing to check: the allocator panics by name on
-	// exhaustion and never returns "no memory" (allocator.c) — the fence
-	// above is this function's only refusal.
-	tty_cell_t *fresh = kmalloc((size_t)new_total * cols * sizeof(tty_cell_t));
-
+	uint32_t new_total = rows + limit;
+	size_t bytes = (size_t)new_total * cols * sizeof(tty_cell_t);
+	// Allocate outside the tty lock; no allocator/tty lock nesting.
+	size_t history_bytes = (size_t)limit * cols * sizeof(tty_cell_t);
+	int why = 0;
+	tty_cell_t *fresh = t->is_pty ? pty_grid_alloc(bytes, history_bytes, &why) : kmalloc(bytes);
+	if (!fresh) return why;
 	flags = spinlock_acquire_irqsave(&t->lock);
-	// A concurrent resize may have installed the requested geometry while
-	// this caller allocated. Leave its cells and generation intact.
-	if (t->cols == cols && t->rows == rows)
-	{
+	if (t->cols != prior_cols || t->rows != prior_rows ||
+		t->history_configured != configured || t->history_limit != prior_limit) {
 		spinlock_release_irqrestore(&t->lock, flags);
-		kfree(fresh);
-		return 0;
+		if (t->is_pty) pty_grid_free(fresh, history_bytes); else kfree(fresh);
+		goto retry;
 	}
 
 	// If the cursor would fall off the bottom of a shorter screen, the top
@@ -1272,6 +1314,14 @@ int tty_resize(tty_t *t, uint32_t cols, uint32_t rows)
 	}
 
 	tty_cell_t *old = t->cells;
+	size_t old_bytes = t->history_bytes;
+	t->live_line += shift;
+	if (t->cols != cols || t->rows != rows) t->view_epoch++;
+	if (configure_history) {
+		t->history_limit = history;
+		t->history_configured = true;
+	}
+	if (t->is_pty) t->history_bytes = history_bytes;
 	t->cells       = fresh;
 	t->cols        = cols;
 	t->rows        = rows;
@@ -1287,8 +1337,47 @@ int tty_resize(tty_t *t, uint32_t cols, uint32_t rows)
 	t->generation++;                   // the snapshot poll's contract: every grid mutation
 
 	spinlock_release_irqrestore(&t->lock, flags);
-	kfree(old);
+	if (t->is_pty) pty_grid_free(old, old_bytes); else kfree(old);
 	return 1;
+}
+
+int tty_resize(tty_t *t, uint32_t cols, uint32_t rows)
+{
+	return tty_reconfigure(t, cols, rows, false, 0);
+}
+
+int tty_pty_history(tty_t *t, uint32_t lines)
+{
+	return tty_reconfigure(t, 0, 0, true, lines);
+}
+
+uint32_t tty_pty_view_locked(tty_t *t, os64_pty_viewport_t *v,
+	os64_pty_cell_t *cells, uint32_t max_cells, uint64_t first, uint64_t epoch)
+{
+	memset(v, 0, sizeof(*v));
+	v->screen.cols = t->cols; v->screen.rows = t->rows;
+	v->screen.cur_row = t->cur_row; v->screen.cur_col = t->cur_col;
+	v->screen.generation = t->generation;
+	v->screen.flags = (t->everSeated && t->seats <= 0) ? OS64_PTY_HUNGUP : 0;
+	v->live_line = t->live_line;
+	v->oldest_line = t->live_line - t->hist_lines;
+	v->epoch = t->view_epoch;
+	v->history_lines = t->hist_lines;
+	v->history_limit = t->total_lines - t->rows;
+	if (epoch != v->epoch || first > v->live_line) first = v->live_line;
+	if (first < v->oldest_line) first = v->oldest_line;
+	v->first_line = first;
+	uint32_t count = t->cols * t->rows;
+	if (count > max_cells) count = max_cells;
+	uint32_t base = (t->screen_top + t->total_lines - (uint32_t)(v->live_line - first)) % t->total_lines;
+	for (uint32_t copied = 0; copied < count;) {
+		uint32_t n = t->cols;
+		if (n > count - copied) n = count - copied;
+		memcpy(cells + copied, tty_line(t, base), (size_t)n * sizeof(*cells));
+		copied += n;
+		base = (base + 1) % t->total_lines;
+	}
+	return count;
 }
 
 // tty_refont's fence is tty_resize's — sanity, not policy — WIDENED TO THE
@@ -1518,7 +1607,7 @@ static void pty_maybe_bury(tty_t *t)
 		// operation that still references an end keeps the pipe past it.
 		if (t->stream != NULL)
 			pipe_unhold(t->stream);
-		kfree(t->cells);
+		pty_grid_free(t->cells, t->history_bytes);
 		kfree(t);
 	}
 }

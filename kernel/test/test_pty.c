@@ -125,3 +125,69 @@ bool test_pty_stream_seats(void)
     pty_master_unhold(t);
     return ok;
 }
+
+bool test_pty_history(void)
+{
+    if(kmalloc_try(0) || kmalloc_try(UINT64_MAX) || kmalloc_try(1UL<<48))return false;
+    tty_t *t=pty_create_slave(4,2,PTY_MODE_GRID);
+    if(!t)return false;
+    bool ok=tty_pty_history(t,4)==1;
+    tty_write(t,"A\nB\nC\nD\nE\nF\n",12);
+    os64_pty_viewport_t v;os64_pty_cell_t cells[24];
+    uint64_t flags=spinlock_acquire_irqsave(&t->lock);
+    uint32_t copied=tty_pty_view_locked(t,&v,cells,24,2,t->view_epoch);
+    spinlock_release_irqrestore(&t->lock,flags);
+    ok &= copied==8 && v.history_lines==4 && v.live_line==5 && v.first_line==2 && cells[0].ch=='C';
+    uint64_t epoch=v.epoch;
+    tty_write(t,"G\nH\n",4);
+    flags=spinlock_acquire_irqsave(&t->lock);
+    tty_pty_view_locked(t,&v,cells,24,2,epoch);
+    spinlock_release_irqrestore(&t->lock,flags);
+    ok &= v.first_line==3 && cells[0].ch=='D'; // old anchor evicted
+    ok &= tty_resize(t,6,3)==1 && t->total_lines==7;
+    flags=spinlock_acquire_irqsave(&t->lock);
+    tty_pty_view_locked(t,&v,cells,24,3,epoch);
+    spinlock_release_irqrestore(&t->lock,flags);
+    ok &= v.epoch!=epoch && v.first_line==v.live_line && v.history_limit==4;
+    ok &= tty_pty_history(t,1)==1 && t->hist_lines==1;
+    tty_cell_t *before=t->cells;uint64_t generation=t->generation;
+    ok &= tty_pty_history(t,10001)<0 && t->cells==before && t->generation==generation;
+    ok &= tty_pty_history(t,0)==1 && t->total_lines==t->rows && !t->hist_lines;
+    tty_write(t,"I\nJ\nK\n",6);
+    ok &= !t->hist_lines;
+    pty_master_close(t);
+    t=pty_create_slave(4,2,PTY_MODE_STREAM);
+    if(!t)return false;
+    ok &= tty_pty_history(t,4)<0 && t->cells==NULL;
+    pty_master_close(t);
+    // Exercise aggregate refusal, including a replacement's temporary bytes.
+    tty_t *many[4]={0};unsigned count=0;bool refused=false;
+    for(;count<4;++count){
+        many[count]=pty_create_slave(512,2,PTY_MODE_GRID);
+        if(!many[count]){refused=true;break;}
+        before=many[count]->cells;generation=many[count]->generation;
+        int result=tty_pty_history(many[count],10000);
+        if(result<0){
+            ok &= result==OS64_PTY_ERR_HISTORY_BUDGET;
+            ok &= many[count]->cells==before && many[count]->generation==generation;
+            refused=true;++count;break;
+        }
+    }
+    // Fill the quota exactly: 32768 retained rows at 4096 bytes per row.
+    if(count==4 && refused){
+        ok &= tty_pty_history(many[3],0)>=0;
+        ok &= tty_pty_history(many[3],2768)>=0;
+        tty_t *fresh=pty_create_slave(512,256,PTY_MODE_GRID);
+        ok &= fresh && fresh->total_lines==256 && fresh->history_bytes==0;
+        if(fresh){
+            ok &= tty_pty_history(fresh,1)==OS64_PTY_ERR_HISTORY_BUDGET;
+            ok &= tty_pty_history(fresh,0)>=0 && tty_resize(fresh,500,250)==1;
+            pty_master_close(fresh);
+        }
+    }
+    while(count)pty_master_close(many[--count]);
+    t=pty_create_slave(512,2,PTY_MODE_GRID);
+    ok &= t && tty_pty_history(t,10000)>=0;
+    if(t)pty_master_close(t);
+    return ok && refused;
+}

@@ -1182,3 +1182,18 @@ system has to know:
   its canvas pages — teardown-order invariant violated, or a task exit path
   is missing the `gui_task_destroy_windows` hook. Windows die before pages,
   always.
+
+## Application Settings action
+
+Applications opt in at window creation with `OS64_GUI_WINDOW_HAS_SETTINGS`.
+The Settings titlebar action, or Ctrl+Alt+S, delivers
+`OS64_GUI_EVENT_SETTINGS` (15) to that window. The application owns its
+settings dialog and policy. `os64_gui_window_focus` (syscall 62) restores/focuses an owned ordinary
+window within its stacking band, allowing repeated Settings requests to reveal
+the same draft. Desktop and popup windows are refused by that focus call.
+
+Decoration V7 supplies the drawn slider icon, with the usual placement, housing,
+fill and ink options. Unsupported applications omit the slot and automatic gap
+from geometry, painting and hit testing. Explicit spacers remain. The compiled
+fallback also exposes Settings for opted-in windows. Existing compositions
+retain their controls, and the shortcut works when the button or titlebar is absent.

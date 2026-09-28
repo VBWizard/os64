@@ -428,8 +428,10 @@ memory_status_t* make_new_status_entry(uint64_t address, uint64_t length, bool i
 	return &kMemoryStatus[kMemoryStatusCurrentPtr-1];
 }
 
-uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_t requested_length, bool use_address, bool page_aligned)
+static uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_t requested_length, bool use_address, bool page_aligned, bool fallible)
 {
+	if (fallible && (!requested_length || requested_length > UINT64_MAX - 7))
+		return 0;
 	uint64_t irqflags = allocator_lock();
 
 	// THE TABLE-FULL GUARD'S COMPACTION LIVES HERE, NOT AT MINT TIME
@@ -446,6 +448,11 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		printd(DEBUG_ALLOCATOR, "allocator: status table full (%lu entries) — compacting before the carve\n",
 		       (uint64_t)kMemoryStatusCurrentPtr);
 		compact_memory_array();
+	}
+
+	if (fallible && kMemoryStatusCurrentPtr + 2 >= INITIAL_MEMORY_STATUS_COUNT) {
+		allocator_unlock(irqflags);
+		return 0;
 	}
 
 	memory_status_t* memaddr;
@@ -475,21 +482,12 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		// Align to the next multiple of 8
 		requested_length = (requested_length + 7) & ~((size_t)7);
 		memaddr = get_status_entry_for_first_available_address(requested_length, page_aligned);
-		// OUT OF MEMORY IS A PANIC, NOT A HALT (2026-08-25, Fable's review of
-		// PR #29 rd15). This was `cli; hlt` — with the allocator lock HELD, a
-		// few lines up. The core went dark with no panic line and no serial
-		// byte, and every other core then spun forever, interrupts off, on
-		// its next allocation. A silent whole-machine wedge for the one
-		// condition a kernel most needs to explain.
-		//
-		// It also made a promise the rest of the kernel believed: there are
-		// dozens of `if (kmalloc(...) == NULL)` guards in the tree, and NOT
-		// ONE can fire — this function never returns 0 for "no memory", and
-		// even if it did, kmalloc adds kHHDMOffset to it. A whole review
-		// round (rd15) was spent building a fallback for that unreachable
-		// branch. So the contract, stated once where it is enforced: THE
-		// ALLOCATOR NEVER RETURNS "NO MEMORY". It panics, by name, with the
-		// size. Tripwires over silence.
+		// Ordinary allocations panic on exhaustion. The opt-in try path
+		// returns zero before changing ownership or mapping unowned bytes.
+		if (memaddr == NULL && fallible) {
+			allocator_unlock(irqflags);
+			return 0;
+		}
 		if (memaddr == NULL)
 			panic("allocator: OUT OF MEMORY — no free block for %lu bytes (%s)\n",
 			      requested_length, page_aligned ? "page-aligned" : "unaligned");
@@ -501,6 +499,14 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 			panic("allocator: no free block covering the requested address 0x%016lx (%lu bytes)\n",
 			      requested_address, requested_length);
 	}
+	// The try entry point requests unaligned memory. Prepare its HHDM tables
+	// before carving, so mapping after ownership changes cannot exhaust the
+	// table pool. This check runs under the allocator lock with memaddr stable.
+	if (fallible && !paging_hhdm_prepare_range(memaddr->startAddress, requested_length)) {
+		allocator_unlock(irqflags);
+		return 0;
+	}
+
 	if (memaddr->length < requested_length)
 		retVal = 0;
 	else if (memaddr->length == requested_length)
@@ -606,18 +612,25 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 /// @return 
 uint64_t allocate_memory_at_address(uint64_t address, uint64_t requested_length, bool use_address)
 {
-	return allocate_memory_at_address_internal(address, requested_length, use_address, false);
+	return allocate_memory_at_address_internal(address, requested_length, use_address, false, false);
 }
 
 uint64_t allocate_memory_aligned(uint64_t requested_length)
 {
-	return allocate_memory_at_address_internal(0, requested_length, false, true);
+	return allocate_memory_at_address_internal(0, requested_length, false, true, false);
 }
 
 //NOTE: Only the kernel can request unaligned memory.  User space allocations MUST be on a page boundry and be the full page
 uint64_t allocate_memory(uint64_t requested_length)
 {
-	return allocate_memory_at_address_internal(0, requested_length, false, false);
+	return allocate_memory_at_address_internal(0, requested_length, false, false, false);
+}
+
+// Optional allocations may refuse; existing allocation APIs retain their
+// panic-on-exhaustion contract. No physical address zero is handed out.
+uint64_t allocate_memory_try(uint64_t length)
+{
+	return allocate_memory_at_address_internal(0, length, false, false, true);
 }
 
 //The free-path compaction BACKSTOP: normally the kworker's maintenance pass

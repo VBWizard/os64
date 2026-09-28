@@ -59,6 +59,7 @@ typedef enum input_event_type
     INPUT_EVENT_APPEARANCE,
     INPUT_EVENT_MOUSE_WHEEL,
     INPUT_EVENT_DOORBELL,
+    INPUT_EVENT_SETTINGS,
 } input_event_type_t;
 
 _Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
@@ -70,6 +71,7 @@ _Static_assert(INPUT_EVENT_POINTER_STATE == OS64_GUI_EVENT_POINTER_STATE, "event
 
 _Static_assert(INPUT_EVENT_APPEARANCE == OS64_GUI_EVENT_APPEARANCE, "event ABI: appearance");
 _Static_assert(INPUT_EVENT_MOUSE_WHEEL == OS64_GUI_EVENT_MOUSE_WHEEL, "event ABI: wheel");
+_Static_assert(INPUT_EVENT_SETTINGS == OS64_GUI_EVENT_SETTINGS, "event ABI: settings");
 _Static_assert(INPUT_EVENT_DOORBELL == OS64_GUI_EVENT_DOORBELL, "event ABI: doorbell");
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the

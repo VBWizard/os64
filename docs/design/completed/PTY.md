@@ -405,3 +405,23 @@ call in the resize arm, verified on glass by dragging a gterm and watching
   waiter wake — same wake discipline as the keyboard producer, no shortcuts.
 - **`ps` shows the child seated on the wrong tty**: the spawn argument
   resolved after inheritance instead of overriding it.
+
+## Configurable GRID history and viewport snapshots
+
+`SYSCALL_PTY_HISTORY` (60) sets 0..10000 additional retained physical rows,
+independent of live-screen height. It preserves newest history when shrinking
+and sends no SIGWINCH. Unconfigured clients request the legacy three-screen
+history policy. The 128 MiB aggregate ceiling charges retained rows, including
+old and replacement history until the old ring is freed. Live grids are exempt:
+a new GRID falls back to no history if its optional legacy ring is refused.
+Physical memory exhaustion can still refuse the live grid. Explicit capacity
+changes return distinct quota, memory, and contention errors without mutation.
+
+`SYSCALL_PTY_VIEWPORT` (61) returns a 72-byte header containing the original
+32-byte screen header, oldest/live/first logical line IDs, a geometry epoch,
+and history count/capacity. Pass a logical first line and its epoch, or
+`OS64_PTY_VIEW_LIVE`; stale epochs return the live screen and evicted anchors
+clamp to the oldest row. Header and cells share one locked snapshot. User
+copies and fallible bounded scratch allocation happen outside the tty lock.
+Both new operations pin the master and reject STREAM mode. The old live
+snapshot ABI is unchanged. See [TERMINAL_CONTRACTS.md](../../../TERMINAL_CONTRACTS.md).
