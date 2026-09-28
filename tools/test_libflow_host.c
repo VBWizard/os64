@@ -1017,6 +1017,96 @@ static void table_fuzz(size_t pages)
     printf("libflow table fuzz: %zu pages of extreme tables, laid out under UBSan\n", pages);
 }
 
+// Whether the laid-out page holds every one of `lines` (whole dump lines,
+// indentation stripped) — for a case about a few boxes of a larger tree.
+static bool has_lines(const char *html, int32_t width, const char *const *lines, int n)
+{
+    char *dump = layout_dump_of(html, width);
+    bool all = dump != NULL;
+    for (int i = 0; i < n && all; i++) {
+        size_t len = strlen(lines[i]);
+        bool found = false;
+        for (const char *p = dump; *p != '\0' && !found;) {
+            const char *e = strchr(p, '\n');
+            const char *q = p;
+            while (*q == ' ')
+                q++;
+            size_t have = e != NULL ? (size_t)(e - q) : strlen(q);
+            found = have == len && strncmp(q, lines[i], len) == 0;
+            p = e != NULL ? e + 1 : p + strlen(p);
+        }
+        all = found;
+    }
+    free(dump);
+    return all;
+}
+
+// Codex, the table slice's first review, each worked by hand: a table 200
+// wide with no spacing or padding, at the body's 8.
+static void table_review_cases(void)
+{
+    static const char *const col_pct[] = {"cell td 8 8 150 20", "cell td 158 8 50 20"};
+    expect("a col's percentage width reaches its column",
+           has_lines("<!doctype html><table width=200 cellspacing=0 cellpadding=0>"
+                     "<col width=75%><col><tr><td>a<td>b</table>", 400, col_pct, 2), NULL);
+    static const char *const span_pct[] = {"cell td 8 8 150 20", "cell td 8 28 75 20",
+                                           "cell td 83 28 75 20", "cell td 158 28 50 20"};
+    expect("a spanning cell's percentage is shared by its columns",
+           has_lines("<!doctype html><table width=200 cellspacing=0 cellpadding=0>"
+                     "<tr><td colspan=2 width=75%>s<td>c<tr><td>a<td>b<td>c</table>", 400,
+                     span_pct, 4), NULL);
+    static const char *const group[] = {"cell td 8 8 50 20", "cell td 58 8 50 20",
+                                        "cell td 108 8 100 20"};
+    expect("an empty colgroup's width is each of its columns'",
+           has_lines("<!doctype html><table width=200 cellspacing=0 cellpadding=0>"
+                     "<colgroup span=2 width=50></colgroup><tr><td>a<td>b<td>c</table>", 400,
+                     group, 3), NULL);
+    // 30% of 200 is 60, the col's own 100 stands, and the third takes 40.
+    static const char *const inherit[] = {"cell td 8 8 60 20", "cell td 68 8 100 20",
+                                          "cell td 168 8 40 20"};
+    expect("a col with no width takes its group's",
+           has_lines("<!doctype html><table width=200 cellspacing=0 cellpadding=0>"
+                     "<colgroup width=30%><col><col width=100></colgroup><tr><td>a<td>b<td>c"
+                     "</table>", 400, inherit, 3), NULL);
+    // A four-row span in column 1, crossed on row 2 by a two-row span: row
+    // 4's second cell goes to column 2, not onto the span.
+    static const char *const hold[] = {"cell td 16 8 8 60", "cell td 24 48 8 20"};
+    expect("a rowspan's hold is never shortened by a span crossing it",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr><td>a"
+                     "<td rowspan=4>B<tr><td colspan=2 rowspan=2>C<tr><tr><td>d<td>e</table>",
+                     400, hold, 2), NULL);
+    // Baselines: the p's line sits 30 down (its 16px margin and 14), the
+    // five lines' first 14 down; below the shared baseline the tall cell
+    // needs 100 - 14 = 86, so the row is 30 + 86 = 116 and holds it moved.
+    static const char *const row[] = {"row tr 8 8 20 116", "row tr 8 124 20 20"};
+    expect("a baseline row is sized for its cells where the baseline puts them",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
+                     "<td><p>x</p><td>a<br>b<br>c<br>d<br>e<tr><td>n<td>m</table>", 400, row, 2),
+           NULL);
+    // Two 100px preferences in a 44px containing block: each column gives
+    // back toward its least (8), 8 + 28 x 92 / 184 = 22, and the grid is
+    // the table's 44.
+    static const char *const fixed[] = {"table table 8 8 44 20", "cell td 8 8 22 20",
+                                        "cell td 30 8 22 20"};
+    expect("set widths give way when the table cannot hold them",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr><td width=100>a"
+                     "<td width=100>b</table>", 60, fixed, 3), NULL);
+    // A cell with no line: its baseline is the bottom of its content, 100,
+    // so the x moves down 100 - 14 and the row is 100 + (20 - 14).
+    static const char *const empty[] = {"row tr 8 8 8 106", "text \"x\" 8 96 8 16 serif 16"};
+    expect("a cell with no line has its baseline at its content's bottom",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
+                     "<td height=100></td><td>x</table>", 400, empty, 2), NULL);
+    // A nested table's baseline is its first row as shown: the tbody, not
+    // the tfoot written before it — the x shares the B's baseline, 50.
+    static const char *const shown[] = {"text \"x\" 8 38 8 16 serif 16"};
+    expect("a table's baseline is its first row as shown",
+           has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr valign=baseline>"
+                     "<td>x<td><table cellspacing=0 cellpadding=0><tfoot><tr><td>f<br>f2"
+                     "</tfoot><tbody><tr><td><font size=7>B</font></tbody></table></table>",
+                     400, shown, 1), NULL);
+}
+
 static void layout_sweep(void)
 {
     const char *html =
@@ -1100,6 +1190,7 @@ int main(int argc, char **argv)
     table_bounds();
     corpus();
     hostile_corpus();
+    table_review_cases();
     table_fuzz(3000);
     allocation_sweep();
     boxes_sweep();

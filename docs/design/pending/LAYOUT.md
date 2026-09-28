@@ -519,7 +519,8 @@ margins; an `hr` is an ordinary empty block whose borders are the rule.
 The grid first: rows in the order they are drawn (the first header group
 first, the first footer group last, every other group and every run of
 groupless rows between), each cell given its slot past the slots rowspans
-from above still hold, with the standard's clamps — `colspan` 1..1000,
+from above still hold (a hold only ever lengthens: a cell whose span
+crosses a longer rowspan leaves it as it was), with the standard's clamps — `colspan` 1..1000,
 `rowspan` 1..65534 and 0 meaning "to the end of the row group" — and a
 rowspan never reaching past its group. Declared columns (`col span`, a
 `colgroup`'s own span when it has no `col`s) count where no cell reaches.
@@ -532,25 +533,39 @@ on the box: a table nested forty deep costs each of its contexts a
 constant number of measurements, not three to the power of its depth
 (*Bounds*; the harness asserts the count). A cell's set width is what it
 wants at most, never less than it can be. Columns take their one-column
-cells' widths and `col` widths; spanning cells then spread what their
+cells' widths and their `col` widths, in pixels or percentages (a `col`
+with none takes its `colgroup`'s, and a `colgroup` with no `col`s gives
+its own to each column it spans); spanning cells then spread what their
 columns lack over them, narrowest span first, in proportion to what each
 column wants at most — the rule Netscape's engine used and every engine
-since. The table's width: a set width (`table { box-sizing: border-box }`,
+since — and a spanning cell's percentage goes, less what its columns'
+own percentages already hold, to those of them that have none. The table's width: a set width (`table { box-sizing: border-box }`,
 so it is the border box) and never less than its least; otherwise its
 most when that fits the containing block, else what the block has, and
 never less than its least — it overflows rather than squash a word.
 The grid's width is then shared: a percentage column its share, a fixed
-column its width, the auto columns from least toward most in proportion
-to how far apart the two are, and what is left over to the auto columns
-in proportion to what they want (else to the others), never a column
-below its least.
+column its width — which is what it wants at most, so when the fixed
+columns and the auto columns' least do not fit the table's width they
+give back toward their own least, in proportion to what each can give,
+and the grid never outgrows its table — the auto columns from least
+toward most in proportion to how far apart the two are, and what is left
+over to the auto columns in proportion to what they want (else to the
+others), never a column below its least. Every share is taken exact or
+held (`mul_div`): a nested table's most is a length as long as a face can
+read, and its column's share of a spread multiplies it by another.
 
-Then the heights: each cell laid out ONCE at its final width; a row as
-tall as its tallest one-row cell and its own set height; a rowspan's
-excess spread evenly over its rows; a set table height's excess shared by
-the rows in proportion. `valign` places a cell's content in its rows —
-top, middle (the sheet's default for a table's rows), bottom, or
-baseline, which lines the first baselines of a row's baseline cells up.
+Then the heights: each cell laid out ONCE at its final width, and its
+baseline taken then — its first line's, or the bottom of its content
+where it has none (§17.5.3), and a nested table's is its first row AS
+SHOWN, the header group first and the footer group last; a row as tall
+as its tallest one-row cell, its own set height, and what its baseline
+cells need — the most any has above the shared baseline plus the most any
+has below it, so a cell moved to the baseline never reaches into the
+next row; a rowspan's excess (a baseline cell's move included) spread
+evenly over its rows; a set table height's excess shared by the rows in
+proportion. `valign` places a cell's content in its rows — top, middle
+(the sheet's default for a table's rows), bottom, or baseline, which
+lines the first baselines of a row's baseline cells up.
 Captions sit above (or below, `caption-side`) the table's box, as wide
 as it; `border-spacing` separates cells and `cellpadding` pads them; the
 `border` attribute draws the old web's outset frame and inset cells. The
