@@ -701,18 +701,17 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
     // Generated content the sheet asks for: `q`'s quotation marks, nested
     // levels alternating double and single; and the parentheses a browser
     // that lays out no ruby puts round an `rt` whose ruby has no `rp`.
+    // Both answers are pass 1's (FStyled.quotes, .has_rp): asked here per
+    // element, a walk up the ancestors or across the siblings would be
+    // quadratic on a page of nested quotes or a ruby of many annotations.
     const char *before = NULL, *after = NULL;
+    const FStyled *holder = styled(b, el->parent);
     if (is(el, OS64_HTML_TAG_Q)) {
-        int32_t level = 0;
-        for (const os64_html_node_t *p = el->parent; p != NULL; p = p->parent)
-            level += is(p, OS64_HTML_TAG_Q);
+        int32_t level = holder != NULL ? holder->quotes : 0;
         before = level % 2 == 0 ? "\xe2\x80\x9c" : "\xe2\x80\x98";   // U+201C, U+2018
         after = level % 2 == 0 ? "\xe2\x80\x9d" : "\xe2\x80\x99";    // U+201D, U+2019
     } else if (is(el, OS64_HTML_TAG_RT) && el->parent != NULL) {
-        bool rp = false;
-        for (const os64_html_node_t *c = el->parent->first_child; c != NULL; c = c->next)
-            rp |= is(c, OS64_HTML_TAG_RP);
-        if (!rp) {
+        if (holder == NULL || !holder->has_rp) {
             before = "(";
             after = ")";
         }

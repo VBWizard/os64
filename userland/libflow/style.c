@@ -1351,6 +1351,10 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->lists_or_dls = (up != NULL ? up->lists_or_dls : 0) + is_list_or_dl(n);
     out->items = (up != NULL ? up->items : 0) + is_li(n);
     out->in_nobr = (up != NULL && up->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
+    out->quotes = (up != NULL ? up->quotes : 0) + is(n, OS64_HTML_TAG_Q);
+    FStyled *holder = f_map_get(&c->out->map, n->parent);
+    if (holder != NULL && is(n, OS64_HTML_TAG_RP))
+        holder->has_rp = true;
     out->decoration = sp.s.text_decoration;
     out->decoration_colors = (FDecorationColors){sp.s.color, sp.s.color};
     if (up != NULL && !decoration_edge(n, &sp.s, c->quirks))

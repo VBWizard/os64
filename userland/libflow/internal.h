@@ -101,9 +101,14 @@ typedef struct {
     // How many of this element and its ancestors are lists (`ul ol menu
     // dir`), lists or `dl`s, and `li`s: the chapter's descendant selectors
     // for its children, by the same bargain. And whether one of them is a
-    // `nobr`, which is what `nobr wbr` asks.
-    int32_t lists, lists_or_dls, items;
+    // `nobr`, which is what `nobr wbr` asks, and how many are `q`s, which
+    // is how deep a quotation's marks nest.
+    int32_t lists, lists_or_dls, items, quotes;
     bool in_nobr;
+    // An `rp` among this element's children: whether an `rt` in it gets
+    // the parentheses a browser that lays out no ruby adds. Set by the
+    // child, and read by pass 2 once every child has been styled.
+    bool has_rp;
 } FStyled;
 
 typedef struct {
