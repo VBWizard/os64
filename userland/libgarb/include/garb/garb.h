@@ -114,7 +114,9 @@ struct garb_rule {
 
 typedef enum {
     GARB_OK = 0,
-    GARB_NO_MEMORY,         // nothing came back at all
+    // Nothing came back at all. A list that runs short partway answers OK
+    // with `incomplete`; a single item has no partway, so it answers this.
+    GARB_NO_MEMORY,
     GARB_TOO_BIG,           // the input is past GARB_SHEET_MAX
     // The single-item parses (§5.3.x): nothing there, or more than one.
     GARB_EMPTY,
@@ -131,9 +133,11 @@ typedef enum {
 #define GARB_DEPTH_MAX 64
 
 
-// What every parse returns: an arena that owns it all, and whether the
-// parse ran short of memory or of depth partway — what came back is real,
-// and there is less of it than the text held.
+// What every parse returns: an arena that owns it all, and whether there is
+// less of it than the text held — the parse ran short of memory or of depth
+// partway (what came back is real), or it was refused whole (NO_MEMORY,
+// TOO_BIG: nothing came back). A reader holding only the result, as the
+// cascade does, learns from `incomplete` alone that it is short.
 typedef struct {
     struct os64_arena *arena;
     bool incomplete;
@@ -172,8 +176,10 @@ garb_status_t garb_parse_one_rule(const char *text, size_t len, garb_parsed_t *o
 garb_status_t garb_parse_one_declaration(const char *text, size_t len, garb_parsed_t *out);
 garb_status_t garb_parse_one_value(const char *text, size_t len, garb_parsed_t *out);
 
-// An at-rule's block, read as rules or as a block's contents, into the
-// arena of the parse it came from, so the answer lives and dies with it.
+// A rule's block, read as rules or as a block's contents, into the arena of
+// the parse it came from, so the answer lives and dies with it. False when
+// the answer came out short (the owner is marked incomplete too): what is
+// in `items` is then a prefix, and a reader that shows it says so.
 bool garb_rules_of(garb_parsed_t *owner, const garb_value_t *values, int32_t n,
                    garb_item_t **items, int32_t *nitems);
 bool garb_items_of(garb_parsed_t *owner, const garb_value_t *values, int32_t n,
