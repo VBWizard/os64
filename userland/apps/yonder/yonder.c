@@ -209,6 +209,9 @@ typedef struct {
     PictureState state;
     os64_image_t image;
     os64_work_id_t id;              // while WAITING
+    // An image naming it gives no width and height of its own, so its
+    // arrival moves the page. Decided once, as the pictures are gathered.
+    bool moves;
 } Picture;
 
 typedef struct {
@@ -896,21 +899,49 @@ static void open_address(const char *typed, NavKind kind, const way_position_t *
 // Fetches the page's pictures, one job per address, in tree order: libpage's
 // list is the record. A picture whose address was refused, or names a
 // scheme nothing here fetches, is never asked for.
+// Whether an image's element fixes its box whatever arrives: libflow sizes
+// a picture whose element gives both a width and a height (the height not
+// a percentage) the same whether it has arrived or not.
+static bool has_percent(const char *v)
+{
+    for (; v != NULL && *v != '\0'; v++)
+        if (*v == '%')
+            return true;
+    return false;
+}
+
+static bool picture_sized(const os64_html_node_t *node)
+{
+    const os64_html_attr_t *w = os64_html_attr(node, "width");
+    const os64_html_attr_t *h = os64_html_attr(node, "height");
+    return w != NULL && h != NULL && h->value != NULL && !has_percent(h->value);
+}
+
 static void pictures_start(Page *p)
 {
     const os64_page_t *model = page_model(p);
     int32_t n = model != NULL ? os64_page_nimages(model) : 0;
     if (n <= 0 || g.pool == NULL)
         return;
+    // One picture per address, found through a table and never by a walk
+    // of those gathered so far: a page names every picture it likes, and a
+    // walk per picture is quadratic in them.
+    size_t cap = 16;
+    while (cap < (size_t)n * 2)
+        cap *= 2;
+    int32_t *slot = os64_malloc(cap * sizeof(*slot));
     p->pic_of = os64_calloc((size_t)n, sizeof(*p->pic_of));
     p->pics = os64_calloc((size_t)n, sizeof(*p->pics));
-    if (p->pic_of == NULL || p->pics == NULL) {
+    if (slot == NULL || p->pic_of == NULL || p->pics == NULL) {
+        os64_free(slot);
         os64_free(p->pic_of);
         os64_free(p->pics);
         p->pic_of = NULL;
         p->pics = NULL;
         return;
     }
+    for (size_t k = 0; k < cap; k++)
+        slot[k] = -1;
     for (int32_t i = 0; i < n; i++) {
         p->pic_of[i] = -1;
         const char *url = os64_page_image(model, i)->src.url;
@@ -922,15 +953,21 @@ static void pictures_start(Page *p)
                           os64_memcmp(url, "file://", 7) == 0);
         if (!fetchable)
             continue;
-        int32_t same = -1;
-        for (int32_t k = 0; k < p->npics && same < 0; k++)
-            if (os64_streq(p->pics[k].url, url))
-                same = k;
-        if (same >= 0) {
-            p->pic_of[i] = same;
+        uint64_t h = 1469598103934665603ull;       // FNV-1a over the address
+        for (const char *c = url; *c != '\0'; c++)
+            h = (h ^ (uint8_t)*c) * 1099511628211ull;
+        size_t at = (size_t)h & (cap - 1);
+        while (slot[at] >= 0 && !os64_streq(p->pics[slot[at]].url, url))
+            at = (at + 1) & (cap - 1);
+        if (slot[at] >= 0) {
+            p->pic_of[i] = slot[at];
+            if (!picture_sized(os64_page_image(model, i)->node))
+                p->pics[slot[at]].moves = true;
             continue;
         }
+        slot[at] = p->npics;
         Picture *pic = &p->pics[p->npics];
+        pic->moves = !picture_sized(os64_page_image(model, i)->node);
         pic->url = url;
         pic->state = PIC_FAILED;
         yonder_picture_job_t *job = os64_calloc(1, sizeof(*job));
@@ -951,6 +988,7 @@ static void pictures_start(Page *p)
         }
         p->pic_of[i] = p->npics++;
     }
+    os64_free(slot);
 }
 
 // The page is being left: its pictures still on their way are cancelled,
@@ -963,30 +1001,10 @@ static void pictures_leave(Page *p)
     p->waiting = 0;
 }
 
-// Whether a picture's arrival can move the page: libflow sizes a picture
-// whose element gives both a width and a height the same whether it has
-// arrived or not.
-static bool has_percent(const char *v)
-{
-    for (; v != NULL && *v != '\0'; v++)
-        if (*v == '%')
-            return true;
-    return false;
-}
-
+// Whether a picture's arrival can move the page (Picture.moves).
 static bool picture_moves_page(const Page *p, int32_t pic)
 {
-    const os64_page_t *model = page_model(p);
-    for (int32_t i = 0; i < os64_page_nimages(model); i++) {
-        if (p->pic_of[i] != pic)
-            continue;
-        const os64_html_node_t *node = os64_page_image(model, i)->node;
-        const os64_html_attr_t *w = os64_html_attr(node, "width");
-        const os64_html_attr_t *h = os64_html_attr(node, "height");
-        if (w == NULL || h == NULL || h->value == NULL || has_percent(h->value))
-            return true;
-    }
-    return false;
+    return p->pics[pic].moves;
 }
 
 static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product)
