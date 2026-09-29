@@ -698,6 +698,7 @@ static void relayout(bool again)
     // The attempt consumes the moves whether or not it fits: kept, they
     // would retry a layout that just failed at every event batch.
     g.pictures_moved = false;
+    g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     if (fresh == NULL) {
         status_rest("Out of memory laying the page out; this is the last layout that fit.");
         return;
@@ -791,6 +792,7 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     os64_memset(fresh, 0, sizeof(*fresh));
     g.page_serial++;
     g.pictures_moved = false;
+    g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     g.laid_at = t1;
     pictures_start(&g.page);
     forms_build();
@@ -2513,6 +2515,7 @@ int main(int argc, char **argv)
     g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET, g.win, BELL_WORK);
     g.settle_due = YONDER_NEVER;
     g.ticker = yonder_ticker_start(g.win, BELL_TICK);
+    window_seen();                      // a window born covered learns it now, not at a nudge
     if (g.pool == NULL)
         status_rest("No background workers; pages from the network cannot be fetched.");
     buttons_follow();
