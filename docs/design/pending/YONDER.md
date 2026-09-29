@@ -340,11 +340,13 @@ cookies.
 let go with it. They are children of the window's root, after the window's
 own widgets, so a page's widgets leave together: libui has no call that
 removes a widget, so the list is cut back to the window's own after
-interaction is cancelled (focus, hover and a press grab must not outlive
-the widget they point at) and each widget's retained text runs are
-released the way libui's own teardown releases them (the class's
-`destroy`, then `run` and `run_staged`) — a run left behind would hold the
-window's text context busy for good.
+interaction is cancelled (a hover and a press grab must not outlive the
+widget they point at, nor the focus — which goes to the page view when a
+page widget held it, and otherwise stays put, so the keys still scroll the
+page that arrived) and each widget's retained text runs are released the
+way libui's own teardown releases them (the class's `destroy`, then `run`
+and `run_staged`) — a run left behind would hold the window's text context
+busy for good.
 
 | The control | Its widget |
 |---|---|
@@ -373,10 +375,13 @@ widget). Disabled controls get disabled widgets; a readonly one, a disabled
 text field.
 
 **The values are the page model's.** A checkbox, radio or list writes its
-change to libpage at once (`os64_page_set_checked`, `os64_page_set_chosen`).
-A text field has no change callback, so every text field's contents are
-written to libpage (`os64_page_set_text`) before anything is sent — the
-model is what a submission reads.
+change to libpage at once (`os64_page_set_checked`,
+`os64_page_set_chosen`). A text field has no change callback, so every
+text field's contents are written to libpage (`os64_page_set_text`) before
+anything is sent — the model is what a submission reads. Until then the
+FIELD holds the newer value, so a tick or a choice rewrites only ticks and
+lists from the model; the text fields are rewritten only when the model is
+the truth, as the page arrives and at a reset.
 
 **Sending.** A button that submits activates its control
 (`OS64_PAGE_ACTIVATE_CONTROL`); Enter in a text field is the standard's
