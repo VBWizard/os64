@@ -1851,7 +1851,7 @@ static void tcp_tomb_remove_locked(tcp_conn_t* c)
 // each move ticks heap_moves in the same critical section. The tripwire
 // is the lock word itself: a caller that does not hold it is the next
 // uncounted edge, and it panics by name instead of waiting for a review
-// to find it. (The allocator never returns NULL — exhaustion panics —
+// to find it. (Ordinary kmalloc never returns NULL — exhaustion panics —
 // so there is no failure path to handle.)
 static void* tcp_heap_alloc_locked(size_t bytes)
 {

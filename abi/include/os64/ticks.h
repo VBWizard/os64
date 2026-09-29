@@ -23,6 +23,15 @@
 //     uptime seconds   = ticks / per_second
 //     ms per tick      = 1000 / per_second     (the honest floor of sleep())
 //     CPU%% of a thread = its ticks-delta / this ticks-delta, two samples apart
+//
+// THE SAME STOPWATCH HAS A FINER FACE: micros() (SYSCALL_MICROS, 59) returns
+// microseconds since boot as a bare number, read from the CPU's cycle
+// counter. `ticks` counts timer interrupts the kernel received, and under
+// load it LOSES some (a syscall's interrupts-off window can outlast a tick
+// period; DEBTS § wall-clock hardening); micros reads a counter and loses
+// none. The two drift apart by exactly the lost ticks. Measure an INTERVAL
+// with micros; divide two tick deltas for a CPU%, because both sides of
+// that ratio lose the same ticks and the error cancels.
 typedef struct {
 	uint64_t ticks;        // scheduler ticks since boot — monotonic, never jumps
 	uint32_t per_second;   // the ACTIVE tick rate (TICKS_PER_SECOND; 100 today)

@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "os64/file.h"
+
 // handle.h — the per-task handle table.
 //
 // THE CONTRACT (and why it never has to change again):
@@ -19,7 +21,11 @@
 // ONE handle type for everything (files, pipes, later windows) — a handle is a
 // tagged reference to a kernel object, and read/write dispatch on the tag.
 
-#define TASK_MAX_HANDLES 16
+// Room for a program that works in parallel: a work pool's pipes and
+// threads, and then a socket per fetch in flight, is well past sixteen
+// before much has been fetched. A slot costs 16 bytes of task_t. The size
+// is the ABI's, because userland derives limits from it.
+#define TASK_MAX_HANDLES OS64_TASK_HANDLES
 
 typedef enum handle_type
 {

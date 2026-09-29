@@ -1,6 +1,7 @@
 #ifndef TTY_H
 #define TTY_H
 
+#include "os64/pty.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -20,8 +21,9 @@
 // window or a serial line will be just another sink bound to the same object.
 //
 // THE DESIGN (os32's terminfo_t screenBuffer, grown up):
-//   - Every tty owns a CHARACTER-CELL GRID — a ring of lines holding
-//     TTY_SCROLLBACK_SCREENS screens' worth of text. The grid is the TRUTH.
+//   - GRID terminals own a character-cell ring. VTs and unconfigured PTYs
+//     retain TTY_SCROLLBACK_SCREENS screens; configured PTYs retain a fixed
+//     number of extra rows. STREAM PTYs carry output bytes instead.
 //     The glass (framebuffer) is a PROJECTION of the focused tty's grid.
 //   - Writes land in the grid ALWAYS, and paint the glass ONLY when this tty
 //     is focused. Switching terminals is therefore a repaint-from-state —
@@ -76,6 +78,11 @@ typedef struct tty
 	uint32_t total_lines;              // GRID ring height; zero for STREAM
 	uint32_t screen_top;               // ring index of live row 0
 	uint32_t hist_lines;               // valid history lines above screen_top
+	uint64_t live_line, view_epoch;    // GRID PTY logical row identity / geometry epoch
+	uint32_t history_limit;
+	bool history_replacing;            // replacement owns this ring's quota credit
+	bool history_configured;           // false retains legacy rows*3 retention
+	size_t history_bytes;                 // charged retained rows; excludes live grid
 	uint32_t view_offset;              // >0 = viewing history, this many lines up
 	uint32_t cur_row, cur_col;         // cursor, relative to screen_top
 	// Where SCP put the cursor away, for RCP to take it back out. POSITION
@@ -319,7 +326,8 @@ extern volatile bool kTTYDirect;
 // ── The pty family (PTY.md; mechanism here, the syscall skin in syscall.c) ──
 // Create a registered slave with input and geometry. GRID owns a cell ring;
 // STREAM owns an output pipe and has no cells. Returns NULL for an invalid
-// geometry or mode. The allocator panics on exhaustion.
+// geometry/mode or refused slave/cell allocation. STREAM pipe allocation
+// retains the ordinary kernel allocation contract.
 tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode);
 
 // Resize geometry without touching the glass. STREAM updates dimensions;
@@ -327,8 +335,15 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows, uint8_t mode);
 // cursor and returns to the live view. Shrinking below the cursor rolls the
 // top rows into history so the current line stays visible.
 // Returns 1 for a change (generation bumped), 0 for unchanged dimensions,
-// or -1 for invalid geometry (no mutation). Caller must keep t alive.
+// or -1 for invalid geometry, HISTORY_BUDGET/NO_MEMORY for allocation
+// refusal, or BUSY after concurrent reconfiguration (OS64_PTY_ERR_*).
+// A refused call makes no mutation.
+// Caller must keep t alive. Configured PTY retention is independent of rows.
 int tty_resize(tty_t *t, uint32_t cols, uint32_t rows);
+int tty_pty_history(tty_t *t, uint32_t lines);
+// Caller holds t->lock and a lifetime reference; GRID only.
+uint32_t tty_pty_view_locked(tty_t *t, os64_pty_viewport_t *view,
+    os64_pty_cell_t *cells, uint32_t max_cells, uint64_t first, uint64_t epoch);
 
 // Re-shape a GRID terminal and KEEP ITS TEXT — the carrier for a console font
 // change, where nobody repaints (CONSOLE_FONTS.md § The contents survive).
