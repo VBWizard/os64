@@ -255,9 +255,19 @@ struct FBox {
     // out before it did (LAYOUT.md § Proof, the allocation sweep).
     bool unfinished;
     int64_t x, y, w, h;             // the border box
+    // A table row: the baseline its layout gave it (the one its baseline
+    // cells share, else its first cell's, else its bottom), absolute, once
+    // it is laid out.
+    bool has_baseline;
+    int64_t baseline;
     int64_t border[4], padding[4];  // used widths, top right bottom left
     FLine *lines, *last_line;       // an inline formatting context's lines
     FFrag *marker_frag;             // an outside marker, placed
+    // The box's min-content and max-content border-box widths, found once
+    // per layout and kept: a nested table asks for its cells' widths on
+    // every level above it, and without the memo that is exponential.
+    bool intrinsic_known;
+    int64_t intrinsic_min, intrinsic_max;
 };
 
 typedef struct {
@@ -336,8 +346,14 @@ typedef struct {
     os64_text_run_t **runs;
     size_t nruns, cap_runs;
     int64_t width, height;          // the page's, 26.6
-    // The text engine or the allocator refused partway: what is placed is
-    // real, and nothing after the refusal is.
+    // How many times an inline formatting context was measured: the cost
+    // the harness holds to a linear bound (LAYOUT.md § Bounds).
+    uint64_t measures;
+    // The most table working memory held at once, which shares the arena's
+    // budget: what the harness holds to it.
+    size_t scratch_peak;
+    // The text engine, the allocator or the budget refused partway: what is
+    // placed is real, and nothing after the refusal is.
     bool incomplete;
 } FLayout;
 

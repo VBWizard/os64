@@ -1052,7 +1052,9 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
         if (attr_is(n, "align", "bottom"))
             s->caption_side = FLOW_CAPTION_BOTTOM;
         break;
-    case OS64_HTML_TAG_COL:
+    // A column group's width is its columns' when they give none (and a
+    // group with no `col` in it is its `span` of columns).
+    case OS64_HTML_TAG_COL: case OS64_HTML_TAG_COLGROUP:
         map_dimension(n, "width", false, &sp->width);
         break;
     default:

@@ -235,7 +235,9 @@ typedef struct {
     uint32_t ink, link_ink, paper;  // XRGB; the dumps name these, never print them
     // What each of the two arenas a page can MULTIPLY may hold, in bytes:
     // the boxes (an inline split round a block reopens every inline open
-    // there) and the lines laid out from them. 0 is FLOW_ARENA_DEFAULT. The
+    // there) and the lines laid out from them, whose budget a table's
+    // working memory shares (nested tables hold theirs at once, and
+    // columns can be declared by the thousand). 0 is FLOW_ARENA_DEFAULT. The
     // budget is the caller's, as libhtml's max_arena_bytes is; a layout that
     // reaches it stops and says `incomplete`, and what it holds is real.
     size_t max_arena_bytes;
