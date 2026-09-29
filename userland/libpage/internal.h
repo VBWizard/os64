@@ -92,6 +92,8 @@ struct os64_page {
     int32_t nimages, imagecap;
     os64_page_background_t *backgrounds;
     int32_t nbackgrounds, backgroundcap;
+    os64_page_sheet_t *sheets;
+    int32_t nsheets, sheetcap;
 
     PInitial *initial;             // per control, captured after group normalization
     PEdit *edits;
