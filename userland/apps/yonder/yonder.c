@@ -251,6 +251,10 @@ typedef struct {
     garb_parsed_t parsed;
     bool ready;                     // parsed: it is in the cascade
     bool waiting;                   // its job is out, as `id`
+    // The first paint waits for it: its media holds on this glass now, or
+    // it is an import of a sheet that does. One that does not is fetched
+    // all the same, and laid in when it lands.
+    bool holds;
     os64_work_id_t id;
     const char *media;              // a sheet the page names: its element's; NULL otherwise
     int32_t importer, import_index; // -1 for a sheet the page names; else its @import
@@ -272,6 +276,8 @@ typedef struct {
     // The page's sheets, and their cascade at the size the tree was laid
     // out at; it is judged again when the size or the sheets change. The
     // tree points into both. `serial` names the page to a sheet's job.
+    // `sheets_waiting` counts the sheets out that the first paint waits for
+    // (Sheet.holds), not every sheet out.
     Sheet *sheets;
     int32_t nsheets, sheets_waiting, sheets_ready;
     bool sheets_changed;
@@ -367,9 +373,11 @@ static bool page_from_text(Page *p)
 // An entry of the cascade's input for sheet `e` and, before it, for the
 // ready sheets its @imports brought, each naming it as `parent`
 // (garb/cascade.h). Its index, or -1 when it is not ready.
-static int32_t sheet_emit(const Page *p, int32_t e, garb_sheet_in_t *in, int32_t *n)
+// The cascade writes into each sheet's arena as it reads a rule's block
+// (garb_rules_of), so the page is not const here.
+static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *n)
 {
-    const Sheet *sh = &p->sheets[e];
+    Sheet *sh = &p->sheets[e];
     if (!sh->ready)
         return -1;
     int32_t kids[SHEET_IMPORTS_MAX], nkids = 0;
@@ -380,7 +388,7 @@ static int32_t sheet_emit(const Page *p, int32_t e, garb_sheet_in_t *in, int32_t
     }
     int32_t at = (*n)++;
     in[at] = (garb_sheet_in_t){
-        .sheet = (garb_parsed_t *)&sh->parsed,
+        .sheet = &sh->parsed,
         .media = sh->media,
         .via = sh->importer >= 0 ? &p->sheets[sh->importer].imports[sh->import_index] : NULL,
     };
@@ -1389,6 +1397,13 @@ static Sheet *sheet_new(Page *p, const char *media, int32_t importer, int32_t im
     sh->media = media;
     sh->importer = importer;
     sh->import_index = import_index;
+    if (importer >= 0) {
+        sh->holds = p->sheets[importer].holds;
+    } else {
+        garb_env_t view = {g.view.bounds.w > 0 ? g.view.bounds.w : 1,
+                           g.view.bounds.h > 0 ? g.view.bounds.h : 1};
+        sh->holds = media == NULL || garb_media_text_matches(media, view);
+    }
     return sh;
 }
 
@@ -1412,6 +1427,8 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
     os64_strcopy(job->url, sizeof(job->url), url);
     if (doc->charset != NULL)
         os64_strcopy(job->environment, sizeof(job->environment), doc->charset);
+    // Judged on the address asked for; HTML reads the response's, so a
+    // same-origin sheet that redirects elsewhere is read whatever its type.
     job->any_type = doc->quirks == OS64_HTML_QUIRKS && same_origin(url, p->way.url);
     job->hooks.jar = g.way.jar;
     os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
@@ -1422,7 +1439,8 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
         return;
     }
     sh->waiting = true;
-    p->sheets_waiting++;
+    if (sh->holds)
+        p->sheets_waiting++;
 }
 
 // A sheet is ready: it joins the cascade, and its @imports are sent for,
@@ -1540,7 +1558,8 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
         return;
     sh->waiting = false;
     sh->id = 0;
-    p->sheets_waiting--;
+    if (sh->holds)
+        p->sheets_waiting--;
     if (got != NULL && got->ok) {
         sh->parsed = got->parsed;               // moved: the release frees nothing
         os64_memset(&got->parsed, 0, sizeof(got->parsed));

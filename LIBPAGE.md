@@ -192,8 +192,10 @@ refuses such bytes, rightly, for an address a PERSON types — the page's
 rule lives here. So does the reading of `file:///path`: its EMPTY host is
 url.h's "no host", but the URL Standard reads it as this machine, so a
 page read from disk resolves its references beside it and they keep the
-empty host. `os64_page_url_absolute` applies the same rule to an address a
-page's resource names in turn — a style sheet's `@import`.
+empty host. `os64_page_url_absolute` applies the file-host rule to an
+address a page's resource names in turn — a style sheet's `@import` — but
+not the encoding rule above it: an `@import` of a name past ASCII is
+refused where a link to it is encoded and followed.
 
 **B. Form owner** (§4.10.17.3). One door: `page_form_owner(page, control)`,
 settled ONCE for every control after the walk and before anything asks, so

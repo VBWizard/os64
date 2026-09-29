@@ -8,20 +8,23 @@
 #define SHEET_ACCEPT "text/css,*/*;q=0.1"
 
 // The body, whole, up to libgarb's cap. NULL on no memory, when the fetch
-// did not deliver all of it, or when there is more than the cap.
+// did not deliver all of it, or when there is more than the cap. The buffer
+// may hold one byte past the cap, so a body of exactly the cap is read to
+// its end and kept, and one byte more is found and refused.
 static uint8_t *read_all(os64_fetch_t *f, size_t *len)
 {
+    const size_t limit = GARB_SHEET_MAX + 1;
     size_t at = 0, size = 16u * 1024u;
     uint8_t *buf = os64_malloc(size);
     if (buf == NULL)
         return NULL;
     for (;;) {
         if (at == size) {
-            if (size >= GARB_SHEET_MAX) {
+            if (size >= limit) {
                 os64_free(buf);
                 return NULL;
             }
-            size_t want = size * 2 > GARB_SHEET_MAX ? GARB_SHEET_MAX : size * 2;
+            size_t want = size * 2 > limit ? limit : size * 2;
             uint8_t *grown = os64_realloc(buf, want);
             if (grown == NULL) {
                 os64_free(buf);
@@ -35,7 +38,7 @@ static uint8_t *read_all(os64_fetch_t *f, size_t *len)
             break;
         at += (size_t)n;
     }
-    if (os64_fetch_status(f) != OS64_FETCH_OK) {
+    if (os64_fetch_status(f) != OS64_FETCH_OK || at > GARB_SHEET_MAX) {
         os64_free(buf);
         return NULL;
     }
