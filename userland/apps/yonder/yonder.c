@@ -373,7 +373,8 @@ static struct {
     // Which page is on screen, so a picture finished for another is let go.
     uint64_t page_serial;
     // A picture arrived whose size may move the page, since the page was
-    // last laid out (pictures_settle); cleared by any layout that succeeds.
+    // last laid out (pictures_settle); cleared by any layout, whether or not
+    // it fit.
     bool pictures_moved;
     // The last layout: how long it took, for the status line and for
     // pictures_settle, and when it finished.
@@ -554,6 +555,9 @@ static void relayout(bool again)
     os64_ticks(&t0);
     flow_tree_t *fresh = layout_tree(&g.page, width);
     os64_ticks(&t1);
+    // The attempt consumes the moves whether or not it fits: kept, they
+    // would retry a layout that just failed at every event batch.
+    g.pictures_moved = false;
     if (fresh == NULL) {
         status_rest("Out of memory laying the page out; this is the last layout that fit.");
         return;
@@ -561,7 +565,6 @@ static void relayout(bool again)
     flow_free(g.page.tree);
     g.page.tree = fresh;
     g.page.laid_width = width;
-    g.pictures_moved = false;
     g.laid_at = t1;
     if (anchor != NULL) {
         const flow_box_t *b = flow_box_for(g.page.tree, anchor);
