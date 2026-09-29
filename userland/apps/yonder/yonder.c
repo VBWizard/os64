@@ -279,8 +279,10 @@ static void relayout(bool keep_place)
 // that declares none in a <meta> is read as windows-1252 by the standard's
 // default. Bytes that are valid UTF-8 and not plain ASCII are almost never
 // meant as windows-1252, so they are read as what they are — the file
-// detector's answer, not a rule the standard makes, and a <meta> can only
-// lose to it when the bytes already contradict the <meta>.
+// detector's answer, not a rule the standard makes. It is handed to
+// libhtml as the transport's label, which outranks the page: when it fires,
+// the page's <meta> is not read at all. A page that declares
+// windows-1252 and is UTF-8 is the case it exists for.
 static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len)
 {
     bool wide = false, valid = true;

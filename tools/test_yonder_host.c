@@ -294,7 +294,29 @@ static void cost_cases(void)
         "<!doctype html><hr size=1000000 noshade>",
         big,
     };
+    // A line at the foot of a page as tall as an int32_t says: 2147
+    // pictures a million pixels tall (each line 1000006 with its strut) and
+    // one of 470741 put the text's top at INT32_MAX - 8, so its box meets
+    // the view while its baseline is held at INT32_MAX. A decoration's
+    // offset from that baseline must not wrap.
+    size_t tall_cap = 2148 * 48 + 64, tall_at = 0;
+    char *tall = malloc(tall_cap);
+    tall_at += (size_t)snprintf(tall, tall_cap, "<!doctype html>");
+    for (int i = 0; i < 2147; i++)
+        tall_at += (size_t)snprintf(tall + tall_at, tall_cap - tall_at,
+                                    "<img src=known.png height=1000000><br>");
+    snprintf(tall + tall_at, tall_cap - tall_at,
+             "<img src=known.png height=470741><br><u>x</u><s>y</s>");
+    bool tall_escaped = false;
     signal(SIGALRM, paint_hung);
+    alarm(60);
+    char *foot = paint_of(tall, strlen(tall), 800, (os64_gui_rect_t){0, INT32_MAX - 600, 800, 600},
+                          &tall_escaped);
+    alarm(0);
+    expect("decorations at the foot of a page past int32_t paint without wrapping",
+           foot != NULL && !tall_escaped, NULL);
+    free(foot);
+    free(tall);
     for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
         bool escaped = false;
         alarm(60);

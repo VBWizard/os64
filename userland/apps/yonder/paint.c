@@ -21,11 +21,6 @@ static int32_t px(flow_unit_t u)
     return (u + FLOW_UNITS_PER_PX / 2) / FLOW_UNITS_PER_PX;
 }
 
-static int32_t max32(int32_t a, int32_t b)
-{
-    return a > b ? a : b;
-}
-
 static int64_t min64(int64_t a, int64_t b)
 {
     return a < b ? a : b;
@@ -185,12 +180,13 @@ static void decorations(const Painter *p, const flow_box_t *b)
 {
     if (b->decoration == 0)
         return;
-    int32_t size = px(b->style->font_size);
-    int32_t thick = max32(1, size / 16);
+    int64_t size = px(b->style->font_size);
+    int64_t thick = max64(1, size / 16);
     if (b->decoration & FLOW_DECORATION_UNDERLINE)
-        fill(p, b->rect.x, b->baseline + thick, b->rect.w, thick, b->underline_color);
+        fill(p, b->rect.x, (int64_t)b->baseline + thick, b->rect.w, thick, b->underline_color);
     if (b->decoration & FLOW_DECORATION_LINE_THROUGH)
-        fill(p, b->rect.x, b->baseline - size * 3 / 10, b->rect.w, thick, b->line_through_color);
+        fill(p, b->rect.x, (int64_t)b->baseline - size * 3 / 10, b->rect.w, thick,
+             b->line_through_color);
 }
 
 // Disc, circle and square are drawn as shapes, the way browsers draw them,
