@@ -693,8 +693,8 @@ its contract; this is what it offers and why.
   arrival cannot move it: the rule `replaced_size` sizes by, written once,
   for a face deciding whether a picture's arrival needs a new layout. Asked
   of the element's box, never of its attributes: `width="auto"` is written
-  and fixes nothing. The host suite holds it to the layout for every
-  spelling of the two sides.
+  and fixes nothing. The host suite holds it to the layout for 42
+  spellings of the two sides (`fixed_cases`).
 - **`flow_height`, `flow_width`** — the width is the root's overflow
   width: at least the width laid out at, more where something would not
   fit. **`flow_dump`** is the dump above, snprintf-shaped.

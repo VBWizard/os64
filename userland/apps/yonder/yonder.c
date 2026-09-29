@@ -64,8 +64,11 @@
 #define PICTURES_AT_ONCE (POOL_WORKERS - 1)
 
 // A layout at most this slow is repeated for every batch of pictures that
-// moves the page; a slower one waits for the page's last picture.
+// moves the page. A slower one waits for the page's last picture, or until
+// its last layout is PICTURES_STALE_MS old and twice its own cost — at
+// most a third of the time spent laying out while pictures trickle in.
 #define PICTURES_CHEAP_LAYOUT_MS 100
+#define PICTURES_STALE_MS 2000
 
 // The window's doorbell bits: the pool's completions, and a navigation's
 // mailbox (progress and questions).
@@ -369,10 +372,13 @@ static struct {
     uint64_t generation;
     // Which page is on screen, so a picture finished for another is let go.
     uint64_t page_serial;
-    // A picture arrived whose size may move the page (pictures_settle).
+    // A picture arrived whose size may move the page, since the page was
+    // last laid out (pictures_settle); cleared by any layout that succeeds.
     bool pictures_moved;
-    // The last layout's time: for the status line, and for pictures_settle.
+    // The last layout: how long it took, for the status line and for
+    // pictures_settle, and when it finished.
     uint64_t laid_ms;
+    os64_ticks_t laid_at;
 } g;   // zeroed: the session's histories are large, and .data would carry them in the file
 
 // A sentence in the house's status-row voice starts with a space; a line
@@ -555,6 +561,8 @@ static void relayout(bool again)
     flow_free(g.page.tree);
     g.page.tree = fresh;
     g.page.laid_width = width;
+    g.pictures_moved = false;
+    g.laid_at = t1;
     if (anchor != NULL) {
         const flow_box_t *b = flow_box_for(g.page.tree, anchor);
         if (b != NULL)
@@ -634,6 +642,8 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
     g.page_serial++;
+    g.pictures_moved = false;
+    g.laid_at = t1;
     pictures_start(&g.page);
     g.hover_link = g.pressed_link = -1;
     if (kind == NAV_BACK || kind == NAV_FORWARD)
@@ -1058,17 +1068,24 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
 }
 
 // After a drained batch: lay the page out again if pictures moved it —
-// once per batch when laying it out is cheap, otherwise when its last
-// picture is in, so a slow page of forty pictures is not laid out forty
-// times. Either way the wait ends at an arrival, which rings the doorbell:
-// nothing deferred here waits on a clock nobody is keeping.
+// once per batch when laying it out is cheap, so a slow page of forty
+// pictures is not laid out forty times; otherwise when its last picture is
+// in, or at a batch that finds the last layout stale. The clock is READ at
+// a batch, never waited on: a slow page whose pictures stop arriving
+// settles at the first event after its layout goes stale, or when the last
+// picture comes or gives up (YONDER.md § Booked: the deadline that needs
+// neither).
 static void pictures_settle(void)
 {
     if (!g.pictures_moved)
         return;
-    if (g.page.waiting > 0 && g.laid_ms > PICTURES_CHEAP_LAYOUT_MS)
-        return;
-    g.pictures_moved = false;
+    if (g.page.waiting > 0 && g.laid_ms > PICTURES_CHEAP_LAYOUT_MS) {
+        os64_ticks_t now;
+        os64_ticks(&now);
+        uint64_t since = ms_between(&g.laid_at, &now);
+        if (since < PICTURES_STALE_MS || since < 2 * g.laid_ms)
+            return;
+    }
     relayout(true);
 }
 

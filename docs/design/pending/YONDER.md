@@ -362,9 +362,9 @@ the order it was given, so a page's forty pictures handed over at once
 would put a person's next click forty-first in line — and past the pool's
 table, the rest refused for good. So yonder keeps the page's pictures
 itself and hands the pool the next as each comes back, never more than
-one fewer than the pool has workers: a navigation always finds a worker
-free, once the pictures of a page left behind have seen they were
-cancelled. Leaving a page cancels the few in the pool and forgets the
+one fewer than the pool has workers: a navigation finds a worker free
+once whatever was cancelled before it — a page left behind's pictures, a
+navigation it replaced — has seen its cancel and let the worker go. Leaving a page cancels the few in the pool and forgets the
 rest.
 
 **The size is the layout's question, the pixels the painter's.** libflow
@@ -376,11 +376,17 @@ rule, `flow_replaced_fixed`, asked of the element's box, since a
 `width="auto"` is written but fixes nothing — the page is laid out AGAIN
 (keeping the reader's place, as a resize does), because its size may move
 everything below it. Relayouts are coalesced: at most one per drained
-batch of doorbells, and on a page whose layout takes more than 100 ms,
-none until its last picture is in — an arrival rings the doorbell, so the
-page always settles at its true shape and nothing waits on a clock. A
-picture whose box is fixed needs no relayout at all; the old web wrote
-both attributes on most.
+batch of doorbells. On a page whose layout takes more than 100 ms, a batch
+lays it out again only when its last picture is in, or when the last
+layout is two seconds old and twice its own cost — so laying out takes at
+most a third of the time while pictures trickle in. That clock is READ at
+a batch, never waited on: a slow page whose pictures have stopped
+arriving stays mis-laid until the person's first event after that, or until the last
+picture arrives or gives up — and a picture from a server that trickles a
+byte at a time can take as long as the server likes, since libfetch's
+patience is 30 s of silence. The deadline that needs neither is booked
+below. A picture whose box is fixed needs no relayout at all; the old web
+wrote both attributes on most.
 
 **Drawing.** The painter's `image` verb draws the picture into its box's
 content rectangle, SCALED nearest-neighbour when the box and the picture
@@ -422,6 +428,7 @@ pictures, the next page's count untouched by the late arrivals.
 | Links on a page from disk | a relative address does not resolve against a `file:` page | Y3, where pages come from the network |
 | Serif, bold, italic | packet 04 | 04 merged |
 | POST and cookies, logging in | packet 05 | 05 merged |
+| A slow page's picture relayout, on time | the window's loop has no clock to wait on; a slow page settles at the person's first event once its layout is stale, or at its last picture (§ Y5) | Y5b's ticker: the settle deadline rides it |
 | Animated GIFs | libimage decodes sequences (GIF_ANIMATION.md); a page view that repaints on a timer is a new loop for the window | the first page whose animation is the point |
 | SVG pictures | libimage decodes raster formats; SVG is a vector language with a renderer of its own | the modern web's logos, which are mostly SVG |
 | `data:` pictures, and `background=` | a data: address needs no fetch but a decoder of its own; a background image is a fill the painter does not tile yet | a page that needs one |
