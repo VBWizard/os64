@@ -1,12 +1,10 @@
 #include "os64/os64.h"
+#include "os64/walk.h"
 
 #define RM_PATH_MAX 256
-// A task has 16 handle slots, with 0/1/2 occupied by its console handles.
-// Recursive removal holds one parent directory handle open per level. Stop
-// with our honest depth error while 12 are open, leaving the thirteenth free
-// slot as breathing room instead of failing later with a misleading opendir
-// error from an exhausted handle table.
-#define RM_MAX_DEPTH 12
+// Recursive removal holds one parent directory handle open per level: the
+// walk's depth (os64/walk.h), which leaves room in the handle table.
+#define RM_MAX_DEPTH OS64_WALK_MAX_DEPTH
 
 static bool unsafe_recursive_operand(const char *path)
 {

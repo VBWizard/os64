@@ -15,7 +15,7 @@ for n, source in enumerate(upstream+port):
     extra = ['-DFT2_BUILD_LIBRARY', '-Wno-unused-variable', '-Wno-unused-but-set-variable'] if source in upstream else []
     subprocess.run(['cc', *flags, '-fcf-protection=none', '-fno-builtin', '-fno-tree-loop-distribute-patterns', '-DOS64_FREETYPE_HOSTED', '-I'+str(ROOT/'userland/libfreetype/port'), '-I'+str(ROOT/'userland/libfreetype/upstream/include'), *extra, '-c', str(source), '-o', str(obj)], check=True)
     objects.append(str(obj))
-sources = ['tools/test_gterm_fonts_host.c', 'userland/apps/gterm/font_grid.c']
+sources = ['tools/test_gterm_fonts_host.c', 'userland/apps/gterm/font_grid.c', 'userland/apps/gterm/settings.c']
 sources += ['userland/libos64/'+name+'.c' for name in ['font_provider', 'font_adopt', 'text', 'text_cache', 'text_decode', 'text_bitmap', 'text_draw', 'str', 'draw']]
 subprocess.run(['cc', *flags, *[str(ROOT/s) for s in sources], *objects, '-o', str(out/'test_gterm')], check=True)
 result = subprocess.run([str(out/'test_gterm'), str(ROOT/'userland/libfreetype/fixtures'), str(out/'NoBoxes.ttf')], env=os.environ)

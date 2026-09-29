@@ -167,8 +167,10 @@ static const char *faces_open(void)
 // that declares none in a <meta> is read as windows-1252 by the standard's
 // default. Bytes that are valid UTF-8 and not plain ASCII are almost never
 // meant as windows-1252, so they are read as what they are — the file
-// detector's answer, not a rule the standard makes, and a <meta> can only
-// lose to it when the bytes already contradict the <meta>.
+// detector's answer, not a rule the standard makes. It is handed to
+// libhtml as the transport's label, which outranks the page: when it fires,
+// the page's <meta> is not read at all. A page that declares
+// windows-1252 and is UTF-8 is the case it exists for.
 static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len)
 {
     bool wide = false, valid = true;
@@ -433,7 +435,7 @@ static void say_laid_out(uint64_t ms)
     os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px in %lu ms%s", g.page.way.url,
                   g.page.way.note[0] ? " - " : "", g.page.way.note, g.page.laid_width,
                   (unsigned long)ms,
-                  flow_incomplete(g.page.tree) ? " - INCOMPLETE: out of memory partway" : "");
+                  flow_incomplete(g.page.tree) ? " - INCOMPLETE: the layout stopped partway" : "");
     status_rest(line);
 }
 
@@ -1293,16 +1295,27 @@ static bool bar_event(const os64_gui_event_t *ev)
     return mine;
 }
 
-// The page's <title>, whitespace collapsed, for the window's name.
+// The page's title — the first `title` element in tree order, wherever the
+// parser left it — whitespace collapsed, for the window's name.
 static void title_of(const os64_html_document_t *doc, char *out, size_t cap)
 {
     out[0] = '\0';
     const os64_html_node_t *t = NULL;
-    for (const os64_html_node_t *n = doc != NULL && doc->head != NULL ? doc->head->first_child
-                                                                        : NULL;
-         n != NULL && t == NULL; n = n->next)
-        if (n->kind == OS64_HTML_ELEMENT && n->tag == OS64_HTML_TAG_TITLE)
+    const os64_html_node_t *n = doc != NULL ? doc->document : NULL;
+    while (n != NULL && t == NULL) {
+        if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML &&
+            n->tag == OS64_HTML_TAG_TITLE) {
             t = n;
+            break;
+        }
+        if (n->first_child != NULL) {
+            n = n->first_child;
+            continue;
+        }
+        while (n != NULL && n->next == NULL)
+            n = n->parent;
+        n = n != NULL ? n->next : NULL;
+    }
     size_t at = 0;
     bool space = false;
     for (const os64_html_node_t *c = t != NULL ? t->first_child : NULL; c != NULL; c = c->next) {
@@ -1326,8 +1339,8 @@ static void title_of(const os64_html_document_t *doc, char *out, size_t cap)
 
 // "<page> - yonder" in the title's capacity, which the boundary refuses to
 // exceed rather than cutting (gui.h): a long page title is shortened with
-// "..." first. Anything past ASCII becomes '?', because the title bar is
-// drawn in the kernel's face, not the page's.
+// "..." first. A character past ASCII becomes one '?', because the title
+// bar is drawn in the kernel's face, not the page's.
 static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
 {
     static const char kTail[] = " - yonder";
@@ -1335,8 +1348,12 @@ static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
     size_t n = os64_strlen(page), at = 0;
     bool cut = n > room;
     size_t keep = cut ? room - 3 : n;
-    for (size_t i = 0; i < keep; i++)
-        out[at++] = (unsigned char)page[i] < 0x80 ? page[i] : '?';
+    for (size_t i = 0; i < keep; i++) {
+        unsigned char ch = (unsigned char)page[i];
+        if (ch >= 0x80 && (ch & 0xC0) == 0x80)
+            continue;           // the rest of a character already marked
+        out[at++] = ch < 0x80 ? (char)ch : '?';
+    }
     if (cut)
         for (int i = 0; i < 3; i++)
             out[at++] = '.';
