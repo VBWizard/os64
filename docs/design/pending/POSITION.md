@@ -7,8 +7,8 @@ Fable's review (§ Review record). This is the first slice of GARB.md's
 pile 2. The library is libflow and its rules are
 [LAYOUT.md](../completed/LAYOUT.md)'s; the properties come from libgarb
 ([GARB.md](../completed/GARB.md)); the face is yonder
-([YONDER.md](../completed/YONDER.md)). Nothing here is built until Chris
-has ruled on the questions at the end.*
+([YONDER.md](../completed/YONDER.md)). Chris ruled on all five questions
+the same day, each as recommended (§ Rulings).*
 
 ## Why this, and why now
 
@@ -154,8 +154,8 @@ absolute dropdown inside it is ordinary.
   START OF THE NEXT LINE, at the container's content edge. Among blocks, a
   box records the top of where the next in-flow block would start — below
   the previous sibling's margin; whether the following sibling's collapsed
-  margin counts is settled against Chrome on the P5 before the fixture's
-  numbers are written (Chris's question 5).
+  margin counts is settled against Chrome before the fixture's numbers are
+  written (ruling 5).
 - **Absolute.** An absolute box is laid out when its containing block is
   FINISHED — its height is part of the equation — as a block formatting
   context of its own, with § 10.3.7's and § 10.6.4's solutions against the
@@ -313,7 +313,10 @@ Each slice is reviewed with Fable before the next starts, as the stack was.
   background is painted over the page's text and whose text is on top of
   its own background.
 
-## Questions for Chris
+## Rulings
+
+Chris, 2026-09-29, each as recommended: "I really tried to find something
+to disagree with. No luck."
 
 1. **The slice order**: P1 → P2 → P3 → P4, with the paint layer in P1 so
    no slice ships a page whose text shows through its own dialog.
@@ -331,9 +334,11 @@ Each slice is reviewed with Fable before the next starts, as the stack was.
    not painted, and the `static_only` key. Recommended: after P2 a fixed
    overlay nothing can dismiss would otherwise make pages unreadable that
    today are merely awkward.
-5. **A test page viewed in Chrome on the P5** before P1's static-position
-   fixtures are written: an absolute box between two blocks whose margins
-   collapse, to settle which margin its static position sits below.
+5. **A test page viewed in Chrome** before P1's static-position fixtures
+   are written: an absolute box between two blocks whose margins collapse,
+   to settle which margin its static position sits below
+   (`tools/position_probe/static-position.html`, which prints what Chrome
+   measured; its answer is recorded here when it comes back).
 
 ## Booked, with their triggers
 
