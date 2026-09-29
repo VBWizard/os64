@@ -254,24 +254,28 @@ bool way_load(way_session_t *s, const char *url, const os64_page_request_t *requ
         }
     }
 
-    // EVERY WAY A PAGE CAN BE INCOMPLETE GETS A SENTENCE, because half a
-    // page that says so is worth reading and half a page that pretends to be
-    // whole is not.
+    // EVERY WAY THE WIRE OR THE PARSE LEFT A PAGE INCOMPLETE GETS A
+    // SENTENCE, each of them and not only the first, because half a page
+    // that says so is worth reading and half a page that pretends to be
+    // whole is not. (A model libpage could not finish costs links and boxes,
+    // which are the face's to offer, so the face says that one.)
     char trouble[WAY_SENTENCE_MAX];
+    size_t said = 0;
     trouble[0] = '\0';
     os64_fetch_status_t st = os64_fetch_status(f);
     if (why)
         *why = st;
-    if (short_of_memory)
-        os64_strcopy(trouble, sizeof(trouble),
-                     " - this machine ran out of memory partway, so the page"
-                     " stops where it does");
-    else if (st != OS64_FETCH_OK)
-        os64_snprintf(trouble, sizeof(trouble), " - %s", os64_fetch_reason(f));
-    else if (out->doc && out->doc->refusal)
-        os64_snprintf(trouble, sizeof(trouble), " - the page is bigger than this"
-                      " browser will parse (%s)",
-                      os64_html_status_name(out->doc->refusal));
+    if (short_of_memory && said < sizeof(trouble))
+        said += (size_t)os64_snprintf(trouble + said, sizeof(trouble) - said,
+                                      " - this machine ran out of memory partway, so the page"
+                                      " stops where it does");
+    if (st != OS64_FETCH_OK && said < sizeof(trouble))
+        said += (size_t)os64_snprintf(trouble + said, sizeof(trouble) - said, " - %s",
+                                      os64_fetch_reason(f));
+    if (out->doc && out->doc->refusal && said < sizeof(trouble))
+        said += (size_t)os64_snprintf(trouble + said, sizeof(trouble) - said,
+                                      " - the page is bigger than this browser will parse (%s)",
+                                      os64_html_status_name(out->doc->refusal));
     os64_snprintf(out->note, sizeof(out->note), "%ld%s%s%s", (long)head->status,
                   head->reason[0] ? " " : "", head->reason, trouble);
     os64_fetch_close(f);
