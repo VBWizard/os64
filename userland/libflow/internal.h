@@ -349,8 +349,11 @@ typedef struct {
     // How many times an inline formatting context was measured: the cost
     // the harness holds to a linear bound (LAYOUT.md § Bounds).
     uint64_t measures;
-    // The text engine or the allocator refused partway: what is placed is
-    // real, and nothing after the refusal is.
+    // The most table working memory held at once, which shares the arena's
+    // budget: what the harness holds to it.
+    size_t scratch_peak;
+    // The text engine, the allocator or the budget refused partway: what is
+    // placed is real, and nothing after the refusal is.
     bool incomplete;
 } FLayout;
 

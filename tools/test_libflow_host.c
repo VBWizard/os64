@@ -604,6 +604,42 @@ static void cost_cases(void)
     os64_page_free(page);
     os64_html_document_free(doc);
     free(html);
+
+    // A table's working memory is declared, not written — ten
+    // `<col span=1000>`s are ten thousand columns in a few bytes — and a
+    // cell lays the next table out while its table's columns wait, so 120
+    // tables nested that way held 56 MB of it from a 20 KB page. It shares
+    // the arena's budget: at 8 MiB the layout stops, incomplete, and never
+    // held more than the budget between them.
+    html = malloc(120 * 200 + 64);
+    at = (size_t)sprintf(html, "<!doctype html>");
+    for (int i = 0; i < 120; i++) {
+        at += (size_t)sprintf(html + at, "<table>");
+        for (int k = 0; k < 10; k++)
+            at += (size_t)sprintf(html + at, "<col span=1000>");
+        at += (size_t)sprintf(html + at, "<tr><td>");
+    }
+    sprintf(html + at, "x");
+    flow_env_t eight = kEnv;
+    eight.max_arena_bytes = (size_t)8 << 20;
+    s_cost_case = "a chain of declared columns met no budget";
+    alarm(60);
+    doc = parse(html);
+    page = os64_page_build(doc, kPage, NULL);
+    styles = f_style_build(doc, page, &eight);
+    boxes = styles != NULL ? f_boxes_build(doc, page, styles, &eight) : NULL;
+    lay = boxes != NULL ? f_layout(boxes, doc, page, &eight, 800) : NULL;
+    alarm(0);
+    expect("a chain of declared columns stops at the budget, incomplete",
+           boxes != NULL && !boxes->incomplete && lay != NULL && lay->incomplete &&
+           lay->scratch_peak <= eight.max_arena_bytes &&
+           lay->arena.reserved <= eight.max_arena_bytes, NULL);
+    f_layout_free(lay);
+    f_boxes_free(boxes);
+    f_style_free(styles);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+    free(html);
 }
 
 static void limit_cases(void)

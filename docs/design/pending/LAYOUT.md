@@ -744,7 +744,13 @@ LIBPAGE.md's rule restated for geometry:
   rows × columns. The tree has as many leaves as the columns holds reach
   and grows as they reach further, and the spans' counting sort as many
   buckets as the widest span: a table's working memory is its own
-  size, so a page of ten thousand small tables costs small tables. A
+  size, so a page of ten thousand small tables costs small tables. NESTED
+  tables hold theirs at once — a cell lays out the next table while its
+  own table's columns wait — and columns can be declared (`<col
+  span=1000>`), so 120 tables nested ten such `col`s deep held 56 MB from a
+  20 KB page: the working memory is charged to the arena budget beside
+  the lines (`max_arena_bytes`), and a chain that reaches it stops
+  `incomplete`. A
   rowspan's share of its rows' heights is summed and spread in a
   range-add, range-sum tree over the row heights (log of the rows per
   cell), and a cell's height at placement comes from its rows' tops: no
