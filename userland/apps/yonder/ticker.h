@@ -3,8 +3,9 @@
 
 // The window's clock (YONDER.md § Y5b): a thread that holds one deadline
 // and rings the window's doorbell when it passes. The window's loop waits
-// for events with no timeout, so moving pictures need somebody else to
-// wake it; the ticker does that and nothing more.
+// for events with no timeout, so moving pictures, and a slow page's
+// deferred layout, need somebody else to wake it; the ticker does that and
+// nothing more.
 
 #include <stdbool.h>
 #include <stdint.h>

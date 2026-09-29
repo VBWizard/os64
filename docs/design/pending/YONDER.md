@@ -490,14 +490,14 @@ below it. Relayouts are coalesced: at most one per drained batch of
 doorbells. On a page whose layout takes more than 100 ms, a batch lays it
 out again only when its last picture is in, or when the last layout is two
 seconds old and twice its own cost — so laying out takes at most a third
-of the time while pictures trickle in. That clock is READ at a batch,
-never waited on: a slow page whose pictures have stopped arriving stays
-mis-laid until the first event after its layout goes stale, or until the
-last picture arrives or gives up — and a picture from a server that
-trickles a byte at a time can take as long as the server likes, since
-libfetch's patience is 30 s of silence. The deadline that needs neither is
-booked below. A picture whose box is fixed needs no relayout at all; the
-old web wrote both attributes on most.
+of the time while pictures trickle in. The moment it goes stale is a
+deadline on the window's clock (§ Y5b's ticker), so the page settles on
+time with nobody at the mouse, however long its last picture takes — a
+server that trickles a byte at a time can take as long as it likes, since
+libfetch's patience is 30 s of silence. Without a ticker (its thread could
+not start) the page settles at the first event after that moment. A
+picture whose box is fixed needs no relayout at all; the old web wrote
+both attributes on most.
 
 **Drawing.** The painter's `image` verb draws the picture into its box's
 content rectangle, SCALED nearest-neighbour when the box and the picture
@@ -559,12 +559,14 @@ earliest deadline left among the ones on screen. Only those boxes, because
 the view paints only its dirty part: the kernel takes exactly the
 rectangle libui publishes, so nothing outside it is ever seen, and a
 moving bullet costs its own sixteen pixels rather than the page (a full
-repaint a frame cost a third of a core for three small GIFs). A picture scrolled away
-is not advanced (decoding frames nobody sees is the waste the frame clock
-exists to stop) and moves again when it is back; a window that is covered
-(`OS64_GUI_WINDOW_COVERED`, re-read on the COVERED/UNCOVERED nudge, since
-the flag is the truth) hands the ticker no deadline at all. A page with
-nothing moving costs a sleeping thread.
+repaint a frame cost a third of a core for three small GIFs). A picture
+scrolled away is not advanced (decoding frames nobody sees is the waste
+the frame clock exists to stop) and moves again when it is back; a window
+that is covered (`OS64_GUI_WINDOW_COVERED`, re-read on the
+COVERED/UNCOVERED nudge, since the flag is the truth) hands the ticker no
+deadline at all. A page with nothing moving costs a sleeping thread. The
+same deadline serves § Y5's relayout: the window hands the ticker the
+earlier of the next frame and the moment a slow page's layout goes stale.
 
 **The timing is gview's and the browsers'**: a frame's delay starts when
 it is shown; a delay of 0 or 10 ms is shown for 100 ms (what every browser
@@ -643,7 +645,6 @@ page failed with "out of handles or ports"; the table is 64 now
 | POST and cookies, logging in | packet 05 | 05 merged |
 | A multi-line textarea, a drop-down select, several choices in a multiple select, a file chooser | each is a widget libui does not have yet (a multi-line field sized to its box, a popup list, a multiple-selection list, a file dialog) | the first form that needs one |
 | Back and Forward to the reply to a form | the history holds addresses, so going back to a POST's reply fetches its address, which a server may answer with something else; Chrome shows a "resubmit?" page there | a page where going back to a reply matters |
-| A slow page's picture relayout, on time | the window's loop has no clock to wait on; a slow page settles at the person's first event once its layout is stale, or at its last picture (§ Y5) | Y5b's ticker: the settle deadline rides it |
 | SVG pictures | libimage decodes raster formats; SVG is a vector language with a renderer of its own | the modern web's logos, which are mostly SVG |
 | `data:` pictures, and `background=` | a data: address needs no fetch but a decoder of its own; a background image is a fill the painter does not tile yet | a page that needs one |
 | A picture cache between pages | Back and Forward refetch pictures as they refetch pages | back-and-forth on a slow link hurts |

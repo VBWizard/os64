@@ -422,6 +422,18 @@ static void scale_cases(void)
         }
     expect("tile: a clip does not move the tiles", inside_same && outside_clear, NULL);
 
+    // An area as wide as an int32_t says, starting one pixel in: its right
+    // edge is past INT32_MAX, which int32 sums wrapped to a draw of nothing.
+    uint32_t wide_tiles[25] = {0};
+    yonder_tile_picture(wide_tiles, 5, (os64_gui_rect_t){0, 0, 5, 5},
+                        (os64_gui_rect_t){1, 0, INT32_MAX, 5}, 0, 0, two, 2, 2);
+    bool wide_ok = true;
+    for (int y = 0; y < 5; y++)
+        for (int x = 0; x < 5; x++)
+            if (wide_tiles[y * 5 + x] != (x >= 1 ? tiled[y * 5 + x] : 0))
+                wide_ok = false;
+    expect("tile: an area reaching past INT32_MAX still covers the clip", wide_ok, NULL);
+
     // An origin above and left of the area (the canvas's, for a body the
     // view is scrolled into): the area starts one pixel into a tile.
     uint32_t shifted_tiles[4] = {0};

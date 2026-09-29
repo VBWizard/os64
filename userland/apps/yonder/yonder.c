@@ -416,8 +416,13 @@ static struct {
     // last laid out (pictures_settle); cleared by any layout, whether or not
     // it fit.
     bool pictures_moved;
-    yonder_ticker_t *ticker;        // moving pictures' clock; NULL, and nothing moves
+    // The window's clock, for moving pictures and a slow page's owed
+    // layout; NULL, and nothing moves and a layout waits for an event.
+    yonder_ticker_t *ticker;
     bool covered;                   // nobody can see the window: nothing moves
+    // When a slow page's deferred layout is owed (pictures_settle), in
+    // yonder_now_ms's milliseconds; YONDER_NEVER for none.
+    uint64_t settle_due;
     // The last layout: how long it took, for the status line and for
     // pictures_settle, and when it finished.
     uint64_t laid_ms;
@@ -1293,23 +1298,32 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
 // After a drained batch: lay the page out again if pictures moved it —
 // once per batch when laying it out is cheap, so a slow page of forty
 // pictures is not laid out forty times; otherwise when its last picture is
-// in, or at a batch that finds the last layout stale. The clock is READ at
-// a batch, never waited on: a slow page whose pictures stop arriving
-// settles at the first event after its layout goes stale, or when the last
-// picture comes or gives up (YONDER.md § Booked: the deadline that needs
-// neither).
+// in, or once the last layout is stale. A slow page that is waiting hands
+// the ticker the moment it goes stale (pictures_schedule), so it settles
+// on time with nobody at the mouse — or, with no ticker, at the first
+// batch after that moment.
 static void pictures_settle(void)
 {
-    if (!g.pictures_moved)
-        return;
-    if (g.page.waiting > 0 && g.laid_ms > PICTURES_CHEAP_LAYOUT_MS) {
-        os64_ticks_t now;
-        os64_ticks(&now);
-        uint64_t since = ms_between(&g.laid_at, &now);
-        if (since < PICTURES_STALE_MS || since < 2 * g.laid_ms)
-            return;
+    uint64_t due = YONDER_NEVER;
+    if (g.pictures_moved) {
+        bool now_ok = true;
+        if (g.page.waiting > 0 && g.laid_ms > PICTURES_CHEAP_LAYOUT_MS) {
+            os64_ticks_t now;
+            os64_ticks(&now);
+            uint64_t since = ms_between(&g.laid_at, &now);
+            uint64_t stale = 2 * g.laid_ms > PICTURES_STALE_MS ? 2 * g.laid_ms : PICTURES_STALE_MS;
+            if (since < stale) {
+                now_ok = false;
+                due = yonder_now_ms() + (stale - since);
+            }
+        }
+        if (now_ok)
+            relayout(true);
     }
-    relayout(true);
+    if (due != g.settle_due) {
+        g.settle_due = due;
+        pictures_schedule();
+    }
 }
 
 // ── Moving pictures ─────────────────────────────────────────────────────
@@ -1371,11 +1385,13 @@ static bool picture_on_screen(int32_t k, bool mark)
     return seen;
 }
 
-// Hands the ticker the earliest next frame among the pictures on screen,
-// or none: a covered window, or nothing moving where the reader is.
+// Hands the ticker the earliest of the next frame among the pictures on
+// screen and the moment a slow page's layout goes stale (pictures_settle),
+// or none: a covered window, or nothing moving where the reader is and no
+// layout owed.
 static void pictures_schedule(void)
 {
-    uint64_t next = YONDER_NEVER;
+    uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
     for (int32_t k = 0; !g.covered && k < g.page.npics; k++) {
         const Picture *pic = &g.page.pics[k];
         if (pic->playing && pic->due < next && picture_on_screen(k, false))
@@ -2495,6 +2511,7 @@ int main(int argc, char **argv)
     layout();
 
     g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET, g.win, BELL_WORK);
+    g.settle_due = YONDER_NEVER;
     g.ticker = yonder_ticker_start(g.win, BELL_TICK);
     if (g.pool == NULL)
         status_rest("No background workers; pages from the network cannot be fetched.");
