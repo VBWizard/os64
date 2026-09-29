@@ -93,6 +93,25 @@ static const char *const kDisplay[] = {
     "table-row-group", "table-header-group", "table-footer-group", "table-row",
     "table-column-group", "table-column", "table-cell", "table-caption", "contents",
     "flow-root", "flex", "inline-flex", "grid", "inline-grid", NULL};
+// Display values this grammar reads but no slice lays out as written yet
+// (GARB.md's pile 2): a flex or grid container is laid out as the block or
+// inline-block it is on the outside, and flow-root as a block, which keeps
+// a page's `display: inline-block; display: inline-flex` fallback pattern
+// working. Read, so the cascade keeps them; not SUPPORTED, so @supports
+// tells a page to use the fallback it wrote for exactly this.
+static const char *const kDisplayApproximated[] = {"flex", "inline-flex", "grid", "inline-grid",
+                                                   "flow-root", NULL};
+
+bool garb_set_approximated(const garb_set_t *set)
+{
+    if (set->prop != GARB_DISPLAY || set->value.kind != GARB_V_KEYWORD)
+        return false;
+    for (int k = 0; kDisplayApproximated[k] != NULL; k++)
+        if (os64_streq(set->value.keyword, kDisplayApproximated[k]))
+            return true;
+    return false;
+}
+
 static const char *const kBorderStyle[] = {"none", "hidden", "dotted", "dashed", "solid", "double",
                                            "groove", "ridge", "inset", "outset", NULL};
 static const char *const kBorderWidth[] = {"thin", "medium", "thick", NULL};
