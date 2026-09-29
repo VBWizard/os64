@@ -946,6 +946,9 @@ static int64_t gaps_before(const int64_t *gap_at, size_t gaps, int64_t x)
 
 static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw, Cursor *cur)
 {
+    // Pass 2 stopped inside this context: its last line was broken without
+    // the items that would have followed, so it is not a line to trust.
+    bool cut = ifc->unfinished;
     Segs s = {0};
     segments(l, ifc, cw, &s);
     Fonts bf;
@@ -976,6 +979,8 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         if (line == NULL)
             break;
         line->x = cx;
+        line->y = cur->y;
+        line->baseline = cur->y;
         line->w = cw;
 
         // The last segment with content, whose collapsible spaces go.
@@ -1246,6 +1251,10 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         // Pieces still open run to the line's end and carry on.
         for (size_t k = 0; k < open.n && !l->failed; k++)
             span_add(l, line, open.v[k], open_x[k], pen);
+        // A line only joins its context whole (above): one pass 3 could
+        // not finish is dropped.
+        if (l->failed)
+            break;
 
         // No-quirks: every inline box on the line holds its own font's box
         // open, empty or not, on a line that is not itself empty (in quirks
@@ -1384,6 +1393,12 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         if (height > 0 && cur->first < 0)
             cur->first = line->y;
         start = end;
+    }
+    if (cut && ifc->last_line != NULL) {
+        FLine *last = ifc->last_line;
+        last->frags = last->last_frag = NULL;
+        last->spans = last->last_span = NULL;
+        last->unfinished = true;
     }
     os64_free(s.v);
     os64_free(open.v);
@@ -1826,6 +1841,7 @@ static Intr intrinsic(L *l, FBox *b)
         return (Intr){b->intrinsic_min, b->intrinsic_max};
     Intr r = {0, 0};
     const flow_style_t *s = b->style;
+    b->intrinsic_computed++;
     if (b->kind == FB_TABLE) {
         r = table_intrinsic(l, b);
     } else if (b->kind == FB_REPLACED) {
@@ -2526,10 +2542,11 @@ static bool table_is_empty(const FBox *t)
 }
 
 // The table: its width and its columns', its captions, its rows and their
-// cells, placed in its containing block like any block. One whose layout
-// ran out of memory partway keeps its place, empty: its columns would come
-// from only the cells it has, so no line in it breaks where the whole
-// table's would, and none of it is real yet.
+// cells, placed in its containing block like any block. One whose build or
+// layout stopped partway (memory, the budget, the depth) keeps its place,
+// empty: its columns
+// would come from only the cells it has, so no line in it breaks where the
+// whole table's would, and none of it is real yet.
 static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw, Cursor *cur)
 {
     // A table with no rows and no captions in quirks mode is nothing at all
@@ -2547,9 +2564,16 @@ static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw
         return;
     }
     int64_t y = cur->y + max64(cur->pm, len(t->style->margin[FLOW_TOP], cbw));
-    table_body(l, styles, t, cbx, cbw, cur);
-    if (!l->failed)
-        return;
+    if (t->unfinished) {
+        if (cur->first < 0)
+            cur->first = y;
+        cur->y = y;
+        cur->pm = 0;
+    } else {
+        table_body(l, styles, t, cbx, cbw, cur);
+        if (!l->failed)
+            return;
+    }
     for (FBox *c = t->first; c != NULL; c = c->next)
         unplace(c);
     t->placed = true;
@@ -3000,7 +3024,10 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     if (boxes->root != NULL) {
         Cursor cur = {0, 0, -1};
         block(&l, boxes->styles, boxes->root, 0, w, &cur);
-        out->height = max64(cur.y + cur.pm, bottom_edge(boxes->root));
+        // A layout that stopped has no cursor worth reading: the page is as
+        // tall as what it placed.
+        out->height = l.failed ? bottom_edge(boxes->root)
+                               : max64(cur.y + cur.pm, bottom_edge(boxes->root));
         out->width = max64(w, right_edge(boxes->root));
     }
     return out;

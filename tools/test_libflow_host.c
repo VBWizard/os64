@@ -463,6 +463,22 @@ static const FFrag *find_frag(const FBox *b, const char *text)
     return NULL;
 }
 
+// The first public TEXT box whose text starts with `text`, or NULL.
+static const flow_box_t *public_text(const flow_box_t *b, const char *text)
+{
+    if (b == NULL)
+        return NULL;
+    if (b->kind == FLOW_BOX_TEXT && b->length >= strlen(text) &&
+        strncmp(b->text, text, strlen(text)) == 0)
+        return b;
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
+        const flow_box_t *found = public_text(c, text);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
 // Codex #147 round 3: each decoration is drawn in the colour of the element
 // that asked for it — the u's underline in ink, the s's line-through red.
 static void decoration_colour_cases(void)
@@ -482,6 +498,13 @@ static void decoration_colour_cases(void)
     f_layout_free(lay);
     f_boxes_free(boxes);
     f_style_free(styles);
+    // And the public box a painter reads says the same.
+    flow_tree_t *t = flow_layout(doc, page, 400, &kEnv);
+    const flow_box_t *x = t != NULL ? public_text(flow_root(t), "x") : NULL;
+    expect("the public box carries each decoration's colour",
+           x != NULL && x->underline_color == kEnv.ink && x->line_through_color == 0xFF0000,
+           NULL);
+    flow_free(t);
     os64_page_free(page);
     os64_html_document_free(doc);
 }
@@ -505,6 +528,16 @@ static void paint_cases(void)
     expect("decorations inside an inline-block are its own",
            fragment_ends("<!doctype html><u><marquee><s>m</s></marquee></u>",
                          "text \"m\"", "serif 16 line-through"), NULL);
+}
+
+static int32_t lowest_y(const flow_box_t *b)
+{
+    int32_t y = b != NULL ? b->rect.y : 0;
+    for (const flow_box_t *c = b != NULL ? b->first : NULL; c != NULL; c = c->next) {
+        int32_t k = lowest_y(c);
+        y = k < y ? k : y;
+    }
+    return y;
 }
 
 typedef struct {
@@ -652,8 +685,8 @@ static void limit_cases(void)
         char *got = layout_dump_of("<!doctype html><font size=7><ul><li><font size=1><ul><li>x"
                                    "</ul></font><li>y</ul></font>", 300);
         expect("every marker waiting on a shared first line holds it open",
-               got != NULL && strstr(got, "      block li 48 48 244 60\n"
-                                          "        marker \"\xe2\x80\xa2 \" 12 54 36 48\n") != NULL,
+               got != NULL && strstr(got, "      block li 48 48 244 60\n") != NULL &&
+                   strstr(got, "        marker \"\xe2\x80\xa2 \" 12 54 36 48\n") != NULL,
                got);
         free(got);
     }
@@ -801,6 +834,14 @@ static void limit_cases(void)
     flow_tree_t *t = flow_layout(doc, page, 200, &kEnv);
     expect("a page past INT32_MAX is held to it",
            t != NULL && !flow_incomplete(t) && flow_height(t) == INT32_MAX, NULL);
+    // And so is every box a face reads: the last picture sits on the last
+    // pixel, and nothing wraps round to a negative y.
+    const flow_box_t *last = t != NULL ? flow_image(t, flow_nimages(t) - 1) : NULL;
+    expect("a box past INT32_MAX sits on the last pixel",
+           last != NULL && flow_nimages(t) == 2200 && last->rect.y == INT32_MAX &&
+               last->rect.h == 0, NULL);
+    expect("no box of a page past INT32_MAX wraps above it",
+           t != NULL && lowest_y(flow_root(t)) >= 0, NULL);
     flow_free(t);
     os64_page_free(page);
     os64_html_document_free(doc);
@@ -823,216 +864,6 @@ static void limit_cases(void)
     os64_page_free(page);
     os64_html_document_free(doc);
     free(html);
-}
-
-// ── The relation sweep (LAYOUT.md § Proof) ─────────────────────────────
-//
-// A laid-out tree flattened in the order it is made: each box, its lines,
-// each line's fragments (an atom's content under its fragment) and spans,
-// its child boxes, and its marker last.
-typedef struct {
-    int kind;                   // 1 box, 2 line, 3 fragment, 4 span, 5 marker
-    const void *what;           // the node it stands for
-    uint32_t begin, end;
-    int64_t x, y, w, h;
-    bool unfinished;
-    int32_t parent;
-} RelItem;
-
-typedef struct {
-    RelItem *v;
-    size_t n, cap;
-} Rel;
-
-static int32_t rel_add(Rel *r, RelItem it)
-{
-    if (r->n == r->cap) {
-        r->cap = r->cap ? r->cap * 2 : 64;
-        r->v = realloc(r->v, r->cap * sizeof(*r->v));
-    }
-    r->v[r->n] = it;
-    return (int32_t)r->n++;
-}
-
-static void rel_box(Rel *r, const FBox *b, int32_t parent);
-
-static void rel_lines(Rel *r, const FBox *b, int32_t me)
-{
-    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next) {
-        int32_t li = rel_add(r, (RelItem){2, b->node, 0, 0, ln->x, ln->y, ln->w, ln->h, false, me});
-        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
-            int32_t fi = rel_add(r, (RelItem){3, fr->node, fr->begin, fr->end, fr->x, fr->y,
-                                              fr->w, fr->h, false, li});
-            if (fr->kind == FF_ATOMIC && fr->item->content != NULL)
-                rel_box(r, fr->item->content, fi);
-        }
-        for (const FSpan *sp = ln->spans; sp != NULL; sp = sp->next)
-            rel_add(r, (RelItem){4, sp->inl->node, 0, 0, sp->x0, sp->top, sp->x1 - sp->x0,
-                                 sp->bottom - sp->top, false, li});
-    }
-}
-
-static void rel_box(Rel *r, const FBox *b, int32_t parent)
-{
-    if (b == NULL || !b->placed)
-        return;
-    int32_t me = rel_add(r, (RelItem){1, b->node, 0, 0, b->x, b->y, b->w, b->h,
-                                      b->unfinished, parent});
-    rel_lines(r, b, me);
-    for (const FBox *c = b->first; c != NULL; c = c->next)
-        rel_box(r, c, me);
-    // Last, as it is made: a marker is placed after its box's content.
-    if (b->marker_frag != NULL)
-        rel_add(r, (RelItem){5, b->node, 0, 0, b->marker_frag->x, b->marker_frag->y,
-                             b->marker_frag->w, b->marker_frag->h, false, me});
-}
-
-static bool rel_under_unfinished(const Rel *r, size_t i)
-{
-    for (size_t k = i + 1; k < r->n; k++) {
-        int32_t up = r->v[k].parent;
-        while (up >= 0 && (size_t)up > i)
-            up = r->v[up].parent;
-        if (up != (int32_t)i)
-            break;
-        if (r->v[k].unfinished)
-            return true;
-    }
-    return false;
-}
-
-// Every single allocation of pass 3 fails in turn, the rest succeeding.
-// A partial tree is held to what the whole one says: (a) its pre-order is
-// a prefix of the whole's, (b) everything finished is where the whole puts
-// it, (c) the unfinished boxes are the path to the last thing it holds —
-// and the page is as tall as what it holds.
-static void layout_relation_sweep(const char *what, const char *html, int32_t width)
-{
-    os64_html_document_t *doc = parse(html);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
-    FStyles *styles = f_style_build(doc, page, &kEnv);
-    // Layout writes its geometry into the boxes, so every run gets its own,
-    // built with nothing failing.
-    FBoxes *boxes = f_boxes_build(doc, page, styles, &kEnv);
-    FLayout *whole = f_layout(boxes, doc, page, &kEnv, width);
-    Rel w = {0};
-    rel_box(&w, boxes->root, -1);
-    RelItem *wv = w.v;
-    size_t wn = w.n;
-    f_layout_free(whole);
-    f_boxes_free(boxes);
-    boxes = f_boxes_build(doc, page, styles, &kEnv);
-    size_t base_live = live;
-    allocations = 0;
-    FLayout *probe = f_layout(boxes, doc, page, &kEnv, width);
-    size_t count = allocations;
-    f_layout_free(probe);
-    f_boxes_free(boxes);
-    boxes = NULL;
-    size_t partial = 0, nulls = 0, compared = 0;
-    bool ok_a = true, ok_b = true, ok_c = true, ok_h = true, ok_d = true;
-    char detail[200] = "";
-    fail_single = true;
-    for (size_t at = 1; at <= count; at++) {
-        boxes = f_boxes_build(doc, page, styles, &kEnv);
-        base_live = live;
-        allocations = 0;
-        fail_at = at;
-        FLayout *t = f_layout(boxes, doc, page, &kEnv, width);
-        fail_at = 0;
-        if (t == NULL) {
-            nulls++;
-        } else if (t->incomplete) {
-            partial++;
-            Rel p = {0};
-            rel_box(&p, boxes->root, -1);
-            bool prefix = p.n <= wn;
-            for (size_t i = 0; prefix && i < p.n; i++)
-                prefix = p.v[i].kind == wv[i].kind && p.v[i].what == wv[i].what &&
-                         p.v[i].begin == wv[i].begin &&
-                         (p.v[i].unfinished || wv[i].unfinished || p.v[i].end == wv[i].end);
-            if (!prefix && ok_a) {
-                size_t i = 0;
-                while (i < p.n && i < wn && p.v[i].kind == wv[i].kind && p.v[i].what == wv[i].what &&
-                       p.v[i].begin == wv[i].begin &&
-                       (p.v[i].unfinished || wv[i].unfinished || p.v[i].end == wv[i].end))
-                    i++;
-                snprintf(detail, sizeof(detail),
-                         "(a) at failure %zu: item %zu of %zu (whole %zu): kind %d +%u..%u, whole "
-                         "kind %d +%u..%u", at, i, p.n, wn, i < p.n ? p.v[i].kind : -1,
-                         i < p.n ? p.v[i].begin : 0, i < p.n ? p.v[i].end : 0,
-                         i < wn ? wv[i].kind : -1, i < wn ? wv[i].begin : 0, i < wn ? wv[i].end : 0);
-            }
-            ok_a &= prefix;
-            for (size_t i = 0; prefix && i < p.n; i++) {
-                if (p.v[i].unfinished || rel_under_unfinished(&p, i))
-                    continue;
-                bool same = p.v[i].x == wv[i].x && p.v[i].y == wv[i].y &&
-                            p.v[i].w == wv[i].w && p.v[i].h == wv[i].h;
-                if (!same && ok_b)
-                    snprintf(detail, sizeof(detail), "(b) at failure %zu: item %zu kind %d",
-                             at, i, p.v[i].kind);
-                ok_b &= same;
-                compared++;
-            }
-            for (size_t i = 0; i < p.n; i++) {
-                if (!p.v[i].unfinished)
-                    continue;
-                int32_t up = (int32_t)p.n - 1;
-                while (up >= 0 && (size_t)up != i)
-                    up = p.v[up].parent;
-                if (up != (int32_t)i && ok_c)
-                    snprintf(detail, sizeof(detail), "(c) at failure %zu", at);
-                ok_c &= up == (int32_t)i;
-            }
-            int64_t bottom = 0;
-            for (size_t i = 0; i < p.n; i++)
-                if (p.v[i].kind == 1 && p.v[i].y + p.v[i].h > bottom)
-                    bottom = p.v[i].y + p.v[i].h;
-            if (t->height < bottom && ok_h)
-                snprintf(detail, sizeof(detail), "height at failure %zu", at);
-            ok_h &= t->height >= bottom;
-            // (d) and no taller or wider than what it holds: nothing that is
-            // not placed reaches the page's edges.
-            int64_t reach_y = 0, reach_x = (int64_t)width * 64;
-            for (size_t i = 0; i < p.n; i++) {
-                reach_y = p.v[i].y + p.v[i].h > reach_y ? p.v[i].y + p.v[i].h : reach_y;
-                reach_x = p.v[i].x + p.v[i].w > reach_x ? p.v[i].x + p.v[i].w : reach_x;
-            }
-            if ((t->height > reach_y || t->width > reach_x) && ok_d)
-                snprintf(detail, sizeof(detail), "(d) at failure %zu: page %lld x %lld, holds %lld x %lld",
-                         at, (long long)t->width, (long long)t->height, (long long)reach_x,
-                         (long long)reach_y);
-            ok_d &= t->height <= reach_y && t->width <= reach_x;
-            free(p.v);
-        }
-        f_layout_free(t);
-        bool leaked = live != base_live;
-        f_boxes_free(boxes);
-        boxes = NULL;
-        if (leaked) {
-            expect("relation sweep: nothing leaked", false, what);
-            break;
-        }
-    }
-    fail_single = false;
-    char name[96];
-    snprintf(name, sizeof(name), "relation sweep %s: (a) a prefix of the whole", what);
-    expect(name, ok_a, detail);
-    snprintf(name, sizeof(name), "relation sweep %s: (b) what finished is where it will be", what);
-    expect(name, ok_b, detail);
-    snprintf(name, sizeof(name), "relation sweep %s: (c) the unfinished lead to the last", what);
-    expect(name, ok_c, detail);
-    snprintf(name, sizeof(name), "relation sweep %s: as tall as what it holds", what);
-    expect(name, ok_h, detail);
-    snprintf(name, sizeof(name), "relation sweep %s: (d) nothing unplaced reaches an edge", what);
-    expect(name, ok_d, detail);
-    printf("libflow relation sweep, %s: %zu failures: %zu NULL, %zu partial trees held to "
-           "(a)(b)(c), %zu finished items compared\n", what, count, nulls, partial, compared);
-    free(wv);
-    f_style_free(styles);
-    os64_page_free(page);
-    os64_html_document_free(doc);
 }
 
 // A face at its most hostile: every picture measured at an extreme — a
@@ -1378,8 +1209,28 @@ static void layout_sweep(void)
     os64_html_document_free(doc);
 }
 
+#include "test_libflow_door.inc"
+
 int main(int argc, char **argv)
 {
+    // `--write-corpus`: regenerate tools/html_corpus/*.boxes from the engine.
+    if (argc == 2 && strcmp(argv[1], "--write-corpus") == 0) {
+        text_setup();
+        corpus_dumps(true);
+        text_teardown();
+        return 0;
+    }
+    bool full_fuzz = argc >= 2 && strcmp(argv[1], "--fuzz") == 0;
+    // `--fuzz PAGE K N`: only the full fuzz, of one corpus page, and only
+    // its Kth of N shares — the whole thing is hours in one process.
+    if (full_fuzz && argc == 5) {
+        text_setup();
+        fuzz_share(argv[2], (size_t)atoi(argv[3]), (size_t)atoi(argv[4]));
+        text_teardown();
+        printf("libflow: %d checks, %d failed%s\n", checks, failures,
+               live != 0 ? " (AND LEAKED)" : "");
+        return failures != 0 || live != 0 ? 1 : 0;
+    }
     // `--styles FILE` / `--boxes FILE`: print one page's dump, for reading.
     // `--layout FILE WIDTH`: the laid-out page.
     if (argc == 4 && strcmp(argv[1], "--layout") == 0) {
@@ -1420,12 +1271,12 @@ int main(int argc, char **argv)
     allocation_sweep();
     boxes_sweep();
     layout_sweep();
-    layout_relation_sweep("a page of every family",
-        "<!doctype html><h1>T</h1><p>one <b>two</b> three<br>four <img src=known.png>"
-        "<ul><li>a<li>b</ul><table border=1><tr><td>c1<td>c2</table><pre>x\ty</pre>"
-        "<font face=arial><p>in</p>out</font><p>last words here <a href=x>link <i>it</i></a>"
-        "<div align=justify>justified words across a line that wraps more than once</div>"
-        "<marquee>m <b>q</b></marquee><ol><li><p>para</p><li>item</ol><q>quoted</q>", 300);
+    door_cases();
+    paint_cases();
+    decoration_colour_cases();
+    limit_cases();
+    cost_cases();
+    layout_relation_sweep("a page of every family", kSweepPage, 300);
     // A tall first cell in a table the failure stops: its lines, not
     // placed, must not reach the page's edges.
     layout_relation_sweep("a tall cell in a table that stops",
@@ -1439,10 +1290,8 @@ int main(int argc, char **argv)
         expect("relation sweep: the corpus page is there", html != NULL, NULL);
         free(html);
     }
-    paint_cases();
-    decoration_colour_cases();
-    limit_cases();
-    cost_cases();
+    corpus_dumps(false);
+    fuzz_share(NULL, 0, full_fuzz ? 1 : 0);
     text_teardown();
     printf("libflow: %d checks, %d failed%s\n", checks, failures,
            live != 0 ? " (AND LEAKED)" : "");

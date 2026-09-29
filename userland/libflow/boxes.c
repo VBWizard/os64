@@ -31,7 +31,7 @@ typedef struct {
     const flow_env_t *env;
     FBoxes *out;
     int32_t depth;      // descents open, each costed as a block level (F_DEPTH_MAX)
-    bool stopped;       // memory ran out, or the page is nested past F_DEPTH_MAX
+    bool stopped;       // memory or the arena's budget ran out, or the page nests past F_DEPTH_MAX
 } B;
 
 // A list's counter: the number the next item wears.
@@ -203,6 +203,15 @@ static void ascend(B *b)
 }
 
 // ── Allocation ──────────────────────────────────────────────────────────
+
+// A box whose content the build could not finish says so, and so does
+// every box above it: they are the path to where the build stopped, and
+// layout must not present them as whole (LAYOUT.md § Proof, rule (c)).
+static void mark_cut(const B *b, FBox *box)
+{
+    if (b->stopped && box != NULL)
+        box->unfinished = true;
+}
 
 static void *alloc(B *b, size_t size)
 {
@@ -582,7 +591,10 @@ static void build_container(B *b, FBox *box, const os64_html_node_t *first,
         }
     }
     flow_range(&f, first, stop, scope);
+    // The anonymous block being filled when the build stopped is the cut too.
+    mark_cut(b, f.target);
     end_run(&f);
+    mark_cut(b, box);
 }
 
 static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
@@ -596,8 +608,10 @@ static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
     }
     if (s->style.display == FLOW_DISPLAY_TABLE) {
         FBox *table = new_box(b, f->container, FB_TABLE, el, &s->style);
-        if (table != NULL)
+        if (table != NULL) {
             table_range(b, table, el->first_child, NULL, scope);
+            mark_cut(b, table);
+        }
         return;
     }
     // A list resets the list-item counter (`ol, ul, menu`, not `dir`: the
@@ -614,7 +628,7 @@ static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
             inner.next = inner.down ? count_items(b, el) : 1;
         use = &inner;
     }
-    // The marker is made BEFORE the box, so running out of memory for it
+    // The marker is made BEFORE the box, so a build that stops making it
     // leaves no box behind that a whole build would have drawn with one.
     const char *marker = NULL;
     uint32_t marker_len = 0;
@@ -777,8 +791,10 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
                 f->anon_table = new_box(b, f->container, FB_TABLE, NULL,
                                         anon_style(b, f->container->style, FLOW_DISPLAY_TABLE));
             }
-            if (f->anon_table != NULL)
+            if (f->anon_table != NULL) {
                 table_range(b, f->anon_table, c, c->next, scope);
+                mark_cut(b, f->anon_table);
+            }
         } else if (block_level(d)) {
             block_box(f, c, s, scope);
         } else {
@@ -906,12 +922,14 @@ static void table_part(B *b, FBox *table, const os64_html_node_t *c, flow_displa
         FBox *row = new_box(b, table, FB_ROW, c, s);
         if (row != NULL)
             row_range(b, row, c->first_child, NULL, scope);
+        mark_cut(b, row);
         break;
     }
     default: {
         FBox *group = new_box(b, table, FB_ROW_GROUP, c, s);
         if (group != NULL)
             rows_range(b, group, AT_GROUP, c->first_child, NULL, scope);
+        mark_cut(b, group);
         break;
     }
     }
@@ -941,6 +959,7 @@ static void rows_range(B *b, FBox *parent, Level level, const os64_html_node_t *
             const os64_html_node_t *end = d == FLOW_DISPLAY_TABLE_CELL
                                               ? c->next : loose_end(b, level, c, stop);
             row_range(b, anon_row, c, end, scope);
+            mark_cut(b, anon_row);
             c = end;
             continue;
         }

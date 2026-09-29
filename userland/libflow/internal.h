@@ -268,15 +268,16 @@ struct FBox {
     // every level above it, and without the memo that is exponential.
     bool intrinsic_known;
     int64_t intrinsic_min, intrinsic_max;
+    uint32_t intrinsic_computed;    // how often; the fuzz asserts at most once
 };
 
 typedef struct {
     FArena arena;
     const FStyles *styles;          // what the boxes' styles came from
     FBox *root;
-    // Memory ran out partway, or the page nests past F_DEPTH_MAX: every
-    // box and item present is real, and the build stopped at the first
-    // thing it could not make.
+    // Memory or the arena's budget ran out partway, or the page nests past
+    // F_DEPTH_MAX: every box and item present is real, and the build
+    // stopped at the first thing it could not make.
     bool incomplete;
 } FBoxes;
 
@@ -316,6 +317,10 @@ struct FSpan {
 struct FLine {
     FLine *next;
     int64_t x, y, w, h, baseline;   // w: the content width it was broken to
+    // Pass 2 stopped inside this line's context, so the line was broken
+    // without the items that would have followed: it is kept, empty, where
+    // it began. (A line pass 3 could not finish never joins its context.)
+    bool unfinished;
     FFrag *frags, *last_frag;
     FSpan *spans, *last_span;
 };
@@ -362,6 +367,9 @@ typedef struct {
 FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
                   const flow_env_t *env, int32_t width);
 void f_layout_free(FLayout *layout);
-int64_t f_layout_dump(const FLayout *layout, char *out, size_t cap);
+
+// The public tree (flow.c) as text, one line per box (dump.c).
+int64_t f_tree_dump(const flow_box_t *root, int32_t width, int32_t height, bool incomplete,
+                    char *out, size_t cap);
 
 #endif

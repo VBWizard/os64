@@ -242,9 +242,10 @@ static void layout_cases(void)
         "  block body 8 16 184 20\n"
         "    block ul 8 16 184 20\n"
         "      block li 48 16 144 20\n"
-        "        marker \"\xe2\x80\xa2 \" 36 18 12 16\n"
         "        line 48 16 144 20 base 14\n"
-        "          text \"x\" 48 18 8 16 serif 16\n");
+        "          text \"x\" 48 18 8 16 serif 16\n"
+        // The marker is placed from the first line, so it comes after it.
+        "        marker \"\xe2\x80\xa2 \" 36 18 12 16\n");
 
     // The picture's bottom edge is on the baseline: 30 above it, the text's
     // 6 below it (its descent and half its leading), 36 in all.
@@ -371,9 +372,9 @@ static void layout_cases(void)
         "      block li 48 16 144 20\n"
         "        marker \"\xe2\x80\xa2 \" 36 18 12 16\n"
         "      block li 48 36 144 20\n"
-        "        marker \"\xe2\x80\xa2 \" 36 38 12 16\n"
         "        line 48 36 144 20 base 14\n"
-        "          text \"x\" 48 38 8 16 serif 16\n");
+        "          text \"x\" 48 38 8 16 serif 16\n"
+        "        marker \"\xe2\x80\xa2 \" 36 38 12 16\n");
 
     // A frame the page sized on one side keeps 300 by 150 on the other:
     // 600 x 150 and 300 x 50, each in its 2px inset border.
@@ -407,9 +408,9 @@ static void layout_cases(void)
         "  block body 8 16 184 20\n"
         "    block ul 8 16 184 20 link 0\n"
         "      block li 48 16 144 20 link 0\n"
-        "        marker \"\xe2\x80\xa2 \" 36 18 12 16 link 0\n"
         "        line 48 16 144 20 base 14\n"
-        "          text \"foo\" 48 18 20 16 serif 16 underline link 0\n");
+        "          text \"foo\" 48 18 20 16 serif 16 underline link 0\n"
+        "        marker \"\xe2\x80\xa2 \" 36 18 12 16 link 0\n");
 
     // Codex #147 round 2. Alt text collapses against the text beside it:
     // "a " already ends in a space, so " b" loses its own, and " c" keeps
@@ -577,9 +578,9 @@ static void layout_cases(void)
         "  block body 8 8 184 20\n"
         "    block ul 8 8 184 20\n"
         "      block li 48 8 144 20\n"
-        "        marker \"\xe2\x80\xa2 \" 36 10 12 16\n"
         "        line 48 8 144 20 base 14\n"
-        "          atomic img 48 8 1 1\n");
+        "          atomic img 48 8 1 1\n"
+        "        marker \"\xe2\x80\xa2 \" 36 10 12 16\n");
 
     // Codex #147 round 6. A missing picture with no alt draws nothing, and
     // is nothing to the spaces round it: "a " and " b" share one space, as

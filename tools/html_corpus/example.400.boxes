@@ -1,0 +1,16 @@
+page 400 175
+block html 0 0 400 175
+  block body 8 21 384 138
+    block div 8 21 384 138
+      block h1 8 21 384 40
+        line 8 21 384 40 base 28
+          text "Example Domain" 8 25 216 32 serif 32 bold
+      block p 8 83 384 40
+        line 8 83 384 20 base 14
+          text "This domain is for use in documentation examples without" 8 85 380 16 serif 16
+        line 8 103 384 20 base 14
+          text "needing permission. Avoid use in operations." 8 105 292 16 serif 16
+      block p 8 139 384 20
+        line 8 139 384 20 base 14
+          span a 8 141 72 16 link 0
+          text "Learn more" 8 141 72 16 serif 16 underline link 0
