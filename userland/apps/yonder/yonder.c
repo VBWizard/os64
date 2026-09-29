@@ -230,9 +230,15 @@ static const char *faces_open(void)
         os64_font_config_family_prepare(s_faces.text, &config, &s_faces.families, &error) ==
             OS64_FONT_CONFIG_OK)
         return NULL;
+    // Whatever failed — a line that will not parse, a family named twice, a
+    // face that will not open, or the file itself unreadable — is said
+    // before the fallback speaks, by the config's own name for it.
+    const char *why = os64_font_config_status_name(error.status);
     if (error.line > 0)
-        os64_printf("yonder: fonts.conf line %u names a face that will not open; using the "
-                    "shipped faces\n", (unsigned)error.line);
+        os64_printf("yonder: fonts.conf line %u could not be used (%s); using the shipped "
+                    "faces\n", (unsigned)error.line, why);
+    else
+        os64_printf("yonder: fonts.conf could not be used (%s); using the shipped faces\n", why);
     return faces_fallback() ? NULL : "no faces for the page, not even the built-in one";
 }
 

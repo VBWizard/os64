@@ -91,6 +91,9 @@ static void setup(void)
                              .backend = os64_freetype_backend_v1()};
     require(os64_text_create(&o, &s_text) == OS64_FONT_OK, "no text context");
     s_env.text = s_text;
+    // The configured families or nothing: yonder falls back to what it can
+    // open, but a fixture that dumps a layout must not quietly measure it
+    // in other faces than the ones it names.
     os64_font_config_t config;
     os64_font_config_error_t error;
     require(os64_font_config_read(&config, &error) == OS64_FONT_CONFIG_OK &&
