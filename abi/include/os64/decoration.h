@@ -9,7 +9,7 @@
  * top-titlebar typography, controls and prepared opaque finishes. Unsupported
  * fields are refused. */
 #define OS64_DECOR_MAGIC 0x31434544u
-#define OS64_DECOR_VERSION 6u
+#define OS64_DECOR_VERSION 7u
 #define OS64_DECOR_LEGACY_HEADER_BYTES 296u
 #define OS64_DECOR_BYTES_MAX (8u * 1024u * 1024u)
 #define OS64_DECOR_GLYPHS_MAX 768u
@@ -59,6 +59,7 @@ _Static_assert(sizeof(os64_decor_command_t)==24, "decoration command ABI");
 #define OS64_DECOR_MINIMIZE 2u
 #define OS64_DECOR_MAXIMIZE 3u
 #define OS64_DECOR_PIN 4u
+#define OS64_DECOR_SETTINGS 5u
 #define OS64_DECOR_SQUARE 0u
 #define OS64_DECOR_ROUND 1u
 #define OS64_DECOR_BARE 2u
@@ -88,10 +89,11 @@ typedef struct {
     /* Gradients span each color pair. Pattern strength (0..64) blends the
      * second color toward the first; Solid ignores the second color. */
     uint32_t active_face2, inactive_face2, active_border2, inactive_border2;
-    /* V6: action-minus-one order (close/minimize/maximize/pin). Zero follows
+    /* V6 adds close/minimize/maximize/pin ink; V7 appends settings ink.
+     * Action-minus-one order. Zero follows
      * title text; FFrrggbb overrides that state's symbol. Absent buttons keep
      * their choices so removal/reordering does not transfer another action's ink. */
-    os64_decor_symbol_t symbols[4];
+    os64_decor_symbol_t symbols[5];
 } os64_decor_header_t;
 
 typedef struct {
@@ -125,7 +127,7 @@ typedef struct {
     uint32_t width, height, pitch;
 } os64_decor_surface_t;
 
-_Static_assert(sizeof(os64_decor_header_t) == 328, "decoration header ABI");
+_Static_assert(sizeof(os64_decor_header_t) == 336, "decoration header ABI");
 _Static_assert(offsetof(os64_decor_header_t,symbols)==OS64_DECOR_LEGACY_HEADER_BYTES,"legacy decoration prefix");
 _Static_assert(sizeof(os64_decor_glyph_t) == 32, "decoration glyph ABI");
 _Static_assert(sizeof(os64_decor_pair_t) == 8, "decoration pair ABI");
@@ -136,6 +138,8 @@ bool os64_decor_validate(const void *bytes, size_t length, os64_decor_view_t *ou
 /* Copy a validated header into a full current recipe, inheriting old symbols.
  * Output must be distinct from the borrowed header. Asset offsets stay intact. */
 void os64_decor_header_copy(const os64_decor_header_t *,os64_decor_header_t *);
+/* Remove unsupported settings slots, including their automatic spacing. */
+void os64_decor_filter(const os64_decor_header_t *,bool settings,os64_decor_header_t *);
 os64_decor_insets_t os64_decor_insets(const os64_decor_header_t *, bool titlebar);
 bool os64_decor_layout(const os64_decor_header_t *, int32_t width, int32_t height,
     bool titlebar, os64_decor_layout_t *out);

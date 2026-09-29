@@ -50,6 +50,7 @@
 // fits the screen, using the same locked decoration snapshot as creation.
 #define OS64_GUI_CREATE_FIT_SCREEN (1ull << 33)
 #define OS64_GUI_WINDOW_TITLE_UTF8 (1u << 8) // W1 title text; legacy titles remain Latin-1
+#define OS64_GUI_WINDOW_HAS_SETTINGS (1u << 9) // opt in to the Settings titlebar action
 #define OS64_GUI_WINDOW_START_UNFOCUSED (1u << 1)   // born on top, declines focus
 #define OS64_GUI_WINDOW_PINNED           (1u << 2)   // born in the always-on-top band
 
@@ -278,6 +279,7 @@ typedef struct os64_gui_surface
 // Worker notification, coalesced by OR outside the input ring. The mask is
 // application-defined; drain the shared work record when this arrives.
 #define OS64_GUI_EVENT_DOORBELL         14
+#define OS64_GUI_EVENT_SETTINGS         15 // app opens/focuses its settings window
 _Static_assert(OS64_GUI_EVENT_MOUSE_WHEEL == 13, "wheel event ABI");
 
 // Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
@@ -442,6 +444,10 @@ static inline int64_t os64_gui_window_get_state(int64_t handle,
 // and restore honor these content limits even if the resulting frame extends
 // beyond the screen. Returns 0 or a GUI error;
 // only the owning task can change a window's limits.
+// Restore and focus an owned ordinary window, within its stacking band.
+static inline int64_t os64_gui_window_focus(int64_t handle)
+{ return (int64_t)os64_syscall1(SYSCALL_GUI_WINDOW_FOCUS, (uint64_t)handle); }
+
 static inline int64_t os64_gui_window_set_min_size(int64_t handle,
                                                    uint32_t width, uint32_t height)
 {

@@ -168,17 +168,8 @@ static void meet_axis(int32_t *at, int32_t *len, int32_t other_at, int32_t other
     *len = (int32_t)(a1 > a0 ? a1 - a0 : 0);
 }
 
-// Which axes a box clips its content on. `hidden` and `clip` do; `scroll`
-// and `auto` are drawn unclipped, because yonder does not yet scroll a
-// box and a clipped one would hide what it holds past its edge with no way
-// to reach it (GARB.md § Booked). The root's overflow, or the body's when
-// the root's is visible, is the viewport's (CSS Overflow 3 § 3.3), and
-// clips neither.
-static bool clips_axis(flow_overflow_t o)
-{
-    return o == FLOW_OVERFLOW_HIDDEN || o == FLOW_OVERFLOW_CLIP;
-}
-
+// The root's overflow, or the body's when the root's is visible, is the
+// viewport's (CSS Overflow 3 § 3.3), and clips neither axis.
 static bool viewport_overflow(const FBox *src)
 {
     if (src->parent == NULL)
@@ -193,7 +184,7 @@ static bool viewport_overflow(const FBox *src)
 static bool clips_own(const FBox *src, bool x_axis)
 {
     return src->node != NULL && !viewport_overflow(src) &&
-           clips_axis(x_axis ? src->style->overflow_x : src->style->overflow_y);
+           f_overflow_clips(x_axis ? src->style->overflow_x : src->style->overflow_y);
 }
 
 // The clip a box hands its content: its own, met with its padding box on
@@ -353,6 +344,10 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     flow_tree_t *tree = os64_calloc(1, sizeof(*tree));
     if (tree == NULL)
         return NULL;
+    // The public boxes mirror what pass 3 placed, one for each box and
+    // fragment, so the budgeted arenas already bound them: no cap of their
+    // own, which would turn a page the budget cut short into no page.
+    tree->arena.cap = SIZE_MAX;
     tree->styles = f_style_build(doc, model, env);
     tree->boxes = tree->styles != NULL ? f_boxes_build(doc, model, tree->styles, env) : NULL;
     tree->layout = tree->boxes != NULL ? f_layout(tree->boxes, doc, model, env, width) : NULL;

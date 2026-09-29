@@ -614,11 +614,20 @@ static bool rgb_fn(const garb_value_t *f, garb_color_t *out)
     return true;
 }
 
-// CSS Color 4 § 7.1's hslToRgb and § 8.1's hwbToRgb.
+// CSS Color 4 § 7.1's hslToRgb and § 8.1's hwbToRgb. A hue is taken
+// modulo 360; the quotient is cast only inside int64_t's range, and past it
+// is already a whole number. What comes out of a hue so large that no
+// precision is left (or of NaN, or an infinity) is not in [0, 360), and
+// reads as 0.
 static double hue_normal(double h)
 {
-    h = h - 360.0 * (double)(int64_t)(h / 360.0);
-    return h < 0 ? h + 360.0 : h;
+    double q = h / 360.0;
+    if (q > -4e18 && q < 4e18)
+        q = (double)(int64_t)q;
+    h = h - 360.0 * q;
+    if (h < 0)
+        h += 360.0;
+    return h >= 0 && h < 360.0 ? h : 0;
 }
 
 static void hsl_to_rgb(double h, double s, double l, double rgb[3])
@@ -792,8 +801,10 @@ bool vc_url(VCur *c, garb_val_t *out)
 }
 
 // An <image>: a url, or a gradient or image-set this library does not draw
-// yet, kept so a declaration naming one is valid — as it is in a browser
-// that draws it — and the rest of a `background` still applies.
+// yet, taken by its name, so that a declaration naming one is valid — as
+// it is in a browser that draws it — and the rest of a `background` still
+// applies. props.c's bg_image asks a linear or radial gradient's grammar
+// first.
 bool vc_image(VCur *c, garb_val_t *out)
 {
     if (vc_url(c, out))

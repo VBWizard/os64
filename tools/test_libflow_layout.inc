@@ -126,6 +126,32 @@ static void layout_cases(void)
         "        text \"aaaa\" 8 18 32 16 serif 16\n"
         "        text \"bbbbbbbb\" 40 18 64 16 serif 16 bold\n");
 
+    // A wbr breaks where ITS white-space wraps: inside `nobr` pass 1 makes it
+    // `normal` (`nobr wbr`), so the 64px of `aaaa` `bbbb` splits at it in 34.
+    layout_case("a wbr inside nobr is the one break the run allows",
+        "<!doctype html><p><nobr>aaaa<wbr>bbbb</nobr>", 50,
+        "page 50 72\n"
+        "block html 0 0 50 72\n"
+        "  block body 8 16 34 40\n"
+        "    block p 8 16 34 40\n"
+        "      line 8 16 34 20 base 14\n"
+        "        span nobr 8 18 32 16\n"
+        "        text \"aaaa\" 8 18 32 16 serif 16\n"
+        "      line 8 36 34 20 base 14\n"
+        "        span nobr 8 38 32 16\n"
+        "        text \"bbbb\" 8 38 32 16 serif 16\n");
+    // In `pre` the wbr inherits pre, and there it is no opportunity: one
+    // line, overflowing.
+    layout_case("a wbr in pre is no break",
+        "<!doctype html><pre>aaaa<wbr>bbbb</pre>", 50,
+        "page 72 52\n"
+        "block html 0 0 50 52\n"
+        "  block body 8 16 34 20\n"
+        "    block pre 8 16 34 20\n"
+        "      line 8 16 34 20 base 14\n"
+        "        text \"aaaa\" 8 18 32 16 mono 16\n"
+        "        text \"bbbb\" 40 18 32 16 mono 16\n");
+
     // Past the engine's 1 MiB run cap, a text is measured in windows and
     // still laid out whole — prose and one enormous word alike.
     {
@@ -403,16 +429,17 @@ static void layout_cases(void)
     // A link has no edge an inline-block's content could fall outside: the
     // text in a linked marquee is the link, though the `a`'s underline
     // stops at the atom (decorations do not reach an atom's content). The
-    // marquee's baseline is its last line's (CSS 2.1 § 10.8.1), 14 down,
-    // so it sits on the line's top; the `a`'s own box is the strut's font
-    // box on that baseline: 8 + 14 - 12 = 10.
+    // marquee's overflow is hidden, so its baseline is its bottom edge
+    // (CSS 2.1 § 10.8.1), 20; the 16px strut hangs 6 below it, and the
+    // `a`'s own box is the strut's font box on that baseline: 8 + 20 - 12 =
+    // 16.
     layout_case("an inline-block's content is in the link its atom is",
         "<!doctype html><a href=x><marquee>hi</marquee></a>", 200,
-        "page 200 36\n"
-        "block html 0 0 200 36\n"
-        "  block body 8 8 184 20\n"
-        "    line 8 8 184 20 base 14\n"
-        "      span a 8 10 184 16 link 0\n"
+        "page 200 42\n"
+        "block html 0 0 200 42\n"
+        "  block body 8 8 184 26\n"
+        "    line 8 8 184 26 base 20\n"
+        "      span a 8 16 184 16 link 0\n"
         "      atomic marquee 8 8 184 20 link 0\n"
         "        block marquee 8 8 184 20 link 0\n"
         "          line 8 8 184 20 base 14\n"

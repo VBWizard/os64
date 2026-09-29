@@ -31,7 +31,7 @@ typedef struct {
     const flow_env_t *env;
     FBoxes *out;
     int32_t depth;      // descents open, each costed as a block level (F_DEPTH_MAX)
-    bool stopped;       // memory ran out, or the page is nested past F_DEPTH_MAX
+    bool stopped;       // memory or the arena's budget ran out, or the page nests past F_DEPTH_MAX
 } B;
 
 // A list's counter: the number the next item wears.
@@ -177,9 +177,10 @@ static bool text_significant(const B *b, const os64_html_node_t *n)
 
 // ── Depth ───────────────────────────────────────────────────────────────
 
-// Every recursive descent of the build opens with descend() and closes with
-// ascend(), and a descent that costs more stack than a block level opens
-// more than one. Past F_DEPTH_MAX the build stops, as it does when memory
+// Every recursive descent of the build over the TREE opens with descend()
+// and closes with ascend(), and a descent that costs more stack than a
+// block level opens more than one. reopen() recurses too, over the inlines
+// open at a point, which the descents that opened them already count. Past F_DEPTH_MAX the build stops, as it does when memory
 // runs out, so what it made is still a prefix of the whole build.
 static bool descend(B *b)
 {
@@ -236,7 +237,6 @@ static FBox *new_box(B *b, FBox *parent, f_box_kind_t kind, const os64_html_node
     box->style = style;
     const FStyled *st = node != NULL ? styled(b, node) : NULL;
     box->link = st != NULL ? st->link : parent != NULL ? parent->link : -1;
-    box->atom_width = -1;
     box->parent = parent;
     // Attached at once, so a build that stops here leaves a tree that is
     // whole up to this box.
@@ -434,40 +434,61 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     FBox *ifc = target(f);
     if (ifc == NULL)
         return;
-    char *copy = alloc(b, n->text_len);
-    if (copy == NULL)
-        return;
     // Pre-line keeps its line breaks: the text is collapsed a line at a
     // time, and each kept break ends an item, less a space just before it
     // (CSS Text 3 § 4.1.1), with the next line starting as if after one.
-    bool keep_breaks = s->white_space == FLOW_WS_PRE_LINE;
-    uint32_t len = 0, seg = 0;
-    bool space = ifc->collapse_space;
-    size_t from = 0;
-    for (size_t i = 0; i <= n->text_len; i++) {
-        bool kept = i < n->text_len && keep_breaks && n->text[i] == '\n';
-        if (i < n->text_len && !kept)
-            continue;
-        len += f_collapse_white(n->text + from, (uint32_t)(i - from), copy + len, &space);
-        from = i + 1;
-        if (!kept)
-            break;
-        if (len > seg && copy[len - 1] == ' ')
-            len--;
+    if (s->white_space == FLOW_WS_PRE_LINE) {
+        char *copy = alloc(b, n->text_len);
+        if (copy == NULL)
+            return;
+        uint32_t len = 0, seg = 0;
+        bool space = ifc->collapse_space;
+        size_t from = 0;
+        for (size_t i = 0; i <= n->text_len; i++) {
+            bool kept = i < n->text_len && n->text[i] == '\n';
+            if (i < n->text_len && !kept)
+                continue;
+            len += f_collapse_white(n->text + from, (uint32_t)(i - from), copy + len, &space);
+            from = i + 1;
+            if (!kept)
+                break;
+            if (len > seg && copy[len - 1] == ' ')
+                len--;
+            if (len > seg)
+                text_item(f, ifc, n, s, copy + seg, len - seg, seg, false);
+            if (new_item(b, ifc, FI_BREAK, NULL, s) == NULL)
+                return;
+            seg = len;
+            space = true;
+        }
+        ifc->collapse_space = space;
         if (len > seg)
             text_item(f, ifc, n, s, copy + seg, len - seg, seg, false);
-        if (new_item(b, ifc, FI_BREAK, NULL, s) == NULL)
+        return;
+    }
+    // Point into the tree when processing changes nothing — no tab or
+    // newline, no space after a space, no leading space after one — and
+    // copy only when it does: the box tree copies no text it can point at.
+    bool space = ifc->collapse_space;
+    bool changes = false;
+    for (size_t i = 0; i < n->text_len && !changes; i++) {
+        char ch = n->text[i];
+        changes = css_space(ch) && (ch != ' ' || (i == 0 ? space : n->text[i - 1] == ' '));
+    }
+    const char *text = n->text;
+    uint32_t len = (uint32_t)n->text_len;
+    if (changes) {
+        char *copy = alloc(b, n->text_len);
+        if (copy == NULL)
             return;
-        seg = len;
-        space = true;
+        len = f_collapse_white(n->text, (uint32_t)n->text_len, copy, &space);
+        text = copy;
+    } else if (len > 0) {
+        space = n->text[len - 1] == ' ';
     }
     ifc->collapse_space = space;
-    // Point into the tree when processing changed nothing: the box tree
-    // copies no text it can point at.
-    const char *text = len == n->text_len && os64_memcmp(copy, n->text, len) == 0 ? n->text
-                                                                               : copy;
-    if (len > seg)
-        text_item(f, ifc, n, s, text + seg, len - seg, seg, false);
+    if (len > 0)
+        text_item(f, ifc, n, s, text, len, 0, false);
 }
 
 static void generated(Flow *f, const os64_html_node_t *el, const flow_style_t *s,
@@ -682,7 +703,7 @@ static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
             inner.next = inner.down ? count_items(b, el) : 1;
         use = &inner;
     }
-    // The marker is made BEFORE the box, so running out of memory for it
+    // The marker is made BEFORE the box, so a build that stops making it
     // leaves no box behind that a whole build would have drawn with one.
     const char *marker = NULL;
     uint32_t marker_len = 0;
@@ -781,18 +802,17 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
     // Generated content the sheet asks for: `q`'s quotation marks, nested
     // levels alternating double and single; and the parentheses a browser
     // that lays out no ruby puts round an `rt` whose ruby has no `rp`.
+    // Both answers are pass 1's (FStyled.quotes, .has_rp): asked here per
+    // element, a walk up the ancestors or across the siblings would be
+    // quadratic on a page of nested quotes or a ruby of many annotations.
     const char *before = NULL, *after = NULL;
+    const FStyled *holder = styled(b, el->parent);
     if (is(el, OS64_HTML_TAG_Q)) {
-        int32_t level = 0;
-        for (const os64_html_node_t *p = el->parent; p != NULL; p = p->parent)
-            level += is(p, OS64_HTML_TAG_Q);
+        int32_t level = holder != NULL ? holder->quotes : 0;
         before = level % 2 == 0 ? "\xe2\x80\x9c" : "\xe2\x80\x98";   // U+201C, U+2018
         after = level % 2 == 0 ? "\xe2\x80\x9d" : "\xe2\x80\x99";    // U+201D, U+2019
     } else if (is(el, OS64_HTML_TAG_RT) && el->parent != NULL) {
-        bool rp = false;
-        for (const os64_html_node_t *c = el->parent->first_child; c != NULL; c = c->next)
-            rp |= is(c, OS64_HTML_TAG_RP);
-        if (!rp) {
+        if (holder == NULL || !holder->has_rp) {
             before = "(";
             after = ")";
         }
@@ -1040,6 +1060,7 @@ FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
     if (out == NULL)
         return NULL;
     out->styles = styles;
+    out->arena.cap = f_arena_budget(env);
     B b = {doc, model, styles, env, out, 0, false};
     const os64_html_node_t *html = doc->html;
     const FStyled *root = html != NULL ? styled(&b, html) : NULL;

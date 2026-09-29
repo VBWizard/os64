@@ -1609,7 +1609,9 @@ int main(int argc, char **argv)
     os64_signal_set_handler(OS64_SIGTERM, on_hangup);
 
     s_way.name = "wend";
-    s_way.jar = way_jar_new();          // NULL keeps no cookies: the pages still load
+    // NULL keeps no cookies: the pages still load. Never freed: the jar
+    // lives as long as wend, and the exit returns it.
+    s_way.jar = way_jar_new();
     s_way.agent = WEND_AGENT;
     s_way.accept = WEND_ACCEPT;
     s_way.delayed_hint = " - press g to go";

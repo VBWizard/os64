@@ -76,6 +76,15 @@ static void cascade_cases(void)
         "    div block color=#ff0000 border=3:solid:#ff0000/0:none:#ff0000/0:none:#ff0000"
         "/0:none:#ff0000\n");
 
+    // `border-width: revert` goes back to the user-agent origin, which
+    // declared no width for a div: the style the author drew is medium.
+    cascade_case("a width reverted is no width declared", 800,
+        "<!doctype html><style>div { border-style: solid; border-width: revert }</style>"
+        "<div>x</div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block border=3:solid:ink\n");
+
     // The narrow query holds at 400 and not at 800.
     static const char kMedia[] =
         "<!doctype html><style>p { color: red } @media (max-width: 500px) {"
@@ -170,16 +179,36 @@ static void cascade_cases(void)
     // its LAST line's baseline: the div's p is 16 down, so the line's
     // baseline is 16 + 14 = 30 and a, the span's text and b all have their
     // tops at 30 - 12 = 18 — the span's box 5 above its text, at 11. A
-    // marquee is as wide as the line, so it wraps below.
+    // marquee is as wide as the line, so it wraps below, and its overflow
+    // is hidden, so it sits on its bottom edge: that line's baseline is 20,
+    // and the strut hangs 6 below it.
+    // An auto-width inline-block's percentages are of the LINE's width, as
+    // it was measured (CSS 2.1 § 10.3.9, § 8.3): 5% of 200 is 10, so the
+    // span's box is 10 + "x" 8 + 10 = 28 wide after a 10px margin, at 18,
+    // its text at 28, and b at 18 + 28 + 10 = 56.
+    cascade_layout_case("an inline-block's percentages are the line's",
+        "<!doctype html><style>body { margin: 0 } span { display: inline-block;"
+        " padding: 0 5%; margin: 0 5% }</style>a<span>x</span>b", 200,
+        "page 200 20\n"
+        "block html 0 0 200 20\n"
+        "  block body 0 0 200 20\n"
+        "    line 0 0 200 20 base 14\n"
+        "      text \"a\" 0 2 8 16 serif 16\n"
+        "      atomic span 18 0 28 20\n"
+        "        block span 18 0 28 20\n"
+        "          line 28 0 8 20 base 14\n"
+        "            text \"x\" 28 2 8 16 serif 16\n"
+        "      text \"b\" 56 2 8 16 serif 16\n");
+
     cascade_layout_case("inline-blocks shrink to fit and sit on their last line",
         "<!doctype html><style>body { margin: 0 } span { display: inline-block;"
         " margin: 0 4px; border: 2px solid; padding: 3px } div { display: inline-block;"
         " width: 50% }</style>a<span>x y</span>b<div><p>para</p></div><marquee>m</marquee>",
         200,
-        "page 200 72\n"
-        "block html 0 0 200 72\n"
-        "  block body 0 0 200 72\n"
-        "    block anon 0 0 200 72\n"
+        "page 200 78\n"
+        "block html 0 0 200 78\n"
+        "  block body 0 0 200 78\n"
+        "    block anon 0 0 200 78\n"
         "      line 0 0 200 52 base 30\n"
         "        text \"a\" 0 18 8 16 serif 16\n"
         "        atomic span 12 11 30 30\n"
@@ -192,7 +221,7 @@ static void cascade_cases(void)
         "            block p 54 16 100 20\n"
         "              line 54 16 100 20 base 14\n"
         "                text \"para\" 54 18 28 16 serif 16\n"
-        "      line 0 52 200 20 base 14\n"
+        "      line 0 52 200 26 base 20\n"
         "        atomic marquee 0 52 200 20\n"
         "          block marquee 0 52 200 20\n"
         "            line 0 52 200 20 base 14\n"
@@ -301,14 +330,44 @@ static void cascade_cases(void)
 
     // An atom whose margins outrun the line has no content width, never a
     // negative one: 150 + 150 of margin in 184 leaves the marquee 0 wide at
-    // 8 + 150, its x overflowing it.
+    // 8 + 150, its x overflowing it. Its overflow is hidden, so it sits on
+    // its bottom edge (§ 10.8.1) and the strut hangs 6 below: the line is 26.
+    // An inline-block a sheet clips sits on its bottom margin edge (CSS 2.1
+    // § 10.8.1), not its last line's baseline: a's baseline is the line's.
+    // What a box would scroll is drawn, since nothing scrolls: an
+    // overflow: auto box's 100px paragraph makes the page 100 wide, where a
+    // hidden one's would not.
+    cascade_layout_case("what a box would scroll widens the page",
+        "<!doctype html><style>body { margin: 0 } div { width: 30px; overflow: auto }"
+        " p { width: 100px; margin: 0 }</style><div><p>x</p></div>", 20,
+        "page 100 20\n"
+        "block html 0 0 20 20\n"
+        "  block body 0 0 20 20\n"
+        "    block div 0 0 30 20\n"
+        "      block p 0 0 100 20\n"
+        "        line 0 0 100 20 base 14\n"
+        "          text \"x\" 0 2 8 16 serif 16\n");
+
+    cascade_layout_case("an inline-block that clips sits on its bottom edge",
+        "<!doctype html><style>body { margin: 0 } span { display: inline-block;"
+        " overflow: hidden }</style>a<span>x</span>", 200,
+        "page 200 26\n"
+        "block html 0 0 200 26\n"
+        "  block body 0 0 200 26\n"
+        "    line 0 0 200 26 base 20\n"
+        "      text \"a\" 0 8 8 16 serif 16\n"
+        "      atomic span 8 0 8 20\n"
+        "        block span 8 0 8 20\n"
+        "          line 8 0 8 20 base 14 clip 8 0 8 20\n"
+        "            text \"x\" 8 2 8 16 serif 16 clip 8 0 8 20\n");
+
     cascade_layout_case("an inline-block's margins wider than the line leave it no width",
         "<!doctype html><style>marquee { margin: 0 150px }</style><marquee>x</marquee>",
         200,
-        "page 200 36\n"
-        "block html 0 0 200 36\n"
-        "  block body 8 8 184 20\n"
-        "    line 8 8 184 20 base 14\n"
+        "page 200 42\n"
+        "block html 0 0 200 42\n"
+        "  block body 8 8 184 26\n"
+        "    line 8 8 184 26 base 20\n"
         "      atomic marquee 158 8 0 20\n"
         "        block marquee 158 8 0 20\n"
         "          line 158 8 0 20 base 14\n"

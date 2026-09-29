@@ -2,12 +2,12 @@
 
 #include "scale.h"
 
-static int32_t max32(int32_t a, int32_t b)
+static int64_t max64(int64_t a, int64_t b)
 {
     return a > b ? a : b;
 }
 
-static int32_t min32(int32_t a, int32_t b)
+static int64_t min64(int64_t a, int64_t b)
 {
     return a < b ? a : b;
 }
@@ -46,17 +46,19 @@ void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
 {
     if (area.w <= 0 || area.h <= 0 || sw == 0 || sh == 0)
         return;
-    int32_t x0 = max32(area.x, clip.x), y0 = max32(area.y, clip.y);
-    int32_t x1 = min32(area.x + area.w, clip.x + clip.w);
-    int32_t y1 = min32(area.y + area.h, clip.y + clip.h);
+    // Edges add in 64 bits, as yonder_draw_picture's do: a box's area may
+    // reach as far as an int32_t says.
+    int32_t x0 = (int32_t)max64(area.x, clip.x), y0 = (int32_t)max64(area.y, clip.y);
+    int32_t x1 = (int32_t)min64((int64_t)area.x + area.w, (int64_t)clip.x + clip.w);
+    int32_t y1 = (int32_t)min64((int64_t)area.y + area.h, (int64_t)clip.y + clip.h);
     // An axis that does not repeat has its one copy, where the origin is.
     if (!repeat_x) {
-        x0 = max32(x0, ox);
-        x1 = (int32_t)((int64_t)x1 < (int64_t)ox + sw ? x1 : (int64_t)ox + sw);
+        x0 = (int32_t)max64(x0, ox);
+        x1 = (int32_t)min64(x1, (int64_t)ox + sw);
     }
     if (!repeat_y) {
-        y0 = max32(y0, oy);
-        y1 = (int32_t)((int64_t)y1 < (int64_t)oy + sh ? y1 : (int64_t)oy + sh);
+        y0 = (int32_t)max64(y0, oy);
+        y1 = (int32_t)min64(y1, (int64_t)oy + sh);
     }
     for (int32_t y = y0; y < y1; y++) {
         const uint32_t *row = src + (uint64_t)wrap((int64_t)y - oy, sh) * sw;
@@ -75,9 +77,12 @@ void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
 {
     if (box.w <= 0 || box.h <= 0 || sw == 0 || sh == 0)
         return;
-    int32_t x0 = max32(box.x, clip.x), y0 = max32(box.y, clip.y);
-    int32_t x1 = min32(box.x + box.w, clip.x + clip.w);
-    int32_t y1 = min32(box.y + box.h, clip.y + clip.h);
+    // Edges are added in 64 bits: a picture may be as wide as an int32_t
+    // says (a width of 1000000% three tables deep), and its box need not
+    // start at zero. What is walked is cut to `clip`, a real surface's.
+    int32_t x0 = (int32_t)max64(box.x, clip.x), y0 = (int32_t)max64(box.y, clip.y);
+    int32_t x1 = (int32_t)min64((int64_t)box.x + box.w, (int64_t)clip.x + clip.w);
+    int32_t y1 = (int32_t)min64((int64_t)box.y + box.h, (int64_t)clip.y + clip.h);
     for (int32_t y = y0; y < y1; y++) {
         // The source row whose span covers the middle of this one:
         // floor((y - box.y + 1/2) * sh / box.h), in integers.

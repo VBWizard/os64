@@ -8,8 +8,10 @@
 //
 // What the machine answers, and why: a screen, a mouse (fine pointer, can
 // hover), 8 bits a colour channel, 1 dppx, a light scheme, no scripting,
-// and reduced motion — yonder runs no animations, and a page that knows so
-// spends nothing on them.
+// and reduced motion — yonder runs no CSS animations or transitions, and a
+// page that knows so spends nothing on them. So every
+// `@media (prefers-reduced-motion: reduce)` block applies, and some pages
+// hide more than motion in one (a carousel, a video's autoplay).
 
 #include "values_internal.h"
 #include "garb/cascade.h"

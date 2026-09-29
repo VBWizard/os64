@@ -61,19 +61,19 @@ that the properties libflow lays out can reach.
 | Module | Level | Pile | How much |
 |---|---|---|---|
 | CSS Syntax | 3 | 1 | Whole: the tokenizer, the parser, error recovery exactly as written (an invalid declaration is dropped and parsing goes on — the rule that lets a 2026 sheet run in a browser that knows 1998's properties) |
-| Selectors | 3, and 4's `:is()`, `:where()`, `:not(<list>)`, `:has()`, `nth-child(… of S)` | 1 | Whole for Level 3; `:hover`, `:focus`, `:active`, `:focus-within`, `:focus-visible` and `:target` never match until a face restyles on them (booked); `:visited` never matches, by privacy as the browsers do; `:has()` matched by brute force; a namespace prefix other than `*` or none needs `@namespace` (booked) |
+| Selectors | 3, and 4's `:is()`, `:where()`, `:not(<list>)`, `:has()`, `nth-child(… of S)` | 1 | Whole for Level 3; `:hover`, `:focus`, `:active`, `:focus-within`, `:focus-visible`, `:target` and `:indeterminate` never match, and `:checked` follows the page's attribute and not a person's tick, until a face restyles on them (booked); `:visited` never matches, by privacy as the browsers do; `:has()` matched by brute force; a namespace prefix other than `*` or none needs `@namespace` (booked) |
 | CSS Cascading and Inheritance | 4 | 1 | Origins (user agent = libflow's chapter, author), importance, specificity, order of appearance, `style` attributes, `inherit`/`initial`/`unset`/`revert`, shorthands expanding to longhands, `@import`; Level 5's `@layer` booked |
 | CSS Custom Properties | 1 | 1 | Whole: `--name` inherited, `var()` with fallback, cycles invalid at computed-value time |
 | Environment Variables | 1 | 1 | `env()` replaced as `var()` is; this machine defines none of the variables, so its fallback is what a page gets |
 | CSS Values and Units | 3, and 4's `min()`/`max()`/`clamp()` | 1 | `px`, `em`, `rem`, `ex`, `ch`, `%`, `vw`, `vh`, `vmin`, `vmax`, `pt`, `pc`, `cm`, `mm`, `in`, `q`; `calc()`. Level 4's small, large and dynamic viewport units are the viewport's (yonder has no toolbar that comes and goes), and Containment 3's container units fall back to it as the specification says for an element with no container |
 | Media Queries | 4 | 1 | `@media` and `<link media>`: media types, `width`/`height` in both spellings (`max-width:` and `width <=`), `orientation`, `prefers-color-scheme` (light), `prefers-reduced-motion` (reduce), `and`/`not`/`only`/`,` |
-| CSS Color | 4 | 1 | Named colours, `#rgb[a]`/`#rrggbb[aa]`, `rgb()`/`rgba()`/`hsl()`/`hsla()` in both syntaxes, `hwb()`, `transparent`, `currentColor`. `lab()`, `lch()`, `oklab()`, `oklch()` and `color()` are booked: a declaration using one is invalid, so the page's fallback before it stands. libflow's colours are opaque XRGB; alpha is honoured as opaque or fully transparent until pile 3 blends (booked there) |
+| CSS Color | 4 | 1 | Named colours, `#rgb[a]`/`#rrggbb[aa]`, `rgb()`/`rgba()`/`hsl()`/`hsla()` in both syntaxes, `hwb()`, `transparent`, `currentColor`. `lab()`, `lch()`, `oklab()`, `oklch()`, `color()` and `color-mix()` are booked: a declaration using one is invalid, so the page's fallback before it stands. libflow's colours are opaque XRGB; alpha is honoured as opaque or fully transparent until pile 3 blends (booked there) |
 | CSS 2.1 properties | — | 1 | Every property libflow's struct already holds, and their shorthands: `display`, `font`/`font-*`, `color`, `background`/`background-color`, `margin`, `padding`, `border`/`border-*`, `width`, `height`, `text-align`, `vertical-align`, `white-space`, `text-decoration`, `visibility`, `list-style`/`list-style-*`, `border-spacing`, `border-collapse`, `caption-side`, `float`, `clear` |
 | New in libflow, still pile 1 | — | 1 | The cheap ones that make modern pages readable: `box-sizing`, `min-`/`max-width`/`-height`, `line-height`, `text-indent`, `text-transform`, `overflow` (clipping), `background-image`/`-repeat`/`-position` (Y5b's tiler), `white-space: pre-line` |
 | Positioned layout | 3 | 2 | `position`, offsets, `z-index`, stacking contexts |
-| Flexible Box Layout | 1 | 2 | Whole |
-| Grid Layout | 2 | 2 | Whole, subgrid last |
-| Backgrounds and Borders, Images, Transforms, Fonts (`@font-face`), Animations | 3/4 | 3 | Gradients, `border-radius`, `box-shadow`, `opacity`, `transform`, web fonts (packet 04's faces), animations on the Y5b ticker |
+| Flexible Box Layout | 1 | 2 | Whole. Until then `display: flex`/`inline-flex` is read and laid out as the block or inline-block it is outside, and `@supports` answers no, so a page's fallback for it is used |
+| Grid Layout | 2 | 2 | Whole, subgrid last. Until then `display: grid`/`inline-grid` is read and laid out as flex is, and `@supports` answers no |
+| Backgrounds and Borders, Images, Transforms, Fonts (`@font-face`), Animations | 3/4 | 3 | Gradients, `border-radius`, `box-shadow`, `opacity`, `transform`, web fonts (packet 04's faces), animations on the Y5b ticker. What G2b already decided about gradients: a linear or radial one is VALID when it fits Images 3's grammar (so the pre-standard `linear-gradient(top, …)` is not, and the colour before it stands), conic gradients and `image-set()` are taken by name, and a valid one draws nothing yet while the `background` shorthand still resets the colour |
 
 ## What goes in
 
@@ -119,8 +119,31 @@ classes and tag name; selectors match right to left. Bounded where libhtml
 and libflow bound themselves, and refused out loud past a bound, never
 silently: bytes of sheet per page, rules, `@import` depth, nesting of
 `calc()` and of `var()` substitution, the length a substitution may grow
-to (the billion-laughs shape `var()` allows). The numbers are set in the
-parser slice against the corpus, and each is a named constant.
+to (the billion-laughs shape `var()` allows). Each bound is a named
+constant.
+
+**What a parse costs, measured** (`tools/test_garb_host.sh`, `--cost` and
+`--full`). Ordinary CSS — a Bootstrap-shaped sheet, long selector lists and
+short declarations — costs about 16 bytes of arena for each byte of text to
+parse, and about 19 once every rule's block has been read as its items,
+which is what the cascade does. So the 96 MiB arena (`GARB_ARENA_MAX`)
+holds about 6 MiB of such a sheet parsed, about 5 MiB with every block
+read; the harness holds a 4 MiB sheet to coming back whole at under 22.
+Denser CSS costs more — a sheet of nothing but `a{b:c}` about 59 bytes a
+byte, 77 with its blocks read — so it fills the arena at under 1.5 MiB. A
+sheet the arena cannot hold comes back INCOMPLETE WITH WHAT IT FINISHED:
+the arena always keeps room to publish the lists still open, so filling it
+refuses the next token, never the sheet's rules so far.
+
+The costs are where they are because of three choices: a list is built on
+a scratch stack and kept at its exact size (doubling in the arena left
+every smaller copy behind, and cost three times as much), a component value
+packs to 56 bytes, and a one-byte ASCII text is shared rather than kept.
+Outside the arena, and freed when the parse ends: the tokenizer's code
+points (4 bytes a byte of input, 32 MiB at `GARB_SHEET_MAX`), the decoded
+text of a sheet given as bytes (up to 3 bytes a byte), and the scratch
+stack, as deep as the lists open at once. What the faces reserve for a
+parse on the pool has to count those too.
 
 ## What the faces owe
 
@@ -145,7 +168,7 @@ parser slice against the corpus, and each is a named constant.
 | G2b | Values: the property table, each pile-1 property's grammar, shorthands expanded, lengths, `calc()`, colours | css-parsing-tests' colour files; grammar cases worked by hand |
 | G2c | The cascade: the rule hash, importance and order, `style` attributes, custom properties and `var()`, media queries | a cascade dump per element for fixtures worked by hand |
 | G3 | libflow applies it: every field it holds today from an author rule, `inherit`/`initial`/`unset`; `<style>` pages in yonder and in `flowdump` | libflow's harness with author sheets; the corpus unchanged where there is no CSS |
-| G4 | yonder fetches `<link>` sheets and `@import`s, waits for them, lays out again when a late one arrives | the guest, against a local server, and danlegt.com read as far as pile 1 carries it |
+| G4 | yonder fetches `<link>` sheets and `@import`s, waits for them, lays out again when a late one arrives; an imported sheet stands in its importer's place at that `@import`, its rules BEFORE the importer's own (`garb_sheet_in_t`'s `via` and `parent`) | the guest, against a local server, and danlegt.com read as far as pile 1 carries it |
 | G5 | The cheap new properties in libflow (the table's row) | libflow's harness |
 
 Pile 2 and pile 3 are designed in their own sections when pile 1 is
@@ -169,18 +192,19 @@ block.
 
 **G2a, as run.** An+B: css-parsing-tests' 128 cases pass. Selectors:
 `tools/test_garb_select.py` parses each corpus page on both sides (libhtml
-there, html5lib here) and compares every selector's validity,
-specificity, pseudo-element and matched elements with cssselect2 — a
-catalogue of 123 covering every feature and its refusals, and 400
-generated per page from the page's own names: 3,138 comparisons, none
-differ. 70 answers stand on the standard against the reference, each named
-in the runner with its section: `:link` and `:any-link` are `a` and `area`
-only, `:enabled` is form controls only, `type` is on HTML's list of
-attribute values compared without case, `nth-child(… of S)` weighs its
-argument (and cssselect2 matches nothing when S is a list), `:is()`'s list
-forgives, a user-action pseudo-class may follow a pseudo-element, and the
-pseudo-classes cssselect2 does not know (`:required`, `:optional`,
-`:read-only`, `:read-write`), checked on a small page by hand. On
+there, html5lib here) and compares every selector's validity, specificity,
+pseudo-element and matched elements with cssselect2 — a catalogue of 130
+covering every feature and its refusals, and 400 generated per page from
+the page's own names: 3,180 comparisons, none differ. 100 answers stand on
+the standard against the reference, each named in the runner with its
+section: `:link` and `:any-link` are `a` and `area` only, `:enabled` is
+form controls only, `type` is on HTML's list of attribute values compared
+without case, `nth-child(… of S)` weighs its argument (and cssselect2
+matches nothing when S is a list), `:is()`'s list forgives, a user-action
+pseudo-class may follow a pseudo-element, a pseudo-element inside `:not()`
+and a `:has()` inside `:has()` are invalid, and the pseudo-classes
+cssselect2 does not know (`:required`, `:optional`, `:read-only`,
+`:read-write`, `:indeterminate`), checked on a small page by hand. On
 danlegt.com's own page (a local copy): 923 generated selectors, and all
 896 of its sheets' real selectors — 878 valid, the rest its vendor
 pseudo-elements, refused on both sides — agree.
@@ -201,23 +225,25 @@ over for the cascade are exactly those with `var()` or `env()`. That run
 found four gaps before this commit: the dynamic and container units, env(),
 and background layer lists.
 
-**G2c, as run.** Media Queries 4: 55 queries worked by hand against a stated
-viewport (`tools/garb_corpus/media.txt`) — types, `not`/`only`, plain,
-`min-`/`max-` and range forms, the machine's own answers, and Level 4's
-third value (an unknown feature is UNKNOWN, and so is its negation). The
-cascade: 12 pages worked by hand (`tools/garb_corpus/cascade.txt`) —
+**G2c, as run.** Media Queries 4: 55 queries worked by hand against a
+stated viewport (`tools/garb_corpus/media.txt`) — types, `not`/`only`,
+plain, `min-`/`max-` and range forms, the machine's own answers, and Level
+4's third value (an unknown feature is UNKNOWN, and so is its negation).
+The cascade: 13 pages worked by hand (`tools/garb_corpus/cascade.txt`) —
 specificity over order, importance, the `style` attribute in all four
 combinations, invalid declarations leaving the one before them, `var()`
-with fallbacks, chains, a cycle and shadowing, env(), `@media`,
-`@supports` and a `style` element's `media`, the same page narrower,
-combinators, pseudo-element and `:hover` rules reaching nothing, quirks
-mode's case-free names and unitless lengths, a rule matched through two of
-its selectors at the heavier. All pass; eight mutants of the cascade and
-media code are all caught, five of them only after cases were added for
-them. The allocation sweep now cascades the corpus sheet over a page, 24
-allocations failed in turn, nothing leaked. danlegt.com, its 28 sheets
-inlined in order, cascades in 0.03 s on the host: 471 elements with author
-winners, hand-checked against the rules for the body and `#motd`.
+with fallbacks, chains, a cycle and shadowing, the empty value and `unset`
+on a custom property, env(), `@media`, `@supports` (a flex or grid
+container not supported) and a `style` element's `media`, the same page
+narrower, combinators, pseudo-element and `:hover` rules reaching nothing,
+quirks mode's case-free names and unitless lengths, a rule matched through
+two of its selectors at the heavier. All pass; eight mutants of the
+cascade and media code are all caught, five of them only after cases were
+added for them. The allocation sweep now cascades the corpus sheet over a
+page, 35 allocations each failed alone, nothing leaked. danlegt.com, its
+28 sheets inlined in order, cascades in 0.03 s on the host: 471 elements
+with author winners, hand-checked against the rules for the body and
+`#motd`.
 
 **G3, as run.** libflow computes the author winners after the chapter,
 the hints and the quirks (`style.c`, "The page's own sheets"): every field
@@ -311,7 +337,7 @@ center`, a 400px line cut at its 120px `overflow: hidden` box, and a
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| `:hover`, `:focus`, `:active` | a restyle on every pointer move is a relayout, and the face does not relayout on hover | pile 1 proven, and a page whose menus only exist on hover |
+| `:hover`, `:focus`, `:active`; `:target`, `:indeterminate`; `:checked` after a click | a restyle on every pointer move is a relayout, and the face does not relayout on hover; a tick a person makes lives in libpage's model, which `:checked` does not read, so `input:checked + label` does not follow a click | pile 1 proven, and a page whose menus only exist on hover |
 | `@layer` (Cascade 5) | Level 4 first; a layer is an order within an origin | the first page whose sheets use it |
 | `:has()` by brute force | each candidate scans its subtree or its following siblings, a whole page for `:root:has(…)` | a page whose cascade is slow, measured |
 | `@namespace` | a prefix other than `*` or none makes a selector invalid, so its rule drops | a page whose sheets declare one |
@@ -321,10 +347,10 @@ center`, a 400px line cut at its 120px `overflow: hidden` box, and a
 | `@layer`'s order | a layer's rules are cascaded as if unlayered, so a layered rule may beat an unlayered one it should lose to | a page whose sheets use layers against each other |
 | Pseudo-elements' styles | rules for `::before` and the rest are matched and set aside: nothing generates their boxes yet | G5's generated content |
 | `unicode-range` | the draft reads it from component values, in `@font-face`, not as a token | pile 3's web fonts |
-| `lab()`, `lch()`, `oklab()`, `oklch()`, `color()` | each needs its colour space converted to sRGB and gamut-mapped (Color 4 § 13) | a page whose colours are only written that way |
+| `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, `color-mix()` | each needs its colour space converted to sRGB and gamut-mapped (Color 4 § 13; `color-mix()` is Color 5, and mixes in one of those spaces) | a page whose colours are only written that way |
 | A cache of sheets | a sheet is fetched again for every page that names it, and on every visit | a site whose sheets are slow to come again, measured |
 | An imported sheet's Referer | it names the page, not the sheet that imported it | a server that refuses an import for it |
-| More than 64 sheets on a page, or 16 `@import`s in one sheet | the rest are not fetched | a page that needs them |
+| More than 64 sheets on a page, or 16 `@import`s in one sheet, or an import chain 16 deep | the rest are not fetched; a chain deeper than the cascade's `NEST_MAX` is fetched but not applied, and the cascade says it is incomplete | a page that needs them |
 | Every layer of a background | yonder draws one picture behind a box, so the first layer of a list is kept and the rest are only checked | a page whose look depends on a lower layer |
 | Quirks mode's hashless colour (`color: ff0000`) | quirks mode's unitless lengths are read; its colours without a `#` are not yet | a quirks-mode page written that way |
 | Encodings beyond libhtml's | a sheet in ISO-8859-2 or Shift_JIS keeps its ASCII and loses the rest | the first sheet whose text is not ASCII and not UTF-8 |

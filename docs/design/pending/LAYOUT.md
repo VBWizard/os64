@@ -150,9 +150,10 @@ rect. Boxes are:
 Plus four facts about the whole: the page height, the page WIDTH (the
 root's overflow width, which exceeds the width passed in exactly when a
 table or an unbreakable word overflowed — the number a horizontal
-scrollbar is sized from), `incomplete` (memory or a run limit stopped it
-partway — what is there is real), and the image and control boxes as
-lists so the face can place widgets and schedule fetches without walking.
+scrollbar is sized from), `incomplete` (memory, the arena budget, the
+depth bound or a run limit stopped it partway — what is there is real),
+and the image and control boxes as lists so the face can place pictures
+and widgets without walking.
 
 ## The three passes
 
@@ -194,25 +195,27 @@ Lengths are 26.6 fixed point — the text engine's unit — so a margin of
 `0.67em` on a 32px heading is 1372/64 px and nothing rounds until a box
 coordinate is written (*Rounding*, below).
 
-**The first producer** is `style.c`: the Rendering chapter's sheet, section
-by section, each rule naming its section so the file can be held against
-the standard line by line — the hidden elements, `body`'s 8px, `p`'s 1em,
-the headings (size in the parent's em, margins in their own), `blockquote`
-and `figure`, the monospace and `white-space: pre` elements, the phrasing
-elements (italic, `bolder`, `larger`/`smaller` by CSS Fonts' 6/5 ratio,
-`sub`/`sup`, `mark`, the decorations, `nobr`), the lists (with the nesting
-rules that make a nested `ul` circle and a third level square and take
-nested lists' block margins away), the tables (`border-spacing: 2px`,
-cells' 1px padding, `th` bold and centred when its row's alignment was
-never set, rows and cells taking `vertical-align` from their group), `hr`
-(gray, a 1px inset border all round, `0.5em auto` margins), `fieldset`,
-`iframe`'s 2px inset border, form controls as inline-blocks, `details`
-(the first `summary` is the disclosure; the rest of a closed one is not
-drawn), an open `dialog` laid out where it stands (positioning is booked),
-and a `form` the parser left inside table structure displayed `none`.
-`wbr` is a break opportunity and nothing else; pass 3 reads it as the one
-element boundary that IS a break. `noscript` is SHOWN — the chapter hides
-it only when scripting is on.
+**The first producer** is `style.c`: the Rendering chapter's sheet,
+section by section, each rule naming its section so the file can be held
+against the standard line by line — the hidden elements (and every
+`[popover]` but an open dialog: only script opens one), `body`'s 8px,
+`p`'s 1em, the headings (size in the parent's em, margins in their own),
+`blockquote` and `figure`, `address` italic, the monospace and
+`white-space: pre` elements, the phrasing elements (italic, `bolder`,
+`larger`/`smaller` by CSS Fonts' 6/5 ratio, `sub`/`sup`, `mark`, the
+decorations, `nobr`, and a `wbr` inside one breaking after all), the lists
+(with the nesting rules that make a nested `ul` circle and a third level
+square and take nested lists' block margins away), the tables
+(`border-spacing: 2px`, cells' 1px padding, `th` bold and centred when its
+row's alignment was never set, rows and cells taking `vertical-align` from
+their group), `hr` (gray, a 1px inset border all round, `0.5em auto`
+margins), `fieldset` and `legend`, `iframe`'s 2px inset border, form
+controls as inline-blocks, `details` (the first `summary` is the
+disclosure; the rest of a closed one is not drawn), an open `dialog` laid
+out where it stands (positioning is booked), and a `form` the parser left
+inside table structure displayed `none`. `wbr` is a break opportunity and
+nothing else; pass 3 reads it as the one element boundary that IS a break.
+`noscript` is SHOWN — the chapter hides it only when scripting is on.
 
 Then the PRESENTATIONAL ATTRIBUTES, as the chapter maps them: `body`'s
 margins (`marginheight`/`topmargin` vertical, `marginwidth`/`leftmargin`
@@ -318,8 +321,11 @@ A frame and an iframe are drawn as the link libpage lists for them,
 one is the blank page and draws nothing to follow). An inline-block that
 is not replaced — a `marquee`, or whatever a page's sheet makes one — is
 an atom with a block container of its own inside it: its set width, or
-shrink-to-fit (§10.3.9) — a marquee as wide as its line — and on its last
-line's baseline (§10.8.1). `object`, `video` and `canvas` show their fallback
+shrink-to-fit (§10.3.9), its percentages of the line — a marquee as wide
+as its line — and on its last line's baseline (§10.8.1), or its bottom
+margin edge when it has none or is a scroll container (any overflow but
+`visible` and `clip`, in CSS Inline 3's terms): a marquee counts as one
+by its tag, since the chapter's `overflow: hidden` is not given it (Booked). `object`, `video` and `canvas` show their fallback
 content, since nothing plays them; `embed` and `audio` have none and make
 nothing, and neither do `source`, `track` and `keygen`. `hr` is not
 special: it is an empty block whose borders are the rule, which is what
@@ -416,8 +422,10 @@ its own margins, borders and padding, with `auto` horizontal margins
 sharing the remainder (which is how `<table align=center>` and
 `<hr align=right>` centre and right-align); `width` in px or percent
 overrides `auto`; height is the content's unless set, and a set height
-that is too small still shows the content (no overflow clipping in the
-first cut — `overflow` is the cascade's and booked). **Vertical margins
+that is too small still shows the content, unless the box's `overflow`
+clips it (`hidden` or `clip`, which cut it and keep it off the page's
+extent); `scroll` and `auto` draw it, and it reaches the page's edge,
+since nothing here scrolls. **Vertical margins
 collapse** (§8.3.1) between siblings, between a parent and its first or
 last child when nothing separates them, and through an empty block — the
 whole rule, negative margins included: margins that adjoin are held as
@@ -598,7 +606,8 @@ first line's baseline; `list-style: none` (a `menu` in a nav) draws none.
 degrades honestly:** `float` and `clear` are recorded and ignored, so an
 `<img align=left>` sits inline at its baseline and the text runs after it
 rather than beside it — the page still reads, in order; `position`,
-`z-index`, `overflow` and `inline-table` are not laid out (GARB.md §
+`z-index` and `inline-table` are not laid out, and `overflow` only
+clips (GARB.md §
 Booked says what the cascade does with each). Each is a row in the booked
 table.
 
@@ -678,11 +687,20 @@ its contract; this is what it offers and why.
   link scrolls to, where a control's widget goes. NULL for a node with
   none (hidden, `display: none`, or past where an incomplete layout
   stopped).
-- **`flow_nimages`/`flow_image`, `flow_ncontrols`/`flow_control`** — the
-  two lists the face schedules from, in tree order, each item once: an
-  image's box (its alt text's first run when it is laid out as text) so the
-  face fetches libpage's resolved src, and a control's atom so the face
-  places a widget on it.
+- **`flow_nimages`/`flow_image`, `flow_ncontrols`/`flow_control`** — where
+  the face PLACES things, in tree order, each item once: an image's box
+  (its alt text's first run when it is laid out as text) for a picture that
+  arrived, and a control's atom for its widget. A picture that takes no
+  space (missing, `alt=""`) has no box and is not listed, so the face
+  FETCHES from libpage's images list, which names every picture the page
+  does whether it has a box yet or not.
+- **`flow_replaced_fixed(style)`** — whether a replaced box in that style
+  is sized by the page alone (a width, and a height in pixels), so an
+  arrival cannot move it: the rule `replaced_size` sizes by, written once,
+  for a face deciding whether a picture's arrival needs a new layout. Asked
+  of the element's box, never of its attributes: `width="auto"` is written
+  and fixes nothing. The host suite holds it to the layout for 42
+  spellings of the two sides (`fixed_cases`).
 - **`flow_height`, `flow_width`** — the width is the root's overflow
   width: at least the width laid out at, more where something would not
   fit. **`flow_dump`** is the dump above, snprintf-shaped.
@@ -716,7 +734,13 @@ LIBPAGE.md's rule restated for geometry:
   rows × columns. The tree has as many leaves as the columns holds reach
   and grows as they reach further, and the spans' counting sort as many
   buckets as the widest span: a table's working memory is its own
-  size, so a page of ten thousand small tables costs small tables. A
+  size, so a page of ten thousand small tables costs small tables. NESTED
+  tables hold theirs at once — a cell lays out the next table while its
+  own table's columns wait — and columns can be declared (`<col
+  span=1000>`), so 120 tables nested ten such `col`s deep held 56 MB from a
+  20 KB page: the working memory is charged to the arena budget beside
+  the lines (`max_arena_bytes`), and a chain that reaches it stops
+  `incomplete`. A
   rowspan's share of its rows' heights is summed and spread in a
   range-add, range-sum tree over the row heights (log of the rows per
   cell), and a cell's height at placement comes from its rows' tops: no
@@ -725,11 +749,26 @@ LIBPAGE.md's rule restated for geometry:
   suite lays out a table nested forty deep AND a table whose cells all
   span, and asserts the layout count against the linear bound in both.
   The measuring run per text piece is laid out once per layout;
-  fragments once per line.
+  fragments once per line. **A question about an element's ancestors or
+  siblings is answered from its parent's record, never by a walk**: pass
+  1 keeps what the chapter's descendant selectors ask (lists, list items,
+  `nobr`, `q` depth, a link, decorations) on each element as it styles
+  it, parent before child, and a child that answers for its parent (an
+  `rp`) sets the parent's bit. A walk per element is quadratic on a deep
+  or a wide page; the host suite builds one of each under an alarm.
 - **Memory is the text engine's budget plus the boxes, and REBUILDING
   DOUBLES THE PEAK.** Runs are the big cost (a glyph placement is tens of
   bytes) and they live in the text context the face hands in, which has
-  one `memory_cap` and is caller-serialised. A rebuild builds the NEW
+  one `memory_cap` and is caller-serialised. The boxes and the lines have
+  a budget of their own, `flow_env_t.max_arena_bytes` for each arena
+  (`FLOW_ARENA_DEFAULT`, 64 MiB, when the face sets none), because a page
+  can MULTIPLY them: an inline split round a block reopens every inline
+  still open there, so 400 open `<b>`s and 60000 interrupting `<div>`s
+  asked for 3.7 GB of boxes from a 706 KB page. At the budget the build
+  stops as it does at `F_DEPTH_MAX`, `incomplete`, what it holds real. The
+  largest corpus page (wikipedia) holds about 5 MB in either. The styles
+  are not budgeted: one record an element, bounded by the document
+  libhtml admitted, and all or nothing. A rebuild builds the NEW
   tree while the OLD one is still retained — the face must keep the old
   tree until the new one exists, or a rebuild that fails leaves it with
   nothing to paint — so the peak is two layouts of the page, and a page
@@ -875,8 +914,11 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
   geometry under an unfinished line, are not compared. Beside the four,
   a partial page is as tall as the blocks it holds, so what did lay out
   can be scrolled to. What makes it all hold: pass 2
-  marks the box it was filling when memory ran out and every box above
-  it; a line cut short is kept EMPTY where it would have begun; a table
+  marks the box it was filling when it stopped and every box above it;
+  the last line of a context pass 2 cut short is kept EMPTY where it
+  began, since it was broken without what would have followed, and a
+  line pass 3 could not finish is dropped, since a line joins its
+  context only whole; a table
   cut short in either pass keeps its place with no rows, because its
   columns would come from only the cells it has and no line in it would
   break where the whole table's does; an interrupted block holds what was
@@ -907,7 +949,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Floats and `clear` (`align=left/right` on `img`/`table`, `<br clear>`) | the float rules (§9.5) are a second placement pass with their own line-box shortening; the struct records them so the cascade and the first cut agree on the field | the first page whose layout is unreadable without a float — image-beside-text pages of the old web will vote early |
-| `position`, `z-index`, `overflow`, `inline-table` | none can arise from the first producer; from the cascade, `inline-table` is laid out as a table and the rest are not read into the struct | pile 2 (GARB.md) |
+| `position`, `z-index`, `inline-table`; scrolling | none can arise from the first producer; from the cascade, `inline-table` is laid out as a table, `position` and `z-index` are not read into the struct, and `overflow: scroll`/`auto` draw what they would scroll, since nothing scrolls | pile 2 (GARB.md) |
 | Collapsing borders (§17.6.2) | a table with `rules` or `frame` records `border-collapse: collapse`; it is laid out with no spacing and its borders drawn separately | the first ruled table that reads wrong for it |
 | A range-draw on a measuring run (F2 ask) | halves layout work and run memory; works without it | a page whose layout time is visible, measured, or a page that hits the memory cap through runs |
 | Incremental relayout | ruling 2 says rebuild; the face paces it | the engine, or a page whose rebuild is visibly slow |
@@ -916,7 +958,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Percentage heights (CSS 2.1 §10.5, and the Quirks standard's 3.5) | read as `auto` everywhere, pictures included; one resolved inside a table cell needs the cell's height before its content is laid out — the second layout pass Blink runs for exactly this — and the definite-ancestor case belongs to the same slice | a page shaped by `height=100%` pictures in cells, or the cascade's `height: 100%` chains |
 | `sub`/`sup` vertical shift | one `vertical-align` value each, cheap, and the first cut's fixtures do not cover it | the first page that reads wrong without it (footnotes) |
 | Soft hyphen breaks, CJK and script-aware breaking, bidi/RTL layout | the text profile is Western v1; bidi classes exist in libos64 for `dirname`, the layout half is a real slice | a page in one of those scripts worth reading |
-| `marquee` | the Rendering chapter has it; it is a timer in a face | a page whose meaning scrolls, which is none |
+| `marquee` | the Rendering chapter has it; it is a timer in a face. Its `overflow: hidden !important` is not given either: a still marquee's text runs past its box, and clipping it would hide that text; its baseline is its bottom edge regardless (layout.c asks the tag) | a page whose meaning scrolls, which is none |
 | A `legend` drawn on its `fieldset`'s border | not CSS 2.1's model; laid out inside the fieldset, first, where it still reads | a form page where it misleads |
 | Ruby annotations | CSS 2.1 has no ruby; `rt` is laid out inline after its base, `rp` hidden | a page in a script that uses it |
 | `dialog` and `popover` positioning | an open dialog is laid out where it stands (the `position` row) | the `position` row |

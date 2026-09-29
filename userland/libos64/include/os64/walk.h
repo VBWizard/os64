@@ -15,16 +15,19 @@
 #include <stdint.h>
 
 #include "os64/dirent.h"
+#include "os64/file.h"
 
 // Every path-taking syscall currently accepts at most 255 bytes plus the NUL.
 // A walk uses one mutable buffer of exactly that size rather than placing a
 // fresh path array on every recursive stack frame.
 #define OS64_WALK_PATH_MAX 256u
 
-// Three standard handles plus twelve simultaneously open directories leaves
-// one honest spare.  Callers that need more handles during a visit (cp needs
-// source and destination files together) should choose a smaller limit.
-#define OS64_WALK_MAX_DEPTH 12u
+// A walk holds one directory handle open per level, so its depth is the
+// task's handle table less sixteen slots that stay the program's: its three
+// standard handles and room for what a visit opens (grep's file, cp's source
+// and destination). Stopping there gives an honest depth error instead of a
+// misleading one from an exhausted table.
+#define OS64_WALK_MAX_DEPTH (OS64_TASK_HANDLES - 16u)
 
 typedef enum {
     OS64_WALK_ENTRY,   // preorder: file or directory, before any children

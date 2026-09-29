@@ -318,6 +318,31 @@ got through, the ledger is what did not, and `orphaned` (a frame the cable
 could not hand back because QEMU's inbound socket was gone) is never zero
 silently.
 
+## Arrival wake + `micros()` acceptance (2026-09-27)
+
+What was proved, and the one thing the measurement disproved
+(ARRIVAL_WAKE.md carries the full table and the argument):
+
+| Check | Where | Result |
+|---|---|---|
+| Kernel suite, e1000, TESTRUN entry | wire | pre-boot 31/0, post-boot 33/0; `test_net_icmp_conn` prints its new figure: `arrival wake 87-150 us over 8 echoes` |
+| Same figure with both arrival wakes DISABLED (the sweep as the only waker) | wire | `15-128 us` — on an idle machine knet's park after a drain is the pass the sweep runs in; the wake earns its keep only under a loaded drain, which this rig cannot produce |
+| Ring-3 suite (`testrun`) | wire | 55 passed, 0 failed, 4 skipped |
+| `ping -n 5 10.0.2.2`, e1000 | screendump | `time=0.603` … `0.792 ms` after a 2.6 ms first echo; summary `0.603/1.079/2.629 ms` |
+| `ping -n 5 10.0.2.2`, virtio-net | screendump | `6.862` … `10.745 ms` — the drain waits for the tick (DEBTS virtio row), not the wake |
+| `ping -n 5 10.0.2.2`, OLD kernel + old ping | screendump | `0 ticks` ×4, `1 tick` ×1 — the instrument it replaces |
+| `ping`, OLD kernel + NEW `/bin` | screendump | says `this kernel has no microsecond clock` once, then measures in ticks; before that line existed it printed `0.000 ms` five times without a word |
+| `e2fsck -fn` on the root and /home images the run wrote to | host | both clean |
+
+Recipe: `vm2.sh`-style headless boot (SUCCESSION's recipe plus `-netdev
+user,id=n0 -device e1000,netdev=n0`), the TESTRUN entry (14 downs at the
+Limine menu) for the suite and the default entry for the ping; type
+`ping -n 5 10.0.2.2` through the monitor and `screendump`. The "before"
+row is the same tree with the two `if (c->waiter != NULL && …ISLEEP)`
+claims in `udp_conn_rx` / `icmp_conn_deliver` turned into `if (0 && …)`,
+rebuilt, booted, restored — five minutes that turned a belief into a
+number, and the number was not the one the belief predicted.
+
 ## TLS transport acceptance (2026-09-09)
 
 The [adapter contract and commands](TLS_TRANSPORT.md) describe its host

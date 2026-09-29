@@ -129,6 +129,52 @@ static void door_cases(void)
     os64_html_document_free(doc);
 }
 
+// flow_replaced_fixed is the layout's own rule: for every way a page can
+// spell a picture's width and height, it answers yes exactly when the box
+// comes out the same whether the picture has arrived (known.png, 40x30) or
+// not (missing.png). A face that trusts it to skip a layout on arrival is
+// then never wrong in the direction that leaves a picture squashed.
+static void fixed_cases(void)
+{
+    static const char *const sides[] = {"", "width=50", "width=auto", "width=abc", "width=\"\"",
+                                        "width=50%", "width=\"50 %\""};
+    static const char *const heights[] = {"", "height=60", "height=auto", "height=\"\"",
+                                          "height=60%", "height=\" 60\""};
+    for (size_t i = 0; i < sizeof(sides) / sizeof(sides[0]); i++)
+        for (size_t k = 0; k < sizeof(heights) / sizeof(heights[0]); k++) {
+            os64_gui_rect_t rect[2];
+            bool fixed = false, laid = true;
+            for (int arrived = 0; arrived < 2; arrived++) {
+                char html[256];
+                snprintf(html, sizeof(html), "<!doctype html><p><img src=%s %s %s alt=pic>",
+                         arrived ? "known.png" : "missing.png", sides[i], heights[k]);
+                os64_html_document_t *doc = parse(html);
+                os64_page_t *page = os64_page_build(doc, kPage, NULL);
+                flow_tree_t *t = flow_layout(doc, page, 400, &kEnv);
+                const os64_html_node_t *img = doc->body->first_child->first_child;
+                const flow_box_t *b = t != NULL ? flow_box_for(t, img) : NULL;
+                laid &= b != NULL;
+                if (b != NULL) {
+                    rect[arrived] = b->rect;
+                    // The style is the element's either way: the two answers agree.
+                    if (arrived)
+                        laid &= fixed == flow_replaced_fixed(b->style);
+                    fixed = flow_replaced_fixed(b->style);
+                }
+                flow_free(t);
+                os64_page_free(page);
+                os64_html_document_free(doc);
+            }
+            bool same = laid && rect[0].x == rect[1].x && rect[0].y == rect[1].y &&
+                        rect[0].w == rect[1].w && rect[0].h == rect[1].h;
+            char what[160];
+            snprintf(what, sizeof(what), "fixed: <img %s %s> is fixed exactly when arrival moves nothing",
+                     sides[i], heights[k]);
+            expect(what, laid && fixed == same, NULL);
+        }
+    expect("fixed: no style is not fixed", !flow_replaced_fixed(NULL), NULL);
+}
+
 // ── The allocation sweep: rules (a) to (d) of LAYOUT.md § Proof ─────────
 
 typedef struct {
