@@ -13,9 +13,13 @@
 #include "jobs.h"
 #include "way/way.h"
 
-// What one sheet job may cost, declared to the pool: the largest sheet
-// libgarb reads, and its parse, which runs to a few times the text.
-#define SHEET_RESERVE (GARB_SHEET_MAX * 5)
+// What one sheet job may cost at its peak, declared to the pool (GARB.md
+// § The cost, measured): outside the parse's arena, the body, the
+// tokenizer's code points (4 bytes a byte) and the decoded text (up to 3),
+// eight bytes a byte of GARB_SHEET_MAX in all; inside it, at most
+// GARB_ARENA_MAX, which ordinary CSS reaches at about 5 MiB. 160 MiB, so
+// four sheets and a page's fetch fit the pool's budget at once.
+#define SHEET_RESERVE ((size_t)GARB_ARENA_MAX + 8 * (size_t)GARB_SHEET_MAX)
 
 typedef struct {
     uint32_t kind;                  // YONDER_JOB_SHEET

@@ -14,6 +14,9 @@ deleting that copy reveals the included original again. Loading, preview,
 Apply and startup snapshots use the same validation for either source.
 Neither installing the collection nor browsing it applies a composition.
 
+The compositions include an opt-in Settings control; it appears only on
+windows that advertise application settings.
+
 The first collection:
 
 ![The six compositions, active and inactive](docs/frame-studio/collection/preview.png)

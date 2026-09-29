@@ -34,6 +34,9 @@ extern struct limine_module_response *limine_module_response;
 extern struct limine_memmap_response *memmap_response;
 extern BasicRenderer kRenderer;
 extern uint64_t kCPUCyclesPerSecond;
+// rdtsc at kernel_main's first line — the zero of micros() (syscall 59), so
+// "since boot" means since THIS kernel started and not since power-on.
+extern uint64_t kBootTSC;
 
 // BOOTMARK: boot-phase mile-markers, printed via printf (direct to screen +
 // serial, unqueued — visible even when the log path itself is the suspect).

@@ -6,9 +6,10 @@
 // rules, declarations and component values out, recovering from errors
 // exactly as the specification writes it. Pure: no I/O, no clock.
 //
-// EVERYTHING A PARSE RETURNS LIVES IN ONE ARENA and goes with one free,
-// so a pointer into a result is good until that result is freed and not a
-// moment longer. Strings are UTF-8 with a NUL after them, and `len` is their
+// EVERYTHING A PARSE RETURNS IS GOOD UNTIL THAT RESULT IS FREED, and not a
+// moment longer: it lives in the result's one arena and goes with one free
+// (a one-byte text is shared from a static table instead, which outlasts
+// every result — never count on that). Strings are UTF-8 with a NUL after them, and `len` is their
 // length in bytes; no string holds a NUL of its own, since the tokenizer
 // makes every NUL a U+FFFD, escaped or not.
 
@@ -47,26 +48,30 @@ typedef enum {
 
 typedef struct garb_value garb_value_t;
 
+// A sheet is mostly these — one every three or four bytes of ordinary CSS
+// — so the fields are laid out to pack (56 bytes, static-asserted in
+// parse.c), and the lengths are 32 bits: no text is longer than the input,
+// which GARB_SHEET_MAX keeps far below that.
 struct garb_value {
     garb_kind_t kind;
+    uint32_t len;           // of `text`
     // IDENT, FUNCTION, AT_KEYWORD, HASH, STRING, URL: the value, escapes
     // resolved. DELIM: the code point. NUMBER, PERCENTAGE, DIMENSION: the
     // number as it was written (`+12`, `1e3`), which An+B and a faithful
     // serialization both need.
     const char *text;
-    size_t len;
     double number;
+    const char *unit;       // DIMENSION
+    uint32_t unit_len;
+    int32_t nchildren;
+    garb_value_t *children; // FUNCTION arguments, BLOCK contents
+    char open;              // BLOCK: '{', '[' or '('; UNMATCHED: '}', ']' or ')'
     bool integer;           // written without a fraction or an exponent
     bool id;                // HASH: its text would make an ident
     // STRING, URL: the text ended before the closing quote or parenthesis.
     // The token stands — the specification closes it for you — and a
     // reader that cares where the text broke off can see that it did.
     bool eof;
-    const char *unit;       // DIMENSION
-    size_t unit_len;
-    char open;              // BLOCK: '{', '[' or '('; UNMATCHED: '}', ']' or ')'
-    garb_value_t *children; // FUNCTION arguments, BLOCK contents
-    int32_t nchildren;
 };
 
 // ── Rules, declarations, and the lists they come in (§5) ────────────────
@@ -127,6 +132,12 @@ typedef enum {
 // A sheet is refused whole past this: the web's largest sheets are a
 // fraction of it, and a sheet is held whole while it is parsed.
 #define GARB_SHEET_MAX ((size_t)8 << 20)
+// What one parse may take, past the input itself: about 5 MiB of ordinary
+// CSS with every block read, far less of the densest (GARB.md § The cost,
+// measured). A result past this is cut short and marked incomplete rather
+// than allowed to eat the machine. A face reserving memory for a parse
+// counts this, and what the parse holds outside it (GARB.md § The cost).
+#define GARB_ARENA_MAX ((size_t)96 << 20)
 // Blocks and functions nest this deep and no deeper: past it their
 // contents are read and thrown away, so the end is still found, and the
 // result says it is incomplete.
@@ -177,9 +188,11 @@ garb_status_t garb_parse_one_declaration(const char *text, size_t len, garb_pars
 garb_status_t garb_parse_one_value(const char *text, size_t len, garb_parsed_t *out);
 
 // A rule's block, read as rules or as a block's contents, into the arena of
-// the parse it came from, so the answer lives and dies with it. False when
-// the answer came out short (the owner is marked incomplete too): what is
-// in `items` is then a prefix, and a reader that shows it says so.
+// the parse it came from, so the answer lives and dies with it — and so a
+// parse and its reads belong to one thread at a time: the arena has no
+// lock. False when the answer came out short (the owner is marked
+// incomplete too): what is in `items` is then a prefix, and a reader that
+// shows it says so.
 bool garb_rules_of(garb_parsed_t *owner, const garb_value_t *values, int32_t n,
                    garb_item_t **items, int32_t *nitems);
 bool garb_items_of(garb_parsed_t *owner, const garb_value_t *values, int32_t n,

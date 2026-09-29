@@ -545,7 +545,8 @@ void keyboard_handle_scancode(uint8_t scancode) {
                 if (code == 0x4B) { tty_focus_step(-1); s_ext_consumed[code] = true; return; }   // Alt+Left
                 if (code == 0x4D) { tty_focus_step(+1); s_ext_consumed[code] = true; return; }   // Alt+Right
             }
-            if (s_modifiers & KEYBOARD_MOD_SHIFT) {
+            // Desktop clients own their scrollback; text VTs use the ring here.
+            if ((s_modifiers & KEYBOARD_MOD_SHIFT) && !gui_owns_glass()) {
                 if (code == 0x49) { tty_view_scroll(+1); s_ext_consumed[code] = true; return; }  // Shift+PgUp
                 if (code == 0x51) { tty_view_scroll(-1); s_ext_consumed[code] = true; return; }  // Shift+PgDn
             }

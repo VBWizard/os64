@@ -19,7 +19,7 @@ typedef enum { A_EXISTS, A_EQ, A_INCLUDES, A_DASH, A_PREFIX, A_SUFFIX, A_SUBSTRI
 typedef enum {
     P_ROOT, P_FIRST_CHILD, P_LAST_CHILD, P_ONLY_CHILD, P_FIRST_OF_TYPE, P_LAST_OF_TYPE,
     P_ONLY_OF_TYPE, P_NTH_CHILD, P_NTH_LAST_CHILD, P_NTH_OF_TYPE, P_NTH_LAST_OF_TYPE, P_EMPTY,
-    P_LINK, P_ANY_LINK, P_NEVER, P_ENABLED, P_DISABLED, P_CHECKED, P_LANG, P_DIR, P_NOT, P_IS,
+    P_LINK, P_ANY_LINK, P_NEVER, P_USER_ACTION, P_ENABLED, P_DISABLED, P_CHECKED, P_LANG, P_DIR, P_NOT, P_IS,
     P_WHERE, P_HAS, P_REQUIRED, P_OPTIONAL, P_READ_ONLY, P_READ_WRITE, P_DEFINED, P_SCOPE,
 } PKind;
 typedef enum { C_NONE, C_DESCENDANT, C_CHILD, C_NEXT, C_SUBSEQUENT } Comb;
@@ -75,6 +75,10 @@ typedef struct {
     // allocation that fails anywhere spends it for all of them: a selector
     // is then neither valid nor invalid, and the parse says so.
     Parse *p;
+    // Inside a pseudo-class's own list (:not, :is, :where, :has, `of S`),
+    // where a pseudo-element names nothing (Selectors 4 §4.2, §4.3); and
+    // inside :has(), which may not hold another (§4.5).
+    bool nested, in_has;
 } Cur;
 
 static bool failed(const Cur *c)
@@ -289,10 +293,10 @@ bool garb_an_plus_b(const garb_value_t *v, int32_t n, int32_t *a, int32_t *b)
 
 static List *parse_list(Cur *c, bool forgiving, bool relative);
 
-// A list from a function's arguments.
+// A list from a function's arguments. `relative` is :has()'s.
 static List *sub_list(Cur *outer, const garb_value_t *v, int32_t n, bool forgiving, bool relative)
 {
-    Cur c = {v, n, 0, outer->p};
+    Cur c = {v, n, 0, outer->p, true, outer->in_has || relative};
     return parse_list(&c, forgiving, relative);
 }
 
@@ -318,9 +322,11 @@ static bool pseudo_class_named(const char *s, size_t n, PKind *out)
         {"root", P_ROOT}, {"first-child", P_FIRST_CHILD}, {"last-child", P_LAST_CHILD},
         {"only-child", P_ONLY_CHILD}, {"first-of-type", P_FIRST_OF_TYPE},
         {"last-of-type", P_LAST_OF_TYPE}, {"only-of-type", P_ONLY_OF_TYPE}, {"empty", P_EMPTY},
-        {"link", P_LINK}, {"any-link", P_ANY_LINK}, {"visited", P_NEVER}, {"hover", P_NEVER},
-        {"active", P_NEVER}, {"focus", P_NEVER}, {"focus-within", P_NEVER},
-        {"focus-visible", P_NEVER}, {"target", P_NEVER}, {"enabled", P_ENABLED},
+        {"link", P_LINK}, {"any-link", P_ANY_LINK}, {"visited", P_NEVER},
+        {"hover", P_USER_ACTION}, {"active", P_USER_ACTION}, {"focus", P_USER_ACTION},
+        {"focus-within", P_USER_ACTION}, {"focus-visible", P_USER_ACTION},
+        {"target", P_NEVER}, {"indeterminate", P_NEVER},
+        {"enabled", P_ENABLED},
         {"disabled", P_DISABLED}, {"checked", P_CHECKED}, {"required", P_REQUIRED},
         {"optional", P_OPTIONAL}, {"read-only", P_READ_ONLY}, {"read-write", P_READ_WRITE},
         {"defined", P_DEFINED}, {"scope", P_SCOPE},
@@ -336,7 +342,7 @@ static bool pseudo_class_named(const char *s, size_t n, PKind *out)
 // `[ … ]`, its contents.
 static bool parse_attr(Cur *outer, const garb_value_t *v, int32_t n, Simple *s)
 {
-    Cur c = {v, n, 0, outer->p};
+    Cur c = {v, n, 0, outer->p, outer->nested, outer->in_has};
     s->kind = S_ATTR;
     s->ci = -1;
     skip_ws(&c);
@@ -418,6 +424,8 @@ static bool parse_pseudo_function(Cur *c, const garb_value_t *f, Simple *s)
         return s->list != NULL && (s->list->n > 0 || !is_not);
     }
     if (ascii_ieq(name, len, "has")) {
+        if (c->in_has)
+            return false;               // §4.5: never inside another :has()
         s->pseudo = P_HAS;
         s->list = sub_list(c, f->children, f->nchildren, false, true);
         return s->list != NULL && s->list->n > 0;
@@ -544,7 +552,7 @@ static bool parse_compound(Cur *c, Compound *cp, garb_pseudo_t *pseudo)
                     return false;
                 // After a pseudo-element only the user-action classes may
                 // follow, and they never match here.
-                if (*pseudo != GARB_PSEUDO_NONE && s.pseudo != P_NEVER)
+                if (*pseudo != GARB_PSEUDO_NONE && s.pseudo != P_USER_ACTION)
                     return false;
             } else if (u->kind == GARB_FUNCTION) {
                 if (*pseudo != GARB_PSEUDO_NONE || !parse_pseudo_function(c, u, &s))
@@ -664,6 +672,11 @@ static bool parse_complex(Cur *c, bool relative, Complex *x)
             return false;
         }
     }
+    // §4.2, §4.3: a pseudo-element inside a pseudo-class's list is not a
+    // selector there — invalid in a strict list, dropped from a forgiving
+    // one, never a complex that matches.
+    if (c->nested && x->pseudo != GARB_PSEUDO_NONE)
+        return false;
     weigh(x);
     return true;
 }
@@ -698,7 +711,7 @@ garb_selectors_t *garb_selectors_parse(garb_parsed_t *owner, const garb_value_t 
                                        int32_t n, os64_html_quirks_t quirks)
 {
     Parse p = {.arena = owner->arena};
-    Cur c = {prelude, n, 0, &p};
+    Cur c = {prelude, n, 0, &p, false, false};
     garb_selectors_t *s = os64_arena_calloc(owner->arena, 1, sizeof(*s));
     if (s == NULL) {
         owner->incomplete = true;
@@ -836,7 +849,7 @@ static bool match_list(const garb_selectors_t *sel, const List *l, const os64_ht
                        const os64_html_node_t *scope)
 {
     for (int32_t i = 0; l != NULL && i < l->n; i++)
-        if (l->v[i].pseudo == GARB_PSEUDO_NONE && match_complex(sel, &l->v[i], el, scope))
+        if (match_complex(sel, &l->v[i], el, scope))
             return true;
     return false;
 }
@@ -1083,7 +1096,8 @@ static bool pseudo_matches(const garb_selectors_t *sel, const Simple *s,
         return true;
     case P_LINK:
     case P_ANY_LINK: return is_link(el);
-    case P_NEVER: return false;
+    case P_NEVER:
+    case P_USER_ACTION: return false;
     case P_ENABLED:
         return (named(el, "button") || named(el, "input") || named(el, "select") ||
                 named(el, "textarea") || named(el, "optgroup") || named(el, "option") ||

@@ -125,12 +125,15 @@ typedef struct {
 
 // A declaration read against its property's grammar: the longhands it sets
 // into `out` (a shorthand sets them all, the ones it leaves out to their
-// initial values), how many answered, 0 for a property libgarb does not
-// read, -1 when the value is INVALID. `quirks` lets the few properties
-// quirks mode allows take a length without a unit. Values that must live
-// on (a family name, a url) point into `owner`'s arena. A value holding
-// var() or env() is not read here: garb_decl_has_var says so, and the
-// cascade reads it once they are replaced.
+// initial values), how many answered; 0 for a property libgarb does not
+// read; GARB_DECL_INVALID when the value does not fit the grammar; and
+// GARB_DECL_HELD for a value holding var() or env(), which is not read
+// here — the cascade reads it once they are replaced (garb_decl_has_var
+// asks the same question first). `quirks` lets the few properties quirks
+// mode allows take a length without a unit. Values that must live on (a
+// family name, a url) point into `owner`'s arena.
+#define GARB_DECL_INVALID (-1)
+#define GARB_DECL_HELD    (-2)
 int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, bool quirks,
                               garb_set_t *out);
 bool garb_decl_has_var(const garb_decl_t *decl);

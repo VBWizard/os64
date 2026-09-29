@@ -75,7 +75,11 @@ guard again for a Terminal/Document publication after a resize. Provider and
 widget-run preparation still run; custom planners are unchanged. A pending
 interface height that differs from the installed one remains subject to the
 guard even if another role also changes. Previous fonts remain usable on refusal.
-gclock measures a clock row before staging its centered label. gterm clamps
+gclock follows the Interface face, with an optional local `FontSize` override
+in `gclock.conf`. It measures digit/colon slots, centers them in the content
+area, and grows its window minimum after successful font/run preparation.
+A refused minimum aborts adoption and keeps the old font and layout.
+gterm clamps
 its initial frame to the screen before preparing the grid, so a large saved
 font cannot open a preferred 100-column window beyond the display.
 

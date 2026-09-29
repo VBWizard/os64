@@ -103,6 +103,8 @@ extern volatile bool kHHDMMaintenanceEnabled;
 /// at its HHDM address in the kernel page tables. Idempotent (HHDM virt<->phys
 /// is a fixed 1:1 relation, so remapping writes an identical PTE). No-op until
 /// kHHDMMaintenanceEnabled.
+// Fallible preparation for allocator-owned HHDM mappings; no leaf publication.
+bool paging_hhdm_prepare_range(uintptr_t phys_start, uint64_t length);
 void paging_hhdm_map_range(uintptr_t phys_start, uint64_t length);
 
 /// @brief Unmap the HHDM mapping of every page FULLY CONTAINED in physical

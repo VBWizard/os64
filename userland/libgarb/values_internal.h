@@ -35,6 +35,9 @@ bool vc_url(VCur *c, garb_val_t *out);
 bool vc_image(VCur *c, garb_val_t *out);
 bool read_color_value(const garb_value_t *t, garb_color_t *out);
 const garb_calc_t *read_calc(Arena *a, const garb_value_t *f, int accept, int *type);
+// Whether a longhand's value is read but laid out as something else until
+// its slice (props.c's kDisplayApproximated): not what @supports means.
+bool garb_set_approximated(const garb_set_t *set);
 
 // The longhands a property name sets — itself for a longhand, all of them
 // for a shorthand — into `out` (GARB_SETS_MAX long). 0 for a name libgarb

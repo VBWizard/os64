@@ -353,6 +353,10 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     flow_tree_t *tree = os64_calloc(1, sizeof(*tree));
     if (tree == NULL)
         return NULL;
+    // The public boxes mirror what pass 3 placed, one for each box and
+    // fragment, so the budgeted arenas already bound them: no cap of their
+    // own, which would turn a page the budget cut short into no page.
+    tree->arena.cap = SIZE_MAX;
     tree->styles = f_style_build(doc, model, env);
     tree->boxes = tree->styles != NULL ? f_boxes_build(doc, model, tree->styles, env) : NULL;
     tree->layout = tree->boxes != NULL ? f_layout(tree->boxes, doc, model, env, width) : NULL;

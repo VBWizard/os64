@@ -70,7 +70,8 @@ p: color: rgb(255, 0, 0); margin-top: 3px; margin-left: 7px; padding-top: 4px; p
 (end)
 END
 
-# @media, @supports, and a style element's media.
+# @media, @supports, and a style element's media. A grid or flex container
+# is read but laid out as the block it is outside, so it is not SUPPORTED.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -80,12 +81,15 @@ p { color: red }
 @supports (display: grid) { p { margin-top: 1px } }
 @supports not (display: nonsense) { p { margin-left: 2px } }
 @supports (foo: bar) { p { margin-right: 3px } }
+@supports (display: table-cell) { p { margin-bottom: 4px } }
+@supports not (display: inline-flex) { p { padding-left: 5px } }
+@supports (display: contents) { p { padding-right: 6px } }
 </style>
 <style media="print">p { width: 1px }</style>
 <style media="(min-width: 700px)">p { height: 2px }</style>
 <p>x
 WANT
-p: color: rgb(0, 0, 255); margin-top: 1px; margin-left: 2px; height: 2px
+p: color: rgb(0, 0, 255); margin-bottom: 4px; margin-left: 2px; padding-right: 6px; padding-left: 5px; height: 2px
 (end)
 END
 
@@ -188,16 +192,18 @@ END
 # address as written. An imported sheet's rules come BEFORE its importer's:
 # a.css's blue loses to the page's own red, and a1.css (imported by a.css)
 # comes before a.css, so a.css's margin-top wins over a1's. b.css's media
-# does not hold at 800; c.css's supports() does; d.css's does not; e.css is
-# imported after a rule, which makes the @import nothing.
+# does not hold at 800; c.css's supports() does; d.css's does not, and nor
+# does f.css's, a grid laid out as the block it is outside rather than as
+# written; e.css is imported after a rule, which makes the @import nothing.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
 @charset "utf-8";
 @import "a.css";
 @import url(b.css) screen and (max-width: 500px);
-@import "c.css" supports(display: grid);
+@import "c.css" supports(display: block);
 @import "d.css" supports(foo: bar);
+@import "f.css" supports(display: grid);
 p { color: red }
 @import "e.css";
 </style><p>x
@@ -214,6 +220,8 @@ p { padding-top: 3px }
 p { padding-left: 4px }
 @@SHEET e.css
 p { width: 1px }
+@@SHEET f.css
+p { padding-bottom: 6px }
 WANT
 p: color: rgb(255, 0, 0); margin-top: 1px; margin-left: 5px; padding-top: 3px
 (end)
@@ -254,5 +262,21 @@ p { margin-left: 5px }
 p { padding-top: 3px }
 WANT
 p: padding-top: 3px
+(end)
+END
+
+# A custom property's empty value is a value, and its initial one is not:
+# the "space toggle" (`--on: ;` substitutes nothing, `--off: initial` takes
+# the fallback). And `unset` on a custom property inherits, as custom
+# properties do (Cascade 4 § 7.3).
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+div { --on: ; --off: initial; --u: blue }
+p { --u: unset; color: var(--u, red); margin-top: var(--on) 3px; margin-bottom: var(--off, 4px) }
+</style>
+<div><p>x</div>
+WANT
+p: color: rgb(0, 0, 255); margin-top: 3px; margin-bottom: 4px
 (end)
 END
