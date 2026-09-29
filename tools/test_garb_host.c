@@ -4,9 +4,9 @@
 // css-parsing-tests' inputs, framed by tools/test_garb_suite.py — and prints
 // one JSON line per record, in the suite's representation, for the runner to
 // compare. As a TEST (`garb_driver --sweep FILE`) it runs every entry
-// point — the sheet, each list, each single item — with every allocation
-// failing in turn, and asserts each parse ends, nothing leaks, and what
-// comes back is true of the whole text. And two probes: `--deep`
+// point — the sheet, each list, each single item, a selector list — with
+// every allocation failing in turn, and asserts each parse ends, nothing
+// leaks, and what comes back is true of the whole text or says it is not. And two probes: `--deep`
 // parses a million nested `(` on a thread with a small stack (past the
 // depth bound the parser must find the end without recursing), and
 // `--numbers` dumps numbers past int64_t's reach and past a double's. And
@@ -24,6 +24,8 @@
 #include "os64/arena.h"
 
 #include "garb/garb.h"
+#include "garb/select.h"
+#include "html/html.h"
 
 // ── Allocation, and failing it on purpose ───────────────────────────────
 
@@ -156,6 +158,78 @@ static void one(const char *mode, const char *text, size_t len, const char *prot
     garb_free(&r);
 }
 
+// ── Selectors ───────────────────────────────────────────────────────────
+
+// §6 An+B, for the suite's An+B.json.
+static void an_plus_b(const char *text, size_t len)
+{
+    garb_parsed_t r;
+    int32_t a, b;
+    if (garb_parse_values(text, len, &r) == GARB_OK && garb_an_plus_b(r.values, r.nvalues, &a, &b))
+        printf("[%d, %d]\n", (int)a, (int)b);
+    else
+        puts("null");
+    garb_free(&r);
+}
+
+// Every element in document order, template contents aside.
+static const os64_html_node_t **s_elements;
+static size_t s_nelements, s_elcap;
+
+static void collect(const os64_html_node_t *n)
+{
+    for (; n != NULL; n = n->next) {
+        if (n->kind == OS64_HTML_ELEMENT) {
+            if (s_nelements == s_elcap) {
+                s_elcap = s_elcap ? s_elcap * 2 : 256;
+                s_elements = realloc(s_elements, s_elcap * sizeof(*s_elements));
+            }
+            s_elements[s_nelements++] = n;
+        }
+        collect(n->first_child);
+    }
+}
+
+// A page, and a selector list per line: for each list, null when it is
+// invalid, else each selector's [a, b, c, pseudo, [indices it matches]].
+static void select_page(const char *html, size_t hlen, const char *lists)
+{
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, html, hlen);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    s_nelements = 0;
+    collect(doc->document->first_child);
+    for (const char *line = lists; *line != '\0';) {
+        const char *end = strchr(line, '\n');
+        size_t n = end != NULL ? (size_t)(end - line) : strlen(line);
+        garb_parsed_t r;
+        garb_parse_values(line, n, &r);
+        garb_selectors_t *sel = garb_selectors_parse(&r, r.values, r.nvalues, doc->quirks);
+        if (sel == NULL) {
+            puts("null");
+        } else {
+            fputs("[", stdout);
+            for (int32_t i = 0; i < garb_selectors_count(sel); i++) {
+                uint32_t sp = garb_selector_specificity(sel, i);
+                printf("%s[%u, %u, %u, %d, [", i ? ", " : "", sp >> 20, (sp >> 10) & 1023,
+                       sp & 1023, (int)garb_selector_pseudo(sel, i));
+                bool first = true;
+                for (size_t k = 0; k < s_nelements; k++)
+                    if (garb_selector_matches(sel, i, s_elements[k])) {
+                        printf("%s%zu", first ? "" : ", ", k);
+                        first = false;
+                    }
+                fputs("]]", stdout);
+            }
+            puts("]");
+        }
+        garb_free(&r);
+        line = end != NULL ? end + 1 : line + n;
+    }
+    os64_html_document_free(doc);
+}
+
 // ── The allocation sweep ────────────────────────────────────────────────
 
 static void parse_all(const char *text, size_t len)
@@ -175,6 +249,8 @@ static void parse_all(const char *text, size_t len)
             fprintf(stderr, "FAIL sweep: a reparse came out short and the sheet says whole\n");
             exit(1);
         }
+        if (!rule->at)
+            (void)garb_selectors_parse(&r, rule->prelude, rule->nprelude, OS64_HTML_NO_QUIRKS);
     }
     garb_free(&r);
 }
@@ -417,6 +493,79 @@ static int sweep_lists(void)
     return failures;
 }
 
+// A selector list with every allocation failing in turn: an answer that
+// differs from the whole parse's — NULL where it was valid, a list where it
+// was invalid, fewer selectors, other weights — must come with the owner
+// marked incomplete. A failure is never a verdict on the selector.
+static void selector_desc(const char *text, char *out, size_t cap, bool *incomplete)
+{
+    garb_parsed_t r;
+    (void)garb_parse_values(text, strlen(text), &r);
+    garb_selectors_t *sel = garb_selectors_parse(&r, r.values, r.nvalues, OS64_HTML_NO_QUIRKS);
+    size_t at = (size_t)snprintf(out, cap, "%s", sel == NULL ? "null" : "list");
+    for (int32_t i = 0; sel != NULL && i < garb_selectors_count(sel) && at < cap; i++)
+        at += (size_t)snprintf(out + at, cap - at, " %u/%d", garb_selector_specificity(sel, i),
+                               (int)garb_selector_pseudo(sel, i));
+    *incomplete = r.incomplete;
+    garb_free(&r);
+}
+
+static int sweep_selectors(void)
+{
+    // Each shape, many times over, so the selectors outgrow the arena's
+    // first chunk and a failure lands inside the selector parse: a long
+    // LIST (its array of selectors grows), and one long SELECTOR of
+    // compounds (its array of compounds grows), bare and in :is().
+    static const struct { const char *before, *unit, *sep, *after; } shapes[] = {
+        {"", "a, b.c, #d > e + f ~ g", ", ", ""},
+        {"", ":is(a, b, :not(.c)) d", ", ", ""},
+        {"", "[x=y i], [z|=w], a[b]", ", ", ""},
+        {"", ":where(a, :is(b, [c])), :has(> d)", ", ", ""},
+        {"", "li:nth-child(2n + 1 of .x)", ", ", ""},
+        {"", "a::before", ", ", ""},
+        {"", ":is(a, $$)", ", ", ""},
+        {"", "a, $$", ", ", ""},
+        {"", "a.b[c]", " ", ""},
+        {"x, :is(", "a.b", " > ", ")"},
+        {"", "a", " ", "::before b"},
+    };
+    enum { COPIES = 2000 };
+    static char text[COPIES * 64], whole[COPIES * 32], part[COPIES * 32];
+    int failures = 0;
+    for (size_t k = 0; k < sizeof(shapes) / sizeof(shapes[0]); k++) {
+        size_t len = (size_t)snprintf(text, sizeof(text), "%s", shapes[k].before);
+        for (int i = 0; i < COPIES; i++)
+            len += (size_t)snprintf(text + len, sizeof(text) - len, "%s%s", i ? shapes[k].sep : "",
+                                    shapes[k].unit);
+        snprintf(text + len, sizeof(text) - len, "%s", shapes[k].after);
+        bool inc;
+        allocations = 0;
+        fail_at = 0;
+        selector_desc(text, whole, sizeof(whole), &inc);
+        size_t worst = allocations;
+        for (size_t at = 1; at <= worst; at++) {
+            allocations = 0;
+            fail_at = at;
+            selector_desc(text, part, sizeof(part), &inc);
+            fail_at = 0;
+            if (strcmp(part, whole) != 0 && !inc) {
+                fprintf(stderr, "FAIL sweep selectors \"%s\"%s: failure at %zu answered "
+                        "\"%.60s\", the whole \"%.60s\", and nothing says it is short\n",
+                        shapes[k].unit, shapes[k].sep, at, part, whole);
+                failures++;
+            }
+            if (live != 0) {
+                fprintf(stderr, "FAIL sweep selectors: %zu leaked with failure at %zu\n", live, at);
+                failures++;
+                live = 0;
+            }
+        }
+    }
+    printf("libgarb sweep, selectors: every allocation failed in turn, %s\n",
+           failures == 0 ? "each answer the whole one or marked incomplete" : "FAILED");
+    return failures;
+}
+
 static int sweep(const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -434,6 +583,7 @@ static int sweep(const char *path)
     failures += sweep_text("a long identifier", long_ident, sizeof(long_ident) - 1);
     failures += sweep_ones();
     failures += sweep_lists();
+    failures += sweep_selectors();
     return failures == 0 ? 0 : 1;
 }
 
@@ -566,7 +716,12 @@ int main(int argc, char **argv)
             break;
         char *protocol = field(&plen, &pabsent);
         char *environment = field(&elen, &eabsent);
-        one(argv[1], text, len, pabsent ? NULL : protocol, eabsent ? NULL : environment);
+        if (strcmp(argv[1], "anplusb") == 0)
+            an_plus_b(text, len);
+        else if (strcmp(argv[1], "select") == 0)
+            select_page(text, len, protocol);
+        else
+            one(argv[1], text, len, pabsent ? NULL : protocol, eabsent ? NULL : environment);
         fflush(stdout);
         free(text);
         free(protocol);
