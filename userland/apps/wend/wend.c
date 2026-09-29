@@ -600,7 +600,11 @@ static bool fetch_cancelled(void *ctx)
 static bool face_confirm(void *ctx, const char *question, bool security, const char *refused)
 {
     (void)ctx;
-    return confirm(question, security, refused);
+    // libway's questions say nothing about how to answer; on this row it
+    // is a key.
+    char asked[WEND_STATUS_MAX];
+    os64_snprintf(asked, sizeof(asked), "%s (y/n) ", question);
+    return confirm(asked, security, refused);
 }
 
 static void face_progress(void *ctx, const char *sentence)
@@ -643,7 +647,12 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why,
                  const os64_page_request_t *request)
 {
     s_cancel = 0;
-    if (!way_load(&s_way, url, request, &out->way, why))
+    // One leg per load, on this thread: wend waits for its pages, so the
+    // leg's sentence simply becomes the status row's.
+    way_leg_t leg = way_leg(&s_way);
+    bool loaded = way_load(&leg, url, request, &out->way, why);
+    os64_strcopy(s_way.status, sizeof(s_way.status), leg.status);
+    if (!loaded)
         return false;
     out->sel = -1;
     out->top = 0;
@@ -1598,6 +1607,7 @@ int main(int argc, char **argv)
     s_way.name = "wend";
     s_way.agent = WEND_AGENT;
     s_way.accept = WEND_ACCEPT;
+    s_way.delayed_hint = " - press g to go";
     s_way.face = (way_face_t){NULL, face_confirm, fetch_cancelled, face_progress};
 
     geometry();

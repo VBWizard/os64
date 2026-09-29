@@ -276,7 +276,7 @@ LIBPAGE_PROGRAMS := wend pagetest flowdump yonder
 # Where a page is laid out: the layout library's probe, and the browser.
 LIBFLOW_PROGRAMS := flowdump yonder
 # A browsing session (libway): the browsers.
-LIBWAY_PROGRAMS := wend
+LIBWAY_PROGRAMS := wend yonder
 
 # pngtest directly checks the codec; gview and desktop use libimage.
 # libpng carries its own DT_NEEDED edge on
