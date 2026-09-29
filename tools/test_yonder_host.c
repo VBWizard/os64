@@ -330,6 +330,16 @@ static void scale_cases(void)
     const uint32_t copied[16] = {0, 0, 0, 0, 0, A, B, 0, 0, C, A, 0, 0, 0, 0, 0};
     expect("picture: a box its own size is a copy", pixels_are(dst, copied, 16), NULL);
 
+    // A box as wide as an int32_t says, starting past zero: its right edge
+    // is past INT32_MAX, which must clip and not wrap (UBSan watches).
+    uint32_t wide[4] = {0};
+    const uint32_t one[1] = {A};
+    yonder_draw_picture(wide, 4, (os64_gui_rect_t){0, 0, 4, 1},
+                        (os64_gui_rect_t){2, 0, INT32_MAX, INT32_MAX}, one, 1, 1);
+    const uint32_t wide_want[4] = {0, 0, A, A};
+    expect("picture: a box past INT32_MAX clips, its edge added in 64 bits",
+           pixels_are(wide, wide_want, 4), NULL);
+
     uint32_t row[4] = {0};
     const uint32_t ab[2] = {A, B};
     yonder_draw_picture(row, 4, (os64_gui_rect_t){0, 0, 4, 1}, (os64_gui_rect_t){0, 0, 4, 1}, ab, 2, 1);

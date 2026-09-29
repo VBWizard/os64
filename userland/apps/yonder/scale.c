@@ -2,12 +2,12 @@
 
 #include "scale.h"
 
-static int32_t max32(int32_t a, int32_t b)
+static int64_t max64(int64_t a, int64_t b)
 {
     return a > b ? a : b;
 }
 
-static int32_t min32(int32_t a, int32_t b)
+static int64_t min64(int64_t a, int64_t b)
 {
     return a < b ? a : b;
 }
@@ -23,9 +23,12 @@ void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
 {
     if (box.w <= 0 || box.h <= 0 || sw == 0 || sh == 0)
         return;
-    int32_t x0 = max32(box.x, clip.x), y0 = max32(box.y, clip.y);
-    int32_t x1 = min32(box.x + box.w, clip.x + clip.w);
-    int32_t y1 = min32(box.y + box.h, clip.y + clip.h);
+    // Edges are added in 64 bits: a picture may be as wide as an int32_t
+    // says (a width of 1000000% three tables deep), and its box need not
+    // start at zero. What is walked is cut to `clip`, a real surface's.
+    int32_t x0 = (int32_t)max64(box.x, clip.x), y0 = (int32_t)max64(box.y, clip.y);
+    int32_t x1 = (int32_t)min64((int64_t)box.x + box.w, (int64_t)clip.x + clip.w);
+    int32_t y1 = (int32_t)min64((int64_t)box.y + box.h, (int64_t)clip.y + clip.h);
     for (int32_t y = y0; y < y1; y++) {
         // The source row whose span covers the middle of this one:
         // floor((y - box.y + 1/2) * sh / box.h), in integers.
