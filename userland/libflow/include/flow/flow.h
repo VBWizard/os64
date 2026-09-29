@@ -304,8 +304,10 @@ struct flow_box {
 
 typedef struct flow_tree flow_tree_t;
 
-// Styles, boxes and lays out the page at `width` CSS pixels. NULL on no
-// memory only; otherwise a tree whose `incomplete` says whether it is
+// Styles, boxes and lays out the page at `width` CSS pixels. NULL when
+// memory runs out outside the budget, or when there is no document, no
+// environment, no text context or font resolver, or the width is
+// negative; otherwise a tree whose `incomplete` says whether it is
 // whole — a document libhtml refused partway, or a model libpage could not
 // finish, is not, however it lays out. Every call is a whole rebuild
 // (LAYOUT.md, ruling 2).
@@ -326,7 +328,8 @@ const flow_box_t *flow_root(const flow_tree_t *tree);
 // without z-index or positioning): the block-level boxes first — their
 // backgrounds and borders — then the inline content, spans before the
 // text they sit behind; an atom's own content where the atom is. Pruned
-// on OVERFLOW rects, so painting the viewport costs the boxes it shows.
+// on OVERFLOW rects: a subtree off the viewport costs one test, and a box
+// that meets it costs a test for each of its children, lines included.
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 

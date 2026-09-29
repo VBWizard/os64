@@ -31,7 +31,7 @@ typedef struct {
     const flow_env_t *env;
     FBoxes *out;
     int32_t depth;      // descents open, each costed as a block level (F_DEPTH_MAX)
-    bool stopped;       // memory ran out, or the page is nested past F_DEPTH_MAX
+    bool stopped;       // memory or the arena's budget ran out, or the page nests past F_DEPTH_MAX
 } B;
 
 // A list's counter: the number the next item wears.
@@ -628,7 +628,7 @@ static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
             inner.next = inner.down ? count_items(b, el) : 1;
         use = &inner;
     }
-    // The marker is made BEFORE the box, so running out of memory for it
+    // The marker is made BEFORE the box, so a build that stops making it
     // leaves no box behind that a whole build would have drawn with one.
     const char *marker = NULL;
     uint32_t marker_len = 0;

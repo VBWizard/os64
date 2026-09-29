@@ -275,9 +275,9 @@ typedef struct {
     FArena arena;
     const FStyles *styles;          // what the boxes' styles came from
     FBox *root;
-    // Memory ran out partway, or the page nests past F_DEPTH_MAX: every
-    // box and item present is real, and the build stopped at the first
-    // thing it could not make.
+    // Memory or the arena's budget ran out partway, or the page nests past
+    // F_DEPTH_MAX: every box and item present is real, and the build
+    // stopped at the first thing it could not make.
     bool incomplete;
 } FBoxes;
 

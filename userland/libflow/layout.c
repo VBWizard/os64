@@ -2547,7 +2547,8 @@ static bool table_is_empty(const FBox *t)
 
 // The table: its width and its columns', its captions, its rows and their
 // cells, placed in its containing block like any block. One whose build or
-// layout ran out of memory partway keeps its place, empty: its columns
+// layout stopped partway (memory, the budget, the depth) keeps its place,
+// empty: its columns
 // would come from only the cells it has, so no line in it breaks where the
 // whole table's would, and none of it is real yet.
 static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw, Cursor *cur)
