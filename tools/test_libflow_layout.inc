@@ -126,6 +126,32 @@ static void layout_cases(void)
         "        text \"aaaa\" 8 18 32 16 serif 16\n"
         "        text \"bbbbbbbb\" 40 18 64 16 serif 16 bold\n");
 
+    // A wbr breaks where ITS white-space wraps: inside `nobr` pass 1 makes it
+    // `normal` (`nobr wbr`), so the 64px of `aaaa` `bbbb` splits at it in 34.
+    layout_case("a wbr inside nobr is the one break the run allows",
+        "<!doctype html><p><nobr>aaaa<wbr>bbbb</nobr>", 50,
+        "page 50 72\n"
+        "block html 0 0 50 72\n"
+        "  block body 8 16 34 40\n"
+        "    block p 8 16 34 40\n"
+        "      line 8 16 34 20 base 14\n"
+        "        span nobr 8 18 32 16\n"
+        "        text \"aaaa\" 8 18 32 16 serif 16\n"
+        "      line 8 36 34 20 base 14\n"
+        "        span nobr 8 38 32 16\n"
+        "        text \"bbbb\" 8 38 32 16 serif 16\n");
+    // In `pre` the wbr inherits pre, and there it is no opportunity: one
+    // line, overflowing.
+    layout_case("a wbr in pre is no break",
+        "<!doctype html><pre>aaaa<wbr>bbbb</pre>", 50,
+        "page 72 52\n"
+        "block html 0 0 50 52\n"
+        "  block body 8 16 34 20\n"
+        "    block pre 8 16 34 20\n"
+        "      line 8 16 34 20 base 14\n"
+        "        text \"aaaa\" 8 18 32 16 mono 16\n"
+        "        text \"bbbb\" 40 18 32 16 mono 16\n");
+
     // Past the engine's 1 MiB run cap, a text is measured in windows and
     // still laid out whole — prose and one enormous word alike.
     {

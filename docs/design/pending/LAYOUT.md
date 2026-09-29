@@ -193,25 +193,27 @@ Lengths are 26.6 fixed point — the text engine's unit — so a margin of
 `0.67em` on a 32px heading is 1372/64 px and nothing rounds until a box
 coordinate is written (*Rounding*, below).
 
-**The first producer** is `style.c`: the Rendering chapter's sheet, section
-by section, each rule naming its section so the file can be held against
-the standard line by line — the hidden elements, `body`'s 8px, `p`'s 1em,
-the headings (size in the parent's em, margins in their own), `blockquote`
-and `figure`, the monospace and `white-space: pre` elements, the phrasing
-elements (italic, `bolder`, `larger`/`smaller` by CSS Fonts' 6/5 ratio,
-`sub`/`sup`, `mark`, the decorations, `nobr`), the lists (with the nesting
-rules that make a nested `ul` circle and a third level square and take
-nested lists' block margins away), the tables (`border-spacing: 2px`,
-cells' 1px padding, `th` bold and centred when its row's alignment was
-never set, rows and cells taking `vertical-align` from their group), `hr`
-(gray, a 1px inset border all round, `0.5em auto` margins), `fieldset`,
-`iframe`'s 2px inset border, form controls as inline-blocks, `details`
-(the first `summary` is the disclosure; the rest of a closed one is not
-drawn), an open `dialog` laid out where it stands (positioning is booked),
-and a `form` the parser left inside table structure displayed `none`.
-`wbr` is a break opportunity and nothing else; pass 3 reads it as the one
-element boundary that IS a break. `noscript` is SHOWN — the chapter hides
-it only when scripting is on.
+**The first producer** is `style.c`: the Rendering chapter's sheet,
+section by section, each rule naming its section so the file can be held
+against the standard line by line — the hidden elements (and every
+`[popover]` but an open dialog: only script opens one), `body`'s 8px,
+`p`'s 1em, the headings (size in the parent's em, margins in their own),
+`blockquote` and `figure`, `address` italic, the monospace and
+`white-space: pre` elements, the phrasing elements (italic, `bolder`,
+`larger`/`smaller` by CSS Fonts' 6/5 ratio, `sub`/`sup`, `mark`, the
+decorations, `nobr`, and a `wbr` inside one breaking after all), the lists
+(with the nesting rules that make a nested `ul` circle and a third level
+square and take nested lists' block margins away), the tables
+(`border-spacing: 2px`, cells' 1px padding, `th` bold and centred when its
+row's alignment was never set, rows and cells taking `vertical-align` from
+their group), `hr` (gray, a 1px inset border all round, `0.5em auto`
+margins), `fieldset` and `legend`, `iframe`'s 2px inset border, form
+controls as inline-blocks, `details` (the first `summary` is the
+disclosure; the rest of a closed one is not drawn), an open `dialog` laid
+out where it stands (positioning is booked), and a `form` the parser left
+inside table structure displayed `none`. `wbr` is a break opportunity and
+nothing else; pass 3 reads it as the one element boundary that IS a break.
+`noscript` is SHOWN — the chapter hides it only when scripting is on.
 
 Then the PRESENTATIONAL ATTRIBUTES, as the chapter maps them: `body`'s
 margins (`marginheight`/`topmargin` vertical, `marginwidth`/`leftmargin`
@@ -716,7 +718,13 @@ LIBPAGE.md's rule restated for geometry:
   rows × columns. The tree has as many leaves as the columns holds reach
   and grows as they reach further, and the spans' counting sort as many
   buckets as the widest span: a table's working memory is its own
-  size, so a page of ten thousand small tables costs small tables. A
+  size, so a page of ten thousand small tables costs small tables. NESTED
+  tables hold theirs at once — a cell lays out the next table while its
+  own table's columns wait — and columns can be declared (`<col
+  span=1000>`), so 120 tables nested ten such `col`s deep held 56 MB from a
+  20 KB page: the working memory is charged to the arena budget beside
+  the lines (`max_arena_bytes`), and a chain that reaches it stops
+  `incomplete`. A
   rowspan's share of its rows' heights is summed and spread in a
   range-add, range-sum tree over the row heights (log of the rows per
   cell), and a cell's height at placement comes from its rows' tops: no
@@ -725,11 +733,26 @@ LIBPAGE.md's rule restated for geometry:
   suite lays out a table nested forty deep AND a table whose cells all
   span, and asserts the layout count against the linear bound in both.
   The measuring run per text piece is laid out once per layout;
-  fragments once per line.
+  fragments once per line. **A question about an element's ancestors or
+  siblings is answered from its parent's record, never by a walk**: pass
+  1 keeps what the chapter's descendant selectors ask (lists, list items,
+  `nobr`, `q` depth, a link, decorations) on each element as it styles
+  it, parent before child, and a child that answers for its parent (an
+  `rp`) sets the parent's bit. A walk per element is quadratic on a deep
+  or a wide page; the host suite builds one of each under an alarm.
 - **Memory is the text engine's budget plus the boxes, and REBUILDING
   DOUBLES THE PEAK.** Runs are the big cost (a glyph placement is tens of
   bytes) and they live in the text context the face hands in, which has
-  one `memory_cap` and is caller-serialised. A rebuild builds the NEW
+  one `memory_cap` and is caller-serialised. The boxes and the lines have
+  a budget of their own, `flow_env_t.max_arena_bytes` for each arena
+  (`FLOW_ARENA_DEFAULT`, 64 MiB, when the face sets none), because a page
+  can MULTIPLY them: an inline split round a block reopens every inline
+  still open there, so 400 open `<b>`s and 60000 interrupting `<div>`s
+  asked for 3.7 GB of boxes from a 706 KB page. At the budget the build
+  stops as it does at `F_DEPTH_MAX`, `incomplete`, what it holds real. The
+  largest corpus page (wikipedia) holds about 5 MB in either. The styles
+  are not budgeted: one record an element, bounded by the document
+  libhtml admitted, and all or nothing. A rebuild builds the NEW
   tree while the OLD one is still retained — the face must keep the old
   tree until the new one exists, or a rebuild that fails leaves it with
   nothing to paint — so the peak is two layouts of the page, and a page
