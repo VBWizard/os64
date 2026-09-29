@@ -489,6 +489,7 @@ static void relayout(void)
 
 static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask);
 static void buttons_follow(void);
+static void bar_forget(void);
 static void open_address(const char *url, NavKind kind, const way_position_t *crumb,
                          os64_page_request_t *request);
 
@@ -543,6 +544,9 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
         else if (kind == NAV_FORWARD)
             way_went_forward(&g.way, g.page.way.url, &here);
     }
+    // The page on screen is being replaced, and its question with it: a
+    // page that fails to lay out (above) leaves both where they were.
+    bar_forget();
     page_clear(&g.page);
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
@@ -642,7 +646,10 @@ static void bar_forget(void)
 }
 
 // A new question replaces one that is up: a worker's is answered No (its
-// page is being left), a request waiting on this thread is dropped.
+// page is being left), a request waiting on this thread is dropped. Its
+// number comes from whoever asks — the worker's mailbox, or this thread's
+// own count for a request — and `asker` says which, so the two counts never
+// have to agree.
 static void bar_ask(Asker asker, uint32_t number, const char *question)
 {
     if (g.asker == ASK_WORKER && g.nav.mail != NULL)
@@ -715,10 +722,16 @@ static const char *file_path(const char *after)
 static void start_trip(const char *url, os64_page_request_t *request, NavKind kind,
                        const way_position_t *crumb)
 {
+    // A QUESTION IS ABOUT THE PAGE ON SCREEN, and going anywhere leaves it:
+    // whoever asked, it goes (a form's request with it) before this goes.
+    bar_forget();
     if (os64_strlen(url) >= 7 && os64_memcmp(url, "file://", 7) == 0) {
+        // `url` may be the request's own: the path is taken before it goes.
+        char path[OS64_FETCH_URL_MAX];
+        os64_strcopy(path, sizeof(path), file_path(url + 7));
         os64_page_request_free(request);
         stop_trip();
-        open_local(file_path(url + 7), kind, crumb);
+        open_local(path, kind, crumb);
         return;
     }
     stop_trip();
@@ -795,6 +808,7 @@ static void open_address(const char *typed, NavKind kind, const way_position_t *
                          os64_page_request_t *request)
 {
     if (typed[0] == '/') {
+        bar_forget();           // the page on screen is being left (start_trip)
         stop_trip();
         open_local(typed, kind, crumb);
         return;
