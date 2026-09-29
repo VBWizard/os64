@@ -43,6 +43,7 @@ void way_page_clear(way_page_t *p)
     p->doc = NULL;
     p->text = NULL;
     p->textlen = 0;
+    p->posted = false;
 }
 
 bool way_details_flip(way_page_t *p, const os64_html_node_t *details)

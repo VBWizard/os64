@@ -68,6 +68,10 @@ typedef struct {
     // The page's standing line: the reply's status and reason, and a
     // sentence for every way the page is incomplete.
     char note[WAY_SENTENCE_MAX];
+    // The reply to a POST, by the FINAL method: its address alone cannot
+    // fetch it again, so a reload is the form sent again (a 303 turned a
+    // POST into a GET, and that page is an address like any other).
+    bool posted;
 } way_page_t;
 
 // How the library reaches the person.
