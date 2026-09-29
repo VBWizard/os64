@@ -11,6 +11,11 @@
 // space and do not know about each other, so a family that used -2 for
 // something of its own would misname an unreadable argument as that thing).
 
+// How many handles one task may hold open at once: the size of its handle
+// table. A limit in userland that holds one handle per level of something
+// (a directory walk) is derived from this, so it grows with the table.
+#define OS64_TASK_HANDLES 64
+
 #define OS64_FILE_ERR_INVALID      (-1)  // boundary-owned: no such handle, or
                                          // a refusal with no better name
 #define OS64_FILE_ERR_BAD_POINTER  (-2)  // boundary-owned: a pointer that was

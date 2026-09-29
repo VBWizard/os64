@@ -39,6 +39,7 @@
 #include "memory/mmap.h"   // MAP_ANONYMOUS (map()'s regions are anonymous)
 #include "CONFIG.h"        // TICKS_PER_SECOND — sleep()'s ms→ticks boundary
 #include "os64/ticks.h"    // os64_ticks_t — the ticks() out-struct (abi)
+#include "driver/system/x86_64.h"   // rdtsc — micros() reads the counter
 #include "os64/memory.h"   // os64_memory_t — the memory() out-struct (abi)
 #include "os64/time.h"     // os64_time_t — the time() out-struct (abi)
 #include "os64/pty.h"      // os64_pty_header_t/_cell_t — pty_snapshot's out-structs (abi)
@@ -60,6 +61,8 @@ extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kSystemCurrentTime;   // UTC epoch seconds (timer IRQ advances it)
 extern volatile uint64_t irq0_current_count;   // ticks into the current second (same IRQ)
 extern uint64_t kTicksPerSecond;
+extern uint64_t kCPUCyclesPerSecond;   // the TSC's rate, fixed at boot — micros() converts at it
+extern uint64_t kBootTSC;              // micros()'s zero (kernel.c stamps it first thing)
 extern int kTimeZoneOffsetMinutes;             // configured standard offset, east of UTC
 extern task_t *kKernelTask;        // never a pty seat — pty_resize's walk skips it
 extern uint64_t kTotalMemory;      // installed RAM (memmap.c, Limine map sum)
@@ -103,6 +106,8 @@ static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pty_create_stream(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_pty_history(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_pty_viewport(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -142,6 +147,8 @@ static uint64_t syscall_reap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_ticks(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_micros(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_memory(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -185,6 +192,12 @@ static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uin
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_window_focus(uint64_t a0,uint64_t a1,uint64_t a2,
+    uint64_t a3,uint64_t a4,uint64_t a5)
+{
+    (void)a1;(void)a2;(void)a3;(void)a4;(void)a5;
+    return (uint64_t)gui_window_focus((int64_t)a0);
+}
 static uint64_t syscall_gui_window_set_min_size(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -243,6 +256,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_REAP,      "reap",      syscall_reap,      false, 0x01),  // arg0 = exit-code out ptr
 	SYSCALL_DEFINE(SYSCALL_SLEEP,     "sleep",     syscall_sleep,     false, 0x00),  // arg0 = milliseconds (a value, no pointers)
 	SYSCALL_DEFINE(SYSCALL_TICKS,     "ticks",     syscall_ticks,     false, 0x01),  // arg0 = os64_ticks_t out ptr
+	SYSCALL_DEFINE(SYSCALL_MICROS,    "micros",    syscall_micros,    false, 0x00),  // no args; the count comes back in RAX
 	SYSCALL_DEFINE(SYSCALL_MEMORY,    "memory",    syscall_memory,    false, 0x01),  // arg0 = os64_memory_t out ptr
 	SYSCALL_DEFINE(SYSCALL_PRINTAT,   "printat",   syscall_printat,   false, 0x04),  // arg0 = x cell, arg1 = y cell, arg2 = string
 	SYSCALL_DEFINE(SYSCALL_TIME,      "time",      syscall_time,      false, 0x01),  // arg0 = os64_time_t out ptr
@@ -259,6 +273,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_RENAME,      "rename",      syscall_rename,      false, 0x03),  // legacy arg0/1 = paths; every trailing register is ignored
 	SYSCALL_DEFINE(SYSCALL_PTY_CREATE,   "pty_create",   syscall_pty_create,   false, 0x00),  // args: cols, rows — values, no pointers (GRID)
 	SYSCALL_DEFINE(SYSCALL_PTY_CREATE_STREAM, "pty_create_stream", syscall_pty_create_stream, false, 0x00),  // args: cols, rows (STREAM)
+    SYSCALL_DEFINE(SYSCALL_PTY_HISTORY, "pty_history", syscall_pty_history, false, 0),
+    SYSCALL_DEFINE(SYSCALL_PTY_VIEWPORT, "pty_viewport", syscall_pty_viewport, false, 0x02),
 	SYSCALL_DEFINE(SYSCALL_PTY_SNAPSHOT, "pty_snapshot", syscall_pty_snapshot, false, 0x02),  // arg1 = header out; arg2 = cells out, NULLABLE (max_cells 0 = header-only probe — handler validates)
 	SYSCALL_DEFINE(SYSCALL_PTY_RESIZE,   "pty_resize",   syscall_pty_resize,   false, 0x00),  // args: master handle, cols, rows — values, no pointers
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
@@ -287,6 +303,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_POLL,         "gui_event_poll",         syscall_gui_event_poll,         false, 0x02),  // arg1 = input_event_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_SCREEN_INFO,        "gui_screen_info",        syscall_gui_screen_info,        false, 0x00),  // arg0/arg1 = uint32_t outs, EITHER may be NULL (handler validates)
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x00),  // arg1 = input_event_t out OR NULL (nullable: NULL = wait, don't take — handler validates); BLOCKS (like read)
+    SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_FOCUS,"gui_window_focus",syscall_gui_window_focus,false,0),
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_MIN_SIZE, "gui_window_set_min_size", syscall_gui_window_set_min_size, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_STATE,   "gui_window_get_state",   syscall_gui_window_get_state,   false, 0x02),  // arg1 = os64_gui_window_state_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_RING,         "gui_event_ring",         syscall_gui_event_ring,         false, 0x00),  // scalar window handle and mask
@@ -2416,6 +2433,55 @@ static uint64_t syscall_pty_create_stream(uint64_t arg0, uint64_t arg1, uint64_t
 	return syscall_pty_create_common((uint32_t)arg0, (uint32_t)arg1, PTY_MODE_STREAM);
 }
 
+static uint64_t syscall_pty_history(uint64_t master, uint64_t lines, uint64_t a2,
+    uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a2; (void)a3; (void)a4; (void)a5;
+    task_t *task = get_core_local_storage()->task;
+    handle_t pin;
+    if (lines > OS64_PTY_HISTORY_MAX || !task || !handle_pin(task, (int)master, &pin))
+        return SYSCALL_RESULT_INVALID;
+    uint64_t result = SYSCALL_RESULT_INVALID;
+    if (pin.type == HANDLE_PTY_MASTER) {
+        int changed = tty_pty_history(pin.object, (uint32_t)lines);
+        result = changed < 0 ? (uint64_t)(int64_t)changed : 0;
+    }
+    handle_unpin(&pin);
+    return result;
+}
+
+static uint64_t syscall_pty_viewport(uint64_t master, uint64_t header, uint64_t cells,
+    uint64_t max_cells, uint64_t first, uint64_t epoch)
+{
+    if (max_cells > 512 * 256 || (max_cells && !cells)) return SYSCALL_RESULT_INVALID;
+    task_t *task = get_core_local_storage()->task;
+    handle_t pin;
+    if (!task || !handle_pin(task, (int)master, &pin)) return SYSCALL_RESULT_INVALID;
+    uint64_t result = SYSCALL_RESULT_INVALID;
+    os64_pty_cell_t *scratch = NULL;
+    if (pin.type != HANDLE_PTY_MASTER) goto done;
+    tty_t *t = pin.object;
+    if (t->pty_mode != PTY_MODE_GRID) goto done;
+    // Bound scratch by the caller's explicit capacity, then clamp the copy
+    // under the grid lock. A concurrent resize cannot overrun this buffer.
+    if (max_cells) {
+        scratch = kmalloc_try(max_cells * sizeof(*scratch));
+        if (!scratch) { result = (uint64_t)(int64_t)OS64_PTY_ERR_NO_MEMORY; goto done; }
+    }
+    os64_pty_viewport_t v;
+    uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+    uint32_t n = tty_pty_view_locked(t, &v, scratch, (uint32_t)max_cells, first, epoch);
+    spinlock_release_irqrestore(&t->lock, flags);
+    result = n;
+    if (!copy_to_user_buffer((void *)header, &v, sizeof(v)) ||
+        (n && !copy_to_user_buffer((void *)cells, scratch, (size_t)n * sizeof(*scratch))))
+        result = SYSCALL_RESULT_BAD_USER_DATA;
+done:
+    kfree(scratch);
+    handle_unpin(&pin);
+    return result;
+}
+
 // pty_snapshot(master, header out, cells out, max_cells) -> cells copied.
 // max_cells == 0 is the cheap poll: header only (generation + HUNGUP), no
 // cell traffic — what a terminal calls at frame cadence. The full copy goes
@@ -2516,7 +2582,9 @@ static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2
 	return r;
 }
 
-// pty_resize(master, cols, rows) -> 0. The SIGWINCH slice (PTY.md § Resize).
+// pty_resize -> 0, INVALID, or OS64_PTY_ERR_HISTORY_BUDGET/NO_MEMORY/BUSY.
+// Refused calls leave geometry and cells untouched and send no SIGWINCH.
+// The SIGWINCH slice (PTY.md § Resize).
 // The MASTER's verb, because the master owns the geometry: a terminal window
 // that grew tells its slave the new size, and the slave learns — it does not
 // decide. tty_resize changes geometry and generation, carrying text and
@@ -2557,12 +2625,16 @@ static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 	tty_t *t = (tty_t *)pinned.object;
 
+	if (arg1 > 512 || arg2 > 256) {
+		handle_unpin(&pinned);
+		return SYSCALL_RESULT_INVALID;
+	}
 	uint32_t cols = (uint32_t)arg1, rows = (uint32_t)arg2;
 	int changed = tty_resize(t, cols, rows);
 	if (changed <= 0)
 	{
 		handle_unpin(&pinned);
-		return changed < 0 ? SYSCALL_RESULT_INVALID : 0;
+		return changed < 0 ? (uint64_t)(int64_t)changed : 0;
 	}
 
 	uint32_t seats = 0, told = 0;
@@ -4606,6 +4678,63 @@ static uint64_t syscall_ticks(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!copy_to_user_buffer(user_out, &t, sizeof(t)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	return 0;
+}
+
+// micros() — the same stopwatch as ticks(), read from the CPU's cycle
+// counter instead of the tick count: microseconds since boot, in RAX. No
+// pointer and no struct, because one number in the unit the caller wants
+// has nothing to fill in and nothing to get wrong (ARRIVAL_WAKE.md says why
+// this is a new call and not a field on os64_ticks_t: the struct is sized
+// by the caller at compile time, and growing it clobbers every binary
+// built before the growth).
+//
+// The rate is kCPUCyclesPerSecond, fixed for the life of the boot
+// (kernel.c says why a moving rate is worse). Divided in two steps — whole
+// seconds, then the remainder — so the multiply cannot overflow at any
+// uptime: cycles × 1,000,000 passes 2^64 within a couple of hours on a
+// 3GHz part.
+//
+// ticks() counts interrupts the BSP received and LOSES some under load
+// (DEBTS § wall-clock hardening); this reads a counter and loses none. The
+// two drift apart by exactly the lost ticks. A program measuring an
+// interval wants this one; a CPU% that divides two tick deltas wants ticks.
+//
+// MONOTONIC BY CONSTRUCTION, not by assumption. kBootTSC was read on the
+// BSP; this rdtsc runs on whatever core the caller is on, and the house
+// rule (nvme.c's completion poll) is that a TSC read on one core may not
+// be compared with one from another — QEMU and WSL2 have both been seen
+// to hand cores counters with different offsets. So the raw figure is
+// never returned as-is: it is folded through a global high-water mark
+// (compare-and-swap, the only cross-core state), and a caller can only
+// ever see a value at least as large as the last one anybody was given.
+// A core whose counter lags therefore STALLS the clock by its offset
+// rather than running it backward, and a core behind the boot anchor
+// reads 0 rather than 2^64 - offset. A stall is still a wrong interval on
+// a desynchronized machine; the boot-time sync check that would make it a
+// right one is booked (DEBTS § micros).
+static volatile uint64_t s_micros_high_water;
+static uint64_t syscall_micros(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	uint64_t cps = kCPUCyclesPerSecond;
+	if (cps == 0)
+		return 0;   // asked before calibration — nothing has, but 0 beats a divide fault
+	uint64_t now = rdtsc();
+	uint64_t cycles = now > kBootTSC ? now - kBootTSC : 0;
+	uint64_t seconds = cycles / cps;
+	uint64_t rest = cycles % cps;
+	uint64_t us = seconds * 1000000UL + (rest * 1000000UL) / cps;
+
+	for (;;)
+	{
+		uint64_t seen = s_micros_high_water;
+		if (us <= seen)
+			return seen;   // behind somebody's reading: hand out theirs, never less
+		if (__sync_bool_compare_and_swap(&s_micros_high_water, seen, us))
+			return us;
+	}
 }
 
 // memory(out) — the physical memory picture, one atomic snapshot. free/used/

@@ -76,7 +76,9 @@ typedef struct CustomMap CustomMap;
 typedef struct {
     const char *name;
     size_t len;
-    const garb_value_t *value;  // as declared, or NULL: the guaranteed-invalid value
+    // As declared (kEmptyValue for a declaration of nothing), or NULL: the
+    // guaranteed-invalid value.
+    const garb_value_t *value;
     int32_t nvalue;
     int state;                  // 0 as declared, 1 being replaced, 2 replaced, 3 invalid
 } Custom;
@@ -324,6 +326,8 @@ static void add_rules(garb_cascade_t *c, garb_parsed_t *owner, const garb_item_t
         }
         // The grouping rules whose contents join the sheet when they hold.
         // @layer's contents are cascaded as if unlayered (booked: layers).
+        // Every other at-rule is passed over here, @import among them: its
+        // sheet is the face's to fetch, and joins at its place (GARB.md, G4).
         bool group = at(r, "media") ? garb_media_matches(r->prelude, r->nprelude, c->env)
                    : at(r, "supports") ? supports(c, owner, r->prelude, r->nprelude)
                    : at(r, "layer") && r->has_block;
@@ -376,8 +380,10 @@ static bool supports_in_parens(garb_cascade_t *c, garb_parsed_t *owner, SCur *s)
         bool r = supports_condition(c, owner, &inner);
         return r && speek(&inner) == NULL;
     }
-    // A declaration: supported if its property is read here and its value
-    // fits (a custom property always does).
+    // A declaration: supported if its property is read here, its value fits
+    // (a custom property always does), and what it says is laid out as it
+    // says — a value read but laid out as something else is not supported,
+    // or a page would be told not to use the fallback it wrote for that.
     garb_item_t *items;
     int32_t n;
     if (!garb_items_of(owner, t->children, t->nchildren, &items, &n) || n != 1 ||
@@ -389,7 +395,11 @@ static bool supports_in_parens(garb_cascade_t *c, garb_parsed_t *owner, SCur *s)
         return garb_decl_is_custom(d) || prop_longhands(d->name, d->len, props) > 0;
     }
     garb_set_t sets[GARB_SETS_MAX];
-    return garb_read_declaration(owner, d, c->quirks == OS64_HTML_QUIRKS, sets) > 0;
+    int32_t read = garb_read_declaration(owner, d, c->quirks == OS64_HTML_QUIRKS, sets);
+    for (int32_t k = 0; k < read; k++)
+        if (garb_set_approximated(&sets[k]))
+            return false;
+    return read > 0;
 }
 
 static bool supports_condition(garb_cascade_t *c, garb_parsed_t *owner, SCur *s)
@@ -545,6 +555,12 @@ static bool substitute(Sub *s, const garb_value_t *in, int32_t n, Vec *out)
 // A custom property's value as the element sees it, its own var()s
 // replaced; NULL for the guaranteed-invalid value (undeclared, or in a
 // cycle, or its replacement failed).
+// A custom property declared with nothing (`--on: ;`) holds the EMPTY value,
+// which is a value: var() substitutes nothing for it, where the
+// guaranteed-invalid value (NULL) takes the fallback. The "space toggle"
+// idiom is exactly that difference, so the empty one is this, never NULL.
+static const garb_value_t kEmptyValue[1];
+
 static const garb_value_t *custom_value(Sub *s, const char *name, size_t len, int32_t *n)
 {
     for (const CustomMap *m = s->map; m != NULL; m = m->parent)
@@ -560,7 +576,7 @@ static const garb_value_t *custom_value(Sub *s, const char *name, size_t len, in
                 Sub inner = {s->c, m, s->depth, VAR_VALUES_MAX};
                 bool ok = substitute(&inner, cu->value, cu->nvalue, &out);
                 if (ok) {
-                    cu->value = out.v;
+                    cu->value = out.n > 0 ? out.v : kEmptyValue;
                     cu->nvalue = out.n;
                 }
                 cu->state = ok ? 2 : 3;
@@ -757,17 +773,17 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
                 Custom *cu = &own->own[k];
                 cu->name = d->name;
                 cu->len = d->len;
-                cu->value = d->value;
+                cu->value = d->nvalue > 0 ? d->value : kEmptyValue;
                 cu->nvalue = d->nvalue;
                 cu->state = 0;
-                // `--x: initial` and a value of nothing are the
-                // guaranteed-invalid value; `inherit` is the parent's.
-                if (d->nvalue == 1 && d->value[0].kind == GARB_IDENT &&
-                    (ieq(d->value[0].text, d->value[0].len, "initial") ||
-                     ieq(d->value[0].text, d->value[0].len, "unset")))
+                // `--x: initial` is the guaranteed-invalid value, its
+                // initial value. `inherit` is the parent's, and so is
+                // `unset`: a custom property inherits (Cascade 4 § 7.3).
+                bool one_ident = d->nvalue == 1 && d->value[0].kind == GARB_IDENT;
+                if (one_ident && ieq(d->value[0].text, d->value[0].len, "initial"))
                     cu->value = NULL;
-                if (d->nvalue == 1 && d->value[0].kind == GARB_IDENT &&
-                    ieq(d->value[0].text, d->value[0].len, "inherit")) {
+                if (one_ident && (ieq(d->value[0].text, d->value[0].len, "inherit") ||
+                                  ieq(d->value[0].text, d->value[0].len, "unset"))) {
                     Sub up = {c, inherited, 0, VAR_VALUES_MAX};
                     int32_t pn = 0;
                     cu->value = custom_value(&up, d->name, d->len, &pn);

@@ -15,9 +15,20 @@
 typedef struct FBlock FBlock;
 typedef struct {
     FBlock *blocks;
+    // Bytes the blocks hold, and the most they may: flow_env_t's
+    // max_arena_bytes for the arenas a page can multiply (boxes, lines). A
+    // block past it is refused like one malloc cannot supply, so such a page
+    // stops as `incomplete`.
+    size_t reserved, cap;
 } FArena;
 
-void *f_arena_alloc(FArena *arena, size_t size);    // zeroed; NULL on no memory
+// The byte budget a multiplied arena takes from the environment.
+static inline size_t f_arena_budget(const flow_env_t *env)
+{
+    return env != NULL && env->max_arena_bytes != 0 ? env->max_arena_bytes : FLOW_ARENA_DEFAULT;
+}
+
+void *f_arena_alloc(FArena *arena, size_t size);    // zeroed; NULL on no memory or budget
 void f_arena_free(FArena *arena);
 
 // A node to the record built for it. Open addressing over a power-of-two
@@ -100,8 +111,15 @@ typedef struct {
     FDecorationColors decoration_colors;
     // How many of this element and its ancestors are lists (`ul ol menu
     // dir`), lists or `dl`s, and `li`s: the chapter's descendant selectors
-    // for its children, by the same bargain.
-    int32_t lists, lists_or_dls, items;
+    // for its children, by the same bargain. And whether one of them is a
+    // `nobr`, which is what `nobr wbr` asks, and how many are `q`s, which
+    // is how deep a quotation's marks nest.
+    int32_t lists, lists_or_dls, items, quotes;
+    bool in_nobr;
+    // An `rp` among this element's children: whether an `rt` in it gets
+    // the parentheses a browser that lays out no ruby adds. Set by the
+    // child, and read by pass 2 once every child has been styled.
+    bool has_rp;
 } FStyled;
 
 typedef struct {
@@ -257,9 +275,9 @@ typedef struct {
     FArena arena;
     const FStyles *styles;          // what the boxes' styles came from
     FBox *root;
-    // Memory ran out partway, or the page nests past F_DEPTH_MAX: every
-    // box and item present is real, and the build stopped at the first
-    // thing it could not make.
+    // Memory or the arena's budget ran out partway, or the page nests past
+    // F_DEPTH_MAX: every box and item present is real, and the build
+    // stopped at the first thing it could not make.
     bool incomplete;
 } FBoxes;
 
@@ -299,8 +317,9 @@ struct FSpan {
 struct FLine {
     FLine *next;
     int64_t x, y, w, h, baseline;   // w: the content width it was broken to
-    // Layout stopped while this line was being built: it is kept, empty,
-    // where it would have begun.
+    // Pass 2 stopped inside this line's context, so the line was broken
+    // without the items that would have followed: it is kept, empty, where
+    // it began. (A line pass 3 could not finish never joins its context.)
     bool unfinished;
     FFrag *frags, *last_frag;
     FSpan *spans, *last_span;
@@ -335,8 +354,11 @@ typedef struct {
     // How many times an inline formatting context was measured: the cost
     // the harness holds to a linear bound (LAYOUT.md § Bounds).
     uint64_t measures;
-    // The text engine or the allocator refused partway: what is placed is
-    // real, and nothing after the refusal is.
+    // The most table working memory held at once, which shares the arena's
+    // budget: what the harness holds to it.
+    size_t scratch_peak;
+    // The text engine, the allocator or the budget refused partway: what is
+    // placed is real, and nothing after the refusal is.
     bool incomplete;
 } FLayout;
 

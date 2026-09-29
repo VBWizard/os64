@@ -14,7 +14,14 @@ typedef struct {
     size_t source_line[3], size_line; /* zero means a compiled/default value */
 } os64_font_config_role_t;
 typedef struct {
+    /* Empty members inherit: bold/italic -> regular, bolditalic -> bold.
+     * An entirely empty family selects the shipped DejaVu family. */
+    char face[OS64_FONT_FAMILY_STYLES + OS64_FONT_CONFIG_FALLBACK_MAX][OS64_FONT_PATH_CAP];
+    size_t source_line[OS64_FONT_FAMILY_STYLES + OS64_FONT_CONFIG_FALLBACK_MAX];
+} os64_font_config_family_t;
+typedef struct {
     os64_font_config_role_t roles[OS64_FONT_ROLE_COUNT];
+    os64_font_config_family_t families[OS64_FONT_FAMILY_COUNT];
     char path[OS64_FONT_PATH_CAP]; /* selected config; empty for no file */
 } os64_font_config_t;
 
@@ -42,7 +49,7 @@ void os64_font_config_defaults(os64_font_config_t *);
  * path must be the absolute location of the selected config. No file I/O. */
 os64_font_config_status_t os64_font_config_decode(const char *, size_t,
     const char *path, os64_font_config_t *out, os64_font_config_error_t *);
-/* Resolve fonts.conf on the system ladder. No match returns builtin defaults.
+/* Resolve fonts.conf on the system ladder. No match returns builtin roles and default web-family selections.
  * A selected file that cannot be read is an error. Out is unchanged on error. */
 os64_font_config_status_t os64_font_config_read(os64_font_config_t *out,
     os64_font_config_error_t *);
@@ -50,6 +57,14 @@ os64_font_config_status_t os64_font_config_read(os64_font_config_t *out,
  * set or consumer changes. On failure *out is NULL; success owns a new set. */
 os64_font_config_status_t os64_font_config_prepare(os64_text_context_t *,
     const os64_font_config_t *, os64_font_set_t **out, os64_font_config_error_t *);
+/* Resolve family inheritance and prepare an immutable source snapshot. Reads
+ * every selected member before publishing a cache, so an unreadable style
+ * refuses the candidate even if the page has not requested that style yet.
+ * Error line/source identify the family setting; role is ROLE_COUNT.
+ * Roles do not load these files, and Workshop's Apply does not adopt them. */
+os64_font_config_status_t os64_font_config_family_prepare(os64_text_context_t *,
+    const os64_font_config_t *, os64_font_family_cache_t **out,
+    os64_font_config_error_t *);
 /* Absolute paths (or builtin) make saved choices independent of destination.
  * Returns bytes excluding NUL, or a negative value; no partial output. */
 int64_t os64_font_config_encode(const os64_font_config_t *, char *, size_t);

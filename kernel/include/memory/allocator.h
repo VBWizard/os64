@@ -33,6 +33,7 @@ bool allocator_copy_from_task_va(void *pml4v, uintptr_t va, void *dst, size_t le
 uint64_t allocate_memory_at_address(uint64_t address, uint64_t requested_length, bool use_address);
 uint64_t allocate_memory_aligned(uint64_t requested_length);
 uint64_t allocate_memory(uint64_t requested_length);
+uint64_t allocate_memory_try(uint64_t requested_length);
 bool merge_freed_block(uint64_t freedIndex);
 void compact_memory_array();
 uint64_t free_memory(uint64_t address);

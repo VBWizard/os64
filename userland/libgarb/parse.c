@@ -20,7 +20,9 @@ bool p_push(Parse *p, void **list, int32_t *n, int32_t *cap, size_t size, const 
         return false;
     if (*n == *cap) {
         int32_t grown = *cap > 0 ? *cap * 2 : 4;
-        void *bigger = os64_arena_alloc(p->arena, (size_t)grown * size);
+        void *bigger = garb_room(p->arena, (size_t)grown * size, p->top + GARB_CLOSE_SLACK)
+                           ? os64_arena_alloc(p->arena, (size_t)grown * size)
+                           : NULL;
         if (bigger == NULL) {
             p->incomplete = true;
             p->spent = true;
@@ -36,24 +38,110 @@ bool p_push(Parse *p, void **list, int32_t *n, int32_t *cap, size_t size, const 
     return true;
 }
 
-typedef struct {
-    garb_value_t *v;
-    int32_t n, cap;
-} Values;
+// ── The lists a parse builds ────────────────────────────────────────────
+//
+// A LIST IS BUILT ON THE SCRATCH STACK AND KEPT AT ITS EXACT SIZE. Grown in
+// the arena, a list doubled and left every smaller copy behind, which the
+// arena never takes back: a twelve-token prelude cost three times its own
+// size, and a sheet of ordinary CSS filled the arena at a tenth of what it
+// admits as text. Lists nest the way the grammar does — a block's contents
+// finish before the rule round them, a function's arguments before the
+// value that holds them — so one stack serves them all: a list opens at
+// the stack's end, grows there, and is copied into the arena once, when it
+// closes, which gives the stack back to the list that was open below it. A
+// list the grammar abandons (a rule with no block) is simply never closed:
+// the next push to the list below starts at that list's own end, and
+// writes over it.
+
+#define LIST_ALIGN 16u
+
+// garb.h promises a value packs to this: a sheet is mostly values.
+_Static_assert(sizeof(garb_value_t) == 56, "garb_value_t packs to 56 bytes");
 
 typedef struct {
-    garb_item_t *v;
-    int32_t n, cap;
-} Items;
+    size_t start;           // its first item's offset in the scratch stack
+    int32_t n;
+} List;
 
-static void push_value(Parse *p, Values *l, const garb_value_t *v)
+static List list_open(const Parse *p)
 {
-    (void)p_push(p, (void **)&l->v, &l->n, &l->cap, sizeof(*v), v);
+    List l = {(p->top + LIST_ALIGN - 1) & ~(size_t)(LIST_ALIGN - 1), 0};
+    return l;
 }
 
-static void push_item(Parse *p, Items *l, const garb_item_t *it)
+static bool list_push(Parse *p, List *l, size_t size, const void *item)
 {
-    (void)p_push(p, (void **)&l->v, &l->n, &l->cap, sizeof(*it), it);
+    if (p_spent(p))
+        return false;
+    size_t end = l->start + (size_t)l->n * size;
+    // A list grows only while the arena could still keep every open list.
+    if (!garb_room(p->arena, 0, end + size + GARB_CLOSE_SLACK)) {
+        p->incomplete = true;
+        p->spent = true;
+        return false;
+    }
+    if (end + size > p->scratch_cap) {
+        size_t cap = p->scratch_cap > 0 ? p->scratch_cap : 4096;
+        while (cap < end + size)
+            cap *= 2;
+        char *grown = os64_realloc(p->scratch, cap);
+        if (grown == NULL) {
+            p->incomplete = true;
+            p->spent = true;
+            return false;
+        }
+        p->scratch = grown;
+        p->scratch_cap = cap;
+    }
+    os64_memcpy(p->scratch + end, item, size);
+    l->n++;
+    p->top = end + size;
+    return true;
+}
+
+// The open list's items, until the next push to any list.
+static void *list_items(const Parse *p, const List *l)
+{
+    return l->n > 0 ? p->scratch + l->start : NULL;
+}
+
+// Keeps the list in the arena at its size and gives its stack back. NULL,
+// and `*n` 0, for an empty list, or one the heap will not give the arena
+// room for — which spends the parse, as any failed allocation does. The
+// arena's own cap never refuses a close: every other allocation left room
+// for it (internal.h § Room for what is open). A spent parse still keeps
+// what it can: what was finished before the failure is real.
+static void *list_close(Parse *p, List *l, size_t size, int32_t *n)
+{
+    void *kept = NULL;
+    if (l->n > 0) {
+        kept = os64_arena_alloc(p->arena, (size_t)l->n * size);
+        if (kept != NULL) {
+            os64_memcpy(kept, p->scratch + l->start, (size_t)l->n * size);
+        } else {
+            p->incomplete = true;
+            p->spent = true;
+        }
+    }
+    *n = kept != NULL ? l->n : 0;
+    p->top = l->start;
+    l->n = 0;
+    return kept;
+}
+
+static void push_value(Parse *p, List *l, const garb_value_t *v)
+{
+    (void)list_push(p, l, sizeof(*v), v);
+}
+
+static void push_item(Parse *p, List *l, const garb_item_t *it)
+{
+    (void)list_push(p, l, sizeof(*it), it);
+}
+
+static garb_value_t *close_values(Parse *p, List *l, int32_t *n)
+{
+    return list_close(p, l, sizeof(garb_value_t), n);
 }
 
 // ── The input ───────────────────────────────────────────────────────────
@@ -220,13 +308,13 @@ static void skip_contents(Parse *p, Input *in, char end)
 // the depth bound they are read to find the end, and not kept.
 static void consume_contents(Parse *p, Input *in, char end, garb_value_t *into)
 {
-    Values kids = {0};
     if (p->depth >= GARB_DEPTH_MAX) {
         skip_contents(p, in, end);
         into->children = NULL;
         into->nchildren = 0;
         return;
     }
+    List kids = list_open(p);
     p->depth++;
     for (;;) {
         Tok t = in_next(in);
@@ -236,8 +324,7 @@ static void consume_contents(Parse *p, Input *in, char end, garb_value_t *into)
         push_value(p, &kids, &v);
     }
     p->depth--;
-    into->children = kids.v;
-    into->nchildren = kids.n;
+    into->children = close_values(p, &kids, &into->nchildren);
 }
 
 // §5.4.8, the token already consumed.
@@ -302,7 +389,7 @@ static bool consume_declaration(Parse *p, Input *in, bool nested, bool whole, ga
     }
     in_next(in);
     skip_ws(in);
-    Values value = {0};
+    List value = list_open(p);
     for (;;) {
         t = in_peek(in);
         if (t.kind == T_EOF || (!whole && is_kind(&t, GARB_SEMICOLON)))
@@ -312,41 +399,44 @@ static bool consume_declaration(Parse *p, Input *in, bool nested, bool whole, ga
         garb_value_t v = consume_component_value(p, in, in_next(in));
         push_value(p, &value, &v);
     }
+    // Judged on the stack, and kept only as far as it is the value.
+    const garb_value_t *vs = list_items(p, &value);
     // `!important` last, white space around it and between allowed.
     int32_t end = value.n;
-    while (end > 0 && blank(&value.v[end - 1]))
+    while (end > 0 && blank(&vs[end - 1]))
         end--;
-    if (end >= 2 && value.v[end - 1].kind == GARB_IDENT &&
-        ascii_is(value.v[end - 1].text, value.v[end - 1].len, "important")) {
+    if (end >= 2 && vs[end - 1].kind == GARB_IDENT &&
+        ascii_is(vs[end - 1].text, vs[end - 1].len, "important")) {
         int32_t bang = end - 2;
-        while (bang >= 0 && blank(&value.v[bang]))
+        while (bang >= 0 && blank(&vs[bang]))
             bang--;
-        if (bang >= 0 && value.v[bang].kind == GARB_DELIM && value.v[bang].len == 1 &&
-            value.v[bang].text[0] == '!') {
+        if (bang >= 0 && vs[bang].kind == GARB_DELIM && vs[bang].len == 1 &&
+            vs[bang].text[0] == '!') {
             d->important = true;
             end = bang;
         }
     }
-    while (end > 0 && blank(&value.v[end - 1]))
+    while (end > 0 && blank(&vs[end - 1]))
         end--;
-    d->value = value.v;
-    d->nvalue = end;
     // A value holding a {} block and anything else is not a declaration:
     // it is a nested rule that begins like one (`a:hover { … }`), and the
     // caller reads it again as a rule. A custom property may hold anything.
     bool custom = d->len >= 2 && d->name[0] == '-' && d->name[1] == '-';
     if (!custom) {
         bool block = false, other = false;
-        for (int32_t i = 0; i < d->nvalue; i++) {
-            const garb_value_t *v = &d->value[i];
-            if (v->kind == GARB_BLOCK && v->open == '{')
+        for (int32_t i = 0; i < end; i++) {
+            if (vs[i].kind == GARB_BLOCK && vs[i].open == '{')
                 block = true;
-            else if (!blank(v))
+            else if (!blank(&vs[i]))
                 other = true;
         }
-        if (block && other)
+        if (block && other) {
+            p->top = value.start;           // abandoned: never kept
             return false;
+        }
     }
+    value.n = end;
+    d->value = close_values(p, &value, &d->nvalue);
     return true;
 }
 
@@ -354,7 +444,9 @@ static bool consume_declaration(Parse *p, Input *in, bool nested, bool whole, ga
 
 static garb_rule_t *new_rule(Parse *p)
 {
-    garb_rule_t *r = os64_arena_calloc(p->arena, 1, sizeof(*r));
+    garb_rule_t *r = garb_room(p->arena, sizeof(*r), p->top + GARB_CLOSE_SLACK)
+                         ? os64_arena_calloc(p->arena, 1, sizeof(*r))
+                         : NULL;
     if (r == NULL) {
         p->incomplete = true;
         p->spent = true;
@@ -382,7 +474,7 @@ static void consume_curly(Parse *p, Input *in, garb_rule_t *r)
 static garb_rule_t *consume_at_rule(Parse *p, Input *in, bool nested)
 {
     Tok t = in_next(in);
-    Values prelude = {0};
+    List prelude = list_open(p);
     // Read whole before it is kept, so a rule the arena cannot hold still
     // has its tokens consumed and the parse goes on past it.
     garb_rule_t rule = {0};
@@ -407,8 +499,7 @@ static garb_rule_t *consume_at_rule(Parse *p, Input *in, bool nested)
         garb_value_t v = consume_component_value(p, in, in_next(in));
         push_value(p, &prelude, &v);
     }
-    r->prelude = prelude.v;
-    r->nprelude = prelude.n;
+    r->prelude = close_values(p, &prelude, &r->nprelude);
     garb_rule_t *kept = new_rule(p);
     if (kept != NULL)
         *kept = rule;
@@ -418,7 +509,7 @@ static garb_rule_t *consume_at_rule(Parse *p, Input *in, bool nested)
 // §5.4.3. NULL where the specification returns nothing.
 static garb_rule_t *consume_qualified_rule(Parse *p, Input *in, bool nested, bool stop_at_semicolon)
 {
-    Values prelude = {0};
+    List prelude = list_open(p);
     for (;;) {
         Tok t = in_peek(in);
         if (t.kind == T_EOF)
@@ -429,16 +520,16 @@ static garb_rule_t *consume_qualified_rule(Parse *p, Input *in, bool nested, boo
             return NULL;
         if (is_curly(&t)) {
             // A custom property's shape (`--x: {…}`) is never a rule.
+            const garb_value_t *pv = list_items(p, &prelude);
             int32_t i = 0;
-            while (i < prelude.n && blank(&prelude.v[i]))
+            while (i < prelude.n && blank(&pv[i]))
                 i++;
-            bool dashed = i < prelude.n && prelude.v[i].kind == GARB_IDENT &&
-                          prelude.v[i].len >= 2 && prelude.v[i].text[0] == '-' &&
-                          prelude.v[i].text[1] == '-';
+            bool dashed = i < prelude.n && pv[i].kind == GARB_IDENT && pv[i].len >= 2 &&
+                          pv[i].text[0] == '-' && pv[i].text[1] == '-';
             int32_t j = i + 1;
-            while (j < prelude.n && blank(&prelude.v[j]))
+            while (j < prelude.n && blank(&pv[j]))
                 j++;
-            if (dashed && j < prelude.n && prelude.v[j].kind == GARB_COLON) {
+            if (dashed && j < prelude.n && pv[j].kind == GARB_COLON) {
                 garb_rule_t discard = {0};
                 consume_curly(p, in, &discard);
                 return NULL;
@@ -450,8 +541,7 @@ static garb_rule_t *consume_qualified_rule(Parse *p, Input *in, bool nested, boo
                 return NULL;
             }
             consume_curly(p, in, r);
-            r->prelude = prelude.v;
-            r->nprelude = prelude.n;
+            r->prelude = close_values(p, &prelude, &r->nprelude);
             return r;
         }
         garb_value_t v = consume_component_value(p, in, in_next(in));
@@ -459,7 +549,7 @@ static garb_rule_t *consume_qualified_rule(Parse *p, Input *in, bool nested, boo
     }
 }
 
-static void push_rule(Parse *p, Items *items, garb_rule_t *r)
+static void push_rule(Parse *p, List *items, garb_rule_t *r)
 {
     garb_item_t it = {0};
     it.kind = r != NULL ? GARB_ITEM_RULE : GARB_ITEM_INVALID;
@@ -469,7 +559,7 @@ static void push_rule(Parse *p, Items *items, garb_rule_t *r)
 
 // §5.4.1 "consume a stylesheet's contents", and the list of rules a
 // grouping at-rule holds, where `<!--` and `-->` mean nothing special.
-static void consume_rule_list(Parse *p, Input *in, bool top_level, Items *items)
+static void consume_rule_list(Parse *p, Input *in, bool top_level, List *items)
 {
     for (;;) {
         Tok t = in_peek(in);
@@ -492,7 +582,7 @@ static void consume_rule_list(Parse *p, Input *in, bool top_level, Items *items)
 
 // §5.4.5 "consume a block's contents": declarations, and rules nested
 // among them, in order.
-static void consume_block_contents(Parse *p, Input *in, Items *items)
+static void consume_block_contents(Parse *p, Input *in, List *items)
 {
     for (;;) {
         Tok t = in_peek(in);
@@ -520,7 +610,7 @@ static void consume_block_contents(Parse *p, Input *in, Items *items)
 
 // The list of declarations of Syntax 3's 2021 draft — a block's contents
 // with no qualified rule among them, what `@font-face` and `@page` hold.
-static void consume_declaration_list(Parse *p, Input *in, Items *items)
+static void consume_declaration_list(Parse *p, Input *in, List *items)
 {
     for (;;) {
         Tok t = in_peek(in);
@@ -551,11 +641,8 @@ static void consume_declaration_list(Parse *p, Input *in, Items *items)
 static bool start(garb_parsed_t *out, Parse *p)
 {
     os64_memset(out, 0, sizeof(*out));
+    os64_memset(p, 0, sizeof(*p));
     p->arena = os64_arena_create(0, GARB_ARENA_MAX);
-    p->incomplete = false;
-    p->spent = false;
-    p->tz = NULL;
-    p->depth = 0;
     out->arena = p->arena;
     return p->arena != NULL;
 }
@@ -576,8 +663,8 @@ typedef enum { M_SHEET, M_RULES, M_BLOCK, M_DECLS, M_VALUES, M_ONE_RULE, M_ONE_D
 
 static garb_status_t run(Mode mode, Parse *p, Input *in, garb_parsed_t *out)
 {
-    Items items = {0};
-    Values values = {0};
+    List items = list_open(p);
+    List values = list_open(p);
     garb_status_t st = GARB_OK;
     switch (mode) {
     case M_SHEET:
@@ -646,15 +733,19 @@ static garb_status_t run(Mode mode, Parse *p, Input *in, garb_parsed_t *out)
     // decides nothing: the EOF that ended it may be where memory ran out,
     // not where the text did, so EMPTY, EXTRA_INPUT and INVALID are no
     // more true of it than OK is.
+    // Only one of the two lists was used, so closing both keeps its own.
+    out->items = list_close(p, &items, sizeof(garb_item_t), &out->nitems);
+    out->values = close_values(p, &values, &out->nvalues);
+    os64_free(p->scratch);
+    p->scratch = NULL;
+    p->top = p->scratch_cap = 0;
     if (p_spent(p) && (mode == M_ONE_RULE || mode == M_ONE_DECL || mode == M_ONE_VALUE)) {
         out->rule = NULL;
         os64_memset(&out->decl, 0, sizeof(out->decl));
+        out->values = NULL;
+        out->nvalues = 0;
         return GARB_NO_MEMORY;
     }
-    out->items = items.v;
-    out->nitems = items.n;
-    out->values = values.v;
-    out->nvalues = values.n;
     return st;
 }
 
@@ -673,6 +764,7 @@ static garb_status_t parse_text(Mode mode, const char *text, size_t len, garb_pa
         return finish(out, &p, NULL, GARB_NO_MEMORY);
     }
     p.tz = &tz;
+    tz.open = &p.top;
     Input in = {0};
     in.tz = &tz;
     in.owner = &p;
@@ -724,7 +816,7 @@ garb_status_t garb_parse_one_value(const char *text, size_t len, garb_parsed_t *
 static bool reparse(Mode mode, garb_parsed_t *owner, const garb_value_t *values, int32_t n,
                     garb_item_t **items, int32_t *nitems)
 {
-    Parse p = {owner->arena, false, false, NULL, 0};
+    Parse p = {.arena = owner->arena};
     Input in = {0};
     in.values = values;
     in.n = n;

@@ -17,7 +17,7 @@ bool os64_decor_validate(const void *bytes, size_t length, os64_decor_view_t *ou
     if (!out || !bytes || ((uintptr_t)bytes & 3u) ||
         length < OS64_DECOR_LEGACY_HEADER_BYTES || length > OS64_DECOR_BYTES_MAX) return false;
     const os64_decor_header_t *h = bytes;
-    if (h->magic != OS64_DECOR_MAGIC || (h->version != OS64_DECOR_VERSION && h->version != 5u && h->version != 4u) ||
+    if (h->magic != OS64_DECOR_MAGIC || (h->version != OS64_DECOR_VERSION && h->version != 6u && h->version != 5u && h->version != 4u) ||
         h->bytes != length || h->edge != OS64_DECOR_EDGE_TOP ||
         !h->glyph_count || h->glyph_count > OS64_DECOR_GLYPHS_MAX ||
         h->pair_count > OS64_DECOR_PAIRS_MAX || !h->line_height || h->line_height > 256 ||
@@ -29,9 +29,9 @@ bool os64_decor_validate(const void *bytes, size_t length, os64_decor_view_t *ou
         h->border_finish>OS64_DECOR_STIPPLE || h->strength>64 ||
         (h->scale!=1 && h->scale!=2 && h->scale!=4 && h->scale!=8) ||
         h->direction>1 || h->relief>3 || h->match_border>1) return false;
-    size_t header_bytes=h->version>=6?sizeof(*h):OS64_DECOR_LEGACY_HEADER_BYTES;
+    size_t header_bytes=h->version>=7?sizeof(*h):h->version==6?328u:OS64_DECOR_LEGACY_HEADER_BYTES;
     if(length<header_bytes)return false;
-    if(h->version>=6)for(unsigned i=0;i<4;++i){
+    if(h->version>=6)for(unsigned i=0;i<(h->version>=7?5u:4u);++i){
         if((h->symbols[i].active && (h->symbols[i].active>>24)!=255) ||
             (h->symbols[i].inactive && (h->symbols[i].inactive>>24)!=255))return false;
     }
@@ -42,7 +42,7 @@ bool os64_decor_validate(const void *bytes, size_t length, os64_decor_view_t *ou
             if (b->action || b->group || b->shape || b->face) return false;
             continue;
         }
-        if (b->action>OS64_DECOR_PIN || b->group>1 || b->shape>OS64_DECOR_BARE ||
+        if (b->action>(h->version>=7?OS64_DECOR_SETTINGS:OS64_DECOR_PIN) || b->group>1 || b->shape>OS64_DECOR_BARE ||
             (h->version==4u && b->face) ||
             (b->face && (b->face>>24)!=255 && (b->face>>24)!=1)) return false;
         if (b->action && (actions & (1u<<b->action))) return false;
@@ -87,10 +87,21 @@ bool os64_decor_validate(const void *bytes, size_t length, os64_decor_view_t *ou
 void os64_decor_header_copy(const os64_decor_header_t *h,os64_decor_header_t *out)
 {
     *out=(os64_decor_header_t){0};
-    size_t size=h->version>=6?sizeof(*out):OS64_DECOR_LEGACY_HEADER_BYTES;
+    size_t size=h->version>=7?sizeof(*out):h->version==6?328u:OS64_DECOR_LEGACY_HEADER_BYTES;
     const uint8_t *source=(const void *)h;uint8_t *target=(void *)out;
     for(size_t i=0;i<size;++i)target[i]=source[i];
     out->version=OS64_DECOR_VERSION;
+}
+
+void os64_decor_filter(const os64_decor_header_t *h,bool settings,os64_decor_header_t *out)
+{
+    os64_decor_header_copy(h,out);
+    if(settings)return;
+    uint32_t count=0;
+    for(uint32_t i=0;i<h->button_count;++i)
+        if(h->buttons[i].action!=OS64_DECOR_SETTINGS)out->buttons[count++]=h->buttons[i];
+    out->button_count=count;
+    while(count<OS64_DECOR_BUTTONS_MAX)out->buttons[count++]=(os64_decor_button_t){0};
 }
 
 os64_decor_insets_t os64_decor_insets(const os64_decor_header_t *h, bool titlebar)
@@ -287,6 +298,11 @@ static void button_paint(const os64_decor_header_t *h, os64_decor_surface_t *s,
             if (state && state->maximized)
                 mark=(((y==-k+2 || y==k+2) && x>=-k && x<=k) || ((x==-k || x==k) && y>=-k+2 && y<=k+2)) ||
                     ((y==-k && x>=-k+2 && x<=k+2) || (x==k+2 && y>=-k && y<=k));
+        }
+        if (b->action==OS64_DECOR_SETTINGS) {
+            mark=x>=-k && x<=k && (y==-k || y==0 || y==k);
+            mark=mark || (x==-k/2 && y>=-k-1 && y<=-k+1) ||
+                (x==k/2 && y>=-1 && y<=1) || (x==-k/2 && y>=k-1 && y<=k+1);
         }
         if (b->action==OS64_DECOR_PIN)
             mark=(y==-k && x>=-k/2 && x<=k/2) || (y>=-k && y<=0 && (x==-k/2 || x==k/2 || pinned)) ||

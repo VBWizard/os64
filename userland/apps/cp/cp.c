@@ -1,13 +1,14 @@
 // cp.c — copy files and directory trees through the ordinary VFS interface.
 
 #include "os64/os64.h"
+#include "os64/walk.h"
 
 #define CP_BUFFER_SIZE  (1024 * 1024)
 #define CP_PATH_MAX     256
 #define CP_MAX_OPERANDS 512
-// Three standard handles + ten open source directories + a source and
-// destination file = fifteen of the task's sixteen handle slots.
-#define CP_MAX_DEPTH    10
+// One open source directory per level, and a source and destination file at
+// the deepest: the walk's depth (os64/walk.h) leaves room for both.
+#define CP_MAX_DEPTH    OS64_WALK_MAX_DEPTH
 
 typedef struct {
     bool recursive;

@@ -40,11 +40,28 @@ static uint32_t s_next_id = 1;
 
 static os64_decor_view_t s_decoration;
 
+static uint32_t decoration_min_width(const os64_decor_view_t *v,uint32_t flags)
+{
+    if(!wm_has_titlebar(flags))return 0;
+    if(!v->header)return flags & GUI_WINDOW_HAS_SETTINGS ? 64 : 0;
+    os64_decor_header_t h;
+    os64_decor_filter(v->header,(flags & GUI_WINDOW_HAS_SETTINGS)!=0,&h);
+    return os64_decor_min_width(&h);
+}
+static rect_t fallback_settings(const window_t *w)
+{
+    return (rect_t){w->frame.w-26,GUI_BORDER_WIDTH+2,20,GUI_TITLEBAR_HEIGHT-GUI_BORDER_WIDTH-4};
+}
+
 static os64_decor_insets_t decoration_insets(const os64_decor_view_t *v, uint32_t flags)
 {
 	if (flags & GUI_WINDOW_DESKTOP) return (os64_decor_insets_t){0};
 	if (flags & GUI_WINDOW_NO_DECORATIONS) return (os64_decor_insets_t){1,1,1,1};
-	if (v->header) return os64_decor_insets(v->header, true);
+	if (v->header) {
+        os64_decor_header_t h;
+        os64_decor_filter(v->header,(flags & GUI_WINDOW_HAS_SETTINGS)!=0,&h);
+        return os64_decor_insets(&h,true);
+    }
 	return (os64_decor_insets_t){GUI_BORDER_WIDTH,GUI_TITLEBAR_HEIGHT,GUI_BORDER_WIDTH,GUI_BORDER_WIDTH};
 }
 
@@ -63,16 +80,23 @@ uint32_t wm_border_color(bool active)
 
 uint32_t wm_decoration_min_width(uint32_t flags)
 {
-	return s_decoration.header && wm_has_titlebar(flags)?os64_decor_min_width(s_decoration.header):0;
+	return decoration_min_width(&s_decoration,flags);
 }
 uint32_t wm_decoration_hit(const window_t *w,int32_t x,int32_t y)
 {
-	if (!s_decoration.header || !wm_has_titlebar(w->flags) || wm_is_hidden(w)) return 0;
+	if (!wm_has_titlebar(w->flags) || wm_is_hidden(w)) return 0;
 	int64_t lx=(int64_t)x-w->frame.x,ly=(int64_t)y-w->frame.y;
 	if (lx<0 || ly<0 || lx>=w->frame.w || ly>=w->frame.h) return 0;
+    if(!s_decoration.header) {
+        rect_t r=fallback_settings(w);
+        return (w->flags & GUI_WINDOW_HAS_SETTINGS) && lx>=r.x && ly>=r.y &&
+            lx<r.x+r.w && ly<r.y+r.h ? OS64_DECOR_SETTINGS : 0;
+    }
+    os64_decor_header_t h;
+    os64_decor_filter(s_decoration.header,(w->flags & GUI_WINDOW_HAS_SETTINGS)!=0,&h);
 	os64_decor_layout_t layout;
-	if (!os64_decor_layout(s_decoration.header,w->frame.w,w->frame.h,true,&layout)) return 0;
-	return os64_decor_hit(s_decoration.header,&layout,(int32_t)lx,(int32_t)ly);
+	if (!os64_decor_layout(&h,w->frame.w,w->frame.h,true,&layout)) return 0;
+	return os64_decor_hit(&h,&layout,(int32_t)lx,(int32_t)ly);
 }
 uint32_t wm_decoration_disabled(const window_t *w)
 {
@@ -94,6 +118,9 @@ void wm_decoration_action(window_t *w,uint32_t action,uint64_t tick)
 	if (action==OS64_DECOR_CLOSE) {
 		input_event_t close={.type=INPUT_EVENT_WINDOW_CLOSE,.tick=tick};
 		wm_deliver_event(w,&close);
+    } else if(action==OS64_DECOR_SETTINGS && (w->flags & GUI_WINDOW_HAS_SETTINGS)) {
+        input_event_t request={.type=INPUT_EVENT_SETTINGS,.tick=tick};
+        wm_deliver_event(w,&request);
 	} else if (action==OS64_DECOR_MINIMIZE) wm_set_minimized(w,true);
 	else if (action==OS64_DECOR_MAXIMIZE) wm_set_maximized(w,!(w->flags & GUI_WINDOW_MAXIMIZED));
 	else if (action==OS64_DECOR_PIN) wm_set_pinned(w,!(w->flags & GUI_WINDOW_PINNED));
@@ -135,7 +162,7 @@ bool wm_set_decoration(const os64_decor_view_t *view, void **retired)
 			printd(DEBUG_GUI, "wm: decoration refused: window %u (%s): frame geometry\n", w->id, w->title);
 			return false;
 		}
-		if (frame.w<(int32_t)os64_decor_min_width(view->header)) {
+		if (frame.w<(int32_t)decoration_min_width(view,w->flags)) {
 			printd(DEBUG_GUI, "wm: decoration refused: window %u (%s): decoration minimum width\n", w->id, w->title);
 			return false;
 		}
@@ -149,7 +176,7 @@ bool wm_set_decoration(const os64_decor_view_t *view, void **retired)
 			return false;
 		}
 		if (maximized && (!decoration_frame(w->restoreFrame,old,next,false,&restore) ||
-			restore.w<(int32_t)os64_decor_min_width(view->header))) {
+			restore.w<(int32_t)decoration_min_width(view,w->flags))) {
 			printd(DEBUG_GUI, "wm: decoration refused: window %u (%s): restore geometry or minimum width\n", w->id, w->title);
 			return false;
 		}
@@ -878,7 +905,10 @@ static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damag
 		while (n<GUI_WINDOW_TITLE_MAX && w->title[n]) ++n;
 		os64_decor_state_t state={w->decor_hover,w->decor_pressed,wm_decoration_disabled(w),
 			(w->flags & GUI_WINDOW_MAXIMIZED)!=0};
-		(void)os64_decor_paint(&s_decoration,&dst,
+        os64_decor_header_t filtered;
+        os64_decor_filter(s_decoration.header,(w->flags & GUI_WINDOW_HAS_SETTINGS)!=0,&filtered);
+        os64_decor_view_t effective=s_decoration;effective.header=&filtered;
+		(void)os64_decor_paint(&effective,&dst,
 			(os64_decor_rect_t){f.x,f.y,f.w,f.h},
 			(os64_decor_rect_t){0,0,(int32_t)view.width,(int32_t)view.height},
 			true,focused,(w->flags & GUI_WINDOW_PINNED)!=0,w->title,n,
@@ -919,14 +949,26 @@ static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damag
 			}
 			paint_title=fallback;title_len=n;
 		}
+        int32_t title_room=bar.w-12-((w->flags & GUI_WINDOW_HAS_SETTINGS)?28:0)-
+            ((w->flags & GUI_WINDOW_PINNED)?14:0);
+        if(title_len>(size_t)(title_room>0?title_room/8:0))title_len=(size_t)(title_room>0?title_room/8:0);
 		surface_draw_text(&view,bar.x+6,bar.y+(bar.h-16)/2,
 			paint_title,title_len,GUI_COLOR_WHITE,bar_color);
 
-		// A pinned window wears a small white square at the right end of its
-		// bar — the only chrome the pin has, and enough to answer "why won't
-		// this thing go behind?" at a glance.
+        if(w->flags & GUI_WINDOW_HAS_SETTINGS) {
+            rect_t r=fallback_settings(w);r.x+=f.x;r.y+=f.y;
+            uint32_t ink=GUI_COLOR_WHITE;
+            if(w->decor_hover==OS64_DECOR_SETTINGS || w->decor_pressed==OS64_DECOR_SETTINGS)
+                surface_fill_rect(&view,r,WINDOW_TITLEBAR_UNFOCUSED);
+            for(int line=-1;line<=1;++line) {
+                int32_t y=r.y+r.h/2+line*4,x=r.x+r.w/2-5;
+                surface_fill_rect(&view,(rect_t){x,y,11,1},ink);
+                surface_fill_rect(&view,(rect_t){x+(line==0?7:3),y-1,1,3},ink);
+            }
+        }
+		// Keep the pin indicator beside Settings when both are present.
 		if (w->flags & GUI_WINDOW_PINNED)
-			surface_fill_rect(&view, (rect_t){bar.x + bar.w - 14, bar.y + (bar.h - 8) / 2, 8, 8},
+			surface_fill_rect(&view, (rect_t){bar.x + bar.w - 14 - ((w->flags & GUI_WINDOW_HAS_SETTINGS)?28:0), bar.y + (bar.h - 8) / 2, 8, 8},
 			                  GUI_COLOR_WHITE);
 	}
 

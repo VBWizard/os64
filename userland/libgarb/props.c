@@ -93,6 +93,29 @@ static const char *const kDisplay[] = {
     "table-row-group", "table-header-group", "table-footer-group", "table-row",
     "table-column-group", "table-column", "table-cell", "table-caption", "contents",
     "flow-root", "flex", "inline-flex", "grid", "inline-grid", NULL};
+// Display values this grammar reads but no slice lays out as written yet
+// (GARB.md's pile 2): a flex or grid container is laid out as the block or
+// inline-block it is on the outside, and flow-root as a block, which keeps
+// a page's `display: inline-block; display: inline-flex` fallback pattern
+// working. Read, so the cascade keeps them; not SUPPORTED, so @supports
+// tells a page to use the fallback it wrote for exactly this. `contents`
+// is not here: libflow gives such an element no box and flows its
+// children into its parent, which is what it says. THE LIST IS EVERY
+// APPROXIMATION, of any property: whatever libflow lays out as something
+// other than what a value says joins it the day the mapping is written.
+static const char *const kDisplayApproximated[] = {"flex", "inline-flex", "grid", "inline-grid",
+                                                   "flow-root", NULL};
+
+bool garb_set_approximated(const garb_set_t *set)
+{
+    if (set->prop != GARB_DISPLAY || set->value.kind != GARB_V_KEYWORD)
+        return false;
+    for (int k = 0; kDisplayApproximated[k] != NULL; k++)
+        if (os64_streq(set->value.keyword, kDisplayApproximated[k]))
+            return true;
+    return false;
+}
+
 static const char *const kBorderStyle[] = {"none", "hidden", "dotted", "dashed", "solid", "double",
                                            "groove", "ridge", "inset", "outset", NULL};
 static const char *const kBorderWidth[] = {"thin", "medium", "thick", NULL};
@@ -643,6 +666,167 @@ static bool position(Sets *s, VCur *c, garb_val_t *x, garb_val_t *y)
 }
 
 // One or two repeat keywords, as the single keyword they amount to.
+// ── Gradients (Images 3 § 3) ────────────────────────────────────────────
+//
+// A gradient is drawn by nobody yet, but whether one is VALID decides what
+// a `background` does: the pre-standard `linear-gradient(top, …)` (no
+// `to`) is refused by every browser, so the `background: #333` before it
+// stands, and a page that relied on that is dark. So a linear or radial
+// gradient is read against its grammar; conic gradients and image-set are
+// accepted by name (GARB.md's pile-3 row says so).
+
+// One comma-separated argument group of a gradient: [from, to) of `v`.
+typedef struct {
+    const garb_value_t *v;
+    int32_t n;
+} Group;
+
+static bool only_ws(const Group *g)
+{
+    for (int32_t i = 0; i < g->n; i++)
+        if (g->v[i].kind != GARB_WHITESPACE)
+            return false;
+    return true;
+}
+
+static bool angle(VCur *c)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL)
+        return false;
+    bool ok = (t->kind == GARB_DIMENSION &&
+               (ieq(t->unit, t->unit_len, "deg") || ieq(t->unit, t->unit_len, "grad") ||
+                ieq(t->unit, t->unit_len, "rad") || ieq(t->unit, t->unit_len, "turn"))) ||
+              (t->kind == GARB_NUMBER && t->number == 0);   // Images 3: a unitless zero
+    if (ok)
+        c->i++;
+    return ok;
+}
+
+static bool length_percentage(Sets *s, VCur *c)
+{
+    garb_val_t v;
+    return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, &v);
+}
+
+// `<color> <length-percentage>{0,2}` (a stop), or one length-percentage
+// alone (a hint).
+static bool stop(Sets *s, const Group *g, bool *hint)
+{
+    VCur c = {g->v, g->n, 0};
+    garb_val_t v;
+    *hint = false;
+    if (vc_color(&c, &v)) {
+        for (int k = 0; k < 2 && !vc_done(&c); k++)
+            if (!length_percentage(s, &c))
+                return false;
+        return vc_done(&c);
+    }
+    *hint = true;
+    return length_percentage(s, &c) && vc_done(&c);
+}
+
+// §3.4: at least two stops, a hint only between two of them.
+static bool stops(Sets *s, const Group *g, int32_t n)
+{
+    int32_t colours = 0;
+    bool last_hint = true;          // nothing before the first: it may not be a hint
+    for (int32_t i = 0; i < n; i++) {
+        bool hint;
+        if (!stop(s, &g[i], &hint) || (hint && last_hint))
+            return false;
+        colours += !hint;
+        last_hint = hint;
+    }
+    return colours >= 2 && !last_hint;
+}
+
+// `to` [left | right] || [top | bottom], or an angle.
+static bool linear_prelude(const Group *g)
+{
+    VCur c = {g->v, g->n, 0};
+    static const char *const kTo[] = {"to", NULL};
+    static const char *const kX[] = {"left", "right", NULL};
+    static const char *const kY[] = {"top", "bottom", NULL};
+    if (vc_keyword(&c, kTo) != NULL) {
+        bool x = vc_keyword(&c, kX) != NULL, y = vc_keyword(&c, kY) != NULL;
+        if (!x && vc_keyword(&c, kX) != NULL)
+            x = true;
+        return (x || y) && vc_done(&c);
+    }
+    return angle(&c) && vc_done(&c);
+}
+
+// [<ending-shape> || <size>]? [at <position>]?, one of them at least. The
+// size's finer rules (a circle takes one length and no percentage) are not
+// checked: what they refuse is rare, and nothing draws it yet.
+static bool radial_prelude(Sets *s, const Group *g)
+{
+    VCur c = {g->v, g->n, 0};
+    static const char *const kShape[] = {"circle", "ellipse", NULL};
+    static const char *const kExtent[] = {"closest-side", "farthest-side", "closest-corner",
+                                          "farthest-corner", NULL};
+    static const char *const kAt[] = {"at", NULL};
+    bool shape = false, size = false, any = false;
+    for (int k = 0; k < 2; k++) {
+        if (!shape && vc_keyword(&c, kShape) != NULL) {
+            shape = any = true;
+        } else if (!size && vc_keyword(&c, kExtent) != NULL) {
+            size = any = true;
+        } else if (!size && length_percentage(s, &c)) {
+            (void)length_percentage(s, &c);     // an ellipse's second radius
+            size = any = true;
+        }
+    }
+    if (vc_keyword(&c, kAt) != NULL) {
+        Sets strict = *s;
+        strict.quirks = false;
+        garb_val_t x, y;
+        bool ok = position(&strict, &c, &x, &y);
+        s->a.short_of_memory |= strict.a.short_of_memory;
+        if (!ok)
+            return false;
+        any = true;
+    }
+    return any && vc_done(&c);
+}
+
+// Whether `f`, a linear or radial gradient function, fits its grammar.
+static bool gradient_ok(Sets *s, const garb_value_t *f, bool radial)
+{
+    Group g[64];
+    int32_t n = 0, from = 0;
+    for (int32_t i = 0; i <= f->nchildren; i++)
+        if (i == f->nchildren || f->children[i].kind == GARB_COMMA) {
+            if (n == (int32_t)(sizeof(g) / sizeof(g[0])))
+                return false;               // past 63 stops: refused, not guessed
+            g[n++] = (Group){f->children + from, i - from};
+            from = i + 1;
+        }
+    for (int32_t i = 0; i < n; i++)
+        if (only_ws(&g[i]))
+            return false;
+    if (n > 0 && (radial ? radial_prelude(s, &g[0]) : linear_prelude(&g[0])))
+        return stops(s, g + 1, n - 1);
+    return stops(s, g, n);
+}
+
+// An <image>: a url, or a gradient the grammar above admits, or one this
+// library takes by name (vc_image).
+static bool bg_image(Sets *s, VCur *c, garb_val_t *out)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t != NULL && t->kind == GARB_FUNCTION) {
+        bool linear = ieq(t->text, t->len, "linear-gradient") ||
+                      ieq(t->text, t->len, "repeating-linear-gradient");
+        bool radial = ieq(t->text, t->len, "radial-gradient") ||
+                      ieq(t->text, t->len, "repeating-radial-gradient");
+        if ((linear || radial) && !gradient_ok(s, t, radial))
+            return false;
+    }
+    return vc_image(c, out);
+}
+
 static bool repeat(VCur *c, garb_val_t *out)
 {
     const char *one = vc_keyword(c, kRepeat);
@@ -692,7 +876,7 @@ static bool background(Sets *s, VCur *c)
             if (!have_img && vc_keyword(c, kNone) != NULL) {
                 li = kw("none");
                 have_img = true;
-            } else if (!have_img && vc_image(c, &v)) {
+            } else if (!have_img && bg_image(s, c, &v)) {
                 li = v;
                 have_img = true;
             } else if (!have_pos && position(s, c, &x, &y)) {
@@ -999,7 +1183,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
             *out = kw("none");
             return true;
         }
-        return l->g == G_BG_IMAGE ? vc_image(c, out) : vc_url(c, out);
+        return l->g == G_BG_IMAGE ? bg_image(s, c, out) : vc_url(c, out);
     case G_BG_REPEAT: return repeat(c, out);
     case G_BG_POS_X:
         if ((k = vc_keyword(c, kPosX)) != NULL) {
@@ -1199,12 +1383,12 @@ int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, boo
     if (l == NULL && sh < 0)
         return 0;
     if (garb_decl_has_var(decl))
-        return -1;                      // the cascade reads it once the variable is known
+        return GARB_DECL_HELD;
     // A CSS-wide keyword alone reaches every longhand the property sets.
     const char *wide = vc_keyword(&c, kWide);
     if (wide != NULL) {
         if (!vc_done(&c))
-            return -1;
+            return GARB_DECL_INVALID;
         garb_val_t v = {0};
         v.kind = GARB_V_WIDE;
         v.keyword = wide;
@@ -1229,7 +1413,7 @@ int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, boo
     }
     if (s.a.short_of_memory)
         owner->incomplete = true;
-    return ok && !s.a.short_of_memory ? s.n : -1;
+    return ok && !s.a.short_of_memory ? s.n : GARB_DECL_INVALID;
 }
 
 // ── Writing a value back ────────────────────────────────────────────────
@@ -1258,10 +1442,18 @@ static void put_n(Out *o, const char *s, size_t n)
 }
 
 // A number to six decimal places, the zeros after them trimmed — how
-// Color 4 serializes a channel, and plenty for a length.
+// Color 4 serializes a channel, and plenty for a length. One past what an
+// int64_t holds (1e300px is a valid length), or not a number at all, is
+// written by the parser's own writer, which tests the range before any
+// cast.
 static void num(Out *o, double v)
 {
     char b[64];
+    if (!(v < 1e15 && v > -1e15)) {
+        garb_format_double(b, sizeof(b), v);
+        put(o, b);
+        return;
+    }
     bool neg = v < 0;
     if (neg)
         v = -v;

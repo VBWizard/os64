@@ -18,7 +18,7 @@ One of each mode, all in `userland/apps/`:
 |---|---|---|
 | **glogo** | immediate (libdraw) | you repaint most of the window anyway: animation, custom drawing. YOU are the painter — clear, draw everything, publish, every frame. Its numbered steps [1]-[9] are the whole liturgy, including the frame clock done right (dt-scaled state, boundary-anchored cadence). xlogo's heir, and exactly as ambitious. |
 | **gclock** | retained (libui) | furniture that mostly sits still: labels, buttons, panels. Describe widgets once; then change state → mark dirty → `os64_ui_paint()`. Also the model for TIME-driven UIs (`os64_ui_run` blocks on events; a ticking app runs the paint loop itself). Chris's — the first user-authored g-app, and it found a window-manager bug before it could tell time. |
-| **gterm** | hybrid (libdraw, one full-bleed surface) | the window IS one custom-drawn thing (a grid, a canvas, a plot). No widgets to retain, no frame-clear ceremony beyond your own — and a documented example of choosing libdraw over libui on purpose. |
+| **gterm** | hybrid (libdraw grid and libui controls) | custom terminal cells beside a themed scrollbar, with a modeless settings dialog; see GTERM.md. |
 
 (uiprobe exercises libui's whole contract — dispatch, grab, theme — and is
 worth reading, but it is a FIXTURE: it proves the toolkit, where gclock
@@ -336,3 +336,21 @@ A listbox may supply a `swatch` callback to draw color chips before its labels;
 the chip and label share the row's existing mouse and keyboard behavior.
 Palette-role and schema color accessors live in `ui_palette.c` / `ui_theme.c`.
 APPEARANCE.md records role inference, persistence compatibility, and Undo scope.
+
+## Application settings windows
+
+`os64/ui_settings.h` provides an app-owned, modeless dialog with a content
+container, status line, and Apply / Save as default / Close buttons. Call
+`open`, populate `body`, then `ready`; service `pump` in the application loop
+and `close` before releasing the app widgets. Opening an existing dialog
+focuses/restores it and retains its draft.
+
+The app supplies layout and apply callbacks and owns validation, runtime
+changes and persistence. The helper supplies theme/font adoption, keyboard
+focus and button behavior. Its font planner stages layout before adopting
+a changed Interface font; a size that cannot fit is refused intact.
+
+A main window opts into the titlebar action with
+`OS64_GUI_WINDOW_HAS_SETTINGS` and handles `OS64_GUI_EVENT_SETTINGS` by
+opening this helper. The dialog itself does not opt in. Ctrl+Alt+S requests
+settings even when the titlebar is hidden or a composition omits the button.

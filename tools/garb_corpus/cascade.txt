@@ -70,7 +70,8 @@ p: color: rgb(255, 0, 0); margin-top: 3px; margin-left: 7px; padding-top: 4px; p
 (end)
 END
 
-# @media, @supports, and a style element's media.
+# @media, @supports, and a style element's media. A grid or flex container
+# is read but laid out as the block it is outside, so it is not SUPPORTED.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -80,12 +81,15 @@ p { color: red }
 @supports (display: grid) { p { margin-top: 1px } }
 @supports not (display: nonsense) { p { margin-left: 2px } }
 @supports (foo: bar) { p { margin-right: 3px } }
+@supports (display: table-cell) { p { margin-bottom: 4px } }
+@supports not (display: inline-flex) { p { padding-left: 5px } }
+@supports (display: contents) { p { padding-right: 6px } }
 </style>
 <style media="print">p { width: 1px }</style>
 <style media="(min-width: 700px)">p { height: 2px }</style>
 <p>x
 WANT
-p: color: rgb(0, 0, 255); margin-top: 1px; margin-left: 2px; height: 2px
+p: color: rgb(0, 0, 255); margin-bottom: 4px; margin-left: 2px; padding-right: 6px; padding-left: 5px; height: 2px
 (end)
 END
 
@@ -180,5 +184,21 @@ p { height: var(--loop, 6px); margin: 1px env(nope); width: env(nope, 3px) }
 <p>x
 WANT
 p: margin-top: unset; margin-right: unset; margin-bottom: unset; margin-left: unset; width: 3px; height: 6px
+(end)
+END
+
+# A custom property's empty value is a value, and its initial one is not:
+# the "space toggle" (`--on: ;` substitutes nothing, `--off: initial` takes
+# the fallback). And `unset` on a custom property inherits, as custom
+# properties do (Cascade 4 § 7.3).
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+div { --on: ; --off: initial; --u: blue }
+p { --u: unset; color: var(--u, red); margin-top: var(--on) 3px; margin-bottom: var(--off, 4px) }
+</style>
+<div><p>x</div>
+WANT
+p: color: rgb(0, 0, 255); margin-top: 3px; margin-bottom: 4px
 (end)
 END

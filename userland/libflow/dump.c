@@ -1,5 +1,5 @@
-// dump.c — a page's layout as text, for the host harness and for a probe
-// in the guest: a change to the engine is a diff to a file.
+// dump.c — what libflow makes of a page, as text, for the host harness and
+// for a probe in the guest: a change to the engine is a diff to a file.
 
 #include "internal.h"
 #include "os64/fmt.h"
@@ -110,6 +110,18 @@ static const char *const s_list[] = {"disc", "circle", "square", "decimal", "low
 static const char *const s_visibility[] = {"visible", "hidden", "collapse"};
 static const char *const s_float[] = {"none", "left", "right"};
 static const char *const s_clear[] = {"none", "left", "right", "both"};
+
+// One name per value: an enum that grows without its table stops the build.
+_Static_assert(F_ARRAY(s_display) == FLOW_DISPLAY_NONE + 1, "s_display");
+_Static_assert(F_ARRAY(s_generic) == FLOW_GENERIC_MONO + 1, "s_generic");
+_Static_assert(F_ARRAY(s_border) == FLOW_BORDER_GROOVE + 1, "s_border");
+_Static_assert(F_ARRAY(s_align) == FLOW_ALIGN_HTML_JUSTIFY + 1, "s_align");
+_Static_assert(F_ARRAY(s_valign) == FLOW_VALIGN_HTML_MIDDLE + 1, "s_valign");
+_Static_assert(F_ARRAY(s_ws) == FLOW_WS_PRE_WRAP + 1, "s_ws");
+_Static_assert(F_ARRAY(s_list) == FLOW_LIST_NONE + 1, "s_list");
+_Static_assert(F_ARRAY(s_visibility) == FLOW_COLLAPSE + 1, "s_visibility");
+_Static_assert(F_ARRAY(s_float) == FLOW_FLOAT_RIGHT + 1, "s_float");
+_Static_assert(F_ARRAY(s_clear) == FLOW_CLEAR_BOTH + 1, "s_clear");
 
 static bool family_eq(const flow_family_list_t *a, const flow_family_list_t *b)
 {
@@ -348,6 +360,7 @@ static void quoted(Buf *b, const char *s, uint32_t len)
 static const char *const s_box[] = {
     "block", "replaced", "table", "caption", "column-group", "column", "row-group", "row", "cell",
 };
+_Static_assert(F_ARRAY(s_box) == FB_CELL + 1, "s_box");
 
 static void box_lines(Buf *b, const FBox *box, int32_t depth);
 

@@ -17,13 +17,19 @@ struct FBlock {
 
 void *f_arena_alloc(FArena *arena, size_t size)
 {
+    if (size > SIZE_MAX - 15u)
+        return NULL;
     size = (size + 15u) & ~(size_t)15u;
     FBlock *b = arena->blocks;
     if (b == NULL || b->cap - b->used < size) {
         size_t cap = size > F_BLOCK_BYTES ? size : F_BLOCK_BYTES;
-        b = os64_malloc(sizeof(FBlock) + cap);
+        size_t bytes = sizeof(FBlock) + cap;
+        if (bytes < cap || bytes > arena->cap || arena->reserved > arena->cap - bytes)
+            return NULL;
+        b = os64_malloc(bytes);
         if (b == NULL)
             return NULL;
+        arena->reserved += bytes;
         b->next = arena->blocks;
         b->used = 0;
         b->cap = cap;
@@ -44,6 +50,7 @@ void f_arena_free(FArena *arena)
         b = next;
     }
     arena->blocks = NULL;
+    arena->reserved = 0;
 }
 
 static size_t hash_ptr(const void *p)
