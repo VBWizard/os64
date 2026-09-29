@@ -168,13 +168,8 @@ static void meet_axis(int32_t *at, int32_t *len, int32_t other_at, int32_t other
     *len = (int32_t)(a1 > a0 ? a1 - a0 : 0);
 }
 
-// Which axes a box clips its content on. `hidden` and `clip` do; `scroll`
-// and `auto` are drawn unclipped, because yonder does not yet scroll a
-// box and a clipped one would hide what it holds past its edge with no way
-// to reach it (GARB.md § Booked). The root's overflow, or the body's when
-// the root's is visible, is the viewport's (CSS Overflow 3 § 3.3), and
-// clips neither.
-
+// The root's overflow, or the body's when the root's is visible, is the
+// viewport's (CSS Overflow 3 § 3.3), and clips neither axis.
 static bool viewport_overflow(const FBox *src)
 {
     if (src->parent == NULL)
