@@ -186,6 +186,7 @@ char startTime[100] = {0};
 uint64_t lastTime = 0;
 task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
+uint64_t kBootTSC;   // stamped first thing in kernel_main (kernel.h)
 // Boot TSC calibration window, seconds (TSCCAL= on the cmdline).
 //
 // The rate measured here is FIXED for the life of the boot. Every CPU-time
@@ -1141,6 +1142,7 @@ void log_debug_level(__uint128_t value) {
 //		Make changes in kernel_init() instead if you need variables.
 void kernel_main()
 {
+	kBootTSC = rdtsc();   // micros()'s zero: before anything else counts
 	kDebugLevel = DEBUG_OPTIONS;
 	kInitDone = false;
 	kTicksPerSecond = TICKS_PER_SECOND;

@@ -28,6 +28,7 @@
 // "a signal cut your wait short" is the system-wide sentinel, not a private
 // GUI code. signals.c pins every signal NUMBER this way; the one error value
 // that crosses subsystems gets the same treatment.
+_Static_assert(GUI_WINDOW_HAS_SETTINGS == OS64_GUI_WINDOW_HAS_SETTINGS,"settings capability ABI");
 _Static_assert(GUI_ERR_INTERRUPTED == OS64_INTERRUPTED,
                "GUI_ERR_INTERRUPTED must be OS64_INTERRUPTED (os64/signal.h) — one sentinel for every interrupted wait");
 #include "kernel.h"     // kTicksSinceStart — the park's backstop deadline
@@ -183,7 +184,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	const uint32_t client_flags = GUI_WINDOW_NO_DECORATIONS |
 	                              GUI_WINDOW_START_UNFOCUSED |
 	                              GUI_WINDOW_PINNED |
-	                              GUI_WINDOW_DESKTOP | GUI_WINDOW_TITLE_UTF8;
+	                              GUI_WINDOW_DESKTOP | GUI_WINDOW_TITLE_UTF8 | GUI_WINDOW_HAS_SETTINGS;
 	uint32_t create_flags = (uint32_t)flags & client_flags;
 
 	// DESKTOP AND PINNED ARE A CONTRADICTION, AND IT USED TO RESOLVE BADLY
@@ -460,9 +461,22 @@ int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
 	                            GUI_WINDOW_DESKTOP |   // the band is state too (Codex #31 rd3): without it a saved-and-recreated desktop came back an ordinary window
 	                            GUI_WINDOW_MAXIMIZED |
 	                            GUI_WINDOW_MINIMIZED |
-	                            GUI_WINDOW_COVERED | GUI_WINDOW_TITLE_UTF8);   // can anyone see me? — the frame clock's question
+	                            GUI_WINDOW_COVERED | GUI_WINDOW_TITLE_UTF8 | GUI_WINDOW_HAS_SETTINGS);   // can anyone see me? — the frame clock's question
 	spinlock_release_irqrestore(&kGuiLock, irqflags);
 	return 0;
+}
+
+int64_t gui_window_focus(int64_t handle)
+{
+    int64_t err;
+    uint64_t flags=spinlock_acquire_irqsave(&kGuiLock);
+    window_t *win=handle_lookup_owned(handle,&err);
+    if(win && (win->flags & (GUI_WINDOW_DESKTOP | GUI_WINDOW_POPUP))) {
+        win=NULL;err=GUI_ERR_BAD_ARGS;
+    }
+    if(win) { wm_set_minimized(win,false);wm_raise(win); }
+    spinlock_release_irqrestore(&kGuiLock,flags);
+    return win?0:err;
 }
 
 int64_t gui_window_set_min_size(int64_t handle, uint32_t width, uint32_t height)

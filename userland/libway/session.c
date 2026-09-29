@@ -188,7 +188,8 @@ bool way_may_go(way_session_t *s, const os64_page_request_t *request, way_ask_t 
 {
     way_judgement_t j = way_judge(s, request, ask);
     if (j.kind == WAY_QUESTION)
-        return s->face.confirm(s->face.ctx, j.question, j.security, j.refused);
+        return s->face.confirm != NULL &&
+               s->face.confirm(s->face.ctx, j.question, j.security, j.refused);
     return j.kind == WAY_FETCH;
 }
 

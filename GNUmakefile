@@ -209,8 +209,8 @@ USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/li
 
 # The font fixtures /tests/fonttest reads: two TrueType faces and two
 # OpenType/CFF ones, with their licences beside them. They land in /tests
-# as test inputs. The product selection below reuses two pinned, licensed
-# files and installs independent copies in /etc/fonts.
+# as test inputs. The product selection ships the complete DejaVu serif,
+# sans and mono families as independent copies in /etc/fonts.
 # userland/libfreetype/fixtures/FIXTURES.md records where each file came
 # from, its digest, and what licence it travels under.
 FONT_FIXTURE_DIR   := userland/libfreetype/fixtures
@@ -219,12 +219,17 @@ FONT_FIXTURE_FILES := DejaVuSans.ttf DejaVuSansMono.ttf \
                       LICENSE-DejaVu.txt LICENSE-SourceCodePro.txt \
                       LICENSE-SourceSans3.txt
 FONT_FIXTURES      := $(addprefix $(FONT_FIXTURE_DIR)/,$(FONT_FIXTURE_FILES))
-FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSans.ttf DejaVuSansMono.ttf)
+FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSerif.ttf DejaVuSerif-Bold.ttf \
+                      DejaVuSerif-Italic.ttf DejaVuSerif-BoldItalic.ttf \
+                      DejaVuSans.ttf DejaVuSans-Bold.ttf DejaVuSans-Oblique.ttf \
+                      DejaVuSans-BoldOblique.ttf DejaVuSansMono.ttf DejaVuSansMono-Bold.ttf \
+                      DejaVuSansMono-Oblique.ttf DejaVuSansMono-BoldOblique.ttf)
 
 # The real pages the layout library is tested on, and the style sheets
 # libgarb is, side by side in /tests/pages, so /tests/flowdump and
 # /tests/garbdump have something to read on a machine with no network. Where
-# each page came from is in tools/html_corpus/SOURCES.json.
+# each page came from is in tools/html_corpus/SOURCES.json, which ships
+# beside them.
 PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css)
 
 # The same fixtures for the wire, staged alone: os64serve serves a directory
@@ -470,7 +475,7 @@ userland:
 # that rides it changes.
 TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
 
-$(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(FONT_FIXTURES) $(PAGE_FIXTURES) $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf GNUmakefile
+$(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -488,7 +493,7 @@ $(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENS
 	# is writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
 	# /home/husk.rc (the user's, on its own partition) still wins the
 	# search; /fat/husk.rc remains the lifeboat's copy.
-	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/crontab crontab\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\nwrite etc/bootenv.conf bootenv.conf\nwrite etc/sshd.conf sshd.conf\nwrite etc/vncd.conf vncd.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/crontab crontab\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/gterm.conf gterm.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\nwrite etc/bootenv.conf bootenv.conf\nwrite etc/sshd.conf sshd.conf\nwrite etc/vncd.conf vncd.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
 	# The pinned public roots are system configuration; /home/tls.conf can
 	# select another store through the configuration ladder.
 	printf 'mkdir /etc/certs\nwrite %s /etc/certs/roots.pem\n' "$(TLS_PUBLIC_ROOTS)" >> $(EXT2_STAGING)/debugfs_bins.cmds
@@ -519,7 +524,7 @@ $(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENS
 	printf 'mkdir /tests/fonts\ncd /tests/fonts\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(FONT_FIXTURES),printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'mkdir /tests/pages\ncd /tests/pages\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	$(foreach f,$(PAGE_FIXTURES),printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	$(foreach f,$(PAGE_FIXTURES) tools/html_corpus/SOURCES.json,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'cd /tests\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;))
 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
@@ -540,7 +545,7 @@ $(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENS
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(PAGE_FIXTURES) $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -588,7 +593,7 @@ $(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE lic
 	$(foreach f,$(FONT_FIXTURES),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/fonts/$(notdir $(f));)
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/tests/pages > /dev/null 2>&1
-	$(foreach f,$(PAGE_FIXTURES),\
+	$(foreach f,$(PAGE_FIXTURES) tools/html_corpus/SOURCES.json,\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/pages/$(notdir $(f));)
 	# The lifeboat's own /lib. Its /bin is dynamically linked exactly like
 	# root's, so these files are what make the lifeboat a working system
@@ -628,6 +633,7 @@ $(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE lic
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/unicode-LICENSE ::/etc/licenses/unicode.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gclock.conf ::/etc/gclock.conf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gterm.conf ::/etc/gterm.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/os64.conf ::/etc/os64.conf
 	# bootenv.conf for the same reason as os64.conf: the boot environment is
 	# decided by a file now, and the lifeboat boots with the same defaults the

@@ -185,9 +185,29 @@ static void buf_cp(Tokenizer *tz, uint32_t c)
 }
 
 // The buffer, copied into the arena with a NUL after it.
-static const char *buf_keep(Tokenizer *tz, size_t *len)
+// Every single-byte ASCII text, so the commonest tokens (a delimiter, a
+// one-letter name) cost the arena nothing: text is read-only once kept.
+static const char kOneByte[128][2] = {
+#define B(c) {(char)(c), '\0'}
+#define B8(c) B(c), B(c + 1), B(c + 2), B(c + 3), B(c + 4), B(c + 5), B(c + 6), B(c + 7)
+    B8(0), B8(8), B8(16), B8(24), B8(32), B8(40), B8(48), B8(56),
+    B8(64), B8(72), B8(80), B8(88), B8(96), B8(104), B8(112), B8(120),
+#undef B8
+#undef B
+};
+
+// The text built so far, kept: packed byte to byte (a string needs no
+// alignment, and padding every token to sixteen bytes was a quarter of what
+// text cost), or shared when it is one ASCII byte.
+static const char *buf_keep(Tokenizer *tz, uint32_t *len)
 {
-    char *out = os64_arena_alloc(tz->arena, tz->buflen + 1);
+    *len = (uint32_t)tz->buflen;
+    if (tz->buflen == 1 && (unsigned char)tz->buf[0] < 128)
+        return kOneByte[(unsigned char)tz->buf[0]];
+    size_t hold = (tz->open != NULL ? *tz->open : 0) + GARB_CLOSE_SLACK;
+    char *out = garb_room(tz->arena, tz->buflen + 1, hold)
+                    ? os64_arena_alloc_aligned(tz->arena, tz->buflen + 1, 1)
+                    : NULL;
     if (out == NULL) {
         tz->short_of_memory = true;
         *len = 0;
@@ -196,7 +216,6 @@ static const char *buf_keep(Tokenizer *tz, size_t *len)
     if (tz->buflen > 0)
         os64_memcpy(out, tz->buf, tz->buflen);
     out[tz->buflen] = '\0';
-    *len = tz->buflen;
     return out;
 }
 

@@ -985,11 +985,10 @@ void processSignals()
 	pipe_wake_if_ready();
 
 	// And for dialed network conversations: wake any reader whose datagram
-	// ring is non-empty. (UDP conns have NO fast-path wake — their enqueue
-	// runs in knet, which could take the queue lock the way tcp_input now
-	// does, but nothing has asked for a faster datagram yet — so this sweep
-	// is their only waker, one tick behind the arrival; see the context map
-	// in udp_conn.c.)
+	// ring is non-empty. udp_conn_rx wakes a parked reader on arrival
+	// (ARRIVAL_WAKE.md); this sweep is the backstop for a reader that had
+	// registered but not yet parked when its datagram landed — the same
+	// race, and the same cure, as pipes.
 	udp_conn_wake_if_ready();
 
 	// Same for TCP streams: a reader wakes for bytes, EOF, or death; a
@@ -999,7 +998,8 @@ void processSignals()
 	// same race, and the same cure, as pipes.
 	tcp_wake_if_ready();
 
-	// And echo conversations: a reader wakes when its reply lands.
+	// And echo conversations: icmp_conn_deliver wakes on arrival too; same
+	// backstop, same reason.
 	icmp_conn_wake_if_ready();
 
 	// And threads: wake anyone blocked reading a thread handle whose

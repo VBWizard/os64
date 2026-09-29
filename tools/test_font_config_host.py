@@ -44,7 +44,7 @@ if not objects:
 sources = ['tools/test_font_settings_host.c' if a.settings else 'tools/test_font_config_host.c']
 if a.settings:
     sources += ['userland/libos64/'+n+'.c' for n in ['font_install','ui_session','ui_theme','ui_envelope','ui_palette','ui_saved','fmt']]
-sources += ['userland/libos64/'+n+'.c' for n in ['font_config', 'font_discovery', 'font_provider',
+sources += ['userland/libos64/'+n+'.c' for n in ['font_config', 'font_discovery', 'font_provider', 'font_family',
             'conf', 'slurp', 'str', 'text', 'text_cache', 'text_decode', 'text_bitmap']]
 binary = out/'test_font_config'
 subprocess.run(['cc', *flags, *[str(root/s) for s in sources], *map(str, objects),

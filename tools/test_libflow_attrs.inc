@@ -62,7 +62,8 @@ static void attrs_cases(void)
     dimension_case(".5", false, F_DIM_NONE, 0);
     dimension_case("-5", false, F_DIM_NONE, 0);
     dimension_case("7.", false, F_DIM_PX, 7 * 64);
-    dimension_case("7.%", false, F_DIM_PX, 7 * 64);           // the fraction needs a digit
+    dimension_case("7.%", false, F_DIM_PERCENT, 7 * 64);      // past the dot, then the suffix
+    dimension_case("7.x%", false, F_DIM_PX, 7 * 64);
     dimension_case("", false, F_DIM_NONE, 0);
 
     int32_t v = 0;

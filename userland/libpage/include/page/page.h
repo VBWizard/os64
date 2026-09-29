@@ -242,9 +242,10 @@ typedef struct {
 // attributes on the node.
 //
 // Every `img` and every `input type=image` whose `src` names something. An
-// empty `src` (white space counts as empty) names nothing, and the standard
-// shows such an image as broken rather than fetching the page it sits on as
-// a picture — so it is not listed, and `os64_page_image_for` answers -1.
+// empty or blank `src` names nothing: such an image is shown broken rather
+// than fetching the page it sits on as a picture — the standard's rule for
+// the empty string, and browsers' for white space — so it is not
+// listed, and `os64_page_image_for` answers -1.
 typedef struct {
     const os64_html_node_t *node;   // the `img` or `input type=image`
     os64_page_ref_t src;            // resolved against the base; refused says why
@@ -368,12 +369,12 @@ int32_t os64_page_background_for(const os64_page_t *page, const os64_html_node_t
 // cascade ranks them in (GARB.md): a `style` element, whose text is its
 // children as libhtml keeps them, and a `link` whose `rel` holds the token
 // `stylesheet` and not `alternate` (an alternate sheet is off until a
-// person picks it), with an `href` that is not empty, resolved against the
-// base for the reason every reference is. A `type` that is neither empty
-// nor `text/css` names a language this browser does not read, and a
-// `disabled` link is off: neither is listed. `media` is as written, NULL
-// when absent — judging it is the cascade's, since a resize changes the
-// answer. HTML elements only: an SVG `style` styles SVG.
+// person picks it), with an `href` that is not empty or white space,
+// resolved against the base for the reason every reference is. A `type`
+// that is neither empty nor `text/css` names a language this browser does
+// not read, and a `disabled` link is off: neither is listed. `media` is as
+// written, NULL when absent — judging it is the cascade's, since a resize
+// changes the answer. HTML elements only: an SVG `style` styles SVG.
 typedef struct {
     const os64_html_node_t *node;   // the `style` or the `link`
     bool linked;                    // a `link`: its sheet is at `href`

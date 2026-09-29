@@ -46,6 +46,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 
 | Unix/Linux | os64 | Why | Recorded |
 |---|---|---|---|
+| `clock_gettime(CLOCK_MONOTONIC, &ts)` — a struct of seconds and nanoseconds through a pointer, one of several clock IDs | `micros()` returns microseconds since boot in RAX; `ticks()` is the scheduler's own count beside it | One number in the unit an interval wants, and no pointer to get wrong; nanoseconds would promise a precision a 3-second TSC calibration cannot keep. Two calls on purpose: they can disagree (lost ticks), and a struct carrying both invites adding them | ABI #59, `os64/ticks.h`, ARRIVAL_WAKE.md |
 | `errno` (global, action at a distance) | In-band errors only; designed convention = RAX:RDX value:status pair (interim: two high sentinels) | The error check belongs at the call site | ABI § register contract |
 | `lseek` (whence + offset dance, return needs care) | `seek` returns the NEW absolute position; `SEEK_END+0` = file size, no fstat needed | The useful answer, directly | ABI inventory #10 |
 | `getdents` + per-entry `stat` dance; `struct dirent`'s poverty | `readdir` yields name+size+kind in ONE call; returns 1/0/<0; EOF is sticky | One call, whole answer | dirent.h, ABI #11 |

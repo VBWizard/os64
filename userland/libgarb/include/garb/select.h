@@ -6,10 +6,14 @@
 // against libhtml's tree. Pure: a tree and a selector in, an answer out.
 //
 // WHAT NEVER MATCHES, and why. The user-action pseudo-classes (:hover,
-// :active, :focus, :focus-within, :focus-visible) and :target parse, and
-// match nothing until a face restyles when they change (GARB.md § Booked).
-// :visited matches nothing by design, as in every browser: a page must not
-// learn where you have been from the colour of its own links.
+// :active, :focus, :focus-within, :focus-visible), :target and
+// :indeterminate parse, and match nothing until a face restyles when they
+// change (GARB.md § Booked); only the user-action ones may follow a
+// pseudo-element. :checked reads the tree's `checked` attribute, so a
+// person's own tick, which lives in libpage's model, restyles nothing
+// until then either. :visited matches nothing by design, as in every
+// browser: a page must not learn where you have been from the colour of
+// its own links.
 
 #include <stdbool.h>
 #include <stdint.h>
