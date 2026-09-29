@@ -1,7 +1,8 @@
 # libgarb's property grammars (GARB.md, G2b), worked by hand from the
 # specifications: each IN is one declaration, each OUT the longhands it
 # sets, `invalid` when the value does not fit its property's grammar, or
-# `unknown` for a property libgarb does not read. `quirks` before an IN
+# `unknown` for a property libgarb does not read, `held` for a value the
+# cascade reads once its var() or env() is replaced. `quirks` before an IN
 # reads it as quirks mode does. Run by tools/test_garb_suite.py.
 
 # ── The box (CSS 2.1 § 8) ──
@@ -66,6 +67,33 @@ OUT: invalid
 IN: border: initial
 OUT: border-top-width: initial; border-right-width: initial; border-bottom-width: initial; border-left-width: initial; border-top-style: initial; border-right-style: initial; border-bottom-style: initial; border-left-style: initial; border-top-color: initial; border-right-color: initial; border-bottom-color: initial; border-left-color: initial
 
+# ── Held for the cascade: a var() or env() anywhere, even in a value that
+# would not parse, is read only once it is replaced ──
+IN: width: var(--w)
+OUT: held
+IN: margin: 1px env(safe-area-inset-top)
+OUT: held
+IN: color: red var(--x) nonsense
+OUT: held
+IN: --custom-thing: var(--w)
+OUT: unknown
+
+# ── Numbers past what an int64_t holds: valid, and written without a cast
+# that cannot be made (a double past int64_t's range cannot be cast to one).
+# The digits are the tokenizer's, which does not round correctly, and a
+# literal past a double's range stays the infinity it made (BROWSER_DEBTS:
+# libgarb's numbers); a hue with no precision left reads as 0 ──
+IN: width: 1e300px
+OUT: width: 1.0000000000000006e300px
+IN: line-height: 1e300
+OUT: line-height: 1.0000000000000006e300
+IN: margin-top: 1e400px
+OUT: margin-top: Infinitypx
+IN: width: calc(1e300px * 10)
+OUT: width: calc(1.0000000000000006e300px * 10)
+IN: color: hsl(1e300 50% 50%)
+OUT: color: rgb(191.25, 63.75, 63.75)
+
 # ── Sizes and calc() (Sizing 3, Values 3 § 8, Values 4 § 10) ──
 IN: width: auto
 OUT: width: auto
@@ -120,7 +148,7 @@ OUT: height: 100vh
 IN: font-size: clamp(12px, 2.3cqw, 14px)
 OUT: font-size: clamp(12px, 2.3vw, 14px)
 IN: width: calc(100vw - env(safe-area-inset-left, 0px))
-OUT: invalid
+OUT: held
 IN: box-sizing: border-box
 OUT: box-sizing: border-box
 
@@ -321,6 +349,44 @@ IN: background-repeat: no-repeat repeat
 OUT: background-repeat: repeat-y
 IN: background-image: url(a.png), linear-gradient(red, blue)
 OUT: background-image: url(a.png)
+# Gradients by their grammar (Images 3 § 3): what the browsers refuse is
+# refused, so the colour set before it stands.
+IN: background-image: linear-gradient(to right, red, blue)
+OUT: background-image: linear-gradient(...)
+IN: background-image: linear-gradient(to top left, red, blue)
+OUT: background-image: linear-gradient(...)
+IN: background-image: linear-gradient(45deg, red 0%, blue 100%)
+OUT: background-image: linear-gradient(...)
+IN: background-image: linear-gradient(0, red, 20%, blue)
+OUT: background-image: linear-gradient(...)
+IN: background-image: repeating-linear-gradient(red 0 10px, blue 10px 20px)
+OUT: background-image: repeating-linear-gradient(...)
+IN: background-image: radial-gradient(red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(circle closest-side at 20% 30%, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(ellipse 10px 20px, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: linear-gradient(top, #333, #000)
+OUT: invalid
+IN: background: linear-gradient(top, #333, #000)
+OUT: invalid
+IN: background-image: linear-gradient(garbage)
+OUT: invalid
+IN: background-image: linear-gradient(red)
+OUT: invalid
+IN: background-image: linear-gradient(10%, red, blue)
+OUT: invalid
+IN: background-image: linear-gradient(red, 10%, 20%, blue)
+OUT: invalid
+IN: background-image: linear-gradient(red, blue, 10%)
+OUT: invalid
+IN: background-image: linear-gradient(to, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(at, red, blue)
+OUT: invalid
+IN: background-image: linear-gradient(red,, blue)
+OUT: invalid
 IN: background-image: url(a.png), 10px
 OUT: invalid
 IN: background-position: 0 0, 17px 11px, 50% 50%
@@ -337,4 +403,4 @@ IN: --panel: 10px
 OUT: unknown
 # A value holding var() is the cascade's to read, once the variable is known.
 IN: color: var(--x)
-OUT: invalid
+OUT: held

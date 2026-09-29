@@ -7,10 +7,37 @@
 #include "garb/garb.h"
 #include "os64/arena.h"
 
-// What one parse may take, past the input itself: a 2026 page's biggest
-// sheet parses in a few MiB, and a result past this is cut short and
-// marked incomplete rather than allowed to eat the machine.
+// What one parse may take, past the input itself: about 5 MiB of ordinary
+// CSS with every block read, far less of the densest (GARB.md § The cost,
+// measured). A result past this is cut short and marked incomplete rather
+// than allowed to eat the machine.
 #define GARB_ARENA_MAX ((size_t)96 << 20)
+
+// ── Room for what is open ───────────────────────────────────────────────
+//
+// THE ARENA ALWAYS HAS ROOM TO KEEP WHAT IS OPEN. parse.c's lists reach the
+// arena only when they close (parse.c § The lists a parse builds), so an
+// arena filled by anything else would lose every list still open — the
+// sheet's own list of rules among them, the day a sheet reached the cap.
+// Every allocation but a close — a token's text, a rule, a push onto an
+// open list — asks garb_room first: what the arena has reserved, the
+// request, and `hold` (the open lists' bytes, plus GARB_CLOSE_SLACK) must
+// fit. Filling the arena then refuses a token or a rule, never the lists
+// that hold what was finished.
+//
+// The slack is for how an arena reserves: in chunks (os64/arena.h — they
+// grow to 256 KiB), so one small request can reserve a whole chunk, and a
+// close bigger than what is left of the current chunk starts one of its
+// own and strands that tail. Two chunks' worth covers both; and a chunk
+// header and alignment for every list that could be open.
+#define GARB_CLOSE_SLACK ((size_t)2 * ((256u << 10) + 64) + (size_t)(GARB_DEPTH_MAX * 4 + 8) * 128)
+
+static inline bool garb_room(const os64_arena_t *arena, size_t size, size_t hold)
+{
+    size_t reserved = os64_arena_stats(arena).reserved_bytes;
+    return reserved <= GARB_ARENA_MAX && size <= GARB_ARENA_MAX - reserved &&
+           hold <= GARB_ARENA_MAX - reserved - size;
+}
 
 // ── The tokenizer (§4) ──────────────────────────────────────────────────
 
@@ -34,6 +61,7 @@ typedef struct {
     uint32_t *cp;           // the input, preprocessed (§3.3), as code points
     size_t n, pos;
     os64_arena_t *arena;    // where token text goes
+    const size_t *open;     // the parse's open lists, which text must leave room for
     bool short_of_memory;
     // A scratch buffer for building UTF-8 before it is copied into the arena.
     char *buf;
@@ -63,6 +91,10 @@ typedef struct {
     bool spent;             // an allocation failed: nothing more is read or kept
     Tokenizer *tz;          // the text's tokenizer, whose buffer can fail too
     int32_t depth;
+    // Where parse.c's lists are built before they are kept (parse.c § Lists):
+    // a stack on the heap, the open lists nested in it, `top` its end.
+    char *scratch;
+    size_t top, scratch_cap;
 } Parse;
 
 static inline bool p_spent(const Parse *p)
@@ -79,8 +111,15 @@ typedef struct {
     const Parse *owner;     // spent: the input has ended
 } Input;
 
-// Appending to a list held in the arena: the list doubles. Once the parse
-// is spent nothing is appended, and a list that cannot grow spends it.
+// A double as text, safe for any value (dump.c): NaN, the infinities and
+// numbers past int64_t's reach included. `cap` of 48 always suffices.
+void garb_format_double(char *b, size_t cap, double v);
+
+// Appending to a list held in the arena: the list doubles, and the arena
+// never takes the old half back, so this is for lists that stay small (a
+// selector's); parse.c builds its own on the scratch stack instead. Once
+// the parse is spent nothing is appended, and a list that cannot grow
+// spends it.
 bool p_push(Parse *p, void **list, int32_t *n, int32_t *cap, size_t size, const void *item);
 
 #endif

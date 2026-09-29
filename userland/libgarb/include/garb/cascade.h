@@ -58,7 +58,9 @@ typedef struct {
 
 // A `style` element's sheet: its child text content (HTML § 4.2.6), which
 // libhtml may keep as more than one text node, parsed into `out`. The parse
-// keeps no pointer into the tree.
+// keeps no pointer into the tree: one text node is parsed where it lies —
+// every string a parse keeps is its arena's copy, never its input's — and
+// several are joined in a buffer freed once the parse returns.
 garb_status_t garb_parse_style_element(const os64_html_node_t *style, garb_parsed_t *out);
 
 typedef struct garb_cascade garb_cascade_t;

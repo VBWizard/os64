@@ -138,6 +138,13 @@ p > > a
 :nth-child(n+)
 :not()
 :has()
+:not(p::before)
+:not(::selection)
+:is(p::before, div)
+:has(:has(p))
+:indeterminate
+p::before:hover
+p::before:target
 a:not(:hover)
 :is()
 :where()
@@ -186,6 +193,15 @@ ADJUDICATED = {
                            'the whole list',
     'p::before:hover': 'Selectors 4 § 3.6.3: a user-action pseudo-class may follow a '
                        'pseudo-element; cssselect2 refuses it (it matches nothing here either)',
+    ':not(p::before)': 'Selectors 4 § 4.3: a pseudo-element is not valid inside :not(), so '
+                       'the selector is invalid; cssselect2 reads it as valid and matching '
+                       'nothing, where the engine it replaced matched every element',
+    ':not(::selection)': 'the same rule, a pseudo-element alone in the list',
+    ':has(:has(p))': 'Selectors 4 § 4.5: :has() may not be nested inside :has(), so the '
+                     'selector is invalid; cssselect2 matches it',
+    ':indeterminate': 'Selectors 4 § 14.3.4 (Level 3 § 6.6.4): a pseudo-class this engine '
+                      'knows and never matches until a face restyles on it (GARB.md § '
+                      'Booked); cssselect2 does not know it and refuses it',
 }
 
 # Pseudo-classes the reference answers differently wherever they appear in a

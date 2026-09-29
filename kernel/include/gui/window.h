@@ -63,6 +63,7 @@
 #define GUI_WINDOW_START_UNFOCUSED (1u << 1)
 // Title bytes use the shared Western UTF-8 profile instead of legacy Latin-1.
 #define GUI_WINDOW_TITLE_UTF8 (1u << 8)
+#define GUI_WINDOW_HAS_SETTINGS (1u << 9) // opt in to the Settings titlebar action
 // PIN ON TOP (2026-08-23): the window lives in the upper band of the z-list
 // and cannot be buried by an ordinary raise. The user can toggle it with
 // Ctrl+Alt+P, and clients whose persisted state asks for it can request it
@@ -151,10 +152,10 @@
 // other's; this one pins the kernel's flags to EACH OTHER.
 _Static_assert((GUI_WINDOW_NO_DECORATIONS ^ GUI_WINDOW_START_UNFOCUSED ^ GUI_WINDOW_PINNED ^
                 GUI_WINDOW_MAXIMIZED ^ GUI_WINDOW_MINIMIZED ^ GUI_WINDOW_DESKTOP ^
-                GUI_WINDOW_COVERED ^ GUI_WINDOW_POPUP ^ GUI_WINDOW_TITLE_UTF8) ==
+                GUI_WINDOW_COVERED ^ GUI_WINDOW_POPUP ^ GUI_WINDOW_TITLE_UTF8 ^ GUI_WINDOW_HAS_SETTINGS) ==
                (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_START_UNFOCUSED | GUI_WINDOW_PINNED |
                 GUI_WINDOW_MAXIMIZED | GUI_WINDOW_MINIMIZED | GUI_WINDOW_DESKTOP |
-                GUI_WINDOW_COVERED | GUI_WINDOW_POPUP | GUI_WINDOW_TITLE_UTF8),
+                GUI_WINDOW_COVERED | GUI_WINDOW_POPUP | GUI_WINDOW_TITLE_UTF8 | GUI_WINDOW_HAS_SETTINGS),
                "two window flags share a bit");
 
 // Alt+F4 twice within this long (5s) on a window that did not go away is

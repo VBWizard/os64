@@ -478,11 +478,13 @@ static void render_checks(void)
     }
 
     // A FRAMESET PAGE IS ITS FRAMES, each one a link the model resolved —
-    // against the page's `<base>` like any other reference.
+    // against the page's `<base>` like any other reference. A frame whose
+    // src is absent, empty or blank names nothing and is not drawn.
     wend_page_t *frames = render_html_text(
         "<head><base href='http://other/dir/'></head>"
         "<frameset><frame name=menu src=menu.html><frame src=body.html#top>"
-        "<frame name=nothing></frameset>", 40, "http://host/p");
+        "<frame name=nothing><frame name=empty src=''><frame name=blank src=' \t'>"
+        "</frameset>", 40, "http://host/p");
     CHECK(frames != NULL && frames->nspots == 2);
     if (frames && frames->nspots == 2) {
         CHECK(frames->nlines == 2 && strcmp(frames->lines[0].text, "[1]frame: menu") == 0 &&

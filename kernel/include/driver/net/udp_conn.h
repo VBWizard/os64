@@ -74,6 +74,10 @@ typedef struct udp_conn
 	uint64_t rx_delivered;        // datagrams handed to read()
 	uint64_t rx_dropped_full;     // ring full — newest arrival sacrificed
 	uint64_t rx_dropped_stranger; // right port, wrong peer — connected-UDP filter
+	// rdtsc at the last enqueue. Subtracted from a reader's own rdtsc after
+	// its read returns, it is the enqueue-to-running latency — the
+	// kernel's share of a round trip, which test_net_icmp_conn prints.
+	uint64_t last_arrival_tsc;
 
 	struct udp_conn* next;   // kUdpConnList, for the wake sweep
 } udp_conn_t;
@@ -107,8 +111,10 @@ void udp_conn_ref(udp_conn_t* c);
 void udp_conn_release(udp_conn_t* c);
 
 // The level-triggered wake sweep — called from processSignals beside
-// pipe_wake_if_ready, under the scheduler lock, AFTER the NIC poll (so a
-// datagram delivered this pass wakes its reader this pass).
+// pipe_wake_if_ready, under the scheduler lock. The BACKSTOP: udp_conn_rx
+// wakes a parked reader on arrival itself (ARRIVAL_WAKE.md); this catches
+// a reader that had registered but not yet parked when its datagram
+// landed, the same race pipes have and the same cure.
 void udp_conn_wake_if_ready(void);
 
 #endif // UDP_CONN_H

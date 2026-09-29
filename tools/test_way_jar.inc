@@ -231,6 +231,42 @@ static void cookie_order_and_room(void)
            way_jar_count(jar) == WAY_COOKIES_PER_DOMAIN && strncmp(all, "c1=1; ", 6) == 0, all);
     way_jar_free(jar);
 
+    // The cookie in use is the last to go (§5.3 step 12, §5.4 step 3): the
+    // oldest is sent once, alone at its own path, so when the 181st
+    // arrives the second-oldest goes instead.
+    jar = way_jar_new();
+    hear(jar, "http://used.test/", false, "login=1; Path=/in", 0);
+    for (int i = 1; i < WAY_COOKIES_PER_DOMAIN; i++) {
+        snprintf(line, sizeof(line), "c%d=1; Path=/out", i);
+        hear(jar, "http://used.test/", false, line, i);
+    }
+    jar_expect("limits: the oldest cookie, sent", jar, "http://used.test/in", false, 500,
+               "login=1");
+    hear(jar, "http://used.test/", false, "late=1; Path=/out", 600);
+    const char *rest = sent(jar, "http://used.test/out", false, 700);
+    expect("limits: past 180 the cookie used longest ago goes, not the one in use",
+           way_jar_count(jar) == WAY_COOKIES_PER_DOMAIN && strncmp(rest, "c2=1; ", 6) == 0 &&
+               strcmp(sent(jar, "http://used.test/in", false, 700), "login=1") == 0,
+           rest);
+    way_jar_free(jar);
+
+    // The expired go before any limit is counted: 179 live and then one
+    // that expires — the newest, so no other rule would pick it — then a
+    // new one, and every live cookie stays.
+    jar = way_jar_new();
+    for (int i = 1; i < WAY_COOKIES_PER_DOMAIN; i++) {
+        snprintf(line, sizeof(line), "c%d=1", i);
+        hear(jar, "http://aged.test/", false, line, i);
+    }
+    hear(jar, "http://aged.test/", false, "gone=1; Max-Age=5", 300);
+    hear(jar, "http://aged.test/", false, "late=1", 600);
+    const char *kept = sent(jar, "http://aged.test/", false, 700);
+    expect("limits: an expired cookie goes before a live one",
+           way_jar_count(jar) == WAY_COOKIES_PER_DOMAIN && strncmp(kept, "c1=1; ", 6) == 0 &&
+               strstr(kept, "gone=") == NULL,
+           kept);
+    way_jar_free(jar);
+
     jar = way_jar_new();
     for (int i = 0; i < WAY_COOKIES_MAX + 1; i++) {
         snprintf(line, sizeof(line), "http://d%d.test/", i / 100);
