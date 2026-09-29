@@ -152,10 +152,10 @@ absolute dropdown inside it is ordinary.
   inline-level (`specified_inline`) records the pen where it stands. One
   specified block-level would have broken the line, so it records the
   START OF THE NEXT LINE, at the container's content edge. Among blocks, a
-  box records the top of where the next in-flow block would start — below
-  the previous sibling's margin; whether the following sibling's collapsed
-  margin counts is settled against Chrome before the fixture's numbers are
-  written (ruling 5).
+  box records the top edge below the PREVIOUS sibling's margin alone — not
+  the margin that sibling collapses to with the next one, which has not
+  been met when the placeholder is passed (ruling 5, Chrome: 10 below a
+  block whose 10px margin collapses to 40 with the next).
 - **Absolute.** An absolute box is laid out when its containing block is
   FINISHED — its height is part of the equation — as a block formatting
   context of its own, with § 10.3.7's and § 10.6.4's solutions against the
@@ -338,7 +338,9 @@ to disagree with. No luck."
    are written: an absolute box between two blocks whose margins collapse,
    to settle which margin its static position sits below
    (`tools/position_probe/static-position.html`, which prints what Chrome
-   measured; its answer is recorded here when it comes back).
+   measured). Chrome 154 answered: 10, the previous sibling's own margin;
+   and the mid-line cases as designed — an absolute `span` at the pen, an
+   absolute `div` at the start of the next line.
 
 ## Booked, with their triggers
 
