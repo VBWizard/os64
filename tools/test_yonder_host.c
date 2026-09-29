@@ -4,10 +4,12 @@
 // tools/test_yonder_cases.inc are worked out by hand (YONDER.md § Slices);
 // the corpus .paint files beside the pages are regression, not proof.
 
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "html/html.h"
 #include "page/page.h"
@@ -265,6 +267,46 @@ static void paint_case(const char *name, const char *html, int32_t width, os64_g
 
 #include "test_yonder_cases.inc"
 
+// ── A paint costs the viewport it paints ────────────────────────────────
+
+static void paint_hung(int sig)
+{
+    (void)sig;
+    static const char msg[] = "FAIL a paint walked what the viewport does not show\n";
+    (void)!write(2, msg, sizeof(msg) - 1);
+    _exit(1);
+}
+
+// Sizes a page may ask for and no viewport shows: a border a million
+// pixels thick, and a bullet a third of a font sixty `<big>`s deep (which
+// holds at the million-pixel clamp). Painted under UBSan and an alarm, each
+// must finish, and every fill must stay inside the viewport: a painter that
+// walked every row, or multiplied in 32 bits, fails one or the other.
+static void cost_cases(void)
+{
+    static char big[4096];
+    size_t at = (size_t)snprintf(big, sizeof(big), "<!doctype html>");
+    for (int i = 0; i < 60; i++)
+        at += (size_t)snprintf(big + at, sizeof(big) - at, "<big>");
+    snprintf(big + at, sizeof(big) - at, "<ul><li>x</ul>");
+    static const char *const pages[] = {
+        "<!doctype html><table border=1000000><tr><td>x</table>",
+        "<!doctype html><hr size=1000000 noshade>",
+        big,
+    };
+    signal(SIGALRM, paint_hung);
+    for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
+        bool escaped = false;
+        alarm(60);
+        char *got = paint_of(pages[i], strlen(pages[i]), 800, (os64_gui_rect_t){0, 0, 800, 600},
+                             &escaped);
+        alarm(0);
+        expect("a hostile size paints the viewport and no more", got != NULL && !escaped,
+               pages[i]);
+        free(got);
+    }
+}
+
 // ── The corpus ──────────────────────────────────────────────────────────
 
 static const char *const kCorpus[] = {
@@ -360,6 +402,7 @@ int main(int argc, char **argv)
         corpus(true);
     } else {
         paint_cases();
+        cost_cases();
         corpus(false);
     }
     for (int i = 0; i < s_nfonts; i++)
