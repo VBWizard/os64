@@ -50,6 +50,7 @@
 #include "driver/net/udp_conn.h"
 #include "driver/net/tcp.h"
 #include "driver/net/icmp_conn.h"
+#include "driver/system/x86_64.h"   // rdtsc — the arrival-wake figure in test_net_icmp_conn
 #include "os64/net.h"                // OS64_NET_ERR_* — refusals carry reasons (abi)
 #include "fpu.h"
 
@@ -77,6 +78,7 @@ bool test_vma_file_backed_page_fault_resolved(void);
 bool test_vma_partial_page_bss_zero_filled(void);
 bool test_pty_publication_hold(void);
 bool test_pty_resize_modes(void);
+bool test_pty_history(void);
 bool test_pty_stream_seats(void);
 
 bool test_register_policy(const char *name, bool (*func)(void), int phase,
@@ -4920,10 +4922,13 @@ static bool test_net_udp_conn(void)
         net_device_rx(dev, f, (uint16_t)n);                                   \
     } while (0)
 
-    // In from the PEER: must queue and read back verbatim.
+    // In from the PEER: must queue and read back verbatim. The frame is
+    // injected synchronously, so the read never parks — but a deadline
+    // anyway, because a demux that stopped delivering must FAIL this
+    // test, not hang the suite on a wait that can never end.
     CONN_FRAME(5555, msg1, 14);
     char buf[64];
-    long got = udp_conn_read(conn, buf, sizeof(buf), 0);
+    long got = udp_conn_read(conn, buf, sizeof(buf), kTicksSinceStart + 10);
     if (got != 14 || memcmp(buf, msg1, 14) != 0) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - readback got %ld (delivered=%lu)\n",
                got, conn->rx_delivered);
@@ -4945,7 +4950,7 @@ static bool test_net_udp_conn(void)
     // Truncation contract: a 14-byte datagram read into an 8-byte buffer
     // returns 8 and the tail DROPS — one datagram, one read, no carryover.
     CONN_FRAME(5555, msg1, 14);
-    got = udp_conn_read(conn, buf, 8, 0);
+    got = udp_conn_read(conn, buf, 8, kTicksSinceStart + 10);
     if (got != 8 || conn->count != 0) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - truncation contract broken (got %ld, queued %u)\n",
                got, conn->count);
@@ -5012,19 +5017,99 @@ static bool test_net_icmp_conn(void)
         return false;
     }
 
+    // Every read here is BOUNDED (Codex #145): this is a live echo across
+    // a real or emulated wire, and a dropped reply against a zero deadline
+    // is "wait forever" — a suite that hangs on packet loss is worse than
+    // one that fails. Two seconds is a hundred round trips of slack.
+    #define ECHO_PATIENCE (kTicksSinceStart + 2 * TICKS_PER_SECOND)
     uint8_t in[64];
-    long got = icmp_conn_read(c, in, sizeof(in), 0);
+    long got = icmp_conn_read(c, in, sizeof(in), ECHO_PATIENCE);
     uint64_t rtt = kTicksSinceStart - stamp;
 
     if (got != (long)sizeof(out)) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - read returned %ld, expected %u\n",
-               got, (uint32_t)sizeof(out));
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - read returned %ld, expected %u%s\n",
+               got, (uint32_t)sizeof(out),
+               got == ICMP_CONN_ERR_TIMEOUT ? " (no reply within 2 s)" : "");
         icmp_conn_close(c);
         return false;
     }
     // Byte-for-byte: an echo that alters the payload is not an echo.
     if (memcmp(in, out, sizeof(out)) != 0) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - payload came back altered\n");
+        icmp_conn_close(c);
+        return false;
+    }
+
+    // THE ARRIVAL WAKE (ARRIVAL_WAKE.md): from icmp_conn_deliver's enqueue
+    // stamp to this thread running again is the kernel's own wake-up
+    // latency — the part of a round trip that is the scheduler's, not the
+    // wire's. Woken on arrival it is microseconds. Woken by the sweep it
+    // is the next scheduler pass — which on an idle machine knet's own
+    // park provokes at once (measured 15-128 us with the arrival wake
+    // disabled), so this figure cannot tell the two apart here; what it
+    // catches is a reader woken by nothing but its backstop second. The
+    // MIN over several echoes is the figure: one sample can land in the
+    // registered-not-yet-parked window the sweep exists for, and one can
+    // eat host scheduling jitter, but not all of them.
+    // A lost reply is a lost SAMPLE, not a failed test: UDP-honest echo can
+    // drop, and the figure is a minimum, which survives losing a few. Half
+    // the samples lost is a different problem and is reported as one.
+    //
+    // BOTH ENDS OF THE SUBTRACTION COME FROM ONE CORE'S TSC (Codex #145
+    // rd2, nvme.c's rule): the stamp is knet's, on the BSP, and the wake
+    // would otherwise recruit whichever AP is idle — a cross-core TSC
+    // delta, which QEMU and WSL2 have both been seen to offset. So this
+    // thread is pinned to the BSP for the measurement and parks once
+    // first, so that it has actually moved there before the first stamp;
+    // every rdtsc below then runs on the core that took the stamp. The
+    // pin costs nothing the figure cares about — a pinned wake on knet's
+    // own core is picked by the pass knet's park provokes, the same pass
+    // that would have run the sweep.
+    thread_t *self = get_core_local_storage()->currentThread;
+    uint64_t affinity_before = self->mp_apic;
+    self->mp_apic = BOOTSTRAP_PROCESSOR_ID;
+    __sync_synchronize();
+    nap(10);
+    uint64_t wake_min_us = ~0UL, wake_max_us = 0;
+    int samples = 0, lost = 0;
+    const char *measure_fail = NULL;
+    uint32_t measured_on = 0;
+    for (int i = 0; i < 8 && measure_fail == NULL; i++) {
+        if (icmp_conn_write(c, out, sizeof(out)) != (long)sizeof(out)) {
+            measure_fail = "write";
+            break;
+        }
+        long r = icmp_conn_read(c, in, sizeof(in), ECHO_PATIENCE);
+        if (r == ICMP_CONN_ERR_TIMEOUT) { lost++; continue; }
+        if (r != (long)sizeof(out)) {
+            measure_fail = "read";
+            break;
+        }
+        uint64_t per_us = kCPUCyclesPerSecond / 1000000;
+        uint64_t stamp_tsc = c->last_arrival_tsc;
+        uint64_t now_tsc = rdtsc();
+        measured_on = get_core_local_storage()->apic_id;   // printed, so the pin is checkable in every log
+        uint64_t wake_us = (per_us && now_tsc > stamp_tsc) ? (now_tsc - stamp_tsc) / per_us : 0;
+        if (wake_us < wake_min_us) wake_min_us = wake_us;
+        if (wake_us > wake_max_us) wake_max_us = wake_us;
+        samples++;
+    }
+    self->mp_apic = affinity_before;   // the pin was the measurement's, not the test's
+    __sync_synchronize();
+    if (measure_fail != NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - a %s in the wake measurement failed\n", measure_fail);
+        icmp_conn_close(c);
+        return false;
+    }
+    if (samples < 4) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - only %d of 8 echoes came back within 2 s (%d lost); "
+               "the wire, not the wake, is the problem\n", samples, lost);
+        icmp_conn_close(c);
+        return false;
+    }
+    if (wake_min_us >= 1000) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - best enqueue-to-reader wake was %lu us over 8 echoes "
+               "(neither the arrival wake nor the sweep woke it; that is the backstop)\n", wake_min_us);
         icmp_conn_close(c);
         return false;
     }
@@ -5042,16 +5127,18 @@ static bool test_net_icmp_conn(void)
         icmp_conn_close(c);
         return false;
     }
-    got = icmp_conn_read(c, in, sizeof(in), 0);
+    got = icmp_conn_read(c, in, sizeof(in), ECHO_PATIENCE);
+    #undef ECHO_PATIENCE
     icmp_conn_close(c);
     if (got != (long)sizeof(out)) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - cold-cache echo read returned %ld\n", got);
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - cold-cache echo read returned %ld%s\n", got,
+               got == ICMP_CONN_ERR_TIMEOUT ? " (no reply within 2 s)" : "");
         return false;
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_net_icmp_conn (%ld bytes echoed by %u.%u.%u.%u in %lu ticks; "
-           "cold-cache echo survived the ARP re-ask)\n",
-           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt);
+           "arrival wake %lu-%lu us over %d echoes, %d lost, measured on APIC %u; cold-cache echo survived the ARP re-ask)\n",
+           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt, wake_min_us, wake_max_us, samples, lost, measured_on);
     return true;
 }
 
@@ -5804,6 +5891,7 @@ static void register_builtin_tests(void)
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
     test_register("pty_publication_hold", test_pty_publication_hold, TEST_PHASE_POSTBOOT);
+    test_register("pty_history", test_pty_history, TEST_PHASE_POSTBOOT);
     test_register("pty_resize_modes", test_pty_resize_modes, TEST_PHASE_POSTBOOT);
     test_register("pty_stream_seats", test_pty_stream_seats, TEST_PHASE_POSTBOOT);
     test_register("task_args", test_task_args, TEST_PHASE_POSTBOOT);

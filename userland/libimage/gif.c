@@ -98,8 +98,11 @@ static os64_image_status_t parse(gif_reader_t *r, gif_scan_t *scan,
         p = take(r, 1);
         if (p == NULL)
             return OS64_IMAGE_MALFORMED;
-        if (*p == 0x3b)
-            return found && !pending_control && r->at == r->len ? OS64_IMAGE_OK : OS64_IMAGE_MALFORMED;
+        if (*p == 0x3b) {
+            // Tolerate an unused trailing control from legacy encoders. Its
+            // settings target a following graphic, not the preceding frame.
+            return found && r->at == r->len ? OS64_IMAGE_OK : OS64_IMAGE_MALFORMED;
+        }
         if (*p == 0x21) {
             p = take(r, 1);
             if (p == NULL)

@@ -1,19 +1,6 @@
-//gclock - Retained mode example ... with blinking separators!
-//
-// The RETAINED-MODE template (glogo is the immediate-mode twin; LIBDRAW.md's
-// "Start here" section is the map). In retained mode you describe FURNITURE
-// once — widgets, in a tree, with bounds — and then your entire job per tick
-// is three verbs: change state, mark dirty, os64_ui_paint(). The toolkit
-// draws and publishes for you; you never call fill/draw/publish yourself
-// (doing so paints over your own furniture — ask this file's first draft).
-//
-// Also the model for TIME-driven UIs: os64_ui_run blocks in event_wait, and
-// a clock has no events — so a ticking app runs the loop itself, exactly as
-// below. The first user-authored g-app, and it found a window-manager bug
-// (the third titlebar door) before it could tell time.
-//
-// Every numbered step is load-bearing; swap the label for your furniture and
-// the tick for your logic, and you have a new app.
+// gclock — a retained-mode clock following the Appearance Interface face.
+// Digit slots keep proportional figures and blinking separators stationary.
+// See LIBDRAW.md for the retained-mode event/paint loop this app illustrates.
 
 #include "os64/os64.h"
 #include "os64/gui.h"
@@ -21,28 +8,38 @@
 #include "os64/fmt.h"
 #include "os64/ui.h"
 #include "os64/conf.h"
+#include "os64/font_settings.h"
 
-#define WIN_W 90u
-#define WIN_H 48u
-// A decorated frame's 20px titlebar includes the top border; an undecorated
-// frame keeps that 1px border. Removing the bar therefore removes 19px while
-// preserving the clock's content height exactly.
-#define TITLEBAR_FRAME_DELTA 19u
-#define MAX_CLOCK_CHARS 40
-
-static int64_t gClockWin = 0;
-static char clockText[MAX_CLOCK_CHARS];
-static os64_ui_widget_t gRoot, gLblClockText;
-static os64_ui_t gUi;
-static bool separatorsShown = false;
-static bool gRunning = true;
+#define CLOCK_CHARS 8
+#define CLOCK_SCALABLE_FACE "/etc/fonts/DejaVuSans.ttf"
 
 typedef struct {
     int32_t x, y;
-    bool titlebar;
-    bool pinned;
+    bool titlebar, pinned, save_position, blink;
+    uint32_t font_size; // Zero inherits the Interface size.
     const char *path;
 } gclock_conf_t;
+
+typedef struct {
+    int32_t advances[11]; // Digits 0..9, then the colon.
+    int32_t digit_w, colon_w, row_h, width, height;
+} clock_layout_t;
+
+static int64_t gClockWin;
+static os64_draw_ctx_t gCtx;
+static os64_ui_t gUi;
+static os64_ui_widget_t gRoot, gDigits[CLOCK_CHARS];
+static os64_ui_class_t gDigitClass;
+static char gText[CLOCK_CHARS][2];
+static gclock_conf_t gConf;
+static clock_layout_t gLayout, *gPendingLayout;
+static bool gRunning = true, separatorsShown = true;
+
+static gclock_conf_t conf_defaults(const char *path)
+{
+    return (gclock_conf_t){.x = 280, .y = 10, .titlebar = true,
+        .save_position = true, .blink = true, .path = path};
+}
 
 static bool parse_i32(const char **text, int32_t *out)
 {
@@ -83,195 +80,318 @@ static bool parse_position(const char *value, int32_t *x, int32_t *y)
 
 static bool conf_line(const char *key, const char *value, void *user)
 {
-    gclock_conf_t *conf = (gclock_conf_t *)user;
-
-    if (key == NULL) {
-        os64_hprintf(OS64_STDERR, "gclock: %s: expected 'key = value' - ignored: %s\n",
-                     conf->path, value);
+    gclock_conf_t *conf = user;
+    bool valid = false;
+    const char *expected = "unknown setting";
+    if (!key) {
+        expected = "expected key = value";
     } else if (os64_streq_nocase(key, "position")) {
-        if (!parse_position(value, &conf->x, &conf->y))
-            os64_hprintf(OS64_STDERR, "gclock: %s: Position must be x,y - ignored: %s\n",
-                         conf->path, value);
-    } else if (os64_streq_nocase(key, "titlebar")) {
-        if (os64_streq_nocase(value, "on"))
-            conf->titlebar = true;
-        else if (os64_streq_nocase(value, "off"))
-            conf->titlebar = false;
-        else
-            os64_hprintf(OS64_STDERR, "gclock: %s: Titlebar must be on or off - ignored: %s\n",
-                         conf->path, value);
-    } else if (os64_streq_nocase(key, "pinned")) {
-        if (os64_streq_nocase(value, "true"))
-            conf->pinned = true;
-        else if (os64_streq_nocase(value, "false"))
-            conf->pinned = false;
-        else
-            os64_hprintf(OS64_STDERR, "gclock: %s: Pinned must be true or false - ignored: %s\n",
-                         conf->path, value);
+        valid = parse_position(value, &conf->x, &conf->y);
+        expected = "Position must be x,y";
+    } else if (os64_streq_nocase(key, "fontsize")) {
+        int32_t size;
+        const char *p = value;
+        if (os64_streq_nocase(value, "inherit")) {
+            conf->font_size = 0;
+            valid = true;
+        } else if (parse_i32(&p, &size) && !*p && size >= 8 && size <= 96) {
+            conf->font_size = (uint32_t)size;
+            valid = true;
+        }
+        expected = "FontSize must be inherit or 8..96 pixels";
     } else {
-        os64_hprintf(OS64_STDERR, "gclock: %s: unknown setting '%s' - ignored\n",
-                     conf->path, key);
+        bool *dest = NULL;
+        if (os64_streq_nocase(key, "titlebar")) dest = &conf->titlebar;
+        else if (os64_streq_nocase(key, "pinned")) dest = &conf->pinned;
+        else if (os64_streq_nocase(key, "saveposition")) dest = &conf->save_position;
+        else if (os64_streq_nocase(key, "blink")) dest = &conf->blink;
+        if (dest) {
+            valid = os64_conf_get_bool(value, dest);
+            expected = "expected true/false or on/off";
+        }
     }
+    if (!valid)
+        os64_hprintf(OS64_STDERR, "gclock: %s: %s (%s = %s); ignored\n",
+                     conf->path, expected, key ? key : "?", value);
     return true;
 }
 
 static void refresh_clock_text(void)
 {
-    os64_date_t now;
-
-    separatorsShown = !separatorsShown;
+    os64_date_t now = {0};
+    char text[CLOCK_CHARS + 1];
     os64_date_now(&now, NULL);
-    os64_memset(clockText, 0, MAX_CLOCK_CHARS);
-    if (separatorsShown)
-        os64_snprintf(clockText, 40, "%02d:%02d:%02d",
-                        now.hour, now.minute, now.second);
-    else
-        os64_snprintf(clockText, 40, "%02d %02d %02d",
-                      now.hour, now.minute, now.second);
+    os64_snprintf(text, sizeof(text), "%02d:%02d:%02d",
+                  now.hour, now.minute, now.second);
+    for (int i = 0; i < CLOCK_CHARS; ++i) {
+        bool colon = i == 2 || i == 5;
+        gText[i][0] = colon && gConf.blink && !separatorsShown ? '\0' : text[i];
+    }
+}
+
+static int32_t max_i32(int32_t a, int32_t b) { return a > b ? a : b; }
+
+static os64_font_status_t measure_clock(os64_ui_t *ui, clock_layout_t *m)
+{
+    *m = (clock_layout_t){0};
+    for (int i = 0; i < 11; ++i) {
+        char c = i == 10 ? ':' : '0' + i;
+        os64_font_status_t status = os64_ui_text_measure(ui, OS64_FONT_ROLE_UI,
+                                                         &c, 1, &m->advances[i]);
+        if (status) return status;
+        if (i < 10) m->digit_w = max_i32(m->digit_w, m->advances[i]);
+    }
+    m->digit_w = max_i32(1, m->digit_w);
+    m->colon_w = max_i32(1, m->advances[10]);
+    m->row_h = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
+    int32_t pad = max_i32(6, m->row_h / 3);
+    m->width = max_i32(64, 6 * m->digit_w + 2 * m->colon_w + 2 * pad);
+    m->height = max_i32(32, m->row_h + 2 * pad);
+    return OS64_FONT_OK;
+}
+
+static void arrange_clock(const clock_layout_t *m, int32_t width, int32_t height,
+                          bool stage)
+{
+    os64_gui_rect_t box = {0, 0, width, height};
+    if (stage) os64_ui_widget_stage_bounds(&gRoot, box);
+    else gRoot.bounds = box;
+    int32_t x = (width - 6 * m->digit_w - 2 * m->colon_w) / 2;
+    for (int i = 0; i < CLOCK_CHARS; ++i) {
+        int32_t w = i == 2 || i == 5 ? m->colon_w : m->digit_w;
+        box = (os64_gui_rect_t){x, (height - m->row_h) / 2, w, m->row_h};
+        if (stage) os64_ui_widget_stage_bounds(&gDigits[i], box);
+        else gDigits[i].bounds = box;
+        x += w;
+    }
+}
+
+static void layout_clock(os64_ui_t *ui)
+{
+    (void)ui;
+    arrange_clock(&gLayout, (int32_t)gCtx.surf.width, (int32_t)gCtx.surf.height, false);
+}
+
+static void digit_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
+                        const os64_ui_theme_t *theme)
+{
+    os64_draw_fill_rect(&ctx->surf, w->bounds, theme->panel_bg);
+    char c = w->text[0];
+    if (!c) return;
+    if (c != ':' && (c < '0' || c > '9')) return;
+    int index = c == ':' ? 10 : c - '0';
+    os64_ui_draw_text(w->ui, &w->run, OS64_FONT_ROLE_UI, &ctx->surf, w->bounds,
+        w->bounds.x + (w->bounds.w - gLayout.advances[index]) / 2, w->bounds.y,
+        w->text, 1, theme->label_fg, theme->panel_bg);
 }
 
 static os64_font_status_t plan_clock_font(os64_ui_t *ui, void *user, void **out)
 {
-    (void)user; *out = NULL;
-    int32_t width;
-    os64_font_status_t status = os64_ui_text_measure(ui, OS64_FONT_ROLE_UI,
-                                                    "88:88:88", 8, &width);
-    if (status) return status;
-    int32_t height = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
-    os64_gui_rect_t box = gRoot.bounds;
-    if (width > box.w || height > box.h) return OS64_FONT_LIMIT;
-    box.x += (box.w-width)/2; box.y += (box.h-height)/2;
-    box.w = width; box.h = height;
-    os64_ui_widget_stage_bounds(&gLblClockText, box);
+    (void)user;
+    *out = NULL;
+    clock_layout_t *m = os64_malloc(sizeof(*m));
+    if (!m) return OS64_FONT_NO_MEMORY;
+    os64_font_status_t status = measure_clock(ui, m);
+    if (status) { os64_free(m); return status; }
+    int32_t width = m->width, height = m->height;
+    if (gClockWin > 0) {
+        width = max_i32(width, (int32_t)gCtx.surf.width);
+        height = max_i32(height, (int32_t)gCtx.surf.height);
+    }
+    arrange_clock(m, width, height, true);
+    gPendingLayout = m;
+    *out = m;
     return OS64_FONT_OK;
 }
-static void clock_font_done(os64_ui_t *ui, void *user, void *plan)
-{ (void)ui; (void)user; (void)plan; }
+
+static void discard_clock_font(os64_ui_t *ui, void *user, void *plan)
+{
+    (void)ui; (void)user;
+    gPendingLayout = NULL;
+    os64_free(plan);
+}
+
+// The window grows after font and widget preparation succeeds. A refused
+// minimum leaves the old window/font intact; commit cannot need allocation.
+static os64_font_status_t resize_for_font(void *user, void *plan)
+{
+    (void)user; (void)plan;
+    if (gClockWin > 0 && os64_gui_window_set_min_size(gClockWin,
+            (uint32_t)gPendingLayout->width, (uint32_t)gPendingLayout->height))
+        return OS64_FONT_LIMIT;
+    return OS64_FONT_OK;
+}
+
+static void commit_clock_font(os64_ui_t *ui, void *user, void *plan)
+{
+    (void)user;
+    gLayout = *(clock_layout_t *)plan;
+    if (gClockWin > 0) {
+        if (os64_draw_ctx_refresh(&gCtx)) {
+            os64_complain("gclock: cannot refresh resized window");
+            gRunning = false;
+        } else layout_clock(ui);
+    }
+    discard_clock_font(ui, NULL, plan);
+}
+
+// An app-local size changes the Interface role in this window's candidate,
+// leaving the shared selection and other applications untouched.
+static void clock_font_config(const os64_font_config_t *shared, os64_font_config_t *local)
+{
+    os64_font_config_defaults(local);
+    local->roles[OS64_FONT_ROLE_UI] = shared->roles[OS64_FONT_ROLE_UI];
+    os64_font_config_role_t *role = &local->roles[OS64_FONT_ROLE_UI];
+    if (gConf.font_size) {
+        role->size = gConf.font_size;
+        if (role->size != 16 && os64_streq(role->face[0], "builtin")) {
+            os64_memset(role->face, 0, sizeof(role->face));
+            os64_strcopy(role->face[0], sizeof(role->face[0]), CLOCK_SCALABLE_FACE);
+        }
+    }
+}
+
+static void refresh_clock_font(os64_ui_t *ui)
+{
+    os64_font_config_t shared, local;
+    uint64_t generation;
+    if (os64_font_settings_current(&shared, &generation)) {
+        os64_debug_log("gclock: cannot read Interface font; keeping current font");
+        return;
+    }
+    if (ui->font_settings_ready && ui->font_generation == generation) return;
+    clock_font_config(&shared, &local);
+    os64_font_set_t *set = NULL;
+    os64_font_config_error_t error;
+    if (os64_font_config_prepare(os64_ui_font_context(ui), &local, &set, &error)) {
+        os64_debug_log("gclock: cannot prepare Interface font/size; keeping current font");
+        return;
+    }
+    os64_font_consumer_t consumer;
+    os64_ui_font_consumer(ui, &consumer);
+    consumer.barrier = resize_for_font;
+    os64_font_status_t status = os64_font_adopt(set, &consumer, 1, NULL);
+    os64_font_set_release(set);
+    if (status) {
+        os64_debug_log("gclock: cannot fit Interface font; keeping current font");
+    } else {
+        ui->font_generation = generation;
+        ui->font_settings_ready = true;
+    }
+}
 
 static void on_close_request(os64_ui_t *ui)
 {
     (void)ui;
     os64_gui_window_state_t st;
-    if (os64_gui_window_get_state(gClockWin, &st) == 0)
-    {
-        char pos[32];
-        os64_snprintf(pos, sizeof pos, "%d,%d", st.x, st.y);
-        const os64_conf_pair_t save[] = {
+    char path[OS64_CONF_PATH_MAX] = "", target[OS64_CONF_PATH_MAX];
+    gclock_conf_t conf = conf_defaults(path);
+    // Respect edits made while the clock was open, including SavePosition.
+    int64_t rc = os64_conf_find_read("gclock.conf", conf_line, &conf, path, sizeof(path));
+    bool readable = rc >= 0 || (rc == OS64_CONF_NO_FILE && !path[0]);
+    if (!readable || os64_conf_target("gclock.conf", target, sizeof(target))) {
+        os64_complain("gclock: cannot read configuration; window state not saved");
+    } else if (!os64_gui_window_get_state(gClockWin, &st)) {
+        char pos[32], size[16];
+        bool save_position = conf.save_position && !(st.flags & OS64_GUI_WINDOW_MAXIMIZED);
+        os64_snprintf(pos, sizeof(pos), "%d,%d", save_position ? st.x : conf.x,
+                      save_position ? st.y : conf.y);
+        if (conf.font_size) os64_snprintf(size, sizeof(size), "%u", conf.font_size);
+        else os64_strcopy(size, sizeof(size), "inherit");
+        os64_conf_pair_t save[] = {
             {"titlebar", (st.flags & OS64_GUI_WINDOW_NO_DECORATIONS) ? "off" : "on"},
             {"pinned", (st.flags & OS64_GUI_WINDOW_PINNED) ? "true" : "false"},
             {"position", pos},
+            {"saveposition", conf.save_position ? "true" : "false"},
+            {"fontsize", size},
+            {"blink", conf.blink ? "true" : "false"},
         };
-        size_t saveCount = (st.flags & OS64_GUI_WINDOW_MAXIMIZED) ? 2 : 3;
-        //don't save position if window is maximized
-        if (os64_conf_write("gclock.conf", save, saveCount)) // → /home/gclock.conf, merged, atomic
-            os64_hprintf(1, "Error: Unable to save configuration to gclock.conf");
+        // A first personal file shadows the system copy wholesale. Seed the
+        // effective settings so a frozen startup position survives that save.
+        size_t count = !os64_streq(path, target) ? 6 : save_position ? 3 : 2;
+        if (os64_conf_write("gclock.conf", save, count))
+            os64_complain("gclock: unable to save window state");
     }
     gRunning = false;
 }
 
 int main(int argc, char **argv)
 {
-	(void)argc; (void)argv;
+    (void)argc; (void)argv;
+    char conf_path[OS64_CONF_PATH_MAX] = "";
+    gConf = conf_defaults(conf_path);
+    int64_t rc = os64_conf_find_read("gclock.conf", conf_line, &gConf,
+                                    conf_path, sizeof(conf_path));
+    if (rc < 0 && rc != OS64_CONF_NO_FILE)
+        os64_complain("gclock: configuration read incomplete; using available settings");
 
-	gclock_conf_t conf = { .x = 280, .y = 10, .titlebar = true, .pinned = false };
-	char conf_path[OS64_CONF_PATH_MAX];
-	conf.path = conf_path;
-	int64_t conf_rc = os64_conf_find_read("gclock.conf", conf_line, &conf,
-	                                      conf_path, sizeof(conf_path));
-	if (conf_rc == OS64_CONF_TRUNCATED)
-		os64_hprintf(OS64_STDERR, "gclock: %s: file exceeds %d bytes; trailing settings ignored\n",
-		             conf_path, OS64_CONF_MAX - 1);
-	else if (conf_rc == OS64_CONF_NO_MEMORY)
-		os64_hprintf(OS64_STDERR, "gclock: could not allocate config reader buffer; using defaults\n");
-
-	uint64_t flags = 0;
-	if (!conf.titlebar)
-		flags |= OS64_GUI_WINDOW_NO_DECORATIONS;
-	if (conf.pinned)
-		flags |= OS64_GUI_WINDOW_PINNED;
-	uint32_t win_h = conf.titlebar ? WIN_H : WIN_H - TITLEBAR_FRAME_DELTA;
-
-	// [1] A window, born directly in its configured position and WM state.
-	gClockWin = os64_gui_window_create("gclock", conf.x, conf.y,
-	                                     WIN_W,
-	                                     win_h, flags);
-	if (gClockWin <= 0)
-	{
-		os64_printf("gclock: no GUI here (window_create %ld)\n", (long)gClockWin);
-		return 1;
-	}
-
-	// [2] The draw context: the window's shared canvas plus drawing state.
-	//     Retained mode still stands on it — libui paints THROUGH this.
-	os64_draw_ctx_t ctx;
-	if (os64_draw_ctx_init(&ctx, gClockWin) != 0)
-	{
-		os64_printf("gclock: get_surface failed\n");
-		os64_gui_window_destroy(gClockWin);
-		return 1;
-	}
-
-    // [3] The UI context loads defaults and the startup theme through the
-    //     configuration ladder. Supported colors and metrics need no recompile.
-    os64_ui_init(&gUi, &ctx);
-
+    // Prepare fonts and measured furniture before requesting content size;
+    // the WM supplies the current decoration's frame dimensions.
+    os64_ui_init(&gUi, NULL);
     gUi.on_close = on_close_request;
-    // [4] The furniture. App-owned structs (libui never allocates): a panel
-    //     as the root — it paints the themed background — and a label whose
-    //     text member POINTS AT our buffer, so refreshing the buffer is
-    //     refreshing the widget.
+    gUi.on_resize = layout_clock;
+    gUi.font_session = refresh_clock_font;
     os64_ui_panel(&gRoot);
-    gRoot.bounds = (os64_gui_rect_t){0, 0, (int32_t)ctx.surf.width,
-                                     (int32_t)ctx.surf.height};
     os64_ui_set_root(&gUi, &gRoot);
-    os64_ui_label(&gLblClockText, clockText);
-    os64_ui_add_child(&gRoot, &gLblClockText);
-
-    // [5] Layout: give the label a height (one font row); the vertical stack
-    //     assigns x/y/width inside the panel, honoring the theme's padding.
-    //     A widget without real bounds paints nowhere — the first draft's
-    //     black-window lesson, preserved here as a warning label.
-    gLblClockText.bounds.h = gUi.theme.font_h;
-    os64_ui_stack_vertical(&gUi, &gRoot);
-
-    (void)os64_ui_font_planner(&gUi, plan_clock_font, clock_font_done, clock_font_done, NULL);
-    (void)os64_ui_font_follow(&gUi);
-
-    // [6] First paint: deliver everything set_root/stack marked dirty.
-    //     Without it the window shows its birth-gray until the first tick.
+    refresh_clock_text();
+    for (int i = 0; i < CLOCK_CHARS; ++i) {
+        os64_ui_label(&gDigits[i], gText[i]);
+        if (i == 0) {
+            // Borrow the constructed label's callbacks without a data-symbol
+            // import, which would require an unsupported ELF COPY relocation.
+            gDigitClass = *gDigits[i].cls;
+            gDigitClass.paint = digit_paint;
+        }
+        gDigits[i].cls = &gDigitClass;
+        os64_ui_add_child(&gRoot, &gDigits[i]);
+    }
+    os64_ui_font_planner(&gUi, plan_clock_font, commit_clock_font, discard_clock_font, NULL);
+    refresh_clock_font(&gUi);
+    if (!gUi.font_settings_ready) {
+        if (measure_clock(&gUi, &gLayout)) {
+            os64_complain("gclock: cannot measure clock");
+            os64_ui_font_release(&gUi);
+            return 1;
+        }
+    }
+    uint64_t flags = (gConf.titlebar ? 0 : OS64_GUI_WINDOW_NO_DECORATIONS) |
+                     (gConf.pinned ? OS64_GUI_WINDOW_PINNED : 0);
+    gClockWin = os64_gui_window_create_content("gclock", gConf.x, gConf.y,
+                                               gLayout.width, gLayout.height, flags);
+    if (gClockWin <= 0) {
+        os64_complain("gclock: cannot create GUI window");
+        os64_ui_font_release(&gUi);
+        return 1;
+    }
+    if (os64_gui_window_set_min_size(gClockWin, gLayout.width, gLayout.height) ||
+        os64_draw_ctx_init(&gCtx, gClockWin)) {
+        os64_complain("gclock: cannot initialize window");
+        os64_gui_window_destroy(gClockWin);
+        os64_ui_font_release(&gUi);
+        return 1;
+    }
+    gUi.ctx = &gCtx;
+    layout_clock(&gUi);
+    os64_ui_mark_dirty(&gUi, &gRoot);
     os64_ui_paint(&gUi);
 
-    // [7] The tick loop — retained mode's whole runtime, three verbs long:
-    //     change state, mark dirty, paint (which publishes just the dirty
-    //     rect itself). frame_wait anchors to the last frame BOUNDARY and
-    //     sleeps only the remainder, so the blink keeps honest time no
-    //     matter what the work costs.
+    // Event wakes handle appearance/resize/close before the next tick. The
+    // frame clock sleeps while the clock is covered, waking for queued events.
     os64_frame_clock_t frameClock;
     os64_frame_clock_init(&frameClock);
-    os64_frame_clock_bind(&frameClock, gClockWin);   // sleep while nobody can see the face
-    while (gRunning)
-    {
+    os64_frame_clock_bind(&frameClock, gClockWin);
+    while (gRunning) {
         os64_gui_event_t ev;
-        while (os64_gui_event_poll(gClockWin, &ev) == 1)
-        os64_ui_dispatch(&gUi, &ev);
-        // A close request drained above clears gRunning; leave NOW rather
-        // than sleep one more frame — behind a covering window that sleep
-        // lasts until the next event, not the next tick.
-        if (!gRunning)
-            break;
-        // Sync to frames instead of blindly sleeping for 500 ms!
-        os64_frame_wait(&frameClock, 500);
+        while (gRunning && os64_gui_event_poll(gClockWin, &ev) == 1)
+            os64_ui_dispatch(&gUi, &ev);
+        if (!gRunning) break;
         refresh_clock_text();
-        os64_ui_mark_dirty(&gUi, &gLblClockText);
+        for (int i = 0; i < CLOCK_CHARS; ++i) os64_ui_mark_dirty(&gUi, &gDigits[i]);
         os64_ui_paint(&gUi);
+        os64_frame_wait(&frameClock, 500);
+        separatorsShown = !separatorsShown;
     }
-    // [8] The exit path: the close callback (Alt+F4, the title-bar close)
-    //     saves where you left the window and clears gRunning, so the loop
-    //     above ends here and the window is destroyed by the normal exit.
-    //     Ctrl+C from the launching terminal is the FORCED alternative — it
-    //     skips the save, and the kernel's exit sweep reclaims the window.
-    //     (This comment said "no exit path" from the day the clock had none
-    //     until Codex #29 rd19, two commits after it grew one.)
-	os64_ui_font_release(&gUi);
-	return 0;
+    os64_ui_font_release(&gUi);
+    os64_gui_window_destroy(gClockWin);
+    return 0;
 }
