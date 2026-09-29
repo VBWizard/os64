@@ -64,6 +64,7 @@ typedef struct icmp_conn
 
 	uint64_t requests_sent, replies_delivered;
 	uint64_t dropped_full;   // replies arriving faster than they're read
+	uint64_t last_arrival_tsc;   // rdtsc at the last enqueue (udp_conn.h says why)
 
 	struct icmp_conn* next;
 } icmp_conn_t;
@@ -91,11 +92,14 @@ void icmp_conn_ref(icmp_conn_t* c);
 void icmp_conn_release(icmp_conn_t* c);
 
 // Called by icmp.c when an echo REPLY arrives: routes it to the handle
-// whose identifier matches, or nowhere. RX context.
+// whose identifier matches, or nowhere, and wakes a parked reader on
+// arrival. Thread context (knet, or a test at the seam) — it takes the
+// scheduler's queue lock, which an ISR may not.
 void icmp_conn_deliver(uint32_t src_ip, uint16_t identifier,
                        const void* payload, uint16_t length);
 
-// Level-triggered wake sweep, beside its UDP and TCP siblings.
+// Level-triggered wake sweep, beside its UDP and TCP siblings: the backstop
+// for a reader that registered but had not parked when its reply landed.
 void icmp_conn_wake_if_ready(void);
 
 #endif // ICMP_CONN_H

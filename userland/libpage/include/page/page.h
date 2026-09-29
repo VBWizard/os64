@@ -242,9 +242,10 @@ typedef struct {
 // attributes on the node.
 //
 // Every `img` and every `input type=image` whose `src` names something. An
-// empty `src` (white space counts as empty) names nothing, and the standard
-// shows such an image as broken rather than fetching the page it sits on as
-// a picture — so it is not listed, and `os64_page_image_for` answers -1.
+// empty or blank `src` names nothing: such an image is shown broken rather
+// than fetching the page it sits on as a picture — the standard's rule for
+// the empty string, and browsers' for white space — so it is not
+// listed, and `os64_page_image_for` answers -1.
 typedef struct {
     const os64_html_node_t *node;   // the `img` or `input type=image`
     os64_page_ref_t src;            // resolved against the base; refused says why

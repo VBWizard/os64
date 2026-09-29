@@ -1082,10 +1082,14 @@ static void walk(render_t *r, const os64_html_node_t *n, list_t *list)
     const char *alt = n->tag == OS64_HTML_TAG_IMG ? attr_value(n, "alt") : NULL;
     const char *src = n->tag == OS64_HTML_TAG_FRAME ? attr_value(n, "src") : NULL;
     const char *type = n->tag == OS64_HTML_TAG_INPUT ? attr_value(n, "type") : NULL;
-    // A frame that spells no address of its own is nowhere worth offering;
-    // an `input type=hidden` is the form's data and never drawn.
+    // A frame that names no document is nowhere worth offering. The model
+    // lists every frame whose src names something, so one it did not list
+    // is the blank page; with no model, what the page wrote is all there is.
+    // An `input type=hidden` is the form's data and never drawn.
+    bool no_frame = r->model != NULL ? os64_page_link_for(r->model, n) < 0
+                                     : src == NULL || src[0] == '\0';
     if ((alt != NULL && alt[0] == '\0') ||
-        (n->tag == OS64_HTML_TAG_FRAME && (src == NULL || src[0] == '\0')) ||
+        (n->tag == OS64_HTML_TAG_FRAME && no_frame) ||
         (type != NULL && os64_streq_nocase(type, "hidden")))
         return;
     node_add(r, n);

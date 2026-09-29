@@ -84,6 +84,48 @@ typedef struct os64_pty_cell
 _Static_assert(sizeof(os64_pty_cell_t) == 8, "pty cell ABI: 8 bytes");
 _Static_assert(sizeof(os64_pty_header_t) == 32, "pty header ABI: 32 bytes");
 
+// History is measured in additional physical rows, independent of live height.
+#define OS64_PTY_HISTORY_MAX 10000u
+#define OS64_PTY_VIEW_LIVE UINT64_MAX
+
+// History/resize/viewport refusals: -1 invalid arguments, handle or mode;
+// -2 unreadable/writable user memory. -4 remains OS64_INTERRUPTED globally.
+#define OS64_PTY_ERR_HISTORY_BUDGET (-3)
+#define OS64_PTY_ERR_NO_MEMORY      (-5)
+#define OS64_PTY_ERR_BUSY           (-6)
+
+
+typedef struct os64_pty_viewport {
+    os64_pty_header_t screen;
+    uint64_t oldest_line, live_line, first_line;
+    uint64_t epoch;                 // changes when geometry changes
+    uint32_t history_lines, history_limit;
+} os64_pty_viewport_t;
+_Static_assert(sizeof(os64_pty_viewport_t) == 72, "pty viewport ABI");
+
+// GRID only. Returns 0 on success, -1 for invalid arguments/handle/mode,
+// HISTORY_BUDGET when the shared retained-row quota is full, NO_MEMORY on
+// allocation refusal, or BUSY after repeated concurrent reconfiguration.
+// Refusal leaves this call's grid and capacity unchanged.
+// This changes retention, not geometry, and does not send SIGWINCH.
+static inline int64_t os64_pty_history(int64_t master, uint32_t lines)
+{
+    return (int64_t)os64_syscall2(SYSCALL_PTY_HISTORY, (uint64_t)master, lines);
+}
+
+// Stable logical line IDs keep a reader anchored while output arrives. The
+// requested first line is clamped to [oldest_line, live_line]; LIVE follows
+// output. A mismatched epoch returns the live screen after a geometry change.
+// Metadata and returned cells describe one locked snapshot. A zero max_cells
+// polls metadata; a short buffer returns a prefix of the viewport. Returns
+// the copied cell count, -1/-2 as above, or NO_MEMORY for scratch refusal.
+static inline int64_t os64_pty_viewport(int64_t master, os64_pty_viewport_t *view,
+    os64_pty_cell_t *cells, uint32_t max_cells, uint64_t first, uint64_t epoch)
+{
+    return (int64_t)os64_syscall6(SYSCALL_PTY_VIEWPORT, (uint64_t)master,
+        (uint64_t)view, (uint64_t)cells, max_cells, first, epoch);
+}
+
 // ── the calls ───────────────────────────────────────────────────────────────
 
 // Create a GRID-mode pty sized cols x rows. Returns the master handle
@@ -128,8 +170,9 @@ static inline int64_t os64_pty_snapshot(int64_t master,
 // snapshot poll repaints, and every task seated on the slave that installed
 // a SIGWINCH handler gets the signal — a seat without one is not disturbed,
 // and nothing is left pending for a handler it installs later. Same fence
-// as create (2..512 x 2..256). Returns 0, or a negative error — and on
-// error the grid is exactly as it was.
+// as create (2..512 x 2..256). Returns 0 or -1 for invalid geometry/handle,
+// HISTORY_BUDGET, NO_MEMORY, or BUSY (OS64_PTY_ERR_*). A refusal makes no
+// mutation by this call; other callers can still change the terminal.
 static inline int64_t os64_pty_resize(int64_t master, uint32_t cols, uint32_t rows)
 {
 	return (int64_t)os64_syscall3(SYSCALL_PTY_RESIZE, (uint64_t)master, cols, rows);

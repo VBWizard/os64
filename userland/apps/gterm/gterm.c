@@ -3,35 +3,10 @@
 // X apps wore an x, so `ls /bin/g*` enumerates the desktop the way
 // `ls /usr/bin/x*` once mapped a workstation.
 //
-// This is ptyprobe wearing pixels — the whole program is PTY.md's promised
-// shape: GRID IN, KEYS OUT.
-//
-//   keys out: every KEY_DOWN with an ascii byte goes to the pty master.
-//     That one rule carries more than it looks like: Ctrl+C arrives here as
-//     0x03 (the keyboard's 1963-vintage translation), crosses to the master,
-//     runs the SLAVE's intercept, and kills the program in the window —
-//     never us. Arrow keys arrive as the VT100's ESC [ A burst and flow
-//     through untouched, so husk's history works in a window because the
-//     bytes never knew where they were.
-//   grid in: poll the snapshot header at frame cadence (the ratified 30Hz;
-//     the client-notification seam retires the poll when it lands), copy
-//     cells only when the generation moved, repaint, publish. The kernel's
-//     ONE terminal interpreter did all the hard work before we ever saw it.
-//
-// The window closes when the session ends — HUNGUP after `exit`, xterm's
-// contract since 1984 — or when the window dies under us. No menu, no
-// chrome: the app-driven doctrine says a menu widget arrives when some app
-// truly needs one, and a terminal doesn't (xterm went decades; settings
-// live in theme.conf's world, not in bars). The X-button's SIGHUP rides
-// GRAPHICS #5, already booked in PTY.md with its modem etymology.
-//
-// Deliberately libdraw, not libui: a terminal is ONE full-bleed custom
-// surface with no widgets in it — os64_ui buys dispatch and theming for
-// widget TREES, and wrapping a single grid in one would be ceremony. The
-// day gterm wants chrome (scrollbar, tabs), it adopts libui and becomes
-// the custom-widget-class precedent. Geometry is honest the other way
-// around too: the pty is sized from the actual content area and selected
-// cell metrics. A refused resize leaves the old grid clipped or letterboxed.
+// The kernel owns interpreted cells and retained physical rows. gterm paints
+// a stable viewport, forwards input, and supplies the scrollbar/settings UI.
+// Ctrl+C still targets the child; Shift+navigation belongs to scrollback.
+// The session closes on PTY hangup or a window close request.
 
 #include "os64/os64.h"
 #include "os64/gui.h"
@@ -43,6 +18,9 @@
 #include "os64/clip.h"
 #include "os64/mem.h"
 #include "font_grid.h"
+#include "settings.h"
+#include "os64/ui_settings.h"
+#include "os64/str.h"
 #include "os64/font_settings.h"
 
 // Prefer a grid wide enough for top without wrapping its usual columns.
@@ -65,6 +43,18 @@ static uint64_t gFontGeneration;
 static bool gFontSettingsReady;
 static os64_text_context_t *gText;
 
+static os64_pty_viewport_t gView;
+static uint64_t gFirst=OS64_PTY_VIEW_LIVE;
+static os64_ui_t gUi;
+static os64_ui_widget_t gRoot;
+static os64_ui_scrollbar_t gScroll;
+static os64_ui_settings_t gSettings;
+static os64_ui_textfield_t gHistoryField;
+static os64_ui_widget_t gSettingsLabels[4];
+static char gHistoryText[16],gMemoryText[120];
+static uint32_t gHistoryLimit=GTERM_HISTORY_DEFAULT;
+static const os64_ui_class_t terminal_root={.name="terminal"};
+
 // ── the selection (CLIPBOARD.md slice 3) ────────────────────────────────────
 // SELECT IS COPY: releasing a drag publishes the highlighted text to
 // /sys/clipboard, and right-click writes the clipboard to the master as if
@@ -72,10 +62,8 @@ static os64_text_context_t *gText;
 // the Linux console (Alessandro Rubini, 1994) and xterm before it — and it
 // is the gesture Chris asked for by name.
 //
-// The selection covers the VISIBLE GRID only, because a grid is all a pty
-// has: there is no scrollback to select into yet. When one arrives, the
-// anchor/end pair below becomes a pair of positions in the scrollback's
-// coordinates and everything else here stays as it is.
+// Selection covers the displayed viewport, including historical rows. A
+// viewport or content change invalidates it before another copy can occur.
 static bool     gSelLive;                    // is anything highlighted?
 static bool     gDragging;                   // button 1 is down inside us
 static uint32_t gAnchorRow, gAnchorCol;      // where the drag began
@@ -148,6 +136,7 @@ static void invalidate_grid(void *user)
 	(void)user;
 	gSelLive = gDragging = gSnapshotValid = false;
 	gRenderedGen = UINT64_MAX;
+    gFirst=OS64_PTY_VIEW_LIVE;
 }
 
 /* Both shared settings and the guest fixture use the grid transaction. */
@@ -186,11 +175,123 @@ static void refresh_font_settings(void)
 static void cell_at(int32_t x, int32_t y, uint32_t *row, uint32_t *col)
 { gterm_grid_cell_at(&gGrid, x, y, row, col); }
 
+static uint32_t grid_width(const os64_draw_ctx_t *ctx)
+{
+    uint32_t bar=(uint32_t)gUi.theme.scroll_w;
+    return ctx->surf.width>bar?ctx->surf.width-bar:0;
+}
+static void layout_terminal(os64_draw_ctx_t *ctx)
+{
+    gRoot.bounds=(os64_gui_rect_t){0,0,(int32_t)ctx->surf.width,(int32_t)ctx->surf.height};
+    gScroll.w.bounds=(os64_gui_rect_t){(int32_t)grid_width(ctx),0,
+        gUi.theme.scroll_w,(int32_t)ctx->surf.height};
+    (void)gterm_grid_resize(&gGrid,grid_width(ctx),ctx->surf.height);
+    os64_ui_mark_dirty(&gUi,&gRoot);
+}
+static void view_first(uint64_t first)
+{
+    gFirst=first;
+    gSelLive=gDragging=false;
+    gRenderedGen=UINT64_MAX;
+}
+static void scroll_by(int64_t delta)
+{
+    if(!gSnapshotValid)return;
+    // Accumulate input against the requested view, including earlier events
+    // in this frame whose snapshot has not been fetched yet.
+    uint64_t first=gFirst==OS64_PTY_VIEW_LIVE?gView.live_line:gFirst;
+    if(first<gView.oldest_line)first=gView.oldest_line;
+    if(first>gView.live_line)first=gView.live_line;
+    int64_t pos=(int64_t)(first-gView.oldest_line)+delta;
+    if(pos<0)pos=0;
+    if(pos>=(int64_t)gView.history_lines)view_first(OS64_PTY_VIEW_LIVE);
+    else view_first(gView.oldest_line+(uint64_t)pos);
+}
+static void scrolled(os64_ui_scrollbar_t *bar,void *user)
+{
+    (void)user;
+    view_first(bar->pos>=bar->total-bar->visible?OS64_PTY_VIEW_LIVE:
+        gView.oldest_line+(uint64_t)bar->pos);
+}
+static bool scroll_key(const os64_gui_event_t *ev)
+{
+    if(!(ev->key.modifiers & OS64_GUI_MOD_SHIFT))return false;
+    bool hid=(ev->key.modifiers & OS64_GUI_MOD_HID)!=0;
+    unsigned code=ev->key.scancode;
+    int key=code==(hid?0x4b:0x49)?1:code==(hid?0x4e:0x51)?2:
+        code==(hid?0x4a:0x47)?3:code==(hid?0x4d:0x4f)?4:0;
+    if(!key)return false;
+    // Every byte of the keyboard's escape burst carries the physical key.
+    // Swallow the whole burst, but move just once at its initial ESC.
+    if(ev->key.ascii==27){
+        if(key<3)scroll_by((key==1?-1:1)*(int64_t)(gHdr.rows>1?gHdr.rows-1:1));
+        else view_first(key==3?gView.oldest_line:OS64_PTY_VIEW_LIVE);
+    }
+    return true;
+}
+static void settings_place(os64_ui_widget_t *w,os64_gui_rect_t r,bool staged)
+{if(staged)os64_ui_widget_stage_bounds(w,r);else w->bounds=r;}
+static bool settings_layout(os64_ui_settings_t *d,os64_gui_rect_t b,int32_t row,bool staged)
+{
+    for(unsigned i=0;i<4;++i){
+        const char *text=gSettingsLabels[i].text;int32_t width;
+        if(os64_ui_text_measure(&d->ui,OS64_FONT_ROLE_UI,text,os64_strlen(text),&width) || width>b.w)
+            return false;
+        settings_place(&gSettingsLabels[i],(os64_gui_rect_t){b.x,b.y+(int32_t)(i+(i>0))*row,b.w,row},staged);
+    }
+    settings_place(&gHistoryField.w,(os64_gui_rect_t){b.x,b.y+row,160,row},staged);
+    return true;
+}
+static void settings_memory(void)
+{
+    uint32_t lines;char text[sizeof(gMemoryText)];
+    if(gterm_history_parse(gHistoryText,&lines))
+        os64_snprintf(text,sizeof(text),"History: about %lu KiB at %u columns",
+            (unsigned long)(((uint64_t)lines*gGrid.cols*sizeof(os64_pty_cell_t)+1023)/1024),gGrid.cols);
+    else os64_strcopy(text,sizeof(text),"Enter a whole number from 0 to 10000.");
+    if(!os64_streq(text,gMemoryText)){
+        os64_strcopy(gMemoryText,sizeof(gMemoryText),text);
+        if(gSettings.window>0)os64_ui_mark_dirty(&gSettings.ui,&gSettingsLabels[2]);
+    }
+}
+static void settings_apply(os64_ui_settings_t *d,bool save)
+{
+    uint32_t lines;
+    if(!gterm_history_parse(gHistoryText,&lines)){
+        os64_ui_settings_report(d,"Enter a whole number from 0 to 10000.");return;
+    }
+    int64_t result=os64_pty_history(gMaster,lines);
+    if(result<0){
+        os64_ui_settings_report(d,gterm_history_error(result));return;
+    }
+    gHistoryLimit=lines;gRenderedGen=UINT64_MAX;gSelLive=gDragging=false;
+    if(save && gterm_history_save(lines))
+        os64_ui_settings_report(d,"Applied here, but the default could not be saved.");
+    else os64_ui_settings_report(d,save?"Applied and saved for new terminals.":"Applied to this terminal.");
+}
+static void settings_open(int64_t parent)
+{
+    if(!os64_ui_settings_open(&gSettings,parent,"Terminal Settings",5,settings_layout,settings_apply,NULL))return;
+    char value[16];os64_snprintf(value,sizeof(value),"%u",gHistoryLimit);
+    const char *labels[]={"Scrollback lines","0 disables history; maximum 10000.",gMemoryText,
+        "Reducing the limit discards the oldest lines."};
+    for(unsigned i=0;i<4;++i){
+        os64_ui_label(&gSettingsLabels[i],labels[i]);
+        os64_ui_add_child(&gSettings.body,&gSettingsLabels[i]);
+    }
+    os64_ui_textfield(&gHistoryField,gHistoryText,sizeof(gHistoryText),NULL,NULL,NULL);
+    os64_ui_add_child(&gSettings.body,&gHistoryField.w);
+    os64_ui_textfield_set(&gSettings.ui,&gHistoryField,value);
+    settings_memory();os64_ui_settings_ready(&gSettings);
+    os64_ui_set_focus(&gSettings.ui,&gHistoryField.w);
+}
+
 static void render(os64_draw_ctx_t *ctx)
 {
 	if (!gSnapshotValid) return;
-	os64_gui_rect_t all = {0, 0, (int32_t)ctx->surf.width, (int32_t)ctx->surf.height};
-	os64_draw_fill_rect(&ctx->surf, all, GTERM_BG);
+	os64_gui_surface_t grid_surface=ctx->surf;grid_surface.width=grid_width(ctx);
+	os64_gui_rect_t all = {0, 0, (int32_t)grid_surface.width, (int32_t)ctx->surf.height};
+	os64_draw_fill_rect(&grid_surface, all, GTERM_BG);
 	for (uint32_t r = 0; r < gHdr.rows; r++) {
 		uint32_t hf = 0, ht = 0;
 		bool hl = row_highlight(r, &hf, &ht);
@@ -199,15 +300,17 @@ static void render(os64_draw_ctx_t *ctx)
 			uint32_t fg = cell->color, bg = os64_ansi_bg_color(cell->bg, GTERM_BG);
 			os64_ansi_apply_attrs(cell->attrs, &fg, &bg);
 			if (hl && c >= hf && c <= ht) { uint32_t swap = fg; fg = bg; bg = swap; }
-			os64_draw_fill_rect(&ctx->surf, gterm_grid_cell_rect(&gGrid, r, c), bg);
-			gterm_grid_draw_cell(&gGrid, &ctx->surf, r, c, (uint8_t)cell->ch, cell->charset, fg);
+			os64_draw_fill_rect(&grid_surface, gterm_grid_cell_rect(&gGrid, r, c), bg);
+			gterm_grid_draw_cell(&gGrid, &grid_surface, r, c, (uint8_t)cell->ch, cell->charset, fg);
 		}
 	}
 	// Snapshots contain cells and cursor coordinates, not the kernel
 	// renderer's cursor pixels; the graphical terminal paints its own.
-	if (gHdr.cur_row < gHdr.rows && gHdr.cur_col < gHdr.cols)
-		os64_draw_fill_rect(&ctx->surf,
+	if (gView.first_line==gView.live_line && gHdr.cur_row < gHdr.rows && gHdr.cur_col < gHdr.cols)
+		os64_draw_fill_rect(&grid_surface,
 			gterm_grid_cell_rect(&gGrid, gHdr.cur_row, gHdr.cur_col), 0xffc0c0c0u);
+	os64_ui_mark_dirty(&gUi,&gScroll.w);
+    (void)os64_ui_render(&gUi,NULL);
 	os64_draw_publish(ctx, NULL);
 }
 
@@ -300,6 +403,7 @@ static void paste_end(void)
 // pointer (and the same one vt_select.c keeps).
 static void paste_begin(void)
 {
+    view_first(OS64_PTY_VIEW_LIVE);
 	paste_end();
 	gPasteHandle = os64_open(OS64_CLIPBOARD_PATH, "r");
 }
@@ -341,6 +445,7 @@ static void paste_step(int32_t master)
 
 int main(int argc, char **argv)
 {
+    gHistoryLimit=gterm_history_load();
 	os64_text_options_t options = {.memory = {NULL, font_allocate, font_release}};
 	os64_font_set_t *initial = NULL;
 	gGrid = (gterm_grid_t){.memory = options.memory, .resize = resize_pty,
@@ -378,8 +483,11 @@ int main(int argc, char **argv)
 	if (title[0] == 0)
 		title = "gterm";
 
+	// Load the session metrics before sizing; the initial grid and later
+	// layout must reserve the same themed scrollbar width.
+	os64_ui_init(&gUi,NULL);
 	int64_t win = os64_gui_window_create_content(title, initial_x, initial_y,
-										 content_w, content_h, OS64_GUI_CREATE_FIT_SCREEN);
+										 content_w+(uint32_t)gUi.theme.scroll_w, content_h, OS64_GUI_CREATE_FIT_SCREEN | OS64_GUI_WINDOW_HAS_SETTINGS);
 	if (win <= 0)
 	{
 		os64_printf("gterm: no GUI here (window_create %ld)\n", (long)win);
@@ -396,7 +504,11 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	gGrid.width = ctx.surf.width; gGrid.height = ctx.surf.height;
+    gUi.ctx=&ctx;
+    gRoot=(os64_ui_widget_t){.cls=&terminal_root};
+    os64_ui_set_root(&gUi,&gRoot);
+    os64_ui_scrollbar(&gScroll,scrolled,NULL);os64_ui_add_child(&gRoot,&gScroll.w);
+    gGrid.width=grid_width(&ctx);gGrid.height=ctx.surf.height;
 	os64_font_status_t status = replace_fonts(initial);
 	os64_font_set_release(initial);
 	if (status != OS64_FONT_OK) {
@@ -413,6 +525,13 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+    if(os64_pty_history(master,gHistoryLimit)<0){
+        os64_debug_log("gterm: history allocation refused; keeping initial capacity");
+        os64_pty_viewport_t initial;
+        if(os64_pty_viewport(master,&initial,NULL,0,OS64_PTY_VIEW_LIVE,0)>=0)
+            gHistoryLimit=initial.history_limit;
+    }
+    layout_terminal(&ctx);
 	int64_t seated = os64_spawn_seated(prog, prog_argv, master);
 	if (seated <= 0)
 	{
@@ -430,25 +549,36 @@ int main(int argc, char **argv)
 
 	for (;;)
 	{
-		// Keys out. Only presses, only bytes: releases and chord-consumed
-		// keys never reach us, and a key with no ascii has nothing to say
-		// to a byte stream (until STREAM mode teaches us better).
-		//
-		// Mouse in, since 2026-08-21: drag-select, and right-click paste.
-		// The compositor's implicit pointer grab is what makes the drag
-		// reliable — a press inside our content area routes every move and
-		// the release to US, even when the pointer leaves the window.
+        // The terminal and its modeless dialog share one event loop.
+        if(gSettings.window>0){settings_memory();os64_ui_settings_pump(&gSettings);}
 		os64_gui_event_t ev;
 		int64_t erc;
 		bool repaint = false;   // the selection changed; the grid may not have
 		while ((erc = os64_gui_event_poll(win, &ev)) == 1)
 		{
+            if(ev.type==OS64_GUI_EVENT_WINDOW_CLOSE){window_alive=false;break;}
+            if(ev.type==OS64_GUI_EVENT_WINDOW_FOCUS || ev.type==OS64_GUI_EVENT_WINDOW_COVERED){
+                os64_ui_dispatch(&gUi,&ev);
+                if(ev.type==OS64_GUI_EVENT_WINDOW_COVERED || !ev.focus.gained)gDragging=false;
+            }
+            if(ev.type==OS64_GUI_EVENT_SETTINGS){settings_open(win);continue;}
+            if(ev.type==OS64_GUI_EVENT_MOUSE_WHEEL){scroll_by((int64_t)ev.mouse.dy*3);continue;}
+            bool pointer=ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_UP ||
+                ev.type==OS64_GUI_EVENT_MOUSE_MOVE || ev.type==OS64_GUI_EVENT_POINTER_STATE;
+            if(pointer && !gDragging){
+                bool scrollbar=gUi.grab || ev.mouse.x>=(int32_t)grid_width(&ctx);
+                os64_ui_dispatch(&gUi,&ev);
+                if(scrollbar)continue;
+            }
 			if (ev.type == OS64_GUI_EVENT_APPEARANCE) {
+                os64_ui_dispatch(&gUi,&ev);layout_terminal(&ctx);
 				refresh_font_settings();
 				repaint = true;
 			}
 			else if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii != 0)
 			{
+                if(scroll_key(&ev))continue;
+                view_first(OS64_PTY_VIEW_LIVE);
 				// Typing means you are done looking: the highlight dies on
 				// any keystroke (his ruling). Keeping it lit while the screen
 				// fills underneath would be a highlight that no longer names
@@ -508,17 +638,16 @@ int main(int argc, char **argv)
 				if (os64_draw_ctx_refresh(&ctx) == 0) {
 					/* Allocation and bounds refusals retain the old PTY grid;
 					 * the resized surface clips or letterboxes that grid. */
-					gterm_grid_resize(&gGrid, ctx.surf.width, ctx.surf.height);
+					layout_terminal(&ctx);
 					gRenderedGen = UINT64_MAX;
 				}
 			}
-			// COVERED / UNCOVERED events need no branch here: the flag is
-			// asked every pass below, and a nudge that can be dropped from a
-			// full queue is no basis for a decision either way.
+			// Query visibility every pass below; a coverage notification may
+			// be dropped when the event queue is full.
 		}
-		if (erc < 0)
+		if (!window_alive || erc < 0)
 		{
-			window_alive = false;   // the window died under us (swept?)
+			window_alive = erc >= 0;   // destroy a close-requested window, not a swept one
 			break;
 		}
 
@@ -528,10 +657,10 @@ int main(int argc, char **argv)
 		paste_step((int32_t)master);
 
 		// Grid in — header first, cells only when the generation moved.
-		os64_pty_header_t probe;
-		if (os64_pty_snapshot(master, &probe, NULL, 0) < 0)
+		os64_pty_viewport_t probe;
+		if (os64_pty_viewport(master, &probe, NULL, 0,gFirst,gView.epoch) < 0)
 			break;
-		if (probe.flags & OS64_PTY_HUNGUP)
+		if (probe.screen.flags & OS64_PTY_HUNGUP)
 			break;                  // the session ended: exit closes the window
 		// Can anyone see us? Asked EVERY pass — one get_state per frame —
 		// never inferred from the COVERED/UNCOVERED events, either of which
@@ -554,25 +683,27 @@ int main(int argc, char **argv)
 			// Whatever moved is noted by the stale gRenderedGen; the first
 			// uncovered pass paints it all at once.
 		}
-		else if (!gSnapshotValid || probe.generation != gRenderedGen)
+		else if (!gSnapshotValid || probe.screen.generation != gRenderedGen ||
+                 probe.first_line!=gView.first_line || probe.epoch!=gView.epoch)
 		{
-			os64_pty_header_t next = {0};
+			os64_pty_viewport_t next = {0};
 			os64_pty_cell_t *cells = gCells == gCellStorage[0] ? gCellStorage[1] : gCellStorage[0];
-			int64_t copied = os64_pty_snapshot(master, &next, cells, MAX_CELLS);
-			if (!gterm_grid_snapshot_matches(&gGrid, &next, copied)) {
+			int64_t copied = os64_pty_viewport(master, &next, cells, MAX_CELLS,gFirst,gView.epoch);
+			if (!gterm_grid_snapshot_matches(&gGrid, &next.screen, copied)) {
 				/* A successful PTY barrier is not undone by a transient read.
 				 * Keep the displayed snapshot intact and retry next frame. */
 				os64_frame_wait(&clock, 33);
 				continue;
 			}
-			gHdr = next; gCells = cells; gSnapshotValid = true;
-			// The text moved underneath. A highlight is a claim about WHICH
-			// TEXT you have, and those coordinates now name something else —
-			// so it goes out rather than lying. (The drag itself survives: if
-			// a button is still down, the next move re-lights the selection
-			// against what is on the screen now, which is what the eye is
-			// following anyway.)
-			gSelLive = false;
+			gHdr = next.screen; gCells = cells; gSnapshotValid = true;
+            if(next.epoch!=gView.epoch)gFirst=OS64_PTY_VIEW_LIVE;
+            else if(gFirst!=OS64_PTY_VIEW_LIVE)gFirst=next.first_line;
+            gView=next;
+            gHistoryLimit=next.history_limit;
+            os64_ui_scrollbar_set(&gUi,&gScroll,(int64_t)next.history_lines+gHdr.rows,
+                gHdr.rows,(int64_t)(next.first_line-next.oldest_line));
+            // A new snapshot invalidates the selection's cell coordinates.
+            gSelLive=gDragging=false;
 			render(&ctx);
 			gRenderedGen = gHdr.generation;
 		}
@@ -581,9 +712,12 @@ int main(int argc, char **argv)
 			render(&ctx);   // selection-only change: gCells is still current
 		}
 
+        if(!covered)os64_ui_paint(&gUi);
 		os64_frame_wait(&clock, 33);   // the ratified ~30Hz poll
 	}
 
+    os64_ui_settings_close(&gSettings);
+    (void)os64_ui_font_release(&gUi);
 	gterm_grid_destroy(&gGrid);
 	os64_text_destroy(gText);
 	paste_end();                       // a paste cut off by the hangup lets the snarf go
