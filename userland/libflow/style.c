@@ -61,7 +61,7 @@ typedef struct {
     const os64_page_t *model;
     const flow_env_t *env;
     FStyles *out;
-    bool quirks, any_quirks;    // full quirks; quirks or limited quirks
+    bool quirks;                // full quirks mode
     // `body link=` recolours every link, and the body is styled before any
     // link it contains is.
     bool has_body_link;
@@ -374,9 +374,10 @@ static flow_unit_t font_size(const Ctx *c, const Spec *sp, const flow_style_t *p
 }
 
 // CSS Fonts' `bolder`, from the parent's weight.
+// CSS Fonts 4 § 2.2's table: a weight at or above 900 stays as it is.
 static uint16_t bolder(uint16_t w)
 {
-    return w < 350 ? 400 : w < 550 ? 700 : 900;
+    return w < 350 ? 400 : w < 550 ? 700 : w < 900 ? 900 : w;
 }
 
 // Which generic a named face stands for, when the page spelled no generic
@@ -1559,6 +1560,10 @@ static bool author_generic(const char *k, flow_generic_t *out)
 
 // `font-family`: the names in order and the first generic, as `<font
 // face>` builds them. The names point into the sheet.
+// The names are copied into the styles arena for every element the
+// declaration reaches: a `* { font-family: … }` reset costs one list an
+// element (48 bytes for three names). Bounded by the document, as the
+// styles arena is; one list per winning set would cost it once.
 static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *out)
 {
     if (v->items == NULL || v->nitems <= 0)
@@ -1953,6 +1958,18 @@ static bool author_sets(garb_style_t st, int32_t prop)
     return false;
 }
 
+// Whether an author set gives `prop` a value of its own: anything but
+// `revert`, which hands it back to the user-agent origin.
+static bool author_declares(garb_style_t st, int32_t prop)
+{
+    for (int32_t i = 0; i < st.n; i++)
+        if ((int32_t)st.sets[i].prop == prop)
+            return !(st.sets[i].value.kind == GARB_V_WIDE &&
+                     (os64_streq(st.sets[i].value.keyword, "revert") ||
+                      os64_streq(st.sets[i].value.keyword, "revert-layer")));
+    return false;
+}
+
 // The element's author winners over what the chapter and the hints wrote.
 // `ua` is the Spec as the user-agent origin left it, which `revert` goes
 // back to. False on no memory only.
@@ -2007,10 +2024,13 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     }
     // A border style the author drew with no width from any origin has the
     // initial width, medium. The Spec's declared width starts at 0, not
-    // medium, because the chapter always declares the width it draws.
+    // medium, because the chapter always declares the width it draws — so a
+    // 0 there means NO origin declared one, which is also what `revert`
+    // leaves where the chapter declared none: a width reverted is not a
+    // width declared.
     for (int i = 0; i < 4; i++)
         if (sp->border_px[i] == 0 && author_sets(st, GARB_BORDER_TOP_STYLE + i) &&
-            !author_sets(st, GARB_BORDER_TOP_WIDTH + i))
+            !author_declares(st, GARB_BORDER_TOP_WIDTH + i))
             sp->border_px[i] = 3 * FLOW_UNITS_PER_PX;
     return true;
 }
@@ -2178,7 +2198,6 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
     out->arena.cap = SIZE_MAX;
     Ctx c = {.doc = doc, .model = model, .env = env, .out = out,
              .quirks = doc->quirks == OS64_HTML_QUIRKS,
-             .any_quirks = doc->quirks != OS64_HTML_NO_QUIRKS,
              .root_font = (flow_unit_t)env->viewport_font_px * FLOW_UNITS_PER_PX};
 
     // Pre-order down, and each element FINISHED on the way back up, when

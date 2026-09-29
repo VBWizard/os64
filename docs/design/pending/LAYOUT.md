@@ -321,8 +321,10 @@ A frame and an iframe are drawn as the link libpage lists for them,
 one is the blank page and draws nothing to follow). An inline-block that
 is not replaced — a `marquee`, or whatever a page's sheet makes one — is
 an atom with a block container of its own inside it: its set width, or
-shrink-to-fit (§10.3.9) — a marquee as wide as its line — and on its last
-line's baseline (§10.8.1). `object`, `video` and `canvas` show their fallback
+shrink-to-fit (§10.3.9), its percentages of the line — a marquee as wide
+as its line — and on its last line's baseline (§10.8.1), or its bottom
+margin edge when it has none or its overflow is not visible: a marquee's,
+which the chapter makes `overflow: hidden`. `object`, `video` and `canvas` show their fallback
 content, since nothing plays them; `embed` and `audio` have none and make
 nothing, and neither do `source`, `track` and `keygen`. `hr` is not
 special: it is an empty block whose borders are the rule, which is what

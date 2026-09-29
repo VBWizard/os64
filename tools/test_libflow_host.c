@@ -1263,9 +1263,10 @@ static void table_review_cases(void)
                      "<td valign=baseline><font size=7>B</font></table></table>", 400, row_base, 1),
            NULL);
     // An inline-block is measured from its content: the marquee's cell is
-    // its text's 68 wide, and the next cell starts after it. The marquee sits
-    // on its own line's baseline, so the row is its 20.
-    static const char *const atom[] = {"cell td 8 8 68 20", "cell td 76 8 8 20"};
+    // its text's 68 wide, and the next cell starts after it. The marquee's
+    // overflow is hidden, so it sits on its bottom edge (§ 10.8.1) and the
+    // strut hangs 6 below: the row is 26.
+    static const char *const atom[] = {"cell td 8 8 68 26", "cell td 76 8 8 26"};
     expect("an inline-block's cell is as wide as its content",
            has_lines("<!doctype html><table cellspacing=0 cellpadding=0><tr><td>"
                      "<marquee>abcdefghij</marquee><td>x</table>", 400, atom, 2), NULL);

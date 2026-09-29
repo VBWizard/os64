@@ -679,6 +679,7 @@ typedef struct {
 } Intr;
 
 static Intr intrinsic(L *l, FBox *b);
+static int64_t hframe(const FBox *b, int64_t base);
 
 static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
 {
@@ -763,8 +764,13 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                 } else if (st->width.kind != FLOW_LENGTH_AUTO) {
                     r.w = max64(0, len(st->width, cw));
                 } else {
+                    // intrinsic() answers border-box widths with the frame's
+                    // percentages at 0 (the containing block is not known
+                    // there); take off that frame, not the line's, to have
+                    // the content's own preferred widths.
                     Intr in = intrinsic(l, it->content);
-                    r.w = min64(max64(in.min - fw, room), in.max - fw);
+                    int64_t f0 = hframe(it->content, 0);
+                    r.w = min64(max64(in.min - f0, room), in.max - f0);
                     r.w = max64(0, r.w);
                 }
             }
@@ -1217,13 +1223,13 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 if (g->item->content != NULL) {
                     // Laid out where it will not collide, measured, and
                     // moved into place once the line is placed. The block
-                    // is the element's own box, so it sizes itself again:
-                    // a set width against the line, as it was measured,
-                    // and an auto one to fill exactly the atom's width.
+                    // is the element's own box, against the line it was
+                    // measured on — its percentages are of the line's
+                    // width, once — with the width the line gave it.
                     Cursor c = {0, kNoMargins, -1};
-                    int64_t cbw = g->style->width.kind != FLOW_LENGTH_AUTO
-                                      ? cw : g->ml + g->frame_w + g->atom.w + g->mr;
-                    block(l, styles, g->item->content, 0, cbw, &c);
+                    g->item->content->atom_sized = true;
+                    g->item->content->atom_w = g->atom.w;
+                    block(l, styles, g->item->content, 0, cw, &c);
                     content_h = g->item->content->placed ? g->item->content->h - g->frame_h : 0;
                 }
                 fr->h = g->frame_h + content_h;
@@ -1231,9 +1237,13 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 fr->link = g->item->link >= 0 ? g->item->link : p.link;
                 int64_t hm = g->mt + fr->h + g->mb;
                 // The baseline of a replaced box is its bottom margin edge;
-                // an inline-block's is its last line's, where it has one.
+                // an inline-block's is its last line's, where it has one,
+                // unless its overflow is not visible (§ 10.8.1) — which is
+                // the marquee's, `overflow: hidden !important` in the
+                // chapter, tested by its tag until libflow holds overflow.
                 int64_t top = -hm, base = 0;
                 if (g->item->content != NULL && g->item->content->placed &&
+                    g->item->node->tag != OS64_HTML_TAG_MARQUEE &&
                     last_baseline(g->item->content, &base))
                     top = -(g->mt + base - g->item->content->y);
                 switch (g->style->vertical_align) {
@@ -1712,6 +1722,8 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     if (b->kind == FB_REPLACED) {
         rep = replaced_size(l, b->node, s, cbw);
         forced_w = rep.w;
+    } else if (b->atom_sized) {
+        forced_w = b->atom_w;
     }
     int64_t ml;
     int64_t cw = widths(b, cbw, forced_w, &ml);

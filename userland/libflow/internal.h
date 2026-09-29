@@ -260,6 +260,11 @@ struct FBox {
     // it is laid out.
     bool has_baseline;
     int64_t baseline;
+    // An inline-block's content: the content width its line gave it (§
+    // 10.3.9), which block() takes as given rather than filling — so its
+    // percentages still resolve against the line, as they were measured.
+    bool atom_sized;
+    int64_t atom_w;
     int64_t border[4], padding[4];  // used widths, top right bottom left
     FLine *lines, *last_line;       // an inline formatting context's lines
     FFrag *marker_frag;             // an outside marker, placed
