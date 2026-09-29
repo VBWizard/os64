@@ -7,6 +7,19 @@
 
 #define F_ARRAY(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))
 
+// White-space's two questions (CSS Text 3 § 3), answered in one place so
+// the box builder and layout agree: does a run of spaces collapse, and
+// may a line wrap?
+static inline bool f_ws_collapses(flow_white_space_t ws)
+{
+    return ws == FLOW_WS_NORMAL || ws == FLOW_WS_NOWRAP || ws == FLOW_WS_PRE_LINE;
+}
+
+static inline bool f_ws_wraps(flow_white_space_t ws)
+{
+    return ws == FLOW_WS_NORMAL || ws == FLOW_WS_PRE_WRAP || ws == FLOW_WS_PRE_LINE;
+}
+
 // ── Storage ─────────────────────────────────────────────────────────────
 //
 // Everything a layout builds lives until the layout is freed and is never
@@ -193,6 +206,22 @@ typedef enum {
     FI_MARKER,          // a list marker drawn inside
 } f_item_kind_t;
 
+// What an overflow value does, asked in one place (CSS Overflow 3 § 3):
+// `hidden` and `clip` cut what overflows, and the rest draw it — `scroll`
+// and `auto` included, since nothing here scrolls (LAYOUT.md § Booked).
+// Every overflow but `visible` and `clip` makes a scroll container, which
+// is what starts a formatting context and gives an inline-block its bottom
+// edge for a baseline; `clip` does neither — that is what it is for.
+static inline bool f_overflow_clips(flow_overflow_t o)
+{
+    return o == FLOW_OVERFLOW_HIDDEN || o == FLOW_OVERFLOW_CLIP;
+}
+
+static inline bool f_overflow_scrolls(flow_overflow_t o)
+{
+    return o != FLOW_OVERFLOW_VISIBLE && o != FLOW_OVERFLOW_CLIP;
+}
+
 typedef struct FBox FBox;
 typedef struct FLine FLine;
 typedef struct FFrag FFrag;
@@ -218,13 +247,14 @@ struct FItem {
     const flow_style_t *style;      // what the item is drawn in
     // TEXT, MARKER: the bytes to lay out. For page text, a slice of the
     // node's processed copy starting `offset` bytes in — the range a
-    // selection maps back through.
+    // selection maps back through — or, under text-transform, a copy of
+    // that slice with its case changed and its length kept.
     const char *text;
     uint32_t len, offset;
     bool generated;                 // TEXT the sheet made: a quote mark, a ruby parenthesis
     bool continuation;              // OPEN: an earlier piece exists; CLOSE: a block split it here
     FInline *inl;                   // OPEN, CLOSE
-    FBox *content;                  // ATOMIC with a block of its own (a marquee)
+    FBox *content;                  // ATOMIC: an inline-block's own block; NULL when replaced
     int32_t link, control;          // ATOMIC: libpage's indexes, or -1
 };
 
@@ -335,12 +365,12 @@ FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
                       const FStyles *styles, const flow_env_t *env);
 void f_boxes_free(FBoxes *boxes);
 // CSS white space processing (CSS 2.1 §16.6.1), for every text the page
-// is laid out as — a text node's, and a missing picture's alt. Whether a
-// white-space value collapses spaces; then `n` bytes of `in` into `out`
-// (room for `n`), each run of spaces, tabs and line breaks one space, and
-// none at the start when `*space` says the text before ended in one. It
-// leaves `*space` saying whether this one does, and returns the length.
-bool f_collapsible(flow_white_space_t ws);
+// is laid out as — a text node's, and a missing picture's alt — where
+// f_ws_collapses says spaces collapse: `n` bytes of `in` into `out` (room
+// for `n`), each run of spaces, tabs and line breaks one space, and none
+// at the start when `*space` says the text before ended in one. It leaves
+// `*space` saying whether this one does, and returns the length. A caller
+// that keeps line breaks (pre-line) collapses the text between them.
 uint32_t f_collapse_white(const char *in, uint32_t n, char *out, bool *space);
 // One line per box and per item, indented by depth; the same contract as
 // f_style_dump.

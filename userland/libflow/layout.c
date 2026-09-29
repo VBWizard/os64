@@ -128,6 +128,42 @@ static int64_t len(flow_length_t l, int64_t base)
     return 0;
 }
 
+// A width or height the page gave, as the content box's: a border-box one
+// less its frame (CSS Sizing 3 § 4.1), and never below zero.
+static int64_t content_of(const flow_style_t *s, flow_length_t v, int64_t base, int64_t frame)
+{
+    int64_t x = len(v, base) - (s->box_sizing == FLOW_BORDER_BOX ? frame : 0);
+    return x > 0 ? x : 0;
+}
+
+// A content width held to max-width and then min-width (§10.4): when the
+// two disagree, the minimum wins. Measured against no containing block
+// (`base` 0, an intrinsic width), a percentage limit binds nothing.
+static bool binds(flow_length_t limit, int64_t base)
+{
+    return limit.kind == FLOW_LENGTH_PX || (limit.kind == FLOW_LENGTH_PERCENT && base > 0);
+}
+
+static int64_t clamp_width(const flow_style_t *s, int64_t w, int64_t base, int64_t frame)
+{
+    if (binds(s->max_width, base))
+        w = min64(w, content_of(s, s->max_width, base, frame));
+    if (binds(s->min_width, base))
+        w = max64(w, content_of(s, s->min_width, base, frame));
+    return w;
+}
+
+// The same for a height. Only a length binds: a percentage would need a
+// containing block of known height, and libflow sizes heights by content.
+static int64_t clamp_height(const flow_style_t *s, int64_t h, int64_t frame)
+{
+    if (s->max_height.kind == FLOW_LENGTH_PX)
+        h = min64(h, content_of(s, s->max_height, 0, frame));
+    if (s->min_height.kind == FLOW_LENGTH_PX)
+        h = max64(h, content_of(s, s->min_height, 0, frame));
+    return h;
+}
+
 static void fail(L *l)
 {
     l->failed = true;
@@ -353,7 +389,11 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     Replaced r = {0, 0, false, false};
     bool w_set = width_given(s);
     bool h_set = height_given(s);
-    int64_t w = max64(0, len(s->width, cbw)), h = h_set ? max64(0, hold_len(s->height.value)) : 0;
+    int64_t fw = s->border_width[FLOW_LEFT] + s->border_width[FLOW_RIGHT] +
+                 len(s->padding[FLOW_LEFT], cbw) + len(s->padding[FLOW_RIGHT], cbw);
+    int64_t fh = s->border_width[FLOW_TOP] + s->border_width[FLOW_BOTTOM] +
+                 len(s->padding[FLOW_TOP], cbw) + len(s->padding[FLOW_BOTTOM], cbw);
+    int64_t w = content_of(s, s->width, cbw, fw), h = h_set ? content_of(s, s->height, 0, fh) : 0;
     int32_t iw = 0, ih = 0;
     bool known = l->env->replaced_size != NULL &&
                  l->env->replaced_size(l->env->ctx, node, &iw, &ih) && iw >= 0 && ih >= 0;
@@ -371,6 +411,22 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
         } else {
             r.w = kw;
             r.h = kh;
+        }
+        // §10.4's limits, the picture's own ratio kept in whichever
+        // dimension the page left to it (`img { max-width: 100% }`). The
+        // rest of §10.4's table — both limits binding at once against the
+        // ratio — is booked (GARB.md § Booked).
+        int64_t held = clamp_width(s, r.w, cbw, fw);
+        if (held != r.w) {
+            if (!h_set && r.w > 0)
+                r.h = r.h * held / r.w;
+            r.w = held;
+        }
+        held = clamp_height(s, r.h, fh);
+        if (held != r.h) {
+            if (!w_set && r.h > 0)
+                r.w = r.w * held / r.h;
+            r.h = held;
         }
         return r;
     }
@@ -520,11 +576,6 @@ static bool ends_in_space(const Segs *s)
     return false;
 }
 
-static bool wraps(flow_white_space_t ws)
-{
-    return ws == FLOW_WS_NORMAL || ws == FLOW_WS_PRE_WRAP;
-}
-
 // A space's advance in these fonts, for spaces with no other measure.
 static int64_t space_advance(L *l, const Fonts *f)
 {
@@ -552,7 +603,7 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
     if (n == 0 || !fonts_for(l, style, &f))
         return;
     flow_white_space_t ws = style->white_space;
-    bool collapsible = f_collapsible(ws);
+    bool collapsible = f_ws_collapses(ws);
     bool whole = ws == FLOW_WS_PRE || ws == FLOW_WS_NOWRAP;
     uint32_t lead = 0;
     if (s->drop_space && collapsible)
@@ -688,8 +739,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
     for (const FItem *it = ifc->items; it != NULL && !l->failed; it = it->next) {
         switch (it->kind) {
         case FI_TEXT: {
-            if (tabs == 0 && !(it->style->white_space == FLOW_WS_NORMAL ||
-                               it->style->white_space == FLOW_WS_NOWRAP))
+            if (tabs == 0 && !f_ws_collapses(it->style->white_space))
                 tabs = tab_interval_for(l, ifc->style);
             text_segments(l, s, it, it->text, it->len, it->style, tabs);
             break;
@@ -704,7 +754,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                 // under collapsing white-space its spaces collapse too.
                 const char *alt = os64_html_attr(it->node, "alt")->value;
                 uint32_t n = (uint32_t)os64_strlen(alt);
-                if (f_collapsible(st->white_space)) {
+                if (f_ws_collapses(st->white_space)) {
                     char *copy = alloc(l, n);
                     if (copy == NULL)
                         break;
@@ -719,7 +769,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                         next = next->next;
                     if (m > 0 && copy[m - 1] == ' ' && next != NULL && next->kind == FI_TEXT &&
                         next->len > 0 && next->text[0] == ' ' &&
-                        f_collapsible(next->style->white_space))
+                        f_ws_collapses(next->style->white_space))
                         m--;
                     alt = copy;
                     n = m;
@@ -762,7 +812,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                 if (it->node->tag == OS64_HTML_TAG_MARQUEE) {
                     r.w = room;
                 } else if (st->width.kind != FLOW_LENGTH_AUTO) {
-                    r.w = max64(0, len(st->width, cw));
+                    r.w = content_of(st, st->width, cw, fw);
                 } else {
                     // intrinsic() answers border-box widths with the frame's
                     // percentages at 0 (the containing block is not known
@@ -773,11 +823,12 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     r.w = min64(max64(in.min - f0, room), in.max - f0);
                     r.w = max64(0, r.w);
                 }
+                r.w = clamp_width(st, r.w, cw, fw);
             }
             g->atom = r;
             g->w = g->ml + fw + r.w + g->mr;
             g->keep_round = quirk_no_wrap_round(l, ifc, it);
-            bool wrap = wraps(st->white_space) && !g->keep_round;
+            bool wrap = f_ws_wraps(st->white_space) && !g->keep_round;
             g->wrap_after = wrap;
             if (wrap && s->n >= 2 && s->v[s->n - 2].kind != SG_BREAK)
                 s->v[s->n - 2].wrap_after = true;
@@ -807,7 +858,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             Seg *g = seg_add(l, s, SG_WBR);
             if (g != NULL) {
                 g->item = it;
-                g->wrap_after = wraps(it->style->white_space);
+                g->wrap_after = f_ws_wraps(it->style->white_space);
             }
             break;
         }
@@ -833,7 +884,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             // the item's to allow: the item is the nearest box holding both
             // the space and the text that follows (CSS Text 3 § 5).
             g->wrap_after = it->len > 0 && it->text[it->len - 1] == ' ' &&
-                            wraps(it->style->white_space);
+                            f_ws_wraps(it->style->white_space);
             break;
         }
         }
@@ -892,9 +943,12 @@ static int64_t spaces_width(const Seg *g, int64_t x)
 // line goes on a line of its own and overflows it (`overflow-wrap:
 // normal`). Returns the segment after the line; `*forced` says a break
 // ended it.
-static size_t break_line(const Segs *s, size_t start, int64_t avail, bool *forced)
+static size_t break_line(const Segs *s, size_t start, int64_t indent, int64_t avail,
+                         bool *forced)
 {
-    int64_t pen = 0;
+    // The pen starts where the line does, after a first line's indent, so
+    // a tab reaches the same stop here as where the line is laid down.
+    int64_t pen = indent;
     bool content = false;
     size_t brk = SIZE_MAX;
     *forced = false;
@@ -941,8 +995,15 @@ static void extend(Extent *e, bool *any, int64_t top, int64_t bottom)
 
 // An inline box's height is its line-height, the content area centred in
 // it with half the leading above and half below (§10.8.1).
-static Extent font_box(int64_t ascent, int64_t descent, int64_t line_height)
+// An inline box's extent about its baseline (CSS 2.1 § 10.8.1): its
+// ascent and descent with the leading — line-height less the two — split
+// above and below. `normal` is the face's own line height; a leading may
+// be negative, and then the box is shorter than its glyphs.
+static Extent font_box(const flow_style_t *s, int64_t ascent, int64_t descent, int64_t normal)
 {
+    int64_t line_height = s->line_height.kind == FLOW_LINE_NUMBER
+                              ? (int64_t)s->font_size * s->line_height.value / 1000
+                        : s->line_height.kind == FLOW_LINE_PX ? s->line_height.value : normal;
     int64_t half = (line_height - ascent - descent) / 2;
     return (Extent){-ascent - half, descent + (line_height - ascent - descent - half)};
 }
@@ -1024,6 +1085,16 @@ static bool last_baseline(const FBox *b, int64_t *out)
     return found;
 }
 
+// The indent of a context's first line (CSS Text 3 § 8.1): an element's
+// own, and an anonymous block's only when it holds its parent's first
+// line — the one before any block child.
+static int64_t first_line_indent(const FBox *ifc, int64_t cw)
+{
+    if (ifc->node == NULL && (ifc->parent == NULL || ifc->parent->first != ifc))
+        return 0;
+    return len(ifc->style->text_indent, cw);
+}
+
 // How many of a justified line's gaps end at or before pen position `x`:
 // how many widenings a fragment or an inline box's edge there moves by.
 static int64_t gaps_before(const int64_t *gap_at, size_t gaps, int64_t x)
@@ -1052,10 +1123,13 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
 
     flow_text_align_t align = ifc->style->text_align;
     bool justify = align == FLOW_ALIGN_JUSTIFY || align == FLOW_ALIGN_HTML_JUSTIFY;
+    // text-indent: the first line of an element's own text starts this far
+    // in, and has that much less room.
+    int64_t indent = first_line_indent(ifc, cw);
 
     for (size_t start = 0; start < s.n && !l->failed;) {
         bool forced;
-        size_t end = break_line(&s, start, cw, &forced);
+        size_t end = break_line(&s, start, indent, cw, &forced);
         // An inline that closes right where a break falls closes on this
         // line, not as an empty piece on the next.
         while (end < s.n && s.v[end].kind == SG_CLOSE)
@@ -1092,11 +1166,13 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         for (size_t k = 0; k < open.n; k++)
             open_x[k] = 0;
 
-        // Horizontal: lay the fragments down from 0; alignment shifts
-        // them after, once the line's width is known. Where each gap a
-        // justified line may grow ends is kept, so what comes after it —
-        // a fragment, an inline box's edge — moves by the gaps before it.
-        int64_t pen = 0, used = 0;
+        // Horizontal: lay the fragments down from 0, or from the first
+        // line's indent; alignment shifts them after, once the line's
+        // width is known. Where each gap a justified line may grow ends is
+        // kept, so what comes after it — a fragment, an inline box's edge
+        // — moves by the gaps before it.
+        int64_t pen = indent, used = indent;
+        indent = 0;
         size_t gaps = 0;
         bool content = false, has_text = false, has_break = false;
         Extent brk_box = {0, 0};
@@ -1106,7 +1182,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         // as tall as its neighbours. Quirks and limited-quirks modes make
         // none (the Quirks standard's 3.4) — the sliced-image fix.
         if (have_block_font && !l->any_quirks) {
-            Extent strut = font_box(bf.info.ascent, bf.info.descent, bf.info.line_height);
+            Extent strut = font_box(ifc->style, bf.info.ascent, bf.info.descent, bf.info.line_height);
             extend(&ext, &any, strut.top, strut.bottom);
         }
 
@@ -1143,16 +1219,18 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 uint32_t b1 = e->s1;
                 if (spread || (at_tail && e->collapsible))
                     b1 = e->b1;
+                // The tab stops first: they ask for the block's fonts, and
+                // a font list is good only until the next request.
+                bool pre = g->style->white_space == FLOW_WS_PRE ||
+                           g->style->white_space == FLOW_WS_PRE_WRAP;
+                int64_t tabs = 0;
+                for (uint32_t t = b0; t < b1 && pre; t++)
+                    if (g->text[t] == '\t') {
+                        tabs = tab_interval_for(l, ifc->style);
+                        break;
+                    }
                 Fonts f;
                 if (b1 > b0 && fonts_for(l, g->style, &f)) {
-                    bool pre = g->style->white_space == FLOW_WS_PRE ||
-                               g->style->white_space == FLOW_WS_PRE_WRAP;
-                    int64_t tabs = 0;
-                    for (uint32_t t = b0; t < b1 && pre; t++)
-                        if (g->text[t] == '\t') {
-                            tabs = tab_interval_for(l, ifc->style);
-                            break;
-                        }
                     // Tabs stop where the LINE's stops are, whatever this
                     // fragment starts after.
                     os64_text_run_t *run = run_of(l, &f, g->text + b0, b1 - b0,
@@ -1180,7 +1258,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     fr->decoration = p.decoration;
                     fr->decoration_colors = p.colors;
                     fr->link = p.link;
-                    Extent fb = font_box(v.ascent, v.descent, v.line_height);
+                    Extent fb = font_box(g->style, v.ascent, v.descent, v.line_height);
                     extend(&ext, &any, fb.top, fb.bottom);
                     // Pre-wrap spaces ending a line hang: they are drawn, and
                     // count for nothing — not the line's width, not the page's.
@@ -1238,12 +1316,17 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 int64_t hm = g->mt + fr->h + g->mb;
                 // The baseline of a replaced box is its bottom margin edge;
                 // an inline-block's is its last line's, where it has one,
-                // unless its overflow is not visible (§ 10.8.1) — which is
-                // the marquee's, `overflow: hidden !important` in the
-                // chapter, tested by its tag until libflow holds overflow.
+                // unless it is a scroll container (CSS 2.1 § 10.8.1, in CSS
+                // Inline 3's terms, where `overflow: clip` makes none): one a
+                // sheet makes so, or a marquee, which the chapter makes
+                // `overflow: hidden !important` — asked by its tag, because
+                // this chapter does not give the marquee that clip (it would
+                // cut the text a still marquee lets overflow; booked).
                 int64_t top = -hm, base = 0;
-                if (g->item->content != NULL && g->item->content->placed &&
-                    g->item->node->tag != OS64_HTML_TAG_MARQUEE &&
+                bool scroller = f_overflow_scrolls(g->style->overflow_x) ||
+                                f_overflow_scrolls(g->style->overflow_y) ||
+                                g->item->node->tag == OS64_HTML_TAG_MARQUEE;
+                if (g->item->content != NULL && g->item->content->placed && !scroller &&
                     last_baseline(g->item->content, &base))
                     top = -(g->mt + base - g->item->content->y);
                 switch (g->style->vertical_align) {
@@ -1300,7 +1383,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 fr->decoration = mp.decoration;
                 fr->decoration_colors = mp.colors;
                 fr->link = mp.link;
-                Extent fb = font_box(v.ascent, v.descent, v.line_height);
+                Extent fb = font_box(g->style, v.ascent, v.descent, v.line_height);
                 extend(&ext, &any, fb.top, fb.bottom);
                 pen += v.advance_x;
                 used = pen;
@@ -1342,7 +1425,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 // sliced images must not open a gap under the first.
                 Fonts f;
                 if (fonts_for(l, g->style, &f)) {
-                    brk_box = font_box(f.info.ascent, f.info.descent, f.info.line_height);
+                    brk_box = font_box(g->style, f.info.ascent, f.info.descent, f.info.line_height);
                     has_break = true;
                 }
                 break;
@@ -1366,7 +1449,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
             for (FSpan *sp = line->spans; sp != NULL; sp = sp->next) {
                 Fonts f;
                 if (fonts_for(l, sp->inl->style, &f)) {
-                    Extent fb = font_box(f.info.ascent, f.info.descent, f.info.line_height);
+                    Extent fb = font_box(sp->inl->style, f.info.ascent, f.info.descent, f.info.line_height);
                     extend(&ext, &any, fb.top, fb.bottom);
                 }
             }
@@ -1396,7 +1479,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
             for (int32_t k = 0; k < l->nmarkers; k++) {
                 Fonts mf;
                 if (fonts_for(l, l->markers[k]->style, &mf)) {
-                    Extent mb = font_box(mf.info.ascent, mf.info.descent, mf.info.line_height);
+                    Extent mb = font_box(l->markers[k]->style, mf.info.ascent, mf.info.descent, mf.info.line_height);
                     extend(&ext, &any, mb.top, mb.bottom);
                 }
             }
@@ -1547,14 +1630,18 @@ static void translate(FBox *b, int64_t dx, int64_t dy)
 }
 
 // A box whose margins never collapse with its content's: the root, a
-// table and its cells and captions, a replaced block, and an atom's
-// content — each starts a block formatting context of its own (§9.4.1,
+// table and its cells and captions, a replaced block, an atom's content,
+// and a block whose overflow scrolls or hides (CSS Overflow 3 § 3; `clip`
+// does not) — each starts a block formatting context of its own (§9.4.1,
 // §8.3.1).
 static bool bfc_root(const FBox *b)
 {
+    const flow_style_t *s = b->style;
+    bool scroller = b->node != NULL &&
+                    (f_overflow_scrolls(s->overflow_x) || f_overflow_scrolls(s->overflow_y));
     return b->parent == NULL || b->kind == FB_TABLE || b->kind == FB_CELL ||
-           b->kind == FB_CAPTION || b->kind == FB_REPLACED ||
-           (b->kind == FB_BLOCK && b->node != NULL && b->style->display == FLOW_DISPLAY_INLINE_BLOCK);
+           b->kind == FB_CAPTION || b->kind == FB_REPLACED || scroller ||
+           (b->kind == FB_BLOCK && b->node != NULL && s->display == FLOW_DISPLAY_INLINE_BLOCK);
 }
 
 // The HTML alignments reach a block child whose margins are both set, that
@@ -1575,6 +1662,9 @@ static int64_t html_align_shift(const FBox *b, int64_t rem)
 // §10.3.3: margin + border + padding + width = the containing block, auto
 // margins sharing what a set width leaves over — and zero when it leaves
 // nothing, the box overflowing to the right rather than off the left.
+// §10.4: a width that breaks max-width or min-width is worked again with
+// the limit as the width the page set — which is how `max-width: 40em;
+// margin: 0 auto` centres.
 static int64_t widths(FBox *b, int64_t cbw, int64_t forced_w, int64_t *ml_out)
 {
     const flow_style_t *s = b->style;
@@ -1590,12 +1680,18 @@ static int64_t widths(FBox *b, int64_t cbw, int64_t forced_w, int64_t *ml_out)
     int64_t mr = mr_auto ? 0 : len(s->margin[FLOW_RIGHT], cbw);
     bool w_auto = forced_w < 0 && s->width.kind == FLOW_LENGTH_AUTO;
     int64_t w;
-    if (w_auto) {
-        w = cbw - ml - mr - frame;
-        if (w < 0)
-            w = 0;
-    } else {
-        w = forced_w >= 0 ? forced_w : len(s->width, cbw);
+    if (w_auto)
+        w = max64(0, cbw - ml - mr - frame);
+    else
+        w = forced_w >= 0 ? forced_w : content_of(s, s->width, cbw, frame);
+    if (forced_w < 0) {
+        int64_t held = clamp_width(s, w, cbw, frame);
+        if (held != w) {
+            w = held;
+            w_auto = false;
+        }
+    }
+    if (!w_auto) {
         int64_t rem = cbw - (ml + mr + frame + w);
         if (ml_auto && mr_auto)
             ml = rem > 0 ? rem / 2 : 0;
@@ -1691,7 +1787,7 @@ static void place_marker(L *l, const FStyles *styles, FBox *b, int64_t content_x
     fr->w = v.advance_x;
     fr->h = v.ascent + v.descent;
     fr->x = content_x - fr->w;
-    Extent fb = font_box(v.ascent, v.descent, v.line_height);
+    Extent fb = font_box(b->style, v.ascent, v.descent, v.line_height);
     fr->baseline = has_first ? first : content_y - fb.top;
     fr->y = fr->baseline - v.ascent;
     b->marker_frag = fr;
@@ -1731,8 +1827,14 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     bool root = bfc_root(b);
     bool top_open = !root && b->border[FLOW_TOP] == 0 && b->padding[FLOW_TOP] == 0;
     bool height_auto = s->height.kind != FLOW_LENGTH_PX;
-    bool bottom_open = !root && height_auto && b->border[FLOW_BOTTOM] == 0 &&
+    // §8.3.1: a bottom margin meets the last child's, and a box's two
+    // margins meet each other, only across a height of auto and a
+    // min-height of zero.
+    bool min_height = s->min_height.kind == FLOW_LENGTH_PX && s->min_height.value > 0;
+    bool bottom_open = !root && height_auto && !min_height && b->border[FLOW_BOTTOM] == 0 &&
                        b->padding[FLOW_BOTTOM] == 0;
+    int64_t vframe_px = b->border[FLOW_TOP] + b->padding[FLOW_TOP] + b->padding[FLOW_BOTTOM] +
+                        b->border[FLOW_BOTTOM];
 
     b->x = cbx + ml;
     b->w = b->border[FLOW_LEFT] + b->padding[FLOW_LEFT] + cw + b->padding[FLOW_RIGHT] +
@@ -1788,7 +1890,7 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     if (b->marker != NULL && (top_open ? in.first < 0 : in.y == content_top)) {
         Fonts f;
         if (fonts_for(l, s, &f)) {
-            Extent fb = font_box(f.info.ascent, f.info.descent, f.info.line_height);
+            Extent fb = font_box(s, f.info.ascent, f.info.descent, f.info.line_height);
             in.y += margins_sum(in.pm);
             in.pm = kNoMargins;
             if (in.first < 0)
@@ -1817,7 +1919,7 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     int64_t content_h;
     Margins pm_out;
     if (!height_auto) {
-        content_h = s->height.value;
+        content_h = content_of(s, s->height, 0, vframe_px);
         pm_out = margin_of(mb);
     } else if (bottom_open) {
         content_h = in.y - content_top;
@@ -1826,8 +1928,8 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
         content_h = in.y + margins_sum(in.pm) - content_top;
         pm_out = margin_of(mb);
     }
-    if (content_h < 0)
-        content_h = 0;
+    // Content taller than a max-height is drawn past it.
+    content_h = clamp_height(s, max64(0, content_h), vframe_px);
     b->placed = true;
     b->y = y_border;
     b->h = b->border[FLOW_TOP] + b->padding[FLOW_TOP] + content_h + b->padding[FLOW_BOTTOM] +
@@ -1881,7 +1983,9 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
     Segs s = {0};
     segments(l, ifc, 0, &s);
     Intr r = {0, 0};
-    int64_t word = 0, line = 0, space = 0;
+    // The first line's indent is part of its first word and of the line,
+    // a percentage of a width not known yet counting as nothing.
+    int64_t word = max64(0, first_line_indent(ifc, 0)), line = word, space = 0;
     for (size_t i = 0; i < s.n; i++) {
         const Seg *g = &s.v[i];
         switch (g->kind) {
@@ -1960,11 +2064,23 @@ static Intr intrinsic(L *l, FBox *b)
             }
         }
         // A width the page set is both, for anything but a cell, whose
-        // width is its column's business.
-        if (s->width.kind == FLOW_LENGTH_PX && b->kind != FB_CELL)
-            r.min = r.max = s->width.value;
-        r.min += hframe(b, 0);
-        r.max += hframe(b, 0);
+        // width is its column's business; so is a limit in pixels (a
+        // percentage of a width not known yet binds nothing).
+        int64_t frame = hframe(b, 0);
+        if (b->kind != FB_CELL) {
+            if (s->width.kind == FLOW_LENGTH_PX)
+                r.min = r.max = content_of(s, s->width, 0, frame);
+            if (s->max_width.kind == FLOW_LENGTH_PX) {
+                r.min = min64(r.min, content_of(s, s->max_width, 0, frame));
+                r.max = min64(r.max, content_of(s, s->max_width, 0, frame));
+            }
+            if (s->min_width.kind == FLOW_LENGTH_PX) {
+                r.min = max64(r.min, content_of(s, s->min_width, 0, frame));
+                r.max = max64(r.max, content_of(s, s->min_width, 0, frame));
+            }
+        }
+        r.min += frame;
+        r.max += frame;
     }
     b->intrinsic_known = true;
     b->intrinsic_min = r.min;
@@ -3075,6 +3191,11 @@ static int64_t right_edge(const FBox *b)
     if (!b->placed)
         return 0;
     int64_t r = b->x + b->w;
+    // What a box clips on an axis is not drawn past it there, so it widens
+    // nothing (CSS Overflow 3 § 2.2); what it would scroll is drawn, since
+    // nothing scrolls, and so it does.
+    if (f_overflow_clips(b->style->overflow_x))
+        return r;
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
             r = max64(r, fr->x + fr->w - fr->hang);
@@ -3087,12 +3208,14 @@ static int64_t right_edge(const FBox *b)
 }
 
 // How far down anything is drawn: a box's own bottom, and anything inside
-// it that overflows a height the page set.
+// it that overflows a height the page set — unless the box clips it.
 static int64_t bottom_edge(const FBox *b)
 {
     if (!b->placed)
         return 0;
     int64_t r = b->y + b->h;
+    if (f_overflow_clips(b->style->overflow_y))
+        return r;
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
             r = max64(r, fr->y + fr->h);

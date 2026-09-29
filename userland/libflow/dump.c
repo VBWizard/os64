@@ -103,7 +103,8 @@ static const char *const s_align[] = {"left", "right", "center", "justify", "htm
                                       "html-right", "html-center", "html-justify"};
 static const char *const s_valign[] = {"baseline", "sub", "super", "top", "text-top",
                                        "middle", "bottom", "html-middle"};
-static const char *const s_ws[] = {"normal", "pre", "nowrap", "pre-wrap"};
+static const char *const s_ws[] = {"normal", "pre", "nowrap", "pre-wrap", "pre-line"};
+static const char *const s_transform[] = {"none", "uppercase", "lowercase", "capitalize"};
 static const char *const s_list[] = {"disc", "circle", "square", "decimal", "lower-alpha",
                                      "upper-alpha", "lower-roman", "upper-roman",
                                      "disclosure-closed", "disclosure-open", "none"};
@@ -117,7 +118,8 @@ _Static_assert(F_ARRAY(s_generic) == FLOW_GENERIC_MONO + 1, "s_generic");
 _Static_assert(F_ARRAY(s_border) == FLOW_BORDER_GROOVE + 1, "s_border");
 _Static_assert(F_ARRAY(s_align) == FLOW_ALIGN_HTML_JUSTIFY + 1, "s_align");
 _Static_assert(F_ARRAY(s_valign) == FLOW_VALIGN_HTML_MIDDLE + 1, "s_valign");
-_Static_assert(F_ARRAY(s_ws) == FLOW_WS_PRE_WRAP + 1, "s_ws");
+_Static_assert(F_ARRAY(s_ws) == FLOW_WS_PRE_LINE + 1, "s_ws");
+_Static_assert(F_ARRAY(s_transform) == FLOW_TRANSFORM_CAPITALIZE + 1, "s_transform");
 _Static_assert(F_ARRAY(s_list) == FLOW_LIST_NONE + 1, "s_list");
 _Static_assert(F_ARRAY(s_visibility) == FLOW_COLLAPSE + 1, "s_visibility");
 _Static_assert(F_ARRAY(s_float) == FLOW_FLOAT_RIGHT + 1, "s_float");
@@ -199,6 +201,15 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, " bg=");
         color(b, env, s->background);
     }
+    if (s->background_image != NULL) {
+        static const char *const kRepeat[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
+        puts_(b, " bg-image=\"");
+        put(b, s->background_image, s->background_image_len);
+        putf(b, "\"@%d %s ", (int)s->background_sheet, kRepeat[s->background_repeat]);
+        length(b, s->background_position[0]);
+        puts_(b, "/");
+        length(b, s->background_position[1]);
+    }
     bool margins = false, paddings = false, borders = false;
     for (int i = 0; i < 4; i++) {
         margins |= !is_zero(s->margin[i]);
@@ -235,12 +246,41 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, " height=");
         length(b, s->height);
     }
+    static const char *const kLimits[4] = {" min-width=", " max-width=", " min-height=",
+                                           " max-height="};
+    const flow_length_t limits[4] = {s->min_width, s->max_width, s->min_height, s->max_height};
+    for (int i = 0; i < 4; i++)
+        if (!length_eq(limits[i], automatic)) {
+            puts_(b, kLimits[i]);
+            length(b, limits[i]);
+        }
+    if (s->box_sizing == FLOW_BORDER_BOX)
+        puts_(b, " border-box");
+    static const char *const kOverflow[] = {"visible", "hidden", "clip", "scroll", "auto"};
+    if (s->overflow_x != FLOW_OVERFLOW_VISIBLE || s->overflow_y != FLOW_OVERFLOW_VISIBLE)
+        putf(b, " overflow=%s/%s", kOverflow[s->overflow_x], kOverflow[s->overflow_y]);
     if (s->text_align != parent->text_align)
         putf(b, " align=%s", s_align[s->text_align]);
     if (s->vertical_align != FLOW_VALIGN_BASELINE)
         putf(b, " valign=%s", s_valign[s->vertical_align]);
     if (s->white_space != parent->white_space)
         putf(b, " ws=%s", s_ws[s->white_space]);
+    if (s->line_height.kind != parent->line_height.kind ||
+        s->line_height.value != parent->line_height.value) {
+        puts_(b, " line-height=");
+        if (s->line_height.kind == FLOW_LINE_NORMAL)
+            puts_(b, "normal");
+        else if (s->line_height.kind == FLOW_LINE_NUMBER)
+            putf(b, "%d.%03d", (int)(s->line_height.value / 1000), (int)(s->line_height.value % 1000));
+        else
+            unit(b, s->line_height.value);
+    }
+    if (!length_eq(s->text_indent, parent->text_indent)) {
+        puts_(b, " indent=");
+        length(b, s->text_indent);
+    }
+    if (s->text_transform != parent->text_transform)
+        putf(b, " transform=%s", s_transform[s->text_transform]);
     if (s->text_decoration & FLOW_DECORATION_UNDERLINE)
         puts_(b, " underline");
     if (s->text_decoration & FLOW_DECORATION_LINE_THROUGH)
@@ -494,6 +534,10 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
         putf(b, " link %d", (int)box->link);
     if (box->unfinished)
         puts_(b, " unfinished");
+    if (box->clipped) {
+        puts_(b, " clip");
+        box_rect(b, box->clip);
+    }
     puts_(b, "\n");
     for (const flow_box_t *c = box->first; c != NULL; c = c->next)
         tree_lines(b, c, depth + 1);

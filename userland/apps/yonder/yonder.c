@@ -222,12 +222,14 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len)
 // ── Pages ───────────────────────────────────────────────────────────────
 
 // A picture of the page's, one per ADDRESS: forty spacer GIFs are one
-// fetch. Its address is the page model's, which lives as long as it does.
-// QUEUED is yonder's to hand over; WAITING is in the pool.
+// fetch. Its address is the page model's, which lives as long as it does —
+// or, for one a sheet names, the table's own copy (`owned`). QUEUED is
+// yonder's to hand over; WAITING is in the pool.
 typedef enum { PIC_QUEUED, PIC_WAITING, PIC_SHOWN, PIC_FAILED, PIC_NOT_KEPT } PictureState;
 
 typedef struct {
     const char *url;
+    bool owned;
     PictureState state;
     os64_image_t image;             // a still picture's pixels
     os64_image_sequence_t *moving;  // or a moving one's, its frame on show
@@ -282,12 +284,19 @@ typedef struct {
     int32_t nsheets, sheets_waiting, sheets_ready;
     bool sheets_changed;
     garb_cascade_t *cascade;
+    // For each of the cascade's inputs, the sheet entry it is: what a url()
+    // in a winner is resolved against (flow_style_t.background_sheet).
+    int32_t cascade_entry[SHEETS_MAX];
     uint64_t serial;
     // The pictures, one per address, and for each of libpage's pictures
     // (os64_page_image) and backgrounds (os64_page_background) which of
     // these it is, -1 for one that will not be fetched.
     Picture *pics;
-    int32_t npics, *pic_of, *bg_of;
+    int32_t npics, cap_pics, *pic_of, *bg_of;
+    // The table's index by address (picture_for): open-addressed, at most
+    // half full, grown with the table.
+    int32_t *pic_slot;
+    size_t pic_slot_cap;
     // Still to come (QUEUED or WAITING), and of those, in the pool; the
     // next picture to hand it.
     int32_t waiting, in_flight, next_pic;
@@ -330,8 +339,11 @@ static void page_clear(Page *p)
     for (int32_t i = 0; i < p->npics; i++) {
         os64_image_free(&p->pics[i].image);
         os64_image_sequence_free(p->pics[i].moving);
+        if (p->pics[i].owned)
+            os64_free((char *)p->pics[i].url);
     }
     os64_free(p->pics);
+    os64_free(p->pic_slot);
     os64_free(p->pic_of);
     os64_free(p->bg_of);
     flow_free(p->tree);
@@ -375,18 +387,19 @@ static bool page_from_text(Page *p)
 // (garb/cascade.h). Its index, or -1 when it is not ready.
 // The cascade writes into each sheet's arena as it reads a rule's block
 // (garb_rules_of), so the page is not const here.
-static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *n)
+static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *entry, int32_t *n)
 {
     Sheet *sh = &p->sheets[e];
     if (!sh->ready)
         return -1;
     int32_t kids[SHEET_IMPORTS_MAX], nkids = 0;
     for (int32_t k = 0; k < sh->nimports; k++) {
-        int32_t at = sh->child[k] >= 0 ? sheet_emit(p, sh->child[k], in, n) : -1;
+        int32_t at = sh->child[k] >= 0 ? sheet_emit(p, sh->child[k], in, entry, n) : -1;
         if (at >= 0)
             kids[nkids++] = at;
     }
     int32_t at = (*n)++;
+    entry[at] = e;
     in[at] = (garb_sheet_in_t){
         .sheet = &sh->parsed,
         .media = sh->media,
@@ -405,6 +418,7 @@ static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *n)
 static bool page_lay_out(Page *p, int32_t width, int32_t height)
 {
     garb_cascade_t *cascade = p->cascade;
+    int32_t entry[SHEETS_MAX] = {0};
     garb_env_t view = {width, height};
     if (p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
                                                   garb_cascade_env(cascade).height != view.height))) {
@@ -412,7 +426,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height)
         int32_t n = 0;
         for (int32_t e = 0; e < p->nsheets; e++)
             if (p->sheets[e].importer < 0)
-                (void)sheet_emit(p, e, in, &n);
+                (void)sheet_emit(p, e, in, entry, &n);
         cascade = n > 0 ? garb_cascade(in, n, page_doc(p), view) : NULL;
         if (n > 0 && cascade == NULL)
             return false;
@@ -430,6 +444,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height)
     if (cascade != p->cascade) {
         garb_cascade_free(p->cascade);
         p->cascade = cascade;
+        os64_memcpy(p->cascade_entry, entry, sizeof(entry));
     }
     p->tree = fresh;
     p->laid_width = width;
@@ -800,6 +815,8 @@ static const os64_html_node_t *anchor_of(int32_t *offset)
     return b->node;
 }
 
+static void css_pictures(Page *p);
+
 // Lays the page on screen out again at the view's size. `again` lays it
 // out even at the size it has: a picture's size arrived. Without sheets
 // only the width moves anything; with them the height does too, which is
@@ -826,6 +843,7 @@ static void relayout(bool again)
         return;
     }
     g.laid_at = t1;
+    css_pictures(&g.page);
     if (anchor != NULL) {
         const flow_box_t *b = flow_box_for(g.page.tree, anchor);
         if (b != NULL)
@@ -920,6 +938,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     g.laid_at = t1;
     pictures_start(&g.page);
+    css_pictures(&g.page);
     forms_build();
     g.hover_link = g.pressed_link = -1;
     if (kind == NAV_BACK || kind == NAV_FORWARD)
@@ -1294,6 +1313,15 @@ static void open_address(const char *typed, NavKind kind, const way_position_t *
 
 // ── Pictures ────────────────────────────────────────────────────────────
 
+static char *copy_text(const char *text)
+{
+    size_t n = os64_strlen(text) + 1;
+    char *out = os64_malloc(n);
+    if (out != NULL)
+        os64_memcpy(out, text, n);
+    return out;
+}
+
 // Whether an arrival can move the page: libflow's rule, asked of the box
 // the element was laid out in. A picture with no box has nothing fixed.
 static bool picture_sized(const Page *p, const os64_html_node_t *node)
@@ -1335,12 +1363,41 @@ static void pictures_feed(Page *p)
     }
 }
 
-// The picture at `url`, gathered once however many times the page names
-// it: its index in the page's pictures, or -1 for an address nothing here
-// fetches. Found through `slot`, an open-addressed table over the page's
-// addresses, never by a walk of those gathered so far: a page names every
-// picture it likes, and a walk per picture is quadratic in them.
-static int32_t picture_for(Page *p, int32_t *slot, size_t cap, const char *url)
+static size_t url_hash(const char *url)
+{
+    uint64_t h = 1469598103934665603ull;       // FNV-1a over the address
+    for (const char *c = url; *c != '\0'; c++)
+        h = (h ^ (uint8_t)*c) * 1099511628211ull;
+    return (size_t)h;
+}
+
+// The table's index slot for `url`: where it is, or the empty slot where it
+// would go. The index is never full (picture_for keeps it half empty).
+static size_t picture_slot(const Page *p, const char *url)
+{
+    size_t at = url_hash(url) & (p->pic_slot_cap - 1);
+    while (p->pic_slot[at] >= 0 && !os64_streq(p->pics[p->pic_slot[at]].url, url))
+        at = (at + 1) & (p->pic_slot_cap - 1);
+    return at;
+}
+
+// The picture at `url` in the page's table, or -1: found through the index,
+// never by a walk of the table — a page names every picture it likes, and a
+// walk per picture is quadratic in them.
+static int32_t picture_find(const Page *p, const char *url)
+{
+    if (p->pic_slot == NULL || url == NULL)
+        return -1;
+    return p->pic_slot[picture_slot(p, url)];
+}
+
+// The picture at `url`, gathered once however many times the page or its
+// sheets name it: its index in the page's table, QUEUED for pictures_feed
+// when it is new, or -1 for an address nothing here fetches (or no memory).
+// `own` keeps a copy of the address, for one no page model holds (a
+// sheet's). The index grows with the table, so a sheet's pictures found
+// after a layout join the same one.
+static int32_t picture_for(Page *p, const char *url, bool own)
 {
     if (url == NULL)
         return -1;
@@ -1350,32 +1407,46 @@ static int32_t picture_for(Page *p, int32_t *slot, size_t cap, const char *url)
                       os64_memcmp(url, "file://", 7) == 0);
     if (!fetchable)
         return -1;
-    uint64_t h = 1469598103934665603ull;       // FNV-1a over the address
-    for (const char *c = url; *c != '\0'; c++)
-        h = (h ^ (uint8_t)*c) * 1099511628211ull;
-    size_t at = (size_t)h & (cap - 1);
-    while (slot[at] >= 0 && !os64_streq(p->pics[slot[at]].url, url))
-        at = (at + 1) & (cap - 1);
-    if (slot[at] >= 0)
-        return slot[at];
-    slot[at] = p->npics;
+    int32_t found = picture_find(p, url);
+    if (found >= 0)
+        return found;
+    if ((size_t)(p->npics + 1) * 2 > p->pic_slot_cap) {
+        size_t cap = 16;
+        while (cap < (size_t)(p->npics + 1) * 2)
+            cap *= 2;
+        int32_t *slot = os64_malloc(cap * sizeof(*slot));
+        if (slot == NULL)
+            return -1;
+        for (size_t k = 0; k < cap; k++)
+            slot[k] = -1;
+        os64_free(p->pic_slot);
+        p->pic_slot = slot;
+        p->pic_slot_cap = cap;
+        for (int32_t k = 0; k < p->npics; k++)
+            p->pic_slot[picture_slot(p, p->pics[k].url)] = k;
+    }
+    if (p->npics == p->cap_pics) {
+        int32_t cap = p->cap_pics > 0 ? p->cap_pics * 2 : 8;
+        Picture *grown = os64_realloc(p->pics, (size_t)cap * sizeof(*grown));
+        if (grown == NULL)
+            return -1;
+        os64_memset(grown + p->cap_pics, 0, (size_t)(cap - p->cap_pics) * sizeof(*grown));
+        p->pics = grown;
+        p->cap_pics = cap;
+    }
+    const char *kept = own ? copy_text(url) : url;
+    if (kept == NULL)
+        return -1;
+    p->pic_slot[picture_slot(p, kept)] = p->npics;
     Picture *pic = &p->pics[p->npics];
-    pic->url = url;
+    pic->url = kept;
+    pic->owned = own;
     pic->state = PIC_QUEUED;
     p->waiting++;
     return p->npics++;
 }
 
 // ── The page's sheets ───────────────────────────────────────────────────
-
-static char *copy_text(const char *text)
-{
-    size_t n = os64_strlen(text) + 1;
-    char *out = os64_malloc(n);
-    if (out != NULL)
-        os64_memcpy(out, text, n);
-    return out;
-}
 
 // Whether two addresses share an origin: scheme, host and port.
 static bool same_origin(const char *a, const char *b)
@@ -1584,6 +1655,66 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     }
 }
 
+// ── Pictures a sheet names ──────────────────────────────────────────────
+
+// A style's background url() resolved, as the cascade that chose it saw
+// it: against the sheet it was written in after that sheet's redirects, or
+// the page's base for a `style` attribute or a `style` element.
+static bool css_url(const Page *p, const flow_style_t *s, char *out, size_t cap)
+{
+    char written[OS64_FETCH_URL_MAX];
+    if (s->background_image == NULL || s->background_image_len >= sizeof(written))
+        return false;
+    os64_memcpy(written, s->background_image, s->background_image_len);
+    written[s->background_image_len] = '\0';
+    const char *base = os64_page_base(page_model(p));
+    int32_t in = s->background_sheet;
+    if (in >= 0) {
+        if (in >= SHEETS_MAX || p->cascade == NULL)
+            return false;
+        const Sheet *sh = &p->sheets[p->cascade_entry[in]];
+        if (sh->url != NULL)
+            base = sh->url;
+    }
+    return os64_page_url_absolute(base, written, out, cap);
+}
+
+// The picture a style's background names, in the page's table, or -1.
+// Asked for every box with a background on every paint: a copy, a resolve
+// and one index probe, small beside drawing the box. The layout-time walk
+// has the same answer; keeping it per box would mean a field on libflow's
+// tree for yonder's table, and one to keep true across relayouts.
+static int32_t css_picture(const Page *p, const flow_style_t *s)
+{
+    char url[OS64_FETCH_URL_MAX];
+    if (!css_url(p, s, url, sizeof(url)))
+        return -1;
+    return picture_find(p, url);
+}
+
+// After a layout: every picture the laid-out boxes' sheets put behind them
+// is sent for, once — a resize whose media query brings a new one fetches
+// it then.
+static void css_pictures_under(Page *p, const flow_box_t *b)
+{
+    for (; b != NULL; b = b->next) {
+        if (b->node != NULL && b->style->background_image != NULL) {
+            char url[OS64_FETCH_URL_MAX];
+            if (css_url(p, b->style, url, sizeof(url)))
+                (void)picture_for(p, url, true);
+        }
+        css_pictures_under(p, b->first);
+    }
+}
+
+static void css_pictures(Page *p)
+{
+    if (p->tree != NULL && p->sheets_ready > 0 && g.pool != NULL) {
+        css_pictures_under(p, flow_root(p->tree));
+        pictures_feed(p);
+    }
+}
+
 // Gathers the page's pictures and the pictures behind its boxes, one per
 // address, in tree order — libpage's lists are the record — and starts
 // feeding them to the pool. A picture whose address was refused, or names
@@ -1595,36 +1726,30 @@ static void pictures_start(Page *p)
     int32_t nb = model != NULL ? os64_page_nbackgrounds(model) : 0;
     if (n + nb <= 0 || g.pool == NULL)
         return;
-    size_t cap = 16;
-    while (cap < (size_t)(n + nb) * 2)
-        cap *= 2;
-    int32_t *slot = os64_malloc(cap * sizeof(*slot));
     p->pic_of = os64_calloc((size_t)(n > 0 ? n : 1), sizeof(*p->pic_of));
     p->bg_of = os64_calloc((size_t)(nb > 0 ? nb : 1), sizeof(*p->bg_of));
     p->pics = os64_calloc((size_t)(n + nb), sizeof(*p->pics));
-    if (slot == NULL || p->pic_of == NULL || p->bg_of == NULL || p->pics == NULL) {
-        os64_free(slot);
+    p->cap_pics = p->pics != NULL ? n + nb : 0;
+    if (p->pic_of == NULL || p->bg_of == NULL || p->pics == NULL) {
         os64_free(p->pic_of);
         os64_free(p->bg_of);
         os64_free(p->pics);
         p->pic_of = p->bg_of = NULL;
         p->pics = NULL;
+        p->cap_pics = 0;
         return;
     }
-    for (size_t k = 0; k < cap; k++)
-        slot[k] = -1;
     // A picture moves the page when any element naming it leaves its box
     // to the picture; a background never does, being painted, not laid out.
     for (int32_t i = 0; i < n; i++) {
         const os64_page_image_t *img = os64_page_image(model, i);
-        int32_t k = picture_for(p, slot, cap, img->src.url);
+        int32_t k = picture_for(p, img->src.url, false);
         p->pic_of[i] = k;
         if (k >= 0 && !picture_sized(p, img->node))
             p->pics[k].moves = true;
     }
     for (int32_t i = 0; i < nb; i++)
-        p->bg_of[i] = picture_for(p, slot, cap, os64_page_background(model, i)->src.url);
-    os64_free(slot);
+        p->bg_of[i] = picture_for(p, os64_page_background(model, i)->src.url, false);
     pictures_feed(p);
 }
 
@@ -2291,7 +2416,8 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
 // ── The page view ───────────────────────────────────────────────────────
 //
 // The verbs, executed: page coordinates moved onto the glass by the scroll
-// and the view's origin, and cut to the part of the view being painted (a
+// and the view's origin, and cut to the part of the view being painted —
+// and, for what a verb draws whole, to the clip the painter hands it (a
 // paint hook is handed no clip; libui's primitives clip only to the canvas).
 
 typedef struct {
@@ -2318,33 +2444,51 @@ static void glass_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
         os64_draw_fill_rect(gl->surf, r, 0xff000000u | colour);
 }
 
+// The verbs that draw something whole — a run, a picture — cut it to
+// `clip`, the painter's view narrowed by any `overflow` that clips the box,
+// met with what is being painted.
 static void glass_text(void *ctx, const flow_box_t *b, os64_gui_rect_t clip, uint32_t colour)
 {
-    (void)clip;
     const Glass *gl = ctx;
-    os64_text_draw(b->run, gl->surf, gl->clip, b->rect.x + gl->dx, b->baseline + gl->dy,
+    os64_gui_rect_t cut = on_glass(gl, clip);
+    if (cut.w <= 0 || cut.h <= 0)
+        return;
+    os64_text_draw(b->run, gl->surf, cut, b->rect.x + gl->dx, b->baseline + gl->dy,
                    0xff000000u | colour);
 }
 
-// A picture behind a box: libpage's list says whether there is one, and
-// one that has arrived is tiled, unscaled, over the box's colour.
+// A picture behind a box: the box's sheets, or else libpage's list, say
+// whether there is one, and one that has arrived is tiled, unscaled, over
+// the box's colour — a sheet's where its position and repeat say.
 static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area, int32_t ox,
                            int32_t oy, os64_gui_rect_t clip)
 {
-    (void)clip;
     const Glass *gl = ctx;
     const Page *p = &g.page;
-    int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
-    if (i < 0)
-        return false;
-    if (area == NULL || p->bg_of == NULL || p->bg_of[i] < 0 ||
-        p->pics[p->bg_of[i]].state != PIC_SHOWN)
+    // A sheet's picture outranks a `background` attribute's, as an author
+    // rule outranks a presentational hint.
+    bool css = b->style->background_image != NULL;
+    int32_t k = -1;
+    if (css) {
+        k = css_picture(p, b->style);
+    } else {
+        int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
+        if (i < 0)
+            return false;
+        k = p->bg_of != NULL ? p->bg_of[i] : -1;
+    }
+    if (area == NULL || k < 0 || p->pics[k].state != PIC_SHOWN)
         return true;
     uint32_t w, h;
-    const uint32_t *px = picture_pixels(&p->pics[p->bg_of[i]], &w, &h);
+    const uint32_t *px = picture_pixels(&p->pics[k], &w, &h);
+    bool rx = true, ry = true;
+    if (css)
+        yonder_background_place(b, w, h, &ox, &oy, &rx, &ry);
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
-    yonder_tile_picture(gl->surf->pixels, gl->surf->pitch_px, gl->clip, on, ox + gl->dx,
-                        oy + gl->dy, px, w, h);
+    os64_gui_rect_t cut = on_glass(gl, clip);
+    if (cut.w > 0 && cut.h > 0)
+        yonder_tile_picture(gl->surf->pixels, gl->surf->pitch_px, cut, on, ox + gl->dx,
+                            oy + gl->dy, rx, ry, px, w, h);
     return true;
 }
 
@@ -2352,25 +2496,30 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t
 // (scale.c); one on its way, or that will not come, keeps its frame.
 static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
-    (void)clip;
     const Glass *gl = ctx;
+    os64_gui_rect_t cut = on_glass(gl, clip);
+    if (cut.w <= 0 || cut.h <= 0)
+        return;
     const Page *p = &g.page;
     int32_t i = p->pic_of != NULL ? os64_page_image_for(page_model(p), b->node) : -1;
     if (i >= 0 && p->pic_of[i] >= 0 && p->pics[p->pic_of[i]].state == PIC_SHOWN) {
         uint32_t w, h;
         const uint32_t *px = picture_pixels(&p->pics[p->pic_of[i]], &w, &h);
         os64_gui_rect_t box = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
-        yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, gl->clip, box, px, w, h);
+        yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, px, w, h);
         return;
     }
-    os64_gui_rect_t r = on_glass(gl, c);
+    // The frame of one still coming, cut the same way.
+    Glass narrow = *gl;
+    narrow.clip = cut;
+    os64_gui_rect_t r = on_glass(&narrow, c);
     if (r.w <= 0 || r.h <= 0)
         return;
     os64_draw_fill_rect(gl->surf, r, 0xffe8e8e8u);
-    glass_fill(ctx, (os64_gui_rect_t){c.x, c.y, c.w, 1}, 0xa0a0a0);
-    glass_fill(ctx, (os64_gui_rect_t){c.x, c.y + c.h - 1, c.w, 1}, 0xa0a0a0);
-    glass_fill(ctx, (os64_gui_rect_t){c.x, c.y, 1, c.h}, 0xa0a0a0);
-    glass_fill(ctx, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xa0a0a0);
+    glass_fill(&narrow, (os64_gui_rect_t){c.x, c.y, c.w, 1}, 0xa0a0a0);
+    glass_fill(&narrow, (os64_gui_rect_t){c.x, c.y + c.h - 1, c.w, 1}, 0xa0a0a0);
+    glass_fill(&narrow, (os64_gui_rect_t){c.x, c.y, 1, c.h}, 0xa0a0a0);
+    glass_fill(&narrow, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xa0a0a0);
 }
 
 static FormWidget *form_widget(int32_t control);

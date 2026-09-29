@@ -70,6 +70,10 @@ typedef struct garb_cascade garb_cascade_t;
 // a winner like any other; libflow gives it its meaning.
 typedef struct {
     const garb_set_t *sets;
+    // For each winner, the index in garb_cascade's `sheets` of the sheet
+    // it was written in, or -1 for the element's `style` attribute: what a
+    // relative url() in it is resolved against (CSS Values 4 § 4.5.1).
+    const int32_t *sheet;
     int32_t n;
 } garb_style_t;
 

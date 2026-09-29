@@ -65,6 +65,32 @@ static uint32_t half_to_black(uint32_t c)
     return c / 2;
 }
 
+// n / d to nearest, ties up, for an n that may be negative (d > 0).
+static int32_t nearest(int64_t n, int64_t d)
+{
+    int64_t q = n + d / 2;
+    return (int32_t)(q >= 0 ? q / d : -((-q + d - 1) / d));
+}
+
+// A position from `start`: pixels, or a percentage of `room` plus a
+// calc()'s fixed part. In units of 1/6400 px: a percentage is 64ths.
+static int32_t place_axis(flow_length_t at, int32_t start, int32_t room)
+{
+    if (at.kind == FLOW_LENGTH_PERCENT)
+        return start + nearest((int64_t)room * at.value + (int64_t)at.offset * 100, 100 * 64);
+    return start + (at.kind == FLOW_LENGTH_PX ? nearest(at.value, 64) : 0);
+}
+
+void yonder_background_place(const flow_box_t *box, uint32_t iw, uint32_t ih, int32_t *ox,
+                             int32_t *oy, bool *repeat_x, bool *repeat_y)
+{
+    const flow_style_t *s = box->style;
+    *ox = place_axis(s->background_position[0], box->rect.x, box->rect.w - (int32_t)iw);
+    *oy = place_axis(s->background_position[1], box->rect.y, box->rect.h - (int32_t)ih);
+    *repeat_x = s->background_repeat == FLOW_REPEAT || s->background_repeat == FLOW_REPEAT_X;
+    *repeat_y = s->background_repeat == FLOW_REPEAT || s->background_repeat == FLOW_REPEAT_Y;
+}
+
 uint32_t yonder_lighter(uint32_t colour)
 {
     return channelwise(colour, half_to_white);
@@ -271,9 +297,24 @@ static bool is_picture(const flow_box_t *b)
 
 static void paint_box(void *ctx, const flow_box_t *b)
 {
-    const Painter *p = ctx;
+    const Painter *outer = ctx;
     if (b->style->visibility != FLOW_VISIBLE)
         return;
+    // A box an ancestor's `overflow` clips is drawn only inside the clip:
+    // every verb is handed the view, so the view is narrowed.
+    Painter clipped = *outer;
+    const Painter *p = outer;
+    if (b->clipped) {
+        os64_gui_rect_t v = outer->view, c = b->clip;
+        int64_t x0 = max64(v.x, c.x), y0 = max64(v.y, c.y);
+        int64_t x1 = min64((int64_t)v.x + v.w, (int64_t)c.x + c.w);
+        int64_t y1 = min64((int64_t)v.y + v.h, (int64_t)c.y + c.h);
+        if (x1 <= x0 || y1 <= y0)
+            return;
+        clipped.view = (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0),
+                                         (int32_t)(y1 - y0)};
+        p = &clipped;
+    }
     switch (b->kind) {
     case FLOW_BOX_LINE:
         return;

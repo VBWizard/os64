@@ -323,8 +323,9 @@ is not replaced — a `marquee`, or whatever a page's sheet makes one — is
 an atom with a block container of its own inside it: its set width, or
 shrink-to-fit (§10.3.9), its percentages of the line — a marquee as wide
 as its line — and on its last line's baseline (§10.8.1), or its bottom
-margin edge when it has none or its overflow is not visible: a marquee's,
-which the chapter makes `overflow: hidden`. `object`, `video` and `canvas` show their fallback
+margin edge when it has none or is a scroll container (any overflow but
+`visible` and `clip`, in CSS Inline 3's terms): a marquee counts as one
+by its tag, since the chapter's `overflow: hidden` is not given it (Booked). `object`, `video` and `canvas` show their fallback
 content, since nothing plays them; `embed` and `audio` have none and make
 nothing, and neither do `source`, `track` and `keygen`. `hr` is not
 special: it is an empty block whose borders are the rule, which is what
@@ -421,8 +422,10 @@ its own margins, borders and padding, with `auto` horizontal margins
 sharing the remainder (which is how `<table align=center>` and
 `<hr align=right>` centre and right-align); `width` in px or percent
 overrides `auto`; height is the content's unless set, and a set height
-that is too small still shows the content (no overflow clipping in the
-first cut — `overflow` is the cascade's and booked). **Vertical margins
+that is too small still shows the content, unless the box's `overflow`
+clips it (`hidden` or `clip`, which cut it and keep it off the page's
+extent); `scroll` and `auto` draw it, and it reaches the page's edge,
+since nothing here scrolls. **Vertical margins
 collapse** (§8.3.1) between siblings, between a parent and its first or
 last child when nothing separates them, and through an empty block — the
 whole rule, negative margins included: margins that adjoin are held as
@@ -603,7 +606,8 @@ first line's baseline; `list-style: none` (a `menu` in a nav) draws none.
 degrades honestly:** `float` and `clear` are recorded and ignored, so an
 `<img align=left>` sits inline at its baseline and the text runs after it
 rather than beside it — the page still reads, in order; `position`,
-`z-index`, `overflow` and `inline-table` are not laid out (GARB.md §
+`z-index` and `inline-table` are not laid out, and `overflow` only
+clips (GARB.md §
 Booked says what the cascade does with each). Each is a row in the booked
 table.
 
@@ -945,7 +949,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Floats and `clear` (`align=left/right` on `img`/`table`, `<br clear>`) | the float rules (§9.5) are a second placement pass with their own line-box shortening; the struct records them so the cascade and the first cut agree on the field | the first page whose layout is unreadable without a float — image-beside-text pages of the old web will vote early |
-| `position`, `z-index`, `overflow`, `inline-table` | none can arise from the first producer; from the cascade, `inline-table` is laid out as a table and the rest are not read into the struct | pile 2 (GARB.md) |
+| `position`, `z-index`, `inline-table`; scrolling | none can arise from the first producer; from the cascade, `inline-table` is laid out as a table, `position` and `z-index` are not read into the struct, and `overflow: scroll`/`auto` draw what they would scroll, since nothing scrolls | pile 2 (GARB.md) |
 | Collapsing borders (§17.6.2) | a table with `rules` or `frame` records `border-collapse: collapse`; it is laid out with no spacing and its borders drawn separately | the first ruled table that reads wrong for it |
 | A range-draw on a measuring run (F2 ask) | halves layout work and run memory; works without it | a page whose layout time is visible, measured, or a page that hits the memory cap through runs |
 | Incremental relayout | ruling 2 says rebuild; the face paces it | the engine, or a page whose rebuild is visibly slow |
@@ -954,7 +958,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Percentage heights (CSS 2.1 §10.5, and the Quirks standard's 3.5) | read as `auto` everywhere, pictures included; one resolved inside a table cell needs the cell's height before its content is laid out — the second layout pass Blink runs for exactly this — and the definite-ancestor case belongs to the same slice | a page shaped by `height=100%` pictures in cells, or the cascade's `height: 100%` chains |
 | `sub`/`sup` vertical shift | one `vertical-align` value each, cheap, and the first cut's fixtures do not cover it | the first page that reads wrong without it (footnotes) |
 | Soft hyphen breaks, CJK and script-aware breaking, bidi/RTL layout | the text profile is Western v1; bidi classes exist in libos64 for `dirname`, the layout half is a real slice | a page in one of those scripts worth reading |
-| `marquee` | the Rendering chapter has it; it is a timer in a face | a page whose meaning scrolls, which is none |
+| `marquee` | the Rendering chapter has it; it is a timer in a face. Its `overflow: hidden !important` is not given either: a still marquee's text runs past its box, and clipping it would hide that text; its baseline is its bottom edge regardless (layout.c asks the tag) | a page whose meaning scrolls, which is none |
 | A `legend` drawn on its `fieldset`'s border | not CSS 2.1's model; laid out inside the fieldset, first, where it still reads | a form page where it misleads |
 | Ruby annotations | CSS 2.1 has no ruby; `rt` is laid out inline after its base, `rp` hidden | a page in a script that uses it |
 | `dialog` and `popover` positioning | an open dialog is laid out where it stands (the `position` row) | the `position` row |

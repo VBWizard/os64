@@ -108,6 +108,37 @@ static void cascade_cases(void)
         "    p block font=\"Courier New\",\"Arial\",mono weight=700 margin=0/0/16/0\n"
         "      q inline font=\"Georgia\",serif\n");
 
+    // The limits and box-sizing as the struct holds them; `none` is none.
+    cascade_case("min-width, max-width, box-sizing", 800,
+        "<!doctype html><style>div { min-width: 10px; max-width: 50%; max-height: none;"
+        " min-height: 2em; box-sizing: border-box }</style><div>x</div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block min-width=10 max-width=50% min-height=32 border-box\n");
+
+    // 150% of the div's 10px computes to 15px, which the span inherits
+    // as 15px whatever its own size; 1.5 stays a number. 2em of 10 is 20.
+    cascade_case("line-height, text-indent, text-transform as they inherit", 800,
+        "<!doctype html><style>div { line-height: 150%; font-size: 10px; text-indent: 2em }"
+        " span { font-size: 20px } p { line-height: 1.5; text-transform: uppercase }</style>"
+        "<div>x<span>y</span></div><p>z</p>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block size=10 line-height=15 indent=20\n"
+        "      span inline size=20\n"
+        "    p block margin=16/0/16/0 line-height=1.500 transform=uppercase\n");
+
+    // A background picture keeps its url() as written and the sheet it
+    // came from (0: the page's first sheet; -1: a style attribute, which
+    // wins here). `right 10px bottom` is calc(100% - 10px) and 100%.
+    cascade_case("background pictures, their repeat and position", 800,
+        "<!doctype html><style>body { background: url(sky.png) no-repeat right 10px bottom }"
+        " p { background-image: url(a.gif) }</style>"
+        "<p style='background: url(b.gif) repeat-x 5px 50%'>x</p>",
+        PAGE_OPEN
+        "  body block bg-image=\"sky.png\"@0 no-repeat 100%-10/100% margin=8/8/8/8 holds-block\n"
+        "    p block bg-image=\"b.gif\"@-1 repeat-x 5/50% margin=16/0/16/0\n");
+
     // The layout dumps are test_libflow_layout.inc's: 16px text is 20
     // tall with its content area 2 below the line's top.
 
@@ -195,4 +226,182 @@ static void cascade_cases(void)
         "          block marquee 0 52 200 20\n"
         "            line 0 52 200 20 base 14\n"
         "              text \"m\" 0 54 12 16 serif 16\n");
+
+    // G5: box-sizing and the limits (CSS 2.1 § 10.4, CSS Sizing 3 § 4.1).
+    // The div's frame is 2 + 3 a side, 10; auto would make it 190 wide,
+    // max-width holds it to 100, and then its auto margins share the 90
+    // left over: 45 each. Its text starts 5 in, at 50, 7 down. The p is 50
+    // wide AS A BORDER BOX: its content 50 - 12 = 38, starting 6 in.
+    cascade_layout_case("max-width centres with auto margins; border-box",
+        "<!doctype html><style>body { margin: 0 } div { max-width: 100px; margin: 0 auto;"
+        " border: 2px solid; padding: 3px } p { margin: 0; width: 50px;"
+        " box-sizing: border-box; padding: 5px; border: 1px solid }</style>"
+        "<div>x</div><p>y</p>",
+        200,
+        "page 200 62\n"
+        "block html 0 0 200 62\n"
+        "  block body 0 0 200 62\n"
+        "    block div 45 0 110 30\n"
+        "      line 50 5 100 20 base 14\n"
+        "        text \"x\" 50 7 8 16 serif 16\n"
+        "    block p 0 30 50 32\n"
+        "      line 6 36 38 20 base 14\n"
+        "        text \"y\" 6 38 8 16 serif 16\n");
+
+    // A min-height stops the bottom margin collapsing through (§ 8.3.1):
+    // the first p's 10 still collapses up through the div and body (to y
+    // 10), but its bottom 10 stays inside the div, whose content is
+    // 20 + 10 = 30, held up to 50. The next p is 10 below that, at 70.
+    cascade_layout_case("min-height holds a box open",
+        "<!doctype html><style>body { margin: 0 } div { min-height: 50px }"
+        " p { margin: 10px 0 }</style><div><p>a</p></div><p>b</p>",
+        200,
+        "page 200 100\n"
+        "block html 0 0 200 100\n"
+        "  block body 0 10 200 80\n"
+        "    block div 0 10 200 50\n"
+        "      block p 0 10 200 20\n"
+        "        line 0 10 200 20 base 14\n"
+        "          text \"a\" 0 12 8 16 serif 16\n"
+        "    block p 0 70 200 20\n"
+        "      line 0 70 200 20 base 14\n"
+        "        text \"b\" 0 72 8 16 serif 16\n");
+
+    // `img { max-width: 100% }` in a 20px box: the 40x30 picture is held
+    // to 20 wide and keeps its ratio, 15 tall. On its line with the
+    // strut (14 above the baseline, 6 below) it makes the line 21.
+    cascade_layout_case("a picture's max-width keeps its ratio",
+        "<!doctype html><style>body { margin: 0 } div { width: 20px }"
+        " img { max-width: 100% }</style><div><img src=known.png></div>",
+        200,
+        "page 200 21\n"
+        "block html 0 0 200 21\n"
+        "  block body 0 0 200 21\n"
+        "    block div 0 0 20 21\n"
+        "      line 0 0 20 21 base 15\n"
+        "        atomic img 0 0 20 15\n");
+
+    // line-height (CSS 2.1 § 10.8.1). The face's ascent and descent are 16
+    // of it; the rest is leading, half above and half below. 30px: 7
+    // each way, so the line is 30 with its baseline 12 + 7 = 19 down and
+    // the text's top at 7. A number, 2, is 32 of a 16px font: 8 each way,
+    // baseline 20, the line from 30 to 62.
+    cascade_layout_case("line-height as a length and as a number",
+        "<!doctype html><style>body { margin: 0 } p { margin: 0; line-height: 30px }"
+        " div { line-height: 2 }</style><p>a</p><div>b</div>",
+        200,
+        "page 200 62\n"
+        "block html 0 0 200 62\n"
+        "  block body 0 0 200 62\n"
+        "    block p 0 0 200 30\n"
+        "      line 0 0 200 30 base 19\n"
+        "        text \"a\" 0 7 8 16 serif 16\n"
+        "    block div 0 30 200 32\n"
+        "      line 0 30 200 32 base 20\n"
+        "        text \"b\" 0 38 8 16 serif 16\n");
+
+    // text-indent moves each p's first line 20 in; text-transform changes
+    // the letters and not their places (every letter here is 8 wide, the
+    // space 4: "Ab Cd" is 36). pre-line collapses the spaces, drops the one
+    // before the newline, and breaks there: "a b", then "c".
+    cascade_layout_case("text-indent, text-transform, pre-line",
+        "<!doctype html><style>body { margin: 0 } p { margin: 0; text-indent: 20px }"
+        " .u { text-transform: uppercase } .c { text-transform: capitalize }"
+        " div { white-space: pre-line }</style>"
+        "<p>ab</p><p class=u>ab</p><p class=c>ab cd</p><div>a   b \n  c</div>",
+        200,
+        "page 200 100\n"
+        "block html 0 0 200 100\n"
+        "  block body 0 0 200 100\n"
+        "    block p 0 0 200 20\n"
+        "      line 0 0 200 20 base 14\n"
+        "        text \"ab\" 20 2 16 16 serif 16\n"
+        "    block p 0 20 200 20\n"
+        "      line 0 20 200 20 base 14\n"
+        "        text \"AB\" 20 22 16 16 serif 16\n"
+        "    block p 0 40 200 20\n"
+        "      line 0 40 200 20 base 14\n"
+        "        text \"Ab Cd\" 20 42 36 16 serif 16\n"
+        "    block div 0 60 200 40\n"
+        "      line 0 60 200 20 base 14\n"
+        "        text \"a b\" 0 62 20 16 serif 16\n"
+        "      line 0 80 200 20 base 14\n"
+        "        text \"c\" 0 82 8 16 serif 16\n");
+
+    // An atom whose margins outrun the line has no content width, never a
+    // negative one: 150 + 150 of margin in 184 leaves the marquee 0 wide at
+    // 8 + 150, its x overflowing it. Its overflow is hidden, so it sits on
+    // its bottom edge (§ 10.8.1) and the strut hangs 6 below: the line is 26.
+    // An inline-block a sheet clips sits on its bottom margin edge (CSS 2.1
+    // § 10.8.1), not its last line's baseline: a's baseline is the line's.
+    // What a box would scroll is drawn, since nothing scrolls: an
+    // overflow: auto box's 100px paragraph makes the page 100 wide, where a
+    // hidden one's would not.
+    cascade_layout_case("what a box would scroll widens the page",
+        "<!doctype html><style>body { margin: 0 } div { width: 30px; overflow: auto }"
+        " p { width: 100px; margin: 0 }</style><div><p>x</p></div>", 20,
+        "page 100 20\n"
+        "block html 0 0 20 20\n"
+        "  block body 0 0 20 20\n"
+        "    block div 0 0 30 20\n"
+        "      block p 0 0 100 20\n"
+        "        line 0 0 100 20 base 14\n"
+        "          text \"x\" 0 2 8 16 serif 16\n");
+
+    cascade_layout_case("an inline-block that clips sits on its bottom edge",
+        "<!doctype html><style>body { margin: 0 } span { display: inline-block;"
+        " overflow: hidden }</style>a<span>x</span>", 200,
+        "page 200 26\n"
+        "block html 0 0 200 26\n"
+        "  block body 0 0 200 26\n"
+        "    line 0 0 200 26 base 20\n"
+        "      text \"a\" 0 8 8 16 serif 16\n"
+        "      atomic span 8 0 8 20\n"
+        "        block span 8 0 8 20\n"
+        "          line 8 0 8 20 base 14 clip 8 0 8 20\n"
+        "            text \"x\" 8 2 8 16 serif 16 clip 8 0 8 20\n");
+
+    cascade_layout_case("an inline-block's margins wider than the line leave it no width",
+        "<!doctype html><style>marquee { margin: 0 150px }</style><marquee>x</marquee>",
+        200,
+        "page 200 42\n"
+        "block html 0 0 200 42\n"
+        "  block body 8 8 184 26\n"
+        "    line 8 8 184 26 base 20\n"
+        "      atomic marquee 158 8 0 20\n"
+        "        block marquee 158 8 0 20\n"
+        "          line 158 8 0 20 base 14\n"
+        "            text \"x\" 158 10 8 16 serif 16\n");
+
+    // overflow (CSS Overflow 3). The div hides: its content is cut to its
+    // padding box, 50 by 10, which every box inside carries as its clip;
+    // and it starts a block formatting context, so the p's 5px top margin
+    // stays inside it instead of moving it down. Its own overflow stops at
+    // its border box, so the page is the div's 10 tall.
+    cascade_layout_case("overflow: hidden clips, and holds a margin in",
+        "<!doctype html><style>body { margin: 0 } div { width: 50px; height: 10px;"
+        " overflow: hidden } p { margin: 5px 0 0; width: 100px }</style>"
+        "<div><p>ab cd ef</p></div>",
+        200,
+        "page 200 10\n"
+        "block html 0 0 200 10\n"
+        "  block body 0 0 200 10\n"
+        "    block div 0 0 50 10\n"
+        "      block p 0 5 100 20 clip 0 0 50 10\n"
+        "        line 0 5 100 20 base 14 clip 0 0 50 10\n"
+        "          text \"ab cd ef\" 0 7 52 16 serif 16 clip 0 0 50 10\n");
+
+    // overflow-x alone: the y axis computes to auto, which is drawn
+    // unclipped, so the clip is x's and the y span is everything.
+    cascade_layout_case("overflow-x: hidden clips one axis",
+        "<!doctype html><style>body { margin: 0 } div { width: 30px; overflow-x: hidden }"
+        " p { margin: 0; width: 60px }</style><div><p>ab</p></div>",
+        200,
+        "page 200 20\n"
+        "block html 0 0 200 20\n"
+        "  block body 0 0 200 20\n"
+        "    block div 0 0 30 20\n"
+        "      block p 0 0 60 20 clip 0 -1073741824 30 2147483647\n"
+        "        line 0 0 60 20 base 14 clip 0 -1073741824 30 2147483647\n"
+        "          text \"ab\" 0 2 16 16 serif 16 clip 0 -1073741824 30 2147483647\n");
 }

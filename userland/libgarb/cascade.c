@@ -44,6 +44,7 @@ typedef struct {
     Decl *decls;
     int32_t ndecls;
     uint32_t order;
+    int32_t sheet;              // which input sheet it came from
     // The element this rule last matched, and the specificity it matched
     // with — so one rule matched through two selectors is counted once.
     const os64_html_node_t *seen;
@@ -273,7 +274,7 @@ static bool read_decl(garb_cascade_t *c, garb_parsed_t *owner, const garb_decl_t
 }
 
 static void add_style_rule(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t *r,
-                           uint32_t *order)
+                           uint32_t *order, int32_t sheet)
 {
     garb_selectors_t *sel = garb_selectors_parse(owner, r->prelude, r->nprelude, c->quirks);
     if (sel == NULL)
@@ -287,6 +288,7 @@ static void add_style_rule(garb_cascade_t *c, garb_parsed_t *owner, const garb_r
     os64_memset(rule, 0, sizeof(*rule));
     rule->sel = sel;
     rule->order = (*order)++;
+    rule->sheet = sheet;
     rule->decls = alloc(c, (size_t)(nitems > 0 ? nitems : 1) * sizeof(Decl));
     if (rule->decls == NULL)
         return;
@@ -309,7 +311,7 @@ static bool at(const garb_rule_t *r, const char *name)
 }
 
 static void add_rules(garb_cascade_t *c, garb_parsed_t *owner, const garb_item_t *items,
-                      int32_t n, uint32_t *order, int depth)
+                      int32_t n, uint32_t *order, int depth, int32_t sheet)
 {
     if (depth > NEST_MAX) {
         c->incomplete = true;
@@ -321,7 +323,7 @@ static void add_rules(garb_cascade_t *c, garb_parsed_t *owner, const garb_item_t
         const garb_rule_t *r = items[i].rule;
         if (!r->at) {
             if (r->has_block)
-                add_style_rule(c, owner, r, order);
+                add_style_rule(c, owner, r, order, sheet);
             continue;
         }
         // The grouping rules whose contents join the sheet when they hold.
@@ -336,7 +338,7 @@ static void add_rules(garb_cascade_t *c, garb_parsed_t *owner, const garb_item_t
         garb_item_t *inner;
         int32_t ninner;
         (void)garb_rules_of(owner, r->block, r->nblock, &inner, &ninner);
-        add_rules(c, owner, inner, ninner, order, depth + 1);
+        add_rules(c, owner, inner, ninner, order, depth + 1, sheet);
     }
 }
 
@@ -693,6 +695,7 @@ typedef struct {
     const Decl *d;
     bool important, inline_;
     uint32_t spec, order;
+    int32_t sheet;              // -1 for the style attribute
 } Applied;
 
 static bool before(const Applied *a, const Applied *b)
@@ -825,10 +828,11 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
     for (int32_t k = 0; k < nm; k++)
         for (int32_t j = 0; j < (*m)[k].rule->ndecls; j++) {
             const Decl *d = &(*m)[k].rule->decls[j];
-            ap[na++] = (Applied){d, d->important, false, (*m)[k].spec, (*m)[k].rule->order};
+            ap[na++] = (Applied){d, d->important, false, (*m)[k].spec, (*m)[k].rule->order,
+                                 (*m)[k].rule->sheet};
         }
     for (int32_t j = 0; j < ninl; j++)
-        ap[na++] = (Applied){&inl[j], inl[j].important, true, 0, (uint32_t)j};
+        ap[na++] = (Applied){&inl[j], inl[j].important, true, 0, (uint32_t)j, -1};
     // Insertion sort into ascending precedence; the last write wins.
     for (int32_t i = 1; i < na; i++) {
         Applied x = ap[i];
@@ -888,6 +892,7 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
     }
     // The winners, one per longhand.
     garb_set_t win[GARB_NPROPS];
+    int32_t from[GARB_NPROPS];
     bool have[GARB_NPROPS];
     os64_memset(have, 0, sizeof(have));
     for (int32_t i = 0; i < na; i++) {
@@ -897,6 +902,7 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
         if (!d->pending) {
             for (int32_t k = 0; k < d->nsets; k++) {
                 win[d->sets[k].prop] = d->sets[k];
+                from[d->sets[k].prop] = ap[i].sheet;
                 have[d->sets[k].prop] = true;
             }
             continue;
@@ -928,6 +934,7 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
         }
         for (int32_t k = 0; k < n; k++) {
             win[sets[k].prop] = sets[k];
+            from[sets[k].prop] = ap[i].sheet;
             have[sets[k].prop] = true;
         }
     }
@@ -938,13 +945,17 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
     if (nwin == 0)
         return;
     garb_set_t *kept = alloc(c, (size_t)nwin * sizeof(garb_set_t));
-    if (kept == NULL)
+    int32_t *kept_from = alloc(c, (size_t)nwin * sizeof(int32_t));
+    if (kept == NULL || kept_from == NULL)
         return;
     int32_t k = 0;
     for (int p = 0; p < GARB_NPROPS; p++)
-        if (have[p])
+        if (have[p]) {
+            kept_from[k] = from[p];
             kept[k++] = win[p];
+        }
     slot->style.sets = kept;
+    slot->style.sheet = kept_from;
     slot->style.n = nwin;
 }
 
@@ -974,7 +985,7 @@ garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
         garb_parsed_t *sheet = sheets[s].sheet;
         if (!sheet_applies(c, sheets, n, s, 0))
             continue;
-        add_rules(c, sheet, sheet->items, sheet->nitems, &order, 0);
+        add_rules(c, sheet, sheet->items, sheet->nitems, &order, 0, s);
     }
     // Every element's slot: the table is sized for the tree.
     size_t elements = 0;
@@ -1069,7 +1080,7 @@ garb_env_t garb_cascade_env(const garb_cascade_t *c)
 
 garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *element)
 {
-    garb_style_t none = {NULL, 0};
+    garb_style_t none = {NULL, NULL, 0};
     if (c == NULL)
         return none;
     const Slot *s = slot_for(c, element, false);
@@ -1115,7 +1126,7 @@ size_t garb_cascade_dump(const garb_cascade_t *c, const os64_html_document_t *do
     if (cap > 0)
         out[0] = '\0';
     for (const os64_html_node_t *x = doc->document; x != NULL;) {
-        garb_style_t st = is_el(x) ? garb_style_for(c, x) : (garb_style_t){NULL, 0};
+        garb_style_t st = is_el(x) ? garb_style_for(c, x) : (garb_style_t){NULL, NULL, 0};
         if (st.n > 0) {
             puts_(&o, x->name != NULL ? x->name : "?");
             const os64_html_attr_t *id = os64_html_attr(x, "id");

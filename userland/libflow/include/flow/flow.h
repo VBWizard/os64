@@ -147,7 +147,25 @@ typedef enum {
     FLOW_WS_PRE,
     FLOW_WS_NOWRAP,
     FLOW_WS_PRE_WRAP,
+    FLOW_WS_PRE_LINE,               // spaces collapse, line breaks are kept
 } flow_white_space_t;
+
+// `line-height` as it inherits (CSS 2.1 § 10.8.1): `normal` is the face's
+// own; a number is a factor of each element's own font size and inherits
+// as the number; a length or a percentage computes to pixels and inherits
+// as those.
+typedef enum { FLOW_LINE_NORMAL = 0, FLOW_LINE_NUMBER, FLOW_LINE_PX } flow_line_height_kind_t;
+typedef struct {
+    flow_line_height_kind_t kind;
+    int32_t value;                  // NUMBER: thousandths; PX: flow_unit_t
+} flow_line_height_t;
+
+typedef enum {
+    FLOW_TRANSFORM_NONE = 0,
+    FLOW_TRANSFORM_UPPERCASE,
+    FLOW_TRANSFORM_LOWERCASE,
+    FLOW_TRANSFORM_CAPITALIZE,
+} flow_text_transform_t;
 
 typedef enum {
     FLOW_LIST_DISC = 0,
@@ -174,6 +192,15 @@ typedef enum { FLOW_VISIBLE = 0, FLOW_HIDDEN, FLOW_COLLAPSE } flow_visibility_t;
 typedef enum { FLOW_SEPARATE = 0, FLOW_COLLAPSE_BORDERS } flow_border_collapse_t;
 typedef enum { FLOW_CAPTION_TOP = 0, FLOW_CAPTION_BOTTOM } flow_caption_side_t;
 typedef enum { FLOW_FLOAT_NONE = 0, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT } flow_float_t;
+typedef enum { FLOW_CONTENT_BOX = 0, FLOW_BORDER_BOX } flow_box_sizing_t;
+typedef enum { FLOW_REPEAT = 0, FLOW_REPEAT_X, FLOW_REPEAT_Y, FLOW_NO_REPEAT } flow_repeat_t;
+typedef enum {
+    FLOW_OVERFLOW_VISIBLE = 0,
+    FLOW_OVERFLOW_HIDDEN,
+    FLOW_OVERFLOW_CLIP,
+    FLOW_OVERFLOW_SCROLL,
+    FLOW_OVERFLOW_AUTO,
+} flow_overflow_t;
 typedef enum { FLOW_CLEAR_NONE = 0, FLOW_CLEAR_LEFT, FLOW_CLEAR_RIGHT, FLOW_CLEAR_BOTH } flow_clear_t;
 
 typedef struct {
@@ -187,6 +214,19 @@ typedef struct {
     uint32_t color;                 // XRGB
     bool has_background;            // false = transparent
     uint32_t background;            // XRGB
+    // A picture behind the box from the page's own sheets (CSS Backgrounds
+    // 3 § 3): its url() as written, not terminated, and the index in the
+    // cascade's input of the sheet it was written in (-1 for a `style`
+    // attribute), which the face resolves it against and fetches. NULL
+    // for none. A `background` ATTRIBUTE's picture is libpage's list, and
+    // a sheet's outranks it.
+    const char *background_image;
+    uint32_t background_image_len;
+    int32_t background_sheet;
+    flow_repeat_t background_repeat;
+    // From the box's top-left corner: PX, or PERCENT of the room the
+    // picture leaves (a picture at 100% sits against the far edge).
+    flow_length_t background_position[2];
 
     flow_length_t margin[4];        // PX, PERCENT or AUTO
     flow_length_t padding[4];       // PX or PERCENT
@@ -196,10 +236,23 @@ typedef struct {
     flow_border_style_t border_style[4];
     uint32_t border_color[4];       // XRGB; `currentColor` resolved
     flow_length_t width, height;    // AUTO, PX or PERCENT
+    // The limits: PX or PERCENT, AUTO for none (`min-*: auto` is none too,
+    // outside flex and grid). A percentage on a height limit binds
+    // nothing, as a percentage height does not.
+    flow_length_t min_width, max_width, min_height, max_height;
+    // Whether width, height and their limits measure the content box or
+    // the border box (CSS Sizing 3 § 4.1).
+    flow_box_sizing_t box_sizing;
+    // Computed as CSS Overflow 3 § 3 says: a visible or clip axis beside
+    // one that scrolls or hides becomes auto or hidden.
+    flow_overflow_t overflow_x, overflow_y;
 
     flow_text_align_t text_align;
     flow_vertical_align_t vertical_align;
     flow_white_space_t white_space;
+    flow_line_height_t line_height;
+    flow_length_t text_indent;      // PX or PERCENT: the first line's; AUTO reads as 0
+    flow_text_transform_t text_transform;
     // This element's own decorations. CSS draws an ancestor's across its
     // descendants too, each in the colour of the element that drew it,
     // which is a fact libflow derives and not a property of the descendant.
@@ -225,6 +278,9 @@ typedef struct {
     void *ctx;
     // Fonts: the face's resolver; on the host, the fake backend. `families`
     // is a style's list — names as the page wrote them, then a generic.
+    // The list it answers is BORROWED until the next call: libflow lays out
+    // what it needs with one list before it asks again, and a run laid out
+    // with the fonts retains them for as long as the run lives.
     os64_font_status_t (*fonts)(void *ctx, const flow_family_list_t *families,
                                 bool bold, bool italic, uint32_t px,
                                 os64_text_font_t *const **list, size_t *count,
@@ -298,6 +354,11 @@ struct flow_box {
     // marks, an `rt`'s parentheses, a picture's alt), and `begin` indexes
     // nothing of the node's.
     uint32_t begin;
+    // What of this box may be drawn: the padding boxes of the ancestors
+    // whose `overflow` clips, met together, on the axes they clip. When
+    // `clipped` is false nothing clips it and `clip` means nothing.
+    os64_gui_rect_t clip;
+    bool clipped;
     uint8_t decoration;             // TEXT: FLOW_DECORATION_* drawn across it
     // TEXT: each drawn decoration's colour, the colour of the element that
     // drew it — an underline and a line-through may differ.
@@ -342,8 +403,8 @@ const flow_box_t *flow_root(const flow_tree_t *tree);
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 
-// The deepest box whose OWN rect holds (x, y), the last painted winning;
-// NULL for none. The face asks libpage what its node means, and a TEXT's
+// The deepest box whose OWN rect holds (x, y), the last painted winning,
+// and which no ancestor clips away there; NULL for none. The face asks libpage what its node means, and a TEXT's
 // run where in the text the pointer is (os64_text_hit).
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y);
 

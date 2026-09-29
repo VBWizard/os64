@@ -22,6 +22,7 @@
 #include "bar.h"
 #include "mail.h"
 #include "paint.h"
+#include "garb/cascade.h"
 #include "scale.h"
 #include "test_libflow_fonts.h"
 #include "os64/syscall_numbers.h"
@@ -241,20 +242,31 @@ static void rec_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
     out(&rec->out, "fill %d %d %d %d #%06x\n", r.x, r.y, r.w, r.h, colour);
 }
 
+// A text is drawn whole and cut by its verb, so a clip narrower than the
+// view — an ancestor's `overflow` — is part of what it was told.
+static void clip_note(Rec *rec, os64_gui_rect_t clip)
+{
+    if (clip.x != rec->view.x || clip.y != rec->view.y || clip.w != rec->view.w ||
+        clip.h != rec->view.h)
+        out(&rec->out, " clip %d %d %d %d", clip.x, clip.y, clip.w, clip.h);
+}
+
 static void rec_text(void *ctx, const flow_box_t *b, os64_gui_rect_t clip, uint32_t colour)
 {
-    (void)clip;
     Rec *rec = ctx;
-    out(&rec->out, "text \"%.*s\" %d %d #%06x\n", (int)b->length, b->text, b->rect.x, b->baseline,
+    out(&rec->out, "text \"%.*s\" %d %d #%06x", (int)b->length, b->text, b->rect.x, b->baseline,
         colour);
+    clip_note(rec, clip);
+    out(&rec->out, "\n");
 }
 
 static void rec_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     (void)b;
-    (void)clip;
     Rec *rec = ctx;
-    out(&rec->out, "image %d %d %d %d\n", c.x, c.y, c.w, c.h);
+    out(&rec->out, "image %d %d %d %d", c.x, c.y, c.w, c.h);
+    clip_note(rec, clip);
+    out(&rec->out, "\n");
 }
 
 static void rec_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
@@ -293,12 +305,27 @@ static os64_html_document_t *parse(const char *html, size_t len)
 }
 
 // Lays `html` out at `width` and paints `view`; the recording, or NULL.
+// With `css` the page's `style` elements are cascaded, as yonder does.
 static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect_t view,
-                      bool *escaped)
+                      bool *escaped, bool css)
 {
     os64_html_document_t *doc = parse(html, len);
     os64_page_t *page = os64_page_build(doc, kPage, NULL);
-    flow_tree_t *t = flow_layout(doc, page, width, &kEnv);
+    garb_parsed_t sheets[8];
+    garb_sheet_in_t in[8];
+    int32_t n = 0;
+    for (int32_t i = 0; css && i < os64_page_nsheets(page) && n < 8; i++) {
+        const os64_page_sheet_t *sh = os64_page_sheet(page, i);
+        if (sh->linked)
+            continue;
+        garb_parse_style_element(sh->node, &sheets[n]);
+        in[n] = (garb_sheet_in_t){.sheet = &sheets[n], .media = sh->media};
+        n++;
+    }
+    garb_cascade_t *c = css ? garb_cascade(in, n, doc, (garb_env_t){width, view.h}) : NULL;
+    flow_env_t env = kEnv;
+    env.cascade = c;
+    flow_tree_t *t = flow_layout(doc, page, width, &env);
     Rec rec = {{0}, view, false, page};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = {&rec, rec_fill, rec_text, rec_image, rec_control, rec_backdrop};
@@ -307,19 +334,28 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     if (escaped != NULL)
         *escaped = rec.escaped;
     flow_free(t);
+    garb_cascade_free(c);
+    for (int32_t k = 0; k < n; k++)
+        garb_free(&sheets[k]);
     os64_page_free(page);
     os64_html_document_free(doc);
     return rec.out.v;
 }
 
-static void paint_case(const char *name, const char *html, int32_t width, os64_gui_rect_t view,
-                       const char *expected)
+static void paint_page_case(const char *name, const char *html, int32_t width,
+                            os64_gui_rect_t view, bool css, const char *expected)
 {
     bool escaped = false;
-    char *got = paint_of(html, strlen(html), width, view, &escaped);
+    char *got = paint_of(html, strlen(html), width, view, &escaped, css);
     expect(name, got != NULL && strcmp(got, expected) == 0, got);
     expect(name, !escaped, "a fill reached past the viewport");
     free(got);
+}
+
+static void paint_case(const char *name, const char *html, int32_t width, os64_gui_rect_t view,
+                       const char *expected)
+{
+    paint_page_case(name, html, width, view, false, expected);
 }
 
 #include "test_yonder_cases.inc"
@@ -400,7 +436,7 @@ static void scale_cases(void)
     // Tiling a 2x2 picture {A,B / C,A} unscaled from the area's corner.
     uint32_t tiles[25] = {0};
     yonder_tile_picture(tiles, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5}, 0, 0,
-                        two, 2, 2);
+                        true, true, two, 2, 2);
     const uint32_t tiled[25] = {A, B, A, B, A, C, A, C, A, C, A, B, A, B, A,
                                 C, A, C, A, C, A, B, A, B, A};
     expect("tile: whole copies, and the last cut at the area's edge", pixels_are(tiles, tiled, 25),
@@ -410,7 +446,7 @@ static void scale_cases(void)
     // origin put them, and nothing outside the clip is written.
     uint32_t cut_tiles[25] = {0};
     yonder_tile_picture(cut_tiles, 5, (os64_gui_rect_t){1, 1, 3, 3}, (os64_gui_rect_t){0, 0, 5, 5},
-                        0, 0, two, 2, 2);
+                        0, 0, true, true, two, 2, 2);
     bool inside_same = true, outside_clear = true;
     for (int y = 0; y < 5; y++)
         for (int x = 0; x < 5; x++) {
@@ -426,7 +462,7 @@ static void scale_cases(void)
     // edge is past INT32_MAX, which int32 sums wrapped to a draw of nothing.
     uint32_t wide_tiles[25] = {0};
     yonder_tile_picture(wide_tiles, 5, (os64_gui_rect_t){0, 0, 5, 5},
-                        (os64_gui_rect_t){1, 0, INT32_MAX, 5}, 0, 0, two, 2, 2);
+                        (os64_gui_rect_t){1, 0, INT32_MAX, 5}, 0, 0, true, true, two, 2, 2);
     bool wide_ok = true;
     for (int y = 0; y < 5; y++)
         for (int x = 0; x < 5; x++)
@@ -438,7 +474,7 @@ static void scale_cases(void)
     // view is scrolled into): the area starts one pixel into a tile.
     uint32_t shifted_tiles[4] = {0};
     yonder_tile_picture(shifted_tiles, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){0, 0, 2, 2},
-                        -1, -3, two, 2, 2);
+                        -1, -3, true, true, two, 2, 2);
     const uint32_t from_origin[4] = {A, C, B, A};
     expect("tile: an origin outside the area lays the tiles from there",
            pixels_are(shifted_tiles, from_origin, 4), NULL);
@@ -446,9 +482,43 @@ static void scale_cases(void)
     uint32_t over_blue[2] = {0xff0000ffu, 0xff0000ffu};
     const uint32_t half_and_none[2] = {0x80ff0000u, 0x00ff0000u};
     yonder_tile_picture(over_blue, 2, (os64_gui_rect_t){0, 0, 2, 1}, (os64_gui_rect_t){0, 0, 2, 1}, 0,
-                        0, half_and_none, 2, 1);
+                        0, true, true, half_and_none, 2, 1);
     expect("tile: blended by alpha over the colour beneath",
            over_blue[0] == 0xff80007fu && over_blue[1] == 0xff0000ffu, NULL);
+
+    // repeat-x at (1, 2) in a 5x5 area: the one row of tiles, two tall
+    // from y 2, laid from x 1 both ways; no-repeat: the one copy at (1, 2).
+    uint32_t strip[25] = {0};
+    yonder_tile_picture(strip, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5}, 1, 2,
+                        true, false, two, 2, 2);
+    const uint32_t row_want[25] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, B, A, B, A, B,
+                                   A, C, A, C, A, 0, 0, 0, 0, 0};
+    expect("tile: repeat-x draws one row of tiles", pixels_are(strip, row_want, 25), NULL);
+    uint32_t single[25] = {0};
+    yonder_tile_picture(single, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5}, 1, 2,
+                        false, false, two, 2, 2);
+    const uint32_t single_want[25] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, A, B, 0, 0,
+                                   0, C, A, 0, 0, 0, 0, 0, 0, 0};
+    expect("tile: no-repeat draws the one copy", pixels_are(single, single_want, 25), NULL);
+
+    // A sheet's picture, 20x10, behind a 100x50 box at (10, 20):
+    // `right 10px center repeat-x` is calc(100% - 10px) and 50%, so x is
+    // 10 + (100 - 20) - 10 = 80 and y is 20 + (50 - 10) / 2 = 40.
+    flow_style_t st;
+    memset(&st, 0, sizeof(st));
+    st.background_position[0] = (flow_length_t){FLOW_LENGTH_PERCENT, 100 * 64, -10 * 64};
+    st.background_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    st.background_repeat = FLOW_REPEAT_X;
+    flow_box_t box;
+    memset(&box, 0, sizeof(box));
+    box.style = &st;
+    box.rect = (os64_gui_rect_t){10, 20, 100, 50};
+    int32_t ox = 0, oy = 0;
+    bool rx = false, ry = true;
+    yonder_background_place(&box, 20, 10, &ox, &oy, &rx, &ry);
+    expect("background: a position from the far edge, and one centred", ox == 80 && oy == 40,
+           NULL);
+    expect("background: repeat-x repeats across and not down", rx && !ry, NULL);
 }
 
 // ── The question bar: no click made before a question may answer it ─────
@@ -605,7 +675,7 @@ static void cost_cases(void)
     signal(SIGALRM, paint_hung);
     alarm(60);
     char *foot = paint_of(tall, strlen(tall), 800, (os64_gui_rect_t){0, INT32_MAX - 600, 800, 600},
-                          &tall_escaped);
+                          &tall_escaped, false);
     alarm(0);
     expect("decorations at the foot of a page past int32_t paint without wrapping",
            foot != NULL && !tall_escaped, NULL);
@@ -615,7 +685,7 @@ static void cost_cases(void)
         bool escaped = false;
         alarm(60);
         char *got = paint_of(pages[i], strlen(pages[i]), 800, (os64_gui_rect_t){0, 0, 800, 600},
-                             &escaped);
+                             &escaped, false);
         alarm(0);
         expect("a hostile size paints the viewport and no more", got != NULL && !escaped,
                pages[i]);
@@ -665,8 +735,8 @@ static void corpus(bool write)
             continue;
         }
         bool escaped = false;
-        char *top = paint_of(html, len, 800, (os64_gui_rect_t){0, 0, 800, 600}, &escaped);
-        char *mid = paint_of(html, len, 800, (os64_gui_rect_t){0, 3000, 800, 600}, &escaped);
+        char *top = paint_of(html, len, 800, (os64_gui_rect_t){0, 0, 800, 600}, &escaped, false);
+        char *mid = paint_of(html, len, 800, (os64_gui_rect_t){0, 3000, 800, 600}, &escaped, false);
         expect("corpus: every fill inside the viewport", !escaped, kCorpus[i]);
         size_t n = strlen(top) + strlen(mid) + 64;
         char *both = malloc(n);
@@ -710,7 +780,7 @@ int main(int argc, char **argv)
         if (html == NULL)
             return 2;
         int32_t w = atoi(argv[3]);
-        char *got = paint_of(html, len, w, (os64_gui_rect_t){0, 0, w, 1 << 20}, NULL);
+        char *got = paint_of(html, len, w, (os64_gui_rect_t){0, 0, w, 1 << 20}, NULL, false);
         fputs(got, stdout);
         free(got);
         free(html);

@@ -41,7 +41,8 @@ static uint32_t wrap(int64_t v, uint32_t m)
 }
 
 void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t area,
-                         int32_t ox, int32_t oy, const uint32_t *src, uint32_t sw, uint32_t sh)
+                         int32_t ox, int32_t oy, bool repeat_x, bool repeat_y,
+                         const uint32_t *src, uint32_t sw, uint32_t sh)
 {
     if (area.w <= 0 || area.h <= 0 || sw == 0 || sh == 0)
         return;
@@ -50,6 +51,15 @@ void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
     int32_t x0 = (int32_t)max64(area.x, clip.x), y0 = (int32_t)max64(area.y, clip.y);
     int32_t x1 = (int32_t)min64((int64_t)area.x + area.w, (int64_t)clip.x + clip.w);
     int32_t y1 = (int32_t)min64((int64_t)area.y + area.h, (int64_t)clip.y + clip.h);
+    // An axis that does not repeat has its one copy, where the origin is.
+    if (!repeat_x) {
+        x0 = (int32_t)max64(x0, ox);
+        x1 = (int32_t)min64(x1, (int64_t)ox + sw);
+    }
+    if (!repeat_y) {
+        y0 = (int32_t)max64(y0, oy);
+        y1 = (int32_t)min64(y1, (int64_t)oy + sh);
+    }
     for (int32_t y = y0; y < y1; y++) {
         const uint32_t *row = src + (uint64_t)wrap((int64_t)y - oy, sh) * sw;
         uint32_t *out = dst + (uint64_t)y * pitch;
