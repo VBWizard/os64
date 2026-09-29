@@ -929,6 +929,14 @@ static void limit_cases(void)
            nested_whole("<marquee>", "</marquee>", (F_DEPTH_MAX - 2) / 2, 4096) == 1, NULL);
     expect("an inline-block level costs two descents",
            nested_whole("<marquee>", "</marquee>", (F_DEPTH_MAX - 2) / 2 + 1, 4096) == 0, NULL);
+    // So is an absolute box's level (an open dialog is one with no sheet):
+    // it is laid out from inside its containing block's frame.
+    expect("absolute boxes nested exactly to the bound are whole",
+           nested_whole("<dialog open>", "</dialog>", (F_DEPTH_MAX - 2) / 2, 4096) == 1, NULL);
+    expect("an absolute level costs two descents",
+           nested_whole("<dialog open>", "</dialog>", (F_DEPTH_MAX - 2) / 2 + 1, 4096) == 0, NULL);
+    expect("an absolute chain past the bound is incomplete, not a crash",
+           nested_whole("<dialog open>", "</dialog>", 2000, 4096) == 0, NULL);
     expect("inline nesting counts against the same bound",
            nested_whole("<span>", "</span>", 2000, 4096) == 0, NULL);
     // Codex #147 round 5: display: contents is walked before any box is

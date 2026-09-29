@@ -572,6 +572,11 @@ const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y)
     return hit(tree->root, x, y);
 }
 
+const flow_box_t *flow_hit_in_flow(const flow_tree_t *tree, int32_t x, int32_t y)
+{
+    return tree != NULL && tree->root != NULL ? hit(tree->root, x, y) : NULL;
+}
+
 int32_t flow_npositioned(const flow_tree_t *tree)
 {
     return tree != NULL ? tree->npositioned : 0;

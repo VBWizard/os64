@@ -25,11 +25,17 @@ Where does the red box's top sit, measured from A's bottom edge?</p>
   <div class="line">before <div class="abs" id="x3"></div>after, a div</div>
 </div>
 
+<h3>3. An absolute DIV that LEADS its line</h3>
+<p>Nothing is written before it: does it sit at the line's top, or a line down?</p>
+<div class="box" id="c3">
+  <div class="line"><div class="abs" id="x4"></div>after, a leading div</div>
+</div>
+
 <pre id="out">(needs script)</pre>
 <script>
   function r(id) { return document.getElementById(id).getBoundingClientRect(); }
   const a1 = r('a1'), x1 = r('x1'), b1 = r('b1');
-  const c2 = r('c2'), x2 = r('x2'), x3 = r('x3');
+  const c2 = r('c2'), x2 = r('x2'), x3 = r('x3'), c3 = r('c3'), x4 = r('x4');
   document.getElementById('out').textContent =
     'Case 1: red top - A bottom = ' + (x1.top - a1.bottom) +
     '   (B top - A bottom = ' + (b1.top - a1.bottom) + ')\n' +
@@ -37,5 +43,7 @@ Where does the red box's top sit, measured from A's bottom edge?</p>
     ', top - container top = ' + (x2.top - c2.top) + '\n' +
     '        div box  left - container left = ' + (x3.left - c2.left) +
     ', top - container top = ' + (x3.top - c2.top) + '\n' +
+    'Case 3: leading div left - container left = ' + (x4.left - c3.left) +
+    ', top - container top = ' + (x4.top - c3.top) + '\n' +
     navigator.userAgent;
 </script>

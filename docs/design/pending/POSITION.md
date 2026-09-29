@@ -390,6 +390,7 @@ to disagree with. No luck."
 | Scrolling a positioned box's own overflow | nothing scrolls a box yet | box scrolling |
 | Form widgets under positioned boxes, between P1 and P2 | `flow_box_covered` is P2's | P2 |
 | A relative inline, or atom, painted in the positioned layer | an inline has no box to list, only pieces spread over lines: they move and paint in the flow's order | a page where a nudged inline must paint over its neighbours |
+| A block inside a relative inline, moved with it (CSS 2.1 § 9.2.1.1) | the offset lives on the inline's pieces and fragments; the block the inline is split round is laid out by the block flow, which knows no inline open round it | a page that nudges an inline holding a block by a visible amount |
 | `position` on the root element | it is laid out in the flow — absolute or not — and a relative root is a containing block that does not move | a page that positions its `html` |
 
 ## Review record

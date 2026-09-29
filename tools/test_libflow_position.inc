@@ -5,8 +5,10 @@
 
 static void position_style_cases(void)
 {
-    // § 9.7: an absolute or fixed box is blockified and floats nowhere; the
-    // display it was given survives as one bit. A list item stays one. A
+    // § 9.7: an absolute box is blockified and floats nowhere; the display
+    // it was given survives as one bit. A list item stays one. A fixed box
+    // is laid out in the flow until P2, so it keeps the display it was
+    // given. A
     // translucent background on an OUT-OF-FLOW box draws nothing, a
     // relative one's is laid over the paper as ever (0.5 black on fefefe
     // is 7f); an opaque one is drawn. z-index is kept; opacity is clamped
@@ -19,6 +21,7 @@ static void position_style_cases(void)
         ".ins{inset:1px 2% auto -3px}</style>"
         "<span class=a>a</span><img class=a><span class=a style='display:inline-block'>b</span>"
         "<div class=a style='display:table-cell;float:left'>c</div><li class=f>d</li>"
+        "<span class=f>e</span>"
         "<div class='a glass'>g</div><div class='r glass'>h</div><div class='a ink'>k</div>"
         "<span class='r z'>z</span><span class='r zn o'>y</span><b class=h>x</b><i class=big>w</i>"
         "<div class='r ins'>i</div><span style='position:absolute;display:contents'>c</span>",
@@ -30,6 +33,7 @@ static void position_style_cases(void)
         "    span block position=absolute specified-inline\n"
         "    div block position=absolute\n"
         "    li list-item position=fixed\n"
+        "    span inline position=fixed\n"
         "    div block position=absolute\n"
         "    div block bg=#7f7f7f position=relative\n"
         "    div block bg=#000000 position=absolute\n"
@@ -54,6 +58,18 @@ static void position_style_cases(void)
 
 static void position_layout_cases(void)
 {
+    // A fixed span inside a link stays on its line: laid out as relative
+    // until P2, it splits nothing.
+    {
+        char *got = cascade_layout_of("<!doctype html><p>before <a href=x>link "
+                                      "<span style='position:fixed'>top</span> more</a> after</p>",
+                                      400);
+        expect("positioned: a fixed span in a link splits no paragraph",
+               got != NULL && strstr(got, "block anon") == NULL &&
+                   strstr(got, "block span") == NULL, got);
+        free(got);
+    }
+
     // An absolute box in each corner of a relative parent. The parent is
     // 2 + 3 + 200 + 3 + 2 = 210 across and 110 down; its padding box, the
     // containing block, is at (2, 2), 206 x 106. Right: 2 + 206 - 10 = 198;
@@ -349,6 +365,9 @@ static void position_door_cases(void)
            memcmp(h->text, "over", 4) == 0, NULL);
     h = flow_hit(t, 102, 8);
     expect("positioned door: beside the modal, the page's text",
+           h != NULL && h->kind == FLOW_BOX_TEXT && memcmp(h->text, "under", 5) == 0, NULL);
+    h = flow_hit_in_flow(t, 20, 8);
+    expect("positioned door: in the flow alone, the text under the modal",
            h != NULL && h->kind == FLOW_BOX_TEXT && memcmp(h->text, "under", 5) == 0, NULL);
     h = flow_hit(t, 150, 28);
     expect("positioned door: an unpainted box is still there to be pointed at",

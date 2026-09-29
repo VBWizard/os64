@@ -150,12 +150,12 @@ harness's containment invariant all use the overflow rect. Boxes are:
   the counter is not the page's data.
 
 Plus four facts about the whole: the page height, the page WIDTH (the
-root's overflow width, which exceeds the width passed in exactly when a
-table or an unbreakable word overflowed — the number a horizontal
-scrollbar is sized from), `incomplete` (memory, the arena budget, the
-depth bound or a run limit stopped it partway — what is there is real),
-and the image and control boxes as lists so the face can place pictures
-and widgets without walking.
+root's overflow width, which exceeds the width passed in when a table or
+an unbreakable word overflowed or a positioned box reaches past it — the
+number a horizontal scrollbar is sized from), `incomplete` (memory, the
+arena budget, the depth bound or a run limit stopped it partway — what
+is there is real), and the image and control boxes as lists so the face
+can place pictures and widgets without walking.
 
 ## The three passes
 
@@ -668,8 +668,10 @@ not scale with size, which a layout test needs it to.
 `userland/libflow/include/flow/flow.h` is the door, and its comments are
 its contract; this is what it offers and why.
 
-- **`flow_layout(doc, model, width, env)`** — NULL on no memory only;
-  otherwise a tree whose `flow_incomplete` says whether it is whole. Every
+- **`flow_layout(doc, model, width, env)`** — NULL on no memory, on
+  missing inputs, or on a cascade judged at another viewport height than
+  the one handed in (POSITION.md); otherwise a tree whose
+  `flow_incomplete` says whether it is whole. Every
   call is a whole rebuild (ruling 2): the face calls it on load, on
   resize, when an image's size arrives, when a control is edited in a way
   that changes its size, and never more than once per frame. `flow_env_t`
@@ -691,7 +693,8 @@ its contract; this is what it offers and why.
   searched through overflow rects, the last one painted winning (the one
   on top): the positioned list backwards, then the ordinary tree. The face
   then asks libpage what its node MEANS and a TEXT's run where in the text
-  the pointer is (`os64_text_hit`).
+  the pointer is (`os64_text_hit`). `flow_hit_in_flow` asks the ordinary
+  tree alone, which is what a scroll position is anchored to.
 - **`flow_box_for(tree, node)`** — a node's first box: where a fragment
   link scrolls to, where a control's widget goes. NULL for a node with
   none (hidden, `display: none`, or past where an incomplete layout
@@ -811,7 +814,10 @@ LIBPAGE.md's rule restated for geometry:
   as a block level's stack — an element level, each part a table adds
   (row group, row), anonymous ones included, and an inline-block's
   content TWICE, since a level of it holds a line's frame as well as a
-  block's — and at `F_DEPTH_MAX` (512) it stops exactly as it does when
+  block's, and an absolute box's level TWICE, since it is laid out from
+  inside its containing block's frame with the positioned layout's frames
+  on top of a block's (POSITION.md) — and at `F_DEPTH_MAX` (512) it stops
+  exactly as it does when
   memory runs out: the tree is `incomplete`, and what it holds is a
   prefix of the whole build. libhtml refuses past its own limit the same
   way, rather than flattening. Every pass after the build recurses along
@@ -821,7 +827,9 @@ LIBPAGE.md's rule restated for geometry:
   shipped `-O2` with the whole stack's slices in, a block chain 512
   deep and a table nest at the bound lay out in under 448KB, and a
   chain of inline-blocks, which needed 640-768KB before it was charged
-  double, now stops at half the depth; a thread has 1MB. The host suite
+  double, now stops at half the depth — as does a chain of absolute
+  boxes, 1472 bytes a level by the shipped frames against a block's 704,
+  which needed 668KB; a thread has 1MB. The host suite
   lays out pages nested to and past the bound, both kinds, and asserts
   where each stops.
 - **Nothing blocks and nothing is cached across calls.** Every layout is

@@ -853,12 +853,13 @@ static void say_laid_out(uint64_t ms)
 }
 
 // The node at the top of the view, and how far below the view's top its box
-// sits, so a new layout can put that node back where it was.
+// sits, so a new layout can put that node back where it was: a node in the
+// flow, never an overlay drawn over it, which a new layout can put anywhere.
 static const os64_html_node_t *anchor_of(int32_t *offset)
 {
     if (g.page.tree == NULL)
         return NULL;
-    const flow_box_t *b = flow_hit(g.page.tree, g.sx + 1, g.sy + 1);
+    const flow_box_t *b = flow_hit_in_flow(g.page.tree, g.sx + 1, g.sy + 1);
     while (b != NULL && b->node == NULL)
         b = b->parent;
     if (b == NULL)

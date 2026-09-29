@@ -2211,18 +2211,20 @@ static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset)
 // What positioning does to the rest of a style (CSS 2.1 § 9.7), once every
 // origin has spoken. A face asking for the page as it reads in document
 // order (flow_env_t.static_only) gets every box static, and nothing here
-// fires. An absolute or fixed box is BLOCKIFIED — laid out as the block it
-// computes to, its float none — and keeps one bit of the display it was
-// given (flow_style_t.specified_inline). An out-of-flow box whose own
-// background is translucent draws none: `xrgb` lays the colour over the
-// paper, and a solid grey sheet over a whole page is worse than seeing
-// through an overlay (POSITION.md § What positioning costs).
+// fires. A box that leaves the flow (f_out_of_flow) is BLOCKIFIED — laid
+// out as the block it computes to, its float none — and keeps one bit of
+// the display it was given (flow_style_t.specified_inline); a fixed one is
+// in the flow until its slice, and keeps the display the page gave it, or
+// a fixed span in a link would split its paragraph. An out-of-flow box
+// whose own background is translucent draws none: `xrgb` lays the colour
+// over the paper, and a solid grey sheet over a whole page is worse than
+// seeing through an overlay (POSITION.md § What positioning costs).
 static void positioning(const Ctx *c, Spec *sp)
 {
     flow_style_t *s = &sp->s;
     if (c->env->static_only)
         s->position = FLOW_POSITION_STATIC;
-    if (s->position != FLOW_POSITION_ABSOLUTE && s->position != FLOW_POSITION_FIXED)
+    if (!f_out_of_flow(s))
         return;
     switch (s->display) {
     case FLOW_DISPLAY_NONE: case FLOW_DISPLAY_CONTENTS:
@@ -2239,7 +2241,7 @@ static void positioning(const Ctx *c, Spec *sp)
         break;
     }
     s->float_side = FLOW_FLOAT_NONE;
-    if (f_out_of_flow(s) && sp->bg_translucent)
+    if (sp->bg_translucent)
         s->has_background = false;
 }
 

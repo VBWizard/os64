@@ -820,18 +820,22 @@ static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
 
 // An out-of-flow box: under the context it was written in, which it does
 // not interrupt — among inline content with a placeholder where it stood,
-// among blocks where the flow had reached.
+// among blocks where the flow had reached. Its level costs two descents: it
+// is laid out from inside its containing block's frame, the positioned
+// layout's frames on top of a block's (LAYOUT.md § Bounds).
 static void absolute_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
 {
+    if (!descend(f->b))
+        return;
     FItem *place = NULL;
-    if (f->target != NULL) {
+    if (f->target != NULL)
         place = new_item(f->b, f->target, FI_PLACEHOLDER, el, &s->style);
-        if (place == NULL)
-            return;
-    }
-    FBox *box = element_box(f->b, f->target != NULL ? f->target : f->container, el, s, scope);
+    FBox *box = place != NULL || f->target == NULL
+                    ? element_box(f->b, f->target != NULL ? f->target : f->container, el, s, scope)
+                    : NULL;
     if (place != NULL)
         place->absolute = box;
+    ascend(f->b);
 }
 
 static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
