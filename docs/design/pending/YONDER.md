@@ -340,11 +340,11 @@ cookies.
 let go with it. They are children of the window's root, after the window's
 own widgets, so a page's widgets leave together: libui has no call that
 removes a widget, so the list is cut back to the window's own after
-interaction is cancelled (focus, hover and a press grab must not outlive the widget
-they point at) and each widget's retained text runs are released the way
-libui's own teardown releases them (the class's `destroy`, then `run` and
-`run_staged`) — a run left behind would hold the window's text context busy
-for good.
+interaction is cancelled (focus, hover and a press grab must not outlive
+the widget they point at) and each widget's retained text runs are
+released the way libui's own teardown releases them (the class's
+`destroy`, then `run` and `run_staged`) — a run left behind would hold the
+window's text context busy for good.
 
 | The control | Its widget |
 |---|---|
