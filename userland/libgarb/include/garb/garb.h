@@ -138,9 +138,11 @@ typedef enum {
 #define GARB_DEPTH_MAX 64
 
 
-// What every parse returns: an arena that owns it all, and whether the
-// parse ran short of memory or of depth partway — what came back is real,
-// and there is less of it than the text held.
+// What every parse returns: an arena that owns it all, and whether there is
+// less of it than the text held — the parse ran short of memory or of depth
+// partway (what came back is real), or it was refused whole (NO_MEMORY,
+// TOO_BIG: nothing came back). A reader holding only the result, as the
+// cascade does, learns from `incomplete` alone that it is short.
 typedef struct {
     struct os64_arena *arena;
     bool incomplete;

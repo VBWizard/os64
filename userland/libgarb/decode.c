@@ -118,6 +118,7 @@ garb_status_t garb_parse_sheet(const uint8_t *bytes, size_t len, const char *pro
 {
     if (len > GARB_SHEET_MAX) {
         os64_memset(out, 0, sizeof(*out));
+        out->incomplete = true;
         return GARB_TOO_BIG;
     }
     // The Encoding standard's decode: a byte order mark outranks everything.
@@ -139,6 +140,7 @@ garb_status_t garb_parse_sheet(const uint8_t *bytes, size_t len, const char *pro
     char *text = to_utf8(bytes + skip, len - skip, encoding, &tlen);
     if (text == NULL) {
         os64_memset(out, 0, sizeof(*out));
+        out->incomplete = true;
         return GARB_NO_MEMORY;
     }
     garb_status_t st = garb_parse_sheet_text(text, tlen, out);

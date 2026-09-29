@@ -654,7 +654,8 @@ static garb_status_t finish(garb_parsed_t *out, Parse *p, Tokenizer *tz, garb_st
             p->incomplete = true;
         tz_close(tz);
     }
-    out->incomplete = p->incomplete;
+    // Refused whole is short too: nothing came back of what the text held.
+    out->incomplete = p->incomplete || st == GARB_NO_MEMORY || st == GARB_TOO_BIG;
     return st;
 }
 
@@ -751,8 +752,10 @@ static garb_status_t run(Mode mode, Parse *p, Input *in, garb_parsed_t *out)
 static garb_status_t parse_text(Mode mode, const char *text, size_t len, garb_parsed_t *out)
 {
     Parse p;
-    if (!start(out, &p))
+    if (!start(out, &p)) {
+        out->incomplete = true;
         return GARB_NO_MEMORY;
+    }
     if (len > GARB_SHEET_MAX)
         return finish(out, &p, NULL, GARB_TOO_BIG);
     Tokenizer tz;

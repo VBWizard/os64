@@ -4,14 +4,15 @@
 // css-parsing-tests' inputs, framed by tools/test_garb_suite.py — and prints
 // one JSON line per record, in the suite's representation, for the runner to
 // compare. As a TEST (`garb_driver --sweep FILE`) it runs every entry
-// point — the sheet, each list, each single item, a selector list — with
-// every allocation failing in turn, and asserts each parse ends, nothing
-// leaks, and what comes back is true of the whole text or says it is not. And two probes: `--deep`
-// parses a million nested `(` on a thread with a small stack (past the
-// depth bound the parser must find the end without recursing), and
-// `--numbers` dumps numbers past int64_t's reach and past a double's. And
-// `--cost BYTES` and `--full` hold a parse to what GARB.md says it costs,
-// and to keeping what it finished when the arena fills.
+// point — the sheet, each list, each single item, a selector list, the
+// cascade — with allocations failing in turn, and asserts each parse ends,
+// nothing leaks, and what comes back is true of the whole text or says it
+// is not. And probes: `--deep` parses a million nested `(` on a thread
+// with a small stack (past the depth bound the parser must find the end
+// without recursing), `--numbers` dumps numbers past int64_t's reach and
+// past a double's, and `--cost BYTES` and `--full` hold a parse to what
+// GARB.md says it costs, and to keeping what it finished when the arena
+// fills.
 
 #include <pthread.h>
 #include <signal.h>
@@ -26,16 +27,25 @@
 #include "garb/garb.h"
 #include "garb/select.h"
 #include "garb/values.h"
+#include "garb/cascade.h"
 #include "html/html.h"
 
 // ── Allocation, and failing it on purpose ───────────────────────────────
 
 static size_t allocations, fail_at, live;
+// Fail only allocation fail_at, the rest succeeding: the failure that a
+// later success would otherwise paper over.
+static bool fail_single;
+
+static bool fail_now(void)
+{
+    return fail_at != 0 && (fail_single ? allocations == fail_at : allocations >= fail_at);
+}
 
 void *os64_malloc(size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_now())
         return NULL;
     void *at = malloc(size != 0 ? size : 1);
     if (at != NULL)
@@ -54,7 +64,7 @@ void *os64_calloc(size_t count, size_t size)
 void *os64_realloc(void *ptr, size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_now())
         return NULL;
     void *at = realloc(ptr, size != 0 ? size : 1);
     if (at != NULL && ptr == NULL)
@@ -288,12 +298,84 @@ static void select_page(const char *html, size_t hlen, const char *lists)
     os64_html_document_free(doc);
 }
 
+// ── The cascade ─────────────────────────────────────────────────────────
+
+// "WIDTHxHEIGHT query…": whether the query holds in that viewport.
+static void media(const char *text)
+{
+    garb_env_t env = {0, 0};
+    int used = 0;
+    if (sscanf(text, "%lfx%lf %n", &env.width, &env.height, &used) < 2) {
+        puts("bad case");
+        return;
+    }
+    puts(garb_media_text_matches(text + used, env) ? "true" : "false");
+}
+
+// The page's style elements as sheets, in document order — libpage's list,
+// done by hand here so the harness needs no libpage.
+static void collect_styles(const os64_html_node_t *n, garb_parsed_t *sheets, garb_sheet_in_t *in,
+                           int32_t *count)
+{
+    for (; n != NULL && *count < 64; n = n->next) {
+        if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML && n->name != NULL &&
+            strcmp(n->name, "style") == 0) {
+            const char *text = n->first_child != NULL && n->first_child->kind == OS64_HTML_TEXT
+                                   ? n->first_child->text : "";
+            size_t len = n->first_child != NULL ? n->first_child->text_len : 0;
+            garb_parse_sheet_text(text, len, &sheets[*count]);
+            const os64_html_attr_t *m = os64_html_attr(n, "media");
+            in[*count].sheet = &sheets[*count];
+            in[*count].media = m != NULL ? m->value : NULL;
+            (*count)++;
+        }
+        collect_styles(n->first_child, sheets, in, count);
+    }
+}
+
+// A page and "WIDTHxHEIGHT": every element's author winners.
+static void cascade(const char *html, size_t hlen, const char *viewport)
+{
+    garb_env_t env = {800, 600};
+    if (viewport != NULL)
+        sscanf(viewport, "%lfx%lf", &env.width, &env.height);
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, html, hlen);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    static garb_parsed_t sheets[64];
+    garb_sheet_in_t in[64];
+    int32_t n = 0;
+    collect_styles(doc->document, sheets, in, &n);
+    garb_cascade_t *c = garb_cascade(in, n, doc, env);
+    size_t need = garb_cascade_dump(c, doc, NULL, 0) + 1;
+    char *out = malloc(need);
+    garb_cascade_dump(c, doc, out, need);
+    fputs(out, stdout);
+    puts(garb_cascade_incomplete(c) ? "(incomplete)" : "(end)");
+    free(out);
+    garb_cascade_free(c);
+    for (int32_t k = 0; k < n; k++)
+        garb_free(&sheets[k]);
+    os64_html_document_free(doc);
+}
+
 // ── The allocation sweep ────────────────────────────────────────────────
+
+// The page parse_all cascades over, built once before the sweep: what it
+// holds is live throughout, and every leak check counts from there.
+static os64_html_document_t *s_sweep_doc;
+static size_t s_live_base;
 
 static void parse_all(const char *text, size_t len)
 {
     garb_parsed_t r;
     (void)garb_parse_sheet((const uint8_t *)text, len, NULL, NULL, &r);
+    // The whole sheet cascaded over a small page, custom properties and a
+    // style attribute included.
+    garb_sheet_in_t in = {&r, NULL};
+    garb_env_t env = {800, 600};
+    garb_cascade_free(garb_cascade(&in, 1, s_sweep_doc, env));
     for (int32_t i = 0; i < r.nitems; i++) {
         const garb_rule_t *rule = r.items[i].rule;
         if (r.items[i].kind != GARB_ITEM_RULE || rule == NULL || !rule->has_block)
@@ -373,10 +455,11 @@ static int sweep_text(const char *what, const char *text, size_t len)
             failures++;
         }
         free_dumps(part, npart);
-        if (live != 0) {
-            fprintf(stderr, "FAIL sweep %s: %zu leaked with failure at %zu\n", what, live, at);
+        if (live != s_live_base) {
+            fprintf(stderr, "FAIL sweep %s: %zu leaked with failure at %zu\n", what,
+                    live - s_live_base, at);
             failures++;
-            live = 0;
+            live = s_live_base;
         }
     }
     free_dumps(whole, nwhole);
@@ -436,10 +519,11 @@ static int sweep_one(const char *what, OneParse parse, const char *text)
         }
         free(part);
         garb_free(&r);
-        if (live != 0) {
-            fprintf(stderr, "FAIL sweep %s: %zu leaked with failure at %zu\n", what, live, at);
+        if (live != s_live_base) {
+            fprintf(stderr, "FAIL sweep %s: %zu leaked with failure at %zu\n", what,
+                    live - s_live_base, at);
             failures++;
-            live = 0;
+            live = s_live_base;
         }
     }
     free(whole);
@@ -541,11 +625,11 @@ static int sweep_lists(void)
                     failures++;
                 }
                 free_dumps(part, npart);
-                if (live != 0) {
+                if (live != s_live_base) {
                     fprintf(stderr, "FAIL sweep %s: %zu leaked with failure at %zu\n",
-                            modes[m].what, live, at);
+                            modes[m].what, live - s_live_base, at);
                     failures++;
-                    live = 0;
+                    live = s_live_base;
                 }
             }
             free_dumps(whole, nwhole);
@@ -617,15 +701,70 @@ static int sweep_selectors(void)
                         shapes[k].unit, shapes[k].sep, at, part, whole);
                 failures++;
             }
-            if (live != 0) {
-                fprintf(stderr, "FAIL sweep selectors: %zu leaked with failure at %zu\n", live, at);
+            if (live != s_live_base) {
+                fprintf(stderr, "FAIL sweep selectors: %zu leaked with failure at %zu\n",
+                        live - s_live_base, at);
                 failures++;
-                live = 0;
+                live = s_live_base;
             }
         }
     }
     printf("libgarb sweep, selectors: every allocation failed in turn, %s\n",
            failures == 0 ? "each answer the whole one or marked incomplete" : "FAILED");
+    return failures;
+}
+
+// The cascade with each single allocation failing, the rest succeeding —
+// in the sheet's parse, a rule block read again, a selector list, a value,
+// a style attribute: its answer is the whole cascade's, or it says it is
+// incomplete. A short read that a later success papers over is the case.
+static char *cascade_answer(const char *text, size_t len, bool *incomplete)
+{
+    garb_parsed_t r;
+    (void)garb_parse_sheet((const uint8_t *)text, len, NULL, NULL, &r);
+    garb_sheet_in_t in = {&r, NULL};
+    garb_env_t env = {800, 600};
+    garb_cascade_t *c = garb_cascade(&in, 1, s_sweep_doc, env);
+    size_t need = garb_cascade_dump(c, s_sweep_doc, NULL, 0) + 1;
+    char *out = malloc(need);
+    garb_cascade_dump(c, s_sweep_doc, out, need);
+    *incomplete = garb_cascade_incomplete(c);
+    garb_cascade_free(c);
+    garb_free(&r);
+    return out;
+}
+
+static int sweep_cascade(const char *what, const char *text, size_t len)
+{
+    allocations = 0;
+    fail_at = 0;
+    bool inc;
+    char *whole = cascade_answer(text, len, &inc);
+    size_t worst = allocations;
+    int failures = 0;
+    fail_single = true;
+    for (size_t at = 1; at <= worst; at++) {
+        allocations = 0;
+        fail_at = at;
+        char *part = cascade_answer(text, len, &inc);
+        fail_at = 0;
+        if (strcmp(part, whole) != 0 && !inc) {
+            fprintf(stderr, "FAIL sweep cascade %s: failure at %zu changed the answer and it "
+                    "says it is whole\n", what, at);
+            failures++;
+        }
+        free(part);
+        if (live != s_live_base) {
+            fprintf(stderr, "FAIL sweep cascade %s: %zu leaked with failure at %zu\n", what,
+                    live - s_live_base, at);
+            failures++;
+            live = s_live_base;
+        }
+    }
+    fail_single = false;
+    free(whole);
+    printf("libgarb sweep, cascade over %s: each of %zu allocations failed alone, %s\n", what,
+           worst, failures == 0 ? "each answer the whole one or marked incomplete" : "FAILED");
     return failures;
 }
 
@@ -637,6 +776,15 @@ static int sweep(const char *path)
     static char text[1 << 20];
     size_t len = fread(text, 1, sizeof(text), f);
     fclose(f);
+    static const char kPage[] =
+        "<!doctype html><html><body class=panel><div id=main class='item x' data-state=open>"
+        "<div class=title style='color: red; --pad: 3px; margin: var(--pad)'>t</div>"
+        "<a href=/>link</a><div class=grid>g</div><p class=card>c</div>";
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, kPage, sizeof(kPage) - 1);
+    s_sweep_doc = os64_html_parser_finish(hp);
+    s_live_base = live;
     int failures = sweep_text(path, text, len);
     // A token that outgrows the tokenizer's first buffer (64 bytes) with a
     // two-byte character across the boundary: the growth fails between the
@@ -647,6 +795,9 @@ static int sweep(const char *path)
     failures += sweep_ones();
     failures += sweep_lists();
     failures += sweep_selectors();
+    failures += sweep_cascade(path, text, len);
+    os64_html_document_free(s_sweep_doc);
+    s_live_base = 0;
     return failures == 0 ? 0 : 1;
 }
 
@@ -785,6 +936,10 @@ int main(int argc, char **argv)
             color(text, len);
         else if (strcmp(argv[1], "decl") == 0)
             declaration(text, len);
+        else if (strcmp(argv[1], "media") == 0)
+            media(text);
+        else if (strcmp(argv[1], "cascade") == 0)
+            cascade(text, len, pabsent ? NULL : protocol);
         else if (strcmp(argv[1], "select") == 0)
             select_page(text, len, protocol);
         else

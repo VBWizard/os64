@@ -71,8 +71,8 @@ that the properties libflow lays out can reach.
 | CSS 2.1 properties | — | 1 | Every property libflow's struct already holds, and their shorthands: `display`, `font`/`font-*`, `color`, `background`/`background-color`, `margin`, `padding`, `border`/`border-*`, `width`, `height`, `text-align`, `vertical-align`, `white-space`, `text-decoration`, `visibility`, `list-style`/`list-style-*`, `border-spacing`, `border-collapse`, `caption-side`, `float`, `clear` |
 | New in libflow, still pile 1 | — | 1 | The cheap ones that make modern pages readable: `box-sizing`, `min-`/`max-width`/`-height`, `line-height`, `text-indent`, `text-transform`, `overflow` (clipping), `background-image`/`-repeat`/`-position` (Y5b's tiler), `white-space: pre-line` |
 | Positioned layout | 3 | 2 | `position`, offsets, `z-index`, stacking contexts |
-| Flexible Box Layout | 1 | 2 | Whole |
-| Grid Layout | 2 | 2 | Whole, subgrid last |
+| Flexible Box Layout | 1 | 2 | Whole. Until then `display: flex`/`inline-flex` is read and laid out as the block or inline-block it is outside, and `@supports` answers no, so a page's fallback for it is used |
+| Grid Layout | 2 | 2 | Whole, subgrid last. Until then `display: grid`/`inline-grid` is read and laid out as flex is, and `@supports` answers no |
 | Backgrounds and Borders, Images, Transforms, Fonts (`@font-face`), Animations | 3/4 | 3 | Gradients, `border-radius`, `box-shadow`, `opacity`, `transform`, web fonts (packet 04's faces), animations on the Y5b ticker. What G2b already decided about gradients: a linear or radial one is VALID when it fits Images 3's grammar (so the pre-standard `linear-gradient(top, …)` is not, and the colour before it stands), conic gradients and `image-set()` are taken by name, and a valid one draws nothing yet while the `background` shorthand still resets the colour |
 
 ## What goes in
@@ -168,7 +168,7 @@ parse on the pool has to count those too.
 | G2b | Values: the property table, each pile-1 property's grammar, shorthands expanded, lengths, `calc()`, colours | css-parsing-tests' colour files; grammar cases worked by hand |
 | G2c | The cascade: the rule hash, importance and order, `style` attributes, custom properties and `var()`, media queries | a cascade dump per element for fixtures worked by hand |
 | G3 | libflow applies it: every field it holds today from an author rule, `inherit`/`initial`/`unset`; `<style>` pages in yonder and in `flowdump` | libflow's harness with author sheets; the corpus unchanged where there is no CSS |
-| G4 | yonder fetches `<link>` sheets and `@import`s, waits for them, lays out again when a late one arrives | the guest, against a local server, and danlegt.com read as far as pile 1 carries it |
+| G4 | yonder fetches `<link>` sheets and `@import`s, waits for them, lays out again when a late one arrives; the cascade skips `@import` today, so G4 adds the door for "this sheet stands in the importer's place at that `@import`" (an imported sheet's rules come BEFORE the importer's own) | the guest, against a local server, and danlegt.com read as far as pile 1 carries it |
 | G5 | The cheap new properties in libflow (the table's row) | libflow's harness |
 
 Pile 2 and pile 3 are designed in their own sections when pile 1 is
@@ -225,6 +225,26 @@ over for the cascade are exactly those with `var()` or `env()`. That run
 found four gaps before this commit: the dynamic and container units, env(),
 and background layer lists.
 
+**G2c, as run.** Media Queries 4: 55 queries worked by hand against a
+stated viewport (`tools/garb_corpus/media.txt`) — types, `not`/`only`,
+plain, `min-`/`max-` and range forms, the machine's own answers, and Level
+4's third value (an unknown feature is UNKNOWN, and so is its negation).
+The cascade: 13 pages worked by hand (`tools/garb_corpus/cascade.txt`) —
+specificity over order, importance, the `style` attribute in all four
+combinations, invalid declarations leaving the one before them, `var()`
+with fallbacks, chains, a cycle and shadowing, the empty value and `unset`
+on a custom property, env(), `@media`, `@supports` (a flex or grid
+container not supported) and a `style` element's `media`, the same page
+narrower, combinators, pseudo-element and `:hover` rules reaching nothing,
+quirks mode's case-free names and unitless lengths, a rule matched through
+two of its selectors at the heavier. All pass; eight mutants of the
+cascade and media code are all caught, five of them only after cases were
+added for them. The allocation sweep now cascades the corpus sheet over a
+page, 35 allocations each failed alone, nothing leaked. danlegt.com, its
+28 sheets inlined in order, cascades in 0.03 s on the host: 471 elements
+with author winners, hand-checked against the rules for the body and
+`#motd`.
+
 ## Booked before the first line
 
 | Debt | Why it waits | Trigger |
@@ -235,6 +255,9 @@ and background layer lists.
 | `@namespace` | a prefix other than `*` or none makes a selector invalid, so its rule drops | a page whose sheets declare one |
 | wend honouring `display: none` | libgarb proven in one face before a second leans on it | pile 1 proven |
 | User stylesheets | a person's own sheet is the user origin; nobody has asked | a person who asks |
+| CSS Nesting | a style rule's nested rules are parsed (G1) and not cascaded; only its declarations count | the first page whose sheets nest |
+| `@layer`'s order | a layer's rules are cascaded as if unlayered, so a layered rule may beat an unlayered one it should lose to | a page whose sheets use layers against each other |
+| Pseudo-elements' styles | rules for `::before` and the rest are matched and set aside: nothing generates their boxes yet | G5's generated content |
 | `unicode-range` | the draft reads it from component values, in `@font-face`, not as a token | pile 3's web fonts |
 | `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, `color-mix()` | each needs its colour space converted to sRGB and gamut-mapped (Color 4 § 13; `color-mix()` is Color 5, and mixes in one of those spaces) | a page whose colours are only written that way |
 | Every layer of a background | yonder draws one picture behind a box, so the first layer of a list is kept and the rest are only checked | a page whose look depends on a lower layer |

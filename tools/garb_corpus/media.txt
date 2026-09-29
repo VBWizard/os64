@@ -1,0 +1,116 @@
+# Media Queries 4 (GARB.md, G2c), worked by hand: IN is a viewport and a
+# query list, OUT whether it holds. The machine is a screen with a mouse, 8
+# bits a channel, 1 dppx, a light scheme, reduced motion and no scripting.
+IN: 800x600
+OUT: true
+IN: 800x600 all
+OUT: true
+IN: 800x600 screen
+OUT: true
+IN: 800x600 SCREEN
+OUT: true
+IN: 800x600 print
+OUT: false
+IN: 800x600 not print
+OUT: true
+IN: 800x600 not screen
+OUT: false
+IN: 800x600 only screen
+OUT: true
+IN: 800x600 foo
+OUT: false
+IN: 800x600 screen and (min-width: 700px)
+OUT: true
+IN: 800x600 (min-width: 801px)
+OUT: false
+IN: 800x600 (max-width: 800px)
+OUT: true
+IN: 800x600 (width: 800px)
+OUT: true
+IN: 800x600 (width >= 600px)
+OUT: true
+IN: 800x600 (width < 600px)
+OUT: false
+IN: 800x600 (width < 800px)
+OUT: false
+IN: 800x600 (width <= 800px)
+OUT: true
+IN: 800x600 (400px <= width <= 900px)
+OUT: true
+IN: 800x600 (400px <= width < 700px)
+OUT: false
+IN: 800x600 (600px > width)
+OUT: false
+IN: 800x600 (min-width: 50em)
+OUT: true
+IN: 800x600 (min-width: 51em)
+OUT: false
+IN: 800x600 (orientation: landscape)
+OUT: true
+IN: 400x600 (orientation: portrait)
+OUT: true
+IN: 800x600 (orientation: portrait)
+OUT: false
+IN: 800x600 (hover: hover)
+OUT: true
+IN: 800x600 (hover: none)
+OUT: false
+IN: 800x600 (hover)
+OUT: true
+IN: 800x600 (pointer: coarse)
+OUT: false
+IN: 800x600 (any-pointer: fine)
+OUT: true
+IN: 800x600 (prefers-color-scheme: dark)
+OUT: false
+IN: 800x600 (prefers-color-scheme: light)
+OUT: true
+IN: 800x600 (prefers-reduced-motion: reduce)
+OUT: true
+IN: 800x600 (prefers-reduced-motion)
+OUT: true
+IN: 800x600 (scripting: enabled)
+OUT: false
+IN: 800x600 (scripting: none)
+OUT: true
+IN: 800x600 (color)
+OUT: true
+IN: 800x600 (monochrome)
+OUT: false
+IN: 800x600 (min-color: 8)
+OUT: true
+IN: 800x600 (min-resolution: 2dppx)
+OUT: false
+IN: 800x600 (max-resolution: 96dpi)
+OUT: true
+IN: 800x600 (min-aspect-ratio: 4/3)
+OUT: true
+IN: 800x600 (aspect-ratio: 16/9)
+OUT: false
+IN: 800x600 screen, print
+OUT: true
+IN: 800x600 print, (max-width: 100px)
+OUT: false
+IN: 800x600 not all and (monochrome)
+OUT: true
+IN: 800x600 (min-width: 700px) and (max-width: 900px)
+OUT: true
+IN: 800x600 (max-width: 700px) or (min-width: 900px)
+OUT: false
+IN: 800x600 not ((max-width: 700px) or (min-width: 900px))
+OUT: true
+IN: 800x600 screen and (max-width: 700px), print
+OUT: false
+# Level 4's third value: a feature this machine does not know is UNKNOWN,
+# and so is its negation; a query left UNKNOWN is false.
+IN: 800x600 (-webkit-min-device-pixel-ratio: 2)
+OUT: false
+IN: 800x600 not (-webkit-min-device-pixel-ratio: 2)
+OUT: false
+IN: 800x600 (color) or (-webkit-min-device-pixel-ratio: 2)
+OUT: true
+IN: 800x600 not ((monochrome) or (-webkit-min-device-pixel-ratio: 2))
+OUT: false
+# `and` and `or` do not mix without parentheses.
+IN: 800x600 (min-width: 700px) and (max-width: 900px) or (color)
+OUT: false

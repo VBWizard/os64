@@ -244,7 +244,55 @@ def main():
         print(f'FAIL declarations: the driver answered {len(lines)} of {len(cases)}')
         decl_failed += 1
     print(f'declarations: {len(cases)} cases, {decl_failed} failed')
-    sys.exit(1 if failed or anb_failed or color_failed or decl_failed else 0)
+
+    # Media queries, worked by hand (tools/garb_corpus/media.txt).
+    cases = []
+    for line in (SUITE.parent / 'garb_corpus' / 'media.txt').read_text().splitlines():
+        if line.startswith('IN: '):
+            cases.append([line[4:], None])
+        elif line.startswith('OUT: '):
+            cases[-1][1] = line[5:]
+    feed = b''.join(record(given.encode('utf-8')) + b'-1\n-1\n' for given, _ in cases)
+    run = subprocess.run([driver, 'media'], input=feed, capture_output=True)
+    lines = run.stdout.decode().splitlines()
+    media_failed = sum(1 for (g, w), l in zip(cases, lines) if l != w)
+    for (given, want), line in zip(cases, lines):
+        if line != want:
+            print(f'FAIL media: {given!r} want {want} got {line}')
+    if run.returncode != 0 or len(lines) != len(cases):
+        print(f'FAIL media: the driver answered {len(lines)} of {len(cases)}')
+        media_failed += 1
+    print(f'media queries: {len(cases)} cases, {media_failed} failed')
+
+    # The cascade, worked by hand (tools/garb_corpus/cascade.txt).
+    pages, mode, viewport, page, want = [], None, None, [], []
+    for line in (SUITE.parent / 'garb_corpus' / 'cascade.txt').read_text().splitlines():
+        if mode is None and line.startswith('VIEWPORT '):
+            viewport = line.split()[1]
+        elif line == 'PAGE':
+            mode, page, want = 'page', [], []
+        elif line == 'WANT':
+            mode = 'want'
+        elif line == 'END':
+            pages.append((viewport, '\n'.join(page), want))
+            mode = None
+        elif mode == 'page':
+            page.append(line)
+        elif mode == 'want':
+            want.append(line)
+    cascade_failed = 0
+    for viewport, html, want in pages:
+        feed = record(html.encode('utf-8')) + record(viewport.encode()) + b'-1\n'
+        run = subprocess.run([driver, 'cascade'], input=feed, capture_output=True)
+        got = run.stdout.decode().splitlines()
+        if run.returncode != 0 or got != want:
+            cascade_failed += 1
+            print(f'FAIL cascade at {viewport}:\n' + html[:300] + '\n  want:\n    '
+                  + '\n    '.join(want) + '\n  got:\n    ' + '\n    '.join(got)
+                  + run.stderr.decode(errors='replace')[:1500])
+    print(f'cascade: {len(pages)} pages, {cascade_failed} failed')
+    sys.exit(1 if failed or anb_failed or color_failed or decl_failed or media_failed
+             or cascade_failed else 0)
 
 
 def channels(text):
