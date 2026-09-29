@@ -83,12 +83,13 @@ p { color: red }
 @supports (foo: bar) { p { margin-right: 3px } }
 @supports (display: table-cell) { p { margin-bottom: 4px } }
 @supports not (display: inline-flex) { p { padding-left: 5px } }
+@supports (display: contents) { p { padding-right: 6px } }
 </style>
 <style media="print">p { width: 1px }</style>
 <style media="(min-width: 700px)">p { height: 2px }</style>
 <p>x
 WANT
-p: color: rgb(0, 0, 255); margin-bottom: 4px; margin-left: 2px; padding-left: 5px; height: 2px
+p: color: rgb(0, 0, 255); margin-bottom: 4px; margin-left: 2px; padding-right: 6px; padding-left: 5px; height: 2px
 (end)
 END
 

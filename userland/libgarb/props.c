@@ -98,7 +98,11 @@ static const char *const kDisplay[] = {
 // inline-block it is on the outside, and flow-root as a block, which keeps
 // a page's `display: inline-block; display: inline-flex` fallback pattern
 // working. Read, so the cascade keeps them; not SUPPORTED, so @supports
-// tells a page to use the fallback it wrote for exactly this.
+// tells a page to use the fallback it wrote for exactly this. `contents`
+// is not here: libflow gives such an element no box and flows its
+// children into its parent, which is what it says. THE LIST IS EVERY
+// APPROXIMATION, of any property: whatever libflow lays out as something
+// other than what a value says joins it the day the mapping is written.
 static const char *const kDisplayApproximated[] = {"flex", "inline-flex", "grid", "inline-grid",
                                                    "flow-root", NULL};
 
