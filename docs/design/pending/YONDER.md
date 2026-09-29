@@ -162,6 +162,7 @@ in-house (CLAUDE.md's reviewer-to-risk rule).
 | Y3b | libway's cookie jar and `Referer`, on packet 05's hooks, for both browsers | libway's host harness; logging in to a real site |
 | Y4 | Forms: every control libflow placed becomes a real libui widget at its box, moved when the page scrolls and hidden when it leaves the view (libui does not clip a child to its parent), submitted through libpage's form model, GET or POST | § Y4 below |
 | Y5 | Images: fetched in parallel on the pool, decoded, drawn scaled and blended, the page laid out again when a size arrives | § Y5 below |
+| Y5b | Moving pictures and pictures behind: GIF animation on a frame clock that sleeps when nothing can be seen, and the `background` attribute of the body and of tables, tiled | § Y5b below |
 
 Y1 needs none of the open packets, which is why it came first. Packets 06
 (Y2), 07 (the pool and the doorbell), 02 (blending) and 03 (GIF) are in;
@@ -489,21 +490,21 @@ below it. Relayouts are coalesced: at most one per drained batch of
 doorbells. On a page whose layout takes more than 100 ms, a batch lays it
 out again only when its last picture is in, or when the last layout is two
 seconds old and twice its own cost — so laying out takes at most a third
-of the time while pictures trickle in. That clock is READ at a batch,
-never waited on: a slow page whose pictures have stopped arriving stays
-mis-laid until the first event after its layout goes stale, or until the
-last picture arrives or gives up — and a picture from a server that
-trickles a byte at a time can take as long as the server likes, since
-libfetch's patience is 30 s of silence. The deadline that needs neither is
-booked below. A picture whose box is fixed needs no relayout at all; the
-old web wrote both attributes on most.
+of the time while pictures trickle in. The moment it goes stale is a
+deadline on the window's clock (§ Y5b's ticker), so the page settles on
+time with nobody at the mouse, however long its last picture takes — a
+server that trickles a byte at a time can take as long as it likes, since
+libfetch's patience is 30 s of silence. Without a ticker (its thread could
+not start) the page settles at the first event after that moment. A
+picture whose box is fixed needs no relayout at all; the old web wrote
+both attributes on most.
 
 **Drawing.** The painter's `image` verb draws the picture into its box's
 content rectangle, SCALED nearest-neighbour when the box and the picture
 differ (a `width=` stretching a spacer, a thumbnail shrunk) and blended by
 its alpha over what is beneath, one row of the visible part at a time
 (`scale.c`, pure and host-tested). A picture that has not arrived, or will
-not, keeps Y1's frame. GIFs show their first frame.
+not, keeps Y1's frame. A GIF's other frames are § Y5b's.
 
 **Memory kept.** Decoded pictures stay while their page is shown, up to
 256 MiB of pixels; past that, a picture is not kept and draws as its frame,
@@ -526,6 +527,110 @@ from upload.wikimedia.org (its logos are SVG, which libimage does not
 decode, and keep their frames); and a page left nine seconds into its
 pictures, the next page's count untouched by the late arrivals.
 
+## Y5b — moving pictures, and pictures behind
+
+Chris's order after Y4: the old web's GIFs move (theoldnet's guestbook,
+its Angelfire badge), and its pages sit on tiled backgrounds.
+
+### Animation
+
+**A GIF with more than one frame is kept as a SEQUENCE**
+(`image/sequence.h`, GIF_ANIMATION.md): libimage's handle that decodes a
+frame when it is asked for the next one, disposes the last and composites
+onto one canvas, honouring the loop count. The job decodes a GIF as a
+sequence first — the handle copies its input, so the fetched bytes and the
+sequence together stay inside the declared reserve — and keeps it when
+there is more than one frame; a still GIF is let go and decoded the Y5
+way. So nothing changes for any picture that does not move. What a
+sequence costs is counted against the page's 256 MiB as its canvas, its
+expansion buffer, its restore rectangle and its copied input, which is
+libimage's own account of what a handle owns.
+
+**The window has no clock, so a TICKER gives it one.** yonder's loop
+sleeps in `os64_gui_event_wait`, which takes no timeout, so a thread of
+its own holds the next frame's deadline: it sleeps on a pipe with
+`os64_read_for` until the deadline or until the window writes to say the
+deadline moved, and at the deadline it rings the window's doorbell and
+forgets it. The ring is the only thing it does; the window thread does
+everything else, so no picture is touched by two threads. Rung, the window
+advances every animation that is due AND ON SCREEN — some box showing it
+meets the view — repaints only those boxes, and hands the ticker the
+earliest deadline left among the ones on screen. Only those boxes, because
+the view paints only its dirty part: the kernel takes exactly the
+rectangle libui publishes, so nothing outside it is ever seen, and a
+moving bullet costs its own sixteen pixels rather than the page (a full
+repaint a frame cost a third of a core for three small GIFs). A picture
+scrolled away is not advanced (decoding frames nobody sees is the waste
+the frame clock exists to stop) and moves again when it is back; a window
+that is covered (`OS64_GUI_WINDOW_COVERED`, re-read on the
+COVERED/UNCOVERED nudge, since the flag is the truth) hands the ticker no
+deadline at all. A page with nothing moving costs a sleeping thread. The
+same deadline serves § Y5's relayout: the window hands the ticker the
+earlier of the next frame and the moment a slow page's layout goes stale.
+
+**The timing is gview's and the browsers'**: a frame's delay starts when
+it is shown; a delay of 0 or 10 ms is shown for 100 ms (what every browser
+does with the GIFs that ask for "as fast as you can"); a finite loop count
+is honoured, so a GIF that plays once stops on its last frame, as Chrome
+stops it. A frame that fails to decode holds the last good one and that
+picture stops, while the rest play on.
+
+### Pictures behind
+
+**The attribute, not the property.** The Rendering chapter maps the
+`background` attribute of `body`, `table`, `thead`, `tbody`, `tfoot`, `tr`,
+`td` and `th` to `background-image`. The cascade will bring the property
+and its relatives (`repeat`, `position`); this slice brings what the old
+web wrote.
+
+**libpage lists them**, beside the pictures: WHERE A PICTURE COMES FROM IS
+A FACT ABOUT THE PAGE, and a background's address is resolved against the
+base like every other reference, so two resolvers never disagree about a
+`<base>`. `os64_page_background(page, i)` names the element and its
+resolved address; `os64_page_background_for(page, node)` answers the other
+way. wend reads neither, because a terminal has no background to put one
+in.
+
+**Fetched with the page's pictures**, from the same table, per address —
+a picture used as an `img` and as a background is one fetch — and animated
+by the same machinery. An arrival never lays the page out again: a
+background sizes nothing.
+
+**Painted after the box's colour and under its content, TILED** from the
+top-left of its border box across that box, blended by its alpha over the
+colour (`scale.c`, beside the scaler, and host-tested the same way). The
+body's background is the CANVAS's, as its colour already is (CSS 2.1
+§14.2): tiled from the page's top-left across the whole page, so it
+scrolls with the page, as the attribute always did.
+
+**Evidence, as run.** The host: the tiler against hand-worked pixels
+(whole tiles and a cut last one, a clip that does not move the tiles, an
+origin outside the area, a half-transparent tile over a colour); libpage's
+list for every element that takes the attribute, a relative address under
+a `<base>`, empty attributes and a `div`'s not listed, an address that
+will not resolve listed as refused, and the fail-every-allocation sweep;
+the painter's recordings — the body's picture as the canvas's with and
+without a colour, tiled from the page's corner in a scrolled view, and a
+cell's picture over its colour from its own corner. Counts: yonder 59,
+libpage 178722, libflow 10485, libway 75, none failed.
+
+The guest, on a local server: a looping GIF, a play-once GIF stopped on
+its last frame, a zero-delay GIF, and a scaled copy sharing its sequence,
+all moving; yonder's CPU time over 20 seconds — 1.5 s with them on screen
+(7.5 s before the view painted only its dirty part), 0.0 s scrolled away,
+0.1 s behind a maximized terminal. A page on a tiled body picture with no
+colour, a cell with a half-transparent picture over yellow, and a cell
+whose picture moves, all scrolling with the page. Live: the 1996 Space Jam
+site on its starfield, 13 of 13 pictures; theoldnet's GIFs moving on the
+P5 (Chris). Its `bullet02.gif`, which ends with a timing block for a frame
+that never comes, moves since Quinn's libimage fix (PR #142): a local GIF
+of the same shape cycles through its seven frames in the guest.
+
+**Sixteen handles were not enough.** The ticker's pipe and thread took
+yonder to fourteen of the kernel's sixteen before its first fetch, and the
+page failed with "out of handles or ports"; the table is 64 now
+(`OS64_TASK_HANDLES`, `abi/include/os64/file.h`).
+
 ## Booked, with their triggers
 
 | Debt | Why it waits | Trigger |
@@ -540,10 +645,8 @@ pictures, the next page's count untouched by the late arrivals.
 | POST and cookies, logging in | packet 05 | 05 merged |
 | A multi-line textarea, a drop-down select, several choices in a multiple select, a file chooser | each is a widget libui does not have yet (a multi-line field sized to its box, a popup list, a multiple-selection list, a file dialog) | the first form that needs one |
 | Back and Forward to the reply to a form | the history holds addresses, so going back to a POST's reply fetches its address, which a server may answer with something else; Chrome shows a "resubmit?" page there | a page where going back to a reply matters |
-| A slow page's picture relayout, on time | the window's loop has no clock to wait on; a slow page settles at the person's first event once its layout is stale, or at its last picture (§ Y5) | Y5b's ticker: the settle deadline rides it |
-| Animated GIFs | libimage decodes sequences (GIF_ANIMATION.md); a page view that repaints on a timer is a new loop for the window | the first page whose animation is the point |
 | SVG pictures | libimage decodes raster formats; SVG is a vector language with a renderer of its own | the modern web's logos, which are mostly SVG |
-| `data:` pictures, and `background=` | a data: address needs no fetch but a decoder of its own; a background image is a fill the painter does not tile yet | a page that needs one |
+| `data:` pictures | a data: address needs no fetch but a decoder of its own | a page that needs one |
 | A picture cache between pages | Back and Forward refetch pictures as they refetch pages | back-and-forth on a slow link hurts |
 | Layout on a worker | every page shares one text context, which one thread uses at a time; a worker would need its own, with its own fonts opened | a page whose layout makes the window stop answering for long enough to matter (fetch.spec.whatwg.org takes 6 s to lay out again at full screen on the P5) |
 | Cookies and `Referer` | slice Y3b: libway's jar on packet 05's hooks. `on_set_cookie` carries whether the reply came over an encrypted connection (Quinn, 2026-09-25), so the jar enforces `Secure` itself — libfetch hands over the facts, libway owns the policy | packet 05 merged and Y3 in |

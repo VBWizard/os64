@@ -2,7 +2,7 @@
 #define YONDER_PAINT_H
 
 // The page view's painter (YONDER.md § The page view): a laid-out tree and
-// a viewport in, drawing out — through four verbs, never straight to a
+// a viewport in, drawing out — through its verbs, never straight to a
 // surface, so the host harness can record what a page paints and check it
 // by hand the way libflow's dumps are checked.
 
@@ -20,10 +20,16 @@ typedef struct {
     void (*image)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip);
     void (*control)(void *ctx, const flow_box_t *box, os64_gui_rect_t content,
                     os64_gui_rect_t clip);
+    // A picture BEHIND a box (YONDER.md § Y5b): true when the box has one,
+    // and then, unless `area` is NULL (only asking), it is tiled across
+    // `area` from (ox, oy) — drawn if it has arrived, nothing yet if not.
+    bool (*backdrop)(void *ctx, const flow_box_t *box, const os64_gui_rect_t *area, int32_t ox,
+                     int32_t oy, os64_gui_rect_t clip);
 } yonder_verbs_t;
 
 // Paints every box that meets `viewport`, canvas first. `paper` is the
-// canvas when neither the root nor the body has a background.
+// canvas when neither the root nor the body has a background, colour or
+// picture.
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, uint32_t paper,
                   const yonder_verbs_t *verbs);
 

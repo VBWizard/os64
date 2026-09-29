@@ -31,6 +31,7 @@
 #include "paint.h"
 #include "picture.h"
 #include "scale.h"
+#include "ticker.h"
 #include "trip.h"
 
 // The largest file yonder reads: libhtml refuses by size beyond its own
@@ -52,7 +53,8 @@
 #define TRIP_RESERVE (80u << 20)
 #define POOL_BUDGET  (768u << 20)
 
-// Decoded pixels a page may keep; past it a picture draws as its frame.
+// What a page's pictures may cost to keep — a still one's pixels, a moving
+// one's whole sequence; past it a picture draws as its frame.
 #define PICTURES_KEPT_MAX ((size_t)256u << 20)
 
 // A page's pictures in the pool at once: one fewer than its workers. The
@@ -74,6 +76,11 @@
 // mailbox (progress and questions).
 #define BELL_WORK (1u << 0)
 #define BELL_MAIL (1u << 1)
+#define BELL_TICK (1u << 2)       // a moving picture's next frame is due
+
+// A GIF frame that asks for 10 ms or less is shown for this long, as every
+// browser shows the ones that ask for "as fast as you can".
+#define FRAME_FLOOR_MS 100
 
 // ── The page's fonts ────────────────────────────────────────────────────
 //
@@ -219,7 +226,10 @@ typedef enum { PIC_QUEUED, PIC_WAITING, PIC_SHOWN, PIC_FAILED, PIC_NOT_KEPT } Pi
 typedef struct {
     const char *url;
     PictureState state;
-    os64_image_t image;
+    os64_image_t image;             // a still picture's pixels
+    os64_image_sequence_t *moving;  // or a moving one's, its frame on show
+    uint64_t due;                   // when its next frame is, while it plays
+    bool playing;                   // false once it stops: its loops done, or a frame failed
     os64_work_id_t id;              // while WAITING
     // An image naming it gives no width and height of its own, so its
     // arrival moves the page. Decided once, as the pictures are gathered.
@@ -235,10 +245,11 @@ typedef struct {
     os64_page_t *plain_model;
     flow_tree_t *tree;
     int32_t laid_width;
-    // The pictures, and for each of libpage's pictures (os64_page_image)
-    // which of these it is, -1 for one that will not be fetched.
+    // The pictures, one per address, and for each of libpage's pictures
+    // (os64_page_image) and backgrounds (os64_page_background) which of
+    // these it is, -1 for one that will not be fetched.
     Picture *pics;
-    int32_t npics, *pic_of;
+    int32_t npics, *pic_of, *bg_of;
     // Still to come (QUEUED or WAITING), and of those, in the pool; the
     // next picture to hand it.
     int32_t waiting, in_flight, next_pic;
@@ -248,6 +259,23 @@ typedef struct {
     // Reload sends again. Its url is NULL otherwise.
     os64_page_request_t sent;
 } Page;
+
+static void pictures_schedule(void);
+static uint64_t frame_delay(const Picture *pic);
+
+// A shown picture's pixels: the still image, or the frame a moving one is on.
+static const uint32_t *picture_pixels(const Picture *pic, uint32_t *w, uint32_t *h)
+{
+    if (pic->moving != NULL) {
+        const os64_image_frame_t *f = os64_image_sequence_frame(pic->moving);
+        *w = f->width;
+        *h = f->height;
+        return f->pixels;
+    }
+    *w = pic->image.width;
+    *h = pic->image.height;
+    return pic->image.pixels;
+}
 
 static const os64_html_document_t *page_doc(const Page *p)
 {
@@ -261,10 +289,13 @@ static os64_page_t *page_model(const Page *p)
 
 static void page_clear(Page *p)
 {
-    for (int32_t i = 0; i < p->npics; i++)
+    for (int32_t i = 0; i < p->npics; i++) {
         os64_image_free(&p->pics[i].image);
+        os64_image_sequence_free(p->pics[i].moving);
+    }
     os64_free(p->pics);
     os64_free(p->pic_of);
+    os64_free(p->bg_of);
     flow_free(p->tree);
     os64_page_free(p->plain_model);
     os64_html_document_free(p->plain);
@@ -385,6 +416,13 @@ static struct {
     // last laid out (pictures_settle); cleared by any layout, whether or not
     // it fit.
     bool pictures_moved;
+    // The window's clock, for moving pictures and a slow page's owed
+    // layout; NULL, and nothing moves and a layout waits for an event.
+    yonder_ticker_t *ticker;
+    bool covered;                   // nobody can see the window: nothing moves
+    // When a slow page's deferred layout is owed (pictures_settle), in
+    // yonder_now_ms's milliseconds; YONDER_NEVER for none.
+    uint64_t settle_due;
     // The last layout: how long it took, for the status line and for
     // pictures_settle, and when it finished.
     uint64_t laid_ms;
@@ -474,8 +512,10 @@ static bool replaced_size(void *ctx, const os64_html_node_t *node, int32_t *w, i
     int32_t i = p->pic_of != NULL ? os64_page_image_for(model, node) : -1;
     if (i < 0 || p->pic_of[i] < 0 || p->pics[p->pic_of[i]].state != PIC_SHOWN)
         return false;
-    *w = (int32_t)p->pics[p->pic_of[i]].image.width;
-    *h = (int32_t)p->pics[p->pic_of[i]].image.height;
+    uint32_t pw, ph;
+    (void)picture_pixels(&p->pics[p->pic_of[i]], &pw, &ph);
+    *w = (int32_t)pw;
+    *h = (int32_t)ph;
     return true;
 }
 
@@ -551,6 +591,7 @@ static void scroll_to(int32_t x, int32_t y)
     sync_bars();
     os64_ui_mark_dirty(&g.ui, &g.view);
     forms_place();
+    pictures_schedule();
     // The page moved under a pointer that did not: what it rests on now.
     hover(g.pointer_x, g.pointer_y);
 }
@@ -657,6 +698,7 @@ static void relayout(bool again)
     // The attempt consumes the moves whether or not it fits: kept, they
     // would retry a layout that just failed at every event batch.
     g.pictures_moved = false;
+    g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     if (fresh == NULL) {
         status_rest("Out of memory laying the page out; this is the last layout that fit.");
         return;
@@ -673,6 +715,7 @@ static void relayout(bool again)
     clamp_scroll();
     sync_bars();
     forms_place();
+    pictures_schedule();
     say_laid_out(ms_between(&t0, &t1));
     os64_ui_mark_dirty(&g.ui, &g.view);
 }
@@ -749,6 +792,7 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     os64_memset(fresh, 0, sizeof(*fresh));
     g.page_serial++;
     g.pictures_moved = false;
+    g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     g.laid_at = t1;
     pictures_start(&g.page);
     forms_build();
@@ -761,6 +805,7 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
         g.sx = g.sy = 0;
     sync_bars();
     forms_place();
+    pictures_schedule();
     os64_ui_textfield_set(&g.ui, &g.field, g.page.way.url);
     say_laid_out(ms_between(&t0, &t1));
     if (fragment != NULL)
@@ -1093,7 +1138,7 @@ static bool picture_sized(const Page *p, const os64_html_node_t *node)
     return b != NULL && flow_replaced_fixed(b->style);
 }
 
-// Hands the pool the page's next pictures, in tree order, while fewer than
+// Hands the pool the page's next pictures, in table order, while fewer than
 // PICTURES_AT_ONCE are in it. One it cannot take keeps its frame.
 static void pictures_feed(Page *p)
 {
@@ -1124,65 +1169,77 @@ static void pictures_feed(Page *p)
     }
 }
 
-// Gathers the page's pictures, one per address, in tree order: libpage's
-// list is the record. A picture whose address was refused, or names a
-// scheme nothing here fetches, is never asked for.
+// The picture at `url`, gathered once however many times the page names
+// it: its index in the page's pictures, or -1 for an address nothing here
+// fetches. Found through `slot`, an open-addressed table over the page's
+// addresses, never by a walk of those gathered so far: a page names every
+// picture it likes, and a walk per picture is quadratic in them.
+static int32_t picture_for(Page *p, int32_t *slot, size_t cap, const char *url)
+{
+    if (url == NULL)
+        return -1;
+    bool fetchable = os64_strlen(url) > 7 &&
+                     (os64_memcmp(url, "http://", 7) == 0 ||
+                      (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
+                      os64_memcmp(url, "file://", 7) == 0);
+    if (!fetchable)
+        return -1;
+    uint64_t h = 1469598103934665603ull;       // FNV-1a over the address
+    for (const char *c = url; *c != '\0'; c++)
+        h = (h ^ (uint8_t)*c) * 1099511628211ull;
+    size_t at = (size_t)h & (cap - 1);
+    while (slot[at] >= 0 && !os64_streq(p->pics[slot[at]].url, url))
+        at = (at + 1) & (cap - 1);
+    if (slot[at] >= 0)
+        return slot[at];
+    slot[at] = p->npics;
+    Picture *pic = &p->pics[p->npics];
+    pic->url = url;
+    pic->state = PIC_QUEUED;
+    p->waiting++;
+    return p->npics++;
+}
+
+// Gathers the page's pictures and the pictures behind its boxes, one per
+// address, in tree order — libpage's lists are the record — and starts
+// feeding them to the pool. A picture whose address was refused, or names
+// a scheme nothing here fetches, is never asked for.
 static void pictures_start(Page *p)
 {
     const os64_page_t *model = page_model(p);
     int32_t n = model != NULL ? os64_page_nimages(model) : 0;
-    if (n <= 0 || g.pool == NULL)
+    int32_t nb = model != NULL ? os64_page_nbackgrounds(model) : 0;
+    if (n + nb <= 0 || g.pool == NULL)
         return;
-    // One picture per address, found through a table and never by a walk
-    // of those gathered so far: a page names every picture it likes, and a
-    // walk per picture is quadratic in them.
     size_t cap = 16;
-    while (cap < (size_t)n * 2)
+    while (cap < (size_t)(n + nb) * 2)
         cap *= 2;
     int32_t *slot = os64_malloc(cap * sizeof(*slot));
-    p->pic_of = os64_calloc((size_t)n, sizeof(*p->pic_of));
-    p->pics = os64_calloc((size_t)n, sizeof(*p->pics));
-    if (slot == NULL || p->pic_of == NULL || p->pics == NULL) {
+    p->pic_of = os64_calloc((size_t)(n > 0 ? n : 1), sizeof(*p->pic_of));
+    p->bg_of = os64_calloc((size_t)(nb > 0 ? nb : 1), sizeof(*p->bg_of));
+    p->pics = os64_calloc((size_t)(n + nb), sizeof(*p->pics));
+    if (slot == NULL || p->pic_of == NULL || p->bg_of == NULL || p->pics == NULL) {
         os64_free(slot);
         os64_free(p->pic_of);
+        os64_free(p->bg_of);
         os64_free(p->pics);
-        p->pic_of = NULL;
+        p->pic_of = p->bg_of = NULL;
         p->pics = NULL;
         return;
     }
     for (size_t k = 0; k < cap; k++)
         slot[k] = -1;
+    // A picture moves the page when any element naming it leaves its box
+    // to the picture; a background never does, being painted, not laid out.
     for (int32_t i = 0; i < n; i++) {
-        p->pic_of[i] = -1;
-        const char *url = os64_page_image(model, i)->src.url;
-        if (url == NULL)
-            continue;
-        bool fetchable = os64_strlen(url) > 7 &&
-                         (os64_memcmp(url, "http://", 7) == 0 ||
-                          (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
-                          os64_memcmp(url, "file://", 7) == 0);
-        if (!fetchable)
-            continue;
-        uint64_t h = 1469598103934665603ull;       // FNV-1a over the address
-        for (const char *c = url; *c != '\0'; c++)
-            h = (h ^ (uint8_t)*c) * 1099511628211ull;
-        size_t at = (size_t)h & (cap - 1);
-        while (slot[at] >= 0 && !os64_streq(p->pics[slot[at]].url, url))
-            at = (at + 1) & (cap - 1);
-        if (slot[at] >= 0) {
-            p->pic_of[i] = slot[at];
-            if (!picture_sized(p, os64_page_image(model, i)->node))
-                p->pics[slot[at]].moves = true;
-            continue;
-        }
-        slot[at] = p->npics;
-        Picture *pic = &p->pics[p->npics];
-        pic->moves = !picture_sized(p, os64_page_image(model, i)->node);
-        pic->url = url;
-        pic->state = PIC_QUEUED;
-        p->waiting++;
-        p->pic_of[i] = p->npics++;
+        const os64_page_image_t *img = os64_page_image(model, i);
+        int32_t k = picture_for(p, slot, cap, img->src.url);
+        p->pic_of[i] = k;
+        if (k >= 0 && !picture_sized(p, img->node))
+            p->pics[k].moves = true;
     }
+    for (int32_t i = 0; i < nb; i++)
+        p->bg_of[i] = picture_for(p, slot, cap, os64_page_background(model, i)->src.url);
     os64_free(slot);
     pictures_feed(p);
 }
@@ -1218,7 +1275,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
         pic->state = PIC_FAILED;
         return;
     }
-    size_t bytes = (size_t)product->image.width * product->image.height * 4u;
+    size_t bytes = product->cost;
     if (g.page.kept_bytes + bytes > PICTURES_KEPT_MAX) {
         pic->state = PIC_NOT_KEPT;
         g.page.not_kept++;
@@ -1226,8 +1283,15 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     }
     pic->image = product->image;
     os64_memset(&product->image, 0, sizeof(product->image));
+    pic->moving = product->sequence;
+    product->sequence = NULL;
     pic->state = PIC_SHOWN;
     g.page.kept_bytes += bytes;
+    if (pic->moving != NULL) {
+        pic->playing = true;
+        pic->due = yonder_now_ms() + frame_delay(pic);
+        pictures_schedule();
+    }
     if (picture_moves_page(&g.page, job->index))
         g.pictures_moved = true;
     os64_ui_mark_dirty(&g.ui, &g.view);
@@ -1236,23 +1300,137 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
 // After a drained batch: lay the page out again if pictures moved it —
 // once per batch when laying it out is cheap, so a slow page of forty
 // pictures is not laid out forty times; otherwise when its last picture is
-// in, or at a batch that finds the last layout stale. The clock is READ at
-// a batch, never waited on: a slow page whose pictures stop arriving
-// settles at the first event after its layout goes stale, or when the last
-// picture comes or gives up (YONDER.md § Booked: the deadline that needs
-// neither).
+// in, or once the last layout is stale. A slow page that is waiting hands
+// the ticker the moment it goes stale (pictures_schedule), so it settles
+// on time with nobody at the mouse — or, with no ticker, at the first
+// batch after that moment.
 static void pictures_settle(void)
 {
-    if (!g.pictures_moved)
-        return;
-    if (g.page.waiting > 0 && g.laid_ms > PICTURES_CHEAP_LAYOUT_MS) {
-        os64_ticks_t now;
-        os64_ticks(&now);
-        uint64_t since = ms_between(&g.laid_at, &now);
-        if (since < PICTURES_STALE_MS || since < 2 * g.laid_ms)
-            return;
+    uint64_t due = YONDER_NEVER;
+    if (g.pictures_moved) {
+        bool now_ok = true;
+        if (g.page.waiting > 0 && g.laid_ms > PICTURES_CHEAP_LAYOUT_MS) {
+            os64_ticks_t now;
+            os64_ticks(&now);
+            uint64_t since = ms_between(&g.laid_at, &now);
+            uint64_t stale = 2 * g.laid_ms > PICTURES_STALE_MS ? 2 * g.laid_ms : PICTURES_STALE_MS;
+            if (since < stale) {
+                now_ok = false;
+                due = yonder_now_ms() + (stale - since);
+            }
+        }
+        if (now_ok)
+            relayout(true);
     }
-    relayout(true);
+    if (due != g.settle_due) {
+        g.settle_due = due;
+        pictures_schedule();
+    }
+}
+
+// ── Moving pictures ─────────────────────────────────────────────────────
+
+// How long the frame on show stays: its own delay, or the floor for one
+// that asks for none.
+static uint64_t frame_delay(const Picture *pic)
+{
+    uint32_t ms = os64_image_sequence_frame(pic->moving)->delay_ms;
+    return ms <= 10 ? FRAME_FLOOR_MS : ms;
+}
+
+// Marks a part of the view, in page coordinates, for repainting: libui
+// marks a widget's bounds, so a stand-in with the part's is how.
+static void mark_part(os64_gui_rect_t r)
+{
+    os64_ui_widget_t part = {0};
+    part.bounds = (os64_gui_rect_t){g.view.bounds.x + r.x - g.sx, g.view.bounds.y + r.y - g.sy,
+                                    r.w, r.h};
+    os64_ui_mark_dirty(&g.ui, &part);
+}
+
+// Whether any box showing picture `k` meets the view — one scrolled away is
+// not advanced, since decoding a frame nobody sees is only cost — and, when
+// `mark`, each such box's part of the glass marked for repainting.
+static bool picture_on_screen(int32_t k, bool mark)
+{
+    const Page *p = &g.page;
+    const os64_page_t *model = page_model(p);
+    if (p->tree == NULL || model == NULL)
+        return false;
+    os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}, meet;
+    bool seen = false;
+    for (int32_t i = 0; p->pic_of != NULL && i < flow_nimages(p->tree); i++) {
+        const flow_box_t *b = flow_image(p->tree, i);
+        int32_t at = os64_page_image_for(model, b->node);
+        if (at < 0 || p->pic_of[at] != k || !os64_rect_intersect(b->rect, view, &meet))
+            continue;
+        seen = true;
+        if (!mark)
+            return true;
+        mark_part(meet);
+    }
+    // Behind a box: the body's picture is the canvas's, behind the whole
+    // view; any other is behind its own box.
+    for (int32_t i = 0; p->bg_of != NULL && i < os64_page_nbackgrounds(model); i++) {
+        if (p->bg_of[i] != k)
+            continue;
+        const os64_html_node_t *node = os64_page_background(model, i)->node;
+        const flow_box_t *b = flow_box_for(p->tree, node);
+        bool canvas = node->tag == OS64_HTML_TAG_BODY;
+        if (b == NULL || (!canvas && !os64_rect_intersect(b->rect, view, &meet)))
+            continue;
+        seen = true;
+        if (!mark)
+            return true;
+        mark_part(canvas ? view : meet);
+    }
+    return seen;
+}
+
+// Hands the ticker the earliest of the next frame among the pictures on
+// screen and the moment a slow page's layout goes stale (pictures_settle),
+// or none: a covered window, or nothing moving where the reader is and no
+// layout owed.
+static void pictures_schedule(void)
+{
+    uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
+    for (int32_t k = 0; !g.covered && k < g.page.npics; k++) {
+        const Picture *pic = &g.page.pics[k];
+        if (pic->playing && pic->due < next && picture_on_screen(k, false))
+            next = pic->due;
+    }
+    yonder_ticker_set(g.ticker, next);
+}
+
+// The ticker rang: every picture that is due and on screen shows its next
+// frame, and only its boxes are repainted.
+static void pictures_tick(void)
+{
+    uint64_t now = yonder_now_ms();
+    for (int32_t k = 0; !g.covered && k < g.page.npics; k++) {
+        Picture *pic = &g.page.pics[k];
+        if (!pic->playing || pic->due > now || !picture_on_screen(k, false))
+            continue;
+        // END holds the last frame and a failure the last good one: either
+        // way the picture stays as it is, and stops.
+        if (os64_image_sequence_next(pic->moving) != OS64_IMAGE_OK) {
+            pic->playing = false;
+            continue;
+        }
+        pic->due = now + frame_delay(pic);
+        (void)picture_on_screen(k, true);
+    }
+    pictures_schedule();
+}
+
+// The window was covered or uncovered. The flag is the truth and the event
+// only the nudge, since a full queue drops events.
+static void window_seen(void)
+{
+    os64_gui_window_state_t st;
+    if (os64_gui_window_get_state(g.win, &st) == 0)
+        g.covered = (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
+    pictures_schedule();
 }
 
 // ── Forms ───────────────────────────────────────────────────────────────
@@ -1688,6 +1866,8 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         if (yonder_mail_take_question(g.nav.mail, &number, line, sizeof(line)))
             bar_ask(ASK_WORKER, number, line);
     }
+    if (mask & BELL_TICK)
+        pictures_tick();
     if ((mask & BELL_WORK) && g.pool != NULL) {
         os64_work_id_t id;
         int64_t verdict;
@@ -1716,13 +1896,13 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
 // ── The page view ───────────────────────────────────────────────────────
 //
 // The verbs, executed: page coordinates moved onto the glass by the scroll
-// and the view's origin, and cut to the view (a paint hook is handed no
-// clip; libui's primitives clip only to the canvas).
+// and the view's origin, and cut to the part of the view being painted (a
+// paint hook is handed no clip; libui's primitives clip only to the canvas).
 
 typedef struct {
     os64_gui_surface_t *surf;
     int32_t dx, dy;             // page -> window
-    os64_gui_rect_t clip;       // the view, in window coordinates
+    os64_gui_rect_t clip;       // what is being painted, in window coordinates
 } Glass;
 
 static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
@@ -1751,6 +1931,28 @@ static void glass_text(void *ctx, const flow_box_t *b, os64_gui_rect_t clip, uin
                    0xff000000u | colour);
 }
 
+// A picture behind a box: libpage's list says whether there is one, and
+// one that has arrived is tiled, unscaled, over the box's colour.
+static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area, int32_t ox,
+                           int32_t oy, os64_gui_rect_t clip)
+{
+    (void)clip;
+    const Glass *gl = ctx;
+    const Page *p = &g.page;
+    int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
+    if (i < 0)
+        return false;
+    if (area == NULL || p->bg_of == NULL || p->bg_of[i] < 0 ||
+        p->pics[p->bg_of[i]].state != PIC_SHOWN)
+        return true;
+    uint32_t w, h;
+    const uint32_t *px = picture_pixels(&p->pics[p->bg_of[i]], &w, &h);
+    os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
+    yonder_tile_picture(gl->surf->pixels, gl->surf->pitch_px, gl->clip, on, ox + gl->dx,
+                        oy + gl->dy, px, w, h);
+    return true;
+}
+
 // A picture that arrived is drawn into its box, scaled and blended
 // (scale.c); one on its way, or that will not come, keeps its frame.
 static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
@@ -1760,10 +1962,10 @@ static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
     const Page *p = &g.page;
     int32_t i = p->pic_of != NULL ? os64_page_image_for(page_model(p), b->node) : -1;
     if (i >= 0 && p->pic_of[i] >= 0 && p->pics[p->pic_of[i]].state == PIC_SHOWN) {
-        const os64_image_t *img = &p->pics[p->pic_of[i]].image;
+        uint32_t w, h;
+        const uint32_t *px = picture_pixels(&p->pics[p->pic_of[i]], &w, &h);
         os64_gui_rect_t box = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
-        yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, gl->clip, box, img->pixels,
-                            img->width, img->height);
+        yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, gl->clip, box, px, w, h);
         return;
     }
     os64_gui_rect_t r = on_glass(gl, c);
@@ -1794,16 +1996,23 @@ static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
     glass_fill(ctx, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xd4d4d4);
 }
 
+// Only the part of the view that is dirty is painted: the kernel takes
+// exactly that rectangle when libui publishes, so nothing outside it is
+// seen, and a moving picture costs its own box rather than the page.
 static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
 {
     (void)t;
-    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, w->bounds};
+    os64_gui_rect_t part;
+    if (!os64_rect_intersect(w->bounds, g.ui.dirty, &part))
+        return;
+    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, part};
     if (g.page.tree == NULL) {
-        os64_draw_fill_rect(&ctx->surf, w->bounds, 0xff000000u | PAGE_PAPER);
+        os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | PAGE_PAPER);
         return;
     }
-    yonder_verbs_t v = {&gl, glass_fill, glass_text, glass_image, glass_control};
-    yonder_paint(g.page.tree, (os64_gui_rect_t){g.sx, g.sy, w->bounds.w, w->bounds.h}, PAGE_PAPER, &v);
+    yonder_verbs_t v = {&gl, glass_fill, glass_text, glass_image, glass_control, glass_backdrop};
+    yonder_paint(g.page.tree,
+                 (os64_gui_rect_t){part.x - gl.dx, part.y - gl.dy, part.w, part.h}, PAGE_PAPER, &v);
 }
 
 // The keyboard's arrows arrive as VT100 bursts (ESC [ A ...). libui's
@@ -2083,6 +2292,7 @@ static void on_resize(os64_ui_t *ui)
     clamp_scroll();
     sync_bars();
     forms_place();
+    pictures_schedule();
     os64_ui_mark_dirty(&g.ui, &g.root);
 }
 
@@ -2303,6 +2513,9 @@ int main(int argc, char **argv)
     layout();
 
     g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET, g.win, BELL_WORK);
+    g.settle_due = YONDER_NEVER;
+    g.ticker = yonder_ticker_start(g.win, BELL_TICK);
+    window_seen();                      // a window born covered learns it now, not at a nudge
     if (g.pool == NULL)
         status_rest("No background workers; pages from the network cannot be fetched.");
     buttons_follow();
@@ -2333,6 +2546,9 @@ int main(int argc, char **argv)
                 hover(ev.mouse.x, ev.mouse.y);
             else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
                 hover(ev.pointer.inside ? ev.pointer.x : -1, ev.pointer.inside ? ev.pointer.y : -1);
+            else if (ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
+                     ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
+                window_seen();
             if (!bar_event(&ev) && !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
         } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
@@ -2353,7 +2569,9 @@ int main(int argc, char **argv)
         }
     }
 
-    // The workers first: destroy cancels them — a fetch and a question
+    // The clock first: it only rings, and nothing after this should.
+    yonder_ticker_stop(g.ticker);
+    // The workers next: destroy cancels them — a fetch and a question
     // alike hear the pool's own predicate — and joins them, and releases
     // what they held, before anything they could touch goes away.
     os64_work_pool_destroy(g.pool);
