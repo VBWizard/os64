@@ -213,7 +213,9 @@ static void declaration(const char *text, size_t len)
     }
     garb_set_t sets[GARB_SETS_MAX];
     int32_t n = garb_read_declaration(&r, &r.decl, quirks, sets);
-    if (n < 0) {
+    if (n == GARB_DECL_HELD) {
+        puts("held");
+    } else if (n < 0) {
         puts("invalid");
     } else if (n == 0) {
         puts("unknown");

@@ -67,13 +67,13 @@ that the properties libflow lays out can reach.
 | Environment Variables | 1 | 1 | `env()` replaced as `var()` is; this machine defines none of the variables, so its fallback is what a page gets |
 | CSS Values and Units | 3, and 4's `min()`/`max()`/`clamp()` | 1 | `px`, `em`, `rem`, `ex`, `ch`, `%`, `vw`, `vh`, `vmin`, `vmax`, `pt`, `pc`, `cm`, `mm`, `in`, `q`; `calc()`. Level 4's small, large and dynamic viewport units are the viewport's (yonder has no toolbar that comes and goes), and Containment 3's container units fall back to it as the specification says for an element with no container |
 | Media Queries | 4 | 1 | `@media` and `<link media>`: media types, `width`/`height` in both spellings (`max-width:` and `width <=`), `orientation`, `prefers-color-scheme` (light), `prefers-reduced-motion` (reduce), `and`/`not`/`only`/`,` |
-| CSS Color | 4 | 1 | Named colours, `#rgb[a]`/`#rrggbb[aa]`, `rgb()`/`rgba()`/`hsl()`/`hsla()` in both syntaxes, `hwb()`, `transparent`, `currentColor`. `lab()`, `lch()`, `oklab()`, `oklch()` and `color()` are booked: a declaration using one is invalid, so the page's fallback before it stands. libflow's colours are opaque XRGB; alpha is honoured as opaque or fully transparent until pile 3 blends (booked there) |
+| CSS Color | 4 | 1 | Named colours, `#rgb[a]`/`#rrggbb[aa]`, `rgb()`/`rgba()`/`hsl()`/`hsla()` in both syntaxes, `hwb()`, `transparent`, `currentColor`. `lab()`, `lch()`, `oklab()`, `oklch()`, `color()` and `color-mix()` are booked: a declaration using one is invalid, so the page's fallback before it stands. libflow's colours are opaque XRGB; alpha is honoured as opaque or fully transparent until pile 3 blends (booked there) |
 | CSS 2.1 properties | — | 1 | Every property libflow's struct already holds, and their shorthands: `display`, `font`/`font-*`, `color`, `background`/`background-color`, `margin`, `padding`, `border`/`border-*`, `width`, `height`, `text-align`, `vertical-align`, `white-space`, `text-decoration`, `visibility`, `list-style`/`list-style-*`, `border-spacing`, `border-collapse`, `caption-side`, `float`, `clear` |
 | New in libflow, still pile 1 | — | 1 | The cheap ones that make modern pages readable: `box-sizing`, `min-`/`max-width`/`-height`, `line-height`, `text-indent`, `text-transform`, `overflow` (clipping), `background-image`/`-repeat`/`-position` (Y5b's tiler), `white-space: pre-line` |
 | Positioned layout | 3 | 2 | `position`, offsets, `z-index`, stacking contexts |
 | Flexible Box Layout | 1 | 2 | Whole |
 | Grid Layout | 2 | 2 | Whole, subgrid last |
-| Backgrounds and Borders, Images, Transforms, Fonts (`@font-face`), Animations | 3/4 | 3 | Gradients, `border-radius`, `box-shadow`, `opacity`, `transform`, web fonts (packet 04's faces), animations on the Y5b ticker |
+| Backgrounds and Borders, Images, Transforms, Fonts (`@font-face`), Animations | 3/4 | 3 | Gradients, `border-radius`, `box-shadow`, `opacity`, `transform`, web fonts (packet 04's faces), animations on the Y5b ticker. What G2b already decided about gradients: a linear or radial one is VALID when it fits Images 3's grammar (so the pre-standard `linear-gradient(top, …)` is not, and the colour before it stands), conic gradients and `image-set()` are taken by name, and a valid one draws nothing yet while the `background` shorthand still resets the colour |
 
 ## What goes in
 
@@ -236,7 +236,7 @@ and background layer lists.
 | wend honouring `display: none` | libgarb proven in one face before a second leans on it | pile 1 proven |
 | User stylesheets | a person's own sheet is the user origin; nobody has asked | a person who asks |
 | `unicode-range` | the draft reads it from component values, in `@font-face`, not as a token | pile 3's web fonts |
-| `lab()`, `lch()`, `oklab()`, `oklch()`, `color()` | each needs its colour space converted to sRGB and gamut-mapped (Color 4 § 13) | a page whose colours are only written that way |
+| `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, `color-mix()` | each needs its colour space converted to sRGB and gamut-mapped (Color 4 § 13; `color-mix()` is Color 5, and mixes in one of those spaces) | a page whose colours are only written that way |
 | Every layer of a background | yonder draws one picture behind a box, so the first layer of a list is kept and the rest are only checked | a page whose look depends on a lower layer |
 | Quirks mode's hashless colour (`color: ff0000`) | quirks mode's unitless lengths are read; its colours without a `#` are not yet | a quirks-mode page written that way |
 | Encodings beyond libhtml's | a sheet in ISO-8859-2 or Shift_JIS keeps its ASCII and loses the rest | the first sheet whose text is not ASCII and not UTF-8 |
