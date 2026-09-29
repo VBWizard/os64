@@ -4,7 +4,7 @@ DEBTS.md's shape, for the browser campaign: wend, yonder, and the
 libraries under them (libhtml, libpage, libflow, libway, libfetch,
 libimage). A row is something a person hit on a real page, or a known gap
 with its trigger. What yonder's own design deliberately leaves for later
-is booked in its constitution (`docs/design/pending/YONDER.md` § Booked);
+is booked in its constitution (`docs/design/completed/YONDER.md` § Booked);
 this file is for what USE finds.
 
 Each row names who owns the fix, because the browsers sit on libraries

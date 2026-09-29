@@ -1,13 +1,13 @@
 # LAYOUT.md — a tree in, boxes out: yonder's layout library
 
-*Written 2026-09-25 by Fable, after the six work packets in `docs/yonder/`
-and the rulings of 2026-09-24. This is LIBPAGE.md's twin: the constitution
-for the one boss BROWSER.md names and the campaign never designed, because
-the ladder was built to reach it and not to guess at it. The library's
-placeholder name is `libflow` — normal flow is CSS's own word for what it
-does — and nothing below depends on the name; Chris settles it.
-Reviewed twice by Opus, then handed to Opus the same day (Chris: "Doc's
-all yours now") — Opus owns the document and builds the library.*
+*Written 2026-09-25 by Fable, after the six work packets now in
+`docs/completed/` and the rulings of 2026-09-24. This is LIBPAGE.md's twin:
+the constitution for the one boss BROWSER.md names and the campaign never
+designed, because the ladder was built to reach it and not to guess at it.
+The library's placeholder name is `libflow` — normal flow is CSS's own word
+for what it does — and nothing below depends on the name; Chris settles it.
+Reviewed twice by Opus, then handed to Opus the same day (Chris: "Doc's all
+yours now") — Opus owns the document and builds the library.*
 
 ## The ruling this rests on
 

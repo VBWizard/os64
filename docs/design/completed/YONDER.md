@@ -4,7 +4,7 @@
 The campaign is [BROWSER.md](../../../BROWSER.md), what a page means is
 [LIBPAGE.md](../../../LIBPAGE.md), where its boxes go is
 [LAYOUT.md](LAYOUT.md), and the gaps are the packets in
-[docs/yonder/](../../yonder/README.md). This is rung 2 of yonder's ladder:
+[docs/completed/](../../completed/). This is rung 2 of yonder's ladder:
 a window you can read the web in.*
 
 ## What it is
