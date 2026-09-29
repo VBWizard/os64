@@ -61,11 +61,53 @@ size_t p_percent_decode(char *s, size_t len)
     return write;
 }
 
+// An address taken apart for resolving. `file:///a/b` — the standard
+// spelling of a file on this machine — names an EMPTY host, which url.h's
+// grammar refuses as no host at all; the URL Standard reads an empty file
+// host as this machine, so it is parsed here as one and kept empty, and it
+// spells back as `file:///a/b`. Without this a page read from disk could
+// resolve none of its relative references: not a picture, not a sheet.
+static os64_url_result_t parse_address(const char *text, os64_url_t *out)
+{
+    os64_url_result_t rc = os64_url_parse(text, out);
+    char scheme[OS64_URL_SCHEME_MAX];
+    if (rc != OS64_URL_NO_HOST || !os64_url_scheme_of(text, scheme, sizeof(scheme)) ||
+        !os64_streq(scheme, "file"))
+        return rc;
+    const char *after = text + os64_strlen(scheme) + 1;
+    if (os64_strlen(after) < 3 || os64_memcmp(after, "///", 3) != 0)
+        return rc;
+    char local[OS64_URL_REF_MAX];
+    size_t n = os64_strlen(after + 2);
+    if (n + sizeof("file://localhost") > sizeof(local))
+        return OS64_URL_TOO_LONG;
+    os64_memcpy(local, "file://localhost", 16);
+    os64_memcpy(local + 16, after + 2, n + 1);
+    rc = os64_url_parse(local, out);
+    if (rc == OS64_URL_OK)
+        out->host[0] = '\0';
+    return rc;
+}
+
+bool os64_page_url_absolute(const char *base, const char *reference, char *out, size_t cap)
+{
+    os64_url_t b, url;
+    char absolute[OS64_URL_REF_MAX];
+    if (base == NULL || reference == NULL || reference[0] == '\0' ||
+        parse_address(base, &b) != OS64_URL_OK ||
+        !os64_url_absolute(&b, reference, absolute, sizeof(absolute)) ||
+        parse_address(absolute, &url) != OS64_URL_OK)
+        return false;
+    if (url.port != 0 && url.port == p_default_port(url.scheme))
+        url.port = 0;
+    return os64_url_spell(&url, out, cap);
+}
+
 bool p_canonical(os64_page_t *page, const char *text, const char **out,
                  os64_page_reason_t *refused)
 {
     os64_url_t url;
-    os64_url_result_t rc = os64_url_parse(text, &url);
+    os64_url_result_t rc = parse_address(text, &url);
     if (rc == OS64_URL_OK) {
         if (url.port != 0 && url.port == p_default_port(url.scheme))
             url.port = 0;
@@ -270,7 +312,7 @@ bool p_document_url(os64_page_t *page, const char *text)
     // Parsed for resolution, and separately: an address this grammar cannot
     // take apart is still an address a downgrade can be judged against, so
     // the scheme is read even when the rest is opaque.
-    page->document_hierarchical = os64_url_parse(page->document_url, &page->document) == OS64_URL_OK;
+    page->document_hierarchical = parse_address(page->document_url, &page->document) == OS64_URL_OK;
     if (page->document_hierarchical && page->document.port != 0 &&
         page->document.port == p_default_port(page->document.scheme))
         page->document.port = 0;
@@ -335,7 +377,7 @@ bool p_base(os64_page_t *page)
         return refused != OS64_PAGE_REASON_NO_MEMORY;
 
     page->base_url = resolved;
-    page->base_hierarchical = os64_url_parse(resolved, &page->base) == OS64_URL_OK;
+    page->base_hierarchical = parse_address(resolved, &page->base) == OS64_URL_OK;
     if (page->base_hierarchical && page->base.port != 0 &&
         page->base.port == p_default_port(page->base.scheme))
         page->base.port = 0;

@@ -116,6 +116,44 @@ static void family_a(void)
                 .html = "<base href='http://bad host/'><a href=x>l</a>",
                 .link = true,
                 .url = "http://host/dir/x"});
+    // A page read from disk is `file:///path`: an EMPTY host, which the URL
+    // Standard reads as this machine. Its relative references resolve
+    // beside it and keep the empty host.
+    run((PCase){.steps = "A4",
+                .name = "A: a relative link on a file:/// page",
+                .document = "file:///tests/pages/garb.html",
+                .html = "<a href='../up/next.html'>x</a>",
+                .link = true,
+                .url = "file:///tests/up/next.html"});
+    run((PCase){.steps = "A1",
+                .name = "A: a relative base on a file:/// page",
+                .document = "file:///tests/pages/garb.html",
+                .html = "<base href='sub/'><a href=x>l</a>",
+                .link = true,
+                .url = "file:///tests/pages/sub/x"});
+}
+
+// os64_page_url_absolute: an address a resource names, against the
+// resource's own — the same rule, so a sheet's @import agrees with a link.
+static void url_absolute(void)
+{
+    static const struct { const char *base, *ref, *want; } k[] = {
+        {"file:///tests/pages/garb-linked.css", "garb-imported.css",
+         "file:///tests/pages/garb-imported.css"},
+        {"http://host:80/css/main.css", "sub/deep.css", "http://host/css/sub/deep.css"},
+        {"https://host/css/sub/deep.css", "../main.css", "https://host/css/main.css"},
+        {"http://host/a.css", "//cdn/b.css", "http://cdn/b.css"},
+        {"http://host/a.css", "https://other:443/c.css", "https://other/c.css"},
+        {"mailto:x@y", "a.css", NULL},
+        {"http://host/a.css", "", NULL},
+    };
+    for (int32_t i = 0; i < (int32_t)(sizeof(k) / sizeof(k[0])); i++) {
+        char out[512];
+        bool ok = os64_page_url_absolute(k[i].base, k[i].ref, out, sizeof(out));
+        checks++;
+        if (k[i].want == NULL ? ok : !ok || strcmp(out, k[i].want) != 0)
+            fail("os64_page_url_absolute", "%s", k[i].ref);
+    }
 }
 
 static void long_reference(void)
@@ -1406,6 +1444,7 @@ static void allocation_sweep(void)
 static void cases(void)
 {
     family_a();
+    url_absolute();
     long_reference();
     family_b();
     family_b_outranks();

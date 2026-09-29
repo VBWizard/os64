@@ -132,6 +132,12 @@ typedef enum {
 // A sheet is refused whole past this: the web's largest sheets are a
 // fraction of it, and a sheet is held whole while it is parsed.
 #define GARB_SHEET_MAX ((size_t)8 << 20)
+// What one parse may take, past the input itself: about 5 MiB of ordinary
+// CSS with every block read, far less of the densest (GARB.md § The cost,
+// measured). A result past this is cut short and marked incomplete rather
+// than allowed to eat the machine. A face reserving memory for a parse
+// counts this, and what the parse holds outside it (GARB.md § The cost).
+#define GARB_ARENA_MAX ((size_t)96 << 20)
 // Blocks and functions nest this deep and no deeper: past it their
 // contents are read and thrown away, so the end is still found, and the
 // result says it is incomplete.

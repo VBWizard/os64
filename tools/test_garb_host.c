@@ -312,24 +312,98 @@ static void media(const char *text)
     puts(garb_media_text_matches(text + used, env) ? "true" : "false");
 }
 
+// The sheets a case supplies beside its page, for its @imports: the page's
+// text ends where the first "\n@@SHEET <url>\n" begins, and each such line
+// starts a sheet that runs to the next.
+typedef struct {
+    const char *url;
+    size_t ulen;
+    const char *text;
+    size_t len;
+} Supplied;
+
+static Supplied s_supplied[16];
+static int32_t s_nsupplied;
+
+static size_t split_supplied(const char *html, size_t hlen)
+{
+    static const char kMark[] = "\n@@SHEET ";
+    s_nsupplied = 0;
+    const char *end = html + hlen, *at = strstr(html, kMark);
+    if (at == NULL)
+        return hlen;
+    size_t page = (size_t)(at - html);
+    while (at != NULL && s_nsupplied < 16) {
+        const char *url = at + sizeof(kMark) - 1;
+        const char *nl = memchr(url, '\n', (size_t)(end - url));
+        if (nl == NULL)
+            break;
+        const char *next = strstr(nl, kMark);
+        const char *stop = next != NULL ? next : end;
+        s_supplied[s_nsupplied++] = (Supplied){url, (size_t)(nl - url), nl + 1,
+                                               (size_t)(stop - nl - 1)};
+        at = next;
+    }
+    return page;
+}
+
+// The cascade's input, built as a browser builds it: each sheet's @imports
+// (found by address among the supplied sheets, never twice on one chain)
+// stand before it, and name it as their `parent`.
+#define INPUT_MAX 64
+typedef struct {
+    garb_parsed_t parsed[INPUT_MAX];
+    garb_import_t imports[INPUT_MAX][8];
+    int32_t nparsed;
+    garb_sheet_in_t in[INPUT_MAX];
+    int32_t n;
+    const char *chain[16];
+    int32_t depth;
+} Input;
+
+static int32_t emit(Input *in, int32_t p, const char *media, const garb_import_t *via,
+                    const char *url)
+{
+    int32_t kids[8], nkids = 0;
+    garb_import_t *imps = in->imports[p];
+    int32_t nimp = garb_sheet_imports(&in->parsed[p], imps, 8);
+    in->chain[in->depth++] = url;
+    for (int32_t i = 0; i < nimp && i < 8; i++) {
+        const Supplied *found = NULL;
+        for (int32_t k = 0; k < s_nsupplied; k++)
+            if (s_supplied[k].ulen == imps[i].len &&
+                memcmp(s_supplied[k].url, imps[i].url, imps[i].len) == 0)
+                found = &s_supplied[k];
+        bool looping = false;
+        for (int32_t k = 0; found != NULL && k < in->depth; k++)
+            looping |= in->chain[k] == found->url;
+        if (found == NULL || looping || in->nparsed >= INPUT_MAX || in->depth >= 16)
+            continue;
+        int32_t child = in->nparsed++;
+        garb_parse_sheet_text(found->text, found->len, &in->parsed[child]);
+        kids[nkids++] = emit(in, child, NULL, &imps[i], found->url);
+    }
+    in->depth--;
+    int32_t at = in->n++;
+    in->in[at] = (garb_sheet_in_t){.sheet = &in->parsed[p], .media = media, .via = via};
+    for (int32_t k = 0; k < nkids; k++)
+        in->in[kids[k]].parent = at;
+    return at;
+}
+
 // The page's style elements as sheets, in document order — libpage's list,
 // done by hand here so the harness needs no libpage.
-static void collect_styles(const os64_html_node_t *n, garb_parsed_t *sheets, garb_sheet_in_t *in,
-                           int32_t *count)
+static void collect_styles(const os64_html_node_t *n, Input *in)
 {
-    for (; n != NULL && *count < 64; n = n->next) {
+    for (; n != NULL && in->nparsed < INPUT_MAX; n = n->next) {
         if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML && n->name != NULL &&
             strcmp(n->name, "style") == 0) {
-            const char *text = n->first_child != NULL && n->first_child->kind == OS64_HTML_TEXT
-                                   ? n->first_child->text : "";
-            size_t len = n->first_child != NULL ? n->first_child->text_len : 0;
-            garb_parse_sheet_text(text, len, &sheets[*count]);
+            int32_t p = in->nparsed++;
+            garb_parse_style_element(n, &in->parsed[p]);
             const os64_html_attr_t *m = os64_html_attr(n, "media");
-            in[*count].sheet = &sheets[*count];
-            in[*count].media = m != NULL ? m->value : NULL;
-            (*count)++;
+            emit(in, p, m != NULL ? m->value : NULL, NULL, NULL);
         }
-        collect_styles(n->first_child, sheets, in, count);
+        collect_styles(n->first_child, in);
     }
 }
 
@@ -339,15 +413,15 @@ static void cascade(const char *html, size_t hlen, const char *viewport)
     garb_env_t env = {800, 600};
     if (viewport != NULL)
         sscanf(viewport, "%lfx%lf", &env.width, &env.height);
+    hlen = split_supplied(html, hlen);
     os64_html_options_t opt = os64_html_options_default();
     os64_html_parser_t *hp = os64_html_parser_new(&opt);
     os64_html_parser_feed(hp, html, hlen);
     os64_html_document_t *doc = os64_html_parser_finish(hp);
-    static garb_parsed_t sheets[64];
-    garb_sheet_in_t in[64];
-    int32_t n = 0;
-    collect_styles(doc->document, sheets, in, &n);
-    garb_cascade_t *c = garb_cascade(in, n, doc, env);
+    static Input in;
+    memset(&in, 0, sizeof(in));
+    collect_styles(doc->document, &in);
+    garb_cascade_t *c = garb_cascade(in.in, in.n, doc, env);
     size_t need = garb_cascade_dump(c, doc, NULL, 0) + 1;
     char *out = malloc(need);
     garb_cascade_dump(c, doc, out, need);
@@ -355,8 +429,8 @@ static void cascade(const char *html, size_t hlen, const char *viewport)
     puts(garb_cascade_incomplete(c) ? "(incomplete)" : "(end)");
     free(out);
     garb_cascade_free(c);
-    for (int32_t k = 0; k < n; k++)
-        garb_free(&sheets[k]);
+    for (int32_t k = 0; k < in.nparsed; k++)
+        garb_free(&in.parsed[k]);
     os64_html_document_free(doc);
 }
 
@@ -373,7 +447,7 @@ static void parse_all(const char *text, size_t len)
     (void)garb_parse_sheet((const uint8_t *)text, len, NULL, NULL, &r);
     // The whole sheet cascaded over a small page, custom properties and a
     // style attribute included.
-    garb_sheet_in_t in = {&r, NULL};
+    garb_sheet_in_t in = {.sheet = &r};
     garb_env_t env = {800, 600};
     garb_cascade_free(garb_cascade(&in, 1, s_sweep_doc, env));
     for (int32_t i = 0; i < r.nitems; i++) {
@@ -722,7 +796,7 @@ static char *cascade_answer(const char *text, size_t len, bool *incomplete)
 {
     garb_parsed_t r;
     (void)garb_parse_sheet((const uint8_t *)text, len, NULL, NULL, &r);
-    garb_sheet_in_t in = {&r, NULL};
+    garb_sheet_in_t in = {.sheet = &r};
     garb_env_t env = {800, 600};
     garb_cascade_t *c = garb_cascade(&in, 1, s_sweep_doc, env);
     size_t need = garb_cascade_dump(c, s_sweep_doc, NULL, 0) + 1;

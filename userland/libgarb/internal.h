@@ -7,11 +7,6 @@
 #include "garb/garb.h"
 #include "os64/arena.h"
 
-// What one parse may take, past the input itself: about 5 MiB of ordinary
-// CSS with every block read, far less of the densest (GARB.md § The cost,
-// measured). A result past this is cut short and marked incomplete rather
-// than allowed to eat the machine.
-#define GARB_ARENA_MAX ((size_t)96 << 20)
 
 // ── Room for what is open ───────────────────────────────────────────────
 //

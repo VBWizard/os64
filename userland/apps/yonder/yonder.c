@@ -25,12 +25,14 @@
 #include "os64/str.h"
 #include "os64/text.h"
 #include "os64/text_draw.h"
+#include "os64/url.h"
 #include "os64/ui.h"
 #include "os64/work.h"
 #include "bar.h"
 #include "mail.h"
 #include "paint.h"
 #include "picture.h"
+#include "sheet.h"
 #include "scale.h"
 #include "ticker.h"
 #include "trip.h"
@@ -237,6 +239,31 @@ typedef struct {
     bool moves;
 } Picture;
 
+// One of a page's style sheets (GARB.md, G3 and G4): a `style` element's,
+// a linked one, or one an @import brought. Entries never move once made —
+// the cascade's input points at their parses — and an @import's entry is
+// made when its importer is ready.
+#define SHEETS_MAX 64           // a page's sheets, @imports included
+#define SHEET_IMPORTS_MAX 16    // the @imports one sheet may make
+#define SHEETS_WAIT_MS 3000     // how long a page waits for its sheets before it is shown
+
+typedef struct {
+    garb_parsed_t parsed;
+    bool ready;                     // parsed: it is in the cascade
+    bool waiting;                   // its job is out, as `id`
+    // The first paint waits for it: its media holds on this glass now, or
+    // it is an import of a sheet that does. One that does not is fetched
+    // all the same, and laid in when it lands.
+    bool holds;
+    os64_work_id_t id;
+    const char *media;              // a sheet the page names: its element's; NULL otherwise
+    int32_t importer, import_index; // -1 for a sheet the page names; else its @import
+    char *url;                      // where it came from, its @imports' base; NULL for a `style`
+    garb_import_t *imports;         // once ready: its @imports, and each one's entry or -1
+    int32_t *child;
+    int32_t nimports;
+} Sheet;
+
 // A page as the window holds it: libway's page (the tree, what it means,
 // the reader's flips) and its layout at the size it was laid out at. A
 // text/plain page has no tree of its own, so it is given one.
@@ -246,13 +273,16 @@ typedef struct {
     os64_page_t *plain_model;
     flow_tree_t *tree;
     int32_t laid_width, laid_height;
-    // The page's `style` sheets, parsed once, and their cascade at the size
-    // the tree was laid out at (GARB.md, G3). The tree points into both.
-    garb_parsed_t *sheets;
-    garb_sheet_in_t *sheet_in;
-    int32_t nsheets;
-    bool sheets_read;
+    // The page's sheets, and their cascade at the size the tree was laid
+    // out at; it is judged again when the size or the sheets change. The
+    // tree points into both. `serial` names the page to a sheet's job.
+    // `sheets_waiting` counts the sheets out that the first paint waits for
+    // (Sheet.holds), not every sheet out.
+    Sheet *sheets;
+    int32_t nsheets, sheets_waiting, sheets_ready;
+    bool sheets_changed;
     garb_cascade_t *cascade;
+    uint64_t serial;
     // The pictures, one per address, and for each of libpage's pictures
     // (os64_page_image) and backgrounds (os64_page_background) which of
     // these it is, -1 for one that will not be fetched.
@@ -306,10 +336,13 @@ static void page_clear(Page *p)
     os64_free(p->bg_of);
     flow_free(p->tree);
     garb_cascade_free(p->cascade);
-    for (int32_t i = 0; i < p->nsheets; i++)
-        garb_free(&p->sheets[i]);
+    for (int32_t i = 0; i < p->nsheets; i++) {
+        garb_free(&p->sheets[i].parsed);
+        os64_free(p->sheets[i].url);
+        os64_free(p->sheets[i].imports);
+        os64_free(p->sheets[i].child);
+    }
     os64_free(p->sheets);
-    os64_free(p->sheet_in);
     os64_page_free(p->plain_model);
     os64_html_document_free(p->plain);
     way_page_clear(&p->way);
@@ -337,54 +370,51 @@ static bool page_from_text(Page *p)
     return p->plain != NULL && p->plain_model != NULL;
 }
 
-// The page's `style` elements, parsed once, in the order the cascade ranks
-// them. A linked sheet is not fetched. A sheet that will not parse — too
-// big, or no memory — is left out, and the page is drawn without it.
-static void sheets_read(Page *p)
+// An entry of the cascade's input for sheet `e` and, before it, for the
+// ready sheets its @imports brought, each naming it as `parent`
+// (garb/cascade.h). Its index, or -1 when it is not ready.
+// The cascade writes into each sheet's arena as it reads a rule's block
+// (garb_rules_of), so the page is not const here.
+static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *n)
 {
-    p->sheets_read = true;
-    const os64_page_t *model = page_model(p);
-    int32_t n = model != NULL ? os64_page_nsheets(model) : 0;
-    if (n == 0)
-        return;
-    p->sheets = os64_calloc((size_t)n, sizeof(*p->sheets));
-    p->sheet_in = os64_calloc((size_t)n, sizeof(*p->sheet_in));
-    if (p->sheets == NULL || p->sheet_in == NULL) {
-        os64_free(p->sheets);
-        os64_free(p->sheet_in);
-        p->sheets = NULL;
-        p->sheet_in = NULL;
-        return;
+    Sheet *sh = &p->sheets[e];
+    if (!sh->ready)
+        return -1;
+    int32_t kids[SHEET_IMPORTS_MAX], nkids = 0;
+    for (int32_t k = 0; k < sh->nimports; k++) {
+        int32_t at = sh->child[k] >= 0 ? sheet_emit(p, sh->child[k], in, n) : -1;
+        if (at >= 0)
+            kids[nkids++] = at;
     }
-    for (int32_t i = 0; i < n; i++) {
-        const os64_page_sheet_t *sh = os64_page_sheet(model, i);
-        if (sh->linked)
-            continue;
-        garb_parsed_t *parsed = &p->sheets[p->nsheets];
-        if (garb_parse_style_element(sh->node, parsed) != GARB_OK) {
-            garb_free(parsed);
-            continue;
-        }
-        p->sheet_in[p->nsheets] = (garb_sheet_in_t){parsed, sh->media};
-        p->nsheets++;
-    }
+    int32_t at = (*n)++;
+    in[at] = (garb_sheet_in_t){
+        .sheet = &sh->parsed,
+        .media = sh->media,
+        .via = sh->importer >= 0 ? &p->sheets[sh->importer].imports[sh->import_index] : NULL,
+    };
+    for (int32_t k = 0; k < nkids; k++)
+        in[kids[k]].parent = at;
+    return at;
 }
 
 // Lays the page out at `width` x `height`, cascading its sheets again when
-// the size is not the one they were cascaded at — a media query or a vw
-// reads it. The new tree replaces the old only once it exists (LAYOUT.md
-// § Bounds), and the cascade the old one points into is freed with it.
-// False on no memory, the page on screen untouched.
+// they changed or the size is not the one they were cascaded at — a media
+// query or a vw reads it. The new tree replaces the old only once it
+// exists (LAYOUT.md § Bounds), and the cascade the old one points into is
+// freed with it. False on no memory, the page on screen untouched.
 static bool page_lay_out(Page *p, int32_t width, int32_t height)
 {
-    if (!p->sheets_read)
-        sheets_read(p);
     garb_cascade_t *cascade = p->cascade;
     garb_env_t view = {width, height};
-    if (p->nsheets > 0 && (cascade == NULL || garb_cascade_env(cascade).width != view.width ||
-                           garb_cascade_env(cascade).height != view.height)) {
-        cascade = garb_cascade(p->sheet_in, p->nsheets, page_doc(p), view);
-        if (cascade == NULL)
+    if (p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
+                                                  garb_cascade_env(cascade).height != view.height))) {
+        garb_sheet_in_t in[SHEETS_MAX];
+        int32_t n = 0;
+        for (int32_t e = 0; e < p->nsheets; e++)
+            if (p->sheets[e].importer < 0)
+                (void)sheet_emit(p, e, in, &n);
+        cascade = n > 0 ? garb_cascade(in, n, page_doc(p), view) : NULL;
+        if (n > 0 && cascade == NULL)
             return false;
     }
     s_env.ctx = p;
@@ -404,6 +434,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height)
     p->tree = fresh;
     p->laid_width = width;
     p->laid_height = height;
+    p->sheets_changed = false;
     return true;
 }
 
@@ -489,6 +520,19 @@ static struct {
     uint64_t generation;
     // Which page is on screen, so a picture finished for another is let go.
     uint64_t page_serial;
+    uint64_t pages_made;            // the last Page.serial handed out
+    // A page that arrived and is waiting for its linked sheets, with what
+    // arriving needs; the page on screen stays until it is shown (GARB.md,
+    // G4). `due` is when it is shown whatever is still coming.
+    struct {
+        bool active;
+        Page page;
+        NavKind kind;
+        way_position_t crumb;
+        bool has_fragment;
+        char fragment[256];
+        uint64_t due;
+    } coming;
     // A picture arrived whose size may move the page, since the page was
     // last laid out (pictures_settle); cleared by any layout, whether or not
     // it fit.
@@ -765,7 +809,7 @@ static void relayout(bool again)
     int32_t width = g.view.bounds.w, height = g.view.bounds.h;
     if (page_doc(&g.page) == NULL || width <= 0 ||
         (!again && g.page.tree != NULL && width == g.page.laid_width &&
-         (g.page.nsheets == 0 || height == g.page.laid_height)))
+         (g.page.sheets_ready == 0 || height == g.page.laid_height)))
         return;
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
@@ -799,6 +843,9 @@ static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask
 static void buttons_follow(void);
 static void pictures_start(Page *p);
 static void pictures_leave(Page *p);
+static void sheets_start(Page *p);
+static void sheets_leave(Page *p);
+static void coming_drop(void);
 static void forms_build(void);
 static void forms_drop(void);
 static void bar_forget(void);
@@ -830,10 +877,11 @@ static void refresh_if_declared(void)
         os64_ui_textfield_set(&g.ui, &g.field, later);
 }
 
-// A page arrived: lay it out BESIDE the one on screen and swap only once
-// the layout exists, so a page this machine cannot lay out costs a
+// A page is shown: laid out BESIDE the one on screen and swapped in only
+// once the layout exists, so a page this machine cannot lay out costs a
 // sentence and not the page the person was reading.
-static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const char *fragment)
+static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
+                       const char *fragment)
 {
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
     int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
@@ -842,6 +890,7 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     bool laid = page_lay_out(fresh, width, height);
     os64_ticks(&t1);
     if (!laid) {
+        sheets_leave(fresh);
         page_clear(fresh);
         status_rest("Out of memory laying that page out; this is still the page you were on.");
         return;
@@ -861,6 +910,7 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     // leaves them all where they were.
     bar_forget();
     pictures_leave(&g.page);
+    sheets_leave(&g.page);
     forms_drop();
     page_clear(&g.page);
     g.page = *fresh;
@@ -888,6 +938,37 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     refresh_if_declared();
     buttons_follow();
     os64_ui_mark_dirty(&g.ui, &g.view);
+}
+
+// A page arrived. Its linked sheets are sent for first, and the page on
+// screen stays while they come — for up to SHEETS_WAIT_MS — so the new one
+// is not drawn once bare and then again dressed; a sheet still coming after
+// that is laid in when it arrives (GARB.md, G4).
+static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const char *fragment)
+{
+    coming_drop();
+    fresh->serial = ++g.pages_made;
+    sheets_start(fresh);
+    if (fresh->sheets_waiting == 0) {
+        arrive_now(fresh, kind, crumb, fragment);
+        return;
+    }
+    g.coming.active = true;
+    g.coming.page = *fresh;
+    os64_memset(fresh, 0, sizeof(*fresh));
+    g.coming.kind = kind;
+    if (crumb != NULL)
+        g.coming.crumb = *crumb;
+    g.coming.has_fragment = fragment != NULL;
+    if (fragment != NULL)
+        os64_strcopy(g.coming.fragment, sizeof(g.coming.fragment), fragment);
+    g.coming.due = yonder_now_ms() + SHEETS_WAIT_MS;
+    char line[160];
+    os64_snprintf(line, sizeof(line), "Fetching %d style sheet%s...",
+                  (int)g.coming.page.sheets_waiting, g.coming.page.sheets_waiting == 1 ? "" : "s");
+    status_rest(line);
+    buttons_follow();
+    pictures_schedule();
 }
 
 // ── Going somewhere ─────────────────────────────────────────────────────
@@ -932,7 +1013,7 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
 
 static void buttons_follow(void)
 {
-    bool loading = g.nav.id != 0;
+    bool loading = g.nav.id != 0 || g.coming.active;
     os64_ui_set_enabled(&g.ui, &g.stop, loading);
     os64_ui_set_enabled(&g.ui, &g.reload, !loading && g.page.tree != NULL);
 }
@@ -1009,14 +1090,18 @@ static void bar_answered(bool yes)
 
 // ── The navigation in flight ────────────────────────────────────────────
 
-// Ends the navigation in flight, if there is one. The pool's own
-// cancellation reaches its fetch and any question it is waiting on; the
-// mailbox this window held is let go, and outlives it for as long as the
-// job still holds its own.
+// Ends the navigation in flight, if there is one, and lets go of a page
+// that arrived and is waiting for its sheets: somewhere else was asked
+// for. The pool's own cancellation reaches its fetch and any question it
+// is waiting on; the mailbox this window held is let go, and outlives it
+// for as long as the job still holds its own.
 static void stop_trip(void)
 {
-    if (g.nav.id == 0)
+    coming_drop();
+    if (g.nav.id == 0) {
+        buttons_follow();
         return;
+    }
     os64_work_cancel(g.pool, g.nav.id);
     if (g.asker == ASK_WORKER)
         bar_forget();
@@ -1281,6 +1366,224 @@ static int32_t picture_for(Page *p, int32_t *slot, size_t cap, const char *url)
     return p->npics++;
 }
 
+// ── The page's sheets ───────────────────────────────────────────────────
+
+static char *copy_text(const char *text)
+{
+    size_t n = os64_strlen(text) + 1;
+    char *out = os64_malloc(n);
+    if (out != NULL)
+        os64_memcpy(out, text, n);
+    return out;
+}
+
+// Whether two addresses share an origin: scheme, host and port.
+static bool same_origin(const char *a, const char *b)
+{
+    os64_url_t ua, ub;
+    return os64_url_parse(a, &ua) == OS64_URL_OK && os64_url_parse(b, &ub) == OS64_URL_OK &&
+           os64_streq(ua.scheme, ub.scheme) && os64_streq(ua.host, ub.host) &&
+           ua.port == ub.port;
+}
+
+// A new entry, NULL when the page has as many as it may.
+static Sheet *sheet_new(Page *p, const char *media, int32_t importer, int32_t import_index)
+{
+    if (p->sheets == NULL)
+        p->sheets = os64_calloc(SHEETS_MAX, sizeof(Sheet));
+    if (p->sheets == NULL || p->nsheets == SHEETS_MAX)
+        return NULL;
+    Sheet *sh = &p->sheets[p->nsheets++];
+    sh->media = media;
+    sh->importer = importer;
+    sh->import_index = import_index;
+    // Whether the first paint waits for it: its media holds on this glass
+    // now — an import's own media list as well as its importer's. An
+    // import's supports() is the cascade's to judge and is not asked here,
+    // so one that fails is waited for all the same; rare, and never wrong
+    // about what applies.
+    garb_env_t view = {g.view.bounds.w > 0 ? g.view.bounds.w : 1,
+                       g.view.bounds.h > 0 ? g.view.bounds.h : 1};
+    if (importer >= 0) {
+        const garb_import_t *im = &p->sheets[importer].imports[import_index];
+        sh->holds = p->sheets[importer].holds && garb_media_matches(im->media, im->nmedia, view);
+    } else {
+        sh->holds = media == NULL || garb_media_text_matches(media, view);
+    }
+    return sh;
+}
+
+// Sends a sheet's address to a worker. One that cannot be fetched stays
+// out of the cascade, and the page is drawn without it.
+static void sheet_fetch(Page *p, Sheet *sh, const char *url)
+{
+    sh->url = copy_text(url);
+    bool fetchable = sh->url != NULL &&
+                     ((os64_strlen(url) > 7 && os64_memcmp(url, "http://", 7) == 0) ||
+                      (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
+                      (os64_strlen(url) > 7 && os64_memcmp(url, "file://", 7) == 0));
+    yonder_sheet_job_t *job = fetchable && g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
+    if (job == NULL)
+        return;
+    const os64_html_document_t *doc = page_doc(p);
+    job->kind = YONDER_JOB_SHEET;
+    job->page = p->serial;
+    job->index = (int32_t)(sh - p->sheets);
+    job->agent = g.way.agent;
+    os64_strcopy(job->url, sizeof(job->url), url);
+    if (doc->charset != NULL)
+        os64_strcopy(job->environment, sizeof(job->environment), doc->charset);
+    // Judged on the address asked for; HTML reads the response's, so a
+    // same-origin sheet that redirects elsewhere is read whatever its type.
+    job->any_type = doc->quirks == OS64_HTML_QUIRKS && same_origin(url, p->way.url);
+    job->hooks.jar = g.way.jar;
+    os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
+    os64_work_t work = {yonder_sheet_run, yonder_sheet_release, job, SHEET_RESERVE};
+    sh->id = os64_work_submit(g.pool, &work);
+    if (sh->id == 0) {
+        os64_free(job);         // the table is full: the page goes without it
+        return;
+    }
+    sh->waiting = true;
+    if (sh->holds)
+        p->sheets_waiting++;
+}
+
+// A sheet is ready: it joins the cascade, and its @imports are sent for,
+// each resolved against the sheet's own address — a `style` element's
+// against the page's base — and none that is already on the chain of
+// sheets importing it, which would import itself for ever.
+static void sheet_ready(Page *p, int32_t e)
+{
+    Sheet *sh = &p->sheets[e];
+    sh->ready = true;
+    p->sheets_ready++;
+    p->sheets_changed = true;
+    int32_t n = garb_sheet_imports(&sh->parsed, NULL, 0);
+    if (n > SHEET_IMPORTS_MAX)
+        n = SHEET_IMPORTS_MAX;
+    if (n == 0)
+        return;
+    sh->imports = os64_calloc((size_t)n, sizeof(*sh->imports));
+    sh->child = os64_calloc((size_t)n, sizeof(*sh->child));
+    if (sh->imports == NULL || sh->child == NULL)
+        return;
+    sh->nimports = garb_sheet_imports(&sh->parsed, sh->imports, n);
+    if (sh->nimports > n)
+        sh->nimports = n;
+    const char *base = sh->url != NULL ? sh->url : os64_page_base(page_model(p));
+    for (int32_t k = 0; k < sh->nimports; k++) {
+        sh->child[k] = -1;
+        char written[OS64_FETCH_URL_MAX], url[OS64_FETCH_URL_MAX];
+        const garb_import_t *im = &sh->imports[k];
+        if (im->len == 0 || im->len >= sizeof(written))
+            continue;
+        os64_memcpy(written, im->url, im->len);
+        written[im->len] = '\0';
+        if (!os64_page_url_absolute(base, written, url, sizeof(url)))
+            continue;
+        bool looping = false;
+        for (int32_t up = e; up >= 0 && !looping; up = p->sheets[up].importer)
+            looping = p->sheets[up].url != NULL && os64_streq(p->sheets[up].url, url);
+        Sheet *child = looping ? NULL : sheet_new(p, NULL, e, k);
+        if (child == NULL)
+            continue;
+        sh->child[k] = (int32_t)(child - p->sheets);
+        sheet_fetch(p, child, url);
+    }
+}
+
+// Every sheet libpage lists, in document order: a `style` element's parsed
+// here, a linked one sent for. A sheet that will not parse — too big, or no
+// memory — is left out, and the page is drawn without it.
+static void sheets_start(Page *p)
+{
+    const os64_page_t *model = page_model(p);
+    int32_t n = model != NULL ? os64_page_nsheets(model) : 0;
+    for (int32_t i = 0; i < n; i++) {
+        const os64_page_sheet_t *one = os64_page_sheet(model, i);
+        if (one->linked && one->href.url == NULL)
+            continue;
+        Sheet *sh = sheet_new(p, one->media, -1, -1);
+        if (sh == NULL)
+            break;
+        if (one->linked) {
+            sheet_fetch(p, sh, one->href.url);
+        } else if (garb_parse_style_element(one->node, &sh->parsed) == GARB_OK) {
+            sheet_ready(p, (int32_t)(sh - p->sheets));
+        } else {
+            garb_free(&sh->parsed);
+        }
+    }
+}
+
+// The page is going: what it is still waiting for is not wanted.
+static void sheets_leave(Page *p)
+{
+    for (int32_t e = 0; e < p->nsheets; e++)
+        if (p->sheets[e].waiting && g.pool != NULL)
+            os64_work_cancel(g.pool, p->sheets[e].id);
+}
+
+// The page waiting for its sheets is shown, with what has come.
+static void coming_show(void)
+{
+    if (!g.coming.active)
+        return;
+    Page page = g.coming.page;
+    NavKind kind = g.coming.kind;
+    way_position_t crumb = g.coming.crumb;
+    char fragment[sizeof(g.coming.fragment)];
+    bool has_fragment = g.coming.has_fragment;
+    os64_strcopy(fragment, sizeof(fragment), g.coming.fragment);
+    os64_memset(&g.coming, 0, sizeof(g.coming));
+    arrive_now(&page, kind, &crumb, has_fragment ? fragment : NULL);
+}
+
+// The page waiting for its sheets is not wanted after all.
+static void coming_drop(void)
+{
+    if (!g.coming.active)
+        return;
+    sheets_leave(&g.coming.page);
+    page_clear(&g.coming.page);
+    os64_memset(&g.coming, 0, sizeof(g.coming));
+}
+
+// A sheet's job finished. It belongs to the page waiting for its sheets —
+// which is shown once the last is in — or to the page on screen, which is
+// laid out again with it; any other page's is let go.
+static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
+{
+    Page *p = g.coming.active && g.coming.page.serial == job->page ? &g.coming.page
+            : g.page.serial == job->page ? &g.page : NULL;
+    if (p == NULL || job->index < 0 || job->index >= p->nsheets)
+        return;
+    Sheet *sh = &p->sheets[job->index];
+    if (!sh->waiting)
+        return;
+    sh->waiting = false;
+    sh->id = 0;
+    if (sh->holds)
+        p->sheets_waiting--;
+    if (got != NULL && got->ok) {
+        sh->parsed = got->parsed;               // moved: the release frees nothing
+        os64_memset(&got->parsed, 0, sizeof(got->parsed));
+        char *url = copy_text(got->url);        // after its redirects
+        if (url != NULL) {
+            os64_free(sh->url);
+            sh->url = url;
+        }
+        sheet_ready(p, job->index);
+    }
+    if (p == &g.coming.page) {
+        if (p->sheets_waiting == 0)
+            coming_show();
+    } else if (p->sheets_changed) {
+        relayout(true);
+    }
+}
+
 // Gathers the page's pictures and the pictures behind its boxes, one per
 // address, in tree order — libpage's lists are the record — and starts
 // feeding them to the pool. A picture whose address was refused, or names
@@ -1468,13 +1771,16 @@ static bool picture_on_screen(int32_t k, bool mark)
     return seen;
 }
 
-// Hands the ticker the earliest of the next frame among the pictures on
-// screen and the moment a slow page's layout goes stale (pictures_settle),
-// or none: a covered window, or nothing moving where the reader is and no
-// layout owed.
+// Hands the ticker the earliest of three deadlines: the next frame among
+// the pictures on screen and the moment a slow page's layout goes stale
+// (pictures_settle) — neither for a covered window — and the moment a page
+// waiting for its sheets is shown whatever is still coming, covered or
+// not, since that page has to arrive either way.
 static void pictures_schedule(void)
 {
     uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
+    if (g.coming.active && g.coming.due < next)
+        next = g.coming.due;
     for (int32_t k = 0; !g.covered && k < g.page.npics; k++) {
         const Picture *pic = &g.page.pics[k];
         if (pic->playing && pic->due < next && picture_on_screen(k, false))
@@ -1895,6 +2201,11 @@ static void reaped(os64_work_id_t id, void *job, void *product)
         pictures_feed(&g.page);
         return;
     }
+    if (*(const uint32_t *)job == YONDER_JOB_SHEET) {
+        sheet_arrived(job, product);
+        yonder_sheet_release(job, product);
+        return;
+    }
     if (id == 0 || id != g.nav.id) {
         yonder_trip_release(job, product);
         return;
@@ -1947,8 +2258,11 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         if (yonder_mail_take_question(g.nav.mail, &number, line, sizeof(line)))
             bar_ask(ASK_WORKER, number, line);
     }
-    if (mask & BELL_TICK)
+    if (mask & BELL_TICK) {
+        if (g.coming.active && yonder_now_ms() >= g.coming.due)
+            coming_show();
         pictures_tick();
+    }
     if ((mask & BELL_WORK) && g.pool != NULL) {
         os64_work_id_t id;
         int64_t verdict;
@@ -2315,6 +2629,11 @@ static void click_stop(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     (void)user;
+    // A page waiting for its sheets is shown with the ones that came.
+    if (g.coming.active) {
+        coming_show();
+        return;
+    }
     if (g.nav.id == 0)
         return;
     stop_trip();
@@ -2662,6 +2981,7 @@ int main(int argc, char **argv)
     yonder_mail_drop(g.nav.mail);
     forms_drop();
     page_clear(&g.page);
+    page_clear(&g.coming.page);
     way_jar_free(g.way.jar);
     os64_ui_font_release(&g.ui);
     for (int i = 0; i < s_faces.nopen; i++)
