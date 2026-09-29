@@ -72,7 +72,8 @@ typedef struct {
     // Ask a yes/no question. `security` marks one where a stale or
     // unverifiable answer could send something in clear; `refused` is the
     // sentence for a no, NULL for none. The face owns how an answer is
-    // shown to be FRESH.
+    // shown to be FRESH. NULL answers every question no: nothing goes out
+    // in clear that nobody was asked about.
     bool (*confirm)(void *ctx, const char *question, bool security, const char *refused);
     // Whether to stop the fetch in flight. Asked before every wait.
     bool (*cancelled)(void *ctx);
@@ -87,6 +88,9 @@ typedef struct {
     way_position_t position;
 } way_crumb_t;
 
+// A session is LARGE — its history is WAY_HISTORY_MAX addresses of up to
+// OS64_FETCH_URL_MAX bytes each — so a face keeps one in static storage, as
+// wend does, and never on a thread's stack.
 typedef struct {
     const char *name;                   // how a sentence names this browser: "wend"
     const char *agent;                  // the User-Agent it sends

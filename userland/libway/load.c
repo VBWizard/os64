@@ -31,7 +31,8 @@ static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
                       ? " Resend form data unencrypted to %s? (y/n) "
                       : " %s sends you to unencrypted http - follow? (y/n) ",
                   hop->target.host);
-    bool yes = s->face.confirm(s->face.ctx, question, true, " stopped at the unencrypted hop");
+    bool yes = s->face.confirm != NULL &&
+               s->face.confirm(s->face.ctx, question, true, " stopped at the unencrypted hop");
     if (yes)
         way_say(s, " following an unencrypted hop");
     return yes ? OS64_FETCH_HOP_FOLLOW : OS64_FETCH_HOP_STOP;
@@ -224,8 +225,6 @@ bool way_load(way_session_t *s, const char *url, const os64_page_request_t *requ
         return false;
     }
 
-    os64_strcopy(out->url, sizeof(out->url), head->url_text);
-
     if (html) {
         out->doc = parse_body(s, f, head->charset, url);
         if (!out->doc) {
@@ -253,6 +252,9 @@ bool way_load(way_session_t *s, const char *url, const os64_page_request_t *requ
             return false;
         }
     }
+
+    // Only now is there a page: a false return leaves `out` empty.
+    os64_strcopy(out->url, sizeof(out->url), head->url_text);
 
     // EVERY WAY THE WIRE OR THE PARSE LEFT A PAGE INCOMPLETE GETS A
     // SENTENCE, each of them and not only the first, because half a page
