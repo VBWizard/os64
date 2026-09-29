@@ -941,6 +941,41 @@ bool garb_cascade_incomplete(const garb_cascade_t *c)
     return c == NULL || c->incomplete;
 }
 
+garb_status_t garb_parse_style_element(const os64_html_node_t *style, garb_parsed_t *out)
+{
+    size_t len = 0;
+    const os64_html_node_t *only = NULL;
+    int32_t texts = 0;
+    for (const os64_html_node_t *k = style != NULL ? style->first_child : NULL; k != NULL;
+         k = k->next)
+        if (k->kind == OS64_HTML_TEXT) {
+            len += k->text_len;
+            only = k;
+            texts++;
+        }
+    if (texts <= 1)
+        return garb_parse_sheet_text(only != NULL ? only->text : "", only != NULL ? len : 0, out);
+    char *joined = os64_malloc(len + 1);
+    if (joined == NULL) {
+        os64_memset(out, 0, sizeof(*out));
+        return GARB_NO_MEMORY;
+    }
+    size_t at = 0;
+    for (const os64_html_node_t *k = style->first_child; k != NULL; k = k->next)
+        if (k->kind == OS64_HTML_TEXT) {
+            os64_memcpy(joined + at, k->text, k->text_len);
+            at += k->text_len;
+        }
+    garb_status_t st = garb_parse_sheet_text(joined, len, out);
+    os64_free(joined);
+    return st;
+}
+
+garb_env_t garb_cascade_env(const garb_cascade_t *c)
+{
+    return c != NULL ? c->env : (garb_env_t){0, 0};
+}
+
 garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *element)
 {
     garb_style_t none = {NULL, 0};

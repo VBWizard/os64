@@ -30,20 +30,49 @@ typedef struct {
     size_t scratch;     // the working memory live now (Scratch, below)
 } L;
 
-// The flow of one block formatting context: where the next box goes, the
-// vertical margins adjoining that point that no box has resolved yet (they
-// collapse — non-negative, so to their largest), and where the first
-// content inside the current container was placed, if any has been.
+// Vertical margins that adjoin collapse to the largest positive one plus
+// the most negative (CSS 2.1 § 8.3.1), so a set of them is held as those
+// two and summed where a box is placed.
 typedef struct {
-    int64_t y;
-    int64_t pm;
-    int64_t first;      // -1 until content resolves the pending margins
-} Cursor;
+    int64_t pos, neg;   // pos >= 0, neg <= 0
+} Margins;
+
+static const Margins kNoMargins = {0, 0};
 
 static int64_t max64(int64_t a, int64_t b)
 {
     return a > b ? a : b;
 }
+
+static int64_t min64(int64_t a, int64_t b)
+{
+    return a < b ? a : b;
+}
+
+static Margins margin_of(int64_t m)
+{
+    return m >= 0 ? (Margins){m, 0} : (Margins){0, m};
+}
+
+static Margins margins_join(Margins a, Margins b)
+{
+    return (Margins){max64(a.pos, b.pos), min64(a.neg, b.neg)};
+}
+
+static int64_t margins_sum(Margins m)
+{
+    return m.pos + m.neg;
+}
+
+// The flow of one block formatting context: where the next box goes, the
+// vertical margins adjoining that point that no box has resolved yet, and
+// where the first content inside the current container was placed, if any
+// has been.
+typedef struct {
+    int64_t y;
+    Margins pm;
+    int64_t first;      // -1 until content resolves the pending margins
+} Cursor;
 
 // The longest length layout resolves, in 26.6: as many pixels as a face
 // can read. A page can nest percentages of percentages (`width=1000000%`
@@ -84,14 +113,15 @@ static int64_t mul_div(int64_t a, int64_t b, int64_t c)
 
 // A length against a containing block's width; auto reads as 0, and the
 // caller that cares asks first. A percentage is a count of 1/64 percent,
-// so it divides by 6400, taken in two parts that cannot overflow.
+// so it divides by 6400, taken in two parts that cannot overflow, and a
+// calc()'s pixel offset is added to it.
 static int64_t len(flow_length_t l, int64_t base)
 {
     switch (l.kind) {
     case FLOW_LENGTH_PX: return hold_len(l.value);
     case FLOW_LENGTH_PERCENT: {
         int64_t b = hold_len(base);
-        return hold_len(b / 6400 * l.value + b % 6400 * l.value / 6400);
+        return hold_len(b / 6400 * l.value + b % 6400 * l.value / 6400 + hold_len(l.offset));
     }
     case FLOW_LENGTH_AUTO: break;
     }
@@ -644,6 +674,13 @@ static bool quirk_no_wrap_round(const L *l, const FBox *ifc, const FItem *it)
     return false;
 }
 
+typedef struct {
+    int64_t min, max;
+} Intr;
+
+static Intr intrinsic(L *l, FBox *b);
+static int64_t hframe(const FBox *b, int64_t base);
+
 static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
 {
     l->out->measures++;
@@ -714,11 +751,29 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                          len(st->padding[FLOW_TOP], cw) + len(st->padding[FLOW_BOTTOM], cw);
             g->frame_w = fw;
             g->frame_h = fh;
-            // An atom with content of its own (a marquee) is as wide as
-            // the line; its height comes from laying it out. Margins and a
-            // frame wider than the line leave it no content, never less.
-            if (it->content != NULL)
-                r.w = cw - fw - g->ml - g->mr > 0 ? cw - fw - g->ml - g->mr : 0;
+            // An atom with content of its own is laid out inside it, which
+            // gives its height. A marquee is as wide as the line; any other
+            // inline-block is its set width, or shrinks to fit (CSS 2.1 §
+            // 10.3.9): its min-content width at least, its max-content at
+            // most, and between them the room the line has. Measured for a
+            // parent's intrinsic widths (cw 0), that is its min-content.
+            if (it->content != NULL) {
+                int64_t room = max64(0, cw - fw - g->ml - g->mr);
+                if (it->node->tag == OS64_HTML_TAG_MARQUEE) {
+                    r.w = room;
+                } else if (st->width.kind != FLOW_LENGTH_AUTO) {
+                    r.w = max64(0, len(st->width, cw));
+                } else {
+                    // intrinsic() answers border-box widths with the frame's
+                    // percentages at 0 (the containing block is not known
+                    // there); take off that frame, not the line's, to have
+                    // the content's own preferred widths.
+                    Intr in = intrinsic(l, it->content);
+                    int64_t f0 = hframe(it->content, 0);
+                    r.w = min64(max64(in.min - f0, room), in.max - f0);
+                    r.w = max64(0, r.w);
+                }
+            }
             g->atom = r;
             g->w = g->ml + fw + r.w + g->mr;
             g->keep_round = quirk_no_wrap_round(l, ifc, it);
@@ -949,6 +1004,26 @@ static bool open_push(L *l, Open *o, const FInline *inl)
     return true;
 }
 
+// The baseline of a box's last line with content, in its flow (CSS 2.1 §
+// 10.8.1: an inline-block's baseline); false for a box with none. A table
+// inside is not looked into.
+static bool last_baseline(const FBox *b, int64_t *out)
+{
+    bool found = false;
+    if (b->ifc) {
+        for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
+            if (ln->h > 0) {
+                *out = ln->baseline;
+                found = true;
+            }
+        return found;
+    }
+    for (const FBox *c = b->first; c != NULL; c = c->next)
+        if (c->kind == FB_BLOCK && last_baseline(c, out))
+            found = true;
+    return found;
+}
+
 // How many of a justified line's gaps end at or before pen position `x`:
 // how many widenings a fragment or an inline box's edge there moves by.
 static int64_t gaps_before(const int64_t *gap_at, size_t gaps, int64_t x)
@@ -1147,17 +1222,30 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 int64_t content_h = g->atom.h;
                 if (g->item->content != NULL) {
                     // Laid out where it will not collide, measured, and
-                    // moved into place once the line is placed.
-                    Cursor c = {0, 0, -1};
-                    block(l, styles, g->item->content, 0, g->atom.w + g->frame_w, &c);
+                    // moved into place once the line is placed. The block
+                    // is the element's own box, against the line it was
+                    // measured on — its percentages are of the line's
+                    // width, once — with the width the line gave it.
+                    Cursor c = {0, kNoMargins, -1};
+                    g->item->content->atom_sized = true;
+                    g->item->content->atom_w = g->atom.w;
+                    block(l, styles, g->item->content, 0, cw, &c);
                     content_h = g->item->content->placed ? g->item->content->h - g->frame_h : 0;
                 }
                 fr->h = g->frame_h + content_h;
                 Paint p = paint_for(l, styles, g->item->node, g->item->node);
                 fr->link = g->item->link >= 0 ? g->item->link : p.link;
                 int64_t hm = g->mt + fr->h + g->mb;
-                // The baseline of a replaced box is its bottom margin edge.
-                int64_t top = -hm;
+                // The baseline of a replaced box is its bottom margin edge;
+                // an inline-block's is its last line's, where it has one,
+                // unless its overflow is not visible (§ 10.8.1) — which is
+                // the marquee's, `overflow: hidden !important` in the
+                // chapter, tested by its tag until libflow holds overflow.
+                int64_t top = -hm, base = 0;
+                if (g->item->content != NULL && g->item->content->placed &&
+                    g->item->node->tag != OS64_HTML_TAG_MARQUEE &&
+                    last_baseline(g->item->content, &base))
+                    top = -(g->mt + base - g->item->content->y);
                 switch (g->style->vertical_align) {
                 case FLOW_VALIGN_MIDDLE: {
                     int64_t xh = g->style->font_size / 2;
@@ -1345,13 +1433,13 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
 
         // Resolve the margins waiting above the first line with height.
         if (height > 0) {
-            cur->y += cur->pm;
-            cur->pm = 0;
+            cur->y += margins_sum(cur->pm);
+            cur->pm = kNoMargins;
             if (cur->first < 0)
                 cur->first = cur->y;
         }
         // An empty line resolves no margins, but it sits where a line would.
-        line->y = height > 0 ? cur->y : cur->y + cur->pm;
+        line->y = height > 0 ? cur->y : cur->y + margins_sum(cur->pm);
         line->h = height;
         line->baseline = line->y + baseline_off;
 
@@ -1634,6 +1722,8 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     if (b->kind == FB_REPLACED) {
         rep = replaced_size(l, b->node, s, cbw);
         forced_w = rep.w;
+    } else if (b->atom_sized) {
+        forced_w = b->atom_w;
     }
     int64_t ml;
     int64_t cw = widths(b, cbw, forced_w, &ml);
@@ -1648,15 +1738,15 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     b->w = b->border[FLOW_LEFT] + b->padding[FLOW_LEFT] + cw + b->padding[FLOW_RIGHT] +
            b->border[FLOW_RIGHT];
     int64_t cx = b->x + b->border[FLOW_LEFT] + b->padding[FLOW_LEFT];
-    int64_t pm = max64(cur->pm, mt);
+    Margins pm = margins_join(cur->pm, margin_of(mt));
 
     Cursor in;
     int64_t y_border = 0;
     if (top_open) {
         in = (Cursor){cur->y, pm, -1};
     } else {
-        y_border = cur->y + pm;
-        in = (Cursor){y_border + b->border[FLOW_TOP] + b->padding[FLOW_TOP], 0, -1};
+        y_border = cur->y + margins_sum(pm);
+        in = (Cursor){y_border + b->border[FLOW_TOP] + b->padding[FLOW_TOP], kNoMargins, -1};
         in.first = in.y;
     }
     int64_t content_top = in.y;
@@ -1681,14 +1771,14 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
         // Layout stopped inside this box: it holds what was laid out.
         b->placed = true;
         b->unfinished = true;
-        b->y = top_open ? (in.first >= 0 ? in.first : cur->y + pm) : y_border;
+        b->y = top_open ? (in.first >= 0 ? in.first : cur->y + margins_sum(pm)) : y_border;
         b->h = max64(0, in.y - b->y);
         // And the parent's cursor stops at its bottom, so every box above
         // holds what was laid out and the page can be scrolled to it.
         if (cur->first < 0)
             cur->first = b->y;
         cur->y = b->y + b->h;
-        cur->pm = 0;
+        cur->pm = kNoMargins;
         return;
     }
 
@@ -1699,8 +1789,8 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
         Fonts f;
         if (fonts_for(l, s, &f)) {
             Extent fb = font_box(f.info.ascent, f.info.descent, f.info.line_height);
-            in.y += in.pm;
-            in.pm = 0;
+            in.y += margins_sum(in.pm);
+            in.pm = kNoMargins;
             if (in.first < 0)
                 in.first = in.y;
             in.y += fb.bottom - fb.top;
@@ -1711,9 +1801,9 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     // and bottom margins collapse together with whatever adjoins them.
     if (top_open && in.first < 0 && height_auto && bottom_open) {
         b->placed = true;
-        b->y = cur->y + pm;
+        b->y = cur->y + margins_sum(pm);
         b->h = 0;
-        cur->pm = max64(pm, max64(in.pm, mb));
+        cur->pm = margins_join(pm, margins_join(in.pm, margin_of(mb)));
         if (b->marker != NULL)
             place_marker(l, styles, b, cx, b->y);
         if (l->failed)
@@ -1721,19 +1811,20 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
         return;
     }
     if (top_open) {
-        y_border = in.first >= 0 ? in.first : cur->y + pm;
+        y_border = in.first >= 0 ? in.first : cur->y + margins_sum(pm);
         content_top = y_border;
     }
-    int64_t content_h, pm_out;
+    int64_t content_h;
+    Margins pm_out;
     if (!height_auto) {
         content_h = s->height.value;
-        pm_out = mb;
+        pm_out = margin_of(mb);
     } else if (bottom_open) {
         content_h = in.y - content_top;
-        pm_out = max64(in.pm, mb);
+        pm_out = margins_join(in.pm, margin_of(mb));
     } else {
-        content_h = in.y + in.pm - content_top;
-        pm_out = mb;
+        content_h = in.y + margins_sum(in.pm) - content_top;
+        pm_out = margin_of(mb);
     }
     if (content_h < 0)
         content_h = 0;
@@ -1764,11 +1855,6 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
 // on the box, so a table nested forty deep costs each cell a constant
 // number of measurements and not three to the power of its depth.
 
-typedef struct {
-    int64_t min, max;
-} Intr;
-
-static Intr intrinsic(L *l, FBox *b);
 static Intr table_intrinsic(L *l, FBox *t);
 
 static int64_t hframe(const FBox *b, int64_t base)
@@ -2245,6 +2331,8 @@ static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
             col->max = max64(col->max, cmax);
             if (fixed >= 0)
                 col->fixed = max64(col->fixed, fixed);
+            // The percentage only: a column has no room for a calc()'s
+            // fixed part (GARB.md § Booked).
             if (s->width.kind == FLOW_LENGTH_PERCENT)
                 col->pct = max64(col->pct, s->width.value);
         } else {
@@ -2504,13 +2592,13 @@ static int64_t cell_layout(L *l, const FStyles *styles, FBox *cell, int64_t x, i
     cell->w = w;
     cell->y = 0;
     int64_t top = cell->border[FLOW_TOP] + cell->padding[FLOW_TOP];
-    Cursor in = {top, 0, top};
+    Cursor in = {top, kNoMargins, top};
     int64_t cx = x + cell->border[FLOW_LEFT] + cell->padding[FLOW_LEFT];
     if (cell->ifc)
         lines(l, styles, cell, cx, cw, &in);
     else
         children(l, styles, cell, cx, cw, &in);
-    int64_t content = in.y + in.pm - top;
+    int64_t content = in.y + margins_sum(in.pm) - top;
     int64_t vf = vframe(cell, base);
     int64_t h = vf + (content > 0 ? content : 0);
     // A set height is a least height. In quirks mode it counts the border
@@ -2578,12 +2666,13 @@ static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw
             t->border[i] = t->padding[i] = 0;
         return;
     }
-    int64_t y = cur->y + max64(cur->pm, len(t->style->margin[FLOW_TOP], cbw));
+    int64_t y = cur->y + margins_sum(margins_join(cur->pm,
+                                                  margin_of(len(t->style->margin[FLOW_TOP], cbw))));
     if (t->unfinished) {
         if (cur->first < 0)
             cur->first = y;
         cur->y = y;
-        cur->pm = 0;
+        cur->pm = kNoMargins;
     } else {
         table_body(l, styles, t, cbx, cbw, cur);
         if (!l->failed)
@@ -2693,16 +2782,16 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
     t->x = cbx + ml;
     t->w = used;
     int64_t mt = len(s->margin[FLOW_TOP], cbw), mb = len(s->margin[FLOW_BOTTOM], cbw);
-    int64_t y = cur->y + max64(cur->pm, mt);
+    int64_t y = cur->y + margins_sum(margins_join(cur->pm, margin_of(mt)));
     if (cur->first < 0)
         cur->first = y;
 
     // Top captions, as wide as the table.
-    Cursor cc = {y, 0, y};
+    Cursor cc = {y, kNoMargins, y};
     for (FBox *c = t->first; c != NULL && !l->failed; c = c->next)
         if (c->kind == FB_CAPTION && c->style->caption_side == FLOW_CAPTION_TOP)
             block(l, styles, c, t->x, t->w, &cc);
-    y = cc.y + cc.pm;
+    y = cc.y + margins_sum(cc.pm);
 
     distribute(cols, g.ncols, used - frame - (int64_t)(g.ncols + 1) * hsp);
     int64_t gx = t->x + t->border[FLOW_LEFT] + t->padding[FLOW_LEFT];
@@ -2964,12 +3053,12 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
     t->h = vf + grid_h;
 
     // Bottom captions, then the flow goes on below it all.
-    cc = (Cursor){t->y + t->h, 0, t->y + t->h};
+    cc = (Cursor){t->y + t->h, kNoMargins, t->y + t->h};
     for (FBox *c = t->first; c != NULL && !l->failed; c = c->next)
         if (c->kind == FB_CAPTION && c->style->caption_side == FLOW_CAPTION_BOTTOM)
             block(l, styles, c, t->x, t->w, &cc);
-    cur->y = cc.y + cc.pm;
-    cur->pm = mb;
+    cur->y = cc.y + margins_sum(cc.pm);
+    cur->pm = margin_of(mb);
 
     scratch_free(l, rh);
     scratch_free(l, ry);
@@ -3037,12 +3126,12 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     int64_t w = (int64_t)width * 64;
     out->width = w;
     if (boxes->root != NULL) {
-        Cursor cur = {0, 0, -1};
+        Cursor cur = {0, kNoMargins, -1};
         block(&l, boxes->styles, boxes->root, 0, w, &cur);
         // A layout that stopped has no cursor worth reading: the page is as
         // tall as what it placed.
         out->height = l.failed ? bottom_edge(boxes->root)
-                               : max64(cur.y + cur.pm, bottom_edge(boxes->root));
+                               : max64(cur.y + margins_sum(cur.pm), bottom_edge(boxes->root));
         out->width = max64(w, right_edge(boxes->root));
     }
     return out;

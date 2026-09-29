@@ -245,6 +245,38 @@ page, 35 allocations each failed alone, nothing leaked. danlegt.com, its
 with author winners, hand-checked against the rules for the body and
 `#motd`.
 
+**G3, as run.** libflow computes the author winners after the chapter,
+the hints and the quirks (`style.c`, "The page's own sheets"): every field
+`flow_style_t` holds, the CSS-wide keywords (`revert` goes back to the
+chapter's sheet, its link rule and its quirks — the user-agent origin —
+without the hints), font-size and color first so every em and every
+currentColor on the element sees them, lengths in every unit libgarb reads
+(`rem` from the root's size, `ex` and `ch` as half an em, the viewport units
+from the size the cascade was judged at), and `calc()` resolved at style
+time into a fixed part and a percentage — which `flow_length_t` now carries
+as `offset`, so `calc(100% - 2em)` survives to layout.
+`tools/test_libflow_host.sh` adds 9 styled pages worked by hand (author over hints, the style
+attribute, font sizes by %, em, rem, keyword and `larger`, the four
+CSS-wide keywords, `var()` into `calc()` and `vh`, display and borders, a
+border style alone at medium in currentColor, `@media` at two widths, a
+quirks page's families), 3 pages laid out by hand for what a sheet asks
+of layout that no attribute ever did — negative margins, collapsing to
+the largest positive plus the most negative (CSS 2.1 § 8.3.1), and
+inline-blocks that shrink to fit and sit on their last line's baseline
+(§ 10.3.9, § 10.8.1; before, the one inline-block with content was a
+marquee, which fills its line) — and a sweep that fails each of the style
+pass's allocations with a cascade in force: all pass, and the 12 corpus
+dumps — pages with no author sheet — are unchanged. yonder parses a page's `style`
+elements once, cascades them again only when the view's size changes (and
+relays out on a height change when there are sheets, for `vh` and the
+media queries), and frees a cascade only with the tree that points into it.
+In the guest, `/tests/flowdump` passes with an `h2` its own sheet hides,
+and `yonder /tests/pages/garb.html` draws the showcase: cards in the
+accent's borders at `calc(100% - 72px)`, centred by `margin: auto`, a
+later class winning, `display: none`, square markers inside, a collapsed
+table, a style attribute, a row of inline-block pills, a negative margin,
+and the media query flipping between `flowdump garb.html 800` and `500`.
+
 ## Booked before the first line
 
 | Debt | Why it waits | Trigger |
@@ -263,4 +295,12 @@ with author winners, hand-checked against the rules for the body and
 | Every layer of a background | yonder draws one picture behind a box, so the first layer of a list is kept and the rest are only checked | a page whose look depends on a lower layer |
 | Quirks mode's hashless colour (`color: ff0000`) | quirks mode's unitless lengths are read; its colours without a `#` are not yet | a quirks-mode page written that way |
 | Encodings beyond libhtml's | a sheet in ISO-8859-2 or Shift_JIS keeps its ASCII and loses the rest | the first sheet whose text is not ASCII and not UTF-8 |
-| Alpha blending of colours | libflow's colours are opaque | pile 3 |
+| Alpha blending of colours | libflow's colours are opaque: a translucent colour is laid over the page's paper, whatever is really under it | pile 3 |
+| Flex, grid and inline tables | `flex` and `grid` are laid out as the block they are outside, `inline-flex` and `inline-grid` as an inline-block, `inline-table` as a table | pile 2 |
+| Dotted, dashed, double and ridge borders | the painter strokes solid, inset, outset and groove: the first three are drawn solid, ridge as groove | pile 3 |
+| `min-content`, `max-content`, `fit-content` sizes, and `min-`/`max-width` and `-height` | libflow sizes a box by its container; the keywords read as `auto`, the limits are not applied | G5 |
+| `vertical-align` by a length, and `text-bottom` | libflow aligns by keyword: a length or percentage is baseline, `text-bottom` is bottom | G5 |
+| `white-space: pre-line` | libflow has no mode that collapses spaces and keeps line breaks: drawn as `normal` (`break-spaces` as `pre-wrap`) | G5 |
+| A string list marker, and counter styles beyond the ten | libflow draws its ten marker kinds; any other name is decimal, as Counter Styles 3 says of an undefined one, and a string is ignored | G5's generated content |
+| A table column's `calc()` width | a column keeps a percentage's share of the table and no fixed part, so `calc(20% + 10px)` on a cell is 20% | a page whose tables are sized that way |
+| `line-height`, `text-indent`, `text-transform`, `font-variant`, `overflow`, `box-sizing`, background pictures and positions | read by libgarb, not yet held by libflow | G5 |

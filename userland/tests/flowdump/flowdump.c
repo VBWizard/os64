@@ -2,7 +2,9 @@
 //
 // `flowdump FILE [WIDTH]` lays FILE out at WIDTH pixels (800 unless told)
 // and prints the laid-out tree, the same dump the host harness diffs, so a
-// page can be compared across the two. With no arguments it lays out a
+// page can be compared across the two. The page's `style` elements are
+// cascaded at WIDTH x 600, as yonder cascades them; a linked sheet is not
+// fetched. With no arguments it lays out a
 // page of its own and checks what real fonts must make true of any layout:
 // a heading taller than a paragraph, a long paragraph wrapping into more
 // lines at a narrower width, every run released.
@@ -14,6 +16,7 @@
 #include "html/html.h"
 #include "page/page.h"
 #include "flow/flow.h"
+#include "garb/cascade.h"
 #include "os64/os64.h"
 #include "os64/text.h"
 #include "os64/slurp.h"
@@ -141,10 +144,44 @@ static os64_html_document_t *parse(const char *html, size_t len)
     return doc;
 }
 
-static flow_tree_t *lay(os64_html_document_t *doc, os64_page_t **page, int32_t width)
+// A page's `style` sheets, parsed and cascaded: they outlive its layout.
+typedef struct {
+    garb_parsed_t parsed[32];
+    garb_sheet_in_t in[32];
+    int32_t n;
+    garb_cascade_t *cascade;
+} Sheets;
+
+static void sheets_open(Sheets *sh, const os64_html_document_t *doc, const os64_page_t *page,
+                        int32_t width)
+{
+    os64_memset(sh, 0, sizeof(*sh));
+    for (int32_t i = 0; i < os64_page_nsheets(page) && sh->n < 32; i++) {
+        const os64_page_sheet_t *one = os64_page_sheet(page, i);
+        if (one->linked)
+            continue;
+        garb_parse_style_element(one->node, &sh->parsed[sh->n]);
+        sh->in[sh->n] = (garb_sheet_in_t){&sh->parsed[sh->n], one->media};
+        sh->n++;
+    }
+    sh->cascade = garb_cascade(sh->in, sh->n, doc, (garb_env_t){width, 600});
+    require(sh->cascade != NULL, "cascade memory");
+}
+
+static void sheets_close(Sheets *sh)
+{
+    garb_cascade_free(sh->cascade);
+    for (int32_t i = 0; i < sh->n; i++)
+        garb_free(&sh->parsed[i]);
+}
+
+static flow_tree_t *lay(os64_html_document_t *doc, os64_page_t **page, Sheets *sh,
+                        int32_t width)
 {
     *page = os64_page_build(doc, "file:///flowdump", NULL);
     require(*page != NULL, "page model");
+    sheets_open(sh, doc, *page, width);
+    s_env.cascade = sh->cascade;
     flow_tree_t *t = flow_layout(doc, *page, width, &s_env);
     require(t != NULL, "flow_layout answered NULL");
     return t;
@@ -202,7 +239,8 @@ static const char kPage[] =
     "<p>A paragraph long enough to wrap: the quick brown fox jumps over the lazy dog, "
     "and then does it again, and then once more for luck, until the line has no choice.</p>"
     "<ul><li>one<li>two</ul><pre>tab\there</pre>"
-    "<font face=arial><p>inside a font</p></font><p><a href=x>a link</a></p>";
+    "<font face=arial><p>inside a font</p></font><p><a href=x>a link</a></p>"
+    "<style>h2 { display: none }</style><h2>hidden by the page's sheet</h2>";
 
 int main(int argc, char **argv)
 {
@@ -220,11 +258,13 @@ int main(int argc, char **argv)
         }
         os64_html_document_t *doc = parse((const char *)html, len);
         os64_page_t *page;
-        flow_tree_t *t = lay(doc, &page, width);
+        Sheets sh;
+        flow_tree_t *t = lay(doc, &page, &sh, width);
         char *text = dump_of(t);
         os64_write(1, text, os64_strlen(text));
         os64_free(text);
         flow_free(t);
+        sheets_close(&sh);
         os64_page_free(page);
         os64_html_document_free(doc);
         os64_free(html);
@@ -234,11 +274,12 @@ int main(int argc, char **argv)
 
     os64_html_document_t *doc = parse(kPage, sizeof(kPage) - 1);
     os64_page_t *page;
-    flow_tree_t *wide = lay(doc, &page, 800);
+    Sheets sh_wide, sh_narrow;
+    flow_tree_t *wide = lay(doc, &page, &sh_wide, 800);
     require(!flow_incomplete(wide), "incomplete at 800");
     char *a = dump_of(wide);
     os64_page_t *page2;
-    flow_tree_t *narrow = lay(doc, &page2, 300);
+    flow_tree_t *narrow = lay(doc, &page2, &sh_narrow, 300);
     require(!flow_incomplete(narrow), "incomplete at 300");
     char *b = dump_of(narrow);
     int32_t h1 = text_height_after(a, "block h1"), p = text_height_after(a, "block p");
@@ -251,10 +292,13 @@ int main(int argc, char **argv)
     require(flow_height(narrow) > flow_height(wide), "a narrower page is not taller");
     require(count(a, "marker \"") == 2, "the list's markers");
     require(count(a, "underline link 0") == 1, "the link");
+    require(count(a, "block h2") == 0, "the page's own sheet");
     os64_free(a);
     os64_free(b);
     flow_free(wide);
     flow_free(narrow);
+    sheets_close(&sh_wide);
+    sheets_close(&sh_narrow);
     os64_page_free(page);
     os64_page_free(page2);
     os64_html_document_free(doc);

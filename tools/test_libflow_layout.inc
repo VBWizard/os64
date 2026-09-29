@@ -429,9 +429,10 @@ static void layout_cases(void)
     // A link has no edge an inline-block's content could fall outside: the
     // text in a linked marquee is the link, though the `a`'s underline
     // stops at the atom (decorations do not reach an atom's content). The
-    // marquee's overflow is hidden, so its baseline is its bottom edge, 20;
-    // the 16px strut hangs 6 below it, and the `a`'s own box is the strut's
-    // font box on that baseline: 8 + 20 - 12 = 16.
+    // marquee's overflow is hidden, so its baseline is its bottom edge
+    // (CSS 2.1 § 10.8.1), 20; the 16px strut hangs 6 below it, and the
+    // `a`'s own box is the strut's font box on that baseline: 8 + 20 - 12 =
+    // 16.
     layout_case("an inline-block's content is in the link its atom is",
         "<!doctype html><a href=x><marquee>hi</marquee></a>", 200,
         "page 200 42\n"

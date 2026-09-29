@@ -11,13 +11,14 @@
 // The order inside one element is the cascade's: inheritance first, then
 // the user-agent sheet, then the presentational hints (which an author's
 // sheet outranks and the user-agent sheet does not), then the quirks-mode
-// user-agent rules that the chapter states in prose. A later cascade slots
-// in after the hints with no field renamed.
+// user-agent rules that the chapter states in prose, then the page's own
+// sheets — libgarb's author winners, computed into the same fields.
 //
 // The walk is iterative, over the tree's own parent pointers, so a page as
 // deep as libhtml allows is styled without a stack as deep as the page.
 
 #include "internal.h"
+#include "garb/cascade.h"
 
 // ── Lengths while an element is being styled ────────────────────────────
 //
@@ -28,11 +29,12 @@ typedef enum { L_UNSET = 0, L_AUTO, L_PX, L_PCT, L_EM } LKind;
 typedef struct {
     LKind kind;
     int32_t v;      // PX: 26.6 px; PCT: 1/64 percent; EM: 1/1000 em
+    int32_t off;    // PCT: 26.6 px added to it, a calc()'s fixed part
 } Len;
 
-static Len px(int32_t n) { return (Len){L_PX, n * FLOW_UNITS_PER_PX}; }
-static Len em(int32_t thousandths) { return (Len){L_EM, thousandths}; }
-static const Len kAuto = {L_AUTO, 0};
+static Len px(int32_t n) { return (Len){L_PX, n * FLOW_UNITS_PER_PX, 0}; }
+static Len em(int32_t thousandths) { return (Len){L_EM, thousandths, 0}; }
+static const Len kAuto = {L_AUTO, 0, 0};
 
 // How the font size was written, resolved against the parent's.
 typedef enum {
@@ -64,6 +66,7 @@ typedef struct {
     // link it contains is.
     bool has_body_link;
     uint32_t body_link;
+    flow_unit_t root_font;      // the html element's font size: what `rem` is
 } Ctx;
 
 // ── Reading the tree ────────────────────────────────────────────────────
@@ -254,7 +257,7 @@ static void monospace(Spec *sp)
 
 static Len dim(f_dim_kind_t kind, int32_t v)
 {
-    return kind == F_DIM_PERCENT ? (Len){L_PCT, v} : (Len){L_PX, v};
+    return kind == F_DIM_PERCENT ? (Len){L_PCT, v, 0} : (Len){L_PX, v, 0};
 }
 
 // "Maps to the dimension property": the attribute, read as a dimension,
@@ -303,8 +306,8 @@ static flow_style_t initial(const Ctx *c)
     s.color = c->env->ink;
     // Margins and padding start at 0px — NOT at zero bytes, which is `auto`.
     for (int i = 0; i < 4; i++) {
-        s.margin[i] = (flow_length_t){FLOW_LENGTH_PX, 0};
-        s.padding[i] = (flow_length_t){FLOW_LENGTH_PX, 0};
+        s.margin[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
+        s.padding[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
     }
     // Everything else starts at zero bytes, which is each property's
     // initial value: auto width and height, no borders, left, baseline,
@@ -371,9 +374,10 @@ static flow_unit_t font_size(const Ctx *c, const Spec *sp, const flow_style_t *p
 }
 
 // CSS Fonts' `bolder`, from the parent's weight.
+// CSS Fonts 4 § 2.2's table: a weight at or above 900 stays as it is.
 static uint16_t bolder(uint16_t w)
 {
-    return w < 350 ? 400 : w < 550 ? 700 : 900;
+    return w < 350 ? 400 : w < 550 ? 700 : w < 900 ? 900 : w;
 }
 
 // Which generic a named face stands for, when the page spelled no generic
@@ -889,6 +893,20 @@ static bool is_embedded_aligned(const os64_html_node_t *n)
            (is(n, OS64_HTML_TAG_INPUT) && attr_is(n, "type", "image"));
 }
 
+// §15.3.4: a link's colour, where libpage says the node IS a link. The
+// user-agent rule is `:link`, and `body link=` is a hint on the same
+// selector, so it wins over the sheet and loses to anything the link's own
+// descendants say. It is applied with the hints for that reason, and
+// without the hint to the user-agent origin `revert` goes back to.
+static void link_rule(const Ctx *c, const os64_html_node_t *n, Spec *sp, bool hint)
+{
+    if ((is(n, OS64_HTML_TAG_A) || is(n, OS64_HTML_TAG_AREA)) && c->model != NULL &&
+        os64_page_link_for(c->model, n) >= 0) {
+        sp->s.color = hint && c->has_body_link ? c->body_link : c->env->link_ink;
+        sp->s.text_decoration |= FLOW_DECORATION_UNDERLINE;
+    }
+}
+
 static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
 {
     flow_style_t *s = &sp->s;
@@ -1182,11 +1200,11 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
     }
     if (is(n, OS64_HTML_TAG_EMBED) || is(n, OS64_HTML_TAG_IMG) || is(n, OS64_HTML_TAG_OBJECT) ||
         (is(n, OS64_HTML_TAG_INPUT) && attr_is(n, "type", "image"))) {
-        Len v = {L_UNSET, 0};
+        Len v = {L_UNSET, 0, 0};
         map_dimension(n, "hspace", false, &v);
         if (v.kind != L_UNSET)
             margin_inline(sp, v);
-        v = (Len){L_UNSET, 0};
+        v = (Len){L_UNSET, 0, 0};
         map_dimension(n, "vspace", false, &v);
         if (v.kind != L_UNSET)
             margin_block(sp, v);
@@ -1207,16 +1225,11 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
         sp->height = px(0);
     }
 
-    // §15.3.4: a link's colour, where libpage says the node IS a link. The
-    // user-agent rule is `:link`, and `body link=` is a hint on the same
-    // selector, so it wins over the sheet and loses to anything the link's
-    // own descendants say. `:visited` and `:active` are states of a
-    // browsing session, not of the page, and pass 1 sees only the page.
-    if ((is(n, OS64_HTML_TAG_A) || is(n, OS64_HTML_TAG_AREA)) && c->model != NULL &&
-        os64_page_link_for(c->model, n) >= 0) {
-        s->color = c->has_body_link ? c->body_link : c->env->link_ink;
-        s->text_decoration |= FLOW_DECORATION_UNDERLINE;
-    }
+    // §15.3.4: a link's colour, where libpage says the node IS a link
+    // (link_rule): `body link=` is a hint on the same selector as the
+    // user-agent rule, so it wins over the sheet and loses to anything the
+    // link's own descendants say.
+    link_rule(c, n, sp, true);
     return true;
 }
 
@@ -1252,15 +1265,785 @@ static void margin_quirks(const Ctx *c, const os64_html_node_t *n, Spec *sp)
         sp->margin[FLOW_BOTTOM] = px(0);
 }
 
+// ── The page's own sheets ───────────────────────────────────────────────
+//
+// libgarb's cascade hands each element its AUTHOR-origin winners: declared
+// values, checked against their grammars, var() already replaced. Here
+// they are computed into the Spec the chapter and the hints wrote, which
+// they outrank. A property flow_style_t has no field for waits for the
+// layout that needs it (GARB.md § Booked); a value its grammar allows and
+// libflow cannot draw takes the nearest value libflow has, named where the
+// value is read.
+
+typedef struct {
+    Ctx *c;
+    const flow_style_t *parent;
+    flow_unit_t font;           // the element's own font size, once it is known
+    garb_env_t view;
+} Author;
+
+static bool word(const garb_val_t *v, const char *w)
+{
+    return v->kind == GARB_V_KEYWORD && os64_streq(v->keyword, w);
+}
+
+// A length in 26.6 px, `font` being the em it is relative to — the
+// element's own, or its parent's for font-size (Values 4 § 6).
+static double length_px(const Author *a, const garb_val_t *v, double font)
+{
+    double n = v->number;
+    switch (v->unit) {
+    case GARB_U_PX: return n * FLOW_UNITS_PER_PX;
+    case GARB_U_EM: return n * font;
+    case GARB_U_REM: return n * a->c->root_font;
+    // No face metrics reach the style pass: an ex and a ch are taken as
+    // half an em, the fallback Values 4 gives for both.
+    case GARB_U_EX: case GARB_U_CH: return n * font / 2;
+    case GARB_U_VW: return n * a->view.width * FLOW_UNITS_PER_PX / 100;
+    case GARB_U_VH: return n * a->view.height * FLOW_UNITS_PER_PX / 100;
+    case GARB_U_VMIN: {
+        double m = a->view.width < a->view.height ? a->view.width : a->view.height;
+        return n * m * FLOW_UNITS_PER_PX / 100;
+    }
+    case GARB_U_VMAX: {
+        double m = a->view.width > a->view.height ? a->view.width : a->view.height;
+        return n * m * FLOW_UNITS_PER_PX / 100;
+    }
+    case GARB_U_PT: return n * 96 / 72 * FLOW_UNITS_PER_PX;
+    case GARB_U_PC: return n * 16 * FLOW_UNITS_PER_PX;
+    case GARB_U_IN: return n * 96 * FLOW_UNITS_PER_PX;
+    case GARB_U_CM: return n * 96 / 2.54 * FLOW_UNITS_PER_PX;
+    case GARB_U_MM: return n * 96 / 25.4 * FLOW_UNITS_PER_PX;
+    case GARB_U_Q: return n * 96 / 101.6 * FLOW_UNITS_PER_PX;
+    }
+    return 0;
+}
+
+// A calc() as a fixed part and a percentage part — what libflow's lengths
+// carry — or a plain number.
+typedef struct {
+    double px, pct;             // px in 26.6
+    bool number;
+} Lp;
+
+static bool calc(const Author *a, const garb_calc_t *k, double font, Lp *out)
+{
+    *out = (Lp){0, 0, false};
+    switch (k->op) {
+    case GARB_CALC_LEAF:
+        if (k->leaf.kind == GARB_V_NUMBER)
+            *out = (Lp){k->leaf.number, 0, true};
+        else if (k->leaf.kind == GARB_V_PERCENTAGE)
+            out->pct = k->leaf.number;
+        else if (k->leaf.kind == GARB_V_LENGTH)
+            out->px = length_px(a, &k->leaf, font);
+        else
+            return false;
+        return true;
+    case GARB_CALC_SUM:
+        for (int32_t i = 0; i < k->nargs; i++) {
+            Lp t;
+            if (!calc(a, k->args[i], font, &t))
+                return false;
+            double sign = k->invert != NULL && k->invert[i] ? -1 : 1;
+            out->px += sign * t.px;
+            out->pct += sign * t.pct;
+            out->number = t.number;
+        }
+        return true;
+    case GARB_CALC_PRODUCT:
+        *out = (Lp){1, 0, true};
+        for (int32_t i = 0; i < k->nargs; i++) {
+            Lp t;
+            if (!calc(a, k->args[i], font, &t))
+                return false;
+            bool divide = k->invert != NULL && k->invert[i];
+            // The grammar let at most one factor be a length, and no divisor.
+            double f = t.number ? t.px : 0;
+            if (divide && (!t.number || f == 0))
+                return false;
+            if (t.number) {
+                double m = divide ? 1 / f : f;
+                out->px *= m;
+                out->pct *= m;
+            } else if (out->number) {
+                *out = (Lp){t.px * out->px, t.pct * out->px, false};
+            } else {
+                return false;
+            }
+        }
+        return true;
+    case GARB_CALC_MIN: case GARB_CALC_MAX: case GARB_CALC_CLAMP: {
+        // Comparing needs one unit: a percentage against a length can only
+        // be settled at layout, which flow_length_t cannot carry.
+        // clamp(MIN, VAL, MAX) is max(MIN, min(VAL, MAX)), so its arguments
+        // are taken VAL, MAX, MIN: a min of the first two, then a max.
+        static const int32_t clamp_order[3] = {1, 2, 0};
+        if (k->op == GARB_CALC_CLAMP && k->nargs != 3)
+            return false;
+        Lp best = {0, 0, false};
+        for (int32_t i = 0; i < k->nargs; i++) {
+            Lp t;
+            int32_t at = k->op == GARB_CALC_CLAMP ? clamp_order[i] : i;
+            if (!calc(a, k->args[at], font, &t))
+                return false;
+            if (t.pct != 0 && t.px != 0)
+                return false;
+            if (i == 0) {
+                best = t;
+                continue;
+            }
+            if ((best.pct != 0) != (t.pct != 0) && (best.px != 0 || t.px != 0))
+                return false;
+            double bv = best.px + best.pct, tv = t.px + t.pct;
+            bool smaller = k->op == GARB_CALC_MIN || (k->op == GARB_CALC_CLAMP && i == 1);
+            if (smaller ? tv < bv : tv > bv)
+                best = t;
+        }
+        *out = best;
+        return true;
+    }
+    }
+    return false;
+}
+
+static int32_t round_i32(double v)
+{
+    if (v > 2e9)
+        return 2000000000;
+    if (v < -2e9)
+        return -2000000000;
+    return (int32_t)(v < 0 ? v - 0.5 : v + 0.5);
+}
+
+// A length-percentage (or `auto`, where `allow_auto`) into a Len; false
+// for anything else, which leaves the property as it was.
+static bool author_len(const Author *a, const garb_val_t *v, bool allow_auto, Len *out)
+{
+    switch (v->kind) {
+    case GARB_V_KEYWORD:
+        if (allow_auto && word(v, "auto")) {
+            *out = kAuto;
+            return true;
+        }
+        return false;
+    case GARB_V_LENGTH:
+        *out = (Len){L_PX, round_i32(length_px(a, v, a->font)), 0};
+        return true;
+    case GARB_V_PERCENTAGE:
+        *out = (Len){L_PCT, round_i32(v->number * 64), 0};
+        return true;
+    case GARB_V_CALC: {
+        Lp r;
+        if (v->calc == NULL || !calc(a, v->calc, a->font, &r) || r.number)
+            return false;
+        if (r.pct == 0)
+            *out = (Len){L_PX, round_i32(r.px), 0};
+        else
+            *out = (Len){L_PCT, round_i32(r.pct * 64), round_i32(r.px)};
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+static int32_t channel(double v)
+{
+    return v <= 0 ? 0 : v >= 255 ? 255 : (int32_t)(v + 0.5);
+}
+
+// sRGB with alpha, as XRGB over `under`: what is under a translucent
+// colour is not known here, so it is laid over the page's paper.
+static uint32_t xrgb(garb_color_t k, uint32_t under)
+{
+    double al = k.a < 0 ? 0 : k.a > 1 ? 1 : k.a;
+    double ur = (under >> 16) & 0xFF, ug = (under >> 8) & 0xFF, ub = under & 0xFF;
+    return (uint32_t)channel(k.r * al + ur * (1 - al)) << 16 |
+           (uint32_t)channel(k.g * al + ug * (1 - al)) << 8 |
+           (uint32_t)channel(k.b * al + ub * (1 - al));
+}
+
+// One keyword of a table, by index; -1 when `v` is none of them.
+static int32_t pick(const garb_val_t *v, const char *const *words, int32_t n)
+{
+    if (v->kind != GARB_V_KEYWORD)
+        return -1;
+    for (int32_t i = 0; i < n; i++)
+        if (os64_streq(v->keyword, words[i]))
+            return i;
+    return -1;
+}
+
+static bool author_display(const garb_val_t *v, flow_display_t *out)
+{
+    static const char *const words[] = {
+        "none", "block", "inline", "inline-block", "list-item", "table", "inline-table",
+        "table-row-group", "table-header-group", "table-footer-group", "table-row",
+        "table-column-group", "table-column", "table-cell", "table-caption", "contents",
+        "flow-root", "flex", "inline-flex", "grid", "inline-grid",
+    };
+    // An inline table is laid out as a table, and a flex or grid container
+    // as the block or inline-block it is on the outside, until libflow has
+    // their layouts (GARB.md § Booked).
+    static const flow_display_t as[] = {
+        FLOW_DISPLAY_NONE, FLOW_DISPLAY_BLOCK, FLOW_DISPLAY_INLINE, FLOW_DISPLAY_INLINE_BLOCK,
+        FLOW_DISPLAY_LIST_ITEM, FLOW_DISPLAY_TABLE, FLOW_DISPLAY_TABLE,
+        FLOW_DISPLAY_TABLE_ROW_GROUP, FLOW_DISPLAY_TABLE_HEADER_GROUP,
+        FLOW_DISPLAY_TABLE_FOOTER_GROUP, FLOW_DISPLAY_TABLE_ROW,
+        FLOW_DISPLAY_TABLE_COLUMN_GROUP, FLOW_DISPLAY_TABLE_COLUMN, FLOW_DISPLAY_TABLE_CELL,
+        FLOW_DISPLAY_TABLE_CAPTION, FLOW_DISPLAY_CONTENTS, FLOW_DISPLAY_BLOCK,
+        FLOW_DISPLAY_BLOCK, FLOW_DISPLAY_INLINE_BLOCK, FLOW_DISPLAY_BLOCK,
+        FLOW_DISPLAY_INLINE_BLOCK,
+    };
+    int32_t i = pick(v, words, F_ARRAY(words));
+    if (i < 0)
+        return false;
+    *out = as[i];
+    return true;
+}
+
+static bool author_border_style(const garb_val_t *v, flow_border_style_t *out)
+{
+    static const char *const words[] = {"none", "hidden", "dotted", "dashed", "solid",
+                                        "double", "groove", "ridge", "inset", "outset"};
+    // Dotted, dashed and double are drawn solid, and a ridge as a groove,
+    // until the painter has their strokes (GARB.md § Booked).
+    static const flow_border_style_t as[] = {
+        FLOW_BORDER_NONE, FLOW_BORDER_HIDDEN, FLOW_BORDER_SOLID, FLOW_BORDER_SOLID,
+        FLOW_BORDER_SOLID, FLOW_BORDER_SOLID, FLOW_BORDER_GROOVE, FLOW_BORDER_GROOVE,
+        FLOW_BORDER_INSET, FLOW_BORDER_OUTSET,
+    };
+    int32_t i = pick(v, words, F_ARRAY(words));
+    if (i < 0)
+        return false;
+    *out = as[i];
+    return true;
+}
+
+// `thin`, `medium`, `thick`: 1, 3 and 5px (Backgrounds 3 § 4.3).
+static bool author_border_width(const Author *a, const garb_val_t *v, int32_t *out)
+{
+    static const char *const words[] = {"thin", "medium", "thick"};
+    int32_t i = pick(v, words, F_ARRAY(words));
+    if (i >= 0) {
+        *out = (1 + 2 * i) * FLOW_UNITS_PER_PX;
+        return true;
+    }
+    Len l;
+    if (!author_len(a, v, false, &l) || l.kind != L_PX)
+        return false;
+    *out = l.v < 0 ? 0 : l.v;
+    return true;
+}
+
+// A generic family by its keyword. The families this machine has no face
+// for fall to the nearest of the three it has.
+static bool author_generic(const char *k, flow_generic_t *out)
+{
+    static const struct { const char *name; flow_generic_t g; } map[] = {
+        {"serif", FLOW_GENERIC_SERIF}, {"sans-serif", FLOW_GENERIC_SANS},
+        {"monospace", FLOW_GENERIC_MONO}, {"cursive", FLOW_GENERIC_SERIF},
+        {"fantasy", FLOW_GENERIC_SERIF}, {"system-ui", FLOW_GENERIC_SANS},
+        {"ui-serif", FLOW_GENERIC_SERIF}, {"ui-sans-serif", FLOW_GENERIC_SANS},
+        {"ui-monospace", FLOW_GENERIC_MONO}, {"ui-rounded", FLOW_GENERIC_SANS},
+        {"math", FLOW_GENERIC_SERIF}, {"emoji", FLOW_GENERIC_SANS},
+        {"fangsong", FLOW_GENERIC_SERIF},
+    };
+    for (int32_t i = 0; i < F_ARRAY(map); i++)
+        if (os64_streq(k, map[i].name)) {
+            *out = map[i].g;
+            return true;
+        }
+    return false;
+}
+
+// `font-family`: the names in order and the first generic, as `<font
+// face>` builds them. The names point into the sheet.
+// The names are copied into the styles arena for every element the
+// declaration reaches: a `* { font-family: … }` reset costs one list an
+// element (48 bytes for three names). Bounded by the document, as the
+// styles arena is; one list per winning set would cost it once.
+static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *out)
+{
+    if (v->items == NULL || v->nitems <= 0)
+        return true;
+    flow_family_name_t *names = f_arena_alloc(&a->c->out->arena,
+                                              (size_t)v->nitems * sizeof(*names));
+    if (names == NULL)
+        return false;
+    uint32_t n = 0;
+    bool have_generic = false;
+    flow_generic_t generic = FLOW_GENERIC_SANS;
+    for (int32_t i = 0; i < v->nitems; i++) {
+        const garb_val_t *it = &v->items[i];
+        flow_generic_t g;
+        if (it->kind == GARB_V_KEYWORD && author_generic(it->keyword, &g)) {
+            if (!have_generic) {
+                generic = g;
+                have_generic = true;
+            }
+        } else if (it->kind == GARB_V_STRING && it->len > 0) {
+            names[n++] = (flow_family_name_t){it->text, (uint32_t)it->len};
+        }
+    }
+    if (!have_generic && n > 0)
+        generic = guess_generic(names[0].name, names[0].len);
+    *out = (flow_family_list_t){n > 0 ? names : NULL, n, generic};
+    return true;
+}
+
+// `font-size`: its em and its percentage are the PARENT's font (Fonts 4 §
+// 2.5), and so are a calc()'s.
+static void author_font_size(Author *a, Spec *sp, const garb_val_t *v)
+{
+    static const char *const words[] = {"xx-small", "x-small", "small", "medium",
+                                        "large", "x-large", "xx-large", "xxx-large"};
+    double base = a->parent != NULL ? a->parent->font_size
+                                    : (double)a->c->env->viewport_font_px * FLOW_UNITS_PER_PX;
+    int32_t i = pick(v, words, F_ARRAY(words));
+    if (i >= 0) {
+        sp->fs_kind = FS_KEYWORD;
+        sp->fs_v = i;
+    } else if (word(v, "larger")) {
+        sp->fs_kind = FS_LARGER;
+    } else if (word(v, "smaller")) {
+        sp->fs_kind = FS_SMALLER;
+    } else if (v->kind == GARB_V_PERCENTAGE) {
+        sp->fs_kind = FS_EM;
+        sp->fs_v = round_i32(v->number * 10);
+    } else if (v->kind == GARB_V_LENGTH) {
+        double px = length_px(a, v, base);
+        sp->fs_kind = FS_PX;
+        sp->fs_v = px < 0 ? 0 : round_i32(px);
+    } else if (v->kind == GARB_V_CALC) {
+        Lp r;
+        if (v->calc == NULL || !calc(a, v->calc, base, &r) || r.number)
+            return;
+        double px = r.px + base * r.pct / 100;
+        sp->fs_kind = FS_PX;
+        sp->fs_v = px < 0 ? 0 : round_i32(px);
+    }
+}
+
+static void author_font_weight(Author *a, Spec *sp, const garb_val_t *v)
+{
+    uint16_t up = a->parent != NULL ? a->parent->font_weight : 400;
+    sp->bolder = false;
+    if (word(v, "normal"))
+        sp->s.font_weight = 400;
+    else if (word(v, "bold"))
+        sp->s.font_weight = 700;
+    else if (word(v, "bolder"))
+        sp->s.font_weight = bolder(up);
+    else if (word(v, "lighter"))    // Fonts 4 § 2.2's table
+        sp->s.font_weight = up < 100 ? up : up < 550 ? 100 : up < 750 ? 400 : 700;
+    else if (v->kind == GARB_V_NUMBER)
+        sp->s.font_weight = (uint16_t)(v->number < 1 ? 1 : v->number > 1000 ? 1000
+                                                             : v->number + 0.5);
+}
+
+static void author_list_type(Spec *sp, const garb_val_t *v)
+{
+    static const char *const words[] = {
+        "disc", "circle", "square", "decimal", "lower-alpha", "upper-alpha", "lower-roman",
+        "upper-roman", "disclosure-closed", "disclosure-open", "none", "lower-latin",
+        "upper-latin", "decimal-leading-zero",
+    };
+    static const flow_list_style_type_t as[] = {
+        FLOW_LIST_DISC, FLOW_LIST_CIRCLE, FLOW_LIST_SQUARE, FLOW_LIST_DECIMAL,
+        FLOW_LIST_LOWER_ALPHA, FLOW_LIST_UPPER_ALPHA, FLOW_LIST_LOWER_ROMAN,
+        FLOW_LIST_UPPER_ROMAN, FLOW_LIST_DISCLOSURE_CLOSED, FLOW_LIST_DISCLOSURE_OPEN,
+        FLOW_LIST_NONE, FLOW_LIST_LOWER_ALPHA, FLOW_LIST_UPPER_ALPHA, FLOW_LIST_DECIMAL,
+    };
+    int32_t i = pick(v, words, F_ARRAY(words));
+    if (i >= 0)
+        sp->s.list_style_type = as[i];
+    else if (v->kind == GARB_V_KEYWORD)
+        // A counter style this browser does not define is decimal (Counter
+        // Styles 3 § 2); a string marker is booked with the markers.
+        sp->s.list_style_type = FLOW_LIST_DECIMAL;
+}
+
+// The side a longhand names, in libgarb's top-right-bottom-left order.
+static int side(garb_prop_t p, garb_prop_t top)
+{
+    return (int)(p - top);
+}
+
+// Copies the fields `prop` sets from one Spec to another: how a CSS-wide
+// keyword takes a value from the parent, the initial values, or the
+// user-agent origin.
+static void take(Spec *dst, const Spec *src, garb_prop_t prop)
+{
+    flow_style_t *d = &dst->s;
+    const flow_style_t *s = &src->s;
+    switch (prop) {
+    case GARB_DISPLAY: d->display = s->display; break;
+    case GARB_COLOR: d->color = s->color; break;
+    case GARB_BACKGROUND_COLOR:
+        d->has_background = s->has_background;
+        d->background = s->background;
+        break;
+    case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
+        dst->margin[side(prop, GARB_MARGIN_TOP)] = src->margin[side(prop, GARB_MARGIN_TOP)];
+        break;
+    case GARB_PADDING_TOP: case GARB_PADDING_RIGHT: case GARB_PADDING_BOTTOM:
+    case GARB_PADDING_LEFT:
+        dst->padding[side(prop, GARB_PADDING_TOP)] = src->padding[side(prop, GARB_PADDING_TOP)];
+        break;
+    case GARB_BORDER_TOP_WIDTH: case GARB_BORDER_RIGHT_WIDTH: case GARB_BORDER_BOTTOM_WIDTH:
+    case GARB_BORDER_LEFT_WIDTH: {
+        int i = side(prop, GARB_BORDER_TOP_WIDTH);
+        dst->border_px[i] = src->border_px[i];
+        break;
+    }
+    case GARB_BORDER_TOP_STYLE: case GARB_BORDER_RIGHT_STYLE: case GARB_BORDER_BOTTOM_STYLE:
+    case GARB_BORDER_LEFT_STYLE: {
+        int i = side(prop, GARB_BORDER_TOP_STYLE);
+        d->border_style[i] = s->border_style[i];
+        break;
+    }
+    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
+    case GARB_BORDER_LEFT_COLOR: {
+        int i = side(prop, GARB_BORDER_TOP_COLOR);
+        dst->border_color_set[i] = src->border_color_set[i];
+        d->border_color[i] = s->border_color[i];
+        break;
+    }
+    case GARB_WIDTH: dst->width = src->width; break;
+    case GARB_HEIGHT: dst->height = src->height; break;
+    case GARB_FONT_FAMILY: d->family = s->family; break;
+    case GARB_FONT_SIZE:
+        dst->fs_kind = src->fs_kind;
+        dst->fs_v = src->fs_v;
+        d->font_size = s->font_size;
+        break;
+    case GARB_FONT_WEIGHT:
+        d->font_weight = s->font_weight;
+        dst->bolder = src->bolder;
+        break;
+    case GARB_FONT_STYLE: d->font_style = s->font_style; break;
+    case GARB_TEXT_ALIGN: d->text_align = s->text_align; break;
+    case GARB_VERTICAL_ALIGN: d->vertical_align = s->vertical_align; break;
+    case GARB_WHITE_SPACE: d->white_space = s->white_space; break;
+    case GARB_TEXT_DECORATION_LINE: d->text_decoration = s->text_decoration; break;
+    case GARB_VISIBILITY: d->visibility = s->visibility; break;
+    case GARB_LIST_STYLE_TYPE: d->list_style_type = s->list_style_type; break;
+    case GARB_LIST_STYLE_POSITION: d->list_style_position = s->list_style_position; break;
+    case GARB_BORDER_SPACING:
+        d->border_spacing[0] = s->border_spacing[0];
+        d->border_spacing[1] = s->border_spacing[1];
+        break;
+    case GARB_BORDER_COLLAPSE: d->border_collapse = s->border_collapse; break;
+    case GARB_CAPTION_SIDE: d->caption_side = s->caption_side; break;
+    case GARB_FLOAT: d->float_side = s->float_side; break;
+    case GARB_CLEAR: d->clear = s->clear; break;
+    default: break;
+    }
+}
+
+static Len len_of(flow_length_t l)
+{
+    switch (l.kind) {
+    case FLOW_LENGTH_PX: return (Len){L_PX, l.value, 0};
+    case FLOW_LENGTH_PERCENT: return (Len){L_PCT, l.value, l.offset};
+    case FLOW_LENGTH_AUTO: break;
+    }
+    return kAuto;
+}
+
+// What `initial` gives every property, as a Spec.
+static void initial_spec(const Ctx *c, Spec *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    out->s = initial(c);
+    for (int i = 0; i < 4; i++) {
+        out->margin[i] = px(0);
+        out->padding[i] = px(0);
+        out->border_px[i] = 3 * FLOW_UNITS_PER_PX;     // medium
+    }
+    out->width = out->height = kAuto;
+    out->fs_kind = FS_KEYWORD;
+    out->fs_v = 3;                                      // medium
+}
+
+// What `inherit` gives every property: the parent's computed values.
+static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
+{
+    if (parent == NULL) {
+        initial_spec(c, out);
+        return;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->s = *parent;
+    for (int i = 0; i < 4; i++) {
+        out->margin[i] = len_of(parent->margin[i]);
+        out->padding[i] = len_of(parent->padding[i]);
+        out->border_px[i] = parent->border_width[i];
+        out->border_color_set[i] = true;
+    }
+    out->width = len_of(parent->width);
+    out->height = len_of(parent->height);
+    out->fs_kind = FS_PX;
+    out->fs_v = parent->font_size;
+}
+
+// One winner that is not a CSS-wide keyword.
+static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
+{
+    const garb_val_t *v = &set->value;
+    flow_style_t *s = &sp->s;
+    garb_prop_t p = set->prop;
+    int32_t i;
+    switch (p) {
+    case GARB_DISPLAY: author_display(v, &s->display); break;
+    case GARB_COLOR:
+        if (v->kind == GARB_V_COLOR && v->color.current)
+            s->color = a->parent != NULL ? a->parent->color : a->c->env->ink;
+        else if (v->kind == GARB_V_COLOR)
+            s->color = xrgb(v->color, a->c->env->paper);
+        break;
+    case GARB_BACKGROUND_COLOR:
+        if (v->kind != GARB_V_COLOR)
+            break;
+        if (v->color.current) {
+            s->has_background = true;
+            s->background = s->color;
+        } else {
+            s->has_background = v->color.a > 0;
+            s->background = xrgb(v->color, a->c->env->paper);
+        }
+        break;
+    case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
+        author_len(a, v, true, &sp->margin[side(p, GARB_MARGIN_TOP)]);
+        break;
+    case GARB_PADDING_TOP: case GARB_PADDING_RIGHT: case GARB_PADDING_BOTTOM:
+    case GARB_PADDING_LEFT:
+        author_len(a, v, false, &sp->padding[side(p, GARB_PADDING_TOP)]);
+        break;
+    case GARB_BORDER_TOP_WIDTH: case GARB_BORDER_RIGHT_WIDTH: case GARB_BORDER_BOTTOM_WIDTH:
+    case GARB_BORDER_LEFT_WIDTH:
+        author_border_width(a, v, &sp->border_px[side(p, GARB_BORDER_TOP_WIDTH)]);
+        break;
+    case GARB_BORDER_TOP_STYLE: case GARB_BORDER_RIGHT_STYLE: case GARB_BORDER_BOTTOM_STYLE:
+    case GARB_BORDER_LEFT_STYLE:
+        author_border_style(v, &s->border_style[side(p, GARB_BORDER_TOP_STYLE)]);
+        break;
+    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
+    case GARB_BORDER_LEFT_COLOR:
+        i = side(p, GARB_BORDER_TOP_COLOR);
+        if (v->kind != GARB_V_COLOR)
+            break;
+        // currentColor is left for finish, which knows the final colour.
+        sp->border_color_set[i] = !v->color.current;
+        s->border_color[i] = xrgb(v->color, a->c->env->paper);
+        break;
+    case GARB_WIDTH: case GARB_HEIGHT: {
+        Len *l = p == GARB_WIDTH ? &sp->width : &sp->height;
+        // The content-sized keywords are auto until libflow sizes by content
+        // on request (GARB.md § Booked).
+        if (v->kind == GARB_V_KEYWORD)
+            *l = kAuto;
+        else
+            author_len(a, v, true, l);
+        break;
+    }
+    case GARB_FONT_FAMILY: return author_family(a, v, &s->family);
+    case GARB_FONT_SIZE: break;         // read first, by author()
+    case GARB_FONT_WEIGHT: author_font_weight(a, sp, v); break;
+    case GARB_FONT_STYLE:
+        s->font_style = word(v, "normal") ? FLOW_FONT_NORMAL : FLOW_FONT_ITALIC;
+        break;
+    case GARB_TEXT_ALIGN: {
+        static const char *const words[] = {"left", "right", "center", "justify", "start", "end"};
+        static const flow_text_align_t as[] = {FLOW_ALIGN_LEFT, FLOW_ALIGN_RIGHT,
+                                               FLOW_ALIGN_CENTER, FLOW_ALIGN_JUSTIFY,
+                                               FLOW_ALIGN_LEFT, FLOW_ALIGN_RIGHT};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->text_align = as[i];
+        else if (word(v, "match-parent") && a->parent != NULL)
+            s->text_align = a->parent->text_align;
+        break;
+    }
+    case GARB_VERTICAL_ALIGN: {
+        // text-bottom is drawn as bottom, and a length or a percentage
+        // raises nothing yet (GARB.md § Booked).
+        static const char *const words[] = {"baseline", "sub", "super", "text-top",
+                                            "text-bottom", "middle", "top", "bottom"};
+        static const flow_vertical_align_t as[] = {
+            FLOW_VALIGN_BASELINE, FLOW_VALIGN_SUB, FLOW_VALIGN_SUPER, FLOW_VALIGN_TEXT_TOP,
+            FLOW_VALIGN_BOTTOM, FLOW_VALIGN_MIDDLE, FLOW_VALIGN_TOP, FLOW_VALIGN_BOTTOM};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->vertical_align = as[i];
+        else
+            s->vertical_align = FLOW_VALIGN_BASELINE;
+        break;
+    }
+    case GARB_WHITE_SPACE: {
+        // pre-line collapses spaces and keeps line breaks, which libflow has
+        // no mode for: it is drawn as normal, and break-spaces as pre-wrap
+        // (GARB.md § Booked).
+        static const char *const words[] = {"normal", "pre", "nowrap", "pre-wrap",
+                                            "pre-line", "break-spaces"};
+        static const flow_white_space_t as[] = {FLOW_WS_NORMAL, FLOW_WS_PRE, FLOW_WS_NOWRAP,
+                                                FLOW_WS_PRE_WRAP, FLOW_WS_NORMAL,
+                                                FLOW_WS_PRE_WRAP};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->white_space = as[i];
+        break;
+    }
+    case GARB_TEXT_DECORATION_LINE:
+        // An overline and blink are not drawn.
+        s->text_decoration = 0;
+        for (int32_t k = 0; k < v->nitems; k++) {
+            if (word(&v->items[k], "underline"))
+                s->text_decoration |= FLOW_DECORATION_UNDERLINE;
+            else if (word(&v->items[k], "line-through"))
+                s->text_decoration |= FLOW_DECORATION_LINE_THROUGH;
+        }
+        break;
+    case GARB_VISIBILITY: {
+        static const char *const words[] = {"visible", "hidden", "collapse"};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->visibility = (flow_visibility_t)i;
+        break;
+    }
+    case GARB_LIST_STYLE_TYPE: author_list_type(sp, v); break;
+    case GARB_LIST_STYLE_POSITION:
+        s->list_style_position = word(v, "inside") ? FLOW_LIST_INSIDE : FLOW_LIST_OUTSIDE;
+        break;
+    case GARB_BORDER_SPACING:
+        for (int32_t k = 0; k < 2 && k < v->nitems; k++) {
+            Len l;
+            if (author_len(a, &v->items[k], false, &l) && l.kind == L_PX)
+                s->border_spacing[k] = l.v < 0 ? 0 : l.v;
+        }
+        break;
+    case GARB_BORDER_COLLAPSE:
+        s->border_collapse = word(v, "collapse") ? FLOW_COLLAPSE_BORDERS : FLOW_SEPARATE;
+        break;
+    case GARB_CAPTION_SIDE:
+        s->caption_side = word(v, "bottom") ? FLOW_CAPTION_BOTTOM : FLOW_CAPTION_TOP;
+        break;
+    case GARB_FLOAT: {
+        static const char *const words[] = {"none", "left", "right", "inline-start",
+                                            "inline-end"};
+        static const flow_float_t as[] = {FLOW_FLOAT_NONE, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT,
+                                          FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->float_side = as[i];
+        break;
+    }
+    case GARB_CLEAR: {
+        static const char *const words[] = {"none", "left", "right", "both", "inline-start",
+                                            "inline-end"};
+        static const flow_clear_t as[] = {FLOW_CLEAR_NONE, FLOW_CLEAR_LEFT, FLOW_CLEAR_RIGHT,
+                                          FLOW_CLEAR_BOTH, FLOW_CLEAR_LEFT, FLOW_CLEAR_RIGHT};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->clear = as[i];
+        break;
+    }
+    default:
+        break;
+    }
+    return true;
+}
+
+static bool author_sets(garb_style_t st, int32_t prop)
+{
+    for (int32_t i = 0; i < st.n; i++)
+        if ((int32_t)st.sets[i].prop == prop)
+            return true;
+    return false;
+}
+
+// Whether an author set gives `prop` a value of its own: anything but
+// `revert`, which hands it back to the user-agent origin.
+static bool author_declares(garb_style_t st, int32_t prop)
+{
+    for (int32_t i = 0; i < st.n; i++)
+        if ((int32_t)st.sets[i].prop == prop)
+            return !(st.sets[i].value.kind == GARB_V_WIDE &&
+                     (os64_streq(st.sets[i].value.keyword, "revert") ||
+                      os64_streq(st.sets[i].value.keyword, "revert-layer")));
+    return false;
+}
+
+// The element's author winners over what the chapter and the hints wrote.
+// `ua` is the Spec as the user-agent origin left it, which `revert` goes
+// back to. False on no memory only.
+static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
+                   const flow_style_t *parent)
+{
+    if (c->env->cascade == NULL)
+        return true;
+    garb_style_t st = garb_style_for(c->env->cascade, n);
+    if (st.n == 0)
+        return true;
+    Author a = {c, parent, 0, garb_cascade_env(c->env->cascade)};
+    Spec init, inh;
+    bool have_init = false, have_inh = false;
+    // font-size and color before the rest: every other em on the element
+    // is its font size, and every currentColor its colour.
+    for (int pass = 0; pass < 2; pass++) {
+        for (int32_t i = 0; i < st.n; i++) {
+            const garb_set_t *set = &st.sets[i];
+            bool font = set->prop == GARB_FONT_SIZE;
+            bool first = font || set->prop == GARB_COLOR;
+            if (first != (pass == 0))
+                continue;
+            if (set->value.kind != GARB_V_WIDE) {
+                if (font)
+                    author_font_size(&a, sp, &set->value);
+                else if (!author_value(&a, sp, set))
+                    return false;
+                continue;
+            }
+            const char *k = set->value.keyword;
+            bool inherits = os64_streq(k, "inherit") ||
+                            (os64_streq(k, "unset") && garb_prop_inherited(set->prop));
+            if (os64_streq(k, "revert") || os64_streq(k, "revert-layer")) {
+                // No user origin, and no layers: both go back to the
+                // user-agent origin (Cascade 5 § 7.3, § 7.4).
+                take(sp, ua, set->prop);
+            } else if (inherits) {
+                if (!have_inh)
+                    inherited_spec(c, parent, &inh);
+                have_inh = true;
+                take(sp, &inh, set->prop);
+            } else {
+                if (!have_init)
+                    initial_spec(c, &init);
+                have_init = true;
+                take(sp, &init, set->prop);
+            }
+        }
+        if (pass == 0)
+            a.font = sp->fs_kind != FS_INHERIT ? font_size(c, sp, parent) : sp->s.font_size;
+    }
+    // A border style the author drew with no width from any origin has the
+    // initial width, medium. The Spec's declared width starts at 0, not
+    // medium, because the chapter always declares the width it draws — so a
+    // 0 there means NO origin declared one, which is also what `revert`
+    // leaves where the chapter declared none: a width reverted is not a
+    // width declared.
+    for (int i = 0; i < 4; i++)
+        if (sp->border_px[i] == 0 && author_sets(st, GARB_BORDER_TOP_STYLE + i) &&
+            !author_declares(st, GARB_BORDER_TOP_WIDTH + i))
+            sp->border_px[i] = 3 * FLOW_UNITS_PER_PX;
+    return true;
+}
+
 // ── Resolving ───────────────────────────────────────────────────────────
 
 static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset)
 {
     switch (l.kind) {
-    case L_PX: return (flow_length_t){FLOW_LENGTH_PX, l.v};
-    case L_PCT: return (flow_length_t){FLOW_LENGTH_PERCENT, l.v};
-    case L_EM: return (flow_length_t){FLOW_LENGTH_PX, scale(font, l.v, 1000)};
-    case L_AUTO: return (flow_length_t){FLOW_LENGTH_AUTO, 0};
+    case L_PX: return (flow_length_t){FLOW_LENGTH_PX, l.v, 0};
+    case L_PCT: return (flow_length_t){FLOW_LENGTH_PERCENT, l.v, l.off};
+    case L_EM: return (flow_length_t){FLOW_LENGTH_PX, scale(font, l.v, 1000), 0};
+    case L_AUTO: return (flow_length_t){FLOW_LENGTH_AUTO, 0, 0};
     case L_UNSET: break;
     }
     return unset;
@@ -1273,8 +2056,8 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent)
         s->font_size = font_size(c, sp, parent);
     if (sp->bolder)
         s->font_weight = bolder(parent != NULL ? parent->font_weight : 400);
-    const flow_length_t zero = {FLOW_LENGTH_PX, 0};
-    const flow_length_t automatic = {FLOW_LENGTH_AUTO, 0};
+    const flow_length_t zero = {FLOW_LENGTH_PX, 0, 0};
+    const flow_length_t automatic = {FLOW_LENGTH_AUTO, 0, 0};
     for (int i = 0; i < 4; i++) {
         s->margin[i] = resolve(sp->margin[i], s->font_size, zero);
         s->padding[i] = resolve(sp->padding[i], s->font_size, zero);
@@ -1337,15 +2120,25 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
                 sp.s.display = FLOW_DISPLAY_NONE;
             }
         }
+        // What `revert` goes back to: the user-agent origin, which is the
+        // chapter's sheet, its link rule and its quirks, without the hints.
+        Spec ua = sp;
         if (sp.s.display != FLOW_DISPLAY_NONE) {
             if (!hints(c, n, &sp))
                 return NULL;
             image_quirk(c, n, &sp);
             margin_quirks(c, n, &sp);
+            link_rule(c, n, &ua, false);
+            image_quirk(c, n, &ua);
+            margin_quirks(c, n, &ua);
         }
+        if (!author(c, n, &sp, &ua, parent))
+            return NULL;
     }
     finish(c, &sp, parent);
     out->style = sp.s;
+    if (n == c->doc->html)
+        c->root_font = sp.s.font_size;
     out->link = c->model != NULL ? os64_page_link_for(c->model, n) : -1;
     if (out->link < 0 && up != NULL)
         out->link = up->link;
@@ -1404,7 +2197,8 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
     // that the boxes' budget would merely cut short.
     out->arena.cap = SIZE_MAX;
     Ctx c = {.doc = doc, .model = model, .env = env, .out = out,
-             .quirks = doc->quirks == OS64_HTML_QUIRKS};
+             .quirks = doc->quirks == OS64_HTML_QUIRKS,
+             .root_font = (flow_unit_t)env->viewport_font_px * FLOW_UNITS_PER_PX};
 
     // Pre-order down, and each element FINISHED on the way back up, when
     // everything under it has been styled — which is when its holds_block

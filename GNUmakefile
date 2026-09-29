@@ -225,12 +225,12 @@ FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSerif.ttf DejaVuSer
                       DejaVuSans-BoldOblique.ttf DejaVuSansMono.ttf DejaVuSansMono-Bold.ttf \
                       DejaVuSansMono-Oblique.ttf DejaVuSansMono-BoldOblique.ttf)
 
-# The real pages the layout library is tested on, and the style sheets
-# libgarb is, side by side in /tests/pages, so /tests/flowdump and
-# /tests/garbdump have something to read on a machine with no network. Where
-# each page came from is in tools/html_corpus/SOURCES.json, which ships
-# beside them.
-PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css)
+# The real pages the layout library is tested on, and libgarb's style
+# sheets and its showcase page (garb.html), side by side in /tests/pages, so
+# /tests/flowdump, /tests/garbdump and yonder have something to read on a
+# machine with no network. Where each page came from is in
+# tools/html_corpus/SOURCES.json, which ships beside them.
+PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css tools/garb_corpus/*.html)
 
 # The same fixtures for the wire, staged alone: os64serve serves a directory
 # whole, and tools/html_corpus also holds the host harness's expected dumps,

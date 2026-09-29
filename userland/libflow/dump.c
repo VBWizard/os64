@@ -63,12 +63,16 @@ static void length(Buf *b, flow_length_t l)
         unit(b, l.value);
         if (l.kind == FLOW_LENGTH_PERCENT)
             puts_(b, "%");
+        if (l.kind == FLOW_LENGTH_PERCENT && l.offset != 0) {
+            puts_(b, l.offset < 0 ? "-" : "+");
+            unit(b, l.offset < 0 ? -l.offset : l.offset);
+        }
     }
 }
 
 static bool length_eq(flow_length_t a, flow_length_t b)
 {
-    return a.kind == b.kind && a.value == b.value;
+    return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
 }
 
 static bool is_zero(flow_length_t l)
@@ -222,7 +226,7 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
             color(b, env, s->border_color[i]);
         }
     }
-    flow_length_t automatic = {FLOW_LENGTH_AUTO, 0};
+    flow_length_t automatic = {FLOW_LENGTH_AUTO, 0, 0};
     if (!length_eq(s->width, automatic)) {
         puts_(b, " width=");
         length(b, s->width);

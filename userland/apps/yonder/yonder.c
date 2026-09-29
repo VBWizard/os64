@@ -13,6 +13,7 @@
 #include "html/html.h"
 #include "page/page.h"
 #include "flow/flow.h"
+#include "garb/cascade.h"
 #include "way/way.h"
 #include "os64/os64.h"
 #include "os64/draw.h"
@@ -237,14 +238,21 @@ typedef struct {
 } Picture;
 
 // A page as the window holds it: libway's page (the tree, what it means,
-// the reader's flips) and its layout at the width it was laid out at. A
+// the reader's flips) and its layout at the size it was laid out at. A
 // text/plain page has no tree of its own, so it is given one.
 typedef struct {
     way_page_t way;
     os64_html_document_t *plain;
     os64_page_t *plain_model;
     flow_tree_t *tree;
-    int32_t laid_width;
+    int32_t laid_width, laid_height;
+    // The page's `style` sheets, parsed once, and their cascade at the size
+    // the tree was laid out at (GARB.md, G3). The tree points into both.
+    garb_parsed_t *sheets;
+    garb_sheet_in_t *sheet_in;
+    int32_t nsheets;
+    bool sheets_read;
+    garb_cascade_t *cascade;
     // The pictures, one per address, and for each of libpage's pictures
     // (os64_page_image) and backgrounds (os64_page_background) which of
     // these it is, -1 for one that will not be fetched.
@@ -297,6 +305,11 @@ static void page_clear(Page *p)
     os64_free(p->pic_of);
     os64_free(p->bg_of);
     flow_free(p->tree);
+    garb_cascade_free(p->cascade);
+    for (int32_t i = 0; i < p->nsheets; i++)
+        garb_free(&p->sheets[i]);
+    os64_free(p->sheets);
+    os64_free(p->sheet_in);
     os64_page_free(p->plain_model);
     os64_html_document_free(p->plain);
     way_page_clear(&p->way);
@@ -324,10 +337,74 @@ static bool page_from_text(Page *p)
     return p->plain != NULL && p->plain_model != NULL;
 }
 
-static flow_tree_t *layout_tree(Page *p, int32_t width)
+// The page's `style` elements, parsed once, in the order the cascade ranks
+// them. A linked sheet is not fetched. A sheet that will not parse — too
+// big, or no memory — is left out, and the page is drawn without it.
+static void sheets_read(Page *p)
 {
+    p->sheets_read = true;
+    const os64_page_t *model = page_model(p);
+    int32_t n = model != NULL ? os64_page_nsheets(model) : 0;
+    if (n == 0)
+        return;
+    p->sheets = os64_calloc((size_t)n, sizeof(*p->sheets));
+    p->sheet_in = os64_calloc((size_t)n, sizeof(*p->sheet_in));
+    if (p->sheets == NULL || p->sheet_in == NULL) {
+        os64_free(p->sheets);
+        os64_free(p->sheet_in);
+        p->sheets = NULL;
+        p->sheet_in = NULL;
+        return;
+    }
+    for (int32_t i = 0; i < n; i++) {
+        const os64_page_sheet_t *sh = os64_page_sheet(model, i);
+        if (sh->linked)
+            continue;
+        garb_parsed_t *parsed = &p->sheets[p->nsheets];
+        if (garb_parse_style_element(sh->node, parsed) != GARB_OK) {
+            garb_free(parsed);
+            continue;
+        }
+        p->sheet_in[p->nsheets] = (garb_sheet_in_t){parsed, sh->media};
+        p->nsheets++;
+    }
+}
+
+// Lays the page out at `width` x `height`, cascading its sheets again when
+// the size is not the one they were cascaded at — a media query or a vw
+// reads it. The new tree replaces the old only once it exists (LAYOUT.md
+// § Bounds), and the cascade the old one points into is freed with it.
+// False on no memory, the page on screen untouched.
+static bool page_lay_out(Page *p, int32_t width, int32_t height)
+{
+    if (!p->sheets_read)
+        sheets_read(p);
+    garb_cascade_t *cascade = p->cascade;
+    garb_env_t view = {width, height};
+    if (p->nsheets > 0 && (cascade == NULL || garb_cascade_env(cascade).width != view.width ||
+                           garb_cascade_env(cascade).height != view.height)) {
+        cascade = garb_cascade(p->sheet_in, p->nsheets, page_doc(p), view);
+        if (cascade == NULL)
+            return false;
+    }
     s_env.ctx = p;
-    return flow_layout(page_doc(p), page_model(p), width, &s_env);
+    s_env.cascade = cascade;
+    flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
+    s_env.cascade = NULL;
+    if (fresh == NULL) {
+        if (cascade != p->cascade)
+            garb_cascade_free(cascade);
+        return false;
+    }
+    flow_free(p->tree);
+    if (cascade != p->cascade) {
+        garb_cascade_free(p->cascade);
+        p->cascade = cascade;
+    }
+    p->tree = fresh;
+    p->laid_width = width;
+    p->laid_height = height;
+    return true;
 }
 
 // ── The window ──────────────────────────────────────────────────────────
@@ -679,33 +756,31 @@ static const os64_html_node_t *anchor_of(int32_t *offset)
     return b->node;
 }
 
-// Lays the page on screen out again at the view's width. The new tree is
-// built beside the old one, which is freed only once the new one exists
-// (LAYOUT.md § Bounds).
-// `again` lays it out even at the width it has: a picture's size arrived.
+// Lays the page on screen out again at the view's size. `again` lays it
+// out even at the size it has: a picture's size arrived. Without sheets
+// only the width moves anything; with them the height does too, which is
+// what their media queries and vh units read.
 static void relayout(bool again)
 {
-    int32_t width = g.view.bounds.w;
+    int32_t width = g.view.bounds.w, height = g.view.bounds.h;
     if (page_doc(&g.page) == NULL || width <= 0 ||
-        (!again && g.page.tree != NULL && width == g.page.laid_width))
+        (!again && g.page.tree != NULL && width == g.page.laid_width &&
+         (g.page.nsheets == 0 || height == g.page.laid_height)))
         return;
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
     os64_ticks_t t0, t1;
     os64_ticks(&t0);
-    flow_tree_t *fresh = layout_tree(&g.page, width);
+    bool laid = page_lay_out(&g.page, width, height);
     os64_ticks(&t1);
     // The attempt consumes the moves whether or not it fits: kept, they
     // would retry a layout that just failed at every event batch.
     g.pictures_moved = false;
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
-    if (fresh == NULL) {
+    if (!laid) {
         status_rest("Out of memory laying the page out; this is the last layout that fit.");
         return;
     }
-    flow_free(g.page.tree);
-    g.page.tree = fresh;
-    g.page.laid_width = width;
     g.laid_at = t1;
     if (anchor != NULL) {
         const flow_box_t *b = flow_box_for(g.page.tree, anchor);
@@ -761,16 +836,16 @@ static void refresh_if_declared(void)
 static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const char *fragment)
 {
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
+    int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
     os64_ticks_t t0, t1;
     os64_ticks(&t0);
-    fresh->tree = layout_tree(fresh, width);
+    bool laid = page_lay_out(fresh, width, height);
     os64_ticks(&t1);
-    if (fresh->tree == NULL) {
+    if (!laid) {
         page_clear(fresh);
         status_rest("Out of memory laying that page out; this is still the page you were on.");
         return;
     }
-    fresh->laid_width = width;
     way_position_t here = position_now();
     bool had = g.page.tree != NULL;
     if (had) {
