@@ -302,12 +302,27 @@ typedef struct {
 // text inline when it has one, nothing when its alt is empty, a small
 // icon when it has none — and a sensible box for anything else: a frame's
 // 300x150, a control ten ems wide and one line of its own font high.
+static bool width_given(const flow_style_t *s)
+{
+    return s->width.kind != FLOW_LENGTH_AUTO;
+}
+
+static bool height_given(const flow_style_t *s)
+{
+    return s->height.kind == FLOW_LENGTH_PX;
+}
+
+bool flow_replaced_fixed(const flow_style_t *style)
+{
+    return style != NULL && width_given(style) && height_given(style);
+}
+
 static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_style_t *s,
                               int64_t cbw)
 {
     Replaced r = {0, 0, false, false};
-    bool w_set = s->width.kind != FLOW_LENGTH_AUTO;
-    bool h_set = s->height.kind == FLOW_LENGTH_PX;
+    bool w_set = width_given(s);
+    bool h_set = height_given(s);
     int64_t w = max64(0, len(s->width, cbw)), h = h_set ? max64(0, hold_len(s->height.value)) : 0;
     int32_t iw = 0, ih = 0;
     bool known = l->env->replaced_size != NULL &&

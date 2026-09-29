@@ -352,22 +352,35 @@ rather than by what the server claims. The product is the decoded image,
 0xAARRGGBB; the job's input and product are released by the pool if the
 page is left first. The DECLARED RESERVE is honest to the decoders'
 defaults: 20 MiB of body and 128 MiB of decoding (libjpeg's memory cap,
-which also bounds PNG's 16-megapixel raster and its inflate buffer), and
-the pool's budget grows to 768 MiB so a page and four pictures — one per
-worker — run at once. A picture over the decoders' caps is refused by them
-and drawn as its placeholder.
+which also bounds PNG: its 16-megapixel raster is 64 MiB, and it inflates
+through a 32 KiB window straight into it), and the pool's budget grows to
+768 MiB so a page and three pictures run at once. A picture over the
+decoders' caps is refused by them and drawn as its placeholder.
+
+**Three at a time, and yonder holds the rest.** The pool admits work in
+the order it was given, so a page's forty pictures handed over at once
+would put a person's next click forty-first in line — and past the pool's
+table, the rest refused for good. So yonder keeps the page's pictures
+itself and hands the pool the next as each comes back, never more than
+one fewer than the pool has workers: a navigation always finds a worker
+free, once the pictures of a page left behind have seen they were
+cancelled. Leaving a page cancels the few in the pool and forgets the
+rest.
 
 **The size is the layout's question, the pixels the painter's.** libflow
 asks the face for a picture's intrinsic size (`replaced_size`); yonder
 answers from the pictures that have arrived, and "unknown" for the rest —
 libflow then lays out the alt text, or the box the width and height
-attributes give. When a picture arrives whose element lacks either
-attribute, the page is laid out AGAIN (keeping the reader's place, as a
-resize does), because its size may move everything below it. Relayouts are
-coalesced: at most one per drained batch of doorbells, and while pictures
-are still arriving, at most one a second — the last arrival always lays
-out, so the page settles at its true shape. A picture whose element has
-both attributes needs no relayout at all; the old web wrote them on most.
+give. When a picture arrives whose box the page did not fix — libflow's
+rule, `flow_replaced_fixed`, asked of the element's box, since a
+`width="auto"` is written but fixes nothing — the page is laid out AGAIN
+(keeping the reader's place, as a resize does), because its size may move
+everything below it. Relayouts are coalesced: at most one per drained
+batch of doorbells, and on a page whose layout takes more than 100 ms,
+none until its last picture is in — an arrival rings the doorbell, so the
+page always settles at its true shape and nothing waits on a clock. A
+picture whose box is fixed needs no relayout at all; the old web wrote
+both attributes on most.
 
 **Drawing.** The painter's `image` verb draws the picture into its box's
 content rectangle, SCALED nearest-neighbour when the box and the picture

@@ -47,14 +47,25 @@
 
 // The work pool. A navigation declares what one page can cost: libhtml's
 // 8 MiB of input and 64 MiB of tree, and the model beside them; a picture
-// declares PICTURE_RESERVE. The budget fits a page and four pictures, one
-// per worker.
+// declares PICTURE_RESERVE. The budget fits a page and PICTURES_AT_ONCE.
 #define POOL_WORKERS 4
 #define TRIP_RESERVE (80u << 20)
 #define POOL_BUDGET  (768u << 20)
 
 // Decoded pixels a page may keep; past it a picture draws as its frame.
 #define PICTURES_KEPT_MAX ((size_t)256u << 20)
+
+// A page's pictures in the pool at once: one fewer than its workers. The
+// pool admits in the order it was given work, so a navigation submitted
+// after a page's pictures would wait for every one of them; yonder keeps
+// the rest itself and hands over the next as each comes back, which keeps
+// a worker free for the person — once any pictures of a page left behind
+// have seen they were cancelled.
+#define PICTURES_AT_ONCE (POOL_WORKERS - 1)
+
+// A layout at most this slow is repeated for every batch of pictures that
+// moves the page; a slower one waits for the page's last picture.
+#define PICTURES_CHEAP_LAYOUT_MS 100
 
 // The window's doorbell bits: the pool's completions, and a navigation's
 // mailbox (progress and questions).
@@ -202,7 +213,8 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len)
 // text/plain page has no tree of its own, so it is given one.
 // A picture of the page's, one per ADDRESS: forty spacer GIFs are one
 // fetch. Its address is the page model's, which lives as long as it does.
-typedef enum { PIC_WAITING, PIC_SHOWN, PIC_FAILED, PIC_NOT_KEPT } PictureState;
+// QUEUED is yonder's to hand over; WAITING is in the pool.
+typedef enum { PIC_QUEUED, PIC_WAITING, PIC_SHOWN, PIC_FAILED, PIC_NOT_KEPT } PictureState;
 
 typedef struct {
     const char *url;
@@ -224,7 +236,10 @@ typedef struct {
     // which of these it is, -1 for one that will not be fetched.
     Picture *pics;
     int32_t npics, *pic_of;
-    int32_t waiting, not_kept;
+    // Still to come (QUEUED or WAITING), and of those, in the pool; the
+    // next picture to hand it.
+    int32_t waiting, in_flight, next_pic;
+    int32_t not_kept;
     size_t kept_bytes;
 } Page;
 
@@ -354,12 +369,10 @@ static struct {
     uint64_t generation;
     // Which page is on screen, so a picture finished for another is let go.
     uint64_t page_serial;
-    // A picture arrived whose size may move the page; and when the page was
-    // last laid out again for one, to lay out at most once a second while
-    // more are coming.
+    // A picture arrived whose size may move the page (pictures_settle).
     bool pictures_moved;
-    os64_ticks_t pictures_laid;
-    uint64_t laid_ms;               // the last layout's time, for the status line
+    // The last layout's time: for the status line, and for pictures_settle.
+    uint64_t laid_ms;
 } g;   // zeroed: the session's histories are large, and .data would carry them in the file
 
 // A sentence in the house's status-row voice starts with a space; a line
@@ -896,27 +909,48 @@ static void open_address(const char *typed, NavKind kind, const way_position_t *
 
 // ── Pictures ────────────────────────────────────────────────────────────
 
-// Fetches the page's pictures, one job per address, in tree order: libpage's
+// Whether an arrival can move the page: libflow's rule, asked of the box
+// the element was laid out in. A picture with no box has nothing fixed.
+static bool picture_sized(const Page *p, const os64_html_node_t *node)
+{
+    const flow_box_t *b = flow_box_for(p->tree, node);
+    return b != NULL && flow_replaced_fixed(b->style);
+}
+
+// Hands the pool the page's next pictures, in tree order, while fewer than
+// PICTURES_AT_ONCE are in it. One it cannot take keeps its frame.
+static void pictures_feed(Page *p)
+{
+    while (p->in_flight < PICTURES_AT_ONCE && p->next_pic < p->npics) {
+        int32_t index = p->next_pic++;
+        Picture *pic = &p->pics[index];
+        if (pic->state != PIC_QUEUED)
+            continue;
+        pic->state = PIC_FAILED;
+        p->waiting--;
+        yonder_picture_job_t *job = g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
+        if (job == NULL)
+            continue;
+        job->kind = YONDER_JOB_PICTURE;
+        job->index = index;
+        job->generation = g.page_serial;
+        job->agent = g.way.agent;
+        os64_strcopy(job->url, sizeof(job->url), pic->url);
+        os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
+        pic->id = os64_work_submit(g.pool, &work);
+        if (pic->id == 0) {
+            os64_free(job);
+            continue;
+        }
+        pic->state = PIC_WAITING;
+        p->waiting++;
+        p->in_flight++;
+    }
+}
+
+// Gathers the page's pictures, one per address, in tree order: libpage's
 // list is the record. A picture whose address was refused, or names a
 // scheme nothing here fetches, is never asked for.
-// Whether an image's element fixes its box whatever arrives: libflow sizes
-// a picture whose element gives both a width and a height (the height not
-// a percentage) the same whether it has arrived or not.
-static bool has_percent(const char *v)
-{
-    for (; v != NULL && *v != '\0'; v++)
-        if (*v == '%')
-            return true;
-    return false;
-}
-
-static bool picture_sized(const os64_html_node_t *node)
-{
-    const os64_html_attr_t *w = os64_html_attr(node, "width");
-    const os64_html_attr_t *h = os64_html_attr(node, "height");
-    return w != NULL && h != NULL && h->value != NULL && !has_percent(h->value);
-}
-
 static void pictures_start(Page *p)
 {
     const os64_page_t *model = page_model(p);
@@ -961,44 +995,32 @@ static void pictures_start(Page *p)
             at = (at + 1) & (cap - 1);
         if (slot[at] >= 0) {
             p->pic_of[i] = slot[at];
-            if (!picture_sized(os64_page_image(model, i)->node))
+            if (!picture_sized(p, os64_page_image(model, i)->node))
                 p->pics[slot[at]].moves = true;
             continue;
         }
         slot[at] = p->npics;
         Picture *pic = &p->pics[p->npics];
-        pic->moves = !picture_sized(os64_page_image(model, i)->node);
+        pic->moves = !picture_sized(p, os64_page_image(model, i)->node);
         pic->url = url;
-        pic->state = PIC_FAILED;
-        yonder_picture_job_t *job = os64_calloc(1, sizeof(*job));
-        if (job != NULL) {
-            job->kind = YONDER_JOB_PICTURE;
-            job->index = p->npics;
-            job->generation = g.page_serial;
-            job->agent = g.way.agent;
-            os64_strcopy(job->url, sizeof(job->url), url);
-            os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
-            pic->id = os64_work_submit(g.pool, &work);
-            if (pic->id != 0) {
-                pic->state = PIC_WAITING;
-                p->waiting++;
-            } else {
-                os64_free(job);     // the table is full: this one keeps its frame
-            }
-        }
+        pic->state = PIC_QUEUED;
+        p->waiting++;
         p->pic_of[i] = p->npics++;
     }
     os64_free(slot);
+    pictures_feed(p);
 }
 
-// The page is being left: its pictures still on their way are cancelled,
-// and the pool lets their inputs and products go.
+// The page is being left: its pictures in the pool are cancelled, and the
+// pool lets their inputs and products go; those not handed over are never
+// asked for.
 static void pictures_leave(Page *p)
 {
     for (int32_t i = 0; i < p->npics; i++)
         if (p->pics[i].state == PIC_WAITING && g.pool != NULL)
             os64_work_cancel(g.pool, p->pics[i].id);
-    p->waiting = 0;
+    p->waiting = p->in_flight = 0;
+    p->next_pic = p->npics;
 }
 
 // Whether a picture's arrival can move the page (Picture.moves).
@@ -1015,6 +1037,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     if (pic->state != PIC_WAITING)
         return;
     g.page.waiting--;
+    g.page.in_flight--;
     if (product == NULL || product->status != OS64_IMAGE_OK) {
         pic->state = PIC_FAILED;
         return;
@@ -1034,19 +1057,18 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     os64_ui_mark_dirty(&g.ui, &g.view);
 }
 
-// After a drained batch: lay the page out again if pictures moved it — at
-// once when the last one is in, otherwise at most once a second, so a page
-// of forty pictures settles without forty layouts.
+// After a drained batch: lay the page out again if pictures moved it —
+// once per batch when laying it out is cheap, otherwise when its last
+// picture is in, so a slow page of forty pictures is not laid out forty
+// times. Either way the wait ends at an arrival, which rings the doorbell:
+// nothing deferred here waits on a clock nobody is keeping.
 static void pictures_settle(void)
 {
     if (!g.pictures_moved)
         return;
-    os64_ticks_t now;
-    os64_ticks(&now);
-    if (g.page.waiting > 0 && ms_between(&g.pictures_laid, &now) < 1000)
+    if (g.page.waiting > 0 && g.laid_ms > PICTURES_CHEAP_LAYOUT_MS)
         return;
     g.pictures_moved = false;
-    g.pictures_laid = now;
     relayout(true);
 }
 
@@ -1059,6 +1081,7 @@ static void reaped(os64_work_id_t id, void *job, void *product)
     if (*(const uint32_t *)job == YONDER_JOB_PICTURE) {
         picture_arrived(job, product);
         yonder_picture_release(job, product);
+        pictures_feed(&g.page);
         return;
     }
     if (id == 0 || id != g.nav.id) {

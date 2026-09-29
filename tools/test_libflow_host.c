@@ -1272,6 +1272,7 @@ int main(int argc, char **argv)
     boxes_sweep();
     layout_sweep();
     door_cases();
+    fixed_cases();
     paint_cases();
     decoration_colour_cases();
     limit_cases();
