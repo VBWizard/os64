@@ -394,8 +394,68 @@ OUT: background-position-x: 0px; background-position-y: 0px
 IN: background-position-x: right 5px
 OUT: background-position-x: calc(100% - 5px)
 
-# ── What libgarb does not read here ──
+# ── Positioning (Position 3 § 3, CSS 2.1 § 9.9.1, Color 4 § 4.2) ──
 IN: position: absolute
+OUT: position: absolute
+IN: position: STICKY
+OUT: position: sticky
+IN: position: absolute fixed
+OUT: invalid
+IN: position: -webkit-sticky
+OUT: invalid
+IN: top: -10px
+OUT: top: -10px
+IN: left: -9999px
+OUT: left: -9999px
+IN: right: 5%
+OUT: right: 5%
+IN: bottom: auto
+OUT: bottom: auto
+IN: top: calc(50% - 2em)
+OUT: top: calc(50% - 2em)
+IN: top: none
+OUT: invalid
+IN: top: 10
+OUT: invalid
+IN: quirks top: 10
+OUT: top: 10px
+IN: inset: 0
+OUT: top: 0px; right: 0px; bottom: 0px; left: 0px
+IN: inset: 1px 2px 3px
+OUT: top: 1px; right: 2px; bottom: 3px; left: 2px
+IN: inset: auto 0
+OUT: top: auto; right: 0px; bottom: auto; left: 0px
+IN: inset: 1px 2px 3px 4px 5px
+OUT: invalid
+IN: inset: inherit
+OUT: top: inherit; right: inherit; bottom: inherit; left: inherit
+IN: z-index: 10
+OUT: z-index: 10
+IN: z-index: -1
+OUT: z-index: -1
+IN: z-index: auto
+OUT: z-index: auto
+IN: z-index: 1.5
+OUT: invalid
+IN: z-index: 1e3
+OUT: invalid
+IN: z-index: 1px
+OUT: invalid
+IN: opacity: 0
+OUT: opacity: 0
+IN: opacity: 0.5
+OUT: opacity: 0.5
+IN: opacity: 50%
+OUT: opacity: 50%
+IN: opacity: 2
+OUT: opacity: 2
+IN: opacity: -1
+OUT: opacity: -1
+IN: opacity: none
+OUT: invalid
+
+# ── What libgarb does not read here ──
+IN: transform: none
 OUT: unknown
 IN: grid-template-columns: 1fr
 OUT: unknown
