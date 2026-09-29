@@ -3,7 +3,7 @@
 ## Completed — 2026-09-25
 
 Delivered as yonder's slice Y2 (branch `opus/yonder-nav`,
-[YONDER.md](../design/pending/YONDER.md)): **`userland/libway/`**, a
+[YONDER.md](../design/completed/YONDER.md)): **`userland/libway/`**, a
 browsing session apart from whatever draws it. `wend.c` is now its terminal
 half and nothing more.
 
