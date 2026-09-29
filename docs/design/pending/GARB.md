@@ -191,18 +191,19 @@ block.
 
 **G2a, as run.** An+B: css-parsing-tests' 128 cases pass. Selectors:
 `tools/test_garb_select.py` parses each corpus page on both sides (libhtml
-there, html5lib here) and compares every selector's validity,
-specificity, pseudo-element and matched elements with cssselect2 — a
-catalogue of 123 covering every feature and its refusals, and 400
-generated per page from the page's own names: 3,138 comparisons, none
-differ. 70 answers stand on the standard against the reference, each named
-in the runner with its section: `:link` and `:any-link` are `a` and `area`
-only, `:enabled` is form controls only, `type` is on HTML's list of
-attribute values compared without case, `nth-child(… of S)` weighs its
-argument (and cssselect2 matches nothing when S is a list), `:is()`'s list
-forgives, a user-action pseudo-class may follow a pseudo-element, and the
-pseudo-classes cssselect2 does not know (`:required`, `:optional`,
-`:read-only`, `:read-write`), checked on a small page by hand. On
+there, html5lib here) and compares every selector's validity, specificity,
+pseudo-element and matched elements with cssselect2 — a catalogue of 130
+covering every feature and its refusals, and 400 generated per page from
+the page's own names: 3,180 comparisons, none differ. 100 answers stand on
+the standard against the reference, each named in the runner with its
+section: `:link` and `:any-link` are `a` and `area` only, `:enabled` is
+form controls only, `type` is on HTML's list of attribute values compared
+without case, `nth-child(… of S)` weighs its argument (and cssselect2
+matches nothing when S is a list), `:is()`'s list forgives, a user-action
+pseudo-class may follow a pseudo-element, a pseudo-element inside `:not()`
+and a `:has()` inside `:has()` are invalid, and the pseudo-classes
+cssselect2 does not know (`:required`, `:optional`, `:read-only`,
+`:read-write`, `:indeterminate`), checked on a small page by hand. On
 danlegt.com's own page (a local copy): 923 generated selectors, and all
 896 of its sheets' real selectors — 878 valid, the rest its vendor
 pseudo-elements, refused on both sides — agree.
