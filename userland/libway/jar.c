@@ -15,6 +15,10 @@ typedef struct {
     int64_t expiry;                         // INT64_MAX: until the browser closes
     int64_t created;                        // seconds, and `order` within one
     uint64_t order;
+    // §5.3 step 12's last-access time, as the jar's own count: stamped as
+    // the cookie is stored and each time it is sent, so eviction takes the
+    // one used longest ago — never the login every page carries.
+    uint64_t used;
     bool host_only, secure, http_only;
     SameSite same_site;
 } Cookie;
@@ -23,7 +27,7 @@ struct way_jar {
     os64_lock_t lock;
     Cookie *cookies;
     int32_t n, cap;
-    uint64_t next_order;
+    uint64_t next_order, next_use;
 };
 
 way_jar_t *way_jar_new(void)
@@ -289,6 +293,13 @@ static bool older(const Cookie *a, const Cookie *b)
     return a->created < b->created || (a->created == b->created && a->order < b->order);
 }
 
+// §5.3 step 12: past a limit, the cookie used longest ago goes (expired
+// ones are purged before this is asked).
+static bool staler(const Cookie *a, const Cookie *b)
+{
+    return a->used < b->used;
+}
+
 static void purge_expired(way_jar_t *jar, int64_t now)
 {
     for (int32_t i = 0; i < jar->n;)
@@ -298,29 +309,32 @@ static void purge_expired(way_jar_t *jar, int64_t now)
             i++;
 }
 
-// Past a limit, the oldest goes: in the domain for the domain's limit, in
-// the jar for the jar's.
+// Past a limit, the cookie used longest ago goes: in the domain for the
+// domain's limit, in the jar for the jar's. `domain` is the string of the
+// cookie just stored, which is the one used MOST recently, so it is never
+// the one dropped and the string outlives every drop here (a drop moves
+// Cookie records, not the blocks their strings live in).
 static void enforce_limits(way_jar_t *jar, const char *domain)
 {
     for (;;) {
-        int32_t count = 0, oldest = -1;
+        int32_t count = 0, stalest = -1;
         for (int32_t i = 0; i < jar->n; i++) {
             if (!os64_streq(jar->cookies[i].domain, domain))
                 continue;
             count++;
-            if (oldest < 0 || older(&jar->cookies[i], &jar->cookies[oldest]))
-                oldest = i;
+            if (stalest < 0 || staler(&jar->cookies[i], &jar->cookies[stalest]))
+                stalest = i;
         }
         if (count <= WAY_COOKIES_PER_DOMAIN)
             break;
-        drop(jar, oldest);
+        drop(jar, stalest);
     }
     while (jar->n > WAY_COOKIES_MAX) {
-        int32_t oldest = 0;
+        int32_t stalest = 0;
         for (int32_t i = 1; i < jar->n; i++)
-            if (older(&jar->cookies[i], &jar->cookies[oldest]))
-                oldest = i;
-        drop(jar, oldest);
+            if (staler(&jar->cookies[i], &jar->cookies[stalest]))
+                stalest = i;
+        drop(jar, stalest);
     }
 }
 
@@ -471,6 +485,9 @@ void way_jar_hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const 
     int64_t expiry = h.have_max_age ? h.max_age_expiry : h.have_expires ? h.expires : INT64_MAX;
 
     os64_lock_acquire(&jar->lock);
+    // §5.3 step 12 takes the expired first, so they go before any limit is
+    // counted — and before anything below holds an index into the jar.
+    purge_expired(jar, now);
     // 6265bis §5.7 step 12: over a connection that is not encrypted, a
     // cookie may not shadow a secure one of the same name.
     int32_t same = -1;
@@ -533,6 +550,7 @@ void way_jar_hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const 
     c->expiry = expiry;
     c->created = created;
     c->order = order;
+    c->used = jar->next_use++;
     c->host_only = !h.have_domain;
     c->secure = h.secure;
     c->http_only = h.http_only;
@@ -568,9 +586,9 @@ size_t way_jar_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int
     // request asks once.
     const Cookie *last = NULL;
     for (;;) {
-        const Cookie *next = NULL;
+        Cookie *next = NULL;
         for (int32_t i = 0; i < jar->n; i++) {
-            const Cookie *c = &jar->cookies[i];
+            Cookie *c = &jar->cookies[i];
             bool host = c->host_only ? os64_streq(to->host, c->domain)
                                      : domain_match(to->host, c->domain);
             if (!host || !path_match(to->path, rn, c->path) || (c->secure && !encrypted))
@@ -601,6 +619,7 @@ size_t way_jar_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int
         os64_memcpy(out + used, next->value, vlen);
         used += vlen;
         out[used] = '\0';
+        next->used = jar->next_use++;       // §5.4 step 3: sent is used
     }
     os64_lock_release(&jar->lock);
     return used;
