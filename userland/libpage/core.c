@@ -658,19 +658,26 @@ static void add_link(os64_page_t *page, const os64_html_node_t *n, const char *a
     page->nlinks++;
 }
 
-static bool blank(const char *s)
+// A `src` that spells nothing names nothing, whatever carries it: for a
+// frame or an iframe it is the blank page, nowhere to go; for a picture it
+// is shown broken rather than fetching the page it sits on. The standard
+// says so of the empty string, and browsers of white space too.
+static bool names_something(const os64_html_node_t *n, const char *name)
 {
-    for (; *s != '\0'; s++)
-        if (!space(*s))
-            return false;
-    return true;
+    const char *v = p_attr(n, name);
+    if (v == NULL)
+        return false;
+    for (; *v != '\0'; v++)
+        if (!space(*v))
+            return true;
+    return false;
 }
 
 static void add_image(os64_page_t *page, const os64_html_node_t *n)
 {
-    const char *src = p_attr(n, "src");
-    if (src == NULL || blank(src))
+    if (!names_something(n, "src"))
         return;
+    const char *src = p_attr(n, "src");
     if (!p_grow((void **)&page->images, &page->imagecap, page->nimages, sizeof(*page->images))) {
         page->incomplete = true;
         return;
@@ -806,17 +813,12 @@ static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off)
         if ((p_is(n, OS64_HTML_TAG_A) || p_is(n, OS64_HTML_TAG_AREA)) &&
             p_has_attr(n, "href"))
             add_link(page, n, "href");
-        // A FRAME NAMES A DOCUMENT the way a link does, and a face that
-        // cannot draw frames offers each one as somewhere to go. It is
-        // resolved here for the reason every reference is: two resolvers
-        // disagree about a `<base>`. An `iframe` is offered the same way by
-        // a face that draws no document inside a document — but only one
-        // that names something: an iframe with an empty `src` is the blank
-        // page, and there is nowhere to go.
-        if (p_is(n, OS64_HTML_TAG_FRAME) && p_has_attr(n, "src"))
-            add_link(page, n, "src");
-        if (p_is(n, OS64_HTML_TAG_IFRAME) && p_has_attr(n, "src") &&
-            !blank(p_attr(n, "src")))
+        // A FRAME OR AN IFRAME NAMES A DOCUMENT the way a link does, and a
+        // face that cannot draw a document inside a document offers each
+        // one as somewhere to go. It is resolved here for the reason every
+        // reference is: two resolvers disagree about a `<base>`.
+        if ((p_is(n, OS64_HTML_TAG_FRAME) || p_is(n, OS64_HTML_TAG_IFRAME)) &&
+            names_something(n, "src"))
             add_link(page, n, "src");
         if (p_is(n, OS64_HTML_TAG_IMG) ||
             (p_is(n, OS64_HTML_TAG_INPUT) && p_input_type(n) == OS64_PAGE_INPUT_IMAGE))

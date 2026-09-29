@@ -126,8 +126,9 @@ long the last layout took, because that number is the one to watch.
 one that declares no `<meta charset>` is windows-1252 by the standard's
 default — which turned Hacker News's UTF-8 dashes into `â€“`. Bytes that
 are valid UTF-8 and not plain ASCII are read as UTF-8, the file detector
-browsers use; a `<meta>` loses to it only where the bytes already
-contradict the `<meta>`.
+browsers use. The answer goes to libhtml as the transport's label, which
+outranks the page's own, so when the detector fires a `<meta>` is not read
+at all: a page that declares windows-1252 and is UTF-8 is read as UTF-8.
 
 **The window is named `<title> - yonder`**, fitted to the title's 31
 bytes (the boundary refuses a longer one rather than cutting it) with an
@@ -138,9 +139,11 @@ before the window exists; one opened later leaves the name as it was
 
 **Fonts.** Every page view shares ONE text context of its own, apart from
 libui's chrome context, with a cache of opened faces on it keyed by
-(family, bold, italic, size) — LAYOUT.md's arrangement. Until packet 04
-lands, the resolver is `flowdump`'s: DejaVu Sans, or DejaVu Sans Mono for
-the monospace generic, at the asked size. Serif, bold and italic are drawn
+(monospace or not, size): until packet 04 lands, the resolver is
+`flowdump`'s, DejaVu Sans, or DejaVu Sans Mono for the monospace generic,
+at the asked size, and at most 64 of them (a 65th size stops the layout,
+incomplete). Packet 04's family cache, keyed by family, bold, italic and
+size as LAYOUT.md arranges, replaces it. Serif, bold and italic are drawn
 as the regular face until then, and packet 04's `os64_font_family_open`
 replaces the resolver without the view noticing.
 

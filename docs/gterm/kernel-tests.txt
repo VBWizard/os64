@@ -1,0 +1,83 @@
+03:01:37 (468,0): BUILT-IN TESTS: Running pre-boot tests:
+03:01:37 (468,0): 	[Test] window_minimum_clamp... OK
+03:01:37 (468,0): 	[Test] kmalloc_not_null... OK
+03:01:37 (468,0): 	[Test] fpu_state_round_trip... OK
+03:01:37 (468,0): 	[Test] page_fault_test_mode_returns... OK
+03:01:37 (468,0): 	[Test] page_zero_unmapped... OK
+03:01:37 (468,0): 	[Test] dlist_basic_operations... OK
+03:01:37 (468,0): 	[Test] arena_create_and_destroy... OK
+03:01:37 (468,0): 	[Test] arena_basic_alloc... OK
+03:01:37 (468,0): 	[Test] arena_aligned_alloc... OK
+03:01:37 (468,0): 	[Test] arena_reset... OK
+03:01:37 (468,0): 	[Test] arena_growth... OK
+03:01:37 (468,0): 	[Test] vma_insert_and_lookup... OK
+03:01:37 (468,0): 	[Test] vma_page_fault_resolved... OK
+03:01:37 (468,0): 	[Test] vma_cow_write... OK
+03:01:37 (468,0): 	[Test] env_create_empty... OK
+03:01:37 (469,0): 	[Test] env_set_and_get... OK
+03:01:37 (469,0): 	[Test] env_update_shorter_val... OK
+03:01:37 (469,0): 	[Test] env_update_longer_val... OK
+03:01:37 (469,0): 	[Test] env_multi_key... OK
+03:01:37 (469,0): 	[Test] env_inherit_copies... OK
+03:01:37 (469,0): 	[Test] env_inherit_independence... OK
+03:01:37 (469,0): 	[Test] gmtime_negative_epoch... OK
+03:01:37 (469,0): 	[Test] time_zone_minute_offsets... OK
+03:01:37 (469,0): 	[Test] env_inherit_grown... OK
+03:01:37 (469,0): 	[Test] env_count_accurate... OK
+03:01:37 (470,0): 	[Test] env_capacity_full... OK
+03:01:37 (470,0): 	[Test] task_arena_create_and_destroy... OK
+03:01:37 (470,0): 	[Test] task_arena_alloc_and_convert... OK
+03:01:37 (470,0): 	[Test] task_arena_aligned_alloc... OK
+03:01:37 (470,0): 	[Test] task_arena_exhaustion... OK
+03:01:37 (470,0): 	[Test] random_pool... OK
+03:01:37 (470,0): BUILT-IN TESTS: 31 passed, 0 failed
+03:01:38 (591,2): BUILT-IN TESTS: Running post-boot tests:
+03:01:38 (591,2): 	[Test] vma_file_backed_page_fault_resolved... OK
+03:01:38 (591,2): 	[Test] vma_partial_page_bss_zero_filled... OK
+03:01:38 (593,2): 	[Test] elf_loader... OK
+03:01:38 (595,2): 	[Test] dynamic_linking... OK
+03:01:39 (595,2): 	[Test] pty_publication_hold... OK
+03:01:39 (642,2): 	[Test] pty_history... OK
+03:01:39 (642,2): 	[Test] pty_resize_modes... OK
+03:01:39 (642,2): 	[Test] pty_stream_seats... OK
+03:01:39 (644,2): 	[Test] task_args... OK
+03:01:39 (667,2): 	[Test] env_growth... OK
+03:01:39 (678,2): 	[Test] ext2_real_partition... OK
+03:01:39 (679,2): 	[Test] mount_table... OK
+03:01:39 (679,2): 	[Test] devfs... OK
+03:01:39 (679,2): 	[Test] net_arp_pending_order... OK
+03:01:39 (679,2): 	[Test] net_martian_dropped... OK
+03:01:39 (679,2): 	SKIP: test_net_wire (no NIC — QEMU: -netdev user,id=n0 -device virtio-net-pci,netdev=n0)
+03:01:39 (679,2): 	[Test] net_wire... OK
+03:01:39 (679,2): 	SKIP: test_net_arp (no NIC)
+03:01:39 (679,2): 	[Test] net_arp... OK
+03:01:39 (679,2): 	SKIP: test_net_ping (no NIC)
+03:01:39 (679,2): 	[Test] net_ping... OK
+03:01:39 (679,2): 	SKIP: test_net_echo_responder (no NIC)
+03:01:39 (679,2): 	[Test] net_echo_responder... OK
+03:01:39 (679,2): 	SKIP: test_net_dhcp (no NIC)
+03:01:39 (679,2): 	[Test] net_dhcp... OK
+03:01:39 (679,2): 	SKIP: test_net_udp_conn (no NIC)
+03:01:39 (679,2): 	[Test] net_udp_conn... OK
+03:01:39 (679,2): 	SKIP: test_net_icmp_conn (no NIC)
+03:01:39 (679,2): 	[Test] net_icmp_conn... OK
+03:01:39 (680,2): 	[Test] vfs_write_mkdir... OK
+03:01:39 (685,2): 	[Test] vfs_rename... OK
+03:01:39 (686,2): 	[Test] ext2_published_insert_failure... OK
+03:01:39 (692,2): 	[Test] ext2_orphan... OK
+03:01:39 (692,2): 	[Test] ext2_readonly_demotion... OK
+03:01:39 (692,2): 	SKIP: test_ext2_secondary_write (no writable /ext2 mount on this boot)
+03:01:39 (692,2): 	[Test] ext2_secondary_write... OK
+03:01:39 (696,2): 	[Test] shared_object_reload... OK
+03:01:39 (697,2): 	[Test] mount_unmount... OK
+03:01:40 (700,1): 	[Test] console_read_deadline... OK
+03:01:40 (701,1): 	[Test] block_cache... OK
+03:01:40 (701,1): 	[Test] dirent_mtime... OK
+03:01:40 (712,2): 	[Test] backstop_preemption... OK
+03:01:40 (712,2): BUILT-IN TESTS: 34 passed, 0 failed
+03:01:40 (713,4): BUILT-IN TESTS: Running late tests:
+03:02:16 (4309,0): 	[Test] task_teardown_leak... OK
+03:02:16 (4309,0): 	[Test] doorbell_wakes_sleeper... OK
+03:02:16 (4309,0): 	SKIP: test_net_tcp_refused (no NIC)
+03:02:16 (4309,0): 	[Test] net_tcp_refused... OK
+03:02:16 (4309,0): BUILT-IN TESTS: 3 passed, 0 failed

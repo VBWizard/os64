@@ -40,6 +40,12 @@ void *kmalloc(uint64_t length)
 	return (void*)virtual_address;
 }
 
+void *kmalloc_try(uint64_t length)
+{
+    uint64_t phys = allocate_memory_try(length);
+    return phys ? (void *)(phys | kHHDMOffset) : NULL;
+}
+
 /// @brief DMA allocation: HHDM pointer for the kernel, physical for the device.
 ///
 /// THE IDENTITY-MAP ERA ENDED HERE (2026-08-19, paying the DEBTS row). The

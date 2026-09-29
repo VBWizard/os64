@@ -396,8 +396,17 @@ is what keeps a NIC with no interrupt (virtio) at its old cadence.
 `/sys/net/knet` carries the counters (wakes, drain rounds, the longest wake)
 — read it FIRST when a transfer is slower than the wire; it caught a 5,800
 wakes-a-second loop the day it was born. The e1000 rings from its INTx
-handler, the RTL8125 from MSI (vector 0x46, P5 only), and `tcp_input` wakes a
-parked reader on arrival instead of at the tick.
+handler, the RTL8125 from MSI (vector 0x46, P5 only), and every protocol's
+input — `tcp_input`, `udp_conn_rx`, `icmp_conn_deliver` — wakes a parked
+reader on arrival, without waiting for a scheduler pass (ARRIVAL_WAKE.md;
+the per-pass sweeps in `processSignals` are the backstop for a reader that
+registered but had not yet parked — and on an idle machine they were
+never far behind, because knet's own park after a drain IS a pass; the
+arrival wake is for the loaded drain where knet does not park). Ring 3
+measures with `micros()` (syscall 59, microseconds since boot off the TSC
+— the stopwatch's fine face, `os64/ticks.h`), which is what lets `ping`
+print milliseconds: 0.6 ms to the slirp gateway on the e1000, 7–11 ms on
+virtio because its drain waits for the tick.
 
 **System Drivers:**
 - **PCI** (`pci.c`): PCI device enumeration and configuration

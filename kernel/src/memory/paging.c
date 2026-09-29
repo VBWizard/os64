@@ -431,8 +431,8 @@ uintptr_t paging_resolve_user_writable(pt_entry_t *pml4v, uint64_t va)
 
 /// @brief Fund one table page from `source` (a task's arena) or the pool.
 ///
-/// The ONE place map-time table pages come from since the paging-arena work
-/// (PAGING_ARENA.md): a task's tables ride its arena and die with it at
+/// Ordinary mapping draws from the task arena or the kernel pool
+/// (PAGING_ARENA.md). A task's tables ride its arena and die with it at
 /// burial; the kernel's ride the pool and are eternal. Returns the PHYSICAL
 /// address either way — arena memory is kmalloc-backed, so the HHDM math
 /// (virt - kHHDMOffset) is exact, and both sources hand back zeroed pages.
@@ -441,6 +441,8 @@ uintptr_t paging_resolve_user_writable(pt_entry_t *pml4v, uint64_t va)
 /// the same class of catastrophe as pool exhaustion, and it gets the same
 /// loud death rather than a quiet fallback that would strand this task's
 /// tables in two owners' books.
+static uintptr_t try_paging_table_page(void);
+
 static uintptr_t draw_table_page(struct arena *source, const char *level, uint64_t va)
 {
     if (source != NULL) {
@@ -500,7 +502,7 @@ static uintptr_t draw_table_page(struct arena *source, const char *level, uint64
 static pt_entry_t *paging_walk_or_create_level(pt_entry_t *table, uint64_t idx,
                                                uint64_t tableRequiredFlags,
                                                struct arena *tableSource,
-                                               const char *level, uint64_t va)
+                                               const char *level, uint64_t va, bool fallible)
 {
     uint64_t entry = table[idx];
 
@@ -518,7 +520,10 @@ static pt_entry_t *paging_walk_or_create_level(pt_entry_t *table, uint64_t idx,
 
         // Absent: draw, zero, THEN publish — a table must never be reachable
         // before it is blank. The CAS is the publication.
-        uint64_t new_phys = draw_table_page(tableSource, level, va);
+        uint64_t new_phys = fallible ? try_paging_table_page() :
+                            draw_table_page(tableSource, level, va);
+        if (new_phys == 0)
+            return NULL;
         pt_entry_t *new_page = (pt_entry_t *)PHYS_TO_VIRT(new_phys);
         // Sanity: the drawn page's VA must land in the HHDM window. The old
         // form of this check compared bits 32-63 against 0xFFFF8000, which
@@ -551,9 +556,9 @@ void paging_init_null_guard(pt_entry_t *pml4v, struct arena *tableSource)
 {
     // The root is inactive. Build a private low-page table with an absent
     // leaf, so later mappings in this region preserve the NULL guard.
-    pt_entry_t *pdpt = paging_walk_or_create_level(pml4v, 0, 0, tableSource, "PDPT", 0);
-    pt_entry_t *pd = paging_walk_or_create_level(pdpt, 0, 0, tableSource, "PD", 0);
-    pt_entry_t *pt = paging_walk_or_create_level(pd, 0, 0, tableSource, "PT", 0);
+    pt_entry_t *pdpt = paging_walk_or_create_level(pml4v, 0, 0, tableSource, "PDPT", 0, false);
+    pt_entry_t *pd = paging_walk_or_create_level(pdpt, 0, 0, tableSource, "PD", 0, false);
+    pt_entry_t *pt = paging_walk_or_create_level(pd, 0, 0, tableSource, "PT", 0, false);
     if (pt[0] != 0)
         pt[0] = 0;
 }
@@ -600,15 +605,15 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
     // documented once, on paging_walk_or_create_level above.
     pt_entry_t *pdpt_page = paging_walk_or_create_level(pml4v, PML4_INDEX(virtual_address),
                                                         tableRequiredFlags, tableSource,
-                                                        "PDPT", virtual_address);
+                                                        "PDPT", virtual_address, false);
 
     pt_entry_t *pd_page = paging_walk_or_create_level(pdpt_page, PDPT_INDEX(virtual_address),
                                                       tableRequiredFlags, tableSource,
-                                                      "PD", virtual_address);
+                                                      "PD", virtual_address, false);
 
     pt_entry_t *pt_page = paging_walk_or_create_level(pd_page, PD_INDEX(virtual_address),
                                                       tableRequiredFlags, tableSource,
-                                                      "PT", virtual_address);
+                                                      "PT", virtual_address, false);
 
     // uint64_t, NOT uint16_t — this was the NX guillotine (found 2026-08-16).
     // PAGE_NO_EXECUTE is bit 63, and for the whole life of this kernel the
@@ -667,6 +672,31 @@ void paging_unmap_page(pt_entry_t *pml4v, uint64_t virtual_address) {
 // unmap-on-free with the boundary-page rule, instead of an eager full
 // direct map).
 volatile bool kHHDMMaintenanceEnabled = false;
+
+// Prepare intermediate tables without publishing leaves for unowned RAM.
+// A failed attempt may leave empty kernel tables; those tables remain usable
+// by later allocations. The pool draw itself is bounded and fallible.
+bool paging_hhdm_prepare_range(uintptr_t start, uint64_t length)
+{
+    if (!kHHDMMaintenanceEnabled) return false;
+    if (!length || length > UINT64_MAX - (PAGE_SIZE - 1) ||
+        start > UINT64_MAX - length - (PAGE_SIZE - 1)) return false;
+    uintptr_t end = (start + length + PAGE_SIZE - 1) & PAGE_ADDRESS_MASK;
+    for (uintptr_t page = start & PAGE_ADDRESS_MASK; page < end;) {
+        uint64_t va = page | kHHDMOffset;
+        pt_entry_t *pdpt = paging_walk_or_create_level((pt_entry_t *)kKernelPML4v,
+            PML4_INDEX(va), PAGE_WRITE, NULL, "PDPT", va, true);
+        if (!pdpt) return false;
+        pt_entry_t *pd = paging_walk_or_create_level(pdpt, PDPT_INDEX(va),
+            PAGE_WRITE, NULL, "PD", va, true);
+        if (!pd) return false;
+        if (!paging_walk_or_create_level(pd, PD_INDEX(va), PAGE_WRITE,
+                                         NULL, "PT", va, true)) return false;
+        // One PT covers two MiB. Intermediate kernel tables are not freed.
+        page = (page + (1UL << PD_SHIFT)) & ~((1UL << PD_SHIFT) - 1);
+    }
+    return true;
+}
 
 void paging_hhdm_map_range(uintptr_t phys_start, uint64_t length)
 {
@@ -793,17 +823,25 @@ void paging_init()
 	);
 }
 
-uintptr_t get_paging_table_page()
+static uintptr_t try_paging_table_page(void)
 {
-	// Exhaustion tripwire: this is a bump allocator that never frees. Without
-	// this check, running past the pool silently hands out pages the physical
-	// allocator ALSO owns — two owners, one page, corruption with no
-	// fingerprints. A loud panic here names the culprit instead.
-	if (kPagingPagesCurrentPtr >= kPagingPagesBaseAddressP + (kPagingPagesCount * PAGE_SIZE))
-		panic("get_paging_table_page: paging page pool exhausted (%lu pages) — grow the pool sizing in init_os64_paging_tables\n", kPagingPagesCount);
-	uintptr_t retVal = kPagingPagesCurrentPtr;
-	kPagingPagesCurrentPtr += PAGE_SIZE;
-	return retVal;
+    uintptr_t next = __atomic_load_n(&kPagingPagesCurrentPtr, __ATOMIC_RELAXED);
+    uintptr_t end = kPagingPagesBaseAddressP + kPagingPagesCount * PAGE_SIZE;
+    while (next < end) {
+        uintptr_t seen = __sync_val_compare_and_swap(&kPagingPagesCurrentPtr,
+                                                    next, next + PAGE_SIZE);
+        if (seen == next) return next;
+        next = seen;
+    }
+    return 0;
+}
+
+uintptr_t get_paging_table_page(void)
+{
+    uintptr_t page = try_paging_table_page();
+    if (!page)
+        panic("get_paging_table_page: paging page pool exhausted (%lu pages)\n", kPagingPagesCount);
+    return page;
 }
 
 // The pool's odometer (probe, 2026-08-04): how many pages has the bump
