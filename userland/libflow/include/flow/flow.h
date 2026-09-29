@@ -255,7 +255,7 @@ typedef struct {
 
 typedef enum {
     FLOW_BOX_BLOCK = 0,     // a block container (node NULL: anonymous)
-    FLOW_BOX_REPLACED,      // a block-level replaced box: a frame
+    FLOW_BOX_REPLACED,      // a block-level replaced box: a frame, or a picture made a block
     FLOW_BOX_TABLE,         // the table's own box; its captions sit outside it
     FLOW_BOX_CAPTION,
     FLOW_BOX_COLUMN_GROUP,

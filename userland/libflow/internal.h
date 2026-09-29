@@ -173,7 +173,7 @@ int64_t f_style_dump(const FStyles *styles, char *out, size_t cap);
 
 typedef enum {
     FB_BLOCK = 0,       // a block container; node NULL for an anonymous one
-    FB_REPLACED,        // a block-level replaced box: a frame
+    FB_REPLACED,        // a block-level replaced box: a frame, or a picture made a block
     FB_TABLE,
     FB_CAPTION,         // a block container
     FB_COLUMN_GROUP,
