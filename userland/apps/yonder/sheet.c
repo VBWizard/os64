@@ -10,7 +10,9 @@
 // The body, whole, up to libgarb's cap. NULL on no memory, when the fetch
 // did not deliver all of it, or when there is more than the cap. The buffer
 // may hold one byte past the cap, so a body of exactly the cap is read to
-// its end and kept, and one byte more is found and refused.
+// its end and kept. A longer one never reaches here — the fetch's max_body
+// refuses it before the byte that crosses — and the check after the loop
+// is a second guard for that, not the one that finds it.
 static uint8_t *read_all(os64_fetch_t *f, size_t *len)
 {
     const size_t limit = GARB_SHEET_MAX + 1;

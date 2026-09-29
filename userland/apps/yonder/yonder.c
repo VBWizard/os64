@@ -1397,11 +1397,17 @@ static Sheet *sheet_new(Page *p, const char *media, int32_t importer, int32_t im
     sh->media = media;
     sh->importer = importer;
     sh->import_index = import_index;
+    // Whether the first paint waits for it: its media holds on this glass
+    // now — an import's own media list as well as its importer's. An
+    // import's supports() is the cascade's to judge and is not asked here,
+    // so one that fails is waited for all the same; rare, and never wrong
+    // about what applies.
+    garb_env_t view = {g.view.bounds.w > 0 ? g.view.bounds.w : 1,
+                       g.view.bounds.h > 0 ? g.view.bounds.h : 1};
     if (importer >= 0) {
-        sh->holds = p->sheets[importer].holds;
+        const garb_import_t *im = &p->sheets[importer].imports[import_index];
+        sh->holds = p->sheets[importer].holds && garb_media_matches(im->media, im->nmedia, view);
     } else {
-        garb_env_t view = {g.view.bounds.w > 0 ? g.view.bounds.w : 1,
-                           g.view.bounds.h > 0 ? g.view.bounds.h : 1};
         sh->holds = media == NULL || garb_media_text_matches(media, view);
     }
     return sh;
