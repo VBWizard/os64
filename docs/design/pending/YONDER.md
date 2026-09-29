@@ -138,14 +138,15 @@ before the window exists; one opened later leaves the name as it was
 (booked).
 
 **Fonts.** Every page view shares ONE text context of its own, apart from
-libui's chrome context, with a cache of opened faces on it keyed by
-(monospace or not, size): until packet 04 lands, the resolver is
-`flowdump`'s, DejaVu Sans, or DejaVu Sans Mono for the monospace generic,
-at the asked size, and at most 64 of them (a 65th size stops the layout,
-incomplete). Packet 04's family cache, keyed by family, bold, italic and
-size as LAYOUT.md arranges, replaces it. Serif, bold and italic are drawn
-as the regular face until then, and packet 04's `os64_font_family_open`
-replaces the resolver without the view noticing.
+libui's chrome context, and on it packet 04's family cache: serif, sans
+and mono, each regular, bold, italic and bold italic, at any size, from
+`fonts.conf`'s family lines or the shipped DejaVu faces. libflow asks for
+a style's family list, bold, italic and size (`page_fonts`, through
+`os64_font_family_open`), and the list is borrowed until the next ask.
+When the configured families will not all open, yonder falls back to
+whatever of the shipped twelve it can read — a missing style takes its
+family's regular, a missing family the sans — and says on its terminal
+what was missing; with none of them, the engine's bitmap face.
 
 ## Slices
 
@@ -735,7 +736,6 @@ page failed with "out of handles or ports"; the table is 64 now
 | An inline box's borders | the public tree does not mark a span's first and last piece | a page that needs them |
 | Layout time on big pages | On the P5, Wikipedia (800 KB) lays out in 600 ms; fetch.spec.whatwg.org (1.9 MB) takes 4 s to load and 6 s to lay out again at full screen (Chris, 2026-09-25) | a libflow profiling slice, with those two pages as its benchmark |
 | Links on a page from disk | a relative address does not resolve against a `file:` page | Y3, where pages come from the network |
-| Serif, bold, italic | packet 04 | 04 merged |
 | A multi-line textarea, a drop-down select, several choices in a multiple select, a file chooser | each is a widget libui does not have yet (a multi-line field sized to its box, a popup list, a multiple-selection list, a file dialog) | the first form that needs one |
 | Back and Forward to the reply to a form | the history holds addresses, so going back to a POST's reply fetches its address, which a server may answer with something else; Chrome shows a "resubmit?" page there | a page where going back to a reply matters |
 | SVG pictures | libimage decodes raster formats; SVG is a vector language with a renderer of its own | the modern web's logos, which are mostly SVG |
