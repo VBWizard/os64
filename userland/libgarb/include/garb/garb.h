@@ -6,9 +6,10 @@
 // rules, declarations and component values out, recovering from errors
 // exactly as the specification writes it. Pure: no I/O, no clock.
 //
-// EVERYTHING A PARSE RETURNS LIVES IN ONE ARENA and goes with one free,
-// so a pointer into a result is good until that result is freed and not a
-// moment longer. Strings are UTF-8 with a NUL after them, and `len` is their
+// EVERYTHING A PARSE RETURNS IS GOOD UNTIL THAT RESULT IS FREED, and not a
+// moment longer: it lives in the result's one arena and goes with one free
+// (a one-byte text is shared from a static table instead, which outlasts
+// every result — never count on that). Strings are UTF-8 with a NUL after them, and `len` is their
 // length in bytes; no string holds a NUL of its own, since the tokenizer
 // makes every NUL a U+FFFD, escaped or not.
 
