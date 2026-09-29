@@ -111,6 +111,10 @@ typedef struct {
     const Parse *owner;     // spent: the input has ended
 } Input;
 
+// A double as text, safe for any value (dump.c): NaN, the infinities and
+// numbers past int64_t's reach included. `cap` of 48 always suffices.
+void garb_format_double(char *b, size_t cap, double v);
+
 // Appending to a list held in the arena: the list doubles, and the arena
 // never takes the old half back, so this is for lists that stay small (a
 // selector's); parse.c builds its own on the scratch stack instead. Once

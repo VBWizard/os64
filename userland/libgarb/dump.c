@@ -52,26 +52,28 @@ static void str(Out *o, const char *s, size_t n)
 // ten, so the last of them can be off by a unit; what compares these dumps
 // does so to a relative 1e-12, and a finite double is always written as a
 // finite number — infinity only for an infinity, tested exactly.
-static void num(Out *o, double v)
+// A double as text, whatever it holds: NaN, an infinity, an integer below
+// 1e15 as one, anything else as a mantissa and an exponent. The range is
+// tested before any cast, since a double past int64_t's cannot be cast to
+// one at all. Every writer of a number that may be out of range uses this.
+void garb_format_double(char *b, size_t cap, double v)
 {
-    char b[48];
     if (v != v) {
-        puts_(o, "NaN");
+        os64_snprintf(b, cap, "NaN");
         return;
     }
     if (v > DBL_MAX || v < -DBL_MAX) {
-        puts_(o, v > 0 ? "Infinity" : "-Infinity");
+        os64_snprintf(b, cap, "%s", v > 0 ? "Infinity" : "-Infinity");
         return;
     }
-    // The range first: a double past int64_t's cannot be cast to one at all.
     if (v < 1e15 && v > -1e15 && v == (double)(int64_t)v) {
-        os64_snprintf(b, sizeof(b), "%ld", (long)(int64_t)v);
-        puts_(o, b);
+        os64_snprintf(b, cap, "%ld", (long)(int64_t)v);
         return;
     }
+    char m[32];
     size_t k = 0;
     if (v < 0) {
-        b[k++] = '-';
+        m[k++] = '-';
         v = -v;
     }
     int32_t e = 0;
@@ -87,12 +89,19 @@ static void num(Out *o, double v)
         int d = (int)v;
         if (d > 9)
             d = 9;
-        b[k++] = (char)('0' + d);
+        m[k++] = (char)('0' + d);
         if (i == 0)
-            b[k++] = '.';
+            m[k++] = '.';
         v = (v - d) * 10.0;
     }
-    os64_snprintf(b + k, sizeof(b) - k, "e%d", (int)e);
+    m[k] = '\0';
+    os64_snprintf(b, cap, "%se%d", m, (int)e);
+}
+
+static void num(Out *o, double v)
+{
+    char b[48];
+    garb_format_double(b, sizeof(b), v);
     puts_(o, b);
 }
 
