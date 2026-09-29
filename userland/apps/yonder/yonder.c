@@ -483,6 +483,8 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height)
     }
     s_env.ctx = p;
     s_env.cascade = cascade;
+    // One height for `vh` and the initial containing block (flow_env_t).
+    s_env.viewport_height = height;
     flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
     s_env.cascade = NULL;
     if (fresh == NULL) {
@@ -869,14 +871,16 @@ static void css_pictures(Page *p);
 
 // Lays the page on screen out again at the view's size. `again` lays it
 // out even at the size it has: a picture's size arrived. Without sheets
-// only the width moves anything; with them the height does too, which is
-// what their media queries and vh units read.
+// or positioned boxes only the width moves anything; with sheets the
+// height does too, which is what their media queries and vh units read,
+// and with a positioned box, whose initial containing block is the view.
 static void relayout(bool again)
 {
     int32_t width = g.view.bounds.w, height = g.view.bounds.h;
+    bool height_matters = g.page.sheets_ready != 0 || flow_npositioned(g.page.tree) > 0;
     if (page_doc(&g.page) == NULL || width <= 0 ||
         (!again && g.page.tree != NULL && width == g.page.laid_width &&
-         (g.page.sheets_ready == 0 || height == g.page.laid_height)))
+         (!height_matters || height == g.page.laid_height)))
         return;
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
@@ -2613,7 +2617,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
 // decoder for them is private to libos64, so the view reads the few it
 // needs itself.
 typedef enum { KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END,
-               KEY_PGUP, KEY_PGDN, KEY_SPACE } Key;
+               KEY_PGUP, KEY_PGDN, KEY_SPACE, KEY_POSITIONING } Key;
 
 static Key view_key(const os64_gui_event_t *ev)
 {
@@ -2648,7 +2652,19 @@ static Key view_key(const os64_gui_event_t *ev)
         g.seq = 1;
         return KEY_NONE;
     }
-    return a == ' ' ? KEY_SPACE : KEY_NONE;
+    return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : KEY_NONE;
+}
+
+// `p` lays the page out again with every box static — the page as it
+// reads in document order — and again as it was designed to look: the
+// instrument for a page whose positioned boxes cover what it says
+// (POSITION.md § What positioning costs).
+static void toggle_positioning(void)
+{
+    s_env.static_only = !s_env.static_only;
+    relayout(true);
+    status_rest(s_env.static_only ? "Positioning off: the page in document order. p turns it on."
+                                  : "Positioning on.");
 }
 
 // One line of scrolling: the default font's line, as the view shows it.
@@ -2738,6 +2754,7 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
         case KEY_SPACE: scroll_to(g.sx, g.sy + page); return true;
         case KEY_HOME: scroll_to(0, 0); return true;
         case KEY_END: scroll_to(g.sx, page_height()); return true;
+        case KEY_POSITIONING: toggle_positioning(); return true;
         default: return g.seq != 0;
         }
     default:

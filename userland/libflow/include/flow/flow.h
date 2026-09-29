@@ -41,6 +41,11 @@ typedef enum {
     FLOW_LENGTH_AUTO = 0,
     FLOW_LENGTH_PX,         // value in flow_unit_t
     FLOW_LENGTH_PERCENT,    // value in 1/64ths of a percent, resolved at layout
+    // A width that shrinks to fit (CSS Sizing 3 § 3.2): no smaller than
+    // the content's min-content width, no larger than its max-content, the
+    // room between. The Rendering chapter's `dialog` is its producer; an
+    // author's `fit-content` is still read as `auto` (GARB.md § Booked).
+    FLOW_LENGTH_FIT_CONTENT,
 } flow_length_kind_t;
 
 typedef struct {
@@ -202,6 +207,15 @@ typedef enum {
     FLOW_OVERFLOW_AUTO,
 } flow_overflow_t;
 typedef enum { FLOW_CLEAR_NONE = 0, FLOW_CLEAR_LEFT, FLOW_CLEAR_RIGHT, FLOW_CLEAR_BOTH } flow_clear_t;
+// CSS Position 3 § 2 (POSITION.md). `fixed` and `sticky` are laid out as
+// `relative` with their insets ignored until their slices.
+typedef enum {
+    FLOW_POSITION_STATIC = 0,
+    FLOW_POSITION_RELATIVE,
+    FLOW_POSITION_ABSOLUTE,
+    FLOW_POSITION_FIXED,
+    FLOW_POSITION_STICKY,
+} flow_position_t;
 
 typedef struct {
     flow_display_t display;
@@ -270,6 +284,24 @@ typedef struct {
     // cut lays a float out where it stands (LAYOUT.md § Booked).
     flow_float_t float_side;
     flow_clear_t clear;
+
+    // Positioning (POSITION.md). The insets in CSS's side order: AUTO, PX,
+    // or PERCENT of the containing block.
+    flow_position_t position;
+    flow_length_t inset[4];
+    // `z-index`: an integer when `has_z_index`, else `auto`, the initial.
+    bool has_z_index;
+    int32_t z_index;
+    // In thousandths: 1000 is opaque, the initial value. 0 is not painted,
+    // and neither is anything inside it; what is between is painted opaque
+    // until the painter blends (POSITION.md § Booked).
+    uint16_t opacity;
+    // An absolute or fixed box's `display` is BLOCKIFIED (CSS 2.1 § 9.7),
+    // and this says the display the page gave was inline-level: its static
+    // position is where it would have stood on the line, not below it. Not
+    // a property: the one fact of the specified display the blockified one
+    // loses.
+    bool specified_inline;
 } flow_style_t;
 
 // ── What the face hands in ──────────────────────────────────────────────
@@ -303,6 +335,18 @@ typedef struct {
     // budget is the caller's, as libhtml's max_arena_bytes is; a layout that
     // reaches it stops and says `incomplete`, and what it holds is real.
     size_t max_arena_bytes;
+    // The viewport's height in CSS pixels, which is the initial containing
+    // block's (CSS 2.1 § 10.1): as tall as the window, not the page, so
+    // `position: absolute; bottom: 0` with no positioned ancestor sits at
+    // the foot of the first screenful. A cascade (above) must have been
+    // judged at this same height, or flow_layout refuses it: one height,
+    // so `vh` and the initial containing block can never disagree. 0 for
+    // none known, and the page's own height stands in.
+    int32_t viewport_height;
+    // Every box laid out as `static`, whatever the page positioned: the
+    // page as it reads in document order, one keypress from the page as it
+    // was designed to look (POSITION.md § What positioning costs).
+    bool static_only;
 } flow_env_t;
 
 #define FLOW_ARENA_DEFAULT ((size_t)64 << 20)
@@ -366,6 +410,17 @@ struct flow_box {
     int32_t link;                   // libpage's link this box is or sits in, or -1
     int32_t control;                // ATOMIC: libpage's control, or -1
     bool unfinished;                // layout stopped inside it (flow_incomplete)
+    // A block-level box whose `position` is not static (a table's row,
+    // group or column is laid out static: booked): it stays under its
+    // parent, but it is REACHED FROM THE POSITIONED LIST (flow_positioned),
+    // in paint order, and never through its tree ancestors — their walks
+    // skip it and their overflow rects leave it out, and its clip is what
+    // its containing blocks allow, not its parent (POSITION.md).
+    bool positioned;
+    // `opacity: 0` on it or on an element it is inside: flow_visit does not
+    // hand it over, and a face drawing live widgets does not draw its.
+    // flow_hit still finds it, as a browser's pointer does.
+    bool unpainted;
     const flow_box_t *parent, *first, *next;
 };
 
@@ -394,19 +449,29 @@ bool flow_incomplete(const flow_tree_t *tree);
 const flow_box_t *flow_root(const flow_tree_t *tree);
 
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of
-// their own (flow_hit can still answer one), in painting order (CSS 2.1
-// Appendix E without z-index or positioning): the block-level boxes first —
-// their backgrounds and borders — then the inline content, spans before the
-// text they sit behind; an atom's own content where the atom is. Pruned on
-// OVERFLOW rects: a subtree off the viewport costs one test, and a box that
-// meets it costs a test for each of its children, lines included.
+// their own (flow_hit can still answer one), and the unpainted ones, in
+// painting order (CSS 2.1 Appendix E with every `z-index` read as auto):
+// the ordinary tree first, its positioned boxes skipped — the block-level
+// boxes, their backgrounds and borders, then the inline content, spans
+// before the text they sit behind, an atom's own content where the atom
+// is — and then each positioned box in list order, the same two walks
+// over its own subtree, skipping the positioned boxes nested in it, which
+// come later in the list. Pruned on OVERFLOW rects: a subtree off the
+// viewport costs one test, and a box that meets it costs a test for each
+// of its children, lines included.
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 
-// The deepest box whose OWN rect holds (x, y), the last painted winning,
-// and which no ancestor clips away there; NULL for none. The face asks libpage what its node means, and a TEXT's
-// run where in the text the pointer is (os64_text_hit).
+// The deepest box whose OWN rect holds (x, y), the last painted winning —
+// the positioned list backwards, then the ordinary tree — and whose own
+// clip holds the point; NULL for none. The face asks libpage what its node
+// means, and a TEXT's run where in the text the pointer is (os64_text_hit).
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y);
+
+// The positioned boxes (flow_box_t.positioned) in paint order: tree order,
+// until z-index sorts it.
+int32_t flow_npositioned(const flow_tree_t *tree);
+const flow_box_t *flow_positioned(const flow_tree_t *tree, int32_t i);
 
 // A node's first box — where a fragment link scrolls to, where a control's
 // widget goes. NULL for a node with none (hidden, display none, or past

@@ -266,6 +266,7 @@ static void sheeted_open(Sheeted *p, const char *html, double width, double heig
     p->cascade = garb_cascade(in, p->n, p->doc, (garb_env_t){width, height});
     p->env = kEnv;
     p->env.cascade = p->cascade;
+    p->env.viewport_height = (int32_t)height;
 }
 
 static void sheeted_close(Sheeted *p)
@@ -498,6 +499,7 @@ static void cascade_sweep(void)
     garb_cascade_t *c = garb_cascade(&in, 1, doc, (garb_env_t){800, 600});
     flow_env_t env = kEnv;
     env.cascade = c;
+    env.viewport_height = 600;
     char *whole = cascade_dump_of(kHtml, 800, 600);
     size_t base_live = live;
     allocations = 0;
@@ -1361,6 +1363,7 @@ static void layout_sweep(void)
 }
 
 #include "test_libflow_door.inc"
+#include "test_libflow_position.inc"
 
 int main(int argc, char **argv)
 {
@@ -1383,26 +1386,32 @@ int main(int argc, char **argv)
         return failures != 0 || live != 0 ? 1 : 0;
     }
     // `--styles FILE` / `--boxes FILE`: print one page's dump, for reading.
-    // `--layout FILE WIDTH`: the laid-out page.
-    if (argc == 4 && strcmp(argv[1], "--layout") == 0) {
+    // `--layout FILE WIDTH`: the laid-out page; `--cascade FILE WIDTH`, the
+    // same with its style sheets, at 600 high.
+    if (argc == 4 && (strcmp(argv[1], "--layout") == 0 || strcmp(argv[1], "--cascade") == 0)) {
         size_t len = 0;
         char *html = slurp(argv[2], &len);
         if (html == NULL)
             return 2;
         text_setup();
-        char *text = layout_dump_of(html, atoi(argv[3]));
+        char *text = argv[1][2] == 'l' ? layout_dump_of(html, atoi(argv[3]))
+                                       : cascade_layout_of(html, atoi(argv[3]));
         fputs(text != NULL ? text : "(null)\n", stdout);
         free(text);
         free(html);
         return 0;
     }
-    if (argc == 3 && (strcmp(argv[1], "--styles") == 0 || strcmp(argv[1], "--boxes") == 0)) {
+    // `--sheet-styles FILE`: the styles with the page's sheets, at 800 x 600.
+    if (argc == 3 && (strcmp(argv[1], "--styles") == 0 || strcmp(argv[1], "--boxes") == 0 ||
+                      strcmp(argv[1], "--sheet-styles") == 0)) {
         size_t len = 0;
         char *html = slurp(argv[2], &len);
         if (html == NULL)
             return 2;
         text_setup();
-        char *text = argv[1][2] == 's' ? style_dump_of(html) : boxes_dump_of(html);
+        char *text = argv[1][2] == 's' && argv[1][3] == 't' ? style_dump_of(html)
+                   : argv[1][2] == 's' ? cascade_dump_of(html, 800, 600)
+                   : boxes_dump_of(html);
         fputs(text != NULL ? text : "(null)\n", stdout);
         free(text);
         free(html);
@@ -1425,12 +1434,14 @@ int main(int argc, char **argv)
     boxes_sweep();
     layout_sweep();
     door_cases();
+    position_cases();
     fixed_cases();
     paint_cases();
     decoration_colour_cases();
     limit_cases();
     cost_cases();
     layout_relation_sweep("a page of every family", kSweepPage, 300);
+    layout_relation_sweep("a positioned page", kPositionedSweepPage, 300);
     // A tall first cell in a table the failure stops: its lines, not
     // placed, must not reach the page's edges.
     layout_relation_sweep("a tall cell in a table that stops",

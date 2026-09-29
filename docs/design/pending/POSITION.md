@@ -98,12 +98,15 @@ would be stale the day `position` joined it.
 ### Pass 1 — style
 
 `flow_style_t` gains `position`, `inset[4]` (`flow_length_t`, AUTO for
-`auto`), `z_index` with a flag for `auto`, and `opacity_zero` (see the
-face below). CSS 2.1 § 9.7 is applied here, where display is: an absolute
-or fixed box's `display` is BLOCKIFIED and its `float` is `none` — and
-beside the computed display one bit is kept, **`specified_inline`**, that
-the specified display was inline-level, because the static position needs
-it (below) and blockifying destroys it.
+`auto`), `z_index` with a flag for `auto`, and `opacity` in thousandths
+(see the face below). CSS 2.1 § 9.7 is applied here, where display is: an
+absolute or fixed box's `display` is BLOCKIFIED and its `float` is `none`
+— and beside the computed display one bit is kept, **`specified_inline`**,
+that the specified display was inline-level, because the static position
+needs it (below) and blockifying destroys it. Pass 1 also answers, parent
+before child as it answers the link an element sits in, each element's
+nearest positioned ancestor that makes a box (the containing block of an
+absolute box inside it) and whether it or an ancestor has `opacity: 0`.
 
 The first producer can position a box now: the Rendering chapter's
 `dialog` rule is `position: absolute`, both inline insets 0, `margin:
@@ -111,7 +114,9 @@ auto`, `width: fit-content`, and it is paid in P1 (LAYOUT.md books
 "`dialog` and `popover` positioning" with this document as its trigger).
 So a page with no sheet can have a positioned box, and `fit-content` on
 an absolute box with both sides set shrinks to fit where `auto` would
-stretch.
+stretch: `flow_length_t` gains a FIT_CONTENT kind, whose producer is the
+chapter alone (an author's `fit-content` is still read as `auto`, GARB.md
+§ Booked).
 
 Until their own slices, `fixed` and `sticky` are laid out as `relative`
 with their offsets ignored — never as `static`: a positioned box is its
@@ -134,20 +139,31 @@ absolute dropdown inside it is ordinary.
   opportunity, nothing to a line's width or height or to the min- and
   max-content widths. It records the static position when its line is
   PLACED — after `text-align` has moved the line.
-- **The list.** Every positioned box — relative, absolute, fixed — is
-  appended to the tree's positioned list in tree order, with its
-  containing block: the nearest positioned ancestor (a box, or an INLINE
+- **The list.** Every positioned element — relative, absolute, fixed —
+  and every containing block is appended to the tree's positioned list in
+  tree order, and each out-of-flow box is filed under its containing
+  block's entry: the nearest positioned ancestor (a box, or an INLINE
   element, whose containing block pass 3 computes from its pieces), else
-  the initial containing block.
+  the initial containing block. Whether a box is positioned and out of
+  flow comes from its style, not from its entry, so a build that stops
+  before the entry is made leaves an absolute box filed nowhere — never
+  laid out — rather than one in a flow the whole build takes it out of.
 
 ### Pass 3 — layout
 
-- **Relative.** A relative box is laid out where the flow puts it and
-  then moved, with everything inside it, by its offsets (`left` wins over
-  `right`, `top` over `bottom`; a percentage is of the containing block).
-  On an INLINE element that means its SPAN pieces and fragments on every
-  line — `position: relative; top: -0.4em` on a `span` is how pages nudge
-  text. Nothing else moves.
+- **Relative.** A relative box moves, with everything inside it, by its
+  offsets (`left` wins over `right`, `top` over `bottom`; a percentage is
+  of the containing block, a vertical one only when that block's height
+  is given in pixels, CSS 2.1 § 9.3.2 computing it to auto otherwise). It
+  is LAID OUT where it moves to — the flow goes on as if it had not moved
+  — rather than laid out and then moved: what finishes inside it is then
+  where it stays, which relation (b) below asserts and the move-after
+  version broke for every box inside a relative box a layout stopped in.
+  A table cell is placed by its table, so it moves once placed. On an
+  INLINE element that means its SPAN pieces and fragments on every line —
+  `position: relative; top: -0.4em` on a `span` is how pages nudge text —
+  moved as the line is placed, the offsets of every relative inline open
+  round a fragment added up. Nothing else moves.
 - **Static positions.** A placeholder whose element was specified
   inline-level (`specified_inline`) records the pen where it stands. One
   specified block-level would have broken the line, so it records the
@@ -159,9 +175,15 @@ absolute dropdown inside it is ordinary.
 - **Absolute.** An absolute box is laid out when its containing block is
   FINISHED — its height is part of the equation — as a block formatting
   context of its own, with § 10.3.7's and § 10.6.4's solutions against the
-  containing block's padding box. An inline containing block's rect is the
+  containing block's padding box: one solver for both axes, which are the
+  same equation with the same cases, the width held to its limits and
+  solved again (§ 10.4). An inline containing block's rect is the
   bounding box of the padding boxes of its first and last pieces
-  (§ 10.1, 4.1), known once its lines are placed.
+  (§ 10.1, 4.1), known once every piece is placed — when the block
+  container they are all in is finished. A table cell's is known once its
+  row has stretched it. An absolute TABLE is laid out as the flow would
+  lay it out in the room its insets leave, and then moved to where they
+  put it, its captions with it.
 - **Fixed** (P2). An absolute box whose containing block is the viewport,
   `(0, 0, width, viewport height)`, and whose rects are VIEWPORT
   coordinates, flagged so.
@@ -187,13 +209,17 @@ absolute dropdown inside it is ordinary.
 
 ### The door
 
-- **Paint order, P1.** `flow_visit` walks the ordinary tree as it does
+- **Paint order, P1.** `flow_box_t` gains `positioned`, and the tree
+  hands its list over in paint order (`flow_npositioned`,
+  `flow_positioned`). `flow_visit` walks the ordinary tree as it does
   today — blocks, then inline content — SKIPPING positioned subtrees; then
   it walks the positioned list in order, each positioned box as its own
   small two-phase walk that skips the positioned boxes nested in it, which
   come later in the list. That is Appendix E's step 8 with every
-  `z-index` read as `auto`. P3 then sorts the list by `z-index` and nests
-  it by stacking context, and nothing else changes.
+  `z-index` read as `auto`. A relative INLINE (or atom) is the exception:
+  it has no box of its own to list, only pieces on lines, so it moves and
+  paints in the flow's order (booked). P3 then sorts the list by
+  `z-index` and nests it by stacking context, and nothing else changes.
 - **Hit testing** tries the positioned list backwards, then the ordinary
   tree, so a click lands on what is on top. `hit` tests a box's clip
   against the box's OWN rect and prunes children on overflow alone, since
@@ -204,8 +230,8 @@ absolute dropdown inside it is ordinary.
   containment invariant stays literally true where it is asserted (every
   in-flow child inside its parent's overflow rect), and every walk that
   prunes on a rect still finds everything drawn inside the view.
-- **Fixed coordinates** (P2). `flow_box_t` gains `positioned` and `fixed`
-  (in a fixed box's subtree: its rects are viewport coordinates).
+- **Fixed coordinates** (P2). `flow_box_t` gains `fixed` (in a fixed
+  box's subtree: its rects are viewport coordinates).
   `flow_visit` and `flow_hit` take the scroll offset — the rect yonder
   passes is the view's DIRTY PART, not the view, so the scroll cannot be
   derived from it — and the rule is written ONCE: `flow_box_doc_rect(box,
@@ -255,14 +281,18 @@ larger than a centred modal sitting off-centre:
   rgba(0, 0, 0, 0.5)` on a full-viewport overlay is a solid grey sheet.
 
 Three answers, none of which needs a blend or a transform, all in P1:
-**`opacity: 0` is not painted** (`opacity_zero`; values between 0 and 1
-stay booked); **a background whose alpha is below 1, on an out-of-flow
-box, is not painted** until the painter blends — seeing through an overlay
-is a better failure than seeing only the overlay; and **yonder gets a key
-that lays the page out again with positioning off** (`flow_env_t`'s
-`static_only`: every box `static`, which is today's layout exactly) — the
-"kill sticky" bookmarklet made a feature, and the instrument for the Chrome
-comparison: the same page with and without, one keypress apart.
+**`opacity: 0` is not painted** — `flow_box_t.unpainted`, on the box and
+everything inside it, which `flow_visit` does not hand over and a face
+drawing widgets does not draw, while `flow_hit` still finds it as a
+browser's pointer does (values between 0 and 1 stay booked); **a
+background whose alpha is below 1, on an out-of-flow box, is not painted**
+until the painter blends — seeing through an overlay is a better failure
+than seeing only the overlay; and **yonder's `p` key lays the page out
+again with positioning off** (`flow_env_t`'s `static_only`: every box
+`static` — today's layout, but for an open dialog, which the chapter still
+sizes to fit and so centres in the flow) — the "kill sticky" bookmarklet
+made a feature, and the instrument for the Chrome comparison: the same
+page with and without, one keypress apart.
 
 ## Slices
 
@@ -295,9 +325,13 @@ Each slice is reviewed with Fable before the next starts, as the stack was.
   soup with no `style` attribute, so it can prove nothing about positioned
   boxes. The soup gains `style=` attributes drawn from `position`, the
   four offsets (negative, huge, percent, `auto`), `overflow`, `z-index`,
-  `width`, `height` and `opacity`, and the fuzz lays out with a cascade.
-  That is the instrument that would have caught the containment and
-  reachability problems of the first draft mechanically.
+  `width`, `height` and `opacity`, and the fuzz lays out with a cascade —
+  of those and of each corpus page's own sheets. That is the instrument
+  that would have caught the containment and reachability problems of the
+  first draft mechanically. Containment is of what a box DRAWS, its
+  overflow rect met with its clip: a box that clips reaches no further
+  than its border box, whatever its content says, which the fuzz met the
+  first time it read wikipedia's sheets.
 - **Fixtures**, hand-computed (F2's rule): an absolute box in each corner
   of a relative parent; the corner badge inside a relative `<a>` (an
   inline containing block); `left: 0; right: 0` stretching; `width: auto`
@@ -355,12 +389,14 @@ to disagree with. No luck."
 | Percentage heights of an absolute box's descendants | GARB.md's percentage-height row, unchanged; the absolute box's own resolves | that row |
 | Scrolling a positioned box's own overflow | nothing scrolls a box yet | box scrolling |
 | Form widgets under positioned boxes, between P1 and P2 | `flow_box_covered` is P2's | P2 |
+| A relative inline, or atom, painted in the positioned layer | an inline has no box to list, only pieces spread over lines: they move and paint in the flow's order | a page where a nudged inline must paint over its neighbours |
+| `position` on the root element | it is laid out in the flow — absolute or not — and a relative root is a containing block that does not move | a page that positions its `html` |
 
 ## Review record
 
-Fable read the first draft (e36c3741) at Chris's request the day it was
-written; the record is `POSITION_REVIEW.md` beside this one until this
-document ships with P1. Twelve findings, each answered above:
+Fable read the first draft at Chris's request the day it was written, a
+review given privately, as design reviews are here. Twelve findings, each
+answered above:
 
 1. Paint order (HIGH): `flow_visit` paints every block page-wide before
    any text, so "tree order until P3" would have put a modal's background

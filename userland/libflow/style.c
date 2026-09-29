@@ -25,7 +25,7 @@
 // The sheet writes `1em` before the element's font size is known, so a
 // length is held as written and resolved once, after the font.
 // UNSET is what nothing wrote: a margin or padding of 0, a width of auto.
-typedef enum { L_UNSET = 0, L_AUTO, L_PX, L_PCT, L_EM } LKind;
+typedef enum { L_UNSET = 0, L_AUTO, L_PX, L_PCT, L_EM, L_FIT } LKind;
 typedef struct {
     LKind kind;
     int32_t v;      // PX: 26.6 px; PCT: 1/64 percent; EM: 1/1000 em
@@ -35,6 +35,7 @@ typedef struct {
 static Len px(int32_t n) { return (Len){L_PX, n * FLOW_UNITS_PER_PX, 0}; }
 static Len em(int32_t thousandths) { return (Len){L_EM, thousandths, 0}; }
 static const Len kAuto = {L_AUTO, 0, 0};
+static const Len kFitContent = {L_FIT, 0, 0};
 
 static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset);
 
@@ -50,7 +51,7 @@ typedef enum {
 
 typedef struct {
     flow_style_t s;             // everything that needs no font to resolve
-    Len margin[4], padding[4], width, height;
+    Len margin[4], padding[4], inset[4], width, height;
     Len min_width, max_width, min_height, max_height;
     Len text_indent;                // UNSET: as inherited
     FsKind fs_kind;
@@ -58,6 +59,9 @@ typedef struct {
     bool border_color_set[4];
     int32_t border_px[4];       // declared widths in 26.6; style decides if drawn
     bool bolder;
+    // The background colour was written with an alpha below 1, which
+    // `background` holds laid over the paper (xrgb).
+    bool bg_translucent;
 } Spec;
 
 typedef struct {
@@ -294,6 +298,7 @@ static void background(Spec *sp, uint32_t rgb)
 {
     sp->s.has_background = true;
     sp->s.background = rgb;
+    sp->bg_translucent = false;
 }
 
 // ── The initial style, and inheritance ──────────────────────────────────
@@ -310,6 +315,7 @@ static flow_style_t initial(const Ctx *c)
     s.color = c->env->ink;
     s.background_position[0] = s.background_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 0, 0};
     s.background_sheet = -1;
+    s.opacity = 1000;
     // Margins and padding start at 0px — NOT at zero bytes, which is `auto`.
     for (int i = 0; i < 4; i++) {
         s.margin[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
@@ -317,7 +323,8 @@ static flow_style_t initial(const Ctx *c)
     }
     // Everything else starts at zero bytes, which is each property's
     // initial value: auto width and height, no borders, left, baseline,
-    // normal, disc outside, separate, top, no float.
+    // normal, disc outside, separate, top, no float, static with auto
+    // insets, and z-index auto.
     return s;
 }
 
@@ -608,13 +615,20 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         s->white_space = FLOW_WS_PRE;
         break;
     case OS64_HTML_TAG_DIALOG:
-        // Open, it is positioned over the page; positioning is booked, so
-        // it is laid out where it stands, with its border and padding.
+        // Open, it is positioned over the page where it was written,
+        // centred between its containing block's sides and as wide as its
+        // content wants. The block-axis insets are the modal dialog's,
+        // which only script opens.
         if (!has(n, "open")) {
             s->display = FLOW_DISPLAY_NONE;
             return;
         }
         s->display = FLOW_DISPLAY_BLOCK;
+        s->position = FLOW_POSITION_ABSOLUTE;
+        sp->inset[FLOW_LEFT] = sp->inset[FLOW_RIGHT] = px(0);
+        for (int i = 0; i < 4; i++)
+            sp->margin[i] = kAuto;
+        sp->width = kFitContent;
         border(sp, FLOW_BORDER_SOLID, 3);   // `border: solid` is medium: 3px
         padding_all(sp, em(1000));
         background(sp, c->env->paper);
@@ -1694,6 +1708,7 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_BACKGROUND_COLOR:
         d->has_background = s->has_background;
         d->background = s->background;
+        dst->bg_translucent = src->bg_translucent;
         break;
     case GARB_BACKGROUND_IMAGE:
         d->background_image = s->background_image;
@@ -1770,6 +1785,15 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_CAPTION_SIDE: d->caption_side = s->caption_side; break;
     case GARB_FLOAT: d->float_side = s->float_side; break;
     case GARB_CLEAR: d->clear = s->clear; break;
+    case GARB_POSITION: d->position = s->position; break;
+    case GARB_TOP: case GARB_RIGHT: case GARB_BOTTOM: case GARB_LEFT:
+        dst->inset[side(prop, GARB_TOP)] = src->inset[side(prop, GARB_TOP)];
+        break;
+    case GARB_Z_INDEX:
+        d->has_z_index = s->has_z_index;
+        d->z_index = s->z_index;
+        break;
+    case GARB_OPACITY: d->opacity = s->opacity; break;
     default: break;
     }
 }
@@ -1779,6 +1803,7 @@ static Len len_of(flow_length_t l)
     switch (l.kind) {
     case FLOW_LENGTH_PX: return (Len){L_PX, l.value, 0};
     case FLOW_LENGTH_PERCENT: return (Len){L_PCT, l.value, l.offset};
+    case FLOW_LENGTH_FIT_CONTENT: return kFitContent;
     case FLOW_LENGTH_AUTO: break;
     }
     return kAuto;
@@ -1792,6 +1817,7 @@ static void initial_spec(const Ctx *c, Spec *out)
     for (int i = 0; i < 4; i++) {
         out->margin[i] = px(0);
         out->padding[i] = px(0);
+        out->inset[i] = kAuto;
         out->border_px[i] = 3 * FLOW_UNITS_PER_PX;     // medium
     }
     out->width = out->height = kAuto;
@@ -1813,6 +1839,7 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
     for (int i = 0; i < 4; i++) {
         out->margin[i] = len_of(parent->margin[i]);
         out->padding[i] = len_of(parent->padding[i]);
+        out->inset[i] = len_of(parent->inset[i]);
         out->border_px[i] = parent->border_width[i];
         out->border_color_set[i] = true;
     }
@@ -1848,9 +1875,11 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         if (v->color.current) {
             s->has_background = true;
             s->background = s->color;
+            sp->bg_translucent = false;
         } else {
             s->has_background = v->color.a > 0;
             s->background = xrgb(v->color, a->c->env->paper);
+            sp->bg_translucent = v->color.a < 1;
         }
         break;
     case GARB_BACKGROUND_IMAGE:
@@ -2044,6 +2073,34 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             s->clear = as[i];
         break;
     }
+    case GARB_POSITION: {
+        static const char *const words[] = {"static", "relative", "absolute", "fixed", "sticky"};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->position = (flow_position_t)i;
+        break;
+    }
+    case GARB_TOP: case GARB_RIGHT: case GARB_BOTTOM: case GARB_LEFT:
+        author_len(a, v, true, &sp->inset[side(p, GARB_TOP)]);
+        break;
+    case GARB_Z_INDEX:
+        s->has_z_index = v->kind == GARB_V_NUMBER;
+        s->z_index = s->has_z_index ? round_i32(v->number) : 0;
+        break;
+    case GARB_OPACITY: {
+        // Clamped to 0..1 now that it is computed (Color 4 § 4.2).
+        double o = -1;
+        Lp r;
+        if (v->kind == GARB_V_NUMBER)
+            o = v->number;
+        else if (v->kind == GARB_V_PERCENTAGE)
+            o = v->number / 100;
+        else if (v->kind == GARB_V_CALC && v->calc != NULL && calc(a, v->calc, a->font, &r))
+            o = r.number ? r.px : r.pct / 100;
+        else
+            break;
+        s->opacity = (uint16_t)(o <= 0 ? 0 : o >= 1 ? 1000 : (int32_t)(o * 1000 + 0.5));
+        break;
+    }
     default:
         break;
     }
@@ -2145,9 +2202,45 @@ static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset)
     case L_PCT: return (flow_length_t){FLOW_LENGTH_PERCENT, l.v, l.off};
     case L_EM: return (flow_length_t){FLOW_LENGTH_PX, scale(font, l.v, 1000), 0};
     case L_AUTO: return (flow_length_t){FLOW_LENGTH_AUTO, 0, 0};
+    case L_FIT: return (flow_length_t){FLOW_LENGTH_FIT_CONTENT, 0, 0};
     case L_UNSET: break;
     }
     return unset;
+}
+
+// What positioning does to the rest of a style (CSS 2.1 § 9.7), once every
+// origin has spoken. A face asking for the page as it reads in document
+// order (flow_env_t.static_only) gets every box static, and nothing here
+// fires. An absolute or fixed box is BLOCKIFIED — laid out as the block it
+// computes to, its float none — and keeps one bit of the display it was
+// given (flow_style_t.specified_inline). An out-of-flow box whose own
+// background is translucent draws none: `xrgb` lays the colour over the
+// paper, and a solid grey sheet over a whole page is worse than seeing
+// through an overlay (POSITION.md § What positioning costs).
+static void positioning(const Ctx *c, Spec *sp)
+{
+    flow_style_t *s = &sp->s;
+    if (c->env->static_only)
+        s->position = FLOW_POSITION_STATIC;
+    if (s->position != FLOW_POSITION_ABSOLUTE && s->position != FLOW_POSITION_FIXED)
+        return;
+    switch (s->display) {
+    case FLOW_DISPLAY_NONE: case FLOW_DISPLAY_CONTENTS:
+        return;
+    case FLOW_DISPLAY_INLINE: case FLOW_DISPLAY_INLINE_BLOCK:
+        s->specified_inline = true;
+        s->display = FLOW_DISPLAY_BLOCK;
+        break;
+    case FLOW_DISPLAY_TABLE: case FLOW_DISPLAY_LIST_ITEM: case FLOW_DISPLAY_BLOCK:
+        break;
+    default:
+        // A table's parts: § 9.7's table makes each a block.
+        s->display = FLOW_DISPLAY_BLOCK;
+        break;
+    }
+    s->float_side = FLOW_FLOAT_NONE;
+    if (f_out_of_flow(s) && sp->bg_translucent)
+        s->has_background = false;
 }
 
 static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent)
@@ -2170,6 +2263,9 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent)
     }
     s->width = resolve(sp->width, s->font_size, automatic);
     s->height = resolve(sp->height, s->font_size, automatic);
+    for (int i = 0; i < 4; i++)
+        s->inset[i] = resolve(sp->inset[i], s->font_size, automatic);
+    positioning(c, sp);
     // CSS Overflow 3 § 3: visible and clip do not stand beside an axis
     // that scrolls or hides.
     bool x_scrolls = s->overflow_x != FLOW_OVERFLOW_VISIBLE && s->overflow_x != FLOW_OVERFLOW_CLIP;
@@ -2262,6 +2358,8 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->items = (up != NULL ? up->items : 0) + is_li(n);
     out->in_nobr = (up != NULL && up->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
     out->quotes = (up != NULL ? up->quotes : 0) + is(n, OS64_HTML_TAG_Q);
+    out->anchor = f_contains_absolute(&sp.s) ? n : up != NULL ? up->anchor : NULL;
+    out->transparent = sp.s.opacity == 0 || (up != NULL && up->transparent);
     FStyled *holder = f_map_get(&c->out->map, n->parent);
     if (holder != NULL && is(n, OS64_HTML_TAG_RP))
         holder->has_rp = true;
@@ -2275,10 +2373,14 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     return out;
 }
 
-// Whether a child makes its parent hold a block: it is block-level itself,
-// or it is inline (or makes no box) and holds one inside.
+// Whether a child makes its parent hold an IN-FLOW block: it is block-level
+// itself, or it is inline (or makes no box) and holds one inside. An
+// out-of-flow box is neither — no formatting context holds it — so an
+// absolute badge inside an `<a>` splits nothing round it.
 static bool contributes_block(const FStyled *child)
 {
+    if (f_out_of_flow(&child->style))
+        return false;
     switch (child->style.display) {
     case FLOW_DISPLAY_NONE: case FLOW_DISPLAY_INLINE_BLOCK:
         return false;

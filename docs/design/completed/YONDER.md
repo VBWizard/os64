@@ -109,7 +109,17 @@ overlap; Home and End the ends. The horizontal bar appears only when
 `flow_width` is wider than the view. The layout width is the view's width
 LESS the vertical bar, and the bar's space is always reserved, so a page
 that grows past one screen does not change width, re-wrap, and shrink back
-below it.
+below it. The view's HEIGHT is handed to the cascade and to libflow as one
+number (`flow_env_t.viewport_height`, the initial containing block), and a
+page is laid out again when it changes only if it has sheets or a
+positioned box — nothing else can read it.
+
+**`p` lays the page out with positioning off**, every box `static` — the
+page as it reads in document order — and `p` again as it was designed to
+look (POSITION.md § What positioning costs). With no script to close a
+cookie wall or a menu that covers the page, it is how the text under one
+is read, and it is the Chrome comparison's instrument: one page, one
+keypress apart.
 
 **Resizing lays the page out again, and keeps your place.** Before the
 new layout, the view notes the node of the box at the top of the

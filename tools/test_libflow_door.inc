@@ -183,6 +183,16 @@ typedef struct {
     size_t n, cap;
 } Flat;
 
+// The IN-FLOW tree in pre-order (POSITION.md § Proof): an out-of-flow box
+// is all or nothing, laid out once its containing block is finished, so a
+// partial tree can hold boxes after where one of those would be; the
+// relations are asserted without them, and a placed one is held only to
+// being where it is.
+static bool out_of_flow_box(const flow_box_t *b)
+{
+    return b->positioned && b->style->position == FLOW_POSITION_ABSOLUTE;
+}
+
 static void flatten(Flat *f, const flow_box_t *b, int32_t parent)
 {
     if (f->n == f->cap) {
@@ -194,7 +204,8 @@ static void flatten(Flat *f, const flow_box_t *b, int32_t parent)
     f->v[me] = b;
     f->parent[me] = parent;
     for (const flow_box_t *c = b->first; c != NULL; c = c->next)
-        flatten(f, c, me);
+        if (!out_of_flow_box(c))
+            flatten(f, c, me);
 }
 
 static bool same_item(const flow_box_t *a, const flow_box_t *b)
@@ -224,18 +235,75 @@ static const char kSweepPage[] =
     "<table><caption>c</caption><tr><td rowspan=2>r<td>x<tr><td>y</table>"
     "<marquee>m <b>q</b></marquee><ol><li><p>para</p><li>item</ol><q>quoted</q>";
 
+// Every kind of positioned box, and every kind of containing block, none
+// clipped (a clipped box reaches past the page on purpose): relative ones
+// nested, an absolute one under an inline, one among blocks, one against
+// the viewport, one in a table cell, in an inline-block, and the dialog.
+static const char kPositionedSweepPage[] =
+    "<!doctype html><style>.r{position:relative;left:3px;top:2px}"
+    ".a{position:absolute;right:0;top:0} .b{position:absolute;bottom:0;left:10%;width:50%}"
+    "</style><h1 class=r>T<span class=a>x</span></h1><p>one <a href=x class=r>two"
+    "<b class=a>badge</b></a> three</p><div class=a>among blocks</div>"
+    "<div class=r><div class=r>nested <i class=b>deep</i></div></div>"
+    "<table><tr><td class=r>c<span class=a>in cell</span><td>d</table>"
+    "<p>x<span class=r style='display:inline-block'>ib<span class=a>in</span></span></p>"
+    "<div class=b>viewport</div><dialog open>modal <b>text</b></dialog><p>last words</p>";
+
+static bool unfinished_within(const flow_box_t *b)
+{
+    if (b->unfinished)
+        return true;
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next)
+        if (unfinished_within(c))
+            return true;
+    return false;
+}
+
+// Relation (b) for the out-of-flow boxes the in-flow walk left out: one
+// placed whole, under no unfinished table or line, is where the whole
+// layout puts it — laid out once its containing block was finished, it
+// does not move after.
+static void placed_out_of_flow_stay(const flow_box_t *b, bool exempt, const flow_tree_t *whole,
+                                    bool *same, size_t *compared)
+{
+    if (out_of_flow_box(b) && !exempt && !unfinished_within(b)) {
+        const flow_box_t *twin = flow_box_for(whole, b->node);
+        *same &= twin != NULL && twin->rect.x == b->rect.x && twin->rect.y == b->rect.y &&
+                 twin->rect.w == b->rect.w && twin->rect.h == b->rect.h;
+        (*compared)++;
+    }
+    exempt |= b->unfinished && (b->kind == FLOW_BOX_TABLE || b->kind == FLOW_BOX_LINE);
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next)
+        placed_out_of_flow_stay(c, exempt, whole, same, compared);
+}
+
+// How far the whole tree reaches, out-of-flow boxes and all.
+static void reach_of(const flow_box_t *b, int64_t *x, int64_t *y)
+{
+    const os64_gui_rect_t *r = &b->rect;
+    *y = r->y + r->h > *y ? r->y + r->h : *y;
+    *x = r->x + r->w > *x ? r->x + r->w : *x;
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next)
+        reach_of(c, x, y);
+}
+
 // Beside (a) to (d), a partial page is as tall as the blocks it holds, so
 // what did lay out can be scrolled to.
 static void layout_relation_sweep(const char *what, const char *html, int32_t width)
 {
-    os64_html_document_t *doc = parse(html);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
-    flow_tree_t *whole = flow_layout(doc, page, width, &kEnv);
+    // With the page's own sheets, cascaded before the sweep counts: the
+    // allocations failed are the layout's.
+    Sheeted sh;
+    sheeted_open(&sh, html, width, 600);
+    const flow_env_t *env = &sh.env;
+    os64_html_document_t *doc = sh.doc;
+    os64_page_t *page = sh.page;
+    flow_tree_t *whole = flow_layout(doc, page, width, env);
     Flat w = {0};
     flatten(&w, flow_root(whole), -1);
     size_t base_live = live;
     allocations = 0;
-    flow_tree_t *probe = flow_layout(doc, page, width, &kEnv);
+    flow_tree_t *probe = flow_layout(doc, page, width, env);
     size_t count = allocations;
     flow_free(probe);
     size_t partial = 0, nulls = 0, compared = 0;
@@ -243,7 +311,7 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
     for (size_t at = 1; at <= count; at++) {
         allocations = 0;
         fail_at = at;
-        flow_tree_t *t = flow_layout(doc, page, width, &kEnv);
+        flow_tree_t *t = flow_layout(doc, page, width, env);
         fail_at = 0;
         if (t == NULL) {
             nulls++;
@@ -290,6 +358,10 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
                 compared++;
             }
             expect(name, same, NULL);
+            snprintf(name, sizeof(name), "sweep %zu: (b) a placed out-of-flow box stays", at);
+            bool stays = true;
+            placed_out_of_flow_stay(flow_root(t), false, whole, &stays, &compared);
+            expect(name, stays, NULL);
             snprintf(name, sizeof(name), "sweep %zu: (c) the unfinished lead to the last", at);
             bool path = true;
             for (size_t i = 0; i < p.n; i++) {
@@ -316,11 +388,7 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
             // page's size rounds up, so the canvas holds all of what it has.
             snprintf(name, sizeof(name), "sweep %zu: (d) nothing unplaced reaches an edge", at);
             int64_t reach_y = 0, reach_x = width;
-            for (size_t i = 0; i < p.n; i++) {
-                const os64_gui_rect_t *r = &p.v[i]->rect;
-                reach_y = r->y + r->h > reach_y ? r->y + r->h : reach_y;
-                reach_x = r->x + r->w > reach_x ? r->x + r->w : reach_x;
-            }
+            reach_of(flow_root(t), &reach_x, &reach_y);
             snprintf(detail, sizeof(detail), "page %d x %d, holds %lld x %lld", flow_width(t),
                      flow_height(t), (long long)reach_x, (long long)reach_y);
             expect(name, flow_height(t) <= reach_y + 1 && flow_width(t) <= reach_x + 1, detail);
@@ -344,8 +412,7 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
     free(w.v);
     free(w.parent);
     flow_free(whole);
-    os64_page_free(page);
-    os64_html_document_free(doc);
+    sheeted_close(&sh);
 }
 
 // ── Fuzz ────────────────────────────────────────────────────────────────
@@ -362,12 +429,29 @@ static uint64_t rng(void)
 
 static size_t fuzz_trees;
 
-// The invariants of any laid-out tree, whatever the page did.
+// The invariants of any laid-out tree, whatever the page did. SIZES are
+// never negative; origins may be, anywhere (a negative margin, `left:
+// -9999px`). CONTAINMENT as the door states it: what of every in-flow
+// child is DRAWN — its overflow rect met with its clip, since a box that
+// clips reaches no further than its border box on that axis — inside its
+// parent's overflow rect; and every positioned box's subtree inside its
+// own, a positioned box being reached from the list and not through its
+// parent, so checked as a root of its own.
 static void check_tree(const char *what, const flow_box_t *b, const flow_box_t *parent)
 {
     bool ok = b->rect.w >= 0 && b->rect.h >= 0 && b->overflow.w >= 0 && b->overflow.h >= 0;
-    if (parent != NULL) {
-        const os64_gui_rect_t *o = &b->overflow, *po = &parent->overflow;
+    os64_gui_rect_t drawn = b->overflow;
+    if (b->clipped) {
+        int64_t x0 = drawn.x > b->clip.x ? drawn.x : b->clip.x;
+        int64_t y0 = drawn.y > b->clip.y ? drawn.y : b->clip.y;
+        int64_t x1 = (int64_t)drawn.x + drawn.w, y1 = (int64_t)drawn.y + drawn.h;
+        x1 = x1 < (int64_t)b->clip.x + b->clip.w ? x1 : (int64_t)b->clip.x + b->clip.w;
+        y1 = y1 < (int64_t)b->clip.y + b->clip.h ? y1 : (int64_t)b->clip.y + b->clip.h;
+        drawn = (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 > x0 ? x1 - x0 : 0),
+                                  (int32_t)(y1 > y0 ? y1 - y0 : 0)};
+    }
+    if (parent != NULL && drawn.w > 0 && drawn.h > 0) {
+        const os64_gui_rect_t *o = &drawn, *po = &parent->overflow;
         ok &= o->x >= po->x && o->y >= po->y && (int64_t)o->x + o->w <= (int64_t)po->x + po->w &&
               (int64_t)o->y + o->h <= (int64_t)po->y + po->h;
     }
@@ -381,7 +465,16 @@ static void check_tree(const char *what, const flow_box_t *b, const flow_box_t *
         return;
     }
     for (const flow_box_t *c = b->first; c != NULL; c = c->next)
-        check_tree(what, c, b);
+        check_tree(what, c, c->positioned ? NULL : b);
+}
+
+// The positioned list is every positioned box, each once, in tree order.
+static void positioned_in_order(const flow_box_t *b, const flow_tree_t *t, int32_t *at, bool *ok)
+{
+    if (b->positioned)
+        *ok &= flow_positioned(t, (*at)++) == b;
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next)
+        positioned_in_order(c, t, at, ok);
 }
 
 static void intrinsic_once(const FBox *b, bool *ok)
@@ -403,9 +496,26 @@ static void fuzz_one(const char *what, const char *html, size_t len)
     copy[len] = '\0';
     os64_html_document_t *doc = parse(copy);
     os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    // Through a cascade, which is where positioning comes from: the style
+    // attributes the soup writes, and the corpus page's own sheets.
+    garb_parsed_t sheets[8];
+    garb_sheet_in_t in[8];
+    int32_t nsheets = 0;
+    for (int32_t i = 0; i < os64_page_nsheets(page) && nsheets < 8; i++) {
+        const os64_page_sheet_t *sh = os64_page_sheet(page, i);
+        if (sh->linked)
+            continue;
+        garb_parse_style_element(sh->node, &sheets[nsheets]);
+        in[nsheets] = (garb_sheet_in_t){.sheet = &sheets[nsheets], .media = sh->media};
+        nsheets++;
+    }
+    garb_cascade_t *cascade = garb_cascade(in, nsheets, doc, (garb_env_t){800, 600});
+    flow_env_t env = kEnv;
+    env.cascade = cascade;
+    env.viewport_height = 600;
     static const int32_t widths[] = {800, 200, 0};
     for (size_t w = 0; w < sizeof(widths) / sizeof(widths[0]); w++) {
-        flow_tree_t *t = flow_layout(doc, page, widths[w], &kEnv);
+        flow_tree_t *t = flow_layout(doc, page, widths[w], &env);
         fuzz_trees++;
         // Whole exactly when the bytes were: a document the parser refused
         // (a mutation nested past its limit), or a model libpage could not
@@ -420,13 +530,19 @@ static void fuzz_one(const char *what, const char *html, size_t len)
             flow_free(t);
             continue;
         }
-        if (flow_root(t) != NULL)
+        if (flow_root(t) != NULL) {
             check_tree(what, flow_root(t), NULL);
+            int32_t at = 0;
+            bool listed = true;
+            positioned_in_order(flow_root(t), t, &at, &listed);
+            expect("fuzz: the positioned list is every positioned box, in tree order",
+                   listed && at == flow_npositioned(t), what);
+        }
         flow_free(t);
     }
-    FStyles *st = f_style_build(doc, page, &kEnv);
-    FBoxes *bx = f_boxes_build(doc, page, st, &kEnv);
-    FLayout *lay = f_layout(bx, doc, page, &kEnv, 300);
+    FStyles *st = f_style_build(doc, page, &env);
+    FBoxes *bx = f_boxes_build(doc, page, st, &env);
+    FLayout *lay = f_layout(bx, doc, page, &env, 300);
     bool once = true;
     if (bx != NULL && bx->root != NULL)
         intrinsic_once(bx->root, &once);
@@ -434,9 +550,47 @@ static void fuzz_one(const char *what, const char *html, size_t len)
     f_layout_free(lay);
     f_boxes_free(bx);
     f_style_free(st);
+    garb_cascade_free(cascade);
+    for (int32_t k = 0; k < nsheets; k++)
+        garb_free(&sheets[k]);
     os64_page_free(page);
     os64_html_document_free(doc);
     free(copy);
+}
+
+// A positioned element with a style drawn at random (POSITION.md § Proof):
+// its position, the four insets (negative, huge, a percentage, auto),
+// overflow, z-index, a width and a height, and opacity — whatever the
+// equations can be handed.
+static size_t positioned_soup(char *out, size_t cap)
+{
+    static const char *const kTags[] = {"div", "span", "p", "b", "table", "td", "li", "a href=x",
+                                        "img src=known.png", "dialog open"};
+    static const char *const kPosition[] = {"static", "relative", "absolute", "fixed", "sticky"};
+    static const char *const kInset[] = {"auto", "0", "-5px", "10px", "50%", "-30%", "1e6px",
+                                         "-9999px", "calc(100% - 1em)"};
+    static const char *const kSide[] = {"top", "right", "bottom", "left"};
+    static const char *const kSize[] = {"auto", "0", "10px", "150%", "30%", "fit-content", "1e6px"};
+    static const char *const kOverflow[] = {"visible", "hidden", "clip", "auto"};
+    size_t n = (size_t)snprintf(out, cap, "<%s style=\"position:%s", kTags[rng() % 10],
+                                kPosition[rng() % 5]);
+    for (int k = 0; k < 4; k++)
+        if (rng() % 2)
+            n += (size_t)snprintf(out + n, cap - n, ";%s:%s", kSide[k], kInset[rng() % 9]);
+    if (rng() % 2)
+        n += (size_t)snprintf(out + n, cap - n, ";width:%s", kSize[rng() % 7]);
+    if (rng() % 2)
+        n += (size_t)snprintf(out + n, cap - n, ";height:%s", kSize[rng() % 7]);
+    if (rng() % 3 == 0)
+        n += (size_t)snprintf(out + n, cap - n, ";overflow:%s", kOverflow[rng() % 4]);
+    if (rng() % 4 == 0)
+        n += (size_t)snprintf(out + n, cap - n, ";z-index:%d", (int)(rng() % 7) - 3);
+    if (rng() % 4 == 0)
+        n += (size_t)snprintf(out + n, cap - n, ";opacity:%s", rng() % 2 ? "0" : "0.5");
+    if (rng() % 3 == 0)
+        n += (size_t)snprintf(out + n, cap - n, ";margin:%s", rng() % 2 ? "auto" : "-7px 3%");
+    n += (size_t)snprintf(out + n, cap - n, "\">");
+    return n;
 }
 
 static const char *const kSoup[] = {
@@ -474,7 +628,7 @@ static void fuzz_share(const char *only, size_t k, size_t n)
             memcpy(buf, html, len);
             for (int edit = 0; edit < 4; edit++) {
                 size_t at = len2 > 0 ? (size_t)(rng() % len2) : 0;
-                switch (rng() % 4) {
+                switch (rng() % 5) {
                 case 0: {   // cut a range
                     size_t span = len2 > at ? (size_t)(rng() % (len2 - at + 1)) % 512 : 0;
                     memmove(buf + at, buf + at + span, len2 - at - span);
@@ -496,6 +650,16 @@ static void fuzz_share(const char *only, size_t k, size_t n)
                     if (at + span <= len2 && len2 + span < len * 2 + 200) {
                         memmove(buf + at + span, buf + at, len2 - at);
                         len2 += span;
+                    }
+                    break;
+                }
+                case 4: {   // a positioned element
+                    char tag[512];
+                    size_t tl = positioned_soup(tag, sizeof(tag));
+                    if (len2 + tl < len * 2 + 200) {
+                        memmove(buf + at + tl, buf + at, len2 - at);
+                        memcpy(buf + at, tag, tl);
+                        len2 += tl;
                     }
                     break;
                 }

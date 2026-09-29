@@ -5,9 +5,16 @@
 // once from them — every rectangle rounded ONCE by the painter's rule, to
 // nearest with ties up, and a size as round(end) - round(start) so boxes
 // that meet in the layout meet on the glass — with each box's overflow
-// rect, a node's first box, and the lists of pictures and controls.
+// rect, a node's first box, and the lists of pictures, controls and
+// positioned boxes.
+//
+// A POSITIONED box (POSITION.md) stays under its parent, so the pre-order
+// is still the document's, but it is reached from the positioned list and
+// never through its tree ancestors: their walks skip it, their overflow
+// rects leave it out, and its clip is what its containing blocks allow.
 
 #include "internal.h"
+#include "garb/cascade.h"
 
 // The public kinds of the block-level boxes are pass 2's, in pass 2's order.
 _Static_assert(FLOW_BOX_BLOCK == (int)FB_BLOCK && FLOW_BOX_REPLACED == (int)FB_REPLACED &&
@@ -24,8 +31,8 @@ struct flow_tree {
     FArena arena;           // the public boxes
     flow_box_t *root;
     FMap first;             // node -> its first public box
-    const flow_box_t **images, **controls;
-    int32_t nimages, ncontrols, cap_images, cap_controls;
+    const flow_box_t **images, **controls, **positioned;
+    int32_t nimages, ncontrols, npositioned, cap_images, cap_controls, cap_positioned;
     bool incomplete;
 };
 
@@ -113,6 +120,13 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
     b->style = style;
     b->link = b->control = -1;
     b->parent = parent;
+    // Transparent: its element's opacity, or an ancestor's, is 0; a box
+    // with no element of its own is as its parent is.
+    const os64_html_node_t *e = node;
+    while (e != NULL && e->kind != OS64_HTML_ELEMENT)
+        e = e->parent;
+    const FStyled *st = e != NULL ? f_style_of(bd->t->styles, e) : NULL;
+    b->unpainted = st != NULL ? st->transparent : parent != NULL && parent->unpainted;
     if (parent != NULL) {
         if (*last != NULL)
             (*last)->next = b;
@@ -185,6 +199,30 @@ static bool clips_own(const FBox *src, bool x_axis)
 {
     return src->node != NULL && !viewport_overflow(src) &&
            f_overflow_clips(x_axis ? src->style->overflow_x : src->style->overflow_y);
+}
+
+static Clip inner_clip(const FBox *src, Clip c);
+static Clip content_clip(const FBox *b);
+
+// What a box may draw into, walked up rather than handed down: the clip
+// its tree parent hands its content, or, out of flow, what its containing
+// block hands its — an inline's being its home's, since an inline clips
+// nothing. Only an out-of-flow box asks: every other box is handed its
+// parent's by the build, which is the same answer.
+static Clip outer_clip(const FBox *b)
+{
+    if (b->out_of_flow) {
+        const FPos *cb = b->pos != NULL ? b->pos->cb : NULL;
+        if (cb == NULL)
+            return kNoClip;
+        return content_clip(cb->kind == FP_BOX ? cb->box : cb->home);
+    }
+    return b->parent != NULL ? content_clip(b->parent) : kNoClip;
+}
+
+static Clip content_clip(const FBox *b)
+{
+    return inner_clip(b, outer_clip(b));
 }
 
 // The clip a box hands its content: its own, met with its padding box on
@@ -261,6 +299,12 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     flow_box_t *b = add(bd, parent, last, (flow_box_kind_t)src->kind, src->node, src->style);
     if (b == NULL)
         return NULL;
+    // In the list at its place in the pre-order, which is tree order: the
+    // paint order until z-index sorts it.
+    b->positioned = src->positioned;
+    if (src->positioned &&
+        !push_list(bd, &bd->t->positioned, &bd->t->npositioned, &bd->t->cap_positioned, b))
+        return b;
     set_clip(b, clip);
     Clip in = inner_clip(src, clip);
     b->rect = rect_of(src->x, src->y, src->w, src->h);
@@ -290,6 +334,9 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
             line->overflow = join(line->overflow, span->overflow);
         }
         for (const FFrag *fr = ln->frags; fr != NULL && !bd->failed; fr = fr->next) {
+            // A placeholder is only where a static position was read.
+            if (fr->kind == FF_PLACEHOLDER)
+                continue;
             public_frag(bd, fr, line, &pieces, in);
             if (pieces != NULL)
                 line->overflow = join(line->overflow, pieces->overflow);
@@ -299,8 +346,8 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     for (const FBox *c = src->first; c != NULL && !bd->failed; c = c->next) {
         if (!c->placed)
             continue;
-        flow_box_t *child = public_box(bd, c, b, &kids, in);
-        if (child != NULL)
+        flow_box_t *child = public_box(bd, c, b, &kids, c->out_of_flow ? outer_clip(c) : in);
+        if (child != NULL && !c->positioned)
             b->overflow = join(b->overflow, child->overflow);
     }
     // A marker comes after the box's content, so an unfinished box, whose
@@ -333,6 +380,7 @@ void flow_free(flow_tree_t *tree)
     f_arena_free(&tree->arena);
     os64_free(tree->images);
     os64_free(tree->controls);
+    os64_free(tree->positioned);
     os64_free(tree);
 }
 
@@ -340,6 +388,10 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
                          int32_t width, const flow_env_t *env)
 {
     if (doc == NULL || env == NULL || env->text == NULL || env->fonts == NULL || width < 0)
+        return NULL;
+    // One viewport height for the cascade's `vh` and the initial containing
+    // block, or none.
+    if (env->cascade != NULL && garb_cascade_env(env->cascade).height != env->viewport_height)
         return NULL;
     flow_tree_t *tree = os64_calloc(1, sizeof(*tree));
     if (tree == NULL)
@@ -415,6 +467,12 @@ static bool block_level(flow_box_kind_t k)
     return k <= FLOW_BOX_CELL;
 }
 
+// A child the tree's own walks go into: not one reached from the list.
+static bool in_tree(const flow_box_t *c)
+{
+    return block_level(c->kind) && !c->positioned;
+}
+
 typedef struct {
     os64_gui_rect_t view;
     void (*visit)(void *ctx, const flow_box_t *box);
@@ -423,14 +481,15 @@ typedef struct {
 
 static void visit_inline(const Visit *v, const flow_box_t *b);
 
-// Appendix E's step 4: the block-level boxes, in tree order.
+// Appendix E's step 4: the block-level boxes, in tree order. Nothing of an
+// unpainted box is painted, and nothing inside it either.
 static void visit_blocks(const Visit *v, const flow_box_t *b)
 {
-    if (!meets(b->overflow, v->view))
+    if (b->unpainted || !meets(b->overflow, v->view))
         return;
     v->visit(v->ctx, b);
     for (const flow_box_t *c = b->first; c != NULL; c = c->next)
-        if (block_level(c->kind))
+        if (in_tree(c))
             visit_blocks(v, c);
 }
 
@@ -438,14 +497,14 @@ static void visit_blocks(const Visit *v, const flow_box_t *b)
 // own content painted where the atom is — and the markers.
 static void visit_inline(const Visit *v, const flow_box_t *b)
 {
-    if (!meets(b->overflow, v->view))
+    if (b->unpainted || !meets(b->overflow, v->view))
         return;
     for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
         if (c->kind == FLOW_BOX_LINE) {
             if (!meets(c->overflow, v->view))
                 continue;
             for (const flow_box_t *f = c->first; f != NULL; f = f->next) {
-                if (!meets(f->overflow, v->view))
+                if (f->unpainted || !meets(f->overflow, v->view))
                     continue;
                 v->visit(v->ctx, f);
                 for (const flow_box_t *inner = f->first; inner != NULL; inner = inner->next) {
@@ -454,14 +513,16 @@ static void visit_inline(const Visit *v, const flow_box_t *b)
                 }
             }
         } else if (c->kind == FLOW_BOX_MARKER) {
-            if (meets(c->overflow, v->view))
+            if (!c->unpainted && meets(c->overflow, v->view))
                 v->visit(v->ctx, c);
-        } else if (block_level(c->kind)) {
+        } else if (in_tree(c)) {
             visit_inline(v, c);
         }
     }
 }
 
+// The ordinary tree, then step 8 — each positioned box, in list order, as a
+// small two-phase walk of its own.
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx)
 {
@@ -470,27 +531,55 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
     Visit v = {viewport, visit, ctx};
     visit_blocks(&v, tree->root);
     visit_inline(&v, tree->root);
+    for (int32_t i = 0; i < tree->npositioned; i++) {
+        visit_blocks(&v, tree->positioned[i]);
+        visit_inline(&v, tree->positioned[i]);
+    }
 }
 
+// Pruned on the overflow rect alone, and each box's clip asked of its own
+// rect: a clip is a box's own, so no box is pruned by its parent's — a
+// positioned one may have a wider clip than its tree parent.
 static const flow_box_t *hit(const flow_box_t *b, int32_t x, int32_t y)
 {
-    // What is clipped away is not there to be pointed at.
-    if (!holds(b->overflow, x, y) || (b->clipped && !holds(b->clip, x, y)))
+    if (!holds(b->overflow, x, y))
         return NULL;
     const flow_box_t *found = NULL;
     for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
+        if (c->positioned)
+            continue;
         const flow_box_t *h = hit(c, x, y);
         if (h != NULL)
             found = h;
     }
     if (found != NULL)
         return found;
-    return holds(b->rect, x, y) ? b : NULL;
+    // What is clipped away is not there to be pointed at.
+    return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) ? b : NULL;
 }
 
+// What is painted last is on top: the positioned list backwards, then the
+// ordinary tree.
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y)
 {
-    return tree != NULL && tree->root != NULL ? hit(tree->root, x, y) : NULL;
+    if (tree == NULL || tree->root == NULL)
+        return NULL;
+    for (int32_t i = tree->npositioned; i > 0; i--) {
+        const flow_box_t *h = hit(tree->positioned[i - 1], x, y);
+        if (h != NULL)
+            return h;
+    }
+    return hit(tree->root, x, y);
+}
+
+int32_t flow_npositioned(const flow_tree_t *tree)
+{
+    return tree != NULL ? tree->npositioned : 0;
+}
+
+const flow_box_t *flow_positioned(const flow_tree_t *tree, int32_t i)
+{
+    return tree != NULL && i >= 0 && i < tree->npositioned ? tree->positioned[i] : NULL;
 }
 
 const flow_box_t *flow_box_for(const flow_tree_t *tree, const os64_html_node_t *node)

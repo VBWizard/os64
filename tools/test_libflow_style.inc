@@ -210,12 +210,15 @@ static void style_cases(void)
         "<!doctype html><div hidden><p>x</p></div><input type=HIDDEN><dialog>d</dialog>"
         "<dialog open>o</dialog><embed hidden>",
         PAGE_OPEN
-        "  body block margin=8/8/8/8 holds-block\n"
+        // The open dialog is absolute, out of flow: the body holds no block.
+        "  body block margin=8/8/8/8\n"
         "    div none\n"
         "    input none\n"
         "    dialog none\n"
-        // 1em of padding; `border: solid` is medium, 3px; colours from the face
-        "    dialog block bg=paper padding=16/16/16/16 border=3:solid:ink\n"
+        // 1em of padding; `border: solid` is medium, 3px; colours from the
+        // face; positioned as the chapter's `dialog` rule says (POSITION.md)
+        "    dialog block bg=paper margin=auto/auto/auto/auto padding=16/16/16/16 "
+        "border=3:solid:ink width=fit-content position=absolute inset=auto/0/auto/0\n"
         "    embed inline width=0 height=0\n");
 
     // Four rules of the sheet, each by its §: `address` italic (15.3.3),
@@ -232,7 +235,8 @@ static void style_cases(void)
         "    legend block padding=0/2/0/2\n"
         "    div none\n"
         "    dialog none\n"
-        "    dialog block bg=paper padding=16/16/16/16 border=3:solid:ink\n"
+        "    dialog block bg=paper margin=auto/auto/auto/auto padding=16/16/16/16 "
+        "border=3:solid:ink width=fit-content position=absolute inset=auto/0/auto/0\n"
         "    nobr inline ws=nowrap\n"
         "      wbr inline ws=normal\n"
         "    wbr inline\n");
