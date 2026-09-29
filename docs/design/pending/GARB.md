@@ -238,8 +238,8 @@ combinators, pseudo-element and `:hover` rules reaching nothing, quirks
 mode's case-free names and unitless lengths, a rule matched through two of
 its selectors at the heavier. All pass; eight mutants of the cascade and
 media code are all caught, five of them only after cases were added for
-them. The allocation sweep now cascades the corpus sheet over a page, 24
-allocations failed in turn, nothing leaked. danlegt.com, its 28 sheets
+them. The allocation sweep now cascades the corpus sheet over a page, 35
+allocations each failed alone, nothing leaked. danlegt.com, its 28 sheets
 inlined in order, cascades in 0.03 s on the host: 471 elements with author
 winners, hand-checked against the rules for the body and `#motd`.
 
