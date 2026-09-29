@@ -53,10 +53,11 @@ FFrrggbb is a custom opaque color. Other alpha values are refused. Choices
 belong to the action, so reordering or temporarily removing a button retains
 its settings; spacers do not consume symbol colors. Presets reset inheritance.
 
-The loader accepts V4, V5 and V6 with their respective header lengths.
+V7 appends the Settings action and its ink pair, making the header 336 bytes.
+The loader accepts V4, V5, V6 and V7 with their respective header lengths.
 A normalized editable recipe zero-fills the extension for older bundles.
 Unedited saved/loaded assets keep their original bytes, including their active
-fingerprint. Restyling emits V6, shifts asset offsets by the header-size delta,
+fingerprint. Restyling emits V7, shifts asset offsets by the header-size delta,
 and copies embedded glyphs, pairs and masks without reopening font sources.
 
 Housing colors continue to use title text for their existing automatic hover

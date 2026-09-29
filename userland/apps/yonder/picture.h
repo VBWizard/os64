@@ -13,9 +13,10 @@
 #include "jobs.h"
 
 // What one picture job may cost, declared to the pool: libimage's file cap,
-// and libjpeg's decoder memory cap — which also covers, by arithmetic
-// rather than by any cap libpng enforces, PNG's largest raster (16
-// megapixels, 64 MiB) and an inflate buffer of about the same size.
+// and libjpeg's decoder memory cap. That cap covers PNG too, by arithmetic
+// rather than by any cap PNG's decoder enforces: its largest raster is 16
+// megapixels, 64 MiB, and it inflates through a 32 KiB window into that
+// raster, so its peak is the raster and two rows.
 #define PICTURE_RESERVE ((size_t)OS64_IMAGE_CAP_DEFAULT + (128u << 20))
 
 typedef struct {

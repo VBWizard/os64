@@ -1,0 +1,2 @@
+Before correction (18cd0944): 17 checks, 8 failures.
+pty_budget: 22 checks, 0 failures, 15 allocations

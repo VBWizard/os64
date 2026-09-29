@@ -1,0 +1,2 @@
+webfacestest: specimen ready, 12 faces x 3 sizes plus nested styles
+webfacestest: PASS

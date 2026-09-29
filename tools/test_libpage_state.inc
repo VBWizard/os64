@@ -427,24 +427,23 @@ static void state_frames(void)
     os64_html_document_t *doc = parse(
         "<head><base href=\"http://other/dir/\"></head>"
         "<frameset><frame name=menu src=\" menu.html#top%20part \">"
-        "<frame name=empty><frame src=\"\"></frameset>", "utf-8");
+        "<frame name=empty><frame src=\"\"><frame src=\" \t\"></frameset>", "utf-8");
     os64_page_t *page = os64_page_build(doc, kPage, NULL);
-    state_expect("frames: one link per frame with a src", os64_page_nlinks(page) == 2);
+    state_expect("frames: one link per frame whose src names something",
+                 os64_page_nlinks(page) == 1);
     const os64_page_link_t *link = os64_page_link(page, 0);
     state_expect("frames: resolved against the base",
                  link != NULL && link->href.url != NULL &&
                  strcmp(link->href.url, "http://other/dir/menu.html") == 0 &&
                  link->href.has_fragment && strcmp(link->href.fragment, "top part") == 0);
-    link = os64_page_link(page, 1);
-    state_expect("frames: an empty src is the base",
-                 link != NULL && link->href.url != NULL &&
-                 strcmp(link->href.url, "http://other/dir/") == 0);
+    state_expect("frames: an empty or blank src is the blank page, not the base",
+                 os64_page_link(page, 1) == NULL);
     os64_page_free(page);
     os64_html_document_free(doc);
 }
 
-// An iframe is offered like a frame, but only when it names something: an
-// empty src is the blank page, which is nowhere to go.
+// An iframe is offered as a frame is, by the same rule: an empty or blank
+// src is the blank page, which is nowhere to go.
 static void state_iframes(void)
 {
     os64_html_document_t *doc = parse(

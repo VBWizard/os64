@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -345,6 +346,16 @@ static void scale_cases(void)
     const uint32_t copied[16] = {0, 0, 0, 0, 0, A, B, 0, 0, C, A, 0, 0, 0, 0, 0};
     expect("picture: a box its own size is a copy", pixels_are(dst, copied, 16), NULL);
 
+    // A box as wide as an int32_t says, starting past zero: its right edge
+    // is past INT32_MAX, which must clip and not wrap (UBSan watches).
+    uint32_t wide[4] = {0};
+    const uint32_t one[1] = {A};
+    yonder_draw_picture(wide, 4, (os64_gui_rect_t){0, 0, 4, 1},
+                        (os64_gui_rect_t){2, 0, INT32_MAX, INT32_MAX}, one, 1, 1);
+    const uint32_t wide_want[4] = {0, 0, A, A};
+    expect("picture: a box past INT32_MAX clips, its edge added in 64 bits",
+           pixels_are(wide, wide_want, 4), NULL);
+
     uint32_t row[4] = {0};
     const uint32_t ab[2] = {A, B};
     yonder_draw_picture(row, 4, (os64_gui_rect_t){0, 0, 4, 1}, (os64_gui_rect_t){0, 0, 4, 1}, ab, 2, 1);
@@ -538,6 +549,68 @@ static void mail_cases(void)
     yonder_mail_drop(m);
 }
 
+// ── A paint costs the viewport it paints ────────────────────────────────
+
+static void paint_hung(int sig)
+{
+    (void)sig;
+    static const char msg[] = "FAIL a paint walked what the viewport does not show\n";
+    (void)!write(2, msg, sizeof(msg) - 1);
+    _exit(1);
+}
+
+// Sizes a page may ask for and no viewport shows: a border a million
+// pixels thick, and a bullet a third of a font sixty `<big>`s deep (which
+// holds at the million-pixel clamp). Painted under UBSan and an alarm, each
+// must finish, and every fill must stay inside the viewport: a painter that
+// walked every row, or multiplied in 32 bits, fails one or the other.
+static void cost_cases(void)
+{
+    static char big[4096];
+    size_t at = (size_t)snprintf(big, sizeof(big), "<!doctype html>");
+    for (int i = 0; i < 60; i++)
+        at += (size_t)snprintf(big + at, sizeof(big) - at, "<big>");
+    snprintf(big + at, sizeof(big) - at, "<ul><li>x</ul>");
+    static const char *const pages[] = {
+        "<!doctype html><table border=1000000><tr><td>x</table>",
+        "<!doctype html><hr size=1000000 noshade>",
+        big,
+    };
+    // A line at the foot of a page as tall as an int32_t says: 2147
+    // pictures a million pixels tall (each line 1000006 with its strut) and
+    // one of 470741 put the text's top at INT32_MAX - 8, so its box meets
+    // the view while its baseline is held at INT32_MAX. A decoration's
+    // offset from that baseline must not wrap.
+    size_t tall_cap = 2148 * 48 + 64, tall_at = 0;
+    char *tall = malloc(tall_cap);
+    tall_at += (size_t)snprintf(tall, tall_cap, "<!doctype html>");
+    for (int i = 0; i < 2147; i++)
+        tall_at += (size_t)snprintf(tall + tall_at, tall_cap - tall_at,
+                                    "<img src=known.png height=1000000><br>");
+    snprintf(tall + tall_at, tall_cap - tall_at,
+             "<img src=known.png height=470741><br><u>x</u><s>y</s>");
+    bool tall_escaped = false;
+    signal(SIGALRM, paint_hung);
+    alarm(60);
+    char *foot = paint_of(tall, strlen(tall), 800, (os64_gui_rect_t){0, INT32_MAX - 600, 800, 600},
+                          &tall_escaped);
+    alarm(0);
+    expect("decorations at the foot of a page past int32_t paint without wrapping",
+           foot != NULL && !tall_escaped, NULL);
+    free(foot);
+    free(tall);
+    for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
+        bool escaped = false;
+        alarm(60);
+        char *got = paint_of(pages[i], strlen(pages[i]), 800, (os64_gui_rect_t){0, 0, 800, 600},
+                             &escaped);
+        alarm(0);
+        expect("a hostile size paints the viewport and no more", got != NULL && !escaped,
+               pages[i]);
+        free(got);
+    }
+}
+
 // ── The corpus ──────────────────────────────────────────────────────────
 
 static const char *const kCorpus[] = {
@@ -636,6 +709,7 @@ int main(int argc, char **argv)
         scale_cases();
         bar_cases();
         mail_cases();
+        cost_cases();
         corpus(false);
     }
     for (int i = 0; i < s_nfonts; i++)

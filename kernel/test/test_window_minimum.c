@@ -12,7 +12,7 @@ bool test_window_minimum_clamp(void)
     w->canvas_cap_w = 1024;
     w->canvas_cap_h = 768;
     bool ok = true;
-    const uint32_t flags[] = {0, GUI_WINDOW_NO_DECORATIONS, GUI_WINDOW_DESKTOP};
+    const uint32_t flags[] = {0, GUI_WINDOW_NO_DECORATIONS, GUI_WINDOW_DESKTOP, GUI_WINDOW_HAS_SETTINGS};
     for (unsigned i = 0; i < sizeof(flags) / sizeof(flags[0]); ++i) {
         w->flags = flags[i];
         int32_t bx = 2 * wm_border_width(w->flags);
