@@ -118,8 +118,31 @@ classes and tag name; selectors match right to left. Bounded where libhtml
 and libflow bound themselves, and refused out loud past a bound, never
 silently: bytes of sheet per page, rules, `@import` depth, nesting of
 `calc()` and of `var()` substitution, the length a substitution may grow
-to (the billion-laughs shape `var()` allows). The numbers are set in the
-parser slice against the corpus, and each is a named constant.
+to (the billion-laughs shape `var()` allows). Each bound is a named
+constant.
+
+**What a parse costs, measured** (`tools/test_garb_host.sh`, `--cost` and
+`--full`). Ordinary CSS — a Bootstrap-shaped sheet, long selector lists and
+short declarations — costs about 16 bytes of arena for each byte of text to
+parse, and about 19 once every rule's block has been read as its items,
+which is what the cascade does. So the 96 MiB arena (`GARB_ARENA_MAX`)
+holds about 6 MiB of such a sheet parsed, about 5 MiB with every block
+read; the harness holds a 4 MiB sheet to coming back whole at under 22.
+Denser CSS costs more — a sheet of nothing but `a{b:c}` about 59 bytes a
+byte, 77 with its blocks read — so it fills the arena at under 1.5 MiB. A
+sheet the arena cannot hold comes back INCOMPLETE WITH WHAT IT FINISHED:
+the arena always keeps room to publish the lists still open, so filling it
+refuses the next token, never the sheet's rules so far.
+
+The costs are where they are because of three choices: a list is built on
+a scratch stack and kept at its exact size (doubling in the arena left
+every smaller copy behind, and cost three times as much), a component value
+packs to 56 bytes, and a one-byte ASCII text is shared rather than kept.
+Outside the arena, and freed when the parse ends: the tokenizer's code
+points (4 bytes a byte of input, 32 MiB at `GARB_SHEET_MAX`), the decoded
+text of a sheet given as bytes (up to 3 bytes a byte), and the scratch
+stack, as deep as the lists open at once. What the faces reserve for a
+parse on the pool has to count those too.
 
 ## What the faces owe
 

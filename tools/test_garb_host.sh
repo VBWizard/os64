@@ -2,7 +2,8 @@
 # libgarb's parser on the host, under the sanitizers (GARB.md § Slices, G1):
 # css-parsing-tests through the driver, then every allocation failed in turn
 # over a real 2026 sheet and through every entry point, then a million
-# nested ( on a small stack and numbers past int64_t's reach.
+# nested ( on a small stack, numbers past int64_t's reach, and what a parse
+# costs (GARB.md § The cost): a 4 MiB sheet whole, one at the cap kept.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
@@ -31,3 +32,5 @@ python3 tools/test_garb_suite.py "$work/garb_driver"
 "$work/garb_driver" --sweep tools/garb_corpus/sweep.css
 "$work/garb_driver" --deep
 "$work/garb_driver" --numbers
+"$work/garb_driver" --cost 4194304
+"$work/garb_driver" --full
