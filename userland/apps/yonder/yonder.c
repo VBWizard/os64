@@ -399,17 +399,26 @@ static struct {
 // to pick with the pointer, since yonder has no drop-down (YONDER.md § Y4).
 #define SELECT_ROWS 4
 
+// Keeps a size summed in 64 bits inside a widget's int32 rect.
+static int32_t clamp32(int64_t v)
+{
+    return v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : (int32_t)v;
+}
+
 // A select's box: the rows its list shows, as wide as its longest option.
-// Measured in the window's own face, the one its widget paints in.
+// Measured in the window's own face, the one its widget paints in. The
+// page chooses `size`, so the arithmetic is 64-bit and the answer clamped.
 static void select_size(const os64_page_control_t *c, const os64_html_node_t *node,
                         int32_t *w, int32_t *h)
 {
     const os64_html_attr_t *size = os64_html_attr(node, "size");
-    int32_t rows = size != NULL && size->value != NULL ? (int32_t)os64_atoi(size->value) : 0;
+    int64_t rows = size != NULL && size->value != NULL ? os64_atoi(size->value) : 0;
     if (rows <= 1)
         rows = c->noptions < SELECT_ROWS ? c->noptions : SELECT_ROWS;
     if (rows < 1)
         rows = 1;
+    if (rows > INT32_MAX)
+        rows = INT32_MAX;               // so the product below fits 64 bits
     int32_t widest = 0;
     for (int32_t k = 0; k < c->noptions; k++) {
         int32_t px = 0;
@@ -420,8 +429,8 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
     }
     // The listbox's own arithmetic: a two-pixel frame, rows eight pixels
     // taller than the face's, labels six pixels in.
-    *h = rows * (os64_ui_font_row_height(&g.ui, OS64_FONT_ROLE_UI) + 8) + 4;
-    *w = widest + 2 * 6 + 4;
+    *h = clamp32(rows * ((int64_t)os64_ui_font_row_height(&g.ui, OS64_FONT_ROLE_UI) + 8) + 4);
+    *w = clamp32((int64_t)widest + 2 * 6 + 4);
     if (*w < 48)
         *w = 48;
 }
@@ -1242,15 +1251,27 @@ static FormWidget *form_widget(int32_t control)
                : NULL;
 }
 
-// A button's caption: its value, or the element's own text for a `button`,
-// or the name the standard gives a submit or reset with neither.
+// The node after `n` in tree order, staying inside `root`.
+static const os64_html_node_t *next_within(const os64_html_node_t *n, const os64_html_node_t *root)
+{
+    if (n->first_child != NULL)
+        return n->first_child;
+    while (n != root && n->next == NULL)
+        n = n->parent;
+    return n != root ? n->next : NULL;
+}
+
+// A button's caption: its value, or the element's own text for a `button` —
+// all of it, however deep (`<button><span>Search</span></button>`) — or the
+// name the standard gives a submit or reset with neither.
 static void button_caption(const os64_page_control_t *c, char *out, size_t cap)
 {
     out[0] = '\0';
     if (c->element == OS64_PAGE_EL_BUTTON) {
         size_t at = 0;
         bool space = false;
-        for (const os64_html_node_t *n = c->node->first_child; n != NULL && at + 2 < cap; n = n->next)
+        for (const os64_html_node_t *n = next_within(c->node, c->node); n != NULL && at + 2 < cap;
+             n = next_within(n, c->node))
             for (size_t i = 0; n->kind == OS64_HTML_TEXT && i < n->text_len && at + 2 < cap; i++) {
                 char ch = n->text[i];
                 if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f') {
@@ -1297,7 +1318,7 @@ static void field_cancelled(os64_ui_textfield_t *tf, void *user)
     os64_ui_set_focus(&g.ui, &g.view);
 }
 
-static void forms_sync_from_model(void);
+static void forms_sync_from_model(bool text);
 
 // A tick: the model's, then every tick's again — a radio's group is
 // libpage's, so picking one may have cleared others.
@@ -1306,7 +1327,7 @@ static void check_changed(os64_ui_checkbox_t *cb, void *user)
     const FormWidget *fw = user;
     if (os64_page_set_checked(page_model(&g.page), fw->control, cb->checked) < 0)
         status_rest("the page keeps that one as it is");
-    forms_sync_from_model();
+    forms_sync_from_model(false);
 }
 
 static void list_changed(os64_ui_listbox_t *list, void *user)
@@ -1314,7 +1335,7 @@ static void list_changed(os64_ui_listbox_t *list, void *user)
     const FormWidget *fw = user;
     if (list->selected >= 0)
         (void)os64_page_set_chosen(page_model(&g.page), fw->control, (int32_t)list->selected, true);
-    forms_sync_from_model();
+    forms_sync_from_model(false);
 }
 
 static void button_clicked(os64_ui_widget_t *w, void *user)
@@ -1324,7 +1345,7 @@ static void button_clicked(os64_ui_widget_t *w, void *user)
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), fw->control);
     if (c != NULL && c->resets) {
         (void)os64_page_reset(page_model(&g.page), c->form);
-        forms_sync_from_model();
+        forms_sync_from_model(true);
         return;
     }
     form_send(fw->control, OS64_PAGE_ACTIVATE_CONTROL);
@@ -1342,15 +1363,20 @@ static void password_show(FormWidget *fw)
     os64_ui_textfield_set(&g.ui, &fw->u.field, bullets);
 }
 
-// Every widget shows what the model holds: after a tick changed a group, a
-// reset, or the page arriving.
-static void forms_sync_from_model(void)
+// The widgets show what the model holds. A text field's edits reach the
+// model only when a form is sent (forms_flush), so until then the FIELD is
+// the newer of the two: `text` rewrites the text kinds too, and is for
+// when the model is the truth — the page arriving, a reset. A tick or a
+// choice changes only ticks and lists, and rewrites only those.
+static void forms_sync_from_model(bool text)
 {
     const os64_page_t *model = page_model(&g.page);
     for (int32_t i = 0; i < g.nfw; i++) {
         FormWidget *fw = &g.fw[i];
         const os64_page_control_t *c = os64_page_control(model, fw->control);
         if (c == NULL)
+            continue;
+        if (!text && (fw->kind == FW_TEXT || fw->kind == FW_PASSWORD))
             continue;
         switch (fw->kind) {
         case FW_TEXT:
@@ -1437,8 +1463,8 @@ static bool password_key(const os64_gui_event_t *ev)
     if (fw == NULL)
         return false;
     unsigned char a = (unsigned char)ev->key.ascii;
-    if (a == '\t')
-        return false;                           // traversal is libui's
+    if (a == '\t' || a == 0x1b)
+        return false;                           // traversal and leaving are libui's
     if (a == '\r' || a == '\n') {
         form_send(fw->control, OS64_PAGE_ACTIVATE_IMPLICIT);
     } else if (a == '\b' || a == 0x7f) {
@@ -1510,7 +1536,7 @@ static void forms_build(void)
                             !c->disabled && !c->readonly && fw->kind != FW_FILE);
     }
     forms_place();                      // bounds first: a field's scroll is judged by them
-    forms_sync_from_model();
+    forms_sync_from_model(true);
 }
 
 // Every control's widget at its box on the glass — or hidden, when its box
@@ -1528,9 +1554,12 @@ static void forms_place(void)
         FormWidget *fw = b != NULL ? form_widget(b->control) : NULL;
         if (fw == NULL)
             continue;
-        os64_gui_rect_t r = {v.x + b->rect.x - g.sx, v.y + b->rect.y - g.sy, b->rect.w, b->rect.h};
-        bool inside = r.x >= v.x && r.y >= v.y && r.x + r.w <= v.x + v.w &&
-                      r.y + r.h <= v.y + v.h && r.w > 0 && r.h > 0;
+        // The page's edges add in 64 bits (a box near INT32_MAX would wrap
+        // back inside the view), and whatever is kept is clamped to int32.
+        int64_t x = (int64_t)v.x + b->rect.x - g.sx, y = (int64_t)v.y + b->rect.y - g.sy;
+        bool inside = x >= v.x && y >= v.y && x + b->rect.w <= (int64_t)v.x + v.w &&
+                      y + b->rect.h <= (int64_t)v.y + v.h && b->rect.w > 0 && b->rect.h > 0;
+        os64_gui_rect_t r = {clamp32(x), clamp32(y), b->rect.w, b->rect.h};
         if (!inside) {
             if (!fw->w->hidden)
                 os64_ui_set_hidden(&g.ui, fw->w, true);
@@ -1549,14 +1578,21 @@ static void forms_place(void)
     }
 }
 
-// The page's controls leave with it: interaction first (focus, hover and a
-// press grab must not outlive the widget they name), then each widget's
-// text runs the way libui's own teardown releases them, then the list.
+// The page's controls leave with it: interaction first (a hover or a press
+// grab must not outlive the widget it names, and nor must the focus — which
+// goes to the page view when a page widget held it, and stays where it is
+// when the toolbar did), then each widget's text runs the way libui's own
+// teardown releases them, then the list.
 static void forms_drop(void)
 {
     if (g.fw == NULL)
         return;
-    os64_ui_cancel_interaction(&g.ui);
+    bool page_focus = false;
+    for (int32_t i = 0; i < g.nfw; i++)
+        page_focus |= g.fw[i].w == g.ui.focus;
+    os64_ui_cancel_gestures(&g.ui);
+    if (page_focus)
+        os64_ui_set_focus(&g.ui, &g.view);
     for (int32_t i = 0; i < g.nfw; i++) {
         os64_ui_widget_t *w = g.fw[i].w;
         if (w->cls != NULL && w->cls->destroy != NULL)
