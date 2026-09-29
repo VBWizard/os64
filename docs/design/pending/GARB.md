@@ -61,7 +61,7 @@ that the properties libflow lays out can reach.
 | Module | Level | Pile | How much |
 |---|---|---|---|
 | CSS Syntax | 3 | 1 | Whole: the tokenizer, the parser, error recovery exactly as written (an invalid declaration is dropped and parsing goes on — the rule that lets a 2026 sheet run in a browser that knows 1998's properties) |
-| Selectors | 3, and 4's `:is()`, `:where()`, `:not(<list>)`, `:has()`, `nth-child(… of S)` | 1 | Whole for Level 3; `:hover`, `:focus`, `:active`, `:focus-within`, `:focus-visible` and `:target` never match until a face restyles on them (booked); `:visited` never matches, by privacy as the browsers do; `:has()` matched by brute force; a namespace prefix other than `*` or none needs `@namespace` (booked) |
+| Selectors | 3, and 4's `:is()`, `:where()`, `:not(<list>)`, `:has()`, `nth-child(… of S)` | 1 | Whole for Level 3; `:hover`, `:focus`, `:active`, `:focus-within`, `:focus-visible`, `:target` and `:indeterminate` never match, and `:checked` follows the page's attribute and not a person's tick, until a face restyles on them (booked); `:visited` never matches, by privacy as the browsers do; `:has()` matched by brute force; a namespace prefix other than `*` or none needs `@namespace` (booked) |
 | CSS Cascading and Inheritance | 4 | 1 | Origins (user agent = libflow's chapter, author), importance, specificity, order of appearance, `style` attributes, `inherit`/`initial`/`unset`/`revert`, shorthands expanding to longhands, `@import`; Level 5's `@layer` booked |
 | CSS Custom Properties | 1 | 1 | Whole: `--name` inherited, `var()` with fallback, cycles invalid at computed-value time |
 | CSS Values and Units | 3, and 4's `min()`/`max()`/`clamp()` | 1 | `px`, `em`, `rem`, `ex`, `ch`, `%`, `vw`, `vh`, `vmin`, `vmax`, `pt`, `pc`, `cm`, `mm`, `in`, `q`; `calc()` |
@@ -211,7 +211,7 @@ pseudo-elements, refused on both sides — agree.
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| `:hover`, `:focus`, `:active` | a restyle on every pointer move is a relayout, and the face does not relayout on hover | pile 1 proven, and a page whose menus only exist on hover |
+| `:hover`, `:focus`, `:active`; `:target`, `:indeterminate`; `:checked` after a click | a restyle on every pointer move is a relayout, and the face does not relayout on hover; a tick a person makes lives in libpage's model, which `:checked` does not read, so `input:checked + label` does not follow a click | pile 1 proven, and a page whose menus only exist on hover |
 | `@layer` (Cascade 5) | Level 4 first; a layer is an order within an origin | the first page whose sheets use it |
 | `:has()` by brute force | each candidate scans its subtree or its following siblings, a whole page for `:root:has(…)` | a page whose cascade is slow, measured |
 | `@namespace` | a prefix other than `*` or none makes a selector invalid, so its rule drops | a page whose sheets declare one |
