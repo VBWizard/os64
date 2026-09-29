@@ -1,0 +1,49 @@
+fill 0 0 800 600 #ffffff
+fill 8 96 784 1 #808080
+fill 8 97 784 1 #808080
+text " " 9 23 #000000
+control 0 9 31 160 20
+control 1 171 31 160 20
+control 2 397 31 160 20
+control 3 397 51 160 20
+text "View in Gopher client" 575 45 #0000ff
+fill 575 46 136 1 #0000ff
+text " | " 711 45 #000000
+text "HELP! with" 723 45 #0000ff
+fill 723 46 68 1 #0000ff
+text "proxy" 615 65 #0000ff
+fill 615 66 36 1 #0000ff
+text " | " 651 65 #000000
+text "www.floodgap.com" 663 65 #0000ff
+fill 663 66 128 1 #0000ff
+text "Welcome to Floodgap Systems' official gopher server." 27 121 #000000
+text "Floodgap has served the gopher community since 1999" 27 143 #000000
+text "(formerly gopher.ptloma.edu)." 27 165 #000000
+text " " 27 187 #000000
+text "We run Bucktooth 0.2.9 on xinetd as our server system." 27 209 #000000
+text "gopher.floodgap.com is an IBM Power 520 Express with a 2-way" 27 231 #000000
+text "4.2GHz POWER6 CPU and 8GB of RAM, running AIX 6.1 +patches." 27 253 #000000
+text "Send gopher@floodgap.com your questions and suggestions." 27 275 #000000
+text " " 27 297 #000000
+text "***********************************************************" 27 319 #000000
+text "**              OVER 20 YEARS SERVING YOU!               **" 27 341 #000000
+text "**               Plain text is beautiful!                **" 27 363 #000000
+text "***********************************************************" 27 385 #000000
+text " " 27 407 #000000
+image 9 417 16 16
+text "Does this gopher menu look correct?" 27 429 #0000ff
+fill 27 430 280 1 #0000ff
+text "(plus using the Floodgap Public Gopher Proxy)" 27 451 #000000
+image 9 461 16 16
+text "Are you running a bot? Are we blocking you?" 27 473 #0000ff
+fill 27 474 344 1 #0000ff
+text "Please read this document. Please don't cost us money." 27 495 #000000
+text "(blocklist updated 27 April 2026)" 27 517 #000000
+image 9 527 16 16
+text "Super-Dimensional Fortress: SDF Gopherspace" 27 539 #0000ff
+fill 27 540 344 1 #0000ff
+text "Get your own Gopherspace and shell account!" 27 561 #000000
+text " " 27 583 #000000
+text "--- Getting started with Gopher -------------------------------" 27 605 #000000
+-- 3000
+fill 0 3000 800 600 #ffffff
