@@ -371,7 +371,8 @@ expects):
   read a cookie here, and `SameSite` is booked below with what it needs.
 
 Limits are the browsers': 4096 bytes a cookie, 180 a domain, 3000 in all;
-past a limit the oldest goes.
+past a limit the expired go first and then the cookie used longest ago —
+sending counts as use, so the login every page carries is the last to go.
 
 **Sent in the order the RFC gives** (the longest path first, then the
 oldest), whole cookies only. libfetch gives a hop 1024 bytes for its

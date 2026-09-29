@@ -15,7 +15,8 @@
 
 #pragma GCC visibility push(default)
 
-// The browsers' limits: past one, the oldest cookie goes.
+// The browsers' limits: past one, the expired go first and then the
+// cookie used longest ago (RFC 6265 §5.3 step 12).
 #define WAY_COOKIE_BYTES_MAX   4096   // a cookie's name and value together
 #define WAY_COOKIES_PER_DOMAIN 180
 #define WAY_COOKIES_MAX        3000
