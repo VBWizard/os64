@@ -48,8 +48,7 @@
 
 // The work pool. A navigation declares what one page can cost: libhtml's
 // 8 MiB of input and 64 MiB of tree, and the model beside them; a picture
-// declares PICTURE_RESERVE. The budget fits a page and four pictures, one
-// per worker.
+// declares PICTURE_RESERVE. The budget fits a page and PICTURES_AT_ONCE.
 #define POOL_WORKERS 4
 #define TRIP_RESERVE (80u << 20)
 #define POOL_BUDGET  (768u << 20)
@@ -57,6 +56,21 @@
 // What a page's pictures may cost to keep — a still one's pixels, a moving
 // one's whole sequence; past it a picture draws as its frame.
 #define PICTURES_KEPT_MAX ((size_t)256u << 20)
+
+// A page's pictures in the pool at once: one fewer than its workers. The
+// pool admits in the order it was given work, so a navigation submitted
+// after a page's pictures would wait for every one of them; yonder keeps
+// the rest itself and hands over the next as each comes back, which keeps
+// a worker free for the person — once any pictures of a page left behind
+// have seen they were cancelled.
+#define PICTURES_AT_ONCE (POOL_WORKERS - 1)
+
+// A layout at most this slow is repeated for every batch of pictures that
+// moves the page. A slower one waits for the page's last picture, or until
+// its last layout is PICTURES_STALE_MS old and twice its own cost — at
+// most a third of the time spent laying out while pictures trickle in.
+#define PICTURES_CHEAP_LAYOUT_MS 100
+#define PICTURES_STALE_MS 2000
 
 // The window's doorbell bits: the pool's completions, and a navigation's
 // mailbox (progress and questions).
@@ -179,8 +193,10 @@ static const char *faces_open(void)
 // that declares none in a <meta> is read as windows-1252 by the standard's
 // default. Bytes that are valid UTF-8 and not plain ASCII are almost never
 // meant as windows-1252, so they are read as what they are — the file
-// detector's answer, not a rule the standard makes, and a <meta> can only
-// lose to it when the bytes already contradict the <meta>.
+// detector's answer, not a rule the standard makes. It is handed to
+// libhtml as the transport's label, which outranks the page: when it fires,
+// the page's <meta> is not read at all. A page that declares
+// windows-1252 and is UTF-8 is the case it exists for.
 static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len)
 {
     bool wide = false, valid = true;
@@ -204,7 +220,8 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len)
 
 // A picture of the page's, one per ADDRESS: forty spacer GIFs are one
 // fetch. Its address is the page model's, which lives as long as it does.
-typedef enum { PIC_WAITING, PIC_SHOWN, PIC_FAILED, PIC_NOT_KEPT } PictureState;
+// QUEUED is yonder's to hand over; WAITING is in the pool.
+typedef enum { PIC_QUEUED, PIC_WAITING, PIC_SHOWN, PIC_FAILED, PIC_NOT_KEPT } PictureState;
 
 typedef struct {
     const char *url;
@@ -214,6 +231,9 @@ typedef struct {
     uint64_t due;                   // when its next frame is, while it plays
     bool playing;                   // false once it stops: its loops done, or a frame failed
     os64_work_id_t id;              // while WAITING
+    // An image naming it gives no width and height of its own, so its
+    // arrival moves the page. Decided once, as the pictures are gathered.
+    bool moves;
 } Picture;
 
 // A page as the window holds it: libway's page (the tree, what it means,
@@ -230,7 +250,10 @@ typedef struct {
     // these it is, -1 for one that will not be fetched.
     Picture *pics;
     int32_t npics, *pic_of, *bg_of;
-    int32_t waiting, not_kept;
+    // Still to come (QUEUED or WAITING), and of those, in the pool; the
+    // next picture to hand it.
+    int32_t waiting, in_flight, next_pic;
+    int32_t not_kept;
     size_t kept_bytes;
     // The form whose reply this is, when the reply was to a POST: what
     // Reload sends again. Its url is NULL otherwise.
@@ -389,14 +412,21 @@ static struct {
     uint64_t generation;
     // Which page is on screen, so a picture finished for another is let go.
     uint64_t page_serial;
-    // A picture arrived whose size may move the page; and when the page was
-    // last laid out again for one, to lay out at most once a second while
-    // more are coming.
+    // A picture arrived whose size may move the page, since the page was
+    // last laid out (pictures_settle); cleared by any layout, whether or not
+    // it fit.
     bool pictures_moved;
-    yonder_ticker_t *ticker;        // moving pictures' clock; NULL, and nothing moves
+    // The window's clock, for moving pictures and a slow page's owed
+    // layout; NULL, and nothing moves and a layout waits for an event.
+    yonder_ticker_t *ticker;
     bool covered;                   // nobody can see the window: nothing moves
-    os64_ticks_t pictures_laid;
-    uint64_t laid_ms;               // the last layout's time, for the status line
+    // When a slow page's deferred layout is owed (pictures_settle), in
+    // yonder_now_ms's milliseconds; YONDER_NEVER for none.
+    uint64_t settle_due;
+    // The last layout: how long it took, for the status line and for
+    // pictures_settle, and when it finished.
+    uint64_t laid_ms;
+    os64_ticks_t laid_at;
     // The page's control widgets, after every permanent widget in the
     // window's tree; `by_control` finds one from libpage's index.
     FormWidget *fw;
@@ -407,13 +437,36 @@ static struct {
 // to pick with the pointer, since yonder has no drop-down (YONDER.md § Y4).
 #define SELECT_ROWS 4
 
+// Keeps a size summed in 64 bits inside a widget's int32 rect.
+static int32_t clamp32(int64_t v)
+{
+    return v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : (int32_t)v;
+}
+
+// A select's `size`, by HTML's rules for a non-negative integer (leading
+// white space, an optional `+`, digits), saturating at INT32_MAX: the page
+// writes as many digits as it likes. Anything else is 0, the default.
+static int64_t size_rows(const char *v)
+{
+    while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\f' || *v == '\r')
+        v++;
+    if (*v == '+')
+        v++;
+    int64_t n = 0;
+    for (; *v >= '0' && *v <= '9'; v++)
+        n = n > (INT32_MAX - 9) / 10 ? INT32_MAX : n * 10 + (*v - '0');
+    return n;
+}
+
 // A select's box: the rows its list shows, as wide as its longest option.
-// Measured in the window's own face, the one its widget paints in.
+// Measured in the window's own face, the one its widget paints in. The
+// page chooses `size` (at most INT32_MAX rows, by size_rows), so the
+// arithmetic is 64-bit and the answer clamped.
 static void select_size(const os64_page_control_t *c, const os64_html_node_t *node,
                         int32_t *w, int32_t *h)
 {
     const os64_html_attr_t *size = os64_html_attr(node, "size");
-    int32_t rows = size != NULL && size->value != NULL ? (int32_t)os64_atoi(size->value) : 0;
+    int64_t rows = size != NULL && size->value != NULL ? size_rows(size->value) : 0;
     if (rows <= 1)
         rows = c->noptions < SELECT_ROWS ? c->noptions : SELECT_ROWS;
     if (rows < 1)
@@ -428,8 +481,8 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
     }
     // The listbox's own arithmetic: a two-pixel frame, rows eight pixels
     // taller than the face's, labels six pixels in.
-    *h = rows * (os64_ui_font_row_height(&g.ui, OS64_FONT_ROLE_UI) + 8) + 4;
-    *w = widest + 2 * 6 + 4;
+    *h = clamp32(rows * ((int64_t)os64_ui_font_row_height(&g.ui, OS64_FONT_ROLE_UI) + 8) + 4);
+    *w = clamp32((int64_t)widest + 2 * 6 + 4);
     if (*w < 48)
         *w = 48;
 }
@@ -607,7 +660,7 @@ static void say_laid_out(uint64_t ms)
     os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px in %lu ms%s%s", g.page.way.url,
                   g.page.way.note[0] ? " - " : "", g.page.way.note, g.page.laid_width,
                   (unsigned long)ms, pictures,
-                  flow_incomplete(g.page.tree) ? " - INCOMPLETE: out of memory partway" : "");
+                  flow_incomplete(g.page.tree) ? " - INCOMPLETE: the layout stopped partway" : "");
     status_rest(line);
 }
 
@@ -642,6 +695,10 @@ static void relayout(bool again)
     os64_ticks(&t0);
     flow_tree_t *fresh = layout_tree(&g.page, width);
     os64_ticks(&t1);
+    // The attempt consumes the moves whether or not it fits: kept, they
+    // would retry a layout that just failed at every event batch.
+    g.pictures_moved = false;
+    g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     if (fresh == NULL) {
         status_rest("Out of memory laying the page out; this is the last layout that fit.");
         return;
@@ -649,6 +706,7 @@ static void relayout(bool again)
     flow_free(g.page.tree);
     g.page.tree = fresh;
     g.page.laid_width = width;
+    g.laid_at = t1;
     if (anchor != NULL) {
         const flow_box_t *b = flow_box_for(g.page.tree, anchor);
         if (b != NULL)
@@ -668,6 +726,7 @@ static void pictures_start(Page *p);
 static void pictures_leave(Page *p);
 static void forms_build(void);
 static void forms_drop(void);
+static void bar_forget(void);
 static void open_address(const char *url, NavKind kind, const way_position_t *crumb,
                          os64_page_request_t *request);
 
@@ -722,12 +781,19 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
         else if (kind == NAV_FORWARD)
             way_went_forward(&g.way, g.page.way.url, &here);
     }
+    // The page on screen is being replaced, and its question and its
+    // pictures in flight with it: a page that fails to lay out (above)
+    // leaves them all where they were.
+    bar_forget();
     pictures_leave(&g.page);
     forms_drop();
     page_clear(&g.page);
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
     g.page_serial++;
+    g.pictures_moved = false;
+    g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
+    g.laid_at = t1;
     pictures_start(&g.page);
     forms_build();
     g.hover_link = g.pressed_link = -1;
@@ -828,7 +894,10 @@ static void bar_forget(void)
 }
 
 // A new question replaces one that is up: a worker's is answered No (its
-// page is being left), a request waiting on this thread is dropped.
+// page is being left), a request waiting on this thread is dropped. Its
+// number comes from whoever asks — the worker's mailbox, or this thread's
+// own count for a request — and `asker` says which, so the two counts never
+// have to agree.
 static void bar_ask(Asker asker, uint32_t number, const char *question)
 {
     if (g.asker == ASK_WORKER && g.nav.mail != NULL)
@@ -901,10 +970,16 @@ static const char *file_path(const char *after)
 static void start_trip(const char *url, os64_page_request_t *request, NavKind kind,
                        const way_position_t *crumb)
 {
+    // A QUESTION IS ABOUT THE PAGE ON SCREEN, and going anywhere leaves it:
+    // whoever asked, it goes (a form's request with it) before this goes.
+    bar_forget();
     if (os64_strlen(url) >= 7 && os64_memcmp(url, "file://", 7) == 0) {
+        // `url` may be the request's own: the path is taken before it goes.
+        char path[OS64_FETCH_URL_MAX];
+        os64_strcopy(path, sizeof(path), file_path(url + 7));
         os64_page_request_free(request);
         stop_trip();
-        open_local(file_path(url + 7), kind, crumb);
+        open_local(path, kind, crumb);
         return;
     }
     stop_trip();
@@ -1044,6 +1119,7 @@ static void open_address(const char *typed, NavKind kind, const way_position_t *
                          os64_page_request_t *request)
 {
     if (typed[0] == '/') {
+        bar_forget();           // the page on screen is being left (start_trip)
         stop_trip();
         open_local(typed, kind, crumb);
         return;
@@ -1058,10 +1134,53 @@ static void open_address(const char *typed, NavKind kind, const way_position_t *
 
 // ── Pictures ────────────────────────────────────────────────────────────
 
-// The picture at `url`, fetched once however many times the page names it:
-// its index in the page's table, or -1 for an address nothing here fetches.
-// A job the pool will not take leaves its picture to keep its frame.
-static int32_t picture_for(Page *p, const char *url)
+// Whether an arrival can move the page: libflow's rule, asked of the box
+// the element was laid out in. A picture with no box has nothing fixed.
+static bool picture_sized(const Page *p, const os64_html_node_t *node)
+{
+    const flow_box_t *b = flow_box_for(p->tree, node);
+    return b != NULL && flow_replaced_fixed(b->style);
+}
+
+// Hands the pool the page's next pictures, in table order, while fewer than
+// PICTURES_AT_ONCE are in it. One it cannot take keeps its frame.
+static void pictures_feed(Page *p)
+{
+    while (p->in_flight < PICTURES_AT_ONCE && p->next_pic < p->npics) {
+        int32_t index = p->next_pic++;
+        Picture *pic = &p->pics[index];
+        if (pic->state != PIC_QUEUED)
+            continue;
+        pic->state = PIC_FAILED;
+        p->waiting--;
+        yonder_picture_job_t *job = g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
+        if (job == NULL)
+            continue;
+        job->kind = YONDER_JOB_PICTURE;
+        job->index = index;
+        job->generation = g.page_serial;
+        job->agent = g.way.agent;
+        os64_strcopy(job->url, sizeof(job->url), pic->url);
+        job->hooks.jar = g.way.jar;
+        os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
+        os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
+        pic->id = os64_work_submit(g.pool, &work);
+        if (pic->id == 0) {
+            os64_free(job);
+            continue;
+        }
+        pic->state = PIC_WAITING;
+        p->waiting++;
+        p->in_flight++;
+    }
+}
+
+// The picture at `url`, gathered once however many times the page names
+// it: its index in the page's pictures, or -1 for an address nothing here
+// fetches. Found through `slot`, an open-addressed table over the page's
+// addresses, never by a walk of those gathered so far: a page names every
+// picture it likes, and a walk per picture is quadratic in them.
+static int32_t picture_for(Page *p, int32_t *slot, size_t cap, const char *url)
 {
     if (url == NULL)
         return -1;
@@ -1071,37 +1190,26 @@ static int32_t picture_for(Page *p, const char *url)
                       os64_memcmp(url, "file://", 7) == 0);
     if (!fetchable)
         return -1;
-    for (int32_t k = 0; k < p->npics; k++)
-        if (os64_streq(p->pics[k].url, url))
-            return k;
+    uint64_t h = 1469598103934665603ull;       // FNV-1a over the address
+    for (const char *c = url; *c != '\0'; c++)
+        h = (h ^ (uint8_t)*c) * 1099511628211ull;
+    size_t at = (size_t)h & (cap - 1);
+    while (slot[at] >= 0 && !os64_streq(p->pics[slot[at]].url, url))
+        at = (at + 1) & (cap - 1);
+    if (slot[at] >= 0)
+        return slot[at];
+    slot[at] = p->npics;
     Picture *pic = &p->pics[p->npics];
     pic->url = url;
-    pic->state = PIC_FAILED;
-    yonder_picture_job_t *job = os64_calloc(1, sizeof(*job));
-    if (job != NULL) {
-        job->kind = YONDER_JOB_PICTURE;
-        job->index = p->npics;
-        job->generation = g.page_serial;
-        job->agent = g.way.agent;
-        os64_strcopy(job->url, sizeof(job->url), url);
-        job->hooks.jar = g.way.jar;
-        os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
-        os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
-        pic->id = os64_work_submit(g.pool, &work);
-        if (pic->id != 0) {
-            pic->state = PIC_WAITING;
-            p->waiting++;
-        } else {
-            os64_free(job);     // the table is full: this one keeps its frame
-        }
-    }
+    pic->state = PIC_QUEUED;
+    p->waiting++;
     return p->npics++;
 }
 
-// Fetches the page's pictures and the pictures behind its boxes, one job
-// per address, in tree order: libpage's lists are the record. A picture
-// whose address was refused, or names a scheme nothing here fetches, is
-// never asked for.
+// Gathers the page's pictures and the pictures behind its boxes, one per
+// address, in tree order — libpage's lists are the record — and starts
+// feeding them to the pool. A picture whose address was refused, or names
+// a scheme nothing here fetches, is never asked for.
 static void pictures_start(Page *p)
 {
     const os64_page_t *model = page_model(p);
@@ -1109,10 +1217,15 @@ static void pictures_start(Page *p)
     int32_t nb = model != NULL ? os64_page_nbackgrounds(model) : 0;
     if (n + nb <= 0 || g.pool == NULL)
         return;
+    size_t cap = 16;
+    while (cap < (size_t)(n + nb) * 2)
+        cap *= 2;
+    int32_t *slot = os64_malloc(cap * sizeof(*slot));
     p->pic_of = os64_calloc((size_t)(n > 0 ? n : 1), sizeof(*p->pic_of));
     p->bg_of = os64_calloc((size_t)(nb > 0 ? nb : 1), sizeof(*p->bg_of));
     p->pics = os64_calloc((size_t)(n + nb), sizeof(*p->pics));
-    if (p->pic_of == NULL || p->bg_of == NULL || p->pics == NULL) {
+    if (slot == NULL || p->pic_of == NULL || p->bg_of == NULL || p->pics == NULL) {
+        os64_free(slot);
         os64_free(p->pic_of);
         os64_free(p->bg_of);
         os64_free(p->pics);
@@ -1120,46 +1233,39 @@ static void pictures_start(Page *p)
         p->pics = NULL;
         return;
     }
-    for (int32_t i = 0; i < n; i++)
-        p->pic_of[i] = picture_for(p, os64_page_image(model, i)->src.url);
+    for (size_t k = 0; k < cap; k++)
+        slot[k] = -1;
+    // A picture moves the page when any element naming it leaves its box
+    // to the picture; a background never does, being painted, not laid out.
+    for (int32_t i = 0; i < n; i++) {
+        const os64_page_image_t *img = os64_page_image(model, i);
+        int32_t k = picture_for(p, slot, cap, img->src.url);
+        p->pic_of[i] = k;
+        if (k >= 0 && !picture_sized(p, img->node))
+            p->pics[k].moves = true;
+    }
     for (int32_t i = 0; i < nb; i++)
-        p->bg_of[i] = picture_for(p, os64_page_background(model, i)->src.url);
+        p->bg_of[i] = picture_for(p, slot, cap, os64_page_background(model, i)->src.url);
+    os64_free(slot);
+    pictures_feed(p);
 }
 
-// The page is being left: its pictures still on their way are cancelled,
-// and the pool lets their inputs and products go.
+// The page is being left: its pictures in the pool are cancelled, and the
+// pool lets their inputs and products go; those not handed over are never
+// asked for.
 static void pictures_leave(Page *p)
 {
     for (int32_t i = 0; i < p->npics; i++)
         if (p->pics[i].state == PIC_WAITING && g.pool != NULL)
             os64_work_cancel(g.pool, p->pics[i].id);
-    p->waiting = 0;
+    p->waiting = p->in_flight = 0;
+    p->next_pic = p->npics;
 }
 
-// Whether a picture's arrival can move the page: libflow sizes a picture
-// whose element gives both a width and a height the same whether it has
-// arrived or not.
-static bool has_percent(const char *v)
-{
-    for (; v != NULL && *v != '\0'; v++)
-        if (*v == '%')
-            return true;
-    return false;
-}
-
+// Whether a picture's arrival can move the page (Picture.moves).
 static bool picture_moves_page(const Page *p, int32_t pic)
 {
-    const os64_page_t *model = page_model(p);
-    for (int32_t i = 0; i < os64_page_nimages(model); i++) {
-        if (p->pic_of[i] != pic)
-            continue;
-        const os64_html_node_t *node = os64_page_image(model, i)->node;
-        const os64_html_attr_t *w = os64_html_attr(node, "width");
-        const os64_html_attr_t *h = os64_html_attr(node, "height");
-        if (w == NULL || h == NULL || h->value == NULL || has_percent(h->value))
-            return true;
-    }
-    return false;
+    return p->pics[pic].moves;
 }
 
 static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product)
@@ -1170,6 +1276,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     if (pic->state != PIC_WAITING)
         return;
     g.page.waiting--;
+    g.page.in_flight--;
     if (product == NULL || product->status != OS64_IMAGE_OK) {
         pic->state = PIC_FAILED;
         return;
@@ -1196,20 +1303,35 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     os64_ui_mark_dirty(&g.ui, &g.view);
 }
 
-// After a drained batch: lay the page out again if pictures moved it — at
-// once when the last one is in, otherwise at most once a second, so a page
-// of forty pictures settles without forty layouts.
+// After a drained batch: lay the page out again if pictures moved it —
+// once per batch when laying it out is cheap, so a slow page of forty
+// pictures is not laid out forty times; otherwise when its last picture is
+// in, or once the last layout is stale. A slow page that is waiting hands
+// the ticker the moment it goes stale (pictures_schedule), so it settles
+// on time with nobody at the mouse — or, with no ticker, at the first
+// batch after that moment.
 static void pictures_settle(void)
 {
-    if (!g.pictures_moved)
-        return;
-    os64_ticks_t now;
-    os64_ticks(&now);
-    if (g.page.waiting > 0 && ms_between(&g.pictures_laid, &now) < 1000)
-        return;
-    g.pictures_moved = false;
-    g.pictures_laid = now;
-    relayout(true);
+    uint64_t due = YONDER_NEVER;
+    if (g.pictures_moved) {
+        bool now_ok = true;
+        if (g.page.waiting > 0 && g.laid_ms > PICTURES_CHEAP_LAYOUT_MS) {
+            os64_ticks_t now;
+            os64_ticks(&now);
+            uint64_t since = ms_between(&g.laid_at, &now);
+            uint64_t stale = 2 * g.laid_ms > PICTURES_STALE_MS ? 2 * g.laid_ms : PICTURES_STALE_MS;
+            if (since < stale) {
+                now_ok = false;
+                due = yonder_now_ms() + (stale - since);
+            }
+        }
+        if (now_ok)
+            relayout(true);
+    }
+    if (due != g.settle_due) {
+        g.settle_due = due;
+        pictures_schedule();
+    }
 }
 
 // ── Moving pictures ─────────────────────────────────────────────────────
@@ -1271,11 +1393,13 @@ static bool picture_on_screen(int32_t k, bool mark)
     return seen;
 }
 
-// Hands the ticker the earliest next frame among the pictures on screen,
-// or none: a covered window, or nothing moving where the reader is.
+// Hands the ticker the earliest of the next frame among the pictures on
+// screen and the moment a slow page's layout goes stale (pictures_settle),
+// or none: a covered window, or nothing moving where the reader is and no
+// layout owed.
 static void pictures_schedule(void)
 {
-    uint64_t next = YONDER_NEVER;
+    uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
     for (int32_t k = 0; !g.covered && k < g.page.npics; k++) {
         const Picture *pic = &g.page.pics[k];
         if (pic->playing && pic->due < next && picture_on_screen(k, false))
@@ -1325,15 +1449,27 @@ static FormWidget *form_widget(int32_t control)
                : NULL;
 }
 
-// A button's caption: its value, or the element's own text for a `button`,
-// or the name the standard gives a submit or reset with neither.
+// The node after `n` in tree order, staying inside `root`.
+static const os64_html_node_t *next_within(const os64_html_node_t *n, const os64_html_node_t *root)
+{
+    if (n->first_child != NULL)
+        return n->first_child;
+    while (n != root && n->next == NULL)
+        n = n->parent;
+    return n != root ? n->next : NULL;
+}
+
+// A button's caption: its value, or the element's own text for a `button` —
+// all of it, however deep (`<button><span>Search</span></button>`) — or the
+// name the standard gives a submit or reset with neither.
 static void button_caption(const os64_page_control_t *c, char *out, size_t cap)
 {
     out[0] = '\0';
     if (c->element == OS64_PAGE_EL_BUTTON) {
         size_t at = 0;
         bool space = false;
-        for (const os64_html_node_t *n = c->node->first_child; n != NULL && at + 2 < cap; n = n->next)
+        for (const os64_html_node_t *n = next_within(c->node, c->node); n != NULL && at + 2 < cap;
+             n = next_within(n, c->node))
             for (size_t i = 0; n->kind == OS64_HTML_TEXT && i < n->text_len && at + 2 < cap; i++) {
                 char ch = n->text[i];
                 if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f') {
@@ -1380,7 +1516,7 @@ static void field_cancelled(os64_ui_textfield_t *tf, void *user)
     os64_ui_set_focus(&g.ui, &g.view);
 }
 
-static void forms_sync_from_model(void);
+static void forms_sync_from_model(bool text);
 
 // A tick: the model's, then every tick's again — a radio's group is
 // libpage's, so picking one may have cleared others.
@@ -1389,7 +1525,7 @@ static void check_changed(os64_ui_checkbox_t *cb, void *user)
     const FormWidget *fw = user;
     if (os64_page_set_checked(page_model(&g.page), fw->control, cb->checked) < 0)
         status_rest("the page keeps that one as it is");
-    forms_sync_from_model();
+    forms_sync_from_model(false);
 }
 
 static void list_changed(os64_ui_listbox_t *list, void *user)
@@ -1397,7 +1533,7 @@ static void list_changed(os64_ui_listbox_t *list, void *user)
     const FormWidget *fw = user;
     if (list->selected >= 0)
         (void)os64_page_set_chosen(page_model(&g.page), fw->control, (int32_t)list->selected, true);
-    forms_sync_from_model();
+    forms_sync_from_model(false);
 }
 
 static void button_clicked(os64_ui_widget_t *w, void *user)
@@ -1407,7 +1543,7 @@ static void button_clicked(os64_ui_widget_t *w, void *user)
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), fw->control);
     if (c != NULL && c->resets) {
         (void)os64_page_reset(page_model(&g.page), c->form);
-        forms_sync_from_model();
+        forms_sync_from_model(true);
         return;
     }
     form_send(fw->control, OS64_PAGE_ACTIVATE_CONTROL);
@@ -1425,15 +1561,20 @@ static void password_show(FormWidget *fw)
     os64_ui_textfield_set(&g.ui, &fw->u.field, bullets);
 }
 
-// Every widget shows what the model holds: after a tick changed a group, a
-// reset, or the page arriving.
-static void forms_sync_from_model(void)
+// The widgets show what the model holds. A text field's edits reach the
+// model only when a form is sent (forms_flush), so until then the FIELD is
+// the newer of the two: `text` rewrites the text kinds too, and is for
+// when the model is the truth — the page arriving, a reset. A tick or a
+// choice changes only ticks and lists, and rewrites only those.
+static void forms_sync_from_model(bool text)
 {
     const os64_page_t *model = page_model(&g.page);
     for (int32_t i = 0; i < g.nfw; i++) {
         FormWidget *fw = &g.fw[i];
         const os64_page_control_t *c = os64_page_control(model, fw->control);
         if (c == NULL)
+            continue;
+        if (!text && (fw->kind == FW_TEXT || fw->kind == FW_PASSWORD))
             continue;
         switch (fw->kind) {
         case FW_TEXT:
@@ -1520,8 +1661,8 @@ static bool password_key(const os64_gui_event_t *ev)
     if (fw == NULL)
         return false;
     unsigned char a = (unsigned char)ev->key.ascii;
-    if (a == '\t')
-        return false;                           // traversal is libui's
+    if (a == '\t' || a == 0x1b)
+        return false;                           // traversal and leaving are libui's
     if (a == '\r' || a == '\n') {
         form_send(fw->control, OS64_PAGE_ACTIVATE_IMPLICIT);
     } else if (a == '\b' || a == 0x7f) {
@@ -1593,7 +1734,7 @@ static void forms_build(void)
                             !c->disabled && !c->readonly && fw->kind != FW_FILE);
     }
     forms_place();                      // bounds first: a field's scroll is judged by them
-    forms_sync_from_model();
+    forms_sync_from_model(true);
 }
 
 // Every control's widget at its box on the glass — or hidden, when its box
@@ -1611,9 +1752,12 @@ static void forms_place(void)
         FormWidget *fw = b != NULL ? form_widget(b->control) : NULL;
         if (fw == NULL)
             continue;
-        os64_gui_rect_t r = {v.x + b->rect.x - g.sx, v.y + b->rect.y - g.sy, b->rect.w, b->rect.h};
-        bool inside = r.x >= v.x && r.y >= v.y && r.x + r.w <= v.x + v.w &&
-                      r.y + r.h <= v.y + v.h && r.w > 0 && r.h > 0;
+        // The page's edges add in 64 bits (a box near INT32_MAX would wrap
+        // back inside the view), and whatever is kept is clamped to int32.
+        int64_t x = (int64_t)v.x + b->rect.x - g.sx, y = (int64_t)v.y + b->rect.y - g.sy;
+        bool inside = x >= v.x && y >= v.y && x + b->rect.w <= (int64_t)v.x + v.w &&
+                      y + b->rect.h <= (int64_t)v.y + v.h && b->rect.w > 0 && b->rect.h > 0;
+        os64_gui_rect_t r = {clamp32(x), clamp32(y), b->rect.w, b->rect.h};
         if (!inside) {
             if (!fw->w->hidden)
                 os64_ui_set_hidden(&g.ui, fw->w, true);
@@ -1632,14 +1776,21 @@ static void forms_place(void)
     }
 }
 
-// The page's controls leave with it: interaction first (focus, hover and a
-// press grab must not outlive the widget they name), then each widget's
-// text runs the way libui's own teardown releases them, then the list.
+// The page's controls leave with it: interaction first (a hover or a press
+// grab must not outlive the widget it names, and nor must the focus — which
+// goes to the page view when a page widget held it, and stays where it is
+// when the toolbar did), then each widget's text runs the way libui's own
+// teardown releases them, then the list.
 static void forms_drop(void)
 {
     if (g.fw == NULL)
         return;
-    os64_ui_cancel_interaction(&g.ui);
+    bool page_focus = false;
+    for (int32_t i = 0; i < g.nfw; i++)
+        page_focus |= g.fw[i].w == g.ui.focus;
+    os64_ui_cancel_gestures(&g.ui);
+    if (page_focus)
+        os64_ui_set_focus(&g.ui, &g.view);
     for (int32_t i = 0; i < g.nfw; i++) {
         os64_ui_widget_t *w = g.fw[i].w;
         if (w->cls != NULL && w->cls->destroy != NULL)
@@ -1666,6 +1817,7 @@ static void reaped(os64_work_id_t id, void *job, void *product)
     if (*(const uint32_t *)job == YONDER_JOB_PICTURE) {
         picture_arrived(job, product);
         yonder_picture_release(job, product);
+        pictures_feed(&g.page);
         return;
     }
     if (id == 0 || id != g.nav.id) {
@@ -2226,16 +2378,27 @@ static bool bar_event(const os64_gui_event_t *ev)
     return mine;
 }
 
-// The page's <title>, whitespace collapsed, for the window's name.
+// The page's title — the first `title` element in tree order, wherever the
+// parser left it — whitespace collapsed, for the window's name.
 static void title_of(const os64_html_document_t *doc, char *out, size_t cap)
 {
     out[0] = '\0';
     const os64_html_node_t *t = NULL;
-    for (const os64_html_node_t *n = doc != NULL && doc->head != NULL ? doc->head->first_child
-                                                                        : NULL;
-         n != NULL && t == NULL; n = n->next)
-        if (n->kind == OS64_HTML_ELEMENT && n->tag == OS64_HTML_TAG_TITLE)
+    const os64_html_node_t *n = doc != NULL ? doc->document : NULL;
+    while (n != NULL && t == NULL) {
+        if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML &&
+            n->tag == OS64_HTML_TAG_TITLE) {
             t = n;
+            break;
+        }
+        if (n->first_child != NULL) {
+            n = n->first_child;
+            continue;
+        }
+        while (n != NULL && n->next == NULL)
+            n = n->parent;
+        n = n != NULL ? n->next : NULL;
+    }
     size_t at = 0;
     bool space = false;
     for (const os64_html_node_t *c = t != NULL ? t->first_child : NULL; c != NULL; c = c->next) {
@@ -2259,8 +2422,8 @@ static void title_of(const os64_html_document_t *doc, char *out, size_t cap)
 
 // "<page> - yonder" in the title's capacity, which the boundary refuses to
 // exceed rather than cutting (gui.h): a long page title is shortened with
-// "..." first. Anything past ASCII becomes '?', because the title bar is
-// drawn in the kernel's face, not the page's.
+// "..." first. A character past ASCII becomes one '?', because the title
+// bar is drawn in the kernel's face, not the page's.
 static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
 {
     static const char kTail[] = " - yonder";
@@ -2268,8 +2431,12 @@ static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
     size_t n = os64_strlen(page), at = 0;
     bool cut = n > room;
     size_t keep = cut ? room - 3 : n;
-    for (size_t i = 0; i < keep; i++)
-        out[at++] = (unsigned char)page[i] < 0x80 ? page[i] : '?';
+    for (size_t i = 0; i < keep; i++) {
+        unsigned char ch = (unsigned char)page[i];
+        if (ch >= 0x80 && (ch & 0xC0) == 0x80)
+            continue;           // the rest of a character already marked
+        out[at++] = ch < 0x80 ? (char)ch : '?';
+    }
     if (cut)
         for (int i = 0; i < 3; i++)
             out[at++] = '.';
@@ -2353,7 +2520,9 @@ int main(int argc, char **argv)
     layout();
 
     g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET, g.win, BELL_WORK);
+    g.settle_due = YONDER_NEVER;
     g.ticker = yonder_ticker_start(g.win, BELL_TICK);
+    window_seen();                      // a window born covered learns it now, not at a nudge
     if (g.pool == NULL)
         status_rest("No background workers; pages from the network cannot be fetched.");
     buttons_follow();

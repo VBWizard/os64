@@ -285,10 +285,20 @@ int os64_font_settings_current(os64_font_config_t *out, uint64_t *generation)
     return 0;
 }
 
+/* The session and Workshop own roles. Family lines belong to the startup
+ * file and survive Save through conf's line-preserving merge. */
+static int64_t role_settings_encode(const os64_font_config_t *config, char *out, size_t cap)
+{
+    if (!config) return -1;
+    os64_font_config_t roles = *config;
+    os64_memset(roles.families, 0, sizeof(roles.families));
+    return os64_font_config_encode(&roles, out, cap);
+}
+
 static int64_t font_component(const os64_font_config_t *config, char *out, size_t cap)
 {
     char settings[4096];
-    int64_t n = os64_font_config_encode(config, settings, sizeof(settings));
+    int64_t n = role_settings_encode(config, settings, sizeof(settings));
     if (n < 0) return -1;
     size_t used = 0, start = 0;
     while (start < (size_t)n) {
@@ -359,7 +369,7 @@ static bool saved_fonts_valid(const char *text, size_t length, void *user)
 int os64_font_settings_save(const os64_font_config_t *config, os64_font_config_error_t *error)
 {
     char encoded[4096], target[OS64_FONT_PATH_CAP];
-    int64_t n = os64_font_config_encode(config, encoded, sizeof(encoded));
+    int64_t n = role_settings_encode(config, encoded, sizeof(encoded));
     if (n < 0) return OS64_UI_APPLY_INVALID;
     if (os64_conf_target("fonts.conf", target, sizeof(target)) < 0) return OS64_UI_APPLY_IO;
     os64_font_config_t desired;

@@ -1440,6 +1440,9 @@ static void route_event_locked(const input_event_t *ev)
 			window_t *focus = wm_focused();
 			if (focus && ev->type == INPUT_EVENT_KEY_DOWN) {
 				switch (ev->key.ascii) {
+				case 0x13: // Ctrl+Alt+S: settings, including when chrome is hidden
+					wm_decoration_action(focus,OS64_DECOR_SETTINGS,ev->tick);
+					break;
 				case 0x10: {   // Ctrl+Alt+P: pin on top (toggle)
 					bool was = (focus->flags & GUI_WINDOW_PINNED) != 0;
 					wm_decoration_action(focus,OS64_DECOR_PIN,ev->tick);
