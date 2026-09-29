@@ -317,8 +317,9 @@ struct FSpan {
 struct FLine {
     FLine *next;
     int64_t x, y, w, h, baseline;   // w: the content width it was broken to
-    // Layout stopped while this line was being built: it is kept, empty,
-    // where it would have begun.
+    // Pass 2 stopped inside this line's context, so the line was broken
+    // without the items that would have followed: it is kept, empty, where
+    // it began. (A line pass 3 could not finish never joins its context.)
     bool unfinished;
     FFrag *frags, *last_frag;
     FSpan *spans, *last_span;

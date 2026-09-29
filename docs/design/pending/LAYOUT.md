@@ -149,9 +149,10 @@ rect. Boxes are:
 Plus four facts about the whole: the page height, the page WIDTH (the
 root's overflow width, which exceeds the width passed in exactly when a
 table or an unbreakable word overflowed — the number a horizontal
-scrollbar is sized from), `incomplete` (memory or a run limit stopped it
-partway — what is there is real), and the image and control boxes as
-lists so the face can place widgets and schedule fetches without walking.
+scrollbar is sized from), `incomplete` (memory, the arena budget, the
+depth bound or a run limit stopped it partway — what is there is real),
+and the image and control boxes as lists so the face can place pictures
+and widgets without walking.
 
 ## The three passes
 
@@ -680,11 +681,13 @@ its contract; this is what it offers and why.
   link scrolls to, where a control's widget goes. NULL for a node with
   none (hidden, `display: none`, or past where an incomplete layout
   stopped).
-- **`flow_nimages`/`flow_image`, `flow_ncontrols`/`flow_control`** — the
-  two lists the face schedules from, in tree order, each item once: an
-  image's box (its alt text's first run when it is laid out as text) so the
-  face fetches libpage's resolved src, and a control's atom so the face
-  places a widget on it.
+- **`flow_nimages`/`flow_image`, `flow_ncontrols`/`flow_control`** — where
+  the face PLACES things, in tree order, each item once: an image's box
+  (its alt text's first run when it is laid out as text) for a picture that
+  arrived, and a control's atom for its widget. A picture that takes no
+  space (missing, `alt=""`) has no box and is not listed, so the face
+  FETCHES from libpage's images list, which names every picture the page
+  does whether it has a box yet or not.
 - **`flow_height`, `flow_width`** — the width is the root's overflow
   width: at least the width laid out at, more where something would not
   fit. **`flow_dump`** is the dump above, snprintf-shaped.
@@ -898,8 +901,11 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
   geometry under an unfinished line, are not compared. Beside the four,
   a partial page is as tall as the blocks it holds, so what did lay out
   can be scrolled to. What makes it all hold: pass 2
-  marks the box it was filling when memory ran out and every box above
-  it; a line cut short is kept EMPTY where it would have begun; a table
+  marks the box it was filling when it stopped and every box above it;
+  the last line of a context pass 2 cut short is kept EMPTY where it
+  began, since it was broken without what would have followed, and a
+  line pass 3 could not finish is dropped, since a line joins its
+  context only whole; a table
   cut short in either pass keeps its place with no rows, because its
   columns would come from only the cells it has and no line in it would
   break where the whole table's does; an interrupted block holds what was

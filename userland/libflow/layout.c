@@ -1251,14 +1251,10 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         // Pieces still open run to the line's end and carry on.
         for (size_t k = 0; k < open.n && !l->failed; k++)
             span_add(l, line, open.v[k], open_x[k], pen);
-        if (l->failed) {
-            // Half a line is not a line: kept where it would have begun,
-            // with nothing on it, so what IS on the page is real.
-            line->frags = line->last_frag = NULL;
-            line->spans = line->last_span = NULL;
-            line->unfinished = true;
+        // A line only joins its context whole (above): one pass 3 could
+        // not finish is dropped.
+        if (l->failed)
             break;
-        }
 
         // No-quirks: every inline box on the line holds its own font's box
         // open, empty or not, on a line that is not itself empty (in quirks

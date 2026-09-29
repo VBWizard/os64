@@ -288,7 +288,10 @@ struct flow_box {
     const char *text;
     uint32_t length;
     // TEXT: where those bytes are in the node's processed text — what a
-    // selection maps a pixel back through.
+    // selection maps a pixel back through — when the node is a TEXT node.
+    // Under an ELEMENT they are text the page never wrote there (a `q`'s
+    // marks, an `rt`'s parentheses, a picture's alt), and `begin` indexes
+    // nothing of the node's.
     uint32_t begin;
     uint8_t decoration;             // TEXT: FLOW_DECORATION_* drawn across it
     // TEXT: each drawn decoration's colour, the colour of the element that
@@ -324,12 +327,13 @@ bool flow_incomplete(const flow_tree_t *tree);
 // The root box: the html element's. NULL for a page with nothing to lay out.
 const flow_box_t *flow_root(const flow_tree_t *tree);
 
-// Every box that meets `viewport`, in painting order (CSS 2.1 Appendix E
-// without z-index or positioning): the block-level boxes first — their
-// backgrounds and borders — then the inline content, spans before the
-// text they sit behind; an atom's own content where the atom is. Pruned
-// on OVERFLOW rects: a subtree off the viewport costs one test, and a box
-// that meets it costs a test for each of its children, lines included.
+// Every box that meets `viewport` but the LINE boxes, which paint nothing of
+// their own (flow_hit can still answer one), in painting order (CSS 2.1
+// Appendix E without z-index or positioning): the block-level boxes first —
+// their backgrounds and borders — then the inline content, spans before the
+// text they sit behind; an atom's own content where the atom is. Pruned on
+// OVERFLOW rects: a subtree off the viewport costs one test, and a box that
+// meets it costs a test for each of its children, lines included.
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 
@@ -343,10 +347,12 @@ const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y);
 // where an incomplete layout stopped).
 const flow_box_t *flow_box_for(const flow_tree_t *tree, const os64_html_node_t *node);
 
-// The pictures and the controls, in tree order, each once: an image's box
-// (its alt text's first run when it is laid out as text) so the face can
-// fetch libpage's resolved src, and a control's atom so the face can place
-// a widget on it.
+// The pictures and the controls that have a box, in tree order, each once:
+// PLACEMENT — where a picture that arrived is drawn (its box, or its alt
+// text's first run when it is laid out as text), where a control's widget
+// goes. A picture that takes no space (a missing one with `alt=""`) has no
+// box and is not here, so what to FETCH is libpage's list
+// (os64_page_image), which names every picture the page does.
 int32_t flow_nimages(const flow_tree_t *tree);
 const flow_box_t *flow_image(const flow_tree_t *tree, int32_t i);
 int32_t flow_ncontrols(const flow_tree_t *tree);
