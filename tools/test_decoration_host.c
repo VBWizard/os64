@@ -156,6 +156,7 @@ static void symbol_colors(const void *bytes,size_t length)
     frame_draft_t draft={0};frame_preset(&draft,0);draft.font.size=24;
     strcpy(draft.font.face[0],"/missing/source.ttf");
     os64_decor_header_t *h=&draft.style;
+    h->button_count=4;h->buttons[4]=(os64_decor_button_t){0};
     const uint32_t fills[]={0xffff4040,0xffffcc22,0xff22dd55,0xff203b59};
     for(unsigned i=0;i<4;++i)h->buttons[i]=(os64_decor_button_t){i+1,i==3?0:1,OS64_DECOR_ROUND,fills[i]};
     uint32_t painted[400*180],inherited[400*180],split[400*180],background[400*180];
@@ -170,7 +171,7 @@ static void symbol_colors(const void *bytes,size_t length)
         void *base;size_t base_size;os64_decor_view_t base_view;
         assert(os64_decor_restyle(bytes,length,h,&base,&base_size)==OS64_FONT_OK);
         assert(os64_decor_validate(base,base_size,&base_view));
-        for(unsigned version=4;version<=5;++version){
+        for(unsigned version=4;version<=6;++version){
             if(version==4 && fill!=0 && fill!=3)continue;
             size_t old_size;void *old=legacy_bundle(base,base_size,version,&old_size);
             os64_decor_view_t old_view;assert(os64_decor_validate(old,old_size,&old_view));
@@ -242,6 +243,29 @@ static void symbol_colors(const void *bytes,size_t length)
     puts("symbol colors: PASS per-action active/inactive ink, inherited V4/V5 pixel parity and migration, housing isolation, disabled backgrounds, split damage, hits, save/load, allocation refusal");
 }
 
+static void settings_symbol(const void *bytes,size_t length)
+{
+    os64_decor_header_t h;os64_decor_defaults(&h);
+    h.button_count=1;memset(h.buttons,0,sizeof(h.buttons));
+    h.buttons[0]=(os64_decor_button_t){OS64_DECOR_SETTINGS,0,OS64_DECOR_ROUND,0xff204060};
+    h.symbols[4]=(os64_decor_symbol_t){0xffff8040,0xff80ff40};
+    void *bundle;size_t size;os64_decor_view_t v;
+    assert(os64_decor_restyle(bytes,length,&h,&bundle,&size)==OS64_FONT_OK);
+    assert(os64_decor_validate(bundle,size,&v));
+    uint32_t pixels[400*180];os64_decor_surface_t surface={pixels,400,180,400};
+    os64_decor_layout_t layout;assert(os64_decor_layout(v.header,400,180,true,&layout));
+    for(unsigned active=0;active<2;++active){
+        memset(pixels,0,sizeof(pixels));
+        assert(os64_decor_paint(&v,&surface,(os64_decor_rect_t){0,0,400,180},
+            (os64_decor_rect_t){0,0,400,180},true,active,false,"Title",5,false,NULL));
+        os64_decor_rect_t r=layout.buttons[0];
+        assert(pixels[(r.y+r.h/2)*400+r.x+r.w/2]==(active?h.symbols[4].active:h.symbols[4].inactive));
+    }
+    size_t old_size;void *old=legacy_bundle(bundle,size,6,&old_size);
+    assert(!os64_decor_validate(old,old_size,&v)); // Settings requires V7.
+    os64_free(old);os64_free(bundle);
+}
+
 static void exercise(const os64_font_role_view_t *role)
 {
     os64_decor_header_t style;
@@ -254,6 +278,7 @@ static void exercise(const os64_font_role_view_t *role)
     two_colors(bytes,length);
     button_colors(bytes,length);
     symbol_colors(bytes,length);
+    settings_symbol(bytes,length);
     frame_draft_t saved={.style=style};saved.font.size=24;
     strcpy(saved.font.face[0],"/missing/source.ttf");
     test_frame_storage(&saved,bytes,length);
@@ -431,8 +456,25 @@ static void fingerprint_status(void)
     assert(!os64_decor_status_read(text,n,&out));
     puts("decoration fingerprint: PASS FNV vectors, status bounds, legacy framing, truncation and invalid fields");
 }
+static void settings_filter(void)
+{
+    os64_decor_header_t h;os64_decor_defaults(&h);
+    h.button_count=4;h.buttons[3]=(os64_decor_button_t){OS64_DECOR_SETTINGS,0,OS64_DECOR_ROUND,0xff408060};
+    os64_decor_header_t hidden,shown;
+    os64_decor_filter(&h,false,&hidden);os64_decor_filter(&h,true,&shown);
+    assert(hidden.button_count==3 && shown.button_count==4);
+    assert(os64_decor_min_width(&shown)>os64_decor_min_width(&hidden));
+    os64_decor_layout_t l;
+    assert(os64_decor_layout(&shown,600,400,true,&l));
+    assert(os64_decor_hit(&shown,&l,l.buttons[3].x,l.buttons[3].y)==OS64_DECOR_SETTINGS);
+    h.buttons[2]=(os64_decor_button_t){OS64_DECOR_SPACER,0,OS64_DECOR_BARE,0};
+    os64_decor_filter(&h,false,&hidden);
+    assert(hidden.button_count==3 && hidden.buttons[2].action==OS64_DECOR_SPACER);
+}
+
 int main(void)
 {
+    settings_filter();
     fingerprint_status();
     controls();
     frame_draft_t draft={0},copy={0};

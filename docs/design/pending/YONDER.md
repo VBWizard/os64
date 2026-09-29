@@ -126,8 +126,9 @@ long the last layout took, because that number is the one to watch.
 one that declares no `<meta charset>` is windows-1252 by the standard's
 default — which turned Hacker News's UTF-8 dashes into `â€“`. Bytes that
 are valid UTF-8 and not plain ASCII are read as UTF-8, the file detector
-browsers use; a `<meta>` loses to it only where the bytes already
-contradict the `<meta>`.
+browsers use. The answer goes to libhtml as the transport's label, which
+outranks the page's own, so when the detector fires a `<meta>` is not read
+at all: a page that declares windows-1252 and is UTF-8 is read as UTF-8.
 
 **The window is named `<title> - yonder`**, fitted to the title's 31
 bytes (the boundary refuses a longer one rather than cutting it) with an
@@ -138,9 +139,11 @@ before the window exists; one opened later leaves the name as it was
 
 **Fonts.** Every page view shares ONE text context of its own, apart from
 libui's chrome context, with a cache of opened faces on it keyed by
-(family, bold, italic, size) — LAYOUT.md's arrangement. Until packet 04
-lands, the resolver is `flowdump`'s: DejaVu Sans, or DejaVu Sans Mono for
-the monospace generic, at the asked size. Serif, bold and italic are drawn
+(monospace or not, size): until packet 04 lands, the resolver is
+`flowdump`'s, DejaVu Sans, or DejaVu Sans Mono for the monospace generic,
+at the asked size, and at most 64 of them (a 65th size stops the layout,
+incomplete). Packet 04's family cache, keyed by family, bold, italic and
+size as LAYOUT.md arranges, replaces it. Serif, bold and italic are drawn
 as the regular face until then, and packet 04's `os64_font_family_open`
 replaces the resolver without the view noticing.
 
@@ -454,22 +457,41 @@ rather than by what the server claims. The product is the decoded image,
 0xAARRGGBB; the job's input and product are released by the pool if the
 page is left first. The DECLARED RESERVE is honest to the decoders'
 defaults: 20 MiB of body and 128 MiB of decoding (libjpeg's memory cap,
-which also bounds PNG's 16-megapixel raster and its inflate buffer), and
-the pool's budget grows to 768 MiB so a page and four pictures — one per
-worker — run at once. A picture over the decoders' caps is refused by them
-and drawn as its placeholder.
+which also bounds PNG: its 16-megapixel raster is 64 MiB, and it inflates
+through a 32 KiB window straight into it), and the pool's budget grows to
+768 MiB so a page and three pictures run at once. A picture over the
+decoders' caps is refused by them and drawn as its placeholder.
+
+**Three at a time, and yonder holds the rest.** The pool admits work in
+the order it was given, so a page's forty pictures handed over at once
+would put a person's next click forty-first in line — and past the pool's
+table, the rest refused for good. So yonder keeps the page's pictures
+itself and hands the pool the next as each comes back, never more than one
+fewer than the pool has workers: a navigation finds a worker free once
+whatever was cancelled before it — a page left behind's pictures, a
+navigation it replaced — has seen its cancel and let the worker go.
+Leaving a page cancels the few in the pool and forgets the rest.
 
 **The size is the layout's question, the pixels the painter's.** libflow
 asks the face for a picture's intrinsic size (`replaced_size`); yonder
 answers from the pictures that have arrived, and "unknown" for the rest —
-libflow then lays out the alt text, or the box the width and height
-attributes give. When a picture arrives whose element lacks either
-attribute, the page is laid out AGAIN (keeping the reader's place, as a
-resize does), because its size may move everything below it. Relayouts are
-coalesced: at most one per drained batch of doorbells, and while pictures
-are still arriving, at most one a second — the last arrival always lays
-out, so the page settles at its true shape. A picture whose element has
-both attributes needs no relayout at all; the old web wrote them on most.
+libflow then lays out the alt text, or the box the width and height give.
+When a picture arrives whose box the page did not fix — libflow's rule,
+`flow_replaced_fixed`, asked of the element's box, since a `width="auto"`
+is written but fixes nothing — the page is laid out AGAIN (keeping the
+reader's place, as a resize does), because its size may move everything
+below it. Relayouts are coalesced: at most one per drained batch of
+doorbells. On a page whose layout takes more than 100 ms, a batch lays it
+out again only when its last picture is in, or when the last layout is two
+seconds old and twice its own cost — so laying out takes at most a third
+of the time while pictures trickle in. That clock is READ at a batch,
+never waited on: a slow page whose pictures have stopped arriving stays
+mis-laid until the first event after its layout goes stale, or until the
+last picture arrives or gives up — and a picture from a server that
+trickles a byte at a time can take as long as the server likes, since
+libfetch's patience is 30 s of silence. The deadline that needs neither is
+booked below. A picture whose box is fixed needs no relayout at all; the
+old web wrote both attributes on most.
 
 **Drawing.** The painter's `image` verb draws the picture into its box's
 content rectangle, SCALED nearest-neighbour when the box and the picture
@@ -513,6 +535,7 @@ pictures, the next page's count untouched by the late arrivals.
 | POST and cookies, logging in | packet 05 | 05 merged |
 | A multi-line textarea, a drop-down select, several choices in a multiple select, a file chooser | each is a widget libui does not have yet (a multi-line field sized to its box, a popup list, a multiple-selection list, a file dialog) | the first form that needs one |
 | Back and Forward to the reply to a form | the history holds addresses, so going back to a POST's reply fetches its address, which a server may answer with something else; Chrome shows a "resubmit?" page there | a page where going back to a reply matters |
+| A slow page's picture relayout, on time | the window's loop has no clock to wait on; a slow page settles at the person's first event once its layout is stale, or at its last picture (§ Y5) | Y5b's ticker: the settle deadline rides it |
 | Animated GIFs | libimage decodes sequences (GIF_ANIMATION.md); a page view that repaints on a timer is a new loop for the window | the first page whose animation is the point |
 | SVG pictures | libimage decodes raster formats; SVG is a vector language with a renderer of its own | the modern web's logos, which are mostly SVG |
 | `data:` pictures, and `background=` | a data: address needs no fetch but a decoder of its own; a background image is a fill the painter does not tile yet | a page that needs one |

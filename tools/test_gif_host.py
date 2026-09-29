@@ -159,7 +159,16 @@ def fixtures(work):
     save('bad-gce-terminator', gif(2, 2, extensions=b'!\xf9\x04\0\0\0\0\x01'), early_malformed)
     gce = b'!\xf9\x04\x01\0\0\0\0'
     save('duplicate-gce', gif(2, 2, transparent=0, extensions=gce), early_malformed)
-    save('dangling-gce', base[:-1]+gce+b';', early_malformed)
+    # Some encoders leave an unused control before their final comment/trailer.
+    # It must not change the preceding raster's transparency or other settings.
+    trailing_control = b'!\xf9\x04\x0d\x7b\0\0\0'
+    for suffix in (b'', b'!\xfe'+blocks(b'encoder comment')):
+        name = 'trailing-gce-comment' if suffix else 'trailing-gce'
+        data = base[:-1]+trailing_control+suffix+b';'
+        save(name, data, first_ref)
+        save(name+'-junk', data+b'junk', early_malformed)
+        save(name+'-no-raster', base[:25]+trailing_control+suffix+b';', early_malformed)
+    save('trailing-gce-bad-terminator', base[:-1]+trailing_control[:-1]+b'\x01;', early_malformed)
     save('comment-keeps-gce', gif(2, 2, transparent=0, extensions=b'!\xfe'+blocks(b'hi')))
     save('trailing-data', base+b'junk', early_malformed)
     save('missing-trailer', base[:-1], early_malformed)
@@ -176,7 +185,8 @@ def fixtures(work):
 
 
 def guest_vectors(work, destination):
-    names = ['d2-iFalse-lFalse-tNone', 'd2-iTrue-lTrue-t0', 'offset-1', 'kwkwk']
+    names = ['d2-iFalse-lFalse-tNone', 'd2-iTrue-lTrue-t0', 'offset-1', 'kwkwk',
+             'trailing-gce-comment']
     lines = ['// Generated from tools/test_gif_host.py fixtures; expected pixels checked with Pillow.']
     for i, name in enumerate(names):
         for extension, kind in [('gif', 'data'), ('ref', 'pixels')]:

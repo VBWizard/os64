@@ -27,6 +27,7 @@ typedef struct {
     // than the build does.
     const FBox *markers[F_DEPTH_MAX];
     int32_t nmarkers;
+    size_t scratch;     // the working memory live now (Scratch, below)
 } L;
 
 // The flow of one block formatting context: where the next box goes, the
@@ -107,11 +108,83 @@ static void *alloc(L *l, size_t size)
 {
     if (l->failed)
         return NULL;
+    if (l->scratch > l->out->arena.cap || size > l->out->arena.cap - l->scratch) {
+        fail(l);
+        return NULL;
+    }
+    l->out->arena.cap -= l->scratch;
     void *p = f_arena_alloc(&l->out->arena, size);
+    l->out->arena.cap += l->scratch;
     if (p == NULL)
         fail(l);
     return p;
 }
+
+// ── Scratch ─────────────────────────────────────────────────────────────
+//
+// A table's working memory — its columns, holds, spans and rows, freed
+// when it is placed — charged to the same budget as the arena
+// (flow_env_t.max_arena_bytes). Nesting keeps a chain of it live at once,
+// a cell laying out the next table while its own table's columns wait, and
+// columns can be DECLARED: ten `<col span=1000>`s a level are ten thousand
+// columns in a few bytes. So a page can multiply it by its depth. Each
+// block carries its size, so a free gives its bytes back. A formatting
+// context's segments are not charged: they are its own words, one each,
+// and nested contexts hold disjoint content, so no chain of them can
+// outgrow the page.
+typedef struct {
+    size_t bytes;
+    _Alignas(16) unsigned char data[];
+} Scratch;
+
+static Scratch *scratch_of(void *p)
+{
+    return p != NULL ? (Scratch *)((unsigned char *)p - offsetof(Scratch, data)) : NULL;
+}
+
+static void *scratch_realloc(L *l, void *p, size_t bytes)
+{
+    Scratch *old = scratch_of(p);
+    size_t had = old != NULL ? old->bytes : 0;
+    size_t cap = l->out->arena.cap, used = l->out->arena.reserved + l->scratch - had;
+    if (l->failed || bytes > SIZE_MAX - sizeof(Scratch) || used > cap || bytes > cap - used) {
+        fail(l);
+        return NULL;
+    }
+    Scratch *b = os64_realloc(old, sizeof(Scratch) + bytes);
+    if (b == NULL) {
+        fail(l);
+        return NULL;
+    }
+    b->bytes = bytes;
+    l->scratch = l->scratch - had + bytes;
+    if (l->scratch > l->out->scratch_peak)
+        l->out->scratch_peak = l->scratch;
+    return b->data;
+}
+
+static void *scratch_calloc(L *l, size_t count, size_t size)
+{
+    if (size != 0 && count > SIZE_MAX / size) {
+        fail(l);
+        return NULL;
+    }
+    void *p = scratch_realloc(l, NULL, count * size);
+    if (p != NULL)
+        os64_memset(p, 0, count * size);
+    return p;
+}
+
+static void scratch_free(L *l, void *p)
+{
+    Scratch *b = scratch_of(p);
+    if (b == NULL)
+        return;
+    l->scratch -= b->bytes;
+    os64_free(b);
+}
+
+
 
 // ── Fonts and runs ──────────────────────────────────────────────────────
 
@@ -229,12 +302,27 @@ typedef struct {
 // text inline when it has one, nothing when its alt is empty, a small
 // icon when it has none — and a sensible box for anything else: a frame's
 // 300x150, a control ten ems wide and one line of its own font high.
+static bool width_given(const flow_style_t *s)
+{
+    return s->width.kind != FLOW_LENGTH_AUTO;
+}
+
+static bool height_given(const flow_style_t *s)
+{
+    return s->height.kind == FLOW_LENGTH_PX;
+}
+
+bool flow_replaced_fixed(const flow_style_t *style)
+{
+    return style != NULL && width_given(style) && height_given(style);
+}
+
 static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_style_t *s,
                               int64_t cbw)
 {
     Replaced r = {0, 0, false, false};
-    bool w_set = s->width.kind != FLOW_LENGTH_AUTO;
-    bool h_set = s->height.kind == FLOW_LENGTH_PX;
+    bool w_set = width_given(s);
+    bool h_set = height_given(s);
     int64_t w = max64(0, len(s->width, cbw)), h = h_set ? max64(0, hold_len(s->height.value)) : 0;
     int32_t iw = 0, ih = 0;
     bool known = l->env->replaced_size != NULL &&
@@ -658,10 +746,13 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             break;
         }
         case FI_WBR: {
+            // A break opportunity where its own white-space allows one: a
+            // wbr inside `nobr` is `normal` (pass 1), one in a nowrap or
+            // pre run is not.
             Seg *g = seg_add(l, s, SG_WBR);
             if (g != NULL) {
                 g->item = it;
-                g->wrap_after = true;
+                g->wrap_after = wraps(it->style->white_space);
             }
             break;
         }
@@ -1175,14 +1266,10 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         // Pieces still open run to the line's end and carry on.
         for (size_t k = 0; k < open.n && !l->failed; k++)
             span_add(l, line, open.v[k], open_x[k], pen);
-        if (l->failed) {
-            // Half a line is not a line: kept where it would have begun,
-            // with nothing on it, so what IS on the page is real.
-            line->frags = line->last_frag = NULL;
-            line->spans = line->last_span = NULL;
-            line->unfinished = true;
+        // A line only joins its context whole (above): one pass 3 could
+        // not finish is dropped.
+        if (l->failed)
             break;
-        }
 
         // No-quirks: every inline box on the line holds its own font's box
         // open, empty or not, on a line that is not itself empty (in quirks
@@ -1866,7 +1953,7 @@ static bool hold_room(L *l, Grid *g, int32_t k)
     int32_t n = g->hold_leaves > 0 ? g->hold_leaves : 16;
     while (n <= k)
         n *= 2;
-    int64_t *t = os64_calloc(2 * (size_t)n, sizeof(int64_t));
+    int64_t *t = scratch_calloc(l, 2 * (size_t)n, sizeof(int64_t));
     if (t == NULL) {
         fail(l);
         return false;
@@ -1875,7 +1962,7 @@ static bool hold_room(L *l, Grid *g, int32_t k)
         t[n + j] = g->holds[g->hold_leaves + j];
     for (int32_t at = n - 1; at >= 1; at--)
         t[at] = t[2 * at] < t[2 * at + 1] ? t[2 * at] : t[2 * at + 1];
-    os64_free(g->holds);
+    scratch_free(l, g->holds);
     g->holds = t;
     g->hold_leaves = n;
     return true;
@@ -1904,7 +1991,7 @@ static bool grow(L *l, void **v, int32_t *cap, int32_t want, size_t size)
     int32_t cap2 = *cap != 0 ? *cap : 16;
     while (cap2 < want)
         cap2 *= 2;
-    void *p = os64_realloc(*v, (size_t)cap2 * size);
+    void *p = scratch_realloc(l, *v, (size_t)cap2 * size);
     if (p == NULL) {
         fail(l);
         return false;
@@ -2017,11 +2104,11 @@ static bool grid_build(L *l, FBox *t, Grid *g)
     return !l->failed;
 }
 
-static void grid_free(Grid *g)
+static void grid_free(L *l, Grid *g)
 {
-    os64_free(g->rows);
-    os64_free(g->cells);
-    os64_free(g->holds);
+    scratch_free(l, g->rows);
+    scratch_free(l, g->cells);
+    scratch_free(l, g->holds);
 }
 
 // ── Columns ─────────────────────────────────────────────────────────────
@@ -2105,7 +2192,7 @@ static void spread_pct(Col *cols, int32_t c, int32_t n, int64_t pct)
 // first, then spanning cells, narrowest span first.
 static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
 {
-    Col *cols = os64_calloc((size_t)(g->ncols > 0 ? g->ncols : 1), sizeof(Col));
+    Col *cols = scratch_calloc(l, (size_t)(g->ncols > 0 ? g->ncols : 1), sizeof(Col));
     if (cols == NULL) {
         fail(l);
         return NULL;
@@ -2162,7 +2249,7 @@ static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
                 col->pct = max64(col->pct, s->width.value);
         } else {
             if (spanning == NULL) {
-                spanning = os64_malloc((size_t)g->ncells * sizeof(GCell));
+                spanning = scratch_realloc(l, NULL, (size_t)g->ncells * sizeof(GCell));
                 if (spanning == NULL) {
                     fail(l);
                     break;
@@ -2184,8 +2271,8 @@ static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
     int32_t widest = 0;
     for (int32_t i = 0; i < nspanning; i++)
         widest = spanning[i].cols > widest ? spanning[i].cols : widest;
-    int32_t *starts = nspanning > 0 ? os64_calloc((size_t)widest + 2, sizeof(int32_t)) : NULL;
-    GCell *ordered = nspanning > 0 ? os64_malloc((size_t)nspanning * sizeof(GCell)) : NULL;
+    int32_t *starts = nspanning > 0 ? scratch_calloc(l, (size_t)widest + 2, sizeof(int32_t)) : NULL;
+    GCell *ordered = nspanning > 0 ? scratch_realloc(l, NULL, (size_t)nspanning * sizeof(GCell)) : NULL;
     if (nspanning > 0 && (starts == NULL || ordered == NULL))
         fail(l);
     if (ordered != NULL && starts != NULL) {
@@ -2209,9 +2296,9 @@ static Col *columns_of(L *l, FBox *t, Grid *g, int64_t hsp)
         if (s->width.kind == FLOW_LENGTH_PERCENT)
             spread_pct(cols, gc->col, gc->cols, s->width.value);
     }
-    os64_free(starts);
-    os64_free(ordered);
-    os64_free(spanning);
+    scratch_free(l, starts);
+    scratch_free(l, ordered);
+    scratch_free(l, spanning);
     return cols;
 }
 
@@ -2232,7 +2319,7 @@ static Intr table_intrinsic(L *l, FBox *t)
     Intr r = {0, 0};
     Grid g;
     if (!grid_build(l, t, &g)) {
-        grid_free(&g);
+        grid_free(l, &g);
         return r;
     }
     int64_t hsp = spacing_h(t);
@@ -2253,8 +2340,8 @@ static Intr table_intrinsic(L *l, FBox *t)
                 r.max = max64(r.max, ci.min);
             }
     }
-    os64_free(cols);
-    grid_free(&g);
+    scratch_free(l, cols);
+    grid_free(l, &g);
     return r;
 }
 
@@ -2471,7 +2558,8 @@ static bool table_is_empty(const FBox *t)
 
 // The table: its width and its columns', its captions, its rows and their
 // cells, placed in its containing block like any block. One whose build or
-// layout ran out of memory partway keeps its place, empty: its columns
+// layout stopped partway (memory, the budget, the depth) keeps its place,
+// empty: its columns
 // would come from only the cells it has, so no line in it breaks where the
 // whole table's would, and none of it is real yet.
 static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw, Cursor *cur)
@@ -2558,8 +2646,8 @@ static int64_t rowsums_sum(const RowSums *s, int32_t r0, int32_t r1)
 static bool rowsums_init(L *l, RowSums *s, const int64_t *rh, int32_t n)
 {
     s->n = n + 1;
-    s->a = os64_calloc((size_t)n + 2, sizeof(uint64_t));
-    s->b = os64_calloc((size_t)n + 2, sizeof(uint64_t));
+    s->a = scratch_calloc(l, (size_t)n + 2, sizeof(uint64_t));
+    s->b = scratch_calloc(l, (size_t)n + 2, sizeof(uint64_t));
     if (s->a == NULL || s->b == NULL) {
         fail(l);
         return false;
@@ -2576,12 +2664,12 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
     int64_t hsp = spacing_h(t), vsp = spacing_v(t);
     Grid g;
     if (!grid_build(l, t, &g)) {
-        grid_free(&g);
+        grid_free(l, &g);
         return;
     }
     Col *cols = columns_of(l, t, &g, hsp);
     if (cols == NULL) {
-        grid_free(&g);
+        grid_free(l, &g);
         return;
     }
     Intr sums = grid_sums(cols, g.ncols, hsp);
@@ -2626,14 +2714,14 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
 
     // Each cell once, at its width; rows as tall as their tallest
     // one-row cell; a spanning cell's excess spread evenly over its rows.
-    int64_t *rh = os64_calloc((size_t)(g.nrows > 0 ? g.nrows : 1), sizeof(int64_t));
-    int64_t *ry = os64_calloc((size_t)(g.nrows > 0 ? g.nrows : 1), sizeof(int64_t));
+    int64_t *rh = scratch_calloc(l, (size_t)(g.nrows > 0 ? g.nrows : 1), sizeof(int64_t));
+    int64_t *ry = scratch_calloc(l, (size_t)(g.nrows > 0 ? g.nrows : 1), sizeof(int64_t));
     if (rh == NULL || ry == NULL) {
         fail(l);
-        os64_free(rh);
-        os64_free(ry);
-        os64_free(cols);
-        grid_free(&g);
+        scratch_free(l, rh);
+        scratch_free(l, ry);
+        scratch_free(l, cols);
+        grid_free(l, &g);
         return;
     }
     int64_t inner_w = used - frame;
@@ -2645,9 +2733,9 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
     // tall as its baseline cells need: the most any has above the shared
     // baseline plus the most any has below it (§17.5.3) — sized before the
     // cells are moved, so a moved cell never reaches into the next row.
-    int64_t *base = os64_calloc((size_t)(g.ncells > 0 ? g.ncells : 1), sizeof(int64_t));
-    int64_t *row_base = os64_calloc((size_t)(g.nrows > 0 ? g.nrows : 1), sizeof(int64_t));
-    int64_t *below = os64_calloc((size_t)(g.nrows > 0 ? g.nrows : 1), sizeof(int64_t));
+    int64_t *base = scratch_calloc(l, (size_t)(g.ncells > 0 ? g.ncells : 1), sizeof(int64_t));
+    int64_t *row_base = scratch_calloc(l, (size_t)(g.nrows > 0 ? g.nrows : 1), sizeof(int64_t));
+    int64_t *below = scratch_calloc(l, (size_t)(g.nrows > 0 ? g.nrows : 1), sizeof(int64_t));
     if (base == NULL || row_base == NULL || below == NULL)
         fail(l);
     for (int32_t i = 0; i < g.ncells && !l->failed; i++) {
@@ -2701,8 +2789,8 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
     if (spanning && !l->failed)
         for (int32_t r = 0; r < g.nrows; r++)
             rh[r] = rowsums_sum(&rs, r, r);
-    os64_free(rs.a);
-    os64_free(rs.b);
+    scratch_free(l, rs.a);
+    scratch_free(l, rs.b);
     // A row group's set height is its rows' least together: what they lack
     // of it goes to them in proportion to their heights, else evenly, the
     // rule a set table height follows.
@@ -2803,9 +2891,9 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
             g.rows[r].box->has_baseline = true;
             g.rows[r].box->baseline = ry[r] + rh[r];
         }
-    os64_free(base);
-    os64_free(row_base);
-    os64_free(below);
+    scratch_free(l, base);
+    scratch_free(l, row_base);
+    scratch_free(l, below);
 
     // Rows, row groups and columns: the rectangles their cells make.
     int64_t row_x = gx + hsp, row_w = 0;
@@ -2883,10 +2971,10 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
     cur->y = cc.y + cc.pm;
     cur->pm = mb;
 
-    os64_free(rh);
-    os64_free(ry);
-    os64_free(cols);
-    grid_free(&g);
+    scratch_free(l, rh);
+    scratch_free(l, ry);
+    scratch_free(l, cols);
+    grid_free(l, &g);
 }
 
 // ── The layout ──────────────────────────────────────────────────────────
@@ -2936,6 +3024,7 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     if (out == NULL)
         return NULL;
     out->env = env;
+    out->arena.cap = f_arena_budget(env);
     out->quirks = doc != NULL ? doc->quirks : OS64_HTML_NO_QUIRKS;
     out->model = model;
     out->boxes = boxes;
@@ -2943,8 +3032,8 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     // stopped short of is a prefix however well it lays out.
     out->incomplete = boxes->incomplete || (doc != NULL && doc->refusal != 0) ||
                       (model != NULL && os64_page_incomplete(model));
-    L l = {out, env, model, out->quirks == OS64_HTML_QUIRKS,
-           out->quirks != OS64_HTML_NO_QUIRKS, false, {NULL}, 0};
+    L l = {.out = out, .env = env, .model = model, .quirks = out->quirks == OS64_HTML_QUIRKS,
+           .any_quirks = out->quirks != OS64_HTML_NO_QUIRKS};
     int64_t w = (int64_t)width * 64;
     out->width = w;
     if (boxes->root != NULL) {

@@ -127,9 +127,9 @@ static uint64_t get_heap_value(uint64_t pid)
             break;
     }
 
-    // Close BEFORE returning: this runs once per task per refresh, and with
-    // TASK_MAX_HANDLES at 16 a leaked handle here starves top's entire scan
-    // (read_task_status's open fails → every row vanishes) within one screen.
+    // Close BEFORE returning: this runs once per task per refresh, so a
+    // leaked handle here fills the table within a few screens and starves
+    // top's entire scan (read_task_status's open fails → every row vanishes).
     os64_close(h);
 
     return mappedValue - virginValue;

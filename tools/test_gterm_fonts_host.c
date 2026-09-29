@@ -116,8 +116,41 @@ static void selection(void)
     os64_gui_rect_t cursor=gterm_grid_cell_rect(&gGrid,3,2);
     CHECK(cursor.x==f->cell_width_px*2 && cursor.y==f->row_height_px*3 && cursor.w==f->cell_width_px && cursor.h==f->row_height_px);
 }
+static void history_controls(void)
+{
+    uint32_t n=17;
+    CHECK(gterm_history_parse("0",&n) && n==0);
+    CHECK(gterm_history_parse("10000",&n) && n==10000);
+    CHECK(!gterm_history_parse("10001",&n) && n==10000);
+    CHECK(!gterm_history_parse("99999999999999999999999",&n));
+    CHECK(!gterm_history_parse("-1",&n) && !gterm_history_parse("20x",&n));
+    CHECK(!gterm_history_parse("",&n));
+    CHECK(os64_streq(gterm_history_error(OS64_PTY_ERR_HISTORY_BUDGET),"History budget full; try fewer lines."));
+    CHECK(os64_streq(gterm_history_error(OS64_PTY_ERR_NO_MEMORY),"Not enough memory; try fewer lines."));
+    CHECK(os64_streq(gterm_history_error(OS64_PTY_ERR_BUSY),"Terminal changed during Apply; try again."));
+    CHECK(!os64_streq(gterm_history_error(-1),gterm_history_error(OS64_PTY_ERR_HISTORY_BUDGET)));
+    CHECK(os64_streq(gterm_history_error(-99),"Could not change the scrollback limit."));
+    gSnapshotValid=true;gHdr.rows=10;
+    gView=(os64_pty_viewport_t){.oldest_line=100,.live_line=130,.first_line=130,.history_lines=30};
+    for(unsigned hid=0;hid<2;++hid){
+        gFirst=OS64_PTY_VIEW_LIVE;
+        os64_gui_event_t e={.type=OS64_GUI_EVENT_KEY_DOWN,
+            .key={.scancode=hid?0x4b:0x49,.modifiers=OS64_GUI_MOD_SHIFT|(hid?OS64_GUI_MOD_HID:0)}};
+        const char *seq="\033[5~";
+        for(unsigned j=0;seq[j];++j){e.key.ascii=seq[j];CHECK(scroll_key(&e));CHECK(gFirst==121);}
+        e.key.scancode=hid?0x4e:0x51;seq="\033[6~";
+        for(unsigned j=0;seq[j];++j){e.key.ascii=seq[j];CHECK(scroll_key(&e));CHECK(gFirst==OS64_PTY_VIEW_LIVE);}
+        e.key.modifiers&=~OS64_GUI_MOD_SHIFT;CHECK(!scroll_key(&e));
+    }
+    scroll_by(-3);scroll_by(-3);scroll_by(-3);CHECK(gFirst==121);
+    scroll_by(3);scroll_by(3);CHECK(gFirst==127);
+    gView.first_line=100;scroll_by(-200);CHECK(gFirst==100);
+    scroll_by(200);CHECK(gFirst==OS64_PTY_VIEW_LIVE);
+}
+
 int main(int argc,char **argv)
 {
+    history_controls();
     CHECK(argc==3);geometry();
     os64_text_options_t options={.memory={NULL,allocate,release}};
     CHECK(os64_font_context_create(&options,&gText)==OS64_FONT_OK);

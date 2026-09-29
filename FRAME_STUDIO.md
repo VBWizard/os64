@@ -109,23 +109,24 @@ the bundle into kernel-owned staging and transfers ownership on commit.
   The preview consumer and kernel compile the same implementation. Text decoding
   shares the existing W1 rules; legacy byte titles retain a Latin-1 path. The
   startup fallback remains the compiled bitmap font until a bundle is applied.
-- V6 accepts a 328-byte header, sorted 32-byte glyph records, sorted 8-byte pair
+- V7 accepts a 336-byte header, sorted 32-byte glyph records, sorted 8-byte pair
   adjustments, and tightly packed 8-bit masks. Caps: 8 MiB per bundle, 768
   glyphs, 65,536 pairs, 256x256 per mask, and 256 pixels of line height. There
   are no executable callbacks or texture/image decoders in the format. Border
-  width is 1..16 pixels; horizontal/vertical padding is 0..32. V6 accepts top
+  width is 1..16 pixels; horizontal/vertical padding is 0..32. V7 accepts top
   placement, prepared opaque finish tiles, and left/center/right title alignment. Its header
-  adds up to eight ordered slots: close/minimize/maximize/pin or spacer,
+  adds up to eight ordered slots: close/minimize/maximize/pin/settings or spacer,
   leading/trailing group, and square/round/bare housing. Duplicate actions are
   refused; unused slots must be zero. Button size is 16..48 pixels and gap
-  0..16. Versions 1 through 3 are refused; saved container V1 accepts V4, V5 or V6.
+  0..16. Versions 1 through 3 are refused; saved container V1 accepts V4, V5, V6 or V7.
   V4 requires a zero button-face field and retains its automatic housings.
   V5 assigns that word to the button fill: zero for automatic, FFrrggbb for
   custom opaque color, or 01rrggbb for transparent with retained RGB.
   V6 appends four active/inactive symbol-color pairs indexed by button action.
+  V7 adds Settings and its fifth color pair; V6 retains its 328-byte header.
   Zero inherits title text; FFrrggbb supplies custom ink. V4/V5 retain their
-  296-byte prefix and normalize to a V6 editable recipe with inherited symbols;
-  a style edit emits V6 while copying the embedded font assets. Four 32x32
+  296-byte prefix and normalize to a V7 editable recipe with inherited symbols;
+  a style edit emits V7 while copying the embedded font assets. Four 32x32
   XRGB tiles follow the glyph masks at an aligned offset: active/inactive
   title and active/inactive border. Userland prepares solid, gradient, grain,
   stripe and stipple finishes; the shared painter samples the finished tiles.
@@ -481,7 +482,7 @@ Named-save contract: the config target `frames` contains `<name>.frame` files
 hyphens, underscores, ampersands or parentheses. The little-endian V1 container
 has an 800-byte header: eight uint32 fields (magic `0x314d5246`, version, total
 bytes, bundle offset, bundle bytes, font size, checksum, reserved), followed
-by three 256-byte NUL-terminated font paths. The prepared V4, V5 or V6 decoration bundle
+by three 256-byte NUL-terminated font paths. The prepared V4, V5, V6 or V7 decoration bundle
 follows at offset 800. The checksum is FNV-1a over the complete file with its
 checksum field treated as zero; it detects corruption, not authenticity.
 Maximum file size is 800 bytes plus the 8 MiB bundle cap. Source paths are
@@ -511,7 +512,7 @@ not change that snapshot. `decoration.startup` resolves through the config
 ladder (normally `/home/decoration.startup`). Its 16-byte V1 header carries
 magic, version, payload length and an FNV-1a checksum over the header and
 payload with the checksum field zeroed. A nonempty payload is a validated
-prepared V4/V5/V6 bundle, capped at 8 MiB; a zero-length payload explicitly
+prepared V4/V5/V6/V7 bundle, capped at 8 MiB; a zero-length payload explicitly
 selects the compiled default and masks lower config layers. Neither path
 requires the original font or collection file. Exclusive same-directory
 staging, sync and REQUIRE_ATOMIC_REPLACE preserve the previous startup choice
@@ -572,7 +573,7 @@ architecture review nor implementation review is claimed here.
 ## Button fills and selectable color codes
 
 On **Buttons**, select a control and choose **Edit button colors...**. The
-Finish page also lists Close, Minimize, Maximize and Pin below the frame colors
+Finish page also lists Close, Minimize, Maximize, Pin and Settings below the frame colors
 (navigate with Up/Down, Home/End or Page Up/Down). Opening Finish or using
 Edit button colors focuses the list for immediate keyboard navigation. Each
 included control owns its fill independently.
@@ -606,3 +607,15 @@ role) still updates the picker.
 List keyboard navigation lives in libui, with PS/2 and USB HID event coverage.
 Navigation also reveals an unchanged selection if a companion scrollbar moved
 it out of view. A built-in list scrollbar remains a separate slice.
+
+### Settings action
+
+Settings uses three drawn slider lines. Square, Round and Bare housings,
+fill, and active/inactive ink work as for the other controls. Applications
+opt in; unsupported windows omit the slot and its automatic spacing in
+layout, minimum width, painting and hit testing. Explicit spacers remain.
+The included compositions offer Settings. Existing personal compositions
+retain their controls until edited; Ctrl+Alt+S remains available.
+The front sample supports Settings; the second sample omits it through the
+same capability filter used by the window manager. Switching sample focus
+shows both cases with active and inactive styling.

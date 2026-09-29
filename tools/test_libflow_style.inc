@@ -153,6 +153,17 @@ static void style_cases(void)
         "        tr table-row valign=middle holds-block\n"
         "          td table-cell padding=1/1/1/1 border=1:inset:ink valign=middle\n");
 
+    // The chapter's `border-color: black` names the table for `rules` or
+    // `frame`, and its cells for `rules` alone.
+    style_case("tables: frame blackens the table's border, not its cells'",
+        "<!doctype html><table border=1 frame=box><tr><td>a</table>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    table table border=1:outset:#000000 spacing=2/2 holds-block\n"
+        "      tbody table-row-group valign=middle holds-block\n"
+        "        tr table-row valign=middle holds-block\n"
+        "          td table-cell padding=1/1/1/1 border=1:inset:ink valign=middle\n");
+
     style_case("alignment: center and div align reach the blocks inside",
         "<!doctype html><center><div align=right><table align=center><tr><th>x"
         "<td align=left>y</table></div></center>",
@@ -206,6 +217,25 @@ static void style_cases(void)
         // 1em of padding; `border: solid` is medium, 3px; colours from the face
         "    dialog block bg=paper padding=16/16/16/16 border=3:solid:ink\n"
         "    embed inline width=0 height=0\n");
+
+    // Four rules of the sheet, each by its §: `address` italic (15.3.3),
+    // `legend` 2px inline padding (15.3.12), `[popover]` hidden unless an
+    // open dialog (15.3.3; nothing opens one without script), and
+    // `nobr wbr` normal (15.3.4) — inside a nobr only.
+    style_case("address, legend, popover, nobr wbr",
+        "<!doctype html><address>a</address><legend>L</legend><div popover>p</div>"
+        "<dialog popover>c</dialog><dialog popover open>o</dialog>"
+        "<nobr>x<wbr>y</nobr><wbr>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    address block italic\n"
+        "    legend block padding=0/2/0/2\n"
+        "    div none\n"
+        "    dialog none\n"
+        "    dialog block bg=paper padding=16/16/16/16 border=3:solid:ink\n"
+        "    nobr inline ws=nowrap\n"
+        "      wbr inline ws=normal\n"
+        "    wbr inline\n");
 
     style_case("details: the first summary is the disclosure",
         "<!doctype html><details><summary>S</summary><p>hidden</p></details>"
