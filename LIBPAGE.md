@@ -121,7 +121,8 @@ cells or pixels.
   holds `stylesheet` and not `alternate`, in document order — the order
   the cascade ranks them in (GARB.md) — a link's `href` resolved against
   the base, `media` as written. A `type` other than CSS, a `disabled`
-  link and an empty `href` are not listed; an SVG `style` is SVG's.
+  link and an `href` that is empty or white space are not listed; an SVG
+  `style` is SVG's.
 - **Anchors**: every `id` and every old-style `<a name>`, the names a
   fragment is matched against, with the match made on the DECODED fragment
   (round 7: a heading with a space in its name).
