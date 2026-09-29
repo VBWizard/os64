@@ -249,6 +249,20 @@ $(PAGES_STAGE)/%: tools/garb_corpus/%
 stage-pages: $(PAGES_STAGED)
 	$(if $(strip $(PAGES_RETIRED)),rm -f $(PAGES_RETIRED))
 
+# The faces the image ships in /etc/fonts, staged alone for the wire: a
+# machine refreshed over the network (the P5) has no other way to receive
+# them. Served from here they install by suffix (os64get.conf's *.ttf rule).
+# The directory holds exactly the list, as pages' does: a face dropped from
+# the image is not left here to be installed.
+FONTS_STAGE  := userland/bin/fonts
+FONTS_STAGED := $(addprefix $(FONTS_STAGE)/,$(notdir $(FONT_PRODUCT)))
+FONTS_RETIRED = $(filter-out $(FONTS_STAGED),$(wildcard $(FONTS_STAGE)/*))
+$(FONTS_STAGE)/%: $(FONT_FIXTURE_DIR)/%
+	@mkdir -p $(FONTS_STAGE) && cp $< $@
+.PHONY: stage-fonts
+stage-fonts: $(FONTS_STAGED)
+	$(if $(strip $(FONTS_RETIRED)),rm -f $(FONTS_RETIRED))
+
 # Prepared compositions carry their own glyphs and finish tiles.
 FRAME_COMPOSITIONS := $(wildcard frames/*.frame)
 
@@ -275,10 +289,10 @@ endif
 
 
 .PHONY: all
-all: $(IMAGE_NAME).iso stage-pages
+all: $(IMAGE_NAME).iso stage-pages stage-fonts
 
 .PHONY: all-hdd
-all-hdd: $(IMAGE_NAME).hdd stage-pages
+all-hdd: $(IMAGE_NAME).hdd stage-pages stage-fonts
 
 # The sub-makes are the authority on whether these need rebuilding, so recurse
 # unconditionally — but let the FILE TIMESTAMPS decide what happens downstream.
