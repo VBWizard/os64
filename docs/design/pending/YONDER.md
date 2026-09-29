@@ -161,7 +161,7 @@ in-house (CLAUDE.md's reviewer-to-risk rule).
 | Y3 | The network, through libway on packet 07's pool: http and https, a click follows a link, back, forward, reload and stop, a fragment scrolls to its target, declared refreshes, POST (Quinn's packet 05 carried across from wend), the questions asked in the window | § Y3 below |
 | Y3b | libway's cookie jar and `Referer`, on packet 05's hooks, for both browsers | libway's host harness; logging in to a real site |
 | Y4 | Forms: every control libflow placed becomes a real libui widget at its box, moved when the page scrolls and hidden when it leaves the view (libui does not clip a child to its parent), submitted with GET through libpage's form model | a search form on the live web, typed and submitted |
-| Y5 | Images: fetched in parallel, decoded, blended, the page laid out again when a size arrives | the corpus pages with their pictures |
+| Y5 | Images: fetched in parallel on the pool, decoded, drawn scaled and blended, the page laid out again when a size arrives | § Y5 below |
 
 Y1 needs none of the open packets, which is why it came first. Packets 06
 (Y2), 07 (the pool and the doorbell), 02 (blending) and 03 (GIF) are in;
@@ -330,6 +330,92 @@ guest: a question asked on the window's own thread (a form or refresh
 leaving https), for want of an https page with such a form — its judgement
 is libway's harness's and its bar is the same bar.
 
+## Y5 — pictures
+
+Chris's order after Y3: pictures first (almost every page he visited had
+them), then forms (Y4), then cookies (Y3b).
+
+**What is fetched.** libpage's picture list (`os64_page_image`) is the
+record: every `img` with a src that resolved, in tree order. Pictures are
+kept per ADDRESS, not per element — forty spacer GIFs are one fetch — and
+the page's pictures belong to the page: the page stays on screen, pictures
+still arriving, until the next one replaces it, and then every one still
+in flight is cancelled and the page takes its pixels with it. A picture
+finished for a page no longer shown is let go unread (the page's serial
+number rides in its job).
+
+**Each picture is a job on the same pool** as the page, run by
+`picture.c`: libfetch for the bytes (`os64_fetch_open`, the browser's
+agent, an Accept of image types, libimage's 20 MiB file cap), then
+`os64_image_decode`, which knows PNG, JPEG, GIF and BMP by their bytes
+rather than by what the server claims. The product is the decoded image,
+0xAARRGGBB; the job's input and product are released by the pool if the
+page is left first. The DECLARED RESERVE is honest to the decoders'
+defaults: 20 MiB of body and 128 MiB of decoding (libjpeg's memory cap,
+which also bounds PNG: its 16-megapixel raster is 64 MiB, and it inflates
+through a 32 KiB window straight into it), and the pool's budget grows to
+768 MiB so a page and three pictures run at once. A picture over the
+decoders' caps is refused by them and drawn as its placeholder.
+
+**Three at a time, and yonder holds the rest.** The pool admits work in
+the order it was given, so a page's forty pictures handed over at once
+would put a person's next click forty-first in line — and past the pool's
+table, the rest refused for good. So yonder keeps the page's pictures
+itself and hands the pool the next as each comes back, never more than one
+fewer than the pool has workers: a navigation finds a worker free once
+whatever was cancelled before it — a page left behind's pictures, a
+navigation it replaced — has seen its cancel and let the worker go.
+Leaving a page cancels the few in the pool and forgets the rest.
+
+**The size is the layout's question, the pixels the painter's.** libflow
+asks the face for a picture's intrinsic size (`replaced_size`); yonder
+answers from the pictures that have arrived, and "unknown" for the rest —
+libflow then lays out the alt text, or the box the width and height give.
+When a picture arrives whose box the page did not fix — libflow's rule,
+`flow_replaced_fixed`, asked of the element's box, since a `width="auto"`
+is written but fixes nothing — the page is laid out AGAIN (keeping the
+reader's place, as a resize does), because its size may move everything
+below it. Relayouts are coalesced: at most one per drained batch of
+doorbells. On a page whose layout takes more than 100 ms, a batch lays it
+out again only when its last picture is in, or when the last layout is two
+seconds old and twice its own cost — so laying out takes at most a third
+of the time while pictures trickle in. That clock is READ at a batch,
+never waited on: a slow page whose pictures have stopped arriving stays
+mis-laid until the first event after its layout goes stale, or until the
+last picture arrives or gives up — and a picture from a server that
+trickles a byte at a time can take as long as the server likes, since
+libfetch's patience is 30 s of silence. The deadline that needs neither is
+booked below. A picture whose box is fixed needs no relayout at all; the
+old web wrote both attributes on most.
+
+**Drawing.** The painter's `image` verb draws the picture into its box's
+content rectangle, SCALED nearest-neighbour when the box and the picture
+differ (a `width=` stretching a spacer, a thumbnail shrunk) and blended by
+its alpha over what is beneath, one row of the visible part at a time
+(`scale.c`, pure and host-tested). A picture that has not arrived, or will
+not, keeps Y1's frame. GIFs show their first frame.
+
+**Memory kept.** Decoded pictures stay while their page is shown, up to
+256 MiB of pixels; past that, a picture is not kept and draws as its frame,
+and the status line says how many were left out. Back and Forward fetch
+again (there is no picture cache between pages yet, as there is none for
+pages).
+
+**Evidence, as run.** The host: the scaler and blender against hand-worked
+pixels (an opaque copy, a 2x enlargement, a 3-to-2 shrink, a
+half-transparent source over a known ground, a transparent pixel, a clip
+cutting all four sides, a box hanging off the surface's top left). The
+guest, a page served locally with a picture of each kind: a PNG with no
+size given (the page laid out again around it), a half-transparent PNG
+blended over a blue cell, a GIF scaled 2x, a JPEG scaled by `width=` with
+its shape kept, a 1x1 spacer stretched to a 200-pixel bar, a BMP, a
+missing picture showing its alt text, a broken one keeping its frame, and
+one address used four times fetched once — "pictures 6 of 8". Then live:
+Wikipedia's article on Mosaic over https, its screenshots of Mosaic drawn
+from upload.wikimedia.org (its logos are SVG, which libimage does not
+decode, and keep their frames); and a page left nine seconds into its
+pictures, the next page's count untouched by the late arrivals.
+
 ## Booked, with their triggers
 
 | Debt | Why it waits | Trigger |
@@ -342,6 +428,11 @@ is libway's harness's and its bar is the same bar.
 | Links on a page from disk | a relative address does not resolve against a `file:` page | Y3, where pages come from the network |
 | Serif, bold, italic | packet 04 | 04 merged |
 | POST and cookies, logging in | packet 05 | 05 merged |
+| A slow page's picture relayout, on time | the window's loop has no clock to wait on; a slow page settles at the person's first event once its layout is stale, or at its last picture (§ Y5) | Y5b's ticker: the settle deadline rides it |
+| Animated GIFs | libimage decodes sequences (GIF_ANIMATION.md); a page view that repaints on a timer is a new loop for the window | the first page whose animation is the point |
+| SVG pictures | libimage decodes raster formats; SVG is a vector language with a renderer of its own | the modern web's logos, which are mostly SVG |
+| `data:` pictures, and `background=` | a data: address needs no fetch but a decoder of its own; a background image is a fill the painter does not tile yet | a page that needs one |
+| A picture cache between pages | Back and Forward refetch pictures as they refetch pages | back-and-forth on a slow link hurts |
 | Layout on a worker | every page shares one text context, which one thread uses at a time; a worker would need its own, with its own fonts opened | a page whose layout makes the window stop answering for long enough to matter (fetch.spec.whatwg.org takes 6 s to lay out again at full screen on the P5) |
 | Cookies and `Referer` | slice Y3b: libway's jar on packet 05's hooks. `on_set_cookie` carries whether the reply came over an encrypted connection (Quinn, 2026-09-25), so the jar enforces `Secure` itself — libfetch hands over the facts, libway owns the policy | packet 05 merged and Y3 in |
 | Selecting and copying text | `flow_hit` and the run's own hit test give the pieces; the drag, the highlight and the clipboard are a slice of their own | the first time Chris wants to quote a page |

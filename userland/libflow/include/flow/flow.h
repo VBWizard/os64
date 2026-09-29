@@ -355,6 +355,14 @@ const flow_box_t *flow_box_for(const flow_tree_t *tree, const os64_html_node_t *
 // (os64_page_image), which names every picture the page does.
 int32_t flow_nimages(const flow_tree_t *tree);
 const flow_box_t *flow_image(const flow_tree_t *tree, int32_t i);
+
+// Whether a replaced element drawn in `style` is sized by the page alone —
+// a width, and a height in pixels — so that what the oracle answers
+// (flow_env_t.replaced_size) cannot change its box. The rule the layout
+// sizes by, for a face deciding whether an arrival needs a new layout:
+// ask it of the element's box (flow_box_for), not of its attributes, which
+// say what the page wrote and not what parsed. False for NULL.
+bool flow_replaced_fixed(const flow_style_t *style);
 int32_t flow_ncontrols(const flow_tree_t *tree);
 const flow_box_t *flow_control(const flow_tree_t *tree, int32_t i);
 

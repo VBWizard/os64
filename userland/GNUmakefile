@@ -265,7 +265,7 @@ TELNET_ENGINE_OBJ      := $(OBJ)/apps/telnet/telnet_protocol.c.o
 LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd
 
 # Programs that download: they name libfetch and get its whole closure.
-LIBFETCH_PROGRAMS := os64get wend worktest fetchhooktest fetchposttest
+LIBFETCH_PROGRAMS := os64get wend worktest fetchhooktest fetchposttest yonder
 # What a page MEANS is a browser's edge and nobody else's (LIBPAGE.md).
 # `wend` declares the edge before it CALLS anything through it, which is
 # deliberate: the library is otherwise on the image with nothing loading it,
@@ -471,7 +471,7 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest flowdump yonder
                        $(if $(filter $(1),$(LIBFLOW_PROGRAMS)),$(LIBFLOW_SO)) \
                        $(if $(filter $(1),$(LIBWAY_PROGRAMS)),$(LIBWAY_SO)) \
                        $(if $(filter $(1),$(LIBPAGE_PROGRAMS)),$(LIBPAGE_SO)) \
-                       $(if $(filter $(1),gview desktop jpegtest giftest),$(LIBIMAGE_SO)) \
+                       $(if $(filter $(1),gview desktop jpegtest giftest yonder),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
                        $(if $(filter $(1),fonttest texttest flowdump yonder),$(LIBFREETYPE_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \

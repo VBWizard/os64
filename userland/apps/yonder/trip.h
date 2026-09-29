@@ -4,11 +4,13 @@
 // A navigation's job on the work pool (YONDER.md § Y3): way_load on a
 // worker, with a face that reaches the window only through the mailbox.
 
+#include "jobs.h"
 #include "mail.h"
 #include "way/way.h"
 
 // The job's input. Owned by the pool from submit until release.
 typedef struct {
+    uint32_t kind;                  // YONDER_JOB_TRIP
     yonder_mail_t *mail;            // one reference, the job's
     const way_session_t *session;   // the browser's identity, read-only
     int64_t window;                 // rung when there is mail

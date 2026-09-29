@@ -19,7 +19,7 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/libflow/include -I userland/libflow -I userland/apps/yonder -I userland/libpage/include \
    -I userland/libhtml/include -I userland/libos64/include -I abi/include -I tools \
    -I userland/libpage/upstream/ryu \
-   tools/test_yonder_host.c userland/apps/yonder/paint.c userland/apps/yonder/bar.c \
+   tools/test_yonder_host.c userland/apps/yonder/paint.c userland/apps/yonder/bar.c userland/apps/yonder/scale.c \
    userland/apps/yonder/mail.c \
    userland/libflow/store.c userland/libflow/attrs.c userland/libflow/style.c \
    userland/libflow/dump.c userland/libflow/boxes.c userland/libflow/layout.c \
