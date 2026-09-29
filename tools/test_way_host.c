@@ -21,6 +21,11 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len)
     return (int64_t)len;
 }
 
+// The jar's lock yields under contention; one thread never contends.
+void os64_yield(void)
+{
+}
+
 // ── Allocation, and failing it on purpose ───────────────────────────────
 
 static size_t allocations, fail_at, live;
@@ -427,8 +432,11 @@ static void sweep(void)
     printf("libway sweep: each of %zu allocations failed in turn, nothing leaked\n", count);
 }
 
+#include "test_way_jar.inc"
+
 int main(void)
 {
+    jar_cases();
     judgements();
     refreshes();
     history();

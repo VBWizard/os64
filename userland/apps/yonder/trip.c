@@ -48,6 +48,7 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
         return -1;
     Run r = {trip, cancelled, ctx};
     way_leg_t leg = way_leg(trip->session);
+    os64_strcopy(leg.referrer, sizeof(leg.referrer), trip->referrer);
     leg.face = (way_face_t){&r, run_confirm, run_cancelled, run_progress};
     a->loaded = way_load(&leg, trip->url, trip->has_request ? &trip->request : NULL, &a->page,
                          &a->why);
