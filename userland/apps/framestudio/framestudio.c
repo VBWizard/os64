@@ -17,7 +17,7 @@ static char baseline_name[FRAME_NAME_MAX+1],delete_lines[2][21];
 static const char *const introduction="A little character around every window. Preview first, then make it yours.";
 static os64_ui_listbox_t fonts,slots,colors,saved_list;
 static os64_ui_scrollbar_t font_scroll,saved_scroll;
-static os64_ui_checkbox_t includes[4],match_border;
+static os64_ui_checkbox_t includes[5],match_border;
 static os64_ui_slider_t props[6];
 static os64_ui_colorpicker_t picker;
 static os64_ui_textfield_t hex_field,name_field;
@@ -47,12 +47,12 @@ static bool sample_hidden[2],sample_maximized[2],sample_pinned[2];
 static uint32_t sample_hover[2];
 static os64_decor_capture_t capture;
 static os64_gui_rect_t specimens[2];
-static const char *const action_names[]={"Spacer","Close","Minimize","Maximize","Pin"};
+static const char *const action_names[]={"Spacer","Close","Minimize","Maximize","Pin","Settings"};
 static const char *const shapes[]={"Square","Round","Bare"};
 static const char *const finishes[]={"Solid","Gradient","Grain","Stripes","Stipple"};
-static const char *const color_names[]={"Active title","Inactive title","Active title text","Inactive title text","Active border","Inactive border","Close fill","Minimize fill","Maximize fill","Pin fill",
+static const char *const color_names[]={"Active title","Inactive title","Active title text","Inactive title text","Active border","Inactive border","Close fill","Minimize fill","Maximize fill","Pin fill","Settings fill",
     "Close active ink","Close inactive ink","Min active ink","Min inactive ink",
-    "Max active ink","Max inactive ink","Pin active ink","Pin inactive ink"};
+    "Max active ink","Max inactive ink","Pin active ink","Pin inactive ink","Settings active ink","Settings inactive ink"};
 enum { PRESET0,PRESET1,PRESET2,UNDO,APPLY,COPY_FONT,FONT_LESS,FONT_MORE,ALIGN,
        EARLIER,LATER,REMOVE,GROUP,SHAPE,SPACER,TITLE_FINISH,BORDER_FINISH,SCALE,DIRECTION,RELIEF,
        SET_HEX,REFRESH_FONTS,FOCUS_SAMPLE,RESET_SAMPLES,SAMPLE_STATE,DISCARD_CLOSE,CANCEL_CLOSE,
@@ -80,10 +80,10 @@ static void report(const char *text)
 }
 static uint32_t *color_pointer(os64_decor_header_t *h,unsigned index)
 {
-    if(index>=10 && index<18){
-        unsigned action=(index-10)/2+1;
+    if(index>=11 && index<21){
+        unsigned action=(index-11)/2+1;
         for(unsigned i=0;i<h->button_count;++i)if(h->buttons[i].action==action)
-            return (index&1)?&h->symbols[action-1].inactive:&h->symbols[action-1].active;
+            return ((index-11)&1)?&h->symbols[action-1].inactive:&h->symbols[action-1].active;
         return NULL;
     }
     if(index>=6) {
@@ -101,8 +101,8 @@ static uint32_t color_value(void)
 {
     uint32_t *p=color_pointer(&draft.style,color_role);
     if(!p)return 0xff606060u;
-    if(color_role>=10 && !*p)return (color_role&1)?draft.style.inactive_text:draft.style.active_text;
-    if(color_role>=6 && color_role<10 && !*p)
+    if(color_role>=11 && !*p)return ((color_role-11)&1)?draft.style.inactive_text:draft.style.active_text;
+    if(color_role>=6 && color_role<11 && !*p)
         return 0xff000000u | (((draft.style.active_face&0xfefefeu)+0x606060u)>>1);
     return *p | 0xff000000u;
 }
@@ -112,7 +112,7 @@ static void put_color(frame_draft_t *next,uint32_t color)
     if(!p)return;
     *p=0xff000000u | (color&0xffffffu);
     /* Bare hides the resting housing; choosing a fill makes it visible. */
-    if(color_role>=6 && color_role<10)for(unsigned i=0;i<next->style.button_count;++i)
+    if(color_role>=6 && color_role<11)for(unsigned i=0;i<next->style.button_count;++i)
         if(next->style.buttons[i].action==color_role-5 && next->style.buttons[i].shape==OS64_DECOR_BARE)
             next->style.buttons[i].shape=OS64_DECOR_ROUND;
 }
@@ -189,7 +189,7 @@ static bool accept(const frame_draft_t *candidate,const void *group)
 }
 static const char *font_at(size_t n,void *u){(void)u;return catalog && n<catalog->count?font_names[n]:"";}
 static const char *slot_at(size_t n,void *u){(void)u;return n<draft.style.button_count?slot_names[n]:"";}
-static const char *color_at(size_t n,void *u){(void)u;return n<18?color_names[n]:"";}
+static const char *color_at(size_t n,void *u){(void)u;return n<21?color_names[n]:"";}
 static void refresh_fonts(void)
 {
     os64_font_config_t config;os64_font_config_defaults(&config);config.roles[0]=draft.font;
@@ -393,12 +393,12 @@ static void clicked(os64_ui_widget_t *w,void *u)
         os64_ui_set_focus(&ui,&colors.w);
         report("Fill and symbol colors: use the list arrows.");return;
     }
-    else if(id==COLOR_FIRST && color_role>=10){
+    else if(id==COLOR_FIRST && color_role>=11){
         uint32_t *p=color_pointer(h,color_role);if(!p)return;
         if(*p)*p=0;else put_color(&next,color_value());
     }
-    else if(id==COLOR_SECOND && color_role>=10){
-        color_role=6+(color_role-10)/2;color_second=false;sync_controls();return;
+    else if(id==COLOR_SECOND && color_role>=11){
+        color_role=6+(color_role-11)/2;color_second=false;sync_controls();return;
     }
     else if(id==COLOR_FIRST && color_role>=6){
         uint32_t *p=color_pointer(h,color_role);if(!p)return;
@@ -451,7 +451,7 @@ static void sync_controls(void)
     os64_ui_set_enabled(&ui,&buttons[FONT_MORE],!os64_streq(draft.font.face[0],"builtin") && draft.font.size<64);
     static const char *const alignment[]={"Left","Center","Right"};
     os64_snprintf(captions[ALIGN],128,"Title alignment: %s",alignment[h->align]);
-    for(unsigned i=0;i<4;++i){bool found=false;for(unsigned n=0;n<h->button_count;++n)if(h->buttons[n].action==i+1)found=true;
+    for(unsigned i=0;i<5;++i){bool found=false;for(unsigned n=0;n<h->button_count;++n)if(h->buttons[n].action==i+1)found=true;
         os64_ui_checkbox_set(&ui,&includes[i],found);}
     if(selected_slot>=(int)h->button_count)selected_slot=(int)h->button_count-1;
     for(unsigned i=0;i<h->button_count;++i)os64_snprintf(slot_names[i],sizeof(slot_names[i]),"%u. %s / %s / %s",i+1,
@@ -468,7 +468,7 @@ static void sync_controls(void)
     static const char *const names[]={"Title padding","Border width","Button size","Button gap","Strength","Side padding"};
     for(unsigned i=0;i<6;++i){os64_ui_slider_set(&ui,&props[i],(int)values[i]);os64_snprintf(prop_text[i],80,"%s: %u%s",names[i],i==4?values[i]*100/64:values[i],i==4?"%":" px");}
     os64_ui_set_enabled(&ui,&buttons[EDIT_BUTTON_COLOR],selected && h->buttons[selected_slot].action!=0);
-    os64_ui_listbox_set(&ui,&colors,18,(int)color_role);
+    os64_ui_listbox_set(&ui,&colors,21,(int)color_role);
     uint32_t border_finish=h->match_border?h->finish:h->border_finish;
     bool second_available=color_role<2?h->finish!=OS64_DECOR_SOLID:
         color_role>=4 && color_role<6 && border_finish!=OS64_DECOR_SOLID;
@@ -487,7 +487,7 @@ static void sync_controls(void)
     os64_ui_set_enabled(&ui,&hex_field.w,color!=NULL);
     os64_ui_set_enabled(&ui,&buttons[SET_HEX],color!=NULL);
     os64_ui_set_enabled(&ui,&buttons[COLOR_FIRST],color!=NULL);
-    if(color_role>=10){
+    if(color_role>=11){
         set_caption(COLOR_FIRST,!color?"Button not included":!*color?"Ink: title text":"Ink: custom");
         set_caption(COLOR_SECOND,"Button fill");
         os64_ui_set_enabled(&ui,&buttons[COLOR_SECOND],true);
@@ -537,17 +537,27 @@ static void sync_controls(void)
 
 static bool inside(os64_gui_rect_t r,int x,int y)
 {return x>=r.x && y>=r.y && (int64_t)x<r.x+r.w && (int64_t)y<r.y+r.h;}
+static os64_decor_view_t sample_view(unsigned index,os64_decor_header_t *header)
+{
+    os64_decor_view_t effective=view;
+    if(view.header){
+        os64_decor_filter(view.header,index==0,header);
+        effective.header=header;
+    }
+    return effective;
+}
 static void sample_rectangles(void)
 {
     os64_gui_rect_t r=stage.bounds;
-    int width=r.w-70;
-    int minimum=view.header?(int)os64_decor_min_width(view.header):120;
-    if(width<minimum)width=minimum;
-    int height=(r.h-70)*2/3;
-    if(view.header){os64_decor_insets_t i=os64_decor_insets(view.header,true);if(height<i.top+70)height=i.top+70;}
-    specimens[0]=(os64_gui_rect_t){r.x+24,r.y+100,width,height};
-    specimens[1]=(os64_gui_rect_t){r.x+46,r.y+26,width,height};
-    for(unsigned i=0;i<2;++i)if(sample_maximized[i])specimens[i]=(os64_gui_rect_t){r.x+10,r.y+10,r.w-20,r.h-20};
+    for(unsigned i=0;i<2;++i){
+        os64_decor_header_t header;os64_decor_view_t effective=sample_view(i,&header);
+        int width=r.w-70,height=(r.h-70)*2/3;
+        int minimum=effective.header?(int)os64_decor_min_width(effective.header):120;
+        if(width<minimum)width=minimum;
+        if(effective.header){os64_decor_insets_t inset=os64_decor_insets(effective.header,true);if(height<inset.top+70)height=inset.top+70;}
+        specimens[i]=(os64_gui_rect_t){r.x+(i?46:24),r.y+(i?26:100),width,height};
+        if(sample_maximized[i])specimens[i]=(os64_gui_rect_t){r.x+10,r.y+10,r.w-20,r.h-20};
+    }
 }
 static void sample_paint(os64_ui_widget_t *w,os64_draw_ctx_t *dc,const os64_ui_theme_t *theme)
 {
@@ -559,13 +569,14 @@ static void sample_paint(os64_ui_widget_t *w,os64_draw_ctx_t *dc,const os64_ui_t
     sample_rectangles();
     os64_decor_surface_t surface={dc->surf.pixels,dc->surf.width,dc->surf.height,dc->surf.pitch_px};
     os64_decor_rect_t clip={area.x,area.y,area.w,area.h};
-    static const char *const titles[]={"Your window - Caf\xc3\xa9 / R\xc3\xa9sum\xc3\xa9","A quieter window"};
+    static const char *const titles[]={"Your window - Caf\xc3\xa9 / R\xc3\xa9sum\xc3\xa9","Window without settings"};
     for(unsigned pass=0;pass<2;++pass){unsigned i=pass?active_sample:active_sample^1;
         if(sample_hidden[i])continue;
         os64_gui_rect_t r=specimens[i],visible;
         if(!os64_rect_intersect(r,area,&visible))continue;
         os64_draw_fill_rect(&dc->surf,visible,theme->panel_bg);
-        os64_decor_insets_t inset=os64_decor_insets(view.header,true);
+        os64_decor_header_t header;os64_decor_view_t effective=sample_view(i,&header);
+        os64_decor_insets_t inset=os64_decor_insets(effective.header,true);
         int content_y=r.y+inset.top;
         for(unsigned line=0;line<4;++line){
             os64_gui_rect_t ink={r.x+22,content_y+24+(int)line*24,r.w-(line==3?140:60),line==0?9:5};
@@ -573,10 +584,10 @@ static void sample_paint(os64_ui_widget_t *w,os64_draw_ctx_t *dc,const os64_ui_t
         }
         os64_decor_state_t state={sample_hover[i],capture.window==i+1 && capture.armed?capture.action:0,0,sample_maximized[i]};
         if(i==active_sample && forced_state){
-            uint32_t action=view.header->button_count?view.header->buttons[view.header->button_count-1].action:0;
+            uint32_t action=header.button_count?header.buttons[header.button_count-1].action:0;
             state.hover=action;state.pressed=forced_state==2?action:0;state.disabled=forced_state==3?(1u<<action):0;
         }
-        (void)os64_decor_paint(&view,&surface,(os64_decor_rect_t){r.x,r.y,r.w,r.h},clip,true,i==active_sample,
+        (void)os64_decor_paint(&effective,&surface,(os64_decor_rect_t){r.x,r.y,r.w,r.h},clip,true,i==active_sample,
             sample_pinned[i],titles[i],os64_strlen(titles[i]),false,&state);
     }
 }
@@ -589,7 +600,8 @@ static bool sample_event(os64_ui_widget_t *w,os64_ui_t *context,const os64_gui_e
         unsigned i=pass?active_sample^1:active_sample;
         if(!sample_hidden[i] && inside(specimens[i],ev->mouse.x,ev->mouse.y)){
             target=i;os64_decor_layout_t layout;os64_gui_rect_t r=specimens[i];
-            if(os64_decor_layout(view.header,r.w,r.h,true,&layout))hit=os64_decor_hit(view.header,&layout,ev->mouse.x-r.x,ev->mouse.y-r.y);
+            os64_decor_header_t header;os64_decor_view_t effective=sample_view(i,&header);
+            if(effective.header && os64_decor_layout(effective.header,r.w,r.h,true,&layout))hit=os64_decor_hit(effective.header,&layout,ev->mouse.x-r.x,ev->mouse.y-r.y);
             break;
         }
     }
@@ -603,6 +615,7 @@ static bool sample_event(os64_ui_widget_t *w,os64_ui_t *context,const os64_gui_e
             if(action==OS64_DECOR_CLOSE || action==OS64_DECOR_MINIMIZE){sample_hidden[i]=true;active_sample=i^1;report("Sample hidden. Restore samples brings it back.");}
             if(action==OS64_DECOR_MAXIMIZE)sample_maximized[i]=!sample_maximized[i];
             if(action==OS64_DECOR_PIN)sample_pinned[i]=!sample_pinned[i];
+            if(action==OS64_DECOR_SETTINGS)report("Settings requested (preview). The application supplies its dialog.");
         }
     }else if(ev->type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN && target<2){
         active_sample=target;
@@ -643,7 +656,7 @@ static void arrange(bool staged,int r,int left)
     place(&prop_labels[5],x+10,top+11*r,left/2,r,staged);
     place(&props[5].w,x+left/2,top+11*r,left/2-12,r,staged);
     place(&buttons[REFRESH_FONTS],x+10,top+12*r,left-20,r,staged);
-    for(unsigned i=0;i<4;++i)place(&includes[i].w,x+10+(int)(i%2)*left/2,top+(int)(i/2)*r,left/2-14,r,staged);
+    for(unsigned i=0;i<5;++i)place(&includes[i].w,x+10+(int)(i%3)*left/3,top+(int)(i/3)*r,left/3-14,r,staged);
     place(&slots_label,x+10,top+2*r,left-20,r,staged);
     place(&slots.w,x+10,top+3*r,left-20,4*r,staged);
     for(unsigned i=0;i<3;++i)place(&buttons[EARLIER+i],x+10+(left-20)*(int)i/3,top+7*r,(left-20)/3-4,r,staged);
@@ -736,13 +749,13 @@ static void build_ui(void)
     os64_ui_listbox(&fonts,0,font_at,font_changed,NULL);fonts.on_view=list_view;os64_ui_add_child(&pages[0],&fonts.w);
     os64_ui_scrollbar(&font_scroll,font_scrolled,NULL);os64_ui_add_child(&pages[0],&font_scroll.w);
     add_button(FONT_LESS,&pages[0],"-");add_button(FONT_MORE,&pages[0],"+");add_button(COPY_FONT,&pages[0],"Copy interface font");add_button(ALIGN,&pages[0],"");add_button(REFRESH_FONTS,&pages[0],"Refresh fonts");
-    for(unsigned i=0;i<4;++i){os64_ui_checkbox(&includes[i],action_names[i+1],false,include_changed,(void *)(uintptr_t)(i+1));os64_ui_add_child(&pages[1],&includes[i].w);}
+    for(unsigned i=0;i<5;++i){os64_ui_checkbox(&includes[i],action_names[i+1],false,include_changed,(void *)(uintptr_t)(i+1));os64_ui_add_child(&pages[1],&includes[i].w);}
     add_label(&slots_label,&pages[1],"Slots: left-to-right inside each group");
     os64_ui_listbox(&slots,0,slot_at,slot_changed,NULL);os64_ui_add_child(&pages[1],&slots.w);
     add_button(EARLIER,&pages[1],"Earlier");add_button(LATER,&pages[1],"Later");add_button(REMOVE,&pages[1],"Remove");add_button(GROUP,&pages[1],"");add_button(SHAPE,&pages[1],"");add_button(SPACER,&pages[1],"Add spacer");
     add_button(EDIT_BUTTON_COLOR,&pages[1],"Edit button colors...");
     add_label(&color_label,&pages[2],"Colors / arrows + Home/End");
-    os64_ui_listbox(&colors,18,color_at,color_changed,NULL);os64_ui_add_child(&pages[2],&colors.w);
+    os64_ui_listbox(&colors,21,color_at,color_changed,NULL);os64_ui_add_child(&pages[2],&colors.w);
     os64_ui_colorpicker(&picker,0xff203b59,picker_changed,NULL);os64_ui_add_child(&pages[2],&picker.w);
     os64_ui_textfield(&hex_field,hex,sizeof(hex),hex_submit,NULL,NULL);os64_ui_add_child(&pages[2],&hex_field.w);
     add_button(SET_HEX,&pages[2],"Set");

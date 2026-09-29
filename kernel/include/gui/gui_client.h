@@ -43,6 +43,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 int64_t gui_window_destroy(int64_t handle);
 
 // Owner-only content floors; os64/gui.h defines normalization and growth.
+int64_t gui_window_focus(int64_t handle);
 int64_t gui_window_set_min_size(int64_t handle, uint32_t width, uint32_t height);
 
 // Get the window's drawable CANVAS (the client-owned back buffer). Draw at

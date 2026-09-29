@@ -172,8 +172,10 @@ static const char *faces_open(void)
 // that declares none in a <meta> is read as windows-1252 by the standard's
 // default. Bytes that are valid UTF-8 and not plain ASCII are almost never
 // meant as windows-1252, so they are read as what they are — the file
-// detector's answer, not a rule the standard makes, and a <meta> can only
-// lose to it when the bytes already contradict the <meta>.
+// detector's answer, not a rule the standard makes. It is handed to
+// libhtml as the transport's label, which outranks the page: when it fires,
+// the page's <meta> is not read at all. A page that declares
+// windows-1252 and is UTF-8 is the case it exists for.
 static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len)
 {
     bool wide = false, valid = true;
@@ -495,7 +497,7 @@ static void say_laid_out(uint64_t ms)
     os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px in %lu ms%s%s", g.page.way.url,
                   g.page.way.note[0] ? " - " : "", g.page.way.note, g.page.laid_width,
                   (unsigned long)ms, pictures,
-                  flow_incomplete(g.page.tree) ? " - INCOMPLETE: out of memory partway" : "");
+                  flow_incomplete(g.page.tree) ? " - INCOMPLETE: the layout stopped partway" : "");
     status_rest(line);
 }
 
@@ -552,6 +554,7 @@ static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask
 static void buttons_follow(void);
 static void pictures_start(Page *p);
 static void pictures_leave(Page *p);
+static void bar_forget(void);
 static void open_address(const char *url, NavKind kind, const way_position_t *crumb,
                          os64_page_request_t *request);
 
@@ -606,6 +609,10 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
         else if (kind == NAV_FORWARD)
             way_went_forward(&g.way, g.page.way.url, &here);
     }
+    // The page on screen is being replaced, and its question and its
+    // pictures in flight with it: a page that fails to lay out (above)
+    // leaves them all where they were.
+    bar_forget();
     pictures_leave(&g.page);
     page_clear(&g.page);
     g.page = *fresh;
@@ -708,7 +715,10 @@ static void bar_forget(void)
 }
 
 // A new question replaces one that is up: a worker's is answered No (its
-// page is being left), a request waiting on this thread is dropped.
+// page is being left), a request waiting on this thread is dropped. Its
+// number comes from whoever asks — the worker's mailbox, or this thread's
+// own count for a request — and `asker` says which, so the two counts never
+// have to agree.
 static void bar_ask(Asker asker, uint32_t number, const char *question)
 {
     if (g.asker == ASK_WORKER && g.nav.mail != NULL)
@@ -781,10 +791,16 @@ static const char *file_path(const char *after)
 static void start_trip(const char *url, os64_page_request_t *request, NavKind kind,
                        const way_position_t *crumb)
 {
+    // A QUESTION IS ABOUT THE PAGE ON SCREEN, and going anywhere leaves it:
+    // whoever asked, it goes (a form's request with it) before this goes.
+    bar_forget();
     if (os64_strlen(url) >= 7 && os64_memcmp(url, "file://", 7) == 0) {
+        // `url` may be the request's own: the path is taken before it goes.
+        char path[OS64_FETCH_URL_MAX];
+        os64_strcopy(path, sizeof(path), file_path(url + 7));
         os64_page_request_free(request);
         stop_trip();
-        open_local(file_path(url + 7), kind, crumb);
+        open_local(path, kind, crumb);
         return;
     }
     stop_trip();
@@ -862,6 +878,7 @@ static void open_address(const char *typed, NavKind kind, const way_position_t *
                          os64_page_request_t *request)
 {
     if (typed[0] == '/') {
+        bar_forget();           // the page on screen is being left (start_trip)
         stop_trip();
         open_local(typed, kind, crumb);
         return;
@@ -1520,16 +1537,27 @@ static bool bar_event(const os64_gui_event_t *ev)
     return mine;
 }
 
-// The page's <title>, whitespace collapsed, for the window's name.
+// The page's title — the first `title` element in tree order, wherever the
+// parser left it — whitespace collapsed, for the window's name.
 static void title_of(const os64_html_document_t *doc, char *out, size_t cap)
 {
     out[0] = '\0';
     const os64_html_node_t *t = NULL;
-    for (const os64_html_node_t *n = doc != NULL && doc->head != NULL ? doc->head->first_child
-                                                                        : NULL;
-         n != NULL && t == NULL; n = n->next)
-        if (n->kind == OS64_HTML_ELEMENT && n->tag == OS64_HTML_TAG_TITLE)
+    const os64_html_node_t *n = doc != NULL ? doc->document : NULL;
+    while (n != NULL && t == NULL) {
+        if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML &&
+            n->tag == OS64_HTML_TAG_TITLE) {
             t = n;
+            break;
+        }
+        if (n->first_child != NULL) {
+            n = n->first_child;
+            continue;
+        }
+        while (n != NULL && n->next == NULL)
+            n = n->parent;
+        n = n != NULL ? n->next : NULL;
+    }
     size_t at = 0;
     bool space = false;
     for (const os64_html_node_t *c = t != NULL ? t->first_child : NULL; c != NULL; c = c->next) {
@@ -1553,8 +1581,8 @@ static void title_of(const os64_html_document_t *doc, char *out, size_t cap)
 
 // "<page> - yonder" in the title's capacity, which the boundary refuses to
 // exceed rather than cutting (gui.h): a long page title is shortened with
-// "..." first. Anything past ASCII becomes '?', because the title bar is
-// drawn in the kernel's face, not the page's.
+// "..." first. A character past ASCII becomes one '?', because the title
+// bar is drawn in the kernel's face, not the page's.
 static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
 {
     static const char kTail[] = " - yonder";
@@ -1562,8 +1590,12 @@ static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
     size_t n = os64_strlen(page), at = 0;
     bool cut = n > room;
     size_t keep = cut ? room - 3 : n;
-    for (size_t i = 0; i < keep; i++)
-        out[at++] = (unsigned char)page[i] < 0x80 ? page[i] : '?';
+    for (size_t i = 0; i < keep; i++) {
+        unsigned char ch = (unsigned char)page[i];
+        if (ch >= 0x80 && (ch & 0xC0) == 0x80)
+            continue;           // the rest of a character already marked
+        out[at++] = ch < 0x80 ? (char)ch : '?';
+    }
     if (cut)
         for (int i = 0; i < 3; i++)
             out[at++] = '.';

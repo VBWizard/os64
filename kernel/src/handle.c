@@ -395,7 +395,7 @@ void handle_unshare(const handle_t *shared)
 //
 // There is deliberately NO "close without a status block" fallback for the
 // kmalloc below failing. Rd15 built one; Fable's review found it unreachable:
-// the allocator PANICS on exhaustion (allocator.c, and it says so at the site
+// ordinary kmalloc PANICS on exhaustion (allocator.c, and it says so at the site
 // — it used to `cli;hlt` under its own lock), and kmalloc adds kHHDMOffset to
 // whatever it gets, so `kmalloc() == NULL` cannot happen in this kernel. A
 // fallback for an impossible branch is a comment that lies about what can go

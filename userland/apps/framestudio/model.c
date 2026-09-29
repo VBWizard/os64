@@ -28,6 +28,7 @@ void frame_preset(frame_draft_t *d,unsigned preset)
         h->button_size=28;
         for(unsigned i=0;i<h->button_count;++i)h->buttons[i].shape=OS64_DECOR_SQUARE;
     }
+    h->buttons[h->button_count++]=(os64_decor_button_t){OS64_DECOR_SETTINGS,0,h->buttons[0].shape,0};
 }
 bool frame_same(const frame_draft_t *a,const frame_draft_t *b)
 {

@@ -90,7 +90,8 @@ static int hid_deliver_usage(hid_keyboard_t *kbd, uint8_t usage, bool may_delive
 		if (usage == 0x50) { tty_focus_step(-1); return HID_CONSUMED; }   // Alt+Left
 		if (usage == 0x4F) { tty_focus_step(+1); return HID_CONSUMED; }   // Alt+Right
 	}
-	if (kbd->mods & KEYBOARD_MOD_SHIFT) {
+	// Desktop clients own their scrollback; text VTs use the ring here.
+	if ((kbd->mods & KEYBOARD_MOD_SHIFT) && !gui_owns_glass()) {
 		if (usage == 0x4B) { tty_view_scroll(+1); return HID_CONSUMED; }  // Shift+PgUp
 		if (usage == 0x4E) { tty_view_scroll(-1); return HID_CONSUMED; }  // Shift+PgDn
 	}
