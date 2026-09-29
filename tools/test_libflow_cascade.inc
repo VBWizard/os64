@@ -334,6 +334,20 @@ static void cascade_cases(void)
     // its bottom edge (§ 10.8.1) and the strut hangs 6 below: the line is 26.
     // An inline-block a sheet clips sits on its bottom margin edge (CSS 2.1
     // § 10.8.1), not its last line's baseline: a's baseline is the line's.
+    // What a box would scroll is drawn, since nothing scrolls: an
+    // overflow: auto box's 100px paragraph makes the page 100 wide, where a
+    // hidden one's would not.
+    cascade_layout_case("what a box would scroll widens the page",
+        "<!doctype html><style>body { margin: 0 } div { width: 30px; overflow: auto }"
+        " p { width: 100px; margin: 0 }</style><div><p>x</p></div>", 20,
+        "page 100 20\n"
+        "block html 0 0 20 20\n"
+        "  block body 0 0 20 20\n"
+        "    block div 0 0 30 20\n"
+        "      block p 0 0 100 20\n"
+        "        line 0 0 100 20 base 14\n"
+        "          text \"x\" 0 2 8 16 serif 16\n");
+
     cascade_layout_case("an inline-block that clips sits on its bottom edge",
         "<!doctype html><style>body { margin: 0 } span { display: inline-block;"
         " overflow: hidden }</style>a<span>x</span>", 200,

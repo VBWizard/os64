@@ -1680,6 +1680,10 @@ static bool css_url(const Page *p, const flow_style_t *s, char *out, size_t cap)
 }
 
 // The picture a style's background names, in the page's table, or -1.
+// Asked for every box with a background on every paint: a copy, a resolve
+// and one index probe, small beside drawing the box. The layout-time walk
+// has the same answer; keeping it per box would mean a field on libflow's
+// tree for yonder's table, and one to keep true across relayouts.
 static int32_t css_picture(const Page *p, const flow_style_t *s)
 {
     char url[OS64_FETCH_URL_MAX];

@@ -174,10 +174,6 @@ static void meet_axis(int32_t *at, int32_t *len, int32_t other_at, int32_t other
 // to reach it (GARB.md § Booked). The root's overflow, or the body's when
 // the root's is visible, is the viewport's (CSS Overflow 3 § 3.3), and
 // clips neither.
-static bool clips_axis(flow_overflow_t o)
-{
-    return o == FLOW_OVERFLOW_HIDDEN || o == FLOW_OVERFLOW_CLIP;
-}
 
 static bool viewport_overflow(const FBox *src)
 {
@@ -193,7 +189,7 @@ static bool viewport_overflow(const FBox *src)
 static bool clips_own(const FBox *src, bool x_axis)
 {
     return src->node != NULL && !viewport_overflow(src) &&
-           clips_axis(x_axis ? src->style->overflow_x : src->style->overflow_y);
+           f_overflow_clips(x_axis ? src->style->overflow_x : src->style->overflow_y);
 }
 
 // The clip a box hands its content: its own, met with its padding box on

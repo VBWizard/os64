@@ -206,6 +206,22 @@ typedef enum {
     FI_MARKER,          // a list marker drawn inside
 } f_item_kind_t;
 
+// What an overflow value does, asked in one place (CSS Overflow 3 § 3):
+// `hidden` and `clip` cut what overflows, and the rest draw it — `scroll`
+// and `auto` included, since nothing here scrolls (LAYOUT.md § Booked).
+// Every overflow but `visible` and `clip` makes a scroll container, which
+// is what starts a formatting context and gives an inline-block its bottom
+// edge for a baseline; `clip` does neither — that is what it is for.
+static inline bool f_overflow_clips(flow_overflow_t o)
+{
+    return o == FLOW_OVERFLOW_HIDDEN || o == FLOW_OVERFLOW_CLIP;
+}
+
+static inline bool f_overflow_scrolls(flow_overflow_t o)
+{
+    return o != FLOW_OVERFLOW_VISIBLE && o != FLOW_OVERFLOW_CLIP;
+}
+
 typedef struct FBox FBox;
 typedef struct FLine FLine;
 typedef struct FFrag FFrag;

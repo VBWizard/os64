@@ -1316,16 +1316,17 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 int64_t hm = g->mt + fr->h + g->mb;
                 // The baseline of a replaced box is its bottom margin edge;
                 // an inline-block's is its last line's, where it has one,
-                // unless its overflow is not visible (§ 10.8.1): one a sheet
-                // clips, or a marquee, which the chapter makes
+                // unless it is a scroll container (CSS 2.1 § 10.8.1, in CSS
+                // Inline 3's terms, where `overflow: clip` makes none): one a
+                // sheet makes so, or a marquee, which the chapter makes
                 // `overflow: hidden !important` — asked by its tag, because
                 // this chapter does not give the marquee that clip (it would
                 // cut the text a still marquee lets overflow; booked).
                 int64_t top = -hm, base = 0;
-                bool clips = g->style->overflow_x != FLOW_OVERFLOW_VISIBLE ||
-                             g->style->overflow_y != FLOW_OVERFLOW_VISIBLE ||
-                             g->item->node->tag == OS64_HTML_TAG_MARQUEE;
-                if (g->item->content != NULL && g->item->content->placed && !clips &&
+                bool scroller = f_overflow_scrolls(g->style->overflow_x) ||
+                                f_overflow_scrolls(g->style->overflow_y) ||
+                                g->item->node->tag == OS64_HTML_TAG_MARQUEE;
+                if (g->item->content != NULL && g->item->content->placed && !scroller &&
                     last_baseline(g->item->content, &base))
                     top = -(g->mt + base - g->item->content->y);
                 switch (g->style->vertical_align) {
@@ -1637,8 +1638,7 @@ static bool bfc_root(const FBox *b)
 {
     const flow_style_t *s = b->style;
     bool scroller = b->node != NULL &&
-                    ((s->overflow_x != FLOW_OVERFLOW_VISIBLE && s->overflow_x != FLOW_OVERFLOW_CLIP) ||
-                     (s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP));
+                    (f_overflow_scrolls(s->overflow_x) || f_overflow_scrolls(s->overflow_y));
     return b->parent == NULL || b->kind == FB_TABLE || b->kind == FB_CELL ||
            b->kind == FB_CAPTION || b->kind == FB_REPLACED || scroller ||
            (b->kind == FB_BLOCK && b->node != NULL && s->display == FLOW_DISPLAY_INLINE_BLOCK);
@@ -3192,8 +3192,9 @@ static int64_t right_edge(const FBox *b)
         return 0;
     int64_t r = b->x + b->w;
     // What a box clips on an axis is not drawn past it there, so it widens
-    // nothing (CSS Overflow 3 § 2.2).
-    if (b->style->overflow_x != FLOW_OVERFLOW_VISIBLE)
+    // nothing (CSS Overflow 3 § 2.2); what it would scroll is drawn, since
+    // nothing scrolls, and so it does.
+    if (f_overflow_clips(b->style->overflow_x))
         return r;
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
@@ -3213,7 +3214,7 @@ static int64_t bottom_edge(const FBox *b)
     if (!b->placed)
         return 0;
     int64_t r = b->y + b->h;
-    if (b->style->overflow_y != FLOW_OVERFLOW_VISIBLE)
+    if (f_overflow_clips(b->style->overflow_y))
         return r;
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
