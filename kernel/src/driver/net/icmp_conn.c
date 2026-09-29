@@ -20,6 +20,7 @@
 #include "signals.h"
 #include "scheduler.h"
 #include "time.h"            // wait() — the ARP-resolution retry nap in write
+#include "driver/system/x86_64.h"   // rdtsc — the arrival stamp
 #include "driver/net/net_device.h"
 #include "driver/net/net_wire.h"
 #include "driver/net/icmp.h"
@@ -143,9 +144,9 @@ long icmp_conn_write(icmp_conn_t* c, const void* buf, size_t len)
 	return ICMP_CONN_ERR_TIMEOUT;
 }
 
-// RX context (inside the NIC poll): enqueue only, never wake directly —
-// the sweep under the scheduler lock does that. Same rule, same reason,
-// as udp_conn_rx.
+// THREAD context (knet draining a card, or a test injecting at the seam):
+// enqueue, then wake the parked reader on arrival. Same rule, same shape,
+// as udp_conn_rx — see its context map for who may take which lock.
 void icmp_conn_deliver(uint32_t src_ip, uint16_t identifier,
                        const void* payload, uint16_t length)
 {
@@ -184,7 +185,21 @@ void icmp_conn_deliver(uint32_t src_ip, uint16_t identifier,
 	c->lens[slot] = n;
 	c->count++;
 	c->replies_delivered++;
+	c->last_arrival_tsc = rdtsc();
+
+	// WAKE ON ARRIVAL, udp_conn_rx's tail: claim a PARKED reader under the
+	// conn lock, release, then wake; a registered-not-parked reader stays
+	// registered for the sweep (see icmp_conn_wake_if_ready for why that
+	// window matters — it was once a 100-tick "round trip").
+	thread_t* w = NULL;
+	if (c->waiter != NULL && c->waiter->threadState == THREAD_STATE_ISLEEP)
+	{
+		w = c->waiter;
+		c->waiter = NULL;
+	}
 	spinlock_release_irqrestore(&c->lock, irqflags);
+	if (w != NULL)
+		scheduler_wake_isleep_thread(w);
 }
 
 long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline)
@@ -265,9 +280,9 @@ void icmp_conn_wake_if_ready(void)
 		// wakes the sleeper — it eats the full 1-second backstop instead.
 		// Measured on the first ICMP boot: every echo reported an RTT of
 		// exactly 100 ticks, which is the backstop, not the network.
-		// Leaving a not-yet-parked waiter REGISTERED costs one more
-		// sweep (~1 tick) and is what makes the reply latency the wire's
-		// instead of the timer's.
+		// Leaving a not-yet-parked waiter REGISTERED costs it one more
+		// pass (a tick at most). This sweep is that case's only waker; a
+		// reader already parked is woken by icmp_conn_deliver on arrival.
 		// A closed conn is a condition too: the close's own wake misses a
 		// reader still mid-park, and this pass is what delivers it.
 		if (c->waiter != NULL && (c->count > 0 || c->closed) &&

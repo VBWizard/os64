@@ -11,9 +11,11 @@
 // arrive through the callbacks in flow_env_t, which is what lets the whole
 // library run on the host against the fake font backend.
 //
-// THE DOCUMENT AND THE MODEL MUST OUTLIVE WHATEVER IS BUILT FROM THEM. A
-// style points into the tree for the family names a page wrote; nothing
-// is copied that can be pointed at.
+// THE DOCUMENT, THE MODEL AND THE TEXT CONTEXT MUST OUTLIVE WHATEVER IS
+// BUILT FROM THEM. A style points into the tree for the family names a page
+// wrote, and nothing is copied that can be pointed at; every text
+// fragment's run lives on `env->text`, and freeing the layout releases each
+// run against it.
 
 #include "html/html.h"
 #include "page/page.h"
@@ -232,7 +234,17 @@ typedef struct {
     uint32_t viewport_font_px;      // `medium`; 16 unless the face says otherwise
     flow_generic_t default_generic; // the family a page that names none is drawn in
     uint32_t ink, link_ink, paper;  // XRGB; the dumps name these, never print them
+    // What each of the two arenas a page can MULTIPLY may hold, in bytes:
+    // the boxes (an inline split round a block reopens every inline open
+    // there) and the lines laid out from them, whose budget a table's
+    // working memory shares (nested tables hold theirs at once, and
+    // columns can be declared by the thousand). 0 is FLOW_ARENA_DEFAULT. The
+    // budget is the caller's, as libhtml's max_arena_bytes is; a layout that
+    // reaches it stops and says `incomplete`, and what it holds is real.
+    size_t max_arena_bytes;
 } flow_env_t;
+
+#define FLOW_ARENA_DEFAULT ((size_t)64 << 20)
 
 // ── The laid-out tree ───────────────────────────────────────────────────
 
@@ -276,7 +288,10 @@ struct flow_box {
     const char *text;
     uint32_t length;
     // TEXT: where those bytes are in the node's processed text — what a
-    // selection maps a pixel back through.
+    // selection maps a pixel back through — when the node is a TEXT node.
+    // Under an ELEMENT they are text the page never wrote there (a `q`'s
+    // marks, an `rt`'s parentheses, a picture's alt), and `begin` indexes
+    // nothing of the node's.
     uint32_t begin;
     uint8_t decoration;             // TEXT: FLOW_DECORATION_* drawn across it
     // TEXT: each drawn decoration's colour, the colour of the element that
@@ -292,8 +307,10 @@ struct flow_box {
 
 typedef struct flow_tree flow_tree_t;
 
-// Styles, boxes and lays out the page at `width` CSS pixels. NULL on no
-// memory only; otherwise a tree whose `incomplete` says whether it is
+// Styles, boxes and lays out the page at `width` CSS pixels. NULL when
+// memory runs out outside the budget, or when there is no document, no
+// environment, no text context or font resolver, or the width is
+// negative; otherwise a tree whose `incomplete` says whether it is
 // whole — a document libhtml refused partway, or a model libpage could not
 // finish, is not, however it lays out. Every call is a whole rebuild
 // (LAYOUT.md, ruling 2).
@@ -310,11 +327,13 @@ bool flow_incomplete(const flow_tree_t *tree);
 // The root box: the html element's. NULL for a page with nothing to lay out.
 const flow_box_t *flow_root(const flow_tree_t *tree);
 
-// Every box that meets `viewport`, in painting order (CSS 2.1 Appendix E
-// without z-index or positioning): the block-level boxes first — their
-// backgrounds and borders — then the inline content, spans before the
-// text they sit behind; an atom's own content where the atom is. Pruned
-// on OVERFLOW rects, so painting the viewport costs the boxes it shows.
+// Every box that meets `viewport` but the LINE boxes, which paint nothing of
+// their own (flow_hit can still answer one), in painting order (CSS 2.1
+// Appendix E without z-index or positioning): the block-level boxes first —
+// their backgrounds and borders — then the inline content, spans before the
+// text they sit behind; an atom's own content where the atom is. Pruned on
+// OVERFLOW rects: a subtree off the viewport costs one test, and a box that
+// meets it costs a test for each of its children, lines included.
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 
@@ -328,12 +347,22 @@ const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y);
 // where an incomplete layout stopped).
 const flow_box_t *flow_box_for(const flow_tree_t *tree, const os64_html_node_t *node);
 
-// The pictures and the controls, in tree order, each once: an image's box
-// (its alt text's first run when it is laid out as text) so the face can
-// fetch libpage's resolved src, and a control's atom so the face can place
-// a widget on it.
+// The pictures and the controls that have a box, in tree order, each once:
+// PLACEMENT — where a picture that arrived is drawn (its box, or its alt
+// text's first run when it is laid out as text), where a control's widget
+// goes. A picture that takes no space (a missing one with `alt=""`) has no
+// box and is not here, so what to FETCH is libpage's list
+// (os64_page_image), which names every picture the page does.
 int32_t flow_nimages(const flow_tree_t *tree);
 const flow_box_t *flow_image(const flow_tree_t *tree, int32_t i);
+
+// Whether a replaced element drawn in `style` is sized by the page alone —
+// a width, and a height in pixels — so that what the oracle answers
+// (flow_env_t.replaced_size) cannot change its box. The rule the layout
+// sizes by, for a face deciding whether an arrival needs a new layout:
+// ask it of the element's box (flow_box_for), not of its attributes, which
+// say what the page wrote and not what parsed. False for NULL.
+bool flow_replaced_fixed(const flow_style_t *style);
 int32_t flow_ncontrols(const flow_tree_t *tree);
 const flow_box_t *flow_control(const flow_tree_t *tree, int32_t i);
 

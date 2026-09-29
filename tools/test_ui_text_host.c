@@ -2818,6 +2818,30 @@ static void ui_test_wheel_dispatch(void)
     current="";
 }
 
+/* Exercise the production helper's layout without a guest window syscall. */
+#include "../userland/libos64/ui_settings.c"
+static void ui_test_settings_envelope(void)
+{
+    current="settings root bounds";
+    os64_ui_settings_t d={0};
+    d.ctx.surf.width=760;d.ctx.surf.height=420;d.ui.ctx=&d.ctx;
+    d.ui.theme=(os64_ui_theme_t){.pad=6,.button_h=28,.gap=4};d.body_rows=5;
+    os64_ui_panel(&d.root);os64_ui_panel(&d.body);os64_ui_set_root(&d.ui,&d.root);
+    os64_ui_add_child(&d.root,&d.body);
+    const char *captions[]={"Apply","Save as default","Close"};
+    for(unsigned i=0;i<3;++i){os64_ui_button(&d.actions[i],captions[i],NULL,NULL);os64_ui_add_child(&d.root,&d.actions[i]);}
+    CHECK(d.root.bounds.w==0);
+    CHECK(arrange(&d,false));
+    CHECK(d.root.bounds.w==760 && d.root.bounds.h==420);
+    CHECK(d.body.bounds.h>0 && d.actions[0].bounds.y>d.body.bounds.y+d.body.bounds.h);
+    d.ctx.surf.width=800;CHECK(arrange(&d,true));
+    CHECK(d.root.bounds.w==760 && d.root.bounds_staged.w==800);
+    d.ctx.surf.height=80;CHECK(!arrange(&d,false));
+    CHECK(d.root.bounds.w==760 && d.root.bounds.h==420);
+    CHECK(os64_ui_font_release(&d.ui)==OS64_FONT_OK);
+    current="";
+}
+
 int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : "userland/libfreetype/fixtures";
@@ -2828,6 +2852,7 @@ int main(int argc, char **argv)
     os64_ui_t ui;
     memset(&ui, 0, sizeof(ui));
 
+    ui_test_settings_envelope();
     ui_test_wheel_dispatch();
     identity_against_bitmap(&ui);
     builtin_metrics(&ui);

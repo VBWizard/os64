@@ -146,8 +146,9 @@ MTU-1500 link can carry — where a ninth arrival drops on a counter,
 because the bound is the flow control and dropping is what UDP promises.
 One write is one datagram, one read returns one datagram, short if the
 buffer is smaller. Well-known ports the kernel itself speaks: 67/68 for
-DHCP. A UDP reader still wakes at the tick rather than on arrival
-(DEBTS); TCP's readers do not.
+DHCP. A UDP reader is woken on arrival by the enqueue itself, as TCP's
+and ICMP's are (ARRIVAL_WAKE.md); the per-pass sweep is the backstop for
+a reader that registered but had not yet parked.
 
 ## DHCP
 

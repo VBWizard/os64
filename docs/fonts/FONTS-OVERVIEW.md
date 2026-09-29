@@ -4,7 +4,7 @@ A font file describes how letters should look. os64 now has the other pieces
 needed to turn those letters into editable text: sizing, spacing, drawing,
 selection, scrolling, and settings that applications can change safely.
 
-There are three independent choices:
+There are three independent roles:
 
 - **Interface:** buttons, labels and other libui controls.
 - **Terminal:** gterm's character grid; this needs a genuinely fixed-width font.
@@ -17,8 +17,11 @@ it does not apply them. Use both when you want both effects. Fonts and colors
 have separate drafts, and changing one component preserves the others.
 
 The built-in 8×16 font is the dependable default. It has one size. The shipped
-DejaVu Sans and DejaVu Sans Mono files are scalable, and their license ships
-with them. The first release supports ordinary TrueType and CFF OpenType fonts;
+DejaVu Serif, Sans and Sans Mono families are scalable, with regular, bold,
+italic/oblique and combined styles; their license ships with them. Web-family
+choices in `fonts.conf` are independent of the roles and are read at browser
+startup. Workshop preserves those family lines when saving its role choices.
+The text engine supports ordinary TrueType and CFF OpenType fonts;
 the provider recognizes their contents, rather than trusting the extension.
 This is Western UTF-8 text and common symbols, not full multilingual shaping.
 Scribe preserves the original file bytes, including text it cannot display.
