@@ -405,20 +405,34 @@ static int32_t clamp32(int64_t v)
     return v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : (int32_t)v;
 }
 
+// A select's `size`, by HTML's rules for a non-negative integer (leading
+// white space, an optional `+`, digits), saturating at INT32_MAX: the page
+// writes as many digits as it likes. Anything else is 0, the default.
+static int64_t size_rows(const char *v)
+{
+    while (*v == ' ' || *v == '\t' || *v == '\n' || *v == '\f' || *v == '\r')
+        v++;
+    if (*v == '+')
+        v++;
+    int64_t n = 0;
+    for (; *v >= '0' && *v <= '9'; v++)
+        n = n > (INT32_MAX - 9) / 10 ? INT32_MAX : n * 10 + (*v - '0');
+    return n;
+}
+
 // A select's box: the rows its list shows, as wide as its longest option.
 // Measured in the window's own face, the one its widget paints in. The
-// page chooses `size`, so the arithmetic is 64-bit and the answer clamped.
+// page chooses `size` (at most INT32_MAX rows, by size_rows), so the
+// arithmetic is 64-bit and the answer clamped.
 static void select_size(const os64_page_control_t *c, const os64_html_node_t *node,
                         int32_t *w, int32_t *h)
 {
     const os64_html_attr_t *size = os64_html_attr(node, "size");
-    int64_t rows = size != NULL && size->value != NULL ? os64_atoi(size->value) : 0;
+    int64_t rows = size != NULL && size->value != NULL ? size_rows(size->value) : 0;
     if (rows <= 1)
         rows = c->noptions < SELECT_ROWS ? c->noptions : SELECT_ROWS;
     if (rows < 1)
         rows = 1;
-    if (rows > INT32_MAX)
-        rows = INT32_MAX;               // so the product below fits 64 bits
     int32_t widest = 0;
     for (int32_t k = 0; k < c->noptions; k++) {
         int32_t px = 0;
