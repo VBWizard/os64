@@ -9,7 +9,9 @@
 // leaks, and what comes back is true of the whole text or says it is not. And two probes: `--deep`
 // parses a million nested `(` on a thread with a small stack (past the
 // depth bound the parser must find the end without recursing), and
-// `--numbers` dumps numbers past int64_t's reach and past a double's.
+// `--numbers` dumps numbers past int64_t's reach and past a double's. And
+// `--cost BYTES` and `--full` hold a parse to what GARB.md says it costs,
+// and to keeping what it finished when the arena fills.
 
 #include <pthread.h>
 #include <signal.h>
@@ -18,6 +20,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include "os64/arena.h"
 
 #include "garb/garb.h"
 #include "garb/select.h"
@@ -701,8 +705,60 @@ static int numbers(void)
     return ok ? 0 : 1;
 }
 
+// What a parse COSTS, GARB.md § The cost: a sheet shaped like the web's
+// biggest (Bootstrap's long selector lists, many short declarations),
+// parsed, then every rule's block read as its items — what the cascade
+// does. `--cost BYTES`: it must come back whole, at under GARB_COST_MAX
+// arena bytes a byte of text, the ratio GARB.md gives. `--full`: a sheet at
+// the input's own cap fills the arena, and must come back incomplete with
+// the rules it finished kept — never with nothing because the list that
+// held them could not be kept.
+#define GARB_COST_MAX 22
+static const char kShaped[] =
+    ".btn-outline-%d:not(:disabled):not(.disabled).active,"
+    ".btn-outline-%d:not(:disabled):not(.disabled):active,"
+    ".show>.btn-outline-%d.dropdown-toggle{color:#fff;background-color:#007bff;"
+    "border-color:#007bff;box-shadow:0 0 0 .2rem rgba(0,123,255,.5)}\n"
+    "@media (min-width:%dpx){.col-md-%d{flex:0 0 8.333333%%;max-width:8.333333%%}}\n";
+
+static int cost(size_t bytes, bool full)
+{
+    char *text = malloc(bytes + 512);
+    size_t len = 0;
+    for (int i = 0; len + 512 < bytes; i++)
+        len += (size_t)snprintf(text + len, 512, kShaped, i, i, i, 540 + i % 900, i % 12 + 1);
+    garb_parsed_t r;
+    garb_status_t st = garb_parse_sheet_text(text, len, &r);
+    int32_t rules = 0, decls = 0;
+    bool whole = st == GARB_OK && !r.incomplete;
+    for (int32_t i = 0; i < r.nitems; i++) {
+        const garb_rule_t *rule = r.items[i].rule;
+        if (r.items[i].kind != GARB_ITEM_RULE || !rule->has_block)
+            continue;
+        rules++;
+        garb_item_t *items;
+        int32_t n;
+        whole &= garb_items_of(&r, rule->block, rule->nblock, &items, &n);
+        for (int32_t k = 0; k < n; k++)
+            decls += items[k].kind == GARB_ITEM_DECL;
+    }
+    double ratio = (double)os64_arena_stats(r.arena).used_bytes / (double)len;
+    int ok = full ? st == GARB_OK && r.incomplete && rules > 1000
+                  : whole && !r.incomplete && ratio < GARB_COST_MAX;
+    printf("libgarb %s: a %zu KiB sheet, %d rules, %d declarations read: %.1f arena bytes a "
+           "byte%s%s\n", full ? "full" : "cost", len >> 10, rules, decls, ratio,
+           r.incomplete ? ", incomplete" : "", ok ? "" : " - FAILED");
+    garb_free(&r);
+    free(text);
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 3 && strcmp(argv[1], "--cost") == 0)
+        return cost((size_t)strtoul(argv[2], NULL, 10), false);
+    if (argc == 2 && strcmp(argv[1], "--full") == 0)
+        return cost(GARB_SHEET_MAX, true);
     if (argc == 2 && strcmp(argv[1], "--deep") == 0)
         return deep();
     if (argc == 2 && strcmp(argv[1], "--numbers") == 0)

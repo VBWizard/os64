@@ -30,7 +30,7 @@ int os64_snprintf(char *p, size_t n, const char *fmt, ...)
 }
 
 typedef struct { const char *path; unsigned char *data; size_t length, at; } file;
-static file files[10];
+static file files[32];
 static bool config_found, fail_read, fail_open;
 static int64_t advertised = -1;
 static size_t directory_at, directory_count = 3;
@@ -46,11 +46,11 @@ int64_t os64_opendir(const char *path)
     else if (multi_directory && !strcmp(path,"/home/fonts")) directory_kind = 1;
     else if (multi_directory && !strcmp(path,"/etc/fonts")) directory_kind = 2;
     else return -1;
-    return 30;
+    return 99;
 }
 int64_t os64_readdir(int32_t h, os64_dirent_t *e)
 {
-    CHECK(h == 30);
+    CHECK(h == 99);
     size_t count = directory_kind ? 2 : directory_count;
     if (directory_at == count) return 0;
     *e = (os64_dirent_t){0};
@@ -75,15 +75,15 @@ int64_t os64_open(const char *path, const char *mode)
 {
     CHECK(!strcmp(mode, "r")); ++opens;
     if (fail_open) return -1;
-    for (size_t i = 0; i < 10; ++i) if (files[i].path && !strcmp(files[i].path, path)) {
+    for (size_t i = 0; i < 32; ++i) if (files[i].path && !strcmp(files[i].path, path)) {
         files[i].at = 0; return (int64_t)i + 10;
     }
     return -1;
 }
-int64_t os64_close(int32_t h) { CHECK((h >= 10 && h < 20) || h == 30); return 0; }
+int64_t os64_close(int32_t h) { CHECK((h >= 10 && h < 42) || h == 99); return 0; }
 int64_t os64_read(int32_t h, void *out, size_t n)
 {
-    CHECK(h >= 10 && h < 20);
+    CHECK(h >= 10 && h < 42);
     file *f = &files[h - 10];
     if (fail_read && f->at) return -1;
     if (n > 32768) n = 32768; /* exercise legal short reads */
@@ -92,7 +92,7 @@ int64_t os64_read(int32_t h, void *out, size_t n)
 }
 int64_t os64_stat(const char *path, os64_dirent_t *e)
 {
-    for (size_t i = 0; i < 10; ++i) if (files[i].path && !strcmp(files[i].path, path)) {
+    for (size_t i = 0; i < 32; ++i) if (files[i].path && !strcmp(files[i].path, path)) {
         *e = (os64_dirent_t){.size = advertised >= 0 ? (uint64_t)advertised : files[i].length}; return 0;
     }
     return -1;
@@ -215,6 +215,76 @@ static void discovery(os64_text_context_t *ctx, const os64_font_config_t *c)
     deny = 0;
 }
 
+static void families(const char *fixtures)
+{
+    os64_font_config_t c, moved;
+    os64_font_config_error_t e;
+    const char *settings = "family.serif = fonts/sans\nfamily.serif.bold = fonts/mono\n"
+        "family.serif.fallback.2 = builtin\nfamily.sans = builtin\nfamily.mono = builtin\n";
+    CHECK(!decode(settings, &c, &e));
+    CHECK(!strcmp(c.families[0].face[0], "/cfg/fonts/sans"));
+    CHECK(c.families[0].source_line[1] == 2);
+    char encoded[8192];
+    int64_t n = os64_font_config_encode(&c, encoded, sizeof(encoded)); CHECK(n > 0);
+    CHECK(!os64_font_config_decode(encoded, (size_t)n, "/home/fonts.conf", &moved, &e));
+    for (size_t f=0;f<3;++f) for (size_t i=0;i<6;++i)
+        CHECK(!strcmp(c.families[f].face[i], moved.families[f].face[i]));
+    os64_text_options_t options = {.memory={NULL,allocate,release}};
+    os64_text_context_t *text = NULL;
+    CHECK(!os64_font_context_create(&options, &text));
+    os64_font_family_cache_t *cache = NULL;
+    CHECK(!os64_font_config_family_prepare(text, &c, &cache, &e));
+    os64_font_family_list_t list = {.generic=OS64_FONT_FAMILY_SERIF};
+    os64_font_role_view_t view;
+    for (unsigned style=0;style<4;++style) {
+        CHECK(!os64_font_family_open(cache,&list,style&1,style&2,18,&view));
+        CHECK(!strcmp(view.primary.family, style&1 ? "DejaVu Sans Mono" : "DejaVu Sans"));
+        CHECK(view.font_count==2);
+    }
+    os64_font_family_cache_destroy(cache);
+    /* A missing unused style refuses the candidate and identifies its line. */
+    CHECK(!decode("family.serif = fonts/sans\nfamily.serif.italic = fonts/missing\n", &c, &e));
+    CHECK(os64_font_config_family_prepare(text,&c,&cache,&e)==OS64_FONT_CONFIG_IO);
+    CHECK(!cache && e.line==2 && e.source==2 && e.role==OS64_FONT_ROLE_COUNT);
+    CHECK(!decode("family.serif = fonts/bad\n", &c, &e));
+    /* Keep the other families independent of system files in this harness. */
+    strcpy(c.families[1].face[0],"builtin"); strcpy(c.families[2].face[0],"builtin");
+    CHECK(os64_font_config_family_prepare(text,&c,&cache,&e)==OS64_FONT_CONFIG_FACE);
+    CHECK(!cache && e.line==1);
+    CHECK(decode("family.serif.bold = ../bad",&c,&e)==OS64_FONT_CONFIG_PATH && e.line==1);
+    CHECK(decode("family.serif.fallback.3 = builtin",&c,&e)==OS64_FONT_CONFIG_SYNTAX);
+    CHECK(!decode("family.serif = fonts/sans\nfamily.sans = builtin\nfamily.mono = builtin",&c,&e));
+    CHECK(!os64_font_config_family_prepare(text,&c,&cache,&e));
+    for (unsigned style=0;style<4;++style) {
+        CHECK(!os64_font_family_open(cache,&list,style&1,style&2,18,&view));
+        CHECK(!strcmp(view.primary.family,"DejaVu Sans"));
+    }
+    os64_font_family_cache_destroy(cache);
+    /* Untouched systems resolve all twelve shipped faces, including styles. */
+    char paths[12][128];
+    for (size_t f=0;f<3;++f) for (size_t style=0;style<4;++style) {
+        const char *family[]={"Serif","Sans","SansMono"};
+        const char *suffix[]={"","-Bold",f ? "-Oblique" : "-Italic",f ? "-BoldOblique" : "-BoldItalic"};
+        char name[80]; snprintf(name,sizeof(name),"DejaVu%s%s.ttf",family[f],suffix[style]);
+        size_t i=f*4+style;
+        snprintf(paths[i],sizeof(paths[i]),"/etc/fonts/%s",name);
+        load(&files[10+i],fixtures,name,paths[i]);
+    }
+    os64_font_config_defaults(&c);
+    CHECK(!os64_font_config_family_prepare(text,&c,&cache,&e));
+    for (size_t f=0;f<3;++f) for (unsigned style=0;style<4;++style) {
+        list.generic=(os64_font_family_t)f;
+        CHECK(!os64_font_family_open(cache,&list,style&1,style&2,18,&view));
+        const char *names[]={"DejaVu Serif","DejaVu Sans","DejaVu Sans Mono"};
+        CHECK(!strcmp(view.primary.family,names[f]));
+        CHECK((strstr(view.primary.style,"Bold")!=NULL)==((style&1)!=0));
+        CHECK((!!(strstr(view.primary.style,"Italic") || strstr(view.primary.style,"Oblique")))==((style&2)!=0));
+    }
+    os64_font_family_cache_destroy(cache);
+    for (size_t i=10;i<22;++i) {free(files[i].data); files[i]=(file){0};}
+    CHECK(!os64_text_destroy(text));
+}
+
 static void loading(void)
 {
     os64_font_config_t c, old;
@@ -314,7 +384,7 @@ int main(int argc, char **argv)
     files[7].data = malloc(files[1].length + 1); CHECK(files[7].data);
     memcpy(files[7].data, files[1].data, files[1].length);
     files[7].data[files[1].length] = 0; ++files[7].length;
-    parsing(); loading();
+    parsing(); families(argv[1]); loading();
     free(files[6].data); free(files[7].data);
     free(files[1].data); free(files[2].data);
     printf("font_config: %zu checks, 0 failures; no live allocations\n", checks);

@@ -8,6 +8,8 @@
 
 void *kmalloc_aligned(uint64_t length);
 void *kmalloc(uint64_t length);
+// Zeroed HHDM memory, or NULL on resource exhaustion/invalid size. Free with kfree.
+void *kmalloc_try(uint64_t length);
 // DMA allocation: page-aligned, zeroed, and the caller gets BOTH addresses —
 // the HHDM virtual pointer (returned; what the KERNEL reads and writes) and
 // the physical address (*phys_out; what the DEVICE is programmed with). The

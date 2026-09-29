@@ -1,6 +1,6 @@
 # Font fixtures
 
-Four faces the tests measure against, and the licences they travel under.
+Twelve DejaVu web faces and two CFF test faces, with their licences.
 **Font files are licensed separately from FreeType** — the engine's licence
 says nothing about these, and each one's terms are recorded below.
 
@@ -19,13 +19,24 @@ byte sequence its release archive contains.
 | `DejaVuSansMono.ttf` | `b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582` | 340,712 |
 | `SourceSans3-Regular.otf` | `08df266400933d3178d081a45f94a08814c3e55b4b7dd2e0ff69cb1329f13ab6` | 334,924 |
 | `SourceCodePro-Regular.otf` | `9f9664e2edf6f045c11e774f9bd0be6993971f2544a39061a5ce478b96b051f8` | 131,128 |
+| `DejaVuSerif.ttf` | `42d1edeb7952f31b1f96d767ed7030b08a39e0c372b0071641518864e2bffb51` | 380,132 |
+| `DejaVuSerif-Bold.ttf` | `c47b5527bcdc8dcf9ea8c77054454c5a884beaca2f44851a2a823ee639cbf07f` | 356,088 |
+| `DejaVuSerif-Italic.ttf` | `2e39b1d50f90b933b00c7bb54a96afd3f86419b3d717c7cf202e36f2d4973e47` | 345,996 |
+| `DejaVuSerif-BoldItalic.ttf` | `8d3dd3d31350309042ed226af82b34539bd773518e6107cb352712853ba80308` | 347,460 |
+| `DejaVuSans-Bold.ttf` | `e6476c1b80502924294eed40894c5b18e06c181444ca953e5334262df9c27724` | 705,684 |
+| `DejaVuSans-Oblique.ttf` | `4af75fa16ee6d3ad43e1ecec41862c24954af26a55c6bb1ebb27bd486a50f5f4` | 635,416 |
+| `DejaVuSans-BoldOblique.ttf` | `eb436dca0c2594b73d8b603b892e374fdfd8d885d25ffb4f18df4c4c0b49e50f` | 643,292 |
+| `DejaVuSansMono-Bold.ttf` | `bce60f1b4421acd9ea51ba6623d7024ecbe6817a953e3654df62a5e6bdf8f769` | 331,992 |
+| `DejaVuSansMono-Oblique.ttf` | `742097840c541870e8d6dc5c9b37bb1ceeea6c0dedd1d475faf903ef9df734b0` | 251,932 |
+| `DejaVuSansMono-BoldOblique.ttf` | `91713a71d550bba22c2a6b2bb2a9ad8f9a159e12e4e9f0a5b2677998ba21213e` | 253,580 |
 | `LICENSE-DejaVu.txt` | `7a083b136e64d064794c3419751e5c7dd10d2f64c108fe5ba161eae5e5958a93` | 8,816 |
 | `LICENSE-SourceCodePro.txt` | `7c940e28a5388e9bba866cf0e408edda45fe0899ba98665b8f6ab31dc5e4b8ff` | 4,566 |
 | `LICENSE-SourceSans3.txt` | `89ad2c4f66dd29127527493e729c31e731f111cf10faf5774c3db9275ed0c22c` | 4,579 |
 
 ## Where they came from
 
-**DejaVu Sans and DejaVu Sans Mono**, version 2.37, from
+**DejaVu Serif, Sans and Sans Mono**, regular, bold, italic/oblique and
+bold-italic/bold-oblique, version 2.37, from
 `dejavu-fonts-ttf-2.37.tar.bz2`
 (SHA-256 `fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7`),
 <https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.tar.bz2>.
@@ -49,10 +60,12 @@ modified versions. Neither is modified. The licence texts were fetched from
 each repository at its release tag (the OTF archives carry none) and are
 included as `LICENSE-SourceCodePro.txt` and `LICENSE-SourceSans3.txt`.
 
-The three licence files ship beside the fonts in `/tests/fonts` so the terms
+The DejaVu families also ship in `/etc/fonts`, with their licence in
+`/etc/licenses/DejaVu.txt`. The three licence files ship beside the fonts
+in `/tests/fonts` so the terms
 are on the machine that carries them.
 
-## Why these four
+## Why the four original test faces
 
 Each covers something the others do not, which is what makes the set a test
 rather than a sample.
