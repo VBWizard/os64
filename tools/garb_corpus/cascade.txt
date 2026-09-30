@@ -70,9 +70,8 @@ p: color: rgb(255, 0, 0); margin-top: 3px; margin-left: 7px; padding-top: 4px; p
 (end)
 END
 
-# @media, @supports, and a style element's media. A grid container is read
-# but laid out as the block it is outside, so it is not SUPPORTED; a flex
-# container is laid out, wrapping or not, and is.
+# @media, @supports, and a style element's media. A grid and a flex
+# container are laid out, wrapping or not, so both are SUPPORTED.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -92,7 +91,7 @@ p { color: red }
 <style media="(min-width: 700px)">p { height: 2px }</style>
 <p>x
 WANT
-p: color: rgb(0, 0, 255); margin-bottom: 4px; margin-left: 2px; padding-top: 7px; padding-right: 6px; padding-bottom: 8px; height: 2px
+p: color: rgb(0, 0, 255); margin-top: 1px; margin-bottom: 4px; margin-left: 2px; padding-top: 7px; padding-right: 6px; padding-bottom: 8px; height: 2px
 (end)
 END
 
@@ -221,8 +220,8 @@ END
 # a.css's blue loses to the page's own red, and a1.css (imported by a.css)
 # comes before a.css, so a.css's margin-top wins over a1's. b.css's media
 # does not hold at 800; c.css's supports() does; d.css's does not, and nor
-# does f.css's, a grid laid out as the block it is outside rather than as
-# written; e.css is imported after a rule, which makes the @import nothing.
+# does f.css's, a flow-root laid out as a block rather than as written;
+# e.css is imported after a rule, which makes the @import nothing.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -231,7 +230,7 @@ PAGE
 @import url(b.css) screen and (max-width: 500px);
 @import "c.css" supports(display: block);
 @import "d.css" supports(foo: bar);
-@import "f.css" supports(display: grid);
+@import "f.css" supports(display: flow-root);
 p { color: red }
 @import "e.css";
 </style><p>x

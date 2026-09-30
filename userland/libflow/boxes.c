@@ -250,6 +250,7 @@ static FBox *new_box(B *b, FBox *parent, f_box_kind_t kind, const os64_html_node
     box->control = -1;
     box->parent = parent;
     box->flex = kind == FB_BLOCK && node != NULL && f_display_flex(style->display);
+    box->grid = kind == FB_BLOCK && node != NULL && f_display_grid(style->display);
     // Attached at once, so a build that stops here leaves a tree that is
     // whole up to this box.
     if (parent != NULL) {
@@ -720,18 +721,19 @@ static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *st
 static void table_range(B *b, FBox *table, const os64_html_node_t *first,
                         const os64_html_node_t *stop, Scope *scope);
 
-// A block container's content from a range of sibling nodes. A flex
-// container is never an inline formatting context: its element children
-// are block-level already (pass 1 blockified them), and a run of text
-// among them — or all of its content, when that is text — is an anonymous
-// item of its own (Flexbox 1 § 4), so it is built as if it mixed.
+// A block container's content from a range of sibling nodes. A flex or
+// grid container is never an inline formatting context: its element
+// children are block-level already (pass 1 blockified them), and a run of
+// text among them — or all of its content, when that is text — is an
+// anonymous item of its own (Flexbox 1 § 4, Grid 2 § 6), so it is built as
+// if it mixed.
 static void build_container(B *b, FBox *box, const os64_html_node_t *first,
                             const os64_html_node_t *stop, Scope *scope,
                             const char *inside_marker, uint32_t inside_len)
 {
     Mix m = {false, inside_marker != NULL};
     scan(b, first, stop, &m);
-    Flow f = {b, box, m.block || box->flex, NULL, NULL, NULL};
+    Flow f = {b, box, m.block || box->flex || box->grid, NULL, NULL, NULL};
     if (!f.mixed) {
         box->ifc = true;
         box->collapse_space = true;
@@ -866,9 +868,10 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
         }
         ifc->collapse_space = false;
         // An inline-block that is not replaced (a marquee), or an inline
-        // flex container, is a block of its own, laid out inside the atom. Its content costs two descents: a
-        // level of it holds a line's frame as well as a block's, twice a
-        // block level's stack (LAYOUT.md § Bounds).
+        // flex or grid container, is a block of its own, laid out inside
+        // the atom. Its content costs two descents: a level of it holds a
+        // line's frame as well as a block's, twice a block level's stack
+        // (LAYOUT.md § Bounds).
         if (!replaced(el)) {
             FBox *content = new_box(b, NULL, FB_BLOCK, el, &s->style);
             position_box(b, content, el, false);

@@ -622,7 +622,7 @@ degrades honestly:** `float` and `clear` are recorded and ignored, so an
 rather than beside it — the page still reads, in order; `position` is
 laid out as POSITION.md's slices land it (relative, absolute, fixed and
 sticky, with what is still booked there), flexible boxes as FLEX.md's do,
-`inline-table` is not laid out, and
+grids as GRID.md's does, `inline-table` is not laid out, and
 `overflow` only clips (GARB.md § Booked says what the cascade does with
 each). Each is a row in the booked table.
 

@@ -86,9 +86,12 @@ typedef enum {
     FLOW_DISPLAY_TABLE_CELL,
     FLOW_DISPLAY_TABLE_COLUMN_GROUP,
     FLOW_DISPLAY_TABLE_COLUMN,
-    // A flex container (FLEX.md): a block, or an atom, on the outside.
+    // A flex container (FLEX.md), and a grid container (GRID.md): a block,
+    // or an atom, on the outside.
     FLOW_DISPLAY_FLEX,
     FLOW_DISPLAY_INLINE_FLEX,
+    FLOW_DISPLAY_GRID,
+    FLOW_DISPLAY_INLINE_GRID,
     // The element makes no box and its children are its parent's: `slot`,
     // and an SVG or MathML element, whose HTML descendants still render.
     FLOW_DISPLAY_CONTENTS,
@@ -245,6 +248,58 @@ typedef enum {
     FLOW_PLACE_SPACE_AROUND,
     FLOW_PLACE_SPACE_EVENLY,
 } flow_place_t;
+// Grid 2 § 7.2 (GRID.md): a track's sizing function at one end — a length
+// or percentage (FIXED, in `len`), a flexible share (FR, `fr` in
+// thousandths), or a keyword — and a track: its minimum and maximum, and
+// `fit`, for fit-content(len), whose maximum is then `len` held to the
+// content's max-content.
+typedef enum {
+    FLOW_TRACK_FIXED = 0,
+    FLOW_TRACK_FR,
+    FLOW_TRACK_AUTO,
+    FLOW_TRACK_MIN_CONTENT,
+    FLOW_TRACK_MAX_CONTENT,
+} flow_track_kind_t;
+typedef struct {
+    flow_track_kind_t kind;
+    flow_length_t len;
+    int32_t fr;
+} flow_breadth_t;
+typedef struct {
+    flow_breadth_t min, max;
+    bool fit;
+} flow_track_t;
+// A track list, repeat(n) written out, and where its auto-repeated block is
+// — `repeat_n` tracks from `repeat_at`, repeated as often as they fit, or
+// none when `repeat_n` is 0; `repeat_fit` for auto-fit, which drops the
+// repeated tracks no item is placed in. No tracks at all is `none` in a
+// template and `auto` in grid-auto-rows and -columns.
+typedef struct {
+    const flow_track_t *tracks;
+    int32_t n, repeat_at, repeat_n;
+    bool repeat_fit;
+} flow_tracks_t;
+// A grid item's line on one axis (§ 8.3): auto, a line number (negative
+// from the explicit grid's end), a span of tracks, or an area's name.
+typedef enum {
+    FLOW_GRID_LINE_AUTO = 0,
+    FLOW_GRID_LINE_NUMBER,
+    FLOW_GRID_LINE_SPAN,
+    FLOW_GRID_LINE_NAME,
+} flow_grid_line_kind_t;
+typedef struct {
+    flow_grid_line_kind_t kind;
+    int32_t n;                      // NUMBER, SPAN
+    const char *name;               // NAME: not terminated
+    uint32_t name_len;
+} flow_grid_line_t;
+// A named area of grid-template-areas: its rows and columns, from 0 and
+// the end not included.
+typedef struct {
+    const char *name;
+    uint32_t name_len;
+    int32_t row0, row1, col0, col1;
+} flow_grid_area_t;
 // CSS Position 3 § 2 (POSITION.md).
 typedef enum {
     FLOW_POSITION_STATIC = 0,
@@ -358,6 +413,20 @@ typedef struct {
     flow_length_t flex_basis;
     int32_t order;
     flow_length_t row_gap, column_gap;
+
+    // Grids (GRID.md). A container's tracks, explicit and implicit, its
+    // named areas — `grid_area_rows` by `grid_area_cols` of them in all —
+    // and whether its auto-placement runs down columns, and packs back.
+    // An item's four lines, and its place across its area (`justify-self`,
+    // AUTO for its container's `justify-items`). The arrays are the
+    // styles', and live as long as they do.
+    flow_tracks_t grid_template_columns, grid_template_rows;
+    flow_tracks_t grid_auto_columns, grid_auto_rows;
+    const flow_grid_area_t *grid_areas;
+    int32_t ngrid_areas, grid_area_rows, grid_area_cols;
+    bool grid_auto_flow_column, grid_dense;
+    flow_grid_line_t grid_row_start, grid_row_end, grid_column_start, grid_column_end;
+    flow_place_t justify_items, justify_self;
 } flow_style_t;
 
 // ── What the face hands in ──────────────────────────────────────────────

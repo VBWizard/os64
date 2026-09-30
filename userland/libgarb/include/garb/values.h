@@ -56,6 +56,10 @@ typedef enum {
     GARB_JUSTIFY_CONTENT, GARB_ALIGN_ITEMS, GARB_ALIGN_SELF, GARB_ALIGN_CONTENT,
     GARB_FLEX_GROW, GARB_FLEX_SHRINK, GARB_FLEX_BASIS, GARB_ORDER,
     GARB_ROW_GAP, GARB_COLUMN_GAP,
+    GARB_GRID_TEMPLATE_COLUMNS, GARB_GRID_TEMPLATE_ROWS, GARB_GRID_TEMPLATE_AREAS,
+    GARB_GRID_AUTO_COLUMNS, GARB_GRID_AUTO_ROWS, GARB_GRID_AUTO_FLOW,
+    GARB_GRID_COLUMN_START, GARB_GRID_COLUMN_END, GARB_GRID_ROW_START, GARB_GRID_ROW_END,
+    GARB_JUSTIFY_ITEMS, GARB_JUSTIFY_SELF,
     GARB_NPROPS
 } garb_prop_t;
 
@@ -76,11 +80,25 @@ typedef enum {
     GARB_V_STRING,          // `text`: a family name, a list marker
     GARB_V_CALC,            // `calc`: a length-percentage (or number) to work out at compute time
     GARB_V_IMAGE,           // an image this library does not draw yet (a gradient): `text` is its function
+    // A grid track list (Grid 2 § 7.2): its tracks in `items` — each a
+    // LENGTH (in GARB_U_FR for a flexible one), a PERCENTAGE, a CALC, a
+    // KEYWORD (auto, min-content, max-content) or a FUNCTION. Its line
+    // names are read and not kept (GRID.md, decision 3).
+    GARB_V_TRACKS,
+    // A function a grammar keeps whole: `keyword` its name — minmax,
+    // fit-content, repeat, and `span`, which is a keyword with its number
+    // or name and is written so — and its arguments in `items`; repeat's
+    // first is its count (a NUMBER, or the KEYWORD auto-fill or auto-fit)
+    // and its second the TRACKS repeated.
+    GARB_V_FUNCTION,
 } garb_vkind_t;
 
 typedef enum {
     GARB_U_PX, GARB_U_EM, GARB_U_REM, GARB_U_EX, GARB_U_CH, GARB_U_VW, GARB_U_VH, GARB_U_VMIN,
     GARB_U_VMAX, GARB_U_PT, GARB_U_PC, GARB_U_CM, GARB_U_MM, GARB_U_IN, GARB_U_Q,
+    // A grid track's share of the free space (Grid 2 § 7.2.4), which only
+    // a track list reads: no other length accepts it.
+    GARB_U_FR,
 } garb_unit_t;
 
 // sRGB, channels 0..255 kept as written (Color 4 serializes 209.525 as
@@ -99,7 +117,7 @@ typedef struct garb_val {
     double number;          // LENGTH, PERCENTAGE, NUMBER
     garb_unit_t unit;       // LENGTH
     garb_color_t color;     // COLOR
-    const char *text;       // URL, STRING, IMAGE
+    const char *text;       // URL, STRING (a grid area's or line's name too), IMAGE
     size_t len;
     const garb_calc_t *calc;
     // A list: font-family's names (`comma`), border-spacing's two lengths,
@@ -130,6 +148,9 @@ typedef struct {
 } garb_set_t;
 
 #define GARB_SETS_MAX 32    // the most longhands a shorthand here sets
+// The most tracks one grid track list, or rows one grid-template-areas,
+// is read with; a value with more is invalid.
+#define GARB_TRACKS_MAX 256
 
 // A declaration read against its property's grammar: the longhands it sets
 // into `out` (a shorthand sets them all, the ones it leaves out to their
@@ -148,6 +169,16 @@ bool garb_decl_has_var(const garb_decl_t *decl);
 // Whether a declaration names a custom property (`--name`), whose value is
 // its component values as written.
 bool garb_decl_is_custom(const garb_decl_t *decl);
+
+// One string of grid-template-areas cut into its cells (Grid 2 § 7.3.1):
+// each a name — `text`, `len` its bytes — or a null cell (a run of dots,
+// `len` 0); anything else in it makes the string invalid, and the answer
+// -1. The count of cells, of which the first `cap` are written.
+typedef struct {
+    const char *text;
+    uint32_t len;
+} garb_area_cell_t;
+int32_t garb_area_cells(const char *s, uint32_t len, garb_area_cell_t *out, int32_t cap);
 
 // Just a colour (CSS Color 4 § 4-8), as component values: the suite's
 // colour files, and anything else that holds exactly one.

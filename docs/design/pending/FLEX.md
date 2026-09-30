@@ -105,7 +105,7 @@ and kept `flex-wrap: wrap` among the approximations; F2 wraps it, and
 
 ### Pass 1 — style
 
-`flow_display_t` gains `FLEX` and `INLINE_FLEX` (grid will add its own),
+`flow_display_t` gains `FLEX` and `INLINE_FLEX` (GRID.md adds its own),
 and `flow_style_t` gains the properties: direction, wrap, the three
 alignments and `align_self`, `flex_grow` and `flex_shrink` in thousandths
 (as `opacity` is), `flex_basis` (a `flow_length_t` with a CONTENT kind),

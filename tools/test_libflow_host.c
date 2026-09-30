@@ -1376,6 +1376,7 @@ static void layout_sweep(void)
 #include "test_libflow_door.inc"
 #include "test_libflow_position.inc"
 #include "test_libflow_flex.inc"
+#include "test_libflow_grid.inc"
 
 int main(int argc, char **argv)
 {
@@ -1448,6 +1449,7 @@ int main(int argc, char **argv)
     door_cases();
     position_cases();
     flex_cases();
+    grid_cases();
     fixed_cases();
     paint_cases();
     decoration_colour_cases();

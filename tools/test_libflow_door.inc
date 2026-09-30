@@ -627,17 +627,28 @@ static size_t positioned_soup(char *out, size_t cap)
         n += (size_t)snprintf(out + n, cap - n, ";opacity:%s", rng() % 2 ? "0" : "0.5");
     if (rng() % 3 == 0)
         n += (size_t)snprintf(out + n, cap - n, ";margin:%s", rng() % 2 ? "auto" : "-7px 3%");
-    // Flexible boxes (FLEX.md § Proof): a container, and an item's own.
-    static const char *const kFlexy[] = {
+    // Flexible boxes and grids (FLEX.md, GRID.md § Proof): a container's
+    // properties, and an item's own.
+    static const char *const kItemy[] = {
         "display:flex", "display:inline-flex", "flex-direction:column",
         "flex-direction:row-reverse", "flex-direction:column-reverse", "flex-wrap:wrap",
         "justify-content:space-between", "justify-content:center", "justify-content:space-evenly",
         "align-items:baseline", "align-items:center", "align-self:flex-end", "flex:1",
         "flex:0 0 0", "flex:1e9", "flex:2 3 30%", "flex-basis:content", "order:-3", "order:2",
-        "gap:7px 3%", "min-width:0", "max-width:40px", "margin-left:auto"};
+        "gap:7px 3%", "min-width:0", "max-width:40px", "margin-left:auto",
+        // The track kinds, placement from every side, and lines past the
+        // bound.
+        "display:grid", "display:inline-grid", "grid-template-columns:repeat(auto-fill,minmax(30px,1fr))",
+        "grid-template-columns:1fr 2fr auto", "grid-template-columns:fit-content(40px) min-content 9%",
+        "grid-template-rows:repeat(3,10px) 1fr", "grid-auto-rows:minmax(5px,auto) 7px",
+        "grid-template-areas:'a a' 'b c'", "grid-area:a", "grid-column:span 3", "grid-row:2/-1",
+        "grid-column:1/1000000", "grid-row:-7", "grid-auto-flow:column dense", "grid-auto-flow:dense",
+        "justify-items:center", "justify-self:end", "place-self:center stretch",
+        "place-content:space-around end"};
     for (int k = 0; k < 3; k++)
         if (rng() % 2)
-            n += (size_t)snprintf(out + n, cap - n, ";%s", kFlexy[rng() % 23]);
+            n += (size_t)snprintf(out + n, cap - n, ";%s",
+                                  kItemy[rng() % (sizeof(kItemy) / sizeof(kItemy[0]))]);
     n += (size_t)snprintf(out + n, cap - n, "\">");
     return n;
 }
