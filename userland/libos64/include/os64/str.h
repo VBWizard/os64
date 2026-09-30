@@ -83,8 +83,6 @@ bool os64_glob_match(const char *pattern, const char *text);
 // must be validated. The name survives on merit: `atoi` is one of the handful
 // of Unix names (fork, exec) that earned its keep — every C programmer alive
 // reads it instantly.
-// (Graduated from top's `temporaryAtoi` — "the library guy" was off playing
-// with the network, per the heckling in topmain.c, and has now returned.)
 int64_t os64_atoi(const char *s);
 
 // The unsigned sibling: digits only, no sign, same stop-at-first-non-digit

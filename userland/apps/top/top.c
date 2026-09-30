@@ -1,6 +1,6 @@
 #include "topmain.h"
 
-// The knobs (all four rulings are Chris's — see topmain.h):
+// Presentation and refresh options are collected into top_options_t.
 static const char *delayValue = NULL;
 static bool optZombies = false;
 static bool optAdaptive = false;
