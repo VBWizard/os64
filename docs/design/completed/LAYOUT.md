@@ -718,7 +718,7 @@ its contract; this is what it offers and why.
 - **`flow_nimages`/`flow_image`, `flow_ncontrols`/`flow_control`** — where
   the face PLACES things, in tree order, each item once: an image's box
   (its alt text's first run when it is laid out as text) for a picture that
-  arrived, and a control's atom for its widget. A picture that takes no
+  arrived, and a control's box for its widget. A picture that takes no
   space (missing, `alt=""`) has no box and is not listed, so the face
   FETCHES from libpage's images list, which names every picture the page
   does whether it has a box yet or not.
