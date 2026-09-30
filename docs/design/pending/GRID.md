@@ -55,7 +55,12 @@ need only widths, which `intrinsic` knows without laying anything out
 heights, which only laying out gives. So: place, size the columns, lay
 each item out once at its columns' width, size the rows from the heights,
 then move each item into its rows. An item stretched down its rows has
-its box heightened, and nothing inside moves — as a flex row's stretch.
+its box heightened, and nothing inside moves — as a flex row's stretch,
+and with its exception: an item that is a flex or grid container places
+its items again against the height it now has (FLEX.md's `refit`; a
+grid's refit sizes its rows again). A grid's content height, what a flex
+column reads as its content (`FBox.content_h`), is its rows as its items
+alone size them, whatever height it was given.
 
 ### libgarb
 
@@ -162,7 +167,8 @@ area as their containing block is booked).
 **All or nothing** as FLEX.md: items laid out in tree order, placed once
 all of them are, and withdrawn when a layout stops in between
 (`items_done`); an item's absolute boxes are laid out after its rows have
-sized and moved it, and a relative item keeps its offset when they move
+sized and moved it — after the OUTERMOST container has, when grids and
+flex containers nest — and a relative item keeps its offset when they move
 it (`sized_later`, `laid_offset`).
 
 ### The door, the face

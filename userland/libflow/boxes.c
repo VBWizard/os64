@@ -185,6 +185,19 @@ static bool text_significant(const B *b, const os64_html_node_t *n)
     return false;
 }
 
+// Whether the run of text children from `n` to the next element (comments
+// are no break in it) is all white space: in a flex or grid container such
+// a run makes no anonymous item (Flexbox 1 § 4, Grid 2 § 6), whatever
+// `white-space` says.
+static bool blank_run(const os64_html_node_t *n)
+{
+    for (; n != NULL && (n->kind == OS64_HTML_TEXT || n->kind == OS64_HTML_COMMENT); n = n->next)
+        for (size_t i = 0; n->kind == OS64_HTML_TEXT && i < n->text_len; i++)
+            if (!css_space(n->text[i]))
+                return false;
+    return true;
+}
+
 // ── Depth ───────────────────────────────────────────────────────────────
 
 // Every recursive descent of the build over the TREE opens with descend()
@@ -480,6 +493,8 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     B *b = f->b;
     const flow_style_t *s = text_style(b, n);
     if (s == NULL || n->text_len == 0)
+        return;
+    if (f->target == NULL && (f->container->flex || f->container->grid) && blank_run(n))
         return;
     if (!f_ws_collapses(s->white_space)) {
         FBox *ifc = target(f);

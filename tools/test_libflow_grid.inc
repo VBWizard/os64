@@ -316,6 +316,50 @@ static void grid_review_cases(void)
         sheeted_close(&q);
     }
 }
+// Nested containers in and around a grid (the flex slice's refit, for a
+// grid; Chrome's answers).
+static void grid_nested_cases(void)
+{
+    // A flex container stretched down a grid row, and a grid container
+    // stretched across a flex row, place their items against 100: the
+    // 20px child centred at 40.
+    flex_rects("grid: a stretched flex item in a grid centres against its row",
+               "#o{display:grid;width:200px;height:100px} #i{display:flex;width:100px;align-items:center}"
+               " #k{width:20px;height:20px}</style><div id=o><div id=i><div id=k></div></div></div>",
+               FLEX_IDS("i", "k"), FLEX_WANT({0, 0, 100, 100}, {0, 40, 20, 20}));
+    flex_rects("grid: a stretched grid in a flex row centres against its height",
+               "#o{display:flex;width:200px;height:100px} #i{display:grid;width:100px;align-items:center}"
+               " #k{width:20px;height:20px}</style><div id=o><div id=i><div id=k></div></div></div>",
+               FLEX_IDS("i", "k"), FLEX_WANT({0, 0, 100, 100}, {0, 40, 20, 20}));
+    // A grid in a grid's 100px row: its own row stretches to 100 and
+    // `align-items: end` puts the child at 80.
+    flex_rects("grid: a stretched grid in a grid places its rows again",
+               "#o{display:grid;width:200px;grid-template-rows:100px} #i{display:grid;width:100px;"
+               "align-items:end} #k{width:20px;height:20px}</style>"
+               "<div id=o><div id=i><div id=k></div></div></div>",
+               FLEX_IDS("i", "k"), FLEX_WANT({0, 0, 100, 100}, {0, 80, 20, 20}));
+    // A grid's content height is its rows' as its items ask them, not the
+    // height the page gave it: a content basis of 20.
+    flex_rects("grid: a grid's content basis is its items'",
+               "#o{display:flex;flex-direction:column;width:200px} #i{display:grid;height:300px;"
+               "flex:0 0 content} #k{width:20px;height:20px}</style>"
+               "<div id=o><div id=i><div id=k></div></div></div>",
+               FLEX_IDS("o", "i"), FLEX_WANT({0, 0, 200, 20}, {0, 0, 200, 20}));
+    // An absolute box in a nested grid's item waits for the outermost
+    // container: the item stretched to 100 twice over, its bottom:0 box at
+    // 90.
+    flex_rects("grid: an absolute box in a nested grid's item sits at its final bottom",
+               "#o{display:flex;height:100px} #i{display:grid;width:100px} #j{position:relative}"
+               " #a{position:absolute;bottom:0;width:10px;height:10px}</style>"
+               "<div id=o><div id=i><div id=j><span id=a></span></div></div></div>",
+               FLEX_IDS("j", "a"), FLEX_WANT({0, 0, 100, 100}, {0, 90, 10, 10}));
+    // Blank text between grid items is no item, even where it is preserved.
+    flex_rects("grid: preserved blanks between items are no items",
+               "#o{display:grid;white-space:pre;grid-template-columns:50px 50px;column-gap:10px}"
+               " #a,#b{height:20px}</style><div id=o>  <div id=a></div>  <div id=b></div>  </div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 50, 20}, {60, 0, 50, 20}));
+}
+
 
 static void grid_cases(void)
 {
@@ -323,4 +367,5 @@ static void grid_cases(void)
     grid_place_cases();
     grid_align_cases();
     grid_review_cases();
+    grid_nested_cases();
 }
