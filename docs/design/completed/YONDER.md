@@ -53,9 +53,9 @@ person moves around them.
 The title bar's Settings action opens yonder's Settings window — the
 shared modeless dialog (`os64/ui_settings.h`), Apply, Save as default and
 Close — with two settings in it: whether pictures and style sheets are
-kept on disk (CACHE.md is that one's record: a box, a button that empties
-the cache, and what it holds on the status line), and **who yonder says
-it is**, the
+kept on disk and in how much room (CACHE.md is that one's record: a box,
+a size, a button that empties the cache, and what it holds on the status
+line), and **who yonder says it is**, the
 User-Agent every fetch sends, pages, sheets and pictures alike. Sites
 answer by it (theoldnet serves a browser it does not know as a 1996 one),
 and comparing yonder with another browser means asking as that browser

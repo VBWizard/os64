@@ -352,7 +352,7 @@ static bool entry_parse(char *head, way_entry_t *e, uint64_t *len)
 
 struct way_cache {
     char dir[OS64_PATH_MAX];
-    uint64_t cap;
+    uint64_t cap;               // way_cache_set_cap may change it under a fetch: cap_of reads it
     bool usable, enabled;
     os64_lock_t lock;
     uint64_t total;             // bytes the directory holds, as last counted and since added
@@ -370,6 +370,11 @@ static uint64_t hash(const char *s)
         h *= 0x100000001b3ull;
     }
     return h;
+}
+
+static uint64_t cap_of(way_cache_t *c)
+{
+    return __atomic_load_n(&c->cap, __ATOMIC_RELAXED);
 }
 
 static bool path_of(const way_cache_t *c, const char *url, char *out, size_t cap)
@@ -480,7 +485,7 @@ void way_cache_stats(way_cache_t *c, way_cache_stats_t *out)
     os64_memset(out, 0, sizeof(*out));
     out->usable = c->usable;
     out->enabled = way_cache_enabled(c);
-    out->cap = c->cap;
+    out->cap = cap_of(c);
     if (c->usable)
         survey(c, &out->entries, &out->bytes);
     os64_lock_acquire(&c->lock);
@@ -669,7 +674,8 @@ static void evict(way_cache_t *c)
     if (tmp != NULL) {
         sort_by_time(v, tmp, n);
         char path[OS64_PATH_MAX];
-        for (size_t i = 0; i < n && total > c->cap / 10 * 9; i++)
+        uint64_t keep = cap_of(c) / 10 * 9;
+        for (size_t i = 0; i < n && total > keep; i++)
             if (os64_snprintf(path, sizeof(path), "%s/%s", c->dir, v[i].name) > 0 &&
                 os64_unlink(path) == 0)
                 total -= v[i].size;
@@ -682,10 +688,21 @@ static void evict(way_cache_t *c)
     os64_lock_release(&c->lock);
 }
 
+// Past the cap, one thread sweeps: the first to see it, while no other is.
+static void sweep_if_over(way_cache_t *c)
+{
+    os64_lock_acquire(&c->lock);
+    bool sweep = c->total > cap_of(c) && !c->evicting;
+    c->evicting |= sweep;
+    os64_lock_release(&c->lock);
+    if (sweep)
+        evict(c);
+}
+
 bool way_cache_put(way_cache_t *c, const way_entry_t *e, const uint8_t *body, size_t len)
 {
     char path[OS64_PATH_MAX], temp[OS64_PATH_MAX];
-    if (!way_cache_enabled(c) || len > c->cap / 8 || !path_of(c, e->url, path, sizeof(path)))
+    if (!way_cache_enabled(c) || len > cap_of(c) / 8 || !path_of(c, e->url, path, sizeof(path)))
         return false;
     char *head = os64_malloc(ENTRY_HEAD_MAX);
     size_t hlen = head != NULL ? entry_head(e, len, head, ENTRY_HEAD_MAX) : 0;
@@ -705,10 +722,14 @@ bool way_cache_put(way_cache_t *c, const way_entry_t *e, const uint8_t *body, si
     os64_lock_acquire(&c->lock);
     c->stored++;
     c->total += hlen + len;
-    bool sweep = c->total > c->cap && !c->evicting;
-    c->evicting |= sweep;
     os64_lock_release(&c->lock);
-    if (sweep)
-        evict(c);
+    sweep_if_over(c);
     return true;
+}
+
+void way_cache_set_cap(way_cache_t *c, uint64_t cap)
+{
+    __atomic_store_n(&c->cap, cap, __ATOMIC_RELAXED);
+    if (c->usable)
+        sweep_if_over(c);
 }

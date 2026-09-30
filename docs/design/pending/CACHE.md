@@ -16,9 +16,11 @@ it of every one: `Cache-Control: public, max-age=31536000, immutable`, a
 year. The page itself is still fetched each time; it is one request, and
 whether it changed is the thing a person reloads to see.
 
-yonder's Settings window gains a box to turn the cache off for this
-window (Save as default makes that stick) and a button that empties it,
-and its status line says what the cache holds when it opens.
+yonder's Settings window gains one row: a box to turn the cache off,
+how many megabytes it may hold (1 to 65536; a lower size removes the
+oldest entries at once), and a button that empties it. Apply is for this
+window, Save as default makes them stick, and the status line says what
+the cache holds when it opens.
 
 ## Where it lives
 

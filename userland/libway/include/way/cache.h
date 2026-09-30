@@ -72,12 +72,18 @@ typedef struct way_cache way_cache_t;
 
 #define WAY_CACHE_DIR "/var/cache/yonder"
 #define WAY_CACHE_MB_DEFAULT 256
+#define WAY_CACHE_MB_MAX 65536
 
 // The cache in `dir`, which is made if it is not there, holding at most
 // `cap` bytes. NULL on no memory. A directory that cannot be made or
 // written is a cache that keeps nothing, and says so in its stats.
 way_cache_t *way_cache_open(const char *dir, uint64_t cap);
 void way_cache_close(way_cache_t *cache);
+
+// How much it may hold, from now on, fetches in flight included. Lowered
+// below what it holds, the oldest entries go at once, on the caller's
+// thread.
+void way_cache_set_cap(way_cache_t *cache, uint64_t cap);
 
 // Whether fetches use it; a cache turned off keeps what it has.
 void way_cache_enable(way_cache_t *cache, bool on);

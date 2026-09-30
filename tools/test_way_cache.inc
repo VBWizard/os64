@@ -416,6 +416,14 @@ static void store_cases(void)
     expect("store: the oldest went, the newest stayed",
            stat(names[0], &s0) != 0 && stat(names[59], &s59) == 0, NULL);
 
+    // A lower cap sweeps at once, to under nine-tenths of it, the oldest
+    // first; the newest stays.
+    way_cache_set_cap(c, 16 * 1024);
+    way_cache_stats(c, &st);
+    expect("store: a lower cap sweeps at once", st.cap == 16 * 1024 &&
+           st.bytes <= 16 * 1024 / 10 * 9 && st.entries > 0 && stat(names[59], &s59) == 0, NULL);
+    way_cache_set_cap(c, 64 * 1024);
+
     // A temp file a dead writer left is swept; one being written is not.
     char dead[1300], live[1300];
     snprintf(dead, sizeof(dead), "%s/0123456789abcdef.7.1.new", dir);
