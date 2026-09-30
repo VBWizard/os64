@@ -860,6 +860,67 @@ static void position_sticky_cases(void)
                flow_box_doc_rect(s, down).y == 100, NULL);
     flow_free(t);
     sheeted_close(&q);
+
+    // Quinn's review, round 1. A box taller than its view: `bottom: 0` on
+    // 800 pixels after a 1000-pixel spacer, 600 high. The view gives way
+    // at its end, so the box shows its top: scrolled 500, at 500, not with
+    // its bottom at the view's foot (300); not scrolled, at the top.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0} .top{height:1000px}"
+                     ".f{position:sticky;bottom:0;height:800px} .after{height:1000px}</style>"
+                     "<p class=top></p><div class=f id=f>tall</div><p class=after></p>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    f = box_with_id(t, q.doc->document, "f");
+    expect("sticky: one taller than its view shows its start",
+           f != NULL && flow_box_doc_rect(f, (flow_point_t){0, 500}).y == 500 &&
+               flow_box_doc_rect(f, top).y == 0, NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // What clips a sticky box from outside stays put: an `overflow: clip`
+    // box 100 high holds a wrapper 1000 high and a header in it. Scrolled
+    // 300, the header is pushed to 300, but the clip is still 0..100, so
+    // nothing of the header is drawn or clicked there.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} .c{overflow:clip;height:100px}"
+                     ".w{height:1000px} .s{position:sticky;top:0;height:30px}"
+                     ".page{height:2000px}</style><div class=c><div class=w>"
+                     "<div class=s id=s>head</div></div></div><div class=page></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    s = box_with_id(t, q.doc->document, "s");
+    os64_gui_rect_t c = s != NULL ? flow_box_doc_clip(s, down) : (os64_gui_rect_t){0, 0, 0, 0};
+    h = t != NULL ? flow_hit(t, 10, 310, down) : NULL;
+    const flow_box_t *h0 = t != NULL ? flow_hit(t, 10, 10, top) : NULL;
+    expect("sticky: a clip from outside does not move with it",
+           s != NULL && s->clipped && flow_box_doc_rect(s, down).y == 300 && c.y == 0 &&
+               c.h == 100 && !inside_of(h, s) && inside_of(h0, s), NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // Sticky boxes nested deep, each a scroll container too: every one's
+    // push is worked from its outer one's frame and its scrollport's, the
+    // same box. A lookup costs each once, and past F_STICKY_DEPS they are
+    // laid out where the flow put them.
+    {
+        char html[8192];
+        size_t n = (size_t)snprintf(html, sizeof(html),
+                                    "<!doctype html><style>body{margin:0} div{position:sticky;"
+                                    "top:0;overflow:auto;height:100px}</style>");
+        for (int k = 0; k < 60; k++)
+            n += (size_t)snprintf(html + n, sizeof(html) - n, "<div id=d%d>", k);
+        snprintf(html + n, sizeof(html) - n, "deep");
+        sheeted_open(&q, html, 400, 600);
+        t = flow_layout(q.doc, q.page, 400, &q.env);
+        const flow_box_t *d0 = box_with_id(t, q.doc->document, "d0");
+        const flow_box_t *d20 = box_with_id(t, q.doc->document, "d20");
+        const flow_box_t *d59 = box_with_id(t, q.doc->document, "d59");
+        expect("sticky: nested deep, the near ones move and the deep ones stand",
+               d0 != NULL && d0->sticky->moves && d20 != NULL && d20->sticky->moves &&
+                   d59 != NULL && !d59->sticky->moves &&
+                   flow_box_doc_rect(d59, down).y == d59->rect.y, NULL);
+        flow_free(t);
+        sheeted_close(&q);
+    }
 }
 
 static void position_cases(void)

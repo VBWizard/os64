@@ -515,10 +515,21 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
                   const flow_env_t *env, int32_t width);
 void f_layout_free(FLayout *layout);
 
+// The most sticky boxes one sticky box's push may be worked from, itself,
+// the ones outside it and their scrollports' included. One past it is laid
+// out and drawn where the flow put it: the work of a lookup stays bounded
+// however a page nests them.
+#define F_STICKY_DEPS 32
+
 // A sticky box (CSS Position 3 § 3.4), as the door built it: everything
 // the push at a scroll is worked from, in the box's own coordinates.
 struct flow_sticky {
     const flow_box_t *box;
+    // Pushed at all: false past F_STICKY_DEPS, and then the box is where
+    // the frame it is in puts it. `mover`: this one when it moves, else the
+    // nearest outside it that does, or NULL — whose frame is this one's.
+    bool moves;
+    const flow_sticky_t *mover;
     // The next sticky box out along its containing blocks, which moves it
     // and everything it is worked against; NULL for none.
     const flow_sticky_t *outer;
@@ -535,6 +546,14 @@ struct flow_sticky {
     // How far it may move on each axis, x then y, and stay inside its
     // containing block, margins and all: lo <= 0 <= hi.
     int32_t lo[2], hi[2];
+    // What clips it from outside, which stays where it is while it moves:
+    // the clip its parent hands its content, in the coordinates of the
+    // frame it is in, as wide as a rectangle can say on an axis nothing
+    // clips, when `clips`. The boxes inside it keep in their own `clip`
+    // only what clips inside it, and flow_box_doc_clip meets the two.
+    // `clipped`: it or one outside it clips.
+    os64_gui_rect_t clip;
+    bool clips, clipped;
 };
 
 // The public tree (flow.c) as text, one line per box (dump.c).

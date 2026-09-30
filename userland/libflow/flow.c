@@ -184,21 +184,30 @@ typedef struct {
 
 static const Clip kNoClip = {{0, 0, 0, 0}, false, false};
 
-static void set_clip(flow_box_t *b, Clip c)
+// A clip as a rectangle: an axis nothing clips is as wide as a rectangle
+// can say.
+static os64_gui_rect_t clip_rect(Clip c)
 {
-    b->clipped = c.x || c.y;
-    if (!b->clipped)
-        return;
-    // An axis nothing clips is as wide as a rectangle can say.
-    b->clip = c.r;
+    os64_gui_rect_t r = c.r;
     if (!c.x) {
-        b->clip.x = INT32_MIN / 2;
-        b->clip.w = INT32_MAX;
+        r.x = INT32_MIN / 2;
+        r.w = INT32_MAX;
     }
     if (!c.y) {
-        b->clip.y = INT32_MIN / 2;
-        b->clip.h = INT32_MAX;
+        r.y = INT32_MIN / 2;
+        r.h = INT32_MAX;
     }
+    return r;
+}
+
+// A box's clip: what `c` says, and, in a sticky box's subtree, clipped as
+// well when something outside the sticky box clips (flow_sticky_t.clip),
+// which flow_box_doc_clip meets with this one.
+static void set_clip(flow_box_t *b, Clip c)
+{
+    b->clipped = c.x || c.y || (b->sticky != NULL && b->sticky->clipped);
+    if (b->clipped)
+        b->clip = clip_rect(c);
 }
 
 static void meet_axis(int32_t *at, int32_t *len, int32_t other_at, int32_t other_len)
@@ -232,13 +241,23 @@ static bool clips_own(const FBox *src, bool x_axis)
 static Clip inner_clip(const FBox *src, Clip c);
 static Clip content_clip(const FBox *b);
 
+static bool is_sticky(const FBox *b)
+{
+    return b->positioned && !b->out_of_flow && b->style->position == FLOW_POSITION_STICKY;
+}
+
 // What a box may draw into, walked up rather than handed down: the clip
 // its tree parent hands its content, or, out of flow, what its containing
 // block hands its — an inline's being its home's, since an inline clips
 // nothing. Only an out-of-flow box asks: every other box is handed its
-// parent's by the build, which is the same answer.
+// parent's by the build, which is the same answer. A sticky box's is
+// nothing: what clips it from outside does not move with it, so it is its
+// record's (flow_sticky_t.clip), and what it hands its content is only
+// what clips inside it.
 static Clip outer_clip(const FBox *b)
 {
+    if (is_sticky(b))
+        return kNoClip;
     if (b->out_of_flow) {
         const FPos *cb = b->pos != NULL ? b->pos->cb : NULL;
         if (cb == NULL)
@@ -314,7 +333,23 @@ static void room(int64_t b0, int64_t b1, int64_t m0, int64_t m1, int64_t c0, int
 // block is its parent's content box — a cell's, its table's — and a
 // block-level box fills its containing block across, margins and all, so
 // only a cell can move sideways.
-static const flow_sticky_t *sticky_new(Build *bd, const FBox *src, const flow_box_t *b)
+// The sticky boxes that move and that `s`'s frame is worked from, added to
+// `seen[0..n)` once each; F_STICKY_DEPS + 1 once there are more than that.
+static int32_t reach(const flow_sticky_t *s, const flow_sticky_t **seen, int32_t n)
+{
+    for (s = s != NULL ? s->mover : NULL; s != NULL && n <= F_STICKY_DEPS;
+         s = s->outer != NULL ? s->outer->mover : NULL) {
+        for (int32_t i = 0; i < n; i++)
+            if (seen[i] == s)
+                return n;       // it is here, and so is everything it needs
+        seen[n++] = s;
+        if (s->port != NULL)
+            n = reach(s->port->sticky, seen, n);
+    }
+    return n;
+}
+
+static const flow_sticky_t *sticky_new(Build *bd, const FBox *src, const flow_box_t *b, Clip clip)
 {
     flow_sticky_t *st = f_arena_alloc(&bd->t->arena, sizeof(*st));
     if (st == NULL) {
@@ -323,6 +358,9 @@ static const flow_sticky_t *sticky_new(Build *bd, const FBox *src, const flow_bo
     }
     st->box = b;
     st->outer = b->sticky;
+    st->clips = clip.x || clip.y;
+    st->clip = clip_rect(clip);
+    st->clipped = st->clips || (st->outer != NULL && st->outer->clipped);
     st->view_w = bd->view_w;
     st->view_h = bd->view_h;
     for (const flow_box_t *a = b->parent; a != NULL && st->port == NULL; a = a->parent) {
@@ -332,6 +370,14 @@ static const flow_sticky_t *sticky_new(Build *bd, const FBox *src, const flow_bo
             st->port_rect = padding_box(port);
         }
     }
+    const flow_sticky_t *seen[F_STICKY_DEPS + 1];
+    int32_t n = reach(st->outer, seen, 0);
+    if (st->port != NULL)
+        n = reach(st->port->sticky, seen, n);
+    st->moves = n < F_STICKY_DEPS;
+    st->mover = st->moves ? st : st->outer != NULL ? st->outer->mover : NULL;
+    if (!st->moves)
+        return st;
     int64_t pw = st->port != NULL ? st->port_rect.w : st->view_w;
     int64_t ph = st->port != NULL ? st->port_rect.h : st->view_h;
     const flow_style_t *s = src->style;
@@ -363,17 +409,17 @@ static const flow_sticky_t *sticky_new(Build *bd, const FBox *src, const flow_bo
 
 // What a box's frame is — the sticky box it moves with — and what it lends
 // the boxes that ask after it: an out-of-flow box moves with its containing
-// block, every other with its parent, and a sticky box with itself; a
-// scroll container is remembered for the sticky boxes inside it. False on
-// no memory.
-static bool frame_box(Build *bd, const FBox *src, flow_box_t *b)
+// block, every other with its parent, and a sticky box with itself, `clip`
+// being what clips it from outside; a scroll container is remembered for
+// the sticky boxes inside it. False on no memory.
+static bool frame_box(Build *bd, const FBox *src, flow_box_t *b, Clip clip)
 {
     if (src->out_of_flow) {
         const FPos *cb = src->pos != NULL ? src->pos->cb : NULL;
         b->sticky = cb != NULL ? f_map_get(&bd->frames, cb) : NULL;
     }
-    if (src->positioned && !src->out_of_flow && src->style->position == FLOW_POSITION_STICKY) {
-        b->sticky = sticky_new(bd, src, b);
+    if (is_sticky(src)) {
+        b->sticky = sticky_new(bd, src, b, clip);
         if (b->sticky == NULL)
             return false;
     }
@@ -448,14 +494,16 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     if (src->positioned &&
         !push_list(bd, &bd->t->positioned, &bd->t->npositioned, &bd->t->cap_positioned, b))
         return b;
-    set_clip(b, clip);
-    Clip in = inner_clip(src, clip);
     b->rect = rect_of(src->x, src->y, src->w, src->h);
     b->overflow = b->rect;
     b->link = src->link;
     b->unfinished = src->unfinished;
-    if (!frame_box(bd, src, b))
+    if (!frame_box(bd, src, b, clip))
         return b;
+    if (is_sticky(src))
+        clip = kNoClip;         // its record's, where it stays as the box moves
+    set_clip(b, clip);
+    Clip in = inner_clip(src, clip);
     flow_box_t *kids = NULL;
     for (const FLine *ln = src->lines; ln != NULL && !bd->failed; ln = ln->next) {
         flow_box_t *line = add(bd, b, &kids, FLOW_BOX_LINE, NULL, src->style);
@@ -783,30 +831,47 @@ static os64_gui_rect_t moved(os64_gui_rect_t r, int64_t dx, int64_t dy)
                      (int64_t)r.y + r.h + dy);
 }
 
-static flow_point_t frame_offset(const flow_sticky_t *s, bool fixed, flow_point_t scroll);
+// The frames already worked out in one lookup, each once: a sticky box's
+// push is worked from its outer one's frame and its scrollport's, which are
+// often the same, so without this a nest of them costs twice as much per
+// level. The build bounds how many one lookup meets (F_STICKY_DEPS).
+typedef struct {
+    const flow_sticky_t *s[F_STICKY_DEPS];
+    flow_point_t at[F_STICKY_DEPS];
+    int32_t n;
+} Frames;
 
-// How far a sticky box is pushed along one axis: its end edge back inside
-// the scrollport's [v0, v1] less the end inset, then its start edge, which
-// wins where both cannot hold (CSS Position 3 § 3.4: top over bottom, and
-// left over right), held to the room its containing block leaves.
+static flow_point_t frame_of(Frames *m, const flow_sticky_t *s, bool fixed, flow_point_t scroll);
+
+// How far a sticky box is pushed along one axis (CSS Position 3 § 3.4).
+// The view is the scrollport's [v0, v1] less the insets that are set, and
+// no smaller than the box: where it is, its end edge gives way (possibly
+// past the scrollport), so a box taller than its view shows its start.
+// The end edge is pushed back inside the view, then the start edge, which
+// wins where both cannot hold — top over bottom, left over right — and the
+// push is held to the room its containing block leaves.
 static int64_t push(int64_t b0, int64_t b1, int64_t v0, int64_t v1, const flow_sticky_t *s,
                     int start, int end, int axis)
 {
+    int64_t lo = v0 + (s->has[start] ? s->inset[start] : 0);
+    int64_t hi = v1 - (s->has[end] ? s->inset[end] : 0);
+    if (hi - lo < b1 - b0)
+        hi = lo + (b1 - b0);
     int64_t d = 0;
-    if (s->has[end] && b1 > v1 - s->inset[end])
-        d = v1 - s->inset[end] - b1;
-    if (s->has[start] && b0 + d < v0 + s->inset[start])
-        d = v0 + s->inset[start] - b0;
+    if (s->has[end] && b1 > hi)
+        d = hi - b1;
+    if (s->has[start] && b0 + d < lo)
+        d = lo - b0;
     return d < s->lo[axis] ? s->lo[axis] : d > s->hi[axis] ? s->hi[axis] : d;
 }
 
 // Where a sticky box's scrollport is, in the coordinates of the frame it is
 // in — the frame being moved by `at` — and how far that pushes the box.
-static flow_point_t shift(const flow_sticky_t *s, flow_point_t at, flow_point_t scroll)
+static flow_point_t shift(Frames *m, const flow_sticky_t *s, flow_point_t at, flow_point_t scroll)
 {
     int64_t vx = scroll.x, vy = scroll.y, vw = s->view_w, vh = s->view_h;
     if (s->port != NULL) {
-        flow_point_t o = flow_box_doc_offset(s->port, scroll);
+        flow_point_t o = frame_of(m, s->port->sticky, s->port->fixed, scroll);
         vx = (int64_t)s->port_rect.x + o.x;
         vy = (int64_t)s->port_rect.y + o.y;
         vw = s->port_rect.w;
@@ -822,18 +887,29 @@ static flow_point_t shift(const flow_sticky_t *s, flow_point_t at, flow_point_t 
 
 // A frame's offset: the scroll under a fixed box, then each sticky box's
 // push, outermost first, each worked in the frame the one outside it moved.
-static flow_point_t frame_offset(const flow_sticky_t *s, bool fixed, flow_point_t scroll)
+// A sticky box that does not move is where the frame it is in puts it.
+static flow_point_t frame_of(Frames *m, const flow_sticky_t *s, bool fixed, flow_point_t scroll)
 {
+    s = s != NULL ? s->mover : NULL;
     if (s == NULL)
         return fixed ? scroll : (flow_point_t){0, 0};
-    flow_point_t at = frame_offset(s->outer, fixed, scroll);
-    flow_point_t d = shift(s, at, scroll);
-    return (flow_point_t){edge32((int64_t)at.x + d.x), edge32((int64_t)at.y + d.y)};
+    for (int32_t i = 0; i < m->n; i++)
+        if (m->s[i] == s)
+            return m->at[i];
+    flow_point_t at = frame_of(m, s->outer, fixed, scroll);
+    flow_point_t d = shift(m, s, at, scroll);
+    flow_point_t here = {edge32((int64_t)at.x + d.x), edge32((int64_t)at.y + d.y)};
+    if (m->n < F_STICKY_DEPS) {
+        m->s[m->n] = s;
+        m->at[m->n++] = here;
+    }
+    return here;
 }
 
 flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll)
 {
-    return box != NULL ? frame_offset(box->sticky, box->fixed, scroll) : (flow_point_t){0, 0};
+    Frames m = {.n = 0};
+    return box != NULL ? frame_of(&m, box->sticky, box->fixed, scroll) : (flow_point_t){0, 0};
 }
 
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)
@@ -842,10 +918,44 @@ os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)
     return box != NULL ? moved(box->rect, o.x, o.y) : (os64_gui_rect_t){0, 0, 0, 0};
 }
 
+static os64_gui_rect_t meet(os64_gui_rect_t a, os64_gui_rect_t b)
+{
+    meet_axis(&a.x, &a.w, b.x, b.w);
+    meet_axis(&a.y, &a.h, b.y, b.h);
+    return a;
+}
+
+// Its own clip where its frame puts it, met with what clips each sticky box
+// it is inside from outside that box, where that box's own frame puts it.
 os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll)
 {
-    flow_point_t o = flow_box_doc_offset(box, scroll);
-    return box != NULL ? moved(box->clip, o.x, o.y) : (os64_gui_rect_t){0, 0, 0, 0};
+    if (box == NULL)
+        return (os64_gui_rect_t){0, 0, 0, 0};
+    Frames m = {.n = 0};
+    flow_point_t o = frame_of(&m, box->sticky, box->fixed, scroll);
+    os64_gui_rect_t r = moved(box->clip, o.x, o.y);
+    for (const flow_sticky_t *s = box->sticky; s != NULL; s = s->outer)
+        if (s->clips) {
+            flow_point_t at = frame_of(&m, s->outer, s->box->fixed, scroll);
+            r = meet(r, moved(s->clip, at.x, at.y));
+        }
+    return r;
+}
+
+// Whether what clips the sticky boxes `b` is inside, from outside each,
+// holds the document point (x, y) at this scroll: a box in one is drawn,
+// and hit, only there.
+static bool outside_clips_hold(const flow_box_t *b, int64_t x, int64_t y, flow_point_t scroll)
+{
+    Frames m = {.n = 0};
+    for (const flow_sticky_t *s = b->sticky; s != NULL && s->clipped; s = s->outer)
+        if (s->clips) {
+            flow_point_t at = frame_of(&m, s->outer, s->box->fixed, scroll);
+            if (x < INT32_MIN || x > INT32_MAX || y < INT32_MIN || y > INT32_MAX ||
+                !holds(moved(s->clip, at.x, at.y), (int32_t)x, (int32_t)y))
+                return false;
+        }
+    return true;
 }
 
 static void visit_inline(const Visit *v, const flow_box_t *b);
@@ -963,13 +1073,16 @@ static const flow_box_t *hit(const flow_box_t *b, int32_t x, int32_t y)
 }
 
 // What is painted last is on top: the layers backwards, each asked in its
-// own coordinates.
+// own coordinates. Every box a layer walks is in its box's frame, so what
+// clips a sticky box from outside is asked once, of the layer.
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll)
 {
     if (tree == NULL || tree->root == NULL)
         return NULL;
     for (int32_t i = tree->nlayers; i > 0; i--) {
         const flow_box_t *b = tree->layers[i - 1].box;
+        if (!outside_clips_hold(b, x, y, scroll))
+            continue;
         flow_point_t o = flow_box_doc_offset(b, scroll);
         int64_t px = (int64_t)x - o.x, py = (int64_t)y - o.y;
         if (px < INT32_MIN || px > INT32_MAX || py < INT32_MIN || py > INT32_MAX)
@@ -1016,8 +1129,15 @@ static const flow_box_t *hit_in_flow(const flow_box_t *b, int32_t x, int32_t y)
     if (found != NULL)
         return found;
     // What the pointer passes through is still where it is: an anchor is a
-    // place, not a target, so pointer-events is not asked here.
-    return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) ? b : NULL;
+    // place, not a target, so pointer-events is not asked here. Places are
+    // where the flow put them, sticky boxes unpushed, so what clips one from
+    // outside is asked where it stands.
+    if (!holds(b->rect, x, y) || (b->clipped && !holds(b->clip, x, y)))
+        return NULL;
+    for (const flow_sticky_t *s = b->sticky; s != NULL && s->clipped; s = s->outer)
+        if (s->clips && !holds(s->clip, x, y))
+            return NULL;
+    return b;
 }
 
 const flow_box_t *flow_hit_in_flow(const flow_tree_t *tree, int32_t x, int32_t y)

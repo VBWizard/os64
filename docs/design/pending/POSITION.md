@@ -203,7 +203,9 @@ dropdown inside it is ordinary.
   ancestor scroll container's padding box, else the viewport — less its
   insets, `top` winning over `bottom` and `left` over `right` where both
   cannot hold, and never so far that its margin box leaves its
-  containing block: its parent's content box, a cell's table's. What it
+  containing block: its parent's content box, a cell's table's. A box
+  larger than that view makes the view's end edge give way until the two
+  are the same size, so it shows its start rather than its end. What it
   may move is worked out once, when the tree is built (`flow_sticky_t`);
   where it is, at each scroll. A block-level box fills its containing
   block across, margins and all, so only a cell moves sideways. A scroll
@@ -212,7 +214,12 @@ dropdown inside it is ordinary.
   scroll does not move it. A sticky box inside another is worked out in
   the frame the outer one moved, and an absolute box inside one moves
   with it, since the sticky box is its containing block; a fixed one does
-  not. Insets that are percentages are of the scrollport.
+  not. Insets that are percentages are of the scrollport. A lookup works
+  each sticky box's push once, and a sticky box whose push would be
+  worked from more than 32 of them (itself, those outside it, their
+  scrollports') is laid out where the flow put it, so no page can make a
+  lookup cost more than that (Quinn's review, where a nest of 27 each
+  worked twice per level took past 15 seconds).
 - **All or nothing.** An out-of-flow box that does not finish is not
   placed, as a table cut short keeps its place with no rows: its
   containing block is marked unfinished and the tree is `incomplete`.
@@ -288,10 +295,14 @@ dropdown inside it is ordinary.
   containing blocks — its parent's for a box in the flow, its containing
   block's for an out-of-flow one — and `flow_box_doc_offset` adds each
   sticky box's push, outermost first, to the scroll a fixed box already
-  took. Painting, hit testing, `flow_box_covered` and yonder's widgets
-  follow with no change of their own; `flow_hit_in_flow` and a fragment
-  link read a sticky box where the flow put it, which is its place in
-  the document.
+  took. What clips a sticky box from outside does not move with it, so it
+  is the sticky box's record's: the boxes inside keep in `clip` only what
+  clips inside it, and `flow_box_doc_clip` meets the two, each where its
+  own frame puts it — which is how a painter reads a clip, and what
+  `flow_hit` asks of each layer. Hit testing, `flow_box_covered` and
+  yonder's widgets follow with no change of their own; `flow_hit_in_flow`
+  and a fragment link read a sticky box where the flow put it, which is
+  its place in the document.
 - **Covered.** `flow_box_covered(tree, box, scroll)` answers whether the
   pointer cannot reach `box`: `flow_hit` at its centre answers neither it
   nor anything inside it (ruling 9), so a face that draws live widgets

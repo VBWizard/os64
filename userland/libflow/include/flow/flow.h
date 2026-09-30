@@ -418,7 +418,10 @@ struct flow_box {
     uint32_t begin;
     // What of this box may be drawn: the padding boxes of the ancestors
     // whose `overflow` clips, met together, on the axes they clip. When
-    // `clipped` is false nothing clips it and `clip` means nothing.
+    // `clipped` is false nothing clips it and `clip` means nothing. In a
+    // sticky box's subtree `clip` holds only what clips inside the sticky
+    // box — what clips it from outside stays where it is while it moves —
+    // so the whole of it is flow_box_doc_clip's, and `clipped` says either.
     os64_gui_rect_t clip;
     bool clipped;
     uint8_t decoration;             // TEXT: FLOW_DECORATION_* drawn across it
@@ -491,7 +494,8 @@ const flow_box_t *flow_root(const flow_tree_t *tree);
 // the rect and clip functions below apply it.
 flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll);
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
-// Its clip, meaningful when `clipped`, as for the field.
+// Its clip, meaningful when `clipped`: its own, met with what clips each
+// sticky box it is in from outside that box, each where its frame is.
 os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll);
 
 // Whether the pointer cannot reach `box` at this scroll: flow_hit at its

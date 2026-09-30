@@ -317,24 +317,25 @@ static void paint_box(void *ctx, const flow_box_t *b)
     if (b->style->visibility != FLOW_VISIBLE)
         return;
     // The box's own coordinates: a fixed one's view is the page's less the
-    // scroll. A box an ancestor's `overflow` clips is drawn only inside the
-    // clip: every verb is handed the view, so the view is narrowed.
+    // scroll, a sticky one's less its push. A box an ancestor's `overflow`
+    // clips is drawn only inside the clip, asked in document coordinates —
+    // what clips a sticky box from outside stays put as the box moves — and
+    // every verb is handed the view, so the view is narrowed.
     Painter clipped = *outer;
     clipped.off = flow_box_doc_offset(b, outer->scroll);
-    clipped.view = (os64_gui_rect_t){(int32_t)((int64_t)outer->view.x - clipped.off.x),
-                                     (int32_t)((int64_t)outer->view.y - clipped.off.y),
-                                     outer->view.w, outer->view.h};
-    const Painter *p = &clipped;
+    os64_gui_rect_t v = outer->view;
     if (b->clipped) {
-        os64_gui_rect_t v = clipped.view, c = b->clip;
+        os64_gui_rect_t c = flow_box_doc_clip(b, outer->scroll);
         int64_t x0 = max64(v.x, c.x), y0 = max64(v.y, c.y);
         int64_t x1 = min64((int64_t)v.x + v.w, (int64_t)c.x + c.w);
         int64_t y1 = min64((int64_t)v.y + v.h, (int64_t)c.y + c.h);
         if (x1 <= x0 || y1 <= y0)
             return;
-        clipped.view = (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0),
-                                         (int32_t)(y1 - y0)};
+        v = (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
     }
+    clipped.view = (os64_gui_rect_t){(int32_t)((int64_t)v.x - clipped.off.x),
+                                     (int32_t)((int64_t)v.y - clipped.off.y), v.w, v.h};
+    const Painter *p = &clipped;
     switch (b->kind) {
     case FLOW_BOX_LINE:
         return;
