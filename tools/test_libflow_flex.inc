@@ -327,6 +327,152 @@ static void flex_wrap_cases(void)
                FLEX_WANT({0, 0, 200, 40}, {0, 40, 200, 40}, {200, 0, 200, 40}));
 }
 
+// Codex's first round on F1 (PR #181): each case the one its finding
+// describes, worked by hand.
+static void flex_review_cases(void)
+{
+    // A column item's automatic minimum is its CONTENT's height, not a
+    // height the page gave it: two empty 300px items shrink into 400, 200
+    // each (§ 4.5).
+    flex_rects("flex: a column's automatic minimum is the content, not the height",
+               ".c{display:flex;flex-direction:column;height:400px} .c div{height:300px}"
+               "</style><div class=c><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 400, 200}, {0, 200, 400, 200}));
+    // `flex-basis: content` in a column is the content's height (one line,
+    // 20), whatever height the page gave; not flexing, it stays 20.
+    flex_rects("flex: a column's content basis ignores the height",
+               ".c{display:flex;flex-direction:column;height:400px}"
+               " .c div{height:300px;flex:0 0 content}</style>"
+               "<div class=c><div id=a>x</div></div>",
+               FLEX_IDS("a"), FLEX_WANT({0, 0, 400, 20}));
+    // An absolute box in an item is placed against the item's FINAL size:
+    // stretched to the row's 100, and grown down a 100px column.
+    flex_rects("flex: an absolute box in a stretched item sits at its bottom",
+               ".c{display:flex;height:100px} .c div{position:relative;width:50px}"
+               " .c span{position:absolute;bottom:0;height:10px;width:10px}</style>"
+               "<div class=c><div id=i><span id=a></span></div></div>",
+               FLEX_IDS("i", "a"), FLEX_WANT({0, 0, 50, 100}, {0, 90, 10, 10}));
+    flex_rects("flex: an absolute box in a grown column item sits at its bottom",
+               ".c{display:flex;flex-direction:column;height:100px} .c div{position:relative;flex:1}"
+               " .c span{position:absolute;bottom:0;height:10px;width:10px}</style>"
+               "<div class=c><div id=i><span id=a></span></div></div>",
+               FLEX_IDS("i", "a"), FLEX_WANT({0, 0, 400, 100}, {0, 90, 10, 10}));
+    // A relative item in a column keeps its offset when the column moves it
+    // to its place: 10 down from 0 and from 20.
+    flex_rects("flex: a column item keeps its relative offset",
+               ".c{display:flex;flex-direction:column} .c div{height:20px;position:relative;top:10px}"
+               "</style><div class=c><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 10, 400, 20}, {0, 30, 400, 20}));
+    // `left` on a column is `start`: column-reverse puts it at the top, the
+    // first item lowest of the two (a 20 down, b at 0).
+    flex_rects("flex: justify-content left on a column-reverse is its start",
+               ".c{display:flex;flex-direction:column-reverse;height:100px;justify-content:left}"
+               " .c div{height:20px}</style><div class=c><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 20, 400, 20}, {0, 0, 400, 20}));
+    // An inline flex container is as wide as items that cannot shrink ask
+    // by their basis (Chrome's measure): two empty `flex: 0 0 100px`, 200;
+    // and an item that can shrink asks its content, 200 past a 100px basis.
+    flex_rects("flex: an inline flex container holds its unshrinking bases",
+               ".x{display:inline-flex}</style><div><span class=x id=g>"
+               "<div style='flex:0 0 100px'></div><div style='flex:0 0 100px'></div></span></div>",
+               FLEX_IDS("g"), FLEX_WANT({0, -1, 200, -1}));
+    flex_rects("flex: a shrinkable basis asks its content",
+               ".x{display:inline-flex}</style><div><span class=x id=g>"
+               "<div style='flex:0 1 100px'><div style='width:200px;height:10px'></div></div>"
+               "</span></div>",
+               FLEX_IDS("g"), FLEX_WANT({0, -1, 200, -1}));
+
+    // A thousand `flex: 0 .001 .75px` items (750px) shrink into a 10px
+    // row. Their factors sum to one, so all of the overflow is shared
+    // (§ 9.7), by weights of a factor times a base that are both tiny: in
+    // whole numbers of 26.6 each product rounds to nothing, and the row
+    // kept its 750.
+    {
+        static char page[16384];
+        strcpy(page, ".c{display:flex;width:10px} .c div{flex:0 .001 .75px;min-width:0;height:5px}"
+                     "</style><div class=c>");
+        for (int i = 0; i < 999; i++)
+            strcat(page, "<div></div>");
+        strcat(page, "<div id=z></div></div>");
+        Sheeted q;
+        static char html[20000];
+        snprintf(html, sizeof(html), "<!doctype html><style>body{margin:0}%s", page);
+        sheeted_open(&q, html, 400, 600);
+        flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+        const flow_box_t *z = flex_box(&q, t, "z");
+        char got[64];
+        snprintf(got, sizeof(got), "last item %d..%d", z ? z->rect.x : -1,
+                 z ? z->rect.x + z->rect.w : -1);
+        expect("flex: tiny factors on bases under a pixel still shrink", z != NULL &&
+               z->rect.x + z->rect.w <= 11, got);
+        flow_free(t);
+        sheeted_close(&q);
+    }
+
+    // A layout that stops inside a later item withdraws the earlier ones:
+    // they have only their provisional places. The third item's text needs
+    // far more line memory than the three boxes need box memory, so a
+    // budget between the two stops in layout with the box tree whole;
+    // every budget up to the whole is tried, and a placed item is always
+    // where the whole layout puts it.
+    {
+        static char page[40000];
+        strcpy(page, "<!doctype html><style>body{margin:0}.c{display:flex;flex-direction:column;"
+                     "height:300px} .c p{margin:0;flex:1}</style><div class=c>"
+                     "<p id=a>one<p id=b>two<p id=c>");
+        for (int i = 0; i < 3000; i++)
+            strcat(page, "w ");
+        strcat(page, "</div>");
+        Sheeted q;
+        sheeted_open(&q, page, 400, 600);
+        flow_tree_t *whole = flow_layout(q.doc, q.page, 400, &q.env);
+        const flow_box_t *wa = flex_box(&q, whole, "a"), *wb = flex_box(&q, whole, "b");
+        bool ok = wa != NULL && wb != NULL, stopped = false;
+        for (size_t budget = 8 * 1024; ok && budget < 4u * 1024 * 1024; budget += 8 * 1024) {
+            q.env.max_arena_bytes = budget;
+            flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+            if (t == NULL)
+                continue;
+            bool incomplete = flow_incomplete(t);
+            stopped |= incomplete && flex_box(&q, t, "c") == NULL;
+            const flow_box_t *a = flex_box(&q, t, "a"), *b = flex_box(&q, t, "b");
+            ok = (a == NULL || memcmp(&a->rect, &wa->rect, sizeof(a->rect)) == 0) &&
+                 (b == NULL || memcmp(&b->rect, &wb->rect, sizeof(b->rect)) == 0);
+            flow_free(t);
+            if (!incomplete)
+                break;
+        }
+        expect("flex: a layout stopped in a later item withdraws the earlier ones", ok && stopped,
+               stopped ? NULL : "no budget stopped inside the third item");
+        flow_free(whole);
+        sheeted_close(&q);
+    }
+}
+
+// The same findings at the sites wrapping added (PR #182): a wrapping
+// column moves its items ACROSS to their lines, and widens a stretched
+// one to its line.
+static void flex_wrap_review_cases(void)
+{
+    // Two lines of one 40px item each in a 50px-high column: the second
+    // line starts at 30 (the first line is its widest item, 30), and the
+    // relative item keeps its 5px on top of that.
+    flex_rects("flex: a wrapping column item keeps its relative offset across",
+               ".c{display:flex;flex-direction:column;flex-wrap:wrap;height:50px;align-content:start}"
+               " .c div{height:40px;width:30px}</style><div class=c><div id=a></div>"
+               "<div id=b style=position:relative;left:5px></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 30, 40}, {35, 0, 30, 40}));
+    // A stretched item in a wrapping column is widened to its line (the
+    // 80px of its sibling), and its absolute box, right:0, sits at the
+    // widened edge: 80 - 10.
+    flex_rects("flex: an absolute box in a widened wrapping-column item sits at its edge",
+               ".c{display:flex;flex-direction:column;flex-wrap:wrap;height:100px;align-content:start}"
+               " .c span{position:absolute;right:0;top:0;width:10px;height:10px}</style>"
+               "<div class=c><div id=i style=position:relative;height:20px><span id=a></span></div>"
+               "<div style=width:80px;height:20px></div></div>",
+               FLEX_IDS("i", "a"), FLEX_WANT({0, 0, 80, 20}, {70, 0, 10, 10}));
+}
+
 static void flex_cases(void)
 {
     flex_row_cases();
@@ -334,4 +480,6 @@ static void flex_cases(void)
     flex_column_cases();
     flex_box_cases();
     flex_wrap_cases();
+    flex_review_cases();
+    flex_wrap_review_cases();
 }

@@ -395,6 +395,10 @@ struct FBox {
     // gave overrides them, border box: what a flex item's automatic
     // minimum and `flex-basis: content` read (Flexbox 1 § 4.5, § 7.2.3).
     int64_t content_min, content_max;
+    // The height its content took when it was laid out, border box, before
+    // a height or a limit the page gave: what a column flex item's
+    // automatic minimum and `flex-basis: content` read.
+    int64_t content_h;
     uint32_t intrinsic_computed;    // how often; the fuzz asserts at most once
     // An out-of-flow box's static position (CSS 2.1 § 10.3.7): among
     // blocks, `static_known` says x and y hold it until the box is laid
