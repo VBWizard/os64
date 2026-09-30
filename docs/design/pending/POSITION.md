@@ -169,8 +169,10 @@ absolute dropdown inside it is ordinary.
   round a fragment added up. Nothing else moves.
 - **Static positions.** A placeholder whose element was specified
   inline-level (`specified_inline`) records the pen where it stands. One
-  specified block-level would have broken the line, so it records the
-  START OF THE NEXT LINE, at the container's content edge. Among blocks, a
+  specified block-level would have broken the line where something in the
+  flow — text, an atom, a marker — stood before it, so it records the
+  START OF THE NEXT LINE, at the container's content edge; with nothing
+  before it on its line, the START OF THIS ONE. Among blocks, a
   box records the top edge below the PREVIOUS sibling's margin alone — not
   the margin that sibling collapses to with the next one, which has not
   been met when the placeholder is passed (ruling 5, Chrome: 10 below a
@@ -380,7 +382,10 @@ to disagree with. No luck."
    (`tools/position_probe/static-position.html`, which prints what Chrome
    measured). Chrome 154 answered: 10, the previous sibling's own margin;
    and the mid-line cases as designed — an absolute `span` at the pen, an
-   absolute `div` at the start of the next line.
+   absolute `div` at the start of the next line. And, asked on Fable's
+   review of the code (the probe's case 3, answered by Chrome 154 the same
+   day): an absolute `div` that LEADS its line, with nothing before it,
+   stands at that line's top.
 
 Three more, on Fable's review of P1's code, Chris 2026-09-29, each as
 recommended ("I trust your judgement"):

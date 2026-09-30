@@ -1641,15 +1641,23 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         }
         int64_t per_gap = justify && !last && !forced && gaps > 0 && extra > 0
                               ? extra / (int64_t)gaps : 0;
+        // Whether anything in the flow stands before a fragment on this line:
+        // text, an atom, a marker — not a placeholder, not an inline's edge.
+        bool flow_before = false;
         for (FFrag *fr = line->frags; fr != NULL; fr = fr->next) {
             if (fr->kind == FF_PLACEHOLDER && !fr->style->specified_inline) {
-                // A box that was a block would have broken the line: its
-                // static position starts the next one, at the content edge.
+                // A box that was a block would have broken the line where
+                // something in the flow preceded it, so its static position
+                // starts the next line; with nothing before it, it starts
+                // this one. Either way at the content edge (Chrome: ruling
+                // 5, and the probe's case 3).
                 fr->x = cx + fr->rel_x;
-                fr->y = line->y + height + fr->rel_y;
+                fr->y = line->y + (flow_before ? height : 0) + fr->rel_y;
                 fr->baseline = line->baseline;
                 continue;
             }
+            if (fr->kind != FF_PLACEHOLDER)
+                flow_before = true;
             fr->x += cx + shift + per_gap * gaps_before(gap_at, gaps, fr->x) + fr->rel_x;
             if (fr->kind == FF_ATOMIC) {
                 flow_vertical_align_t va = fr->style->vertical_align;

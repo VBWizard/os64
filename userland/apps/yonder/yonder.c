@@ -2324,11 +2324,11 @@ static void forms_place(void)
         // The page's edges add in 64 bits (a box near INT32_MAX would wrap
         // back inside the view), and whatever is kept is clamped to int32.
         int64_t x = (int64_t)v.x + b->rect.x - g.sx, y = (int64_t)v.y + b->rect.y - g.sy;
-        bool inside = x >= v.x && y >= v.y && x + b->rect.w <= (int64_t)v.x + v.w &&
-                      y + b->rect.h <= (int64_t)v.y + v.h && b->rect.w > 0 && b->rect.h > 0 &&
-                      !(b->unpainted && b->style->pointer_events_none);
+        bool shown = x >= v.x && y >= v.y && x + b->rect.w <= (int64_t)v.x + v.w &&
+                     y + b->rect.h <= (int64_t)v.y + v.h && b->rect.w > 0 && b->rect.h > 0 &&
+                     !(b->unpainted && b->style->pointer_events_none);
         os64_gui_rect_t r = {clamp32(x), clamp32(y), b->rect.w, b->rect.h};
-        if (!inside) {
+        if (!shown) {
             if (!fw->w->hidden)
                 os64_ui_set_hidden(&g.ui, fw->w, true);
             fw->w->bounds = r;          // a field scrolls its text by its width

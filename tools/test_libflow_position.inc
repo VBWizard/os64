@@ -167,19 +167,22 @@ static void position_layout_cases(void)
     // Static positions (ruling 5, from Chrome). An absolute SPAN written
     // mid-line stands at the pen, "before " = 44, at the line's top; an
     // absolute DIV would have broken the line, so it starts the next one,
-    // at the content edge, 20 + 20 = 40. Between blocks, below the
-    // previous one's own margin: A ends at 60, its margin 10, so 70 — not
-    // the 40 it collapses to with B, which is at 60 + 40 = 100.
+    // at the content edge, 20 + 20 = 40; one that LEADS its line has
+    // nothing to break away from, and stands at that line's top, 40.
+    // Between blocks, below the previous one's own margin: A ends at 80,
+    // its margin 10, so 90 — not the 40 it collapses to with B, which is at
+    // 80 + 40 = 120.
     cascade_layout_case("positioned: static positions",
         "<!doctype html><style>body{margin:0} .line{position:relative;width:300px}"
         ".a{position:absolute} #A{height:20px;margin-bottom:10px}"
         "#B{height:20px;margin-top:40px} #between{width:10px;height:5px}</style>"
         "<div class=line>before <span class=a>S</span>after</div>"
         "<div class=line>before <div class=a>D</div>after</div>"
+        "<div class=line><div class=a>L</div>after</div>"
         "<div id=A></div><div class=a id=between></div><div id=B></div>", 400,
-        "page 400 120\n"
-        "block html 0 0 400 120\n"
-        "  block body 0 0 400 120\n"
+        "page 400 140\n"
+        "block html 0 0 400 140\n"
+        "  block body 0 0 400 140\n"
         "    block div 0 0 300 20 positioned\n"
         "      line 0 0 300 20 base 14\n"
         "        text \"before \" 0 2 44 16 serif 16\n"
@@ -194,9 +197,15 @@ static void position_layout_cases(void)
         "      block div 0 40 8 20 positioned\n"
         "        line 0 40 8 20 base 14\n"
         "          text \"D\" 0 42 8 16 serif 16\n"
-        "    block div 0 40 400 20\n"
-        "    block div 0 70 10 5 positioned\n"
-        "    block div 0 100 400 20\n");
+        "    block div 0 40 300 20 positioned\n"
+        "      line 0 40 300 20 base 14\n"
+        "        text \"after\" 0 42 28 16 serif 16\n"
+        "      block div 0 40 8 20 positioned\n"
+        "        line 0 40 8 20 base 14\n"
+        "          text \"L\" 0 42 8 16 serif 16\n"
+        "    block div 0 60 400 20\n"
+        "    block div 0 90 10 5 positioned\n"
+        "    block div 0 120 400 20\n");
 
     // The initial containing block is the viewport, 600 high (§ 10.1):
     // bottom 0 is 590, and the page reaches it. A drop whose containing

@@ -485,9 +485,9 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
 // means, and a TEXT's run where in the text the pointer is (os64_text_hit).
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y);
 
-// The same, among everything in the flow — relative boxes included, absolute
-// ones not: what lies under (x, y) in the flow, whatever out-of-flow box is
-// drawn over it. What a scroll position is a property of — a face that
+// The box under (x, y) among everything in the flow — relative boxes
+// included, absolute ones not — whatever out-of-flow box is drawn over it,
+// and whatever its `pointer-events`: a place, not a target. What a scroll position is a property of — a face that
 // keeps a node in place across a new layout anchors on this, or it follows
 // an overlay wherever the new layout puts it. It walks the whole in-flow
 // tree: once per layout, not per pointer move.
