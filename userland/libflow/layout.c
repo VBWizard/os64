@@ -474,13 +474,32 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     return r;
 }
 
+// Content size `size` on `axis` (0 across, 1 down) as the page would have
+// written it: a border box's includes its frame, so `box-sizing` goes on
+// meaning what it did for the limits a copied style keeps.
+static flow_length_t replaced_given(const flow_style_t *s, int axis, int64_t size, int64_t cbw)
+{
+    int64_t frame = axis == 0
+        ? s->border_width[FLOW_LEFT] + s->border_width[FLOW_RIGHT] +
+              len(s->padding[FLOW_LEFT], cbw) + len(s->padding[FLOW_RIGHT], cbw)
+        : s->border_width[FLOW_TOP] + s->border_width[FLOW_BOTTOM] +
+              len(s->padding[FLOW_TOP], cbw) + len(s->padding[FLOW_BOTTOM], cbw);
+    flow_length_t given;
+    os64_memset(&given, 0, sizeof(given));
+    given.kind = FLOW_LENGTH_PX;
+    given.value = (int32_t)min64(max64(0, size) + (s->box_sizing == FLOW_BORDER_BOX ? frame : 0),
+                                 INT32_MAX);
+    return given;
+}
+
 // A picture's own size on one axis (0 across, 1 down), content box: as
-// if the page had given it no size and no limits on that axis, a size it
-// gave on the other carried through the picture's ratio. What a flex base
-// of `content`, or of `auto` with no size, and an automatic minimum read
-// (Flexbox 1 § 9.2, § 4.5): a size the page gave on the flex axis is the
-// algorithm's to weigh, never the content's.
-static int64_t replaced_own(L *l, const FBox *b, int axis, int64_t cbw)
+// if the page had given it no size and no limits on that axis, the size
+// on the other axis carried through the picture's ratio — the page's, or,
+// `across` >= 0, that content size (a line stretched it there). What a
+// flex base of `content`, or of `auto` with no size, and an automatic
+// minimum read (Flexbox 1 § 9.2, § 4.5): a size the page gave on the flex
+// axis is the algorithm's to weigh, never the content's.
+static int64_t replaced_own(L *l, const FBox *b, int axis, int64_t cbw, int64_t across)
 {
     flow_style_t own = *b->style;
     flow_length_t none;
@@ -489,6 +508,13 @@ static int64_t replaced_own(L *l, const FBox *b, int axis, int64_t cbw)
         own.width = own.min_width = own.max_width = none;
     else
         own.height = own.min_height = own.max_height = none;
+    if (across >= 0 && axis == 0) {
+        own.height = replaced_given(&own, 1, across, cbw);
+        own.min_height = own.max_height = none;
+    } else if (across >= 0) {
+        own.width = replaced_given(&own, 0, across, cbw);
+        own.min_width = own.max_width = none;
+    }
     Replaced r = replaced_size(l, b->node, &own, cbw);
     return axis == 0 ? r.w : r.h;
 }
@@ -496,28 +522,17 @@ static int64_t replaced_own(L *l, const FBox *b, int axis, int64_t cbw)
 // A picture's size across the other axis when it is given content size
 // `size` on `axis` (0 across, 1 down) and the page gave it none there:
 // through its own ratio, held to that axis's limits as the page wrote them.
+// A used size, where replaced_own is a content one.
 static int64_t replaced_for(L *l, const FBox *b, int axis, int64_t size, int64_t cbw)
 {
     flow_style_t own = *b->style;
     flow_length_t none;
     os64_memset(&none, 0, sizeof(none));
-    // The size as the page would have written it: a border box's includes
-    // its frame, so `box-sizing` goes on meaning what it did for the
-    // limits left in place.
-    int64_t frame = axis == 0
-        ? own.border_width[FLOW_LEFT] + own.border_width[FLOW_RIGHT] +
-              len(own.padding[FLOW_LEFT], cbw) + len(own.padding[FLOW_RIGHT], cbw)
-        : own.border_width[FLOW_TOP] + own.border_width[FLOW_BOTTOM] +
-              len(own.padding[FLOW_TOP], cbw) + len(own.padding[FLOW_BOTTOM], cbw);
-    flow_length_t given = none;
-    given.kind = FLOW_LENGTH_PX;
-    given.value = (int32_t)min64(max64(0, size) + (own.box_sizing == FLOW_BORDER_BOX ? frame : 0),
-                                 INT32_MAX);
     if (axis == 0) {
-        own.width = given;
+        own.width = replaced_given(&own, 0, size, cbw);
         own.min_width = own.max_width = none;
     } else {
-        own.height = given;
+        own.height = replaced_given(&own, 1, size, cbw);
         own.min_height = own.max_height = none;
     }
     Replaced r = replaced_size(l, b->node, &own, cbw);
@@ -2526,7 +2541,11 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
                 const flow_style_t *cs = c->style;
                 int64_t mt = len(cs->margin[FLOW_TOP], cw), mb = len(cs->margin[FLOW_BOTTOM], cw);
                 int64_t h = natural_h(c), o = mt + h + mb;
-                if (cross_align(s, cs) == FLOW_PLACE_BASELINE) {
+                // An item with an auto margin across takes no part in the
+                // baseline (§ 8.3): it is only as tall as it is.
+                if (cross_align(s, cs) == FLOW_PLACE_BASELINE &&
+                    cs->margin[FLOW_TOP].kind != FLOW_LENGTH_AUTO &&
+                    cs->margin[FLOW_BOTTOM].kind != FLOW_LENGTH_AUTO) {
                     int64_t bl, asc = mt + h;
                     if (first_baseline_in(c, &bl))
                         asc = mt + (bl - c->y);
@@ -2613,8 +2632,8 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
         // definite; a wrapping column's line width is not known yet).
         int64_t content = c->content_h;
         if (c->kind == FB_REPLACED)
-            content = (!wraps && stretches_across(s, c) ? replaced_for(l, c, 0, c->flex_w, cw)
-                                                         : replaced_own(l, c, 1, cw)) + it->frame;
+            content = replaced_own(l, c, 1, cw, !wraps && stretches_across(s, c) ? c->flex_w : -1) +
+                      it->frame;
         flow_length_t fb = cs->flex_basis;
         if (fb.kind == FLOW_LENGTH_PX || (fb.kind == FLOW_LENGTH_PERCENT && given >= 0))
             it->base = content_of(cs, fb, max64(0, given), it->frame) + it->frame;
@@ -2871,7 +2890,7 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
                 int64_t vf = vframe(c, cw);
                 int64_t ch = clamp_height(cs, max64(0, h_given - len(cs->margin[FLOW_TOP], cw) -
                                                            len(cs->margin[FLOW_BOTTOM], cw) - vf), vf);
-                own_min = own_max = replaced_for(l, c, 1, ch, cw) + it->frame;
+                own_min = own_max = replaced_own(l, c, 0, cw, ch) + it->frame;
             }
             bool width_given = cs->width.kind == FLOW_LENGTH_PX || cs->width.kind == FLOW_LENGTH_PERCENT;
             flow_length_t fb = cs->flex_basis;
@@ -4596,7 +4615,7 @@ static Intr intrinsic(L *l, FBox *b)
     } else if (b->kind == FB_REPLACED) {
         Replaced rep = replaced_size(l, b->node, s, 0);
         r.min = r.max = rep.w + hframe(b, 0);
-        b->content_min = b->content_max = replaced_own(l, b, 0, 0) + hframe(b, 0);
+        b->content_min = b->content_max = replaced_own(l, b, 0, 0, -1) + hframe(b, 0);
     } else {
         if (b->flex && s->flex_direction != FLOW_FLEX_COLUMN &&
             s->flex_direction != FLOW_FLEX_COLUMN_REVERSE) {
