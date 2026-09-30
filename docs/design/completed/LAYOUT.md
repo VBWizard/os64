@@ -707,9 +707,10 @@ its contract; this is what it offers and why.
   a scroll position is anchored to.
 - **`flow_box_doc_offset`/`flow_box_doc_rect`/`flow_box_doc_clip(box,
   scroll)`** — a box in document coordinates, the one place the fixed rule
-  is written; and **`flow_box_covered(tree, box, scroll)`**, whether a
-  positioned box painted after it is drawn over it, so a face hides the
-  live widget of a control that is (POSITION.md, P2).
+  is written; and **`flow_box_covered(tree, box, scroll)`**, whether the
+  pointer cannot reach a box — `flow_hit` at its centre answers neither it
+  nor anything inside it — so a face hides the live widget of a control
+  that is (POSITION.md, ruling 9).
 - **`flow_box_for(tree, node)`** — a node's first box: where a fragment
   link scrolls to, where a control's widget goes. NULL for a node with
   none (hidden, `display: none`, or past where an incomplete layout
