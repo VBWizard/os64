@@ -1,8 +1,9 @@
 #include "topmain.h"
 
-// The knobs (all four rulings are Chris's — see topmain.h):
+// Presentation and refresh options are collected into top_options_t.
 static const char *delayValue = NULL;
 static bool optZombies = false;
+static bool optIdle = false;
 static bool optAdaptive = false;
 static bool optNoSummary = false;
 static bool optLog = false;
@@ -19,6 +20,8 @@ int main(int argc, char **argv)
          .value_out = &delayValue},
         {'z', "zombies", false, "Show zombie tasks (hidden by default)",
          .flag = &optZombies},
+        {'i', "idle", false, "Show CPU idle tasks (hidden by default)",
+         .flag = &optIdle},
         {'a', "adaptive", false, "Adaptive TIME units (us/ms/s) instead of X.Ys",
          .flag = &optAdaptive},
         {'s', "nosummary", false, "Hide the cores/idle/system summary lines",
@@ -31,7 +34,7 @@ int main(int argc, char **argv)
          .flag = &optThreads},
     };
 
-    os64_args_init(&args, argc, argv, specs, 7);
+    os64_args_init(&args, argc, argv, specs, sizeof(specs) / sizeof(specs[0]));
     args.about = "View the system's tasks and where the CPU time goes";
     int32_t nPositionals = os64_args_parse(&args, "top", &positional, 1);
     if (nPositionals == 0)
@@ -43,6 +46,7 @@ int main(int argc, char **argv)
         if (opts.delayMS > 60000)
             opts.delayMS = 60000;
         opts.showZombies = optZombies;
+        opts.showIdle = optIdle;
         opts.adaptiveUnits = optAdaptive;
         opts.noSummary = optNoSummary;
         opts.logLedger = optLog;

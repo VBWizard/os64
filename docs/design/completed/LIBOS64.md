@@ -100,11 +100,90 @@ umbrella that pulled the world into every TU.
 | `<os64/str.h>` | str*/mem* primitives |
 | `<os64/url.h>` | `os64_url_parse` — the `scheme://host:port/path` grammar RFC 1738 wrote once for http and gopher as siblings. Grammar only: no scheme table, no default ports, no percent-decoding, so a caller says which schemes it serves and what each implies |
 | `<os64/proc.h>` | `spawn`, `fork`, `exec*`, `waitpid`, `exit`, `kill`, `getcwd`/`chdir` |
+| `<os64/monitor.h>` | Per-consumer process/thread/core sampling, CPU deltas and percentages, system memory; used by `top` and `htop`. Contract and extension boundaries below. |
 | `<os64/pipe.h>` | `pipe`, `dup`/`dup2` |
 | `<os64/opt.h>` | the `CommandLineOption` getopt-style parser (kept from libChrisOS — it was good) |
 | `<os64/time.h>` | `time`, `sleep`, `gettime` |
 | `<os64/clip.h>` | `os64_clip_copy`/`paste`/`length` — the system clipboard. NO syscall behind it: it is open/read/write/close on `/sys/clipboard`, and a program that spells that out longhand gets the identical clipboard (CLIPBOARD.md) |
 | `<os64.h>` | includes all of the above for quick programs |
+
+## Shared monitoring
+
+`monitor.c` builds on the typed process readers in `procfs.c`. It owns the
+history and CPU arithmetic used by `top` and `htop`; its public header is
+`<os64/monitor.h>`. A terminal monitor or graphical Task Manager can consume
+the same results without implementing another version of that arithmetic.
+
+Create an `os64_monitor_t` with explicit task, thread and core capacities,
+call `os64_monitor_sample()` at the application's cadence, then destroy it.
+Sample buffers are allocated at creation. Two buffers keep the previous
+readings separate from the readings being collected. Each instance owns its
+history; separate instances can sample at different rates. Access to one
+instance must be serialized by its caller.
+
+A successful sample returns a borrowed, read-only snapshot valid until that
+instance's next sample call or destruction. A GUI worker must copy a snapshot
+into its own published storage, or coordinate access with the UI, before
+sampling again. Changing public record sizes or strides is an ABI change;
+future extensions must preserve these layouts or introduce a new interface.
+
+The snapshot contains task metadata, optional thread rows for multithreaded
+tasks, per-core counters and deltas, rounded CPU percentages, memory, and
+clock intervals. There is no display formatting, filtering, sorting, sleep,
+input handling, or process control in the module. In particular, process
+filters do not decide which tasks get their accounting history updated.
+Task and thread identities occupy separate arrays; thread identity includes
+its owning task. Thread sampling may be disabled, and re-enabling it starts
+a fresh baseline rather than charging the unsampled time to one interval.
+
+Process CPU percentages use one core as 100%, and may exceed 100% for a
+multithreaded task. The denominator follows `top`'s policy: core 0's CPU ledger
+interval when it is greater than half and less than four times the tick
+interval, otherwise the tick interval. Summary buckets are percentages of
+the machine; a core whose ledger barely advances (less than 1% of the
+interval), or does not advance, contributes an idle interval as a parked core.
+Largest-remainder rounding apportions busy/idle/scheduler percentages to
+100 when their sum is nonzero. Both per-core and machine buckets normalize
+against their sum, avoiding one-microsecond rounding differences in the
+kernel's separately converted counters. Tick/ledger disagreement is also
+available as a signed magnitude in tenths of a percent.
+
+New tasks, missing previous readings, counter resets, and threads returning
+after sampling was disabled have unavailable CPU usage for one sample.
+Task counters are matched by ID, not directory order or a display row.
+The kernel's task IDs are assumed not to be reused within a monitor's lifetime;
+if that changes, the producer must expose an incarnation identifier.
+
+`/proc` enumeration or clock failure returns an error and resets history.
+Disappearing task/thread reports are skipped. Optional memory failure sets
+`memory_valid=false`; missing or malformed core reports and reached capacities
+set partial flags. CPU reports are parsed by key, accepting unknown keys but
+rejecting missing, duplicate or malformed required fields. Core IDs need not
+be contiguous. An incomplete core census suppresses the machine summary;
+individual available records remain usable. Files are sampled separately,
+so this is not an atomic whole-machine census. Sampling bounds limit retained
+records; they do not promise a complete count beyond capacity.
+
+The first consumer is `top`. Its flags, controls, sort/filter behavior and
+raw ledger logging remain presentation concerns. Unlike its former shared
+512-row cache, task and thread capacities are separate, so thread expansion
+cannot consume task slots. New baselines and resets display as unavailable;
+partial samples are reported on screen. `top` hides CPU idle tasks by default;
+`i` toggles them and `-i`/`--idle` shows them at startup. As in `htop`, this
+means kernel tasks named `idle` followed by digits, not sleeping user tasks.
+The view filter does not change the sampled CPU totals or history.
+
+The [htop interface](HTOP.md) is a second consumer: it owns selection,
+filtering, tree layout, activity history and terminal rendering. Network and
+disk-rate sampling, terminal mouse input, and the graphical Task Manager
+are separate extensions. Existing readers remain available for tools that
+only need a one-shot process list.
+
+Validation: `tools/test_monitor_host.sh` exercises independent consumers,
+identity/lifecycle changes, thread toggles, failed sources, parsing, bounded
+samples, allocation failures, clock selection, overflow and percentage
+rounding under ASan/UBSan. `/tests/monitortest` exercises independent monitors
+against live kernel reports. `top` needs a separate interactive smoke test.
 
 ## The unified handle model
 

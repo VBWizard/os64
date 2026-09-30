@@ -1,27 +1,12 @@
-// topmain.c — the engine behind top. Chris designed the instrument (the
-// display rulings, the stat-file contract, the zombie and units knobs);
-// the library guy — back from "playing" with the network, thanks for the
-// heckling in the old temporaryAtoi comments — wound it.
-//
-// The measurement doctrine (PROC.md "cores"): runtime_us in each status
-// file and the /sys/cpu/<n>/time ledger (né /proc/cores, moved 2026-08-12
-// when the machine's facts went to /sys) are BOUNDARY-CHARGED microsecond
-// counters. top never computes time itself — it snapshots the counters,
-// waits, snapshots again, and divides deltas. The interval is measured
-// with os64_ticks (never assumed from the delay: sleep rounds up, screens
-// take time to paint, and a denominator that lies makes every row lie).
+// top presents snapshots from libos64; sampling history and CPU accounting
+// live in os64/monitor.h so terminal and graphical consumers share them.
 
 #include "topmain.h"
+#include "os64/monitor.h"
 
 #define MAX_ENTRIES 512
 #define MAX_CORES 32
-#define STATUS_LINE_SIZE 256
 #define FRAME_SIZE 16384
-
-static const char procDir[] = "/proc";
-
-static top_entry_t top_entries[MAX_ENTRIES];
-static uint64_t topIterationsExecuted = 0;
 
 typedef enum {
     TOP_SORT_CPU,
@@ -65,6 +50,17 @@ static bool contains_case_insensitive(const char *text, const char *needle)
             return true;
     }
     return false;
+}
+
+// Match the kernel's per-core idle tasks, not sleeping user processes.
+static bool idle_task(const os64_proc_info_t *task)
+{
+    if (!task->kernel || os64_memcmp(task->name, "idle", 4) || !task->name[4])
+        return false;
+    for (const char *c = task->name + 4; *c; c++)
+        if (*c < '0' || *c > '9')
+            return false;
+    return true;
 }
 
 static int32_t string_compare_case_insensitive(const char *a, const char *b)
@@ -137,6 +133,7 @@ static bool handle_key(top_view_t *view, char c)
             view->filterEditing = true;
             return true;
         case 27: view->filter[0] = '\0'; return true;
+        case 'i': case 'I': view->options.showIdle = !view->options.showIdle; return true;
         case 'z': case 'Z': view->options.showZombies = !view->options.showZombies; return true;
         case 'a': case 'A': view->options.adaptiveUnits = !view->options.adaptiveUnits; return true;
         case 'c': case 'C': view->options.perCore = !view->options.perCore; return true;
@@ -190,19 +187,8 @@ static bool wait_until_refresh(top_view_t *view, const os64_ticks_t *started,
     return view->quit;
 }
 
-// One core's ledger row, twice (this refresh and the last one).
-typedef struct {
-    uint64_t total, busy, idle, sched;
-} core_sample_t;
-static core_sample_t coresNow[MAX_CORES], coresPrev[MAX_CORES];
-static int32_t coreCount = 0;
-static bool haveCorePrev = false;
-
 // ── The frame ────────────────────────────────────────────────────────────
-// The whole screen is composed into one buffer and written in ONE call
-// after the \f — a repaint should be a single write, not a drizzle of
-// lines racing the console (and someday, when the escape-sequence slice
-// gives us cursor addressing, this buffer is what gets diffed).
+// Compose a complete frame before writing it to the terminal.
 static char frame[FRAME_SIZE];
 static size_t frameLen = 0;
 
@@ -259,6 +245,7 @@ static void compose_help(const top_view_t *view)
     framef("  S          reverse sort direction\n");
     framef("  /          edit command filter\n");
     framef("  Esc        clear the active filter\n");
+    framef("  i          show or hide CPU idle tasks\n");
     framef("  z          show or hide zombies\n");
     framef("  a          fixed or adaptive time units\n");
     framef("  c          machine or per-core accounting\n");
@@ -266,7 +253,8 @@ static void compose_help(const top_view_t *view)
     framef("  sort: %s %s   filter: %s\n",
            sort_name(view->sort), sort_direction(view),
            view->filter[0] ? view->filter : "(none)");
-    framef("  zombies: %s   units: %s   cores: %s\n\n",
+    framef("  idle tasks: %s   zombies: %s   units: %s   cores: %s\n\n",
+           view->options.showIdle ? "shown" : "hidden",
            view->options.showZombies ? "shown" : "hidden",
            view->options.adaptiveUnits ? "adaptive" : "fixed",
            view->options.perCore ? "per-core" : "machine");
@@ -284,106 +272,10 @@ static void compose_footer(const top_view_t *view)
     if (view->filterEditing)
         framef("\nfilter: %s_   Enter apply  Esc cancel\n", view->filterEdit);
     else
-        framef("\nq quit  ? help  s sort  S reverse  / filter  z zombies  a units  c cores  t threads\n");
+        framef("\nq quit  ? help  s/S sort  / filter  i idle  z zombies  a units  c cores  t threads\n");
 }
 
 // ── Small formatters ─────────────────────────────────────────────────────
-
-// A percentage with one decimal, from a part and a whole, without floats:
-// tenths = part*1000/whole, printed as t/10 "." t%10. Kept for the ONE
-// reading whose whole signal lives below 1% — see tickskew's own note. The
-// CPU splits use the integer apportionment below instead (ruled 2026-08-05:
-// different instruments, different resolutions, each chosen for what it
-// measures rather than for what Linux prints).
-static void fmt_pct(char *buf, size_t cap, uint64_t part, uint64_t whole)
-{
-    if (whole == 0)
-    {
-        os64_strcopy(buf, cap, "-");
-        return;
-    }
-    uint64_t tenths = part * 1000 / whole;
-    os64_snprintf(buf, (int32_t)cap, "%lu.%lu", tenths / 10, tenths % 10);
-}
-
-// ── Integer percentages that actually sum to 100 ─────────────────────────
-// Turn `count` parts of `whole` into whole-number percentages whose total is
-// EXACTLY 100. Rounding each one independently cannot do this: three parts
-// truncated (or even rounded) on their own routinely total 99 or 101, and a
-// summary line that visibly fails to add up is the exact complaint that
-// started this — trading a jittery ±1% for a permanent −1% would have been
-// no bargain.
-//
-// The fix is LARGEST REMAINDER: give everyone their floor, then hand the
-// leftover units out to whoever was robbed most by the flooring. This is
-// the apportionment problem — the same math as allocating seats in the US
-// House of Representatives, which is where it was first argued (Hamilton's
-// method, 1792, and Congress fought over the alternatives for a century).
-// Dividing a fixed whole into whole-number shares that still total the
-// whole turns out to be hard enough to have a political history; a CPU
-// meter is a much smaller stage for it.
-//
-// CONTRACT: parts must sum to `whole` — the caller's arithmetic guarantees
-// it (the kernel derives busy as total − idle − sched, so the three always
-// close). The redistribution loop is bounded by `count` anyway, so a caller
-// who breaks that contract gets a small bounded error rather than an
-// inflated lie.
-#define TOP_PCT_MAX 4
-
-static void pct_apportion(const uint64_t *parts, uint32_t count,
-                          uint64_t whole, uint32_t *out)
-{
-    uint64_t remainder[TOP_PCT_MAX];
-    uint32_t assigned = 0;
-
-    if (whole == 0 || count > TOP_PCT_MAX)
-    {
-        for (uint32_t i = 0; i < count; i++)
-            out[i] = 0;
-        return;
-    }
-
-    for (uint32_t i = 0; i < count; i++)
-    {
-        uint64_t scaled = parts[i] * 100;
-        out[i] = (uint32_t)(scaled / whole);
-        remainder[i] = scaled % whole;
-        assigned += out[i];
-    }
-
-    // Flooring N values can lose at most N−1 whole units, so that bounds
-    // this loop. Each entry may be rounded up once (its remainder is then
-    // spent), which is what makes the result stable rather than lumpy.
-    for (uint32_t pass = 0; assigned < 100 && pass < count; pass++)
-    {
-        uint32_t best = count;
-        for (uint32_t i = 0; i < count; i++)
-            if (remainder[i] > 0 && (best == count || remainder[i] > remainder[best]))
-                best = i;
-        if (best == count)
-            break;   // every floor was exact; nothing is owed
-        out[best]++;
-        remainder[best] = 0;
-        assigned++;
-    }
-}
-
-// One percentage on its own, rounded half-up rather than truncated. For the
-// per-task CPU column, where the rows are independent readings that never
-// have to sum to anything — so there is nothing to apportion, only a digit
-// to round honestly. A task burning a steady fraction of a percent rounds
-// to 0 here and is meant to: the TIME column is the slow-leak detector,
-// and it measures accumulated microseconds, which is strictly better at
-// that job than an instantaneous percentage ever was.
-static void fmt_pct_int(char *buf, size_t cap, uint64_t part, uint64_t whole)
-{
-    if (whole == 0)
-    {
-        os64_strcopy(buf, cap, "-");
-        return;
-    }
-    os64_snprintf(buf, (int32_t)cap, "%lu", (part * 100 + whole / 2) / whole);
-}
 
 // CPU time for the TIME column. Default: X.Y seconds, always — scannable
 // at a glance at a 1-second cadence (Chris's ruling; adaptive units are
@@ -400,7 +292,7 @@ static void fmt_time(char *buf, size_t cap, uint64_t us, bool adaptive)
                       us / 1000000, (us % 1000000) / 100000);
 }
 
-static int32_t compare_entries(const top_entry_t *a, const top_entry_t *b,
+static int32_t compare_entries(const os64_monitor_task_t *a, const os64_monitor_task_t *b,
                                const top_view_t *view)
 {
     uint64_t av = 0, bv = 0;
@@ -409,25 +301,25 @@ static int32_t compare_entries(const top_entry_t *a, const top_entry_t *b,
     switch (view->sort)
     {
         case TOP_SORT_CPU:
-            av = a->havePrev ? a->runtimeUS - a->prevRuntimeUS : 0;
-            bv = b->havePrev ? b->runtimeUS - b->prevRuntimeUS : 0;
+            av = a->cpu.delta_us;
+            bv = b->cpu.delta_us;
             result = av > bv ? -1 : av < bv ? 1 : 0;
             break;
         case TOP_SORT_TIME:
-            result = a->runtimeUS > b->runtimeUS ? -1 :
-                     a->runtimeUS < b->runtimeUS ? 1 : 0;
+            result = a->info.runtime_us > b->info.runtime_us ? -1 :
+                     a->info.runtime_us < b->info.runtime_us ? 1 : 0;
             break;
         case TOP_SORT_TID:
-            result = a->TID < b->TID ? -1 : a->TID > b->TID ? 1 : 0;
+            result = a->info.pid < b->info.pid ? -1 : a->info.pid > b->info.pid ? 1 : 0;
             break;
         case TOP_SORT_NAME:
-            result = string_compare_case_insensitive(a->Command, b->Command);
+            result = string_compare_case_insensitive(a->info.name, b->info.name);
             break;
         case TOP_SORT_STATE:
-            result = a->State < b->State ? -1 : a->State > b->State ? 1 : 0;
+            result = a->info.state < b->info.state ? -1 : a->info.state > b->info.state ? 1 : 0;
             break;
         case TOP_SORT_CORE:
-            result = a->core < b->core ? -1 : a->core > b->core ? 1 : 0;
+            result = a->info.core < b->info.core ? -1 : a->info.core > b->info.core ? 1 : 0;
             break;
         default:
             break;
@@ -436,17 +328,17 @@ static int32_t compare_entries(const top_entry_t *a, const top_entry_t *b,
     if (result != 0 && view->reverseSort)
         result = -result;
     if (result == 0)
-        result = a->TID < b->TID ? -1 : a->TID > b->TID ? 1 : 0;
+        result = a->info.pid < b->info.pid ? -1 : a->info.pid > b->info.pid ? 1 : 0;
     return result;
 }
 
-static void sort_entries(top_entry_t **entries, uint32_t count,
+static void sort_entries(const os64_monitor_task_t **entries, uint32_t count,
                          const top_view_t *view)
 {
     // Stable insertion sort is ideal for top's small, nearly sorted table.
     for (uint32_t i = 1; i < count; i++)
     {
-        top_entry_t *key = entries[i];
+        const os64_monitor_task_t *key = entries[i];
         uint32_t j = i;
         while (j > 0 && compare_entries(entries[j - 1], key, view) > 0)
         {
@@ -457,122 +349,19 @@ static void sort_entries(top_entry_t **entries, uint32_t count,
     }
 }
 
-static void import_task(top_entry_t *entry, const os64_proc_info_t *task)
-{
-    entry->TID = task->pid;
-    entry->PTID = task->ppid;
-    entry->State = task->state;
-    entry->KernelProc = task->kernel;
-    entry->threadCount = task->threads;
-    entry->core = task->core;
-    entry->runtimeUS = task->runtime_us;
-    os64_strcopy(entry->Command, sizeof(entry->Command), task->name);
-}
-
-// /sys/cpu/<n>/time → coresNow[] — one file per core, "key: value" lines in
-// fixed order: total_us, busy_us, idle_us, sched_us. The first core whose
-// file won't open is the end of the machine, so the loop needs no /sys/cpu/
-// count read. (One open per core where /proc/cores was one for the table;
-// the kernel's settle-on-read is rate-limited to once a tick, so the sweep
-// still pays for exactly one settle.)
-static int32_t readCores(void)
-{
-    char line[STATUS_LINE_SIZE];
-    char path[32];
-
-    coreCount = 0;
-    for (int32_t core = 0; core < MAX_CORES; core++)
-    {
-        os64_snprintf(path, sizeof(path), "/sys/cpu/%d/time", core);
-        int64_t h = os64_open(path, NULL);
-        if (h < 0)
-            break;
-
-        // Values arrive in the ledger's fixed order; the keys hold no
-        // digits, so "first digit run on the line" is the whole parse.
-        uint64_t v[4] = {0};
-        int32_t f = 0;
-        while (f < 4 && os64_readline((int32_t)h, line, sizeof(line)) == 1)
-        {
-            const char *p = line;
-            while (*p != '\0' && (*p < '0' || *p > '9'))
-                p++;
-            v[f++] = os64_atou(p);
-        }
-        os64_close((int32_t)h);
-
-        coresNow[core].total = v[0];
-        coresNow[core].busy  = v[1];
-        coresNow[core].idle  = v[2];
-        coresNow[core].sched = v[3];
-        coreCount = core + 1;
-    }
-    return coreCount > 0 ? 0 : -1;
-}
-
-// ── Entry cache ──────────────────────────────────────────────────────────
-// Find the entry for a TID, or claim a slot: exact match first, then a
-// stale slot (its task vanished — reuse resets the delta history so a
-// recycled slot can't inherit a dead task's runtime), then a fresh one.
-static int64_t getTopEntryToUse(uint64_t key, top_entry_t **out,
-                                uint32_t *topEntryCount)
-{
-    top_entry_t *stale = NULL;
-
-    *out = NULL;
-    for (uint32_t idx = 0; idx < *topEntryCount; idx++)
-    {
-        if (top_entries[idx].key == key)
-        {
-            *out = &top_entries[idx];
-            (*out)->lastIterationUsed = topIterationsExecuted;
-            return 0;
-        }
-        if (stale == NULL &&
-            top_entries[idx].lastIterationUsed + 2 <= topIterationsExecuted)
-            stale = &top_entries[idx];
-    }
-
-    if (stale != NULL)
-    {
-        os64_memset(stale, 0, sizeof(*stale));
-        stale->key = key;
-        stale->lastIterationUsed = topIterationsExecuted;
-        *out = stale;
-        return 0;
-    }
-
-    if (*topEntryCount < MAX_ENTRIES)
-    {
-        *out = &top_entries[*topEntryCount];
-        os64_memset(*out, 0, sizeof(**out));
-        (*out)->key = key;
-        (*out)->lastIterationUsed = topIterationsExecuted;
-        (*topEntryCount)++;
-        return 0;
-    }
-    return TOP_ERROR_NO_FREE_TOP_ENTRIES;
-}
-
-// The thread-key bit (topmain.h `key` doctrine): thread rows live in the
-// same entry pool as tasks — same delta history, same staleness reuse —
-// distinguished by the top bit of the cache key.
-#define TOP_THREAD_KEY (1ULL << 63)
-
-// ── The main loop ────────────────────────────────────────────────────────
-
 int32_t topMain(const top_options_t *opts)
 {
-    uint32_t topEntryCount = 0;
-    os64_ticks_t tickThen = {0}, tickNow = {0};
-    os64_dirent_t dent;
+    os64_monitor_t *monitor = os64_monitor_create(MAX_ENTRIES, MAX_ENTRIES, MAX_CORES);
+    if (!monitor) {
+        os64_hprintf(OS64_STDERR, "top: cannot allocate monitor\n");
+        return 3;
+    }
     top_view_t view = {0};
     view.options = *opts;
     view.sort = TOP_SORT_CPU;
+    int32_t result = 0;
 
-    os64_ticks(&tickThen);
-
-    while (1 == 1)   // Ctrl+C is a fine interface for communicating with top
+    for (;;)
     {
         if (view.help)
         {
@@ -588,195 +377,54 @@ int32_t topMain(const top_options_t *opts)
 
         os64_ticks_t refreshStarted = {0};
         os64_ticks(&refreshStarted);
-        topIterationsExecuted++;
-
-        // ── Gather ───────────────────────────────────────────────────
-        int64_t dirHandle = os64_opendir(procDir);
-        if (dirHandle < 0)
-        {
-            os64_hprintf(OS64_STDERR, "top: cannot open %s\n", procDir);
-            return TOP_ERROR_CANNOT_READ_PROC_DIRECTORY;
+        const os64_monitor_snapshot_t *sample;
+        if (os64_monitor_sample(monitor, view.options.showThreads, &sample) < 0) {
+            os64_hprintf(OS64_STDERR, "top: cannot sample processes or clock\n");
+            result = 2;
+            break;
         }
-
-        uint32_t seen = 0, zombies = 0;
-        top_entry_t *shown[MAX_ENTRIES];
+        const os64_monitor_task_t *shown[MAX_ENTRIES];
         uint32_t shownCount = 0;
-        // Thread rows for this refresh (t view): gathered only for tasks
-        // that made the screen, attached to their parent at render time by
-        // PTID. They ride the same entry pool, so their CPU% deltas survive
-        // refreshes exactly like task rows' do.
-        top_entry_t *threadRows[MAX_ENTRIES];
-        uint32_t threadRowCount = 0;
-
-        while (os64_readdir((int32_t)dirHandle, &dent) == 1)
-        {
-            if (dent.name[0] < '0' || dent.name[0] > '9')
-                continue;   // any future non-task names ("cores" until 8/12)
-
-            uint64_t pid = os64_atou(dent.name);
-            os64_proc_info_t taskInfo;
-            if (os64_proc_read(pid, &taskInfo) < 0)
-                continue;   // the task died between readdir and open — fine
-
-            top_entry_t *e = NULL;
-            if (getTopEntryToUse(pid, &e, &topEntryCount) != 0)
-            {
-                continue;   // table full: count what we can, drop the rest
-            }
-
-            e->runtimeUS = 0;
-            e->threadCount = 0;
-            import_task(e, &taskInfo);
-
-            seen++;
-            if (e->State == OS64_PROC_ZOMBIE)
-            {
-                zombies++;
-                if (!view.options.showZombies)
-                    continue;
-            }
-            if (!contains_case_insensitive(e->Command, view.filter))
+        for (size_t i = 0; i < sample->task_count; i++) {
+            const os64_monitor_task_t *task = &sample->tasks[i];
+            if (!view.options.showIdle && idle_task(&task->info))
                 continue;
-            if (shownCount < MAX_ENTRIES)
-                shown[shownCount++] = e;
-
-            // A single-thread task IS its thread — the aggregate row says
-            // everything, so only multi-thread tasks earn an expansion.
-            if (!view.options.showThreads || e->threadCount < 2)
+            if (!view.options.showZombies && task->info.state == OS64_PROC_ZOMBIE)
                 continue;
-
-            char threadPath[64];
-            os64_snprintf(threadPath, sizeof(threadPath), "/proc/%s/thread", dent.name);
-            int64_t th = os64_opendir(threadPath);
-            if (th < 0)
-                continue;
-            os64_dirent_t tdent;
-            while (os64_readdir((int32_t)th, &tdent) == 1)
-            {
-                uint64_t tid = os64_atou(tdent.name);
-                os64_thread_info_t threadInfo;
-                if (os64_proc_read_thread(pid, tid, &threadInfo) < 0)
-                    continue;   // the thread exited mid-walk — fine
-
-                top_entry_t *te = NULL;
-                if (getTopEntryToUse(tid | TOP_THREAD_KEY,
-                                     &te, &topEntryCount) != 0)
-                {
-                    break;      // pool full: the task rows keep priority
-                }
-                te->runtimeUS = 0;
-                te->isThread = true;
-                // The thread file carries no name or kernel flag — the
-                // parent's are the truth for both.
-                os64_strcopy(te->Command, sizeof(te->Command), e->Command);
-                te->KernelProc = e->KernelProc;
-                te->TID = threadInfo.tid;
-                te->PTID = threadInfo.pid;
-                te->State = threadInfo.state;
-                te->core = threadInfo.core;
-                te->runtimeUS = threadInfo.runtime_us;
-                if (threadRowCount < MAX_ENTRIES)
-                    threadRows[threadRowCount++] = te;
-            }
-            os64_close((int32_t)th);
+            if (contains_case_insensitive(task->info.name, view.filter))
+                shown[shownCount++] = task;
         }
-        os64_close((int32_t)dirHandle);
-
-        readCores();
-        os64_ticks(&tickNow);
-
-        os64_memory_t memory = {0};
-        bool haveMemory = os64_memory(&memory) == 0;
-
-        // ── One clock to rule the division (Chris's ruling, 2026-07-30
-        // small hours: "everything should be using the same clock").
-        // Numerators (runtime_us, core columns) are LEDGER-clock (TSC→µs).
-        // If the denominator comes from the TICK clock, every skew between
-        // the two smears across every row — the P5's lockstep 100.5%s, the
-        // VBox −45%. So the interval is measured on the LEDGER'S OWN CLOCK:
-        // Δ(core 0's total_us) between refreshes. Core 0 always exists, and
-        // settle-on-read guarantees its meter is fresh at every read.
-        // The tick-clock interval is still computed — the DISAGREEMENT
-        // between the two is promoted to a first-class display line (skew),
-        // so tick-stream pathology becomes a watched number instead of a
-        // smear. Percentages sum by construction; the truth stays visible.
-        uint64_t tickIntervalUS = 0;
-        if (tickNow.per_second > 0)
-            tickIntervalUS = (tickNow.ticks - tickThen.ticks) * 1000000
-                             / tickNow.per_second;
-        tickThen = tickNow;
-
-        // Defensive monotonicity guard. The fixed boot-time TSC rate means
-        // these counters should not move backward, but clamp a reset or
-        // discontinuity before doing unsigned delta arithmetic. It runs
-        // BEFORE the ledger interval is taken, because that interval is
-        // itself a core-0 delta.
-        for (int32_t c = 0; c < coreCount; c++)
-        {
-            if (coresNow[c].total < coresPrev[c].total) coresPrev[c].total = coresNow[c].total;
-            if (coresNow[c].busy  < coresPrev[c].busy)  coresPrev[c].busy  = coresNow[c].busy;
-            if (coresNow[c].idle  < coresPrev[c].idle)  coresPrev[c].idle  = coresNow[c].idle;
-            if (coresNow[c].sched < coresPrev[c].sched) coresPrev[c].sched = coresNow[c].sched;
-        }
-
-        uint64_t ledgerIntervalUS = 0;
-        if (haveCorePrev && coreCount > 0)
-            ledgerIntervalUS = coresNow[0].total - coresPrev[0].total;
-
-        // The ledger interval is the denominator when it's sane; the tick
-        // interval covers the first refresh or a discontinuity that leaves
-        // core 0 with a near-zero delta for one round.
-        uint64_t intervalUS = tickIntervalUS;
-        if (ledgerIntervalUS > tickIntervalUS / 2 &&
-            ledgerIntervalUS < tickIntervalUS * 4)
-            intervalUS = ledgerIntervalUS;
-
-        // A counter that went BACKWARD reads as zero delta, not as a
-        // 584-million-year spike. The counters are expected to be monotonic;
-        // this keeps an unexpected reset from wrapping unsigned subtraction.
-        for (uint32_t i = 0; i < shownCount; i++)
-            if (shown[i]->runtimeUS < shown[i]->prevRuntimeUS)
-                shown[i]->prevRuntimeUS = shown[i]->runtimeUS;
-        for (uint32_t i = 0; i < threadRowCount; i++)
-            if (threadRows[i]->runtimeUS < threadRows[i]->prevRuntimeUS)
-                threadRows[i]->prevRuntimeUS = threadRows[i]->runtimeUS;
+        uint64_t intervalUS = sample->interval_us;
+        int32_t coreCount = (int32_t)sample->core_count;
 
         sort_entries(shown, shownCount, &view);
 
-        // ── The checkout channel (-l): raw ledger to the system log ──
-        // Chris's protocol: emit what the accounting ACTUALLY said, every
-        // refresh, in raw microseconds — no display rounding, no
-        // percentages — so the serial log becomes a dataset and the
-        // accounting can be audited statistically instead of by eyeball.
-        // MUST run here, while prev counters still hold LAST refresh's
-        // values (the display loop advances them). Cores first (the
-        // machine's books), then every row top holds, deltas included.
-        // One line per record, "toplog" prefix for grep.
+        // Keep the raw ledger log alongside top's display. Reading a snapshot
+        // does not advance its counters; the next sample owns that transition.
         if (view.options.logLedger)
         {
             char lbuf[224];
             os64_snprintf(lbuf, sizeof(lbuf),
                           "toplog iter=%lu int_us=%lu cores=%d",
-                          topIterationsExecuted, intervalUS, coreCount);
+                          sample->sequence, intervalUS, coreCount);
             os64_debug_log(lbuf);
             for (int32_t c = 0; c < coreCount; c++)
             {
                 os64_snprintf(lbuf, sizeof(lbuf),
-                              "toplog core=%d total=%lu busy=%lu idle=%lu sched=%lu dtotal=%lu didle=%lu",
-                              c, coresNow[c].total, coresNow[c].busy,
-                              coresNow[c].idle, coresNow[c].sched,
-                              coresNow[c].total - coresPrev[c].total,
-                              coresNow[c].idle - coresPrev[c].idle);
+                              "toplog core=%u total=%lu busy=%lu idle=%lu sched=%lu dtotal=%lu didle=%lu",
+                              sample->cores[c].id, sample->cores[c].time.total, sample->cores[c].time.busy,
+                              sample->cores[c].time.idle, sample->cores[c].time.sched,
+                              sample->cores[c].delta.total, sample->cores[c].delta.idle);
                 os64_debug_log(lbuf);
             }
             for (uint32_t i = 0; i < shownCount; i++)
             {
-                top_entry_t *e = shown[i];
+                const os64_monitor_task_t *e = shown[i];
                 os64_snprintf(lbuf, sizeof(lbuf),
                               "toplog tid=%lu name=%s state=%s run_us=%lu d_us=%lu",
-                              e->TID, e->Command, os64_proc_state_name(e->State),
-                              e->runtimeUS,
-                              e->havePrev ? e->runtimeUS - e->prevRuntimeUS : 0);
+                              e->info.pid, e->info.name, os64_proc_state_name(e->info.state),
+                              e->info.runtime_us,
+                              e->cpu.delta_us);
                 os64_debug_log(lbuf);
             }
         }
@@ -790,125 +438,67 @@ int32_t topMain(const top_options_t *opts)
         else
             framef("os64 top   ");
 
-        if (haveMemory)
-            compose_free_memory(memory.free);
+        if (sample->memory_valid)
+            compose_free_memory(sample->memory.free);
         else
             framef("free n/a   ");
 
         char upBuf[24];
-        uint64_t upUS = (tickNow.per_second > 0)
-                        ? tickNow.ticks * 1000000 / tickNow.per_second : 0;
+        uint64_t upUS = (sample->ticks.per_second > 0)
+                        ? sample->ticks.ticks * 1000000 / sample->ticks.per_second : 0;
         fmt_time(upBuf, sizeof(upBuf), upUS, false);
         framef("up %s   interval %lums   iter %lu\n",
-               upBuf, intervalUS / 1000, topIterationsExecuted);
+               upBuf, intervalUS / 1000, sample->sequence);
         framef("view: sort *%s %s   filter: %s%s%s\n",
                sort_name(view.sort), sort_direction(&view),
                view.filter[0] ? "\"" : "",
                view.filter[0] ? view.filter : "(none)",
                view.filter[0] ? "\"" : "");
-        framef("      zombies %s   time %s   cores %s\n",
+        framef("      idle tasks %s   zombies %s   time %s   cores %s\n",
+               view.options.showIdle ? "shown" : "hidden",
                view.options.showZombies ? "shown" : "hidden",
                view.options.adaptiveUnits ? "adaptive" : "fixed",
                view.options.perCore ? "per-core" : "machine");
 
         framef("tasks: %u shown, %u zombie%s%s, %u total\n",
-               shownCount, zombies, zombies == 1 ? "" : "s",
-               view.options.showZombies ? "" : " (hidden)", seen);
+               shownCount, (uint32_t)sample->zombies, sample->zombies == 1 ? "" : "s",
+               view.options.showZombies ? "" : " (hidden)", (uint32_t)sample->task_count);
+        if (sample->partial)
+            framef("sample incomplete: tasks %s  threads %s  cores %s\n",
+                   sample->partial & OS64_MONITOR_TASKS_PARTIAL ? "partial" : "ok",
+                   sample->partial & OS64_MONITOR_THREADS_PARTIAL ? "partial" : "ok",
+                   sample->partial & OS64_MONITOR_CORES_PARTIAL ? "partial" : "ok");
 
-        if (!view.options.noSummary && haveCorePrev && intervalUS > 0)
+        if (!view.options.noSummary && sample->summary_valid)
         {
-            // Machine-wide summary (Chris's ruling: the top of the screen
-            // speaks in %-of-the-whole-machine). A core whose meter didn't
-            // move is PARKED (BSPSCHED never woke it): it contributes its
-            // whole interval as idle and is never divided by.
-            uint64_t dBusy = 0, dIdle = 0, dSched = 0;
-            int32_t parked = 0;
-            for (int32_t c = 0; c < coreCount; c++)
-            {
-                // Monotonicity clamps already ran, before the ledger
-                // interval was taken from core 0.
-                uint64_t dTotal = coresNow[c].total - coresPrev[c].total;
-                if (dTotal < intervalUS / 100)
-                {
-                    parked++;
-                    dIdle += intervalUS;
-                    continue;
-                }
-                dBusy  += coresNow[c].busy  - coresPrev[c].busy;
-                dIdle  += coresNow[c].idle  - coresPrev[c].idle;
-                dSched += coresNow[c].sched - coresPrev[c].sched;
-            }
-            // Close the percentage against the ledger's own buckets. The
-            // tick clock belongs only in tickskew below; using its interval
-            // here made that disagreement leak directly into the CPU split.
-            uint64_t machineUS = dBusy + dIdle + dSched;
-            // Whole numbers, apportioned so the three ALWAYS total 100 —
-            // the closure is now arithmetic rather than aspiration.
-            uint64_t machineParts[3] = { dBusy, dIdle, dSched };
-            uint32_t machinePct[3];
-            pct_apportion(machineParts, 3, machineUS, machinePct);
-
-            // The two clocks' disagreement, on its own leash: positive =
-            // the tick clock claims MORE time passed than the TSC ledger
-            // (lost-tick pathology reads negative — ticks fell behind).
-            // On a healthy box this reads ±0.x%; on a stuttering P5 it
-            // twitches with each hiccup; on VBox it IS the mystery.
-            //
-            // THE ONE READING THAT KEEPS ITS DECIMAL, and the reason the
-            // rest gave theirs up: this instrument's entire useful range
-            // lives below 1%. Round it to whole numbers and a healthy box
-            // and a mildly sick one both read "+0%" — that is not a
-            // simpler display, it is a deleted one. Magnitude through the
-            // shared formatter; the sign is this reading's alone, because
-            // it is the only percentage here that can be negative (ticks
-            // falling BEHIND the TSC is a different pathology from ticks
-            // running ahead, and the sign is which).
-            char skewBuf[16];
-            if (ledgerIntervalUS > 0)
-            {
-                int64_t diff = (int64_t)tickIntervalUS - (int64_t)ledgerIntervalUS;
-                uint64_t mag = (uint64_t)(diff < 0 ? -diff : diff);
-                char magBuf[16];
-                fmt_pct(magBuf, sizeof(magBuf), mag, ledgerIntervalUS);
-                os64_snprintf(skewBuf, sizeof(skewBuf), "%c%s",
-                              diff < 0 ? '-' : '+', magBuf);
-            }
+            char skewBuf[32];
+            if (sample->skew_valid)
+                os64_snprintf(skewBuf, sizeof(skewBuf), "%c%lu.%lu",
+                              sample->skew_negative ? '-' : '+',
+                              sample->skew_tenths / 10, sample->skew_tenths % 10);
             else
                 os64_strcopy(skewBuf, sizeof(skewBuf), "-");
             framef("cores: %d (%d parked)   busy %u%%   idle %u%%   sched %u%%   tickskew %s%%\n",
-                   coreCount, parked, machinePct[0], machinePct[1], machinePct[2],
-                   skewBuf);
-
-            // -c: each core's books against ITS OWN ledger interval — the
-            // per-core closure test. busy is kernel-derived (total − idle −
-            // sched) so each line sums to 100.0 BY IDENTITY; the value is in
-            // the split, and in comparing a core's busy% against the task
-            // rows wearing its number in the C column.
+                   coreCount, (int32_t)sample->parked, sample->machine_percent[0],
+                   sample->machine_percent[1], sample->machine_percent[2], skewBuf);
             if (view.options.perCore)
             {
-                for (int32_t c = 0; c < coreCount; c++)
+                for (size_t c = 0; c < sample->core_count; c++)
                 {
-                    uint64_t dT = coresNow[c].total - coresPrev[c].total;
-                    if (dT < intervalUS / 100)
-                    {
-                        framef("  core %2d: parked\n", c);
+                    const os64_monitor_core_t *core = &sample->cores[c];
+                    if (core->parked) {
+                        framef("  core %2u: parked\n", core->id);
                         continue;
                     }
-                    uint64_t coreParts[3] = {
-                        coresNow[c].busy  - coresPrev[c].busy,
-                        coresNow[c].idle  - coresPrev[c].idle,
-                        coresNow[c].sched - coresPrev[c].sched,
-                    };
-                    uint32_t corePct[3];
-                    pct_apportion(coreParts, 3, dT, corePct);
-                    framef("  core %2d: busy %u%%   idle %u%%   sched %u%%   (%lums)\n",
-                           c, corePct[0], corePct[1], corePct[2], dT / 1000);
+                    framef("  core %2u: busy %u%%   idle %u%%   sched %u%%   (%lums)\n",
+                           core->id, core->percent[0], core->percent[1], core->percent[2],
+                           core->delta.total / 1000);
                 }
             }
         }
         else if (!view.options.noSummary)
         {
-            framef("cores: %d   (first interval - measuring)\n", coreCount);
+            framef("cores: %d   (interval unavailable - measuring)\n", coreCount);
         }
 
         framef("\n%-6s %-9s %1s %2s %6s %10s  %s\n",
@@ -921,69 +511,44 @@ int32_t topMain(const top_options_t *opts)
 
         for (uint32_t i = 0; i < shownCount; i++)
         {
-            top_entry_t *e = shown[i];
-            uint64_t dUS = e->havePrev ? e->runtimeUS - e->prevRuntimeUS : 0;
+            const os64_monitor_task_t *e = shown[i];
 
             // Per-task CPU% is of ONE CPU (the other half of the ruling):
             // 100.0 means "ate a whole core", however many cores exist.
             char pctBuf[16], timeBuf[24];
-            if (e->havePrev && intervalUS > 0)
-                fmt_pct_int(pctBuf, sizeof(pctBuf), dUS, intervalUS);
+            if (e->cpu.valid && intervalUS > 0)
+                os64_snprintf(pctBuf, sizeof(pctBuf), "%lu", e->cpu.percent);
             else
                 os64_strcopy(pctBuf, sizeof(pctBuf), "-");
-            fmt_time(timeBuf, sizeof(timeBuf), e->runtimeUS, view.options.adaptiveUnits);
+            fmt_time(timeBuf, sizeof(timeBuf), e->info.runtime_us, view.options.adaptiveUnits);
 
             framef("%-6lu %-9s %1s %2u %6s %10s  %s\n",
-                   e->TID, os64_proc_state_name(e->State),
-                   e->KernelProc ? "k" : " ",
-                   e->core, pctBuf, timeBuf, e->Command);
+                   e->info.pid, os64_proc_state_name(e->info.state),
+                   e->info.kernel ? "k" : " ",
+                   e->info.core, pctBuf, timeBuf, e->info.name);
 
-            e->prevRuntimeUS = e->runtimeUS;
-            e->havePrev = true;
-
-            // The task's threads, indented beneath it (t view). Their CPU%
-            // columns sum to the aggregate row's — same ledger, finer split.
-            for (uint32_t t = 0; t < threadRowCount; t++)
+            // Attach sampled thread rows to their owning task for display.
+            for (size_t t = 0; t < sample->thread_count; t++)
             {
-                top_entry_t *tr = threadRows[t];
-                if (tr->PTID != e->TID)
+                const os64_monitor_thread_t *tr = &sample->threads[t];
+                if (tr->info.pid != e->info.pid)
                     continue;
 
-                uint64_t tdUS = tr->havePrev ? tr->runtimeUS - tr->prevRuntimeUS : 0;
                 char tPct[16], tTime[24];
-                if (tr->havePrev && intervalUS > 0)
-                    fmt_pct_int(tPct, sizeof(tPct), tdUS, intervalUS);
+                if (tr->cpu.valid && intervalUS > 0)
+                    os64_snprintf(tPct, sizeof(tPct), "%lu", tr->cpu.percent);
                 else
                     os64_strcopy(tPct, sizeof(tPct), "-");
-                fmt_time(tTime, sizeof(tTime), tr->runtimeUS,
+                fmt_time(tTime, sizeof(tTime), tr->info.runtime_us,
                          view.options.adaptiveUnits);
 
                 framef("%-6lu %-9s %1s %2u %6s %10s   - %s\n",
-                       tr->TID, os64_proc_state_name(tr->State),
-                       tr->KernelProc ? "k" : " ",
-                       tr->core, tPct, tTime, tr->Command);
+                       tr->info.tid, os64_proc_state_name(tr->info.state),
+                       e->info.kernel ? "k" : " ",
+                       tr->info.core, tPct, tTime, e->info.name);
 
-                tr->prevRuntimeUS = tr->runtimeUS;
-                tr->havePrev = true;
             }
         }
-
-        // Advance every task sampled this round, including rows hidden by the
-        // zombie or command filters. Revealing one later must not charge all
-        // of its hidden runtime to a single refresh.
-        for (uint32_t i = 0; i < topEntryCount; i++)
-        {
-            top_entry_t *e = &top_entries[i];
-            if (e->lastIterationUsed == topIterationsExecuted)
-            {
-                e->prevRuntimeUS = e->runtimeUS;
-                e->havePrev = true;
-            }
-        }
-
-        for (int32_t c = 0; c < coreCount; c++)
-            coresPrev[c] = coresNow[c];
-        haveCorePrev = true;
 
         compose_footer(&view);
 
@@ -994,5 +559,6 @@ int32_t topMain(const top_options_t *opts)
                                (uint64_t)view.options.delayMS))
             break;
     }
-    return 0;
+    os64_monitor_destroy(monitor);
+    return result;
 }
