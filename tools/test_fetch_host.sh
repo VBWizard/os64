@@ -43,5 +43,5 @@ cc -std=c11 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
    userland/libgzip/inflate.c userland/libgzip/deflate.c userland/libgzip/gzip.c \
    -o "$work/test_fetch"
 
-ASAN_OPTIONS=detect_leaks=1 "$work/test_fetch" 12345
-ASAN_OPTIONS=detect_leaks=1 "$work/test_fetch" "$(date +%s)"
+ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1}" "$work/test_fetch" 12345
+ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1}" "$work/test_fetch" "$(date +%s)"

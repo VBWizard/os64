@@ -94,11 +94,11 @@ method[2] = 7
 PY
 
 run() {
-    ASAN_OPTIONS=detect_leaks=0 "$work/test_gzip" "$@"
+    ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1}" "$work/test_gzip" "$@"
 }
 
 encode() {
-    ASAN_OPTIONS=detect_leaks=0 "$work/test_gzip" encode "$@"
+    ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1}" "$work/test_gzip" encode "$@"
 }
 
 for chunks in "1 1" "2 3" "7 31" "4096 17" "65536 65536"; do
@@ -161,7 +161,7 @@ echo "raw/gzip encoders: chunks, boundaries, mtime, ratio, interop PASS"
 # in the 00 00 FF FF marker, and the stream still finishes (RFB's ZRLE).
 for shape in "1 1" "100 7" "4096 97" "40000 65536"; do
     set -- $shape
-    ASAN_OPTIONS=detect_leaks=0 "$work/test_gzip" sync "$work/payload" \
+    ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1}" "$work/test_gzip" sync "$work/payload" \
         "$work/sync-$1-$2" "$work/sync-$1-$2.cuts" "$1" "$2"
 done
 python3 - "$work" <<'PY'
@@ -192,7 +192,7 @@ echo "raw sync flush: every flush point decodes, marker, stream finishes PASS"
 
 # The flush's edges: a finishing stream refuses a flush and still ends
 # valid; a flush completed by process() leaves the next one its marker.
-ASAN_OPTIONS=detect_leaks=0 "$work/test_gzip" edges "$work/payload" \
+ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1}" "$work/test_gzip" edges "$work/payload" \
     "$work/edge-a" "$work/edge-b" "$work/edge-b.cut"
 python3 - "$work" <<'PY'
 import pathlib

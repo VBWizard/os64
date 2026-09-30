@@ -52,7 +52,8 @@ def main():
         command += [str(port / f) for f in ('certificate_der.c', 'certificate_policy.c', 'trust_pem.c')]
         command += [str(userland / 'obj/tls-shared/core.a'), '-Wl,--gc-sections,-z,noexecstack', '-o', str(probe)]
         subprocess.run(command, check=True)
-        env = {**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'}
+        env = os.environ.copy()
+        env.setdefault("ASAN_OPTIONS", "detect_leaks=1")
         output = subprocess.check_output([str(probe), *map(str, paths), str(DATA / 'install/roots.pem')], env=env, text=True)
         lines = [line.rsplit(' ', 4) for line in output.splitlines()]
         expected = {entry['der_sha256']: entry for group in ('accepted', 'excluded') for entry in manifest[group]}

@@ -54,7 +54,8 @@ def run(work):
         obj=work/(Path(source).stem+'.o');objects.append(obj)
         subprocess.run(common+includes+private+['-I'+str(work),'-include',str(ROOT/'userland/libjpeg/port/config.h'),'-Wno-unused-parameter','-Wno-sign-compare','-c',str(ROOT/'userland'/source),'-o',str(obj)],check=True)
     subprocess.run(common+includes+['-no-pie',str(ROOT/'tools/test_jpeg_host.c'),*map(str,objects),'-o',str(work/'test')],check=True)
-    env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0'}
+    env = os.environ.copy()
+    env.setdefault("ASAN_OPTIONS", "detect_leaks=1")
     for p in paths:
         subprocess.run([str(work/'test'),str(p),str(p.with_suffix('.ref'))],env=env,check=True)
         print('PASS',p.stem,flush=True)

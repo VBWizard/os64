@@ -228,7 +228,13 @@ int64_t os64_read(int32_t h, void *buf, size_t cap)
     return result;
 }
 int64_t os64_read_for(int32_t h, void *buf, size_t cap, uint64_t ms)
-{ (void)ms; return os64_read(h, buf, cap); }
+{
+    // libfetch polls for an early response before writing the request.
+    // No response has been queued yet: an empty poll is not peer EOF.
+    if (ms == 0 && cap != 0 && h >= 10000 && network_len[h - 10000] == 0)
+        return OS64_ERR_TIMEOUT;
+    return os64_read(h, buf, cap);
+}
 int64_t os64_dial(const char *dial)
 { (void)dial; assert(connections < 16); return (int64_t)(10000 + connections++); }
 int64_t os64_write(int32_t h, const void *buf, size_t n)

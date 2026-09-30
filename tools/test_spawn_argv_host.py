@@ -179,6 +179,8 @@ int main(void)
     char *plain[] = { "prog", "hello", "", NULL };
     assert(marshal(plain, &kargv, &strbuf, NULL, -1) == 3);
     assert(!strcmp(kargv[0], "prog") && !strcmp(kargv[1], "hello") && !strcmp(kargv[2], "") && !kargv[3]);
+    free(strbuf);
+    free(kargv);
 
     // The copy pass's reads, in order: argv[0]'s pointer, argv[0]'s bytes,
     // argv[1]'s pointer, argv[1]'s bytes. The sibling runs before one of them.
@@ -188,29 +190,52 @@ int main(void)
     char *racing[] = { "prog", "abc", NULL, NULL, NULL };
     g_argv = racing;
     assert(marshal(racing, &kargv, &strbuf, grow_first, 2) == -1);
+    free(strbuf);
+    free(kargv);
+    free(g_long);
+    g_long = NULL;
 
     // One grows past the per-argument cap while another shrinks to pay for
     // it, so the room paid for still holds both: the room is not the only
     // promise, and the cap refuses it.
-    char *swap[] = { "prog", pattern(OS64_SPAWN_ARG_MAX - 100), pattern(OS64_SPAWN_ARG_MAX - 100), NULL, NULL };
+    // Keep ownership separate from argv entries, which the race replaces.
+    char *swap_first = pattern(OS64_SPAWN_ARG_MAX - 100);
+    char *swap_second = pattern(OS64_SPAWN_ARG_MAX - 100);
+    char *swap[] = { "prog", swap_first, swap_second, NULL, NULL };
     g_argv = swap;
     g_long = pattern(OS64_SPAWN_ARG_MAX + 1000);
     assert(marshal(swap, &kargv, &strbuf, grow_first_shrink_second, 2) == -1);
+    free(strbuf);
+    free(kargv);
+    free(swap_first);
+    free(swap_second);
+    free(g_long);
+    g_long = NULL;
 
     // A string that shrinks arrives shorter — what the program holds now.
-    char *shrinking[] = { "prog", pattern(40), NULL, NULL, NULL };
+    char *before_shrink = pattern(40);
+    char *shrinking[] = { "prog", before_shrink, NULL, NULL, NULL };
     g_argv = shrinking; g_short = "ok";
     assert(marshal(shrinking, &kargv, &strbuf, shrink_first, 2) == 2 && !strcmp(kargv[1], "ok"));
+    free(strbuf);
+    free(kargv);
+    free(before_shrink);
 
     // An entry added between the passes is not copied past what was paid for.
     char *adding[] = { "prog", "a", "b", NULL, NULL };
     g_argv = adding;
     assert(marshal(adding, &kargv, &strbuf, add_entry, 1) == 3 && kargv[3] == NULL);
+    free(strbuf);
+    free(kargv);
 
     // The terminator moves between the copy pass's own measure and its read.
     char *moving[] = { "prog", strdup("abc"), NULL };
     g_argv = moving;
     assert(marshal(moving, &kargv, &strbuf, lengthen_in_place, 4) == -1);
+    free(strbuf);
+    free(kargv);
+    free(moving[1]);
+    g_argv = NULL;
 
 
     // The copier may consume the final destination byte if it is a NUL.
@@ -246,6 +271,14 @@ int main(void)
     char *overlong[] = {pattern(OS64_SPAWN_ARG_MAX)};
     assert(!task_measure_argv("prog", 1, overlong, &layout));
     assert(task_measure_argv("prog", 0, NULL, &layout) && layout == 2 * sizeof(char *) + 5);
+    free(at_cap);
+    free(over);
+    free(fill);
+    free(fill1);
+    free(near_limit);
+    free(overlong[0]);
+    assert(munmap(hole - PAGE_SIZE, 2 * PAGE_SIZE) == 0);
+    hole = NULL;
     puts("path final-byte/guard-page and rewritten argv preflight: PASS");
 
     puts("spawn argv: caps exact at the terminator, the 512th argument and the block's last byte; "
@@ -264,7 +297,8 @@ with tempfile.TemporaryDirectory(prefix='spawn-argv-') as directory:
                     '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                     '-I' + str(root / 'abi/include'), str(path), '-o', str(work / 'spawn_argv')],
                    check=True)
-    # The scenarios keep what they build for the whole run; leaks are not the question.
+    env = os.environ.copy()
+    env.setdefault("ASAN_OPTIONS", "detect_leaks=1")
     result = subprocess.run([str(work / 'spawn_argv')],
-                            env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'})
+                            env=env)
     assert result.returncode == 0, result.returncode

@@ -207,7 +207,8 @@ def run(work, vectors=None):
                     *['-I'+str(ROOT/p) for p in includes], *[str(ROOT/p) for p in sources],
                     '-o', str(work/'test')], check=True)
     paths = fixtures(work)
-    env = {**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'}
+    env = os.environ.copy()
+    env.setdefault("ASAN_OPTIONS", "detect_leaks=1")
     for p in paths:
         subprocess.run([str(work/'test'), str(p), str(p.with_suffix('.ref'))], env=env, check=True)
         print('PASS', p.stem, flush=True)
