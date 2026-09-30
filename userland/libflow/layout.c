@@ -474,6 +474,40 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     return r;
 }
 
+// A picture's own size on one axis (0 across, 1 down), content box: as
+// if the page had given it no size and no limits on that axis, a size it
+// gave on the other carried through the picture's ratio. What a flex base
+// of `content`, or of `auto` with no size, and an automatic minimum read
+// (Flexbox 1 § 9.2, § 4.5): a size the page gave on the flex axis is the
+// algorithm's to weigh, never the content's.
+static int64_t replaced_own(L *l, const FBox *b, int axis, int64_t cbw)
+{
+    flow_style_t own = *b->style;
+    flow_length_t none;
+    os64_memset(&none, 0, sizeof(none));
+    if (axis == 0)
+        own.width = own.min_width = own.max_width = none;
+    else
+        own.height = own.min_height = own.max_height = none;
+    Replaced r = replaced_size(l, b->node, &own, cbw);
+    return axis == 0 ? r.w : r.h;
+}
+
+// A picture's width for a content height `h` it was given, when the page
+// gave it no width: through its ratio, held to its width limits.
+static int64_t replaced_w_for(L *l, const FBox *b, int64_t h, int64_t cbw)
+{
+    flow_style_t own = *b->style;
+    flow_length_t none;
+    os64_memset(&none, 0, sizeof(none));
+    own.box_sizing = FLOW_CONTENT_BOX;
+    own.height = none;
+    own.height.kind = FLOW_LENGTH_PX;
+    own.height.value = (int32_t)min64(max64(0, h), INT32_MAX);
+    own.min_height = own.max_height = none;
+    return replaced_size(l, b->node, &own, cbw).w;
+}
+
 // ── Relative offsets ────────────────────────────────────────────────────
 
 // A containing block's height when it does not depend on its content — a
@@ -1154,7 +1188,7 @@ static bool first_baseline_in(const FBox *b, int64_t *out);
 static bool last_baseline(const FBox *b, int64_t *out)
 {
     bool found = false;
-    // A flex container's is its first item's (Flexbox 1 § 8.5).
+    // A flex container's last baseline is read as its first (flex_baseline).
     if (b->flex)
         return first_baseline_in(b, out);
     if (b->ifc) {
@@ -1864,10 +1898,43 @@ static void table_ends(const FBox *t, FBox **head, FBox **foot)
 // first row's, the one that row's cells share, not whatever line its first
 // cell holds. A table's rows are walked header group first and footer
 // group last, and its captions not at all.
+static flow_place_t cross_align(const flow_style_t *container, const flow_style_t *item);
+
+// A flex container's first baseline (Flexbox 1 § 8.5): in a row, that of
+// an item lined up by baseline; else its first item's in `order`, not in
+// the tree. An item with no line of text gives one from its border box's
+// bottom edge, as it does when it is lined up by baseline.
+static bool flex_baseline(const FBox *b, int64_t *out)
+{
+    const flow_style_t *s = b->style;
+    bool row = s->flex_direction == FLOW_FLEX_ROW || s->flex_direction == FLOW_FLEX_ROW_REVERSE;
+    const FBox *pick = NULL;
+    for (const FBox *c = b->first; c != NULL; c = c->next) {
+        if (c->out_of_flow)
+            continue;
+        const flow_style_t *cs = c->style;
+        if (row && cross_align(s, cs) == FLOW_PLACE_BASELINE &&
+            cs->margin[FLOW_TOP].kind != FLOW_LENGTH_AUTO &&
+            cs->margin[FLOW_BOTTOM].kind != FLOW_LENGTH_AUTO) {
+            pick = c;
+            break;
+        }
+        if (pick == NULL || cs->order < pick->style->order)
+            pick = c;
+    }
+    if (pick == NULL || !pick->placed)
+        return false;
+    if (!first_baseline_in(pick, out))
+        *out = pick->y + pick->h;
+    return true;
+}
+
 static bool first_baseline_in(const FBox *b, int64_t *out)
 {
     if (!b->placed)
         return false;
+    if (b->flex)
+        return flex_baseline(b, out);
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         if (ln->h > 0) {
             *out = ln->baseline;
@@ -1958,7 +2025,10 @@ static void children(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t c
 // laying anything out, so a ROW is resolved first and each item laid out
 // once, at the width it was given, and moved to its place on the cross
 // axis after. A COLUMN's items are laid out first, at their cross size,
-// and growing or shrinking sets a height, which moves nothing inside.
+// and growing or shrinking sets a height, which moves nothing inside. Both
+// have one exception: an item that is a flex container itself places its
+// items again against the height it is given (refit) — moved and sized,
+// never laid out again.
 
 typedef struct {
     FBox *box;
@@ -2202,6 +2272,27 @@ static void items_done(L *l, const FStyles *styles, FBox *b, int64_t cbw)
     }
 }
 
+// A column item's left margin across a content box `cw` wide, its border
+// box `w` wide: auto margins take the room first, else its alignment
+// places it (a stretched one fills it, and is not sized here).
+static int64_t column_ml(const flow_style_t *s, const FBox *c, int64_t cw, int64_t w)
+{
+    const flow_style_t *cs = c->style;
+    bool ml_auto = cs->margin[FLOW_LEFT].kind == FLOW_LENGTH_AUTO;
+    bool mr_auto = cs->margin[FLOW_RIGHT].kind == FLOW_LENGTH_AUTO;
+    int64_t ml = ml_auto ? 0 : len(cs->margin[FLOW_LEFT], cw);
+    int64_t mr = mr_auto ? 0 : len(cs->margin[FLOW_RIGHT], cw);
+    int64_t room = cw - (ml + w + mr);
+    flow_place_t a = cross_align(s, cs);
+    if ((ml_auto || mr_auto) && room > 0)
+        ml += ml_auto && mr_auto ? room / 2 : ml_auto ? room : 0;
+    else if (!ml_auto && !mr_auto && a == FLOW_PLACE_FLEX_END)
+        ml += room;
+    else if (!ml_auto && !mr_auto && a == FLOW_PLACE_CENTER)
+        ml += room / 2;
+    return ml;
+}
+
 // One flex container's items and what placing them needs.
 typedef struct {
     FBox *b;
@@ -2322,13 +2413,17 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
         // and a percentage of a height not known, its content's alone.
         // Neither is held to the item's limits: those hold the
         // hypothetical size, and the base weighs the shrinking.
+        // A picture's content is its own height, not the one it was laid
+        // out at (replaced_own).
+        int64_t content = c->kind == FB_REPLACED ? replaced_own(l, c, 1, cw) + it->frame
+                                                 : c->content_h;
         flow_length_t fb = cs->flex_basis;
         if (fb.kind == FLOW_LENGTH_PX || (fb.kind == FLOW_LENGTH_PERCENT && given >= 0))
             it->base = content_of(cs, fb, max64(0, given), it->frame) + it->frame;
         else if (fb.kind == FLOW_LENGTH_AUTO && cs->height.kind == FLOW_LENGTH_PX)
             it->base = content_of(cs, cs->height, 0, it->frame) + it->frame;
         else
-            it->base = c->content_h;
+            it->base = content;
         it->max = cs->max_height.kind == FLOW_LENGTH_PX
                       ? content_of(cs, cs->max_height, 0, it->frame) + it->frame : kNoLimit;
         if (cs->min_height.kind == FLOW_LENGTH_PX)
@@ -2339,8 +2434,7 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
             // The automatic minimum (§ 4.5): its content's height, no more
             // than a height the page gave (natural_h is that, when it gave
             // one), or its limit.
-            it->min = min64(min64(c->content_h, natural_h(c)),
-                            it->max);
+            it->min = min64(min64(content, natural_h(c)), it->max);
         it->min = max64(it->min, it->frame);
         it->max = max64(it->max, it->min);
         it->hyp = it->base < it->min ? it->min : it->base > it->max ? it->max : it->base;
@@ -2360,6 +2454,19 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
     }
     if (l->failed)
         return false;
+    // A picture the page gave no width takes one from the height it was
+    // flexed to, through its ratio, and is placed across again.
+    for (int32_t i = 0; i < n; i++) {
+        FBox *c = items[i].box;
+        if (c->kind != FB_REPLACED || !c->flex_sized || c->style->width.kind != FLOW_LENGTH_AUTO)
+            continue;
+        c->flex_w = replaced_w_for(l, c, c->h - items[i].frame, cw);
+        c->w = hframe(c, cw) + c->flex_w;
+        c->flex_ml = column_ml(s, c, cw, c->w);
+        int64_t rdx, rdy;
+        laid_offset(c, cw, &rdx, &rdy);
+        translate(c, r->cx + c->flex_ml + rdx - c->x, 0);
+    }
     if (free > 0 && autos > 0) {
         int64_t *w = r->w;
         for (int32_t i = 0; i < 2 * n; i++)
@@ -2600,20 +2707,11 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             if (a != FLOW_PLACE_STRETCH || ml_auto || mr_auto || width_given) {
                 // Sized as it would be on its own, then placed across.
                 int64_t frame = hframe(c, cw);
-                int64_t ml = ml_auto ? 0 : len(cs->margin[FLOW_LEFT], cw);
-                int64_t mr = mr_auto ? 0 : len(cs->margin[FLOW_RIGHT], cw);
                 int64_t cwid = width_given ? clamp_width(cs, content_of(cs, cs->width, cw, frame), cw, frame)
                                            : fit_content(l, c, cw);
-                int64_t room = cw - (ml + frame + cwid + mr);
-                if ((ml_auto || mr_auto) && room > 0)
-                    ml += ml_auto && mr_auto ? room / 2 : ml_auto ? room : 0;
-                else if (!ml_auto && !mr_auto && a == FLOW_PLACE_FLEX_END)
-                    ml += room;
-                else if (!ml_auto && !mr_auto && a == FLOW_PLACE_CENTER)
-                    ml += room / 2;
                 c->flex_sized = true;
                 c->flex_w = cwid;
-                c->flex_ml = ml;
+                c->flex_ml = column_ml(s, c, cw, frame + cwid);
             }
             Cursor cur = {top, kNoMargins, -1};
             block(l, styles, c, cx, cw, &cur);
@@ -3221,7 +3319,7 @@ static Intr intrinsic(L *l, FBox *b)
     } else if (b->kind == FB_REPLACED) {
         Replaced rep = replaced_size(l, b->node, s, 0);
         r.min = r.max = rep.w + hframe(b, 0);
-        b->content_min = b->content_max = r.min;
+        b->content_min = b->content_max = replaced_own(l, b, 0, 0) + hframe(b, 0);
     } else {
         if (b->flex && s->flex_direction != FLOW_FLEX_COLUMN &&
             s->flex_direction != FLOW_FLEX_COLUMN_REVERSE) {

@@ -461,6 +461,48 @@ static void flex_nested_cases(void)
                FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 50, 20}, {60, 0, 50, 20}));
 }
 
+// Pictures and baselines (Quinn's second round on #181; Chrome's answers,
+// with a 40x30 picture as the host's `known` is).
+static void flex_picture_cases(void)
+{
+    // A picture's content width is its own 40, not a max-width's 20: two
+    // bases of 40 shrink into 30 by equal weights, 15 each.
+    flex_rects("flex: a picture's basis is its own width, not its limit",
+               "#o{display:flex;width:30px;align-items:flex-start} img{min-width:0} #a{max-width:20px}"
+               "</style><div id=o><img id=a src=known.png><img id=b src=known.png></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 15, -1}, {15, 0, 15, -1}));
+    // A content basis in a column is the picture's own height, 30, not the
+    // 300 the page gave; its width follows the height by its ratio.
+    flex_rects("flex: a picture's content basis in a column is its own height",
+               "#o{display:flex;flex-direction:column;align-items:flex-start}"
+               " img{height:300px;flex:0 0 content}</style><div id=o><img id=i src=known.png></div>",
+               FLEX_IDS("i"), FLEX_WANT({0, 0, 40, 30}));
+    // Shrunk down a column to 15, a picture is 20 wide by its ratio, and
+    // placed across at that width: at the start, and centred in 100.
+    flex_rects("flex: a picture shrunk down a column keeps its ratio",
+               "#o{display:flex;flex-direction:column;width:100px;height:15px;align-items:flex-start}"
+               " img{min-height:0}</style><div id=o><img id=i src=known.png></div>",
+               FLEX_IDS("i"), FLEX_WANT({0, 0, 20, 15}));
+    flex_rects("flex: a picture shrunk down a column is centred at its new width",
+               "#o{display:flex;flex-direction:column;width:100px;height:15px;align-items:center}"
+               " img{min-height:0}</style><div id=o><img id=i src=known.png></div>",
+               FLEX_IDS("i"), FLEX_WANT({40, 0, 20, 15}));
+    // An inline flex container's baseline is its first item's, made from
+    // its border box's bottom when it holds no text: 20, so the 20px
+    // inline-block beside it sits at 0 — and the first item is the first
+    // in `order`, 60 tall, which puts it at 40.
+    flex_rects("flex: an inline flex container's baseline is its first item's",
+               "#o{display:inline-flex;align-items:flex-start} #a{width:10px;height:20px}"
+               " #b{width:10px;height:60px} #c{display:inline-block;width:10px;height:20px}</style>"
+               "<div><div id=o><div id=a></div><div id=b></div></div><div id=c></div></div>",
+               FLEX_IDS("c"), FLEX_WANT({20, 0, 10, 20}));
+    flex_rects("flex: an inline flex container's first item is first in order",
+               "#o{display:inline-flex;align-items:flex-start} #a{width:10px;height:20px;order:2}"
+               " #b{width:10px;height:60px} #c{display:inline-block;width:10px;height:20px}</style>"
+               "<div><div id=o><div id=a></div><div id=b></div></div><div id=c></div></div>",
+               FLEX_IDS("c"), FLEX_WANT({20, 40, 10, 20}));
+}
+
 static void flex_cases(void)
 {
     flex_row_cases();
@@ -469,4 +511,5 @@ static void flex_cases(void)
     flex_box_cases();
     flex_review_cases();
     flex_nested_cases();
+    flex_picture_cases();
 }
