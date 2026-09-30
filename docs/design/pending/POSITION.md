@@ -120,8 +120,9 @@ stretch: `flow_length_t` gains a FIT_CONTENT kind, whose producer is the
 chapter alone (an author's `fit-content` is still read as `auto`, GARB.md
 § Booked).
 
-Until their own slices, `fixed` and `sticky` are laid out as `relative`
-with their offsets ignored — never as `static`: a positioned box is its
+Until their own slices, `fixed` (P1 alone) and `sticky` (until P4) are
+laid out as `relative` with their offsets ignored — never as `static`:
+a positioned box is its
 absolute descendants' containing block, and a sticky nav bar with an
 absolute dropdown inside it is ordinary.
 
@@ -190,8 +191,12 @@ absolute dropdown inside it is ordinary.
   lay it out in the room its insets leave, and then moved to where they
   put it, its captions with it.
 - **Fixed** (P2). An absolute box whose containing block is the viewport,
-  `(0, 0, width, viewport height)`, and whose rects are VIEWPORT
-  coordinates, flagged so.
+  `(0, 0, width, viewport height)`, whatever is round it, and whose rects
+  are VIEWPORT coordinates, flagged so — with everything laid out inside
+  it. The numbers are the initial containing block's, so it is filed and
+  laid out with that block's absolute boxes. On an axis whose insets are
+  both `auto`, its static position is read as a viewport coordinate: where
+  it would stand with the page not scrolled, and there it stays.
 - **All or nothing.** An out-of-flow box that does not finish is not
   placed, as a table cut short keeps its place with no rows: its
   containing block is marked unfinished and the tree is `incomplete`.
@@ -241,7 +246,8 @@ absolute dropdown inside it is ordinary.
   passes is the view's DIRTY PART, not the view, so the scroll cannot be
   derived from it — and the rule is written ONCE: `flow_box_doc_rect(box,
   scroll)` answers a box's rect in document coordinates (its rect, or its
-  rect plus the scroll for a fixed one), and the same for its clip. Every
+  rect plus the scroll for a fixed one), and the same for its clip; both
+  are `flow_box_doc_offset`, which is the rule. Every
   face site that reads a rect today — scrolling to a node or a fragment,
   pictures' dirty rects, widget placement — changes one expression and
   keeps working in document coordinates. This departs from LAYOUT.md's
@@ -249,7 +255,8 @@ absolute dropdown inside it is ordinary.
   changes shape, and from flow.h's "whole document pixels"; the slice that
   does it amends both, out loud.
 - **Covered.** `flow_box_covered(tree, box, scroll)` answers whether any
-  box painted after `box` overlaps it, so a face that draws live widgets
+  positioned box painted after `box` is drawn over it (an unpainted one is
+  not drawn at all), so a face that draws live widgets
   over the page — yonder's form controls — hides one that is covered and
   draws its frame, as `forms_place` already does for one that is not
   wholly in view. A text field under a fixed header must not draw over the
@@ -267,7 +274,10 @@ absolute dropdown inside it is ordinary.
   a page out again when the height changes and it has sheets; with P1 it
   does so for any page that has a positioned box.
 - It passes the scroll to `flow_visit`/`flow_hit` and reads rects through
-  `flow_box_doc_rect` (P2).
+  `flow_box_doc_rect` (P2). yonder's painter works in each box's own
+  coordinates and adds `flow_box_doc_offset` where it hands a rectangle
+  to a verb; its text verb is handed the run's origin rather than reading
+  the box's, since that is the one verb that read a box's position itself.
 
 ### What positioning costs a browser with no JavaScript
 

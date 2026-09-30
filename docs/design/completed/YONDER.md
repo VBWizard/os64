@@ -114,6 +114,11 @@ number (`flow_env_t.viewport_height`, the initial containing block), and a
 page is laid out again when it changes only if it has sheets or a
 positioned box — nothing else can read it.
 
+**A fixed box stays where it is on the glass** while the page scrolls
+under it (POSITION.md, P2): the painter moves it by the scroll, clicks
+find it there, and a form field a fixed box is drawn over hides its widget
+— the header's pixels are the header's, and so is the click.
+
 **`p` lays pages out with positioning off**, every box `static` — the
 page as it reads in document order — until `p` again brings back pages
 as they were designed to look (POSITION.md § What positioning costs,

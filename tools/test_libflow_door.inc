@@ -39,18 +39,18 @@ static void door_cases(void)
     if (t == NULL)
         return;
 
-    const flow_box_t *h = flow_hit(t, 30, 40);
+    const flow_box_t *h = flow_hit(t, 30, 40, kNoScroll);
     expect("door: a click on a link's text is that text, in that link",
            h != NULL && h->kind == FLOW_BOX_TEXT && h->length == 4 &&
            memcmp(h->text, "here", 4) == 0 && h->link == 0, NULL);
-    h = flow_hit(t, 70, 20);
+    h = flow_hit(t, 70, 20, kNoScroll);
     expect("door: a click on a picture is its atom",
            h != NULL && h->kind == FLOW_BOX_ATOMIC && h->rect.x == 60 && h->rect.y == 16 &&
            h->rect.w == 40 && h->rect.h == 30, NULL);
-    h = flow_hit(t, 390, 20);
+    h = flow_hit(t, 390, 20, kNoScroll);
     expect("door: a click past the line's content is the line",
            h != NULL && h->kind == FLOW_BOX_LINE, NULL);
-    expect("door: a click off the page is nothing", flow_hit(t, 500, 20) == NULL, NULL);
+    expect("door: a click off the page is nothing", flow_hit(t, 500, 20, kNoScroll) == NULL, NULL);
 
     const os64_html_node_t *p = doc->body->first_child;
     const os64_html_node_t *a = p->first_child->next;
@@ -72,7 +72,7 @@ static void door_cases(void)
            flow_control(t, 0)->rect.h == 20, NULL);
 
     Seen all = {{0}, 0};
-    flow_visit(t, (os64_gui_rect_t){0, 0, 400, 1000}, seen_add, &all);
+    flow_visit(t, (os64_gui_rect_t){0, 0, 400, 1000}, kNoScroll, seen_add, &all);
     char order[512] = "";
     for (int i = 0; i < all.n; i++) {
         strcat(order, kind_name(all.v[i]->kind));
@@ -82,7 +82,7 @@ static void door_cases(void)
            strcmp(order, "block block block span text text text atomic text atomic text text ")
                == 0, order);
     Seen some = {{0}, 0};
-    flow_visit(t, (os64_gui_rect_t){250, 0, 20, 100}, seen_add, &some);
+    flow_visit(t, (os64_gui_rect_t){250, 0, 20, 100}, kNoScroll, seen_add, &some);
     order[0] = '\0';
     for (int i = 0; i < some.n; i++) {
         strcat(order, kind_name(some.v[i]->kind));
@@ -91,7 +91,7 @@ static void door_cases(void)
     expect("door: the walk prunes what the viewport does not meet",
            strcmp(order, "block block block atomic text text ") == 0, order);
     Seen none = {{0}, 0};
-    flow_visit(t, (os64_gui_rect_t){0, 100, 400, 50}, seen_add, &none);
+    flow_visit(t, (os64_gui_rect_t){0, 100, 400, 50}, kNoScroll, seen_add, &none);
     expect("door: below the page, nothing", none.n == 0, NULL);
     flow_free(t);
 
@@ -104,7 +104,7 @@ static void door_cases(void)
     expect("door: overflow reaches past the box",
            root != NULL && root->rect.w == 50 && root->overflow.w == 76 &&
            flow_width(t) == 76, NULL);
-    h = flow_hit(t, 70, 20);
+    h = flow_hit(t, 70, 20, kNoScroll);
     expect("door: a click on the overflowing word finds it",
            h != NULL && h->kind == FLOW_BOX_TEXT && h->length == 10, NULL);
     flow_free(t);
@@ -117,7 +117,7 @@ static void door_cases(void)
     page2 = os64_page_build(doc2, kPage, NULL);
     t = flow_layout(doc2, page2, 50, &kEnv);
     Seen out = {{0}, 0};
-    flow_visit(t, (os64_gui_rect_t){100, 0, 10, 100}, seen_add, &out);
+    flow_visit(t, (os64_gui_rect_t){100, 0, 10, 100}, kNoScroll, seen_add, &out);
     bool table_seen = false;
     for (int i = 0; i < out.n; i++)
         table_seen |= out.v[i]->kind == FLOW_BOX_TABLE;
@@ -247,7 +247,8 @@ static const char kPositionedSweepPage[] =
     "<div class=r><div class=r>nested <i class=b>deep</i></div></div>"
     "<table><tr><td class=r>c<span class=a>in cell</span><td>d</table>"
     "<p>x<span class=r style='display:inline-block'>ib<span class=a>in</span></span></p>"
-    "<div class=b>viewport</div><dialog open>modal <b>text</b></dialog><p>last words</p>";
+    "<div class=b>viewport</div><dialog open>modal <b>text</b></dialog><p>last words</p>"
+    "<div style='position:fixed;top:0;right:0;width:40%'>held <i class=a>on it</i></div>";
 
 static bool unfinished_within(const flow_box_t *b)
 {
@@ -375,8 +376,11 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
             expect(name, path, NULL);
             snprintf(name, sizeof(name), "sweep %zu: the page is as tall as what it holds", at);
             int64_t bottom = 0;
+            // A fixed box is where it is on the glass, and the page is never
+            // scrolled to reach it.
             for (size_t i = 0; i < p.n; i++)
-                if (p.v[i]->kind == FLOW_BOX_BLOCK && p.v[i]->rect.y + p.v[i]->rect.h > bottom)
+                if (p.v[i]->kind == FLOW_BOX_BLOCK && !p.v[i]->fixed &&
+                    p.v[i]->rect.y + p.v[i]->rect.h > bottom)
                     bottom = p.v[i]->rect.y + p.v[i]->rect.h;
             snprintf(detail, sizeof(detail), "height %d, a block reaches %lld, root %d+%d%s",
                      flow_height(t), (long long)bottom, p.v[0]->rect.y, p.v[0]->rect.h,

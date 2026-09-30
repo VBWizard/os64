@@ -316,8 +316,12 @@ static void position_box(B *b, FBox *box, const os64_html_node_t *el, bool block
     box->pos = p;
     if (!box->out_of_flow)
         return;
+    // A fixed box's containing block is the viewport, whatever is round it
+    // (a transform would change that, and is booked): it is filed with the
+    // initial containing block's, whose rect is the viewport's too.
     const FStyled *up = styled(b, el->parent);
-    p->cb = up != NULL && up->anchor != NULL ? f_map_get(&b->pos_of, up->anchor) : NULL;
+    bool fixed = box->style->position == FLOW_POSITION_FIXED;
+    p->cb = !fixed && up != NULL && up->anchor != NULL ? f_map_get(&b->pos_of, up->anchor) : NULL;
     FPos **first = p->cb != NULL ? &p->cb->abs_first : &b->out->icb_first;
     FPos **last = p->cb != NULL ? &p->cb->abs_last : &b->out->icb_last;
     if (*last != NULL)

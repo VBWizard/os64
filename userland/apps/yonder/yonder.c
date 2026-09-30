@@ -749,6 +749,13 @@ static int32_t page_width(void)
     return g.page.tree != NULL ? flow_width(g.page.tree) : 0;
 }
 
+// Where the page is scrolled to, as libflow asks for it: what a box in a
+// fixed subtree is moved by to be where it is on the page now.
+static flow_point_t scroll_now(void)
+{
+    return (flow_point_t){g.sx, g.sy};
+}
+
 static void clamp_scroll(void)
 {
     int32_t most_y = page_height() - g.view.bounds.h, most_x = page_width() - g.view.bounds.w;
@@ -811,7 +818,7 @@ static void scroll_to_node(const os64_html_node_t *node)
         status_rest("that target has no box on this page");
         return;
     }
-    scroll_to(g.sx, b != NULL ? b->rect.y : 0);
+    scroll_to(g.sx, b != NULL ? flow_box_doc_rect(b, scroll_now()).y : 0);
 }
 
 static void scroll_to_fragment(const char *name)
@@ -1930,7 +1937,8 @@ static bool picture_on_screen(int32_t k, bool mark)
     for (int32_t i = 0; p->pic_of != NULL && i < flow_nimages(p->tree); i++) {
         const flow_box_t *b = flow_image(p->tree, i);
         int32_t at = os64_page_image_for(model, b->node);
-        if (at < 0 || p->pic_of[at] != k || !os64_rect_intersect(b->rect, view, &meet))
+        if (at < 0 || p->pic_of[at] != k ||
+            !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet))
             continue;
         seen = true;
         if (!mark)
@@ -1945,7 +1953,8 @@ static bool picture_on_screen(int32_t k, bool mark)
         const os64_html_node_t *node = os64_page_background(model, i)->node;
         const flow_box_t *b = flow_box_for(p->tree, node);
         bool canvas = node->tag == OS64_HTML_TAG_BODY;
-        if (b == NULL || (!canvas && !os64_rect_intersect(b->rect, view, &meet)))
+        if (b == NULL ||
+            (!canvas && !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet)))
             continue;
         seen = true;
         if (!mark)
@@ -2305,8 +2314,10 @@ static void forms_build(void)
 // Every control's widget at its box on the glass — or hidden, when its box
 // is not wholly inside the page view, because libui does not clip a child
 // to its parent and a widget half out of the view would paint over the
-// toolbar; the painter draws the frame of that one. And hidden, frame and
-// all, when the pointer cannot reach it: an unpainted box that is also
+// toolbar; the painter draws the frame of that one, and of one a positioned
+// box is drawn over (a field under a fixed header must not draw over the
+// header and take its click: POSITION.md). And hidden, frame and all, when
+// the pointer cannot reach it: an unpainted box that is also
 // `pointer-events: none` is a hidden dialog's or search overlay's, never a
 // custom checkbox's real input, which takes the pointer (POSITION.md,
 // ruling 9).
@@ -2323,11 +2334,13 @@ static void forms_place(void)
             continue;
         // The page's edges add in 64 bits (a box near INT32_MAX would wrap
         // back inside the view), and whatever is kept is clamped to int32.
-        int64_t x = (int64_t)v.x + b->rect.x - g.sx, y = (int64_t)v.y + b->rect.y - g.sy;
-        bool shown = x >= v.x && y >= v.y && x + b->rect.w <= (int64_t)v.x + v.w &&
-                     y + b->rect.h <= (int64_t)v.y + v.h && b->rect.w > 0 && b->rect.h > 0 &&
-                     !(b->unpainted && b->style->pointer_events_none);
-        os64_gui_rect_t r = {clamp32(x), clamp32(y), b->rect.w, b->rect.h};
+        os64_gui_rect_t at = flow_box_doc_rect(b, scroll_now());
+        int64_t x = (int64_t)v.x + at.x - g.sx, y = (int64_t)v.y + at.y - g.sy;
+        bool shown = x >= v.x && y >= v.y && x + at.w <= (int64_t)v.x + v.w &&
+                     y + at.h <= (int64_t)v.y + v.h && at.w > 0 && at.h > 0 &&
+                     !(b->unpainted && b->style->pointer_events_none) &&
+                     !flow_box_covered(g.page.tree, b, scroll_now());
+        os64_gui_rect_t r = {clamp32(x), clamp32(y), at.w, at.h};
         if (!shown) {
             if (!fw->w->hidden)
                 os64_ui_set_hidden(&g.ui, fw->w, true);
@@ -2511,14 +2524,14 @@ static void glass_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
 // The verbs that draw something whole — a run, a picture — cut it to
 // `clip`, the painter's view narrowed by any `overflow` that clips the box,
 // met with what is being painted.
-static void glass_text(void *ctx, const flow_box_t *b, os64_gui_rect_t clip, uint32_t colour)
+static void glass_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseline,
+                       os64_gui_rect_t clip, uint32_t colour)
 {
     const Glass *gl = ctx;
     os64_gui_rect_t cut = on_glass(gl, clip);
     if (cut.w <= 0 || cut.h <= 0)
         return;
-    os64_text_draw(b->run, gl->surf, cut, b->rect.x + gl->dx, b->baseline + gl->dy,
-                   0xff000000u | colour);
+    os64_text_draw(b->run, gl->surf, cut, x + gl->dx, baseline + gl->dy, 0xff000000u | colour);
 }
 
 // A picture behind a box: the box's sheets, or else libpage's list, say
@@ -2547,7 +2560,7 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t
     const uint32_t *px = picture_pixels(&p->pics[k], &w, &h);
     bool rx = true, ry = true;
     if (css)
-        yonder_background_place(b, w, h, &ox, &oy, &rx, &ry);
+        yonder_background_place(b, flow_box_doc_rect(b, scroll_now()), w, h, &ox, &oy, &rx, &ry);
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
     os64_gui_rect_t cut = on_glass(gl, clip);
     if (cut.w > 0 && cut.h > 0)
@@ -2619,8 +2632,8 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         return;
     }
     yonder_verbs_t v = {&gl, glass_fill, glass_text, glass_image, glass_control, glass_backdrop};
-    yonder_paint(g.page.tree,
-                 (os64_gui_rect_t){part.x - gl.dx, part.y - gl.dy, part.w, part.h}, PAGE_PAPER, &v);
+    yonder_paint(g.page.tree, (os64_gui_rect_t){part.x - gl.dx, part.y - gl.dy, part.w, part.h},
+                 scroll_now(), PAGE_PAPER, &v);
 }
 
 // The keyboard's arrows arrive as VT100 bursts (ESC [ A ...). libui's
@@ -2690,7 +2703,7 @@ static int32_t link_at(int32_t x, int32_t y)
     os64_gui_rect_t v = g.view.bounds;
     if (g.page.tree == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
         return -1;
-    const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy);
+    const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
     return b != NULL ? b->link : -1;
 }
 
@@ -2721,7 +2734,7 @@ static void picture_button_at(int32_t x, int32_t y)
     os64_gui_rect_t v = g.view.bounds;
     if (g.page.tree == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
         return;
-    const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy);
+    const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
     const os64_page_control_t *c =
         b != NULL && b->control >= 0 ? os64_page_control(page_model(&g.page), b->control) : NULL;
     if (c != NULL && c->input == OS64_PAGE_INPUT_IMAGE && !c->disabled)

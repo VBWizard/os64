@@ -163,4 +163,15 @@ static void paint_cases(void)
                     "fill 0 0 50 10 #00ff00\n"
                     "fill 0 0 50 10 #ff0000\n"
                     "text \"ab cd ef\" 0 14 #101010 clip 0 0 50 10\n");
+    // A fixed header is painted where it is on the glass: scrolled 500
+    // down, its background at the view's top, 500, and its text on its
+    // baseline 14 below that — after the page, which is under it.
+    paint_page_case("a fixed header is painted where the scroll puts it",
+                    "<!doctype html><style>body { margin: 0 } p { margin: 0; height: 1000px }"
+                    " div { position: fixed; top: 0; left: 0; right: 0; height: 30px;"
+                    " background: #00ff00 }</style><p>long</p><div>top</div>",
+                    200, (os64_gui_rect_t){0, 500, 200, 100}, true,
+                    "fill 0 500 200 100 #fefefe\n"
+                    "fill 0 500 200 30 #00ff00\n"
+                    "text \"top\" 0 514 #101010\n");
 }

@@ -209,6 +209,9 @@ static void text_teardown(void)
 
 static const char *kPage = "http://host/dir/page.html";
 
+// A page not scrolled: every box's coordinates are the document's then.
+static const flow_point_t kNoScroll = {0, 0};
+
 static os64_html_document_t *parse(const char *html)
 {
     os64_html_options_t opt = os64_html_options_default();
