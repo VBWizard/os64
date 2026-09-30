@@ -26,6 +26,8 @@ for scenario in "${scenarios[@]}"; do
         # Stop at the commit-state assignment and perform the signal handler's
         # flag store there. This deterministically exercises the transition gap
         # without adding a scheduling hook to production code. Requires GDB.
+        # LeakSanitizer cannot inspect the inferior while GDB is attached;
+        # keep the other sanitizer options and disable leaks for this case.
         transition_line=$(python3 - <<'PYLINE'
 from pathlib import Path
 lines = Path("userland/apps/os64get/install.c").read_text().splitlines()
@@ -34,7 +36,7 @@ assert len(spots) == 1, "locate the commit transition before injecting cancellat
 print(spots[0])
 PYLINE
         )
-        if ! ASAN_OPTIONS=detect_leaks=0 gdb -nx -q -batch \
+        if ! ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=0" gdb -nx -q -batch \
             -ex "break userland/apps/os64get/install.c:$transition_line" \
             -ex run -ex 'set variable cancelled = 1' -ex continue \
             --args "$work/os64get-test" "$scenario" "$work/$scenario" > "$work/transition.log" 2>&1; then
@@ -44,7 +46,7 @@ PYLINE
         cat "$work/transition.log"
         grep -q '^PASS cancel-transition$' "$work/transition.log"
     else
-        if ! ASAN_OPTIONS=detect_leaks=0 "$work/os64get-test" "$scenario" "$work/$scenario" 2> "$work/stderr"; then
+        if ! ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1}" "$work/os64get-test" "$scenario" "$work/$scenario" 2> "$work/stderr"; then
             cat "$work/stderr" >&2
             exit 1
         fi

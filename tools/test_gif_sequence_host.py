@@ -66,7 +66,8 @@ def run(work, real):
                     '-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie',
                     *['-I'+str(ROOT/p) for p in includes],*[str(ROOT/p) for p in sources],
                     '-o',str(work/'test')],check=True)
-    env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0'}
+    env = os.environ.copy()
+    env.setdefault("ASAN_OPTIONS", "detect_leaks=1")
     def check(name,data,status=0,expected=None,bad=False):
         p=work/(name+'.gif');p.write_bytes(data)
         ref=p.with_suffix('.seq')

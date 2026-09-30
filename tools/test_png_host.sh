@@ -299,7 +299,7 @@ fixture("palette_index", palette_bad)
 PY
 
 run() {
-    ASAN_OPTIONS=detect_leaks=0 "$work/test_png" "$@"
+    ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1}" "$work/test_png" "$@"
 }
 
 for color in 0 2 3 4 6; do

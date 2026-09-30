@@ -19,7 +19,8 @@ CORE = ROOT / 'userland/apps/sshd'
 SOURCES = [CORE / ('ssh_' + name + '.c') for name in ('codec', 'keys', 'transport', 'connection')]
 FLAGS = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
          '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '-no-pie']
-ENV = {**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0'}
+ENV = os.environ.copy()
+ENV.setdefault("ASAN_OPTIONS", "detect_leaks=1")
 
 
 def run(argv, **kw):
