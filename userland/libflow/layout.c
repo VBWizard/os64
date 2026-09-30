@@ -123,7 +123,7 @@ static int64_t len(flow_length_t l, int64_t base)
         int64_t b = hold_len(base);
         return hold_len(b / 6400 * l.value + b % 6400 * l.value / 6400 + hold_len(l.offset));
     }
-    case FLOW_LENGTH_AUTO: break;
+    case FLOW_LENGTH_AUTO: case FLOW_LENGTH_FIT_CONTENT: break;
     }
     return 0;
 }
@@ -370,7 +370,7 @@ typedef struct {
 // 300x150, a control ten ems wide and one line of its own font high.
 static bool width_given(const flow_style_t *s)
 {
-    return s->width.kind != FLOW_LENGTH_AUTO;
+    return s->width.kind == FLOW_LENGTH_PX || s->width.kind == FLOW_LENGTH_PERCENT;
 }
 
 static bool height_given(const flow_style_t *s)
@@ -468,6 +468,45 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     return r;
 }
 
+// ── Relative offsets ────────────────────────────────────────────────────
+
+// A containing block's height when it does not depend on its content — a
+// height in pixels on the nearest box with an element — or -1: what a
+// percentage top or bottom is of (CSS 2.1 § 9.3.2, where the other case
+// computes it to auto).
+static int64_t definite_height(const FBox *b)
+{
+    while (b != NULL && b->node == NULL)
+        b = b->parent;
+    if (b == NULL || b->style->height.kind != FLOW_LENGTH_PX)
+        return -1;
+    const flow_style_t *s = b->style;
+    int64_t frame = s->border_width[FLOW_TOP] + s->border_width[FLOW_BOTTOM] +
+                    len(s->padding[FLOW_TOP], 0) + len(s->padding[FLOW_BOTTOM], 0);
+    return content_of(s, s->height, 0, frame);
+}
+
+// How far a relative box moves from where the flow put it (CSS 2.1 §
+// 9.4.3): `left` over `right`, `top` over `bottom`, percentages of its
+// containing block — a vertical one only against a definite height (`cbh`
+// >= 0). A fixed or sticky box is laid out as relative with its insets
+// ignored until its slice, so it does not move.
+static void rel_offset(const flow_style_t *s, int64_t cbw, int64_t cbh, int64_t *dx, int64_t *dy)
+{
+    *dx = *dy = 0;
+    if (s->position != FLOW_POSITION_RELATIVE)
+        return;
+    if (s->inset[FLOW_LEFT].kind != FLOW_LENGTH_AUTO)
+        *dx = len(s->inset[FLOW_LEFT], cbw);
+    else if (s->inset[FLOW_RIGHT].kind != FLOW_LENGTH_AUTO)
+        *dx = -len(s->inset[FLOW_RIGHT], cbw);
+    bool top = s->inset[FLOW_TOP].kind != FLOW_LENGTH_AUTO;
+    flow_length_t v = top ? s->inset[FLOW_TOP] : s->inset[FLOW_BOTTOM];
+    if (v.kind == FLOW_LENGTH_AUTO || (v.kind == FLOW_LENGTH_PERCENT && cbh < 0))
+        return;
+    *dy = top ? len(v, cbh) : -len(v, cbh);
+}
+
 // ── Decorations and links ───────────────────────────────────────────────
 
 typedef struct {
@@ -510,7 +549,16 @@ static Paint paint_for(const L *l, const FStyles *styles, const os64_html_node_t
 // WORD — the unbreakable thing — may be several segments: `foo<b>bar</b>`
 // is a segment, two edges and a segment with no opportunity between them.
 
-typedef enum { SG_WORD, SG_ATOM, SG_OPEN, SG_CLOSE, SG_BREAK, SG_WBR, SG_MARKER } SegKind;
+typedef enum { SG_WORD, SG_ATOM, SG_OPEN, SG_CLOSE, SG_BREAK, SG_WBR, SG_MARKER,
+               SG_PLACEHOLDER } SegKind;
+
+// What a line holds nothing of — no width, no opportunity, nothing that
+// ends a run of white space: an inline box's edges, and where an absolute
+// box was written.
+static bool seg_is_edge(SegKind k)
+{
+    return k == SG_OPEN || k == SG_CLOSE || k == SG_PLACEHOLDER;
+}
 
 typedef struct {
     SegKind kind;
@@ -558,7 +606,7 @@ static Seg *seg_add(L *l, Segs *s, SegKind kind)
     Seg *g = &s->v[s->n++];
     os64_memset(g, 0, sizeof(*g));
     g->kind = kind;
-    if (kind != SG_OPEN && kind != SG_CLOSE)
+    if (!seg_is_edge(kind))
         s->drop_space = false;
     return g;
 }
@@ -569,7 +617,7 @@ static bool ends_in_space(const Segs *s)
 {
     for (size_t k = s->n; k > 0; k--) {
         const Seg *p = &s->v[k - 1];
-        if (p->kind == SG_OPEN || p->kind == SG_CLOSE)
+        if (seg_is_edge(p->kind))
             continue;
         return p->kind == SG_WORD && p->collapsible && p->s1 > p->b1;
     }
@@ -731,6 +779,7 @@ typedef struct {
 
 static Intr intrinsic(L *l, FBox *b);
 static int64_t hframe(const FBox *b, int64_t base);
+static int64_t vframe(const FBox *b, int64_t base);
 
 static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
 {
@@ -765,7 +814,8 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     bool space = ends_in_space(s);
                     uint32_t m = f_collapse_white(alt, n, copy, &space);
                     const FItem *next = it->next;
-                    while (next != NULL && (next->kind == FI_OPEN || next->kind == FI_CLOSE))
+                    while (next != NULL && (next->kind == FI_OPEN || next->kind == FI_CLOSE ||
+                                            next->kind == FI_PLACEHOLDER))
                         next = next->next;
                     if (m > 0 && copy[m - 1] == ' ' && next != NULL && next->kind == FI_TEXT &&
                         next->len > 0 && next->text[0] == ' ' &&
@@ -811,7 +861,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                 int64_t room = max64(0, cw - fw - g->ml - g->mr);
                 if (it->node->tag == OS64_HTML_TAG_MARQUEE) {
                     r.w = room;
-                } else if (st->width.kind != FLOW_LENGTH_AUTO) {
+                } else if (width_given(st)) {
                     r.w = content_of(st, st->width, cw, fw);
                 } else {
                     // intrinsic() answers border-box widths with the frame's
@@ -862,6 +912,16 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             }
             break;
         }
+        case FI_PLACEHOLDER: {
+            if (it->absolute == NULL)
+                break;
+            Seg *g = seg_add(l, s, SG_PLACEHOLDER);
+            if (g != NULL) {
+                g->item = it;
+                g->style = it->style;
+            }
+            break;
+        }
         case FI_MARKER: {
             Fonts f;
             if (!fonts_for(l, it->style, &f))
@@ -898,7 +958,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             continue;
         for (size_t k = j; k > 0; k--) {
             Seg *p = &s->v[k - 1];
-            if (p->kind == SG_OPEN || p->kind == SG_CLOSE)
+            if (seg_is_edge(p->kind))
                 continue;
             if (p->kind != SG_BREAK)
                 p->wrap_after = false;
@@ -906,7 +966,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
         }
         for (size_t k = j + 1; k < s->n; k++) {
             Seg *n = &s->v[k];
-            if (n->kind == SG_OPEN || n->kind == SG_CLOSE)
+            if (seg_is_edge(n->kind))
                 continue;
             if (n->kind == SG_WORD && n->b1 == n->b0)
                 n->wrap_after = false;
@@ -1008,13 +1068,15 @@ static Extent font_box(const flow_style_t *s, int64_t ascent, int64_t descent, i
     return (Extent){-ascent - half, descent + (line_height - ascent - descent - half)};
 }
 
-static FFrag *frag_add(L *l, FLine *line, f_frag_kind_t kind)
+static FFrag *frag_add(L *l, FLine *line, f_frag_kind_t kind, int64_t rel_x, int64_t rel_y)
 {
     FFrag *f = alloc(l, sizeof(*f));
     if (f == NULL)
         return NULL;
     f->kind = kind;
     f->link = -1;
+    f->rel_x = rel_x;
+    f->rel_y = rel_y;
     if (line->last_frag != NULL)
         line->last_frag->next = f;
     else
@@ -1023,7 +1085,8 @@ static FFrag *frag_add(L *l, FLine *line, f_frag_kind_t kind)
     return f;
 }
 
-static FSpan *span_add(L *l, FLine *line, const FInline *inl, int64_t x0, int64_t x1)
+static FSpan *span_add(L *l, FLine *line, FInline *inl, int64_t x0, int64_t x1, int64_t rel_x,
+                       int64_t rel_y)
 {
     FSpan *sp = alloc(l, sizeof(*sp));
     if (sp == NULL)
@@ -1031,6 +1094,15 @@ static FSpan *span_add(L *l, FLine *line, const FInline *inl, int64_t x0, int64_
     sp->inl = inl;
     sp->x0 = x0;
     sp->x1 = x1;
+    sp->rel_x = rel_x;
+    sp->rel_y = rel_y;
+    // A positioned inline's first and last pieces bound it as a containing
+    // block (CSS 2.1 § 10.1, 4.1).
+    if (inl->pos != NULL) {
+        if (inl->first_span == NULL)
+            inl->first_span = sp;
+        inl->last_span = sp;
+    }
     if (line->last_span != NULL)
         line->last_span->next = sp;
     else
@@ -1042,18 +1114,21 @@ static FSpan *span_add(L *l, FLine *line, const FInline *inl, int64_t x0, int64_
 static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur);
 static void translate(FBox *b, int64_t dx, int64_t dy);
 static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw, Cursor *cur);
+static void positioned_done(L *l, const FStyles *styles, FBox *b, int64_t cbw);
+static int64_t fit_content(L *l, FBox *b, int64_t cbw);
+static void unplace(FBox *b);
 
 // Open inline boxes carried from one line to the next.
 typedef struct {
-    const FInline **v;
+    FInline **v;
     size_t n, cap;
 } Open;
 
-static bool open_push(L *l, Open *o, const FInline *inl)
+static bool open_push(L *l, Open *o, FInline *inl)
 {
     if (o->n == o->cap) {
         size_t cap = o->cap != 0 ? o->cap * 2 : 8;
-        const FInline **grown = os64_realloc(o->v, cap * sizeof(*grown));
+        FInline **grown = os64_realloc(o->v, cap * sizeof(*grown));
         if (grown == NULL) {
             fail(l);
             return false;
@@ -1080,7 +1155,7 @@ static bool last_baseline(const FBox *b, int64_t *out)
         return found;
     }
     for (const FBox *c = b->first; c != NULL; c = c->next)
-        if (c->kind == FB_BLOCK && last_baseline(c, out))
+        if (c->kind == FB_BLOCK && !c->out_of_flow && last_baseline(c, out))
             found = true;
     return found;
 }
@@ -1120,6 +1195,10 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
     size_t open_x_cap = 0;
     int64_t *gap_at = NULL;             // where each justified gap ends, in pen x
     size_t gap_cap = 0;
+    // The relative inlines open here move what is inside them: the sum of
+    // their offsets, carried across lines as the open inlines are (their
+    // containing block is this context's, whose width is `cw`).
+    int64_t rel_x = 0, rel_y = 0, cbh = definite_height(ifc);
 
     flow_text_align_t align = ifc->style->text_align;
     bool justify = align == FLOW_ALIGN_JUSTIFY || align == FLOW_ALIGN_HTML_JUSTIFY;
@@ -1237,7 +1316,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                                                   pre ? -pen : 0, tabs);
                     if (run == NULL || !keep_run(l, run))
                         break;
-                    FFrag *fr = frag_add(l, line, FF_TEXT);
+                    FFrag *fr = frag_add(l, line, FF_TEXT, rel_x, rel_y);
                     if (fr == NULL)
                         break;
                     os64_text_run_view_t v;
@@ -1289,7 +1368,10 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 break;
             }
             case SG_ATOM: {
-                FFrag *fr = frag_add(l, line, FF_ATOMIC);
+                // A relative atom moves by its own offset too.
+                int64_t own_x, own_y;
+                rel_offset(g->style, cw, cbh, &own_x, &own_y);
+                FFrag *fr = frag_add(l, line, FF_ATOMIC, rel_x + own_x, rel_y + own_y);
                 if (fr == NULL)
                     break;
                 fr->item = g->item;
@@ -1362,7 +1444,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 os64_text_run_t *run = run_of(l, &f, g->text, g->b1, 0, 0);
                 if (run == NULL || !keep_run(l, run))
                     break;
-                FFrag *fr = frag_add(l, line, FF_MARKER);
+                FFrag *fr = frag_add(l, line, FF_MARKER, rel_x, rel_y);
                 if (fr == NULL)
                     break;
                 os64_text_run_view_t v;
@@ -1403,13 +1485,19 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                         open_x_cap = open.cap;
                     }
                     open_x[open.n - 1] = pen;
+                    FInline *inl = g->item->inl;
+                    rel_offset(inl->style, cw, cbh, &inl->rel_x, &inl->rel_y);
+                    rel_x += inl->rel_x;
+                    rel_y += inl->rel_y;
                 }
                 break;
             case SG_CLOSE:
                 // Inlines close innermost first; the piece ends here.
                 for (size_t k = open.n; k > 0; k--)
                     if (open.v[k - 1] == g->item->inl) {
-                        span_add(l, line, open.v[k - 1], open_x[k - 1], pen);
+                        span_add(l, line, open.v[k - 1], open_x[k - 1], pen, rel_x, rel_y);
+                        rel_x -= open.v[k - 1]->rel_x;
+                        rel_y -= open.v[k - 1]->rel_y;
                         for (size_t m = k - 1; m + 1 < open.n; m++) {
                             open.v[m] = open.v[m + 1];
                             open_x[m] = open_x[m + 1];
@@ -1418,6 +1506,19 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                         break;
                     }
                 break;
+            case SG_PLACEHOLDER: {
+                // Where the absolute box stood: its static position, read
+                // once the line is placed (and moved with it after).
+                FFrag *fr = frag_add(l, line, FF_PLACEHOLDER, rel_x, rel_y);
+                if (fr == NULL)
+                    break;
+                fr->item = g->item;
+                fr->node = g->item->node;
+                fr->style = g->style;
+                fr->x = pen;
+                g->item->absolute->place = fr;
+                break;
+            }
             case SG_BREAK: {
                 // A forced break holds its line open with its own font's box
                 // — that is `a<br><br>b`'s blank line — but in quirks mode
@@ -1436,7 +1537,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         }
         // Pieces still open run to the line's end and carry on.
         for (size_t k = 0; k < open.n && !l->failed; k++)
-            span_add(l, line, open.v[k], open_x[k], pen);
+            span_add(l, line, open.v[k], open_x[k], pen, rel_x, rel_y);
         // A line only joins its context whole (above): one pass 3 could
         // not finish is dropped.
         if (l->failed)
@@ -1540,8 +1641,24 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         }
         int64_t per_gap = justify && !last && !forced && gaps > 0 && extra > 0
                               ? extra / (int64_t)gaps : 0;
+        // Whether anything in the flow stands before a fragment on this line:
+        // text, an atom, a marker — not a placeholder, not an inline's edge.
+        bool flow_before = false;
         for (FFrag *fr = line->frags; fr != NULL; fr = fr->next) {
-            fr->x += cx + shift + per_gap * gaps_before(gap_at, gaps, fr->x);
+            if (fr->kind == FF_PLACEHOLDER && !fr->style->specified_inline) {
+                // A box that was a block would have broken the line where
+                // something in the flow preceded it, so its static position
+                // starts the next line; with nothing before it, it starts
+                // this one. Either way at the content edge (Chrome: ruling
+                // 5, and the probe's case 3).
+                fr->x = cx + fr->rel_x;
+                fr->y = line->y + (flow_before ? height : 0) + fr->rel_y;
+                fr->baseline = line->baseline;
+                continue;
+            }
+            if (fr->kind != FF_PLACEHOLDER)
+                flow_before = true;
+            fr->x += cx + shift + per_gap * gaps_before(gap_at, gaps, fr->x) + fr->rel_x;
             if (fr->kind == FF_ATOMIC) {
                 flow_vertical_align_t va = fr->style->vertical_align;
                 int64_t mt = len(fr->style->margin[FLOW_TOP], cw);
@@ -1551,21 +1668,26 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     fr->y = line->y + height - fr->h - len(fr->style->margin[FLOW_BOTTOM], cw);
                 else
                     fr->y += line->baseline;
+                fr->y += fr->rel_y;
                 if (fr->item->content != NULL)
                     translate(fr->item->content, fr->x - fr->item->content->x,
                               fr->y - fr->item->content->y);
+            } else if (fr->kind == FF_PLACEHOLDER) {
+                // One that was inline stands where the pen was, at the
+                // line's top.
+                fr->y = line->y + fr->rel_y;
             } else {
-                fr->y += line->baseline;
+                fr->y += line->baseline + fr->rel_y;
             }
             fr->baseline = line->baseline;
         }
         for (FSpan *sp = line->spans; sp != NULL; sp = sp->next) {
-            sp->x0 += cx + shift + per_gap * gaps_before(gap_at, gaps, sp->x0);
-            sp->x1 += cx + shift + per_gap * gaps_before(gap_at, gaps, sp->x1);
+            sp->x0 += cx + shift + per_gap * gaps_before(gap_at, gaps, sp->x0) + sp->rel_x;
+            sp->x1 += cx + shift + per_gap * gaps_before(gap_at, gaps, sp->x1) + sp->rel_x;
             Fonts f;
             if (fonts_for(l, sp->inl->style, &f)) {
-                sp->top = line->baseline - f.info.ascent;
-                sp->bottom = line->baseline + f.info.descent;
+                sp->top = line->baseline - f.info.ascent + sp->rel_y;
+                sp->bottom = line->baseline + f.info.descent + sp->rel_y;
             }
         }
         if (l->failed)
@@ -1582,6 +1704,10 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
     }
     if (cut && ifc->last_line != NULL) {
         FLine *last = ifc->last_line;
+        // An absolute box whose place is on the line dropped has none.
+        for (FFrag *fr = last->frags; fr != NULL; fr = fr->next)
+            if (fr->kind == FF_PLACEHOLDER)
+                fr->item->absolute->place = NULL;
         last->frags = last->last_frag = NULL;
         last->spans = last->last_span = NULL;
         last->unfinished = true;
@@ -1631,16 +1757,16 @@ static void translate(FBox *b, int64_t dx, int64_t dy)
 
 // A box whose margins never collapse with its content's: the root, a
 // table and its cells and captions, a replaced block, an atom's content,
-// and a block whose overflow scrolls or hides (CSS Overflow 3 § 3; `clip`
-// does not) — each starts a block formatting context of its own (§9.4.1,
-// §8.3.1).
+// an out-of-flow box, and a block whose overflow scrolls or hides (CSS
+// Overflow 3 § 3; `clip` does not) — each starts a block formatting
+// context of its own (§9.4.1, §8.3.1).
 static bool bfc_root(const FBox *b)
 {
     const flow_style_t *s = b->style;
     bool scroller = b->node != NULL &&
                     (f_overflow_scrolls(s->overflow_x) || f_overflow_scrolls(s->overflow_y));
     return b->parent == NULL || b->kind == FB_TABLE || b->kind == FB_CELL ||
-           b->kind == FB_CAPTION || b->kind == FB_REPLACED || scroller ||
+           b->kind == FB_CAPTION || b->kind == FB_REPLACED || scroller || b->out_of_flow ||
            (b->kind == FB_BLOCK && b->node != NULL && s->display == FLOW_DISPLAY_INLINE_BLOCK);
 }
 
@@ -1751,7 +1877,7 @@ static bool first_baseline_in(const FBox *b, int64_t *out)
         return foot != NULL && first_baseline_in(foot, out);
     }
     for (const FBox *c = b->first; c != NULL; c = c->next)
-        if (first_baseline_in(c, out))
+        if (!c->out_of_flow && first_baseline_in(c, out))
             return true;
     return false;
 }
@@ -1793,21 +1919,62 @@ static void place_marker(L *l, const FStyles *styles, FBox *b, int64_t content_x
     b->marker_frag = fr;
 }
 
-// A block container's block-level children, in order.
+// A block container's block-level children, in order. An out-of-flow one
+// takes no part: it records its static position — where the flow has
+// reached, below the previous sibling's own margin and not the margin that
+// sibling will collapse to with the next, which has not been met yet
+// (POSITION.md, ruling 5) — and is laid out once its containing block is
+// finished.
 static void children(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, Cursor *in)
 {
-    for (FBox *c = b->first; c != NULL && !l->failed; c = c->next)
+    for (FBox *c = b->first; c != NULL && !l->failed; c = c->next) {
+        if (c->out_of_flow) {
+            c->x = cx;
+            c->y = in->y + margins_sum(in->pm);
+            c->static_known = true;
+            continue;
+        }
         block(l, styles, c, cx, cw, in);
+    }
 }
+
+static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur);
 
 // A block-level box in its parent's flow. On entry `cur` is the point
 // below the previous box with the margins still pending there; on exit it
 // is the point below this one, with this box's bottom margin (and, when it
 // adjoins, its last child's) pending.
+//
+// A RELATIVE box (CSS 2.1 § 9.4.3) is laid out at its offset from where the
+// flow puts it — everything inside it with it — and the flow goes on as if
+// it had not moved: the cursor it hands back is the one it would have. Laid
+// out there from the start rather than moved once finished, so whatever
+// finishes inside it is where it will stay (LAYOUT.md § Proof, relation b).
+// A cell is placed by its table, and moves once placed (positioned_done).
 static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur)
 {
     if (l->failed)
         return;
+    int64_t dx = 0, dy = 0;
+    if (b->positioned && !b->out_of_flow)
+        rel_offset(b->style, cbw, definite_height(b->parent), &dx, &dy);
+    if (dx == 0 && dy == 0) {
+        block_at(l, styles, b, cbx, cbw, cur);
+        return;
+    }
+    Cursor moved = *cur;
+    moved.y += dy;
+    if (moved.first >= 0)
+        moved.first += dy;
+    block_at(l, styles, b, cbx + dx, cbw, &moved);
+    *cur = moved;
+    cur->y -= dy;
+    if (cur->first >= 0)
+        cur->first -= dy;
+}
+
+static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur)
+{
     if (b->kind == FB_TABLE) {
         table(l, styles, b, cbx, cbw, cur);
         return;
@@ -1820,13 +1987,20 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
         forced_w = rep.w;
     } else if (b->atom_sized) {
         forced_w = b->atom_w;
+    } else if (b->abs_sized) {
+        forced_w = b->abs_w;
+    } else if (s->width.kind == FLOW_LENGTH_FIT_CONTENT) {
+        forced_w = fit_content(l, b, cbw);
     }
     int64_t ml;
     int64_t cw = widths(b, cbw, forced_w, &ml);
+    // An out-of-flow box's own equations placed it (absolute, below).
+    if (b->abs_sized)
+        ml = b->abs_ml;
     int64_t mt = len(s->margin[FLOW_TOP], cbw), mb = len(s->margin[FLOW_BOTTOM], cbw);
     bool root = bfc_root(b);
     bool top_open = !root && b->border[FLOW_TOP] == 0 && b->padding[FLOW_TOP] == 0;
-    bool height_auto = s->height.kind != FLOW_LENGTH_PX;
+    bool height_auto = s->height.kind != FLOW_LENGTH_PX && !b->abs_h_set;
     // §8.3.1: a bottom margin meets the last child's, and a box's two
     // margins meet each other, only across a height of auto and a
     // min-height of zero.
@@ -1910,6 +2084,8 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
             place_marker(l, styles, b, cx, b->y);
         if (l->failed)
             b->unfinished = true;
+        else
+            positioned_done(l, styles, b, cbw);
         return;
     }
     if (top_open) {
@@ -1919,7 +2095,7 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     int64_t content_h;
     Margins pm_out;
     if (!height_auto) {
-        content_h = content_of(s, s->height, 0, vframe_px);
+        content_h = b->abs_h_set ? b->abs_h : content_of(s, s->height, 0, vframe_px);
         pm_out = margin_of(mb);
     } else if (bottom_open) {
         content_h = in.y - content_top;
@@ -1944,6 +2120,272 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     // there stopped inside this box.
     if (l->failed)
         b->unfinished = true;
+    else
+        positioned_done(l, styles, b, cbw);
+}
+
+// ── Positioned layout (POSITION.md) ─────────────────────────────────────
+//
+// An ABSOLUTE box is laid out once its containing block is finished — its
+// height is part of the equations — as a block formatting context of its
+// own, in document coordinates like everything else, where the tree walks
+// that follow never visit it. A RELATIVE box is laid out at its offset from
+// where the flow puts it (block, above), or, a table cell, moved there once
+// its table has placed it; a relative inline's pieces and content move as
+// their lines are placed (lines(), above).
+
+typedef struct {
+    int64_t x, y, w, h;
+} Rect;
+
+// A box's padding box: what it is the containing block of (CSS 2.1 § 10.1).
+static Rect padding_rect(const FBox *b)
+{
+    return (Rect){b->x + b->border[FLOW_LEFT], b->y + b->border[FLOW_TOP],
+                  max64(0, b->w - b->border[FLOW_LEFT] - b->border[FLOW_RIGHT]),
+                  max64(0, b->h - b->border[FLOW_TOP] - b->border[FLOW_BOTTOM])};
+}
+
+// A positioned inline's: the box bounding the padding boxes of its first
+// and last pieces (CSS 2.1 § 10.1, 4.1) — its left padding opens the first,
+// its right padding closes the last — once its home has placed them all.
+// One with no piece at all is its home's padding box.
+static Rect inline_rect(const FPos *p)
+{
+    const FSpan *f = p->inl->first_span, *e = p->inl->last_span;
+    Rect home = padding_rect(p->home);
+    if (f == NULL)
+        return home;
+    const flow_style_t *s = p->style;
+    int64_t pl = len(s->padding[FLOW_LEFT], home.w), pr = len(s->padding[FLOW_RIGHT], home.w);
+    int64_t pt = len(s->padding[FLOW_TOP], home.w), pb = len(s->padding[FLOW_BOTTOM], home.w);
+    int64_t x0 = min64(f->x0 - pl, e->x0), x1 = max64(f->x1, e->x1 + pr);
+    int64_t y0 = min64(f->top, e->top) - pt, y1 = max64(f->bottom, e->bottom) + pb;
+    return (Rect){x0, y0, max64(0, x1 - x0), max64(0, y1 - y0)};
+}
+
+// A width that shrinks to fit (CSS 2.1 § 10.3.5's formula, CSS Sizing 3 §
+// 3.2's fit-content): the content's min-content width at least, its
+// max-content at most, and between them the room `avail` leaves.
+static int64_t shrink_to_fit(L *l, FBox *b, int64_t avail)
+{
+    Intr in = intrinsic(l, b);
+    int64_t f0 = hframe(b, 0);
+    return max64(0, min64(max64(in.min - f0, avail), in.max - f0));
+}
+
+// `width: fit-content` in the flow: the room its containing block leaves
+// after its margins that are set and its frame, then its limits.
+static int64_t fit_content(L *l, FBox *b, int64_t cbw)
+{
+    const flow_style_t *s = b->style;
+    int64_t frame = hframe(b, cbw);
+    int64_t margins = len(s->margin[FLOW_LEFT], cbw) + len(s->margin[FLOW_RIGHT], cbw);
+    return clamp_width(s, shrink_to_fit(l, b, cbw - margins - frame), cbw, frame);
+}
+
+// One axis of an absolute box's equations: the two insets and the two
+// margins along it (0 where auto), which of them are auto, and the
+// containing block's length.
+typedef struct {
+    bool auto0, auto1, mauto0, mauto1;
+    int64_t in0, in1, m0, m1;
+    int64_t cb;
+} Axis;
+
+// What an auto size comes to in the room it is given: shrink-to-fit across,
+// the laid-out content's height down.
+typedef struct {
+    L *l;
+    FBox *b;
+    int64_t content_h;
+} Fit;
+
+static int64_t fit_size(const Fit *f, bool across, int64_t room)
+{
+    return across ? shrink_to_fit(f->l, f->b, room) : f->content_h;
+}
+
+// CSS 2.1 § 10.3.7 across and § 10.6.4 down, which are the same equation
+// — inset + margin + frame + size + margin + inset = the containing block
+// — with the same cases: the size given or auto (-1), `stat` the static
+// position's offset from the containing block's start. Answers the border
+// edge's offset from that start, and the used size and start margin.
+static int64_t solve_axis(Axis ax, int64_t stat, int64_t frame, int64_t size, const Fit *fit,
+                          bool across, int64_t *size_out, int64_t *m0_out)
+{
+    int64_t in0 = ax.in0, in1 = ax.in1, m0 = ax.m0, m1 = ax.m1;
+    if (ax.auto0 && ax.auto1 && size < 0) {
+        // All three auto: from the static position, as big as it fits.
+        in0 = stat;
+        size = fit_size(fit, across, ax.cb - in0 - m0 - m1 - frame);
+    } else if (!ax.auto0 && !ax.auto1 && size >= 0) {
+        // None auto: auto margins share what is left — across, a start
+        // margin never below zero; over-constrained, the end inset gives.
+        int64_t rem = ax.cb - in0 - in1 - m0 - m1 - frame - size;
+        if (ax.mauto0 && ax.mauto1) {
+            m0 = across && rem < 0 ? 0 : rem / 2;
+            m1 = rem - m0;
+        } else if (ax.mauto0) {
+            m0 = rem;
+        } else if (ax.mauto1) {
+            m1 = rem;
+        }
+    } else if (ax.auto0 && size < 0) {
+        size = fit_size(fit, across, ax.cb - in1 - m0 - m1 - frame);
+        in0 = ax.cb - in1 - m1 - frame - size - m0;
+    } else if (ax.auto0 && ax.auto1) {
+        in0 = stat;
+    } else if (size < 0 && ax.auto1) {
+        size = fit_size(fit, across, ax.cb - in0 - m0 - m1 - frame);
+    } else if (ax.auto0) {
+        in0 = ax.cb - in1 - m1 - frame - size - m0;
+    } else if (size < 0) {
+        size = max64(0, ax.cb - in0 - in1 - m0 - m1 - frame);
+    }
+    *size_out = size;
+    *m0_out = m0;
+    return in0 + m0;
+}
+
+static Axis axis_of(const flow_style_t *s, int side0, int side1, int64_t cb, int64_t pct_base)
+{
+    Axis ax = {.cb = cb};
+    ax.auto0 = s->inset[side0].kind == FLOW_LENGTH_AUTO;
+    ax.auto1 = s->inset[side1].kind == FLOW_LENGTH_AUTO;
+    ax.in0 = len(s->inset[side0], cb);
+    ax.in1 = len(s->inset[side1], cb);
+    ax.mauto0 = s->margin[side0].kind == FLOW_LENGTH_AUTO;
+    ax.mauto1 = s->margin[side1].kind == FLOW_LENGTH_AUTO;
+    // Every margin's percentage is of the containing block's WIDTH.
+    ax.m0 = len(s->margin[side0], pct_base);
+    ax.m1 = len(s->margin[side1], pct_base);
+    return ax;
+}
+
+// A table is laid out as the flow would lay it out in the room its insets
+// leave, then moved to where they put it; its captions move with it.
+static void absolute_table(L *l, const FStyles *styles, FBox *t, Rect cb, int64_t sx, int64_t sy)
+{
+    const flow_style_t *s = t->style;
+    Axis h = axis_of(s, FLOW_LEFT, FLOW_RIGHT, cb.w, cb.w);
+    Axis v = axis_of(s, FLOW_TOP, FLOW_BOTTOM, cb.h, cb.w);
+    int64_t room = max64(0, cb.w - (h.auto0 ? 0 : h.in0) - (h.auto1 ? 0 : h.in1));
+    Cursor c = {0, kNoMargins, -1};
+    table(l, styles, t, 0, room, &c);
+    if (l->failed)
+        return;
+    // table() gave it its left margin inside the room: t->x.
+    int64_t x = !h.auto0 ? cb.x + h.in0 + t->x
+              : !h.auto1 ? cb.x + cb.w - h.in1 - h.m1 - t->w
+              : sx + h.m0;
+    int64_t y = !v.auto0 ? cb.y + v.in0 + v.m0
+              : !v.auto1 ? cb.y + cb.h - v.in1 - v.m1 - t->h
+              : sy + v.m0;
+    translate(t, x - t->x, y - t->y);
+}
+
+// An absolute box against its containing block's padding box `cb`: the
+// width first (§ 10.3.8 for a replaced box, whose width is its own), held
+// to its limits and solved again with the one it is held to (§ 10.4); the
+// height when nothing about it waits on the content; then the box laid
+// out at that width; then the vertical equation with the height it came to.
+// A box with no static position — its line was dropped — is not placed.
+static void absolute(L *l, const FStyles *styles, FBox *a, Rect cb)
+{
+    int64_t sx, sy;
+    if (a->place != NULL) {
+        sx = a->place->x;
+        sy = a->place->y;
+    } else if (a->static_known) {
+        sx = a->x;
+        sy = a->y;
+    } else {
+        return;
+    }
+    if (a->kind == FB_TABLE) {
+        absolute_table(l, styles, a, cb, sx, sy);
+        return;
+    }
+    const flow_style_t *s = a->style;
+    Axis h = axis_of(s, FLOW_LEFT, FLOW_RIGHT, cb.w, cb.w);
+    Axis v = axis_of(s, FLOW_TOP, FLOW_BOTTOM, cb.h, cb.w);
+    int64_t hf = hframe(a, cb.w), vf = vframe(a, cb.w);
+    Fit fit = {l, a, 0};
+    bool replaced = a->kind == FB_REPLACED;
+    Replaced rep = {0, 0, false, false};
+    int64_t w = -1, hgt = -1;
+    if (replaced) {
+        rep = replaced_size(l, a->node, s, cb.w);
+        w = rep.w;
+        hgt = rep.h;
+    } else if (width_given(s)) {
+        w = content_of(s, s->width, cb.w, hf);
+    } else if (s->width.kind == FLOW_LENGTH_FIT_CONTENT) {
+        w = shrink_to_fit(l, a, cb.w - (h.auto0 ? 0 : h.in0) - (h.auto1 ? 0 : h.in1) - h.m0 -
+                                    h.m1 - hf);
+    }
+    int64_t used_w, ml;
+    int64_t x = solve_axis(h, sx - cb.x, hf, w, &fit, true, &used_w, &ml);
+    if (!replaced) {
+        int64_t held = clamp_width(s, used_w, cb.w, hf);
+        if (held != used_w)
+            x = solve_axis(h, sx - cb.x, hf, held, &fit, true, &used_w, &ml);
+        // A percentage height resolves here: the containing block's is known.
+        if (s->height.kind == FLOW_LENGTH_PX || s->height.kind == FLOW_LENGTH_PERCENT)
+            hgt = content_of(s, s->height, cb.h, vf);
+        else if (!v.auto0 && !v.auto1)
+            hgt = max64(0, cb.h - v.in0 - v.in1 - v.m0 - v.m1 - vf);
+        if (hgt >= 0) {
+            hgt = clamp_height(s, hgt, vf);
+            a->abs_h_set = true;
+            a->abs_h = hgt;
+        }
+        a->abs_w = used_w;
+    }
+    a->abs_sized = true;
+    a->abs_ml = ml;
+    Cursor c = {0, kNoMargins, -1};
+    block(l, styles, a, cb.x + x - ml, cb.w, &c);
+    if (l->failed || !a->placed)
+        return;
+    fit.content_h = a->h - vf;
+    int64_t used_h, mt;
+    int64_t y = solve_axis(v, sy - cb.y, vf, hgt >= 0 ? a->h - vf : -1, &fit, false, &used_h, &mt);
+    translate(a, 0, cb.y + y - a->y);
+}
+
+// The absolute boxes filed under one containing block, in tree order. ALL
+// OR NOTHING: one whose layout stops is not placed, and its containing
+// block — `owner`, the box whose work just finished — is not finished.
+static void absolutes(L *l, const FStyles *styles, FPos *first, Rect cb, FBox *owner)
+{
+    for (FPos *a = first; a != NULL && !l->failed; a = a->abs_next) {
+        absolute(l, styles, a->box, cb);
+        if (l->failed) {
+            unplace(a->box);
+            owner->unfinished = true;
+        }
+    }
+}
+
+// A box's own work is done, so what it is the containing block of can be
+// laid out: the absolute boxes of the positioned inlines whose pieces are
+// all in it, then its own. A relative CELL, which its table placed, then
+// moves with all of that inside it; any other relative box was laid out
+// where it moved to (block). `cbw` is its containing block's width, what
+// a percentage offset is of.
+static void positioned_done(L *l, const FStyles *styles, FBox *b, int64_t cbw)
+{
+    for (FPos *p = b->homed; p != NULL && !l->failed; p = p->home_next)
+        absolutes(l, styles, p->abs_first, inline_rect(p), b);
+    if (b->pos != NULL && !l->failed)
+        absolutes(l, styles, b->pos->abs_first, padding_rect(b), b);
+    if (b->kind == FB_CELL && b->positioned && !l->failed) {
+        int64_t dx, dy;
+        rel_offset(b->style, cbw, definite_height(b->parent), &dx, &dy);
+        translate(b, dx, dy);
+    }
 }
 
 // ── Tables (CSS 2.1 §17.5, the automatic layout of §17.5.2.2) ────────────
@@ -2057,6 +2499,8 @@ static Intr intrinsic(L *l, FBox *b)
             r = ifc_intrinsic(l, b);
         } else {
             for (FBox *c = b->first; c != NULL && !l->failed; c = c->next) {
+                if (c->out_of_flow)
+                    continue;
                 Intr ci = intrinsic(l, c);
                 int64_t m = len(c->style->margin[FLOW_LEFT], 0) + len(c->style->margin[FLOW_RIGHT], 0);
                 r.min = max64(r.min, ci.min + m);
@@ -2792,6 +3236,8 @@ static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw
     } else {
         table_body(l, styles, t, cbx, cbw, cur);
         if (!l->failed)
+            positioned_done(l, styles, t, cbw);
+        if (!l->failed)
             return;
     }
     for (FBox *c = t->first; c != NULL; c = c->next)
@@ -2883,7 +3329,7 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
     int64_t margins = (s->margin[FLOW_LEFT].kind == FLOW_LENGTH_AUTO ? 0 : len(s->margin[FLOW_LEFT], cbw)) +
                       (s->margin[FLOW_RIGHT].kind == FLOW_LENGTH_AUTO ? 0 : len(s->margin[FLOW_RIGHT], cbw));
     int64_t used;
-    if (s->width.kind != FLOW_LENGTH_AUTO)
+    if (width_given(s))
         used = max64(len(s->width, cbw), tmin);
     else
         used = max64(tmin, tmax < cbw - margins ? tmax : cbw - margins);
@@ -3072,6 +3518,10 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
             base[i] += shift;
         }
     }
+    // A cell is finished once its row has stretched it and valign has
+    // placed its content: only now is it a containing block's final rect.
+    for (int32_t i = 0; i < g.ncells && !l->failed; i++)
+        positioned_done(l, styles, g.cells[i].cell, inner_w);
     // Each row's baseline, for a table this one is nested in: the one its
     // baseline cells share, else its first cell's where valign put it, else
     // (no cells) its bottom.
@@ -3185,7 +3635,8 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
 // ── The layout ──────────────────────────────────────────────────────────
 
 // What is not placed is not on the page — a failed table's unplaced cells
-// keep their lines, and those reach no edge.
+// keep their lines, and those reach no edge. A positioned child is not
+// reached through its parent: its edges are the list's (page_extent).
 static int64_t right_edge(const FBox *b)
 {
     if (!b->placed)
@@ -3203,7 +3654,8 @@ static int64_t right_edge(const FBox *b)
                 r = max64(r, right_edge(fr->item->content));
         }
     for (const FBox *c = b->first; c != NULL; c = c->next)
-        r = max64(r, right_edge(c));
+        if (!c->positioned)
+            r = max64(r, right_edge(c));
     return r;
 }
 
@@ -3223,8 +3675,51 @@ static int64_t bottom_edge(const FBox *b)
                 r = max64(r, bottom_edge(fr->item->content));
         }
     for (const FBox *c = b->first; c != NULL; c = c->next)
-        r = max64(r, bottom_edge(c));
+        if (!c->positioned)
+            r = max64(r, bottom_edge(c));
     return r;
+}
+
+// What clips a box: its tree parent in the flow, its containing block out
+// of it — an inline one's home, since an inline clips nothing — and NULL at
+// the initial containing block or the root (POSITION.md: clips follow
+// containing blocks).
+static const FBox *clip_parent(const FBox *b)
+{
+    if (!b->out_of_flow)
+        return b->parent;
+    const FPos *cb = b->pos != NULL ? b->pos->cb : NULL;
+    return cb == NULL ? NULL : cb->kind == FP_BOX ? cb->box : cb->home;
+}
+
+// The page's extent takes each positioned box's far edges as it takes any
+// box's — cut where a box on its clip chain cuts it, as right_edge and
+// bottom_edge are — and never anything left of or above the origin, which
+// is drawn where it reaches the glass and cannot be scrolled to
+// (POSITION.md, ruling 2). Found by walking the boxes, an inline-block's
+// content included, and not the entries: a build that stopped can leave a
+// positioned box without one.
+static void page_extent(const FBox *b, int64_t *width, int64_t *height)
+{
+    if (!b->placed)
+        return;
+    if (b->positioned) {
+        int64_t r = right_edge(b), bottom = bottom_edge(b);
+        for (const FBox *c = clip_parent(b); c != NULL; c = clip_parent(c)) {
+            if (f_overflow_clips(c->style->overflow_x))
+                r = min64(r, c->x + c->w);
+            if (f_overflow_clips(c->style->overflow_y))
+                bottom = min64(bottom, c->y + c->h);
+        }
+        *width = max64(*width, r);
+        *height = max64(*height, bottom);
+    }
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next)
+            if (fr->kind == FF_ATOMIC && fr->item->content != NULL)
+                page_extent(fr->item->content, width, height);
+    for (const FBox *c = b->first; c != NULL; c = c->next)
+        page_extent(c, width, height);
 }
 
 FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
@@ -3255,7 +3750,15 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
         // tall as what it placed.
         out->height = l.failed ? bottom_edge(boxes->root)
                                : max64(cur.y + margins_sum(cur.pm), bottom_edge(boxes->root));
+        // The initial containing block is the viewport, as tall as the
+        // window (CSS 2.1 § 10.1) — or, with no window height known, the
+        // page — and the root is its owner when one of its boxes stops.
+        if (!l.failed) {
+            int64_t vh = env->viewport_height > 0 ? (int64_t)env->viewport_height * 64 : out->height;
+            absolutes(&l, boxes->styles, boxes->icb_first, (Rect){0, 0, w, vh}, boxes->root);
+        }
         out->width = max64(w, right_edge(boxes->root));
+        page_extent(boxes->root, &out->width, &out->height);
     }
     return out;
 }

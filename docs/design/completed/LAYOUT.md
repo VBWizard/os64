@@ -124,9 +124,11 @@ walk. The first is the box's own border rect. The second is its
 content is ALLOWED to overflow here in three named places (a set height
 smaller than its content, a table that will not squash a word below its
 min-content width, a word wider than its line) and a walk that pruned on
-the own rect would skip visible children in all three. Pruning, hit-
-testing and the harness's containment invariant all use the overflow
-rect. Boxes are:
+the own rect would skip visible children in all three. A POSITIONED
+descendant is the exception: it is reached from the positioned list, not
+through its tree ancestors, so their overflow rects leave its subtree out
+and its own rect covers it (POSITION.md). Pruning, hit-testing and the
+harness's containment invariant all use the overflow rect. Boxes are:
 
 - **Block containers** (`p`, `div`, `li`, a cell's content, the body…),
   holding either block children or line boxes, never both — CSS 2.1
@@ -148,12 +150,12 @@ rect. Boxes are:
   the counter is not the page's data.
 
 Plus four facts about the whole: the page height, the page WIDTH (the
-root's overflow width, which exceeds the width passed in exactly when a
-table or an unbreakable word overflowed — the number a horizontal
-scrollbar is sized from), `incomplete` (memory, the arena budget, the
-depth bound or a run limit stopped it partway — what is there is real),
-and the image and control boxes as lists so the face can place pictures
-and widgets without walking.
+root's overflow width, which exceeds the width passed in when a table or
+an unbreakable word overflowed or a positioned box reaches past it — the
+number a horizontal scrollbar is sized from), `incomplete` (memory, the
+arena budget, the depth bound or a run limit stopped it partway — what
+is there is real), and the image and control boxes as lists so the face
+can place pictures and widgets without walking.
 
 ## The three passes
 
@@ -211,8 +213,9 @@ row's alignment was never set, rows and cells taking `vertical-align` from
 their group), `hr` (gray, a 1px inset border all round, `0.5em auto`
 margins), `fieldset` and `legend`, `iframe`'s 2px inset border, form
 controls as inline-blocks, `details` (the first `summary` is the
-disclosure; the rest of a closed one is not drawn), an open `dialog` laid
-out where it stands (positioning is booked), and a `form` the parser left
+disclosure; the rest of a closed one is not drawn), an open `dialog`
+positioned as the chapter says — absolute, centred between its containing
+block's sides and sized to fit (POSITION.md) — and a `form` the parser left
 inside table structure displayed `none`. `wbr` is a break opportunity and
 nothing else; pass 3 reads it as the one element boundary that IS a break.
 `noscript` is SHOWN — the chapter hides it only when scripting is on.
@@ -605,9 +608,10 @@ first line's baseline; `list-style: none` (a `menu` in a nav) draws none.
 **What is not laid out in the first cut, by name, and how the tree
 degrades honestly:** `float` and `clear` are recorded and ignored, so an
 `<img align=left>` sits inline at its baseline and the text runs after it
-rather than beside it — the page still reads, in order; `position`,
-`z-index` and `inline-table` are not laid out, and `overflow` only
-clips (GARB.md §
+rather than beside it — the page still reads, in order; `position` is
+laid out as POSITION.md's slices land it (relative and absolute; fixed
+and sticky as relative, and every `z-index` as auto, until theirs),
+`inline-table` is not laid out, and `overflow` only clips (GARB.md §
 Booked says what the cascade does with each). Each is a row in the booked
 table.
 
@@ -664,8 +668,10 @@ not scale with size, which a layout test needs it to.
 `userland/libflow/include/flow/flow.h` is the door, and its comments are
 its contract; this is what it offers and why.
 
-- **`flow_layout(doc, model, width, env)`** — NULL on no memory only;
-  otherwise a tree whose `flow_incomplete` says whether it is whole. Every
+- **`flow_layout(doc, model, width, env)`** — NULL on no memory, on
+  missing inputs, or on a cascade judged at another viewport height than
+  the one handed in (POSITION.md); otherwise a tree whose
+  `flow_incomplete` says whether it is whole. Every
   call is a whole rebuild (ruling 2): the face calls it on load, on
   resize, when an image's size arrives, when a control is edited in a way
   that changes its size, and never more than once per frame. `flow_env_t`
@@ -673,16 +679,23 @@ its contract; this is what it offers and why.
   replaced-size oracle, the text context, `medium`, the default generic
   and the three colours the dumps name and never print.
 - **`flow_root` and `flow_visit(tree, viewport, fn, ctx)`** — the tree for
-  painting, walked in Appendix E's order without z-index or positioning:
-  the block-level boxes first (backgrounds and borders), then the inline
-  content, a span before the text it sits behind, an atom's own content
-  where the atom is. The walk prunes on each box's OVERFLOW rect, never
-  its own, so a child hanging out of a too-short parent is still visited
-  and painting the viewport costs the boxes it shows.
+  painting, walked in Appendix E's order with every `z-index` read as
+  auto: the block-level boxes first (backgrounds and borders), then the
+  inline content, a span before the text it sits behind, an atom's own
+  content where the atom is — the ordinary tree with its positioned boxes
+  skipped, then each positioned box, in list order, the same two walks
+  over its own subtree (POSITION.md). Nothing of an `opacity: 0` box is
+  handed over (`flow_box_t.unpainted`). The walk prunes on each box's
+  OVERFLOW rect, never its own, so a child hanging out of a too-short
+  parent is still visited and painting the viewport costs the boxes it
+  shows.
 - **`flow_hit(tree, x, y)`** — the box whose OWN rect holds the point,
   searched through overflow rects, the last one painted winning (the one
-  on top). The face then asks libpage what its node MEANS and a TEXT's run
-  where in the text the pointer is (`os64_text_hit`).
+  on top): the positioned list backwards, then the ordinary tree. The face
+  then asks libpage what its node MEANS and a TEXT's run where in the text
+  the pointer is (`os64_text_hit`). `flow_hit_in_flow` asks everything in
+  the flow, relative boxes included and absolute ones not, which is what a
+  scroll position is anchored to.
 - **`flow_box_for(tree, node)`** — a node's first box: where a fragment
   link scrolls to, where a control's widget goes. NULL for a node with
   none (hidden, `display: none`, or past where an incomplete layout
@@ -802,7 +815,10 @@ LIBPAGE.md's rule restated for geometry:
   as a block level's stack — an element level, each part a table adds
   (row group, row), anonymous ones included, and an inline-block's
   content TWICE, since a level of it holds a line's frame as well as a
-  block's — and at `F_DEPTH_MAX` (512) it stops exactly as it does when
+  block's, and an absolute box's level TWICE, since it is laid out from
+  inside its containing block's frame with the positioned layout's frames
+  on top of a block's (POSITION.md) — and at `F_DEPTH_MAX` (512) it stops
+  exactly as it does when
   memory runs out: the tree is `incomplete`, and what it holds is a
   prefix of the whole build. libhtml refuses past its own limit the same
   way, rather than flattening. Every pass after the build recurses along
@@ -812,9 +828,12 @@ LIBPAGE.md's rule restated for geometry:
   shipped `-O2` with the whole stack's slices in, a block chain 512
   deep and a table nest at the bound lay out in under 448KB, and a
   chain of inline-blocks, which needed 640-768KB before it was charged
-  double, now stops at half the depth; a thread has 1MB. The host suite
-  lays out pages nested to and past the bound, both kinds, and asserts
-  where each stops.
+  double, now stops at half the depth — as does a chain of absolute
+  boxes (1472 bytes a level by the shipped frames, against a block's 704),
+  which needed 668KB in the host's -O2 build before it was charged double;
+  every positioned chain, absolute, relative or both, now lays out in
+  under 448KB too; a thread has 1MB. The host suite lays out pages nested
+  to and past the bound, all three kinds, and asserts where each stops.
 - **Nothing blocks and nothing is cached across calls.** Every layout is
   from scratch; the face owns the pacing.
 - **The run cap** (1 MiB per run) is honoured by windowing a long text
@@ -911,7 +930,11 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
   is an ancestor of the last box; (d) nothing that was not placed reaches
   the page's edges — a partial page is no taller or wider than what it
   holds. Heights and table widths of unfinished ancestors, and the
-  geometry under an unfinished line, are not compared. Beside the four,
+  geometry under an unfinished line, are not compared. (a) and (c) are
+  asserted over the IN-FLOW tree: an out-of-flow box is all or nothing,
+  laid out once its containing block is finished, so a partial tree can
+  hold boxes after where one of those would be; a placed one is held to
+  (b), and every box to (d) (POSITION.md § Proof). Beside the four,
   a partial page is as tall as the blocks it holds, so what did lay out
   can be scrolled to. What makes it all hold: pass 2
   marks the box it was filling when it stopped and every box above it;
@@ -929,11 +952,17 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
   for one page's Kth of N shares, because the whole run is hours in one
   process; the default run samples it): every corpus page truncated at every 64 bytes and 400
   tag-soup mutations of each, laid out at 800, 200 and 0 under ASan,
-  asserting the invariants of a box tree — the layout is whole; every
-  child's overflow rect inside its parent's OVERFLOW rect (not its own
-  rect, which content may legitimately exceed); every rect non-negative;
-  every text fragment's byte range within its node's text; every
-  memoized width COMPUTED at most once per box. The span clamps are
+  asserting the invariants of a box tree — the layout is whole; what
+  every in-flow child DRAWS (its overflow rect met with its clip) inside
+  its parent's OVERFLOW rect (not its own rect, which content may
+  legitimately exceed), and each positioned box's subtree inside its own;
+  every SIZE non-negative, origins free to be negative anywhere (a
+  negative margin, `left: -9999px`); the positioned list every positioned
+  box once, in tree order; every text fragment's byte range within its
+  node's text; every memoized width COMPUTED at most once per box. Each
+  page is laid out through a cascade of its own sheets and of the
+  positioned elements, their styles drawn at random, that one kind of
+  mutation writes (POSITION.md § Proof). The span clamps are
   proved by the table cases, which lay out a page of spanning cells at
   the limits.
 - **The corpus dumps**: `--write-corpus` writes `<page>.boxes` (800) and
@@ -949,7 +978,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Floats and `clear` (`align=left/right` on `img`/`table`, `<br clear>`) | the float rules (§9.5) are a second placement pass with their own line-box shortening; the struct records them so the cascade and the first cut agree on the field | the first page whose layout is unreadable without a float — image-beside-text pages of the old web will vote early |
-| `position`, `z-index`, `inline-table`; scrolling | none can arise from the first producer; from the cascade, `inline-table` is laid out as a table, `position` and `z-index` are not read into the struct, and `overflow: scroll`/`auto` draw what they would scroll, since nothing scrolls | pile 2 (GARB.md) |
+| `fixed`, `sticky`, `z-index`, `inline-table`; scrolling | relative and absolute are laid out (POSITION.md P1); fixed and sticky are laid out as relative and `z-index` in tree order until their slices; from the cascade, `inline-table` is laid out as a table, and `overflow: scroll`/`auto` draw what they would scroll, since nothing scrolls | POSITION.md's P2–P4; pile 2 (GARB.md) |
 | Collapsing borders (§17.6.2) | a table with `rules` or `frame` records `border-collapse: collapse`; it is laid out with no spacing and its borders drawn separately | the first ruled table that reads wrong for it |
 | A range-draw on a measuring run (F2 ask) | halves layout work and run memory; works without it | a page whose layout time is visible, measured, or a page that hits the memory cap through runs |
 | Incremental relayout | ruling 2 says rebuild; the face paces it | the engine, or a page whose rebuild is visibly slow |
@@ -961,7 +990,6 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | `marquee` | the Rendering chapter has it; it is a timer in a face. Its `overflow: hidden !important` is not given either: a still marquee's text runs past its box, and clipping it would hide that text; its baseline is its bottom edge regardless (layout.c asks the tag) | a page whose meaning scrolls, which is none |
 | A `legend` drawn on its `fieldset`'s border | not CSS 2.1's model; laid out inside the fieldset, first, where it still reads | a form page where it misleads |
 | Ruby annotations | CSS 2.1 has no ruby; `rt` is laid out inline after its base, `rp` hidden | a page in a script that uses it |
-| `dialog` and `popover` positioning | an open dialog is laid out where it stands (the `position` row) | the `position` row |
 | Dotted underlines (`abbr[title]`) | drawn as a plain underline; the line's style is a cascade property | the cascade |
 | `iframe` content | a document inside a document is a second fetch and a second tree; drawn as a link to its `src`, `wend`'s frame rule | a page whose meaning is in the frame |
 | `object`/`embed`/`video`/`audio`/`canvas` | nothing plays or scripts them; fallback content is shown | media, after JS |

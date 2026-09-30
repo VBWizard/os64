@@ -20,6 +20,34 @@ static inline bool f_ws_wraps(flow_white_space_t ws)
     return ws == FLOW_WS_NORMAL || ws == FLOW_WS_PRE_WRAP || ws == FLOW_WS_PRE_LINE;
 }
 
+// Positioning's two questions (POSITION.md), answered in one place so the
+// three passes agree. Out of flow: no formatting context holds the box,
+// and it is laid out against its containing block once that is finished —
+// an absolute box; a fixed one is laid out as relative until its slice.
+static inline bool f_out_of_flow(const flow_style_t *s)
+{
+    return s->position == FLOW_POSITION_ABSOLUTE;
+}
+
+// A containing block for the absolute boxes inside it: an element whose
+// position is not static and that makes a box of its own. A table's rows,
+// row groups and columns are not (`position: relative` on them is booked),
+// and neither is anything `display: contents` or `none` makes no box for.
+static inline bool f_contains_absolute(const flow_style_t *s)
+{
+    if (s->position == FLOW_POSITION_STATIC)
+        return false;
+    switch (s->display) {
+    case FLOW_DISPLAY_CONTENTS: case FLOW_DISPLAY_NONE:
+    case FLOW_DISPLAY_TABLE_ROW_GROUP: case FLOW_DISPLAY_TABLE_HEADER_GROUP:
+    case FLOW_DISPLAY_TABLE_FOOTER_GROUP: case FLOW_DISPLAY_TABLE_ROW:
+    case FLOW_DISPLAY_TABLE_COLUMN_GROUP: case FLOW_DISPLAY_TABLE_COLUMN:
+        return false;
+    default:
+        return true;
+    }
+}
+
 // ── Storage ─────────────────────────────────────────────────────────────
 //
 // Everything a layout builds lives until the layout is freed and is never
@@ -133,6 +161,15 @@ typedef struct {
     // the parentheses a browser that lays out no ruby adds. Set by the
     // child, and read by pass 2 once every child has been styled.
     bool has_rp;
+    // The element whose box is the containing block of an absolute box
+    // inside this one: this element when it can be one
+    // (f_contains_absolute), else its parent's answer; NULL for the initial
+    // containing block. An absolute element's own containing block is its
+    // PARENT's anchor.
+    const os64_html_node_t *anchor;
+    // `opacity: 0` on this element or an ancestor: nothing of it is painted
+    // (flow_box_t.unpainted).
+    bool transparent;
 } FStyled;
 
 typedef struct {
@@ -204,6 +241,10 @@ typedef enum {
     FI_BREAK,           // `br`, or a preserved newline
     FI_WBR,             // a break opportunity and nothing else
     FI_MARKER,          // a list marker drawn inside
+    // Where an absolute box was written among inline content: nothing on
+    // the line — no width, no height, no break opportunity — but the point
+    // its static position is read from once the line is placed.
+    FI_PLACEHOLDER,
 } f_item_kind_t;
 
 // What an overflow value does, asked in one place (CSS Overflow 3 § 3):
@@ -225,6 +266,8 @@ static inline bool f_overflow_scrolls(flow_overflow_t o)
 typedef struct FBox FBox;
 typedef struct FLine FLine;
 typedef struct FFrag FFrag;
+typedef struct FSpan FSpan;
+typedef struct FPos FPos;
 
 // One record per inline element, shared by every piece a block splits it
 // into, so a face paints a split `<a>` as one link.
@@ -234,6 +277,12 @@ typedef struct {
     int32_t link;                   // libpage's index, or -1
     int32_t pieces;                 // how many OPENs have been emitted
     FBox *open_in;                  // the context its current piece is open in
+    // A positioned inline's entry (pass 2); and in pass 3 its first and last
+    // pieces, whose padding boxes bound it as a containing block (CSS 2.1 §
+    // 10.1), and the relative offset its pieces and content move by.
+    FPos *pos;
+    FSpan *first_span, *last_span;
+    int64_t rel_x, rel_y;
 } FInline;
 
 typedef struct FItem FItem;
@@ -255,6 +304,7 @@ struct FItem {
     bool continuation;              // OPEN: an earlier piece exists; CLOSE: a block split it here
     FInline *inl;                   // OPEN, CLOSE
     FBox *content;                  // ATOMIC: an inline-block's own block; NULL when replaced
+    FBox *absolute;                 // PLACEHOLDER: the out-of-flow box it holds the place of
     int32_t link, control;          // ATOMIC: libpage's indexes, or -1
 };
 
@@ -263,9 +313,23 @@ struct FBox {
     const os64_html_node_t *node;
     const flow_style_t *style;
     FBox *parent, *first, *last, *next;
-    // A block container either has block children or is an inline
-    // formatting context with items — never both.
+    // A block container either has in-flow block children or is an inline
+    // formatting context with items — never both. Out-of-flow children may
+    // hang under either kind.
     bool ifc;
+    // POSITION.md. `positioned`: a block-level box whose position is not
+    // static — but a table's row, group or column, laid out static (booked)
+    // — reached from the positioned list and skipped by every walk of its
+    // tree ancestors. `out_of_flow`: an absolute one, which no formatting
+    // context holds — laid out once its containing block is finished.
+    // `pos`: its entry, which every box that is a containing block has: the
+    // positioned ones, and a positioned inline-block's content or root,
+    // which are not `positioned`.
+    bool positioned, out_of_flow;
+    FPos *pos;
+    // The positioned inlines whose pieces are all laid out inside this box,
+    // which is finished only once all of them are (FPos.home).
+    FPos *homed;
     FItem *items, *last_item;
     int32_t nitems;
     bool collapse_space;            // build time: the last text ended in a collapsible space
@@ -304,12 +368,48 @@ struct FBox {
     bool intrinsic_known;
     int64_t intrinsic_min, intrinsic_max;
     uint32_t intrinsic_computed;    // how often; the fuzz asserts at most once
+    // An out-of-flow box's static position (CSS 2.1 § 10.3.7): among
+    // blocks, `static_known` says x and y hold it until the box is laid
+    // out; among inline content it is the placeholder `place` on a line.
+    // Either moves with whatever moves what holds it. Then the width and
+    // left margin its equations gave it, and the content height when they
+    // gave one, which block() takes as given.
+    bool static_known;
+    FFrag *place;
+    bool abs_sized, abs_h_set;
+    int64_t abs_w, abs_ml, abs_h;
+};
+
+// One element that is a containing block (f_contains_absolute; POSITION.md):
+// a box, or an inline element whose pieces are spread over lines.
+typedef enum { FP_BOX = 0, FP_INLINE } f_pos_kind_t;
+
+struct FPos {
+    FPos *next;                     // every entry, in tree order
+    f_pos_kind_t kind;
+    const os64_html_node_t *node;
+    const flow_style_t *style;
+    FBox *box;                      // BOX
+    FInline *inl;                   // INLINE
+    // INLINE: the block container its pieces are all laid out in, finished
+    // only once all of them are; and the next inline entry homed there.
+    FBox *home;
+    FPos *home_next;
+    // An out-of-flow box's containing block, NULL for the initial one.
+    FPos *cb;
+    // The out-of-flow boxes this entry is the containing block of, in tree
+    // order; and the next in its containing block's.
+    FPos *abs_first, *abs_last, *abs_next;
 };
 
 typedef struct {
     FArena arena;
     const FStyles *styles;          // what the boxes' styles came from
     FBox *root;
+    // Every containing block's entry, in tree order; and the out-of-flow
+    // boxes of the initial containing block.
+    FPos *positioned, *last_positioned;
+    FPos *icb_first, *icb_last;
     // Memory or the arena's budget ran out partway, or the page nests past
     // F_DEPTH_MAX: every box and item present is real, and the build
     // stopped at the first thing it could not make.
@@ -318,7 +418,7 @@ typedef struct {
 
 // ── Pass 3: lines and fragments (layout.c) ──────────────────────────────
 
-typedef enum { FF_TEXT = 0, FF_ATOMIC, FF_MARKER } f_frag_kind_t;
+typedef enum { FF_TEXT = 0, FF_ATOMIC, FF_MARKER, FF_PLACEHOLDER } f_frag_kind_t;
 
 // What one line holds: a text fragment is one run of the text engine; an
 // atomic fragment is a replaced box or an inline-block; a marker fragment
@@ -338,15 +438,18 @@ struct FFrag {
     uint8_t decoration;             // FLOW_DECORATION_* drawn across it
     FDecorationColors decoration_colors;
     int32_t link;                   // the link it sits in, or -1
+    // The relative offset it moves by once its line is placed: a relative
+    // atom's own, and every relative inline's open round it.
+    int64_t rel_x, rel_y;
 };
 
 // One inline box's piece on one line: what a link's underline or a
 // background is drawn behind.
-typedef struct FSpan FSpan;
 struct FSpan {
     FSpan *next;
-    const FInline *inl;
+    FInline *inl;
     int64_t x0, x1, top, bottom;
+    int64_t rel_x, rel_y;           // as a fragment's
 };
 
 struct FLine {

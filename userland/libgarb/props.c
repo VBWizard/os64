@@ -73,6 +73,14 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_CLEAR] = {"clear", false},
     [GARB_OVERFLOW_X] = {"overflow-x", false},
     [GARB_OVERFLOW_Y] = {"overflow-y", false},
+    [GARB_POSITION] = {"position", false},
+    [GARB_TOP] = {"top", false},
+    [GARB_RIGHT] = {"right", false},
+    [GARB_BOTTOM] = {"bottom", false},
+    [GARB_LEFT] = {"left", false},
+    [GARB_Z_INDEX] = {"z-index", false},
+    [GARB_OPACITY] = {"opacity", false},
+    [GARB_POINTER_EVENTS] = {"pointer-events", true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -93,25 +101,48 @@ static const char *const kDisplay[] = {
     "table-row-group", "table-header-group", "table-footer-group", "table-row",
     "table-column-group", "table-column", "table-cell", "table-caption", "contents",
     "flow-root", "flex", "inline-flex", "grid", "inline-grid", NULL};
-// Display values this grammar reads but no slice lays out as written yet
-// (GARB.md's pile 2): a flex or grid container is laid out as the block or
-// inline-block it is on the outside, and flow-root as a block, which keeps
-// a page's `display: inline-block; display: inline-flex` fallback pattern
-// working. Read, so the cascade keeps them; not SUPPORTED, so @supports
-// tells a page to use the fallback it wrote for exactly this. `contents`
-// is not here: libflow gives such an element no box and flows its
-// children into its parent, which is what it says. THE LIST IS EVERY
-// APPROXIMATION, of any property: whatever libflow lays out as something
-// other than what a value says joins it the day the mapping is written.
-static const char *const kDisplayApproximated[] = {"flex", "inline-flex", "grid", "inline-grid",
-                                                   "flow-root", NULL};
+// Values this grammar reads but no slice lays out as written yet (GARB.md's
+// pile 2, POSITION.md's slices). Read, so the cascade keeps them; not
+// SUPPORTED, so @supports tells a page to use the fallback it wrote for
+// exactly this. A flex or grid container is laid out as the block or
+// inline-block it is on the outside, and flow-root as a block, which keeps a
+// page's `display: inline-block; display: inline-flex` fallback pattern
+// working; a fixed or sticky box as a relative one; a `z-index` in tree
+// order; an opacity between none and all as all. `contents` is not here:
+// libflow gives such an element no box and flows its children into its
+// parent, which is what it says. The list is for the layouts a page writes
+// a fallback for — asks for one and is handed another — and each joins it
+// the day its mapping is written and leaves the day the slice that lays it
+// out lands.
+static const struct {
+    garb_prop_t prop;
+    const char *keyword;
+} kApproximated[] = {
+    {GARB_DISPLAY, "flex"}, {GARB_DISPLAY, "inline-flex"}, {GARB_DISPLAY, "grid"},
+    {GARB_DISPLAY, "inline-grid"}, {GARB_DISPLAY, "flow-root"},
+    {GARB_POSITION, "fixed"}, {GARB_POSITION, "sticky"},
+};
 
 bool garb_set_approximated(const garb_set_t *set)
 {
-    if (set->prop != GARB_DISPLAY || set->value.kind != GARB_V_KEYWORD)
+    const garb_val_t *v = &set->value;
+    if (v->kind == GARB_V_WIDE)
         return false;
-    for (int k = 0; kDisplayApproximated[k] != NULL; k++)
-        if (os64_streq(set->value.keyword, kDisplayApproximated[k]))
+    // Every integer: the stacking order is not laid out, only tree order.
+    if (set->prop == GARB_Z_INDEX)
+        return v->kind != GARB_V_KEYWORD;
+    // 0 is not painted and 1 is painted, both as they say; what is between
+    // needs a blend, and a calc() is not worked out here to know.
+    if (set->prop == GARB_OPACITY) {
+        double all = v->kind == GARB_V_PERCENTAGE ? 100 : 1;
+        return v->kind == GARB_V_CALC ||
+               ((v->kind == GARB_V_NUMBER || v->kind == GARB_V_PERCENTAGE) && v->number > 0 &&
+                v->number < all);
+    }
+    if (v->kind != GARB_V_KEYWORD)
+        return false;
+    for (size_t k = 0; k < sizeof(kApproximated) / sizeof(kApproximated[0]); k++)
+        if (set->prop == kApproximated[k].prop && os64_streq(v->keyword, kApproximated[k].keyword))
             return true;
     return false;
 }
@@ -159,6 +190,12 @@ static const char *const kFloat[] = {"left", "right", "none", "inline-start", "i
 static const char *const kClear[] = {"none", "left", "right", "both", "inline-start",
                                      "inline-end", NULL};
 static const char *const kOverflow[] = {"visible", "hidden", "clip", "scroll", "auto", NULL};
+static const char *const kPosition[] = {"static", "relative", "absolute", "fixed", "sticky", NULL};
+// CSS UI 4 § 5.1 for HTML, and SVG 2's values, which an HTML box treats as
+// auto: read so a sheet written for both keeps its declaration.
+static const char *const kPointerEvents[] = {"auto", "none", "visiblepainted", "visiblefill",
+                                             "visiblestroke", "visible", "painted", "fill",
+                                             "stroke", "all", "bounding-box", NULL};
 static const char *const kRepeat[] = {"repeat-x", "repeat-y", NULL};
 static const char *const kRepeat2[] = {"repeat", "space", "round", "no-repeat", NULL};
 static const char *const kAttachment[] = {"scroll", "fixed", "local", NULL};
@@ -1066,6 +1103,8 @@ typedef enum {
     G_FAMILY, G_FONT_SIZE, G_FONT_WEIGHT, G_FONT_STYLE, G_LINE_HEIGHT,
     G_VALIGN, G_DECORATION_LINE, G_INDENT, G_LIST_TYPE, G_LIST_IMAGE, G_BG_IMAGE,
     G_BG_REPEAT, G_BG_POS_X, G_BG_POS_Y, G_SPACING,
+    G_Z_INDEX,              // auto | <integer>
+    G_ALPHA,                // <alpha-value>: a number or a percentage, clamped when computed
 } Grammar;
 
 typedef struct {
@@ -1105,6 +1144,14 @@ static const Longhand kLonghands[] = {
     {GARB_BORDER_COLLAPSE, G_KEYWORDS, kCollapse}, {GARB_CAPTION_SIDE, G_KEYWORDS, kCaption},
     {GARB_FLOAT, G_KEYWORDS, kFloat}, {GARB_CLEAR, G_KEYWORDS, kClear},
     {GARB_OVERFLOW_X, G_KEYWORDS, kOverflow}, {GARB_OVERFLOW_Y, G_KEYWORDS, kOverflow},
+    // Position 3 § 3.1. The insets are the margins' grammar exactly — auto
+    // or a length-percentage, negative allowed — and are on the Quirks
+    // standard's unitless-length list (§ 3.2) with them.
+    {GARB_POSITION, G_KEYWORDS, kPosition},
+    {GARB_TOP, G_MARGIN, NULL}, {GARB_RIGHT, G_MARGIN, NULL},
+    {GARB_BOTTOM, G_MARGIN, NULL}, {GARB_LEFT, G_MARGIN, NULL},
+    {GARB_Z_INDEX, G_Z_INDEX, NULL}, {GARB_OPACITY, G_ALPHA, NULL},
+    {GARB_POINTER_EVENTS, G_KEYWORDS, kPointerEvents},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -1216,6 +1263,26 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         out->nitems = 2;
         return out->items != NULL;
     }
+    case G_Z_INDEX: {
+        // CSS 2.1 § 9.9.1. An integer as written: `1.0` and `1e3` are
+        // numbers, not integers. A calc() that works out to one is not read.
+        if (vc_keyword(c, kAuto) != NULL) {
+            *out = kw("auto");
+            return true;
+        }
+        const garb_value_t *t = vc_peek(c);
+        if (t == NULL || t->kind != GARB_NUMBER || !t->integer)
+            return false;
+        c->i++;
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_NUMBER;
+        out->number = t->number;
+        return true;
+    }
+    case G_ALPHA:
+        // Color 4 § 4.2: outside 0 to 1 (or 0% to 100%) is not invalid,
+        // it is clamped when the value is computed.
+        return vc_dim(c, ACCEPT_NUMBER | ACCEPT_PERCENT, true, false, &s->a, out);
     }
     return false;
 }
@@ -1225,7 +1292,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
 typedef enum {
     SH_MARGIN, SH_PADDING, SH_BORDER, SH_BORDER_TOP, SH_BORDER_RIGHT, SH_BORDER_BOTTOM,
     SH_BORDER_LEFT, SH_BORDER_WIDTH, SH_BORDER_STYLE, SH_BORDER_COLOR, SH_BACKGROUND,
-    SH_BACKGROUND_POSITION, SH_FONT, SH_LIST_STYLE, SH_TEXT_DECORATION, SH_OVERFLOW,
+    SH_BACKGROUND_POSITION, SH_FONT, SH_LIST_STYLE, SH_TEXT_DECORATION, SH_OVERFLOW, SH_INSET,
 } Shorthand;
 
 static const struct { const char *name; Shorthand sh; } kShorthands[] = {
@@ -1236,7 +1303,7 @@ static const struct { const char *name; Shorthand sh; } kShorthands[] = {
     {"border-color", SH_BORDER_COLOR}, {"background", SH_BACKGROUND},
     {"background-position", SH_BACKGROUND_POSITION}, {"font", SH_FONT},
     {"list-style", SH_LIST_STYLE}, {"text-decoration", SH_TEXT_DECORATION},
-    {"overflow", SH_OVERFLOW},
+    {"overflow", SH_OVERFLOW}, {"inset", SH_INSET},
 };
 
 // The longhands a shorthand sets, for a CSS-wide keyword to reach them all.
@@ -1272,6 +1339,7 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
     case SH_LIST_STYLE: for (int k = 0; k < 3; k++) out[n++] = kList[k]; break;
     case SH_TEXT_DECORATION: out[n++] = GARB_TEXT_DECORATION_LINE; break;
     case SH_OVERFLOW: out[n++] = GARB_OVERFLOW_X; out[n++] = GARB_OVERFLOW_Y; break;
+    case SH_INSET: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_TOP + k); break;
     }
     return n;
 }
@@ -1284,6 +1352,8 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     switch (sh) {
     case SH_MARGIN: return box4(s, c, GARB_MARGIN_TOP, margin_one);
     case SH_PADDING: return box4(s, c, GARB_PADDING_TOP, padding_one);
+    // Position 3 § 3.1.1: the margin's one-to-four, top right bottom left.
+    case SH_INSET: return box4(s, c, GARB_TOP, margin_one);
     case SH_BORDER: return border_side(s, c, kAll, 4);
     case SH_BORDER_TOP: case SH_BORDER_RIGHT: case SH_BORDER_BOTTOM: case SH_BORDER_LEFT: {
         garb_prop_t side = (garb_prop_t)(sh - SH_BORDER_TOP);

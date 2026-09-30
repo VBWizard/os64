@@ -325,6 +325,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     garb_cascade_t *c = css ? garb_cascade(in, n, doc, (garb_env_t){width, view.h}) : NULL;
     flow_env_t env = kEnv;
     env.cascade = c;
+    env.viewport_height = view.h;
     flow_tree_t *t = flow_layout(doc, page, width, &env);
     Rec rec = {{0}, view, false, page};
     out(&rec.out, "%s", "");

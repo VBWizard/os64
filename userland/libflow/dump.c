@@ -59,6 +59,8 @@ static void length(Buf *b, flow_length_t l)
 {
     if (l.kind == FLOW_LENGTH_AUTO) {
         puts_(b, "auto");
+    } else if (l.kind == FLOW_LENGTH_FIT_CONTENT) {
+        puts_(b, "fit-content");
     } else {
         unit(b, l.value);
         if (l.kind == FLOW_LENGTH_PERCENT)
@@ -77,7 +79,7 @@ static bool length_eq(flow_length_t a, flow_length_t b)
 
 static bool is_zero(flow_length_t l)
 {
-    return l.kind != FLOW_LENGTH_AUTO && l.value == 0;
+    return (l.kind == FLOW_LENGTH_PX || l.kind == FLOW_LENGTH_PERCENT) && l.value == 0;
 }
 
 static void color(Buf *b, const flow_env_t *env, uint32_t rgb)
@@ -111,6 +113,7 @@ static const char *const s_list[] = {"disc", "circle", "square", "decimal", "low
 static const char *const s_visibility[] = {"visible", "hidden", "collapse"};
 static const char *const s_float[] = {"none", "left", "right"};
 static const char *const s_clear[] = {"none", "left", "right", "both"};
+static const char *const s_position[] = {"static", "relative", "absolute", "fixed", "sticky"};
 
 // One name per value: an enum that grows without its table stops the build.
 _Static_assert(F_ARRAY(s_display) == FLOW_DISPLAY_NONE + 1, "s_display");
@@ -124,6 +127,7 @@ _Static_assert(F_ARRAY(s_list) == FLOW_LIST_NONE + 1, "s_list");
 _Static_assert(F_ARRAY(s_visibility) == FLOW_COLLAPSE + 1, "s_visibility");
 _Static_assert(F_ARRAY(s_float) == FLOW_FLOAT_RIGHT + 1, "s_float");
 _Static_assert(F_ARRAY(s_clear) == FLOW_CLEAR_BOTH + 1, "s_clear");
+_Static_assert(F_ARRAY(s_position) == FLOW_POSITION_STICKY + 1, "s_position");
 
 static bool family_eq(const flow_family_list_t *a, const flow_family_list_t *b)
 {
@@ -306,6 +310,21 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         putf(b, " float=%s", s_float[s->float_side]);
     if (s->clear != FLOW_CLEAR_NONE)
         putf(b, " clear=%s", s_clear[s->clear]);
+    if (s->position != FLOW_POSITION_STATIC)
+        putf(b, " position=%s", s_position[s->position]);
+    bool insets = false;
+    for (int i = 0; i < 4; i++)
+        insets |= !length_eq(s->inset[i], automatic);
+    if (insets)
+        four_lengths(b, "inset", s->inset);
+    if (s->has_z_index)
+        putf(b, " z=%d", (int)s->z_index);
+    if (s->opacity != 1000)
+        putf(b, " opacity=%d.%03d", s->opacity / 1000, s->opacity % 1000);
+    if (s->pointer_events_none != parent->pointer_events_none)
+        puts_(b, s->pointer_events_none ? " pointer-events=none" : " pointer-events=auto");
+    if (s->specified_inline)
+        puts_(b, " specified-inline");
     if (self->holds_block)
         puts_(b, " holds-block");
     puts_(b, "\n");
@@ -441,6 +460,9 @@ static void item_line(Buf *b, const FItem *it, int32_t depth)
         puts_(b, "marker ");
         quoted(b, it->text, it->len);
         break;
+    case FI_PLACEHOLDER:
+        putf(b, "placeholder %s", node_name(it->node));
+        break;
     }
     puts_(b, "\n");
     if (it->kind == FI_ATOMIC && it->content != NULL)
@@ -457,6 +479,10 @@ static void box_lines(Buf *b, const FBox *box, int32_t depth)
     }
     if (box->link >= 0)
         putf(b, " link %d", (int)box->link);
+    if (box->out_of_flow)
+        puts_(b, " out-of-flow");
+    else if (box->positioned)
+        puts_(b, " positioned");
     puts_(b, "\n");
     for (const FItem *it = box->items; it != NULL; it = it->next)
         item_line(b, it, depth + 1);
@@ -534,6 +560,10 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
         putf(b, " link %d", (int)box->link);
     if (box->unfinished)
         puts_(b, " unfinished");
+    if (box->positioned)
+        puts_(b, " positioned");
+    if (box->unpainted)
+        puts_(b, " unpainted");
     if (box->clipped) {
         puts_(b, " clip");
         box_rect(b, box->clip);

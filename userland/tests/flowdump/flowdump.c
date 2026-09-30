@@ -76,9 +76,14 @@ static os64_font_status_t fonts(void *ctx, const flow_family_list_t *families, b
     return OS64_FONT_OK;
 }
 
+// The viewport a dump is judged in: the width asked for, and this height,
+// which the cascade and the initial containing block share.
+#define DUMP_VIEWPORT_H 600
+
 static flow_env_t s_env = {
     .fonts = fonts,
     .viewport_font_px = 16,
+    .viewport_height = DUMP_VIEWPORT_H,
     .default_generic = FLOW_GENERIC_SERIF,
     .ink = 0x000000,
     .link_ink = 0x0000ee,
@@ -138,7 +143,7 @@ static void sheets_open(Sheets *sh, const os64_html_document_t *doc, const os64_
         sh->in[sh->n] = (garb_sheet_in_t){.sheet = &sh->parsed[sh->n], .media = one->media};
         sh->n++;
     }
-    sh->cascade = garb_cascade(sh->in, sh->n, doc, (garb_env_t){width, 600});
+    sh->cascade = garb_cascade(sh->in, sh->n, doc, (garb_env_t){width, DUMP_VIEWPORT_H});
     require(sh->cascade != NULL, "cascade memory");
 }
 

@@ -16,6 +16,15 @@
 // children are built, from pass 1's holds-block bits, so a build that stops
 // early is a prefix of the whole build (LAYOUT.md § Proof).
 //
+// AN OUT-OF-FLOW BOX (POSITION.md) is built where it was written, hung under
+// the formatting context it was written in, and held by none: no line and
+// no anonymous block is made round it, and its container's mix is decided
+// without it. Among inline content it leaves a PLACEHOLDER item, which is
+// where its static position will be read. Every element that is a
+// containing block — positioned, and making a box of its own — gets an
+// entry (FPos) in tree order, and each out-of-flow box is filed under its
+// containing block's entry.
+//
 // Recursion follows the element tree. Its depth is bounded HERE, by
 // F_DEPTH_MAX, not by libhtml's max_depth, which is the caller's option:
 // every later pass recurses along the boxes this builds, so this is the
@@ -32,6 +41,7 @@ typedef struct {
     FBoxes *out;
     int32_t depth;      // descents open, each costed as a block level (F_DEPTH_MAX)
     bool stopped;       // memory or the arena's budget ran out, or the page nests past F_DEPTH_MAX
+    FMap pos_of;        // element -> its positioning entry, for an absolute box's containing block
 } B;
 
 // A list's counter: the number the next item wears.
@@ -256,6 +266,65 @@ static const flow_style_t *anon_style(B *b, const flow_style_t *parent, flow_dis
     if (s != NULL)
         f_style_anonymous(b->styles, parent, display, s);
     return s;
+}
+
+// ── Positioning ─────────────────────────────────────────────────────────
+
+// An entry for an element that is a containing block (f_contains_absolute),
+// appended in tree order and found again by its node.
+static FPos *pos_add(B *b, f_pos_kind_t kind, const os64_html_node_t *node,
+                     const flow_style_t *style)
+{
+    FPos *p = alloc(b, sizeof(*p));
+    if (p == NULL)
+        return NULL;
+    if (!f_map_put(&b->pos_of, node, p)) {
+        b->stopped = true;
+        return NULL;
+    }
+    p->kind = kind;
+    p->node = node;
+    p->style = style;
+    if (b->out->last_positioned != NULL)
+        b->out->last_positioned->next = p;
+    else
+        b->out->positioned = p;
+    b->out->last_positioned = p;
+    return p;
+}
+
+// A box made for element `el`: its entry when it is a containing block,
+// and, when it is out of flow, its place in its containing block's list —
+// the entry of its parent's anchor (FStyled.anchor), or the initial
+// containing block's. `block_level` is false for an inline-block's
+// content, which is a containing block but is reached through its atom,
+// and for the root, which is where every walk starts.
+static void position_box(B *b, FBox *box, const os64_html_node_t *el, bool block_level)
+{
+    if (box == NULL || !f_contains_absolute(box->style))
+        return;
+    // What the box is comes from its style, entry or none: a build that
+    // stops here leaves an out-of-flow box filed nowhere, which is never
+    // laid out, rather than one laid out in a flow the whole build takes it
+    // out of (LAYOUT.md § Proof, the prefix rule).
+    box->positioned = block_level;
+    box->out_of_flow = block_level && f_out_of_flow(box->style);
+    FPos *p = pos_add(b, FP_BOX, el, box->style);
+    if (p == NULL)
+        return;
+    p->box = box;
+    box->pos = p;
+    if (!box->out_of_flow)
+        return;
+    const FStyled *up = styled(b, el->parent);
+    p->cb = up != NULL && up->anchor != NULL ? f_map_get(&b->pos_of, up->anchor) : NULL;
+    FPos **first = p->cb != NULL ? &p->cb->abs_first : &b->out->icb_first;
+    FPos **last = p->cb != NULL ? &p->cb->abs_last : &b->out->icb_last;
+    if (*last != NULL)
+        (*last)->abs_next = p;
+    else
+        *first = p;
+    *last = p;
 }
 
 static FItem *new_item(B *b, FBox *ifc, f_item_kind_t kind, const os64_html_node_t *node,
@@ -620,7 +689,8 @@ static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *st
         if (c->kind != OS64_HTML_ELEMENT || boxless(c))
             continue;
         const FStyled *s = styled(b, c);
-        if (s == NULL || s->style.display == FLOW_DISPLAY_NONE)
+        // An out-of-flow box is neither: no formatting context holds it.
+        if (s == NULL || s->style.display == FLOW_DISPLAY_NONE || f_out_of_flow(&s->style))
             continue;
         if (s->style.display == FLOW_DISPLAY_CONTENTS) {
             // A box-less element's children are its parent's, so the scan
@@ -672,22 +742,23 @@ static void build_container(B *b, FBox *box, const os64_html_node_t *first,
     mark_cut(b, box);
 }
 
-static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
+// The box of a block-level element and everything in it, under `parent`.
+static FBox *element_box(B *b, FBox *parent, const os64_html_node_t *el, const FStyled *s,
+                         Scope *scope)
 {
-    B *b = f->b;
-    end_run(f);
-    f->anon_table = NULL;
     if (replaced(el)) {
-        new_box(b, f->container, FB_REPLACED, el, &s->style);
-        return;
+        FBox *box = new_box(b, parent, FB_REPLACED, el, &s->style);
+        position_box(b, box, el, true);
+        return box;
     }
     if (s->style.display == FLOW_DISPLAY_TABLE) {
-        FBox *table = new_box(b, f->container, FB_TABLE, el, &s->style);
+        FBox *table = new_box(b, parent, FB_TABLE, el, &s->style);
+        position_box(b, table, el, true);
         if (table != NULL) {
             table_range(b, table, el->first_child, NULL, scope);
             mark_cut(b, table);
         }
-        return;
+        return table;
     }
     // A list resets the list-item counter (`ol, ul, menu`, not `dir`: the
     // chapter's sheet), and an item takes the next number.
@@ -721,11 +792,12 @@ static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
         }
         marker = marker_text(b, s->style.list_style_type, value, &marker_len);
         if (b->stopped)
-            return;
+            return NULL;
     }
-    FBox *box = new_box(b, f->container, FB_BLOCK, el, &s->style);
+    FBox *box = new_box(b, parent, FB_BLOCK, el, &s->style);
+    position_box(b, box, el, true);
     if (box == NULL)
-        return;
+        return NULL;
     const char *inside = NULL;
     uint32_t inside_len = 0;
     if (marker != NULL && s->style.list_style_position == FLOW_LIST_INSIDE) {
@@ -736,6 +808,34 @@ static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
         box->marker_len = marker_len;
     }
     build_container(b, box, el->first_child, NULL, use, inside, inside_len);
+    return box;
+}
+
+static void block_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
+{
+    end_run(f);
+    f->anon_table = NULL;
+    element_box(f->b, f->container, el, s, scope);
+}
+
+// An out-of-flow box: under the context it was written in, which it does
+// not interrupt — among inline content with a placeholder where it stood,
+// among blocks where the flow had reached. Its level costs two descents: it
+// is laid out from inside its containing block's frame, the positioned
+// layout's frames on top of a block's (LAYOUT.md § Bounds).
+static void absolute_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
+{
+    if (!descend(f->b))
+        return;
+    FItem *place = NULL;
+    if (f->target != NULL)
+        place = new_item(f->b, f->target, FI_PLACEHOLDER, el, &s->style);
+    FBox *box = place != NULL || f->target == NULL
+                    ? element_box(f->b, f->target != NULL ? f->target : f->container, el, s, scope)
+                    : NULL;
+    if (place != NULL)
+        place->absolute = box;
+    ascend(f->b);
 }
 
 static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
@@ -757,6 +857,7 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
         // block level's stack (LAYOUT.md § Bounds).
         if (!replaced(el)) {
             FBox *content = new_box(b, NULL, FB_BLOCK, el, &s->style);
+            position_box(b, content, el, false);
             if (content != NULL) {
                 content->parent = ifc;
                 item->content = content;
@@ -788,6 +889,17 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
     inl->style = &s->style;
     inl->link = b->model != NULL && (is(el, OS64_HTML_TAG_A) || is(el, OS64_HTML_TAG_AREA))
                     ? os64_page_link_for(b->model, el) : -1;
+    // A positioned inline: its pieces may land in several anonymous blocks,
+    // so it is finished when the container they are all in is.
+    if (f_contains_absolute(&s->style)) {
+        inl->pos = pos_add(b, FP_INLINE, el, &s->style);
+        if (inl->pos == NULL)
+            return;
+        inl->pos->inl = inl;
+        inl->pos->home = f->container;
+        inl->pos->home_next = f->container->homed;
+        f->container->homed = inl->pos;
+    }
     Frame frame = {inl, f->open};
     f->open = &frame;
     if (f->target != NULL) {
@@ -858,6 +970,8 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
         flow_display_t d = s->style.display;
         if (d == FLOW_DISPLAY_CONTENTS) {
             flow_range(f, c->first_child, NULL, scope);
+        } else if (f_out_of_flow(&s->style)) {
+            absolute_box(f, c, s, scope);
         } else if (table_internal(d)) {
             // An internal table box with no table round it gets an
             // anonymous one, shared with the internal boxes beside it.
@@ -950,6 +1064,7 @@ static void row_range(B *b, FBox *row, const os64_html_node_t *first,
     for (const os64_html_node_t *c = first; c != stop && !b->stopped;) {
         if (structural(AT_ROW, c, display_of(b, c))) {
             FBox *cell = new_box(b, row, FB_CELL, c, &styled(b, c)->style);
+            position_box(b, cell, c, true);
             if (cell != NULL)
                 build_container(b, cell, c->first_child, NULL, scope, NULL, 0);
             c = c->next;
@@ -978,6 +1093,7 @@ static void table_part(B *b, FBox *table, const os64_html_node_t *c, flow_displa
     switch (d) {
     case FLOW_DISPLAY_TABLE_CAPTION: {
         FBox *cap = new_box(b, table, FB_CAPTION, c, s);
+        position_box(b, cap, c, true);
         if (cap != NULL)
             build_container(b, cap, c->first_child, NULL, scope, NULL, 0);
         break;
@@ -1061,15 +1177,17 @@ FBoxes *f_boxes_build(const os64_html_document_t *doc, const os64_page_t *model,
         return NULL;
     out->styles = styles;
     out->arena.cap = f_arena_budget(env);
-    B b = {doc, model, styles, env, out, 0, false};
+    B b = {.doc = doc, .model = model, .styles = styles, .env = env, .out = out};
     const os64_html_node_t *html = doc->html;
     const FStyled *root = html != NULL ? styled(&b, html) : NULL;
     if (root != NULL && root->style.display != FLOW_DISPLAY_NONE) {
         out->root = new_box(&b, NULL, FB_BLOCK, html, &root->style);
+        position_box(&b, out->root, html, false);
         Scope scope = {1, false};
         if (out->root != NULL)
             build_container(&b, out->root, html->first_child, NULL, &scope, NULL, 0);
     }
+    f_map_free(&b.pos_of);
     out->incomplete = b.stopped;
     return out;
 }

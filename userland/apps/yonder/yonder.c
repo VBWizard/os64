@@ -483,6 +483,8 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height)
     }
     s_env.ctx = p;
     s_env.cascade = cascade;
+    // One height for `vh` and the initial containing block (flow_env_t).
+    s_env.viewport_height = height;
     flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
     s_env.cascade = NULL;
     if (fresh == NULL) {
@@ -843,20 +845,25 @@ static void say_laid_out(uint64_t ms)
         os64_snprintf(pictures, sizeof(pictures), " - pictures %d of %d%s", shown, g.page.npics,
                       g.page.not_kept > 0 ? " (the rest past the memory kept)" : "");
     char line[512];
-    os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px in %lu ms%s%s", g.page.way.url,
+    // Positioning off is a mode that outlives the page it was turned off
+    // on, so it is said on every page while it is in force: a page laid
+    // out in document order must never pass for the page as designed.
+    os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px in %lu ms%s%s%s", g.page.way.url,
                   g.page.way.note[0] ? " - " : "", g.page.way.note, g.page.laid_width,
                   (unsigned long)ms, pictures,
+                  s_env.static_only ? " - POSITIONING OFF (p)" : "",
                   flow_incomplete(g.page.tree) ? " - INCOMPLETE: the layout stopped partway" : "");
     status_rest(line);
 }
 
 // The node at the top of the view, and how far below the view's top its box
-// sits, so a new layout can put that node back where it was.
+// sits, so a new layout can put that node back where it was: a node in the
+// flow, never an overlay drawn over it, which a new layout can put anywhere.
 static const os64_html_node_t *anchor_of(int32_t *offset)
 {
     if (g.page.tree == NULL)
         return NULL;
-    const flow_box_t *b = flow_hit(g.page.tree, g.sx + 1, g.sy + 1);
+    const flow_box_t *b = flow_hit_in_flow(g.page.tree, g.sx + 1, g.sy + 1);
     while (b != NULL && b->node == NULL)
         b = b->parent;
     if (b == NULL)
@@ -869,14 +876,16 @@ static void css_pictures(Page *p);
 
 // Lays the page on screen out again at the view's size. `again` lays it
 // out even at the size it has: a picture's size arrived. Without sheets
-// only the width moves anything; with them the height does too, which is
-// what their media queries and vh units read.
+// or positioned boxes only the width moves anything; with sheets the
+// height does too, which is what their media queries and vh units read,
+// and with a positioned box, whose initial containing block is the view.
 static void relayout(bool again)
 {
     int32_t width = g.view.bounds.w, height = g.view.bounds.h;
+    bool height_matters = g.page.sheets_ready != 0 || flow_npositioned(g.page.tree) > 0;
     if (page_doc(&g.page) == NULL || width <= 0 ||
         (!again && g.page.tree != NULL && width == g.page.laid_width &&
-         (g.page.sheets_ready == 0 || height == g.page.laid_height)))
+         (!height_matters || height == g.page.laid_height)))
         return;
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
@@ -2296,7 +2305,11 @@ static void forms_build(void)
 // Every control's widget at its box on the glass — or hidden, when its box
 // is not wholly inside the page view, because libui does not clip a child
 // to its parent and a widget half out of the view would paint over the
-// toolbar. The painter draws the frame of a hidden one.
+// toolbar; the painter draws the frame of that one. And hidden, frame and
+// all, when the pointer cannot reach it: an unpainted box that is also
+// `pointer-events: none` is a hidden dialog's or search overlay's, never a
+// custom checkbox's real input, which takes the pointer (POSITION.md,
+// ruling 9).
 static void forms_place(void)
 {
     if (g.page.tree == NULL)
@@ -2311,10 +2324,11 @@ static void forms_place(void)
         // The page's edges add in 64 bits (a box near INT32_MAX would wrap
         // back inside the view), and whatever is kept is clamped to int32.
         int64_t x = (int64_t)v.x + b->rect.x - g.sx, y = (int64_t)v.y + b->rect.y - g.sy;
-        bool inside = x >= v.x && y >= v.y && x + b->rect.w <= (int64_t)v.x + v.w &&
-                      y + b->rect.h <= (int64_t)v.y + v.h && b->rect.w > 0 && b->rect.h > 0;
+        bool shown = x >= v.x && y >= v.y && x + b->rect.w <= (int64_t)v.x + v.w &&
+                     y + b->rect.h <= (int64_t)v.y + v.h && b->rect.w > 0 && b->rect.h > 0 &&
+                     !(b->unpainted && b->style->pointer_events_none);
         os64_gui_rect_t r = {clamp32(x), clamp32(y), b->rect.w, b->rect.h};
-        if (!inside) {
+        if (!shown) {
             if (!fw->w->hidden)
                 os64_ui_set_hidden(&g.ui, fw->w, true);
             fw->w->bounds = r;          // a field scrolls its text by its width
@@ -2613,7 +2627,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
 // decoder for them is private to libos64, so the view reads the few it
 // needs itself.
 typedef enum { KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END,
-               KEY_PGUP, KEY_PGDN, KEY_SPACE } Key;
+               KEY_PGUP, KEY_PGDN, KEY_SPACE, KEY_POSITIONING } Key;
 
 static Key view_key(const os64_gui_event_t *ev)
 {
@@ -2648,7 +2662,20 @@ static Key view_key(const os64_gui_event_t *ev)
         g.seq = 1;
         return KEY_NONE;
     }
-    return a == ' ' ? KEY_SPACE : KEY_NONE;
+    return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : KEY_NONE;
+}
+
+// `p` lays pages out with every box static — the page as it reads in
+// document order — until it is pressed again: a MODE, kept across
+// navigation (a site's cookie wall is on every page of it), and said on
+// the status line of every page laid out while it is in force (POSITION.md,
+// ruling 8).
+static void toggle_positioning(void)
+{
+    s_env.static_only = !s_env.static_only;
+    relayout(true);
+    status_rest(s_env.static_only ? "Positioning off: the page in document order. p turns it on."
+                                  : "Positioning on.");
 }
 
 // One line of scrolling: the default font's line, as the view shows it.
@@ -2738,6 +2765,7 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
         case KEY_SPACE: scroll_to(g.sx, g.sy + page); return true;
         case KEY_HOME: scroll_to(0, 0); return true;
         case KEY_END: scroll_to(g.sx, page_height()); return true;
+        case KEY_POSITIONING: toggle_positioning(); return true;
         default: return g.seq != 0;
         }
     default:

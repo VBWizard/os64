@@ -93,6 +93,31 @@ p: color: rgb(0, 0, 255); margin-bottom: 4px; margin-left: 2px; padding-right: 6
 (end)
 END
 
+# Positioning in @supports: absolute and relative are laid out as they
+# say, and so are `z-index: auto` and an opacity of none or all; fixed and
+# sticky are laid out as relative, a z-index in tree order, and a partial
+# opacity as all, so none of those is SUPPORTED until its slice lands.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@supports (position: absolute) { p { margin-top: 1px } }
+@supports (position: relative) { p { margin-right: 2px } }
+@supports (position: fixed) { p { margin-bottom: 3px } }
+@supports (position: sticky) { p { margin-left: 4px } }
+@supports (z-index: auto) { p { padding-top: 5px } }
+@supports (z-index: 1) { p { padding-right: 6px } }
+@supports (opacity: 0) { p { padding-bottom: 7px } }
+@supports (opacity: 0.5) { p { padding-left: 8px } }
+@supports (opacity: 100%) { p { width: 9px } }
+@supports (inset: 0) { p { height: 10px } }
+@supports not (position: sticky) { p { position: relative } }
+</style>
+<p>x
+WANT
+p: margin-top: 1px; margin-right: 2px; padding-top: 5px; padding-bottom: 7px; width: 9px; height: 10px; position: relative
+(end)
+END
+
 # The same page, narrower.
 VIEWPORT 400x600
 PAGE
