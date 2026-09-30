@@ -100,7 +100,7 @@ umbrella that pulled the world into every TU.
 | `<os64/str.h>` | str*/mem* primitives |
 | `<os64/url.h>` | `os64_url_parse` — the `scheme://host:port/path` grammar RFC 1738 wrote once for http and gopher as siblings. Grammar only: no scheme table, no default ports, no percent-decoding, so a caller says which schemes it serves and what each implies |
 | `<os64/proc.h>` | `spawn`, `fork`, `exec*`, `waitpid`, `exit`, `kill`, `getcwd`/`chdir` |
-| `<os64/monitor.h>` | Per-consumer process/thread/core sampling, CPU deltas and percentages, system memory; used by `top`. Contract and extension boundaries below. |
+| `<os64/monitor.h>` | Per-consumer process/thread/core sampling, CPU deltas and percentages, system memory; used by `top` and `htop`. Contract and extension boundaries below. |
 | `<os64/pipe.h>` | `pipe`, `dup`/`dup2` |
 | `<os64/opt.h>` | the `CommandLineOption` getopt-style parser (kept from libChrisOS — it was good) |
 | `<os64/time.h>` | `time`, `sleep`, `gettime` |
@@ -110,7 +110,7 @@ umbrella that pulled the world into every TU.
 ## Shared monitoring
 
 `monitor.c` builds on the typed process readers in `procfs.c`. It owns the
-history and CPU arithmetic used by `top`; its public header is
+history and CPU arithmetic used by `top` and `htop`; its public header is
 `<os64/monitor.h>`. A terminal monitor or graphical Task Manager can consume
 the same results without implementing another version of that arithmetic.
 
@@ -170,10 +170,11 @@ raw ledger logging remain presentation concerns. Unlike its former shared
 cannot consume task slots. New baselines and resets display as unavailable;
 partial samples are reported on screen.
 
-Network and disk-rate sampling, terminal mouse input, the htop-style UI,
-and the graphical Task Manager are later consumers/extensions. They are
-not prerequisites for this extraction. Existing readers remain available
-for tools that only need a one-shot process list.
+The [htop interface](HTOP.md) is a second consumer: it owns selection,
+filtering, tree layout, activity history and terminal rendering. Network and
+disk-rate sampling, terminal mouse input, and the graphical Task Manager
+are separate extensions. Existing readers remain available for tools that
+only need a one-shot process list.
 
 Validation: `tools/test_monitor_host.sh` exercises independent consumers,
 identity/lifecycle changes, thread toggles, failed sources, parsing, bounded
