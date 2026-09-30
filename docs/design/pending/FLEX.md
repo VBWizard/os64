@@ -99,9 +99,9 @@ Every property in the table is read into the property table, with the
 of `gap` every flex page still writes). `display: flex` and `inline-flex`
 leave `kApproximated`, so `@supports (display: flex)` says yes from F1 —
 and the page's `inline-block` fallback, written for browsers without
-flexbox, is no longer taken. `flex-wrap: wrap` and `align-content` are
-READ in F1 and laid out in F2; until then a wrapping container is laid out
-on one line (see § Slices), and `@supports (flex-wrap: wrap)` says no.
+flexbox, is no longer taken. F1 laid a wrapping container out on one line
+and kept `flex-wrap: wrap` among the approximations; F2 wraps it, and
+`@supports (flex-wrap: wrap)` says yes.
 
 ### Pass 1 — style
 
@@ -157,9 +157,12 @@ and its items' margins never collapse with each other or with it.
    other than `visible` or `clip`). A column item is laid out at its
    cross size: the container's inner width less its margins when it
    stretches, else fit-content (`fit_content`, as a shrink-to-fit box).
-2. **Lines.** F1: one. F2: items are taken in order until the next one's
-   outer size would pass the container's inner main size (§ 9.3), each
-   line at least one item.
+2. **Lines** (F2). Items are taken in `order` order until the next one's
+   outer hypothetical size would pass the container's inner main size
+   (§ 9.3), each line at least one item; a container that does not wrap
+   has one. A column breaks into lines only where its height is given or
+   limited by `max-height`: with neither, it is as tall as all its items,
+   on one line. Steps 4 and 8 are each line's own.
 3. **The container's main size**: a row's is its width, which block
    layout already knows (`widths`) — or, as an atom or a shrink-to-fit box,
    what `intrinsic` answers for a flex container (below); a column's is
@@ -178,9 +181,18 @@ and its items' margins never collapse with each other or with it.
    width), `block_at` as any block is, at its line's cross start. Its
    height is then its HYPOTHETICAL CROSS SIZE.
 6. **Cross sizes**: a single-line container's line is as tall as its
-   `height` if given, else its tallest item (outer); a multi-line
-   container's lines are each their tallest item, and `align-content:
-   stretch` shares what is left of a given height among them (F2).
+   `height` if given, else its tallest item (outer), held to its limits; a
+   multi-line container's lines are each their tallest item — the
+   baseline-aligned ones by what they reach above and below their shared
+   baseline — and `align-content` places them in the container's height:
+   `normal`, which is `stretch`, shares what is left among them, the rest
+   place them as `justify-content` places items. `wrap-reverse` stacks
+   them from the far side and swaps `flex-start` and `flex-end` for the
+   items in them. A wrapping COLUMN's lines are as wide as their widest
+   item, which is not known before its items are laid out, so there each
+   item is laid out at its own width (fit-content) and a stretched one's
+   box is widened to its line without laying its content out again
+   (booked).
 7. **Cross alignment**, per item: `stretch` — the initial value — sets the
    item's height (row) or width (column) to the line's less its margins,
    when that dimension is `auto` and neither cross margin is `auto`, held
@@ -264,10 +276,9 @@ Nothing. yonder draws what the tree says.
    `space-*` values start at the start edge and `center` overflows both
    ways — what Chrome 154 does (the probe's case 1), and what `safe` and
    `unsafe` (booked) would let a page choose.
-5. **One line for a wrapping container until F2.** `flex-wrap: wrap` is
-   read, and a container that asks for it gets one line whose items
-   shrink — a row of cards squeezed, not stacked. That is closer to the
-   designed page than today's stack, and F2 follows at once.
+5. **F1 laid a wrapping container out on one line**, its items squeezed
+   rather than stacked, as the nearer of the two to the designed page,
+   until F2 wrapped it.
 
 ## Slices
 
@@ -276,7 +287,8 @@ Nothing. yonder draws what the tree says.
 | F1 | libgarb reads every property in the table and the three shorthands; `display: flex`/`inline-flex` laid out and supported; pass 1 blockifies items; pass 2's text-only container; single-line flex in all four directions: bases, the automatic minimum, § 9.7's freezing loop, gaps, `order`, auto margins, `justify-content`, `align-items`/`align-self` with stretch and baseline; the container's intrinsic widths and baseline; absolute children at the content box's corner | hand-laid pages worked from § 9 for each step, with the arithmetic in the test (a row of `flex: 1` at every width; grow with a max-width freezing; shrink with a min-content floor; each `justify-content` with 1, 2 and 3 items; stretch, center, baseline; margin-left auto; column with a given height and without; each reverse; `order`); the corpus dumps unchanged where no sheet says flex; the flex fuzz; the partial-tree relations; a guest page: danlegt's nav row and zombo's loading line against Chrome |
 | F2 | `flex-wrap: wrap` and `wrap-reverse`: lines, `align-content`, a multi-line container's cross sizes and baselines, `@supports (flex-wrap: wrap)` | hand-laid wrapped rows (cards at three widths), each `align-content` with a given height; the fuzz; a guest page of cards |
 
-Each is reviewed before the next starts.
+Chris had all three built stacked on 2026-09-30 — F1, F2 on it, then
+grid — each reviewed in turn.
 
 ## Proof, and the invariants that hold
 
@@ -319,4 +331,6 @@ Each is reviewed before the next starts.
 | `safe` and `unsafe` alignment, `last baseline`, `first baseline` spelled out | rarely written | a page that writes them |
 | `visibility: collapse` on flex items (§ 4.4, struts) | rare | a page that collapses an item |
 | `flex-basis: min-content` and `fit-content` | read as `content` (max-content), the nearest this reads | a page whose item they would size differently |
+| A stretched item in a wrapping column | its box is widened to its line and its content not laid out again, since nothing is laid out twice: text centred or right-aligned in it stays where the narrower layout put it | a page whose stretched column item shows it |
+| `align-items: baseline` in a `wrap-reverse` container | lined up from each line's top, as in a container that does not reverse | a page that writes both |
 | A table as a flex item | laid out by the table layout in the container's width at its place, not at the width flexing gave it | a page whose table item is the wrong width |

@@ -263,12 +263,68 @@ static void flex_box_cases(void)
                "</style><nav><a id=a href=x>home</a><a href=x>b</a><a href=x>c</a>"
                "<a href=x>d</a><a href=x>e</a><a id=f href=x>f</a></nav>",
                FLEX_IDS("a", "f"), FLEX_WANT({0, 0, 67, 20}, {333, 0, 67, 20}));
-    // A wrapping container is laid out on one line until F2: its items
-    // squeezed, not stacked.
-    flex_rects("flex: flex-wrap is one line until it is laid out",
-               ".c{display:flex;flex-wrap:wrap} .c div{width:300px;height:10px}</style>"
-               "<div class=c><div id=a></div><div id=b></div></div>",
-               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 200, 10}, {200, 0, 200, 10}));
+}
+
+static void flex_wrap_cases(void)
+{
+    // Cards 150 wide in 400: two fit on a line (300; a third would make
+    // 450), the third on the next, 20 down.
+    flex_rects("flex: wrap puts what does not fit on the next line",
+               ".c{display:flex;flex-wrap:wrap} .c div{width:150px;height:20px}</style>"
+               "<div class=c><div id=a></div><div id=b></div><div id=c></div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 0, 150, 20}, {150, 0, 150, 20}, {0, 20, 150, 20}));
+    // With gap 10: 150 + 10 + 150 = 310 fits, 470 does not; the next line
+    // is 10 below the first.
+    flex_rects("flex: gap between items and between lines",
+               ".c{display:flex;flex-wrap:wrap;gap:10px} .c div{width:150px;height:20px}</style>"
+               "<div class=c><div id=a></div><div id=b></div><div id=c></div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 0, 150, 20}, {160, 0, 150, 20}, {0, 30, 150, 20}));
+    // Each line flexes on its own: two from 150 grow to 200 each, the
+    // third alone to 400.
+    flex_rects("flex: each wrapped line grows on its own",
+               ".c{display:flex;flex-wrap:wrap} .c div{flex:1 1 150px;height:20px}</style>"
+               "<div class=c><div id=a></div><div id=b></div><div id=c></div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 0, 200, 20}, {200, 0, 200, 20}, {0, 20, 400, 20}));
+    // align-content in a container 100 high: two lines of 20 leave 60.
+    static const struct { const char *how; int32_t ay, ah, cy, ch; } kContent[] = {
+        {"normal", 0, 50, 50, 50},          // stretch: each line 50, the items with them
+        {"flex-start", 0, 20, 20, 20},
+        {"flex-end", 60, 20, 80, 20},
+        {"center", 30, 20, 50, 20},
+        {"space-between", 0, 20, 80, 20},
+        {"space-around", 15, 20, 65, 20},   // 60 / 4 about each line
+        {"space-evenly", 20, 20, 60, 20},   // 60 / 3 between and at the ends
+    };
+    for (size_t i = 0; i < sizeof(kContent) / sizeof(kContent[0]); i++) {
+        char page[512], name[96];
+        snprintf(page, sizeof(page),
+                 ".c{display:flex;flex-wrap:wrap;height:100px;align-content:%s}"
+                 " .c div{width:300px}</style><div class=c><div id=a>x</div><div id=c>x</div></div>",
+                 kContent[i].how);
+        snprintf(name, sizeof(name), "flex: align-content %s", kContent[i].how);
+        flex_rects(name, page, FLEX_IDS("a", "c"),
+                   FLEX_WANT({0, kContent[i].ay, 300, kContent[i].ah},
+                             {0, kContent[i].cy, 300, kContent[i].ch}));
+    }
+    // wrap-reverse stacks the lines from the bottom: the first line at 20
+    // in a container 40 high, the second at 0.
+    flex_rects("flex: wrap-reverse puts the first line at the far side",
+               ".c{display:flex;flex-wrap:wrap-reverse} .c div{width:150px;height:20px}</style>"
+               "<div class=c><div id=a></div><div id=b></div><div id=c></div></div>",
+               FLEX_IDS("a", "c"), FLEX_WANT({0, 20, 150, 20}, {0, 0, 150, 20}));
+    // A wrapping column 100 high: two items of 40 per line (a third would
+    // make 120). Each line is as wide as its item, 8 (`x`), and the 384
+    // left across is shared, 192 each, so each line and each stretched
+    // item is 200 wide.
+    flex_rects("flex: a wrapping column makes lines side by side",
+               ".c{display:flex;flex-direction:column;flex-wrap:wrap;height:100px}"
+               " .c div{height:40px}</style>"
+               "<div class=c><div id=a>x</div><div id=b>x</div><div id=c>x</div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 0, 200, 40}, {0, 40, 200, 40}, {200, 0, 200, 40}));
 }
 
 static void flex_cases(void)
@@ -277,4 +333,5 @@ static void flex_cases(void)
     flex_cross_cases();
     flex_column_cases();
     flex_box_cases();
+    flex_wrap_cases();
 }
