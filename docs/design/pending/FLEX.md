@@ -271,10 +271,10 @@ one floor: two empty `flex: 0 0 100px` items are 200 wide, and a
 **A flex container's baseline**, for `inline-flex` on a line and
 `align-items: baseline` on its own container (§ 8.5, `flex_baseline`): in
 a row, that of an item on its first line lined up by baseline; else its
-startmost item's (a row's, on its first line) — the first in `order`, not
-the tree's order, and in a reverse direction, which puts the last at the
-start, the last. An item with no line of text gives one from its border
-box's bottom edge, as it does when it is lined up by baseline.
+startmost item's, on its first line — the first in `order`, not the tree's
+order, and in a reverse direction, which puts the last at the start, the
+last. An item with no line of text gives one from its border box's bottom
+edge, as it does when it is lined up by baseline.
 
 **Absolute children** (POSITION.md): a flex container is their containing
 block when it is positioned, as any block is. The static position of an
