@@ -52,6 +52,17 @@ static bool contains_case_insensitive(const char *text, const char *needle)
     return false;
 }
 
+// Match the kernel's per-core idle tasks, not sleeping user processes.
+static bool idle_task(const os64_proc_info_t *task)
+{
+    if (!task->kernel || os64_memcmp(task->name, "idle", 4) || !task->name[4])
+        return false;
+    for (const char *c = task->name + 4; *c; c++)
+        if (*c < '0' || *c > '9')
+            return false;
+    return true;
+}
+
 static int32_t string_compare_case_insensitive(const char *a, const char *b)
 {
     while (*a != '\0' && *b != '\0')
@@ -122,6 +133,7 @@ static bool handle_key(top_view_t *view, char c)
             view->filterEditing = true;
             return true;
         case 27: view->filter[0] = '\0'; return true;
+        case 'i': case 'I': view->options.showIdle = !view->options.showIdle; return true;
         case 'z': case 'Z': view->options.showZombies = !view->options.showZombies; return true;
         case 'a': case 'A': view->options.adaptiveUnits = !view->options.adaptiveUnits; return true;
         case 'c': case 'C': view->options.perCore = !view->options.perCore; return true;
@@ -233,6 +245,7 @@ static void compose_help(const top_view_t *view)
     framef("  S          reverse sort direction\n");
     framef("  /          edit command filter\n");
     framef("  Esc        clear the active filter\n");
+    framef("  i          show or hide CPU idle tasks\n");
     framef("  z          show or hide zombies\n");
     framef("  a          fixed or adaptive time units\n");
     framef("  c          machine or per-core accounting\n");
@@ -240,7 +253,8 @@ static void compose_help(const top_view_t *view)
     framef("  sort: %s %s   filter: %s\n",
            sort_name(view->sort), sort_direction(view),
            view->filter[0] ? view->filter : "(none)");
-    framef("  zombies: %s   units: %s   cores: %s\n\n",
+    framef("  idle tasks: %s   zombies: %s   units: %s   cores: %s\n\n",
+           view->options.showIdle ? "shown" : "hidden",
            view->options.showZombies ? "shown" : "hidden",
            view->options.adaptiveUnits ? "adaptive" : "fixed",
            view->options.perCore ? "per-core" : "machine");
@@ -258,7 +272,7 @@ static void compose_footer(const top_view_t *view)
     if (view->filterEditing)
         framef("\nfilter: %s_   Enter apply  Esc cancel\n", view->filterEdit);
     else
-        framef("\nq quit  ? help  s sort  S reverse  / filter  z zombies  a units  c cores  t threads\n");
+        framef("\nq quit  ? help  s/S sort  / filter  i idle  z zombies  a units  c cores  t threads\n");
 }
 
 // ── Small formatters ─────────────────────────────────────────────────────
@@ -373,6 +387,8 @@ int32_t topMain(const top_options_t *opts)
         uint32_t shownCount = 0;
         for (size_t i = 0; i < sample->task_count; i++) {
             const os64_monitor_task_t *task = &sample->tasks[i];
+            if (!view.options.showIdle && idle_task(&task->info))
+                continue;
             if (!view.options.showZombies && task->info.state == OS64_PROC_ZOMBIE)
                 continue;
             if (contains_case_insensitive(task->info.name, view.filter))
@@ -438,7 +454,8 @@ int32_t topMain(const top_options_t *opts)
                view.filter[0] ? "\"" : "",
                view.filter[0] ? view.filter : "(none)",
                view.filter[0] ? "\"" : "");
-        framef("      zombies %s   time %s   cores %s\n",
+        framef("      idle tasks %s   zombies %s   time %s   cores %s\n",
+               view.options.showIdle ? "shown" : "hidden",
                view.options.showZombies ? "shown" : "hidden",
                view.options.adaptiveUnits ? "adaptive" : "fixed",
                view.options.perCore ? "per-core" : "machine");

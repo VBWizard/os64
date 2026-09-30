@@ -168,7 +168,10 @@ The first consumer is `top`. Its flags, controls, sort/filter behavior and
 raw ledger logging remain presentation concerns. Unlike its former shared
 512-row cache, task and thread capacities are separate, so thread expansion
 cannot consume task slots. New baselines and resets display as unavailable;
-partial samples are reported on screen.
+partial samples are reported on screen. `top` hides CPU idle tasks by default;
+`i` toggles them and `-i`/`--idle` shows them at startup. As in `htop`, this
+means kernel tasks named `idle` followed by digits, not sleeping user tasks.
+The view filter does not change the sampled CPU totals or history.
 
 The [htop interface](HTOP.md) is a second consumer: it owns selection,
 filtering, tree layout, activity history and terminal rendering. Network and

@@ -7,6 +7,7 @@
 typedef struct {
     int64_t delayMS;
     bool showZombies;   // -z
+    bool showIdle;      // -i  (show CPU idle tasks; hidden by default)
     bool adaptiveUnits; // -a
     bool noSummary;     // -s  (hide the cores/idle/system summary lines)
     bool logLedger;     // -l  (raw ledger to the system log each refresh —
