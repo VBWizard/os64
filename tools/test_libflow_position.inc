@@ -24,7 +24,8 @@ static void position_style_cases(void)
         "<span class=f>e</span>"
         "<div class='a glass'>g</div><div class='r glass'>h</div><div class='a ink'>k</div>"
         "<span class='r z'>z</span><span class='r zn o'>y</span><b class=h>x</b><i class=big>w</i>"
-        "<div class='r ins'>i</div><span style='position:absolute;display:contents'>c</span>",
+        "<div class='r ins'>i</div><span style='position:absolute;display:contents'>c</span>"
+        "<div style='pointer-events:none'><b>n</b><i style='pointer-events:auto'>a</i></div>",
         "html block holds-block\n"
         "  head none\n"
         "  body block holds-block\n"
@@ -42,7 +43,11 @@ static void position_style_cases(void)
         "    b inline weight=700 opacity=0.500\n"
         "    i inline italic\n"
         "    div block position=relative inset=1/2%/auto/-3\n"
-        "    span contents position=absolute\n");
+        "    span contents position=absolute\n"
+        // pointer-events is inherited: the b is as its div is.
+        "    div block pointer-events=none\n"
+        "      b inline weight=700\n"
+        "      i inline italic pointer-events=auto\n");
 
     // An out-of-flow child makes nothing hold a block: the span with an
     // absolute div in it is not split round it, and the body with only
@@ -383,6 +388,47 @@ static void position_door_cases(void)
            mb != NULL && !mb->positioned && mb->rect.y == 40 && flow_npositioned(t) == 0, NULL);
     flow_free(t);
     p.env.static_only = false;
+
+    // A relative box is in the flow: what lies under a point inside one is
+    // its text, not the box round it that its overflow rect leaves out —
+    // the body relative, as pages write it, and a relative wrapper in it.
+    {
+        Sheeted q;
+        sheeted_open(&q, "<!doctype html><style>body{margin:0;position:relative}"
+                         "div{position:relative;top:5px} .m{position:absolute;top:0;left:0;"
+                         "width:50px;height:50px}</style><div>moved text</div><p class=m>over</p>",
+                     400, 600);
+        flow_tree_t *v = flow_layout(q.doc, q.page, 400, &q.env);
+        const flow_box_t *h = v != NULL ? flow_hit_in_flow(v, 5, 10) : NULL;
+        expect("positioned door: in the flow, a relative box's text is found",
+               h != NULL && h->kind == FLOW_BOX_TEXT && memcmp(h->text, "moved", 5) == 0, NULL);
+        flow_free(v);
+        sheeted_close(&q);
+    }
+
+    // pointer-events: none (ruling 7): an invisible overlay over the whole
+    // page lets a click through to the text under it; a button inside it
+    // that asks for the pointer back (`auto`) still takes one; and the
+    // property is inherited, so the overlay's other text is passed through.
+    {
+        Sheeted q;
+        sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0}"
+                         ".veil{position:absolute;top:0;left:0;width:400px;height:100px;"
+                         "opacity:0;pointer-events:none} .veil b{pointer-events:auto}</style>"
+                         "<p>under the veil</p><div class=veil>veiled <b>button</b></div>",
+                     400, 600);
+        flow_tree_t *v = flow_layout(q.doc, q.page, 400, &q.env);
+        const flow_box_t *h = v != NULL ? flow_hit(v, 20, 8) : NULL;
+        expect("positioned door: pointer-events: none lets the click through",
+               h != NULL && h->kind == FLOW_BOX_TEXT && memcmp(h->text, "under", 5) == 0, NULL);
+        // "veiled " is 7 x 8 less a narrow 'l' and 'i': 8+8+4+4+8+8+4 = 44,
+        // so "button" starts at 44.
+        h = v != NULL ? flow_hit(v, 50, 8) : NULL;
+        expect("positioned door: a child that sets pointer-events: auto is hit",
+               h != NULL && h->kind == FLOW_BOX_TEXT && memcmp(h->text, "button", 6) == 0, NULL);
+        flow_free(v);
+        sheeted_close(&q);
+    }
 
     // One viewport height: a cascade judged at another is refused.
     p.env.viewport_height = 599;

@@ -80,6 +80,7 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_LEFT] = {"left", false},
     [GARB_Z_INDEX] = {"z-index", false},
     [GARB_OPACITY] = {"opacity", false},
+    [GARB_POINTER_EVENTS] = {"pointer-events", true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -190,6 +191,11 @@ static const char *const kClear[] = {"none", "left", "right", "both", "inline-st
                                      "inline-end", NULL};
 static const char *const kOverflow[] = {"visible", "hidden", "clip", "scroll", "auto", NULL};
 static const char *const kPosition[] = {"static", "relative", "absolute", "fixed", "sticky", NULL};
+// CSS UI 4 § 5.1 for HTML, and SVG 2's values, which an HTML box treats as
+// auto: read so a sheet written for both keeps its declaration.
+static const char *const kPointerEvents[] = {"auto", "none", "visiblepainted", "visiblefill",
+                                             "visiblestroke", "visible", "painted", "fill",
+                                             "stroke", "all", "bounding-box", NULL};
 static const char *const kRepeat[] = {"repeat-x", "repeat-y", NULL};
 static const char *const kRepeat2[] = {"repeat", "space", "round", "no-repeat", NULL};
 static const char *const kAttachment[] = {"scroll", "fixed", "local", NULL};
@@ -1145,6 +1151,7 @@ static const Longhand kLonghands[] = {
     {GARB_TOP, G_MARGIN, NULL}, {GARB_RIGHT, G_MARGIN, NULL},
     {GARB_BOTTOM, G_MARGIN, NULL}, {GARB_LEFT, G_MARGIN, NULL},
     {GARB_Z_INDEX, G_Z_INDEX, NULL}, {GARB_OPACITY, G_ALPHA, NULL},
+    {GARB_POINTER_EVENTS, G_KEYWORDS, kPointerEvents},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);

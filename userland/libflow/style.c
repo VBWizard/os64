@@ -346,6 +346,7 @@ static flow_style_t inherit(const Ctx *c, const flow_style_t *parent)
     s.text_indent = parent->text_indent;
     s.text_transform = parent->text_transform;
     s.visibility = parent->visibility;
+    s.pointer_events_none = parent->pointer_events_none;
     s.list_style_type = parent->list_style_type;
     s.list_style_position = parent->list_style_position;
     s.border_spacing[0] = parent->border_spacing[0];
@@ -1794,6 +1795,7 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->z_index = s->z_index;
         break;
     case GARB_OPACITY: d->opacity = s->opacity; break;
+    case GARB_POINTER_EVENTS: d->pointer_events_none = s->pointer_events_none; break;
     default: break;
     }
 }
@@ -2085,6 +2087,10 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     case GARB_Z_INDEX:
         s->has_z_index = v->kind == GARB_V_NUMBER;
         s->z_index = s->has_z_index ? round_i32(v->number) : 0;
+        break;
+    case GARB_POINTER_EVENTS:
+        // SVG's values are auto to an HTML box.
+        s->pointer_events_none = word(v, "none");
         break;
     case GARB_OPACITY: {
         // Clamped to 0..1 now that it is computed (Color 4 § 4.2).

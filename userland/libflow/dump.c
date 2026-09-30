@@ -321,6 +321,8 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         putf(b, " z=%d", (int)s->z_index);
     if (s->opacity != 1000)
         putf(b, " opacity=%d.%03d", s->opacity / 1000, s->opacity % 1000);
+    if (s->pointer_events_none != parent->pointer_events_none)
+        puts_(b, s->pointer_events_none ? " pointer-events=none" : " pointer-events=auto");
     if (s->specified_inline)
         puts_(b, " specified-inline");
     if (self->holds_block)

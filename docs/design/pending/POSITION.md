@@ -99,9 +99,11 @@ would be stale the day `position` joined it.
 
 `flow_style_t` gains `position`, `inset[4]` (`flow_length_t`, AUTO for
 `auto`), `z_index` with a flag for `auto`, and `opacity` in thousandths
-(see the face below). CSS 2.1 § 9.7 is applied here, where display is: an
-absolute or fixed box's `display` is BLOCKIFIED and its `float` is `none`
-— and beside the computed display one bit is kept, **`specified_inline`**,
+(see the face below). CSS 2.1 § 9.7 is applied here, where display is: a
+box that leaves the flow has its `display` BLOCKIFIED and its `float`
+`none` — an absolute box from P1, a fixed one from P2, which until then
+keeps the display it was given (a fixed span in a link must not split its
+paragraph) — and beside the computed display one bit is kept, **`specified_inline`**,
 that the specified display was inline-level, because the static position
 needs it (below) and blockifying destroys it. Pass 1 also answers, parent
 before child as it answers the link an element sits in, each element's
@@ -125,7 +127,8 @@ absolute dropdown inside it is ordinary.
 
 ### Pass 2 — boxes
 
-- **Out of flow.** An absolute or fixed box is marked out of flow. It
+- **Out of flow.** An absolute box is marked out of flow, and from P2 a
+  fixed one. It
   hangs under its parent BLOCK CONTAINER in the box tree, and the
   formatting context it was written in skips it: no line holds it, no
   margin collapses through it, no anonymous block is made round it.
@@ -282,13 +285,15 @@ larger than a centred modal sitting off-centre:
 
 Three answers, none of which needs a blend or a transform, all in P1:
 **`opacity: 0` is not painted** — `flow_box_t.unpainted`, on the box and
-everything inside it, which `flow_visit` does not hand over and a face
-drawing widgets does not draw, while `flow_hit` still finds it as a
-browser's pointer does (values between 0 and 1 stay booked); **a
+everything inside it, which `flow_visit` does not hand over, while
+`flow_hit` still finds it as a browser's pointer does unless it is
+`pointer-events: none`, and a form control's widget is drawn whatever
+(rulings 6 and 7; values between 0 and 1 stay booked); **a
 background whose alpha is below 1, on an out-of-flow box, is not painted**
 until the painter blends — seeing through an overlay is a better failure
-than seeing only the overlay; and **yonder's `p` key lays the page out
-again with positioning off** (`flow_env_t`'s `static_only`: every box
+than seeing only the overlay; and **yonder's `p` key lays pages out
+with positioning off**, a mode until it is pressed again (ruling 8;
+`flow_env_t`'s `static_only`: every box
 `static` — today's layout, but for an open dialog, which the chapter still
 sizes to fit and so centres in the flow) — the "kill sticky" bookmarklet
 made a feature, and the instrument for the Chrome comparison: the same
@@ -375,6 +380,22 @@ to disagree with. No luck."
    measured). Chrome 154 answered: 10, the previous sibling's own margin;
    and the mid-line cases as designed — an absolute `span` at the pen, an
    absolute `div` at the start of the next line.
+
+Three more, on Fable's review of P1's code, Chris 2026-09-29, each as
+recommended ("I trust your judgement"):
+
+6. **A form control is drawn whatever its opacity.** An invisible control
+   is nearly always a custom checkbox's real input, hidden so a styled
+   stand-in can follow its state, which it cannot here (`:checked` does not
+   follow a click); hiding the widget too would leave a form nobody can
+   use. `unpainted` keeps the rest of the box unpainted.
+7. **`pointer-events: none` is read**, and `flow_hit` passes through such
+   a box — the property that says a click goes to what is under it. An
+   invisible overlay otherwise eats every click over the links a person
+   can see, forever, with no script to show it.
+8. **Positioning off is a MODE**: `p` holds across navigation until it is
+   pressed again, and the status line of every page says so while it is
+   in force.
 
 ## Booked, with their triggers
 

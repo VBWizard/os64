@@ -554,8 +554,11 @@ static const flow_box_t *hit(const flow_box_t *b, int32_t x, int32_t y)
     }
     if (found != NULL)
         return found;
-    // What is clipped away is not there to be pointed at.
-    return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) ? b : NULL;
+    // What is clipped away is not there to be pointed at, and a box that
+    // lets the pointer through is not either.
+    return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) &&
+                   !b->style->pointer_events_none
+               ? b : NULL;
 }
 
 // What is painted last is on top: the positioned list backwards, then the
@@ -572,9 +575,31 @@ const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y)
     return hit(tree->root, x, y);
 }
 
+// Everything in the flow — a relative box is, an absolute one is not — the
+// last painted winning. Not pruned on overflow rects, which leave every
+// positioned box out: a relative one is in the flow all the same, and it
+// may sit anywhere its tree parent's rect does not reach. A walk of the
+// in-flow tree, once per layout, for a face that anchors on it.
+static const flow_box_t *hit_in_flow(const flow_box_t *b, int32_t x, int32_t y)
+{
+    const flow_box_t *found = NULL;
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
+        if (c->positioned && f_out_of_flow(c->style))
+            continue;
+        const flow_box_t *h = hit_in_flow(c, x, y);
+        if (h != NULL)
+            found = h;
+    }
+    if (found != NULL)
+        return found;
+    return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) &&
+                   !b->style->pointer_events_none
+               ? b : NULL;
+}
+
 const flow_box_t *flow_hit_in_flow(const flow_tree_t *tree, int32_t x, int32_t y)
 {
-    return tree != NULL && tree->root != NULL ? hit(tree->root, x, y) : NULL;
+    return tree != NULL && tree->root != NULL ? hit_in_flow(tree->root, x, y) : NULL;
 }
 
 int32_t flow_npositioned(const flow_tree_t *tree)

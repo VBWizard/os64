@@ -693,8 +693,9 @@ its contract; this is what it offers and why.
   searched through overflow rects, the last one painted winning (the one
   on top): the positioned list backwards, then the ordinary tree. The face
   then asks libpage what its node MEANS and a TEXT's run where in the text
-  the pointer is (`os64_text_hit`). `flow_hit_in_flow` asks the ordinary
-  tree alone, which is what a scroll position is anchored to.
+  the pointer is (`os64_text_hit`). `flow_hit_in_flow` asks everything in
+  the flow, relative boxes included and absolute ones not, which is what a
+  scroll position is anchored to.
 - **`flow_box_for(tree, node)`** — a node's first box: where a fragment
   link scrolls to, where a control's widget goes. NULL for a node with
   none (hidden, `display: none`, or past where an incomplete layout
@@ -828,10 +829,11 @@ LIBPAGE.md's rule restated for geometry:
   deep and a table nest at the bound lay out in under 448KB, and a
   chain of inline-blocks, which needed 640-768KB before it was charged
   double, now stops at half the depth — as does a chain of absolute
-  boxes, 1472 bytes a level by the shipped frames against a block's 704,
-  which needed 668KB; a thread has 1MB. The host suite
-  lays out pages nested to and past the bound, both kinds, and asserts
-  where each stops.
+  boxes (1472 bytes a level by the shipped frames, against a block's 704),
+  which needed 668KB in the host's -O2 build before it was charged double;
+  every positioned chain, absolute, relative or both, now lays out in
+  under 448KB too; a thread has 1MB. The host suite lays out pages nested
+  to and past the bound, all three kinds, and asserts where each stops.
 - **Nothing blocks and nothing is cached across calls.** Every layout is
   from scratch; the face owns the pacing.
 - **The run cap** (1 MiB per run) is honoured by windowing a long text

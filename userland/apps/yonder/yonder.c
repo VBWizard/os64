@@ -845,9 +845,13 @@ static void say_laid_out(uint64_t ms)
         os64_snprintf(pictures, sizeof(pictures), " - pictures %d of %d%s", shown, g.page.npics,
                       g.page.not_kept > 0 ? " (the rest past the memory kept)" : "");
     char line[512];
-    os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px in %lu ms%s%s", g.page.way.url,
+    // Positioning off is a mode that outlives the page it was turned off
+    // on, so it is said on every page while it is in force: a page laid
+    // out in document order must never pass for the page as designed.
+    os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px in %lu ms%s%s%s", g.page.way.url,
                   g.page.way.note[0] ? " - " : "", g.page.way.note, g.page.laid_width,
                   (unsigned long)ms, pictures,
+                  s_env.static_only ? " - POSITIONING OFF (p)" : "",
                   flow_incomplete(g.page.tree) ? " - INCOMPLETE: the layout stopped partway" : "");
     status_rest(line);
 }
@@ -2656,10 +2660,11 @@ static Key view_key(const os64_gui_event_t *ev)
     return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : KEY_NONE;
 }
 
-// `p` lays the page out again with every box static — the page as it
-// reads in document order — and again as it was designed to look: the
-// instrument for a page whose positioned boxes cover what it says
-// (POSITION.md § What positioning costs).
+// `p` lays pages out with every box static — the page as it reads in
+// document order — until it is pressed again: a MODE, kept across
+// navigation (a site's cookie wall is on every page of it), and said on
+// the status line of every page laid out while it is in force (POSITION.md,
+// ruling 8).
 static void toggle_positioning(void)
 {
     s_env.static_only = !s_env.static_only;

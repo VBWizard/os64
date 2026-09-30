@@ -296,6 +296,10 @@ typedef struct {
     // and neither is anything inside it; what is between is painted opaque
     // until the painter blends (POSITION.md § Booked).
     uint16_t opacity;
+    // `pointer-events: none` (CSS UI 4 § 5.1), inherited: flow_hit passes
+    // through the box to whatever is under it, though a descendant that
+    // sets `auto` is still hit. Zero is `auto`, the initial value.
+    bool pointer_events_none;
     // A box that leaves the flow has its `display` BLOCKIFIED (CSS 2.1 §
     // 9.7) — an absolute one; a fixed one is laid out in the flow as
     // relative until its slice, and keeps its own — and this says the
@@ -421,8 +425,12 @@ struct flow_box {
     // its containing blocks allow, not its parent (POSITION.md).
     bool positioned;
     // `opacity: 0` on it or on an element it is inside: flow_visit does not
-    // hand it over, and a face drawing live widgets does not draw its.
-    // flow_hit still finds it, as a browser's pointer does.
+    // hand it over. flow_hit still finds it, as a browser's pointer does,
+    // unless it is `pointer-events: none`. A face drawing live widgets
+    // draws a control's whatever its opacity: a control made invisible is
+    // nearly always a custom checkbox's real input, whose styled stand-in
+    // cannot follow a click here, and hiding the widget too would leave a
+    // form nobody can use (POSITION.md, ruling 6).
     bool unpainted;
     const flow_box_t *parent, *first, *next;
 };
@@ -470,16 +478,17 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 
 // The deepest box whose OWN rect holds (x, y), the last painted winning —
-// the positioned list backwards, then the ordinary tree — and whose own
-// clip holds the point; NULL for none. The face asks libpage what its node
+// the positioned list backwards, then the ordinary tree — whose own clip
+// holds the point, and that is not `pointer-events: none`; NULL for none. The face asks libpage what its node
 // means, and a TEXT's run where in the text the pointer is (os64_text_hit).
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y);
 
-// The same, in the ordinary tree alone: what lies under (x, y) in the flow,
-// whatever positioned box is drawn over it. What a scroll position is a
-// property of — a face that keeps a node in place across a new layout
-// anchors on this, or it follows an overlay wherever the new layout puts
-// it.
+// The same, among everything in the flow — relative boxes included, absolute
+// ones not: what lies under (x, y) in the flow, whatever out-of-flow box is
+// drawn over it. What a scroll position is a property of — a face that
+// keeps a node in place across a new layout anchors on this, or it follows
+// an overlay wherever the new layout puts it. It walks the whole in-flow
+// tree: once per layout, not per pointer move.
 const flow_box_t *flow_hit_in_flow(const flow_tree_t *tree, int32_t x, int32_t y);
 
 // The positioned boxes (flow_box_t.positioned) in paint order: tree order,

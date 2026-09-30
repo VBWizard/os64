@@ -453,6 +453,12 @@ IN: opacity: -1
 OUT: opacity: -1
 IN: opacity: none
 OUT: invalid
+IN: pointer-events: none
+OUT: pointer-events: none
+IN: pointer-events: visiblePainted
+OUT: pointer-events: visiblepainted
+IN: pointer-events: none auto
+OUT: invalid
 
 # ── What libgarb does not read here ──
 IN: transform: none
