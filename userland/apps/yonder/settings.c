@@ -111,6 +111,7 @@ static void relay_stop(void)
         const char byte = 1;
         (void)os64_write(s.pumped[1], &byte, 1);
         (void)os64_thread_join((int32_t)s.thread, NULL);
+        os64_close((int32_t)s.thread);
     }
     if (s.piped) {
         os64_close(s.pumped[0]);

@@ -23,6 +23,7 @@ way_leg_t way_leg(const way_session_t *s)
     way_leg_t leg;
     os64_memset(&leg, 0, sizeof(leg));
     leg.session = s;
+    leg.agent = s->agent;
     leg.face = s->face;
     return leg;
 }

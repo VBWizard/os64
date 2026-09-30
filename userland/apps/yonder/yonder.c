@@ -1267,6 +1267,7 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     trip->kind = YONDER_JOB_TRIP;
     trip->mail = mail;
     trip->session = &g.way;
+    trip->agent = g.way.agent;
     trip->window = g.win;
     trip->mail_bell = BELL_MAIL;
     os64_strcopy(trip->url, sizeof(trip->url), url);
