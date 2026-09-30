@@ -361,6 +361,7 @@ Each is reviewed before the next starts.
 |---|---|---|
 | Paint and hit in `order` order, and `z-index` on a static flex item | the tree's order is the document's; the two differ only where items overlap | a page whose overlapping items draw in the wrong order |
 | A percentage height inside a stretched item | the stretched size is decided after the item is laid out, and nothing is laid out twice | GARB.md's percentage-height row |
+| A picture stretched in a row whose height its own container decides after laying it out (a flex row that is itself a grown or stretched item) | the picture's width follows that height through its ratio, but the row resolved its widths at the height it had; `refit` re-places, and nothing is laid out twice (Chrome lays the row out again: 80x60 where libflow draws 40x60) | a page whose picture in a nested row is visibly the wrong shape |
 | The static position of an absolute child as the only item (§ 4.1) | the content box's corner is where it usually is already | a page whose absolute icon sits at the wrong end of its flex row |
 | `safe` and `unsafe` alignment, `last baseline`, `first baseline` spelled out | rarely written | a page that writes them |
 | `visibility: collapse` on flex items (§ 4.4, struts) | rare | a page that collapses an item |
