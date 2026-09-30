@@ -1466,6 +1466,11 @@ int main(int argc, char **argv)
         "<div class=c><p>one<p class=i>two<span class=a>x</span><p>three</div>"
         "<div class=r><p>a<p class=i>b<p style=flex:2>c</div>"
         "<div class=c style=flex-direction:column-reverse><p>d<p>e</div>", 300);
+    layout_relation_sweep("a grid page",
+        "<!doctype html><style>.g{display:grid;grid-template-columns:1fr 2fr;gap:4px}"
+        ".i{position:relative;top:4px} .a{position:absolute;bottom:0;right:0}"
+        ".s{grid-column:span 2}</style><div class=g><p>one<p class=i>two<span class=a>x</span>"
+        "<p class=s>three<p>four</div>", 300);
     // A tall first cell in a table the failure stops: its lines, not
     // placed, must not reach the page's edges.
     layout_relation_sweep("a tall cell in a table that stops",

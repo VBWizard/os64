@@ -254,7 +254,7 @@ stretched item is booked with GARB.md's percentage-height row.
 **All or nothing.** Items are laid out in TREE order, whatever `order`
 says, and placed where they belong only once every item is laid out; a
 layout that stops in between WITHDRAWS the container's items
-(`flex_items_done`), because each has only its provisional place, and the
+(`items_done`), because each has only its provisional place, and the
 container is left unfinished. A box tree the boxes pass cut short is laid
 out with the items it has, which may place them differently from the
 whole page, as a table's columns come from the cells it has: the relation

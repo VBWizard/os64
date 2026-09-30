@@ -1957,14 +1957,19 @@ static int64_t repeat_times(const garb_val_t *count)
     return count->number > F_GRID_MAX ? F_GRID_MAX : (int64_t)count->number;
 }
 
+// What reading a grid value came to: a value to keep, one to leave the
+// property as it was for, or no memory — which fails the element, as any
+// allocation of the style pass does.
+typedef enum { GRID_READ_OK, GRID_READ_UNUSABLE, GRID_READ_NO_MEMORY } GridRead;
+
 // A track list with each repeat(n) written out, into the styles arena, and
 // held to F_GRID_MAX tracks; an auto-repeat's tracks are kept once and
-// marked (flow_tracks_t). False leaves the property as it was.
-static bool author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out)
+// marked (flow_tracks_t).
+static GridRead author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
     if (v->kind == GARB_V_KEYWORD)
-        return word(v, "none") || word(v, "auto");
+        return word(v, "none") || word(v, "auto") ? GRID_READ_OK : GRID_READ_UNUSABLE;
     // A single size (grid-auto-*) is a list of one.
     const garb_val_t *items = v->kind == GARB_V_TRACKS ? v->items : v;
     int32_t n = v->kind == GARB_V_TRACKS ? v->nitems : 1;
@@ -1980,13 +1985,13 @@ static bool author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out)
         total = F_GRID_MAX;
     flow_track_t *tracks = f_arena_alloc(&a->c->out->arena, (size_t)total * sizeof(*tracks));
     if (tracks == NULL)
-        return false;
+        return GRID_READ_NO_MEMORY;
     int32_t k = 0;
     for (int32_t i = 0; i < n && k < total; i++) {
         const garb_val_t *t = &items[i];
         if (!(t->kind == GARB_V_FUNCTION && os64_streq(t->keyword, "repeat") && t->nitems == 2)) {
             if (!author_track(a, t, &tracks[k++]))
-                return false;
+                return GRID_READ_UNUSABLE;
             continue;
         }
         const garb_val_t *inner = &t->items[1];
@@ -2000,36 +2005,36 @@ static bool author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out)
         for (int64_t r = 0; r < times && k < total; r++)
             for (int32_t j = 0; j < inner->nitems && k < total; j++)
                 if (!author_track(a, &inner->items[j], &tracks[k++]))
-                    return false;
+                    return GRID_READ_UNUSABLE;
     }
     if (out->repeat_n > 0 && out->repeat_at + out->repeat_n > k)
         out->repeat_n = 0;      // held to the bound before it was met
     out->tracks = tracks;
     out->n = k;
-    return true;
+    return GRID_READ_OK;
 }
 
 // grid-template-areas' strings into rectangles, one per name (the grammar
 // checked that each name is one).
-static bool author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
+static GridRead author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
 {
     s->grid_areas = NULL;
     s->ngrid_areas = s->grid_area_rows = s->grid_area_cols = 0;
     if (v->kind != GARB_V_STRING || v->nitems <= 0)
-        return word(v, "none");
+        return word(v, "none") ? GRID_READ_OK : GRID_READ_UNUSABLE;
     int32_t rows = v->nitems;
     int32_t cols = garb_area_cells(v->items[0].text, (uint32_t)v->items[0].len, NULL, 0);
     if (cols <= 0 || (int64_t)rows * cols > F_GRID_AREA_CELLS)
-        return false;
+        return GRID_READ_UNUSABLE;
     garb_area_cell_t cells[F_GRID_AREA_CELLS];
     for (int32_t r = 0; r < rows; r++)
         if (garb_area_cells(v->items[r].text, (uint32_t)v->items[r].len, cells + r * cols,
                             cols) != cols)
-            return false;
+            return GRID_READ_UNUSABLE;
     flow_grid_area_t *areas = f_arena_alloc(&a->c->out->arena,
                                             (size_t)rows * cols * sizeof(*areas));
     if (areas == NULL)
-        return false;
+        return GRID_READ_NO_MEMORY;
     int32_t n = 0;
     for (int32_t k = 0; k < rows * cols; k++) {
         garb_area_cell_t name = cells[k];
@@ -2044,7 +2049,7 @@ static bool author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
         if (found < 0) {
             char *copy = f_arena_alloc(&a->c->out->arena, name.len);
             if (copy == NULL)
-                return false;
+                return GRID_READ_NO_MEMORY;
             os64_memcpy(copy, name.text, name.len);
             areas[n++] = (flow_grid_area_t){copy, name.len, r, r + 1, c, c + 1};
             continue;
@@ -2057,40 +2062,40 @@ static bool author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
     s->ngrid_areas = n;
     s->grid_area_rows = rows;
     s->grid_area_cols = cols;
-    return true;
+    return GRID_READ_OK;
 }
 
 // A grid line (§ 8.3). A span of a NAME is a span of one: it counts lines
 // of that name, and names in brackets are dropped (GRID.md, decision 3).
-static bool author_line(Author *a, const garb_val_t *v, flow_grid_line_t *out)
+static GridRead author_line(Author *a, const garb_val_t *v, flow_grid_line_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
     if (v->kind == GARB_V_KEYWORD)
-        return true;                    // auto
+        return GRID_READ_OK;            // auto
     if (v->kind == GARB_V_NUMBER) {
         double n = v->number;
         out->kind = FLOW_GRID_LINE_NUMBER;
         out->n = n > 10000 ? 10000 : n < -10000 ? -10000 : (int32_t)n;
-        return true;
+        return GRID_READ_OK;
     }
     if (v->kind == GARB_V_FUNCTION && os64_streq(v->keyword, "span") && v->nitems == 1) {
         out->kind = FLOW_GRID_LINE_SPAN;
         out->n = 1;
         if (v->items[0].kind == GARB_V_NUMBER)
             out->n = v->items[0].number > F_GRID_MAX ? F_GRID_MAX : (int32_t)v->items[0].number;
-        return true;
+        return GRID_READ_OK;
     }
     if (v->kind == GARB_V_STRING && v->len > 0) {
         char *copy = f_arena_alloc(&a->c->out->arena, v->len);
         if (copy == NULL)
-            return false;
+            return GRID_READ_NO_MEMORY;
         os64_memcpy(copy, v->text, v->len);
         out->kind = FLOW_GRID_LINE_NAME;
         out->name = copy;
         out->name_len = (uint32_t)v->len;
-        return true;
+        return GRID_READ_OK;
     }
-    return false;
+    return GRID_READ_UNUSABLE;
 }
 
 // One winner that is not a CSS-wide keyword.
@@ -2380,7 +2385,10 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     case GARB_GRID_TEMPLATE_COLUMNS: case GARB_GRID_TEMPLATE_ROWS:
     case GARB_GRID_AUTO_COLUMNS: case GARB_GRID_AUTO_ROWS: {
         flow_tracks_t t;
-        if (!author_tracks(a, v, &t))
+        GridRead r = author_tracks(a, v, &t);
+        if (r == GRID_READ_NO_MEMORY)
+            return false;
+        if (r != GRID_READ_OK)
             break;
         *(p == GARB_GRID_TEMPLATE_COLUMNS ? &s->grid_template_columns
           : p == GARB_GRID_TEMPLATE_ROWS  ? &s->grid_template_rows
@@ -2389,7 +2397,8 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     }
     case GARB_GRID_TEMPLATE_AREAS:
-        (void)author_areas(a, v, s);
+        if (author_areas(a, v, s) == GRID_READ_NO_MEMORY)
+            return false;
         break;
     case GARB_GRID_AUTO_FLOW:
         if (v->kind == GARB_V_KEYWORD) {
@@ -2400,7 +2409,10 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     case GARB_GRID_ROW_START: case GARB_GRID_ROW_END:
     case GARB_GRID_COLUMN_START: case GARB_GRID_COLUMN_END: {
         flow_grid_line_t l;
-        if (author_line(a, v, &l))
+        GridRead r = author_line(a, v, &l);
+        if (r == GRID_READ_NO_MEMORY)
+            return false;
+        if (r == GRID_READ_OK)
             *(p == GARB_GRID_ROW_START      ? &s->grid_row_start
               : p == GARB_GRID_ROW_END      ? &s->grid_row_end
               : p == GARB_GRID_COLUMN_START ? &s->grid_column_start

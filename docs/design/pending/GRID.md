@@ -159,7 +159,11 @@ flex container's.
 **Absolute children** are placed at the content box's corner (the grid
 area as their containing block is booked).
 
-**All or nothing** as FLEX.md: items laid out in tree order.
+**All or nothing** as FLEX.md: items laid out in tree order, placed once
+all of them are, and withdrawn when a layout stops in between
+(`items_done`); an item's absolute boxes are laid out after its rows have
+sized and moved it, and a relative item keeps its offset when they move
+it (`sized_later`, `laid_offset`).
 
 ### The door, the face
 

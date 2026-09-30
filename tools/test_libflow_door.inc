@@ -265,14 +265,15 @@ static bool unfinished_within(const flow_box_t *b)
 // layout puts it — laid out once its containing block was finished, it
 // does not move after.
 // A box whose children's geometry comes from the children it has: a
-// table's columns from its cells, a line's from its pieces, a flex
+// table's columns from its cells, a line's from its pieces, a flex or grid
 // container's items from each other. Unfinished, what it holds may be
 // placed differently from the whole layout, and is not compared.
 static bool sized_by_its_children(const flow_box_t *b)
 {
+    flow_display_t d = b->style != NULL ? b->style->display : FLOW_DISPLAY_BLOCK;
     return b->kind == FLOW_BOX_TABLE || b->kind == FLOW_BOX_LINE ||
-           (b->kind == FLOW_BOX_BLOCK && b->style != NULL &&
-            (b->style->display == FLOW_DISPLAY_FLEX || b->style->display == FLOW_DISPLAY_INLINE_FLEX));
+           (b->kind == FLOW_BOX_BLOCK && (d == FLOW_DISPLAY_FLEX || d == FLOW_DISPLAY_INLINE_FLEX ||
+                                          d == FLOW_DISPLAY_GRID || d == FLOW_DISPLAY_INLINE_GRID));
 }
 
 static void placed_out_of_flow_stay(const flow_box_t *b, bool exempt, const flow_tree_t *whole,

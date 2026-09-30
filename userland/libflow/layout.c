@@ -2258,12 +2258,13 @@ static void laid_offset(const FBox *c, int64_t cbw, int64_t *dx, int64_t *dy)
         rel_offset(c->style, cbw, definite_height(c->parent), dx, dy);
 }
 
-// The end of a container's items. Placed whole, each item's absolute boxes
+// The end of a flex or grid container's items. Placed whole, each item's
+// absolute boxes
 // are laid out against its final size (sized_later). Stopped, what was laid
 // out is withdrawn: an item there has only its provisional place, before
 // its container moved and sized it, and a tree that stopped holds no item
 // its container had not finished with.
-static void flex_items_done(L *l, const FStyles *styles, FBox *b, int64_t cbw)
+static void items_done(L *l, const FStyles *styles, FBox *b, int64_t cbw)
 {
     for (FBox *c = b->first; c != NULL; c = c->next) {
         if (c->out_of_flow)
@@ -2651,7 +2652,7 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
         in->y = top + size;
     }
 done:
-    flex_items_done(l, styles, b, cw);
+    items_done(l, styles, b, cw);
     if (l->failed)
         in->y = top;
     scratch_free(l, items);
@@ -3493,7 +3494,6 @@ static void grid_layout(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_
         return;
     }
     GTrack *cols = p.t[0], *rows = p.t[1];
-    int64_t bottom = top;
 
     // The columns, and the tracks placed in the width.
     bool spread_x = s->justify_content == FLOW_PLACE_NORMAL ||
@@ -3544,13 +3544,9 @@ static void grid_layout(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_
             c->flex_ml = ml;
         }
         block(l, styles, c, ax, aw, &cur);
-        if (c->placed)
-            bottom = max64(bottom, cur.y + margins_sum(cur.pm));
     }
-    if (l->failed) {
-        in->y = bottom;
+    if (l->failed)
         goto done;
-    }
 
     // The rows, from the heights: a row's room is a height the page gave,
     // and it stretches into that, or into a min-height.
@@ -3599,22 +3595,28 @@ static void grid_layout(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_
         } else if (a == FLOW_PLACE_CENTER) {
             dy = room / 2;
         }
-        translate(c, 0, top + r0->pos + mt + dy - c->y);
+        int64_t rdx, rdy;
+        laid_offset(c, cw, &rdx, &rdy);
+        translate(c, 0, top + r0->pos + mt + dy + rdy - c->y);
     }
     in->y = top + total;
 done:
+    items_done(l, styles, b, cw);
+    if (l->failed)
+        in->y = top;
     plan_free(l, &p);
 }
 
 static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur);
 
-// A flex item's size is its container's to finish — stretched across a
-// line, grown or shrunk down a column — after it is laid out, so the
-// absolute boxes it contains wait for that (flex_items_done), or they
-// would be placed against a size the item no longer has.
+// A flex or grid item's size is its container's to finish — stretched
+// across a line or down its rows, grown or shrunk down a column — after it
+// is laid out, so the absolute boxes it contains wait for that
+// (items_done), or they would be placed against a size the item no longer
+// has.
 static bool sized_later(const FBox *b)
 {
-    return b->parent != NULL && b->parent->flex && !b->out_of_flow;
+    return b->parent != NULL && (b->parent->flex || b->parent->grid) && !b->out_of_flow;
 }
 
 // A block-level box in its parent's flow. On entry `cur` is the point

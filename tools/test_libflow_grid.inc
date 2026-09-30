@@ -262,9 +262,65 @@ static void grid_align_cases(void)
                FLEX_WANT({0, -1, 160, -1}, {0, -1, 30, -1}, {80, -1, 80, -1}));
 }
 
+// Codex's first round on flex (PR #181) found classes grid shares: an
+// item's absolute boxes against its final size, a relative item's offset
+// kept when its rows move it, and a layout that stops withdrawing items
+// that have only their provisional places.
+static void grid_review_cases(void)
+{
+    // A 100px row stretches the item; its bottom:0 box sits at 100 - 10.
+    flex_rects("grid: an absolute box in a stretched item sits at its bottom",
+               ".g{display:grid;grid-template-columns:50px;grid-template-rows:100px}"
+               " .g div{position:relative} .g span{position:absolute;bottom:0;height:10px;width:10px}"
+               "</style><div class=g><div id=i><span id=a></span></div></div>",
+               FLEX_IDS("i", "a"), FLEX_WANT({0, 0, 50, 100}, {0, 90, 10, 10}));
+    // Rows of 20; each relative item 10 below its row.
+    flex_rects("grid: a relative item keeps its offset in its row",
+               ".g{display:grid;grid-template-columns:100px;grid-auto-rows:20px}"
+               " .g div{position:relative;top:10px}</style>"
+               "<div class=g><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 10, 100, 20}, {0, 30, 100, 20}));
+    // A budget that stops inside the third item's lines, with the box tree
+    // whole: the first two items are withdrawn, or where the whole layout
+    // puts them (flex_review_cases' sweep, for a grid).
+    {
+        static char page[40000];
+        strcpy(page, "<!doctype html><style>body{margin:0}.g{display:grid;"
+                     "grid-template-columns:1fr 1fr 1fr} .g p{margin:0}</style><div class=g>"
+                     "<p id=a>one<p id=b>two<p id=c>");
+        for (int i = 0; i < 3000; i++)
+            strcat(page, "w ");
+        strcat(page, "</div>");
+        Sheeted q;
+        sheeted_open(&q, page, 400, 600);
+        flow_tree_t *whole = flow_layout(q.doc, q.page, 400, &q.env);
+        const flow_box_t *wa = flex_box(&q, whole, "a"), *wb = flex_box(&q, whole, "b");
+        bool ok = wa != NULL && wb != NULL, stopped = false;
+        for (size_t budget = 8 * 1024; ok && budget < 4u * 1024 * 1024; budget += 8 * 1024) {
+            q.env.max_arena_bytes = budget;
+            flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+            if (t == NULL)
+                continue;
+            bool incomplete = flow_incomplete(t);
+            stopped |= incomplete;
+            const flow_box_t *a = flex_box(&q, t, "a"), *b = flex_box(&q, t, "b");
+            ok = (a == NULL || memcmp(&a->rect, &wa->rect, sizeof(a->rect)) == 0) &&
+                 (b == NULL || memcmp(&b->rect, &wb->rect, sizeof(b->rect)) == 0);
+            flow_free(t);
+            if (!incomplete)
+                break;
+        }
+        expect("grid: a layout stopped in a later item withdraws the earlier ones", ok && stopped,
+               stopped ? NULL : "no budget stopped the layout");
+        flow_free(whole);
+        sheeted_close(&q);
+    }
+}
+
 static void grid_cases(void)
 {
     grid_track_cases();
     grid_place_cases();
     grid_align_cases();
+    grid_review_cases();
 }
