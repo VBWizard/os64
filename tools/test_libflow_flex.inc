@@ -501,6 +501,61 @@ static void flex_picture_cases(void)
                " #b{width:10px;height:60px} #c{display:inline-block;width:10px;height:20px}</style>"
                "<div><div id=o><div id=a></div><div id=b></div></div><div id=c></div></div>",
                FLEX_IDS("c"), FLEX_WANT({20, 40, 10, 20}));
+    // A reverse direction puts its last item at the start, and that is the
+    // one whose baseline counts: the 60px item, in a row and a column.
+    flex_rects("flex: a row-reverse baseline is its startmost item's",
+               "#o{display:inline-flex;align-items:flex-start;flex-direction:row-reverse}"
+               " #a{width:10px;height:20px} #b{width:10px;height:60px}"
+               " #c{display:inline-block;width:10px;height:20px}</style>"
+               "<div><div id=o><div id=a></div><div id=b></div></div><div id=c></div></div>",
+               FLEX_IDS("c"), FLEX_WANT({20, 40, 10, 20}));
+    flex_rects("flex: a column-reverse baseline is its startmost item's",
+               "#o{display:inline-flex;align-items:flex-start;flex-direction:column-reverse}"
+               " #a{width:10px;height:20px} #b{width:10px;height:60px}"
+               " #c{display:inline-block;width:10px;height:20px}</style>"
+               "<div><div id=o><div id=a></div><div id=b></div></div><div id=c></div></div>",
+               FLEX_IDS("c"), FLEX_WANT({10, 40, 10, 20}));
+    // A picture given no width grows from 0 to 40 and takes its height
+    // from its ratio, not from the 0 it started at.
+    flex_rects("flex: a picture grown from width 0 keeps its ratio",
+               "#o{display:flex;width:40px;align-items:flex-start} img{width:0;min-width:0;flex:1}"
+               "</style><div id=o><img id=i src=known.png></div>",
+               FLEX_IDS("i", "o"), FLEX_WANT({0, 0, 40, 30}, {0, 0, 40, 30}));
+    // Flexed to 40 down a column, a border-box picture keeps its 30px
+    // border-box max-width.
+    flex_rects("flex: a picture's width from its ratio keeps its box-sizing",
+               "#o{display:flex;flex-direction:column;width:100px;height:40px;align-items:flex-start}"
+               " img{flex:1;min-height:0;box-sizing:border-box;border:5px solid;max-width:30px}"
+               "</style><div id=o><img id=i src=known.png></div>",
+               FLEX_IDS("i"), FLEX_WANT({0, 0, 30, 40}));
+    // Stretched, a picture's cross size is the line's, and its ratio
+    // carries it into its basis: 100 wide down a column is 75 tall, and 60
+    // tall in a 60px row is 80 wide.
+    flex_rects("flex: a picture stretched across a column takes its height from it",
+               "#o{display:flex;flex-direction:column;width:100px}</style>"
+               "<div id=o><img id=i src=known.png></div>",
+               FLEX_IDS("i", "o"), FLEX_WANT({0, 0, 100, 75}, {0, 0, 100, 75}));
+    flex_rects("flex: a picture stretched down a row takes its width from it",
+               "#o{display:flex;width:100px;height:60px}</style>"
+               "<div id=o><img id=i src=known.png></div>",
+               FLEX_IDS("i"), FLEX_WANT({0, 0, 80, 60}));
+    // A content basis counts a percentage padding at the container's
+    // width: 30 of content and 20 each side, 70.
+    flex_rects("flex: a content basis counts a percentage padding",
+               "#o{display:flex;width:200px} #a{flex:none;padding:10%} #k{width:30px;height:20px}"
+               " #b{width:50px;height:20px}</style>"
+               "<div id=o><div id=a><div id=k></div></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 70, -1}, {70, 0, 50, 20}));
+    // The same padding in the basis alone (no automatic minimum to lean
+    // on), and in the automatic minimum alone (a basis of 0).
+    flex_rects("flex: a content basis alone counts a percentage padding",
+               "#o{display:flex;width:200px} #a{flex:none;padding:10%;min-width:0}"
+               " #k{width:30px;height:20px}</style><div id=o><div id=a><div id=k></div></div></div>",
+               FLEX_IDS("a"), FLEX_WANT({0, 0, 70, -1}));
+    flex_rects("flex: an automatic minimum counts a percentage padding",
+               "#o{display:flex;width:200px} #a{flex:0 1 0px;padding:10%}"
+               " #k{width:30px;height:20px}</style><div id=o><div id=a><div id=k></div></div></div>",
+               FLEX_IDS("a"), FLEX_WANT({0, 0, 70, -1}));
 }
 
 static void flex_cases(void)

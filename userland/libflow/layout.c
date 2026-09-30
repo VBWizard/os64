@@ -493,19 +493,35 @@ static int64_t replaced_own(L *l, const FBox *b, int axis, int64_t cbw)
     return axis == 0 ? r.w : r.h;
 }
 
-// A picture's width for a content height `h` it was given, when the page
-// gave it no width: through its ratio, held to its width limits.
-static int64_t replaced_w_for(L *l, const FBox *b, int64_t h, int64_t cbw)
+// A picture's size across the other axis when it is given content size
+// `size` on `axis` (0 across, 1 down) and the page gave it none there:
+// through its own ratio, held to that axis's limits as the page wrote them.
+static int64_t replaced_for(L *l, const FBox *b, int axis, int64_t size, int64_t cbw)
 {
     flow_style_t own = *b->style;
     flow_length_t none;
     os64_memset(&none, 0, sizeof(none));
-    own.box_sizing = FLOW_CONTENT_BOX;
-    own.height = none;
-    own.height.kind = FLOW_LENGTH_PX;
-    own.height.value = (int32_t)min64(max64(0, h), INT32_MAX);
-    own.min_height = own.max_height = none;
-    return replaced_size(l, b->node, &own, cbw).w;
+    // The size as the page would have written it: a border box's includes
+    // its frame, so `box-sizing` goes on meaning what it did for the
+    // limits left in place.
+    int64_t frame = axis == 0
+        ? own.border_width[FLOW_LEFT] + own.border_width[FLOW_RIGHT] +
+              len(own.padding[FLOW_LEFT], cbw) + len(own.padding[FLOW_RIGHT], cbw)
+        : own.border_width[FLOW_TOP] + own.border_width[FLOW_BOTTOM] +
+              len(own.padding[FLOW_TOP], cbw) + len(own.padding[FLOW_BOTTOM], cbw);
+    flow_length_t given = none;
+    given.kind = FLOW_LENGTH_PX;
+    given.value = (int32_t)min64(max64(0, size) + (own.box_sizing == FLOW_BORDER_BOX ? frame : 0),
+                                 INT32_MAX);
+    if (axis == 0) {
+        own.width = given;
+        own.min_width = own.max_width = none;
+    } else {
+        own.height = given;
+        own.min_height = own.max_height = none;
+    }
+    Replaced r = replaced_size(l, b->node, &own, cbw);
+    return axis == 0 ? r.h : r.w;
 }
 
 // ── Relative offsets ────────────────────────────────────────────────────
@@ -1901,13 +1917,17 @@ static void table_ends(const FBox *t, FBox **head, FBox **foot)
 static flow_place_t cross_align(const flow_style_t *container, const flow_style_t *item);
 
 // A flex container's first baseline (Flexbox 1 § 8.5): in a row, that of
-// an item lined up by baseline; else its first item's in `order`, not in
-// the tree. An item with no line of text gives one from its border box's
-// bottom edge, as it does when it is lined up by baseline.
+// an item lined up by baseline; else its startmost item's — first in
+// `order`, not in the tree, and in a reverse direction, which puts the
+// last at the start, last. An item with no line of text gives one from
+// its border box's bottom edge, as it does when it is lined up by
+// baseline.
 static bool flex_baseline(const FBox *b, int64_t *out)
 {
     const flow_style_t *s = b->style;
     bool row = s->flex_direction == FLOW_FLEX_ROW || s->flex_direction == FLOW_FLEX_ROW_REVERSE;
+    bool reverse = s->flex_direction == FLOW_FLEX_ROW_REVERSE ||
+                   s->flex_direction == FLOW_FLEX_COLUMN_REVERSE;
     const FBox *pick = NULL;
     for (const FBox *c = b->first; c != NULL; c = c->next) {
         if (c->out_of_flow)
@@ -1919,7 +1939,8 @@ static bool flex_baseline(const FBox *b, int64_t *out)
             pick = c;
             break;
         }
-        if (pick == NULL || cs->order < pick->style->order)
+        if (pick == NULL || (reverse ? cs->order >= pick->style->order
+                                     : cs->order < pick->style->order))
             pick = c;
     }
     if (pick == NULL || !pick->placed)
@@ -2272,6 +2293,20 @@ static void items_done(L *l, const FStyles *styles, FBox *b, int64_t cbw)
     }
 }
 
+// Whether an item is stretched across its line: `stretch`, no auto margin
+// across, and no size the page gave across — a row's item its height, a
+// column's its width. A table is not: its size is its rows' and columns'.
+static bool stretches_across(const flow_style_t *s, const FBox *c)
+{
+    const flow_style_t *cs = c->style;
+    bool row = s->flex_direction == FLOW_FLEX_ROW || s->flex_direction == FLOW_FLEX_ROW_REVERSE;
+    int side0 = row ? FLOW_TOP : FLOW_LEFT, side1 = row ? FLOW_BOTTOM : FLOW_RIGHT;
+    bool size_given = row ? cs->height.kind == FLOW_LENGTH_PX
+                          : cs->width.kind == FLOW_LENGTH_PX || cs->width.kind == FLOW_LENGTH_PERCENT;
+    return cross_align(s, cs) == FLOW_PLACE_STRETCH && !size_given && c->kind != FB_TABLE &&
+           cs->margin[side0].kind != FLOW_LENGTH_AUTO && cs->margin[side1].kind != FLOW_LENGTH_AUTO;
+}
+
 // A column item's left margin across a content box `cw` wide, its border
 // box `w` wide: auto margins take the room first, else its alignment
 // places it (a stretched one fills it, and is not sized here).
@@ -2414,9 +2449,12 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
         // Neither is held to the item's limits: those hold the
         // hypothetical size, and the base weighs the shrinking.
         // A picture's content is its own height, not the one it was laid
-        // out at (replaced_own).
-        int64_t content = c->kind == FB_REPLACED ? replaced_own(l, c, 1, cw) + it->frame
-                                                 : c->content_h;
+        // out at (replaced_own) — or, stretched across the line, the one
+        // its ratio gives that width (§ 9.8: a stretched size is definite).
+        int64_t content = c->content_h;
+        if (c->kind == FB_REPLACED)
+            content = (stretches_across(s, c) ? replaced_for(l, c, 0, c->flex_w, cw)
+                                              : replaced_own(l, c, 1, cw)) + it->frame;
         flow_length_t fb = cs->flex_basis;
         if (fb.kind == FLOW_LENGTH_PX || (fb.kind == FLOW_LENGTH_PERCENT && given >= 0))
             it->base = content_of(cs, fb, max64(0, given), it->frame) + it->frame;
@@ -2455,12 +2493,14 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
     if (l->failed)
         return false;
     // A picture the page gave no width takes one from the height it was
-    // flexed to, through its ratio, and is placed across again.
+    // flexed to, through its ratio, and is placed across again — unless the
+    // line stretches it, which decided its width first.
     for (int32_t i = 0; i < n; i++) {
         FBox *c = items[i].box;
-        if (c->kind != FB_REPLACED || !c->flex_sized || c->style->width.kind != FLOW_LENGTH_AUTO)
+        if (c->kind != FB_REPLACED || !c->flex_sized || c->style->width.kind != FLOW_LENGTH_AUTO ||
+            stretches_across(s, c))
             continue;
-        c->flex_w = replaced_w_for(l, c, c->h - items[i].frame, cw);
+        c->flex_w = replaced_for(l, c, 1, c->h - items[i].frame, cw);
         c->w = hframe(c, cw) + c->flex_w;
         c->flex_ml = column_ml(s, c, cw, c->w);
         int64_t rdx, rdy;
@@ -2623,6 +2663,19 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             it->grow = cs->flex_grow;
             it->shrink = cs->flex_shrink;
             (void)intrinsic(l, c);          // measures content_min, content_max
+            // The content's widths with its frame as it is here: intrinsic()
+            // measured a percentage padding against nothing.
+            int64_t own_min = c->content_min - hframe(c, 0) + it->frame;
+            int64_t own_max = c->content_max - hframe(c, 0) + it->frame;
+            // A picture stretched to a line the container's height fixes
+            // has that height, which its ratio carries into its width
+            // (§ 9.8: a stretched size is definite).
+            if (c->kind == FB_REPLACED && h_def && stretches_across(s, c)) {
+                int64_t vf = vframe(c, cw);
+                int64_t ch = clamp_height(cs, max64(0, h_given - len(cs->margin[FLOW_TOP], cw) -
+                                                           len(cs->margin[FLOW_BOTTOM], cw) - vf), vf);
+                own_min = own_max = replaced_for(l, c, 1, ch, cw) + it->frame;
+            }
             bool width_given = cs->width.kind == FLOW_LENGTH_PX || cs->width.kind == FLOW_LENGTH_PERCENT;
             flow_length_t fb = cs->flex_basis;
             if (fb.kind == FLOW_LENGTH_PX || fb.kind == FLOW_LENGTH_PERCENT)
@@ -2633,7 +2686,7 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
                 // `content`, and `auto` with no width: the content's own
                 // max-content width, before a limit the page gave, which
                 // holds the hypothetical size and not the base (§ 9.2.3).
-                it->base = c->content_max;
+                it->base = own_max;
             it->max = binds(cs->max_width, cw) ? content_of(cs, cs->max_width, cw, it->frame) + it->frame
                                                 : kNoLimit;
             if (binds(cs->min_width, cw)) {
@@ -2643,7 +2696,7 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             } else {
                 // The automatic minimum (§ 4.5): the content's min-content
                 // width, no more than a width the page gave, or its limit.
-                it->min = c->content_min;
+                it->min = own_min;
                 if (width_given)
                     it->min = min64(it->min, content_of(cs, cs->width, cw, it->frame) + it->frame);
                 it->min = min64(it->min, it->max);
@@ -2704,11 +2757,17 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             bool ml_auto = cs->margin[FLOW_LEFT].kind == FLOW_LENGTH_AUTO;
             bool mr_auto = cs->margin[FLOW_RIGHT].kind == FLOW_LENGTH_AUTO;
             bool width_given = cs->width.kind == FLOW_LENGTH_PX || cs->width.kind == FLOW_LENGTH_PERCENT;
-            if (a != FLOW_PLACE_STRETCH || ml_auto || mr_auto || width_given) {
-                // Sized as it would be on its own, then placed across.
+            // A stretched picture is sized here too: laid out as a block, it
+            // would take its own width rather than the line's.
+            bool stretched = a == FLOW_PLACE_STRETCH && !ml_auto && !mr_auto && !width_given;
+            if (!stretched || c->kind == FB_REPLACED) {
+                // Sized as it would be on its own, or stretched, then placed
+                // across.
                 int64_t frame = hframe(c, cw);
+                int64_t across = cw - len(cs->margin[FLOW_LEFT], cw) - len(cs->margin[FLOW_RIGHT], cw);
                 int64_t cwid = width_given ? clamp_width(cs, content_of(cs, cs->width, cw, frame), cw, frame)
-                                           : fit_content(l, c, cw);
+                             : stretched ? clamp_width(cs, max64(0, across - frame), cw, frame)
+                             : fit_content(l, c, cw);
                 c->flex_sized = true;
                 c->flex_w = cwid;
                 c->flex_ml = column_ml(s, c, cw, frame + cwid);
@@ -2800,8 +2859,8 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     // its own ratio.
     if (b->flex_sized) {
         forced_w = b->flex_w;
-        if (b->kind == FB_REPLACED && !height_given(s) && rep.w > 0)
-            rep.h = mul_div(b->flex_w, rep.h, rep.w);
+        if (b->kind == FB_REPLACED && !height_given(s))
+            rep.h = replaced_for(l, b, 0, b->flex_w, cbw);
     }
     int64_t ml;
     int64_t cw = widths(b, cbw, forced_w, &ml);

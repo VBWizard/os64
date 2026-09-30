@@ -157,7 +157,11 @@ and its items' margins never collapse with each other or with it.
    column lays each item out, once). A PICTURE's content is its own size
    on that axis (`replaced_own`): the size the page gave it and its limits
    there removed, a size given on the other axis carried through its
-   ratio. The base is NOT held to the item's limits: they weigh nothing
+   ratio — and a picture STRETCHED across a line whose size is fixed (a
+   column's width; a single-line row's given height) has that size, which
+   its ratio carries into this one (§ 9.8: a stretched size is definite).
+   A content width counts the item's frame as it is at the container's
+   width: `intrinsic` measures a percentage padding against nothing. The base is NOT held to the item's limits: they weigh nothing
    in shrinking. The hypothetical size is that, held to its limits, with
    `min-width: auto` (row) or `min-height: auto` (column) read as the
    automatic minimum (§ 4.5): in a row its CONTENT'S
@@ -194,7 +198,8 @@ and its items' margins never collapse with each other or with it.
    `auto` takes it from that width by its own ratio. The column's
    counterpart comes after resolving: a picture the page gave no width
    takes one from the height it was flexed to, and is placed across at it
-   (`replaced_w_for`, `column_ml`).
+   (`replaced_for`, `column_ml`) —
+   unless the line stretches it, which gave it its width first.
 6. **Cross sizes**: a single-line container's line is as tall as its
    `height` if given, else its tallest item (outer); a multi-line
    container's lines are each their tallest item, and `align-content:
@@ -246,8 +251,9 @@ one floor: two empty `flex: 0 0 100px` items are 200 wide, and a
 
 **A flex container's baseline**, for `inline-flex` on a line and
 `align-items: baseline` on its own container (§ 8.5, `flex_baseline`): in
-a row, that of an item lined up by baseline; else its first item's in
-`order` — the tree's order does not decide it. An item with no line of
+a row, that of an item lined up by baseline; else its startmost item's —
+the first in `order`, not the tree's order, and in a reverse direction,
+which puts the last at the start, the last. An item with no line of
 text gives one from its border box's bottom edge, as it does when it is
 lined up by baseline.
 
