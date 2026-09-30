@@ -1935,10 +1935,10 @@ static flow_place_t cross_align(const flow_style_t *container, const flow_style_
 
 // A flex container's first baseline (Flexbox 1 § 8.5): in a row, that of
 // an item on its first line lined up by baseline; else its startmost
-// item's — first in `order`, not in the tree, and in a reverse direction,
-// which puts the last at the start, last. An item with no line of text
-// gives one from its border box's bottom edge, as it does when it is
-// lined up by baseline.
+// item's (a row's, on its first line) — first in `order`, not in the
+// tree, and in a reverse direction, which puts the last at the start,
+// last. An item with no line of text gives one from its border box's
+// bottom edge, as it does when it is lined up by baseline.
 static bool flex_baseline(const FBox *b, int64_t *out)
 {
     const flow_style_t *s = b->style;
@@ -1956,6 +1956,8 @@ static bool flex_baseline(const FBox *b, int64_t *out)
             pick = c;
             break;
         }
+        if (row && c->flex_line != 0)
+            continue;               // a wrapped row's baseline is its first line's
         if (pick == NULL || (reverse ? cs->order >= pick->style->order
                                      : cs->order < pick->style->order))
             pick = c;
@@ -2298,16 +2300,21 @@ static int64_t justify_extra(flow_place_t j, bool reverse, bool column, int64_t 
 }
 
 // An item's cross alignment: its own, or its container's; `normal` is
-// `stretch`, and the start and end spellings are flex-start and flex-end
-// on one line.
+// `stretch`. The answer is PHYSICAL: flex-start is the top (a row's line)
+// or the left (a column's). `start` and `end` are the writing mode's,
+// which wrap-reverse leaves alone; `flex-start` and `flex-end` are the
+// cross axis's, which wrap-reverse turns round.
 static flow_place_t cross_align(const flow_style_t *container, const flow_style_t *item)
 {
     flow_place_t a = item->align_self != FLOW_PLACE_AUTO ? item->align_self
                                                          : container->align_items;
+    bool back = container->flex_wrap == FLOW_FLEX_WRAP_REVERSE;
     switch (a) {
     case FLOW_PLACE_NORMAL: case FLOW_PLACE_AUTO: return FLOW_PLACE_STRETCH;
     case FLOW_PLACE_START: case FLOW_PLACE_SELF_START: return FLOW_PLACE_FLEX_START;
     case FLOW_PLACE_END: case FLOW_PLACE_SELF_END: return FLOW_PLACE_FLEX_END;
+    case FLOW_PLACE_FLEX_START: return back ? FLOW_PLACE_FLEX_END : FLOW_PLACE_FLEX_START;
+    case FLOW_PLACE_FLEX_END: return back ? FLOW_PLACE_FLEX_START : FLOW_PLACE_FLEX_END;
     default: return a;
     }
 }
@@ -2317,10 +2324,12 @@ static const int64_t kNoLimit = INT64_MAX / 4;
 // Where the lines go on the cross axis (§ 9.4, § 8.4): `total` is the
 // container's inner cross size. `align-content: normal` is `stretch`,
 // which shares what the lines leave among them; the rest place them as
-// justify-content places items. A single-line container's one line is as
-// big as the container. False on no memory.
+// justify-content places items. The places are from the cross axis's
+// start, which the caller mirrors when `back` (wrap-reverse). A
+// single-line container's one line is as big as the container. False on
+// no memory.
 static bool place_lines(L *l, FlexLine *lines, int32_t nl, int64_t total, int64_t gap,
-                        flow_place_t how, bool wraps)
+                        flow_place_t how, bool wraps, bool back)
 {
     if (!wraps) {
         lines[0].cross = total;
@@ -2346,6 +2355,10 @@ static bool place_lines(L *l, FlexLine *lines, int32_t nl, int64_t total, int64_
         how = FLOW_PLACE_FLEX_START;
     } else if (how == FLOW_PLACE_BASELINE) {
         how = FLOW_PLACE_FLEX_START;
+    } else if (back && (how == FLOW_PLACE_START || how == FLOW_PLACE_END)) {
+        // `start` and `end` are the writing mode's: the caller mirrors
+        // these places for wrap-reverse, so they are mirrored here first.
+        how = how == FLOW_PLACE_START ? FLOW_PLACE_FLEX_END : FLOW_PLACE_FLEX_START;
     }
     int64_t at = 0;
     for (int32_t i = 0; i < nl; i++) {
@@ -2560,7 +2573,7 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
         }
         *natural = sum;
         int64_t total = given >= 0 ? given : clamp_height(s, sum, vframe_b);
-        if (!place_lines(l, lines, nl, total, cgap, s->align_content, wraps))
+        if (!place_lines(l, lines, nl, total, cgap, s->align_content, wraps, wrap_back))
             return false;
         for (int32_t li = 0; li < nl; li++) {
             const int32_t *idx = ord + lines[li].first;
@@ -2575,12 +2588,7 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
                 int64_t vf = c->border[FLOW_TOP] + c->padding[FLOW_TOP] + c->padding[FLOW_BOTTOM] +
                              c->border[FLOW_BOTTOM];
                 int64_t h = natural_h(c), room = line - (mt + h + mb), dy = 0;
-                flow_place_t a = cross_align(s, cs);
-                // wrap-reverse swaps the cross axis's start and end.
-                if (wrap_back && a == FLOW_PLACE_FLEX_START)
-                    a = FLOW_PLACE_FLEX_END;
-                else if (wrap_back && a == FLOW_PLACE_FLEX_END)
-                    a = FLOW_PLACE_FLEX_START;
+                flow_place_t a = cross_align(s, cs);   // physical
                 if (at_auto || ab_auto) {
                     // Auto margins on the cross axis take its free space.
                     if (room > 0)
@@ -2588,6 +2596,10 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
                 } else if (a == FLOW_PLACE_STRETCH) {
                     if (cs->height.kind != FLOW_LENGTH_PX && c->kind != FB_TABLE)
                         h = max64(vf, clamp_height(cs, max64(0, line - mt - mb - vf), vf) + vf);
+                    // One that does not fill its line sits at the cross
+                    // start, which wrap-reverse puts at the bottom.
+                    if (wrap_back)
+                        dy = line - (mt + h + mb);
                 } else if (a == FLOW_PLACE_FLEX_END) {
                     dy = room;
                 } else if (a == FLOW_PLACE_CENTER) {
@@ -2658,9 +2670,11 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
     }
     // A column breaks into lines only where its height is known, or
     // limited: with neither, it is as tall as all of its items.
+    // A min-height over the max-height wins, as it does for the height.
     int64_t room = given >= 0 ? given
-                 : s->max_height.kind == FLOW_LENGTH_PX ? content_of(s, s->max_height, 0, vframe_b)
-                 : kNoLimit;
+                 : s->max_height.kind == FLOW_LENGTH_PX
+                     ? clamp_height(s, content_of(s, s->max_height, 0, vframe_b), vframe_b)
+                     : kNoLimit;
     int32_t nl = form_lines(items, ord, n, room, gap, wraps, lines);
     int64_t size = 0;
     for (int32_t li = 0; li < nl; li++) {
@@ -2721,7 +2735,7 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
         // Across: the lines side by side, and each item in its line — a
         // stretched one's box widened to the line, its content as it was
         // laid out (FLEX.md § Booked).
-        if (!place_lines(l, lines, nl, cw, cgap, s->align_content, true))
+        if (!place_lines(l, lines, nl, cw, cgap, s->align_content, true, wrap_back))
             return false;
         for (int32_t li = 0; li < nl; li++) {
             const int32_t *idx = ord + lines[li].first;
@@ -2736,17 +2750,19 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
                 int64_t mr = mr_auto ? 0 : len(cs->margin[FLOW_RIGHT], cw);
                 int64_t nw = natural_w(c), room = line - (ml + nw + mr), dx = 0;
                 c->w = nw;
-                flow_place_t a = cross_align(s, cs);
-                if (wrap_back && a == FLOW_PLACE_FLEX_START)
-                    a = FLOW_PLACE_FLEX_END;
-                else if (wrap_back && a == FLOW_PLACE_FLEX_END)
-                    a = FLOW_PLACE_FLEX_START;
+                flow_place_t a = cross_align(s, cs);   // physical
                 if (ml_auto || mr_auto) {
                     if (room > 0)
                         dx = ml_auto && mr_auto ? room / 2 : ml_auto ? room : 0;
                 } else if (a == FLOW_PLACE_STRETCH) {
+                    // Widened to the line, held to its width limits; one
+                    // that does not fill it sits at the cross start, which
+                    // wrap-reverse puts at the right.
+                    int64_t hf = hframe(c, cw);
                     if (cs->width.kind == FLOW_LENGTH_AUTO && room > 0)
-                        c->w += room;
+                        c->w = hf + clamp_width(cs, nw - hf + room, cw, hf);
+                    if (wrap_back)
+                        dx = line - (ml + c->w + mr);
                 } else if (a == FLOW_PLACE_FLEX_END) {
                     dx = room;
                 } else if (a == FLOW_PLACE_CENTER) {

@@ -210,12 +210,16 @@ and its items' margins never collapse with each other or with it.
    baseline — and `align-content` places them in the container's height:
    `normal`, which is `stretch`, shares what is left among them, the rest
    place them as `justify-content` places items. `wrap-reverse` stacks
-   them from the far side and swaps `flex-start` and `flex-end` for the
-   items in them. A wrapping COLUMN's lines are as wide as their widest
-   item, which is not known before its items are laid out, so there each
-   item is laid out at its own width (fit-content) and a stretched one's
-   box is widened to its line without laying its content out again
-   (booked).
+   them from the far side and swaps `flex-start` and `flex-end` — for the
+   lines and for the items in them, and a stretched item that does not
+   fill its line is left at the far side too. `start` and `end` are the
+   writing mode's and are not swapped (`cross_align` answers in physical
+   terms). A column wraps in the height it may grow to: its max-height,
+   unless a min-height overrides it. A wrapping COLUMN's lines are as wide
+   as their widest item, which is not known before its items are laid
+   out, so there each item is laid out at its own width (fit-content) and
+   a stretched one's box is widened to its line, held to its width
+   limits, without laying its content out again (booked).
 7. **Cross alignment**, per item: `stretch` — the initial value — sets the
    item's height (row) or width (column) to the line's less its margins,
    when that dimension is `auto` and neither cross margin is `auto`, held
@@ -267,10 +271,10 @@ one floor: two empty `flex: 0 0 100px` items are 200 wide, and a
 **A flex container's baseline**, for `inline-flex` on a line and
 `align-items: baseline` on its own container (§ 8.5, `flex_baseline`): in
 a row, that of an item on its first line lined up by baseline; else its
-startmost item's — the first in `order`, not the tree's order, and in a
-reverse direction, which puts the last at the start, the last. An item with no line of
-text gives one from its border box's bottom edge, as it does when it is
-lined up by baseline.
+startmost item's (a row's, on its first line) — the first in `order`, not
+the tree's order, and in a reverse direction, which puts the last at the
+start, the last. An item with no line of text gives one from its border
+box's bottom edge, as it does when it is lined up by baseline.
 
 **Absolute children** (POSITION.md): a flex container is their containing
 block when it is positioned, as any block is. The static position of an
