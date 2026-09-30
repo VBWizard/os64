@@ -154,10 +154,13 @@ and its items' margins never collapse with each other or with it.
    height its content took laid out at its cross size (`FBox.content_h`,
    whatever `height` the page gave — for an item that is a flex container,
    the height its own items ask; for a table, its rows'; this is where a
-   column lays each item out, once). The base is NOT held to the item's
-   limits: they weigh nothing in shrinking. The hypothetical size is that,
-   held to its limits, with `min-width: auto` (row) or `min-height: auto` (column)
-   read as the automatic minimum (§ 4.5): in a row its CONTENT'S
+   column lays each item out, once). A PICTURE's content is its own size
+   on that axis (`replaced_own`): the size the page gave it and its limits
+   there removed, a size given on the other axis carried through its
+   ratio. The base is NOT held to the item's limits: they weigh nothing
+   in shrinking. The hypothetical size is that, held to its limits, with
+   `min-width: auto` (row) or `min-height: auto` (column) read as the
+   automatic minimum (§ 4.5): in a row its CONTENT'S
    min-content width — `intrinsic` keeps the content's two widths beside
    the ones a set width overrides (`content_min`, `content_max`), and the
    automatic minimum and `flex-basis: content` read those — in a column
@@ -191,7 +194,10 @@ and its items' margins never collapse with each other or with it.
 5. **Laying the row's items out**: each at its main size (the forced
    width), `block_at` as any block is, at its line's cross start. Its
    height is then its HYPOTHETICAL CROSS SIZE; a picture whose height is
-   `auto` takes it from that width by its own ratio.
+   `auto` takes it from that width by its own ratio. The column's
+   counterpart comes after resolving: a picture the page gave no width
+   takes one from the height it was flexed to, and is placed across at it
+   (`replaced_w_for`, `column_ml`).
 6. **Cross sizes**: a single-line container's line is as tall as its
    `height` if given, else its tallest item (outer), held to its limits; a
    multi-line container's lines are each their tallest item — the
@@ -254,9 +260,11 @@ one floor: two empty `flex: 0 0 100px` items are 200 wide, and a
 `flex: 0 1 100px` item holding 200px of content asks 200.)
 
 **A flex container's baseline**, for `inline-flex` on a line and
-`align-items: baseline` on its own container: the first baseline among its
-items in document order (`first_baseline_in`, which an item `order` moves
-does not change; booked with paint order).
+`align-items: baseline` on its own container (§ 8.5, `flex_baseline`): in
+a row, that of an item on its first line lined up by baseline; else its first item's in
+`order` — the tree's order does not decide it. An item with no line of
+text gives one from its border box's bottom edge, as it does when it is
+lined up by baseline.
 
 **Absolute children** (POSITION.md): a flex container is their containing
 block when it is positioned, as any block is. The static position of an
