@@ -247,6 +247,7 @@ static FBox *new_box(B *b, FBox *parent, f_box_kind_t kind, const os64_html_node
     box->style = style;
     const FStyled *st = node != NULL ? styled(b, node) : NULL;
     box->link = st != NULL ? st->link : parent != NULL ? parent->link : -1;
+    box->control = -1;
     box->parent = parent;
     // Attached at once, so a build that stops here leaves a tree that is
     // whole up to this box.
@@ -752,6 +753,10 @@ static FBox *element_box(B *b, FBox *parent, const os64_html_node_t *el, const F
 {
     if (replaced(el)) {
         FBox *box = new_box(b, parent, FB_REPLACED, el, &s->style);
+        // A control made a block is still a control: its widget goes where
+        // this box is, as an inline one's goes where its atom is.
+        if (box != NULL && b->model != NULL)
+            box->control = os64_page_control_for(b->model, el);
         position_box(b, box, el, true);
         return box;
     }

@@ -340,8 +340,10 @@ struct FBox {
     const char *marker;
     uint32_t marker_len;
     // The link this box IS (a frame) or sits inside, however deep, or -1:
-    // every box carries its own, an anonymous one its parent's.
-    int32_t link;
+    // every box carries its own, an anonymous one its parent's. And the
+    // control it is — a form control made block-level, by `display: block`
+    // or by positioning — or -1.
+    int32_t link, control;
 
     // ── Pass 3's geometry, in 26.6 document coordinates (x from the page's
     // left edge, y from its top). 64-bit, because a long page is taller

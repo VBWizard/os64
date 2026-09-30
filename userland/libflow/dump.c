@@ -554,6 +554,8 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
     default:
         putf(b, "%s %s", s_box[box->kind], node_name(box->node));
         box_rect(b, box->rect);
+        if (box->control >= 0)
+            putf(b, " control %d", (int)box->control);
         break;
     }
     if (box->link >= 0)

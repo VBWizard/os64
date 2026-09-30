@@ -24,6 +24,17 @@ _Static_assert(FLOW_BOX_BLOCK == (int)FB_BLOCK && FLOW_BOX_REPLACED == (int)FB_R
                FLOW_BOX_ROW == (int)FB_ROW && FLOW_BOX_CELL == (int)FB_CELL,
                "flow_box_kind_t and f_box_kind_t disagree");
 
+// One step of painting (CSS 2.1 Appendix E): a box's WHOLE two-phase walk,
+// or, for a stacking context with members under it, its SELF — its own
+// background and borders — and its BODY — everything else of its own —
+// with the members of negative z-index between the two.
+typedef enum { PART_WHOLE = 0, PART_SELF, PART_BODY } LayerPart;
+
+typedef struct {
+    const flow_box_t *box;
+    LayerPart part;
+} Layer;
+
 struct flow_tree {
     FStyles *styles;
     FBoxes *boxes;
@@ -33,6 +44,11 @@ struct flow_tree {
     FMap first;             // node -> its first public box
     const flow_box_t **images, **controls, **positioned;
     int32_t nimages, ncontrols, npositioned, cap_images, cap_controls, cap_positioned;
+    // The paint order: the root's layers and every positioned box's, as the
+    // stacking contexts sort them (stack_build). `positioned` is left in
+    // the same order.
+    Layer *layers;
+    int32_t nlayers;
     bool incomplete;
 };
 
@@ -302,6 +318,10 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
         return NULL;
     // In the list at its place in the pre-order, which is tree order: the
     // paint order until z-index sorts it.
+    b->control = src->control;
+    if (b->control >= 0 &&
+        !push_list(bd, &bd->t->controls, &bd->t->ncontrols, &bd->t->cap_controls, b))
+        return b;
     b->positioned = src->positioned;
     b->fixed |= src->out_of_flow && src->style->position == FLOW_POSITION_FIXED;
     if (src->positioned &&
@@ -383,7 +403,155 @@ void flow_free(flow_tree_t *tree)
     os64_free(tree->images);
     os64_free(tree->controls);
     os64_free(tree->positioned);
+    os64_free(tree->layers);
     os64_free(tree);
+}
+
+// ── Stacking (CSS 2.1 Appendix E, § 9.9.1) ───────────────────────────────
+//
+// A STACKING CONTEXT is the root, or a positioned box with a z-index, a
+// fixed or sticky one, or one painted at less than full opacity (CSS
+// Position 3, Color 4). Each positioned box belongs to the nearest one
+// that is its ancestor; within a context its members paint after the
+// context's own background — those of negative z-index first, then the
+// context's own content, then the rest by z-index, auto and 0 in tree
+// order, the positive lowest first — and a member that is a context
+// paints whole, its own members with it. A positioned box that is not a
+// context lends its descendants to the context it is in. What a
+// non-positioned box at less than full opacity would make is booked
+// (POSITION.md).
+
+static bool makes_context(const flow_box_t *b)
+{
+    const flow_style_t *s = b->style;
+    return s->has_z_index || s->position == FLOW_POSITION_FIXED ||
+           s->position == FLOW_POSITION_STICKY || s->opacity < 1000;
+}
+
+static int32_t z_of(const flow_box_t *b)
+{
+    return b->style->has_z_index ? b->style->z_index : 0;
+}
+
+typedef struct {
+    flow_tree_t *t;
+    const flow_box_t **entry;   // the positioned boxes, in tree order
+    bool *context;              // each entry's makes_context
+    int32_t *order;             // every context's members, grouped, each group sorted
+    int32_t *first, *count;     // a context's group in `order`: [first, first + count); -1 is the root
+    Layer *layers;
+    const flow_box_t **painted; // the entries again, in paint order
+    int32_t nlayers, npainted;
+} Stack;
+
+// A stable sort of a group by z-index: a merge through `tmp`, so members
+// of one z-index keep their tree order.
+static void sort_by_z(const Stack *st, int32_t *v, int32_t *tmp, int32_t n)
+{
+    if (n < 2)
+        return;
+    int32_t h = n / 2;
+    sort_by_z(st, v, tmp, h);
+    sort_by_z(st, v + h, tmp, n - h);
+    int32_t i = 0, j = h, k = 0;
+    while (i < h && j < n)
+        tmp[k++] = z_of(st->entry[v[j]]) < z_of(st->entry[v[i]]) ? v[j++] : v[i++];
+    while (i < h)
+        tmp[k++] = v[i++];
+    while (j < n)
+        tmp[k++] = v[j++];
+    os64_memcpy(v, tmp, (size_t)n * sizeof(*v));
+}
+
+static void layer(Stack *st, const flow_box_t *box, LayerPart part)
+{
+    st->layers[st->nlayers++] = (Layer){box, part};
+    if (part != PART_SELF && box->positioned)
+        st->painted[st->npainted++] = box;
+}
+
+// Context `c` (-1 for the root) and everything painted within it.
+static void emit_context(Stack *st, int32_t c)
+{
+    const flow_box_t *box = c < 0 ? st->t->root : st->entry[c];
+    const int32_t *m = st->order + st->first[c + 1];
+    int32_t n = st->count[c + 1], neg = 0;
+    while (neg < n && z_of(st->entry[m[neg]]) < 0)
+        neg++;
+    if (neg == 0) {
+        layer(st, box, PART_WHOLE);
+    } else {
+        layer(st, box, PART_SELF);
+        for (int32_t k = 0; k < neg; k++)
+            emit_context(st, m[k]);     // a negative z-index is always a context
+        layer(st, box, PART_BODY);
+    }
+    for (int32_t k = neg; k < n; k++) {
+        if (st->context[m[k]])
+            emit_context(st, m[k]);
+        else
+            layer(st, st->entry[m[k]], PART_WHOLE);
+    }
+}
+
+// The paint order, once per tree. False on no memory.
+static bool stack_build(flow_tree_t *t)
+{
+    int32_t n = t->npositioned;
+    Stack st = {.t = t, .entry = t->positioned};
+    FMap index = {0};
+    int32_t *ctx = os64_calloc((size_t)n + 1, sizeof(int32_t));
+    int32_t *tmp = os64_calloc((size_t)n + 1, sizeof(int32_t));
+    st.context = os64_calloc((size_t)n + 1, sizeof(bool));
+    st.order = os64_calloc((size_t)n + 1, sizeof(int32_t));
+    st.first = os64_calloc((size_t)n + 2, sizeof(int32_t));
+    st.count = os64_calloc((size_t)n + 2, sizeof(int32_t));
+    st.layers = os64_calloc((size_t)n * 2 + 2, sizeof(Layer));
+    st.painted = os64_calloc((size_t)n + 1, sizeof(*st.painted));
+    bool ok = ctx != NULL && tmp != NULL && st.context != NULL && st.order != NULL &&
+              st.first != NULL && st.count != NULL && st.layers != NULL && st.painted != NULL;
+    for (int32_t i = 0; ok && i < n; i++) {
+        st.context[i] = makes_context(st.entry[i]);
+        ok = f_map_put(&index, st.entry[i], (void *)(intptr_t)(i + 1));
+    }
+    // Each entry's context: the nearest ancestor entry that is one. An
+    // ancestor comes before in tree order, so it is indexed already.
+    for (int32_t i = 0; ok && i < n; i++) {
+        ctx[i] = -1;
+        for (const flow_box_t *p = st.entry[i]->parent; p != NULL; p = p->parent) {
+            intptr_t j = p->positioned ? (intptr_t)f_map_get(&index, p) - 1 : -1;
+            if (j >= 0 && st.context[j]) {
+                ctx[i] = (int32_t)j;
+                break;
+            }
+        }
+        st.count[ctx[i] + 1]++;
+    }
+    for (int32_t c = 1; ok && c <= n; c++)
+        st.first[c] = st.first[c - 1] + st.count[c - 1];
+    if (ok) {
+        int32_t *fill = tmp;            // how many of each group are placed
+        os64_memset(fill, 0, ((size_t)n + 1) * sizeof(int32_t));
+        for (int32_t i = 0; i < n; i++)
+            st.order[st.first[ctx[i] + 1] + fill[ctx[i] + 1]++] = i;
+        for (int32_t c = 0; c <= n; c++)
+            sort_by_z(&st, st.order + st.first[c], tmp, st.count[c]);
+        emit_context(&st, -1);
+        os64_memcpy(t->positioned, st.painted, (size_t)n * sizeof(*st.painted));
+        t->layers = st.layers;
+        t->nlayers = st.nlayers;
+        st.layers = NULL;
+    }
+    f_map_free(&index);
+    os64_free(ctx);
+    os64_free(tmp);
+    os64_free(st.context);
+    os64_free(st.order);
+    os64_free(st.first);
+    os64_free(st.count);
+    os64_free(st.layers);
+    os64_free(st.painted);
+    return ok;
 }
 
 flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *model,
@@ -417,7 +585,7 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
         tree->root = public_box(&bd, root, NULL, &none, kNoClip);
         // Out of memory for the public boxes is out of memory for the
         // page: nothing half-built is handed over.
-        if (bd.failed) {
+        if (bd.failed || !stack_build(tree)) {
             flow_free(tree);
             return NULL;
         }
@@ -547,30 +715,58 @@ static void visit_inline(const Visit *v, const flow_box_t *b)
     }
 }
 
-// The ordinary tree, then step 8 — each positioned box, in list order, as a
-// small two-phase walk of its own, against the viewport in its own
-// coordinates: a fixed box's are the viewport's.
+// The layers in paint order (stack_build), each against the viewport in
+// its box's own coordinates: a fixed box's are the viewport's. A WHOLE box
+// is its two-phase walk; a SELF, the box alone; a BODY, the rest of that
+// walk — its block-level descendants, then its inline content.
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx)
 {
     if (tree == NULL || tree->root == NULL || visit == NULL)
         return;
-    Visit v = {viewport, visit, ctx};
-    visit_blocks(&v, tree->root);
-    visit_inline(&v, tree->root);
-    for (int32_t i = 0; i < tree->npositioned; i++) {
-        const flow_box_t *p = tree->positioned[i];
-        flow_point_t o = flow_box_doc_offset(p, scroll);
-        Visit own = {moved(viewport, -(int64_t)o.x, -(int64_t)o.y), visit, ctx};
-        visit_blocks(&own, p);
-        visit_inline(&own, p);
+    for (int32_t i = 0; i < tree->nlayers; i++) {
+        const flow_box_t *b = tree->layers[i].box;
+        flow_point_t o = flow_box_doc_offset(b, scroll);
+        Visit v = {moved(viewport, -(int64_t)o.x, -(int64_t)o.y), visit, ctx};
+        switch (tree->layers[i].part) {
+        case PART_WHOLE:
+            visit_blocks(&v, b);
+            visit_inline(&v, b);
+            break;
+        case PART_SELF:
+            if (!b->unpainted && meets(b->overflow, v.view))
+                visit(ctx, b);
+            break;
+        case PART_BODY:
+            if (b->unpainted || !meets(b->overflow, v.view))
+                break;
+            for (const flow_box_t *c = b->first; c != NULL; c = c->next)
+                if (in_tree(c))
+                    visit_blocks(&v, c);
+            visit_inline(&v, b);
+            break;
+        }
     }
 }
 
+// What is clipped away is not there to be pointed at, and neither is a box
+// that lets the pointer through or is not drawn at all — asked of each
+// box, since both are inherited and a descendant may undo them.
+static const flow_box_t *hit_self(const flow_box_t *b, int32_t x, int32_t y)
+{
+    return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) &&
+                   !b->style->pointer_events_none && b->style->visibility == FLOW_VISIBLE
+               ? b : NULL;
+}
+
+static const flow_box_t *hit(const flow_box_t *b, int32_t x, int32_t y);
+
+// The deepest of a box's descendants the tree reaches (its positioned ones
+// are layers of their own) holding the point, the last painted winning.
 // Pruned on the overflow rect alone, and each box's clip asked of its own
 // rect: a clip is a box's own, so no box is pruned by its parent's — a
 // positioned one may have a wider clip than its tree parent.
-static const flow_box_t *hit(const flow_box_t *b, int32_t x, int32_t y)
+static const flow_box_t *hit_kids(const flow_box_t *b, int32_t x, int32_t y)
 {
     if (!holds(b->overflow, x, y))
         return NULL;
@@ -582,33 +778,37 @@ static const flow_box_t *hit(const flow_box_t *b, int32_t x, int32_t y)
         if (h != NULL)
             found = h;
     }
-    if (found != NULL)
-        return found;
-    // What is clipped away is not there to be pointed at, and neither is a
-    // box that lets the pointer through or is not drawn at all — asked of
-    // each box, since both are inherited and a descendant may undo them.
-    return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) &&
-                   !b->style->pointer_events_none && b->style->visibility == FLOW_VISIBLE
-               ? b : NULL;
+    return found;
 }
 
-// What is painted last is on top: the positioned list backwards, then the
-// ordinary tree — each asked in its own coordinates.
+static const flow_box_t *hit(const flow_box_t *b, int32_t x, int32_t y)
+{
+    const flow_box_t *h = hit_kids(b, x, y);
+    return h != NULL ? h : hit_self(b, x, y);
+}
+
+// What is painted last is on top: the layers backwards, each asked in its
+// own coordinates.
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll)
 {
     if (tree == NULL || tree->root == NULL)
         return NULL;
-    for (int32_t i = tree->npositioned; i > 0; i--) {
-        const flow_box_t *p = tree->positioned[i - 1];
-        flow_point_t o = flow_box_doc_offset(p, scroll);
+    for (int32_t i = tree->nlayers; i > 0; i--) {
+        const flow_box_t *b = tree->layers[i - 1].box;
+        flow_point_t o = flow_box_doc_offset(b, scroll);
         int64_t px = (int64_t)x - o.x, py = (int64_t)y - o.y;
         if (px < INT32_MIN || px > INT32_MAX || py < INT32_MIN || py > INT32_MAX)
             continue;
-        const flow_box_t *h = hit(p, (int32_t)px, (int32_t)py);
+        const flow_box_t *h = NULL;
+        switch (tree->layers[i - 1].part) {
+        case PART_WHOLE: h = hit(b, (int32_t)px, (int32_t)py); break;
+        case PART_SELF: h = hit_self(b, (int32_t)px, (int32_t)py); break;
+        case PART_BODY: h = hit_kids(b, (int32_t)px, (int32_t)py); break;
+        }
         if (h != NULL)
             return h;
     }
-    return hit(tree->root, x, y);
+    return NULL;
 }
 
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll)

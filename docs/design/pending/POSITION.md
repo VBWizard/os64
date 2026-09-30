@@ -230,6 +230,19 @@ absolute dropdown inside it is ordinary.
   it has no box of its own to list, only pieces on lines, so it moves and
   paints in the flow's order (booked). P3 then sorts the list by
   `z-index` and nests it by stacking context, and nothing else changes.
+- **Paint order, P3, as built.** The door keeps a list of LAYERS, built
+  once per tree: each stacking context — the root, a positioned box with
+  a `z-index`, a fixed or sticky one, or one below full opacity (CSS
+  Position 3, Color 4) — paints its own background (its SELF), its
+  members of negative `z-index`, its own content (its BODY), then its
+  members of `z-index` auto or 0 in tree order, then the positive ones,
+  lowest first, by a stable sort; a context with no negative member paints
+  whole in one step. A positioned box that is no context lends its
+  positioned descendants to the context it is in. `flow_visit` walks the
+  layers forwards and `flow_hit` backwards, and `flow_positioned` lists
+  the positioned boxes in the order their content is painted. A box below
+  full opacity that is NOT positioned makes a context in CSS too, painted
+  as if it were positioned at `z-index: 0`; that is booked.
 - **Hit testing** tries the positioned list backwards, then the ordinary
   tree, so a click lands on what is on top. `hit` tests a box's clip
   against the box's OWN rect and prunes children on overflow alone, since
@@ -442,6 +455,7 @@ he said, not a CSS one — and Fable ruled as he had recommended:
 | The logical insets (`inset-inline-start` and the rest) | the physical four first; the chapter's `dialog` rule is applied physically | a page that writes them |
 | Percentage heights of an absolute box's descendants | GARB.md's percentage-height row, unchanged; the absolute box's own resolves | that row |
 | Scrolling a positioned box's own overflow | nothing scrolls a box yet | box scrolling |
+| A non-positioned box below full opacity as a stacking context | CSS paints it as if positioned at `z-index: 0`; libflow paints such a box in the flow, opaque, since the painter blends nothing yet | the painter's blend (pile 3) |
 | Form widgets under positioned boxes, between P1 and P2 | `flow_box_covered` is P2's | P2 |
 | A relative inline, or atom, painted in the positioned layer | an inline has no box to list, only pieces spread over lines: they move and paint in the flow's order | a page where a nudged inline must paint over its neighbours |
 | A block inside a relative inline, moved with it (CSS 2.1 § 9.2.1.1) | the offset lives on the inline's pieces and fragments; the block the inline is split round is laid out by the block flow, which knows no inline open round it | a page that nudges an inline holding a block by a visible amount |

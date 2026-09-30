@@ -618,10 +618,9 @@ degrades honestly:** `float` and `clear` are recorded and ignored, so an
 `<img align=left>` sits inline at its baseline and the text runs after it
 rather than beside it — the page still reads, in order; `position` is
 laid out as POSITION.md's slices land it (relative, absolute and fixed;
-sticky as relative, and every `z-index` as auto, until theirs),
-`inline-table` is not laid out, and `overflow` only clips (GARB.md §
-Booked says what the cascade does with each). Each is a row in the booked
-table.
+sticky as relative until its own), `inline-table` is not laid out, and
+`overflow` only clips (GARB.md § Booked says what the cascade does with
+each). Each is a row in the booked table.
 
 ## The dump
 
@@ -687,12 +686,13 @@ its contract; this is what it offers and why.
   replaced-size oracle, the text context, `medium`, the default generic
   and the three colours the dumps name and never print.
 - **`flow_root` and `flow_visit(tree, viewport, scroll, fn, ctx)`** — the
-  tree for painting, walked in Appendix E's order with every `z-index` read as
-  auto: the block-level boxes first (backgrounds and borders), then the
-  inline content, a span before the text it sits behind, an atom's own
-  content where the atom is — the ordinary tree with its positioned boxes
-  skipped, then each positioned box, in list order, the same two walks
-  over its own subtree (POSITION.md). Nothing of an `opacity: 0` box is
+  tree for painting, walked in Appendix E's order: each stacking context's
+  own background, its members of negative `z-index`, its own content —
+  the block-level boxes first (backgrounds and borders), then the inline
+  content, a span before the text it sits behind, an atom's own content
+  where the atom is, its positioned boxes skipped — then its members of
+  `z-index` auto or 0 in tree order, then the positive ones, lowest first
+  (POSITION.md, P3). Nothing of an `opacity: 0` box is
   handed over (`flow_box_t.unpainted`). The walk prunes on each box's
   OVERFLOW rect, never its own, so a child hanging out of a too-short
   parent is still visited and painting the viewport costs the boxes it
@@ -718,7 +718,7 @@ its contract; this is what it offers and why.
 - **`flow_nimages`/`flow_image`, `flow_ncontrols`/`flow_control`** — where
   the face PLACES things, in tree order, each item once: an image's box
   (its alt text's first run when it is laid out as text) for a picture that
-  arrived, and a control's atom for its widget. A picture that takes no
+  arrived, and a control's box for its widget. A picture that takes no
   space (missing, `alt=""`) has no box and is not listed, so the face
   FETCHES from libpage's images list, which names every picture the page
   does whether it has a box yet or not.
@@ -993,7 +993,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Floats and `clear` (`align=left/right` on `img`/`table`, `<br clear>`) | the float rules (§9.5) are a second placement pass with their own line-box shortening; the struct records them so the cascade and the first cut agree on the field | the first page whose layout is unreadable without a float — image-beside-text pages of the old web will vote early |
-| `sticky`, `z-index`, `inline-table`; scrolling | relative, absolute and fixed are laid out (POSITION.md P1, P2); sticky is laid out as relative and `z-index` in tree order until their slices; from the cascade, `inline-table` is laid out as a table, and `overflow: scroll`/`auto` draw what they would scroll, since nothing scrolls | POSITION.md's P3–P4; pile 2 (GARB.md) |
+| `sticky`, `inline-table`; scrolling | relative, absolute and fixed are laid out, and `z-index` stacks them (POSITION.md P1–P3); sticky is laid out as relative until its slice; from the cascade, `inline-table` is laid out as a table, and `overflow: scroll`/`auto` draw what they would scroll, since nothing scrolls | POSITION.md's P4; pile 2 (GARB.md) |
 | Collapsing borders (§17.6.2) | a table with `rules` or `frame` records `border-collapse: collapse`; it is laid out with no spacing and its borders drawn separately | the first ruled table that reads wrong for it |
 | A range-draw on a measuring run (F2 ask) | halves layout work and run memory; works without it | a page whose layout time is visible, measured, or a page that hits the memory cap through runs |
 | Incremental relayout | ruling 2 says rebuild; the face paces it | the engine, or a page whose rebuild is visibly slow |

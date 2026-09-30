@@ -422,7 +422,7 @@ struct flow_box {
     // drew it — an underline and a line-through may differ.
     uint32_t underline_color, line_through_color;
     int32_t link;                   // libpage's link this box is or sits in, or -1
-    int32_t control;                // ATOMIC: libpage's control, or -1
+    int32_t control;                // ATOMIC, REPLACED: libpage's control, or -1
     bool unfinished;                // layout stopped inside it (flow_incomplete)
     // A block-level box whose `position` is not static (a table's row,
     // group or column is laid out static: booked): it stays under its
@@ -495,13 +495,15 @@ bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point
 
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of
 // their own (flow_hit can still answer one), and the unpainted ones, in
-// painting order (CSS 2.1 Appendix E with every `z-index` read as auto):
-// the ordinary tree first, its positioned boxes skipped — the block-level
-// boxes, their backgrounds and borders, then the inline content, spans
-// before the text they sit behind, an atom's own content where the atom
-// is — and then each positioned box in list order, the same two walks
-// over its own subtree, skipping the positioned boxes nested in it, which
-// come later in the list. Pruned on OVERFLOW rects: a subtree off the
+// painting order (CSS 2.1 Appendix E): each stacking context's own
+// background, then its members of negative z-index, then its own content —
+// the block-level boxes, their backgrounds and borders, then the inline
+// content, spans before the text they sit behind, an atom's own content
+// where the atom is, its positioned boxes skipped — then its members of
+// z-index auto or 0 in tree order, then the positive ones, lowest first;
+// a member that is a context painted whole in its turn, and one that is
+// not painted by the same two walks over its own subtree. The root is the
+// first context. Pruned on OVERFLOW rects: a subtree off the
 // viewport costs one test, and a box that meets it costs a test for each
 // of its children, lines included. `viewport` is in document coordinates
 // and `scroll` is where the page is scrolled to: the rect a face paints is
@@ -528,8 +530,8 @@ const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_p
 // layout, not per pointer move.
 const flow_box_t *flow_hit_in_flow(const flow_tree_t *tree, int32_t x, int32_t y);
 
-// The positioned boxes (flow_box_t.positioned) in paint order: tree order,
-// until z-index sorts it.
+// The positioned boxes (flow_box_t.positioned), each once, in the order
+// their content is painted (flow_visit's).
 int32_t flow_npositioned(const flow_tree_t *tree);
 const flow_box_t *flow_positioned(const flow_tree_t *tree, int32_t i);
 
