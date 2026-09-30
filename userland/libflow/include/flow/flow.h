@@ -207,8 +207,7 @@ typedef enum {
     FLOW_OVERFLOW_AUTO,
 } flow_overflow_t;
 typedef enum { FLOW_CLEAR_NONE = 0, FLOW_CLEAR_LEFT, FLOW_CLEAR_RIGHT, FLOW_CLEAR_BOTH } flow_clear_t;
-// CSS Position 3 § 2 (POSITION.md). `sticky` is laid out as `relative`
-// with its insets ignored until its slice.
+// CSS Position 3 § 2 (POSITION.md).
 typedef enum {
     FLOW_POSITION_STATIC = 0,
     FLOW_POSITION_RELATIVE,
@@ -376,6 +375,9 @@ typedef enum {
 } flow_box_kind_t;
 
 typedef struct flow_box flow_box_t;
+// What a sticky box needs to know to find where it is at a scroll
+// (flow_box_doc_offset): opaque, the door's own.
+typedef struct flow_sticky flow_sticky_t;
 
 // A point, or an offset: how far the page is scrolled, x and y.
 typedef struct {
@@ -386,9 +388,11 @@ typedef struct {
 // pixels, rounded once, by the painter's rule, from the layout's 26.6 — in
 // DOCUMENT coordinates, x from the page's left and y from its top, but for
 // a box in a fixed box's subtree (`fixed`), whose coordinates are the
-// VIEWPORT's, since it does not move with the page. flow_box_doc_rect and
-// its siblings answer any box in document coordinates, given the scroll:
-// the one place that rule is written.
+// VIEWPORT's, since it does not move with the page. A box in a sticky
+// box's subtree is where the flow put it, and is drawn moved by however
+// far the scroll pushes the sticky box. flow_box_doc_rect and its siblings
+// answer any box in document coordinates, given the scroll: the one place
+// that rule is written.
 struct flow_box {
     flow_box_kind_t kind;
     const os64_html_node_t *node;   // NULL for an anonymous box
@@ -434,6 +438,12 @@ struct flow_box {
     // In a `position: fixed` box's subtree, the fixed box included: its
     // rects, clip and baseline are viewport coordinates (above).
     bool fixed;
+    // The innermost `position: sticky` box whose push moves this one, it
+    // included, or NULL: the one its containing blocks lead to, so a box in
+    // the flow moves with its parent and an absolute one with its
+    // containing block, while a fixed box inside a sticky one, the
+    // viewport's, does not move with it (POSITION.md, P4).
+    const flow_sticky_t *sticky;
     // `opacity: 0` on it or on an element it is inside: flow_visit does not
     // hand it over. flow_hit still finds it, as a browser's pointer does,
     // unless it is `pointer-events: none`. A face drawing live widgets
@@ -476,8 +486,9 @@ bool flow_incomplete(const flow_tree_t *tree);
 const flow_box_t *flow_root(const flow_tree_t *tree);
 
 // What to add to a box's coordinates to have document ones: the scroll,
-// for a box in a fixed subtree, else nothing. The one rule; the rect and
-// clip functions below apply it.
+// for a box in a fixed subtree, and the push of each sticky box it moves
+// with at that scroll (CSS Position 3 § 3.4), else nothing. The one rule;
+// the rect and clip functions below apply it.
 flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll);
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
 // Its clip, meaningful when `clipped`, as for the field.

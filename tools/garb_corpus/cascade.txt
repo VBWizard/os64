@@ -93,10 +93,10 @@ p: color: rgb(0, 0, 255); margin-bottom: 4px; margin-left: 2px; padding-right: 6
 (end)
 END
 
-# Positioning in @supports: absolute, relative and fixed are laid out as
-# they say, and so is `z-index`, and an opacity of none or all; sticky is
-# laid out as relative and a partial opacity as all, so neither is
-# SUPPORTED until its slice lands.
+# Positioning in @supports: absolute, relative, fixed and sticky are laid
+# out as they say, and so is `z-index`, and an opacity of none or all; a
+# partial opacity is painted as all, so it is not SUPPORTED until the
+# painter blends.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -114,7 +114,7 @@ PAGE
 </style>
 <p>x
 WANT
-p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; padding-top: 5px; padding-right: 6px; padding-bottom: 7px; width: 9px; height: 10px; position: relative
+p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; margin-left: 4px; padding-top: 5px; padding-right: 6px; padding-bottom: 7px; width: 9px; height: 10px
 (end)
 END
 

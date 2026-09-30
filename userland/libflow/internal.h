@@ -504,11 +504,38 @@ typedef struct {
     bool incomplete;
 } FLayout;
 
+// A length in 26.6 against a base in 26.6, as layout resolves one: a
+// percentage of the base, and `auto` read as 0 — the caller that cares
+// asks first.
+int64_t f_len(flow_length_t l, int64_t base);
+
 // Lays the box tree out at `width` CSS pixels. NULL only when there is not
 // memory for the layout record.
 FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
                   const flow_env_t *env, int32_t width);
 void f_layout_free(FLayout *layout);
+
+// A sticky box (CSS Position 3 § 3.4), as the door built it: everything
+// the push at a scroll is worked from, in the box's own coordinates.
+struct flow_sticky {
+    const flow_box_t *box;
+    // The next sticky box out along its containing blocks, which moves it
+    // and everything it is worked against; NULL for none.
+    const flow_sticky_t *outer;
+    // Its SCROLLPORT: the nearest ancestor that is a scroll container, or
+    // NULL for the viewport. Nothing here scrolls but the viewport, so
+    // another's is the padding box `port_rect`, in `port`'s coordinates,
+    // where it stands; the viewport's is `view_w` by `view_h` at the scroll.
+    const flow_box_t *port;
+    os64_gui_rect_t port_rect;
+    int32_t view_w, view_h;
+    // The insets that are not `auto`, in pixels, in CSS's side order.
+    bool has[4];
+    int32_t inset[4];
+    // How far it may move on each axis, x then y, and stay inside its
+    // containing block, margins and all: lo <= 0 <= hi.
+    int32_t lo[2], hi[2];
+};
 
 // The public tree (flow.c) as text, one line per box (dump.c).
 int64_t f_tree_dump(const flow_box_t *root, int32_t width, int32_t height, bool incomplete,

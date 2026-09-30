@@ -117,7 +117,9 @@ positioned box — nothing else can read it.
 **A fixed box stays where it is on the glass** while the page scrolls
 under it (POSITION.md, P2): the painter moves it by the scroll, clicks
 find it there, and a form field a fixed box is drawn over hides its widget
-— the header's pixels are the header's, and so is the click.
+— the header's pixels are the header's, and so is the click. **A sticky
+box** (P4) rides the same rule: it is drawn where the scroll pushes it, and
+it is clicked there.
 
 **`p` lays pages out with positioning off**, every box `static` — the
 page as it reads in document order — until `p` again brings back pages

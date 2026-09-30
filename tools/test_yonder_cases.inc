@@ -174,4 +174,15 @@ static void paint_cases(void)
                     "fill 0 500 200 100 #fefefe\n"
                     "fill 0 500 200 30 #00ff00\n"
                     "text \"top\" 0 514 #101010\n");
+    // A sticky header written at the top rides the view down: scrolled
+    // 500, it is drawn at 500 like the fixed one, its text with it, over
+    // the paragraph it was written before.
+    paint_page_case("a sticky header is painted where the scroll pushes it",
+                    "<!doctype html><style>body { margin: 0 } p { margin: 0; height: 1000px }"
+                    " div { position: sticky; top: 0; height: 30px; background: #00ff00 }"
+                    "</style><div>top</div><p>long</p>",
+                    200, (os64_gui_rect_t){0, 500, 200, 100}, true,
+                    "fill 0 500 200 100 #fefefe\n"
+                    "fill 0 500 200 30 #00ff00\n"
+                    "text \"top\" 0 514 #101010\n");
 }

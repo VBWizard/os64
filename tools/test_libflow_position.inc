@@ -691,6 +691,177 @@ static void position_zindex_cases(void)
     sheeted_close(&q);
 }
 
+// Sticky boxes (P4): where the flow put them, drawn moved by the scroll
+// until their containing block runs out (CSS Position 3 § 3.4).
+static bool inside_of(const flow_box_t *b, const flow_box_t *outer)
+{
+    while (b != NULL && b != outer)
+        b = b->parent;
+    return b != NULL;
+}
+
+static bool seen_has(const Seen *s, const flow_box_t *b)
+{
+    return seen_index(s, b) >= 0;
+}
+
+static void position_sticky_cases(void)
+{
+    // A header 30 high at 100, in a wrapper 100..900: it stays put until
+    // the page scrolls past 100, then rides the view's top, and lets go
+    // 30 above the wrapper's end, at 870 — 770 below where it began.
+    Sheeted q;
+    const char *page =
+        "<!doctype html><style>body{margin:0} p{margin:0} .gap{height:100px}"
+        ".wrap{height:800px} .s{position:sticky;top:0;height:30px} .long{height:1000px}</style>"
+        "<p class=gap></p><div class=wrap id=w><div class=s id=s>head</div>"
+        "<p><input name=q></p></div><p class=long></p>";
+    sheeted_open(&q, page, 400, 600);
+    flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+    const os64_html_node_t *root = q.doc->document;
+    const flow_box_t *s = box_with_id(t, root, "s"), *w = box_with_id(t, root, "w");
+    const flow_box_t *field = t != NULL ? flow_control(t, 0) : NULL;
+    expect("sticky: the header is positioned and sticky, where the flow put it",
+           s != NULL && s->positioned && s->sticky != NULL && s->sticky->box == s &&
+               s->rect.y == 100 && s->rect.h == 30 && !s->fixed, NULL);
+    expect("sticky: what is inside it moves with it",
+           s != NULL && s->first != NULL && s->first->sticky == s->sticky, NULL);
+    struct { int32_t scroll, y; } at[] = {{0, 100}, {50, 100}, {100, 100}, {300, 300},
+                                          {870, 870}, {1000, 870}};
+    bool rides = s != NULL;
+    for (size_t k = 0; rides && k < sizeof(at) / sizeof(at[0]); k++)
+        rides = flow_box_doc_rect(s, (flow_point_t){0, at[k].scroll}).y == at[k].y;
+    expect("sticky: stays, rides the view's top, lets go at its wrapper's end", rides, NULL);
+    const flow_box_t *text = s != NULL ? s->first : NULL;
+    while (text != NULL && text->kind != FLOW_BOX_TEXT)
+        text = text->first;
+    expect("sticky: its text is drawn moved as far",
+           text != NULL && flow_box_doc_rect(text, (flow_point_t){0, 300}).y ==
+                               text->rect.y + 200, NULL);
+    expect("sticky: an in-flow box beside it does not move",
+           w != NULL && flow_box_doc_rect(w, (flow_point_t){0, 300}).y == 100, NULL);
+
+    flow_point_t top = {0, 0}, down = {0, 300};
+    const flow_box_t *h = t != NULL ? flow_hit(t, 10, 310, down) : NULL;
+    expect("sticky: scrolled, a click at the view's top is the header", inside_of(h, s), NULL);
+    h = t != NULL ? flow_hit(t, 10, 310, top) : NULL;
+    expect("sticky: not scrolled, the same point is the wrapper", h == w, NULL);
+    Seen seen = {0}, none = {0};
+    flow_visit(t, (os64_gui_rect_t){0, 300, 400, 100}, down, seen_add, &seen);
+    flow_visit(t, (os64_gui_rect_t){0, 300, 400, 100}, top, seen_add, &none);
+    expect("sticky: scrolled, the header is painted in view, and not unscrolled",
+           seen_has(&seen, s) && !seen_has(&none, s), NULL);
+    flow_point_t over = {0, field != NULL ? field->rect.y - 10 : 0};
+    expect("sticky: the field is not covered unscrolled, and is under the stuck header",
+           field != NULL && !flow_box_covered(t, field, top) &&
+               flow_box_covered(t, field, over), NULL);
+    flow_free(t);
+    sheeted_close(&q);
+    {
+        char *got = cascade_layout_of(page, 400);
+        expect("sticky: the dump says how far it may move",
+               got != NULL && strstr(got, " positioned sticky x 0..0 y 0..770\n") != NULL, got);
+        free(got);
+    }
+
+    // `bottom: 0` on a footer at 1000 in a page 2000 tall: pushed up to the
+    // view's foot while it is below it, as far up as the body's top.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0} .top{height:1000px}"
+                     ".f{position:sticky;bottom:0;height:20px} .after{height:980px}</style>"
+                     "<p class=top></p><div class=f id=f>foot</div><p class=after></p>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *f = box_with_id(t, q.doc->document, "f");
+    expect("sticky: a bottom one is held at the view's foot, and let go in view",
+           f != NULL && f->sticky != NULL && f->sticky->lo[1] == -1000 &&
+               f->sticky->hi[1] == 980 &&
+               flow_box_doc_rect(f, top).y == 580 &&
+               flow_box_doc_rect(f, (flow_point_t){0, 500}).y == 1000 &&
+               flow_box_doc_rect(f, (flow_point_t){0, 1400}).y == 1000, NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // Inside a scroll container its scrollport is the container's, which
+    // nothing scrolls: `top: 50px` pushes it 50 down at every scroll of the
+    // page, and the page's scroll moves it no further.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} .box{overflow:auto;height:200px}"
+                     ".s{position:sticky;top:50px;height:30px} .long{height:1000px}"
+                     ".page{height:2000px}</style><div class=box id=b><div class=s id=s>s</div>"
+                     "<div class=long></div></div><div class=page></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    s = box_with_id(t, q.doc->document, "s");
+    const flow_box_t *b = box_with_id(t, q.doc->document, "b");
+    expect("sticky: in a scroll container, it sticks to the container, not the view",
+           s != NULL && s->sticky != NULL && s->sticky->port == b &&
+               flow_box_doc_rect(s, top).y == 50 &&
+               flow_box_doc_rect(s, (flow_point_t){0, 500}).y == 50, NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A table's heading cell rides the view until the table ends: its
+    // containing block is the table.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} table{border-spacing:0}"
+                     "th,td{padding:0} th{position:sticky;top:0;height:20px}"
+                     "td{height:1000px}</style><table id=t><thead><tr><th id=h>h</th></tr>"
+                     "</thead><tbody><tr><td>x</td></tr></tbody></table>"
+                     "<div style='height:1000px'></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *th = box_with_id(t, q.doc->document, "h");
+    const flow_box_t *tb = box_with_id(t, q.doc->document, "t");
+    int32_t end = tb != NULL && th != NULL ? tb->rect.y + tb->rect.h - th->rect.h : -1;
+    expect("sticky: a heading cell rides the view until its table ends",
+           th != NULL && th->kind == FLOW_BOX_CELL && th->sticky != NULL &&
+               flow_box_doc_rect(th, top).y == th->rect.y &&
+               flow_box_doc_rect(th, (flow_point_t){0, 500}).y == 500 &&
+               flow_box_doc_rect(th, (flow_point_t){0, 1500}).y == end, NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // What is positioned inside it: an absolute badge has the sticky box
+    // for its containing block and moves with it; a fixed one is the
+    // viewport's and does not; a sticky box inside it is worked out in the
+    // frame the outer one moved: it rides with it, and once the outer one
+    // has let go at 800 the inner one is pushed on to the outer box's own
+    // end, 800 + 100 - 20.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0} .gap{height:100px}"
+                     ".wrap{height:800px} .s{position:sticky;top:0;height:100px}"
+                     ".in{position:sticky;top:0;height:20px}"
+                     ".a{position:absolute;top:0;right:0;width:10px;height:10px}"
+                     ".f{position:fixed;top:50px;left:0;width:10px;height:10px}"
+                     ".long{height:1000px}</style><p class=gap></p><div class=wrap>"
+                     "<div class=s id=s><div class=in id=i>in</div><span class=a id=a></span>"
+                     "<span class=f id=f></span></div></div><p class=long></p>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    root = q.doc->document;
+    s = box_with_id(t, root, "s");
+    const flow_box_t *in = box_with_id(t, root, "i"), *a = box_with_id(t, root, "a");
+    f = box_with_id(t, root, "f");
+    expect("sticky: an absolute box in it moves with it",
+           a != NULL && s != NULL && a->sticky == s->sticky &&
+               flow_box_doc_rect(a, down).y == 300, NULL);
+    expect("sticky: a fixed box in it is the viewport's",
+           f != NULL && f->sticky == NULL && f->fixed && flow_box_doc_rect(f, down).y == 350,
+           NULL);
+    expect("sticky: a sticky box in it rides with it, then to the outer box's end",
+           in != NULL && in->sticky != NULL && in->sticky->outer == s->sticky &&
+               flow_box_doc_rect(in, down).y == 300 &&
+               flow_box_doc_rect(in, (flow_point_t){0, 1000}).y == 880, NULL);
+    flow_free(t);
+
+    // Positioning off: laid out, and drawn, where the flow puts it.
+    q.env.static_only = true;
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    s = box_with_id(t, root, "s");
+    expect("sticky: positioning off, it does not stick",
+           s != NULL && !s->positioned && s->sticky == NULL &&
+               flow_box_doc_rect(s, down).y == 100, NULL);
+    flow_free(t);
+    sheeted_close(&q);
+}
+
 static void position_cases(void)
 {
     position_style_cases();
@@ -698,4 +869,5 @@ static void position_cases(void)
     position_door_cases();
     position_fixed_door_cases();
     position_zindex_cases();
+    position_sticky_cases();
 }
