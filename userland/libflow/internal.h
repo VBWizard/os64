@@ -396,8 +396,9 @@ struct FBox {
     // minimum and `flex-basis: content` read (Flexbox 1 § 4.5, § 7.2.3).
     int64_t content_min, content_max;
     // The height its content took when it was laid out, border box, before
-    // a height or a limit the page gave: what a column flex item's
-    // automatic minimum and `flex-basis: content` read.
+    // a height or a limit the page gave: a flex container's, the height its
+    // items ask; a table's, its rows'. What a flex item's natural height,
+    // and a column item's automatic minimum and `flex-basis: content`, read.
     int64_t content_h;
     uint32_t intrinsic_computed;    // how often; the fuzz asserts at most once
     // An out-of-flow box's static position (CSS 2.1 § 10.3.7): among
@@ -411,10 +412,12 @@ struct FBox {
     bool abs_sized, abs_h_set;
     int64_t abs_w, abs_ml, abs_h;
     // A flex item's width and left margin, as its container decided them
-    // before laying it out (FLEX.md), which block() takes as given; and
-    // how many times the box was laid out, which the fuzz holds to once.
+    // before laying it out (FLEX.md), which block() takes as given; a row
+    // item's line, which placing it again reads; and how many times the
+    // box was laid out, which the fuzz holds to once.
     bool flex_sized;
     int64_t flex_w, flex_ml;
+    int32_t flex_line;
     uint32_t laid;
 };
 

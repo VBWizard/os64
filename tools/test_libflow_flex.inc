@@ -473,6 +473,92 @@ static void flex_wrap_review_cases(void)
                FLEX_IDS("i", "a"), FLEX_WANT({0, 0, 80, 20}, {70, 0, 10, 10}));
 }
 
+// Nested containers, bases and limits (Quinn's round on #181; Chrome's
+// answers).
+static void flex_nested_cases(void)
+{
+    // An item that is itself a flex container places its items against
+    // the height its container gave it: stretched to 100 in a row, grown
+    // to 100 down a column, its 20px child centred at 40.
+    flex_rects("flex: a stretched flex item centres against its stretched height",
+               "#o{display:flex;width:200px;height:100px} #i{display:flex;width:100px;align-items:center}"
+               " #k{width:20px;height:20px}</style><div id=o><div id=i><div id=k></div></div></div>",
+               FLEX_IDS("i", "k"), FLEX_WANT({0, 0, 100, 100}, {0, 40, 20, 20}));
+    flex_rects("flex: a grown column item centres against its grown height",
+               "#o{display:flex;flex-direction:column;width:200px;height:100px}"
+               " #i{flex:1;display:flex;flex-direction:column;justify-content:center}"
+               " #k{width:20px;height:20px}</style><div id=o><div id=i><div id=k></div></div></div>",
+               FLEX_IDS("i", "k"), FLEX_WANT({0, 0, 200, 100}, {0, 40, 20, 20}));
+    // A flex container's content height is what its items ask, not a
+    // height the page gave it: its content basis is its child's 20, and
+    // two 300px ones shrink into 400, 200 each, down to that content.
+    flex_rects("flex: a nested flex container's content basis is its items'",
+               "#o{display:flex;flex-direction:column;width:200px}"
+               " #i{display:flex;flex-direction:column;height:300px;flex:0 0 content}"
+               " #k{width:20px;height:20px}</style><div id=o><div id=i><div id=k></div></div></div>",
+               FLEX_IDS("o", "i"), FLEX_WANT({0, 0, 200, 20}, {0, 0, 200, 20}));
+    flex_rects("flex: nested flex containers shrink down to their items",
+               "#o{display:flex;flex-direction:column;height:400px} #o>div{display:flex;height:300px}"
+               " .k{width:20px;height:20px}</style><div id=o><div id=a><div class=k></div></div>"
+               "<div id=b><div class=k></div></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 400, 200}, {0, 200, 400, 200}));
+    // A table's content height is its rows': as a column item it keeps
+    // its 60, and the item after it starts there.
+    flex_rects("flex: a table in a column keeps its rows' height",
+               "#o{display:flex;flex-direction:column} table{border-spacing:0} td{padding:0}"
+               "</style><div id=o><table id=t><tr><td><div style=height:60px></div></table>"
+               "<div id=n style=height:10px></div></div>",
+               FLEX_IDS("t", "n"), FLEX_WANT({0, 0, -1, 60}, {0, 60, 400, 10}));
+    // An auto basis is the content's size before the item's limits, which
+    // hold only its hypothetical size: two 200px bases shrink into 150 by
+    // equal weights, 75 each, the first's 100px limit never reached.
+    flex_rects("flex: an auto basis in a row is unclamped",
+               "#o{display:flex;width:150px} #o>div{min-width:0} #a{max-width:100px}"
+               " .k{width:200px;height:20px}</style><div id=o><div id=a><div class=k></div></div>"
+               "<div id=b><div class=k></div></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 75, -1}, {75, 0, 75, -1}));
+    flex_rects("flex: an auto basis in a column is unclamped",
+               "#o{display:flex;flex-direction:column;height:150px} #o>div{min-height:0}"
+               " #a{max-height:100px} .k{height:200px}</style><div id=o><div id=a><div class=k></div>"
+               "</div><div id=b><div class=k></div></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 400, 75}, {0, 75, 400, 75}));
+    // A picture flexed narrower keeps its ratio: 40x30 into 20 is 20x15.
+    flex_rects("flex: a flexed picture keeps its ratio",
+               "#o{display:flex;width:20px;align-items:flex-start} img{min-width:0}</style>"
+               "<div id=o><img id=i src=known.png></div>",
+               FLEX_IDS("i", "o"), FLEX_WANT({0, 0, 20, 15}, {0, 0, 20, 15}));
+    // An unshrinking basis is held to the item's limits before the
+    // container counts it: an inline flex container of one 20px item.
+    flex_rects("flex: an unshrinking basis is held to its limits",
+               ".x{display:inline-flex}</style><div><span class=x id=g>"
+               "<div id=a style='flex:0 0 100px;min-width:0;max-width:20px;height:20px'></div>"
+               "</span></div>",
+               FLEX_IDS("g", "a"), FLEX_WANT({0, -1, 20, -1}, {0, -1, 20, 20}));
+    // Blank text between items is no item, even where it is preserved.
+    flex_rects("flex: preserved blanks between items are no items",
+               "#o{display:flex;gap:10px;white-space:pre} #a,#b{width:50px;height:20px}</style>"
+               "<div id=o>  <div id=a></div>  <div id=b></div>  </div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 50, 20}, {60, 0, 50, 20}));
+    // A wrapped row's items are placed again in their own lines: the
+    // second line of a stretched inner row centres its item in that
+    // line's half of 100.
+    flex_rects("flex: a stretched wrapping row places its lines again",
+               "#o{display:flex;width:200px;height:100px} #i{display:flex;flex-wrap:wrap;width:100px;"
+               "align-items:center} #i div{width:60px;height:20px}</style>"
+               "<div id=o><div id=i><div id=a></div><div id=b></div></div></div>",
+               FLEX_IDS("i", "a", "b"), FLEX_WANT({0, 0, 100, 100}, {0, 15, 60, 20}, {0, 65, 60, 20}));
+    // A wrapping column stretched to 100 wraps again against it: its two
+    // 60px items take a line each, the lines sized from the items' own
+    // 50px widths (not the 200 the first placement stretched them to)
+    // and stretched to 100 each.
+    flex_rects("flex: a stretched wrapping column forms its lines again",
+               "#o{display:flex;height:100px} #i{display:flex;flex-direction:column;flex-wrap:wrap;"
+               "width:200px} #i>div{height:60px} .k{width:50px;height:10px}</style>"
+               "<div id=o><div id=i><div id=a><div class=k></div></div><div id=b><div class=k></div>"
+               "</div></div></div>",
+               FLEX_IDS("i", "a", "b"), FLEX_WANT({0, 0, 200, 100}, {0, 0, 100, 60}, {100, 0, 100, 60}));
+}
+
 static void flex_cases(void)
 {
     flex_row_cases();
@@ -482,4 +568,5 @@ static void flex_cases(void)
     flex_wrap_cases();
     flex_review_cases();
     flex_wrap_review_cases();
+    flex_nested_cases();
 }

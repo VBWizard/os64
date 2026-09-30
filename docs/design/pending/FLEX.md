@@ -73,7 +73,7 @@ Two rules matter more than they look:
 - **Items are BLOCKIFIED** (§ 4): an inline child is laid out as a block,
   an inline-block as a block, an inline table as a table, and each run of
   text among them becomes an anonymous item of its own (a run that is only
-  collapsible space makes none).
+  white space makes none, preserved or not).
 
 ## How it enters libflow
 
@@ -86,8 +86,10 @@ laid out after: each item is handed the width the algorithm gave it, as
 an absolute box is handed the width its equations gave it (`abs_sized`),
 and what the cross axis decides afterwards — a stretched height, a line's
 alignment — sets a height or MOVES the laid-out box (`translate`), which
-does not change what is inside it. A COLUMN is laid out first and resolved
-after: its items take their widths from the container, as blocks do, and
+does not change what is inside it — except in an item that is itself a
+flex container, whose items are PLACED again against the height it was
+given (`refit`: moved and sized, not laid out again). A COLUMN is laid
+out first and resolved after: its items take their widths from the container, as blocks do, and
 growing or shrinking changes a height, never a width, so nothing reflows.
 No item is laid out twice, and a page of nested flex containers costs what
 the same page of blocks costs.
@@ -121,8 +123,11 @@ it is everywhere in libflow.
   element children are block-level after pass 1, so `build_container`
   already makes them block boxes, and a run of text among them already
   goes into an anonymous block (`target`) made only on its first
-  significant character. The one change: a container holding nothing but
-  text is not an IFC either — its text is one anonymous item.
+  significant character. Two changes: a container holding nothing but
+  text is not an IFC either — its text is one anonymous item; and a run
+  of text between items that is all white space makes no item even when
+  `white-space` preserves it (`blank_run`), where a block would make a
+  line of it.
 - `FBox` gains `flex`: this box lays its children out as flex items. An
   `inline-flex` element is an atom whose content box is the container,
   as an `inline-block`'s is its block.
@@ -145,11 +150,13 @@ and its items' margins never collapse with each other or with it.
    is a length, or a percentage of a main size that is known; else, for
    `auto`, its `width` (row) or `height` (column) when that is given;
    else — and for `content`, and a percentage of a size not known — its
-   content: in a row its max-content width (`intrinsic`); in a column the
+   content: in a row its max-content width (`content_max`); in a column the
    height its content took laid out at its cross size (`FBox.content_h`,
-   whatever `height` the page gave; this is where a column lays each item
-   out, once). The hypothetical size is that, held to its
-   limits, with `min-width: auto` (row) or `min-height: auto` (column)
+   whatever `height` the page gave — for an item that is a flex container,
+   the height its own items ask; for a table, its rows'; this is where a
+   column lays each item out, once). The base is NOT held to the item's
+   limits: they weigh nothing in shrinking. The hypothetical size is that,
+   held to its limits, with `min-width: auto` (row) or `min-height: auto` (column)
    read as the automatic minimum (§ 4.5): in a row its CONTENT'S
    min-content width — `intrinsic` keeps the content's two widths beside
    the ones a set width overrides (`content_min`, `content_max`), and the
@@ -183,7 +190,8 @@ and its items' margins never collapse with each other or with it.
    items meets its end.
 5. **Laying the row's items out**: each at its main size (the forced
    width), `block_at` as any block is, at its line's cross start. Its
-   height is then its HYPOTHETICAL CROSS SIZE.
+   height is then its HYPOTHETICAL CROSS SIZE; a picture whose height is
+   `auto` takes it from that width by its own ratio.
 6. **Cross sizes**: a single-line container's line is as tall as its
    `height` if given, else its tallest item (outer), held to its limits; a
    multi-line container's lines are each their tallest item — the
@@ -200,10 +208,19 @@ and its items' margins never collapse with each other or with it.
 7. **Cross alignment**, per item: `stretch` — the initial value — sets the
    item's height (row) or width (column) to the line's less its margins,
    when that dimension is `auto` and neither cross margin is `auto`, held
-   to its limits; a row item's height is only its box, so nothing inside
-   moves. The absolute boxes an item contains are laid out after its
-   container has finished with it (`sized_later`), against the size it
-   ends with. `flex-start`, `flex-end` and `center` move the item. `baseline`
+   to its limits. A row item's height is only its box, so nothing inside
+   moves — unless the item is a flex container itself: then its items are
+   placed again against the height it now has (`refit`): everything
+   after laying its items out, over the same laid-out boxes, from what
+   laying them out left — their natural sizes (`natural_h`, `natural_w`),
+   never an earlier placement's, and a row's lines as laying out formed
+   them (`FBox.flex_line`), while a column forms its lines again against
+   the height, which is now known. A column item grown or shrunk is refit
+   the same way. The absolute boxes an item contains
+   are laid out after its OUTERMOST flex container has finished with it
+   (`sized_later`, `items_done` walking down through nested containers),
+   against the size it ends with. `flex-start`, `flex-end` and `center`
+   move the item. `baseline`
    lines the items' first baselines up (`first_baseline_in`), the item
    with the most above its baseline at the line's start; an item with no
    line of text has one made from its border box's bottom edge. Auto
@@ -254,7 +271,7 @@ stretched item is booked with GARB.md's percentage-height row.
 **All or nothing.** Items are laid out in TREE order, whatever `order`
 says, and placed where they belong only once every item is laid out; a
 layout that stops in between WITHDRAWS the container's items
-(`flex_items_done`), because each has only its provisional place, and the
+(`items_done`), because each has only its provisional place, and the
 container is left unfinished. A box tree the boxes pass cut short is laid
 out with the items it has, which may place them differently from the
 whole page, as a table's columns come from the cells it has: the relation
@@ -278,9 +295,10 @@ Nothing. yonder draws what the tree says.
 
 1. **An item is laid out once** (above): the design rather than an
    optimisation, and the reason F1 can be judged by LAYOUT.md's bounds
-   unchanged. It costs nothing CSS asks for except what is booked: a
-   percentage height inside a stretched item, which needs the stretched
-   size first.
+   unchanged. A nested flex container given a new height places its items
+   again (`refit`), which moves and sizes boxes and lays none out. It
+   costs nothing CSS asks for except what is booked: a percentage height
+   inside a stretched item, which needs the stretched size first.
 2. **`order` does not reorder the tree.** Paint and hit order stay the
    document's; placement follows `order`. Chrome paints in `order` order,
    which differs only for overlapping items.
