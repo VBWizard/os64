@@ -8,9 +8,13 @@
 #include "paint.h"
 #include "html/html.h"
 
+// A painter works in the coordinates of the box it paints — a fixed box's
+// are the viewport's — and `off` is what takes them to the page's, added
+// wherever a rectangle is handed to a verb. `view` is in the box's.
 typedef struct {
     const yonder_verbs_t *v;
     os64_gui_rect_t view;
+    flow_point_t scroll, off;
     // The box whose background became the canvas's: it does not paint it
     // a second time over its own border box (CSS 2.1 §14.2).
     const flow_box_t *canvas_owner;
@@ -46,8 +50,18 @@ static void fill(const Painter *p, int64_t x, int64_t y, int64_t w, int64_t h, u
     if (x1 <= x0 || y1 <= y0)
         return;
     p->v->fill(p->v->ctx,
-               (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
+               (os64_gui_rect_t){(int32_t)(x0 + p->off.x), (int32_t)(y0 + p->off.y),
+                                 (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
                colour);
+}
+
+// A rectangle in the box's coordinates, in the page's, held to int32.
+static os64_gui_rect_t on_page(const Painter *p, os64_gui_rect_t r)
+{
+    int64_t x = (int64_t)r.x + p->off.x, y = (int64_t)r.y + p->off.y;
+    x = x > INT32_MAX ? INT32_MAX : x < INT32_MIN ? INT32_MIN : x;
+    y = y > INT32_MAX ? INT32_MAX : y < INT32_MIN ? INT32_MIN : y;
+    return (os64_gui_rect_t){(int32_t)x, (int32_t)y, r.w, r.h};
 }
 
 static uint32_t channelwise(uint32_t c, uint32_t (*f)(uint32_t))
@@ -81,12 +95,13 @@ static int32_t place_axis(flow_length_t at, int32_t start, int32_t room)
     return start + (at.kind == FLOW_LENGTH_PX ? nearest(at.value, 64) : 0);
 }
 
-void yonder_background_place(const flow_box_t *box, uint32_t iw, uint32_t ih, int32_t *ox,
-                             int32_t *oy, bool *repeat_x, bool *repeat_y)
+void yonder_background_place(const flow_box_t *box, os64_gui_rect_t rect, uint32_t iw,
+                             uint32_t ih, int32_t *ox, int32_t *oy, bool *repeat_x,
+                             bool *repeat_y)
 {
     const flow_style_t *s = box->style;
-    *ox = place_axis(s->background_position[0], box->rect.x, box->rect.w - (int32_t)iw);
-    *oy = place_axis(s->background_position[1], box->rect.y, box->rect.h - (int32_t)ih);
+    *ox = place_axis(s->background_position[0], rect.x, rect.w - (int32_t)iw);
+    *oy = place_axis(s->background_position[1], rect.y, rect.h - (int32_t)ih);
     *repeat_x = s->background_repeat == FLOW_REPEAT || s->background_repeat == FLOW_REPEAT_X;
     *repeat_y = s->background_repeat == FLOW_REPEAT || s->background_repeat == FLOW_REPEAT_Y;
 }
@@ -181,7 +196,8 @@ static void frame(const Painter *p, const flow_box_t *b)
     if (b != p->canvas_owner) {
         if (s->has_background)
             fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, s->background);
-        (void)p->v->backdrop(p->v->ctx, b, &b->rect, b->rect.x, b->rect.y, p->view);
+        os64_gui_rect_t area = on_page(p, b->rect);
+        (void)p->v->backdrop(p->v->ctx, b, &area, area.x, area.y, on_page(p, p->view));
     }
     borders(p, b);
 }
@@ -300,12 +316,17 @@ static void paint_box(void *ctx, const flow_box_t *b)
     const Painter *outer = ctx;
     if (b->style->visibility != FLOW_VISIBLE)
         return;
-    // A box an ancestor's `overflow` clips is drawn only inside the clip:
-    // every verb is handed the view, so the view is narrowed.
+    // The box's own coordinates: a fixed one's view is the page's less the
+    // scroll. A box an ancestor's `overflow` clips is drawn only inside the
+    // clip: every verb is handed the view, so the view is narrowed.
     Painter clipped = *outer;
-    const Painter *p = outer;
+    clipped.off = flow_box_doc_offset(b, outer->scroll);
+    clipped.view = (os64_gui_rect_t){(int32_t)((int64_t)outer->view.x - clipped.off.x),
+                                     (int32_t)((int64_t)outer->view.y - clipped.off.y),
+                                     outer->view.w, outer->view.h};
+    const Painter *p = &clipped;
     if (b->clipped) {
-        os64_gui_rect_t v = outer->view, c = b->clip;
+        os64_gui_rect_t v = clipped.view, c = b->clip;
         int64_t x0 = max64(v.x, c.x), y0 = max64(v.y, c.y);
         int64_t x1 = min64((int64_t)v.x + v.w, (int64_t)c.x + c.w);
         int64_t y1 = min64((int64_t)v.y + v.h, (int64_t)c.y + c.h);
@@ -313,7 +334,6 @@ static void paint_box(void *ctx, const flow_box_t *b)
             return;
         clipped.view = (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0),
                                          (int32_t)(y1 - y0)};
-        p = &clipped;
     }
     switch (b->kind) {
     case FLOW_BOX_LINE:
@@ -329,16 +349,18 @@ static void paint_box(void *ctx, const flow_box_t *b)
         __attribute__((fallthrough));
     case FLOW_BOX_TEXT:
         if (b->run != NULL)
-            p->v->text(p->v->ctx, b, p->view, b->style->color);
+            p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x),
+                       (int32_t)((int64_t)b->baseline + p->off.y), on_page(p, p->view),
+                       b->style->color);
         decorations(p, b);
         return;
     case FLOW_BOX_ATOMIC:
     case FLOW_BOX_REPLACED:
         frame(p, b);
         if (b->control >= 0)
-            p->v->control(p->v->ctx, b, content_of(b), p->view);
+            p->v->control(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
         else if (is_picture(b))
-            p->v->image(p->v->ctx, b, content_of(b), p->view);
+            p->v->image(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
         return;
     case FLOW_BOX_SPAN:
         // An inline box's borders open on its first piece and close on its
@@ -372,10 +394,10 @@ static const flow_box_t *canvas_owner(const Painter *p, const flow_box_t *root)
     return NULL;
 }
 
-void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, uint32_t paper,
-                  const yonder_verbs_t *verbs)
+void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                  uint32_t paper, const yonder_verbs_t *verbs)
 {
-    Painter p = {verbs, viewport, NULL};
+    Painter p = {.v = verbs, .view = viewport, .scroll = scroll};
     const flow_box_t *root = flow_root(tree);
     if (root != NULL)
         p.canvas_owner = canvas_owner(&p, root);
@@ -387,5 +409,5 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, uint32_t pa
     if (owner != NULL)
         (void)verbs->backdrop(verbs->ctx, owner, &viewport, 0, 0, viewport);
     if (root != NULL)
-        flow_visit(tree, viewport, paint_box, &p);
+        flow_visit(tree, viewport, scroll, paint_box, &p);
 }

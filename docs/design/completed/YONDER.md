@@ -114,13 +114,18 @@ number (`flow_env_t.viewport_height`, the initial containing block), and a
 page is laid out again when it changes only if it has sheets or a
 positioned box — nothing else can read it.
 
+**A fixed box stays where it is on the glass** while the page scrolls
+under it (POSITION.md, P2): the painter moves it by the scroll, clicks
+find it there, and a form field a fixed box is drawn over hides its widget
+— the header's pixels are the header's, and so is the click.
+
 **`p` lays pages out with positioning off**, every box `static` — the
 page as it reads in document order — until `p` again brings back pages
 as they were designed to look (POSITION.md § What positioning costs,
 ruling 8). It is a MODE, kept across navigation, and every page laid out
 while it is on says POSITIONING OFF on the status line. A form control's
-widget is drawn whatever its opacity, unless the pointer cannot reach it
-either (rulings 6 and 9). With no script to close a
+widget is drawn whatever its opacity, unless the pointer cannot reach its
+centre (rulings 6 and 9). With no script to close a
 cookie wall or a menu that covers the page, it is how the text under one
 is read, and it is the Chrome comparison's instrument: one page, one
 keypress apart.

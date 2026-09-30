@@ -562,6 +562,8 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
         puts_(b, " unfinished");
     if (box->positioned)
         puts_(b, " positioned");
+    if (box->fixed && (box->parent == NULL || !box->parent->fixed))
+        puts_(b, " fixed");
     if (box->unpainted)
         puts_(b, " unpainted");
     if (box->clipped) {

@@ -207,8 +207,8 @@ typedef enum {
     FLOW_OVERFLOW_AUTO,
 } flow_overflow_t;
 typedef enum { FLOW_CLEAR_NONE = 0, FLOW_CLEAR_LEFT, FLOW_CLEAR_RIGHT, FLOW_CLEAR_BOTH } flow_clear_t;
-// CSS Position 3 § 2 (POSITION.md). `fixed` and `sticky` are laid out as
-// `relative` with their insets ignored until their slices.
+// CSS Position 3 § 2 (POSITION.md). `sticky` is laid out as `relative`
+// with its insets ignored until its slice.
 typedef enum {
     FLOW_POSITION_STATIC = 0,
     FLOW_POSITION_RELATIVE,
@@ -300,13 +300,11 @@ typedef struct {
     // through the box to whatever is under it, though a descendant that
     // sets `auto` is still hit. Zero is `auto`, the initial value.
     bool pointer_events_none;
-    // A box that leaves the flow has its `display` BLOCKIFIED (CSS 2.1 §
-    // 9.7) — an absolute one; a fixed one is laid out in the flow as
-    // relative until its slice, and keeps its own — and this says the
-    // display the page gave was inline-level: its static
-    // position is where it would have stood on the line, not below it. Not
-    // a property: the one fact of the specified display the blockified one
-    // loses.
+    // A box that leaves the flow — absolute or fixed — has its `display`
+    // BLOCKIFIED (CSS 2.1 § 9.7), and this says the display the page gave
+    // was inline-level: its static position is where it would have stood
+    // on the line, not below it. Not a property: the one fact of the
+    // specified display the blockified one loses.
     bool specified_inline;
 } flow_style_t;
 
@@ -379,9 +377,18 @@ typedef enum {
 
 typedef struct flow_box flow_box_t;
 
+// A point, or an offset: how far the page is scrolled, x and y.
+typedef struct {
+    int32_t x, y;
+} flow_point_t;
+
 // One box of the laid-out tree, read-only. Everything here is whole
-// document pixels — x from the page's left, y from its top — rounded once,
-// by the painter's rule, from the layout's 26.6.
+// pixels, rounded once, by the painter's rule, from the layout's 26.6 — in
+// DOCUMENT coordinates, x from the page's left and y from its top, but for
+// a box in a fixed box's subtree (`fixed`), whose coordinates are the
+// VIEWPORT's, since it does not move with the page. flow_box_doc_rect and
+// its siblings answer any box in document coordinates, given the scroll:
+// the one place that rule is written.
 struct flow_box {
     flow_box_kind_t kind;
     const os64_html_node_t *node;   // NULL for an anonymous box
@@ -424,15 +431,18 @@ struct flow_box {
     // skip it and their overflow rects leave it out, and its clip is what
     // its containing blocks allow, not its parent (POSITION.md).
     bool positioned;
+    // In a `position: fixed` box's subtree, the fixed box included: its
+    // rects, clip and baseline are viewport coordinates (above).
+    bool fixed;
     // `opacity: 0` on it or on an element it is inside: flow_visit does not
     // hand it over. flow_hit still finds it, as a browser's pointer does,
     // unless it is `pointer-events: none`. A face drawing live widgets
     // draws a control's whatever its opacity — a control made invisible is
     // nearly always a custom checkbox's real input, whose styled stand-in
     // cannot follow a click here, and hiding the widget too would leave a
-    // form nobody can use — unless the pointer cannot reach it either
-    // (`pointer-events: none` as well), which is a hidden dialog's or
-    // search overlay's (POSITION.md, rulings 6 and 9).
+    // form nobody can use — unless the pointer cannot reach it
+    // (flow_box_covered), as it cannot a hidden dialog's or search
+    // overlay's (POSITION.md, rulings 6 and 9).
     bool unpainted;
     const flow_box_t *parent, *first, *next;
 };
@@ -465,6 +475,24 @@ bool flow_incomplete(const flow_tree_t *tree);
 // The root box: the html element's. NULL for a page with nothing to lay out.
 const flow_box_t *flow_root(const flow_tree_t *tree);
 
+// What to add to a box's coordinates to have document ones: the scroll,
+// for a box in a fixed subtree, else nothing. The one rule; the rect and
+// clip functions below apply it.
+flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll);
+os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
+// Its clip, meaningful when `clipped`, as for the field.
+os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll);
+
+// Whether the pointer cannot reach `box` at this scroll: flow_hit at its
+// centre answers something that is neither it nor inside it — a box
+// painted over it, or nothing, since it is hidden or lets the pointer
+// through itself. A face that draws live widgets over the page draws a
+// control's exactly when this is false (POSITION.md, ruling 9): a text
+// field under a fixed header must not draw over the header and take its
+// click, while a floating label or an icon in a field's corner, which the
+// pointer passes or does not reach at the centre, leaves the field usable.
+bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll);
+
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of
 // their own (flow_hit can still answer one), and the unpainted ones, in
 // painting order (CSS 2.1 Appendix E with every `z-index` read as auto):
@@ -475,22 +503,29 @@ const flow_box_t *flow_root(const flow_tree_t *tree);
 // over its own subtree, skipping the positioned boxes nested in it, which
 // come later in the list. Pruned on OVERFLOW rects: a subtree off the
 // viewport costs one test, and a box that meets it costs a test for each
-// of its children, lines included.
-void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
+// of its children, lines included. `viewport` is in document coordinates
+// and `scroll` is where the page is scrolled to: the rect a face paints is
+// often only the view's dirty part, from which the scroll cannot be told,
+// and a fixed box meets it wherever the scroll puts it.
+void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 
 // The deepest box whose OWN rect holds (x, y), the last painted winning —
 // the positioned list backwards, then the ordinary tree — whose own clip
-// holds the point, and that is not `pointer-events: none`; NULL for none. The face asks libpage what its node
-// means, and a TEXT's run where in the text the pointer is (os64_text_hit).
-const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y);
+// holds the point, and that is drawn (`visibility: visible`) and not
+// `pointer-events: none`; NULL for none.
+// (x, y) is in document coordinates, the page scrolled to `scroll`. The face
+// asks libpage what its node means, and a TEXT's run where in the text the
+// pointer is (os64_text_hit).
+const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll);
 
-// The box under (x, y) among everything in the flow — relative boxes
-// included, absolute ones not — whatever out-of-flow box is drawn over it,
-// and whatever its `pointer-events`: a place, not a target. What a scroll position is a property of — a face that
-// keeps a node in place across a new layout anchors on this, or it follows
-// an overlay wherever the new layout puts it. It walks the whole in-flow
-// tree: once per layout, not per pointer move.
+// The box under (x, y), in document coordinates, among everything in the
+// flow — relative boxes included, out-of-flow ones not — whatever is drawn
+// over it, and whatever its `pointer-events`: a place, not a target. What a
+// scroll position is a property of: a face that keeps a node in place
+// across a new layout anchors on this, or it follows an overlay wherever
+// the new layout puts it. It walks the whole in-flow tree: once per
+// layout, not per pointer move.
 const flow_box_t *flow_hit_in_flow(const flow_tree_t *tree, int32_t x, int32_t y);
 
 // The positioned boxes (flow_box_t.positioned) in paint order: tree order,

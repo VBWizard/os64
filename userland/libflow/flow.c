@@ -127,6 +127,7 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
         e = e->parent;
     const FStyled *st = e != NULL ? f_style_of(bd->t->styles, e) : NULL;
     b->unpainted = st != NULL ? st->transparent : parent != NULL && parent->unpainted;
+    b->fixed = parent != NULL && parent->fixed;
     if (parent != NULL) {
         if (*last != NULL)
             (*last)->next = b;
@@ -302,6 +303,7 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     // In the list at its place in the pre-order, which is tree order: the
     // paint order until z-index sorts it.
     b->positioned = src->positioned;
+    b->fixed |= src->out_of_flow && src->style->position == FLOW_POSITION_FIXED;
     if (src->positioned &&
         !push_list(bd, &bd->t->positioned, &bd->t->npositioned, &bd->t->cap_positioned, b))
         return b;
@@ -474,10 +476,34 @@ static bool in_tree(const flow_box_t *c)
 }
 
 typedef struct {
-    os64_gui_rect_t view;
+    os64_gui_rect_t view;   // in the coordinates of the boxes being walked
     void (*visit)(void *ctx, const flow_box_t *box);
     void *ctx;
 } Visit;
+
+// A rect moved by an offset, its edges held to what an int32_t says.
+static os64_gui_rect_t moved(os64_gui_rect_t r, int64_t dx, int64_t dy)
+{
+    return rect_from((int64_t)r.x + dx, (int64_t)r.y + dy, (int64_t)r.x + r.w + dx,
+                     (int64_t)r.y + r.h + dy);
+}
+
+flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll)
+{
+    return box != NULL && box->fixed ? scroll : (flow_point_t){0, 0};
+}
+
+os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)
+{
+    flow_point_t o = flow_box_doc_offset(box, scroll);
+    return box != NULL ? moved(box->rect, o.x, o.y) : (os64_gui_rect_t){0, 0, 0, 0};
+}
+
+os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll)
+{
+    flow_point_t o = flow_box_doc_offset(box, scroll);
+    return box != NULL ? moved(box->clip, o.x, o.y) : (os64_gui_rect_t){0, 0, 0, 0};
+}
 
 static void visit_inline(const Visit *v, const flow_box_t *b);
 
@@ -522,8 +548,9 @@ static void visit_inline(const Visit *v, const flow_box_t *b)
 }
 
 // The ordinary tree, then step 8 — each positioned box, in list order, as a
-// small two-phase walk of its own.
-void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
+// small two-phase walk of its own, against the viewport in its own
+// coordinates: a fixed box's are the viewport's.
+void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx)
 {
     if (tree == NULL || tree->root == NULL || visit == NULL)
@@ -532,8 +559,11 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport,
     visit_blocks(&v, tree->root);
     visit_inline(&v, tree->root);
     for (int32_t i = 0; i < tree->npositioned; i++) {
-        visit_blocks(&v, tree->positioned[i]);
-        visit_inline(&v, tree->positioned[i]);
+        const flow_box_t *p = tree->positioned[i];
+        flow_point_t o = flow_box_doc_offset(p, scroll);
+        Visit own = {moved(viewport, -(int64_t)o.x, -(int64_t)o.y), visit, ctx};
+        visit_blocks(&own, p);
+        visit_inline(&own, p);
     }
 }
 
@@ -554,28 +584,46 @@ static const flow_box_t *hit(const flow_box_t *b, int32_t x, int32_t y)
     }
     if (found != NULL)
         return found;
-    // What is clipped away is not there to be pointed at, and a box that
-    // lets the pointer through is not either.
+    // What is clipped away is not there to be pointed at, and neither is a
+    // box that lets the pointer through or is not drawn at all — asked of
+    // each box, since both are inherited and a descendant may undo them.
     return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) &&
-                   !b->style->pointer_events_none
+                   !b->style->pointer_events_none && b->style->visibility == FLOW_VISIBLE
                ? b : NULL;
 }
 
 // What is painted last is on top: the positioned list backwards, then the
-// ordinary tree.
-const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y)
+// ordinary tree — each asked in its own coordinates.
+const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll)
 {
     if (tree == NULL || tree->root == NULL)
         return NULL;
     for (int32_t i = tree->npositioned; i > 0; i--) {
-        const flow_box_t *h = hit(tree->positioned[i - 1], x, y);
+        const flow_box_t *p = tree->positioned[i - 1];
+        flow_point_t o = flow_box_doc_offset(p, scroll);
+        int64_t px = (int64_t)x - o.x, py = (int64_t)y - o.y;
+        if (px < INT32_MIN || px > INT32_MAX || py < INT32_MIN || py > INT32_MAX)
+            continue;
+        const flow_box_t *h = hit(p, (int32_t)px, (int32_t)py);
         if (h != NULL)
             return h;
     }
     return hit(tree->root, x, y);
 }
 
-// Everything in the flow — a relative box is, an absolute one is not — the
+bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll)
+{
+    if (tree == NULL || box == NULL)
+        return false;
+    os64_gui_rect_t r = flow_box_doc_rect(box, scroll);
+    const flow_box_t *h = flow_hit(tree, (int32_t)((int64_t)r.x + r.w / 2),
+                                   (int32_t)((int64_t)r.y + r.h / 2), scroll);
+    while (h != NULL && h != box)
+        h = h->parent;
+    return h == NULL;
+}
+
+// Everything in the flow — a relative box is, an out-of-flow one is not — the
 // last painted winning. Not pruned on overflow rects, which leave every
 // positioned box out: a relative one is in the flow all the same, and it
 // may sit anywhere its tree parent's rect does not reach. A walk of the

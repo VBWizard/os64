@@ -5,10 +5,8 @@
 
 static void position_style_cases(void)
 {
-    // § 9.7: an absolute box is blockified and floats nowhere; the display
-    // it was given survives as one bit. A list item stays one. A fixed box
-    // is laid out in the flow until P2, so it keeps the display it was
-    // given. A
+    // § 9.7: an absolute or fixed box is blockified and floats nowhere; the
+    // display it was given survives as one bit. A list item stays one. A
     // translucent background on an OUT-OF-FLOW box draws nothing, a
     // relative one's is laid over the paper as ever (0.5 black on fefefe
     // is 7f); an opaque one is drawn. z-index is kept; opacity is clamped
@@ -34,7 +32,7 @@ static void position_style_cases(void)
         "    span block position=absolute specified-inline\n"
         "    div block position=absolute\n"
         "    li list-item position=fixed\n"
-        "    span inline position=fixed\n"
+        "    span block position=fixed specified-inline\n"
         "    div block position=absolute\n"
         "    div block bg=#7f7f7f position=relative\n"
         "    div block bg=#000000 position=absolute\n"
@@ -63,15 +61,46 @@ static void position_style_cases(void)
 
 static void position_layout_cases(void)
 {
-    // A fixed span inside a link stays on its line: laid out as relative
-    // until P2, it splits nothing.
+    // Fixed boxes (P2) against the viewport, 400 x 600, whatever is round
+    // them: a header across the top, 0 0 400 30, with an absolute badge in
+    // it at 392 (the header is its containing block); a footer 10 from the
+    // right and on the bottom, 400 - 10 - 50 = 340 and 600 - 20 = 580; and
+    // one inside a relative div, at 5 5 all the same. The page is as tall
+    // and as wide as the flow and the relative div make it (1000 + 20, and
+    // 100 more of each for the div's offset), never the fixed boxes.
+    cascade_layout_case("positioned: fixed, against the viewport",
+        "<!doctype html><style>body{margin:0} p{margin:0;height:1000px}"
+        ".h{position:fixed;top:0;left:0;right:0;height:30px}"
+        ".f{position:fixed;bottom:0;right:10px;width:50px;height:20px}"
+        ".r{position:relative;left:100px;top:100px}"
+        ".in{position:fixed;left:5px;top:5px;width:10px;height:10px}"
+        ".h b{position:absolute;right:0;top:0;width:8px;height:8px}</style>"
+        "<div class=h><b></b></div><p>long</p><div class=f></div>"
+        "<div class=r>x<span class=in></span></div>", 400,
+        "page 500 1120\n"
+        "block html 0 0 400 1020\n"
+        "  block body 0 0 400 1020\n"
+        "    block div 0 0 400 30 positioned fixed\n"
+        "      line 0 0 400 0 base 14\n"
+        "      block b 392 0 8 8 positioned\n"
+        "    block p 0 0 400 1000\n"
+        "      line 0 0 400 20 base 14\n"
+        "        text \"long\" 0 2 28 16 serif 16\n"
+        "    block div 340 580 50 20 positioned fixed\n"
+        "    block div 100 1100 400 20 positioned\n"
+        "      line 100 1100 400 20 base 14\n"
+        "        text \"x\" 100 1102 8 16 serif 16\n"
+        "      block span 5 5 10 10 positioned fixed\n");
+
+    // A fixed span inside a link is out of flow: it splits nothing, and
+    // it is a fixed box of its own.
     {
         char *got = cascade_layout_of("<!doctype html><p>before <a href=x>link "
                                       "<span style='position:fixed'>top</span> more</a> after</p>",
                                       400);
         expect("positioned: a fixed span in a link splits no paragraph",
                got != NULL && strstr(got, "block anon") == NULL &&
-                   strstr(got, "block span") == NULL, got);
+                   strstr(got, " positioned fixed\n") != NULL, got);
         free(got);
     }
 
@@ -348,7 +377,7 @@ static void position_door_cases(void)
     // background, and nothing of the page over either. The faded p paints
     // nothing, and nothing inside it.
     Seen seen = {0};
-    flow_visit(t, (os64_gui_rect_t){0, 0, 400, 600}, seen_add, &seen);
+    flow_visit(t, (os64_gui_rect_t){0, 0, 400, 600}, kNoScroll, seen_add, &seen);
     int under = -1, box = -1, over = -1, faded = 0;
     for (int i = 0; i < seen.n; i++) {
         const flow_box_t *b = seen.v[i];
@@ -373,17 +402,17 @@ static void position_door_cases(void)
     // that text past the modal's 100 ("under the modal" is 104) is the
     // text's; one on the faded paragraph still finds it, as a browser's
     // pointer does.
-    const flow_box_t *h = flow_hit(t, 20, 8);
+    const flow_box_t *h = flow_hit(t, 20, 8, kNoScroll);
     expect("positioned door: a click over the page's text finds the modal",
            h != NULL && h->kind == FLOW_BOX_TEXT && h->length == 4 &&
            memcmp(h->text, "over", 4) == 0, NULL);
-    h = flow_hit(t, 102, 8);
+    h = flow_hit(t, 102, 8, kNoScroll);
     expect("positioned door: beside the modal, the page's text",
            h != NULL && h->kind == FLOW_BOX_TEXT && memcmp(h->text, "under", 5) == 0, NULL);
     h = flow_hit_in_flow(t, 20, 8);
     expect("positioned door: in the flow alone, the text under the modal",
            h != NULL && h->kind == FLOW_BOX_TEXT && memcmp(h->text, "under", 5) == 0, NULL);
-    h = flow_hit(t, 150, 28);
+    h = flow_hit(t, 150, 28, kNoScroll);
     expect("positioned door: an unpainted box is still there to be pointed at",
            h != NULL && h->unpainted, NULL);
     flow_free(t);
@@ -427,12 +456,12 @@ static void position_door_cases(void)
                          "<p>under the veil</p><div class=veil>veiled <b>button</b></div>",
                      400, 600);
         flow_tree_t *v = flow_layout(q.doc, q.page, 400, &q.env);
-        const flow_box_t *h = v != NULL ? flow_hit(v, 20, 8) : NULL;
+        const flow_box_t *h = v != NULL ? flow_hit(v, 20, 8, kNoScroll) : NULL;
         expect("positioned door: pointer-events: none lets the click through",
                h != NULL && h->kind == FLOW_BOX_TEXT && memcmp(h->text, "under", 5) == 0, NULL);
         // "veiled " is 7 x 8 less a narrow 'l' and 'i': 8+8+4+4+8+8+4 = 44,
         // so "button" starts at 44.
-        h = v != NULL ? flow_hit(v, 50, 8) : NULL;
+        h = v != NULL ? flow_hit(v, 50, 8, kNoScroll) : NULL;
         expect("positioned door: a child that sets pointer-events: auto is hit",
                h != NULL && h->kind == FLOW_BOX_TEXT && memcmp(h->text, "button", 6) == 0, NULL);
         flow_free(v);
@@ -446,9 +475,95 @@ static void position_door_cases(void)
     sheeted_close(&p);
 }
 
+// Fixed boxes (P2): their coordinates are the viewport's, and the door
+// moves them by the scroll. A header 30 high across the top, a field 100
+// down the page, and a thousand pixels of page after it.
+static void position_fixed_door_cases(void)
+{
+    Sheeted q;
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0} .gap{height:100px}"
+                     ".long{height:1000px} .h{position:fixed;top:0;left:0;right:0;height:30px;"
+                     "background:silver}</style><div class=h></div><p class=gap></p>"
+                     "<p><input name=q></p><p class=long>page</p>",
+                 400, 600);
+    flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *h = t != NULL ? flow_positioned(t, 0) : NULL;
+    const flow_box_t *field = t != NULL ? flow_control(t, 0) : NULL;
+    expect("fixed door: the header is fixed and listed",
+           h != NULL && h->fixed && h->positioned && h->rect.y == 0 && h->rect.h == 30, NULL);
+    expect("fixed door: the page is as tall as its flow, no taller for the header",
+           t != NULL && flow_height(t) == flow_root(t)->rect.h, NULL);
+    flow_point_t top = {0, 0}, down = {0, 500}, near = {0, 90};
+    os64_gui_rect_t r = flow_box_doc_rect(h, down);
+    expect("fixed door: its document rect is its rect moved by the scroll",
+           r.x == 0 && r.y == 500 && r.w == 400 && r.h == 30, NULL);
+    r = flow_box_doc_rect(field, down);
+    expect("fixed door: an in-flow box's document rect is its rect",
+           field != NULL && r.y == field->rect.y, NULL);
+
+    // Scrolled 500 down, a click 10 below the view's top is on the header;
+    // not scrolled, the same document point is the page's.
+    const flow_box_t *hit = t != NULL ? flow_hit(t, 20, 510, down) : NULL;
+    expect("fixed door: scrolled, a click at the view's top is the header", hit == h, NULL);
+    hit = t != NULL ? flow_hit(t, 20, 510, top) : NULL;
+    expect("fixed door: not scrolled, the same point is the page", hit != NULL && hit != h, NULL);
+
+    // Painting the view scrolled 500 down hands the header over; the same
+    // document rect unscrolled does not, the header being at the top.
+    Seen seen = {0};
+    flow_visit(t, (os64_gui_rect_t){0, 500, 400, 100}, down, seen_add, &seen);
+    bool painted = false;
+    for (int i = 0; i < seen.n; i++)
+        painted |= seen.v[i] == h;
+    expect("fixed door: scrolled, the header is painted in view", painted, NULL);
+    Seen none = {0};
+    flow_visit(t, (os64_gui_rect_t){0, 500, 400, 100}, top, seen_add, &none);
+    painted = false;
+    for (int i = 0; i < none.n; i++)
+        painted |= none.v[i] == h;
+    expect("fixed door: unscrolled, the header is not in that part", !painted, NULL);
+
+    // The field, 100 down, is under the header at a scroll of 90 (the
+    // header's document 90..120) and not at the top.
+    expect("fixed door: the field is not covered at the top",
+           field != NULL && !flow_box_covered(t, field, top), NULL);
+    expect("fixed door: the field under the fixed header is covered",
+           field != NULL && flow_box_covered(t, field, near), NULL);
+    expect("fixed door: the header covers nothing painted after it",
+           h != NULL && !flow_box_covered(t, h, near), NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // Covered is the pointer's question, asked at the control's centre
+    // (ruling 9). A hidden overlay over everything, written last, takes no
+    // click and covers nothing; a floating label that lets the pointer
+    // through, and an icon in the field's corner, leave it usable.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0} .wrap{position:relative}"
+                     ".label{position:absolute;left:4px;top:2px;pointer-events:none}"
+                     ".icon{position:absolute;right:0;top:0;width:8px;height:8px}"
+                     ".veil{position:fixed;inset:0;visibility:hidden}</style>"
+                     "<p><a href=x>a link</a></p><p class=wrap><input name=a>"
+                     "<span class=label>Email</span></p>"
+                     "<p class=wrap style='width:160px'><input name=b><span class=icon></span></p>"
+                     "<div class=veil></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    hit = t != NULL ? flow_hit(t, 10, 10, top) : NULL;
+    expect("fixed door: a hidden overlay takes no click", hit != NULL && hit->link == 0, NULL);
+    const flow_box_t *a = t != NULL ? flow_control(t, 0) : NULL;
+    const flow_box_t *b = t != NULL ? flow_control(t, 1) : NULL;
+    expect("fixed door: a floating label that lets the pointer through covers nothing",
+           a != NULL && !flow_box_covered(t, a, top), NULL);
+    expect("fixed door: an icon in the corner does not cover the field's centre",
+           b != NULL && !flow_box_covered(t, b, top), NULL);
+    flow_free(t);
+    sheeted_close(&q);
+}
+
 static void position_cases(void)
 {
     position_style_cases();
     position_layout_cases();
     position_door_cases();
+    position_fixed_door_cases();
 }

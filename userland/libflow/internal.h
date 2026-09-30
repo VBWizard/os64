@@ -23,10 +23,11 @@ static inline bool f_ws_wraps(flow_white_space_t ws)
 // Positioning's two questions (POSITION.md), answered in one place so the
 // three passes agree. Out of flow: no formatting context holds the box,
 // and it is laid out against its containing block once that is finished —
-// an absolute box; a fixed one is laid out as relative until its slice.
+// an absolute box, and a fixed one, whose containing block is always the
+// viewport.
 static inline bool f_out_of_flow(const flow_style_t *s)
 {
-    return s->position == FLOW_POSITION_ABSOLUTE;
+    return s->position == FLOW_POSITION_ABSOLUTE || s->position == FLOW_POSITION_FIXED;
 }
 
 // A containing block for the absolute boxes inside it: an element whose
@@ -241,7 +242,7 @@ typedef enum {
     FI_BREAK,           // `br`, or a preserved newline
     FI_WBR,             // a break opportunity and nothing else
     FI_MARKER,          // a list marker drawn inside
-    // Where an absolute box was written among inline content: nothing on
+    // Where an out-of-flow box was written among inline content: nothing on
     // the line — no width, no height, no break opportunity — but the point
     // its static position is read from once the line is placed.
     FI_PLACEHOLDER,
@@ -320,8 +321,9 @@ struct FBox {
     // POSITION.md. `positioned`: a block-level box whose position is not
     // static — but a table's row, group or column, laid out static (booked)
     // — reached from the positioned list and skipped by every walk of its
-    // tree ancestors. `out_of_flow`: an absolute one, which no formatting
-    // context holds — laid out once its containing block is finished.
+    // tree ancestors. `out_of_flow`: an absolute or fixed one, which no
+    // formatting context holds — laid out once its containing block is
+    // finished.
     // `pos`: its entry, which every box that is a containing block has: the
     // positioned ones, and a positioned inline-block's content or root,
     // which are not `positioned`.

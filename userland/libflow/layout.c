@@ -489,8 +489,8 @@ static int64_t definite_height(const FBox *b)
 // How far a relative box moves from where the flow put it (CSS 2.1 §
 // 9.4.3): `left` over `right`, `top` over `bottom`, percentages of its
 // containing block — a vertical one only against a definite height (`cbh`
-// >= 0). A fixed or sticky box is laid out as relative with its insets
-// ignored until its slice, so it does not move.
+// >= 0). A sticky box is laid out as relative with its insets ignored
+// until its slice, so it does not move.
 static void rel_offset(const flow_style_t *s, int64_t cbw, int64_t cbh, int64_t *dx, int64_t *dy)
 {
     *dx = *dy = 0;
@@ -1507,7 +1507,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     }
                 break;
             case SG_PLACEHOLDER: {
-                // Where the absolute box stood: its static position, read
+                // Where the out-of-flow box stood: its static position, read
                 // once the line is placed (and moved with it after).
                 FFrag *fr = frag_add(l, line, FF_PLACEHOLDER, rel_x, rel_y);
                 if (fr == NULL)
@@ -1704,7 +1704,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
     }
     if (cut && ifc->last_line != NULL) {
         FLine *last = ifc->last_line;
-        // An absolute box whose place is on the line dropped has none.
+        // An out-of-flow box whose place is on the line dropped has none.
         for (FFrag *fr = last->frags; fr != NULL; fr = fr->next)
             if (fr->kind == FF_PLACEHOLDER)
                 fr->item->absolute->place = NULL;
@@ -2285,7 +2285,8 @@ static void absolute_table(L *l, const FStyles *styles, FBox *t, Rect cb, int64_
     translate(t, x - t->x, y - t->y);
 }
 
-// An absolute box against its containing block's padding box `cb`: the
+// An out-of-flow box — absolute, or fixed, whose containing block is the
+// viewport — against its containing block's padding box `cb`: the
 // width first (§ 10.3.8 for a replaced box, whose width is its own), held
 // to its limits and solved again with the one it is held to (§ 10.4); the
 // height when nothing about it waits on the content; then the box laid
@@ -2355,7 +2356,7 @@ static void absolute(L *l, const FStyles *styles, FBox *a, Rect cb)
     translate(a, 0, cb.y + y - a->y);
 }
 
-// The absolute boxes filed under one containing block, in tree order. ALL
+// The out-of-flow boxes filed under one containing block, in tree order. ALL
 // OR NOTHING: one whose layout stops is not placed, and its containing
 // block — `owner`, the box whose work just finished — is not finished.
 static void absolutes(L *l, const FStyles *styles, FPos *first, Rect cb, FBox *owner)
@@ -2370,7 +2371,7 @@ static void absolutes(L *l, const FStyles *styles, FPos *first, Rect cb, FBox *o
 }
 
 // A box's own work is done, so what it is the containing block of can be
-// laid out: the absolute boxes of the positioned inlines whose pieces are
+// laid out: the out-of-flow boxes of the positioned inlines whose pieces are
 // all in it, then its own. A relative CELL, which its table placed, then
 // moves with all of that inside it; any other relative box was laid out
 // where it moved to (block). `cbw` is its containing block's width, what
@@ -3698,10 +3699,12 @@ static const FBox *clip_parent(const FBox *b)
 // is drawn where it reaches the glass and cannot be scrolled to
 // (POSITION.md, ruling 2). Found by walking the boxes, an inline-block's
 // content included, and not the entries: a build that stopped can leave a
-// positioned box without one.
+// positioned box without one. A fixed box and everything in it are left
+// out: it is where it is on the glass, not on the page, and the page is
+// never scrolled to reach it.
 static void page_extent(const FBox *b, int64_t *width, int64_t *height)
 {
-    if (!b->placed)
+    if (!b->placed || (b->out_of_flow && b->style->position == FLOW_POSITION_FIXED))
         return;
     if (b->positioned) {
         int64_t r = right_edge(b), bottom = bottom_edge(b);
@@ -3752,7 +3755,9 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
                                : max64(cur.y + margins_sum(cur.pm), bottom_edge(boxes->root));
         // The initial containing block is the viewport, as tall as the
         // window (CSS 2.1 § 10.1) — or, with no window height known, the
-        // page — and the root is its owner when one of its boxes stops.
+        // page — and so is every fixed box's, whose coordinates are the
+        // viewport's own and the same numbers; the root is the owner when
+        // one of those boxes stops.
         if (!l.failed) {
             int64_t vh = env->viewport_height > 0 ? (int64_t)env->viewport_height * 64 : out->height;
             absolutes(&l, boxes->styles, boxes->icb_first, (Rect){0, 0, w, vh}, boxes->root);

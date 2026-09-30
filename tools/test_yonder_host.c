@@ -251,11 +251,11 @@ static void clip_note(Rec *rec, os64_gui_rect_t clip)
         out(&rec->out, " clip %d %d %d %d", clip.x, clip.y, clip.w, clip.h);
 }
 
-static void rec_text(void *ctx, const flow_box_t *b, os64_gui_rect_t clip, uint32_t colour)
+static void rec_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseline,
+                     os64_gui_rect_t clip, uint32_t colour)
 {
     Rec *rec = ctx;
-    out(&rec->out, "text \"%.*s\" %d %d #%06x", (int)b->length, b->text, b->rect.x, b->baseline,
-        colour);
+    out(&rec->out, "text \"%.*s\" %d %d #%06x", (int)b->length, b->text, x, baseline, colour);
     clip_note(rec, clip);
     out(&rec->out, "\n");
 }
@@ -304,7 +304,8 @@ static os64_html_document_t *parse(const char *html, size_t len)
     return os64_html_parser_finish(p);
 }
 
-// Lays `html` out at `width` and paints `view`; the recording, or NULL.
+// Lays `html` out at `width` and paints `view`, the page scrolled to the
+// view's corner; the recording, or NULL.
 // With `css` the page's `style` elements are cascaded, as yonder does.
 static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect_t view,
                       bool *escaped, bool css)
@@ -331,7 +332,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     out(&rec.out, "%s", "");
     yonder_verbs_t v = {&rec, rec_fill, rec_text, rec_image, rec_control, rec_backdrop};
     if (t != NULL)
-        yonder_paint(t, view, kEnv.paper, &v);
+        yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, &v);
     if (escaped != NULL)
         *escaped = rec.escaped;
     flow_free(t);
@@ -516,7 +517,7 @@ static void scale_cases(void)
     box.rect = (os64_gui_rect_t){10, 20, 100, 50};
     int32_t ox = 0, oy = 0;
     bool rx = false, ry = true;
-    yonder_background_place(&box, 20, 10, &ox, &oy, &rx, &ry);
+    yonder_background_place(&box, box.rect, 20, 10, &ox, &oy, &rx, &ry);
     expect("background: a position from the far edge, and one centred", ox == 80 && oy == 40,
            NULL);
     expect("background: repeat-x repeats across and not down", rx && !ry, NULL);
