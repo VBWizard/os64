@@ -107,10 +107,9 @@ static const char *const kDisplay[] = {
 // exactly this. A flex or grid container is laid out as the block or
 // inline-block it is on the outside, and flow-root as a block, which keeps a
 // page's `display: inline-block; display: inline-flex` fallback pattern
-// working; a sticky box as a relative one; an opacity between none and all
-// as all. `contents` is not here: libflow
-// gives such an element no box and flows its children into its parent,
-// which is what it says. The list is for the layouts a page writes
+// working; an opacity between none and all as all. `contents` is not here:
+// libflow gives such an element no box and flows its children into its
+// parent, which is what it says. The list is for the layouts a page writes
 // a fallback for — asks for one and is handed another — and each joins it
 // the day its mapping is written and leaves the day the slice that lays it
 // out lands.
@@ -120,7 +119,6 @@ static const struct {
 } kApproximated[] = {
     {GARB_DISPLAY, "flex"}, {GARB_DISPLAY, "inline-flex"}, {GARB_DISPLAY, "grid"},
     {GARB_DISPLAY, "inline-grid"}, {GARB_DISPLAY, "flow-root"},
-    {GARB_POSITION, "sticky"},
 };
 
 bool garb_set_approximated(const garb_set_t *set)

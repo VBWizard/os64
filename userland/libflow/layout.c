@@ -128,6 +128,11 @@ static int64_t len(flow_length_t l, int64_t base)
     return 0;
 }
 
+int64_t f_len(flow_length_t l, int64_t base)
+{
+    return len(l, base);
+}
+
 // A width or height the page gave, as the content box's: a border-box one
 // less its frame (CSS Sizing 3 § 4.1), and never below zero.
 static int64_t content_of(const flow_style_t *s, flow_length_t v, int64_t base, int64_t frame)
@@ -489,8 +494,8 @@ static int64_t definite_height(const FBox *b)
 // How far a relative box moves from where the flow put it (CSS 2.1 §
 // 9.4.3): `left` over `right`, `top` over `bottom`, percentages of its
 // containing block — a vertical one only against a definite height (`cbh`
-// >= 0). A sticky box is laid out as relative with its insets ignored
-// until its slice, so it does not move.
+// >= 0). A sticky box is laid out where the flow puts it, and the door
+// moves it as the page scrolls (flow_box_doc_offset).
 static void rel_offset(const flow_style_t *s, int64_t cbw, int64_t cbh, int64_t *dx, int64_t *dy)
 {
     *dx = *dy = 0;

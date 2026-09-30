@@ -487,6 +487,28 @@ static void positioned_in_order(const flow_box_t *b, const flow_tree_t *t, int32
         positioned_in_order(c, t, at, ok);
 }
 
+// Every sticky box, at any scroll, is moved from the frame it is in by no
+// more than its containing block leaves room for, on either axis — and a
+// room always holds 0, where the flow put it.
+static void sticky_held(const flow_box_t *b, bool *ok)
+{
+    const flow_sticky_t *s = b->sticky;
+    if (s != NULL && s->box == b) {
+        static const flow_point_t kScrolls[] = {{0, 0}, {0, 317}, {0, 100000}, {50, 2000},
+                                                {INT32_MAX / 2, INT32_MAX / 2}};
+        *ok &= s->lo[0] <= 0 && s->hi[0] >= 0 && s->lo[1] <= 0 && s->hi[1] >= 0;
+        for (size_t k = 0; k < sizeof(kScrolls) / sizeof(kScrolls[0]); k++) {
+            flow_point_t at = flow_box_doc_offset(b, kScrolls[k]);
+            flow_point_t from = s->outer != NULL ? flow_box_doc_offset(s->outer->box, kScrolls[k])
+                              : b->fixed ? kScrolls[k] : (flow_point_t){0, 0};
+            int64_t dx = (int64_t)at.x - from.x, dy = (int64_t)at.y - from.y;
+            *ok &= dx >= s->lo[0] && dx <= s->hi[0] && dy >= s->lo[1] && dy <= s->hi[1];
+        }
+    }
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next)
+        sticky_held(c, ok);
+}
+
 static void intrinsic_once(const FBox *b, bool *ok)
 {
     if (b->intrinsic_computed > 1)
@@ -547,6 +569,10 @@ static void fuzz_one(const char *what, const char *html, size_t len)
             positioned_in_order(flow_root(t), t, &at, &listed);
             expect("fuzz: the positioned list is every positioned box, each once",
                    listed && at == flow_npositioned(t), what);
+            bool held = true;
+            sticky_held(flow_root(t), &held);
+            expect("fuzz: a sticky box moves only as far as its containing block allows",
+                   held, what);
         }
         flow_free(t);
     }

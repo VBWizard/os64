@@ -88,10 +88,10 @@ lets a fixed box, in another coordinate space, be reached at all.
 `position`, `top`, `right`, `bottom`, `left`, `inset`, `z-index` (an
 integer, or `auto`) and `opacity` are read into the property table, the
 usual way. A value no slice lays out yet is READ — the cascade keeps it —
-and is NOT SUPPORTED: `@supports (position: sticky)` says no until P4,
-`@supports (z-index: 1)` until P3, and `@supports (opacity: 0.5)` until
-the painter blends. The approximation list generalises for it: props.c's
-`kDisplayApproximated` becomes a list of (property, value) pairs —
+and is NOT SUPPORTED: `@supports (opacity: 0.5)` says no until the painter
+blends, as `z-index` and `sticky` did until P3 and P4. The approximation
+list generalises for it: props.c's `kDisplayApproximated` becomes a list
+of (property, value) pairs —
 `kApproximated`, with `z-index` matching any integer — because the name
 would be stale the day `position` joined it.
 
@@ -120,11 +120,11 @@ stretch: `flow_length_t` gains a FIT_CONTENT kind, whose producer is the
 chapter alone (an author's `fit-content` is still read as `auto`, GARB.md
 § Booked).
 
-Until their own slices, `fixed` (P1 alone) and `sticky` (until P4) are
-laid out as `relative` with their offsets ignored — never as `static`:
-a positioned box is its
-absolute descendants' containing block, and a sticky nav bar with an
-absolute dropdown inside it is ordinary.
+A `sticky` box is laid out as `relative` with no offset — where the flow
+puts it — and moved when it is drawn (P4); `fixed`, in P1 alone, was laid
+out the same way. Never as `static`: a positioned box is its absolute
+descendants' containing block, and a sticky nav bar with an absolute
+dropdown inside it is ordinary.
 
 ### Pass 2 — boxes
 
@@ -197,6 +197,29 @@ absolute dropdown inside it is ordinary.
   laid out with that block's absolute boxes. On an axis whose insets are
   both `auto`, its static position is read as a viewport coordinate: where
   it would stand with the page not scrolled, and there it stays.
+- **Sticky** (P4). Laid out where the flow puts it, and the door works
+  out, at each scroll, how far to draw it moved (CSS Position 3 § 3.4):
+  its border box is pushed back inside its SCROLLPORT — the nearest
+  ancestor scroll container's padding box, else the viewport — less its
+  insets, `top` winning over `bottom` and `left` over `right` where both
+  cannot hold, and never so far that its margin box leaves its
+  containing block: its parent's content box, a cell's table's. A box
+  larger than that view makes the view's end edge give way until the two
+  are the same size, so it shows its start rather than its end. What it
+  may move is worked out once, when the tree is built (`flow_sticky_t`);
+  where it is, at each scroll. A block-level box fills its containing
+  block across, margins and all, so only a cell moves sideways. A scroll
+  container other than the viewport is not scrolled here, so a sticky box
+  in one is held where its insets put it in that box, and the page's
+  scroll does not move it. A sticky box inside another is worked out in
+  the frame the outer one moved, and an absolute box inside one moves
+  with it, since the sticky box is its containing block; a fixed one does
+  not. Insets that are percentages are of the scrollport. A lookup works
+  each sticky box's push once, and a sticky box whose push would be
+  worked from more than 32 of them (itself, those outside it, their
+  scrollports') is laid out where the flow put it, so no page can make a
+  lookup cost more than that (Quinn's review, where a nest of 27 each
+  worked twice per level took past 15 seconds).
 - **All or nothing.** An out-of-flow box that does not finish is not
   placed, as a table cut short keeps its place with no rows: its
   containing block is marked unfinished and the tree is `incomplete`.
@@ -267,6 +290,19 @@ absolute dropdown inside it is ordinary.
   promise that no field changes its meaning and no signature at the door
   changes shape, and from flow.h's "whole document pixels"; the slice that
   does it amends both, out loud.
+- **Sticky coordinates** (P4). No new coordinate space: `flow_box_t`
+  gains `sticky`, the innermost sticky box the box moves with along its
+  containing blocks — its parent's for a box in the flow, its containing
+  block's for an out-of-flow one — and `flow_box_doc_offset` adds each
+  sticky box's push, outermost first, to the scroll a fixed box already
+  took. What clips a sticky box from outside does not move with it, so it
+  is the sticky box's record's: the boxes inside keep in `clip` only what
+  clips inside it, and `flow_box_doc_clip` meets the two, each where its
+  own frame puts it — which is how a painter reads a clip, and what
+  `flow_hit` asks of each layer. Hit testing, `flow_box_covered` and
+  yonder's widgets follow with no change of their own; `flow_hit_in_flow`
+  and a fragment link read a sticky box where the flow put it, which is
+  its place in the document.
 - **Covered.** `flow_box_covered(tree, box, scroll)` answers whether the
   pointer cannot reach `box`: `flow_hit` at its centre answers neither it
   nor anything inside it (ruling 9), so a face that draws live widgets
@@ -334,7 +370,7 @@ Each slice is reviewed with Fable before the next starts, as the stack was.
 | P1 | libgarb reads the properties; pass 1 carries them, blockifies with `specified_inline`, and pays `dialog`; `relative` on blocks and inlines; `absolute` against block, inline and initial containing blocks, with static positions, § 10.3.7/§ 10.6.4 sizing and percentage heights; the positioned list, the paint layer and the reversed hit test; clips along containing blocks; the page's extent; `viewport_height`; `fixed` and `sticky` as `relative` meanwhile; `opacity: 0`, translucent out-of-flow backgrounds, and the `static_only` key | hand-laid pages for every row of § 10.3.7's table and § 10.6.4's; the corpus dumps unchanged where no sheet positions anything; the partial-tree relations as restated below; the positioned fuzz |
 | P2 | `fixed`: viewport coordinates, the `fixed` flag, `flow_visit`/`flow_hit` with the scroll, `flow_box_doc_rect`, `flow_box_covered` and yonder's widgets, LAYOUT.md's promise amended | hand-laid pages; a guest page scrolled with a fixed header held on the glass and a form field scrolled under it |
 | P3 | `z-index` and stacking contexts: the list sorted and nested | hand-laid overlapping pages whose paint order is written out; a dropdown over the content it overlaps, clicked |
-| P4 | `sticky` | a guest page whose header sticks at `top: 0` and lets go at its container's end |
+| P4 | `sticky`: the door's push at each scroll, along containing blocks; block-level boxes and table cells, against the nearest scroll container or the viewport | hand-laid pages: a header that stays, rides the view and lets go at its wrapper's end; `bottom: 0`; one in a scroll container; a heading cell; an absolute, a fixed and a sticky box inside one; the fuzz's sticky property, that no box ever leaves its containing block at any scroll; a guest page whose header sticks at `top: 0` and lets go at its container's end |
 
 ## Proof, and the invariants that change
 
@@ -451,7 +487,8 @@ he said, not a CSS one — and Fable ruled as he had recommended:
 | `opacity` between 0 and 1, translucent colours | a blend the painter does not have | pile 3's painter work |
 | `clip`, `clip-path` | the first is deprecated; the second is a path (Bootstrap's `.visually-hidden` hides without `clip`, from P1) | a page that needs one to be readable |
 | Floats beside positioned boxes | libflow has no floats; a static position among floats is not computed | floats |
-| `position: relative` on table rows, row groups and columns | undefined in CSS 2.1, defined in Position 3 | a page that needs it |
+| `position: relative` or `sticky` on table rows, row groups and columns | undefined in CSS 2.1, defined in Position 3; a sticky heading CELL sticks (P4), and that is the common spelling | a page whose sticky `thead` or `tr` matters |
+| A sticky inline, or inline-block | it has pieces on lines, not a box of its own to push, as a relative one has (below) | a page whose sticky inline matters |
 | The logical insets (`inset-inline-start` and the rest) | the physical four first; the chapter's `dialog` rule is applied physically | a page that writes them |
 | Percentage heights of an absolute box's descendants | GARB.md's percentage-height row, unchanged; the absolute box's own resolves | that row |
 | Scrolling a positioned box's own overflow | nothing scrolls a box yet | box scrolling |

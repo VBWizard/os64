@@ -39,7 +39,9 @@ applied:
    not the document's, and `flow_visit` and `flow_hit` gained the scroll,
    since the rect a face paints is the view's dirty part and the scroll
    cannot be told from it. `flow_box_doc_rect` is where the one rule
-   between the two is written. The one
+   between the two is written, and `position: sticky` (P4) added to it
+   without a new coordinate space: a sticky box's rects are where the flow
+   put it, and the rule adds how far the scroll pushes it. The one
    place that promise needed a decision NOW is the font family: a cascade
    writes a NAME LIST (`font-family: Georgia, "Times New Roman", serif`),
    so the struct holds a list ending in a generic from the first line, and
@@ -124,8 +126,9 @@ window. The harness renders the corpus and diffs box coordinates.
 box), its computed style, its kind, and after layout TWO rectangles in
 DOCUMENT coordinates — absolute, integer pixels, x from the content edge,
 y from the top of the page; a box in a fixed box's subtree carries its
-two in VIEWPORT coordinates, and `flow_box_doc_rect` answers either kind
-in document ones given the scroll — because the face paints and hit-tests by
+two in VIEWPORT coordinates, and one in a sticky box's subtree where the
+flow put it, and `flow_box_doc_rect` answers any of them in document ones
+given the scroll — because the face paints and hit-tests by
 rectangle and a rectangle relative to a parent would make every click a
 walk. The first is the box's own border rect. The second is its
 **overflow rect**: its own rect joined with every descendant's, because
@@ -617,8 +620,8 @@ first line's baseline; `list-style: none` (a `menu` in a nav) draws none.
 degrades honestly:** `float` and `clear` are recorded and ignored, so an
 `<img align=left>` sits inline at its baseline and the text runs after it
 rather than beside it — the page still reads, in order; `position` is
-laid out as POSITION.md's slices land it (relative, absolute and fixed;
-sticky as relative until its own), `inline-table` is not laid out, and
+laid out as POSITION.md's slices land it (relative, absolute, fixed and
+sticky, with what is still booked there), `inline-table` is not laid out, and
 `overflow` only clips (GARB.md § Booked says what the cascade does with
 each). Each is a row in the booked table.
 
@@ -706,8 +709,8 @@ its contract; this is what it offers and why.
   the flow, relative boxes included and out-of-flow ones not, which is what
   a scroll position is anchored to.
 - **`flow_box_doc_offset`/`flow_box_doc_rect`/`flow_box_doc_clip(box,
-  scroll)`** — a box in document coordinates, the one place the fixed rule
-  is written; and **`flow_box_covered(tree, box, scroll)`**, whether the
+  scroll)`** — a box in document coordinates, the one place the fixed and
+  sticky rules are written; and **`flow_box_covered(tree, box, scroll)`**, whether the
   pointer cannot reach a box — `flow_hit` at its centre answers neither it
   nor anything inside it — so a face hides the live widget of a control
   that is (POSITION.md, ruling 9).
@@ -993,7 +996,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Floats and `clear` (`align=left/right` on `img`/`table`, `<br clear>`) | the float rules (§9.5) are a second placement pass with their own line-box shortening; the struct records them so the cascade and the first cut agree on the field | the first page whose layout is unreadable without a float — image-beside-text pages of the old web will vote early |
-| `sticky`, `inline-table`; scrolling | relative, absolute and fixed are laid out, and `z-index` stacks them (POSITION.md P1–P3); sticky is laid out as relative until its slice; from the cascade, `inline-table` is laid out as a table, and `overflow: scroll`/`auto` draw what they would scroll, since nothing scrolls | POSITION.md's P4; pile 2 (GARB.md) |
+| `inline-table`; scrolling | relative, absolute, fixed and sticky are laid out, and `z-index` stacks them (POSITION.md P1–P4); from the cascade, `inline-table` is laid out as a table, and `overflow: scroll`/`auto` draw what they would scroll, since nothing scrolls | pile 2 (GARB.md) |
 | Collapsing borders (§17.6.2) | a table with `rules` or `frame` records `border-collapse: collapse`; it is laid out with no spacing and its borders drawn separately | the first ruled table that reads wrong for it |
 | A range-draw on a measuring run (F2 ask) | halves layout work and run memory; works without it | a page whose layout time is visible, measured, or a page that hits the memory cap through runs |
 | Incremental relayout | ruling 2 says rebuild; the face paces it | the engine, or a page whose rebuild is visibly slow |
