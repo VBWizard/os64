@@ -656,6 +656,31 @@ static void flex_picture_cases(void)
                FLEX_IDS("i"), FLEX_WANT({0, 0, 80, 60}));
     // A content basis counts a percentage padding at the container's
     // width: 30 of content and 20 each side, 70.
+    // A stretched picture's basis is its own size across the stretched
+    // one: the page's size and limits on the flex axis weigh nothing in it.
+    flex_rects("flex: a stretched picture's basis ignores a max-width",
+               "#o{display:flex;width:30px;height:30px} img{min-width:0} #a{max-width:20px}</style>"
+               "<div id=o><img id=a src=known.png><img id=b src=known.png></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 15, 30}, {15, 0, 15, 30}));
+    flex_rects("flex: a stretched picture's basis ignores a max-height",
+               "#o{display:flex;flex-direction:column;width:40px;height:30px} img{min-height:0}"
+               " #a{max-height:20px}</style><div id=o><img id=a src=known.png><img id=b src=known.png></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 40, 15}, {0, 15, 40, 15}));
+    flex_rects("flex: a stretched picture's content basis ignores its height",
+               "#o{display:flex;flex-direction:column;width:100px} img{height:300px;flex:0 0 content}"
+               "</style><div id=o><img id=i src=known.png></div>",
+               FLEX_IDS("i"), FLEX_WANT({0, 0, 100, 75}));
+    flex_rects("flex: a stretched picture's content basis ignores its width",
+               "#o{display:flex;width:200px;height:30px} img{width:300px;flex:0 0 content}"
+               "</style><div id=o><img id=i src=known.png></div>",
+               FLEX_IDS("i"), FLEX_WANT({0, 0, 40, 30}));
+    // An item with an auto margin across takes no part in the baseline: a
+    // stays at the top beside b's 40.
+    flex_rects("flex: an auto cross margin keeps an item out of the baseline",
+               "#o{display:flex;width:100px;align-items:baseline} #a{width:20px;height:20px}"
+               " #b{width:20px;height:40px;margin-top:auto}</style>"
+               "<div id=o><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b", "o"), FLEX_WANT({0, 0, 20, 20}, {20, 0, 20, 40}, {0, 0, 100, 40}));
     flex_rects("flex: a content basis counts a percentage padding",
                "#o{display:flex;width:200px} #a{flex:none;padding:10%} #k{width:30px;height:20px}"
                " #b{width:50px;height:20px}</style>"
