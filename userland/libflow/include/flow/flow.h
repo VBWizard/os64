@@ -46,6 +46,11 @@ typedef enum {
     // room between. The Rendering chapter's `dialog` is its producer; an
     // author's `fit-content` is still read as `auto` (GARB.md § Booked).
     FLOW_LENGTH_FIT_CONTENT,
+    // `flex-basis: content` (Flexbox 1 § 7.2.3): the item's own content
+    // size, whatever width or height it was given — and the sizing
+    // keywords a basis is read as that (FLEX.md § Booked). Only a basis
+    // is ever this.
+    FLOW_LENGTH_CONTENT,
 } flow_length_kind_t;
 
 typedef struct {
@@ -81,6 +86,9 @@ typedef enum {
     FLOW_DISPLAY_TABLE_CELL,
     FLOW_DISPLAY_TABLE_COLUMN_GROUP,
     FLOW_DISPLAY_TABLE_COLUMN,
+    // A flex container (FLEX.md): a block, or an atom, on the outside.
+    FLOW_DISPLAY_FLEX,
+    FLOW_DISPLAY_INLINE_FLEX,
     // The element makes no box and its children are its parent's: `slot`,
     // and an SVG or MathML element, whose HTML descendants still render.
     FLOW_DISPLAY_CONTENTS,
@@ -207,6 +215,36 @@ typedef enum {
     FLOW_OVERFLOW_AUTO,
 } flow_overflow_t;
 typedef enum { FLOW_CLEAR_NONE = 0, FLOW_CLEAR_LEFT, FLOW_CLEAR_RIGHT, FLOW_CLEAR_BOTH } flow_clear_t;
+// Flexbox 1 § 5 (FLEX.md): the main axis, and whether items wrap.
+typedef enum {
+    FLOW_FLEX_ROW = 0,
+    FLOW_FLEX_ROW_REVERSE,
+    FLOW_FLEX_COLUMN,
+    FLOW_FLEX_COLUMN_REVERSE,
+} flow_flex_direction_t;
+typedef enum { FLOW_FLEX_NOWRAP = 0, FLOW_FLEX_WRAP, FLOW_FLEX_WRAP_REVERSE } flow_flex_wrap_t;
+// Box Alignment 3's values, as `justify-content`, `align-items`,
+// `align-self` and `align-content` compute them; each property takes the
+// ones its grammar allows. NORMAL is every one's initial value but
+// `align-self`'s, which is AUTO: its container's `align-items`.
+typedef enum {
+    FLOW_PLACE_NORMAL = 0,
+    FLOW_PLACE_AUTO,
+    FLOW_PLACE_STRETCH,
+    FLOW_PLACE_FLEX_START,
+    FLOW_PLACE_FLEX_END,
+    FLOW_PLACE_CENTER,
+    FLOW_PLACE_BASELINE,
+    FLOW_PLACE_START,
+    FLOW_PLACE_END,
+    FLOW_PLACE_SELF_START,
+    FLOW_PLACE_SELF_END,
+    FLOW_PLACE_LEFT,
+    FLOW_PLACE_RIGHT,
+    FLOW_PLACE_SPACE_BETWEEN,
+    FLOW_PLACE_SPACE_AROUND,
+    FLOW_PLACE_SPACE_EVENLY,
+} flow_place_t;
 // CSS Position 3 § 2 (POSITION.md).
 typedef enum {
     FLOW_POSITION_STATIC = 0,
@@ -303,8 +341,23 @@ typedef struct {
     // BLOCKIFIED (CSS 2.1 § 9.7), and this says the display the page gave
     // was inline-level: its static position is where it would have stood
     // on the line, not below it. Not a property: the one fact of the
-    // specified display the blockified one loses.
+    // specified display the blockified one loses. A flex item is
+    // blockified too (Flexbox 1 § 4), and says the same.
     bool specified_inline;
+
+    // Flexible boxes (FLEX.md). A container's: its main axis, whether its
+    // items wrap, and where its free space and its lines go. An item's: its
+    // own cross alignment, its flex factors in thousandths, its basis
+    // (AUTO, CONTENT, PX or PERCENT of the container's inner main size),
+    // and its place among its siblings. A container's gaps between items
+    // and between lines: PX or PERCENT, or AUTO for `normal`, which is 0.
+    flow_flex_direction_t flex_direction;
+    flow_flex_wrap_t flex_wrap;
+    flow_place_t justify_content, align_items, align_self, align_content;
+    int32_t flex_grow, flex_shrink;
+    flow_length_t flex_basis;
+    int32_t order;
+    flow_length_t row_gap, column_gap;
 } flow_style_t;
 
 // ── What the face hands in ──────────────────────────────────────────────

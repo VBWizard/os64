@@ -61,6 +61,8 @@ static void length(Buf *b, flow_length_t l)
         puts_(b, "auto");
     } else if (l.kind == FLOW_LENGTH_FIT_CONTENT) {
         puts_(b, "fit-content");
+    } else if (l.kind == FLOW_LENGTH_CONTENT) {
+        puts_(b, "content");
     } else {
         unit(b, l.value);
         if (l.kind == FLOW_LENGTH_PERCENT)
@@ -97,8 +99,15 @@ static void color(Buf *b, const flow_env_t *env, uint32_t rgb)
 static const char *const s_display[] = {
     "inline", "block", "list-item", "inline-block", "table", "table-caption",
     "table-row-group", "table-header-group", "table-footer-group", "table-row",
-    "table-cell", "table-column-group", "table-column", "contents", "none",
+    "table-cell", "table-column-group", "table-column", "flex", "inline-flex", "contents",
+    "none",
 };
+static const char *const s_direction[] = {"row", "row-reverse", "column", "column-reverse"};
+static const char *const s_wrap[] = {"nowrap", "wrap", "wrap-reverse"};
+static const char *const s_place[] = {"normal", "auto", "stretch", "flex-start", "flex-end",
+                                      "center", "baseline", "start", "end", "self-start",
+                                      "self-end", "left", "right", "space-between",
+                                      "space-around", "space-evenly"};
 static const char *const s_generic[] = {"serif", "sans", "mono"};
 static const char *const s_border[] = {"none", "hidden", "solid", "inset", "outset", "groove"};
 static const char *const s_align[] = {"left", "right", "center", "justify", "html-left",
@@ -128,6 +137,9 @@ _Static_assert(F_ARRAY(s_visibility) == FLOW_COLLAPSE + 1, "s_visibility");
 _Static_assert(F_ARRAY(s_float) == FLOW_FLOAT_RIGHT + 1, "s_float");
 _Static_assert(F_ARRAY(s_clear) == FLOW_CLEAR_BOTH + 1, "s_clear");
 _Static_assert(F_ARRAY(s_position) == FLOW_POSITION_STICKY + 1, "s_position");
+_Static_assert(F_ARRAY(s_direction) == FLOW_FLEX_COLUMN_REVERSE + 1, "s_direction");
+_Static_assert(F_ARRAY(s_wrap) == FLOW_FLEX_WRAP_REVERSE + 1, "s_wrap");
+_Static_assert(F_ARRAY(s_place) == FLOW_PLACE_SPACE_EVENLY + 1, "s_place");
 
 static bool family_eq(const flow_family_list_t *a, const flow_family_list_t *b)
 {
@@ -323,6 +335,31 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         putf(b, " opacity=%d.%03d", s->opacity / 1000, s->opacity % 1000);
     if (s->pointer_events_none != parent->pointer_events_none)
         puts_(b, s->pointer_events_none ? " pointer-events=none" : " pointer-events=auto");
+    if (s->flex_direction != FLOW_FLEX_ROW)
+        putf(b, " flex-direction=%s", s_direction[s->flex_direction]);
+    if (s->flex_wrap != FLOW_FLEX_NOWRAP)
+        putf(b, " flex-wrap=%s", s_wrap[s->flex_wrap]);
+    if (s->justify_content != FLOW_PLACE_NORMAL)
+        putf(b, " justify-content=%s", s_place[s->justify_content]);
+    if (s->align_items != FLOW_PLACE_NORMAL)
+        putf(b, " align-items=%s", s_place[s->align_items]);
+    if (s->align_self != FLOW_PLACE_AUTO)
+        putf(b, " align-self=%s", s_place[s->align_self]);
+    if (s->align_content != FLOW_PLACE_NORMAL)
+        putf(b, " align-content=%s", s_place[s->align_content]);
+    if (s->flex_grow != 0 || s->flex_shrink != 1000 || s->flex_basis.kind != FLOW_LENGTH_AUTO) {
+        putf(b, " flex=%d.%03d/%d.%03d/", s->flex_grow / 1000, s->flex_grow % 1000,
+             s->flex_shrink / 1000, s->flex_shrink % 1000);
+        length(b, s->flex_basis);
+    }
+    if (s->order != 0)
+        putf(b, " order=%d", (int)s->order);
+    if (s->row_gap.kind != FLOW_LENGTH_AUTO || s->column_gap.kind != FLOW_LENGTH_AUTO) {
+        puts_(b, " gap=");
+        length(b, s->row_gap);
+        puts_(b, "/");
+        length(b, s->column_gap);
+    }
     if (s->specified_inline)
         puts_(b, " specified-inline");
     if (self->holds_block)
@@ -483,6 +520,8 @@ static void box_lines(Buf *b, const FBox *box, int32_t depth)
         puts_(b, " out-of-flow");
     else if (box->positioned)
         puts_(b, " positioned");
+    if (box->flex)
+        puts_(b, " flex");
     puts_(b, "\n");
     for (const FItem *it = box->items; it != NULL; it = it->next)
         item_line(b, it, depth + 1);

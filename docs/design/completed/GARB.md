@@ -71,8 +71,8 @@ that the properties libflow lays out can reach.
 | CSS 2.1 properties | — | 1 | Every property libflow's struct already holds, and their shorthands: `display`, `font`/`font-*`, `color`, `background`/`background-color`, `margin`, `padding`, `border`/`border-*`, `width`, `height`, `text-align`, `vertical-align`, `white-space`, `text-decoration`, `visibility`, `list-style`/`list-style-*`, `border-spacing`, `border-collapse`, `caption-side`, `float`, `clear` |
 | New in libflow, still pile 1 | — | 1 | The cheap ones that make modern pages readable: `box-sizing`, `min-`/`max-width`/`-height`, `line-height`, `text-indent`, `text-transform`, `overflow` (clipping), `background-image`/`-repeat`/`-position` (Y5b's tiler), `white-space: pre-line` |
 | Positioned layout | 3 | 2 | `position`, the insets and `inset`, `z-index`, stacking contexts — POSITION.md's slices. All are read now, and `opacity` and `pointer-events` with them: relative and absolute are laid out (P1), fixed (P2), stacked by `z-index` (P3) and sticky (P4), and an opacity of 0 is not painted while one between is painted opaque until pile 3 blends, an approximation that does not answer yes to `@supports` |
-| Flexible Box Layout | 1 | 2 | Whole. Until then `display: flex`/`inline-flex` is read and laid out as the block or inline-block it is outside, and `@supports` answers no, so a page's fallback for it is used |
-| Grid Layout | 2 | 2 | Whole, subgrid last. Until then `display: grid`/`inline-grid` is read and laid out as flex is, and `@supports` answers no |
+| Flexible Box Layout | 1 | 2 | Whole — FLEX.md's slices. Every property is read, with `flex`, `flex-flow`, `gap` and `grid-gap`: one line in all four directions is laid out (F1), and `@supports (display: flex)` says yes; a wrapping container is laid out on one line until F2, and `@supports (flex-wrap: wrap)` says no until then |
+| Grid Layout | 2 | 2 | Whole, subgrid last. Until then `display: grid`/`inline-grid` is read and laid out as the block or inline-block it is outside, and `@supports` answers no |
 | Backgrounds and Borders, Images, Transforms, Fonts (`@font-face`), Animations | 3/4 | 3 | Gradients, `border-radius`, `box-shadow`, `opacity`, `transform`, web fonts (packet 04's faces), animations on the Y5b ticker. What G2b already decided about gradients: a linear or radial one is VALID when it fits Images 3's grammar (so the pre-standard `linear-gradient(top, …)` is not, and the colour before it stands), conic gradients and `image-set()` are taken by name, and a valid one draws nothing yet while the `background` shorthand still resets the colour |
 
 ## What goes in
@@ -233,8 +233,8 @@ The cascade: 13 pages worked by hand (`tools/garb_corpus/cascade.txt`) —
 specificity over order, importance, the `style` attribute in all four
 combinations, invalid declarations leaving the one before them, `var()`
 with fallbacks, chains, a cycle and shadowing, the empty value and `unset`
-on a custom property, env(), `@media`, `@supports` (a flex or grid
-container not supported) and a `style` element's `media`, the same page
+on a custom property, env(), `@media`, `@supports` (a grid container not
+supported, a flex one supported) and a `style` element's `media`, the same page
 narrower, combinators, pseudo-element and `:hover` rules reaching nothing,
 quirks mode's case-free names and unitless lengths, a rule matched through
 two of its selectors at the heavier. All pass; eight mutants of the
@@ -355,7 +355,7 @@ center`, a 400px line cut at its 120px `overflow: hidden` box, and a
 | Quirks mode's hashless colour (`color: ff0000`) | quirks mode's unitless lengths are read; its colours without a `#` are not yet | a quirks-mode page written that way |
 | Encodings beyond libhtml's | a sheet in ISO-8859-2 or Shift_JIS keeps its ASCII and loses the rest | the first sheet whose text is not ASCII and not UTF-8 |
 | Alpha blending of colours | libflow's colours are opaque: a translucent colour is laid over the page's paper, whatever is really under it | pile 3 |
-| Flex, grid and inline tables | `flex` and `grid` are laid out as the block they are outside, `inline-flex` and `inline-grid` as an inline-block, `inline-table` as a table | pile 2 |
+| Grid and inline tables | `grid` is laid out as the block it is outside, `inline-grid` as an inline-block, `inline-table` as a table | pile 2 |
 | Dotted, dashed, double and ridge borders | the painter strokes solid, inset, outset and groove: the first three are drawn solid, ridge as groove | pile 3 |
 | `min-content`, `max-content`, `fit-content` sizes | libflow sizes a box by its container; the keywords read as `auto` (and as none on a limit) | pile 2, where flex and grid need content sizing anyway |
 | `box-sizing` and the limits on tables and cells; §10.4's table for a picture held by two limits against its ratio | a table's width comes from its columns and a cell's from its column, and neither reads them yet; a picture is held by width then height, keeping its ratio in the dimension the page left it | a page whose tables or pictures read wrong for it |

@@ -81,6 +81,18 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_Z_INDEX] = {"z-index", false},
     [GARB_OPACITY] = {"opacity", false},
     [GARB_POINTER_EVENTS] = {"pointer-events", true},
+    [GARB_FLEX_DIRECTION] = {"flex-direction", false},
+    [GARB_FLEX_WRAP] = {"flex-wrap", false},
+    [GARB_JUSTIFY_CONTENT] = {"justify-content", false},
+    [GARB_ALIGN_ITEMS] = {"align-items", false},
+    [GARB_ALIGN_SELF] = {"align-self", false},
+    [GARB_ALIGN_CONTENT] = {"align-content", false},
+    [GARB_FLEX_GROW] = {"flex-grow", false},
+    [GARB_FLEX_SHRINK] = {"flex-shrink", false},
+    [GARB_FLEX_BASIS] = {"flex-basis", false},
+    [GARB_ORDER] = {"order", false},
+    [GARB_ROW_GAP] = {"row-gap", false},
+    [GARB_COLUMN_GAP] = {"column-gap", false},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -104,10 +116,11 @@ static const char *const kDisplay[] = {
 // Values this grammar reads but no slice lays out as written yet (GARB.md's
 // pile 2, POSITION.md's slices). Read, so the cascade keeps them; not
 // SUPPORTED, so @supports tells a page to use the fallback it wrote for
-// exactly this. A flex or grid container is laid out as the block or
-// inline-block it is on the outside, and flow-root as a block, which keeps a
-// page's `display: inline-block; display: inline-flex` fallback pattern
-// working; an opacity between none and all as all. `contents` is not here:
+// exactly this. A grid container is laid out as the block or inline-block
+// it is on the outside, and flow-root as a block, which keeps a page's
+// `display: inline-block; display: inline-grid` fallback pattern working; a
+// wrapping flex container on one line (FLEX.md, F2); an opacity between
+// none and all as all. `contents` is not here:
 // libflow gives such an element no box and flows its children into its
 // parent, which is what it says. The list is for the layouts a page writes
 // a fallback for — asks for one and is handed another — and each joins it
@@ -117,8 +130,8 @@ static const struct {
     garb_prop_t prop;
     const char *keyword;
 } kApproximated[] = {
-    {GARB_DISPLAY, "flex"}, {GARB_DISPLAY, "inline-flex"}, {GARB_DISPLAY, "grid"},
-    {GARB_DISPLAY, "inline-grid"}, {GARB_DISPLAY, "flow-root"},
+    {GARB_DISPLAY, "grid"}, {GARB_DISPLAY, "inline-grid"}, {GARB_DISPLAY, "flow-root"},
+    {GARB_FLEX_WRAP, "wrap"}, {GARB_FLEX_WRAP, "wrap-reverse"},
 };
 
 bool garb_set_approximated(const garb_set_t *set)
@@ -191,6 +204,29 @@ static const char *const kPosition[] = {"static", "relative", "absolute", "fixed
 static const char *const kPointerEvents[] = {"auto", "none", "visiblepainted", "visiblefill",
                                              "visiblestroke", "visible", "painted", "fill",
                                              "stroke", "all", "bounding-box", NULL};
+// Flexbox 1 § 5 and the Box Alignment 3 values a flex container reads.
+// `safe` and `last baseline` are not read: a value using one is invalid,
+// and the page's fallback stands (FLEX.md § Booked); `unsafe` is what
+// every value means without it, and is read as that.
+static const char *const kFlexDirection[] = {"row", "row-reverse", "column", "column-reverse",
+                                             NULL};
+static const char *const kFlexWrap[] = {"nowrap", "wrap", "wrap-reverse", NULL};
+static const char *const kJustify[] = {"normal", "flex-start", "flex-end", "center",
+                                       "space-between", "space-around", "space-evenly",
+                                       "start", "end", "left", "right", "stretch", NULL};
+static const char *const kAlignItems[] = {"normal", "stretch", "flex-start", "flex-end",
+                                          "center", "baseline", "start", "end", "self-start",
+                                          "self-end", NULL};
+static const char *const kAlignSelf[] = {"auto", "normal", "stretch", "flex-start", "flex-end",
+                                         "center", "baseline", "start", "end", "self-start",
+                                         "self-end", NULL};
+static const char *const kAlignContent[] = {"normal", "stretch", "flex-start", "flex-end",
+                                            "center", "space-between", "space-around",
+                                            "space-evenly", "start", "end", "baseline", NULL};
+static const char *const kBasisWords[] = {"auto", "content", "min-content", "max-content",
+                                          "fit-content", NULL};
+static const char *const kUnsafe[] = {"unsafe", NULL};
+static const char *const kFirst[] = {"first", NULL};
 static const char *const kRepeat[] = {"repeat-x", "repeat-y", NULL};
 static const char *const kRepeat2[] = {"repeat", "space", "round", "no-repeat", NULL};
 static const char *const kAttachment[] = {"scroll", "fixed", "local", NULL};
@@ -1100,6 +1136,11 @@ typedef enum {
     G_BG_REPEAT, G_BG_POS_X, G_BG_POS_Y, G_SPACING,
     G_Z_INDEX,              // auto | <integer>
     G_ALPHA,                // <alpha-value>: a number or a percentage, clamped when computed
+    G_ALIGN,                // an alignment keyword from `words`, `unsafe` or `first` before it
+    G_FACTOR,               // <number [0,∞]>: flex-grow, flex-shrink
+    G_BASIS,                // flex-basis: `words` | lp >= 0
+    G_INTEGER,              // <integer>: order
+    G_GAP,                  // normal | lp >= 0
 } Grammar;
 
 typedef struct {
@@ -1147,6 +1188,12 @@ static const Longhand kLonghands[] = {
     {GARB_BOTTOM, G_MARGIN, NULL}, {GARB_LEFT, G_MARGIN, NULL},
     {GARB_Z_INDEX, G_Z_INDEX, NULL}, {GARB_OPACITY, G_ALPHA, NULL},
     {GARB_POINTER_EVENTS, G_KEYWORDS, kPointerEvents},
+    {GARB_FLEX_DIRECTION, G_KEYWORDS, kFlexDirection}, {GARB_FLEX_WRAP, G_KEYWORDS, kFlexWrap},
+    {GARB_JUSTIFY_CONTENT, G_ALIGN, kJustify}, {GARB_ALIGN_ITEMS, G_ALIGN, kAlignItems},
+    {GARB_ALIGN_SELF, G_ALIGN, kAlignSelf}, {GARB_ALIGN_CONTENT, G_ALIGN, kAlignContent},
+    {GARB_FLEX_GROW, G_FACTOR, NULL}, {GARB_FLEX_SHRINK, G_FACTOR, NULL},
+    {GARB_FLEX_BASIS, G_BASIS, kBasisWords}, {GARB_ORDER, G_INTEGER, NULL},
+    {GARB_ROW_GAP, G_GAP, NULL}, {GARB_COLUMN_GAP, G_GAP, NULL},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -1278,6 +1325,47 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         // Color 4 § 4.2: outside 0 to 1 (or 0% to 100%) is not invalid,
         // it is clamped when the value is computed.
         return vc_dim(c, ACCEPT_NUMBER | ACCEPT_PERCENT, true, false, &s->a, out);
+    case G_ALIGN: {
+        // Box Alignment 3 § 4: `first baseline` is `baseline`, and
+        // `unsafe` is what a position means without it.
+        bool unsafe = vc_keyword(c, kUnsafe) != NULL;
+        bool first = !unsafe && vc_keyword(c, kFirst) != NULL;
+        if ((k = vc_keyword(c, l->words)) == NULL)
+            return false;
+        if (first && !os64_streq(k, "baseline"))
+            return false;
+        if (unsafe && (os64_streq(k, "normal") || os64_streq(k, "stretch") ||
+                       os64_streq(k, "baseline") || os64_streq(k, "auto") ||
+                       os64_streq(k, "space-between") || os64_streq(k, "space-around") ||
+                       os64_streq(k, "space-evenly")))
+            return false;
+        *out = kw(k);
+        return true;
+    }
+    case G_FACTOR:
+        return vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, out);
+    case G_BASIS:
+        if ((k = vc_keyword(c, l->words)) != NULL) {
+            *out = kw(k);
+            return true;
+        }
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, out);
+    case G_INTEGER: {
+        const garb_value_t *t = vc_peek(c);
+        if (t == NULL || t->kind != GARB_NUMBER || !t->integer)
+            return false;
+        c->i++;
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_NUMBER;
+        out->number = t->number;
+        return true;
+    }
+    case G_GAP:
+        if (vc_keyword(c, kNormal) != NULL) {
+            *out = kw("normal");
+            return true;
+        }
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, out);
     }
     return false;
 }
@@ -1288,6 +1376,7 @@ typedef enum {
     SH_MARGIN, SH_PADDING, SH_BORDER, SH_BORDER_TOP, SH_BORDER_RIGHT, SH_BORDER_BOTTOM,
     SH_BORDER_LEFT, SH_BORDER_WIDTH, SH_BORDER_STYLE, SH_BORDER_COLOR, SH_BACKGROUND,
     SH_BACKGROUND_POSITION, SH_FONT, SH_LIST_STYLE, SH_TEXT_DECORATION, SH_OVERFLOW, SH_INSET,
+    SH_FLEX, SH_FLEX_FLOW, SH_GAP,
 } Shorthand;
 
 static const struct { const char *name; Shorthand sh; } kShorthands[] = {
@@ -1299,6 +1388,10 @@ static const struct { const char *name; Shorthand sh; } kShorthands[] = {
     {"background-position", SH_BACKGROUND_POSITION}, {"font", SH_FONT},
     {"list-style", SH_LIST_STYLE}, {"text-decoration", SH_TEXT_DECORATION},
     {"overflow", SH_OVERFLOW}, {"inset", SH_INSET},
+    {"flex", SH_FLEX}, {"flex-flow", SH_FLEX_FLOW}, {"gap", SH_GAP},
+    // Grid 1's first spelling of `gap`, still written by nearly every sheet
+    // that wants the gap in the browsers of 2018 (Box Alignment 3 § 8.4).
+    {"grid-gap", SH_GAP},
 };
 
 // The longhands a shorthand sets, for a CSS-wide keyword to reach them all.
@@ -1335,8 +1428,57 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
     case SH_TEXT_DECORATION: out[n++] = GARB_TEXT_DECORATION_LINE; break;
     case SH_OVERFLOW: out[n++] = GARB_OVERFLOW_X; out[n++] = GARB_OVERFLOW_Y; break;
     case SH_INSET: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_TOP + k); break;
+    case SH_FLEX: out[n++] = GARB_FLEX_GROW; out[n++] = GARB_FLEX_SHRINK; out[n++] = GARB_FLEX_BASIS; break;
+    case SH_FLEX_FLOW: out[n++] = GARB_FLEX_DIRECTION; out[n++] = GARB_FLEX_WRAP; break;
+    case SH_GAP: out[n++] = GARB_ROW_GAP; out[n++] = GARB_COLUMN_GAP; break;
     }
     return n;
+}
+
+// `flex` (Flexbox 1 § 7.1): `none`, or a grow factor with an optional
+// shrink factor and a basis, in either order. What is left out is not the
+// longhand's initial value: grow 1, shrink 1, basis 0% — `flex: 1` is
+// `1 1 0%`. A unitless zero is a factor unless two factors came before it.
+static bool flex_shorthand(Sets *s, VCur *c)
+{
+    garb_val_t grow = {0}, shrink = {0}, basis = percent(0);
+    grow.kind = shrink.kind = GARB_V_NUMBER;
+    grow.number = shrink.number = 1;
+    if (vc_keyword(c, kNone) != NULL) {
+        if (!vc_done(c))
+            return false;
+        grow.number = shrink.number = 0;
+        basis = kw("auto");
+    } else {
+        bool factors = false, have_basis = false;
+        while (!vc_done(c)) {
+            const garb_value_t *t = vc_peek(c);
+            if (!factors && t != NULL && t->kind == GARB_NUMBER) {
+                if (!vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, &grow))
+                    return false;
+                const garb_value_t *u = vc_peek(c);
+                if (u != NULL && u->kind == GARB_NUMBER &&
+                    !vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, &shrink))
+                    return false;
+                factors = true;
+            } else if (!have_basis) {
+                const char *k = vc_keyword(c, kBasisWords);
+                if (k != NULL)
+                    basis = kw(k);
+                else if (!vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, &basis))
+                    return false;
+                have_basis = true;
+            } else {
+                return false;
+            }
+        }
+        if (!factors && !have_basis)
+            return false;
+    }
+    set(s, GARB_FLEX_GROW, &grow);
+    set(s, GARB_FLEX_SHRINK, &shrink);
+    set(s, GARB_FLEX_BASIS, &basis);
+    return true;
 }
 
 static bool shorthand(Sets *s, VCur *c, Shorthand sh)
@@ -1376,6 +1518,44 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     case SH_FONT: return font_shorthand(s, c);
     case SH_LIST_STYLE: return list_style(s, c);
     case SH_TEXT_DECORATION: return text_decoration(s, c);
+    case SH_FLEX: return flex_shorthand(s, c);
+    case SH_FLEX_FLOW: {
+        // Flexbox 1 § 5.3: a direction and a wrap, either order, each at
+        // most once; the one left out is its initial value.
+        garb_val_t dir = kw("row"), wrap = kw("nowrap");
+        bool have_dir = false, have_wrap = false;
+        while (!vc_done(c)) {
+            if (!have_dir && (k = vc_keyword(c, kFlexDirection)) != NULL) {
+                dir = kw(k);
+                have_dir = true;
+            } else if (!have_wrap && (k = vc_keyword(c, kFlexWrap)) != NULL) {
+                wrap = kw(k);
+                have_wrap = true;
+            } else {
+                return false;
+            }
+        }
+        if (!have_dir && !have_wrap)
+            return false;
+        set(s, GARB_FLEX_DIRECTION, &dir);
+        set(s, GARB_FLEX_WRAP, &wrap);
+        return true;
+    }
+    case SH_GAP: {
+        // Box Alignment 3 § 8.3: a row gap and a column gap, the second
+        // the first when it is left out.
+        const Longhand gap = {GARB_ROW_GAP, G_GAP, NULL};
+        if (!longhand_one(s, c, &gap, &x))
+            return false;
+        y = x;
+        if (!vc_done(c) && !longhand_one(s, c, &gap, &y))
+            return false;
+        if (!vc_done(c))
+            return false;
+        set(s, GARB_ROW_GAP, &x);
+        set(s, GARB_COLUMN_GAP, &y);
+        return true;
+    }
     case SH_OVERFLOW:
         if ((k = vc_keyword(c, kOverflow)) == NULL)
             return false;

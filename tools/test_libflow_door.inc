@@ -264,6 +264,17 @@ static bool unfinished_within(const flow_box_t *b)
 // placed whole, under no unfinished table or line, is where the whole
 // layout puts it — laid out once its containing block was finished, it
 // does not move after.
+// A box whose children's geometry comes from the children it has: a
+// table's columns from its cells, a line's from its pieces, a flex
+// container's items from each other. Unfinished, what it holds may be
+// placed differently from the whole layout, and is not compared.
+static bool sized_by_its_children(const flow_box_t *b)
+{
+    return b->kind == FLOW_BOX_TABLE || b->kind == FLOW_BOX_LINE ||
+           (b->kind == FLOW_BOX_BLOCK && b->style != NULL &&
+            (b->style->display == FLOW_DISPLAY_FLEX || b->style->display == FLOW_DISPLAY_INLINE_FLEX));
+}
+
 static void placed_out_of_flow_stay(const flow_box_t *b, bool exempt, const flow_tree_t *whole,
                                     bool *same, size_t *compared)
 {
@@ -273,7 +284,7 @@ static void placed_out_of_flow_stay(const flow_box_t *b, bool exempt, const flow
                  twin->rect.w == b->rect.w && twin->rect.h == b->rect.h;
         (*compared)++;
     }
-    exempt |= b->unfinished && (b->kind == FLOW_BOX_TABLE || b->kind == FLOW_BOX_LINE);
+    exempt |= b->unfinished && sized_by_its_children(b);
     for (const flow_box_t *c = b->first; c != NULL; c = c->next)
         placed_out_of_flow_stay(c, exempt, whole, same, compared);
 }
@@ -345,12 +356,11 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
             for (size_t i = 0; prefix && i < p.n; i++) {
                 if (p.v[i]->unfinished || has_unfinished_below(&p, i))
                     continue;
-                // Under an unfinished table or line, geometry is not compared:
-                // a table's columns come from the cells it has.
+                // Under an unfinished box sized by its children, geometry is
+                // not compared (sized_by_its_children).
                 bool exempt = false;
                 for (int32_t up = p.parent[i]; up >= 0 && !exempt; up = p.parent[up])
-                    exempt = p.v[up]->unfinished && (p.v[up]->kind == FLOW_BOX_TABLE ||
-                                                     p.v[up]->kind == FLOW_BOX_LINE);
+                    exempt = p.v[up]->unfinished && sized_by_its_children(p.v[up]);
                 if (exempt)
                     continue;
                 const os64_gui_rect_t *x = &p.v[i]->rect, *y = &w.v[i]->rect;
@@ -511,7 +521,9 @@ static void sticky_held(const flow_box_t *b, bool *ok)
 
 static void intrinsic_once(const FBox *b, bool *ok)
 {
-    if (b->intrinsic_computed > 1)
+    // Measured at most once, and laid out at most once (FLEX.md: a flex
+    // item as much as any other box).
+    if (b->intrinsic_computed > 1 || b->laid > 1)
         *ok = false;
     for (const FBox *c = b->first; c != NULL; c = c->next)
         intrinsic_once(c, ok);
@@ -582,7 +594,7 @@ static void fuzz_one(const char *what, const char *html, size_t len)
     bool once = true;
     if (bx != NULL && bx->root != NULL)
         intrinsic_once(bx->root, &once);
-    expect("fuzz: every box's widths measured at most once", once, what);
+    expect("fuzz: every box measured at most once, and laid out at most once", once, what);
     f_layout_free(lay);
     f_boxes_free(bx);
     f_style_free(st);
@@ -625,6 +637,17 @@ static size_t positioned_soup(char *out, size_t cap)
         n += (size_t)snprintf(out + n, cap - n, ";opacity:%s", rng() % 2 ? "0" : "0.5");
     if (rng() % 3 == 0)
         n += (size_t)snprintf(out + n, cap - n, ";margin:%s", rng() % 2 ? "auto" : "-7px 3%");
+    // Flexible boxes (FLEX.md § Proof): a container, and an item's own.
+    static const char *const kFlexy[] = {
+        "display:flex", "display:inline-flex", "flex-direction:column",
+        "flex-direction:row-reverse", "flex-direction:column-reverse", "flex-wrap:wrap",
+        "justify-content:space-between", "justify-content:center", "justify-content:space-evenly",
+        "align-items:baseline", "align-items:center", "align-self:flex-end", "flex:1",
+        "flex:0 0 0", "flex:1e9", "flex:2 3 30%", "flex-basis:content", "order:-3", "order:2",
+        "gap:7px 3%", "min-width:0", "max-width:40px", "margin-left:auto"};
+    for (int k = 0; k < 3; k++)
+        if (rng() % 2)
+            n += (size_t)snprintf(out + n, cap - n, ";%s", kFlexy[rng() % 23]);
     n += (size_t)snprintf(out + n, cap - n, "\">");
     return n;
 }

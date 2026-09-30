@@ -30,6 +30,19 @@ static inline bool f_out_of_flow(const flow_style_t *s)
     return s->position == FLOW_POSITION_ABSOLUTE || s->position == FLOW_POSITION_FIXED;
 }
 
+// Display's two questions, answered in one place for every pass: is the
+// element an atom on its line — laid out as a block of its own inside the
+// line — and does it lay its children out as flex items (FLEX.md)?
+static inline bool f_display_atomic(flow_display_t d)
+{
+    return d == FLOW_DISPLAY_INLINE_BLOCK || d == FLOW_DISPLAY_INLINE_FLEX;
+}
+
+static inline bool f_display_flex(flow_display_t d)
+{
+    return d == FLOW_DISPLAY_FLEX || d == FLOW_DISPLAY_INLINE_FLEX;
+}
+
 // A containing block for the absolute boxes inside it: an element whose
 // position is not static and that makes a box of its own. A table's rows,
 // row groups and columns are not (`position: relative` on them is booked),
@@ -171,6 +184,10 @@ typedef struct {
     // `opacity: 0` on this element or an ancestor: nothing of it is painted
     // (flow_box_t.unpainted).
     bool transparent;
+    // Its in-flow children are flex items: it is a flex container, or it
+    // makes no box (`display: contents`) inside one. Pass 1 blockifies
+    // them (Flexbox 1 § 4).
+    bool flex_items;
 } FStyled;
 
 typedef struct {
@@ -329,6 +346,9 @@ struct FBox {
     // which are not `positioned`.
     bool positioned, out_of_flow;
     FPos *pos;
+    // It lays its children out as flex items (FLEX.md): a block container
+    // whose element is a flex container, or an inline one's atom content.
+    bool flex;
     // The positioned inlines whose pieces are all laid out inside this box,
     // which is finished only once all of them are (FPos.home).
     FPos *homed;
@@ -371,6 +391,17 @@ struct FBox {
     // every level above it, and without the memo that is exponential.
     bool intrinsic_known;
     int64_t intrinsic_min, intrinsic_max;
+    // The same two from its content alone, before a width or limit the page
+    // gave overrides them (a picture's, its own width: replaced_own),
+    // border box: what a row flex item's automatic minimum and content
+    // basis — `content`, or `auto` with no width — read (Flexbox 1 § 4.5,
+    // § 9.2).
+    int64_t content_min, content_max;
+    // The height its content took when it was laid out, border box, before
+    // a height or a limit the page gave: a flex container's, the height its
+    // items ask; a table's, its rows'. What a flex item's natural height,
+    // and a column item's automatic minimum and `flex-basis: content`, read.
+    int64_t content_h;
     uint32_t intrinsic_computed;    // how often; the fuzz asserts at most once
     // An out-of-flow box's static position (CSS 2.1 § 10.3.7): among
     // blocks, `static_known` says x and y hold it until the box is laid
@@ -382,6 +413,12 @@ struct FBox {
     FFrag *place;
     bool abs_sized, abs_h_set;
     int64_t abs_w, abs_ml, abs_h;
+    // A flex item's width and left margin, as its container decided them
+    // before laying it out (FLEX.md), which block() takes as given; and
+    // how many times the box was laid out, which the fuzz holds to once.
+    bool flex_sized;
+    int64_t flex_w, flex_ml;
+    uint32_t laid;
 };
 
 // One element that is a containing block (f_contains_absolute; POSITION.md):
