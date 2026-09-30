@@ -460,6 +460,92 @@ OUT: pointer-events: visiblepainted
 IN: pointer-events: none auto
 OUT: invalid
 
+# ── Flexible boxes (Flexbox 1 § 5, § 7; Box Alignment 3 § 4, § 8) ──
+IN: display: flex
+OUT: display: flex
+IN: display: Inline-Flex
+OUT: display: inline-flex
+IN: flex-direction: column-reverse
+OUT: flex-direction: column-reverse
+IN: flex-direction: vertical
+OUT: invalid
+IN: flex-wrap: wrap
+OUT: flex-wrap: wrap
+IN: flex-flow: column wrap
+OUT: flex-direction: column; flex-wrap: wrap
+IN: flex-flow: wrap
+OUT: flex-direction: row; flex-wrap: wrap
+IN: flex-flow: row column
+OUT: invalid
+IN: justify-content: space-between
+OUT: justify-content: space-between
+IN: justify-content: unsafe center
+OUT: justify-content: center
+IN: justify-content: safe center
+OUT: invalid
+IN: justify-content: unsafe space-around
+OUT: invalid
+IN: align-items: first baseline
+OUT: align-items: baseline
+IN: align-items: last baseline
+OUT: invalid
+IN: align-items: first center
+OUT: invalid
+IN: align-self: auto
+OUT: align-self: auto
+IN: align-items: auto
+OUT: invalid
+IN: align-content: space-evenly
+OUT: align-content: space-evenly
+IN: flex-grow: 2
+OUT: flex-grow: 2
+IN: flex-grow: -1
+OUT: invalid
+IN: flex-shrink: 0.5
+OUT: flex-shrink: 0.5
+IN: flex-basis: 30%
+OUT: flex-basis: 30%
+IN: flex-basis: content
+OUT: flex-basis: content
+IN: flex-basis: -10px
+OUT: invalid
+IN: order: -2
+OUT: order: -2
+IN: order: 1.5
+OUT: invalid
+IN: flex: 1
+OUT: flex-grow: 1; flex-shrink: 1; flex-basis: 0%
+IN: flex: 2 3
+OUT: flex-grow: 2; flex-shrink: 3; flex-basis: 0%
+IN: flex: 1 1 0
+OUT: flex-grow: 1; flex-shrink: 1; flex-basis: 0px
+IN: flex: 1 0
+OUT: flex-grow: 1; flex-shrink: 0; flex-basis: 0%
+IN: flex: 0 0 200px
+OUT: flex-grow: 0; flex-shrink: 0; flex-basis: 200px
+IN: flex: 200px 3
+OUT: flex-grow: 3; flex-shrink: 1; flex-basis: 200px
+IN: flex: auto
+OUT: flex-grow: 1; flex-shrink: 1; flex-basis: auto
+IN: flex: none
+OUT: flex-grow: 0; flex-shrink: 0; flex-basis: auto
+IN: flex: none 1
+OUT: invalid
+IN: flex: 1 2 3
+OUT: invalid
+IN: flex: initial
+OUT: flex-grow: initial; flex-shrink: initial; flex-basis: initial
+IN: gap: 10px
+OUT: row-gap: 10px; column-gap: 10px
+IN: gap: 1em 5%
+OUT: row-gap: 1em; column-gap: 5%
+IN: gap: normal
+OUT: row-gap: normal; column-gap: normal
+IN: gap: -1px
+OUT: invalid
+IN: grid-gap: 4px 8px
+OUT: row-gap: 4px; column-gap: 8px
+
 # ── What libgarb does not read here ──
 IN: transform: none
 OUT: unknown

@@ -1,0 +1,280 @@
+// Flexible boxes (FLEX.md, F1): every expectation worked by hand from
+// Flexbox 1 § 9 with the test font's metrics (test_libflow_fonts.c: at
+// 16px a line is 20 high, its baseline 14 down, `x` 8 wide, `w` 12, `l` 4).
+// A viewport 400 wide and 600 high, the body's margin 0.
+
+static const flow_box_t *flex_box(const Sheeted *q, const flow_tree_t *t, const char *id)
+{
+    return t != NULL ? box_with_id(t, q->doc->document, id) : NULL;
+}
+
+// One page laid out, and the rects of up to four ids checked against
+// `want` (x, y, w, h each; -1 for "not checked").
+static void flex_rects(const char *name, const char *page, const char *const ids[4],
+                       const int32_t want[4][4])
+{
+    Sheeted q;
+    char html[4096];
+    snprintf(html, sizeof(html), "<!doctype html><style>body{margin:0} p{margin:0}%s", page);
+    sheeted_open(&q, html, 400, 600);
+    flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+    bool ok = t != NULL;
+    char got[256] = "";
+    size_t at = 0;
+    for (int i = 0; i < 4 && ids[i] != NULL && ok; i++) {
+        const flow_box_t *b = flex_box(&q, t, ids[i]);
+        if (b == NULL) {
+            ok = false;
+            break;
+        }
+        const int32_t r[4] = {b->rect.x, b->rect.y, b->rect.w, b->rect.h};
+        at += (size_t)snprintf(got + at, sizeof(got) - at, "%s %d,%d %dx%d; ", ids[i], r[0], r[1],
+                               r[2], r[3]);
+        for (int k = 0; k < 4; k++)
+            ok &= want[i][k] < 0 || want[i][k] == r[k];
+    }
+    expect(name, ok, got);
+    flow_free(t);
+    sheeted_close(&q);
+}
+
+#define FLEX_IDS(...) (const char *const[4]){__VA_ARGS__}
+#define FLEX_WANT(...) (const int32_t[4][4]){__VA_ARGS__}
+
+static void flex_row_cases(void)
+{
+    // Three `flex: 1` items share 400 from a basis of 0: 133.33 each, the
+    // 26.6 remainder carried so the three meet the end — 0..133, 133..267,
+    // 267..400 once rounded — and each as tall as its 20px.
+    flex_rects("flex: a row of flex: 1 shares the line exactly",
+               ".c{display:flex} .c div{flex:1;height:20px}</style>"
+               "<div class=c><div id=a></div><div id=b></div><div id=c></div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 0, 133, 20}, {133, 0, 134, 20}, {267, 0, 133, 20}));
+
+    // Three 50px items that do not flex leave 250 free, and
+    // justify-content places it: § 8.2.
+    static const struct { const char *how; int32_t x[3]; } kJustify[] = {
+        {"flex-start", {0, 50, 100}},
+        {"flex-end", {250, 300, 350}},
+        {"center", {125, 175, 225}},
+        {"space-between", {0, 175, 350}},
+        // 250 / 6 = 41.67 either side of each: 41.67, 175, 308.33.
+        {"space-around", {42, 175, 308}},
+        // 250 / 4 = 62.5 between and at the ends: 62.5, 175, 287.5, ties up.
+        {"space-evenly", {63, 175, 288}},
+    };
+    for (size_t i = 0; i < sizeof(kJustify) / sizeof(kJustify[0]); i++) {
+        char page[512], name[96];
+        snprintf(page, sizeof(page),
+                 ".c{display:flex;justify-content:%s} .c div{flex:none;width:50px;height:10px}"
+                 "</style><div class=c><div id=a></div><div id=b></div><div id=c></div></div>",
+                 kJustify[i].how);
+        snprintf(name, sizeof(name), "flex: justify-content %s", kJustify[i].how);
+        flex_rects(name, page, FLEX_IDS("a", "b", "c"),
+                   FLEX_WANT({kJustify[i].x[0], 0, 50, 10}, {kJustify[i].x[1], 0, 50, 10},
+                             {kJustify[i].x[2], 0, 50, 10}));
+    }
+    // row-reverse starts at the right: the first item at 350.
+    flex_rects("flex: row-reverse places the first item at the right",
+               ".c{display:flex;flex-direction:row-reverse} .c div{width:50px;height:10px}"
+               "</style><div class=c><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({350, 0, 50, 10}, {300, 0, 50, 10}));
+    // Items that overflow: space-between starts them at the start edge,
+    // center overflows both ways (FLEX.md, decision 4; the probe's case 1).
+    flex_rects("flex: overflowing items start at the start, or centre both ways",
+               ".c{display:flex;width:300px} .c div{flex:none;width:200px;height:10px}"
+               ".b{justify-content:space-between} .m{justify-content:center}</style>"
+               "<div class='c b'><div id=a></div><div></div></div>"
+               "<div class='c m'><div id=b></div><div></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 200, 10}, {-50, 10, 200, 10}));
+
+    // Growing, frozen at a limit: two flex: 1 from 0 take 200 each; A's
+    // max-width holds it at 100, a negative violation, so A is frozen and
+    // B shares the rest: 300 (§ 9.7).
+    flex_rects("flex: an item frozen at its max-width, the other takes the rest",
+               ".c{display:flex} .c div{flex:1;height:10px} #a{max-width:100px}</style>"
+               "<div class=c><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 100, 10}, {100, 0, 300, 10}));
+    // Shrinking, floored at the content: two items 150 wide in 200 each
+    // hold ten `w`s (120). Shrinking by their bases gives each 100, below
+    // the automatic minimum — the smaller of the content's 120 and the
+    // width's 150 — so both freeze at 120 and overflow (§ 4.5).
+    flex_rects("flex: shrinking stops at the automatic minimum",
+               ".c{display:flex;width:200px} .c div{width:150px}</style>"
+               "<div class=c><div id=a>wwwwwwwwww</div><div id=b>wwwwwwwwww</div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 120, 20}, {120, 0, 120, 20}));
+    // A scroll container has no automatic minimum: it shrinks to 100.
+    flex_rects("flex: a scroll container shrinks below its content",
+               ".c{display:flex;width:200px} .c div{width:150px;overflow:hidden}</style>"
+               "<div class=c><div id=a>wwwwwwwwww</div><div id=b>wwwwwwwwww</div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 100, 20}, {100, 0, 100, 20}));
+    // Grow weighted: 1 and 3 share 400 from bases of 0: 100 and 300.
+    flex_rects("flex: grow factors weigh the shares",
+               ".c{display:flex} .c div{height:10px} #a{flex:1} #b{flex:3}</style>"
+               "<div class=c><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 100, 10}, {100, 0, 300, 10}));
+    // Factors that sum below one share only that fraction: 0.25 of 400.
+    flex_rects("flex: grow factors below one share only their fraction",
+               ".c{display:flex} #a{flex:0.25;height:10px}</style>"
+               "<div class=c><div id=a></div></div>",
+               FLEX_IDS("a"), FLEX_WANT({0, 0, 100, 10}));
+    // A gap between items: 50, gap 10, 50, gap 10, 50.
+    flex_rects("flex: gap between the items",
+               ".c{display:flex;gap:10px} .c div{width:50px;height:10px}</style>"
+               "<div class=c><div id=a></div><div id=b></div><div id=c></div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 0, 50, 10}, {60, 0, 50, 10}, {120, 0, 50, 10}));
+    // margin-left: auto takes the free space: the last item at the end.
+    flex_rects("flex: margin-left auto pushes an item to the end",
+               ".c{display:flex} .c div{width:50px;height:10px} #b{margin-left:auto}</style>"
+               "<div class=c><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 50, 10}, {350, 0, 50, 10}));
+    // order: B (order 1) before A (order 2), whatever the markup says.
+    flex_rects("flex: order places the items",
+               ".c{display:flex} .c div{width:50px;height:10px} #a{order:2} #b{order:1}</style>"
+               "<div class=c><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({50, 0, 50, 10}, {0, 0, 50, 10}));
+    // An auto basis with no width is the content's max-content: `xx` is 16.
+    flex_rects("flex: an auto basis is the content's width",
+               ".c{display:flex}</style><div class=c><div id=a>xx</div></div>",
+               FLEX_IDS("a"), FLEX_WANT({0, 0, 16, 20}));
+}
+
+static void flex_cross_cases(void)
+{
+    // The line is its tallest item, 50. A stretches to it; B is 50.
+    flex_rects("flex: stretch makes an item as tall as the line",
+               ".c{display:flex} #b{height:50px;width:10px}</style>"
+               "<div class=c><div id=a>x</div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 8, 50}, {8, 0, 10, 50}));
+    // A item with a height of its own does not stretch; center and
+    // flex-end move a 20-high item in a line of 50: 15 and 30.
+    flex_rects("flex: align-items center",
+               ".c{display:flex;align-items:center} #b{height:50px;width:10px}</style>"
+               "<div class=c><div id=a>x</div><div id=b></div></div>",
+               FLEX_IDS("a"), FLEX_WANT({0, 15, 8, 20}));
+    flex_rects("flex: align-self flex-end",
+               ".c{display:flex} #a{align-self:flex-end} #b{height:50px;width:10px}</style>"
+               "<div class=c><div id=a>x</div><div id=b></div></div>",
+               FLEX_IDS("a"), FLEX_WANT({0, 30, 8, 20}));
+    // Baselines: A's is 14 down, B's 20 + 14 = 34 (padding-top 20). A moves
+    // down 20; the line is 34 above and 6 below: 40.
+    flex_rects("flex: align-items baseline lines up the first lines",
+               ".c{display:flex;align-items:baseline} #b{padding-top:20px}</style>"
+               "<div class=c id=c><div id=a>x</div><div id=b>x</div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 20, 8, 20}, {8, 0, 8, 40}, {0, 0, 400, 40}));
+    // Auto margins on the cross axis centre: (50 - 20) / 2 = 15.
+    flex_rects("flex: margin auto centres on the cross axis",
+               ".c{display:flex;height:50px} #a{margin:auto 0}</style>"
+               "<div class=c><div id=a>x</div></div>",
+               FLEX_IDS("a"), FLEX_WANT({0, 15, 8, 20}));
+    // A container given a height is the line's: stretch to 80.
+    flex_rects("flex: a container's height is its line's",
+               ".c{display:flex;height:80px}</style><div class=c><div id=a>x</div></div>",
+               FLEX_IDS("a"), FLEX_WANT({0, 0, 8, 80}));
+}
+
+static void flex_column_cases(void)
+{
+    // A column 300 high: B is 50, A grows from 0 into the other 250.
+    flex_rects("flex: a column grows an item into its height",
+               ".c{display:flex;flex-direction:column;height:300px} #a{flex:1}"
+               " #b{height:50px}</style><div class=c><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 400, 250}, {0, 250, 400, 50}));
+    // Without a height it is as tall as its items: 20 + 20.
+    flex_rects("flex: a column with no height is its items' height",
+               ".c{display:flex;flex-direction:column}</style>"
+               "<div class=c id=c><div id=a>x</div><div id=b>x</div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 0, 400, 20}, {0, 20, 400, 20}, {0, 0, 400, 40}));
+    // justify-content center in 300: two 20s leave 260, 130 above.
+    flex_rects("flex: a column centres its items",
+               ".c{display:flex;flex-direction:column;justify-content:center;height:300px}"
+               "</style><div class=c><div id=a>x</div><div id=b>x</div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 130, 400, 20}, {0, 150, 400, 20}));
+    // align-items center sizes an item to its content (`xx`, 16) and
+    // centres it across: (400 - 16) / 2 = 192.
+    flex_rects("flex: a column's item centred across is as wide as its content",
+               ".c{display:flex;flex-direction:column;align-items:center}</style>"
+               "<div class=c><div id=a>xx</div></div>",
+               FLEX_IDS("a"), FLEX_WANT({192, 0, 16, 20}));
+    // column-reverse in 100: the first item at the bottom.
+    flex_rects("flex: column-reverse places the first item at the bottom",
+               ".c{display:flex;flex-direction:column-reverse;height:100px}</style>"
+               "<div class=c><div id=a>x</div><div id=b>x</div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 80, 400, 20}, {0, 60, 400, 20}));
+    // min-height on the column: its items grow into it, the sticky-footer
+    // idiom: A (flex: 1) takes what B's 20 leaves of 200.
+    flex_rects("flex: a column's min-height is room its items grow into",
+               ".c{display:flex;flex-direction:column;min-height:200px} #a{flex:1}</style>"
+               "<div class=c><div id=a>x</div><div id=b>x</div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 400, 180}, {0, 180, 400, 20}));
+}
+
+static void flex_box_cases(void)
+{
+    // Items are blockified: a span becomes a block that remembers it was
+    // inline; a run of text is an anonymous item; nothing is a line of
+    // the container's own.
+    {
+        char *got = cascade_dump_of("<!doctype html><style>.c{display:flex}</style>"
+                                    "<div class=c><span>a</span>text</div>", 400, 600);
+        expect("flex: an item span is blockified",
+               got != NULL && strstr(got, "span block specified-inline") != NULL, got);
+        free(got);
+    }
+    // An inline flex container is an atom as wide as its items: `x` and
+    // `yy`, 8 + 16 (FLEX.md, decision 3).
+    flex_rects("flex: an inline-flex is as wide as its items side by side",
+               ".f{display:inline-flex}</style><p>a<span class=f id=f><b>x</b><b>yy</b></span>b",
+               FLEX_IDS("f"), FLEX_WANT({8, 0, 24, 20}));
+    // A container of nothing but text: one anonymous item, as wide as the
+    // text (`hello`: 8 + 8 + 4 + 4 + 8), at the start.
+    flex_rects("flex: a container of text is one item as wide as the text",
+               ".c{display:flex;justify-content:flex-end}</style>"
+               "<div class=c id=c>hello</div>",
+               FLEX_IDS("c"), FLEX_WANT({0, 0, 400, 20}));
+    {
+        Sheeted q;
+        sheeted_open(&q, "<!doctype html><style>body{margin:0} .c{display:flex;"
+                         "justify-content:flex-end}</style><div class=c id=c>hello</div>",
+                     400, 600);
+        flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+        const flow_box_t *c = flex_box(&q, t, "c");
+        const flow_box_t *item = c != NULL ? c->first : NULL;
+        expect("flex: its text is an anonymous item at the end",
+               item != NULL && item->node == NULL && item->kind == FLOW_BOX_BLOCK &&
+                   item->rect.x == 368 && item->rect.w == 32, NULL);
+        flow_free(t);
+        sheeted_close(&q);
+    }
+    // An absolute child is no item: it sits at the content box's corner.
+    flex_rects("flex: an absolute child is not an item",
+               ".c{display:flex;position:relative;padding:10px} #a{position:absolute}"
+               " .c div{width:50px;height:10px}</style>"
+               "<div class=c><div id=b></div><div id=a></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({10, 10, 50, 10}, {10, 10, 50, 10}));
+    // The nav of danlegt.com: six links, flex: 1, space-around (which a
+    // line with no free space leaves as it is): 400 / 6 each.
+    flex_rects("flex: a nav bar of six equal links",
+               "nav{display:flex;justify-content:space-around} nav a{flex:1;display:inline-block}"
+               "</style><nav><a id=a href=x>home</a><a href=x>b</a><a href=x>c</a>"
+               "<a href=x>d</a><a href=x>e</a><a id=f href=x>f</a></nav>",
+               FLEX_IDS("a", "f"), FLEX_WANT({0, 0, 67, 20}, {333, 0, 67, 20}));
+    // A wrapping container is laid out on one line until F2: its items
+    // squeezed, not stacked.
+    flex_rects("flex: flex-wrap is one line until it is laid out",
+               ".c{display:flex;flex-wrap:wrap} .c div{width:300px;height:10px}</style>"
+               "<div class=c><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 200, 10}, {200, 0, 200, 10}));
+}
+
+static void flex_cases(void)
+{
+    flex_row_cases();
+    flex_cross_cases();
+    flex_column_cases();
+    flex_box_cases();
+}

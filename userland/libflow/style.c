@@ -25,7 +25,7 @@
 // The sheet writes `1em` before the element's font size is known, so a
 // length is held as written and resolved once, after the font.
 // UNSET is what nothing wrote: a margin or padding of 0, a width of auto.
-typedef enum { L_UNSET = 0, L_AUTO, L_PX, L_PCT, L_EM, L_FIT } LKind;
+typedef enum { L_UNSET = 0, L_AUTO, L_PX, L_PCT, L_EM, L_FIT, L_CONTENT } LKind;
 typedef struct {
     LKind kind;
     int32_t v;      // PX: 26.6 px; PCT: 1/64 percent; EM: 1/1000 em
@@ -36,6 +36,7 @@ static Len px(int32_t n) { return (Len){L_PX, n * FLOW_UNITS_PER_PX, 0}; }
 static Len em(int32_t thousandths) { return (Len){L_EM, thousandths, 0}; }
 static const Len kAuto = {L_AUTO, 0, 0};
 static const Len kFitContent = {L_FIT, 0, 0};
+static const Len kContent = {L_CONTENT, 0, 0};
 
 static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset);
 
@@ -52,6 +53,7 @@ typedef enum {
 typedef struct {
     flow_style_t s;             // everything that needs no font to resolve
     Len margin[4], padding[4], inset[4], width, height;
+    Len flex_basis, row_gap, column_gap;     // AUTO: auto, and `normal`
     Len min_width, max_width, min_height, max_height;
     Len text_indent;                // UNSET: as inherited
     FsKind fs_kind;
@@ -316,6 +318,8 @@ static flow_style_t initial(const Ctx *c)
     s.background_position[0] = s.background_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 0, 0};
     s.background_sheet = -1;
     s.opacity = 1000;
+    s.flex_shrink = 1000;
+    s.align_self = FLOW_PLACE_AUTO;
     // Margins and padding start at 0px — NOT at zero bytes, which is `auto`.
     for (int i = 0; i < 4; i++) {
         s.margin[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
@@ -324,7 +328,9 @@ static flow_style_t initial(const Ctx *c)
     // Everything else starts at zero bytes, which is each property's
     // initial value: auto width and height, no borders, left, baseline,
     // normal, disc outside, separate, top, no float, static with auto
-    // insets, and z-index auto.
+    // insets, z-index auto, and a row that does not wrap, its alignments
+    // normal, its items growing by nothing from an auto basis, order 0,
+    // and gaps of normal.
     return s;
 }
 
@@ -1508,9 +1514,9 @@ static bool author_display(const garb_val_t *v, flow_display_t *out)
         "table-column-group", "table-column", "table-cell", "table-caption", "contents",
         "flow-root", "flex", "inline-flex", "grid", "inline-grid",
     };
-    // An inline table is laid out as a table, and a flex or grid container
-    // as the block or inline-block it is on the outside, until libflow has
-    // their layouts (GARB.md § Booked).
+    // An inline table is laid out as a table, and a grid container as the
+    // block or inline-block it is on the outside, until libflow has its
+    // layout (GARB.md § Booked).
     static const flow_display_t as[] = {
         FLOW_DISPLAY_NONE, FLOW_DISPLAY_BLOCK, FLOW_DISPLAY_INLINE, FLOW_DISPLAY_INLINE_BLOCK,
         FLOW_DISPLAY_LIST_ITEM, FLOW_DISPLAY_TABLE, FLOW_DISPLAY_TABLE,
@@ -1518,7 +1524,7 @@ static bool author_display(const garb_val_t *v, flow_display_t *out)
         FLOW_DISPLAY_TABLE_FOOTER_GROUP, FLOW_DISPLAY_TABLE_ROW,
         FLOW_DISPLAY_TABLE_COLUMN_GROUP, FLOW_DISPLAY_TABLE_COLUMN, FLOW_DISPLAY_TABLE_CELL,
         FLOW_DISPLAY_TABLE_CAPTION, FLOW_DISPLAY_CONTENTS, FLOW_DISPLAY_BLOCK,
-        FLOW_DISPLAY_BLOCK, FLOW_DISPLAY_INLINE_BLOCK, FLOW_DISPLAY_BLOCK,
+        FLOW_DISPLAY_FLEX, FLOW_DISPLAY_INLINE_FLEX, FLOW_DISPLAY_BLOCK,
         FLOW_DISPLAY_INLINE_BLOCK,
     };
     int32_t i = pick(v, words, F_ARRAY(words));
@@ -1796,6 +1802,18 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         break;
     case GARB_OPACITY: d->opacity = s->opacity; break;
     case GARB_POINTER_EVENTS: d->pointer_events_none = s->pointer_events_none; break;
+    case GARB_FLEX_DIRECTION: d->flex_direction = s->flex_direction; break;
+    case GARB_FLEX_WRAP: d->flex_wrap = s->flex_wrap; break;
+    case GARB_JUSTIFY_CONTENT: d->justify_content = s->justify_content; break;
+    case GARB_ALIGN_ITEMS: d->align_items = s->align_items; break;
+    case GARB_ALIGN_SELF: d->align_self = s->align_self; break;
+    case GARB_ALIGN_CONTENT: d->align_content = s->align_content; break;
+    case GARB_FLEX_GROW: d->flex_grow = s->flex_grow; break;
+    case GARB_FLEX_SHRINK: d->flex_shrink = s->flex_shrink; break;
+    case GARB_FLEX_BASIS: dst->flex_basis = src->flex_basis; break;
+    case GARB_ORDER: d->order = s->order; break;
+    case GARB_ROW_GAP: dst->row_gap = src->row_gap; break;
+    case GARB_COLUMN_GAP: dst->column_gap = src->column_gap; break;
     default: break;
     }
 }
@@ -1806,6 +1824,7 @@ static Len len_of(flow_length_t l)
     case FLOW_LENGTH_PX: return (Len){L_PX, l.value, 0};
     case FLOW_LENGTH_PERCENT: return (Len){L_PCT, l.value, l.offset};
     case FLOW_LENGTH_FIT_CONTENT: return kFitContent;
+    case FLOW_LENGTH_CONTENT: return kContent;
     case FLOW_LENGTH_AUTO: break;
     }
     return kAuto;
@@ -1824,6 +1843,7 @@ static void initial_spec(const Ctx *c, Spec *out)
     }
     out->width = out->height = kAuto;
     out->min_width = out->max_width = out->min_height = out->max_height = kAuto;
+    out->flex_basis = out->row_gap = out->column_gap = kAuto;
     out->text_indent = px(0);
     out->fs_kind = FS_KEYWORD;
     out->fs_v = 3;                                      // medium
@@ -1851,6 +1871,9 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
     out->max_width = len_of(parent->max_width);
     out->min_height = len_of(parent->min_height);
     out->max_height = len_of(parent->max_height);
+    out->flex_basis = len_of(parent->flex_basis);
+    out->row_gap = len_of(parent->row_gap);
+    out->column_gap = len_of(parent->column_gap);
     out->text_indent = len_of(parent->text_indent);
     out->fs_kind = FS_PX;
     out->fs_v = parent->font_size;
@@ -2092,6 +2115,62 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         // SVG's values are auto to an HTML box.
         s->pointer_events_none = word(v, "none");
         break;
+    case GARB_FLEX_DIRECTION: {
+        static const char *const words[] = {"row", "row-reverse", "column", "column-reverse"};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->flex_direction = (flow_flex_direction_t)i;
+        break;
+    }
+    case GARB_FLEX_WRAP: {
+        static const char *const words[] = {"nowrap", "wrap", "wrap-reverse"};
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->flex_wrap = (flow_flex_wrap_t)i;
+        break;
+    }
+    case GARB_JUSTIFY_CONTENT: case GARB_ALIGN_ITEMS: case GARB_ALIGN_SELF:
+    case GARB_ALIGN_CONTENT: {
+        // One table for all four: each grammar admits only its own words.
+        static const char *const words[] = {
+            "normal", "auto", "stretch", "flex-start", "flex-end", "center", "baseline",
+            "start", "end", "self-start", "self-end", "left", "right", "space-between",
+            "space-around", "space-evenly"};
+        _Static_assert(F_ARRAY(words) == FLOW_PLACE_SPACE_EVENLY + 1, "flow_place_t");
+        if ((i = pick(v, words, F_ARRAY(words))) < 0)
+            break;
+        flow_place_t *field = p == GARB_JUSTIFY_CONTENT ? &s->justify_content
+                            : p == GARB_ALIGN_ITEMS ? &s->align_items
+                            : p == GARB_ALIGN_SELF ? &s->align_self : &s->align_content;
+        *field = (flow_place_t)i;
+        break;
+    }
+    case GARB_FLEX_GROW: case GARB_FLEX_SHRINK:
+        if (v->kind == GARB_V_NUMBER) {
+            // In thousandths, held where a sum of many cannot overflow.
+            double f = v->number < 0 ? 0 : v->number > 1e6 ? 1e6 : v->number;
+            *(p == GARB_FLEX_GROW ? &s->flex_grow : &s->flex_shrink) = round_i32(f * 1000);
+        }
+        break;
+    case GARB_FLEX_BASIS:
+        // `content` is the content's size, and so, here, are the three
+        // sizing keywords: max-content exactly, min-content and fit-content
+        // as the nearest this reads (FLEX.md § Booked).
+        if (v->kind == GARB_V_KEYWORD && !word(v, "auto"))
+            sp->flex_basis = kContent;
+        else
+            author_len(a, v, true, &sp->flex_basis);
+        break;
+    case GARB_ORDER:
+        if (v->kind == GARB_V_NUMBER)
+            s->order = round_i32(v->number);
+        break;
+    case GARB_ROW_GAP: case GARB_COLUMN_GAP: {
+        Len *gap = p == GARB_ROW_GAP ? &sp->row_gap : &sp->column_gap;
+        if (word(v, "normal"))
+            *gap = kAuto;
+        else
+            author_len(a, v, false, gap);
+        break;
+    }
     case GARB_OPACITY: {
         // Clamped to 0..1 now that it is computed (Color 4 § 4.2).
         double o = -1;
@@ -2209,6 +2288,7 @@ static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset)
     case L_EM: return (flow_length_t){FLOW_LENGTH_PX, scale(font, l.v, 1000), 0};
     case L_AUTO: return (flow_length_t){FLOW_LENGTH_AUTO, 0, 0};
     case L_FIT: return (flow_length_t){FLOW_LENGTH_FIT_CONTENT, 0, 0};
+    case L_CONTENT: return (flow_length_t){FLOW_LENGTH_CONTENT, 0, 0};
     case L_UNSET: break;
     }
     return unset;
@@ -2225,21 +2305,25 @@ static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset)
 // whose own background is translucent draws none: `xrgb` lays the colour
 // over the paper, and a solid grey sheet over a whole page is worse than
 // seeing through an overlay (POSITION.md § What positioning costs).
-static void positioning(const Ctx *c, Spec *sp)
+// CSS 2.1 § 9.7's table, and Display 3's blockification: the block-level
+// display an inline-level one becomes, keeping the one bit of the old
+// (flow_style_t.specified_inline). A box that makes none keeps its display.
+// False when there was nothing to do.
+static bool blockify(flow_style_t *s)
 {
-    flow_style_t *s = &sp->s;
-    if (c->env->static_only)
-        s->position = FLOW_POSITION_STATIC;
-    if (!f_out_of_flow(s))
-        return;
     switch (s->display) {
     case FLOW_DISPLAY_NONE: case FLOW_DISPLAY_CONTENTS:
-        return;
+        return false;
     case FLOW_DISPLAY_INLINE: case FLOW_DISPLAY_INLINE_BLOCK:
         s->specified_inline = true;
         s->display = FLOW_DISPLAY_BLOCK;
         break;
+    case FLOW_DISPLAY_INLINE_FLEX:
+        s->specified_inline = true;
+        s->display = FLOW_DISPLAY_FLEX;
+        break;
     case FLOW_DISPLAY_TABLE: case FLOW_DISPLAY_LIST_ITEM: case FLOW_DISPLAY_BLOCK:
+    case FLOW_DISPLAY_FLEX:
         break;
     default:
         // A table's parts: § 9.7's table makes each a block.
@@ -2247,11 +2331,23 @@ static void positioning(const Ctx *c, Spec *sp)
         break;
     }
     s->float_side = FLOW_FLOAT_NONE;
+    return true;
+}
+
+static void positioning(const Ctx *c, Spec *sp)
+{
+    flow_style_t *s = &sp->s;
+    if (c->env->static_only)
+        s->position = FLOW_POSITION_STATIC;
+    if (!f_out_of_flow(s) || !blockify(s))
+        return;
     if (sp->bg_translucent)
         s->has_background = false;
 }
 
-static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent)
+// `flex_item`: the element's box is its parent's flex item, and is
+// blockified (Flexbox 1 § 4) — as an out-of-flow one already was.
+static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool flex_item)
 {
     flow_style_t *s = &sp->s;
     if (sp->fs_kind != FS_INHERIT)
@@ -2274,6 +2370,8 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent)
     for (int i = 0; i < 4; i++)
         s->inset[i] = resolve(sp->inset[i], s->font_size, automatic);
     positioning(c, sp);
+    if (flex_item && !f_out_of_flow(s))
+        (void)blockify(s);
     // CSS Overflow 3 § 3: visible and clip do not stand beside an axis
     // that scrolls or hides.
     bool x_scrolls = s->overflow_x != FLOW_OVERFLOW_VISIBLE && s->overflow_x != FLOW_OVERFLOW_CLIP;
@@ -2288,6 +2386,9 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent)
     s->max_width = resolve(sp->max_width, s->font_size, automatic);
     s->min_height = resolve(sp->min_height, s->font_size, automatic);
     s->max_height = resolve(sp->max_height, s->font_size, automatic);
+    s->flex_basis = resolve(sp->flex_basis, s->font_size, automatic);
+    s->row_gap = resolve(sp->row_gap, s->font_size, automatic);
+    s->column_gap = resolve(sp->column_gap, s->font_size, automatic);
 }
 
 // ── The walk ────────────────────────────────────────────────────────────
@@ -2307,7 +2408,7 @@ static bool first_summary(const os64_html_node_t *n)
 // atomic inline; a table, in full quirks) — its own still reach it.
 static bool decoration_edge(const os64_html_node_t *n, const flow_style_t *s, bool quirks)
 {
-    return s->display == FLOW_DISPLAY_INLINE_BLOCK ||
+    return f_display_atomic(s->display) ||
            (quirks && n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_TABLE);
 }
 
@@ -2354,8 +2455,10 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         if (!author(c, n, &sp, &ua, parent))
             return NULL;
     }
-    finish(c, &sp, parent);
+    finish(c, &sp, parent, up != NULL && up->flex_items);
     out->style = sp.s;
+    out->flex_items = f_display_flex(sp.s.display) ||
+                      (sp.s.display == FLOW_DISPLAY_CONTENTS && up != NULL && up->flex_items);
     if (n == c->doc->html)
         c->root_font = sp.s.font_size;
     out->link = c->model != NULL ? os64_page_link_for(c->model, n) : -1;
@@ -2390,7 +2493,7 @@ static bool contributes_block(const FStyled *child)
     if (f_out_of_flow(&child->style))
         return false;
     switch (child->style.display) {
-    case FLOW_DISPLAY_NONE: case FLOW_DISPLAY_INLINE_BLOCK:
+    case FLOW_DISPLAY_NONE: case FLOW_DISPLAY_INLINE_BLOCK: case FLOW_DISPLAY_INLINE_FLEX:
         return false;
     case FLOW_DISPLAY_INLINE: case FLOW_DISPLAY_CONTENTS:
         return child->holds_block;

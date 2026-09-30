@@ -136,8 +136,8 @@ static bool boxless(const os64_html_node_t *n)
 
 static bool block_level(flow_display_t d)
 {
-    return d != FLOW_DISPLAY_INLINE && d != FLOW_DISPLAY_INLINE_BLOCK &&
-           d != FLOW_DISPLAY_CONTENTS && d != FLOW_DISPLAY_NONE;
+    return d != FLOW_DISPLAY_INLINE && !f_display_atomic(d) && d != FLOW_DISPLAY_CONTENTS &&
+           d != FLOW_DISPLAY_NONE;
 }
 
 static bool table_internal(flow_display_t d)
@@ -249,6 +249,7 @@ static FBox *new_box(B *b, FBox *parent, f_box_kind_t kind, const os64_html_node
     box->link = st != NULL ? st->link : parent != NULL ? parent->link : -1;
     box->control = -1;
     box->parent = parent;
+    box->flex = kind == FB_BLOCK && node != NULL && f_display_flex(style->display);
     // Attached at once, so a build that stops here leaves a tree that is
     // whole up to this box.
     if (parent != NULL) {
@@ -719,14 +720,18 @@ static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *st
 static void table_range(B *b, FBox *table, const os64_html_node_t *first,
                         const os64_html_node_t *stop, Scope *scope);
 
-// A block container's content from a range of sibling nodes.
+// A block container's content from a range of sibling nodes. A flex
+// container is never an inline formatting context: its element children
+// are block-level already (pass 1 blockified them), and a run of text
+// among them — or all of its content, when that is text — is an anonymous
+// item of its own (Flexbox 1 § 4), so it is built as if it mixed.
 static void build_container(B *b, FBox *box, const os64_html_node_t *first,
                             const os64_html_node_t *stop, Scope *scope,
                             const char *inside_marker, uint32_t inside_len)
 {
     Mix m = {false, inside_marker != NULL};
     scan(b, first, stop, &m);
-    Flow f = {b, box, m.block, NULL, NULL, NULL};
+    Flow f = {b, box, m.block || box->flex, NULL, NULL, NULL};
     if (!f.mixed) {
         box->ifc = true;
         box->collapse_space = true;
@@ -850,7 +855,7 @@ static void absolute_box(Flow *f, const os64_html_node_t *el, const FStyled *s, 
 static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
 {
     B *b = f->b;
-    if (replaced(el) || s->style.display == FLOW_DISPLAY_INLINE_BLOCK) {
+    if (replaced(el) || f_display_atomic(s->style.display)) {
         FBox *ifc = target(f);
         FItem *item = ifc != NULL ? new_item(b, ifc, FI_ATOMIC, el, &s->style) : NULL;
         if (item == NULL)
@@ -860,8 +865,8 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
             item->control = os64_page_control_for(b->model, el);
         }
         ifc->collapse_space = false;
-        // An inline-block that is not replaced (a marquee) is a block of its
-        // own, laid out inside the atom. Its content costs two descents: a
+        // An inline-block that is not replaced (a marquee), or an inline
+        // flex container, is a block of its own, laid out inside the atom. Its content costs two descents: a
         // level of it holds a line's frame as well as a block's, twice a
         // block level's stack (LAYOUT.md § Bounds).
         if (!replaced(el)) {

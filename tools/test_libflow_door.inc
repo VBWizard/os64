@@ -511,7 +511,9 @@ static void sticky_held(const flow_box_t *b, bool *ok)
 
 static void intrinsic_once(const FBox *b, bool *ok)
 {
-    if (b->intrinsic_computed > 1)
+    // Measured at most once, and laid out at most once (FLEX.md: a flex
+    // item as much as any other box).
+    if (b->intrinsic_computed > 1 || b->laid > 1)
         *ok = false;
     for (const FBox *c = b->first; c != NULL; c = c->next)
         intrinsic_once(c, ok);
@@ -582,7 +584,7 @@ static void fuzz_one(const char *what, const char *html, size_t len)
     bool once = true;
     if (bx != NULL && bx->root != NULL)
         intrinsic_once(bx->root, &once);
-    expect("fuzz: every box's widths measured at most once", once, what);
+    expect("fuzz: every box measured at most once, and laid out at most once", once, what);
     f_layout_free(lay);
     f_boxes_free(bx);
     f_style_free(st);
@@ -625,6 +627,17 @@ static size_t positioned_soup(char *out, size_t cap)
         n += (size_t)snprintf(out + n, cap - n, ";opacity:%s", rng() % 2 ? "0" : "0.5");
     if (rng() % 3 == 0)
         n += (size_t)snprintf(out + n, cap - n, ";margin:%s", rng() % 2 ? "auto" : "-7px 3%");
+    // Flexible boxes (FLEX.md § Proof): a container, and an item's own.
+    static const char *const kFlexy[] = {
+        "display:flex", "display:inline-flex", "flex-direction:column",
+        "flex-direction:row-reverse", "flex-direction:column-reverse", "flex-wrap:wrap",
+        "justify-content:space-between", "justify-content:center", "justify-content:space-evenly",
+        "align-items:baseline", "align-items:center", "align-self:flex-end", "flex:1",
+        "flex:0 0 0", "flex:1e9", "flex:2 3 30%", "flex-basis:content", "order:-3", "order:2",
+        "gap:7px 3%", "min-width:0", "max-width:40px", "margin-left:auto"};
+    for (int k = 0; k < 3; k++)
+        if (rng() % 2)
+            n += (size_t)snprintf(out + n, cap - n, ";%s", kFlexy[rng() % 23]);
     n += (size_t)snprintf(out + n, cap - n, "\">");
     return n;
 }
