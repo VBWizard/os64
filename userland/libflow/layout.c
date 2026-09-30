@@ -1933,10 +1933,10 @@ static flow_place_t cross_align(const flow_style_t *container, const flow_style_
 
 // A flex container's first baseline (Flexbox 1 § 8.5): in a row, that of
 // an item on its first line lined up by baseline; else its startmost
-// item's (a row's, on its first line) — first in `order`, not in the
-// tree, and in a reverse direction, which puts the last at the start,
-// last. An item with no line of text gives one from its border box's
-// bottom edge, as it does when it is lined up by baseline.
+// item's, on its first line — first in `order`, not in the tree, and in a
+// reverse direction, which puts the last at the start, last. An item with
+// no line of text gives one from its border box's bottom edge, as it does
+// when it is lined up by baseline.
 static bool flex_baseline(const FBox *b, int64_t *out)
 {
     const flow_style_t *s = b->style;
@@ -1948,14 +1948,14 @@ static bool flex_baseline(const FBox *b, int64_t *out)
         if (c->out_of_flow)
             continue;
         const flow_style_t *cs = c->style;
-        if (row && c->flex_line == 0 && cross_align(s, cs) == FLOW_PLACE_BASELINE &&
+        if (c->flex_line != 0)
+            continue;               // a wrapped container's baseline is its first line's
+        if (row && cross_align(s, cs) == FLOW_PLACE_BASELINE &&
             cs->margin[FLOW_TOP].kind != FLOW_LENGTH_AUTO &&
             cs->margin[FLOW_BOTTOM].kind != FLOW_LENGTH_AUTO) {
             pick = c;
             break;
         }
-        if (row && c->flex_line != 0)
-            continue;               // a wrapped row's baseline is its first line's
         if (pick == NULL || (reverse ? cs->order >= pick->style->order
                                      : cs->order < pick->style->order))
             pick = c;
@@ -2673,6 +2673,9 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
                      ? clamp_height(s, content_of(s, s->max_height, 0, vframe_b), vframe_b)
                      : kNoLimit;
     int32_t nl = form_lines(items, ord, n, room, gap, wraps, lines);
+    for (int32_t li = 0; li < nl; li++)
+        for (int32_t i = 0; i < lines[li].count; i++)
+            items[ord[lines[li].first + i]].box->flex_line = li;
     int64_t size = 0;
     for (int32_t li = 0; li < nl; li++) {
         int64_t sum = gap * (lines[li].count - 1);

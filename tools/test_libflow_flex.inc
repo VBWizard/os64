@@ -743,6 +743,14 @@ static void flex_wrap_round2_cases(void)
                " #c{display:inline-block;width:10px;height:20px}</style>"
                "<div><div id=o><div id=a></div><div id=b></div><div id=x></div></div><div id=c></div></div>",
                FLEX_IDS("c"), FLEX_WANT({20, 40, 10, 20}));
+    // A wrapped column-reverse's baseline is its first column's too: b's
+    // 60, not x's in the second column.
+    flex_rects("flex: a wrapped column-reverse baseline is its first line's",
+               "#o{display:inline-flex;flex-flow:column-reverse wrap;width:40px;height:80px;"
+               "align-items:flex-start} #a{width:10px;height:20px} #b{width:10px;height:60px}"
+               " #x{width:10px;height:30px} #c{display:inline-block;width:10px;height:20px}</style>"
+               "<div><div id=o><div id=a></div><div id=b></div><div id=x></div></div><div id=c></div></div>",
+               FLEX_IDS("c"), FLEX_WANT({40, 40, 10, 20}));
     // A min-height over the max-height is the room a column wraps in: one
     // line of 80 in its 100.
     flex_rects("flex: a column wraps in a min-height over its max-height",
