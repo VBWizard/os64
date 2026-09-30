@@ -9,6 +9,9 @@ a window you can read the web in.*
 
 ## What it is
 
+(How to use it is `docs/yonder.md`, the user's guide; this is how it is
+built.)
+
 `yonder` is a libui program. It links libhtml, libpage, libflow and libway
 (and libfetch through libway) unchanged, and adds what a window needs of
 its own: a PAGE VIEW widget that paints a flow tree and scrolls it, the
