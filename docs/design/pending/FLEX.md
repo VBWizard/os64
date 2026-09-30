@@ -144,15 +144,17 @@ and its items' margins never collapse with each other or with it.
    hypothetical main size**. Its FLEX BASE SIZE is `flex-basis` when it
    is a length, or a percentage of a main size that is known; else, for
    `auto`, its `width` (row) or `height` (column) when that is given;
-   else its content: in a row its max-content width (`intrinsic`); in a
-   column its height laid out at its cross size (this is where a column
-   lays each item out, once). The hypothetical size is that, held to its
+   else — and for `content`, and a percentage of a size not known — its
+   content: in a row its max-content width (`intrinsic`); in a column the
+   height its content took laid out at its cross size (`FBox.content_h`,
+   whatever `height` the page gave; this is where a column lays each item
+   out, once). The hypothetical size is that, held to its
    limits, with `min-width: auto` (row) or `min-height: auto` (column)
    read as the automatic minimum (§ 4.5): in a row its CONTENT'S
    min-content width — `intrinsic` keeps the content's two widths beside
    the ones a set width overrides (`content_min`, `content_max`), and the
    automatic minimum and `flex-basis: content` read those — in a column
-   its content height — capped in either by a size the page
+   its content height (`content_h`) — capped in either by a size the page
    gave it — and zero for an item that is a scroll container (overflow
    other than `visible` or `clip`). A column item is laid out at its
    cross size: the container's inner width less its margins when it
@@ -168,7 +170,9 @@ and its items' margins never collapse with each other or with it.
 4. **Resolving the flexible lengths** (§ 9.7), per line: free space is the
    inner main size less the items' outer hypothetical sizes and the gaps;
    positive, the growing items share it by `flex-grow`; negative, the
-   shrinking ones give it back by `flex-shrink` × base size; an item a
+   shrinking ones give it back by `flex-shrink` × base size, weighed as
+   real numbers so that a small factor on a base under a pixel is not
+   rounded to nothing; an item a
    share would carry past a limit is FROZEN at the limit and the rest
    share again, until none is. A sum of `flex-grow` below 1 shares only
    that fraction. 26.6 all the way, the remainder of a share to the last
@@ -185,7 +189,9 @@ and its items' margins never collapse with each other or with it.
    item's height (row) or width (column) to the line's less its margins,
    when that dimension is `auto` and neither cross margin is `auto`, held
    to its limits; a row item's height is only its box, so nothing inside
-   moves. `flex-start`, `flex-end` and `center` move the item. `baseline`
+   moves. The absolute boxes an item contains are laid out after its
+   container has finished with it (`sized_later`), against the size it
+   ends with. `flex-start`, `flex-end` and `center` move the item. `baseline`
    lines the items' first baselines up (`first_baseline_in`), the item
    with the most above its baseline at the line's start; an item with no
    line of text has one made from its border box's bottom edge. Auto
@@ -199,18 +205,24 @@ and its items' margins never collapse with each other or with it.
    spread: all three `space-*` values fall back to `flex-start` — what
    Chrome 154 does (`tools/flex_probe/flex-probe.html`; Flexbox 1's older
    text sent `space-around` to `center`) — and `center` overflows both
-   ways.
+   ways. `left` and `right` are physical: in a row they are the page's
+   sides, and on a column (not the inline axis) both are `start` (Box
+   Alignment 3 § 5.1).
 9. **Column items** are placed by moving them: they were laid out in step
-   1, and steps 4–8 decide where and how tall.
+   1, and steps 4–8 decide where and how tall. A relative item keeps its
+   offset on top of the place it is moved to (`laid_offset`).
 
 **A flex container's intrinsic widths** (`intrinsic`, for an
 `inline-flex` atom, a flex container in a table cell or an absolute box):
 a row's max-content is the sum of its items' max-content outer widths and
 gaps, its min-content the sum of their min-contents when it does not wrap
-and the largest when it does; a column's are its items' largest. (CSS
-Flexbox § 9.9.1's full answer weighs items by their flex factors; Chrome
-154 answers the plain sum — the probe's inline-flex of items growing 1 and
-3 is exactly their two max-content widths wide — and so does libflow.)
+and the largest when it does; a column's are its items' largest. An item
+that cannot shrink asks at least its `flex-basis` when that is a length.
+(CSS Flexbox § 9.9.1's full answer weighs items by their flex factors;
+Chrome 154 answers the plain sum — the probe's inline-flex of items
+growing 1 and 3 is exactly their two max-content widths wide — with that
+one floor: two empty `flex: 0 0 100px` items are 200 wide, and a
+`flex: 0 1 100px` item holding 200px of content asks 200.)
 
 **A flex container's baseline**, for `inline-flex` on a line and
 `align-items: baseline` on its own container: the first baseline among its
@@ -227,11 +239,15 @@ with `justify-content` and `align-items`, and that is booked.
 of the container's inner size on that axis; a percentage height inside a
 stretched item is booked with GARB.md's percentage-height row.
 
-**All or nothing, the same way as a block.** Items are laid out in TREE
-order, whatever `order` says, so a layout that stops leaves a prefix of the
-tree placed (LAYOUT.md § Proof, relation a) and the container unfinished;
-where a placed item stands is what the algorithm decided from the sizes it
-had, which were all measured before any item was laid out.
+**All or nothing.** Items are laid out in TREE order, whatever `order`
+says, and placed where they belong only once every item is laid out; a
+layout that stops in between WITHDRAWS the container's items
+(`flex_items_done`), because each has only its provisional place, and the
+container is left unfinished. A box tree the boxes pass cut short is laid
+out with the items it has, which may place them differently from the
+whole page, as a table's columns come from the cells it has: the relation
+sweep compares neither under an unfinished flex container
+(`sized_by_its_children`).
 
 ### The door
 
@@ -258,7 +274,8 @@ Nothing. yonder draws what the tree says.
    which differs only for overlapping items.
 3. **The intrinsic width of a flex container is the plain sum**, not §
    9.9.1's flex-weighted one: Chrome 154 answers the sum (the probe's case
-   2, items growing 1 and 3), and a page's inline-flex is as wide there as
+   2, items growing 1 and 3), with an item that cannot shrink asking at
+   least its length basis, and a page's inline-flex is as wide there as
    here.
 4. **Negative free space is never spread by `justify-content`**: the
    `space-*` values start at the start edge and `center` overflows both
