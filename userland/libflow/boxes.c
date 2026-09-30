@@ -66,6 +66,9 @@ typedef struct {
     FBox *target;           // the context inline content lands in; NULL between runs
     Frame *open;
     FBox *anon_table;       // an anonymous table gathering internal table boxes
+    // In a flex or grid container, the next text node of a run already
+    // found to be all white space (blank_run), so each run is scanned once.
+    const os64_html_node_t *blank_next;
 } Flow;
 
 static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_node_t *stop,
@@ -494,8 +497,15 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     const flow_style_t *s = text_style(b, n);
     if (s == NULL || n->text_len == 0)
         return;
-    if (f->target == NULL && (f->container->flex || f->container->grid) && blank_run(n))
+    if (f->target == NULL && (f->container->flex || f->container->grid) &&
+        (n == f->blank_next || blank_run(n))) {
+        // The rest of the run is blank too: its next text node is known.
+        const os64_html_node_t *m = n->next;
+        while (m != NULL && m->kind == OS64_HTML_COMMENT)
+            m = m->next;
+        f->blank_next = m != NULL && m->kind == OS64_HTML_TEXT ? m : NULL;
         return;
+    }
     if (!f_ws_collapses(s->white_space)) {
         FBox *ifc = target(f);
         if (ifc == NULL)
@@ -748,7 +758,7 @@ static void build_container(B *b, FBox *box, const os64_html_node_t *first,
 {
     Mix m = {false, inside_marker != NULL};
     scan(b, first, stop, &m);
-    Flow f = {b, box, m.block || box->flex || box->grid, NULL, NULL, NULL};
+    Flow f = {b, box, m.block || box->flex || box->grid, NULL, NULL, NULL, NULL};
     if (!f.mixed) {
         box->ifc = true;
         box->collapse_space = true;

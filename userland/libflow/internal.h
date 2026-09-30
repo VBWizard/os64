@@ -405,8 +405,10 @@ struct FBox {
     bool intrinsic_known;
     int64_t intrinsic_min, intrinsic_max;
     // The same two from its content alone, before a width or limit the page
-    // gave overrides them, border box: what a flex item's automatic
-    // minimum and `flex-basis: content` read (Flexbox 1 § 4.5, § 7.2.3).
+    // gave overrides them (a picture's, its own width: replaced_own),
+    // border box: what a row flex item's automatic minimum and content
+    // basis — `content`, or `auto` with no width — read (Flexbox 1 § 4.5,
+    // § 9.2).
     int64_t content_min, content_max;
     // The height its content took when it was laid out, border box, before
     // a height or a limit the page gave: a flex container's, the height its
