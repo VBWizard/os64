@@ -27,7 +27,8 @@ typedef struct {
     const char *agent;              // the browser's, read-only for the run
     char url[OS64_FETCH_URL_MAX];
     // The browser's cookies and the page's address for the Referer: a
-    // picture is fetched as the page is (YONDER.md § Y3b).
+    // picture is fetched as the page is (YONDER.md § Y3b); and the
+    // browser's cache, which may answer instead (CACHE.md).
     way_hooks_t hooks;
 } yonder_picture_job_t;
 

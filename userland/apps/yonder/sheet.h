@@ -34,7 +34,7 @@ typedef struct {
     // same-origin one on a quirks-mode page, which is read whatever type it
     // was given (HTML's `link` fetch).
     bool any_type;
-    way_hooks_t hooks;              // the page's cookies and its Referer
+    way_hooks_t hooks;              // the page's cookies, its Referer, the cache
 } yonder_sheet_job_t;
 
 typedef struct {

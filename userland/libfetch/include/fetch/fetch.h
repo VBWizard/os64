@@ -115,6 +115,25 @@ typedef struct {
 
 // ── What came back ──────────────────────────────────────────────────────
 
+// What a final reply said about keeping it (RFC 9111), for a caller that
+// caches: this library keeps nothing. Each field as written, a repeated one
+// joined by ", ", "" when it was not sent. `unreadable`: one was longer than
+// its field here holds, so what is here is not the whole of what the server
+// said. (A field longer than a header line may be never gets this far:
+// http.c omits it whole, http.h.)
+#define OS64_FETCH_KEEP_FIELD 192
+typedef struct {
+    char cache_control[OS64_FETCH_KEEP_FIELD];
+    char pragma[OS64_FETCH_KEEP_FIELD];
+    char etag[OS64_FETCH_KEEP_FIELD];
+    char last_modified[OS64_FETCH_KEEP_FIELD];
+    char expires[OS64_FETCH_KEEP_FIELD];
+    char date[OS64_FETCH_KEEP_FIELD];
+    char age[OS64_FETCH_KEEP_FIELD];
+    char vary[OS64_FETCH_KEEP_FIELD];
+    bool unreadable;
+} os64_fetch_keep_t;
+
 // Valid from the moment `open` returns with a head (any status whose head
 // was read: OK, REDIRECT_STOPPED, TOO_MANY_HOPS) until `close`. Every
 // string is storage inside the fetch object — nothing here outlives it.
@@ -136,6 +155,7 @@ typedef struct {
     char     proxy_host[OS64_URL_HOST_MAX];
     uint16_t proxy_port;
     os64_fetch_method_t method;               // request that produced this head, after redirects
+    os64_fetch_keep_t keep;                   // this head's caching fields
 } os64_fetch_head_t;
 
 // Counters a caller reads between reads, for a meter or a status line.

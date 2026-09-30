@@ -52,7 +52,10 @@ person moves around them.
 
 The title bar's Settings action opens yonder's Settings window — the
 shared modeless dialog (`os64/ui_settings.h`), Apply, Save as default and
-Close — with one setting in it: **who yonder says it is**, the
+Close — with two settings in it: whether pictures and style sheets are
+kept on disk (CACHE.md is that one's record: a box, a button that empties
+the cache, and what it holds on the status line), and **who yonder says
+it is**, the
 User-Agent every fetch sends, pages, sheets and pictures alike. Sites
 answer by it (theoldnet serves a browser it does not know as a 1996 one),
 and comparing yonder with another browser means asking as that browser
@@ -653,9 +656,9 @@ not, keeps Y1's frame. A GIF's other frames are § Y5b's.
 
 **Memory kept.** Decoded pictures stay while their page is shown, up to
 256 MiB of pixels; past that, a picture is not kept and draws as its frame,
-and the status line says how many were left out. Back and Forward fetch
-again (there is no picture cache between pages yet, as there is none for
-pages).
+and the status line says how many were left out. Back and Forward decode
+them again, from the disk when the cache kept them (CACHE.md) and from
+the network when it did not.
 
 **Evidence, as run.** The host: the scaler and blender against hand-worked
 pixels (an opaque copy, a 2x enlargement, a 3-to-2 shrink, a
@@ -794,7 +797,7 @@ page failed with "out of handles or ports"; the table is 64 now
 | Back and Forward to the reply to a form | the history holds addresses, so going back to a POST's reply fetches its address, which a server may answer with something else; Chrome shows a "resubmit?" page there | a page where going back to a reply matters |
 | SVG pictures | libimage decodes raster formats; SVG is a vector language with a renderer of its own | the modern web's logos, which are mostly SVG |
 | `data:` pictures | a data: address needs no fetch but a decoder of its own | a page that needs one |
-| A picture cache between pages | Back and Forward refetch pictures as they refetch pages | back-and-forth on a slow link hurts |
+| Decoded pictures between pages | the cache (CACHE.md) keeps the download, and Back and Forward decode it again | decoding shows in the time to a laid-out page |
 | Layout on a worker | every page shares one text context, which one thread uses at a time; a worker would need its own, with its own fonts opened | a page whose layout makes the window stop answering for long enough to matter (fetch.spec.whatwg.org takes 6 s to lay out again at full screen on the P5) |
 | Cookies and `Referer` | slice Y3b: libway's jar on packet 05's hooks. `on_set_cookie` carries whether the reply came over an encrypted connection (Quinn, 2026-09-25), so the jar enforces `Secure` itself — libfetch hands over the facts, libway owns the policy | packet 05 merged and Y3 in |
 | Selecting and copying text | `flow_hit` and the run's own hit test give the pieces; the drag, the highlight and the clipboard are a slice of their own | the first time Chris wants to quote a page |

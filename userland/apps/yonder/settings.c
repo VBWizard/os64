@@ -16,19 +16,28 @@
 
 #define CONF_NAME "yonder.conf"
 #define CONF_AGENT "agent"
+#define CONF_CACHE "cache"
+#define CONF_CACHE_DIR "cache_dir"
+#define CONF_CACHE_MB "cache_mb"
 
 // The list's height, in rows; the dialog's rows are a line of words, the
-// list, the field and a line of help.
+// list, the field, and the cache's box with its button. What the cache
+// holds is said on the dialog's own status line. The helper's window is
+// one size, and a body that does not fit it is not laid out at all.
 #define LIST_ROWS 6
 #define BODY_ROWS (LIST_ROWS + 3)
 
 static struct {
     os64_ui_settings_t d;
-    os64_ui_widget_t heading, help;
+    os64_ui_widget_t heading;
     os64_ui_listbox_t list;
     os64_ui_textfield_t field;
     char field_buf[YONDER_AGENT_MAX];
     void (*use)(const char *agent);
+    way_cache_t *cache;
+    bool usable;                    // the cache has a directory it can keep things in
+    os64_ui_checkbox_t keep;
+    os64_ui_widget_t empty;
     // The relay: `thread` waits for events at the dialog's window and
     // rings `bell` on `window`, then waits on `pumped` until the loop has
     // handled them — one ring outstanding at a time, so it never spins on
@@ -83,6 +92,68 @@ bool yonder_settings_saved_agent(char *out, size_t cap)
         return false;
     }
     return true;
+}
+
+way_cache_t *yonder_settings_cache_open(void)
+{
+    char dir[OS64_PATH_MAX], v[32];
+    if (os64_conf_get(CONF_NAME, CONF_CACHE_DIR, dir, sizeof(dir)) != 0 || dir[0] != '/')
+        os64_strcopy(dir, sizeof(dir), WAY_CACHE_DIR);
+    uint64_t mb = WAY_CACHE_MB_DEFAULT;
+    if (os64_conf_get(CONF_NAME, CONF_CACHE_MB, v, sizeof(v)) == 0 &&
+        (!os64_parse_u64(v, &mb) || mb == 0 || mb > 65536)) {
+        os64_debug_log("yonder: yonder.conf's cache_mb is not a size from 1 to 65536; using 256");
+        mb = WAY_CACHE_MB_DEFAULT;
+    }
+    way_cache_t *cache = way_cache_open(dir, mb * 1024 * 1024);
+    if (cache != NULL && os64_conf_get(CONF_NAME, CONF_CACHE, v, sizeof(v)) == 0 &&
+        os64_streq_nocase(v, "off"))
+        way_cache_enable(cache, false);
+    return cache;
+}
+
+// What the cache holds, on the dialog's status line, and whether it can
+// hold anything at all.
+static void holds_say(void)
+{
+    way_cache_stats_t st = {0};
+    if (s.cache != NULL)
+        way_cache_stats(s.cache, &st);
+    s.usable = st.usable;
+    char line[160];
+    if (s.cache == NULL) {
+        os64_strcopy(line, sizeof(line), "There was no memory for a cache.");
+    } else if (!st.usable) {
+        os64_snprintf(line, sizeof(line), "The cache cannot be kept: %s cannot be made or written.",
+                      way_cache_dir(s.cache));
+    } else {
+        // Under a megabyte it is counted in kilobytes, or it reads as 0.0.
+        char size[32];
+        if (st.bytes < 1024 * 1024) {
+            os64_snprintf(size, sizeof(size), "%lu KB", (unsigned long)((st.bytes + 1023) / 1024));
+        } else {
+            uint64_t tenths = st.bytes * 10 / (1024 * 1024);
+            os64_snprintf(size, sizeof(size), "%lu.%lu MB", (unsigned long)(tenths / 10),
+                          (unsigned long)(tenths % 10));
+        }
+        os64_snprintf(line, sizeof(line),
+                      "The cache holds %d files, %s of %lu MB; this window took %lu from it.",
+                      (int)st.entries, size, (unsigned long)(st.cap / (1024 * 1024)),
+                      (unsigned long)(st.hits + st.confirmed + st.stale));
+    }
+    os64_ui_settings_report(&s.d, line);
+}
+
+static void emptied(os64_ui_widget_t *w, void *user)
+{
+    (void)w;
+    (void)user;
+    if (s.cache == NULL)
+        return;
+    char line[160];
+    os64_snprintf(line, sizeof(line), "Emptied the cache: %d files gone.",
+                  (int)way_cache_clear(s.cache));
+    os64_ui_settings_report(&s.d, line);
 }
 
 // ── The relay ───────────────────────────────────────────────────────────
@@ -149,18 +220,24 @@ static void place(os64_ui_widget_t *w, os64_gui_rect_t r, bool staged)
 
 static bool arrange(os64_ui_settings_t *d, os64_gui_rect_t b, int32_t row, bool staged)
 {
-    const os64_ui_widget_t *words[] = {&s.heading, &s.help};
+    // The box and its button share the last row, the button at its right.
+    int32_t widths[3];
+    const os64_ui_widget_t *words[] = {&s.heading, &s.keep.w, &s.empty};
     for (size_t i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
-        int32_t width;
         const char *text = words[i]->text;
-        if (os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, text, os64_strlen(text), &width) ||
-            width > b.w)
+        if (os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, text, os64_strlen(text), &widths[i]) ||
+            widths[i] > b.w)
             return false;
     }
+    int32_t button = widths[2] + 2 * row;
+    if (widths[1] + 2 * row + button > b.w)
+        return false;
+    int32_t last = b.y + (LIST_ROWS + 2) * row;
     place(&s.heading, (os64_gui_rect_t){b.x, b.y, b.w, row}, staged);
     place(&s.list.w, (os64_gui_rect_t){b.x, b.y + row, b.w, LIST_ROWS * row}, staged);
     place(&s.field.w, (os64_gui_rect_t){b.x, b.y + (LIST_ROWS + 1) * row, b.w, row}, staged);
-    place(&s.help, (os64_gui_rect_t){b.x, b.y + (LIST_ROWS + 2) * row, b.w, row}, staged);
+    place(&s.keep.w, (os64_gui_rect_t){b.x, last, b.w - button - row, row}, staged);
+    place(&s.empty, (os64_gui_rect_t){b.x + b.w - button, last, button, row}, staged);
     return true;
 }
 
@@ -178,39 +255,53 @@ static void apply(os64_ui_settings_t *d, bool save)
     }
     s.use(agent);
     const char *name = yonder_agent_name(agent);
+    // A cache that cannot keep anything has no box to tick, and saves no
+    // `cache = off` that would outlive whatever stopped it.
+    bool keeping = s.usable && s.keep.checked;
+    if (s.usable)
+        way_cache_enable(s.cache, keeping);
     char line[160];
-    if (save && os64_conf_set(CONF_NAME, CONF_AGENT, agent) != 0)
+    if (save && (os64_conf_set(CONF_NAME, CONF_AGENT, agent) != 0 ||
+                 (s.usable && os64_conf_set(CONF_NAME, CONF_CACHE, keeping ? "on" : "off") != 0)))
         os64_strcopy(line, sizeof(line), "Applied here, but yonder.conf could not be written.");
     else
-        os64_snprintf(line, sizeof(line), "%s: sites are asked as %s from the next page on%s",
+        os64_snprintf(line, sizeof(line), "%s: asking as %s, %s%s",
                       save ? "Saved" : "Applied", name != NULL ? name : "the agent typed",
-                      save ? ", and in new windows." : "; Reload asks again.");
+                      keeping ? "keeping pictures" : "keeping nothing",
+                      save ? ", here and in new windows." : ", from the next page on.");
     os64_ui_settings_report(d, line);
 }
 
 void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
-                          void (*use)(const char *agent))
+                          void (*use)(const char *agent), way_cache_t *cache)
 {
     // Open already: the helper brings it forward and keeps what was typed.
     if (!os64_ui_settings_open(&s.d, parent, "yonder Settings", BODY_ROWS, arrange, apply, NULL))
         return;
     s.use = use;
+    s.cache = cache;
+    s.usable = false;
     s.window = parent;
     s.bell = bell;
-    os64_ui_label(&s.heading, "Identify as - what every site is told this browser is:");
-    os64_ui_label(&s.help, "Pick one to fill the field, or type another.");
+    os64_ui_label(&s.heading, "Identify as - pick what every site is told, or type another:");
     int selected = -1;
     for (size_t i = 0; i < yonder_agent_npresets(); i++)
         if (os64_streq(agent, yonder_agent_preset(i)->agent))
             selected = (int)i;
     os64_ui_listbox(&s.list, yonder_agent_npresets(), preset_label, picked, NULL);
     os64_ui_textfield(&s.field, s.field_buf, sizeof(s.field_buf), NULL, NULL, NULL);
-    os64_ui_widget_t *kids[] = {&s.heading, &s.list.w, &s.field.w, &s.help};
+    os64_ui_checkbox(&s.keep, "Keep pictures and style sheets on disk", way_cache_enabled(cache),
+                     NULL, NULL);
+    os64_ui_button(&s.empty, "Empty the cache", emptied, NULL);
+    os64_ui_widget_t *kids[] = {&s.heading, &s.list.w, &s.field.w, &s.keep.w, &s.empty};
     for (size_t i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
         os64_ui_add_child(&s.d.body, kids[i]);
     os64_ui_listbox_set(&s.d.ui, &s.list, yonder_agent_npresets(), selected);
     os64_ui_textfield_set(&s.d.ui, &s.field, agent);
     os64_ui_settings_ready(&s.d);
+    holds_say();
+    os64_ui_set_enabled(&s.d.ui, &s.empty, s.usable);
+    os64_ui_set_enabled(&s.d.ui, &s.keep.w, s.usable);
     os64_ui_set_focus(&s.d.ui, &s.list.w);
     os64_ui_paint(&s.d.ui);
     // Without the relay the dialog would answer only when yonder's own

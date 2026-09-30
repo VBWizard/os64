@@ -251,7 +251,9 @@ make -C kernel test-elf
   read-only pair survives as the forced_ro fallback for ro_compat features
   beyond the driver. THE PERSISTENCE DOCTRINE (same ruling): root is the
   SYSTEM's — the build rewrites the image, the P5 refresh script mirrors it,
-  nothing written there survives a rebuild; /home is the USER's — its own
+  nothing written there survives a rebuild, except that the refresh leaves
+  `/var/cache/` alone (a cache is the system's own and disposable: yonder's,
+  CACHE.md); /home is the USER's — its own
   partition/disk, never rebuilt, never --delete'd. **/home is ext2 too since
   2026-08-18, and 1GB** (it was a 64MB FAT32 partition in QEMU long after the
   P5 had moved, so the test rig could reproduce failures the real machine

@@ -4,19 +4,27 @@
 // exactly as a face would show it (docs/completed/06-navigator.md's evidence).
 // The I/O half, way_load, needs a network; the guest walk proves it.
 
+// POSIX, for the cache's files (test_way_cache.inc).
+#define _DEFAULT_SOURCE
+
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "html/html.h"
 #include "way/way.h"
 #include "page/page.h"
 
+// The console goes nowhere; a file the cache opened (test_way_cache.inc)
+// is written.
 int64_t os64_write(int32_t handle, const void *buf, size_t len)
 {
-    (void)handle;
+    if (handle >= 1000)
+        return write(handle - 1000, buf, len);
     (void)buf;
     return (int64_t)len;
 }
@@ -433,10 +441,13 @@ static void sweep(void)
 }
 
 #include "test_way_jar.inc"
+#include "internal.h"
+#include "test_way_cache.inc"
 
 int main(void)
 {
     jar_cases();
+    cache_cases();
     judgements();
     refreshes();
     history();

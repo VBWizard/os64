@@ -6,9 +6,12 @@
 #
 # THE PERSISTENCE DOCTRINE (ruled 2026-08-07): the ROOT and FAT partitions
 # are the SYSTEM's — this script mirrors them exactly (rsync --delete) and
-# anything you wrote there dies, same as a QEMU image rebuild. The /home
-# partition is YOURS — this script does not know its device name on purpose
-# and will never touch it.
+# anything you wrote there dies, same as a QEMU image rebuild. The one
+# exception is root's /var/cache/ — what programs keep to save fetching it
+# again (yonder's, CACHE.md) — which the mirror leaves alone: it is the
+# system's own, and losing it costs only the next load. The /home partition
+# is YOURS — this script does not know its device name on purpose and will
+# never touch it.
 #
 # ── ONE-TIME SETUP (do this once; refreshes need none of it) ────────────────
 #
@@ -190,7 +193,7 @@ for d in "$WORK/root-dst" "$WORK/fat-dst"; do
 done
 
 echo "p5-refresh: mirroring system root (ext2)..."
-rsync -a --delete "$WORK/ext2-src/" "$WORK/root-dst/"
+rsync -a --delete --exclude=/var/cache/ "$WORK/ext2-src/" "$WORK/root-dst/"
 echo "p5-refresh: mirroring lifeboat (FAT)..."
 rsync -a --delete "$WORK/fat-src/" "$WORK/fat-dst/"
 sync

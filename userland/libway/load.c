@@ -81,6 +81,157 @@ void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt)
     opt->ctx = hooks;
 }
 
+// ── A body read whole, through the cache ────────────────────────────────
+
+// Every hop takes the library's own verdict; what is noted is whether one
+// was a redirect the server does not promise to repeat.
+static os64_fetch_verdict_t hooks_hop(void *ctx, const os64_fetch_hop_t *hop)
+{
+    way_hooks_t *h = ctx;
+    if (hop->status != 301 && hop->status != 308)
+        h->passing_hop = true;
+    return OS64_FETCH_HOP_DEFAULT;
+}
+
+// The body, whole, up to `cap` bytes. NULL on no memory, when the fetch
+// did not deliver all of it, or when there is more than `cap`.
+static uint8_t *read_whole(os64_fetch_t *f, size_t cap, size_t *len)
+{
+    size_t at = 0, size = 16u * 1024u < cap ? 16u * 1024u : cap;
+    uint8_t *buf = os64_malloc(size > 0 ? size : 1);
+    if (buf == NULL)
+        return NULL;
+    for (;;) {
+        if (at == size) {
+            if (size >= cap) {
+                // ASK FOR THE BYTE THAT WOULD CROSS THE CAP: libfetch refuses
+                // a body at max_body on the read that would pass it, not
+                // before, and a buffer that stopped at exactly the cap would
+                // take the first `cap` bytes of something longer for all of it.
+                uint8_t probe;
+                (void)os64_fetch_read(f, &probe, 1);
+                break;
+            }
+            size_t want = size * 2 > cap ? cap : size * 2;
+            uint8_t *grown = os64_realloc(buf, want);
+            if (grown == NULL) {
+                os64_free(buf);
+                return NULL;
+            }
+            buf = grown;
+            size = want;
+        }
+        int64_t n = os64_fetch_read(f, buf + at, size - at);
+        if (n <= 0)
+            break;
+        at += (size_t)n;
+    }
+    if (os64_fetch_status(f) != OS64_FETCH_OK) {
+        os64_free(buf);
+        return NULL;
+    }
+    *len = at;
+    return buf;
+}
+
+// A kept entry as the answer.
+static bool serve(way_whole_t *out, const way_entry_t *e, uint8_t *body, size_t len,
+                  way_served_t how)
+{
+    out->bytes = body;
+    out->len = len;
+    out->status = e->status;
+    os64_strcopy(out->content_type, sizeof(out->content_type), e->content_type);
+    os64_strcopy(out->charset, sizeof(out->charset), e->charset);
+    os64_strcopy(out->url, sizeof(out->url), e->final);
+    out->served = how;
+    out->fetch = OS64_FETCH_OK;
+    return true;
+}
+
+bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *opt,
+                     size_t cap, way_whole_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    way_fetch_hooks(hooks, opt);
+    opt->on_hop = hooks_hop;
+    opt->max_body = cap;
+    hooks->passing_hop = false;
+    // Only a plain GET is the same request every time: a caller's own
+    // headers could change what comes back.
+    way_cache_t *cache = hooks->cache;
+    bool plain = opt->method == OS64_FETCH_METHOD_GET && opt->body == NULL &&
+                 (opt->extra_headers == NULL || opt->extra_headers[0] == '\0');
+    bool caching = plain && way_cache_enabled(cache);
+    way_entry_t *e = caching ? os64_malloc(sizeof(*e)) : NULL;
+    uint8_t *kept = NULL;
+    size_t kept_len = 0;
+    bool have = e != NULL && way_cache_find(cache, url, e, &kept, &kept_len, cap);
+    int64_t now = now_utc();
+    if (have && way_keep_fresh(&e->keep, now)) {
+        serve(out, e, kept, kept_len, WAY_SERVED_KEPT);
+        way_cache_count(cache, WAY_SERVED_KEPT);
+        os64_free(e);
+        return true;
+    }
+    char conditions[OS64_FETCH_EXTRA_MAX];
+    if (have && way_keep_conditions(&e->keep, conditions, sizeof(conditions)) > 0)
+        opt->extra_headers = conditions;
+
+    os64_fetch_t *f = os64_fetch_open(url, opt);
+    const os64_fetch_head_t *head = f != NULL ? os64_fetch_head(f) : NULL;
+    out->fetch = f != NULL ? os64_fetch_status(f) : OS64_FETCH_NO_MEMORY;
+    bool served = false;
+    if (head == NULL) {
+        // The server could not be reached at all: a stale entry that may be
+        // used so is better than no picture (CACHE.md, decision 3). A TLS
+        // failure is not this: somebody may be in the way.
+        bool unreachable = out->fetch == OS64_FETCH_DIAL_FAILED || out->fetch == OS64_FETCH_SILENT;
+        if (have && unreachable && way_keep_stale_ok(&e->keep)) {
+            served = serve(out, e, kept, kept_len, WAY_SERVED_STALE);
+            way_cache_count(cache, WAY_SERVED_STALE);
+            kept = NULL;
+        }
+    } else if (have && head->status == 304 && head->hops == 0) {
+        // Not modified: the kept body, with what the 304 said laid over what
+        // was kept, which starts its freshness again.
+        if (way_keep_confirm(&e->keep, &head->keep, now_utc()))
+            (void)way_cache_put(cache, e, kept, kept_len);
+        served = serve(out, e, kept, kept_len, WAY_SERVED_CONFIRMED);
+        way_cache_count(cache, WAY_SERVED_CONFIRMED);
+        kept = NULL;
+    } else {
+        size_t len = 0;
+        uint8_t *bytes = read_whole(f, cap, &len);
+        out->fetch = os64_fetch_status(f);
+        if (bytes != NULL) {
+            out->bytes = bytes;
+            out->len = len;
+            out->status = head->status;
+            os64_strcopy(out->content_type, sizeof(out->content_type), head->content_type);
+            os64_strcopy(out->charset, sizeof(out->charset), head->charset);
+            os64_strcopy(out->url, sizeof(out->url), head->url_text);
+            served = true;
+            // Kept when it is a whole 200 reached directly or by permanent
+            // redirects, and says it may be (way_keep_read).
+            if (e != NULL && head->status == 200 && !hooks->passing_hop &&
+                way_keep_read(&head->keep, now_utc(), &e->keep)) {
+                os64_strcopy(e->url, sizeof(e->url), url);
+                os64_strcopy(e->final, sizeof(e->final), head->url_text);
+                e->status = head->status;
+                os64_strcopy(e->content_type, sizeof(e->content_type), head->content_type);
+                os64_strcopy(e->charset, sizeof(e->charset), head->charset);
+                (void)way_cache_put(cache, e, bytes, len);
+            }
+        }
+    }
+    if (f != NULL)
+        os64_fetch_close(f);
+    os64_free(kept);
+    os64_free(e);
+    return served;
+}
+
 // A DOWNGRADE IS A PERSON'S DECISION, which is the whole reason libfetch
 // takes a callback: a script may not follow https into http, and somebody at
 // a keyboard may. Every other hop takes the library's own verdict.
