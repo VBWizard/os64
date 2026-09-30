@@ -533,6 +533,31 @@ static void position_fixed_door_cases(void)
            h != NULL && !flow_box_covered(t, h, near), NULL);
     flow_free(t);
     sheeted_close(&q);
+
+    // Covered is the pointer's question, asked at the control's centre
+    // (ruling 9). A hidden overlay over everything, written last, takes no
+    // click and covers nothing; a floating label that lets the pointer
+    // through, and an icon in the field's corner, leave it usable.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0} .wrap{position:relative}"
+                     ".label{position:absolute;left:4px;top:2px;pointer-events:none}"
+                     ".icon{position:absolute;right:0;top:0;width:8px;height:8px}"
+                     ".veil{position:fixed;inset:0;visibility:hidden}</style>"
+                     "<p><a href=x>a link</a></p><p class=wrap><input name=a>"
+                     "<span class=label>Email</span></p>"
+                     "<p class=wrap style='width:160px'><input name=b><span class=icon></span></p>"
+                     "<div class=veil></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    hit = t != NULL ? flow_hit(t, 10, 10, top) : NULL;
+    expect("fixed door: a hidden overlay takes no click", hit != NULL && hit->link == 0, NULL);
+    const flow_box_t *a = t != NULL ? flow_control(t, 0) : NULL;
+    const flow_box_t *b = t != NULL ? flow_control(t, 1) : NULL;
+    expect("fixed door: a floating label that lets the pointer through covers nothing",
+           a != NULL && !flow_box_covered(t, a, top), NULL);
+    expect("fixed door: an icon in the corner does not cover the field's centre",
+           b != NULL && !flow_box_covered(t, b, top), NULL);
+    flow_free(t);
+    sheeted_close(&q);
 }
 
 static void position_cases(void)

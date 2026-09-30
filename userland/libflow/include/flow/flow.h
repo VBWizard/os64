@@ -440,9 +440,9 @@ struct flow_box {
     // draws a control's whatever its opacity — a control made invisible is
     // nearly always a custom checkbox's real input, whose styled stand-in
     // cannot follow a click here, and hiding the widget too would leave a
-    // form nobody can use — unless the pointer cannot reach it either
-    // (`pointer-events: none` as well), which is a hidden dialog's or
-    // search overlay's (POSITION.md, rulings 6 and 9).
+    // form nobody can use — unless the pointer cannot reach it
+    // (flow_box_covered), as it cannot a hidden dialog's or search
+    // overlay's (POSITION.md, rulings 6 and 9).
     bool unpainted;
     const flow_box_t *parent, *first, *next;
 };
@@ -483,11 +483,14 @@ os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
 // Its clip, meaningful when `clipped`, as for the field.
 os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll);
 
-// Whether any positioned box painted after `box` is drawn over part of it
-// at this scroll — so a face that draws live widgets over the page hides
-// the widget of one that is covered (a text field under a fixed header
-// must not draw over the header and take its click). An unpainted box
-// covers nothing.
+// Whether the pointer cannot reach `box` at this scroll: flow_hit at its
+// centre answers something that is neither it nor inside it — a box
+// painted over it, or nothing, since it is hidden or lets the pointer
+// through itself. A face that draws live widgets over the page draws a
+// control's exactly when this is false (POSITION.md, ruling 9): a text
+// field under a fixed header must not draw over the header and take its
+// click, while a floating label or an icon in a field's corner, which the
+// pointer passes or does not reach at the centre, leaves the field usable.
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll);
 
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of
@@ -509,7 +512,8 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 
 // The deepest box whose OWN rect holds (x, y), the last painted winning —
 // the positioned list backwards, then the ordinary tree — whose own clip
-// holds the point, and that is not `pointer-events: none`; NULL for none.
+// holds the point, and that is drawn (`visibility: visible`) and not
+// `pointer-events: none`; NULL for none.
 // (x, y) is in document coordinates, the page scrolled to `scroll`. The face
 // asks libpage what its node means, and a TEXT's run where in the text the
 // pointer is (os64_text_hit).

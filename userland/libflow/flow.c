@@ -584,10 +584,11 @@ static const flow_box_t *hit(const flow_box_t *b, int32_t x, int32_t y)
     }
     if (found != NULL)
         return found;
-    // What is clipped away is not there to be pointed at, and a box that
-    // lets the pointer through is not either.
+    // What is clipped away is not there to be pointed at, and neither is a
+    // box that lets the pointer through or is not drawn at all — asked of
+    // each box, since both are inherited and a descendant may undo them.
     return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) &&
-                   !b->style->pointer_events_none
+                   !b->style->pointer_events_none && b->style->visibility == FLOW_VISIBLE
                ? b : NULL;
 }
 
@@ -610,44 +611,16 @@ const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_p
     return hit(tree->root, x, y);
 }
 
-// The positioned list's entry a box is painted with: its nearest positioned
-// ancestor, itself included; -1 for a box of the ordinary tree.
-static int32_t entry_of(const flow_tree_t *tree, const flow_box_t *box)
-{
-    while (box != NULL && !box->positioned)
-        box = box->parent;
-    for (int32_t i = 0; box != NULL && i < tree->npositioned; i++)
-        if (tree->positioned[i] == box)
-            return i;
-    return -1;
-}
-
-// What of an entry is drawn, in document coordinates: its overflow rect,
-// met with its clip when it has one.
-static os64_gui_rect_t drawn(const flow_box_t *b, flow_point_t scroll)
-{
-    flow_point_t o = flow_box_doc_offset(b, scroll);
-    os64_gui_rect_t r = moved(b->overflow, o.x, o.y);
-    if (!b->clipped)
-        return r;
-    os64_gui_rect_t c = flow_box_doc_clip(b, scroll);
-    int64_t x0 = r.x > c.x ? r.x : c.x, y0 = r.y > c.y ? r.y : c.y;
-    int64_t x1 = (int64_t)r.x + r.w < (int64_t)c.x + c.w ? (int64_t)r.x + r.w : (int64_t)c.x + c.w;
-    int64_t y1 = (int64_t)r.y + r.h < (int64_t)c.y + c.h ? (int64_t)r.y + r.h : (int64_t)c.y + c.h;
-    return rect_from(x0, y0, x1 > x0 ? x1 : x0, y1 > y0 ? y1 : y0);
-}
-
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll)
 {
     if (tree == NULL || box == NULL)
         return false;
     os64_gui_rect_t r = flow_box_doc_rect(box, scroll);
-    for (int32_t i = entry_of(tree, box) + 1; i < tree->npositioned; i++) {
-        const flow_box_t *p = tree->positioned[i];
-        if (!p->unpainted && meets(drawn(p, scroll), r))
-            return true;
-    }
-    return false;
+    const flow_box_t *h = flow_hit(tree, (int32_t)((int64_t)r.x + r.w / 2),
+                                   (int32_t)((int64_t)r.y + r.h / 2), scroll);
+    while (h != NULL && h != box)
+        h = h->parent;
+    return h == NULL;
 }
 
 // Everything in the flow — a relative box is, an out-of-flow one is not — the

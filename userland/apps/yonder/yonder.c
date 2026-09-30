@@ -818,7 +818,11 @@ static void scroll_to_node(const os64_html_node_t *node)
         status_rest("that target has no box on this page");
         return;
     }
-    scroll_to(g.sx, b != NULL ? flow_box_doc_rect(b, scroll_now()).y : 0);
+    // A target in a fixed box is on the glass wherever the page is: no
+    // scroll brings it nearer, so none is made (as Chrome does).
+    if (b != NULL && b->fixed)
+        return;
+    scroll_to(g.sx, b != NULL ? b->rect.y : 0);
 }
 
 static void scroll_to_fragment(const char *name)
@@ -2314,13 +2318,10 @@ static void forms_build(void)
 // Every control's widget at its box on the glass — or hidden, when its box
 // is not wholly inside the page view, because libui does not clip a child
 // to its parent and a widget half out of the view would paint over the
-// toolbar; the painter draws the frame of that one, and of one a positioned
-// box is drawn over (a field under a fixed header must not draw over the
-// header and take its click: POSITION.md). And hidden, frame and all, when
-// the pointer cannot reach it: an unpainted box that is also
-// `pointer-events: none` is a hidden dialog's or search overlay's, never a
-// custom checkbox's real input, which takes the pointer (POSITION.md,
-// ruling 9).
+// toolbar; and hidden when the pointer cannot reach the control at its
+// centre (flow_box_covered; POSITION.md, ruling 9): a field under a fixed
+// header, a hidden dialog's field, one `visibility: hidden`. Whatever of
+// its frame the page draws, the painter draws.
 static void forms_place(void)
 {
     if (g.page.tree == NULL)
@@ -2338,7 +2339,6 @@ static void forms_place(void)
         int64_t x = (int64_t)v.x + at.x - g.sx, y = (int64_t)v.y + at.y - g.sy;
         bool shown = x >= v.x && y >= v.y && x + at.w <= (int64_t)v.x + v.w &&
                      y + at.h <= (int64_t)v.y + v.h && at.w > 0 && at.h > 0 &&
-                     !(b->unpainted && b->style->pointer_events_none) &&
                      !flow_box_covered(g.page.tree, b, scroll_now());
         os64_gui_rect_t r = {clamp32(x), clamp32(y), at.w, at.h};
         if (!shown) {

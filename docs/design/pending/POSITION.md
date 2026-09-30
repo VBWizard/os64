@@ -254,9 +254,9 @@ absolute dropdown inside it is ordinary.
   promise that no field changes its meaning and no signature at the door
   changes shape, and from flow.h's "whole document pixels"; the slice that
   does it amends both, out loud.
-- **Covered.** `flow_box_covered(tree, box, scroll)` answers whether any
-  positioned box painted after `box` is drawn over it (an unpainted one is
-  not drawn at all), so a face that draws live widgets
+- **Covered.** `flow_box_covered(tree, box, scroll)` answers whether the
+  pointer cannot reach `box`: `flow_hit` at its centre answers neither it
+  nor anything inside it (ruling 9), so a face that draws live widgets
   over the page — yonder's form controls — hides one that is covered and
   draws its frame, as `forms_place` already does for one that is not
   wholly in view. A text field under a fixed header must not draw over the
@@ -300,8 +300,8 @@ Three answers, none of which needs a blend or a transform, all in P1:
 everything inside it, which `flow_visit` does not hand over, while
 `flow_hit` still finds it as a browser's pointer does unless it is
 `pointer-events: none`, and a form control's widget is drawn whatever
-its opacity unless the pointer cannot reach it either (rulings 6, 7 and
-9; values between 0 and 1 stay booked); **a
+its opacity unless the pointer cannot reach it (rulings 6, 7 and 9;
+values between 0 and 1 stay booked); **a
 background whose alpha is below 1, on an out-of-flow box, is not painted**
 until the painter blends — seeing through an overlay is a better failure
 than seeing only the overlay; and **yonder's `p` key lays pages out
@@ -422,7 +422,13 @@ he said, not a CSS one — and Fable ruled as he had recommended:
    AND `pointer-events: none`. Rulings 6 and 7 meet there: a custom
    checkbox's real input takes the pointer and is drawn; a hidden dialog's
    or search overlay's controls do not, and a text field drawn from one
-   would float over the page, unlabelled, taking typing.
+   would float over the page, unlabelled, taking typing. Fable made it
+   exact on P2's review, where fixed boxes made covering common: a
+   control's widget is drawn exactly when `flow_hit` at the control's
+   CENTRE answers the control or something inside it. That holds ruling
+   9's case, a field under a fixed header, one `visibility: hidden`, and
+   leaves usable a field a floating label or a corner icon only touches;
+   it gives up a header crossing a field short of its centre.
 
 ## Booked, with their triggers
 
