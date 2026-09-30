@@ -32,12 +32,14 @@
 #include "os64/url.h"
 #include "os64/ui.h"
 #include "os64/work.h"
+#include "agent.h"
 #include "bar.h"
 #include "mail.h"
 #include "paint.h"
 #include "picture.h"
 #include "sheet.h"
 #include "scale.h"
+#include "settings.h"
 #include "ticker.h"
 #include "trip.h"
 
@@ -50,7 +52,6 @@
 #define PAGE_LINK  0x0000eeu
 #define PAGE_PAPER 0xffffffu
 
-#define YONDER_AGENT  "yonder/1.0 (os64)"
 #define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
 
 // The work pool. A navigation declares what one page can cost: libhtml's
@@ -84,6 +85,7 @@
 #define BELL_WORK (1u << 0)
 #define BELL_MAIL (1u << 1)
 #define BELL_TICK (1u << 2)       // a moving picture's next frame is due
+#define BELL_SETTINGS (1u << 3)   // something arrived at the Settings window
 
 // A GIF frame that asks for 10 ms or less is shown for this long, as every
 // browser shows the ones that ask for "as fast as you can".
@@ -858,13 +860,29 @@ static void say_laid_out(uint64_t ms)
     char line[512];
     // Positioning off is a mode that outlives the page it was turned off
     // on, so it is said on every page while it is in force: a page laid
-    // out in document order must never pass for the page as designed.
-    os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px in %lu ms%s%s%s", g.page.way.url,
-                  g.page.way.note[0] ? " - " : "", g.page.way.note, g.page.laid_width,
-                  (unsigned long)ms, pictures,
+    // out in document order must never pass for the page as designed. So
+    // is an agent other than yonder's, or a page answering an assumed
+    // identity could pass for one answering yonder.
+    char asking[80] = "";
+    if (!os64_streq(g.way.agent, YONDER_AGENT)) {
+        const char *name = yonder_agent_name(g.way.agent);
+        os64_snprintf(asking, sizeof(asking), " - asking as %s", name != NULL ? name : "a typed agent");
+    }
+    os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px in %lu ms%s%s%s%s",
+                  g.page.way.url, g.page.way.note[0] ? " - " : "", g.page.way.note,
+                  g.page.laid_width, (unsigned long)ms, pictures, asking,
                   s_env.static_only ? " - POSITIONING OFF (p)" : "",
                   flow_incomplete(g.page.tree) ? " - INCOMPLETE: the layout stopped partway" : "");
     status_rest(line);
+}
+
+// An agent applied from the Settings window: every fetch from now on sends
+// it, and the page's standing line says so.
+static void agent_use(const char *agent)
+{
+    g.way.agent = agent;
+    if (g.page.tree != NULL)
+        say_laid_out(g.laid_ms);
 }
 
 // The node at the top of the view, and how far below the view's top its box
@@ -1249,6 +1267,7 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     trip->kind = YONDER_JOB_TRIP;
     trip->mail = mail;
     trip->session = &g.way;
+    trip->agent = g.way.agent;
     trip->window = g.win;
     trip->mail_bell = BELL_MAIL;
     os64_strcopy(trip->url, sizeof(trip->url), url);
@@ -2460,6 +2479,8 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         if (yonder_mail_take_question(g.nav.mail, &number, line, sizeof(line)))
             bar_ask(ASK_WORKER, number, line);
     }
+    if (mask & BELL_SETTINGS)
+        yonder_settings_rung();
     if (mask & BELL_TICK) {
         if (g.coming.active && yonder_now_ms() >= g.coming.due)
             coming_show();
@@ -3104,7 +3125,7 @@ int main(int argc, char **argv)
             os64_free(bytes);
         }
     }
-    g.win = os64_gui_window_create(title, 60, 40, 860, 640, 0);
+    g.win = os64_gui_window_create(title, 60, 40, 860, 640, OS64_GUI_WINDOW_HAS_SETTINGS);
     if (g.win < 0) {
         os64_printf("yonder: no window (is the desktop running?)\n");
         return 1;
@@ -3116,7 +3137,10 @@ int main(int argc, char **argv)
     g.hover_link = g.pressed_link = -1;
     s_env.replaced_size = replaced_size;
     g.way.name = "yonder";
-    g.way.agent = YONDER_AGENT;
+    char saved[YONDER_AGENT_MAX];
+    const char *agent = yonder_settings_saved_agent(saved, sizeof(saved)) ? yonder_agent_keep(saved)
+                                                                           : NULL;
+    g.way.agent = agent != NULL ? agent : YONDER_AGENT;
     g.way.accept = YONDER_ACCEPT;
     g.way.delayed_hint = " - it is in the address field; press Enter to go";
     g.way.jar = way_jar_new();          // NULL keeps no cookies: the pages still load
@@ -3190,7 +3214,9 @@ int main(int argc, char **argv)
             else if (ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
                      ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
                 window_seen();
-            if (!bar_event(&ev) && !password_key(&ev))
+            if (ev.type == OS64_GUI_EVENT_SETTINGS)
+                yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, agent_use);
+            else if (!bar_event(&ev) && !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
         } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
         if (g.relayout_due) {
@@ -3210,7 +3236,9 @@ int main(int argc, char **argv)
         }
     }
 
-    // The clock first: it only rings, and nothing after this should.
+    // The clock and the Settings window's relay first: they only ring, and
+    // nothing after this should.
+    yonder_settings_close();
     yonder_ticker_stop(g.ticker);
     // The workers next: destroy cancels them — a fetch and a question
     // alike hear the pool's own predicate — and joins them, and releases
@@ -3223,6 +3251,8 @@ int main(int argc, char **argv)
     page_clear(&g.page);
     page_clear(&g.coming.page);
     way_jar_free(g.way.jar);
+    // Nothing is left to read an agent: the workers are gone, and the pages.
+    yonder_agents_release();
     os64_ui_font_release(&g.ui);
     os64_font_family_cache_destroy(s_faces.families);
     os64_text_destroy(s_faces.text);

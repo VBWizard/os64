@@ -124,13 +124,20 @@ typedef struct {
     way_jar_t *jar;
 } way_session_t;
 
-// ONE LOAD'S WORTH OF THE SESSION. A load reads the browser's identity
-// (name, agent, accept — set before the first load and never changed while
-// one runs) and writes only its own sentence, and reaches the person only
-// through its own face. So a face may run way_load on a thread other than
-// the session's: the leg is the whole of what the two share.
+// ONE LOAD'S WORTH OF THE SESSION. A load reads the browser's name and
+// accept list (set before the first load and never changed while one
+// runs), sends the agent its leg carries, writes only its own sentence,
+// and reaches the person only through its own face. So a face may run
+// way_load on a thread other than the session's: the leg is the whole of
+// what the two share.
 typedef struct {
     const way_session_t *session;
+    // The User-Agent this load sends: the session's when way_leg made the
+    // leg, or the one handed to way_leg_as. A face that lets the agent
+    // change while loads run elsewhere (yonder's Settings) reads it on the
+    // session's thread when it asks for the load and makes the leg with
+    // way_leg_as, so nothing off that thread reads the session's.
+    const char *agent;
     way_face_t face;
     char status[WAY_SENTENCE_MAX];
     // The page this load was asked for from — a link followed, a form sent,
@@ -139,8 +146,12 @@ typedef struct {
     char referrer[OS64_FETCH_URL_MAX];
 } way_leg_t;
 
-// A leg for `session`, with the session's own face and an empty sentence.
+// A leg for `session`, with the session's own face and agent and an empty
+// sentence. way_leg reads the session's agent; way_leg_as is handed one
+// read earlier, on the session's thread, and reads only what never
+// changes while a load runs.
 way_leg_t way_leg(const way_session_t *session);
+way_leg_t way_leg_as(const way_session_t *session, const char *agent);
 
 // ── The I/O half ────────────────────────────────────────────────────────
 

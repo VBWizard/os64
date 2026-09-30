@@ -259,7 +259,7 @@ bool way_load(way_leg_t *s, const char *url, const os64_page_request_t *request,
 
     os64_html_options_t limits = os64_html_options_default();
     os64_fetch_options_t opt = {0};
-    opt.user_agent = s->session->agent;
+    opt.user_agent = s->agent;
     opt.accept = s->session->accept;
     opt.max_body = limits.max_bytes;     // the same page, the same cap
     opt.cancelled = fetch_cancelled;

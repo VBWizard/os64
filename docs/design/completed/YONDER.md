@@ -48,6 +48,39 @@ person moves around them.
 - **The window's title is the page's `<title>`** if the GUI can retitle a
   window; if it cannot, that is a booked ask, not a workaround.
 
+## Settings
+
+The title bar's Settings action opens yonder's Settings window — the
+shared modeless dialog (`os64/ui_settings.h`), Apply, Save as default and
+Close — with one setting in it: **who yonder says it is**, the
+User-Agent every fetch sends, pages, sheets and pictures alike. Sites
+answer by it (theoldnet serves a browser it does not know as a 1996 one),
+and comparing yonder with another browser means asking as that browser
+asks.
+
+- **The presets** (`agent.c`) are yonder's own, Chrome and Firefox on
+  Windows, Safari on an iPhone (a lighter page from many sites), Netscape
+  4 on Windows 98 (what the vintage-web sites serve an old browser) and
+  Lynx (a text-only version, where a site keeps one). Picking one fills the field; anything
+  typed there is sent as typed, once it is printable ASCII a header can
+  carry and the config file keeps: no `#`, no space at either end, under
+  `OS64_FETCH_AGENT_MAX`.
+- **Apply** changes it for this window, from the next fetch on; **Save as
+  default** writes `agent =` to `yonder.conf` at the top of the
+  configuration ladder, where every yonder reads it at start. An agent
+  that is not valid there is ignored, and yonder's own is used.
+- **It is said while it is in force**: the status line ends `- asking as
+  Chrome on Windows` (or `a typed agent`), so a page answering an assumed
+  identity never passes for one answering yonder.
+- **An agent, once applied, lives as long as yonder does**: a job already
+  submitted reads the agent it was handed when it opens its fetch, which
+  may be after another is applied, so none is freed before the workers
+  are gone.
+- **yonder's loop waits on its own window**, so a thread waits on the
+  dialog's (without taking its events) and rings a doorbell on yonder's;
+  the loop pumps the dialog and tells the thread it has. One ring is out
+  at a time.
+
 ## The page view
 
 A custom libui class (the container pattern, `os64_ui_class_t`). It owns

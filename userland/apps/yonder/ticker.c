@@ -107,6 +107,7 @@ void yonder_ticker_stop(yonder_ticker_t *t)
     os64_lock_release(&t->lock);
     wake(t);
     (void)os64_thread_join((int32_t)t->thread, NULL);
+    os64_close((int32_t)t->thread);
     os64_close(t->wake[0]);
     os64_close(t->wake[1]);
     os64_free(t);

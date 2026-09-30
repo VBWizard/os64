@@ -13,6 +13,9 @@ typedef struct {
     uint32_t kind;                  // YONDER_JOB_TRIP
     yonder_mail_t *mail;            // one reference, the job's
     const way_session_t *session;   // the browser's identity, read-only
+    // The agent to send, read on the window's thread when the job was
+    // made: Settings may change the session's while the job runs.
+    const char *agent;
     int64_t window;                 // rung when there is mail
     uint32_t mail_bell;
     char url[OS64_FETCH_URL_MAX];

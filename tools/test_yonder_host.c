@@ -19,6 +19,7 @@
 #include "page/page.h"
 #include "flow/flow.h"
 #include "os64/text.h"
+#include "agent.h"
 #include "bar.h"
 #include "mail.h"
 #include "paint.h"
@@ -765,6 +766,37 @@ static void corpus(bool write)
         printf("yonder corpus: %zu paints match\n", same);
 }
 
+// ── Who yonder says it is ───────────────────────────────────────────────
+
+static void agent_cases(void)
+{
+    bool presets_valid = yonder_agent_npresets() > 1 &&
+                         strcmp(yonder_agent_preset(0)->agent, YONDER_AGENT) == 0;
+    for (size_t i = 0; i < yonder_agent_npresets(); i++)
+        presets_valid &= yonder_agent_valid(yonder_agent_preset(i)->agent) &&
+                         strcmp(yonder_agent_name(yonder_agent_preset(i)->agent),
+                                yonder_agent_preset(i)->name) == 0;
+    expect("agent: yonder's own is first, and every preset can be sent and saved as it is",
+           presets_valid, NULL);
+    expect("agent: one typed is valid and has no preset's name",
+           yonder_agent_valid("Mozilla/3.0 (compatible)") &&
+               yonder_agent_name("Mozilla/3.0 (compatible)") == NULL, NULL);
+    // YONDER_AGENT_MAX counts the NUL: one that long is a byte too long.
+    char longest[YONDER_AGENT_MAX + 1];
+    memset(longest, 'a', YONDER_AGENT_MAX);
+    longest[YONDER_AGENT_MAX] = '\0';
+    bool refused = !yonder_agent_valid(longest);
+    longest[YONDER_AGENT_MAX - 1] = '\0';
+    bool fits = yonder_agent_valid(longest);
+    expect("agent: one that would not fit a fetch is refused, one a byte shorter is not",
+           refused && fits, NULL);
+    expect("agent: what a header or the config file would not keep is refused",
+           !yonder_agent_valid("") && !yonder_agent_valid(NULL) &&
+               !yonder_agent_valid(" leading") && !yonder_agent_valid("trailing ") &&
+               !yonder_agent_valid("a # comment") && !yonder_agent_valid("two\nlines") &&
+               !yonder_agent_valid("tab\there") && !yonder_agent_valid("caf\xc3\xa9"), NULL);
+}
+
 int main(int argc, char **argv)
 {
     os64_text_options_t o = {
@@ -794,6 +826,7 @@ int main(int argc, char **argv)
         bar_cases();
         mail_cases();
         cost_cases();
+        agent_cases();
         corpus(false);
     }
     for (int i = 0; i < s_nfonts; i++)
