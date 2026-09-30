@@ -1990,6 +1990,23 @@ static void share(int64_t v, const int64_t *weights, int64_t *parts, int32_t n)
     }
 }
 
+// The same, by real weights: a shrink weight is a factor in thousandths
+// times a base in 26.6, and a small factor on a base under a pixel, divided
+// down to whole units, is nothing.
+static void share_by(int64_t v, const double *weights, int64_t *parts, int32_t n)
+{
+    double total = 0, sofar = 0;
+    for (int32_t i = 0; i < n; i++)
+        total += weights[i];
+    int64_t given = 0;
+    for (int32_t i = 0; i < n; i++) {
+        sofar += weights[i];
+        int64_t upto = total > 0 ? (int64_t)((double)v * sofar / total + (v < 0 ? -0.5 : 0.5)) : 0;
+        parts[i] = upto - given;
+        given = upto;
+    }
+}
+
 static int64_t outer(const FlexItem *it, int64_t size)
 {
     return it->m0 + size + it->m1;
@@ -1999,10 +2016,10 @@ static int64_t outer(const FlexItem *it, int64_t size)
 // taken back by flex-shrink weighted by each item's inner base size; an
 // item a share carries past a limit is frozen there and the rest share
 // again. The line is `idx[0..n)`, and `space` its inner main size less its
-// gaps. `w` is working memory for n weights and n parts.
-static void resolve_flex(FlexItem *items, const int32_t *idx, int32_t n, int64_t space, int64_t *w)
+// gaps. `parts` and `w` are working memory for n shares and n weights.
+static void resolve_flex(FlexItem *items, const int32_t *idx, int32_t n, int64_t space,
+                         int64_t *parts, double *w)
 {
-    int64_t *parts = w + n;
     int64_t hyp_sum = 0;
     for (int32_t i = 0; i < n; i++)
         hyp_sum += outer(&items[idx[i]], items[idx[i]].hyp);
@@ -2039,9 +2056,10 @@ static void resolve_flex(FlexItem *items, const int32_t *idx, int32_t n, int64_t
         for (int32_t i = 0; i < n; i++) {
             const FlexItem *it = &items[idx[i]];
             w[i] = it->frozen ? 0
-                 : growing ? it->grow : (int64_t)it->shrink * max64(0, it->base - it->frame) / 64;
+                 : growing ? (double)it->grow
+                           : (double)it->shrink * (double)max64(0, it->base - it->frame);
         }
-        share(rem, w, parts, n);
+        share_by(rem, w, parts, n);
         int64_t violation = 0;
         for (int32_t i = 0; i < n; i++) {
             FlexItem *it = &items[idx[i]];
@@ -2142,18 +2160,23 @@ static void order_items(const int64_t *key, int32_t *ord, int32_t *tmp, int32_t 
 // Where `justify-content` puts the k-th of n items, past where the ones
 // before it and the gaps end, given the line's free space: the reverse
 // directions read `start` and `end` against the writing mode, which does
-// not reverse, and `left` and `right` against the page, in a row.
+// not reverse, and `left` and `right` against the page in a row, and as
+// `start` in a column.
 static int64_t justify_extra(flow_place_t j, bool reverse, bool column, int64_t free,
                              int32_t k, int32_t n)
 {
     switch (j) {
     case FLOW_PLACE_START: j = reverse ? FLOW_PLACE_FLEX_END : FLOW_PLACE_FLEX_START; break;
     case FLOW_PLACE_END: j = reverse ? FLOW_PLACE_FLEX_START : FLOW_PLACE_FLEX_END; break;
+    // Physical sides: on a column, whose axis is not the inline one, both
+    // are `start` (Box Alignment 3 § 5.1), which column-reverse puts at
+    // flex-end.
     case FLOW_PLACE_LEFT:
-        j = column || !reverse ? FLOW_PLACE_FLEX_START : FLOW_PLACE_FLEX_END;
+        j = !reverse ? FLOW_PLACE_FLEX_START : FLOW_PLACE_FLEX_END;
         break;
     case FLOW_PLACE_RIGHT:
-        j = column ? FLOW_PLACE_FLEX_START : reverse ? FLOW_PLACE_FLEX_START : FLOW_PLACE_FLEX_END;
+        j = column ? (reverse ? FLOW_PLACE_FLEX_END : FLOW_PLACE_FLEX_START)
+                   : (reverse ? FLOW_PLACE_FLEX_START : FLOW_PLACE_FLEX_END);
         break;
     default: break;
     }
@@ -2226,6 +2249,32 @@ static bool place_lines(L *l, FlexLine *lines, int32_t nl, int64_t total, int64_
     return true;
 }
 
+// The relative offset `block` laid an item out at: moved to its place
+// after, it keeps the offset on top of the place (CSS 2.1 § 9.4.3).
+static void laid_offset(const FBox *c, int64_t cbw, int64_t *dx, int64_t *dy)
+{
+    *dx = *dy = 0;
+    if (c->positioned && !c->out_of_flow)
+        rel_offset(c->style, cbw, definite_height(c->parent), dx, dy);
+}
+
+// The end of a container's items. Placed whole, each item's absolute boxes
+// are laid out against its final size (sized_later). Stopped, what was laid
+// out is withdrawn: an item there has only its provisional place, before
+// its container moved and sized it, and a tree that stopped holds no item
+// its container had not finished with.
+static void flex_items_done(L *l, const FStyles *styles, FBox *b, int64_t cbw)
+{
+    for (FBox *c = b->first; c != NULL; c = c->next) {
+        if (c->out_of_flow)
+            continue;
+        if (l->failed)
+            unplace(c);
+        else
+            positioned_done(l, styles, c, cbw);
+    }
+}
+
 // A flex container's items, from `in->y` down, content box `cx`..`cx + cw`.
 // On exit `in->y` is the content's bottom.
 static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, Cursor *in)
@@ -2265,7 +2314,9 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
     int64_t *w = scratch_calloc(l, (size_t)n * 2, sizeof(*w));
     int64_t *at = scratch_calloc(l, (size_t)n, sizeof(*at));
     FlexLine *lines = scratch_calloc(l, (size_t)n, sizeof(*lines));
-    if (items == NULL || ord == NULL || w == NULL || at == NULL || lines == NULL)
+    double *weights = scratch_calloc(l, (size_t)n, sizeof(*weights));
+    if (items == NULL || ord == NULL || w == NULL || at == NULL || lines == NULL ||
+        weights == NULL)
         goto done;
     int32_t k = 0;
     bool reordered = false;
@@ -2291,7 +2342,6 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
     flow_length_t gc = column ? s->column_gap : s->row_gap;
     int64_t gap = gm.kind == FLOW_LENGTH_PERCENT && main_def < 0 ? 0 : len(gm, max64(0, main_def));
     int64_t cgap = gc.kind == FLOW_LENGTH_PERCENT && cross_def < 0 ? 0 : len(gc, max64(0, cross_def));
-    int64_t bottom = top;
     int32_t nl = 0;
 
     if (!column) {
@@ -2342,7 +2392,7 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             const int32_t *idx = ord + lines[li].first;
             int32_t m = lines[li].count;
             int64_t space = cw - gap * (m - 1);
-            resolve_flex(items, idx, m, space, w);
+            resolve_flex(items, idx, m, space, w, weights);
             int64_t free = space;
             for (int32_t i = 0; i < m; i++)
                 free -= outer(&items[idx[i]], items[idx[i]].target);
@@ -2368,13 +2418,9 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             c->flex_ml = it->m0;
             Cursor cur = {top, kNoMargins, -1};
             block(l, styles, c, at[i], cw, &cur);
-            if (c->placed)
-                bottom = max64(bottom, cur.y + margins_sum(cur.pm));
         }
-        if (l->failed) {
-            in->y = bottom;
+        if (l->failed)
             goto done;
-        }
         // Each line's cross size: its tallest item, the baseline-aligned
         // ones by what they reach above and below their shared baseline.
         int64_t sum = cgap * (nl - 1);
@@ -2476,13 +2522,9 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             }
             Cursor cur = {top, kNoMargins, -1};
             block(l, styles, c, cx, cw, &cur);
-            if (c->placed)
-                bottom = max64(bottom, cur.y + margins_sum(cur.pm));
         }
-        if (l->failed) {
-            in->y = bottom;
+        if (l->failed)
             goto done;
-        }
         for (int32_t i = 0; i < n; i++) {
             FlexItem *it = &items[i];
             FBox *c = it->box;
@@ -2495,11 +2537,15 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             it->m1 = it->auto1 ? 0 : len(cs->margin[FLOW_BOTTOM], cw);
             it->grow = cs->flex_grow;
             it->shrink = cs->flex_shrink;
+            // `auto` is the item's height, given or its content's; `content`,
+            // and a percentage of a height not known, its content's alone.
             flow_length_t fb = cs->flex_basis;
             if (fb.kind == FLOW_LENGTH_PX || (fb.kind == FLOW_LENGTH_PERCENT && h_def))
                 it->base = content_of(cs, fb, max64(0, h_given), it->frame) + it->frame;
+            else if (fb.kind == FLOW_LENGTH_AUTO)
+                it->base = c->h;
             else
-                it->base = c->h;            // as laid out: its height, or its content's
+                it->base = c->content_h;
             it->max = cs->max_height.kind == FLOW_LENGTH_PX
                           ? content_of(cs, cs->max_height, 0, it->frame) + it->frame : kNoLimit;
             if (cs->min_height.kind == FLOW_LENGTH_PX)
@@ -2507,7 +2553,10 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             else if (f_overflow_scrolls(cs->overflow_x) || f_overflow_scrolls(cs->overflow_y))
                 it->min = it->frame;
             else
-                it->min = min64(c->h, it->max);     // the automatic minimum: its content
+                // The automatic minimum (§ 4.5): its content's height, no
+                // more than a height the page gave (c->h is that, when it
+                // gave one), or its limit.
+                it->min = min64(min64(c->content_h, c->h), it->max);
             it->min = max64(it->min, it->frame);
             it->max = max64(it->max, it->min);
             it->hyp = it->base < it->min ? it->min : it->base > it->max ? it->max : it->base;
@@ -2534,7 +2583,7 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             const int32_t *idx = ord + lines[li].first;
             int32_t m = lines[li].count;
             int64_t space = size - gap * (m - 1);
-            resolve_flex(items, idx, m, space, w);
+            resolve_flex(items, idx, m, space, w, weights);
             int64_t free = space;
             lines[li].cross = 0;
             for (int32_t i = 0; i < m; i++) {
@@ -2553,7 +2602,9 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
                 int64_t o = outer(it, it->target);
                 int64_t pos = along + justify_extra(s->justify_content, reverse, true, free, i, m);
                 int64_t mb_top = reverse ? top + size - pos - o : top + pos;
-                translate(it->box, 0, mb_top + it->m0 - it->box->y);
+                int64_t rdx, rdy;
+                laid_offset(it->box, cw, &rdx, &rdy);
+                translate(it->box, 0, mb_top + it->m0 + rdy - it->box->y);
                 along += o + gap;
             }
         }
@@ -2591,18 +2642,24 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
                     } else if (a == FLOW_PLACE_CENTER) {
                         dx = room / 2;
                     }
-                    translate(c, line_left + ml + dx - c->x, 0);
+                    int64_t rdx, rdy;
+                    laid_offset(c, cw, &rdx, &rdy);
+                    translate(c, line_left + ml + dx + rdx - c->x, 0);
                 }
             }
         }
         in->y = top + size;
     }
 done:
+    flex_items_done(l, styles, b, cw);
+    if (l->failed)
+        in->y = top;
     scratch_free(l, items);
     scratch_free(l, ord);
     scratch_free(l, w);
     scratch_free(l, at);
     scratch_free(l, lines);
+    scratch_free(l, weights);
 }
 
 // ── Grid layout (GRID.md) ───────────────────────────────────────────────
@@ -3551,6 +3608,15 @@ done:
 
 static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur);
 
+// A flex item's size is its container's to finish — stretched across a
+// line, grown or shrunk down a column — after it is laid out, so the
+// absolute boxes it contains wait for that (flex_items_done), or they
+// would be placed against a size the item no longer has.
+static bool sized_later(const FBox *b)
+{
+    return b->parent != NULL && b->parent->flex && !b->out_of_flow;
+}
+
 // A block-level box in its parent's flow. On entry `cur` is the point
 // below the previous box with the margins still pending there; on exit it
 // is the point below this one, with this box's bottom margin (and, when it
@@ -3700,13 +3766,13 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     if (top_open && in.first < 0 && height_auto && bottom_open) {
         b->placed = true;
         b->y = cur->y + margins_sum(pm);
-        b->h = 0;
+        b->h = b->content_h = 0;
         cur->pm = margins_join(pm, margins_join(in.pm, margin_of(mb)));
         if (b->marker != NULL)
             place_marker(l, styles, b, cx, b->y);
         if (l->failed)
             b->unfinished = true;
-        else
+        else if (!sized_later(b))
             positioned_done(l, styles, b, cbw);
         return;
     }
@@ -3714,6 +3780,8 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         y_border = in.first >= 0 ? in.first : cur->y + margins_sum(pm);
         content_top = y_border;
     }
+    int64_t flowed = bottom_open ? in.y - content_top : in.y + margins_sum(in.pm) - content_top;
+    b->content_h = vframe_px + max64(0, flowed);
     int64_t content_h;
     Margins pm_out;
     if (!height_auto) {
@@ -3742,7 +3810,7 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     // there stopped inside this box.
     if (l->failed)
         b->unfinished = true;
-    else
+    else if (!sized_later(b))
         positioned_done(l, styles, b, cbw);
 }
 
@@ -4125,13 +4193,23 @@ static Intr intrinsic(L *l, FBox *b)
             s->flex_direction != FLOW_FLEX_COLUMN_REVERSE) {
             // A row's (FLEX.md, decision 3): its items side by side and
             // the gaps between, and at least its widest item's min-content
-            // when it wraps, all of them side by side when it does not.
+            // when it wraps, all of them side by side when it does not. An
+            // item that cannot shrink asks at least its flex basis, when
+            // that is a length; one that can asks its content, as Chrome
+            // measures it (FLEX.md, decision 3).
             int32_t n = 0;
             bool wraps = s->flex_wrap != FLOW_FLEX_NOWRAP;
             for (FBox *c = b->first; c != NULL && !l->failed; c = c->next) {
                 if (c->out_of_flow)
                     continue;
                 Intr ci = intrinsic(l, c);
+                const flow_style_t *cs = c->style;
+                if (cs->flex_shrink == 0 && cs->flex_basis.kind == FLOW_LENGTH_PX) {
+                    int64_t frame = hframe(c, 0);
+                    int64_t basis = content_of(cs, cs->flex_basis, 0, frame) + frame;
+                    ci.min = max64(ci.min, basis);
+                    ci.max = max64(ci.max, basis);
+                }
                 int64_t m = len(c->style->margin[FLOW_LEFT], 0) + len(c->style->margin[FLOW_RIGHT], 0);
                 r.max += ci.max + m;
                 r.min = wraps ? max64(r.min, ci.min + m) : r.min + ci.min + m;

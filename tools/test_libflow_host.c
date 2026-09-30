@@ -1457,6 +1457,15 @@ int main(int argc, char **argv)
     cost_cases();
     layout_relation_sweep("a page of every family", kSweepPage, 300);
     layout_relation_sweep("a positioned page", kPositionedSweepPage, 300);
+    // Flex items are laid out and then moved and sized by their container:
+    // a stop between the two must not leave them where they were laid out.
+    layout_relation_sweep("a flex page",
+        "<!doctype html><style>.c{display:flex;flex-direction:column;height:200px}"
+        ".r{display:flex} .i{position:relative;top:4px;flex:1}"
+        ".a{position:absolute;bottom:0;right:0}</style>"
+        "<div class=c><p>one<p class=i>two<span class=a>x</span><p>three</div>"
+        "<div class=r><p>a<p class=i>b<p style=flex:2>c</div>"
+        "<div class=c style=flex-direction:column-reverse><p>d<p>e</div>", 300);
     // A tall first cell in a table the failure stops: its lines, not
     // placed, must not reach the page's edges.
     layout_relation_sweep("a tall cell in a table that stops",
