@@ -2305,7 +2305,11 @@ static void forms_build(void)
 // Every control's widget at its box on the glass — or hidden, when its box
 // is not wholly inside the page view, because libui does not clip a child
 // to its parent and a widget half out of the view would paint over the
-// toolbar. The painter draws the frame of a hidden one.
+// toolbar; the painter draws the frame of that one. And hidden, frame and
+// all, when the pointer cannot reach it: an unpainted box that is also
+// `pointer-events: none` is a hidden dialog's or search overlay's, never a
+// custom checkbox's real input, which takes the pointer (POSITION.md,
+// ruling 9).
 static void forms_place(void)
 {
     if (g.page.tree == NULL)
@@ -2321,7 +2325,8 @@ static void forms_place(void)
         // back inside the view), and whatever is kept is clamped to int32.
         int64_t x = (int64_t)v.x + b->rect.x - g.sx, y = (int64_t)v.y + b->rect.y - g.sy;
         bool inside = x >= v.x && y >= v.y && x + b->rect.w <= (int64_t)v.x + v.w &&
-                      y + b->rect.h <= (int64_t)v.y + v.h && b->rect.w > 0 && b->rect.h > 0;
+                      y + b->rect.h <= (int64_t)v.y + v.h && b->rect.w > 0 && b->rect.h > 0 &&
+                      !(b->unpainted && b->style->pointer_events_none);
         os64_gui_rect_t r = {clamp32(x), clamp32(y), b->rect.w, b->rect.h};
         if (!inside) {
             if (!fw->w->hidden)

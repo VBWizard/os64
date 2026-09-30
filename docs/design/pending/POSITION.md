@@ -288,7 +288,8 @@ Three answers, none of which needs a blend or a transform, all in P1:
 everything inside it, which `flow_visit` does not hand over, while
 `flow_hit` still finds it as a browser's pointer does unless it is
 `pointer-events: none`, and a form control's widget is drawn whatever
-(rulings 6 and 7; values between 0 and 1 stay booked); **a
+its opacity unless the pointer cannot reach it either (rulings 6, 7 and
+9; values between 0 and 1 stay booked); **a
 background whose alpha is below 1, on an out-of-flow box, is not painted**
 until the painter blends — seeing through an overlay is a better failure
 than seeing only the overlay; and **yonder's `p` key lays pages out
@@ -388,7 +389,8 @@ recommended ("I trust your judgement"):
    is nearly always a custom checkbox's real input, hidden so a styled
    stand-in can follow its state, which it cannot here (`:checked` does not
    follow a click); hiding the widget too would leave a form nobody can
-   use. `unpainted` keeps the rest of the box unpainted.
+   use. `unpainted` keeps the rest of the box unpainted. (Ruling 9 makes
+   the one exception.)
 7. **`pointer-events: none` is read**, and `flow_hit` passes through such
    a box — the property that says a click goes to what is under it. An
    invisible overlay otherwise eats every click over the links a person
@@ -396,6 +398,16 @@ recommended ("I trust your judgement"):
 8. **Positioning off is a MODE**: `p` holds across navigation until it is
    pressed again, and the status line of every page says so while it is
    in force.
+
+And one more, on the third round, which Chris left to his reviewer —
+"I'm deferring to you on this question"; an OS developer and a web user,
+he said, not a CSS one — and Fable ruled as he had recommended:
+
+9. **A control the pointer cannot reach is not drawn**: its box unpainted
+   AND `pointer-events: none`. Rulings 6 and 7 meet there: a custom
+   checkbox's real input takes the pointer and is drawn; a hidden dialog's
+   or search overlay's controls do not, and a text field drawn from one
+   would float over the page, unlabelled, taking typing.
 
 ## Booked, with their triggers
 

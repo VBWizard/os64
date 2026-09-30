@@ -427,10 +427,12 @@ struct flow_box {
     // `opacity: 0` on it or on an element it is inside: flow_visit does not
     // hand it over. flow_hit still finds it, as a browser's pointer does,
     // unless it is `pointer-events: none`. A face drawing live widgets
-    // draws a control's whatever its opacity: a control made invisible is
+    // draws a control's whatever its opacity — a control made invisible is
     // nearly always a custom checkbox's real input, whose styled stand-in
     // cannot follow a click here, and hiding the widget too would leave a
-    // form nobody can use (POSITION.md, ruling 6).
+    // form nobody can use — unless the pointer cannot reach it either
+    // (`pointer-events: none` as well), which is a hidden dialog's or
+    // search overlay's (POSITION.md, rulings 6 and 9).
     bool unpainted;
     const flow_box_t *parent, *first, *next;
 };

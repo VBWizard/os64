@@ -119,7 +119,8 @@ page as it reads in document order — until `p` again brings back pages
 as they were designed to look (POSITION.md § What positioning costs,
 ruling 8). It is a MODE, kept across navigation, and every page laid out
 while it is on says POSITIONING OFF on the status line. A form control's
-widget is drawn whatever its opacity (ruling 6). With no script to close a
+widget is drawn whatever its opacity, unless the pointer cannot reach it
+either (rulings 6 and 9). With no script to close a
 cookie wall or a menu that covers the page, it is how the text under one
 is read, and it is the Chrome comparison's instrument: one page, one
 keypress apart.

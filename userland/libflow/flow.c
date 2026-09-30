@@ -592,9 +592,9 @@ static const flow_box_t *hit_in_flow(const flow_box_t *b, int32_t x, int32_t y)
     }
     if (found != NULL)
         return found;
-    return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) &&
-                   !b->style->pointer_events_none
-               ? b : NULL;
+    // What the pointer passes through is still where it is: an anchor is a
+    // place, not a target, so pointer-events is not asked here.
+    return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) ? b : NULL;
 }
 
 const flow_box_t *flow_hit_in_flow(const flow_tree_t *tree, int32_t x, int32_t y)
