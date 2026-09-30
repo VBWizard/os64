@@ -66,9 +66,11 @@ typedef struct {
     FBox *target;           // the context inline content lands in; NULL between runs
     Frame *open;
     FBox *anon_table;       // an anonymous table gathering internal table boxes
-    // In a flex or grid container, the next text node of a run already
-    // found to be all white space (blank_run), so each run is scanned once.
-    const os64_html_node_t *blank_next;
+    // In a flex or grid container, the next text node of a run whose
+    // verdict (blank_run) is already known, and the verdict: each run is
+    // scanned once.
+    const os64_html_node_t *run_next;
+    bool run_blank;
 } Flow;
 
 static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_node_t *stop,
@@ -188,6 +190,14 @@ static bool text_significant(const B *b, const os64_html_node_t *n)
     return false;
 }
 
+static bool text_blank(const os64_html_node_t *n)
+{
+    for (size_t i = 0; i < n->text_len; i++)
+        if (!css_space(n->text[i]))
+            return false;
+    return true;
+}
+
 // Whether the run of text children from `n` to the next element (comments
 // are no break in it) is all white space: in a flex or grid container such
 // a run makes no anonymous item (Flexbox 1 § 4, Grid 2 § 6), whatever
@@ -195,9 +205,8 @@ static bool text_significant(const B *b, const os64_html_node_t *n)
 static bool blank_run(const os64_html_node_t *n)
 {
     for (; n != NULL && (n->kind == OS64_HTML_TEXT || n->kind == OS64_HTML_COMMENT); n = n->next)
-        for (size_t i = 0; n->kind == OS64_HTML_TEXT && i < n->text_len; i++)
-            if (!css_space(n->text[i]))
-                return false;
+        if (n->kind == OS64_HTML_TEXT && !text_blank(n))
+            return false;
     return true;
 }
 
@@ -497,14 +506,20 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     const flow_style_t *s = text_style(b, n);
     if (s == NULL || n->text_len == 0)
         return;
-    if (f->target == NULL && (f->container->flex || f->container->grid) &&
-        (n == f->blank_next || blank_run(n))) {
-        // The rest of the run is blank too: its next text node is known.
-        const os64_html_node_t *m = n->next;
-        while (m != NULL && m->kind == OS64_HTML_COMMENT)
-            m = m->next;
-        f->blank_next = m != NULL && m->kind == OS64_HTML_TEXT ? m : NULL;
-        return;
+    if (f->target == NULL && (f->container->flex || f->container->grid)) {
+        bool blank = n == f->run_next ? f->run_blank : blank_run(n);
+        // A node that is all white space leaves the rest of its run the
+        // verdict the run had, so the next text node inherits it.
+        f->run_next = NULL;
+        if (text_blank(n)) {
+            const os64_html_node_t *m = n->next;
+            while (m != NULL && m->kind == OS64_HTML_COMMENT)
+                m = m->next;
+            f->run_next = m != NULL && m->kind == OS64_HTML_TEXT ? m : NULL;
+            f->run_blank = blank;
+        }
+        if (blank)
+            return;
     }
     if (!f_ws_collapses(s->white_space)) {
         FBox *ifc = target(f);
@@ -758,7 +773,7 @@ static void build_container(B *b, FBox *box, const os64_html_node_t *first,
 {
     Mix m = {false, inside_marker != NULL};
     scan(b, first, stop, &m);
-    Flow f = {b, box, m.block || box->flex || box->grid, NULL, NULL, NULL, NULL};
+    Flow f = {b, box, m.block || box->flex || box->grid, NULL, NULL, NULL, NULL, false};
     if (!f.mixed) {
         box->ifc = true;
         box->collapse_space = true;
