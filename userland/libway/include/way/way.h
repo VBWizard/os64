@@ -133,9 +133,10 @@ typedef struct {
 typedef struct {
     const way_session_t *session;
     // The User-Agent this load sends: the session's when way_leg made the
-    // leg. A face that lets the agent change while loads run elsewhere
-    // (yonder's Settings) reads it on the session's thread when it asks for
-    // the load, and hands it over here, so no load reads the session's.
+    // leg, or the one handed to way_leg_as. A face that lets the agent
+    // change while loads run elsewhere (yonder's Settings) reads it on the
+    // session's thread when it asks for the load and makes the leg with
+    // way_leg_as, so nothing off that thread reads the session's.
     const char *agent;
     way_face_t face;
     char status[WAY_SENTENCE_MAX];
@@ -145,8 +146,12 @@ typedef struct {
     char referrer[OS64_FETCH_URL_MAX];
 } way_leg_t;
 
-// A leg for `session`, with the session's own face and an empty sentence.
+// A leg for `session`, with the session's own face and agent and an empty
+// sentence. way_leg reads the session's agent; way_leg_as is handed one
+// read earlier, on the session's thread, and reads only what never
+// changes while a load runs.
 way_leg_t way_leg(const way_session_t *session);
+way_leg_t way_leg_as(const way_session_t *session, const char *agent);
 
 // ── The I/O half ────────────────────────────────────────────────────────
 

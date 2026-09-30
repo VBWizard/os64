@@ -18,14 +18,19 @@ void way_say(way_session_t *s, const char *fmt, ...)
     va_end(args);
 }
 
-way_leg_t way_leg(const way_session_t *s)
+way_leg_t way_leg_as(const way_session_t *s, const char *agent)
 {
     way_leg_t leg;
     os64_memset(&leg, 0, sizeof(leg));
     leg.session = s;
-    leg.agent = s->agent;
+    leg.agent = agent;
     leg.face = s->face;
     return leg;
+}
+
+way_leg_t way_leg(const way_session_t *s)
+{
+    return way_leg_as(s, s->agent);
 }
 
 // ── Pages ───────────────────────────────────────────────────────────────
