@@ -472,11 +472,17 @@ static void check_tree(const char *what, const flow_box_t *b, const flow_box_t *
         check_tree(what, c, c->positioned ? NULL : b);
 }
 
-// The positioned list is every positioned box, each once, in tree order.
+// The positioned list is every positioned box, each once: counted in the
+// tree, and each found in the list exactly once.
 static void positioned_in_order(const flow_box_t *b, const flow_tree_t *t, int32_t *at, bool *ok)
 {
-    if (b->positioned)
-        *ok &= flow_positioned(t, (*at)++) == b;
+    if (b->positioned) {
+        int32_t seen = 0;
+        for (int32_t i = 0; i < flow_npositioned(t); i++)
+            seen += flow_positioned(t, i) == b;
+        *ok &= seen == 1;
+        (*at)++;
+    }
     for (const flow_box_t *c = b->first; c != NULL; c = c->next)
         positioned_in_order(c, t, at, ok);
 }
@@ -539,7 +545,7 @@ static void fuzz_one(const char *what, const char *html, size_t len)
             int32_t at = 0;
             bool listed = true;
             positioned_in_order(flow_root(t), t, &at, &listed);
-            expect("fuzz: the positioned list is every positioned box, in tree order",
+            expect("fuzz: the positioned list is every positioned box, each once",
                    listed && at == flow_npositioned(t), what);
         }
         flow_free(t);

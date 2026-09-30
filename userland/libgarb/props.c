@@ -107,8 +107,8 @@ static const char *const kDisplay[] = {
 // exactly this. A flex or grid container is laid out as the block or
 // inline-block it is on the outside, and flow-root as a block, which keeps a
 // page's `display: inline-block; display: inline-flex` fallback pattern
-// working; a sticky box as a relative one; a `z-index` in tree order; an
-// opacity between none and all as all. `contents` is not here: libflow
+// working; a sticky box as a relative one; an opacity between none and all
+// as all. `contents` is not here: libflow
 // gives such an element no box and flows its children into its parent,
 // which is what it says. The list is for the layouts a page writes
 // a fallback for — asks for one and is handed another — and each joins it
@@ -128,9 +128,6 @@ bool garb_set_approximated(const garb_set_t *set)
     const garb_val_t *v = &set->value;
     if (v->kind == GARB_V_WIDE)
         return false;
-    // Every integer: the stacking order is not laid out, only tree order.
-    if (set->prop == GARB_Z_INDEX)
-        return v->kind != GARB_V_KEYWORD;
     // 0 is not painted and 1 is painted, both as they say; what is between
     // needs a blend, and a calc() is not worked out here to know.
     if (set->prop == GARB_OPACITY) {

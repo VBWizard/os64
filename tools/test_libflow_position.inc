@@ -560,10 +560,142 @@ static void position_fixed_door_cases(void)
     sheeted_close(&q);
 }
 
+// z-index (P3): the paint order a flow_visit hands over, worked from
+// Appendix E, and what a click finds.
+static int seen_index(const Seen *s, const flow_box_t *b)
+{
+    for (int i = 0; i < s->n; i++)
+        if (s->v[i] == b)
+            return i;
+    return -1;
+}
+
+static const flow_box_t *box_with_id(const flow_tree_t *t, const os64_html_node_t *n, const char *id)
+{
+    for (const os64_html_node_t *c = n; c != NULL; c = c->next) {
+        const char *v = c->kind == OS64_HTML_ELEMENT && os64_html_attr(c, "id") != NULL
+                            ? os64_html_attr(c, "id")->value : NULL;
+        if (v != NULL && strcmp(v, id) == 0)
+            return flow_box_for(t, c);
+        const flow_box_t *in = box_with_id(t, c->first_child, id);
+        if (in != NULL)
+            return in;
+    }
+    return NULL;
+}
+
+static void position_zindex_cases(void)
+{
+    flow_point_t top = {0, 0};
+    // Four boxes over one corner and a line of text in the flow: D (-1)
+    // under the text, then C (auto, tree order), B (1), A (2) — A on top.
+    Sheeted q;
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0}"
+                     "div{position:absolute;top:0;left:0;width:100px;height:100px}"
+                     "#a{z-index:2} #b{z-index:1} #d{z-index:-1}</style>"
+                     "<div id=a>A</div><div id=b>B</div><div id=c>C</div><div id=d>D</div>"
+                     "<p id=t>text</p>",
+                 400, 600);
+    flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+    const os64_html_node_t *root = q.doc->document;
+    const flow_box_t *a = box_with_id(t, root, "a"), *b = box_with_id(t, root, "b");
+    const flow_box_t *c = box_with_id(t, root, "c"), *d = box_with_id(t, root, "d");
+    const flow_box_t *pt = box_with_id(t, root, "t");
+    Seen seen = {0};
+    flow_visit(t, (os64_gui_rect_t){0, 0, 400, 600}, top, seen_add, &seen);
+    int ia = seen_index(&seen, a), ib = seen_index(&seen, b), ic = seen_index(&seen, c);
+    int id = seen_index(&seen, d), ip = seen_index(&seen, pt);
+    expect("z-index: -1, the flow, auto, 1, 2 — in that order",
+           id >= 0 && ip > id && ic > ip && ib > ic && ia > ib, NULL);
+    expect("z-index: the list is in paint order",
+           flow_positioned(t, 0) == d && flow_positioned(t, 1) == c &&
+               flow_positioned(t, 2) == b && flow_positioned(t, 3) == a, NULL);
+    const flow_box_t *h = flow_hit(t, 4, 10, top);
+    expect("z-index: a click finds the highest", h != NULL && h->kind == FLOW_BOX_TEXT &&
+                                                    h->length == 1 && h->text[0] == 'A', NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A context keeps its members inside it: 100 in a context of 1 is
+    // under a sibling of 2. A positioned parent with no z-index is no
+    // context, and lends it 100 in the root's: it is on top.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0}"
+                     ".box{position:absolute;top:0;left:0;width:100px;height:100px}"
+                     ".kid{position:absolute;z-index:100;top:0;left:0;width:50px;height:50px}"
+                     "</style><div class=box style='z-index:1'><div class=kid>K</div></div>"
+                     "<div class=box style='z-index:2'>P</div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    h = t != NULL ? flow_hit(t, 4, 10, top) : NULL;
+    expect("z-index: a member stays inside its context", h != NULL && h->kind == FLOW_BOX_TEXT &&
+                                                             h->text[0] == 'P', NULL);
+    flow_free(t);
+    sheeted_close(&q);
+    sheeted_open(&q, "<!doctype html><style>body{margin:0}"
+                     ".box{position:absolute;top:0;left:0;width:100px;height:100px}"
+                     ".kid{position:absolute;z-index:100;top:0;left:0;width:50px;height:50px}"
+                     "</style><div class=box><div class=kid>K</div></div>"
+                     "<div class=box style='z-index:2'>P</div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    h = t != NULL ? flow_hit(t, 4, 10, top) : NULL;
+    expect("z-index: a parent that is no context lends its members to the root's",
+           h != NULL && h->kind == FLOW_BOX_TEXT && h->text[0] == 'K', NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A form control made block-level — by positioning, or `display: block`
+    // from a sheet — is still a control: listed, and its box says which.
+    {
+        char *got = cascade_layout_of("<!doctype html><style>body{margin:0}"
+                                      ".b{display:block;width:100px}"
+                                      ".a{position:absolute;top:50px;left:0}</style>"
+                                      "<input name=x class=b><input name=y class=a>", 400);
+        expect("a block-level control is a control, by display or by position",
+               got != NULL && strstr(got, "replaced input 0 0 100 20 control 0\n") != NULL &&
+                   strstr(got, " control 1 positioned\n") != NULL, got);
+        free(got);
+    }
+
+    // Fable's first carry-in: a custom checkbox whose real input is raised
+    // over its stand-in by z-index keeps its widget: the pointer reaches
+    // the input at its centre. In tree order the stand-in, written after
+    // it, would answer there.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0}"
+                     "label{position:relative;display:inline-block;width:20px;height:20px}"
+                     "input{position:absolute;z-index:1;opacity:0;top:0;left:0;margin:0;"
+                     "width:20px;height:20px} .box{position:absolute;top:0;left:0;width:20px;"
+                     "height:20px;background:silver}</style>"
+                     "<label><input type=checkbox name=c><span class=box></span></label>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *in = t != NULL ? flow_control(t, 0) : NULL;
+    expect("z-index: a raised invisible input keeps its widget",
+           in != NULL && !flow_box_covered(t, in, top), NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // And the second: a fixed header written first with a z-index stays
+    // over the page's content in a relative wrapper written after it,
+    // which tree order would have painted over it.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0}"
+                     ".h{position:fixed;top:0;left:0;right:0;height:30px;z-index:10}"
+                     ".wrap{position:relative} .long{height:1000px}</style>"
+                     "<div class=h>header</div><div class=wrap><p class=long>content</p></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    h = t != NULL ? flow_hit(t, 4, 510, (flow_point_t){0, 500}) : NULL;
+    expect("z-index: a raised fixed header is over a relative wrapper written after it",
+           h != NULL && h->fixed, NULL);
+    flow_free(t);
+    sheeted_close(&q);
+}
+
 static void position_cases(void)
 {
     position_style_cases();
     position_layout_cases();
     position_door_cases();
     position_fixed_door_cases();
+    position_zindex_cases();
 }
