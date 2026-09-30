@@ -704,6 +704,54 @@ static void flex_picture_cases(void)
                FLEX_IDS("a"), FLEX_WANT({0, 0, 70, -1}));
 }
 
+// Wrapping, reversed and limited (Quinn's round on #182; Chrome's answers).
+static void flex_wrap_round2_cases(void)
+{
+    // A wrapped column's stretch is held to the item's max-width: 50 in
+    // lines of 100.
+    flex_rects("flex: a wrapped column's stretch keeps max-width",
+               "#o{display:flex;flex-flow:column wrap;width:200px;height:100px}"
+               " #a,#b{height:60px;max-width:50px}</style><div id=o><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 50, 60}, {100, 0, 50, 60}));
+    // wrap-reverse puts the cross start at the far side, and a stretch
+    // item that cannot fill its line sits there.
+    flex_rects("flex: an unfilled stretch item sits at the reversed cross start",
+               "#o{display:flex;flex-wrap:wrap-reverse;width:100px;height:100px} #o>div{width:60px}"
+               "</style><div id=o><div id=a style=height:20px></div><div id=b style=height:40px></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 80, 60, 20}, {0, 20, 60, 40}));
+    flex_rects("flex: an unfilled stretch item sits at the reversed cross start of a column",
+               "#o{display:flex;flex-flow:column wrap-reverse;width:100px;height:100px}"
+               " #o>div{height:60px}</style>"
+               "<div id=o><div id=a style=width:20px></div><div id=b style=width:40px></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({80, 0, 20, 60}, {20, 0, 40, 60}));
+    // `start` is the writing mode's, which wrap-reverse does not turn:
+    // lines packed at the top, items at their line's top.
+    flex_rects("flex: align-content start under wrap-reverse is the top",
+               "#o{display:flex;flex-wrap:wrap-reverse;width:100px;height:100px;align-content:start}"
+               " #o>div{width:60px;height:20px}</style><div id=o><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 20, 60, 20}, {0, 0, 60, 20}));
+    flex_rects("flex: align-items start under wrap-reverse is the top",
+               "#o{display:flex;flex-wrap:wrap-reverse;width:100px;height:100px;align-items:start}"
+               " #o>div{width:40px}</style>"
+               "<div id=o><div id=a style=height:20px></div><div id=b style=height:40px></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 40, 20}, {40, 0, 40, 40}));
+    // A wrapped row-reverse takes its baseline from its first line's
+    // startmost item (b's 60), never from a later line.
+    flex_rects("flex: a wrapped row-reverse baseline is its first line's",
+               "#o{display:inline-flex;flex-flow:row-reverse wrap;width:20px;align-items:flex-start}"
+               " #a{width:10px;height:20px} #b{width:10px;height:60px} #x{width:20px;height:30px}"
+               " #c{display:inline-block;width:10px;height:20px}</style>"
+               "<div><div id=o><div id=a></div><div id=b></div><div id=x></div></div><div id=c></div></div>",
+               FLEX_IDS("c"), FLEX_WANT({20, 40, 10, 20}));
+    // A min-height over the max-height is the room a column wraps in: one
+    // line of 80 in its 100.
+    flex_rects("flex: a column wraps in a min-height over its max-height",
+               "#o{display:flex;flex-flow:column wrap;width:200px;min-height:100px;max-height:50px;"
+               "align-content:start} #o>div{width:20px;height:40px}</style>"
+               "<div id=o><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b", "o"), FLEX_WANT({0, 0, 20, 40}, {0, 40, 20, 40}, {0, 0, 200, 100}));
+}
+
 static void flex_cases(void)
 {
     flex_row_cases();
@@ -715,4 +763,5 @@ static void flex_cases(void)
     flex_wrap_review_cases();
     flex_nested_cases();
     flex_picture_cases();
+    flex_wrap_round2_cases();
 }
