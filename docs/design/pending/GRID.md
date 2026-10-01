@@ -147,15 +147,17 @@ anonymous items, `FBox.grid` beside `FBox.flex`, `inline-grid` an atom.
    rule for a size not known — one fr is the most any `fr` row or item in
    one asks of it, so `1fr 2fr` over items 30 and 20 tall is 30 and 60.
    `auto` rows stretch into a given height, or a min-height. An item's
-   automatic minimum down its rows is as across: its content's height,
-   or a `min-height` the page gave, or only its frame when it scrolls. A
+   minimum contribution down its rows is as across (§ 6.6): a height the
+   page gave, whatever its `min-height`; else its automatic minimum — a
+   `min-height` the page gave, only its frame when it scrolls, or its
+   content's height. A
    percentage row gap counts as nothing while a height not given is found,
    and is of that height once it is (Box Alignment 3 § 8.3).
 6. **Alignment**: each item moved down into its rows by `align-self`
    (`stretch` heightens its box; `baseline` is read as `start`, booked),
-   auto margins taking the room first, and across to where it was laid
-   out in its columns — a refit plans the grid again, and may put it in
-   others; and the tracks placed in the container by `justify-content`
+   auto margins taking the room first, and across into its columns by
+   `justify-self`, at the width it was laid out at — a refit plans the
+   grid again, and may put it in others; and the tracks placed in the container by `justify-content`
    and `align-content` where they leave room — overflowing tracks centred
    or ended all the same.
 7. **The container's height**: its `height`, or its rows and gaps, held to
@@ -167,9 +169,9 @@ its items' min-content, or max-content, `fr` tracks as their minimum or
 their items' max-content — and the gaps.
 
 **A grid container's baseline** (§ 10.8, `grid_baseline`): its first
-item's in grid order — the lowest row, then the leftmost column — made
-from its border box's bottom edge when it holds no text, as a flex
-container's is.
+item's in grid order — the lowest row, then the leftmost column, then
+`order` — made from its border box's bottom edge when it holds no text, as
+a flex container's is.
 
 **Absolute children** are placed at the content box's corner (the grid
 area as their containing block is booked).

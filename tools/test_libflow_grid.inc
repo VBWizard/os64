@@ -356,6 +356,46 @@ static void grid_round1_cases(void)
                "#o{display:grid;width:100px;grid-auto-rows:20px} #s{height:10px}</style>"
                "<div id=o></div><div id=s></div>",
                FLEX_IDS("o", "s"), FLEX_WANT({0, 0, 100, 0}, {0, 0, -1, 10}));
+    // A size the page gave is the item's minimum contribution whatever its
+    // min-height or min-width: the next row at 150, the next column at 150.
+    flex_rects("grid: a given height is its row minimum whatever min-height says",
+               "#o{display:grid;width:100px;height:100px;grid-template-rows:1fr 1fr}"
+               " #a{height:150px;min-height:0} #b{height:20px}</style>"
+               "<div id=o><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("b"), FLEX_WANT({0, 150, 100, 20}));
+    flex_rects("grid: a given width is its column minimum whatever min-width says",
+               "#o{display:grid;width:100px;grid-template-columns:1fr 1fr}"
+               " #a{width:150px;min-width:0;height:5px} #b{width:20px;height:5px}</style>"
+               "<div id=o><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("b"), FLEX_WANT({150, 0, 20, 5}));
+    // A refit that moves items into other columns places them by their
+    // alignment in those: all three end, and centre, in the first 20px
+    // column.
+    flex_rects("grid: a refit places items by their alignment in their new columns",
+               "#o{display:grid;width:100px;grid-template-rows:100px} #i{display:grid;width:100px;"
+               "grid-auto-flow:column;grid-template-rows:repeat(auto-fill,20px);"
+               "grid-auto-columns:20px 40px 60px;justify-items:end} #i>div{height:10px;width:10px}</style>"
+               "<div id=o><div id=i><div id=p></div><div id=q></div><div id=r></div></div></div>",
+               FLEX_IDS("p", "q", "r"), FLEX_WANT({10, 0, 10, 10}, {10, 20, 10, 10}, {10, 40, 10, 10}));
+    flex_rects("grid: a refit centres items in their new columns",
+               "#o{display:grid;width:100px;grid-template-rows:100px} #i{display:grid;width:100px;"
+               "grid-auto-flow:column;grid-template-rows:repeat(auto-fill,20px);"
+               "grid-auto-columns:20px 40px 60px;justify-items:center} #i>div{height:10px;width:10px}</style>"
+               "<div id=o><div id=i><div id=p></div><div id=q></div><div id=r></div></div></div>",
+               FLEX_IDS("p", "q", "r"), FLEX_WANT({5, 0, 10, 10}, {5, 20, 10, 10}, {5, 40, 10, 10}));
+    // Two items in one cell: the first in `order` gives the baseline,
+    // b's 40, so the inline-block sits at 20.
+    flex_rects("grid: two items in one cell give the baseline by order",
+               "#o{display:inline-grid;grid-template-columns:40px;grid-template-rows:80px}"
+               " #a,#b{grid-area:1/1} #a{height:20px} #b{height:40px;order:-1}"
+               " #c{display:inline-block;width:10px;height:20px}</style>"
+               "<div><div id=o><div id=a></div><div id=b></div></div><div id=c></div></div>",
+               FLEX_IDS("c"), FLEX_WANT({40, 20, 10, 20}));
+    // Flowing by column, an empty grid has no row either.
+    flex_rects("grid: an empty column-flow grid has no implicit row",
+               "#o{display:grid;width:100px;grid-auto-flow:column;grid-auto-rows:20px}"
+               " #s{height:10px}</style><div id=o></div><div id=s></div>",
+               FLEX_IDS("o", "s"), FLEX_WANT({0, 0, 100, 0}, {0, 0, -1, 10}));
     // A percentage row gap is nothing while the height is found (40), and
     // half of it after: the second row at 40.
     flex_rects("grid: a percentage row gap is of the height it found",

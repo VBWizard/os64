@@ -1969,16 +1969,19 @@ static bool flex_baseline(const FBox *b, int64_t *out)
 }
 
 // A grid container's first baseline (Grid 2 § 10.8): its first item's in
-// grid order — the lowest row, then the leftmost column — made from its
-// border box's bottom edge when it holds no text. Items lined up by
-// baseline are read as `start` (GRID.md § Booked), so none takes part.
+// grid order — the lowest row, then the leftmost column, then `order`,
+// then the tree's — made from its border box's bottom edge when it holds
+// no text. Items lined up by baseline are read as `start` (GRID.md §
+// Booked), so none takes part.
 static bool grid_baseline(const FBox *b, int64_t *out)
 {
     const FBox *pick = NULL;
     for (const FBox *c = b->first; c != NULL; c = c->next)
         if (!c->out_of_flow && c->placed &&
             (pick == NULL || c->grid_row < pick->grid_row ||
-             (c->grid_row == pick->grid_row && c->grid_col < pick->grid_col)))
+             (c->grid_row == pick->grid_row &&
+              (c->grid_col < pick->grid_col ||
+               (c->grid_col == pick->grid_col && c->style->order < pick->style->order)))))
             pick = c;
     if (pick == NULL)
         return false;
@@ -3354,7 +3357,7 @@ static bool place_items(L *l, const flow_style_t *s, GPlan *p, const int32_t *ne
         const GItem *it = &p->items[k];
         na = max64(na, it->fixed[A] || it->fixed[B] ? it->at[A][1] : it->span[A]);
     }
-    na = max64(1, min64(na, F_GRID_MAX));
+    na = min64(na, F_GRID_MAX);         // 0 with no items and no explicit tracks
     int32_t ca = 0, cb = 0, open = 0;
     for (int32_t k = 0; k < p->ni && ok; k++) {
         GItem *it = &p->items[p->ord[k]];
@@ -3831,7 +3834,13 @@ static void column_asks(L *l, GPlan *p, bool min_only)
         int64_t frame = hframe(c, 0);
         it->cmin = ci.min + m;
         it->cmax = (min_only ? ci.min : ci.max) + m;
-        if (cs->min_width.kind == FLOW_LENGTH_PX)
+        // Its minimum contribution (§ 6.6): a width the page gave is its
+        // size whatever its minimum; else its automatic minimum, a
+        // min-width the page gave, only its frame when it scrolls, or its
+        // content's.
+        if (cs->width.kind == FLOW_LENGTH_PX)
+            it->cauto = it->cmin;
+        else if (cs->min_width.kind == FLOW_LENGTH_PX)
             it->cauto = content_of(cs, cs->min_width, 0, frame) + frame + m;
         else if (f_overflow_scrolls(cs->overflow_x) || f_overflow_scrolls(cs->overflow_y))
             it->cauto = frame + m;
@@ -3864,6 +3873,28 @@ static Intr grid_intrinsic(L *l, FBox *b)
 
 // A grid container's items, from `in->y` down, content box `cx`..`cx + cw`.
 // On exit `in->y` is the content's bottom.
+// A grid item's left margin across an area `aw` wide, its border box `w`
+// wide: auto margins take the room first, else `justify-self` places it.
+static int64_t grid_ml(const flow_style_t *s, const FBox *c, int64_t aw, int64_t w)
+{
+    const flow_style_t *cs = c->style;
+    bool ml_auto = cs->margin[FLOW_LEFT].kind == FLOW_LENGTH_AUTO;
+    bool mr_auto = cs->margin[FLOW_RIGHT].kind == FLOW_LENGTH_AUTO;
+    int64_t ml = ml_auto ? 0 : len(cs->margin[FLOW_LEFT], aw);
+    int64_t mr = mr_auto ? 0 : len(cs->margin[FLOW_RIGHT], aw);
+    int64_t room = aw - (ml + w + mr);
+    flow_place_t a = self_align(cs->justify_self, s->justify_items, c);
+    if (ml_auto || mr_auto) {
+        if (room > 0)
+            ml += ml_auto && mr_auto ? room / 2 : ml_auto ? room : 0;
+    } else if (a == FLOW_PLACE_END) {
+        ml += room;
+    } else if (a == FLOW_PLACE_CENTER) {
+        ml += room / 2;
+    }
+    return ml;
+}
+
 // A grid's plan and its columns, sized and placed in the width `cw`; `ch`
 // its content height, -1 when not known. False on no memory, the plan
 // then partly filled — plan_free takes it either way.
@@ -3908,10 +3939,12 @@ static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t c
         int64_t vf = c->border[FLOW_TOP] + c->padding[FLOW_TOP] + c->padding[FLOW_BOTTOM] +
                      c->border[FLOW_BOTTOM];
         it->cmin = it->cmax = m + natural_h(c);
-        // Its automatic minimum, as column_asks has it across: a
-        // min-height the page gave, nothing but its frame when it scrolls,
-        // else its content's.
-        if (cs->min_height.kind == FLOW_LENGTH_PX)
+        // Its minimum contribution, as column_asks has it across: a height
+        // the page gave; else a min-height the page gave, nothing but its
+        // frame when it scrolls, or its content's.
+        if (cs->height.kind == FLOW_LENGTH_PX)
+            it->cauto = it->cmin;
+        else if (cs->min_height.kind == FLOW_LENGTH_PX)
             it->cauto = content_of(cs, cs->min_height, 0, vf) + vf + m;
         else if (f_overflow_scrolls(cs->overflow_x) || f_overflow_scrolls(cs->overflow_y))
             it->cauto = vf + m;
@@ -3940,8 +3973,7 @@ static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t c
     place_tracks(rows, p->n[1], s->align_content, total - tracks_extent(rows, p->n[1]));
 
     // Each item moved into its area: down into its rows, and across into
-    // its columns at the place it was laid out at in them (a plan made
-    // again for a refit may put it in others).
+    // its columns (a plan made again for a refit may put it in others).
     for (int32_t j = 0; j < p->ni; j++) {
         GItem *it = &p->items[j];
         FBox *c = it->box;
@@ -3971,7 +4003,11 @@ static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t c
         set_item_h(l, styles, c, h);
         int64_t rdx, rdy;
         laid_offset(c, cw, &rdx, &rdy);
-        translate(c, cx + cols[it->at[0][0]].pos + c->area_dx - c->x,
+        // Across, its place in this area's width: the width it was laid out
+        // at, placed again by its alignment. A table placed itself, and
+        // keeps where it was laid out in its area (area_dx).
+        int64_t ax = c->kind == FB_TABLE ? c->area_dx : grid_ml(s, c, aw, c->w) + rdx;
+        translate(c, cx + cols[it->at[0][0]].pos + ax - c->x,
                   top + r0->pos + mt + dy + rdy - c->y);
         c->grid_row = it->at[1][0];
         c->grid_col = it->at[0][0];
@@ -4036,18 +4072,9 @@ static void grid_layout(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_
                 cwid = clamp_width(cs, max64(0, aw - ml - mr - frame), aw, frame);
             else
                 cwid = fit_content(l, c, aw);
-            int64_t room = aw - (ml + frame + cwid + mr);
-            if (ml_auto || mr_auto) {
-                if (room > 0)
-                    ml += ml_auto && mr_auto ? room / 2 : ml_auto ? room : 0;
-            } else if (a == FLOW_PLACE_END) {
-                ml += room;
-            } else if (a == FLOW_PLACE_CENTER) {
-                ml += room / 2;
-            }
             c->flex_sized = true;
             c->flex_w = cwid;
-            c->flex_ml = ml;
+            c->flex_ml = grid_ml(s, c, aw, frame + cwid);
         }
         block(l, styles, c, ax, aw, &cur);
         c->area_dx = c->x - ax;
