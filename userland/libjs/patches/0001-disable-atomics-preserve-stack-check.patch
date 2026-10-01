@@ -1,0 +1,16 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -66,11 +66,8 @@
+ #define CONFIG_PRINTF_RNDN
+ #endif
+ 
+-/* define to include Atomics.* operations which depend on the OS
+-   threads */
+-#if !defined(__EMSCRIPTEN__)
+-#define CONFIG_ATOMICS
+-#endif
++/* Atomics are omitted by the os64 standalone profile. Keep stack checks
++   enabled independently of this feature choice. */
+ 
+ #if !defined(__EMSCRIPTEN__)
+ /* enable stack limitation */
