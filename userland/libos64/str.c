@@ -51,6 +51,50 @@ bool os64_streq(const char *a, const char *b)
     return *a == *b;        // both at their NUL == same string
 }
 
+int os64_strcmp(const char *a, const char *b)
+{
+    const unsigned char *left = (const unsigned char *)a;
+    const unsigned char *right = (const unsigned char *)b;
+    while (*left && *left == *right) {
+        left++;
+        right++;
+    }
+    return (int)*left - (int)*right;
+}
+
+char *os64_strchr(const char *s, int c)
+{
+    unsigned char byte = (unsigned char)c;
+    for (;;) {
+        if ((unsigned char)*s == byte)
+            return (char *)s;
+        if (!*s)
+            return NULL;
+        s++;
+    }
+}
+
+char *os64_strrchr(const char *s, int c)
+{
+    unsigned char byte = (unsigned char)c;
+    const char *last = NULL;
+    do {
+        if ((unsigned char)*s == byte)
+            last = s;
+    } while (*s++);
+    return (char *)last;
+}
+
+void *os64_memchr(const void *block, int c, size_t n)
+{
+    const unsigned char *bytes = (const unsigned char *)block;
+    unsigned char byte = (unsigned char)c;
+    for (size_t i = 0; i < n; i++)
+        if (bytes[i] == byte)
+            return (void *)(bytes + i);
+    return NULL;
+}
+
 // ASCII only, deliberately: os64 has no locale and a config key is written in
 // the same 26 letters everywhere. A table-driven fold would be a lie about
 // capabilities this system does not have.

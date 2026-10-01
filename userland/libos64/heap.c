@@ -990,11 +990,11 @@ static heap_block_t *block_from_user_pointer(void *ptr, heap_region_t **region_o
 	heap_region_t *r = region_of(ptr);
 
 	if (r == NULL)
-		heap_die("free of a pointer this heap never handed out", ptr, 0,
+		heap_die("heap pointer is outside allocated regions", ptr, 0,
 		         HEAP_EXIT_FREE_BAD);
 
 	if (((uintptr_t)ptr & (HEAP_ALIGN - 1)) != 0)
-		heap_die("free of a misaligned pointer", ptr, (uintptr_t)ptr & (HEAP_ALIGN - 1),
+		heap_die("heap pointer is misaligned", ptr, (uintptr_t)ptr & (HEAP_ALIGN - 1),
 		         HEAP_EXIT_FREE_BAD);
 
 	heap_block_t *b = payload_block(ptr);
@@ -1002,17 +1002,17 @@ static heap_block_t *block_from_user_pointer(void *ptr, heap_region_t **region_o
 	if (block_canary_ok(b))
 	{
 		if (!block_in_use(b))
-			heap_die("free of a block that is already free (double free)",
+			heap_die("heap pointer refers to a freed block",
 			         ptr, b->canary, HEAP_EXIT_FREE_BAD);
 	}
 	else
 	{
 		// A freed block's canary uses the FREE seed. If THAT is what we are
-		// looking at, this is a double free and deserves to be named as one
+		// looking at, this is a freed block and deserves to be named as one
 		// rather than reported as generic corruption.
 		if (b->canary == heap_canary_for(b, block_size(b), false,
 		                                 (b->size_flags & HEAP_DEDICATED) != 0))
-			heap_die("free of a block that is already free (double free)",
+			heap_die("heap pointer refers to a freed block",
 			         ptr, b->canary, HEAP_EXIT_FREE_BAD);
 
 		heap_die("block header canary is wrong — the heap has been stomped",
@@ -1021,6 +1021,20 @@ static heap_block_t *block_from_user_pointer(void *ptr, heap_region_t **region_o
 
 	*region_out = r;
 	return b;
+}
+
+size_t os64_malloc_size(const void *ptr)
+{
+	if (ptr == NULL)
+		return 0;
+	if (!gInited)
+		os64_heap_init();
+	heap_lock();
+	heap_region_t *region = NULL;
+	heap_block_t *block = block_from_user_pointer((void *)ptr, &region);
+	size_t capacity = (size_t)(block_size(block) - sizeof(heap_block_t));
+	heap_unlock();
+	return capacity;
 }
 
 // Fill the body with poison, skipping the bytes the allocator itself is about

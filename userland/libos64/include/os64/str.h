@@ -46,9 +46,24 @@ size_t os64_strcopy(char *dst, size_t cap, const char *src);
 // Compare two NUL-terminated strings for exact equality. A bool, not a
 // three-way int: every caller in this tree so far (husk's str_eq, echo's
 // str_is) wanted "are these the same word", and `strcmp(a,b) == 0` reading as
-// "equal" has confused people for fifty years. Ordering comparison arrives if
-// something ever needs to SORT — consumer-driven, like everything else here.
+// "equal" has confused people for fifty years. Use os64_strcmp when a
+// three-way ordering comparison is required.
 bool os64_streq(const char *a, const char *b);
+
+// Compare NUL-terminated strings as unsigned bytes. The sign of the result
+// gives their lexical ordering; zero means equal. Both strings must be valid.
+int os64_strcmp(const char *a, const char *b);
+
+// Find the first/last byte matching (unsigned char)c in a valid NUL-terminated
+// string. The terminating NUL participates in the search. NULL if absent;
+// the returned pointer borrows the input storage and does not grant write access.
+char *os64_strchr(const char *s, int c);
+char *os64_strrchr(const char *s, int c);
+
+// Find the first byte matching (unsigned char)c in the first n bytes. The
+// block need not be a string; n == 0 permits a NULL block. NULL if absent.
+// The returned pointer borrows the block and does not grant write access.
+void *os64_memchr(const void *block, int c, size_t n);
 
 // The same, ignoring ASCII letter case. `os64_streq_nocase` and not the
 // traditional `strieq`/`strcasecmp` spelling: the `i` infix is fifty-year-old
