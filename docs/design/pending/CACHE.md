@@ -63,7 +63,8 @@ fields and a clock, so the host harness drives them with no network:
    either no redirect or only permanent ones (301, 308) — each held to what
    it said about keeping it (`way_chain_t`): a redirect's `no-store` keeps
    nothing, its `no-cache` and `must-revalidate` become the entry's, and an
-   explicit freshness shorter than the reply's holds the entry to it; one
+   explicit freshness shorter than the reply's holds the entry to when it
+   ends, counted from the redirect's own arrival; one
    that says nothing is kept by heuristic, as § 4.2.2 lets a 301 or 308 be.
    A `no-cache` reply is kept, and asked about every time it is used. It is
    kept under
@@ -79,13 +80,17 @@ fields and a clock, so the host harness drives them with no network:
    no-cache` without a `Cache-Control`).
 3. **Fresh**: served from the disk, and nothing goes out.
 4. **Stale, with a validator**: asked again with `If-None-Match` (the
-   ETag) or `If-Modified-Since` (the Last-Modified), on every hop of the
-   way. A 304 — from the address asked for, or from the address the entry
-   came from at the end of the redirects — serves the stored body and
-   rewrites the entry with the 304's fields and the redirects', which is
-   what restarts its freshness; when those forbid keeping it any longer,
-   the entry is removed. Anything else is a new reply, kept or not by rule
-   1, and one not kept removes the entry it would have replaced.
+   ETag) or `If-Modified-Since` (the Last-Modified) — when the entry came
+   from the address asked for. A validator is the RESOURCE's, two
+   resources may share one (RFC 9110 § 8.8.1), and libfetch sends a
+   request's headers on every hop, so an entry reached through redirects
+   is fetched whole when stale. A 304 from the resource asked about serves
+   the stored body and rewrites the entry with the 304's fields and any
+   redirects', which is what restarts its freshness; when those forbid
+   keeping it any longer, the entry is removed. A 304 from elsewhere (the
+   address redirects now) validates nothing: the question goes again
+   without the condition. Anything else is a new reply, kept or not by
+   rule 1, and one not kept removes the entry it would have replaced.
 5. **Stale, without one**: fetched as if it were not there.
 6. **The network down**: a stale entry is served when the fetch cannot
    reach the server at all (no dial, or silence before a head), unless it
@@ -155,9 +160,11 @@ button is the way to a truly fresh load.
   temp file ignored, eviction, two windows under one cap.
 - `tools/test_way_fetch_host.sh`: `way_fetch_whole` end to end, the real
   libfetch and cache against scripted peers and a temporary directory —
-  a 304 at the end of a permanent redirect, a 304 that ends an entry, a
-  redirect's `no-cache`, `no-store` and shorter freshness, a caching field
-  too long to read, and the caller's options left as they were.
+  a validator asked only of the resource it belongs to, another
+  resource's 304 asked again, a 304 that ends an entry, a redirect's
+  `no-cache`, `no-store` and shorter freshness (its time running while the
+  chain is followed), a caching field too long to read or hidden behind an
+  escaped quote, and the caller's options left as they were.
 - The guest: danlegt.com in yonder twice; the second load's pictures and
   sheets come off the disk (the status line and `ls /var/cache/yonder`);
   Settings shows the count, Clear empties it, the next load fetches again.

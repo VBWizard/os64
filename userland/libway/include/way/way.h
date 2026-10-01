@@ -210,7 +210,8 @@ typedef struct {
 
 // A GET of `url` read whole, of at most `cap` bytes, through the hooks'
 // cache when it has one (CACHE.md): served from it while fresh, asked
-// again with its validator when stale, kept when the reply allows. `opt`
+// again with its validator when stale (fetched whole, when it came through
+// redirects), kept when the reply allows. `opt`
 // carries the rest of the request — agent, accept, extra headers — and is
 // the caller's; the hooks are set on it here. True when there is a body
 // whole, whatever its status: a 404's page is a body. False with

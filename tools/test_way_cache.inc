@@ -175,6 +175,13 @@ static void keep_rules(void)
            way_keep_read(&f, D, &k) && k.max_age == 0 && !way_keep_fresh(&k, D), NULL);
     f = fields("max-age=\"30\"", "", "");
     expect("keep: a quoted max-age", way_keep_read(&f, D, &k) && k.max_age == 30, NULL);
+    // An escaped quote inside a quoted value ends nothing: what follows the
+    // value is still read.
+    f = fields("x=\"a\\\"b\", no-store", "", "");
+    expect("keep: an escaped quote does not hide a no-store", !way_keep_read(&f, D, &k), NULL);
+    f = fields("x=\"a\\\"b, c\", no-cache", "", "");
+    expect("keep: nor a no-cache after a comma inside quotes",
+           way_keep_read(&f, D, &k) && k.no_cache, NULL);
 
     f = fields("max-age=60", "", "");
     snprintf(f.vary, sizeof(f.vary), "Accept-Encoding");
@@ -327,6 +334,17 @@ static void chain_rules(void)
     (void)way_keep_read(&end, D, &k);
     expect("chain: a redirect's own age counts", way_chain_apply(&chain, &k, D) &&
            way_keep_fresh(&k, D + 39) && !way_keep_fresh(&k, D + 41), NULL);
+    // ...and from when it came, not when the chain is laid over the reply:
+    // a second-long redirect two seconds before is spent.
+    way_chain_start(&chain);
+    hop = fields("max-age=1", kDate, "");
+    way_chain_hop(&chain, &hop, D);
+    end = fields("max-age=600", kDate, "");
+    (void)way_keep_read(&end, D + 2, &k);
+    expect("chain: a redirect's time runs while the chain is followed",
+           way_chain_apply(&chain, &k, D + 2) && !way_keep_fresh(&k, D + 2) && k.max_age >= 0,
+           NULL);
+    end = fields("max-age=600", kDate, "");
     // A longer-lived one limits nothing.
     way_chain_start(&chain);
     hop = fields("max-age=86400", kDate, "");

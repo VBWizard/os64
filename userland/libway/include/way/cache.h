@@ -73,8 +73,8 @@ bool way_keep_stale_ok(const way_keep_t *k);
 typedef struct {
     bool no_store;                      // one forbade keeping, or could not be read
     bool no_cache, must_revalidate;
-    int64_t left;                       // seconds of explicit freshness the
-                                        // shortest-lived had left; -1 when none said
+    int64_t until;                      // when the shortest-lived explicit freshness
+                                        // ends, this machine's clock; -1 when none said
 } way_chain_t;
 
 void way_chain_start(way_chain_t *chain);

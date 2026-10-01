@@ -51,7 +51,11 @@ static bool member(Members *m, const char **name, size_t *nlen, const char **val
     size_t start = m->at;
     bool quoted = false;
     while (m->at < m->len && (quoted || m->s[m->at] != ',')) {
-        if (m->s[m->at] == '"')
+        // A quoted-pair inside a quoted string (RFC 9110 § 5.6.4) is one
+        // character, whatever it is: an escaped quote ends nothing.
+        if (quoted && m->s[m->at] == '\\' && m->at + 1 < m->len)
+            m->at++;
+        else if (m->s[m->at] == '"')
             quoted = !quoted;
         m->at++;
     }
@@ -240,7 +244,7 @@ bool way_keep_stale_ok(const way_keep_t *k)
 void way_chain_start(way_chain_t *chain)
 {
     os64_memset(chain, 0, sizeof(*chain));
-    chain->left = -1;
+    chain->until = -1;
 }
 
 void way_chain_hop(way_chain_t *chain, const os64_fetch_keep_t *fields, int64_t now)
@@ -255,8 +259,8 @@ void way_chain_hop(way_chain_t *chain, const os64_fetch_keep_t *fields, int64_t 
     if (k.max_age < 0 && k.expires < 0)
         return;
     int64_t left = way_keep_lifetime(&k) - way_keep_age(&k, now);
-    left = left < 0 ? 0 : left;
-    chain->left = chain->left < 0 || left < chain->left ? left : chain->left;
+    int64_t until = now + (left < 0 ? 0 : left);
+    chain->until = chain->until < 0 || until < chain->until ? until : chain->until;
 }
 
 bool way_chain_apply(const way_chain_t *chain, way_keep_t *k, int64_t now)
@@ -265,10 +269,12 @@ bool way_chain_apply(const way_chain_t *chain, way_keep_t *k, int64_t now)
         return false;
     k->no_cache |= chain->no_cache;
     k->must_revalidate |= chain->must_revalidate;
-    // Fresh no longer than the chain is: a max-age that ends `left` seconds
-    // from now, on the reply's own clock.
-    if (chain->left >= 0) {
-        int64_t end = way_keep_age(k, now) + chain->left;
+    // Fresh no longer than the chain is: a max-age that ends when the
+    // shortest-lived redirect did, on the reply's own clock — time spent
+    // on the hops after it, and on the body, already counted against it.
+    if (chain->until >= 0) {
+        int64_t end = way_keep_age(k, now) + (chain->until - now);
+        end = end < 0 ? 0 : end;
         if (end < way_keep_lifetime(k))
             k->max_age = end;
     }

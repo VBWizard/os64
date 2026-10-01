@@ -63,6 +63,7 @@ int64_t os64_ticks(os64_ticks_t *t)
 typedef struct {
     const char *host;
     const char *replies[REPLIES_MAX];   // NULL: the dial is refused
+    int64_t waits[REPLIES_MAX];         // seconds the clock moves when it is dialed
     int n, next;
 } peer_t;
 static peer_t s_peers[8];
@@ -79,12 +80,18 @@ static peer_t *peer(const char *host)
     return p;
 }
 
-// The next dial of `host` gets `reply`; NULL refuses it.
-static void script(const char *host, const char *reply)
+// The next dial of `host` gets `reply`, `wait` seconds later on the
+// clock; NULL refuses it.
+static void script_wait(const char *host, const char *reply, int64_t wait)
 {
     peer_t *p = peer(host);
     assert(p->n < REPLIES_MAX);
+    p->waits[p->n] = wait;
     p->replies[p->n++] = reply;
+}
+static void script(const char *host, const char *reply)
+{
+    script_wait(host, reply, 0);
 }
 
 typedef struct {
@@ -113,6 +120,7 @@ int64_t os64_dial(const char *dialstring)
             p->next++;
             return -3;                  // refused
         }
+        s_clock += p->waits[p->next];
         for (int h = 0; h < 8; h++)
             if (!s_conns[h].open) {
                 memset(&s_conns[h], 0, sizeof(s_conns[h]));
@@ -329,26 +337,72 @@ static void options_left_alone(void)
            NULL);
 }
 
-static void redirect_then_304(void)
+// A validator is the kept resource's: asked only of the address the
+// entry came from, and a 304 from anywhere else validates nothing (RFC 9110
+// § 8.8.1: two resources may share one).
+static void validator_identity(void)
 {
+    // Reached through a redirect: stale, it is fetched whole, and the
+    // validator of the end of the chain goes nowhere.
     fresh();
     const char *moved = "HTTP/1.1 301 Moved Permanently\r\nLocation: http://b.test/y\r\n"
                         "Content-Length: 0\r\n\r\n";
     script("a.test", moved);
     script("b.test", kOld);
     script("a.test", moved);
-    script("b.test", "HTTP/1.1 304 Not Modified\r\n\r\n");
+    script("b.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nNEW");
     way_whole_t w;
-    expect("redirect 304: a first load through the redirect",
+    expect("validator: a first load through a redirect",
            whole("http://a.test/x", &w, NULL) && body_is(&w, "OLD"), NULL);
     free(w.bytes);
-    bool ok = whole("http://a.test/x", &w, NULL);
-    expect("redirect 304: the kept body, confirmed at the redirect's end",
-           ok && w.status == 200 && w.served == WAY_SERVED_CONFIRMED && body_is(&w, "OLD"), NULL);
+    expect("validator: stale through a redirect, fetched whole",
+           whole("http://a.test/x", &w, NULL) && w.served == WAY_SERVED_NETWORK &&
+           body_is(&w, "NEW"), NULL);
     free(w.bytes);
-    int b = 1;
-    expect("redirect 304: asked with its validator at the end of the chain",
-           strstr(s_last_request[b], "If-None-Match: \"v1\"") != NULL, s_last_request[b]);
+    expect("validator: the end of the chain was not asked with it",
+           strstr(s_last_request[1], "If-None-Match") == NULL, s_last_request[1]);
+    expect("validator: nor the address that redirected",
+           strstr(s_last_request[0], "If-None-Match") == NULL, s_last_request[0]);
+
+    // The address that redirected stops redirecting: its own answer, never
+    // the end of the old chain's body.
+    fresh();
+    script("a.test", moved);
+    script("b.test", kOld);
+    script("a.test", "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nETag: \"v1\"\r\n\r\nMINE");
+    (void)whole("http://a.test/x", &w, NULL);
+    free(w.bytes);
+    expect("validator: a former redirect's own answer",
+           whole("http://a.test/x", &w, NULL) && body_is(&w, "MINE") &&
+           strstr(s_last_request[0], "If-None-Match") == NULL, s_last_request[0]);
+    free(w.bytes);
+
+    // Kept directly, then the address redirects: the other resource's 304
+    // validates nothing, and the question is asked again without it.
+    fresh();
+    script("a.test", kOld);
+    script("a.test", moved);
+    script("b.test", "HTTP/1.1 304 Not Modified\r\n\r\n");
+    script("a.test", moved);
+    script("b.test", "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nTHEM");
+    (void)whole("http://a.test/x", &w, NULL);
+    free(w.bytes);
+    bool ok = whole("http://a.test/x", &w, NULL);
+    expect("validator: another resource's 304 is asked again, whole",
+           ok && w.status == 200 && body_is(&w, "THEM") && w.served == WAY_SERVED_NETWORK, NULL);
+    free(w.bytes);
+
+    // Kept directly and still there: its 304 is its own.
+    fresh();
+    script("a.test", kOld);
+    script("a.test", "HTTP/1.1 304 Not Modified\r\n\r\n");
+    (void)whole("http://a.test/x", &w, NULL);
+    free(w.bytes);
+    ok = whole("http://a.test/x", &w, NULL);
+    expect("validator: its own 304 confirms it",
+           ok && w.served == WAY_SERVED_CONFIRMED && body_is(&w, "OLD") &&
+           strstr(s_last_request[0], "If-None-Match: \"v1\"") != NULL, s_last_request[0]);
+    free(w.bytes);
 }
 
 static void restrictive_304(void)
@@ -418,6 +472,23 @@ static void redirect_restrictions(void)
            whole("http://i.test/", &w, NULL) && body_is(&w, "NEW") && s_dials > before, NULL);
     free(w.bytes);
 
+    // The redirect's minute counts from when it came, not from when the
+    // body did: a second-long redirect, then two seconds for the body, and
+    // the entry is stale when stored.
+    fresh();
+    script("n.test", "HTTP/1.1 301 Moved\r\nLocation: http://o.test/\r\nCache-Control: max-age=1\r\n"
+                     "Date: Wed, 30 Sep 2026 08:55:09 GMT\r\nContent-Length: 0\r\n\r\n");
+    script_wait("o.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=600\r\n"
+                          "Date: Wed, 30 Sep 2026 08:55:09 GMT\r\n\r\nOLD", 2);
+    script("n.test", "HTTP/1.1 301 Moved\r\nLocation: http://p.test/\r\nContent-Length: 0\r\n\r\n");
+    script("p.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nNEW");
+    (void)whole("http://n.test/", &w, NULL);
+    free(w.bytes);
+    before = s_dials;
+    expect("redirect max-age: its time counts from its own arrival",
+           whole("http://n.test/", &w, NULL) && body_is(&w, "NEW") && s_dials > before, NULL);
+    free(w.bytes);
+
     // A permanent redirect that says nothing is kept by heuristic, as before.
     fresh();
     script("k.test", "HTTP/1.1 308 Permanent\r\nLocation: http://l.test/\r\nContent-Length: 0\r\n\r\n");
@@ -451,6 +522,18 @@ static void field_too_long(void)
     expect("long field: a Cache-Control too long to read is no permission to keep",
            !whole("http://m.test/", &w, NULL), NULL);
     free(w.bytes);
+
+    // An escaped quote in an extension's value does not hide a no-store.
+    fresh();
+    script("q.test", "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nCache-Control: x=\"a\\\"b\", no-store\r\n"
+                     "Last-Modified: Wed, 23 Sep 2026 20:36:58 GMT\r\nDate: Wed, 30 Sep 2026 08:55:09 GMT\r\n"
+                     "\r\nSECRET");
+    script("q.test", NULL);
+    (void)whole("http://q.test/", &w, NULL);
+    free(w.bytes);
+    expect("escaped quote: the no-store after it is read", !whole("http://q.test/", &w, NULL),
+           NULL);
+    free(w.bytes);
 }
 
 int main(void)
@@ -463,7 +546,7 @@ int main(void)
     s_cache = way_cache_open(s_dir, 1 << 24);
     s_jar = way_jar_new();
     options_left_alone();
-    redirect_then_304();
+    validator_identity();
     restrictive_304();
     redirect_restrictions();
     field_too_long();

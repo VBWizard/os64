@@ -178,14 +178,31 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
         return true;
     }
     // The question that asks whether it changed goes out on a copy: the
-    // caller's options outlive this frame, and its conditions do not.
+    // caller's options outlive this frame, and its conditions do not. A
+    // validator is the kept RESOURCE's, and two resources may share one
+    // (RFC 9110 § 8.8.1): it is asked only when the entry came from the
+    // address asked for, since libfetch sends a request's headers on every
+    // hop. One reached through redirects is fetched whole when stale.
     char conditions[OS64_FETCH_EXTRA_MAX];
     os64_fetch_options_t ask = *opt;
-    if (have && way_keep_conditions(&e->keep, conditions, sizeof(conditions)) > 0)
+    bool asked = have && os64_streq(e->final, url) &&
+                 way_keep_conditions(&e->keep, conditions, sizeof(conditions)) > 0;
+    if (asked)
         ask.extra_headers = conditions;
 
     os64_fetch_t *f = os64_fetch_open(url, &ask);
     const os64_fetch_head_t *head = f != NULL ? os64_fetch_head(f) : NULL;
+    // A 304 from another resource — the address redirects now — validates
+    // nothing kept here: asked again, without the condition.
+    if (asked && head != NULL && head->status == 304 && !os64_streq(head->url_text, e->final)) {
+        os64_fetch_close(f);
+        hooks->passing_hop = false;
+        way_chain_start(&hooks->chain);
+        ask.extra_headers = opt->extra_headers;
+        asked = false;
+        f = os64_fetch_open(url, &ask);
+        head = f != NULL ? os64_fetch_head(f) : NULL;
+    }
     out->fetch = f != NULL ? os64_fetch_status(f) : OS64_FETCH_NO_MEMORY;
     bool served = false;
     if (head == NULL) {
@@ -198,12 +215,12 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
             way_cache_count(cache, WAY_SERVED_STALE);
             kept = NULL;
         }
-    } else if (have && head->status == 304 && (head->hops == 0 || os64_streq(head->url_text, e->final))) {
-        // Not modified: the kept body — the 304 is about the resource kept,
-        // asked for directly or at the end of the redirects that led to it —
-        // with what the 304 and the redirects said laid over what was kept,
-        // which starts its freshness again. When they forbid keeping it any
-        // longer, it goes; this once, it is still the answer.
+    } else if (asked && head->status == 304) {
+        // Not modified: the kept body — the 304 is the kept resource's,
+        // since it came from the address the entry came from — with what
+        // the 304 and any redirects on the way said laid over what was
+        // kept, which starts its freshness again. When they forbid keeping
+        // it any longer, it goes; this once, it is still the answer.
         bool keep = !hooks->passing_hop && way_keep_confirm(&e->keep, &head->keep, now_utc()) &&
                     way_chain_apply(&hooks->chain, &e->keep, now_utc());
         if (keep)
