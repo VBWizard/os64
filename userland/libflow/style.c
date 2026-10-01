@@ -320,6 +320,7 @@ static flow_style_t initial(const Ctx *c)
     s.opacity = 1000;
     s.flex_shrink = 1000;
     s.align_self = FLOW_PLACE_AUTO;
+    s.justify_self = FLOW_PLACE_AUTO;
     // Margins and padding start at 0px — NOT at zero bytes, which is `auto`.
     for (int i = 0; i < 4; i++) {
         s.margin[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
@@ -330,7 +331,8 @@ static flow_style_t initial(const Ctx *c)
     // normal, disc outside, separate, top, no float, static with auto
     // insets, z-index auto, and a row that does not wrap, its alignments
     // normal, its items growing by nothing from an auto basis, order 0,
-    // and gaps of normal.
+    // and gaps of normal; no grid tracks or areas, auto-placement by rows,
+    // and auto lines.
     return s;
 }
 
@@ -1346,6 +1348,7 @@ static double length_px(const Author *a, const garb_val_t *v, double font)
     case GARB_U_CM: return n * 96 / 2.54 * FLOW_UNITS_PER_PX;
     case GARB_U_MM: return n * 96 / 25.4 * FLOW_UNITS_PER_PX;
     case GARB_U_Q: return n * 96 / 101.6 * FLOW_UNITS_PER_PX;
+    case GARB_U_FR: break;          // a track's share, never a length
     }
     return 0;
 }
@@ -1514,9 +1517,7 @@ static bool author_display(const garb_val_t *v, flow_display_t *out)
         "table-column-group", "table-column", "table-cell", "table-caption", "contents",
         "flow-root", "flex", "inline-flex", "grid", "inline-grid",
     };
-    // An inline table is laid out as a table, and a grid container as the
-    // block or inline-block it is on the outside, until libflow has its
-    // layout (GARB.md § Booked).
+    // An inline table is laid out as a table (GARB.md § Booked).
     static const flow_display_t as[] = {
         FLOW_DISPLAY_NONE, FLOW_DISPLAY_BLOCK, FLOW_DISPLAY_INLINE, FLOW_DISPLAY_INLINE_BLOCK,
         FLOW_DISPLAY_LIST_ITEM, FLOW_DISPLAY_TABLE, FLOW_DISPLAY_TABLE,
@@ -1524,8 +1525,8 @@ static bool author_display(const garb_val_t *v, flow_display_t *out)
         FLOW_DISPLAY_TABLE_FOOTER_GROUP, FLOW_DISPLAY_TABLE_ROW,
         FLOW_DISPLAY_TABLE_COLUMN_GROUP, FLOW_DISPLAY_TABLE_COLUMN, FLOW_DISPLAY_TABLE_CELL,
         FLOW_DISPLAY_TABLE_CAPTION, FLOW_DISPLAY_CONTENTS, FLOW_DISPLAY_BLOCK,
-        FLOW_DISPLAY_FLEX, FLOW_DISPLAY_INLINE_FLEX, FLOW_DISPLAY_BLOCK,
-        FLOW_DISPLAY_INLINE_BLOCK,
+        FLOW_DISPLAY_FLEX, FLOW_DISPLAY_INLINE_FLEX, FLOW_DISPLAY_GRID,
+        FLOW_DISPLAY_INLINE_GRID,
     };
     int32_t i = pick(v, words, F_ARRAY(words));
     if (i < 0)
@@ -1814,6 +1815,26 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_ORDER: d->order = s->order; break;
     case GARB_ROW_GAP: dst->row_gap = src->row_gap; break;
     case GARB_COLUMN_GAP: dst->column_gap = src->column_gap; break;
+    case GARB_GRID_TEMPLATE_COLUMNS: d->grid_template_columns = s->grid_template_columns; break;
+    case GARB_GRID_TEMPLATE_ROWS: d->grid_template_rows = s->grid_template_rows; break;
+    case GARB_GRID_AUTO_COLUMNS: d->grid_auto_columns = s->grid_auto_columns; break;
+    case GARB_GRID_AUTO_ROWS: d->grid_auto_rows = s->grid_auto_rows; break;
+    case GARB_GRID_TEMPLATE_AREAS:
+        d->grid_areas = s->grid_areas;
+        d->ngrid_areas = s->ngrid_areas;
+        d->grid_area_rows = s->grid_area_rows;
+        d->grid_area_cols = s->grid_area_cols;
+        break;
+    case GARB_GRID_AUTO_FLOW:
+        d->grid_auto_flow_column = s->grid_auto_flow_column;
+        d->grid_dense = s->grid_dense;
+        break;
+    case GARB_GRID_ROW_START: d->grid_row_start = s->grid_row_start; break;
+    case GARB_GRID_ROW_END: d->grid_row_end = s->grid_row_end; break;
+    case GARB_GRID_COLUMN_START: d->grid_column_start = s->grid_column_start; break;
+    case GARB_GRID_COLUMN_END: d->grid_column_end = s->grid_column_end; break;
+    case GARB_JUSTIFY_ITEMS: d->justify_items = s->justify_items; break;
+    case GARB_JUSTIFY_SELF: d->justify_self = s->justify_self; break;
     default: break;
     }
 }
@@ -1877,6 +1898,204 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
     out->text_indent = len_of(parent->text_indent);
     out->fs_kind = FS_PX;
     out->fs_v = parent->font_size;
+}
+
+// ── Grid values (GRID.md § Pass 1) ──────────────────────────────────────
+
+// A track's sizing function at one end: a flexible share, a keyword, or a
+// length-percentage, resolved here as any other length is.
+static bool author_breadth(const Author *a, const garb_val_t *v, flow_breadth_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (v->kind == GARB_V_LENGTH && v->unit == GARB_U_FR) {
+        out->kind = FLOW_TRACK_FR;
+        out->fr = round_i32((v->number > 1e6 ? 1e6 : v->number) * 1000);
+        return true;
+    }
+    if (v->kind == GARB_V_KEYWORD) {
+        out->kind = word(v, "min-content")   ? FLOW_TRACK_MIN_CONTENT
+                    : word(v, "max-content") ? FLOW_TRACK_MAX_CONTENT
+                                             : FLOW_TRACK_AUTO;
+        return true;
+    }
+    Len l;
+    if (!author_len(a, v, false, &l))
+        return false;
+    out->kind = FLOW_TRACK_FIXED;
+    out->len = resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0});
+    return true;
+}
+
+// A track size (§ 7.2.1): minmax(min, max), fit-content(len), or one
+// breadth that is both ends — except `<n>fr`, whose minimum is `auto`.
+static bool author_track(const Author *a, const garb_val_t *v, flow_track_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (v->kind == GARB_V_FUNCTION && os64_streq(v->keyword, "minmax") && v->nitems == 2)
+        return author_breadth(a, &v->items[0], &out->min) &&
+               author_breadth(a, &v->items[1], &out->max);
+    if (v->kind == GARB_V_FUNCTION && os64_streq(v->keyword, "fit-content") && v->nitems == 1) {
+        out->min.kind = FLOW_TRACK_AUTO;
+        out->fit = true;
+        return author_breadth(a, &v->items[0], &out->max);
+    }
+    if (!author_breadth(a, v, &out->max))
+        return false;
+    out->min = out->max;
+    if (out->min.kind == FLOW_TRACK_FR)
+        out->min = (flow_breadth_t){FLOW_TRACK_AUTO, {FLOW_LENGTH_AUTO, 0, 0}, 0};
+    return true;
+}
+
+// How many times a repeat() repeats: its count, held to the bound before
+// it is made an integer (a count may be any size the page writes); an
+// auto-repeat's tracks once.
+static int64_t repeat_times(const garb_val_t *count)
+{
+    if (count->kind != GARB_V_NUMBER)
+        return 1;
+    return count->number > F_GRID_MAX ? F_GRID_MAX : (int64_t)count->number;
+}
+
+// What reading a grid value came to: a value to keep, one to leave the
+// property as it was for, or no memory — which fails the element, as any
+// allocation of the style pass does.
+typedef enum { GRID_READ_OK, GRID_READ_UNUSABLE, GRID_READ_NO_MEMORY } GridRead;
+
+// A track list with each repeat(n) written out, into the styles arena, and
+// held to F_GRID_MAX tracks; an auto-repeat's tracks are kept once and
+// marked (flow_tracks_t).
+static GridRead author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (v->kind == GARB_V_KEYWORD)
+        return word(v, "none") || word(v, "auto") ? GRID_READ_OK : GRID_READ_UNUSABLE;
+    // A single size (grid-auto-*) is a list of one.
+    const garb_val_t *items = v->kind == GARB_V_TRACKS ? v->items : v;
+    int32_t n = v->kind == GARB_V_TRACKS ? v->nitems : 1;
+    int64_t total = 0;
+    for (int32_t i = 0; i < n; i++) {
+        const garb_val_t *t = &items[i];
+        if (t->kind == GARB_V_FUNCTION && os64_streq(t->keyword, "repeat") && t->nitems == 2)
+            total += repeat_times(&t->items[0]) * t->items[1].nitems;
+        else
+            total++;
+    }
+    if (total > F_GRID_MAX)
+        total = F_GRID_MAX;
+    flow_track_t *tracks = f_arena_alloc(&a->c->out->arena, (size_t)total * sizeof(*tracks));
+    if (tracks == NULL)
+        return GRID_READ_NO_MEMORY;
+    int32_t k = 0;
+    for (int32_t i = 0; i < n && k < total; i++) {
+        const garb_val_t *t = &items[i];
+        if (!(t->kind == GARB_V_FUNCTION && os64_streq(t->keyword, "repeat") && t->nitems == 2)) {
+            if (!author_track(a, t, &tracks[k++]))
+                return GRID_READ_UNUSABLE;
+            continue;
+        }
+        const garb_val_t *inner = &t->items[1];
+        bool automatic = t->items[0].kind == GARB_V_KEYWORD;
+        int64_t times = repeat_times(&t->items[0]);
+        if (automatic) {
+            out->repeat_at = k;
+            out->repeat_n = inner->nitems;
+            out->repeat_fit = word(&t->items[0], "auto-fit");
+        }
+        for (int64_t r = 0; r < times && k < total; r++)
+            for (int32_t j = 0; j < inner->nitems && k < total; j++)
+                if (!author_track(a, &inner->items[j], &tracks[k++]))
+                    return GRID_READ_UNUSABLE;
+    }
+    if (out->repeat_n > 0 && out->repeat_at + out->repeat_n > k)
+        out->repeat_n = 0;      // held to the bound before it was met
+    out->tracks = tracks;
+    out->n = k;
+    return GRID_READ_OK;
+}
+
+// grid-template-areas' strings into rectangles, one per name (the grammar
+// checked that each name is one).
+static GridRead author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
+{
+    s->grid_areas = NULL;
+    s->ngrid_areas = s->grid_area_rows = s->grid_area_cols = 0;
+    if (v->kind != GARB_V_STRING || v->nitems <= 0)
+        return word(v, "none") ? GRID_READ_OK : GRID_READ_UNUSABLE;
+    int32_t rows = v->nitems;
+    int32_t cols = garb_area_cells(v->items[0].text, (uint32_t)v->items[0].len, NULL, 0);
+    if (cols <= 0 || (int64_t)rows * cols > F_GRID_AREA_CELLS)
+        return GRID_READ_UNUSABLE;
+    garb_area_cell_t cells[F_GRID_AREA_CELLS];
+    for (int32_t r = 0; r < rows; r++)
+        if (garb_area_cells(v->items[r].text, (uint32_t)v->items[r].len, cells + r * cols,
+                            cols) != cols)
+            return GRID_READ_UNUSABLE;
+    flow_grid_area_t *areas = f_arena_alloc(&a->c->out->arena,
+                                            (size_t)rows * cols * sizeof(*areas));
+    if (areas == NULL)
+        return GRID_READ_NO_MEMORY;
+    int32_t n = 0;
+    for (int32_t k = 0; k < rows * cols; k++) {
+        garb_area_cell_t name = cells[k];
+        if (name.len == 0)
+            continue;
+        int32_t found = -1;
+        for (int32_t j = 0; j < n && found < 0; j++)
+            if (areas[j].name_len == name.len &&
+                os64_memcmp(areas[j].name, name.text, name.len) == 0)
+                found = j;
+        int32_t r = k / cols, c = k % cols;
+        if (found < 0) {
+            char *copy = f_arena_alloc(&a->c->out->arena, name.len);
+            if (copy == NULL)
+                return GRID_READ_NO_MEMORY;
+            os64_memcpy(copy, name.text, name.len);
+            areas[n++] = (flow_grid_area_t){copy, name.len, r, r + 1, c, c + 1};
+            continue;
+        }
+        flow_grid_area_t *ar = &areas[found];
+        ar->row1 = r + 1 > ar->row1 ? r + 1 : ar->row1;
+        ar->col1 = c + 1 > ar->col1 ? c + 1 : ar->col1;
+    }
+    s->grid_areas = areas;
+    s->ngrid_areas = n;
+    s->grid_area_rows = rows;
+    s->grid_area_cols = cols;
+    return GRID_READ_OK;
+}
+
+// A grid line (§ 8.3). A span of a NAME is a span of one: it counts lines
+// of that name, and names in brackets are dropped (GRID.md, decision 3).
+static GridRead author_line(Author *a, const garb_val_t *v, flow_grid_line_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (v->kind == GARB_V_KEYWORD)
+        return GRID_READ_OK;            // auto
+    if (v->kind == GARB_V_NUMBER) {
+        double n = v->number;
+        out->kind = FLOW_GRID_LINE_NUMBER;
+        out->n = n > 10000 ? 10000 : n < -10000 ? -10000 : (int32_t)n;
+        return GRID_READ_OK;
+    }
+    if (v->kind == GARB_V_FUNCTION && os64_streq(v->keyword, "span") && v->nitems == 1) {
+        out->kind = FLOW_GRID_LINE_SPAN;
+        out->n = 1;
+        if (v->items[0].kind == GARB_V_NUMBER)
+            out->n = v->items[0].number > F_GRID_MAX ? F_GRID_MAX : (int32_t)v->items[0].number;
+        return GRID_READ_OK;
+    }
+    if (v->kind == GARB_V_STRING && v->len > 0) {
+        char *copy = f_arena_alloc(&a->c->out->arena, v->len);
+        if (copy == NULL)
+            return GRID_READ_NO_MEMORY;
+        os64_memcpy(copy, v->text, v->len);
+        out->kind = FLOW_GRID_LINE_NAME;
+        out->name = copy;
+        out->name_len = (uint32_t)v->len;
+        return GRID_READ_OK;
+    }
+    return GRID_READ_UNUSABLE;
 }
 
 // One winner that is not a CSS-wide keyword.
@@ -2163,6 +2382,57 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         if (v->kind == GARB_V_NUMBER)
             s->order = round_i32(v->number);
         break;
+    case GARB_GRID_TEMPLATE_COLUMNS: case GARB_GRID_TEMPLATE_ROWS:
+    case GARB_GRID_AUTO_COLUMNS: case GARB_GRID_AUTO_ROWS: {
+        flow_tracks_t t;
+        GridRead r = author_tracks(a, v, &t);
+        if (r == GRID_READ_NO_MEMORY)
+            return false;
+        if (r != GRID_READ_OK)
+            break;
+        *(p == GARB_GRID_TEMPLATE_COLUMNS ? &s->grid_template_columns
+          : p == GARB_GRID_TEMPLATE_ROWS  ? &s->grid_template_rows
+          : p == GARB_GRID_AUTO_COLUMNS   ? &s->grid_auto_columns
+                                          : &s->grid_auto_rows) = t;
+        break;
+    }
+    case GARB_GRID_TEMPLATE_AREAS:
+        if (author_areas(a, v, s) == GRID_READ_NO_MEMORY)
+            return false;
+        break;
+    case GARB_GRID_AUTO_FLOW:
+        if (v->kind == GARB_V_KEYWORD) {
+            s->grid_auto_flow_column = word(v, "column") || word(v, "column dense");
+            s->grid_dense = word(v, "row dense") || word(v, "column dense");
+        }
+        break;
+    case GARB_GRID_ROW_START: case GARB_GRID_ROW_END:
+    case GARB_GRID_COLUMN_START: case GARB_GRID_COLUMN_END: {
+        flow_grid_line_t l;
+        GridRead r = author_line(a, v, &l);
+        if (r == GRID_READ_NO_MEMORY)
+            return false;
+        if (r == GRID_READ_OK)
+            *(p == GARB_GRID_ROW_START      ? &s->grid_row_start
+              : p == GARB_GRID_ROW_END      ? &s->grid_row_end
+              : p == GARB_GRID_COLUMN_START ? &s->grid_column_start
+                                            : &s->grid_column_end) = l;
+        break;
+    }
+    case GARB_JUSTIFY_ITEMS: case GARB_JUSTIFY_SELF: {
+        // The alignment table, and `legacy` read as `normal`: all it adds
+        // is taking an ancestor's `legacy center`, which is not read (Box
+        // Alignment 3 § 6.1).
+        static const char *const words[] = {
+            "normal", "auto", "stretch", "flex-start", "flex-end", "center", "baseline",
+            "start", "end", "self-start", "self-end", "left", "right"};
+        i = pick(v, words, F_ARRAY(words));
+        if (i < 0 && word(v, "legacy"))
+            i = FLOW_PLACE_NORMAL;
+        if (i >= 0)
+            *(p == GARB_JUSTIFY_ITEMS ? &s->justify_items : &s->justify_self) = (flow_place_t)i;
+        break;
+    }
     case GARB_ROW_GAP: case GARB_COLUMN_GAP: {
         Len *gap = p == GARB_ROW_GAP ? &sp->row_gap : &sp->column_gap;
         if (word(v, "normal"))
@@ -2322,8 +2592,12 @@ static bool blockify(flow_style_t *s)
         s->specified_inline = true;
         s->display = FLOW_DISPLAY_FLEX;
         break;
+    case FLOW_DISPLAY_INLINE_GRID:
+        s->specified_inline = true;
+        s->display = FLOW_DISPLAY_GRID;
+        break;
     case FLOW_DISPLAY_TABLE: case FLOW_DISPLAY_LIST_ITEM: case FLOW_DISPLAY_BLOCK:
-    case FLOW_DISPLAY_FLEX:
+    case FLOW_DISPLAY_FLEX: case FLOW_DISPLAY_GRID:
         break;
     default:
         // A table's parts: § 9.7's table makes each a block.
@@ -2345,9 +2619,10 @@ static void positioning(const Ctx *c, Spec *sp)
         s->has_background = false;
 }
 
-// `flex_item`: the element's box is its parent's flex item, and is
-// blockified (Flexbox 1 § 4) — as an out-of-flow one already was.
-static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool flex_item)
+// `item`: the element's box is its parent's flex or grid item, and is
+// blockified (Flexbox 1 § 4, Grid 2 § 6) — as an out-of-flow one already
+// was.
+static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item)
 {
     flow_style_t *s = &sp->s;
     if (sp->fs_kind != FS_INHERIT)
@@ -2370,7 +2645,7 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool flex
     for (int i = 0; i < 4; i++)
         s->inset[i] = resolve(sp->inset[i], s->font_size, automatic);
     positioning(c, sp);
-    if (flex_item && !f_out_of_flow(s))
+    if (item && !f_out_of_flow(s))
         (void)blockify(s);
     // CSS Overflow 3 § 3: visible and clip do not stand beside an axis
     // that scrolls or hides.
@@ -2455,10 +2730,11 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         if (!author(c, n, &sp, &ua, parent))
             return NULL;
     }
-    finish(c, &sp, parent, up != NULL && up->flex_items);
+    finish(c, &sp, parent, up != NULL && up->lays_out_items);
     out->style = sp.s;
-    out->flex_items = f_display_flex(sp.s.display) ||
-                      (sp.s.display == FLOW_DISPLAY_CONTENTS && up != NULL && up->flex_items);
+    out->lays_out_items = f_display_flex(sp.s.display) || f_display_grid(sp.s.display) ||
+                          (sp.s.display == FLOW_DISPLAY_CONTENTS && up != NULL &&
+                           up->lays_out_items);
     if (n == c->doc->html)
         c->root_font = sp.s.font_size;
     out->link = c->model != NULL ? os64_page_link_for(c->model, n) : -1;
@@ -2494,6 +2770,7 @@ static bool contributes_block(const FStyled *child)
         return false;
     switch (child->style.display) {
     case FLOW_DISPLAY_NONE: case FLOW_DISPLAY_INLINE_BLOCK: case FLOW_DISPLAY_INLINE_FLEX:
+    case FLOW_DISPLAY_INLINE_GRID:
         return false;
     case FLOW_DISPLAY_INLINE: case FLOW_DISPLAY_CONTENTS:
         return child->holds_block;

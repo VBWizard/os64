@@ -546,10 +546,84 @@ OUT: invalid
 IN: grid-gap: 4px 8px
 OUT: row-gap: 4px; column-gap: 8px
 
+# ── Grids (Grid 2 § 7, § 8; Box Alignment 3 § 5, § 6) ──
+IN: display: grid
+OUT: display: grid
+IN: grid-template-columns: repeat(6, 1fr)
+OUT: grid-template-columns: repeat(6, 1fr)
+IN: grid-template-columns: 92px 1fr
+OUT: grid-template-columns: 92px 1fr
+IN: grid-template-columns: minmax(140px, 42%) 1fr
+OUT: grid-template-columns: minmax(140px, 42%) 1fr
+IN: grid-template-columns: repeat(auto-fill, minmax(104px, 1fr))
+OUT: grid-template-columns: repeat(auto-fill, minmax(104px, 1fr))
+IN: grid-template-columns: repeat(auto-fit, 1fr)
+OUT: invalid
+IN: grid-template-columns: repeat(auto-fill, 10px) repeat(auto-fill, 10px)
+OUT: invalid
+IN: grid-template-columns: [full-start] minmax(0, 1fr) [main-start] 60ch [main-end] 1fr [full-end]
+OUT: grid-template-columns: minmax(0px, 1fr) 60ch 1fr
+IN: grid-template-columns: minmax(1fr, 2fr)
+OUT: invalid
+IN: grid-template-columns: fit-content(200px) auto max-content
+OUT: grid-template-columns: fit-content(200px) auto max-content
+IN: grid-template-columns: -1px
+OUT: invalid
+IN: grid-template-columns: repeat(0, 1fr)
+OUT: invalid
+IN: grid-template-rows: none
+OUT: grid-template-rows: none
+IN: width: 1fr
+OUT: invalid
+IN: grid-auto-rows: 150px
+OUT: grid-auto-rows: 150px
+IN: grid-auto-rows: minmax(100px, auto) 20px
+OUT: grid-auto-rows: minmax(100px, auto) 20px
+IN: grid-auto-rows: repeat(2, 1fr)
+OUT: invalid
+IN: grid-template-areas: "head head" "side main"
+OUT: grid-template-areas: "head head" "side main"
+IN: grid-template-areas: "a . ." "a ... b"
+OUT: grid-template-areas: "a . ." "a ... b"
+IN: grid-template-areas: "a b a"
+OUT: invalid
+IN: grid-template-areas: "a b" "c"
+OUT: invalid
+IN: grid-template-areas: "a$b"
+OUT: invalid
+IN: grid-auto-flow: dense
+OUT: grid-auto-flow: row dense
+IN: grid-auto-flow: dense column
+OUT: grid-auto-flow: column dense
+IN: grid-auto-flow: row column
+OUT: invalid
+IN: grid-column: span 2
+OUT: grid-column-start: span 2; grid-column-end: auto
+IN: grid-column: 1 / -1
+OUT: grid-column-start: 1; grid-column-end: -1
+IN: grid-column: 0
+OUT: invalid
+IN: grid-row: header
+OUT: grid-row-start: "header"; grid-row-end: "header"
+IN: grid-area: main
+OUT: grid-row-start: "main"; grid-column-start: "main"; grid-row-end: "main"; grid-column-end: "main"
+IN: grid-area: 1 / 2 / 3
+OUT: grid-row-start: 1; grid-column-start: 2; grid-row-end: 3; grid-column-end: auto
+IN: grid-row: 2 header
+OUT: invalid
+IN: place-items: center
+OUT: align-items: center; justify-items: center
+IN: place-items: start end
+OUT: align-items: start; justify-items: end
+IN: place-content: space-between center
+OUT: align-content: space-between; justify-content: center
+IN: place-self: auto stretch
+OUT: align-self: auto; justify-self: stretch
+IN: justify-items: legacy
+OUT: justify-items: legacy
+
 # ── What libgarb does not read here ──
 IN: transform: none
-OUT: unknown
-IN: grid-template-columns: 1fr
 OUT: unknown
 IN: --panel: 10px
 OUT: unknown

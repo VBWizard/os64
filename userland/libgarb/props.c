@@ -93,6 +93,18 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_ORDER] = {"order", false},
     [GARB_ROW_GAP] = {"row-gap", false},
     [GARB_COLUMN_GAP] = {"column-gap", false},
+    [GARB_GRID_TEMPLATE_COLUMNS] = {"grid-template-columns", false},
+    [GARB_GRID_TEMPLATE_ROWS] = {"grid-template-rows", false},
+    [GARB_GRID_TEMPLATE_AREAS] = {"grid-template-areas", false},
+    [GARB_GRID_AUTO_COLUMNS] = {"grid-auto-columns", false},
+    [GARB_GRID_AUTO_ROWS] = {"grid-auto-rows", false},
+    [GARB_GRID_AUTO_FLOW] = {"grid-auto-flow", false},
+    [GARB_GRID_COLUMN_START] = {"grid-column-start", false},
+    [GARB_GRID_COLUMN_END] = {"grid-column-end", false},
+    [GARB_GRID_ROW_START] = {"grid-row-start", false},
+    [GARB_GRID_ROW_END] = {"grid-row-end", false},
+    [GARB_JUSTIFY_ITEMS] = {"justify-items", false},
+    [GARB_JUSTIFY_SELF] = {"justify-self", false},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -116,10 +128,8 @@ static const char *const kDisplay[] = {
 // Values this grammar reads but no slice lays out as written yet (GARB.md's
 // pile 2, POSITION.md's slices). Read, so the cascade keeps them; not
 // SUPPORTED, so @supports tells a page to use the fallback it wrote for
-// exactly this. A grid container is laid out as the block or inline-block
-// it is on the outside, and flow-root as a block, which keeps a page's
-// `display: inline-block; display: inline-grid` fallback pattern working;
-// an opacity between none and all as all. `contents` is not here:
+// exactly this. flow-root is laid out as a block; an opacity between none
+// and all as all. `contents` is not here:
 // libflow gives such an element no box and flows its children into its
 // parent, which is what it says. The list is for the layouts a page writes
 // a fallback for — asks for one and is handed another — and each joins it
@@ -129,7 +139,7 @@ static const struct {
     garb_prop_t prop;
     const char *keyword;
 } kApproximated[] = {
-    {GARB_DISPLAY, "grid"}, {GARB_DISPLAY, "inline-grid"}, {GARB_DISPLAY, "flow-root"},
+    {GARB_DISPLAY, "flow-root"},
 };
 
 bool garb_set_approximated(const garb_set_t *set)
@@ -223,7 +233,19 @@ static const char *const kAlignContent[] = {"normal", "stretch", "flex-start", "
                                             "space-evenly", "start", "end", "baseline", NULL};
 static const char *const kBasisWords[] = {"auto", "content", "min-content", "max-content",
                                           "fit-content", NULL};
+static const char *const kJustifyItems[] = {"normal", "stretch", "start", "end", "center",
+                                            "left", "right", "self-start", "self-end",
+                                            "flex-start", "flex-end", "baseline", "legacy", NULL};
+static const char *const kJustifySelf[] = {"auto", "normal", "stretch", "start", "end", "center",
+                                           "left", "right", "self-start", "self-end",
+                                           "flex-start", "flex-end", "baseline", NULL};
 static const char *const kUnsafe[] = {"unsafe", NULL};
+// Grid 2 § 7.2: a track's sizing keywords, and repeat()'s automatic counts.
+static const char *const kTrackWords[] = {"auto", "min-content", "max-content", NULL};
+static const char *const kAutoRepeat[] = {"auto-fill", "auto-fit", NULL};
+static const char *const kFlowAxis[] = {"row", "column", NULL};
+static const char *const kDense[] = {"dense", NULL};
+static const char *const kSpan[] = {"span", NULL};
 static const char *const kFirst[] = {"first", NULL};
 static const char *const kRepeat[] = {"repeat-x", "repeat-y", NULL};
 static const char *const kRepeat2[] = {"repeat", "space", "round", "no-repeat", NULL};
@@ -1139,6 +1161,11 @@ typedef enum {
     G_BASIS,                // flex-basis: `words` | lp >= 0
     G_INTEGER,              // <integer>: order
     G_GAP,                  // normal | lp >= 0
+    G_TEMPLATE,             // grid-template-*: none | a track list
+    G_AUTO_TRACKS,          // grid-auto-*: one or more track sizes
+    G_AREAS,                // none | strings, a rectangle per name
+    G_AUTO_FLOW,            // [row | column] || dense
+    G_GRID_LINE,            // auto | <integer> | span <integer> | <custom-ident>
 } Grammar;
 
 typedef struct {
@@ -1192,9 +1219,338 @@ static const Longhand kLonghands[] = {
     {GARB_FLEX_GROW, G_FACTOR, NULL}, {GARB_FLEX_SHRINK, G_FACTOR, NULL},
     {GARB_FLEX_BASIS, G_BASIS, kBasisWords}, {GARB_ORDER, G_INTEGER, NULL},
     {GARB_ROW_GAP, G_GAP, NULL}, {GARB_COLUMN_GAP, G_GAP, NULL},
+    {GARB_GRID_TEMPLATE_COLUMNS, G_TEMPLATE, NULL}, {GARB_GRID_TEMPLATE_ROWS, G_TEMPLATE, NULL},
+    {GARB_GRID_TEMPLATE_AREAS, G_AREAS, NULL},
+    {GARB_GRID_AUTO_COLUMNS, G_AUTO_TRACKS, NULL}, {GARB_GRID_AUTO_ROWS, G_AUTO_TRACKS, NULL},
+    {GARB_GRID_AUTO_FLOW, G_AUTO_FLOW, NULL},
+    {GARB_GRID_COLUMN_START, G_GRID_LINE, NULL}, {GARB_GRID_COLUMN_END, G_GRID_LINE, NULL},
+    {GARB_GRID_ROW_START, G_GRID_LINE, NULL}, {GARB_GRID_ROW_END, G_GRID_LINE, NULL},
+    {GARB_JUSTIFY_ITEMS, G_ALIGN, kJustifyItems}, {GARB_JUSTIFY_SELF, G_ALIGN, kJustifySelf},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
+
+// ── Grid (Grid 2 § 7, § 8) ──────────────────────────────────────────────
+
+// A function's arguments, split at their commas: up to `max` cursors.
+static int32_t fn_args(const garb_value_t *f, VCur *args, int32_t max)
+{
+    int32_t n = 0, from = 0;
+    for (int32_t i = 0; i <= f->nchildren; i++) {
+        if (i == f->nchildren || f->children[i].kind == GARB_COMMA) {
+            if (n == max)
+                return -1;
+            args[n++] = (VCur){f->children + from, i - from, 0};
+            from = i + 1;
+        }
+    }
+    return n;
+}
+
+static bool is_fn(const garb_value_t *t, const char *name)
+{
+    return t != NULL && t->kind == GARB_FUNCTION && ieq(t->text, t->len, name);
+}
+
+static garb_val_t fn_val(Sets *s, const char *name, const garb_val_t *args, int32_t n)
+{
+    garb_val_t v = {0};
+    v.kind = GARB_V_FUNCTION;
+    v.keyword = name;
+    v.items = keep(s, args, n);
+    v.nitems = v.items != NULL ? n : 0;
+    v.comma = true;
+    return v;
+}
+
+// A track breadth: a length or percentage (never negative), a flexible
+// `<n>fr` where `flex` allows, or a sizing keyword where `words` does.
+static bool track_breadth(Sets *s, VCur *c, bool flex, bool words, garb_val_t *out)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL)
+        return false;
+    if (t->kind == GARB_DIMENSION && ieq(t->unit, t->unit_len, "fr")) {
+        if (!flex || t->number < 0)
+            return false;
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_LENGTH;
+        out->unit = GARB_U_FR;
+        out->number = t->number;
+        c->i++;
+        return true;
+    }
+    const char *k = words ? vc_keyword(c, kTrackWords) : NULL;
+    if (k != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, out);
+}
+
+static bool fixed_breadth(const garb_val_t *v)
+{
+    return v->kind == GARB_V_PERCENTAGE || v->kind == GARB_V_CALC ||
+           (v->kind == GARB_V_LENGTH && v->unit != GARB_U_FR);
+}
+
+// A track size (§ 7.2.1): a breadth, minmax(min, max) — whose minimum is
+// never flexible — or fit-content(length-percentage). `fixed` says it has
+// a fixed size at one end, which an auto-repeated track must.
+static bool track_size(Sets *s, VCur *c, garb_val_t *out, bool *fixed)
+{
+    const garb_value_t *t = vc_peek(c);
+    VCur args[2];
+    garb_val_t two[2];
+    if (is_fn(t, "minmax")) {
+        if (fn_args(t, args, 2) != 2 || !track_breadth(s, &args[0], false, true, &two[0]) ||
+            !vc_done(&args[0]) || !track_breadth(s, &args[1], true, true, &two[1]) ||
+            !vc_done(&args[1]))
+            return false;
+        c->i++;
+        *out = fn_val(s, "minmax", two, 2);
+        *fixed = fixed_breadth(&two[0]) || fixed_breadth(&two[1]);
+        return out->nitems == 2;
+    }
+    if (is_fn(t, "fit-content")) {
+        if (fn_args(t, args, 1) != 1 ||
+            !vc_dim(&args[0], ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, &two[0]) ||
+            !vc_done(&args[0]))
+            return false;
+        c->i++;
+        *out = fn_val(s, "fit-content", two, 1);
+        *fixed = false;
+        return out->nitems == 1;
+    }
+    if (!track_breadth(s, c, true, true, out))
+        return false;
+    *fixed = fixed_breadth(out);
+    return true;
+}
+
+// Line names in brackets, read and dropped (GRID.md, decision 3): each an
+// identifier, and never `span` or `auto`.
+static bool line_names(VCur *c)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL || t->kind != GARB_BLOCK || t->open != '[')
+        return true;
+    for (int32_t i = 0; i < t->nchildren; i++) {
+        const garb_value_t *n = &t->children[i];
+        if (n->kind == GARB_WHITESPACE)
+            continue;
+        if (n->kind != GARB_IDENT || ieq(n->text, n->len, "span") || ieq(n->text, n->len, "auto"))
+            return false;
+    }
+    c->i++;
+    return true;
+}
+
+// A track list (§ 7.2): track sizes and repeat()s, line names between.
+// `repeat` allows repeat(); `autos` counts the auto-repeats met, of which
+// a list may hold one, alongside fixed tracks only.
+static bool track_list(Sets *s, VCur *c, bool repeat, int *autos, bool *all_fixed, garb_val_t *out)
+{
+    garb_val_t tracks[GARB_TRACKS_MAX];
+    int32_t n = 0;
+    *all_fixed = true;
+    while (!vc_done(c)) {
+        if (!line_names(c))
+            return false;
+        if (vc_done(c))
+            break;
+        if (n == GARB_TRACKS_MAX)
+            return false;
+        const garb_value_t *t = vc_peek(c);
+        if (repeat && is_fn(t, "repeat")) {
+            VCur args[2];
+            garb_val_t two[2];
+            if (fn_args(t, args, 2) != 2)
+                return false;
+            const char *k = vc_keyword(&args[0], kAutoRepeat);
+            if (k != NULL) {
+                two[0] = kw(k);
+                (*autos)++;
+            } else {
+                const garb_value_t *count = vc_peek(&args[0]);
+                if (count == NULL || count->kind != GARB_NUMBER || !count->integer ||
+                    count->number < 1)
+                    return false;
+                args[0].i++;
+                os64_memset(&two[0], 0, sizeof(two[0]));
+                two[0].kind = GARB_V_NUMBER;
+                two[0].number = count->number;
+            }
+            int inner = 0;
+            bool fixed;
+            if (!vc_done(&args[0]) || !track_list(s, &args[1], false, &inner, &fixed, &two[1]))
+                return false;
+            if (k != NULL && !fixed)
+                return false;           // an auto-repeat repeats fixed sizes only
+            *all_fixed &= fixed;
+            c->i++;
+            tracks[n++] = fn_val(s, "repeat", two, 2);
+            if (tracks[n - 1].nitems != 2)
+                return false;
+            continue;
+        }
+        bool fixed;
+        if (!track_size(s, c, &tracks[n], &fixed))
+            return false;
+        *all_fixed &= fixed;
+        n++;
+    }
+    if (n == 0 || *autos > 1 || (*autos == 1 && !*all_fixed))
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_TRACKS;
+    out->items = keep(s, tracks, n);
+    out->nitems = out->items != NULL ? n : 0;
+    return out->nitems == n;
+}
+
+int32_t garb_area_cells(const char *s, uint32_t len, garb_area_cell_t *out, int32_t cap)
+{
+    int32_t n = 0;
+    uint32_t i = 0;
+    while (i < len) {
+        char ch = s[i];
+        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f') {
+            i++;
+            continue;
+        }
+        uint32_t from = i;
+        if (ch == '.') {
+            while (i < len && s[i] == '.')
+                i++;
+            if (n < cap)
+                out[n] = (garb_area_cell_t){s + from, 0};
+            n++;
+            continue;
+        }
+        // A name is ident code points: letters, digits, `-`, `_`, and
+        // anything past ASCII.
+        while (i < len) {
+            unsigned char u = (unsigned char)s[i];
+            if (!(u >= 0x80 || (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') ||
+                  (u >= '0' && u <= '9') || u == '-' || u == '_'))
+                break;
+            i++;
+        }
+        if (i == from)
+            return -1;
+        if (n < cap)
+            out[n] = (garb_area_cell_t){s + from, i - from};
+        n++;
+    }
+    return n;
+}
+
+static bool cell_is(garb_area_cell_t c, garb_area_cell_t name)
+{
+    return c.len == name.len && c.len > 0 && os64_memcmp(c.text, name.text, c.len) == 0;
+}
+
+// Whether every name in the rows covers a rectangle and nothing else
+// (§ 7.3): the bounding box of its cells holds nothing but it.
+static bool areas_rectangular(const garb_val_t *rows, int32_t nrows, int32_t ncols)
+{
+    garb_area_cell_t cells[GARB_TRACKS_MAX * 4];
+    if ((int64_t)nrows * ncols > (int64_t)(sizeof(cells) / sizeof(cells[0])))
+        return false;
+    for (int32_t r = 0; r < nrows; r++)
+        (void)garb_area_cells(rows[r].text, rows[r].len, cells + r * ncols, ncols);
+    for (int32_t k = 0; k < nrows * ncols; k++) {
+        garb_area_cell_t name = cells[k];
+        if (name.len == 0)
+            continue;
+        int32_t r0 = nrows, r1 = -1, c0 = ncols, c1 = -1, count = 0;
+        for (int32_t j = 0; j < nrows * ncols; j++)
+            if (cell_is(cells[j], name)) {
+                int32_t r = j / ncols, cc = j % ncols;
+                r0 = r < r0 ? r : r0;
+                r1 = r > r1 ? r : r1;
+                c0 = cc < c0 ? cc : c0;
+                c1 = cc > c1 ? cc : c1;
+                count++;
+            }
+        if (count != (r1 - r0 + 1) * (c1 - c0 + 1))
+            return false;
+        for (int32_t r = r0; r <= r1; r++)
+            for (int32_t cc = c0; cc <= c1; cc++)
+                if (!cell_is(cells[r * ncols + cc], name))
+                    return false;
+    }
+    return true;
+}
+
+// grid-template-areas (§ 7.3): strings of the same number of cells, each
+// name covering a rectangle, a run of dots for none.
+static bool areas(Sets *s, VCur *c, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return true;
+    }
+    garb_val_t rows[GARB_TRACKS_MAX];
+    int32_t n = 0, cols = -1;
+    const garb_value_t *t;
+    while ((t = vc_peek(c)) != NULL && t->kind == GARB_STRING) {
+        if (n == GARB_TRACKS_MAX)
+            return false;
+        int32_t cells = garb_area_cells(t->text, t->len, NULL, 0);
+        if (cells <= 0 || (cols >= 0 && cells != cols))
+            return false;
+        cols = cells;
+        os64_memset(&rows[n], 0, sizeof(rows[n]));
+        rows[n].kind = GARB_V_STRING;
+        rows[n].text = t->text;
+        rows[n].len = t->len;
+        n++;
+        c->i++;
+    }
+    if (n == 0 || !vc_done(c) || !areas_rectangular(rows, n, cols))
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_STRING;
+    out->items = keep(s, rows, n);
+    out->nitems = out->items != NULL ? n : 0;
+    return out->nitems == n;
+}
+
+// A grid line (§ 8.3): auto, an integer other than 0, `span` with a
+// positive integer or a name, or a name. A name beside a number — the
+// n-th line of that name — is booked with named lines, and is invalid
+// here.
+static bool grid_line(Sets *s, VCur *c, garb_val_t *out)
+{
+    if (vc_keyword(c, kAuto) != NULL) {
+        *out = kw("auto");
+        return true;
+    }
+    bool span = vc_keyword(c, kSpan) != NULL;
+    const garb_value_t *t = vc_peek(c);
+    if (t != NULL && t->kind == GARB_NUMBER && t->integer && t->number != 0 &&
+        (!span || t->number > 0)) {
+        garb_val_t num = {0};
+        num.kind = GARB_V_NUMBER;
+        num.number = t->number;
+        c->i++;
+        *out = span ? fn_val(s, "span", &num, 1) : num;
+        return !span || out->nitems == 1;
+    }
+    if (t != NULL && t->kind == GARB_IDENT && !ieq(t->text, t->len, "span") &&
+        !ieq(t->text, t->len, "auto") && vc_keyword(&(VCur){c->v, c->n, c->i}, kWide) == NULL) {
+        garb_val_t name = {0};
+        name.kind = GARB_V_STRING;
+        name.text = t->text;
+        name.len = t->len;
+        c->i++;
+        *out = span ? fn_val(s, "span", &name, 1) : name;
+        return !span || out->nitems == 1;
+    }
+    return false;
+}
 
 // The background longhands take a comma-separated list, one per layer
 // (Backgrounds 3 § 3.1): the first — the layer on top, the one yonder
@@ -1364,6 +1720,53 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
             return true;
         }
         return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, out);
+    case G_TEMPLATE: {
+        if (vc_keyword(c, kNone) != NULL) {
+            *out = kw("none");
+            return true;
+        }
+        int autos = 0;
+        bool fixed;
+        return track_list(s, c, true, &autos, &fixed, out);
+    }
+    case G_AUTO_TRACKS: {
+        // One or more track sizes, no repeat() and no line names (§ 7.6).
+        garb_val_t tracks[GARB_TRACKS_MAX];
+        int32_t n = 0;
+        while (!vc_done(c)) {
+            bool fixed;
+            if (n == GARB_TRACKS_MAX || !track_size(s, c, &tracks[n], &fixed))
+                return false;
+            n++;
+        }
+        if (n == 0)
+            return false;
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_TRACKS;
+        out->items = keep(s, tracks, n);
+        out->nitems = out->items != NULL ? n : 0;
+        return out->nitems == n;
+    }
+    case G_AREAS: return areas(s, c, out);
+    case G_AUTO_FLOW: {
+        // [row | column] || dense, written as the four keywords it names.
+        const char *axis = NULL;
+        bool dense = false;
+        while (!vc_done(c)) {
+            if (axis == NULL && (k = vc_keyword(c, kFlowAxis)) != NULL)
+                axis = k;
+            else if (!dense && vc_keyword(c, kDense) != NULL)
+                dense = true;
+            else
+                return false;
+        }
+        if (axis == NULL && !dense)
+            return false;
+        bool column = axis != NULL && os64_streq(axis, "column");
+        *out = kw(column ? (dense ? "column dense" : "column") : (dense ? "row dense" : "row"));
+        return true;
+    }
+    case G_GRID_LINE: return grid_line(s, c, out);
     }
     return false;
 }
@@ -1375,6 +1778,7 @@ typedef enum {
     SH_BORDER_LEFT, SH_BORDER_WIDTH, SH_BORDER_STYLE, SH_BORDER_COLOR, SH_BACKGROUND,
     SH_BACKGROUND_POSITION, SH_FONT, SH_LIST_STYLE, SH_TEXT_DECORATION, SH_OVERFLOW, SH_INSET,
     SH_FLEX, SH_FLEX_FLOW, SH_GAP,
+    SH_GRID_COLUMN, SH_GRID_ROW, SH_GRID_AREA, SH_PLACE_ITEMS, SH_PLACE_SELF, SH_PLACE_CONTENT,
 } Shorthand;
 
 static const struct { const char *name; Shorthand sh; } kShorthands[] = {
@@ -1390,6 +1794,9 @@ static const struct { const char *name; Shorthand sh; } kShorthands[] = {
     // Grid 1's first spelling of `gap`, still written by nearly every sheet
     // that wants the gap in the browsers of 2018 (Box Alignment 3 § 8.4).
     {"grid-gap", SH_GAP},
+    {"grid-column", SH_GRID_COLUMN}, {"grid-row", SH_GRID_ROW}, {"grid-area", SH_GRID_AREA},
+    {"place-items", SH_PLACE_ITEMS}, {"place-self", SH_PLACE_SELF},
+    {"place-content", SH_PLACE_CONTENT},
 };
 
 // The longhands a shorthand sets, for a CSS-wide keyword to reach them all.
@@ -1429,8 +1836,43 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
     case SH_FLEX: out[n++] = GARB_FLEX_GROW; out[n++] = GARB_FLEX_SHRINK; out[n++] = GARB_FLEX_BASIS; break;
     case SH_FLEX_FLOW: out[n++] = GARB_FLEX_DIRECTION; out[n++] = GARB_FLEX_WRAP; break;
     case SH_GAP: out[n++] = GARB_ROW_GAP; out[n++] = GARB_COLUMN_GAP; break;
+    case SH_GRID_COLUMN: out[n++] = GARB_GRID_COLUMN_START; out[n++] = GARB_GRID_COLUMN_END; break;
+    case SH_GRID_ROW: out[n++] = GARB_GRID_ROW_START; out[n++] = GARB_GRID_ROW_END; break;
+    case SH_GRID_AREA:
+        out[n++] = GARB_GRID_ROW_START; out[n++] = GARB_GRID_COLUMN_START;
+        out[n++] = GARB_GRID_ROW_END; out[n++] = GARB_GRID_COLUMN_END;
+        break;
+    case SH_PLACE_ITEMS: out[n++] = GARB_ALIGN_ITEMS; out[n++] = GARB_JUSTIFY_ITEMS; break;
+    case SH_PLACE_SELF: out[n++] = GARB_ALIGN_SELF; out[n++] = GARB_JUSTIFY_SELF; break;
+    case SH_PLACE_CONTENT: out[n++] = GARB_ALIGN_CONTENT; out[n++] = GARB_JUSTIFY_CONTENT; break;
     }
     return n;
+}
+
+// Up to `max` grid lines split by slashes (Grid 2 § 8.4): what each one
+// left out is its partner's name where that one is a name, else auto.
+static bool grid_lines(Sets *s, VCur *c, garb_val_t *lines, int32_t max)
+{
+    int32_t n = 0;
+    for (;;) {
+        if (n == max || !grid_line(s, c, &lines[n]))
+            return false;
+        n++;
+        const garb_value_t *t = vc_peek(c);
+        if (t == NULL)
+            break;
+        if (!is_delim_v(t, '/'))
+            return false;
+        c->i++;
+    }
+    // grid-area's four: row-start, column-start, row-end, column-end; each
+    // missing one copies the one across from it (index - 2) when that is
+    // a name, and the second copies the first when there is only one.
+    for (int32_t i = n; i < max; i++) {
+        const garb_val_t *from = &lines[i >= 2 ? i - 2 : 0];
+        lines[i] = from->kind == GARB_V_STRING ? *from : kw("auto");
+    }
+    return true;
 }
 
 // `flex` (Flexbox 1 § 7.1): `none`, or a grow factor with an optional
@@ -1552,6 +1994,49 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
             return false;
         set(s, GARB_ROW_GAP, &x);
         set(s, GARB_COLUMN_GAP, &y);
+        return true;
+    }
+    case SH_GRID_COLUMN: case SH_GRID_ROW: {
+        garb_val_t two[2];
+        if (!grid_lines(s, c, two, 2))
+            return false;
+        garb_prop_t start = sh == SH_GRID_COLUMN ? GARB_GRID_COLUMN_START : GARB_GRID_ROW_START;
+        set(s, start, &two[0]);
+        set(s, (garb_prop_t)(start + 1), &two[1]);
+        return true;
+    }
+    case SH_GRID_AREA: {
+        garb_val_t four[4];
+        if (!grid_lines(s, c, four, 4))
+            return false;
+        set(s, GARB_GRID_ROW_START, &four[0]);
+        set(s, GARB_GRID_COLUMN_START, &four[1]);
+        set(s, GARB_GRID_ROW_END, &four[2]);
+        set(s, GARB_GRID_COLUMN_END, &four[3]);
+        return true;
+    }
+    case SH_PLACE_ITEMS: case SH_PLACE_SELF: case SH_PLACE_CONTENT: {
+        // Box Alignment 3 § 5: the align value, then the justify value,
+        // which is the align value when it is left out.
+        static const Longhand kPlace[3][2] = {
+            {{GARB_ALIGN_ITEMS, G_ALIGN, kAlignItems}, {GARB_JUSTIFY_ITEMS, G_ALIGN, kJustifyItems}},
+            {{GARB_ALIGN_SELF, G_ALIGN, kAlignSelf}, {GARB_JUSTIFY_SELF, G_ALIGN, kJustifySelf}},
+            {{GARB_ALIGN_CONTENT, G_ALIGN, kAlignContent},
+             {GARB_JUSTIFY_CONTENT, G_ALIGN, kJustify}},
+        };
+        const Longhand *pair = kPlace[sh - SH_PLACE_ITEMS];
+        if (!longhand_one(s, c, &pair[0], &x))
+            return false;
+        if (vc_done(c)) {
+            VCur again = {&(garb_value_t){.kind = GARB_IDENT, .text = x.keyword,
+                                           .len = (uint32_t)os64_strlen(x.keyword)}, 1, 0};
+            if (!longhand_one(s, &again, &pair[1], &y))
+                return false;
+        } else if (!longhand_one(s, c, &pair[1], &y) || !vc_done(c)) {
+            return false;
+        }
+        set(s, pair[0].prop, &x);
+        set(s, pair[1].prop, &y);
         return true;
     }
     case SH_OVERFLOW:
@@ -1721,7 +2206,7 @@ static void num(Out *o, double v)
 }
 
 static const char *const kUnitNames[] = {"px", "em", "rem", "ex", "ch", "vw", "vh", "vmin",
-                                         "vmax", "pt", "pc", "cm", "mm", "in", "q"};
+                                         "vmax", "pt", "pc", "cm", "mm", "in", "q", "fr"};
 
 static void val(Out *o, const garb_val_t *v);
 
@@ -1761,6 +2246,22 @@ static void calc(Out *o, const garb_calc_t *c, At at)
 
 static void val(Out *o, const garb_val_t *v)
 {
+    if (v->kind == GARB_V_FUNCTION && os64_streq(v->keyword, "span")) {
+        put(o, "span ");            // a keyword and its argument, not a call
+        val(o, &v->items[0]);
+        return;
+    }
+    if (v->kind == GARB_V_FUNCTION) {
+        put(o, v->keyword);
+        put(o, "(");
+        for (int32_t k = 0; k < v->nitems; k++) {
+            if (k > 0)
+                put(o, ", ");
+            val(o, &v->items[k]);
+        }
+        put(o, ")");
+        return;
+    }
     if (v->nitems > 0) {
         for (int32_t k = 0; k < v->nitems; k++) {
             if (k > 0)
@@ -1796,6 +2297,7 @@ static void val(Out *o, const garb_val_t *v)
     case GARB_V_STRING: put(o, "\""); put_n(o, v->text, v->len); put(o, "\""); break;
     case GARB_V_CALC: calc(o, v->calc, AT_TOP); break;
     case GARB_V_IMAGE: put_n(o, v->text, v->len); put(o, "(...)"); break;
+    case GARB_V_TRACKS: case GARB_V_FUNCTION: break;    // always with items, above
     }
 }
 

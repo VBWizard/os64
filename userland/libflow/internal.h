@@ -30,18 +30,30 @@ static inline bool f_out_of_flow(const flow_style_t *s)
     return s->position == FLOW_POSITION_ABSOLUTE || s->position == FLOW_POSITION_FIXED;
 }
 
-// Display's two questions, answered in one place for every pass: is the
+// Display's questions, answered in one place for every pass: is the
 // element an atom on its line — laid out as a block of its own inside the
-// line — and does it lay its children out as flex items (FLEX.md)?
+// line — and does it lay its children out as flex items (FLEX.md) or grid
+// items (GRID.md)?
 static inline bool f_display_atomic(flow_display_t d)
 {
-    return d == FLOW_DISPLAY_INLINE_BLOCK || d == FLOW_DISPLAY_INLINE_FLEX;
+    return d == FLOW_DISPLAY_INLINE_BLOCK || d == FLOW_DISPLAY_INLINE_FLEX ||
+           d == FLOW_DISPLAY_INLINE_GRID;
 }
 
 static inline bool f_display_flex(flow_display_t d)
 {
     return d == FLOW_DISPLAY_FLEX || d == FLOW_DISPLAY_INLINE_FLEX;
 }
+
+static inline bool f_display_grid(flow_display_t d)
+{
+    return d == FLOW_DISPLAY_GRID || d == FLOW_DISPLAY_INLINE_GRID;
+}
+
+// A grid's bound on either axis (GRID.md, decision 4), and on the cells of
+// one grid-template-areas (libgarb's own bound on them).
+#define F_GRID_MAX 1000
+#define F_GRID_AREA_CELLS 1024
 
 // A containing block for the absolute boxes inside it: an element whose
 // position is not static and that makes a box of its own. A table's rows,
@@ -184,10 +196,10 @@ typedef struct {
     // `opacity: 0` on this element or an ancestor: nothing of it is painted
     // (flow_box_t.unpainted).
     bool transparent;
-    // Its in-flow children are flex items: it is a flex container, or it
-    // makes no box (`display: contents`) inside one. Pass 1 blockifies
-    // them (Flexbox 1 § 4).
-    bool flex_items;
+    // Its in-flow children are flex or grid items: it is a flex or grid
+    // container, or it makes no box (`display: contents`) inside one. Pass
+    // 1 blockifies them (Flexbox 1 § 4, Grid 2 § 6).
+    bool lays_out_items;
 } FStyled;
 
 typedef struct {
@@ -346,9 +358,10 @@ struct FBox {
     // which are not `positioned`.
     bool positioned, out_of_flow;
     FPos *pos;
-    // It lays its children out as flex items (FLEX.md): a block container
-    // whose element is a flex container, or an inline one's atom content.
-    bool flex;
+    // It lays its children out as flex items (FLEX.md), or as grid items
+    // (GRID.md): a block container whose element is such a container, or
+    // an inline one's atom content.
+    bool flex, grid;
     // The positioned inlines whose pieces are all laid out inside this box,
     // which is finished only once all of them are (FPos.home).
     FPos *homed;
@@ -421,6 +434,11 @@ struct FBox {
     bool flex_sized;
     int64_t flex_w, flex_ml;
     int32_t flex_line;
+    // A grid item's area's first row and column, which the grid's baseline
+    // reads; and its x from the area's left edge as it was laid out, which
+    // placing a table item again keeps (a table places itself).
+    int32_t grid_row, grid_col;
+    int64_t area_dx;
     uint32_t laid;
 };
 

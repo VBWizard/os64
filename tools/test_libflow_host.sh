@@ -47,4 +47,9 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    userland/libos64/str.c userland/libos64/bidi.c userland/libos64/url.c userland/libos64/fmt.c \
    -o "$work/libflow_driver"
 
+# LIBFLOW_DRIVER=path keeps a copy of the driver there, for the tools that
+# run it many times (tools/grid_probe).
+if [ -n "${LIBFLOW_DRIVER:-}" ]; then
+    cp "$work/libflow_driver" "$LIBFLOW_DRIVER"
+fi
 "$work/libflow_driver" "$@"

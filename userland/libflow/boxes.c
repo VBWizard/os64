@@ -66,9 +66,9 @@ typedef struct {
     FBox *target;           // the context inline content lands in; NULL between runs
     Frame *open;
     FBox *anon_table;       // an anonymous table gathering internal table boxes
-    // In a flex container, the next text node of a run whose verdict
-    // (blank_run) is already known, and the verdict: each run is scanned
-    // once.
+    // In a flex or grid container, the next text node of a run whose
+    // verdict (blank_run) is already known, and the verdict: each run is
+    // scanned once.
     const os64_html_node_t *run_next;
     bool run_blank;
 } Flow;
@@ -199,8 +199,9 @@ static bool text_blank(const os64_html_node_t *n)
 }
 
 // Whether the run of text children from `n` to the next element (comments
-// are no break in it) is all white space: in a flex container such a run
-// makes no anonymous item (Flexbox 1 § 4), whatever `white-space` says.
+// are no break in it) is all white space: in a flex or grid container such
+// a run makes no anonymous item (Flexbox 1 § 4, Grid 2 § 6), whatever
+// `white-space` says.
 static bool blank_run(const os64_html_node_t *n)
 {
     for (; n != NULL && (n->kind == OS64_HTML_TEXT || n->kind == OS64_HTML_COMMENT); n = n->next)
@@ -274,6 +275,7 @@ static FBox *new_box(B *b, FBox *parent, f_box_kind_t kind, const os64_html_node
     box->control = -1;
     box->parent = parent;
     box->flex = kind == FB_BLOCK && node != NULL && f_display_flex(style->display);
+    box->grid = kind == FB_BLOCK && node != NULL && f_display_grid(style->display);
     // Attached at once, so a build that stops here leaves a tree that is
     // whole up to this box.
     if (parent != NULL) {
@@ -504,7 +506,7 @@ static void text_node(Flow *f, const os64_html_node_t *n)
     const flow_style_t *s = text_style(b, n);
     if (s == NULL || n->text_len == 0)
         return;
-    if (f->target == NULL && f->container->flex) {
+    if (f->target == NULL && (f->container->flex || f->container->grid)) {
         bool blank = n == f->run_next ? f->run_blank : blank_run(n);
         // A node that is all white space leaves the rest of its run the
         // verdict the run had, so the next text node inherits it.
@@ -759,18 +761,19 @@ static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *st
 static void table_range(B *b, FBox *table, const os64_html_node_t *first,
                         const os64_html_node_t *stop, Scope *scope);
 
-// A block container's content from a range of sibling nodes. A flex
-// container is never an inline formatting context: its element children
-// are block-level already (pass 1 blockified them), and a run of text
-// among them — or all of its content, when that is text — is an anonymous
-// item of its own (Flexbox 1 § 4), so it is built as if it mixed.
+// A block container's content from a range of sibling nodes. A flex or
+// grid container is never an inline formatting context: its element
+// children are block-level already (pass 1 blockified them), and a run of
+// text among them — or all of its content, when that is text — is an
+// anonymous item of its own (Flexbox 1 § 4, Grid 2 § 6), so it is built as
+// if it mixed.
 static void build_container(B *b, FBox *box, const os64_html_node_t *first,
                             const os64_html_node_t *stop, Scope *scope,
                             const char *inside_marker, uint32_t inside_len)
 {
     Mix m = {false, inside_marker != NULL};
     scan(b, first, stop, &m);
-    Flow f = {b, box, m.block || box->flex, NULL, NULL, NULL, NULL, false};
+    Flow f = {b, box, m.block || box->flex || box->grid, NULL, NULL, NULL, NULL, false};
     if (!f.mixed) {
         box->ifc = true;
         box->collapse_space = true;
@@ -905,9 +908,10 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
         }
         ifc->collapse_space = false;
         // An inline-block that is not replaced (a marquee), or an inline
-        // flex container, is a block of its own, laid out inside the atom. Its content costs two descents: a
-        // level of it holds a line's frame as well as a block's, twice a
-        // block level's stack (LAYOUT.md § Bounds).
+        // flex or grid container, is a block of its own, laid out inside
+        // the atom. Its content costs two descents: a level of it holds a
+        // line's frame as well as a block's, twice a block level's stack
+        // (LAYOUT.md § Bounds).
         if (!replaced(el)) {
             FBox *content = new_box(b, NULL, FB_BLOCK, el, &s->style);
             position_box(b, content, el, false);

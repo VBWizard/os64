@@ -74,6 +74,56 @@ static void length(Buf *b, flow_length_t l)
     }
 }
 
+// A grid track's sizing function at one end.
+static void breadth(Buf *b, flow_breadth_t v)
+{
+    switch (v.kind) {
+    case FLOW_TRACK_FIXED: length(b, v.len); break;
+    case FLOW_TRACK_FR: putf(b, "%d.%03dfr", v.fr / 1000, v.fr % 1000); break;
+    case FLOW_TRACK_AUTO: puts_(b, "auto"); break;
+    case FLOW_TRACK_MIN_CONTENT: puts_(b, "min-content"); break;
+    case FLOW_TRACK_MAX_CONTENT: puts_(b, "max-content"); break;
+    }
+}
+
+// A track list, comma-separated, a track as its two ends `min..max`
+// (`fit-content(len)` as that); the auto-repeat's tracks in brackets
+// after `fill` or `fit`.
+static void tracks(Buf *b, const char *name, const flow_tracks_t *t)
+{
+    if (t->n == 0)
+        return;
+    putf(b, " %s=", name);
+    for (int32_t i = 0; i < t->n; i++) {
+        if (i > 0)
+            puts_(b, ",");
+        if (t->repeat_n > 0 && i == t->repeat_at)
+            puts_(b, t->repeat_fit ? "fit[" : "fill[");
+        const flow_track_t *k = &t->tracks[i];
+        if (k->fit) {
+            puts_(b, "fit-content(");
+            breadth(b, k->max);
+            puts_(b, ")");
+        } else {
+            breadth(b, k->min);
+            puts_(b, "..");
+            breadth(b, k->max);
+        }
+        if (t->repeat_n > 0 && i == t->repeat_at + t->repeat_n - 1)
+            puts_(b, "]");
+    }
+}
+
+static void grid_line(Buf *b, flow_grid_line_t l)
+{
+    switch (l.kind) {
+    case FLOW_GRID_LINE_AUTO: puts_(b, "auto"); break;
+    case FLOW_GRID_LINE_NUMBER: putf(b, "%d", (int)l.n); break;
+    case FLOW_GRID_LINE_SPAN: putf(b, "span %d", (int)l.n); break;
+    case FLOW_GRID_LINE_NAME: putf(b, "%.*s", (int)l.name_len, l.name); break;
+    }
+}
+
 static bool length_eq(flow_length_t a, flow_length_t b)
 {
     return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
@@ -99,8 +149,8 @@ static void color(Buf *b, const flow_env_t *env, uint32_t rgb)
 static const char *const s_display[] = {
     "inline", "block", "list-item", "inline-block", "table", "table-caption",
     "table-row-group", "table-header-group", "table-footer-group", "table-row",
-    "table-cell", "table-column-group", "table-column", "flex", "inline-flex", "contents",
-    "none",
+    "table-cell", "table-column-group", "table-column", "flex", "inline-flex", "grid",
+    "inline-grid", "contents", "none",
 };
 static const char *const s_direction[] = {"row", "row-reverse", "column", "column-reverse"};
 static const char *const s_wrap[] = {"nowrap", "wrap", "wrap-reverse"};
@@ -360,6 +410,35 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, "/");
         length(b, s->column_gap);
     }
+    tracks(b, "grid-template-columns", &s->grid_template_columns);
+    tracks(b, "grid-template-rows", &s->grid_template_rows);
+    tracks(b, "grid-auto-columns", &s->grid_auto_columns);
+    tracks(b, "grid-auto-rows", &s->grid_auto_rows);
+    for (int32_t i = 0; i < s->ngrid_areas; i++) {
+        const flow_grid_area_t *a = &s->grid_areas[i];
+        putf(b, "%s%.*s:%d-%d/%d-%d", i == 0 ? " grid-areas=" : ",", (int)a->name_len, a->name,
+             (int)a->row0, (int)a->row1, (int)a->col0, (int)a->col1);
+    }
+    if (s->grid_auto_flow_column || s->grid_dense)
+        putf(b, " grid-auto-flow=%s%s", s->grid_auto_flow_column ? "column" : "row",
+             s->grid_dense ? " dense" : "");
+    const flow_grid_line_t *lines[4] = {&s->grid_row_start, &s->grid_column_start,
+                                        &s->grid_row_end, &s->grid_column_end};
+    for (int i = 0; i < 4; i++)
+        if (lines[i]->kind != FLOW_GRID_LINE_AUTO) {
+            // grid-area's order: the starts, then the ends.
+            puts_(b, " grid-area=");
+            for (int k = 0; k < 4; k++) {
+                if (k > 0)
+                    puts_(b, "/");
+                grid_line(b, *lines[k]);
+            }
+            break;
+        }
+    if (s->justify_items != FLOW_PLACE_NORMAL)
+        putf(b, " justify-items=%s", s_place[s->justify_items]);
+    if (s->justify_self != FLOW_PLACE_AUTO)
+        putf(b, " justify-self=%s", s_place[s->justify_self]);
     if (s->specified_inline)
         puts_(b, " specified-inline");
     if (self->holds_block)
@@ -522,6 +601,8 @@ static void box_lines(Buf *b, const FBox *box, int32_t depth)
         puts_(b, " positioned");
     if (box->flex)
         puts_(b, " flex");
+    if (box->grid)
+        puts_(b, " grid");
     puts_(b, "\n");
     for (const FItem *it = box->items; it != NULL; it = it->next)
         item_line(b, it, depth + 1);
