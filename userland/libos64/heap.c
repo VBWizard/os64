@@ -982,19 +982,43 @@ void *os64_malloc(size_t size)
 
 // ── free ────────────────────────────────────────────────────────────────────
 
+// Each caller names its operation without weakening the shared validation.
+typedef struct {
+	const char *outside;
+	const char *misaligned;
+	const char *freed;
+} heap_pointer_diagnostics_t;
+
+static const heap_pointer_diagnostics_t gFreePointer = {
+	"free of a pointer this heap never handed out",
+	"free of a misaligned pointer",
+	"free of a block that is already free (double free)"
+};
+static const heap_pointer_diagnostics_t gReallocPointer = {
+	"realloc of a pointer this heap never handed out",
+	"realloc of a misaligned pointer",
+	"realloc of a freed block (use after free)"
+};
+static const heap_pointer_diagnostics_t gSizePointer = {
+	"size query on a pointer this heap never handed out",
+	"size query on a misaligned pointer",
+	"size query on a freed block (use after free)"
+};
+
 // Validate a caller's pointer down to the bone, then hand back its block.
 // Order matters: containment FIRST (reads only our own ledger), then the
 // canary (reads the header, now known to be inside a region we own).
-static heap_block_t *block_from_user_pointer(void *ptr, heap_region_t **region_out)
+static heap_block_t *block_from_user_pointer(void *ptr, heap_region_t **region_out,
+                                            const heap_pointer_diagnostics_t *diagnostics)
 {
 	heap_region_t *r = region_of(ptr);
 
 	if (r == NULL)
-		heap_die("free of a pointer this heap never handed out", ptr, 0,
+		heap_die(diagnostics->outside, ptr, 0,
 		         HEAP_EXIT_FREE_BAD);
 
 	if (((uintptr_t)ptr & (HEAP_ALIGN - 1)) != 0)
-		heap_die("free of a misaligned pointer", ptr, (uintptr_t)ptr & (HEAP_ALIGN - 1),
+		heap_die(diagnostics->misaligned, ptr, (uintptr_t)ptr & (HEAP_ALIGN - 1),
 		         HEAP_EXIT_FREE_BAD);
 
 	heap_block_t *b = payload_block(ptr);
@@ -1002,17 +1026,17 @@ static heap_block_t *block_from_user_pointer(void *ptr, heap_region_t **region_o
 	if (block_canary_ok(b))
 	{
 		if (!block_in_use(b))
-			heap_die("free of a block that is already free (double free)",
+			heap_die(diagnostics->freed,
 			         ptr, b->canary, HEAP_EXIT_FREE_BAD);
 	}
 	else
 	{
 		// A freed block's canary uses the FREE seed. If THAT is what we are
-		// looking at, this is a double free and deserves to be named as one
+		// looking at, this is a freed block and deserves to be named as one
 		// rather than reported as generic corruption.
 		if (b->canary == heap_canary_for(b, block_size(b), false,
 		                                 (b->size_flags & HEAP_DEDICATED) != 0))
-			heap_die("free of a block that is already free (double free)",
+			heap_die(diagnostics->freed,
 			         ptr, b->canary, HEAP_EXIT_FREE_BAD);
 
 		heap_die("block header canary is wrong — the heap has been stomped",
@@ -1021,6 +1045,20 @@ static heap_block_t *block_from_user_pointer(void *ptr, heap_region_t **region_o
 
 	*region_out = r;
 	return b;
+}
+
+size_t os64_malloc_size(const void *ptr)
+{
+	if (ptr == NULL)
+		return 0;
+	if (!gInited)
+		os64_heap_init();
+	heap_lock();
+	heap_region_t *region = NULL;
+	heap_block_t *block = block_from_user_pointer((void *)ptr, &region, &gSizePointer);
+	size_t capacity = (size_t)(block_size(block) - sizeof(heap_block_t));
+	heap_unlock();
+	return capacity;
 }
 
 // Fill the body with poison, skipping the bytes the allocator itself is about
@@ -1060,7 +1098,7 @@ static void heap_release(void *ptr, uint64_t *counter)
 		heap_verify_locked();
 
 	heap_region_t *r = NULL;
-	heap_block_t *b = block_from_user_pointer(ptr, &r);
+	heap_block_t *b = block_from_user_pointer(ptr, &r, &gFreePointer);
 
 	uint64_t payload = block_size(b) - sizeof(heap_block_t);
 	gReport.blocks_live--;
@@ -1260,7 +1298,7 @@ void *os64_realloc(void *ptr, size_t size)
 	gReport.calls_realloc++;
 
 	heap_region_t *r = NULL;
-	heap_block_t *b = block_from_user_pointer(ptr, &r);
+	heap_block_t *b = block_from_user_pointer(ptr, &r, &gReallocPointer);
 	uint64_t old_size = block_size(b);
 	uint64_t old_payload = old_size - sizeof(heap_block_t);
 	uint64_t need = align_up((uint64_t)size + sizeof(heap_block_t), HEAP_ALIGN);

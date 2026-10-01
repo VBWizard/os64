@@ -77,6 +77,13 @@ int64_t os64_memory(os64_memory_t *out);
 // case every caller has to remember.
 void *os64_malloc(size_t size);
 
+// Return the live block's payload capacity, including alignment slack but
+// excluding allocator metadata. NULL returns zero. Other pointers must be
+// live allocation bases from this heap; invalid pointers end the program
+// through the same validation as free/realloc. No allocation/report counters
+// change. The caller must prevent concurrent free/realloc of this block.
+size_t os64_malloc_size(const void *ptr);
+
 // Release a block from os64_malloc/calloc/realloc. NULL is a no-op; anything
 // else that isn't a live block ends the program (see above).
 void os64_free(void *ptr);

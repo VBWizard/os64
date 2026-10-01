@@ -78,9 +78,19 @@ int64_t os64_heap_publish(const os64_heap_report_t *report)
     return 0;
 }
 
+static char gDiagnostic[512];
+static size_t gDiagnosticLength;
+
 long os64_write(int handle, const void *buf, size_t len)
 {
-    (void)handle;
+    if (handle == 2) {
+        size_t count = len;
+        if (count > sizeof(gDiagnostic) - 1 - gDiagnosticLength)
+            count = sizeof(gDiagnostic) - 1 - gDiagnosticLength;
+        memcpy(gDiagnostic + gDiagnosticLength, buf, count);
+        gDiagnosticLength += count;
+        gDiagnostic[gDiagnosticLength] = '\0';
+    }
     fwrite(buf, 1, len, stdout);
     return (long)len;
 }
@@ -127,6 +137,8 @@ static int gFailures, gChecks;
         gChecks++;                                                      \
         gExpectingDeath = 1;                                            \
         gDeathCode = 0;                                                 \
+        gDiagnosticLength = 0;                                         \
+        gDiagnostic[0] = '\0';                                        \
         if (setjmp(gDeathLanding) == 0) {                               \
             body;                                                       \
             gFailures++;                                                \
@@ -545,20 +557,73 @@ static void t_big_and_giveback(void)
     CHECK(os64_heap_verify() == 0, "heap does not verify after the give-back");
 }
 
+static void t_malloc_size(void)
+{
+    CHECK(os64_malloc_size(NULL) == 0, "NULL size is not zero");
+    const size_t requests[] = {0, 1, 31, 32, 300, 5000, 128 * 1024};
+    for (size_t i = 0; i < sizeof(requests) / sizeof(requests[0]); i++) {
+        uint64_t live = gReport->bytes_live;
+        void *p = os64_malloc(requests[i]);
+        CHECK(p != NULL, "size-query allocation failed");
+        if (!p) continue;
+        os64_heap_report_t before = *gReport;
+        size_t capacity = os64_malloc_size(p);
+        CHECK(capacity >= requests[i] && capacity > 0, "capacity underreports request");
+        CHECK(capacity == gReport->bytes_live - live, "query disagrees with heap accounting");
+        CHECK(memcmp(&before, gReport, sizeof(before)) == 0, "query changed heap report");
+        memset(p, 0x5A, capacity);
+        CHECK(os64_realloc(p, SIZE_MAX) == NULL, "oversized realloc succeeded");
+        CHECK(os64_malloc_size(p) == capacity, "failed realloc changed capacity");
+        CHECK(((unsigned char *)p)[capacity - 1] == 0x5A, "query capacity exceeds writable payload");
+        os64_free(p);
+    }
+    void *p = os64_calloc(1, 512);
+    CHECK(p != NULL && os64_malloc_size(p) >= 512, "calloc size missing");
+    p = os64_realloc(p, 4096);
+    CHECK(p != NULL && os64_malloc_size(p) >= 4096, "grown size missing");
+    p = os64_realloc(p, 64);
+    CHECK(p != NULL && os64_malloc_size(p) >= 64, "shrunk size missing");
+    os64_free(p);
+}
+
 static void t_crimes(void)
 {
     // Double free: named as such, and fatal.
     void *p = os64_malloc(64);
     os64_free(p);
     EXPECT_DEATH(0xF12EEBAD, os64_free(p));
+    CHECK(strstr(gDiagnostic, "free of a block that is already free (double free)") != NULL,
+          "double free was not named: %s", gDiagnostic);
+    EXPECT_DEATH(0xF12EEBAD, (void)os64_realloc(p, 128));
+    CHECK(strstr(gDiagnostic, "realloc of a freed block (use after free)") != NULL,
+          "freed realloc was not named: %s", gDiagnostic);
+    EXPECT_DEATH(0xF12EEBAD, (void)os64_malloc_size(p));
+    CHECK(strstr(gDiagnostic, "size query on a freed block (use after free)") != NULL,
+          "freed size query was not named: %s", gDiagnostic);
 
     // A pointer this heap never handed out.
     int stack_object = 0;
     EXPECT_DEATH(0xF12EEBAD, os64_free(&stack_object));
+    CHECK(strstr(gDiagnostic, "free of a pointer this heap never handed out") != NULL,
+          "wild free was not named: %s", gDiagnostic);
+    EXPECT_DEATH(0xF12EEBAD, (void)os64_realloc(&stack_object, 128));
+    CHECK(strstr(gDiagnostic, "realloc of a pointer this heap never handed out") != NULL,
+          "wild realloc was not named: %s", gDiagnostic);
+    EXPECT_DEATH(0xF12EEBAD, (void)os64_malloc_size(&stack_object));
+    CHECK(strstr(gDiagnostic, "size query on a pointer this heap never handed out") != NULL,
+          "wild size query was not named: %s", gDiagnostic);
 
     // Misaligned: inside a region, but not on a payload boundary.
     void *q = os64_malloc(64);
     EXPECT_DEATH(0xF12EEBAD, os64_free((char *)q + 1));
+    CHECK(strstr(gDiagnostic, "free of a misaligned pointer") != NULL,
+          "misaligned free was not named: %s", gDiagnostic);
+    EXPECT_DEATH(0xF12EEBAD, (void)os64_realloc((char *)q + 1, 128));
+    CHECK(strstr(gDiagnostic, "realloc of a misaligned pointer") != NULL,
+          "misaligned realloc was not named: %s", gDiagnostic);
+    EXPECT_DEATH(0xF12EEBAD, (void)os64_malloc_size((char *)q + 1));
+    CHECK(strstr(gDiagnostic, "size query on a misaligned pointer") != NULL,
+          "misaligned size query was not named: %s", gDiagnostic);
     os64_free(q);
 
     // The stomp: run off the end of one block into the next block's header,
@@ -691,6 +756,7 @@ int main(void)
     printf("libos64 heap — host tests\n");
     t_frontier_tag();   // first: it needs a virgin heap to carve at the frontier
     t_basics();
+    t_malloc_size();
     t_recycle_and_coalesce();
     t_calloc();
     t_calloc_never_leaks_predecessor();
