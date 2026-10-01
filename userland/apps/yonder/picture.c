@@ -10,47 +10,6 @@
 // label.
 #define PICTURE_ACCEPT "image/png, image/jpeg, image/gif, image/bmp, */*;q=0.5"
 
-// The body, whole, up to libimage's file cap. NULL on no memory or when the
-// fetch did not deliver all of it.
-static uint8_t *read_all(os64_fetch_t *f, size_t *len)
-{
-    size_t at = 0, size = 16u * 1024u;
-    uint8_t *buf = os64_malloc(size);
-    if (buf == NULL)
-        return NULL;
-    for (;;) {
-        if (at == size) {
-            size_t want = size * 2 > OS64_IMAGE_CAP_DEFAULT ? OS64_IMAGE_CAP_DEFAULT : size * 2;
-            if (want == size) {
-                // ASK FOR THE BYTE THAT WOULD CROSS THE CAP: libfetch refuses
-                // a body at max_body on the read that would pass it, and a
-                // buffer that stopped at exactly the cap would take the
-                // first 20 MiB of something longer for the whole picture.
-                uint8_t probe;
-                (void)os64_fetch_read(f, &probe, 1);
-                break;
-            }
-            uint8_t *grown = os64_realloc(buf, want);
-            if (grown == NULL) {
-                os64_free(buf);
-                return NULL;
-            }
-            buf = grown;
-            size = want;
-        }
-        int64_t n = os64_fetch_read(f, buf + at, size - at);
-        if (n <= 0)
-            break;
-        at += (size_t)n;
-    }
-    if (os64_fetch_status(f) != OS64_FETCH_OK) {
-        os64_free(buf);
-        return NULL;
-    }
-    *len = at;
-    return buf;
-}
-
 // A GIF is opened as a sequence first, and kept as one when it moves; a
 // still one, and every other kind, is decoded whole. The sequence copies
 // the bytes, so they and it are all this job holds at its peak — inside
@@ -98,21 +57,14 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
     os64_fetch_options_t opt = {0};
     opt.user_agent = j->agent;
     opt.accept = PICTURE_ACCEPT;
-    opt.max_body = OS64_IMAGE_CAP_DEFAULT;
     j->hooks.cancelled = cancelled;
     j->hooks.cancel_ctx = ctx;
-    way_fetch_hooks(&j->hooks, &opt);
-    os64_fetch_t *f = os64_fetch_open(j->url, &opt);
+    way_whole_t body;
     p->status = OS64_IMAGE_IO_ERROR;
-    if (f == NULL)
+    if (!way_fetch_whole(&j->hooks, j->url, &opt, OS64_IMAGE_CAP_DEFAULT, &body))
         return 0;
-    size_t len = 0;
-    uint8_t *bytes = os64_fetch_head(f) != NULL ? read_all(f, &len) : NULL;
-    os64_fetch_close(f);
-    if (bytes == NULL)
-        return 0;
-    p->status = cancelled(ctx) ? OS64_IMAGE_IO_ERROR : decode(bytes, len, p);
-    os64_free(bytes);
+    p->status = cancelled(ctx) ? OS64_IMAGE_IO_ERROR : decode(body.bytes, body.len, p);
+    os64_free(body.bytes);
     return p->status == OS64_IMAGE_OK ? 1 : 0;
 }
 

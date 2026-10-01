@@ -7,47 +7,6 @@
 
 #define SHEET_ACCEPT "text/css,*/*;q=0.1"
 
-// The body, whole, up to libgarb's cap. NULL on no memory, when the fetch
-// did not deliver all of it, or when there is more than the cap. The buffer
-// may hold one byte past the cap, so a body of exactly the cap is read to
-// its end and kept. A longer one never reaches here — the fetch's max_body
-// refuses it before the byte that crosses — and the check after the loop
-// is a second guard for that, not the one that finds it.
-static uint8_t *read_all(os64_fetch_t *f, size_t *len)
-{
-    const size_t limit = GARB_SHEET_MAX + 1;
-    size_t at = 0, size = 16u * 1024u;
-    uint8_t *buf = os64_malloc(size);
-    if (buf == NULL)
-        return NULL;
-    for (;;) {
-        if (at == size) {
-            if (size >= limit) {
-                os64_free(buf);
-                return NULL;
-            }
-            size_t want = size * 2 > limit ? limit : size * 2;
-            uint8_t *grown = os64_realloc(buf, want);
-            if (grown == NULL) {
-                os64_free(buf);
-                return NULL;
-            }
-            buf = grown;
-            size = want;
-        }
-        int64_t n = os64_fetch_read(f, buf + at, size - at);
-        if (n <= 0)
-            break;
-        at += (size_t)n;
-    }
-    if (os64_fetch_status(f) != OS64_FETCH_OK || at > GARB_SHEET_MAX) {
-        os64_free(buf);
-        return NULL;
-    }
-    *len = at;
-    return buf;
-}
-
 int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out)
 {
     yonder_sheet_job_t *j = job;
@@ -71,31 +30,23 @@ int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *ctx), void *ctx, voi
     os64_fetch_options_t opt = {0};
     opt.user_agent = j->agent;
     opt.accept = SHEET_ACCEPT;
-    opt.max_body = GARB_SHEET_MAX;
     j->hooks.cancelled = cancelled;
     j->hooks.cancel_ctx = ctx;
-    way_fetch_hooks(&j->hooks, &opt);
-    os64_fetch_t *f = os64_fetch_open(j->url, &opt);
-    if (f == NULL)
+    // A body of exactly the cap is read to its end and kept; a longer one
+    // is refused by the fetch before the byte that crosses it.
+    way_whole_t body;
+    if (!way_fetch_whole(&j->hooks, j->url, &opt, GARB_SHEET_MAX, &body))
         return 0;
-    const os64_fetch_head_t *head = os64_fetch_head(f);
-    uint8_t *bytes = NULL;
-    size_t len = 0;
-    char charset[sizeof(head->charset)] = "";
-    if (head != NULL && head->status >= 200 && head->status < 300 &&
-        (j->any_type || os64_streq(head->content_type, "text/css"))) {
-        os64_strcopy(s->url, sizeof(s->url), head->url_text);
-        os64_strcopy(charset, sizeof(charset), head->charset);
-        bytes = read_all(f, &len);
-    }
-    os64_fetch_close(f);
-    if (bytes == NULL || cancelled(ctx)) {
-        os64_free(bytes);
+    bool usable = body.status >= 200 && body.status < 300 &&
+                  (j->any_type || os64_streq(body.content_type, "text/css"));
+    if (!usable || cancelled(ctx)) {
+        os64_free(body.bytes);
         return 0;
     }
-    s->ok = garb_parse_sheet(bytes, len, charset[0] != '\0' ? charset : NULL, environment,
-                             &s->parsed) == GARB_OK;
-    os64_free(bytes);
+    os64_strcopy(s->url, sizeof(s->url), body.url);
+    s->ok = garb_parse_sheet(body.bytes, body.len, body.charset[0] != '\0' ? body.charset : NULL,
+                             environment, &s->parsed) == GARB_OK;
+    os64_free(body.bytes);
     return s->ok ? 1 : 0;
 }
 

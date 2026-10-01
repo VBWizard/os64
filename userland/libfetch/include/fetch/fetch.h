@@ -95,6 +95,25 @@ typedef enum {
 #define OS64_FETCH_URL_MAX HTTP_URL_TEXT_MAX
 #define OS64_FETCH_WHY_MAX 200
 
+// What a reply said about keeping it (RFC 9111), for a caller that caches:
+// this library keeps nothing. Each field as written, a repeated one joined
+// by ", ", "" when it was not sent. `unreadable`: one of these fields was
+// longer than its place here holds, or than a header line may be (http.c
+// omits such a line whole, and says whose it was), so what is here is not
+// the whole of what the server said.
+#define OS64_FETCH_KEEP_FIELD 192
+typedef struct {
+    char cache_control[OS64_FETCH_KEEP_FIELD];
+    char pragma[OS64_FETCH_KEEP_FIELD];
+    char etag[OS64_FETCH_KEEP_FIELD];
+    char last_modified[OS64_FETCH_KEEP_FIELD];
+    char expires[OS64_FETCH_KEEP_FIELD];
+    char date[OS64_FETCH_KEEP_FIELD];
+    char age[OS64_FETCH_KEEP_FIELD];
+    char vary[OS64_FETCH_KEEP_FIELD];
+    bool unreadable;
+} os64_fetch_keep_t;
+
 typedef struct {
     os64_fetch_hop_kind_t kind;
     int32_t  status;                  // the 3xx that sent us
@@ -111,9 +130,11 @@ typedef struct {
     uint16_t from_proxy_port;         // it even when the final head went direct
     char     why[OS64_FETCH_WHY_MAX]; // PROXY: what is wrong with the setting
     os64_fetch_method_t from_method, to_method; // proposed transition, even if stopped
+    os64_fetch_keep_t keep;           // the redirect's own caching fields
 } os64_fetch_hop_t;
 
 // ── What came back ──────────────────────────────────────────────────────
+
 
 // Valid from the moment `open` returns with a head (any status whose head
 // was read: OK, REDIRECT_STOPPED, TOO_MANY_HOPS) until `close`. Every
@@ -136,6 +157,7 @@ typedef struct {
     char     proxy_host[OS64_URL_HOST_MAX];
     uint16_t proxy_port;
     os64_fetch_method_t method;               // request that produced this head, after redirects
+    os64_fetch_keep_t keep;                   // this head's caching fields
 } os64_fetch_head_t;
 
 // Counters a caller reads between reads, for a meter or a status line.

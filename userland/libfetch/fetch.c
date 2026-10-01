@@ -154,6 +154,7 @@ static void hop_read(os64_fetch_t *f, os64_fetch_hop_t *hop, http_url_t *target,
         (hop->status == 301 || hop->status == 302 || hop->status == 303))
         hop->to_method = OS64_FETCH_METHOD_GET;
     os64_strcopy(hop->reason, sizeof(hop->reason), f->reply.reason);
+    hop->keep = f->head.keep;           // what the redirect said about keeping it
     hop->number = f->head.hops + 1;
     proxy_facts(&f->proxy, &hop->from_via_proxy, hop->from_proxy_host,
                 sizeof(hop->from_proxy_host), &hop->from_proxy_port);
@@ -417,11 +418,50 @@ static bool request_extras(os64_fetch_t *f, char *out, size_t cap, bool encrypte
     return true;
 }
 
+// One caching field into its place in the head, joined to what an earlier
+// line of the same name put there.
+static void keep_field(os64_fetch_keep_t *k, char *field, const char *value, size_t len)
+{
+    size_t at = os64_strlen(field);
+    size_t need = at + (at != 0 ? 2 : 0) + len;
+    if (need >= OS64_FETCH_KEEP_FIELD) {
+        k->unreadable = true;
+        return;
+    }
+    if (at != 0) {
+        field[at++] = ',';
+        field[at++] = ' ';
+    }
+    os64_memcpy(field + at, value, len);
+    field[at + len] = '\0';
+}
+
 static void response_header(void *ctx, const char *name, size_t name_len,
                              const char *value, size_t value_len)
 {
     os64_fetch_t *f = ctx;
-    if (!f->opt.on_set_cookie || !name_is(name, name_len, "set-cookie"))
+    os64_fetch_keep_t *k = &f->head.keep;
+    static const struct { const char *name; size_t at; } kKept[] = {
+        {"cache-control", offsetof(os64_fetch_keep_t, cache_control)},
+        {"pragma", offsetof(os64_fetch_keep_t, pragma)},
+        {"etag", offsetof(os64_fetch_keep_t, etag)},
+        {"last-modified", offsetof(os64_fetch_keep_t, last_modified)},
+        {"expires", offsetof(os64_fetch_keep_t, expires)},
+        {"date", offsetof(os64_fetch_keep_t, date)},
+        {"age", offsetof(os64_fetch_keep_t, age)},
+        {"vary", offsetof(os64_fetch_keep_t, vary)},
+    };
+    for (size_t i = 0; i < sizeof(kKept) / sizeof(kKept[0]); i++)
+        if (name_is(name, name_len, kKept[i].name)) {
+            // A line too long to read was one of these: what is kept is not
+            // all the server said, and absence is not permission.
+            if (value == NULL)
+                k->unreadable = true;
+            else
+                keep_field(k, (char *)k + kKept[i].at, value, value_len);
+            return;
+        }
+    if (value == NULL || !f->opt.on_set_cookie || !name_is(name, name_len, "set-cookie"))
         return;
     // Apply the authenticated-prefix check used before redirects. TLS
     // authentication/protocol errors suppress delivery; missing closure alone
@@ -580,6 +620,8 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         // Upload and response heads share the connection. A final response
         // ends the upload; an interim response resumes at the accepted byte.
         http_stream_init(&f->stream, fetch_transport_read, &f->io);
+        // A redirect's caching fields are not its target's.
+        os64_memset(&f->head.keep, 0, sizeof(f->head.keep));
         size_t head_sent = 0, body_sent = 0;
         bool head_done = false, body_done = f->method != OS64_FETCH_METHOD_POST || !f->opt.body_len;
         unsigned interim = 0;

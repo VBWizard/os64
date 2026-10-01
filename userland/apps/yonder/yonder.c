@@ -570,6 +570,9 @@ static struct {
     uint8_t seq;                    // the view's VT100 key-burst state
 
     way_session_t way;
+    // The browser's cache (CACHE.md), shared by every picture and sheet
+    // job; NULL keeps nothing.
+    way_cache_t *cache;
     os64_work_pool_t *pool;
     Page page;                      // the page on screen
     int32_t sx, sy;                 // where it is scrolled to, in page pixels
@@ -1439,6 +1442,7 @@ static void pictures_feed(Page *p)
         job->agent = g.way.agent;
         os64_strcopy(job->url, sizeof(job->url), pic->url);
         job->hooks.jar = g.way.jar;
+        job->hooks.cache = g.cache;
         os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
         os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
         pic->id = os64_work_submit(g.pool, &work);
@@ -1597,6 +1601,7 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
     // same-origin sheet that redirects elsewhere is read whatever its type.
     job->any_type = doc->quirks == OS64_HTML_QUIRKS && same_origin(url, p->way.url);
     job->hooks.jar = g.way.jar;
+    job->hooks.cache = g.cache;
     os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
     os64_work_t work = {yonder_sheet_run, yonder_sheet_release, job, SHEET_RESERVE};
     sh->id = os64_work_submit(g.pool, &work);
@@ -3144,6 +3149,7 @@ int main(int argc, char **argv)
     g.way.accept = YONDER_ACCEPT;
     g.way.delayed_hint = " - it is in the address field; press Enter to go";
     g.way.jar = way_jar_new();          // NULL keeps no cookies: the pages still load
+    g.cache = yonder_settings_cache_open(); // NULL keeps nothing: pictures come from the network
 
     os64_ui_init(&g.ui, &g.ctx);
     g.ui.on_resize = on_resize;
@@ -3215,7 +3221,7 @@ int main(int argc, char **argv)
                      ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
                 window_seen();
             if (ev.type == OS64_GUI_EVENT_SETTINGS)
-                yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, agent_use);
+                yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, agent_use, g.cache);
             else if (!bar_event(&ev) && !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
         } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
@@ -3251,6 +3257,8 @@ int main(int argc, char **argv)
     page_clear(&g.page);
     page_clear(&g.coming.page);
     way_jar_free(g.way.jar);
+    if (g.cache != NULL)
+        way_cache_close(g.cache);
     // Nothing is left to read an agent: the workers are gone, and the pages.
     yonder_agents_release();
     os64_ui_font_release(&g.ui);

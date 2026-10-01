@@ -27,6 +27,7 @@
 #include "fetch/fetch.h"
 #include "html/html.h"
 #include "page/page.h"
+#include "way/cache.h"
 #include "way/jar.h"
 
 #pragma GCC visibility push(default)
@@ -167,18 +168,57 @@ bool way_load(way_leg_t *leg, const char *url, const os64_page_request_t *reques
               way_page_t *out, os64_fetch_status_t *why);
 
 // For a fetch a face makes itself — a picture a page names — the same
-// cookies and Referer a page's own fetch carries. way_fetch_hooks takes
-// over `opt`'s headers_for, on_set_cookie, cancelled and ctx: the caller's
-// own cancellation goes in the hooks instead, and the hooks must live
-// until the fetch is closed.
+// cookies and Referer a page's own fetch carries, and the browser's cache.
+// way_fetch_hooks takes over `opt`'s headers_for, on_set_cookie, cancelled
+// and ctx: the caller's own cancellation goes in the hooks instead, and the
+// hooks must live until the fetch is closed.
 typedef struct {
     way_jar_t *jar;
+    way_cache_t *cache;                     // NULL keeps nothing
     char referrer[OS64_FETCH_URL_MAX];      // "" for none
     bool (*cancelled)(void *ctx);
     void *cancel_ctx;
+    // way_fetch_whole's own: a redirect on the way that was not permanent
+    // (301, 308), which makes the reply one not to keep under the address
+    // asked for; and what the permanent ones said about keeping them.
+    bool passing_hop;
+    way_chain_t chain;
 } way_hooks_t;
 
 void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt);
+
+// Where a whole body came from.
+typedef enum {
+    WAY_SERVED_NETWORK = 0,
+    WAY_SERVED_KEPT,            // the cache, fresh: nothing went out
+    WAY_SERVED_CONFIRMED,       // the cache, after the server answered 304
+    WAY_SERVED_STALE,           // the cache, stale, because the server could not be reached
+} way_served_t;
+
+// A body read whole, and what came with it. `bytes` is os64_malloc'd and
+// the caller's to free.
+typedef struct {
+    uint8_t *bytes;
+    size_t len;
+    int32_t status;
+    char content_type[HTTP_TYPE_MAX];
+    char charset[HTTP_CHARSET_MAX];
+    char url[OS64_FETCH_URL_MAX];           // where it came from: a base for what it names
+    way_served_t served;
+    os64_fetch_status_t fetch;              // the fetch's verdict, when there was one
+} way_whole_t;
+
+// A GET of `url` read whole, of at most `cap` bytes, through the hooks'
+// cache when it has one (CACHE.md): served from it while fresh, asked
+// again with its validator when stale (fetched whole, when it came through
+// redirects), kept when the reply allows. `opt`
+// carries the rest of the request — agent, accept, extra headers — and is
+// the caller's; the hooks are set on it here. True when there is a body
+// whole, whatever its status: a 404's page is a body. False with
+// `out->fetch` saying why when there is none, or when it was longer than
+// `cap`; `out` holds no bytes then.
+bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *opt,
+                     size_t cap, way_whole_t *out);
 
 // ── Pages ───────────────────────────────────────────────────────────────
 
