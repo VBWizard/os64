@@ -698,11 +698,13 @@ static void sort_by_time(Kept *v, Kept *tmp, size_t n)
     os64_memcpy(v, tmp, n * sizeof(*v));
 }
 
-// The directory counted, and when it is over the cap, the oldest entries
-// go, by their files' times, until what is left is under nine-tenths of
-// it. Disk work, so it runs outside the lock, by the one thread that set
-// `evicting`.
-static void evict(way_cache_t *c)
+// One pass: the directory counted, and when it is over the cap, the oldest
+// entries go, by their files' times, until what is left is under
+// nine-tenths of it. Disk work, so it runs outside the lock, by the one
+// thread that set `evicting`. True when what was written while it ran
+// calls for another pass, which the same thread makes before it lets the
+// sweep go: those writers saw a sweep running and left it to this one.
+static bool evict_pass(way_cache_t *c)
 {
     int64_t d = os64_opendir(c->dir);
     size_t n = 0, capn = 256;
@@ -710,7 +712,7 @@ static void evict(way_cache_t *c)
         os64_lock_acquire(&c->lock);
         c->evicting = false;
         os64_lock_release(&c->lock);
-        return;
+        return false;
     }
     uint64_t total = 0;
     Kept *v = os64_malloc(capn * sizeof(*v));
@@ -745,10 +747,22 @@ static void evict(way_cache_t *c)
     os64_free(tmp);
     os64_free(v);
     os64_lock_acquire(&c->lock);
+    uint64_t cap = cap_of(c);
     c->total = total + c->during;
+    bool again = c->during != 0 && (c->total > cap || c->since >= cap / 16);
     c->during = 0;
-    c->evicting = false;
+    if (again)
+        c->since = 0;
+    else
+        c->evicting = false;
     os64_lock_release(&c->lock);
+    return again;
+}
+
+static void evict(way_cache_t *c)
+{
+    while (evict_pass(c)) {
+    }
 }
 
 // Past the cap, or due a count, one thread sweeps: the first to see it,

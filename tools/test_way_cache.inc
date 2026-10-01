@@ -111,6 +111,11 @@ int64_t os64_opendir(const char *path)
     return -1;
 }
 
+// Called once, the next time a directory has been read to its end: what
+// another thread does between a sweep's count of the directory and its
+// last word on it.
+static void (*s_after_listing)(void);
+
 int64_t os64_readdir(int32_t handle, os64_dirent_t *e)
 {
     int i = handle - FILE_BASE - 4096;
@@ -126,6 +131,10 @@ int64_t os64_readdir(int32_t handle, os64_dirent_t *e)
         dirent_of(&st, d->d_name, e);
         return 1;
     }
+    void (*after)(void) = s_after_listing;
+    s_after_listing = NULL;
+    if (after != NULL)
+        after();
     return 0;
 }
 
@@ -407,6 +416,20 @@ static way_entry_t entry(const char *url, const char *cc)
     return e;
 }
 
+// Twelve puts into the cache a sweep is running for, from the listing's
+// end (s_after_listing).
+static way_cache_t *s_during_cache;
+static void puts_during_sweep(void)
+{
+    static uint8_t body[7000];
+    for (int i = 0; i < 12; i++) {
+        char u[64];
+        snprintf(u, sizeof(u), "https://during.test/b%d.png", i);
+        way_entry_t x = entry(u, "max-age=60");
+        (void)way_cache_put(s_during_cache, &x, body, sizeof(body));
+    }
+}
+
 static int count_entries(const char *dir)
 {
     int n = 0;
@@ -574,6 +597,27 @@ static void store_cases(void)
            detail);
     way_cache_close(one);
     way_cache_close(two);
+
+    // Writes that finish while a sweep is running: the sweeper, not they,
+    // sweeps again for them before it lets the sweep go (Quinn's
+    // interleaving: twelve 7000-byte puts between a sweep's count of the
+    // directory and its last word). Measured on the disk, since stats
+    // would sweep.
+    snprintf(dir, sizeof(dir), "%s/during", root);
+    s_during_cache = way_cache_open(dir, 65536);
+    for (int i = 0; i < 8; i++) {
+        char u[64];
+        snprintf(u, sizeof(u), "https://during.test/a%d.png", i);
+        way_entry_t x = entry(u, "max-age=60");
+        (void)way_cache_put(s_during_cache, &x, seven, sizeof(seven));
+    }
+    s_after_listing = puts_during_sweep;
+    way_entry_t last = entry("https://during.test/last.png", "max-age=60");
+    (void)way_cache_put(s_during_cache, &last, seven, sizeof(seven));
+    snprintf(detail, sizeof(detail), "%llu bytes", (unsigned long long)dir_bytes(dir));
+    expect("store: what was written during a sweep is swept for", s_after_listing == NULL &&
+           dir_bytes(dir) <= 65536, detail);
+    way_cache_close(s_during_cache);
 
     // A directory that cannot be made keeps nothing, and says so.
     char blocked[700];
