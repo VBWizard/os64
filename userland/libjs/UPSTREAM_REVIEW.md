@@ -6,7 +6,11 @@ quickjs-libc.c, qjs/qjsc, host modules, examples, and upstream test runners are
 excluded. Original LICENSE and VERSION are retained. Patch 0001 omits Atomics
 without disabling stack checks. The host smoke test applies it to a disposable
 copy, checks hashes, builds the five units, and exercises language execution,
-Promise draining, absence of Atomics/std/os, and recursion failure.
+Promise draining, absence of Atomics/std/os, and recursion failure. Review
+follow-up probes cover continued execution and queued work after script/job
+exceptions, unhandled rejection followed by a handler, and repeated class-ID
+requests through one engine slot. The profile guard uses the Python dependency
+already required by source verification; it has no ripgrep dependency.
 
 This is source preparation and an engine-only host check. It does not audit
 current upstream fixes, numerical conformance, complete interrupt coverage,

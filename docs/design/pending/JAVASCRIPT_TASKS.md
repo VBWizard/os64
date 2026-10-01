@@ -53,8 +53,9 @@ request to launch agents or send messages.
 The conceptual contract is agreed in JAVASCRIPT.md under Runtime contracts.
 R0 remains open for interface review: declarations, ownership rules, and
 failure semantics are proposed in [the runtime contract](../../../userland/libjs/CONTRACT.md)
-and [public header](../../../userland/libjs/include/os64/js.h), awaiting Fable's
-interface review and implementation evidence. The runner requires
+and [public header](../../../userland/libjs/include/os64/js.h). Fable's first
+review approved the shape and continuous turn budget; the revised contract
+awaits re-review and implementation evidence. The runner requires
 no QuickJS types; binding examples use the pinned engine API. Include:
 
 - Creation/destruction, caller-supplied limits, evaluation of a bounded source
@@ -74,13 +75,16 @@ no QuickJS types; binding examples use the pinned engine API. Include:
   lifetime, registration failure cleanup, and native-state teardown; do not
   duplicate the engine's value or class API.
 - Caller-header compatibility checking before exposing an engine context,
-  covering the upstream pin, port ABI, and relevant configuration. Test a
-  mismatched caller and a useful diagnostic, not only a matching build.
+  covering the upstream pin, port ABI, and relevant configuration. Creation
+  checks the host; the context accessor separately checks each binding unit
+  with a caller-owned outcome. Test both mismatches and useful diagnostics.
 - Output and script-argument bindings implemented through library machinery;
-  callers choose output destinations rather than duplicating those bindings.
+  callers choose output destinations and `print`/`console.log` names rather
+  than duplicating those bindings. Test console-only installation, invalid
+  flag masks, and preservation of unselected globals.
 - One owning thread per runtime, permitted cross-thread cancellation signalling,
-  class-registration synchronization, and rejection of evaluation or job-drain
-  re-entry from callbacks into the same runtime through the os64 wrappers.
+  serialized check-and-allocation of process-lifetime class-ID slots, and
+  rejection of evaluation or job-drain re-entry from callbacks into the same runtime through the os64 wrappers.
   Native bindings must not bypass these restrictions or replace library-owned
   engine configuration. Document conversions/property access that can invoke
   script, and preservation of active budgets. Destruction occurs outside
@@ -133,7 +137,10 @@ FreeType/libtls shim consolidation is tracked separately in DEBTS.md.
 
 Acceptance: direct library tests cover repeated lifecycle, exceptions,
 allocation failure, memory limits, deep recursion, cancellation, Promise work,
-unhandled rejection, callback failure, and independent runtimes. Confirm that
+unhandled rejection, callback failure, and independent runtimes. Include reuse
+after an exception/rejection, jobs retained after a thrown script/job, original
+budgets preserved while draining after failure, and class-ID reuse across
+repeated runtime creation and simultaneous slot requests. Confirm that
 unregistered capabilities are absent and prohibited callback re-entry returns
 the documented error. The first capability demonstration is a small test
 executable that registers a native function and checks its successful result
@@ -200,8 +207,10 @@ Evaluate UI-thread script execution and a cancellable parser-worker mailbox
 handoff against libway and Yonder. Settle exclusive access to partially parsed
 documents, navigation generations, synchronous geometry/layout, event tasks,
 and Promise checkpoints. This packet is a design deliverable; implementing
-browser APIs remains J3/J4 work. Safe recovery from a known teardown leak, if
-proposed, needs a separate audited contract including cumulative memory bounds.
+browser APIs remains J3/J4 work. The standalone contract reserves budgeted
+function-call turns and checkpoints inside a host task for this browser design. Known-teardown-leak reporting and
+reclamation, selected at creation, needs its separate audited contract and
+repeated-leak evidence before replacing the fatal policy.
 
 ## Shared file and integration rules
 
@@ -243,12 +252,14 @@ documents were copied into that checkout without changing the main checkout.
 
 - R0 has concrete proposed declarations, a lifecycle/job/error contract, and
   syntax-checked runner, expression/job, and custom-binding examples. The
-  conservative failed-runtime policy and continuous deadline across manual
-  job slices require interface review before C1 depends on them. No runtime
-  symbol is implemented by these headers.
+  round-one revisions keep ordinary exceptions/rejections reusable, make
+  class-ID slots and binding ABI checks explicit, and select output names.
+  The continuous deadline is accepted; the revised interface needs re-review
+  before C1 depends on it. No runtime symbol is implemented by these headers.
 - The separate libos64 prerequisite change supplies `os64_malloc_size`,
   `os64_memchr`, `os64_strchr`, `os64_strrchr`, and `os64_strcmp`, with host
-  regression coverage and a guest fixture at `/tests/jssupporttest`.
+  regression coverage and `/tests/jssupporttest`, registered in `testrun` with
+  its JSUP pass badge.
 - R1 source preparation retains the pinned original core and hashes, notices,
   a scoped Atomics patch, and a repeatable engine-only host probe. The profile
   preserves stack checks. Target adaptation and libjs.so registration remain

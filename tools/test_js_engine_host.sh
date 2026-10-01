@@ -6,8 +6,15 @@ js_engine_work=$(mktemp -d)
 trap 'rm -rf "$js_engine_work"' EXIT
 cp userland/libjs/upstream/* "$js_engine_work/"
 patch -s -d "$js_engine_work" -p1 < userland/libjs/patches/0001-disable-atomics-preserve-stack-check.patch
-if rg '^#define CONFIG_ATOMICS' "$js_engine_work/quickjs.c"; then exit 1; fi
-rg -q '^#define CONFIG_STACK_CHECK' "$js_engine_work/quickjs.c"
+python3 - "$js_engine_work/quickjs.c" <<'PY'
+from pathlib import Path
+import re, sys
+source = Path(sys.argv[1]).read_text()
+if re.search(r'^#define CONFIG_ATOMICS\b', source, re.MULTILINE):
+    raise SystemExit('QuickJS profile guard: Atomics is enabled')
+if not re.search(r'^#define CONFIG_STACK_CHECK\b', source, re.MULTILINE):
+    raise SystemExit('QuickJS profile guard: stack checks are missing')
+PY
 cc -O2 -fPIC -ffreestanding -fno-builtin -fno-stack-protector \
     -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -D_GNU_SOURCE \
     '-DCONFIG_VERSION="2026-06-04"' -I "$js_engine_work" \

@@ -6,7 +6,7 @@
 
 /* Proposed R0 API, not implemented by a shipped library. The runtime contract
  * and examples live in userland/libjs/CONTRACT.md. */
-#define OS64_JS_ABI_ID "os64-js/1;quickjs=2026-06-04;lp64;value=16;limb=64;atomics=0"
+#define OS64_JS_ABI_ID "os64-js/2;quickjs=2026-06-04;lp64;value=16;limb=64;atomics=0"
 #define OS64_JS_MESSAGE_CAP 256
 #define OS64_JS_SOURCE_NAME_CAP 128
 #define OS64_JS_STACK_TRACE_CAP 1024
@@ -36,6 +36,12 @@ typedef enum {
     OS64_JS_LIMIT_EXECUTION,
     OS64_JS_LIMIT_JOBS
 } os64_js_limit_t;
+
+/* Select the output names the host grants; zero or unknown bits are invalid. */
+typedef enum {
+    OS64_JS_OUTPUT_PRINT = 1u << 0,
+    OS64_JS_OUTPUT_CONSOLE_LOG = 1u << 1
+} os64_js_output_names_t;
 
 /* Inline diagnostic storage: no allocation or borrowed strings to release.
  * Truncated/unavailable fields do not change the structured status. Locations
@@ -90,9 +96,10 @@ os64_js_status_t os64_js_run_file(os64_js_runtime_t *runtime,
 os64_js_status_t os64_js_drain_jobs(os64_js_runtime_t *runtime,
                                     uint64_t slice_jobs,
                                     os64_js_outcome_t *outcome);
-/* These installers borrow the handle, copy arguments, and expose no file APIs. */
+/* Output borrows the handle and installs only the selected names. Arguments
+ * are copied. These installers expose no script-visible file APIs. */
 os64_js_status_t os64_js_install_output(os64_js_runtime_t *runtime,
-                                        int32_t handle,
+                                        int32_t handle, uint32_t names,
                                         os64_js_outcome_t *outcome);
 os64_js_status_t os64_js_install_args(os64_js_runtime_t *runtime,
                                       size_t count, const char *const *args,

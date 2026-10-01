@@ -258,7 +258,10 @@ A recoverable execution or host failure returns control to the caller. Library
 reporting of those failures must not call `exit()` or terminate the application.
 The runner maps the result to process status; another application chooses its
 own response. Whether a runtime remains reusable after each failure class is
-an explicit R0 contract and test requirement.
+an explicit R0 contract and test requirement. R0 keeps ordinary script
+exceptions and unhandled rejections reusable, with already-queued jobs retained
+and the active turn's budget unchanged. Limits, cancellation, and host failures
+retire the runtime. The runner stops and destroys on a non-success outcome.
 
 ### Engine invariant failures
 
@@ -292,8 +295,9 @@ not support concurrent execution within one runtime.
 
 Class registration also needs a policy: the audited Atomics-disabled build
 omits a mutex around process-global class ID allocation. Multiple runtimes
-must not make that shared operation race. Define registration at controlled
-initialization or provide appropriate synchronization.
+must not make that shared operation race. R0 serializes the check-and-allocation
+of a binding's process-lifetime class-ID slot; it reuses that ID across runtimes rather than allocating per navigation.
+Register the ID in each runtime separately.
 
 The initial API prohibits native callbacks from starting another top-level
 evaluation or draining jobs in that same runtime. Enforce this at the os64

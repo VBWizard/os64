@@ -11,7 +11,8 @@ int js_example_run_file(const char *path, os64_js_outcome_t *result)
                                             &runtime, result);
     if (status != OS64_JS_OK) return 1;
     const char *args[] = {path};
-    status = os64_js_install_output(runtime, 1, result);
+    status = os64_js_install_output(runtime, 1,
+        OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG, result);
     if (status == OS64_JS_OK)
         status = os64_js_install_args(runtime, 1, args, result);
     if (status == OS64_JS_OK)

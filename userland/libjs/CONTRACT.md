@@ -17,8 +17,11 @@ in the examples; production defaults wait for J2 guest measurements and can be
 introduced through a configuration helper without changing this structure.
 
 The ABI identifier covers the engine release, os64 wrapper revision, LP64
-layout, 16-byte JSValue, 64-bit limbs, and Atomics configuration. The runtime
-compares it before exposing a context. Relevant public configuration changes
+layout, 16-byte JSValue, 64-bit limbs, and Atomics configuration. Creation and
+the context accessor compare each calling unit's identifier before exposing a
+context. A binding built separately from the host must pass its own compiled-in
+identifier, not one supplied by the host. Publish matching os64 and QuickJS
+headers as one port profile. Relevant public configuration changes
 require a new identifier. This detects accidental header/library disagreement;
 it does not validate or isolate native code.
 
@@ -34,11 +37,22 @@ compare. Calls on one runtime must not overlap. Wrapper evaluation/drain/setup
 entry points reject active-call re-entry with BUSY without replacing the outer
 call's result or budget. Native bindings are responsible for obeying the rule
 when using the raw engine API. Independent runtimes may execute on different
-threads; class ID allocation uses `os64_js_new_class_id`, serialized process-wide.
-The caller registers that ID in each runtime with QuickJS's class API.
+threads; class IDs use `os64_js_class_id(&slot)`. The library serializes the
+slot check and engine allocation together process-wide: a zero-initialized,
+process-lifetime slot receives an ID once; later calls reuse it. Bindings access
+shared slots through this function rather than reading/writing them separately.
+NULL returns the invalid ID zero without entering the engine. The caller
+registers the returned ID in each runtime with QuickJS's class API; allocation
+and per-runtime registration are different operations.
 
-`os64_js_context` borrows the owned context. It is available for idle setup and
-inside native callbacks, and returns NULL for a failed runtime. Consumers must
+`os64_js_context(runtime, OS64_JS_ABI_ID, outcome)` borrows the owned context.
+It is available for idle setup and inside native callbacks. Its caller-owned
+outcome is required and must be separate from an active outer call's outcome.
+It returns NULL with ABI_MISMATCH on header disagreement, BAD_ARGUMENT for a
+null runtime/ABI argument, or FAILED_RUNTIME for a failed runtime, without
+changing the runtime or active budgets. On success it initializes the outcome
+with OK. Each translation unit using engine inline helpers checks through this
+accessor before using the context. Consumers must
 not free it, create additional contexts, migrate its runtime, or replace the
 library's allocator, interrupt hook, Promise tracker, or loader configuration.
 Library ownership of QuickJS's opaque slots must be specified in R1; custom
@@ -47,7 +61,11 @@ bindings should keep native state in their own objects and function data.
 ## Capabilities and native bindings
 
 `os64_js_install_output` borrows an already-open output handle and installs
-`console.log` and `print`. The host keeps that handle valid until destruction;
+only the names selected by its bitmask: OS64_JS_OUTPUT_PRINT grants `print`,
+OS64_JS_OUTPUT_CONSOLE_LOG grants `console.log`. Zero or unknown bits return
+BAD_ARGUMENT without installing anything. The runner selects both; a browser
+can select only logging and retain ownership of the web's `print` function.
+Unselected names are untouched. The host keeps that handle valid until destruction;
 the library does not close it. Values convert with QuickJS string conversion,
 spaces separate arguments, and one newline terminates a call. Conversion may
 execute script and remains subject to the active execution budget. A conversion
@@ -96,7 +114,8 @@ It has one monotonic execution deadline and one total executed-job cap. Time
 spent between manual job slices counts against that deadline; slicing does not
 refresh either budget. `eval` can return OK with `jobs_pending` true.
 `drain_jobs` executes up to positive `slice_jobs`, returning MORE_JOBS if the
-queue remains nonempty. `run` drains until the queue empties or a failure occurs.
+queue remains nonempty. `run` drains until the queue empties or a non-success
+outcome occurs.
 No new top-level evaluation is accepted while a turn has runnable jobs; return
 BUSY and preserve the turn. Reaching a slice boundary with an empty queue is OK;
 if another job is runnable after the turn's total cap, the result is LIMIT/JOBS.
@@ -111,9 +130,15 @@ handlers or the turn reaches a checkpoint. Intermediate MORE_JOBS outcomes do
 not report an unhandled rejection that a later job in the turn could handle.
 At queue exhaustion, remaining unhandled rejections produce
 UNHANDLED_REJECTION with a diagnostic for the first observed one. Their retained
-values and bookkeeping count against the memory budget. Browser checkpoint
-policy will require a reviewed extension; this contract is for the standalone
-runner, not the HTML event loop.
+values and bookkeeping count against the memory budget. At that checkpoint the
+wrapper releases the reported bookkeeping and retained values; those rejections
+are not reported again on the next turn. Engine notification of a later handler
+for an already-reported rejection is harmless. If an exception is the primary
+outcome at the same queue exhaustion, EXCEPTION takes precedence and checkpoint
+bookkeeping is still released. The standalone outcome carries one diagnostic;
+per-rejection browser events are later checkpoint work. Browser task/checkpoint
+policy requires the extensions listed below; the standalone profile does not
+implement the HTML event loop.
 
 ## Results, limits, and reuse
 
@@ -127,13 +152,25 @@ that work and retain a non-allocating fallback. Returned status equals the
 outcome's status. There is no release operation for an outcome.
 
 OK and MORE_JOBS keep the runtime usable. BAD_ARGUMENT and BUSY reject the
-operation without changing its runtime. ABI_MISMATCH applies to creation and
-publishes no runtime. Execution failures (EXCEPTION, UNHANDLED_REJECTION, LIMIT,
-CANCELLED, HOST_FAILURE) make the runtime failed: no further script or jobs run,
-and pending work is discarded at destruction. An already-failed runtime returns
-FAILED_RUNTIME. This conservative first policy avoids resuming a partly executed
-script or inventing a public job-purge API. A browser can disable that document's
-script environment; reuse after execution failure needs a separate contract.
+operation without changing its runtime. ABI_MISMATCH publishes no runtime at
+creation and no context at access; an existing runtime stays unchanged.
+
+EXCEPTION and UNHANDLED_REJECTION report script outcomes and keep the runtime
+usable. An exception does not resume the failed script or job. Jobs already
+queued remain queued: `jobs_pending` reports them, and the host drains them or
+destroys the runtime. If jobs remain, the current turn and its original deadline
+and executed-job count remain active; new top-level evaluation stays BUSY until
+the queue empties. An exception with no runnable jobs ends the turn after the
+outcome is captured. Capture the original exception before any later execution
+can replace it. UNHANDLED_REJECTION is reported at queue exhaustion and ends that
+turn. The runner stops on either outcome and destroys its runtime; other hosts
+may continue with the documented draining rule.
+
+LIMIT, CANCELLED, and HOST_FAILURE make the runtime failed: no further script or
+jobs run, and pending work is discarded at destruction. An already-failed runtime
+returns FAILED_RUNTIME. A browser can continue showing the document without its
+script environment. Sticky limit/cancellation/host-failure signals take precedence
+over an engine exception sentinel so they cannot become ordinary reusable errors.
 
 Limit classification must be reliable when the wrapper detects it: SOURCE,
 MEMORY, EXECUTION, and JOBS are wrapper-owned counters/flags. STACK is reported
@@ -155,10 +192,31 @@ before. A leaked value or engine invariant violation diagnoses and exits the
 host with `OS64_JS_FATAL_EXIT`; it is not an outcome. Teardown-leak containment
 for Yonder remains D0 work under the conditions in JAVASCRIPT.md.
 
+## Browser extensions reserved for later work
+
+DOM.md's event-loop and teardown design asks for three reviewed extensions,
+outside R0 implementation:
+
+- Start a budgeted turn by calling a function value (timer or listener), with
+  the same outcomes and ownership rules. A raw JS_Call outside a wrapper turn
+  does not arm its deadline and is not a browser dispatch mechanism.
+- Drain to a microtask checkpoint inside a host task, including between
+  listeners. The task's deadline and total job cap continue across checkpoints;
+  each checkpoint judges unhandled rejections without opening a fresh budget.
+  R2 must separate budget lifetime from queue exhaustion so this can be added.
+- Select a known-teardown-leak reporting/reclamation policy at creation. This
+  requires a reviewed detection patch, dead runtime/handle guarantees, native
+  resource/finalizer rules, allocator-ledger and global-reference audits, and
+  repeated-leak tests proving no cumulative growth. R0 destruction stays fatal
+  until that narrower contract is implemented and validated; unrelated engine
+  invariant failures remain fatal. An outcome cannot make unsafe cleanup safe.
+
 ## Review and implementation gates
 
-Fable reviews this proposal, including the conservative reuse rule and the
-continuous budget across manual slices, before C1 depends on it. R0's header
+Fable's first review approved the interface shape and continuous budget across
+manual slices. This revision adopts reusable script exceptions, serialized
+class-ID slots, per-binding ABI checks, and selected output names; it awaits
+re-review before C1 depends on it. R0's header
 and examples have syntax checks; they do not prove any runtime behaviour.
 R1 supplies target C adaptation and compatibility-header publication without
 bringing host libc into the exported binding header. R2 implements and tests
