@@ -661,7 +661,8 @@ static http_head_result_t header_take(char *line, http_response_t *out,
 // short, so the truncated prefix still carries it. A line so long that not
 // even a colon fits is refused too — an unidentifiable multi-kilobyte header
 // is not something to shrug at.
-static http_head_result_t overlong_verdict(const char *prefix)
+static http_head_result_t overlong_verdict(const char *prefix, http_header_fn on_header,
+                                           void *ctx)
 {
     // The name, judged by is_token_byte — the SAME rule header_take applies,
     // so the two paths cannot disagree about what a header is called. Any
@@ -687,7 +688,12 @@ static http_head_result_t overlong_verdict(const char *prefix)
         os64_streq_nocase(name, "Location"))
         return HTTP_HEAD_FRAMING;
 
-    return HTTP_HEAD_OK;              // optional metadata is omitted whole
+    // Optional metadata is omitted whole, and the observer told whose it
+    // was: a cache must not read a `Cache-Control: no-store` it never saw as
+    // no Cache-Control at all.
+    if (on_header != NULL)
+        on_header(ctx, name, n, NULL, 0);
+    return HTTP_HEAD_OK;
 }
 
 http_head_result_t http_head_read_one_with_headers(http_stream_t *s, http_response_t *out,
@@ -752,7 +758,9 @@ http_head_result_t http_head_read_one_with_headers(http_stream_t *s, http_respon
         if (r == LINE_LONG)
         {
             // Omit oversized metadata; framing and redirect fields must fit.
-            http_head_result_t verdict = overlong_verdict(line);
+            // Interim heads are not offered, as header_take does not.
+            http_head_result_t verdict =
+                overlong_verdict(line, out->status >= 200 ? on_header : NULL, ctx);
             if (verdict != HTTP_HEAD_OK)
                 return verdict;
             continue;

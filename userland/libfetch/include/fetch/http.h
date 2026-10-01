@@ -235,7 +235,9 @@ http_head_result_t http_head_read_one(http_stream_t *s, http_response_t *out);
 // checks. Name and OWS-trimmed value are borrowed through this call only;
 // duplicate fields arrive separately, in wire order. Only final (>= 200)
 // response heads are offered, not interim heads or trailers. Oversized
-// optional fields are omitted whole; framing/redirect fields fail the head.
+// optional fields are omitted whole — offered by name with a NULL value, so
+// an observer can tell absence from omission; framing/redirect fields fail
+// the head.
 // A later head failure does not undo callbacks already made.
 typedef void (*http_header_fn)(void *ctx, const char *name, size_t name_len,
                                const char *value, size_t value_len);

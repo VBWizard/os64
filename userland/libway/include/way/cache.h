@@ -66,6 +66,26 @@ bool way_keep_confirm(way_keep_t *k, const os64_fetch_keep_t *fields, int64_t no
 // all (§ 4.2.4): not when it asked to be checked every time.
 bool way_keep_stale_ok(const way_keep_t *k);
 
+// What the redirects on the way to a reply said about keeping them, for
+// the reply kept under the address that led through them: a permanent
+// redirect is kept only as its own fields allow (§ 4), and an entry that
+// stands for the whole chain is held to the strictest of them.
+typedef struct {
+    bool no_store;                      // one forbade keeping, or could not be read
+    bool no_cache, must_revalidate;
+    int64_t left;                       // seconds of explicit freshness the
+                                        // shortest-lived had left; -1 when none said
+} way_chain_t;
+
+void way_chain_start(way_chain_t *chain);
+// A redirect's fields, as they arrive at `now`. One that says nothing about
+// freshness is kept by heuristic (§ 4.2.2: 301 and 308 may be), and limits
+// nothing.
+void way_chain_hop(way_chain_t *chain, const os64_fetch_keep_t *fields, int64_t now);
+// The chain laid over the reply's own keep, at `now`. False when the chain
+// forbids keeping it at all.
+bool way_chain_apply(const way_chain_t *chain, way_keep_t *k, int64_t now);
+
 // ── The store ───────────────────────────────────────────────────────────
 
 typedef struct way_cache way_cache_t;
@@ -75,8 +95,11 @@ typedef struct way_cache way_cache_t;
 #define WAY_CACHE_MB_MAX 65536
 
 // The cache in `dir`, which is made if it is not there, holding at most
-// `cap` bytes. NULL on no memory. A directory that cannot be made or
-// written is a cache that keeps nothing, and says so in its stats.
+// `cap` bytes — the directory's, shared with any other browser that opens
+// it: each counts the directory again after writing a sixteenth of the cap,
+// so it is over by no more than that much for each browser writing to it.
+// NULL on no memory. A directory that cannot be made or written is a cache
+// that keeps nothing, and says so in its stats.
 way_cache_t *way_cache_open(const char *dir, uint64_t cap);
 void way_cache_close(way_cache_t *cache);
 
@@ -90,7 +113,8 @@ void way_cache_enable(way_cache_t *cache, bool on);
 bool way_cache_enabled(way_cache_t *cache);
 
 // What a person is shown: what the directory holds (counted when asked,
-// so another browser's entries count too), and what this one did.
+// so another browser's entries count too, and swept when that is over the
+// cap), and what this one did.
 typedef struct {
     bool usable;                        // the directory is there and writable
     bool enabled;

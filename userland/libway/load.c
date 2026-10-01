@@ -84,12 +84,14 @@ void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt)
 // ── A body read whole, through the cache ────────────────────────────────
 
 // Every hop takes the library's own verdict; what is noted is whether one
-// was a redirect the server does not promise to repeat.
+// was a redirect the server does not promise to repeat, and what a
+// permanent one said about keeping it.
 static os64_fetch_verdict_t hooks_hop(void *ctx, const os64_fetch_hop_t *hop)
 {
     way_hooks_t *h = ctx;
     if (hop->status != 301 && hop->status != 308)
         h->passing_hop = true;
+    way_chain_hop(&h->chain, &hop->keep, now_utc());
     return OS64_FETCH_HOP_DEFAULT;
 }
 
@@ -157,6 +159,7 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
     opt->on_hop = hooks_hop;
     opt->max_body = cap;
     hooks->passing_hop = false;
+    way_chain_start(&hooks->chain);
     // Only a plain GET is the same request every time: a caller's own
     // headers could change what comes back.
     way_cache_t *cache = hooks->cache;
@@ -174,11 +177,14 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
         os64_free(e);
         return true;
     }
+    // The question that asks whether it changed goes out on a copy: the
+    // caller's options outlive this frame, and its conditions do not.
     char conditions[OS64_FETCH_EXTRA_MAX];
+    os64_fetch_options_t ask = *opt;
     if (have && way_keep_conditions(&e->keep, conditions, sizeof(conditions)) > 0)
-        opt->extra_headers = conditions;
+        ask.extra_headers = conditions;
 
-    os64_fetch_t *f = os64_fetch_open(url, opt);
+    os64_fetch_t *f = os64_fetch_open(url, &ask);
     const os64_fetch_head_t *head = f != NULL ? os64_fetch_head(f) : NULL;
     out->fetch = f != NULL ? os64_fetch_status(f) : OS64_FETCH_NO_MEMORY;
     bool served = false;
@@ -192,11 +198,18 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
             way_cache_count(cache, WAY_SERVED_STALE);
             kept = NULL;
         }
-    } else if (have && head->status == 304 && head->hops == 0) {
-        // Not modified: the kept body, with what the 304 said laid over what
-        // was kept, which starts its freshness again.
-        if (way_keep_confirm(&e->keep, &head->keep, now_utc()))
+    } else if (have && head->status == 304 && (head->hops == 0 || os64_streq(head->url_text, e->final))) {
+        // Not modified: the kept body — the 304 is about the resource kept,
+        // asked for directly or at the end of the redirects that led to it —
+        // with what the 304 and the redirects said laid over what was kept,
+        // which starts its freshness again. When they forbid keeping it any
+        // longer, it goes; this once, it is still the answer.
+        bool keep = !hooks->passing_hop && way_keep_confirm(&e->keep, &head->keep, now_utc()) &&
+                    way_chain_apply(&hooks->chain, &e->keep, now_utc());
+        if (keep)
             (void)way_cache_put(cache, e, kept, kept_len);
+        else
+            way_cache_drop(cache, url);
         served = serve(out, e, kept, kept_len, WAY_SERVED_CONFIRMED);
         way_cache_count(cache, WAY_SERVED_CONFIRMED);
         kept = NULL;
@@ -213,15 +226,21 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
             os64_strcopy(out->url, sizeof(out->url), head->url_text);
             served = true;
             // Kept when it is a whole 200 reached directly or by permanent
-            // redirects, and says it may be (way_keep_read).
+            // redirects, and it and they say it may be (way_keep_read,
+            // way_chain_apply).
             if (e != NULL && head->status == 200 && !hooks->passing_hop &&
-                way_keep_read(&head->keep, now_utc(), &e->keep)) {
+                way_keep_read(&head->keep, now_utc(), &e->keep) &&
+                way_chain_apply(&hooks->chain, &e->keep, now_utc())) {
                 os64_strcopy(e->url, sizeof(e->url), url);
                 os64_strcopy(e->final, sizeof(e->final), head->url_text);
                 e->status = head->status;
                 os64_strcopy(e->content_type, sizeof(e->content_type), head->content_type);
                 os64_strcopy(e->charset, sizeof(e->charset), head->charset);
                 (void)way_cache_put(cache, e, bytes, len);
+            } else if (have) {
+                // A new answer that is not kept is still newer than the
+                // kept one, which must not come back as stale.
+                way_cache_drop(cache, url);
             }
         }
     }

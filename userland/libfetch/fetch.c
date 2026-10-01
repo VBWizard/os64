@@ -154,6 +154,7 @@ static void hop_read(os64_fetch_t *f, os64_fetch_hop_t *hop, http_url_t *target,
         (hop->status == 301 || hop->status == 302 || hop->status == 303))
         hop->to_method = OS64_FETCH_METHOD_GET;
     os64_strcopy(hop->reason, sizeof(hop->reason), f->reply.reason);
+    hop->keep = f->head.keep;           // what the redirect said about keeping it
     hop->number = f->head.hops + 1;
     proxy_facts(&f->proxy, &hop->from_via_proxy, hop->from_proxy_host,
                 sizeof(hop->from_proxy_host), &hop->from_proxy_port);
@@ -452,10 +453,15 @@ static void response_header(void *ctx, const char *name, size_t name_len,
     };
     for (size_t i = 0; i < sizeof(kKept) / sizeof(kKept[0]); i++)
         if (name_is(name, name_len, kKept[i].name)) {
-            keep_field(k, (char *)k + kKept[i].at, value, value_len);
+            // A line too long to read was one of these: what is kept is not
+            // all the server said, and absence is not permission.
+            if (value == NULL)
+                k->unreadable = true;
+            else
+                keep_field(k, (char *)k + kKept[i].at, value, value_len);
             return;
         }
-    if (!f->opt.on_set_cookie || !name_is(name, name_len, "set-cookie"))
+    if (value == NULL || !f->opt.on_set_cookie || !name_is(name, name_len, "set-cookie"))
         return;
     // Apply the authenticated-prefix check used before redirects. TLS
     // authentication/protocol errors suppress delivery; missing closure alone

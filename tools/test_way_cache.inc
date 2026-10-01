@@ -274,6 +274,94 @@ static void keep_rules(void)
     expect("keep: not with must-revalidate", !way_keep_stale_ok(&k), NULL);
 }
 
+// What the redirects on the way to a reply said, laid over it.
+static void chain_rules(void)
+{
+    way_keep_t k;
+    os64_fetch_keep_t end = fields("max-age=600", kDate, "");
+    way_chain_t chain;
+
+    way_chain_start(&chain);
+    (void)way_keep_read(&end, D, &k);
+    expect("chain: none is the reply's own", way_chain_apply(&chain, &k, D) &&
+           way_keep_lifetime(&k) == 600 && !k.no_cache, NULL);
+
+    os64_fetch_keep_t hop = fields("no-store", "", "");
+    way_chain_hop(&chain, &hop, D);
+    (void)way_keep_read(&end, D, &k);
+    expect("chain: a redirect's no-store keeps nothing", !way_chain_apply(&chain, &k, D), NULL);
+
+    way_chain_start(&chain);
+    hop = fields("max-age=60", "", "");
+    hop.unreadable = true;
+    way_chain_hop(&chain, &hop, D);
+    (void)way_keep_read(&end, D, &k);
+    expect("chain: a redirect not read whole keeps nothing", !way_chain_apply(&chain, &k, D), NULL);
+
+    way_chain_start(&chain);
+    hop = fields("no-cache", "", "");
+    way_chain_hop(&chain, &hop, D);
+    (void)way_keep_read(&end, D, &k);
+    expect("chain: a redirect's no-cache is the entry's",
+           way_chain_apply(&chain, &k, D) && k.no_cache && !way_keep_fresh(&k, D), NULL);
+
+    way_chain_start(&chain);
+    hop = fields("max-age=600, must-revalidate", "", "");
+    way_chain_hop(&chain, &hop, D);
+    (void)way_keep_read(&end, D, &k);
+    expect("chain: a redirect's must-revalidate is the entry's",
+           way_chain_apply(&chain, &k, D) && !way_keep_stale_ok(&k), NULL);
+
+    // The shorter-lived redirect holds the entry: fresh for its minute.
+    way_chain_start(&chain);
+    hop = fields("max-age=60", kDate, "");
+    way_chain_hop(&chain, &hop, D);
+    (void)way_keep_read(&end, D, &k);
+    expect("chain: held to a redirect's minute", way_chain_apply(&chain, &k, D) &&
+           way_keep_fresh(&k, D + 59) && !way_keep_fresh(&k, D + 61), NULL);
+    // ...counted from when it arrived: a redirect 20 seconds old has 40 left.
+    way_chain_start(&chain);
+    hop = fields("max-age=60", kDate, "");
+    snprintf(hop.age, sizeof(hop.age), "20");
+    way_chain_hop(&chain, &hop, D);
+    (void)way_keep_read(&end, D, &k);
+    expect("chain: a redirect's own age counts", way_chain_apply(&chain, &k, D) &&
+           way_keep_fresh(&k, D + 39) && !way_keep_fresh(&k, D + 41), NULL);
+    // A longer-lived one limits nothing.
+    way_chain_start(&chain);
+    hop = fields("max-age=86400", kDate, "");
+    way_chain_hop(&chain, &hop, D);
+    (void)way_keep_read(&end, D, &k);
+    expect("chain: a longer-lived redirect limits nothing",
+           way_chain_apply(&chain, &k, D) && way_keep_lifetime(&k) == 600, NULL);
+    // One that says nothing of freshness is kept by heuristic and limits
+    // nothing either.
+    way_chain_start(&chain);
+    hop = fields("", "", "");
+    way_chain_hop(&chain, &hop, D);
+    (void)way_keep_read(&end, D, &k);
+    expect("chain: a silent permanent redirect limits nothing",
+           way_chain_apply(&chain, &k, D) && way_keep_lifetime(&k) == 600 && !k.no_cache, NULL);
+}
+
+// The bytes of entries in `dir`, as the disk has them.
+static uint64_t dir_bytes(const char *dir)
+{
+    uint64_t total = 0;
+    DIR *d = opendir(dir);
+    struct dirent *x;
+    while (d != NULL && (x = readdir(d)) != NULL) {
+        char path[1200];
+        struct stat st;
+        snprintf(path, sizeof(path), "%s/%s", dir, x->d_name);
+        if (strlen(x->d_name) == 18 && stat(path, &st) == 0)
+            total += (uint64_t)st.st_size;
+    }
+    if (d != NULL)
+        closedir(d);
+    return total;
+}
+
 // ── The store ───────────────────────────────────────────────────────────
 
 // The name the store gives an address: FNV-1a, as cache.c spells it.
@@ -437,11 +525,37 @@ static void store_cases(void)
            access(dead, F_OK) != 0 && access(live, F_OK) == 0, NULL);
     unlink(live);
 
+    // An entry dropped is gone.
+    way_entry_t gone = entry("https://x.test/gone.png", "max-age=60");
+    (void)way_cache_put(c, &gone, body, sizeof(body));
+    way_cache_drop(c, "https://x.test/gone.png");
+    expect("store: a dropped entry is gone",
+           !way_cache_find(c, "https://x.test/gone.png", &got, &bytes, &len, 1 << 20), NULL);
+
     int held = count_entries(dir);
     expect("store: emptied", held > 0 && way_cache_clear(c) == held && count_entries(dir) == 0, NULL);
     way_cache_stats(c, &st);
     expect("store: and says so", st.entries == 0 && st.bytes == 0 && st.stored > 0, NULL);
     way_cache_close(c);
+
+    // Two browsers on one directory: each counts the directory again as it
+    // writes, so what both wrote stays under the cap, though neither alone
+    // would have reached it (Quinn's case: eight 7000-byte bodies each).
+    snprintf(dir, sizeof(dir), "%s/shared", root);
+    way_cache_t *one = way_cache_open(dir, 65536), *two = way_cache_open(dir, 65536);
+    static uint8_t seven[7000];
+    for (int i = 0; i < 16; i++) {
+        char u[64];
+        snprintf(u, sizeof(u), "https://shared.test/%d.png", i);
+        way_entry_t x = entry(u, "max-age=60");
+        (void)way_cache_put(i % 2 == 0 ? one : two, &x, seven, sizeof(seven));
+    }
+    char detail[64];
+    snprintf(detail, sizeof(detail), "%llu bytes", (unsigned long long)dir_bytes(dir));
+    expect("store: two browsers on one directory stay under its cap", dir_bytes(dir) <= 65536,
+           detail);
+    way_cache_close(one);
+    way_cache_close(two);
 
     // A directory that cannot be made keeps nothing, and says so.
     char blocked[700];
@@ -463,5 +577,6 @@ static void store_cases(void)
 static void cache_cases(void)
 {
     keep_rules();
+    chain_rules();
     store_cases();
 }

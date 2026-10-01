@@ -237,6 +237,44 @@ bool way_keep_stale_ok(const way_keep_t *k)
     return !k->no_cache && !k->must_revalidate;
 }
 
+void way_chain_start(way_chain_t *chain)
+{
+    os64_memset(chain, 0, sizeof(*chain));
+    chain->left = -1;
+}
+
+void way_chain_hop(way_chain_t *chain, const os64_fetch_keep_t *fields, int64_t now)
+{
+    way_keep_t k;
+    if (!way_keep_read(fields, now, &k)) {
+        chain->no_store = true;
+        return;
+    }
+    chain->no_cache |= k.no_cache;
+    chain->must_revalidate |= k.must_revalidate;
+    if (k.max_age < 0 && k.expires < 0)
+        return;
+    int64_t left = way_keep_lifetime(&k) - way_keep_age(&k, now);
+    left = left < 0 ? 0 : left;
+    chain->left = chain->left < 0 || left < chain->left ? left : chain->left;
+}
+
+bool way_chain_apply(const way_chain_t *chain, way_keep_t *k, int64_t now)
+{
+    if (chain->no_store)
+        return false;
+    k->no_cache |= chain->no_cache;
+    k->must_revalidate |= chain->must_revalidate;
+    // Fresh no longer than the chain is: a max-age that ends `left` seconds
+    // from now, on the reply's own clock.
+    if (chain->left >= 0) {
+        int64_t end = way_keep_age(k, now) + chain->left;
+        if (end < way_keep_lifetime(k))
+            k->max_age = end;
+    }
+    return true;
+}
+
 // ── An entry on disk ────────────────────────────────────────────────────
 //
 // A text head, `key value` a line, then a blank line and the body. Every
@@ -355,7 +393,12 @@ struct way_cache {
     uint64_t cap;               // way_cache_set_cap may change it under a fetch: cap_of reads it
     bool usable, enabled;
     os64_lock_t lock;
-    uint64_t total;             // bytes the directory holds, as last counted and since added
+    // Bytes the directory holds, as last counted and since added here.
+    // Other browsers share the directory and add to it unseen, so it is
+    // counted again whenever this one has written a sixteenth of the cap
+    // since (`since`); what this one adds while a sweep counts is added
+    // after it (`during`).
+    uint64_t total, since, during;
     uint64_t hits, confirmed, stale, stored;
     bool evicting;              // one thread sweeps at a time, outside the lock
     uint32_t seq;               // this browser's temp names
@@ -480,6 +523,8 @@ const char *way_cache_dir(way_cache_t *c)
     return c->dir;
 }
 
+static void sweep_if_due(way_cache_t *c);
+
 void way_cache_stats(way_cache_t *c, way_cache_stats_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
@@ -495,6 +540,9 @@ void way_cache_stats(way_cache_t *c, way_cache_stats_t *out)
     out->stored = c->stored;
     c->total = out->bytes;
     os64_lock_release(&c->lock);
+    // What other browsers wrote may have put it over: counted, it is swept.
+    if (c->usable)
+        sweep_if_due(c);
 }
 
 void way_cache_count(way_cache_t *c, way_served_t how)
@@ -526,6 +574,13 @@ int32_t way_cache_clear(way_cache_t *c)
     c->total = 0;
     os64_lock_release(&c->lock);
     return gone;
+}
+
+void way_cache_drop(way_cache_t *c, const char *url)
+{
+    char path[OS64_PATH_MAX];
+    if (c != NULL && c->usable && path_of(c, url, path, sizeof(path)))
+        (void)os64_unlink(path);
 }
 
 // Reads exactly `len` bytes, or fails.
@@ -637,9 +692,10 @@ static void sort_by_time(Kept *v, Kept *tmp, size_t n)
     os64_memcpy(v, tmp, n * sizeof(*v));
 }
 
-// The oldest entries go, by their files' times, until what is left is
-// under nine-tenths of the cap. Disk work, so it runs outside the lock,
-// by the one thread that set `evicting`.
+// The directory counted, and when it is over the cap, the oldest entries
+// go, by their files' times, until what is left is under nine-tenths of
+// it. Disk work, so it runs outside the lock, by the one thread that set
+// `evicting`.
 static void evict(way_cache_t *c)
 {
     int64_t d = os64_opendir(c->dir);
@@ -674,7 +730,7 @@ static void evict(way_cache_t *c)
     if (tmp != NULL) {
         sort_by_time(v, tmp, n);
         char path[OS64_PATH_MAX];
-        uint64_t keep = cap_of(c) / 10 * 9;
+        uint64_t keep = total > cap_of(c) ? cap_of(c) / 10 * 9 : total;
         for (size_t i = 0; i < n && total > keep; i++)
             if (os64_snprintf(path, sizeof(path), "%s/%s", c->dir, v[i].name) > 0 &&
                 os64_unlink(path) == 0)
@@ -683,17 +739,25 @@ static void evict(way_cache_t *c)
     os64_free(tmp);
     os64_free(v);
     os64_lock_acquire(&c->lock);
-    c->total = total;
+    c->total = total + c->during;
+    c->during = 0;
     c->evicting = false;
     os64_lock_release(&c->lock);
 }
 
-// Past the cap, one thread sweeps: the first to see it, while no other is.
-static void sweep_if_over(way_cache_t *c)
+// Past the cap, or due a count, one thread sweeps: the first to see it,
+// while no other is. A browser over the cap by what others wrote finds out
+// within a sixteenth of the cap of its own writing.
+static void sweep_if_due(way_cache_t *c)
 {
     os64_lock_acquire(&c->lock);
-    bool sweep = c->total > cap_of(c) && !c->evicting;
-    c->evicting |= sweep;
+    uint64_t cap = cap_of(c);
+    bool sweep = (c->total > cap || c->since >= cap / 16) && !c->evicting;
+    if (sweep) {
+        c->evicting = true;
+        c->since = 0;
+        c->during = 0;
+    }
     os64_lock_release(&c->lock);
     if (sweep)
         evict(c);
@@ -722,8 +786,11 @@ bool way_cache_put(way_cache_t *c, const way_entry_t *e, const uint8_t *body, si
     os64_lock_acquire(&c->lock);
     c->stored++;
     c->total += hlen + len;
+    c->since += hlen + len;
+    if (c->evicting)
+        c->during += hlen + len;
     os64_lock_release(&c->lock);
-    sweep_if_over(c);
+    sweep_if_due(c);
     return true;
 }
 
@@ -731,5 +798,5 @@ void way_cache_set_cap(way_cache_t *c, uint64_t cap)
 {
     __atomic_store_n(&c->cap, cap, __ATOMIC_RELAXED);
     if (c->usable)
-        sweep_if_over(c);
+        sweep_if_due(c);
 }

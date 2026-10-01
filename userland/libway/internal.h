@@ -31,6 +31,8 @@ bool way_cache_find(way_cache_t *cache, const char *url, way_entry_t *e, uint8_t
 // Keeps an entry, replacing any for the same address. False when it was
 // not kept: turned off, too large, or the disk said no.
 bool way_cache_put(way_cache_t *cache, const way_entry_t *e, const uint8_t *body, size_t len);
+// Forgets the entry for `url`, if there is one.
+void way_cache_drop(way_cache_t *cache, const char *url);
 // Counts a reply served from the store.
 void way_cache_count(way_cache_t *cache, way_served_t how);
 

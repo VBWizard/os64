@@ -1386,6 +1386,15 @@ static void case_cookies(void)
 // field as written, a repeated one joined, a redirect's not carried to its
 // target, one too long for its field marked; and a 304 to a caller's
 // If-None-Match is a head with an empty body.
+// The caching fields each redirect said, as its hop saw them.
+static char s_hop_cc[OS64_FETCH_KEEP_FIELD];
+static os64_fetch_verdict_t keep_hop(void *ctx, const os64_fetch_hop_t *hop)
+{
+    (void)ctx;
+    snprintf(s_hop_cc, sizeof(s_hop_cc), "%s", hop->keep.cache_control);
+    return OS64_FETCH_HOP_DEFAULT;
+}
+
 static void case_keep(void)
 {
     for (int mode = 0; mode < 3; mode++) {
@@ -1396,10 +1405,13 @@ static void case_keep(void)
             "Cache-Control: public\r\ncache-control:  max-age=31536000, immutable\r\n"
             "ETag: \"v1\"\r\nLast-Modified: Wed, 23 Sep 2026 20:36:58 GMT\r\n"
             "Date: Wed, 30 Sep 2026 08:55:09 GMT\r\nAge: 7\r\nVary: Accept-Encoding\r\n", page));
-        os64_fetch_options_t opt = {0};
+        os64_fetch_options_t opt = { .on_hop = keep_hop };
+        s_hop_cc[0] = '\0';
         os64_fetch_t *f = os64_fetch_open("http://a.test/pic", &opt);
         const os64_fetch_head_t *h = os64_fetch_head(f);
         CHECK(h != NULL && h->status == 200 && !h->keep.unreadable);
+        // The redirect's own fields reached its hop, and are not the target's.
+        CHECK(strcmp(s_hop_cc, "max-age=60") == 0);
         CHECK(strcmp(h->keep.cache_control, "public, max-age=31536000, immutable") == 0);
         CHECK(strcmp(h->keep.etag, "\"v1\"") == 0);
         CHECK(strcmp(h->keep.last_modified, "Wed, 23 Sep 2026 20:36:58 GMT") == 0);
@@ -1418,6 +1430,31 @@ static void case_keep(void)
         f = os64_fetch_open("http://a.test/", &opt);
         h = os64_fetch_head(f);
         CHECK(h != NULL && h->keep.unreadable && h->keep.cache_control[0] == '\0');
+        os64_fetch_close(f);
+
+        // A caching field longer than a header line may be: omitted by the
+        // parser, and still marked, so its absence is not permission.
+        reset(); chunk_mode = mode;
+        char longer[HTTP_LINE_MAX + 200];
+        n = snprintf(longer, sizeof(longer), "Cache-Control: no-store, x=\"");
+        memset(longer + n, 'x', HTTP_LINE_MAX + 50);
+        snprintf(longer + n + HTTP_LINE_MAX + 50, sizeof(longer) - (size_t)n - HTTP_LINE_MAX - 50,
+                 "\"\r\n");
+        peer_add("a.test", 80, reply_len("200 OK", longer, page));
+        f = os64_fetch_open("http://a.test/", &opt);
+        h = os64_fetch_head(f);
+        CHECK(h != NULL && os64_fetch_status(f) == OS64_FETCH_OK && h->keep.unreadable);
+        os64_fetch_close(f);
+        // A long line that is no caching field leaves them readable.
+        reset(); chunk_mode = mode;
+        n = snprintf(longer, sizeof(longer), "X-Padding: ");
+        memset(longer + n, 'x', HTTP_LINE_MAX + 50);
+        snprintf(longer + n + HTTP_LINE_MAX + 50, sizeof(longer) - (size_t)n - HTTP_LINE_MAX - 50,
+                 "\r\nCache-Control: max-age=5\r\n");
+        peer_add("a.test", 80, reply_len("200 OK", longer, page));
+        f = os64_fetch_open("http://a.test/", &opt);
+        h = os64_fetch_head(f);
+        CHECK(h != NULL && !h->keep.unreadable && strcmp(h->keep.cache_control, "max-age=5") == 0);
         os64_fetch_close(f);
 
         // A conditional request is the caller's header, and its 304 has no

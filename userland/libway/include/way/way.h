@@ -180,8 +180,9 @@ typedef struct {
     void *cancel_ctx;
     // way_fetch_whole's own: a redirect on the way that was not permanent
     // (301, 308), which makes the reply one not to keep under the address
-    // asked for.
+    // asked for; and what the permanent ones said about keeping them.
     bool passing_hop;
+    way_chain_t chain;
 } way_hooks_t;
 
 void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt);
