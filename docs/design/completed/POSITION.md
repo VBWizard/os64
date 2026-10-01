@@ -5,9 +5,9 @@ pile to yonder was merged and Chris set yonder beside Chrome on the P5:
 "most of my observations are about exactly that". Revised the same day on
 Fable's review (§ Review record). This is the first slice of GARB.md's
 pile 2. The library is libflow and its rules are
-[LAYOUT.md](../completed/LAYOUT.md)'s; the properties come from libgarb
-([GARB.md](../completed/GARB.md)); the face is yonder
-([YONDER.md](../completed/YONDER.md)). Chris ruled on all five questions
+[LAYOUT.md](LAYOUT.md)'s; the properties come from libgarb
+([GARB.md](GARB.md)); the face is yonder
+([YONDER.md](YONDER.md)). Chris ruled on all five questions
 the same day, each as recommended (§ Rulings).*
 
 ## Why this, and why now
