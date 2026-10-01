@@ -21,5 +21,5 @@ int main(void)
         os64_free(p);
     }
     os64_printf("jssupporttest: %s (%d failures)\n", failures ? "FAIL" : "PASS", failures);
-    return failures ? 1 : 0;
+    return failures ? 1 : 0x4A535550; /* JSUP */
 }

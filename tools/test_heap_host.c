@@ -78,9 +78,19 @@ int64_t os64_heap_publish(const os64_heap_report_t *report)
     return 0;
 }
 
+static char gDiagnostic[512];
+static size_t gDiagnosticLength;
+
 long os64_write(int handle, const void *buf, size_t len)
 {
-    (void)handle;
+    if (handle == 2) {
+        size_t count = len;
+        if (count > sizeof(gDiagnostic) - 1 - gDiagnosticLength)
+            count = sizeof(gDiagnostic) - 1 - gDiagnosticLength;
+        memcpy(gDiagnostic + gDiagnosticLength, buf, count);
+        gDiagnosticLength += count;
+        gDiagnostic[gDiagnosticLength] = '\0';
+    }
     fwrite(buf, 1, len, stdout);
     return (long)len;
 }
@@ -127,6 +137,8 @@ static int gFailures, gChecks;
         gChecks++;                                                      \
         gExpectingDeath = 1;                                            \
         gDeathCode = 0;                                                 \
+        gDiagnosticLength = 0;                                         \
+        gDiagnostic[0] = '\0';                                        \
         if (setjmp(gDeathLanding) == 0) {                               \
             body;                                                       \
             gFailures++;                                                \
@@ -580,17 +592,38 @@ static void t_crimes(void)
     void *p = os64_malloc(64);
     os64_free(p);
     EXPECT_DEATH(0xF12EEBAD, os64_free(p));
+    CHECK(strstr(gDiagnostic, "free of a block that is already free (double free)") != NULL,
+          "double free was not named: %s", gDiagnostic);
+    EXPECT_DEATH(0xF12EEBAD, (void)os64_realloc(p, 128));
+    CHECK(strstr(gDiagnostic, "realloc of a freed block (use after free)") != NULL,
+          "freed realloc was not named: %s", gDiagnostic);
     EXPECT_DEATH(0xF12EEBAD, (void)os64_malloc_size(p));
+    CHECK(strstr(gDiagnostic, "size query on a freed block (use after free)") != NULL,
+          "freed size query was not named: %s", gDiagnostic);
 
     // A pointer this heap never handed out.
     int stack_object = 0;
     EXPECT_DEATH(0xF12EEBAD, os64_free(&stack_object));
+    CHECK(strstr(gDiagnostic, "free of a pointer this heap never handed out") != NULL,
+          "wild free was not named: %s", gDiagnostic);
+    EXPECT_DEATH(0xF12EEBAD, (void)os64_realloc(&stack_object, 128));
+    CHECK(strstr(gDiagnostic, "realloc of a pointer this heap never handed out") != NULL,
+          "wild realloc was not named: %s", gDiagnostic);
     EXPECT_DEATH(0xF12EEBAD, (void)os64_malloc_size(&stack_object));
+    CHECK(strstr(gDiagnostic, "size query on a pointer this heap never handed out") != NULL,
+          "wild size query was not named: %s", gDiagnostic);
 
     // Misaligned: inside a region, but not on a payload boundary.
     void *q = os64_malloc(64);
     EXPECT_DEATH(0xF12EEBAD, os64_free((char *)q + 1));
+    CHECK(strstr(gDiagnostic, "free of a misaligned pointer") != NULL,
+          "misaligned free was not named: %s", gDiagnostic);
+    EXPECT_DEATH(0xF12EEBAD, (void)os64_realloc((char *)q + 1, 128));
+    CHECK(strstr(gDiagnostic, "realloc of a misaligned pointer") != NULL,
+          "misaligned realloc was not named: %s", gDiagnostic);
     EXPECT_DEATH(0xF12EEBAD, (void)os64_malloc_size((char *)q + 1));
+    CHECK(strstr(gDiagnostic, "size query on a misaligned pointer") != NULL,
+          "misaligned size query was not named: %s", gDiagnostic);
     os64_free(q);
 
     // The stomp: run off the end of one block into the next block's header,
