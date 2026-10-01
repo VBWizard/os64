@@ -1220,8 +1220,7 @@ static bool last_baseline(const FBox *b, int64_t *out)
 {
     bool found = false;
     // A flex container's last baseline is read as its first (flex_baseline),
-    // and so is a grid container's — its first item's, the nearest libflow
-    // reads Grid 2 § 10.8.
+    // and so is a grid container's (grid_baseline).
     if (b->flex || b->grid)
         return first_baseline_in(b, out);
     if (b->ifc) {
@@ -1969,12 +1968,33 @@ static bool flex_baseline(const FBox *b, int64_t *out)
     return true;
 }
 
+// A grid container's first baseline (Grid 2 § 10.8): its first item's in
+// grid order — the lowest row, then the leftmost column — made from its
+// border box's bottom edge when it holds no text. Items lined up by
+// baseline are read as `start` (GRID.md § Booked), so none takes part.
+static bool grid_baseline(const FBox *b, int64_t *out)
+{
+    const FBox *pick = NULL;
+    for (const FBox *c = b->first; c != NULL; c = c->next)
+        if (!c->out_of_flow && c->placed &&
+            (pick == NULL || c->grid_row < pick->grid_row ||
+             (c->grid_row == pick->grid_row && c->grid_col < pick->grid_col)))
+            pick = c;
+    if (pick == NULL)
+        return false;
+    if (!first_baseline_in(pick, out))
+        *out = pick->y + pick->h;
+    return true;
+}
+
 static bool first_baseline_in(const FBox *b, int64_t *out)
 {
     if (!b->placed)
         return false;
     if (b->flex)
         return flex_baseline(b, out);
+    if (b->grid)
+        return grid_baseline(b, out);
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         if (ln->h > 0) {
             *out = ln->baseline;
@@ -3091,7 +3111,10 @@ static int32_t repeats(const flow_tracks_t *t, int64_t avail, int64_t gap)
     int32_t nothers = t->n - t->repeat_n;
     for (int32_t i = 0; i < t->n; i++) {
         bool in = i >= t->repeat_at && i < t->repeat_at + t->repeat_n;
-        *(in ? &rep : &others) += repeat_size(&t->tracks[i], avail);
+        // Counted at 1px at least (§ 7.2.3.2), or a track of nothing
+        // would repeat without end; its size is not changed.
+        int64_t size = repeat_size(&t->tracks[i], avail);
+        *(in ? &rep : &others) += in ? max64(size, FLOW_UNITS_PER_PX) : size;
     }
     int64_t per = rep + gap * t->repeat_n;
     int64_t room = avail - others - gap * (nothers - 1);
@@ -3445,8 +3468,10 @@ static bool grid_plan(L *l, FBox *b, int64_t cw, int64_t ch, GPlan *p)
     for (int32_t i = 0; i < p->ni; i++)
         count[1 - A] = max64(count[1 - A], p->items[i].at[1 - A][1]);
     for (int ax = 0; ax < 2; ax++) {
-        int32_t n = max64(1, min64(count[ax], F_GRID_MAX));
-        p->t[ax] = scratch_calloc(l, (size_t)n, sizeof(GTrack));
+        // An axis with no tracks has none: room for one is only so the
+        // allocation is never of nothing.
+        int32_t n = (int32_t)min64(count[ax], F_GRID_MAX);
+        p->t[ax] = scratch_calloc(l, (size_t)max64(1, n), sizeof(GTrack));
         if (p->t[ax] == NULL)
             return false;
         p->n[ax] = n;
@@ -3480,6 +3505,20 @@ static void plan_free(L *l, GPlan *p)
 static bool track_gone(const GTrack *t)
 {
     return t->fit_repeat && !t->used;
+}
+
+// The tracks placed end to end from 0, `gap` between those not gone.
+static void space_tracks(GTrack *t, int32_t n, int64_t gap)
+{
+    int64_t at = 0;
+    bool first = true;
+    for (int32_t i = 0; i < n; i++) {
+        if (!track_gone(&t[i]) && !first)
+            at += gap;
+        t[i].pos = at;
+        at += t[i].size;
+        first &= track_gone(&t[i]);
+    }
 }
 
 static bool track_flexible(const GTrack *t)
@@ -3719,16 +3758,9 @@ static bool size_tracks(L *l, GTrack *t, int32_t n, GItem *items, int32_t ni, in
         }
     }
 
-    int64_t at = 0;
-    bool first = true;
-    for (int32_t i = 0; i < n; i++) {
+    for (int32_t i = 0; i < n; i++)
         t[i].size = track_gone(&t[i]) ? 0 : t[i].base;
-        if (!track_gone(&t[i]) && !first)
-            at += gap;
-        t[i].pos = at;
-        at += t[i].size;
-        first &= track_gone(&t[i]);
-    }
+    space_tracks(t, n, gap);
     scratch_free(l, w);
     return true;
 }
@@ -3859,8 +3891,8 @@ static bool grid_open(L *l, FBox *b, int64_t cw, int64_t ch, GPlan *p)
 // gave them, and moves each item to an absolute place. `*used` is the
 // content height it came to, `*natural` the rows' extent with no height
 // given. False on no memory.
-static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t top, int64_t cw,
-                       int64_t given, int64_t *used, int64_t *natural)
+static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t cx, int64_t top,
+                       int64_t cw, int64_t given, int64_t *used, int64_t *natural)
 {
     const flow_style_t *s = b->style;
     GTrack *cols = p->t[0], *rows = p->t[1];
@@ -3871,8 +3903,20 @@ static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t t
         const flow_style_t *cs = it->box->style;
         int64_t aw = cols[it->at[0][1] - 1].pos + cols[it->at[0][1] - 1].size -
                      cols[it->at[0][0]].pos;
-        it->cmin = it->cmax = it->cauto = len(cs->margin[FLOW_TOP], aw) + natural_h(it->box) +
-                                          len(cs->margin[FLOW_BOTTOM], aw);
+        int64_t m = len(cs->margin[FLOW_TOP], aw) + len(cs->margin[FLOW_BOTTOM], aw);
+        const FBox *c = it->box;
+        int64_t vf = c->border[FLOW_TOP] + c->padding[FLOW_TOP] + c->padding[FLOW_BOTTOM] +
+                     c->border[FLOW_BOTTOM];
+        it->cmin = it->cmax = m + natural_h(c);
+        // Its automatic minimum, as column_asks has it across: a
+        // min-height the page gave, nothing but its frame when it scrolls,
+        // else its content's.
+        if (cs->min_height.kind == FLOW_LENGTH_PX)
+            it->cauto = content_of(cs, cs->min_height, 0, vf) + vf + m;
+        else if (f_overflow_scrolls(cs->overflow_x) || f_overflow_scrolls(cs->overflow_y))
+            it->cauto = vf + m;
+        else
+            it->cauto = it->cmin;
     }
     // The rows as the items alone size them; then, when there is a height
     // to fill — one the page gave, or a min-height rows stretch into —
@@ -3889,9 +3933,15 @@ static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t t
                      spread_y ? room_y : -1))
         return false;
     int64_t total = given >= 0 ? given : clamp_height(s, tracks_extent(rows, p->n[1]), vframe_b);
+    // A percentage row gap counted as nothing while the height was being
+    // found is of that height now (Box Alignment 3 § 8.3: a cyclic gap).
+    if (given < 0 && s->row_gap.kind == FLOW_LENGTH_PERCENT)
+        space_tracks(rows, p->n[1], len(s->row_gap, total));
     place_tracks(rows, p->n[1], s->align_content, total - tracks_extent(rows, p->n[1]));
 
-    // Each item moved down into its rows.
+    // Each item moved into its area: down into its rows, and across into
+    // its columns at the place it was laid out at in them (a plan made
+    // again for a refit may put it in others).
     for (int32_t j = 0; j < p->ni; j++) {
         GItem *it = &p->items[j];
         FBox *c = it->box;
@@ -3921,7 +3971,10 @@ static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t t
         set_item_h(l, styles, c, h);
         int64_t rdx, rdy;
         laid_offset(c, cw, &rdx, &rdy);
-        translate(c, 0, top + r0->pos + mt + dy + rdy - c->y);
+        translate(c, cx + cols[it->at[0][0]].pos + c->area_dx - c->x,
+                  top + r0->pos + mt + dy + rdy - c->y);
+        c->grid_row = it->at[1][0];
+        c->grid_col = it->at[0][0];
     }
     *used = total;
     return !l->failed;
@@ -3997,11 +4050,12 @@ static void grid_layout(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_
             c->flex_ml = ml;
         }
         block(l, styles, c, ax, aw, &cur);
+        c->area_dx = c->x - ax;
     }
     if (l->failed)
         goto done;
     int64_t used;
-    if (grid_place(l, styles, b, &p, top, cw, h_def ? h_given : -1, &used, natural))
+    if (grid_place(l, styles, b, &p, cx, top, cw, h_def ? h_given : -1, &used, natural))
         in->y = top + used;
 done:
     if (l->failed || !sized_later(b))
@@ -4026,7 +4080,8 @@ static void refit(L *l, const FStyles *styles, FBox *c)
     if (c->grid) {
         GPlan p;
         if (grid_open(l, c, content_width(c), given, &p))
-            (void)grid_place(l, styles, c, &p, top, content_width(c), given, &used, &natural);
+            (void)grid_place(l, styles, c, &p, c->x + c->border[FLOW_LEFT] + c->padding[FLOW_LEFT],
+                             top, content_width(c), given, &used, &natural);
         plan_free(l, &p);
         return;
     }

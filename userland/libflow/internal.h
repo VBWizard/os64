@@ -434,6 +434,11 @@ struct FBox {
     bool flex_sized;
     int64_t flex_w, flex_ml;
     int32_t flex_line;
+    // A grid item's area's first row and column, and its x from the area's
+    // left edge as it was laid out: what placing it again, and the grid's
+    // baseline, read.
+    int32_t grid_row, grid_col;
+    int64_t area_dx;
     uint32_t laid;
 };
 

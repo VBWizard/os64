@@ -104,8 +104,9 @@ anonymous items, `FBox.grid` beside `FBox.flex`, `inline-grid` an atom.
    an auto-repeat block repeated as often as it fits the container's
    width (columns), or its given height or else its max-height (rows) —
    each track at its fixed size, or its minimum when only that is fixed,
-   at least once (§ 7.2.3.2) — and `grid-template-areas` adding rows and
-   columns up to its own size.
+   counted as 1px when it is less (a track of nothing would repeat
+   without end; its size does not change), at least once (§ 7.2.3.2) —
+   and `grid-template-areas` adding rows and columns up to its own size.
 2. **Placement** (§ 8.5), items in `order` order: those with a definite
    position on both axes; then, with `grid-auto-flow: row`, those with a
    definite row, each at the first free column in it; then the rest at an
@@ -118,7 +119,8 @@ anonymous items, `FBox.grid` beside `FBox.flex`, `inline-grid` an atom.
    up to 1000 on either axis, a bound of libflow's own (decision 4); an
    item placed past it is held to the last track. The items fixed to a
    row may add columns; a line before the grid's start is its start
-   (booked).
+   (booked). An axis with no explicit track and no item has no tracks at
+   all: `grid-auto-rows` makes no row of its own.
 3. **The columns** (§ 12, the parts pages write): a fixed track is its
    size; a percentage is of the content width; an intrinsic minimum
    (`auto`, `min-content`) starts at the largest min-content width among
@@ -144,12 +146,18 @@ anonymous items, `FBox.grid` beside `FBox.flex`, `inline-grid` an atom.
    height the container was given, or, with none, sized by § 12.7.1's
    rule for a size not known — one fr is the most any `fr` row or item in
    one asks of it, so `1fr 2fr` over items 30 and 20 tall is 30 and 60.
-   `auto` rows stretch into a given height, or a min-height.
+   `auto` rows stretch into a given height, or a min-height. An item's
+   automatic minimum down its rows is as across: its content's height,
+   or a `min-height` the page gave, or only its frame when it scrolls. A
+   percentage row gap counts as nothing while a height not given is found,
+   and is of that height once it is (Box Alignment 3 § 8.3).
 6. **Alignment**: each item moved down into its rows by `align-self`
    (`stretch` heightens its box; `baseline` is read as `start`, booked),
-   auto margins taking the room first, and the tracks placed in the
-   container by `justify-content` and `align-content` where they leave
-   room — overflowing tracks centred or ended all the same.
+   auto margins taking the room first, and across to where it was laid
+   out in its columns — a refit plans the grid again, and may put it in
+   others; and the tracks placed in the container by `justify-content`
+   and `align-content` where they leave room — overflowing tracks centred
+   or ended all the same.
 7. **The container's height**: its `height`, or its rows and gaps, held to
    its limits.
 
@@ -158,8 +166,10 @@ size them for the smallest and the largest room — each intrinsic track at
 its items' min-content, or max-content, `fr` tracks as their minimum or
 their items' max-content — and the gaps.
 
-**A grid container's baseline**: its first item's, in document order, as a
-flex container's.
+**A grid container's baseline** (§ 10.8, `grid_baseline`): its first
+item's in grid order — the lowest row, then the leftmost column — made
+from its border box's bottom edge when it holds no text, as a flex
+container's is.
 
 **Absolute children** are placed at the content box's corner (the grid
 area as their containing block is booked).

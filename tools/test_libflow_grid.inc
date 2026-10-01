@@ -317,6 +317,66 @@ static void grid_review_cases(void)
     }
 }
 // Nested containers in and around a grid (the flex slice's refit, for a
+
+// Minimums, refits, baselines, empty axes, gaps and repeats (Quinn's
+// round on #183; Chrome's answers).
+static void grid_round1_cases(void)
+{
+    // An item's automatic minimum in its row is nothing under a
+    // min-height of 0 or a scrolling overflow: two 1fr rows of 50 in 100.
+    flex_rects("grid: a min-height of 0 lets a row be smaller than its content",
+               "#o{display:grid;width:100px;height:100px;grid-template-rows:1fr 1fr} #a{min-height:0}"
+               " #x{height:150px} #b{height:20px}</style>"
+               "<div id=o><div id=a><div id=x></div></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 100, 50}, {0, 50, 100, 20}));
+    flex_rects("grid: a scrolling item lets a row be smaller than its content",
+               "#o{display:grid;width:100px;height:100px;grid-template-rows:1fr 1fr} #a{overflow:auto}"
+               " #x{height:150px} #b{height:20px}</style>"
+               "<div id=o><div id=a><div id=x></div></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 100, 50}, {0, 50, 100, 20}));
+    // A refit that plans the grid again moves its items across too: rows
+    // of 20 fill the 100 it is stretched to, so all three items share the
+    // first column.
+    flex_rects("grid: a refit's new plan moves items across",
+               "#o{display:grid;width:100px;grid-template-rows:100px} #i{display:grid;grid-auto-flow:column;"
+               "grid-template-rows:repeat(auto-fill,20px);grid-auto-columns:20px}"
+               " #i>div{height:10px;width:10px}</style>"
+               "<div id=o><div id=i><div id=p></div><div id=q></div><div id=r></div></div></div>",
+               FLEX_IDS("p", "q", "r"), FLEX_WANT({0, 0, 10, 10}, {0, 20, 10, 10}, {0, 40, 10, 10}));
+    // An inline grid's baseline is its first item's, made from its bottom
+    // edge when it holds no text: 20, so the inline-block beside sits at 0.
+    flex_rects("grid: an inline grid's baseline is its first item's",
+               "#o{display:inline-grid;grid-template-columns:40px;grid-template-rows:20px 60px}"
+               " #c{display:inline-block;width:10px;height:20px}</style>"
+               "<div><div id=o><div></div><div></div></div><div id=c></div></div>",
+               FLEX_IDS("c"), FLEX_WANT({40, 0, 10, 20}));
+    // A grid with no items and no rows has none: grid-auto-rows makes no
+    // row of its own.
+    flex_rects("grid: an empty grid has no implicit row",
+               "#o{display:grid;width:100px;grid-auto-rows:20px} #s{height:10px}</style>"
+               "<div id=o></div><div id=s></div>",
+               FLEX_IDS("o", "s"), FLEX_WANT({0, 0, 100, 0}, {0, 0, -1, 10}));
+    // A percentage row gap is nothing while the height is found (40), and
+    // half of it after: the second row at 40.
+    flex_rects("grid: a percentage row gap is of the height it found",
+               "#o{display:grid;width:100px;grid-template-rows:20px 20px;row-gap:50%}</style>"
+               "<div id=o><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("o", "b"), FLEX_WANT({0, 0, 100, 40}, {0, 40, 100, 20}));
+    // An auto-repeat of 0px counts each track as 1px: 100 columns, both
+    // items on the first row.
+    flex_rects("grid: an auto-repeat of nothing counts each track as a pixel",
+               "#o{display:grid;width:100px;grid-template-columns:repeat(auto-fill,0px);"
+               "grid-auto-rows:20px} #o>div{width:10px;height:10px}</style>"
+               "<div id=o><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b", "o"), FLEX_WANT({0, 0, 10, 10}, {0, 0, 10, 10}, {0, 0, 100, 20}));
+    // And one of half a pixel counts as a pixel: 20 in 20px, the last
+    // column at 9.5 (10, as libflow rounds it).
+    flex_rects("grid: an auto-repeat under a pixel counts as a pixel",
+               "#o{display:grid;width:20px;grid-template-columns:repeat(auto-fill,0.5px)}"
+               " #l{grid-column:-2;height:5px}</style><div id=o><div id=l></div></div>",
+               FLEX_IDS("l"), FLEX_WANT({10, 0, -1, 5}));
+}
+
 // grid; Chrome's answers).
 static void grid_nested_cases(void)
 {
@@ -368,4 +428,5 @@ static void grid_cases(void)
     grid_align_cases();
     grid_review_cases();
     grid_nested_cases();
+    grid_round1_cases();
 }
