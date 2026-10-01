@@ -1,6 +1,6 @@
 # JavaScript library and runner work plan
 
-Status: proposed work assignments and foundation progress, updated 2026-10-01. The product decisions are in
+Status: work assignments and foundation/target-adapter progress, updated 2026-10-01. The product decisions are in
 [JAVASCRIPT.md](JAVASCRIPT.md). This plan separates work so Chris can assign
 packets to Opus and Fable without overlapping ownership. No collaborator has
 been contacted or started by this plan. `libjs`, `js`, and `libmath` are working
@@ -51,11 +51,11 @@ request to launch agents or send messages.
 ## R0 runtime contract
 
 The conceptual contract is agreed in JAVASCRIPT.md under Runtime contracts.
-R0 remains open for interface review: declarations, ownership rules, and
-failure semantics are proposed in [the runtime contract](../../../userland/libjs/CONTRACT.md)
-and [public header](../../../userland/libjs/include/os64/js.h). Fable's first
-review approved the shape and continuous turn budget; the revised contract
-awaits re-review and implementation evidence. The runner requires
+R0's interface was reviewed by Fable and merged in PR #189; runtime
+implementation and behavioral evidence remain R2 work. Declarations, ownership rules, and
+failure semantics are recorded in [the runtime contract](../../../userland/libjs/CONTRACT.md)
+and [public header](../../../userland/libjs/include/os64/js.h). Fable's
+follow-up review accepted the revised contract, including reusable script failures and continuous turn budgets. The runner requires
 no QuickJS types; binding examples use the pinned engine API. Include:
 
 - Creation/destruction, caller-supplied limits, evaluation of a bounded source
@@ -246,7 +246,7 @@ Chris's explicit authorization; this plan does not authorize either.
 
 ## Foundation slice 2026-10-01
 
-The runtime owner has begun in `.worktrees/js-runtime-foundation` on branch
+The runtime owner began in `.worktrees/js-runtime-foundation` on branch
 `codex/js-runtime-foundation`, based on `b55c3770`. The agreed design/review
 documents were copied into that checkout without changing the main checkout.
 
@@ -254,18 +254,41 @@ documents were copied into that checkout without changing the main checkout.
   syntax-checked runner, expression/job, and custom-binding examples. The
   round-one revisions keep ordinary exceptions/rejections reusable, make
   class-ID slots and binding ABI checks explicit, and select output names.
-  The continuous deadline is accepted; the revised interface needs re-review
-  before C1 depends on it. No runtime symbol is implemented by these headers.
+  Fable accepted the revised interface and it was merged in PR #189; C1
+  can depend on the reviewed contract, with execution waiting on R2. No runtime
+  symbol is implemented by these headers.
 - The separate libos64 prerequisite change supplies `os64_malloc_size`,
   `os64_memchr`, `os64_strchr`, `os64_strrchr`, and `os64_strcmp`, with host
   regression coverage and `/tests/jssupporttest`, registered in `testrun` with
   its JSUP pass badge.
 - R1 source preparation retains the pinned original core and hashes, notices,
   a scoped Atomics patch, and a repeatable engine-only host probe. The profile
-  preserves stack checks. Target adaptation and libjs.so registration remain
-  open; the host probe uses host libc/libm and does not establish os64 execution.
+  preserves stack checks. The target-adapter slice below follows this foundation;
+  default image registration remains open. This baseline probe uses host
+  libc/libm and does not establish os64 execution.
 
 Validation and remaining work are recorded in `userland/libjs/VALIDATION.md`.
 M1, R2, C1, V1, and D0 remain separate work packets. The library prerequisite
 commit is on `codex/js-support`; the interface and source preparation are stacked
-above it on `codex/js-runtime-foundation` for review before consumer work begins.
+above it on `codex/js-runtime-foundation`. PRs #188 and #189 merged these
+foundation branches; they are retained for reference.
+
+## R1 target adaptation slice 2026-10-01
+
+Worktree `.worktrees/js-target-port`, branch `codex/js-target-port`, starts at
+merged foundation `a426386d`. The runtime owner supplies the private C headers,
+allocation callbacks using `os64_malloc_size`, wall-clock/timezone adaptation,
+diagnostic formatting, compiler memory veneers, generated patch preparation,
+core build and shared-link recipe. Upstream originals remain unchanged.
+
+`make -C userland js-core` cross-compiles and partially links the retained core
+and required libgcc helpers. `js-library` is an explicit shared target requiring
+M1's real `libmath.so`; it is excluded from the default image until the maths
+and R2 runtime boundary are available. The shared placement population reserves
+both library names; image registration remains I1 work.
+
+The maintained target/host fixtures are `tools/test_js_port_target.*`,
+`tools/test_js_port_host.*`, and `tools/test_js_port_calendar.c`. They belong to
+R1, alongside its own component docs. Exact evidence and limitations live in
+`userland/libjs/VALIDATION.md`. This slice does not implement R2, C1, or D1 and
+does not establish guest JavaScript or numerical conformance.

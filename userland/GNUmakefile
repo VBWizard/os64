@@ -223,7 +223,7 @@ LIBFETCH_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libfetch.so
 # isolation would miss a hash collision and prelink two objects into the same
 # slot. app_bases.py sorts before probing, so adding a library gives the build
 # one deterministic map independent of link order.
-LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so libpage.so libflow.so libway.so libgarb.so libfreetype.so)
+LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so libpage.so libflow.so libway.so libgarb.so libfreetype.so libmath.so libjs.so)
 LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
 LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
 LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
@@ -363,6 +363,7 @@ include libpage/library.mk
 include libgarb/library.mk
 include libflow/library.mk
 include libway/library.mk
+include libjs/shared.mk
 
 # Source membership and the population used for prelink placement live here.
 $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBFREETYPE_SO): GNUmakefile
