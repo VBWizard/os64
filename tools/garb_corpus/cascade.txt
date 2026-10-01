@@ -72,7 +72,7 @@ END
 
 # @media, @supports, and a style element's media. A grid container is read
 # but laid out as the block it is outside, so it is not SUPPORTED; a flex
-# container is laid out, and is, but not yet one that wraps (FLEX.md, F2).
+# container is laid out, wrapping or not, and is.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -92,7 +92,7 @@ p { color: red }
 <style media="(min-width: 700px)">p { height: 2px }</style>
 <p>x
 WANT
-p: color: rgb(0, 0, 255); margin-bottom: 4px; margin-left: 2px; padding-right: 6px; padding-bottom: 8px; height: 2px
+p: color: rgb(0, 0, 255); margin-bottom: 4px; margin-left: 2px; padding-top: 7px; padding-right: 6px; padding-bottom: 8px; height: 2px
 (end)
 END
 

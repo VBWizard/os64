@@ -263,12 +263,68 @@ static void flex_box_cases(void)
                "</style><nav><a id=a href=x>home</a><a href=x>b</a><a href=x>c</a>"
                "<a href=x>d</a><a href=x>e</a><a id=f href=x>f</a></nav>",
                FLEX_IDS("a", "f"), FLEX_WANT({0, 0, 67, 20}, {333, 0, 67, 20}));
-    // A wrapping container is laid out on one line until F2: its items
-    // squeezed, not stacked.
-    flex_rects("flex: flex-wrap is one line until it is laid out",
-               ".c{display:flex;flex-wrap:wrap} .c div{width:300px;height:10px}</style>"
-               "<div class=c><div id=a></div><div id=b></div></div>",
-               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 200, 10}, {200, 0, 200, 10}));
+}
+
+static void flex_wrap_cases(void)
+{
+    // Cards 150 wide in 400: two fit on a line (300; a third would make
+    // 450), the third on the next, 20 down.
+    flex_rects("flex: wrap puts what does not fit on the next line",
+               ".c{display:flex;flex-wrap:wrap} .c div{width:150px;height:20px}</style>"
+               "<div class=c><div id=a></div><div id=b></div><div id=c></div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 0, 150, 20}, {150, 0, 150, 20}, {0, 20, 150, 20}));
+    // With gap 10: 150 + 10 + 150 = 310 fits, 470 does not; the next line
+    // is 10 below the first.
+    flex_rects("flex: gap between items and between lines",
+               ".c{display:flex;flex-wrap:wrap;gap:10px} .c div{width:150px;height:20px}</style>"
+               "<div class=c><div id=a></div><div id=b></div><div id=c></div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 0, 150, 20}, {160, 0, 150, 20}, {0, 30, 150, 20}));
+    // Each line flexes on its own: two from 150 grow to 200 each, the
+    // third alone to 400.
+    flex_rects("flex: each wrapped line grows on its own",
+               ".c{display:flex;flex-wrap:wrap} .c div{flex:1 1 150px;height:20px}</style>"
+               "<div class=c><div id=a></div><div id=b></div><div id=c></div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 0, 200, 20}, {200, 0, 200, 20}, {0, 20, 400, 20}));
+    // align-content in a container 100 high: two lines of 20 leave 60.
+    static const struct { const char *how; int32_t ay, ah, cy, ch; } kContent[] = {
+        {"normal", 0, 50, 50, 50},          // stretch: each line 50, the items with them
+        {"flex-start", 0, 20, 20, 20},
+        {"flex-end", 60, 20, 80, 20},
+        {"center", 30, 20, 50, 20},
+        {"space-between", 0, 20, 80, 20},
+        {"space-around", 15, 20, 65, 20},   // 60 / 4 about each line
+        {"space-evenly", 20, 20, 60, 20},   // 60 / 3 between and at the ends
+    };
+    for (size_t i = 0; i < sizeof(kContent) / sizeof(kContent[0]); i++) {
+        char page[512], name[96];
+        snprintf(page, sizeof(page),
+                 ".c{display:flex;flex-wrap:wrap;height:100px;align-content:%s}"
+                 " .c div{width:300px}</style><div class=c><div id=a>x</div><div id=c>x</div></div>",
+                 kContent[i].how);
+        snprintf(name, sizeof(name), "flex: align-content %s", kContent[i].how);
+        flex_rects(name, page, FLEX_IDS("a", "c"),
+                   FLEX_WANT({0, kContent[i].ay, 300, kContent[i].ah},
+                             {0, kContent[i].cy, 300, kContent[i].ch}));
+    }
+    // wrap-reverse stacks the lines from the bottom: the first line at 20
+    // in a container 40 high, the second at 0.
+    flex_rects("flex: wrap-reverse puts the first line at the far side",
+               ".c{display:flex;flex-wrap:wrap-reverse} .c div{width:150px;height:20px}</style>"
+               "<div class=c><div id=a></div><div id=b></div><div id=c></div></div>",
+               FLEX_IDS("a", "c"), FLEX_WANT({0, 20, 150, 20}, {0, 0, 150, 20}));
+    // A wrapping column 100 high: two items of 40 per line (a third would
+    // make 120). Each line is as wide as its item, 8 (`x`), and the 384
+    // left across is shared, 192 each, so each line and each stretched
+    // item is 200 wide.
+    flex_rects("flex: a wrapping column makes lines side by side",
+               ".c{display:flex;flex-direction:column;flex-wrap:wrap;height:100px}"
+               " .c div{height:40px}</style>"
+               "<div class=c><div id=a>x</div><div id=b>x</div><div id=c>x</div></div>",
+               FLEX_IDS("a", "b", "c"),
+               FLEX_WANT({0, 0, 200, 40}, {0, 40, 200, 40}, {200, 0, 200, 40}));
 }
 
 // Codex's first round on F1 (PR #181): each case the one its finding
@@ -393,6 +449,30 @@ static void flex_review_cases(void)
     }
 }
 
+// The same findings at the sites wrapping added (PR #182): a wrapping
+// column moves its items ACROSS to their lines, and widens a stretched
+// one to its line.
+static void flex_wrap_review_cases(void)
+{
+    // Two lines of one 40px item each in a 50px-high column: the second
+    // line starts at 30 (the first line is its widest item, 30), and the
+    // relative item keeps its 5px on top of that.
+    flex_rects("flex: a wrapping column item keeps its relative offset across",
+               ".c{display:flex;flex-direction:column;flex-wrap:wrap;height:50px;align-content:start}"
+               " .c div{height:40px;width:30px}</style><div class=c><div id=a></div>"
+               "<div id=b style=position:relative;left:5px></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 30, 40}, {35, 0, 30, 40}));
+    // A stretched item in a wrapping column is widened to its line (the
+    // 80px of its sibling), and its absolute box, right:0, sits at the
+    // widened edge: 80 - 10.
+    flex_rects("flex: an absolute box in a widened wrapping-column item sits at its edge",
+               ".c{display:flex;flex-direction:column;flex-wrap:wrap;height:100px;align-content:start}"
+               " .c span{position:absolute;right:0;top:0;width:10px;height:10px}</style>"
+               "<div class=c><div id=i style=position:relative;height:20px><span id=a></span></div>"
+               "<div style=width:80px;height:20px></div></div>",
+               FLEX_IDS("i", "a"), FLEX_WANT({0, 0, 80, 20}, {70, 0, 10, 10}));
+}
+
 // Nested containers, bases and limits (Quinn's round on #181; Chrome's
 // answers).
 static void flex_nested_cases(void)
@@ -459,6 +539,24 @@ static void flex_nested_cases(void)
                "#o{display:flex;gap:10px;white-space:pre} #a,#b{width:50px;height:20px}</style>"
                "<div id=o>  <div id=a></div>  <div id=b></div>  </div>",
                FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 50, 20}, {60, 0, 50, 20}));
+    // A wrapped row's items are placed again in their own lines: the
+    // second line of a stretched inner row centres its item in that
+    // line's half of 100.
+    flex_rects("flex: a stretched wrapping row places its lines again",
+               "#o{display:flex;width:200px;height:100px} #i{display:flex;flex-wrap:wrap;width:100px;"
+               "align-items:center} #i div{width:60px;height:20px}</style>"
+               "<div id=o><div id=i><div id=a></div><div id=b></div></div></div>",
+               FLEX_IDS("i", "a", "b"), FLEX_WANT({0, 0, 100, 100}, {0, 15, 60, 20}, {0, 65, 60, 20}));
+    // A wrapping column stretched to 100 wraps again against it: its two
+    // 60px items take a line each, the lines sized from the items' own
+    // 50px widths (not the 200 the first placement stretched them to)
+    // and stretched to 100 each.
+    flex_rects("flex: a stretched wrapping column forms its lines again",
+               "#o{display:flex;height:100px} #i{display:flex;flex-direction:column;flex-wrap:wrap;"
+               "width:200px} #i>div{height:60px} .k{width:50px;height:10px}</style>"
+               "<div id=o><div id=i><div id=a><div class=k></div></div><div id=b><div class=k></div>"
+               "</div></div></div>",
+               FLEX_IDS("i", "a", "b"), FLEX_WANT({0, 0, 200, 100}, {0, 0, 100, 60}, {100, 0, 100, 60}));
 }
 
 // Pictures and baselines (Quinn's second round on #181; Chrome's answers,
@@ -501,6 +599,23 @@ static void flex_picture_cases(void)
                " #b{width:10px;height:60px} #c{display:inline-block;width:10px;height:20px}</style>"
                "<div><div id=o><div id=a></div><div id=b></div></div><div id=c></div></div>",
                FLEX_IDS("c"), FLEX_WANT({20, 40, 10, 20}));
+    // In a wrapping column, a picture shrunk to 15 is 20 wide, and its
+    // line is: the next line starts at 20.
+    flex_rects("flex: a picture shrunk down a wrapping column sizes its line",
+               "#o{display:flex;flex-direction:column;flex-wrap:wrap;height:15px;width:100px;"
+               "align-content:flex-start;align-items:flex-start} img{min-height:0}"
+               " #d{width:10px;height:10px}</style><div id=o><img id=i src=known.png><div id=d></div></div>",
+               FLEX_IDS("i", "d"), FLEX_WANT({0, 0, 20, 15}, {20, 0, 10, 10}));
+    // Wrapped, only the first line's items count: the baseline-aligned
+    // item on the second line does not, and the first item's bottom, 20,
+    // is the container's baseline.
+    flex_rects("flex: a wrapped container's baseline is its first line's",
+               "#o{display:inline-flex;flex-wrap:wrap;width:20px;align-items:flex-start}"
+               " #a{width:10px;height:20px} #b{width:10px;height:60px}"
+               " #x{width:20px;height:30px;align-self:baseline}"
+               " #c{display:inline-block;width:10px;height:20px}</style>"
+               "<div><div id=o><div id=a></div><div id=b></div><div id=x></div></div><div id=c></div></div>",
+               FLEX_IDS("c", "x"), FLEX_WANT({20, 0, 10, 20}, {0, 60, 20, 30}));
     // A reverse direction puts its last item at the start, and that is the
     // one whose baseline counts: the 60px item, in a row and a column.
     flex_rects("flex: a row-reverse baseline is its startmost item's",
@@ -573,6 +688,12 @@ static void flex_picture_cases(void)
                FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 70, -1}, {70, 0, 50, 20}));
     // The same padding in the basis alone (no automatic minimum to lean
     // on), and in the automatic minimum alone (a basis of 0).
+    // A wrapping row's line is not fixed by its height, so a stretched
+    // picture keeps its own width there and is only stretched down (Chrome).
+    flex_rects("flex: a picture in a wrapping row is not widened by its stretch",
+               "#o{display:flex;flex-wrap:wrap;width:100px;height:60px}</style>"
+               "<div id=o><img id=i src=known.png></div>",
+               FLEX_IDS("i"), FLEX_WANT({0, 0, 40, 60}));
     flex_rects("flex: a content basis alone counts a percentage padding",
                "#o{display:flex;width:200px} #a{flex:none;padding:10%;min-width:0}"
                " #k{width:30px;height:20px}</style><div id=o><div id=a><div id=k></div></div></div>",
@@ -583,13 +704,72 @@ static void flex_picture_cases(void)
                FLEX_IDS("a"), FLEX_WANT({0, 0, 70, -1}));
 }
 
+// Wrapping, reversed and limited (Quinn's round on #182; Chrome's answers).
+static void flex_wrap_round2_cases(void)
+{
+    // A wrapped column's stretch is held to the item's max-width: 50 in
+    // lines of 100.
+    flex_rects("flex: a wrapped column's stretch keeps max-width",
+               "#o{display:flex;flex-flow:column wrap;width:200px;height:100px}"
+               " #a,#b{height:60px;max-width:50px}</style><div id=o><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 50, 60}, {100, 0, 50, 60}));
+    // wrap-reverse puts the cross start at the far side, and a stretch
+    // item that cannot fill its line sits there.
+    flex_rects("flex: an unfilled stretch item sits at the reversed cross start",
+               "#o{display:flex;flex-wrap:wrap-reverse;width:100px;height:100px} #o>div{width:60px}"
+               "</style><div id=o><div id=a style=height:20px></div><div id=b style=height:40px></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 80, 60, 20}, {0, 20, 60, 40}));
+    flex_rects("flex: an unfilled stretch item sits at the reversed cross start of a column",
+               "#o{display:flex;flex-flow:column wrap-reverse;width:100px;height:100px}"
+               " #o>div{height:60px}</style>"
+               "<div id=o><div id=a style=width:20px></div><div id=b style=width:40px></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({80, 0, 20, 60}, {20, 0, 40, 60}));
+    // `start` is the writing mode's, which wrap-reverse does not turn:
+    // lines packed at the top, items at their line's top.
+    flex_rects("flex: align-content start under wrap-reverse is the top",
+               "#o{display:flex;flex-wrap:wrap-reverse;width:100px;height:100px;align-content:start}"
+               " #o>div{width:60px;height:20px}</style><div id=o><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 20, 60, 20}, {0, 0, 60, 20}));
+    flex_rects("flex: align-items start under wrap-reverse is the top",
+               "#o{display:flex;flex-wrap:wrap-reverse;width:100px;height:100px;align-items:start}"
+               " #o>div{width:40px}</style>"
+               "<div id=o><div id=a style=height:20px></div><div id=b style=height:40px></div></div>",
+               FLEX_IDS("a", "b"), FLEX_WANT({0, 0, 40, 20}, {40, 0, 40, 40}));
+    // A wrapped row-reverse takes its baseline from its first line's
+    // startmost item (b's 60), never from a later line.
+    flex_rects("flex: a wrapped row-reverse baseline is its first line's",
+               "#o{display:inline-flex;flex-flow:row-reverse wrap;width:20px;align-items:flex-start}"
+               " #a{width:10px;height:20px} #b{width:10px;height:60px} #x{width:20px;height:30px}"
+               " #c{display:inline-block;width:10px;height:20px}</style>"
+               "<div><div id=o><div id=a></div><div id=b></div><div id=x></div></div><div id=c></div></div>",
+               FLEX_IDS("c"), FLEX_WANT({20, 40, 10, 20}));
+    // A wrapped column-reverse's baseline is its first column's too: b's
+    // 60, not x's in the second column.
+    flex_rects("flex: a wrapped column-reverse baseline is its first line's",
+               "#o{display:inline-flex;flex-flow:column-reverse wrap;width:40px;height:80px;"
+               "align-items:flex-start} #a{width:10px;height:20px} #b{width:10px;height:60px}"
+               " #x{width:10px;height:30px} #c{display:inline-block;width:10px;height:20px}</style>"
+               "<div><div id=o><div id=a></div><div id=b></div><div id=x></div></div><div id=c></div></div>",
+               FLEX_IDS("c"), FLEX_WANT({40, 40, 10, 20}));
+    // A min-height over the max-height is the room a column wraps in: one
+    // line of 80 in its 100.
+    flex_rects("flex: a column wraps in a min-height over its max-height",
+               "#o{display:flex;flex-flow:column wrap;width:200px;min-height:100px;max-height:50px;"
+               "align-content:start} #o>div{width:20px;height:40px}</style>"
+               "<div id=o><div id=a></div><div id=b></div></div>",
+               FLEX_IDS("a", "b", "o"), FLEX_WANT({0, 0, 20, 40}, {0, 40, 20, 40}, {0, 0, 200, 100}));
+}
+
 static void flex_cases(void)
 {
     flex_row_cases();
     flex_cross_cases();
     flex_column_cases();
     flex_box_cases();
+    flex_wrap_cases();
     flex_review_cases();
+    flex_wrap_review_cases();
     flex_nested_cases();
     flex_picture_cases();
+    flex_wrap_round2_cases();
 }

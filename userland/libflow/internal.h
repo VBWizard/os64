@@ -414,10 +414,13 @@ struct FBox {
     bool abs_sized, abs_h_set;
     int64_t abs_w, abs_ml, abs_h;
     // A flex item's width and left margin, as its container decided them
-    // before laying it out (FLEX.md), which block() takes as given; and
-    // how many times the box was laid out, which the fuzz holds to once.
+    // before laying it out (FLEX.md), which block() takes as given; its
+    // line, counted from the first — a row's placing it again reads that,
+    // and the container's baseline reads either's; and how many times the
+    // box was laid out, which the fuzz holds to once.
     bool flex_sized;
     int64_t flex_w, flex_ml;
+    int32_t flex_line;
     uint32_t laid;
 };
 

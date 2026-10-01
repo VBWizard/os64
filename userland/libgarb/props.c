@@ -118,9 +118,8 @@ static const char *const kDisplay[] = {
 // SUPPORTED, so @supports tells a page to use the fallback it wrote for
 // exactly this. A grid container is laid out as the block or inline-block
 // it is on the outside, and flow-root as a block, which keeps a page's
-// `display: inline-block; display: inline-grid` fallback pattern working; a
-// wrapping flex container on one line (FLEX.md, F2); an opacity between
-// none and all as all. `contents` is not here:
+// `display: inline-block; display: inline-grid` fallback pattern working;
+// an opacity between none and all as all. `contents` is not here:
 // libflow gives such an element no box and flows its children into its
 // parent, which is what it says. The list is for the layouts a page writes
 // a fallback for — asks for one and is handed another — and each joins it
@@ -131,7 +130,6 @@ static const struct {
     const char *keyword;
 } kApproximated[] = {
     {GARB_DISPLAY, "grid"}, {GARB_DISPLAY, "inline-grid"}, {GARB_DISPLAY, "flow-root"},
-    {GARB_FLEX_WRAP, "wrap"}, {GARB_FLEX_WRAP, "wrap-reverse"},
 };
 
 bool garb_set_approximated(const garb_set_t *set)
