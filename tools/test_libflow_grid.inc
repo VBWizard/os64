@@ -396,6 +396,30 @@ static void grid_round1_cases(void)
                "#o{display:grid;width:100px;grid-auto-flow:column;grid-auto-rows:20px}"
                " #s{height:10px}</style><div id=o></div><div id=s></div>",
                FLEX_IDS("o", "s"), FLEX_WANT({0, 0, 100, 0}, {0, 0, -1, 10}));
+    // A relative item's percentages are of its grid area: half of its 100px
+    // column across, half of its 100px row down, whatever the grid's size.
+    flex_rects("grid: a relative left is of the grid area's width",
+               "#o{display:grid;width:200px;grid-template-columns:100px 100px}"
+               " #a{position:relative;left:50%;height:20px}</style>"
+               "<div id=o><div id=a></div><div></div></div>",
+               FLEX_IDS("a"), FLEX_WANT({50, 0, 100, 20}));
+    // (Moved 100 in, so the answer is not negative: a negative want is
+    // flex_rects' "any".)
+    flex_rects("grid: a relative right is of the grid area's width",
+               "#o{display:grid;width:200px;margin-left:100px;grid-template-columns:100px 100px}"
+               " #a{position:relative;right:50%;height:20px}</style>"
+               "<div id=o><div id=a></div><div></div></div>",
+               FLEX_IDS("a"), FLEX_WANT({50, 0, 100, 20}));
+    flex_rects("grid: a relative top is of the grid area's height",
+               "#o{display:grid;width:200px;grid-template-rows:100px 100px}"
+               " #a{position:relative;top:50%;height:20px}</style>"
+               "<div id=o><div id=a></div><div></div></div>",
+               FLEX_IDS("a"), FLEX_WANT({0, 50, 200, 20}));
+    flex_rects("grid: a relative top is of the area, not the grid's height",
+               "#o{display:grid;width:200px;height:300px;grid-template-rows:100px 100px}"
+               " #a{position:relative;top:50%;height:20px}</style>"
+               "<div id=o><div id=a></div><div></div></div>",
+               FLEX_IDS("a"), FLEX_WANT({0, 50, 200, 20}));
     // A percentage row gap is nothing while the height is found (40), and
     // half of it after: the second row at 40.
     flex_rects("grid: a percentage row gap is of the height it found",

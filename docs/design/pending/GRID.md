@@ -181,7 +181,8 @@ all of them are, and withdrawn when a layout stops in between
 (`items_done`); an item's absolute boxes are laid out after its rows have
 sized and moved it — after the OUTERMOST container has, when grids and
 flex containers nest — and a relative item keeps its offset when they move
-it (`sized_later`, `laid_offset`).
+it, its percentages being of its grid area, its containing block, both
+ways (`sized_later`, `rel_offset`).
 
 ### The door, the face
 

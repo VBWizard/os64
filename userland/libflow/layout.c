@@ -3915,15 +3915,17 @@ static bool grid_open(L *l, FBox *b, int64_t cw, int64_t ch, GPlan *p)
     return !l->failed;
 }
 
-// Everything after a grid's items are laid out, against its content height
-// `given` (-1: not known): the rows, sized from the items' heights, and
-// each item moved down into them and stretched. It can run again (refit):
+// Everything after a grid's items are laid out, in its content box from
+// `cx`, `top`, against its content height `given` (-1: not known): the
+// rows, sized from the items' heights, and each item moved into its area —
+// down into its rows and stretched, across into its columns. It can run
+// again (refit):
 // it reads the items' natural heights, never what an earlier placement
 // gave them, and moves each item to an absolute place. `*used` is the
 // content height it came to, `*natural` the rows' extent with no height
 // given. False on no memory.
 static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t cx, int64_t top,
-                       int64_t cw, int64_t given, int64_t *used, int64_t *natural)
+                       int64_t given, int64_t *used, int64_t *natural)
 {
     const flow_style_t *s = b->style;
     GTrack *cols = p->t[0], *rows = p->t[1];
@@ -4001,8 +4003,11 @@ static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t c
             dy = room / 2;
         }
         set_item_h(l, styles, c, h);
-        int64_t rdx, rdy;
-        laid_offset(c, cw, &rdx, &rdy);
+        // A relative item's offsets are of its grid area, its containing
+        // block (Grid 2 § 9), both ways.
+        int64_t rdx = 0, rdy = 0;
+        if (c->positioned && !c->out_of_flow)
+            rel_offset(cs, aw, ah, &rdx, &rdy);
         // Across, its place in this area's width: the width it was laid out
         // at, placed again by its alignment. A table placed itself, and
         // keeps where it was laid out in its area (area_dx).
@@ -4082,7 +4087,7 @@ static void grid_layout(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_
     if (l->failed)
         goto done;
     int64_t used;
-    if (grid_place(l, styles, b, &p, cx, top, cw, h_def ? h_given : -1, &used, natural))
+    if (grid_place(l, styles, b, &p, cx, top, h_def ? h_given : -1, &used, natural))
         in->y = top + used;
 done:
     if (l->failed || !sized_later(b))
@@ -4108,7 +4113,7 @@ static void refit(L *l, const FStyles *styles, FBox *c)
         GPlan p;
         if (grid_open(l, c, content_width(c), given, &p))
             (void)grid_place(l, styles, c, &p, c->x + c->border[FLOW_LEFT] + c->padding[FLOW_LEFT],
-                             top, content_width(c), given, &used, &natural);
+                             top, given, &used, &natural);
         plan_free(l, &p);
         return;
     }
