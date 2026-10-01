@@ -4,8 +4,8 @@
 #178) was merged and Chris set danlegt.com beside Chrome: "the 6 buttons
 should be in a row, not stacked on each other". This is the second part
 of GARB.md's pile 2; grid is the third. The library is libflow and its
-rules are [LAYOUT.md](../completed/LAYOUT.md)'s; the properties come from
-libgarb ([GARB.md](../completed/GARB.md)); positioned boxes inside a flex
+rules are [LAYOUT.md](LAYOUT.md)'s; the properties come from
+libgarb ([GARB.md](GARB.md)); positioned boxes inside a flex
 container follow [POSITION.md](POSITION.md). Nothing here is waiting on a
 ruling: the questions are web semantics, decided below with Chrome as the
 yardstick (§ Decisions), and the one question about what a person sees —

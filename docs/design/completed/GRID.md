@@ -3,8 +3,8 @@
 *Written 2026-09-30 by Opus, the same night as FLEX.md, as the last part
 of GARB.md's pile 2: Chris asked for flexbox's two slices and grid, built
 stacked. The library is libflow and its rules are
-[LAYOUT.md](../completed/LAYOUT.md)'s; the properties come from libgarb
-([GARB.md](../completed/GARB.md)); it reuses what
+[LAYOUT.md](LAYOUT.md)'s; the properties come from libgarb
+([GARB.md](GARB.md)); it reuses what
 [FLEX.md](FLEX.md) built — blockified items, content sizes kept per box,
 the once-only layout, the alignment vocabulary. Decisions are web
 semantics, made with Chrome as the yardstick (§ Decisions).*
