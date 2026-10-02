@@ -62,6 +62,22 @@ static HNode *root_of(HNode *n)
         n = n->parent;
     return n;
 }
+/* True of no node, and of a node in this document's arena (HDoc.id). */
+static bool ours(const HDoc *d, const HNode *n)
+{
+    return !n || n->document_id == d->id;
+}
+/* Preorder over the tree `root` is the root of, as the DOM counts a tree: a
+ * template's contents are no part of it, being a tree of their own. */
+static HNode *next_in_tree(HNode *root, HNode *n)
+{
+    if (n->first_child)
+        return n->first_child;
+    for (; n != root; n = n->parent)
+        if (n->next)
+            return n->next;
+    return NULL;
+}
 /* How far below its root a node is, a template's contents counted as the
  * template's children (h_depth_limit). */
 static size_t depth_of(const HNode *n)
@@ -148,7 +164,8 @@ static bool kind_precedes(const HNode *child, os64_html_node_kind_t kind)
  * `html` element, and the tree stays as shallow as a parse would keep it. */
 static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, bool replacing)
 {
-    if (!parent || !node || (replacing && !child))
+    if (!parent || !node || (replacing && !child) || !ours(d, parent) || !ours(d, node) ||
+        !ours(d, child))
         return OS64_HTML_BAD_ARGUMENT;
     if (parent->kind != DOCUMENT && parent->kind != FRAGMENT && parent->kind != ELEMENT)
         return OS64_HTML_HIERARCHY;
@@ -224,7 +241,12 @@ static bool is_landmark_parent(const HDoc *d, const HNode *n)
 /* "Reset the form owner", for the half of a move that takes a node out of
  * its tree: a control and its form that are now in different trees are no
  * longer tied, whichever of the two moved. `moved` is detached already, so
- * it is the root of everything in it. */
+ * it is the root of everything in it.
+ *
+ * Both walks stay out of template contents. What lies in a template's
+ * contents is in the tree those contents are the root of, before the move
+ * and after it, so a control and its form in there are parted by nothing
+ * that happens to the template. */
 static void forget_owner(HDoc *d, HNode *control)
 {
     control->form_owner = NULL;
@@ -235,8 +257,7 @@ static void split_records(HDoc *d, HNode *moved, HNode *left_behind)
     if (!d->records)
         return;
     bool carries_form = false;
-    size_t depth = 0;
-    for (HNode *n = moved; n; n = next_in(moved, n, &depth)) {
+    for (HNode *n = moved; n; n = next_in_tree(moved, n)) {
         if (is_html(n, OS64_HTML_TAG_FORM))
             carries_form = true;
         if (n->form_owner && root_of(n->form_owner) != moved)
@@ -244,8 +265,7 @@ static void split_records(HDoc *d, HNode *moved, HNode *left_behind)
     }
     if (!carries_form || !d->records)
         return;
-    depth = 0;
-    for (HNode *n = left_behind; n; n = next_in(left_behind, n, &depth))
+    for (HNode *n = left_behind; n; n = next_in_tree(left_behind, n))
         if (n->form_owner && root_of(n->form_owner) == moved)
             forget_owner(d, n);
 }
@@ -314,7 +334,7 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
 int64_t os64_html_remove(os64_html_document_t *doc, HNode *node)
 {
     HDoc *d = (HDoc *)doc;
-    if (!d || !node)
+    if (!d || !node || !ours(d, node))
         return OS64_HTML_BAD_ARGUMENT;
     if (!node->parent)
         return OS64_HTML_OK;
@@ -335,6 +355,7 @@ static HNode *node_new(HDoc *d, os64_html_node_kind_t kind, int64_t *why)
     HNode *n = d_permanent(d, sizeof(*n) + sizeof(size_t), why);
     if (n) {
         n->kind = kind;
+        n->document_id = d->id;
         d->pub.node_count++;
     }
     return n;
@@ -534,7 +555,7 @@ int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name
                            const char *value, size_t value_len)
 {
     HDoc *d = (HDoc *)doc;
-    if (!d || !e || e->kind != ELEMENT || !name || !*name || (!value && value_len))
+    if (!d || !e || !ours(d, e) || e->kind != ELEMENT || !name || !*name || (!value && value_len))
         return OS64_HTML_BAD_ARGUMENT;
     if (!text_ok(name, h_len(name)) || !text_ok(value, value_len))
         return OS64_HTML_BAD_TEXT;
@@ -562,7 +583,7 @@ int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name
 int64_t os64_html_remove_attr(os64_html_document_t *doc, HNode *e, const char *name)
 {
     HDoc *d = (HDoc *)doc;
-    if (!d || !e || e->kind != ELEMENT || !name)
+    if (!d || !e || !ours(d, e) || e->kind != ELEMENT || !name)
         return OS64_HTML_BAD_ARGUMENT;
     if (!*attr_slot(e, name))
         return OS64_HTML_OK;
@@ -579,7 +600,7 @@ int64_t os64_html_remove_attr(os64_html_document_t *doc, HNode *e, const char *n
 int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8, size_t len)
 {
     HDoc *d = (HDoc *)doc;
-    if (!d || !n || (n->kind != TEXT && n->kind != COMMENT) || (!utf8 && len))
+    if (!d || !n || !ours(d, n) || (n->kind != TEXT && n->kind != COMMENT) || (!utf8 && len))
         return OS64_HTML_BAD_ARGUMENT;
     if (!text_ok(utf8, len))
         return OS64_HTML_BAD_TEXT;
@@ -600,7 +621,24 @@ int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8
 
 /* ── Clone ───────────────────────────────────────────────────────────── */
 
-static HNode *clone_one(HDoc *d, const HNode *from, int64_t *why)
+/* A name or a doctype's identifier for the copy. One of this document's is
+ * shared, since those are never replaced; one of another document's is
+ * copied, since that document may be freed first. */
+static bool string_for(HDoc *d, bool foreign, const char *from, const char **out, int64_t *why)
+{
+    *out = from;
+    if (!foreign || !from)
+        return true;
+    size_t len = h_len(from);
+    char *copy = d_permanent(d, len + 1, why);
+    if (!copy)
+        return false;
+    for (size_t i = 0; i < len; i++)
+        copy[i] = from[i];
+    *out = copy;
+    return true;
+}
+static HNode *clone_one(HDoc *d, const HNode *from, bool foreign, int64_t *why)
 {
     if (from->kind == TEXT || from->kind == COMMENT) {
         char *bytes = bytes_new(d, from->text, from->text_len, why);
@@ -617,14 +655,16 @@ static HNode *clone_one(HDoc *d, const HNode *from, int64_t *why)
     HNode *n = node_new(d, from->kind, why);
     if (!n)
         return NULL;
-    /* Names and a doctype's identifiers are never replaced, so are shared. */
     n->ns = from->ns;
     n->tag = from->tag;
-    n->name = from->name;
-    n->public_id = from->public_id;
-    n->system_id = from->system_id;
+    if (!string_for(d, foreign, from->name, &n->name, why) ||
+        !string_for(d, foreign, from->public_id, &n->public_id, why) ||
+        !string_for(d, foreign, from->system_id, &n->system_id, why))
+        return NULL;
     if (from->kind == ELEMENT) {
-        if (*h_word(from) & H_ATTRS_PRIVATE) {
+        /* The parser's shared list can be shared once more, inside the
+         * document whose chunks hold it. */
+        if (foreign || (*h_word(from) & H_ATTRS_PRIVATE)) {
             if (!attrs_copy(d, from->attrs, false, &n->attrs, why))
                 return NULL;
             *h_word(n) |= H_ATTRS_PRIVATE;
@@ -645,7 +685,15 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
         say(status, OS64_HTML_BAD_ARGUMENT);
         return NULL;
     }
-    HNode *root = (HNode *)node, *copy = clone_one(d, root, &why);
+    /* A subtree is of one document throughout: nothing puts one document's
+     * node under another's. */
+    HNode *root = (HNode *)node;
+    bool foreign = !ours(d, root);
+    if (deep && foreign && height_of(root) > h_depth_limit(d)) {
+        say(status, OS64_HTML_TOO_DEEP);
+        return NULL;
+    }
+    HNode *copy = clone_one(d, root, foreign, &why);
     size_t depth = 0;
     /* `at` and `mirror` walk the original and the copy in step: the copy of
      * a node's parent is found by climbing both until the original's side
@@ -653,7 +701,7 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
     HNode *at = root, *mirror = copy;
     for (HNode *n = deep && copy ? next_in(root, root, &depth) : NULL; n;
          n = next_in(root, n, &depth)) {
-        HNode *made = clone_one(d, n, &why);
+        HNode *made = clone_one(d, n, foreign, &why);
         if (!made) {
             copy = NULL;
             break;

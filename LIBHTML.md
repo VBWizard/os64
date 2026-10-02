@@ -552,8 +552,15 @@ the changes go through libhtml. The design is
   each entry the stack keeps. The fuzz pass found this the day the harness
   began checking tree depth. A parse can build a tree up to twice `max_depth`
   deep, and the verbs hold a document to that same number.
-- **A document remembers `max_depth`** and counts its form-owner records, in
-  184 more bytes of its header; every measured arena figure rises by that.
+- **A node says which document it belongs to** (`document_id`, in four bytes
+  the struct had spare). A node lies in its document's arena, so one
+  document's node in another's tree would dangle when the first was freed;
+  every verb refuses a node that is not its document's. `os64_html_clone` is
+  the way across: given another document's node it copies names,
+  identifiers and attribute records too, and the copy outlives its source.
+- **A document remembers `max_depth`**, counts its form-owner records and
+  holds its pin table, in 320 more bytes of its header; every measured arena
+  figure rises by that.
 - **Parsing is unchanged.** The reference, safety, chunking and corpus
   results are identical, work units included.
 

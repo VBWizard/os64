@@ -277,6 +277,25 @@ static void t_validity(void)
           "element name that is not UTF-8");
     check(!os64_html_clone(doc, root, true, &st) && st == OS64_HTML_BAD_ARGUMENT, "cloning the document");
 
+    // The document's own element and doctype, put under it again. Each is
+    // what Chrome answers: appendChild and insertBefore throw "Only one
+    // element (doctype) on document allowed", replaceChild with itself is
+    // quiet.
+    struct {
+        const char *what;
+        int64_t got, want;
+    } again[] = {
+        {"the html element appended to its document", os64_html_insert(doc, root, html, NULL), OS64_HTML_HIERARCHY},
+        {"the html element before itself", os64_html_insert(doc, root, html, html), OS64_HTML_HIERARCHY},
+        {"the doctype before the html element", os64_html_insert(doc, root, doctype, html), OS64_HTML_HIERARCHY},
+        {"the doctype before itself", os64_html_insert(doc, root, doctype, doctype), OS64_HTML_HIERARCHY},
+        {"the html element in place of itself", os64_html_replace(doc, root, html, html), OS64_HTML_OK},
+        {"the doctype in place of itself", os64_html_replace(doc, root, doctype, doctype), OS64_HTML_OK},
+    };
+    for (size_t i = 0; i < H_ARRAY(again); i++)
+        check(again[i].got == again[i].want, "%s: %s, want %s", again[i].what,
+              os64_html_status_name(again[i].got), os64_html_status_name(again[i].want));
+
     char *after = spelled(root);
     check(strcmp(before, after) == 0, "refused verbs changed the tree:\n   %s\n   %s", before, after);
     check(os64_html_version(doc) == version, "refused verbs moved the version");
@@ -569,6 +588,27 @@ static void t_form_owners(void)
     check(!q->form_owner, "and putting the form back does not restore them");
     os64_html_document_free(doc);
 
+    // A pair inside a template's contents is in the tree those contents are
+    // the root of. Nothing done to the template takes either out of it.
+    doc = parse("<body><table id=t><form id=f><tr><td><input id=q></table><template id=m></template>"
+                "<div id=x></div>");
+    q = id_in(doc, "q"), f = id_in(doc, "f"), x = id_in(doc, "x"), t = id_in(doc, "t");
+    HNode *m = id_in(doc, "m");
+    d = (HDoc *)doc;
+    check(os64_html_insert(doc, m->template_contents, t, NULL) == OS64_HTML_OK && q->form_owner == f,
+          "a pair moved into a template's contents together stays tied");
+    check(os64_html_insert(doc, x, m, NULL) == OS64_HTML_OK && q->form_owner == f && d->records == 1,
+          "moving the template leaves a pair in its contents tied");
+    check(os64_html_remove(doc, x) == OS64_HTML_OK && q->form_owner == f && d->records == 1,
+          "and so does removing what holds the template");
+    HNode *outer = os64_html_clone(doc, m, false, NULL);
+    check(os64_html_insert(doc, outer->template_contents, x, NULL) == OS64_HTML_OK && q->form_owner == f,
+          "and nesting it in another template's contents");
+    check(os64_html_insert(doc, doc->body, f, NULL) == OS64_HTML_OK && !q->form_owner && d->records == 0,
+          "the form leaving the contents parts them");
+    check(links_ok(d, doc->document, 0) + links_ok(d, outer, 0) == d->records, "records after the template cases");
+    os64_html_document_free(doc);
+
     // An ordinary nested control: the record is the ancestor, and a move
     // out clears it; libpage then finds the nearest ancestor by its own rule.
     doc = parse("<body><form id=f><div id=w><input id=q></div></form><p id=o></p><img id=i form=zz>");
@@ -758,9 +798,133 @@ static void t_pins(void)
         check(false, "a pin was let go twice");
     }
     check(death_code == (int32_t)OS64_HTML_FATAL_EXIT, "letting a pin go twice dies");
+
+    // A pin let go names nothing afterwards, though its slot is taken again:
+    // the stale number must not release the pin that now sits there.
+    os64_html_pin_t stale = os64_html_pin(doc);
+    os64_html_unpin(doc, stale);
+    os64_html_pin_t fresh = os64_html_pin(doc);
+    check(fresh != stale && fresh % H_PINS == stale % H_PINS, "the slot is reused and the number is not");
+    os64_html_set_text(doc, text, "fifth", 5);
+    size_t under_fresh = os64_html_retired_bytes(doc);
+    death_code = 0;
+    if (setjmp(death_landing) == 0) {
+        os64_html_unpin(doc, stale);
+        check(false, "a stale pin released the pin that took its slot");
+    }
+    check(death_code == (int32_t)OS64_HTML_FATAL_EXIT && under_fresh > 0 &&
+              os64_html_retired_bytes(doc) == under_fresh,
+          "a stale pin dies and frees nothing the new one holds");
+    // Nor does another document's pin, which a slot number alone would match.
+    os64_html_document_t *other = parse("<body>");
+    os64_html_pin_t theirs = os64_html_pin(other);
+    check(theirs % H_PINS == fresh % H_PINS && theirs != fresh, "two documents, one slot, two numbers");
+    death_code = 0;
+    if (setjmp(death_landing) == 0) {
+        os64_html_unpin(doc, theirs);
+        check(false, "another document's pin released this one's");
+    }
+    check(death_code == (int32_t)OS64_HTML_FATAL_EXIT && os64_html_retired_bytes(doc) == under_fresh,
+          "another document's pin dies here");
+    os64_html_unpin(other, theirs);
+    os64_html_document_free(other);
+    os64_html_unpin(doc, fresh);
+    check(os64_html_retired_bytes(doc) == 0, "and the pin that was held still lets go");
     expecting_death = false;
     os64_html_document_free(doc);
     check(live == 0, "pin cases freed");
+}
+
+// ── Two documents ───────────────────────────────────────────────────────
+
+static void t_documents(void)
+{
+    os64_html_options_t deep_opt = os64_html_options_default();
+    deep_opt.max_depth = 64;
+    // `b` twice: the second is the parser's own copy and shares the first's
+    // attribute records. `own` has a list a verb made private.
+    os64_html_document_t *src = parse_with("<!doctype html SYSTEM \"about:legacy-compat\"><body>"
+                                           "<div id=s class=k><b title=shared>one<p>two</b>"
+                                           "<template id=tm><i lang=en>in</i></template>"
+                                           "<!--note--><span id=own>x</span>"
+                                           "<svg viewBox='0 0 1 1'><foreignObject/></svg></div>",
+                                           &deep_opt);
+    os64_html_document_t *dst = parse("<body><p id=here></p>");
+    HNode *s = id_in(src, "s"), *here = id_in(dst, "here");
+    os64_html_set_attr(src, id_in(src, "own"), "data-n", "1", 1);
+    char *want = spelled(s);
+    char *src_before = spelled(src->document), *dst_before = spelled(dst->document);
+    uint64_t src_version = os64_html_version(src), dst_version = os64_html_version(dst);
+    HNode *theirs = id_in(src, "own"), *text = theirs->first_child;
+
+    // One document's node is refused by every verb of another, in each seat.
+    struct {
+        const char *what;
+        int64_t got;
+    } refused[] = {
+        {"insert, the node", os64_html_insert(dst, here, theirs, NULL)},
+        {"insert, the parent", os64_html_insert(dst, s, here, NULL)},
+        {"insert, the place", os64_html_insert(dst, here, os64_html_create_comment(dst, "c", 1, NULL), theirs)},
+        {"replace, the node", os64_html_replace(dst, dst->body, theirs, here)},
+        {"replace, the old", os64_html_replace(dst, dst->body, here, theirs)},
+        {"remove", os64_html_remove(dst, theirs)},
+        {"set_attr", os64_html_set_attr(dst, theirs, "x", "y", 1)},
+        {"remove_attr", os64_html_remove_attr(dst, theirs, "data-n")},
+        {"set_text", os64_html_set_text(dst, text, "y", 1)},
+    };
+    for (size_t i = 0; i < H_ARRAY(refused); i++)
+        check(refused[i].got == OS64_HTML_BAD_ARGUMENT, "another document's node, %s: %s", refused[i].what,
+              os64_html_status_name(refused[i].got));
+    char *src_after = spelled(src->document), *dst_after = spelled(dst->document);
+    check(strcmp(src_before, src_after) == 0 && strcmp(dst_before, dst_after) == 0 &&
+              os64_html_version(src) == src_version && os64_html_version(dst) == dst_version,
+          "the refusals changed neither document");
+    free(src_before), free(dst_before), free(src_after), free(dst_after);
+
+    // A clone is how a node crosses: it reads the same and shares nothing,
+    // which freeing the source proves under the sanitizer.
+    int64_t st = 99;
+    HNode *copy = os64_html_clone(dst, s, true, &st);
+    HNode *doctype = os64_html_clone(dst, src->document->first_child, false, NULL);
+    HNode *shallow = os64_html_clone(dst, s, false, NULL);
+    check(copy && st == OS64_HTML_OK && doctype && shallow, "a subtree, a doctype and one element cloned across");
+    const char *system_id = src->document->first_child->system_id;
+    check(doctype->name != src->document->first_child->name && doctype->system_id != system_id &&
+              doctype->public_id == NULL && strcmp(doctype->system_id, "about:legacy-compat") == 0,
+          "a doctype's identifiers are copied, and an absent one stays absent");
+    check(copy->name != s->name && copy->attrs != s->attrs && copy->first_child->attrs != s->first_child->attrs,
+          "names and attribute records are the copy's own");
+    os64_html_document_free(src);
+    expect_tree(copy, want, "the clone, read after its source is freed");
+    expect_tree(shallow, "<div id='s' class='k'>", "the shallow one");
+    check(strcmp(doctype->name, "html") == 0, "the doctype's name outlives the source");
+    check(os64_html_insert(dst, here, copy, NULL) == OS64_HTML_OK &&
+              os64_html_set_attr(dst, copy, "class", "changed", 7) == OS64_HTML_OK &&
+              os64_html_remove_attr(dst, copy->first_child, "title") == OS64_HTML_OK,
+          "the clone is this document's: it goes in and its attributes change");
+    HDoc *d = (HDoc *)dst;
+    check(links_ok(d, dst->document, 0) == d->records, "links after the crossing");
+    free(want);
+    os64_html_document_free(dst);
+
+    // A subtree taller than the receiving document allows does not cross.
+    char markup[512] = "<body><div id=top>";
+    for (int i = 0; i < 20; i++)
+        strcat(markup, "<div>");
+    src = parse_with(markup, &deep_opt);
+    os64_html_options_t shallow_opt = os64_html_options_default();
+    shallow_opt.max_depth = 4;
+    dst = parse_with("<body>", &shallow_opt);
+    d = (HDoc *)dst;
+    size_t arena = dst->arena_bytes;
+    st = 0;
+    check(!os64_html_clone(dst, id_in(src, "top"), true, &st) && st == OS64_HTML_TOO_DEEP &&
+              dst->arena_bytes == arena,
+          "a subtree %d deep into a document that allows %zu: %s", 21, h_depth_limit(d), os64_html_status_name(st));
+    check(os64_html_clone(dst, id_in(src, "top"), false, &st) && st == OS64_HTML_OK, "its top alone crosses");
+    os64_html_document_free(src);
+    os64_html_document_free(dst);
+    check(live == 0, "two-document cases freed");
 }
 
 // ── When memory runs out ────────────────────────────────────────────────
@@ -811,6 +975,32 @@ static int64_t v_clone(os64_html_document_t *doc)
     made = os64_html_clone(doc, doc->body, true, &st);
     return st;
 }
+// A clone from another document copies what one from its own may share.
+static os64_html_document_t *elsewhere;
+static int64_t open_elsewhere(os64_html_document_t *doc)
+{
+    (void)doc;
+    elsewhere = parse("<!doctype html PUBLIC \"p\" \"s\"><body><div id=a x=1><b title=t>one<p>two</b>"
+                      "<template><i lang=en>in</i></template></div>");
+    return 0;
+}
+static void close_elsewhere(void)
+{
+    os64_html_document_free(elsewhere);
+    elsewhere = NULL;
+}
+static int64_t v_clone_across(os64_html_document_t *doc)
+{
+    int64_t st = 0;
+    made = os64_html_clone(doc, elsewhere->html, true, &st);
+    return st;
+}
+static int64_t v_clone_doctype_across(os64_html_document_t *doc)
+{
+    int64_t st = 0;
+    made = os64_html_clone(doc, elsewhere->document->first_child, false, &st);
+    return st;
+}
 static void t_out_of_memory(void)
 {
     static const struct {
@@ -822,7 +1012,9 @@ static void t_out_of_memory(void)
                  {"remove_attr", no_prepare, v_remove_attr},
                  {"create_element", no_prepare, v_create_element},
                  {"create_text", no_prepare, v_create_text},
-                 {"clone", own_attrs, v_clone}};
+                 {"clone", own_attrs, v_clone},
+                 {"clone from another document", open_elsewhere, v_clone_across},
+                 {"clone of another document's doctype", open_elsewhere, v_clone_doctype_across}};
     const char *markup = "<body><div id=a x=1 y=2 z=3><span id=b>one</span></div>"
                          "<p id=m title=t lang=en>two<template><i>in</i></template></p>";
     size_t swept = 0;
@@ -835,6 +1027,7 @@ static void t_out_of_memory(void)
         check(verbs[v].verb(doc) == OS64_HTML_OK, "%s succeeds", verbs[v].name);
         size_t needed = allocations;
         os64_html_document_free(doc);
+        close_elsewhere();
         for (size_t n = 1; n <= needed; n++) {
             doc = parse(markup);
             verbs[v].prepare(doc);
@@ -855,7 +1048,10 @@ static void t_out_of_memory(void)
             // A verb that only replaces gives back whatever it took before it
             // failed. One that makes nodes may have made some: those stay
             // charged, as any detached node does.
-            if (verbs[v].verb != v_create_element && verbs[v].verb != v_create_text && verbs[v].verb != v_clone)
+            bool makes_nodes = verbs[v].verb == v_create_element || verbs[v].verb == v_create_text ||
+                               verbs[v].verb == v_clone || verbs[v].verb == v_clone_across ||
+                               verbs[v].verb == v_clone_doctype_across;
+            if (!makes_nodes)
                 check(doc->arena_bytes == arena && live == blocks, "%s, allocation %zu kept memory", verbs[v].name, n);
             check(doc->refusal == 0, "%s left a refusal on the document", verbs[v].name);
             HDoc *d = (HDoc *)doc;
@@ -865,6 +1061,7 @@ static void t_out_of_memory(void)
             free(before);
             free(after);
             os64_html_document_free(doc);
+            close_elsewhere();
             check(live == 0, "%s, allocation %zu leaked", verbs[v].name, n);
             swept++;
         }
@@ -1577,6 +1774,7 @@ int main(void)
     t_depth();
     t_deep();
     t_pins();
+    t_documents();
     t_out_of_memory();
     static const char *const pages[] = {
         "<!doctype html><html><head><title>t</title></head><body><div id=a class=x><span>one</span></div>"

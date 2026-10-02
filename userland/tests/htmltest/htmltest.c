@@ -140,6 +140,29 @@ static void verbs(void)
                 "churn");
     }
     require(os64_heap_verify() == 0, "heap during verbs");
+
+    /* A node belongs to one document. Another's verbs refuse it, and a clone
+     * carries it across whole: it reads the same once its source is freed. */
+    os64_html_document_t *other = parsed("<body><p id=o class=k><b title=t>x<p>y</b>");
+    os64_html_node_t *o = with_id(other->document, "o");
+    require(o && os64_html_insert(doc, doc->body, o, NULL) == OS64_HTML_BAD_ARGUMENT &&
+                os64_html_remove(doc, o) == OS64_HTML_BAD_ARGUMENT &&
+                os64_html_set_attr(doc, o, "class", "z", 1) == OS64_HTML_BAD_ARGUMENT && o->parent,
+            "another document's node refused");
+    os64_html_node_t *across = os64_html_clone(doc, o, true, NULL);
+    os64_html_document_free(other);
+    require(across && os64_streq(across->name, "p") &&
+                os64_streq(os64_html_attr(across, "class")->value, "k") && across->first_child &&
+                os64_streq(os64_html_attr(across->first_child, "title")->value, "t") &&
+                os64_html_insert(doc, doc->body, across, NULL) == OS64_HTML_OK,
+            "a clone across documents outlives its source");
+    /* A pin's number is not handed out twice, though its slot is. */
+    os64_html_pin_t first = os64_html_pin(doc);
+    os64_html_unpin(doc, first);
+    os64_html_pin_t second = os64_html_pin(doc);
+    require(first && second && first != second, "pin numbers are not reused");
+    os64_html_unpin(doc, second);
+
     os64_html_document_free(doc);
     require(os64_heap_verify() == 0, "heap after verbs");
 }

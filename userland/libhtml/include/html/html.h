@@ -24,7 +24,7 @@ typedef enum {
 } os64_html_status_t;
 
 /* What the program exits with when a document is freed while a snapshot
- * still has it pinned, or a pin is released twice ("HTML"). */
+ * still has it pinned, or a pin that is not held is released ("HTML"). */
 #define OS64_HTML_FATAL_EXIT 0x48544D4C
 
 typedef enum {
@@ -59,6 +59,9 @@ typedef struct os64_html_node {
     os64_html_node_kind_t kind;
     os64_html_ns_t ns;
     os64_html_tag_t tag;
+    /* The library's mark of which document the node belongs to. It means
+     * nothing to a reader. */
+    uint32_t document_id;
     const char *name;
     const char *public_id, *system_id;
     const char *text;
@@ -155,11 +158,18 @@ bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out);
  * answers "has the tree moved since?". The library calls nobody.
  *
  * `os64_html_pin` answers a pin, or 0 when the document has none left to
- * give (it has sixteen). Freeing a document while one is held, or releasing
- * one twice, ends the program
+ * give (it has sixteen). No two pins in a program are answered with the same
+ * number, so a pin names one taking of it and nothing later. Freeing a
+ * document while one is held, or releasing what is not held (a pin let go
+ * already, or one taken on another document), ends the program
  * (OS64_HTML_FATAL_EXIT): the holder is about to read freed memory.
- * `os64_html_retired_bytes` is what the pins are keeping alive right now. */
-typedef uint32_t os64_html_pin_t;
+ * `os64_html_retired_bytes` is what the pins are keeping alive right now.
+ *
+ * EVERY NODE A VERB IS HANDED BELONGS TO `doc`, the source of a clone
+ * excepted. A node lies in its document's arena and goes when that document
+ * is freed, so one document's node in another's tree would be a pointer to
+ * freed memory in waiting; a verb refuses it (OS64_HTML_BAD_ARGUMENT). */
+typedef uint64_t os64_html_pin_t;
 uint64_t os64_html_version(const os64_html_document_t *doc);
 os64_html_pin_t os64_html_pin(const os64_html_document_t *doc);
 void os64_html_unpin(const os64_html_document_t *doc, os64_html_pin_t pin);
@@ -168,7 +178,11 @@ size_t os64_html_retired_bytes(const os64_html_document_t *doc);
 /* New nodes, detached and owned by `doc`. NULL with `*status` (which may be
  * NULL) saying why. An element's `name` is taken as written: the caller
  * lowercases an HTML one. `os64_html_clone` copies one node, or with `deep`
- * its whole subtree and a template's contents; a copy has no form owner. */
+ * its whole subtree and a template's contents; a copy has no form owner.
+ * Its `node` may belong to another document, which is how a node is brought
+ * from one to another: the copy then shares no memory with that document
+ * and outlives it. A subtree taller than this document allows is refused
+ * (OS64_HTML_TOO_DEEP). */
 os64_html_node_t *os64_html_create_element(os64_html_document_t *doc, os64_html_ns_t ns,
                                            const char *name, int64_t *status);
 os64_html_node_t *os64_html_create_text(os64_html_document_t *doc, const char *utf8, size_t len,
@@ -184,6 +198,11 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
  * is left empty. `replace` puts `node` where `old` is. `remove` unlinks a
  * node that has a parent and is a no-op on one that has none. Adjacent text
  * is not merged. None of the three allocates.
+ *
+ * A document's element or doctype cannot be inserted under that document
+ * again, even to where it already is: the rule that a document has one of
+ * each counts the node itself (OS64_HTML_HIERARCHY), as it does in a
+ * browser. Replacing either with itself is allowed and changes nothing.
  *
  * A form control's `form_owner` record is cleared by the change that makes
  * it untrue, as the HTML Standard's "reset the form owner" says: a move that

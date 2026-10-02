@@ -101,7 +101,12 @@ table is a small fixed array inside the document, so taking a pin allocates
 nothing and cannot fail for memory; a full table is a refusal by name, and
 the snapshot is not built. Freeing a document with a pin still out
 ends the program, by name: something is about to read freed memory, and
-that is the class of fault `os64_free` already ends a program for.
+that is the class of fault `os64_free` already ends a program for. So does
+letting go of a pin that is not held. A pin's number is its slot and a
+serial no other pin in the program has had, so a number let go already, or
+one taken on another document, matches nothing; a bare slot number would
+come round again, and its stale twin would release the pin of whichever
+snapshot took the slot next.
 
 **The retired list.** When a primitive replaces a string or unlinks an
 attribute record, the old one is stamped with the new version and moved to
@@ -155,7 +160,7 @@ verb and turn a status into an exception.
 | Verb | What it does |
 |---|---|
 | `create_element(doc, ns, name)`, `create_text`, `create_comment`, `create_fragment` | a detached node, owned by the document |
-| `clone(doc, node, deep)` | a detached copy; form-owner records are not copied |
+| `clone(doc, node, deep)` | a detached copy; form-owner records are not copied. `node` may be another document's, and the copy then shares no memory with it |
 | `insert(doc, parent, node, before)` | moves `node` (or a fragment's children) under `parent`; adjacent text is not merged, as the DOM does not |
 | `remove(doc, node)` | unlinks it; the node lives on |
 | `replace(doc, parent, node, old)` | one validity check for the pair, then both moves |
@@ -177,6 +182,22 @@ to break what every consumer assumes:
   reference child really a child. Each refusal has its own status and the
   binding maps it to the exception's name. A cycle in the tree is an
   endless loop in every walker, so this cannot be left to callers.
+  The rule that a document has one element and one doctype counts the
+  node being inserted, so the document's own `html` element cannot be
+  inserted under it again, even to where it already is. That reads like an
+  oversight and is what the standard's steps say and what Chrome does
+  (`document.appendChild(document.documentElement)` throws "Only one
+  element on document allowed"); replacing it with itself is quiet.
+- **A node belongs to one document, and a verb refuses another's.** A
+  node lies in its document's arena and its replaced strings are retired
+  on its document's ledger, so one document's node in another's tree would
+  dangle when the first was freed, and a change to it would unlink a block
+  from the wrong list. Each node carries its document's mark and every
+  verb checks it (`OS64_HTML_BAD_ARGUMENT`). `clone` is the way across:
+  given another document's node it copies everything, names and attribute
+  records included, into the document it was asked to make the copy in.
+  That is `importNode`, and `adoptNode` is a clone and a remove when a
+  second document a script can reach arrives.
 - **The tree stays UTF-8 with no NUL**, so every string in it is still a C
   string (LIBHTML.md). A verb refuses bytes that are not. The binding
   converts first: a lone surrogate and a NUL each become U+FFFD. The NUL
@@ -211,9 +232,11 @@ to break what every consumer assumes:
   - *a move that parts a control from its form*: every control in the
     moved subtree whose form is outside it, and every control outside it
     whose form is inside. A control and its form that move together stay
-    tied, as the standard's "no longer in the same tree" has it. The
-    document counts its live records, so the second half costs a walk only
-    when there is one to find;
+    tied, as the standard's "no longer in the same tree" has it. A tree
+    here is the DOM's: a template's contents are a tree of their own, so a
+    control and its form inside them are parted by nothing that happens to
+    the template. The document counts its live records, so the second half
+    costs a walk only when there is one to find;
   - *a listed control given a `form` attribute*: that control. In
     `<table><form id=f><input id=q></table>` the parser ties `q` to `f`,
     which is not its ancestor. Set `q`'s `form` to a name that matches
@@ -644,14 +667,20 @@ stacked on it. D1 to D4 need no engine and can start before J2 ends.
 `html.h` carries the contract. The parser is unchanged in what it builds:
 all 8,596 reference cases, the 63,708 allocation-failure points and the
 corpus give the same trees and the same work counts as before, and each
-arena figure is 184 bytes higher, the growth of the document's header.
+arena figure is 320 bytes higher, the growth of the document's header. A
+node is no larger: its document's mark sits in four bytes the struct had
+spare.
 
 What the harness holds the verbs to:
 
 - **By hand**, each rule with its own case: the DOM Standard's validity
   table, the `html` element, templates across their boundary, attribute
   order and the shared list, text, each form-owner reset (Quinn's table
-  case among them), the depth limit, pins and the two ways to die.
+  case among them, and a pair inside a template's contents), the depth
+  limit, pins and the ways to die (a pinned document freed, a pin let go
+  twice, a stale number whose slot was taken again, another document's
+  pin), and two documents: each verb refusing the other's node in each
+  seat, and a clone read after its source is freed.
 - **Out of memory**: every allocation a verb makes failed in turn. The
   verb answers `OS64_HTML_NO_MEMORY`, the tree spells as it did, the
   version has not moved, the parse's `refusal` is untouched, and a verb
@@ -667,8 +696,9 @@ What the harness holds the verbs to:
   form owner. Twenty-two walks of 4,000 steps, some under a depth limit
   low enough to keep meeting it, with up to three snapshots pinned at
   random whose borrowed strings are re-read after every step.
-- **Mutants.** Twenty-eight deliberate breaks of the library, one at a
-  time, against the finished code. Twenty-seven are caught. The one that
+- **Mutants.** Forty-eight deliberate breaks of the library, one at a
+  time, against the finished code; twenty of them undo what Codex's round
+  on #190 changed. Forty-seven are caught. The one that
   is not cannot be told apart while the document keeps its `html`
   element: the DOM's check for a doctype after an inserted element, which
   the element the document already has always trips first. It stays, as
@@ -751,6 +781,15 @@ The fourth was one case of a class. My first text also had libpage *ignore*
 a record whose form had left the control's tree, which resurrects the
 same way when the form comes back. That is replaced by the same rule:
 cleared at the mutation, never re-validated by a reader.
+
+**Codex, 2026-10-01, on D1 (PR #190): four findings, three taken.**
+
+| Finding | What it was | What was done |
+|---|---|---|
+| P1 | `clone` given another document's node shared that document's names, identifiers and attribute records, which dangle when it is freed | A node carries its document's mark. `clone` copies everything when the source is another document's; every other verb refuses a node that is not its own document's, since the same hazard sat behind each of them |
+| P1 | A pin's number was its slot, so a stale release could let go of the pin that took the slot next | A number is slot and serial, unique in the program; a stale one, or another document's, ends the program |
+| P2 | The document's own element or doctype cannot be re-inserted under it | Not changed: it is the standard's rule and Chrome's behaviour, now stated in `html.h` and held by a case |
+| P2 | Moving a template cleared the record of a control and form that sat together in its contents | The form-owner walks stay out of template contents, which are a tree of their own |
 
 ## What was checked, and what was not
 

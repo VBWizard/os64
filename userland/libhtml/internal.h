@@ -28,11 +28,19 @@ typedef struct {
     size_t root_word;
     HNode html;
     size_t html_word;
+    /* What each node of this document carries in `document_id`, drawn from a
+     * counter the program's documents share. A node's memory and its strings
+     * go when its document is freed, and its replaced strings are retired on
+     * its document's ledger, so a verb has to tell its own document's nodes
+     * from another's. Never zero, which is what a node nobody stamped
+     * carries. */
+    uint32_t id;
     /* DOM.md, the mutation core. `version` moves whenever a verb changes
      * what a reader can see and is never zero, so a zero pin is a free slot.
      * `retired` holds replaced blocks a pinned snapshot may still point at. */
     uint64_t version;
     uint64_t pins[H_PINS];
+    os64_html_pin_t pin_handles[H_PINS];    /* what os64_html_pin answered for each held slot */
     HBlock *retired;
     size_t retired_bytes;
     size_t records;     /* live form_owner records: a move with none skips its walk */

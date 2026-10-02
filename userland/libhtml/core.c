@@ -209,6 +209,13 @@ uint64_t os64_html_version(const os64_html_document_t *doc)
 {
     return doc ? ((const HDoc *)doc)->version : 0;
 }
+/* A handle is its slot and a serial number no other pin in the program has
+ * had, so one that was let go already, or that belongs to another document,
+ * matches nothing. A handle that was only the slot would come round again,
+ * and its stale twin would then release a pin some other snapshot holds.
+ * Documents on different threads draw from the one counter, so it is
+ * advanced atomically. */
+static uint64_t pin_serial;
 os64_html_pin_t os64_html_pin(const os64_html_document_t *doc)
 {
     /* The pin table is the document's own bookkeeping, not its content. */
@@ -218,7 +225,8 @@ os64_html_pin_t os64_html_pin(const os64_html_document_t *doc)
     for (size_t i = 0; i < H_PINS; i++)
         if (!d->pins[i]) {
             d->pins[i] = d->version;
-            return (os64_html_pin_t)(i + 1);
+            d->pin_handles[i] = __atomic_add_fetch(&pin_serial, 1, __ATOMIC_RELAXED) * H_PINS + i;
+            return d->pin_handles[i];
         }
     return 0;
 }
@@ -227,9 +235,10 @@ void os64_html_unpin(const os64_html_document_t *doc, os64_html_pin_t pin)
     HDoc *d = (HDoc *)doc;
     if (!d || !pin)
         return;
-    if (pin > H_PINS || !d->pins[pin - 1])
+    size_t slot = pin % H_PINS;
+    if (!d->pins[slot] || d->pin_handles[slot] != pin)
         fatal("libhtml: unpin of a pin that is not held\n");
-    d->pins[pin - 1] = 0;
+    d->pins[slot] = 0;
     reclaim(d);
 }
 size_t os64_html_retired_bytes(const os64_html_document_t *doc)
@@ -391,6 +400,7 @@ HNode *h_node(os64_html_parser_t *p, os64_html_node_kind_t kind)
     HNode *n = h_permanent(p, sizeof(*n) + sizeof(size_t));
     if (n) {
         n->kind = kind;
+        n->document_id = p->d->id;
         p->d->pub.node_count++;
     }
     return n;
@@ -500,6 +510,10 @@ os64_html_options_t os64_html_options_default(void)
      * crafted growth still refuses by name (tools/test_html_driver.c). */
     return (os64_html_options_t){NULL, 8u * 1024u * 1024u, 64u * 1024u * 1024u, 512, 100000000};
 }
+/* Where HDoc.id comes from. Documents are made on more than one thread, so
+ * it is advanced atomically; it comes round after 2^32 documents, which is
+ * the one way two could share a mark. */
+static uint32_t document_serial;
 os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options)
 {
     os64_html_options_t opt = options ? *options : os64_html_options_default();
@@ -527,6 +541,10 @@ os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options)
     d->html.kind = OS64_HTML_ELEMENT;
     d->html.name = "html";
     d->html.tag = OS64_HTML_TAG_HTML;
+    do
+        d->id = __atomic_add_fetch(&document_serial, 1, __ATOMIC_RELAXED);
+    while (!d->id);
+    d->root.document_id = d->html.document_id = d->id;
     d->pub.document = &d->root;
     d->pub.html = &d->html;
     d->pub.node_count = 2;

@@ -32,7 +32,10 @@ reconstruction share one list of attribute records, so a verb copies an
 element's list before it first changes it. A document owns the
 allocation ledger; scratch buffers are charged to the same budget and released
 on finish. Stable node/string storage uses geometric arena chunks. A parser
-needs serialized calls; distinct parsers have independent state.
+needs serialized calls, and so do a document's verbs; distinct documents
+share two counters (document marks and pin numbers), advanced atomically, and
+nothing else. A verb refuses a node of another document; `os64_html_clone`
+copies one across.
 
 `core.c` owns allocations, pins and retirement, topology primitives, limits,
 and the parsing API. `dom.c` holds the verbs that change a finished document.
