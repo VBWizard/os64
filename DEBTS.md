@@ -371,7 +371,7 @@ how a worklist fills with things nobody intends to do.
 
 | Debt | Class | Size | Trigger | Where |
 |---|---|---|---|---|
-| **The proposed mutable libhtml retains detached nodes until document destruction.** Stable pointers simplify script wrappers and borrowed page/layout data, but repeated creation/removal consumes the document budget even after script references disappear. Budget exhaustion must raise an exception. Reclaiming unreachable nodes is deferred; its design must account for native borrowers and JS reachability together | Capacity | TBD in DOM.md | legitimate page node churn exhausts the document budget | [JavaScript DOM ownership](docs/design/pending/JAVASCRIPT.md#mutable-document-ownership); D0 in JAVASCRIPT_TASKS.md |
+| **libhtml keeps a detached node until its document is freed.** A removed node is unlinked and stays charged to the document's arena, so a script that makes and drops nodes spends the budget and then gets `OS64_HTML_ARENA_EXHAUSTED` as an exception. That is right for a page that adds a little and wrong for one that rebuilds itself: a hundred nodes replaced sixty times a second meets the 64 MiB default in about a minute. Reclaiming a removed subtree that nothing holds is slice D6, and has to answer for wrappers, the parser's stack and a face's own node pointers together | Capacity | M | before scripting is something a person is told to turn on (DOM.md § Wrappers) | `userland/libhtml/dom.c`; DOM.md § Slices, D6 |
 
 ## husk (the shell, ongoing)
 

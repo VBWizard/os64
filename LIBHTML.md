@@ -283,8 +283,9 @@ const char             *os64_html_status_name(int64_t status);
 
 Everything the tree does NOT carry is deliberate: no style, no computed
 anything, no back-pointer from nodes to byte offsets (the errors carry
-offsets; nodes do not need them), no mutation API. A consumer that needs
-to rewrite a tree builds its own.
+offsets; nodes do not need them). The parser builds the tree and the structs
+are read-only views; what changes a finished document is a set of verbs
+(*Design changes*, 2026-10-01).
 
 ## The algorithm: what is in, and what is out by name
 
@@ -532,6 +533,29 @@ attributes are read-only to consumers and live until `document_free`.
 `node_count` includes allocated nodes detached by recovery; `arena_bytes`
 includes retained capacity and allocator headers, rather than payload alone.
 `charset` can be NULL if a resource refusal prevents encoding selection.
+
+### 2026-10-01: verbs that change a finished document (DOM.md, slice D1)
+
+The original contract had no mutation API and said a consumer that needed to
+rewrite a tree would build its own. JavaScript changes that: one tree has to
+serve the script, the page model and the layout, so the tree is libhtml's and
+the changes go through libhtml. The design is
+[DOM.md](docs/design/pending/DOM.md); `html.h` carries the contract and
+`dom.c` the verbs. What that changes here:
+
+- **Nodes still live until `document_free`.** A removed node is unlinked and
+  kept. A replaced string that a verb wrote is freed once no pinned snapshot
+  can be pointing at it; one the parser wrote stays in its chunk.
+- **`max_depth` bounds the stack of open elements, and a tree can be deeper
+  than its stack.** `</form>` takes the form off the stack while what it
+  holds stays open, so `<form><div></form>` repeated nests two levels for
+  each entry the stack keeps. The fuzz pass found this the day the harness
+  began checking tree depth. A parse can build a tree up to twice `max_depth`
+  deep, and the verbs hold a document to that same number.
+- **A document remembers `max_depth`** and counts its form-owner records, in
+  184 more bytes of its header; every measured arena figure rises by that.
+- **Parsing is unchanged.** The reference, safety, chunking and corpus
+  results are identical, work units included.
 
 ### Implementation evidence (2026-09-11)
 

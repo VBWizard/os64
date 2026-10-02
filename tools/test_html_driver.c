@@ -34,6 +34,15 @@ void os64_free(void *p)
         free(p);
     }
 }
+/* The library ends the program on a broken pin promise; nothing here makes one. */
+int64_t os64_write(int32_t handle, const void *buf, size_t len)
+{
+    return (int64_t)fwrite(buf, 1, len, handle == 2 ? stderr : stdout);
+}
+void os64_exit(int32_t code)
+{
+    exit(code ? 3 : 0);
+}
 #ifdef HTML_TOKENIZER_ONLY
 void h_tree(os64_html_parser_t *p, HToken *t)
 {
@@ -250,7 +259,8 @@ static uint64_t validate(os64_html_document_t *doc)
     HNode **stack = malloc((doc->node_count + 1) * sizeof(*stack));
     if (!stack)
         exit(2);
-    size_t top = 0, visited = 0;
+    size_t top = 0, visited = 0, records = 0;
+    const HDoc *d = (const HDoc *)doc;
     uint64_t hash = 1469598103934665603ull;
     hash = hash_bytes(hash, (const char *)&doc->quirks, sizeof(doc->quirks));
     hash = hash_string(hash, doc->charset);
@@ -308,6 +318,21 @@ static uint64_t validate(os64_html_document_t *doc)
         hash = hash_bytes(hash, (const char *)&children, sizeof(children));
         unsigned char associated = n->form_owner != NULL;
         hash = hash_bytes(hash, (const char *)&associated, 1);
+        records += associated;
+        /* What the verbs hold a tree to, the parser must already deliver
+         * (internal.h, h_depth_limit). */
+        size_t depth = 0, limit = h_depth_limit(d);
+        for (const HNode *a = n; depth <= limit;) {
+            if (a->parent) {
+                a = a->parent;
+                depth++;
+            } else if (a->kind == OS64_HTML_FRAGMENT && *h_word(a))
+                a = (const HNode *)*h_word(a);
+            else
+                break;
+        }
+        if (depth > limit)
+            safety_fail("node deeper than the parse's limit allows");
         if (n->form_owner &&
             (n->kind != OS64_HTML_ELEMENT || n->ns != OS64_HTML_NS_HTML ||
              n->form_owner->kind != OS64_HTML_ELEMENT ||
@@ -326,6 +351,10 @@ static uint64_t validate(os64_html_document_t *doc)
         }
     }
     free(stack);
+    if (records != d->records)
+        safety_fail("form-owner record count disagrees with the tree");
+    if (!d->version || d->retired || d->retired_bytes)
+        safety_fail("a parse left mutation state behind");
     return hash;
 }
 static uint32_t random_next(uint32_t *seed)

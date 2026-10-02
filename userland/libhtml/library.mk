@@ -1,6 +1,6 @@
 # HTML is an optional userland parser. Only its consumers acquire this edge;
 # libos64 remains independent of parser code and generated entity tables.
-LIBHTML_SRCS := libhtml/core.c libhtml/encoding.c libhtml/tokenizer.c libhtml/tree.c
+LIBHTML_SRCS := libhtml/core.c libhtml/encoding.c libhtml/tokenizer.c libhtml/tree.c libhtml/dom.c
 LIBHTML_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBHTML_SRCS))
 LIBHTML_SO := $(BIN)/libhtml.so
 # The saved Wikipedia page takes 54.5ms at -O0 and 23.6ms at -O2 on the host

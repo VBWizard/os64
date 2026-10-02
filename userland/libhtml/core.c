@@ -1,13 +1,18 @@
 #include "internal.h"
+#include "os64/io.h"
+#include "os64/proc.h"
 
 /* Blocks are owned by the document, including parser scratch until finish.
  * Charging capacity and headers makes the arena limit a retained-memory bound,
  * rather than a count of requested payload bytes. Growth charges both blocks
- * while copying; the returned document reports its peak as well as live cost. */
+ * while copying; the returned document reports its peak as well as live cost.
+ * `retired_at` is zero on a live block, which sits on the document's `blocks`
+ * list; a retired one sits on `retired` and carries the version of the change
+ * that replaced it. The word also keeps the payload 16-byte aligned. */
 struct HBlock {
     HBlock *prev, *next;
     size_t size;
-    uint64_t alignment;
+    uint64_t retired_at;
 };
 static const char *const tag_names[] = {
 #include "tags.inc"
@@ -88,22 +93,20 @@ void h_error(os64_html_parser_t *p, const char *name)
     if (n != SIZE_MAX)
         p->d->pub.parse_errors++;
 }
-void *h_alloc(os64_html_parser_t *p, size_t size)
+void *d_alloc(HDoc *d, size_t size, int64_t *why)
 {
-    HDoc *d = p->d;
-    if (d->pub.refusal)
-        return NULL;
     if (size > SIZE_MAX - sizeof(HBlock) ||
         size + sizeof(HBlock) > d->budget - d->pub.arena_bytes) {
-        h_refuse(p, OS64_HTML_ARENA_EXHAUSTED);
+        *why = OS64_HTML_ARENA_EXHAUSTED;
         return NULL;
     }
     HBlock *b = os64_malloc(sizeof(*b) + size);
     if (!b) {
-        h_refuse(p, OS64_HTML_NO_MEMORY);
+        *why = OS64_HTML_NO_MEMORY;
         return NULL;
     }
     b->size = sizeof(*b) + size;
+    b->retired_at = 0;
     b->prev = NULL;
     b->next = d->blocks;
     if (b->next)
@@ -117,30 +120,130 @@ void *h_alloc(os64_html_parser_t *p, size_t size)
         out[i] = 0;
     return out;
 }
+void *h_alloc(os64_html_parser_t *p, size_t size)
+{
+    if (p->d->pub.refusal)
+        return NULL;
+    int64_t why = OS64_HTML_OK;
+    void *out = d_alloc(p->d, size, &why);
+    if (!out)
+        h_refuse(p, why);
+    return out;
+}
+static void block_unlink(HBlock **list, HBlock *b)
+{
+    if (b->prev)
+        b->prev->next = b->next;
+    else
+        *list = b->next;
+    if (b->next)
+        b->next->prev = b->prev;
+}
 void h_free(HDoc *d, void *ptr)
 {
     if (!ptr)
         return;
     HBlock *b = (HBlock *)ptr - 1;
-    if (b->prev)
-        b->prev->next = b->next;
-    else
-        d->blocks = b->next;
-    if (b->next)
-        b->next->prev = b->prev;
+    block_unlink(&d->blocks, b);
     d->pub.arena_bytes -= b->size;
     os64_free(b);
 }
+
+/* ── Pins and retirement (DOM.md § The mutation core) ────────────────────
+ *
+ * A snapshot built at version P borrowed what the tree held at P. A block
+ * replaced by the change that made version R was in the tree at every
+ * version below R, so a pin below R may still point at it and a pin at R or
+ * later cannot. */
+static bool pinned_below(const HDoc *d, uint64_t version)
+{
+    for (size_t i = 0; i < H_PINS; i++)
+        if (d->pins[i] && d->pins[i] < version)
+            return true;
+    return false;
+}
+static void retired_free(HDoc *d, HBlock *b)
+{
+    block_unlink(&d->retired, b);
+    d->retired_bytes -= b->size;
+    d->pub.arena_bytes -= b->size;
+    os64_free(b);
+}
+void d_retire(HDoc *d, void *ptr)
+{
+    if (!ptr)
+        return;
+    if (!pinned_below(d, d->version)) {
+        h_free(d, ptr);
+        return;
+    }
+    /* Still charged to the arena: a snapshot that never lets go must not
+     * make replaced bytes free. Its links are the block's own, so retiring
+     * allocates nothing and cannot fail. */
+    HBlock *b = (HBlock *)ptr - 1;
+    block_unlink(&d->blocks, b);
+    b->retired_at = d->version;
+    b->prev = NULL;
+    b->next = d->retired;
+    if (b->next)
+        b->next->prev = b;
+    d->retired = b;
+    d->retired_bytes += b->size;
+}
+static void reclaim(HDoc *d)
+{
+    for (HBlock *b = d->retired, *next; b; b = next) {
+        next = b->next;
+        if (!pinned_below(d, b->retired_at))
+            retired_free(d, b);
+    }
+}
+/* A broken promise about memory ends the program, as a stomped heap canary
+ * does: whoever still holds the pin is about to read what is being freed. */
+static void fatal(const char *sentence)
+{
+    os64_write(2, sentence, h_len(sentence));
+    os64_exit((int32_t)OS64_HTML_FATAL_EXIT);
+}
+uint64_t os64_html_version(const os64_html_document_t *doc)
+{
+    return doc ? ((const HDoc *)doc)->version : 0;
+}
+os64_html_pin_t os64_html_pin(const os64_html_document_t *doc)
+{
+    /* The pin table is the document's own bookkeeping, not its content. */
+    HDoc *d = (HDoc *)doc;
+    if (!d)
+        return 0;
+    for (size_t i = 0; i < H_PINS; i++)
+        if (!d->pins[i]) {
+            d->pins[i] = d->version;
+            return (os64_html_pin_t)(i + 1);
+        }
+    return 0;
+}
+void os64_html_unpin(const os64_html_document_t *doc, os64_html_pin_t pin)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !pin)
+        return;
+    if (pin > H_PINS || !d->pins[pin - 1])
+        fatal("libhtml: unpin of a pin that is not held\n");
+    d->pins[pin - 1] = 0;
+    reclaim(d);
+}
+size_t os64_html_retired_bytes(const os64_html_document_t *doc)
+{
+    return doc ? ((const HDoc *)doc)->retired_bytes : 0;
+}
+
 /* Stable nodes and strings share geometrically grown arena chunks. Scratch
  * buffers use individually releasable ledger blocks so replacing a buffer does
  * not retain every old capacity until document_free. Both charge one budget. */
-void *h_permanent(os64_html_parser_t *p, size_t size)
+void *d_permanent(HDoc *d, size_t size, int64_t *why)
 {
-    HDoc *d = p->d;
-    if (d->pub.refusal)
-        return NULL;
     if (size > SIZE_MAX - 15) {
-        h_refuse(p, OS64_HTML_ARENA_EXHAUSTED);
+        *why = OS64_HTML_ARENA_EXHAUSTED;
         return NULL;
     }
     size = (size + 15) & ~(size_t)15;
@@ -154,10 +257,10 @@ void *h_permanent(os64_html_parser_t *p, size_t size)
         if (available > sizeof(HBlock) && cap > available - sizeof(HBlock))
             cap = available - sizeof(HBlock);
         if (cap < size) {
-            h_refuse(p, OS64_HTML_ARENA_EXHAUSTED);
+            *why = OS64_HTML_ARENA_EXHAUSTED;
             return NULL;
         }
-        unsigned char *chunk = h_alloc(p, cap);
+        unsigned char *chunk = d_alloc(d, cap, why);
         if (!chunk)
             return NULL;
         d->permanent = chunk;
@@ -167,6 +270,16 @@ void *h_permanent(os64_html_parser_t *p, size_t size)
     void *out = d->permanent;
     d->permanent += size;
     d->permanent_left -= size;
+    return out;
+}
+void *h_permanent(os64_html_parser_t *p, size_t size)
+{
+    if (p->d->pub.refusal)
+        return NULL;
+    int64_t why = OS64_HTML_OK;
+    void *out = d_permanent(p->d, size, &why);
+    if (!out)
+        h_refuse(p, why);
     return out;
 }
 char *h_copy(os64_html_parser_t *p, const char *s, size_t n)
@@ -274,7 +387,7 @@ HNode *h_current(os64_html_parser_t *p)
 }
 HNode *h_node(os64_html_parser_t *p, os64_html_node_kind_t kind)
 {
-    /* Text nodes carry a private capacity word after the public node. */
+    /* The public node, then its private word (internal.h, h_word). */
     HNode *n = h_permanent(p, sizeof(*n) + sizeof(size_t));
     if (n) {
         n->kind = kind;
@@ -346,6 +459,16 @@ const char *os64_html_status_name(int64_t s)
         return "OS64_HTML_TOO_DEEP";
     case OS64_HTML_WORK_EXHAUSTED:
         return "OS64_HTML_WORK_EXHAUSTED";
+    case OS64_HTML_HIERARCHY:
+        return "OS64_HTML_HIERARCHY";
+    case OS64_HTML_NOT_FOUND:
+        return "OS64_HTML_NOT_FOUND";
+    case OS64_HTML_BAD_TEXT:
+        return "OS64_HTML_BAD_TEXT";
+    case OS64_HTML_ROOT_REQUIRED:
+        return "OS64_HTML_ROOT_REQUIRED";
+    case OS64_HTML_BAD_ARGUMENT:
+        return "OS64_HTML_BAD_ARGUMENT";
     default:
         return "OS64_HTML_UNKNOWN_STATUS";
     }
@@ -355,6 +478,11 @@ void os64_html_document_free(os64_html_document_t *doc)
     if (!doc)
         return;
     HDoc *d = (HDoc *)doc;
+    for (size_t i = 0; i < H_PINS; i++)
+        if (d->pins[i])
+            fatal("libhtml: a document was freed while a snapshot still had it pinned\n");
+    while (d->retired)
+        retired_free(d, d->retired);
     while (d->blocks)
         h_free(d, d->blocks + 1);
     os64_free(d);
@@ -381,6 +509,8 @@ os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options)
     if (!d)
         return NULL;
     d->budget = opt.max_arena_bytes;
+    d->version = 1;
+    d->max_depth = opt.max_depth;
     d->pub.arena_bytes = d->pub.peak_arena_bytes = sizeof(*d);
     os64_html_parser_t bootstrap = {0};
     bootstrap.d = d;
