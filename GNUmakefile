@@ -184,7 +184,9 @@ override IMAGE_NAME := os64_kernel
 # an app that built perfectly and simply wasn't there at boot.)
 # $(sort) dedupes: multi-file apps (top.c + topMain.c) list their directory
 # once per .c file — without it, top appears twice in every list built here.
-USERLAND_APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c)))))
+# js is held back exactly as userland/GNUmakefile holds it back: its library
+# is not on the image yet (DEBTS.md § Userland utilities).
+USERLAND_APPS := $(filter-out js,$(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c))))))
 # Punctuation aliases are alternate names for discovered apps, and therefore
 # ride every /bin without pretending to be independently linked programs.
 USERLAND_ALIASES := [

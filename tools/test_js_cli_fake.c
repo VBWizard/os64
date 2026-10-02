@@ -1,5 +1,7 @@
-// test_js_cli_fake.c — a stand-in for the os64_js_* runtime, for testing the
-// js runner before R2 builds the real one.
+// test_js_cli_fake.c — a stand-in for the os64_js_* runtime, so the js
+// runner's own decisions can be tested on every outcome, including the ones
+// the real library cannot be made to produce on demand (an ABI mismatch, a
+// BUSY, a refused installer). test_js_cli_real.c runs it on the real library.
 //
 // It implements CONTRACT.md's calling rules and nothing else: every operation
 // initializes the caller's outcome and returns the same status it stores

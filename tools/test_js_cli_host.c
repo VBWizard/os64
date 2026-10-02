@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "test_js_cli_fake.h"
+#include "os64/dirent.h"
 
 int js_main(int argc, char **argv);
 
@@ -53,6 +54,16 @@ int64_t os64_read(int32_t handle, void *buf, size_t len)
     memcpy(buf, s_stdin + s_stdin_at, n);
     s_stdin_at += n;
     return (int64_t)n;
+}
+
+// Paths starting "nosuch" do not exist and "adir" is a directory; every other
+// path is a regular file, so the fake library is the one that answers for it.
+int64_t os64_stat(const char *path, os64_dirent_t *entry)
+{
+    if (!strncmp(path, "nosuch", 6)) return -1;
+    memset(entry, 0, sizeof(*entry));
+    entry->flags = !strcmp(path, "adir") ? OS64_DE_DIR : 0;
+    return 0;
 }
 
 static size_t s_live;
@@ -268,17 +279,35 @@ static void outcomes(void)
     outcome("source", "js tool.js",
             (js_fake_answer_t){.status = OS64_JS_LIMIT, .limit = OS64_JS_LIMIT_SOURCE},
             4, "js: tool.js: source budget exceeded (4M)\n");
-    outcome("missing file", "js nosuch.js",
-            (js_fake_answer_t){.status = OS64_JS_HOST_FAILURE, .host_error = -2,
-                               .message = "cannot read"},
-            3, "js: nosuch.js: cannot read (error -2)\n");
+    outcome("read failure", "js tool.js",
+            (js_fake_answer_t){.status = OS64_JS_HOST_FAILURE, .host_error = -5,
+                               .message = "host service failed"},
+            3, "js: tool.js: host service failed (error -5)\n");
     outcome("host failure, no message", "js tool.js",
             (js_fake_answer_t){.status = OS64_JS_HOST_FAILURE, .host_error = -9},
             3, "js: tool.js: input or output failed (error -9)\n");
+    outcome("host failure, no service code", "js tool.js",
+            (js_fake_answer_t){.status = OS64_JS_HOST_FAILURE,
+                               .message = "host allocation failed"},
+            3, "js: tool.js: host allocation failed\n");
+
+    // A path that is not a script is named before any runtime exists.
+    fresh();
+    int st = run("missing file", "js nosuch.js a");
+    check(st == 3 && !js_fake.calls[0] && !strcmp(s_err, "js: nosuch.js: no such file\n"),
+          "a missing file exits 3 without asking the library");
+    fresh();
+    st = run("directory", "js adir");
+    check(st == 3 && !js_fake.calls[0] && !strcmp(s_err, "js: adir: is a directory\n"),
+          "a directory exits 3 without asking the library");
     outcome("truncated", "js tool.js",
             (js_fake_answer_t){.status = OS64_JS_EXCEPTION, .message = "Error: long",
                                .truncated = true},
             1, "js: tool.js: Error: long [truncated]\n");
+    outcome("truncated trace", "js tool.js",
+            (js_fake_answer_t){.status = OS64_JS_EXCEPTION, .message = "InternalError: stack overflow",
+                               .stack_trace = "    at r (tool.js:1:24)\n    at r (tool", .truncated = true},
+            1, "js: tool.js: InternalError: stack overflow\n    at r (tool.js:1:24)\n    at r (tool\n    [truncated]\n");
     outcome("library names the source", "js tool.js",
             (js_fake_answer_t){.status = OS64_JS_EXCEPTION, .line = 3, .column = 1,
                                .message = "Error: in a job", .source_name = "lib.js"},
@@ -294,7 +323,7 @@ static void outcomes(void)
     // no runtime to destroy.
     fresh();
     js_fake.create = (js_fake_answer_t){.status = OS64_JS_ABI_MISMATCH};
-    int st = run("abi", "js tool.js");
+    st = run("abi", "js tool.js");
     check(st == 5 && !strcmp(js_fake.calls, "create") && has(s_err, "ABI_MISMATCH"),
           "a refused creation exits 5 and runs nothing");
     fresh();

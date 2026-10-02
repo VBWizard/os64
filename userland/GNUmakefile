@@ -292,9 +292,9 @@ LIBPNG_PROGRAMS := pngtest
 # (top was the first: top.c + topMain.c): the wildcard yields the directory
 # once PER .c FILE, so without sort a two-file app appears twice in APPS
 # and its link rule gets eval'd twice.
-# js is the one directory held back: it calls the os64_js_* runtime, which R2
-# has not built yet, so it cannot link. apps/js/runner.mk compiles it under
-# the same flags (`make js-runner`); DEBTS.md § Userland utilities holds the
+# js is the one directory held back from the image: it needs /lib/libjs.so,
+# which the image does not install yet. apps/js/runner.mk builds and links it
+# by the same rule (`make js-runner`); DEBTS.md § Userland utilities holds the
 # row that takes this filter out.
 APPS := $(filter-out js,$(sort $(notdir $(patsubst %/,%,$(dir $(wildcard apps/*/*.c))))))
 
@@ -349,7 +349,7 @@ APP_ALIASES := [
 # probing, feeding it both lists yields exactly the map it produced when they
 # were one list: moving a program between apps/ and tests/ does not move it in
 # memory.
-APP_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py $(APPS) $(TESTS) jsembedtest)
+APP_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py $(APPS) $(TESTS) jsembedtest js)
 # The slot size comes from the same script that assigns the bases, and is
 # handed to ld so app.ld can ASSERT the app actually fits in its slot. One
 # definition of the number; see app.ld's slot-check comment.
@@ -487,6 +487,7 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest flowdump yonder
                        $(if $(filter $(1),gview desktop jpegtest giftest yonder),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
                        $(if $(filter $(1),fonttest texttest flowdump yonder),$(LIBFREETYPE_SO)) \
+                       $(if $(filter $(1),js),$(LIBJS_SO)) \
                        $(if $(filter $(1),mathtest),$(LIBMATH_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
@@ -504,6 +505,7 @@ $(3)/$(1): $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $$(APP_EXTRA
 endef
 $(foreach app,$(APPS),$(eval $(call APP_RULE,$(app),apps,$(BIN))))
 $(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
+$(eval $(call APP_RULE,js,apps,$(JS_RUNNER_DIR)))
 
 # The GDB symbol map: one add-symbol-file per program, at its own base. Sourced
 # by ./.gdbinit, so EVERY program's symbols are loaded before anything runs —

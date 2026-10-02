@@ -252,7 +252,12 @@ static const char *status_name(os64_js_status_t status)
 static int32_t report(const js_plan_t *plan, const os64_js_outcome_t *o)
 {
     const char *source = o->source_name[0] != '\0' ? o->source_name : plan->name;
-    const char *cut = o->diagnostic_truncated ? " [truncated]" : "";
+    // diagnostic_truncated covers every field, and the stack trace is the one
+    // that overflows (a runaway recursion's trace is the same frame a
+    // thousand times), so with a trace the marker ends the trace rather than
+    // making a whole one-line message look cut.
+    bool traced = o->stack_trace[0] != '\0';
+    const char *cut = o->diagnostic_truncated && !traced ? " [truncated]" : "";
     int32_t status;
 
     switch (o->status) {
@@ -299,9 +304,13 @@ static int32_t report(const js_plan_t *plan, const os64_js_outcome_t *o)
         os64_hprintf(2, ")\n");
         return JS_EXIT_BUDGET;
     case OS64_JS_HOST_FAILURE:
-        os64_hprintf(2, "js: %s: %s (error %ld)%s\n", source,
-                     o->message[0] != '\0' ? o->message : "input or output failed",
-                     (long)o->host_error, cut);
+        // host_error zero means the library had no service code to give
+        // (an allocation refusal, a write that made no progress).
+        os64_hprintf(2, "js: %s: %s", source,
+                     o->message[0] != '\0' ? o->message : "input or output failed");
+        if (o->host_error != 0)
+            os64_hprintf(2, " (error %ld)", (long)o->host_error);
+        os64_hprintf(2, "%s\n", cut);
         return JS_EXIT_IO;
     default:
         // Statuses the runner's call sequence never invites (MORE_JOBS,
@@ -312,11 +321,13 @@ static int32_t report(const js_plan_t *plan, const os64_js_outcome_t *o)
                      status_name(o->status), o->message[0] != '\0' ? ": " : "", o->message);
         return JS_EXIT_REFUSED;
     }
-    if (o->stack_trace[0] != '\0') {
+    if (traced) {
         size_t n = os64_strlen(o->stack_trace);
         os64_write(2, o->stack_trace, n);
         if (o->stack_trace[n - 1] != '\n')
             os64_write(2, "\n", 1);
+        if (o->diagnostic_truncated)
+            os64_hprintf(2, "    [truncated]\n");
     }
     return status;
 }
@@ -329,6 +340,22 @@ int main(int argc, char **argv)
         return JS_EXIT_OK;          // --help
     if (parsed != JS_EXIT_OK)
         return parsed;
+
+    // A file the library cannot load comes back as HOST_FAILURE, the same
+    // status a failed write to standard output gets, so the commonest
+    // mistake (a mistyped path) is named here, before any runtime exists.
+    // A file that vanishes after this check is still reported by the library.
+    if (plan.kind == JS_FROM_FILE) {
+        os64_dirent_t entry;
+        if (os64_stat(plan.operand, &entry) < 0) {
+            os64_hprintf(2, "js: %s: no such file\n", plan.operand);
+            return JS_EXIT_IO;
+        }
+        if (entry.flags & OS64_DE_DIR) {
+            os64_hprintf(2, "js: %s: is a directory\n", plan.operand);
+            return JS_EXIT_IO;
+        }
+    }
 
     char *input = NULL;
     size_t input_length = 0;

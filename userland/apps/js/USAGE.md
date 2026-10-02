@@ -3,9 +3,11 @@
 Status: RULED by Chris, 2026-10-02 (C1). The grammar, argument binding,
 output conventions and exit statuses below are the runner's half of the R0
 contract (`userland/libjs/CONTRACT.md`); Quinn's agreement as R0's owner is
-pending. `tools/test_js_cli_host.sh` holds the runner to every table here.
-The runner links once R2 provides the runtime (DEBTS.md § Userland
-utilities); until then `make -C userland js-runner` compiles it.
+pending. `tools/test_js_cli_host.sh` holds the runner to the tables here
+(all but the library's own fatal exit), on a stand-in for the library and on
+the real one. `make -C userland
+js-runner` builds it; `/bin/js` joins the image with `/lib/libjs.so`
+(DEBTS.md § Userland utilities).
 
 ```
 js [options] FILE [ARG...]
@@ -38,7 +40,8 @@ standard error.
 SIZE takes a byte count with an optional `K` or `M` suffix. Every budget must
 be positive: R0 has no "unlimited" setting, deliberately. `--stack` is at most
 768K, a quarter below the 1 MiB thread stack the engine actually runs on, so a
-deep recursion is a JavaScript `RangeError`, never a fault.
+runaway recursion ends as the script's own `InternalError: stack overflow`
+(exit 1, like any uncaught exception), never as a fault.
 
 A job is one Promise continuation: each `.then` callback that runs, and each
 resumption of an `async` function after an `await`. The job budget is the one
@@ -77,7 +80,7 @@ script's own arguments always start at index one.
 | 1 | the script failed: an uncaught exception or an unhandled Promise rejection |
 | 2 | usage: unknown option, bad value, no script |
 | 3 | input or output failed: the script (file or standard input) could not be read, the runner had no memory to hold it or its arguments, or output could not be written |
-| 4 | a budget was exceeded (the message names which: memory, time, source, jobs, stack) |
+| 4 | a budget was exceeded (the message names which: memory, time, source or jobs) |
 | 5 | the library refused the runtime (header/library mismatch, or a runtime that could not be created), or answered with a status the runner never asks for; the message names the status |
 | 0x4A534641 | the engine detected a broken invariant and ended the process (`OS64_JS_FATAL_EXIT`, "JSFA"); this is the library's, not the runner's |
 
@@ -86,15 +89,20 @@ safe from a signal handler, and the runner does not pretend otherwise.
 
 ## Diagnostics
 
-One line, then the stack trace when the engine has one:
+One line, then the stack trace when the engine has one; the trace is where
+the line and column are:
 
 ```
-js: tool.js:12:5: TypeError: not a function
+js: tool.js: TypeError: not a function
     at main (tool.js:12:5)
-js: tool.js: unhandled promise rejection: Error: boom
+js: tool.js: unhandled promise rejection: boom
+    at <eval> (tool.js:3:16)
 js: tool.js: time budget exceeded (60000 ms)
-js: nosuch.js: cannot read (error -2)
+js: nosuch.js: no such file
 ```
+
+A trace too long for the library's diagnostic buffer ends with
+`[truncated]`.
 
 ## Not supported
 
