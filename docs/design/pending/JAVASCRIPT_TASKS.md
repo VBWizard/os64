@@ -31,7 +31,7 @@ independent review.
 | R2 runtime implementation | **Merged** | Core [PR #194](https://github.com/VBWizard/os64/pull/194), merge `a6d45945`; file/output/argument helpers [PR #195](https://github.com/VBWizard/os64/pull/195), merge `a558f8fd`. All eleven embedding operations are implemented. Maintained suites pass 822 target-engine host, 3,014 sanitized-engine host and 395 os64/QEMU checks; evidence and review corrections are in libjs/VALIDATION.md. |
 | C1 runner | **Merged; running on P5** | Opus's [PR #196](https://github.com/VBWizard/os64/pull/196), merge `a2e409a7`, delivers file/expression/stdin execution, copied arguments, selected output, diagnostics and exit mapping. Both `js` and `libjs.so` build by default for os64get delivery. Host and QEMU acceptance pass; Chris reports `js primes.js \| wc -l` produced `1229` on the P5. Standard-image delivery is recorded in I1. |
 | V1 independent validation | **Merged** | [PR #197](https://github.com/VBWizard/os64/pull/197), merge `99df2636`: independently reviewed separate consumer suite passes 383 checks in each host engine profile and 375 in QEMU, with 55 upstream functions passing and four explicit host-feature skips. Capability/failure/native ownership, diagnostic exhaustion, reuse, ABI refusal and the separate fatal process are covered. V1 found and fixes an engine error lifetime defect under persistent allocation refusal. |
-| I1 shared integration | **Implemented; review pending** | `codex/js-integration`, based on merged V1 `99df2636`: the normal ext2 root and FAT rescue volume install `js`, `libjs.so` and `/etc/licenses/quickjs.txt` with their existing dependencies. Strict root/header/target checks and 18 image byte comparisons pass, including FreeType through libos64. Fresh ext2-root and FAT-root QEMU boots each pass the CLI smoke cases and V1's 375 checks, with 55 upstream functions passing and four explicit skips. Both prime pipelines produce `1229`; the separate fatal process returns the full JSFA badge. Publication and independent review remain. |
+| I1 shared integration | **In review** | [PR #198](https://github.com/VBWizard/os64/pull/198), implementation `3b986b84`, based on merged V1 `99df2636`: the normal ext2 root and FAT rescue volume install `js`, `libjs.so` and `/etc/licenses/quickjs.txt` with their existing dependencies. Strict root/header/target checks and 18 image byte comparisons pass, including FreeType through libos64. Fresh ext2-root and FAT-root QEMU boots each pass the CLI smoke cases and V1's 375 checks, with 55 upstream functions passing and four explicit skips. Both prime pipelines produce `1229`; the separate fatal process returns the full JSFA badge. Independent review remains. |
 | D0 DOM design | **Merged** | Reviewed [DOM.md](DOM.md), delivered with [PR #190](https://github.com/VBWizard/os64/pull/190). Design completion is separate from browser scripting implementation. |
 | D1 libhtml mutation core | **Merged** | [PR #190](https://github.com/VBWizard/os64/pull/190), merge `5c7d62ce`. Mutation/lifetime verbs and maintained tests; `parse_fragment` belongs to D2. |
 | D2 scripting-enabled parsing | **Pending** | Stop/resume/abandon, fragment parsing and serialization; acceptance in DOM.md. |
@@ -57,7 +57,7 @@ belong to [JAVASCRIPT.md](JAVASCRIPT.md#delivery-and-validation):
 
 Next steps:
 
-1. Publish and review I1's standard-image registration, complete dependency
+1. Review I1's standard-image registration in PR #198, complete dependency
    and licence audit, and fresh ext2-root/FAT-root execution evidence. V1 is
    reviewed and merged; I1's implementation and acceptance are recorded below.
 2. Close J2's measurement gaps: recursion/native-callback stack headroom,
@@ -459,7 +459,9 @@ scheduling measurements are separate packets.
 
 Chris assigned I1 after accepting V1. The integration is isolated in
 `.worktrees/js-integration`, branch `codex/js-integration`, based on merged
-V1 `userland` `99df2636`. Publication and independent review remain pending.
+V1 `userland` `99df2636`. Implementation `3b986b84` is published in
+[PR #198](https://github.com/VBWizard/os64/pull/198), targeting `userland`.
+Independent review remains pending.
 
 The root GNUmakefile discovers `js` with the other applications and adds
 `libjs.so` to the shared-library inventory used by both ext2 and FAT. Both

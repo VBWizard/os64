@@ -514,7 +514,8 @@ intentional invariant diagnostic. Both owned VMs were stopped after extraction.
 These temporary files supplement the maintained audit and documented commands;
 they are not installed in the product image.
 
-I1's implementation and acceptance are ready for independent review. No new
+I1's implementation and acceptance are published in
+[PR #198](https://github.com/VBWizard/os64/pull/198) for independent review. No new
 P5 run or full ECMAScript conformance is claimed. J2's stack measurements,
 production limit defaults and floating-point scheduling acceptance remain
 separate; the runner's defaults are still provisional.
