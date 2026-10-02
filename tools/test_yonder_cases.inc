@@ -229,6 +229,35 @@ static void paint_cases(void)
                         "fill 0 0 40 40 #ff0000/128\n");
     }
 
+    // The border styles (PILE3.md § The box's edge), on a top side alone, 20
+    // wide. Dashed 2px: dashes 6 long, 6 apart, from the box's edge, on
+    // each of its two rows. Dotted 2px: squares 2 across, 2 apart. Double
+    // 3px: the outer and inner thirds, the middle row left. Ridge 2px is a
+    // groove turned over: its outer row the lighter tone (#808080 to
+    // #bfbfbf), its inner the darker (#404040).
+    struct { const char *style, *want; } kEdges[] = {
+        {"2px dashed #ff0000",
+         "fill 0 0 6 1 #ff0000\nfill 12 0 6 1 #ff0000\n"
+         "fill 0 1 6 1 #ff0000\nfill 12 1 6 1 #ff0000\n"},
+        {"2px dotted #ff0000",
+         "fill 0 0 2 1 #ff0000\nfill 4 0 2 1 #ff0000\nfill 8 0 2 1 #ff0000\n"
+         "fill 12 0 2 1 #ff0000\nfill 16 0 2 1 #ff0000\n"
+         "fill 0 1 2 1 #ff0000\nfill 4 1 2 1 #ff0000\nfill 8 1 2 1 #ff0000\n"
+         "fill 12 1 2 1 #ff0000\nfill 16 1 2 1 #ff0000\n"},
+        {"3px double #ff0000", "fill 0 0 20 1 #ff0000\nfill 0 2 20 1 #ff0000\n"},
+        {"2px ridge #808080", "fill 0 0 20 1 #bfbfbf\nfill 0 1 20 1 #404040\n"},
+    };
+    for (size_t k = 0; k < sizeof(kEdges) / sizeof(kEdges[0]); k++) {
+        char html[256], want[512];
+        snprintf(html, sizeof(html),
+                 "<!doctype html><style>body { margin: 0 } div { width: 20px; height: 0;"
+                 " border-top: %s }</style><div></div>",
+                 kEdges[k].style);
+        snprintf(want, sizeof(want), "fill 0 0 200 100 #fefefe\n%s", kEdges[k].want);
+        paint_page_case("a border style is drawn as it says", html, 200,
+                        (os64_gui_rect_t){0, 0, 200, 100}, true, want);
+    }
+
     // Groups nest, each laid over what was under it when it opened, and a
     // group none of which shows opens empty: the far one at 520, cut to a
     // view that ends at 100, has no height.

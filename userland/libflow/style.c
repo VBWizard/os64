@@ -1533,12 +1533,10 @@ static bool author_border_style(const garb_val_t *v, flow_border_style_t *out)
 {
     static const char *const words[] = {"none", "hidden", "dotted", "dashed", "solid",
                                         "double", "groove", "ridge", "inset", "outset"};
-    // Dotted, dashed and double are drawn solid, and a ridge as a groove,
-    // until the painter has their strokes (GARB.md § Booked).
     static const flow_border_style_t as[] = {
-        FLOW_BORDER_NONE, FLOW_BORDER_HIDDEN, FLOW_BORDER_SOLID, FLOW_BORDER_SOLID,
-        FLOW_BORDER_SOLID, FLOW_BORDER_SOLID, FLOW_BORDER_GROOVE, FLOW_BORDER_GROOVE,
-        FLOW_BORDER_INSET, FLOW_BORDER_OUTSET,
+        FLOW_BORDER_NONE,   FLOW_BORDER_HIDDEN, FLOW_BORDER_DOTTED, FLOW_BORDER_DASHED,
+        FLOW_BORDER_SOLID,  FLOW_BORDER_DOUBLE, FLOW_BORDER_GROOVE, FLOW_BORDER_RIDGE,
+        FLOW_BORDER_INSET,  FLOW_BORDER_OUTSET,
     };
     int32_t i = pick(v, words, F_ARRAY(words));
     if (i < 0)

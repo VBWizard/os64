@@ -135,10 +135,53 @@ static uint32_t tone(flow_border_style_t style, uint32_t c, int side, int32_t i,
     case FLOW_BORDER_GROOVE:
         sunk = i < (width + 1) / 2;
         break;
+    case FLOW_BORDER_RIDGE:
+        sunk = i >= (width + 1) / 2;
+        break;
     default:
         return c;
     }
     return top_left == sunk ? yonder_darker(c) : yonder_lighter(c);
+}
+
+// a / b rounded down, for an a that may be negative (b > 0).
+static int64_t floor_div(int64_t a, int64_t b)
+{
+    return a >= 0 ? a / b : -((-a + b - 1) / b);
+}
+
+// One row (along x) or column of a side, `depth` rows in from its outer
+// edge of a side `width` deep, starting at (x, y) and `len` long. A DOUBLE
+// side is two lines a third of its width each, the middle third left; a
+// DOTTED one is squares a width across with a width between, and a DASHED
+// one dashes three widths long with as much between — both counted from
+// `origin`, the box's edge along the side, so every row's pattern lines up
+// with the next. Only what meets the view is walked, however long the side.
+static void stroke(const Painter *p, flow_border_style_t style, int64_t x, int64_t y, int64_t len,
+                   bool along_x, int64_t depth, int64_t width, int64_t origin, uint32_t colour)
+{
+    if (style == FLOW_BORDER_DOUBLE && width >= 3) {
+        int64_t band = (width + 1) / 3;
+        if (depth >= band && depth < width - band)
+            return;
+    }
+    if (style != FLOW_BORDER_DOTTED && style != FLOW_BORDER_DASHED) {
+        fill(p, x, y, along_x ? len : 1, along_x ? 1 : len, colour);
+        return;
+    }
+    int64_t on = max64(1, style == FLOW_BORDER_DOTTED ? width : 3 * width), period = 2 * on;
+    int64_t at = along_x ? x : y;
+    int64_t v0 = along_x ? p->view.x : p->view.y;
+    int64_t a = max64(at, v0), b = min64(at + len, v0 + (along_x ? p->view.w : p->view.h));
+    for (int64_t s = origin + floor_div(a - origin, period) * period; s < b; s += period) {
+        int64_t s0 = max64(s, a), s1 = min64(s + on, b);
+        if (s1 <= s0)
+            continue;
+        if (along_x)
+            fill(p, s0, y, s1 - s0, 1, colour);
+        else
+            fill(p, x, s0, 1, s1 - s0, colour);
+    }
 }
 
 // The four sides, one row or column at a time, meeting on the diagonals:
@@ -162,30 +205,30 @@ static void borders(const Painter *p, const flow_box_t *b)
     for (int64_t i = max64(0, vy0 - ry), end = min64(min64(t, rh), vy1 - ry); i < end; i++) {
         // ceil(i * l / t): the columns of the left side this row gives up.
         int64_t x0 = rx + (i * l + t - 1) / t, x1 = rx + rw - (i * rt + t - 1) / t;
-        fill(p, x0, ry + i, x1 - x0, 1,
-             tone(s->border_style[FLOW_TOP], s->border_color[FLOW_TOP], FLOW_TOP, (int32_t)i,
-                  (int32_t)t));
+        stroke(p, s->border_style[FLOW_TOP], x0, ry + i, x1 - x0, true, i, t, rx,
+               tone(s->border_style[FLOW_TOP], s->border_color[FLOW_TOP], FLOW_TOP, (int32_t)i,
+                    (int32_t)t));
     }
     for (int64_t i = max64(0, ry + rh - vy1), end = min64(min64(bt, rh), ry + rh - vy0); i < end;
          i++) {
         int64_t x0 = rx + (i * l + bt - 1) / bt, x1 = rx + rw - (i * rt + bt - 1) / bt;
-        fill(p, x0, ry + rh - 1 - i, x1 - x0, 1,
-             tone(s->border_style[FLOW_BOTTOM], s->border_color[FLOW_BOTTOM], FLOW_BOTTOM,
-                  (int32_t)i, (int32_t)bt));
+        stroke(p, s->border_style[FLOW_BOTTOM], x0, ry + rh - 1 - i, x1 - x0, true, i, bt, rx,
+               tone(s->border_style[FLOW_BOTTOM], s->border_color[FLOW_BOTTOM], FLOW_BOTTOM,
+                    (int32_t)i, (int32_t)bt));
     }
     for (int64_t j = max64(0, vx0 - rx), end = min64(min64(l, rw), vx1 - rx); j < end; j++) {
         // How many top rows reach column j: min(t, floor(j * t / l) + 1).
         int64_t y0 = ry + min64(t, j * t / l + 1), y1 = ry + rh - min64(bt, j * bt / l + 1);
-        fill(p, rx + j, y0, 1, y1 - y0,
-             tone(s->border_style[FLOW_LEFT], s->border_color[FLOW_LEFT], FLOW_LEFT, (int32_t)j,
-                  (int32_t)l));
+        stroke(p, s->border_style[FLOW_LEFT], rx + j, y0, y1 - y0, false, j, l, ry,
+               tone(s->border_style[FLOW_LEFT], s->border_color[FLOW_LEFT], FLOW_LEFT, (int32_t)j,
+                    (int32_t)l));
     }
     for (int64_t j = max64(0, rx + rw - vx1), end = min64(min64(rt, rw), rx + rw - vx0); j < end;
          j++) {
         int64_t y0 = ry + min64(t, j * t / rt + 1), y1 = ry + rh - min64(bt, j * bt / rt + 1);
-        fill(p, rx + rw - 1 - j, y0, 1, y1 - y0,
-             tone(s->border_style[FLOW_RIGHT], s->border_color[FLOW_RIGHT], FLOW_RIGHT, (int32_t)j,
-                  (int32_t)rt));
+        stroke(p, s->border_style[FLOW_RIGHT], rx + rw - 1 - j, y0, y1 - y0, false, j, rt, ry,
+               tone(s->border_style[FLOW_RIGHT], s->border_color[FLOW_RIGHT], FLOW_RIGHT,
+                    (int32_t)j, (int32_t)rt));
     }
 }
 

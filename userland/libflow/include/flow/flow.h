@@ -138,6 +138,10 @@ typedef enum {
     FLOW_BORDER_INSET,
     FLOW_BORDER_OUTSET,
     FLOW_BORDER_GROOVE,
+    FLOW_BORDER_RIDGE,
+    FLOW_BORDER_DOTTED,
+    FLOW_BORDER_DASHED,
+    FLOW_BORDER_DOUBLE,
 } flow_border_style_t;
 
 typedef enum {
