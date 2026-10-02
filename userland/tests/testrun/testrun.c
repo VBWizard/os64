@@ -107,6 +107,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/nx_test",         argv_nx_stack, 139, 0,         "executing the stack kills the program (NX works)" },
     { "/tests/nx_test",         argv_nx_text,  139, 0,         "writing to .text kills the program (W^X works)" },
     { "/tests/fputest",         NULL, 0xF0DE0000,  0,          "x87/SSE data AND control state survive preemption, migration, a handler that wipes them, and a forged frame MXCSR" },
+    { "/tests/mathtest",        NULL, 0x3A740000,  0,          "libmath.so matches the host build bit for bit, keeps the caller's FP control state, and holds across threads" },
     // PASS BY DYING: a CPU exception from ring 3 ends the program with
     // 200 + vector (user_exception_kill), never the machine.
     // #XM is the one QEMU's TCG cannot raise (it records SSE exceptions in
