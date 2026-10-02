@@ -51,13 +51,13 @@ belong to [JAVASCRIPT.md](JAVASCRIPT.md#delivery-and-validation):
 | --- | --- | --- |
 | J0 reviewed foundation | **Complete** | Pinned QuickJS source/profile, maths selection, dependency inventory and reviewed runtime contract are delivered. |
 | J1 library and runner on os64 | **Complete** | Merged M1/R1/R2/C1, strict target build/link, expected shared dependencies, script execution and exception output in QEMU. Chris's P5 prime-count pipeline adds a hardware smoke test. J1 does not require standard-image installation. |
-| J2 lifecycle and failure acceptance | **Implemented; review pending** | `codex/js-acceptance-limits`, based on merged I1 `1b874edd`: existing lifecycle/failure/cancellation/Promise/fatal and upstream evidence is supplemented by 105 guest measurement checks passing on one and eight CPUs. Twelve recursion/native-frame cases retain sampled headroom and permit reuse; two competing runtimes preserve XMM/x87/control state across yield/sleep with a deliberate-disturbance negative control. Six workloads fit the retained 64 MiB/256 KiB/4 MiB/60 s profile, now published by `os64_js_default_limits()` and shared by the runner. Both final boots also pass V1's 375 checks, CLI/default/768 KiB-cap cases and the fatal status; host runner suites pass 196/38 checks. Publication and independent review remain. |
+| J2 lifecycle and failure acceptance | **In review** | [PR #200](https://github.com/VBWizard/os64/pull/200), implementation `ec41a57f`, based on merged I1 `1b874edd`: existing lifecycle/failure/cancellation/Promise/fatal and upstream evidence is supplemented by 105 guest measurement checks passing on one and eight CPUs. Twelve recursion/native-frame cases retain sampled headroom and permit reuse; two competing runtimes preserve XMM/x87/control state across yield/sleep with a deliberate-disturbance negative control. Six workloads fit the retained 64 MiB/256 KiB/4 MiB/60 s profile, now published by `os64_js_default_limits()` and shared by the runner. Both final boots also pass V1's 375 checks, CLI/default/768 KiB-cap cases and the fatal status; host runner suites pass 196/38 checks. Independent review remains. |
 | J3 first scripted Yonder fixture | **Pending** | D0/D1 are merged; D2-D5 and visible mutation/rebuild/reference/form/navigation acceptance remain. |
 | J4 browser execution and events | **Pending** | Browser script order, parser mode, timers/events, origins/cookies and their acceptance fixtures remain. D6 reclamation and D7's event loop are separate deliverables. |
 
 Next steps:
 
-1. Publish and review J2's measurement suite and shared standalone defaults.
+1. Review J2's measurement suite and shared standalone defaults in PR #200.
    V1 and I1 are reviewed and merged. J2's measurements and acceptance are
    recorded below; accepting that packet closes the standalone milestone.
 2. Continue Fable's D2-D4 alongside that work; then D5 supplies the first
@@ -495,8 +495,9 @@ packet; that evidence is recorded below. Browser scripting remains D2-D7.
 
 Chris assigned J2 after I1 merged. The packet is isolated in
 `.worktrees/js-acceptance-limits`, branch `codex/js-acceptance-limits`, based on
-`userland` `1b874edd`. Implementation and guest acceptance are complete;
-publication and independent review remain pending.
+`userland` `1b874edd`. Implementation `ec41a57f` and guest acceptance are
+complete; [PR #200](https://github.com/VBWizard/os64/pull/200) is open against
+`userland` for independent review.
 
 `tools/js_measure` and the explicit `js-measure-test` target provide a maintained
 guest consumer using public runtime/binding APIs and `/proc/self/maps`. At
