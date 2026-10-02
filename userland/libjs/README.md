@@ -32,6 +32,7 @@ Checks:
   support fixtures, normal-exit leak checks, allocation-failure sweeps, clock
   failures/deadlines, native bindings/finalizers, Promise checkpoints, class
   allocation across threads, cross-thread cancellation, owned input cleanup,
+  EOF probes before buffer growth and memory-budget boundary cases,
   partial output writes, transactional property/handle publication, copied
   arguments and installer failure sweeps. Fatal fixtures
   verify the full JSFA badge through a host exit hook.

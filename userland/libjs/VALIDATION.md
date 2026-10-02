@@ -317,3 +317,42 @@ The corrected libjs is 4,520,760 bytes with SHA-256
 libmath and libos64 retain the sizes and hashes in the helper-slice table above.
 These are scratch-image runtime observations; C1, independent validation and
 normal image integration remain separate work.
+
+## PR #195 EOF-before-growth correction, 2026-10-02
+
+The second P2 finding was reproduced at `2fd6007d` with two failed assertions:
+4,095- and 8,191-byte sources evaluated successfully through the buffer API
+under measured memory budgets, but file evaluation exhausted those budgets.
+The old reader grew at the buffer boundary before checking for EOF.
+
+The reader now probes one byte at an intermediate buffer boundary. EOF keeps
+the existing terminated-source capacity; extra input is retained after growth.
+Probe read errors preserve their service code, cancellation is observed before
+growth, and these outcomes still close the owned input. The wrapper's direct
+file-to-evaluation handoff is distinct from the engine's compiler allocations.
+
+- Maintained host suites: **822 target-engine checks** and **3,014
+  sanitized-engine checks**, zero failures and zero live fixture allocations,
+  with normal-exit LeakSanitizer enabled and expected fatal badges. Cases cover
+  both boundary sizes, equivalent buffer evaluation, one byte beyond each
+  boundary, probe read/close error precedence, cancellation on a positive/EOF
+  probe, short reads preserving the probed byte, and growth-allocation refusal
+  after the extra byte is confirmed. Construction accounting is measured for
+  each engine profile. Extra-byte sources can fit the sanitized profile's
+  budget; the actual guest profile reaches its memory limit after growth.
+- Strict explicit consumer and root builds, header/manifest checks, target
+  import/export/ELF/dependency and relink audits: PASS. Symbol inventories and
+  dependencies are unchanged.
+- QEMU VM 56207: **395 checks, zero failures, 41 native calls**. Both boundary
+  sizes pass file and buffer evaluation under the same measured budget; the
+  additional-byte fixtures return LIMIT/MEMORY. The full JSRT success status
+  and both intentional JSFA fatal statuses match expectations. The kernel
+  teardown test passed after a quiet boot before consumer commands. The
+  screenshot showed the returned shell and expected invariant diagnostics;
+  the VM was stopped after extraction.
+
+Guest copies of all three libraries matched the current build byte for byte.
+libjs is 4,521,008 bytes with SHA-256
+`5e5be11499c7bf5f12bacb20c94ea0002595f4b31142823f561f38bf1160e5ba`.
+libmath and libos64 retain the sizes and hashes in the helper-slice table above.
+C1, independent validation and normal image integration remain separate gates.

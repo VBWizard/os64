@@ -137,7 +137,9 @@ verdict is an error. After a successful open, read/allocation/size/cancellation
 failure still closes the owned input. Empty and exact-limit files are accepted;
 one byte beyond the source ceiling produces LIMIT/SOURCE. The growing input
 buffer is charged to the engine allocator and passed directly to evaluation,
-without a second source copy. BUSY or invalid-path refusal does not open a file.
+without a second source copy by the wrapper. At buffer boundaries, a one-byte
+probe checks for EOF before growth; confirmed extra input is retained after
+expansion. BUSY or invalid-path refusal does not open a file.
 Non-file handles are outside this helper's contract.
 The execution deadline starts immediately before compilation/evaluation, after
 file loading. Input size and memory cap bound loading; the initial helper does

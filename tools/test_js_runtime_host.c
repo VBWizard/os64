@@ -18,6 +18,7 @@ static size_t read_fail_at = SIZE_MAX, output_fail_at = SIZE_MAX;
 static int64_t loading_time;
 static int64_t monotonic = 10000000, clock_step;
 static os64_js_runtime_t *cancel_on_read;
+static size_t cancel_read_at;
 
 int64_t os64_open(const char *path, const char *mode)
 {
@@ -31,12 +32,13 @@ int64_t os64_read(int32_t handle, void *buffer, size_t size)
     check(handle == 73 && size != 0, "file helper reads its owned input");
     if (input_position >= read_fail_at) return read_error;
     size_t n = input_length - input_position;
+    size_t before = input_position;
     if (n > size) n = size;
     if (n > read_limit) n = read_limit;
     memcpy(buffer, input_bytes + input_position, n);
     input_position += n;
     monotonic += loading_time;
-    if (cancel_on_read) os64_js_cancel(cancel_on_read);
+    if (cancel_on_read && before >= cancel_read_at) os64_js_cancel(cancel_on_read);
     return (int64_t)n;
 }
 int64_t os64_close(int32_t handle)
@@ -228,7 +230,61 @@ static void reset_io(const char *source)
     read_fail_at = output_fail_at = read_limit = SIZE_MAX;
     loading_time = 0;
     cancel_on_read = NULL;
+    cancel_read_at = 0;
     output_len = 0; write_limit = SIZE_MAX;
+}
+
+static void file_boundary_cases(void)
+{
+    char source[8193];
+    for (size_t capacity = 4096; capacity <= 8192; capacity *= 2) {
+        os64_js_config_t config = file_boundary_config(capacity);
+        os64_js_outcome_t outcome;
+        for (size_t extra = 0; extra <= 1; extra++) {
+            size_t length = capacity - 1 + extra;
+            memset(source, ' ', length);
+            memcpy(source, "true", 4);
+            source[length] = 0;
+            reset_io(source);
+            os64_js_runtime_t *runtime = create_fixture(&config);
+            if (!runtime) return;
+            check(os64_js_run(runtime, source, length, "boundary.js", &outcome) == OS64_JS_OK,
+                  "boundary source evaluates within the measured memory budget");
+            os64_js_destroy(runtime);
+            runtime = create_fixture(&config);
+            if (!runtime) return;
+            os64_js_status_t result = os64_js_run_file(runtime, "boundary.js", &outcome);
+            check(result == OS64_JS_OK || (extra != 0 && result == OS64_JS_LIMIT &&
+                  outcome.limit == OS64_JS_LIMIT_MEMORY),
+                  "EOF boundary fits the budget and extra input respects the memory ceiling");
+            check(input_closes == 1, "boundary load closes its input");
+            os64_js_destroy(runtime);
+            check(live == 0, "boundary fixtures release all allocations");
+        }
+    }
+    for (unsigned mode = 0; mode < 4; mode++) {
+        memset(source, ' ', 4096);
+        source[0] = '(';
+        memcpy(source + 4091, "true)", 5);
+        source[mode == 2 ? 4095 : 4096] = 0;
+        reset_io(source);
+        os64_js_config_t config = mode == 3 ? fixture_config() : file_boundary_config(4096);
+        os64_js_runtime_t *runtime = create_fixture(&config);
+        if (!runtime) return;
+        if (mode == 0) { read_fail_at = 4095; read_error = -45; close_error = OS64_CLOSE_DEFERRED; }
+        if (mode == 1 || mode == 2) { cancel_on_read = runtime; cancel_read_at = 4095; }
+        if (mode == 3) read_limit = 137;
+        os64_js_outcome_t outcome;
+        os64_js_status_t result = os64_js_run_file(runtime, "probe.js", &outcome);
+        check(mode == 0 ? result == OS64_JS_HOST_FAILURE && outcome.host_error == -45 :
+              mode < 3 ? result == OS64_JS_CANCELLED : result == OS64_JS_OK,
+              "boundary probe preserves read error, cancellation and the extra source byte");
+        check(input_closes == 1, "probe outcomes close the owned input");
+        cancel_on_read = NULL;
+        os64_js_destroy(runtime);
+        check(live == 0, "probe outcomes release source and runtime allocations");
+    }
+    reset_io("");
 }
 
 static void file_cases(void)
@@ -290,6 +346,8 @@ static void file_cases(void)
         fail_at = attempts + mode + 1;
         check(os64_js_run_file(runtime, "allocation.js", &outcome) == OS64_JS_HOST_FAILURE &&
               input_closes == 1, "file initial and growth allocation failures close input");
+        check(input_position == (mode == 0 ? 0 : 4096),
+              "growth allocation refusal follows the confirmed extra input byte");
         fail_at = 0; os64_js_destroy(runtime);
         check(live == 0, "file allocation failure reclaims buffers and engine");
     }
@@ -594,7 +652,7 @@ int main(int argc, char **argv)
         return 1;
     }
     runtime_cases(); clock_cases(); diagnostic_cases(); allocation_cases(); thread_cases();
-    file_cases(); output_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
+    file_cases(); file_boundary_cases(); output_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     check(live == 0, "runtime suite releases every fixture allocation");
     printf("libjs runtime: %u checks, %u failures, %zu live allocations, %u native calls\n",
            checks, failures, live, native_calls);

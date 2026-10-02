@@ -121,6 +121,24 @@ static os64_js_runtime_t *create_fixture(const os64_js_config_t *config)
     return runtime;
 }
 
+/* Measure retained target allocations rather than assuming the host and guest
+ * heaps or the instrumented engine have the same construction footprint.
+ * Reserve the input buffer, compiler source storage and small parsing work. */
+static os64_js_config_t file_boundary_config(size_t capacity)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    if (runtime) {
+        os64_js_outcome_t outcome;
+        JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+        JSMemoryUsage usage;
+        JS_ComputeMemoryUsage(JS_GetRuntime(context), &usage);
+        config.limits.memory_bytes = os64_malloc_size(runtime) + usage.malloc_size + 2 * capacity + 2048;
+        os64_js_destroy(runtime);
+    }
+    return config;
+}
+
 static os64_js_status_t execute_fixture(os64_js_runtime_t *runtime, const char *source,
                                        os64_js_outcome_t *outcome)
 {

@@ -41,6 +41,32 @@ static void file_helpers(int32_t output_handle)
     check(os64_js_run_file(runtime, "/home/jsr2-missing.js", &outcome) == OS64_JS_HOST_FAILURE && outcome.host_error < 0,
           "guest missing file preserves open error");
     os64_js_destroy(runtime);
+    for (size_t capacity = 4096; capacity <= 8192; capacity *= 2) {
+        config = file_boundary_config(capacity);
+        for (size_t extra = 0; extra <= 1; extra++) {
+            size_t length = capacity - 1 + extra;
+            os64_memset(source, ' ', length);
+            os64_memcpy(source, "true", 4);
+            handle = os64_open(path, "w");
+            check(handle >= 0, "guest boundary source opened");
+            if (handle < 0) return;
+            check(os64_write((int32_t)handle, source, length) == (int64_t)length,
+                  "guest boundary source written");
+            check(os64_close((int32_t)handle) == 0, "guest boundary source committed");
+            runtime = create_fixture(&config);
+            if (!runtime) return;
+            check(os64_js_run(runtime, source, length, path, &outcome) == OS64_JS_OK,
+                  "guest boundary buffer evaluation fits memory budget");
+            os64_js_destroy(runtime);
+            runtime = create_fixture(&config);
+            if (!runtime) return;
+            os64_js_status_t result = os64_js_run_file(runtime, path, &outcome);
+            check(extra == 0 ? result == OS64_JS_OK : result == OS64_JS_LIMIT &&
+                  outcome.limit == OS64_JS_LIMIT_MEMORY,
+                  "guest EOF boundary avoids growth but extra input requires it");
+            os64_js_destroy(runtime);
+        }
+    }
 }
 
 static void guest_helpers(void)

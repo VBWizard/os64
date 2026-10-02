@@ -510,12 +510,25 @@ JS_PUBLIC os64_js_status_t os64_js_run_file(os64_js_runtime_t *runtime,
             break;
         }
         if (length + 1 == capacity) {
+            /* The current buffer can terminate an exact-boundary file. Probe
+             * for more input before charging a larger allocation. */
+            char extra;
+            int64_t n = os64_read((int32_t)opened, &extra, 1);
+            if (n < 0) { latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, n); break; }
+            if (n == 0) break;
+            if (n != 1) {
+                latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, 0);
+                break;
+            }
+            if (observe(runtime)) break;
             size_t ceiling = runtime->limits.source_bytes + 1;
             size_t next = capacity > ceiling / 2 ? ceiling : capacity * 2;
             char *grown = js_realloc_rt(runtime->engine, source, next);
             if (grown == NULL) break;
             source = grown;
             capacity = next;
+            source[length++] = extra;
+            continue;
         }
         size_t room = capacity - length - 1;
         int64_t n = os64_read((int32_t)opened, source + length, room);
