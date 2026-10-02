@@ -1,10 +1,10 @@
 # Maths library port for os64
 
-Status: recommended implementation and handoff, updated 2026-10-01. Chris approved
-a reusable maths library as the numerical foundation for the standalone
-JavaScript runtime. Use musl 1.2.5 binary64 maths, with generic C routines and
-an SSE2 `sqrt` adapter. Opus is the proposed port owner; assignment and
-implementation have not occurred through this document.
+Status: implemented by Opus (M1), 2026-10-01, on branch `opus/libmath`; the
+evidence is § M1 implementation record at the end. Chris approved a reusable
+maths library as the numerical foundation for the standalone JavaScript
+runtime. It uses musl 1.2.5 binary64 maths, with generic C routines and an
+SSE2 `sqrt` adapter.
 
 The working library name is `libmath.so`. The first deliverable covers the
 32 functions required by the audited QuickJS configuration, with their complete
@@ -116,7 +116,9 @@ can access MXCSR and x87 state without a public fenv API; os64's existing
 conformance in every rounding mode. Record the supported environment and
 build assumptions, and restore any state changed by a fixture.
 
-The initial floating-point-state test set is limited to these named cases:
+The floating-point-state test set is these named cases, plus the two
+documented-contract additions § M1 implementation record describes
+(exact functions in every mode, control bits preserved by every export):
 
 | Case | Required observation |
 | --- | --- |
@@ -277,6 +279,105 @@ A 2026-10-01 host probe linked the audited musl objects without host libm and
 called `lrint(1.75)` after setting MXCSR. It returned 2 under round-to-nearest
 and 1 under downward rounding, then restored the saved state. This demonstrates
 observable rounding dependence, not guest validation or a complete fenv audit.
+
+## M1 implementation record
+
+Built 2026-10-01 on `opus/libmath`, off `userland` at `5c7d62ce`. The port
+lives in `userland/libmath/`; its README says what is where, and its
+UPSTREAM_REVIEW.md carries the detailed evidence summarized here.
+
+**The plan held, with one addition: a backported upstream fix.** Reviewing
+musl's `src/math` history since the tag turned up `3e80328d45` (2026-08),
+"math: fix acosh for x<0": 1.2.5's `acosh` returns a finite number instead
+of a NaN for some x ≤ −2. It is upstream's own patch, applied unmodified
+from `userland/libmath/patches/`. musl 1.2.6 is released but does not
+contain it, and changes no maths routine this port builds, so the pin stays
+at 1.2.5. The corpus first missed the bug because it only drew `acosh`
+arguments inside the domain. It now fails 26 vectors without the patch.
+
+Against the criteria above:
+
+1. **Manifest, checksums, notices, patches.** `manifest.json` pins the
+   archive, each of the 70 files and the patch. `tools/import_math.py
+   --check <archive>` proves `upstream/` equals the archive plus `patches/`.
+   musl's `COPYRIGHT` ships whole as `/etc/licenses/libmath.txt` on both
+   images.
+2. **Strict build, boundary checks.** Upstream files build under
+   `-Wall -Wextra -Werror` with the three exceptions this document
+   anticipated. `-Wno-maybe-uninitialized` applies to `__rem_pio2_large.c`
+   alone, after the control-flow read (UPSTREAM_REVIEW.md § Compiler
+   exceptions: `jz >= 3` whenever `fq` is read, so no defect).
+   `tools/test_math_audit.py` checks that `libmath.so` is a leaf with no
+   `DT_NEEDED`, no undefined symbols, no dynamic relocations and no system
+   calls. It also checks that it exports exactly the 32 names that
+   `exports.map` and `<math.h>` list, and that `sqrt` disassembles to
+   `sqrtsd; ret` with no generic table.
+3. **Host tests run the port, not host libm.** `tools/test_math_host.sh`
+   links the harness with no `-lm`, checks that all 32 symbols are defined
+   in the binary itself, compiles with `-fno-builtin`, and checks `<math.h>`
+   against C's prototypes.
+4. **Edge cases and FP state.** The corpus (`userland/tests/mathtest/
+   corpus.h`) gives every unary function 60 edge inputs: signed zeros,
+   subnormal edges, ties, 2^52/2^53/2^63, the overflow and underflow
+   thresholds, π's neighbours, large reduction arguments, infinities and
+   NaNs. Each binary function gets the 18×18 pairs that reach pow's and
+   atan2's special rows. On top of that, 256 random draws per function,
+   uniform in exponent. The state checks are the six named in § Consumer
+   interface, plus two that the header's promises need. The first runs the
+   exact functions' whole corpus in all four rounding modes and checks it
+   produces identical bits; `floor` and `round` round in the current mode
+   internally before correcting. The second runs every export in every
+   mode and checks that the control bits come back unchanged.
+5. **Independent oracle.** MPFR at 256 bits judges all 11,696 vectors.
+   Each bound is upstream's own stated worst case where the source states
+   one, and 1 ULP (fdlibm's standard) where it does not. `sinh` states
+   none and measures 1.06, so it is held to `tanh`'s 2. The full table is
+   in UPSTREAM_REVIEW.md § Accuracy. The oracle was mutation-tested before
+   it was trusted.
+6. **Host and guest bit-exact.** The host-gcc build and the cross-built
+   objects of `libmath.so` produce identical bits for all 11,696 vectors
+   on the host. Both use the SSE2 `sqrt` adapter and the same flags, which
+   `shared.mk` hands the script. NaNs compare as a class, since sign and
+   payload are not in the contract. The guest compares FNV-1a digests of
+   190 blocks of 64 against the checked-in `expected.h`, and the host test
+   fails if that file is stale.
+7. **Guest evidence (QEMU TCG, 4 cores).** `mathtest` printed the
+   `/sys/shlib` stanza for `/lib/libmath.so`: base `0x00007f0078000000`
+   (its prelinked slot), 10 of 11 pages resident after the corpus ran, and
+   the same inode the image builder wrote. All 190 blocks matched, the
+   state checks passed, and four concurrent threads passed with 0 failures:
+   two re-running the corpus with yields between blocks, two holding
+   downward and upward rounding for 200,000 iterations each. A planted
+   wrong digest made it fail with the block dumped, and the dump matched
+   `tools/test_math_host.sh dump` line for line. The full `testrun`: 57
+   passed, 0 failed, 5 skipped. The pre-branch image under the same QEMU
+   flags gives 56/0/5 with the same five skips, which are fixtures
+   declaring a missing desktop or missing RDRAND. Nothing was run on the
+   P5.
+8. **JavaScript integration.** Not done. That belongs to the runtime owner,
+   and libmath is ready for it.
+
+**Shared-file changes for the integration coordinator.** Guest validation
+needed registration, so this branch makes the edits itself, kept to the
+lines that name the library:
+
+- `userland/GNUmakefile`: `libmath.so` joins the prelink population, the
+  `all`/GDB-map lists and the include list. `-I libmath/include` joins
+  CFLAGS, so `<math.h>` resolves for every userland program. `mathtest` is
+  `libmath.so`'s first entry in `APP_EXTRA_LIBS`.
+- Root `GNUmakefile`: `libmath.so` joins `USERLAND_LIBS`, and
+  `license/libmath-LICENSE` is installed on both images.
+- `userland/tests/testrun/testrun.c`: one row, badge `0x3A740000`.
+
+**Contract details settled while building** (all in `<math.h>`):
+
+- A NaN result's sign and payload are not promised.
+- `lrint` of a NaN or an out-of-range value returns `LONG_MIN` and raises
+  invalid. That is the conversion instruction's "integer indefinite",
+  checked on the host.
+- Rounding modes other than nearest are honoured exactly by the exact
+  functions, `sqrt` and `lrint`. Transcendental accuracy is measured in
+  round-to-nearest only.
 
 ## References
 
