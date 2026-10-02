@@ -222,3 +222,57 @@ suite, complete interrupt-coverage audit, browser integration test or J1/J2
 acceptance. Production limits remain unselected. Structured line/column data
 remains unavailable, and stack overflow remains an ordinary engine exception
 because no reliable wrapper-owned stack-failure signal is exposed.
+
+## R2 helper slice evidence, 2026-10-02
+
+Worktree `.worktrees/js-runtime-helpers`, branch `codex/js-runtime-helpers`,
+stacked on core commit `45cae4fc` in PR #194. This adds `run_file`,
+`install_output` and `install_args`; the shared library now exports eleven
+embedding operations plus the 186 engine symbols. There is no C1 runner change.
+
+- Strict explicit guest-consumer build and root `make -j8`: PASS. Normal image
+  installation and application placements are unchanged by the helper slice.
+- Target/ELF/dependency/relink audit: PASS, 32 maths and 22 os64 imports with
+  real libmath/libos64 dependencies. The core's own inventory remains 32 maths
+  and 18 os64 imports. Header/manifest checks and shell syntax: PASS.
+- Maintained host suite: PASS, **642 checks** with the actual target engine and
+  M1 maths; **2,784 checks** with ASan on the engine. Both retain ASan/UBSan on
+  the wrapper/support fixtures, enabled normal-exit LeakSanitizer and zero live
+  fixture allocations. Both intentional fatal modes retain their expected JSFA
+  badge. The original core cases run along with the helper cases.
+- Added cases cover copied UTF-8 arguments, empty arguments, invalid masks and
+  pointers/counts, installer repetition and post-evaluation refusal, native
+  helper re-entry, selected names and existing console-member preservation,
+  embedded-NUL conversion, partial/zero/error writes, conversion exceptions and
+  deadlines, fixed-property installation errors, avoiding a console getter,
+  constructor-independent installer allocation-failure sweeps, argument memory
+  ceilings, short/empty/exact/oversized file reads, file-buffer allocation and
+  memory-ceiling failures, cancellation during loading, owned close on failure,
+  first read/close error precedence, loading before the deadline, BUSY without
+  opening input, file exceptions/reuse, and late deadline-overflow refusal
+  preserving the previous completed turn's state. The named os64 close errors
+  exercised here are NOT_COMMITTED (`-3`) and DEFERRED (`-5`).
+
+QEMU VM 56205 used this worktree's normal ISO and disposable root/home copies,
+with the explicit consumer, libjs and QuickJS licence inserted into the root
+copy as in the core run. The existing kernel teardown test passed after a
+45-second quiet boot, before consumer commands. The consumer passed **319
+checks, zero failures, 38 native calls**, including real os64 file creation,
+12,000-byte file loading/growth, Promise draining, empty/missing input, copied
+arguments, selected output names, borrowed output lifetime and byte comparison
+of output containing an embedded NUL. The captured full status was JSRT
+(`0x4A535254`); both intentional fatal modes returned JSFA (`0x4A534641`).
+
+After guest `cp` and `sync`, returned library copies matched the build files
+byte for byte:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| libjs.so | 4,510,744 | `022cf37e1d0bc5a7e2a11379df6221a967c327902ae6835a906a8536601c7c49` |
+| libmath.so | 150,408 | `d1a505d69987c9c22f1348cabae50a6db7703133e704ee6e8e58dbb90b99dfc8` |
+| libos64.so | 789,264 | `8004c9774c27eb6ad51c24fa4fa1ab09f8bbc245d64322a88b02912492951bd8` |
+
+The screenshot showed the expected invariant diagnostics and returned shell
+prompt; VM 56205 was stopped after extraction. These fixtures validate the R2
+library handoff; Opus's C1 integration, independent V1 validation, normal
+image/licence registration and J1/J2 acceptance remain separate gates.

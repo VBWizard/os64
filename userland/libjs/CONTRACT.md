@@ -1,20 +1,19 @@
 # JavaScript runtime API contract
 
-Status: reviewed R0 contract with an implemented R2 core slice, 2026-10-02.
-The explicit `js-library` target exports create, context access, class-ID
-allocation, eval, run, job draining, cancellation and destruction. File loading,
-output and argument installers are declared for the complete contract below
-but are not exported by this slice; using them fails at link time. Their
-implementation and the runner remain tracked in JAVASCRIPT_TASKS.md. The default
-image does not install libjs; `js-runtime-test` builds an optional guest consumer.
+Status: reviewed R0 contract with the two R2 implementation slices, 2026-10-02.
+The explicit `js-library` target exports eleven embedding operations: create,
+context access, class-ID allocation, eval, run, file execution, job draining,
+output/argument setup, cancellation and destruction. Their review/merge state
+and Opus's C1 integration are tracked in JAVASCRIPT_TASKS.md. The default image
+does not install libjs; `js-runtime-test` builds an optional guest consumer.
 
 ## Creation and ownership
 
 `os64_js_create` takes a configuration, `OS64_JS_ABI_ID`, an output runtime
 pointer, and a caller-owned outcome. These pointers must be valid. It clears
 `*out` before attempting creation and returns an independent runtime on success.
-Input configuration, ABI and source/name buffers must not overlap output
-runtime-pointer or outcome storage. A null configuration, zero limits, or
+Input configuration, ABI, source/name/path and argument buffers must not overlap
+output runtime-pointer or outcome storage. A null configuration, zero limits, or
 unrepresentable deadline is a bad
 argument. There is no unlimited sentinel; zero is rejected. Explicit development budgets appear
 in the examples; production defaults wait for J2 guest measurements and can be
@@ -79,7 +78,11 @@ the library does not close it. Values convert with QuickJS string conversion,
 spaces separate arguments, and one newline terminates a call. Conversion may
 execute script and remains subject to the active execution budget. A conversion
 exception is a script exception. A write failure is HOST_FAILURE with its os64
-error code. A blocking handle operation has the handle's ordinary blocking
+error code. Partial writes are retried; zero progress is HOST_FAILURE with
+`host_error` zero because no service code is available. Embedded NUL bytes in
+converted values are written by length. Earlier argument bytes may already be
+written when a later conversion/write fails; output is not atomic.
+A blocking handle operation has the handle's ordinary blocking
 semantics; the engine interrupt does not cancel a blocked native write. Hosts
 needing bounded output must choose an appropriate handle or custom binding.
 
@@ -89,6 +92,14 @@ may release its array/strings when installation returns. The runner supplies
 the filename as argument zero; the library does not invent it. Installers run
 while idle, before the first evaluation, and are each installed once. Calling
 one again, or attempting setup after evaluation starts, returns BAD_ARGUMENT.
+The count must fit the engine array's uint32 index range. Both installers use
+the runtime's memory budget and hold the re-entry guard. A setup operation has
+its own execution budget, including property traps and exception diagnostics;
+it does not mark the first source evaluation as started. If host-supplied traps
+queue jobs, their setup turn must drain before other setup or source execution.
+For console-only setup, an existing own data object is retained and its other
+members are untouched. An accessor or non-object console is a setup exception;
+the installer does not invoke a global console getter to discover the object.
 
 Custom bindings use QuickJS values and lifetime rules directly. `examples/binding.c`
 shows argument conversion, a thrown callback exception, and ownership on
@@ -113,7 +124,13 @@ runtime memory accounting.
 
 `run_file` loads a bounded file, closes its owned input handle, and uses `run`.
 Reading the file grants no script-visible file capability. File read/close
-errors are HOST_FAILURE. Non-file handles are outside this helper's contract.
+errors are HOST_FAILURE, preserving the first failure's code; any nonzero close
+verdict is an error. After a successful open, read/allocation/size/cancellation
+failure still closes the owned input. Empty and exact-limit files are accepted;
+one byte beyond the source ceiling produces LIMIT/SOURCE. The growing input
+buffer is charged to the engine allocator and passed directly to evaluation,
+without a second source copy. BUSY or invalid-path refusal does not open a file.
+Non-file handles are outside this helper's contract.
 The execution deadline starts immediately before compilation/evaluation, after
 file loading. Input size and memory cap bound loading; the initial helper does
 not promise an I/O deadline. Native bindings likewise supply their own bounds.
@@ -197,6 +214,7 @@ of the configured memory limit. Engine arenas, source copies and rejection
 bookkeeping are charged through the same allocator. Native binding allocations
 outside the engine require their host's own budget. DOM allocations have their
 separate budget. `host_error` preserves negative monotonic-clock service codes;
+file and output operations preserve their service verdicts too;
 allocation refusal has no service error code and reports zero rather than an
 invented errno. The target adapter's fatal wall-clock invariant remains distinct
 from recoverable monotonic-clock failure.
@@ -244,10 +262,10 @@ outside R0 implementation:
 ## Review and implementation gates
 
 Fable's first review approved the interface shape and continuous budget across
-manual slices. This revision adopts reusable script exceptions, serialized
-class-ID slots, per-binding ABI checks, and selected output names; it awaits
-re-review before C1 depends on it. R0's header
-and examples have syntax checks; they do not prove any runtime behaviour.
+manual slices. The reviewed interface includes reusable script exceptions,
+serialized class-ID slots, per-binding ABI checks and selected output names.
+R0's header and examples have syntax checks; R2's maintained host/guest fixtures
+provide implementation evidence in VALIDATION.md.
 R1 supplies target C adaptation and compatibility-header publication without
 bringing host libc into the exported binding header. R2 implements and tests
 the lifecycle, limits, installers, error fallback, job tracking, cancellation,

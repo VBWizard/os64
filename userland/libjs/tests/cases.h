@@ -287,4 +287,77 @@ static void runtime_cases(void)
 {
     lifecycle_cases(); job_cases(); limit_cases();
 }
+
+static JSValue native_install(JSContext *context, JSValueConst self, int argc,
+                               JSValueConst *args)
+{
+    (void)self; (void)argc; (void)args;
+    os64_js_outcome_t nested;
+    bool guarded = os64_js_install_args(fixture_runtime, 0, NULL, &nested) == OS64_JS_BUSY &&
+        os64_js_install_output(fixture_runtime, 1, OS64_JS_OUTPUT_PRINT, &nested) == OS64_JS_BUSY &&
+        os64_js_run_file(fixture_runtime, "nested.js", &nested) == OS64_JS_BUSY;
+    return JS_NewBool(context, guarded);
+}
+
+/* The driver owns this output handle and verifies its returned bytes. */
+static void helper_cases(int32_t handle)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    if (!runtime) return;
+    os64_js_outcome_t outcome;
+    const char *bad[] = {"ok", NULL};
+    check(os64_js_install_args(runtime, 2, bad, &outcome) == OS64_JS_BAD_ARGUMENT &&
+          os64_js_install_args(runtime, 1, NULL, &outcome) == OS64_JS_BAD_ARGUMENT &&
+          os64_js_install_args(runtime, SIZE_MAX, bad, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "invalid arguments rejected before setup");
+    check(os64_js_install_output(runtime, handle, 0, &outcome) == OS64_JS_BAD_ARGUMENT &&
+          os64_js_install_output(runtime, handle, 4, &outcome) == OS64_JS_BAD_ARGUMENT &&
+          os64_js_install_output(runtime, -1, OS64_JS_OUTPUT_PRINT, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "invalid output handle or names rejected");
+    char mutable[] = "before";
+    const char *args[] = {"script.js", "caf\xc3\xa9", mutable};
+    check(os64_js_install_args(runtime, 3, args, &outcome) == OS64_JS_OK, "argument installer succeeds");
+    mutable[0] = 'X';
+    check(os64_js_install_args(runtime, 0, NULL, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "argument installer is installed once");
+    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG,
+          &outcome) == OS64_JS_OK, "selected output names installed");
+    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_PRINT, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "output installer is installed once");
+    fixture_runtime = runtime;
+    check(install_native(runtime, "setupGuarded", native_install) >= 0, "installer guard callback installed");
+    check(execute_fixture(runtime,
+          "if(scriptArgs.length!==3 || scriptArgs[0]!=='script.js' || scriptArgs[1]!=='caf\u00e9' ||"
+          "scriptArgs[2]!=='before' || !setupGuarded()) throw Error('argument copy or reentry');"
+          "print('hi',7,'a\\0b');console.log();console.log({toString(){return 'converted'}})",
+          &outcome) == OS64_JS_OK, "copied UTF-8 arguments, reentry and output conversion");
+    os64_js_destroy(runtime); fixture_runtime = NULL;
+
+    runtime = create_fixture(&config);
+    if (!runtime) return;
+    JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+    JSValue global = JS_GetGlobalObject(context), console = JS_NewObject(context);
+    check(JS_SetPropertyStr(context, console, "keep", JS_NewInt32(context, 42)) >= 0 &&
+          JS_SetPropertyStr(context, global, "console", console) >= 0,
+          "host console with another member installed");
+    JS_FreeValue(context, global);
+    check(install_native(runtime, "print", native_twice) >= 0, "host print capability installed");
+    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_CONSOLE_LOG, &outcome) == OS64_JS_OK &&
+          os64_js_install_args(runtime, 0, NULL, &outcome) == OS64_JS_OK, "console-only and empty argument setup");
+    check(execute_fixture(runtime,
+          "if(print(21)!==42 || console.keep!==42 || scriptArgs.length!==0)throw Error('unselected name changed')",
+          &outcome) == OS64_JS_OK, "unselected print and other console members preserved");
+    os64_js_destroy(runtime);
+
+    runtime = create_fixture(&config);
+    if (!runtime) return;
+    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_PRINT, &outcome) == OS64_JS_OK,
+          "print-only setup");
+    check(execute_fixture(runtime, "if(typeof console!=='undefined')throw Error('console granted')",
+          &outcome) == OS64_JS_OK, "print-only leaves console absent");
+    check(os64_js_install_args(runtime, 0, NULL, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "unused installer refused after evaluation");
+    os64_js_destroy(runtime);
+}
 #endif
