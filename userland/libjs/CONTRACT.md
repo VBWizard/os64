@@ -1,7 +1,7 @@
 # JavaScript runtime API contract
 
 Status: reviewed R0 contract with the two R2 implementation slices, 2026-10-02.
-The explicit `js-library` target exports eleven embedding operations: create,
+`libjs.so` exports eleven embedding operations: create,
 context access, class-ID allocation, eval, run, file execution, job draining,
 output/argument setup, cancellation and destruction. Their review/merge state
 and Opus's C1 integration are tracked in JAVASCRIPT_TASKS.md. The default image

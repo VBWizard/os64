@@ -10,8 +10,9 @@ output, arguments, filesystem, networking or process functions.
 
 `make -C userland js-core` builds the freestanding engine and compiler helpers.
 `make -C userland js-library` links the engine and runtime against the real
-libmath/libos64 libraries. Both are explicit targets; the default image does
-not install libjs. `js-runtime-test` additionally builds the guest consumer at
+libmath/libos64 libraries. The default build also produces `libjs.so`, as the
+`js` runner's library, so os64get can serve it; the default image does not
+install libjs. `js-runtime-test` additionally builds the guest consumer at
 `userland/obj/js/runtime-core-test`, for installation as `/tests/jsembedtest`
 in a disposable validation image. Its reserved slot preserves the existing
 application addresses.

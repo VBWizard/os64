@@ -6,8 +6,9 @@ $(OBJ)/js/runtime/%.o: libjs/runtime/%.c $(LIBJS_GENERATED)/.prepared libjs/shar
 -include $(LIBJS_RUNTIME_OBJS:.o=.d)
 LIBJS_SO := $(BIN)/libjs.so
 LIBJS_BASE := $(patsubst libjs.so=%,%,$(filter libjs.so=%,$(LIB_BASE_PAIRS)))
-# This explicit runtime target requires libmath's
-# real target library; a host libm cannot satisfy its freestanding link.
+# The runtime library requires libmath's real target library; a host libm
+# cannot satisfy its freestanding link. The default build reaches it through
+# the js runner (apps/js/runner.mk); `make js-library` builds it alone.
 $(LIBJS_SO): $(LIBJS_CORE) $(LIBJS_RUNTIME_OBJS) $(LIBOS64_SO) $(BIN)/libmath.so libjs/exports.map link/lib.ld \
     GNUmakefile libjs/shared.mk tools/app_bases.py
 	$(LD) --defsym LIB_BASE=$(LIBJS_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \

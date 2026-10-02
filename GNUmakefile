@@ -184,7 +184,10 @@ override IMAGE_NAME := os64_kernel
 # an app that built perfectly and simply wasn't there at boot.)
 # $(sort) dedupes: multi-file apps (top.c + topMain.c) list their directory
 # once per .c file — without it, top appears twice in every list built here.
-USERLAND_APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c)))))
+# js is the one app built but not installed: /bin/js cannot start without
+# /lib/libjs.so, which is not on the image yet (DEBTS.md § Userland
+# utilities). Both are in userland/bin all the same, for os64get.
+USERLAND_APPS := $(filter-out js,$(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c))))))
 # Punctuation aliases are alternate names for discovered apps, and therefore
 # ride every /bin without pretending to be independently linked programs.
 USERLAND_ALIASES := [
