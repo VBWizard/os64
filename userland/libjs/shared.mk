@@ -30,3 +30,20 @@ $(LIBJS_TEST_ELF): $(LIBJS_TEST_OBJ) $(LAUNCH_OBJS) $(LIBJS_SO) $(LIBOS64_SO) GN
 .PHONY: js-runtime-test
 js-runtime-test: $(LIBJS_TEST_ELF)
 -include $(LIBJS_TEST_OBJ:.o=.d)
+
+# V1 is a separate consumer alternative in the reserved fixture slot. Neither
+# fixture belongs to the normal image; validation images select one executable.
+LIBJS_ACCEPTANCE_DIR := $(OBJ)/js/acceptance
+LIBJS_ACCEPTANCE_ELF := $(LIBJS_ACCEPTANCE_DIR)/consumer
+LIBJS_ACCEPTANCE_HEADER := $(LIBJS_ACCEPTANCE_DIR)/language.h
+$(LIBJS_ACCEPTANCE_HEADER): ../tools/js_acceptance/prepare.py $(wildcard ../tools/js_acceptance/upstream/*)
+	@mkdir -p "$(@D)"
+	python3 ../tools/js_acceptance/prepare.py $@
+$(LIBJS_ACCEPTANCE_DIR)/consumer.o: ../tools/js_acceptance/consumer.c $(LIBJS_ACCEPTANCE_HEADER) $(LIBJS_GENERATED)/.prepared libjs/shared.mk libjs/core.mk
+	$(CC) $(filter-out -fPIC,$(LIBJS_FLAGS)) -I$(LIBJS_ACCEPTANCE_DIR) -fno-pic -fno-pie -c $< -o $@
+$(LIBJS_ACCEPTANCE_ELF): $(LIBJS_ACCEPTANCE_DIR)/consumer.o $(LAUNCH_OBJS) $(LIBJS_SO) $(LIBOS64_SO) GNUmakefile libjs/shared.mk tools/app_bases.py
+	$(LD) --defsym APP_BASE=$(APP_BASE_jsembedtest) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) -o $@ $(LIBJS_ACCEPTANCE_DIR)/consumer.o $(LAUNCH_OBJS) $(LIBJS_SO) $(LIBOS64_SO)
+.PHONY: js-acceptance-test
+js-acceptance-test: $(LIBJS_ACCEPTANCE_ELF)
+-include $(LIBJS_ACCEPTANCE_DIR)/consumer.d

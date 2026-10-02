@@ -19,6 +19,8 @@ later consumers or guest acceptance gates have passed. "In review" records an
 implemented slice in an open PR. Pending rows record work still needed by this
 plan, without assigning a new contributor or claiming work has started. "Partial"
 records completed evidence while named acceptance work remains.
+"Implemented; review pending" records a locally validated packet that has not
+yet received its independent review or been published.
 
 | Work | Status on 2026-10-02 | Evidence and remaining work |
 | --- | --- | --- |
@@ -28,7 +30,7 @@ records completed evidence while named acceptance work remains.
 | R1 target adapter/core | **Merged** | [PR #192](https://github.com/VBWizard/os64/pull/192), merge `ef43d227`: strict core/userland builds, real libmath/libos64 linkage, target symbol/header/ELF/relink audits, 675 sanitized host checks and 437 cross-core host checks pass. R1 itself did not run a guest; the R2 core fixture now exercises the combined library. |
 | R2 runtime implementation | **Merged** | Core [PR #194](https://github.com/VBWizard/os64/pull/194), merge `a6d45945`; file/output/argument helpers [PR #195](https://github.com/VBWizard/os64/pull/195), merge `a558f8fd`. All eleven embedding operations are implemented. Maintained suites pass 822 target-engine host, 3,014 sanitized-engine host and 395 os64/QEMU checks; evidence and review corrections are in libjs/VALIDATION.md. |
 | C1 runner | **Merged; running on P5** | Opus's [PR #196](https://github.com/VBWizard/os64/pull/196), merge `a2e409a7`, delivers file/expression/stdin execution, copied arguments, selected output, diagnostics and exit mapping. Both `js` and `libjs.so` build by default for os64get delivery. Host and QEMU acceptance pass; Chris reports `js primes.js \| wc -l` produced `1229` on the P5. Standard-image installation remains I1. |
-| V1 independent validation | **Partial** | Quinn reviewed C1's initial published head `0d337421` without code findings, reproduced both host suites, added temporary allocation-refusal probes and passed ten independent QEMU scenarios. Full independent embedding capability/failure/ownership coverage and selected upstream language cases with pass/fail/skip reporting remain. M1/R2/C1 are available. |
+| V1 independent validation | **Implemented; review pending** | Quinn's separate consumer suite passes 383 checks in each host engine profile and 375 in QEMU, with 55 upstream functions passing and four explicit host-feature skips. Capability/failure/native ownership, diagnostic exhaustion, reuse, ABI refusal and the separate fatal process are covered. V1 found and fixes an engine error lifetime defect under persistent allocation refusal. Quinn also authored R2; another reviewer must assess this packet before the independent gate closes. |
 | I1 shared integration | **Partial** | Real shared-library dependency/link audits and strict builds pass. C1 builds `js` and `libjs.so` into userland/bin for os64get delivery, with QEMU delivery evidence and Chris's P5 execution report. Remaining: root-image app/library registration, QuickJS licence installation, and combined fresh-image acceptance alongside V1 evidence. |
 | D0 DOM design | **Merged** | Reviewed [DOM.md](DOM.md), delivered with [PR #190](https://github.com/VBWizard/os64/pull/190). Design completion is separate from browser scripting implementation. |
 | D1 libhtml mutation core | **Merged** | [PR #190](https://github.com/VBWizard/os64/pull/190), merge `5c7d62ce`. Mutation/lifetime verbs and maintained tests; `parse_fragment` belongs to D2. |
@@ -55,10 +57,10 @@ belong to [JAVASCRIPT.md](JAVASCRIPT.md#delivery-and-validation):
 
 Next steps:
 
-1. Finish independent V1 acceptance using the merged library and runner,
-   including selected upstream language cases with explicit pass/fail/skip
-   results. Extend independent coverage beyond the C1 command-line review to
-   the embedding capability, failure and ownership contracts.
+1. Review the implemented V1 consumer suite and its diagnostic-exhaustion
+   engine fix. Host and guest coverage now includes embedding capability,
+   failure and ownership contracts plus selected upstream pass/fail/skip
+   results. Independent scrutiny remains before accepting this gate.
 2. Finish I1: install the runner, library and licence together in the normal
    image, then prove the combined strict build and execution on a fresh image.
 3. Close J2's measurement gaps: recursion/native-callback stack headroom,
@@ -99,7 +101,7 @@ Next steps:
 | R1 | Runtime owner | Pinned QuickJS import and private C adaptation for allocation, strings, dates, formatting, compiler support, and selected features. | R0 for public integration. Compile work can proceed before M1; production guest link needs M1. |
 | R2 | Runtime owner | Runtime lifecycle, limits, job processing, library-owned input/output helpers, and capability registration implementation. | R0 and R1; M1 for guest validation. |
 | C1 | Opus | Thin runner executable, usage documentation, command-line integration cases and os64get delivery; merged in PR #196. | R0, R2 and M1 are merged; standard-image installation belongs to I1. |
-| V1 | Fable or another independent reviewer | Consumer-level validation of capability boundaries, failure behaviour, and fixture coverage. | R0 for test design; M1/R2/C1 for execution. Coordinate test-file ownership before writing. |
+| V1 | Quinn implements the consumer suite; another reviewer accepts the independent gate | Consumer-level validation of capability boundaries, failure behaviour, and fixture coverage. | Based on merged M1/R2/C1; owns tools/js_acceptance and tools/test_js_acceptance_host.sh. R2's fixture files remain separate. |
 | I1 | Runtime owner as integration coordinator | Shared build/image registration, final dependency checks, combined strict build and QEMU evidence. | M1, R2, C1, and V1 evidence. |
 | D0 | Fable | DOM.md covering mutable libhtml, document/wrapper lifetime, retired storage, parser handoff, and browser event scheduling. | This design and the existing browser libraries. Design runs alongside M1/R1; reviewed completion gates J3, not the runner. |
 | D1–D7 | Browser owner; coordinate with Fable | Mutable-document, parser, presentation, bindings and event-loop slices defined in DOM.md. | D0; detailed dependencies and acceptance belong to DOM.md. D1 is merged; later slices remain separate from the standalone milestone. |
@@ -426,3 +428,31 @@ js primes.js | wc -l
 
 This records Chris's reported hardware execution and pipeline output.
 Independent language and numerical acceptance remain in V1/J2.
+
+## V1 consumer acceptance handoff, 2026-10-02
+
+Chris assigned V1, I1 and J2 in sequence. The V1 implementation is isolated in
+`.worktrees/js-validation`, branch `codex/js-validation`, based on merged
+`userland` `a2e409a7` plus the local task-status documentation commit `2b3ee4cb`.
+It is locally validated and awaiting independent review/publication.
+
+`tools/js_acceptance` owns a consumer suite with no R2 fixture/private-runtime
+includes, retained hash-checked upstream tests and their original licence.
+`tools/test_js_acceptance_host.sh` runs the target core/M1 maths and a second
+sanitized engine against those cases. Both pass 383 checks with zero failures;
+diagnostic refusal ends with zero live allocations. Each reports 55 upstream functions passing
+and four unsupported host-capability skips. QEMU passes 375 checks, the same
+language selection, ordinary status zero and the expected separate JSFA fatal
+status. Consumer/library byte comparisons, regression suites and precise
+limitations are recorded in libjs/VALIDATION.md.
+
+Persistent allocation refusal during diagnostic conversion exposed a borrowed
+error freed while QuickJS assembled its backtrace. Manifest patch 0005 retains
+the error through that operation and frees its early-exit buffer. The same
+fixture that crashed before the patch now returns structured HOST_FAILURE and
+reclaims its storage. No public API, image inventory or kernel behavior changes.
+
+Quinn authored R2 as well as this suite. The new consumer and upstream expected
+values strengthen acceptance evidence; another review is required to close V1's
+independence requirement. I1 image/licence installation and J2 stack/defaults/
+scheduling measurements remain the next separate packets.

@@ -1,0 +1,217 @@
+{
+  "release": "2026-06-04",
+  "archive_url": "https://bellard.org/quickjs/quickjs-2026-06-04.tar.xz",
+  "archive_sha256": "b376e839b322978313d929fd20663b11ba58b75df5a46c126dd19ea2fa70ad2a",
+  "license_sha256": "598fd7fc928e4350abce36e337ba5a1346923c5c692f5be92c3d8e29ddd7c18d",
+  "files": [
+    {
+      "path": "test_language.js",
+      "sha256": "d4f2744f0e5587daf018a4909ba60962cc1b43664a9ed0f758bc6f63cc14b27b",
+      "driver_offset": 14166,
+      "cases": [
+        {
+          "name": "test_op1"
+        },
+        {
+          "name": "test_cvt"
+        },
+        {
+          "name": "test_eq"
+        },
+        {
+          "name": "test_inc_dec"
+        },
+        {
+          "name": "test_op2"
+        },
+        {
+          "name": "test_constructor"
+        },
+        {
+          "name": "test_delete"
+        },
+        {
+          "name": "test_prototype"
+        },
+        {
+          "name": "test_arguments"
+        },
+        {
+          "name": "test_class"
+        },
+        {
+          "name": "test_template"
+        },
+        {
+          "name": "test_template_skip"
+        },
+        {
+          "name": "test_object_literal"
+        },
+        {
+          "name": "test_regexp_skip"
+        },
+        {
+          "name": "test_labels"
+        },
+        {
+          "name": "test_labels2"
+        },
+        {
+          "name": "test_destructuring"
+        },
+        {
+          "name": "test_spread"
+        },
+        {
+          "name": "test_function_length"
+        },
+        {
+          "name": "test_argument_scope"
+        },
+        {
+          "name": "test_function_expr_name"
+        },
+        {
+          "name": "test_parse_semicolon"
+        },
+        {
+          "name": "test_optional_chaining"
+        },
+        {
+          "name": "test_parse_arrow_function"
+        },
+        {
+          "name": "test_unicode_ident"
+        },
+        {
+          "name": "test_global_var_opt"
+        },
+        {
+          "name": "test_number_literals"
+        }
+      ]
+    },
+    {
+      "path": "test_builtin.js",
+      "sha256": "15ecdc33db88182d8bbab1a1e7344d7057b5459b3a76d705db7840b45a81f930",
+      "driver_offset": 33736,
+      "cases": [
+        {
+          "name": "test"
+        },
+        {
+          "name": "test_function"
+        },
+        {
+          "name": "test_enum"
+        },
+        {
+          "name": "test_array"
+        },
+        {
+          "name": "test_string"
+        },
+        {
+          "name": "test_math"
+        },
+        {
+          "name": "test_number"
+        },
+        {
+          "name": "test_eval"
+        },
+        {
+          "name": "test_typed_array"
+        },
+        {
+          "name": "test_json"
+        },
+        {
+          "name": "test_date"
+        },
+        {
+          "name": "test_regexp"
+        },
+        {
+          "name": "test_symbol"
+        },
+        {
+          "name": "test_map"
+        },
+        {
+          "name": "test_weak_map",
+          "skip": "requires upstream std.gc host capability"
+        },
+        {
+          "name": "test_weak_map_cycles",
+          "skip": "requires upstream std.gc host capability"
+        },
+        {
+          "name": "test_weak_ref",
+          "skip": "requires upstream std.gc host capability"
+        },
+        {
+          "name": "test_finalization_registry",
+          "skip": "requires upstream std.gc and os.setTimeout host capabilities"
+        },
+        {
+          "name": "test_generator"
+        },
+        {
+          "name": "test_rope"
+        },
+        {
+          "name": "test_line_column_numbers"
+        }
+      ]
+    },
+    {
+      "path": "test_closure.js",
+      "sha256": "d575e2d909dbd166bce628a694145ba431e5157051b3a6dc149fd64ab833f735",
+      "driver_offset": 4220,
+      "cases": [
+        {
+          "name": "test_closure1"
+        },
+        {
+          "name": "test_closure2"
+        },
+        {
+          "name": "test_closure3"
+        },
+        {
+          "name": "test_arrow_function"
+        },
+        {
+          "name": "test_with"
+        },
+        {
+          "name": "test_eval_closure"
+        },
+        {
+          "name": "test_eval_const"
+        }
+      ]
+    },
+    {
+      "path": "test_bigint.js",
+      "sha256": "0b53a7d98a41c0540abff3ec59ffe51738fd3da150b7147f1832f77cdf9a8725",
+      "driver_offset": 8419,
+      "cases": [
+        {
+          "name": "test_bigint1"
+        },
+        {
+          "name": "test_bigint2"
+        },
+        {
+          "name": "test_bigint3"
+        },
+        {
+          "name": "test_pi"
+        }
+      ]
+    }
+  ]
+}

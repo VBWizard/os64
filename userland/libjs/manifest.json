@@ -99,6 +99,11 @@
       "path": "patches/0004-construction-allocation-cleanup.patch",
       "sha256": "f0c73acff8fff6324ce6ee1240d1ba768f28012af084a510847a69d75e755ac0",
       "reason": "Fix context GC unlinking, global construction failure, lazy-global cleanup and consuming Proxy installation failure."
+    },
+    {
+      "path": "patches/0005-backtrace-error-lifetime.patch",
+      "sha256": "bfccbb28a13d46352407921cc8d0e046c275fc4cc003b5f67fc24a3b4c4d1083",
+      "reason": "Retain the borrowed error during backtrace assembly when diagnostic allocation failures replace current_exception; release temporary buffer on early failure."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
