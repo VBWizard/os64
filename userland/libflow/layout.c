@@ -5912,10 +5912,10 @@ static int64_t right_edge(const FBox *b)
     if (!b->placed)
         return 0;
     int64_t r = b->x + b->w;
-    // What a box clips on an axis is not drawn past it there, so it widens
-    // nothing (CSS Overflow 3 § 2.2); what it would scroll is drawn, since
-    // nothing scrolls, and so it does.
-    if (f_overflow_clips(b->style->overflow_x))
+    // What a box clips on an axis is not drawn past it there — scrolled to
+    // inside it, if it scrolls — so it widens nothing (CSS Overflow 3 §
+    // 2.2). The viewport's overflow clips nothing: it is the page's.
+    if (f_box_clips(b, true))
         return r;
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
@@ -5936,7 +5936,7 @@ static int64_t bottom_edge(const FBox *b)
     if (!b->placed)
         return 0;
     int64_t r = b->y + b->h;
-    if (f_overflow_clips(b->style->overflow_y))
+    if (f_box_clips(b, false))
         return r;
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
@@ -5978,9 +5978,9 @@ static void page_extent(const FBox *b, int64_t *width, int64_t *height)
     if (b->positioned) {
         int64_t r = right_edge(b), bottom = bottom_edge(b);
         for (const FBox *c = clip_parent(b); c != NULL; c = clip_parent(c)) {
-            if (f_overflow_clips(c->style->overflow_x))
+            if (f_box_clips(c, true))
                 r = min64(r, c->x + c->w);
-            if (f_overflow_clips(c->style->overflow_y))
+            if (f_box_clips(c, false))
                 bottom = min64(bottom, c->y + c->h);
         }
         *width = max64(*width, r);

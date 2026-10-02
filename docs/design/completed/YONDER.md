@@ -143,7 +143,9 @@ What each kind of box draws:
   for themselves), and nothing for a line.
 
 **Scrolling.** The wheel moves three lines of the default font a notch,
-and a tilt moves sideways; the arrow keys move a line; Page Up and Page Down a view less one line of
+and a tilt moves sideways — the innermost box under the pointer that can
+still move that way first, then the boxes outside it, then the page
+(PILE3.md § Scrolling boxes); the arrow keys move a line; Page Up and Page Down a view less one line of
 overlap; Home and End the ends. The horizontal bar appears only when
 `flow_width` is wider than the view. The layout width is the view's width
 LESS the vertical bar, and the bar's space is always reserved, so a page

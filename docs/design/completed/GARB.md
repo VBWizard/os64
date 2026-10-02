@@ -315,10 +315,11 @@ the page left it, `img { max-width: 100% }`). **G5b** `line-height` (every
 inline box's leading, split above and below, § 10.8.1), `text-indent`,
 `text-transform` (ASCII and Latin-1, whose case changes keep their UTF-8
 length, so selection offsets hold) and `white-space: pre-line`. **G5c**
-`overflow`: `hidden` and `clip` cut what is inside to the padding box —
-drawing, hit-testing and the page's extent — and a scrolling or hiding box
-starts a block formatting context; `auto` and `scroll` are laid out as
-containers and drawn unclipped until yonder scrolls a box. **G5d**
+`overflow`: every value but `visible` cuts what is inside to the padding
+box — drawing, hit-testing and the page's extent — and a scrolling or
+hiding box starts a block formatting context; `hidden`, `auto` and
+`scroll` scroll it, and a person scrolls the last two (PILE3.md §
+Scrolling boxes). **G5d**
 background pictures from a sheet: libgarb's winners now say which sheet
 each came from, so yonder resolves a url() against THAT sheet (after its
 redirects), or the page's base for a `style` attribute, fetches it with the
@@ -367,5 +368,4 @@ center`, a 400px line cut at its 120px `overflow: hidden` box, and a
 | A table column's `calc()` width | a column keeps a percentage's share of the table and no fixed part, so `calc(20% + 10px)` on a cell is 20% | a page whose tables are sized that way |
 | `font-variant: small-caps` | read by libgarb and not drawn: it needs a face's small capitals, or capitals made smaller, and yonder has one face today | brief 04's faces |
 | `background-size`, `-origin`, `-clip`, `-attachment`, and a gradient as a picture | a sheet's picture is drawn at its own size, positioned from the border box's corner, under the whole border box, and scrolls with the page; a gradient is no picture | pile 3 |
-| Scrolling boxes: `overflow: auto` and `scroll` | they are laid out as the containers they are (their own block formatting context) but drawn unclipped, since yonder does not scroll a box, and a clipped one would hide what is past its edge with no way to reach it | yonder scrolls a box (wheel over it, and a bar) |
 | The viewport's own overflow, and form controls inside a clipping box | the root's (or the body's) `overflow` is the viewport's and yonder always scrolls the page; a control is a widget of its own over the page and is not CUT by an ancestor's clip — a widget is whole or absent: one whose control's centre is clipped away is absent, since the pointer cannot reach it there (POSITION.md, ruling 9), and one whose centre shows is drawn whole, over the clip's edge | a page that hides its viewport's overflow on purpose (a modal), or a form inside a box that clips |

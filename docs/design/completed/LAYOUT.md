@@ -437,9 +437,9 @@ sharing the remainder (which is how `<table align=center>` and
 `<hr align=right>` centre and right-align); `width` in px or percent
 overrides `auto`; height is the content's unless set, and a set height
 that is too small still shows the content, unless the box's `overflow`
-clips it (`hidden` or `clip`, which cut it and keep it off the page's
-extent); `scroll` and `auto` draw it, and it reaches the page's edge,
-since nothing here scrolls. **Vertical margins
+is not `visible`: then it is cut and kept off the page's extent, and —
+for `hidden`, `scroll` and `auto` — scrolled inside the box
+(PILE3.md § Scrolling boxes). **Vertical margins
 collapse** (§8.3.1) between siblings, between a parent and its first or
 last child when nothing separates them, and through an empty block — the
 whole rule, negative margins included: margins that adjoin are held as
@@ -997,7 +997,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Floats and `clear` (`align=left/right` on `img`/`table`, `<br clear>`) | the float rules (§9.5) are a second placement pass with their own line-box shortening; the struct records them so the cascade and the first cut agree on the field | the first page whose layout is unreadable without a float — image-beside-text pages of the old web will vote early |
-| `inline-table`; scrolling | relative, absolute, fixed and sticky are laid out, and `z-index` stacks them (POSITION.md P1–P4); from the cascade, `inline-table` is laid out as a table, and `overflow: scroll`/`auto` draw what they would scroll, since nothing scrolls | pile 2 (GARB.md) |
+| `inline-table`; scrolling | relative, absolute, fixed and sticky are laid out, and `z-index` stacks them (POSITION.md P1–P4); from the cascade, `inline-table` is laid out as a table; a box scrolls (PILE3.md) | pile 2 (GARB.md) |
 | Collapsing borders (§17.6.2) | a table with `rules` or `frame` records `border-collapse: collapse`; it is laid out with no spacing and its borders drawn separately | the first ruled table that reads wrong for it |
 | A range-draw on a measuring run (F2 ask) | halves layout work and run memory; works without it | a page whose layout time is visible, measured, or a page that hits the memory cap through runs |
 | Incremental relayout | ruling 2 says rebuild; the face paces it | the engine, or a page whose rebuild is visibly slow |

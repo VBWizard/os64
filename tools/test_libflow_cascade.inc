@@ -334,19 +334,19 @@ static void cascade_cases(void)
     // its bottom edge (§ 10.8.1) and the strut hangs 6 below: the line is 26.
     // An inline-block a sheet clips sits on its bottom margin edge (CSS 2.1
     // § 10.8.1), not its last line's baseline: a's baseline is the line's.
-    // What a box would scroll is drawn, since nothing scrolls: an
-    // overflow: auto box's 100px paragraph makes the page 100 wide, where a
-    // hidden one's would not.
-    cascade_layout_case("what a box would scroll widens the page",
+    // What a box scrolls is scrolled to inside it, not on the page: an
+    // overflow: auto box's 100px paragraph is cut to its 30px and gives it
+    // 70 to scroll, and the page is as wide as the box.
+    cascade_layout_case("what a box scrolls does not widen the page",
         "<!doctype html><style>body { margin: 0 } div { width: 30px; overflow: auto }"
         " p { width: 100px; margin: 0 }</style><div><p>x</p></div>", 20,
-        "page 100 20\n"
+        "page 30 20\n"
         "block html 0 0 20 20\n"
         "  block body 0 0 20 20\n"
-        "    block div 0 0 30 20\n"
-        "      block p 0 0 100 20\n"
-        "        line 0 0 100 20 base 14\n"
-        "          text \"x\" 0 2 8 16 serif 16\n");
+        "    block div 0 0 30 20 scroller 0 range 70 0\n"
+        "      block p 0 0 100 20 clip 0 0 30 20\n"
+        "        line 0 0 100 20 base 14 clip 0 0 30 20\n"
+        "          text \"x\" 0 2 8 16 serif 16 clip 0 0 30 20\n");
 
     cascade_layout_case("an inline-block that clips sits on its bottom edge",
         "<!doctype html><style>body { margin: 0 } span { display: inline-block;"
@@ -357,7 +357,7 @@ static void cascade_cases(void)
         "    line 0 0 200 26 base 20\n"
         "      text \"a\" 0 8 8 16 serif 16\n"
         "      atomic span 8 0 8 20\n"
-        "        block span 8 0 8 20\n"
+        "        block span 8 0 8 20 scroller 0 range 0 0\n"
         "          line 8 0 8 20 base 14 clip 8 0 8 20\n"
         "            text \"x\" 8 2 8 16 serif 16 clip 8 0 8 20\n");
 
@@ -377,7 +377,9 @@ static void cascade_cases(void)
     // padding box, 50 by 10, which every box inside carries as its clip;
     // and it starts a block formatting context, so the p's 5px top margin
     // stays inside it instead of moving it down. Its own overflow stops at
-    // its border box, so the page is the div's 10 tall.
+    // its border box, so the page is the div's 10 tall. Hidden is still a
+    // scroll container, a script's to scroll: the p reaches 50 past it and
+    // 15 below.
     cascade_layout_case("overflow: hidden clips, and holds a margin in",
         "<!doctype html><style>body { margin: 0 } div { width: 50px; height: 10px;"
         " overflow: hidden } p { margin: 5px 0 0; width: 100px }</style>"
@@ -386,22 +388,24 @@ static void cascade_cases(void)
         "page 200 10\n"
         "block html 0 0 200 10\n"
         "  block body 0 0 200 10\n"
-        "    block div 0 0 50 10\n"
+        "    block div 0 0 50 10 scroller 0 range 50 15\n"
         "      block p 0 5 100 20 clip 0 0 50 10\n"
         "        line 0 5 100 20 base 14 clip 0 0 50 10\n"
         "          text \"ab cd ef\" 0 7 52 16 serif 16 clip 0 0 50 10\n");
 
-    // overflow-x alone: the y axis computes to auto, which is drawn
-    // unclipped, so the clip is x's and the y span is everything.
-    cascade_layout_case("overflow-x: hidden clips one axis",
+    // overflow-x alone: the y axis computes to auto (CSS Overflow 3 § 3),
+    // which clips too, so the clip is the padding box on both axes, as
+    // Chrome draws it — and nothing reaches below, so y has nothing to
+    // scroll.
+    cascade_layout_case("overflow-x: hidden makes y auto, and both clip",
         "<!doctype html><style>body { margin: 0 } div { width: 30px; overflow-x: hidden }"
         " p { margin: 0; width: 60px }</style><div><p>ab</p></div>",
         200,
         "page 200 20\n"
         "block html 0 0 200 20\n"
         "  block body 0 0 200 20\n"
-        "    block div 0 0 30 20\n"
-        "      block p 0 0 60 20 clip 0 -1073741824 30 2147483647\n"
-        "        line 0 0 60 20 base 14 clip 0 -1073741824 30 2147483647\n"
-        "          text \"ab\" 0 2 16 16 serif 16 clip 0 -1073741824 30 2147483647\n");
+        "    block div 0 0 30 20 scroller 0 range 30 0\n"
+        "      block p 0 0 60 20 clip 0 0 30 20\n"
+        "        line 0 0 60 20 base 14 clip 0 0 30 20\n"
+        "          text \"ab\" 0 2 16 16 serif 16 clip 0 0 30 20\n");
 }

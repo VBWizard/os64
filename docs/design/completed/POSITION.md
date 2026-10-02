@@ -203,23 +203,25 @@ dropdown inside it is ordinary.
   ancestor scroll container's padding box, else the viewport — less its
   insets, `top` winning over `bottom` and `left` over `right` where both
   cannot hold, and never so far that its margin box leaves its
-  containing block: its parent's content box, a cell's table's. A box
+  containing block: its parent's content box, a cell's table's — and
+  when that parent is a scroll container, as far down as its content
+  reaches (PILE3.md). A box
   larger than that view makes the view's end edge give way until the two
   are the same size, so it shows its start rather than its end. What it
-  may move is worked out once, when the tree is built (`flow_sticky_t`);
+  may move is worked out once, when the tree is built (a `flow_frame_t`);
   where it is, at each scroll. A block-level box fills its containing
-  block across, margins and all, so only a cell moves sideways. A scroll
-  container other than the viewport is not scrolled here, so a sticky box
-  in one is held where its insets put it in that box, and the page's
-  scroll does not move it. A sticky box inside another is worked out in
+  block across, margins and all, so only a cell moves sideways. A sticky
+  box in a scroll container other than the viewport sticks to that box
+  as it scrolls (PILE3.md § Scrolling boxes); the page's scroll carries
+  it with that box and does not push it. A sticky box inside another is worked out in
   the frame the outer one moved, and an absolute box inside one moves
   with it, since the sticky box is its containing block; a fixed one does
   not. Insets that are percentages are of the scrollport. A lookup works
-  each sticky box's push once, and a sticky box whose push would be
-  worked from more than 32 of them (itself, those outside it, their
-  scrollports') is laid out where the flow put it, so no page can make a
-  lookup cost more than that (Quinn's review, where a nest of 27 each
-  worked twice per level took past 15 seconds).
+  each frame once, and a sticky box whose push would be worked from more
+  than 32 frames (itself, the sticky boxes and scroll containers outside
+  it, their scrollports') is laid out where the flow put it, so no page
+  can make a lookup cost more than that (Quinn's review, where a nest of
+  27 each worked twice per level took past 15 seconds).
 - **All or nothing.** An out-of-flow box that does not finish is not
   placed, as a table cut short keeps its place with no rows: its
   containing block is marked unfinished and the tree is `incomplete`.
@@ -491,7 +493,6 @@ he said, not a CSS one — and Fable ruled as he had recommended:
 | A sticky inline, or inline-block | it has pieces on lines, not a box of its own to push, as a relative one has (below) | a page whose sticky inline matters |
 | The logical insets (`inset-inline-start` and the rest) | the physical four first; the chapter's `dialog` rule is applied physically | a page that writes them |
 | Percentage heights of an absolute box's descendants | GARB.md's percentage-height row, unchanged; the absolute box's own resolves | that row |
-| Scrolling a positioned box's own overflow | nothing scrolls a box yet | box scrolling |
 | A non-positioned box below full opacity as a stacking context | CSS paints it as if positioned at `z-index: 0`; libflow paints such a box in the flow, opaque, since the painter blends nothing yet | the painter's blend (pile 3) |
 | Form widgets under positioned boxes, between P1 and P2 | `flow_box_covered` is P2's | P2 |
 | A relative inline, or atom, painted in the positioned layer | an inline has no box to list, only pieces spread over lines: they move and paint in the flow's order | a page where a nudged inline must paint over its neighbours |

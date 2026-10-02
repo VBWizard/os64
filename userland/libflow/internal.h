@@ -278,14 +278,15 @@ typedef enum {
 } f_item_kind_t;
 
 // What an overflow value does, asked in one place (CSS Overflow 3 § 3):
-// `hidden` and `clip` cut what overflows, and the rest draw it — `scroll`
-// and `auto` included, since nothing here scrolls (LAYOUT.md § Booked).
-// Every overflow but `visible` and `clip` makes a scroll container, which
-// is what starts a formatting context and gives an inline-block its bottom
-// edge for a baseline; `clip` does neither — that is what it is for.
+// every value but `visible` cuts what overflows. Every one but `visible`
+// and `clip` makes a SCROLL CONTAINER, which is what starts a formatting
+// context, gives an inline-block its bottom edge for a baseline, and has a
+// scroll position its content is drawn moved by (PILE3.md § Scrolling
+// boxes) — `hidden` too, which a person cannot scroll and a script and a
+// fragment link can; `clip` does none of it — that is what it is for.
 static inline bool f_overflow_clips(flow_overflow_t o)
 {
-    return o == FLOW_OVERFLOW_HIDDEN || o == FLOW_OVERFLOW_CLIP;
+    return o != FLOW_OVERFLOW_VISIBLE;
 }
 
 static inline bool f_overflow_scrolls(flow_overflow_t o)
@@ -444,6 +445,36 @@ struct FBox {
 
 // One element that is a containing block (f_contains_absolute; POSITION.md):
 // a box, or an inline element whose pieces are spread over lines.
+// The root's overflow, or the body's when the root's is visible, is the
+// viewport's (CSS Overflow 3 § 3.3): the box itself neither clips nor
+// scrolls, and the face scrolls the page.
+static inline bool f_viewport_overflow(const FBox *b)
+{
+    if (b->parent == NULL)
+        return true;
+    const flow_style_t *root = b->parent->style;
+    return b->parent->parent == NULL && b->node != NULL && b->node->kind == OS64_HTML_ELEMENT &&
+           b->node->tag == OS64_HTML_TAG_BODY && root->overflow_x == FLOW_OVERFLOW_VISIBLE &&
+           root->overflow_y == FLOW_OVERFLOW_VISIBLE;
+}
+
+// Whether a box cuts its own content on the x axis (or else the y): an
+// element whose overflow is not the viewport's. An anonymous box carries
+// its parent's style and clips nothing of its own.
+static inline bool f_box_clips(const FBox *b, bool x_axis)
+{
+    return b->node != NULL && !f_viewport_overflow(b) &&
+           f_overflow_clips(x_axis ? b->style->overflow_x : b->style->overflow_y);
+}
+
+// Whether a box is a scroll container: one that clips, on either axis, by
+// a value that scrolls.
+static inline bool f_box_scrolls(const FBox *b)
+{
+    return b->node != NULL && !f_viewport_overflow(b) &&
+           (f_overflow_scrolls(b->style->overflow_x) || f_overflow_scrolls(b->style->overflow_y));
+}
+
 typedef enum { FP_BOX = 0, FP_INLINE } f_pos_kind_t;
 
 struct FPos {
@@ -573,28 +604,44 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
                   const flow_env_t *env, int32_t width);
 void f_layout_free(FLayout *layout);
 
-// The most sticky boxes one sticky box's push may be worked from, itself,
-// the ones outside it and their scrollports' included. One past it is laid
-// out and drawn where the flow put it: the work of a lookup stays bounded
-// however a page nests them.
-#define F_STICKY_DEPS 32
+// The most frames one sticky box's push may be worked from, itself, the
+// ones outside it and their scrollports' included. A sticky box past it is
+// laid out and drawn where the flow put it: the work of a lookup stays
+// bounded however a page nests them.
+#define F_FRAME_DEPS 32
 
-// A sticky box (CSS Position 3 § 3.4), as the door built it: everything
-// the push at a scroll is worked from, in the box's own coordinates.
-struct flow_sticky {
+typedef enum { F_FRAME_STICKY = 0, F_FRAME_SCROLL } f_frame_kind_t;
+
+// A FRAME, as the door built it: what moves a box and everything inside it
+// away from where the flow put them. A STICKY box (CSS Position 3 § 3.4)
+// moves itself by its push at the page's scroll, worked from everything
+// below. A SCROLL CONTAINER moves its CONTENT, not itself, back by its own
+// scroll position `at` (CSS Overflow 3 § 2.2): the container is in the
+// frame outside, its content in this one, and its padding box clips that
+// content from outside.
+struct flow_frame {
+    f_frame_kind_t kind;
     const flow_box_t *box;
-    // Pushed at all: false past F_STICKY_DEPS, and then the box is where
-    // the frame it is in puts it. `mover`: this one when it moves, else the
-    // nearest outside it that does, or NULL — whose frame is this one's.
+    // Moved at all: false for a sticky box past F_FRAME_DEPS, and then it is
+    // where the frame it is in puts it; a scroll container's always moves.
+    // `mover`: this one when it moves, else the nearest outside it that
+    // does, or NULL — whose frame is this one's.
     bool moves;
-    const flow_sticky_t *mover;
-    // The next sticky box out along its containing blocks, which moves it
-    // and everything it is worked against; NULL for none.
-    const flow_sticky_t *outer;
-    // Its SCROLLPORT: the nearest ancestor that is a scroll container, or
-    // NULL for the viewport. Nothing here scrolls but the viewport, so
-    // another's is the padding box `port_rect`, in `port`'s coordinates,
-    // where it stands; the viewport's is `view_w` by `view_h` at the scroll.
+    const flow_frame_t *mover;
+    // The next frame out along its containing blocks, which moves it and
+    // everything it is worked against; NULL for none.
+    const flow_frame_t *outer;
+    // SCROLL: where its content is scrolled to, which the face sets
+    // (flow_scroll_set), from 0 to `range` on each axis — the most its
+    // scrollable overflow reaches past its padding box `pad` — and its
+    // place in the tree's list of them.
+    flow_point_t at, range;
+    os64_gui_rect_t pad;
+    int32_t index;
+    // STICKY: its SCROLLPORT, the nearest ancestor that is a scroll
+    // container, or NULL for the viewport — the padding box `port_rect`, in
+    // the coordinates of the frame `port` itself is in; the viewport's is
+    // `view_w` by `view_h` at the page's scroll.
     const flow_box_t *port;
     os64_gui_rect_t port_rect;
     int32_t view_w, view_h;
@@ -604,18 +651,27 @@ struct flow_sticky {
     // How far it may move on each axis, x then y, and stay inside its
     // containing block, margins and all: lo <= 0 <= hi.
     int32_t lo[2], hi[2];
-    // What clips it from outside, which stays where it is while it moves:
-    // the clip its parent hands its content, in the coordinates of the
-    // frame it is in, as wide as a rectangle can say on an axis nothing
-    // clips, when `clips`. The boxes inside it keep in their own `clip`
-    // only what clips inside it, and flow_box_doc_clip meets the two.
-    // `clipped`: it or one outside it clips.
+    // When its containing block is a scroll container (`outer`'s box), the
+    // block's content reaches as far down as the container scrolls, so
+    // `hi[1]` is `room_down` — the room to the padding box's foot, which
+    // may be negative — plus that range, once the range is known
+    // (sticky_reach_scrolled).
+    bool cb_scrolls;
+    int32_t room_down;
+    // What clips everything in the frame from outside, which stays where it
+    // is while the frame moves, in the coordinates of the frame outside, as
+    // wide as a rectangle can say on an axis nothing clips, when `clips`: a
+    // sticky box's, the clip its parent hands its content; a scroll
+    // container's, the clip it hands its own. The boxes inside keep in
+    // their own `clip` only what clips inside the frame, and
+    // flow_box_doc_clip meets the two. `clipped`: it or one outside it clips.
     os64_gui_rect_t clip;
     bool clips, clipped;
 };
 
-// The public tree (flow.c) as text, one line per box (dump.c).
-int64_t f_tree_dump(const flow_box_t *root, int32_t width, int32_t height, bool incomplete,
-                    char *out, size_t cap);
+// The public tree (flow.c) as text, one line per box (dump.c); `scrollers`
+// are its scroll containers' frames, by flow_box_t.scroller.
+int64_t f_tree_dump(const flow_box_t *root, const flow_frame_t *const *scrollers, int32_t width,
+                    int32_t height, bool incomplete, char *out, size_t cap);
 
 #endif

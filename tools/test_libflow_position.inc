@@ -240,7 +240,9 @@ static void position_layout_cases(void)
     // bottom 0 is 590, and the page reaches it. A drop whose containing
     // block is OUTSIDE an overflow: hidden box escapes its clip; one whose
     // containing block is that box keeps it (§ 11.1.1), and reaches no
-    // further down the page than it (40). left: -9999px is where it says,
+    // further down the page than it (40) — it is what that box scrolls, 60
+    // past it, and the escaped one gives its own box nothing to scroll.
+    // left: -9999px is where it says,
     // and widens nothing: "skip to content" is 28 + 4 + 12 + 4 + 48 = 96.
     // Relative boxes nested three deep move 10, 5 each, everything inside
     // with them: the innermost at 30, 60 + 15, and 30 + 400 wide is what
@@ -261,10 +263,10 @@ static void position_layout_cases(void)
         "  block body 0 0 400 80\n"
         "    block div 0 590 10 10 positioned\n"
         "    block div 0 0 400 20 positioned\n"
-        "      block div 0 0 400 20\n"
+        "      block div 0 0 400 20 scroller 0 range 0 0\n"
         "        line 0 0 400 0 base 14 clip 0 0 400 20\n"
         "        block div 0 50 30 30 positioned\n"
-        "    block div 0 20 400 20 positioned\n"
+        "    block div 0 20 400 20 positioned scroller 1 range 0 60\n"
         "      line 0 20 400 0 base 14 clip 0 20 400 20\n"
         "      block div 0 70 30 30 positioned clip 0 20 400 20\n"
         "    block p 0 40 400 20\n"
@@ -722,10 +724,10 @@ static void position_sticky_cases(void)
     const flow_box_t *s = box_with_id(t, root, "s"), *w = box_with_id(t, root, "w");
     const flow_box_t *field = t != NULL ? flow_control(t, 0) : NULL;
     expect("sticky: the header is positioned and sticky, where the flow put it",
-           s != NULL && s->positioned && s->sticky != NULL && s->sticky->box == s &&
+           s != NULL && s->positioned && s->frame != NULL && s->frame->box == s &&
                s->rect.y == 100 && s->rect.h == 30 && !s->fixed, NULL);
     expect("sticky: what is inside it moves with it",
-           s != NULL && s->first != NULL && s->first->sticky == s->sticky, NULL);
+           s != NULL && s->first != NULL && s->first->frame == s->frame, NULL);
     struct { int32_t scroll, y; } at[] = {{0, 100}, {50, 100}, {100, 100}, {300, 300},
                                           {870, 870}, {1000, 870}};
     bool rides = s != NULL;
@@ -773,8 +775,8 @@ static void position_sticky_cases(void)
     t = flow_layout(q.doc, q.page, 400, &q.env);
     const flow_box_t *f = box_with_id(t, q.doc->document, "f");
     expect("sticky: a bottom one is held at the view's foot, and let go in view",
-           f != NULL && f->sticky != NULL && f->sticky->lo[1] == -1000 &&
-               f->sticky->hi[1] == 980 &&
+           f != NULL && f->frame != NULL && f->frame->lo[1] == -1000 &&
+               f->frame->hi[1] == 980 &&
                flow_box_doc_rect(f, top).y == 580 &&
                flow_box_doc_rect(f, (flow_point_t){0, 500}).y == 1000 &&
                flow_box_doc_rect(f, (flow_point_t){0, 1400}).y == 1000, NULL);
@@ -793,7 +795,7 @@ static void position_sticky_cases(void)
     s = box_with_id(t, q.doc->document, "s");
     const flow_box_t *b = box_with_id(t, q.doc->document, "b");
     expect("sticky: in a scroll container, it sticks to the container, not the view",
-           s != NULL && s->sticky != NULL && s->sticky->port == b &&
+           s != NULL && s->frame != NULL && s->frame->port == b &&
                flow_box_doc_rect(s, top).y == 50 &&
                flow_box_doc_rect(s, (flow_point_t){0, 500}).y == 50, NULL);
     flow_free(t);
@@ -812,7 +814,7 @@ static void position_sticky_cases(void)
     const flow_box_t *tb = box_with_id(t, q.doc->document, "t");
     int32_t end = tb != NULL && th != NULL ? tb->rect.y + tb->rect.h - th->rect.h : -1;
     expect("sticky: a heading cell rides the view until its table ends",
-           th != NULL && th->kind == FLOW_BOX_CELL && th->sticky != NULL &&
+           th != NULL && th->kind == FLOW_BOX_CELL && th->frame != NULL &&
                flow_box_doc_rect(th, top).y == th->rect.y &&
                flow_box_doc_rect(th, (flow_point_t){0, 500}).y == 500 &&
                flow_box_doc_rect(th, (flow_point_t){0, 1500}).y == end, NULL);
@@ -840,13 +842,13 @@ static void position_sticky_cases(void)
     const flow_box_t *in = box_with_id(t, root, "i"), *a = box_with_id(t, root, "a");
     f = box_with_id(t, root, "f");
     expect("sticky: an absolute box in it moves with it",
-           a != NULL && s != NULL && a->sticky == s->sticky &&
+           a != NULL && s != NULL && a->frame == s->frame &&
                flow_box_doc_rect(a, down).y == 300, NULL);
     expect("sticky: a fixed box in it is the viewport's",
-           f != NULL && f->sticky == NULL && f->fixed && flow_box_doc_rect(f, down).y == 350,
+           f != NULL && f->frame == NULL && f->fixed && flow_box_doc_rect(f, down).y == 350,
            NULL);
     expect("sticky: a sticky box in it rides with it, then to the outer box's end",
-           in != NULL && in->sticky != NULL && in->sticky->outer == s->sticky &&
+           in != NULL && in->frame != NULL && in->frame->outer == s->frame &&
                flow_box_doc_rect(in, down).y == 300 &&
                flow_box_doc_rect(in, (flow_point_t){0, 1000}).y == 880, NULL);
     flow_free(t);
@@ -856,7 +858,7 @@ static void position_sticky_cases(void)
     t = flow_layout(q.doc, q.page, 400, &q.env);
     s = box_with_id(t, root, "s");
     expect("sticky: positioning off, it does not stick",
-           s != NULL && !s->positioned && s->sticky == NULL &&
+           s != NULL && !s->positioned && s->frame == NULL &&
                flow_box_doc_rect(s, down).y == 100, NULL);
     flow_free(t);
     sheeted_close(&q);
@@ -899,8 +901,9 @@ static void position_sticky_cases(void)
 
     // Sticky boxes nested deep, each a scroll container too: every one's
     // push is worked from its outer one's frame and its scrollport's, the
-    // same box. A lookup costs each once, and past F_STICKY_DEPS they are
-    // laid out where the flow put them.
+    // same box. A lookup costs each once, and past F_FRAME_DEPS frames —
+    // two a level here, the push and the scroll — they are laid out where
+    // the flow put them.
     {
         char html[8192];
         size_t n = (size_t)snprintf(html, sizeof(html),
@@ -912,11 +915,11 @@ static void position_sticky_cases(void)
         sheeted_open(&q, html, 400, 600);
         t = flow_layout(q.doc, q.page, 400, &q.env);
         const flow_box_t *d0 = box_with_id(t, q.doc->document, "d0");
-        const flow_box_t *d20 = box_with_id(t, q.doc->document, "d20");
+        const flow_box_t *d10 = box_with_id(t, q.doc->document, "d10");
         const flow_box_t *d59 = box_with_id(t, q.doc->document, "d59");
         expect("sticky: nested deep, the near ones move and the deep ones stand",
-               d0 != NULL && d0->sticky->moves && d20 != NULL && d20->sticky->moves &&
-                   d59 != NULL && !d59->sticky->moves &&
+               d0 != NULL && d0->frame->moves && d10 != NULL && d10->frame->moves &&
+                   d59 != NULL && !d59->frame->moves &&
                    flow_box_doc_rect(d59, down).y == d59->rect.y, NULL);
         flow_free(t);
         sheeted_close(&q);
