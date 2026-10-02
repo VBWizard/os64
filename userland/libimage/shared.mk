@@ -4,7 +4,10 @@ LIBIMAGE_OBJ := $(OBJ)/pic/libimage/image.c.o $(OBJ)/pic/libimage/gif.c.o
 $(OBJ)/pic/libimage/%.c.o: libimage/%.c libimage/shared.mk
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@
-$(LIBIMAGE_SO): $(LIBIMAGE_OBJ) $(LIBPNG_SO) $(LIBJPEG_SO) $(LIBOS64_SO) link/lib.ld tools/app_bases.py libimage/exports.map
+# shared.mk holds the object list: removing a source creates no newer
+# object, so without it the old library would look up to date.
+$(LIBIMAGE_SO): $(LIBIMAGE_OBJ) $(LIBPNG_SO) $(LIBJPEG_SO) $(LIBOS64_SO) link/lib.ld tools/app_bases.py libimage/exports.map \
+        libimage/shared.mk
 	$(LD) --defsym LIB_BASE=$(LIBIMAGE_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
 	    $(SHARED_LIB_LDFLAGS) -soname libimage.so --no-undefined --no-as-needed \
 	    --version-script=libimage/exports.map -rpath-link $(BIN) \

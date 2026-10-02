@@ -58,8 +58,10 @@ $(OBJ)/freetype/libfreetype/%.S.o: libfreetype/%.S libfreetype/shared.mk
 # No $(LIBOS64_SO) on this line, and that absence is the whole design: with
 # --no-undefined, anything the port forgot to implement stops the build here
 # instead of quietly acquiring libos64 as a dependency.
+# sources.mk holds the object list: removing a source creates no newer
+# object, so without it the old library would look up to date.
 $(LIBFREETYPE_SO): $(FREETYPE_OBJS) libfreetype/exports.map link/lib.ld \
-        tools/app_bases.py libfreetype/shared.mk
+        tools/app_bases.py libfreetype/shared.mk libfreetype/sources.mk
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBFREETYPE_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
 	    $(SHARED_LIB_LDFLAGS) -soname libfreetype.so --no-undefined --no-as-needed \
