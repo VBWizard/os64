@@ -283,8 +283,10 @@ static void associate_form(os64_html_parser_t *p, HNode *n, HNode *parent)
     if (!parent_root)
         return;
     HNode *form_root = tree_root(p, p->form);
-    if (form_root && parent_root == form_root)
+    if (form_root && parent_root == form_root) {
         n->form_owner = p->form;
+        p->d->records++;
+    }
 }
 static HNode *element(os64_html_parser_t *p, HToken *t, os64_html_ns_t ns, bool push)
 {
@@ -315,6 +317,7 @@ static HNode *element(os64_html_parser_t *p, HToken *t, os64_html_ns_t ns, bool 
         n->template_contents = h_node(p, FRAGMENT);
         if (!n->template_contents)
             return NULL;
+        *h_word(n->template_contents) = (size_t)n;
     }
     HNode *parent, *before;
     insertion_place(p, NULL, &parent, &before);
@@ -384,7 +387,7 @@ static void insert_character(os64_html_parser_t *p, uint32_t c)
         n->text = "";
         h_attach(parent, before, n);
     }
-    size_t *cap = (size_t *)(n + 1);
+    size_t *cap = h_word(n);
     HBuf b = {*cap ? (char *)n->text : NULL, n->text_len, *cap};
 
     if (h_buf_put(p, &b, c)) {

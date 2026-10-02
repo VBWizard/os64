@@ -62,6 +62,7 @@ static char *const argv_arg_echo[] = { "/tests/arg_echo", "hello", "world", NULL
 // tripwire nobody knows is disconnected.
 static char *const argv_malloc_threads[]    = { "/tests/malloctest", "threads", "4", NULL };
 static char *const argv_malloc_doublefree[] = { "/tests/malloctest", "doublefree", NULL };
+static char *const argv_html_pinned[]       = { "/tests/htmltest", "pinned", NULL };
 static char *const argv_malloc_stomp[]      = { "/tests/malloctest", "stomp", NULL };
 
 // The W^X pair (2026-08-16): both die by the segfault kill, 139. A survivor
@@ -130,7 +131,8 @@ static const fixture_t kFixtures[] = {
     { "/tests/gziptest",        NULL, 0x621A0000,  0,          "standalone libgzip and safe gzip/gunzip command publication" },
     { "/tests/pngtest",         NULL, 0x90640000,  0,          "standalone libpng: filtered RGBA decode, alpha, CRC and pixel cap" },
     { "/tests/pagetest",        NULL, 0x50670000,  0,          "libpage: numeric conversion, range grids, control state and submission" },
-    { "/tests/htmltest",        NULL, 0x48640000,  0,          "standalone libhtml: document recovery, namespaces, templates and heap lifetime" },
+    { "/tests/htmltest",        NULL, 0x48640000,  0,          "standalone libhtml: document recovery, namespaces, templates, the verbs and heap lifetime" },
+    { "/tests/htmltest",        argv_html_pinned, 0x48544D4C, 0, "freeing a pinned document kills the program (it must)" },
     { "/tests/jpegtest",        NULL, 0x90650000,  0,          "JPEG: baseline/progressive, orientation, image dispatch, file load and cleanup" },
     { "/tests/bearssltest",     NULL, 0xBEA20000,  0,          "BearSSL foundation vectors and explicit entropy boundary" },
     { "/tests/tlstrusttest",    NULL, 0x71570000,  0,          "TLS trust parsing, certificate gate and snapshot replacement" },

@@ -2,6 +2,7 @@
 #define HTML_INTERNAL_H
 #include "html/html.h"
 #include "os64/mem.h"
+#include <stddef.h>
 #include "os64/str.h"
 
 #define H_EOF 0xffffffffu
@@ -13,14 +14,63 @@ typedef struct {
     size_t len, cap;
 } HBuf;
 typedef struct HBlock HBlock;
+/* Snapshots that borrow from the tree, each by the version it was built at. */
+#define H_PINS 16
 typedef struct {
     os64_html_document_t pub;
     HBlock *blocks;
     size_t budget;
     unsigned char *permanent;
     size_t permanent_left, permanent_chunk;
-    HNode root, html;
+    /* A node is followed by one private word (h_word). The two nodes that
+     * live here and not in a chunk carry theirs beside them. */
+    HNode root;
+    size_t root_word;
+    HNode html;
+    size_t html_word;
+    /* What each node of this document carries in `document_id`, and no other
+     * document's does (h_document_serial). A node's memory and its strings
+     * go when its document is freed, and its replaced strings are retired on
+     * its document's ledger, so a verb has to tell its own document's nodes
+     * from another's. Never zero, which is what a node nobody stamped
+     * carries. */
+    uint32_t id;
+    /* DOM.md, the mutation core. `version` moves whenever a verb changes
+     * what a reader can see and is never zero, so a zero pin is a free slot.
+     * `retired` holds replaced blocks a pinned snapshot may still point at. */
+    uint64_t version;
+    uint64_t pins[H_PINS];
+    os64_html_pin_t pin_handles[H_PINS];    /* what os64_html_pin answered for each held slot */
+    HBlock *retired;
+    size_t retired_bytes;
+    size_t records;     /* live form_owner records: a move with none skips its walk */
+    size_t max_depth;   /* the parse's limit on open elements: see h_depth_limit */
 } HDoc;
+_Static_assert(offsetof(HDoc, root_word) == offsetof(HDoc, root) + sizeof(HNode) &&
+               offsetof(HDoc, html_word) == offsetof(HDoc, html) + sizeof(HNode),
+               "an embedded node's private word must sit where h_word looks for it");
+
+/* The private word after a node: a TEXT or COMMENT's buffer capacity (zero
+ * when its bytes are a literal or lie in a permanent chunk, so are never
+ * freed alone); an ELEMENT's flags; a template-contents FRAGMENT's host. */
+static inline size_t *h_word(const HNode *n)
+{
+    return (size_t *)(n + 1);
+}
+#define H_ATTRS_PRIVATE ((size_t)1)   /* ELEMENT: its attribute records are its own blocks */
+
+/* How deep a node may be, the document at 0 and a template's contents
+ * counted as its children. `max_depth` bounds the parser's stack of OPEN
+ * elements, and a tree can be deeper than its stack ever was: `</form>`
+ * takes the form off the stack while what it contains stays open, so
+ * `<form><div></form>` over and over nests two levels for each entry the
+ * stack keeps. A removed form is never the parent of another, which makes
+ * twice the stack the most a parse can build; the verbs hold the tree to
+ * the same number, so no walker meets a tree a parse could not have made. */
+static inline size_t h_depth_limit(const HDoc *d)
+{
+    return d->max_depth > (SIZE_MAX - 2) / 2 ? SIZE_MAX : 2 * d->max_depth + 2;
+}
 typedef enum { H_CHAR, H_START, H_END, H_COMMENT, H_DOCTYPE, H_END_INPUT } HType;
 typedef struct {
     HType type;
@@ -172,6 +222,18 @@ struct os64_html_parser {
 void *h_permanent(os64_html_parser_t *p, size_t size);
 void *h_alloc(os64_html_parser_t *p, size_t size);
 void h_free(HDoc *d, void *ptr);
+/* The same two allocators for a caller with no parser: the failure is the
+ * caller's answer (`*why`) and the document's `refusal`, which records how
+ * the parse ended, is left alone. */
+void *d_permanent(HDoc *d, size_t size, int64_t *why);
+void *d_alloc(HDoc *d, size_t size, int64_t *why);
+/* Give up a ledger block something may have borrowed: freed at once when no
+ * pinned snapshot is older than the change that replaced it, else kept
+ * until the last such pin lets go. Call it after bumping `version`. */
+void d_retire(HDoc *d, void *ptr);
+/* How many documents the program has begun (core.c). Here so that a test can
+ * set it near its end. */
+extern uint32_t h_document_serial;
 bool h_buf_put(os64_html_parser_t *p, HBuf *b, uint32_t cp);
 bool h_buf_bytes(os64_html_parser_t *p, HBuf *b, const char *s, size_t n);
 void h_buf_reset(HBuf *b);
