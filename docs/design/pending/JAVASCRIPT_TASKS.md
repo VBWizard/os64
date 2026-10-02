@@ -19,8 +19,8 @@ later consumers or guest acceptance gates have passed. "In review" records an
 implemented slice in an open PR. Pending rows record work still needed by this
 plan, without assigning a new contributor or claiming work has started. "Partial"
 records completed evidence while named acceptance work remains.
-"Implemented; review pending" records a locally validated packet that has not
-yet received its independent review or been published.
+"Implemented; review pending" records a validated packet that still needs
+independent review.
 
 | Work | Status on 2026-10-02 | Evidence and remaining work |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ yet received its independent review or been published.
 | R1 target adapter/core | **Merged** | [PR #192](https://github.com/VBWizard/os64/pull/192), merge `ef43d227`: strict core/userland builds, real libmath/libos64 linkage, target symbol/header/ELF/relink audits, 675 sanitized host checks and 437 cross-core host checks pass. R1 itself did not run a guest; the R2 core fixture now exercises the combined library. |
 | R2 runtime implementation | **Merged** | Core [PR #194](https://github.com/VBWizard/os64/pull/194), merge `a6d45945`; file/output/argument helpers [PR #195](https://github.com/VBWizard/os64/pull/195), merge `a558f8fd`. All eleven embedding operations are implemented. Maintained suites pass 822 target-engine host, 3,014 sanitized-engine host and 395 os64/QEMU checks; evidence and review corrections are in libjs/VALIDATION.md. |
 | C1 runner | **Merged; running on P5** | Opus's [PR #196](https://github.com/VBWizard/os64/pull/196), merge `a2e409a7`, delivers file/expression/stdin execution, copied arguments, selected output, diagnostics and exit mapping. Both `js` and `libjs.so` build by default for os64get delivery. Host and QEMU acceptance pass; Chris reports `js primes.js \| wc -l` produced `1229` on the P5. Standard-image installation remains I1. |
-| V1 independent validation | **Implemented; review pending** | Quinn's separate consumer suite passes 383 checks in each host engine profile and 375 in QEMU, with 55 upstream functions passing and four explicit host-feature skips. Capability/failure/native ownership, diagnostic exhaustion, reuse, ABI refusal and the separate fatal process are covered. V1 found and fixes an engine error lifetime defect under persistent allocation refusal. Quinn also authored R2; another reviewer must assess this packet before the independent gate closes. |
+| V1 independent validation | **In review** | [PR #197](https://github.com/VBWizard/os64/pull/197), implementation `80f2d4f9`: Quinn's separate consumer suite passes 383 checks in each host engine profile and 375 in QEMU, with 55 upstream functions passing and four explicit host-feature skips. Capability/failure/native ownership, diagnostic exhaustion, reuse, ABI refusal and the separate fatal process are covered. V1 found and fixes an engine error lifetime defect under persistent allocation refusal. Quinn also authored R2; another reviewer must assess this packet before the independent gate closes. |
 | I1 shared integration | **Partial** | Real shared-library dependency/link audits and strict builds pass. C1 builds `js` and `libjs.so` into userland/bin for os64get delivery, with QEMU delivery evidence and Chris's P5 execution report. Remaining: root-image app/library registration, QuickJS licence installation, and combined fresh-image acceptance alongside V1 evidence. |
 | D0 DOM design | **Merged** | Reviewed [DOM.md](DOM.md), delivered with [PR #190](https://github.com/VBWizard/os64/pull/190). Design completion is separate from browser scripting implementation. |
 | D1 libhtml mutation core | **Merged** | [PR #190](https://github.com/VBWizard/os64/pull/190), merge `5c7d62ce`. Mutation/lifetime verbs and maintained tests; `parse_fragment` belongs to D2. |
@@ -433,8 +433,10 @@ Independent language and numerical acceptance remain in V1/J2.
 
 Chris assigned V1, I1 and J2 in sequence. The V1 implementation is isolated in
 `.worktrees/js-validation`, branch `codex/js-validation`, based on merged
-`userland` `a2e409a7` plus the local task-status documentation commit `2b3ee4cb`.
-It is locally validated and awaiting independent review/publication.
+`userland` `a2e409a7` plus task-status documentation commit `2b3ee4cb`.
+Implementation `80f2d4f9` is published in
+[PR #197](https://github.com/VBWizard/os64/pull/197), targeting `userland`.
+Independent review remains pending.
 
 `tools/js_acceptance` owns a consumer suite with no R2 fixture/private-runtime
 includes, retained hash-checked upstream tests and their original licence.
