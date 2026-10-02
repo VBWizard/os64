@@ -497,9 +497,10 @@ typedef enum {
 } flow_box_kind_t;
 
 typedef struct flow_box flow_box_t;
-// What a sticky box needs to know to find where it is at a scroll
-// (flow_box_doc_offset): opaque, the door's own.
-typedef struct flow_sticky flow_sticky_t;
+// A FRAME: what moves a box away from where the flow put it — a sticky
+// box's push, or a scroll container's scroll — and what is needed to find
+// where it is (flow_box_doc_offset): opaque, the door's own.
+typedef struct flow_frame flow_frame_t;
 
 // A point, or an offset: how far the page is scrolled, x and y.
 typedef struct {
@@ -510,11 +511,12 @@ typedef struct {
 // pixels, rounded once, by the painter's rule, from the layout's 26.6 — in
 // DOCUMENT coordinates, x from the page's left and y from its top, but for
 // a box in a fixed box's subtree (`fixed`), whose coordinates are the
-// VIEWPORT's, since it does not move with the page. A box in a sticky
-// box's subtree is where the flow put it, and is drawn moved by however
-// far the scroll pushes the sticky box. flow_box_doc_rect and its siblings
-// answer any box in document coordinates, given the scroll: the one place
-// that rule is written.
+// VIEWPORT's, since it does not move with the page. A box in a FRAME — a
+// sticky box's subtree, or a scroll container's content — is where the
+// flow put it, and is drawn moved by however far the page's scroll pushes
+// the sticky box, or back by however far the container is scrolled.
+// flow_box_doc_rect and its siblings answer any box in document
+// coordinates, given the scroll: the one place that rule is written.
 struct flow_box {
     flow_box_kind_t kind;
     const os64_html_node_t *node;   // NULL for an anonymous box
@@ -541,9 +543,10 @@ struct flow_box {
     // What of this box may be drawn: the padding boxes of the ancestors
     // whose `overflow` clips, met together, on the axes they clip. When
     // `clipped` is false nothing clips it and `clip` means nothing. In a
-    // sticky box's subtree `clip` holds only what clips inside the sticky
-    // box — what clips it from outside stays where it is while it moves —
-    // so the whole of it is flow_box_doc_clip's, and `clipped` says either.
+    // frame `clip` holds only what clips inside the frame — what clips it
+    // from outside stays where it is while it moves, a scroll container's
+    // own padding box among them — so the whole of it is
+    // flow_box_doc_clip's, and `clipped` says either.
     os64_gui_rect_t clip;
     bool clipped;
     uint8_t decoration;             // TEXT: FLOW_DECORATION_* drawn across it
@@ -563,12 +566,18 @@ struct flow_box {
     // In a `position: fixed` box's subtree, the fixed box included: its
     // rects, clip and baseline are viewport coordinates (above).
     bool fixed;
-    // The innermost `position: sticky` box whose push moves this one, it
-    // included, or NULL: the one its containing blocks lead to, so a box in
-    // the flow moves with its parent and an absolute one with its
-    // containing block, while a fixed box inside a sticky one, the
-    // viewport's, does not move with it (POSITION.md, P4).
-    const flow_sticky_t *sticky;
+    // The innermost frame that moves this box, or NULL: the one its
+    // containing blocks lead to, so a box in the flow moves with its parent
+    // and an absolute one with its containing block, while a fixed box
+    // inside a sticky one, the viewport's, does not move with it
+    // (POSITION.md, P4). A sticky box's is its own; a scroll container's is
+    // the frame it is in, and its content's is its scroll.
+    const flow_frame_t *frame;
+    // A scroll container's place in the tree's list of them
+    // (flow_scroller), or -1: CSS Overflow 3 § 3's, any `overflow` but
+    // `visible` and `clip` that is not the viewport's, so `hidden` too,
+    // which a script and a fragment link may scroll and a person may not.
+    int32_t scroller;
     // `opacity: 0` on it or on an element it is inside: flow_visit does not
     // hand it over. flow_hit still finds it, as a browser's pointer does,
     // unless it is `pointer-events: none`. A face drawing live widgets
@@ -611,14 +620,41 @@ bool flow_incomplete(const flow_tree_t *tree);
 const flow_box_t *flow_root(const flow_tree_t *tree);
 
 // What to add to a box's coordinates to have document ones: the scroll,
-// for a box in a fixed subtree, and the push of each sticky box it moves
-// with at that scroll (CSS Position 3 § 3.4), else nothing. The one rule;
-// the rect and clip functions below apply it.
+// for a box in a fixed subtree, the push of each sticky box it moves with
+// at that scroll (CSS Position 3 § 3.4), and less the scroll position of
+// each scroll container whose content it is in, else nothing. The one
+// rule; the rect and clip functions below apply it.
 flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll);
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
 // Its clip, meaningful when `clipped`: its own, met with what clips each
-// sticky box it is in from outside that box, each where its frame is.
+// frame it is in from outside that frame, each where its own frame is.
 os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll);
+
+// ── Scroll containers (CSS Overflow 3 § 2.2; PILE3.md § Scrolling boxes) ─
+//
+// A scroll container's SCROLL POSITION is the one thing a face may change
+// in a laid-out tree: how far its content is scrolled, which every rect
+// and clip above, flow_visit and flow_hit answer by. Each starts at 0,0,
+// and a new layout starts them all again, so a face that keeps them
+// across one sets them again on the new tree, by node.
+
+// The scroll containers, in tree order, each once.
+int32_t flow_nscrollers(const flow_tree_t *tree);
+const flow_box_t *flow_scroller(const flow_tree_t *tree, int32_t i);
+// How far it can be scrolled on each axis: as far as its scrollable
+// overflow reaches past its padding box — its content's overflow rects,
+// the positioned boxes it moves included, and its own end padding past
+// what is in its flow — or 0 where nothing reaches past.
+flow_point_t flow_scroll_range(const flow_tree_t *tree, int32_t i);
+flow_point_t flow_scroll_at(const flow_tree_t *tree, int32_t i);
+// Scrolls it to `at`, held to [0, range] on each axis; answers where it
+// went.
+flow_point_t flow_scroll_set(flow_tree_t *tree, int32_t i, flow_point_t at);
+// The innermost scroll container whose scrolling moves `box`, or -1: its
+// containing blocks', which a scroll container's own box is not — asked of
+// one, this answers the container it is in. A wheel goes here when it is
+// over a box the pointer reaches and that container can move no further.
+int32_t flow_box_scroller(const flow_box_t *box);
 
 // Whether the pointer cannot reach `box` at this scroll: flow_hit at its
 // centre answers something that is neither it nor inside it — a box
@@ -640,7 +676,8 @@ bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point
 // z-index auto or 0 in tree order, then the positive ones, lowest first;
 // a member that is a context painted whole in its turn, and one that is
 // not painted by the same two walks over its own subtree. The root is the
-// first context. Pruned on OVERFLOW rects: a subtree off the
+// first context. A scroll container's content is walked where its scroll
+// moves it. Pruned on OVERFLOW rects: a subtree off the
 // viewport costs one test, and a box that meets it costs a test for each
 // of its children, lines included. `viewport` is in document coordinates
 // and `scroll` is where the page is scrolled to: the rect a face paints is
@@ -650,9 +687,10 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 
 // The deepest box whose OWN rect holds (x, y), the last painted winning —
-// the positioned list backwards, then the ordinary tree — whose own clip
-// holds the point, and that is drawn (`visibility: visible`) and not
-// `pointer-events: none`; NULL for none.
+// the positioned list backwards, then the ordinary tree — whose clip holds
+// the point, and that is drawn (`visibility: visible`) and not
+// `pointer-events: none`; NULL for none. A scroll container's content is
+// where its scroll moves it, and is not there outside its padding box.
 // (x, y) is in document coordinates, the page scrolled to `scroll`. The face
 // asks libpage what its node means, and a TEXT's run where in the text the
 // pointer is (os64_text_hit).

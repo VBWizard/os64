@@ -318,6 +318,13 @@ typedef struct {
     int32_t nimports;
 } Sheet;
 
+// Where a person scrolled a box, by its element: a layout starts every box
+// at the top, so each new one is set again from these (page_lay_out).
+typedef struct {
+    const os64_html_node_t *node;
+    flow_point_t at;
+} BoxScroll;
+
 // A page as the window holds it: libway's page (the tree, what it means,
 // the reader's flips) and its layout at the size it was laid out at. A
 // text/plain page has no tree of its own, so it is given one.
@@ -357,6 +364,8 @@ typedef struct {
     // The form whose reply this is, when the reply was to a POST: what
     // Reload sends again. Its url is NULL otherwise.
     os64_page_request_t sent;
+    BoxScroll *box_scrolls;
+    int32_t nbox_scrolls, cap_box_scrolls;
 } Page;
 
 static void pictures_schedule(void);
@@ -411,6 +420,7 @@ static void page_clear(Page *p)
     os64_html_document_free(p->plain);
     way_page_clear(&p->way);
     os64_page_request_free(&p->sent);
+    os64_free(p->box_scrolls);
     os64_memset(p, 0, sizeof(*p));
 }
 
@@ -501,10 +511,38 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height)
         os64_memcpy(p->cascade_entry, entry, sizeof(entry));
     }
     p->tree = fresh;
+    // A box keeps where it was scrolled to, as near as the new layout lets
+    // it: the range may have shrunk, and the element may make no box now.
+    for (int32_t i = 0; i < p->nbox_scrolls; i++) {
+        const flow_box_t *b = flow_box_for(fresh, p->box_scrolls[i].node);
+        if (b != NULL && b->scroller >= 0)
+            flow_scroll_set(fresh, b->scroller, p->box_scrolls[i].at);
+    }
     p->laid_width = width;
     p->laid_height = height;
     p->sheets_changed = false;
     return true;
+}
+
+// Remembers where a box was scrolled to, for the layouts after this one.
+// Out of memory, it is forgotten: the next layout starts the box at the
+// top, which is what it did before a person scrolled it.
+static void page_keep_box_scroll(Page *p, const os64_html_node_t *node, flow_point_t at)
+{
+    for (int32_t i = 0; i < p->nbox_scrolls; i++)
+        if (p->box_scrolls[i].node == node) {
+            p->box_scrolls[i].at = at;
+            return;
+        }
+    if (p->nbox_scrolls == p->cap_box_scrolls) {
+        int32_t cap = p->cap_box_scrolls != 0 ? p->cap_box_scrolls * 2 : 8;
+        BoxScroll *grown = os64_realloc(p->box_scrolls, (size_t)cap * sizeof(*grown));
+        if (grown == NULL)
+            return;
+        p->box_scrolls = grown;
+        p->cap_box_scrolls = cap;
+    }
+    p->box_scrolls[p->nbox_scrolls++] = (BoxScroll){node, at};
 }
 
 // ── The window ──────────────────────────────────────────────────────────
@@ -815,19 +853,45 @@ static void position_restore(const way_position_t *at)
     clamp_scroll();
 }
 
+// A box's padding box, from where its border box `r` is.
+static os64_gui_rect_t padding_of(const flow_box_t *b, os64_gui_rect_t r)
+{
+    const flow_unit_t *bw = b->style->border_width;
+    int32_t l = (bw[FLOW_LEFT] + 32) / 64, t = (bw[FLOW_TOP] + 32) / 64;
+    return (os64_gui_rect_t){r.x + l, r.y + t, r.w - l - (bw[FLOW_RIGHT] + 32) / 64,
+                             r.h - t - (bw[FLOW_BOTTOM] + 32) / 64};
+}
+
+// A target is brought to the top of every box it is scrolled inside,
+// innermost first — each box then to the top of the one outside it — and
+// then to the top of the page, as Chrome does. `hidden` boxes too: what a
+// person cannot scroll, a link may.
 static void scroll_to_node(const os64_html_node_t *node)
 {
-    const flow_box_t *b = node != NULL && g.page.tree != NULL ? flow_box_for(g.page.tree, node)
-                                                              : NULL;
+    flow_tree_t *t = g.page.tree;
+    const flow_box_t *b = node != NULL && t != NULL ? flow_box_for(t, node) : NULL;
     if (node != NULL && b == NULL) {
         status_rest("that target has no box on this page");
         return;
     }
+    const flow_box_t *in = b;
+    for (int32_t i = b != NULL ? flow_box_scroller(b) : -1; i >= 0;
+         i = flow_box_scroller(flow_scroller(t, i))) {
+        const flow_box_t *c = flow_scroller(t, i);
+        flow_point_t at = flow_scroll_at(t, i);
+        at.y = in->rect.y - padding_of(c, c->rect).y;
+        page_keep_box_scroll(&g.page, c->node, flow_scroll_set(t, i, at));
+        in = c;
+    }
     // A target in a fixed box is on the glass wherever the page is: no
-    // scroll brings it nearer, so none is made (as Chrome does).
+    // scroll of the page brings it nearer, so none is made (as Chrome
+    // does), though the boxes it is in may have moved. Any other is where
+    // its boxes' scrolls put it on the page unscrolled, so a sticky one is
+    // where the flow put it, not where the scroll now pushes it.
     if (b != NULL && b->fixed)
-        return;
-    scroll_to(g.sx, b != NULL ? b->rect.y : 0);
+        scroll_to(g.sx, g.sy);
+    else
+        scroll_to(g.sx, b != NULL ? flow_box_doc_rect(b, (flow_point_t){0, 0}).y : 0);
 }
 
 static void scroll_to_fragment(const char *name)
@@ -2632,15 +2696,118 @@ static FormWidget *form_widget(int32_t control);
 // a sunken edge.
 static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
-    (void)clip;
     const FormWidget *fw = form_widget(b->control);
     if (fw != NULL && !fw->w->hidden)
         return;
-    glass_fill(ctx, c, 0xffffff);
-    glass_fill(ctx, (os64_gui_rect_t){c.x, c.y, c.w, 1}, 0x808080);
-    glass_fill(ctx, (os64_gui_rect_t){c.x, c.y, 1, c.h}, 0x808080);
-    glass_fill(ctx, (os64_gui_rect_t){c.x, c.y + c.h - 1, c.w, 1}, 0xd4d4d4);
-    glass_fill(ctx, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xd4d4d4);
+    // The stand-in is drawn whole, so it is cut like a run or a picture: a
+    // control scrolled out of its box, or past an `overflow: hidden` edge,
+    // is not drawn there.
+    Glass cut = *(const Glass *)ctx;
+    cut.clip = on_glass(&cut, clip);
+    if (cut.clip.w <= 0 || cut.clip.h <= 0)
+        return;
+    glass_fill(&cut, c, 0xffffff);
+    glass_fill(&cut, (os64_gui_rect_t){c.x, c.y, c.w, 1}, 0x808080);
+    glass_fill(&cut, (os64_gui_rect_t){c.x, c.y, 1, c.h}, 0x808080);
+    glass_fill(&cut, (os64_gui_rect_t){c.x, c.y + c.h - 1, c.w, 1}, 0xd4d4d4);
+    glass_fill(&cut, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xd4d4d4);
+}
+
+// ── A scrolled box's bars ───────────────────────────────────────────────
+//
+// A box a person can scroll shows where it is with a thin bar over the
+// inside of its padding box's far edge: a bar that OVERLAYS the content,
+// as a touch screen's and macOS's do, so showing it changes no layout. An
+// `overflow: scroll` axis shows its track whatever it holds; an `auto` one
+// shows a bar only when there is something to scroll to. Whatever is
+// painted over the box is over its bars too: a bar is drawn only where
+// the pointer would reach the box (flow_box_covered's rule, POSITION.md
+// ruling 9), at the bar's middle.
+
+#define BOX_BAR 6               // thickness, pixels
+#define BOX_BAR_THUMB_MIN 16
+#define BOX_BAR_TRACK 0xd8d8d8u
+#define BOX_BAR_THUMB 0x8c8c8cu
+
+// Whether a person may scroll a box on one axis: `auto` and `scroll` say
+// so, while `hidden` is a script's and a fragment link's to scroll.
+static bool person_scrolls(flow_overflow_t o)
+{
+    return o == FLOW_OVERFLOW_AUTO || o == FLOW_OVERFLOW_SCROLL;
+}
+
+// Whether the pointer at the document point (x, y) reaches `box` or
+// something inside it.
+static bool reaches_box(const flow_box_t *box, int32_t x, int32_t y)
+{
+    const flow_box_t *h = flow_hit(g.page.tree, x, y, scroll_now());
+    while (h != NULL && h != box)
+        h = h->parent;
+    return h != NULL;
+}
+
+// One bar along an axis: `track` in document coordinates, the thumb where
+// `at` of `range` puts it, cut to `clip` — what clips the box, in document
+// coordinates, or the view when nothing does.
+static void box_bar(Glass *gl, os64_gui_rect_t track, bool across, int32_t at, int32_t range,
+                    bool show_track, os64_gui_rect_t clip)
+{
+    os64_gui_rect_t on;
+    if (!os64_rect_intersect(track, clip, &on))
+        return;
+    Glass cut = *gl;
+    os64_gui_rect_t shown = on_glass(gl, on);
+    if (shown.w <= 0 || shown.h <= 0)
+        return;
+    cut.clip = shown;
+    if (show_track)
+        glass_fill(&cut, track, BOX_BAR_TRACK);
+    if (range <= 0)
+        return;
+    int64_t len = across ? track.w : track.h;
+    int64_t thumb = len * len / (len + range);
+    if (thumb < BOX_BAR_THUMB_MIN)
+        thumb = len < BOX_BAR_THUMB_MIN ? len : BOX_BAR_THUMB_MIN;
+    int64_t from = (len - thumb) * at / range;
+    os64_gui_rect_t r = track;
+    if (across) {
+        r.x = (int32_t)(track.x + from);
+        r.w = (int32_t)thumb;
+    } else {
+        r.y = (int32_t)(track.y + from);
+        r.h = (int32_t)thumb;
+    }
+    glass_fill(&cut, r, BOX_BAR_THUMB);
+}
+
+static void box_bars(Glass *gl, os64_gui_rect_t view)
+{
+    flow_tree_t *t = g.page.tree;
+    for (int32_t i = 0; i < flow_nscrollers(t); i++) {
+        const flow_box_t *b = flow_scroller(t, i);
+        const flow_style_t *s = b->style;
+        if (b->unpainted || s->visibility != FLOW_VISIBLE)
+            continue;
+        flow_point_t range = flow_scroll_range(t, i), at = flow_scroll_at(t, i);
+        bool down = person_scrolls(s->overflow_y) &&
+                    (range.y > 0 || s->overflow_y == FLOW_OVERFLOW_SCROLL);
+        bool across = person_scrolls(s->overflow_x) &&
+                      (range.x > 0 || s->overflow_x == FLOW_OVERFLOW_SCROLL);
+        os64_gui_rect_t r = flow_box_doc_rect(b, scroll_now()), meet;
+        if ((!down && !across) || !os64_rect_intersect(r, view, &meet))
+            continue;
+        os64_gui_rect_t pad = padding_of(b, r);
+        if (pad.w < BOX_BAR * 2 || pad.h < BOX_BAR * 2)
+            continue;
+        os64_gui_rect_t clip = b->clipped ? flow_box_doc_clip(b, scroll_now()) : view;
+        int32_t corner = down && across ? BOX_BAR : 0;
+        os64_gui_rect_t v = {pad.x + pad.w - BOX_BAR, pad.y, BOX_BAR, pad.h - corner};
+        os64_gui_rect_t h = {pad.x, pad.y + pad.h - BOX_BAR, pad.w - corner, BOX_BAR};
+        if (down && reaches_box(b, v.x + v.w / 2, v.y + v.h / 2))
+            box_bar(gl, v, false, at.y, range.y, s->overflow_y == FLOW_OVERFLOW_SCROLL, clip);
+        if (across && reaches_box(b, h.x + h.w / 2, h.y + h.h / 2))
+            box_bar(gl, h, true, at.x, range.x, s->overflow_x == FLOW_OVERFLOW_SCROLL, clip);
+    }
 }
 
 // Only the part of the view that is dirty is painted: the kernel takes
@@ -2658,8 +2825,9 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         return;
     }
     yonder_verbs_t v = {&gl, glass_fill, glass_text, glass_image, glass_control, glass_backdrop};
-    yonder_paint(g.page.tree, (os64_gui_rect_t){part.x - gl.dx, part.y - gl.dy, part.w, part.h},
-                 scroll_now(), PAGE_PAPER, &v);
+    os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
+    yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, &v);
+    box_bars(&gl, view);
 }
 
 // The keyboard's arrows arrive as VT100 bursts (ESC [ A ...). libui's
@@ -2767,17 +2935,50 @@ static void picture_button_at(int32_t x, int32_t y)
         form_send(b->control, OS64_PAGE_ACTIVATE_CONTROL);
 }
 
+// A wheel over the page scrolls the innermost box under the pointer that
+// can still move that way, then the one outside it, as browsers chain a
+// scroll (CSS Overscroll 1 § 2). False when no box moved, and the page is
+// the wheel's.
+static bool wheel_box(int32_t x, int32_t y, int32_t dx, int32_t dy)
+{
+    os64_gui_rect_t v = g.view.bounds;
+    flow_tree_t *t = g.page.tree;
+    if (t == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
+        return false;
+    const flow_box_t *b = flow_hit(t, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
+    int32_t i = b == NULL ? -1 : b->scroller >= 0 ? b->scroller : flow_box_scroller(b);
+    for (; i >= 0; i = flow_box_scroller(flow_scroller(t, i))) {
+        const flow_style_t *s = flow_scroller(t, i)->style;
+        flow_point_t was = flow_scroll_at(t, i);
+        flow_point_t to = {was.x + (person_scrolls(s->overflow_x) ? dx : 0),
+                           was.y + (person_scrolls(s->overflow_y) ? dy : 0)};
+        flow_point_t now = flow_scroll_set(t, i, to);
+        if (now.x != was.x || now.y != was.y) {
+            page_keep_box_scroll(&g.page, flow_scroller(t, i)->node, now);
+            os64_ui_mark_dirty(&g.ui, &g.view);
+            forms_place();
+            pictures_schedule();
+            hover(g.pointer_x, g.pointer_y);
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_t *ev)
 {
     (void)ui;
     int32_t page = w->bounds.h - line_step();
     switch (ev->type) {
-    case OS64_GUI_EVENT_MOUSE_WHEEL:
+    case OS64_GUI_EVENT_MOUSE_WHEEL: {
         // Three lines a notch, as libui's lists scroll; a tilt goes sideways.
         if (ev->mouse.dy == 0 && ev->mouse.dx == 0)
             return false;
-        scroll_to(g.sx + ev->mouse.dx * 3 * line_step(), g.sy + ev->mouse.dy * 3 * line_step());
+        int32_t dx = ev->mouse.dx * 3 * line_step(), dy = ev->mouse.dy * 3 * line_step();
+        if (!wheel_box(ev->mouse.x, ev->mouse.y, dx, dy))
+            scroll_to(g.sx + dx, g.sy + dy);
         return true;
+    }
     case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN:
         os64_ui_set_focus(&g.ui, w);
         g.pressed_link = ev->mouse.button == OS64_GUI_MOUSE_LEFT

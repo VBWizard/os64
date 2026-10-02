@@ -451,19 +451,30 @@ static size_t fuzz_trees;
 // clips reaches no further than its border box on that axis — inside its
 // parent's overflow rect; and every positioned box's subtree inside its
 // own, a positioned box being reached from the list and not through its
-// parent, so checked as a root of its own.
+// parent, so checked as a root of its own. Unscrolled, a scroll
+// container's content stands where the container's frame does, so what
+// clips that frame from outside — the container's padding box — clips it.
+static os64_gui_rect_t met_with(os64_gui_rect_t drawn, os64_gui_rect_t clip)
+{
+    int64_t x0 = drawn.x > clip.x ? drawn.x : clip.x;
+    int64_t y0 = drawn.y > clip.y ? drawn.y : clip.y;
+    int64_t x1 = (int64_t)drawn.x + drawn.w, y1 = (int64_t)drawn.y + drawn.h;
+    x1 = x1 < (int64_t)clip.x + clip.w ? x1 : (int64_t)clip.x + clip.w;
+    y1 = y1 < (int64_t)clip.y + clip.h ? y1 : (int64_t)clip.y + clip.h;
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 > x0 ? x1 - x0 : 0),
+                             (int32_t)(y1 > y0 ? y1 - y0 : 0)};
+}
+
 static void check_tree(const char *what, const flow_box_t *b, const flow_box_t *parent)
 {
     bool ok = b->rect.w >= 0 && b->rect.h >= 0 && b->overflow.w >= 0 && b->overflow.h >= 0;
     os64_gui_rect_t drawn = b->overflow;
     if (b->clipped) {
-        int64_t x0 = drawn.x > b->clip.x ? drawn.x : b->clip.x;
-        int64_t y0 = drawn.y > b->clip.y ? drawn.y : b->clip.y;
-        int64_t x1 = (int64_t)drawn.x + drawn.w, y1 = (int64_t)drawn.y + drawn.h;
-        x1 = x1 < (int64_t)b->clip.x + b->clip.w ? x1 : (int64_t)b->clip.x + b->clip.w;
-        y1 = y1 < (int64_t)b->clip.y + b->clip.h ? y1 : (int64_t)b->clip.y + b->clip.h;
-        drawn = (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 > x0 ? x1 - x0 : 0),
-                                  (int32_t)(y1 > y0 ? y1 - y0 : 0)};
+        drawn = met_with(drawn, b->clip);
+        for (const flow_frame_t *f = b->frame; f != NULL && f->kind == F_FRAME_SCROLL;
+             f = f->outer)
+            if (f->clips)
+                drawn = met_with(drawn, f->clip);
     }
     if (parent != NULL && drawn.w > 0 && drawn.h > 0) {
         const os64_gui_rect_t *o = &drawn, *po = &parent->overflow;
@@ -503,7 +514,7 @@ static void positioned_in_order(const flow_box_t *b, const flow_tree_t *t, int32
 // room always holds 0, where the flow put it.
 static void sticky_held(const flow_box_t *b, bool *ok)
 {
-    const flow_sticky_t *s = b->sticky;
+    const flow_frame_t *s = b->frame;
     if (s != NULL && s->box == b) {
         static const flow_point_t kScrolls[] = {{0, 0}, {0, 317}, {0, 100000}, {50, 2000},
                                                 {INT32_MAX / 2, INT32_MAX / 2}};

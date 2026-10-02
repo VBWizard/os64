@@ -7,6 +7,8 @@
 typedef struct {
     char *out;
     size_t cap, len;    // len counts everything, written or not
+    // The public tree's scroll containers' frames, by flow_box_t.scroller.
+    const flow_frame_t *const *scrollers;
 } Buf;
 
 static void put(Buf *b, const char *s, size_t n)
@@ -448,7 +450,7 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
 
 int64_t f_style_dump(const FStyles *styles, char *out, size_t cap)
 {
-    Buf b = {out, cap, 0};
+    Buf b = {out, cap, 0, NULL};
     if (styles == NULL) {
         if (cap > 0)
             out[0] = '\0';
@@ -612,7 +614,7 @@ static void box_lines(Buf *b, const FBox *box, int32_t depth)
 
 int64_t f_boxes_dump(const FBoxes *boxes, char *out, size_t cap)
 {
-    Buf b = {out, cap, 0};
+    Buf b = {out, cap, 0, NULL};
     if (boxes != NULL && boxes->root != NULL)
         box_lines(&b, boxes->root, 0);
     if (boxes != NULL && boxes->incomplete)
@@ -630,6 +632,17 @@ int64_t f_boxes_dump(const FBoxes *boxes, char *out, size_t cap)
 static void box_rect(Buf *b, os64_gui_rect_t r)
 {
     putf(b, " %d %d %d %d", (int)r.x, (int)r.y, (int)r.w, (int)r.h);
+}
+
+// Where two rects meet: empty, at the first's corner, when they do not.
+static os64_gui_rect_t met(os64_gui_rect_t a, os64_gui_rect_t c)
+{
+    int64_t x0 = a.x > c.x ? a.x : c.x, y0 = a.y > c.y ? a.y : c.y;
+    int64_t x1 = (int64_t)a.x + a.w < (int64_t)c.x + c.w ? (int64_t)a.x + a.w : (int64_t)c.x + c.w;
+    int64_t y1 = (int64_t)a.y + a.h < (int64_t)c.y + c.h ? (int64_t)a.y + a.h : (int64_t)c.y + c.h;
+    if (x1 <= x0 || y1 <= y0)
+        return (os64_gui_rect_t){a.x, a.y, 0, 0};
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
 }
 
 static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
@@ -686,24 +699,38 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
         puts_(b, " positioned");
     if (box->fixed && (box->parent == NULL || !box->parent->fixed))
         puts_(b, " fixed");
-    if (box->sticky != NULL && box->sticky->box == box)
-        putf(b, " sticky x %d..%d y %d..%d", (int)box->sticky->lo[0], (int)box->sticky->hi[0],
-             (int)box->sticky->lo[1], (int)box->sticky->hi[1]);
+    if (box->frame != NULL && box->frame->box == box && box->frame->kind == F_FRAME_STICKY)
+        putf(b, " sticky x %d..%d y %d..%d", (int)box->frame->lo[0], (int)box->frame->hi[0],
+             (int)box->frame->lo[1], (int)box->frame->hi[1]);
+    if (box->scroller >= 0 && b->scrollers != NULL) {
+        const flow_frame_t *f = b->scrollers[box->scroller];
+        putf(b, " scroller %d range %d %d", (int)box->scroller, (int)f->range.x, (int)f->range.y);
+        if (f->at.x != 0 || f->at.y != 0)
+            putf(b, " at %d %d", (int)f->at.x, (int)f->at.y);
+    }
     if (box->unpainted)
         puts_(b, " unpainted");
+    // What clips it with every scroll container unscrolled: its own clip,
+    // met with each scroll container's whose content it is in, out to the
+    // first frame of another kind, which would move it.
     if (box->clipped) {
+        os64_gui_rect_t c = box->clip;
+        for (const flow_frame_t *f = box->frame; f != NULL && f->kind == F_FRAME_SCROLL;
+             f = f->outer)
+            if (f->clips)
+                c = met(c, f->clip);
         puts_(b, " clip");
-        box_rect(b, box->clip);
+        box_rect(b, c);
     }
     puts_(b, "\n");
     for (const flow_box_t *c = box->first; c != NULL; c = c->next)
         tree_lines(b, c, depth + 1);
 }
 
-int64_t f_tree_dump(const flow_box_t *root, int32_t width, int32_t height, bool incomplete,
-                    char *out, size_t cap)
+int64_t f_tree_dump(const flow_box_t *root, const flow_frame_t *const *scrollers, int32_t width,
+                    int32_t height, bool incomplete, char *out, size_t cap)
 {
-    Buf b = {out, cap, 0};
+    Buf b = {out, cap, 0, scrollers};
     if (root != NULL) {
         putf(&b, "page %d %d\n", (int)width, (int)height);
         tree_lines(&b, root, 0);
