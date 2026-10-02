@@ -333,11 +333,15 @@ QuickJS's default stack allowance is 1 MiB. The inspected os64 user-thread
 stack is also 1 MiB (`kernel/include/thread.h`). Configure a smaller engine
 allowance with room for the embedding code and native calls, and test it on
 the thread that actually evaluates scripts. The host probe's 256 KiB setting
-was an experiment, not a selected production limit.
+was an experiment. The standalone production profile now uses 256 KiB,
+published by `os64_js_default_limits()` with 64 MiB memory, 4 MiB source,
+60,000 ms execution and `UINT64_MAX` jobs. The runner shares that profile and
+keeps its 768 KiB stack-option cap. A lower job count provides an explicit
+deterministic cap; the default deadline bounds ordinary Promise work.
 
-J2 measures recursion depth and stack use for representative frames and native
-callbacks; report the workload rather than claiming a universal stack cost
-per frame. Browser validation adds script-to-layout calls on that same stack.
+J2 records recursion depth and sampled stack use for representative frames and
+a bounded native callback; report the workload rather than claiming a universal
+stack cost per frame. Browser validation adds script-to-layout calls on that same stack.
 Configurable thread stacks are deferred in DEBTS.md, triggered by measured
 insufficient headroom; no kernel API change is authorized by this plan.
 

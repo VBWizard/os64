@@ -1,11 +1,10 @@
 #include "os64/js.h"
 
-/* Explicit development budgets for an API example, not selected production
- * defaults. Diagnostics can be presented after this call by the application. */
+/* Standalone limits come from the library's public profile. The application
+ * presents diagnostics after this call and may override individual budgets. */
 int js_example_run_file(const char *path, os64_js_outcome_t *result)
 {
-    os64_js_config_t config = {{16 * 1024 * 1024, 256 * 1024,
-                               1024 * 1024, 1000, 10000}};
+    os64_js_config_t config = {.limits = os64_js_default_limits()};
     os64_js_runtime_t *runtime = NULL;
     os64_js_status_t status = os64_js_create(&config, OS64_JS_ABI_ID,
                                             &runtime, result);

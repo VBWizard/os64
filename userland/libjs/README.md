@@ -46,6 +46,9 @@ Checks:
 - `python3 tools/test_js_image.py`: after `make`, compare the runner, its
   complete shared-library dependency chain and pinned QuickJS notice with
   the standalone ext2 image, disk ext2 root and FAT rescue volume.
+- `make -C userland js-measure-test`: build the optional J2 guest consumer
+  for recursion/native stack, representative budgets and floating-point state
+  across scheduling. `tools/js_measure/README.md` explains its measurements.
 - `tools/test_js_port_host.sh`: adapter fixtures with ASan/UBSan and the actual
   cross-built core on the host, using host libm as a substitute for M1.
 - `tools/test_js_engine_host.sh`: isolated upstream engine baseline.

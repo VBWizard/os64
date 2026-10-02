@@ -16,9 +16,17 @@ pointer, and a caller-owned outcome. These pointers must be valid. It clears
 Input configuration, ABI, source/name/path and argument buffers must not overlap
 output runtime-pointer or outcome storage. A null configuration, zero limits, or
 unrepresentable deadline is a bad
-argument. There is no unlimited sentinel; zero is rejected. Explicit development budgets appear
-in the examples; production defaults wait for J2 guest measurements and can be
-introduced through a configuration helper without changing this structure.
+argument. There is no unlimited sentinel; zero is rejected.
+`os64_js_default_limits()` supplies the standalone profile: 64 MiB engine
+memory, 256 KiB engine stack, 4 MiB source, 60,000 ms per turn and `UINT64_MAX`
+jobs. This header helper initializes values; it grants no capabilities and
+does not make a null configuration valid. Hosts may override individual fields.
+The runner uses this profile; the job-count option supplies a practical
+deterministic cap when wanted, while the default execution deadline bounds
+ordinary Promise work. Native operations need their own bounded behavior.
+The helper changes no struct layout, engine profile or exported symbol, so the
+embedding ABI identifier remains unchanged. J2's guest measurements and the
+profile's limits are recorded in VALIDATION.md.
 
 The ABI identifier covers the engine release, os64 wrapper revision, LP64
 layout, 16-byte JSValue, 64-bit limbs, and Atomics configuration. Creation and
@@ -234,8 +242,11 @@ The stack budget must fit the caller's native thread stack, leaving room for
 native callbacks and host frames. Creation rejects zero, values above PTRDIFF_MAX,
 and values above half its local stack address to keep engine subtraction away
 from unsigned underflow. This representability guard does not discover the
-thread's actual stack extent. The fixture's 256 KiB engine budget fits os64's
-1 MiB native thread stack; J2 must measure room for the runner's own calls.
+thread's actual stack extent. J2 measures the standalone 256 KiB profile and
+the runner's 768 KiB option cap on os64's 1 MiB mapped thread stacks, including
+a bounded 64 KiB native frame. These sampled workloads establish their own
+headroom, not a guarantee for arbitrary native callbacks. Browser bindings
+must measure their script-to-layout paths separately.
 
 `os64_js_cancel` atomically latches cancellation and is the cross-thread
 operation. The owner observes it before execution/job entry and through the
@@ -280,5 +291,5 @@ provide implementation evidence in VALIDATION.md.
 R1 supplies target C adaptation and compatibility-header publication without
 bringing host libc into the exported binding header. R2 implements and tests
 the lifecycle, limits, installers, error fallback, job tracking, cancellation,
-header mismatch, custom callbacks, and fatal teardown contracts. J2 selects
-production defaults using guest evidence. M1 supplies the maths library.
+header mismatch, custom callbacks, and fatal teardown contracts. J2 records
+the standalone production profile's guest evidence. M1 supplies the maths library.

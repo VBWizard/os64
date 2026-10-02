@@ -47,3 +47,20 @@ $(LIBJS_ACCEPTANCE_ELF): $(LIBJS_ACCEPTANCE_DIR)/consumer.o $(LAUNCH_OBJS) $(LIB
 .PHONY: js-acceptance-test
 js-acceptance-test: $(LIBJS_ACCEPTANCE_ELF)
 -include $(LIBJS_ACCEPTANCE_DIR)/consumer.d
+
+# J2's guest measurements select the same reserved slot in their own process.
+LIBJS_MEASURE_DIR := $(OBJ)/js/measure
+LIBJS_MEASURE_ELF := $(LIBJS_MEASURE_DIR)/consumer
+LIBJS_MEASURE_OBJS := $(LIBJS_MEASURE_DIR)/consumer.o $(LIBJS_MEASURE_DIR)/fp_pause.o
+$(LIBJS_MEASURE_DIR)/consumer.o: ../tools/js_measure/consumer.c $(LIBJS_GENERATED)/.prepared libjs/shared.mk libjs/core.mk
+	@mkdir -p "$(@D)"
+	$(CC) $(filter-out -fPIC,$(LIBJS_FLAGS)) -fno-pic -fno-pie -c $< -o $@
+$(LIBJS_MEASURE_DIR)/fp_pause.o: ../tools/js_measure/fp_pause.S libjs/shared.mk
+	@mkdir -p "$(@D)"
+	$(CC) $(CFLAGS) -c $< -o $@
+$(LIBJS_MEASURE_ELF): $(LIBJS_MEASURE_OBJS) $(LAUNCH_OBJS) $(LIBJS_SO) $(LIBOS64_SO) GNUmakefile libjs/shared.mk tools/app_bases.py
+	$(LD) --defsym APP_BASE=$(APP_BASE_jsembedtest) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) \
+	    $(LDFLAGS) -o $@ $(LIBJS_MEASURE_OBJS) $(LAUNCH_OBJS) $(LIBJS_SO) $(LIBOS64_SO)
+.PHONY: js-measure-test
+js-measure-test: $(LIBJS_MEASURE_ELF)
+-include $(LIBJS_MEASURE_OBJS:.o=.d)

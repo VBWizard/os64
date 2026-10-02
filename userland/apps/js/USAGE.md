@@ -40,9 +40,10 @@ standard error.
 
 SIZE takes a byte count with an optional `K` or `M` suffix. Every budget must
 be positive: R0 has no "unlimited" setting, deliberately. `--stack` is at most
-768K, a quarter below the 1 MiB thread stack the engine actually runs on, so a
-runaway recursion ends as the script's own `InternalError: stack overflow`
-(exit 1, like any uncaught exception), never as a fault.
+768K on os64's 1 MiB native thread stack. J2's guest recursion cases and
+bounded 64K native callback retain headroom at that cap; a stack overflow is
+reported as the script's `InternalError: stack overflow` (exit 1). Arbitrary
+native bindings still need their own stack budget. The measured default is 256K.
 
 A job is one Promise continuation: each `.then` callback that runs, and each
 resumption of an `async` function after an `await`. The job budget is the one
@@ -52,8 +53,10 @@ because an ordinary async program can legitimately run millions of jobs and the
 time budget already stops one that never ends. `--jobs N` is there for a test
 that wants the deterministic cap.
 
-The defaults are the runner's, provisional until J2 measures real programs on
-the guest and the library publishes production defaults.
+The runner obtains these standalone defaults from the library's public
+`os64_js_default_limits()` helper. J2's guest measurements support retaining
+this profile; the options override it for programs with different needs.
+`userland/libjs/VALIDATION.md` records the workloads and measured headroom.
 
 **The first operand ends `js`'s options.** Everything after the file name
 (or after `-e SOURCE`, or `-`) belongs to the script, flags included, so
