@@ -15,6 +15,21 @@ fails. The first two fail through the actual cross-built engine. The sanitized
 constructor sweep also reaches the individual lazy-global and Proxy failures.
 Upstream originals remain unchanged; the manifest records the patch and digest.
 
+Patch 0005 retains the error object while assembling its backtrace. Allocating
+the backtrace can replace `current_exception`; without an owned reference,
+that replacement frees the object still used by the backtrace builder. The
+patch also frees the temporary buffer on the builder's early failure paths.
+V1's persistent host-allocation refusal during thrown-object conversion
+reproduces the crash before this patch and returns HOST_FAILURE after it.
+The acceptance suite runs that case against the actual target core and an
+ASan-instrumented engine. Source hashes cover the additional patch.
+
+Selected upstream test sources are retained separately in
+`tools/js_acceptance/upstream`, with archive/file hashes and the original
+licence. Their assertions remain unchanged; separate drivers report individual
+pass/fail results and explicit unsupported host-capability skips. This selection
+does not retain or run upstream's command-line test runners.
+
 The engine baseline applies patch 0001 to a disposable copy, checks hashes,
 builds the five units, and exercises language execution,
 Promise draining, absence of Atomics/std/os, and recursion failure. Review

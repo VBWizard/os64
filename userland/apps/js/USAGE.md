@@ -2,8 +2,8 @@
 
 Status: RULED by Chris, 2026-10-02 (C1). The grammar, argument binding,
 output conventions and exit statuses below are the runner's half of the R0
-contract (`userland/libjs/CONTRACT.md`); Quinn's agreement as R0's owner is
-pending. `tools/test_js_cli_host.sh` holds the runner to the tables here
+contract (`userland/libjs/CONTRACT.md`), accepted by Quinn as R0's owner in
+the C1 review. `tools/test_js_cli_host.sh` holds the runner to the tables here
 (all but the library's own fatal exit), on a stand-in for the library and on
 the real one. `make` builds `js` and `libjs.so` into `userland/bin`, and
 `os64get js libjs.so` installs them; the image gains `/bin/js` together with

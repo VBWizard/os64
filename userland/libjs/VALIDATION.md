@@ -356,3 +356,76 @@ libjs is 4,521,008 bytes with SHA-256
 `5e5be11499c7bf5f12bacb20c94ea0002595f4b31142823f561f38bf1160e5ba`.
 libmath and libos64 retain the sizes and hashes in the helper-slice table above.
 C1, independent validation and normal image integration remain separate gates.
+
+## V1 consumer acceptance, 2026-10-02
+
+Worktree `.worktrees/js-validation`, branch `codex/js-validation`, based on
+merged M1/R1/R2/C1 at `a2e409a7` plus task-status documentation `2b3ee4cb`.
+The maintained consumer and provenance/inventory are in `tools/js_acceptance`;
+the host runner is `tools/test_js_acceptance_host.sh`. This suite does not include
+R2's `cases.h` or private runtime state. Quinn authored both R2 and this suite,
+so another reviewer must assess the packet before calling V1 independently
+accepted. These observations establish execution evidence, not that review.
+
+The initial persistent OS-allocation-refusal fixture crashed in
+`find_own_property`, reached from `build_backtrace` while converting a thrown
+object. The builder borrowed `current_exception`; backtrace allocation could
+replace that exception and free the object still being used. Manifest patch
+0005 retains the error through assembly and frees the temporary buffer on early
+failures. The reproducing fixture is unchanged in its refusal/conversion
+behavior and now returns HOST_FAILURE, refuses reuse and destroys with zero
+live allocations. The isolated `--diagnostic-oom` process also passes with two
+refused OS allocations and zero live allocations in both host engine profiles.
+The patch covers the shared builder used by its native, bytecode and parser
+callers. Public ABI/layout, symbol inventories and capabilities are unchanged.
+
+- `tools/test_js_acceptance_host.sh`: **383 checks, zero failures** for each
+  of the actual target-core/M1-maths and ASan-instrumented engine profiles.
+  Host-only diagnostic refusal verifies complete allocation reclamation;
+  ASan/UBSan cover the wrapper and consumer/service/support code. The second
+  engine is instrumented with ASan, with individual allocations instead of
+  the target's small-object arenas. Maths remains the target objects; neither
+  executable depends on host libm. Normal-exit LeakSanitizer stays enabled;
+  the recorded run had permission for its thread inspection. The leaked-value
+  fatal processes verify the full `0x4A534641` badge through a host hook mapping
+  it to host status 99; their immediate exits are separate from leak checks.
+- Upstream selection: **55 functions passed, zero failed, four skipped** in
+  each host profile and the guest. The skip reasons explicitly name the absent
+  `std.gc`/`os.setTimeout` host capabilities. Assertions and fixed expected
+  values come from the original pinned files, including the 2,000-digit pi
+  expectation. A negative control rejects a deliberately incorrect expected
+  value. The manifest covers the complete selected-file driver inventory of
+  59 functions, not test262 or the other upstream test files. Retained files
+  and licence match the pinned archive hashes; generated drivers are separate.
+- Regression checks: runtime **822 target-core / 3,014 sanitized-engine
+  checks**, zero failures and zero live allocations; runner **196 fake-runtime
+  / 38 real-library checks**, zero failures. The existing fatal runtime modes
+  pass. Header/manifest checks, target import/export/dependency/relink audits,
+  and strict root/explicit-consumer builds pass.
+- Fresh QEMU VM 56209: **375 checks, zero failures**, normal process status
+  **0**, and a separate leaked-value process with actual guest status
+  **`0x4A534641`**. Guest coverage includes native/absent capabilities, copied
+  arguments and selected output, source/job callback re-entry, recoverable
+  exceptions and retained jobs, rejection/reuse, jobs and diagnostic memory
+  ceilings, real invalid-handle output failure, GC marking/cyclic finalization,
+  and cancellation teardown. Persistent OS allocation refusal is host-only;
+  guest diagnostic exhaustion uses the runtime's memory ceiling. The quiet
+  boot passed the kernel teardown test before commands; pre/post boot totals
+  were 31/34 passed and zero failed. The screenshot showed the returned shell
+  and intentional invariant diagnostic. Disposable images and named-pipe VM
+  helpers were used, and the owned VM was stopped after extraction.
+
+The guest consumer and three libraries returned through `/home` match the
+checkout's build byte for byte:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| jsaccepttest | 121144 | `b10589a743b139340b5f8c3d278c1f0c0b9f321a09d52173c571f39ef390635b` |
+| libjs.so | 4521208 | `2a19576a70357459099e2b3f87e1de30aee82cbc00f9c3783fee13afb439499f` |
+| libmath.so | 150400 | `9e488810d9e45876bbb3095029e75f4c6188025ea2a17c552ce5a718299e1434` |
+| libos64.so | 789240 | `fbfbf8b3978faf89507643c35acaf48b47700c29e671d304ad8c0c75c27430b1` |
+
+This validation image installs the optional consumer and matching libraries;
+the standard root-image inventory still awaits I1, including licence delivery.
+J2's measured stack headroom, production defaults and floating-point scheduling
+acceptance remain separate. No new P5 execution was performed in this packet.
