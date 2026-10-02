@@ -10,8 +10,9 @@ LIBJS_FLAGS := $(LIBOS64_CFLAGS) -O2 -std=gnu11 -fvisibility=hidden -fno-builtin
     -I$(CURDIR)/libmath/include -I$(CURDIR)/libjs/port/compat \
     -I$(CURDIR)/libjs/port -I$(CURDIR)/libjs/include \
     -isystem $(LIBJS_GENERATED) -DCONFIG_VERSION=\"2026-06-04\"
-# Unused callback arguments, signed loop comparisons and partial aggregate
-# initializers occur in the pinned upstream core. These exceptions stay there.
+# Unused callback arguments, signed loop comparisons, partial aggregate
+# initializers and the JSON switch's intentional fallthrough occur in the
+# pinned upstream core. These warning exceptions stay there.
 LIBJS_UPSTREAM_WARNINGS := -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-implicit-fallthrough
 
 $(LIBJS_GENERATED)/.prepared: $(wildcard libjs/upstream/* libjs/patches/*.patch) libjs/manifest.json ../tools/js_prepare.py
