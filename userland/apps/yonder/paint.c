@@ -373,6 +373,13 @@ static void paint_box(void *ctx, const flow_box_t *b)
             fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, b->style->background);
         return;
     default:
+        // An inline-block (or inline-flex, inline-grid) is two boxes of one
+        // element: the atom on its line, which paints the element's frame
+        // where the line is painted, and its content box inside it, which
+        // must not paint it again — a translucent background or border laid
+        // twice is twice as opaque (Quinn, #202).
+        if (b->parent != NULL && b->parent->kind == FLOW_BOX_ATOMIC && b->parent->node == b->node)
+            return;
         frame(p, b);
         return;
     }

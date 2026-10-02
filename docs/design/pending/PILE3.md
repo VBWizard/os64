@@ -271,6 +271,13 @@ coverage is c, over a backdrop B, CSS asks `a*c*G + (1 - a*c)*B`; the
 copy gives `a*(c*G + (1 - c)*B) + (1 - a)*B`, which is the same. Groups
 nest on a small stack (`GlassGroups`).
 
+**An element is framed once.** An inline-block (or inline-flex, inline-grid,
+a button) is two boxes of one element — the atom on its line and its
+content box inside — and both used to paint the element's background,
+borders and picture: invisible while everything was opaque, twice as
+opaque once it is not (Quinn, #202). The atom paints the frame; the
+content box under an atom of its own element does not.
+
 **libos64 gained two alpha verbs**: `os64_draw_fill_rect_alpha` and
 `os64_text_draw_alpha`, with `os64_draw_blend`'s rounding — the text
 one scales each glyph's coverage by the ink's alpha.
@@ -288,7 +295,9 @@ inline-block left unstacked; `opacity: 0` opening nothing. One style dump
 changed by rule: a translucent background keeps its alpha in or out of
 the flow (`bg=#000000/128`). `tools/test_yonder_cases.inc`: translucent
 fill and text reach the verbs with their alpha; a group recorded open,
-painted, closed at 128; nested groups; a group out of view opening empty.
+painted, closed at 128; nested groups; a group out of view opening empty;
+an inline-block, inline-flex and inline-grid's translucent background
+laid once.
 libgarb's `@supports` page now finds `opacity: 0.5` supported. In the
 guest, a fixture of stripes under an `rgba` veil with half-black text, an
 `opacity: 0.5` card holding a green box, an in-flow `opacity: 0.35` block

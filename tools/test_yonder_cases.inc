@@ -212,6 +212,23 @@ static void paint_cases(void)
                     "fill 0 0 200 20 #00ff00\n"
                     "text \"a\" 0 14 #101010\n"
                     "end group 128\n");
+    // An inline-block, inline-flex or inline-grid is an atom on its line and
+    // a content box inside it, one element: its translucent background is
+    // laid ONCE, by the atom, or 0.5 would land as 0.75 (Quinn, #202).
+    static const char *const kInlineContainers[] = {"inline-block", "inline-flex",
+                                                    "inline-grid"};
+    for (size_t k = 0; k < sizeof(kInlineContainers) / sizeof(kInlineContainers[0]); k++) {
+        char html[256];
+        snprintf(html, sizeof(html),
+                 "<!doctype html><style>body { margin: 0 } span { display: %s; width: 40px;"
+                 " height: 40px; background: rgba(255, 0, 0, 0.5) }</style><span></span>",
+                 kInlineContainers[k]);
+        paint_page_case("an inline container's translucent frame is painted once", html, 200,
+                        (os64_gui_rect_t){0, 0, 200, 100}, true,
+                        "fill 0 0 200 100 #fefefe\n"
+                        "fill 0 0 40 40 #ff0000/128\n");
+    }
+
     // Groups nest, each laid over what was under it when it opened, and a
     // group none of which shows opens empty: the far one at 520, cut to a
     // view that ends at 100, has no height.
