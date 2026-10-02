@@ -1,8 +1,9 @@
 # JavaScript embedding library
 
-R2's core slice implements runtime construction/destruction, ABI-checked context
+R2's two slices implement runtime construction/destruction, ABI-checked context
 access, serialized class-ID allocation, bounded source evaluation, controlled
-Promise jobs, execute-and-drain, diagnostics and sticky cancellation. Native
+Promise jobs, execute-and-drain, diagnostics, sticky cancellation, bounded file
+loading, selected output bindings and copied arguments. Native
 hosts register capabilities through the borrowed context using the pinned
 QuickJS API. Creation removes SharedArrayBuffer exposure and grants no host
 output, arguments, filesystem, networking or process functions.
@@ -18,10 +19,10 @@ application addresses.
 Read CONTRACT.md before implementing a consumer and port/README.md for the
 adapter's accounting, headers and diagnostic formats. Upstream originals stay
 byte-identical; generated copies receive the hash-checked manifest patch series.
-`exports.map` publishes 186 engine symbols and eight runtime symbols, with
-adapter/compiler helpers private. File loading, output and argument installers
-are declared in the full contract but are not exported by this slice. The
-remaining R2 helpers, C1 runner, image/licence installation and independent
+`exports.map` publishes 186 engine symbols and eleven runtime symbols, with
+adapter/compiler helpers private. The two R2 slices provide the complete
+standalone embedding interface. Their review/merge, Opus's C1 runner integration,
+image/licence installation and independent
 validation are tracked in JAVASCRIPT_TASKS.md.
 
 Checks:
@@ -30,7 +31,10 @@ Checks:
   cross-built engine and M1 maths, an ASan engine build, ASan/UBSan wrapper and
   support fixtures, normal-exit leak checks, allocation-failure sweeps, clock
   failures/deadlines, native bindings/finalizers, Promise checkpoints, class
-  allocation across threads and cross-thread cancellation. Fatal fixtures
+  allocation across threads, cross-thread cancellation, owned input cleanup,
+  EOF probes before buffer growth and memory-budget boundary cases,
+  partial output writes, transactional property/handle publication, copied
+  arguments and installer failure sweeps. Fatal fixtures
   verify the full JSFA badge through a host exit hook.
 - `tools/test_js_port_target.sh`: strict target core and binding example,
   import/export and ELF audits, a symbol-only core link with trap dependencies,

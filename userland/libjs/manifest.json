@@ -101,5 +101,5 @@
       "reason": "Fix context GC unlinking, global construction failure, lazy-global cleanup and consuming Proxy installation failure."
     }
   ],
-  "configuration_scope": "Atomics-disabled, stack-checked target engine and standalone runtime core; file/output/argument helpers and runner are tracked in JAVASCRIPT_TASKS.md"
+  "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
 }

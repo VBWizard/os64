@@ -25,8 +25,8 @@ plan, without assigning a new contributor or claiming work has started.
 | R0 runtime contract | **Merged** | [PR #189](https://github.com/VBWizard/os64/pull/189), merge `a426386d`: reviewed public header, lifecycle/capability contract, examples, pinned QuickJS foundation. R0 delivered the interface; R2 records implementation. |
 | M1 maths library | **Merged** | [PR #191](https://github.com/VBWizard/os64/pull/191), merge `3b509e8b`. R1 now links against its real shared library. Numerical acceptance belongs to M1; the R2 core fixture supplies combined guest engine evidence. |
 | R1 target adapter/core | **Merged** | [PR #192](https://github.com/VBWizard/os64/pull/192), merge `ef43d227`: strict core/userland builds, real libmath/libos64 linkage, target symbol/header/ELF/relink audits, 675 sanitized host checks and 437 cross-core host checks pass. R1 itself did not run a guest; the R2 core fixture now exercises the combined library. |
-| R2 runtime implementation | **In progress** | Core slice implemented on `codex/js-runtime-core`: lifecycle/ABI checks, bounded evaluation, native context/class registration, cancellation, diagnostics, Promise jobs/checkpoints and shared-buffer suppression. Validation is recorded in libjs/VALIDATION.md. File/output/argument helpers remain; the core slice needs review and merge. |
-| C1 runner | **Pending** | Thin `js` executable, command grammar/usage, arguments, diagnostics and exit mapping. Uses R0's contract; end-to-end tests need R2 and M1. |
+| R2 runtime implementation | **In review** | Two slices: core [PR #194](https://github.com/VBWizard/os64/pull/194), `codex/js-runtime-core`; file/output/argument helpers [PR #195](https://github.com/VBWizard/os64/pull/195), stacked `codex/js-runtime-helpers`. The eleven-operation embedding interface is implemented; validation is recorded in libjs/VALIDATION.md. Both slices need review and merge. |
+| C1 runner | **In progress** | Opus owns the runner and split its work in two. Chris reports the groundwork is complete; final integration is waiting for R2. Command grammar/usage, diagnostics and exit mapping belong to C1; end-to-end acceptance still needs R2 and M1. |
 | V1 independent validation | **Pending** | Consumer capability/failure/ownership tests and selected upstream cases; execution needs M1/R2/C1. |
 | I1 shared integration | **Pending** | Real shared-library dependency/link audits, build/image and licence installation, combined strict build and QEMU acceptance. Depends on M1/R2/C1 and V1 evidence. |
 | D0 DOM design | **Merged** | Reviewed [DOM.md](DOM.md), delivered with [PR #190](https://github.com/VBWizard/os64/pull/190). Design completion is separate from browser scripting implementation. |
@@ -41,18 +41,19 @@ plan, without assigning a new contributor or claiming work has started.
 The DOM slice definitions and detailed acceptance cases belong to
 [DOM.md](DOM.md); this table tracks their place in the overall campaign.
 The implementation and validation evidence for libjs belongs to
-[VALIDATION.md](../../../userland/libjs/VALIDATION.md). The core guest fixture
-does not complete J1/J2: those gates also require the
-remaining R2 helpers, runner and shared integration.
+[VALIDATION.md](../../../userland/libjs/VALIDATION.md). The library fixtures
+do not complete J1/J2: those gates also require accepted R2 slices, the runner,
+independent validation and shared integration.
 
 Next steps:
 
-1. Implement R2 against the reviewed contract; R0, R1 and M1 are merged.
-   Review and merge the core slice, then implement the reusable bounded-file,
-   output and argument helpers. Promise processing and cancellation are included
-   in the core because queued jobs retain the original evaluation budget. Use
-   the real maths library for target/guest evidence.
-2. Deliver C1, independent V1 validation, and I1 integration to establish J1/J2.
+1. Accept R2 against the reviewed contract; R0, R1 and M1 are merged.
+   Review and merge the core and stacked bounded-file/output/argument helpers
+   in that order. Promise processing and cancellation belong to the core because
+   queued jobs retain the original evaluation budget. Both slices use the real
+   maths library for target/guest evidence.
+2. Hand the complete R2 interface to Opus for C1 integration, then deliver
+   independent V1 validation and I1 integration to establish J1/J2.
 3. Track Fable's D2 onward alongside the standalone work; J3/J4 require their
    own browser acceptance evidence.
 
@@ -84,7 +85,7 @@ Next steps:
 | M1 | Opus | Maths source import, private compatibility layer, shared library, maths tests, and port documentation. | MATH.md interface confirmed with runtime owner. Can run alongside R0 and R1. |
 | R1 | Runtime owner | Pinned QuickJS import and private C adaptation for allocation, strings, dates, formatting, compiler support, and selected features. | R0 for public integration. Compile work can proceed before M1; production guest link needs M1. |
 | R2 | Runtime owner | Runtime lifecycle, limits, job processing, library-owned input/output helpers, and capability registration implementation. | R0 and R1; M1 for guest validation. |
-| C1 | Chris, if he wants it | Thin runner executable, usage documentation, and command-line integration cases. | R0 contract frozen. End-to-end completion needs R2 and M1. |
+| C1 | Opus | Thin runner executable, usage documentation, and command-line integration cases. Groundwork is complete per Chris; final integration waits for R2. | R0 contract frozen. End-to-end completion needs R2 and M1. |
 | V1 | Fable or another independent reviewer | Consumer-level validation of capability boundaries, failure behaviour, and fixture coverage. | R0 for test design; M1/R2/C1 for execution. Coordinate test-file ownership before writing. |
 | I1 | Runtime owner as integration coordinator | Shared build/image registration, final dependency checks, combined strict build and QEMU evidence. | M1, R2, C1, and V1 evidence. |
 | D0 | Fable | DOM.md covering mutable libhtml, document/wrapper lifetime, retired storage, parser handoff, and browser event scheduling. | This design and the existing browser libraries. Design runs alongside M1/R1; reviewed completion gates J3, not the runner. |
@@ -352,11 +353,30 @@ Review and merge are separate from implementation/validation completion.
 The core slice passes 475 target-core host checks, 2,539 sanitized-engine host
 checks and 280 checks in os64/QEMU; details and library hashes are in VALIDATION.md.
 
-The remaining R2 slice owns `run_file`, `install_output` and `install_args`,
+There are two R2 implementation slices. The core is published in
+[PR #194](https://github.com/VBWizard/os64/pull/194) at `45cae4fc`. The helpers
+are isolated in `.worktrees/js-runtime-helpers`, branch
+`codex/js-runtime-helpers`, based directly on that core commit. Their PR base
+is the core branch so its review diff contains the helper changes.
+The helper slice is published in [PR #195](https://github.com/VBWizard/os64/pull/195)
+at `6344e1d7`. Merge the core first, then retarget the helper PR to `userland`.
+
+The second slice implements `run_file`, `install_output` and `install_args`,
 including bounded input/close failure, output conversion/write failure, copied
-arguments, installer flags and setup-state checks. The declarations already
-exist, but those symbols are not exported until implemented. C1 can use the
-core header for planning; the complete runner needs those helpers. Production
-limit defaults remain J2 work, rather than adopting the fixtures' development
-budgets without measurements. D2-D4 can proceed independently; the D5 binding
+arguments, installer flags and setup-state checks. The shared library exports
+all eleven declared embedding operations. Opus can integrate C1 against this
+stack; both R2 slices require review and merge before acceptance. C1 is not
+implemented or modified by the runtime slice.
+The combined core/helper fixtures pass 822 target-engine host checks, 3,014
+sanitized-engine host checks and 395 os64/QEMU checks, with zero failures.
+The first helper review's combined-output transaction finding is corrected:
+selected properties are staged/restored and the borrowed handle commits after
+installation succeeds. The second review's unnecessary file-buffer growth at
+EOF is corrected: an extra-byte probe precedes expansion, with tight-budget
+boundary, probe failure/cancellation and owned-input cleanup coverage.
+The updated PR requires re-review; core/helper review
+acceptance remains separate from the recorded implementation evidence.
+
+Production limit defaults remain J2 work, rather than adopting the fixtures'
+development budgets without measurements. D2-D4 can proceed independently; the D5 binding
 join and later browser turn/reclamation APIs remain separate acceptance gates.

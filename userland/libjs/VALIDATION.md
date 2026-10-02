@@ -222,3 +222,137 @@ suite, complete interrupt-coverage audit, browser integration test or J1/J2
 acceptance. Production limits remain unselected. Structured line/column data
 remains unavailable, and stack overflow remains an ordinary engine exception
 because no reliable wrapper-owned stack-failure signal is exposed.
+
+## R2 helper slice evidence, 2026-10-02
+
+Worktree `.worktrees/js-runtime-helpers`, branch `codex/js-runtime-helpers`,
+stacked on core commit `45cae4fc` in PR #194. This adds `run_file`,
+`install_output` and `install_args`; the shared library now exports eleven
+embedding operations plus the 186 engine symbols. There is no C1 runner change.
+
+- Strict explicit guest-consumer build and root `make -j8`: PASS. Normal image
+  installation and application placements are unchanged by the helper slice.
+- Target/ELF/dependency/relink audit: PASS, 32 maths and 22 os64 imports with
+  real libmath/libos64 dependencies. The core's own inventory remains 32 maths
+  and 18 os64 imports. Header/manifest checks and shell syntax: PASS.
+- Maintained host suite: PASS, **642 checks** with the actual target engine and
+  M1 maths; **2,784 checks** with ASan on the engine. Both retain ASan/UBSan on
+  the wrapper/support fixtures, enabled normal-exit LeakSanitizer and zero live
+  fixture allocations. Both intentional fatal modes retain their expected JSFA
+  badge. The original core cases run along with the helper cases.
+- Added cases cover copied UTF-8 arguments, empty arguments, invalid masks and
+  pointers/counts, installer repetition and post-evaluation refusal, native
+  helper re-entry, selected names and existing console-member preservation,
+  embedded-NUL conversion, partial/zero/error writes, conversion exceptions and
+  deadlines, fixed-property installation errors, avoiding a console getter,
+  constructor-independent installer allocation-failure sweeps, argument memory
+  ceilings, short/empty/exact/oversized file reads, file-buffer allocation and
+  memory-ceiling failures, cancellation during loading, owned close on failure,
+  first read/close error precedence, loading before the deadline, BUSY without
+  opening input, file exceptions/reuse, and late deadline-overflow refusal
+  preserving the previous completed turn's state. The named os64 close errors
+  exercised here are NOT_COMMITTED (`-3`) and DEFERRED (`-5`).
+
+QEMU VM 56205 used this worktree's normal ISO and disposable root/home copies,
+with the explicit consumer, libjs and QuickJS licence inserted into the root
+copy as in the core run. The existing kernel teardown test passed after a
+45-second quiet boot, before consumer commands. The consumer passed **319
+checks, zero failures, 38 native calls**, including real os64 file creation,
+12,000-byte file loading/growth, Promise draining, empty/missing input, copied
+arguments, selected output names, borrowed output lifetime and byte comparison
+of output containing an embedded NUL. The captured full status was JSRT
+(`0x4A535254`); both intentional fatal modes returned JSFA (`0x4A534641`).
+
+After guest `cp` and `sync`, returned library copies matched the build files
+byte for byte:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| libjs.so | 4,510,744 | `022cf37e1d0bc5a7e2a11379df6221a967c327902ae6835a906a8536601c7c49` |
+| libmath.so | 150,408 | `d1a505d69987c9c22f1348cabae50a6db7703133e704ee6e8e58dbb90b99dfc8` |
+| libos64.so | 789,264 | `8004c9774c27eb6ad51c24fa4fa1ab09f8bbc245d64322a88b02912492951bd8` |
+
+The screenshot showed the expected invariant diagnostics and returned shell
+prompt; VM 56205 was stopped after extraction. These fixtures validate the R2
+library handoff; Opus's C1 integration, independent V1 validation, normal
+image/licence registration and J1/J2 acceptance remain separate gates.
+
+## PR #195 output transaction correction, 2026-10-02
+
+The P2 finding was reproduced at `9af1f2a9`: a failing combined install replaced
+or leaked `print`, and console-only retry retained that unselected capability.
+The initial target-core negative control reported seven failed assertions,
+including the resulting unwanted output bytes. Those shared regressions now
+pass on both host profiles and inside os64.
+
+The correction stages selected functions/atoms and retains complete property
+descriptors before publishing. Failed attempts restore prior data/accessor
+values and attributes or remove newly published names. The borrowed handle and
+installation flag commit after publication succeeds; a function seen by a
+property trap before commit cannot write. A trap or allocation refusal that
+prevents restoration retires the runtime rather than leaving it reusable.
+
+- Final maintained host suites: **698 target-engine checks** and **2,890
+  sanitized-engine checks**, zero failures and zero live fixture allocations,
+  with normal-exit LeakSanitizer enabled. The allocation sweep also checks
+  absence of staged capabilities on failure. The sanitized accessor-publication
+  sweep checks restoration of getter identity and property attributes; the
+  target arena profile has no native allocations for that replacement fixture.
+  A separate native exotic-property case proves that staged callbacks cannot
+  write and that rollback refusal retires the runtime.
+- Strict explicit consumer and root builds, target import/export/ELF/dependency
+  and relink checks, and contract/manifest checks: PASS. The published symbol
+  inventory and required libraries are unchanged by this correction.
+- QEMU VM 56206: **365 checks, zero failures, 41 native calls**, with JSRT
+  (`0x4A535254`) and both intended JSFA (`0x4A534641`) fatal statuses. Shared
+  transaction cases cover non-object/accessor console rejection, fixed `log`
+  and `print` targets, original print identity/attributes, getter non-execution,
+  preserved console log and console-only retries. The kernel teardown test
+  passed before consumer commands after a quiet boot; the VM was stopped after
+  screenshot and file extraction.
+
+All three returned guest library files matched the current build byte for byte.
+The corrected libjs is 4,520,760 bytes with SHA-256
+`00e6b3eb776b2cd0bff140ff7788ed3bbb2ccdad3b4a22ef0763d81312844b98`.
+libmath and libos64 retain the sizes and hashes in the helper-slice table above.
+These are scratch-image runtime observations; C1, independent validation and
+normal image integration remain separate work.
+
+## PR #195 EOF-before-growth correction, 2026-10-02
+
+The second P2 finding was reproduced at `2fd6007d` with two failed assertions:
+4,095- and 8,191-byte sources evaluated successfully through the buffer API
+under measured memory budgets, but file evaluation exhausted those budgets.
+The old reader grew at the buffer boundary before checking for EOF.
+
+The reader now probes one byte at an intermediate buffer boundary. EOF keeps
+the existing terminated-source capacity; extra input is retained after growth.
+Probe read errors preserve their service code, cancellation is observed before
+growth, and these outcomes still close the owned input. The wrapper's direct
+file-to-evaluation handoff is distinct from the engine's compiler allocations.
+
+- Maintained host suites: **822 target-engine checks** and **3,014
+  sanitized-engine checks**, zero failures and zero live fixture allocations,
+  with normal-exit LeakSanitizer enabled and expected fatal badges. Cases cover
+  both boundary sizes, equivalent buffer evaluation, one byte beyond each
+  boundary, probe read/close error precedence, cancellation on a positive/EOF
+  probe, short reads preserving the probed byte, and growth-allocation refusal
+  after the extra byte is confirmed. Construction accounting is measured for
+  each engine profile. Extra-byte sources can fit the sanitized profile's
+  budget; the actual guest profile reaches its memory limit after growth.
+- Strict explicit consumer and root builds, header/manifest checks, target
+  import/export/ELF/dependency and relink audits: PASS. Symbol inventories and
+  dependencies are unchanged.
+- QEMU VM 56207: **395 checks, zero failures, 41 native calls**. Both boundary
+  sizes pass file and buffer evaluation under the same measured budget; the
+  additional-byte fixtures return LIMIT/MEMORY. The full JSRT success status
+  and both intentional JSFA fatal statuses match expectations. The kernel
+  teardown test passed after a quiet boot before consumer commands. The
+  screenshot showed the returned shell and expected invariant diagnostics;
+  the VM was stopped after extraction.
+
+Guest copies of all three libraries matched the current build byte for byte.
+libjs is 4,521,008 bytes with SHA-256
+`5e5be11499c7bf5f12bacb20c94ea0002595f4b31142823f561f38bf1160e5ba`.
+libmath and libos64 retain the sizes and hashes in the helper-slice table above.
+C1, independent validation and normal image integration remain separate gates.

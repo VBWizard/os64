@@ -1,5 +1,6 @@
 #include "os64/js_engine.h"
 #include "os64/mem.h"
+#include "os64/io.h"
 #include "os64/proc.h"
 #include "os64/str.h"
 #include "allocator.h"
@@ -26,6 +27,8 @@ struct os64_js_runtime {
     os64_js_limit_t failed_limit;
     unsigned cancelled;
     bool active, turn, source_truncated;
+    bool evaluated, output_installed, args_installed;
+    int32_t output_handle;
     char source_name[OS64_JS_SOURCE_NAME_CAP];
 };
 
@@ -363,6 +366,34 @@ JS_PUBLIC JSClassID os64_js_class_id(JSClassID *slot)
     return id;
 }
 
+/* Both buffer and file entry points own an accounted, terminated source here.
+ * Loading and source copying finish before the execution deadline starts. */
+static os64_js_status_t evaluate(os64_js_runtime_t *runtime, const char *source,
+                                size_t length, const char *source_name,
+                                os64_js_outcome_t *outcome)
+{
+    int64_t now = os64_micros();
+    if (now < 0) latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, now);
+    else if (runtime->limits.execution_ms * 1000 > (uint64_t)(INT64_MAX - now))
+        return OS64_JS_BAD_ARGUMENT;
+    else {
+        runtime->jobs = 0;
+        runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), source_name);
+        runtime->deadline = now + (int64_t)(runtime->limits.execution_ms * 1000);
+        runtime->turn = true;
+        runtime->evaluated = true;
+        JSValue value = JS_Eval(runtime->context, source, length, source_name, JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(value)) {
+            JSValue error = JS_GetException(runtime->context);
+            outcome->status = OS64_JS_EXCEPTION;
+            diagnostic(runtime, error, outcome);
+            JS_FreeValue(runtime->context, error);
+        }
+        JS_FreeValue(runtime->context, value);
+    }
+    return OS64_JS_OK;
+}
+
 JS_PUBLIC os64_js_status_t os64_js_eval(os64_js_runtime_t *runtime,
                                       const void *source, size_t length,
                                       const char *source_name,
@@ -387,26 +418,10 @@ JS_PUBLIC os64_js_status_t os64_js_eval(os64_js_runtime_t *runtime,
     if (copy == NULL) return leave(runtime, outcome);
     if (length != 0) os64_memcpy(copy, source, length);
     copy[length] = 0;
-    int64_t now = os64_micros();
-    if (now < 0) latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, now);
-    else if (runtime->limits.execution_ms * 1000 > (uint64_t)(INT64_MAX - now)) {
-        js_free_rt(runtime->engine, copy);
-        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "deadline is not representable");
-    } else {
-        runtime->jobs = 0;
-        runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), source_name);
-        runtime->deadline = now + (int64_t)(runtime->limits.execution_ms * 1000);
-        runtime->turn = true;
-        JSValue value = JS_Eval(runtime->context, copy, length, source_name, JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(value)) {
-            JSValue error = JS_GetException(runtime->context);
-            outcome->status = OS64_JS_EXCEPTION;
-            diagnostic(runtime, error, outcome);
-            JS_FreeValue(runtime->context, error);
-        }
-        JS_FreeValue(runtime->context, value);
-    }
+    result = evaluate(runtime, copy, length, source_name, outcome);
     js_free_rt(runtime->engine, copy);
+    if (result == OS64_JS_BAD_ARGUMENT)
+        return refuse(runtime, outcome, result, "deadline is not representable");
     return leave(runtime, outcome);
 }
 
@@ -444,18 +459,344 @@ JS_PUBLIC os64_js_status_t os64_js_drain_jobs(os64_js_runtime_t *runtime,
     return leave(runtime, outcome);
 }
 
-JS_PUBLIC os64_js_status_t os64_js_run(os64_js_runtime_t *runtime,
-                                     const void *source, size_t length,
-                                     const char *source_name,
-                                     os64_js_outcome_t *outcome)
+static os64_js_status_t complete_run(os64_js_runtime_t *runtime,
+                                    os64_js_status_t result,
+                                    os64_js_outcome_t *outcome)
 {
-    os64_js_status_t result = os64_js_eval(runtime, source, length, source_name, outcome);
     if (result != OS64_JS_OK) return result;
     while (outcome->jobs_pending) {
         result = os64_js_drain_jobs(runtime, UINT64_MAX, outcome);
         if (result != OS64_JS_OK && result != OS64_JS_MORE_JOBS) return result;
     }
     return result;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_run(os64_js_runtime_t *runtime,
+                                     const void *source, size_t length,
+                                     const char *source_name,
+                                     os64_js_outcome_t *outcome)
+{
+    return complete_run(runtime, os64_js_eval(runtime, source, length, source_name, outcome), outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_run_file(os64_js_runtime_t *runtime,
+                                          const char *path,
+                                          os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (path == NULL || path[0] == 0)
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "file path is required");
+    if (runtime->turn || JS_IsJobPending(runtime->engine))
+        return refuse(runtime, outcome, OS64_JS_BUSY, "the previous turn has queued jobs");
+    if (observe(runtime)) return leave(runtime, outcome);
+    int64_t opened = os64_open(path, "r");
+    if (opened < 0) {
+        latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, opened);
+        runtime->jobs = 0;
+        runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), path);
+        return leave(runtime, outcome);
+    }
+    size_t capacity = runtime->limits.source_bytes < 4096
+        ? runtime->limits.source_bytes + 1 : 4096;
+    size_t length = 0;
+    char *source = js_malloc_rt(runtime->engine, capacity);
+    while (source != NULL && !observe(runtime)) {
+        if (length == runtime->limits.source_bytes) {
+            char extra;
+            int64_t n = os64_read((int32_t)opened, &extra, 1);
+            if (n < 0) latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, n);
+            else if (n != 0) latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_SOURCE, 0);
+            break;
+        }
+        if (length + 1 == capacity) {
+            /* The current buffer can terminate an exact-boundary file. Probe
+             * for more input before charging a larger allocation. */
+            char extra;
+            int64_t n = os64_read((int32_t)opened, &extra, 1);
+            if (n < 0) { latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, n); break; }
+            if (n == 0) break;
+            if (n != 1) {
+                latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, 0);
+                break;
+            }
+            if (observe(runtime)) break;
+            size_t ceiling = runtime->limits.source_bytes + 1;
+            size_t next = capacity > ceiling / 2 ? ceiling : capacity * 2;
+            char *grown = js_realloc_rt(runtime->engine, source, next);
+            if (grown == NULL) break;
+            source = grown;
+            capacity = next;
+            source[length++] = extra;
+            continue;
+        }
+        size_t room = capacity - length - 1;
+        int64_t n = os64_read((int32_t)opened, source + length, room);
+        if (n < 0) { latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, n); break; }
+        if (n == 0) break;
+        if ((uint64_t)n > room) {
+            latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, 0);
+            break;
+        }
+        length += (size_t)n;
+    }
+    observe(runtime);
+    /* Close consumes this owned input even after a read/allocation refusal.
+     * A nonzero close verdict is failure; keep the first failure. */
+    int64_t closed = os64_close((int32_t)opened);
+    if (closed != 0) latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, closed);
+    if (source != NULL && !observe(runtime)) {
+        source[length] = 0;
+        result = evaluate(runtime, source, length, path, outcome);
+    }
+    js_free_rt(runtime->engine, source);
+    if (result == OS64_JS_BAD_ARGUMENT)
+        return refuse(runtime, outcome, result, "deadline is not representable");
+    if (runtime->failure != OS64_JS_OK && !runtime->turn) {
+        runtime->jobs = 0;
+        runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), path);
+    }
+    return complete_run(runtime, leave(runtime, outcome), outcome);
+}
+
+static bool write_output(os64_js_runtime_t *runtime, const char *bytes, size_t size)
+{
+    while (size != 0 && !observe(runtime)) {
+        int64_t n = os64_write(runtime->output_handle, bytes, size);
+        if (n <= 0 || (uint64_t)n > size) {
+            latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, n < 0 ? n : 0);
+            return false;
+        }
+        bytes += (size_t)n;
+        size -= (size_t)n;
+    }
+    return !observe(runtime);
+}
+
+static JSValue output_call(JSContext *context, JSValueConst self, int argc,
+                           JSValueConst *args)
+{
+    (void)self;
+    os64_js_runtime_t *runtime = JS_GetContextOpaque(context);
+    if (!runtime->active || !runtime->turn)
+        jsport_fatal("output outside a runtime turn", __FILE__, __LINE__);
+    /* Property traps can see a staged function before setup commits. It must
+     * not use a borrowed handle until the entire installation succeeds. */
+    if (!runtime->output_installed)
+        return JS_ThrowTypeError(context, "output installation is incomplete");
+    for (int i = 0; i < argc && !observe(runtime); i++) {
+        size_t length;
+        const char *text = JS_ToCStringLen(context, &length, args[i]);
+        if (text == NULL) return JS_EXCEPTION;
+        bool written = (i == 0 || write_output(runtime, " ", 1)) &&
+                       write_output(runtime, text, length);
+        JS_FreeCString(context, text);
+        if (!written) break;
+    }
+    if (write_output(runtime, "\n", 1)) return JS_UNDEFINED;
+    return JS_ThrowInternalError(context, "host output failed");
+}
+
+/* Setup may reach a host-supplied console object's property traps. Give it
+ * a guarded budget without marking the first source evaluation as started. */
+static os64_js_status_t setup(os64_js_runtime_t *runtime, bool installed,
+                             os64_js_outcome_t *outcome, const char *name)
+{
+    if (runtime->evaluated || installed || runtime->turn || JS_IsJobPending(runtime->engine))
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "installer requires unused idle setup");
+    int64_t now = os64_micros();
+    if (now < 0) latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, now);
+    else if (runtime->limits.execution_ms * 1000 > (uint64_t)(INT64_MAX - now))
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "deadline is not representable");
+    else {
+        runtime->deadline = now + (int64_t)(runtime->limits.execution_ms * 1000);
+        runtime->turn = true;
+        runtime->jobs = 0;
+        runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), name);
+    }
+    return OS64_JS_OK;
+}
+
+static void setup_exception(os64_js_runtime_t *runtime, os64_js_outcome_t *outcome)
+{
+    JSValue error = JS_GetException(runtime->context);
+    outcome->status = OS64_JS_EXCEPTION;
+    diagnostic(runtime, error, outcome);
+    JS_FreeValue(runtime->context, error);
+}
+
+typedef struct {
+    JSValue object, value;
+    JSAtom name;
+    JSPropertyDescriptor previous;
+    int present;
+    bool attempted;
+} OutputProperty;
+
+static void free_descriptor(JSContext *context, JSPropertyDescriptor *descriptor)
+{
+    JS_FreeValue(context, descriptor->value);
+    JS_FreeValue(context, descriptor->getter);
+    JS_FreeValue(context, descriptor->setter);
+}
+
+/* Retain the complete descriptor before changing it. Validation and function
+ * allocation precede publication; no console getter is used for discovery. */
+static int prepare_output_property(JSContext *context, OutputProperty *property,
+                                   JSValueConst object, const char *name, JSValue value)
+{
+    property->object = object;
+    property->value = value;
+    if (JS_IsException(value)) return -1;
+    property->name = JS_NewAtom(context, name);
+    if (property->name == JS_ATOM_NULL) return -1;
+    property->present = JS_GetOwnProperty(context, &property->previous, object, property->name);
+    if (property->present < 0) return -1;
+    if (property->present > 0 && !(property->previous.flags & JS_PROP_CONFIGURABLE)) {
+        JS_ThrowTypeError(context, "output property is not configurable");
+        return -1;
+    }
+    if (property->present == 0) {
+        int extensible = JS_IsExtensible(context, object);
+        if (extensible < 0) return -1;
+        if (!extensible) {
+            JS_ThrowTypeError(context, "output object is not extensible");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void restore_output_property(os64_js_runtime_t *runtime, OutputProperty *property)
+{
+    JSContext *context = runtime->context;
+    int restored;
+    if (property->present == 0) {
+        restored = JS_DeleteProperty(context, property->object, property->name, JS_PROP_THROW);
+    } else {
+        const JSPropertyDescriptor *old = &property->previous;
+        int flags = (old->flags & JS_PROP_C_W_E) | JS_PROP_HAS_CONFIGURABLE |
+                    JS_PROP_HAS_ENUMERABLE | JS_PROP_THROW;
+        if (old->flags & JS_PROP_GETSET) flags |= JS_PROP_HAS_GET | JS_PROP_HAS_SET;
+        else flags |= JS_PROP_HAS_VALUE | JS_PROP_HAS_WRITABLE;
+        restored = JS_DefineProperty(context, property->object, property->name,
+                                    old->value, old->getter, old->setter, flags);
+    }
+    if (restored <= 0) {
+        discard_exception(context);
+        observe(runtime);
+        /* A host-supplied trap or allocation refusal may prevent restoration.
+         * Retire instead of exposing a reusable partially installed runtime. */
+        latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, 0);
+    }
+}
+
+JS_PUBLIC os64_js_status_t os64_js_install_output(os64_js_runtime_t *runtime,
+                                                int32_t handle, uint32_t names,
+                                                os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    const uint32_t valid = OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG;
+    if (handle < 0 || names == 0 || (names & ~valid) != 0)
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "output handle and selected names are required");
+    result = setup(runtime, runtime->output_installed, outcome, "<output setup>");
+    if (result != OS64_JS_OK) return result;
+    if (observe(runtime)) return leave(runtime, outcome);
+    JSContext *context = runtime->context;
+    JSValue global = JS_GetGlobalObject(context), console = JS_UNDEFINED;
+    JSPropertyDescriptor console_descriptor = {0};
+    OutputProperty properties[3] = {0};
+    size_t count = 0;
+    int console_present = 0;
+    int installed = 0;
+    if (names & OS64_JS_OUTPUT_CONSOLE_LOG) {
+        JSAtom name = JS_NewAtom(context, "console");
+        console_present = name == JS_ATOM_NULL ? -1 : JS_GetOwnProperty(context, &console_descriptor, global, name);
+        JS_FreeAtom(context, name);
+        if (console_present == 0) console = JS_NewObject(context);
+        else if (console_present > 0) {
+            if (JS_IsObject(console_descriptor.value)) console = JS_DupValue(context, console_descriptor.value);
+            else console = JS_ThrowTypeError(context, "console must be an own data object");
+        }
+        if (console_present < 0 || JS_IsException(console)) installed = -1;
+        else installed = prepare_output_property(context, &properties[count++], console, "log",
+                          JS_NewCFunction(context, output_call, "log", 1));
+    }
+    if (installed >= 0 && (names & OS64_JS_OUTPUT_PRINT))
+        installed = prepare_output_property(context, &properties[count++], global, "print",
+                      JS_NewCFunction(context, output_call, "print", 1));
+    if (installed >= 0 && (names & OS64_JS_OUTPUT_CONSOLE_LOG) && console_present == 0)
+        installed = prepare_output_property(context, &properties[count++], global, "console",
+                      JS_DupValue(context, console));
+    for (size_t i = 0; installed >= 0 && i < count && !observe(runtime); i++) {
+        OutputProperty *property = &properties[i];
+        /* DefineProperty may change the value before a later flags allocation
+         * fails, so an attempted write also needs restoration on refusal. */
+        property->attempted = true;
+        installed = JS_DefineProperty(context, property->object, property->name, property->value,
+                      JS_UNDEFINED, JS_UNDEFINED, JS_PROP_C_W_E | JS_PROP_HAS_VALUE |
+                      JS_PROP_HAS_CONFIGURABLE | JS_PROP_HAS_WRITABLE | JS_PROP_HAS_ENUMERABLE | JS_PROP_THROW);
+        if (installed == 0) installed = -1;
+    }
+    if (installed < 0 || observe(runtime)) {
+        JSValue error = JS_GetException(context);
+        for (size_t i = count; i != 0; i--)
+            if (properties[i-1].attempted) restore_output_property(runtime, &properties[i-1]);
+        if (installed < 0) {
+            outcome->status = OS64_JS_EXCEPTION;
+            diagnostic(runtime, error, outcome);
+        }
+        JS_FreeValue(context, error);
+    } else {
+        runtime->output_handle = handle;
+        runtime->output_installed = true;
+    }
+    for (size_t i = 0; i < count; i++) {
+        OutputProperty *property = &properties[i];
+        if (property->present > 0) free_descriptor(context, &property->previous);
+        JS_FreeAtom(context, property->name);
+        JS_FreeValue(context, property->value);
+    }
+    if (console_present > 0) free_descriptor(context, &console_descriptor);
+    JS_FreeValue(context, console);
+    JS_FreeValue(context, global);
+    return leave(runtime, outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_install_args(os64_js_runtime_t *runtime,
+                                              size_t count, const char *const *args,
+                                              os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (count > UINT32_MAX || (count != 0 && args == NULL))
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "argument array is invalid");
+    for (size_t i = 0; i < count; i++)
+        if (args[i] == NULL)
+            return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "argument entries must be strings");
+    result = setup(runtime, runtime->args_installed, outcome, "<argument setup>");
+    if (result != OS64_JS_OK) return result;
+    if (observe(runtime)) return leave(runtime, outcome);
+    JSContext *context = runtime->context;
+    JSValue array = JS_NewArray(context);
+    int installed = JS_IsException(array) ? -1 : 0;
+    for (size_t i = 0; installed >= 0 && i < count && !observe(runtime); i++) {
+        JSValue text = JS_NewString(context, args[i]);
+        if (JS_IsException(text)) installed = -1;
+        else installed = JS_DefinePropertyValueUint32(context, array, (uint32_t)i, text,
+                                                      JS_PROP_C_W_E | JS_PROP_THROW);
+    }
+    if (installed >= 0 && !observe(runtime)) {
+        JSValue global = JS_GetGlobalObject(context);
+        installed = JS_DefinePropertyValueStr(context, global, "scriptArgs", array, JS_PROP_C_W_E | JS_PROP_THROW);
+        array = JS_UNDEFINED;
+        JS_FreeValue(context, global);
+    }
+    JS_FreeValue(context, array);
+    if (installed < 0) setup_exception(runtime, outcome);
+    else if (!observe(runtime)) runtime->args_installed = true;
+    return leave(runtime, outcome);
 }
 
 JS_PUBLIC void os64_js_cancel(os64_js_runtime_t *runtime)

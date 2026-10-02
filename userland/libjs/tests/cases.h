@@ -121,6 +121,24 @@ static os64_js_runtime_t *create_fixture(const os64_js_config_t *config)
     return runtime;
 }
 
+/* Measure retained target allocations rather than assuming the host and guest
+ * heaps or the instrumented engine have the same construction footprint.
+ * Reserve the input buffer, compiler source storage and small parsing work. */
+static os64_js_config_t file_boundary_config(size_t capacity)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    if (runtime) {
+        os64_js_outcome_t outcome;
+        JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+        JSMemoryUsage usage;
+        JS_ComputeMemoryUsage(JS_GetRuntime(context), &usage);
+        config.limits.memory_bytes = os64_malloc_size(runtime) + usage.malloc_size + 2 * capacity + 2048;
+        os64_js_destroy(runtime);
+    }
+    return config;
+}
+
 static os64_js_status_t execute_fixture(os64_js_runtime_t *runtime, const char *source,
                                        os64_js_outcome_t *outcome)
 {
@@ -286,5 +304,151 @@ static void limit_cases(void)
 static void runtime_cases(void)
 {
     lifecycle_cases(); job_cases(); limit_cases();
+}
+
+static JSValue native_install(JSContext *context, JSValueConst self, int argc,
+                               JSValueConst *args)
+{
+    (void)self; (void)argc; (void)args;
+    os64_js_outcome_t nested;
+    bool guarded = os64_js_install_args(fixture_runtime, 0, NULL, &nested) == OS64_JS_BUSY &&
+        os64_js_install_output(fixture_runtime, 1, OS64_JS_OUTPUT_PRINT, &nested) == OS64_JS_BUSY &&
+        os64_js_run_file(fixture_runtime, "nested.js", &nested) == OS64_JS_BUSY;
+    return JS_NewBool(context, guarded);
+}
+
+/* The driver owns this output handle and verifies its returned bytes. */
+static void helper_cases(int32_t handle)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    if (!runtime) return;
+    os64_js_outcome_t outcome;
+    const char *bad[] = {"ok", NULL};
+    check(os64_js_install_args(runtime, 2, bad, &outcome) == OS64_JS_BAD_ARGUMENT &&
+          os64_js_install_args(runtime, 1, NULL, &outcome) == OS64_JS_BAD_ARGUMENT &&
+          os64_js_install_args(runtime, SIZE_MAX, bad, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "invalid arguments rejected before setup");
+    check(os64_js_install_output(runtime, handle, 0, &outcome) == OS64_JS_BAD_ARGUMENT &&
+          os64_js_install_output(runtime, handle, 4, &outcome) == OS64_JS_BAD_ARGUMENT &&
+          os64_js_install_output(runtime, -1, OS64_JS_OUTPUT_PRINT, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "invalid output handle or names rejected");
+    char mutable[] = "before";
+    const char *args[] = {"script.js", "caf\xc3\xa9", mutable};
+    check(os64_js_install_args(runtime, 3, args, &outcome) == OS64_JS_OK, "argument installer succeeds");
+    mutable[0] = 'X';
+    check(os64_js_install_args(runtime, 0, NULL, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "argument installer is installed once");
+    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG,
+          &outcome) == OS64_JS_OK, "selected output names installed");
+    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_PRINT, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "output installer is installed once");
+    fixture_runtime = runtime;
+    check(install_native(runtime, "setupGuarded", native_install) >= 0, "installer guard callback installed");
+    check(execute_fixture(runtime,
+          "if(scriptArgs.length!==3 || scriptArgs[0]!=='script.js' || scriptArgs[1]!=='caf\u00e9' ||"
+          "scriptArgs[2]!=='before' || !setupGuarded()) throw Error('argument copy or reentry');"
+          "print('hi',7,'a\\0b');console.log();console.log({toString(){return 'converted'}})",
+          &outcome) == OS64_JS_OK, "copied UTF-8 arguments, reentry and output conversion");
+    os64_js_destroy(runtime); fixture_runtime = NULL;
+
+    runtime = create_fixture(&config);
+    if (!runtime) return;
+    JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+    JSValue global = JS_GetGlobalObject(context), console = JS_NewObject(context);
+    check(JS_SetPropertyStr(context, console, "keep", JS_NewInt32(context, 42)) >= 0 &&
+          JS_SetPropertyStr(context, global, "console", console) >= 0,
+          "host console with another member installed");
+    JS_FreeValue(context, global);
+    check(install_native(runtime, "print", native_twice) >= 0, "host print capability installed");
+    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_CONSOLE_LOG, &outcome) == OS64_JS_OK &&
+          os64_js_install_args(runtime, 0, NULL, &outcome) == OS64_JS_OK, "console-only and empty argument setup");
+    check(execute_fixture(runtime,
+          "if(print(21)!==42 || console.keep!==42 || scriptArgs.length!==0)throw Error('unselected name changed')",
+          &outcome) == OS64_JS_OK, "unselected print and other console members preserved");
+    os64_js_destroy(runtime);
+
+    runtime = create_fixture(&config);
+    if (!runtime) return;
+    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_PRINT, &outcome) == OS64_JS_OK,
+          "print-only setup");
+    check(execute_fixture(runtime, "if(typeof console!=='undefined')throw Error('console granted')",
+          &outcome) == OS64_JS_OK, "print-only leaves console absent");
+    check(os64_js_install_args(runtime, 0, NULL, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "unused installer refused after evaluation");
+    os64_js_destroy(runtime);
+}
+
+static unsigned transaction_getters;
+static JSValue transaction_console_getter(JSContext *context, JSValueConst self,
+                                          int argc, JSValueConst *args)
+{
+    (void)self; (void)argc; (void)args;
+    transaction_getters++;
+    return JS_NewObject(context);
+}
+
+static void output_transaction_cases(int32_t handle)
+{
+    os64_js_config_t config = fixture_config();
+    const uint32_t both = OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG;
+    for (unsigned mode = 0; mode < 5; mode++) {
+        os64_js_runtime_t *runtime = create_fixture(&config);
+        if (!runtime) return;
+        os64_js_outcome_t outcome;
+        JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+        JSValue global = JS_GetGlobalObject(context), console = JS_NewObject(context);
+        JSValue original = JS_NewCFunction(context, native_twice, "host print", 1);
+        if (mode != 0 && mode != 4)
+            check(JS_DefinePropertyValueStr(context, global, "print", JS_DupValue(context, original),
+                  mode == 3 ? 0 : JS_PROP_CONFIGURABLE) > 0, "transaction original print installed");
+        if (mode == 0 || mode == 1) {
+            check(JS_DefinePropertyValueStr(context, global, "console", JS_NewInt32(context, 9),
+                  JS_PROP_C_W_E) > 0, "transaction invalid console installed");
+        } else if (mode == 4) {
+            JSAtom name = JS_NewAtom(context, "console");
+            check(JS_DefinePropertyGetSet(context, global, name,
+                  JS_NewCFunction(context, transaction_console_getter, "get console", 0),
+                  JS_UNDEFINED, JS_PROP_CONFIGURABLE) > 0, "transaction console accessor installed");
+            JS_FreeAtom(context, name);
+        } else {
+            check(JS_DefinePropertyValueStr(context, console, "log", JS_NewInt32(context, 17),
+                  mode == 2 ? 0 : JS_PROP_C_W_E) > 0 &&
+                  JS_DefinePropertyValueStr(context, global, "console", JS_DupValue(context, console),
+                  JS_PROP_C_W_E) > 0, "transaction original console log installed");
+        }
+        check(os64_js_install_output(runtime, handle, both, &outcome) == OS64_JS_EXCEPTION,
+              "combined output failure is a script exception");
+        JSAtom print_name = JS_NewAtom(context, "print");
+        JSPropertyDescriptor descriptor = {0};
+        int present = JS_GetOwnProperty(context, &descriptor, global, print_name);
+        check(mode == 0 || mode == 4 ? present == 0 : present == 1 && JS_SameValue(context, descriptor.value, original) &&
+              descriptor.flags == (mode == 3 ? 0 : JS_PROP_CONFIGURABLE),
+              "combined failure restores print presence, identity and attributes");
+        if (present > 0) {
+            JS_FreeValue(context, descriptor.value); JS_FreeValue(context, descriptor.getter);
+            JS_FreeValue(context, descriptor.setter);
+        }
+        JS_FreeAtom(context, print_name);
+        if (mode == 2 || mode == 3) {
+            JSValue log = JS_GetPropertyStr(context, console, "log");
+            int32_t value = 0;
+            check(JS_ToInt32(context, &value, log) == 0 && value == 17,
+                  "combined failure leaves original console log unchanged");
+            JS_FreeValue(context, log);
+        }
+        if (mode == 4) check(transaction_getters == 0, "transaction does not invoke console accessor");
+        JSAtom console_name = JS_NewAtom(context, "console");
+        check(JS_DeleteProperty(context, global, console_name, JS_PROP_THROW) > 0,
+              "transaction fixture clears failed console target");
+        JS_FreeAtom(context, console_name);
+        check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_CONSOLE_LOG, &outcome) == OS64_JS_OK,
+              "console-only retry succeeds after combined exception");
+        check(execute_fixture(runtime, mode == 0 || mode == 4 ? "if(typeof print!=='undefined')throw Error('print leaked')" :
+              "if(print(21)!==42)throw Error('host print replaced')", &outcome) == OS64_JS_OK,
+              "console-only retry does not retain an unselected print capability");
+        JS_FreeValue(context, original); JS_FreeValue(context, console); JS_FreeValue(context, global);
+        os64_js_destroy(runtime);
+    }
 }
 #endif
