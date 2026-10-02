@@ -25,7 +25,7 @@ plan, without assigning a new contributor or claiming work has started.
 | R0 runtime contract | **Merged** | [PR #189](https://github.com/VBWizard/os64/pull/189), merge `a426386d`: reviewed public header, lifecycle/capability contract, examples, pinned QuickJS foundation. R0 delivered the interface; R2 records implementation. |
 | M1 maths library | **Merged** | [PR #191](https://github.com/VBWizard/os64/pull/191), merge `3b509e8b`. R1 now links against its real shared library. Numerical acceptance belongs to M1; the R2 core fixture supplies combined guest engine evidence. |
 | R1 target adapter/core | **Merged** | [PR #192](https://github.com/VBWizard/os64/pull/192), merge `ef43d227`: strict core/userland builds, real libmath/libos64 linkage, target symbol/header/ELF/relink audits, 675 sanitized host checks and 437 cross-core host checks pass. R1 itself did not run a guest; the R2 core fixture now exercises the combined library. |
-| R2 runtime implementation | **In review** | Two slices: core [PR #194](https://github.com/VBWizard/os64/pull/194), `codex/js-runtime-core`; file/output/argument helpers on stacked `codex/js-runtime-helpers`. The eleven-operation embedding interface is implemented; validation is recorded in libjs/VALIDATION.md. Both slices need review and merge. |
+| R2 runtime implementation | **In review** | Two slices: core [PR #194](https://github.com/VBWizard/os64/pull/194), `codex/js-runtime-core`; file/output/argument helpers [PR #195](https://github.com/VBWizard/os64/pull/195), stacked `codex/js-runtime-helpers`. The eleven-operation embedding interface is implemented; validation is recorded in libjs/VALIDATION.md. Both slices need review and merge. |
 | C1 runner | **In progress** | Opus owns the runner and split its work in two. Chris reports the groundwork is complete; final integration is waiting for R2. Command grammar/usage, diagnostics and exit mapping belong to C1; end-to-end acceptance still needs R2 and M1. |
 | V1 independent validation | **Pending** | Consumer capability/failure/ownership tests and selected upstream cases; execution needs M1/R2/C1. |
 | I1 shared integration | **Pending** | Real shared-library dependency/link audits, build/image and licence installation, combined strict build and QEMU acceptance. Depends on M1/R2/C1 and V1 evidence. |
@@ -358,6 +358,8 @@ There are two R2 implementation slices. The core is published in
 are isolated in `.worktrees/js-runtime-helpers`, branch
 `codex/js-runtime-helpers`, based directly on that core commit. Their PR base
 is the core branch so its review diff contains the helper changes.
+The helper slice is published in [PR #195](https://github.com/VBWizard/os64/pull/195)
+at `6344e1d7`. Merge the core first, then retarget the helper PR to `userland`.
 
 The second slice implements `run_file`, `install_output` and `install_args`,
 including bounded input/close failure, output conversion/write failure, copied
