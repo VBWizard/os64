@@ -1,14 +1,57 @@
 # JavaScript library and runner work plan
 
-Status: work assignments and foundation/target-adapter progress, updated 2026-10-01. The product decisions are in
+Status: running work checklist, updated 2026-10-02. The product decisions are in
 [JAVASCRIPT.md](JAVASCRIPT.md). This plan separates work so Chris can assign
-packets to Opus and Fable without overlapping ownership. No collaborator has
-been contacted or started by this plan. `libjs`, `js`, and `libmath` are working
-names; paths below are proposed implementation destinations.
+packets to Opus and Fable without overlapping ownership. The status table records
+completed work, review dependencies, and remaining acceptance gates. It is updated
+at implementation, review, merge, and validation handoffs; statuses are a dated
+snapshot rather than a live GitHub feed. `libjs`, `js`, and `libmath` are working
+names.
 
 The standalone milestone has no dependency on a browser DOM implementation.
 Keep Yonder integration in its later campaign. A proven need for a kernel
 change is discussed separately rather than being absorbed into these tasks.
+
+## Progress checklist
+
+"Merged" records an accepted deliverable on `userland`; it does not imply that
+later consumers or guest acceptance gates have passed. "In review" records an
+implemented slice in an open PR. Pending rows record work still needed by this
+plan, without assigning a new contributor or claiming work has started.
+
+| Work | Status on 2026-10-02 | Evidence and remaining work |
+| --- | --- | --- |
+| libos64 prerequisites | **Merged** | [PR #188](https://github.com/VBWizard/os64/pull/188), merge `6a6c08c1`: allocation-size query and four string/memory verbs, host coverage and guest test registration. |
+| R0 runtime contract | **Merged** | [PR #189](https://github.com/VBWizard/os64/pull/189), merge `a426386d`: reviewed public header, lifecycle/capability contract, examples, pinned QuickJS foundation. Runtime operations are declarations; implementation is R2. |
+| M1 maths library | **In review** | [PR #191](https://github.com/VBWizard/os64/pull/191), current head `1f509d1b`. Review/merge and real libjs integration remain. Numerical acceptance belongs to M1. |
+| R1 target adapter/core | **In review** | [PR #192](https://github.com/VBWizard/os64/pull/192), implementation `e53bde19`: strict core/userland builds, target symbol/ELF audits, 675 sanitized host checks and 437 cross-core host checks pass. Production maths linkage and guest execution remain unproven. |
+| R2 runtime implementation | **Pending** | Implement lifecycle, capability registration, limits/cancellation, outcomes, file/output helpers, Promise processing and compatibility checks. R0/R1 are prerequisites; guest validation needs M1. |
+| C1 runner | **Pending** | Thin `js` executable, command grammar/usage, arguments, diagnostics and exit mapping. Uses R0's contract; end-to-end tests need R2 and M1. |
+| V1 independent validation | **Pending** | Consumer capability/failure/ownership tests and selected upstream cases; execution needs M1/R2/C1. |
+| I1 shared integration | **Pending** | Real shared-library dependency/link audits, build/image and licence installation, combined strict build and QEMU acceptance. Depends on M1/R2/C1 and V1 evidence. |
+| D0 DOM design | **Merged** | Reviewed [DOM.md](DOM.md), delivered with [PR #190](https://github.com/VBWizard/os64/pull/190). Design completion is separate from browser scripting implementation. |
+| D1 libhtml mutation core | **Merged** | [PR #190](https://github.com/VBWizard/os64/pull/190), merge `5c7d62ce`. Mutation/lifetime verbs and maintained tests; `parse_fragment` belongs to D2. |
+| D2 scripting-enabled parsing | **Pending** | Stop/resume/abandon, fragment parsing and serialization; acceptance in DOM.md. |
+| D3 page rebuild/control state | **Pending** | Stale-model gate, durable form edits, script setters and failure-safe rebuilds. |
+| D4 parser stream handoff | **Pending** | Yonder parser-thread handoff and responsive streaming; no script execution in this slice. |
+| D5 DOM binding/first page fixture | **Pending** | Bindings and J3: visible text change, stable references/form edits and safe navigation teardown. Needs the runtime and earlier DOM slices. |
+| D6 detached-subtree reclamation | **Pending** | Reclaim unheld detached trees and prove bounded long-running churn. |
+| D7 browser event loop | **Pending** | Tasks/checkpoints, timers/events, script order and J4 evidence. |
+
+The DOM slice definitions and detailed acceptance cases belong to
+[DOM.md](DOM.md); this table tracks their place in the overall campaign.
+The implementation and validation evidence for libjs belongs to
+[VALIDATION.md](../../../userland/libjs/VALIDATION.md). No J1/J2 guest milestone
+is marked complete by the current host checks.
+
+Next steps:
+
+1. Address M1/R1 review results and record their accepted merge commits.
+2. Implement R2 against the reviewed contract and integrate the real maths
+   library for target/guest evidence.
+3. Deliver C1, independent V1 validation, and I1 integration to establish J1/J2.
+4. Track Fable's D2 onward alongside the standalone work; J3/J4 require their
+   own browser acceptance evidence.
 
 ## Agreed standalone scope
 
@@ -42,6 +85,7 @@ change is discussed separately rather than being absorbed into these tasks.
 | V1 | Fable or another independent reviewer | Consumer-level validation of capability boundaries, failure behaviour, and fixture coverage. | R0 for test design; M1/R2/C1 for execution. Coordinate test-file ownership before writing. |
 | I1 | Runtime owner as integration coordinator | Shared build/image registration, final dependency checks, combined strict build and QEMU evidence. | M1, R2, C1, and V1 evidence. |
 | D0 | Fable | DOM.md covering mutable libhtml, document/wrapper lifetime, retired storage, parser handoff, and browser event scheduling. | This design and the existing browser libraries. Design runs alongside M1/R1; reviewed completion gates J3, not the runner. |
+| D1–D7 | Browser owner; coordinate with Fable | Mutable-document, parser, presentation, bindings and event-loop slices defined in DOM.md. | D0; detailed dependencies and acceptance belong to DOM.md. D1 is merged; later slices remain separate from the standalone milestone. |
 
 The runtime owner is the coordinating implementer working with Chris in this
 thread. Review of a packet is separate from ownership of its implementation.
@@ -232,18 +276,6 @@ integration verifies symbol visibility, the shipped library identity, licence
 installation, the strict build, and guest execution. Pushes and merges follow
 Chris's explicit authorization; this plan does not authorize either.
 
-## First actions
-
-1. Confirm the proposed maths ABI between M1 and the runtime owner. Opus can
-   then start the maths port from MATH.md without browser work.
-2. Turn the agreed six-operation API into R0's runtime header and precise
-   ownership and failure contracts, with Fable reviewing the consumer boundary.
-   Use QuickJS directly for bindings. This runs alongside the maths port.
-3. Begin R1 after source and adaptation decisions are recorded. C1 starts when
-   the R0 contract is stable, and V1 can design fixtures against that contract.
-4. Fable develops D0 alongside M1/R1. Integrate guest evidence and review DOM.md
-   before advancing to Yonder's mutable-document implementation campaign.
-
 ## Foundation slice 2026-10-01
 
 The runtime owner began in `.worktrees/js-runtime-foundation` on branch
@@ -268,7 +300,8 @@ documents were copied into that checkout without changing the main checkout.
   libc/libm and does not establish os64 execution.
 
 Validation and remaining work are recorded in `userland/libjs/VALIDATION.md`.
-M1, R2, C1, V1, and D0 remain separate work packets. The library prerequisite
+M1, R2, C1, V1, and the DOM slices are separate work packets. Current statuses
+are recorded in the progress checklist above. The library prerequisite
 commit is on `codex/js-support`; the interface and source preparation are stacked
 above it on `codex/js-runtime-foundation`. PRs #188 and #189 merged these
 foundation branches; they are retained for reference.
@@ -292,3 +325,6 @@ The maintained target/host fixtures are `tools/test_js_port_target.*`,
 R1, alongside its own component docs. Exact evidence and limitations live in
 `userland/libjs/VALIDATION.md`. This slice does not implement R2, C1, or D1 and
 does not establish guest JavaScript or numerical conformance.
+
+Implementation commit `e53bde19` is published for review in
+[PR #192](https://github.com/VBWizard/os64/pull/192).
