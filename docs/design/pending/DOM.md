@@ -782,7 +782,7 @@ a record whose form had left the control's tree, which resurrects the
 same way when the form comes back. That is replaced by the same rule:
 cleared at the mutation, never re-validated by a reader.
 
-**Codex, 2026-10-01, on D1 (PR #190): four findings, three taken.**
+**Codex, 2026-10-01, on D1 (PR #190): five findings over two rounds, four taken.**
 
 | Finding | What it was | What was done |
 |---|---|---|
@@ -790,6 +790,7 @@ cleared at the mutation, never re-validated by a reader.
 | P1 | A pin's number was its slot, so a stale release could let go of the pin that took the slot next | A number is slot and serial, unique in the program; a stale one, or another document's, ends the program |
 | P2 | The document's own element or doctype cannot be re-inserted under it | Not changed: it is the standard's rule and Chrome's behaviour, now stated in `html.h` and held by a case |
 | P2 | Moving a template cleared the record of a control and form that sat together in its contents | The form-owner walks stay out of template contents, which are a tree of their own |
+| P2 (second round) | Inserting an empty fragment changed nothing and still moved the version, which is every snapshot's signal to rebuild | It answers OK and the version stays |
 
 ## What was checked, and what was not
 

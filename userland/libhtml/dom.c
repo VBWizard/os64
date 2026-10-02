@@ -302,6 +302,10 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
     int64_t verdict = may_insert(d, parent, node, before, false);
     if (verdict)
         return verdict;
+    /* An empty fragment brings nothing: the tree is as it was, so the
+     * version says so and no snapshot is rebuilt for it. */
+    if (node->kind == FRAGMENT && !node->first_child)
+        return OS64_HTML_OK;
     if (before == node)
         before = node->next;
     d->version++;

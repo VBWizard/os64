@@ -195,7 +195,8 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
 
 /* `insert` puts `node` under `parent` before `before` (NULL: last), moving
  * it from wherever it was; a FRAGMENT gives up its children in its place and
- * is left empty. `replace` puts `node` where `old` is. `remove` unlinks a
+ * is left empty (inserting an empty one changes nothing, and the version
+ * does not move). `replace` puts `node` where `old` is. `remove` unlinks a
  * node that has a parent and is a no-op on one that has none. Adjacent text
  * is not merged. None of the three allocates.
  *

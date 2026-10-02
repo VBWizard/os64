@@ -367,6 +367,12 @@ static void t_structure(void)
     check(os64_html_insert(doc, body, c, c) == OS64_HTML_OK, "a node before itself stays put");
     expect_tree(body, "<body>[<p id='c'>[\"two\"]<div id='a'>[<span id='b'>[\"one\"]]<!--note-->]", "stayed");
     check(os64_html_version(doc) > v, "a change moved the version");
+    // An empty fragment is allowed anywhere a fragment is and brings nothing.
+    v = os64_html_version(doc);
+    HNode *nothing = os64_html_create_fragment(doc, NULL);
+    check(os64_html_insert(doc, body, nothing, a) == OS64_HTML_OK && os64_html_version(doc) == v,
+          "inserting an empty fragment changes nothing, the version included");
+    expect_tree(body, "<body>[<p id='c'>[\"two\"]<div id='a'>[<span id='b'>[\"one\"]]<!--note-->]", "as it was");
 
     // A move across parents; text is not merged with its new neighbour.
     HNode *t1 = os64_html_create_text(doc, "A", 1, NULL), *t2 = os64_html_create_text(doc, "B", 1, NULL);
@@ -1585,6 +1591,7 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             snprintf(did, sizeof(did), "insert");
             want = r_may(document, (int)(2 * max_depth + 2), y, x, z, false);
             got = os64_html_insert(doc, y->real, x->real, z ? z->real : NULL);
+            changes = !(x->kind == OS64_HTML_FRAGMENT && x->nkids == 0);
             if (!want)
                 r_insert(y, x, z);
             break;
