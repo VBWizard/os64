@@ -769,6 +769,52 @@ static void form_owners(void)
                      NULL);
     }
 }
+static char *tree_text(os64_html_document_t *doc)
+{
+    char *dump = NULL;
+    size_t len = 0, visited = 0;
+    FILE *out = open_memstream(&dump, &len);
+    if (!out)
+        exit(2);
+    dump_nodes(out, doc->document->first_child, 0, &visited, doc->node_count);
+    fclose(out);
+    return dump;
+}
+/* `</p>` and `</br>` met in foreign content are handed to the HTML rules. At
+ * an integration point there is nothing foreign left to pop first, and the
+ * token must still be handed over: these once went round until the work
+ * budget ran out. The trees are Chrome's. */
+static void integration_end_tags(void)
+{
+    static const struct {
+        const char *markup, *tree;
+    } cases[] = {
+        {"<svg><foreignObject></p>x",
+         "| <html>\n|   <head>\n|   <body>\n|     <svg svg>\n|       <svg foreignObject>\n"
+         "|         <p>\n|         \"x\"\n"},
+        {"<svg><desc></br>x",
+         "| <html>\n|   <head>\n|   <body>\n|     <svg svg>\n|       <svg desc>\n"
+         "|         <br>\n|         \"x\"\n"},
+        {"<svg><title></p>y",
+         "| <html>\n|   <head>\n|   <body>\n|     <svg svg>\n|       <svg title>\n"
+         "|         <p>\n|         \"y\"\n"},
+        {"<math><mi></p>x",
+         "| <html>\n|   <head>\n|   <body>\n|     <math math>\n|       <math mi>\n"
+         "|         <p>\n|         \"x\"\n"},
+    };
+    os64_html_options_t opt = os64_html_options_default();
+    opt.charset = "utf-8";
+    for (size_t i = 0; i < H_ARRAY(cases); i++) {
+        const unsigned char *data = (const unsigned char *)cases[i].markup;
+        os64_html_document_t *doc = parse_raw(data, strlen(cases[i].markup), 0, &opt);
+        char *got = tree_text(doc);
+        check(doc && !doc->refusal && doc->work < 1000 && strcmp(got, cases[i].tree) == 0,
+              "an end tag at an integration point: %s", cases[i].markup);
+        free(got);
+        os64_html_document_free(doc);
+        safety_case(data, strlen(cases[i].markup));
+    }
+}
 static void stress(void)
 {
     char *data = malloc(1024 * 1024);
@@ -849,6 +895,7 @@ int main(int argc, char **argv)
     if (argc > 1 && strcmp(argv[1], "--checks") == 0) {
         encoding_exports();
         form_owners();
+        integration_end_tags();
         printf("html checks: %zu run, %zu failed\n", checks_run, checks_failed);
         return checks_failed ? 1 : 0;
     }

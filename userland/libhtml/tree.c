@@ -2264,7 +2264,10 @@ static bool foreign(os64_html_parser_t *p, HToken *t)
                     break;
                 pop(p);
             }
-            return true;
+            /* By the HTML rules, said here and not left to h_tree: with an
+             * integration point as the current node it would send an end tag
+             * back to this function, which has nothing left to pop. */
+            return process(p, t, p->mode);
         }
         if (!ascii_ci_equal(h_current(p)->name, t->name.s))
             h_error(p, "unexpected-end-tag");
