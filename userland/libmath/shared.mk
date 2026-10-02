@@ -74,8 +74,11 @@ $(OBJ)/math/libmath/%.c.o: libmath/%.c libmath/shared.mk $(MATH_ALLTYPES)
 	$(CC) $(MATH_FLAGS) $(if $(findstring /upstream/,$<),$(MATH_UPSTREAM_FLAGS)) $(MATH_FILE_FLAGS) -c $< -o $@
 
 # No $(LIBOS64_SO) on this line, and that absence is the design (see the top).
+# sources.mk IS on it: removing a routine from the list creates no newer
+# object, so without it the old library — removed code and all — would look
+# up to date.
 $(LIBMATH_SO): $(MATH_OBJS) libmath/exports.map link/lib.ld \
-        tools/app_bases.py libmath/shared.mk
+        tools/app_bases.py libmath/shared.mk libmath/sources.mk
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBMATH_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
 	    $(SHARED_LIB_LDFLAGS) -soname libmath.so --no-undefined --no-as-needed \
