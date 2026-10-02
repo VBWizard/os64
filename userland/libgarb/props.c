@@ -128,8 +128,7 @@ static const char *const kDisplay[] = {
 // Values this grammar reads but no slice lays out as written yet (GARB.md's
 // pile 2, POSITION.md's slices). Read, so the cascade keeps them; not
 // SUPPORTED, so @supports tells a page to use the fallback it wrote for
-// exactly this. flow-root is laid out as a block; an opacity between none
-// and all as all. `contents` is not here:
+// exactly this. flow-root is laid out as a block. `contents` is not here:
 // libflow gives such an element no box and flows its children into its
 // parent, which is what it says. The list is for the layouts a page writes
 // a fallback for — asks for one and is handed another — and each joins it
@@ -145,17 +144,7 @@ static const struct {
 bool garb_set_approximated(const garb_set_t *set)
 {
     const garb_val_t *v = &set->value;
-    if (v->kind == GARB_V_WIDE)
-        return false;
-    // 0 is not painted and 1 is painted, both as they say; what is between
-    // needs a blend, and a calc() is not worked out here to know.
-    if (set->prop == GARB_OPACITY) {
-        double all = v->kind == GARB_V_PERCENTAGE ? 100 : 1;
-        return v->kind == GARB_V_CALC ||
-               ((v->kind == GARB_V_NUMBER || v->kind == GARB_V_PERCENTAGE) && v->number > 0 &&
-                v->number < all);
-    }
-    if (v->kind != GARB_V_KEYWORD)
+    if (v->kind == GARB_V_WIDE || v->kind != GARB_V_KEYWORD)
         return false;
     for (size_t k = 0; k < sizeof(kApproximated) / sizeof(kApproximated[0]); k++)
         if (set->prop == kApproximated[k].prop && os64_streq(v->keyword, kApproximated[k].keyword))

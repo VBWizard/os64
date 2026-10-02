@@ -214,6 +214,37 @@ static void scroll_cases(void)
     flow_free(t);
     sheeted_close(&q);
 
+    // Nested: each container reveals the TARGET, not the container inside
+    // it (Quinn, #201 rd2; Firefox moves the outer to 220 across and 300
+    // down). An inner box wider (or taller) than the outer one, holding a
+    // target past the outer's edge, with nothing of its own to scroll.
+    const char *nest[] = {
+        "#o{width:100px;height:100px} #i{position:relative;width:400px;height:100px}"
+        "#t{left:300px;top:0}",
+        "#o{width:100px;height:100px} #i{position:relative;width:100px;height:400px}"
+        "#t{left:0;top:300px}",
+    };
+    for (size_t k = 0; k < sizeof(nest) / sizeof(nest[0]); k++) {
+        char html[512];
+        snprintf(html, sizeof(html),
+                 "<!doctype html><style>body{margin:0} #o,#i{overflow:auto}"
+                 "#t{position:absolute;width:20px;height:20px}%s</style>"
+                 "<div id=o><div id=i><div id=t></div></div></div>",
+                 nest[k]);
+        sheeted_open(&q, html, 400, 600);
+        t = flow_layout(q.doc, q.page, 400, &q.env);
+        const flow_box_t *target = box_with_id(t, q.doc->document, "t");
+        flow_scroll_reveal(t, target);
+        flow_point_t outer = flow_scroll_at(t, 0), inner = flow_scroll_at(t, 1);
+        expect(k == 0 ? "scroll: nested, the outer box reveals the target across"
+                      : "scroll: nested, the outer box reveals the target down",
+               target != NULL && inner.x == 0 && inner.y == 0 &&
+                   (k == 0 ? outer.x == 220 && outer.y == 0 : outer.x == 0 && outer.y == 300),
+               NULL);
+        flow_free(t);
+        sheeted_close(&q);
+    }
+
     // Nested: the inner box's content moves by both.
     sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0}"
                      ".s{overflow:auto} #o{height:100px} #i{height:50px}</style>"

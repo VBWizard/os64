@@ -2592,10 +2592,28 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
 // and, for what a verb draws whole, to the clip the painter hands it (a
 // paint hook is handed no clip; libui's primitives clip only to the canvas).
 
+// The groups open while a page is painted (paint.h): for each, where it is
+// on the glass and a copy of what was there before it painted anything.
+// Laying the group over that copy at its opacity once it has painted is
+// exactly CSS's group compositing — the group G over the backdrop B at
+// alpha a, G's own coverage c: a*c*G + (1 - a*c)*B, and a*(cG + (1-c)B) +
+// (1-a)*B is the same — with no transparent canvas to paint G onto. A group
+// past the deepest kept, or whose copy finds no memory, is painted opaque.
+#define GLASS_GROUPS 32
+
+typedef struct {
+    struct {
+        os64_gui_rect_t at;     // window coordinates; empty for nothing to lay
+        uint32_t *under;
+    } open[GLASS_GROUPS];
+    int32_t depth;              // may pass GLASS_GROUPS; those are not kept
+} GlassGroups;
+
 typedef struct {
     os64_gui_surface_t *surf;
     int32_t dx, dy;             // page -> window
     os64_gui_rect_t clip;       // what is being painted, in window coordinates
+    GlassGroups *groups;
 } Glass;
 
 static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
@@ -2608,12 +2626,57 @@ static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
     return out;
 }
 
+// A colour's top byte is how transparent it is (flow.h): laid over what is
+// there by its alpha.
 static void glass_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
 {
     const Glass *gl = ctx;
     r = on_glass(gl, r);
     if (r.w > 0 && r.h > 0)
-        os64_draw_fill_rect(gl->surf, r, 0xff000000u | colour);
+        os64_draw_fill_rect_alpha(gl->surf, r, 0xff000000u | colour, flow_alpha(colour));
+}
+
+static void glass_group_open(void *ctx, os64_gui_rect_t bounds)
+{
+    const Glass *gl = ctx;
+    GlassGroups *gs = gl->groups;
+    int32_t d = gs->depth++;
+    if (d >= GLASS_GROUPS)
+        return;
+    os64_gui_rect_t at = on_glass(gl, bounds);
+    gs->open[d].at = at;
+    gs->open[d].under = NULL;
+    if (at.w <= 0 || at.h <= 0)
+        return;
+    uint32_t *under = os64_malloc((size_t)at.w * (size_t)at.h * sizeof(uint32_t));
+    if (under == NULL) {
+        gs->open[d].at.w = 0;
+        return;
+    }
+    for (int32_t y = 0; y < at.h; y++)
+        os64_memcpy(under + (size_t)y * (size_t)at.w,
+                    gl->surf->pixels + (size_t)(at.y + y) * gl->surf->pitch_px + (size_t)at.x,
+                    (size_t)at.w * sizeof(uint32_t));
+    gs->open[d].under = under;
+}
+
+// What was under the group goes back over it at 255 - alpha, which leaves
+// the group at alpha over it (os64_draw_blend's mix).
+static void glass_group_close(void *ctx, uint8_t alpha)
+{
+    const Glass *gl = ctx;
+    GlassGroups *gs = gl->groups;
+    int32_t d = --gs->depth;
+    if (d >= GLASS_GROUPS || gs->open[d].under == NULL)
+        return;
+    os64_gui_rect_t at = gs->open[d].at;
+    uint32_t *under = gs->open[d].under;
+    uint32_t keep = (uint32_t)(255 - alpha) << 24;
+    for (size_t k = 0; k < (size_t)at.w * (size_t)at.h; k++)
+        under[k] = keep | (under[k] & 0xffffffu);
+    os64_draw_blend(gl->surf, at.x, at.y, under, (uint32_t)at.w, (uint32_t)at.h, (uint32_t)at.w);
+    os64_free(under);
+    gs->open[d].under = NULL;
 }
 
 // The verbs that draw something whole — a run, a picture — cut it to
@@ -2626,7 +2689,8 @@ static void glass_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseli
     os64_gui_rect_t cut = on_glass(gl, clip);
     if (cut.w <= 0 || cut.h <= 0)
         return;
-    os64_text_draw(b->run, gl->surf, cut, x + gl->dx, baseline + gl->dy, 0xff000000u | colour);
+    os64_text_draw_alpha(b->run, gl->surf, cut, x + gl->dx, baseline + gl->dy,
+                         0xff000000u | colour, flow_alpha(colour));
 }
 
 // A picture behind a box: the box's sheets, or else libpage's list, say
@@ -2824,12 +2888,14 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     os64_gui_rect_t part;
     if (!os64_rect_intersect(w->bounds, g.ui.dirty, &part))
         return;
-    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, part};
+    GlassGroups groups = {.depth = 0};
+    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, part, &groups};
     if (g.page.tree == NULL) {
         os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | PAGE_PAPER);
         return;
     }
-    yonder_verbs_t v = {&gl, glass_fill, glass_text, glass_image, glass_control, glass_backdrop};
+    yonder_verbs_t v = {&gl,          glass_fill,       glass_text,       glass_image,
+                        glass_control, glass_backdrop, glass_group_open, glass_group_close};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, &v);
     box_bars(&gl, view);

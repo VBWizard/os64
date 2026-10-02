@@ -38,6 +38,12 @@ bool os64_rect_intersect(os64_gui_rect_t a, os64_gui_rect_t b,
 
 void os64_draw_fill_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
                          uint32_t color);
+// The same rect laid OVER the canvas at `alpha` of 255: each RGB channel
+// becomes (c * alpha + d * (255 - alpha) + 127) / 255, os64_draw_blend's
+// mix, and the reserved byte 0xFF. 0 leaves the canvas untouched; 255 is
+// os64_draw_fill_rect.
+void os64_draw_fill_rect_alpha(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                               uint32_t color, uint8_t alpha);
 void os64_draw_hline(os64_gui_surface_t *dst, int32_t x, int32_t y,
                      int32_t len, uint32_t color);
 void os64_draw_vline(os64_gui_surface_t *dst, int32_t x, int32_t y,

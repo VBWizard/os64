@@ -61,9 +61,6 @@ typedef struct {
     bool border_color_set[4];
     int32_t border_px[4];       // declared widths in 26.6; style decides if drawn
     bool bolder;
-    // The background colour was written with an alpha below 1, which
-    // `background` holds laid over the paper (xrgb).
-    bool bg_translucent;
 } Spec;
 
 typedef struct {
@@ -300,7 +297,6 @@ static void background(Spec *sp, uint32_t rgb)
 {
     sp->s.has_background = true;
     sp->s.background = rgb;
-    sp->bg_translucent = false;
 }
 
 // ── The initial style, and inheritance ──────────────────────────────────
@@ -1487,15 +1483,13 @@ static int32_t channel(double v)
     return v <= 0 ? 0 : v >= 255 ? 255 : (int32_t)(v + 0.5);
 }
 
-// sRGB with alpha, as XRGB over `under`: what is under a translucent
-// colour is not known here, so it is laid over the page's paper.
-static uint32_t xrgb(garb_color_t k, uint32_t under)
+// sRGB with alpha, as a flow colour (flow.h): its alpha kept, as how
+// transparent it is, for the face to blend over whatever is under it.
+static uint32_t colour_of(garb_color_t k)
 {
     double al = k.a < 0 ? 0 : k.a > 1 ? 1 : k.a;
-    double ur = (under >> 16) & 0xFF, ug = (under >> 8) & 0xFF, ub = under & 0xFF;
-    return (uint32_t)channel(k.r * al + ur * (1 - al)) << 16 |
-           (uint32_t)channel(k.g * al + ug * (1 - al)) << 8 |
-           (uint32_t)channel(k.b * al + ub * (1 - al));
+    return (uint32_t)(255 - channel(al * 255)) << 24 | (uint32_t)channel(k.r) << 16 |
+           (uint32_t)channel(k.g) << 8 | (uint32_t)channel(k.b);
 }
 
 // One keyword of a table, by index; -1 when `v` is none of them.
@@ -1716,7 +1710,6 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_BACKGROUND_COLOR:
         d->has_background = s->has_background;
         d->background = s->background;
-        dst->bg_translucent = src->bg_translucent;
         break;
     case GARB_BACKGROUND_IMAGE:
         d->background_image = s->background_image;
@@ -2111,19 +2104,17 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         if (v->kind == GARB_V_COLOR && v->color.current)
             s->color = a->parent != NULL ? a->parent->color : a->c->env->ink;
         else if (v->kind == GARB_V_COLOR)
-            s->color = xrgb(v->color, a->c->env->paper);
+            s->color = colour_of(v->color);
         break;
     case GARB_BACKGROUND_COLOR:
         if (v->kind != GARB_V_COLOR)
             break;
         if (v->color.current) {
-            s->has_background = true;
+            s->has_background = flow_alpha(s->color) > 0;
             s->background = s->color;
-            sp->bg_translucent = false;
         } else {
             s->has_background = v->color.a > 0;
-            s->background = xrgb(v->color, a->c->env->paper);
-            sp->bg_translucent = v->color.a < 1;
+            s->background = colour_of(v->color);
         }
         break;
     case GARB_BACKGROUND_IMAGE:
@@ -2173,7 +2164,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             break;
         // currentColor is left for finish, which knows the final colour.
         sp->border_color_set[i] = !v->color.current;
-        s->border_color[i] = xrgb(v->color, a->c->env->paper);
+        s->border_color[i] = colour_of(v->color);
         break;
     case GARB_WIDTH: case GARB_HEIGHT: case GARB_MIN_WIDTH: case GARB_MAX_WIDTH:
     case GARB_MIN_HEIGHT: case GARB_MAX_HEIGHT: {
@@ -2571,10 +2562,7 @@ static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset)
 // out as the block it computes to, its float none — and keeps one bit of
 // the display it was given (flow_style_t.specified_inline); a fixed one is
 // in the flow until its slice, and keeps the display the page gave it, or
-// a fixed span in a link would split its paragraph. An out-of-flow box
-// whose own background is translucent draws none: `xrgb` lays the colour
-// over the paper, and a solid grey sheet over a whole page is worse than
-// seeing through an overlay (POSITION.md § What positioning costs).
+// a fixed span in a link would split its paragraph.
 // CSS 2.1 § 9.7's table, and Display 3's blockification: the block-level
 // display an inline-level one becomes, keeping the one bit of the old
 // (flow_style_t.specified_inline). A box that makes none keeps its display.
@@ -2613,10 +2601,8 @@ static void positioning(const Ctx *c, Spec *sp)
     flow_style_t *s = &sp->s;
     if (c->env->static_only)
         s->position = FLOW_POSITION_STATIC;
-    if (!f_out_of_flow(s) || !blockify(s))
-        return;
-    if (sp->bg_translucent)
-        s->has_background = false;
+    if (f_out_of_flow(s))
+        (void)blockify(s);
 }
 
 // `item`: the element's box is its parent's flex or grid item, and is

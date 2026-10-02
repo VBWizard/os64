@@ -350,8 +350,8 @@ struct FBox {
     bool ifc;
     // POSITION.md. `positioned`: a block-level box whose position is not
     // static — but a table's row, group or column, laid out static (booked)
-    // — reached from the positioned list and skipped by every walk of its
-    // tree ancestors. `out_of_flow`: an absolute or fixed one, which no
+    // — whose public box is stacked (flow_box_t.stacked): reached from the
+    // layers and skipped by every walk of its tree ancestors. `out_of_flow`: an absolute or fixed one, which no
     // formatting context holds — laid out once its containing block is
     // finished.
     // `pos`: its entry, which every box that is a containing block has: the

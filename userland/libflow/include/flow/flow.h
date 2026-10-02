@@ -64,6 +64,20 @@ typedef struct {
 // Box sides, in CSS's own order.
 enum { FLOW_TOP = 0, FLOW_RIGHT = 1, FLOW_BOTTOM = 2, FLOW_LEFT = 3 };
 
+// ── Colours ─────────────────────────────────────────────────────────────
+//
+// A COLOUR is 0xTTRRGGBB: sRGB, and in the top byte how TRANSPARENT it is —
+// 0 opaque, 255 not there at all. Transparency rather than alpha so that
+// every plain 0xRRGGBB a face, an attribute or the Rendering chapter writes
+// is the opaque colour it always was; and in the colour itself, not beside
+// it, so that whatever copies a colour — inheritance, `currentColor`, a
+// border or a decoration in its element's colour — copies how translucent
+// it is with it (PILE3.md § The blend).
+static inline uint8_t flow_alpha(uint32_t colour)
+{
+    return (uint8_t)(255 - (colour >> 24));
+}
+
 // ── The computed style ──────────────────────────────────────────────────
 //
 // EVERY FIELD IS ONE CSS PROPERTY'S COMPUTED VALUE, in the property's own
@@ -317,9 +331,9 @@ typedef struct {
     flow_font_style_t font_style;
     flow_unit_t font_size;
 
-    uint32_t color;                 // XRGB
+    uint32_t color;                 // a colour (above)
     bool has_background;            // false = transparent
-    uint32_t background;            // XRGB
+    uint32_t background;            // a colour
     // A picture behind the box from the page's own sheets (CSS Backgrounds
     // 3 § 3): its url() as written, not terminated, and the index in the
     // cascade's input of the sheet it was written in (-1 for a `style`
@@ -340,7 +354,7 @@ typedef struct {
     // so a width here is a width that will be drawn.
     flow_unit_t border_width[4];
     flow_border_style_t border_style[4];
-    uint32_t border_color[4];       // XRGB; `currentColor` resolved
+    uint32_t border_color[4];       // colours; `currentColor` resolved
     flow_length_t width, height;    // AUTO, PX or PERCENT
     // The limits: PX or PERCENT, AUTO for none (`min-*: auto` is none too,
     // outside flex and grid). A percentage on a height limit binds
@@ -385,8 +399,10 @@ typedef struct {
     bool has_z_index;
     int32_t z_index;
     // In thousandths: 1000 is opaque, the initial value. 0 is not painted,
-    // and neither is anything inside it; what is between is painted opaque
-    // until the painter blends (POSITION.md § Booked).
+    // and neither is anything inside it. What is between makes a stacking
+    // context that a face composites WHOLE at this opacity — one GROUP,
+    // not each thing in it (flow_visit_groups) — but for an inline box
+    // and an inline-block, which are painted opaque (PILE3.md § Booked).
     uint16_t opacity;
     // `pointer-events: none` (CSS UI 4 § 5.1), inherited: flow_hit passes
     // through the box to whatever is under it, though a descendant that
@@ -447,7 +463,7 @@ typedef struct {
     os64_text_context_t *text;      // the page context the runs are laid out on
     uint32_t viewport_font_px;      // `medium`; 16 unless the face says otherwise
     flow_generic_t default_generic; // the family a page that names none is drawn in
-    uint32_t ink, link_ink, paper;  // XRGB; the dumps name these, never print them
+    uint32_t ink, link_ink, paper;  // opaque colours; the dumps name these, never print them
     // The page's own sheets, cascaded against this document (garb/cascade.h),
     // or NULL for none: their winners are computed after the Rendering
     // chapter and the presentational hints, which they outrank.
@@ -558,11 +574,18 @@ struct flow_box {
     bool unfinished;                // layout stopped inside it (flow_incomplete)
     // A block-level box whose `position` is not static (a table's row,
     // group or column is laid out static: booked): it stays under its
-    // parent, but it is REACHED FROM THE POSITIONED LIST (flow_positioned),
-    // in paint order, and never through its tree ancestors — their walks
-    // skip it and their overflow rects leave it out, and its clip is what
-    // its containing blocks allow, not its parent (POSITION.md).
+    // parent, but it is `stacked`, and is in the positioned list
+    // (flow_positioned); its tree ancestors' overflow rects leave it out,
+    // and its clip is what its containing blocks allow, not its parent
+    // (POSITION.md).
     bool positioned;
+    // Painted as a layer of its own, in paint order, and never through its
+    // tree ancestors: their walks skip it. A positioned box is; so is a
+    // block-level box in the flow below full opacity, a stacking context
+    // painted whole where CSS 2.1 Appendix E paints a positioned box of
+    // z-index 0 — and that one stays in its parent's overflow rect, clip
+    // and frame, since it has not left the flow.
+    bool stacked;
     // In a `position: fixed` box's subtree, the fixed box included: its
     // rects, clip and baseline are viewport coordinates (above).
     bool fixed;
@@ -656,12 +679,13 @@ flow_point_t flow_scroll_set(flow_tree_t *tree, int32_t i, flow_point_t at);
 // answer, which for an inline-block is the atom on the line and not the
 // container under it.
 int32_t flow_scroller_for(const flow_tree_t *tree, const os64_html_node_t *node);
-// Scrolls every scroll container `box` is in so that it shows, innermost
-// first, each container then shown by the one outside it: its top at the
-// container's top (a fragment's block start), and across as little as
-// shows it (inline nearest), its left edge winning when it is wider than
-// the view — as Firefox and Chrome reveal a fragment. Each is held to its
-// range; the page's own scroll is the face's.
+// Scrolls every scroll container `box` is in so that `box` shows, innermost
+// first, each asked to show `box` itself where the containers inside have
+// moved it (CSSOM View's scroll-into-view walk), never the container inside
+// it: its top at the container's top (a fragment's block start), and across
+// as little as shows it (inline nearest), its left edge winning when it is
+// wider than the view — as Firefox and Chrome reveal a fragment. Each is
+// held to its range; the page's own scroll is the face's.
 void flow_scroll_reveal(flow_tree_t *tree, const flow_box_t *box);
 // The innermost scroll container whose scrolling moves `box`, or -1: its
 // containing blocks', which a scroll container's own box is not — asked of
@@ -685,7 +709,7 @@ bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point
 // background, then its members of negative z-index, then its own content —
 // the block-level boxes, their backgrounds and borders, then the inline
 // content, spans before the text they sit behind, an atom's own content
-// where the atom is, its positioned boxes skipped — then its members of
+// where the atom is, its stacked boxes skipped — then its members of
 // z-index auto or 0 in tree order, then the positive ones, lowest first;
 // a member that is a context painted whole in its turn, and one that is
 // not painted by the same two walks over its own subtree. The root is the
@@ -699,8 +723,27 @@ bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 
+// The same walk, told where each GROUP is: a stacking context painted below
+// full opacity (flow_style_t.opacity), the root's included. `open` comes
+// before the group's first box and `close` after its last, groups nesting;
+// `bounds` holds everything the group paints, in document coordinates at
+// this scroll — its own boxes' overflow rects and its members', each where
+// its frame puts it — so a face can composite it whole: everything inside
+// painted as usual, then the group laid over what was under it at its
+// opacity (CSS Color 4 § 3.2). A face that blends nothing may leave `open`
+// and `close` NULL, which is flow_visit.
+typedef struct {
+    void (*visit)(void *ctx, const flow_box_t *box);
+    void (*open)(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds);
+    void (*close)(void *ctx, const flow_box_t *box);
+    void *ctx;
+} flow_visitor_t;
+
+void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                       const flow_visitor_t *visitor);
+
 // The deepest box whose OWN rect holds (x, y), the last painted winning —
-// the positioned list backwards, then the ordinary tree — whose clip holds
+// the stacked boxes backwards, then the ordinary tree — whose clip holds
 // the point, and that is drawn (`visibility: visible`) and not
 // `pointer-events: none`; NULL for none. A scroll container's content is
 // where its scroll moves it, and is not there outside its padding box.

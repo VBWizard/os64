@@ -9,9 +9,11 @@
 // positioned boxes.
 //
 // A POSITIONED box (POSITION.md) stays under its parent, so the pre-order
-// is still the document's, but it is reached from the positioned list and
-// never through its tree ancestors: their walks skip it, their overflow
-// rects leave it out, and its clip is what its containing blocks allow.
+// is still the document's, but it is STACKED — reached from the layers
+// and never through its tree ancestors, whose walks skip it — and their
+// overflow rects leave it out, and its clip is what its containing blocks
+// allow. A block-level box in the flow below full opacity is stacked too
+// (PILE3.md § The blend), and keeps its parent's overflow, clip and frame.
 // A STICKY box is where the flow put it, and the door works out, at each
 // scroll, how far to draw it moved (flow_box_doc_offset). So is a SCROLL
 // CONTAINER's content, drawn moved back by the container's scroll position,
@@ -33,8 +35,10 @@ _Static_assert(FLOW_BOX_BLOCK == (int)FB_BLOCK && FLOW_BOX_REPLACED == (int)FB_R
 // One step of painting (CSS 2.1 Appendix E): a box's WHOLE two-phase walk,
 // or, for a stacking context with members under it, its SELF — its own
 // background and borders — and its BODY — everything else of its own —
-// with the members of negative z-index between the two.
-typedef enum { PART_WHOLE = 0, PART_SELF, PART_BODY } LayerPart;
+// with the members of negative z-index between the two. A GROUP — a
+// stacking context below full opacity — is bracketed by an OPEN and a
+// CLOSE around everything it paints, which a face composites whole.
+typedef enum { PART_WHOLE = 0, PART_SELF, PART_BODY, PART_OPEN, PART_CLOSE } LayerPart;
 
 typedef struct {
     const flow_box_t *box;
@@ -48,11 +52,13 @@ struct flow_tree {
     FArena arena;           // the public boxes
     flow_box_t *root;
     FMap first;             // node -> its first public box
-    const flow_box_t **images, **controls, **positioned;
-    int32_t nimages, ncontrols, npositioned, cap_images, cap_controls, cap_positioned;
-    // The paint order: the root's layers and every positioned box's, as the
-    // stacking contexts sort them (stack_build). `positioned` is left in
-    // the same order.
+    const flow_box_t **images, **controls, **positioned, **stacked;
+    int32_t nimages, ncontrols, npositioned, nstacked;
+    int32_t cap_images, cap_controls, cap_positioned, cap_stacked;
+    // The paint order: the root's layers and every stacked box's, as the
+    // stacking contexts sort them (stack_build). `stacked` is left in the
+    // same order, and `positioned`, the stacked boxes that are positioned,
+    // too.
     Layer *layers;
     int32_t nlayers;
     // Each scroll container's frame, in tree order: what flow_scroll_set
@@ -602,6 +608,15 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     if (src->positioned &&
         !push_list(bd, &bd->t->positioned, &bd->t->npositioned, &bd->t->cap_positioned, b))
         return b;
+    // Below full opacity, a box its block-level parent's walks would reach
+    // is a stacking context of its own, painted whole. The root is the
+    // first context already, and an inline-block's content is painted where
+    // its atom is, on the line.
+    b->stacked = src->positioned ||
+                 (src->style->opacity < 1000 && parent != NULL && parent->kind <= FLOW_BOX_CELL);
+    if (b->stacked &&
+        !push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
+        return b;
     b->rect = rect_of(src->x, src->y, src->w, src->h);
     b->overflow = b->rect;
     b->link = src->link;
@@ -699,6 +714,7 @@ void flow_free(flow_tree_t *tree)
     os64_free(tree->images);
     os64_free(tree->controls);
     os64_free(tree->positioned);
+    os64_free(tree->stacked);
     os64_free(tree->layers);
     os64_free(tree->scrollers);
     os64_free(tree);
@@ -706,17 +722,18 @@ void flow_free(flow_tree_t *tree)
 
 // ── Stacking (CSS 2.1 Appendix E, § 9.9.1) ───────────────────────────────
 //
-// A STACKING CONTEXT is the root, or a positioned box with a z-index, a
-// fixed or sticky one, or one painted at less than full opacity (CSS
-// Position 3, Color 4). Each positioned box belongs to the nearest one
-// that is its ancestor; within a context its members paint after the
-// context's own background — those of negative z-index first, then the
-// context's own content, then the rest by z-index, auto and 0 in tree
-// order, the positive lowest first — and a member that is a context
-// paints whole, its own members with it. A positioned box that is not a
-// context lends its descendants to the context it is in. What a
-// non-positioned box at less than full opacity would make is booked
-// (POSITION.md).
+// A STACKING CONTEXT is the root, a positioned box with a z-index, a fixed
+// or sticky one, or any box painted at less than full opacity (CSS
+// Position 3, Color 4) — which is why such a box is stacked even in the
+// flow, where it paints as a positioned box of z-index 0 would. Each
+// stacked box belongs to the nearest one that is its ancestor; within a
+// context its members paint after the context's own background — those of
+// negative z-index first, then the context's own content, then the rest by
+// z-index, auto and 0 in tree order, the positive lowest first — and a
+// member that is a context paints whole, its own members with it. A
+// positioned box that is not a context lends its descendants to the
+// context it is in. A context below full opacity is a GROUP: everything it
+// paints is bracketed by an OPEN and a CLOSE.
 
 static bool makes_context(const flow_box_t *b)
 {
@@ -725,14 +742,21 @@ static bool makes_context(const flow_box_t *b)
            s->position == FLOW_POSITION_STICKY || s->opacity < 1000;
 }
 
+// z-index applies to a positioned box; a box stacked in the flow is 0.
 static int32_t z_of(const flow_box_t *b)
 {
-    return b->style->has_z_index ? b->style->z_index : 0;
+    return b->positioned && b->style->has_z_index ? b->style->z_index : 0;
+}
+
+// Composited whole: below full opacity, and painted at all.
+static bool is_group(const flow_box_t *b)
+{
+    return b->style->opacity < 1000 && !b->unpainted;
 }
 
 typedef struct {
     flow_tree_t *t;
-    const flow_box_t **entry;   // the positioned boxes, in tree order
+    const flow_box_t **entry;   // the stacked boxes, in tree order
     bool *context;              // each entry's makes_context
     int32_t *order;             // every context's members, grouped, each group sorted
     int32_t *first, *count;     // a context's group in `order`: [first, first + count); -1 is the root
@@ -763,7 +787,7 @@ static void sort_by_z(const Stack *st, int32_t *v, int32_t *tmp, int32_t n)
 static void layer(Stack *st, const flow_box_t *box, LayerPart part)
 {
     st->layers[st->nlayers++] = (Layer){box, part};
-    if (part != PART_SELF && box->positioned)
+    if ((part == PART_WHOLE || part == PART_BODY) && box->stacked)
         st->painted[st->npainted++] = box;
 }
 
@@ -773,6 +797,8 @@ static void emit_context(Stack *st, int32_t c)
     const flow_box_t *box = c < 0 ? st->t->root : st->entry[c];
     const int32_t *m = st->order + st->first[c + 1];
     int32_t n = st->count[c + 1], neg = 0;
+    if (is_group(box))
+        layer(st, box, PART_OPEN);
     while (neg < n && z_of(st->entry[m[neg]]) < 0)
         neg++;
     if (neg == 0) {
@@ -789,13 +815,15 @@ static void emit_context(Stack *st, int32_t c)
         else
             layer(st, st->entry[m[k]], PART_WHOLE);
     }
+    if (is_group(box))
+        layer(st, box, PART_CLOSE);
 }
 
 // The paint order, once per tree. False on no memory.
 static bool stack_build(flow_tree_t *t)
 {
-    int32_t n = t->npositioned;
-    Stack st = {.t = t, .entry = t->positioned};
+    int32_t n = t->nstacked;
+    Stack st = {.t = t, .entry = t->stacked};
     FMap index = {0};
     int32_t *ctx = os64_calloc((size_t)n + 1, sizeof(int32_t));
     int32_t *tmp = os64_calloc((size_t)n + 1, sizeof(int32_t));
@@ -803,7 +831,8 @@ static bool stack_build(flow_tree_t *t)
     st.order = os64_calloc((size_t)n + 1, sizeof(int32_t));
     st.first = os64_calloc((size_t)n + 2, sizeof(int32_t));
     st.count = os64_calloc((size_t)n + 2, sizeof(int32_t));
-    st.layers = os64_calloc((size_t)n * 2 + 2, sizeof(Layer));
+    // Each context two layers at most, and an open and a close.
+    st.layers = os64_calloc((size_t)n * 4 + 4, sizeof(Layer));
     st.painted = os64_calloc((size_t)n + 1, sizeof(*st.painted));
     bool ok = ctx != NULL && tmp != NULL && st.context != NULL && st.order != NULL &&
               st.first != NULL && st.count != NULL && st.layers != NULL && st.painted != NULL;
@@ -816,7 +845,7 @@ static bool stack_build(flow_tree_t *t)
     for (int32_t i = 0; ok && i < n; i++) {
         ctx[i] = -1;
         for (const flow_box_t *p = st.entry[i]->parent; p != NULL; p = p->parent) {
-            intptr_t j = p->positioned ? (intptr_t)f_map_get(&index, p) - 1 : -1;
+            intptr_t j = p->stacked ? (intptr_t)f_map_get(&index, p) - 1 : -1;
             if (j >= 0 && st.context[j]) {
                 ctx[i] = (int32_t)j;
                 break;
@@ -834,7 +863,11 @@ static bool stack_build(flow_tree_t *t)
         for (int32_t c = 0; c <= n; c++)
             sort_by_z(&st, st.order + st.first[c], tmp, st.count[c]);
         emit_context(&st, -1);
-        os64_memcpy(t->positioned, st.painted, (size_t)n * sizeof(*st.painted));
+        os64_memcpy(t->stacked, st.painted, (size_t)n * sizeof(*st.painted));
+        int32_t k = 0;
+        for (int32_t i = 0; i < n; i++)
+            if (st.painted[i]->positioned)
+                t->positioned[k++] = st.painted[i];
         t->layers = st.layers;
         t->nlayers = st.nlayers;
         st.layers = NULL;
@@ -943,7 +976,7 @@ static bool block_level(flow_box_kind_t k)
 // A child the tree's own walks go into: not one reached from the list.
 static bool in_tree(const flow_box_t *c)
 {
-    return block_level(c->kind) && !c->positioned;
+    return block_level(c->kind) && !c->stacked;
 }
 
 typedef struct {
@@ -1150,17 +1183,58 @@ static void visit_inline(const Visit *outer, const flow_box_t *b)
     }
 }
 
+// What a group paints, from its OPEN at layer `i`: every box of every layer
+// up to its CLOSE, each overflow rect where its frame puts it at `scroll`.
+static os64_gui_rect_t group_bounds(const flow_tree_t *tree, int32_t i, flow_point_t scroll)
+{
+    os64_gui_rect_t r = {0, 0, 0, 0};
+    bool any = false;
+    for (int32_t k = i + 1, depth = 1; k < tree->nlayers; k++) {
+        const Layer *l = &tree->layers[k];
+        depth += l->part == PART_OPEN ? 1 : l->part == PART_CLOSE ? -1 : 0;
+        if (depth == 0)
+            break;
+        if (l->part == PART_OPEN || l->part == PART_CLOSE)
+            continue;
+        flow_point_t o = flow_box_doc_offset(l->box, scroll);
+        os64_gui_rect_t at = moved(l->box->overflow, o.x, o.y);
+        r = any ? join(r, at) : at;
+        any = true;
+    }
+    return r;
+}
+
 // The layers in paint order (stack_build), each against the viewport in
 // its box's own coordinates: a fixed box's are the viewport's. A WHOLE box
 // is its two-phase walk; a SELF, the box alone; a BODY, the rest of that
-// walk — its block-level descendants, then its inline content.
+// walk — its block-level descendants, then its inline content; an OPEN and
+// a CLOSE, the face's to hear.
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx)
 {
-    if (tree == NULL || tree->root == NULL || visit == NULL)
+    flow_visitor_t v = {visit, NULL, NULL, ctx};
+    flow_visit_groups(tree, viewport, scroll, &v);
+}
+
+void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                       const flow_visitor_t *visitor)
+{
+    if (tree == NULL || tree->root == NULL || visitor == NULL || visitor->visit == NULL)
         return;
+    void (*visit)(void *, const flow_box_t *) = visitor->visit;
+    void *ctx = visitor->ctx;
     for (int32_t i = 0; i < tree->nlayers; i++) {
         const flow_box_t *b = tree->layers[i].box;
+        if (tree->layers[i].part == PART_OPEN) {
+            if (visitor->open != NULL)
+                visitor->open(ctx, b, group_bounds(tree, i, scroll));
+            continue;
+        }
+        if (tree->layers[i].part == PART_CLOSE) {
+            if (visitor->close != NULL)
+                visitor->close(ctx, b);
+            continue;
+        }
         flow_point_t o = flow_box_doc_offset(b, scroll);
         Visit v = {tree, moved(viewport, -(int64_t)o.x, -(int64_t)o.y), visit, ctx};
         switch (tree->layers[i].part) {
@@ -1183,6 +1257,7 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
             visit_inline(&v, b);
             break;
         }
+        case PART_OPEN: case PART_CLOSE: break;     // heard above
         }
     }
 }
@@ -1199,7 +1274,7 @@ static const flow_box_t *hit_self(const flow_box_t *b, int32_t x, int32_t y)
 
 static const flow_box_t *hit(const flow_tree_t *t, const flow_box_t *b, int32_t x, int32_t y);
 
-// The deepest of a box's descendants the tree reaches (its positioned ones
+// The deepest of a box's descendants the tree reaches (its stacked ones
 // are layers of their own) holding the point, the last painted winning.
 // Pruned on the overflow rect alone, and each box's clip asked of its own
 // rect: a clip is a box's own, so no box is pruned by its parent's — a
@@ -1221,7 +1296,7 @@ static const flow_box_t *hit_kids(const flow_tree_t *t, const flow_box_t *b, int
     }
     const flow_box_t *found = NULL;
     for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
-        if (c->positioned)
+        if (c->stacked)
             continue;
         const flow_box_t *h = hit(t, c, x, y);
         if (h != NULL)
@@ -1257,6 +1332,7 @@ const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_p
         case PART_WHOLE: h = hit(tree, b, (int32_t)px, (int32_t)py); break;
         case PART_SELF: h = hit_self(b, (int32_t)px, (int32_t)py); break;
         case PART_BODY: h = hit_kids(tree, b, (int32_t)px, (int32_t)py); break;
+        case PART_OPEN: case PART_CLOSE: break;     // a group is no box of its own
         }
         if (h != NULL)
             return h;
@@ -1395,17 +1471,28 @@ static int64_t reveal_axis(int64_t at, int64_t view, int64_t b0, int64_t b1, boo
     return b1 > at + view ? b1 - view : at;
 }
 
+// Each container is asked to show the TARGET, never the container inside
+// it (CSSOM View's walk): the target's rect taken into the container's
+// content coordinates as it stands now, after the containers inside have
+// moved — its own frame offset less the one the container's content is
+// drawn moved by, at the page unscrolled — then measured from the padding
+// edge.
 void flow_scroll_reveal(flow_tree_t *tree, const flow_box_t *box)
 {
-    const flow_box_t *in = box;
-    for (int32_t i = flow_box_scroller(box); in != NULL && scroller_at(tree, i) != NULL;
+    if (box == NULL)
+        return;
+    flow_point_t still = {0, 0};
+    for (int32_t i = flow_box_scroller(box); scroller_at(tree, i) != NULL;
          i = flow_box_scroller(tree->scrollers[i]->box)) {
         flow_frame_t *f = tree->scrollers[i];
-        int64_t x0 = (int64_t)in->rect.x - f->pad.x, y0 = (int64_t)in->rect.y - f->pad.y;
-        int64_t x = reveal_axis(f->at.x, f->pad.w, x0, x0 + in->rect.w, false);
-        int64_t y = reveal_axis(f->at.y, f->pad.h, y0, y0 + in->rect.h, true);
+        Frames m = {.n = 0}, mc = {.n = 0};
+        flow_point_t ot = frame_of(&m, box->frame, box->fixed, still);
+        flow_point_t oc = frame_of(&mc, f, box->fixed, still);
+        int64_t x0 = (int64_t)box->rect.x + ot.x - oc.x - f->pad.x;
+        int64_t y0 = (int64_t)box->rect.y + ot.y - oc.y - f->pad.y;
+        int64_t x = reveal_axis(f->at.x, f->pad.w, x0, x0 + box->rect.w, false);
+        int64_t y = reveal_axis(f->at.y, f->pad.h, y0, y0 + box->rect.h, true);
         flow_scroll_set(tree, i, (flow_point_t){edge32(x), edge32(y)});
-        in = f->box;
     }
 }
 

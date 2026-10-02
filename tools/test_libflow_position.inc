@@ -7,9 +7,9 @@ static void position_style_cases(void)
 {
     // § 9.7: an absolute or fixed box is blockified and floats nowhere; the
     // display it was given survives as one bit. A list item stays one. A
-    // translucent background on an OUT-OF-FLOW box draws nothing, a
-    // relative one's is laid over the paper as ever (0.5 black on fefefe
-    // is 7f); an opaque one is drawn. z-index is kept; opacity is clamped
+    // translucent background keeps its alpha, in the flow or out of it, for
+    // the face to blend (0.5 is 128 of 255); an opaque one is opaque.
+    // z-index is kept; opacity is clamped
     // to 0..1 in thousandths. display: contents makes no box to position.
     cascade_case("positioning: blockified, what it computes to", 800,
         "<!doctype html><style>body{margin:0}"
@@ -33,8 +33,8 @@ static void position_style_cases(void)
         "    div block position=absolute\n"
         "    li list-item position=fixed\n"
         "    span block position=fixed specified-inline\n"
-        "    div block position=absolute\n"
-        "    div block bg=#7f7f7f position=relative\n"
+        "    div block bg=#000000/128 position=absolute\n"
+        "    div block bg=#000000/128 position=relative\n"
         "    div block bg=#000000 position=absolute\n"
         "    span inline position=relative z=5\n"
         "    span inline position=relative z=-2 opacity=0.000\n"

@@ -185,4 +185,48 @@ static void paint_cases(void)
                     "fill 0 500 200 100 #fefefe\n"
                     "fill 0 500 200 30 #00ff00\n"
                     "text \"top\" 0 514 #101010\n");
+
+    // The blend (PILE3.md). A translucent colour reaches the verbs with
+    // its alpha, for them to lay over what is there: 0.5 is 128 of 255,
+    // 0.25 is 64.
+    paint_page_case("a translucent background and text keep their alpha",
+                    "<!doctype html><style>body { margin: 0 } div { height: 20px;"
+                    " background: rgba(255, 0, 0, 0.5); color: rgba(0, 0, 255, 0.25) }"
+                    "</style><div>a</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 0 0 200 20 #ff0000/128\n"
+                    "text \"a\" 0 14 #0000ff/64\n");
+    // A block below full opacity is a stacking context, painted whole
+    // where a positioned box of z-index 0 would be — after the flow it sits
+    // in, so the paragraph written after it is painted first — and as ONE
+    // group: its bounds when it opens, its alpha (0.5: 128) when it closes.
+    paint_page_case("a block below full opacity is one group, after the flow",
+                    "<!doctype html><style>body { margin: 0 } p { margin: 0; height: 20px }"
+                    " .h { opacity: 0.5; height: 20px; background: #00ff00 }</style>"
+                    "<div class=h>a</div><p>b</p>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"b\" 0 34 #101010\n"
+                    "group 0 0 200 20\n"
+                    "fill 0 0 200 20 #00ff00\n"
+                    "text \"a\" 0 14 #101010\n"
+                    "end group 128\n");
+    // Groups nest, each laid over what was under it when it opened, and a
+    // group none of which shows opens empty: the far one at 520, cut to a
+    // view that ends at 100, has no height.
+    paint_page_case("groups nest; one out of view opens empty",
+                    "<!doctype html><style>body { margin: 0 } div { opacity: 0.5 }"
+                    " .in { height: 20px; background: #0000ff }"
+                    " .far { margin-top: 500px; height: 20px }</style>"
+                    "<div><div class=in></div></div><div class=far></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "group 0 0 200 20\n"
+                    "group 0 0 200 20\n"
+                    "fill 0 0 200 20 #0000ff\n"
+                    "end group 128\n"
+                    "end group 128\n"
+                    "group 0 520 200 0\n"
+                    "end group 128\n");
 }

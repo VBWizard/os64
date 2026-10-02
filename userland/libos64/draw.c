@@ -75,6 +75,29 @@ void os64_draw_fill_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
     }
 }
 
+void os64_draw_fill_rect_alpha(os64_gui_surface_t *dst, os64_gui_rect_t r,
+                               uint32_t color, uint8_t alpha)
+{
+    if (alpha == 255) {
+        os64_draw_fill_rect(dst, r, color);
+        return;
+    }
+    os64_gui_rect_t c;
+    if (alpha == 0 || !os64_rect_intersect(r, surface_bounds(dst), &c))
+        return;
+    uint32_t a = alpha, cr = (color >> 16) & 255, cg = (color >> 8) & 255, cb = color & 255;
+    for (int32_t y = c.y; y < c.y + c.h; y++) {
+        uint32_t *row = surface_row(dst, y) + c.x;
+        for (int32_t x = 0; x < c.w; x++) {
+            uint32_t d = row[x];
+            uint32_t r8 = (cr * a + ((d >> 16) & 255) * (255 - a) + 127) / 255;
+            uint32_t g8 = (cg * a + ((d >> 8) & 255) * (255 - a) + 127) / 255;
+            uint32_t b8 = (cb * a + (d & 255) * (255 - a) + 127) / 255;
+            row[x] = 0xff000000u | r8 << 16 | g8 << 8 | b8;
+        }
+    }
+}
+
 void os64_draw_hline(os64_gui_surface_t *dst, int32_t x, int32_t y,
                      int32_t len, uint32_t color)
 {

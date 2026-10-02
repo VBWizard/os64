@@ -242,12 +242,22 @@ typedef struct {
     const os64_page_t *page;
 } Rec;
 
+// A colour as its RGB, and its alpha after a slash when it is not opaque.
+static void colour_note(Rec *rec, uint32_t colour)
+{
+    out(&rec->out, " #%06x", colour & 0xffffffu);
+    if (flow_alpha(colour) != 255)
+        out(&rec->out, "/%d", (int)flow_alpha(colour));
+}
+
 static void rec_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
 {
     Rec *rec = ctx;
     if (!inside(r, rec->view))
         rec->escaped = true;
-    out(&rec->out, "fill %d %d %d %d #%06x\n", r.x, r.y, r.w, r.h, colour);
+    out(&rec->out, "fill %d %d %d %d", r.x, r.y, r.w, r.h);
+    colour_note(rec, colour);
+    out(&rec->out, "\n");
 }
 
 // A text is drawn whole and cut by its verb, so a clip narrower than the
@@ -263,7 +273,8 @@ static void rec_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseline
                      os64_gui_rect_t clip, uint32_t colour)
 {
     Rec *rec = ctx;
-    out(&rec->out, "text \"%.*s\" %d %d #%06x", (int)b->length, b->text, x, baseline, colour);
+    out(&rec->out, "text \"%.*s\" %d %d", (int)b->length, b->text, x, baseline);
+    colour_note(rec, colour);
     clip_note(rec, clip);
     out(&rec->out, "\n");
 }
@@ -297,6 +308,19 @@ static bool rec_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *
         out(&rec->out, "backdrop %d %d %d %d from %d %d\n", area->x, area->y, area->w, area->h, ox,
             oy);
     return true;
+}
+
+// A group's bounds when it opens, and its alpha when it closes.
+static void rec_group_open(void *ctx, os64_gui_rect_t bounds)
+{
+    Rec *rec = ctx;
+    out(&rec->out, "group %d %d %d %d\n", bounds.x, bounds.y, bounds.w, bounds.h);
+}
+
+static void rec_group_close(void *ctx, uint8_t alpha)
+{
+    Rec *rec = ctx;
+    out(&rec->out, "end group %d\n", (int)alpha);
 }
 
 static const char *kPage = "http://host/dir/page.html";
@@ -338,7 +362,8 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     flow_tree_t *t = flow_layout(doc, page, width, &env);
     Rec rec = {{0}, view, false, page};
     out(&rec.out, "%s", "");
-    yonder_verbs_t v = {&rec, rec_fill, rec_text, rec_image, rec_control, rec_backdrop};
+    yonder_verbs_t v = {&rec,          rec_fill,     rec_text,       rec_image,
+                        rec_control,   rec_backdrop, rec_group_open, rec_group_close};
     if (t != NULL)
         yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, &v);
     if (escaped != NULL)
