@@ -64,9 +64,11 @@ static os64_gui_rect_t on_page(const Painter *p, os64_gui_rect_t r)
     return (os64_gui_rect_t){(int32_t)x, (int32_t)y, r.w, r.h};
 }
 
+// Each colour channel through `f`; how transparent the colour is stays.
 static uint32_t channelwise(uint32_t c, uint32_t (*f)(uint32_t))
 {
-    return f((c >> 16) & 0xff) << 16 | f((c >> 8) & 0xff) << 8 | f(c & 0xff);
+    return (c & 0xff000000u) | f((c >> 16) & 0xff) << 16 | f((c >> 8) & 0xff) << 8 |
+           f(c & 0xff);
 }
 
 static uint32_t half_to_white(uint32_t c)
@@ -371,9 +373,37 @@ static void paint_box(void *ctx, const flow_box_t *b)
             fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, b->style->background);
         return;
     default:
+        // An inline-block (or inline-flex, inline-grid) is two boxes of one
+        // element: the atom on its line, which paints the element's frame
+        // where the line is painted, and its content box inside it, which
+        // must not paint it again — a translucent background or border laid
+        // twice is twice as opaque (Quinn, #202).
+        if (b->parent != NULL && b->parent->kind == FLOW_BOX_ATOMIC && b->parent->node == b->node)
+            return;
         frame(p, b);
         return;
     }
+}
+
+// A group (flow_visit_groups) opens: its bounds, cut to what is painted,
+// are the verb's to remember what was under them; closes: everything it
+// painted is laid over that at the group's opacity, in 255ths.
+static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
+{
+    (void)box;
+    const Painter *p = ctx;
+    int64_t x0 = max64(bounds.x, p->view.x), y0 = max64(bounds.y, p->view.y);
+    int64_t x1 = min64((int64_t)bounds.x + bounds.w, (int64_t)p->view.x + p->view.w);
+    int64_t y1 = min64((int64_t)bounds.y + bounds.h, (int64_t)p->view.y + p->view.h);
+    p->v->group_open(p->v->ctx, (os64_gui_rect_t){(int32_t)x0, (int32_t)y0,
+                                                  (int32_t)max64(0, x1 - x0),
+                                                  (int32_t)max64(0, y1 - y0)});
+}
+
+static void group_close(void *ctx, const flow_box_t *box)
+{
+    const Painter *p = ctx;
+    p->v->group_close(p->v->ctx, (uint8_t)(((uint32_t)box->style->opacity * 255 + 500) / 1000));
 }
 
 // Whether a box has any background: a colour, or a picture behind it.
@@ -403,12 +433,21 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
     if (root != NULL)
         p.canvas_owner = canvas_owner(&p, root);
     const flow_box_t *owner = p.canvas_owner;
-    fill(&p, viewport.x, viewport.y, viewport.w, viewport.h,
-         owner != NULL && owner->style->has_background ? owner->style->background : paper);
+    // A translucent canvas colour is laid over the paper: under the page
+    // there is nothing else.
+    uint32_t canvas = owner != NULL && owner->style->has_background ? owner->style->background
+                                                                    : paper;
+    if (flow_alpha(canvas) != 255)
+        fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, paper);
+    fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, canvas);
     // The canvas's picture is tiled from the page's own corner, so it
     // scrolls with the page.
     if (owner != NULL)
         (void)verbs->backdrop(verbs->ctx, owner, &viewport, 0, 0, viewport);
-    if (root != NULL)
-        flow_visit(tree, viewport, scroll, paint_box, &p);
+    if (root != NULL) {
+        bool groups = verbs->group_open != NULL && verbs->group_close != NULL;
+        flow_visitor_t v = {paint_box, groups ? group_open : NULL, groups ? group_close : NULL,
+                            &p};
+        flow_visit_groups(tree, viewport, scroll, &v);
+    }
 }

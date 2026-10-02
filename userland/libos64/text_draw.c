@@ -4,6 +4,12 @@
 os64_font_status_t os64_text_draw(const os64_text_run_t *r, os64_gui_surface_t *s,
     os64_gui_rect_t clip, int32_t bx, int32_t by, uint32_t color)
 {
+    return os64_text_draw_alpha(r, s, clip, bx, by, color, 255);
+}
+
+os64_font_status_t os64_text_draw_alpha(const os64_text_run_t *r, os64_gui_surface_t *s,
+    os64_gui_rect_t clip, int32_t bx, int32_t by, uint32_t color, uint8_t alpha)
+{
     if (!r || !s || !s->pixels || !s->width || !s->height ||
         s->width>INT32_MAX || s->height>INT32_MAX || s->pitch_px<s->width ||
         (size_t)s->pitch_px>SIZE_MAX/sizeof(uint32_t)/s->height) return OS64_FONT_BAD_ARGUMENT;
@@ -43,6 +49,7 @@ os64_font_status_t os64_text_draw(const os64_text_run_t *r, os64_gui_surface_t *
         }
         for (int64_t y=top;y<bottom;y++) for (int64_t x=left;x<right;x++) {
             uint32_t a=g->coverage[(size_t)(y-gy)*g->stride+(size_t)(x-gx)];
+            if (alpha!=255) a=(a*alpha+127)/255;
             if (!a) continue;
             uint32_t *pixel=&s->pixels[(size_t)y*s->pitch_px+(size_t)x];
             uint32_t dest=*pixel,value=0xff000000u;

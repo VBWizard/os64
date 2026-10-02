@@ -88,8 +88,9 @@ lets a fixed box, in another coordinate space, be reached at all.
 `position`, `top`, `right`, `bottom`, `left`, `inset`, `z-index` (an
 integer, or `auto`) and `opacity` are read into the property table, the
 usual way. A value no slice lays out yet is READ — the cascade keeps it —
-and is NOT SUPPORTED: `@supports (opacity: 0.5)` says no until the painter
-blends, as `z-index` and `sticky` did until P3 and P4. The approximation
+and is NOT SUPPORTED: `@supports (opacity: 0.5)` said no until the painter
+blended (PILE3.md § The blend), as `z-index` and `sticky` did until P3 and
+P4. The approximation
 list generalises for it: props.c's `kDisplayApproximated` becomes a list
 of (property, value) pairs —
 `kApproximated`, with `z-index` matching any integer — because the name
@@ -267,7 +268,8 @@ dropdown inside it is ordinary.
   layers forwards and `flow_hit` backwards, and `flow_positioned` lists
   the positioned boxes in the order their content is painted. A box below
   full opacity that is NOT positioned makes a context in CSS too, painted
-  as if it were positioned at `z-index: 0`; that is booked.
+  as if it were positioned at `z-index: 0`: booked here, and built with
+  the blend (PILE3.md), which made the layers a list of STACKED boxes.
 - **Hit testing** tries the positioned list backwards, then the ordinary
   tree, so a click lands on what is on top. `hit` tests a box's clip
   against the box's OWN rect and prunes children on overflow alone, since
@@ -345,6 +347,8 @@ larger than a centred modal sitting off-centre:
 - **Translucent colours are opaque**: `xrgb` lays alpha over the page's
   paper, because what is really underneath is not known, so `background:
   rgba(0, 0, 0, 0.5)` on a full-viewport overlay is a solid grey sheet.
+  (So it was until the blend, PILE3.md, which keeps a colour's alpha and
+  lays it over what is really there.)
 
 Three answers, none of which needs a blend or a transform, all in P1:
 **`opacity: 0` is not painted** — `flow_box_t.unpainted`, on the box and
@@ -352,10 +356,10 @@ everything inside it, which `flow_visit` does not hand over, while
 `flow_hit` still finds it as a browser's pointer does unless it is
 `pointer-events: none`, and a form control's widget is drawn whatever
 its opacity unless the pointer cannot reach it (rulings 6, 7 and 9;
-values between 0 and 1 stay booked); **a
+values between 0 and 1 stayed booked until PILE3.md blended them); **a
 background whose alpha is below 1, on an out-of-flow box, is not painted**
 until the painter blends — seeing through an overlay is a better failure
-than seeing only the overlay; and **yonder's `p` key lays pages out
+than seeing only the overlay, and the blend retired it; and **yonder's `p` key lays pages out
 with positioning off**, a mode until it is pressed again (ruling 8;
 `flow_env_t`'s `static_only`: every box
 `static` — today's layout, but for an open dialog, which the chapter still
@@ -486,14 +490,12 @@ he said, not a CSS one — and Fable ruled as he had recommended:
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | `transform` (and `translate()` centring) | a transform is a new kind of geometry: a box's rect is no longer where it is drawn | the first centred modal that matters after P1, which will be the first one |
-| `opacity` between 0 and 1, translucent colours | a blend the painter does not have | pile 3's painter work |
 | `clip`, `clip-path` | the first is deprecated; the second is a path (Bootstrap's `.visually-hidden` hides without `clip`, from P1) | a page that needs one to be readable |
 | Floats beside positioned boxes | libflow has no floats; a static position among floats is not computed | floats |
 | `position: relative` or `sticky` on table rows, row groups and columns | undefined in CSS 2.1, defined in Position 3; a sticky heading CELL sticks (P4), and that is the common spelling | a page whose sticky `thead` or `tr` matters |
 | A sticky inline, or inline-block | it has pieces on lines, not a box of its own to push, as a relative one has (below) | a page whose sticky inline matters |
 | The logical insets (`inset-inline-start` and the rest) | the physical four first; the chapter's `dialog` rule is applied physically | a page that writes them |
 | Percentage heights of an absolute box's descendants | GARB.md's percentage-height row, unchanged; the absolute box's own resolves | that row |
-| A non-positioned box below full opacity as a stacking context | CSS paints it as if positioned at `z-index: 0`; libflow paints such a box in the flow, opaque, since the painter blends nothing yet | the painter's blend (pile 3) |
 | Form widgets under positioned boxes, between P1 and P2 | `flow_box_covered` is P2's | P2 |
 | A relative inline, or atom, painted in the positioned layer | an inline has no box to list, only pieces spread over lines: they move and paint in the flow's order | a page where a nudged inline must paint over its neighbours |
 | A block inside a relative inline, moved with it (CSS 2.1 § 9.2.1.1) | the offset lives on the inline's pieces and fragments; the block the inline is split round is laid out by the block flow, which knows no inline open round it | a page that nudges an inline holding a block by a visible amount |

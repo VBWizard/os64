@@ -19,7 +19,7 @@ slices booked against it:
 
 | Area | What it is |
 |---|---|
-| **The blend** | Translucent colours, `opacity` between 0 and 1 painted as a group, and a non-positioned box below full opacity as a stacking context (POSITION.md § Booked). The painter today has no blend at all, and every row below wants one. |
+| **The blend** | Translucent colours, `opacity` between 0 and 1 painted as a group, and a non-positioned box below full opacity as a stacking context (POSITION.md § Booked). Every row below wants it (§ The blend). |
 | **Borders** | `border-radius`, which also clips a background to the curve; dotted, dashed, double and ridge |
 | **Backgrounds** | `background-size`, `-origin`, `-clip`, `-attachment`; every layer of a list; gradients as pictures (G2b already parses the grammar) |
 | **Shadows** | `box-shadow`, `text-shadow` |
@@ -173,8 +173,11 @@ is worked from the one frame outside it.
   inline-block's first box is the atom on its line, not the container.
 - **A fragment link reveals its target in every box it is in**
   (`flow_scroll_reveal`, the door's because `scrollIntoView` will want it
-  too): innermost first, its top at each box's top, and across as little
-  as shows it, as Firefox and Chrome reveal a fragment; then the page by
+  too): innermost first, each box asked to show the TARGET where the boxes
+  inside have moved it — not the box inside it, which may be wider than
+  its view (CSSOM View's walk; Quinn, #201) — its top at the box's top,
+  and across as little as shows it, as Firefox and Chrome reveal a
+  fragment; then the page by
   the same rule. A `hidden` box too, since a link may scroll what a
   person cannot.
 - **A control scrolled out of its box has no widget**, by ruling 9's own
@@ -215,3 +218,100 @@ list and the page; both positions surviving a relayout.
 | Smooth scrolling, `scroll-snap`, `overscroll-behavior` | a wheel moves a box at once, three lines a notch | a page whose carousel snaps |
 | Classic bars that take room from the content (`scrollbar-gutter`, `scrollbar-width`) | the overlay bar changes no layout, which is the point of it | a page whose layout counts on the gutter |
 | `filter`, `cursor`, `image-rendering` | not GARB.md's pile 3, and measured above | the slice that takes them, re-measured |
+
+## The blend (slice S2)
+
+### What CSS asks (CSS Color 4 § 3.2, § 4; CSS 2.1 Appendix E)
+
+A colour may be TRANSLUCENT — `rgba()`, `hsla()`, `#rrggbbaa`, `/ alpha`
+— and is then laid OVER whatever is already painted there, source-over:
+each channel `alpha * colour + (1 - alpha) * under`. `opacity` below 1 is
+different, and the difference is the whole of this slice: it does not
+fade each thing the element paints, it paints the element and everything
+inside it as ONE GROUP and fades the group, so a black card with a green
+box inside it at `opacity: 0.5` shows the page through the green, not the
+card's black. Such an element is a STACKING CONTEXT, positioned or not,
+painted where a positioned box of `z-index: 0` would be.
+
+### How it is built
+
+**A colour keeps its alpha, in itself.** A flow colour is `0xTTRRGGBB`,
+the top byte how TRANSPARENT it is (flow.h, `flow_alpha`). Transparency
+rather than alpha so every plain `0xRRGGBB` anybody wrote — a face's ink
+and paper, an attribute, the Rendering chapter — is still the opaque
+colour it was; and in the colour so that whatever copies a colour copies
+its alpha: inheritance, `currentColor`, a border or a decoration in its
+element's colour. libflow used to lay alpha over the page's paper while
+styling (`xrgb`), which made `rgba(0,0,0,0.5)` a grey sheet; it now keeps
+it, and POSITION.md's stopgap — a translucent background on an
+out-of-flow box not painted at all — is gone with it.
+
+**A box below full opacity is STACKED.** `flow_box_t.stacked` is what the
+layer list holds: every positioned box, and now a block-level box in the
+flow below full opacity, which the tree's own walks skip and the stacking
+order paints whole (POSITION.md's booked row). Unlike a positioned box it
+has not left the flow, so it stays in its parent's overflow rect, clip
+and frame. `flow_positioned` still lists only the positioned ones.
+
+**A group is bracketed.** Every stacking context below full opacity — the
+root's too — gets an OPEN layer before everything it paints and a CLOSE
+after; `flow_visit_groups` hands the face both, the open with the
+group's BOUNDS: every box of every layer inside, each overflow rect where
+its frame puts it at this scroll, so an absolutely positioned member far
+outside the box is inside. `flow_visit` is the same walk with no ears for
+groups. `opacity: 0` stays unpainted and opens nothing.
+
+**The face composites a group without a transparent canvas.** yonder
+paints straight onto an opaque window, and libdraw cannot paint onto
+transparency. It does not need to: at the open, yonder copies what is
+under the group's bounds (cut to what is being painted); the group paints
+as usual; at the close, the copy is laid back over the group at
+`255 - alpha` with libdraw's own source-over. For a group G whose own
+coverage is c, over a backdrop B, CSS asks `a*c*G + (1 - a*c)*B`; the
+copy gives `a*(c*G + (1 - c)*B) + (1 - a)*B`, which is the same. Groups
+nest on a small stack (`GlassGroups`).
+
+**An element is framed once.** An inline-block (or inline-flex, inline-grid,
+a button) is two boxes of one element — the atom on its line and its
+content box inside — and both used to paint the element's background,
+borders and picture: invisible while everything was opaque, twice as
+opaque once it is not (Quinn, #202). The atom paints the frame; the
+content box under an atom of its own element does not.
+
+**libos64 gained two alpha verbs**: `os64_draw_fill_rect_alpha` and
+`os64_text_draw_alpha`, with `os64_draw_blend`'s rounding — the text
+one scales each glyph's coverage by the ink's alpha.
+
+**`@supports (opacity: 0.5)` says yes** now: libgarb's approximation
+list no longer holds it.
+
+### Proof
+
+`tools/test_libflow_blend.inc`: a block below full opacity stacked and
+not positioned, painted as one group after the paragraph written after
+it, its bounds, and hit over the flow it overlaps; a positioned group's
+bounds holding an absolute member 50 below it; nested groups; an
+inline-block left unstacked; `opacity: 0` opening nothing. One style dump
+changed by rule: a translucent background keeps its alpha in or out of
+the flow (`bg=#000000/128`). `tools/test_yonder_cases.inc`: translucent
+fill and text reach the verbs with their alpha; a group recorded open,
+painted, closed at 128; nested groups; a group out of view opening empty;
+an inline-block, inline-flex and inline-grid's translucent background
+laid once.
+libgarb's `@supports` page now finds `opacity: 0.5` supported. In the
+guest, a fixture of stripes under an `rgba` veil with half-black text, an
+`opacity: 0.5` card holding a green box, an in-flow `opacity: 0.35` block
+over both by a negative margin, and an `rgba` background on the paper
+was drawn as headless Chrome draws it: the stripes through the veil,
+through the card AND through its green, the in-flow block over the card.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| `opacity` on an inline box or an inline-block | an inline box is pieces on lines and an inline-block's content is painted where its atom is, so neither is one layer to group; both are painted opaque | a page whose faded link or badge matters |
+| Form widgets and a box's scroll bars in a group | libui widgets are windows' children drawn after the page, and the bars are drawn after it too; both stay opaque | a faded form, or a faded scrolling panel |
+| The root's own opacity over the canvas | the canvas is painted before the walk, so a translucent `html` fades the page over its own background, not over nothing | a page that fades `html` |
+| Groups past 32 deep, or a group whose copy finds no memory | painted opaque | a page that nests them that deep |
+| A group's cost | each visible group copies its bounds once a paint | a page whose many faded boxes make painting slow, measured |
+| `mix-blend-mode`, `backdrop-filter`, `filter` | other compositing operators, and a filter is a picture of what is under it | the slice that takes them |

@@ -13,6 +13,8 @@
 // moves it onto the glass. `clip` is the viewport, handed to every verb
 // because a text run and a picture are drawn whole and must be cut by
 // whoever draws them.
+// A colour is flow's (flow.h): its top byte how transparent it is, which a
+// verb blends by.
 typedef struct {
     void *ctx;
     void (*fill)(void *ctx, os64_gui_rect_t rect, uint32_t colour);
@@ -29,6 +31,13 @@ typedef struct {
     // `area` from (ox, oy) — drawn if it has arrived, nothing yet if not.
     bool (*backdrop)(void *ctx, const flow_box_t *box, const os64_gui_rect_t *area, int32_t ox,
                      int32_t oy, os64_gui_rect_t clip);
+    // A GROUP (flow_visit_groups): everything painted between an open and
+    // its close is laid over what was under it at `alpha` of 255 (CSS
+    // Color 4 § 3.2). `bounds` holds all of it, cut to the viewport — empty
+    // when none of it shows — in page coordinates. Groups nest. Either NULL:
+    // groups are painted opaque.
+    void (*group_open)(void *ctx, os64_gui_rect_t bounds);
+    void (*group_close)(void *ctx, uint8_t alpha);
 } yonder_verbs_t;
 
 // Paints every box that meets `viewport`, canvas first, the page scrolled

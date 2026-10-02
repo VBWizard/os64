@@ -146,6 +146,8 @@ static void color(Buf *b, const flow_env_t *env, uint32_t rgb)
         puts_(b, "paper");
     else
         putf(b, "#%06x", (unsigned)(rgb & 0xFFFFFF));
+    if (flow_alpha(rgb) != 255)
+        putf(b, "/%d", (int)flow_alpha(rgb));
 }
 
 static const char *const s_display[] = {
@@ -697,6 +699,8 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
         puts_(b, " unfinished");
     if (box->positioned)
         puts_(b, " positioned");
+    else if (box->stacked)
+        puts_(b, " stacked");
     if (box->fixed && (box->parent == NULL || !box->parent->fixed))
         puts_(b, " fixed");
     if (box->frame != NULL && box->frame->box == box && box->frame->kind == F_FRAME_STICKY)

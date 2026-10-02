@@ -96,9 +96,8 @@ p: color: rgb(0, 0, 255); margin-top: 1px; margin-bottom: 4px; margin-left: 2px;
 END
 
 # Positioning in @supports: absolute, relative, fixed and sticky are laid
-# out as they say, and so is `z-index`, and an opacity of none or all; a
-# partial opacity is painted as all, so it is not SUPPORTED until the
-# painter blends.
+# out as they say, and so is `z-index`, and any opacity, which the painter
+# blends (PILE3.md § The blend).
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -116,7 +115,7 @@ PAGE
 </style>
 <p>x
 WANT
-p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; margin-left: 4px; padding-top: 5px; padding-right: 6px; padding-bottom: 7px; width: 9px; height: 10px
+p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; margin-left: 4px; padding-top: 5px; padding-right: 6px; padding-bottom: 7px; padding-left: 8px; width: 9px; height: 10px
 (end)
 END
 
