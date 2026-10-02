@@ -9,6 +9,9 @@ root = Path(__file__).resolve().parents[1]
 core = root / 'userland/obj/js/core.o'
 math = set('acos acosh asin asinh atan atan2 atanh cbrt ceil cos cosh exp expm1 fabs floor fmax fmin fmod hypot log log10 log1p log2 lrint pow round sin sinh sqrt tan tanh trunc'.split())
 services = set('os64_exit os64_free os64_hprintf os64_localtime os64_malloc os64_malloc_size os64_memchr os64_memcmp os64_memcpy os64_memmove os64_memset os64_realloc os64_strchr os64_strcmp os64_strlen os64_strrchr os64_time os64_write'.split())
+runtime_services = services | {'os64_micros'}
+runtime_exports = {'os64_js_' + name for name in
+                   'create context class_id eval run drain_jobs cancel destroy'.split()}
 
 def run(*args):
     return subprocess.check_output(args, cwd=root, text=True)
@@ -71,13 +74,13 @@ dynamic = run('x86_64-elf-readelf', '-dW', str(library))
 assert set(re.findall(r'\(NEEDED\).*\[(.*?)\]', dynamic)) == {'libmath.so', 'libos64.so'}
 assert '(HASH)' in dynamic and '(TEXTREL)' not in dynamic and '[libjs.so]' in dynamic
 imports = {line.split()[-1] for line in run('x86_64-elf-nm', '-D', '-u', str(library)).splitlines()}
-assert imports == math | services, sorted(imports ^ (math | services))
-for dependency, names in [('libmath', math), ('libos64', services)]:
+assert imports == math | runtime_services, sorted(imports ^ (math | runtime_services))
+for dependency, names in [('libmath', math), ('libos64', runtime_services)]:
     provided = {line.split()[-1] for line in run('x86_64-elf-nm', '-D', '--defined-only',
                 str(root / f'userland/bin/{dependency}.so')).splitlines()}
     assert names <= provided, sorted(names - provided)
 real_exports = {line.split()[-1] for line in run('x86_64-elf-nm', '-D', '--defined-only', str(library)).splitlines()}
-assert real_exports == exports, sorted(real_exports ^ exports)
+assert real_exports == exports | runtime_exports, sorted(real_exports ^ (exports | runtime_exports))
 assert not re.search(r'LOAD.*RWE', run('x86_64-elf-readelf', '-lW', str(library)))
 for name in ['quickjs.d', 'port/format.d']:
     dependencies = (root / 'userland/obj/js' / name).read_text()
@@ -92,6 +95,7 @@ assert '-soname libjs.so' not in idle, 'production library is not up to date'
 for prerequisite in ['libjs/shared.mk', 'tools/app_bases.py']:
     recipe = run('make', '-C', str(root / 'userland'), '-n',
                  '-o', str(core), '-o', str(root / 'userland/bin/libos64.so'),
+                 '-o', str(root / 'userland/obj/js/runtime/runtime.o'),
                  '-o', str(root / 'userland/bin/libmath.so'), '-W', prerequisite, 'js-library')
     assert '-soname libjs.so' in recipe, prerequisite
-print('QuickJS production link: real dependency coverage, public maths header and relink triggers: PASS (no guest execution)')
+print(f'QuickJS production link: {len(runtime_exports)} runtime exports; 32 math / 19 os64 imports; real dependencies, public maths header and relink triggers: PASS (no guest execution)')

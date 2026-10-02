@@ -1,32 +1,46 @@
-# JavaScript library foundation
+# JavaScript embedding library
 
-The reviewed R0 header and runtime contract describe the os64 embedding API;
-those runtime operations and the runner are not implemented yet. R1 now has a
-freestanding QuickJS core and private os64 adaptation. `make -C userland js-core`
-builds the cross-compiled, partially linked core with its compiler helpers.
-`make -C userland js-library` is the engine shared-library link and requires
-M1's real `libmath.so`; it is not part of the default image build.
+R2's core slice implements runtime construction/destruction, ABI-checked context
+access, serialized class-ID allocation, bounded source evaluation, controlled
+Promise jobs, execute-and-drain, diagnostics and sticky cancellation. Native
+hosts register capabilities through the borrowed context using the pinned
+QuickJS API. Creation removes SharedArrayBuffer exposure and grants no host
+output, arguments, filesystem, networking or process functions.
+
+`make -C userland js-core` builds the freestanding engine and compiler helpers.
+`make -C userland js-library` links the engine and runtime against the real
+libmath/libos64 libraries. Both are explicit targets; the default image does
+not install libjs. `js-runtime-test` additionally builds the guest consumer at
+`userland/obj/js/runtime-core-test`, for installation as `/tests/jsembedtest`
+in a disposable validation image. Its reserved slot preserves the existing
+application addresses.
 
 Read CONTRACT.md before implementing a consumer and port/README.md for the
-adapter's accounting, headers, diagnostic formats and remaining dependencies.
-Upstream originals stay byte-identical; generated copies receive the manifest's
-patch series. `exports.map` exposes the pinned engine API, including helpers
-used by its public inline functions, and keeps adapter internals private.
+adapter's accounting, headers and diagnostic formats. Upstream originals stay
+byte-identical; generated copies receive the hash-checked manifest patch series.
+`exports.map` publishes 186 engine symbols and eight runtime symbols, with
+adapter/compiler helpers private. File loading, output and argument installers
+are declared in the full contract but are not exported by this slice. The
+remaining R2 helpers, C1 runner, image/licence installation and independent
+validation are tracked in JAVASCRIPT_TASKS.md.
 
 Checks:
 
-- `tools/test_js_contract_headers.sh`: source hashes and R0 examples.
-- `tools/test_js_port_target.sh`: strict target core, target binding example,
-  import/export inventory, a symbol-only ELF link with trap dependencies, the
-  production link against real libmath/libos64, public maths-header selection,
-  and recipe/placement relink triggers.
-- `tools/test_js_port_host.sh`: adapter fixtures with ASan/UBSan, leak detection,
-  controlled libos64 calendar/clock/heap inputs, and the actual cross-built core
-  executed on the host. Host libm remains a substitute for M1.
+- `tools/test_js_runtime_host.sh`: shared guest/host consumer cases, the actual
+  cross-built engine and M1 maths, an ASan engine build, ASan/UBSan wrapper and
+  support fixtures, normal-exit leak checks, allocation-failure sweeps, clock
+  failures/deadlines, native bindings/finalizers, Promise checkpoints, class
+  allocation across threads and cross-thread cancellation. Fatal fixtures
+  verify the full JSFA badge through a host exit hook.
+- `tools/test_js_port_target.sh`: strict target core and binding example,
+  import/export and ELF audits, a symbol-only core link with trap dependencies,
+  real shared-library dependencies, public maths headers and relink triggers.
+- `tools/test_js_contract_headers.sh`: source hashes and contract examples.
+- `tools/test_js_port_host.sh`: adapter fixtures with ASan/UBSan and the actual
+  cross-built core on the host, using host libm as a substitute for M1.
 - `tools/test_js_engine_host.sh`: isolated upstream engine baseline.
 - `tools/test_js_support_host.sh`: libos64 prerequisites.
 
-VALIDATION.md separates this evidence from guest execution. R2 implements the
-os64 runtime boundary, limits, capability registration and shared-buffer
-suppression. M1 supplies target maths. C1 supplies the thin runner. Browser
-mutation and bindings are separate work.
+VALIDATION.md records measured results and distinguishes host fixtures from
+actual os64 execution. These checks do not establish full ECMAScript/numerical
+conformance, complete interrupt coverage or browser event-loop integration.

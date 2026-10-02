@@ -11,7 +11,9 @@ typedef uint32_t JSClassID;
  * The calling unit supplies its compiled-in ABI ID and a separate outcome;
  * mismatch returns NULL/ABI_MISMATCH without exposing the context.
  * No concurrent use, ownership transfer, configuration replacement, or bypass
- * of the top-level re-entry rule. See CONTRACT.md. */
+ * of the top-level re-entry rule. Runtime and context opaque slots belong to
+ * the wrapper; bindings keep state in their own objects or function data.
+ * See CONTRACT.md. */
 JSContext *os64_js_context(os64_js_runtime_t *runtime, const char *caller_abi,
                            os64_js_outcome_t *outcome);
 /* Serialize the slot check and process-global ID allocation together. A

@@ -138,3 +138,87 @@ The branch merges `userland` at `d5eecf1b`, including the accepted M1 library
 The real dependency link is build evidence, not guest engine execution or a
 new numerical conformance measurement. R2, the runner, and combined QEMU
 acceptance remain open.
+
+## R2 runtime core evidence, 2026-10-02
+
+Worktree `.worktrees/js-runtime-core`, branch `codex/js-runtime-core`, base
+`ef43d227` (merged R1). This implements eight runtime operations alongside the
+186-symbol engine API. File/output/argument helpers, the runner and normal
+image/licence registration remain separate work.
+
+- Strict `make -C userland -j8 js-runtime-test` and root `make -j8`: PASS.
+  Runtime and guest-consumer code retain `-Wall -Wextra -Werror`; root builds
+  the unchanged kernel and normal image. Existing ignored dependency sources
+  were copied from the main checkout. The optional consumer's `jsembedtest`
+  slot is `0x14800000`; its addition preserves all 161 existing application
+  addresses. The normal image does not include libjs or this consumer.
+- `tools/test_js_port_target.sh`: PASS. The core retains 32 maths and 18 os64
+  imports. The real shared library adds `os64_micros`, exports eight wrapper
+  operations, and retains its two named real dependencies, SysV hash and ELF
+  protections. Adapter/compiler helpers remain hidden. Binary inputs, including
+  the runtime object, are frozen in dry runs to verify direct relink edges.
+- `tools/test_js_contract_headers.sh`: PASS, including the four-patch manifest
+  and unchanged upstream-original hashes.
+- `tools/test_js_runtime_host.sh`: PASS, 475 checks with the actual target core
+  and libmath objects; 2,539 with the engine source instrumented by ASan. Both
+  use the actual cross-built M1 maths, controlled host heap/syscall fixtures,
+  ASan/UBSan wrapper/support code, normal-exit LeakSanitizer and zero live
+  fixture allocations. The target engine/math objects themselves are not
+  sanitizer-instrumented. ASan bypasses engine arenas, so the constructor sweep
+  measures 1,086 native allocations versus the target profile's 54. Cases cover
+  repeated lifecycle, ABI mismatches, native callbacks/classes/finalizers,
+  teardown/re-entry guards (including aliased outcomes), absence of host/shared
+  capabilities, exceptions/reuse, cumulative jobs and deadlines, rejection
+  checkpoints and safe diagnostics, source/memory limits, clock/heap failure,
+  truncation, serialized class slots and real cross-thread cancellation.
+  LeakSanitizer remains enabled with its required thread-inspection permission.
+- Separate fatal fixture processes for leaked values and active destruction
+  pass with both profiles. The host exit hook checks the full JSFA badge and
+  maps it to host status 99; the guest observations below independently verify
+  the os64 status.
+
+Constructor refusal initially reproduced four defects in the pinned source.
+The actual target profile exposed GC-list retention of a freed raw context
+and an unchecked global-variable object allocation. The finer sanitized sweep
+also exposed a leaked lazy-global value and a second release after Proxy's
+consuming property installation failed. Patch 0004 fixes those four sites;
+upstream originals remain byte-identical. The target raw-context regression
+and both complete constructor-failure sweeps pass after the corrections.
+
+The first guest run overlapped the kernel's late memory measurement with our
+consumer commands. The JavaScript fixture passed, but the background teardown
+measurement reported losses. A second boot waited for the kernel test before
+running commands: two independently measured quiet windows passed with zero
+loss. This distinguishes the consumer fixture's result from the first boot's
+background measurement; it is not a kernel fix or proof of concurrent-test
+isolation. Final guest results and returned-library hashes are recorded below.
+
+The final QEMU run (VM 56204, eight cores) used this worktree's normal ISO and
+disposable copies of its root/home images. The root copy received the explicit
+`js-runtime-test` ELF at `/tests/jsembedtest`, `libjs.so` at `/lib/libjs.so` and
+the retained QuickJS licence. After a 45-second quiet boot, the kernel teardown
+test had passed before any consumer commands ran. `/tests/jsembedtest` then
+reported **280 checks, zero failures, 37 native calls**, including the real
+monotonic deadline and finalizer re-entry checks. Husk's captured full exit
+status was `0x4A535254` (JSRT). Separate `--leak` and `--active-destroy` runs
+diagnosed their intended invariants and returned `0x4A534641` (JSFA).
+
+Guest `cp` copied the three loaded library files to `/home`; after `sync`,
+`vmget` returned them for byte-for-byte comparison with the build outputs.
+All three matched:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| libjs.so | 4,486,952 | `492f6da78cd8995ff2b8dbaf597692aff119f37efe5b94e8337d5cff667977ef` |
+| libmath.so | 150,400 | `3e9cfc3b62a863895bec2291975bd97c568ea713c5744150b0a83d97bfa0c6ae` |
+| libos64.so | 789,248 | `514270439f291eb2f1a738010f703934c6e2224fe4086acdd88bd3f03fd2315c` |
+
+The screenshot showed both intended fatal diagnostics and a returned Husk
+prompt; the VM was stopped after extraction. These were scratch-image
+insertions, not additions to the normal image's installation rules.
+
+This core fixture is not a C1 runner, full ECMAScript/numerical conformance
+suite, complete interrupt-coverage audit, browser integration test or J1/J2
+acceptance. Production limits remain unselected. Structured line/column data
+remains unavailable, and stack overflow remains an ordinary engine exception
+because no reliable wrapper-owned stack-failure signal is exposed.
