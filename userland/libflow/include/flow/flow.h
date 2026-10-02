@@ -643,13 +643,26 @@ int32_t flow_nscrollers(const flow_tree_t *tree);
 const flow_box_t *flow_scroller(const flow_tree_t *tree, int32_t i);
 // How far it can be scrolled on each axis: as far as its scrollable
 // overflow reaches past its padding box — its content's overflow rects,
-// the positioned boxes it moves included, and its own end padding past
+// what can be seen of the positioned boxes it moves (cut by the clips
+// between them and it, through sticky boxes), and its own end padding past
 // what is in its flow — or 0 where nothing reaches past.
 flow_point_t flow_scroll_range(const flow_tree_t *tree, int32_t i);
 flow_point_t flow_scroll_at(const flow_tree_t *tree, int32_t i);
 // Scrolls it to `at`, held to [0, range] on each axis; answers where it
 // went.
 flow_point_t flow_scroll_set(flow_tree_t *tree, int32_t i, flow_point_t at);
+// The scroll container `node` makes, or -1: what a face that keeps a
+// position by element finds again in a new layout. Not flow_box_for's
+// answer, which for an inline-block is the atom on the line and not the
+// container under it.
+int32_t flow_scroller_for(const flow_tree_t *tree, const os64_html_node_t *node);
+// Scrolls every scroll container `box` is in so that it shows, innermost
+// first, each container then shown by the one outside it: its top at the
+// container's top (a fragment's block start), and across as little as
+// shows it (inline nearest), its left edge winning when it is wider than
+// the view — as Firefox and Chrome reveal a fragment. Each is held to its
+// range; the page's own scroll is the face's.
+void flow_scroll_reveal(flow_tree_t *tree, const flow_box_t *box);
 // The innermost scroll container whose scrolling moves `box`, or -1: its
 // containing blocks', which a scroll container's own box is not — asked of
 // one, this answers the container it is in. A wheel goes here when it is

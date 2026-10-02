@@ -145,6 +145,75 @@ static void scroll_cases(void)
     flow_free(t);
     sheeted_close(&q);
 
+    // The container an inline-block makes is under the atom on the line,
+    // which is the element's first box: a face that keeps a position by
+    // element finds the container by flow_scroller_for (Quinn, #201).
+    sheeted_open(&q, "<!doctype html><style>body{margin:0}"
+                     "#ib{display:inline-block;width:100px;height:100px;overflow:auto}"
+                     "</style><span id=ib><div style='height:300px'></div></span>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    const os64_html_node_t *ibn = NULL;
+    const flow_box_t *ib = box_with_id(t, q.doc->document, "ib");
+    if (ib != NULL)
+        ibn = ib->node;
+    expect("scroll: an inline-block's first box is its atom, and flow_scroller_for finds it",
+           ib != NULL && ib->kind == FLOW_BOX_ATOMIC && ib->scroller < 0 &&
+               flow_scroller_for(t, ibn) == 0 && flow_scroller(t, 0)->node == ibn &&
+               flow_scroller_for(t, q.doc->document) == -1, NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // Positioned content is what can be seen of it: behind a sticky box it
+    // still reaches its container (Firefox: 120), and cut by an
+    // overflow: clip wrapper it reaches only as far as the wrapper (0).
+    const char *reach[] = {
+        "<div id=s><div style='position:sticky;height:20px'>"
+        "<div class=abs></div></div></div>",
+        "<div id=s><div style='position:relative;height:50px;overflow:clip'>"
+        "<div class=abs></div></div></div>",
+    };
+    const int32_t reach_y[] = {120, 0};
+    for (size_t k = 0; k < sizeof(reach) / sizeof(reach[0]); k++) {
+        char html[512];
+        snprintf(html, sizeof(html),
+                 "<!doctype html><style>body{margin:0} #s{height:100px;overflow:auto}"
+                 ".abs{position:absolute;top:200px;height:20px;width:20px}</style>%s",
+                 reach[k]);
+        sheeted_open(&q, html, 400, 600);
+        t = flow_layout(q.doc, q.page, 400, &q.env);
+        int32_t s = flow_scroller_for(t, box_with_id(t, q.doc->document, "s") != NULL
+                                              ? box_with_id(t, q.doc->document, "s")->node
+                                              : NULL);
+        expect(k == 0 ? "scroll: a positioned box behind a sticky one reaches its container"
+                      : "scroll: a positioned box an overflow: clip cuts reaches no further",
+               s == 0 && flow_scroll_range(t, s).y == reach_y[k], NULL);
+        flow_free(t);
+        sheeted_close(&q);
+    }
+
+    // Revealing a target: its top at the box's top, and across as little
+    // as shows it — a 20px target at 200 in a 100px view scrolls 120
+    // (Firefox, Quinn's #201 probe); one already in view across stays.
+    sheeted_open(&q, "<!doctype html><style>body{margin:0}"
+                     "#s{position:relative;width:100px;height:100px;overflow:auto}"
+                     ".t{position:absolute;width:20px;height:20px}</style>"
+                     "<div id=s><div id=far class=t style='left:200px;top:150px'></div>"
+                     "<div id=near class=t style='left:40px;top:30px'></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *far = box_with_id(t, q.doc->document, "far");
+    const flow_box_t *near = box_with_id(t, q.doc->document, "near");
+    flow_scroll_reveal(t, far);
+    flow_point_t at_far = flow_scroll_at(t, 0);
+    flow_scroll_reveal(t, near);
+    flow_point_t at_near = flow_scroll_at(t, 0);
+    expect("scroll: a revealed target is shown on both axes",
+           far != NULL && near != NULL && at_far.x == 120 && at_far.y == 70 &&
+               at_near.x == 40 && at_near.y == 30, NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
     // Nested: the inner box's content moves by both.
     sheeted_open(&q, "<!doctype html><style>body{margin:0} p{margin:0}"
                      ".s{overflow:auto} #o{height:100px} #i{height:50px}</style>"

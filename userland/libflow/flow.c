@@ -490,20 +490,33 @@ static void scroll_reach(flow_frame_t *f, int64_t right, int64_t bottom)
         f->range.y = edge32(dy);
 }
 
+// `r` met with `c` on the axes `c` holds; empty when they do not meet.
+static os64_gui_rect_t cut_to(os64_gui_rect_t r, os64_gui_rect_t c)
+{
+    meet_axis(&r.x, &r.w, c.x, c.w);
+    meet_axis(&r.y, &r.h, c.y, c.h);
+    return r;
+}
+
 // The positioned boxes a scroll container's content holds, which its own
-// walk leaves out — a relative box in its flow, and a box its content is
-// the containing block of — reach as far as their overflow rects do. A
-// sticky box is reached from the frame outside its own.
+// walk leaves out — a relative box in its flow, a box its content is the
+// containing block of, and either inside a sticky box in it — reach as far
+// as what of them can be SEEN: their overflow rects, cut by every clip
+// between them and the container — their own, and each sticky frame's on
+// the way out — but not the container's, which is what scrolling reaches
+// past. Sticky boxes are counted where the flow put them, as the content
+// is.
 static void scroll_reach_positioned(flow_tree_t *t)
 {
     for (int32_t i = 0; i < t->npositioned; i++) {
         const flow_box_t *p = t->positioned[i];
+        os64_gui_rect_t r = p->clipped ? cut_to(p->overflow, p->clip) : p->overflow;
         const flow_frame_t *f = p->frame;
-        if (f != NULL && f->kind == F_FRAME_STICKY && f->box == p)
-            f = f->outer;
-        if (f != NULL && f->kind == F_FRAME_SCROLL)
-            scroll_reach(t->scrollers[f->index], (int64_t)p->overflow.x + p->overflow.w,
-                         (int64_t)p->overflow.y + p->overflow.h);
+        for (; f != NULL && f->kind == F_FRAME_STICKY; f = f->outer)
+            if (f->clips)
+                r = cut_to(r, f->clip);
+        if (f != NULL && r.w > 0 && r.h > 0)
+            scroll_reach(t->scrollers[f->index], (int64_t)r.x + r.w, (int64_t)r.y + r.h);
     }
 }
 
@@ -1361,6 +1374,39 @@ int32_t flow_box_scroller(const flow_box_t *box)
         if (f->kind == F_FRAME_SCROLL)
             return f->index;
     return -1;
+}
+
+int32_t flow_scroller_for(const flow_tree_t *tree, const os64_html_node_t *node)
+{
+    for (int32_t i = 0; node != NULL && i < flow_nscrollers(tree); i++)
+        if (tree->scrollers[i]->box->node == node)
+            return i;
+    return -1;
+}
+
+// Where along one axis a container's view [at, at + view) must start to
+// show [b0, b1), both in its content's coordinates from its padding edge:
+// the start edge at the view's start (`start`), or the least move that
+// shows it (nearest), the start edge winning when it does not fit.
+static int64_t reveal_axis(int64_t at, int64_t view, int64_t b0, int64_t b1, bool start)
+{
+    if (start || b0 < at || b1 - b0 > view)
+        return b0;
+    return b1 > at + view ? b1 - view : at;
+}
+
+void flow_scroll_reveal(flow_tree_t *tree, const flow_box_t *box)
+{
+    const flow_box_t *in = box;
+    for (int32_t i = flow_box_scroller(box); in != NULL && scroller_at(tree, i) != NULL;
+         i = flow_box_scroller(tree->scrollers[i]->box)) {
+        flow_frame_t *f = tree->scrollers[i];
+        int64_t x0 = (int64_t)in->rect.x - f->pad.x, y0 = (int64_t)in->rect.y - f->pad.y;
+        int64_t x = reveal_axis(f->at.x, f->pad.w, x0, x0 + in->rect.w, false);
+        int64_t y = reveal_axis(f->at.y, f->pad.h, y0, y0 + in->rect.h, true);
+        flow_scroll_set(tree, i, (flow_point_t){edge32(x), edge32(y)});
+        in = f->box;
+    }
 }
 
 int32_t flow_nimages(const flow_tree_t *tree)

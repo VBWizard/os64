@@ -512,11 +512,12 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height)
     }
     p->tree = fresh;
     // A box keeps where it was scrolled to, as near as the new layout lets
-    // it: the range may have shrunk, and the element may make no box now.
+    // it: the range may have shrunk, and the element may make no scroll
+    // container now.
     for (int32_t i = 0; i < p->nbox_scrolls; i++) {
-        const flow_box_t *b = flow_box_for(fresh, p->box_scrolls[i].node);
-        if (b != NULL && b->scroller >= 0)
-            flow_scroll_set(fresh, b->scroller, p->box_scrolls[i].at);
+        int32_t s = flow_scroller_for(fresh, p->box_scrolls[i].node);
+        if (s >= 0)
+            flow_scroll_set(fresh, s, p->box_scrolls[i].at);
     }
     p->laid_width = width;
     p->laid_height = height;
@@ -862,10 +863,10 @@ static os64_gui_rect_t padding_of(const flow_box_t *b, os64_gui_rect_t r)
                              r.h - t - (bw[FLOW_BOTTOM] + 32) / 64};
 }
 
-// A target is brought to the top of every box it is scrolled inside,
-// innermost first — each box then to the top of the one outside it — and
-// then to the top of the page, as Chrome does. `hidden` boxes too: what a
-// person cannot scroll, a link may.
+// A target is revealed in every box it is scrolled inside
+// (flow_scroll_reveal: its top at each box's top, and across as little as
+// shows it) — `hidden` boxes too, since what a person cannot scroll a link
+// may — and then in the page by the same rule, as Chrome and Firefox do.
 static void scroll_to_node(const os64_html_node_t *node)
 {
     flow_tree_t *t = g.page.tree;
@@ -874,24 +875,28 @@ static void scroll_to_node(const os64_html_node_t *node)
         status_rest("that target has no box on this page");
         return;
     }
-    const flow_box_t *in = b;
-    for (int32_t i = b != NULL ? flow_box_scroller(b) : -1; i >= 0;
-         i = flow_box_scroller(flow_scroller(t, i))) {
-        const flow_box_t *c = flow_scroller(t, i);
-        flow_point_t at = flow_scroll_at(t, i);
-        at.y = in->rect.y - padding_of(c, c->rect).y;
-        page_keep_box_scroll(&g.page, c->node, flow_scroll_set(t, i, at));
-        in = c;
+    if (b != NULL) {
+        flow_scroll_reveal(t, b);
+        for (int32_t i = flow_box_scroller(b); i >= 0; i = flow_box_scroller(flow_scroller(t, i)))
+            page_keep_box_scroll(&g.page, flow_scroller(t, i)->node, flow_scroll_at(t, i));
     }
     // A target in a fixed box is on the glass wherever the page is: no
     // scroll of the page brings it nearer, so none is made (as Chrome
     // does), though the boxes it is in may have moved. Any other is where
     // its boxes' scrolls put it on the page unscrolled, so a sticky one is
     // where the flow put it, not where the scroll now pushes it.
-    if (b != NULL && b->fixed)
+    if (b != NULL && b->fixed) {
         scroll_to(g.sx, g.sy);
-    else
-        scroll_to(g.sx, b != NULL ? flow_box_doc_rect(b, (flow_point_t){0, 0}).y : 0);
+        return;
+    }
+    os64_gui_rect_t r = b != NULL ? flow_box_doc_rect(b, (flow_point_t){0, 0})
+                                  : (os64_gui_rect_t){0, 0, 0, 0};
+    int32_t x = g.sx;
+    if (r.x < g.sx || r.w > g.view.bounds.w)
+        x = r.x;
+    else if ((int64_t)r.x + r.w > (int64_t)g.sx + g.view.bounds.w)
+        x = r.x + r.w - g.view.bounds.w;
+    scroll_to(x, r.y);
 }
 
 static void scroll_to_fragment(const char *name)

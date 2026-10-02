@@ -132,7 +132,12 @@ stands. Positioned content is a layer of its own, and
 content — its lines, its in-flow boxes, its marker — reaches into the
 range with the container's end padding past it, as the public tree is
 built. Positioned boxes are reached afterwards from the positioned list,
-each into the innermost scroll frame it is in. A sticky box whose
+each into the innermost scroll frame it is in — past any sticky frames
+between, since a sticky box is counted where the flow put it — and only
+as far as can be SEEN of it: cut by its own clip and each sticky frame's
+on the way out, but never by the container's own, which is what
+scrolling reaches past (Quinn, #201: a child an `overflow: clip` wrapper
+cuts away must not make a bar that scrolls through empty space). A sticky box whose
 containing block IS a scroll container may then move as far down as
 that container's content reaches, not one screenful of it: its room is
 its distance to the padding box's foot plus the container's range.
@@ -164,10 +169,14 @@ is worked from the one frame outside it.
   covers its bars.
 - **A box keeps where it was scrolled to across layouts** — a resize, a
   late sheet, `p` — by its element (`page_keep_box_scroll`), held to the
-  new layout's range.
-- **A fragment link scrolls every box its target is in**, innermost
-  first, each to put the next one in at its top, then the page; a
-  `hidden` box too, since a link may scroll what a person cannot.
+  new layout's range, and found again by `flow_scroller_for`: an
+  inline-block's first box is the atom on its line, not the container.
+- **A fragment link reveals its target in every box it is in**
+  (`flow_scroll_reveal`, the door's because `scrollIntoView` will want it
+  too): innermost first, its top at each box's top, and across as little
+  as shows it, as Firefox and Chrome reveal a fragment; then the page by
+  the same rule. A `hidden` box too, since a link may scroll what a
+  person cannot.
 - **A control scrolled out of its box has no widget**, by ruling 9's own
   test, and its painted stand-in is cut to the clip like a run or a
   picture. (It was not: `glass_control` threw its clip away, so a hidden
@@ -182,8 +191,10 @@ reaching the scrolled content and one on the border reaching the box,
 the walk pruning what is scrolled away, an absolute box in and out of a
 container's frame, a sticky header riding a container's top (in a
 wrapper, and straight inside it the whole way down), a control covered
-until scrolled in, nested containers, a fixed one, and the viewport's
-overflow making none. Five existing dumps changed, each by the rule
+until scrolled in, nested containers, a fixed one, the viewport's
+overflow making none, an inline-block's container found by element,
+positioned content reaching through a sticky box and stopped by a clip,
+and a target revealed on both axes. Five existing dumps changed, each by the rule
 above: a scroll container prints `scroller N range X Y`, `auto` no
 longer widens the page, and `overflow-x: hidden` clips both axes. The
 guest: danlegt's shape (a grid row of fixed height, a `ridge`-bordered
