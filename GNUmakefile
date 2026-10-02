@@ -184,10 +184,7 @@ override IMAGE_NAME := os64_kernel
 # an app that built perfectly and simply wasn't there at boot.)
 # $(sort) dedupes: multi-file apps (top.c + topMain.c) list their directory
 # once per .c file — without it, top appears twice in every list built here.
-# js is the one app built but not installed: /bin/js cannot start without
-# /lib/libjs.so, which is not on the image yet (DEBTS.md § Userland
-# utilities). Both are in userland/bin all the same, for os64get.
-USERLAND_APPS := $(filter-out js,$(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c))))))
+USERLAND_APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c)))))
 # Punctuation aliases are alternate names for discovered apps, and therefore
 # ride every /bin without pretending to be independently linked programs.
 USERLAND_ALIASES := [
@@ -208,7 +205,9 @@ USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
 # dependencies. The set goes on both volumes that currently carry /bin — the
 # ext2 root and the FAT lifeboat — with independent copies so damage to one
 # volume does not also eat the repair environment's libraries.
-USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libgarb.so userland/bin/libfreetype.so userland/bin/libmath.so
+USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libgarb.so userland/bin/libfreetype.so userland/bin/libmath.so userland/bin/libjs.so
+# The engine's pinned notice travels with both image copies of libjs.
+QUICKJS_LICENSE := userland/libjs/upstream/LICENSE
 
 # The font fixtures /tests/fonttest reads: two TrueType faces and two
 # OpenType/CFF ones, with their licences beside them. They land in /tests
@@ -492,7 +491,7 @@ userland:
 # that rides it changes.
 TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
 
-$(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf GNUmakefile
+$(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -525,6 +524,7 @@ $(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENS
 	printf 'write license/freetype-LICENSE /etc/licenses/freetype.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write license/unicode-LICENSE /etc/licenses/unicode.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write license/libmath-LICENSE /etc/licenses/libmath.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'write %s /etc/licenses/quickjs.txt\n' "$(QUICKJS_LICENSE)" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'mkdir /etc/fonts\nwrite etc/fonts.conf /etc/fonts.conf\nwrite $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt /etc/licenses/DejaVu.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(FONT_PRODUCT),printf 'write %s /etc/fonts/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'mkdir /etc/frames\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
@@ -563,7 +563,7 @@ $(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENS
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -650,6 +650,7 @@ $(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE lic
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/freetype-LICENSE ::/etc/licenses/freetype.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/unicode-LICENSE ::/etc/licenses/unicode.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libmath-LICENSE ::/etc/licenses/libmath.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(QUICKJS_LICENSE) ::/etc/licenses/quickjs.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gclock.conf ::/etc/gclock.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gterm.conf ::/etc/gterm.conf
