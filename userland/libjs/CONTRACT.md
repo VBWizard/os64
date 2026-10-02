@@ -1,17 +1,21 @@
 # JavaScript runtime API contract
 
-Status: R0 proposal for Fable's interface review, 2026-10-01. The declarations
-in `include/os64/js.h` and `include/os64/js_engine.h` are a concrete interface
-proposal, not implemented library symbols. The source pin and host smoke test
-are available; R1's target adaptation and R2's runtime remain implementation
-work. No libjs shared object is registered or shipped by this slice.
+Status: reviewed R0 contract with an implemented R2 core slice, 2026-10-02.
+The explicit `js-library` target exports create, context access, class-ID
+allocation, eval, run, job draining, cancellation and destruction. File loading,
+output and argument installers are declared for the complete contract below
+but are not exported by this slice; using them fails at link time. Their
+implementation and the runner remain tracked in JAVASCRIPT_TASKS.md. The default
+image does not install libjs; `js-runtime-test` builds an optional guest consumer.
 
 ## Creation and ownership
 
 `os64_js_create` takes a configuration, `OS64_JS_ABI_ID`, an output runtime
 pointer, and a caller-owned outcome. These pointers must be valid. It clears
 `*out` before attempting creation and returns an independent runtime on success.
-A null configuration, zero limits, or unrepresentable deadline is a bad
+Input configuration, ABI and source/name buffers must not overlap output
+runtime-pointer or outcome storage. A null configuration, zero limits, or
+unrepresentable deadline is a bad
 argument. There is no unlimited sentinel; zero is rejected. Explicit development budgets appear
 in the examples; production defaults wait for J2 guest measurements and can be
 introduced through a configuration helper without changing this structure.
@@ -27,8 +31,9 @@ it does not validate or isolate native code.
 
 Creation installs language built-ins, including Promise and Date, but no host
 output, arguments, file, network, process, worker, Atomics, or shared-buffer
-capabilities. R2 must remove/omit shared-buffer exposure explicitly; disabling
-Atomics alone does not do that. No filesystem module loader is installed.
+capabilities. Disabling Atomics alone leaves shared-buffer exposure in the core.
+This wrapper deletes the shared-buffer global
+before publishing its context. No filesystem module loader is installed.
 
 Creation binds the runtime to the creating thread. The same thread owns setup,
 evaluation, jobs, diagnostic extraction, and destruction. This is a caller
@@ -46,7 +51,8 @@ registers the returned ID in each runtime with QuickJS's class API; allocation
 and per-runtime registration are different operations.
 
 `os64_js_context(runtime, OS64_JS_ABI_ID, outcome)` borrows the owned context.
-It is available for idle setup and inside native callbacks. Its caller-owned
+It is available for idle setup and inside native callbacks executing in an
+evaluation/job call; it is unavailable during destruction. Its caller-owned
 outcome is required and must be separate from an active outer call's outcome.
 It returns NULL with ABI_MISMATCH on header disagreement, BAD_ARGUMENT for a
 null runtime/ABI argument, or FAILED_RUNTIME for a failed runtime, without
@@ -55,8 +61,11 @@ with OK. Each translation unit using engine inline helpers checks through this
 accessor before using the context. Consumers must
 not free it, create additional contexts, migrate its runtime, or replace the
 library's allocator, interrupt hook, Promise tracker, or loader configuration.
-Library ownership of QuickJS's opaque slots must be specified in R1; custom
-bindings should keep native state in their own objects and function data.
+The runtime and context opaque slots both hold wrapper state. Custom bindings
+must leave them unchanged and keep native state in their own objects and
+function data. A raw engine runtime constructed outside this wrapper has its
+ordinary engine configuration, including shared-buffer exposure; this contract
+governs the wrapper-owned context.
 
 ## Capabilities and native bindings
 
@@ -147,8 +156,13 @@ initializes its outcome, with NUL-terminated fields, even when formatting fails.
 Truncation sets `diagnostic_truncated`; unavailable locations are zero. The
 structured status and limit identify failure without parsing text.
 `jobs_executed` is cumulative for the current turn, not just the last slice. Diagnostics
-may use engine conversions, which can fail or invoke script; R2 must bound
-that work and retain a non-allocating fallback. Returned status equals the
+may use engine conversions, which can fail or invoke script; the original turn
+budget and entry guard remain active during exception extraction, with a fixed
+fallback when conversion fails. Rejection checkpoint diagnostics avoid executing
+reason objects: primitive conversion or real Error own string data is used;
+accessors, proxies and other objects retain the fallback. Locations remain zero
+because the retained API does not expose structured line/column data; no error
+message is parsed. Returned status equals the
 outcome's status. There is no release operation for an outcome.
 
 OK and MORE_JOBS keep the runtime usable. BAD_ARGUMENT and BUSY reject the
@@ -177,7 +191,22 @@ MEMORY, EXECUTION, and JOBS are wrapper-owned counters/flags. STACK is reported
 only when the engine exposes a reliable signal; do not recognize it by matching
 exception text. Otherwise stack overflow remains EXCEPTION. Memory accounting
 uses `os64_malloc_size` plus documented metadata charges; realloc failures keep
-old allocation/accounting intact. DOM allocations have their separate budget.
+old allocation/accounting intact. The wrapper reserves its rounded allocation
+capacity before constructing the engine; its allocator ceiling is the remainder
+of the configured memory limit. Engine arenas, source copies and rejection
+bookkeeping are charged through the same allocator. Native binding allocations
+outside the engine require their host's own budget. DOM allocations have their
+separate budget. `host_error` preserves negative monotonic-clock service codes;
+allocation refusal has no service error code and reports zero rather than an
+invented errno. The target adapter's fatal wall-clock invariant remains distinct
+from recoverable monotonic-clock failure.
+
+The stack budget must fit the caller's native thread stack, leaving room for
+native callbacks and host frames. Creation rejects zero, values above PTRDIFF_MAX,
+and values above half its local stack address to keep engine subtraction away
+from unsigned underflow. This representability guard does not discover the
+thread's actual stack extent. The fixture's 256 KiB engine budget fits os64's
+1 MiB native thread stack; J2 must measure room for the runner's own calls.
 
 `os64_js_cancel` atomically latches cancellation and is the cross-thread
 operation. The owner observes it before execution/job entry and through the
@@ -187,7 +216,8 @@ not a signal-handler API and does not interrupt arbitrary blocking native code.
 
 Destroy runs on the owner outside active callbacks, frees queued values and
 contexts, and runs native finalizers before releasing the engine. NULL is a
-no-op. The host must end access to its native state after finalization, not
+no-op. The wrapper holds its entry guard and closes context access before
+running finalizers. The host must end access to its native state after finalization, not
 before. A leaked value or engine invariant violation diagnoses and exits the
 host with `OS64_JS_FATAL_EXIT`; it is not an outcome. Teardown-leak containment
 for Yonder remains D0 work under the conditions in JAVASCRIPT.md.

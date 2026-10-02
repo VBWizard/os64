@@ -4,8 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Proposed R0 API, not implemented by a shipped library. The runtime contract
- * and examples live in userland/libjs/CONTRACT.md. */
+/* Embedding ABI. Operation contracts, supported symbols and examples are
+ * documented in userland/libjs/CONTRACT.md. */
 #define OS64_JS_ABI_ID "os64-js/2;quickjs=2026-06-04;lp64;value=16;limb=64;atomics=0"
 #define OS64_JS_MESSAGE_CAP 256
 #define OS64_JS_SOURCE_NAME_CAP 128
@@ -45,7 +45,8 @@ typedef enum {
 
 /* Inline diagnostic storage: no allocation or borrowed strings to release.
  * Truncated/unavailable fields do not change the structured status. Locations
- * are one-based; zero denotes unavailable. host_error is an os64 error code. */
+ * are one-based; zero denotes unavailable. host_error preserves an available
+ * os64 error code; zero means that no service code is available. */
 typedef struct {
     os64_js_status_t status;
     os64_js_limit_t limit;
@@ -67,8 +68,8 @@ typedef struct {
     uint64_t jobs_per_turn;
 } os64_js_limits_t;
 
-/* Limits must be positive and finite. Production defaults are selected after
- * guest measurements; callers initialize this proposed API explicitly. */
+/* Callers supply positive, representable limits. The examples' development
+ * budgets are not production defaults; see JAVASCRIPT_TASKS.md's J2 gate. */
 typedef struct {
     os64_js_limits_t limits;
 } os64_js_config_t;

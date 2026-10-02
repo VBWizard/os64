@@ -1,2 +1,2 @@
 /* QuickJS's pinned binding surface; adapter internals remain private. */
-{ global: JS_*; __JS_*; js_malloc*; js_free*; js_realloc*; js_strdup*; local: *; };
+{ global: JS_*; __JS_*; js_malloc*; js_free*; js_realloc*; js_strdup*; os64_js_*; local: *; };

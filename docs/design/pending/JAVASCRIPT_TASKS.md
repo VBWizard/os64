@@ -22,10 +22,10 @@ plan, without assigning a new contributor or claiming work has started.
 | Work | Status on 2026-10-02 | Evidence and remaining work |
 | --- | --- | --- |
 | libos64 prerequisites | **Merged** | [PR #188](https://github.com/VBWizard/os64/pull/188), merge `6a6c08c1`: allocation-size query and four string/memory verbs, host coverage and guest test registration. |
-| R0 runtime contract | **Merged** | [PR #189](https://github.com/VBWizard/os64/pull/189), merge `a426386d`: reviewed public header, lifecycle/capability contract, examples, pinned QuickJS foundation. Runtime operations are declarations; implementation is R2. |
-| M1 maths library | **Merged** | [PR #191](https://github.com/VBWizard/os64/pull/191), merge `3b509e8b`. R1 now links against its real shared library. Numerical acceptance belongs to M1; combined guest engine execution remains a runtime gate. |
-| R1 target adapter/core | **In review** | [PR #192](https://github.com/VBWizard/os64/pull/192), initial implementation `e53bde19` with review follow-up: strict core/userland builds, real libmath/libos64 linkage, target symbol/header/ELF/relink audits, 675 sanitized host checks and 437 cross-core host checks pass. Guest execution remains unproven. |
-| R2 runtime implementation | **Pending** | Implement lifecycle, capability registration, limits/cancellation, outcomes, file/output helpers, Promise processing and compatibility checks. R0/R1 are prerequisites; guest validation needs M1. |
+| R0 runtime contract | **Merged** | [PR #189](https://github.com/VBWizard/os64/pull/189), merge `a426386d`: reviewed public header, lifecycle/capability contract, examples, pinned QuickJS foundation. R0 delivered the interface; R2 records implementation. |
+| M1 maths library | **Merged** | [PR #191](https://github.com/VBWizard/os64/pull/191), merge `3b509e8b`. R1 now links against its real shared library. Numerical acceptance belongs to M1; the R2 core fixture supplies combined guest engine evidence. |
+| R1 target adapter/core | **Merged** | [PR #192](https://github.com/VBWizard/os64/pull/192), merge `ef43d227`: strict core/userland builds, real libmath/libos64 linkage, target symbol/header/ELF/relink audits, 675 sanitized host checks and 437 cross-core host checks pass. R1 itself did not run a guest; the R2 core fixture now exercises the combined library. |
+| R2 runtime implementation | **In progress** | Core slice implemented on `codex/js-runtime-core`: lifecycle/ABI checks, bounded evaluation, native context/class registration, cancellation, diagnostics, Promise jobs/checkpoints and shared-buffer suppression. Validation is recorded in libjs/VALIDATION.md. File/output/argument helpers remain; the core slice needs review and merge. |
 | C1 runner | **Pending** | Thin `js` executable, command grammar/usage, arguments, diagnostics and exit mapping. Uses R0's contract; end-to-end tests need R2 and M1. |
 | V1 independent validation | **Pending** | Consumer capability/failure/ownership tests and selected upstream cases; execution needs M1/R2/C1. |
 | I1 shared integration | **Pending** | Real shared-library dependency/link audits, build/image and licence installation, combined strict build and QEMU acceptance. Depends on M1/R2/C1 and V1 evidence. |
@@ -41,16 +41,19 @@ plan, without assigning a new contributor or claiming work has started.
 The DOM slice definitions and detailed acceptance cases belong to
 [DOM.md](DOM.md); this table tracks their place in the overall campaign.
 The implementation and validation evidence for libjs belongs to
-[VALIDATION.md](../../../userland/libjs/VALIDATION.md). No J1/J2 guest milestone
-is marked complete by the current host checks.
+[VALIDATION.md](../../../userland/libjs/VALIDATION.md). The core guest fixture
+does not complete J1/J2: those gates also require the
+remaining R2 helpers, runner and shared integration.
 
 Next steps:
 
-1. Complete R1 review and record its accepted merge commit; M1 is merged.
-2. Implement R2 against the reviewed contract and integrate the real maths
-   library for target/guest evidence.
-3. Deliver C1, independent V1 validation, and I1 integration to establish J1/J2.
-4. Track Fable's D2 onward alongside the standalone work; J3/J4 require their
+1. Implement R2 against the reviewed contract; R0, R1 and M1 are merged.
+   Review and merge the core slice, then implement the reusable bounded-file,
+   output and argument helpers. Promise processing and cancellation are included
+   in the core because queued jobs retain the original evaluation budget. Use
+   the real maths library for target/guest evidence.
+2. Deliver C1, independent V1 validation, and I1 integration to establish J1/J2.
+3. Track Fable's D2 onward alongside the standalone work; J3/J4 require their
    own browser acceptance evidence.
 
 ## Agreed standalone scope
@@ -317,21 +320,43 @@ core build and shared-link recipe. Upstream originals remain unchanged.
 
 `make -C userland js-core` cross-compiles and partially links the retained core
 and required libgcc helpers. `js-library` is an explicit shared target requiring
-the real `libmath.so`; it is excluded from the default image until the R2
-runtime boundary is available. The shared placement population reserves
+the real `libmath.so`; it is excluded from the default image. Normal installation
+is I1 work. The shared placement population reserves
 both library names; image registration remains I1 work.
 
 The maintained target/host fixtures are `tools/test_js_port_target.*`,
 `tools/test_js_port_host.*`, and `tools/test_js_port_calendar.c`. They belong to
 R1, alongside its own component docs. Exact evidence and limitations live in
-`userland/libjs/VALIDATION.md`. This slice does not implement R2, C1, or D1 and
+`userland/libjs/VALIDATION.md`. The R1 deliverable does not implement R2, C1, or
+D1 and its original validation
 does not establish guest JavaScript or numerical conformance.
 
-Implementation commit `e53bde19` is published for review in
-[PR #192](https://github.com/VBWizard/os64/pull/192).
+[PR #192](https://github.com/VBWizard/os64/pull/192) merged as `ef43d227`,
+including implementation `e53bde19` and its review corrections through `b9e6122b`.
 
 The 2026-10-02 review follow-up removes the duplicate maths header, restores
 fatal handling of zero-byte allocations while preserving NULL/zero resize,
 tracks shared-recipe and placement-assigner dependencies, and clarifies the
 ptrace requirement for normal-exit leak checks. Target evidence now includes
 the production shared link against the real merged M1 library.
+
+## R2 implementation slices
+
+The core slice is isolated in `.worktrees/js-runtime-core`, branch
+`codex/js-runtime-core`, based on merged R1 `ef43d227`. It exports create,
+context access, class-ID allocation, eval, run, drain_jobs, cancel and destroy.
+The guest fixture is an explicit build target and is installed only into a
+validation image; libjs remains outside the normal image population. Its
+implementation also includes the tracked QuickJS allocation-failure cleanup guards.
+Review and merge are separate from implementation/validation completion.
+The core slice passes 475 target-core host checks, 2,539 sanitized-engine host
+checks and 280 checks in os64/QEMU; details and library hashes are in VALIDATION.md.
+
+The remaining R2 slice owns `run_file`, `install_output` and `install_args`,
+including bounded input/close failure, output conversion/write failure, copied
+arguments, installer flags and setup-state checks. The declarations already
+exist, but those symbols are not exported until implemented. C1 can use the
+core header for planning; the complete runner needs those helpers. Production
+limit defaults remain J2 work, rather than adopting the fixtures' development
+budgets without measurements. D2-D4 can proceed independently; the D5 binding
+join and later browser turn/reclamation APIs remain separate acceptance gates.

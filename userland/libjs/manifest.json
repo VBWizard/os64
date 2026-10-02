@@ -94,7 +94,12 @@
       "path": "patches/0003-diagnostic-decimal-rounding.patch",
       "sha256": "c9b81c0e51fdfcd0cb3ab0f9a16e6af2557f52c4a95d44bb404273474e959753",
       "reason": "Add a target-private ties-even request for diagnostic %f; preserve JavaScript conversion rounding."
+    },
+    {
+      "path": "patches/0004-construction-allocation-cleanup.patch",
+      "sha256": "f0c73acff8fff6324ce6ee1240d1ba768f28012af084a510847a69d75e755ac0",
+      "reason": "Fix context GC unlinking, global construction failure, lazy-global cleanup and consuming Proxy installation failure."
     }
   ],
-  "configuration_scope": "Atomics-disabled, stack-checked engine profile; freestanding target core build and adapter host fixtures; standalone wrapper and guest engine link pending R2/M1"
+  "configuration_scope": "Atomics-disabled, stack-checked target engine and standalone runtime core; file/output/argument helpers and runner are tracked in JAVASCRIPT_TASKS.md"
 }

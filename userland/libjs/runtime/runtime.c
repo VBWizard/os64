@@ -1,0 +1,477 @@
+#include "os64/js_engine.h"
+#include "os64/mem.h"
+#include "os64/proc.h"
+#include "os64/str.h"
+#include "allocator.h"
+#include "platform.h"
+#include <limits.h>
+
+#define JS_PUBLIC __attribute__((visibility("default")))
+
+typedef struct Rejection {
+    struct Rejection *next;
+    JSValue promise, reason;
+} Rejection;
+
+struct os64_js_runtime {
+    JSRuntime *engine;
+    JSContext *context;
+    JSPortAllocator allocator;
+    os64_js_limits_t limits;
+    os64_js_outcome_t *active_outcome;
+    Rejection *rejections;
+    int64_t deadline, host_error;
+    uint64_t jobs;
+    os64_js_status_t failure;
+    os64_js_limit_t failed_limit;
+    unsigned cancelled;
+    bool active, turn, source_truncated;
+    char source_name[OS64_JS_SOURCE_NAME_CAP];
+};
+
+static unsigned class_lock;
+
+static bool copy_text(char *destination, size_t capacity, const char *source)
+{
+    size_t n = 0;
+    if (source != NULL)
+        while (n + 1 < capacity && source[n] != 0) {
+            destination[n] = source[n];
+            n++;
+        }
+    destination[n] = 0;
+    return source != NULL && source[n] != 0;
+}
+
+static os64_js_status_t status(os64_js_outcome_t *out, os64_js_status_t value,
+                                const char *message)
+{
+    out->status = value;
+    if (message != NULL)
+        out->diagnostic_truncated |= copy_text(out->message, sizeof(out->message), message);
+    return value;
+}
+
+static void latch(os64_js_runtime_t *runtime, os64_js_status_t value,
+                  os64_js_limit_t limit, int64_t error)
+{
+    if (runtime->failure == OS64_JS_OK) {
+        runtime->failure = value;
+        runtime->failed_limit = limit;
+        runtime->host_error = error;
+    }
+}
+
+/* An interrupt or allocator refusal is sticky even if script catches the
+ * engine's exception. The host observes the structured verdict on return. */
+static bool observe(os64_js_runtime_t *runtime)
+{
+    if (__atomic_load_n(&runtime->cancelled, __ATOMIC_ACQUIRE))
+        latch(runtime, OS64_JS_CANCELLED, OS64_JS_LIMIT_NONE, 0);
+    if (runtime->allocator.failures & JSPORT_ALLOC_LIMIT)
+        latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_MEMORY, 0);
+    if (runtime->allocator.failures & JSPORT_ALLOC_OOM)
+        latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, 0);
+    if (runtime->failure == OS64_JS_OK && runtime->turn) {
+        int64_t now = os64_micros();
+        if (now < 0)
+            latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, now);
+        else if (now >= runtime->deadline)
+            latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_EXECUTION, 0);
+    }
+    return runtime->failure != OS64_JS_OK;
+}
+
+static int interrupt(JSRuntime *engine, void *opaque)
+{
+    (void)engine;
+    return observe(opaque);
+}
+
+static void clear_rejections(os64_js_runtime_t *runtime)
+{
+    while (runtime->rejections != NULL) {
+        Rejection *item = runtime->rejections;
+        runtime->rejections = item->next;
+        JS_FreeValueRT(runtime->engine, item->promise);
+        JS_FreeValueRT(runtime->engine, item->reason);
+        js_free_rt(runtime->engine, item);
+    }
+}
+
+static void rejection(JSContext *context, JSValueConst promise,
+                      JSValueConst reason, JS_BOOL handled, void *opaque)
+{
+    os64_js_runtime_t *runtime = opaque;
+    Rejection **place = &runtime->rejections;
+    while (*place != NULL) {
+        if (observe(runtime)) return;
+        if (JS_VALUE_GET_PTR((*place)->promise) == JS_VALUE_GET_PTR(promise)) {
+            if (handled) {
+                Rejection *item = *place;
+                *place = item->next;
+                JS_FreeValueRT(runtime->engine, item->promise);
+                JS_FreeValueRT(runtime->engine, item->reason);
+                js_free_rt(runtime->engine, item);
+            }
+            return;
+        }
+        place = &(*place)->next;
+    }
+    if (handled || observe(runtime)) return;
+    Rejection *item = js_malloc_rt(runtime->engine, sizeof(*item));
+    if (item == NULL) return;
+    *item = (Rejection){.promise = JS_DupValue(context, promise),
+                        .reason = JS_DupValue(context, reason)};
+    *place = item;
+}
+
+static void discard_exception(JSContext *context)
+{
+    JSValue secondary = JS_GetException(context);
+    JS_FreeValue(context, secondary);
+}
+
+/* Conversion and property access can execute script. Keep the original turn
+ * armed and the public entry guard held while extracting diagnostics. */
+static void diagnostic(os64_js_runtime_t *runtime, JSValueConst value,
+                       os64_js_outcome_t *out)
+{
+    copy_text(out->message, sizeof(out->message), "JavaScript exception; diagnostic unavailable");
+    if (observe(runtime)) return;
+    const char *text = JS_ToCString(runtime->context, value);
+    if (text != NULL) {
+        out->diagnostic_truncated |= copy_text(out->message, sizeof(out->message), text);
+        JS_FreeCString(runtime->context, text);
+    } else {
+        discard_exception(runtime->context);
+    }
+    if (!JS_IsObject(value) || observe(runtime)) return;
+    JSValue stack = JS_GetPropertyStr(runtime->context, value, "stack");
+    if (JS_IsException(stack)) {
+        discard_exception(runtime->context);
+    } else if (JS_IsString(stack)) {
+        text = JS_ToCString(runtime->context, stack);
+        if (text != NULL) {
+            out->diagnostic_truncated |= copy_text(out->stack_trace, sizeof(out->stack_trace), text);
+            JS_FreeCString(runtime->context, text);
+        } else {
+            discard_exception(runtime->context);
+        }
+    }
+    JS_FreeValue(runtime->context, stack);
+}
+
+/* A checkpoint must not create more jobs by calling a rejection reason's
+ * toString. Read string data on a real Error, or render a primitive; other
+ * objects keep the fixed fallback. Error proxies do not pass JS_IsError. */
+static void rejection_diagnostic(os64_js_runtime_t *runtime, JSValueConst value,
+                                 os64_js_outcome_t *out)
+{
+    copy_text(out->message, sizeof(out->message), "unhandled Promise rejection");
+    if (!JS_IsObject(value)) {
+        diagnostic(runtime, value, out);
+        return;
+    }
+    if (!JS_IsError(runtime->context, value) || observe(runtime)) return;
+    const char *names[] = {"message", "stack"};
+    char *fields[] = {out->message, out->stack_trace};
+    const size_t sizes[] = {sizeof(out->message), sizeof(out->stack_trace)};
+    for (size_t i = 0; i < 2 && !observe(runtime); i++) {
+        JSAtom name = JS_NewAtom(runtime->context, names[i]);
+        if (name == JS_ATOM_NULL) { discard_exception(runtime->context); break; }
+        JSPropertyDescriptor descriptor = {0};
+        int present = JS_GetOwnProperty(runtime->context, &descriptor, value, name);
+        JS_FreeAtom(runtime->context, name);
+        if (present < 0) discard_exception(runtime->context);
+        if (present > 0) {
+            if (JS_IsString(descriptor.value)) {
+                const char *text = JS_ToCString(runtime->context, descriptor.value);
+                if (text != NULL) {
+                    out->diagnostic_truncated |= copy_text(fields[i], sizes[i], text);
+                    JS_FreeCString(runtime->context, text);
+                } else discard_exception(runtime->context);
+            }
+            JS_FreeValue(runtime->context, descriptor.value);
+            JS_FreeValue(runtime->context, descriptor.getter);
+            JS_FreeValue(runtime->context, descriptor.setter);
+        }
+    }
+}
+
+static os64_js_status_t enter(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
+{
+    if (out == NULL) return OS64_JS_BAD_ARGUMENT;
+    /* A callback must use its own outcome. Refuse an alias before clearing
+     * storage that belongs to the active outer call. */
+    if (runtime != NULL && runtime->active_outcome == out) return OS64_JS_BUSY;
+    os64_memset(out, 0, sizeof(*out));
+    if (runtime == NULL) return status(out, OS64_JS_BAD_ARGUMENT, "runtime is required");
+    if (runtime->active) return status(out, OS64_JS_BUSY, "runtime is executing");
+    if (runtime->failure != OS64_JS_OK)
+        return status(out, OS64_JS_FAILED_RUNTIME, "runtime has failed");
+    runtime->active = true;
+    runtime->active_outcome = out;
+    JS_UpdateStackTop(runtime->engine);
+    return OS64_JS_OK;
+}
+
+static os64_js_status_t refuse(os64_js_runtime_t *runtime, os64_js_outcome_t *out,
+                               os64_js_status_t value, const char *message)
+{
+    out->jobs_pending = JS_IsJobPending(runtime->engine);
+    out->jobs_executed = runtime->jobs;
+    runtime->active_outcome = NULL;
+    runtime->active = false;
+    return status(out, value, message);
+}
+
+static os64_js_status_t leave(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
+{
+    bool pending = JS_IsJobPending(runtime->engine);
+    if (pending && runtime->jobs == runtime->limits.jobs_per_turn)
+        latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_JOBS, 0);
+    if (!observe(runtime) && !pending && runtime->turn) {
+        if (out->status == OS64_JS_OK && runtime->rejections != NULL) {
+            out->status = OS64_JS_UNHANDLED_REJECTION;
+            rejection_diagnostic(runtime, runtime->rejections->reason, out);
+        }
+        pending = JS_IsJobPending(runtime->engine);
+        if (!pending) clear_rejections(runtime);
+    }
+    if (observe(runtime)) {
+        const char *message = "host service failed";
+        if (runtime->failure == OS64_JS_CANCELLED) message = "execution cancelled";
+        else if (runtime->failure == OS64_JS_LIMIT) message = "runtime limit exceeded";
+        else if (runtime->allocator.failures & JSPORT_ALLOC_OOM) message = "host allocation failed";
+        status(out, runtime->failure, message);
+        out->limit = runtime->failed_limit;
+        out->host_error = runtime->host_error;
+    }
+    out->jobs_pending = pending;
+    out->jobs_executed = runtime->jobs;
+    out->diagnostic_truncated |= runtime->source_truncated |
+        copy_text(out->source_name, sizeof(out->source_name), runtime->source_name);
+    if (!pending || runtime->failure != OS64_JS_OK) runtime->turn = false;
+    runtime->active_outcome = NULL;
+    runtime->active = false;
+    return out->status;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_create(const os64_js_config_t *config,
+                                        const char *caller_abi,
+                                        os64_js_runtime_t **out,
+                                        os64_js_outcome_t *outcome)
+{
+    if (out != NULL) *out = NULL;
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (out == NULL || config == NULL || caller_abi == NULL)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "configuration, ABI and output are required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return status(outcome, OS64_JS_ABI_MISMATCH, "runtime header ABI mismatch");
+    const os64_js_limits_t *limits = &config->limits;
+    if (limits->memory_bytes == 0 || limits->stack_bytes == 0 ||
+        limits->stack_bytes > PTRDIFF_MAX || limits->source_bytes == 0 ||
+        limits->source_bytes == SIZE_MAX || limits->execution_ms == 0 ||
+        limits->execution_ms > INT64_MAX / 1000 || limits->jobs_per_turn == 0)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "limits must be positive and representable");
+    int64_t now = os64_micros();
+    if (now < 0) {
+        outcome->host_error = now;
+        return status(outcome, OS64_JS_HOST_FAILURE, "monotonic clock unavailable");
+    }
+    if (limits->execution_ms * 1000 > (uint64_t)(INT64_MAX - now))
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "deadline is not representable");
+    /* Keep subtraction of the configured downward-growing stack budget away
+     * from zero, including the engine frames below this construction frame. */
+    if (limits->stack_bytes > (uintptr_t)&now / 2)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "stack limit exceeds the address range");
+    if (sizeof(os64_js_runtime_t) >= limits->memory_bytes) {
+        outcome->limit = OS64_JS_LIMIT_MEMORY;
+        return status(outcome, OS64_JS_LIMIT, "runtime storage exceeds memory limit");
+    }
+    os64_js_runtime_t *runtime = os64_malloc(sizeof(*runtime));
+    if (runtime == NULL)
+        return status(outcome, OS64_JS_HOST_FAILURE, "host allocation failed");
+    size_t storage = os64_malloc_size(runtime);
+    os64_memset(runtime, 0, sizeof(*runtime));
+    runtime->limits = *limits;
+    runtime->allocator.payload_limit = storage < limits->memory_bytes
+        ? limits->memory_bytes - storage : 0;
+    if (storage < limits->memory_bytes)
+        runtime->engine = JS_NewRuntime2(&jsport_malloc_functions, &runtime->allocator);
+    if (runtime->engine != NULL) {
+        JS_SetMemoryLimit(runtime->engine, runtime->allocator.payload_limit);
+        JS_SetMaxStackSize(runtime->engine, limits->stack_bytes);
+        JS_SetRuntimeOpaque(runtime->engine, runtime);
+        runtime->context = JS_NewContext(runtime->engine);
+    }
+    bool ready = false;
+    if (runtime->context != NULL) {
+        JSValue global = JS_GetGlobalObject(runtime->context);
+        JSAtom name = JS_NewAtom(runtime->context, "SharedArrayBuffer");
+        if (name != JS_ATOM_NULL)
+            ready = JS_DeleteProperty(runtime->context, global, name, JS_PROP_THROW) == 1;
+        JS_FreeAtom(runtime->context, name);
+        JS_FreeValue(runtime->context, global);
+    }
+    if (!ready || runtime->allocator.failures != 0) {
+        bool limited = storage >= limits->memory_bytes ||
+            (runtime->allocator.failures & JSPORT_ALLOC_LIMIT);
+        if (runtime->context != NULL) JS_FreeContext(runtime->context);
+        if (runtime->engine != NULL) JS_FreeRuntime(runtime->engine);
+        os64_free(runtime);
+        if (limited) outcome->limit = OS64_JS_LIMIT_MEMORY;
+        return status(outcome, limited ? OS64_JS_LIMIT : OS64_JS_HOST_FAILURE,
+                      limited ? "runtime construction exceeds memory limit" : "runtime construction failed");
+    }
+    JS_SetContextOpaque(runtime->context, runtime);
+    JS_SetInterruptHandler(runtime->engine, interrupt, runtime);
+    JS_SetHostPromiseRejectionTracker(runtime->engine, rejection, runtime);
+    *out = runtime;
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC JSContext *os64_js_context(os64_js_runtime_t *runtime, const char *caller_abi,
+                                    os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL || (runtime != NULL && runtime->active_outcome == outcome)) return NULL;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (runtime == NULL || caller_abi == NULL) {
+        status(outcome, OS64_JS_BAD_ARGUMENT, "runtime and ABI are required");
+        return NULL;
+    }
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0) {
+        status(outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
+        return NULL;
+    }
+    if (runtime->failure != OS64_JS_OK || __atomic_load_n(&runtime->cancelled, __ATOMIC_ACQUIRE)) {
+        status(outcome, OS64_JS_FAILED_RUNTIME, "runtime has failed");
+        return NULL;
+    }
+    return runtime->context;
+}
+
+JS_PUBLIC JSClassID os64_js_class_id(JSClassID *slot)
+{
+    if (slot == NULL) return 0;
+    while (__atomic_exchange_n(&class_lock, 1, __ATOMIC_ACQUIRE))
+        __asm__ volatile("pause");
+    JSClassID id = JS_NewClassID(slot);
+    __atomic_store_n(&class_lock, 0, __ATOMIC_RELEASE);
+    return id;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_eval(os64_js_runtime_t *runtime,
+                                      const void *source, size_t length,
+                                      const char *source_name,
+                                      os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if ((source == NULL && length != 0) || source_name == NULL) {
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "source bytes and name are required");
+    }
+    if (runtime->turn || JS_IsJobPending(runtime->engine)) {
+        return refuse(runtime, outcome, OS64_JS_BUSY, "the previous turn has queued jobs");
+    }
+    if (length > runtime->limits.source_bytes) {
+        runtime->jobs = 0;
+        runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), source_name);
+        latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_SOURCE, 0);
+        return leave(runtime, outcome);
+    }
+    if (observe(runtime)) return leave(runtime, outcome);
+    char *copy = js_malloc_rt(runtime->engine, length + 1);
+    if (copy == NULL) return leave(runtime, outcome);
+    if (length != 0) os64_memcpy(copy, source, length);
+    copy[length] = 0;
+    int64_t now = os64_micros();
+    if (now < 0) latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, now);
+    else if (runtime->limits.execution_ms * 1000 > (uint64_t)(INT64_MAX - now)) {
+        js_free_rt(runtime->engine, copy);
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "deadline is not representable");
+    } else {
+        runtime->jobs = 0;
+        runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), source_name);
+        runtime->deadline = now + (int64_t)(runtime->limits.execution_ms * 1000);
+        runtime->turn = true;
+        JSValue value = JS_Eval(runtime->context, copy, length, source_name, JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(value)) {
+            JSValue error = JS_GetException(runtime->context);
+            outcome->status = OS64_JS_EXCEPTION;
+            diagnostic(runtime, error, outcome);
+            JS_FreeValue(runtime->context, error);
+        }
+        JS_FreeValue(runtime->context, value);
+    }
+    js_free_rt(runtime->engine, copy);
+    return leave(runtime, outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_drain_jobs(os64_js_runtime_t *runtime,
+                                            uint64_t slice_jobs,
+                                            os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (slice_jobs == 0) {
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "job slice must be positive");
+    }
+    if (!runtime->turn && JS_IsJobPending(runtime->engine))
+        jsport_fatal("jobs outside a runtime turn", __FILE__, __LINE__);
+    uint64_t count = 0;
+    while (JS_IsJobPending(runtime->engine) && count < slice_jobs && !observe(runtime)) {
+        if (runtime->jobs == runtime->limits.jobs_per_turn) {
+            latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_JOBS, 0);
+            break;
+        }
+        runtime->jobs++;
+        count++;
+        JSContext *context = NULL;
+        if (JS_ExecutePendingJob(runtime->engine, &context) < 0) {
+            if (context == NULL) context = runtime->context;
+            JSValue error = JS_GetException(context);
+            outcome->status = OS64_JS_EXCEPTION;
+            diagnostic(runtime, error, outcome);
+            JS_FreeValue(context, error);
+            break;
+        }
+    }
+    if (outcome->status == OS64_JS_OK && JS_IsJobPending(runtime->engine))
+        outcome->status = OS64_JS_MORE_JOBS;
+    return leave(runtime, outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_run(os64_js_runtime_t *runtime,
+                                     const void *source, size_t length,
+                                     const char *source_name,
+                                     os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = os64_js_eval(runtime, source, length, source_name, outcome);
+    if (result != OS64_JS_OK) return result;
+    while (outcome->jobs_pending) {
+        result = os64_js_drain_jobs(runtime, UINT64_MAX, outcome);
+        if (result != OS64_JS_OK && result != OS64_JS_MORE_JOBS) return result;
+    }
+    return result;
+}
+
+JS_PUBLIC void os64_js_cancel(os64_js_runtime_t *runtime)
+{
+    if (runtime != NULL) __atomic_store_n(&runtime->cancelled, 1, __ATOMIC_RELEASE);
+}
+
+JS_PUBLIC void os64_js_destroy(os64_js_runtime_t *runtime)
+{
+    if (runtime == NULL) return;
+    if (runtime->active) jsport_fatal("destroy during an active runtime call", __FILE__, __LINE__);
+    runtime->active = true;
+    runtime->failure = OS64_JS_FAILED_RUNTIME;
+    JS_SetHostPromiseRejectionTracker(runtime->engine, NULL, NULL);
+    clear_rejections(runtime);
+    JS_FreeContext(runtime->context);
+    JS_FreeRuntime(runtime->engine);
+    os64_free(runtime);
+}

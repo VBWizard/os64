@@ -345,7 +345,7 @@ APP_ALIASES := [
 # probing, feeding it both lists yields exactly the map it produced when they
 # were one list: moving a program between apps/ and tests/ does not move it in
 # memory.
-APP_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py $(APPS) $(TESTS))
+APP_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py $(APPS) $(TESTS) jsembedtest)
 # The slot size comes from the same script that assigns the bases, and is
 # handed to ld so app.ld can ASSERT the app actually fits in its slot. One
 # definition of the number; see app.ld's slot-check comment.
