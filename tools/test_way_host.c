@@ -38,6 +38,13 @@ void os64_yield(void)
 
 static size_t allocations, fail_at, live;
 
+// libhtml ends the program when a pinned document is freed. A harness that
+// reached this has found that, so it fails.
+void os64_exit(int32_t code)
+{
+    (void)code;
+    exit(3);
+}
 void *os64_malloc(size_t size)
 {
     allocations++;

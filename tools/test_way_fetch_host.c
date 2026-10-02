@@ -32,6 +32,13 @@
 
 // ── The heap ────────────────────────────────────────────────────────────
 
+// libhtml ends the program when a pinned document is freed. A harness that
+// reached this has found that, so it fails.
+void os64_exit(int32_t code)
+{
+    (void)code;
+    exit(3);
+}
 void *os64_malloc(size_t size) { return malloc(size != 0 ? size : 1); }
 void *os64_calloc(size_t n, size_t size) { return calloc(n != 0 ? n : 1, size != 0 ? size : 1); }
 void *os64_realloc(void *p, size_t size) { return realloc(p, size != 0 ? size : 1); }

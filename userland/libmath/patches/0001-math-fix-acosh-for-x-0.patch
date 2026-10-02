@@ -1,0 +1,47 @@
+From 3e80328d45b73604012b9b174f11e3ed632005ce Mon Sep 17 00:00:00 2001
+From: Szabolcs Nagy <nsz@port70.net>
+Date: Mon, 3 Aug 2026 06:41:28 +0000
+Subject: math: fix acosh for x<0
+
+acosh(-0x1.8p15) returned -3.7534177368329567 instead of nan.
+
+the same issue got fixed for acoshf and acoshl in commits
+c4c38e6364323b6d83ba3428464e19987b981d7a and
+6d10102709df4bc966d2846c1c45cd667e5048e5 here we follow the latter.
+
+reported by Paul Zimmermann.
+---
+ src/math/acosh.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/src/math/acosh.c b/src/math/acosh.c
+index badbf908..75ce95aa 100644
+--- a/src/math/acosh.c
++++ b/src/math/acosh.c
+@@ -9,16 +9,17 @@
+ double acosh(double x)
+ {
+ 	union {double f; uint64_t i;} u = {.f = x};
+-	unsigned e = u.i >> 52 & 0x7ff;
+-
+-	/* x < 1 domain error is handled in the called functions */
++	unsigned e = u.i >> 52;
+ 
+ 	if (e < 0x3ff + 1)
+-		/* |x| < 2, up to 2ulp error in [1,1.125] */
++		/* 0 <= x < 2, up to 2ulp error in [1,1.125] */
+ 		return log1p(x-1 + sqrt((x-1)*(x-1)+2*(x-1)));
+ 	if (e < 0x3ff + 26)
+-		/* |x| < 0x1p26 */
++		/* 2 <= x < 0x1p26 */
+ 		return log(2*x - 1/(x+sqrt(x*x-1)));
+-	/* |x| >= 0x1p26 or nan */
++	if (e & 0x800)
++		/* x < 0 or x = -0, invalid */
++		return (x-x)/(x-x);
++	/* x >= 0x1p26 or nan */
+ 	return log(x) + 0.693147180559945309417232121458176568;
+ }
+-- 
+cgit v1.2.1
+

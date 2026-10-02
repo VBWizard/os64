@@ -11,8 +11,10 @@ LIBGARB_CFLAGS = $(LIBOS64_CFLAGS) -O2 -fvisibility=hidden -I$(CURDIR)/libgarb/i
 LIBGARB_BASE = $(patsubst libgarb.so=%,%,$(filter libgarb.so=%,$(LIB_BASE_PAIRS)))
 LIBGARB_LDFLAGS = $(SHARED_LIB_LDFLAGS) -soname libgarb.so
 
+# library.mk holds the object list and the link flags: removing a source
+# creates no newer object, so without it the old library would look current.
 $(LIBGARB_SO): $(LIBGARB_OBJS) $(LIBHTML_SO) $(LIBOS64_SO) $(CURDIR)/link/lib.ld \
-               $(CURDIR)/tools/app_bases.py
+               $(CURDIR)/tools/app_bases.py libgarb/library.mk
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBGARB_BASE) \
 	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBGARB_LDFLAGS) --no-as-needed \

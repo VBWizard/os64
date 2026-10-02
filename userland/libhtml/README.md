@@ -24,13 +24,21 @@ os64_html_document_free(doc);
 
 For cancellation call `os64_html_parser_destroy(p)` instead of `finish`.
 A supplied options object uses its values literally, including zero limits.
-Nodes and attributes are read-only views, and sharing their strings during
-formatting reconstruction is safe under that contract. A document owns the
+Nodes and attributes are read-only views. A finished document is changed
+through the verbs at the foot of `html.h` (create, insert, replace, remove,
+attributes, text, clone), which keep every rule a reader relies on; the design
+is [DOM.md](../../docs/design/pending/DOM.md). Elements made by formatting
+reconstruction share one list of attribute records, so a verb copies an
+element's list before it first changes it. A document owns the
 allocation ledger; scratch buffers are charged to the same budget and released
 on finish. Stable node/string storage uses geometric arena chunks. A parser
-needs serialized calls; distinct parsers have independent state.
+needs serialized calls, and so do a document's verbs; distinct documents
+share two counters (document marks and pin numbers), advanced atomically, and
+nothing else. A verb refuses a node of another document; `os64_html_clone`
+copies one across.
 
-`core.c` owns allocations, topology primitives, limits, and the public API.
+`core.c` owns allocations, pins and retirement, topology primitives, limits,
+and the parsing API. `dom.c` holds the verbs that change a finished document.
 `encoding.c` selects/decodes the byte stream and preprocesses newlines.
 `tokenizer.c` implements token states and character references. `tree.c`
 implements insertion modes, formatting reconstruction/adoption, templates,
@@ -50,6 +58,7 @@ Validation:
 ```sh
 # Omit the ASAN override when LeakSanitizer is available outside ptrace.
 ASAN_OPTIONS=detect_leaks=0 tools/test_html_host.sh
+tools/test_html_dom_host.sh        # the verbs
 make -j4
 # Inside os64:
 /tests/testrun htmltest
@@ -61,5 +70,7 @@ resource refusals, saved trees, and a 30-second mutation pass. It does not fetch
 network resources or update expected results. `HTML_FUZZ_SECONDS` selects a
 longer fuzz budget. `tools/update_html_fixtures.py` and
 `tools/update_html_corpus.py` are explicit refresh commands; review their inputs
-and regenerated expectations together. Corpus snapshots can be regenerated
+and regenerated expectations together. `tools/test_html_dom_host.sh` proves the
+verbs: cases by hand, every allocation failed in turn, pins and retirement, and
+random walks checked step by step against a second tree kept by the test. Corpus snapshots can be regenerated
 with `tools/test_html_corpus.py --driver <host-driver> --refresh-snapshots`.

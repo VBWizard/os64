@@ -39,6 +39,13 @@ static size_t allocations, fail_at, live;
 // on: the shape of a budget the text engine hits while malloc still works.
 static bool fail_single;
 
+// libhtml ends the program when a pinned document is freed. A harness that
+// reached this has found that, so it fails.
+void os64_exit(int32_t code)
+{
+    (void)code;
+    exit(3);
+}
 void *os64_malloc(size_t size)
 {
     allocations++;

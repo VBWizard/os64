@@ -1,0 +1,10 @@
+# The whole public surface: the functions <math.h> declares, by their C
+# names. musl's helpers (__sin, __rem_pio2, the exp/log/pow tables, scalbn,
+# rint) stay local, so no consumer can come to depend on one.
+{
+  global:
+    acos; acosh; asin; asinh; atan; atan2; atanh; cbrt; ceil; cos; cosh;
+    exp; expm1; fabs; floor; fmax; fmin; fmod; hypot; log; log10; log1p;
+    log2; lrint; pow; round; sin; sinh; sqrt; tan; tanh; trunc;
+  local: *;
+};

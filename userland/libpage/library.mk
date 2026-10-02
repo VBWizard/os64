@@ -15,8 +15,10 @@ LIBPAGE_CFLAGS = $(LIBOS64_CFLAGS) -O2 -fvisibility=hidden \
 LIBPAGE_BASE = $(patsubst libpage.so=%,%,$(filter libpage.so=%,$(LIB_BASE_PAIRS)))
 LIBPAGE_LDFLAGS = $(SHARED_LIB_LDFLAGS) -soname libpage.so
 
+# library.mk holds the object list and the link flags: removing a source
+# creates no newer object, so without it the old library would look current.
 $(LIBPAGE_SO): $(LIBPAGE_OBJS) $(LIBHTML_SO) $(LIBOS64_SO) $(CURDIR)/link/lib.ld \
-               $(CURDIR)/tools/app_bases.py
+               $(CURDIR)/tools/app_bases.py libpage/library.mk
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBPAGE_BASE) \
 	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBPAGE_LDFLAGS) --no-as-needed \
