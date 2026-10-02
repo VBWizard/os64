@@ -47,7 +47,7 @@ def main():
         assert b'cases=256 ' in result.stdout, result.stdout
         total += 256
         batches += 1
-    print(f'Fuzz: mutations={total} chunkings=3 seed={seed:#x} '
+    print(f'Fuzz: mutations={total} chunkings=4 seed={seed:#x} '
           f'budget={args.seconds:g}s elapsed={time.monotonic() - start:.2f}s batches={batches}')
 
 

@@ -116,11 +116,12 @@ void                  os64_html_document_free(os64_html_document_t *doc);
   Bounds for what a step is and why bytes do not bound time). Passing NULL
   selects defaults; otherwise initialize with `os64_html_options_default()`
   and override fields. Supplied zero limits mean zero, including an empty
-  byte prefix. The constructor copies the charset label. Nothing else. **Scripting
-  is OFF and not an option:** os64 runs no JavaScript, so the parser takes
-  the standard's scripting-disabled branches — `<noscript>` content is
-  parsed as markup and shows, and the "in head noscript" insertion mode
-  is live.
+  byte prefix. The constructor copies the charset label. **`scripting` is off
+  unless a host that runs scripts sets it:** off, the parser takes the
+  standard's scripting-disabled branches — `<noscript>` content is parsed
+  as markup and shows, and the "in head noscript" insertion mode is live.
+  On, it takes the other branches and stops at each script (the
+  2026-10-02 section below).
 
 ## Character encoding
 
@@ -323,9 +324,6 @@ the page).
 
 **Out, by name, with the consequence stated:**
 
-- **Scripting-enabled behaviour.** Tests marked `#script-on` are
-  skipped; `#script-off` and unmarked tests run. This is not a cut, it is
-  the truth about the machine.
 - **XML-output coercion.** The four `xmlViolation.test` cases are skipped
   individually as `xml-output-coercion`. They test optional conversion to an
   XML infoset, including changes to text and comments that libhtml preserves.
@@ -334,8 +332,8 @@ the page).
   standard's fragment algorithm (`innerHTML`), which exists for scripts.
   Skipped by name; there is no fragment entry point.
 - **The "change the encoding" restart** — the deviation above, tested.
-- **`document.write`, `<isindex>` rewriting.** Not applicable; removed
-  from the standard.
+- **`document.write`.** Booked in DOM.md as a slice of its own.
+- **`<isindex>` rewriting.** Removed from the standard.
 
 The skip list is a checked-in file, one line per skipped test naming the
 suite file, the input's hash, and the reason from the list above. A test
@@ -569,6 +567,39 @@ the changes go through libhtml. The design is
   figure rises by that.
 - **Parsing is unchanged.** The reference, safety, chunking and corpus
   results are identical, work units included.
+
+### 2026-10-02: the parse that stops (DOM.md, slice D2a)
+
+A host that runs scripts needs the parser to wait for it. `scripting` is now
+an option, off by default, and with it on the parser takes the standard's
+scripting-enabled branches and stops at each script: `feed` answers
+`OS64_HTML_SCRIPT`, the host does what it does, and `resume` carries on.
+`end` says the input is over without giving up the stops, `abandon` hands
+over a document part way, and between any two calls the tree can be read,
+pinned and changed with the verbs. `html.h` carries the contract under THE
+PARSE THAT STOPS, and DOM.md § D2a, as built, the evidence. What that
+changes here:
+
+- **The `#script-on` cases are off the skip list**, and every tree case not
+  marked `#script-off` runs both ways. The skip list is now fragment parsing
+  and XML-output coercion.
+- **Input fed while the parse is stopped is held on the heap, not in the
+  arena.** `max_bytes` bounds it. Charged to the arena it would make a page
+  near its budget refuse when fed whole and parse when fed in pieces, and
+  the rule that a chunk boundary is invisible is worth more than one ledger.
+- **A tree a verb has changed mid-parse is checked link by link.** The
+  parser's stack of open elements is what kept it from making a cycle or a
+  tree deeper than twice the stack; a script that rearranges open elements
+  voids both. From the first such move the parser asks the verbs' validity
+  rules before each link and charges the walks as work.
+- **With scripting off the trees are the same, for the same work.** Three
+  things differ at the edges. An end tag `</p>` or `</br>` at an integration
+  point (`<svg><foreignObject></p>`) used to send the parser round until the
+  work budget ran out and the page was refused; it now builds the tree
+  Chrome builds. Attributes a second `<html>` or `<body>` tag adds go on a
+  list of the element's own, so such a page's arena figure differs. And a
+  parse refused in the middle of the adoption agency keeps the nodes it was
+  moving in one tree, with no control left tied to a form in another.
 
 ### Implementation evidence (2026-09-11)
 

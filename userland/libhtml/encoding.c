@@ -309,6 +309,7 @@ void h_decode_finish(os64_html_parser_t *p)
 {
     if (p->eof_sent || p->d->pub.refusal)
         return;
+    h_moving(p);
     p->offset = p->d->pub.input_bytes;
     if (p->decoder_need || p->high_surrogate || p->utf16_byte >= 0) {
         h_error(p, "invalid-character-encoding");
@@ -360,8 +361,8 @@ void h_encoding_start(os64_html_parser_t *p)
         encoding = E_1252;
     p->encoding = (unsigned)encoding;
     p->d->pub.charset = encoding_name(encoding);
-    for (size_t i = skip; i < n && !p->d->pub.refusal; i++)
-        h_decode(p, s[i], i);
+    p->parsed = skip;
+    h_pump(p);
 }
 void h_late_meta(os64_html_parser_t *p, HNode *n)
 {

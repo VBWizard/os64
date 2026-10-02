@@ -6,13 +6,14 @@
  * Charging capacity and headers makes the arena limit a retained-memory bound,
  * rather than a count of requested payload bytes. Growth charges both blocks
  * while copying; the returned document reports its peak as well as live cost.
- * `retired_at` is zero on a live block, which sits on the document's `blocks`
- * list; a retired one sits on `retired` and carries the version of the change
- * that replaced it. The word also keeps the payload 16-byte aligned. */
+ * `stamp` is a version of the document. On a live block, which sits on the
+ * document's `blocks` list, it is the version the block was made at; on a
+ * retired one, which sits on `retired`, the version of the change that
+ * replaced it. The word also keeps the payload 16-byte aligned. */
 struct HBlock {
     HBlock *prev, *next;
     size_t size;
-    uint64_t retired_at;
+    uint64_t stamp;
 };
 static const char *const tag_names[] = {
 #include "tags.inc"
@@ -106,7 +107,7 @@ void *d_alloc(HDoc *d, size_t size, int64_t *why)
         return NULL;
     }
     b->size = sizeof(*b) + size;
-    b->retired_at = 0;
+    b->stamp = d->version;
     b->prev = NULL;
     b->next = d->blocks;
     if (b->next)
@@ -182,7 +183,7 @@ void d_retire(HDoc *d, void *ptr)
      * allocates nothing and cannot fail. */
     HBlock *b = (HBlock *)ptr - 1;
     block_unlink(&d->blocks, b);
-    b->retired_at = d->version;
+    b->stamp = d->version;
     b->prev = NULL;
     b->next = d->retired;
     if (b->next)
@@ -194,9 +195,18 @@ static void reclaim(HDoc *d)
 {
     for (HBlock *b = d->retired, *next; b; b = next) {
         next = b->next;
-        if (!pinned_below(d, b->retired_at))
+        if (!pinned_below(d, b->stamp))
             retired_free(d, b);
     }
+}
+/* Whether a snapshot may be pointing at a live block made at version `born`:
+ * a pin taken before the block existed cannot be. */
+static bool pinned_since(const HDoc *d, uint64_t born)
+{
+    for (size_t i = 0; i < H_PINS; i++)
+        if (d->pins[i] >= born && d->pins[i])
+            return true;
+    return false;
 }
 /* A broken promise about memory ends the program, as a stomped heap canary
  * does: whoever still holds the pin is about to read what is being freed. */
@@ -225,6 +235,7 @@ os64_html_pin_t os64_html_pin(const os64_html_document_t *doc)
     for (size_t i = 0; i < H_PINS; i++)
         if (!d->pins[i]) {
             d->pins[i] = d->version;
+            d->pinned++;
             d->pin_handles[i] = __atomic_add_fetch(&pin_serial, 1, __ATOMIC_RELAXED) * H_PINS + i;
             return d->pin_handles[i];
         }
@@ -239,6 +250,7 @@ void os64_html_unpin(const os64_html_document_t *doc, os64_html_pin_t pin)
     if (!d->pins[slot] || d->pin_handles[slot] != pin)
         fatal("libhtml: unpin of a pin that is not held\n");
     d->pins[slot] = 0;
+    d->pinned--;
     reclaim(d);
 }
 size_t os64_html_retired_bytes(const os64_html_document_t *doc)
@@ -364,6 +376,35 @@ bool h_buf_put(os64_html_parser_t *p, HBuf *b, uint32_t c)
     }
     return h_buf_bytes(p, b, s, n);
 }
+/* DOM.md's "grow in place". A text node's bytes are a block of the node's
+ * own once its private word holds a capacity, and the tree can be read
+ * between two calls of the parser. A snapshot built then pinned a version no
+ * older than the block and may be pointing into it, so the block is not
+ * written to and not freed: the text moves to a block of its own first, and
+ * the old one is retired. A pin older than the block never saw it, and the
+ * block the move makes is newer than every pin, so a text node is moved
+ * once for each snapshot taken, not once for each character. */
+bool h_text_put(os64_html_parser_t *p, HNode *n, uint32_t c)
+{
+    HDoc *d = p->d;
+    size_t *cap = h_word(n);
+    if (*cap && d->pinned && pinned_since(d, ((HBlock *)n->text - 1)->stamp)) {
+        char *own = h_alloc(p, *cap);
+        if (!own)
+            return false;
+        for (size_t i = 0; i < n->text_len; i++)
+            own[i] = n->text[i];
+        d_retire(d, (char *)n->text);
+        n->text = own;
+    }
+    HBuf b = {*cap ? (char *)n->text : NULL, n->text_len, *cap};
+    if (!h_buf_put(p, &b, c))
+        return false;
+    n->text = b.s;
+    n->text_len = b.len;
+    *cap = b.cap;
+    return true;
+}
 void h_buf_reset(HBuf *b)
 {
     b->len = 0;
@@ -459,6 +500,8 @@ const char *os64_html_status_name(int64_t s)
     switch (s) {
     case OS64_HTML_OK:
         return "OS64_HTML_OK";
+    case OS64_HTML_SCRIPT:
+        return "OS64_HTML_SCRIPT";
     case OS64_HTML_TOO_LARGE:
         return "OS64_HTML_TOO_LARGE";
     case OS64_HTML_ARENA_EXHAUSTED:
@@ -499,16 +542,19 @@ void os64_html_document_free(os64_html_document_t *doc)
 }
 void os64_html_parser_destroy(os64_html_parser_t *p)
 {
-    if (p)
-        os64_html_document_free(&p->d->pub);
+    if (!p)
+        return;
+    os64_free(p->hold);     /* the heap's, so the ledger below does not free it */
+    os64_html_document_free(&p->d->pub);
 }
 
 os64_html_options_t os64_html_options_default(void)
 {
-    /* The saved Wikipedia page peaks at 4,255,104 charged bytes and 1,210,369
+    /* The saved Wikipedia page peaks near 4.3 MB of charged bytes and 1.2M
      * work units. 64 MiB and 100M leave about 15x/82x headroom for real pages;
      * crafted growth still refuses by name (tools/test_html_driver.c). */
-    return (os64_html_options_t){NULL, 8u * 1024u * 1024u, 64u * 1024u * 1024u, 512, 100000000};
+    return (os64_html_options_t){NULL, 8u * 1024u * 1024u, 64u * 1024u * 1024u, 512, 100000000,
+                                 false};
 }
 /* Where HDoc.id comes from: a count of the documents the program has begun.
  * It does not come round. A mark given out twice could sit on two live
@@ -567,57 +613,199 @@ os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options)
     }
     return p;
 }
+/* ── The parse, call by call ─────────────────────────────────────────────
+ *
+ * Bytes reach the decoder in the order they were fed, from three places: the
+ * sniff window (`prescan`) once the encoding is chosen, then the hold, then
+ * the caller's own buffer, which is read where it lies when nothing is
+ * waiting ahead of it. A parse stopped at a script takes no byte further:
+ * what is fed meanwhile joins the hold. */
+/* The document's version moves once in each call of the parser that parses
+ * anything, and before the first thing it parses: whatever was built or
+ * pinned between two calls is then older than every block this call makes
+ * and every block it retires (DOM.md, the mutation core). It is said by
+ * whoever is about to hand the decoder a byte, and not by the decoder, which
+ * would say it a byte at a time. */
+void h_moving(os64_html_parser_t *p)
+{
+    if (!p->moved) {
+        p->moved = true;
+        p->d->version++;
+    }
+}
+static void hold_free(os64_html_parser_t *p)
+{
+    os64_free(p->hold);
+    p->hold = NULL;
+    p->hold_len = p->hold_cap = p->hold_at = 0;
+}
+void h_pump(os64_html_parser_t *p)
+{
+    HDoc *d = p->d;
+    if (!p->started)
+        return;
+    if (!d->pub.refusal && !p->script &&
+        (p->parsed < p->prescan_len || p->hold_at < p->hold_len))
+        h_moving(p);
+    while (!d->pub.refusal && !p->script) {
+        if (p->parsed < p->prescan_len) {
+            size_t at = p->parsed++;
+            h_decode(p, p->prescan[at], at);
+        } else if (p->hold_at < p->hold_len)
+            h_decode(p, p->hold[p->hold_at++], p->parsed++);
+        else
+            break;
+    }
+    if (p->hold_at == p->hold_len)
+        hold_free(p);
+}
+/* Keep `n` bytes for later. False, and the parse refused, when the heap has
+ * no room. */
+static bool hold_bytes(os64_html_parser_t *p, const unsigned char *s, size_t n)
+{
+    if (n > p->hold_cap - p->hold_len) {
+        size_t cap = p->hold_cap ? p->hold_cap : 4096;
+        while (cap - p->hold_len < n)
+            cap = cap > SIZE_MAX / 2 ? SIZE_MAX : cap * 2;
+        unsigned char *grown = os64_malloc(cap);
+        if (!grown) {
+            h_refuse(p, OS64_HTML_NO_MEMORY);
+            return false;
+        }
+        for (size_t i = 0; i < p->hold_len; i++)
+            grown[i] = p->hold[i];
+        os64_free(p->hold);
+        p->hold = grown;
+        p->hold_cap = cap;
+    }
+    for (size_t i = 0; i < n; i++)
+        p->hold[p->hold_len + i] = s[i];
+    p->hold_len += n;
+    return true;
+}
+/* What a call answers. The end of the input, said by the host or met at
+ * `max_bytes`, is acted on here, once nothing is waiting to be parsed: a
+ * parse that is not stopped and not refused has parsed all it was given. */
+static int64_t settle(os64_html_parser_t *p)
+{
+    HDoc *d = p->d;
+    if ((p->cut || p->ended) && !d->pub.refusal) {
+        /* A document shorter than the sniff window is parsed here, and may
+         * stop like any other. */
+        if (!p->started)
+            h_encoding_start(p);
+        if (!p->script) {
+            h_decode_finish(p);
+            if (p->cut) {
+                /* The end is parsed before the byte refusal is recorded, so a
+                 * tag or character reference cut by the limit has prefix-EOF
+                 * semantics. */
+                d->pub.truncated = true;
+                h_refuse(p, OS64_HTML_TOO_LARGE);
+            }
+        }
+    }
+    return d->pub.refusal ? d->pub.refusal : p->script ? OS64_HTML_SCRIPT : OS64_HTML_OK;
+}
 int64_t os64_html_parser_feed(os64_html_parser_t *p, const void *bytes, size_t len)
+{
+    if (!p)
+        return OS64_HTML_NO_MEMORY;
+    HDoc *d = p->d;
+    if (d->pub.refusal)
+        return d->pub.refusal;
+    if (p->ended)
+        return OS64_HTML_BAD_ARGUMENT;
+    p->moved = false;
+    const unsigned char *s = bytes;
+    size_t left = p->opt.max_bytes - d->pub.input_bytes;
+    size_t take = len < left ? len : left;
+    /* Past the sniff window and not stopped, the bytes are parsed as they
+     * come. */
+    if (take && p->started && !p->script)
+        h_moving(p);
+    for (size_t i = 0; i < take && !d->pub.refusal;) {
+        if (p->script) {
+            if (hold_bytes(p, s + i, take - i))
+                d->pub.input_bytes += take - i;
+            break;
+        }
+        d->pub.input_bytes++;
+        if (!p->started) {
+            p->prescan[p->prescan_len++] = s[i++];
+            if (p->prescan_len == sizeof(p->prescan))
+                h_encoding_start(p);
+        } else
+            h_decode(p, s[i++], p->parsed++);
+    }
+    if (len > left)
+        p->cut = true;
+    return settle(p);
+}
+os64_html_node_t *os64_html_parser_script(const os64_html_parser_t *p)
+{
+    return p ? p->script : NULL;
+}
+int64_t os64_html_parser_resume(os64_html_parser_t *p)
 {
     if (!p)
         return OS64_HTML_NO_MEMORY;
     if (p->d->pub.refusal)
         return p->d->pub.refusal;
-    const unsigned char *s = bytes;
-    size_t left = p->opt.max_bytes - p->d->pub.input_bytes;
-    size_t take = len < left ? len : left;
-    for (size_t i = 0; i < take && !p->d->pub.refusal; i++) {
-        size_t offset = p->d->pub.input_bytes++;
-        if (!p->started) {
-            p->prescan[p->prescan_len++] = s[i];
-            if (p->prescan_len == sizeof(p->prescan))
-                h_encoding_start(p);
-        } else
-            h_decode(p, s[i], offset);
-    }
-    if (len > left && !p->d->pub.refusal) {
-        /* EOF must be processed before recording the byte refusal, so a tag
-         * or character reference cut by the limit has prefix-EOF semantics. */
-        if (!p->started)
-            h_encoding_start(p);
-        h_decode_finish(p);
-        p->d->pub.truncated = true;
-        h_refuse(p, OS64_HTML_TOO_LARGE);
-    }
-    return p->d->pub.refusal;
+    if (!p->script)
+        return OS64_HTML_BAD_ARGUMENT;
+    p->moved = false;
+    p->script = NULL;
+    h_pump(p);
+    return settle(p);
 }
-os64_html_document_t *os64_html_parser_finish(os64_html_parser_t *p)
+int64_t os64_html_parser_end(os64_html_parser_t *p)
 {
     if (!p)
-        return NULL;
+        return OS64_HTML_NO_MEMORY;
+    if (p->d->pub.refusal)
+        return p->d->pub.refusal;
+    p->moved = false;
+    p->ended = true;
+    return settle(p);
+}
+os64_html_document_t *os64_html_parser_document(os64_html_parser_t *p)
+{
+    return p ? &p->d->pub : NULL;
+}
+/* The parse is over and the document is the caller's. Scratch has the same
+ * ownership ledger as nodes; freeing these buffers at transfer leaves node
+ * strings and attributes alive with the document. */
+static os64_html_document_t *release(os64_html_parser_t *p)
+{
     HDoc *d = p->d;
-    if (!d->pub.refusal) {
-        if (!p->started)
-            h_encoding_start(p);
-        h_decode_finish(p);
-    }
-    if (!d->html.parent)
-        h_attach(&d->root, NULL, &d->html);
-    /* Scratch has the same ownership ledger as nodes. Freeing these buffers
-     * at transfer leaves node strings and attributes alive with the document. */
+    d_seat_html(d);
     HBuf *buffers[] = {&p->token.name, &p->token.data,   &p->token.public_id, &p->token.system_id,
                        &p->attr_name,  &p->attr_value,   &p->temporary,       &p->last_start,
                        &p->table_text, &p->charset_label};
     for (size_t i = 0; i < H_ARRAY(buffers); i++)
         h_free(d, buffers[i]->s);
+    hold_free(p);
     h_free(d, p->stack.v);
     h_free(d, p->formatting.v);
     h_free(d, p->templates);
     h_free(d, p);
     return &d->pub;
+}
+os64_html_document_t *os64_html_parser_finish(os64_html_parser_t *p)
+{
+    if (!p)
+        return NULL;
+    /* The input has ended and finish does not stop: what is held is parsed
+     * straight through, a script in it included. */
+    p->moved = false;
+    p->ended = p->straight = true;
+    p->script = NULL;
+    h_pump(p);
+    settle(p);
+    return release(p);
+}
+os64_html_document_t *os64_html_parser_abandon(os64_html_parser_t *p)
+{
+    return p ? release(p) : NULL;
 }

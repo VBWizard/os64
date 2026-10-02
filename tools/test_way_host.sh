@@ -25,7 +25,7 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    userland/libpage/submit.c userland/libpage/encode.c userland/libpage/refresh.c \
    userland/libpage/activate.c \
    userland/libhtml/core.c userland/libhtml/encoding.c \
-   userland/libhtml/tokenizer.c userland/libhtml/tree.c \
+   userland/libhtml/tokenizer.c userland/libhtml/tree.c userland/libhtml/dom.c \
    userland/libos64/str.c userland/libos64/bidi.c userland/libos64/url.c userland/libos64/fmt.c \
    -o "$work/way_driver"
 

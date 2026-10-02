@@ -8,8 +8,9 @@ from pathlib import Path
 import struct
 import subprocess
 import tempfile
-from html_reference import ROOT, cases, identity, inventory
+from html_reference import ROOT, cases, identity, inventory, scripting_modes
 STATES={'Data state':0,'RCDATA state':1,'RAWTEXT state':2,'Script data state':3,'PLAINTEXT state':4,'CDATA section state':5}
+SCRIPTING=0x100  # added to a tree record's kind: parse it as a host that runs scripts does
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--driver',required=True);ap.add_argument('--tokenizer-only',action='store_true');args=ap.parse_args()
@@ -23,21 +24,22 @@ def main():
     assert excluded==(ROOT/'SKIPS.tsv').read_text().splitlines(), 'stale skip manifest'
     skips={line.split('\t')[0] for line in (ROOT/'SKIPS.tsv').read_text().splitlines()}
     selected=[c for c in cases() if identity(c) not in skips and (not args.tokenizer_only or c['suite']=='tokenizer')]
+    runs=[(c,scripting) for c in selected for scripting in scripting_modes(c)]
     with tempfile.TemporaryFile() as batch, tempfile.TemporaryFile() as output:
-        for c in selected:
+        for c,scripting in runs:
             if c['suite']=='tokenizer':
                 data=b''.join(struct.pack('<I',ord(ch)) for ch in c['input']);last=c['lastStartTag'].encode();kind=0;state=STATES[c['state']]
             else:
-                data=c['input'].encode('utf-8');last=b'';kind=1;state=0
+                data=c['input'].encode('utf-8');last=b'';kind=1|(SCRIPTING if scripting else 0);state=0
             batch.write(struct.pack('<4I',kind,state,len(data),len(last))+data+last)
         batch.seek(0)
         subprocess.run([args.driver],stdin=batch,stdout=output,check=True,timeout=120)
         output.seek(0);failures=[]
-        for c,line in zip(selected,output,strict=True):
+        for (c,scripting),line in zip(runs,output,strict=True):
             result=json.loads(line.decode('utf-8','surrogatepass'))
             if c['suite']=='tree':
                 if result['tree']!=c['expected'] or result['refusal']:
-                    failures.append({'id':identity(c),'input':c['input'],'expected':c['expected'],'actual':result['tree'],'refusal':result['refusal']})
+                    failures.append({'id':identity(c),'scripting':scripting,'input':c['input'],'expected':c['expected'],'actual':result['tree'],'refusal':result['refusal']})
                 continue
             tokens=[]
             for t in result['tokens']:
@@ -52,13 +54,13 @@ def main():
             failure_path=Path(args.driver).parent/'failures.json'
             failure_path.write_text(json.dumps(failures,indent=2,ensure_ascii=True)+'\n')
             print(f'Failure details: {failure_path}')
-        print(f'Reference: run={len(selected)} passed={len(selected)-len(failures)} failed={len(failures)} skipped={len(skips)}')
+        print(f'Reference: cases={len(selected)} run={len(runs)} scripting={sum(s for _,s in runs)} passed={len(runs)-len(failures)} failed={len(failures)} skipped={len(skips)}')
         for f in failures[:10]:print(json.dumps(f,ensure_ascii=True)[:1600])
         if failures:return True
     with tempfile.TemporaryFile() as batch:
-        for c in selected:
+        for c,scripting in runs:
             data=c['input'].encode('utf-8','surrogatepass')
-            batch.write(struct.pack('<4I',1,0,len(data),0)+data)
+            batch.write(struct.pack('<4I',1|(SCRIPTING if scripting else 0),0,len(data),0)+data)
         batch.seek(0)
         subprocess.run([args.driver,'--safety'],stdin=batch,check=True,timeout=300)
     return False
