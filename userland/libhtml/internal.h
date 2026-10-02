@@ -35,8 +35,17 @@ typedef struct {
      * from another's. Never zero, which is what a node nobody stamped
      * carries. */
     uint32_t id;
+    /* Set by a verb that moves a node. A parser still building the document
+     * reads it: the tree is then no longer what its stack of open elements
+     * says it is, so it stops relying on the stack for what a link needs to
+     * be true (tree.c, attach). */
+    bool disturbed;
+    /* How many of `pins` are held, so that the parser's every character need
+     * not look through them when none is. */
+    uint8_t pinned;
     /* DOM.md, the mutation core. `version` moves whenever a verb changes
-     * what a reader can see and is never zero, so a zero pin is a free slot.
+     * what a reader can see, and once in each call of a parser that parses
+     * anything. It is never zero, so a zero pin is a free slot.
      * `retired` holds replaced blocks a pinned snapshot may still point at. */
     uint64_t version;
     uint64_t pins[H_PINS];
@@ -217,6 +226,22 @@ struct os64_html_parser {
     bool reference_hex;
     void (*token_sink)(struct os64_html_parser *, const HToken *, void *);
     void *sink_context;
+    /* Scripting (DOM.md, the parser with scripting on). `script` is the
+     * element the parse is stopped at. Input that arrives while it is stopped
+     * waits in `hold`, read from `hold_at`. The hold is input and not tree:
+     * it is the heap's and not the arena's, so that a document costs the
+     * same arena however its bytes were cut, and `max_bytes` is what bounds
+     * it. `parsed` is how many bytes of the input have gone to the decoder
+     * or been skipped as a byte order mark: the offset of the next one, and
+     * below `prescan_len` the place the sniff window has been replayed to. */
+    HNode *script;
+    unsigned char *hold;
+    size_t hold_len, hold_cap, hold_at, parsed;
+    /* `ended`: the host said the input is over. `cut`: it ran past
+     * `max_bytes`. Either is acted on when everything waiting has been
+     * parsed. `straight`: os64_html_parser_finish is running, which does not
+     * stop. `moved`: this call has moved the document's version. */
+    bool ended, cut, straight, moved;
 };
 
 void *h_permanent(os64_html_parser_t *p, size_t size);
@@ -231,6 +256,36 @@ void *d_alloc(HDoc *d, size_t size, int64_t *why);
  * pinned snapshot is older than the change that replaced it, else kept
  * until the last such pin lets go. Call it after bumping `version`. */
 void d_retire(HDoc *d, void *ptr);
+/* One more character on a TEXT node, which a snapshot taken between two
+ * calls of the parser may be reading (core.c). */
+bool h_text_put(os64_html_parser_t *p, HNode *n, uint32_t cp);
+/* Parse what is waiting, as far as the next stop (core.c). */
+void h_pump(os64_html_parser_t *p);
+/* Said before a call of the parser parses its first byte, or the end of the
+ * input: the document's version moves, once for the call (core.c). */
+void h_moving(os64_html_parser_t *p);
+
+/* What the parser asks of the verbs' own rules (dom.c). One that takes
+ * `steps` adds what it walked, for the parser to charge as work.
+ *
+ * `d_place` links `node` under `parent` before `before` when the verbs'
+ * validity rules allow it, and answers which rule did not. `d_unlink` takes
+ * a node out of its parent, parting controls from forms as a verb's remove
+ * does. Both keep the landmarks true. `d_place` leaves form owners alone:
+ * the caller that has moved a node which had a parent says so afterwards
+ * with `d_parted`, naming the root of the tree the node began in
+ * (`d_root`, asked before the move). */
+int64_t d_place(HDoc *d, HNode *parent, HNode *node, HNode *before, uint64_t *steps);
+void d_unlink(HDoc *d, HNode *node, uint64_t *steps);
+HNode *d_root(HNode *n, uint64_t *steps);
+void d_parted(HDoc *d, HNode *moved, HNode *old_root, uint64_t *steps);
+/* Seat the document's own `html` element if the document has no element. */
+void d_seat_html(HDoc *d);
+/* `to` takes the attribute list of `from`, which a parser's clone shares
+ * unless a verb has made that list `from`'s own. */
+bool d_attrs_inherit(HDoc *d, const HNode *from, HNode *to, int64_t *why);
+/* One more attribute on an element that has none of that name. */
+int64_t d_attr_add(HDoc *d, HNode *e, const HAttr *a);
 /* How many documents the program has begun (core.c). Here so that a test can
  * set it near its end. */
 extern uint32_t h_document_serial;

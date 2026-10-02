@@ -39,8 +39,15 @@ def cases():
                    'ordinal': ordinal, 'input': fields['data'],
                    'expected': fields.get('document', '').rstrip('\n'),
                    'fragment': fields.get('document-fragment'),
-                   'script': 'on' if 'script-on' in fields else 'off',
+                   'script': ('on' if 'script-on' in fields else
+                              'off' if 'script-off' in fields else 'both'),
                    'errors': fields.get('errors', '')}
+
+def scripting_modes(case):
+    """A tree fixture holds with scripting off and on unless it is marked for one."""
+    if case['suite'] != 'tree':
+        return [False]
+    return {'on': [True], 'off': [False], 'both': [False, True]}[case['script']]
 
 def identity(case):
     # Mode and ordinal distinguish fixtures that share an input but exercise
@@ -55,8 +62,7 @@ def inventory():
         counts = files.setdefault(case['file'], {'total': 0, 'run': 0, 'skip': {}})
         counts['total'] += 1
         reason = ('xml-output-coercion' if case.get('group') == 'xmlViolationTests' else
-                  'fragment-parsing' if case.get('fragment') is not None else
-                  'scripting-enabled' if case.get('script') == 'on' else None)
+                  'fragment-parsing' if case.get('fragment') is not None else None)
         if reason:
             counts['skip'][reason] = counts['skip'].get(reason, 0) + 1
             skips.append(identity(case) + '\t' + reason)

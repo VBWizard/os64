@@ -1,6 +1,6 @@
 #include "internal.h"
 
-/* The verbs that change a finished document (html.h, DOM.md). Each validates
+/* The verbs that change a document (html.h, DOM.md). Each validates
  * everything first and allocates everything second, so the links are only
  * touched by code that cannot fail. */
 
@@ -15,6 +15,14 @@ static void say(int64_t *status, int64_t value)
 {
     if (status)
         *status = value;
+}
+
+/* The parser charges for the walks it asks of this file (internal.h,
+ * d_place); a verb's own are not counted, and it passes no counter. */
+static void step(uint64_t *steps)
+{
+    if (steps)
+        ++*steps;
 }
 
 /* UTF-8 as the Encoding Standard decodes it, and no NUL: what every string
@@ -68,10 +76,12 @@ static HNode *above(const HNode *n)
 {
     return n->parent ? n->parent : host(n);
 }
-static HNode *root_of(HNode *n)
+static HNode *root_of(HNode *n, uint64_t *steps)
 {
-    while (n->parent)
+    while (n->parent) {
         n = n->parent;
+        step(steps);
+    }
     return n;
 }
 /* True of no node, and of a node in this document's arena (HDoc.id). */
@@ -92,10 +102,11 @@ static HNode *next_in_tree(HNode *root, HNode *n)
 }
 /* How far below its root a node is, a template's contents counted as the
  * template's children (h_depth_limit). */
-static size_t depth_of(const HNode *n)
+static size_t depth_of(const HNode *n, uint64_t *steps)
 {
     size_t depth = 0;
     for (;;) {
+        step(steps);
         if (n->parent) {
             n = n->parent;
             depth++;
@@ -135,12 +146,14 @@ static HNode *next_in(HNode *root, HNode *n, size_t *depth)
     }
     return NULL;
 }
-static size_t height_of(HNode *root)
+static size_t height_of(HNode *root, uint64_t *steps)
 {
     size_t depth = 0, deepest = 0;
-    for (HNode *n = root; n; n = next_in(root, n, &depth))
+    for (HNode *n = root; n; n = next_in(root, n, &depth)) {
+        step(steps);
         if (depth > deepest)
             deepest = depth;
+    }
     return deepest;
 }
 
@@ -148,25 +161,32 @@ static bool is_html(const HNode *n, os64_html_tag_t tag)
 {
     return n->kind == ELEMENT && n->ns == OS64_HTML_NS_HTML && n->tag == tag;
 }
-static HNode *child_of_kind(const HNode *parent, os64_html_node_kind_t kind, const HNode *except)
+static HNode *child_of_kind(const HNode *parent, os64_html_node_kind_t kind, const HNode *except,
+                            uint64_t *steps)
 {
-    for (HNode *c = parent->first_child; c; c = c->next)
+    for (HNode *c = parent->first_child; c; c = c->next) {
+        step(steps);
         if (c->kind == kind && c != except)
             return c;
+    }
     return NULL;
 }
-static bool kind_follows(const HNode *child, os64_html_node_kind_t kind)
+static bool kind_follows(const HNode *child, os64_html_node_kind_t kind, uint64_t *steps)
 {
-    for (const HNode *c = child ? child->next : NULL; c; c = c->next)
+    for (const HNode *c = child ? child->next : NULL; c; c = c->next) {
+        step(steps);
         if (c->kind == kind)
             return true;
+    }
     return false;
 }
-static bool kind_precedes(const HNode *child, os64_html_node_kind_t kind)
+static bool kind_precedes(const HNode *child, os64_html_node_kind_t kind, uint64_t *steps)
 {
-    for (const HNode *c = child ? child->prev : NULL; c; c = c->prev)
+    for (const HNode *c = child ? child->prev : NULL; c; c = c->prev) {
+        step(steps);
         if (c->kind == kind)
             return true;
+    }
     return false;
 }
 
@@ -174,16 +194,19 @@ static bool kind_precedes(const HNode *child, os64_html_node_kind_t kind)
  * its twin inside "replace", where `child` is the node being replaced. Then
  * the two rules that are this library's own: the document's element is its
  * `html` element, and the tree stays as shallow as a parse would keep it. */
-static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, bool replacing)
+static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, bool replacing,
+                          uint64_t *steps)
 {
     if (!parent || !node || (replacing && !child) || !ours(d, parent) || !ours(d, node) ||
         !ours(d, child))
         return OS64_HTML_BAD_ARGUMENT;
     if (parent->kind != DOCUMENT && parent->kind != FRAGMENT && parent->kind != ELEMENT)
         return OS64_HTML_HIERARCHY;
-    for (const HNode *a = parent; a; a = above(a))
+    for (const HNode *a = parent; a; a = above(a)) {
+        step(steps);
         if (a == node)
             return OS64_HTML_HIERARCHY;
+    }
     if (child && child->parent != parent)
         return OS64_HTML_NOT_FOUND;
     if (node->kind == DOCUMENT)
@@ -196,17 +219,19 @@ static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, boo
     if (parent->kind == DOCUMENT) {
         const HNode *spared = replacing ? child : NULL;
         if (node->kind == FRAGMENT) {
-            element = child_of_kind(node, ELEMENT, NULL);
-            if (child_of_kind(node, TEXT, NULL) || (element && child_of_kind(node, ELEMENT, element)))
+            element = child_of_kind(node, ELEMENT, NULL, steps);
+            if (child_of_kind(node, TEXT, NULL, steps) ||
+                (element && child_of_kind(node, ELEMENT, element, steps)))
                 return OS64_HTML_HIERARCHY;
         }
         if (element) {
-            if (child_of_kind(parent, ELEMENT, spared) || kind_follows(child, DOCTYPE) ||
+            if (child_of_kind(parent, ELEMENT, spared, steps) || kind_follows(child, DOCTYPE, steps) ||
                 (!replacing && child && child->kind == DOCTYPE))
                 return OS64_HTML_HIERARCHY;
         } else if (node->kind == DOCTYPE) {
-            if (child_of_kind(parent, DOCTYPE, spared) || kind_precedes(child, ELEMENT) ||
-                (!replacing && !child && child_of_kind(parent, ELEMENT, NULL)))
+            if (child_of_kind(parent, DOCTYPE, spared, steps) ||
+                kind_precedes(child, ELEMENT, steps) ||
+                (!replacing && !child && child_of_kind(parent, ELEMENT, NULL, steps)))
                 return OS64_HTML_HIERARCHY;
         }
     }
@@ -220,10 +245,10 @@ static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, boo
     } else if (node->parent == &d->root && node->kind == ELEMENT)
         return OS64_HTML_ROOT_REQUIRED;     /* moving the html element out of the document */
 
-    size_t under = depth_of(parent) + 1, limit = h_depth_limit(d);
+    size_t under = depth_of(parent, steps) + 1, limit = h_depth_limit(d);
     for (HNode *c = node->kind == FRAGMENT ? node->first_child : node; c;
          c = node->kind == FRAGMENT ? c->next : NULL) {
-        size_t height = height_of(c);
+        size_t height = height_of(c, steps);
         if (under > limit || height > limit - under)
             return OS64_HTML_TOO_DEEP;
     }
@@ -232,13 +257,14 @@ static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, boo
 
 /* The landmarks consumers start from, by their definitions: the document's
  * element, and its first `head` and `body` children. */
-static void landmarks(HDoc *d)
+static void landmarks(HDoc *d, uint64_t *steps)
 {
-    HNode *html = child_of_kind(&d->root, ELEMENT, NULL);
+    HNode *html = child_of_kind(&d->root, ELEMENT, NULL, steps);
     if (html)
         d->pub.html = html;
     d->pub.head = d->pub.body = NULL;
     for (HNode *c = d->pub.html->first_child; c; c = c->next) {
+        step(steps);
         if (!d->pub.head && is_html(c, OS64_HTML_TAG_HEAD))
             d->pub.head = c;
         if (!d->pub.body && is_html(c, OS64_HTML_TAG_BODY))
@@ -264,30 +290,40 @@ static void forget_owner(HDoc *d, HNode *control)
     control->form_owner = NULL;
     d->records--;
 }
-static void split_records(HDoc *d, HNode *moved, HNode *left_behind)
+static void split_records(HDoc *d, HNode *moved, HNode *left_behind, uint64_t *steps)
 {
     if (!d->records)
         return;
     bool carries_form = false;
     for (HNode *n = moved; n; n = next_in_tree(moved, n)) {
+        step(steps);
         if (is_html(n, OS64_HTML_TAG_FORM))
             carries_form = true;
-        if (n->form_owner && root_of(n->form_owner) != moved)
+        if (n->form_owner && root_of(n->form_owner, steps) != moved)
             forget_owner(d, n);
     }
     if (!carries_form || !d->records)
         return;
-    for (HNode *n = left_behind; n; n = next_in_tree(left_behind, n))
-        if (n->form_owner && root_of(n->form_owner) == moved)
+    for (HNode *n = left_behind; n; n = next_in_tree(left_behind, n)) {
+        step(steps);
+        if (n->form_owner && root_of(n->form_owner, steps) == moved)
             forget_owner(d, n);
+    }
 }
-static void take_out(HDoc *d, HNode *node)
+static void take_out(HDoc *d, HNode *node, uint64_t *steps)
 {
     if (!node->parent)
         return;
-    HNode *left_behind = root_of(node->parent);
+    HNode *left_behind = root_of(node->parent, steps);
     h_detach(node);
-    split_records(d, node, left_behind);
+    split_records(d, node, left_behind, steps);
+}
+/* A verb moved a node. A parser still building the document checks each
+ * link it makes from then on (internal.h, HDoc.disturbed). */
+static void moved(HDoc *d)
+{
+    d->version++;
+    d->disturbed = true;
 }
 
 static void place(HDoc *d, HNode *parent, HNode *node, HNode *before)
@@ -295,15 +331,15 @@ static void place(HDoc *d, HNode *parent, HNode *node, HNode *before)
     bool touched = is_landmark_parent(d, parent) || (node->parent && is_landmark_parent(d, node->parent));
     if (node->kind == FRAGMENT) {
         for (HNode *c; (c = node->first_child) != NULL;) {
-            take_out(d, c);
+            take_out(d, c, NULL);
             h_attach(parent, before, c);
         }
     } else {
-        take_out(d, node);
+        take_out(d, node, NULL);
         h_attach(parent, before, node);
     }
     if (touched)
-        landmarks(d);
+        landmarks(d, NULL);
 }
 
 int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, HNode *before)
@@ -311,7 +347,7 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
     HDoc *d = (HDoc *)doc;
     if (!d)
         return OS64_HTML_BAD_ARGUMENT;
-    int64_t verdict = may_insert(d, parent, node, before, false);
+    int64_t verdict = may_insert(d, parent, node, before, false, NULL);
     if (verdict)
         return verdict;
     /* The version is every snapshot's signal to rebuild, so it moves when a
@@ -327,7 +363,7 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
     size_t records = d->records;
     place(d, parent, node, before);
     if (!stays || d->records != records)
-        d->version++;
+        moved(d);
     return OS64_HTML_OK;
 }
 
@@ -336,7 +372,7 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
     HDoc *d = (HDoc *)doc;
     if (!d)
         return OS64_HTML_BAD_ARGUMENT;
-    int64_t verdict = may_insert(d, parent, node, old, true);
+    int64_t verdict = may_insert(d, parent, node, old, true, NULL);
     if (verdict)
         return verdict;
     if (node == old)
@@ -344,12 +380,12 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
     HNode *before = old->next;
     if (before == node)
         before = node->next;
-    d->version++;
+    moved(d);
     bool touched = is_landmark_parent(d, parent);
-    take_out(d, old);
+    take_out(d, old, NULL);
     place(d, parent, node, before);
     if (touched)
-        landmarks(d);
+        landmarks(d, NULL);
     return OS64_HTML_OK;
 }
 
@@ -363,11 +399,89 @@ int64_t os64_html_remove(os64_html_document_t *doc, HNode *node)
     if (node->parent == &d->root && node->kind == ELEMENT)
         return OS64_HTML_ROOT_REQUIRED;
     bool touched = is_landmark_parent(d, node->parent);
-    d->version++;
-    take_out(d, node);
+    moved(d);
+    take_out(d, node, NULL);
     if (touched)
-        landmarks(d);
+        landmarks(d, NULL);
     return OS64_HTML_OK;
+}
+
+/* ── What the parser asks (internal.h) ───────────────────────────────────
+ *
+ * While the tree is the one a parser built, the parser's own algorithm keeps
+ * its links sound. Once a verb has moved something under it, the rules that
+ * bind a verb bind the parser's links too, and these are how it asks. */
+
+/* Whether linking or unlinking `node` under `parent` can change which
+ * elements the landmarks name. */
+static bool is_landmark(const HDoc *d, const HNode *parent, const HNode *node)
+{
+    return node->kind == ELEMENT && is_landmark_parent(d, parent);
+}
+int64_t d_place(HDoc *d, HNode *parent, HNode *node, HNode *before, uint64_t *steps)
+{
+    int64_t verdict = may_insert(d, parent, node, before, false, steps);
+    if (verdict)
+        return verdict;
+    bool touched = is_landmark(d, parent, node) ||
+                   (node->parent && is_landmark(d, node->parent, node));
+    h_attach(parent, before, node);
+    if (touched)
+        landmarks(d, steps);
+    return OS64_HTML_OK;
+}
+HNode *d_root(HNode *n, uint64_t *steps)
+{
+    return root_of(n, steps);
+}
+/* The parser's moves are judged by where things end up, since it gets a
+ * subtree to its place in several links and builds part of it aside on the
+ * way. Moving a node about inside one tree, as the adoption agency does, has
+ * never parted a control from its form. When `moved` has ended in another
+ * tree than `old_root`, the one it began in, each control in it and each
+ * control it left behind is asked whether its form is still in its tree. */
+void d_parted(HDoc *d, HNode *moved, HNode *old_root, uint64_t *steps)
+{
+    HNode *new_root = root_of(moved, steps);
+    if (!d->records || new_root == old_root)
+        return;
+    bool carries_form = false;
+    for (HNode *n = moved; n; n = next_in_tree(moved, n)) {
+        step(steps);
+        if (is_html(n, OS64_HTML_TAG_FORM))
+            carries_form = true;
+        if (n->form_owner && root_of(n->form_owner, steps) != new_root)
+            forget_owner(d, n);
+    }
+    if (!carries_form || !d->records)
+        return;
+    for (HNode *n = old_root; n; n = next_in_tree(old_root, n)) {
+        step(steps);
+        if (n->form_owner && root_of(n->form_owner, steps) != old_root)
+            forget_owner(d, n);
+    }
+}
+void d_unlink(HDoc *d, HNode *node, uint64_t *steps)
+{
+    if (!node->parent)
+        return;
+    bool touched = is_landmark(d, node->parent, node);
+    take_out(d, node, steps);
+    if (touched)
+        landmarks(d, steps);
+}
+/* What a finished document promises: it has its `html` element. A parse
+ * that ended before it seated one is given the one every document is born
+ * with. No control has a form owner yet: the parser ties none before the
+ * document has its element. */
+void d_seat_html(HDoc *d)
+{
+    if (child_of_kind(&d->root, ELEMENT, NULL, NULL))
+        return;
+    h_attach(&d->root, NULL, &d->html);
+    d->version++;
+    if (d->disturbed)
+        landmarks(d, NULL);
 }
 
 /* ── New nodes ───────────────────────────────────────────────────────── */
@@ -562,6 +676,39 @@ static HAttr **attr_slot(HNode *e, const char *name)
         slot = &(*slot)->next;
     return slot;
 }
+/* A list that is its element's own cannot be shared: a verb replaces its
+ * records one at a time and retires each, under whoever else pointed at it. */
+bool d_attrs_inherit(HDoc *d, const HNode *from, HNode *to, int64_t *why)
+{
+    if (!(*h_word(from) & H_ATTRS_PRIVATE)) {
+        to->attrs = from->attrs;
+        return true;
+    }
+    if (!attrs_copy(d, from->attrs, false, &to->attrs, why))
+        return false;
+    *h_word(to) |= H_ATTRS_PRIVATE;
+    return true;
+}
+/* A second `html` or `body` tag gives the element the attributes it lacks.
+ * A record goes on the end of the element's own list, as a verb would put
+ * it, so no clone that shares the parser's list gains it. */
+int64_t d_attr_add(HDoc *d, HNode *e, const HAttr *a)
+{
+    int64_t why = OS64_HTML_OK;
+    HAttr *fresh = attr_new(d, a->name, a->value, h_len(a->value), a->ns, &why);
+    if (!fresh)
+        return why;
+    why = attrs_own(d, e);
+    if (why) {
+        h_free(d, fresh);
+        return why;
+    }
+    HAttr **slot = &e->attrs;
+    while (*slot)
+        slot = &(*slot)->next;
+    *slot = fresh;
+    return OS64_HTML_OK;
+}
 /* A listed control was given a `form` attribute, or a new value for one:
  * its record is void. Taking the attribute away needs no such step, since a
  * control that has the attribute has no record: the parser makes none for
@@ -694,12 +841,12 @@ static HNode *clone_one(HDoc *d, const HNode *from, bool foreign, int64_t *why)
     if (from->kind == ELEMENT) {
         /* The parser's shared list can be shared once more, inside the
          * document whose chunks hold it. */
-        if (foreign || (*h_word(from) & H_ATTRS_PRIVATE)) {
+        if (foreign) {
             if (!attrs_copy(d, from->attrs, false, &n->attrs, why))
                 return NULL;
             *h_word(n) |= H_ATTRS_PRIVATE;
-        } else
-            n->attrs = from->attrs;
+        } else if (!d_attrs_inherit(d, from, n, why))
+            return NULL;
         if (from->template_contents && !contents_new(d, n, why))
             return NULL;
     }
@@ -719,7 +866,7 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
      * node under another's. */
     HNode *root = (HNode *)node;
     bool foreign = !ours(d, root);
-    if (deep && foreign && height_of(root) > h_depth_limit(d)) {
+    if (deep && foreign && height_of(root, NULL) > h_depth_limit(d)) {
         say(status, OS64_HTML_TOO_DEEP);
         return NULL;
     }

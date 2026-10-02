@@ -11,7 +11,7 @@ trap cleanup EXIT
 python3 tools/gen_html_tables.py --check
 cc -std=c11 -O2 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -Iuserland/libhtml/include -Iuserland/libos64/include -Iabi/include \
-  userland/libhtml/core.c userland/libhtml/encoding.c userland/libhtml/tokenizer.c userland/libhtml/tree.c \
+  userland/libhtml/core.c userland/libhtml/encoding.c userland/libhtml/tokenizer.c userland/libhtml/tree.c userland/libhtml/dom.c \
   tools/test_html_driver.c -o "$work/html_driver"
 "$work/html_driver" --checks
 python3 -u tools/test_html_host.py --driver "$work/html_driver"

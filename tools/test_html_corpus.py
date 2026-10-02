@@ -10,11 +10,24 @@ import subprocess
 ROOT = Path(__file__).resolve().parent / 'html_corpus'
 
 
-def parse(driver, data, charset=None, chunk=0):
+SCRIPTING = 0x100  # added to a record's kind: parse it as a host that runs scripts does
+
+
+def parse(driver, data, charset=None, chunk=0, scripting=False):
     label = charset.encode() if charset else b''
-    wire = struct.pack('<4I', 2, chunk, len(data), len(label)) + data + label
+    kind = 2 | (SCRIPTING if scripting else 0)
+    wire = struct.pack('<4I', kind, chunk, len(data), len(label)) + data + label
     result = subprocess.run([driver], input=wire, stdout=subprocess.PIPE, check=True, timeout=20)
     return json.loads(result.stdout)
+
+
+def abandon(driver, data, charset):
+    """Abandon a parser at each of the page's stops; the driver walks and frees each document."""
+    label = charset.encode() if charset else b''
+    wire = struct.pack('<4I', 2, 0, len(data), len(label)) + data + label
+    result = subprocess.run([driver, '--abandon'], input=wire, stdout=subprocess.PIPE, check=True,
+                            timeout=120)
+    return int(result.stdout.split(b'parsers=')[1])
 
 
 def encoding_checks(driver):
@@ -91,6 +104,21 @@ def main():
             snapshot.write_bytes(expected)
         else:
             assert snapshot.read_bytes() == expected, f'{name}: snapshot differs'
+        # As a host that runs scripts: a stop at every script the page closes, the same
+        # stops and the same document however the bytes are cut, and a parser abandoned
+        # at each stop.
+        scripted = None
+        for chunk in [0, 1, 0xffffffff]:
+            result = parse(args.driver, data, source['charset'], chunk, scripting=True)
+            assert result['refusal'] == 0, (name, result['refusal'])
+            stable = {k: v for k, v in result.items() if k != 'seconds'}
+            assert scripted is None or scripted == stable, name
+            scripted = stable
+        closed = data.lower().count(b'</script')
+        assert scripted['stops'] == closed, (name, scripted['stops'], closed)
+        assert baseline['stops'] == 0, name
+        parsers = abandon(args.driver, data, source['charset'])
+        print(f"Corpus {name}, scripting: stops={scripted['stops']} abandoned={parsers}")
 
 
 if __name__ == '__main__':

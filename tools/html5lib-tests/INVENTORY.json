@@ -247,10 +247,8 @@
     "total": 14
   },
   "tree/tests16.dat": {
-    "run": 191,
-    "skip": {
-      "scripting-enabled": 6
-    },
+    "run": 197,
+    "skip": {},
     "total": 197
   },
   "tree/tests17.dat": {
@@ -321,10 +319,8 @@
     "total": 9
   },
   "tree/tests5.dat": {
-    "run": 16,
-    "skip": {
-      "scripting-enabled": 1
-    },
+    "run": 17,
+    "skip": {},
     "total": 17
   },
   "tree/tests6.dat": {
@@ -369,10 +365,9 @@
     "total": 52
   },
   "tree/webkit02.dat": {
-    "run": 30,
+    "run": 31,
     "skip": {
-      "fragment-parsing": 4,
-      "scripting-enabled": 1
+      "fragment-parsing": 4
     },
     "total": 35
   }

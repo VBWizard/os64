@@ -269,11 +269,16 @@ bit, and stays wend's mode. On:
   entered.
 - **The parser stops at a script's end tag.** `feed` returns
   `OS64_HTML_SCRIPT`, and `os64_html_parser_script(p)` names the element.
-  Bytes of that chunk the parser had not reached are held inside it,
-  charged to the arena, and a `feed` while a script is pending adds to the
-  hold. `os64_html_parser_resume(p)` carries on from the hold, and may
-  stop at the next script. The push interface keeps its shape: chunk
-  boundaries are still invisible.
+  Bytes of that chunk the parser had not reached are held inside it, and a
+  `feed` while a script is pending adds to the hold.
+  `os64_html_parser_resume(p)` carries on from the hold, and may stop at
+  the next script. The push interface keeps its shape: chunk boundaries
+  are still invisible. That is why the hold is the heap's and not the
+  arena's: it is input, `max_bytes` already bounds it, and charged to the
+  arena it would make a page near its budget refuse in one cutting of its
+  bytes and parse in another. An SVG `script` stops the parse too, at its
+  end tag or its self-closing start tag. A script inside a template's
+  contents does not: it is in a document that runs nothing.
 - **A parser can be abandoned without losing its document.**
   `os64_html_parser_destroy` frees the document with the parser, which is
   right for a download nobody will read. A page being left mid-load still
@@ -290,7 +295,21 @@ bit, and stays wend's mode. On:
   (`os64_html_parser_document`). That is the debt LIBHTML.md booked as
   "reading the tree during `feed`", paid by the mutation core: a snapshot
   taken mid-parse pins, and the parser's own writes go through the same
-  primitives as a script's.
+  primitives as a script's. Each call that parses anything moves the
+  version once, before the first thing it parses, so whatever was pinned
+  between two calls is older than every block the call makes.
+- **A verb between two calls can leave the tree unlike anything a parser
+  built**, and the parser's own soundness came from its stack of open
+  elements: nothing put under its own descendant, nothing deeper than
+  twice the stack. A script that takes an open `p` out and puts the `div`
+  around it inside it has voided both. So the document remembers that a
+  verb moved a node while it was being parsed, and from then on the parser
+  holds each link it makes to the verbs' own rules, charging the walks as
+  work. A link the rules refuse is not made and the parse goes on, as the
+  standard's parser goes on whatever a script did; a node that would lie
+  past the depth limit refuses the parse by name. Until a verb moves
+  something none of this runs, and the parser is the one that was there
+  before.
 - **`document.write` is in**, as its own slice. The old web yonder exists
   to read is full of it: counters, dates, banners. It is
   `os64_html_parser_write(p, utf8, len)`, which tokenizes the text at the
@@ -301,11 +320,12 @@ bit, and stays wend's mode. On:
 - **Fragment parsing** is the standard's algorithm with a context element,
   which is what `innerHTML` needs.
 
-**The proof is already written, and currently skipped.** LIBHTML.md's skip
-list names two families out of scope: the cases marked `#script-on` and
-the cases with a `#document-fragment` line. The scripting slice un-skips
-both. The acceptance bar is the one the parser already met: every newly
-in-scope case passes, whole, byte at a time and in random chunks.
+**The proof was already written, and skipped.** LIBHTML.md's skip list
+named two families out of scope: the cases marked `#script-on` and the
+cases with a `#document-fragment` line. D2a takes the first off the list
+and D2b the second. The acceptance bar is the one the parser already met:
+every newly in-scope case passes, whole, byte at a time and in random
+chunks.
 
 Which scripts run, and when, is not the parser's business. The standard's
 "prepare the script element" steps (type, `nomodule`, `defer`, `async`, a
@@ -666,7 +686,8 @@ stacked on it. D1 to D4 need no engine and can start before J2 ends.
 | Slice | What | Proof |
 |---|---|---|
 | D1 | **Built.** libhtml's mutation core and the verbs but `parse_fragment` | `tools/test_html_dom_host.sh`, under ASan and UBSan: § D1, as built |
-| D2 | Scripting-enabled parsing, stop and resume, abandon, fragments, serialisation | A parser abandoned at every stop leaves a document that walks and frees; the `#script-on` and `#document-fragment` cases un-skipped and passing, whole and chunked; a stop at every script of each corpus page |
+| D2a | **Built.** Scripting-enabled parsing: stop and resume, the end of the input, abandon, the tree read and changed between calls | A parser abandoned at every stop leaves a document that walks and frees; the `#script-on` cases un-skipped and passing, whole and chunked; a stop at every script of each corpus page: § D2a, as built |
+| D2b | Fragment parsing and serialisation | The `#document-fragment` cases un-skipped and passing, whole and chunked |
 | D3 | `os64_page_rebuild`, the `STALE` gate, control state as its own object, and the script-facing setters | libpage's corpus grows cases: a value that survives detach, rebuild and reinsert; a value on a control never yet in the document; a script's assignment to a disabled, a readonly and a hidden input, each by its value mode; a changed action refused from the old model; the allocation sweep |
 | D4 | The stream: yonder parses on its own thread. No script | yonder's and libway's harnesses unchanged in result; the guest walk that proved Y3, its server log identical; the window live through a stalled body |
 | D5 | The binding library and J3's fixture | A script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
@@ -728,10 +749,111 @@ and the depth limit is twice `max_depth` (the fuzz pass found a parser
 tree deeper than its stack within a minute of the harness checking for
 one).
 
-What D1 leaves for the slices after it: the parser's own writes do not yet
-retire (D2, when a tree is readable mid-parse), and the three snapshot
-builders do not yet pin (D3 and D5; nothing changes a tree under them
-until a binding exists).
+What D1 left for the slices after it: the parser's own writes did not
+retire, which D2a has paid, and the three snapshot builders do not yet pin
+(D3 and D5; nothing changes a tree under them until a binding exists).
+
+### D2a, as built
+
+`core.c` holds the calls and the hold, `tree.c` the stop and the checked
+link, `dom.c` what the parser asks of the verbs' rules, and `html.h` the
+contract, under THE PARSE THAT STOPS. With scripting off the parser builds
+the same trees for the same work: the 8,596 reference cases, the corpus
+snapshots and the fuzz pass did not move. Its peak arena is 64 bytes
+higher, the growth of the parser's own scratch, and the saved Wikipedia
+page parses in the time it did (22 ms at `-O2` on the host).
+
+What `tools/test_html_host.sh` holds it to:
+
+- **The reference cases, both ways.** The eight `#script-on` cases are off
+  the skip list, and every tree case not marked `#script-off` now runs with
+  scripting on as well: 1,545 more runs. Each is driven four ways and must
+  stop at the same scripts and build the same document for the same work:
+  whole, a byte at a time, in random pieces, and as a pile, where
+  everything is fed before anything is resumed, which is the driving that
+  fills the hold. Then every allocation failed in turn, byte at a time and
+  as a pile, and a byte limit at every offset.
+- **By hand**, the header's contract a case at a time: what each call
+  answers and when, where the parse stops and where it does not, the sniff
+  window, the byte limit met while stopped, `finish` straight through for
+  the same work, and a snapshot pinned at a stop whose bytes stay while the
+  text they belonged to grows elsewhere, once.
+- **Abandoned at every stop**, and before the first byte and part way
+  through the input: each document walks and frees, and the heap is empty
+  after. Every corpus page is put through the same, and each stops once for
+  each script it closes.
+- **A tree changed under the parser.** A case for each thing a verb was
+  found able to void: the open elements nested the other way round, so that the adoption
+  agency's own move would make a cycle; an open element sunk to the depth
+  limit, under text and under a control already tied to its form; the
+  document element replaced; a `head` and a `body` put in before the
+  parser's; a formatting element given attributes of its own before the
+  parser clones it; the body cloned before a second `<body>` tag adds to
+  it; a control carried out of its form's tree by the adoption agency, a
+  form carried away from its control, and the same by a `frameset` taking
+  the body out. And the ones that say what the checks do not do: a checked
+  parse of a page that moves controls about inside one tree builds the
+  same tree and parts nobody, and the walks are charged as work. Each case
+  then runs again with every allocation failed in turn and with the work
+  running out at every step.
+- **Random scripts.** Documents built from pieces that set the machinery
+  going (formatting to adopt, tables to foster out of, forms, templates,
+  foreign content, a second `<body>`), a script at every turn, and at each
+  script a run of random verbs on random nodes, the parser's open elements
+  among them, with snapshots pinned and let go at random. Half the walks
+  run under limits tight enough to keep meeting them, and some are
+  abandoned part way. Nothing is predicted. After every stop and at the
+  end, every node the document ever had is found by following every link
+  from every node already known, and asked what a reader relies on: no
+  cycle, nothing past the depth limit, links that agree in both directions,
+  one element under the document, the landmarks by their definitions, each
+  control in its form's tree and counted, what a pin held still reading as
+  it did, and an empty heap after the free. The harness runs 20,000; a
+  million ran clean (2.4 million stops, 197,000 refusals, 80,000 abandons)
+  once the three findings below were fixed. The fuzz pass does the same
+  to every mutated reference case it parses with scripting on.
+- **In the guest**, `/tests/htmltest` drives a stop, a verb at the stop, a
+  pinned text that grows, the end of the input and an abandon through the
+  real library on the real heap.
+
+What the building found, none of it in the reference cases:
+
+1. **The parser on `userland` could be sent round a loop by 24 bytes.**
+   `</p>` or `</br>` in foreign content is handed to the HTML rules after
+   the foreign elements are popped. At an integration point there are none
+   to pop, and the token was handed back to the dispatcher, which sent it
+   to the same place: `<svg><foreignObject></p>` went round until the work
+   budget of a hundred million ran out, and the page was refused. The
+   budget is what made it a slow refusal and not a hang, and it is also
+   what hid it: the fuzz pass runs under small budgets, where running out
+   is ordinary. A random walk that took three and a half seconds gave it
+   away. The token now goes to the HTML rules where the standard says, and
+   the four trees are checked against Chrome's.
+2. **The adoption agency builds aside.** It moves the furthest block under
+   fresh clones before the clones have a place, so judging each link alone
+   parted controls from forms they were about to rejoin. Form owners are
+   now settled once, by where the block ends up. The same building aside
+   meant a parse refused part way (out of work, out of memory) could leave
+   a control in one tree tied to a form in another, with scripting off as
+   well: the clone of the formatting element now goes under the block
+   before the block's children go under the clone, and a refusal settles
+   the owners like any other ending.
+3. **A control that never reached the tree kept its record**, when the push
+   that follows the association was refused. The count was then one high
+   for good, and a count that never returns to zero never lets a move skip
+   its walk.
+
+**Mutants.** Sixty deliberate breaks of the new code, one at a time,
+against the finished harness: fifty-nine are caught. The sixtieth takes
+out a shortcut and nothing else: a node the parser moved that has stayed in
+its tree is then walked, and the walk finds nothing. The first pass caught thirty-four of
+forty-six, and what it missed is where the harness grew: the cases for the
+landmarks between two feeds, the form carried away from its control, the
+frameset, a control refused for depth, the byte order marks, and the
+allocation and work sweeps over the cases with a changed tree. It also
+found code that could not matter and is gone: a second flag beside the one
+that says a verb moved a node, and two settlings of form owners at moments
+when no control can have one.
 
 **Review tier.** D1 and D2 are lifetime work in a library fed by whatever
 a server sends, which is what CLAUDE.md says an outside round is for.

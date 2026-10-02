@@ -166,6 +166,78 @@ static void verbs(void)
     os64_html_document_free(doc);
     require(os64_heap_verify() == 0, "heap after verbs");
 }
+/* The parse that stops at a script, through the real library on the real
+ * heap: the host harness proves the rules, this proves the calls are
+ * exported, linked and sound in ring 3. */
+static int64_t feed(os64_html_parser_t *p, const char *markup)
+{
+    return os64_html_parser_feed(p, markup, os64_strlen(markup));
+}
+static void stops(void)
+{
+    /* Past the sniff window, so that a feed is parsed as it arrives. */
+    static char window[1025];
+    for (size_t i = 0; i < sizeof(window) - 1; i++)
+        window[i] = ' ';
+    os64_html_options_t options = os64_html_options_default();
+    options.scripting = true;
+
+    os64_html_parser_t *p = os64_html_parser_new(&options);
+    require(p != NULL, "scripting constructor");
+    os64_html_document_t *doc = os64_html_parser_document(p);
+    require(feed(p, window) == OS64_HTML_OK, "window feed");
+    require(feed(p, "<p id=p>before<script>one</script> after<script>two</script>end") ==
+                OS64_HTML_SCRIPT,
+            "the first script stops the parse");
+    os64_html_node_t *script = os64_html_parser_script(p);
+    require(script && script->first_child && os64_streq(script->first_child->text, "one") &&
+                script->prev && os64_streq(script->prev->text, "before"),
+            "the script is whole and in the tree");
+    require(feed(p, "<p>later") == OS64_HTML_SCRIPT && os64_html_parser_script(p) == script,
+            "a feed while stopped is kept");
+
+    /* What a script does at its stop: a snapshot is pinned, the script takes
+     * itself out, and the text after it joins the text a snapshot can see. */
+    os64_html_node_t *text = script->prev;
+    const char *held = text->text;
+    os64_html_pin_t pin = os64_html_pin(doc);
+    require(pin && os64_html_remove(doc, script) == OS64_HTML_OK, "a verb at a stop");
+    require(os64_html_parser_resume(p) == OS64_HTML_SCRIPT, "resume stops at the next script");
+    require(os64_streq(held, "before") && os64_streq(text->text, "before after") &&
+                os64_html_retired_bytes(doc) > 0,
+            "pinned bytes stay while the text grows elsewhere");
+    os64_html_unpin(doc, pin);
+    require(os64_html_retired_bytes(doc) == 0, "unpin reclaims");
+    require(os64_html_parser_resume(p) == OS64_HTML_OK && !os64_html_parser_script(p),
+            "the last resume parses what was kept");
+    require(os64_html_parser_end(p) == OS64_HTML_OK && feed(p, "x") == OS64_HTML_BAD_ARGUMENT,
+            "the end of the input");
+    require(os64_html_parser_finish(p) == doc && !doc->refusal && find(doc->body, "script") &&
+                !find(doc->body, "script")->next->next,
+            "the finished document");
+    os64_html_document_free(doc);
+
+    /* A page left mid-load keeps its document. */
+    p = os64_html_parser_new(&options);
+    require(p != NULL, "abandon constructor");
+    feed(p, window);
+    require(feed(p, "<p>shown<script>s</script>never parsed") == OS64_HTML_SCRIPT, "stopped");
+    doc = os64_html_parser_abandon(p);
+    require(doc && doc->html->parent == doc->document && find(doc->body, "script") &&
+                !find(doc->body, "script")->next,
+            "an abandoned parser's document, as far as it was built");
+    os64_html_document_free(doc);
+
+    /* An end tag at an integration point once went round until the work
+     * budget ran out. */
+    doc = parsed("<svg><foreignObject></p>x");
+    const os64_html_node_t *foreign = find(doc->body, "foreignObject");
+    require(doc->work < 1000 && foreign && foreign->first_child &&
+                os64_streq(foreign->first_child->name, "p"),
+            "an end tag at an integration point");
+    os64_html_document_free(doc);
+    require(os64_heap_verify() == 0, "heap after stops");
+}
 int main(int argc, char **argv)
 {
     if (argc > 1 && os64_streq(argv[1], "pinned")) {
@@ -208,6 +280,7 @@ int main(int argc, char **argv)
     }
     form_owners();
     verbs();
+    stops();
     os64_html_options_t options = os64_html_options_default();
     options.max_depth = 3;
     os64_html_parser_t *p = os64_html_parser_new(&options);
@@ -222,6 +295,6 @@ int main(int argc, char **argv)
     os64_html_parser_destroy(p);
     require(os64_heap_verify() == 0, "heap after free/cancel");
     os64_printf(
-        "htmltest: PASS (streaming, tree repair, UTF-8, namespaces, templates, form owners, verbs, bounds, heap)\n");
+        "htmltest: PASS (streaming, tree repair, UTF-8, namespaces, templates, form owners, verbs, stops, bounds, heap)\n");
     return HTMLTEST_OK;
 }

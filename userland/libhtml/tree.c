@@ -184,6 +184,62 @@ static bool push_open(os64_html_parser_t *p, HNode *n)
     }
     return h_nodes_push(p, &p->stack, n);
 }
+/* A link the parser makes. While the tree is the parser's own work, its
+ * stack of open elements is what makes a link sound: nothing is put under
+ * its own descendant, and nothing lies deeper than h_depth_limit. A verb that
+ * moves a node between two calls voids that (HDoc.disturbed), and from then
+ * on a link is held to the verbs' rules and its walks are charged as work.
+ *
+ * False when the link was not made. A node that would lie too deep refuses
+ * the parse; any other rule leaves the node where it was and the parse goes
+ * on, as the standard's parser goes on whatever a script did to its tree. */
+static bool attach(os64_html_parser_t *p, HNode *parent, HNode *before, HNode *n)
+{
+    HDoc *d = p->d;
+    if (!d->disturbed) {
+        h_attach(parent, before, n);
+        return true;
+    }
+    uint64_t steps = 0;
+    int64_t verdict = d_place(d, parent, n, before, &steps);
+    h_work(p, steps);
+    if (verdict == OS64_HTML_TOO_DEEP)
+        h_refuse(p, verdict);
+    return verdict == OS64_HTML_OK;
+}
+static void detach(os64_html_parser_t *p, HNode *n)
+{
+    HDoc *d = p->d;
+    if (!d->disturbed) {
+        h_detach(n);
+        return;
+    }
+    uint64_t steps = 0;
+    d_unlink(d, n, &steps);
+    h_work(p, steps);
+}
+/* A node the parser moves from where it sits may end in another tree, once
+ * a verb has made more than one for it to sit in. `rooted` is asked before
+ * the move and `parted` told after it (internal.h, d_parted). NULL, and
+ * nothing to tell, while the tree is the parser's own or when the node has
+ * no parent: a whole tree takes its controls and their forms along. */
+static HNode *rooted(os64_html_parser_t *p, HNode *n)
+{
+    if (!p->d->disturbed || !n->parent)
+        return NULL;
+    uint64_t steps = 0;
+    HNode *root = d_root(n, &steps);
+    h_work(p, steps);
+    return root;
+}
+static void parted(os64_html_parser_t *p, HNode *moved, HNode *from)
+{
+    if (!from)
+        return;
+    uint64_t steps = 0;
+    d_parted(p->d, moved, from, &steps);
+    h_work(p, steps);
+}
 /* Foster parenting may insert before a table instead of under the current
  * node. Template contents redirect insertion to their detached fragment. */
 static void insertion_place(os64_html_parser_t *p, HNode *override, HNode **parent, HNode **before)
@@ -329,16 +385,24 @@ static HNode *element(os64_html_parser_t *p, HToken *t, os64_html_ns_t ns, bool 
     if (p->d->pub.refusal)
         return NULL;
 
-    if (push && !push_open(p, n))
+    /* An element that did not reach the tree is no form's control: its
+     * record would be counted and never found. */
+    bool linked = (!push || push_open(p, n)) && attach(p, parent, before, n);
+    if (!linked && n->form_owner) {
+        n->form_owner = NULL;
+        p->d->records--;
+    }
+    if (p->d->pub.refusal)
         return NULL;
 
-    h_attach(parent, before, n);
-
+    /* In a tree a verb has moved, the landmarks are what the links make
+     * them (d_place), which need not be the elements the parser made. */
     if (named(n, "head")) {
         p->head = n;
-        p->d->pub.head = n;
+        if (!p->d->disturbed)
+            p->d->pub.head = n;
     }
-    if (named(n, "body"))
+    if (named(n, "body") && !p->d->disturbed)
         p->d->pub.body = n;
 
     if (named(n, "meta"))
@@ -368,7 +432,7 @@ static void insert_comment(os64_html_parser_t *p, HToken *t, HNode *parent)
         insertion_place(p, NULL, &parent, &before);
 
     if (!p->d->pub.refusal)
-        h_attach(parent, before, n);
+        attach(p, parent, before, n);
 }
 static void insert_character(os64_html_parser_t *p, uint32_t c)
 {
@@ -385,16 +449,10 @@ static void insert_character(os64_html_parser_t *p, uint32_t c)
         if (!n)
             return;
         n->text = "";
-        h_attach(parent, before, n);
+        if (!attach(p, parent, before, n))
+            return;
     }
-    size_t *cap = h_word(n);
-    HBuf b = {*cap ? (char *)n->text : NULL, n->text_len, *cap};
-
-    if (h_buf_put(p, &b, c)) {
-        n->text = b.s;
-        n->text_len = b.len;
-        *cap = b.cap;
-    }
+    h_text_put(p, n, c);
 }
 static HNode *clone(os64_html_parser_t *p, HNode *old, bool insert)
 {
@@ -405,7 +463,6 @@ static HNode *clone(os64_html_parser_t *p, HNode *old, bool insert)
         t.type = H_START;
         t.name.s = (char *)old->name;
         t.name.len = h_len(old->name);
-        t.attrs = old->attrs;
         n = element(p, &t, old->ns, true);
     } else {
         n = h_node(p, ELEMENT);
@@ -413,8 +470,14 @@ static HNode *clone(os64_html_parser_t *p, HNode *old, bool insert)
             n->name = old->name;
             n->ns = old->ns;
             n->tag = old->tag;
-            n->attrs = old->attrs;
         }
+    }
+    /* A formatting element's clones share its attribute records, unless a
+     * verb has made that list the element's own. */
+    int64_t why = OS64_HTML_OK;
+    if (n && !d_attrs_inherit(p->d, old, n, &why)) {
+        h_refuse(p, why);
+        return NULL;
     }
     return n;
 }
@@ -522,6 +585,71 @@ static void ordinary_end(os64_html_parser_t *p, const char *name)
         }
     }
 }
+/* The adoption agency's links. The furthest block, with a clone of each
+ * formatting element between it and `format` above it, goes to `ancestor`'s
+ * place; the block's children go under a clone of `format`, and that under
+ * the block. `*last` is the top of what is being moved, at every moment.
+ * NULL when the parse was refused part way. */
+static HNode *adopt(os64_html_parser_t *p, HNode *format, size_t furthest, HNode *ancestor,
+                    HNode **last, size_t *bookmark)
+{
+    HNode *block = p->stack.v[furthest];
+    size_t index = furthest;
+    unsigned inner = 0;
+
+    while (index && !p->d->pub.refusal) {
+        HNode *node = p->stack.v[--index];
+        if (node == format)
+            break;
+        inner++;
+
+        size_t ai = index_of(p, &p->formatting, node);
+
+        if (inner > 3 && ai != NONE) {
+            remove_index(p, &p->formatting, ai);
+            if (ai < *bookmark)
+                --*bookmark;
+            ai = NONE;
+        }
+        if (ai == NONE) {
+            remove_index(p, &p->stack, index);
+            continue;
+        }
+        HNode *copy = clone(p, node, false);
+        if (!copy)
+            return NULL;
+
+        p->formatting.v[ai] = copy;
+        p->stack.v[index] = copy;
+
+        if (*last == block)
+            *bookmark = ai + 1;
+
+        attach(p, copy, NULL, *last);
+        *last = copy;
+    }
+    HNode *parent, *before;
+    insertion_place(p, ancestor, &parent, &before);
+    if (p->d->pub.refusal)
+        return NULL;
+
+    attach(p, parent, before, *last);
+
+    HNode *copy = clone(p, format, false);
+    if (!copy)
+        return NULL;
+
+    /* The clone goes under the block first and takes the block's other
+     * children after, so that a refusal part way leaves them all in one
+     * tree. A child that will not move would be met here for ever. */
+    if (!attach(p, block, NULL, copy))
+        return NULL;
+    while (block->first_child != copy) {
+        if (!h_work(p, 1) || !attach(p, copy, NULL, block->first_child))
+            return NULL;
+    }
+    return p->d->pub.refusal ? NULL : copy;
+}
 /* The adoption agency repairs misnested formatting by moving existing
  * subtrees and replacing list/stack entries with clones. The bookmark tracks
  * the formatting insertion point even when entries before it are removed. */
@@ -585,59 +713,22 @@ static void adoption(os64_html_parser_t *p, const char *subject)
             h_error(p, "unexpected-end-tag");
             return;
         }
-        HNode *block = p->stack.v[furthest], *ancestor = p->stack.v[si - 1], *last = block;
-
-        size_t bookmark = fi, index = furthest;
-        unsigned inner = 0;
-
-        while (index && !p->d->pub.refusal) {
-            HNode *node = p->stack.v[--index];
-            if (node == format)
-                break;
-            inner++;
-
-            size_t ai = index_of(p, &p->formatting, node);
-
-            if (inner > 3 && ai != NONE) {
-                remove_index(p, &p->formatting, ai);
-                if (ai < bookmark)
-                    bookmark--;
-                ai = NONE;
-            }
-            if (ai == NONE) {
-                remove_index(p, &p->stack, index);
-                continue;
-            }
-            HNode *copy = clone(p, node, false);
-            if (!copy)
-                return;
-
-            p->formatting.v[ai] = copy;
-            p->stack.v[index] = copy;
-
-            if (last == block)
-                bookmark = ai + 1;
-
-            h_attach(copy, NULL, last);
-            last = copy;
-        }
-        HNode *parent, *before;
-        insertion_place(p, ancestor, &parent, &before);
-        if (p->d->pub.refusal)
-            return;
-
-        h_attach(parent, before, last);
-
-        HNode *copy = clone(p, format, false);
+        HNode *block = p->stack.v[furthest], *last = block;
+        size_t bookmark = fi;
+        /* Where the block ends up decides which controls it has been parted
+         * from, and that is asked once the links are all made, or as many
+         * as a refusal let be made. */
+        HNode *from = rooted(p, block), *ancestor = p->stack.v[si - 1];
+        HNode *copy = adopt(p, format, furthest, ancestor, &last, &bookmark);
+        /* A refusal can leave the block aside, under clones that never
+         * reached their place, in the parser's own tree as in any other.
+         * The ancestor has not moved, and the parse is over: its root is
+         * asked without charge. */
+        if (!copy && !from)
+            from = d_root(ancestor, NULL);
+        parted(p, last, from);
         if (!copy)
             return;
-
-        while (block->first_child) {
-            if (!h_work(p, 1))
-                return;
-            h_attach(copy, NULL, block->first_child);
-        }
-        h_attach(block, NULL, copy);
 
         fi = index_of(p, &p->formatting, format);
         if (fi < bookmark)
@@ -751,6 +842,16 @@ static void reset_mode(os64_html_parser_t *p)
     }
     p->mode = M_BODY;
 }
+/* A script is whole: where a host that runs scripts gets its turn (html.h,
+ * THE PARSE THAT STOPS). One inside a template's contents is in a document
+ * that runs nothing. The walk that finds that out is charged whether or not
+ * this parse stops, so a document costs the same work however it is driven. */
+static void script_done(os64_html_parser_t *p, HNode *script)
+{
+    if (!p->opt.scripting || template_open(p) || p->straight || p->d->pub.refusal)
+        return;
+    p->script = script;
+}
 static void raw_element(os64_html_parser_t *p, HToken *t, HState state)
 {
     if (!element(p, t, HTML, true))
@@ -793,7 +894,7 @@ static void doctype(os64_html_parser_t *p, HToken *t)
 
     if (p->d->pub.refusal)
         return;
-    h_attach(&p->d->root, NULL, n);
+    attach(p, &p->d->root, NULL, n);
 
     if (!h_eq(n->name, "html") || t->has_public ||
         (t->has_system && !h_eq(n->system_id, "about:legacy-compat")))
@@ -829,12 +930,9 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode);
 
 static void merge_attrs(os64_html_parser_t *p, HNode *n, HAttr *attrs)
 {
-    HAttr **tail = &n->attrs;
-    while (*tail) {
+    for (HAttr *b = n->attrs; b; b = b->next)
         if (!h_work(p, 1))
             return;
-        tail = &(*tail)->next;
-    }
 
     for (HAttr *a = attrs; a && !p->d->pub.refusal; a = a->next) {
         bool exists = false;
@@ -848,13 +946,11 @@ static void merge_attrs(os64_html_parser_t *p, HNode *n, HAttr *attrs)
             }
         }
         if (!exists) {
-            HAttr *copy = h_permanent(p, sizeof(*copy));
-            if (!copy)
+            int64_t why = d_attr_add(p->d, n, a);
+            if (why) {
+                h_refuse(p, why);
                 return;
-            *copy = *a;
-            copy->next = NULL;
-            *tail = copy;
-            tail = &copy->next;
+            }
         }
     }
 }
@@ -921,8 +1017,9 @@ static bool body(os64_html_parser_t *p, HToken *t)
             if (!p->frameset_ok || p->stack.n < 2 || !named(p->stack.v[1], "body"))
                 return false;
 
-            h_detach(p->stack.v[1]);
-            p->d->pub.body = NULL;
+            detach(p, p->stack.v[1]);
+            if (!p->d->disturbed)
+                p->d->pub.body = NULL;
             p->stack.n = 1;
             element(p, t, HTML, true);
             p->mode = M_FRAMESET;
@@ -1111,7 +1208,7 @@ static bool body(os64_html_parser_t *p, HToken *t)
             raw_element(p, t, T_RAWTEXT);
             return false;
         }
-        if (h_eq(name, "noembed")) {
+        if (h_eq(name, "noembed") || (p->opt.scripting && h_eq(name, "noscript"))) {
             raw_element(p, t, T_RAWTEXT);
             return false;
         }
@@ -1385,11 +1482,16 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
         if (!push_open(p, &p->d->html))
             return false;
 
-        h_attach(&p->d->root, NULL, &p->d->html);
+        attach(p, &p->d->root, NULL, &p->d->html);
         p->mode = M_BEFORE_HEAD;
 
         if (start(t, "html")) {
-            p->d->html.attrs = t->attrs;
+            /* A verb may have given the element attributes before the parser
+             * reached its tag; the tag then adds to them, as a second one would. */
+            if (p->d->html.attrs || (*h_word(&p->d->html) & H_ATTRS_PRIVATE))
+                merge_attrs(p, &p->d->html, t->attrs);
+            else
+                p->d->html.attrs = t->attrs;
             return false;
         }
         return true;
@@ -1452,6 +1554,11 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
             return false;
         }
         if (start(t, "noscript")) {
+            /* Where scripts run, what a page offers in their place is text. */
+            if (p->opt.scripting) {
+                raw_element(p, t, T_RAWTEXT);
+                return false;
+            }
             element(p, t, HTML, true);
             p->mode = M_HEAD_NOSCRIPT;
             return false;
@@ -1595,8 +1702,13 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
             p->mode = p->original_mode;
             return true;
         }
-        pop(p);
-        p->mode = p->original_mode;
+        {
+            HNode *done = h_current(p);
+            pop(p);
+            p->mode = p->original_mode;
+            if (named(done, "script"))
+                script_done(p, done);
+        }
         return false;
 
     case M_TABLE:
@@ -2248,9 +2360,12 @@ static bool foreign(os64_html_parser_t *p, HToken *t)
             }
             return true;
         }
-        element(p, t, h_current(p)->ns, !t->self_closing);
-        if (t->self_closing)
+        HNode *made = element(p, t, h_current(p)->ns, !t->self_closing);
+        if (t->self_closing) {
             t->acknowledged = true;
+            if (made && made->ns == SVG && h_eq(made->name, "script"))
+                script_done(p, made);
+        }
         return false;
     }
     if (t->type == H_END) {
@@ -2264,7 +2379,10 @@ static bool foreign(os64_html_parser_t *p, HToken *t)
                     break;
                 pop(p);
             }
-            return true;
+            /* By the HTML rules, said here and not left to h_tree: with an
+             * integration point as the current node it would send an end tag
+             * back to this function, which has nothing left to pop. */
+            return process(p, t, p->mode);
         }
         if (!ascii_ci_equal(h_current(p)->name, t->name.s))
             h_error(p, "unexpected-end-tag");
@@ -2275,7 +2393,10 @@ static bool foreign(os64_html_parser_t *p, HToken *t)
             HNode *n = p->stack.v[i - 1];
 
             if (ascii_ci_equal(n->name, t->name.s)) {
+                bool current = i == p->stack.n;
                 p->stack.n = i - 1;
+                if (current && n->ns == SVG && h_eq(n->name, "script"))
+                    script_done(p, n);
                 return false;
             }
             if (i > 1 && p->stack.v[i - 2]->ns == HTML)

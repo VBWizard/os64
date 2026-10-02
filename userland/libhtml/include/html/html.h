@@ -10,12 +10,14 @@ typedef struct os64_html_parser os64_html_parser_t;
 
 typedef enum {
     OS64_HTML_OK = 0,
+    /* Not a refusal: the parse is stopped at a script (below). */
+    OS64_HTML_SCRIPT = 1,
     OS64_HTML_TOO_LARGE = -1,
     OS64_HTML_ARENA_EXHAUSTED = -2,
     OS64_HTML_NO_MEMORY = -3,
     OS64_HTML_TOO_DEEP = -4,
     OS64_HTML_WORK_EXHAUSTED = -5,
-    /* What a verb that changes a finished document answers (below). */
+    /* What a verb that changes a document answers (below). */
     OS64_HTML_HIERARCHY = -6,      /* the tree the DOM Standard refuses to make */
     OS64_HTML_NOT_FOUND = -7,      /* the reference child is not the parent's child */
     OS64_HTML_BAD_TEXT = -8,       /* not UTF-8, or it holds a NUL */
@@ -44,6 +46,9 @@ typedef struct {
     const char *charset;
     size_t max_bytes, max_arena_bytes, max_depth;
     uint64_t max_work;
+    /* Parse as a browser that runs scripts does (THE PARSE THAT STOPS,
+     * below). Off, a script is text like any other and no call stops. */
+    bool scripting;
 } os64_html_options_t;
 
 typedef struct os64_html_attr {
@@ -109,6 +114,71 @@ int64_t os64_html_parser_feed(os64_html_parser_t *p, const void *bytes, size_t l
 os64_html_document_t *os64_html_parser_finish(os64_html_parser_t *p);
 void os64_html_parser_destroy(os64_html_parser_t *p);
 void os64_html_document_free(os64_html_document_t *doc);
+
+/* ── THE PARSE THAT STOPS (docs/design/pending/DOM.md) ────────────────────
+ *
+ * With `scripting` set, `noscript` is parsed as the standard says a browser
+ * with scripting enabled parses it (its contents are text), and THE PARSE
+ * STOPS AT THE END TAG OF EACH SCRIPT: the call answers OS64_HTML_SCRIPT,
+ * which is not a refusal, and `os64_html_parser_script` names the element,
+ * whole and where the parser put it. It names one until the parse is
+ * resumed and NULL otherwise. Whether that script is run, and how, is the
+ * caller's business; the parser only waits. An SVG `script` stops the parse
+ * too, at its end tag or at a start tag that closes itself. A script inside
+ * a template's contents, which no browser runs, does not, nor does one that
+ * only the end of the input closed.
+ *
+ * `resume` carries on, and may stop at the next script. A `feed` while the
+ * parse is stopped parses nothing: its bytes are kept on the heap, counted
+ * against `max_bytes` and not against the arena, and it answers
+ * OS64_HTML_SCRIPT again. Where a chunk ends stays invisible: stops fall at
+ * the same scripts, and the document comes out the same, however the bytes
+ * were cut. Which call answers a stop does depend on the cut. In particular
+ * a parser reads its first 1024 bytes for an encoding before it parses any
+ * of them, so a script among those stops the call that fills that window,
+ * or the one that says the input has ended.
+ *
+ * THE END OF THE INPUT is said one of two ways. `finish` is the way that
+ * does not stop: it parses whatever is kept and the end-of-input steps
+ * straight through, past any script, and hands over the document. A host
+ * that runs scripts says `end` first, which may stop as `feed` does, and
+ * calls `finish` once `end` or a `resume` after it has answered
+ * OS64_HTML_OK. No byte is fed after `end` (OS64_HTML_BAD_ARGUMENT, which
+ * like a `resume` of a parse that is not stopped changes nothing).
+ *
+ * `abandon` is for a page being left mid-load: it parses nothing more, runs
+ * no end-of-input steps, and hands over the document as far as it was
+ * built, to be freed like any other. (`destroy` frees the document with the
+ * parser, which is right when nothing can be pointing into it.)
+ *
+ * BETWEEN TWO CALLS THE TREE IS A DOCUMENT. `os64_html_parser_document`
+ * answers it, the same one `finish` will hand over. It can be read, pinned
+ * and changed with the verbs at the foot of this file, with one
+ * difference from a finished document: until the parser has reached the
+ * first tag or text, the `html` element is not yet in the document. The
+ * parser still owns it: it is not freed while the parser lives.
+ *
+ * Every call that parses anything moves the document's version, and so does
+ * a `finish` or an `abandon` that has to give the document its `html`
+ * element. What a snapshot pinned between two calls keeps pointing at stays
+ * put: the parser adding to a text node such a snapshot can see writes the
+ * longer text elsewhere and retires the old bytes, as `set_text` does.
+ *
+ * A verb between two calls may leave the tree unlike anything a parser
+ * built: its open elements detached, moved, nested the other way. The
+ * parser then goes on as the standard says, adding to the elements it has
+ * open wherever they now are, but it keeps the verbs' rules. A link the
+ * rules refuse is not made and the node stays where it was (a cycle; a
+ * second element, or a doctype after the element, under the document). A
+ * node that would lie deeper than the limit refuses the parse
+ * (OS64_HTML_TOO_DEEP). A control the parser moves out of its form's tree
+ * loses its `form_owner`, and `head` and `body` stay the document element's
+ * first of each. */
+os64_html_node_t *os64_html_parser_script(const os64_html_parser_t *p);
+int64_t os64_html_parser_resume(os64_html_parser_t *p);
+int64_t os64_html_parser_end(os64_html_parser_t *p);
+os64_html_document_t *os64_html_parser_document(os64_html_parser_t *p);
+os64_html_document_t *os64_html_parser_abandon(os64_html_parser_t *p);
 const os64_html_attr_t *os64_html_attr(const os64_html_node_t *element, const char *name);
 os64_html_tag_t os64_html_tag_from_name(const char *name);
 const char *os64_html_tag_name(os64_html_tag_t tag);
@@ -132,7 +202,7 @@ const char *os64_html_status_name(int64_t status);
 const char *os64_html_encoding_for_label(const char *label, size_t len);
 bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out);
 
-/* ── CHANGING A FINISHED DOCUMENT (docs/design/pending/DOM.md) ────────────
+/* ── CHANGING A DOCUMENT (docs/design/pending/DOM.md) ─────────────────────
  *
  * The structs above stay read-only views. A change goes through a verb, so
  * that every one keeps what every reader relies on: no cycle, the DOM
