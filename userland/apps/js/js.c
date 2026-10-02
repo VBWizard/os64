@@ -21,9 +21,9 @@
 #define JS_EXIT_REFUSED 5   // the library refused, or answered outside the contract
 
 // QuickJS's stack check runs on the program's own 1 MiB thread stack
-// (THREAD_USER_STACK_SIZE). The cap keeps a quarter of it for the runner, the
-// library and native callbacks beneath the JavaScript frames, so a deep
-// recursion ends as a RangeError instead of running off the stack.
+// (THREAD_USER_STACK_SIZE). The cap leaves nominal host headroom; J2 measures
+// recursion and a bounded native callback at this cap. Arbitrary host/native
+// frames still need their own budget. Engine stack overflow is an exception.
 #define JS_STACK_CAP ((size_t)768 * 1024)
 
 typedef enum { JS_FROM_FILE, JS_FROM_EVAL, JS_FROM_STDIN } js_source_kind_t;
@@ -108,13 +108,7 @@ static int32_t parse_plan(int32_t argc, char **argv, js_plan_t *plan)
     a.about = "run a JavaScript program: FILE, -e SOURCE, or - for standard input";
     a.details = "after the script, every argument is the script's own (scriptArgs)";
 
-    plan->limits = (os64_js_limits_t){
-        .memory_bytes = (size_t)64 * 1024 * 1024,
-        .stack_bytes = (size_t)256 * 1024,
-        .source_bytes = (size_t)4 * 1024 * 1024,
-        .execution_ms = 60000,
-        .jobs_per_turn = UINT64_MAX,
-    };
+    plan->limits = os64_js_default_limits();
 
     for (;;) {
         // A long-only option is identified by the token this call starts

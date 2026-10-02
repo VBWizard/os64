@@ -31,7 +31,7 @@ independent review.
 | R2 runtime implementation | **Merged** | Core [PR #194](https://github.com/VBWizard/os64/pull/194), merge `a6d45945`; file/output/argument helpers [PR #195](https://github.com/VBWizard/os64/pull/195), merge `a558f8fd`. All eleven embedding operations are implemented. Maintained suites pass 822 target-engine host, 3,014 sanitized-engine host and 395 os64/QEMU checks; evidence and review corrections are in libjs/VALIDATION.md. |
 | C1 runner | **Merged; running on P5** | Opus's [PR #196](https://github.com/VBWizard/os64/pull/196), merge `a2e409a7`, delivers file/expression/stdin execution, copied arguments, selected output, diagnostics and exit mapping. Both `js` and `libjs.so` build by default for os64get delivery. Host and QEMU acceptance pass; Chris reports `js primes.js \| wc -l` produced `1229` on the P5. Standard-image delivery is recorded in I1. |
 | V1 independent validation | **Merged** | [PR #197](https://github.com/VBWizard/os64/pull/197), merge `99df2636`: independently reviewed separate consumer suite passes 383 checks in each host engine profile and 375 in QEMU, with 55 upstream functions passing and four explicit host-feature skips. Capability/failure/native ownership, diagnostic exhaustion, reuse, ABI refusal and the separate fatal process are covered. V1 found and fixes an engine error lifetime defect under persistent allocation refusal. |
-| I1 shared integration | **In review** | [PR #198](https://github.com/VBWizard/os64/pull/198), implementation `3b986b84`, based on merged V1 `99df2636`: the normal ext2 root and FAT rescue volume install `js`, `libjs.so` and `/etc/licenses/quickjs.txt` with their existing dependencies. Strict root/header/target checks and 18 image byte comparisons pass, including FreeType through libos64. Fresh ext2-root and FAT-root QEMU boots each pass the CLI smoke cases and V1's 375 checks, with 55 upstream functions passing and four explicit skips. Both prime pipelines produce `1229`; the separate fatal process returns the full JSFA badge. Independent review remains. |
+| I1 shared integration | **Merged** | [PR #198](https://github.com/VBWizard/os64/pull/198), merge `1b874edd`: the normal ext2 root and FAT rescue volume install `js`, `libjs.so` and `/etc/licenses/quickjs.txt` with their existing dependencies. Strict root/header/target checks and 18 image byte comparisons pass, including FreeType through libos64. Fresh ext2-root and FAT-root QEMU boots each pass the CLI smoke cases and V1's 375 checks, with 55 upstream functions passing and four explicit skips. Both prime pipelines produce `1229`; the separate fatal process returns the full JSFA badge. |
 | D0 DOM design | **Merged** | Reviewed [DOM.md](DOM.md), delivered with [PR #190](https://github.com/VBWizard/os64/pull/190). Design completion is separate from browser scripting implementation. |
 | D1 libhtml mutation core | **Merged** | [PR #190](https://github.com/VBWizard/os64/pull/190), merge `5c7d62ce`. Mutation/lifetime verbs and maintained tests; `parse_fragment` belongs to D2b. |
 | D2a scripting-enabled parsing | **In review** | [PR #199](https://github.com/VBWizard/os64/pull/199), `fable/dom-d2a-parser-stop`: stop/resume, the end of the input, abandon, and a tree read and changed between calls; evidence in DOM.md § D2a, as built. |
@@ -52,19 +52,16 @@ belong to [JAVASCRIPT.md](JAVASCRIPT.md#delivery-and-validation):
 | --- | --- | --- |
 | J0 reviewed foundation | **Complete** | Pinned QuickJS source/profile, maths selection, dependency inventory and reviewed runtime contract are delivered. |
 | J1 library and runner on os64 | **Complete** | Merged M1/R1/R2/C1, strict target build/link, expected shared dependencies, script execution and exception output in QEMU. Chris's P5 prime-count pipeline adds a hardware smoke test. J1 does not require standard-image installation. |
-| J2 lifecycle and failure acceptance | **Partial** | Maintained runtime and runner host/guest evidence covers lifecycle, failures, limits, cancellation, Promise work and the separate fatal-leak fixture; V1 is reviewed and merged. Remaining: measure recursion/native-callback stack use and choose production defaults, and verify floating-point behaviour across scheduling. |
+| J2 lifecycle and failure acceptance | **In review** | [PR #200](https://github.com/VBWizard/os64/pull/200), implementation `ec41a57f`, based on merged I1 `1b874edd`: existing lifecycle/failure/cancellation/Promise/fatal and upstream evidence is supplemented by 105 guest measurement checks passing on one and eight CPUs. Twelve recursion/native-frame cases retain sampled headroom and permit reuse; two competing runtimes preserve XMM/x87/control state across yield/sleep with a deliberate-disturbance negative control. Six workloads fit the retained 64 MiB/256 KiB/4 MiB/60 s profile, now published by `os64_js_default_limits()` and shared by the runner. Both final boots also pass V1's 375 checks, CLI/default/768 KiB-cap cases and the fatal status; host runner suites pass 196/38 checks. Independent review remains. |
 | J3 first scripted Yonder fixture | **Pending** | D0/D1 are merged; D2-D5 and visible mutation/rebuild/reference/form/navigation acceptance remain. |
 | J4 browser execution and events | **Pending** | Browser script order, parser mode, timers/events, origins/cookies and their acceptance fixtures remain. D6 reclamation and D7's event loop are separate deliverables. |
 
 Next steps:
 
-1. Review I1's standard-image registration in PR #198, complete dependency
-   and licence audit, and fresh ext2-root/FAT-root execution evidence. V1 is
-   reviewed and merged; I1's implementation and acceptance are recorded below.
-2. Close J2's measurement gaps: recursion/native-callback stack headroom,
-   production budgets and floating-point state across scheduling. C1's current
-   defaults remain provisional.
-3. Continue Fable's D2-D4 alongside that work; then D5 supplies the first
+1. Review J2's measurement suite and shared standalone defaults in PR #200.
+   V1 and I1 are reviewed and merged. J2's measurements and acceptance are
+   recorded below; accepting that packet closes the standalone milestone.
+2. Continue Fable's D2-D4 alongside that work; then D5 supplies the first
    scripted Yonder fixture. D6 reclamation and D7 execution/events have their
    own acceptance. The reserved browser function-call/checkpoint and audited
    teardown-reclamation runtime work remain separate from the completed CLI.
@@ -462,7 +459,7 @@ Chris assigned I1 after accepting V1. The integration is isolated in
 `.worktrees/js-integration`, branch `codex/js-integration`, based on merged
 V1 `userland` `99df2636`. Implementation `3b986b84` is published in
 [PR #198](https://github.com/VBWizard/os64/pull/198), targeting `userland`.
-Independent review remains pending.
+The packet passed review and merged as `1b874edd`.
 
 The root GNUmakefile discovers `js` with the other applications and adds
 `libjs.so` to the shared-library inventory used by both ext2 and FAT. Both
@@ -492,5 +489,52 @@ pass and both owned VMs are stopped. Read-only filesystem checks on both disks'
 ext2 and home partitions pass. Exact results, hashes and evidence paths
 are recorded in libjs/VALIDATION.md. No new P5 run is claimed.
 
-J2's stack measurements, production defaults and floating-point scheduling
-acceptance remain the next separate packet. Browser scripting remains D2-D7.
+At the I1 handoff, J2's stack/defaults/scheduling measurements were the next
+packet; that evidence is recorded below. Browser scripting remains D2-D7.
+
+## J2 standalone acceptance handoff, 2026-10-02
+
+Chris assigned J2 after I1 merged. The packet is isolated in
+`.worktrees/js-acceptance-limits`, branch `codex/js-acceptance-limits`, based on
+`userland` `1b874edd`. Implementation `ec41a57f` and guest acceptance are
+complete; [PR #200](https://github.com/VBWizard/os64/pull/200) is open against
+`userland` for independent review.
+
+`tools/js_measure` and the explicit `js-measure-test` target provide a maintained
+guest consumer using public runtime/binding APIs and `/proc/self/maps`. At
+128/256/768 KiB engine budgets, simple recursion, eight live locals, accessor
+recursion and recursion with a bounded 64 KiB native frame all end as engine
+exceptions and permit reuse. On the mapped 1 MiB native stack, the 256 KiB
+default with the native frame retains
+718,688 bytes sampled headroom; the 768 KiB cap retains 194,528 bytes. These
+are sampled cases, not a universal per-frame cost or proof for arbitrary native
+bindings. Yonder layout-call measurements remain in browser integration.
+
+Two threads own separate runtimes and preserve sentinels in sixteen XMM and
+two occupied x87 registers plus control/status fields across existing yield/
+sleep syscalls. Distinct rounding controls, an intentional-disturbance negative
+control, script numeric/formatting/Promise assertions, peer-progress counts and
+proc switch reports establish the tested scheduling behavior. Final one-/eight-
+CPU boots pass 105 checks with zero failures, with 259/141 recorded process
+switches during the worker phase. No kernel or syscall change is introduced.
+
+Six representative workloads cover primes, JSON, an 8 MiB typed array, BigInt,
+100,000 Promise jobs and the 4 MiB source ceiling. The largest sampled engine
+charge is 8,547,952 bytes; the longest observed case in these two runs is about
+2.7 s. Retain 64 MiB memory, 256 KiB stack, 4 MiB source, 60,000 ms execution
+and `UINT64_MAX` jobs as the standalone starting profile. The deadline bounds
+ordinary Promise work; `--jobs` remains an explicit practical count cap.
+`os64_js_default_limits()` publishes these values in the library header; the
+runner and standalone example share it. The helper changes no struct layout or
+exported symbol. All runner overrides remain available.
+
+Strict root/header/target/image audits pass. The runner host suites pass 196
+stand-in and 38 real-library checks with normal leak inspection. Each final
+fresh boot also passes V1's 375 checks (55 upstream functions passing, four
+explicit skips), CLI expression/arguments/Promise/stdin/exception/primes cases,
+the runner's 768 KiB recursion cap and the separate actual JSFA fatal status.
+All compared delivered artifacts match the build. Boot/late kernel checks and
+post-stop ext2/home filesystem checks pass; both owned final VMs are stopped.
+Exact workloads, tables, hashes and evidence paths are in libjs/VALIDATION.md.
+The suite does not claim a full interrupt-coverage audit, arbitrary native-
+callback safety, browser layout headroom or a new P5 run.

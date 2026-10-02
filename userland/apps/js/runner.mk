@@ -4,9 +4,8 @@
 # slot) that also links $(LIBJS_SO) and includes <os64/js.h>. Building it
 # builds the library, so `make -C userland` leaves both in $(BIN), where
 # os64serve.py serves them: `os64get js libjs.so` installs the pair. The
-# image is another matter, because the root GNUmakefile holds js back from
-# its app list until I1 puts libjs.so on the image too (DEBTS.md § Userland
-# utilities). `make js-runner` builds just the runner and its library.
+# normal image includes both, with the QuickJS notice, on ext2 and FAT.
+# `make js-runner` builds just the runner and its library.
 JS_RUNNER_OBJS := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard apps/js/*.c))
 $(JS_RUNNER_OBJS): CFLAGS += -I$(CURDIR)/libjs/include
 

@@ -518,4 +518,155 @@ I1's implementation and acceptance are published in
 [PR #198](https://github.com/VBWizard/os64/pull/198) for independent review. No new
 P5 run or full ECMAScript conformance is claimed. J2's stack measurements,
 production limit defaults and floating-point scheduling acceptance remain
-separate; the runner's defaults are still provisional.
+separate at this I1 handoff, when the runner defaults were provisional. J2's
+profile and acceptance are recorded below.
+
+## J2 standalone profile and scheduling, 2026-10-02
+
+Worktree `.worktrees/js-acceptance-limits`, branch `codex/js-acceptance-limits`,
+based on reviewed and merged I1 `userland` `1b874edd`. The maintained guest
+consumer is `tools/js_measure/consumer.c`, with a register-state helper in
+`fp_pause.S`, built by the optional `js-measure-test` target. It uses public
+runtime/binding APIs and `/proc/self/maps`, without private runtime fields or
+kernel changes. Its README specifies sampling boundaries and the run procedure.
+
+The standalone profile is published by the header helper
+`os64_js_default_limits()`: **64 MiB engine memory, 256 KiB engine stack,
+4 MiB source, 60,000 ms execution and `UINT64_MAX` jobs**. The runner and
+standalone API example share it; command-line overrides are retained. The
+values retain C1's defaults after measurement. There is no struct/layout,
+export or ABI-identifier change. Creation still requires explicit positive
+limits. The default deadline bounds ordinary Promise work; `--jobs` supplies
+an explicit practical count cap. Native operations remain responsible for
+bounded behavior and their own stack/heap use.
+
+Fresh final QEMU boots use **eight CPUs (VM 56213)** and **one CPU (VM 56214)**,
+each passing **105 J2 checks, zero failures**, status **0**. Both use the normal
+root image; only the optional consumers and test inputs are added to scratch
+home images. Earlier single-CPU measurement VM 56212 passed 99 checks before
+the disturbance negative control and source-ceiling workload were added; final
+acceptance uses the 105-check consumer on both configurations.
+
+The consumer identifies its usable mapped 1 MiB native stack, then samples RSP
+inside callbacks while recursion reaches an engine stack exception. Four
+shapes at three budgets retain at least 128 KiB sampled headroom and permit
+runtime reuse. The final one-/eight-CPU stack rows agree:
+
+| Shape | Engine budget (KiB) | Reached depth | Sampled stack use (bytes) | Sampled headroom (bytes) |
+| --- | ---: | ---: | ---: | ---: |
+| Simple recursion | 128 | 207 | 133296 | 915280 |
+| Eight live locals | 128 | 171 | 132720 | 915856 |
+| Accessor recursion | 128 | 161 | 132928 | 915648 |
+| Simple plus 64 KiB native frame | 128 | 207 | 198848 | 849728 |
+| Simple recursion | 256 | 417 | 264336 | 784240 |
+| Eight live locals | 256 | 346 | 264320 | 784256 |
+| Accessor recursion | 256 | 325 | 264128 | 784448 |
+| Simple plus 64 KiB native frame | 256 | 417 | 329888 | 718688 |
+| Simple recursion | 768 | 1257 | 788496 | 260080 |
+| Eight live locals | 768 | 1043 | 788464 | 260112 |
+| Accessor recursion | 768 | 980 | 788128 | 260448 |
+| Simple plus 64 KiB native frame | 768 | 1257 | 854048 | 194528 |
+
+This supports retaining the 256 KiB standalone profile and 768 KiB runner cap
+for the measured cases. RSP sampling is not a watermark of every instruction,
+and frame costs depend on source/compiler/host calls. No safety guarantee for
+arbitrary native callbacks or future script-to-layout calls follows from this
+table. The native-stack configurability debt remains a browser-measurement gate.
+
+Six checked workloads use the default profile. `JS_ComputeMemoryUsage` records
+engine allocation charges at explicit callbacks; these are samples, not a
+global peak or process RSS, and exclude wrapper/host input allocations. The
+4 MiB comment-heavy input is fixture-owned host memory, copied through the
+ordinary bounded library execution path. Durations are single observations
+in QEMU under the session's host load, not a comparative CPU benchmark:
+
+| Workload | One CPU (microseconds) | Eight CPUs (microseconds) | Sampled engine charge (bytes) | Jobs |
+| --- | ---: | ---: | ---: | ---: |
+| Primes through 10000, count 1229 | 53315 | 52405 | 151232 | 0 |
+| JSON, 10000 records retained through stringify/parse | 443116 | 560587 | 4524192 | 0 |
+| 8 MiB Float64Array, filled and checked | 1314427 | 1293601 | 8547952 | 0 |
+| BigInt Fibonacci, 10000 steps / 2090 decimal digits | 64558 | 63673 | 157040 | 0 |
+| Promise continuation chain | 2732645 | 2724171 | 163424 | 100000 |
+| Source at 4 MiB ceiling, comment plus native probe | 228573 | 577007 | 4353664 | 0 |
+
+Retaining 64 MiB memory and a 60 s deadline leaves room around these workloads;
+the 4 MiB input case establishes the chosen source ceiling. They define a
+configurable standalone starting profile, not the needs of every program or
+P5 hardware. Existing runtime/runner suites cover the enforcement of overridden
+limits and failure classification.
+
+The scheduling phase creates two independently owned runtimes. Their callbacks
+set distinct sentinels in **all sixteen XMM registers and two occupied x87
+registers**, with different x87/MXCSR rounding controls. Assembly keeps that
+state live around existing yield/sleep syscalls, compares the occupied x87
+values, x87 control/status/tag fields, MXCSR and XMM values, then restores the
+caller's saved state. It compares neither empty x87 values nor reserved FXSAVE
+bytes. An intentional XMM/x87/MXCSR disturbance is rejected with all three
+error bits for controls, x87 and XMM, proving the negative control.
+
+Both workers complete **129 pauses each, zero state mismatches**, including
+Promise callbacks. Script checks retain arithmetic, signed zero/NaN, maths,
+number formatting and JSON behavior under normal rounding. Atomic peer counters
+observe progress while paused: one CPU records 96/95 observations, eight CPUs
+113/114. Proc reports record **259/141 intervening process switches** respectively.
+The single CPU forces competition for the same register hardware; eight CPUs
+exercise the normal SMP configuration. This establishes the tested FXSAVE/
+SSE2 scheduling profile, not AVX/XSAVE, signal-frame coverage or forced CPU
+migration.
+
+Other final acceptance:
+
+- Strict root and explicit consumer builds pass; logs are
+  `/tmp/js-j2-final-strict.log` and `/tmp/js-j2-final-consumer-build.log`.
+  Contract/header checks and target import/export/ELF/shared-dependency/relink
+  audits pass in `/tmp/js-j2-headers.log` and `/tmp/js-j2-target.log`. The
+  library retains eleven runtime and 186 engine exports.
+- Runner host suites pass **196 stand-in / 38 real-library checks**, with
+  ASan/UBSan wrapper/runner code, target core/M1 maths and normal-exit leak
+  inspection. `/tmp/js-j2-cli-host.log` records the run; caller sanitizer
+  options were preserved and leak detection was not disabled.
+- Normal-image audit passes **18 byte comparisons**, including the recursive
+  library chain and pinned notice, on standalone ext2, disk ext2 and FAT.
+- Each final guest also passes V1's **375 checks**, **55 upstream functions
+  passed / four explicit host-feature skips**, status 0. CLI expression,
+  arguments/Promise, stdin, exception/status and prime-pipeline cases pass;
+  each pipeline produces **1229**. The rebuilt runner at `--stack 768K` reports
+  stack overflow with status **1**. The separate invariant fixture returns
+  the full guest JSFA badge **`0x4A534641`**, decimal **`1246971457`**.
+- Both quiet boots pass 31 pre-boot, 34 post-boot and three late checks,
+  including task teardown before the JavaScript commands. After stopping the
+  owned VMs, read-only `e2fsck -fn` on each ext2 root and home partition returns
+  **0**. Logs use `/tmp/js-j2-{1,8}core-fsck-{root,home}.log`.
+- `git diff --check` passes. The stale-reference report is reviewed: its two
+  path hits, `docs/design/pending/JAVASCRIPT.md` and `kernel/include/thread.h`,
+  come from rewriting the debt row. Both files remain present and their
+  retained references are valid; neither path is retired. No added superlative
+  comment claims are reported.
+
+The copied measurement/acceptance consumers, runner, four libraries and notice
+match their corresponding build/source bytes on both final guests. Relevant
+artifact identities:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| jsmeasure | 50064 | `064a3a61baa4483c8b55b2f6a4f95a8b38177618a43b230227a96207a12ff2a2` |
+| jsaccepttest | 121184 | `4e6bb2e83b50942c583670b097ea538ec45199659d056fe561c5d08e33557188` |
+| js | 32336 | `f477bfd7f8c0d80c688486e3396fdb40ea83992031eaf6a232d202294e8f30c1` |
+| libjs.so | 4521296 | `de0dcd6df091a9d8d3c608c399a3c2f1e172161ff912763e81767f96952462c1` |
+| libmath.so | 150408 | `1a017343bf18c539c4f4935b51407db60af676c22f4748b63dccd7d76e905094` |
+| libos64.so | 789272 | `29e3447278237735c714a7050ed3dce3d51fb7fa3f1f64ef78d748323215d36a` |
+
+Harness preparation and foreground run scripts are
+`/tmp/js-j2-prepare-harness.py` and `/tmp/js-j2-final-guest-run.sh`. Raw final
+measurements, statuses, V1 output, CLI output and copied binaries use
+`/tmp/js-j2-final-{1,8}core-*`. Kernel logs have `quiet-kernel.log` and
+`kernel.log` suffixes; screenshots `/tmp/js-j2-final-{1,8}core.png` show the
+returned shell and expected invariant diagnostic. Temporary artifacts
+supplement the maintained sources and documented procedure.
+
+J2's implementation and acceptance are ready for independent review. The
+accepted R2/V1 suites provide lifecycle, failure, ownership, cancellation,
+Promise, date/numeric and separate fatal evidence; this packet closes the
+named stack/defaults/scheduling measurement gaps. It does not claim full
+ECMAScript conformance, a complete interrupt-coverage audit, arbitrary native
+stack safety, browser scheduling/layout acceptance or a new P5 run.

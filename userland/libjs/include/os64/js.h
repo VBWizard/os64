@@ -68,8 +68,21 @@ typedef struct {
     uint64_t jobs_per_turn;
 } os64_js_limits_t;
 
-/* Callers supply positive, representable limits. The examples' development
- * budgets are not production defaults; see JAVASCRIPT_TASKS.md's J2 gate. */
+/* Standalone defaults for os64's 1 MiB native thread stack. Hosts with native
+ * bindings budget their own stack/heap work; browser limits need separate
+ * measurements. The finite deadline bounds ordinary Promise work; callers
+ * may lower the job count for a deterministic cap. */
+static inline os64_js_limits_t os64_js_default_limits(void)
+{
+    const os64_js_limits_t limits = {
+        (size_t)64 * 1024 * 1024, (size_t)256 * 1024,
+        (size_t)4 * 1024 * 1024, UINT64_C(60000), UINT64_MAX
+    };
+    return limits;
+}
+
+/* Callers supply positive, representable limits; creation requires an explicit
+ * configuration. os64_js_default_limits() supplies the standalone profile. */
 typedef struct {
     os64_js_limits_t limits;
 } os64_js_config_t;
