@@ -363,9 +363,10 @@ Worktree `.worktrees/js-validation`, branch `codex/js-validation`, based on
 merged M1/R1/R2/C1 at `a2e409a7` plus task-status documentation `2b3ee4cb`.
 The maintained consumer and provenance/inventory are in `tools/js_acceptance`;
 the host runner is `tools/test_js_acceptance_host.sh`. This suite does not include
-R2's `cases.h` or private runtime state. Quinn authored both R2 and this suite,
-so another reviewer must assess the packet before calling V1 independently
-accepted. These observations establish execution evidence, not that review.
+R2's `cases.h` or private runtime state. Quinn authored both R2 and this suite;
+independent review accepted the V1 packet in
+[PR #197](https://github.com/VBWizard/os64/pull/197), merged as `99df2636`.
+The observations below record its execution evidence.
 
 The initial persistent OS-allocation-refusal fixture crashed in
 `find_own_property`, reached from `build_backtrace` while converting a thrown
@@ -425,7 +426,96 @@ checkout's build byte for byte:
 | libmath.so | 150400 | `9e488810d9e45876bbb3095029e75f4c6188025ea2a17c552ce5a718299e1434` |
 | libos64.so | 789240 | `fbfbf8b3978faf89507643c35acaf48b47700c29e671d304ad8c0c75c27430b1` |
 
-This validation image installs the optional consumer and matching libraries;
-the standard root-image inventory still awaits I1, including licence delivery.
+This V1 validation image received the optional consumer and matching libraries
+through scratch-image installation; normal image/licence delivery belongs to I1.
 J2's measured stack headroom, production defaults and floating-point scheduling
 acceptance remain separate. No new P5 execution was performed in this packet.
+
+## I1 standard-image integration, 2026-10-02
+
+Worktree `.worktrees/js-integration`, branch `codex/js-integration`, based on
+reviewed and merged V1 `userland` `99df2636`. The root GNUmakefile installs
+`/bin/js`, `/lib/libjs.so` and the pinned QuickJS notice on both the ext2 root
+and FAT rescue volume. Existing libmath/libos64 and libos64's FreeType dependency
+remain in both library inventories. Both image targets depend on the pinned
+notice source and install it at `/etc/licenses/quickjs.txt`. The engine, runtime,
+runner, ABI and kernel are unchanged by this packet.
+
+- `make -j8`: **PASS**, a strict fresh kernel/userland/image build. Ignored
+  toolchain dependency sources and Limine build files were copied from the
+  existing checkout. `make -C userland -j8 js-acceptance-test` and the separate
+  normal home-image target pass. Logs: `/tmp/js-i1-strict.log`,
+  `/tmp/js-i1-consumer-build.log` and `/tmp/js-i1-home-build.log`.
+- Contract/header/source-manifest and target import/export/ELF/shared-dependency/
+  relink audits: **PASS**, recorded in `/tmp/js-i1-headers.log` and
+  `/tmp/js-i1-target.log`. The target core retains 32 maths/18 os64 imports;
+  the production library retains eleven runtime/186 engine exports and
+  32 maths/22 os64 imports, with direct libmath/libos64 dependencies.
+- `python3 tools/test_js_image.py`: **18 byte comparisons passed**. The runner,
+  four-library recursive dependency chain and pinned notice match the build
+  on the standalone ext2 image, combined-disk ext2 root and FAT rescue volume.
+  Direct `js` and `libjs.so` DT_NEEDED sets match their contracts; recursive
+  traversal includes libos64's FreeType dependency. The notice matches its
+  manifest SHA-256. Independent scratch copies with FreeType or the QuickJS
+  notice removed from FAT each cause the audit to fail with the missing path.
+- Fresh BIOS/QEMU boots: **ext2 root VM 56210 and FAT root VM 56211 pass**.
+  Scratch copies preserve the normal root disk's payload. Only the optional
+  consumer and test inputs are added to the home image. The ext2 run uses the
+  normal ISO/default entry; the FAT run uses the same kernel and disk with a
+  temporary ISO configuration selecting the FAT partition GUID. Captured
+  command lines and screens confirm the intended root selections. Each boot
+  passes 31 pre-boot, 34 post-boot and three late checks, including the quiet
+  task-teardown test before JavaScript commands.
+- After both VMs stop, read-only `e2fsck -fn` on each scratch disk's ext2
+  partition and home partition returns **0**, with no filesystem errors.
+  Logs: `/tmp/js-i1-fsck-{root,home}.log` and
+  `/tmp/js-i1-fat-fsck-{ext2,home}.log`. `git diff --check` and
+  `tools/stale_refs.sh` pass.
+
+Both boots run `husk /home/i1-checks.sh`, staged in the disposable home image:
+
+| Input | Observed result on both roots |
+| --- | --- |
+| `js -e 'print(6*7)'` | stdout `42`, status 0 |
+| `js /home/i1-script.js alpha -v` | copied arguments `/home/i1-script.js\|alpha\|-v`, then Promise output `42`, status 0 |
+| `echo 'print(21*2)' \| js -` | stdout `42`, pipeline status 0 |
+| `js -e 'throw new Error("i1-marker")'` | diagnostic contains `i1-marker`, status 1 |
+| `js /home/i1-primes.js \| wc -l` | `1229` lines, pipeline status 0 |
+| `/home/jsaccepttest` | 375 checks, zero failures; 55 upstream functions passed, zero failed, four explicit host-feature skips; status 0 |
+| `/home/jsaccepttest --fatal-leak` | intentional engine invariant diagnostic, actual guest status `0x4A534641` (`1246971457`), shell returns |
+
+The argument file prints `scriptArgs.join("|")` and queues
+`Promise.resolve(42).then(print)`. The primes file prints each prime from 2
+through 10,000 using trial division through the square root. The consumer and
+selected upstream fixtures are the unchanged merged V1 suite. The run uses the
+libraries already installed at `/lib` on the selected normal volume.
+
+The runner, four libraries, notice and optional consumer copied through `/home`
+match the checkout's artifacts byte for byte on both roots:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| js | 32120 | `e0db9c65f41209a5fa7ed0e5dfe5b468e9883abd2e83893f46d4178741dde7f3` |
+| libjs.so | 4521216 | `ee6ee651455fb61529808c2acec4516142fb278a418c52b6d24a1cbdaefbf72d` |
+| libmath.so | 150400 | `58dd1965c1c5847a2bc4fc627c72e170bc3e0693c1d813a01de5a2f44162a8c1` |
+| libos64.so | 789248 | `6b5bf5858aa4518fe70130bb9b99454b08bf8a33581e6522b71268fe2d776a02` |
+| libfreetype.so | 1817032 | `62031b9d2224e27735003f11b8a2625286a6d761f0c2418ac51e23ca5c20f31a` |
+| quickjs.txt | 1130 | `598fd7fc928e4350abce36e337ba5a1346923c5c692f5be92c3d8e29ddd7c18d` |
+| jsaccepttest | 121152 | `6d6ae0f1ddd26439c9fe1deb9f03bc837474268b189f2461834c55a4ccea6452` |
+
+Harness inputs and scripts are at `/tmp/os64-js-i1-harness/fixtures`,
+`/tmp/js-i1-guest-run.sh` and `/tmp/js-i1-fat-guest-run.sh`. Captured outputs and
+statuses use `/tmp/js-i1-guest-*` and `/tmp/js-i1-fat-guest-*`; the acceptance
+files are `acceptance.txt`. Quiet-boot and full kernel logs use
+`/tmp/js-i1-{quiet-kernel,kernel}.log` and
+`/tmp/js-i1-fat-{quiet-kernel,kernel}.log`. Screenshots
+`/tmp/js-i1-guest.png` and `/tmp/js-i1-fat-guest.png` show the returned shell and
+intentional invariant diagnostic. Both owned VMs were stopped after extraction.
+These temporary files supplement the maintained audit and documented commands;
+they are not installed in the product image.
+
+I1's implementation and acceptance are published in
+[PR #198](https://github.com/VBWizard/os64/pull/198) for independent review. No new
+P5 run or full ECMAScript conformance is claimed. J2's stack measurements,
+production limit defaults and floating-point scheduling acceptance remain
+separate; the runner's defaults are still provisional.

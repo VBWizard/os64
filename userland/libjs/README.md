@@ -11,8 +11,10 @@ output, arguments, filesystem, networking or process functions.
 `make -C userland js-core` builds the freestanding engine and compiler helpers.
 `make -C userland js-library` links the engine and runtime against the real
 libmath/libos64 libraries. The default build also produces `libjs.so`, as the
-`js` runner's library, so os64get can serve it; the default image does not
-install libjs. `js-runtime-test` additionally builds the guest consumer at
+`js` runner's library, so os64get can serve it. The normal ext2 root and FAT
+rescue image install `/bin/js`, `/lib/libjs.so`, its libmath/libos64 dependencies,
+and the pinned QuickJS notice at `/etc/licenses/quickjs.txt`.
+`js-runtime-test` additionally builds the guest consumer at
 `userland/obj/js/runtime-core-test`, for installation as `/tests/jsembedtest`
 in a disposable validation image. Its reserved slot preserves the existing
 application addresses.
@@ -41,6 +43,9 @@ Checks:
   import/export and ELF audits, a symbol-only core link with trap dependencies,
   real shared-library dependencies, public maths headers and relink triggers.
 - `tools/test_js_contract_headers.sh`: source hashes and contract examples.
+- `python3 tools/test_js_image.py`: after `make`, compare the runner, its
+  complete shared-library dependency chain and pinned QuickJS notice with
+  the standalone ext2 image, disk ext2 root and FAT rescue volume.
 - `tools/test_js_port_host.sh`: adapter fixtures with ASan/UBSan and the actual
   cross-built core on the host, using host libm as a substitute for M1.
 - `tools/test_js_engine_host.sh`: isolated upstream engine baseline.

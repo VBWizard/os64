@@ -3,7 +3,9 @@
 This suite exercises the published embedding contract without including R2's
 fixtures or private runtime state. Quinn authored the suite and the runtime;
 separate consumer tests and upstream expected values do not replace review by
-another person or agent. V1's independent review remains a handoff requirement.
+another person or agent. The V1 packet passed review and merged in
+[PR #197](https://github.com/VBWizard/os64/pull/197); changes to this suite
+remain subject to independent review.
 
 Run `tools/test_js_acceptance_host.sh` from the checkout. It builds the strict
 target consumer, verifies the upstream fixture hashes, and runs two engines:
@@ -54,15 +56,16 @@ allocations; changing the fixture to avoid the conversion would remove coverage.
 For guest validation, `make -C userland -j8 js-acceptance-test` creates
 `userland/obj/js/acceptance/consumer`. This is an alternative consumer in the
 reserved `jsembedtest` slot; do not load it together with that fixture in one
-process. Install it as `/tests/jsaccepttest`, with the checkout's matching
-`libjs.so`, `libmath.so` and `libos64.so`, into a disposable validation image.
-It remains outside the normal root-image inventory; normal installation is I1.
+process. Put it at `/home/jsaccepttest` on a disposable home image and boot
+the checkout's normal root image. I1 installs the runner, matching libraries
+and QuickJS notice on ext2 and FAT; the consumer remains outside the normal
+root-image inventory.
 After the fresh guest's boot tests settle, run:
 
 ```text
-/tests/jsaccepttest > /home/jsv1.txt
+/home/jsaccepttest > /home/jsv1.txt
 echo $? > /home/jsv1-status.txt
-/tests/jsaccepttest --fatal-leak
+/home/jsaccepttest --fatal-leak
 echo $? > /home/jsv1-fatal-status.txt
 sync
 ```

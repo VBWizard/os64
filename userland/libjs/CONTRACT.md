@@ -5,7 +5,8 @@ Status: reviewed R0 contract with the two R2 implementation slices, 2026-10-02.
 context access, class-ID allocation, eval, run, file execution, job draining,
 output/argument setup, cancellation and destruction. Their review/merge state
 and Opus's C1 integration are tracked in JAVASCRIPT_TASKS.md. The default image
-does not install libjs; `js-runtime-test` builds an optional guest consumer.
+installs the runner, library, dependencies and QuickJS licence;
+`js-runtime-test` builds an optional guest consumer.
 
 ## Creation and ownership
 

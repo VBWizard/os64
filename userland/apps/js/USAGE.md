@@ -6,8 +6,9 @@ contract (`userland/libjs/CONTRACT.md`), accepted by Quinn as R0's owner in
 the C1 review. `tools/test_js_cli_host.sh` holds the runner to the tables here
 (all but the library's own fatal exit), on a stand-in for the library and on
 the real one. `make` builds `js` and `libjs.so` into `userland/bin`, and
-`os64get js libjs.so` installs them; the image gains `/bin/js` together with
-`/lib/libjs.so` (DEBTS.md § Userland utilities).
+`os64get js libjs.so` installs them. The normal ext2 root and FAT rescue image
+include `/bin/js`, `/lib/libjs.so`, its libmath/libos64 dependencies, and the
+QuickJS notice at `/etc/licenses/quickjs.txt`.
 
 ```
 js [options] FILE [ARG...]
