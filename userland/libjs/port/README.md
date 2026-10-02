@@ -3,9 +3,8 @@
 R1 builds the five retained engine files, the private adapter and the required
 compiler-runtime objects into `userland/obj/js/core.o`. The production engine
 link records `libmath.so` and `libos64.so`; it uses `--no-undefined`, SysV hashes,
-separate code/data segments and the shared-library placement map. It remains
-an explicit target until the R2 embedding implementation is available.
-The default userland image does not advertise an unfinished JavaScript library.
+separate code/data segments and the shared-library placement map. The default
+userland build produces it for the `js` runner; the image installs it with I1.
 
 ## Allocation
 
