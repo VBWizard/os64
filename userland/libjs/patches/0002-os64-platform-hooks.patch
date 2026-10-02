@@ -1,0 +1,97 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -46,6 +46,9 @@
+ #include "libregexp.h"
+ #include "libunicode.h"
+ #include "dtoa.h"
++#ifdef OS64_JS_TARGET
++#include "allocator.h"
++#endif
+ 
+ #define OPTIMIZE         1
+ #define SHORT_OPCODES    1
+@@ -55,7 +58,7 @@
+ #define DIRECT_DISPATCH  1
+ #endif
+ 
+-#if defined(__APPLE__)
++#if defined(__APPLE__) || defined(OS64_JS_TARGET)
+ #define MALLOC_OVERHEAD  0
+ #else
+ #define MALLOC_OVERHEAD  8
+@@ -2133,6 +2136,8 @@
+     rt->user_opaque = opaque;
+ }
+ 
++/* os64 uses its payload-size query and transactional limit accounting. */
++#ifndef OS64_JS_TARGET
+ /* default memory allocation functions with memory limitation */
+ static size_t js_def_malloc_usable_size(const void *ptr)
+ {
+@@ -2213,9 +2218,14 @@
+     js_def_malloc_usable_size,
+ };
+ 
++#endif
+ JSRuntime *JS_NewRuntime(void)
+ {
++#ifdef OS64_JS_TARGET
++    return JS_NewRuntime2(&jsport_malloc_functions, NULL);
++#else
+     return JS_NewRuntime2(&def_malloc_funcs, NULL);
++#endif
+ }
+ 
+ void JS_SetMemoryLimit(JSRuntime *rt, size_t limit)
+@@ -2229,6 +2239,11 @@
+     rt->malloc_gc_threshold = gc_threshold;
+ }
+ 
++#ifdef OS64_JS_TARGET
++#undef malloc
++#undef free
++#undef realloc
++#endif
+ #define malloc(s) malloc_is_forbidden(s)
+ #define free(p) free_is_forbidden(p)
+ #define realloc(p,s) realloc_is_forbidden(p,s)
+@@ -47226,6 +47241,9 @@
+    between UTC time and local time 'd' in minutes */
+ static int getTimezoneOffset(int64_t time)
+ {
++#ifdef OS64_JS_TARGET
++    return jsport_timezone_offset(time);
++#else
+     time_t ti;
+     int res;
+ 
+@@ -47276,6 +47294,7 @@
+     }
+ #endif
+     return res;
++#endif
+ }
+ 
+ #if 0
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -28,6 +28,10 @@
+ #include <stdio.h>
+ #include <stdint.h>
+ #include <string.h>
++
++#ifdef OS64_JS_TARGET
++#pragma GCC visibility push(default)
++#endif
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -1177,4 +1181,8 @@
+ } /* extern "C" { */
+ #endif
+ 
++#ifdef OS64_JS_TARGET
++#pragma GCC visibility pop
++#endif
++
+ #endif /* QUICKJS_H */

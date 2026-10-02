@@ -1,0 +1,28 @@
+--- a/dtoa.c
++++ b/dtoa.c
+@@ -34,6 +34,9 @@
+ 
+ #include "cutils.h"
+ #include "dtoa.h"
++#ifdef OS64_JS_TARGET
++#include "platform.h"
++#endif
+ 
+ /* 
+    TODO:
+@@ -1244,8 +1247,13 @@
+ 
+         assert(n_digits >= 0 && n_digits <= JS_DTOA_MAX_DIGITS);
+         /* P = max_int(E, 1) + n_digits; */
+-        /* frac is rounded using RNDNA */
+-        mul_pow_round(tmp1, m, e - 53, radix1, radix_shift, n_digits, JS_RNDNA);
++        /* JavaScript uses ties away; target diagnostics can request ties even. */
++        int rounding = JS_RNDNA;
++#ifdef OS64_JS_TARGET
++        if (flags & JSPORT_DTOA_TIES_EVEN)
++            rounding = JS_RNDN;
++#endif
++        mul_pow_round(tmp1, m, e - 53, radix1, radix_shift, n_digits, rounding);
+ 
+         /* we add one extra digit on the left and remove it if needed
+            to avoid testing if the result is < radix^P */

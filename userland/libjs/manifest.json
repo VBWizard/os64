@@ -84,7 +84,17 @@
       "path": "patches/0001-disable-atomics-preserve-stack-check.patch",
       "sha256": "0f949980fa428a75242d2653a205569607fb2bba21a10b284d64d9f1b50c6bbc",
       "reason": "Disable Atomics without spoofing Emscripten and losing stack checks."
+    },
+    {
+      "path": "patches/0002-os64-platform-hooks.patch",
+      "sha256": "1f8f1c6d5cef7f339b8d4399bc31cb253dd7c2c6c7f3e107b550168917615149",
+      "reason": "Select os64 allocation/date hooks and publish engine API visibility in target builds."
+    },
+    {
+      "path": "patches/0003-diagnostic-decimal-rounding.patch",
+      "sha256": "c9b81c0e51fdfcd0cb3ab0f9a16e6af2557f52c4a95d44bb404273474e959753",
+      "reason": "Add a target-private ties-even request for diagnostic %f; preserve JavaScript conversion rounding."
     }
   ],
-  "configuration_scope": "planned standalone port profile; host probe verifies Atomics omission and retained stack checks; target profile not implemented"
+  "configuration_scope": "Atomics-disabled, stack-checked engine profile; freestanding target core build and adapter host fixtures; standalone wrapper and guest engine link pending R2/M1"
 }
