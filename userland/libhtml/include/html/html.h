@@ -96,7 +96,9 @@ typedef struct os64_html_document {
 
 /* NULL options select defaults. For overrides, initialize with options_default;
  * supplied zero limits are literal zero limits. The charset label is copied.
- * Constructor failure returns NULL, including a budget below initial storage.
+ * Constructor failure returns NULL, including a budget below initial storage
+ * and a program that has begun 2^32 - 1 documents: each has a mark its nodes
+ * carry, and a mark is not given out twice.
  * Each parser has independent state; serialize calls on the same parser. */
 #pragma GCC visibility push(default)
 os64_html_options_t os64_html_options_default(void);
@@ -155,7 +157,11 @@ bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out);
  *
  * `os64_html_version` moves on every change a reader could see, and is never
  * zero for a document: comparing it with the version something was built at
- * answers "has the tree moved since?". The library calls nobody.
+ * answers "has the tree moved since?". The library calls nobody. A verb that
+ * leaves everything as it was answers OK and does not move it: an empty
+ * fragment inserted, a node inserted where it already sits (unless that
+ * parted a control from its form, below), a text or an attribute set to the
+ * value it has, an absent attribute removed, a node replaced by itself.
  *
  * `os64_html_pin` answers a pin, or 0 when the document has none left to
  * give (it has sixteen). No two pins in a program are answered with the same
@@ -195,8 +201,7 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
 
 /* `insert` puts `node` under `parent` before `before` (NULL: last), moving
  * it from wherever it was; a FRAGMENT gives up its children in its place and
- * is left empty (inserting an empty one changes nothing, and the version
- * does not move). `replace` puts `node` where `old` is. `remove` unlinks a
+ * is left empty. `replace` puts `node` where `old` is. `remove` unlinks a
  * node that has a parent and is a no-op on one that has none. Adjacent text
  * is not merged. None of the three allocates.
  *

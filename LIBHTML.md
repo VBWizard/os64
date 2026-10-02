@@ -558,6 +558,12 @@ the changes go through libhtml. The design is
   every verb refuses a node that is not its document's. `os64_html_clone` is
   the way across: given another document's node it copies names,
   identifiers and attribute records too, and the copy outlives its source.
+  A mark is never given out twice, so `os64_html_parser_new` refuses once a
+  program has begun 2^32 - 1 documents.
+- **The version moves only when a reader could see a difference.** A verb
+  that ends where it began (the same value set again, a node inserted where
+  it sits) answers OK and leaves it, since a moved version rebuilds every
+  snapshot.
 - **A document remembers `max_depth`**, counts its form-owner records and
   holds its pin table, in 320 more bytes of its header; every measured arena
   figure rises by that.

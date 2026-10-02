@@ -88,7 +88,15 @@ Three private facts are added to a document. The public structs do not
 change, and a consumer still reads them as read-only views.
 
 **The version.** A counter that every primitive bumps when it changes
-something a reader could see. It is the whole invalidation contract:
+something a reader could see, and leaves alone when it does not: a moved
+version rebuilds a model, a cascade and a layout, so a verb that ends
+where it began must not move it. An empty fragment inserted, a node put
+where it already sits, a text or an attribute set to the value it has, an
+absent attribute removed and a node replaced by itself all answer OK with
+the version where it was. The one same-place insert that does move it is
+the one that changed something: a node is still taken out and put back,
+which parts a control from a form outside what moved. (A script that sets `className` to what it is
+already, every frame, is common.) It is the whole invalidation contract:
 libhtml calls nobody. A consumer that wants to know whether the tree moved
 compares the version it was built at with `os64_html_version(doc)`. A live
 collection (`childNodes`, `getElementsByTagName`) is a query and the
@@ -193,7 +201,12 @@ to break what every consumer assumes:
   on its document's ledger, so one document's node in another's tree would
   dangle when the first was freed, and a change to it would unlink a block
   from the wrong list. Each node carries its document's mark and every
-  verb checks it (`OS64_HTML_BAD_ARGUMENT`). `clone` is the way across:
+  verb checks it (`OS64_HTML_BAD_ARGUMENT`). A mark is a count of the
+  documents the program has begun and is never given out twice, so the
+  count ends: after 4,294,967,295 documents a program is refused another
+  (a page a second for 136 years). A count that came round could put one
+  mark on two live documents, and the check would then pass the very node
+  it exists to refuse. `clone` is the way across:
   given another document's node it copies everything, names and attribute
   records included, into the document it was asked to make the copy in.
   That is `importNode`, and `adoptNode` is a clone and a remove when a
@@ -696,9 +709,9 @@ What the harness holds the verbs to:
   form owner. Twenty-two walks of 4,000 steps, some under a depth limit
   low enough to keep meeting it, with up to three snapshots pinned at
   random whose borrowed strings are re-read after every step.
-- **Mutants.** Forty-eight deliberate breaks of the library, one at a
-  time, against the finished code; twenty of them undo what Codex's round
-  on #190 changed. Forty-seven are caught. The one that
+- **Mutants.** Fifty-eight deliberate breaks of the library, one at a
+  time, against the finished code; thirty of them undo what Codex's rounds
+  on #190 changed. Fifty-seven are caught. The one that
   is not cannot be told apart while the document keeps its `html`
   element: the DOM's check for a doctype after an inserted element, which
   the element the document already has always trips first. It stays, as
@@ -782,7 +795,7 @@ a record whose form had left the control's tree, which resurrects the
 same way when the form comes back. That is replaced by the same rule:
 cleared at the mutation, never re-validated by a reader.
 
-**Codex, 2026-10-01, on D1 (PR #190): five findings over two rounds, four taken.**
+**Codex, 2026-10-01, on D1 (PR #190): seven findings over three rounds, six taken.**
 
 | Finding | What it was | What was done |
 |---|---|---|
@@ -791,6 +804,8 @@ cleared at the mutation, never re-validated by a reader.
 | P2 | The document's own element or doctype cannot be re-inserted under it | Not changed: it is the standard's rule and Chrome's behaviour, now stated in `html.h` and held by a case |
 | P2 | Moving a template cleared the record of a control and form that sat together in its contents | The form-owner walks stay out of template contents, which are a tree of their own |
 | P2 (second round) | Inserting an empty fragment changed nothing and still moved the version, which is every snapshot's signal to rebuild | It answers OK and the version stays |
+| P2 (third round) | A node inserted where it already sits moved the version too | The rule is now whole: the version moves when a reader could see a difference and at no other time (§ The version), and the random walk's model predicts which for every step |
+| P2 (third round) | The document mark was a 32-bit counter that came round, so two live documents could share one | The count does not come round; when it is spent no further document is made |
 
 ## What was checked, and what was not
 

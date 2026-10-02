@@ -510,10 +510,22 @@ os64_html_options_t os64_html_options_default(void)
      * crafted growth still refuses by name (tools/test_html_driver.c). */
     return (os64_html_options_t){NULL, 8u * 1024u * 1024u, 64u * 1024u * 1024u, 512, 100000000};
 }
-/* Where HDoc.id comes from. Documents are made on more than one thread, so
- * it is advanced atomically; it comes round after 2^32 documents, which is
- * the one way two could share a mark. */
-static uint32_t document_serial;
+/* Where HDoc.id comes from: a count of the documents the program has begun.
+ * It does not come round. A mark given out twice could sit on two live
+ * documents at once, each taking the other's nodes for its own, so when the
+ * count is spent the answer is zero and no further document is made.
+ * Documents are made on more than one thread, so it is advanced atomically. */
+uint32_t h_document_serial;
+static uint32_t document_mark(void)
+{
+    uint32_t seen = __atomic_load_n(&h_document_serial, __ATOMIC_RELAXED);
+    do {
+        if (seen == UINT32_MAX)
+            return 0;
+    } while (!__atomic_compare_exchange_n(&h_document_serial, &seen, seen + 1, true, __ATOMIC_RELAXED,
+                                          __ATOMIC_RELAXED));
+    return seen + 1;
+}
 os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options)
 {
     os64_html_options_t opt = options ? *options : os64_html_options_default();
@@ -529,7 +541,8 @@ os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options)
     os64_html_parser_t bootstrap = {0};
     bootstrap.d = d;
     os64_html_parser_t *p = h_alloc(&bootstrap, sizeof(*p));
-    if (!p) {
+    d->id = p ? document_mark() : 0;
+    if (!d->id) {
         os64_html_document_free(&d->pub);
         return NULL;
     }
@@ -541,9 +554,6 @@ os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options)
     d->html.kind = OS64_HTML_ELEMENT;
     d->html.name = "html";
     d->html.tag = OS64_HTML_TAG_HTML;
-    do
-        d->id = __atomic_add_fetch(&document_serial, 1, __ATOMIC_RELAXED);
-    while (!d->id);
     d->root.document_id = d->html.document_id = d->id;
     d->pub.document = &d->root;
     d->pub.html = &d->html;

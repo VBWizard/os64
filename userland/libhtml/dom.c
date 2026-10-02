@@ -45,6 +45,18 @@ static bool text_ok(const char *s, size_t n)
     return true;
 }
 
+/* Whether the C string `held` is exactly the `n` bytes at `s`, which hold no
+ * NUL (text_ok). A held string that is NULL is the empty one. */
+static bool same_bytes(const char *held, const char *s, size_t n)
+{
+    if (!held)
+        return n == 0;
+    for (size_t i = 0; i < n; i++)
+        if (held[i] != s[i])
+            return false;
+    return held[n] == 0;
+}
+
 /* A template's contents hang off the template and have no parent. The
  * fragment remembers its template, which is what makes "is this node above
  * that one" answerable across the boundary. */
@@ -302,14 +314,20 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
     int64_t verdict = may_insert(d, parent, node, before, false);
     if (verdict)
         return verdict;
-    /* An empty fragment brings nothing: the tree is as it was, so the
-     * version says so and no snapshot is rebuilt for it. */
+    /* The version is every snapshot's signal to rebuild, so it moves when a
+     * reader could see a difference and stays when none could. An empty
+     * fragment brings nothing. A node put where it already sits is still
+     * taken out and put back, which parts a control from a form outside
+     * what moved; if that parted nobody, nothing is different. */
     if (node->kind == FRAGMENT && !node->first_child)
         return OS64_HTML_OK;
     if (before == node)
         before = node->next;
-    d->version++;
+    bool stays = node->parent == parent && node->next == before;
+    size_t records = d->records;
     place(d, parent, node, before);
+    if (!stays || d->records != records)
+        d->version++;
     return OS64_HTML_OK;
 }
 
@@ -563,10 +581,15 @@ int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name
         return OS64_HTML_BAD_ARGUMENT;
     if (!text_ok(name, h_len(name)) || !text_ok(value, value_len))
         return OS64_HTML_BAD_TEXT;
+    const HAttr *existing = *attr_slot(e, name);
+    /* The value it has already: no string a reader holds is replaced, and
+     * the version stays. A control with a `form` attribute has no record to
+     * void. */
+    if (existing && same_bytes(existing->value, value, value_len))
+        return OS64_HTML_OK;
     /* The new record first, so that a failure after it has one block to give
      * back and a failure before it has none. */
     int64_t why = OS64_HTML_OK;
-    const HAttr *existing = *attr_slot(e, name);
     HAttr *fresh = attr_new(d, name, value, value_len, existing ? existing->ns : NULL, &why);
     if (!fresh)
         return why;
@@ -608,6 +631,9 @@ int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8
         return OS64_HTML_BAD_ARGUMENT;
     if (!text_ok(utf8, len))
         return OS64_HTML_BAD_TEXT;
+    /* The text it has already: as in set_attr, nothing is replaced. */
+    if (same_bytes(n->text, utf8, len))
+        return OS64_HTML_OK;
     int64_t why = OS64_HTML_OK;
     char *bytes = bytes_new(d, utf8, len, &why);
     if (!bytes)

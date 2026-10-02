@@ -372,7 +372,15 @@ static void t_structure(void)
     HNode *nothing = os64_html_create_fragment(doc, NULL);
     check(os64_html_insert(doc, body, nothing, a) == OS64_HTML_OK && os64_html_version(doc) == v,
           "inserting an empty fragment changes nothing, the version included");
+    // Nor does a node put where it already sits, however the place is named.
+    check(os64_html_insert(doc, body, c, c) == OS64_HTML_OK && os64_html_insert(doc, body, c, a) == OS64_HTML_OK &&
+              os64_html_insert(doc, body, body->last_child, NULL) == OS64_HTML_OK &&
+              os64_html_insert(doc, a, b, b) == OS64_HTML_OK && os64_html_version(doc) == v,
+          "a node inserted where it is leaves the version");
     expect_tree(body, "<body>[<p id='c'>[\"two\"]<div id='a'>[<span id='b'>[\"one\"]]<!--note-->]", "as it was");
+    check(os64_html_insert(doc, body, a, c) == OS64_HTML_OK && os64_html_version(doc) == v + 1 &&
+              os64_html_insert(doc, body, c, a) == OS64_HTML_OK && os64_html_version(doc) == v + 2,
+          "and one that moves by a single place moves it");
 
     // A move across parents; text is not merged with its new neighbour.
     HNode *t1 = os64_html_create_text(doc, "A", 1, NULL), *t2 = os64_html_create_text(doc, "B", 1, NULL);
@@ -496,6 +504,22 @@ static void t_attributes(void)
     uint64_t v = os64_html_version(doc);
     check(os64_html_remove_attr(doc, e, "absent") == OS64_HTML_OK && os64_html_version(doc) == v,
           "removing an attribute that is not there is a no-op");
+    // The value an attribute already has: nothing is replaced, on a list the
+    // element owns or on one it still shares.
+    const HAttr *held = os64_html_attr(e, "new"), *shared = os64_html_attr(b2, "title");
+    const char *held_value = held->value;
+    size_t arena = doc->arena_bytes;
+    check(os64_html_set_attr(doc, e, "new", "2", 1) == OS64_HTML_OK &&
+              os64_html_set_attr(doc, e, "title", "", 0) == OS64_HTML_OK &&
+              os64_html_set_attr(doc, b2, "title", "y", 1) == OS64_HTML_OK,
+          "setting the value it has");
+    check(os64_html_version(doc) == v && doc->arena_bytes == arena && os64_html_attr(e, "new") == held &&
+              held->value == held_value && os64_html_attr(b2, "title") == shared,
+          "replaces no record, takes no memory and leaves the version");
+    check(os64_html_set_attr(doc, e, "new", "20", 2) == OS64_HTML_OK && os64_html_version(doc) > v &&
+              os64_html_set_attr(doc, e, "new", "2", 1) == OS64_HTML_OK,
+          "a value that only starts the same is a change");
+    v = os64_html_version(doc);
     os64_html_remove_attr(doc, e, "class");
     os64_html_remove_attr(doc, e, "new");
     os64_html_remove_attr(doc, e, "title");
@@ -549,6 +573,19 @@ static void t_text(void)
               text->text[sizeof(big)] == 0,
           "a long text");
     check(os64_html_retired_bytes(doc) == 0, "with no pin, nothing is kept");
+    // The text a node already has: nothing is replaced.
+    uint64_t v = os64_html_version(doc);
+    const char *kept = comment->text;
+    check(os64_html_set_text(doc, comment, "newer", 5) == OS64_HTML_OK && comment->text == kept &&
+              os64_html_version(doc) == v,
+          "setting the text it has keeps the bytes and the version");
+    check(os64_html_set_text(doc, comment, "new", 3) == OS64_HTML_OK && os64_html_version(doc) == v + 1 &&
+              os64_html_set_text(doc, comment, "newer!", 6) == OS64_HTML_OK && os64_html_version(doc) == v + 2,
+          "a shorter or longer text that starts the same is a change");
+    os64_html_set_text(doc, text, "", 0);
+    v = os64_html_version(doc);
+    check(os64_html_set_text(doc, text, "", 0) == OS64_HTML_OK && os64_html_version(doc) == v,
+          "nothing set to nothing");
     os64_html_document_free(doc);
     check(live == 0, "text cases freed");
 }
@@ -572,6 +609,21 @@ static void t_form_owners(void)
     d = (HDoc *)doc;
     os64_html_set_attr(doc, q, "class", "c", 1);
     check(q->form_owner == f, "another attribute leaves the record");
+    // A node put where it already sits is still taken out and put back. That
+    // parts nobody when the pair goes together, and the version stays; it
+    // parts a control whose form is outside what moved, and the version says
+    // so though no link changed.
+    uint64_t same = os64_html_version(doc);
+    check(os64_html_insert(doc, t->parent, t, t) == OS64_HTML_OK && q->form_owner == f &&
+              os64_html_version(doc) == same,
+          "the pair reinserted in place: tied, and the version stays");
+    os64_html_document_t *twin = parse("<body><table id=t><form id=f><tr><td><input id=q></table>");
+    HNode *q2 = id_in(twin, "q");
+    same = os64_html_version(twin);
+    check(q2->form_owner && os64_html_insert(twin, q2->parent, q2, q2) == OS64_HTML_OK && !q2->form_owner &&
+              os64_html_version(twin) > same,
+          "the control alone reinserted in place: parted, and the version moves");
+    os64_html_document_free(twin);
     check(os64_html_remove_attr(doc, q, "form") == OS64_HTML_OK && q->form_owner == f,
           "removing a form attribute that was never there leaves it too");
     // The control and its form move together: still tied.
@@ -928,6 +980,27 @@ static void t_documents(void)
               dst->arena_bytes == arena,
           "a subtree %d deep into a document that allows %zu: %s", 21, h_depth_limit(d), os64_html_status_name(st));
     check(os64_html_clone(dst, id_in(src, "top"), false, &st) && st == OS64_HTML_OK, "its top alone crosses");
+    os64_html_document_free(src);
+    os64_html_document_free(dst);
+
+    // A mark is never given out twice, so the count of documents ends: the
+    // last one is made, the next is refused, and the count stays spent.
+    check(((HDoc *)(src = parse("<p>")))->id != ((HDoc *)(dst = parse("<p>")))->id, "two documents, two marks");
+    uint32_t serial = h_document_serial;
+    h_document_serial = UINT32_MAX - 1;
+    os64_html_document_t *last = parse("<p>last");
+    check(last && ((HDoc *)last)->id == UINT32_MAX && ((HDoc *)last)->id != ((HDoc *)src)->id &&
+              last->document->document_id == UINT32_MAX,
+          "the last document the count allows is made");
+    size_t held = live;
+    check(!parse("<p>one too many") && !parse("<p>and again") && live == held &&
+              h_document_serial == UINT32_MAX,
+          "and no more are, at no cost in memory");
+    check(os64_html_insert(last, last->body, os64_html_create_comment(last, "c", 1, NULL), NULL) == OS64_HTML_OK &&
+              os64_html_insert(src, src->body, os64_html_create_comment(src, "c", 1, NULL), NULL) == OS64_HTML_OK,
+          "the documents that exist still work");
+    h_document_serial = serial;
+    os64_html_document_free(last);
     os64_html_document_free(src);
     os64_html_document_free(dst);
     check(live == 0, "two-document cases freed");
@@ -1366,6 +1439,13 @@ static void r_part(R *moved)
             control->owner = NULL;
     }
 }
+static int r_tied(void)
+{
+    int tied = 0;
+    for (int i = 0; i < nall; i++)
+        tied += all[i]->owner != NULL;
+    return tied;
+}
 static void r_move(R *parent, R *node, R *before)
 {
     if (node->parent) {
@@ -1591,9 +1671,16 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             snprintf(did, sizeof(did), "insert");
             want = r_may(document, (int)(2 * max_depth + 2), y, x, z, false);
             got = os64_html_insert(doc, y->real, x->real, z ? z->real : NULL);
-            changes = !(x->kind == OS64_HTML_FRAGMENT && x->nkids == 0);
-            if (!want)
+            if (!want) {
+                // What a reader could tell apart afterwards: where x is, and
+                // who is tied to whom.
+                R *was_under = x->parent;
+                int was_at = was_under ? r_index(was_under, x) : -1, tied = r_tied();
+                bool brought = x->kind != OS64_HTML_FRAGMENT || x->nkids > 0;
                 r_insert(y, x, z);
+                changes = brought && (x->kind == OS64_HTML_FRAGMENT || x->parent != was_under ||
+                                      r_index(x->parent, x) != was_at || r_tied() != tied);
+            }
             break;
         case 3:     // replace z under y by x
             snprintf(did, sizeof(did), "replace");
@@ -1634,6 +1721,7 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             got = os64_html_set_attr(doc, x->real, name, value, strlen(value));
             if (!want) {
                 int at = r_attr(x, name);
+                changes = at < 0 || strcmp(x->av[at], value) != 0;
                 if (at < 0) {
                     x->an = realloc(x->an, (size_t)(x->nattrs + 1) * sizeof(char *));
                     x->av = realloc(x->av, (size_t)(x->nattrs + 1) * sizeof(char *));
@@ -1672,6 +1760,7 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             want = x->kind != OS64_HTML_TEXT && x->kind != OS64_HTML_COMMENT ? OS64_HTML_BAD_ARGUMENT : 0;
             got = os64_html_set_text(doc, x->real, value, strlen(value));
             if (!want) {
+                changes = strcmp(x->text, value) != 0;
                 free(x->text);
                 x->text = strdup(value);
             }

@@ -28,8 +28,8 @@ typedef struct {
     size_t root_word;
     HNode html;
     size_t html_word;
-    /* What each node of this document carries in `document_id`, drawn from a
-     * counter the program's documents share. A node's memory and its strings
+    /* What each node of this document carries in `document_id`, and no other
+     * document's does (h_document_serial). A node's memory and its strings
      * go when its document is freed, and its replaced strings are retired on
      * its document's ledger, so a verb has to tell its own document's nodes
      * from another's. Never zero, which is what a node nobody stamped
@@ -231,6 +231,9 @@ void *d_alloc(HDoc *d, size_t size, int64_t *why);
  * pinned snapshot is older than the change that replaced it, else kept
  * until the last such pin lets go. Call it after bumping `version`. */
 void d_retire(HDoc *d, void *ptr);
+/* How many documents the program has begun (core.c). Here so that a test can
+ * set it near its end. */
+extern uint32_t h_document_serial;
 bool h_buf_put(os64_html_parser_t *p, HBuf *b, uint32_t cp);
 bool h_buf_bytes(os64_html_parser_t *p, HBuf *b, const char *s, size_t n);
 void h_buf_reset(HBuf *b);
