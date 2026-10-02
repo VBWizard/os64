@@ -360,4 +360,77 @@ static void helper_cases(int32_t handle)
           "unused installer refused after evaluation");
     os64_js_destroy(runtime);
 }
+
+static unsigned transaction_getters;
+static JSValue transaction_console_getter(JSContext *context, JSValueConst self,
+                                          int argc, JSValueConst *args)
+{
+    (void)self; (void)argc; (void)args;
+    transaction_getters++;
+    return JS_NewObject(context);
+}
+
+static void output_transaction_cases(int32_t handle)
+{
+    os64_js_config_t config = fixture_config();
+    const uint32_t both = OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG;
+    for (unsigned mode = 0; mode < 5; mode++) {
+        os64_js_runtime_t *runtime = create_fixture(&config);
+        if (!runtime) return;
+        os64_js_outcome_t outcome;
+        JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+        JSValue global = JS_GetGlobalObject(context), console = JS_NewObject(context);
+        JSValue original = JS_NewCFunction(context, native_twice, "host print", 1);
+        if (mode != 0 && mode != 4)
+            check(JS_DefinePropertyValueStr(context, global, "print", JS_DupValue(context, original),
+                  mode == 3 ? 0 : JS_PROP_CONFIGURABLE) > 0, "transaction original print installed");
+        if (mode == 0 || mode == 1) {
+            check(JS_DefinePropertyValueStr(context, global, "console", JS_NewInt32(context, 9),
+                  JS_PROP_C_W_E) > 0, "transaction invalid console installed");
+        } else if (mode == 4) {
+            JSAtom name = JS_NewAtom(context, "console");
+            check(JS_DefinePropertyGetSet(context, global, name,
+                  JS_NewCFunction(context, transaction_console_getter, "get console", 0),
+                  JS_UNDEFINED, JS_PROP_CONFIGURABLE) > 0, "transaction console accessor installed");
+            JS_FreeAtom(context, name);
+        } else {
+            check(JS_DefinePropertyValueStr(context, console, "log", JS_NewInt32(context, 17),
+                  mode == 2 ? 0 : JS_PROP_C_W_E) > 0 &&
+                  JS_DefinePropertyValueStr(context, global, "console", JS_DupValue(context, console),
+                  JS_PROP_C_W_E) > 0, "transaction original console log installed");
+        }
+        check(os64_js_install_output(runtime, handle, both, &outcome) == OS64_JS_EXCEPTION,
+              "combined output failure is a script exception");
+        JSAtom print_name = JS_NewAtom(context, "print");
+        JSPropertyDescriptor descriptor = {0};
+        int present = JS_GetOwnProperty(context, &descriptor, global, print_name);
+        check(mode == 0 || mode == 4 ? present == 0 : present == 1 && JS_SameValue(context, descriptor.value, original) &&
+              descriptor.flags == (mode == 3 ? 0 : JS_PROP_CONFIGURABLE),
+              "combined failure restores print presence, identity and attributes");
+        if (present > 0) {
+            JS_FreeValue(context, descriptor.value); JS_FreeValue(context, descriptor.getter);
+            JS_FreeValue(context, descriptor.setter);
+        }
+        JS_FreeAtom(context, print_name);
+        if (mode == 2 || mode == 3) {
+            JSValue log = JS_GetPropertyStr(context, console, "log");
+            int32_t value = 0;
+            check(JS_ToInt32(context, &value, log) == 0 && value == 17,
+                  "combined failure leaves original console log unchanged");
+            JS_FreeValue(context, log);
+        }
+        if (mode == 4) check(transaction_getters == 0, "transaction does not invoke console accessor");
+        JSAtom console_name = JS_NewAtom(context, "console");
+        check(JS_DeleteProperty(context, global, console_name, JS_PROP_THROW) > 0,
+              "transaction fixture clears failed console target");
+        JS_FreeAtom(context, console_name);
+        check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_CONSOLE_LOG, &outcome) == OS64_JS_OK,
+              "console-only retry succeeds after combined exception");
+        check(execute_fixture(runtime, mode == 0 || mode == 4 ? "if(typeof print!=='undefined')throw Error('print leaked')" :
+              "if(print(21)!==42)throw Error('host print replaced')", &outcome) == OS64_JS_OK,
+              "console-only retry does not retain an unselected print capability");
+        JS_FreeValue(context, original); JS_FreeValue(context, console); JS_FreeValue(context, global);
+        os64_js_destroy(runtime);
+    }
+}
 #endif

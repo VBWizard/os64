@@ -345,6 +345,7 @@ static void output_cases(void)
     os64_js_outcome_t outcome;
     reset_io(""); write_limit = 2;
     helper_cases(42);
+    output_transaction_cases(42);
     const char expected[] = "hi 7 a\0b\n\nconverted\n";
     check(output_len == sizeof(expected)-1 && memcmp(output, expected, sizeof(expected)-1) == 0,
           "partial output writes preserve spacing, newline and embedded NUL");
@@ -385,6 +386,102 @@ static JSValue console_getter(JSContext *context, JSValueConst self, int argc, J
     return JS_NewObject(context);
 }
 
+static void transaction_descriptor_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_outcome_t outcome;
+    size_t inventory = 0;
+    for (size_t refused = 0; refused <= inventory; refused++) {
+        os64_js_runtime_t *runtime = create_fixture(&config);
+        if (!runtime) return;
+        JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+        JSValue global = JS_GetGlobalObject(context), console = JS_NewObject(context);
+        JSValue getter = JS_NewCFunction(context, console_getter, "old getter", 0);
+        JSAtom print_name = JS_NewAtom(context, "print"), log_name = JS_NewAtom(context, "log");
+        check(JS_DefinePropertyGetSet(context, global, print_name, JS_DupValue(context, getter),
+              JS_UNDEFINED, JS_PROP_CONFIGURABLE) > 0 &&
+              JS_DefinePropertyGetSet(context, console, log_name, JS_DupValue(context, getter),
+              JS_UNDEFINED, JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE) > 0 &&
+              JS_SetPropertyStr(context, global, "console", JS_DupValue(context, console)) > 0,
+              "transaction accessor descriptors prepared");
+        size_t before = attempts;
+        if (refused != 0) fail_at = attempts + refused;
+        os64_js_status_t result = os64_js_install_output(runtime, 42,
+            OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG, &outcome);
+        fail_at = 0;
+        if (refused == 0) {
+            inventory = attempts - before;
+            check(result == OS64_JS_OK, "accessor replacement allocation inventory succeeds");
+        } else {
+            check(result == OS64_JS_HOST_FAILURE, "accessor replacement allocation failure retires runtime");
+            JSPropertyDescriptor print = {0}, log = {0};
+            int print_present = JS_GetOwnProperty(context, &print, global, print_name);
+            int log_present = JS_GetOwnProperty(context, &log, console, log_name);
+            check(print_present == 1 && log_present == 1 &&
+                  print.flags == (JS_PROP_CONFIGURABLE | JS_PROP_GETSET) &&
+                  log.flags == (JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE | JS_PROP_GETSET) &&
+                  JS_SameValue(context, print.getter, getter) && JS_SameValue(context, log.getter, getter),
+                  "failed publication restores both original accessor identities and attributes");
+            if (print_present > 0) {
+                JS_FreeValue(context, print.value); JS_FreeValue(context, print.getter); JS_FreeValue(context, print.setter);
+            }
+            if (log_present > 0) {
+                JS_FreeValue(context, log.value); JS_FreeValue(context, log.getter); JS_FreeValue(context, log.setter);
+            }
+        }
+        JS_FreeAtom(context, print_name); JS_FreeAtom(context, log_name);
+        JS_FreeValue(context, getter); JS_FreeValue(context, console); JS_FreeValue(context, global);
+        os64_js_destroy(runtime);
+        check(live == 0, "transaction descriptor sweep releases staged and original values");
+    }
+    check(console_getters == 0, "transaction descriptor sweep never invokes original getters");
+}
+
+static bool staged_output_blocked;
+static int output_trap_define(JSContext *context, JSValueConst object, JSAtom name,
+                              JSValueConst value, JSValueConst getter, JSValueConst setter, int flags)
+{
+    (void)object; (void)name; (void)getter; (void)setter; (void)flags;
+    JSValue argument = JS_NewString(context, "must not write");
+    JSValue called = JS_Call(context, value, JS_UNDEFINED, 1, &argument);
+    staged_output_blocked = JS_IsException(called);
+    if (staged_output_blocked) { JSValue error = JS_GetException(context); JS_FreeValue(context, error); }
+    JS_FreeValue(context, called); JS_FreeValue(context, argument);
+    JS_ThrowTypeError(context, "host definition trap refused");
+    return -1;
+}
+static int output_trap_delete(JSContext *context, JSValueConst object, JSAtom name)
+{
+    (void)object; (void)name;
+    JS_ThrowTypeError(context, "host rollback trap refused");
+    return -1;
+}
+static void transaction_trap_case(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    if (!runtime) return;
+    os64_js_outcome_t outcome;
+    JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+    static JSClassID slot;
+    JSClassID id = os64_js_class_id(&slot);
+    JSClassExoticMethods exotic = {.define_own_property = output_trap_define,
+                                   .delete_property = output_trap_delete};
+    const JSClassDef definition = {.class_name = "OutputTrapFixture", .exotic = &exotic};
+    check(JS_NewClass(JS_GetRuntime(context), id, &definition) == 0, "transaction host trap class registered");
+    JSValue global = JS_GetGlobalObject(context);
+    check(JS_SetPropertyStr(context, global, "console", JS_NewObjectClass(context, id)) > 0,
+          "transaction host console trap installed");
+    size_t before = output_len;
+    check(os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG,
+          &outcome) == OS64_JS_HOST_FAILURE && staged_output_blocked && output_len == before,
+          "rollback refusal retires runtime and staged callback cannot borrow output");
+    check(os64_js_eval(runtime, "print('later')", 14, "after trap", &outcome) == OS64_JS_FAILED_RUNTIME,
+          "rollback refusal does not expose a reusable partial capability");
+    JS_FreeValue(context, global);
+    os64_js_destroy(runtime);
+}
+
 static void setup_allocation_cases(void)
 {
     os64_js_config_t config = fixture_config();
@@ -402,11 +499,23 @@ static void setup_allocation_cases(void)
         for (size_t i = 1; i <= inventory; i++) {
             runtime = create_fixture(&config);
             if (!runtime) return;
+            JSContext *inspection = mode == 1 ? os64_js_context(runtime, OS64_JS_ABI_ID, &outcome) : NULL;
+            JSValue global = inspection ? JS_GetGlobalObject(inspection) : JS_UNDEFINED;
             fail_at = attempts + i;
             result = mode == 0 ? os64_js_install_args(runtime, 3, args, &outcome) :
                 os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG, &outcome);
             fail_at = 0;
             check(result == OS64_JS_HOST_FAILURE, "installer allocation refusal is sticky host failure");
+            if (mode == 1) {
+                /* The context was borrowed before failure for native inspection;
+                 * no script is executed through a retired wrapper. */
+                JSValue print = JS_GetPropertyStr(inspection, global, "print");
+                JSValue console = JS_GetPropertyStr(inspection, global, "console");
+                check(JS_IsUndefined(print) && JS_IsUndefined(console),
+                      "allocation refusal removes staged output capabilities");
+                JS_FreeValue(inspection, print); JS_FreeValue(inspection, console);
+                JS_FreeValue(inspection, global);
+            }
             os64_js_destroy(runtime);
             check(live == 0, "partial installer failure releases owned values");
         }
@@ -485,7 +594,7 @@ int main(int argc, char **argv)
         return 1;
     }
     runtime_cases(); clock_cases(); diagnostic_cases(); allocation_cases(); thread_cases();
-    file_cases(); output_cases(); setup_allocation_cases();
+    file_cases(); output_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     check(live == 0, "runtime suite releases every fixture allocation");
     printf("libjs runtime: %u checks, %u failures, %zu live allocations, %u native calls\n",
            checks, failures, live, native_calls);

@@ -276,3 +276,44 @@ The screenshot showed the expected invariant diagnostics and returned shell
 prompt; VM 56205 was stopped after extraction. These fixtures validate the R2
 library handoff; Opus's C1 integration, independent V1 validation, normal
 image/licence registration and J1/J2 acceptance remain separate gates.
+
+## PR #195 output transaction correction, 2026-10-02
+
+The P2 finding was reproduced at `9af1f2a9`: a failing combined install replaced
+or leaked `print`, and console-only retry retained that unselected capability.
+The initial target-core negative control reported seven failed assertions,
+including the resulting unwanted output bytes. Those shared regressions now
+pass on both host profiles and inside os64.
+
+The correction stages selected functions/atoms and retains complete property
+descriptors before publishing. Failed attempts restore prior data/accessor
+values and attributes or remove newly published names. The borrowed handle and
+installation flag commit after publication succeeds; a function seen by a
+property trap before commit cannot write. A trap or allocation refusal that
+prevents restoration retires the runtime rather than leaving it reusable.
+
+- Final maintained host suites: **698 target-engine checks** and **2,890
+  sanitized-engine checks**, zero failures and zero live fixture allocations,
+  with normal-exit LeakSanitizer enabled. The allocation sweep also checks
+  absence of staged capabilities on failure. The sanitized accessor-publication
+  sweep checks restoration of getter identity and property attributes; the
+  target arena profile has no native allocations for that replacement fixture.
+  A separate native exotic-property case proves that staged callbacks cannot
+  write and that rollback refusal retires the runtime.
+- Strict explicit consumer and root builds, target import/export/ELF/dependency
+  and relink checks, and contract/manifest checks: PASS. The published symbol
+  inventory and required libraries are unchanged by this correction.
+- QEMU VM 56206: **365 checks, zero failures, 41 native calls**, with JSRT
+  (`0x4A535254`) and both intended JSFA (`0x4A534641`) fatal statuses. Shared
+  transaction cases cover non-object/accessor console rejection, fixed `log`
+  and `print` targets, original print identity/attributes, getter non-execution,
+  preserved console log and console-only retries. The kernel teardown test
+  passed before consumer commands after a quiet boot; the VM was stopped after
+  screenshot and file extraction.
+
+All three returned guest library files matched the current build byte for byte.
+The corrected libjs is 4,520,760 bytes with SHA-256
+`00e6b3eb776b2cd0bff140ff7788ed3bbb2ccdad3b4a22ef0763d81312844b98`.
+libmath and libos64 retain the sizes and hashes in the helper-slice table above.
+These are scratch-image runtime observations; C1, independent validation and
+normal image integration remain separate work.

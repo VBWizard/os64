@@ -32,7 +32,8 @@ Checks:
   support fixtures, normal-exit leak checks, allocation-failure sweeps, clock
   failures/deadlines, native bindings/finalizers, Promise checkpoints, class
   allocation across threads, cross-thread cancellation, owned input cleanup,
-  partial output writes, copied arguments and installer failure sweeps. Fatal fixtures
+  partial output writes, transactional property/handle publication, copied
+  arguments and installer failure sweeps. Fatal fixtures
   verify the full JSFA badge through a host exit hook.
 - `tools/test_js_port_target.sh`: strict target core and binding example,
   import/export and ELF audits, a symbol-only core link with trap dependencies,

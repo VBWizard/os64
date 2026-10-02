@@ -73,7 +73,15 @@ only the names selected by its bitmask: OS64_JS_OUTPUT_PRINT grants `print`,
 OS64_JS_OUTPUT_CONSOLE_LOG grants `console.log`. Zero or unknown bits return
 BAD_ARGUMENT without installing anything. The runner selects both; a browser
 can select only logging and retain ownership of the web's `print` function.
-Unselected names are untouched. The host keeps that handle valid until destruction;
+Unselected names are untouched. Selected properties and functions are staged
+before publication. A reusable setup exception restores original data/accessor
+descriptors and removes newly published names; the handle is borrowed only
+after the complete installation commits. A staged callback cannot write before
+that commit.
+If a host property trap or allocation failure prevents restoration, the runtime
+is retired instead of returning a reusable partial installation. Unrelated
+side effects of host-supplied traps are outside the property rollback.
+The host keeps a successfully installed handle valid until destruction;
 the library does not close it. Values convert with QuickJS string conversion,
 spaces separate arguments, and one newline terminates a call. Conversion may
 execute script and remains subject to the active execution budget. A conversion
@@ -103,7 +111,7 @@ the installer does not invoke a global console getter to discover the object.
 
 Custom bindings use QuickJS values and lifetime rules directly. `examples/binding.c`
 shows argument conversion, a thrown callback exception, and ownership on
-property-install failure. Setup failure can leave partially installed objects;
+property-install failure. Custom setup failure can leave partially installed objects;
 the host destroys that runtime and must not proceed to evaluation. Engine
 exceptions from custom setup belong to the host until consumed/freed through
 QuickJS. The wrapper does not take ownership of arbitrary native host context.

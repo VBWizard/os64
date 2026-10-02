@@ -367,8 +367,12 @@ arguments, installer flags and setup-state checks. The shared library exports
 all eleven declared embedding operations. Opus can integrate C1 against this
 stack; both R2 slices require review and merge before acceptance. C1 is not
 implemented or modified by the runtime slice.
-The combined core/helper fixtures pass 642 target-engine host checks, 2,784
-sanitized-engine host checks and 319 os64/QEMU checks, with zero failures.
+The combined core/helper fixtures pass 698 target-engine host checks, 2,890
+sanitized-engine host checks and 365 os64/QEMU checks, with zero failures.
+The first helper review's combined-output transaction finding is corrected:
+selected properties are staged/restored and the borrowed handle commits after
+installation succeeds. The updated PR requires re-review; core/helper review
+acceptance remains separate from the recorded implementation evidence.
 
 Production limit defaults remain J2 work, rather than adopting the fixtures'
 development budgets without measurements. D2-D4 can proceed independently; the D5 binding

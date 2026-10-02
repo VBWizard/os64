@@ -50,6 +50,7 @@ static void guest_helpers(void)
     check(handle >= 0, "guest borrowed output opened");
     if (handle < 0) return;
     helper_cases((int32_t)handle);
+    output_transaction_cases((int32_t)handle);
     file_helpers((int32_t)handle);
     check(os64_close((int32_t)handle) == 0, "host closes borrowed output after runtime destruction");
     handle = os64_open(path, "r");
