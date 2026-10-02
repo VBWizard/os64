@@ -232,19 +232,217 @@ static void borders(const Painter *p, const flow_box_t *b)
     }
 }
 
+// ── Rounded corners (Backgrounds 3 § 5) ─────────────────────────────────
+//
+// A box with any radius is drawn row by row in 1/256 px: each row's span
+// through the corner ellipses, taken at the row's middle, its whole pixels
+// filled in runs and the pixel at each end laid over at the share of it
+// the span covers — so a curve is smooth across, which is where the eye
+// sees steps. A square box never comes here.
+
+#define SUB 256
+
+static int64_t isqrt64(int64_t v);
+
+typedef struct {
+    int64_t l, t, r, b;         // the edges, in 1/256 px
+    int64_t rad[4][2];          // TL, TR, BR, BL; horizontal, vertical; 1/256 px
+} Round;
+
+// How far in from its side a corner's ellipse is, `dy` from where it
+// starts curving.
+static int64_t corner_in(int64_t rx, int64_t ry, int64_t dy)
+{
+    if (rx <= 0 || ry <= 0 || dy <= 0)
+        return 0;
+    if (dy >= ry)
+        return rx;
+    return rx - rx * isqrt64(ry * ry - dy * dy) / ry;
+}
+
+// Row `yc` (its middle, 1/256 px) of the shape: [*x0, *x1); false when it
+// misses the row.
+static bool round_row(const Round *s, int64_t yc, int64_t *x0, int64_t *x1)
+{
+    if (yc < s->t || yc >= s->b)
+        return false;
+    *x0 = s->l + max64(corner_in(s->rad[0][0], s->rad[0][1], s->t + s->rad[0][1] - yc),
+                       corner_in(s->rad[3][0], s->rad[3][1], yc - (s->b - s->rad[3][1])));
+    *x1 = s->r - max64(corner_in(s->rad[1][0], s->rad[1][1], s->t + s->rad[1][1] - yc),
+                       corner_in(s->rad[2][0], s->rad[2][1], yc - (s->b - s->rad[2][1])));
+    return *x1 > *x0;
+}
+
+// How much of pixel column x the span [a, b) covers, of SUB.
+static int64_t cover(int64_t x, int64_t a, int64_t b)
+{
+    return max64(0, min64((x + 1) * SUB, b) - max64(x * SUB, a));
+}
+
+// `colour` laid on at `share` of SUB of its own alpha.
+static uint32_t at_share(uint32_t colour, int64_t share)
+{
+    uint32_t alpha = (uint32_t)(flow_alpha(colour) * share / SUB);
+    return (colour & 0xffffffu) | (255u - alpha) << 24;
+}
+
+// The border box's shape, and the padding box's inside it: each inner
+// radius its outer one less the border beside it (§ 5.2).
+static void round_shapes(const flow_box_t *b, const int32_t radii[4][2], const int32_t w[4],
+                         Round *outer, Round *inner)
+{
+    os64_gui_rect_t r = b->rect;
+    *outer = (Round){(int64_t)r.x * SUB, (int64_t)r.y * SUB, ((int64_t)r.x + r.w) * SUB,
+                     ((int64_t)r.y + r.h) * SUB, {{0}}};
+    *inner = (Round){outer->l + (int64_t)w[FLOW_LEFT] * SUB, outer->t + (int64_t)w[FLOW_TOP] * SUB,
+                     outer->r - (int64_t)w[FLOW_RIGHT] * SUB,
+                     outer->b - (int64_t)w[FLOW_BOTTOM] * SUB, {{0}}};
+    // Each corner's horizontal side and vertical side.
+    static const int kH[4] = {FLOW_LEFT, FLOW_RIGHT, FLOW_RIGHT, FLOW_LEFT};
+    static const int kV[4] = {FLOW_TOP, FLOW_TOP, FLOW_BOTTOM, FLOW_BOTTOM};
+    for (int c = 0; c < 4; c++) {
+        outer->rad[c][0] = (int64_t)radii[c][0] * SUB;
+        outer->rad[c][1] = (int64_t)radii[c][1] * SUB;
+        inner->rad[c][0] = max64(0, outer->rad[c][0] - (int64_t)w[kH[c]] * SUB);
+        inner->rad[c][1] = max64(0, outer->rad[c][1] - (int64_t)w[kV[c]] * SUB);
+    }
+}
+
+// The rows of the view the box reaches.
+static void view_rows(const Painter *p, const flow_box_t *b, int64_t *y0, int64_t *y1)
+{
+    *y0 = max64(b->rect.y, p->view.y);
+    *y1 = min64((int64_t)b->rect.y + b->rect.h, (int64_t)p->view.y + p->view.h);
+}
+
+static void round_background(const Painter *p, const flow_box_t *b, const Round *shape,
+                             uint32_t colour)
+{
+    int64_t y0, y1;
+    view_rows(p, b, &y0, &y1);
+    for (int64_t y = y0; y < y1; y++) {
+        int64_t a, e;
+        if (!round_row(shape, y * SUB + SUB / 2, &a, &e))
+            continue;
+        int64_t first = a / SUB, last = (e - 1) / SUB;     // the pixels it touches
+        int64_t whole0 = (a + SUB - 1) / SUB, whole1 = e / SUB;
+        if (whole1 > whole0)
+            fill(p, whole0, y, whole1 - whole0, 1, colour);
+        if (first < whole0)
+            fill(p, first, y, 1, 1, at_share(colour, cover(first, a, e)));
+        if (last >= whole1 && last >= whole0)
+            fill(p, last, y, 1, 1, at_share(colour, cover(last, a, e)));
+    }
+}
+
+// Which side owns a pixel of the ring: of the two sides of the quarter it
+// is in, the top or bottom one at or above the diagonal through its outer
+// corner, sloped by the two widths — the square corners' rule.
+static int ring_side(const flow_box_t *b, const int32_t w[4], int64_t x, int64_t y)
+{
+    os64_gui_rect_t r = b->rect;
+    bool top = y * 2 < (int64_t)r.y * 2 + r.h, left = x * 2 < (int64_t)r.x * 2 + r.w;
+    int v = top ? FLOW_TOP : FLOW_BOTTOM, h = left ? FLOW_LEFT : FLOW_RIGHT;
+    if (w[h] == 0)
+        return v;
+    if (w[v] == 0)
+        return h;
+    int64_t dv = top ? y - r.y : (int64_t)r.y + r.h - 1 - y;
+    int64_t dh = left ? x - r.x : (int64_t)r.x + r.w - 1 - x;
+    return dv * w[h] <= dh * w[v] ? v : h;
+}
+
+// The ring between the border box's shape and the padding box's, each
+// pixel in its side's colour at the share of it the ring covers. Every
+// style is drawn solid here, in its side's tone (PILE3.md § Booked).
+static void round_borders(const Painter *p, const flow_box_t *b, const Round *outer,
+                          const Round *inner, const int32_t w[4])
+{
+    const flow_style_t *s = b->style;
+    int64_t y0, y1;
+    view_rows(p, b, &y0, &y1);
+    for (int64_t y = y0; y < y1; y++) {
+        int64_t oa, oe, ia = 0, ie = 0;
+        int64_t yc = y * SUB + SUB / 2;
+        if (!round_row(outer, yc, &oa, &oe))
+            continue;
+        if (!round_row(inner, yc, &ia, &ie))
+            ia = ie = oa;
+        int64_t x0 = max64(oa / SUB, p->view.x), x1 = min64((oe + SUB - 1) / SUB,
+                                                            (int64_t)p->view.x + p->view.w);
+        // The whole pixels inside the padding box's span hold nothing of
+        // the ring, and are stepped over at once.
+        int64_t hole0 = (ia + SUB - 1) / SUB, hole1 = ie / SUB;
+        int64_t run = x0;
+        uint32_t run_colour = 0;
+        bool in_run = false;
+        for (int64_t x = x0; x <= x1; x++) {
+            if (x >= hole0 && x < hole1 && x < x1) {
+                if (in_run)
+                    fill(p, run, y, x - run, 1, run_colour);
+                in_run = false;
+                x = hole1 - 1;
+                continue;
+            }
+            int64_t share = x < x1 ? cover(x, oa, oe) - cover(x, ia, ie) : 0;
+            uint32_t colour = 0;
+            if (share > 0) {
+                int side = ring_side(b, w, x, y);
+                colour = at_share(tone(s->border_style[side], s->border_color[side], side, 0,
+                                       w[side]),
+                                  share);
+            }
+            if (in_run && (share != SUB || colour != run_colour)) {
+                fill(p, run, y, x - run, 1, run_colour);
+                in_run = false;
+            }
+            if (share == SUB && !in_run) {
+                run = x;
+                run_colour = colour;
+                in_run = true;
+            } else if (share > 0 && share < SUB) {
+                fill(p, x, y, 1, 1, colour);
+            }
+        }
+    }
+}
+
+static bool rounded(const int32_t radii[4][2])
+{
+    for (int c = 0; c < 4; c++)
+        if (radii[c][0] > 0 && radii[c][1] > 0)
+            return true;
+    return false;
+}
+
 // A box's background and borders: every block-level box, and an atom. Its
 // picture goes over its colour and under its borders, tiled from the
-// border box's corner.
+// border box's corner. Rounded, its colour and borders follow the curves.
 static void frame(const Painter *p, const flow_box_t *b)
 {
     const flow_style_t *s = b->style;
+    int32_t radii[4][2];
+    flow_box_radii(b, radii);
+    bool round = rounded(radii);
+    int32_t w[4];
+    Round outer, inner;
+    if (round) {
+        for (int k = 0; k < 4; k++)
+            w[k] = px(s->border_width[k]);
+        round_shapes(b, radii, w, &outer, &inner);
+    }
     if (b != p->canvas_owner) {
-        if (s->has_background)
+        if (s->has_background && round)
+            round_background(p, b, &outer, s->background);
+        else if (s->has_background)
             fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, s->background);
         os64_gui_rect_t area = on_page(p, b->rect);
         (void)p->v->backdrop(p->v->ctx, b, &area, area.x, area.y, on_page(p, p->view));
     }
-    borders(p, b);
+    if (round)
+        round_borders(p, b, &outer, &inner, w);
+    else
+        borders(p, b);
 }
 
 // The picture or control inside an atom's borders and padding. A percentage

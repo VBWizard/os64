@@ -53,6 +53,7 @@ typedef enum {
 typedef struct {
     flow_style_t s;             // everything that needs no font to resolve
     Len margin[4], padding[4], inset[4], width, height;
+    Len radius[4][2];
     Len flex_basis, row_gap, column_gap;     // AUTO: auto, and `normal`
     Len min_width, max_width, min_height, max_height;
     Len text_indent;                // UNSET: as inherited
@@ -1826,6 +1827,13 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_GRID_COLUMN_END: d->grid_column_end = s->grid_column_end; break;
     case GARB_JUSTIFY_ITEMS: d->justify_items = s->justify_items; break;
     case GARB_JUSTIFY_SELF: d->justify_self = s->justify_self; break;
+    case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
+    case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS: {
+        int i = prop - GARB_BORDER_TOP_LEFT_RADIUS;
+        dst->radius[i][0] = src->radius[i][0];
+        dst->radius[i][1] = src->radius[i][1];
+        break;
+    }
     default: break;
     }
 }
@@ -2422,6 +2430,12 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             *(p == GARB_JUSTIFY_ITEMS ? &s->justify_items : &s->justify_self) = (flow_place_t)i;
         break;
     }
+    case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
+    case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS:
+        // A corner is two items, horizontal and vertical (libgarb's G_RADIUS).
+        for (int32_t k = 0; k < 2 && k < v->nitems; k++)
+            author_len(a, &v->items[k], false, &sp->radius[p - GARB_BORDER_TOP_LEFT_RADIUS][k]);
+        break;
     case GARB_ROW_GAP: case GARB_COLUMN_GAP: {
         Len *gap = p == GARB_ROW_GAP ? &sp->row_gap : &sp->column_gap;
         if (word(v, "normal"))
@@ -2618,6 +2632,8 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
     for (int i = 0; i < 4; i++) {
         s->margin[i] = resolve(sp->margin[i], s->font_size, zero);
         s->padding[i] = resolve(sp->padding[i], s->font_size, zero);
+        s->radius[i][0] = resolve(sp->radius[i][0], s->font_size, zero);
+        s->radius[i][1] = resolve(sp->radius[i][1], s->font_size, zero);
         bool drawn = s->border_style[i] != FLOW_BORDER_NONE &&
                      s->border_style[i] != FLOW_BORDER_HIDDEN;
         s->border_width[i] = drawn ? sp->border_px[i] : 0;

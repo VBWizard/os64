@@ -305,6 +305,29 @@ IN: border-spacing: 2px
 OUT: border-spacing: 2px 2px
 IN: border-spacing: 1px 3px
 OUT: border-spacing: 1px 3px
+# ── Corners (Backgrounds 3 § 5.1) ──
+IN: border-top-left-radius: 4px
+OUT: border-top-left-radius: 4px 4px
+IN: border-bottom-right-radius: 10% 2em
+OUT: border-bottom-right-radius: 10% 2em
+IN: border-top-right-radius: -1px
+OUT: invalid
+IN: border-top-right-radius: 1px 2px 3px
+OUT: invalid
+IN: border-radius: 5px
+OUT: border-top-left-radius: 5px 5px; border-top-right-radius: 5px 5px; border-bottom-right-radius: 5px 5px; border-bottom-left-radius: 5px 5px
+IN: border-radius: 1px 2px 3px
+OUT: border-top-left-radius: 1px 1px; border-top-right-radius: 2px 2px; border-bottom-right-radius: 3px 3px; border-bottom-left-radius: 2px 2px
+IN: border-radius: 1px 2px 3px 4px / 5px 6px
+OUT: border-top-left-radius: 1px 5px; border-top-right-radius: 2px 6px; border-bottom-right-radius: 3px 5px; border-bottom-left-radius: 4px 6px
+IN: border-radius: 50%
+OUT: border-top-left-radius: 50% 50%; border-top-right-radius: 50% 50%; border-bottom-right-radius: 50% 50%; border-bottom-left-radius: 50% 50%
+IN: border-radius: 1px /
+OUT: invalid
+IN: border-radius: / 1px
+OUT: invalid
+IN: border-radius: inherit
+OUT: border-top-left-radius: inherit; border-top-right-radius: inherit; border-bottom-right-radius: inherit; border-bottom-left-radius: inherit
 IN: border-spacing: -1px
 OUT: invalid
 IN: border-collapse: collapse

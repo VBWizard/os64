@@ -258,6 +258,22 @@ static void paint_cases(void)
                         (os64_gui_rect_t){0, 0, 200, 100}, true, want);
     }
 
+    // A rounded corner, worked in 1/256 px: a 4px red square with 2px
+    // corners. Row 0's middle is 384 above where the curve ends, so it
+    // is in by 512 - isqrt(512^2 - 384^2) = 174: its whole pixels 1 and 2,
+    // and pixels 0 and 3 at the 82 of 256 the span covers — alpha 81. Row
+    // 1 is 128 above, in by 17: pixels 0 and 3 at 239 of 256, alpha 238.
+    // The bottom rows mirror them.
+    paint_page_case("a rounded background follows its corners, smoothed across",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 4px;"
+                    " border-radius: 2px; background: #ff0000 }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 1 0 2 1 #ff0000\nfill 0 0 1 1 #ff0000/81\nfill 3 0 1 1 #ff0000/81\n"
+                    "fill 1 1 2 1 #ff0000\nfill 0 1 1 1 #ff0000/238\nfill 3 1 1 1 #ff0000/238\n"
+                    "fill 1 2 2 1 #ff0000\nfill 0 2 1 1 #ff0000/238\nfill 3 2 1 1 #ff0000/238\n"
+                    "fill 1 3 2 1 #ff0000\nfill 0 3 1 1 #ff0000/81\nfill 3 3 1 1 #ff0000/81\n");
+
     // Groups nest, each laid over what was under it when it opened, and a
     // group none of which shows opens empty: the far one at 520, cut to a
     // view that ends at 100, has no height.
