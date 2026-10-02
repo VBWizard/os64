@@ -1,4 +1,4 @@
-# R1's freestanding engine archive; the production shared link also needs M1.
+# R1's freestanding engine core; the shared link also needs libmath.
 LIBJS_GENERATED := $(OBJ)/js/upstream
 LIBJS_CORE_NAMES := quickjs dtoa libregexp libunicode cutils
 LIBJS_CORE_OBJS := $(addprefix $(OBJ)/js/,$(addsuffix .o,$(LIBJS_CORE_NAMES)))
@@ -7,7 +7,8 @@ LIBJS_PORT_OBJS := $(addprefix $(OBJ)/js/port/,$(addsuffix .o,$(LIBJS_PORT_NAMES
 LIBJS_CORE := $(OBJ)/js/core.o
 LIBJS_FLAGS := $(LIBOS64_CFLAGS) -O2 -std=gnu11 -fvisibility=hidden -fno-builtin \
     -fno-tree-loop-distribute-patterns -DOS64_JS_TARGET \
-    -I$(CURDIR)/libjs/port/compat -I$(CURDIR)/libjs/port -I$(CURDIR)/libjs/include \
+    -I$(CURDIR)/libmath/include -I$(CURDIR)/libjs/port/compat \
+    -I$(CURDIR)/libjs/port -I$(CURDIR)/libjs/include \
     -isystem $(LIBJS_GENERATED) -DCONFIG_VERSION=\"2026-06-04\"
 # Unused callback arguments, signed loop comparisons and partial aggregate
 # initializers occur in the pinned upstream core. These exceptions stay there.

@@ -4,7 +4,7 @@ R1 builds the five retained engine files, the private adapter and the required
 compiler-runtime objects into `userland/obj/js/core.o`. The production engine
 link records `libmath.so` and `libos64.so`; it uses `--no-undefined`, SysV hashes,
 separate code/data segments and the shared-library placement map. It remains
-an explicit target until M1 and the R2 embedding implementation are available.
+an explicit target until the R2 embedding implementation is available.
 The default userland image does not advertise an unfinished JavaScript library.
 
 ## Allocation
@@ -15,6 +15,9 @@ exclude libos64's private heap metadata. There is no second allocation header.
 QuickJS's arena and large-block headers are payload and therefore charged.
 Both a requested-size preflight and a post-allocation capacity check enforce
 limits. Failed allocation or budget refusal leaves counters unchanged.
+An allocation request of zero bytes is an engine invariant failure and reaches
+the fatal diagnostic. Resizing a NULL pointer to zero returns NULL without
+allocating; resizing an existing pointer to zero releases it.
 
 Resize allocates, checks the rounded capacity, copies, then frees the original.
 This keeps the original pointer, bytes and counters valid when rounding exceeds
@@ -45,11 +48,12 @@ Target assertions remain active even with `NDEBUG`.
 
 The engine includes time, fenv, ctype and setjmp headers but this retained
 profile uses no declarations from them. Its private placeholders deliberately
-provide none. `math.h` declares M1's agreed 32 standard-name binary64 functions
-and uses compiler builtins for classification. When M1 arrives, check its
-published header against these declarations as well as the binary symbols.
+provide none. `<math.h>` comes directly from `userland/libmath/include`; the
+engine and its bindings use the maths library's published declarations and
+classification macros.
 
-A target binding needs these include paths: `-I userland/libjs/port/compat`,
+A target binding needs these include paths: `-I userland/libmath/include`,
+`-I userland/libjs/port/compat`,
 `-I userland/libjs/port`, `-I userland/libjs/include`, libos64 and ABI includes,
 and `-isystem userland/obj/js/upstream` for the prepared pinned engine headers.
 The system-header scope suppresses upstream inline-helper warnings while
@@ -94,9 +98,12 @@ remaining imports to the 32 maths names and 18 libos64 services and check that
 engine header helpers are exported while port/compiler helpers stay hidden.
 I1 must also carry the toolchain runtime notices for the linked libgcc helpers.
 A trap-dependency link proves ELF shape and symbol coverage; it has no maths
-or system behavior and is not a guest execution test.
+or system behavior and is not a guest execution test. The target audit also
+builds the production engine shared object against the real dependency
+libraries, checks its imports, and verifies relinking when the shared recipe
+or placement assigner changes.
 
-Remaining: the real M1 guest link, R2 runtime wrappers and capability policy,
+Remaining: guest engine execution, R2 runtime wrappers and capability policy,
 source/file/output helpers, runtime budget/cancellation outcomes, shared-buffer
 suppression, guest lifecycle/failure tests, and the runner. Nothing here changes
 the kernel or implements browser APIs.

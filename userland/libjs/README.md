@@ -17,7 +17,9 @@ Checks:
 
 - `tools/test_js_contract_headers.sh`: source hashes and R0 examples.
 - `tools/test_js_port_target.sh`: strict target core, target binding example,
-  import/export inventory, and a symbol-only ELF link with trap dependencies.
+  import/export inventory, a symbol-only ELF link with trap dependencies, the
+  production link against real libmath/libos64, public maths-header selection,
+  and recipe/placement relink triggers.
 - `tools/test_js_port_host.sh`: adapter fixtures with ASan/UBSan, leak detection,
   controlled libos64 calendar/clock/heap inputs, and the actual cross-built core
   executed on the host. Host libm remains a substitute for M1.

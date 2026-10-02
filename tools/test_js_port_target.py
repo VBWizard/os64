@@ -21,6 +21,7 @@ for name in ['JS_NewRuntime', 'JS_NewRuntime2', 'JS_Eval', '__JS_FreeValue', '__
 for name in ['jsport_fatal', 'jsport_malloc_functions', 'memcpy', '__udivti3', '__udivmodti4']:
     assert re.search(r'GLOBAL\s+HIDDEN\s+\d+\s+' + name + r'$', symbols, re.M), name
 run('x86_64-elf-gcc', '-std=c11', '-ffreestanding', '-m64', '-Wall', '-Wextra', '-Werror',
+    '-I', str(root / 'userland/libmath/include'),
     '-I', str(root / 'userland/libjs/port/compat'), '-I', str(root / 'userland/libjs/port'),
     '-I', str(root / 'userland/libjs/include'), '-I', str(root / 'userland/libos64/include'),
     '-I', str(root / 'abi/include'), '-isystem', str(root / 'userland/obj/js/upstream'),
@@ -30,6 +31,7 @@ with tempfile.TemporaryDirectory() as work:
     work = Path(work)
     binding = work / 'binding.o'
     run('x86_64-elf-gcc', '-std=c11', '-ffreestanding', '-m64', '-Wall', '-Wextra', '-Werror',
+        '-I', str(root / 'userland/libmath/include'),
         '-I', str(root / 'userland/libjs/port/compat'), '-I', str(root / 'userland/libjs/port'),
         '-I', str(root / 'userland/libjs/include'), '-I', str(root / 'userland/libos64/include'),
         '-I', str(root / 'abi/include'), '-isystem', str(root / 'userland/obj/js/upstream'),
@@ -62,3 +64,34 @@ with tempfile.TemporaryDirectory() as work:
     headers = run('x86_64-elf-readelf', '-lW', str(library))
     assert not re.search(r'LOAD.*RWE', headers)
     print(f'QuickJS target: 32 math / 18 os64 imports; binding header; {len(exports)} engine exports; ELF symbol-only link: PASS')
+
+# Check the production dependency libraries separately from the trap fixture.
+library = root / 'userland/bin/libjs.so'
+dynamic = run('x86_64-elf-readelf', '-dW', str(library))
+assert set(re.findall(r'\(NEEDED\).*\[(.*?)\]', dynamic)) == {'libmath.so', 'libos64.so'}
+assert '(HASH)' in dynamic and '(TEXTREL)' not in dynamic and '[libjs.so]' in dynamic
+imports = {line.split()[-1] for line in run('x86_64-elf-nm', '-D', '-u', str(library)).splitlines()}
+assert imports == math | services, sorted(imports ^ (math | services))
+for dependency, names in [('libmath', math), ('libos64', services)]:
+    provided = {line.split()[-1] for line in run('x86_64-elf-nm', '-D', '--defined-only',
+                str(root / f'userland/bin/{dependency}.so')).splitlines()}
+    assert names <= provided, sorted(names - provided)
+real_exports = {line.split()[-1] for line in run('x86_64-elf-nm', '-D', '--defined-only', str(library)).splitlines()}
+assert real_exports == exports, sorted(real_exports ^ exports)
+assert not re.search(r'LOAD.*RWE', run('x86_64-elf-readelf', '-lW', str(library)))
+for name in ['quickjs.d', 'port/format.d']:
+    dependencies = (root / 'userland/obj/js' / name).read_text()
+    assert str(root / 'userland/libmath/include/math.h') in dependencies, name
+    assert '/libjs/port/compat/math.h' not in dependencies, name
+
+# Simulate either link input becoming newer without changing source timestamps.
+# Freeze the binary inputs so a transitive dependency cannot mask a missing
+# direct edge from the recipe or placement assigner to libjs.so.
+idle = run('make', '-C', str(root / 'userland'), '-n', 'js-library')
+assert '-soname libjs.so' not in idle, 'production library is not up to date'
+for prerequisite in ['libjs/shared.mk', 'tools/app_bases.py']:
+    recipe = run('make', '-C', str(root / 'userland'), '-n',
+                 '-o', str(core), '-o', str(root / 'userland/bin/libos64.so'),
+                 '-o', str(root / 'userland/bin/libmath.so'), '-W', prerequisite, 'js-library')
+    assert '-soname libjs.so' in recipe, prerequisite
+print('QuickJS production link: real dependency coverage, public maths header and relink triggers: PASS (no guest execution)')

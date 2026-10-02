@@ -18,8 +18,9 @@ or runner; runtime headers and examples are interface proposals for review.
 - `tools/test_js_support_host.sh`: PASS. ASan/UBSan string boundary fixtures
   pass; the existing heap host battery plus size-query cases passes 215 checks,
   including operation-specific diagnostics for free/realloc/size-query misuse.
-  LeakSanitizer requires execution outside this sandbox to inspect threads;
-  it remains enabled for the string fixture. The existing heap death harness
+  LeakSanitizer needs permission to inspect/suspend threads through ptrace;
+  the recorded leak verdict comes from normal-exit runs with that permission.
+  It remains enabled for the string fixture. The existing heap death harness
   uses longjmp and deliberately leaves corrupt allocator state, so its battery
   is separate from that sanitizer executable.
 - Authored source and documentation pass `git diff --check`; the byte-identical
@@ -42,7 +43,8 @@ The guest's `/lib/libos64.so` was copied through `/home` and compared with
 `userland/bin/libos64.so`: byte-identical, 789272 bytes. The VM used disposable
 copies of both worktree disks, with FIFO/QMP monitor helpers copied into `/tmp`
 from the main checkout. Boot and all commands ran in one foreground tool
-process because sandbox background processes do not survive its completion.
+process because the validation executor terminates background processes when
+the foreground command completes.
 The VM was stopped after capture. `make` builds the boot/root image; the separate
 `disk/os64_data.img` target created a fresh home disk for this validation.
 
@@ -86,8 +88,9 @@ adapter and engine build; it does not implement the os64 runtime API or runner.
   allocation inventories; the sweep measures each rather than hard-coding it.
   ASan covers the host-built engine; ASan/UBSan cover the adapter and fixture
   support. The prebuilt cross core is not sanitizer-instrumented. LeakSanitizer
-  stays enabled for normal exits and requires execution outside this sandbox
-  to inspect threads. The separate fatal processes exit immediately through
+  stays enabled for normal exits; its thread inspection requires ptrace
+  permission, which was available for the recorded normal-exit leak checks.
+  The separate fatal processes exit immediately through
   the host exit hook, which verifies the full os64 JSFA badge and maps it to
   host status 99; this is not a guest exit-status observation.
 - `tools/test_js_contract_headers.sh` and `tools/test_js_engine_host.sh`: PASS,
@@ -97,8 +100,41 @@ adapter and engine build; it does not implement the os64 runtime API or runner.
   from the default image population. Adding libjs/libmath to the placement map
   leaves the existing libraries' assigned addresses unchanged.
 
-No QEMU engine run, libmath numerical evidence, production `libjs.so` link or
-runner is claimed. `js-library` needs M1's actual `libmath.so`, and R2 must add
-its embedding operations and capability policy before default image registration.
+This initial R1 handoff did not include a QEMU engine run, libmath numerical
+evidence, production `libjs.so` link or runner. Production linkage is added in
+the review follow-up below. R2 must add its embedding operations and capability
+policy before default image registration.
 The allocator's generic fallback realloc references remain visible in the audit;
 wholesale teardown reclamation and its allocation-ledger proof remain later work.
+
+## R1 review follow-up evidence, 2026-10-02
+
+The branch merges `userland` at `d5eecf1b`, including the accepted M1 library
+(PR #191, merge `3b509e8b`) and the shared-library dependency corrections
+(PR #193). The placement conflict retains both libmath and libjs in the map.
+
+- The zero-byte allocation fatal fixture failed against the previous adapter:
+  both normal suites passed, but `js_malloc(0)` returned rather than taking
+  the invariant-failure path. The corrected adapter diagnoses
+  `zero-byte allocation`; `js_realloc(NULL, 0)` remains allocation-free and
+  an existing block resized to zero is released.
+- `tools/test_js_port_target.sh`: PASS. The maintained test builds the real
+  production `libjs.so` with `--no-undefined`, checks its two named dependencies,
+  verifies all 32 maths and 18 libos64 imports against their real exports, and
+  retains the 186-symbol engine surface and ELF protections. Generated core
+  and formatter dependencies identify libmath's public `math.h`; the duplicate
+  private header is removed. Dry runs freeze binary inputs to verify that
+  changing either `libjs/shared.mk` or `tools/app_bases.py` schedules a relink
+  through its direct prerequisite.
+- `tools/test_js_port_host.sh`: PASS, 675 sanitized source/adapter checks and
+  437 cross-core host checks, zero failures. Host libm remains the numerical
+  substitute for these execution fixtures. Leak detection remains enabled on
+  normal exits with ptrace permission. Separate processes for leaked values,
+  clock failure and zero-byte allocation pass for both builds, checking the
+  named invariant diagnostic and full JSFA badge through the host exit hook.
+- `tools/test_js_contract_headers.sh`, `tools/test_js_engine_host.sh`, and
+  strict `make -C userland -j8`: PASS.
+
+The real dependency link is build evidence, not guest engine execution or a
+new numerical conformance measurement. R2, the runner, and combined QEMU
+acceptance remain open.

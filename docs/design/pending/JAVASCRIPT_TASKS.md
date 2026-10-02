@@ -23,8 +23,8 @@ plan, without assigning a new contributor or claiming work has started.
 | --- | --- | --- |
 | libos64 prerequisites | **Merged** | [PR #188](https://github.com/VBWizard/os64/pull/188), merge `6a6c08c1`: allocation-size query and four string/memory verbs, host coverage and guest test registration. |
 | R0 runtime contract | **Merged** | [PR #189](https://github.com/VBWizard/os64/pull/189), merge `a426386d`: reviewed public header, lifecycle/capability contract, examples, pinned QuickJS foundation. Runtime operations are declarations; implementation is R2. |
-| M1 maths library | **In review** | [PR #191](https://github.com/VBWizard/os64/pull/191), current head `1f509d1b`. Review/merge and real libjs integration remain. Numerical acceptance belongs to M1. |
-| R1 target adapter/core | **In review** | [PR #192](https://github.com/VBWizard/os64/pull/192), implementation `e53bde19`: strict core/userland builds, target symbol/ELF audits, 675 sanitized host checks and 437 cross-core host checks pass. Production maths linkage and guest execution remain unproven. |
+| M1 maths library | **Merged** | [PR #191](https://github.com/VBWizard/os64/pull/191), merge `3b509e8b`. R1 now links against its real shared library. Numerical acceptance belongs to M1; combined guest engine execution remains a runtime gate. |
+| R1 target adapter/core | **In review** | [PR #192](https://github.com/VBWizard/os64/pull/192), initial implementation `e53bde19` with review follow-up: strict core/userland builds, real libmath/libos64 linkage, target symbol/header/ELF/relink audits, 675 sanitized host checks and 437 cross-core host checks pass. Guest execution remains unproven. |
 | R2 runtime implementation | **Pending** | Implement lifecycle, capability registration, limits/cancellation, outcomes, file/output helpers, Promise processing and compatibility checks. R0/R1 are prerequisites; guest validation needs M1. |
 | C1 runner | **Pending** | Thin `js` executable, command grammar/usage, arguments, diagnostics and exit mapping. Uses R0's contract; end-to-end tests need R2 and M1. |
 | V1 independent validation | **Pending** | Consumer capability/failure/ownership tests and selected upstream cases; execution needs M1/R2/C1. |
@@ -46,7 +46,7 @@ is marked complete by the current host checks.
 
 Next steps:
 
-1. Address M1/R1 review results and record their accepted merge commits.
+1. Complete R1 review and record its accepted merge commit; M1 is merged.
 2. Implement R2 against the reviewed contract and integrate the real maths
    library for target/guest evidence.
 3. Deliver C1, independent V1 validation, and I1 integration to establish J1/J2.
@@ -309,15 +309,16 @@ foundation branches; they are retained for reference.
 ## R1 target adaptation slice 2026-10-01
 
 Worktree `.worktrees/js-target-port`, branch `codex/js-target-port`, starts at
-merged foundation `a426386d`. The runtime owner supplies the private C headers,
+merged foundation `a426386d`; its review follow-up merges `userland` at
+`d5eecf1b`, including M1. The runtime owner supplies the private C headers,
 allocation callbacks using `os64_malloc_size`, wall-clock/timezone adaptation,
 diagnostic formatting, compiler memory veneers, generated patch preparation,
 core build and shared-link recipe. Upstream originals remain unchanged.
 
 `make -C userland js-core` cross-compiles and partially links the retained core
 and required libgcc helpers. `js-library` is an explicit shared target requiring
-M1's real `libmath.so`; it is excluded from the default image until the maths
-and R2 runtime boundary are available. The shared placement population reserves
+the real `libmath.so`; it is excluded from the default image until the R2
+runtime boundary is available. The shared placement population reserves
 both library names; image registration remains I1 work.
 
 The maintained target/host fixtures are `tools/test_js_port_target.*`,
@@ -328,3 +329,9 @@ does not establish guest JavaScript or numerical conformance.
 
 Implementation commit `e53bde19` is published for review in
 [PR #192](https://github.com/VBWizard/os64/pull/192).
+
+The 2026-10-02 review follow-up removes the duplicate maths header, restores
+fatal handling of zero-byte allocations while preserving NULL/zero resize,
+tracks shared-recipe and placement-assigner dependencies, and clarifies the
+ptrace requirement for normal-exit leak checks. Target evidence now includes
+the production shared link against the real merged M1 library.

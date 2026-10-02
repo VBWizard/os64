@@ -8,7 +8,7 @@ python3 tools/js_prepare.py "$js_port_work/upstream"
 base_flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -fno-tree-loop-distribute-patterns -fno-stack-protector -DOS64_JS_TARGET
     '-DCONFIG_VERSION="2026-06-04"'
-    -I userland/libjs/port -I userland/libjs/include -I userland/libos64/include
+    -I userland/libmath/include -I userland/libjs/port -I userland/libjs/include -I userland/libos64/include
     -I abi/include -isystem "$js_port_work/upstream")
 for name in quickjs dtoa libregexp libunicode cutils; do
     cc "${base_flags[@]}" -U__linux__ -I userland/libjs/port/compat -fsanitize=address \
@@ -36,13 +36,18 @@ cc -fsanitize=address,undefined -Wl,-z,noexecstack userland/obj/js/core.o \
     "$js_port_work/str-local.o" "$js_port_work/fmt.o" -lm -o "$js_port_work/cross-probe"
 "$js_port_work/cross-probe"
 printf 'Cross-built core executed on host (host maths/syscalls): PASS\n'
-for mode in --leak --clock-failure; do
-    set +e
-    "$js_port_work/probe" "$mode" > "$js_port_work/fatal.out" 2> "$js_port_work/fatal.err"
-    status=$?
-    set -e
-    test "$status" -eq 99
-    grep -q 'libjs: engine invariant failure:' "$js_port_work/fatal.err"
-    grep -q 'target exit badge: 4a534641' "$js_port_work/fatal.err"
+for probe in probe cross-probe; do
+    for mode in --leak --clock-failure --zero-allocation; do
+        set +e
+        "$js_port_work/$probe" "$mode" > "$js_port_work/fatal.out" 2> "$js_port_work/fatal.err"
+        status=$?
+        set -e
+        test "$status" -eq 99
+        grep -q 'libjs: engine invariant failure:' "$js_port_work/fatal.err"
+        grep -q 'target exit badge: 4a534641' "$js_port_work/fatal.err"
+        if [ "$mode" = --zero-allocation ]; then
+            grep -q 'engine invariant failure: zero-byte allocation' "$js_port_work/fatal.err"
+        fi
+    done
 done
 printf 'Target fatal paths: PASS (host hook verified full os64 badge)\n'

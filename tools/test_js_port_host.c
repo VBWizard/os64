@@ -80,7 +80,10 @@ static void allocators(void)
     check(!f->js_realloc(&s, b, 0) && s.malloc_size == 0 && s.malloc_count == 0, "zero resize releases");
     s.malloc_limit = 17;
     check(!f->js_malloc(&s, 17) && !s.malloc_size && !s.malloc_count, "rounding over fresh budget rolls back");
-    check(!f->js_malloc(&s, 0) && !f->js_malloc_usable_size(NULL), "zero and null contracts");
+    size_t before = attempts;
+    check(!f->js_realloc(&s, NULL, 0) && !f->js_malloc_usable_size(NULL) &&
+          attempts == before && !s.malloc_size && !s.malloc_count,
+          "null zero resize and usable-size contracts");
     f->js_free(&s, NULL);
     check(live == 0, "allocator fixtures release every block");
     JSPortAllocator owner = {.payload_limit = 17};
@@ -192,6 +195,10 @@ static void clocks_and_engine(void)
 }
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--zero-allocation")) {
+        JSMallocState state = {.malloc_limit = SIZE_MAX};
+        (void)jsport_malloc_functions.js_malloc(&state, 0); return 1;
+    }
     if (argc == 2 && !strcmp(argv[1], "--clock-failure")) {
         struct jsport_timeval tv;
         js_test_clock_failed = 1; jsport_gettimeofday(&tv, NULL); return 1;

@@ -23,7 +23,8 @@ static void refused(JSMallocState *state, unsigned reason)
 
 static void *allocate(JSMallocState *state, size_t size)
 {
-    if (size == 0) return NULL;
+    if (size == 0)
+        jsport_fatal("zero-byte allocation", __FILE__, __LINE__);
     size_t ceiling = limit(state);
     if (state->malloc_size > ceiling || size > ceiling - state->malloc_size) {
         refused(state, JSPORT_ALLOC_LIMIT);
@@ -60,7 +61,7 @@ static void release(JSMallocState *state, void *ptr)
 static void *resize(JSMallocState *state, void *ptr, size_t size)
 {
     if (ptr == NULL)
-        return allocate(state, size);
+        return size == 0 ? NULL : allocate(state, size);
     if (size == 0) {
         release(state, ptr);
         return NULL;
