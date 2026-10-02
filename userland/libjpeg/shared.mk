@@ -12,7 +12,10 @@ $(JPEG_LICENSE): ../tools/jpeg_license.py libjpeg/upstream/LICENSE.md libjpeg/up
 $(OBJ)/jpeg/libjpeg/%.c.o: libjpeg/%.c libjpeg/shared.mk libjpeg/port/config.h $(JPEG_LICENSE)
 	@mkdir -p $(dir $@)
 	$(CC) $(JPEG_FLAGS) $(if $(findstring /upstream/,$<),-Wno-unused-parameter -Wno-sign-compare) -c $< -o $@
-$(LIBJPEG_SO): $(JPEG_OBJS) $(LIBOS64_SO) libjpeg/exports.map link/lib.ld tools/app_bases.py
+# The two .mk files hold the object list: removing a source creates no newer
+# object, so without them the old library would look up to date.
+$(LIBJPEG_SO): $(JPEG_OBJS) $(LIBOS64_SO) libjpeg/exports.map link/lib.ld tools/app_bases.py \
+        libjpeg/sources.mk libjpeg/shared.mk
 	$(LD) --defsym LIB_BASE=$(LIBJPEG_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
 	    $(SHARED_LIB_LDFLAGS) -soname libjpeg.so --no-undefined --no-as-needed \
 	    --version-script=libjpeg/exports.map -o $@ $(JPEG_OBJS) $(LIBOS64_SO)

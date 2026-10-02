@@ -10,8 +10,10 @@ LIBWAY_CFLAGS = $(LIBOS64_CFLAGS) -O2 -fvisibility=hidden -I$(CURDIR)/libway/inc
 LIBWAY_BASE = $(patsubst libway.so=%,%,$(filter libway.so=%,$(LIB_BASE_PAIRS)))
 LIBWAY_LDFLAGS = $(SHARED_LIB_LDFLAGS) -soname libway.so
 
+# library.mk holds the object list and the link flags: removing a source
+# creates no newer object, so without it the old library would look current.
 $(LIBWAY_SO): $(LIBWAY_OBJS) $(LIBFETCH_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBOS64_SO) \
-              $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
+              $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py libway/library.mk
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBWAY_BASE) \
 	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBWAY_LDFLAGS) --no-as-needed \
