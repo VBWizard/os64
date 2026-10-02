@@ -292,7 +292,11 @@ LIBPNG_PROGRAMS := pngtest
 # (top was the first: top.c + topMain.c): the wildcard yields the directory
 # once PER .c FILE, so without sort a two-file app appears twice in APPS
 # and its link rule gets eval'd twice.
-APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard apps/*/*.c)))))
+# js is the one directory held back: it calls the os64_js_* runtime, which R2
+# has not built yet, so it cannot link. apps/js/runner.mk compiles it under
+# the same flags (`make js-runner`); DEBTS.md § Userland utilities holds the
+# row that takes this filter out.
+APPS := $(filter-out js,$(sort $(notdir $(patsubst %/,%,$(dir $(wildcard apps/*/*.c))))))
 
 # And every tests/<name>/ directory is a FIXTURE named <name>, built exactly
 # like an app and installed to /tests instead of /bin.
@@ -366,6 +370,7 @@ include libgarb/library.mk
 include libflow/library.mk
 include libway/library.mk
 include libjs/shared.mk
+include apps/js/runner.mk
 
 # Source membership and the population used for prelink placement live here.
 $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO): GNUmakefile
