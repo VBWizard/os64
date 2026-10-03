@@ -546,12 +546,46 @@ advance it; an effective change during dirty re-sanitization does. Current
 dirty getters allocate nothing; after an HTML mutation they stage
 re-sanitization for current type and constraints. A file-mode observation
 clears a prior dirty value permanently. Historical value-mode transitions
-between observations require a state-aware attribute entrance in D5; the
+between observations use `os64_page_node_set_attr`, described below; a
 current-tree snapshot cannot reconstruct them. Default sanitization may cache
 bytes within the cap and return NO_MEMORY without changing outputs.
 
+Attribute writes stage a prospective attribute view and control effects,
+reserve state, then commit through libhtml's atomic attribute batch before
+publishing state. This records type changes, constraint sanitization and
+radio/select regrouping even when no getter runs between changes. A text
+value transferred to the value attribute and a type change publish together.
+Failure preserves tree/state revisions, borrowed values and accounting.
+
+The node-based insert, replace, remove and replace-children entrances stage
+affected control state before changing the tree, then publish without another
+allocation. Radio groups and select choices therefore reflect each move,
+including moves between detached trees. Replaced children remain
+document-owned; reclamation belongs to D6. Bindings use these state-aware
+entrances, and presentation watches both HTML and state revisions.
+Plans walk moving subtrees, reserve affected old/new option lists and clean
+textarea parents, and scan named radio peers when a move or explicit form-owner
+ID can change their groups. Libhtml's owned explicit-input count rules out
+ID planning when zero.
+Detached inputs and template contents are included, so nonzero remains a
+conservative trigger. A reserved record supplies a temporary stage link,
+cleared on success/refusal. Unrelated tree edits keep sparse records sparse,
+allocate no control state and skip model publication. Template contents keep
+their independent tree when the template host moves.
+
 Numeric contracts, independent checks and compatibility limits are recorded
 in [LIBPAGE_REVIEW.md](LIBPAGE_REVIEW.md). The public contract is in `page.h`.
+
+The state-aware clone entrance copies INPUT current value, checkedness and dirty
+flags, and TEXTAREA current value/dirty flag into a detached same-document copy.
+Other controls initialize from cloned markup. Copied state owns its bytes;
+refusal preserves source state and published values, and success advances
+neither revision. Detached HTML preparation can remain document-owned on refusal.
+A clean shallow textarea clone retains a current value independently of its
+empty child list. State-aware tree and CharacterData entrances observe each
+subsequent real direct child mutation, including changes restored between reads.
+Direct libhtml mutations reconcile the observed text but cannot recover that
+intermediate history. The public contracts are in `page.h`.
 
 ## Proof before integration
 

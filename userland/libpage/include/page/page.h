@@ -43,6 +43,8 @@ typedef struct os64_page_state os64_page_state_t;
 // Freeing explicit state with models still borrowing it ends the program
 // with OS64_PAGE_FATAL_EXIT. State does not pin the document itself.
 os64_page_state_t *os64_page_state_create(os64_html_document_t *doc, size_t max_bytes);
+// Borrowed document; NULL state answers NULL. The caller keeps it alive.
+os64_html_document_t *os64_page_state_document(const os64_page_state_t *state);
 void os64_page_state_free(os64_page_state_t *state);
 size_t os64_page_state_bytes(const os64_page_state_t *state);
 // Nonzero revision of effective control state, including edit origin.
@@ -475,6 +477,53 @@ int64_t os64_page_set_chosen(os64_page_t *page, int32_t control, int32_t option,
 // An incomplete model is refused without discarding edits.
 int64_t os64_page_reset(os64_page_t *page, int32_t form);
 
+// An attribute mutation observes control transitions at this call, including
+// transitions made between property reads. Input modes, constraints, radio
+// groups and select choices are staged with the attributes. Returns HTML
+// status codes; state-cap exhaustion is OS64_HTML_NO_MEMORY. Failure preserves
+// attributes, both revisions, dirty state and published borrowed values.
+// Ordinary owned elements accept attributes too; remove ignores value/len.
+int64_t os64_page_node_set_attr(os64_page_state_t *state, const os64_html_node_t *node,
+                                const char *name, const char *value, size_t len, bool remove);
+
+/* State-aware tree verbs retain libhtml's placement rules/status codes and
+ * normalize the radio/select effects of each move without changing dirty
+ * flags. Reservations precede tree mutation; refusal preserves both tree
+ * and control state. State allocation refusals answer OS64_HTML_NO_MEMORY.
+ * Calls are serialized with the document's other operations.
+ * replace_children accepts an ELEMENT or FRAGMENT parent and a detached,
+ * freshly prepared replacement node/fragment (NULL: empty). It reserves
+ * once, inserts before the original children, then removes those children;
+ * the successful tree commit cannot be followed by a state allocation
+ * refusal. Detached preparation belongs to the caller's document budget. */
+int64_t os64_page_node_insert(os64_page_state_t *state, os64_html_node_t *parent,
+                              os64_html_node_t *node, os64_html_node_t *before);
+int64_t os64_page_node_replace(os64_page_state_t *state, os64_html_node_t *parent,
+                               os64_html_node_t *node, os64_html_node_t *old);
+int64_t os64_page_node_remove(os64_page_state_t *state, os64_html_node_t *node);
+int64_t os64_page_node_replace_children(os64_page_state_t *state, os64_html_node_t *parent,
+                                        os64_html_node_t *replacement);
+
+// Clone an owned non-DOCUMENT node into the same document, detached, with INPUT current
+// value/checkedness and their dirty flags, and TEXTAREA current value/dirty
+// flag. Other control state starts from cloned markup. Deep cloning includes
+// descendant and template-content controls. Status uses HTML codes; a state
+// allocation refusal is OS64_HTML_NO_MEMORY. Refusal preserves source state,
+// published values and both revisions; detached HTML preparation may remain
+// charged to the document. Cloning does not change either revision. Status
+// may be NULL; a failed call returns NULL.
+os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
+                                       const os64_html_node_t *node, bool deep,
+                                       int64_t *status);
+
+// State-aware CharacterData mutation, with libhtml's text contract/statuses.
+// Clean textarea clones keep a current value independently of their markup.
+// These text and tree entrances observe each real direct child mutation before
+// another read, including changes restored between reads. Direct libhtml
+// calls can reconcile the observed text but cannot reconstruct that history.
+// Failure preserves text, control state, published values and both revisions.
+int64_t os64_page_node_set_text(os64_page_state_t *state, os64_html_node_t *node,
+                                const char *utf8, size_t len);
 // A script assigns by node, including detached and never-inserted controls.
 // Disabled, readonly and hidden controls accept these assignments. Value
 // mode decides storage: text/textarea use dirty state; hidden/button/tick
@@ -504,7 +553,7 @@ int64_t os64_page_node_set_selected_index(os64_page_state_t *state,
 // length validation applies only after a person edit. These verbs observe
 // the current tree: transitions
 // between input value modes that happen entirely between observations need
-// a state-aware mutation entrance in the browser binding (DOM D5).
+// os64_page_node_set_attr at each attribute mutation.
 int64_t os64_page_node_value(os64_page_state_t *state, const os64_html_node_t *node,
                              const char **value, size_t *len);
 int64_t os64_page_node_checked(os64_page_state_t *state, const os64_html_node_t *node,

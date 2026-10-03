@@ -112,6 +112,7 @@ static HNode *pack_node(os64_html_parser_t *p, const HNode *from, bool root)
     if (n->kind == OS64_HTML_ELEMENT) {
         n->attrs = attrs ? records : NULL;
         *h_word(n) = H_ATTRS_INLINE;
+        p->d->form_inputs += d_form_input(n);
     }
     if (n->kind == OS64_HTML_TEXT || n->kind == OS64_HTML_COMMENT) {
         if (!h_work(p, from->text_len + 1))

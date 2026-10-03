@@ -1517,7 +1517,7 @@ static int r_attr(const R *r, const char *name)
 // Every node the model knows, against the real node it stands for.
 static void r_compare(os64_html_document_t *doc, R *document, unsigned step, const char *did)
 {
-    size_t bad = checks_failed, records = 0;
+    size_t bad = checks_failed, records = 0, form_inputs = 0;
     for (int i = 0; i < nall && checks_failed == bad; i++) {
         const R *r = all[i];
         const HNode *n = r->real;
@@ -1540,6 +1540,9 @@ static void r_compare(os64_html_document_t *doc, R *document, unsigned step, con
         const HAttr *a = n->attrs;
         for (int k = 0; k < r->nattrs; k++, a = a ? a->next : NULL)
             same = same && a && strcmp(a->name, r->an[k]) == 0 && strcmp(a->value, r->av[k]) == 0;
+        if (r_is(r, "input"))
+            for (int k = 0; k < r->nattrs; k++)
+                form_inputs += strcmp(r->an[k], "form") == 0;
         same = same && a == NULL;
         if (!same) {
             char *got = spelled(n);
@@ -1550,6 +1553,9 @@ static void r_compare(os64_html_document_t *doc, R *document, unsigned step, con
     const HDoc *d = (const HDoc *)doc;
     check(records == d->records, "step %u (%s): %zu records in the tree, the document counts %zu", step, did,
           records, d->records);
+    check(form_inputs == os64_html_form_input_count(doc),
+          "step %u (%s): %zu owned explicit-form inputs, the document counts %zu", step, did,
+          form_inputs, os64_html_form_input_count(doc));
     // The landmarks, by their definitions.
     R *html = NULL, *head = NULL, *body = NULL;
     for (int i = 0; i < document->nkids && !html; i++)
@@ -1859,14 +1865,97 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
     check(live == 0, "random walk freed");
 }
 
-int main(void)
+// Count ownership rather than connectivity: detached nodes can be inserted
+// later, and fragment publication transfers the count with its node ledger.
+static void t_form_input_count(void)
 {
+    const char *markup="<div id=host></div><input id=a form=missing><input id=plain>"
+        "<input id=empty form><button form=missing></button>"
+        "<template id=t><input form=missing></template>";
+    os64_html_document_t *doc=parse(markup);
+    check(doc&&!doc->refusal,"form count: parsed fixture");
+    HNode *a=id_in(doc,"a"),*plain=id_in(doc,"plain"),*host=id_in(doc,"host"),*t=id_in(doc,"t");
+    check(os64_html_form_input_count(NULL)==0&&os64_html_form_input_count(doc)==3,
+          "form count: parser includes empty values and template contents, excludes other kinds");
+    int64_t why=0;
+    HNode *foreign=os64_html_create_element(doc,OS64_HTML_NS_SVG,"input",&why);
+    check(foreign&&os64_html_set_attr(doc,foreign,"form","missing",7)==0&&
+          os64_html_form_input_count(doc)==3,"form count: foreign input excluded");
+    check(os64_html_set_attr(doc,a,"form","other",5)==0&&os64_html_form_input_count(doc)==3,
+          "form count: value replacement counted once");
+    check(os64_html_remove_attr(doc,a,"form")==0&&os64_html_form_input_count(doc)==2,
+          "form count: single removal");
+    check(os64_html_remove_attr(doc,a,"form")==0&&os64_html_form_input_count(doc)==2,
+          "form count: absent removal");
+    check(os64_html_set_attr(doc,a,"form","",0)==0&&os64_html_form_input_count(doc)==3,
+          "form count: single creation");
+    os64_html_attr_change_t batch[]={{"form","f",1,false},{"form",NULL,0,true}};
+    check(os64_html_set_attrs(doc,plain,batch,2)==0&&os64_html_form_input_count(doc)==3,
+          "form count: batch net absence");
+    batch[1]=(os64_html_attr_change_t){"form","",0,false};
+    check(os64_html_set_attrs(doc,plain,batch,2)==0&&os64_html_form_input_count(doc)==4,
+          "form count: batch creation counted once");
+    check(os64_html_set_attrs(doc,plain,batch,2)==0&&os64_html_form_input_count(doc)==4,
+          "form count: batch no-op");
+    batch[0]=(os64_html_attr_change_t){"form",NULL,0,true};
+    check(os64_html_set_attrs(doc,plain,batch,1)==0&&os64_html_form_input_count(doc)==3,
+          "form count: batch removal");
+    HNode *copy=os64_html_clone(doc,a,false,&why);
+    check(copy&&os64_html_form_input_count(doc)==4,"form count: detached shallow clone");
+    check(os64_html_clone(doc,t,true,&why)&&os64_html_form_input_count(doc)==5,
+          "form count: deep template clone");
+    check(os64_html_insert(doc,host,copy,NULL)==0&&os64_html_remove(doc,copy)==0&&
+          os64_html_form_input_count(doc)==5,"form count: detach does not destroy ownership");
+    os64_html_document_t *other=parse("<p>foreign clone target</p>");
+    check(os64_html_clone(other,a,false,&why)&&os64_html_form_input_count(other)==1,
+          "form count: cross-document clone");
+    os64_html_document_free(other);
+    const char *fragment="<input form=f><input><div>fragment</div>";
+    check(os64_html_parse_fragment(doc,host,fragment,strlen(fragment),false,&why)&&
+          os64_html_form_input_count(doc)==6,"form count: published fragment count");
+    os64_html_document_free(doc);
+    check(live==0,"form count: fixture teardown");
+
+    // Attribute/fragment refusals must not publish staged counts. A failed
+    // clone may retain owned nodes; the fragment entrance instead rolls back
+    // its entire temporary ledger, so its count must remain exact on refusal.
+    for (int operation=0; operation<3; operation++) {
+        bool reached=false;
+        for (size_t cut=1; cut<100&&!reached; cut++) {
+            doc=parse("<div id=host></div><input id=a>");
+            a=id_in(doc,"a");host=id_in(doc,"host");
+            allocations=0;fail_at=cut;
+            if (operation==0) why=os64_html_set_attr(doc,a,"form","f",1);
+            else if (operation==1) {
+                os64_html_attr_change_t change={"form","f",1,false};
+                why=os64_html_set_attrs(doc,a,&change,1);
+            } else (void)os64_html_parse_fragment(doc,host,fragment,strlen(fragment),false,&why);
+            fail_at=0;
+            reached=why==OS64_HTML_OK;
+            check(reached||why==OS64_HTML_NO_MEMORY,"form count: allocation refusal %d/%zu",operation,cut);
+            check(os64_html_form_input_count(doc)==(reached?1u:0u),
+                  "form count: staged accounting %d/%zu",operation,cut);
+            os64_html_document_free(doc);
+            check(live==0,"form count: failure sweep teardown %d/%zu",operation,cut);
+        }
+        check(reached,"form count: sweep reached success %d",operation);
+    }
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 2 && strcmp(argv[1], "--form-input-count") == 0) {
+        t_form_input_count();
+        printf("html form-input count: %zu checks, %zu failed\n", checks_run, checks_failed);
+        return checks_failed ? 1 : 0;
+    }
     t_validity();
     t_structure();
     t_templates();
     t_attributes();
     t_text();
     t_form_owners();
+    t_form_input_count();
     t_depth();
     t_deep();
     t_pins();

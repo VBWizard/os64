@@ -369,6 +369,7 @@ static HNode *element(os64_html_parser_t *p, HToken *t, os64_html_ns_t ns, bool 
             n->name = adjust(n->name, svg_tags, H_ARRAY(svg_tags));
         foreign_attrs(p, n->attrs, ns);
     }
+    p->d->form_inputs += d_form_input(n);
     if (named(n, "template")) {
         n->template_contents = h_node(p, FRAGMENT);
         if (!n->template_contents)

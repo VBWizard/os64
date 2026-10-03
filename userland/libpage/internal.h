@@ -36,6 +36,7 @@ typedef struct {
 // change which property was edited. Model pins retain snapshot tree bytes;
 // state publication retains replaceable value bytes until views are updated.
 typedef struct PNodeState PNodeState;
+typedef struct PAttrStage PAttrStage;
 struct PNodeState {
     const os64_html_node_t *node;
     char *text;
@@ -47,7 +48,13 @@ struct PNodeState {
     char *retired_text, *retired_cache;
     int8_t on, selected;
     bool selection_set, text_user;
+    // A clean textarea clone can retain a current value unlike its children.
+    // Its cache holds the child-text baseline until a child mutation resets it.
+    bool text_clean;
     bool on_dirty, on_attr, selected_dirty, selected_attr;
+    // An owner-thread mutation plan borrows this link and clears it on
+    // publication or refusal; no property state is stored in the link.
+    PAttrStage *stage;
     PNodeState *next;
 };
 
@@ -210,6 +217,8 @@ const os64_html_node_t *p_ancestor(const os64_html_node_t *n, os64_html_tag_t ta
 char *p_subtree_text(os64_page_t *page, const os64_html_node_t *n, bool collapse, size_t *len);
 // The same into any arena, for a reader that must not write to the page.
 char *p_subtree_text_into(PArena *arena, const os64_html_node_t *n, bool collapse, size_t *len);
+// Direct Text children supply a textarea's raw default value.
+char *p_child_text_into(PArena *arena, const os64_html_node_t *node, size_t *len);
 // HTML non-negative integer prefix parsing, saturated on arithmetic overflow.
 bool p_nonnegative(const char *text, uint64_t *value);
 // Whether the select display size is one, using HTML integer parsing.

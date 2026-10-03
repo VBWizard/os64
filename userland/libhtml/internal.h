@@ -53,6 +53,10 @@ typedef struct {
     HBlock *retired;
     size_t retired_bytes;
     size_t records;     /* live form_owner records: a move with none skips its walk */
+    /* Owned HTML inputs with an unnamespaced form attribute, including
+     * detached nodes and template contents. Zero rules out explicit owners;
+     * reclaiming such a node must remove its contribution. */
+    size_t form_inputs;
     size_t max_depth;   /* the parse's limit on open elements: see h_depth_limit */
 } HDoc;
 _Static_assert(offsetof(HDoc, root_word) == offsetof(HDoc, root) + sizeof(HNode) &&
@@ -256,6 +260,7 @@ void *d_permanent(HDoc *d, size_t size, int64_t *why);
 void *d_alloc(HDoc *d, size_t size, int64_t *why);
 void *d_node_alloc(HDoc *d, size_t size, int64_t *why);
 void d_transfer_blocks(HDoc *to, HDoc *from);
+bool d_form_input(const HNode *node);
 HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
                        const char *utf8, size_t len, bool scripting,
                        uint64_t max_work, uint64_t *work, int64_t *status);

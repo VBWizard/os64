@@ -11,8 +11,8 @@ goes in DOM.md and its brief here is struck.
 |---|---|---|---|
 | D2b fragments and serialisation | Quinn and two scoped subagents | Fable, then an outside round (Codex); Chris schedules reviews | D2a is merged; publication stacked on D3 at Chris's request |
 | D3 — **Built; review pending** | Quinn and two scoped subagents | Fable | [D3 as built](DOM.md#d3-as-built) |
-| D6 reclaiming unheld detached subtrees | Opus | Fable | D2b (its churn driver) |
-| D5 the binding library and J3's fixture | Quinn | Fable | D2b and D3; D4 is not needed |
+| D6 reclaiming unheld detached subtrees | Available | Fable | D2b (its churn driver) |
+| D5 the binding library and J3's fixture | Quinn with scoped subagents | Fable | D2b and D3; D4 is not needed |
 | D4 the parser on the window's thread; D7 the loop | Fable | — | D4 any time; D7 after D5 |
 
 D4 and D7 stay with Fable because their sections of DOM.md are findings and
@@ -143,7 +143,9 @@ later private attribute records and empty result containers as well as
 reuse permanent-chunk nodes, without weakening the hour-long churn proof.
 D3's persistent state retains node keys, including option keys and
 default-value caches: those records need holds and paired releases when
-D6 introduces reclamation.
+D6 introduces reclamation. D5a stages new state records before tree mutation;
+those reservations must acquire their holds before the native verb and release
+them on abort, so post-mutation normalization can still read their keys.
 
 **What it is.** DOM.md § Wrappers, the paragraph that begins "So the
 reclamation JAVASCRIPT.md booked is not a someday item", and the DEBTS.md
@@ -193,6 +195,12 @@ collector deciding) is booked and is not this slice.
   control from its form clears the record, so by the time a subtree is
   detached no record crosses its edge; the walk asserts that rather than
   assuming it, and the record count comes down for each record it frees.
+- **Explicit-input count.** `os64_html_form_input_count` counts owned HTML
+  inputs with an unnamespaced `form` attribute, including detached/template
+  nodes and retained clone preparation. Its zero gate skips D5a's ID peer scan.
+  Physical reclamation subtracts an input's contribution before freeing its
+  attributes; detachment/retirement alone does not. `H_ATTRS_INLINE` and
+  `H_ATTRS_PRIVATE` can coexist, so reclamation must not assume exclusivity.
 - **Template contents** are a tree of their own under their template; a
   reclaimed template takes its contents with it.
 
@@ -247,6 +255,12 @@ harnesses and the corpus numbers unchanged with scripting off.
 
 ## D5 — the binding library (libdom) and J3's fixture
 
+**D5a is built; review pending in [PR #214](https://github.com/VBWizard/os64/pull/214).**
+The library contract and measured proof are
+in [DOM.md § D5a, as built](DOM.md#d5a-as-built),
+`userland/libdom/include/dom/dom.h` and `userland/libdom/LIBDOM.md`.
+The Yonder integration and guest-page acceptance below remain D5b.
+
 **What it is.** A new library, `userland/libdom` (name ruled, DOM.md
 ruling 3), that stands between libjs and libhtml/libpage: it makes the
 objects a script sees, converts arguments, calls one verb, and turns a
@@ -291,9 +305,10 @@ holds every wrapper strongly until teardown; every engine value C holds
 is in one of the registries that have a drain (the wrapper table, the
 listener lists, the task and timer queues; the last two are D7's); a
 value stored anywhere else is a finding; no finalizer owns a native
-resource; three budgets reach the script as exceptions (the engine's
-heap, the document's arena, the page's own allocations on the script's
-behalf); teardown runs in the seven listed steps and never from inside a
+resource; native document and page-owned allocation refusals reach script
+as named exceptions. Engine exhaustion follows libjs's sticky
+`LIMIT/MEMORY` contract and retires the runtime; it is not a resumable DOM
+exception. Teardown runs in the seven listed steps and never from inside a
 script. Class IDs come through `os64_js_class_id`, the context through
 `os64_js_context` with the unit's compiled-in ABI string, both in
 `userland/libjs/include/os64/js_engine.h` and governed by
@@ -365,7 +380,7 @@ libdom under ASan, and runs scripts whose outcome is checked against the
 tree the verbs built: identity (`body === body` across a rebuild),
 every surface entry once, each refusal reaching script as the right
 exception with the tree unchanged, the three budgets each met and
-reported, teardown in order with the registries drained and no leak, and
+reported through their owning contracts, teardown in order with the registries drained and no leak, and
 an allocation sweep over the binding's own allocations. In the guest, a
 page served by a local server with an inline script that changes a
 heading's text and a second that leaves a typed field alone, driven

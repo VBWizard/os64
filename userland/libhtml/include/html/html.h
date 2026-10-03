@@ -247,6 +247,11 @@ bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out);
  * freed memory in waiting; a verb refuses it (OS64_HTML_BAD_ARGUMENT). */
 typedef uint64_t os64_html_pin_t;
 uint64_t os64_html_version(const os64_html_document_t *doc);
+/* Owned HTML input nodes carrying an unnamespaced form attribute. Includes
+ * detached nodes and template contents, independent of input type/value.
+ * NULL answers zero. Zero permits skipping explicit-owner scans; a nonzero
+ * count does not establish that an affected radio is in the document tree. */
+size_t os64_html_form_input_count(const os64_html_document_t *doc);
 /* Whether a live node belongs to this document, connected or detached.
  * NULL for either argument answers false. This compares the library's
  * ownership mark; it neither walks the tree nor changes the document. */
@@ -298,6 +303,20 @@ int64_t os64_html_remove(os64_html_document_t *doc, os64_html_node_t *node);
 /* An attribute by its qualified name, as os64_html_attr finds it. Setting
  * one that exists keeps its place in the list; a new one goes last.
  * `set_text` replaces a TEXT or COMMENT node's data whole. */
+/* Changes are applied in order to one element's qualified attributes. A set
+ * retains an existing record's namespace and position; a new name goes last.
+ * A remove ignores value/value_len. All entries are validated before any
+ * change; failure preserves the tree, version, parse verdict and arena
+ * accounting, including peak. Complete success publishes once, with replaced
+ * records retired for existing pins. An unchanged final list is a no-op. */
+typedef struct {
+    const char *name, *value;
+    size_t value_len;
+    bool remove;
+} os64_html_attr_change_t;
+int64_t os64_html_set_attrs(os64_html_document_t *doc, os64_html_node_t *element,
+                            const os64_html_attr_change_t *changes, size_t count);
+
 int64_t os64_html_set_attr(os64_html_document_t *doc, os64_html_node_t *element,
                            const char *name, const char *value, size_t value_len);
 int64_t os64_html_remove_attr(os64_html_document_t *doc, os64_html_node_t *element,
