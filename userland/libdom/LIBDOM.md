@@ -100,7 +100,9 @@ Dirty flags retain their meaning as property edits rather than tree effects.
 Planning walks moving subtrees, prepares the old and new affected option lists,
 and resets clean textarea state only for direct child changes. Radio peer scans
 run for moving radio names or IDs that can retarget explicit form owners;
-unrelated control records stay sparse. Stage lookup uses a temporary link from
+ID planning is skipped when libhtml counts no owned inputs with a `form`
+attribute. The count includes detached inputs and template contents.
+Unrelated control records stay sparse. Stage lookup uses a temporary link from
 reserved records, cleared on commit/refusal. An unrelated text/tree edit needs
 no control-state allocation or model publication.
 

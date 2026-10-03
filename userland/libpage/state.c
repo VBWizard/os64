@@ -1575,11 +1575,12 @@ static bool tree_plan_collect(PReserve *reserve, PArena *scratch,
                                PTreeRoot *roots, PAttrStage **stages,
                                PTreeNames *names, PTreeNames *ids)
 {
+    bool explicit_owners = os64_html_form_input_count(reserve->state->doc) != 0;
     for (PTreeRoot *root = roots; root != NULL; root = root->next)
         for (const os64_html_node_t *top = root->node; top != NULL;
              top = root->siblings ? top->next : NULL)
             for (const os64_html_node_t *at = top; at != NULL; at = tree_next(top, at)) {
-                if ((tree_root(at) == reserve->state->doc->document ||
+                if (explicit_owners && (tree_root(at) == reserve->state->doc->document ||
                     (root->parent != NULL && tree_root(root->parent) == reserve->state->doc->document)) &&
                     !tree_name_add(scratch, ids, p_attr(at, "id"))) return false;
                 if (p_is(at, OS64_HTML_TAG_INPUT) && p_input_type(at) == OS64_PAGE_INPUT_RADIO) {

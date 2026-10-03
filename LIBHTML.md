@@ -576,6 +576,16 @@ value before publishing control state. The public contract is in `html.h`;
 binding and consumer evidence is in
 [DOM.md § D5a, as built](docs/design/pending/DOM.md#d5a-as-built).
 
+`os64_html_form_input_count` counts owned HTML inputs carrying an unnamespaced
+`form` attribute, including empty values, detached nodes and template contents.
+The parser, attribute commits, clones and published fragment ledgers maintain
+the count; refused attributes/fragments do not publish staged contributions.
+Retained nodes from a refused clone remain owned and counted. A zero count lets
+libpage skip ID-triggered explicit-owner planning. Nonzero is conservative:
+the counted input need not be a radio or lie in the document tree. Physical
+node reclamation removes its contribution before discarding its attributes;
+detachment alone does not.
+
 ### 2026-10-02: the parse that stops (DOM.md, slice D2a)
 
 A host that runs scripts needs the parser to wait for it. `scripting` is now

@@ -781,7 +781,9 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
     }
     HAttr *old = e->attrs;
     bool private = (*h_word(e) & H_ATTRS_PRIVATE) != 0;
+    bool form_input = d_form_input(e);
     e->attrs = prospective.attrs;
+    d->form_inputs = d->form_inputs - form_input + d_form_input(e);
     *h_word(e) |= H_ATTRS_PRIVATE;
     d->version++;
     if (private)
@@ -822,9 +824,11 @@ int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name
         return why;
     }
     HAttr **slot = attr_slot(e, name), *old = *slot;
+    bool form_input = d_form_input(e);
     d->version++;
     fresh->next = old ? old->next : NULL;
     *slot = fresh;
+    d->form_inputs = d->form_inputs - form_input + d_form_input(e);
     d_retire(d, old);
     form_attr_set(d, e, name);
     return OS64_HTML_OK;
@@ -841,8 +845,10 @@ int64_t os64_html_remove_attr(os64_html_document_t *doc, HNode *e, const char *n
     if (why)
         return why;
     HAttr **slot = attr_slot(e, name), *old = *slot;
+    bool form_input = d_form_input(e);
     d->version++;
     *slot = old->next;
+    d->form_inputs = d->form_inputs - form_input + d_form_input(e);
     d_retire(d, old);
     return OS64_HTML_OK;
 }
@@ -923,6 +929,7 @@ static HNode *clone_one(HDoc *d, const HNode *from, bool foreign, int64_t *why)
             *h_word(n) |= H_ATTRS_PRIVATE;
         } else if (!d_attrs_inherit(d, from, n, why))
             return NULL;
+        d->form_inputs += d_form_input(n);
         if (from->template_contents && !contents_new(d, n, why))
             return NULL;
     }

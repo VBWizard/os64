@@ -149,6 +149,8 @@ void d_transfer_blocks(HDoc *to, HDoc *from)
     to->pub.arena_bytes += from->pub.arena_bytes - sizeof(*from);
     to->pub.node_count += from->pub.node_count;
     to->records += from->records;
+    to->form_inputs += from->form_inputs;
+    from->form_inputs = 0;
     from->pub.arena_bytes = sizeof(*from);
 }
 void *h_alloc(os64_html_parser_t *p, size_t size)
@@ -248,6 +250,20 @@ static void fatal(const char *sentence)
 uint64_t os64_html_version(const os64_html_document_t *doc)
 {
     return doc ? ((const HDoc *)doc)->version : 0;
+}
+bool d_form_input(const HNode *node)
+{
+    if (node->kind != OS64_HTML_ELEMENT || node->ns != OS64_HTML_NS_HTML ||
+        node->tag != OS64_HTML_TAG_INPUT)
+        return false;
+    for (const HAttr *attr = node->attrs; attr; attr = attr->next)
+        if (!attr->ns && h_eq(attr->name, "form"))
+            return true;
+    return false;
+}
+size_t os64_html_form_input_count(const os64_html_document_t *doc)
+{
+    return doc ? ((const HDoc *)doc)->form_inputs : 0;
 }
 bool os64_html_owns_node(const os64_html_document_t *doc, const os64_html_node_t *node)
 {

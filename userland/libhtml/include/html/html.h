@@ -247,6 +247,11 @@ bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out);
  * freed memory in waiting; a verb refuses it (OS64_HTML_BAD_ARGUMENT). */
 typedef uint64_t os64_html_pin_t;
 uint64_t os64_html_version(const os64_html_document_t *doc);
+/* Owned HTML input nodes carrying an unnamespaced form attribute. Includes
+ * detached nodes and template contents, independent of input type/value.
+ * NULL answers zero. Zero permits skipping explicit-owner scans; a nonzero
+ * count does not establish that an affected radio is in the document tree. */
+size_t os64_html_form_input_count(const os64_html_document_t *doc);
 /* Whether a live node belongs to this document, connected or detached.
  * NULL for either argument answers false. This compares the library's
  * ownership mark; it neither walks the tree nor changes the document. */

@@ -565,7 +565,10 @@ document-owned; reclamation belongs to D6. Bindings use these state-aware
 entrances, and presentation watches both HTML and state revisions.
 Plans walk moving subtrees, reserve affected old/new option lists and clean
 textarea parents, and scan named radio peers when a move or explicit form-owner
-ID can change their groups. A reserved record supplies a temporary stage link,
+ID can change their groups. Libhtml's owned explicit-input count rules out
+ID planning when zero.
+Detached inputs and template contents are included, so nonzero remains a
+conservative trigger. A reserved record supplies a temporary stage link,
 cleared on success/refusal. Unrelated tree edits keep sparse records sparse,
 allocate no control state and skip model publication. Template contents keep
 their independent tree when the template host moves.

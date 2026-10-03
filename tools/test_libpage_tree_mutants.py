@@ -8,6 +8,10 @@ import tempfile
 from test_libpage_rebuild_mutants import ROOT, compile_driver
 
 MUTANTS = [
+    ("id-scan-without-explicit-inputs", "bool explicit_owners = os64_html_form_input_count(reserve->state->doc) != 0;",
+     "bool explicit_owners = true;"),
+    ("ignore-explicit-inputs", "bool explicit_owners = os64_html_form_input_count(reserve->state->doc) != 0;",
+     "bool explicit_owners = false;"),
     ("whole-document-plan", "PTreeNames names = {0}, ids = {0};",
      "roots[2].node = state->doc->document;\n    PTreeNames names = {0}, ids = {0};"),
     ("radio-peer-scan", "if (!tree_plan_peers(&reserve,", "if (false && !tree_plan_peers(&reserve,"),

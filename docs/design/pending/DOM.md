@@ -1207,7 +1207,10 @@ revisions; libdom does not own a rendering loop.
 
 Mutation plans walk the moving subtrees and prepare affected old/new option
 lists. Moving radios or IDs that can retarget explicit form owners require
-a peer scan; unrelated controls are not staged. Clean
+a peer scan; the ID path is skipped when libhtml's owned explicit-input count
+is zero. That count includes detached nodes and template contents; nonzero
+does not establish an affected radio in the document tree. Unrelated controls
+are not staged. Clean
 textarea state is reset for direct child changes. Reserved records carry
 temporary stage links, cleared on commit/refusal, so lookup does not scan the
 stage list. Unrelated tree edits allocate no control state and skip model
@@ -1347,8 +1350,9 @@ prototypes alongside wrappers, and clone preparation chooses its source kind's
 prototype before native publication. LIBDOM.md lists the property scopes and
 the constructor/full-DOM boundary.
 
-Final review proof: full libpage 254,057 / 0 with 397 independently failed build
-allocations; binding target profile 1,527 / 0 with 101 reached allocation cuts,
+Round-1 correction proof at `839e6801`: full libpage 254,057 / 0 with 397
+independently failed build allocations; binding target profile 1,527 / 0
+with 101 reached allocation cuts,
 instrumented profile 4,227 / 0 with 551 cuts, including 40 clone refusal points.
 ASan/UBSan/LSan remain enabled. All 29 DOM, six semantic tree and 26 D3 state
 mutants compile and are caught; the tree checks do not count removal of a
@@ -1359,10 +1363,52 @@ QEMU `pagetest` and `domtest` return their success badges and pass final heap
 checks, including native null/property-detection cases. Installed libraries and
 tests match their built bytes, and the owned guest is stopped.
 
-**Parser cost.** Seven alternating O2 host parses per revision, after warmup,
-compare with untouched D2b: Wikipedia medians 24.365 ms before and 24.377 ms
-here (+0.049%). Observed ranges are 24.214–39.585 ms and 24.164–24.645 ms;
-the difference is below sample variation. Both produce the same tree,
+**ID planning without explicit owners.** Libhtml counts owned HTML inputs
+with an unnamespaced `form` attribute. Creation by the parser, clones and
+packed fragment copies adds contributions; attribute commits update them;
+fragment publication transfers its staged count. Attribute/fragment refusal
+leaves the owner's count unchanged. Detached nodes, template contents and
+retained clone preparation still count. Zero lets the tree planner omit its
+ID set and explicit-owner scan; nonzero remains a conservative trigger rather
+than an index of connected radios. D6's brief records the physical-reclamation
+decrement and the nonexclusive inline/private attribute flags.
+
+An independent O2 host probe uses a live model and repeatedly inserts/removes
+a fresh `div id=moved` into body. These are medians of seven batches of 100
+pairs. Both variants use the new HTML metadata implementation; the before
+variant uses `839e6801`'s planner to isolate this guard's effect.
+
+| Fixture | Owned nodes | Before pair, microseconds | After pair, microseconds | Allocations after |
+| --- | --- | --- | --- | --- |
+| Wikipedia | 15,471 | 163.01 | 0.13 | 0 |
+| 1,000 options | 2,006 | 11.71 | 0.13 | 0 |
+| 10,000 options | 20,006 | 120.82 | 0.13 | 0 |
+| 60,000 options | 120,006 | 2,333.64 | 0.14 | 0 |
+
+State bytes remain 80 for Wikipedia and 384 for the option fixtures. These
+are warm host measurements, not P5/Yonder scripting timings. The count adds
+one size word per document: the Wikipedia corpus keeps its tree, 15,470
+parsed nodes and 1,210,567 work units, with peak arena 4,377,488 bytes.
+
+Round-2 proof: native HTML DOM 451,748 / 0, including an independent count
+oracle across the random walk; full libpage 254,057 / 0 with 397 failed build
+allocations; DOM target/instrumented profiles 1,527 / 0 and 4,227 / 0 with
+101/551 reached allocation cuts. Seven count-update mutants and eight tree
+mutants compile and are caught, including the zero-count ID allocation gate
+and the retained explicit-owner scan. Full HTML passes 1,218 / 0, 10,525
+reference runs, allocation/corpus gates and 135,680 bounded fuzz mutations.
+Normal consumers pass: Yonder 115 / 0 with six matching paints, wend
+177,854 / 0 and libflow 18,585 / 0 with twelve matching dumps and 597 sampled
+fuzz trees. The strict userland build passes. Copied-disk QEMU pagetest/domtest pass,
+including native attribute/clone/detached-fragment counts, four runtime
+lifetimes and final heap verification. Installed libraries/tests match their
+build bytes; the owned guest is stopped.
+
+**Parser cost at the initial D5a freeze.** Seven alternating O2 host parses
+per revision, after warmup, compared with untouched D2b: Wikipedia medians
+24.365 ms before and 24.377 ms here (+0.049%). Observed ranges were
+24.214–39.585 ms and 24.164–24.645 ms;
+the difference was below sample variation. Both produced the same tree,
 15,470 nodes, 1,210,567 work units and 4,377,480 peak arena bytes. This is
 a host parser measurement, not Yonder/P5 scripting performance.
 

@@ -36,6 +36,7 @@ static void round_trip(void)
             "parse feed");
     os64_html_document_t *document = os64_html_parser_finish(parser);
     require(document != NULL && document->refusal == OS64_HTML_OK, "parse finish");
+    require(os64_html_form_input_count(document) == 0, "no explicit input owners in fixture");
     os64_page_state_t *state = os64_page_state_create(document, 0);
     require(state != NULL, "control state creation");
     os64_page_t *model = os64_page_build(document, "https://fixture.test/dom", NULL, state);
@@ -88,6 +89,12 @@ static void round_trip(void)
          "tick.checked=true;var tickc=tick.cloneNode();"
          "tickc.removeAttribute('checked');check(tickc.checked,'dirty checked clone');"
          "check(confirm('continue')===false && prompt('value')===null);");
+    eval(runtime, "q.setAttribute('form','external');var qform=q.cloneNode();"
+                  "p.innerHTML='<input form=external>';document.body.removeChild(p);");
+    require(os64_html_form_input_count(document) == 3, "attribute, clone and detached fragment count");
+    eval(runtime, "q.removeAttribute('form');qform.removeAttribute('form');"
+                  "p.firstChild.removeAttribute('form');");
+    require(os64_html_form_input_count(document) == 0, "explicit input count returns to zero");
     os64_dom_drain(dom);
     os64_dom_drain(dom);
     require(os64_dom_registry_count(dom) == 0, "registry drain");

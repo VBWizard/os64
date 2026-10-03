@@ -195,6 +195,12 @@ collector deciding) is booked and is not this slice.
   control from its form clears the record, so by the time a subtree is
   detached no record crosses its edge; the walk asserts that rather than
   assuming it, and the record count comes down for each record it frees.
+- **Explicit-input count.** `os64_html_form_input_count` counts owned HTML
+  inputs with an unnamespaced `form` attribute, including detached/template
+  nodes and retained clone preparation. Its zero gate skips D5a's ID peer scan.
+  Physical reclamation subtracts an input's contribution before freeing its
+  attributes; detachment/retirement alone does not. `H_ATTRS_INLINE` and
+  `H_ATTRS_PRIVATE` can coexist, so reclamation must not assume exclusivity.
 - **Template contents** are a tree of their own under their template; a
   reclaimed template takes its contents with it.
 

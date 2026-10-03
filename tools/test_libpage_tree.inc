@@ -120,6 +120,7 @@ static void tree_depth_and_state_cap(void)
     os64_page_state_t *state=os64_page_state_create(doc,cap);
     os64_html_node_t *parent=rebuild_id(doc,"p");
     fresh=os64_html_create_element(doc,OS64_HTML_NS_HTML,"span",&why);
+    rebuild_expect("tree cap: ID-bearing preparation",os64_html_set_attr(doc,fresh,"id","moved",5)==0);
     version=os64_html_version(doc);revision=os64_page_state_version(state);heap=live;
     rebuild_expect("tree cap: unrelated insertion needs no state storage",os64_page_node_insert(state,parent,fresh,NULL)==0);
     rebuild_expect("tree cap: unrelated insertion stays sparse",version!=os64_html_version(doc)&&revision==os64_page_state_version(state)&&
@@ -226,6 +227,12 @@ static void tree_sparse_large_page(void)
     rebuild_expect("sparse tree: remove",os64_page_node_remove(state,other)==0);
     rebuild_expect("sparse tree: replace children",os64_page_node_replace_children(state,parent,text)==0);
     rebuild_expect("sparse tree: clear children",os64_page_node_replace_children(state,parent,NULL)==0);
+    rebuild_expect("sparse tree: text edits allocate no control state",allocations==0&&bytes==os64_page_state_bytes(state)&&revision==os64_page_state_version(state));
+    os64_html_node_t *container=os64_html_create_element(doc,OS64_HTML_NS_HTML,"div",&why);
+    rebuild_expect("sparse tree: ID-bearing preparation",container&&os64_html_set_attr(doc,container,"id","moved",5)==0);
+    allocations=0;
+    rebuild_expect("sparse tree: ID-bearing append",os64_page_node_insert(state,parent,container,NULL)==0);
+    rebuild_expect("sparse tree: ID-bearing remove",os64_page_node_remove(state,container)==0);
     rebuild_expect("sparse tree: no control allocations or edits",allocations==0&&bytes==os64_page_state_bytes(state)&&revision==os64_page_state_version(state));
     os64_page_free(page);os64_page_state_free(state);os64_html_document_free(doc);
     rebuild_expect("sparse tree: no leaks",live==0);
