@@ -1,8 +1,8 @@
 # DOM.md — one tree, and a script that may change it
 
 *Written 2026-10-01 by Fable. This is packet D0 of
-[JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. D1, D2a
-and D3 are built (§ Slices); the remaining slices are proposals. Read
+[JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. D1, D2a, D2b, D3 and D5a are merged (§ Slices); D5b is implemented
+and awaiting review. The remaining slices are proposals. Read
 against the tree at `b55c3770`, the vendored QuickJS 2026-06-04 source
 (`userland/libjs/upstream/`) and the R0 runtime contract
 (`userland/libjs/CONTRACT.md`). Names of functions that do not exist yet
@@ -710,7 +710,7 @@ builder decides, and the proof in this house's shape.
 | D2b | **Merged (#212, `dca2fe46`).** Fragment parsing and serialisation | All 192 fragment fixtures, contextual serialisation, transactional allocation/work cuts and bounded-buffer proof; § D2b, as built |
 | D3 | **Merged (#211, `3f5fa28a`).** `os64_page_rebuild`, pinned models, the `STALE` gate, shared node state and script property APIs | `tools/test_libpage_rebuild.inc`: detach/reinsert, never-inserted state, value modes, option identity, current-type sanitization, person/script origin, pins, transactional allocation sweeps and independent random walks; § D3, as built |
 | D4 | The stream: yonder parses on its own thread. No script | yonder's and libway's harnesses unchanged in result; the guest walk that proved Y3, its server log identical; the window live through a stalled body |
-| D5 | **D5a merged (#214, `72b2e710`); D5b in progress.** The binding library and J3's fixture | § D5a, as built records library host/guest proof. J3 remains separate: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
+| D5 | **D5a merged (#214, `72b2e710`); D5b implemented, awaiting review.** The binding library and J3's fixture | § D5a, as built records library host/guest proof. § D5b, as built records J3 fixture proof: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
 | D6 | Reclaiming unheld detached subtrees | The churn page that met the budget in a minute runs for an hour |
 | D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order | J4's evidence, per contract |
 | later | `document.write`; geometry; the libjs reclaim slice | each with its own |
@@ -1412,10 +1412,8 @@ the difference was below sample variation. Both produced the same tree,
 15,470 nodes, 1,210,567 work units and 4,377,480 peak arena bytes. This is
 a host parser measurement, not Yonder/P5 scripting performance.
 
-**Next seam.** D5b seats the library in Yonder with a fixture-only execution
-schedule, rebuild/redraw, widget state migration and queued-work navigation
-teardown. It must add cascade/layout pins before changing a tree beneath those
-snapshots. D6 adds paired holds for wrapper keys, query roots, state/model keys
+**Next seam.** D5b below seats the library in Yonder and adds cascade/layout
+pins before changing a tree beneath those snapshots. D6 adds paired holds for wrapper keys, query roots, state/model keys
 and either cached query answers or a proven version-before-dereference rule.
 New control-state reservations need their holds before calling a tree verb,
 with releases on abort, because normalization reads those keys after mutation.
@@ -1423,6 +1421,119 @@ Strings copied into JavaScript hold no native snapshot bytes. Libjs retains
 R0's fatal destroy invariant; reporting/reclaiming destroy is a separate
 reviewed slice before scripting is offered for ordinary browsing. D4 and D7
 are Fable's slices.
+
+
+### D5b, as built
+
+**Implemented 2026-10-03; awaiting Fable review.** Yonder links libdom/libjs
+and runs a bounded finished-document fixture. The loader finishes HTML on a
+worker with the chosen scripting policy, resuming parser script stops without
+executing them. The window thread queues connected HTML inline classic scripts
+in tree order and runs at most one per turn, followed by its budgeted Promise
+checkpoint and one native rebuild. This does not implement D4/D7 execution
+order: external `src`, module, async/defer scheduling, inserted-script
+execution, DOM events, timers, document.write, geometry and location APIs are
+outside this slice. A type absent or empty, or exactly `text/javascript`,
+`application/javascript`, `text/ecmascript` or `application/ecmascript`, qualifies;
+other types and template contents are excluded.
+
+**The switch.** Settings adds **Run page scripts**, default off. Apply changes
+this window; Save as default writes `scripts = on/off` to `yonder.conf`.
+Missing or unrecognized values leave scripts off. A changed setting cancels
+in-flight navigation and queued scripts, destroys the runtime, then requests
+reload with the new parser mode. POST reload retains the resend question;
+refusing it leaves the already drawn page with no remaining script runtime.
+An empty window waits for its next page. The status line begins **SCRIPTS ON**
+while enabled. The document's captured mode also reaches `flow_env_t.scripting`,
+so raw `noscript` fallback text is hidden when enabled and ordinary fallback
+markup is parsed and drawn when disabled. The agent list scrolls within one
+fewer nominal row so the added switch fits the existing settings window.
+
+**Owners and snapshots.** The runtime is created lazily before the first
+runnable script. Its native queue holds nodes, not JavaScript values. Page
+state and document outlive the runtime. Departure, mode change and window
+close drop the queue, drain binding registries, destroy the engine, free binding
+records, then release widgets, layout, cascade, models/state and document.
+Libjs's fatal destroy invariant and libhtml's pinned-document refusal remain.
+`os64_page_retain/free` reference models on their owner thread; a flow tree
+retains the model whose indices its boxes carry and exposes it through
+`flow_model`. Flow and cascade independently pin their borrowed document bytes.
+The caller still keeps the document, cascade inputs, fonts and text context
+alive until their borrowers are released.
+
+**Publication.** HTML version and page-state revision are observed separately.
+A failed model rebuild preserves the old drawing and its native STALE action
+gate. Once a new model exists, a failed cascade/layout leaves older geometry
+and its retained model alive. Links and controls resolve through native nodes
+before consulting current meaning; detached old links do nothing. Resize and
+sheet completion cannot publish layout while a DOM rebuild is owed. Failures
+retry on another external event before running the next script, without a
+self-generated retry loop. Successful HTML changes stage fresh sheet metadata,
+cascade and flow beside the old snapshot, then publish them. Ready linked CSS
+parses, including imports and duplicate links, transfer ownership after their
+old cascade is released; text mutations therefore preserve loaded CSS without
+refetching it. A parse has one staged borrower; abort leaves its old owner intact.
+Stylesheet metadata retains the loader's omission-on-allocation-refusal policy.
+Page scroll offsets are retained and clamped; box scroll positions remain node
+keyed. Node-based page scroll anchoring across DOM changes is not added.
+
+**Controls and pictures.** Widgets are individually allocated and node keyed.
+Surviving controls preserve widget identity, focus, caret, selection and typed
+buffers across index changes and even a partial layout omitting their boxes.
+Before a script or activation, changed editor buffers flush to shared state.
+Native-value changes refresh editors; unchanged projected values leave partial
+numeric edits alone. State-only property changes refresh controls without
+rebuilding HTML geometry. Widget allocation refusal preserves the old list;
+missing new widgets can be retried by a subsequent HTML rebuild. Picture maps
+are rebuilt against current model indices, with bounds checks while older
+geometry remains. Catalog URLs are owned rather than borrowed from a replaced
+model; decoded pictures and pending work survive unrelated changes.
+
+**Bounds and outcomes.** The schedule refuses more than 4096 qualifying
+scripts. Each script source is copied before evaluation, capped at 4 MiB, so
+self-modification cannot invalidate it. Runtime heap/stack/source use the
+measured 64 MiB/256 KiB/4 MiB profile; this fixture chooses a one-second deadline
+and 4096 jobs per turn, with the binding's default 8 MiB cap. Exceptions and
+unhandled rejections report inline source diagnostics and allow later scripts.
+Limit, cancellation and host failure retire the remaining schedule and runtime.
+The per-page picture catalog admits at most 4096 URLs and 4 MiB of owned URL
+bytes; existing catalog entries remain usable at the cap. Console output uses
+stdout; alert reports on the status line.
+
+**Evidence.** `tools/test_yonder_scripts_host.sh` exercises the actual Yonder
+queue, publication and widget code with real libui editing and native libraries,
+a target-profile engine, ASan/UBSan and normal LSan. It passes **1473/0** checks:
+one task per turn, wrapper identity, a real key edit and caret/selection/focus,
+control reorder/kind/hidden transitions, state-only refresh, invalid numeric
+input, current-link routing through older geometry, navigation cancellation,
+job/source/schedule caps, URL ownership and setting persistence. A 160-cut
+native sweep reaches 18 model refusals and 21 layout refusals, with 121 completed
+rebuilds; a separate 64-cut stylesheet sweep covers duplicate parses/imports,
+rollback and retry. The ledger is empty after teardown. Worker services and
+fixture transport are hosted; this suite does not simulate a compositor or
+claim guest timing performance. The real fetch suite adds a multi-chunk HTML
+case with scripts before/after the read boundary: **27/0**. Both libdom profiles
+pass **1527/0** and **4227/0** with sanitizers; libpage rebuild **68328/0**, libflow
+**18585/0** plus matching corpus dumps, libgarb's parser/cascade/allocation suites,
+and the painter **115/0** plus six matching paints pass. Strict userland build
+passes with bounded `-j4` concurrency.
+
+A private QEMU image/server loads `tools/yonder_script_fixture/index.html`.
+Two inline scripts change the visible heading to **Two JavaScript donuts!**;
+a real typed **Q** remains and the held wrapper matches after redraw. Navigation
+from `cancel.html` discards its queued sentinel and shows `quiet.html`.
+`yonder --script-audit URL` reports **heap problems=0** on scripted-page retirement:
+this is heap integrity, while the host ledger/LSan and libjs destroy invariant
+supply the leak checks. Settings Apply/Save, saved-off startup, enable/reload,
+off-mode fallback, and on-mode fallback suppression were checked on the guest.
+The 21 installed library/app/test/fixture files were byte-compared with their
+build inputs. Guest `domtest` passes four lifetimes; `pagetest` and `htmltest`
+pass, and `htmltest pinned` still exits with the HTML badge (`0x48544d4c`).
+No P5 scripting or ordinary-site compatibility evidence is claimed.
+
+**Remaining gates.** D6 detached reclamation, D7's event loop/execution order,
+and reporting/reclaiming runtime teardown remain separate reviewed work before
+recommending this switch for ordinary browsing. D4 and D7 remain Fable's slices.
 
 ## Booked, with their triggers
 

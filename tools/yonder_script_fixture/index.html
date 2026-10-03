@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>JavaScript donuts</title>
+<style>
+body { background: #edf4ff; color: #183a63; font-family: sans-serif; }
+input { width: 280px; }
+</style>
+<h1 id="heading">JavaScript is off</h1>
+<p>This is the finished-document D5b integration fixture.</p>
+<p>Tab into this field during the first script's short pause, and type Q:</p>
+<input id="field" value="">
+<p id="result">Waiting for the two inline scripts.</p>
+<noscript><p id="fallback">Scripts are disabled. This fallback should be visible.</p></noscript>
+<script>
+var heldHeading = document.getElementById('heading');
+var heldField = document.getElementById('field');
+console.log('J3:first-start');
+var firstUntil = Date.now() + 600;
+while (Date.now() < firstUntil) {}
+heldHeading.textContent = 'JavaScript donuts!';
+console.log('J3:first-ready');
+</script>
+<script>
+if (heldHeading !== document.getElementById('heading') ||
+    heldField !== document.getElementById('field'))
+    throw Error('A reference lost its identity');
+heldHeading.textContent = 'Two JavaScript donuts!';
+document.getElementById('result').textContent = 'Reference kept; field = ' + heldField.value;
+console.log('J3:second-ready field=' + heldField.value);
+</script>

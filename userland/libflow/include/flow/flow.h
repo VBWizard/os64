@@ -11,11 +11,13 @@
 // arrive through the callbacks in flow_env_t, which is what lets the whole
 // library run on the host against the fake font backend.
 //
-// THE DOCUMENT, THE MODEL, THE CASCADE AND THE TEXT CONTEXT MUST OUTLIVE
+// THE DOCUMENT, THE CASCADE AND THE TEXT CONTEXT MUST OUTLIVE
 // WHATEVER IS BUILT FROM THEM. A style points into the tree, or into the
 // cascade's sheets, for the family names a page wrote, and nothing is
 // copied that can be pointed at; every text fragment's run lives on
 // `env->text`, and freeing the layout releases each run against it.
+// A layout retains its model and pins the document's borrowed strings until
+// flow_free; the document itself still belongs to its caller.
 
 #include "html/html.h"
 #include "page/page.h"
@@ -513,6 +515,9 @@ typedef struct {
     // page as it reads in document order, one keypress from the page as it
     // was designed to look (POSITION.md § What positioning costs).
     bool static_only;
+    // The document's parsing mode: enabled scripting hides noscript's raw
+    // fallback text. Zero keeps the fallback visible for script-free faces.
+    bool scripting;
 } flow_env_t;
 
 #define FLOW_ARENA_DEFAULT ((size_t)64 << 20)
@@ -649,10 +654,13 @@ typedef struct flow_tree flow_tree_t;
 // `viewport_height`; otherwise a tree whose `incomplete` says whether it is
 // whole — a document libhtml refused partway, or a model libpage could not
 // finish, is not, however it lays out. Every call is a whole rebuild
-// (LAYOUT.md, ruling 2).
+// (LAYOUT.md, ruling 2). The tree pins document strings and retains its
+// model until free. Its cascade, fonts and text context outlive it.
 flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *model,
                          int32_t width, const flow_env_t *env);
 void flow_free(flow_tree_t *tree);
+// Borrowed snapshot whose indices the boxes carry; NULL if built without one.
+const os64_page_t *flow_model(const flow_tree_t *tree);
 
 // The page's size in whole pixels: its height, and its width — at least
 // the width laid out at, more where a word or a table would not fit —

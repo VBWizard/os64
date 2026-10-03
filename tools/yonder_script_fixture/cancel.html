@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8"><title>Queued-script navigation</title>
+<h1>Navigate away during the first script's short pause.</h1>
+<input id="field" value="">
+<script>
+var held = document.body;
+console.log('J3:cancel-start');
+var until = Date.now() + 850;
+while (Date.now() < until) {}
+console.log('J3:cancel-first-ready');
+</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>var pause = Date.now() + 80; while (Date.now() < pause) {}</script>
+<script>
+console.log('J3:queued-script-ran');
+document.body.textContent = 'The queued script ran before navigation.';
+</script>

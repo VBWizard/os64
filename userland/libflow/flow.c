@@ -46,6 +46,9 @@ typedef struct {
 } Layer;
 
 struct flow_tree {
+    const os64_html_document_t *doc;
+    os64_html_pin_t pin;
+    const os64_page_t *model;
     FStyles *styles;
     FBoxes *boxes;
     FLayout *layout;
@@ -717,7 +720,15 @@ void flow_free(flow_tree_t *tree)
     os64_free(tree->stacked);
     os64_free(tree->layers);
     os64_free(tree->scrollers);
+    os64_page_free((os64_page_t *)tree->model);
+    if (tree->pin != 0)
+        os64_html_unpin(tree->doc, tree->pin);
     os64_free(tree);
+}
+
+const os64_page_t *flow_model(const flow_tree_t *tree)
+{
+    return tree != NULL ? tree->model : NULL;
 }
 
 // ── Stacking (CSS 2.1 Appendix E, § 9.9.1) ───────────────────────────────
@@ -896,6 +907,13 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     flow_tree_t *tree = os64_calloc(1, sizeof(*tree));
     if (tree == NULL)
         return NULL;
+    tree->doc = doc;
+    tree->pin = os64_html_pin(doc);
+    if (tree->pin == 0 || (model != NULL && !os64_page_retain(model))) {
+        flow_free(tree);
+        return NULL;
+    }
+    tree->model = model;
     // The public boxes mirror what pass 3 placed, one for each box and
     // fragment, so the budgeted arenas already bound them: no cap of their
     // own, which would turn a page the budget cut short into no page.

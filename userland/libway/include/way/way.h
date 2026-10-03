@@ -140,6 +140,9 @@ typedef struct {
     // way_leg_as, so nothing off that thread reads the session's.
     const char *agent;
     way_face_t face;
+    // Parser noscript policy for this load, captured by the requesting face.
+    // The finished-document loader resumes script stops without executing.
+    bool scripting;
     char status[WAY_SENTENCE_MAX];
     // The page this load was asked for from — a link followed, a form sent,
     // a refresh — which its Referer names (way_referrer). Empty for an

@@ -342,6 +342,13 @@ os64_page_t *os64_page_build(const os64_html_document_t *doc, const char *docume
 // Either model may be freed first. Successful normalization publishes to
 // the other live models before replacing state storage.
 os64_page_t *os64_page_rebuild(const os64_page_t *old);
+// Borrowed state, including private state created by build; valid while a
+// model reference remains alive. The borrower must not free private state. NULL answers NULL.
+os64_page_state_t *os64_page_shared_state(const os64_page_t *page);
+// Owner-thread reference for a consumer keeping snapshot indices/strings.
+// False for NULL or count exhaustion. Free releases one reference; the last
+// releases the model, its document pin and its shared-state membership.
+bool os64_page_retain(const os64_page_t *page);
 void os64_page_free(os64_page_t *page);
 
 // The walk ran short of memory partway. What is in the model is real and

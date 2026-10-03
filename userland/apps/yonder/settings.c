@@ -16,16 +16,17 @@
 
 #define CONF_NAME "yonder.conf"
 #define CONF_AGENT "agent"
+#define CONF_SCRIPTS "scripts"
 #define CONF_CACHE "cache"
 #define CONF_CACHE_DIR "cache_dir"
 #define CONF_CACHE_MB "cache_mb"
 
 // The list's height, in rows; the dialog's rows are a line of words, the
-// list, the field, and the cache's row: its box, its size and its button.
+// list, the field, the cache row and the page-script switch.
 // What the cache holds is said on the dialog's own status line. The helper's window is
 // one size, and a body that does not fit it is not laid out at all.
-#define LIST_ROWS 6
-#define BODY_ROWS (LIST_ROWS + 3)
+#define LIST_ROWS 5
+#define BODY_ROWS (LIST_ROWS + 4)
 
 static struct {
     os64_ui_settings_t d;
@@ -33,7 +34,8 @@ static struct {
     os64_ui_listbox_t list;
     os64_ui_textfield_t field;
     char field_buf[YONDER_AGENT_MAX];
-    void (*use)(const char *agent);
+    void (*use)(const char *agent, bool scripts);
+    os64_ui_checkbox_t scripts;
     way_cache_t *cache;
     bool usable;                    // the cache has a directory it can keep things in
     os64_ui_checkbox_t keep;
@@ -82,6 +84,13 @@ void yonder_agents_release(void)
         s_kept = k->next;
         os64_free(k);
     }
+}
+
+bool yonder_settings_saved_scripts(void)
+{
+    char value[8];
+    return os64_conf_get(CONF_NAME, CONF_SCRIPTS, value, sizeof(value)) == 0 &&
+           os64_streq(value, "on");
 }
 
 bool yonder_settings_saved_agent(char *out, size_t cap)
@@ -222,7 +231,7 @@ static void place(os64_ui_widget_t *w, os64_gui_rect_t r, bool staged)
 
 static bool arrange(os64_ui_settings_t *d, os64_gui_rect_t b, int32_t row, bool staged)
 {
-    // The last row reads as a sentence — the box, its size, "MB" — with
+    // The cache row reads as a sentence — the box, its size, "MB" — with
     // the button at its right. The size field is as wide as the largest
     // size it takes.
     int32_t widths[5];
@@ -244,6 +253,7 @@ static bool arrange(os64_ui_settings_t *d, os64_gui_rect_t b, int32_t row, bool 
     place(&s.size.w, (os64_gui_rect_t){b.x + box, last, size, row}, staged);
     place(&s.mb, (os64_gui_rect_t){b.x + box + size + row / 2, last, mb, row}, staged);
     place(&s.empty, (os64_gui_rect_t){b.x + b.w - button, last, button, row}, staged);
+    place(&s.scripts.w, (os64_gui_rect_t){b.x, last + row, b.w, row}, staged);
     return true;
 }
 
@@ -264,7 +274,7 @@ static void apply(os64_ui_settings_t *d, bool save)
         os64_ui_settings_report(d, "No memory to keep that agent; nothing changed.");
         return;
     }
-    s.use(agent);
+    s.use(agent, s.scripts.checked);
     const char *name = yonder_agent_name(agent);
     // A cache that cannot keep anything has no box to tick, and saves no
     // `cache = off` that would outlive whatever stopped it.
@@ -276,6 +286,8 @@ static void apply(os64_ui_settings_t *d, bool save)
     char line[160], kept[40];
     os64_snprintf(kept, sizeof(kept), "keeping up to %lu MB", (unsigned long)mb);
     bool saved = !save || (os64_conf_set(CONF_NAME, CONF_AGENT, agent) == 0 &&
+                           os64_conf_set(CONF_NAME, CONF_SCRIPTS,
+                                          s.scripts.checked ? "on" : "off") == 0 &&
                            (!s.usable || (os64_conf_set(CONF_NAME, CONF_CACHE,
                                                         keeping ? "on" : "off") == 0 &&
                                           os64_conf_set(CONF_NAME, CONF_CACHE_MB,
@@ -283,15 +295,17 @@ static void apply(os64_ui_settings_t *d, bool save)
     if (!saved)
         os64_strcopy(line, sizeof(line), "Applied here, but yonder.conf could not be written.");
     else
-        os64_snprintf(line, sizeof(line), "%s: asking as %s, %s%s",
+        os64_snprintf(line, sizeof(line), "%s: asking as %s, %s, scripts %s%s",
                       save ? "Saved" : "Applied", name != NULL ? name : "the agent typed",
                       keeping ? kept : "keeping nothing",
-                      save ? ", here and in new windows." : ", from the next page on.");
+                      s.scripts.checked ? "on" : "off",
+                      save ? ", here and in new windows." : ", here.");
     os64_ui_settings_report(d, line);
 }
 
 void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
-                          void (*use)(const char *agent), way_cache_t *cache)
+                          void (*use)(const char *agent, bool scripts), way_cache_t *cache,
+                          bool scripts)
 {
     // Open already: the helper brings it forward and keeps what was typed.
     if (!os64_ui_settings_open(&s.d, parent, "yonder Settings", BODY_ROWS, arrange, apply, NULL))
@@ -311,10 +325,11 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     os64_ui_checkbox(&s.keep, "Keep pictures and style sheets, up to", way_cache_enabled(cache),
                      NULL, NULL);
     os64_ui_textfield(&s.size, s.size_buf, sizeof(s.size_buf), NULL, NULL, NULL);
+    os64_ui_checkbox(&s.scripts, "Run page scripts", scripts, NULL, NULL);
     os64_ui_label(&s.mb, "MB");
     os64_ui_button(&s.empty, "Empty the cache", emptied, NULL);
     os64_ui_widget_t *kids[] = {&s.heading, &s.list.w, &s.field.w, &s.keep.w, &s.size.w, &s.mb,
-                                &s.empty};
+                                &s.empty, &s.scripts.w};
     for (size_t i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
         os64_ui_add_child(&s.d.body, kids[i]);
     os64_ui_listbox_set(&s.d.ui, &s.list, yonder_agent_npresets(), selected);

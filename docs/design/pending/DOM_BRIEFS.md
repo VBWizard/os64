@@ -12,7 +12,7 @@ goes in DOM.md and its brief here is struck.
 | D2b fragments and serialisation — **Merged #212** | Quinn and two scoped subagents | Fable, then an outside round (Codex); Chris schedules reviews | [D2b as built](DOM.md#d2b-as-built); merged after D3 |
 | D3 — **Merged #211** | Quinn and two scoped subagents | Fable | [D3 as built](DOM.md#d3-as-built) |
 | D6 reclaiming unheld detached subtrees | Available | Fable | D2b (its churn driver) |
-| D5 — **D5a merged #214; D5b in progress** | Quinn with scoped subagents | Fable | D2b and D3; D4 is not needed |
+| D5 — **D5a merged #214; D5b implemented; awaiting review** | Quinn with scoped subagents | Fable | D2b and D3; D4 is not needed |
 | D4 the parser on the window's thread; D7 the loop | Fable | — | D4 any time; D7 after D5 |
 
 D4 and D7 stay with Fable because their sections of DOM.md are findings and
@@ -258,7 +258,9 @@ harnesses and the corpus numbers unchanged with scripting off.
 The library contract and measured proof are
 in [DOM.md § D5a, as built](DOM.md#d5a-as-built),
 `userland/libdom/include/dom/dom.h` and `userland/libdom/LIBDOM.md`.
-The Yonder integration and guest-page acceptance below remain D5b.
+D5b implements the Yonder integration, default-off settings switch and guest
+acceptance; it awaits review. [DOM.md § D5b, as built](DOM.md#d5b-as-built)
+records the implementation, evidence and remaining ordinary-browsing gates.
 
 **What it is.** A new library, `userland/libdom` (name ruled, DOM.md
 ruling 3), that stands between libjs and libhtml/libpage: it makes the
