@@ -888,6 +888,8 @@ here.
 status)` and `os64_html_serialize(node, children_only, scripting, out,
 cap)`. D2b needs D2a's parser machinery; its PR is stacked on D3 at
 Chris's request. D3's state API is not a prerequisite of fragment parsing.
+Review and merge are pending in [PR #212](https://github.com/VBWizard/os64/pull/212),
+`codex/dom-d2b` → `codex/dom-d3`; retarget to `userland` after D3 merges.
 
 **Parsing is contextual and inert.** An owned element supplies the
 namespace, tokenizer state, insertion mode, integration-point attributes

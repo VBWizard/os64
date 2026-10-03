@@ -119,8 +119,9 @@ question about what os64 wants is asked of Chris with a lean.
 
 The brief is retired in favour of [DOM.md § D2b, as built](DOM.md#d2b-as-built)
 and the public contract in `userland/libhtml/include/html/html.h`.
-Implementation is on `codex/dom-d2b`, stacked on D3 at Chris's request;
-D3 is not an architectural dependency. D6 consumes the packed-payload
+Implementation is in [PR #212](https://github.com/VBWizard/os64/pull/212),
+`codex/dom-d2b`, stacked on D3 at Chris's request; D3 is not an
+architectural dependency. D6 consumes the packed-payload
 ownership seam. The as-built section records the corrected escaping/NUL
 rules, the historical select compatibility boundary and the full proof.
 Chris schedules Fable's and the outside review after publication.
