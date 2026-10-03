@@ -116,15 +116,28 @@ PNodeState *p_state_find(const os64_page_state_t *state, const os64_html_node_t 
     return *record_slot(state->table, state->cap, node);
 }
 
+PNodeState *p_reserve_find(const PReserve *reserve, const os64_html_node_t *node)
+{
+    if (reserve->table != NULL)
+        return *record_slot(reserve->table, reserve->cap, node);
+    PNodeState *edit = p_state_find(reserve->state, node);
+    if (edit != NULL)
+        return edit;
+    if (reserve->pending != NULL)
+        return *record_slot(reserve->pending, reserve->pending_cap, node);
+    for (edit = reserve->records; edit != NULL; edit = edit->next)
+        if (edit->node == node)
+            return edit;
+    return NULL;
+}
+
 bool p_reserve_node(PReserve *reserve, const os64_html_node_t *node)
 {
     os64_page_state_t *state = reserve->state;
-    if (reserve->table == NULL && p_state_find(state, node) != NULL)
-        return true;
-    if (reserve->table != NULL && *record_slot(reserve->table, reserve->cap, node) != NULL)
+    if (p_reserve_find(reserve, node) != NULL)
         return true;
     size_t cap = reserve->table != NULL ? reserve->cap : state->cap;
-    size_t count = reserve->table != NULL ? reserve->count : state->count;
+    size_t count = state->count + reserve->count;
     if (cap == 0)
         cap = 16;
     while (count + 1 > cap / 2) {
@@ -132,7 +145,8 @@ bool p_reserve_node(PReserve *reserve, const os64_html_node_t *node)
             return false;
         cap *= 2;
     }
-    if (reserve->table == NULL || cap != reserve->cap) {
+    size_t previous_cap = reserve->table != NULL ? reserve->cap : state->cap;
+    if (cap != previous_cap) {
         if (cap > SIZE_MAX / sizeof(*reserve->table))
             return false;
         PNodeState **table = p_state_alloc(state, cap * sizeof(*table));
@@ -144,10 +158,31 @@ bool p_reserve_node(PReserve *reserve, const os64_html_node_t *node)
         for (size_t i = 0; i < source_cap; i++)
             if (source[i] != NULL)
                 *record_slot(table, cap, source[i]->node) = source[i];
+        if (reserve->table == NULL)
+            for (PNodeState *edit = reserve->records; edit != NULL; edit = edit->next)
+                *record_slot(table, cap, edit->node) = edit;
         p_state_dealloc(state, reserve->table);
         reserve->table = table;
         reserve->cap = cap;
-        reserve->count = count;
+        p_state_dealloc(state, reserve->pending);
+        reserve->pending = NULL;
+        reserve->pending_cap = 0;
+    } else if (reserve->table == NULL && reserve->count >= 8 &&
+               (reserve->pending == NULL || reserve->count + 1 > reserve->pending_cap / 2)) {
+        // A bounded small-list lookup makes one-node reservations cheap.
+        // Larger batches index just their new records, not the live table.
+        size_t pending_cap = reserve->pending_cap != 0 ? reserve->pending_cap * 2 : 32;
+        if (pending_cap < reserve->pending_cap || pending_cap > SIZE_MAX / sizeof(*reserve->pending))
+            return false;
+        PNodeState **pending = p_state_alloc(state, pending_cap * sizeof(*pending));
+        if (pending == NULL)
+            return false;
+        os64_memset(pending, 0, pending_cap * sizeof(*pending));
+        for (PNodeState *edit = reserve->records; edit != NULL; edit = edit->next)
+            *record_slot(pending, pending_cap, edit->node) = edit;
+        p_state_dealloc(state, reserve->pending);
+        reserve->pending = pending;
+        reserve->pending_cap = pending_cap;
     }
     PNodeState *edit = p_state_alloc(state, sizeof(*edit));
     if (edit == NULL)
@@ -157,7 +192,10 @@ bool p_reserve_node(PReserve *reserve, const os64_html_node_t *node)
     edit->on = edit->selected = -1;
     edit->next = reserve->records;
     reserve->records = edit;
-    *record_slot(reserve->table, reserve->cap, node) = edit;
+    if (reserve->table != NULL)
+        *record_slot(reserve->table, reserve->cap, node) = edit;
+    else if (reserve->pending != NULL)
+        *record_slot(reserve->pending, reserve->pending_cap, node) = edit;
     reserve->count++;
     return true;
 }
@@ -207,25 +245,34 @@ void p_reserve_abort(PReserve *reserve)
         reserve->records = next;
     }
     p_state_dealloc(reserve->state, reserve->table);
+    p_state_dealloc(reserve->state, reserve->pending);
     reserve->table = NULL;
+    reserve->pending = NULL;
+    reserve->cap = reserve->count = reserve->pending_cap = 0;
 }
 
 void p_reserve_commit(PReserve *reserve)
 {
     os64_page_state_t *state = reserve->state;
+    bool replacement = reserve->table != NULL;
     if (reserve->table != NULL) {
         p_state_dealloc(state, state->table);
         state->table = reserve->table;
         state->cap = reserve->cap;
-        state->count = reserve->count;
         reserve->table = NULL;
     }
+    state->count += reserve->count;
     while (reserve->records != NULL) {
         PNodeState *next = reserve->records->next;
+        if (!replacement)
+            *record_slot(state->table, state->cap, reserve->records->node) = reserve->records;
         reserve->records->next = state->records;
         state->records = reserve->records;
         reserve->records = next;
     }
+    p_state_dealloc(state, reserve->pending);
+    reserve->pending = NULL;
+    reserve->cap = reserve->count = reserve->pending_cap = 0;
 }
 
 void p_state_publish(os64_page_state_t *state)
@@ -367,24 +414,6 @@ no_memory:
     return -OS64_PAGE_REASON_NO_MEMORY;
 }
 
-// Match libpage's options walk without copying labels just to ask a choice.
-static const os64_html_node_t *option_next(const os64_html_node_t *select,
-                                          const os64_html_node_t *previous)
-{
-    const os64_html_node_t *at = previous == NULL ? select->first_child : tree_next(select, previous);
-    while (at != NULL && !p_is(at, OS64_HTML_TAG_OPTION))
-        at = tree_next(select, at);
-    return at;
-}
-
-static bool option_disabled(const os64_html_node_t *select, const os64_html_node_t *option)
-{
-    for (const os64_html_node_t *at = option; at != select; at = at->parent)
-        if ((at == option || p_is(at, OS64_HTML_TAG_OPTGROUP)) && p_has_attr(at, "disabled"))
-            return true;
-    return false;
-}
-
 static bool option_selected(os64_page_state_t *state, const os64_html_node_t *option)
 {
     const PNodeState *edit = p_state_find(state, option);
@@ -402,8 +431,8 @@ int64_t os64_page_node_selected_index(os64_page_state_t *state,
         return -OS64_PAGE_REASON_WRONG_KIND;
     bool multiple = p_has_attr(node, "multiple");
     int32_t chosen = -1, first = -1, i = 0;
-    for (const os64_html_node_t *at = option_next(node, NULL); at != NULL; at = option_next(node, at), i++) {
-        if (first < 0 && !option_disabled(node, at))
+    for (const os64_html_node_t *at = p_option_next(node, NULL); at != NULL; at = p_option_next(node, at), i++) {
+        if (first < 0 && !p_option_disabled(node, at))
             first = i;
         if (option_selected(state, at) && (!multiple || chosen < 0))
             chosen = i;
@@ -421,19 +450,19 @@ static int64_t select_assign(os64_page_state_t *state, const os64_html_node_t *n
     PReserve reserve = {.state = state};
     if (!p_reserve_node(&reserve, node))
         goto no_memory;
-    for (const os64_html_node_t *at = option_next(node, NULL); at != NULL; at = option_next(node, at))
+    for (const os64_html_node_t *at = p_option_next(node, NULL); at != NULL; at = p_option_next(node, at))
         if (!p_reserve_node(&reserve, at))
             goto no_memory;
     int32_t before = -1;
     (void)os64_page_node_selected_index(state, node, &before);
     bool changed = false;
     int32_t i = 0;
-    for (const os64_html_node_t *at = option_next(node, NULL); at != NULL; at = option_next(node, at), i++)
+    for (const os64_html_node_t *at = p_option_next(node, NULL); at != NULL; at = p_option_next(node, at), i++)
         changed |= option_selected(state, at) != (i == index);
     p_reserve_commit(&reserve);
     p_state_find(state, node)->selection_set = true;
     i = 0;
-    for (const os64_html_node_t *at = option_next(node, NULL); at != NULL; at = option_next(node, at), i++)
+    for (const os64_html_node_t *at = p_option_next(node, NULL); at != NULL; at = p_option_next(node, at), i++)
     {
         p_state_find(state, at)->selected = i == index ? 1 : 0;
         p_state_find(state, at)->selected_dirty = true;
@@ -474,7 +503,7 @@ static char *state_copy(os64_page_state_t *state, const char *s, size_t len)
 
 // Version-only invalidation can normalize the current value/mode, but
 // cannot reconstruct type transitions a caller made between observations.
-// The binding must notify state when it performs a value-mode transition.
+// The state-aware mutation entrance is tracked in DEBTS.md under libpage.
 static bool normalize_dirty(PReserve *reserve, const os64_html_node_t *node,
                              os64_page_element_t element, os64_page_input_t input)
 {
@@ -564,7 +593,7 @@ int64_t os64_page_node_value(os64_page_state_t *state, const os64_html_node_t *n
     } else if (element == OS64_PAGE_EL_SELECT) {
         int32_t chosen = -1, i = 0;
         (void)os64_page_node_selected_index(state, node, &chosen);
-        for (const os64_html_node_t *at = option_next(node, NULL); at != NULL; at = option_next(node, at), i++)
+        for (const os64_html_node_t *at = p_option_next(node, NULL); at != NULL; at = p_option_next(node, at), i++)
             if (i == chosen) {
                 raw = p_attr(at, "value");
                 if (raw == NULL) {
@@ -662,7 +691,7 @@ int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node
     if (element == OS64_PAGE_EL_SELECT) {
         PArena temporary = {.budget = state};
         int32_t chosen = -1, i = 0;
-        for (const os64_html_node_t *at = option_next(node, NULL); at != NULL; at = option_next(node, at), i++) {
+        for (const os64_html_node_t *at = p_option_next(node, NULL); at != NULL; at = p_option_next(node, at), i++) {
             const char *text = p_attr(at, "value");
             size_t text_len = text != NULL ? os64_strlen(text) : 0;
             if (text == NULL)
@@ -703,6 +732,7 @@ int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node
         if (!changed) {
             bool origin_changed = edit->text_user != user;
             edit->text_user = user;
+            edit->text_version = os64_html_version(state->doc);
             if (origin_changed)
                 p_state_changed(state);
             p_reserve_abort(&reserve);
@@ -797,13 +827,9 @@ bool p_state_normalize(os64_page_t *page)
         p_publish(page, i);
         if (c->input == OS64_PAGE_INPUT_RADIO || c->input == OS64_PAGE_INPUT_CHECKBOX) {
             (void)os64_page_node_checked(state, c->node, &c->checked);
-            if (!p_reserve_node(&reserve, c->node))
-                goto no_memory;
         }
         for (int32_t o = 0; o < c->noptions; o++) {
             ((os64_page_option_t *)c->options)[o].selected = option_selected(state, c->options[o].node);
-            if (!p_reserve_node(&reserve, c->options[o].node))
-                goto no_memory;
         }
     }
     for (int32_t i = 0; i < page->ncontrols; i++) {
@@ -834,8 +860,9 @@ bool p_state_normalize(os64_page_t *page)
                     }
         }
     }
-    // No allocation follows this commit. Comparing against preexisting live
-    // records (or raw defaults for fresh nodes) gives the effective revision.
+    // Default records are sparse: untouched markup needs a record when
+    // normalization changes its checkedness or selectedness. Existing
+    // records retain their identity and dirty flags through normalization.
     bool changed = false;
     for (int32_t i = 0; i < page->ncontrols; i++) {
         const os64_page_control_t *c = &page->controls[i];
@@ -843,23 +870,37 @@ bool p_state_normalize(os64_page_t *page)
             bool before = false;
             (void)os64_page_node_checked(state, c->node, &before);
             changed |= before != c->checked;
+            if ((p_state_find(state, c->node) != NULL ||
+                 c->checked != p_has_attr(c->node, "checked")) &&
+                !p_reserve_node(&reserve, c->node))
+                goto no_memory;
         }
-        for (int32_t o = 0; o < c->noptions; o++)
+        for (int32_t o = 0; o < c->noptions; o++) {
             changed |= option_selected(state, c->options[o].node) != c->options[o].selected;
+            if ((p_state_find(state, c->options[o].node) != NULL ||
+                 c->options[o].selected != p_has_attr(c->options[o].node, "selected")) &&
+                !p_reserve_node(&reserve, c->options[o].node))
+                goto no_memory;
+        }
     }
+    // No allocation follows this commit.
     p_reserve_commit(&reserve);
     changed |= values_apply(&reserve);
     for (int32_t i = 0; i < page->ncontrols; i++) {
         const os64_page_control_t *c = &page->controls[i];
         if (c->input == OS64_PAGE_INPUT_RADIO || c->input == OS64_PAGE_INPUT_CHECKBOX) {
             PNodeState *edit = p_state_find(state, c->node);
-            edit->on = c->checked ? 1 : 0;
-            edit->on_attr = p_has_attr(c->node, "checked");
+            if (edit != NULL) {
+                edit->on = c->checked ? 1 : 0;
+                edit->on_attr = p_has_attr(c->node, "checked");
+            }
         }
         for (int32_t o = 0; o < c->noptions; o++) {
             PNodeState *edit = p_state_find(state, c->options[o].node);
-            edit->selected = c->options[o].selected ? 1 : 0;
-            edit->selected_attr = p_has_attr(c->options[o].node, "selected");
+            if (edit != NULL) {
+                edit->selected = c->options[o].selected ? 1 : 0;
+                edit->selected_attr = p_has_attr(c->options[o].node, "selected");
+            }
         }
     }
     p_state_publish(state);

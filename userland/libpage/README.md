@@ -14,7 +14,12 @@ until its last model is freed, including models returned by rebuild.
 
 State is keyed by node, including detached or never-inserted controls, and
 options have independent node keys. Its default ceiling is 16 MiB, including
-allocation headers and script-operation scratch. `state_bytes` reports live
+allocation headers and script-operation scratch. Builds keep default records
+where normalization differs from
+markup and preserve existing records; property setters can spend the cap on
+a whole group. Reservations reuse spare lookup capacity and copy the live
+table when it needs to grow. Model and node option indices share the HTML
+list-of-options walk, including its excluded subtrees. `state_bytes` reports live
 charged memory. `state_version` reports effective property changes separately
 from HTML's version. Getter-only cache fills leave the revision alone;
 effective dirty-value normalization advances it.

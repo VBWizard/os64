@@ -497,8 +497,14 @@ their attribute defaults and dirty flags, dirty text and default-value
 caches. Option labels and fallback submission text occupy separate fields.
 A file input holds no selected file; markup cannot supply one.
 
-The document owner creates state with a byte ceiling (zero selects 16 MiB),
-and frees it after its models. Passing NULL to `os64_page_build` creates
+The document owner creates state with a byte ceiling (zero selects 16 MiB).
+The cap includes headers, records, tables, strings and operation scratch. A build
+retains default records where normalization differs from markup and keeps
+existing records; ordinary untouched options and ticks need no dense table
+of defaults. Property assignment can spend the cap on a whole group. New
+records reuse spare live lookup capacity at commit; larger pending batches
+have a private index, and the live lookup is copied when it needs to grow.
+The owner frees state after its models. Passing NULL to `os64_page_build` creates
 private state shared until the last model, including rebuilt models, is
 freed. State does not itself pin the document; each model does. Freeing
 explicit state while models borrow it stops with the PAGE badge.

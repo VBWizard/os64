@@ -195,10 +195,60 @@ static void rebuild(void)
     os64_serial_log("pagetest: PASS D3 rebuild and script state");
 }
 
+static void review_regressions(void)
+{
+    char html[4096];
+    const char *prefix = "<input id=q type=range min=0 max=20><select><option value=A>A";
+    size_t used = os64_strlen(prefix);
+    os64_memcpy(html, prefix, used);
+    const char *option = "<option value=B>B";
+    size_t option_len = os64_strlen(option);
+    for (int i = 0; i < 64; i++) {
+        os64_memcpy(html + used, option, option_len);
+        used += option_len;
+    }
+    os64_memcpy(html + used, "</select>", sizeof("</select>"));
+    os64_html_document_t *doc;
+    os64_page_t *page = build(html, &doc);
+    os64_page_free(page);
+    os64_page_state_t *state = os64_page_state_create(doc, 1024);
+    require(state != NULL, "review capped state");
+    page = os64_page_build(doc, "https://host/page", NULL, state);
+    require(page && !os64_page_incomplete(page), "review sparse options fit cap");
+    os64_html_node_t *input = (os64_html_node_t *)os64_page_control(page, 0)->node;
+    os64_html_node_t *select = (os64_html_node_t *)os64_page_control(page, 1)->node;
+    require(os64_page_node_set_value(state, input, "10", 2) == 0, "review initial dirty value");
+    require(os64_html_set_attr(doc, input, "max", "15", 2) == 0 &&
+        os64_page_node_set_value(state, input, "10", 2) == 0, "review equal value after constraint");
+    const char *value; size_t len;
+    require(os64_page_node_value(state, input, &value, &len) == 0 && len == 2 &&
+        os64_streq(value, "10"), "review current dirty getter");
+    require(os64_page_node_set_selected_index(state, select, 1) == -OS64_PAGE_REASON_NO_MEMORY,
+        "review whole group obeys cap");
+    int32_t index;
+    require(os64_page_node_selected_index(state, select, &index) == 0 && index == 0,
+        "review group refusal keeps selection");
+    os64_page_free(page); os64_page_state_free(state);
+
+    int64_t status;
+    os64_html_node_t *nested = os64_html_create_element(doc, OS64_HTML_NS_HTML, "option", &status);
+    require(nested && status == 0 && os64_html_set_attr(doc, nested, "value", "nested", 6) == 0 &&
+        os64_html_insert(doc, select->first_child, nested, NULL) == 0, "review nest an option");
+    state = os64_page_state_create(doc, 0);
+    page = os64_page_build(doc, "https://host/page", NULL, state);
+    require(page && !os64_page_incomplete(page) && os64_page_control(page, 1)->noptions == 65,
+        "review model option list");
+    require(os64_page_node_set_selected_index(state, select, 1) == 0 &&
+        os64_page_node_value(state, select, &value, &len) == 0 && os64_streq(value, "B") &&
+        os64_streq(os64_page_control(page, 1)->value, "B"), "review shared option numbering");
+    os64_page_free(page); os64_page_state_free(state); os64_html_document_free(doc);
+    os64_serial_log("pagetest: PASS D3 review sparse defaults and shared option walk");
+}
+
 int main(void)
 {
     require(os64_heap_verify()==0,"heap before");
-    numeric();state();navigation();reference_edges();network_targets();rebuild();
+    numeric();state();navigation();reference_edges();network_targets();rebuild();review_regressions();
     require(os64_heap_verify()==0,"heap after");
     os64_printf("pagetest: numeric conversion, range grids, control state and submission passed\n");
     os64_serial_log("pagetest: PASS numeric conversion, range grids, control state and submission");
