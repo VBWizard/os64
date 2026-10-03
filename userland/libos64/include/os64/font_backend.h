@@ -13,7 +13,7 @@
 #define OS64_FONT_MEMORY_MAX (128u * 1024u * 1024u)
 #define OS64_FONT_PIXEL_MAX 256u
 #define OS64_FONT_MASK_DIM_MAX 4096u
-#define OS64_FONT_FACE_MAX 64u
+#define OS64_FONT_FACE_MAX 1024u
 #define OS64_FONT_NAME_CAP 128u
 
 /* Signed 26.6 pixels. X increases right; Y increases down. Rectangles are

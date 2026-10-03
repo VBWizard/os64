@@ -487,7 +487,9 @@ static garb_env_t css_view(int32_t w, int32_t h, uint32_t zoom)
 // see is not the one they were cascaded at — a media query or a vw reads
 // it. The new tree replaces the old only once it exists (LAYOUT.md §
 // Bounds), and the cascade the old one points into is freed with it.
-// False on no memory, the page on screen untouched.
+// False on no memory, the page on screen untouched — unless a first try
+// stopped partway, when the old tree is let go to make room for a second
+// (below), and with no memory even for that the page has no tree.
 static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom)
 {
     garb_cascade_t *cascade = p->cascade;
@@ -511,6 +513,18 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom)
     s_env.viewport_height = view.height;
     s_env.zoom = zoom;
     flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
+    // The tree on screen holds the faces its runs were shaped in until it
+    // is freed — each one a size of a file, counted against the text
+    // engine's budget and its face limit — so a layout at new sizes (a
+    // zoom, most of all) can stop partway for want of the room the old tree
+    // holds. Then both go, and the page is laid out once more in the whole
+    // budget.
+    if (fresh != NULL && flow_incomplete(fresh) && p->tree != NULL) {
+        flow_free(fresh);
+        flow_free(p->tree);
+        p->tree = NULL;
+        fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
+    }
     s_env.cascade = NULL;
     if (fresh == NULL) {
         if (cascade != p->cascade)
@@ -616,9 +630,10 @@ static struct {
     char status_rest[512];
     int32_t pointer_x, pointer_y;   // where the pointer last was, for hover
     bool running;
-    // A resize is laid out once the events that arrived with it are
-    // drained: a drag sends a stream of them, and a big page takes long
-    // enough to lay out that doing it per event would freeze the window.
+    // A resize or a zoom is laid out once the events that arrived with it
+    // are drained: a drag sends a stream of them, a person zooming presses
+    // several times, and a big page takes long enough to lay out that
+    // doing it per event would freeze the window.
     bool relayout_due;
     uint8_t seq;                    // the view's VT100 key-burst state
 
@@ -3099,12 +3114,14 @@ static void toggle_positioning(void)
 static const uint32_t kZoomSteps[] = {250,  330,  500,  670,  750,  800,  900,  1000, 1100,
                                       1250, 1500, 1750, 2000, 2500, 3000, 4000, 5000};
 
+// The zoom in force from now on; the page follows once the events queued
+// with this one are drained, so presses in a row lay it out once.
 static void zoom_to(uint32_t zoom)
 {
     if (zoom == g.zoom)
         return;
     g.zoom = zoom;
-    relayout(true);
+    g.relayout_due = true;
 }
 
 // The next step in (`in`) or out from the zoom in force; one between steps

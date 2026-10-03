@@ -25,8 +25,9 @@ typedef struct {
 } os64_text_options_t;
 
 /* Context operations are serialized by the caller. Destroy is BUSY while any
- * externally retained font/run exists. Successful open copies input bytes;
- * the caller may then free its buffer. Each new open gets a unique identity
+ * externally retained font/run exists. Successful open keeps a copy of the
+ * input bytes — one per distinct file in the context, shared by every face
+ * opened from the same bytes — so the caller may then free its buffer. Each new open gets a unique identity
  * within the context, independent of pathname and pointer reuse. */
 os64_font_status_t os64_text_create(const os64_text_options_t *, os64_text_context_t **out);
 os64_font_status_t os64_text_destroy(os64_text_context_t *);

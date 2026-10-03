@@ -584,7 +584,25 @@ change keeps the element at the top of the view there, its offset scaled.
 The status line says `zoomed 125%` when it is not 100%. **The Settings
 window** gains a row, `Zoom every page to [ ] %`, saved as `zoom =` in
 `yonder.conf`; the shared settings dialog grows taller for a body with
-more rows.
+more rows. Presses in a row are laid out ONCE, after the events that came
+with them (the same deferral a window drag gets).
+
+**Zoom found the text engine's two ceilings** (Chris on the P5, 10/3: a
+page zoomed to 500% stayed broken when zoomed back). Every size of a face
+is a face of its own, and the text engine COPIED the whole font file for
+each — 0.75 MB of DejaVuSans per size — and refused a 65th live face. A
+page using thirty-odd sizes in four styles met both at 100%; a zoom asks
+for every size again while the tree on screen still holds the old ones.
+Both were booked in 04-web-faces.md, and both are paid: a context keeps
+ONE copy of a file's bytes, shared by every face opened from the same
+bytes and freed with the last (`text_cache.c`'s `text_file`, matched by
+content, never by the caller's pointer), and `OS64_FONT_FACE_MAX` is 1024
+— measured with FreeType on the host, a face costs 22 KB once its file is
+shared (sixty sizes of DejaVuSans: 2.2 MB, where the copies made it 47).
+A page of 32 sizes now lays out complete in 1.5 s where it stopped partway
+in 8. And when a relayout still comes back incomplete while the old tree
+exists, yonder frees both and lays the page out once more in the whole
+budget, so a page is never stuck behind the tree it is replacing.
 
 **`image-rendering`** (Images 3 § 5.3, inherited): `pixelated` and
 `crisp-edges` — and the spellings older pixel-art pages wrote,
@@ -606,7 +624,15 @@ the transparent black in would give 0x8f), and a picture at its own size
 copied. In the guest: Ctrl+=, Ctrl+-, Ctrl+0 and Ctrl+wheel on the
 corpus's Wikipedia page and `/tests/pages/pile3-zoom.html`, which drew at
 150% as headless Chrome does at a device scale of 1.5; the Settings row
-applied at once and saved `zoom = 125` to /home's `yonder.conf`.
+applied at once and saved `zoom = 125` to /home's `yonder.conf`. The text
+engine: `test_text_host`'s "one copy per file" (two sizes, one file, the
+file outliving the first face; equal bytes from another buffer the same
+file, and the same buffer with new bytes a new one, as "reload identity"
+already held), the family cache pinning `OS64_FONT_FACE_MAX` faces with
+runs and refused one more, and the whole font battery green, real FreeType
+included. In the guest, a page of 32 sizes in four styles laid out complete
+at 100%, at 500% and at 100% again — before, INCOMPLETE at all three, and
+blank on the way back.
 
 ### Booked
 
