@@ -243,7 +243,8 @@ version that must not move.
 
 The brief is retired in favour of [DOM.md § D3, as built](DOM.md#d3-as-built)
 and the public contract in `userland/libpage/include/page/page.h`.
-Implementation is on `codex/dom-d3`; D5 consumes the state revision and the
+Implementation is in [PR #211](https://github.com/VBWizard/os64/pull/211),
+`codex/dom-d3`; D5 consumes the state revision and the
 attribute-transition handoff, and D6 adds holds for state and model keys.
 
 ## D6 — reclaiming detached subtrees nothing holds

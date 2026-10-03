@@ -1,6 +1,6 @@
 # JavaScript library and runner work plan
 
-Status: running work checklist, updated 2026-10-02. The product decisions are in
+Status: running work checklist, updated 2026-10-03. The product decisions are in
 [JAVASCRIPT.md](JAVASCRIPT.md). This plan separates work so Chris can assign
 packets to Opus and Fable without overlapping ownership. The status table records
 completed work, review dependencies, and remaining acceptance gates. It is updated
@@ -22,7 +22,7 @@ records completed evidence while named acceptance work remains.
 "Implemented; review pending" records a validated packet that still needs
 independent review.
 
-| Work | Status on 2026-10-02 | Evidence and remaining work |
+| Work | Status on 2026-10-03 | Evidence and remaining work |
 | --- | --- | --- |
 | libos64 prerequisites | **Merged** | [PR #188](https://github.com/VBWizard/os64/pull/188), merge `6a6c08c1`: allocation-size query and four string/memory verbs, host coverage and guest test registration. |
 | R0 runtime contract | **Merged** | [PR #189](https://github.com/VBWizard/os64/pull/189), merge `a426386d`: reviewed public header, lifecycle/capability contract, examples, pinned QuickJS foundation. R0 delivered the interface; R2 records implementation. |
@@ -36,7 +36,7 @@ independent review.
 | D1 libhtml mutation core | **Merged** | [PR #190](https://github.com/VBWizard/os64/pull/190), merge `5c7d62ce`. Mutation/lifetime verbs and maintained tests; `parse_fragment` belongs to D2b. |
 | D2a scripting-enabled parsing | **Merged** | [PR #199](https://github.com/VBWizard/os64/pull/199), merge `8016dd43`: stop/resume, the end of the input, abandon, and a tree read and changed between calls; evidence in DOM.md § D2a, as built. |
 | D2b fragment parsing | **Pending** | Fragment parsing and serialization; acceptance in DOM.md. |
-| D3 page rebuild/control state | **Built; review pending** | `codex/dom-d3`: shared node state, pinned models, STALE gates, script property APIs and transactional rebuilds. Evidence and D5/D6 handoffs in DOM.md § D3, as built. |
+| D3 page rebuild/control state | **In review** | [PR #211](https://github.com/VBWizard/os64/pull/211), `codex/dom-d3`: shared node state, pinned models, STALE gates, script property APIs and transactional rebuilds. Evidence and D5/D6 handoffs in DOM.md § D3, as built; Fable reviews before merge. |
 | D4 parser stream handoff | **Pending** | Yonder parser-thread handoff and responsive streaming; no script execution in this slice. |
 | D5 DOM binding/first page fixture | **Pending** | Bindings and J3: visible text change, stable references/form edits and safe navigation teardown. Needs the runtime and earlier DOM slices. |
 | D6 detached-subtree reclamation | **Pending** | Reclaim unheld detached trees and prove bounded long-running churn. |

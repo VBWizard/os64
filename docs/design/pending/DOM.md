@@ -884,7 +884,8 @@ here.
 
 Implemented on `codex/dom-d3`, initially based on `userland` at `ae0a23d5`
 and rebased onto `a90eba97` (the merged GIF improvements) for publication;
-review and merge are pending. `userland/libpage/state.c` owns control state;
+Review and merge are pending in [PR #211](https://github.com/VBWizard/os64/pull/211).
+`userland/libpage/state.c` owns control state;
 `page.h` is the public contract. The implementation, test harness and
 integration were split between Quinn and two scoped subagents, followed
 by Quinn's review of the combined change.
