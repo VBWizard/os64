@@ -1097,9 +1097,11 @@ void flow_box_radii(const flow_box_t *box, int32_t radii[4][2])
     for (int s = 0; s < 4; s++) {
         int axis = kSide[s][2];
         int64_t sum = r[kSide[s][0]][axis] + r[kSide[s][1]][axis];
-        // A radius as written can be a percentage of a box near 2^31 px
-        // many times over: the products are taken in 128 bits.
-        if (sum > 0 && (__int128)size[axis] * den < (__int128)sum * num) {
+        // f_len holds a length to LEN_MAX, so a radius is at most ~2^31
+        // pixels, a side's sum 2^32 and a side 2^31: each product is under
+        // 2^63, and unsigned 64 bits hold it — no 128-bit arithmetic, whose
+        // division is a libgcc helper the freestanding link has not got.
+        if (sum > 0 && (uint64_t)size[axis] * (uint64_t)den < (uint64_t)sum * (uint64_t)num) {
             num = size[axis];
             den = sum;
         }
@@ -1107,9 +1109,10 @@ void flow_box_radii(const flow_box_t *box, int32_t radii[4][2])
     // Scaled, a radius is no longer than its side, so it fits an int32_t
     // as the box does — and one written longer than its side, with no other
     // along it, is scaled to the side (a 100px corner of a 50px box is 50).
+    // r * num is under 2^62.
     for (int c = 0; c < 4; c++)
         for (int k = 0; k < 2; k++)
-            radii[c][k] = (int32_t)((__int128)r[c][k] * num / den);
+            radii[c][k] = (int32_t)(r[c][k] * num / den);
 }
 
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)

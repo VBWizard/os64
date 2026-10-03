@@ -44,6 +44,13 @@ typedef struct {
     void (*mask)(void *ctx, os64_gui_rect_t rect, const uint8_t *alpha, uint32_t colour);
 } yonder_verbs_t;
 
+// Whose background is the CANVAS's (CSS 2.1 § 14.2): the root's when it has
+// one, colour or picture, else the body's when it has one, else none. The
+// painter's own rule, for a face that must know it apart from painting —
+// the canvas is behind the whole view wherever its owner's box has gone.
+// `verbs->backdrop` is asked with no area, which only asks.
+const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verbs_t *verbs);
+
 // Paints every box that meets `viewport`, canvas first, the page scrolled
 // to `scroll` (flow_visit's). `paper` is the canvas when neither the root
 // nor the body has a background, colour or picture.

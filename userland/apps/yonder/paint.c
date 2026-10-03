@@ -857,6 +857,13 @@ static const flow_box_t *canvas_owner(const Painter *p, const flow_box_t *root)
     return NULL;
 }
 
+const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verbs_t *verbs)
+{
+    Painter p = {.v = verbs};
+    const flow_box_t *root = flow_root(tree);
+    return root != NULL ? canvas_owner(&p, root) : NULL;
+}
+
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                   uint32_t paper, const yonder_verbs_t *verbs)
 {

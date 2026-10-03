@@ -364,6 +364,10 @@ static os64_html_document_t *parse(const char *html, size_t len)
 // Lays `html` out at `width` and paints `view`, the page scrolled to the
 // view's corner; the recording, or NULL.
 // With `css` the page's `style` elements are cascaded, as yonder does.
+// When set, paint_of writes here whose background the canvas is
+// (yonder_canvas_owner): "html", "body" or "none".
+static const char **s_canvas_owner;
+
 static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect_t view,
                       bool *escaped, bool css)
 {
@@ -392,6 +396,11 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
                         rec_mask};
     if (t != NULL)
         yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, &v);
+    if (s_canvas_owner != NULL) {
+        const flow_box_t *o = t != NULL ? yonder_canvas_owner(t, &v) : NULL;
+        *s_canvas_owner = o == NULL ? "none"
+                          : o->node != NULL && o->node->tag == OS64_HTML_TAG_BODY ? "body" : "html";
+    }
     if (escaped != NULL)
         *escaped = rec.escaped;
     flow_free(t);
@@ -472,6 +481,28 @@ static void shadow_split_cases(void)
         char note[64];
         snprintf(note, sizeof(note), "%s: %d pixels differ", kShadows[i], differ);
         expect("shadow: a split repaint shades every pixel as a whole one", differ == 0, note);
+    }
+}
+
+// Whose background the canvas is, asked apart from painting (Quinn, #206):
+// the root's when it has one, else the body's — a body only 50px tall all
+// the same, which a walk of the boxes a scrolled view shows would miss.
+static void canvas_owner_cases(void)
+{
+    struct { const char *css, *want; } k[] = {
+        {"html { height: 1000px } body { margin: 0; height: 50px; background: #ff0000 }", "body"},
+        {"html { background: #00ff00 } body { background: #ff0000 }", "html"},
+        {"body { margin: 0 }", "none"},
+    };
+    for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
+        char html[256];
+        snprintf(html, sizeof(html), "<!doctype html><style>%s</style><p>x", k[i].css);
+        const char *owner = NULL;
+        s_canvas_owner = &owner;
+        free(paint_of(html, strlen(html), 200, (os64_gui_rect_t){0, 100, 200, 100}, NULL, true));
+        s_canvas_owner = NULL;
+        expect("canvas: its owner is found apart from what the view shows",
+               owner != NULL && strcmp(owner, k[i].want) == 0, owner);
     }
 }
 
@@ -966,6 +997,7 @@ int main(int argc, char **argv)
         shadow_blur_cases();
         huge_corner_case();
         shadow_split_cases();
+        canvas_owner_cases();
         scale_cases();
         bar_cases();
         mail_cases();
