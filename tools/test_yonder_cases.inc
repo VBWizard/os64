@@ -361,6 +361,16 @@ static void paint_cases(void)
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true,
                     "fill 0 0 200 100 #fefefe\n"
                     "pixels 0 0 4 1 ff4000bf ffbf0040 ffbf0040 ff4000bf\n");
+    // A calc() radius that works out negative is 0 where it is used (Values
+    // 4 § 10.12), as Chrome computes it: an ellipse 0 wide is the mirrored
+    // gradient above, pixel for pixel.
+    paint_page_case("a negative calc() radius is 0",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: radial-gradient(calc(1px - 2px) 10px, #ff0000, #0000ff 2px) }"
+                    "</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff4000bf ffbf0040 ffbf0040 ff4000bf\n");
     // One of no height is the last stop's colour everywhere.
     paint_page_case("an ellipse of no height is its last colour",
                     "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"

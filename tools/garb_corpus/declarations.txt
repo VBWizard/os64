@@ -443,6 +443,12 @@ IN: background-image: radial-gradient(20%, red, blue)
 OUT: invalid
 IN: background-image: radial-gradient(-10px, red, blue)
 OUT: invalid
+IN: background-image: radial-gradient(circle calc(10% + 1px), red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(circle calc(1px - 2px), red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(calc(1px - 2px) 10px, red, blue)
+OUT: background-image: radial-gradient(...)
 IN: background-image: radial-gradient(10px 20% at 0 0, red, blue)
 OUT: background-image: radial-gradient(...)
 IN: background-image: radial-gradient(10px circle, red, blue)

@@ -1001,11 +1001,28 @@ static bool linear_prelude(const Group *g)
 
 static bool lp_val(Sets *s, VCur *c, garb_val_t *out);
 
+// Whether a calc() tree has a percentage in it anywhere: its type is then
+// a length-percentage, never a plain length.
+static bool calc_percent(const garb_calc_t *c)
+{
+    if (c == NULL)
+        return false;
+    if (c->op == GARB_CALC_LEAF)
+        return c->leaf.kind == GARB_V_PERCENTAGE;
+    for (int32_t k = 0; k < c->nargs; k++)
+        if (calc_percent(c->args[k]))
+            return true;
+    return false;
+}
+
 // [<ending-shape> || <size>]? [at <position>]?, one of them at least. A
-// size written as lengths is one length for a circle — never a percentage —
-// and two length-percentages for an ellipse, none negative (Images 3 §
-// 3.2.1): anything else is drawn as SOME gradient, so it has to be refused
-// here or the declaration it is in would not fall back.
+// size written as lengths is one length for a circle — never a percentage,
+// written or inside a calc() — and two length-percentages for an ellipse
+// (Images 3 § 3.2.1): anything else is drawn as SOME gradient, so it has
+// to be refused here or the declaration it is in would not fall back. A
+// negative LITERAL is refused too; a calc() that works out negative is not
+// — Values 4 § 10.12 range-checks a calculation where it is used, so the
+// painter takes it as 0, as Chrome computes it.
 static bool radial_prelude(Sets *s, const Group *g)
 {
     VCur c = {g->v, g->n, 0};
@@ -1024,9 +1041,10 @@ static bool radial_prelude(Sets *s, const Group *g)
             size = any = true;
         } else if (!size && lp_val(s, &c, &r)) {
             for (lengths = 1; ; lengths++) {
-                if (r.number < 0)
+                if (r.kind != GARB_V_CALC && r.number < 0)
                     return false;
-                percent |= r.kind == GARB_V_PERCENTAGE;
+                percent |= r.kind == GARB_V_PERCENTAGE ||
+                           (r.kind == GARB_V_CALC && calc_percent(r.calc));
                 if (lengths == 2 || !lp_val(s, &c, &r))
                     break;
             }

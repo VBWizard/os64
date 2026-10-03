@@ -798,8 +798,11 @@ static void gradient(const Painter *p, const flow_gradient_t *g, double tx, doub
         case FLOW_EXTENT_CLOSEST_CORNER: rx = sx_near * sqrt(2); ry = sy_near * sqrt(2); break;
         case FLOW_EXTENT_FARTHEST_CORNER: rx = sx_far * sqrt(2); ry = sy_far * sqrt(2); break;
         case FLOW_EXTENT_SIZE:
-            rx = lp_px(g->radii[0], w);
-            ry = lp_px(g->radii[1], h);
+            // A radius is never negative where it is used: a calc() that
+            // works out below 0 is 0 (Values 4 § 10.12), then the
+            // degenerate shapes below.
+            rx = fmax(0, lp_px(g->radii[0], w));
+            ry = fmax(0, lp_px(g->radii[1], h));
             break;
         }
         if (g->circle) {
