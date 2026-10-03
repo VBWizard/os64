@@ -16,7 +16,7 @@ static void review3_nul_fragments(void)
         // A frame is a link the model resolves, so it refuses the same way,
         // and the renderer still draws it as a place to go.
         snprintf(html,sizeof(html),"<frameset><frame src='/next#%s'></frameset>",fragments[i]);
-        os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL);
+        os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
         wend_page_t *drawn=wend_render_html(doc,page,40,NULL,0);os64_page_request_t req;
         state_expect("frame refuses NUL fragment",drawn && drawn->nspots==1 &&
             os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_LINK,drawn->spots[0].link,0,0},&req)==OS64_PAGE_REFUSED &&
@@ -51,15 +51,15 @@ static void review3_refresh_failure(void)
     char html[6400];size_t at=(size_t)sprintf(html,"<meta id=first http-equiv=refresh content='5;url=/first#");
     memset(html+at,'x',6000);at+=6000;
     strcpy(html+at,"'><meta id=second http-equiv=refresh content='0;url=/second'>");
-    os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL);
+    os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
     const os64_html_node_t *first=os64_page_anchor(page,"first");
     const os64_page_refresh_t *refresh=os64_page_refresh(page);
     state_expect("first refresh initially wins",refresh && refresh->node==first && refresh->url.url && strcmp(refresh->url.url,"http://host/first")==0);
     os64_page_free(page);
-    size_t before=allocations;page=os64_page_build(doc,kPage,NULL);size_t count=allocations-before;os64_page_free(page);
+    size_t before=allocations;page=os64_page_build(doc,kPage,NULL, NULL);size_t count=allocations-before;os64_page_free(page);
     bool saw_refusal=false;
     for(size_t i=1;i<=count;i++) {
-        fail_single=true;fail_at=allocations+i;page=os64_page_build(doc,kPage,NULL);fail_at=0;fail_single=false;
+        fail_single=true;fail_at=allocations+i;page=os64_page_build(doc,kPage,NULL, NULL);fail_at=0;fail_single=false;
         if(page) {
             refresh=os64_page_refresh(page);
             state_expect("allocation failure cannot replace winning refresh",refresh && refresh->node==first);
@@ -84,7 +84,7 @@ static void review3_unrendered(void)
         "<img alt='' id=x>","<frameset><frame id=x></frameset>"};
     for(size_t i=0;i<sizeof(markup)/sizeof(markup[0]);i++) {
         char html[250];snprintf(html,sizeof(html),"%s<p>Other content</p><a href=#x>Go</a>",markup[i]);
-        os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL);
+        os64_html_document_t *doc=parse(html,"utf-8");os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
         const os64_html_node_t *node=os64_page_anchor(page,"x");
         for(int width=80;width>=20;width-=60) {
             wend_page_t *drawn=wend_render_html(doc,page,width,NULL,0);
@@ -101,12 +101,12 @@ static void review3_document_failure(void)
     size_t at=strlen(document);memset(document+at,'X',1900);document[at+1900]=0;
     snprintf(html,sizeof(html),"<p id=target>Target</p><a href='data%s#target'>Go</a>",document+4);
     os64_html_document_t *doc=parse(html,"utf-8");
-    size_t before=allocations;os64_page_t *page=os64_page_build(doc,document,NULL);size_t count=allocations-before;
+    size_t before=allocations;os64_page_t *page=os64_page_build(doc,document,NULL, NULL);size_t count=allocations-before;
     os64_page_request_t initial = {0};
     state_expect("long opaque document setup",page && os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_LINK,0,0,0},&initial)==OS64_PAGE_FRAGMENT);
     os64_page_request_free(&initial);os64_page_free(page);
     for(size_t i=1;i<=count;i++) {
-        fail_single=true;fail_at=allocations+i;page=os64_page_build(doc,document,NULL);fail_at=0;fail_single=false;
+        fail_single=true;fail_at=allocations+i;page=os64_page_build(doc,document,NULL, NULL);fail_at=0;fail_single=false;
         if(page && os64_page_nlinks(page)) {
             os64_page_request_t req;
             os64_page_verdict_t v=os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_LINK,0,0,0},&req);

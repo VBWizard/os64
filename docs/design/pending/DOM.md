@@ -1,8 +1,8 @@
 # DOM.md — one tree, and a script that may change it
 
 *Written 2026-10-01 by Fable. This is packet D0 of
-[JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. Slice D1
-is built (§ Slices); everything after it is a proposal. Read
+[JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. D1, D2a
+and D3 are built (§ Slices); the remaining slices are proposals. Read
 against the tree at `b55c3770`, the vendored QuickJS 2026-06-04 source
 (`userland/libjs/upstream/`) and the R0 runtime contract
 (`userland/libjs/CONTRACT.md`). Names of functions that do not exist yet
@@ -358,6 +358,11 @@ is in hand, so a failed rebuild still changes nothing. A face that keeps
 no document after its model (wend) passes no state, and the model makes
 and frees its own, which is today's behaviour.
 
+The state has its own version: a script can change a field's live value,
+checkedness or selection without changing any HTML node. The rendering
+step observes that version as well as the document's. Publication updates
+the views in live models before replaced state bytes are freed.
+
 **A script's setter is not a person's edit, and gets its own door.**
 `os64_page_set_text` refuses a disabled or readonly control and does not
 take a hidden one at all; that is right for a keyboard and wrong for
@@ -372,6 +377,15 @@ share the sanitizer underneath. The checks that belong to a person's
 interaction stay in the door a person's edits use. Form semantics still
 live in one library; they now have two entrances because there are two
 kinds of caller.
+
+D3 interprets the current tree and stages dirty-value sanitization when a
+getter or rebuild observes changed types or constraints. A final tree
+version cannot reconstruct input value-mode transitions between observations.
+D5's attribute bindings must therefore use a state-aware mutation entrance
+that observes each type transition, including the standard's transfer of a
+dirty text value to the value attribute. That entrance must stage its tree
+and state changes before publication; the existing single-attribute HTML
+verb does not provide a transaction spanning two attribute assignments.
 
 **A model older than its document sends nothing.** `os64_page_activate`
 and the edit verbs answer a new reason, `STALE`, when the document's
@@ -556,7 +570,8 @@ owed, paint. The standard's loop maps onto it without a second loop.
   `Promise` callback run before the next listener and not after the next
   click.
 - **The rendering step** is the one the loop has: if the tree's version
-  moved, rebuild, lay out, paint. Once per turn, however many tasks ran.
+  moved, rebuild, lay out, paint; if live control state moved, refresh its
+  presentation. Once per turn, however many tasks ran.
 - **Timers** ride the ticker, which already holds the earliest of the
   next animation frame and a stale layout; the earliest timer joins them.
   The tick is 10 ms, so that is a timer's resolution, and it is said here
@@ -692,7 +707,7 @@ builder decides, and the proof in this house's shape.
 | D1 | **Built.** libhtml's mutation core and the verbs but `parse_fragment` | `tools/test_html_dom_host.sh`, under ASan and UBSan: § D1, as built |
 | D2a | **Built.** Scripting-enabled parsing: stop and resume, the end of the input, abandon, the tree read and changed between calls | A parser abandoned at every stop leaves a document that walks and frees; the `#script-on` cases un-skipped and passing, whole and chunked; a stop at every script of each corpus page: § D2a, as built |
 | D2b | Fragment parsing and serialisation | The `#document-fragment` cases un-skipped and passing, whole and chunked |
-| D3 | `os64_page_rebuild`, the `STALE` gate, control state as its own object, and the script-facing setters | libpage's corpus grows cases: a value that survives detach, rebuild and reinsert; a value on a control never yet in the document; a script's assignment to a disabled, a readonly and a hidden input, each by its value mode; a changed action refused from the old model; the allocation sweep |
+| D3 | **Built; review pending.** `os64_page_rebuild`, pinned models, the `STALE` gate, shared node state and script property APIs | `tools/test_libpage_rebuild.inc`: detach/reinsert, never-inserted state, value modes, option identity, current-type sanitization, person/script origin, pins, transactional allocation sweeps and independent random walks; § D3, as built |
 | D4 | The stream: yonder parses on its own thread. No script | yonder's and libway's harnesses unchanged in result; the guest walk that proved Y3, its server log identical; the window live through a stalled body |
 | D5 | The binding library and J3's fixture | A script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
 | D6 | Reclaiming unheld detached subtrees | The churn page that met the budget in a minute runs for an hour |
@@ -754,8 +769,9 @@ tree deeper than its stack within a minute of the harness checking for
 one).
 
 What D1 left for the slices after it: the parser's own writes did not
-retire, which D2a has paid, and the three snapshot builders do not yet pin
-(D3 and D5; nothing changes a tree under them until a binding exists).
+retire, which D2a has paid, and snapshot builders needed pins. D3 supplies
+libpage's model pins; libgarb's cascade and libflow's layout pins belong
+to D5 before a binding changes a tree beneath those snapshots.
 
 ### D2a, as built
 
@@ -863,6 +879,141 @@ when no control can have one.
 a server sends, which is what CLAUDE.md says an outside round is for.
 They get one, requested by Chris's hand as always. The rest is reviewed
 here.
+
+### D3, as built
+
+Implemented on `codex/dom-d3`, initially based on `userland` at `ae0a23d5`
+and rebased onto `a90eba97` (the merged GIF improvements) for publication
+in [PR #211](https://github.com/VBWizard/os64/pull/211).
+`userland/libpage/state.c` owns control state;
+`page.h` is the public contract. The implementation, test harness and
+integration were split between Quinn and two scoped subagents, followed
+by Quinn's review of the combined change.
+
+**The ownership and API choices.** `os64_page_build(doc, url, options,
+state)` takes a fourth argument. A supplied state belongs to the same
+document and outlives its models; NULL creates private shared state that
+ends with its last model, including rebuilt models in either free order.
+Each model pins its document version. Free models, then explicit state,
+then the document. Freeing state while models borrow it ends with the
+PAGE badge (`0x50414745`). `os64_html_owns_node` supplies a constant-time
+ownership query for live nodes, connected or detached, without exposing
+the opaque document mark to libpage.
+
+The state ceiling defaults to 16 MiB and includes the state header,
+allocation headers, lookup tables, records, values, getter caches and
+operation scratch. This bounds property work separately from the HTML
+arena and engine heap; the owner may set a different ceiling. A build
+retains default records where group normalization differs from markup,
+and keeps previously established records. Property assignments may retain
+records for a whole radio group or select's options. Single-node
+reservations reuse spare lookup capacity; larger batches index their new
+records privately, and the live table is copied when it must grow. State has
+its own nonzero revision, because a property edit can leave the HTML
+version unchanged. Failed operations and getter-only cache fills do not
+advance it; effective changes, including person/script edit origin, do.
+
+**What rebuilding commits.** A fresh model is built beside the old one
+using the same document, URL, options and state. It grows its own arenas
+rather than using the old allocation sizes as a hint. Any incomplete
+candidate returns NULL. Dirty-value reconciliation, new records and
+connected radio/select normalization are staged until no allocation
+remains. On success, live model views publish before replaced state bytes
+are freed. On refusal, the old model, state, revisions, pins and allocation
+accounting remain as before the call. Detached records are retained;
+options are keyed by node, so a moved option keeps its selectedness.
+Radio groups are normalized over the candidate's connected controls;
+members in a separate detached tree do not untick that group.
+
+**Two property entrances.** A person's verbs retain control indices and
+access restrictions. Script getters/setters take nodes, including ones
+never inserted, and follow the current input value mode. Text uses dirty
+state; hidden/button/tick values use the HTML value attribute; files accept
+empty only; select value/selectedIndex assignments retain option identity
+and may clear a size-one list. Both entrances share sanitization. Dirty
+text retains whether the last assignment came from a person, because
+minlength/maxlength validation requires that origin; assigning identical
+bytes by script can therefore change validity without replacing the bytes.
+Activation, person edits and reset refuse a changed document with STALE.
+Reset restores the fresh model's normalized defaults without allocating.
+
+**Proof, at the frozen implementation.**
+
+- The full libpage host suite passes **247,179 checks, zero failures**
+  under ASan/UBSan/LSan. The general build sweep fails each of **397**
+  allocations independently; the new cases separately sweep rebuilds,
+  node setters, default getters and dirty-value reconciliation. Refusals
+  preserve publication, revisions, state bytes and pin counts, and release
+  their allocations. The live-state-free probe stops with the PAGE badge.
+- The initial independent D3 suite passed **17,926 checks**. Four 320-step walks
+  keep separate value arrays, connection flags and option permutations;
+  they compare state and rebuilt models after each step. The walk asserts
+  that each operation and each input is exercised. Coordinator review
+  caught low-bit generator bias in its first draft; the final walk uses
+  high bits and covers all operations and inputs.
+- **Twenty-six mutants proposed, twenty-six compiled, twenty-six caught**, using
+  temporary source copies. They cover STALE, pins and release, incomplete
+  rebuild rejection, normalization order, value modes, script access,
+  revisions, shared publication, option identity, current-type sanitization,
+  observed file clearing and assignment origin. Review regressions add
+  tight-budget first touch, sparse defaults, equal-value current getters,
+  the option traversal's excluded subtrees and publication to older models.
+- Existing consumers retain their results: Wend **177,854/0**, libway
+  **226/0**, its real-fetch integration **21/0**, Yonder **115/0** with six
+  matching paints, libflow **18,585/0**
+  with twelve matching corpus dumps and 597 sampled fuzz trees; libgarb's
+  corpus and allocation sweeps pass. The HTML mutation suite remains
+  **363,628/0**. The parser reference suite passes **10,141 runs**; its
+  allocation/prefix checks, unchanged corpus snapshots and 30-second fuzz
+  pass are clean. Leak checking stayed enabled; runs needing process
+  inspection used approved execution outside the sandbox.
+- The ownership helper leaves parser work and peak allocation unchanged.
+  Nine alternating plain `-O2` Wikipedia parses on unchanged userland and
+  D3 measured medians **23.374 ms** and **23.707 ms**, respectively
+  (ranges 22.995–24.144 and 23.515–24.567 ms). Both report **1,210,567 work**,
+  **4,255,504 peak arena bytes**, **15,470 nodes**, and identical stable
+  output. These overlapping host timings do not establish a speed change.
+- A scratch userland build and root image build pass. On a private QEMU
+  guest, `/tests/pagetest` exercises detach/rebuild/reinsert across model
+  frees, a stale changed destination, the fresh request's retained value,
+  never-inserted script state, disabled assignment and the state ceiling.
+  It prints `PASS D3 rebuild and script state`, passes heap verification
+  and returns `0x50670000`. `/tests/htmltest` also passes (`0x48640000`).
+  The guest's `libpage.so` matches the built library byte for byte. This
+  proves the native seam; Yonder's scripted redraw remains D5.
+
+**Review corrections.** First touch reuses spare lookup slots at commit;
+large pending batches use a private index. An 8,000-node reservation probe
+copies the live table eleven times rather than 8,000. A 140,000-option
+host fixture builds and rebuilds completely with 368 bytes of state, using
+a larger HTML arena for the document itself. The state ceiling still
+bounds property assignments, caches and scratch. Equal assignments stamp
+the current HTML version, so the next dirty getter allocates nothing.
+Models and native property verbs share the HTML list-of-options walk:
+ordinary containers can contain options, while option, select, datalist,
+hr and nested-optgroup subtrees are excluded. The review regressions sweep
+each allocation in both a small and a larger batch, retaining state,
+publication and revisions on refusal. Native pagetest covers sparse
+defaults, cap refusal, equal assignment and shared option numbering; its
+final heap check and success badge pass with the built library installed.
+
+Before publication, the branch was rebased over the non-overlapping GIF
+merge. The root image build and full libpage/Yonder host suites were rerun
+there and retain the results above.
+
+**The handoff.** Current dirty getters allocate nothing while their HTML
+version is current. After a mutation, a getter or rebuild stages
+re-sanitization for the current type and constraints; observing file mode
+clears prior dirty text. A final tree cannot reveal historical input-mode
+transitions between observations. D5 must apply those transitions at each
+attribute mutation through a state-aware, failure-atomic entrance, and
+watch both document and state revisions when refreshing presentation.
+Option insertion/removal and select `size`/`multiple` changes must also
+release explicit-empty selectedness and run the select's normalization.
+D6 must add holds for persistent state keys, including option/default-cache
+records, and model node references, with paired releases. Pins protect
+snapshot bytes; they do not replace those holds. Both requirements are in
+DOM_BRIEFS.md and DEBTS.md. D3 adds neither DOM bindings nor reclamation.
 
 ## Booked, with their triggers
 

@@ -62,6 +62,10 @@ share two counters (document marks and pin numbers), advanced atomically, and
 nothing else. A verb refuses a node of another document; `os64_html_clone`
 copies one across.
 
+`os64_html_owns_node(doc, node)` answers ownership for a live connected or
+detached node without walking the tree or changing it. Consumers use this
+query rather than interpreting the library's opaque document mark.
+
 `core.c` owns allocations, pins and retirement, topology primitives, limits,
 and the parsing API, with the stop at a script and the input held meanwhile.
 `dom.c` holds the verbs that change a document, and the rules the parser

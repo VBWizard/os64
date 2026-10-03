@@ -247,6 +247,10 @@ bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out);
  * freed memory in waiting; a verb refuses it (OS64_HTML_BAD_ARGUMENT). */
 typedef uint64_t os64_html_pin_t;
 uint64_t os64_html_version(const os64_html_document_t *doc);
+/* Whether a live node belongs to this document, connected or detached.
+ * NULL for either argument answers false. This compares the library's
+ * ownership mark; it neither walks the tree nor changes the document. */
+bool os64_html_owns_node(const os64_html_document_t *doc, const os64_html_node_t *node);
 os64_html_pin_t os64_html_pin(const os64_html_document_t *doc);
 void os64_html_unpin(const os64_html_document_t *doc, os64_html_pin_t pin);
 size_t os64_html_retired_bytes(const os64_html_document_t *doc);

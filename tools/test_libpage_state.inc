@@ -49,7 +49,7 @@ static void state_initial(const char *name, os64_page_t *page)
 static void state_group_reset(void)
 {
     os64_html_document_t *doc = parse(state_html, "utf-8");
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     state_initial("state: initial defaults", page);
     state_expect("state: edit text", os64_page_set_text(page, 3, "a\r\nb", 4) == 0);
     state_value("state: shared text sanitizer", page, 3, "ab");
@@ -73,7 +73,7 @@ static void state_tick_values(void)
 {
     os64_html_document_t *doc=parse("<form method=post><input type=checkbox name=c checked>"
         "<input type=radio name=r checked><button>Send</button></form>","utf-8");
-    os64_page_t *page=os64_page_build(doc,kPage,NULL);
+    os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
     // A tick's value is the page's word about what it sends; nobody types it.
     for (int32_t i=0;i<2;i++) {
         state_value("tick: default value",page,i,"on");
@@ -105,7 +105,7 @@ static void state_sanitizers(void)
     };
     for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {
         os64_html_document_t *doc = parse(cases[i].html, "utf-8");
-        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
         state_expect("state: sanitizer accepts edit",
                      os64_page_set_text(page, 0, cases[i].edit, strlen(cases[i].edit)) == 0);
         state_value("state: sanitized edit", page, 0, cases[i].want);
@@ -142,7 +142,7 @@ static void state_selection_cases(void)
         "<input type=radio name=x checked hidden>"
         "<input type=radio checked><input type=radio checked></form>"
         "<form><input type=radio name=x checked></form>", "utf-8");
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     state_expect("state: explicit owners and hidden radios share group",
                  !os64_page_control(page,0)->checked && os64_page_control(page,1)->checked);
     state_expect("state: nameless radios and separate owners stay independent",
@@ -168,13 +168,13 @@ static void state_allocation_failures(void)
 {
     os64_html_document_t *doc = parse(state_html, "utf-8");
     size_t before = allocations;
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     size_t builds = allocations - before;
     os64_page_free(page);
     fail_single = true;
     for (size_t point = 1; point <= builds; point++) {
         fail_at = allocations + point;
-        page = os64_page_build(doc, kPage, NULL);
+        page = os64_page_build(doc, kPage, NULL, NULL);
         fail_at = 0;
         if (page != NULL && !os64_page_incomplete(page)) {
             state_initial("state: successful build has every control and option", page);
@@ -191,13 +191,13 @@ static void state_allocation_failures(void)
         os64_page_free(page);
     }
     for (int op = 0; op < 3; op++) {
-        page = os64_page_build(doc,kPage,NULL);
+        page = os64_page_build(doc,kPage,NULL, NULL);
         before = allocations;
         state_expect("state: count successful edit", state_edit(page,op) == 0);
         size_t edits = allocations - before;
         os64_page_free(page);
         for (size_t point = 1; point <= edits; point++) {
-            page = os64_page_build(doc,kPage,NULL);
+            page = os64_page_build(doc,kPage,NULL, NULL);
             fail_at = allocations + point;
             int64_t result = state_edit(page,op);
             fail_at = 0;
@@ -222,14 +222,14 @@ static void state_large_group(void)
                                "<input type=radio name=r %s>",i == 0 ? "checked" : "");
     snprintf(html+len,sizeof(html)-len,"</form>");
     os64_html_document_t *doc = parse(html,"utf-8");
-    os64_page_t *page = os64_page_build(doc,kPage,NULL);
+    os64_page_t *page = os64_page_build(doc,kPage,NULL, NULL);
     size_t before = allocations;
     state_expect("state: large group edit",os64_page_set_checked(page,31,true) == 0);
     size_t count = allocations-before;
     os64_page_free(page);
     fail_single = true;
     for (size_t point = 1; point <= count; point++) {
-        page = os64_page_build(doc,kPage,NULL);
+        page = os64_page_build(doc,kPage,NULL, NULL);
         fail_at = allocations+point;
         int64_t result = os64_page_set_checked(page,31,true);
         fail_at = 0;
@@ -263,7 +263,7 @@ static void state_long_reset(void)
     memset(html+n,'x',6000);
     strcpy(html+n+6000,"'><button>Send</button></form>");
     os64_html_document_t *doc = parse(html,"utf-8");
-    os64_page_t *page = os64_page_build(doc,kPage,NULL);
+    os64_page_t *page = os64_page_build(doc,kPage,NULL, NULL);
     state_expect("state: long default edit",os64_page_set_text(page,0,"z",1) == 0);
     size_t before = allocations;
     fail_at = before+1;
@@ -317,7 +317,7 @@ static void state_byte_spans(void)
         snprintf(html,sizeof(html),"<form method=post>%s<button>Go</button></form>",cases[i].control);
         snprintf(name,sizeof(name),"byte span: case %zu",i);
         os64_html_document_t *doc=parse(html,"utf-8");
-        os64_page_t *page=os64_page_build(doc,kPage,NULL);
+        os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
         const os64_page_control_t *c=os64_page_control(page,0);
         const char *initial=c->value;size_t initial_len=c->value_len;
         state_expect(name,os64_page_set_text(page,0,cases[i].edit,cases[i].edit_len)==0);
@@ -337,7 +337,7 @@ static void state_byte_spans(void)
         char html[256];
         snprintf(html,sizeof(html),"<form method=post enctype=%s><input name=q><button>Go</button></form>",enctypes[i]);
         os64_html_document_t *doc=parse(html,"utf-8");
-        os64_page_t *page=os64_page_build(doc,kPage,NULL);
+        os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
         state_expect("byte span: text edit",os64_page_set_text(page,0,"a\0b",3)==0);
         os64_page_request_t req;os64_page_what_t what={OS64_PAGE_ACTIVATE_CONTROL,1,0,0};
         state_expect("byte span: raw submission",os64_page_activate(page,what,&req)==OS64_PAGE_NAVIGATE);
@@ -376,7 +376,7 @@ static void state_taken_away(void)
         "<input type=checkbox name=tick readonly>"                      // 12
         "<button name=b>Go</button></form>",                            // 13
         "utf-8");
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     state_expect("taken: control count", os64_page_ncontrols(page) == 14);
     state_expect("taken: readonly text",
                  os64_page_set_text(page, 0, "x", 1) == -OS64_PAGE_REASON_READONLY);
@@ -428,7 +428,7 @@ static void state_frames(void)
         "<head><base href=\"http://other/dir/\"></head>"
         "<frameset><frame name=menu src=\" menu.html#top%20part \">"
         "<frame name=empty><frame src=\"\"><frame src=\" \t\"></frameset>", "utf-8");
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     state_expect("frames: one link per frame whose src names something",
                  os64_page_nlinks(page) == 1);
     const os64_page_link_t *link = os64_page_link(page, 0);
@@ -450,7 +450,7 @@ static void state_iframes(void)
         "<body><a href=a.html>a</a><iframe src=\"ad.html#x\">fallback</iframe>"
         "<iframe></iframe><iframe src=\" \t\"></iframe>"
         "<iframe src=\"\"></iframe></body>", "utf-8");
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     state_expect("iframes: only the one that names a document", os64_page_nlinks(page) == 2);
     const os64_page_link_t *link = os64_page_link(page, 1);
     state_expect("iframes: resolved like a frame, fragment kept apart",
@@ -480,7 +480,7 @@ static void state_images(void)
         "<svg><img src=foreign.png></svg>"
         "<template><img src=inert.png></template>"
         "</body>", "utf-8");
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     state_expect("images: every img and image input that names a src",
                  os64_page_nimages(page) == 5);
     const os64_page_image_t *image = os64_page_image(page, 0);
@@ -531,7 +531,7 @@ static void state_backgrounds(void)
         "<div background=no.gif>not this</div><p background=nor.gif>nor this"
         "<table><tr background=\"http://[bad\"><td>w</table>"
         "</body>", "utf-8");
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     static const struct { os64_html_tag_t tag; const char *url; } want[] = {
         {OS64_HTML_TAG_BODY, "http://pics/lib/sky.gif"},
         {OS64_HTML_TAG_TABLE, "http://pics/wall.png"},
@@ -588,7 +588,7 @@ static void state_sheets(void)
         "<svg><style>circle{}</style></svg>"
         "<template><style>t{}</style></template>"
         "<style>late{}</style></body>", "utf-8");
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     state_expect("sheets: the style elements and stylesheet links, and only those",
                  os64_page_nsheets(page) == 6);
     const os64_page_sheet_t *s = os64_page_sheet(page, 0);
@@ -642,7 +642,7 @@ static void state_reference_bytes(void)
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         os64_html_document_t *doc = parse(cases[i].html, cases[i].charset);
-        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
         const os64_page_link_t *link = os64_page_link(page, 0);
         char name[64];
         snprintf(name, sizeof(name), "reference bytes: case %zu", i);
@@ -682,7 +682,7 @@ static void state_scale(void)
         at += (size_t)snprintf(html + at, cap - at, "<input name=t dirname=d>");
     snprintf(html + at, cap - at, "</div><button>Go</button></form>");
     os64_html_document_t *doc = parse(html, "utf-8");
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     state_expect("scale: builds whole", page != NULL && !os64_page_incomplete(page));
     state_expect("scale: fieldset disables its first and last",
                  os64_page_control(page, 0)->disabled && os64_page_control(page, N - 1)->disabled);
@@ -701,7 +701,7 @@ static void state_scale(void)
                 "<legend><fieldset disabled><legend><input name=a></legend>"
                 "<input name=b></fieldset></legend>"
                 "<legend><input name=c></legend><input name=d></fieldset></form>", "utf-8");
-    page = os64_page_build(doc, kPage, NULL);
+    page = os64_page_build(doc, kPage, NULL, NULL);
     state_expect("fieldset: inner legend live", !os64_page_control(page, 0)->disabled);
     state_expect("fieldset: inner body off", os64_page_control(page, 1)->disabled);
     state_expect("fieldset: second legend off", os64_page_control(page, 2)->disabled);
@@ -713,7 +713,7 @@ static void state_scale(void)
     // member: a disabled checked radio still answers it.
     doc = parse("<form><input name=t><input type=radio name=r disabled required>"
                 "<input type=radio name=r><button>Go</button></form>", "utf-8");
-    page = os64_page_build(doc, kPage, NULL);
+    page = os64_page_build(doc, kPage, NULL, NULL);
     what = (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 3, 0, 0};
     state_expect("radio group judged past a barred head",
                  os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING &&
@@ -723,7 +723,7 @@ static void state_scale(void)
     os64_html_document_free(doc);
     doc = parse("<form><input type=radio name=r disabled required checked>"
                 "<input type=radio name=r><button>Go</button></form>", "utf-8");
-    page = os64_page_build(doc, kPage, NULL);
+    page = os64_page_build(doc, kPage, NULL, NULL);
     what = (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 2, 0, 0};
     state_expect("radio group answered by a disabled tick",
                  os64_page_activate(page, what, &req) == OS64_PAGE_NAVIGATE);
@@ -732,7 +732,7 @@ static void state_scale(void)
     os64_html_document_free(doc);
     doc = parse("<form><input name=t><input type=radio name=r><input type=radio name=r required>"
                 "<button>Go</button></form>", "utf-8");
-    page = os64_page_build(doc, kPage, NULL);
+    page = os64_page_build(doc, kPage, NULL, NULL);
     what = (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 3, 0, 0};
     state_expect("radio group failure names its first member",
                  os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING &&
@@ -747,7 +747,7 @@ static void state_option_labels(void)
 {
     os64_html_document_t *doc = parse("<select><option label='' value=x>Fallback"
                                       "<option label=Short value=y>Long</select>", "utf-8");
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     const os64_page_control_t *c = os64_page_control(page, 0);
     state_expect("option: empty label falls back to text",
                  c != NULL && c->noptions == 2 && strcmp(c->options[0].label, "Fallback") == 0 &&

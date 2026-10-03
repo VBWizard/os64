@@ -157,7 +157,7 @@ static void sheets_close(Sheets *sh)
 static flow_tree_t *lay(os64_html_document_t *doc, os64_page_t **page, Sheets *sh,
                         int32_t width)
 {
-    *page = os64_page_build(doc, "file:///flowdump", NULL);
+    *page = os64_page_build(doc, "file:///flowdump", NULL, NULL);
     require(*page != NULL, "page model");
     sheets_open(sh, doc, *page, width);
     s_env.cascade = sh->cascade;

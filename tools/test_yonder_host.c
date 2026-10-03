@@ -372,7 +372,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
                       bool *escaped, bool css)
 {
     os64_html_document_t *doc = parse(html, len);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     garb_parsed_t sheets[8];
     garb_sheet_in_t in[8];
     int32_t n = 0;

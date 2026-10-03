@@ -33,7 +33,7 @@ static const char *kDoorPage =
 static void door_cases(void)
 {
     os64_html_document_t *doc = parse(kDoorPage);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     flow_tree_t *t = flow_layout(doc, page, 400, &kEnv);
     expect("door: laid out", t != NULL && !flow_incomplete(t), NULL);
     if (t == NULL)
@@ -98,7 +98,7 @@ static void door_cases(void)
     // A word wider than its line: the paragraph's OVERFLOW holds it, so
     // the walk and the hit test still reach it past the paragraph's edge.
     os64_html_document_t *doc2 = parse("<!doctype html><p>abcdefghij");
-    os64_page_t *page2 = os64_page_build(doc2, kPage, NULL);
+    os64_page_t *page2 = os64_page_build(doc2, kPage, NULL, NULL);
     t = flow_layout(doc2, page2, 50, &kEnv);
     const flow_box_t *root = flow_root(t);
     expect("door: overflow reaches past the box",
@@ -114,7 +114,7 @@ static void door_cases(void)
     // A table wider than the page hangs out of the html and body boxes: a
     // viewport that meets only the part hanging out still reaches it.
     doc2 = parse("<!doctype html><table width=200><tr><td>x</table>");
-    page2 = os64_page_build(doc2, kPage, NULL);
+    page2 = os64_page_build(doc2, kPage, NULL, NULL);
     t = flow_layout(doc2, page2, 50, &kEnv);
     Seen out = {{0}, 0};
     flow_visit(t, (os64_gui_rect_t){100, 0, 10, 100}, kNoScroll, seen_add, &out);
@@ -149,7 +149,7 @@ static void fixed_cases(void)
                 snprintf(html, sizeof(html), "<!doctype html><p><img src=%s %s %s alt=pic>",
                          arrived ? "known.png" : "missing.png", sides[i], heights[k]);
                 os64_html_document_t *doc = parse(html);
-                os64_page_t *page = os64_page_build(doc, kPage, NULL);
+                os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
                 flow_tree_t *t = flow_layout(doc, page, 400, &kEnv);
                 const os64_html_node_t *img = doc->body->first_child->first_child;
                 const flow_box_t *b = t != NULL ? flow_box_for(t, img) : NULL;
@@ -551,7 +551,7 @@ static void fuzz_one(const char *what, const char *html, size_t len)
     memcpy(copy, html, len);
     copy[len] = '\0';
     os64_html_document_t *doc = parse(copy);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     // Through a cascade, which is where positioning comes from: the style
     // attributes the soup writes, and the corpus page's own sheets.
     garb_parsed_t sheets[8];

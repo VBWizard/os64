@@ -219,6 +219,10 @@ uint64_t os64_html_version(const os64_html_document_t *doc)
 {
     return doc ? ((const HDoc *)doc)->version : 0;
 }
+bool os64_html_owns_node(const os64_html_document_t *doc, const os64_html_node_t *node)
+{
+    return doc && node && node->document_id == ((const HDoc *)doc)->id;
+}
 /* A handle is its slot and a serial number no other pin in the program has
  * had, so one that was let go already, or that belongs to another document,
  * matches nothing. A handle that was only the slot would come round again,

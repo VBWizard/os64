@@ -189,7 +189,7 @@ static wend_page_t *render_html_text(const char *html, int32_t cols, const char 
     os64_html_document_t *doc = os64_html_parser_finish(p);
     if (!doc)
         return NULL;
-    os64_page_t *model = os64_page_build(doc, page_url ? page_url : "http://h/d/p.html", NULL);
+    os64_page_t *model = os64_page_build(doc, page_url ? page_url : "http://h/d/p.html", NULL, NULL);
     wend_page_t *page = wend_render_html(doc, model, cols, NULL, 0);
     TestDocument *entry = page != NULL ? malloc(sizeof(*entry)) : NULL;
     if (entry != NULL) {
@@ -1698,7 +1698,7 @@ int main(int argc, char **argv)
         }
         // The model resolves against where the page came from — and against
         // its own <base href> where it has one, exactly as in the browser.
-        model = os64_page_build(doc, base_text ? base_text : "", NULL);
+        model = os64_page_build(doc, base_text ? base_text : "", NULL, NULL);
         page = wend_render_html(doc, model, cols, NULL, 0);
     }
     if (!page) {

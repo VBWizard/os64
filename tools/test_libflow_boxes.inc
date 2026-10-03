@@ -12,7 +12,7 @@
 static char *boxes_dump_of(const char *html)
 {
     os64_html_document_t *doc = parse(html);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     FStyles *styles = f_style_build(doc, page, &kEnv);
     FBoxes *boxes = f_boxes_build(doc, page, styles, &kEnv);
     char *text = NULL;
@@ -435,7 +435,7 @@ static void boxes_sweep(void)
         "<form><p>n <input name=n> <q>q</q><br><img src=i.png></form>"
         "<li>quirk-free inside?<pre>p\nq</pre>";
     os64_html_document_t *doc = parse(html);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     FStyles *styles = f_style_build(doc, page, &kEnv);
     FBoxes *whole = f_boxes_build(doc, page, styles, &kEnv);
     int64_t whole_len = f_boxes_dump(whole, NULL, 0);

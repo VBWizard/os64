@@ -511,7 +511,7 @@ bool way_load(way_leg_t *s, const char *url, const os64_page_request_t *request,
         // a model of is still a page worth reading, so this is not a failure
         // to return: what it costs is the links and boxes, and the face says
         // so.
-        out->model = os64_page_build(out->doc, head->url_text, NULL);
+        out->model = os64_page_build(out->doc, head->url_text, NULL, NULL);
     } else {
         bool whole = true;
         out->text = read_body(s, f, limits.max_bytes, &out->textlen, url, &whole);

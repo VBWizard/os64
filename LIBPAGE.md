@@ -58,8 +58,10 @@ and not a tidier `render.c`.
   ("this request leaves an encrypted page for a plain one") and the face
   decides what to do with them. The confirm that saved passwords in three
   rounds stays a face concern; the fact it needs is libpage's.
-- libhtml's tree is read-only and owned by its document; libpage keeps
-  POINTERS into it and never copies text it can point at. libos64's URL
+- libhtml's tree exposes read-only views owned by its document; mutation
+  goes through libhtml's verbs. libpage keeps
+  pointers into it when ownership permits, and copies normalized values into
+  model or state storage when needed. libos64's URL
   parser (`os64/url.h`) is the only URL code; libpage calls it and never
   re-implements a byte of it.
 - libfetch carries the request body and content type libpage builds; the
@@ -357,7 +359,8 @@ typedef struct os64_page os64_page_t;
 
 os64_page_t *os64_page_build(const os64_html_document_t *doc,
                              const char *document_url,
-                             const os64_page_options_t *opt);   // opt NULL = defaults
+                             const os64_page_options_t *opt,
+                             os64_page_state_t *state); // opt/state NULL = defaults/private
 void         os64_page_free(os64_page_t *page);
 
 // The model, by index, in tree order. Every item names its node — AND THE
@@ -376,10 +379,12 @@ int32_t                  os64_page_control_for(const os64_page_t *, const os64_h
 const os64_html_node_t  *os64_page_anchor(const os64_page_t *, const char *decoded_fragment); // exact lookup; NULL if absent or incomplete
 os64_page_reason_t os64_page_resolve_fragment(const os64_page_t *, const char *, const os64_html_node_t **); // navigation result, including top and refusal
 
-// Edits — the dirty value, kept apart from the model (ruling 2): a table
-// INSIDE the page, KEYED BY NODE and never by index, so a rebuild over a
-// changed tree can re-key what survives. The model is width-independent,
-// so a face builds it ONCE per page and a re-wrap never touches it.
+// Live values belong to shared node state. A resize does not rebuild the
+// width-independent model; a document mutation does.
+os64_page_state_t *os64_page_state_create(os64_html_document_t *, size_t max_bytes);
+void os64_page_state_free(os64_page_state_t *);
+os64_page_t *os64_page_rebuild(const os64_page_t *old);
+// A person's edits retain the model's control-index entrance.
 int64_t os64_page_set_text(os64_page_t *, int32_t control, const char *utf8, size_t len);
 int64_t os64_page_set_checked(os64_page_t *, int32_t control, bool on);   // a radio unticks its group
 int64_t os64_page_set_chosen(os64_page_t *, int32_t control, int32_t option, bool on);
@@ -484,22 +489,69 @@ values where the HTML auto-directionality algorithm calls for them.
 
 ## Control state and allocation failure
 
-Construction sanitizes values, settles radio groups by name and owner, and
-normalizes select selectedness before capturing immutable defaults. Option
-labels and fallback submission text occupy separate fields. A file input
-holds no selected file; markup cannot supply one.
+Construction sanitizes defaults, settles radio groups by name and form
+owner, and normalizes select defaults before capturing the reset answer.
+Live control state belongs to `os64_page_state_t`, keyed by control node
+and by each option node. It retains normalized checkedness/selectedness,
+their attribute defaults and dirty flags, dirty text and default-value
+caches. Option labels and fallback submission text occupy separate fields.
+A file input holds no selected file; markup cannot supply one.
 
-Text edits use the same sanitizer with temporary storage. Checked-radio
-edits reserve records for the group before publishing checkedness. Failed
-edits preserve published values and selections. Record presence alone does
-not mean a value is dirty. Select publication updates both selectedness and
-the control's current value.
+The document owner creates state with a byte ceiling (zero selects 16 MiB).
+The cap includes headers, records, tables, strings and operation scratch. A build
+retains default records where normalization differs from markup and keeps
+existing records; ordinary untouched options and ticks need no dense table
+of defaults. Property assignment can spend the cap on a whole group. New
+records reuse spare live lookup capacity at commit; larger pending batches
+have a private index, and the live lookup is copied when it needs to grow.
+The owner frees state after its models. Passing NULL to `os64_page_build` creates
+private state shared until the last model, including rebuilt models, is
+freed. State does not itself pin the document; each model does. Freeing
+explicit state while models borrow it stops with the PAGE badge.
 
-Reset clears edits and restores retained normalized defaults, without
-allocating. An incomplete model can be inspected, but edits, reset and form
-submission return NO_MEMORY. Link and refresh requests retain their own
-resolution refusals. Numeric contracts, independent checks and compatibility
-limits are recorded in [LIBPAGE_REVIEW.md](LIBPAGE_REVIEW.md).
+Text assignments share the sanitizer with initial values, using capped
+scratch. Record reservations complete before dirty properties change.
+Successful publication updates live model views before replaced text or
+cache bytes are freed. Failed setters and failed rebuilds preserve live
+state, its revision, published views and allocation accounting.
+
+`os64_page_rebuild` builds alongside the old model at the current document
+version. Any incomplete candidate returns NULL. Normalization runs over the
+candidate's connected controls, stages records and choices, then commits
+without further allocation. Detached nodes retain their state and radio
+members outside the candidate are left alone. Reset allocates nothing and
+restores the current model's retained normalized defaults.
+
+The index-based edit verbs and reset reject a model whose document version
+has changed with STALE. Activation checks the same gate before following
+links, refreshes or form submissions. Incomplete models remain inspectable,
+but person edits, reset and form submission return NO_MEMORY. A failed
+rebuild leaves the old presentation available and its stale actions refused.
+
+Text records retain whether the last assignment was a person edit, because
+minlength/maxlength checks require that origin in addition to dirty state.
+An equal script assignment can change that origin and the state revision
+while retaining the value bytes.
+
+Script-facing value, checked and selectedIndex verbs take a node, including
+one never inserted, and do not apply person-access checks. Text values use
+dirty state; hidden, button and checkbox/radio values write the HTML value
+attribute. File values accept empty only. Select assignments choose by
+current option position/value and store the result by option identity; a
+script may clear a size-one list. Attribute writes advance HTML's version;
+dirty state does not. The nonzero state revision advances on effective
+control changes and successful normalization, so a renderer can notice an
+edit that leaves the HTML version unchanged. Getter-only cache fills do not
+advance it; an effective change during dirty re-sanitization does. Current
+dirty getters allocate nothing; after an HTML mutation they stage
+re-sanitization for current type and constraints. A file-mode observation
+clears a prior dirty value permanently. Historical value-mode transitions
+between observations require a state-aware attribute entrance in D5; the
+current-tree snapshot cannot reconstruct them. Default sanitization may cache
+bytes within the cap and return NO_MEMORY without changing outputs.
+
+Numeric contracts, independent checks and compatibility limits are recorded
+in [LIBPAGE_REVIEW.md](LIBPAGE_REVIEW.md). The public contract is in `page.h`.
 
 ## Proof before integration
 
@@ -541,7 +593,6 @@ marked throwaway.
 | `file` inputs with a file | no face can pick one | the graphical browser's file dialog |
 | Constraint validation beyond `required`/length | typed-value families are their own table | the first page whose `pattern` matters |
 | Cookie storage, referrer policy | navigator-owned; libfetch provides per-hop header hooks | the first site that needs a session |
-| `os64_page_rebuild` — re-walk a changed tree, re-key the edits that survive | nothing can change a tree yet (ruling 2); a verb with no caller is speculative | the engine — the edit table is already keyed by node so the verb costs a walk, not a redesign |
 | An SVG or MathML `a` is not a link | a foreign element is not an HTML one however it is spelled, and no text face draws SVG. The walk DESCENDS into foreign subtrees, so HTML inside a `foreignObject` is still seen; it is the foreign element itself that is passed over | the graphical browser, which draws SVG and will meet a link inside one |
 | `pattern`, `min`/`max`/`step`, and the typed-value checks | family I's draft one, as this document booked it | the first page whose `pattern` matters |
 
@@ -585,6 +636,50 @@ between parsing and layout is what a page MEANS, it is built to the
 standard whole, and it lives in this library.
 
 ## Design changes during implementation
+
+### 2026-10-02: D3 shared node state and snapshot rebuilding
+
+DOM.md's detached-control example changed the edit-table ownership: keeping
+it inside a model would discard a detached value when that model went away.
+`state.c` now owns capped state separately; `os64_page_build` takes it as a
+fourth argument, with NULL preserving the private-state consumer pattern.
+Every in-tree consumer must rebuild against the changed signature.
+
+`os64_page_rebuild` pins a current snapshot beside the old one and stages
+normalization until all allocations have succeeded. Model views share state,
+while borrowed HTML bytes remain protected by each model's pin. The STALE
+gate prevents an old model from sending typed values to an action a script
+has since changed. The script entrance exists because disabled, readonly
+and hidden controls are assignable by script, and input value modes decide
+whether assignment changes live state or an HTML attribute.
+
+State's revision is separate from the HTML version: dirty property changes
+need a rendering signal too. Defaults for checkedness and selectedness stay
+in node records separately from dirty flags, which keeps a selection tied to
+its option when that option moves. A successful rebuild normalizes connected
+radio groups by name and form owner, with the last checked member winning;
+checks retained in other detached trees do not join that group.
+
+The document owner frees models, then explicit state, then the document.
+Private state remains until its last model. The 16 MiB default cap includes
+headers, tables, records, strings and script-operation scratch. Default-value
+cache refresh checks the HTML version; returned bytes last through unchanged
+reads and equal assignments, until their value changes, that cache refreshes
+after a tree mutation, or state is freed.
+
+D6's node holds are a required follow-on protocol: every retained state key
+must hold its node, and state destruction must release those holds. Models
+must hold node references as well as pin strings; document pins govern when
+a detached retired subtree can be reclaimed, while holds govern whether it
+may be retired. D3 uses the present document-lifetime node contract and does
+not implement reclamation. Yonder's rebuild loop and widget migration remain
+D5's integration work.
+
+The independent `tools/test_libpage_rebuild.inc` checks detach/reinsert,
+never-inserted assignment, both setter entrances and value modes, option
+identity, shared old/new publication, STALE, caps, pins, normalization failure
+atomicity, allocation sweeps and random walks. Its measured results and the
+consumer/guest evidence belong in DOM.md's D3 as-built section.
 
 ### 2026-09-12: family K, because a real page needed it
 
@@ -633,10 +728,10 @@ the text either wrong or under-specified. Nothing here changes a RULING.
    an unknown scheme for a form SUBMISSION and says nothing about a link, so
    a link's scheme is stated and the face decides. Which schemes a browser
    follows is a property of the browser, not of the page.
-3. **The edit table is the only STORAGE, and the model POINTS at it.** Keyed
-   by node, never by index, exactly as ruled — but a control's `value`, its
-   `checked` and an option's `selected` are made to reference the edit
-   rather than being a second copy of it. Two copies of one fact is what
+3. **The edit table owns edits, and the model publishes its views.** Keyed
+   by node, never by index, exactly as ruled. A control's value borrows its
+   edit bytes; checkedness and selectedness publish scalar views. D3 moves
+   this storage into shared document-owned state. Two copies of one fact is what
    this library exists to prevent, and a face that read the wrong one would
    be the same bug in a new place.
 4. **No work budget on the radio search.** Every radio sharing a name is
@@ -702,12 +797,11 @@ the text either wrong or under-specified. Nothing here changes a RULING.
 3. **The label lookup.** Same answer, same issue: libhtml exports the lookup
    it has. One request to Quinn covers the form-owner pointer, the label
    lookup and the encoder.
-4. **Edits versus rebuild.** Taken: the edit table lives inside the page,
-   keyed by node pointer, never by index. The model is width-independent,
-   so a face builds it once per page and the re-wrap dance the current edit
-   array exists for goes away. `os64_page_rebuild` is SPECIFIED by that key
-   and BOOKED, not built: nothing can change a tree yet, and a verb with no
-   caller is speculative. Landed in *The one door* and *Booked*.
+4. **Edits versus rebuild.** The September implementation kept edits inside
+   the page, keyed by node pointer. D3's October design supersedes that
+   ownership: explicit state survives models and detached nodes, and
+   `os64_page_rebuild` is implemented. The width-independent model still
+   needs no rebuild for a resize.
 5. **`dir=auto` for `dirname`.** Build it, per ruling 1 — but the weight is
    DATA, not code, and data is generated. A `tools/gen_bidi_table.py` in
    the shape of `tools/gen_html_tables.py` (which makes `entities.inc` from

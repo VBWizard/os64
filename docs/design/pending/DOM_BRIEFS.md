@@ -10,21 +10,21 @@ goes in DOM.md and its brief here is struck.
 | Slice | Builder | Reviewer | After |
 |---|---|---|---|
 | D2b fragments and serialisation | Opus | Fable, then an outside round (Codex) | nothing: D2a is merged |
-| D3 rebuild, control state, `STALE`, script setters | Quinn | Fable | nothing: libpage only |
+| D3 — **Built; review pending** | Quinn and two scoped subagents | Fable | [D3 as built](DOM.md#d3-as-built) |
 | D6 reclaiming unheld detached subtrees | Opus | Fable | D2b (its churn driver) |
 | D5 the binding library and J3's fixture | Quinn | Fable | D2b and D3; D4 is not needed |
 | D4 the parser on the window's thread; D7 the loop | Fable | — | D4 any time; D7 after D5 |
 
 D4 and D7 stay with Fable because their sections of DOM.md are findings and
 leans, not specifications, and a wrong call there is a hunt rather than a
-review round. The four briefs below are for slices whose rules are already
+review round. The remaining briefs below are for slices whose rules are already
 written down.
 
 ## What every DOM slice does the same way
 
-**Read first, in this order.** DOM.md whole, then the two "as built"
-sections at its foot (D1 and D2a), which are the worked examples of what
-a finished slice looks like. The contract blocks in
+**Read first, in this order.** DOM.md whole, then the "as built"
+sections at its foot (D1, D2a and D3), which record the implemented
+contracts and proof. The contract blocks in
 `userland/libhtml/include/html/html.h` (THE PARSE THAT STOPS, CHANGING A
 DOCUMENT): the header is the contract and the test harness holds the code
 to it a sentence at a time. LIBHTML.md (the parser's own design and its
@@ -239,111 +239,23 @@ Mutants: at least one per escaping rule, one per context kind that
 changes the insertion mode, the stop that must not happen, and the
 version that must not move.
 
-## D3 — rebuild, control state, `STALE`, and the script-facing setters
+## D3 — built; review pending
 
-**What it is.** DOM.md § Snapshots when the tree moves, built in libpage
-alone. Four pieces, in the order they depend on each other:
-
-1. **Control state as its own object**, keyed by node at both levels (a
-   `select`'s choices option by option), living as long as the document,
-   owned by whoever owns the document. Today the edit table (`PEdit` in
-   `userland/libpage/internal.h`) is keyed by node but lives inside the
-   model, so a rebuild loses it. It leaves the model and becomes a
-   `os64_page_state_t` the model borrows: `os64_page_build` takes one
-   (NULL means "make and free your own", which is wend's behaviour and
-   today's), and the model's `value`, `checked` and `selected` views point
-   into it as they point into the edit table now.
-2. **`os64_page_rebuild(old)`**: a new model over the same document at its
-   current version, beside the old, borrowing the same state; NULL on no
-   memory with the old untouched. The build's radio-group normalisation
-   writes to the state only after the new model's own memory is in hand,
-   so a failed rebuild changes nothing.
-3. **The `STALE` gate**: a model records `os64_html_version(doc)` when it
-   is built, and `os64_page_activate` and the person's edit verbs answer a
-   new `OS64_PAGE_REASON_STALE` when the document's version has moved past
-   it. The reason is in DOM.md: a script may have changed a form's action,
-   and a submission from the old model would send what a person typed to
-   an address the page no longer names.
-4. **Script-facing setters**, one per value a script assigns, taking a
-   NODE (connected or not) rather than a control index, and applying the
-   input's value mode: a text field's assignment sets the dirty value in
-   the state; a hidden input's, a button's and a checkbox's set the
-   `value` attribute through `os64_html_set_attr`, which is a tree
-   mutation and moves the version; a file input accepts only the empty
-   string. They share the sanitizer with the person's door and refuse
-   nothing the person's door refuses for being disabled, readonly or
-   hidden, because the standard lets a script assign to all of them. The
-   person's verbs keep their index shape and their refusals.
-
-Models also start to **pin** the document here: `os64_page_build` and
-`rebuild` take `os64_html_pin` and `os64_page_free` lets go. D1 left this
-for D3. (libgarb's cascade and libflow's layout pin in D5, which is the
-slice that first changes a tree under them.)
-
-**Read.** DOM.md § The mutation core (the version and the pins), § The
-verbs (the form-owner rules, which the rebuild relies on: a record is
-cleared by the mutation that invalidates it and never re-validated),
-§ Snapshots whole, and § Review record (Quinn's two P2s on edits and
-setters are the reason the shape is what it is). LIBPAGE.md § The ruling,
-§ Control state and allocation failure, § Proof before integration.
-`page.h`'s FILLING IT IN and THE DOOR blocks. `userland/libpage/core.c`
-for how controls find their state today (`p_edit_for`, `form_owner`).
-
-**Rules already settled:** the failure table in DOM.md § Snapshots (a
-failed model keeps the old page drawn and scrolling and refuses only
-following a link and sending a form, each with a sentence); old layouts
-pointing at nodes since detached are safe and correct; a value set on a
-control that was never in the document exists and survives insertion; the
-state is keyed by node and never by index; `os64_page_link_for` and
-`os64_page_control_for` already answer by node and are how a face holding
-a newer model asks about a box built from an older one.
-
-**The builder decides, and records why:** the state object's exact
-surface and whether `os64_page_build`'s signature changes or a sibling is
-added (changing it is the lean: every in-tree consumer rebuilds, and a
-`libpage.so` beside an old consumer is already unsafe, as D2a's PR said
-of `libhtml.so` when its options struct grew); how a radio group whose members are partly detached is
-normalised (a group is by name and form owner; the state records per node,
-and normalisation runs over the model's controls); what a setter answers
-for a node that is not a control (`WRONG_KIND` is the existing word); and
-whether `rebuild` reuses the old model's arena sizes as a hint.
-
-**The proof** is the row in DOM.md § Slices, as cases in a new
-`tools/test_libpage_rebuild.inc` included by `tools/test_libpage_host.c`:
-
-- a value set, the control detached with `os64_html_remove`, the model
-  rebuilt, the control put back, the model rebuilt again: the value is
-  still there, and the form's entry list carries it;
-- a value on a control made with `os64_html_create_element` and never yet
-  inserted, then inserted: present in the rebuilt model;
-- a script's assignment to a disabled, a readonly and a hidden input, and
-  to a checkbox, a button and a file input, each landing where its value
-  mode says (state or attribute), the version moving only for the
-  attribute ones; the same through the person's door refused as today;
-- a form's `action` changed with `os64_html_set_attr`, then
-  `os64_page_activate` on the old model: `REFUSED` with `STALE`; on the
-  rebuilt model, the new address;
-- the allocation sweep over `rebuild` and over each setter: every
-  allocation failed in turn, the old model and the state unchanged, the
-  version unmoved unless the setter's attribute write completed;
-- a pinned document: a model freed lets go of its pin, two models at once
-  hold two, and the count agrees after a failed rebuild.
-
-Plus the consumers unchanged (`test_wend_host.sh` is the one that passes
-NULL state and must not notice) and mutants over the gate, the pin, the
-value modes and the normalisation order.
-
-**Not in D3:** yonder's use of `rebuild` (that is the rendering step of
-the loop, and arrives with D5, where a script first moves a version);
-telling a text change from a structural one (booked in DOM.md with its
-trigger); any binding.
-
-**Docs.** LIBPAGE.md gets a dated section under "Design changes during
-implementation" in the shape of the ones there; `page.h`'s FILLING IT IN
-block gains the second entrance and says why there are two; DOM.md's D3
-row and as-built section; JAVASCRIPT_TASKS.md's row.
+The brief is retired in favour of [DOM.md § D3, as built](DOM.md#d3-as-built)
+and the public contract in `userland/libpage/include/page/page.h`.
+Implementation is in [PR #211](https://github.com/VBWizard/os64/pull/211),
+`codex/dom-d3`; D5 consumes the state revision and the
+attribute-transition handoff, and D6 adds holds for state and model keys.
 
 ## D6 — reclaiming detached subtrees nothing holds
+
+**Storage contract to settle before building.** Reusing node bodies while
+retaining each fragment's parsed names and attributes cannot meet the flat
+arena requirement below. D2b and D6 must account for reclaimable fragment
+payloads and the scaffold/result containers, as well as node reuse, without
+weakening the hour-long churn proof. D3's persistent state also retains node
+keys, including option keys and default-value caches: those records must
+hold their nodes until released when D6 introduces reclamation.
 
 **What it is.** DOM.md § Wrappers, the paragraph that begins "So the
 reclamation JAVASCRIPT.md booked is not a someday item", and the DEBTS.md
@@ -498,6 +410,23 @@ surrogate and a NUL each become U+FFFD before a verb sees them (DOM.md
 libhtml's; the binding maps each refusal status to the DOM exception's
 name and does no checking of its own.
 
+**Input attributes and state.** D3's node property APIs interpret the
+current tree. An attribute binding must also apply the input transition
+rules when each mutation happens: a text → hidden → text sequence cannot
+be recovered from the final tree/version. Add a state-aware entrance for
+`type` and other attributes with control-state effects, including transfer
+of dirty text to the value attribute when required. Stage the tree and
+state effects together; an allocation refusal changes neither. Test both
+intermediate observations and multiple transitions between observations.
+Calling `os64_html_set_attr` alone is not that transaction.
+
+**Select mutation history.** Clearing `selectedIndex` or assigning an
+unmatched value may leave a size-one select empty. Option insertion or
+removal and changes to `size` or `multiple` run selectedness normalization
+again, including the first enabled option fallback. The state-aware tree
+and attribute entrances must release the explicit-empty selection marker
+at those transitions, with refusal preserving both tree and state.
+
 **The leak count.** DOM.md § A leak at teardown asks libjs for a destroy
 that reports instead of aborting (CONTRACT.md § Browser extensions, the
 third), with a reviewed patch and a ledger allocator. For J3 the fixture
@@ -511,7 +440,7 @@ is Quinn's call as the runtime's owner, told to Chris.
 ruled). yonder's page arrives through `trip.c` and is seated in
 `yonder.c` where `os64_page_build` is called on the fresh page; the
 scripts run after that, each as a step of the loop. After a script, if
-the version moved, the rendering step rebuilds: `os64_page_rebuild` (D3),
+the document version moved, the rendering step rebuilds: `os64_page_rebuild` (D3),
 `garb_cascade`, `flow_layout`, paint. libgarb's cascade and libflow's
 layout take a pin at build and let go at free; a layout's `link` and
 `control` indices belong to the model it was built from, so a click is
@@ -519,12 +448,14 @@ resolved by node (`os64_page_link_for`, `os64_page_control_for`), and a
 control's widget becomes the node's, which is what keeps the caret in a
 field a script did not touch. The switch is DOM.md ruling 1: a box in
 yonder's Settings window, "Run page scripts", off by default, and a word
-on the status line while on.
+on the status line while on. A dirty control property may leave the HTML
+version unchanged; compare `os64_page_state_version` as well and refresh
+control presentation when it moves.
 
 **Read.** DOM.md § Wrappers, § Where script runs, § What this asks of
 libjs, § A leak at teardown, § Ruled by Chris; JAVASCRIPT.md § Browser
 integration requirements; CONTRACT.md whole; `js_engine.h`; the D3
-as-built section when it exists; YONDER.md § What runs where;
+as-built section; YONDER.md § What runs where;
 `userland/libway/session.c` (`way_page_clear` is today's teardown order
 and becomes step 6 and 7 of DOM.md's).
 

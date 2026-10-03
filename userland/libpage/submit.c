@@ -218,11 +218,10 @@ bool p_validate(const os64_page_t *page, int32_t form, int32_t *control)
             ok = !c->required || c->checked;
         else if (c->required && text_like(c))
             ok = c->value_len != 0;
-        // THE LENGTH LIMITS APPLY TO WHAT A PERSON TYPED and to nothing
-        // else: the standard hangs them on the dirty value, so a page that
-        // ships a value longer than its own maxlength still submits it.
-        const PEdit *edit = p_edit_find(page, i);
-        if (ok && edit != NULL && edit->text != NULL && length_limited(c)) {
+        // Length limits require a dirty value last changed by a person;
+        // script assignment and the page's default do not trigger them.
+        const PNodeState *edit = p_state_for_control(page, i);
+        if (ok && edit != NULL && edit->text != NULL && edit->text_user && length_limited(c)) {
             // HTML numeric attributes share prefix parsing with select
             // display size and textarea columns.
             size_t units = utf16_length(c->value, c->value_len);
