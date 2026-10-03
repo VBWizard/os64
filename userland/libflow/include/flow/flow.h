@@ -318,6 +318,48 @@ typedef struct {
     uint32_t name_len;
     int32_t row0, row1, col0, col1;
 } flow_grid_area_t;
+// A gradient (Images 3 § 3), as a page wrote it: what it needs to be drawn
+// on a box is the box's size, which a face has and the style has not.
+typedef enum { FLOW_GRADIENT_LINEAR = 0, FLOW_GRADIENT_RADIAL } flow_gradient_kind_t;
+// How big a radial gradient's ending shape is: to a side or a corner of
+// its box, the nearest or the farthest, or a SIZE written out (`radii`).
+typedef enum {
+    FLOW_EXTENT_FARTHEST_CORNER = 0,
+    FLOW_EXTENT_CLOSEST_SIDE,
+    FLOW_EXTENT_FARTHEST_SIDE,
+    FLOW_EXTENT_CLOSEST_CORNER,
+    FLOW_EXTENT_SIZE,
+} flow_extent_t;
+
+// A colour stop at a position along the gradient line (PX, or PERCENT of
+// the line), AUTO where the page left it out; or a HINT, where between its
+// two neighbours their colours meet half and half, its colour unused.
+typedef struct {
+    uint32_t colour;
+    flow_length_t at;
+    bool hint;
+} flow_gradient_stop_t;
+
+typedef struct {
+    flow_gradient_kind_t kind;
+    bool repeating;
+    // LINEAR: the line's angle in thousandths of a degree, clockwise from
+    // up (180000 is the initial, down) — or, when `to_x` or `to_y` is not
+    // 0, toward that side or corner: -1 left or top, 1 right or bottom,
+    // which only the box's shape turns into an angle.
+    int32_t angle;
+    int8_t to_x, to_y;
+    // RADIAL: a circle or an ellipse, how big — an extent, or `radii` (a
+    // circle's in radii[0]; PX, or for an ellipse PERCENT of its box too)
+    // — and its centre, x then y (PX or PERCENT of the box).
+    bool circle;
+    flow_extent_t extent;
+    flow_length_t radii[2];
+    flow_length_t centre[2];
+    const flow_gradient_stop_t *stops;
+    int32_t nstops;
+} flow_gradient_t;
+
 // A shadow (Backgrounds 3 § 7; Text Decoration 3 § 4): its offsets, its
 // blur radius (not negative) and its spread in whole pixels, its colour
 // (currentColor resolved), and whether it falls inside a box rather than
@@ -357,6 +399,10 @@ typedef struct {
     const char *background_image;
     uint32_t background_image_len;
     int32_t background_sheet;
+    // Or a gradient from the page's sheets in its place, NULL for none:
+    // one picture behind a box, never both. It outranks an attribute's
+    // picture as a sheet's url() does. The style's, and lives as it does.
+    const flow_gradient_t *background_gradient;
     flow_repeat_t background_repeat;
     // From the box's top-left corner: PX, or PERCENT of the room the
     // picture leaves (a picture at 100% sits against the far edge).

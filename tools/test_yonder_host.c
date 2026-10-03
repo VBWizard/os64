@@ -348,6 +348,21 @@ static void rec_mask(void *ctx, os64_gui_rect_t r, const uint8_t *alpha, uint32_
         most);
 }
 
+// A painted picture: where, and every pixel when it is small enough to be
+// worked by hand, else its first and last.
+static void rec_pixels(void *ctx, os64_gui_rect_t r, const uint32_t *argb)
+{
+    Rec *rec = ctx;
+    if (!inside(r, rec->view))
+        rec->escaped = true;
+    out(&rec->out, "pixels %d %d %d %d", r.x, r.y, r.w, r.h);
+    int32_t n = r.w * r.h;
+    for (int32_t k = 0; k < n; k++)
+        if (n <= 16 || k == 0 || k == n - 1)
+            out(&rec->out, " %08x", argb[k]);
+    out(&rec->out, "\n");
+}
+
 static const char *kPage = "http://host/dir/page.html";
 
 static os64_html_document_t *parse(const char *html, size_t len)
@@ -393,7 +408,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     out(&rec.out, "%s", "");
     yonder_verbs_t v = {&rec,          rec_fill,     rec_text,       rec_image,
                         rec_control,   rec_backdrop, rec_group_open, rec_group_close,
-                        rec_mask};
+                        rec_mask,      rec_pixels};
     if (t != NULL)
         yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, &v);
     if (s_canvas_owner != NULL) {

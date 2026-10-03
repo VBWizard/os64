@@ -293,6 +293,45 @@ static void paint_cases(void)
                     "text \"Hi\" 9 32 #ff0000\n"
                     "text \"Hi\" 8 30 #101010\n");
 
+    // Gradients, each pixel worked by hand from its middle (PILE3.md §
+    // Gradients). To the right across 4px: t = 1/8, 3/8, 5/8, 7/8 of black
+    // to white.
+    paint_page_case("a linear gradient, pixel by pixel",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: linear-gradient(to right, #000000, #ffffff) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff202020 ff606060 ff9f9f9f ffdfdfdf\n");
+    // Hard stops, repeated: red for 1px, blue for 1px, again.
+    paint_page_case("a repeating gradient with hard stops",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: repeating-linear-gradient(to right, #ff0000 0 1px,"
+                    " #0000ff 1px 2px) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ffff0000 ff0000ff ffff0000 ff0000ff\n");
+    // A circle to its closest side, 2px, in a 4px square: the inner four
+    // pixels sqrt(0.5)/2 out (red a5, blue 5a), the middles of the edges
+    // sqrt(2.5)/2 (35, ca), the corners past the end — the last stop's.
+    paint_page_case("a radial gradient, pixel by pixel",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 4px;"
+                    " background: radial-gradient(circle closest-side, #ff0000, #0000ff) }"
+                    "</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 4 ff0000ff ff3500ca ff3500ca ff0000ff"
+                    " ff3500ca ffa5005a ffa5005a ff3500ca ff3500ca ffa5005a ffa5005a ff3500ca"
+                    " ff0000ff ff3500ca ff3500ca ff0000ff\n");
+    // The body's gradient is the canvas's, its tile the root's box: a page
+    // 4px tall repeats it every 4px down the whole view, as the browsers
+    // do — the first pixel 1/8 down it, the last 7/8.
+    paint_page_case("a body's gradient is the canvas's, tiled by the root",
+                    "<!doctype html><style>html { height: 4px } body { margin: 0;"
+                    " background: linear-gradient(#ff0000, #0000ff) }</style>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 200 100 ffdf0020 ff2000df\n");
+
     // Groups nest, each laid over what was under it when it opened, and a
     // group none of which shows opens empty: the far one at 520, cut to a
     // view that ends at 100, has no height.

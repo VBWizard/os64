@@ -144,3 +144,33 @@ static void radius_cases(void)
         sheeted_close(&q);
     }
 }
+
+// Gradients (PILE3.md § Gradients): what libgarb kept, read into flow's.
+// The initial direction is down, 180 degrees; `to top right` is a corner,
+// whose angle the box's shape decides; 0.25turn is 90 degrees. A stop
+// written with two positions is two stops; a hint has no colour; a stop
+// with none is auto. A radial's initial is an ellipse to the farthest
+// corner at the centre; a circle given one length keeps it for both
+// radii. currentColor in a stop is the element's colour.
+static void gradient_style_cases(void)
+{
+    cascade_case("gradients: what a page wrote, read", 400,
+        "<!doctype html><style>"
+        ".a{background-image:linear-gradient(red,blue)}"
+        ".b{background-image:linear-gradient(to top right,red 10%,30%,blue 2px 4px)}"
+        ".c{background-image:repeating-radial-gradient(circle 20px at 10px 50%,red,blue)}"
+        ".d{color:green;background-image:linear-gradient(0.25turn,red,currentColor)}"
+        ".e{background:radial-gradient(red,blue)}"
+        "</style><div class=a></div><div class=b></div><div class=c></div>"
+        "<div class=d></div><div class=e></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=linear:180000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:to 1 -1:#ff0000@10%,@30%,#0000ff@2,#0000ff@4\n"
+        "    div block gradient=repeating-radial:circle size 20/20 at 10/50%:"
+        "#ff0000@auto,#0000ff@auto\n"
+        "    div block color=#008000 gradient=linear:90000:#ff0000@auto,#008000@auto\n"
+        "    div block gradient=radial:ellipse farthest-corner at 50%/50%:"
+        "#ff0000@auto,#0000ff@auto\n");
+}

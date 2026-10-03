@@ -1716,6 +1716,7 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->background_image = s->background_image;
         d->background_image_len = s->background_image_len;
         d->background_sheet = s->background_sheet;
+        d->background_gradient = s->background_gradient;
         break;
     case GARB_BACKGROUND_REPEAT: d->background_repeat = s->background_repeat; break;
     case GARB_BACKGROUND_POSITION_X: d->background_position[0] = s->background_position[0]; break;
@@ -2110,6 +2111,92 @@ static GridRead author_line(Author *a, const garb_val_t *v, flow_grid_line_t *ou
 }
 
 // One winner that is not a CSS-wide keyword.
+// A length-percentage as flow's, at the element's font size; `unset` for
+// what will not read.
+static flow_length_t author_lp(const Author *a, const garb_val_t *v, flow_length_t unset)
+{
+    Len l;
+    return author_len(a, v, false, &l) ? resolve(l, a->font, unset) : unset;
+}
+
+// libgarb's gradient (values.h's GARB_V_IMAGE: its geometry, then its
+// stops) as flow's, in the style's arena; currentColor is the element's
+// colour, known by now. False only when memory runs out.
+static bool author_gradient(const Author *a, const flow_style_t *s, const garb_val_t *v,
+                            const flow_gradient_t **out)
+{
+    static const flow_length_t kUnwritten = {FLOW_LENGTH_AUTO, 0, 0};
+    static const flow_length_t kHalf = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    flow_gradient_t *g = f_arena_alloc(&a->c->out->arena, sizeof(*g));
+    flow_gradient_stop_t *stops =
+        f_arena_alloc(&a->c->out->arena, (size_t)v->nitems * sizeof(*stops));
+    if (g == NULL || stops == NULL)
+        return false;
+    os64_memset(g, 0, sizeof(*g));
+    const char *name = v->text;             // one of libgarb's own names
+    g->repeating = name != NULL && (os64_streq(name, "repeating-linear-gradient") ||
+                                    os64_streq(name, "repeating-radial-gradient"));
+    const garb_val_t *geo = &v->items[0];
+    if (geo->kind == GARB_V_NUMBER) {
+        g->kind = FLOW_GRADIENT_LINEAR;
+        int64_t t = (int64_t)(geo->number * 1000 + (geo->number < 0 ? -0.5 : 0.5)) % 360000;
+        g->angle = (int32_t)(t < 0 ? t + 360000 : t);
+    } else if (geo->kind == GARB_V_KEYWORD && geo->nitems == 0) {
+        // "to top right" and the rest, libgarb's eight names: the side or
+        // corner each points toward.
+        static const struct { const char *name; int8_t x, y; } kTo[] = {
+            {"to top", 0, -1},          {"to right", 1, 0},         {"to bottom", 0, 1},
+            {"to left", -1, 0},         {"to top left", -1, -1},    {"to top right", 1, -1},
+            {"to bottom left", -1, 1},  {"to bottom right", 1, 1},
+        };
+        g->kind = FLOW_GRADIENT_LINEAR;
+        for (size_t k = 0; k < F_ARRAY(kTo); k++)
+            if (word(geo, kTo[k].name)) {
+                g->to_x = kTo[k].x;
+                g->to_y = kTo[k].y;
+            }
+    } else {
+        g->kind = FLOW_GRADIENT_RADIAL;
+        g->circle = word(geo, "circle");
+        g->extent = FLOW_EXTENT_FARTHEST_CORNER;
+        g->radii[0] = g->radii[1] = kUnwritten;
+        g->centre[0] = g->centre[1] = kHalf;
+        if (geo->nitems == 4) {
+            static const char *const kExtents[] = {"farthest-corner", "closest-side",
+                                                   "farthest-side", "closest-corner"};
+            int32_t e = pick(&geo->items[0], kExtents, F_ARRAY(kExtents));
+            if (e >= 0) {
+                g->extent = (flow_extent_t)e;
+            } else {
+                g->extent = FLOW_EXTENT_SIZE;
+                g->radii[0] = author_lp(a, &geo->items[0], kUnwritten);
+                g->radii[1] = word(&geo->items[1], "auto") ? g->radii[0]
+                                                            : author_lp(a, &geo->items[1], kUnwritten);
+            }
+            g->centre[0] = author_lp(a, &geo->items[2], kHalf);
+            g->centre[1] = author_lp(a, &geo->items[3], kHalf);
+        }
+    }
+    int32_t n = 0;
+    for (int32_t i = 1; i < v->nitems; i++) {
+        const garb_val_t *st = &v->items[i];
+        flow_gradient_stop_t *o = &stops[n++];
+        o->at = kUnwritten;
+        if (st->kind != GARB_V_COLOR) {
+            o->hint = true;
+            o->at = author_lp(a, st, kUnwritten);
+            continue;
+        }
+        o->colour = st->color.current ? s->color : colour_of(st->color);
+        if (st->nitems > 0)
+            o->at = author_lp(a, &st->items[0], kUnwritten);
+    }
+    g->stops = stops;
+    g->nstops = n;
+    *out = g;
+    return true;
+}
+
 // `none`, or libgarb's shadows (G_SHADOW): each `inset` first when it is
 // there, four lengths and a colour. Lengths in pixels, at the element's
 // own font size, which is known by now; currentColor is the element's
@@ -2179,15 +2266,19 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         }
         break;
     case GARB_BACKGROUND_IMAGE:
-        // A gradient is an image libflow cannot draw yet: no picture
-        // (GARB.md § Booked).
+        // A url() to fetch, or a gradient libgarb kept (values.h); a conic
+        // gradient or an image-set is no picture yet (PILE3.md § Booked).
         s->background_image = NULL;
         s->background_image_len = 0;
         s->background_sheet = -1;
+        s->background_gradient = NULL;
         if (v->kind == GARB_V_URL && v->len > 0) {
             s->background_image = v->text;
             s->background_image_len = (uint32_t)v->len;
             s->background_sheet = a->sheet;
+        } else if (v->kind == GARB_V_IMAGE && v->nitems > 0 &&
+                   !author_gradient(a, s, v, &s->background_gradient)) {
+            return false;
         }
         break;
     case GARB_BACKGROUND_REPEAT: {

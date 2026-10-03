@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- pile 3, S4a: gradients. Compare with Chrome: each box's gradient, the
+     rounded one cut to its corners, the translucent stops over the stripes,
+     and the body's own gradient behind everything. -->
+<html><head><title>gradients</title>
+<style>
+body { margin: 16px; font-family: sans-serif; background: linear-gradient(#eef, #ccd) }
+.row { display: flex; gap: 16px; margin-bottom: 18px; flex-wrap: wrap }
+.g { width: 150px; height: 80px; font-size: 13px; color: #000; padding: 4px }
+.l1 { background: linear-gradient(red, blue) }
+.l2 { background: linear-gradient(45deg, #ff0, #f0f, #0ff) }
+.l3 { background: linear-gradient(to top right, #333, #fff) }
+.l4 { background: linear-gradient(to right, red 30%, blue 30%) }
+.r1 { background: radial-gradient(#fff, #036) }
+.r2 { background: radial-gradient(circle at 25% 25%, yellow, orange 40%, red) }
+.r3 { background: radial-gradient(circle closest-side, #0c0, #060 80%, transparent) }
+.r4 { background: radial-gradient(ellipse 60px 20px, #fc0, #930) }
+.p1 { background: repeating-linear-gradient(45deg, #444 0 10px, #888 10px 20px) }
+.p2 { background: repeating-radial-gradient(circle, #fff 0 6px, #39c 6px 12px) }
+.p3 { background: linear-gradient(to right, red, 20%, blue); border-radius: 20px }
+.stripes { background: repeating-linear-gradient(90deg, #000 0 8px, #fff 8px 16px) }
+.p4 { background: linear-gradient(rgba(255, 0, 0, 0.8), rgba(0, 0, 255, 0)) }
+</style></head>
+<body>
+<div class=row><div class="g l1">red, blue</div><div class="g l2">45deg, three stops</div><div class="g l3">to top right</div><div class="g l4">hard stop at 30%</div></div>
+<div class=row><div class="g r1">radial</div><div class="g r2">circle at 25% 25%</div><div class="g r3">closest-side to transparent</div><div class="g r4">ellipse 60x20</div></div>
+<div class=row><div class="g p1">repeating linear</div><div class="g p2">repeating radial</div><div class="g p3">hint at 20%, rounded</div><div class="stripes"><div class="g p4">translucent stops over stripes</div></div></div>
+</body></html>

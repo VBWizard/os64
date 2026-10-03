@@ -8,6 +8,7 @@
 #include "paint.h"
 #include "html/html.h"
 #include "os64/mem.h"
+#include <math.h>
 
 // A painter works in the coordinates of the box it paints — a fixed box's
 // are the viewport's — and `off` is what takes them to the page's, added
@@ -581,6 +582,226 @@ static void shadow(const Painter *p, const flow_box_t *b, const Round *outer, co
     os64_free(m.a);
 }
 
+// ── Gradients (Images 3 § 3) ────────────────────────────────────────────
+//
+// A gradient is a picture the size of the box's padding box — its
+// positioning area — drawn across its border box, repeated as
+// `background-repeat` says, and cut to its corners' curves. Each pixel of
+// it that the view shows is worked out on its own: where its middle falls
+// along the gradient's line (or ray), and the colour the stops give there,
+// mixed in premultiplied sRGB as CSS mixes colours with alpha.
+
+#define GRADIENT_STOPS_MAX 128
+
+typedef struct {
+    double at[GRADIENT_STOPS_MAX];      // along the line, 0 its start, 1 its end
+    uint32_t colour[GRADIENT_STOPS_MAX];
+    bool hint[GRADIENT_STOPS_MAX];
+    int32_t n;
+} Stops;
+
+// A stop's position on a line `len` px long, or NAN for none written.
+static double stop_at(flow_length_t l, double len)
+{
+    if (l.kind == FLOW_LENGTH_PERCENT)
+        return l.value / 6400.0 + (len > 0 ? l.offset / 64.0 / len : 0);
+    if (l.kind == FLOW_LENGTH_PX)
+        return len > 0 ? l.value / 64.0 / len : 0;
+    return NAN;
+}
+
+// A length-percentage in px against `base`: what the box's own sizes make
+// of a radial gradient's centre and radii.
+static double lp_px(flow_length_t l, double base)
+{
+    if (l.kind == FLOW_LENGTH_PERCENT)
+        return l.value / 6400.0 * base + l.offset / 64.0;
+    return l.kind == FLOW_LENGTH_PX ? l.value / 64.0 : 0;
+}
+
+// § 3.5.3's fix-up: the first stop at 0 and the last at 1 when left out,
+// each no earlier than the one before it, and a run left out spread evenly
+// between the stops either side of it.
+static bool stops_resolve(const flow_gradient_t *g, double len, Stops *out)
+{
+    out->n = g->nstops < GRADIENT_STOPS_MAX ? g->nstops : GRADIENT_STOPS_MAX;
+    if (out->n < 2)
+        return false;
+    for (int32_t i = 0; i < out->n; i++) {
+        out->at[i] = stop_at(g->stops[i].at, len);
+        out->colour[i] = g->stops[i].colour;
+        out->hint[i] = g->stops[i].hint;
+    }
+    if (isnan(out->at[0]))
+        out->at[0] = 0;
+    if (isnan(out->at[out->n - 1]))
+        out->at[out->n - 1] = 1;
+    double most = out->at[0];
+    for (int32_t i = 1; i < out->n; i++) {
+        if (!isnan(out->at[i]) && out->at[i] < most)
+            out->at[i] = most;
+        if (!isnan(out->at[i]))
+            most = out->at[i];
+    }
+    for (int32_t i = 1; i < out->n; i++) {
+        if (!isnan(out->at[i]))
+            continue;
+        int32_t j = i;
+        while (isnan(out->at[j]))
+            j++;
+        for (int32_t k = i; k < j; k++)
+            out->at[k] = out->at[i - 1] + (out->at[j] - out->at[i - 1]) * (k - i + 1) / (j - i + 1);
+        i = j;
+    }
+    return true;
+}
+
+// Colour `a` toward `b` by `t` (0..1), premultiplied, as a flow colour.
+static uint32_t mix(uint32_t a, uint32_t b, double t)
+{
+    double aa = flow_alpha(a) / 255.0, ba = flow_alpha(b) / 255.0;
+    double alpha = aa + (ba - aa) * t;
+    uint32_t out = 0;
+    for (int shift = 0; shift < 24; shift += 8) {
+        double ca = ((a >> shift) & 0xff) * aa, cb = ((b >> shift) & 0xff) * ba;
+        double c = alpha > 0 ? (ca + (cb - ca) * t) / alpha : 0;
+        out |= (uint32_t)(c + 0.5 > 255 ? 255 : c + 0.5) << shift;
+    }
+    uint32_t al = (uint32_t)(alpha * 255 + 0.5);
+    return out | (255u - (al > 255 ? 255 : al)) << 24;
+}
+
+// The colour at `t` along the line: the first stop's before it, the last's
+// after, and between two stops their mix — bent by a hint between them so
+// that the two meet half and half at the hint.
+static uint32_t stops_colour(const Stops *s, double t, bool repeating)
+{
+    double first = s->at[0], last = s->at[s->n - 1];
+    if (repeating && last > first) {
+        double span = last - first;
+        t = first + (t - first - span * floor((t - first) / span));
+    }
+    if (t <= first)
+        return s->colour[0];
+    for (int32_t i = 1; i < s->n; i++) {
+        if (s->hint[i] || t > s->at[i])
+            continue;
+        int32_t p = i - 1;
+        bool hinted = p > 0 && s->hint[p];
+        double h = hinted ? s->at[p] : 0;
+        if (hinted)
+            p--;
+        double a = s->at[p], b = s->at[i];
+        double f = b > a ? (t - a) / (b - a) : 1;
+        if (hinted && b > a) {
+            double hf = (h - a) / (b - a);
+            f = hf <= 0 ? 1 : hf >= 1 ? 0 : pow(f, log(0.5) / log(hf));
+        }
+        return mix(s->colour[p], s->colour[i], f);
+    }
+    return s->colour[s->n - 1];
+}
+
+// `x` taken into [0, size), as a repeating tile is.
+static double wrap(double x, double size)
+{
+    return x - size * floor(x / size);
+}
+
+// Gradient `g` with its tile at (tx, ty), w by h, drawn over `area` (and
+// the view), repeated on the axes `repeat` says, cut to `shape` when
+// `round`.
+static void gradient(const Painter *p, const flow_gradient_t *g, double tx, double ty, double w,
+                     double h, os64_gui_rect_t area, flow_repeat_t repeat, const Round *shape,
+                     bool round)
+{
+    if (w <= 0 || h <= 0)
+        return;
+    int64_t x0 = max64(area.x, p->view.x), y0 = max64(area.y, p->view.y);
+    int64_t x1 = min64((int64_t)area.x + area.w, (int64_t)p->view.x + p->view.w);
+    int64_t y1 = min64((int64_t)area.y + area.h, (int64_t)p->view.y + p->view.h);
+    if (x1 <= x0 || y1 <= y0 || p->v->pixels == NULL)
+        return;
+    // The line (linear) or the ray (radial) and its length in px.
+    double dx = 0, dy = 0, len, cx = w / 2, cy = h / 2, rx = 1, ry = 1;
+    if (g->kind == FLOW_GRADIENT_LINEAR) {
+        if (g->to_x != 0 || g->to_y != 0) {
+            // Toward a corner, the line is square to the diagonal between
+            // its two neighbours (§ 3.1.1).
+            dx = g->to_x * h;
+            dy = g->to_y * w;
+            double n = sqrt(dx * dx + dy * dy);
+            dx /= n;
+            dy /= n;
+        } else {
+            double a = g->angle / 1000.0 * 3.14159265358979323846 / 180;
+            dx = sin(a);
+            dy = -cos(a);
+        }
+        len = fabs(w * dx) + fabs(h * dy);
+    } else {
+        cx = lp_px(g->centre[0], w);
+        cy = lp_px(g->centre[1], h);
+        double sx_near = fmin(fabs(cx), fabs(w - cx)), sx_far = fmax(fabs(cx), fabs(w - cx));
+        double sy_near = fmin(fabs(cy), fabs(h - cy)), sy_far = fmax(fabs(cy), fabs(h - cy));
+        switch (g->extent) {
+        case FLOW_EXTENT_CLOSEST_SIDE: rx = sx_near; ry = sy_near; break;
+        case FLOW_EXTENT_FARTHEST_SIDE: rx = sx_far; ry = sy_far; break;
+        case FLOW_EXTENT_CLOSEST_CORNER: rx = sx_near * sqrt(2); ry = sy_near * sqrt(2); break;
+        case FLOW_EXTENT_FARTHEST_CORNER: rx = sx_far * sqrt(2); ry = sy_far * sqrt(2); break;
+        case FLOW_EXTENT_SIZE:
+            rx = lp_px(g->radii[0], w);
+            ry = lp_px(g->radii[1], h);
+            break;
+        }
+        if (g->circle) {
+            // A circle's sides are the nearer (or farther) of the two; its
+            // corners the distance to that corner.
+            double r = g->extent == FLOW_EXTENT_CLOSEST_SIDE ? fmin(sx_near, sy_near)
+                     : g->extent == FLOW_EXTENT_FARTHEST_SIDE ? fmax(sx_far, sy_far)
+                     : g->extent == FLOW_EXTENT_CLOSEST_CORNER ? hypot(sx_near, sy_near)
+                     : g->extent == FLOW_EXTENT_FARTHEST_CORNER ? hypot(sx_far, sy_far) : rx;
+            rx = ry = r;
+        }
+        len = rx;
+    }
+    Stops stops;
+    if (!(len > 0) || !(rx > 0) || !(ry > 0) || !stops_resolve(g, len, &stops))
+        return;
+    bool rep_x = repeat == FLOW_REPEAT || repeat == FLOW_REPEAT_X;
+    bool rep_y = repeat == FLOW_REPEAT || repeat == FLOW_REPEAT_Y;
+    uint32_t *out = os64_malloc((size_t)((x1 - x0) * (y1 - y0)) * sizeof(*out));
+    if (out == NULL)
+        return;
+    for (int64_t y = y0; y < y1; y++) {
+        int64_t a = 0, e = 0;
+        bool row = !round || round_row(shape, y * SUB + SUB / 2, &a, &e);
+        for (int64_t x = x0; x < x1; x++) {
+            uint32_t *px_out = &out[(y - y0) * (x1 - x0) + (x - x0)];
+            double u = x + 0.5 - tx, v = y + 0.5 - ty;
+            if ((!rep_x && (u < 0 || u >= w)) || (!rep_y && (v < 0 || v >= h)) || !row) {
+                *px_out = 0;
+                continue;
+            }
+            u = wrap(u, w);
+            v = wrap(v, h);
+            double t = g->kind == FLOW_GRADIENT_LINEAR
+                           ? ((u - cx) * dx + (v - cy) * dy) / len + 0.5
+                           : hypot((u - cx) / rx, (v - cy) / ry);
+            uint32_t c = stops_colour(&stops, t, g->repeating);
+            uint32_t alpha = flow_alpha(c);
+            if (round)
+                alpha = (uint32_t)(alpha * cover(x, a, e) / SUB);
+            *px_out = alpha << 24 | (c & 0xffffffu);
+        }
+    }
+    p->v->pixels(p->v->ctx,
+                 (os64_gui_rect_t){(int32_t)(x0 + p->off.x), (int32_t)(y0 + p->off.y),
+                                   (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
+                 out);
+    os64_free(out);
+}
+
 static bool rounded(const int32_t radii[4][2])
 {
     for (int c = 0; c < 4; c++)
@@ -602,7 +823,7 @@ static void frame(const Painter *p, const flow_box_t *b)
     bool round = rounded(radii);
     int32_t w[4];
     Round outer, inner;
-    if (round || s->nbox_shadows > 0) {
+    if (round || s->nbox_shadows > 0 || s->background_gradient != NULL) {
         for (int k = 0; k < 4; k++)
             w[k] = px(s->border_width[k]);
         round_shapes(b, round ? radii : (const int32_t[4][2]){{0}}, w, &outer, &inner);
@@ -615,8 +836,16 @@ static void frame(const Painter *p, const flow_box_t *b)
             round_background(p, b, &outer, s->background);
         else if (s->has_background)
             fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, s->background);
-        os64_gui_rect_t area = on_page(p, b->rect);
-        (void)p->v->backdrop(p->v->ctx, b, &area, area.x, area.y, on_page(p, p->view));
+        if (s->background_gradient != NULL) {
+            // Its tile the padding box, drawn across the border box.
+            gradient(p, s->background_gradient, b->rect.x + w[FLOW_LEFT], b->rect.y + w[FLOW_TOP],
+                     b->rect.w - w[FLOW_LEFT] - w[FLOW_RIGHT],
+                     b->rect.h - w[FLOW_TOP] - w[FLOW_BOTTOM], b->rect, s->background_repeat,
+                     &outer, round);
+        } else {
+            os64_gui_rect_t area = on_page(p, b->rect);
+            (void)p->v->backdrop(p->v->ctx, b, &area, area.x, area.y, on_page(p, p->view));
+        }
     }
     for (int32_t i = s->nbox_shadows - 1; i >= 0; i--)
         if (s->box_shadows[i].inset)
@@ -838,10 +1067,11 @@ static void group_close(void *ctx, const flow_box_t *box)
     p->v->group_close(p->v->ctx, (uint8_t)(((uint32_t)box->style->opacity * 255 + 500) / 1000));
 }
 
-// Whether a box has any background: a colour, or a picture behind it.
+// Whether a box has any background: a colour, a gradient, or a picture
+// behind it.
 static bool has_background(const Painter *p, const flow_box_t *b)
 {
-    return b->style->has_background ||
+    return b->style->has_background || b->style->background_gradient != NULL ||
            p->v->backdrop(p->v->ctx, b, NULL, 0, 0, p->view);
 }
 
@@ -880,8 +1110,12 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
         fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, paper);
     fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, canvas);
     // The canvas's picture is tiled from the page's own corner, so it
-    // scrolls with the page.
-    if (owner != NULL)
+    // scrolls with the page; its gradient's tile is the root's box, so a
+    // page shorter than the view repeats it, as the browsers do.
+    if (owner != NULL && owner->style->background_gradient != NULL)
+        gradient(&p, owner->style->background_gradient, root->rect.x, root->rect.y, root->rect.w,
+                 root->rect.h, viewport, owner->style->background_repeat, NULL, false);
+    else if (owner != NULL)
         (void)verbs->backdrop(verbs->ctx, owner, &viewport, 0, 0, viewport);
     if (root != NULL) {
         bool groups = verbs->group_open != NULL && verbs->group_close != NULL;

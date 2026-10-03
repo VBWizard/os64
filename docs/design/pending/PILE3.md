@@ -395,3 +395,58 @@ leaves to the browser.
 | Round dots | a dot is a square a width across | a page where it shows |
 | Clipping to the curve | a picture behind a rounded box, its `overflow`, its hit test and its children are all still cut square | a rounded box whose picture or content shows past the curve |
 | A shadow past its box's overflow | the walk prunes on overflow rects, which leave shadows out, so a shadow reaching into the view from a box outside it is not painted, and a group's bounds leave it out | a page whose shadow is cut where a box leaves the view |
+
+## Gradients (slice S4a)
+
+### How it is built
+
+**libgarb keeps the gradient it already checked.** A linear or radial
+gradient (`repeating-` too) was read against its grammar and thrown away;
+now the IMAGE value carries itself (values.h): its geometry — an angle in
+degrees, or `to` one of eight sides and corners; a radial's shape, size and
+centre — then its stops, a stop written with two positions becoming two
+and a hint a position alone. It is still written out as `name(...)`, so the
+declaration corpus does not churn; what was kept is proven through
+libflow's style dump. Conic gradients and image-set are taken by name and
+drawn as nothing.
+
+**libflow carries `flow_gradient_t`** on `flow_style_t.background_gradient`,
+beside the url() — one picture behind a box, never both. The geometry stays
+as written (a `to` corner, percentages of the box), because only the box's
+size turns it into a line; currentColor in a stop is the element's colour.
+
+**yonder paints it pixel by pixel** where a box's picture goes, between its
+colour and its inset shadows. Its tile is the padding box (the positioning
+area), drawn across the border box and repeated as `background-repeat`
+says, and cut to the curve of a rounded box. A pixel's middle is projected
+onto the line — toward a corner it is square to the box's diagonal (§
+3.1.1), its length |w·dx| + |h·dy| — or measured out along the ray of an
+ellipse or circle sized by its extent. Stops are fixed up by § 3.5.3 (the
+ends 0 and 1 when left out, none earlier than the one before, a run left
+out spread evenly); a hint bends the mix with the power § 3.5.3 gives; a
+repeating gradient wraps between its first stop and its last; colours mix
+premultiplied. The pixels reach the face through a new verb, `pixels`,
+blended there. **A body's gradient is the canvas's**, its tile the root's
+box — a page shorter than the view repeats it in bands, as the browsers
+do.
+
+### Proof
+
+`gradient_style_cases`: five gradients read into flow's (the initial
+direction, a `to` corner, a stop with two positions and a hint, a circle's
+one radius, a turn, currentColor, an ellipse's initial size). yonder, each
+pixel worked by hand: a 4px black-to-white line (t = 1/8 … 7/8), repeated
+hard stops, a 4px radial circle (its inner, edge and corner pixels), and a
+body gradient tiled by a 4px root. In the guest, `/tests/pages/
+pile3-gradients.html` — twelve gradients of every kind, a rounded one, a
+translucent one over stripes, and the body's own — drew as headless Chrome
+draws it.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| `background-size`, `-origin`, `-clip`, and every layer of a list | S4b | S4b |
+| Conic gradients and image-set | no picture is made for them | a page whose look depends on one |
+| Interpolation in another colour space (`in oklab`) | Color 4's spaces are not converted | a page that writes one |
+| A gradient's cost | every pixel of it the view shows is worked out on every paint | a page whose gradients make painting slow, measured |
