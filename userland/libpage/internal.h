@@ -62,20 +62,24 @@ struct os64_page_state {
     bool private_owner;
 };
 
-// A reservation owns a replacement lookup table and new, untouched records
-// until commit; abandoning it cannot change a live property's dirty flags.
+// New records stay private until commit. A lookup indexes larger pending
+// batches; a replacement live table is reserved when those records need
+// more capacity. Abandoning either leaves live properties unchanged.
 typedef struct PValueStage PValueStage;
 typedef struct {
     os64_page_state_t *state;
     PValueStage *values;
     PNodeState **table;
     size_t cap, count;
+    PNodeState **pending;
+    size_t pending_cap;
     PNodeState *records;
 } PReserve;
 
 void *p_state_alloc(os64_page_state_t *state, size_t size);
 void p_state_dealloc(os64_page_state_t *state, void *ptr);
 PNodeState *p_state_find(const os64_page_state_t *state, const os64_html_node_t *node);
+PNodeState *p_reserve_find(const PReserve *reserve, const os64_html_node_t *node);
 PNodeState *p_state_for_control(const os64_page_t *page, int32_t control);
 bool p_reserve_node(PReserve *reserve, const os64_html_node_t *node);
 void p_reserve_commit(PReserve *reserve);
@@ -210,6 +214,11 @@ char *p_subtree_text_into(PArena *arena, const os64_html_node_t *n, bool collaps
 bool p_nonnegative(const char *text, uint64_t *value);
 // Whether the select display size is one, using HTML integer parsing.
 bool p_select_one_line(const os64_page_control_t *control);
+// The select's list of options in tree order, excluding the subtrees the
+// HTML list-of-options algorithm skips. NULL starts or ends the walk.
+const os64_html_node_t *p_option_next(const os64_html_node_t *select,
+                                      const os64_html_node_t *previous);
+bool p_option_disabled(const os64_html_node_t *select, const os64_html_node_t *option);
 // Make a control's `value`, `checked` and its options' `selected` agree with
 // shared node state, which owns the live control properties.
 void p_publish(os64_page_t *page, int32_t control);

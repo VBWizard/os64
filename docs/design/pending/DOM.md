@@ -1027,8 +1027,8 @@ after publication; this slice is built and awaiting review, not merged.
 ### D3, as built
 
 Implemented on `codex/dom-d3`, initially based on `userland` at `ae0a23d5`
-and rebased onto `a90eba97` (the merged GIF improvements) for publication;
-Review and merge are pending in [PR #211](https://github.com/VBWizard/os64/pull/211).
+and rebased onto `a90eba97` (the merged GIF improvements) for publication
+in [PR #211](https://github.com/VBWizard/os64/pull/211).
 `userland/libpage/state.c` owns control state;
 `page.h` is the public contract. The implementation, test harness and
 integration were split between Quinn and two scoped subagents, followed
@@ -1047,7 +1047,12 @@ the opaque document mark to libpage.
 The state ceiling defaults to 16 MiB and includes the state header,
 allocation headers, lookup tables, records, values, getter caches and
 operation scratch. This bounds property work separately from the HTML
-arena and engine heap; the owner may set a different ceiling. State has
+arena and engine heap; the owner may set a different ceiling. A build
+retains default records where group normalization differs from markup,
+and keeps previously established records. Property assignments may retain
+records for a whole radio group or select's options. Single-node
+reservations reuse spare lookup capacity; larger batches index their new
+records privately, and the live table is copied when it must grow. State has
 its own nonzero revision, because a property edit can leave the HTML
 version unchanged. Failed operations and getter-only cache fills do not
 advance it; effective changes, including person/script edit origin, do.
@@ -1078,23 +1083,25 @@ Reset restores the fresh model's normalized defaults without allocating.
 
 **Proof, at the frozen implementation.**
 
-- The full libpage host suite passes **196,571 checks, zero failures**
-  under ASan/UBSan/LSan. The general build sweep fails each of **402**
+- The full libpage host suite passes **247,179 checks, zero failures**
+  under ASan/UBSan/LSan. The general build sweep fails each of **397**
   allocations independently; the new cases separately sweep rebuilds,
   node setters, default getters and dirty-value reconciliation. Refusals
   preserve publication, revisions, state bytes and pin counts, and release
   their allocations. The live-state-free probe stops with the PAGE badge.
-- The independent D3 suite passes **17,926 checks**. Four 320-step walks
+- The initial independent D3 suite passed **17,926 checks**. Four 320-step walks
   keep separate value arrays, connection flags and option permutations;
   they compare state and rebuilt models after each step. The walk asserts
   that each operation and each input is exercised. Coordinator review
   caught low-bit generator bias in its first draft; the final walk uses
   high bits and covers all operations and inputs.
-- **Sixteen mutants proposed, sixteen compiled, sixteen caught**, using
+- **Twenty-six mutants proposed, twenty-six compiled, twenty-six caught**, using
   temporary source copies. They cover STALE, pins and release, incomplete
   rebuild rejection, normalization order, value modes, script access,
   revisions, shared publication, option identity, current-type sanitization,
-  observed file clearing and assignment origin.
+  observed file clearing and assignment origin. Review regressions add
+  tight-budget first touch, sparse defaults, equal-value current getters,
+  the option traversal's excluded subtrees and publication to older models.
 - Existing consumers retain their results: Wend **177,854/0**, libway
   **226/0**, its real-fetch integration **21/0**, Yonder **115/0** with six
   matching paints, libflow **18,585/0**
@@ -1119,6 +1126,21 @@ Reset restores the fresh model's normalized defaults without allocating.
   The guest's `libpage.so` matches the built library byte for byte. This
   proves the native seam; Yonder's scripted redraw remains D5.
 
+**Review corrections.** First touch reuses spare lookup slots at commit;
+large pending batches use a private index. An 8,000-node reservation probe
+copies the live table eleven times rather than 8,000. A 140,000-option
+host fixture builds and rebuilds completely with 368 bytes of state, using
+a larger HTML arena for the document itself. The state ceiling still
+bounds property assignments, caches and scratch. Equal assignments stamp
+the current HTML version, so the next dirty getter allocates nothing.
+Models and native property verbs share the HTML list-of-options walk:
+ordinary containers can contain options, while option, select, datalist,
+hr and nested-optgroup subtrees are excluded. The review regressions sweep
+each allocation in both a small and a larger batch, retaining state,
+publication and revisions on refusal. Native pagetest covers sparse
+defaults, cap refusal, equal assignment and shared option numbering; its
+final heap check and success badge pass with the built library installed.
+
 Before publication, the branch was rebased over the non-overlapping GIF
 merge. The root image build and full libpage/Yonder host suites were rerun
 there and retain the results above.
@@ -1130,6 +1152,8 @@ clears prior dirty text. A final tree cannot reveal historical input-mode
 transitions between observations. D5 must apply those transitions at each
 attribute mutation through a state-aware, failure-atomic entrance, and
 watch both document and state revisions when refreshing presentation.
+Option insertion/removal and select `size`/`multiple` changes must also
+release explicit-empty selectedness and run the select's normalization.
 D6 must add holds for persistent state keys, including option/default-cache
 records, and model node references, with paired releases. Pins protect
 snapshot bytes; they do not replace those holds. Both requirements are in

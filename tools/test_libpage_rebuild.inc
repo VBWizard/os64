@@ -329,7 +329,9 @@ static RebuildFixture rebuild_radio_fixture(void)
         int64_t status=0;
         os64_html_node_t *node=os64_html_create_element(f.doc,OS64_HTML_NS_HTML,"input",&status);
         rebuild_expect("rebuild: new normalization reservation node",node!=NULL && status==0 &&
-            os64_html_set_attr(f.doc,node,"type","checkbox",8)==0 &&
+            os64_html_set_attr(f.doc,node,"type","radio",5)==0 &&
+            os64_html_set_attr(f.doc,node,"name","a",1)==0 &&
+            os64_html_set_attr(f.doc,node,"checked","",0)==0 &&
             os64_html_insert(f.doc,f.doc->body,node,NULL)==0);
     }
     return f;
@@ -349,11 +351,12 @@ static void rebuild_failures_and_caps(void)
     os64_page_t *fresh=os64_page_rebuild(f.page);
     size_t count=allocations-before;
     rebuild_expect("rebuild: successful normalization candidate",fresh!=NULL);
-    bool a=true,b=true,c=false;
+    bool a=true,b=true,c=true;
     rebuild_expect("rebuild: merged radio group normalizes last member",
         os64_page_node_checked(f.state,rebuild_id(f.doc,"r0"),&a)==0 &&
         os64_page_node_checked(f.state,rebuild_id(f.doc,"r1"),&b)==0 &&
-        os64_page_node_checked(f.state,rebuild_id(f.doc,"r2"),&c)==0 && !a && !b && c);
+        os64_page_node_checked(f.state,rebuild_id(f.doc,"r2"),&c)==0 && !a && !b && !c &&
+        os64_page_control(fresh,6)->checked);
     os64_page_free(fresh);rebuild_clear(&f);
     fail_single=true;
     for(size_t point=1;point<=count;point++) {
@@ -733,6 +736,8 @@ static void rebuild_random_oracle(void)
     }
 }
 
+#include "test_libpage_d3_followup.inc"
+
 static void rebuild_contract(void)
 {
     rebuild_lifetime_and_stale();
@@ -745,6 +750,7 @@ static void rebuild_contract(void)
     rebuild_length_origins();
     rebuild_setter_failure_sweeps();
     rebuild_random_oracle();
+    rebuild_review_followup();
 }
 
 static void rebuild_live_state_free(void)
