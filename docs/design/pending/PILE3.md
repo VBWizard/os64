@@ -413,7 +413,12 @@ drawn as nothing.
 **libflow carries `flow_gradient_t`** on `flow_style_t.background_gradient`,
 beside the url() — one picture behind a box, never both. The geometry stays
 as written (a `to` corner, percentages of the box), because only the box's
-size turns it into a line; currentColor in a stop is the element's colour.
+size turns it into a line. A currentColor stop is marked, not resolved:
+it is the colour of the box the gradient is drawn on, which is a child's
+own when the child takes the gradient by `inherit` (CSS Color 4 § 4.4).
+Shadows are marked the same way — a text shadow is inherited — and a
+background or border colour written as currentColor is resolved when the
+element's style is finished, its mark kept for `inherit` to resolve again.
 
 **yonder paints it pixel by pixel** where a box's picture goes, between its
 colour and its inset shadows. Its tile is the padding box (the positioning
@@ -423,9 +428,15 @@ onto the line — toward a corner it is square to the box's diagonal (§
 3.1.1), its length |w·dx| + |h·dy| — or measured out along the ray of an
 ellipse or circle sized by its extent. Stops are fixed up by § 3.5.3 (the
 ends 0 and 1 when left out, none earlier than the one before, a run left
-out spread evenly); a hint bends the mix with the power § 3.5.3 gives; a
-repeating gradient wraps between its first stop and its last; colours mix
-premultiplied. The pixels reach the face through a new verb, `pixels`,
+of colour stops left out spread evenly between the colour stops round it,
+a hint among them keeping its place); a hint bends the mix with the power
+§ 3.5.3 gives; a repeating gradient wraps between its first stop and its
+last, and one with nothing between them is one colour, the average of its
+stops spread from 0 to 1 (§ 3.6); colours mix premultiplied. A radial
+whose ending shape has no size still paints (§ 3.2.3): a circle of no
+radius as a very small one, an ellipse of no width as a narrow tall one,
+one of no height as its last colour. An inline element's gradient is
+painted on each piece of its line, the piece its tile. The pixels reach the face through a new verb, `pixels`,
 blended there. **A body's gradient is the canvas's**, its tile the root's
 box — a page shorter than the view repeats it in bands, as the browsers
 do.
@@ -437,7 +448,13 @@ direction, a `to` corner, a stop with two positions and a hint, a circle's
 one radius, a turn, currentColor, an ellipse's initial size). yonder, each
 pixel worked by hand: a 4px black-to-white line (t = 1/8 … 7/8), repeated
 hard stops, a 4px radial circle (its inner, edge and corner pixels), and a
-body gradient tiled by a 4px root. In the guest, `/tests/pages/
+body gradient tiled by a 4px root; Codex's #208 round — a hint that does
+not move the stops left out, a repeating gradient of no length, ellipses
+of no width and no height, an inherited gradient's and an inherited text
+shadow's currentColor, an inline element's gradient (each failing on the
+code before it), an angle of 1e20 degrees, background and border colours
+by `inherit`, and libgarb refusing a circle's percentage or two radii, an
+ellipse's one, and a negative one. In the guest, `/tests/pages/
 pile3-gradients.html` — twelve gradients of every kind, a rounded one, a
 translucent one over stripes, and the body's own — drew as headless Chrome
 draws it.
@@ -446,7 +463,8 @@ draws it.
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| `background-size`, `-origin`, `-clip`, and every layer of a list | S4b | S4b |
+| `background-size`, `-origin`, `-clip`, `background-position` for a gradient, and every layer of a list | S4b | S4b |
+| An inline element's gradient across its pieces | each piece is its own tile, where the browsers lay the pieces end to end and draw one gradient along them; the public tree does not say which piece is first | a gradient on a span that wraps |
 | Conic gradients and image-set | no picture is made for them | a page whose look depends on one |
 | Interpolation in another colour space (`in oklab`) | Color 4's spaces are not converted | a page that writes one |
 | A gradient's cost | every pixel of it the view shows is worked out on every paint | a page whose gradients make painting slow, measured |

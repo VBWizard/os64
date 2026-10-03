@@ -308,7 +308,9 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         }
         for (int32_t i = 0; i < g->nstops; i++) {
             puts_(b, i == 0 ? ":" : ",");
-            if (!g->stops[i].hint)
+            if (g->stops[i].current)
+                puts_(b, "currentColor");
+            else if (!g->stops[i].hint)
                 color(b, env, g->stops[i].colour);
             puts_(b, "@");
             length(b, g->stops[i].at);

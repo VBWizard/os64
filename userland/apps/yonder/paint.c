@@ -536,6 +536,7 @@ static void shadow(const Painter *p, const flow_box_t *b, const Round *outer, co
     // (mask_blur), and a pixel. A mask cut any closer to the view would
     // shade a pixel by where the dirty part happened to end (Quinn, #203).
     int64_t blur = sh->blur, reach = 3 * (blur / 2) + 1;
+    uint32_t colour = sh->current ? b->style->color : sh->colour;
     Round shape = sh->inset ? round_moved(inner, (int64_t)sh->x * SUB, (int64_t)sh->y * SUB,
                                           -(int64_t)sh->spread * SUB)
                             : round_moved(outer, (int64_t)sh->x * SUB, (int64_t)sh->y * SUB,
@@ -548,12 +549,12 @@ static void shadow(const Painter *p, const flow_box_t *b, const Round *outer, co
         int64_t bl = bx.x, bt = bx.y, br = (int64_t)bx.x + bx.w, bb = (int64_t)bx.y + bx.h;
         if (r <= l || e <= t)
             return;
-        fill(p, l, t, r - l, max64(0, min64(e, bt) - t), sh->colour);                // above
-        fill(p, l, max64(t, bb), r - l, e - max64(t, bb), sh->colour);               // below
+        fill(p, l, t, r - l, max64(0, min64(e, bt) - t), colour);                // above
+        fill(p, l, max64(t, bb), r - l, e - max64(t, bb), colour);               // below
         int64_t mt = max64(t, bt), mb = min64(e, bb);
         if (mb > mt) {
-            fill(p, l, mt, max64(0, min64(r, bl) - l), mb - mt, sh->colour);         // left
-            fill(p, max64(l, br), mt, r - max64(l, br), mb - mt, sh->colour);        // right
+            fill(p, l, mt, max64(0, min64(r, bl) - l), mb - mt, colour);         // left
+            fill(p, max64(l, br), mt, r - max64(l, br), mb - mt, colour);        // right
         }
         return;
     }
@@ -577,7 +578,7 @@ static void shadow(const Painter *p, const flow_box_t *b, const Round *outer, co
     mask_cover(&m, &shape, sh->inset);
     if (mask_blur(&m, blur, sh->inset ? SUB : 0)) {
         mask_times(&m, sh->inset ? inner : outer, !sh->inset);
-        mask_emit(p, &m, sh->colour);
+        mask_emit(p, &m, colour);
     }
     os64_free(m.a);
 }
@@ -620,16 +621,18 @@ static double lp_px(flow_length_t l, double base)
 }
 
 // § 3.5.3's fix-up: the first stop at 0 and the last at 1 when left out,
-// each no earlier than the one before it, and a run left out spread evenly
-// between the stops either side of it.
-static bool stops_resolve(const flow_gradient_t *g, double len, Stops *out)
+// each no earlier than the one before it, and a run of colour stops left
+// out spread evenly between the colour stops either side of it — a hint
+// among them is not one of those, and keeps its own place. A currentColor
+// stop is the colour of the box it is drawn on, `current`.
+static bool stops_resolve(const flow_gradient_t *g, double len, uint32_t current, Stops *out)
 {
     out->n = g->nstops < GRADIENT_STOPS_MAX ? g->nstops : GRADIENT_STOPS_MAX;
     if (out->n < 2)
         return false;
     for (int32_t i = 0; i < out->n; i++) {
         out->at[i] = stop_at(g->stops[i].at, len);
-        out->colour[i] = g->stops[i].colour;
+        out->colour[i] = g->stops[i].current ? current : g->stops[i].colour;
         out->hint[i] = g->stops[i].hint;
     }
     if (isnan(out->at[0]))
@@ -643,17 +646,60 @@ static bool stops_resolve(const flow_gradient_t *g, double len, Stops *out)
         if (!isnan(out->at[i]))
             most = out->at[i];
     }
+    // A hint always has a place, and the first and last stops have one by
+    // now, so every run below ends at a colour stop with one.
     for (int32_t i = 1; i < out->n; i++) {
         if (!isnan(out->at[i]))
             continue;
-        int32_t j = i;
-        while (isnan(out->at[j]))
-            j++;
-        for (int32_t k = i; k < j; k++)
-            out->at[k] = out->at[i - 1] + (out->at[j] - out->at[i - 1]) * (k - i + 1) / (j - i + 1);
-        i = j;
+        int32_t before = i - 1;
+        while (out->hint[before])
+            before--;
+        int32_t after = i, unset = 0;
+        while (out->hint[after] || isnan(out->at[after])) {
+            unset += !out->hint[after];
+            after++;
+        }
+        int32_t k = 0;
+        for (int32_t m = i; m < after; m++)
+            if (!out->hint[m])
+                out->at[m] = out->at[before] +
+                             (out->at[after] - out->at[before]) * ++k / (unset + 1);
+        i = after;
     }
     return true;
+}
+
+// A repeating gradient with no length to repeat over (§ 3.6): the average
+// of the same colours spread evenly from 0 to 1 — each stretch between two
+// neighbours averages to their midpoint — premultiplied, as one colour.
+static uint32_t stops_average(const Stops *s)
+{
+    double sum[4] = {0, 0, 0, 0};
+    int32_t prev = -1, stretches = 0;
+    for (int32_t i = 0; i < s->n; i++) {
+        if (s->hint[i])
+            continue;
+        if (prev >= 0) {
+            const uint32_t two[2] = {s->colour[prev], s->colour[i]};
+            for (int k = 0; k < 2; k++) {
+                double a = flow_alpha(two[k]) / 255.0;
+                sum[3] += a / 2;
+                for (int c = 0; c < 3; c++)
+                    sum[c] += ((two[k] >> (8 * c)) & 0xff) * a / 2;
+            }
+            stretches++;
+        }
+        prev = i;
+    }
+    if (stretches == 0 || sum[3] <= 0)
+        return 0xff000000u;                 // wholly transparent
+    uint32_t out = 0;
+    for (int c = 0; c < 3; c++) {
+        double v = sum[c] / sum[3];
+        out |= (uint32_t)(v + 0.5 > 255 ? 255 : v + 0.5) << (8 * c);
+    }
+    uint32_t al = (uint32_t)(sum[3] / stretches * 255 + 0.5);
+    return out | (255u - (al > 255 ? 255 : al)) << 24;
 }
 
 // Colour `a` toward `b` by `t` (0..1), premultiplied, as a flow colour.
@@ -710,10 +756,11 @@ static double wrap(double x, double size)
 
 // Gradient `g` with its tile at (tx, ty), w by h, drawn over `area` (and
 // the view), repeated on the axes `repeat` says, cut to `shape` when
-// `round`.
+// `round`; a currentColor stop is `current`, the colour of the box it is
+// drawn on.
 static void gradient(const Painter *p, const flow_gradient_t *g, double tx, double ty, double w,
                      double h, os64_gui_rect_t area, flow_repeat_t repeat, const Round *shape,
-                     bool round)
+                     bool round, uint32_t current)
 {
     if (w <= 0 || h <= 0)
         return;
@@ -724,6 +771,7 @@ static void gradient(const Painter *p, const flow_gradient_t *g, double tx, doub
         return;
     // The line (linear) or the ray (radial) and its length in px.
     double dx = 0, dy = 0, len, cx = w / 2, cy = h / 2, rx = 1, ry = 1;
+    bool flat = false;
     if (g->kind == FLOW_GRADIENT_LINEAR) {
         if (g->to_x != 0 || g->to_y != 0) {
             // Toward a corner, the line is square to the diagonal between
@@ -763,11 +811,31 @@ static void gradient(const Painter *p, const flow_gradient_t *g, double tx, doub
                      : g->extent == FLOW_EXTENT_FARTHEST_CORNER ? hypot(sx_far, sy_far) : rx;
             rx = ry = r;
         }
+        // § 3.2.3's degenerate shapes, which still paint: a circle of no
+        // radius is a very small one; an ellipse of no width a very narrow
+        // and very tall one, so its stops spread across x as a linear
+        // gradient mirrored about the centre (and a percentage stop sits at
+        // 0); one of no height a very wide and flat one, which is the last
+        // stop's colour everywhere, or the average if it repeats.
+        const double kSmall = 1e-6, kLarge = 1e9;
+        if (g->circle && !(rx > 0)) {
+            rx = ry = kSmall;
+        } else if (!(rx > 0)) {
+            rx = kSmall;
+            ry = kLarge;
+        } else if (!(ry > 0)) {
+            ry = kSmall;
+            flat = true;
+        }
         len = rx;
     }
     Stops stops;
-    if (!(len > 0) || !(rx > 0) || !(ry > 0) || !stops_resolve(g, len, &stops))
+    if (!(len > 0) || !stops_resolve(g, len, current, &stops))
         return;
+    // One colour everywhere: the flat ellipse, and a repeating gradient
+    // with no length to repeat over (§ 3.6).
+    bool solid = flat || (g->repeating && !(stops.at[stops.n - 1] > stops.at[0]));
+    uint32_t solid_colour = g->repeating ? stops_average(&stops) : stops.colour[stops.n - 1];
     bool rep_x = repeat == FLOW_REPEAT || repeat == FLOW_REPEAT_X;
     bool rep_y = repeat == FLOW_REPEAT || repeat == FLOW_REPEAT_Y;
     uint32_t *out = os64_malloc((size_t)((x1 - x0) * (y1 - y0)) * sizeof(*out));
@@ -788,7 +856,7 @@ static void gradient(const Painter *p, const flow_gradient_t *g, double tx, doub
             double t = g->kind == FLOW_GRADIENT_LINEAR
                            ? ((u - cx) * dx + (v - cy) * dy) / len + 0.5
                            : hypot((u - cx) / rx, (v - cy) / ry);
-            uint32_t c = stops_colour(&stops, t, g->repeating);
+            uint32_t c = solid ? solid_colour : stops_colour(&stops, t, g->repeating);
             uint32_t alpha = flow_alpha(c);
             if (round)
                 alpha = (uint32_t)(alpha * cover(x, a, e) / SUB);
@@ -841,7 +909,7 @@ static void frame(const Painter *p, const flow_box_t *b)
             gradient(p, s->background_gradient, b->rect.x + w[FLOW_LEFT], b->rect.y + w[FLOW_TOP],
                      b->rect.w - w[FLOW_LEFT] - w[FLOW_RIGHT],
                      b->rect.h - w[FLOW_TOP] - w[FLOW_BOTTOM], b->rect, s->background_repeat,
-                     &outer, round);
+                     &outer, round, s->color);
         } else {
             os64_gui_rect_t area = on_page(p, b->rect);
             (void)p->v->backdrop(p->v->ctx, b, &area, area.x, area.y, on_page(p, p->view));
@@ -1010,7 +1078,7 @@ static void paint_box(void *ctx, const flow_box_t *b)
             const flow_shadow_t *sh = &b->style->text_shadows[i];
             p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x + sh->x),
                        (int32_t)((int64_t)b->baseline + p->off.y + sh->y), on_page(p, p->view),
-                       sh->colour);
+                       sh->current ? b->style->color : sh->colour);
         }
         if (b->run != NULL)
             p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x),
@@ -1028,10 +1096,16 @@ static void paint_box(void *ctx, const flow_box_t *b)
         return;
     case FLOW_BOX_SPAN:
         // An inline box's borders open on its first piece and close on its
-        // last, which the public tree does not say; its background is right
-        // on every piece.
+        // last, which the public tree does not say; its background colour is
+        // right on every piece. Its gradient is tiled on each piece — the
+        // browsers lay the pieces end to end and draw one gradient along
+        // them, which needs the same knowledge (PILE3.md § Booked).
         if (b->style->has_background)
             fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, b->style->background);
+        if (b->style->background_gradient != NULL)
+            gradient(p, b->style->background_gradient, b->rect.x, b->rect.y, b->rect.w,
+                     b->rect.h, b->rect, b->style->background_repeat, NULL, false,
+                     b->style->color);
         return;
     default:
         // An inline-block (or inline-flex, inline-grid) is two boxes of one
@@ -1114,7 +1188,8 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
     // page shorter than the view repeats it, as the browsers do.
     if (owner != NULL && owner->style->background_gradient != NULL)
         gradient(&p, owner->style->background_gradient, root->rect.x, root->rect.y, root->rect.w,
-                 root->rect.h, viewport, owner->style->background_repeat, NULL, false);
+                 root->rect.h, viewport, owner->style->background_repeat, NULL, false,
+                 owner->style->color);
     else if (owner != NULL)
         (void)verbs->backdrop(verbs->ctx, owner, &viewport, 0, 0, viewport);
     if (root != NULL) {

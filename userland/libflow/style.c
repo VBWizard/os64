@@ -298,6 +298,7 @@ static void background(Spec *sp, uint32_t rgb)
 {
     sp->s.has_background = true;
     sp->s.background = rgb;
+    sp->s.current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
 }
 
 // ── The initial style, and inheritance ──────────────────────────────────
@@ -1711,6 +1712,8 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_BACKGROUND_COLOR:
         d->has_background = s->has_background;
         d->background = s->background;
+        d->current_colours = (uint8_t)((d->current_colours & ~FLOW_CURRENT_BACKGROUND) |
+                                       (s->current_colours & FLOW_CURRENT_BACKGROUND));
         break;
     case GARB_BACKGROUND_IMAGE:
         d->background_image = s->background_image;
@@ -1894,7 +1897,9 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
         out->padding[i] = len_of(parent->padding[i]);
         out->inset[i] = len_of(parent->inset[i]);
         out->border_px[i] = parent->border_width[i];
-        out->border_color_set[i] = true;
+        // currentColor stays currentColor: finish resolves it against the
+        // child's own colour.
+        out->border_color_set[i] = !(parent->current_colours & FLOW_CURRENT_BORDER(i));
         out->radius[i][0] = len_of(parent->radius[i][0]);
         out->radius[i][1] = len_of(parent->radius[i][1]);
     }
@@ -2119,9 +2124,33 @@ static flow_length_t author_lp(const Author *a, const garb_val_t *v, flow_length
     return author_len(a, v, false, &l) ? resolve(l, a->font, unset) : unset;
 }
 
+// An angle in degrees as thousandths in [0, 360000). It is taken into
+// [0, 360) BEFORE it is scaled and narrowed, or `1e20deg` overflows the
+// integer and points anywhere. Exactly: each step subtracts the largest
+// 360 * 2^k not above it, and a subtraction of two doubles within a factor
+// of two of each other is exact (Sterbenz), so this is fmod's answer
+// without libmath.
+static int32_t angle_thousandths(double deg)
+{
+    if (!(deg == deg) || deg > 1e300 || deg < -1e300)
+        return 0;                           // NaN or near-infinite: the initial
+    double m = deg < 0 ? -deg : deg;
+    while (m >= 360) {
+        double s = 360;
+        while (s <= m / 2)
+            s *= 2;
+        m -= s;
+    }
+    if (deg < 0 && m > 0)
+        m = 360 - m;
+    int64_t t = (int64_t)(m * 1000 + 0.5);
+    return (int32_t)(t >= 360000 ? t - 360000 : t);
+}
+
 // libgarb's gradient (values.h's GARB_V_IMAGE: its geometry, then its
-// stops) as flow's, in the style's arena; currentColor is the element's
-// colour, known by now. False only when memory runs out.
+// stops) as flow's, in the style's arena; a currentColor stop is marked
+// `current`, for the box it is drawn on to resolve. False only when memory
+// runs out.
 static bool author_gradient(const Author *a, const flow_style_t *s, const garb_val_t *v,
                             const flow_gradient_t **out)
 {
@@ -2139,8 +2168,7 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
     const garb_val_t *geo = &v->items[0];
     if (geo->kind == GARB_V_NUMBER) {
         g->kind = FLOW_GRADIENT_LINEAR;
-        int64_t t = (int64_t)(geo->number * 1000 + (geo->number < 0 ? -0.5 : 0.5)) % 360000;
-        g->angle = (int32_t)(t < 0 ? t + 360000 : t);
+        g->angle = angle_thousandths(geo->number);
     } else if (geo->kind == GARB_V_KEYWORD && geo->nitems == 0) {
         // "to top right" and the rest, libgarb's eight names: the side or
         // corner each points toward.
@@ -2187,6 +2215,7 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
             o->at = author_lp(a, st, kUnwritten);
             continue;
         }
+        o->current = st->color.current;
         o->colour = st->color.current ? s->color : colour_of(st->color);
         if (st->nitems > 0)
             o->at = author_lp(a, &st->items[0], kUnwritten);
@@ -2199,8 +2228,9 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
 
 // `none`, or libgarb's shadows (G_SHADOW): each `inset` first when it is
 // there, four lengths and a colour. Lengths in pixels, at the element's
-// own font size, which is known by now; currentColor is the element's
-// colour, known by now too. False only when memory runs out.
+// own font size, which is known by now; a currentColor shadow is marked
+// `current`, for the box it is drawn for to resolve. False only when
+// memory runs out.
 static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v, bool box)
 {
     const flow_shadow_t **list = box ? &s->box_shadows : &s->text_shadows;
@@ -2232,8 +2262,8 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
         if (sh->blur < 0)
             sh->blur = 0;
         const garb_val_t *c = k < one->nitems ? &one->items[k] : NULL;
-        sh->colour = c == NULL || c->kind != GARB_V_COLOR || c->color.current ? s->color
-                                                                               : colour_of(c->color);
+        sh->current = c == NULL || c->kind != GARB_V_COLOR || c->color.current;
+        sh->colour = sh->current ? s->color : colour_of(c->color);
     }
     *list = out;
     *count = v->nitems;
@@ -2257,10 +2287,11 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     case GARB_BACKGROUND_COLOR:
         if (v->kind != GARB_V_COLOR)
             break;
+        // currentColor is resolved in finish, which knows the final colour.
         if (v->color.current) {
-            s->has_background = flow_alpha(s->color) > 0;
-            s->background = s->color;
+            s->current_colours |= FLOW_CURRENT_BACKGROUND;
         } else {
+            s->current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
             s->has_background = v->color.a > 0;
             s->background = colour_of(v->color);
         }
@@ -2789,6 +2820,13 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
         s->border_width[i] = drawn ? sp->border_px[i] : 0;
         if (!sp->border_color_set[i])
             s->border_color[i] = s->color;
+        s->current_colours = (uint8_t)(sp->border_color_set[i]
+                                           ? s->current_colours & ~FLOW_CURRENT_BORDER(i)
+                                           : s->current_colours | FLOW_CURRENT_BORDER(i));
+    }
+    if (s->current_colours & FLOW_CURRENT_BACKGROUND) {
+        s->has_background = flow_alpha(s->color) > 0;
+        s->background = s->color;
     }
     s->width = resolve(sp->width, s->font_size, automatic);
     s->height = resolve(sp->height, s->font_size, automatic);

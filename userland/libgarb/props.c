@@ -999,9 +999,13 @@ static bool linear_prelude(const Group *g)
     return angle(&c) && vc_done(&c);
 }
 
-// [<ending-shape> || <size>]? [at <position>]?, one of them at least. The
-// size's finer rules (a circle takes one length and no percentage) are not
-// checked: what they refuse is rare, and nothing draws it yet.
+static bool lp_val(Sets *s, VCur *c, garb_val_t *out);
+
+// [<ending-shape> || <size>]? [at <position>]?, one of them at least. A
+// size written as lengths is one length for a circle — never a percentage —
+// and two length-percentages for an ellipse, none negative (Images 3 §
+// 3.2.1): anything else is drawn as SOME gradient, so it has to be refused
+// here or the declaration it is in would not fall back.
 static bool radial_prelude(Sets *s, const Group *g)
 {
     VCur c = {g->v, g->n, 0};
@@ -1009,17 +1013,29 @@ static bool radial_prelude(Sets *s, const Group *g)
     static const char *const kExtent[] = {"closest-side", "farthest-side", "closest-corner",
                                           "farthest-corner", NULL};
     static const char *const kAt[] = {"at", NULL};
-    bool shape = false, size = false, any = false;
+    const char *shape = NULL;
+    bool size = false, any = false, percent = false;
+    int lengths = 0;
     for (int k = 0; k < 2; k++) {
-        if (!shape && vc_keyword(&c, kShape) != NULL) {
-            shape = any = true;
+        garb_val_t r;
+        if (shape == NULL && (shape = vc_keyword(&c, kShape)) != NULL) {
+            any = true;
         } else if (!size && vc_keyword(&c, kExtent) != NULL) {
             size = any = true;
-        } else if (!size && length_percentage(s, &c)) {
-            (void)length_percentage(s, &c);     // an ellipse's second radius
+        } else if (!size && lp_val(s, &c, &r)) {
+            for (lengths = 1; ; lengths++) {
+                if (r.number < 0)
+                    return false;
+                percent |= r.kind == GARB_V_PERCENTAGE;
+                if (lengths == 2 || !lp_val(s, &c, &r))
+                    break;
+            }
             size = any = true;
         }
     }
+    bool circle = shape != NULL ? os64_streq(shape, "circle") : lengths == 1;
+    if ((lengths == 1 && (percent || !circle)) || (lengths == 2 && circle))
+        return false;
     if (vc_keyword(&c, kAt) != NULL) {
         Sets strict = *s;
         strict.quirks = false;

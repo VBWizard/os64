@@ -64,6 +64,11 @@ typedef struct {
 // Box sides, in CSS's own order.
 enum { FLOW_TOP = 0, FLOW_RIGHT = 1, FLOW_BOTTOM = 2, FLOW_LEFT = 3 };
 
+// flow_style_t.current_colours: a side's border colour (1 << side), and
+// the background colour.
+#define FLOW_CURRENT_BORDER(side) ((uint8_t)(1u << (side)))
+#define FLOW_CURRENT_BACKGROUND ((uint8_t)0x10)
+
 // ── Colours ─────────────────────────────────────────────────────────────
 //
 // A COLOUR is 0xTTRRGGBB: sRGB, and in the top byte how TRANSPARENT it is —
@@ -334,10 +339,15 @@ typedef enum {
 // A colour stop at a position along the gradient line (PX, or PERCENT of
 // the line), AUTO where the page left it out; or a HINT, where between its
 // two neighbours their colours meet half and half, its colour unused.
+// `current`: the page wrote currentColor, which is the colour of the box
+// the gradient is drawn on — not of the element that wrote it, since a
+// child takes the gradient by `inherit` with its own colour (CSS Color 4
+// § 4.4). `colour` is then the writer's, for a reader with no box.
 typedef struct {
     uint32_t colour;
     flow_length_t at;
     bool hint;
+    bool current;
 } flow_gradient_stop_t;
 
 typedef struct {
@@ -361,13 +371,15 @@ typedef struct {
 } flow_gradient_t;
 
 // A shadow (Backgrounds 3 § 7; Text Decoration 3 § 4): its offsets, its
-// blur radius (not negative) and its spread in whole pixels, its colour
-// (currentColor resolved), and whether it falls inside a box rather than
-// outside it. A text's has no spread and is never inset.
+// blur radius (not negative) and its spread in whole pixels, its colour,
+// and whether it falls inside a box rather than outside it. A text's has
+// no spread and is never inset. `current` as a gradient stop's: the colour
+// of the box it is drawn for, since text shadows are inherited.
 typedef struct {
     int32_t x, y, blur, spread;
     uint32_t colour;
     bool inset;
+    bool current;
 } flow_shadow_t;
 
 // CSS Position 3 § 2 (POSITION.md).
@@ -390,6 +402,11 @@ typedef struct {
     uint32_t color;                 // a colour (above)
     bool has_background;            // false = transparent
     uint32_t background;            // a colour
+    // Which of `background` and `border_color` the page wrote as
+    // currentColor (FLOW_CURRENT_*): resolved against this element's colour
+    // above, and kept so that a child taking them by `inherit` resolves
+    // them against its own (CSS Color 4 § 4.4).
+    uint8_t current_colours;
     // A picture behind the box from the page's own sheets (CSS Backgrounds
     // 3 § 3): its url() as written, not terminated, and the index in the
     // cascade's input of the sheet it was written in (-1 for a `style`
@@ -414,7 +431,7 @@ typedef struct {
     // so a width here is a width that will be drawn.
     flow_unit_t border_width[4];
     flow_border_style_t border_style[4];
-    uint32_t border_color[4];       // colours; `currentColor` resolved
+    uint32_t border_color[4];       // colours; `currentColor` resolved (current_colours)
     // Each corner's radii (Backgrounds 3 § 5.1), top-left, top-right,
     // bottom-right, bottom-left, each horizontal then vertical: PX, or
     // PERCENT of the border box's width and height. flow_box_radii is what
