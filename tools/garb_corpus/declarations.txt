@@ -465,6 +465,22 @@ IN: background-image: linear-gradient(to, red, blue)
 OUT: invalid
 IN: background-image: radial-gradient(at, red, blue)
 OUT: invalid
+IN: background-image: radial-gradient(circle 20%, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(circle 10px 20px, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(ellipse 10px, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(20%, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(-10px, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(10px 20% at 0 0, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(10px circle, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(ellipse 0 20px, red, blue)
+OUT: background-image: radial-gradient(...)
 IN: background-image: linear-gradient(red,, blue)
 OUT: invalid
 IN: background-image: url(a.png), 10px

@@ -359,6 +359,72 @@ static void paint_cases(void)
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true,
                     "fill 0 0 200 100 #fefefe\n"
                     "fill 1 1 2 2 #ff0000\n");
+    // A colour stop left out is spread between the COLOUR stops round it,
+    // not from a hint (§ 3.5.3): white sits at 50%, so black to white is
+    // bent by the hint at 10% (a fifth of its stretch: f^(ln 0.5 / ln 0.2))
+    // and white to black is straight.
+    paint_page_case("a hint does not move the stops left out",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: linear-gradient(to right, #000000, 10%, #ffffff,"
+                    " #000000 100%) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff8c8c8c ffe1e1e1 ffbfbfbf ff404040\n");
+    // A repeating gradient with nothing to repeat over is one colour: the
+    // average of its stops spread from 0 to 1 — red and blue halved.
+    paint_page_case("a repeating gradient of no length is its average",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: repeating-linear-gradient(to right, #ff0000 0,"
+                    " #0000ff 0) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff800080 ff800080 ff800080 ff800080\n");
+    // An ellipse of no width is a gradient across x mirrored about the
+    // centre (§ 3.2.3): 1.5px and 0.5px from it, of 2px to blue.
+    paint_page_case("an ellipse of no width still paints",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: radial-gradient(0 10px, #ff0000, #0000ff 2px) }</style>"
+                    "<div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff4000bf ffbf0040 ffbf0040 ff4000bf\n");
+    // One of no height is the last stop's colour everywhere.
+    paint_page_case("an ellipse of no height is its last colour",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: radial-gradient(10px 0, #ff0000, #0000ff) }</style>"
+                    "<div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff0000ff ff0000ff ff0000ff ff0000ff\n");
+    // currentColor is the colour of the box it is drawn for: a gradient
+    // taken by `inherit`, and an inherited text shadow, are the child's.
+    paint_page_case("an inherited gradient's currentColor is the child's",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px;"
+                    " color: #00ff00; background-image: linear-gradient(currentColor,"
+                    " currentColor) } p { margin: 0; height: 1px; color: #0000ff;"
+                    " background-image: inherit }</style><div><p></p></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff00ff00 ff00ff00 ff00ff00 ff00ff00\n"
+                    "pixels 0 0 4 1 ff0000ff ff0000ff ff0000ff ff0000ff\n");
+    paint_page_case("an inherited text shadow's currentColor is the child's",
+                    "<!doctype html><style>div { color: #ff0000;"
+                    " text-shadow: 1px 2px currentColor } p { color: #0000ff }</style>"
+                    "<div><p>Hi", 100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "text \"Hi\" 9 32 #0000ff\n"
+                    "text \"Hi\" 8 30 #0000ff\n");
+
+    // An inline element's gradient is painted on its piece of the line,
+    // the piece its tile: one solid-colour gradient covers the piece
+    // exactly, under the text.
+    paint_page_case("an inline gradient paints its piece",
+                    "<!doctype html><style>body { margin: 0 } span {"
+                    " background: linear-gradient(#ff0000, #ff0000) }</style><span>Hi</span>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "pixels 0 2 12 16 ffff0000 ffff0000\n"
+                    "text \"Hi\" 0 14 #101010\n");
 
     // Groups nest, each laid over what was under it when it opened, and a
     // group none of which shows opens empty: the far one at 520, cut to a
