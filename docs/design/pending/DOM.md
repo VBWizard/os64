@@ -886,10 +886,10 @@ here.
 `userland/libhtml/fragment.c` and `serialize.c` add the two verbs in
 `html.h`: `os64_html_parse_fragment(doc, context, utf8, len, scripting,
 status)` and `os64_html_serialize(node, children_only, scripting, out,
-cap)`. D2b needs D2a's parser machinery; its PR is stacked on D3 at
-Chris's request. D3's state API is not a prerequisite of fragment parsing.
-Review and merge are pending in [PR #212](https://github.com/VBWizard/os64/pull/212),
-`codex/dom-d2b` → `codex/dom-d3`; retarget to `userland` after D3 merges.
+cap)`. D2b needs D2a's parser machinery; D3's state API is not a
+prerequisite of fragment parsing. Implemented in
+[PR #212](https://github.com/VBWizard/os64/pull/212), initially stacked on
+D3 at Chris's request.
 
 **Parsing is contextual and inert.** An owned element supplies the
 namespace, tokenizer state, insertion mode, integration-point attributes
@@ -1021,8 +1021,7 @@ The VM is stopped. There is no independent P5 or browser scripting run.
 the allocation/attribute changes alongside the parser and serializer.
 D6 must reclaim packed node payloads, text and later private attributes;
 clones must not retain pointers into a reclaimed source. D5 consumes the
-verbs; D3's state API remains independent. Chris schedules the reviews
-after publication; this slice is built and awaiting review, not merged.
+verbs; D3's state API remains independent.
 
 ### D3, as built
 
