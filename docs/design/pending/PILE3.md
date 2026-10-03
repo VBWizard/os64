@@ -642,3 +642,4 @@ blank on the way back.
 | Form controls at the zoom | their boxes grow with the page, but the widgets draw in the theme's Interface font at its size | the Web font role (the Appearance Workshop's Fonts tab), the next slice |
 | A picture shrunk to less than half | four pixels are mixed, so a picture shrunk far shimmers where the browsers filter its whole area | a page whose thumbnails shimmer |
 | Zoom's cost | more device pixels to paint, and smoothing costs more than copying | the deferred painting work |
+| Heavy pages at a high zoom | on the P5 (Chris, 10/3) news.google.com breaks up from 250%, and news.yahoo.com goes wrong at 200% but recovers once zoomed back; the cause is not measured — the page's narrow-viewport sheets at a CSS width of 331 px and under, or a budget the layout still meets, are the suspects. A reading zoom of 200% or less is what yonder is for (Chris) | a page a person needs past 200%, or one that breaks at 200% or less |
