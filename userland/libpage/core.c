@@ -572,21 +572,47 @@ bool p_select_one_line(const os64_page_control_t *c)
     return !c->multiple && size<=1;
 }
 
-// A `select`'s options in tree order, `optgroup` included. A DISABLED option
-// is kept — that is what a "choose one" placeholder is — and never sent.
-static void read_options(os64_page_t *page, const os64_html_node_t *n, os64_page_option_t **items,
-                         int32_t *count, int32_t *cap, bool group_disabled)
+static const os64_html_node_t *option_step(const os64_html_node_t *select,
+                                          const os64_html_node_t *node)
 {
-    for (; n != NULL; n = n->next) {
-        if (p_is(n, OS64_HTML_TAG_OPTGROUP)) {
-            read_options(page, n->first_child, items, count, cap,
-                         group_disabled || p_has_attr(n, "disabled"));
-            continue;
-        }
-        if (!p_is(n, OS64_HTML_TAG_OPTION)) {
-            read_options(page, n->first_child, items, count, cap, group_disabled);
-            continue;
-        }
+    bool skip = p_is(node, OS64_HTML_TAG_SELECT) || p_is(node, OS64_HTML_TAG_HR) ||
+        p_is(node, OS64_HTML_TAG_OPTION) || p_is(node, OS64_HTML_TAG_DATALIST);
+    if (p_is(node, OS64_HTML_TAG_OPTGROUP))
+        for (const os64_html_node_t *at = node->parent; at != select; at = at->parent)
+            if (p_is(at, OS64_HTML_TAG_OPTGROUP)) {
+                skip = true;
+                break;
+            }
+    if (!skip && node->first_child != NULL)
+        return node->first_child;
+    while (node != select && node->next == NULL)
+        node = node->parent;
+    return node != select ? node->next : NULL;
+}
+
+const os64_html_node_t *p_option_next(const os64_html_node_t *select,
+                                      const os64_html_node_t *previous)
+{
+    const os64_html_node_t *at = previous == NULL ? select->first_child : option_step(select, previous);
+    while (at != NULL && !p_is(at, OS64_HTML_TAG_OPTION))
+        at = option_step(select, at);
+    return at;
+}
+
+bool p_option_disabled(const os64_html_node_t *select, const os64_html_node_t *option)
+{
+    for (const os64_html_node_t *at = option; at != select; at = at->parent)
+        if ((at == option || p_is(at, OS64_HTML_TAG_OPTGROUP)) && p_has_attr(at, "disabled"))
+            return true;
+    return false;
+}
+
+// Model indices and node property verbs share the HTML list of options.
+// Disabled entries remain in the list but cannot be submitted.
+static void read_options(os64_page_t *page, const os64_html_node_t *select,
+                         os64_page_option_t **items, int32_t *count, int32_t *cap)
+{
+    for (const os64_html_node_t *n = p_option_next(select, NULL); n != NULL; n = p_option_next(select, n)) {
         if (!p_grow((void **)items, cap, *count, sizeof(**items))) {
             page->incomplete = true;
             return;
@@ -610,7 +636,7 @@ static void read_options(os64_page_t *page, const os64_html_node_t *n, os64_page
         // Without a `value` an option sends its own words, which is how
         // every hand-written menu on the old web is spelled.
         option->value = value != NULL ? value : text;
-        option->disabled = group_disabled || p_has_attr(n, "disabled");
+        option->disabled = p_option_disabled(select, n);
         option->selected = p_has_attr(n, "selected");
         (*count)++;
     }
@@ -818,7 +844,7 @@ static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_
     if (element == OS64_PAGE_EL_SELECT) {
         os64_page_option_t *items = NULL;
         int32_t count = 0, cap = 0;
-        read_options(page, n->first_child, &items, &count, &cap, false);
+        read_options(page, n, &items, &count, &cap);
         c->options = items;
         c->noptions = count;
         // The last selected option wins in a single select. A size-one
@@ -1346,8 +1372,10 @@ void p_publish(os64_page_t *page, int32_t control)
     }
     if (edit != NULL && edit->on >= 0)
         c->checked = edit->on != 0;
+    else if (c->input == OS64_PAGE_INPUT_RADIO || c->input == OS64_PAGE_INPUT_CHECKBOX)
+        c->checked = p_has_attr(c->node, "checked");
     for (int32_t i = 0; i < c->noptions; i++) {
-        bool selected = initial->selected[i];
+        bool selected = p_has_attr(c->options[i].node, "selected");
         const PNodeState *option = p_state_find(page->state, c->options[i].node);
         if (option != NULL && option->selected >= 0)
             selected = option->selected != 0;

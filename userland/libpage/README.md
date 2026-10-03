@@ -14,7 +14,12 @@ until its last model is freed, including models returned by rebuild.
 
 State is keyed by node, including detached or never-inserted controls, and
 options have independent node keys. Its default ceiling is 16 MiB, including
-allocation headers and script-operation scratch. `state_bytes` reports live
+allocation headers and script-operation scratch. Builds keep default records
+where normalization differs from markup and preserve existing records;
+property setters can spend the cap on
+a whole group. Reservations reuse spare lookup capacity and copy the live
+table when it needs to grow. Model and node option indices share the HTML
+list-of-options walk, including its excluded subtrees. `state_bytes` reports live
 charged memory. `state_version` reports effective property changes separately
 from HTML's version. Getter-only cache fills leave the revision alone;
 effective dirty-value normalization advances it.
@@ -29,9 +34,11 @@ Activation and person edits/reset refuse STALE models.
 Default getters may cache sanitized values, with NO_MEMORY leaving their
 outputs unchanged. Current dirty getters allocate nothing. After HTML changes,
 dirty reads and rebuilds stage re-sanitization for current type/constraints; observed file
-mode clears the old value. Historical input-mode transitions require D5
-state-aware attribute mutation, since a final tree version cannot tell
-which transitions happened between observations. Returned bytes expire when
+mode clears the old value. Historical input-mode transitions require the
+state-aware `os64_page_node_set_attr` entrance, since a final tree version
+cannot tell which transitions happened between observations. State-aware
+tree and select-attribute mutations release explicit-empty selection when
+normalization requires it. Returned bytes expire when
 the value changes, a default cache refresh follows an HTML mutation, or state
 is freed. Equal assignments retain the existing bytes.
 

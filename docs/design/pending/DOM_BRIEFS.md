@@ -322,6 +322,13 @@ state effects together; an allocation refusal changes neither. Test both
 intermediate observations and multiple transitions between observations.
 Calling `os64_html_set_attr` alone is not that transaction.
 
+**Select mutation history.** Clearing `selectedIndex` or assigning an
+unmatched value may leave a size-one select empty. Option insertion or
+removal and changes to `size` or `multiple` run selectedness normalization
+again, including the first enabled option fallback. The state-aware tree
+and attribute entrances must release the explicit-empty selection marker
+at those transitions, with refusal preserving both tree and state.
+
 **The leak count.** DOM.md § A leak at teardown asks libjs for a destroy
 that reports instead of aborting (CONTRACT.md § Browser extensions, the
 third), with a reviewed patch and a ledger allocator. For J3 the fixture

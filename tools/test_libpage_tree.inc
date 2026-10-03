@@ -157,6 +157,33 @@ static void tree_state_failure_sweep(void)
     }
 }
 
+static void tree_explicit_empty_selection(void)
+{
+    RebuildFixture f=rebuild_fixture("<select id=s><option id=a>A<option>B</select>",0);
+    os64_html_node_t *select=rebuild_id(f.doc,"s"),*a=rebuild_id(f.doc,"a");
+    os64_html_node_t *option=followup_element(f.doc,"option",NULL);
+    int32_t index=-99;
+    rebuild_expect("empty select: clear before insertion",os64_page_node_set_selected_index(f.state,select,-1)==0);
+    rebuild_expect("empty select: insert option",os64_page_node_insert(f.state,select,option,NULL)==0);
+    rebuild_expect("empty select: insertion restores first",os64_page_node_selected_index(f.state,select,&index)==0&&index==0);
+    rebuild_expect("empty select: clear before removal",os64_page_node_set_selected_index(f.state,select,-1)==0);
+    rebuild_expect("empty select: remove option",os64_page_node_remove(f.state,a)==0);
+    rebuild_expect("empty select: removal restores first",os64_page_node_selected_index(f.state,select,&index)==0&&index==0);
+    rebuild_expect("empty select: clear before size",os64_page_node_set_selected_index(f.state,select,-1)==0);
+    rebuild_expect("empty select: size roundtrip",attrs_set(&f,select,"size","2")==0&&attrs_set(&f,select,"size","1")==0);
+    rebuild_expect("empty select: size restores first",os64_page_node_selected_index(f.state,select,&index)==0&&index==0);
+    rebuild_expect("empty select: clear before multiple",os64_page_node_set_selected_index(f.state,select,-1)==0);
+    rebuild_expect("empty select: multiple roundtrip",attrs_set(&f,select,"multiple","")==0&&attrs_set(&f,select,"multiple",NULL)==0);
+    rebuild_expect("empty select: multiple restores first",os64_page_node_selected_index(f.state,select,&index)==0&&index==0);
+    rebuild_expect("empty select: unmatched value",os64_page_node_set_value(f.state,select,"missing",7)==0);
+    rebuild_expect("empty select: property clear stays empty",os64_page_node_selected_index(f.state,select,&index)==0&&index==-1);
+    os64_html_node_t *nested=followup_option(f.doc,select->first_child,"nested");
+    rebuild_expect("empty select: excluded option attribute",attrs_set(&f,nested,"selected","")==0);
+    rebuild_expect("empty select: excluded option leaves outer selection empty",
+        os64_page_node_selected_index(f.state,select,&index)==0&&index==-1);
+    rebuild_clear(&f);
+}
+
 static void test_libpage_tree(void)
 {
     tree_depth_and_state_cap();
@@ -164,4 +191,5 @@ static void test_libpage_tree(void)
     tree_state_histories();
     tree_native_refusals_and_templates();
     tree_state_failure_sweep();
+    tree_explicit_empty_selection();
 }

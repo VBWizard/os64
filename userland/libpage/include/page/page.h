@@ -37,6 +37,8 @@ typedef struct os64_page_state os64_page_state_t;
 
 // State belongs to one document, including nodes not connected to its tree.
 // The cap includes its header, records, cached values and operation scratch.
+// Builds retain sparse normalized defaults where they differ from markup;
+// script assignments can spend the cap on records for their whole group.
 // Zero selects the default cap. NULL means no memory (or no document).
 // Freeing explicit state with models still borrowing it ends the program
 // with OS64_PAGE_FATAL_EXIT. State does not pin the document itself.
@@ -541,14 +543,15 @@ int64_t os64_page_node_set_selected_index(os64_page_state_t *state,
 // Current dirty getters allocate nothing. After an HTML change, reading a
 // dirty value re-sanitizes it for its current type and constraints, with all
 // replacements staged before publication; file observation clears its value.
-// Reading an untouched default value may
-// cache sanitized bytes within the cap; failure preserves outputs and cache.
+// Reading an untouched default value may cache sanitized bytes within the
+// cap; failure preserves outputs and cache.
 // The returned bytes last until the node's value is successfully changed,
 // its default cache is refreshed after an HTML mutation, or state is freed.
 // Getter cache refresh alone does not advance the control-state revision;
 // effective dirty-value re-sanitization does. An unchanged assignment retains
 // the published bytes. Person/script origin is retained separately because
-// length validation applies only after a person edit. These verbs observe the current tree: transitions
+// length validation applies only after a person edit. These verbs observe
+// the current tree: transitions
 // between input value modes that happen entirely between observations need
 // os64_page_node_set_attr at each attribute mutation.
 int64_t os64_page_node_value(os64_page_state_t *state, const os64_html_node_t *node,

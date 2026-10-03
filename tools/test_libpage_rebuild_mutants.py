@@ -28,8 +28,8 @@ MUTANTS = [
         "p_state_find(state, at)->selected = i == index ? 1 : 0;",
         "p_state_find(state, node)->selected = i == index ? 1 : 0;")]),
     ("normalization-commit-order", [("state.c",
-        "if (!p_reserve_node(&reserve, c->node))\n                goto no_memory;",
-        "if (!p_reserve_node(&reserve, c->node))\n                goto no_memory;\n"
+        "!p_reserve_node(&reserve, c->node))\n                goto no_memory;",
+        "!p_reserve_node(&reserve, c->node))\n                goto no_memory;\n"
         "            p_reserve_commit(&reserve);")]),
     ("current-type-sanitizer", [("state.c",
         "if (edit == NULL || edit->text == NULL || edit->text_version == version)",
@@ -39,8 +39,25 @@ MUTANTS = [
         "p_sanitize_value(&temporary, node, element,\n        input == OS64_PAGE_INPUT_FILE ? OS64_PAGE_INPUT_TEXT : input,\n        edit->text, edit->text_len, &len)")]),
     ("script-user-length-origin", [("state.c", "edit->text_user = user;", "edit->text_user = true;")]),
     ("same-value-origin-transition", [("state.c",
-        "edit->text_user = user;\n            if (origin_changed)",
-        "(void)user;\n            if (origin_changed)")]),
+        "bool origin_changed = edit->text_user != user;\n            edit->text_user = user;",
+        "bool origin_changed = edit->text_user != user;\n            (void)user;")]),
+    ("first-touch-copies-live-table", [("state.c", "if (cap != previous_cap)",
+        "if (cap != previous_cap || reserve->table == NULL)")]),
+    ("dense-normalized-defaults", [("state.c",
+        "c->checked != p_has_attr(c->node, \"checked\")) &&", "true) &&"),
+        ("state.c", "c->options[o].selected != p_has_attr(c->options[o].node, \"selected\")) &&", "true) &&")]),
+    ("equal-assignment-stale-version", [("state.c",
+        "edit->text_clean = false;\n            edit->text_version = os64_html_version(state->doc);",
+        "edit->text_clean = false;")]),
+    ("options-descend-into-option", [("core.c", "p_is(node, OS64_HTML_TAG_OPTION) ||", "false ||")]),
+    ("options-descend-into-select", [("core.c", "p_is(node, OS64_HTML_TAG_SELECT) ||", "false ||")]),
+    ("options-descend-into-datalist", [("core.c", "p_is(node, OS64_HTML_TAG_DATALIST);", "false;")]),
+    ("options-descend-into-hr", [("core.c", "p_is(node, OS64_HTML_TAG_HR) ||", "false ||")]),
+    ("options-descend-into-nested-group", [("core.c", "if (p_is(at, OS64_HTML_TAG_OPTGROUP))", "if (false)")]),
+    ("options-ignore-generic-containers", [("core.c", "if (!skip && node->first_child != NULL)",
+        "if (!skip && p_is(node, OS64_HTML_TAG_OPTGROUP) && node->first_child != NULL)")]),
+    ("sparse-default-old-model-publication", [("core.c",
+        "c->checked = p_has_attr(c->node, \"checked\");", "c->checked = initial->checked;")]),
 ]
 
 
