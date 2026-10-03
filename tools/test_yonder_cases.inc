@@ -350,6 +350,42 @@ static void paint_cases(void)
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true,
                     "fill 0 0 200 100 #fefefe\n"
                     "pixels 1 1 2 1 ff404040 ffbfbfbf\n");
+    // Layers (PILE3.md § Layers) paint from the bottom up: under, the 4px
+    // black-to-white line; over it, a red 2px tile that does not repeat —
+    // its pixels past the tile left as they are.
+    paint_page_case("layers paint from the bottom up",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: linear-gradient(#ff0000, #ff0000) 0 0 / 2px 1px no-repeat,"
+                    " linear-gradient(to right, #000000, #ffffff) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff202020 ff606060 ff9f9f9f ffdfdfdf\n"
+                    "pixels 0 0 4 1 ffff0000 ffff0000 00000000 00000000\n");
+    // The colour is cut by the BOTTOM layer's clip, the border box here,
+    // and each layer by its own: the top one to the content box.
+    paint_page_case("the colour takes the bottom layer's clip, each layer its own",
+                    "<!doctype html><style>body { margin: 0 } div { width: 2px; height: 2px;"
+                    " padding: 1px; background: #ff0000;"
+                    " background-image: linear-gradient(#00ff00, #00ff00),"
+                    " linear-gradient(#0000ff, #0000ff);"
+                    " background-clip: content-box, border-box }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 0 0 4 4 #ff0000\n"
+                    "pixels 0 0 4 4 ff0000ff ff0000ff ff0000ff ff0000ff ff0000ff ff0000ff"
+                    " ff0000ff ff0000ff ff0000ff ff0000ff ff0000ff ff0000ff ff0000ff ff0000ff"
+                    " ff0000ff ff0000ff\n"
+                    "pixels 1 1 2 2 ff00ff00 ff00ff00 ff00ff00 ff00ff00\n");
+    // A sheet's picture is asked for by its layer, over the gradient under
+    // it.
+    paint_page_case("a picture layer is drawn by its index, over the layer under it",
+                    "<!doctype html><style>body { margin: 0 } div { width: 2px; height: 1px;"
+                    " background: url(a.png) no-repeat, linear-gradient(#0000ff, #0000ff) }"
+                    "</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 2 1 ff0000ff ff0000ff\n"
+                    "backdrop 0 0 2 1 layer 0\n");
     // The colour is cut too, and to the text it is not drawn at all.
     paint_page_case("a colour is cut to the clip box",
                     "<!doctype html><style>body { margin: 0 } div { width: 2px; height: 2px;"

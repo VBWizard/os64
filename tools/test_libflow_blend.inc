@@ -200,4 +200,25 @@ static void background_box_cases(void)
         "gradient=linear:180000:#ff0000@auto,#0000ff@auto\n"
         "    div block bg-size=20/20 bg-clip=text\n"
         "    div block bg=#ff0000\n");
+    // Layers: the images say how many; a shorter list repeats (the one
+    // repeat, the two sizes taken in turn), a longer one is cut; `inherit`
+    // takes the parent's whole list.
+    cascade_case("backgrounds: every layer, read", 400,
+        "<!doctype html><style>"
+        ".a{background-image:url(a.png),url(b.png),url(c.png);background-repeat:no-repeat;"
+        "background-size:10px,cover;background-clip:content-box,padding-box,border-box,text}"
+        ".b{background:url(a.png) 1px 2px,linear-gradient(red,blue) content-box}"
+        ".c{background-image:inherit}"
+        "</style><div class=a></div><div class=b><div class=c></div></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block bg-image=\"a.png\"@0 no-repeat 0%/0% bg-size=10/auto bg-clip=content-box"
+        " layer=1 bg-image=\"b.png\"@0 no-repeat 0%/0% bg-size=cover bg-clip=padding-box"
+        " layer=2 bg-image=\"c.png\"@0 no-repeat 0%/0% bg-size=10/auto\n"
+        "    div block bg-image=\"a.png\"@0 repeat 1/2"
+        " layer=1 bg-origin=content-box bg-clip=content-box"
+        " gradient=linear:180000:#ff0000@auto,#0000ff@auto holds-block\n"
+        "      div block bg-image=\"a.png\"@0 repeat 0%/0%"
+        " layer=1 gradient=linear:180000:#ff0000@auto,#0000ff@auto\n");
 }

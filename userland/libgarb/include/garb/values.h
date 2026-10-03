@@ -110,6 +110,10 @@ typedef enum {
     // first is its count (a NUMBER, or the KEYWORD auto-fill or auto-fit)
     // and its second the TRACKS repeated.
     GARB_V_FUNCTION,
+    // A background longhand written for more than one layer (Backgrounds 3
+    // § 3.1): one value per layer in `items`, the top layer first. A list
+    // of one is that one value, never this.
+    GARB_V_LAYERS,
 } garb_vkind_t;
 
 typedef enum {

@@ -371,7 +371,7 @@ the shadow's colour at its offset, under it.
 libgarb's declaration corpus gains eleven corner and twelve shadow cases.
 `radius_cases`: a percentage, the overlap scale, a slash, a zero corner,
 and the radii scaled as written (Firefox's 50 x 50 and 45 x 45).
-`sweep_shadows`: every allocation of a shadow read failed alone, each
+`sweep_grown_lists`: every allocation of a shadow read failed alone, each
 answer whole or marked incomplete.
 yonder, each worked by hand: the four border styles on a top side; a
 4px square with 2px corners to the pixel; an unblurred square shadow as
@@ -410,8 +410,8 @@ declaration corpus does not churn; what was kept is proven through
 libflow's style dump. Conic gradients and image-set are taken by name and
 drawn as nothing.
 
-**libflow carries `flow_gradient_t`** on `flow_style_t.background_gradient`,
-beside the url() — one picture behind a box, never both. The geometry stays
+**libflow carries `flow_gradient_t`** in a background layer's image, beside
+the url() — one picture per layer, never both (S4c, below). The geometry stays
 as written (a `to` corner, percentages of the box), because only the box's
 size turns it into a line; currentColor in a stop is the element's colour.
 
@@ -459,15 +459,14 @@ draws it.
 `contain`, or a width and a height — each a length-percentage or `auto`,
 the height `auto` when only one is written; `background-origin` is one of
 the three boxes; `background-clip` is one of them or `text`. Like the other
-background longhands each takes a list, one per layer, and keeps the first.
+background longhands each takes a list, one per layer (S4c, below).
 The `background` shorthand sets all three now: a size after the position's
 `/`, and one box for both the origin and the clip, or two for the origin
 then the clip. `text` only clips, so it places nothing; written first of
 two, the declaration is invalid.
 
-**libflow carries them** as `background_fit` and `background_size[2]`,
-`background_origin` (initially the padding box) and `background_clip`
-(initially the border box).
+**libflow carries them** in a layer as `fit` and `size[2]`, `origin`
+(initially the padding box) and `clip` (initially the border box).
 
 **yonder sizes one copy, places it, and cuts it.** `yonder_box_edge` gives
 any of a box's three boxes, and `yonder_background_tile` turns the style
@@ -503,7 +502,55 @@ draws it, but for the smoothing below.
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| Every layer of a list | the longhands and the shorthand keep the first layer; the others are checked and dropped | S4c |
+| Every layer of a list | — | done in S4c, below |
 | `background-clip: text` | the glyphs are drawn by the text verb, with no mask to fill with a picture; a background clipped to its text is not drawn at all | a page whose gradient headline matters |
 | A content box with percentage padding | the tree does not carry the width a percentage padding resolved against, so it counts as none, as for an atom's content | a page whose content-box background sits wrong |
 | A scaled picture's smoothing | a copy is scaled nearest-neighbour, where the browsers smooth it unless `image-rendering` says otherwise | the image-rendering slice |
+
+## Layers (slice S4c)
+
+### How it is built
+
+**libgarb keeps every layer.** A background longhand written for more than
+one layer is a LAYERS value, one item per layer, the top first (values.h);
+written for one it is that one value, as before, so nothing that read a
+single layer changes. The `background` shorthand gives each longhand its
+list — a layer that leaves something out gives it the initial value — and
+so does `background-position`, split into its two longhands' lists. The
+lists grow outside the arena, so running out of memory partway is said by
+hand: the read is the whole one or marked incomplete.
+
+**libflow keeps a list per property**, as CSS computes them
+(`flow_backgrounds_t`), each at least one long; `inherit` and the other
+wide keywords take a whole list. `flow_background_layer` puts layer *i*
+together: the images say how many layers there are, a shorter list is
+repeated to fill them and a longer one cut (§ 3.1). An entry flow cannot
+read is that property's initial value.
+
+**yonder paints from the bottom up**: the colour first, cut by the BOTTOM
+layer's clip, then each layer cut by its own clip and placed in its own
+origin box. A gradient is painted as before; a picture is asked of the face
+by its layer's index, and the face draws that layer's picture. With no
+picture or gradient from any sheet, a `background` attribute's picture is
+the one layer, as it was. The canvas paints its owner's layers the same way
+across the whole view.
+
+### Proof
+
+libgarb's corpus: the shorthand over two layers with the colour in the
+last, an empty layer and a trailing comma (both invalid), the longhands as lists, and the
+position shorthand split into lists. `sweep_grown_lists` now also fails
+each allocation of a five-layer longhand, a five-layer shorthand and a
+six-layer position, alone. libflow: three images with one repeat, two sizes
+in turn and four clips cut to three; the shorthand's layers; `inherit`.
+yonder, by hand: two gradients painted bottom first; the colour taking the
+bottom layer's border-box clip while the top layer is cut to the content
+box; a picture layer asked for by its index over the gradient under it. In
+the guest, `/tests/pages/pile3-layers.html` — six boxes and a body of two
+layers — drew as headless Chrome draws it.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| An attribute's picture under a sheet's `none` | a `background` attribute's picture shows whenever no sheet gives the box a picture or gradient, though a sheet's `background-image: none` should hide it | a page that hides a table's background attribute that way |

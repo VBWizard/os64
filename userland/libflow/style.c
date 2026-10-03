@@ -302,6 +302,18 @@ static void background(Spec *sp, uint32_t rgb)
 
 // ── The initial style, and inheritance ──────────────────────────────────
 
+// One layer of nothing: no picture, repeated from the padding box's
+// corner at its own size, cut to the border box.
+static const flow_bg_image_t kNoImage = {NULL, 0, -1, NULL};
+static const flow_repeat_t kRepeat = FLOW_REPEAT;
+static const flow_length_t kAtStart = {FLOW_LENGTH_PERCENT, 0, 0};
+static const flow_bg_size_t kOwnSize = {FLOW_FIT_LENGTHS, {{FLOW_LENGTH_AUTO, 0, 0},
+                                                           {FLOW_LENGTH_AUTO, 0, 0}}};
+static const flow_edge_t kPaddingBox = FLOW_EDGE_PADDING, kBorderBox = FLOW_EDGE_BORDER;
+static const flow_backgrounds_t kBackgrounds = {&kNoImage, &kRepeat, &kAtStart, &kAtStart,
+                                                &kOwnSize, &kPaddingBox, &kBorderBox,
+                                                1, 1, 1, 1, 1, 1, 1};
+
 static flow_style_t initial(const Ctx *c)
 {
     flow_style_t s;
@@ -312,9 +324,7 @@ static flow_style_t initial(const Ctx *c)
     s.font_style = FLOW_FONT_NORMAL;
     s.font_size = (flow_unit_t)c->env->viewport_font_px * FLOW_UNITS_PER_PX;
     s.color = c->env->ink;
-    s.background_position[0] = s.background_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 0, 0};
-    s.background_sheet = -1;
-    s.background_origin = FLOW_EDGE_PADDING;
+    s.backgrounds = kBackgrounds;
     s.opacity = 1000;
     s.flex_shrink = 1000;
     s.align_self = FLOW_PLACE_AUTO;
@@ -1713,22 +1723,36 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->has_background = s->has_background;
         d->background = s->background;
         break;
+    // A list is the style's, kept as long as any style is, so it is shared
+    // and not copied.
     case GARB_BACKGROUND_IMAGE:
-        d->background_image = s->background_image;
-        d->background_image_len = s->background_image_len;
-        d->background_sheet = s->background_sheet;
-        d->background_gradient = s->background_gradient;
+        d->backgrounds.image = s->backgrounds.image;
+        d->backgrounds.nimage = s->backgrounds.nimage;
         break;
-    case GARB_BACKGROUND_REPEAT: d->background_repeat = s->background_repeat; break;
-    case GARB_BACKGROUND_POSITION_X: d->background_position[0] = s->background_position[0]; break;
-    case GARB_BACKGROUND_POSITION_Y: d->background_position[1] = s->background_position[1]; break;
+    case GARB_BACKGROUND_REPEAT:
+        d->backgrounds.repeat = s->backgrounds.repeat;
+        d->backgrounds.nrepeat = s->backgrounds.nrepeat;
+        break;
+    case GARB_BACKGROUND_POSITION_X:
+        d->backgrounds.x = s->backgrounds.x;
+        d->backgrounds.nx = s->backgrounds.nx;
+        break;
+    case GARB_BACKGROUND_POSITION_Y:
+        d->backgrounds.y = s->backgrounds.y;
+        d->backgrounds.ny = s->backgrounds.ny;
+        break;
     case GARB_BACKGROUND_SIZE:
-        d->background_fit = s->background_fit;
-        d->background_size[0] = s->background_size[0];
-        d->background_size[1] = s->background_size[1];
+        d->backgrounds.size = s->backgrounds.size;
+        d->backgrounds.nsize = s->backgrounds.nsize;
         break;
-    case GARB_BACKGROUND_ORIGIN: d->background_origin = s->background_origin; break;
-    case GARB_BACKGROUND_CLIP: d->background_clip = s->background_clip; break;
+    case GARB_BACKGROUND_ORIGIN:
+        d->backgrounds.origin = s->backgrounds.origin;
+        d->backgrounds.norigin = s->backgrounds.norigin;
+        break;
+    case GARB_BACKGROUND_CLIP:
+        d->backgrounds.clip = s->backgrounds.clip;
+        d->backgrounds.nclip = s->backgrounds.nclip;
+        break;
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         dst->margin[side(prop, GARB_MARGIN_TOP)] = src->margin[side(prop, GARB_MARGIN_TOP)];
         break;
@@ -2248,6 +2272,106 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
     return true;
 }
 
+// A background property's list, one entry per layer libgarb read (a
+// LAYERS value, or one value for one layer); an entry flow cannot read is
+// the property's initial value. A url() is fetched by the face, a
+// gradient libgarb kept is drawn (values.h); a conic gradient or an
+// image-set is no picture yet (PILE3.md § Booked).
+static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const garb_val_t *v)
+{
+    const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
+    int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1;
+    if (n <= 0)
+        return true;
+    FArena *arena = &a->c->out->arena;
+    flow_backgrounds_t *b = &s->backgrounds;
+    Len l, two[2];
+    int32_t w;
+    switch (p) {
+    case GARB_BACKGROUND_IMAGE: {
+        flow_bg_image_t *list = f_arena_alloc(arena, (size_t)n * sizeof(*list));
+        if (list == NULL)
+            return false;
+        for (int32_t k = 0; k < n; k++) {
+            const garb_val_t *one = &items[k];
+            list[k] = kNoImage;
+            if (one->kind == GARB_V_URL && one->len > 0) {
+                list[k].url = one->text;
+                list[k].len = (uint32_t)one->len;
+                list[k].sheet = a->sheet;
+            } else if (one->kind == GARB_V_IMAGE && one->nitems > 0 &&
+                       !author_gradient(a, s, one, &list[k].gradient)) {
+                return false;
+            }
+        }
+        b->image = list;
+        b->nimage = n;
+        return true;
+    }
+    case GARB_BACKGROUND_REPEAT: {
+        static const char *const words[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
+        flow_repeat_t *list = f_arena_alloc(arena, (size_t)n * sizeof(*list));
+        if (list == NULL)
+            return false;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = (w = pick(&items[k], words, F_ARRAY(words))) >= 0 ? (flow_repeat_t)w : kRepeat;
+        b->repeat = list;
+        b->nrepeat = n;
+        return true;
+    }
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
+        flow_length_t *list = f_arena_alloc(arena, (size_t)n * sizeof(*list));
+        if (list == NULL)
+            return false;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = author_len(a, &items[k], false, &l)
+                          ? resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0})
+                          : kAtStart;
+        *(p == GARB_BACKGROUND_POSITION_X ? &b->x : &b->y) = list;
+        *(p == GARB_BACKGROUND_POSITION_X ? &b->nx : &b->ny) = n;
+        return true;
+    }
+    case GARB_BACKGROUND_SIZE: {
+        // A keyword, or libgarb's pair of width and height.
+        static const char *const fits[] = {"cover", "contain"};
+        flow_bg_size_t *list = f_arena_alloc(arena, (size_t)n * sizeof(*list));
+        if (list == NULL)
+            return false;
+        for (int32_t k = 0; k < n; k++) {
+            const garb_val_t *one = &items[k];
+            list[k] = kOwnSize;
+            if ((w = pick(one, fits, F_ARRAY(fits))) >= 0) {
+                list[k].fit = (flow_bg_fit_t)(FLOW_FIT_COVER + w);
+            } else if (one->kind == GARB_V_LENGTH && one->nitems == 2 &&
+                       author_len(a, &one->items[0], true, &two[0]) &&
+                       author_len(a, &one->items[1], true, &two[1])) {
+                for (int j = 0; j < 2; j++)
+                    list[k].size[j] =
+                        resolve(two[j], a->font, (flow_length_t){FLOW_LENGTH_AUTO, 0, 0});
+            }
+        }
+        b->size = list;
+        b->nsize = n;
+        return true;
+    }
+    case GARB_BACKGROUND_ORIGIN: case GARB_BACKGROUND_CLIP: {
+        static const char *const edges[] = {"border-box", "padding-box", "content-box", "text"};
+        bool origin = p == GARB_BACKGROUND_ORIGIN;
+        flow_edge_t *list = f_arena_alloc(arena, (size_t)n * sizeof(*list));
+        if (list == NULL)
+            return false;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = (w = pick(&items[k], edges, F_ARRAY(edges))) >= 0 ? (flow_edge_t)w
+                      : origin ? kPaddingBox : kBorderBox;
+        *(origin ? &b->origin : &b->clip) = list;
+        *(origin ? &b->norigin : &b->nclip) = n;
+        return true;
+    }
+    default:
+        return true;
+    }
+}
+
 static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
 {
     const garb_val_t *v = &set->value;
@@ -2273,58 +2397,12 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             s->background = colour_of(v->color);
         }
         break;
-    case GARB_BACKGROUND_IMAGE:
-        // A url() to fetch, or a gradient libgarb kept (values.h); a conic
-        // gradient or an image-set is no picture yet (PILE3.md § Booked).
-        s->background_image = NULL;
-        s->background_image_len = 0;
-        s->background_sheet = -1;
-        s->background_gradient = NULL;
-        if (v->kind == GARB_V_URL && v->len > 0) {
-            s->background_image = v->text;
-            s->background_image_len = (uint32_t)v->len;
-            s->background_sheet = a->sheet;
-        } else if (v->kind == GARB_V_IMAGE && v->nitems > 0 &&
-                   !author_gradient(a, s, v, &s->background_gradient)) {
+    case GARB_BACKGROUND_IMAGE: case GARB_BACKGROUND_REPEAT: case GARB_BACKGROUND_POSITION_X:
+    case GARB_BACKGROUND_POSITION_Y: case GARB_BACKGROUND_SIZE: case GARB_BACKGROUND_ORIGIN:
+    case GARB_BACKGROUND_CLIP:
+        if (!author_layers(a, s, p, v))
             return false;
-        }
         break;
-    case GARB_BACKGROUND_REPEAT: {
-        static const char *const words[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
-        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
-            s->background_repeat = (flow_repeat_t)i;
-        break;
-    }
-    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
-        Len l;
-        if (author_len(a, v, false, &l))
-            s->background_position[p == GARB_BACKGROUND_POSITION_Y] =
-                resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0});
-        break;
-    }
-    case GARB_BACKGROUND_SIZE: {
-        // A keyword, or libgarb's pair of width and height.
-        static const char *const fits[] = {"cover", "contain"};
-        if ((i = pick(v, fits, F_ARRAY(fits))) >= 0) {
-            s->background_fit = (flow_bg_fit_t)(FLOW_FIT_COVER + i);
-            break;
-        }
-        Len two[2];
-        if (v->kind != GARB_V_LENGTH || v->nitems != 2 || !author_len(a, &v->items[0], true, &two[0]) ||
-            !author_len(a, &v->items[1], true, &two[1]))
-            break;
-        s->background_fit = FLOW_FIT_LENGTHS;
-        for (int k = 0; k < 2; k++)
-            s->background_size[k] = resolve(two[k], a->font, (flow_length_t){FLOW_LENGTH_AUTO, 0, 0});
-        break;
-    }
-    case GARB_BACKGROUND_ORIGIN: case GARB_BACKGROUND_CLIP: {
-        static const char *const edges[] = {"border-box", "padding-box", "content-box", "text"};
-        if ((i = pick(v, edges, F_ARRAY(edges))) >= 0)
-            *(p == GARB_BACKGROUND_ORIGIN ? &s->background_origin : &s->background_clip) =
-                (flow_edge_t)i;
-        break;
-    }
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         author_len(a, v, true, &sp->margin[side(p, GARB_MARGIN_TOP)]);
         break;

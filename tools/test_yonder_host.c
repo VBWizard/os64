@@ -295,18 +295,26 @@ static void rec_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
     out(&rec->out, "control %d %d %d %d %d\n", b->control, c.x, c.y, c.w, c.h);
 }
 
-// A box has a picture behind it when libpage lists one for its element;
-// the recording says where it would be tiled, and from where.
-static bool rec_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area, int32_t ox,
-                         int32_t oy, os64_gui_rect_t clip)
+// A box has a picture behind it when libpage lists one for its element or
+// a sheet's layer names one; the recording says which layer (-1 the
+// attribute's), where it would be tiled, and from where.
+static bool rec_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
+                         const os64_gui_rect_t *area, int32_t ox, int32_t oy,
+                         os64_gui_rect_t clip)
 {
     (void)clip;
     Rec *rec = ctx;
-    if (b->node == NULL || os64_page_background_for(rec->page, b->node) < 0)
+    bool sheet = false;
+    for (int32_t i = 0; i < flow_background_layers(b->style); i++)
+        sheet |= flow_background_layer(b->style, i).image != NULL;
+    if (!sheet && (b->node == NULL || os64_page_background_for(rec->page, b->node) < 0))
         return false;
-    if (area != NULL)
+    if (area != NULL && layer < 0)
         out(&rec->out, "backdrop %d %d %d %d from %d %d\n", area->x, area->y, area->w, area->h, ox,
             oy);
+    else if (area != NULL)
+        out(&rec->out, "backdrop %d %d %d %d layer %d\n", area->x, area->y, area->w, area->h,
+            (int)layer);
     return true;
 }
 
@@ -703,11 +711,11 @@ static void scale_cases(void)
     // A sheet's picture, 20x10, behind a 100x50 box at (10, 20):
     // `right 10px center repeat-x` is calc(100% - 10px) and 50%, so x is
     // 10 + (100 - 20) - 10 = 80 and y is 20 + (50 - 10) / 2 = 40.
-    flow_style_t st;
+    flow_layer_t st;
     memset(&st, 0, sizeof(st));
-    st.background_position[0] = (flow_length_t){FLOW_LENGTH_PERCENT, 100 * 64, -10 * 64};
-    st.background_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
-    st.background_repeat = FLOW_REPEAT_X;
+    st.position[0] = (flow_length_t){FLOW_LENGTH_PERCENT, 100 * 64, -10 * 64};
+    st.position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    st.repeat = FLOW_REPEAT_X;
     os64_gui_rect_t area = {10, 20, 100, 50};
     yonder_tile_t t;
     bool got = yonder_background_tile(&st, area, 20, 10, &t);
@@ -716,7 +724,7 @@ static void scale_cases(void)
     expect("background: repeat-x repeats across and not down", t.repeat_x && !t.repeat_y, NULL);
 }
 
-static bool tile_is(const flow_style_t *s, os64_gui_rect_t area, uint32_t iw, uint32_t ih,
+static bool tile_is(const flow_layer_t *s, os64_gui_rect_t area, uint32_t iw, uint32_t ih,
                     int32_t x, int32_t y, int32_t w, int32_t h)
 {
     yonder_tile_t t;
@@ -729,15 +737,15 @@ static bool tile_is(const flow_style_t *s, os64_gui_rect_t area, uint32_t iw, ui
 static void background_size_cases(void)
 {
     os64_gui_rect_t area = {10, 20, 100, 80};
-    flow_style_t st;
+    flow_layer_t st;
     memset(&st, 0, sizeof(st));
-    st.background_fit = FLOW_FIT_COVER;
+    st.fit = FLOW_FIT_COVER;
     // Covering: the larger scale, 80 / 10 = 8 over 100 / 20 = 5.
     expect("size: cover scales to the side that covers",
            tile_is(&st, area, 20, 10, 10, 20, 160, 80), NULL);
     // Fitting: the smaller, 5, and centred, 20 + (80 - 50) / 2 = 35.
-    st.background_fit = FLOW_FIT_CONTAIN;
-    st.background_position[0] = st.background_position[1] =
+    st.fit = FLOW_FIT_CONTAIN;
+    st.position[0] = st.position[1] =
         (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
     expect("size: contain scales to fit, and is placed in the room left",
            tile_is(&st, area, 20, 10, 10, 35, 100, 50), NULL);
@@ -746,29 +754,29 @@ static void background_size_cases(void)
            tile_is(&st, area, 0, 0, 10, 20, 100, 80), NULL);
 
     memset(&st, 0, sizeof(st));
-    st.background_size[0] = (flow_length_t){FLOW_LENGTH_PX, 40 * 64, 0};
+    st.size[0] = (flow_length_t){FLOW_LENGTH_PX, 40 * 64, 0};
     expect("size: a width, the height keeping the picture's shape",
            tile_is(&st, area, 20, 10, 10, 20, 40, 20), NULL);
     expect("size: a width, with no shape the height is the box's",
            tile_is(&st, area, 0, 0, 10, 20, 40, 80), NULL);
-    st.background_size[0] = (flow_length_t){FLOW_LENGTH_AUTO, 0, 0};
-    st.background_size[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 25 * 64, 0};
+    st.size[0] = (flow_length_t){FLOW_LENGTH_AUTO, 0, 0};
+    st.size[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 25 * 64, 0};
     expect("size: a height of 25% is 20, the width 40 to keep the shape",
            tile_is(&st, area, 20, 10, 10, 20, 40, 20), NULL);
-    st.background_size[0] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
-    st.background_size[1] = (flow_length_t){FLOW_LENGTH_PX, 10 * 64, 0};
+    st.size[0] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    st.size[1] = (flow_length_t){FLOW_LENGTH_PX, 10 * 64, 0};
     expect("size: both written, both taken", tile_is(&st, area, 20, 10, 10, 20, 50, 10), NULL);
-    st.background_size[1] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
+    st.size[1] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
     yonder_tile_t t;
     expect("size: a side of 0 draws nothing", !yonder_background_tile(&st, area, 20, 10, &t),
            NULL);
-    st.background_size[0] = st.background_size[1] = (flow_length_t){FLOW_LENGTH_AUTO, 0, 0};
+    st.size[0] = st.size[1] = (flow_length_t){FLOW_LENGTH_AUTO, 0, 0};
     expect("size: auto auto is the picture's own",
            tile_is(&st, area, 20, 10, 10, 20, 20, 10), NULL);
     expect("size: auto auto with no picture size is the box",
            tile_is(&st, area, 0, 0, 10, 20, 100, 80), NULL);
     // A huge picture scaled from a huge box stays inside an int32_t.
-    st.background_fit = FLOW_FIT_COVER;
+    st.fit = FLOW_FIT_COVER;
     expect("size: a scale past INT32_MAX is held there",
            tile_is(&st, (os64_gui_rect_t){0, 0, INT32_MAX, 1}, 1, 65536, 0, 0, INT32_MAX,
                    INT32_MAX),

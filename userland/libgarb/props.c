@@ -1257,6 +1257,49 @@ static bool repeat(VCur *c, garb_val_t *out)
     return true;
 }
 
+// A background value per layer, gathered as a list is read.
+typedef struct {
+    garb_val_t *v;
+    int32_t n, cap;
+} Layers;
+
+static bool layers_add(Sets *s, Layers *l, const garb_val_t *v)
+{
+    if (l->n == l->cap) {
+        int32_t cap = l->cap != 0 ? l->cap * 2 : 4;
+        garb_val_t *grown = os64_realloc(l->v, (size_t)cap * sizeof(*grown));
+        if (grown == NULL) {
+            // Not the arena's, so said here, as shadow_list says it.
+            s->a.short_of_memory = true;
+            return false;
+        }
+        l->v = grown;
+        l->cap = cap;
+    }
+    l->v[l->n++] = *v;
+    return true;
+}
+
+// The list as one value — its one layer's, or a LAYERS of them all — and
+// the list freed. False when the arena is out of room.
+static bool layers_done(Sets *s, Layers *l, garb_val_t *out)
+{
+    bool ok = l->n > 0;
+    if (ok && l->n == 1) {
+        *out = l->v[0];
+    } else if (ok) {
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_LAYERS;
+        out->items = keep(s, l->v, l->n);
+        out->nitems = l->n;
+        out->comma = true;
+        ok = out->items != NULL;
+    }
+    os64_free(l->v);
+    *l = (Layers){0};
+    return ok;
+}
+
 // <bg-size> (Backgrounds 3 § 3.9): cover, contain, or a width and a height,
 // each a length-percentage or auto, the height auto when not written.
 static bool bg_size(Sets *s, VCur *c, garb_val_t *out)
@@ -1292,96 +1335,99 @@ static garb_val_t auto_size(Sets *s)
     return v;
 }
 
-// The `background` shorthand: comma-separated layers, the last of which may
-// carry the colour. What yonder paints is one picture, so the FIRST layer's
-// image, repeat, position, size and boxes are the ones set — the one on
-// top — and the rest are read for their validity (Backgrounds 3 § 3.10).
-// One box sets the origin and the clip; two, the origin then the clip.
-static bool background(Sets *s, VCur *c)
+// The longhands each layer of the `background` shorthand sets, in the
+// order they are set.
+enum { L_IMAGE, L_REPEAT, L_X, L_Y, L_SIZE, L_ORIGIN, L_CLIP, L_N };
+static const garb_prop_t kLayerProps[L_N] = {
+    GARB_BACKGROUND_IMAGE, GARB_BACKGROUND_REPEAT, GARB_BACKGROUND_POSITION_X,
+    GARB_BACKGROUND_POSITION_Y, GARB_BACKGROUND_SIZE, GARB_BACKGROUND_ORIGIN,
+    GARB_BACKGROUND_CLIP,
+};
+
+// The shorthand's layers, each one's values added to `lists`, and the
+// colour the last may carry.
+static bool background_layers(Sets *s, VCur *c, Layers lists[L_N], garb_val_t *color)
 {
-    garb_val_t color = transparent(), image = kw("none"), rep = kw("repeat"), px = percent(0),
-               py = percent(0), size = auto_size(s), origin = kw("padding-box"),
-               clip = kw("border-box");
-    if (size.items == NULL)
-        return false;
-    for (int layer = 0;; layer++) {
+    for (;;) {
         bool have_img = false, have_pos = false, have_rep = false, have_att = false,
-             have_color = false, have_size = false;
+             have_color = false;
         int boxes = 0;
         const char *box[2] = {NULL, NULL};
-        garb_val_t li = kw("none"), lr = kw("repeat"), lx = percent(0), ly = percent(0), lc, ls;
+        garb_val_t l[L_N] = {kw("none"), kw("repeat"), percent(0), percent(0), auto_size(s),
+                             kw("padding-box"), kw("border-box")};
+        if (l[L_SIZE].items == NULL)
+            return false;
         for (;;) {
             const garb_value_t *t = vc_peek(c);
             if (t == NULL || t->kind == GARB_COMMA)
                 break;
             garb_val_t v, x, y;
             if (!have_img && vc_keyword(c, kNone) != NULL) {
-                li = kw("none");
                 have_img = true;
             } else if (!have_img && bg_image(s, c, &v)) {
-                li = v;
+                l[L_IMAGE] = v;
                 have_img = true;
             } else if (!have_pos && position(s, c, &x, &y)) {
-                lx = x;
-                ly = y;
+                l[L_X] = x;
+                l[L_Y] = y;
                 have_pos = true;
                 if (is_delim_v(vc_peek(c), '/')) {
                     c->i++;
-                    if (!bg_size(s, c, &ls))
+                    if (!bg_size(s, c, &l[L_SIZE]))
                         return false;
-                    have_size = true;
                 }
             } else if (!have_rep && repeat(c, &v)) {
-                lr = v;
+                l[L_REPEAT] = v;
                 have_rep = true;
             } else if (!have_att && vc_keyword(c, kAttachment) != NULL) {
                 have_att = true;
             } else if (boxes < 2 && (box[boxes] = vc_keyword(c, kClipBox)) != NULL) {
                 boxes++;
             } else if (!have_color && vc_color(c, &v)) {
-                lc = v;
+                *color = v;
                 have_color = true;
             } else {
                 return false;
             }
         }
-        const garb_value_t *t = vc_peek(c);
-        bool last = t == NULL;
+        bool last = vc_peek(c) == NULL;
         if (have_color && !last)
             return false;               // only the final layer has a colour
         if (!have_img && !have_pos && !have_rep && !have_att && boxes == 0 && !have_color)
             return false;               // an empty layer
         // `text` clips and never places: the origin is the other box, or
-        // stays where it was when there is none.
+        // stays as it was when there is none.
         if (boxes == 2 && os64_streq(box[0], "text"))
             return false;
-        if (layer == 0) {
-            image = li;
-            rep = lr;
-            px = lx;
-            py = ly;
-            if (have_size)
-                size = ls;
-            if (boxes > 0) {
-                clip = kw(box[boxes - 1]);
-                if (!os64_streq(box[0], "text"))
-                    origin = kw(box[0]);
-            }
+        if (boxes > 0) {
+            l[L_CLIP] = kw(box[boxes - 1]);
+            if (!os64_streq(box[0], "text"))
+                l[L_ORIGIN] = kw(box[0]);
         }
-        if (have_color)
-            color = lc;
+        for (int k = 0; k < L_N; k++)
+            if (!layers_add(s, &lists[k], &l[k]))
+                return false;
         if (last)
-            break;
+            return true;
         c->i++;                         // the comma
     }
+}
+
+// The `background` shorthand: comma-separated layers, the top one first,
+// the last of which may carry the colour (Backgrounds 3 § 3.10). One box
+// sets the origin and the clip; two, the origin then the clip.
+static bool background(Sets *s, VCur *c)
+{
+    Layers lists[L_N] = {{0}};
+    garb_val_t color = transparent(), v[L_N];
+    bool ok = background_layers(s, c, lists, &color);
+    for (int k = 0; k < L_N; k++)
+        ok = layers_done(s, &lists[k], &v[k]) && ok;    // each list freed, whatever
+    if (!ok)
+        return false;
     set(s, GARB_BACKGROUND_COLOR, &color);
-    set(s, GARB_BACKGROUND_IMAGE, &image);
-    set(s, GARB_BACKGROUND_REPEAT, &rep);
-    set(s, GARB_BACKGROUND_POSITION_X, &px);
-    set(s, GARB_BACKGROUND_POSITION_Y, &py);
-    set(s, GARB_BACKGROUND_SIZE, &size);
-    set(s, GARB_BACKGROUND_ORIGIN, &origin);
-    set(s, GARB_BACKGROUND_CLIP, &clip);
+    for (int k = 0; k < L_N; k++)
+        set(s, kLayerProps[k], &v[k]);
     return true;
 }
 
@@ -1931,8 +1977,7 @@ static bool grid_line(Sets *s, VCur *c, garb_val_t *out)
 }
 
 // The background longhands take a comma-separated list, one per layer
-// (Backgrounds 3 § 3.1): the first — the layer on top, the one yonder
-// draws — is kept, and the rest are read for their validity.
+// (Backgrounds 3 § 3.1), the top layer first.
 static bool layered(const Longhand *l)
 {
     return l->g == G_BG_IMAGE || l->g == G_BG_REPEAT || l->g == G_BG_POS_X ||
@@ -1941,15 +1986,20 @@ static bool layered(const Longhand *l)
 
 static bool longhand(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
 {
-    if (!longhand_one(s, c, l, out))
-        return false;
-    while (layered(l) && vc_peek(c) != NULL && vc_peek(c)->kind == GARB_COMMA) {
-        c->i++;
-        garb_val_t other;
-        if (!longhand_one(s, c, l, &other))
+    if (!layered(l))
+        return longhand_one(s, c, l, out);
+    Layers list = {0};
+    for (;;) {
+        garb_val_t one;
+        if (!longhand_one(s, c, l, &one) || !layers_add(s, &list, &one)) {
+            os64_free(list.v);
             return false;
+        }
+        if (vc_peek(c) == NULL || vc_peek(c)->kind != GARB_COMMA)
+            break;
+        c->i++;
     }
-    return true;
+    return layers_done(s, &list, out);
 }
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
@@ -2333,21 +2383,28 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     case SH_BORDER_STYLE: return box4(s, c, GARB_BORDER_TOP_STYLE, bstyle_one);
     case SH_BORDER_COLOR: return box4(s, c, GARB_BORDER_TOP_COLOR, bcolor_one);
     case SH_BACKGROUND: return background(s, c);
-    case SH_BACKGROUND_POSITION:
-        // A position per layer; the first is the one drawn.
-        if (!position(s, c, &x, &y))
-            return false;
-        while (vc_peek(c) != NULL && vc_peek(c)->kind == GARB_COMMA) {
-            garb_val_t ox, oy;
+    case SH_BACKGROUND_POSITION: {
+        // A position per layer, each split into its two longhands' lists.
+        Layers xs = {0}, ys = {0};
+        bool ok = true;
+        for (;;) {
+            if (!position(s, c, &x, &y) || !layers_add(s, &xs, &x) || !layers_add(s, &ys, &y)) {
+                ok = false;
+                break;
+            }
+            if (vc_peek(c) == NULL || vc_peek(c)->kind != GARB_COMMA)
+                break;
             c->i++;
-            if (!position(s, c, &ox, &oy))
-                return false;
         }
-        if (!vc_done(c))
+        ok = ok && vc_done(c);
+        ok = layers_done(s, &xs, &x) && ok;     // each list freed, whatever
+        ok = layers_done(s, &ys, &y) && ok;
+        if (!ok)
             return false;
         set(s, GARB_BACKGROUND_POSITION_X, &x);
         set(s, GARB_BACKGROUND_POSITION_Y, &y);
         return true;
+    }
     case SH_FONT: return font_shorthand(s, c);
     case SH_BORDER_RADIUS: return radius_shorthand(s, c);
     case SH_LIST_STYLE: return list_style(s, c);
@@ -2698,7 +2755,7 @@ static void val(Out *o, const garb_val_t *v)
     case GARB_V_STRING: put(o, "\""); put_n(o, v->text, v->len); put(o, "\""); break;
     case GARB_V_CALC: calc(o, v->calc, AT_TOP); break;
     case GARB_V_IMAGE: put_n(o, v->text, v->len); put(o, "(...)"); break;
-    case GARB_V_TRACKS: case GARB_V_FUNCTION: break;    // always with items, above
+    case GARB_V_TRACKS: case GARB_V_FUNCTION: case GARB_V_LAYERS: break;  // always with items, above
     }
 }
 
