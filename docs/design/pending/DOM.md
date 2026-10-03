@@ -1138,6 +1138,10 @@ DOM_BRIEFS.md and DEBTS.md. D3 adds neither DOM bindings nor reclamation.
 
 ### D5a, as built
 
+[PR #214](https://github.com/VBWizard/os64/pull/214) is stacked on D2b #212,
+which is stacked on D3 #211. Fable review is pending; Chris schedules it.
+Retarget each child explicitly after its parent merges and inspect its diff.
+
 `userland/libdom` binds the D5 surface to the mutable HTML document and
 persistent page state. Its native contract is `include/dom/dom.h`; the
 ownership, budget and error contracts are in `LIBDOM.md`. The shared library

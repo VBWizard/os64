@@ -38,7 +38,7 @@ independent review.
 | D2b fragment parsing | **In review** | [PR #212](https://github.com/VBWizard/os64/pull/212), `codex/dom-d2b`, stacked on D3 by request: transactional contextual parsing and allocation-free serialization. All 192 fragment fixtures and failure/mutation proof pass; evidence, compatibility boundary and D6 storage handoff in DOM.md § D2b, as built. Chris schedules the reviews. |
 | D3 page rebuild/control state | **In review** | [PR #211](https://github.com/VBWizard/os64/pull/211), `codex/dom-d3`: shared node state, pinned models, STALE gates, script property APIs and transactional rebuilds. Evidence and D5/D6 handoffs in DOM.md § D3, as built; Fable reviews before merge. |
 | D4 parser stream handoff | **Pending** | Yonder parser-thread handoff and responsive streaming; no script execution in this slice. |
-| D5 DOM binding/first page fixture | **Partial; D5a review pending** | D5a supplies libdom and state-aware attribute/tree transactions, stacked on D2b; evidence in DOM.md § D5a, as built. D5b's visible Yonder fixture, redraw and navigation acceptance remain pending; D4 is not a prerequisite. |
+| D5 DOM binding/first page fixture | **Partial; D5a review pending** | [D5a PR #214](https://github.com/VBWizard/os64/pull/214) supplies libdom and state-aware mutation/clone transactions, stacked on D2b; evidence in DOM.md § D5a, as built. D5b's visible Yonder fixture, redraw and navigation acceptance remain pending; D4 is not a prerequisite. |
 | D6 detached-subtree reclamation | **Pending** | Reclaim unheld detached trees and prove bounded long-running churn. |
 | D7 browser event loop | **Pending** | Tasks/checkpoints, timers/events, script order and J4 evidence. |
 

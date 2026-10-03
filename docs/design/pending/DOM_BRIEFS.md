@@ -249,7 +249,8 @@ harnesses and the corpus numbers unchanged with scripting off.
 
 ## D5 — the binding library (libdom) and J3's fixture
 
-**D5a is built; review pending.** The library contract and measured proof are
+**D5a is built; review pending in [PR #214](https://github.com/VBWizard/os64/pull/214).**
+The library contract and measured proof are
 in [DOM.md § D5a, as built](DOM.md#d5a-as-built),
 `userland/libdom/include/dom/dom.h` and `userland/libdom/LIBDOM.md`.
 The Yonder integration and guest-page acceptance below remain D5b.
