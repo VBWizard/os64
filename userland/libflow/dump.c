@@ -163,7 +163,8 @@ static const char *const s_place[] = {"normal", "auto", "stretch", "flex-start",
                                       "self-end", "left", "right", "space-between",
                                       "space-around", "space-evenly"};
 static const char *const s_generic[] = {"serif", "sans", "mono"};
-static const char *const s_border[] = {"none", "hidden", "solid", "inset", "outset", "groove"};
+static const char *const s_border[] = {"none",   "hidden", "solid",  "inset", "outset",
+                                       "groove", "ridge",  "dotted", "dashed", "double"};
 static const char *const s_align[] = {"left", "right", "center", "justify", "html-left",
                                       "html-right", "html-center", "html-justify"};
 static const char *const s_valign[] = {"baseline", "sub", "super", "top", "text-top",
@@ -181,7 +182,7 @@ static const char *const s_position[] = {"static", "relative", "absolute", "fixe
 // One name per value: an enum that grows without its table stops the build.
 _Static_assert(F_ARRAY(s_display) == FLOW_DISPLAY_NONE + 1, "s_display");
 _Static_assert(F_ARRAY(s_generic) == FLOW_GENERIC_MONO + 1, "s_generic");
-_Static_assert(F_ARRAY(s_border) == FLOW_BORDER_GROOVE + 1, "s_border");
+_Static_assert(F_ARRAY(s_border) == FLOW_BORDER_DOUBLE + 1, "s_border");
 _Static_assert(F_ARRAY(s_align) == FLOW_ALIGN_HTML_JUSTIFY + 1, "s_align");
 _Static_assert(F_ARRAY(s_valign) == FLOW_VALIGN_HTML_MIDDLE + 1, "s_valign");
 _Static_assert(F_ARRAY(s_ws) == FLOW_WS_PRE_LINE + 1, "s_ws");

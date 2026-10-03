@@ -138,6 +138,10 @@ typedef enum {
     FLOW_BORDER_INSET,
     FLOW_BORDER_OUTSET,
     FLOW_BORDER_GROOVE,
+    FLOW_BORDER_RIDGE,
+    FLOW_BORDER_DOTTED,
+    FLOW_BORDER_DASHED,
+    FLOW_BORDER_DOUBLE,
 } flow_border_style_t;
 
 typedef enum {
@@ -314,6 +318,16 @@ typedef struct {
     uint32_t name_len;
     int32_t row0, row1, col0, col1;
 } flow_grid_area_t;
+// A shadow (Backgrounds 3 § 7; Text Decoration 3 § 4): its offsets, its
+// blur radius (not negative) and its spread in whole pixels, its colour
+// (currentColor resolved), and whether it falls inside a box rather than
+// outside it. A text's has no spread and is never inset.
+typedef struct {
+    int32_t x, y, blur, spread;
+    uint32_t colour;
+    bool inset;
+} flow_shadow_t;
+
 // CSS Position 3 § 2 (POSITION.md).
 typedef enum {
     FLOW_POSITION_STATIC = 0,
@@ -355,6 +369,16 @@ typedef struct {
     flow_unit_t border_width[4];
     flow_border_style_t border_style[4];
     uint32_t border_color[4];       // colours; `currentColor` resolved
+    // Each corner's radii (Backgrounds 3 § 5.1), top-left, top-right,
+    // bottom-right, bottom-left, each horizontal then vertical: PX, or
+    // PERCENT of the border box's width and height. flow_box_radii is what
+    // they come to on a box.
+    flow_length_t radius[4][2];
+    // The shadows a box casts and its text casts, the first painted on top;
+    // NULL and 0 for none. `text_shadows` is inherited. The arrays are the
+    // styles', and live as long as they do.
+    const flow_shadow_t *box_shadows, *text_shadows;
+    int32_t nbox_shadows, ntext_shadows;
     flow_length_t width, height;    // AUTO, PX or PERCENT
     // The limits: PX or PERCENT, AUTO for none (`min-*: auto` is none too,
     // outside flex and grid). A percentage on a height limit binds
@@ -649,6 +673,11 @@ const flow_box_t *flow_root(const flow_tree_t *tree);
 // rule; the rect and clip functions below apply it.
 flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll);
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
+// What its corners' radii come to, in whole pixels, in flow_style_t's
+// corner order, horizontal then vertical: a percentage of its border box,
+// and every one scaled down together when two that meet along a side would
+// overlap there (Backgrounds 3 § 5.5). All 0 for square corners.
+void flow_box_radii(const flow_box_t *box, int32_t radii[4][2]);
 // Its clip, meaningful when `clipped`: its own, met with what clips each
 // frame it is in from outside that frame, each where its own frame is.
 os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll);

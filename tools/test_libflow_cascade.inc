@@ -55,7 +55,8 @@ static void cascade_cases(void)
         "  body block margin=8/8/8/8 holds-block\n"
         "    div block margin=0/0/0/24 padding=3/3/3/3 width=50%-10 height=60\n");
 
-    // An inline li leaves its ul holding no block. dashed is drawn solid.
+    // An inline li leaves its ul holding no block. A dashed border keeps
+    // its style for the painter.
     cascade_case("display and borders", 800,
         "<!doctype html><style>li { display: inline } span { display: block;"
         " border: 2px dashed blue } i { border-style: solid; display: none }</style>"
@@ -64,7 +65,7 @@ static void cascade_cases(void)
         "  body block margin=8/8/8/8 holds-block\n"
         "    ul block margin=16/0/16/0 padding=0/0/0/40\n"
         "      li inline\n"
-        "    span block border=2:solid:#0000ff\n"
+        "    span block border=2:dashed:#0000ff\n"
         "    i none\n");
 
     // A style with no width anywhere is medium, 3px; the colour is
