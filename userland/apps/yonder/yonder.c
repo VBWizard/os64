@@ -2020,6 +2020,31 @@ static void mark_part(os64_gui_rect_t r)
     os64_ui_mark_dirty(&g.ui, &part);
 }
 
+typedef struct {
+    int32_t k;
+    bool mark;
+    os64_gui_rect_t view;       // page coordinates
+    bool seen;
+} SheetPictureSeen;
+
+// One box of the view's walk: does a sheet put picture `k` behind it?
+static void sheet_picture_seen(void *ctx, const flow_box_t *b)
+{
+    SheetPictureSeen *look = ctx;
+    if (b->style->background_image == NULL || (look->seen && !look->mark) ||
+        css_picture(&g.page, b->style) != look->k)
+        return;
+    bool canvas = b->parent == NULL ||
+                  (b->node != NULL && b->node->kind == OS64_HTML_ELEMENT &&
+                   b->node->tag == OS64_HTML_TAG_BODY);
+    os64_gui_rect_t meet;
+    if (!canvas && !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
+        return;
+    look->seen = true;
+    if (look->mark)
+        mark_part(canvas ? look->view : meet);
+}
+
 // Whether any box showing picture `k` meets the view — one scrolled away is
 // not advanced, since decoding a frame nobody sees is only cost — and, when
 // `mark`, each such box's part of the glass marked for repainting.
@@ -2058,7 +2083,11 @@ static bool picture_on_screen(int32_t k, bool mark)
             return true;
         mark_part(canvas ? view : meet);
     }
-    return seen;
+    // And a sheet's picture behind any box the view shows (the walk visits
+    // only those), the root's or the body's being the canvas's.
+    SheetPictureSeen look = {k, mark, view, false};
+    flow_visit(p->tree, view, scroll_now(), sheet_picture_seen, &look);
+    return seen || look.seen;
 }
 
 // Hands the ticker the earliest of three deadlines: the next frame among
