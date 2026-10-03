@@ -34,7 +34,7 @@ independent review.
 | I1 shared integration | **Merged** | [PR #198](https://github.com/VBWizard/os64/pull/198), merge `1b874edd`: the normal ext2 root and FAT rescue volume install `js`, `libjs.so` and `/etc/licenses/quickjs.txt` with their existing dependencies. Strict root/header/target checks and 18 image byte comparisons pass, including FreeType through libos64. Fresh ext2-root and FAT-root QEMU boots each pass the CLI smoke cases and V1's 375 checks, with 55 upstream functions passing and four explicit skips. Both prime pipelines produce `1229`; the separate fatal process returns the full JSFA badge. |
 | D0 DOM design | **Merged** | Reviewed [DOM.md](DOM.md), delivered with [PR #190](https://github.com/VBWizard/os64/pull/190). Design completion is separate from browser scripting implementation. |
 | D1 libhtml mutation core | **Merged** | [PR #190](https://github.com/VBWizard/os64/pull/190), merge `5c7d62ce`. Mutation/lifetime verbs and maintained tests; `parse_fragment` belongs to D2b. |
-| D2a scripting-enabled parsing | **In review** | [PR #199](https://github.com/VBWizard/os64/pull/199), `fable/dom-d2a-parser-stop`: stop/resume, the end of the input, abandon, and a tree read and changed between calls; evidence in DOM.md § D2a, as built. |
+| D2a scripting-enabled parsing | **Merged** | [PR #199](https://github.com/VBWizard/os64/pull/199), merge `8016dd43`: stop/resume, the end of the input, abandon, and a tree read and changed between calls; evidence in DOM.md § D2a, as built. |
 | D2b fragment parsing | **Pending** | Fragment parsing and serialization; acceptance in DOM.md. |
 | D3 page rebuild/control state | **Pending** | Stale-model gate, durable form edits, script setters and failure-safe rebuilds. |
 | D4 parser stream handoff | **Pending** | Yonder parser-thread handoff and responsive streaming; no script execution in this slice. |
@@ -99,7 +99,7 @@ Next steps:
 | V1 | Quinn implements the consumer suite; another reviewer accepts the independent gate | Consumer-level validation of capability boundaries, failure behaviour, and fixture coverage. | Based on merged M1/R2/C1; owns tools/js_acceptance and tools/test_js_acceptance_host.sh. R2's fixture files remain separate. |
 | I1 | Runtime owner as integration coordinator | Shared build/image registration, final dependency checks, combined strict build and QEMU evidence. | M1, R2, C1, and V1 evidence. |
 | D0 | Fable | DOM.md covering mutable libhtml, document/wrapper lifetime, retired storage, parser handoff, and browser event scheduling. | This design and the existing browser libraries. Design runs alongside M1/R1; reviewed completion gates J3, not the runner. |
-| D1–D7 | Browser owner; coordinate with Fable | Mutable-document, parser, presentation, bindings and event-loop slices defined in DOM.md. | D0; detailed dependencies and acceptance belong to DOM.md. D1 is merged; later slices remain separate from the standalone milestone. |
+| D1–D7 | Per [DOM_BRIEFS.md](DOM_BRIEFS.md): D2b and D6 Opus, D3 and D5 Quinn, D4 and D7 Fable; Fable reviews each | Mutable-document, parser, presentation, bindings and event-loop slices defined in DOM.md. | D0; detailed dependencies and acceptance belong to DOM.md, the builder's brief to DOM_BRIEFS.md. D1 and D2a are merged; later slices remain separate from the standalone milestone. |
 
 The runtime owner is the coordinating implementer working with Chris in this
 thread. Review of a packet is separate from ownership of its implementation.
