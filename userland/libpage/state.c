@@ -192,6 +192,7 @@ static bool values_apply(PReserve *reserve)
             edit->text_len = stage->len;
             stage->replacement = NULL;
         }
+        if (stage->clear) edit->text_clean = false;
         edit->text_version = stage->version;
         changed |= stage->changed;
     }
@@ -314,6 +315,14 @@ static bool radio_group_member(const os64_html_node_t *target, const os64_html_n
         node_owner(target) == node_owner(node);
 }
 
+static bool checked_raw(const os64_page_state_t *state, const os64_html_node_t *node)
+{
+    const PNodeState *edit = p_state_find(state, node);
+    bool attribute = p_has_attr(node, "checked");
+    return edit != NULL && edit->on >= 0 && (edit->on_dirty || edit->on_attr == attribute) ?
+        edit->on != 0 : attribute;
+}
+
 int64_t os64_page_node_checked(os64_page_state_t *state, const os64_html_node_t *node,
                                bool *on)
 {
@@ -323,10 +332,18 @@ int64_t os64_page_node_checked(os64_page_state_t *state, const os64_html_node_t 
         element != OS64_PAGE_EL_INPUT ||
         (input != OS64_PAGE_INPUT_CHECKBOX && input != OS64_PAGE_INPUT_RADIO))
         return -OS64_PAGE_REASON_WRONG_KIND;
-    const PNodeState *edit = p_state_find(state, node);
-    bool attribute = p_has_attr(node, "checked");
-    *on = edit != NULL && edit->on >= 0 && (edit->on_dirty || edit->on_attr == attribute) ?
-        edit->on != 0 : attribute;
+    *on = checked_raw(state, node);
+    if (*on && input == OS64_PAGE_INPUT_RADIO) {
+        // Before any model exists, raw checked attributes still describe a
+        // radio group: the last checked member in tree order wins. Stored
+        // false records remain authoritative after a prior normalization.
+        const os64_html_node_t *root = tree_root(node);
+        for (const os64_html_node_t *at = tree_next(root, node); at != NULL; at = tree_next(root, at))
+            if (radio_group_member(node, at) && checked_raw(state, at)) {
+                *on = false;
+                break;
+            }
+    }
     return 0;
 }
 
@@ -474,8 +491,8 @@ static char *state_copy(os64_page_state_t *state, const char *s, size_t len)
 
 // Version-only invalidation can normalize the current value/mode, but
 // cannot reconstruct type transitions a caller made between observations.
-// The binding must notify state when it performs a value-mode transition.
-static bool normalize_dirty(PReserve *reserve, const os64_html_node_t *node,
+// Attribute callers use os64_page_node_set_attr to apply each transition.
+static bool normalize_current(PReserve *reserve, const os64_html_node_t *node,
                              os64_page_element_t element, os64_page_input_t input)
 {
     os64_page_state_t *state = reserve->state;
@@ -485,6 +502,27 @@ static bool normalize_dirty(PReserve *reserve, const os64_html_node_t *node,
         return true;
     PArena temporary = {.budget = state};
     bool clear = p_value_is_attribute(element, input);
+    bool clean_changed = false;
+    if (edit->text_clean) {
+        size_t baseline_len = 0;
+        const char *baseline = p_child_text_into(&temporary, node, &baseline_len);
+        if (baseline == NULL) { p_arena_free(&temporary); return false; }
+        clear = !same_bytes(edit->cache, edit->cache_len, baseline, baseline_len);
+        if (!clear) {
+            PValueStage *stage = p_state_alloc(state, sizeof(*stage));
+            if (stage == NULL) { p_arena_free(&temporary); return false; }
+            os64_memset(stage, 0, sizeof(*stage));
+            stage->edit = edit; stage->version = version;
+            stage->next = reserve->values; reserve->values = stage;
+            p_arena_free(&temporary);
+            return true;
+        }
+        size_t normalized_len = 0;
+        const char *normalized = p_sanitize_value(&temporary, node, element, input,
+            baseline, baseline_len, &normalized_len);
+        if (normalized == NULL) { p_arena_free(&temporary); return false; }
+        clean_changed = !same_bytes(edit->text, edit->text_len, normalized, normalized_len);
+    }
     size_t len = 0;
     const char *value = clear ? "" : p_sanitize_value(&temporary, node, element, input,
         edit->text, edit->text_len, &len);
@@ -492,7 +530,8 @@ static bool normalize_dirty(PReserve *reserve, const os64_html_node_t *node,
         p_arena_free(&temporary);
         return false;
     }
-    bool changed = !same_bytes(edit->text, edit->text_len, value, len);
+    bool changed = edit->text_clean ? clean_changed :
+        !same_bytes(edit->text, edit->text_len, value, len);
     PValueStage *stage = p_state_alloc(state, sizeof(*stage));
     char *replacement = changed && !clear ? state_copy(state, value, len) : NULL;
     if (stage == NULL || (changed && !clear && replacement == NULL)) {
@@ -525,11 +564,12 @@ int64_t os64_page_node_value(os64_page_state_t *state, const os64_html_node_t *n
     bool attribute = p_value_is_attribute(element, input);
     uint64_t version = os64_html_version(state->doc);
     PReserve reserve = {.state = state};
-    if (!normalize_dirty(&reserve, node, element, input)) {
+    if (!normalize_current(&reserve, node, element, input)) {
         p_reserve_abort(&reserve);
         return -OS64_PAGE_REASON_NO_MEMORY;
     }
-    if (!attribute && element != OS64_PAGE_EL_SELECT && edit != NULL && edit->text != NULL) {
+    if (!attribute && element != OS64_PAGE_EL_SELECT && edit != NULL && edit->text != NULL &&
+        (reserve.values == NULL || !reserve.values->clear)) {
         bool staged = reserve.values != NULL;
         bool changed = values_apply(&reserve);
         if (staged)
@@ -558,7 +598,7 @@ int64_t os64_page_node_value(os64_page_state_t *state, const os64_html_node_t *n
     size_t raw_len = 0;
     const char *raw = NULL;
     if (element == OS64_PAGE_EL_TEXTAREA) {
-        raw = p_subtree_text_into(&temporary, node, false, &raw_len);
+        raw = p_child_text_into(&temporary, node, &raw_len);
         if (raw == NULL)
             goto no_memory;
     } else if (element == OS64_PAGE_EL_SELECT) {
@@ -703,6 +743,7 @@ int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node
         if (!changed) {
             bool origin_changed = edit->text_user != user;
             edit->text_user = user;
+            edit->text_clean = false;
             if (origin_changed)
                 p_state_changed(state);
             p_reserve_abort(&reserve);
@@ -714,7 +755,7 @@ int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node
         const char *before = p_attr(node, "value");
         size_t before_len = before != NULL ? os64_strlen(before) : 0;
         if (element == OS64_PAGE_EL_TEXTAREA)
-            before = p_subtree_text_into(&temporary, node, false, &before_len);
+            before = p_child_text_into(&temporary, node, &before_len);
         else if (before == NULL && (input == OS64_PAGE_INPUT_CHECKBOX || input == OS64_PAGE_INPUT_RADIO)) {
             before = "on";
             before_len = 2;
@@ -746,6 +787,7 @@ int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node
     if (!attribute)
         changed |= edit->text_user != user;
     edit->text_user = user;
+    edit->text_clean = false;
     char *previous = attribute ? edit->cache : edit->text;
     if (!attribute && edit->text == NULL && edit->cache != NULL &&
         edit->cache_version == os64_html_version(state->doc) &&
@@ -792,7 +834,7 @@ bool p_state_normalize(os64_page_t *page)
     // when option order changes without an attribute assignment.
     for (int32_t i = 0; i < page->ncontrols; i++) {
         os64_page_control_t *c = &page->controls[i];
-        if (!normalize_dirty(&reserve, c->node, c->element, c->input))
+        if (!normalize_current(&reserve, c->node, c->element, c->input))
             goto no_memory;
         p_publish(page, i);
         if (c->input == OS64_PAGE_INPUT_RADIO || c->input == OS64_PAGE_INPUT_CHECKBOX) {
@@ -941,6 +983,7 @@ void p_state_reset(os64_page_t *page, int32_t form)
             edit->retired_cache = edit->cache != keep ? edit->cache : NULL;
             edit->text = NULL;
             edit->text_user = false;
+            edit->text_clean = false;
             edit->cache = keep;
             edit->text_len = 0;
             edit->cache_len = keep != NULL ? initial->value_len : 0;
@@ -973,4 +1016,856 @@ void p_state_reset(os64_page_t *page, int32_t form)
         }
     if (changed)
         p_state_changed(state);
+}
+
+os64_html_document_t *os64_page_state_document(const os64_page_state_t *state)
+{
+    return state != NULL ? state->doc : NULL;
+}
+
+// A plan shadows existing records. New table slots and value bytes remain
+// private until the HTML transaction succeeds; publication cannot allocate.
+typedef struct PAttrStage {
+    struct PAttrStage *next;
+    PNodeState *original;
+    PNodeState value;
+    bool before_on, before_selected, value_staged;
+    bool moving, select_trigger;
+    const os64_html_node_t *owner_before;
+} PAttrStage;
+
+static PAttrStage *attr_stage(PReserve *reserve, PAttrStage **stages,
+                              const os64_html_node_t *node)
+{
+    for (PAttrStage *at = *stages; at != NULL; at = at->next)
+        if (at->value.node == node)
+            return at;
+    if (!p_reserve_node(reserve, node))
+        return NULL;
+    PNodeState *record = reserve->table != NULL ?
+        *record_slot(reserve->table, reserve->cap, node) : p_state_find(reserve->state, node);
+    PAttrStage *stage = p_state_alloc(reserve->state, sizeof(*stage));
+    if (stage == NULL)
+        return NULL;
+    stage->original = record;
+    stage->value = *record;
+    bool on_attr = p_has_attr(node, "checked"), selected_attr = p_has_attr(node, "selected");
+    stage->before_on = record->on >= 0 && (record->on_dirty || record->on_attr == on_attr) ? record->on != 0 : on_attr;
+    if (p_is(node, OS64_HTML_TAG_INPUT) &&
+        (p_input_type(node) == OS64_PAGE_INPUT_RADIO || p_input_type(node) == OS64_PAGE_INPUT_CHECKBOX))
+        (void)os64_page_node_checked(reserve->state, node, &stage->before_on);
+    stage->before_selected = record->selected >= 0 && (record->selected_dirty || record->selected_attr == selected_attr) ? record->selected != 0 : selected_attr;
+    stage->value_staged = false;
+    stage->moving = stage->select_trigger = false;
+    stage->owner_before = p_is(node, OS64_HTML_TAG_INPUT) && p_input_type(node) == OS64_PAGE_INPUT_RADIO ? node_owner(node) : NULL;
+    stage->next = *stages;
+    *stages = stage;
+    return stage;
+}
+
+static void attr_stages_free(os64_page_state_t *state, PAttrStage *stages)
+{
+    while (stages != NULL) {
+        PAttrStage *next = stages->next;
+        // After publication value keeps the old pointers; before it, it keeps
+        // the proposed pointers. Either way free only what differs.
+        if (stages->value.text != stages->original->text)
+            p_state_dealloc(state, stages->value.text);
+        if (stages->value.cache != stages->original->cache)
+            p_state_dealloc(state, stages->value.cache);
+        p_state_dealloc(state, stages);
+        stages = next;
+    }
+}
+
+static bool attr_stage_value(os64_page_state_t *state, PAttrStage *stage,
+                              const char *bytes, size_t len, bool dirty, bool user)
+{
+    char **slot = dirty ? &stage->value.text : &stage->value.cache;
+    size_t *length = dirty ? &stage->value.text_len : &stage->value.cache_len;
+    char *copy = *slot != NULL && same_bytes(*slot, *length, bytes, len) ? *slot :
+        state_copy(state, bytes, len);
+    if (copy == NULL)
+        return false;
+    *slot = copy;
+    *length = len;
+    stage->value_staged = true;
+    if (dirty)
+        stage->value.text_user = user;
+    return true;
+}
+
+// ID lookup is evaluated against the proposed attribute view. The lookup
+// still walks the actual tree, so a stack-local view never becomes a key.
+static const os64_html_node_t *attr_owner(const os64_html_node_t *node,
+                                         const os64_html_node_t *changed,
+                                         const os64_html_node_t *view)
+{
+    const os64_html_node_t *attributes = node == changed ? view : node;
+    const char *form = p_attr(attributes, "form");
+    if (form == NULL)
+        return attributes->form_owner != NULL ? attributes->form_owner : p_ancestor(node, OS64_HTML_TAG_FORM);
+    const os64_html_node_t *root = tree_root(node);
+    if (root->kind == OS64_HTML_DOCUMENT)
+        for (const os64_html_node_t *at = root; at != NULL; at = tree_next(root, at)) {
+            const char *id = p_attr(at == changed ? view : at, "id");
+            if (id != NULL && os64_streq(id, form))
+                return p_is(at, OS64_HTML_TAG_FORM) ? at : NULL;
+        }
+    return NULL;
+}
+
+static bool attr_radio_group(const os64_html_node_t *target, const os64_html_node_t *peer,
+                              const os64_html_node_t *changed, const os64_html_node_t *view)
+{
+    const os64_html_node_t *a = target == changed ? view : target;
+    const os64_html_node_t *b = peer == changed ? view : peer;
+    const char *name = p_attr(a, "name"), *other = p_attr(b, "name");
+    return p_is(b, OS64_HTML_TAG_INPUT) && p_input_type(b) == OS64_PAGE_INPUT_RADIO &&
+        name != NULL && *name != '\0' && other != NULL && os64_streq(name, other) &&
+        attr_owner(target, changed, view) == attr_owner(peer, changed, view);
+}
+
+static bool attr_plan_checked(os64_page_state_t *state, const PAttrStage *stages,
+                               const os64_html_node_t *node)
+{
+    for (; stages != NULL; stages = stages->next)
+        if (stages->value.node == node && stages->value.on >= 0)
+            return stages->value.on != 0;
+    bool on = false;
+    (void)os64_page_node_checked(state, node, &on);
+    return on;
+}
+
+// A single-line select has effective selectedness even before a model or
+// getter has materialized option records. Capture that baseline before a
+// mutation changes the mode or list, rather than inferring it afterward.
+static void attr_select_baseline(os64_page_state_t *state, PAttrStage *stages,
+                                  const os64_html_node_t *select)
+{
+    bool multiple = p_has_attr(select, "multiple");
+    const os64_html_node_t *last = NULL, *first = NULL;
+    for (const os64_html_node_t *at = option_next(select, NULL); at != NULL; at = option_next(select, at)) {
+        if (first == NULL && !option_disabled(select, at))
+            first = at;
+        if (option_selected(state, at))
+            last = at;
+    }
+    const PNodeState *edit = p_state_find(state, select);
+    os64_page_control_t control = {.node = select, .multiple = multiple};
+    if (!multiple && last == NULL && (edit == NULL || !edit->selection_set) && p_select_one_line(&control))
+        last = first;
+    for (PAttrStage *stage = stages; stage != NULL; stage = stage->next)
+        if (p_is(stage->value.node, OS64_HTML_TAG_OPTION) &&
+            p_ancestor(stage->value.node, OS64_HTML_TAG_SELECT) == select) {
+            bool selected = multiple ? option_selected(state, stage->value.node) : stage->value.node == last;
+            stage->before_selected = selected;
+            stage->value.selected = selected;
+            stage->value.selected_attr = p_has_attr(stage->value.node, "selected");
+        }
+}
+
+static bool attr_selection(PReserve *reserve, PAttrStage **stages,
+                            const os64_html_node_t *select, const os64_html_node_t *select_view,
+                            const os64_html_node_t *changed, const os64_html_node_t *changed_view)
+{
+    os64_page_state_t *state = reserve->state;
+    if (!attr_stage(reserve, stages, select))
+        return false;
+    for (const os64_html_node_t *at = option_next(select, NULL); at != NULL; at = option_next(select, at))
+        if (!attr_stage(reserve, stages, at))
+            return false;
+    attr_select_baseline(state, *stages, select);
+    bool multiple = p_has_attr(select_view, "multiple");
+    const os64_html_node_t *last = NULL, *first = NULL;
+    bool preferred = p_is(changed, OS64_HTML_TAG_OPTION) &&
+        !p_has_attr(changed, "selected") && p_has_attr(changed_view, "selected") &&
+        (p_state_find(state, changed) == NULL || !p_state_find(state, changed)->selected_dirty);
+    for (const os64_html_node_t *at = option_next(select, NULL); at != NULL; at = option_next(select, at)) {
+        PAttrStage *stage = attr_stage(reserve, stages, at);
+        const os64_html_node_t *view = at == changed ? changed_view : at;
+        if (at == changed && !stage->value.selected_dirty &&
+            p_has_attr(at, "selected") != p_has_attr(view, "selected"))
+            stage->value.selected = p_has_attr(view, "selected");
+        if (first == NULL && !option_disabled(select, at))
+            first = at;
+        if (stage->value.selected)
+            last = at;
+        stage->value.selected_attr = p_has_attr(view, "selected");
+    }
+    if (!multiple && preferred)
+        last = changed;
+    os64_page_control_t control = {.node = select_view, .multiple = multiple};
+    if (!multiple && last == NULL && p_select_one_line(&control))
+        last = first;
+    if (!multiple)
+        for (PAttrStage *stage = *stages; stage != NULL; stage = stage->next)
+            if (p_is(stage->value.node, OS64_HTML_TAG_OPTION) &&
+                p_ancestor(stage->value.node, OS64_HTML_TAG_SELECT) == select)
+                stage->value.selected = stage->value.node == last;
+    attr_stage(reserve, stages, select)->value.selection_set = false;
+    return true;
+}
+
+int64_t os64_page_node_set_attr(os64_page_state_t *state, const os64_html_node_t *node,
+                                const char *name, const char *value, size_t len, bool remove)
+{
+    if (state == NULL || !os64_html_owns_node(state->doc, node) ||
+        node->kind != OS64_HTML_ELEMENT || name == NULL || *name == '\0' ||
+        (!remove && value == NULL && len != 0) || (!remove && len == SIZE_MAX))
+        return OS64_HTML_BAD_ARGUMENT;
+    const os64_html_attr_t *existing = os64_html_attr(node, name);
+    os64_html_attr_change_t changes[2] = {{name, value, len, remove}};
+    if ((remove && existing == NULL) || (!remove && existing != NULL &&
+        same_bytes(existing->value, os64_strlen(existing->value), value, len)))
+        return os64_html_set_attrs(state->doc, (os64_html_node_t *)node, changes, 1);
+    PArena temporary = {.budget = state};
+    PReserve reserve = {.state = state};
+    PAttrStage *stages = NULL;
+    os64_html_node_t view = *node;
+    // A prospective list borrows existing strings and owns only its records.
+    // The requested bytes are terminated for the shared scalar sanitizers.
+    char *terminated = remove ? NULL : p_arena_copy(&temporary, value != NULL ? value : "", len);
+    if (!remove && terminated == NULL)
+        goto no_memory;
+    os64_html_attr_t **tail = &view.attrs;
+    view.attrs = NULL;
+    bool found = false;
+    for (const os64_html_attr_t *a = node->attrs; a != NULL; a = a->next) {
+        bool match = os64_streq(a->name, name);
+        found |= match;
+        if (match && remove)
+            continue;
+        os64_html_attr_t *copy = p_arena_alloc(&temporary, sizeof(*copy));
+        if (copy == NULL)
+            goto no_memory;
+        *copy = *a;
+        copy->next = NULL;
+        if (match)
+            copy->value = terminated;
+        *tail = copy;
+        tail = &copy->next;
+    }
+    if (!found && !remove) {
+        os64_html_attr_t *copy = p_arena_alloc(&temporary, sizeof(*copy));
+        if (copy == NULL)
+            goto no_memory;
+        *copy = (os64_html_attr_t){.name = name, .value = terminated};
+        *tail = copy;
+    }
+    if (os64_streq(name, "form") && !remove)
+        view.form_owner = NULL;
+    size_t count = 1;
+    PNodeState *edit = p_state_find(state, node);
+    bool input_node = p_is(node, OS64_HTML_TAG_INPUT);
+    os64_page_input_t before = input_node ? p_input_type(node) : OS64_PAGE_INPUT_NONE;
+    os64_page_input_t after = input_node ? p_input_type(&view) : OS64_PAGE_INPUT_NONE;
+    bool type = input_node && os64_streq(name, "type") && before != after;
+    bool value_effect = input_node && (type || os64_streq(name, "value") ||
+        (after == OS64_PAGE_INPUT_EMAIL && os64_streq(name, "multiple")) ||
+        (after == OS64_PAGE_INPUT_RANGE && (os64_streq(name, "min") ||
+            os64_streq(name, "max") || os64_streq(name, "step"))));
+    if (value_effect) {
+        PAttrStage *stage = attr_stage(&reserve, &stages, node);
+        if (stage == NULL)
+            goto no_memory;
+        bool before_attr = p_value_is_attribute(OS64_PAGE_EL_INPUT, before);
+        bool after_attr = p_value_is_attribute(OS64_PAGE_EL_INPUT, after);
+        const char *raw = edit != NULL && edit->text != NULL ? edit->text : p_attr(node, "value");
+        size_t raw_len = edit != NULL && edit->text != NULL ? edit->text_len :
+            (raw != NULL ? os64_strlen(raw) : 0);
+        if (raw == NULL)
+            raw = "";
+        if (type && !before_attr && before != OS64_PAGE_INPUT_FILE && after_attr && raw_len != 0) {
+            // Normalize the old mode before transferring its current value.
+            size_t old_len = 0;
+            const char *old = p_sanitize_value(&temporary, node, OS64_PAGE_EL_INPUT, before,
+                                               raw, raw_len, &old_len);
+            if (old == NULL)
+                goto no_memory;
+            if (old_len != 0) {
+                changes[count++] = (os64_html_attr_change_t){"value", old, old_len, false};
+                raw = old;
+                raw_len = old_len;
+            } else {
+                raw = p_attr(&view, "value");
+                raw_len = raw != NULL ? os64_strlen(raw) : 0;
+                if (raw == NULL) raw = "";
+            }
+        } else if (after_attr || (type && (before_attr || before == OS64_PAGE_INPUT_FILE)) ||
+                   (edit == NULL || edit->text == NULL)) {
+            raw = p_attr(&view, "value");
+            if (raw == NULL && (after == OS64_PAGE_INPUT_CHECKBOX || after == OS64_PAGE_INPUT_RADIO))
+                raw = "on";
+            raw_len = raw != NULL ? os64_strlen(raw) : 0;
+            if (raw == NULL) raw = "";
+        }
+        bool dirty = !after_attr && after != OS64_PAGE_INPUT_FILE &&
+            edit != NULL && edit->text != NULL && !(type && (before_attr || before == OS64_PAGE_INPUT_FILE));
+        size_t normalized_len = 0;
+        const char *normalized = p_sanitize_value(&temporary, &view, OS64_PAGE_EL_INPUT, after,
+                                                   raw, raw_len, &normalized_len);
+        if (normalized == NULL || !attr_stage_value(state, stage, normalized, normalized_len, dirty,
+                                                    dirty && edit->text_user))
+            goto no_memory;
+        if (!dirty) {
+            stage->value.text = NULL;
+            stage->value.text_len = 0;
+            stage->value.text_user = false;
+        }
+    }
+    bool radio_effect = os64_streq(name, "id") || (input_node &&
+        (os64_streq(name, "checked") || type || os64_streq(name, "name") || os64_streq(name, "form")));
+    if (radio_effect) {
+        const os64_html_node_t *root = tree_root(node);
+        // Preserve the old groups' effective checkedness as well as the new
+        // group's winner. A raw earlier checked attribute must not revive
+        // merely because the old winner leaves that group.
+        for (const os64_html_node_t *at = root; at != NULL; at = tree_next(root, at))
+            if (p_is(at, OS64_HTML_TAG_INPUT) && p_input_type(at) == OS64_PAGE_INPUT_RADIO) {
+                PAttrStage *stage = attr_stage(&reserve, &stages, at);
+                if (stage == NULL)
+                    goto no_memory;
+                stage->value.on = stage->before_on;
+                stage->value.on_attr = p_has_attr(at, "checked");
+            }
+    }
+    if (input_node && (os64_streq(name, "checked") || type || os64_streq(name, "name") || os64_streq(name, "form"))) {
+        PAttrStage *stage = attr_stage(&reserve, &stages, node);
+        if (stage == NULL)
+            goto no_memory;
+        bool checked = os64_streq(name, "checked") && (edit == NULL || !edit->on_dirty) ?
+            p_has_attr(&view, "checked") : stage->before_on;
+        stage->value.on = checked;
+        stage->value.on_attr = p_has_attr(&view, "checked");
+        if (after == OS64_PAGE_INPUT_RADIO && checked)
+            for (const os64_html_node_t *at = tree_root(node); at != NULL; at = tree_next(tree_root(node), at))
+                if (at != node && attr_radio_group(node, at, node, &view)) {
+                    PAttrStage *peer = attr_stage(&reserve, &stages, at);
+                    if (peer == NULL)
+                        goto no_memory;
+                    peer->value.on = 0;
+                    peer->value.on_attr = p_has_attr(at, "checked");
+                }
+    }
+    if (os64_streq(name, "id")) {
+        const os64_html_node_t *root = tree_root(node);
+        for (const os64_html_node_t *at = root; at != NULL; at = tree_next(root, at))
+            if (p_is(at, OS64_HTML_TAG_INPUT) && p_input_type(at) == OS64_PAGE_INPUT_RADIO &&
+                node_owner(at) != attr_owner(at, node, &view) && attr_plan_checked(state, stages, at)) {
+                for (const os64_html_node_t *peer = root; peer != NULL; peer = tree_next(root, peer))
+                    if (peer != at && attr_radio_group(at, peer, node, &view)) {
+                        PAttrStage *stage = attr_stage(&reserve, &stages, peer);
+                        if (stage == NULL)
+                            goto no_memory;
+                        stage->value.on = 0;
+                        stage->value.on_attr = p_has_attr(peer, "checked");
+                    }
+            }
+    }
+    const os64_html_node_t *select = p_is(node, OS64_HTML_TAG_SELECT) ? node :
+        p_is(node, OS64_HTML_TAG_OPTION) ? p_ancestor(node, OS64_HTML_TAG_SELECT) : NULL;
+    if (select != NULL && ((select == node && (os64_streq(name, "multiple") || os64_streq(name, "size"))) ||
+        (select != node && os64_streq(name, "selected"))))
+        if (!attr_selection(&reserve, &stages, select, select == node ? &view : select, node, &view))
+            goto no_memory;
+    int64_t status = os64_html_set_attrs(state->doc, (os64_html_node_t *)node, changes, count);
+    if (status != OS64_HTML_OK) {
+        attr_stages_free(state, stages);
+        p_reserve_abort(&reserve);
+        p_arena_free(&temporary);
+        return status;
+    }
+    p_reserve_commit(&reserve);
+    bool changed = false;
+    uint64_t version = os64_html_version(state->doc);
+    for (PAttrStage *stage = stages; stage != NULL; stage = stage->next) {
+        PNodeState *old = stage->original;
+        PNodeState *fresh = &stage->value;
+        changed |= (old->text == NULL) != (fresh->text == NULL) || old->text_user != fresh->text_user ||
+            old->selection_set != fresh->selection_set ||
+            (old->text != NULL && fresh->text != NULL && !same_bytes(old->text, old->text_len, fresh->text, fresh->text_len)) ||
+            (fresh->on >= 0 && stage->before_on != (fresh->on != 0)) ||
+            (fresh->selected >= 0 && stage->before_selected != (fresh->selected != 0));
+        if (stage->value_staged) {
+            fresh->text_version = version;
+            if (fresh->text == NULL && fresh->cache != NULL) fresh->cache_version = version;
+        }
+        PNodeState previous = *old;
+        fresh->next = old->next;
+        *old = *fresh;
+        stage->value = previous;
+    }
+    p_state_publish(state);
+    attr_stages_free(state, stages);
+    if (changed)
+        p_state_changed(state);
+    p_arena_free(&temporary);
+    return OS64_HTML_OK;
+no_memory:
+    attr_stages_free(state, stages);
+    p_reserve_abort(&reserve);
+    p_arena_free(&temporary);
+    return OS64_HTML_NO_MEMORY;
+}
+
+// Structural changes need reservations for both sides of a move. Template
+// contents enter the queue as independent roots, preserving their form trees.
+typedef struct PTreeRoot {
+    struct PTreeRoot *next;
+    const os64_html_node_t *node;
+    bool moving;
+} PTreeRoot;
+
+static bool tree_plan_root(PArena *scratch, PTreeRoot **roots,
+                           const os64_html_node_t *node, bool moving)
+{
+    if (node == NULL)
+        return true;
+    for (PTreeRoot *at = *roots; at != NULL; at = at->next)
+        if (at->node == node && at->moving == moving)
+            return true;
+    PTreeRoot *root = p_arena_alloc(scratch, sizeof(*root));
+    if (root == NULL)
+        return false;
+    *root = (PTreeRoot){.node = node, .moving = moving};
+    PTreeRoot **tail = roots;
+    while (*tail != NULL)
+        tail = &(*tail)->next;
+    *tail = root;
+    return true;
+}
+
+static bool tree_plan_collect(PReserve *reserve, PArena *scratch,
+                               PTreeRoot **roots, PAttrStage **stages)
+{
+    for (PTreeRoot *root = *roots; root != NULL; root = root->next)
+        for (const os64_html_node_t *at = root->node; at != NULL; at = tree_next(root->node, at)) {
+            if (at->template_contents != NULL &&
+                !tree_plan_root(scratch, roots, at->template_contents, root->moving))
+                return false;
+            if (p_is(at, OS64_HTML_TAG_INPUT) || p_is(at, OS64_HTML_TAG_OPTION) ||
+                p_is(at, OS64_HTML_TAG_SELECT) ||
+                (p_is(at, OS64_HTML_TAG_TEXTAREA) && p_state_find(reserve->state, at) != NULL &&
+                 p_state_find(reserve->state, at)->text_clean)) {
+                PAttrStage *stage = attr_stage(reserve, stages, at);
+                if (stage == NULL)
+                    return false;
+                stage->moving |= root->moving;
+                if (p_is(at, OS64_HTML_TAG_INPUT)) {
+                    stage->value.on = stage->before_on;
+                    stage->value.on_attr = p_has_attr(at, "checked");
+                }
+                if (root->moving && p_is(at, OS64_HTML_TAG_OPTION)) {
+                    stage->value.selected = stage->before_selected;
+                    stage->value.selected_attr = p_has_attr(at, "selected");
+                }
+                if (root->moving && p_is(at, OS64_HTML_TAG_SELECT))
+                    stage->select_trigger = true;
+            }
+        }
+    return true;
+}
+
+static PAttrStage *tree_plan_find(PAttrStage *stages, const os64_html_node_t *node)
+{
+    for (; stages != NULL; stages = stages->next)
+        if (stages->value.node == node)
+            return stages;
+    return NULL;
+}
+
+static void tree_plan_select(PAttrStage *stages, const os64_html_node_t *node)
+{
+    const os64_html_node_t *select = p_is(node, OS64_HTML_TAG_SELECT) ? node :
+        p_ancestor(node, OS64_HTML_TAG_SELECT);
+    PAttrStage *stage = tree_plan_find(stages, select);
+    if (stage != NULL)
+        stage->select_trigger = true;
+}
+
+static bool tree_radio_same(const os64_html_node_t *a, const os64_html_node_t *b)
+{
+    return tree_root(a) == tree_root(b) && radio_group_member(a, b);
+}
+
+static bool tree_radio_trigger(const PAttrStage *stage)
+{
+    return stage->moving || stage->owner_before != node_owner(stage->value.node);
+}
+
+static void tree_plan_normalize(os64_page_state_t *state, PAttrStage *stages)
+{
+    // Choose the last checked incoming/group-changed radio in final tree
+    // order. Unchanged peers do not take priority over an inserted control.
+    for (PAttrStage *stage = stages; stage != NULL; stage = stage->next) {
+        const os64_html_node_t *node = stage->value.node;
+        if (!p_is(node, OS64_HTML_TAG_INPUT) || p_input_type(node) != OS64_PAGE_INPUT_RADIO ||
+            !stage->value.on || !tree_radio_trigger(stage))
+            continue;
+        const os64_html_node_t *root = tree_root(node);
+        PAttrStage *winner = stage;
+        for (const os64_html_node_t *at = root; at != NULL; at = tree_next(root, at)) {
+            PAttrStage *candidate = tree_plan_find(stages, at);
+            if (candidate != NULL && candidate->value.on && tree_radio_trigger(candidate) &&
+                tree_radio_same(node, at))
+                winner = candidate;
+        }
+        for (PAttrStage *peer = stages; peer != NULL; peer = peer->next)
+            if (peer != winner && tree_radio_same(winner->value.node, peer->value.node))
+                peer->value.on = 0;
+    }
+    for (PAttrStage *stage = stages; stage != NULL; stage = stage->next) {
+        const os64_html_node_t *select = stage->value.node;
+        if (!stage->select_trigger || !p_is(select, OS64_HTML_TAG_SELECT))
+            continue;
+        bool multiple = p_has_attr(select, "multiple");
+        const os64_html_node_t *last = NULL, *first = NULL;
+        bool incoming = false;
+        for (const os64_html_node_t *at = option_next(select, NULL); at != NULL; at = option_next(select, at)) {
+            PAttrStage *option = tree_plan_find(stages, at);
+            if (first == NULL && !option_disabled(select, at))
+                first = at;
+            if (option != NULL && option->value.selected && (!incoming || option->moving)) {
+                last = at;
+                incoming |= option->moving;
+            }
+        }
+        os64_page_control_t control = {.node = select, .multiple = multiple};
+        // A changed child list runs the select's reset algorithm even when
+        // an earlier property assignment deliberately cleared its selection.
+        if (!multiple && last == NULL && p_select_one_line(&control))
+            last = first;
+        if (!multiple)
+            for (const os64_html_node_t *at = option_next(select, NULL); at != NULL; at = option_next(select, at)) {
+                PAttrStage *option = tree_plan_find(stages, at);
+                if (option != NULL)
+                    option->value.selected = at == last;
+            }
+        stage->value.selection_set = false;
+    }
+    (void)state;
+}
+
+// Compare the LF-normalized direct child text without allocating after the
+// HTML commit. CRLF pairs can span adjacent Text nodes in the concatenation.
+static bool textarea_value_equal(const os64_html_node_t *node, const char *value, size_t len)
+{
+    size_t offset = 0;
+    bool cr = false;
+    for (const os64_html_node_t *at = node->first_child; at != NULL; at = at->next)
+        if (at->kind == OS64_HTML_TEXT)
+            for (size_t i = 0; i < at->text_len; i++) {
+                char byte = at->text[i];
+                if (cr && byte == '\n') { cr = false; continue; }
+                cr = byte == '\r';
+                if (offset == len || value[offset++] != (cr ? '\n' : byte)) return false;
+            }
+    return offset == len;
+}
+
+static void tree_plan_publish(os64_page_state_t *state, PAttrStage *stages)
+{
+    bool changed = false;
+    for (PAttrStage *stage = stages; stage != NULL; stage = stage->next) {
+        PNodeState *old = stage->original;
+        PNodeState *fresh = &stage->value;
+        changed |= (fresh->on >= 0 && stage->before_on != (fresh->on != 0)) ||
+            (fresh->selected >= 0 && stage->before_selected != (fresh->selected != 0)) ||
+            old->selection_set != fresh->selection_set ||
+            (old->text_clean && !fresh->text_clean &&
+             !textarea_value_equal(fresh->node, old->text, old->text_len));
+        fresh->next = old->next;
+        PNodeState previous = *old;
+        *old = *fresh;
+        stage->value = previous;
+    }
+    p_state_publish(state);
+    attr_stages_free(state, stages);
+    if (changed)
+        p_state_changed(state);
+}
+
+// Direct child changes reset a clean textarea's current value even if callers restore
+// the old children before reading it again. Dirty values survive those changes.
+static void tree_plan_textarea(PAttrStage *stages, const os64_html_node_t *parent)
+{
+    if (parent != NULL) {
+        PAttrStage *stage = tree_plan_find(stages, parent);
+        if (stage != NULL && stage->value.text_clean) {
+            stage->value.text = stage->value.cache = NULL;
+            stage->value.text_len = stage->value.cache_len = 0;
+            stage->value.text_clean = false;
+        }
+    }
+}
+
+int64_t os64_page_node_set_text(os64_page_state_t *state, os64_html_node_t *node,
+                                const char *bytes, size_t len)
+{
+    if (state == NULL || !os64_html_owns_node(state->doc, node))
+        return OS64_HTML_BAD_ARGUMENT;
+    if ((node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT) &&
+        (bytes != NULL || len == 0) && same_bytes(node->text, node->text_len, bytes, len))
+        return os64_html_set_text(state->doc, node, bytes, len);
+    PReserve reserve = {.state = state};
+    PAttrStage *stages = NULL;
+    if (node->parent != NULL) {
+        const os64_html_node_t *at = node->parent;
+        const PNodeState *edit = p_state_find(state, at);
+        if (edit != NULL && edit->text_clean && attr_stage(&reserve, &stages, at) == NULL) {
+            attr_stages_free(state, stages); p_reserve_abort(&reserve);
+            return OS64_HTML_NO_MEMORY;
+        }
+    }
+    tree_plan_textarea(stages, node->parent);
+    uint64_t version = os64_html_version(state->doc);
+    int64_t status = os64_html_set_text(state->doc, node, bytes, len);
+    if (status == OS64_HTML_OK && version != os64_html_version(state->doc)) {
+        p_reserve_commit(&reserve);
+        tree_plan_publish(state, stages);
+    } else {
+        attr_stages_free(state, stages); p_reserve_abort(&reserve);
+    }
+    return status;
+}
+
+typedef enum { P_TREE_INSERT, P_TREE_REPLACE, P_TREE_REMOVE, P_TREE_CHILDREN } PTreeVerb;
+
+static int64_t tree_change(os64_page_state_t *state, PTreeVerb verb,
+                           const os64_html_node_t *parent, const os64_html_node_t *node,
+                           const os64_html_node_t *reference)
+{
+    if (state == NULL || (parent != NULL && !os64_html_owns_node(state->doc, parent)) ||
+        (node != NULL && !os64_html_owns_node(state->doc, node)) ||
+        (reference != NULL && !os64_html_owns_node(state->doc, reference)))
+        return OS64_HTML_BAD_ARGUMENT;
+    if (verb == P_TREE_REMOVE && node == NULL)
+        return OS64_HTML_BAD_ARGUMENT;
+    if ((verb == P_TREE_INSERT || verb == P_TREE_REPLACE) && (parent == NULL || node == NULL))
+        return OS64_HTML_BAD_ARGUMENT;
+    if (verb == P_TREE_CHILDREN && (parent == NULL ||
+        (parent->kind != OS64_HTML_ELEMENT && parent->kind != OS64_HTML_FRAGMENT) ||
+        (node != NULL && (node->parent != NULL || node == parent))))
+        return OS64_HTML_BAD_ARGUMENT;
+    if (verb == P_TREE_REMOVE && node->parent == NULL)
+        return os64_html_remove(state->doc, (os64_html_node_t *)node);
+    if ((verb == P_TREE_INSERT && node->kind == OS64_HTML_FRAGMENT && node->first_child == NULL) ||
+        (verb == P_TREE_REPLACE && node == reference))
+        return verb == P_TREE_INSERT ? os64_html_insert(state->doc, (os64_html_node_t *)parent,
+            (os64_html_node_t *)node, (os64_html_node_t *)reference) :
+            os64_html_replace(state->doc, (os64_html_node_t *)parent, (os64_html_node_t *)node,
+                              (os64_html_node_t *)reference);
+    if (verb == P_TREE_CHILDREN && parent->first_child == NULL &&
+        (node == NULL || (node->kind == OS64_HTML_FRAGMENT && node->first_child == NULL)))
+        return OS64_HTML_OK;
+    PReserve reserve = {.state = state};
+    PArena scratch = {.budget = state};
+    PTreeRoot *roots = NULL;
+    PAttrStage *stages = NULL;
+    if (!tree_plan_root(&scratch, &roots, state->doc->document, false) ||
+        !tree_plan_root(&scratch, &roots, parent != NULL ? tree_root(parent) : NULL, false) ||
+        !tree_plan_root(&scratch, &roots, node != NULL ? tree_root(node) : NULL, false) ||
+        !tree_plan_root(&scratch, &roots, reference != NULL ? tree_root(reference) : NULL, false) ||
+        !tree_plan_root(&scratch, &roots, node, true) ||
+        !tree_plan_root(&scratch, &roots, verb == P_TREE_REPLACE ? reference : NULL, true))
+        goto no_memory;
+    if (verb == P_TREE_CHILDREN)
+        for (const os64_html_node_t *at = parent->first_child; at != NULL; at = at->next)
+            if (!tree_plan_root(&scratch, &roots, at, true))
+                goto no_memory;
+    if (!tree_plan_collect(&reserve, &scratch, &roots, &stages))
+        goto no_memory;
+    for (PAttrStage *stage = stages; stage != NULL; stage = stage->next)
+        if (stage->moving && p_is(stage->value.node, OS64_HTML_TAG_OPTION))
+            tree_plan_select(stages, stage->value.node);
+    if (parent != NULL)
+        tree_plan_select(stages, parent);
+    for (PAttrStage *stage = stages; stage != NULL; stage = stage->next)
+        if (stage->select_trigger)
+            attr_select_baseline(state, stages, stage->value.node);
+    tree_plan_textarea(stages, parent);
+    if (node != NULL) tree_plan_textarea(stages, node->parent);
+    if (verb == P_TREE_REPLACE && reference != NULL)
+        tree_plan_textarea(stages, reference->parent);
+    const os64_html_node_t *old_first = verb == P_TREE_CHILDREN ? parent->first_child : NULL;
+    uint64_t version = os64_html_version(state->doc);
+    int64_t status;
+    if (verb == P_TREE_REMOVE)
+        status = os64_html_remove(state->doc, (os64_html_node_t *)node);
+    else if (verb == P_TREE_REPLACE)
+        status = os64_html_replace(state->doc, (os64_html_node_t *)parent, (os64_html_node_t *)node,
+                                   (os64_html_node_t *)reference);
+    else if (node != NULL)
+        status = os64_html_insert(state->doc, (os64_html_node_t *)parent, (os64_html_node_t *)node,
+                                  (os64_html_node_t *)(verb == P_TREE_CHILDREN ? old_first : reference));
+    else
+        status = OS64_HTML_OK;
+    if (status != OS64_HTML_OK) {
+        attr_stages_free(state, stages);
+        p_reserve_abort(&reserve);
+        p_arena_free(&scratch);
+        return status;
+    }
+    if (verb == P_TREE_CHILDREN)
+        for (const os64_html_node_t *at = old_first; at != NULL;) {
+            const os64_html_node_t *next = at->next;
+            // A known child of an element/fragment cannot hit the document
+            // root guard, and remove allocates nothing after preparation.
+            (void)os64_html_remove(state->doc, (os64_html_node_t *)at);
+            at = next;
+        }
+    if (version == os64_html_version(state->doc)) {
+        attr_stages_free(state, stages);
+        p_reserve_abort(&reserve);
+    } else {
+        tree_plan_normalize(state, stages);
+        p_reserve_commit(&reserve);
+        tree_plan_publish(state, stages);
+    }
+    p_arena_free(&scratch);
+    return OS64_HTML_OK;
+no_memory:
+    attr_stages_free(state, stages);
+    p_reserve_abort(&reserve);
+    p_arena_free(&scratch);
+    return OS64_HTML_NO_MEMORY;
+}
+
+int64_t os64_page_node_insert(os64_page_state_t *state, os64_html_node_t *parent,
+                              os64_html_node_t *node, os64_html_node_t *before)
+{
+    return tree_change(state, P_TREE_INSERT, parent, node, before);
+}
+
+int64_t os64_page_node_replace(os64_page_state_t *state, os64_html_node_t *parent,
+                               os64_html_node_t *node, os64_html_node_t *old)
+{
+    return tree_change(state, P_TREE_REPLACE, parent, node, old);
+}
+
+int64_t os64_page_node_remove(os64_page_state_t *state, os64_html_node_t *node)
+{
+    return tree_change(state, P_TREE_REMOVE, NULL, node, NULL);
+}
+
+int64_t os64_page_node_replace_children(os64_page_state_t *state,
+                                       os64_html_node_t *parent,
+                                       os64_html_node_t *replacement)
+{
+    return tree_change(state, P_TREE_CHILDREN, parent, replacement, NULL);
+}
+
+// Pairing the detached copies with their originals also visits template content
+// fragments, which are separate trees rather than ordinary element children.
+typedef struct PClonePair {
+    struct PClonePair *next;
+    const os64_html_node_t *source, *copy;
+} PClonePair;
+
+static bool clone_pair(PArena *scratch, PClonePair ***tail,
+                        const os64_html_node_t *source, const os64_html_node_t *copy)
+{
+    PClonePair *pair = p_arena_alloc(scratch, sizeof(*pair));
+    if (pair == NULL) return false;
+    *pair = (PClonePair){.source = source, .copy = copy};
+    **tail = pair;
+    *tail = &pair->next;
+    return true;
+}
+
+os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
+                                       const os64_html_node_t *node, bool deep,
+                                       int64_t *status)
+{
+    int64_t why = OS64_HTML_BAD_ARGUMENT;
+    os64_html_node_t *copy = NULL;
+    if (state == NULL || !os64_html_owns_node(state->doc, node) ||
+        node->kind == OS64_HTML_DOCUMENT)
+        goto done;
+    copy = os64_html_clone(state->doc, node, deep, &why);
+    if (copy == NULL) goto done;
+    PReserve reserve = {.state = state};
+    PArena scratch = {.budget = state};
+    PClonePair *pairs = NULL, **tail = &pairs;
+    if (!clone_pair(&scratch, &tail, node, copy)) goto no_memory;
+    for (PClonePair *pair = pairs; pair != NULL; pair = pair->next) {
+        const os64_html_node_t *source = pair->source, *target = pair->copy;
+        bool input = p_is(source, OS64_HTML_TAG_INPUT);
+        bool textarea = p_is(source, OS64_HTML_TAG_TEXTAREA);
+        if (input || textarea) {
+            if (!p_reserve_node(&reserve, target)) goto no_memory;
+            PNodeState *fresh = *record_slot(reserve.table, reserve.cap, target);
+            const PNodeState *old = p_state_find(state, source);
+            os64_page_input_t type = input ? p_input_type(source) : OS64_PAGE_INPUT_NONE;
+            os64_page_element_t element = input ? OS64_PAGE_EL_INPUT : OS64_PAGE_EL_TEXTAREA;
+            if (input) {
+                bool checked = checked_raw(state, source);
+                if (type == OS64_PAGE_INPUT_RADIO)
+                    (void)os64_page_node_checked(state, source, &checked);
+                fresh->on = checked ? 1 : 0;
+                fresh->on_dirty = old != NULL && old->on_dirty;
+                fresh->on_attr = p_has_attr(target, "checked");
+            }
+            bool dirty = old != NULL && old->text != NULL && !old->text_clean;
+            if (input && (p_value_is_attribute(element, type) || type == OS64_PAGE_INPUT_FILE))
+                dirty = false;
+            if (textarea || dirty) {
+                size_t len = 0, normalized_len = 0;
+                const char *raw = old != NULL && old->text != NULL ? old->text : NULL;
+                if (raw != NULL) len = old->text_len;
+                if (textarea && (raw == NULL || old->text_clean)) {
+                    size_t child_len = 0;
+                    const char *children = p_child_text_into(&scratch, source, &child_len);
+                    if (children == NULL) goto no_memory;
+                    if (raw == NULL || !same_bytes(old->cache, old->cache_len, children, child_len)) {
+                        raw = children; len = child_len;
+                    }
+                }
+                const char *normalized = p_sanitize_value(&scratch, source, element, type,
+                    raw != NULL ? raw : "", len, &normalized_len);
+                fresh->text = normalized != NULL ? state_copy(state, normalized, normalized_len) : NULL;
+                if (fresh->text == NULL) goto no_memory;
+                fresh->text_len = normalized_len;
+                fresh->text_version = os64_html_version(state->doc);
+                fresh->text_user = dirty && old->text_user;
+                fresh->text_clean = textarea && !dirty;
+                if (fresh->text_clean) {
+                    size_t baseline_len = 0;
+                    const char *baseline = p_child_text_into(&scratch, target, &baseline_len);
+                    fresh->cache = baseline != NULL ? state_copy(state, baseline, baseline_len) : NULL;
+                    if (fresh->cache == NULL) goto no_memory;
+                    fresh->cache_len = baseline_len;
+                    fresh->cache_version = fresh->text_version;
+                }
+            }
+        }
+        if (deep) {
+            const os64_html_node_t *a = source->first_child, *b = target->first_child;
+            for (; a != NULL && b != NULL; a = a->next, b = b->next)
+                if (!clone_pair(&scratch, &tail, a, b)) goto no_memory;
+            if (source->template_contents != NULL && target->template_contents != NULL &&
+                !clone_pair(&scratch, &tail, source->template_contents, target->template_contents))
+                goto no_memory;
+        }
+    }
+    p_reserve_commit(&reserve);
+    p_arena_free(&scratch);
+    why = OS64_HTML_OK;
+    goto done;
+no_memory:
+    // These records have never been published; abort normally only owns their
+    // record storage, so release the staged property bytes first.
+    for (PNodeState *edit = reserve.records; edit != NULL; edit = edit->next) {
+        p_state_dealloc(state, edit->text);
+        p_state_dealloc(state, edit->cache);
+        edit->text = edit->cache = NULL;
+    }
+    p_reserve_abort(&reserve);
+    p_arena_free(&scratch);
+    copy = NULL;
+    why = OS64_HTML_NO_MEMORY;
+done:
+    if (status != NULL) *status = why;
+    return copy;
 }

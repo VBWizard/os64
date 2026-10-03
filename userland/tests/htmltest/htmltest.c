@@ -309,6 +309,42 @@ static void fragments(void)
     require(os64_heap_verify() == 0, "heap after fragments and serialisation");
     os64_printf("htmltest: fragments and serialisation PASS\n");
 }
+static void attribute_batches(void)
+{
+    os64_html_document_t *doc = parsed("<input id=q type=text value=before>");
+    os64_html_node_t *input = (os64_html_node_t *)find(doc->body, "input");
+    require(input != NULL, "attribute batch input");
+    uint64_t pin = os64_html_pin(doc);
+    require(pin != 0, "attribute batch pin");
+    const os64_html_attr_t *old = os64_html_attr(input, "value");
+    uint64_t version = os64_html_version(doc);
+    const os64_html_attr_change_t changes[] = {
+        {"type", "hidden", 6, false}, {"value", "after", 5, false}
+    };
+    require(os64_html_set_attrs(doc, input, changes, 2) == OS64_HTML_OK &&
+                os64_html_version(doc) == version + 1 &&
+                os64_streq(os64_html_attr(input, "type")->value, "hidden") &&
+                os64_streq(os64_html_attr(input, "value")->value, "after"),
+            "attribute batch single publication");
+    require(old && os64_streq(old->value, "before"), "attribute batch pinned old value");
+    version = os64_html_version(doc);
+    const os64_html_attr_t *current = input->attrs;
+    size_t arena = doc->arena_bytes, peak = doc->peak_arena_bytes;
+    const os64_html_attr_change_t invalid[] = {
+        {"type", "text", 4, false}, {"value", "\xff", 1, false}
+    };
+    require(os64_html_set_attrs(doc, input, invalid, 2) == OS64_HTML_BAD_TEXT &&
+                input->attrs == current && os64_html_version(doc) == version &&
+                doc->arena_bytes == arena && doc->peak_arena_bytes == peak,
+            "attribute batch refusal preserves tree and accounting");
+    require(os64_html_set_attrs(doc, input, changes, 2) == OS64_HTML_OK &&
+                input->attrs == current && os64_html_version(doc) == version &&
+                doc->arena_bytes == arena && doc->peak_arena_bytes == peak,
+            "attribute batch no-op preserves accounting");
+    os64_html_unpin(doc, pin);
+    os64_html_document_free(doc);
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && os64_streq(argv[1], "pinned")) {
@@ -353,6 +389,7 @@ int main(int argc, char **argv)
     verbs();
     stops();
     fragments();
+    attribute_batches();
     os64_html_options_t options = os64_html_options_default();
     options.max_depth = 3;
     os64_html_parser_t *p = os64_html_parser_new(&options);
@@ -367,6 +404,6 @@ int main(int argc, char **argv)
     os64_html_parser_destroy(p);
     require(os64_heap_verify() == 0, "heap after free/cancel");
     os64_printf(
-        "htmltest: PASS (streaming, tree repair, UTF-8, namespaces, templates, form owners, verbs, stops, fragments, serialisation, bounds, heap)\n");
+        "htmltest: PASS (streaming, tree repair, UTF-8, namespaces, templates, form owners, verbs, stops, fragments, serialisation, attribute batches, bounds, heap)\n");
     return HTMLTEST_OK;
 }

@@ -1319,7 +1319,7 @@ PNodeState *p_state_for_control(const os64_page_t *page, int32_t control)
 }
 
 // The public options pointer is const, but the page owns mutable storage.
-// Publication restores retained defaults, then overlays the explicit edits.
+// Publication restores retained defaults, then overlays current control state.
 void p_publish(os64_page_t *page, int32_t control)
 {
     os64_page_control_t *c = &page->controls[control];
@@ -1330,9 +1330,9 @@ void p_publish(os64_page_t *page, int32_t control)
     c->checked = initial->checked;
     os64_page_input_t current_input = c->element == OS64_PAGE_EL_INPUT ?
         p_input_type(c->node) : OS64_PAGE_INPUT_NONE;
-    bool dirty_value = !p_value_is_attribute(c->element, current_input) &&
+    bool current_value = !p_value_is_attribute(c->element, current_input) &&
         current_input != OS64_PAGE_INPUT_FILE;
-    if (dirty_value && edit != NULL && edit->text != NULL) {
+    if (current_value && edit != NULL && edit->text != NULL) {
         c->value = edit->text;
         c->value_len = edit->text_len;
     } else if (edit != NULL && edit->cache != NULL &&

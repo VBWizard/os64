@@ -205,7 +205,7 @@ USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
 # dependencies. The set goes on both volumes that currently carry /bin — the
 # ext2 root and the FAT lifeboat — with independent copies so damage to one
 # volume does not also eat the repair environment's libraries.
-USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libgarb.so userland/bin/libfreetype.so userland/bin/libmath.so userland/bin/libjs.so
+USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so userland/bin/libtls.so userland/bin/libjpeg.so userland/bin/libimage.so userland/bin/libfetch.so userland/bin/libhtml.so userland/bin/libpage.so userland/bin/libflow.so userland/bin/libway.so userland/bin/libgarb.so userland/bin/libfreetype.so userland/bin/libmath.so userland/bin/libjs.so userland/bin/libdom.so
 # The engine's pinned notice travels with both image copies of libjs.
 QUICKJS_LICENSE := userland/libjs/upstream/LICENSE
 

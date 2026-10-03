@@ -565,6 +565,17 @@ the changes go through libhtml. The design is
 - **Parsing is unchanged.** The reference, safety, chunking and corpus
   results are identical, work units included.
 
+### Atomic attribute batches (D5a)
+
+`os64_html_set_attrs` applies ordered qualified-name changes to one element
+and publishes its complete final attribute list once. It preserves existing
+namespaces and positions, retires replaced records for pinned readers, and
+restores arena accounting, including peak, on refusal or a final no-op.
+libpage uses it to commit a type change together with a transferred dirty
+value before publishing control state. The public contract is in `html.h`;
+binding and consumer evidence is in
+[DOM.md § D5a, as built](docs/design/pending/DOM.md#d5a-as-built).
+
 ### 2026-10-02: the parse that stops (DOM.md, slice D2a)
 
 A host that runs scripts needs the parser to wait for it. `scripting` is now

@@ -38,7 +38,7 @@ independent review.
 | D2b fragment parsing | **In review** | [PR #212](https://github.com/VBWizard/os64/pull/212), `codex/dom-d2b`, stacked on D3 by request: transactional contextual parsing and allocation-free serialization. All 192 fragment fixtures and failure/mutation proof pass; evidence, compatibility boundary and D6 storage handoff in DOM.md § D2b, as built. Chris schedules the reviews. |
 | D3 page rebuild/control state | **In review** | [PR #211](https://github.com/VBWizard/os64/pull/211), `codex/dom-d3`: shared node state, pinned models, STALE gates, script property APIs and transactional rebuilds. Evidence and D5/D6 handoffs in DOM.md § D3, as built; Fable reviews before merge. |
 | D4 parser stream handoff | **Pending** | Yonder parser-thread handoff and responsive streaming; no script execution in this slice. |
-| D5 DOM binding/first page fixture | **Pending** | Bindings and J3: visible text change, stable references/form edits and safe navigation teardown. Needs the runtime and earlier DOM slices. |
+| D5 DOM binding/first page fixture | **Partial; D5a review pending** | D5a supplies libdom and state-aware attribute/tree transactions, stacked on D2b; evidence in DOM.md § D5a, as built. D5b's visible Yonder fixture, redraw and navigation acceptance remain pending; D4 is not a prerequisite. |
 | D6 detached-subtree reclamation | **Pending** | Reclaim unheld detached trees and prove bounded long-running churn. |
 | D7 browser event loop | **Pending** | Tasks/checkpoints, timers/events, script order and J4 evidence. |
 
@@ -48,23 +48,22 @@ The implementation and validation evidence for libjs belongs to
 [VALIDATION.md](../../../userland/libjs/VALIDATION.md). The milestone criteria
 belong to [JAVASCRIPT.md](JAVASCRIPT.md#delivery-and-validation):
 
-| Milestone | Status on 2026-10-02 | Evidence and remaining work |
+| Milestone | Status on 2026-10-03 | Evidence and remaining work |
 | --- | --- | --- |
 | J0 reviewed foundation | **Complete** | Pinned QuickJS source/profile, maths selection, dependency inventory and reviewed runtime contract are delivered. |
 | J1 library and runner on os64 | **Complete** | Merged M1/R1/R2/C1, strict target build/link, expected shared dependencies, script execution and exception output in QEMU. Chris's P5 prime-count pipeline adds a hardware smoke test. J1 does not require standard-image installation. |
-| J2 lifecycle and failure acceptance | **In review** | [PR #200](https://github.com/VBWizard/os64/pull/200), implementation `ec41a57f`, based on merged I1 `1b874edd`: existing lifecycle/failure/cancellation/Promise/fatal and upstream evidence is supplemented by 105 guest measurement checks passing on one and eight CPUs. Twelve recursion/native-frame cases retain sampled headroom and permit reuse; two competing runtimes preserve XMM/x87/control state across yield/sleep with a deliberate-disturbance negative control. Six workloads fit the retained 64 MiB/256 KiB/4 MiB/60 s profile, now published by `os64_js_default_limits()` and shared by the runner. Both final boots also pass V1's 375 checks, CLI/default/768 KiB-cap cases and the fatal status; host runner suites pass 196/38 checks. Independent review remains. |
-| J3 first scripted Yonder fixture | **Pending** | D0/D1 are merged; D2-D5 and visible mutation/rebuild/reference/form/navigation acceptance remain. |
+| J2 lifecycle and failure acceptance | **Complete; merged** | [PR #200](https://github.com/VBWizard/os64/pull/200), merge `6fda4b79`: existing lifecycle/failure/cancellation/Promise/fatal and upstream evidence is supplemented by 105 guest measurement checks passing on one and eight CPUs. Twelve recursion/native-frame cases retain sampled headroom and permit reuse; two competing runtimes preserve XMM/x87/control state across yield/sleep with a deliberate-disturbance negative control. Six workloads fit the retained 64 MiB/256 KiB/4 MiB/60 s profile, now published by `os64_js_default_limits()` and shared by the runner. Both final boots also pass V1's 375 checks, CLI/default/768 KiB-cap cases and the fatal status; host runner suites pass 196/38 checks. |
+| J3 first scripted Yonder fixture | **Pending** | D0/D1/D2a are merged; D3/D2b/D5a are built with review pending. D5b's visible mutation/rebuild/reference/form/navigation acceptance remains. |
 | J4 browser execution and events | **Pending** | Browser script order, parser mode, timers/events, origins/cookies and their acceptance fixtures remain. D6 reclamation and D7's event loop are separate deliverables. |
 
 Next steps:
 
-1. Review J2's measurement suite and shared standalone defaults in PR #200.
-   V1 and I1 are reviewed and merged. J2's measurements and acceptance are
-   recorded below; accepting that packet closes the standalone milestone.
-2. Continue Fable's D2-D4 alongside that work; then D5 supplies the first
-   scripted Yonder fixture. D6 reclamation and D7 execution/events have their
-   own acceptance. The reserved browser function-call/checkpoint and audited
-   teardown-reclamation runtime work remain separate from the completed CLI.
+1. Review the stacked D3, D2b and D5a packets. Fable reviews the DOM slices;
+   Chris schedules those rounds. J2 has merged, closing the standalone milestone.
+2. D5b supplies the first scripted Yonder fixture without waiting for D4.
+   D4 and D7 remain Fable's work; D6 is available while Opus finishes Yonder
+   pile 3. Reclamation, browser function-call/checkpoint and audited runtime
+   teardown retain their own acceptance before ordinary browsing runs scripts.
 
 ## Agreed standalone scope
 
@@ -99,7 +98,7 @@ Next steps:
 | V1 | Quinn implements the consumer suite; another reviewer accepts the independent gate | Consumer-level validation of capability boundaries, failure behaviour, and fixture coverage. | Based on merged M1/R2/C1; owns tools/js_acceptance and tools/test_js_acceptance_host.sh. R2's fixture files remain separate. |
 | I1 | Runtime owner as integration coordinator | Shared build/image registration, final dependency checks, combined strict build and QEMU evidence. | M1, R2, C1, and V1 evidence. |
 | D0 | Fable | DOM.md covering mutable libhtml, document/wrapper lifetime, retired storage, parser handoff, and browser event scheduling. | This design and the existing browser libraries. Design runs alongside M1/R1; reviewed completion gates J3, not the runner. |
-| D1–D7 | Per [DOM_BRIEFS.md](DOM_BRIEFS.md): D2b and D3 Quinn with scoped subagents, D6 Opus, D5 Quinn, D4 and D7 Fable; Fable reviews each | Mutable-document, parser, presentation, bindings and event-loop slices defined in DOM.md. | D0; detailed dependencies and acceptance belong to DOM.md, the builder's brief to DOM_BRIEFS.md. D1 and D2a are merged; later slices remain separate from the standalone milestone. |
+| D1–D7 | Per [DOM_BRIEFS.md](DOM_BRIEFS.md): D2b, D3 and D5 Quinn with scoped subagents; D4 and D7 reserved for Fable; D6 available, with Opus on Yonder pile 3. Fable reviews the shared DOM slices | Mutable-document, parser, presentation, bindings and event-loop slices defined in DOM.md. | D0; detailed dependencies and acceptance belong to DOM.md, the builder's brief to DOM_BRIEFS.md. D1 and D2a are merged; later slices remain separate from the standalone milestone. |
 
 The runtime owner is the coordinating implementer working with Chris in this
 thread. Review of a packet is separate from ownership of its implementation.

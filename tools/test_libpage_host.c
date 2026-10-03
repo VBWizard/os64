@@ -438,6 +438,8 @@ static void model(const char *step_ids, const char *name, const char *html,
 #include "test_libpage_cases.inc"
 #include "test_libpage_state.inc"
 #include "test_libpage_rebuild.inc"
+#include "test_libpage_attrs.inc"
+#include "test_libpage_tree.inc"
 #include "test_libpage_number.inc"
 #include "test_libpage_boundaries.inc"
 #include "test_libpage_navigation.inc"
@@ -452,6 +454,8 @@ int main(int argc, char **argv)
     bool sweep = argc > 1 && strcmp(argv[1], "--sweep") == 0;
     bool numeric_boundary = argc > 1 && strcmp(argv[1], "--numeric-boundary") == 0;
     bool rebuild_only = argc > 1 && strcmp(argv[1], "--rebuild") == 0;
+    bool attrs_only = argc > 1 && strcmp(argv[1], "--attrs-only") == 0;
+    bool tree_only = argc > 1 && strcmp(argv[1], "--tree-only") == 0;
     if (numeric_boundary) {
         // Focused range regressions; the default suite also checks the
         // independent decimal oracle and conversion boundaries.
@@ -463,12 +467,18 @@ int main(int argc, char **argv)
                    "<input type=range min=0.1 max=0.9 step=0.2 value=0.4>", 0, "0.5");
         value_case("H10", "numeric boundary: disparate decimal scales",
                    "<input type=range min=1e-20 max=1 step=any>", 0, "0.5");
+    } else if (tree_only) {
+        test_libpage_tree();
+    } else if (attrs_only) {
+        test_libpage_attrs();
     } else if (rebuild_only) {
         rebuild_contract();
     } else {
         cases();
         state_cases();
         rebuild_contract();
+        test_libpage_attrs();
+        test_libpage_tree();
         number_cases();
         boundary_cases();
         navigation_cases();

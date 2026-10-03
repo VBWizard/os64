@@ -710,7 +710,7 @@ builder decides, and the proof in this house's shape.
 | D2b | **Built; review pending.** Fragment parsing and serialisation | All 192 fragment fixtures, contextual serialisation, transactional allocation/work cuts and bounded-buffer proof; § D2b, as built |
 | D3 | **Built; review pending.** `os64_page_rebuild`, pinned models, the `STALE` gate, shared node state and script property APIs | `tools/test_libpage_rebuild.inc`: detach/reinsert, never-inserted state, value modes, option identity, current-type sanitization, person/script origin, pins, transactional allocation sweeps and independent random walks; § D3, as built |
 | D4 | The stream: yonder parses on its own thread. No script | yonder's and libway's harnesses unchanged in result; the guest walk that proved Y3, its server log identical; the window live through a stalled body |
-| D5 | The binding library and J3's fixture | A script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
+| D5 | **D5a built; review pending. D5b pending.** The binding library and J3's fixture | § D5a, as built records library host/guest proof. J3 remains separate: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
 | D6 | Reclaiming unheld detached subtrees | The churn page that met the budget in a minute runs for an hour |
 | D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order | J4's evidence, per contract |
 | later | `document.write`; geometry; the libjs reclaim slice | each with its own |
@@ -1128,12 +1128,158 @@ version is current. After a mutation, a getter or rebuild stages
 re-sanitization for the current type and constraints; observing file mode
 clears prior dirty text. A final tree cannot reveal historical input-mode
 transitions between observations. D5 must apply those transitions at each
-attribute mutation through a state-aware, failure-atomic entrance, and
+attribute mutation through a state-aware, failure-atomic entrance (supplied
+by D5a below), and
 watch both document and state revisions when refreshing presentation.
 D6 must add holds for persistent state keys, including option/default-cache
 records, and model node references, with paired releases. Pins protect
 snapshot bytes; they do not replace those holds. Both requirements are in
 DOM_BRIEFS.md and DEBTS.md. D3 adds neither DOM bindings nor reclamation.
+
+### D5a, as built
+
+`userland/libdom` binds the D5 surface to the mutable HTML document and
+persistent page state. Its native contract is `include/dom/dom.h`; the
+ownership, budget and error contracts are in `LIBDOM.md`. The shared library
+and `/tests/domtest` are built and installed by the normal image build. This
+is the library half of D5; D5b and J3's visible Yonder acceptance remain pending.
+
+**Objects and lifetime.** A node identity returns the same strongly held
+wrapper, preserving expandos across garbage collection, detach/reinsert and model
+rebuilds. Native collections expose live length/item/index access; child
+collections retain their identity and tag queries refresh on HTML's revision.
+Numeric property definitions, including future indices, cannot mask live
+answers. PreventExtensions is refused; ordinary nonnumeric/Symbol expandos
+remain available. Query refresh stages its complete replacement vector before
+publication. Template innerHTML uses the contents fragment, while ordinary
+child/text access follows actual children.
+
+The binding's private function-data anchor leaves libjs's runtime/context
+opaque slots untouched. Every C-retained engine value is in the drain ledger,
+including the private nonextensible object used to ask QuickJS to apply its
+strict-assignment refusal rules. Finalizers detach opaque slots; native records
+survive engine destruction. Teardown is drain, runtime destroy, native ledger
+free, models/state, document. Drain is idempotent and works after a sticky
+runtime failure. Partial construction clears native slots and retained values;
+the host retires that runtime without further evaluation.
+
+**Native transactions.** `os64_html_set_attrs` stages a final qualified
+attribute list, preserves order/namespaces and pinned old records, and commits
+one HTML revision. Failure and final no-ops preserve accounting, including peak.
+`os64_page_node_set_attr` reserves state before that commit and then publishes
+control effects without allocating. Input mode changes transfer dirty text,
+clear file-mode text and sanitize current constraints at each transition;
+radio/select regrouping does not depend on an intervening getter.
+
+State-aware tree entrances reserve affected records before insertion,
+replacement or removal, then publish group/selection changes. Content setters
+prepare detached text/fragments and use the shared replace-children entrance.
+Refusal leaves visible children intact, although successful detached staging
+can remain document-owned until D6. Tree methods prepare return wrappers before
+making a visible change. Model presentation must observe both HTML and state
+revisions; libdom does not own a rendering loop.
+
+Cloning delegates to `os64_page_node_clone`, preserving INPUT current value,
+checkedness and their dirty flags, and TEXTAREA current value/dirty flag.
+Other control state initializes from cloned markup. Copied state bytes belong
+to the clone; source getters/caches are not changed while preparing it. A
+shallow clean textarea keeps its current value without copied text children.
+Its direct child changes update that clean value, while unrelated
+mutations leave it alone. The binding routes CharacterData through
+`os64_page_node_set_text` and tree changes through the shared entrances so
+change-and-restore histories are observed before a later getter. Direct native
+libhtml calls reconcile observed text but cannot reconstruct such histories.
+Clone preparation includes the return wrapper; state refusal leaves source
+state, published values and both revisions unchanged, with detached HTML
+preparation charged to the document as above. Success advances neither revision.
+Textarea defaults use direct Text children, including the model/reset path.
+The cloning rules follow the HTML Standard's [input cloning steps](https://html.spec.whatwg.org/multipage/input.html#the-input-element)
+and [textarea cloning and children-changed steps](https://html.spec.whatwg.org/multipage/form-elements.html#the-textarea-element).
+
+**Strings and refusals.** UTF-8 conversion replaces NUL/lone surrogates with
+U+FFFD and preserves valid surrogate pairs. Element and attribute names use
+the DOM Standard's separate validation predicates. Nullable nodeValue and
+textContent map null/undefined to empty; innerHTML's null maps to empty while
+undefined is a DOMString. Native errors have own nonenumerable name/message
+properties, so inherited setters do not run while reporting a refusal. A
+DOMException constructor is outside this surface. Confirm returns false,
+prompt null; alert borrows its message during a synchronous host callback.
+
+The binding-owned default is 8 MiB; explicit zero is a literal ceiling.
+Document, page-state and engine budgets are separately enforced. Native
+allocation/depth/work ceilings become catchable QuotaExceededError; engine
+exhaustion during evaluation follows libjs's sticky LIMIT/MEMORY result.
+The idle installer cannot distinguish engine-cap refusal from host OOM and
+reports construction failure after consuming pending exceptions. Closed
+bindings and nonempty file-input assignments report InvalidStateError.
+
+**Independent proof at the source freeze.**
+
+- `tools/test_dom_host.sh`: actual target engine 1,463 checks / 0 failures,
+  88 reached allocation cuts; separately ASan-instrumented target-profile
+  engine 3,419 / 0, 414 reached cuts. Binding/tree/state/runtime are sanitized
+  in both profiles; upstream engine UBSan is excluded in the second profile.
+  Normal leak detection is enabled. Native installer, full constructor and
+  seven binding mutation/read/refresh operations are swept, plus 42 native
+  clone and two CharacterData refusal points. Focused clone mode is 877 / 0
+  in each profile, including clean/dirty current values, template controls,
+  direct-child defaults, Comment histories, cap refusals and borrowed bytes.
+  One sanitized constructor cut succeeds coherently after a nonessential allocation is refused; its
+  pending exception is empty and teardown remains clean.
+- `tools/test_dom_mutants.py`: all 26 proposed mutants compile and are caught
+  by relevant assertions. No build failure or timeout is counted as a catch.
+- New attribute histories: 154 / 0; tree histories: 2,133 / 0. Full libpage:
+  198,858 / 0, including allocation sweeps. The existing HTML DOM suite is
+  363,628 / 0; focused fragment checks are 326 / 0.
+- Full HTML gate: 1,218 native checks / 0; 10,525 reference runs pass, with
+  four existing XML-coercion skips. Safety covers 91,621 allocation refusals
+  and 662,498 prefix/chunk checks. The 30-second fuzz run makes 132,352
+  mutations with four chunkings. Corpus trees/work/peak remain unchanged.
+- Downstream gates: wend 177,854 / 0 with all seven saved dumps matching;
+  libway 226 / 0, libflow 18,585 / 0 and all 12 dumps matching, Yonder
+  115 / 0 and six paints matching. The libgarb suite and sweeps pass.
+
+Before the control-cloning correction, a full paired libflow fuzz comparison
+with untouched D2b completed 55,077 layout trees and 128,510 checks per revision.
+Both produced the same three existing textfiles-computers geometry failures;
+neither produced an ASan/UBSan/LSan error. Eight bounded shares per revision
+covered the original all-page input and RNG sequence, with a temporary driver
+dispatch for `--fuzz all K 8`; the normal per-page share dispatch would skip
+other pages' RNG advances and compare a different sequence. Final page and
+normal consumer gates cover the later clone/textarea changes separately.
+
+**Target proof.** Strict root build/link/image creation passes. In a private
+copied-disk QEMU guest, `/tests/domtest` runs four document/runtime lifetimes,
+changes text/markup, retains wrapper expandos and a live child collection,
+preserves a person's field value across model rebuilding and type changes,
+checks clean/dirty control clones and child mutation histories, drains twice
+and passes heap verification (`0x446f0000`). `/tests/htmltest`
+adds atomic attribute publication/refusal/no-op/pinned-byte checks and passes
+(`0x48640000`); its separate pinned-document misuse still terminates with
+the HTML badge (`0x48544d4c`). Deployed libdom/libhtml/libpage/libjs all match
+the built libraries byte for byte. libdom's SHA256 is
+`6e90a2b50d4f86f5d1edbebc4b031afbe2055376e3544198691af5b34fbe8e2b`.
+The owned VM is stopped. This establishes the library seam, not a P5 or
+visible Yonder scripting result.
+
+**Parser cost.** Seven alternating O2 host parses per revision, after warmup,
+compare with untouched D2b: Wikipedia medians 24.365 ms before and 24.377 ms
+here (+0.049%). Observed ranges are 24.214–39.585 ms and 24.164–24.645 ms;
+the difference is below sample variation. Both produce the same tree,
+15,470 nodes, 1,210,567 work units and 4,377,480 peak arena bytes. This is
+a host parser measurement, not Yonder/P5 scripting performance.
+
+**Next seam.** D5b seats the library in Yonder with a fixture-only execution
+schedule, rebuild/redraw, widget state migration and queued-work navigation
+teardown. It must add cascade/layout pins before changing a tree beneath those
+snapshots. D6 adds paired holds for wrapper keys, query roots, state/model keys
+and either cached query answers or a proven version-before-dereference rule.
+New control-state reservations need their holds before calling a tree verb,
+with releases on abort, because normalization reads those keys after mutation.
+Strings copied into JavaScript hold no native snapshot bytes. Libjs retains
+R0's fatal destroy invariant; reporting/reclaiming destroy is a separate
+reviewed slice before scripting is offered for ordinary browsing. D4 and D7
+remain Fable's work. Chris schedules Fable's review before merge.
 
 ## Booked, with their triggers
 

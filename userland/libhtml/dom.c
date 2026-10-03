@@ -720,6 +720,82 @@ static void form_attr_set(HDoc *d, HNode *e, const char *name)
         forget_owner(d, e);
 }
 
+static bool attrs_equal(const HAttr *a, const HAttr *b)
+{
+    for (; a && b; a = a->next, b = b->next)
+        if (!h_eq(a->name, b->name) || !h_eq(a->value, b->value) || !h_eq(a->ns, b->ns))
+            return false;
+    return !a && !b;
+}
+
+int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
+                            const os64_html_attr_change_t *changes, size_t count)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !e || !ours(d, e) || e->kind != ELEMENT || (!changes && count))
+        return OS64_HTML_BAD_ARGUMENT;
+    bool effective = false;
+    for (size_t i = 0; i < count; i++) {
+        const os64_html_attr_change_t *c = &changes[i];
+        if (!c->name || !*c->name || (!c->remove && !c->value && c->value_len))
+            return OS64_HTML_BAD_ARGUMENT;
+        if (!text_ok(c->name, h_len(c->name)) ||
+            (!c->remove && !text_ok(c->value, c->value_len)))
+            return OS64_HTML_BAD_TEXT;
+        const HAttr *a = *attr_slot(e, c->name);
+        effective |= c->remove ? a != NULL : !a || !same_bytes(a->value, c->value, c->value_len);
+    }
+    if (!effective)
+        return OS64_HTML_OK;
+    size_t peak = d->pub.peak_arena_bytes;
+    int64_t why = OS64_HTML_OK;
+    HNode prospective = {0};
+    if (!attrs_copy(d, e->attrs, false, &prospective.attrs, &why)) {
+        d->pub.peak_arena_bytes = peak;
+        return why;
+    }
+    for (size_t i = 0; i < count; i++) {
+        const os64_html_attr_change_t *c = &changes[i];
+        HAttr **slot = attr_slot(&prospective, c->name), *old = *slot;
+        if (c->remove) {
+            if (old) {
+                *slot = old->next;
+                h_free(d, old);
+            }
+        } else if (!old || !same_bytes(old->value, c->value, c->value_len)) {
+            HAttr *fresh = attr_new(d, c->name, c->value, c->value_len, old ? old->ns : NULL, &why);
+            if (!fresh) {
+                attrs_discard(d, prospective.attrs);
+                d->pub.peak_arena_bytes = peak;
+                return why;
+            }
+            fresh->next = old ? old->next : NULL;
+            *slot = fresh;
+            h_free(d, old);
+        }
+    }
+    if (attrs_equal(e->attrs, prospective.attrs)) {
+        attrs_discard(d, prospective.attrs);
+        d->pub.peak_arena_bytes = peak;
+        return OS64_HTML_OK;
+    }
+    HAttr *old = e->attrs;
+    bool private = (*h_word(e) & H_ATTRS_PRIVATE) != 0;
+    e->attrs = prospective.attrs;
+    *h_word(e) |= H_ATTRS_PRIVATE;
+    d->version++;
+    if (private)
+        while (old) {
+            HAttr *next = old->next;
+            d_retire(d, old);
+            old = next;
+        }
+    for (size_t i = 0; i < count; i++)
+        if (!changes[i].remove)
+            form_attr_set(d, e, changes[i].name);
+    return OS64_HTML_OK;
+}
+
 int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name,
                            const char *value, size_t value_len)
 {

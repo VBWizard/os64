@@ -76,7 +76,7 @@ CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
            $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include \
            -I$(CURDIR)/libhtml/include -I$(CURDIR)/libpage/include -I$(CURDIR)/libflow/include -I$(CURDIR)/libway/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libtls/include -I$(CURDIR)/libfetch/include \
-           -I$(CURDIR)/libmath/include
+           -I$(CURDIR)/libmath/include -I$(CURDIR)/libjs/include -I$(CURDIR)/libdom/include
 # -z noexecstack: bare-metal objects carry no .note.GNU-stack section (that
 # annotation is a Linux userspace convention), and without the flag ld warns
 # about one arbitrary object per link — noise with no meaning here, since
@@ -224,7 +224,7 @@ LIBFETCH_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libfetch.so
 # isolation would miss a hash collision and prelink two objects into the same
 # slot. app_bases.py sorts before probing, so adding a library gives the build
 # one deterministic map independent of link order.
-LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so libpage.so libflow.so libway.so libgarb.so libfreetype.so libmath.so libjs.so)
+LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so libpage.so libflow.so libway.so libgarb.so libfreetype.so libmath.so libjs.so libdom.so)
 LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
 LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
 LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
@@ -366,6 +366,7 @@ include libgarb/library.mk
 include libflow/library.mk
 include libway/library.mk
 include libjs/shared.mk
+include libdom/library.mk
 include apps/js/runner.mk
 
 # Source membership and the population used for prelink placement live here.
@@ -476,6 +477,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
 APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest flowdump yonder garbdump),$(LIBHTML_SO)) \
+                       $(if $(filter $(1),domtest),$(LIBDOM_SO) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO)) \
                        $(if $(filter $(1),$(LIBFLOW_PROGRAMS)),$(LIBFLOW_SO)) \
                        $(if $(filter $(1),$(LIBWAY_PROGRAMS)),$(LIBWAY_SO)) \
                        $(if $(filter $(1),$(LIBGARB_PROGRAMS)),$(LIBGARB_SO)) \

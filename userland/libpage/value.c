@@ -292,11 +292,33 @@ static const char *datetime_value(PArena *arena, const char *raw, size_t raw_len
     return out;
 }
 
+// A textarea's default/raw value is child text, not descendant text.
+char *p_child_text_into(PArena *arena, const os64_html_node_t *node, size_t *len)
+{
+    size_t total = 0;
+    for (const os64_html_node_t *at = node->first_child; at != NULL; at = at->next)
+        if (at->kind == OS64_HTML_TEXT) {
+            if (at->text_len > SIZE_MAX - total - 1) return NULL;
+            total += at->text_len;
+        }
+    char *text = p_arena_alloc(arena, total + 1);
+    if (text == NULL) return NULL;
+    size_t offset = 0;
+    for (const os64_html_node_t *at = node->first_child; at != NULL; at = at->next)
+        if (at->kind == OS64_HTML_TEXT) {
+            os64_memcpy(text + offset, at->text, at->text_len);
+            offset += at->text_len;
+        }
+    text[total] = '\0';
+    if (len != NULL) *len = total;
+    return text;
+}
+
 const char *p_page_value(os64_page_t *page, const os64_html_node_t *n,
                          os64_page_element_t element, os64_page_input_t input, size_t *len)
 {
     const char *raw = element == OS64_PAGE_EL_TEXTAREA ?
-        p_subtree_text(page, n, false, len) : p_attr(n, "value");
+        p_child_text_into(&page->arena, n, len) : p_attr(n, "value");
     if (raw == NULL && element == OS64_PAGE_EL_TEXTAREA)
         return NULL;
     if (raw == NULL && (input == OS64_PAGE_INPUT_CHECKBOX || input == OS64_PAGE_INPUT_RADIO))
