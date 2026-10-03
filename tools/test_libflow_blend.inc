@@ -107,35 +107,3 @@ static void blend_cases(void)
     flow_free(t);
     sheeted_close(&q);
 }
-
-// Corners (PILE3.md § The box's edge): a radius resolves against the border
-// box, and radii that would overlap along a side are all scaled down
-// together until they meet (Backgrounds 3 § 5.5).
-static void radius_cases(void)
-{
-    struct { const char *css; int32_t h, v; } k[] = {
-        {"border-radius:50%", 50, 25},              // 100 x 50: half of each
-        {"border-radius:40px", 25, 25},             // 80 down a 50 side: 5/8 of 40
-        {"border-radius:10px / 20px", 10, 20},      // fits: as written
-        {"border-top-left-radius:0 30px", 0, 30},   // kept; a face draws it square
-    };
-    for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
-        char html[256];
-        snprintf(html, sizeof(html),
-                 "<!doctype html><style>body{margin:0} div{width:100px;height:50px;%s}</style>"
-                 "<div id=d></div>",
-                 k[i].css);
-        Sheeted q;
-        sheeted_open(&q, html, 400, 600);
-        flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
-        const flow_box_t *d = box_with_id(t, q.doc->document, "d");
-        int32_t r[4][2] = {{0}};
-        flow_box_radii(d, r);
-        char got[64];
-        snprintf(got, sizeof(got), "%s: %d %d", k[i].css, r[0][0], r[0][1]);
-        expect("radius: a corner resolved and held to its sides",
-               d != NULL && r[0][0] == k[i].h && r[0][1] == k[i].v, got);
-        flow_free(t);
-        sheeted_close(&q);
-    }
-}

@@ -38,10 +38,6 @@ typedef struct {
     // groups are painted opaque.
     void (*group_open)(void *ctx, os64_gui_rect_t bounds);
     void (*group_close)(void *ctx, uint8_t alpha);
-    // A SHADOW's pixels: `colour`'s RGB laid over each pixel of `rect`
-    // (page coordinates, already cut to the viewport) at its own `alpha`,
-    // `rect.w` a row, alpha 0 leaving the pixel as it is.
-    void (*mask)(void *ctx, os64_gui_rect_t rect, const uint8_t *alpha, uint32_t colour);
 } yonder_verbs_t;
 
 // Paints every box that meets `viewport`, canvas first, the page scrolled

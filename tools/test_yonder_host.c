@@ -323,23 +323,6 @@ static void rec_group_close(void *ctx, uint8_t alpha)
     out(&rec->out, "end group %d\n", (int)alpha);
 }
 
-// A shadow's mask: where, its colour, and the sum and the largest of its
-// alphas, which a hand-worked case can check without listing every pixel.
-static void rec_mask(void *ctx, os64_gui_rect_t r, const uint8_t *alpha, uint32_t colour)
-{
-    Rec *rec = ctx;
-    if (!inside(r, rec->view))
-        rec->escaped = true;
-    long sum = 0;
-    int most = 0;
-    for (int32_t k = 0; k < r.w * r.h; k++) {
-        sum += alpha[k];
-        most = alpha[k] > most ? alpha[k] : most;
-    }
-    out(&rec->out, "mask %d %d %d %d #%06x sum %ld max %d\n", r.x, r.y, r.w, r.h, colour, sum,
-        most);
-}
-
 static const char *kPage = "http://host/dir/page.html";
 
 static os64_html_document_t *parse(const char *html, size_t len)
@@ -380,8 +363,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     Rec rec = {{0}, view, false, page};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = {&rec,          rec_fill,     rec_text,       rec_image,
-                        rec_control,   rec_backdrop, rec_group_open, rec_group_close,
-                        rec_mask};
+                        rec_control,   rec_backdrop, rec_group_open, rec_group_close};
     if (t != NULL)
         yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, &v);
     if (escaped != NULL)
@@ -412,40 +394,6 @@ static void paint_case(const char *name, const char *html, int32_t width, os64_g
 }
 
 #include "test_yonder_cases.inc"
-
-// A blurred shadow cannot be worked pixel by pixel by hand, so what a blur
-// must do is checked: the mask reaches the blur (and a pixel) past the
-// shape on every side; just outside the box the shadow is about half on,
-// as a Gaussian is at its step; nothing falls on the box itself, and an
-// inset shadow falls only inside it.
-static void shadow_blur_cases(void)
-{
-    struct { const char *css; int x, y, w, h, lo, hi; bool inset; } k[] = {
-        {"box-shadow: 0 0 8px #000000", 31, 31, 38, 38, 100, 160, false},
-        {"box-shadow: inset 0 0 8px #000000", 31, 31, 38, 38, 100, 255, true},
-    };
-    for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
-        char html[256];
-        snprintf(html, sizeof(html),
-                 "<!doctype html><style>body { margin: 0 } div { margin: 40px; width: 20px;"
-                 " height: 20px; %s }</style><div></div>",
-                 k[i].css);
-        bool escaped = false;
-        char *got = paint_of(html, strlen(html), 200, (os64_gui_rect_t){0, 0, 200, 100},
-                             &escaped, true);
-        const char *m = got != NULL ? strstr(got, "mask ") : NULL;
-        int x = 0, y = 0, w = 0, h = 0, most = 0;
-        long sum = 0;
-        bool read = m != NULL && sscanf(m, "mask %d %d %d %d #000000 sum %ld max %d", &x, &y, &w,
-                                        &h, &sum, &most) == 6;
-        expect(k[i].inset ? "shadow: an inset blur falls inside, its mask the blur's reach"
-                          : "shadow: an outer blur is half on at the edge, its mask the reach",
-               read && x == k[i].x && y == k[i].y && w == k[i].w && h == k[i].h &&
-                   most >= k[i].lo && most <= k[i].hi && sum > 0 && !escaped,
-               got);
-        free(got);
-    }
-}
 
 // ── Pictures into their boxes ───────────────────────────────────────────
 //
@@ -906,7 +854,6 @@ int main(int argc, char **argv)
         corpus(true);
     } else {
         paint_cases();
-        shadow_blur_cases();
         scale_cases();
         bar_cases();
         mail_cases();

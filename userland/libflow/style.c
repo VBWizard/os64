@@ -53,7 +53,6 @@ typedef enum {
 typedef struct {
     flow_style_t s;             // everything that needs no font to resolve
     Len margin[4], padding[4], inset[4], width, height;
-    Len radius[4][2];
     Len flex_basis, row_gap, column_gap;     // AUTO: auto, and `normal`
     Len min_width, max_width, min_height, max_height;
     Len text_indent;                // UNSET: as inherited
@@ -350,8 +349,6 @@ static flow_style_t inherit(const Ctx *c, const flow_style_t *parent)
     s.line_height = parent->line_height;
     s.text_indent = parent->text_indent;
     s.text_transform = parent->text_transform;
-    s.text_shadows = parent->text_shadows;
-    s.ntext_shadows = parent->ntext_shadows;
     s.visibility = parent->visibility;
     s.pointer_events_none = parent->pointer_events_none;
     s.list_style_type = parent->list_style_type;
@@ -1536,10 +1533,12 @@ static bool author_border_style(const garb_val_t *v, flow_border_style_t *out)
 {
     static const char *const words[] = {"none", "hidden", "dotted", "dashed", "solid",
                                         "double", "groove", "ridge", "inset", "outset"};
+    // Dotted, dashed and double are drawn solid, and a ridge as a groove,
+    // until the painter has their strokes (GARB.md § Booked).
     static const flow_border_style_t as[] = {
-        FLOW_BORDER_NONE,   FLOW_BORDER_HIDDEN, FLOW_BORDER_DOTTED, FLOW_BORDER_DASHED,
-        FLOW_BORDER_SOLID,  FLOW_BORDER_DOUBLE, FLOW_BORDER_GROOVE, FLOW_BORDER_RIDGE,
-        FLOW_BORDER_INSET,  FLOW_BORDER_OUTSET,
+        FLOW_BORDER_NONE, FLOW_BORDER_HIDDEN, FLOW_BORDER_SOLID, FLOW_BORDER_SOLID,
+        FLOW_BORDER_SOLID, FLOW_BORDER_SOLID, FLOW_BORDER_GROOVE, FLOW_BORDER_GROOVE,
+        FLOW_BORDER_INSET, FLOW_BORDER_OUTSET,
     };
     int32_t i = pick(v, words, F_ARRAY(words));
     if (i < 0)
@@ -1829,21 +1828,6 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_GRID_COLUMN_END: d->grid_column_end = s->grid_column_end; break;
     case GARB_JUSTIFY_ITEMS: d->justify_items = s->justify_items; break;
     case GARB_JUSTIFY_SELF: d->justify_self = s->justify_self; break;
-    case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
-    case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS: {
-        int i = prop - GARB_BORDER_TOP_LEFT_RADIUS;
-        dst->radius[i][0] = src->radius[i][0];
-        dst->radius[i][1] = src->radius[i][1];
-        break;
-    }
-    case GARB_BOX_SHADOW:
-        d->box_shadows = s->box_shadows;
-        d->nbox_shadows = s->nbox_shadows;
-        break;
-    case GARB_TEXT_SHADOW:
-        d->text_shadows = s->text_shadows;
-        d->ntext_shadows = s->ntext_shadows;
-        break;
     default: break;
     }
 }
@@ -1894,8 +1878,6 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
         out->inset[i] = len_of(parent->inset[i]);
         out->border_px[i] = parent->border_width[i];
         out->border_color_set[i] = true;
-        out->radius[i][0] = len_of(parent->radius[i][0]);
-        out->radius[i][1] = len_of(parent->radius[i][1]);
     }
     out->width = len_of(parent->width);
     out->height = len_of(parent->height);
@@ -2110,49 +2092,6 @@ static GridRead author_line(Author *a, const garb_val_t *v, flow_grid_line_t *ou
 }
 
 // One winner that is not a CSS-wide keyword.
-// `none`, or libgarb's shadows (G_SHADOW): each `inset` first when it is
-// there, four lengths and a colour. Lengths in pixels, at the element's
-// own font size, which is known by now; currentColor is the element's
-// colour, known by now too. False only when memory runs out.
-static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v, bool box)
-{
-    const flow_shadow_t **list = box ? &s->box_shadows : &s->text_shadows;
-    int32_t *count = box ? &s->nbox_shadows : &s->ntext_shadows;
-    if (word(v, "none") || v->nitems == 0) {
-        *list = NULL;
-        *count = 0;
-        return true;
-    }
-    flow_shadow_t *out = f_arena_alloc(&a->c->out->arena, (size_t)v->nitems * sizeof(*out));
-    if (out == NULL)
-        return false;
-    for (int32_t i = 0; i < v->nitems; i++) {
-        const garb_val_t *one = &v->items[i];
-        int32_t k = 0;
-        flow_shadow_t *sh = &out[i];
-        os64_memset(sh, 0, sizeof(*sh));
-        if (k < one->nitems && word(&one->items[k], "inset")) {
-            sh->inset = true;
-            k++;
-        }
-        int32_t *len[4] = {&sh->x, &sh->y, &sh->blur, &sh->spread};
-        for (int j = 0; j < 4 && k < one->nitems; j++, k++) {
-            Len l;
-            // To the nearest pixel, a negative offset as a positive one.
-            *len[j] = !author_len(a, &one->items[k], false, &l) || l.kind != L_PX ? 0
-                      : l.v >= 0 ? (l.v + 32) / 64 : -((-l.v + 32) / 64);
-        }
-        if (sh->blur < 0)
-            sh->blur = 0;
-        const garb_val_t *c = k < one->nitems ? &one->items[k] : NULL;
-        sh->colour = c == NULL || c->kind != GARB_V_COLOR || c->color.current ? s->color
-                                                                               : colour_of(c->color);
-    }
-    *list = out;
-    *count = v->nitems;
-    return true;
-}
-
 static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
 {
     const garb_val_t *v = &set->value;
@@ -2485,16 +2424,6 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             *(p == GARB_JUSTIFY_ITEMS ? &s->justify_items : &s->justify_self) = (flow_place_t)i;
         break;
     }
-    case GARB_BOX_SHADOW: case GARB_TEXT_SHADOW:
-        if (!author_shadows(a, s, v, p == GARB_BOX_SHADOW))
-            return false;
-        break;
-    case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
-    case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS:
-        // A corner is two items, horizontal and vertical (libgarb's G_RADIUS).
-        for (int32_t k = 0; k < 2 && k < v->nitems; k++)
-            author_len(a, &v->items[k], false, &sp->radius[p - GARB_BORDER_TOP_LEFT_RADIUS][k]);
-        break;
     case GARB_ROW_GAP: case GARB_COLUMN_GAP: {
         Len *gap = p == GARB_ROW_GAP ? &sp->row_gap : &sp->column_gap;
         if (word(v, "normal"))
@@ -2691,8 +2620,6 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
     for (int i = 0; i < 4; i++) {
         s->margin[i] = resolve(sp->margin[i], s->font_size, zero);
         s->padding[i] = resolve(sp->padding[i], s->font_size, zero);
-        s->radius[i][0] = resolve(sp->radius[i][0], s->font_size, zero);
-        s->radius[i][1] = resolve(sp->radius[i][1], s->font_size, zero);
         bool drawn = s->border_style[i] != FLOW_BORDER_NONE &&
                      s->border_style[i] != FLOW_BORDER_HIDDEN;
         s->border_width[i] = drawn ? sp->border_px[i] : 0;

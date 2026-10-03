@@ -105,12 +105,6 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_GRID_ROW_END] = {"grid-row-end", false},
     [GARB_JUSTIFY_ITEMS] = {"justify-items", false},
     [GARB_JUSTIFY_SELF] = {"justify-self", false},
-    [GARB_BORDER_TOP_LEFT_RADIUS] = {"border-top-left-radius", false},
-    [GARB_BORDER_TOP_RIGHT_RADIUS] = {"border-top-right-radius", false},
-    [GARB_BORDER_BOTTOM_RIGHT_RADIUS] = {"border-bottom-right-radius", false},
-    [GARB_BORDER_BOTTOM_LEFT_RADIUS] = {"border-bottom-left-radius", false},
-    [GARB_BOX_SHADOW] = {"box-shadow", false},
-    [GARB_TEXT_SHADOW] = {"text-shadow", true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -344,161 +338,6 @@ static bool box4(Sets *s, VCur *c, garb_prop_t first,
     set(s, (garb_prop_t)(first + 2), &bottom);
     set(s, (garb_prop_t)(first + 3), &left);
     return true;
-}
-
-// A corner's radius as one value of two items, horizontal and vertical:
-// `n` given, the second the first's when only one is.
-static bool radius_pair(Sets *s, const garb_val_t *given, int n, garb_val_t *out)
-{
-    garb_val_t two[2] = {given[0], n > 1 ? given[1] : given[0]};
-    os64_memset(out, 0, sizeof(*out));
-    out->kind = GARB_V_LENGTH;
-    out->items = keep(s, two, 2);
-    out->nitems = 2;
-    return out->items != NULL;
-}
-
-// `border-radius` (Backgrounds 3 § 5.1): one to four horizontal radii,
-// then `/` and one to four vertical ones, each list filled out as margin's
-// is — top-left, top-right, bottom-right, bottom-left — and the vertical
-// list the horizontal one when there is no slash.
-static bool radius_shorthand(Sets *s, VCur *c)
-{
-    garb_val_t h[4], v[4];
-    int nh = 0, nv = 0;
-    while (nh < 4 && vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, &h[nh]))
-        nh++;
-    if (nh == 0)
-        return false;
-    const garb_value_t *t = vc_peek(c);
-    if (is_delim_v(t, '/')) {
-        c->i++;
-        while (nv < 4 && vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, &v[nv]))
-            nv++;
-        if (nv == 0)
-            return false;
-    }
-    if (!vc_done(c))
-        return false;
-    if (nv == 0) {
-        os64_memcpy(v, h, sizeof(h));
-        nv = nh;
-    }
-    garb_val_t *lists[2] = {h, v};
-    int counts[2] = {nh, nv};
-    for (int k = 0; k < 2; k++) {
-        garb_val_t *l = lists[k];
-        if (counts[k] < 2)
-            l[1] = l[0];
-        if (counts[k] < 3)
-            l[2] = l[0];
-        if (counts[k] < 4)
-            l[3] = l[1];
-    }
-    for (int corner = 0; corner < 4; corner++) {
-        garb_val_t pair[2] = {h[corner], v[corner]}, one;
-        if (!radius_pair(s, pair, 2, &one))
-            return false;
-        set(s, (garb_prop_t)(GARB_BORDER_TOP_LEFT_RADIUS + corner), &one);
-    }
-    return true;
-}
-
-static const char *const kInset[] = {"inset", NULL};
-
-// One shadow (Backgrounds 3 § 7.1; Text Decoration 3 § 4): two to four
-// lengths together — x, y, a blur that is not negative, and for a box a
-// spread — with a colour and, for a box, `inset`, each at most once, on
-// either side of them. Read as one value whose items are always the same:
-// `inset` first when it is there, the four lengths (0 for what was left
-// out), and the colour, currentColor for none.
-static bool shadow_one(Sets *s, VCur *c, bool box, garb_val_t *out)
-{
-    garb_val_t items[6], len[4], colour = {0};
-    int n = 0;
-    bool have_colour = false, have_inset = false, lengths_over = false;
-    while (!vc_done(c) && vc_peek(c)->kind != GARB_COMMA) {
-        if (box && !have_inset && vc_keyword(c, kInset) != NULL) {
-            have_inset = true;
-            lengths_over = n > 0;
-        } else if (!have_colour && vc_color(c, &colour)) {
-            have_colour = true;
-            lengths_over = n > 0;
-        } else if (!lengths_over && n < (box ? 4 : 3) &&
-                   vc_dim(c, ACCEPT_LENGTH, n != 2, false, &s->a, &len[n])) {
-            n++;
-        } else {
-            return false;
-        }
-    }
-    if (n < 2)
-        return false;
-    int k = 0;
-    if (have_inset)
-        items[k++] = kw("inset");
-    for (int i = 0; i < 4; i++) {
-        if (i < n) {
-            items[k++] = len[i];
-        } else {
-            os64_memset(&items[k], 0, sizeof(items[k]));
-            items[k].kind = GARB_V_LENGTH;
-            items[k++].unit = GARB_U_PX;
-        }
-    }
-    if (!have_colour) {
-        os64_memset(&colour, 0, sizeof(colour));
-        colour.kind = GARB_V_COLOR;
-        colour.color.current = true;
-    }
-    items[k++] = colour;
-    os64_memset(out, 0, sizeof(*out));
-    out->kind = GARB_V_LENGTH;
-    out->items = keep(s, items, k);
-    out->nitems = k;
-    return out->items != NULL;
-}
-
-// `none`, or shadows separated by commas, the first painted on top — as
-// many as a page writes: pixel art is drawn with hundreds of them.
-static bool shadow_list(Sets *s, VCur *c, bool box, garb_val_t *out)
-{
-    if (vc_keyword(c, kNone) != NULL) {
-        *out = kw("none");
-        return true;
-    }
-    garb_val_t *list = NULL;
-    int32_t n = 0, cap = 0;
-    bool ok = true;
-    for (;;) {
-        if (n == cap) {
-            int32_t cap2 = cap != 0 ? cap * 2 : 8;
-            garb_val_t *grown = os64_realloc(list, (size_t)cap2 * sizeof(*grown));
-            if (grown == NULL) {
-                ok = false;
-                break;
-            }
-            list = grown;
-            cap = cap2;
-        }
-        if (!shadow_one(s, c, box, &list[n])) {
-            ok = false;
-            break;
-        }
-        n++;
-        if (vc_done(c))
-            break;
-        c->i++;                 // shadow_one stopped at a comma
-    }
-    if (ok) {
-        os64_memset(out, 0, sizeof(*out));
-        out->kind = GARB_V_LENGTH;
-        out->items = keep(s, list, n);
-        out->nitems = n;
-        out->comma = true;
-        ok = out->items != NULL;
-    }
-    os64_free(list);
-    return ok;
 }
 
 static bool margin_one(Sets *s, VCur *c, garb_val_t *out)
@@ -1316,8 +1155,6 @@ typedef enum {
     G_AREAS,                // none | strings, a rectangle per name
     G_AUTO_FLOW,            // [row | column] || dense
     G_GRID_LINE,            // auto | <integer> | span <integer> | <custom-ident>
-    G_RADIUS,               // a corner: <lp [0,∞]>{1,2}, horizontal then vertical
-    G_SHADOW,               // none | <shadow>#, a box's (`inset`, spread) or text's
 } Grammar;
 
 typedef struct {
@@ -1378,10 +1215,6 @@ static const Longhand kLonghands[] = {
     {GARB_GRID_COLUMN_START, G_GRID_LINE, NULL}, {GARB_GRID_COLUMN_END, G_GRID_LINE, NULL},
     {GARB_GRID_ROW_START, G_GRID_LINE, NULL}, {GARB_GRID_ROW_END, G_GRID_LINE, NULL},
     {GARB_JUSTIFY_ITEMS, G_ALIGN, kJustifyItems}, {GARB_JUSTIFY_SELF, G_ALIGN, kJustifySelf},
-    {GARB_BORDER_TOP_LEFT_RADIUS, G_RADIUS, NULL}, {GARB_BORDER_TOP_RIGHT_RADIUS, G_RADIUS, NULL},
-    {GARB_BORDER_BOTTOM_RIGHT_RADIUS, G_RADIUS, NULL},
-    {GARB_BORDER_BOTTOM_LEFT_RADIUS, G_RADIUS, NULL},
-    {GARB_BOX_SHADOW, G_SHADOW, NULL}, {GARB_TEXT_SHADOW, G_SHADOW, NULL},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -1815,15 +1648,6 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         out->nitems = 2;
         return out->items != NULL;
     }
-    case G_SHADOW: return shadow_list(s, c, l->prop == GARB_BOX_SHADOW, out);
-    case G_RADIUS: {
-        // Backgrounds 3 § 5.1: one radius is both; a second is the vertical.
-        garb_val_t two[2];
-        int n = 0;
-        while (n < 2 && vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, &two[n]))
-            n++;
-        return n > 0 && radius_pair(s, two, n, out);
-    }
     case G_Z_INDEX: {
         // CSS 2.1 § 9.9.1. An integer as written: `1.0` and `1e3` are
         // numbers, not integers. A calc() that works out to one is not read.
@@ -1944,7 +1768,6 @@ typedef enum {
     SH_BACKGROUND_POSITION, SH_FONT, SH_LIST_STYLE, SH_TEXT_DECORATION, SH_OVERFLOW, SH_INSET,
     SH_FLEX, SH_FLEX_FLOW, SH_GAP,
     SH_GRID_COLUMN, SH_GRID_ROW, SH_GRID_AREA, SH_PLACE_ITEMS, SH_PLACE_SELF, SH_PLACE_CONTENT,
-    SH_BORDER_RADIUS,
 } Shorthand;
 
 static const struct { const char *name; Shorthand sh; } kShorthands[] = {
@@ -1962,7 +1785,7 @@ static const struct { const char *name; Shorthand sh; } kShorthands[] = {
     {"grid-gap", SH_GAP},
     {"grid-column", SH_GRID_COLUMN}, {"grid-row", SH_GRID_ROW}, {"grid-area", SH_GRID_AREA},
     {"place-items", SH_PLACE_ITEMS}, {"place-self", SH_PLACE_SELF},
-    {"place-content", SH_PLACE_CONTENT}, {"border-radius", SH_BORDER_RADIUS},
+    {"place-content", SH_PLACE_CONTENT},
 };
 
 // The longhands a shorthand sets, for a CSS-wide keyword to reach them all.
@@ -2011,7 +1834,6 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
     case SH_PLACE_ITEMS: out[n++] = GARB_ALIGN_ITEMS; out[n++] = GARB_JUSTIFY_ITEMS; break;
     case SH_PLACE_SELF: out[n++] = GARB_ALIGN_SELF; out[n++] = GARB_JUSTIFY_SELF; break;
     case SH_PLACE_CONTENT: out[n++] = GARB_ALIGN_CONTENT; out[n++] = GARB_JUSTIFY_CONTENT; break;
-    case SH_BORDER_RADIUS: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_LEFT_RADIUS + k); break;
     }
     return n;
 }
@@ -2123,7 +1945,6 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
         set(s, GARB_BACKGROUND_POSITION_Y, &y);
         return true;
     case SH_FONT: return font_shorthand(s, c);
-    case SH_BORDER_RADIUS: return radius_shorthand(s, c);
     case SH_LIST_STYLE: return list_style(s, c);
     case SH_TEXT_DECORATION: return text_decoration(s, c);
     case SH_FLEX: return flex_shorthand(s, c);

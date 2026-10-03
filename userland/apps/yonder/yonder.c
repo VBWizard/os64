@@ -2636,27 +2636,6 @@ static void glass_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
         os64_draw_fill_rect_alpha(gl->surf, r, 0xff000000u | colour, flow_alpha(colour));
 }
 
-// A shadow's pixels, each row made ARGB from the colour and its alphas and
-// blended where it meets what is being painted.
-static void glass_mask(void *ctx, os64_gui_rect_t r, const uint8_t *alpha, uint32_t colour)
-{
-    const Glass *gl = ctx;
-    os64_gui_rect_t at = on_glass(gl, r);
-    if (at.w <= 0 || at.h <= 0)
-        return;
-    uint32_t *row = os64_malloc((size_t)at.w * sizeof(*row));
-    if (row == NULL)
-        return;
-    int32_t sx = at.x - (r.x + gl->dx), sy = at.y - (r.y + gl->dy);
-    for (int32_t y = 0; y < at.h; y++) {
-        const uint8_t *a = alpha + (size_t)(sy + y) * (size_t)r.w + (size_t)sx;
-        for (int32_t x = 0; x < at.w; x++)
-            row[x] = (uint32_t)a[x] << 24 | (colour & 0xffffffu);
-        os64_draw_blend(gl->surf, at.x, at.y + y, row, (uint32_t)at.w, 1, (uint32_t)at.w);
-    }
-    os64_free(row);
-}
-
 static void glass_group_open(void *ctx, os64_gui_rect_t bounds)
 {
     const Glass *gl = ctx;
@@ -2915,9 +2894,8 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | PAGE_PAPER);
         return;
     }
-    yonder_verbs_t v = {&gl,           glass_fill,       glass_text,       glass_image,
-                        glass_control, glass_backdrop,   glass_group_open, glass_group_close,
-                        glass_mask};
+    yonder_verbs_t v = {&gl,          glass_fill,       glass_text,       glass_image,
+                        glass_control, glass_backdrop, glass_group_open, glass_group_close};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, &v);
     box_bars(&gl, view);

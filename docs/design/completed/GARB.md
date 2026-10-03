@@ -356,6 +356,7 @@ center`, a 400px line cut at its 120px `overflow: hidden` box, and a
 | Quirks mode's hashless colour (`color: ff0000`) | quirks mode's unitless lengths are read; its colours without a `#` are not yet | a quirks-mode page written that way |
 | Encodings beyond libhtml's | a sheet in ISO-8859-2 or Shift_JIS keeps its ASCII and loses the rest | the first sheet whose text is not ASCII and not UTF-8 |
 | Inline tables | `inline-table` is laid out as a table | pile 2 |
+| Dotted, dashed, double and ridge borders | the painter strokes solid, inset, outset and groove: the first three are drawn solid, ridge as groove | pile 3 |
 | `min-content`, `max-content`, `fit-content` sizes | libflow sizes a box by its container; the keywords read as `auto` (and as none on a limit) | pile 2, where flex and grid need content sizing anyway |
 | `box-sizing` and the limits on tables and cells; §10.4's table for a picture held by two limits against its ratio | a table's width comes from its columns and a cell's from its column, and neither reads them yet; a picture is held by width then height, keeping its ratio in the dimension the page left it | a page whose tables or pictures read wrong for it |
 | A percentage `height`, `min-height` or `max-height` | libflow sizes heights by content, so there is no containing block of known height for one to be a percentage of; each binds nothing | pile 2 |

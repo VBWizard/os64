@@ -1078,32 +1078,6 @@ flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll)
     return box != NULL ? frame_of(&m, box->frame, box->fixed, scroll) : (flow_point_t){0, 0};
 }
 
-void flow_box_radii(const flow_box_t *box, int32_t radii[4][2])
-{
-    int64_t r[4][2], size[2] = {box != NULL ? box->rect.w : 0, box != NULL ? box->rect.h : 0};
-    for (int c = 0; c < 4; c++)
-        for (int k = 0; k < 2; k++) {
-            int64_t v = box != NULL ? round_px(f_len(box->style->radius[c][k], size[k] * 64)) : 0;
-            r[c][k] = v < 0 ? 0 : v > size[k] ? size[k] : v;
-        }
-    // Along each side, the two radii that meet it: top (TL, TR across),
-    // right (TR, BR down), bottom (BR, BL across), left (BL, TL down). The
-    // smallest side over its sum, when below 1, scales every radius.
-    static const int kSide[4][3] = {{0, 1, 0}, {1, 2, 1}, {2, 3, 0}, {3, 0, 1}};
-    int64_t num = 1, den = 1;
-    for (int s = 0; s < 4; s++) {
-        int axis = kSide[s][2];
-        int64_t sum = r[kSide[s][0]][axis] + r[kSide[s][1]][axis];
-        if (sum > 0 && size[axis] * den < sum * num) {
-            num = size[axis];
-            den = sum;
-        }
-    }
-    for (int c = 0; c < 4; c++)
-        for (int k = 0; k < 2; k++)
-            radii[c][k] = (int32_t)(r[c][k] * num / den);
-}
-
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)
 {
     flow_point_t o = flow_box_doc_offset(box, scroll);

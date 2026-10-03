@@ -7,7 +7,6 @@
 
 #include "paint.h"
 #include "html/html.h"
-#include "os64/mem.h"
 
 // A painter works in the coordinates of the box it paints — a fixed box's
 // are the viewport's — and `off` is what takes them to the page's, added
@@ -136,53 +135,10 @@ static uint32_t tone(flow_border_style_t style, uint32_t c, int side, int32_t i,
     case FLOW_BORDER_GROOVE:
         sunk = i < (width + 1) / 2;
         break;
-    case FLOW_BORDER_RIDGE:
-        sunk = i >= (width + 1) / 2;
-        break;
     default:
         return c;
     }
     return top_left == sunk ? yonder_darker(c) : yonder_lighter(c);
-}
-
-// a / b rounded down, for an a that may be negative (b > 0).
-static int64_t floor_div(int64_t a, int64_t b)
-{
-    return a >= 0 ? a / b : -((-a + b - 1) / b);
-}
-
-// One row (along x) or column of a side, `depth` rows in from its outer
-// edge of a side `width` deep, starting at (x, y) and `len` long. A DOUBLE
-// side is two lines a third of its width each, the middle third left; a
-// DOTTED one is squares a width across with a width between, and a DASHED
-// one dashes three widths long with as much between — both counted from
-// `origin`, the box's edge along the side, so every row's pattern lines up
-// with the next. Only what meets the view is walked, however long the side.
-static void stroke(const Painter *p, flow_border_style_t style, int64_t x, int64_t y, int64_t len,
-                   bool along_x, int64_t depth, int64_t width, int64_t origin, uint32_t colour)
-{
-    if (style == FLOW_BORDER_DOUBLE && width >= 3) {
-        int64_t band = (width + 1) / 3;
-        if (depth >= band && depth < width - band)
-            return;
-    }
-    if (style != FLOW_BORDER_DOTTED && style != FLOW_BORDER_DASHED) {
-        fill(p, x, y, along_x ? len : 1, along_x ? 1 : len, colour);
-        return;
-    }
-    int64_t on = max64(1, style == FLOW_BORDER_DOTTED ? width : 3 * width), period = 2 * on;
-    int64_t at = along_x ? x : y;
-    int64_t v0 = along_x ? p->view.x : p->view.y;
-    int64_t a = max64(at, v0), b = min64(at + len, v0 + (along_x ? p->view.w : p->view.h));
-    for (int64_t s = origin + floor_div(a - origin, period) * period; s < b; s += period) {
-        int64_t s0 = max64(s, a), s1 = min64(s + on, b);
-        if (s1 <= s0)
-            continue;
-        if (along_x)
-            fill(p, s0, y, s1 - s0, 1, colour);
-        else
-            fill(p, x, s0, 1, s1 - s0, colour);
-    }
 }
 
 // The four sides, one row or column at a time, meeting on the diagonals:
@@ -206,417 +162,46 @@ static void borders(const Painter *p, const flow_box_t *b)
     for (int64_t i = max64(0, vy0 - ry), end = min64(min64(t, rh), vy1 - ry); i < end; i++) {
         // ceil(i * l / t): the columns of the left side this row gives up.
         int64_t x0 = rx + (i * l + t - 1) / t, x1 = rx + rw - (i * rt + t - 1) / t;
-        stroke(p, s->border_style[FLOW_TOP], x0, ry + i, x1 - x0, true, i, t, rx,
-               tone(s->border_style[FLOW_TOP], s->border_color[FLOW_TOP], FLOW_TOP, (int32_t)i,
-                    (int32_t)t));
+        fill(p, x0, ry + i, x1 - x0, 1,
+             tone(s->border_style[FLOW_TOP], s->border_color[FLOW_TOP], FLOW_TOP, (int32_t)i,
+                  (int32_t)t));
     }
     for (int64_t i = max64(0, ry + rh - vy1), end = min64(min64(bt, rh), ry + rh - vy0); i < end;
          i++) {
         int64_t x0 = rx + (i * l + bt - 1) / bt, x1 = rx + rw - (i * rt + bt - 1) / bt;
-        stroke(p, s->border_style[FLOW_BOTTOM], x0, ry + rh - 1 - i, x1 - x0, true, i, bt, rx,
-               tone(s->border_style[FLOW_BOTTOM], s->border_color[FLOW_BOTTOM], FLOW_BOTTOM,
-                    (int32_t)i, (int32_t)bt));
+        fill(p, x0, ry + rh - 1 - i, x1 - x0, 1,
+             tone(s->border_style[FLOW_BOTTOM], s->border_color[FLOW_BOTTOM], FLOW_BOTTOM,
+                  (int32_t)i, (int32_t)bt));
     }
     for (int64_t j = max64(0, vx0 - rx), end = min64(min64(l, rw), vx1 - rx); j < end; j++) {
         // How many top rows reach column j: min(t, floor(j * t / l) + 1).
         int64_t y0 = ry + min64(t, j * t / l + 1), y1 = ry + rh - min64(bt, j * bt / l + 1);
-        stroke(p, s->border_style[FLOW_LEFT], rx + j, y0, y1 - y0, false, j, l, ry,
-               tone(s->border_style[FLOW_LEFT], s->border_color[FLOW_LEFT], FLOW_LEFT, (int32_t)j,
-                    (int32_t)l));
+        fill(p, rx + j, y0, 1, y1 - y0,
+             tone(s->border_style[FLOW_LEFT], s->border_color[FLOW_LEFT], FLOW_LEFT, (int32_t)j,
+                  (int32_t)l));
     }
     for (int64_t j = max64(0, rx + rw - vx1), end = min64(min64(rt, rw), rx + rw - vx0); j < end;
          j++) {
         int64_t y0 = ry + min64(t, j * t / rt + 1), y1 = ry + rh - min64(bt, j * bt / rt + 1);
-        stroke(p, s->border_style[FLOW_RIGHT], rx + rw - 1 - j, y0, y1 - y0, false, j, rt, ry,
-               tone(s->border_style[FLOW_RIGHT], s->border_color[FLOW_RIGHT], FLOW_RIGHT,
-                    (int32_t)j, (int32_t)rt));
+        fill(p, rx + rw - 1 - j, y0, 1, y1 - y0,
+             tone(s->border_style[FLOW_RIGHT], s->border_color[FLOW_RIGHT], FLOW_RIGHT, (int32_t)j,
+                  (int32_t)rt));
     }
-}
-
-// ── Rounded corners (Backgrounds 3 § 5) ─────────────────────────────────
-//
-// A box with any radius is drawn row by row in 1/256 px: each row's span
-// through the corner ellipses, taken at the row's middle, its whole pixels
-// filled in runs and the pixel at each end laid over at the share of it
-// the span covers — so a curve is smooth across, which is where the eye
-// sees steps. A square box's background and borders never come here; its
-// shadows use the same shapes, with no radius.
-
-#define SUB 256
-
-static int64_t isqrt64(int64_t v);
-
-typedef struct {
-    int64_t l, t, r, b;         // the edges, in 1/256 px
-    int64_t rad[4][2];          // TL, TR, BR, BL; horizontal, vertical; 1/256 px
-} Round;
-
-// How far in from its side a corner's ellipse is, `dy` from where it
-// starts curving.
-static int64_t corner_in(int64_t rx, int64_t ry, int64_t dy)
-{
-    if (rx <= 0 || ry <= 0 || dy <= 0)
-        return 0;
-    if (dy >= ry)
-        return rx;
-    return rx - rx * isqrt64(ry * ry - dy * dy) / ry;
-}
-
-// Row `yc` (its middle, 1/256 px) of the shape: [*x0, *x1); false when it
-// misses the row.
-static bool round_row(const Round *s, int64_t yc, int64_t *x0, int64_t *x1)
-{
-    if (yc < s->t || yc >= s->b)
-        return false;
-    *x0 = s->l + max64(corner_in(s->rad[0][0], s->rad[0][1], s->t + s->rad[0][1] - yc),
-                       corner_in(s->rad[3][0], s->rad[3][1], yc - (s->b - s->rad[3][1])));
-    *x1 = s->r - max64(corner_in(s->rad[1][0], s->rad[1][1], s->t + s->rad[1][1] - yc),
-                       corner_in(s->rad[2][0], s->rad[2][1], yc - (s->b - s->rad[2][1])));
-    return *x1 > *x0;
-}
-
-// How much of pixel column x the span [a, b) covers, of SUB.
-static int64_t cover(int64_t x, int64_t a, int64_t b)
-{
-    return max64(0, min64((x + 1) * SUB, b) - max64(x * SUB, a));
-}
-
-// `colour` laid on at `share` of SUB of its own alpha.
-static uint32_t at_share(uint32_t colour, int64_t share)
-{
-    uint32_t alpha = (uint32_t)(flow_alpha(colour) * share / SUB);
-    return (colour & 0xffffffu) | (255u - alpha) << 24;
-}
-
-// The border box's shape, and the padding box's inside it: each inner
-// radius its outer one less the border beside it (§ 5.2).
-static void round_shapes(const flow_box_t *b, const int32_t radii[4][2], const int32_t w[4],
-                         Round *outer, Round *inner)
-{
-    os64_gui_rect_t r = b->rect;
-    *outer = (Round){(int64_t)r.x * SUB, (int64_t)r.y * SUB, ((int64_t)r.x + r.w) * SUB,
-                     ((int64_t)r.y + r.h) * SUB, {{0}}};
-    *inner = (Round){outer->l + (int64_t)w[FLOW_LEFT] * SUB, outer->t + (int64_t)w[FLOW_TOP] * SUB,
-                     outer->r - (int64_t)w[FLOW_RIGHT] * SUB,
-                     outer->b - (int64_t)w[FLOW_BOTTOM] * SUB, {{0}}};
-    // Each corner's horizontal side and vertical side.
-    static const int kH[4] = {FLOW_LEFT, FLOW_RIGHT, FLOW_RIGHT, FLOW_LEFT};
-    static const int kV[4] = {FLOW_TOP, FLOW_TOP, FLOW_BOTTOM, FLOW_BOTTOM};
-    for (int c = 0; c < 4; c++) {
-        outer->rad[c][0] = (int64_t)radii[c][0] * SUB;
-        outer->rad[c][1] = (int64_t)radii[c][1] * SUB;
-        inner->rad[c][0] = max64(0, outer->rad[c][0] - (int64_t)w[kH[c]] * SUB);
-        inner->rad[c][1] = max64(0, outer->rad[c][1] - (int64_t)w[kV[c]] * SUB);
-    }
-}
-
-// The rows of the view the box reaches.
-static void view_rows(const Painter *p, const flow_box_t *b, int64_t *y0, int64_t *y1)
-{
-    *y0 = max64(b->rect.y, p->view.y);
-    *y1 = min64((int64_t)b->rect.y + b->rect.h, (int64_t)p->view.y + p->view.h);
-}
-
-static void round_background(const Painter *p, const flow_box_t *b, const Round *shape,
-                             uint32_t colour)
-{
-    int64_t y0, y1;
-    view_rows(p, b, &y0, &y1);
-    for (int64_t y = y0; y < y1; y++) {
-        int64_t a, e;
-        if (!round_row(shape, y * SUB + SUB / 2, &a, &e))
-            continue;
-        int64_t first = a / SUB, last = (e - 1) / SUB;     // the pixels it touches
-        int64_t whole0 = (a + SUB - 1) / SUB, whole1 = e / SUB;
-        if (whole1 > whole0)
-            fill(p, whole0, y, whole1 - whole0, 1, colour);
-        if (first < whole0)
-            fill(p, first, y, 1, 1, at_share(colour, cover(first, a, e)));
-        if (last >= whole1 && last >= whole0)
-            fill(p, last, y, 1, 1, at_share(colour, cover(last, a, e)));
-    }
-}
-
-// Which side owns a pixel of the ring: of the two sides of the quarter it
-// is in, the top or bottom one at or above the diagonal through its outer
-// corner, sloped by the two widths — the square corners' rule.
-static int ring_side(const flow_box_t *b, const int32_t w[4], int64_t x, int64_t y)
-{
-    os64_gui_rect_t r = b->rect;
-    bool top = y * 2 < (int64_t)r.y * 2 + r.h, left = x * 2 < (int64_t)r.x * 2 + r.w;
-    int v = top ? FLOW_TOP : FLOW_BOTTOM, h = left ? FLOW_LEFT : FLOW_RIGHT;
-    if (w[h] == 0)
-        return v;
-    if (w[v] == 0)
-        return h;
-    int64_t dv = top ? y - r.y : (int64_t)r.y + r.h - 1 - y;
-    int64_t dh = left ? x - r.x : (int64_t)r.x + r.w - 1 - x;
-    return dv * w[h] <= dh * w[v] ? v : h;
-}
-
-// The ring between the border box's shape and the padding box's, each
-// pixel in its side's colour at the share of it the ring covers. Every
-// style is drawn solid here, in its side's tone (PILE3.md § Booked).
-static void round_borders(const Painter *p, const flow_box_t *b, const Round *outer,
-                          const Round *inner, const int32_t w[4])
-{
-    const flow_style_t *s = b->style;
-    int64_t y0, y1;
-    view_rows(p, b, &y0, &y1);
-    for (int64_t y = y0; y < y1; y++) {
-        int64_t oa, oe, ia = 0, ie = 0;
-        int64_t yc = y * SUB + SUB / 2;
-        if (!round_row(outer, yc, &oa, &oe))
-            continue;
-        if (!round_row(inner, yc, &ia, &ie))
-            ia = ie = oa;
-        int64_t x0 = max64(oa / SUB, p->view.x), x1 = min64((oe + SUB - 1) / SUB,
-                                                            (int64_t)p->view.x + p->view.w);
-        // The whole pixels inside the padding box's span hold nothing of
-        // the ring, and are stepped over at once.
-        int64_t hole0 = (ia + SUB - 1) / SUB, hole1 = ie / SUB;
-        int64_t run = x0;
-        uint32_t run_colour = 0;
-        bool in_run = false;
-        for (int64_t x = x0; x <= x1; x++) {
-            if (x >= hole0 && x < hole1 && x < x1) {
-                if (in_run)
-                    fill(p, run, y, x - run, 1, run_colour);
-                in_run = false;
-                x = hole1 - 1;
-                continue;
-            }
-            int64_t share = x < x1 ? cover(x, oa, oe) - cover(x, ia, ie) : 0;
-            uint32_t colour = 0;
-            if (share > 0) {
-                int side = ring_side(b, w, x, y);
-                colour = at_share(tone(s->border_style[side], s->border_color[side], side, 0,
-                                       w[side]),
-                                  share);
-            }
-            if (in_run && (share != SUB || colour != run_colour)) {
-                fill(p, run, y, x - run, 1, run_colour);
-                in_run = false;
-            }
-            if (share == SUB && !in_run) {
-                run = x;
-                run_colour = colour;
-                in_run = true;
-            } else if (share > 0 && share < SUB) {
-                fill(p, x, y, 1, 1, colour);
-            }
-        }
-    }
-}
-
-// ── Shadows (Backgrounds 3 § 7) ─────────────────────────────────────────
-//
-// A shadow is its shape — the border box moved by its offset, grown by its
-// spread (the padding box's, shrunk, for an inset one) — as a mask of how
-// much of each pixel it covers, blurred, and laid on in its colour only
-// where it may fall: OUTSIDE the border box for an outer shadow, inside the
-// padding box for an inset one. The blur is three box blurs, whose sum is
-// near enough the Gaussian CSS asks for (standard deviation half the blur
-// radius). Only the view's part, and the blur's reach around it, is made.
-
-typedef struct {
-    int64_t x, y, w, h;         // page pixels
-    uint16_t *a;                // of SUB, w a row
-} Mask;
-
-// The shape's coverage of every pixel of the mask, or what it leaves.
-static void mask_cover(Mask *m, const Round *s, bool leaves)
-{
-    for (int64_t r = 0; r < m->h; r++) {
-        int64_t a = 0, e = 0;
-        bool row = round_row(s, (m->y + r) * SUB + SUB / 2, &a, &e);
-        uint16_t *out = m->a + r * m->w;
-        for (int64_t c = 0; c < m->w; c++) {
-            int64_t cov = row ? cover(m->x + c, a, e) : 0;
-            out[c] = (uint16_t)(leaves ? SUB - cov : cov);
-        }
-    }
-}
-
-// Each pixel times the shape's coverage of it, or what the shape leaves.
-static void mask_times(Mask *m, const Round *s, bool leaves)
-{
-    for (int64_t r = 0; r < m->h; r++) {
-        int64_t a = 0, e = 0;
-        bool row = round_row(s, (m->y + r) * SUB + SUB / 2, &a, &e);
-        uint16_t *out = m->a + r * m->w;
-        for (int64_t c = 0; c < m->w; c++) {
-            int64_t cov = row ? cover(m->x + c, a, e) : 0;
-            out[c] = (uint16_t)(out[c] * (leaves ? SUB - cov : cov) / SUB);
-        }
-    }
-}
-
-// One box blur of radius `r` along rows (or columns), past the edges
-// reading `edge`.
-static void blur_pass(Mask *m, uint16_t *tmp, int64_t r, bool rows, uint16_t edge)
-{
-    int64_t lines = rows ? m->h : m->w, len = rows ? m->w : m->h;
-    int64_t step = rows ? 1 : m->w, span = 2 * r + 1;
-    for (int64_t l = 0; l < lines; l++) {
-        uint16_t *v = m->a + (rows ? l * m->w : l);
-        int64_t sum = 0;
-        for (int64_t i = -r; i <= r; i++)
-            sum += i < 0 || i >= len ? edge : v[i * step];
-        for (int64_t i = 0; i < len; i++) {
-            tmp[i] = (uint16_t)((sum + span / 2) / span);
-            int64_t out = i - r, in = i + r + 1;
-            sum += (in >= len ? edge : v[in * step]) - (out < 0 ? edge : v[out * step]);
-        }
-        for (int64_t i = 0; i < len; i++)
-            v[i * step] = tmp[i];
-    }
-}
-
-static bool mask_blur(Mask *m, int64_t blur, uint16_t edge)
-{
-    int64_t r = blur / 2;
-    if (r <= 0)
-        return true;
-    uint16_t *tmp = os64_malloc((size_t)max64(m->w, m->h) * sizeof(*tmp));
-    if (tmp == NULL)
-        return false;
-    for (int k = 0; k < 3; k++) {
-        blur_pass(m, tmp, r, true, edge);
-        blur_pass(m, tmp, r, false, edge);
-    }
-    os64_free(tmp);
-    return true;
-}
-
-// The view's part of the mask, in `colour` at its alpha times each pixel's.
-static void mask_emit(const Painter *p, const Mask *m, uint32_t colour)
-{
-    int64_t x0 = max64(m->x, p->view.x), y0 = max64(m->y, p->view.y);
-    int64_t x1 = min64(m->x + m->w, (int64_t)p->view.x + p->view.w);
-    int64_t y1 = min64(m->y + m->h, (int64_t)p->view.y + p->view.h);
-    if (x1 <= x0 || y1 <= y0 || p->v->mask == NULL)
-        return;
-    uint8_t *alpha = os64_malloc((size_t)((x1 - x0) * (y1 - y0)));
-    if (alpha == NULL)
-        return;
-    uint32_t a = flow_alpha(colour);
-    for (int64_t y = y0; y < y1; y++)
-        for (int64_t x = x0; x < x1; x++)
-            alpha[(y - y0) * (x1 - x0) + (x - x0)] =
-                (uint8_t)(m->a[(y - m->y) * m->w + (x - m->x)] * a / SUB);
-    p->v->mask(p->v->ctx,
-               (os64_gui_rect_t){(int32_t)(x0 + p->off.x), (int32_t)(y0 + p->off.y),
-                                 (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
-               alpha, colour & 0xffffffu);
-    os64_free(alpha);
-}
-
-// A shape moved by (dx, dy) and grown by `by` on every side, its radii
-// with it (a radius grown from 0 stays 0: a square corner stays square).
-static Round round_moved(const Round *s, int64_t dx, int64_t dy, int64_t by)
-{
-    Round r = {s->l + dx - by, s->t + dy - by, s->r + dx + by, s->b + dy + by, {{0}}};
-    for (int c = 0; c < 4; c++)
-        for (int k = 0; k < 2; k++)
-            r.rad[c][k] = s->rad[c][k] > 0 ? max64(0, s->rad[c][k] + by) : 0;
-    return r;
-}
-
-static void shadow(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
-                   const flow_shadow_t *sh, bool square)
-{
-    int64_t blur = sh->blur, reach = blur + 1;
-    Round shape = sh->inset ? round_moved(inner, (int64_t)sh->x * SUB, (int64_t)sh->y * SUB,
-                                          -(int64_t)sh->spread * SUB)
-                            : round_moved(outer, (int64_t)sh->x * SUB, (int64_t)sh->y * SUB,
-                                          (int64_t)sh->spread * SUB);
-    // An outer square shadow with no blur is rectangles: the shape less the
-    // border box, which is how pixel art draws hundreds of them cheaply.
-    if (!sh->inset && blur == 0 && square) {
-        int64_t l = shape.l / SUB, t = shape.t / SUB, r = shape.r / SUB, e = shape.b / SUB;
-        os64_gui_rect_t bx = b->rect;
-        int64_t bl = bx.x, bt = bx.y, br = (int64_t)bx.x + bx.w, bb = (int64_t)bx.y + bx.h;
-        if (r <= l || e <= t)
-            return;
-        fill(p, l, t, r - l, max64(0, min64(e, bt) - t), sh->colour);                // above
-        fill(p, l, max64(t, bb), r - l, e - max64(t, bb), sh->colour);               // below
-        int64_t mt = max64(t, bt), mb = min64(e, bb);
-        if (mb > mt) {
-            fill(p, l, mt, max64(0, min64(r, bl) - l), mb - mt, sh->colour);         // left
-            fill(p, max64(l, br), mt, r - max64(l, br), mb - mt, sh->colour);        // right
-        }
-        return;
-    }
-    // Where it can fall: around its shape by the blur's reach, outside the
-    // border box (or inside the padding box), and in the view or the blur's
-    // reach of it.
-    const Round *where = sh->inset ? inner : &shape;
-    int64_t x0 = where->l / SUB - reach, y0 = where->t / SUB - reach;
-    int64_t x1 = (where->r + SUB - 1) / SUB + reach, y1 = (where->b + SUB - 1) / SUB + reach;
-    x0 = max64(x0, (int64_t)p->view.x - reach);
-    y0 = max64(y0, (int64_t)p->view.y - reach);
-    x1 = min64(x1, (int64_t)p->view.x + p->view.w + reach);
-    y1 = min64(y1, (int64_t)p->view.y + p->view.h + reach);
-    if (x1 <= x0 || y1 <= y0)
-        return;
-    Mask m = {x0, y0, x1 - x0, y1 - y0, NULL};
-    m.a = os64_malloc((size_t)(m.w * m.h) * sizeof(*m.a));
-    if (m.a == NULL)
-        return;
-    // An inset shadow is what its shape leaves, inside the padding box.
-    mask_cover(&m, &shape, sh->inset);
-    if (mask_blur(&m, blur, sh->inset ? SUB : 0)) {
-        mask_times(&m, sh->inset ? inner : outer, !sh->inset);
-        mask_emit(p, &m, sh->colour);
-    }
-    os64_free(m.a);
-}
-
-static bool rounded(const int32_t radii[4][2])
-{
-    for (int c = 0; c < 4; c++)
-        if (radii[c][0] > 0 && radii[c][1] > 0)
-            return true;
-    return false;
 }
 
 // A box's background and borders: every block-level box, and an atom. Its
-// outer shadows go under its colour, the last first so the first is on
-// top; its picture over its colour, tiled from the border box's corner;
-// its inset shadows over those and under its borders (Backgrounds 3 §
-// 7.1). Rounded, its colour, shadows and borders follow the curves.
+// picture goes over its colour and under its borders, tiled from the
+// border box's corner.
 static void frame(const Painter *p, const flow_box_t *b)
 {
     const flow_style_t *s = b->style;
-    int32_t radii[4][2];
-    flow_box_radii(b, radii);
-    bool round = rounded(radii);
-    int32_t w[4];
-    Round outer, inner;
-    if (round || s->nbox_shadows > 0) {
-        for (int k = 0; k < 4; k++)
-            w[k] = px(s->border_width[k]);
-        round_shapes(b, round ? radii : (const int32_t[4][2]){{0}}, w, &outer, &inner);
-    }
-    for (int32_t i = s->nbox_shadows - 1; i >= 0; i--)
-        if (!s->box_shadows[i].inset)
-            shadow(p, b, &outer, &inner, &s->box_shadows[i], !round);
     if (b != p->canvas_owner) {
-        if (s->has_background && round)
-            round_background(p, b, &outer, s->background);
-        else if (s->has_background)
+        if (s->has_background)
             fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, s->background);
         os64_gui_rect_t area = on_page(p, b->rect);
         (void)p->v->backdrop(p->v->ctx, b, &area, area.x, area.y, on_page(p, p->view));
     }
-    for (int32_t i = s->nbox_shadows - 1; i >= 0; i--)
-        if (s->box_shadows[i].inset)
-            shadow(p, b, &outer, &inner, &s->box_shadows[i], !round);
-    if (round)
-        round_borders(p, b, &outer, &inner, w);
-    else
-        borders(p, b);
+    borders(p, b);
 }
 
 // The picture or control inside an atom's borders and padding. A percentage
@@ -766,15 +351,6 @@ static void paint_box(void *ctx, const flow_box_t *b)
         // A numbered marker is its text.
         __attribute__((fallthrough));
     case FLOW_BOX_TEXT:
-        // Its shadows under it, the last first: the run again in each
-        // shadow's colour at its offset — sharp, whatever its blur
-        // (PILE3.md § Booked).
-        for (int32_t i = b->style->ntext_shadows - 1; b->run != NULL && i >= 0; i--) {
-            const flow_shadow_t *sh = &b->style->text_shadows[i];
-            p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x + sh->x),
-                       (int32_t)((int64_t)b->baseline + p->off.y + sh->y), on_page(p, p->view),
-                       sh->colour);
-        }
         if (b->run != NULL)
             p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x),
                        (int32_t)((int64_t)b->baseline + p->off.y), on_page(p, p->view),
