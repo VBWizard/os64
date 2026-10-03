@@ -63,6 +63,8 @@ typedef enum {
     // Backgrounds 3 § 5.1: each corner's horizontal and vertical radius.
     GARB_BORDER_TOP_LEFT_RADIUS, GARB_BORDER_TOP_RIGHT_RADIUS,
     GARB_BORDER_BOTTOM_RIGHT_RADIUS, GARB_BORDER_BOTTOM_LEFT_RADIUS,
+    // Backgrounds 3 § 7.1 and Text Decoration 3 § 4: `none`, or a list.
+    GARB_BOX_SHADOW, GARB_TEXT_SHADOW,
     GARB_NPROPS
 } garb_prop_t;
 

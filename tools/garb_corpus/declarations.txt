@@ -328,6 +328,31 @@ IN: border-radius: / 1px
 OUT: invalid
 IN: border-radius: inherit
 OUT: border-top-left-radius: inherit; border-top-right-radius: inherit; border-bottom-right-radius: inherit; border-bottom-left-radius: inherit
+# ── Shadows (Backgrounds 3 § 7.1; Text Decoration 3 § 4) ──
+IN: box-shadow: none
+OUT: box-shadow: none
+IN: box-shadow: 2px 3px
+OUT: box-shadow: 2px 3px 0px 0px currentcolor
+IN: box-shadow: red 2px 3px 4px
+OUT: box-shadow: 2px 3px 4px 0px rgb(255, 0, 0)
+IN: box-shadow: inset 0 0 5px 2px rgba(0, 0, 0, 0.5)
+OUT: box-shadow: inset 0px 0px 5px 2px rgba(0, 0, 0, 0.5)
+IN: box-shadow: 1px 1px blue inset, -2px 0 4px red
+OUT: box-shadow: inset 1px 1px 0px 0px rgb(0, 0, 255), -2px 0px 4px 0px rgb(255, 0, 0)
+IN: box-shadow: 1px 1px -3px
+OUT: invalid
+IN: box-shadow: 1px red 1px
+OUT: invalid
+IN: box-shadow: 1px
+OUT: invalid
+IN: box-shadow: 1px 1px,
+OUT: invalid
+IN: text-shadow: 1px 1px 2px black
+OUT: text-shadow: 1px 1px 2px 0px rgb(0, 0, 0)
+IN: text-shadow: 1px 1px 2px 3px
+OUT: invalid
+IN: text-shadow: inset 1px 1px
+OUT: invalid
 IN: border-spacing: -1px
 OUT: invalid
 IN: border-collapse: collapse

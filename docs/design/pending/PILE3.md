@@ -315,3 +315,73 @@ through the card AND through its green, the in-flow block over the card.
 | Groups past 32 deep, or a group whose copy finds no memory | painted opaque | a page that nests them that deep |
 | A group's cost | each visible group copies its bounds once a paint | a page whose many faded boxes make painting slow, measured |
 | `mix-blend-mode`, `backdrop-filter`, `filter` | other compositing operators, and a filter is a picture of what is under it | the slice that takes them |
+
+## The box's edge (slice S3)
+
+Four small things that share one painter: the border styles libflow kept
+as solid, rounded corners, and the shadows a box and its text cast.
+
+### How it is built
+
+**The border styles.** libflow now keeps `dotted`, `dashed`, `double`
+and `ridge` (they were drawn solid, and a ridge as a groove). A side is
+still drawn a row or a column at a time, meeting its neighbours on the
+diagonals, through `stroke`: a double side leaves its middle third; a
+dotted one is squares a width across with a width between, a dashed one
+dashes three widths long with as much between, both counted from the
+box's edge so the rows line up; only the part the view shows is walked.
+A ridge is a groove turned over.
+
+**Rounded corners.** libgarb reads the four corner longhands and the
+`border-radius` shorthand with its slash (Backgrounds 3 § 5.1). libflow
+carries `flow_style_t.radius` and resolves it on a box with
+`flow_box_radii`: a percentage of the border box, and every radius
+scaled down together where two that meet along a side would overlap
+(§ 5.5). yonder draws a box with any radius row by row in 1/256 px — each
+row's span through the corner ellipses at its middle, whole pixels in
+runs, the pixel at each end laid over at the share it is covered — so a
+curve is smooth across. Its border is the ring between the border box's
+shape and the padding box's, each inner radius its outer one less the
+border beside it (§ 5.2), each pixel in the colour of the side the square
+corners' diagonal rule gives it. A square box takes the old path,
+untouched.
+
+**Shadows.** libgarb reads `box-shadow` and `text-shadow` (`none`, or a
+comma list as long as a page writes — pixel art is drawn with hundreds),
+each shadow normalised to `inset`, four lengths and a colour. libflow
+carries them as `flow_shadow_t` arrays, `text-shadow` inherited, lengths
+in pixels at the element's own font size and currentColor its colour. A
+box's outer shadows are painted under its background, the last first so
+the first is on top; its inset ones over its background and under its
+borders. A shadow is its shape — the border box moved and grown by its
+spread, or for an inset one the padding box moved and shrunk — as a
+coverage mask, blurred by three box blurs (near enough CSS's Gaussian,
+standard deviation half the blur), cut to where it may fall (outside the
+border box, or inside the padding box), and handed to yonder's new `mask`
+verb. An outer square shadow with no blur takes a fast path: its shape
+less the border box, as rectangles. A text's shadow is its run again, in
+the shadow's colour at its offset, under it.
+
+### Proof
+
+libgarb's declaration corpus gains eleven corner and twelve shadow cases.
+`radius_cases`: a percentage, the overlap scale, a slash, a zero corner.
+yonder, each worked by hand: the four border styles on a top side; a
+4px square with 2px corners to the pixel; an unblurred square shadow as
+two rectangles; a text shadow under its text. A blurred shadow is checked
+by what a blur must do — its mask the blur's reach past the shape, half
+on at the box's edge, nothing on the box, an inset one only inside. In
+the guest, a fixture of every style, four kinds of corners, four kinds of
+shadow and two text shadows drew as headless Chrome draws it, but for
+round dots (yonder's are square) and ridge's exact tones, which CSS
+leaves to the browser.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| A text shadow's blur | the text is drawn by its verb onto the glass, with no mask to blur; a blurred text shadow is drawn sharp | a page whose glowing text matters |
+| Dotted, dashed, double, groove and ridge round a rounded box | the ring is drawn pixel by pixel in its side's tone, every style solid | a rounded box with a dashed border that matters |
+| Round dots | a dot is a square a width across | a page where it shows |
+| Clipping to the curve | a picture behind a rounded box, its `overflow`, its hit test and its children are all still cut square | a rounded box whose picture or content shows past the curve |
+| A shadow past its box's overflow | the walk prunes on overflow rects, which leave shadows out, so a shadow reaching into the view from a box outside it is not painted, and a group's bounds leave it out | a page whose shadow is cut where a box leaves the view |

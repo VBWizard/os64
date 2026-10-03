@@ -274,6 +274,25 @@ static void paint_cases(void)
                     "fill 1 2 2 1 #ff0000\nfill 0 2 1 1 #ff0000/238\nfill 3 2 1 1 #ff0000/238\n"
                     "fill 1 3 2 1 #ff0000\nfill 0 3 1 1 #ff0000/81\nfill 3 3 1 1 #ff0000/81\n");
 
+    // A square shadow with no blur is rectangles: its shape (20x10 moved
+    // 5, 5 — so 5..25 by 5..15) less the border box (0..20 by 0..10)
+    // leaves a band below and a band at the right.
+    paint_page_case("an unblurred square shadow is its shape less the box",
+                    "<!doctype html><style>body { margin: 0 } div { width: 20px; height: 10px;"
+                    " box-shadow: 5px 5px #ff0000 }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 5 10 20 5 #ff0000\n"
+                    "fill 20 5 5 5 #ff0000\n");
+    // A text's shadow is the run again in the shadow's colour, moved by its
+    // offset, painted under it.
+    paint_page_case("a text shadow is the run again, under it",
+                    "<!doctype html><style>p { text-shadow: 1px 2px #ff0000 }</style><p>Hi", 100,
+                    (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "text \"Hi\" 9 32 #ff0000\n"
+                    "text \"Hi\" 8 30 #101010\n");
+
     // Groups nest, each laid over what was under it when it opened, and a
     // group none of which shows opens empty: the far one at 520, cut to a
     // view that ends at 100, has no height.
