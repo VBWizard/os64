@@ -9,10 +9,10 @@ goes in DOM.md and its brief here is struck.
 
 | Slice | Builder | Reviewer | After |
 |---|---|---|---|
-| D2b fragments and serialisation | Quinn and two scoped subagents | Fable, then an outside round (Codex); Chris schedules reviews | D2a is merged; publication stacked on D3 at Chris's request |
-| D3 — **Built; review pending** | Quinn and two scoped subagents | Fable | [D3 as built](DOM.md#d3-as-built) |
+| D2b fragments and serialisation — **Merged #212** | Quinn and two scoped subagents | Fable, then an outside round (Codex); Chris schedules reviews | [D2b as built](DOM.md#d2b-as-built); merged after D3 |
+| D3 — **Merged #211** | Quinn and two scoped subagents | Fable | [D3 as built](DOM.md#d3-as-built) |
 | D6 reclaiming unheld detached subtrees | Available | Fable | D2b (its churn driver) |
-| D5 the binding library and J3's fixture | Quinn with scoped subagents | Fable | D2b and D3; D4 is not needed |
+| D5 — **D5a merged #214; D5b in progress** | Quinn with scoped subagents | Fable | D2b and D3; D4 is not needed |
 | D4 the parser on the window's thread; D7 the loop | Fable | — | D4 any time; D7 after D5 |
 
 D4 and D7 stay with Fable because their sections of DOM.md are findings and
@@ -115,18 +115,17 @@ as-built section records it. A question about web-platform semantics is
 answered from the standard and Chrome's behaviour and told to Chris; a
 question about what os64 wants is asked of Chris with a lean.
 
-## D2b — built; review pending
+## D2b — completed brief
 
 The brief is retired in favour of [DOM.md § D2b, as built](DOM.md#d2b-as-built)
 and the public contract in `userland/libhtml/include/html/html.h`.
 Implementation is in [PR #212](https://github.com/VBWizard/os64/pull/212),
-`codex/dom-d2b`, stacked on D3 at Chris's request; D3 is not an
+initially stacked on D3 at Chris's request; D3 is not an
 architectural dependency. D6 consumes the packed-payload
 ownership seam. The as-built section records the corrected escaping/NUL
 rules, the historical select compatibility boundary and the full proof.
-Chris schedules Fable's and the outside review after publication.
 
-## D3 — built; review pending
+## D3 — completed brief
 
 The brief is retired in favour of [DOM.md § D3, as built](DOM.md#d3-as-built)
 and the public contract in `userland/libpage/include/page/page.h`.
@@ -255,7 +254,7 @@ harnesses and the corpus numbers unchanged with scripting off.
 
 ## D5 — the binding library (libdom) and J3's fixture
 
-**D5a is built; review pending in [PR #214](https://github.com/VBWizard/os64/pull/214).**
+**D5a was delivered in [PR #214](https://github.com/VBWizard/os64/pull/214).**
 The library contract and measured proof are
 in [DOM.md § D5a, as built](DOM.md#d5a-as-built),
 `userland/libdom/include/dom/dom.h` and `userland/libdom/LIBDOM.md`.
