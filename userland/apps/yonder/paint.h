@@ -28,7 +28,10 @@ typedef struct {
                     os64_gui_rect_t clip);
     // A picture BEHIND a box (YONDER.md § Y5b): true when the box has one,
     // and then, unless `area` is NULL (only asking), it is tiled across
-    // `area` from (ox, oy) — drawn if it has arrived, nothing yet if not.
+    // `area` — the box's clip box, or the view for the canvas's — from
+    // (ox, oy), or as a sheet's size
+    // and position place it (yonder_background_tile); drawn if it has
+    // arrived, nothing yet if not.
     bool (*backdrop)(void *ctx, const flow_box_t *box, const os64_gui_rect_t *area, int32_t ox,
                      int32_t oy, os64_gui_rect_t clip);
     // A GROUP (flow_visit_groups): everything painted between an open and
@@ -61,14 +64,24 @@ const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verb
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                   uint32_t paper, const yonder_verbs_t *verbs);
 
-// Where a sheet's picture behind `box` starts, and on which axes it
-// repeats (CSS Backgrounds 3 § 3.4, § 3.6): its position from the corner
-// of `rect` — the box's rect in page coordinates — a percentage being of
-// the room the `iw` x `ih` picture leaves there, so 100% puts it against
-// the far edge and 50% in the middle.
-void yonder_background_place(const flow_box_t *box, os64_gui_rect_t rect, uint32_t iw,
-                             uint32_t ih, int32_t *ox, int32_t *oy, bool *repeat_x,
-                             bool *repeat_y);
+// One of `box`'s boxes — its border box `rect` (in any coordinates), or
+// the padding or content box inside it. A percentage padding counts as
+// none, as content_of's does; TEXT is the border box.
+os64_gui_rect_t yonder_box_edge(const flow_box_t *box, os64_gui_rect_t rect, flow_edge_t edge);
+
+// A sheet's background, one copy of it: where it is and how big, and on
+// which axes it repeats (CSS Backgrounds 3 § 3.4–§ 3.9), from style `s`
+// and its ORIGIN box `area`. `iw` x `ih` is the picture's own size, 0 x 0
+// for one with none (a gradient), which is then the origin box's. A
+// percentage position is of the room the copy leaves, so 100% puts it
+// against the far edge and 50% in the middle. False when the copy is
+// empty, and nothing is drawn.
+typedef struct {
+    os64_gui_rect_t at;
+    bool repeat_x, repeat_y;
+} yonder_tile_t;
+bool yonder_background_tile(const flow_style_t *s, os64_gui_rect_t area, uint32_t iw, uint32_t ih,
+                            yonder_tile_t *out);
 
 // The two tones a bevelled border is drawn in, from its colour.
 uint32_t yonder_lighter(uint32_t colour);

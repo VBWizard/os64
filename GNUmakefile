@@ -235,7 +235,7 @@ FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSerif.ttf DejaVuSer
 # pages written here to show a feature beside Chrome (each says what to look
 # for), with the pictures they name.
 PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css tools/garb_corpus/*.html \
-                            tools/pages/*.html tools/pages/*.gif)
+                            tools/pages/*.html tools/pages/*.gif tools/pages/*.png)
 
 # The same fixtures for the wire, staged alone: os64serve serves a directory
 # whole, and tools/html_corpus also holds the host harness's expected dumps,

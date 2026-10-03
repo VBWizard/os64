@@ -314,6 +314,7 @@ static flow_style_t initial(const Ctx *c)
     s.color = c->env->ink;
     s.background_position[0] = s.background_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 0, 0};
     s.background_sheet = -1;
+    s.background_origin = FLOW_EDGE_PADDING;
     s.opacity = 1000;
     s.flex_shrink = 1000;
     s.align_self = FLOW_PLACE_AUTO;
@@ -1721,6 +1722,13 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_BACKGROUND_REPEAT: d->background_repeat = s->background_repeat; break;
     case GARB_BACKGROUND_POSITION_X: d->background_position[0] = s->background_position[0]; break;
     case GARB_BACKGROUND_POSITION_Y: d->background_position[1] = s->background_position[1]; break;
+    case GARB_BACKGROUND_SIZE:
+        d->background_fit = s->background_fit;
+        d->background_size[0] = s->background_size[0];
+        d->background_size[1] = s->background_size[1];
+        break;
+    case GARB_BACKGROUND_ORIGIN: d->background_origin = s->background_origin; break;
+    case GARB_BACKGROUND_CLIP: d->background_clip = s->background_clip; break;
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         dst->margin[side(prop, GARB_MARGIN_TOP)] = src->margin[side(prop, GARB_MARGIN_TOP)];
         break;
@@ -2292,6 +2300,29 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         if (author_len(a, v, false, &l))
             s->background_position[p == GARB_BACKGROUND_POSITION_Y] =
                 resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0});
+        break;
+    }
+    case GARB_BACKGROUND_SIZE: {
+        // A keyword, or libgarb's pair of width and height.
+        static const char *const fits[] = {"cover", "contain"};
+        if ((i = pick(v, fits, F_ARRAY(fits))) >= 0) {
+            s->background_fit = (flow_bg_fit_t)(FLOW_FIT_COVER + i);
+            break;
+        }
+        Len two[2];
+        if (v->kind != GARB_V_LENGTH || v->nitems != 2 || !author_len(a, &v->items[0], true, &two[0]) ||
+            !author_len(a, &v->items[1], true, &two[1]))
+            break;
+        s->background_fit = FLOW_FIT_LENGTHS;
+        for (int k = 0; k < 2; k++)
+            s->background_size[k] = resolve(two[k], a->font, (flow_length_t){FLOW_LENGTH_AUTO, 0, 0});
+        break;
+    }
+    case GARB_BACKGROUND_ORIGIN: case GARB_BACKGROUND_CLIP: {
+        static const char *const edges[] = {"border-box", "padding-box", "content-box", "text"};
+        if ((i = pick(v, edges, F_ARRAY(edges))) >= 0)
+            *(p == GARB_BACKGROUND_ORIGIN ? &s->background_origin : &s->background_clip) =
+                (flow_edge_t)i;
         break;
     }
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:

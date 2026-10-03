@@ -228,6 +228,10 @@ typedef enum { FLOW_CAPTION_TOP = 0, FLOW_CAPTION_BOTTOM } flow_caption_side_t;
 typedef enum { FLOW_FLOAT_NONE = 0, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT } flow_float_t;
 typedef enum { FLOW_CONTENT_BOX = 0, FLOW_BORDER_BOX } flow_box_sizing_t;
 typedef enum { FLOW_REPEAT = 0, FLOW_REPEAT_X, FLOW_REPEAT_Y, FLOW_NO_REPEAT } flow_repeat_t;
+typedef enum { FLOW_FIT_LENGTHS = 0, FLOW_FIT_COVER, FLOW_FIT_CONTAIN } flow_bg_fit_t;
+typedef enum {
+    FLOW_EDGE_BORDER = 0, FLOW_EDGE_PADDING, FLOW_EDGE_CONTENT, FLOW_EDGE_TEXT
+} flow_edge_t;
 typedef enum {
     FLOW_OVERFLOW_VISIBLE = 0,
     FLOW_OVERFLOW_HIDDEN,
@@ -404,9 +408,18 @@ typedef struct {
     // picture as a sheet's url() does. The style's, and lives as it does.
     const flow_gradient_t *background_gradient;
     flow_repeat_t background_repeat;
-    // From the box's top-left corner: PX, or PERCENT of the room the
-    // picture leaves (a picture at 100% sits against the far edge).
+    // From the origin box's top-left corner: PX, or PERCENT of the room
+    // the picture leaves (a picture at 100% sits against the far edge).
     flow_length_t background_position[2];
+    // How big a copy of the picture is drawn (Backgrounds 3 § 3.9): the
+    // LENGTHS, each AUTO, PX or PERCENT of the origin box — or scaled,
+    // keeping its shape, to COVER the origin box or to fit inside it.
+    flow_bg_fit_t background_fit;
+    flow_length_t background_size[2];
+    // The box the picture is placed in, and the box the colour and the
+    // picture are cut to (§ 3.7, § 3.8). TEXT cuts to the glyphs.
+    flow_edge_t background_origin;
+    flow_edge_t background_clip;
 
     flow_length_t margin[4];        // PX, PERCENT or AUTO
     flow_length_t padding[4];       // PX or PERCENT
