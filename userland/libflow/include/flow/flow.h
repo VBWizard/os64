@@ -675,8 +675,9 @@ flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll);
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
 // What its corners' radii come to, in whole pixels, in flow_style_t's
 // corner order, horizontal then vertical: a percentage of its border box,
-// and every one scaled down together when two that meet along a side would
-// overlap there (Backgrounds 3 § 5.5). All 0 for square corners.
+// and every one scaled down by one factor when the radii along any side
+// would together be longer than it — the radii as written, so a corner
+// keeps its shape (Backgrounds 3 § 5.5). All 0 for square corners.
 void flow_box_radii(const flow_box_t *box, int32_t radii[4][2]);
 // Its clip, meaningful when `clipped`: its own, met with what clips each
 // frame it is in from outside that frame, each where its own frame is.

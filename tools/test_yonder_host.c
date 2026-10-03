@@ -325,9 +325,17 @@ static void rec_group_close(void *ctx, uint8_t alpha)
 
 // A shadow's mask: where, its colour, and the sum and the largest of its
 // alphas, which a hand-worked case can check without listing every pixel.
+// When set, every mask's alphas are also written here, a 200 x 100 page: a
+// split repaint can then be compared with a whole one pixel by pixel.
+static uint8_t *s_mask_canvas;
+
 static void rec_mask(void *ctx, os64_gui_rect_t r, const uint8_t *alpha, uint32_t colour)
 {
     Rec *rec = ctx;
+    for (int32_t y = 0; s_mask_canvas != NULL && y < r.h; y++)
+        for (int32_t x = 0; x < r.w; x++)
+            if (r.x + x >= 0 && r.x + x < 200 && r.y + y >= 0 && r.y + y < 100)
+                s_mask_canvas[(r.y + y) * 200 + r.x + x] = alpha[y * r.w + x];
     if (!inside(r, rec->view))
         rec->escaped = true;
     long sum = 0;
@@ -414,15 +422,64 @@ static void paint_case(const char *name, const char *html, int32_t width, os64_g
 #include "test_yonder_cases.inc"
 
 // A blurred shadow cannot be worked pixel by pixel by hand, so what a blur
-// must do is checked: the mask reaches the blur (and a pixel) past the
-// shape on every side; just outside the box the shadow is about half on,
+// must do is checked: the mask reaches three box blurs (and a pixel) past
+// the shape on every side; just outside the box the shadow is about half on,
 // as a Gaussian is at its step; nothing falls on the box itself, and an
 // inset shadow falls only inside it.
+// A rounded box as big as libflow takes, painted through a small view
+// (Quinn, #203): the corner arithmetic must stay in range — UBSan is fatal
+// here — and the view, deep inside the top-left curve's square, shows the
+// paper where the curve leaves it and red where it is inside.
+static void huge_corner_case(void)
+{
+    const char *html = "<!doctype html><style>body { margin: 0 } div { width: 31000000px;"
+                       " height: 31000000px; border-radius: 50%; background: #ff0000 }"
+                       "</style><div></div>";
+    bool escaped = false;
+    char *got = paint_of(html, strlen(html), 200, (os64_gui_rect_t){0, 0, 100, 100}, &escaped,
+                         true);
+    expect("radius: a box near the size limit paints its corner in range",
+           got != NULL && !escaped && strstr(got, "fill 0 0 100 100 #fefefe") != NULL, got);
+    free(got);
+}
+
+// A shadow is shaded the same whatever part is repainted (Quinn, #203): the
+// whole view painted once, and its two halves painted apart, give the same
+// alpha at every pixel, for blurs of 8, 20 and 40 and an inset of 20.
+static void shadow_split_cases(void)
+{
+    static const char *const kShadows[] = {"0 0 8px #000000", "0 0 20px #000000",
+                                           "0 0 40px #000000", "inset 0 0 20px #000000"};
+    for (size_t i = 0; i < sizeof(kShadows) / sizeof(kShadows[0]); i++) {
+        char html[256];
+        snprintf(html, sizeof(html),
+                 "<!doctype html><style>body { margin: 0 } div { margin: 25px 70px;"
+                 " width: 50px; height: 50px; background: #ffffff; box-shadow: %s }"
+                 "</style><div></div>",
+                 kShadows[i]);
+        static uint8_t whole[200 * 100], halves[200 * 100];
+        memset(whole, 0, sizeof(whole));
+        memset(halves, 0, sizeof(halves));
+        s_mask_canvas = whole;
+        free(paint_of(html, strlen(html), 200, (os64_gui_rect_t){0, 0, 200, 100}, NULL, true));
+        s_mask_canvas = halves;
+        free(paint_of(html, strlen(html), 200, (os64_gui_rect_t){0, 0, 100, 100}, NULL, true));
+        free(paint_of(html, strlen(html), 200, (os64_gui_rect_t){100, 0, 100, 100}, NULL, true));
+        s_mask_canvas = NULL;
+        int differ = 0;
+        for (int k = 0; k < 200 * 100; k++)
+            differ += whole[k] != halves[k];
+        char note[64];
+        snprintf(note, sizeof(note), "%s: %d pixels differ", kShadows[i], differ);
+        expect("shadow: a split repaint shades every pixel as a whole one", differ == 0, note);
+    }
+}
+
 static void shadow_blur_cases(void)
 {
     struct { const char *css; int x, y, w, h, lo, hi; bool inset; } k[] = {
-        {"box-shadow: 0 0 8px #000000", 31, 31, 38, 38, 100, 160, false},
-        {"box-shadow: inset 0 0 8px #000000", 31, 31, 38, 38, 100, 255, true},
+        {"box-shadow: 0 0 8px #000000", 27, 27, 46, 46, 100, 160, false},
+        {"box-shadow: inset 0 0 8px #000000", 27, 27, 46, 46, 100, 255, true},
     };
     for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
         char html[256];
@@ -907,6 +964,8 @@ int main(int argc, char **argv)
     } else {
         paint_cases();
         shadow_blur_cases();
+        huge_corner_case();
+        shadow_split_cases();
         scale_cases();
         bar_cases();
         mail_cases();

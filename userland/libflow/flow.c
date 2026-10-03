@@ -1080,11 +1080,14 @@ flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll)
 
 void flow_box_radii(const flow_box_t *box, int32_t radii[4][2])
 {
+    // Each radius as written, never capped on its own: a cap would change
+    // the corner's shape before the common reduction below, which must
+    // scale the radii a page wrote (§ 5.5's overlapping-curves rule).
     int64_t r[4][2], size[2] = {box != NULL ? box->rect.w : 0, box != NULL ? box->rect.h : 0};
     for (int c = 0; c < 4; c++)
         for (int k = 0; k < 2; k++) {
             int64_t v = box != NULL ? round_px(f_len(box->style->radius[c][k], size[k] * 64)) : 0;
-            r[c][k] = v < 0 ? 0 : v > size[k] ? size[k] : v;
+            r[c][k] = v < 0 ? 0 : v;
         }
     // Along each side, the two radii that meet it: top (TL, TR across),
     // right (TR, BR down), bottom (BR, BL across), left (BL, TL down). The
@@ -1094,14 +1097,19 @@ void flow_box_radii(const flow_box_t *box, int32_t radii[4][2])
     for (int s = 0; s < 4; s++) {
         int axis = kSide[s][2];
         int64_t sum = r[kSide[s][0]][axis] + r[kSide[s][1]][axis];
-        if (sum > 0 && size[axis] * den < sum * num) {
+        // A radius as written can be a percentage of a box near 2^31 px
+        // many times over: the products are taken in 128 bits.
+        if (sum > 0 && (__int128)size[axis] * den < (__int128)sum * num) {
             num = size[axis];
             den = sum;
         }
     }
+    // Scaled, a radius is no longer than its side, so it fits an int32_t
+    // as the box does — and one written longer than its side, with no other
+    // along it, is scaled to the side (a 100px corner of a 50px box is 50).
     for (int c = 0; c < 4; c++)
         for (int k = 0; k < 2; k++)
-            radii[c][k] = (int32_t)(r[c][k] * num / den);
+            radii[c][k] = (int32_t)((__int128)r[c][k] * num / den);
 }
 
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)

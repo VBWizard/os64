@@ -849,6 +849,57 @@ static int sweep_cascade(const char *what, const char *text, size_t len)
     return failures;
 }
 
+// A shadow list grows outside the arena (props.c's shadow_list), so its
+// failure is said by hand: each allocation of reading a shadow declaration
+// failed alone, the read must be the whole one or say it is incomplete —
+// never an invalid declaration with the sheet calling itself whole (Quinn,
+// #203).
+static int sweep_shadows(void)
+{
+    static const char *const decls[] = {"box-shadow: 1px 1px red",
+                                        "text-shadow: 1px 1px red, 2px 2px blue",
+                                        "box-shadow: 1px 1px red, 2px 2px blue, 3px 3px green, "
+                                        "4px 4px, 5px 5px, 6px 6px, 7px 7px, 8px 8px, 9px 9px"};
+    int failures = 0;
+    for (size_t d = 0; d < sizeof(decls) / sizeof(decls[0]); d++) {
+        garb_set_t sets[GARB_SETS_MAX];
+        garb_parsed_t r;
+        allocations = 0;
+        fail_at = 0;
+        if (garb_parse_one_declaration(decls[d], strlen(decls[d]), &r) != GARB_OK) {
+            garb_free(&r);
+            failures++;
+            continue;
+        }
+        size_t before = allocations;
+        int32_t whole = garb_read_declaration(&r, &r.decl, false, sets);
+        size_t worst = allocations - before;
+        garb_free(&r);
+        for (size_t at = 1; at <= worst; at++) {
+            allocations = 0;
+            fail_at = 0;
+            if (garb_parse_one_declaration(decls[d], strlen(decls[d]), &r) != GARB_OK) {
+                garb_free(&r);
+                continue;
+            }
+            fail_single = true;
+            fail_at = allocations + at;
+            int32_t n = garb_read_declaration(&r, &r.decl, false, sets);
+            fail_at = 0;
+            fail_single = false;
+            if (n != whole && !r.incomplete) {
+                fprintf(stderr, "FAIL sweep shadows \"%s\": failure %zu read %d, sheet whole\n",
+                        decls[d], at, (int)n);
+                failures++;
+            }
+            garb_free(&r);
+        }
+    }
+    printf("libgarb sweep, shadow lists: every allocation of the read failed alone, %s\n",
+           failures == 0 ? "each the whole read or marked incomplete" : "FAILED");
+    return failures;
+}
+
 static int sweep(const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -875,6 +926,7 @@ static int sweep(const char *path)
     failures += sweep_text("a long identifier", long_ident, sizeof(long_ident) - 1);
     failures += sweep_ones();
     failures += sweep_lists();
+    failures += sweep_shadows();
     failures += sweep_selectors();
     failures += sweep_cascade(path, text, len);
     os64_html_document_free(s_sweep_doc);
