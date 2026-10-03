@@ -683,6 +683,10 @@ process boundary. Booked with tabs, where it would be designed anyway.
 In the house's order: each finished, tested by its builder, the next
 stacked on it. D1 to D4 need no engine and can start before J2 ends.
 
+The slices handed to other builders each have a brief in
+[DOM_BRIEFS.md](DOM_BRIEFS.md): what to read, what is settled, what the
+builder decides, and the proof in this house's shape.
+
 | Slice | What | Proof |
 |---|---|---|
 | D1 | **Built.** libhtml's mutation core and the verbs but `parse_fragment` | `tools/test_html_dom_host.sh`, under ASan and UBSan: § D1, as built |
