@@ -187,6 +187,23 @@ static void gradient_style_cases(void)
         "    div block gradient=linear:280000:#ff0000@auto,#0000ff@auto\n"
         "    div block gradient=linear:270000:#ff0000@auto,#0000ff@auto\n"
         "    div block gradient=linear:500:#ff0000@auto,#0000ff@auto\n");
+    // Past 1e300 too, to the top of a double's range. The remainders are
+    // fmod's of the double libgarb reads, which is within a few units in
+    // the last place of the text (tokenize.c, BROWSER_DEBTS.md):
+    // 1.0000000000000002e301 reads as 1.0000000000000008e301 (48 degrees),
+    // 1e308 as 1.0000000000000006e308 (320).
+    cascade_case("gradients: every finite angle", 400,
+        "<!doctype html><style>"
+        ".d{background-image:linear-gradient(1.0000000000000002e301deg,red,blue)}"
+        ".e{background-image:linear-gradient(-1.0000000000000002e301deg,red,blue)}"
+        ".f{background-image:linear-gradient(1e308deg,red,blue)}"
+        "</style><div class=d></div><div class=e></div><div class=f></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=linear:48000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:312000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:320000:#ff0000@auto,#0000ff@auto\n");
     // currentColor is the colour of the element that USES it (CSS Color 4
     // § 4.4): a background or border colour taken by `inherit` is the
     // child's colour, and one written before `color` in the same rule is

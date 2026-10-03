@@ -2161,11 +2161,14 @@ static flow_length_t author_lp(const Author *a, const garb_val_t *v, flow_length
 // integer and points anywhere. Exactly: each step subtracts the largest
 // 360 * 2^k not above it, and a subtraction of two doubles within a factor
 // of two of each other is exact (Sterbenz), so this is fmod's answer
-// without libmath.
+// without libmath, for EVERY finite angle. Each step at least halves what
+// is left and `s` never passes it, so even the largest double takes at
+// most 1024 steps of 1024 doublings. Only NaN and infinity, which have no
+// remainder, take the initial direction.
 static int32_t angle_thousandths(double deg)
 {
-    if (!(deg == deg) || deg > 1e300 || deg < -1e300)
-        return 0;                           // NaN or near-infinite: the initial
+    if (!(deg - deg == 0))
+        return 0;                           // NaN or infinite
     double m = deg < 0 ? -deg : deg;
     while (m >= 360) {
         double s = 360;
