@@ -157,7 +157,7 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
         return JS_ThrowTypeError(ctx, "innerHTML requires an element");
     DString string = {0};
     JSValue empty = JS_UNDEFINED;
-    if ((JS_IsNull(value) && property != D_DATA) ||
+    if (JS_IsNull(value) ||
         (JS_IsUndefined(value) && (property == D_NODE_VALUE || property == D_TEXT_CONTENT))) {
         empty = JS_NewString(ctx, "");
         if (JS_IsException(empty)) return empty;

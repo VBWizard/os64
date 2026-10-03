@@ -563,6 +563,12 @@ allocation. Radio groups and select choices therefore reflect each move,
 including moves between detached trees. Replaced children remain
 document-owned; reclamation belongs to D6. Bindings use these state-aware
 entrances, and presentation watches both HTML and state revisions.
+Plans walk moving subtrees, reserve affected old/new option lists and clean
+textarea parents, and scan named radio peers when a move or explicit form-owner
+ID can change their groups. A reserved record supplies a temporary stage link,
+cleared on success/refusal. Unrelated tree edits keep sparse records sparse,
+allocate no control state and skip model publication. Template contents keep
+their independent tree when the template host moves.
 
 Numeric contracts, independent checks and compatibility limits are recorded
 in [LIBPAGE_REVIEW.md](LIBPAGE_REVIEW.md). The public contract is in `page.h`.

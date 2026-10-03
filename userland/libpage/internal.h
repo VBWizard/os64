@@ -36,6 +36,7 @@ typedef struct {
 // change which property was edited. Model pins retain snapshot tree bytes;
 // state publication retains replaceable value bytes until views are updated.
 typedef struct PNodeState PNodeState;
+typedef struct PAttrStage PAttrStage;
 struct PNodeState {
     const os64_html_node_t *node;
     char *text;
@@ -51,6 +52,9 @@ struct PNodeState {
     // Its cache holds the child-text baseline until a child mutation resets it.
     bool text_clean;
     bool on_dirty, on_attr, selected_dirty, selected_attr;
+    // An owner-thread mutation plan borrows this link and clears it on
+    // publication or refusal; no property state is stored in the link.
+    PAttrStage *stage;
     PNodeState *next;
 };
 

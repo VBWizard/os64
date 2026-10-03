@@ -11,6 +11,11 @@
 #define D_SET 0x1000
 typedef struct DValue DValue;
 typedef struct DQuery DQuery;
+enum {
+    D_PROTO_NODE, D_PROTO_DOCUMENT, D_PROTO_ELEMENT, D_PROTO_CHARACTER_DATA,
+    D_PROTO_FRAGMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
+    D_PROTO_BUTTON, D_PROTO_COUNT
+};
 struct DValue {
     JSValue value;
     DValue *next, *hash_next;
@@ -38,6 +43,7 @@ struct os64_dom {
     bool closed;
     JSClassID anchor_class, node_class, collection_class;
     DValue *values, *anchor, *index_guard;
+    DValue *prototypes[D_PROTO_COUNT];
     DValue *buckets[D_BUCKETS];
     DQuery *queries;
 };
@@ -60,7 +66,7 @@ int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
 JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
-int d_node_install(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype);
+int d_node_install(os64_dom_t *dom, JSContext *ctx);
 int d_collection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype);
 extern JSClassExoticMethods d_collection_exotic;
 JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,

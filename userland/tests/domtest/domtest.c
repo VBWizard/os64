@@ -59,6 +59,12 @@ static void round_trip(void)
          "check(children.length===n+1 && children.item(n)===p);"
          "check(held===document.getElementById('h') && held.extra===42);"
          "check(document.getElementById('q').value==='typed');");
+    eval(runtime,
+         "var data=document.createTextNode('before');data.data=null;check(data.data==='','null CharacterData');"
+         "data.data=undefined;check(data.data==='undefined','undefined CharacterData');"
+         "check(document.body.value===undefined && !('value' in document.body),'element control feature detection');"
+         "check(data.tagName===undefined && !('tagName' in data),'text element feature detection');"
+         "check(document.body.head===undefined && !('head' in document.body),'document-only property');");
     os64_page_t *next = os64_page_rebuild(model);
     require(next != NULL && !os64_page_incomplete(next), "transactional model rebuild");
     require(os64_streq(os64_page_control(next, 0)->value, "typed"), "edit survived rebuild");

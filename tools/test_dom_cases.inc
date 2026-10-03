@@ -273,6 +273,31 @@ static void dom_extra_surface_cases(void)
     check(!strcmp(before,after)&&tree==os64_html_version(f.document)&&state==os64_page_state_version(f.state),"document root refusal preserves tree and revisions");
     free(before);free(after);fixture_free(&f);
 }
+
+static void dom_review_property_cases(void)
+{
+    DomFixture f=fixture_new(NULL);if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "const body=document.body,text=document.createTextNode('before'),comment=document.createComment('before');"
+        "text.data=null;comment.data=null;assert(text.data===''&&comment.data==='','CharacterData null clears');"
+        "text.data=undefined;comment.data=undefined;assert(text.data==='undefined'&&comment.data==='undefined','data undefined stringifies');"
+        "assert(body.value===undefined&&body.checked===undefined&&body.data===undefined&&body.head===undefined);"
+        "assert(text.tagName===undefined&&text.value===undefined&&text.innerHTML===undefined&&document.tagName===undefined);"
+        "assert(!('value' in body)&&!('checked' in body)&&!('data' in body)&&!('head' in body)&&!('tagName' in text));"
+        "assert('head' in document&&'tagName' in body&&'data' in text&&'nodeName' in text);"
+        "const input=document.createElement('input'),area=document.createElement('textarea'),select=document.createElement('select'),button=document.createElement('button');"
+        "assert('value' in input&&'value' in area&&'value' in select&&'value' in button);"
+        "assert('checked' in input&&!('checked' in area)&&'selectedIndex' in select&&!('selectedIndex' in input));"
+        "assert(Object.getPrototypeOf(Object.getPrototypeOf(input))===Object.getPrototypeOf(body));"
+        "assert(Object.getPrototypeOf(text)===Object.getPrototypeOf(comment));"
+        "assert(Object.getPrototypeOf(input.cloneNode())===Object.getPrototypeOf(input));"
+        "const fragment=document.createDocumentFragment();assert('children' in fragment&&'getElementById' in fragment&&!('head' in fragment));"
+        "const getter=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document),'head').get;"
+        "throws('TypeError',()=>getter.call(body));throws('TypeError',()=>body.getAttribute.call(text,'id'));"
+        "body.value='expando';assert(body.value==='expando'&&document.body===body);",
+        "review-property-prototypes.js");
+    fixture_free(&f);
+}
 static void dom_budget_cases(void)
 {
     check(os64_dom_bytes(NULL)==0&&os64_dom_registry_count(NULL)==0,"NULL statistics");

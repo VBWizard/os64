@@ -44,6 +44,25 @@ queries, creation, tree mutation/navigation, attributes, text and markup,
 and control properties. `window` names the global object. Document landmarks
 are read from the attached tree rather than trusted parser-time pointers.
 
+Kind prototypes inherit Node, and the HTML control prototypes inherit Element.
+The supported properties and methods are placed on those chains:
+
+| Kind | Surface beyond Node |
+| --- | --- |
+| Document | documentElement/head/body, child-element access, ID/tag queries, creation |
+| Element | tagName, id/className, innerHTML/outerHTML, attributes, tag queries, child-element access and element siblings |
+| Text and Comment (CharacterData) | data and element siblings |
+| DocumentFragment | child-element access and ID queries |
+| HTML input/textarea/select/button | value |
+| HTML input | checked (native control-state operations support checkbox/radio) |
+| HTML select | selectedIndex |
+
+Node supplies tree navigation, ownerDocument, childNodes, nodeType/nodeName,
+nodeValue/textContent and tree methods. A property absent from a node's chain
+reads undefined and is absent from `in`; assignment may create an ordinary
+expando. Borrowed methods and accessors still validate native receivers.
+Interface constructors and a complete DOM surface are outside this slice.
+
 Child collections and tag queries are native live objects with `length`,
 `item(index)` and indexed access. A query refreshes against the HTML version;
 its node-vector replacement is staged before publication. A held collection
@@ -60,7 +79,8 @@ are ASCII-folded where the operation requires it. Native placement validity
 belongs to libhtml; bindings turn its status into an exception.
 Element and attribute names use the DOM Standard's separate name-validation
 rules. Nullable nodeValue/textContent map null and undefined to empty text;
-innerHTML maps null to empty but converts undefined to the literal string.
+innerHTML and CharacterData data map null to empty but convert undefined to
+the literal string.
 
 ## Mutation and control state
 
@@ -77,6 +97,12 @@ native insertion/removal, then publish radio/select effects without another
 allocation. Moving controls changes their group/selection state at the move;
 a later getter or model rebuild cannot recover unobserved intermediate moves.
 Dirty flags retain their meaning as property edits rather than tree effects.
+Planning walks moving subtrees, prepares the old and new affected option lists,
+and resets clean textarea state only for direct child changes. Radio peer scans
+run for moving radio names or IDs that can retarget explicit form owners;
+unrelated control records stay sparse. Stage lookup uses a temporary link from
+reserved records, cleared on commit/refusal. An unrelated text/tree edit needs
+no control-state allocation or model publication.
 
 Content setters stage detached text or a contextual fragment. The shared
 replace-children entrance reserves once, inserts before the original first

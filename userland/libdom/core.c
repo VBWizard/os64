@@ -235,10 +235,7 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     if (JS_PreventExtensions(ctx, guard) < 0) { JS_FreeValue(ctx, guard); goto fail; }
     dom->index_guard = d_retain(dom, ctx, guard);
     if (dom->index_guard == NULL) goto fail;
-    JSValue node_prototype = JS_NewObject(ctx);
-    if (JS_IsException(node_prototype)) goto fail;
-    if (d_node_install(dom, ctx, node_prototype) < 0) { JS_FreeValue(ctx, node_prototype); goto fail; }
-    JS_SetClassProto(ctx, dom->node_class, node_prototype);
+    if (d_node_install(dom, ctx) < 0) goto fail;
     JSValue collection_prototype = JS_NewObject(ctx);
     if (JS_IsException(collection_prototype)) goto fail;
     if (d_collection_install(dom, ctx, collection_prototype) < 0) {

@@ -55,6 +55,8 @@ static inline os64_dom_options_t os64_dom_default_options(void)
  * access. Child collections omit template contents; innerHTML uses them.
  * Strings replace NUL and lone UTF-16 surrogates with U+FFFD. HTML names are
  * ASCII-folded where their DOM operation requires it.
+ * Supported properties/methods live on kind-specific prototype chains;
+ * a property absent from a node's chain reads undefined and is absent from in.
  *
  * Content setters stage detached replacements and preflight their insertion
  * before removing current children. A refusal preserves visible children;

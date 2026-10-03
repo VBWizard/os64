@@ -1161,15 +1161,14 @@ DOM_BRIEFS.md and DEBTS.md. D3 adds neither DOM bindings nor reclamation.
 
 ### D5a, as built
 
-[PR #214](https://github.com/VBWizard/os64/pull/214) is stacked on D2b #212,
-which is stacked on D3 #211. Fable review is pending; Chris schedules it.
-Retarget each child explicitly after its parent merges and inspect its diff.
+Implemented in [PR #214](https://github.com/VBWizard/os64/pull/214), initially
+stacked on D2b #212 at Chris's request.
 
 `userland/libdom` binds the D5 surface to the mutable HTML document and
 persistent page state. Its native contract is `include/dom/dom.h`; the
 ownership, budget and error contracts are in `LIBDOM.md`. The shared library
 and `/tests/domtest` are built and installed by the normal image build. This
-is the library half of D5; D5b and J3's visible Yonder acceptance remain pending.
+is the library half of D5; D5b owns J3's visible Yonder acceptance.
 
 **Objects and lifetime.** A node identity returns the same strongly held
 wrapper, preserving expandos across garbage collection, detach/reinsert and model
@@ -1205,6 +1204,14 @@ Refusal leaves visible children intact, although successful detached staging
 can remain document-owned until D6. Tree methods prepare return wrappers before
 making a visible change. Model presentation must observe both HTML and state
 revisions; libdom does not own a rendering loop.
+
+Mutation plans walk the moving subtrees and prepare affected old/new option
+lists. Moving radios or IDs that can retarget explicit form owners require
+a peer scan; unrelated controls are not staged. Clean
+textarea state is reset for direct child changes. Reserved records carry
+temporary stage links, cleared on commit/refusal, so lookup does not scan the
+stage list. Unrelated tree edits allocate no control state and skip model
+publication. Template contents stay independent when their host moves.
 
 Cloning delegates to `os64_page_node_clone`, preserving INPUT current value,
 checkedness and their dirty flags, and TEXTAREA current value/dirty flag.
@@ -1298,8 +1305,8 @@ excluded nested option does not normalize the outer select. Regression cases
 cover explicit-empty selection after insertion, removal, `size` and `multiple`
 transitions, including an excluded nested option.
 
-After this integration, the full libpage suite passes 249,491 checks / 0
-failures. The binding suite passes 1,447 / 0 with 87 reached allocation cuts
+At parent review merge `d7acdf10`, the full libpage suite passed 249,491 checks
+/ 0 failures. The binding suite passed 1,447 / 0 with 87 reached allocation cuts
 on the actual target engine, and 3,403 / 0 with 413 cuts on the instrumented
 engine; clone refusal has 41 allocation points. The smaller sweep counts
 reflect fewer reservation allocations. Normal leak detection remains enabled.
@@ -1307,6 +1314,50 @@ Both changed D3 mutation anchors compile and are caught. The strict userland
 build passes; private QEMU `pagetest` and `domtest` return their success badges
 and pass heap verification. The installed libpage/libhtml/libdom and both test
 executables match the build byte for byte. This guest is stopped.
+
+**D5a review corrections.** The mutation planner retains sparse state for
+unrelated edits and uses indexed stage lookup. It prepares affected select
+lists, named radio peers and clean textarea parents. ID moves are included
+because they can retarget an explicit form owner even without a moving control.
+The tests cover a control-free form move, separate template contents, no state
+allocation for unrelated edits on 20,000 options under a 1 KiB state cap, and
+refusal followed by retry with existing records. Temporary stage links are
+cleared before their storage is released.
+
+An independent plain-O2 host probe, with a live model and an explicitly enlarged
+HTML arena, measures one text insert/remove pair at the normal 16 MiB state cap:
+
+| Options | Before | After | Allocations after |
+| --- | --- | --- | --- |
+| 1,000 | 2.540 ms | 3 microseconds | 0 |
+| 10,000 | 428.712 ms | 7 microseconds | 0 |
+| 60,000 | NO_MEMORY after 12.157 seconds | 24 microseconds | 0 |
+
+These are individual host measurements. The current 60,000-option pair retains
+384 state bytes; the larger record includes its temporary stage link. A real
+10,000-option-list insert/remove pair drops from 1,289.068 ms to 21.198 ms in
+the same probe. A touched list still spends state budget on its records/stages;
+this does not remove the cap or establish P5/Yonder scripting timings.
+
+CharacterData `data = null` now clears the string, while undefined still
+stringifies. Kind prototypes inherit Node, and HTML control prototypes inherit
+Element, so unsupported properties are absent rather than throwing during a
+normal lookup; `in` reports the supported surface. The registry drains retained
+prototypes alongside wrappers, and clone preparation chooses its source kind's
+prototype before native publication. LIBDOM.md lists the property scopes and
+the constructor/full-DOM boundary.
+
+Final review proof: full libpage 254,057 / 0 with 397 independently failed build
+allocations; binding target profile 1,527 / 0 with 101 reached allocation cuts,
+instrumented profile 4,227 / 0 with 551 cuts, including 40 clone refusal points.
+ASan/UBSan/LSan remain enabled. All 29 DOM, six semantic tree and 26 D3 state
+mutants compile and are caught; the tree checks do not count removal of a
+performance-only shortcut as a semantic catch. Normal consumers pass: Yonder
+115 / 0 with six matching paints, wend 177,854 / 0 and libflow 18,585 / 0 with
+twelve matching dumps. The strict userland build passes. Copied-disk
+QEMU `pagetest` and `domtest` return their success badges and pass final heap
+checks, including native null/property-detection cases. Installed libraries and
+tests match their built bytes, and the owned guest is stopped.
 
 **Parser cost.** Seven alternating O2 host parses per revision, after warmup,
 compare with untouched D2b: Wikipedia medians 24.365 ms before and 24.377 ms
@@ -1325,7 +1376,7 @@ with releases on abort, because normalization reads those keys after mutation.
 Strings copied into JavaScript hold no native snapshot bytes. Libjs retains
 R0's fatal destroy invariant; reporting/reclaiming destroy is a separate
 reviewed slice before scripting is offered for ordinary browsing. D4 and D7
-remain Fable's work. Chris schedules Fable's review before merge.
+are Fable's slices.
 
 ## Booked, with their triggers
 

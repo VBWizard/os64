@@ -224,6 +224,7 @@ int main(int argc, char **argv)
     dom_clone_character_data_cases();
     dom_refusal_cases();
     dom_extra_surface_cases();
+    dom_review_property_cases();
     dom_exception_ownership_cases();
     dom_fragment_mode_cases();
     dom_budget_cases();

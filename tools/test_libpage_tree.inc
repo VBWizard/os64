@@ -121,9 +121,15 @@ static void tree_depth_and_state_cap(void)
     os64_html_node_t *parent=rebuild_id(doc,"p");
     fresh=os64_html_create_element(doc,OS64_HTML_NS_HTML,"span",&why);
     version=os64_html_version(doc);revision=os64_page_state_version(state);heap=live;
-    rebuild_expect("tree cap: named refusal",os64_page_node_insert(state,parent,fresh,NULL)==OS64_HTML_NO_MEMORY);
-    rebuild_expect("tree cap: exact rollback",version==os64_html_version(doc)&&revision==os64_page_state_version(state)&&
-        cap==os64_page_state_bytes(state)&&heap==live&&fresh->parent==NULL);
+    rebuild_expect("tree cap: unrelated insertion needs no state storage",os64_page_node_insert(state,parent,fresh,NULL)==0);
+    rebuild_expect("tree cap: unrelated insertion stays sparse",version!=os64_html_version(doc)&&revision==os64_page_state_version(state)&&
+        cap==os64_page_state_bytes(state)&&heap==live&&fresh->parent==parent);
+    os64_html_node_t *radio=followup_element(doc,"input",NULL);
+    rebuild_expect("tree cap: radio markup",os64_html_set_attr(doc,radio,"type","radio",5)==0);
+    version=os64_html_version(doc);revision=os64_page_state_version(state);heap=live;
+    rebuild_expect("tree cap: affected control still capped",os64_page_node_insert(state,parent,radio,NULL)==OS64_HTML_NO_MEMORY);
+    rebuild_expect("tree cap: affected refusal preserves tree/state",version==os64_html_version(doc)&&revision==os64_page_state_version(state)&&
+        cap==os64_page_state_bytes(state)&&heap==live&&radio->parent==NULL);
     os64_page_state_free(state);os64_html_document_free(doc);
 }
 
@@ -150,6 +156,8 @@ static void tree_state_failure_sweep(void)
                 fragment->first_child==incoming&&incoming->parent==fragment&&version==os64_html_version(f.doc)&&
                 revision==os64_page_state_version(f.state)&&bytes==os64_page_state_bytes(f.state)&&
                 arena==f.doc->arena_bytes&&peak==f.doc->peak_arena_bytes&&heap==live);
+            rebuild_expect("tree sweep: same state can retry",os64_page_node_replace_children(f.state,dest,fragment)==0&&
+                fragment->first_child==NULL&&old->parent==NULL);
         } else
             rebuild_expect("tree sweep: success",status==0&&fragment->first_child==NULL&&old->parent==NULL);
         rebuild_clear(&f);
@@ -177,10 +185,120 @@ static void tree_explicit_empty_selection(void)
     rebuild_expect("empty select: multiple restores first",os64_page_node_selected_index(f.state,select,&index)==0&&index==0);
     rebuild_expect("empty select: unmatched value",os64_page_node_set_value(f.state,select,"missing",7)==0);
     rebuild_expect("empty select: property clear stays empty",os64_page_node_selected_index(f.state,select,&index)==0&&index==-1);
+    int64_t why=0;
+    os64_html_node_t *text=os64_html_create_text(f.doc,"unrelated",9,&why);
+    rebuild_expect("empty select: unrelated text insertion",text!=NULL&&why==0&&os64_page_node_insert(f.state,select,text,NULL)==0);
+    rebuild_expect("empty select: text leaves selection empty",os64_page_node_selected_index(f.state,select,&index)==0&&index==-1);
+    rebuild_expect("empty select: unrelated text removal",os64_page_node_remove(f.state,text)==0);
+    rebuild_expect("empty select: text removal leaves selection empty",os64_page_node_selected_index(f.state,select,&index)==0&&index==-1);
     os64_html_node_t *nested=followup_option(f.doc,select->first_child,"nested");
     rebuild_expect("empty select: excluded option attribute",attrs_set(&f,nested,"selected","")==0);
     rebuild_expect("empty select: excluded option leaves outer selection empty",
         os64_page_node_selected_index(f.state,select,&index)==0&&index==-1);
+    rebuild_clear(&f);
+}
+
+static void tree_sparse_large_page(void)
+{
+    const size_t count=20000;
+    const char *start="<body><div id=p></div><select>";
+    const char *item="<option>A";
+    size_t first=strlen(start),each=strlen(item);
+    char *markup=malloc(first+count*each+10);
+    memcpy(markup,start,first);
+    for(size_t i=0;i<count;i++)memcpy(markup+first+i*each,item,each);
+    memcpy(markup+first+count*each,"</select>",10);
+    os64_html_options_t options=os64_html_options_default();options.max_arena_bytes=256u*1024u*1024u;
+    os64_html_parser_t *parser=os64_html_parser_new(&options);
+    rebuild_expect("sparse tree: feed",parser&&os64_html_parser_feed(parser,markup,strlen(markup))==0);
+    os64_html_document_t *doc=os64_html_parser_finish(parser);free(markup);
+    rebuild_expect("sparse tree: complete HTML",doc&&doc->refusal==0);
+    os64_page_state_t *state=os64_page_state_create(doc,1024);
+    os64_page_t *page=os64_page_build(doc,kPage,NULL,state);
+    rebuild_expect("sparse tree: complete model under tight state cap",page&&!os64_page_incomplete(page));
+    os64_html_node_t *parent=rebuild_id(doc,"p");
+    int64_t why=0;
+    os64_html_node_t *text=os64_html_create_text(doc,"new",3,&why),*other=os64_html_create_text(doc,"other",5,&why);
+    size_t bytes=os64_page_state_bytes(state);uint64_t revision=os64_page_state_version(state);
+    allocations=0;
+    rebuild_expect("sparse tree: append",os64_page_node_insert(state,parent,text,NULL)==0);
+    rebuild_expect("sparse tree: replace",os64_page_node_replace(state,parent,other,text)==0);
+    rebuild_expect("sparse tree: remove",os64_page_node_remove(state,other)==0);
+    rebuild_expect("sparse tree: replace children",os64_page_node_replace_children(state,parent,text)==0);
+    rebuild_expect("sparse tree: clear children",os64_page_node_replace_children(state,parent,NULL)==0);
+    rebuild_expect("sparse tree: no control allocations or edits",allocations==0&&bytes==os64_page_state_bytes(state)&&revision==os64_page_state_version(state));
+    os64_page_free(page);os64_page_state_free(state);os64_html_document_free(doc);
+    rebuild_expect("sparse tree: no leaks",live==0);
+}
+
+static void tree_id_owner_history(void)
+{
+    RebuildFixture f=rebuild_fixture("<form id=f><input id=a type=radio name=g checked></form>"
+        "<input id=b type=radio name=g checked form=f><div id=p></div>",0);
+    os64_html_node_t *form=rebuild_id(f.doc,"f"),*a=rebuild_id(f.doc,"a"),*b=rebuild_id(f.doc,"b");
+    bool on=false;
+    rebuild_expect("tree ID: prior winner",os64_page_node_checked(f.state,b,&on)==0&&on);
+    rebuild_expect("tree ID: detach form without its explicit peer",os64_page_node_remove(f.state,form)==0);
+    rebuild_expect("tree ID: detached loser does not revive",os64_page_node_checked(f.state,a,&on)==0&&!on);
+    rebuild_expect("tree ID: explicit peer stays checked",os64_page_node_checked(f.state,b,&on)==0&&on);
+    rebuild_expect("tree ID: check detached member",os64_page_node_set_checked(f.state,a,true)==0);
+    rebuild_expect("tree ID: restore form",os64_page_node_insert(f.state,f.doc->body,form,NULL)==0);
+    rebuild_expect("tree ID: incoming group member wins",os64_page_node_checked(f.state,a,&on)==0&&on);
+    rebuild_expect("tree ID: peer owner change participates",os64_page_node_checked(f.state,b,&on)==0&&!on);
+    rebuild_clear(&f);
+    f=rebuild_fixture("<form id=f></form><input id=a type=radio name=g checked form=f>"
+        "<input id=b type=radio name=g checked><div id=p></div>",0);
+    form=rebuild_id(f.doc,"f");a=rebuild_id(f.doc,"a");b=rebuild_id(f.doc,"b");
+    rebuild_expect("tree ID: remove control-free owner",os64_page_node_remove(f.state,form)==0);
+    rebuild_expect("tree ID: changed explicit owner wins",os64_page_node_checked(f.state,a,&on)==0&&on);
+    rebuild_expect("tree ID: owner change clears destination peer",os64_page_node_checked(f.state,b,&on)==0&&!on);
+    rebuild_expect("tree ID: restore control-free owner",os64_page_node_insert(f.state,f.doc->body,form,NULL)==0);
+    rebuild_expect("tree ID: old peer does not revive",os64_page_node_checked(f.state,b,&on)==0&&!on);
+    rebuild_clear(&f);
+}
+
+static void tree_select_reservation_sweep(void)
+{
+    size_t points=0;
+    for(size_t point=0;;point++) {
+        RebuildFixture f=rebuild_fixture("<select id=s><option>A<option selected>B</select>",0);
+        os64_html_node_t *select=rebuild_id(f.doc,"s");
+        rebuild_expect("select sweep: existing property records",os64_page_node_set_selected_index(f.state,select,1)==0);
+        for(size_t i=0;i<24;i++)followup_option(f.doc,select,"more");
+        os64_html_node_t *incoming=followup_element(f.doc,"option",NULL);
+        rebuild_expect("select sweep: incoming selected",os64_html_set_attr(f.doc,incoming,"selected","",0)==0);
+        int32_t prior=-1;rebuild_expect("select sweep: baseline",os64_page_node_selected_index(f.state,select,&prior)==0&&prior==1);
+        uint64_t tree=os64_html_version(f.doc),revision=os64_page_state_version(f.state);
+        size_t bytes=os64_page_state_bytes(f.state),heap=live;
+        allocations=0;fail_at=point;fail_single=true;
+        int64_t status=os64_page_node_insert(f.state,select,incoming,select->first_child);
+        size_t attempted=allocations;fail_at=0;fail_single=false;
+        if(point==0)points=attempted;
+        if(point!=0) {
+            int32_t index=-1;
+            rebuild_expect("select sweep: refusal",status==OS64_HTML_NO_MEMORY);
+            rebuild_expect("select sweep: preserves state/tree",incoming->parent==NULL&&tree==os64_html_version(f.doc)&&
+                revision==os64_page_state_version(f.state)&&bytes==os64_page_state_bytes(f.state)&&heap==live&&
+                os64_page_node_selected_index(f.state,select,&index)==0&&index==prior);
+            rebuild_expect("select sweep: retry same state",os64_page_node_insert(f.state,select,incoming,select->first_child)==0);
+        } else rebuild_expect("select sweep: commit",status==0);
+        int32_t index=-1;
+        rebuild_expect("select sweep: incoming selected option wins",os64_page_node_selected_index(f.state,select,&index)==0&&index==0);
+        rebuild_clear(&f);
+        if(point==points)break;
+    }
+}
+
+static void tree_template_host_history(void)
+{
+    RebuildFixture f=rebuild_fixture("<template id=t><select><option>A<option>B</select><input type=radio name=g checked></template><div id=p></div>",0);
+    os64_html_node_t *host=rebuild_id(f.doc,"t"),*select=host->template_contents->first_child;
+    rebuild_expect("template host: explicit empty contents selection",os64_page_node_set_selected_index(f.state,select,-1)==0);
+    size_t bytes=os64_page_state_bytes(f.state);uint64_t revision=os64_page_state_version(f.state);
+    rebuild_expect("template host: ordinary host move",os64_page_node_insert(f.state,rebuild_id(f.doc,"p"),host,NULL)==0);
+    int32_t index=-1;
+    rebuild_expect("template host: independent contents unchanged",os64_page_node_selected_index(f.state,select,&index)==0&&index==-1&&
+        bytes==os64_page_state_bytes(f.state)&&revision==os64_page_state_version(f.state));
     rebuild_clear(&f);
 }
 
@@ -192,4 +310,8 @@ static void test_libpage_tree(void)
     tree_native_refusals_and_templates();
     tree_state_failure_sweep();
     tree_explicit_empty_selection();
+    tree_sparse_large_page();
+    tree_id_owner_history();
+    tree_select_reservation_sweep();
+    tree_template_host_history();
 }

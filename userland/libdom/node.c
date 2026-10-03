@@ -15,11 +15,29 @@ DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node)
     return NULL;
 }
 
-static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx)
+static int node_prototype_kind(const os64_html_node_t *node)
+{
+    if (node->kind == OS64_HTML_DOCUMENT) return D_PROTO_DOCUMENT;
+    if (node->kind == OS64_HTML_FRAGMENT) return D_PROTO_FRAGMENT;
+    if (node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT)
+        return D_PROTO_CHARACTER_DATA;
+    if (node->kind != OS64_HTML_ELEMENT) return D_PROTO_NODE;
+    if (node->ns == OS64_HTML_NS_HTML) {
+        if (node->tag == OS64_HTML_TAG_INPUT) return D_PROTO_INPUT;
+        if (node->tag == OS64_HTML_TAG_TEXTAREA) return D_PROTO_TEXTAREA;
+        if (node->tag == OS64_HTML_TAG_SELECT) return D_PROTO_SELECT;
+        if (node->tag == OS64_HTML_TAG_BUTTON) return D_PROTO_BUTTON;
+    }
+    return D_PROTO_ELEMENT;
+}
+
+static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx,
+                                const os64_html_node_t *node)
 {
     DValue *entry = d_alloc(dom, sizeof(*entry));
     if (entry == NULL) { d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded"); return NULL; }
-    JSValue value = JS_NewObjectClass(ctx, dom->node_class);
+    JSValue value = JS_NewObjectProtoClass(ctx,
+        dom->prototypes[node_prototype_kind(node)]->value, dom->node_class);
     if (JS_IsException(value)) { d_free(dom, entry); return NULL; }
     entry->value = value;
     entry->next = dom->values;
@@ -45,7 +63,7 @@ JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
     if (node == NULL) return JS_NULL;
     DValue *entry = d_find(dom, node);
     if (entry != NULL) return JS_DupValue(ctx, entry->value);
-    entry = wrapper_prepare(dom, ctx);
+    entry = wrapper_prepare(dom, ctx, node);
     return entry != NULL ? wrapper_attach(dom, ctx, entry, node) : JS_EXCEPTION;
 }
 
@@ -320,7 +338,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         int deep = argc > 0 ? JS_ToBool(ctx, argv[0]) : 0;
         if (deep < 0) return JS_EXCEPTION;
         int64_t status;
-        DValue *entry = wrapper_prepare(dom, ctx);
+        DValue *entry = wrapper_prepare(dom, ctx, node);
         if (entry == NULL) return JS_EXCEPTION;
         os64_html_node_t *copy = os64_page_node_clone(dom->state, node, deep != 0, &status);
         if (copy != NULL) return wrapper_attach(dom, ctx, entry, copy);
@@ -372,9 +390,57 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
     return created != NULL ? d_wrap(dom, ctx, created) : d_html_error(ctx, status);
 }
 
-int d_node_install(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype)
+static unsigned property_prototypes(int magic)
+{
+    switch (magic) {
+    case D_CHILDREN: case D_CHILD_ELEMENT_COUNT: case D_FIRST_ELEMENT: case D_LAST_ELEMENT:
+        return (1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT) | (1u << D_PROTO_FRAGMENT);
+    case D_PREV_ELEMENT: case D_NEXT_ELEMENT:
+        return (1u << D_PROTO_ELEMENT) | (1u << D_PROTO_CHARACTER_DATA);
+    case D_TAG: case D_ID: case D_CLASS: case D_INNER_HTML: case D_OUTER_HTML:
+        return 1u << D_PROTO_ELEMENT;
+    case D_DOCUMENT_ELEMENT: case D_HEAD: case D_BODY:
+        return 1u << D_PROTO_DOCUMENT;
+    case D_DATA:
+        return 1u << D_PROTO_CHARACTER_DATA;
+    case D_VALUE:
+        return (1u << D_PROTO_INPUT) | (1u << D_PROTO_TEXTAREA) |
+            (1u << D_PROTO_SELECT) | (1u << D_PROTO_BUTTON);
+    case D_CHECKED:
+        return 1u << D_PROTO_INPUT;
+    case D_SELECTED_INDEX:
+        return 1u << D_PROTO_SELECT;
+    default:
+        return 1u << D_PROTO_NODE;
+    }
+}
+
+static unsigned method_prototypes(int magic)
+{
+    switch (magic) {
+    case D_GET_ID: return (1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_FRAGMENT);
+    case D_GET_TAG: return (1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT);
+    case D_CREATE_ELEMENT: case D_CREATE_TEXT: case D_CREATE_COMMENT: case D_CREATE_FRAGMENT:
+        return 1u << D_PROTO_DOCUMENT;
+    case D_GET_ATTR: case D_SET_ATTR: case D_REMOVE_ATTR: case D_HAS_ATTR:
+        return 1u << D_PROTO_ELEMENT;
+    default: return 1u << D_PROTO_NODE;
+    }
+}
+
+int d_node_install(os64_dom_t *dom, JSContext *ctx)
 {
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return -1;
+    // Kind prototypes inherit Node; HTML control prototypes inherit Element.
+    // The registry retains these engine values through the same drain as wrappers.
+    for (int kind = 0; kind < D_PROTO_COUNT; kind++) {
+        int parent = kind >= D_PROTO_INPUT ? D_PROTO_ELEMENT : D_PROTO_NODE;
+        JSValue value = kind == D_PROTO_NODE ? JS_NewObject(ctx) :
+            JS_NewObjectProto(ctx, dom->prototypes[parent]->value);
+        if (JS_IsException(value)) return -1;
+        dom->prototypes[kind] = d_retain(dom, ctx, value);
+        if (dom->prototypes[kind] == NULL) return -1;
+    }
     static const struct { const char *name; int magic; bool writable; } properties[] = {
         {"parentNode", D_PARENT, false}, {"parentElement", D_PARENT_ELEMENT, false},
         {"firstChild", D_FIRST, false}, {"lastChild", D_LAST, false},
@@ -400,10 +466,15 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype)
         {"removeAttribute", D_REMOVE_ATTR, 1}, {"hasAttribute", D_HAS_ATTR, 1},
         {"hasChildNodes", D_HAS_CHILDREN, 0}
     };
-    for (size_t i = 0; i < sizeof(properties) / sizeof(properties[0]); i++)
-        if (d_accessor(dom, ctx, prototype, properties[i].name, property,
-                       properties[i].magic, properties[i].writable) < 0) return -1;
-    for (size_t i = 0; i < sizeof(methods) / sizeof(methods[0]); i++)
-        if (d_method(dom, ctx, prototype, methods[i].name, method, methods[i].argc, methods[i].magic) < 0) return -1;
+    for (int kind = 0; kind < D_PROTO_COUNT; kind++) {
+        JSValueConst prototype = dom->prototypes[kind]->value;
+        for (size_t i = 0; i < sizeof(properties) / sizeof(properties[0]); i++)
+            if ((property_prototypes(properties[i].magic) & (1u << kind)) != 0 &&
+                d_accessor(dom, ctx, prototype, properties[i].name, property,
+                           properties[i].magic, properties[i].writable) < 0) return -1;
+        for (size_t i = 0; i < sizeof(methods) / sizeof(methods[0]); i++)
+            if ((method_prototypes(methods[i].magic) & (1u << kind)) != 0 &&
+                d_method(dom, ctx, prototype, methods[i].name, method, methods[i].argc, methods[i].magic) < 0) return -1;
+    }
     return 0;
 }
