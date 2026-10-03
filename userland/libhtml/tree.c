@@ -776,7 +776,8 @@ static void reset_mode(os64_html_parser_t *p)
     for (size_t i = p->stack.n; i; i--) {
         if (!h_work(p, 1))
             return;
-        HNode *n = p->stack.v[i - 1];
+        const HNode *n = i == 1 && p->fragment_context ? p->fragment_context
+                                                       : p->stack.v[i - 1];
         if (n->ns != HTML)
             continue;
 
@@ -795,7 +796,7 @@ static void reset_mode(os64_html_parser_t *p)
             }
             return;
         }
-        if (named_in(n, "td th")) {
+        if (named_in(n, "td th") && i != 1) {
             p->mode = M_CELL;
             return;
         }
@@ -823,7 +824,7 @@ static void reset_mode(os64_html_parser_t *p)
             p->mode = p->templates_n ? p->templates[p->templates_n - 1] : M_TEMPLATE;
             return;
         }
-        if (named(n, "head")) {
+        if (named(n, "head") && i != 1) {
             p->mode = M_HEAD;
             return;
         }
@@ -841,6 +842,13 @@ static void reset_mode(os64_html_parser_t *p)
         }
     }
     p->mode = M_BODY;
+}
+void h_fragment_start(os64_html_parser_t *p)
+{
+    const HNode *c = p->fragment_context;
+    if (named(c, "template"))
+        push_template(p, M_TEMPLATE);
+    reset_mode(p);
 }
 /* A script is whole: where a host that runs scripts gets its turn (html.h,
  * THE PARSE THAT STOPS). One inside a template's contents is in a document
@@ -2179,6 +2187,10 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
             return body(p, t);
 
         if (end(t, "html")) {
+            if (p->fragment_context) {
+                h_error(p, "unexpected-end-tag");
+                return false;
+            }
             p->mode = M_AFTER_AFTER_BODY;
             return false;
         }
@@ -2215,7 +2227,7 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
                 return false;
             }
             pop(p);
-            if (!named(h_current(p), "frameset"))
+            if (!p->fragment_context && !named(h_current(p), "frameset"))
                 p->mode = M_AFTER_FRAMESET;
             return false;
         }
@@ -2358,9 +2370,9 @@ static bool foreign(os64_html_parser_t *p, HToken *t)
                     break;
                 pop(p);
             }
-            return true;
+            return p->fragment_context && p->stack.n == 1 ? process(p, t, p->mode) : true;
         }
-        HNode *made = element(p, t, h_current(p)->ns, !t->self_closing);
+        HNode *made = element(p, t, h_adjusted_current(p)->ns, !t->self_closing);
         if (t->self_closing) {
             t->acknowledged = true;
             if (made && made->ns == SVG && h_eq(made->name, "script"))
@@ -2391,6 +2403,10 @@ static bool foreign(os64_html_parser_t *p, HToken *t)
             if (!h_work(p, 1 + t->name.len))
                 return false;
             HNode *n = p->stack.v[i - 1];
+            /* The fragment's HTML scaffold remains on the open stack even
+             * when an end tag matches it while the context is foreign. */
+            if (p->fragment_context && i == 1)
+                return false;
 
             if (ascii_ci_equal(n->name, t->name.s)) {
                 bool current = i == p->stack.n;
@@ -2418,7 +2434,7 @@ void h_tree(os64_html_parser_t *p, HToken *t)
         if (!h_work(p, 1))
             return;
 
-        HNode *n = h_current(p);
+        HNode *n = h_adjusted_current(p);
 
         bool html = !p->stack.n || n->ns == HTML || t->type == H_END_INPUT;
 

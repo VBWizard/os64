@@ -736,7 +736,7 @@ void h_tokenize(os64_html_parser_t *p, uint32_t c)
                 begin_token(p, H_DOCTYPE);
                 p->state = T_DOCTYPE;
             } else if (cdata && n == 7) {
-                if (!p->token_sink && h_current(p)->ns != OS64_HTML_NS_HTML)
+                if (!p->token_sink && h_adjusted_current(p)->ns != OS64_HTML_NS_HTML)
                     p->state = T_CDATA;
                 else {
                     h_error(p, "cdata-in-html-content");

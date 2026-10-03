@@ -9,11 +9,13 @@
  * `stamp` is a version of the document. On a live block, which sits on the
  * document's `blocks` list, it is the version the block was made at; on a
  * retired one, which sits on `retired`, the version of the change that
- * replaced it. The word also keeps the payload 16-byte aligned. */
+ * replaced it. The node tag identifies individually reclaimable fragment
+ * bodies; padding keeps payloads 16-byte aligned. */
 struct HBlock {
     HBlock *prev, *next;
     size_t size;
     uint64_t stamp;
+    uint64_t node, padding;
 };
 static const char *const tag_names[] = {
 #include "tags.inc"
@@ -108,6 +110,7 @@ void *d_alloc(HDoc *d, size_t size, int64_t *why)
     }
     b->size = sizeof(*b) + size;
     b->stamp = d->version;
+    b->node = b->padding = 0;
     b->prev = NULL;
     b->next = d->blocks;
     if (b->next)
@@ -120,6 +123,33 @@ void *d_alloc(HDoc *d, size_t size, int64_t *why)
     for (size_t i = 0; i < size; i++)
         out[i] = 0;
     return out;
+}
+void *d_node_alloc(HDoc *d, size_t size, int64_t *why)
+{
+    void *out = d_alloc(d, size, why);
+    if (out)
+        ((HBlock *)out - 1)->node = 1;
+    return out;
+}
+/* Publish the complete staged ledger without allocating. */
+void d_transfer_blocks(HDoc *to, HDoc *from)
+{
+    HBlock *tail = from->blocks;
+    if (!tail)
+        return;
+    for (HBlock *b = tail; b; b = b->next) {
+        b->stamp = to->version;
+        tail = b;
+    }
+    tail->next = to->blocks;
+    if (to->blocks)
+        to->blocks->prev = tail;
+    to->blocks = from->blocks;
+    from->blocks = NULL;
+    to->pub.arena_bytes += from->pub.arena_bytes - sizeof(*from);
+    to->pub.node_count += from->pub.node_count;
+    to->records += from->records;
+    from->pub.arena_bytes = sizeof(*from);
 }
 void *h_alloc(os64_html_parser_t *p, size_t size)
 {
@@ -441,11 +471,14 @@ HNode *h_current(os64_html_parser_t *p)
 }
 HNode *h_node(os64_html_parser_t *p, os64_html_node_kind_t kind)
 {
-    /* The public node, then its private word (internal.h, h_word). */
-    HNode *n = h_permanent(p, sizeof(*n) + sizeof(size_t));
+    /* Fragment staging adds a temporary allocation ordinal for deterministic
+     * form-owner remapping. Ordinary document nodes keep one private word. */
+    HNode *n = h_permanent(p, sizeof(*n) + sizeof(size_t) * (p->fragment_context ? 2 : 1));
     if (n) {
         n->kind = kind;
         n->document_id = p->d->id;
+        if (p->fragment_context)
+            *(h_word(n) + 1) = p->d->pub.node_count;
         p->d->pub.node_count++;
     }
     return n;

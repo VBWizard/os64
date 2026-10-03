@@ -174,8 +174,8 @@ verb and turn a status into an exception.
 | `replace(doc, parent, node, old)` | one validity check for the pair, then both moves |
 | `set_attr(doc, element, name, value)`, `remove_attr` | first-wins order is kept: a set on an existing name replaces its value in place in the list |
 | `set_text(doc, node, utf8, len)` | replaces a text or comment node's data whole |
-| `parse_fragment(doc, context, utf8, len, limits)` | the standard's fragment algorithm, into a detached fragment |
-| `serialize(node, children_only, out, cap)` | the standard's serialisation, in `snprintf`'s shape |
+| `parse_fragment(doc, context, utf8, len, scripting)` | the standard's fragment algorithm, into a detached fragment, with the page's `noscript` policy |
+| `serialize(node, children_only, scripting, out, cap)` | the standard's serialisation, in `snprintf`'s shape, with the same `noscript` policy |
 
 The DOM's finer text operations (`appendData`, `insertData`, `splitText`)
 are built by the binding as "make the new string, call `set_text`". A
@@ -324,8 +324,9 @@ bit, and stays wend's mode. On:
 named two families out of scope: the cases marked `#script-on` and the
 cases with a `#document-fragment` line. D2a takes the first off the list
 and D2b the second. The acceptance bar is the one the parser already met:
-every newly in-scope case passes, whole, byte at a time and in random
-chunks.
+every newly in-scope case passes. D2a's document input runs whole, byte at
+a time and in random chunks; D2b's fragment input is one UTF-8 string,
+parsed whole, as `innerHTML` receives it.
 
 Which scripts run, and when, is not the parser's business. The standard's
 "prepare the script element" steps (type, `nomodule`, `defer`, `async`, a
@@ -706,7 +707,7 @@ builder decides, and the proof in this house's shape.
 |---|---|---|
 | D1 | **Built.** libhtml's mutation core and the verbs but `parse_fragment` | `tools/test_html_dom_host.sh`, under ASan and UBSan: § D1, as built |
 | D2a | **Built.** Scripting-enabled parsing: stop and resume, the end of the input, abandon, the tree read and changed between calls | A parser abandoned at every stop leaves a document that walks and frees; the `#script-on` cases un-skipped and passing, whole and chunked; a stop at every script of each corpus page: § D2a, as built |
-| D2b | Fragment parsing and serialisation | The `#document-fragment` cases un-skipped and passing, whole and chunked |
+| D2b | **Built; review pending.** Fragment parsing and serialisation | All 192 fragment fixtures, contextual serialisation, transactional allocation/work cuts and bounded-buffer proof; § D2b, as built |
 | D3 | **Built; review pending.** `os64_page_rebuild`, pinned models, the `STALE` gate, shared node state and script property APIs | `tools/test_libpage_rebuild.inc`: detach/reinsert, never-inserted state, value modes, option identity, current-type sanitization, person/script origin, pins, transactional allocation sweeps and independent random walks; § D3, as built |
 | D4 | The stream: yonder parses on its own thread. No script | yonder's and libway's harnesses unchanged in result; the guest walk that proved Y3, its server log identical; the window live through a stalled body |
 | D5 | The binding library and J3's fixture | A script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
@@ -879,6 +880,147 @@ when no control can have one.
 a server sends, which is what CLAUDE.md says an outside round is for.
 They get one, requested by Chris's hand as always. The rest is reviewed
 here.
+
+### D2b, as built
+
+`userland/libhtml/fragment.c` and `serialize.c` add the two verbs in
+`html.h`: `os64_html_parse_fragment(doc, context, utf8, len, scripting,
+status)` and `os64_html_serialize(node, children_only, scripting, out,
+cap)`. D2b needs D2a's parser machinery; its PR is stacked on D3 at
+Chris's request. D3's state API is not a prerequisite of fragment parsing.
+
+**Parsing is contextual and inert.** An owned element supplies the
+namespace, tokenizer state, insertion mode, integration-point attributes
+and nearest ancestor form. The input is one UTF-8 string, without sniffing,
+BOM removal or a charset restart. Invalid UTF-8 becomes U+FFFD. NUL follows
+the tokenizer and tree rules: ordinary HTML text drops it, while raw-text,
+RCDATA, attributes, comments and foreign text replace it with U+FFFD.
+Scripts become nodes and never stop the parse; `scripting` selects the
+`noscript` branch. The result is a detached fragment with no change to the
+visible tree, document version, landmarks, existing form-owner records, pin table
+or original parse outcome. Associations between nodes in the detached
+result add their own records. Inserting its children is a separate verb and
+checks their depth in the destination tree.
+
+**Publication is transactional.** The existing parser builds under an
+isolated document ledger, with the destination's owner mark, quirks and
+depth limit. A second staged ledger receives the reachable result; only
+after parsing, copying and depth checks succeed are its blocks published
+to the destination. Refusals discard both ledgers and preserve the
+destination's live accounting. Temporary parse storage and the staged copy
+both count against the destination's remaining arena while they coexist;
+a near-budget parse can therefore refuse even when its final tree alone
+would fit. Parser work is bounded by saturating `4096 + 256 * len`,
+including context setup and the final walks. The private `h_parse_fragment`
+entry point accepts a budget and reports consumption for the work-cut
+proof; it is not a public override.
+
+**D6 has an ownership seam.** Returned node bodies, names and original
+attributes are packed into individually owned ledger blocks; text buffers
+have their own blocks. Inline attributes and names are copied when a clone
+would otherwise share reclaimable storage. Parser scaffolding, ignored
+tokens and temporary payload chunks are discarded, rather than charged
+permanently for each replacement. Collection remains D6's task: detached
+result nodes stay alive until document teardown under the current contract.
+
+**Serialisation allocates nothing.** `children_only` selects inner or outer
+markup, templates use their contents, HTML void elements omit their end
+tags and foreign names retain their spelling. Text under HTML raw-text
+elements is literal; `noscript` uses the supplied scripting mode. Other
+text escapes ampersand, NBSP and angle brackets; attributes also escape
+quotes. The current [HTML serialization algorithm](https://html.spec.whatwg.org/multipage/parsing.html#serialising-html-fragments)
+escapes angle brackets in attributes too: the brief's earlier escaping
+table was outdated. Output capacity includes the NUL, a zero capacity
+writes nothing, and the return value is the full byte length. A truncated
+output is a byte prefix and can end inside a UTF-8 sequence; a complete
+output is UTF-8. Length overflow saturates at `SIZE_MAX`.
+
+The standard does not promise arbitrary parse/serialize round trips.
+Initial linefeeds, raw-text delimiters and tree repair can change the
+result; the maintained tests name their exclusions rather than treating
+all fragments as a reversible encoding.
+
+**Compatibility boundary.** This slice retains D2a's document parsing and
+the approved historical corpus. Current customizable-select parsing is
+different: in a `select` context, `<div>x<option>a<option>b` loses its
+`div` wrapper here, while Chrome retains it. Adopting the current
+[in-body select rules](https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inbody)
+also changes document parsing and its oracle; that migration remains
+compatibility work in DEBTS.md. Passing the pinned fixtures is not a claim
+of full current-browser equivalence.
+
+**Proof, 2026-10-03.** The final source passes ASan, UBSan and LSan with
+leak inspection enabled:
+
+- `tools/test_html_fragment_host.sh`: 326 focused checks; the full
+  `tools/test_html_host.sh` run passes 1,218 checks and 10,525 reference
+  runs. The 8,796 selected fixtures include all 192 fragment fixtures in
+  both scripting modes; only four XML-output-coercion fixtures remain
+  skipped. Fixture bytes and expected trees were not changed.
+- Fragment failure injection visits 5,270 allocation failures and 21,504
+  work cuts. Document safety retains its 91,621 allocation-failure and
+  662,498 prefix/chunk checks. The 30-second mutation run completes
+  134,912 mutations with document and fragment arms and varied limits.
+- `tools/test_html_fragment_mutants.py`: 29 selected, 29 compiled, 29
+  caught. These cover escaping, raw text, inner/outer output, void and
+  template traversal, context states and insertion modes, foreign-root
+  preservation, ancestor forms, inert scripts and unchanged version.
+- Round trips pass for 188 of the 192 fragment fixtures in both modes
+  (376 checks). The eight excluded mode runs are four named fixtures:
+  `foreign-fragment.dat:50` introduces `plaintext`, which absorbs closing
+  markup on reparse; `tests4.dat:3`, `:4` and `:8` have style, plaintext
+  and script contexts whose returned fragment text has a non-raw parent.
+  [The coverage record](../../../tools/test_html_fragment_roundtrips.json)
+  names each fixture and reason. An independent unfiltered pass reproduced
+  precisely those eight non-round-tripping runs.
+- The DOM suite passes 363,628 checks, page 196,571, wend 177,854, way
+  226, way-fetch 21, flow 18,585 and Yonder 115; garb also passes. Flow's
+  twelve dumps and Yonder's six paint snapshots match. These consumer
+  checks are not a new full flow fuzz or visual P5 acceptance run.
+
+Independent Chrome spot checks match all six document serialization
+examples. Context `innerHTML` after inserting a parsed fragment matches
+seven of eight SVG, MathML, table, textarea, script and select examples;
+the select difference is the boundary above. Compare context children
+after insertion: detached text under a fragment escapes markup even when
+its parse context was `script`, whereas script-parent text serializes raw.
+The document CLI comparison normalizes Windows CRLF and Chrome's added
+newline after the doctype, without normalizing DOM text.
+
+The proof caught an address-dependent work count in an early staging map;
+temporary node ordinals make mapping deterministic. A final audit also
+caught foreign `</html>` popping the fragment scaffold and losing following
+nodes; the standard's sentinel guard and focused SVG/MathML cases cover it.
+The detached-form fuzz failure was a test oracle counting only visible
+owners, corrected while retaining strict detached-tree invariants. The
+fuzz controls now use high PRNG bits so document scripting is actually
+varied. These are separate receipts, not suppressed failed runs.
+
+**Cost.** Eleven alternating unsanitized `-O2` Wikipedia pairs against D3
+have medians 22.899 ms before and 23.991 ms after (+4.77% on this host),
+with identical tree, diagnostics, work (1,210,567) and node count (15,470).
+Peak arena rises from 4,255,504 to 4,377,480 bytes (+121,976, 2.87%): ledger
+headers gain a node tag/alignment padding and the parser gains its context
+pointer. These timings establish no P5 performance claim. The adjusted
+current-node helper is inline so ordinary document dispatch avoids an
+additional wrapper call.
+
+**Native acceptance.** The strict root build produces the library,
+consumers, disk image and ISO. `readelf` shows only `libos64.so` as a
+dependency and both new public exports; private staging helpers stay
+hidden. The private QEMU run on port 55579 passes `/tests/htmltest`,
+including child replacement, escaping, table/foreign contexts, capped
+output and heap verification. It returns `0x48640000`; the guest library
+matches the built library byte for byte (SHA-256
+`5616e62aa672f409c69f0e4fc9cf46628d535f889f1fa71c01fb6713736de9d2`).
+The VM is stopped. There is no independent P5 or browser scripting run.
+
+**Review handoff.** Read the public contract in `html.h`, this section and
+the allocation/attribute changes alongside the parser and serializer.
+D6 must reclaim packed node payloads, text and later private attributes;
+clones must not retain pointers into a reclaimed source. D5 consumes the
+verbs; D3's state API remains independent. Chris schedules the reviews
+after publication; this slice is built and awaiting review, not merged.
 
 ### D3, as built
 

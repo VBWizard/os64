@@ -26,7 +26,7 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    userland/libpage/number.c userland/libpage/range.c userland/libpage/upstream/ryu/ryu/d2s.c \
    userland/libpage/submit.c userland/libpage/encode.c userland/libpage/refresh.c userland/libpage/activate.c \
    userland/libhtml/core.c userland/libhtml/encoding.c userland/libhtml/tokenizer.c \
-   userland/libhtml/tree.c userland/libhtml/dom.c \
+   userland/libhtml/tree.c userland/libhtml/dom.c userland/libhtml/fragment.c userland/libhtml/serialize.c \
    userland/libos64/str.c userland/libos64/bidi.c userland/libos64/url.c userland/libos64/fmt.c \
    -o "$work/libpage_driver"
 

@@ -238,6 +238,77 @@ static void stops(void)
     os64_html_document_free(doc);
     require(os64_heap_verify() == 0, "heap after stops");
 }
+/* Fragment nodes are built off the visible tree, then inserted by the same
+ * verbs the binding uses. This also exercises both exports on the guest heap. */
+static void fragments(void)
+{
+    os64_html_document_t *doc = parsed("<body><div id=target>old</div><table id=table></table>");
+    os64_html_node_t *target = with_id(doc->document, "target");
+    os64_html_node_t *table = with_id(doc->document, "table");
+    require(target && table, "fragment fixture");
+    static const char markup[] = "<b title='&quot;&amp;&lt;&gt;'>new &amp; \xc2\xa0</b>"
+                                 "<script>let n=1</script><template><i>kept</i></template>";
+    static const char expected[] = "<b title=\"&quot;&amp;&lt;&gt;\">new &amp; &nbsp;</b>"
+                                   "<script>let n=1</script><template><i>kept</i></template>";
+    uint64_t version = os64_html_version(doc);
+    os64_html_pin_t pin = os64_html_pin(doc);
+    int64_t status = -1;
+    os64_html_node_t *fragment = os64_html_parse_fragment(doc, target, markup,
+                                                        sizeof(markup) - 1, true, &status);
+    require(fragment && status == OS64_HTML_OK && fragment->kind == OS64_HTML_FRAGMENT &&
+                !fragment->parent && os64_html_version(doc) == version && !doc->refusal &&
+                os64_streq(target->first_child->text, "old"),
+            "fragment parse preserves the pinned live tree and does not stop");
+    size_t length = os64_html_serialize(fragment, true, true, NULL, 0);
+    require(length == sizeof(expected) - 1, "serialize size without output");
+    char *output = os64_malloc(length + 1);
+    require(output && os64_html_serialize(fragment, true, true, output, length + 1) == length &&
+                os64_streq(output, expected),
+            "fragment attribute escaping, raw script and template output");
+    char short_output[2] = {'x', 'x'};
+    require(os64_html_serialize(fragment, true, true, short_output, sizeof(short_output)) == length &&
+                short_output[0] == '<' && short_output[1] == 0,
+            "serialize truncation reports the full size and terminates");
+    while (target->first_child)
+        require(os64_html_remove(doc, target->first_child) == OS64_HTML_OK, "replace old children");
+    require(os64_html_insert(doc, target, fragment, NULL) == OS64_HTML_OK &&
+                !fragment->first_child && os64_html_version(doc) > version &&
+                os64_html_serialize(target, true, true, output, length + 1) == length &&
+                os64_streq(output, expected),
+            "innerHTML-shaped replacement and readback");
+    os64_html_unpin(doc, pin);
+    os64_free(output);
+
+    static const char row[] = "<tr><td>cell</td></tr>";
+    fragment = os64_html_parse_fragment(doc, table, row, sizeof(row) - 1, false, &status);
+    char table_output[64];
+    require(fragment && status == OS64_HTML_OK &&
+                os64_html_serialize(fragment, true, false, table_output, sizeof(table_output)) ==
+                    sizeof("<tbody><tr><td>cell</td></tr></tbody>") - 1 &&
+                os64_streq(table_output, "<tbody><tr><td>cell</td></tr></tbody>"),
+            "table context inserts tbody");
+    os64_html_node_t *svg = os64_html_create_element(doc, OS64_HTML_NS_SVG, "svg", &status);
+    static const char foreign[] = "</html><circle/>";
+    version = os64_html_version(doc);
+    fragment = os64_html_parse_fragment(doc, svg, foreign, sizeof(foreign) - 1, false, &status);
+    require(svg && fragment && status == OS64_HTML_OK && fragment->first_child &&
+                fragment->first_child->ns == OS64_HTML_NS_SVG &&
+                os64_html_serialize(fragment, true, false, table_output, sizeof(table_output)) ==
+                    sizeof("<circle></circle>") - 1 &&
+                os64_streq(table_output, "<circle></circle>") &&
+                os64_html_version(doc) == version,
+            "foreign end tag preserves the fragment root and following nodes");
+    os64_html_document_t *other = parsed("<body>other");
+    version = os64_html_version(doc);
+    require(!os64_html_parse_fragment(doc, other->body, "x", 1, false, &status) &&
+                status == OS64_HTML_BAD_ARGUMENT && !doc->refusal &&
+                os64_html_version(doc) == version,
+            "foreign fragment context refused without changing the tree");
+    os64_html_document_free(other);
+    os64_html_document_free(doc);
+    require(os64_heap_verify() == 0, "heap after fragments and serialisation");
+    os64_printf("htmltest: fragments and serialisation PASS\n");
+}
 int main(int argc, char **argv)
 {
     if (argc > 1 && os64_streq(argv[1], "pinned")) {
@@ -281,6 +352,7 @@ int main(int argc, char **argv)
     form_owners();
     verbs();
     stops();
+    fragments();
     os64_html_options_t options = os64_html_options_default();
     options.max_depth = 3;
     os64_html_parser_t *p = os64_html_parser_new(&options);
@@ -295,6 +367,6 @@ int main(int argc, char **argv)
     os64_html_parser_destroy(p);
     require(os64_heap_verify() == 0, "heap after free/cancel");
     os64_printf(
-        "htmltest: PASS (streaming, tree repair, UTF-8, namespaces, templates, form owners, verbs, stops, bounds, heap)\n");
+        "htmltest: PASS (streaming, tree repair, UTF-8, namespaces, templates, form owners, verbs, stops, fragments, serialisation, bounds, heap)\n");
     return HTMLTEST_OK;
 }

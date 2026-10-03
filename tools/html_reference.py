@@ -61,8 +61,7 @@ def inventory():
     for case in cases():
         counts = files.setdefault(case['file'], {'total': 0, 'run': 0, 'skip': {}})
         counts['total'] += 1
-        reason = ('xml-output-coercion' if case.get('group') == 'xmlViolationTests' else
-                  'fragment-parsing' if case.get('fragment') is not None else None)
+        reason = 'xml-output-coercion' if case.get('group') == 'xmlViolationTests' else None
         if reason:
             counts['skip'][reason] = counts['skip'].get(reason, 0) + 1
             skips.append(identity(case) + '\t' + reason)

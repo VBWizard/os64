@@ -305,6 +305,37 @@ int64_t os64_html_remove_attr(os64_html_document_t *doc, os64_html_node_t *eleme
 int64_t os64_html_set_text(os64_html_document_t *doc, os64_html_node_t *node, const char *utf8,
                            size_t len);
 
+/* Parse a complete UTF-8 string in an owned ELEMENT context. The returned
+ * FRAGMENT is detached and owned by doc; script elements never stop or run.
+ * scripting selects noscript's policy. There is no sniffing, BOM stripping,
+ * or meta charset interpretation. Invalid UTF-8 becomes U+FFFD. NUL follows
+ * tokenizer/tree state: ordinary HTML text drops it; raw text, RCDATA,
+ * attributes, comments and foreign text replace it.
+ * Work is capped at saturating (4096 + 256 * len), including context ancestry
+ * and result copying. Depth uses doc's limit from the detached fragment root;
+ * insertion rechecks depth from the destination tree. Temporary parsing and
+ * final copying both charge doc's remaining arena, so peak storage includes
+ * both until commit. Status is OK, BAD_ARGUMENT, NO_MEMORY, ARENA_EXHAUSTED,
+ * TOO_DEEP or WORK_EXHAUSTED. On failure all doc accounting and state remain
+ * unchanged; on success only allocation counts/peak and owned storage change.
+ * Tree version, parse refusal/work/errors, landmarks and pins do not change.
+ * Calls on one document must be serialized with its other operations. */
+os64_html_node_t *os64_html_parse_fragment(os64_html_document_t *doc,
+                                           const os64_html_node_t *context,
+                                           const char *utf8, size_t len,
+                                           bool scripting, int64_t *status);
+/* innerHTML when children_only, outerHTML otherwise; document and fragment
+ * nodes have no wrapper. HTML template contents are traversed and HTML void
+ * elements have no children/end tag in output. Text escapes &, NBSP, <, >
+ * except in HTML raw-text parents (including noscript when scripting); attrs
+ * also escape double quotes. Names retain namespace-qualified spelling.
+ * Allocation-free. Returns total bytes excluding NUL (saturates at SIZE_MAX),
+ * writes a byte prefix of at most cap-1 and NUL when out != NULL and cap > 0.
+ * cap == 0 writes nothing; truncation may split UTF-8. NULL node is empty.
+ * Serialize calls with mutations of the node's document. */
+size_t os64_html_serialize(const os64_html_node_t *node, bool children_only,
+                           bool scripting, char *out, size_t cap);
+
 #pragma GCC visibility pop
 
 #endif

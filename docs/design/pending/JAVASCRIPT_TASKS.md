@@ -35,7 +35,7 @@ independent review.
 | D0 DOM design | **Merged** | Reviewed [DOM.md](DOM.md), delivered with [PR #190](https://github.com/VBWizard/os64/pull/190). Design completion is separate from browser scripting implementation. |
 | D1 libhtml mutation core | **Merged** | [PR #190](https://github.com/VBWizard/os64/pull/190), merge `5c7d62ce`. Mutation/lifetime verbs and maintained tests; `parse_fragment` belongs to D2b. |
 | D2a scripting-enabled parsing | **Merged** | [PR #199](https://github.com/VBWizard/os64/pull/199), merge `8016dd43`: stop/resume, the end of the input, abandon, and a tree read and changed between calls; evidence in DOM.md § D2a, as built. |
-| D2b fragment parsing | **Pending** | Fragment parsing and serialization; acceptance in DOM.md. |
+| D2b fragment parsing | **Built; review pending** | `codex/dom-d2b`, stacked on D3 by request: transactional contextual parsing and allocation-free serialization. All 192 fragment fixtures and failure/mutation proof pass; evidence, compatibility boundary and D6 storage handoff in DOM.md § D2b, as built. |
 | D3 page rebuild/control state | **In review** | [PR #211](https://github.com/VBWizard/os64/pull/211), `codex/dom-d3`: shared node state, pinned models, STALE gates, script property APIs and transactional rebuilds. Evidence and D5/D6 handoffs in DOM.md § D3, as built; Fable reviews before merge. |
 | D4 parser stream handoff | **Pending** | Yonder parser-thread handoff and responsive streaming; no script execution in this slice. |
 | D5 DOM binding/first page fixture | **Pending** | Bindings and J3: visible text change, stable references/form edits and safe navigation teardown. Needs the runtime and earlier DOM slices. |
@@ -99,7 +99,7 @@ Next steps:
 | V1 | Quinn implements the consumer suite; another reviewer accepts the independent gate | Consumer-level validation of capability boundaries, failure behaviour, and fixture coverage. | Based on merged M1/R2/C1; owns tools/js_acceptance and tools/test_js_acceptance_host.sh. R2's fixture files remain separate. |
 | I1 | Runtime owner as integration coordinator | Shared build/image registration, final dependency checks, combined strict build and QEMU evidence. | M1, R2, C1, and V1 evidence. |
 | D0 | Fable | DOM.md covering mutable libhtml, document/wrapper lifetime, retired storage, parser handoff, and browser event scheduling. | This design and the existing browser libraries. Design runs alongside M1/R1; reviewed completion gates J3, not the runner. |
-| D1–D7 | Per [DOM_BRIEFS.md](DOM_BRIEFS.md): D2b and D6 Opus, D3 and D5 Quinn, D4 and D7 Fable; Fable reviews each | Mutable-document, parser, presentation, bindings and event-loop slices defined in DOM.md. | D0; detailed dependencies and acceptance belong to DOM.md, the builder's brief to DOM_BRIEFS.md. D1 and D2a are merged; later slices remain separate from the standalone milestone. |
+| D1–D7 | Per [DOM_BRIEFS.md](DOM_BRIEFS.md): D2b and D3 Quinn with scoped subagents, D6 Opus, D5 Quinn, D4 and D7 Fable; Fable reviews each | Mutable-document, parser, presentation, bindings and event-loop slices defined in DOM.md. | D0; detailed dependencies and acceptance belong to DOM.md, the builder's brief to DOM_BRIEFS.md. D1 and D2a are merged; later slices remain separate from the standalone milestone. |
 
 The runtime owner is the coordinating implementer working with Chris in this
 thread. Review of a packet is separate from ownership of its implementation.

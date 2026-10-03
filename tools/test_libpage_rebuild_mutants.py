@@ -53,7 +53,7 @@ def compile_driver(lib, output):
                 ["core.c", "state.c", "resolve.c", "value.c", "number.c", "range.c",
                  "upstream/ryu/ryu/d2s.c", "submit.c", "encode.c", "refresh.c", "activate.c"]]
     sources += [ROOT / "userland/libhtml" / name for name in
-                ["core.c", "encoding.c", "tokenizer.c", "tree.c", "dom.c"]]
+                ["core.c", "encoding.c", "tokenizer.c", "tree.c", "dom.c", "fragment.c", "serialize.c"]]
     sources += [ROOT / "userland/libos64" / name for name in
                 ["str.c", "bidi.c", "url.c", "fmt.c"]]
     command = ["cc", "-std=c11", "-g", "-O1", "-Wall", "-Wextra", "-Werror",

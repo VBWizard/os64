@@ -369,11 +369,17 @@ how a worklist fills with things nobody intends to do.
 | **A page whose only redirect is a SCRIPT is still a blank page.** DuckDuckGo's click logger offers both — `window.parent.location.replace(...)` for a browser that runs script and a `meta` refresh in `noscript` for one that does not — and family K reaches the second. A site that offers only the first cannot be followed, and what a reader sees is an accurate sentence about a page with nothing in it. That is JavaScript's row, not this library's: LIBPAGE.md ruling 2 puts it after the graphical browser, and nothing in family K makes that day worse | Feature | L | JavaScript, per LIBPAGE.md ruling 2 | LIBPAGE.md § K |
 | **Cookie storage and referrer policy belong to the navigator.** libfetch provides the per-hop wire hooks; libpage does not own session state | Feature | M | the first site that needs a session | LIBFETCH.md § Booked |
 
+## HTML parsing compatibility
+
+| Debt | Class | Size | Trigger | Where |
+|---|---|---|---|---|
+| **libhtml retains the historical select insertion rules.** In a select fragment, `<div>x<option>a<option>b` drops the div wrapper; current WHATWG customizable-select parsing and Chrome preserve it. D2b keeps D2a document behavior and the pinned reference corpus unchanged. Migrating the document and fragment rules together needs current reference expectations and consumer validation | Compatibility | M | a page needs modern select content, or the approved corpus is migrated | `userland/libhtml/tree.c` (`reset_mode`, `M_SELECT`); LIBHTML.md § Proof; DOM.md § D2b, as built |
+
 ## Browser document lifetime
 
 | Debt | Class | Size | Trigger | Where |
 |---|---|---|---|---|
-| **libhtml keeps a detached node until its document is freed.** A removed node is unlinked and stays charged to the document's arena, so a script that makes and drops nodes spends the budget and then gets `OS64_HTML_ARENA_EXHAUSTED` as an exception. Reclaiming an unheld subtree is D6: wrappers, parser references, model node references and D3's persistent state keys (including options and default caches) need holds and paired releases. Model pins protect snapshot bytes; state itself takes no pin. Fragment payloads and scaffolding must also be reclaimable for D6's flat-arena churn proof | Capacity | M | before scripting is something a person is told to turn on (DOM.md § Wrappers) | `userland/libhtml/dom.c`; DOM_BRIEFS.md § D6; DOM.md § Slices, D6 |
+| **libhtml keeps a detached node until its document is freed.** A removed node is unlinked and stays charged to the document's arena, so a script that makes and drops nodes spends the budget and then gets `OS64_HTML_ARENA_EXHAUSTED` as an exception. Reclaiming an unheld subtree is D6: wrappers, parser references, model node references and D3's persistent state keys (including options and default caches) need holds and paired releases. Model pins protect snapshot bytes; state itself takes no pin. D2b discards temporary fragment scaffolding and packs returned names/attributes into individually owned node blocks; D6 must reclaim those blocks, text buffers and later private attribute records as well as reuse permanent-chunk nodes for its flat-arena churn proof | Capacity | M | before scripting is something a person is told to turn on (DOM.md § Wrappers) | `userland/libhtml/dom.c`, `fragment.c`; DOM_BRIEFS.md § D6; DOM.md § Slices, D6 |
 
 ## husk (the shell, ongoing)
 

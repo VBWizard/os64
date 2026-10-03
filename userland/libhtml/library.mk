@@ -1,10 +1,10 @@
 # HTML is an optional userland parser. Only its consumers acquire this edge;
 # libos64 remains independent of parser code and generated entity tables.
-LIBHTML_SRCS := libhtml/core.c libhtml/encoding.c libhtml/tokenizer.c libhtml/tree.c libhtml/dom.c
+LIBHTML_SRCS := libhtml/core.c libhtml/encoding.c libhtml/tokenizer.c libhtml/tree.c libhtml/dom.c libhtml/fragment.c libhtml/serialize.c
 LIBHTML_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBHTML_SRCS))
 LIBHTML_SO := $(BIN)/libhtml.so
-# The saved Wikipedia page takes 54.5ms at -O0 and 23.6ms at -O2 on the host
-# (same tree/work/arena). The sanitizer suite also runs at this optimization.
+# Optimize the character and stack walks; host sanitizer runners use the
+# same optimization level as the userland library.
 LIBHTML_CFLAGS = $(LIBOS64_CFLAGS) -O2 -fvisibility=hidden
 LIBHTML_BASE = $(patsubst libhtml.so=%,%,$(filter libhtml.so=%,$(LIB_BASE_PAIRS)))
 LIBHTML_LDFLAGS = $(SHARED_LIB_LDFLAGS) -soname libhtml.so

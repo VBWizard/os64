@@ -1,0 +1,28 @@
+{
+  "fragment_fixtures": 192,
+  "checked_fixtures": 188,
+  "mode_runs": 384,
+  "checked_mode_runs": 376,
+  "excluded": [
+    {
+      "id": "tree/foreign-fragment.dat:50::0c1172a4bcbd090de9c9d0ff73a5da7952ab6d213c6575aa0877b9ab32ba6381",
+      "context": "svg desc",
+      "reason": "plaintext-absorbs-closing-markup"
+    },
+    {
+      "id": "tree/tests4.dat:3::4e0d81d99cfb261c1431b2f0c45b3d17b09ad4f3b4ebb41dd2c25f3c4bd3b606",
+      "context": "style",
+      "reason": "raw-text-context"
+    },
+    {
+      "id": "tree/tests4.dat:4::1802ef97321eab522c9af29015178f2572f71ddfdaff6fc6824ee8dcb09950e5",
+      "context": "plaintext",
+      "reason": "raw-text-context"
+    },
+    {
+      "id": "tree/tests4.dat:8::c017237a6caf94aa3e65d3b9026a157889cc24770bf5cd5c8d74734fe96eacd4",
+      "context": "script",
+      "reason": "raw-text-context"
+    }
+  ]
+}
