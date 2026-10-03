@@ -55,7 +55,7 @@ person moves around them.
 
 The title bar's Settings action opens yonder's Settings window — the
 shared modeless dialog (`os64/ui_settings.h`), Apply, Save as default and
-Close — with two settings in it: whether pictures and style sheets are
+Close — with three settings in it: the zoom (below); whether pictures and style sheets are
 kept on disk and in how much room (CACHE.md is that one's record: a box,
 a size, a button that empties the cache, and what it holds on the status
 line), and **who yonder says it is**, the
@@ -82,6 +82,9 @@ asks.
   submitted reads the agent it was handed when it opens its fetch, which
   may be after another is applied, so none is freed before the workers
   are gone.
+- **The zoom every page starts at** (PILE3.md § Zoom): a whole percent
+  from 25 to 500. Apply sets it and lays the page out again at once; Save
+  as default writes `zoom =` to `yonder.conf`; Ctrl+0 goes back to it.
 - **yonder's loop waits on its own window**, so a thread waits on the
   dialog's (without taking its events) and rings a doorbell on yonder's;
   the loop pumps the dialog and tells the thread it has. One ring is out
@@ -653,8 +656,9 @@ picture whose box is fixed needs no relayout at all; the old web wrote
 both attributes on most.
 
 **Drawing.** The painter's `image` verb draws the picture into its box's
-content rectangle, SCALED nearest-neighbour when the box and the picture
-differ (a `width=` stretching a spacer, a thumbnail shrunk) and blended by
+content rectangle, SCALED when the box and the picture differ (a `width=`
+stretching a spacer, a thumbnail shrunk) — smoothed, or nearest-neighbour
+where `image-rendering` asks for hard pixels (PILE3.md § Zoom) — and blended by
 its alpha over what is beneath, one row of the visible part at a time
 (`scale.c`, pure and host-tested). A picture that has not arrived, or will
 not, keeps Y1's frame. A GIF's other frames are § Y5b's.
@@ -809,7 +813,7 @@ page failed with "out of handles or ports"; the table is 64 now
 | Find in page | a walk of the tree's text boxes | same |
 | Keyboard link navigation (Tab through links) | a focus ring over boxes | same |
 | View source | a textview over the bytes that arrived | it is small; take it when a slice has room |
-| Text zoom | a relayout at a scaled `viewport_font_px` | somebody squints |
+| Zoom | — | done: the whole page, not only its text (PILE3.md § Zoom) |
 | Tabs | one navigator session per tab is the design; the session exists first | after Y3 |
 | The cascade | yonder's ladder rung 4, its own arc | the ladder gets there |
 

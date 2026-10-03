@@ -32,7 +32,6 @@ typedef struct {
     int32_t off;    // PCT: 26.6 px added to it, a calc()'s fixed part
 } Len;
 
-static Len px(int32_t n) { return (Len){L_PX, n * FLOW_UNITS_PER_PX, 0}; }
 static Len em(int32_t thousandths) { return (Len){L_EM, thousandths, 0}; }
 static const Len kAuto = {L_AUTO, 0, 0};
 static const Len kFitContent = {L_FIT, 0, 0};
@@ -75,7 +74,17 @@ typedef struct {
     bool has_body_link;
     uint32_t body_link;
     flow_unit_t root_font;      // the html element's font size: what `rem` is
+    double zoom;                // device pixels per CSS pixel (flow_env_t.zoom)
 } Ctx;
+
+// `n` CSS pixels in the tree's units, which are device pixels' (zoomed).
+static flow_unit_t css(const Ctx *c, double n)
+{
+    double u = n * FLOW_UNITS_PER_PX * c->zoom;
+    return (flow_unit_t)(u >= 0 ? u + 0.5 : u - 0.5);
+}
+
+static Len px(const Ctx *c, int32_t n) { return (Len){L_PX, css(c, n), 0}; }
 
 // ── Reading the tree ────────────────────────────────────────────────────
 
@@ -242,11 +251,11 @@ static void padding_all(Spec *sp, Len v)
         sp->padding[i] = v;
 }
 
-static void border(Spec *sp, flow_border_style_t style, int32_t width_px)
+static void border(const Ctx *c, Spec *sp, flow_border_style_t style, int32_t width_px)
 {
     for (int i = 0; i < 4; i++) {
         sp->s.border_style[i] = style;
-        sp->border_px[i] = width_px * FLOW_UNITS_PER_PX;
+        sp->border_px[i] = css(c, width_px);
     }
 }
 
@@ -263,28 +272,27 @@ static void monospace(Spec *sp)
     sp->s.family = (flow_family_list_t){NULL, 0, FLOW_GENERIC_MONO};
 }
 
-static Len dim(f_dim_kind_t kind, int32_t v)
-{
-    return kind == F_DIM_PERCENT ? (Len){L_PCT, v, 0} : (Len){L_PX, v, 0};
-}
-
 // "Maps to the dimension property": the attribute, read as a dimension,
-// sets the property; one that does not parse sets nothing.
-static void map_dimension(const os64_html_node_t *n, const char *name, bool nonzero, Len *out)
+// sets the property — a length in CSS pixels, zoomed — and one that does
+// not parse sets nothing.
+static void map_dimension(const Ctx *c, const os64_html_node_t *n, const char *name, bool nonzero,
+                          Len *out)
 {
     int32_t v;
     f_dim_kind_t kind = f_parse_dimension(attr(n, name), nonzero, &v);
-    if (kind != F_DIM_NONE)
-        *out = dim(kind, v);
+    if (kind == F_DIM_PERCENT)
+        *out = (Len){L_PCT, v, 0};
+    else if (kind == F_DIM_PX)
+        *out = (Len){L_PX, css(c, (double)v / FLOW_UNITS_PER_PX), 0};
 }
 
 // "Maps to the pixel length property": a non-negative integer, in px.
-static bool pixel_length(const os64_html_node_t *n, const char *name, Len *out)
+static bool pixel_length(const Ctx *c, const os64_html_node_t *n, const char *name, Len *out)
 {
     int32_t v;
     if (!f_parse_nonnegative(attr(n, name), &v))
         return false;
-    *out = px(v);
+    *out = px(c, v);
     return true;
 }
 
@@ -322,7 +330,7 @@ static flow_style_t initial(const Ctx *c)
     s.family = (flow_family_list_t){NULL, 0, c->env->default_generic};
     s.font_weight = 400;
     s.font_style = FLOW_FONT_NORMAL;
-    s.font_size = (flow_unit_t)c->env->viewport_font_px * FLOW_UNITS_PER_PX;
+    s.font_size = css(c, c->env->viewport_font_px);
     s.color = c->env->ink;
     s.backgrounds = kBackgrounds;
     s.opacity = 1000;
@@ -363,6 +371,7 @@ static flow_style_t inherit(const Ctx *c, const flow_style_t *parent)
     s.text_transform = parent->text_transform;
     s.text_shadows = parent->text_shadows;
     s.ntext_shadows = parent->ntext_shadows;
+    s.pixelated = parent->pixelated;
     s.visibility = parent->visibility;
     s.pointer_events_none = parent->pointer_events_none;
     s.list_style_type = parent->list_style_type;
@@ -394,7 +403,7 @@ static int32_t scale(int32_t v, int32_t num, int32_t den)
 
 static flow_unit_t font_size(const Ctx *c, const Spec *sp, const flow_style_t *parent)
 {
-    flow_unit_t medium = (flow_unit_t)c->env->viewport_font_px * FLOW_UNITS_PER_PX;
+    flow_unit_t medium = css(c, c->env->viewport_font_px);
     flow_unit_t base = parent != NULL ? parent->font_size : medium;
     switch (sp->fs_kind) {
     case FS_PX: return sp->fs_v;
@@ -620,7 +629,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     case OS64_HTML_TAG_BLOCKQUOTE: case OS64_HTML_TAG_FIGURE:
         s->display = FLOW_DISPLAY_BLOCK;
         margin_block(sp, em(1000));
-        margin_inline(sp, px(40));
+        margin_inline(sp, px(c, 40));
         break;
     case OS64_HTML_TAG_P:
         s->display = FLOW_DISPLAY_BLOCK;
@@ -644,11 +653,11 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         }
         s->display = FLOW_DISPLAY_BLOCK;
         s->position = FLOW_POSITION_ABSOLUTE;
-        sp->inset[FLOW_LEFT] = sp->inset[FLOW_RIGHT] = px(0);
+        sp->inset[FLOW_LEFT] = sp->inset[FLOW_RIGHT] = px(c, 0);
         for (int i = 0; i < 4; i++)
             sp->margin[i] = kAuto;
         sp->width = kFitContent;
-        border(sp, FLOW_BORDER_SOLID, 3);   // `border: solid` is medium: 3px
+        border(c, sp, FLOW_BORDER_SOLID, 3);   // `border: solid` is medium: 3px
         padding_all(sp, em(1000));
         background(sp, c->env->paper);
         s->color = c->env->ink;
@@ -732,7 +741,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     case OS64_HTML_TAG_UL: {
         s->display = FLOW_DISPLAY_BLOCK;
         margin_block(sp, em(1000));
-        sp->padding[FLOW_LEFT] = px(40);
+        sp->padding[FLOW_LEFT] = px(c, 40);
         if (n->tag == OS64_HTML_TAG_OL) {
             s->list_style_type = FLOW_LIST_DECIMAL;
         } else {
@@ -749,7 +758,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     // §15.3.8 Tables.
     case OS64_HTML_TAG_TABLE:
         s->display = FLOW_DISPLAY_TABLE;
-        s->border_spacing[0] = s->border_spacing[1] = 2 * FLOW_UNITS_PER_PX;
+        s->border_spacing[0] = s->border_spacing[1] = css(c, 2);
         s->border_collapse = FLOW_SEPARATE;
         break;
     case OS64_HTML_TAG_CAPTION:
@@ -773,7 +782,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         break;
     case OS64_HTML_TAG_TD: case OS64_HTML_TAG_TH:
         s->display = FLOW_DISPLAY_TABLE_CELL;
-        padding_all(sp, px(1));
+        padding_all(sp, px(c, 1));
         if (n->tag == OS64_HTML_TAG_TH)
             s->font_weight = 700;
         break;
@@ -795,7 +804,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     case OS64_HTML_TAG_HR:
         s->display = FLOW_DISPLAY_BLOCK;
         s->color = 0x808080;
-        border(sp, FLOW_BORDER_INSET, 1);
+        border(c, sp, FLOW_BORDER_INSET, 1);
         margin_block(sp, em(500));
         margin_inline(sp, kAuto);
         break;
@@ -805,8 +814,8 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     // reads (LAYOUT.md § Booked).
     case OS64_HTML_TAG_FIELDSET:
         s->display = FLOW_DISPLAY_BLOCK;
-        margin_inline(sp, px(2));
-        border(sp, FLOW_BORDER_GROOVE, 2);
+        margin_inline(sp, px(c, 2));
+        border(c, sp, FLOW_BORDER_GROOVE, 2);
         border_color(sp, 0xC0C0C0);     // ThreeDFace, the classic 3D grey
         sp->padding[FLOW_TOP] = em(350);
         sp->padding[FLOW_BOTTOM] = em(625);
@@ -814,12 +823,12 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         break;
     case OS64_HTML_TAG_LEGEND:
         s->display = FLOW_DISPLAY_BLOCK;
-        sp->padding[FLOW_LEFT] = sp->padding[FLOW_RIGHT] = px(2);
+        sp->padding[FLOW_LEFT] = sp->padding[FLOW_RIGHT] = px(c, 2);
         break;
 
     // §15.4.1 Embedded content.
     case OS64_HTML_TAG_IFRAME:
-        border(sp, FLOW_BORDER_INSET, 2);
+        border(c, sp, FLOW_BORDER_INSET, 2);
         break;
     default:
         break;
@@ -834,10 +843,10 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
 
     // §15.3.7: a list inside a list keeps no block margins.
     if (is_list_or_dl(n) && above(c, n) != NULL && above(c, n)->lists_or_dls > 0)
-        margin_block(sp, px(0));
+        margin_block(sp, px(c, 0));
     // `dd { margin-inline-start: 40px }`
     if (is(n, OS64_HTML_TAG_DD))
-        sp->margin[FLOW_LEFT] = px(40);
+        sp->margin[FLOW_LEFT] = px(c, 40);
 
     // §15.3.8: cells take their vertical alignment from the row, and the
     // row from the group; `table > tr` without a group is middle itself.
@@ -959,15 +968,15 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
     case OS64_HTML_TAG_BODY: {
         // The FIRST of the attributes that exists decides, and one that
         // will not parse means the 8px default — not the next attribute.
-        Len v = px(8);
-        if (has(n, "marginheight") ? !pixel_length(n, "marginheight", &v)
-                                   : has(n, "topmargin") && !pixel_length(n, "topmargin", &v))
-            v = px(8);
+        Len v = px(c, 8);
+        if (has(n, "marginheight") ? !pixel_length(c, n, "marginheight", &v)
+                                   : has(n, "topmargin") && !pixel_length(c, n, "topmargin", &v))
+            v = px(c, 8);
         margin_block(sp, v);
-        v = px(8);
-        if (has(n, "marginwidth") ? !pixel_length(n, "marginwidth", &v)
-                                  : has(n, "leftmargin") && !pixel_length(n, "leftmargin", &v))
-            v = px(8);
+        v = px(c, 8);
+        if (has(n, "marginwidth") ? !pixel_length(c, n, "marginwidth", &v)
+                                  : has(n, "leftmargin") && !pixel_length(c, n, "leftmargin", &v))
+            v = px(c, 8);
         margin_inline(sp, v);
         if (legacy_color(n, "bgcolor", &rgb))
             background(sp, rgb);
@@ -1064,14 +1073,14 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
             s->float_side = FLOW_FLOAT_RIGHT;
         else if (attr_is(n, "align", "center"))
             margin_inline(sp, kAuto);
-        map_dimension(n, "width", true, &sp->width);
-        map_dimension(n, "height", false, &sp->height);
+        map_dimension(c, n, "width", true, &sp->width);
+        map_dimension(c, n, "height", false, &sp->height);
         if (legacy_color(n, "bgcolor", &rgb))
             background(sp, rgb);
         if (legacy_color(n, "bordercolor", &rgb))
             border_color(sp, rgb);
         Len spacing;
-        if (pixel_length(n, "cellspacing", &spacing))
+        if (pixel_length(c, n, "cellspacing", &spacing))
             s->border_spacing[0] = s->border_spacing[1] = spacing.v;
         const char *rules = attr(n, "rules");
         static const char *const rule_values[] = {"none", "groups", "rows", "cols", "all"};
@@ -1086,7 +1095,7 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
             if (!f_parse_nonnegative(attr(n, "border"), &width))
                 width = 1;
             for (int k = 0; k < 4; k++)
-                sp->border_px[k] = width * FLOW_UNITS_PER_PX;
+                sp->border_px[k] = css(c, width);
             if (border_not_zero(n))
                 for (int k = 0; k < 4; k++)
                     s->border_style[k] = FLOW_BORDER_OUTSET;
@@ -1115,7 +1124,7 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
     // A column group's width is its columns' when they give none (and a
     // group with no `col` in it is its `span` of columns).
     case OS64_HTML_TAG_COL: case OS64_HTML_TAG_COLGROUP:
-        map_dimension(n, "width", false, &sp->width);
+        map_dimension(c, n, "width", false, &sp->width);
         break;
     default:
         break;
@@ -1137,29 +1146,29 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
         if (legacy_color(n, "bgcolor", &rgb))
             background(sp, rgb);
         if (is_row_group(n) || is(n, OS64_HTML_TAG_TR))
-            map_dimension(n, "height", false, &sp->height);
+            map_dimension(c, n, "height", false, &sp->height);
     }
     if (is(n, OS64_HTML_TAG_TD) || is(n, OS64_HTML_TAG_TH)) {
         if (has(n, "nowrap"))
             s->white_space = FLOW_WS_NOWRAP;
-        map_dimension(n, "width", true, &sp->width);
-        map_dimension(n, "height", true, &sp->height);
+        map_dimension(c, n, "width", true, &sp->width);
+        map_dimension(c, n, "height", true, &sp->height);
         const os64_html_node_t *table = cell_table(n);
         if (table != NULL) {
             Len pad;
-            if (pixel_length(table, "cellpadding", &pad))
+            if (pixel_length(c, table, "cellpadding", &pad))
                 padding_all(sp, pad);
             if (has(table, "border") && border_not_zero(table))
-                border(sp, FLOW_BORDER_INSET, 1);
+                border(c, sp, FLOW_BORDER_INSET, 1);
             const char *rules = attr(table, "rules");
             if (f_eq_nocase(rules, "none") || f_eq_nocase(rules, "groups") ||
                 f_eq_nocase(rules, "rows")) {
-                border(sp, FLOW_BORDER_NONE, 1);
+                border(c, sp, FLOW_BORDER_NONE, 1);
             } else if (f_eq_nocase(rules, "cols")) {
-                border(sp, FLOW_BORDER_SOLID, 1);
+                border(c, sp, FLOW_BORDER_SOLID, 1);
                 s->border_style[FLOW_TOP] = s->border_style[FLOW_BOTTOM] = FLOW_BORDER_NONE;
             } else if (f_eq_nocase(rules, "all")) {
-                border(sp, FLOW_BORDER_SOLID, 1);
+                border(c, sp, FLOW_BORDER_SOLID, 1);
             }
         }
         // In quirks mode a nowrap cell with a width in PIXELS wraps after
@@ -1177,25 +1186,25 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
             bool rows_rule = f_eq_nocase(rules, "rows") && is(n, OS64_HTML_TAG_TR);
             bool groups_rule = f_eq_nocase(rules, "groups") && is_row_group(n);
             if (rows_rule || groups_rule) {
-                sp->border_px[FLOW_TOP] = sp->border_px[FLOW_BOTTOM] = FLOW_UNITS_PER_PX;
+                sp->border_px[FLOW_TOP] = sp->border_px[FLOW_BOTTOM] = css(c, 1);
                 s->border_style[FLOW_TOP] = s->border_style[FLOW_BOTTOM] = FLOW_BORDER_SOLID;
             }
         }
     }
     if (is(n, OS64_HTML_TAG_COLGROUP) && is(n->parent, OS64_HTML_TAG_TABLE) &&
         attr_is(n->parent, "rules", "groups")) {
-        sp->border_px[FLOW_LEFT] = sp->border_px[FLOW_RIGHT] = FLOW_UNITS_PER_PX;
+        sp->border_px[FLOW_LEFT] = sp->border_px[FLOW_RIGHT] = css(c, 1);
         s->border_style[FLOW_LEFT] = s->border_style[FLOW_RIGHT] = FLOW_BORDER_SOLID;
     }
 
     // §15.3.11 The hr element.
     if (is(n, OS64_HTML_TAG_HR)) {
         if (attr_is(n, "align", "left")) {
-            sp->margin[FLOW_LEFT] = px(0);
+            sp->margin[FLOW_LEFT] = px(c, 0);
             sp->margin[FLOW_RIGHT] = kAuto;
         } else if (attr_is(n, "align", "right")) {
             sp->margin[FLOW_LEFT] = kAuto;
-            sp->margin[FLOW_RIGHT] = px(0);
+            sp->margin[FLOW_RIGHT] = px(c, 0);
         } else if (attr_is(n, "align", "center")) {
             margin_inline(sp, kAuto);
         }
@@ -1207,14 +1216,14 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
         if (f_parse_nonnegative(attr(n, "size"), &size)) {
             if (solid) {
                 for (int k = 0; k < 4; k++)
-                    sp->border_px[k] = size * FLOW_UNITS_PER_PX / 2;
+                    sp->border_px[k] = css(c, size / 2.0);
             } else if (size == 1) {
                 sp->border_px[FLOW_BOTTOM] = 0;
             } else if (size > 1) {
-                sp->height = px(size - 2);
+                sp->height = px(c, size - 2);
             }
         }
-        map_dimension(n, "width", false, &sp->width);
+        map_dimension(c, n, "width", false, &sp->width);
         if (legacy_color(n, "color", &rgb))
             s->color = rgb;
     }
@@ -1237,23 +1246,23 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
             s->vertical_align = FLOW_VALIGN_BOTTOM;
         else if (attr_is(n, "align", "center") || attr_is(n, "align", "middle"))
             s->vertical_align = FLOW_VALIGN_HTML_MIDDLE;
-        map_dimension(n, "width", false, &sp->width);
-        map_dimension(n, "height", false, &sp->height);
+        map_dimension(c, n, "width", false, &sp->width);
+        map_dimension(c, n, "height", false, &sp->height);
     }
     if (is(n, OS64_HTML_TAG_EMBED) || is(n, OS64_HTML_TAG_IMG) || is(n, OS64_HTML_TAG_OBJECT) ||
         (is(n, OS64_HTML_TAG_INPUT) && attr_is(n, "type", "image"))) {
         Len v = {L_UNSET, 0, 0};
-        map_dimension(n, "hspace", false, &v);
+        map_dimension(c, n, "hspace", false, &v);
         if (v.kind != L_UNSET)
             margin_inline(sp, v);
         v = (Len){L_UNSET, 0, 0};
-        map_dimension(n, "vspace", false, &v);
+        map_dimension(c, n, "vspace", false, &v);
         if (v.kind != L_UNSET)
             margin_block(sp, v);
         if (!is(n, OS64_HTML_TAG_EMBED)) {
             int32_t b;
             if (f_parse_nonnegative(attr(n, "border"), &b) && b > 0)
-                border(sp, FLOW_BORDER_SOLID, b);
+                border(c, sp, FLOW_BORDER_SOLID, b);
         }
     }
     if (is(n, OS64_HTML_TAG_IFRAME)) {
@@ -1263,8 +1272,8 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
                 sp->border_px[k] = 0;
     }
     if (is(n, OS64_HTML_TAG_EMBED) && has(n, "hidden")) {
-        sp->width = px(0);
-        sp->height = px(0);
+        sp->width = px(c, 0);
+        sp->height = px(c, 0);
     }
 
     // §15.3.4: a link's colour, where libpage says the node IS a link
@@ -1283,9 +1292,9 @@ static void image_quirk(const Ctx *c, const os64_html_node_t *n, Spec *sp)
     if (!c->quirks || !is(n, OS64_HTML_TAG_IMG) || has(n, "hspace"))
         return;
     if (attr_is(n, "align", "left"))
-        sp->margin[FLOW_RIGHT] = px(3);
+        sp->margin[FLOW_RIGHT] = px(c, 3);
     else if (attr_is(n, "align", "right"))
-        sp->margin[FLOW_LEFT] = px(3);
+        sp->margin[FLOW_LEFT] = px(c, 3);
 }
 
 // §15.3.9 Margin collapsing quirks.
@@ -1297,14 +1306,14 @@ static void margin_quirks(const Ctx *c, const os64_html_node_t *n, Spec *sp)
     bool in_cell = is(p, OS64_HTML_TAG_TD) || is(p, OS64_HTML_TAG_TH);
     bool first = !substantial_before(n);
     if ((in_cell || is(p, OS64_HTML_TAG_BODY)) && first) {
-        sp->margin[FLOW_TOP] = px(0);
+        sp->margin[FLOW_TOP] = px(c, 0);
         if (blank(n))
-            sp->margin[FLOW_BOTTOM] = px(0);
+            sp->margin[FLOW_BOTTOM] = px(c, 0);
     }
     if (in_cell && !substantial_after(n) && blank(n))
-        sp->margin[FLOW_TOP] = px(0);
+        sp->margin[FLOW_TOP] = px(c, 0);
     if (in_cell && is(n, OS64_HTML_TAG_P) && !substantial_after(n))
-        sp->margin[FLOW_BOTTOM] = px(0);
+        sp->margin[FLOW_BOTTOM] = px(c, 0);
 }
 
 // ── The page's own sheets ───────────────────────────────────────────────
@@ -1331,36 +1340,35 @@ static bool word(const garb_val_t *v, const char *w)
 }
 
 // A length in 26.6 px, `font` being the em it is relative to — the
-// element's own, or its parent's for font-size (Values 4 § 6).
+// element's own, or its parent's for font-size (Values 4 § 6). A font is
+// already in device pixels; every other unit is CSS pixels, zoomed here.
 static double length_px(const Author *a, const garb_val_t *v, double font)
 {
-    double n = v->number;
+    double n = v->number, css;
     switch (v->unit) {
-    case GARB_U_PX: return n * FLOW_UNITS_PER_PX;
     case GARB_U_EM: return n * font;
     case GARB_U_REM: return n * a->c->root_font;
     // No face metrics reach the style pass: an ex and a ch are taken as
     // half an em, the fallback Values 4 gives for both.
     case GARB_U_EX: case GARB_U_CH: return n * font / 2;
-    case GARB_U_VW: return n * a->view.width * FLOW_UNITS_PER_PX / 100;
-    case GARB_U_VH: return n * a->view.height * FLOW_UNITS_PER_PX / 100;
-    case GARB_U_VMIN: {
-        double m = a->view.width < a->view.height ? a->view.width : a->view.height;
-        return n * m * FLOW_UNITS_PER_PX / 100;
+    case GARB_U_PX: css = n; break;
+    case GARB_U_VW: css = n * a->view.width / 100; break;
+    case GARB_U_VH: css = n * a->view.height / 100; break;
+    case GARB_U_VMIN:
+        css = n * (a->view.width < a->view.height ? a->view.width : a->view.height) / 100;
+        break;
+    case GARB_U_VMAX:
+        css = n * (a->view.width > a->view.height ? a->view.width : a->view.height) / 100;
+        break;
+    case GARB_U_PT: css = n * 96 / 72; break;
+    case GARB_U_PC: css = n * 16; break;
+    case GARB_U_IN: css = n * 96; break;
+    case GARB_U_CM: css = n * 96 / 2.54; break;
+    case GARB_U_MM: css = n * 96 / 25.4; break;
+    case GARB_U_Q: css = n * 96 / 101.6; break;
+    default: return 0;              // a track's share (fr), never a length
     }
-    case GARB_U_VMAX: {
-        double m = a->view.width > a->view.height ? a->view.width : a->view.height;
-        return n * m * FLOW_UNITS_PER_PX / 100;
-    }
-    case GARB_U_PT: return n * 96 / 72 * FLOW_UNITS_PER_PX;
-    case GARB_U_PC: return n * 16 * FLOW_UNITS_PER_PX;
-    case GARB_U_IN: return n * 96 * FLOW_UNITS_PER_PX;
-    case GARB_U_CM: return n * 96 / 2.54 * FLOW_UNITS_PER_PX;
-    case GARB_U_MM: return n * 96 / 25.4 * FLOW_UNITS_PER_PX;
-    case GARB_U_Q: return n * 96 / 101.6 * FLOW_UNITS_PER_PX;
-    case GARB_U_FR: break;          // a track's share, never a length
-    }
-    return 0;
+    return css * FLOW_UNITS_PER_PX * a->c->zoom;
 }
 
 // A calc() as a fixed part and a percentage part — what libflow's lengths
@@ -1565,7 +1573,7 @@ static bool author_border_width(const Author *a, const garb_val_t *v, int32_t *o
     static const char *const words[] = {"thin", "medium", "thick"};
     int32_t i = pick(v, words, F_ARRAY(words));
     if (i >= 0) {
-        *out = (1 + 2 * i) * FLOW_UNITS_PER_PX;
+        *out = css(a->c, 1 + 2 * i);
         return true;
     }
     Len l;
@@ -1638,7 +1646,7 @@ static void author_font_size(Author *a, Spec *sp, const garb_val_t *v)
     static const char *const words[] = {"xx-small", "x-small", "small", "medium",
                                         "large", "x-large", "xx-large", "xxx-large"};
     double base = a->parent != NULL ? a->parent->font_size
-                                    : (double)a->c->env->viewport_font_px * FLOW_UNITS_PER_PX;
+                                    : (double)css(a->c, a->c->env->viewport_font_px);
     int32_t i = pick(v, words, F_ARRAY(words));
     if (i >= 0) {
         sp->fs_kind = FS_KEYWORD;
@@ -1877,6 +1885,7 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->text_shadows = s->text_shadows;
         d->ntext_shadows = s->ntext_shadows;
         break;
+    case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
     default: break;
     }
 }
@@ -1899,15 +1908,15 @@ static void initial_spec(const Ctx *c, Spec *out)
     os64_memset(out, 0, sizeof(*out));
     out->s = initial(c);
     for (int i = 0; i < 4; i++) {
-        out->margin[i] = px(0);
-        out->padding[i] = px(0);
+        out->margin[i] = px(c, 0);
+        out->padding[i] = px(c, 0);
         out->inset[i] = kAuto;
-        out->border_px[i] = 3 * FLOW_UNITS_PER_PX;     // medium
+        out->border_px[i] = css(c, 3);     // medium
     }
     out->width = out->height = kAuto;
     out->min_width = out->max_width = out->min_height = out->max_height = kAuto;
     out->flex_basis = out->row_gap = out->column_gap = kAuto;
-    out->text_indent = px(0);
+    out->text_indent = px(c, 0);
     out->fs_kind = FS_KEYWORD;
     out->fs_v = 3;                                      // medium
 }
@@ -2528,6 +2537,14 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
                 s->text_decoration |= FLOW_DECORATION_LINE_THROUGH;
         }
         break;
+    case GARB_IMAGE_RENDERING: {
+        // The crisp spellings; every other keyword libgarb takes smooths.
+        static const char *const crisp[] = {"pixelated", "crisp-edges", "-moz-crisp-edges",
+                                            "-webkit-optimize-contrast", "optimizespeed"};
+        if (v->kind == GARB_V_KEYWORD)
+            s->pixelated = pick(v, crisp, F_ARRAY(crisp)) >= 0;
+        break;
+    }
     case GARB_VISIBILITY: {
         static const char *const words[] = {"visible", "hidden", "collapse"};
         if ((i = pick(v, words, F_ARRAY(words))) >= 0)
@@ -2806,7 +2823,7 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     for (int i = 0; i < 4; i++)
         if (sp->border_px[i] == 0 && author_sets(st, GARB_BORDER_TOP_STYLE + i) &&
             !author_declares(st, GARB_BORDER_TOP_WIDTH + i))
-            sp->border_px[i] = 3 * FLOW_UNITS_PER_PX;
+            sp->border_px[i] = css(c, 3);
     return true;
 }
 
@@ -3062,7 +3079,8 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
     out->arena.cap = SIZE_MAX;
     Ctx c = {.doc = doc, .model = model, .env = env, .out = out,
              .quirks = doc->quirks == OS64_HTML_QUIRKS,
-             .root_font = (flow_unit_t)env->viewport_font_px * FLOW_UNITS_PER_PX};
+             .zoom = env->zoom != 0 ? env->zoom / 1000.0 : 1.0};
+    c.root_font = css(&c, env->viewport_font_px);
 
     // Pre-order down, and each element FINISHED on the way back up, when
     // everything under it has been styled — which is when its holds_block

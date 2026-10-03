@@ -722,3 +722,13 @@ OUT: unknown
 # A value holding var() is the cascade's to read, once the variable is known.
 IN: color: var(--x)
 OUT: held
+
+# ── image-rendering (Images 3 § 5.3) ──
+IN: image-rendering: pixelated
+OUT: image-rendering: pixelated
+IN: image-rendering: optimizeSpeed
+OUT: image-rendering: optimizespeed
+IN: image-rendering: -webkit-optimize-contrast
+OUT: image-rendering: -webkit-optimize-contrast
+IN: image-rendering: blurry
+OUT: invalid

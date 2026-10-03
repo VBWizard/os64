@@ -576,7 +576,7 @@ static void scale_cases(void)
     const uint32_t A = 0xff112233u, B = 0xff445566u, C = 0xff778899u;
     uint32_t dst[16] = {0};
     const uint32_t two[4] = {A, B, C, A};
-    yonder_draw_picture(dst, 4, (os64_gui_rect_t){0, 0, 4, 4}, (os64_gui_rect_t){1, 1, 2, 2}, two, 2, 2);
+    yonder_draw_picture(dst, 4, (os64_gui_rect_t){0, 0, 4, 4}, (os64_gui_rect_t){1, 1, 2, 2}, false, two, 2, 2);
     const uint32_t copied[16] = {0, 0, 0, 0, 0, A, B, 0, 0, C, A, 0, 0, 0, 0, 0};
     expect("picture: a box its own size is a copy", pixels_are(dst, copied, 16), NULL);
 
@@ -585,20 +585,20 @@ static void scale_cases(void)
     uint32_t wide[4] = {0};
     const uint32_t one[1] = {A};
     yonder_draw_picture(wide, 4, (os64_gui_rect_t){0, 0, 4, 1},
-                        (os64_gui_rect_t){2, 0, INT32_MAX, INT32_MAX}, one, 1, 1);
+                        (os64_gui_rect_t){2, 0, INT32_MAX, INT32_MAX}, false, one, 1, 1);
     const uint32_t wide_want[4] = {0, 0, A, A};
     expect("picture: a box past INT32_MAX clips, its edge added in 64 bits",
            pixels_are(wide, wide_want, 4), NULL);
 
     uint32_t row[4] = {0};
     const uint32_t ab[2] = {A, B};
-    yonder_draw_picture(row, 4, (os64_gui_rect_t){0, 0, 4, 1}, (os64_gui_rect_t){0, 0, 4, 1}, ab, 2, 1);
+    yonder_draw_picture(row, 4, (os64_gui_rect_t){0, 0, 4, 1}, (os64_gui_rect_t){0, 0, 4, 1}, false, ab, 2, 1);
     const uint32_t doubled[4] = {A, A, B, B};
     expect("picture: twice as wide doubles each column", pixels_are(row, doubled, 4), NULL);
 
     uint32_t pair[2] = {0};
     const uint32_t abc[3] = {A, B, C};
-    yonder_draw_picture(pair, 2, (os64_gui_rect_t){0, 0, 2, 1}, (os64_gui_rect_t){0, 0, 2, 1}, abc, 3, 1);
+    yonder_draw_picture(pair, 2, (os64_gui_rect_t){0, 0, 2, 1}, (os64_gui_rect_t){0, 0, 2, 1}, false, abc, 3, 1);
     const uint32_t shrunk[2] = {A, C};
     expect("picture: three into two takes the columns under the middles",
            pixels_are(pair, shrunk, 2), NULL);
@@ -607,12 +607,12 @@ static void scale_cases(void)
     // (255*127 + 127) / 255 = 127.
     uint32_t blend[1] = {0xff0000ffu};
     const uint32_t red_half[1] = {0x80ff0000u};
-    yonder_draw_picture(blend, 1, (os64_gui_rect_t){0, 0, 1, 1}, (os64_gui_rect_t){0, 0, 1, 1}, red_half, 1, 1);
+    yonder_draw_picture(blend, 1, (os64_gui_rect_t){0, 0, 1, 1}, (os64_gui_rect_t){0, 0, 1, 1}, false, red_half, 1, 1);
     expect("picture: half-transparent red over blue", blend[0] == 0xff80007fu, NULL);
 
     uint32_t clear[1] = {0xff0000ffu};
     const uint32_t none[1] = {0x00ff0000u};
-    yonder_draw_picture(clear, 1, (os64_gui_rect_t){0, 0, 1, 1}, (os64_gui_rect_t){0, 0, 1, 1}, none, 1, 1);
+    yonder_draw_picture(clear, 1, (os64_gui_rect_t){0, 0, 1, 1}, (os64_gui_rect_t){0, 0, 1, 1}, false, none, 1, 1);
     expect("picture: a transparent pixel leaves what is beneath", clear[0] == 0xff0000ffu, NULL);
 
     // A 4x4 picture in a 4x4 box, clipped to the middle 2x2: only those
@@ -620,21 +620,21 @@ static void scale_cases(void)
     uint32_t src[16], clip[16] = {0};
     for (int i = 0; i < 16; i++)
         src[i] = 0xff000000u | (uint32_t)i;
-    yonder_draw_picture(clip, 4, (os64_gui_rect_t){1, 1, 2, 2}, (os64_gui_rect_t){0, 0, 4, 4}, src, 4, 4);
+    yonder_draw_picture(clip, 4, (os64_gui_rect_t){1, 1, 2, 2}, (os64_gui_rect_t){0, 0, 4, 4}, false, src, 4, 4);
     const uint32_t cut[16] = {0, 0, 0, 0, 0, src[5], src[6], 0, 0, src[9], src[10], 0, 0, 0, 0, 0};
     expect("picture: a clip cuts all four sides", pixels_are(clip, cut, 16), NULL);
 
     // A box partly off the surface's left and top: the clip is what keeps
     // the writes inside it.
     uint32_t edge[4] = {0};
-    yonder_draw_picture(edge, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){-2, -2, 4, 4}, src, 4, 4);
+    yonder_draw_picture(edge, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){-2, -2, 4, 4}, false, src, 4, 4);
     const uint32_t shifted[4] = {src[10], src[11], src[14], src[15]};
     expect("picture: a box hanging off the top left", pixels_are(edge, shifted, 4), NULL);
 
     // Tiling a 2x2 picture {A,B / C,A} unscaled from the area's corner.
     uint32_t tiles[25] = {0};
     yonder_tile_picture(tiles, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5},
-                        (os64_gui_rect_t){0, 0, 2, 2}, true, true, two, 2, 2);
+                        (os64_gui_rect_t){0, 0, 2, 2}, true, true, false, two, 2, 2);
     const uint32_t tiled[25] = {A, B, A, B, A, C, A, C, A, C, A, B, A, B, A,
                                 C, A, C, A, C, A, B, A, B, A};
     expect("tile: whole copies, and the last cut at the area's edge", pixels_are(tiles, tiled, 25),
@@ -644,7 +644,7 @@ static void scale_cases(void)
     // origin put them, and nothing outside the clip is written.
     uint32_t cut_tiles[25] = {0};
     yonder_tile_picture(cut_tiles, 5, (os64_gui_rect_t){1, 1, 3, 3}, (os64_gui_rect_t){0, 0, 5, 5},
-                        (os64_gui_rect_t){0, 0, 2, 2}, true, true, two, 2, 2);
+                        (os64_gui_rect_t){0, 0, 2, 2}, true, true, false, two, 2, 2);
     bool inside_same = true, outside_clear = true;
     for (int y = 0; y < 5; y++)
         for (int x = 0; x < 5; x++) {
@@ -661,7 +661,7 @@ static void scale_cases(void)
     uint32_t wide_tiles[25] = {0};
     yonder_tile_picture(wide_tiles, 5, (os64_gui_rect_t){0, 0, 5, 5},
                         (os64_gui_rect_t){1, 0, INT32_MAX, 5}, (os64_gui_rect_t){0, 0, 2, 2}, true,
-                        true, two, 2, 2);
+                        true, false, two, 2, 2);
     bool wide_ok = true;
     for (int y = 0; y < 5; y++)
         for (int x = 0; x < 5; x++)
@@ -673,7 +673,7 @@ static void scale_cases(void)
     // view is scrolled into): the area starts one pixel into a tile.
     uint32_t shifted_tiles[4] = {0};
     yonder_tile_picture(shifted_tiles, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){0, 0, 2, 2},
-                        (os64_gui_rect_t){-1, -3, 2, 2}, true, true, two, 2, 2);
+                        (os64_gui_rect_t){-1, -3, 2, 2}, true, true, false, two, 2, 2);
     const uint32_t from_origin[4] = {A, C, B, A};
     expect("tile: an origin outside the area lays the tiles from there",
            pixels_are(shifted_tiles, from_origin, 4), NULL);
@@ -681,7 +681,7 @@ static void scale_cases(void)
     uint32_t over_blue[2] = {0xff0000ffu, 0xff0000ffu};
     const uint32_t half_and_none[2] = {0x80ff0000u, 0x00ff0000u};
     yonder_tile_picture(over_blue, 2, (os64_gui_rect_t){0, 0, 2, 1}, (os64_gui_rect_t){0, 0, 2, 1},
-                        (os64_gui_rect_t){0, 0, 2, 1}, true, true, half_and_none, 2, 1);
+                        (os64_gui_rect_t){0, 0, 2, 1}, true, true, false, half_and_none, 2, 1);
     expect("tile: blended by alpha over the colour beneath",
            over_blue[0] == 0xff80007fu && over_blue[1] == 0xff0000ffu, NULL);
 
@@ -689,13 +689,13 @@ static void scale_cases(void)
     // from y 2, laid from x 1 both ways; no-repeat: the one copy at (1, 2).
     uint32_t strip[25] = {0};
     yonder_tile_picture(strip, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5},
-                        (os64_gui_rect_t){1, 2, 2, 2}, true, false, two, 2, 2);
+                        (os64_gui_rect_t){1, 2, 2, 2}, true, false, false, two, 2, 2);
     const uint32_t row_want[25] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, B, A, B, A, B,
                                    A, C, A, C, A, 0, 0, 0, 0, 0};
     expect("tile: repeat-x draws one row of tiles", pixels_are(strip, row_want, 25), NULL);
     uint32_t single[25] = {0};
     yonder_tile_picture(single, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5},
-                        (os64_gui_rect_t){1, 2, 2, 2}, false, false, two, 2, 2);
+                        (os64_gui_rect_t){1, 2, 2, 2}, false, false, false, two, 2, 2);
     const uint32_t single_want[25] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, A, B, 0, 0,
                                    0, C, A, 0, 0, 0, 0, 0, 0, 0};
     expect("tile: no-repeat draws the one copy", pixels_are(single, single_want, 25), NULL);
@@ -704,9 +704,35 @@ static void scale_cases(void)
     // floor((u + 1/2) * 2 / 4), so 0, 0, 1, 1 — each pixel doubled.
     uint32_t scaled[16] = {0};
     yonder_tile_picture(scaled, 4, (os64_gui_rect_t){0, 0, 4, 4}, (os64_gui_rect_t){0, 0, 4, 4},
-                        (os64_gui_rect_t){0, 0, 4, 4}, true, true, two, 2, 2);
+                        (os64_gui_rect_t){0, 0, 4, 4}, true, true, false, two, 2, 2);
     const uint32_t each_doubled[16] = {A, A, B, B, A, A, B, B, C, C, A, A, C, C, A, A};
     expect("tile: a copy scaled to its tile", pixels_are(scaled, each_doubled, 16), NULL);
+
+    // Smoothed: black then white, 2 px drawn 4 px wide. Column u falls at
+    // (u + 1/2) * 2 / 4 - 1/2 = -1/4, 1/4, 3/4, 5/4 of the source: the ends
+    // held to the edge pixels, the middle two a quarter and three quarters
+    // of the way from black to white (63.75 and 191.25, to 0x40 and 0xbf).
+    const uint32_t bw[2] = {0xff000000u, 0xffffffffu};
+    uint32_t ramp[4] = {0};
+    yonder_draw_picture(ramp, 4, (os64_gui_rect_t){0, 0, 4, 1}, (os64_gui_rect_t){0, 0, 4, 1},
+                        true, bw, 2, 1);
+    const uint32_t ramp_want[4] = {0xff000000u, 0xff404040u, 0xffbfbfbfu, 0xffffffffu};
+    expect("smooth: a scaled picture mixes the pixels round each one", pixels_are(ramp, ramp_want, 4),
+           NULL);
+    // Red then nothing, over black: a transparent neighbour lends no colour,
+    // only less alpha — a quarter of the way along is red at 191/255, laid
+    // over black as 0xbf0000, where mixing its black in would give 0x8f.
+    const uint32_t red_none[2] = {0xffff0000u, 0x00000000u};
+    uint32_t fade[4] = {0};
+    yonder_tile_picture(fade, 4, (os64_gui_rect_t){0, 0, 4, 1}, (os64_gui_rect_t){0, 0, 4, 1},
+                        (os64_gui_rect_t){0, 0, 4, 1}, false, false, true, red_none, 2, 1);
+    const uint32_t fade_want[4] = {0xffff0000u, 0xffbf0000u, 0xff400000u, 0};
+    expect("smooth: a transparent neighbour lends no colour", pixels_are(fade, fade_want, 4), NULL);
+    // At its own size a picture is copied, smoothing or not.
+    uint32_t same[4] = {0};
+    yonder_draw_picture(same, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){0, 0, 2, 2}, true,
+                        two, 2, 2);
+    expect("smooth: unscaled is the picture itself", pixels_are(same, two, 4), NULL);
 
     // A sheet's picture, 20x10, behind a 100x50 box at (10, 20):
     // `right 10px center repeat-x` is calc(100% - 10px) and 50%, so x is

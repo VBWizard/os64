@@ -217,7 +217,7 @@ list and the page; both positions surviving a relayout.
 | `scroll-padding`, `scroll-margin`: a fragment target under a sticky heading | a target is brought to the box's top, where a heading painted over it hides it — as Chrome does without them | a page that sets them |
 | Smooth scrolling, `scroll-snap`, `overscroll-behavior` | a wheel moves a box at once, three lines a notch | a page whose carousel snaps |
 | Classic bars that take room from the content (`scrollbar-gutter`, `scrollbar-width`) | the overlay bar changes no layout, which is the point of it | a page whose layout counts on the gutter |
-| `filter`, `cursor`, `image-rendering` | not GARB.md's pile 3, and measured above | the slice that takes them, re-measured |
+| `filter`, `cursor` | not GARB.md's pile 3, and measured above (`image-rendering` was taken in § Zoom) | the slice that takes them, re-measured |
 
 ## The blend (slice S2)
 
@@ -505,7 +505,7 @@ draws it, but for the smoothing below.
 | Every layer of a list | — | done in S4c, below |
 | `background-clip: text` | the glyphs are drawn by the text verb, with no mask to fill with a picture; a background clipped to its text is not drawn at all | a page whose gradient headline matters |
 | A content box with percentage padding | the tree does not carry the width a percentage padding resolved against, so it counts as none, as for an atom's content | a page whose content-box background sits wrong |
-| A scaled picture's smoothing | a copy is scaled nearest-neighbour, where the browsers smooth it unless `image-rendering` says otherwise | the image-rendering slice |
+| A scaled picture's smoothing | — | done in § Zoom, below |
 
 ## Layers (slice S4c)
 
@@ -554,3 +554,65 @@ layers — drew as headless Chrome draws it.
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | An attribute's picture under a sheet's `none` | a `background` attribute's picture shows whenever no sheet gives the box a picture or gradient, though a sheet's `background-image: none` should hide it | a page that hides a table's background attribute that way |
+
+## Zoom (slice S5, with image-rendering)
+
+Chris asked for zoom before pile 3 ends (9/27, Hacker News's tiny type):
+not CSS's `zoom` property, but the browser's own — Ctrl and + or -.
+
+### How it is built
+
+**libflow lays the page out in device pixels**, as a browser does for a
+screen denser than 96 dpi. `flow_env_t.zoom` says how many device pixels a
+CSS pixel is (thousandths), and a CSS pixel becomes device pixels at the few
+places one enters: the unit converter (`length_px` — px, pt, in and the
+rest, and vw and vh), the Rendering chapter's own lengths and the HTML
+attributes' (`px()`, `map_dimension`, the border widths), `medium`, a
+replaced element's own size, the frame and broken-picture defaults, and the
+viewport's height. An em, a rem and a percentage follow by themselves. So a
+`16px` font at 150% is shaped at 24 px, and drawn as sharp as at 100%:
+nothing is stretched.
+
+**yonder** lays out at the window's width in device pixels and judges the
+sheets at the window's size divided by the zoom — so a media query sees
+the narrower CSS viewport and a page's narrow layout arrives as it does in
+Chrome. The zoom is the WINDOW's (Chris, 10/3): kept across navigation,
+started from the settings' default. Ctrl with = or + and Ctrl with - step
+through Chrome's zooms (25% to 500%), Ctrl+0 goes back to the default, and
+Ctrl and the wheel step too, wherever focus is in the window. A zoom
+change keeps the element at the top of the view there, its offset scaled.
+The status line says `zoomed 125%` when it is not 100%. **The Settings
+window** gains a row, `Zoom every page to [ ] %`, saved as `zoom =` in
+`yonder.conf`; the shared settings dialog grows taller for a body with
+more rows.
+
+**`image-rendering`** (Images 3 § 5.3, inherited): `pixelated` and
+`crisp-edges` — and the spellings older pixel-art pages wrote,
+`-moz-crisp-edges`, `-webkit-optimize-contrast`, `optimizeSpeed` — keep a
+scaled picture's pixels square; every other value SMOOTHS it: each pixel is
+mixed from the four source pixels round where it falls, by how near each
+is, their colours weighed by their alphas so that a transparent neighbour
+lends no colour. A picture drawn at its own size is copied either way.
+
+### Proof
+
+libgarb: the property, an SVG spelling, Chrome's, and a word it is not.
+libflow: `pixelated` inherited, `auto` back to smooth, Chrome's spelling
+crisp; at zoom 2, a box whose `1em` margin, `50px` width, `1px` border and
+`25vh` height are each doubled, and a picture's attribute size and its own
+size doubled. yonder, by hand: black to white drawn twice as wide (0x40
+and 0xbf between), red beside transparency (0xbf over black, where mixing
+the transparent black in would give 0x8f), and a picture at its own size
+copied. In the guest: Ctrl+=, Ctrl+-, Ctrl+0 and Ctrl+wheel on the
+corpus's Wikipedia page and `/tests/pages/pile3-zoom.html`, which drew at
+150% as headless Chrome does at a device scale of 1.5; the Settings row
+applied at once and saved `zoom = 125` to /home's `yonder.conf`.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| A zoom per site | one zoom for the window (Chris, 10/3) | a person who wants one site bigger than the rest |
+| Form controls at the zoom | their boxes grow with the page, but the widgets draw in the theme's Interface font at its size | the Web font role (the Appearance Workshop's Fonts tab), the next slice |
+| A picture shrunk to less than half | four pixels are mixed, so a picture shrunk far shimmers where the browsers filter its whole area | a page whose thumbnails shimmer |
+| Zoom's cost | more device pixels to paint, and smoothing costs more than copying | the deferred painting work |

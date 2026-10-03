@@ -403,7 +403,7 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     int32_t iw = 0, ih = 0;
     bool known = l->env->replaced_size != NULL &&
                  l->env->replaced_size(l->env->ctx, node, &iw, &ih) && iw >= 0 && ih >= 0;
-    int64_t kw = (int64_t)iw * 64, kh = (int64_t)ih * 64;
+    int64_t kw = f_css_units(l->env, iw), kh = f_css_units(l->env, ih);
     if (known) {
         if (w_set && h_set) {
             r.w = w;
@@ -450,7 +450,7 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
         if (alt != NULL && alt->value != NULL && alt->value[0] != '\0') {
             r.alt = true;
         } else if (alt == NULL) {
-            r.w = r.h = 16 * 64;
+            r.w = r.h = f_css_units(l->env, 16);
         } else {
             // An empty alt says the picture is decoration: it takes no space.
             r.none = true;
@@ -460,8 +460,8 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     bool frame = node->ns == OS64_HTML_NS_HTML &&
                  (node->tag == OS64_HTML_TAG_IFRAME || node->tag == OS64_HTML_TAG_FRAME);
     if (frame) {
-        r.w = 300 * 64;
-        r.h = 150 * 64;
+        r.w = f_css_units(l->env, 300);
+        r.h = f_css_units(l->env, 150);
     } else {
         Fonts f;
         r.w = (int64_t)s->font_size * 10;
@@ -6028,7 +6028,8 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
         // viewport's own and the same numbers; the root is the owner when
         // one of those boxes stops.
         if (!l.failed) {
-            int64_t vh = env->viewport_height > 0 ? (int64_t)env->viewport_height * 64 : out->height;
+            int64_t vh = env->viewport_height > 0 ? f_css_units(env, env->viewport_height)
+                                                  : out->height;
             absolutes(&l, boxes->styles, boxes->icb_first, (Rect){0, 0, w, vh}, boxes->root);
         }
         out->width = max64(w, right_edge(boxes->root));

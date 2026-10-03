@@ -222,3 +222,51 @@ static void background_box_cases(void)
         "      div block bg-image=\"a.png\"@0 repeat 0%/0%"
         " layer=1 gradient=linear:180000:#ff0000@auto,#0000ff@auto\n");
 }
+
+// image-rendering is inherited, its crisp spellings one answer and every
+// other keyword the other.
+static void image_rendering_cases(void)
+{
+    cascade_case("image-rendering: pixelated inherited, auto back to smooth", 400,
+        "<!doctype html><style>.a{image-rendering:pixelated}.c{image-rendering:auto}"
+        ".d{image-rendering:-webkit-optimize-contrast}</style>"
+        "<div class=a><p></p><p class=c><span class=d></span></p></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block pixelated holds-block\n"
+        "      p block margin=16/0/16/0\n"
+        "      p block margin=16/0/16/0 smooth\n"
+        "        span inline pixelated\n");
+}
+
+// Zoom (PILE3.md § Zoom): at 2, every CSS pixel is two of the tree's. 1em
+// is the zoomed font's (32), 50px is 100, a 1px border 2, and 25vh is a
+// quarter of the 600 CSS px viewport, 300 device pixels.
+static void zoom_cases(void)
+{
+    kEnv.zoom = 2000;
+    cascade_layout_case("zoom 2: lengths, the font, the border and vh doubled",
+        "<!doctype html><style>body{margin:0}"
+        "div{width:50px;height:25vh;border-left:1px solid;margin-left:1em}</style><div></div>",
+        400,
+        "page 400 300\n"
+        "block html 0 0 400 300\n"
+        "  block body 0 0 400 300\n"
+        "    block div 32 0 102 300\n");
+    // A picture's size from its attributes, and the oracle's own 40 x 30,
+    // both in CSS pixels: 20 x 40 and 80 x 60 on the page.
+    char *got = cascade_layout_of("<!doctype html><img src=known.png width=10 height=20>"
+                                  "<img src=known.png>", 400);
+    int32_t size[2][2] = {{0}}, n = 0;
+    for (const char *at = got; at != NULL && n < 2 && (at = strstr(at, "atomic img ")) != NULL;
+         at++, n++) {
+        int x, y;
+        sscanf(at, "atomic img %d %d %d %d", &x, &y, &size[n][0], &size[n][1]);
+    }
+    expect("zoom 2: a picture's attribute size and its own size doubled",
+           n == 2 && size[0][0] == 20 && size[0][1] == 40 && size[1][0] == 80 && size[1][1] == 60,
+           got);
+    free(got);
+    kEnv.zoom = 0;
+}

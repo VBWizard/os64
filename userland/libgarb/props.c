@@ -114,6 +114,7 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_BORDER_BOTTOM_LEFT_RADIUS] = {"border-bottom-left-radius", false},
     [GARB_BOX_SHADOW] = {"box-shadow", false},
     [GARB_TEXT_SHADOW] = {"text-shadow", true},
+    [GARB_IMAGE_RENDERING] = {"image-rendering", true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -197,6 +198,10 @@ static const char *const kTransform[] = {"none", "capitalize", "uppercase", "low
                                          "full-width", "full-size-kana", NULL};
 static const char *const kIndentWords[] = {"hanging", "each-line", NULL};
 static const char *const kVisibility[] = {"visible", "hidden", "collapse", NULL};
+static const char *const kImageRendering[] = {
+    "auto", "smooth", "high-quality", "pixelated", "crisp-edges",
+    // Before pixelated: Firefox's, Chrome's, and SVG's two.
+    "-moz-crisp-edges", "-webkit-optimize-contrast", "optimizespeed", "optimizequality", NULL};
 static const char *const kListPosition[] = {"inside", "outside", NULL};
 static const char *const kCollapse[] = {"collapse", "separate", NULL};
 static const char *const kCaption[] = {"top", "bottom", NULL};
@@ -1650,6 +1655,7 @@ static const Longhand kLonghands[] = {
     {GARB_BORDER_BOTTOM_RIGHT_RADIUS, G_RADIUS, NULL},
     {GARB_BORDER_BOTTOM_LEFT_RADIUS, G_RADIUS, NULL},
     {GARB_BOX_SHADOW, G_SHADOW, NULL}, {GARB_TEXT_SHADOW, G_SHADOW, NULL},
+    {GARB_IMAGE_RENDERING, G_KEYWORDS, kImageRendering},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);

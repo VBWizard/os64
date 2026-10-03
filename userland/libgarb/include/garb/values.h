@@ -70,6 +70,9 @@ typedef enum {
     GARB_BORDER_BOTTOM_RIGHT_RADIUS, GARB_BORDER_BOTTOM_LEFT_RADIUS,
     // Backgrounds 3 § 7.1 and Text Decoration 3 § 4: `none`, or a list.
     GARB_BOX_SHADOW, GARB_TEXT_SHADOW,
+    // Images 3 § 5.3, with the spellings older pages wrote for crisp
+    // pixels kept as they were written.
+    GARB_IMAGE_RENDERING,
     GARB_NPROPS
 } garb_prop_t;
 
