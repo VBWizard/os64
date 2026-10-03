@@ -137,7 +137,7 @@ os64_font_config_status_t os64_font_config_discover(os64_text_context_t *context
     (void)inspect(&d, "builtin");
     /* Configured paths win representative selection. Keep aliases so two
      * roles selecting identical copies still highlight the shared row. */
-    for (size_t r = 0; r < OS64_FONT_ROLE_COUNT; ++r)
+    for (size_t r = 0; r < OS64_FONT_CONFIG_ROLES; ++r)
         for (size_t s = 0; s < 3; ++s) {
             const char *path = config->roles[r].face[s];
             if (!path[0]) continue;

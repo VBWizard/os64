@@ -116,6 +116,10 @@ static struct {
     os64_font_family_cache_t *families;
 } s_faces;
 
+// fonts.conf as read at start, or its defaults: the families above, and the
+// Web setting — the page's default font size, and the controls' face.
+static os64_font_config_t s_fonts_conf;
+
 // libflow's family list and the provider's are the same shape in the same
 // generic order, so a style's list is handed over as it is.
 _Static_assert(sizeof(flow_family_name_t) == sizeof(os64_font_family_name_t) &&
@@ -226,11 +230,13 @@ static const char *faces_open(void)
     if (os64_text_create(&o, &s_faces.text) != OS64_FONT_OK)
         return "no text context for the page";
     s_env.text = s_faces.text;
-    os64_font_config_t config;
     os64_font_config_error_t error;
-    if (os64_font_config_read(&config, &error) == OS64_FONT_CONFIG_OK &&
-        os64_font_config_family_prepare(s_faces.text, &config, &s_faces.families, &error) ==
-            OS64_FONT_CONFIG_OK)
+    bool read = os64_font_config_read(&s_fonts_conf, &error) == OS64_FONT_CONFIG_OK;
+    if (!read)
+        os64_font_config_defaults(&s_fonts_conf);
+    s_env.viewport_font_px = (int32_t)s_fonts_conf.roles[OS64_FONT_CONFIG_WEB].size;
+    if (read && os64_font_config_family_prepare(s_faces.text, &s_fonts_conf, &s_faces.families,
+                                                &error) == OS64_FONT_CONFIG_OK)
         return NULL;
     // Whatever failed — a line that will not parse, a family named twice, a
     // face that will not open, or the file itself unreadable — is said
@@ -724,9 +730,9 @@ static int64_t size_rows(const char *v)
 }
 
 // A select's box: the rows its list shows, as wide as its longest option.
-// Measured in the window's own face, the one its widget paints in. The
-// page chooses `size` (at most INT32_MAX rows, by size_rows), so the
-// arithmetic is 64-bit and the answer clamped.
+// Measured in the controls' face (controls_face), the one its widget
+// paints in. The page chooses `size` (at most INT32_MAX rows, by
+// size_rows), so the arithmetic is 64-bit and the answer clamped.
 static void select_size(const os64_page_control_t *c, const os64_html_node_t *node,
                         int32_t *w, int32_t *h)
 {
@@ -740,14 +746,20 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
     for (int32_t k = 0; k < c->noptions; k++) {
         int32_t px = 0;
         const char *label = c->options[k].label != NULL ? c->options[k].label : "";
-        if (os64_ui_text_measure(&g.ui, OS64_FONT_ROLE_UI, label, os64_strlen(label), &px) ==
+        if (os64_ui_text_measure(&g.ui, OS64_UI_FONT_APP, label, os64_strlen(label), &px) ==
                 OS64_FONT_OK && px > widest)
             widest = px;
     }
     // The listbox's own arithmetic: a two-pixel frame, rows eight pixels
-    // taller than the face's, labels six pixels in.
-    *h = clamp32(rows * ((int64_t)os64_ui_font_row_height(&g.ui, OS64_FONT_ROLE_UI) + 8) + 4);
-    *w = clamp32((int64_t)widest + 2 * 6 + 4);
+    // taller than the face's, labels six pixels in. The face is already at
+    // the zoom and libflow scales a replaced box's own size by it, so the
+    // answer goes back in CSS pixels, rounded up so no row is cut. At most
+    // INT32_MAX rows of a face under a thousand pixels, so 64 bits hold it.
+    int64_t zoom = s_env.zoom > 0 ? s_env.zoom : 1000;
+    int64_t dh = rows * ((int64_t)os64_ui_font_row_height(&g.ui, OS64_UI_FONT_APP) + 8) + 4;
+    int64_t dw = (int64_t)widest + 2 * 6 + 4;
+    *h = clamp32((dh * 1000 + zoom - 1) / zoom);
+    *w = clamp32((dw * 1000 + zoom - 1) / zoom);
     if (*w < 48)
         *w = 48;
 }
@@ -2507,6 +2519,7 @@ static void forms_build(void)
         fw->w->hidden = true;
         g.by_control[b->control] = g.nfw++;
         os64_ui_add_child(&g.root, fw->w);
+        os64_ui_widget_app_face(&g.ui, fw->w, true);   // the page's face, not the toolbar's
         os64_ui_set_enabled(&g.ui, fw->w,
                             !c->disabled && !c->readonly && fw->kind != FW_FILE);
     }
@@ -3114,14 +3127,52 @@ static void toggle_positioning(void)
 static const uint32_t kZoomSteps[] = {250,  330,  500,  670,  750,  800,  900,  1000, 1100,
                                       1250, 1500, 1750, 2000, 2500, 3000, 4000, 5000};
 
+// The page's form controls draw in the Web face (fonts.conf's `web.face`)
+// at the size browsers give a control — 13/16 of the page's default size,
+// 13 px at 16 (Chrome's small-control) — at the zoom in force, lent to the
+// window so only those widgets wear it. A face that will not open leaves
+// them in the Interface font, and says so once.
+static uint32_t s_controls_px;
+static bool s_controls_refused;
+
+static void controls_face(void)
+{
+    uint32_t px = (uint32_t)(((uint64_t)(uint32_t)s_env.viewport_font_px * 13 * g.zoom + 8000) /
+                             16000);
+    if (px == s_controls_px)
+        return;
+    s_controls_px = px;
+    os64_text_context_t *text = os64_ui_font_context(&g.ui);
+    os64_font_set_t *set = NULL;
+    os64_font_config_error_t error = {0};
+    os64_font_config_status_t st =
+        text != NULL ? os64_font_config_web_prepare(text, &s_fonts_conf, px, &set, &error)
+                     : OS64_FONT_CONFIG_NO_MEMORY;
+    if (st == OS64_FONT_CONFIG_OK && os64_ui_font_app(&g.ui, set, OS64_FONT_ROLE_UI) == OS64_FONT_OK) {
+        os64_font_set_release(set);     // the window holds its own reference
+        return;
+    }
+    os64_font_set_release(set);
+    (void)os64_ui_font_app(&g.ui, NULL, OS64_FONT_ROLE_UI);
+    if (!s_controls_refused)
+        os64_printf("yonder: the Web face (%s) could not be used (%s); form controls are drawn "
+                    "in the Interface font\n",
+                    s_fonts_conf.roles[OS64_FONT_CONFIG_WEB].face[0],
+                    st != OS64_FONT_CONFIG_OK ? os64_font_config_status_name(st)
+                                              : "the window would not take it");
+    s_controls_refused = true;
+}
+
 // The zoom in force from now on; the page follows once the events queued
-// with this one are drained, so presses in a row lay it out once.
+// with this one are drained, so presses in a row lay it out once. The
+// controls' face follows at once, so the relayout measures them in it.
 static void zoom_to(uint32_t zoom)
 {
     if (zoom == g.zoom)
         return;
     g.zoom = zoom;
     g.relayout_due = true;
+    controls_face();
 }
 
 // The next step in (`in`) or out from the zoom in force; one between steps
@@ -3669,6 +3720,7 @@ int main(int argc, char **argv)
     layout();
     os64_ui_set_root(&g.ui, &g.root);
     (void)os64_ui_font_follow(&g.ui);
+    controls_face();
     bar_show(false);
     layout();
 

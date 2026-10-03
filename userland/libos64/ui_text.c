@@ -411,7 +411,7 @@ static os64_font_status_t field_geom(os64_ui_textfield_t *tf, os64_ui_t *ui,
                                      line_geom_t *g)
 {
 	*g = geom_whole(tf->buf, tf->len);
-	return os64_ui_run_resolve(ui, &tf->w.run, OS64_FONT_ROLE_UI,
+	return os64_ui_run_resolve(ui, &tf->w.run, ui_role(&tf->w, OS64_FONT_ROLE_UI),
 	                           tf->buf, tf->len, &g->run);
 }
 
@@ -476,7 +476,7 @@ static void field_commit(os64_ui_widget_t *w)
 // arithmetic.
 static void field_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 {
-	w->natural_h = os64_ui_control_min_height(ui);
+	w->natural_h = ui_control_min_height(ui, ui_role(w, OS64_FONT_ROLE_UI));
 }
 
 static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
@@ -492,7 +492,7 @@ static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	int32_t inset = field_inset(t);
 	os64_gui_rect_t inner = { w->bounds.x + inset, w->bounds.y,
 	                          w->bounds.w - 2 * inset, w->bounds.h };
-	int32_t row = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
+	int32_t row = os64_ui_font_row_height(ui, ui_role(w, OS64_FONT_ROLE_UI));
 	int32_t ty = w->bounds.y + (w->bounds.h - row) / 2;
 	int32_t origin = inner.x - tf->left_px;
 
@@ -502,7 +502,7 @@ static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	line_geom_t g;
 	if (field_geom(tf, ui, &g) != OS64_FONT_OK)
 		return;
-	os64_ui_draw_run(ui, g.run, OS64_FONT_ROLE_UI, &ctx->surf, inner,
+	os64_ui_draw_run(ui, g.run, ui_role(w, OS64_FONT_ROLE_UI), &ctx->surf, inner,
 	                 origin, ty, tf->buf, tf->len, t->field_fg, t->field_bg);
 
 	if (tf->selected && tf->anchor != tf->cursor) {
@@ -513,7 +513,7 @@ static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 			sel.x += origin; sel.y = ty; sel.h = row;
 			if (os64_rect_intersect(sel, inner, &clipped)) {
 				os64_draw_fill_rect(&ctx->surf, clipped, t->text_sel_bg);
-				os64_ui_draw_run(ui, g.run, OS64_FONT_ROLE_UI, &ctx->surf, clipped,
+				os64_ui_draw_run(ui, g.run, ui_role(w, OS64_FONT_ROLE_UI), &ctx->surf, clipped,
 					origin, ty, tf->buf, tf->len, t->text_sel_fg, t->text_sel_bg);
 			}
 		}

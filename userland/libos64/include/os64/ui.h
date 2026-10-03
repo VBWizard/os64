@@ -307,6 +307,11 @@ struct os64_ui_widget
     // nowhere to report a failure to.
     void *run, *run_staged;
 
+    // Draw in the application's face (OS64_UI_FONT_APP) instead of the
+    // class's role. Set with os64_ui_widget_app_face, which drops the runs
+    // above: they were laid out in the face the widget is leaving.
+    bool app_face;
+
     // The UI this widget belongs to, threaded in when it joins a tree.
     // A paint routine is handed only (widget, canvas, theme) — the theme
     // cannot carry a font, so this is how a widget reaches the window's
@@ -385,7 +390,9 @@ struct os64_ui
 
 // ── the window's fonts (F4; FONT_PROVIDER.md is the contract) ───────────────
 // A window measures and paints text through an immutable role set: UI for
-// labels, buttons, list rows and fields; DOCUMENT for textviews. The set is
+// labels, buttons, list rows and fields; DOCUMENT for textviews — and, for
+// the widgets that ask, a face the application lends (os64_ui_font_app,
+// below). The set is
 // F5's to resolve from configuration — until then a window binds the builtin
 // 8x16 face on first use, which is the face libui always drew with.
 //
@@ -533,13 +540,39 @@ os64_font_set_t *os64_ui_font_set(os64_ui_t *ui);
 os64_font_status_t os64_ui_font_status(const os64_ui_t *ui);
 size_t os64_ui_font_live_bytes(const os64_ui_t *ui);
 
+// ── the application's face ──────────────────────────────────────────────────
+// A face the APPLICATION lends the window, beside the role set the settings
+// choose, for widgets that draw something other than the application's own
+// interface: a browser's form controls belong to the page, drawn in the
+// Web face at the page's zoom, while its toolbar wears the Interface font.
+// A widget asks for it with os64_ui_widget_app_face — a class that draws in
+// the Interface role honours it; a textview keeps the Document role — and
+// every other widget is untouched. The adoption that replaces the window's
+// set leaves this face alone — it is not the settings' to change.
+//
+// os64_ui_font_app lends `role` of `set` (prepared on THIS window's
+// context, like any set the window wears), retaining the set; NULL lends
+// nothing, and an app-face widget then draws in the Interface role. Measure
+// in the lent face with OS64_UI_FONT_APP as the role. Every
+// run an app-face widget holds is dropped and its geometry re-derived, so
+// the next paint lays its text out in the new face — which is why a lend
+// is cheap enough to follow a zoom. On failure the window keeps the face
+// it had. os64_ui_font_release lets go of it with everything else.
+#define OS64_UI_FONT_APP ((os64_font_role_t)OS64_FONT_ROLE_COUNT)
+os64_font_status_t os64_ui_font_app(os64_ui_t *ui, os64_font_set_t *set,
+                                    os64_font_role_t role);
+// Draw this widget in the application's face (true) or its class's role.
+// Re-derives its geometry and drops its runs, so it may change at any time.
+void os64_ui_widget_app_face(os64_ui_t *ui, os64_ui_widget_t *w, bool app);
+
 // Re-derive every widget's cached geometry from the current binding. Called
 // for you when the set changes; an app needs it only after building a tree
 // under a set it bound earlier.
 void os64_ui_font_restamp(os64_ui_t *ui);
 
 // TEAR THE WINDOW'S FONTS DOWN. It drops every run the widget tree retains,
-// drops the window's set, and — if libui built the context — destroys it.
+// drops the window's set and the application's face, and — if libui built
+// the context — destroys it.
 // An app that simply exits need not call this; it exists so a fixture can
 // close the loop on the engine's accounting, and so a program that outlives
 // its windows can give an engine back.

@@ -11,8 +11,10 @@ static os64_font_config_status_t install(os64_text_context_t *context,
     const os64_font_config_t *config, os64_font_role_t role,
     char out[OS64_FONT_PATH_CAP], os64_font_config_error_t *error)
 {
-    if (error) *error = (os64_font_config_error_t){.role = role};
-    if (!context || !config || !out || role >= OS64_FONT_ROLE_COUNT)
+    bool web = (size_t)role == OS64_FONT_CONFIG_WEB;
+    if (error) *error = (os64_font_config_error_t){
+        .role = web ? OS64_FONT_ROLE_COUNT : role, .web = web};
+    if (!context || !config || !out || (size_t)role >= OS64_FONT_CONFIG_ROLES)
         return OS64_FONT_CONFIG_PATH;
     char valid[4096];
     if (os64_font_config_encode(config, valid, sizeof(valid)) < 0) return OS64_FONT_CONFIG_PATH;
@@ -53,7 +55,9 @@ static os64_font_config_status_t install(os64_text_context_t *context,
         os64_font_config_t candidate = *config;
         os64_strcopy(candidate.roles[role].face[0], OS64_FONT_PATH_CAP, temp);
         os64_font_set_t *set = NULL;
-        status = os64_font_config_prepare(context, &candidate, &set, error);
+        status = web ? os64_font_config_web_prepare(context, &candidate,
+                           candidate.roles[role].size, &set, error)
+                     : os64_font_config_prepare(context, &candidate, &set, error);
         os64_font_set_release(set);
     }
     if (!status && os64_rename_with_flags(temp, path, OS64_RENAME_NOREPLACE) != 0)

@@ -23,9 +23,11 @@ static bool dotted_key(const char *s)
 
 static bool font_key(const char *key)
 {
-    const char *const roles[] = {"ui", "terminal", "document"};
+    // The Web setting travels with the roles: the Workshop edits all four,
+    // and a draft read back from the session must not lose it.
+    const char *const roles[] = {"ui", "terminal", "document", "web"};
     const char *const fields[] = {"face", "size", "fallback.1", "fallback.2"};
-    for (size_t r = 0; r < 3; ++r) for (size_t f = 0; f < 4; ++f) {
+    for (size_t r = 0; r < 4; ++r) for (size_t f = 0; f < 4; ++f) {
         char name[40];
         os64_snprintf(name, sizeof(name), "fonts.%s.%s", roles[r], fields[f]);
         if (os64_streq_nocase(name, key)) return true;
