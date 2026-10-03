@@ -54,6 +54,8 @@ const char *os64_page_reason_name(os64_page_reason_t reason)
         return "there is no such control on this page";
     case OS64_PAGE_REASON_WRONG_KIND:
         return "that control does not hold a value of that kind";
+    case OS64_PAGE_REASON_STALE:
+        return "the page changed; wait for its controls and links to refresh";
     case OS64_PAGE_REASON_READONLY:
         return "the page keeps that value as it is";
     }
@@ -458,6 +460,8 @@ os64_page_verdict_t os64_page_activate(const os64_page_t *page, os64_page_what_t
     request_start(out);
     if (page == NULL)
         return refuse(out, OS64_PAGE_REASON_NO_CONTROL);
+    if (p_stale(page))
+        return refuse(out, OS64_PAGE_REASON_STALE);
     if (what.how == OS64_PAGE_ACTIVATE_LINK)
         return follow_link(page, what.index, out);
     if (what.how == OS64_PAGE_ACTIVATE_REFRESH)

@@ -143,7 +143,7 @@ static way_page_t page_of(const char *html, const char *url)
     os64_html_parser_feed(parser, html, strlen(html));
     p.doc = os64_html_parser_finish(parser);
     if (p.doc != NULL)
-        p.model = os64_page_build(p.doc, url, NULL);
+        p.model = os64_page_build(p.doc, url, NULL, NULL);
     snprintf(p.url, sizeof(p.url), "%s", url);
     return p;
 }

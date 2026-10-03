@@ -16,9 +16,9 @@
 // anything. It STATES FACTS — "this request leaves an encrypted page for a
 // plain one" — and the face decides what to do with them.
 //
-// THE DOCUMENT MUST OUTLIVE THE PAGE. Every string below is either a pointer
-// into libhtml's tree or storage inside the page object, and both go away
-// when their owner does.
+// The document outlives its models and control state. Models pin its tree;
+// control values may also borrow state storage. Free models, then state,
+// then the document, on the document's owning thread.
 
 #include "html/html.h"
 #include "os64/url.h"
@@ -28,8 +28,25 @@
 
 #pragma GCC visibility push(default)
 
-// A page's model, built once from a document and read by whatever draws it.
+// A model snapshots one document version; control properties share node state.
 typedef struct os64_page os64_page_t;
+typedef struct os64_page_state os64_page_state_t;
+
+#define OS64_PAGE_STATE_DEFAULT_MAX_BYTES ((size_t)16 * 1024 * 1024)
+#define OS64_PAGE_FATAL_EXIT 0x50414745
+
+// State belongs to one document, including nodes not connected to its tree.
+// The cap includes its header, records, cached values and operation scratch.
+// Zero selects the default cap. NULL means no memory (or no document).
+// Freeing explicit state with models still borrowing it ends the program
+// with OS64_PAGE_FATAL_EXIT. State does not pin the document itself.
+os64_page_state_t *os64_page_state_create(os64_html_document_t *doc, size_t max_bytes);
+void os64_page_state_free(os64_page_state_t *state);
+size_t os64_page_state_bytes(const os64_page_state_t *state);
+// Nonzero revision of effective control state, including edit origin.
+// Failed operations and getter-only cache fills leave it alone.
+// HTML mutations have their own document version.
+uint64_t os64_page_state_version(const os64_page_state_t *state);
 
 // ── What a rule can say no with ─────────────────────────────────────────
 //
@@ -61,6 +78,7 @@ typedef enum {
     OS64_PAGE_REASON_NO_CONTROL,               // that index names no control
     OS64_PAGE_REASON_WRONG_KIND,               // that control holds no such value
     OS64_PAGE_REASON_READONLY,                 // the page keeps that value as it is
+    OS64_PAGE_REASON_STALE,                    // the document changed since this model
 } os64_page_reason_t;
 
 // The refusal in words, for a status row. Never NULL.
@@ -310,8 +328,16 @@ os64_page_options_t os64_page_options_default(void);
 // A REFUSED document still has a tree, and a page is built from what there
 // is; NULL comes back only when nothing at all could be. `opt` NULL selects
 // the defaults.
+// A supplied state must belong to doc and outlive the model. NULL makes
+// private shared state, released with its last model, including rebuilds.
+// Each model takes one document pin; pin exhaustion returns NULL.
 os64_page_t *os64_page_build(const os64_html_document_t *doc, const char *document_url,
-                             const os64_page_options_t *opt);
+                             const os64_page_options_t *opt, os64_page_state_t *state);
+// Build beside old at the document's current version, sharing control state.
+// Any incomplete candidate returns NULL, preserving old and shared state.
+// Either model may be freed first. Successful normalization publishes to
+// the other live models before replacing state storage.
+os64_page_t *os64_page_rebuild(const os64_page_t *old);
 void os64_page_free(os64_page_t *page);
 
 // The walk ran short of memory partway. What is in the model is real and
@@ -414,8 +440,7 @@ os64_page_reason_t os64_page_resolve_fragment(const os64_page_t *page,
 // includes embedded U+0000 bytes; they survive text sanitization but make
 // numeric, date/time and color strings invalid for their scalar grammars.
 //
-// The model does not depend on how wide anything is, so a face builds it
-// ONCE per page: a window that changes size re-draws and never rebuilds.
+// A resize does not require a model rebuild; a document change does.
 //
 // THESE ARE A PERSON'S EDITS, so they refuse what a person cannot do in a
 // browser: text goes only into a control a person types into (a textarea,
@@ -432,7 +457,7 @@ os64_page_reason_t os64_page_resolve_fragment(const os64_page_t *page,
 // Each returns 0, or a negative OS64_PAGE_REASON_*: NO_CONTROL for an index
 // that names no control, WRONG_KIND for a control or option of the wrong
 // kind, DISABLED or READONLY for one the page took away, NO_MEMORY for
-// memory it could not get. Failure preserves published values and
+// memory it could not get, STALE when the tree changed. Failure preserves published values and
 // selections. Incomplete models reject edits and form submission with
 // NO_MEMORY. File selection has no text setter.
 int64_t os64_page_set_text(os64_page_t *page, int32_t control, const char *utf8, size_t len);
@@ -447,6 +472,42 @@ int64_t os64_page_set_chosen(os64_page_t *page, int32_t control, int32_t option,
 // Normalized defaults are retained at build time; reset allocates nothing.
 // An incomplete model is refused without discarding edits.
 int64_t os64_page_reset(os64_page_t *page, int32_t form);
+
+// A script assigns by node, including detached and never-inserted controls.
+// Disabled, readonly and hidden controls accept these assignments. Value
+// mode decides storage: text/textarea use dirty state; hidden/button/tick
+// values write the HTML value attribute; a file accepts only empty. Select
+// value chooses the first matching option, or clears its selection.
+// Checkedness is for checkbox/radio; selectedIndex is for select, with an
+// out-of-range index clearing it (including -1). Options are keyed by node.
+// WRONG_KIND refuses foreign nodes, unsupported kinds and invalid arguments;
+// NO_MEMORY includes state cap and HTML budget exhaustion. Failure changes
+// neither state, published views nor the HTML version.
+int64_t os64_page_node_set_value(os64_page_state_t *state, const os64_html_node_t *node,
+                                 const char *utf8, size_t len);
+int64_t os64_page_node_set_checked(os64_page_state_t *state, const os64_html_node_t *node,
+                                   bool on);
+int64_t os64_page_node_set_selected_index(os64_page_state_t *state,
+                                          const os64_html_node_t *node, int32_t index);
+// Current dirty getters allocate nothing. After an HTML change, reading a
+// dirty value re-sanitizes it for its current type and constraints, with all
+// replacements staged before publication; file observation clears its value.
+// Reading an untouched default value may
+// cache sanitized bytes within the cap; failure preserves outputs and cache.
+// The returned bytes last until the node's value is successfully changed,
+// its default cache is refreshed after an HTML mutation, or state is freed.
+// Getter cache refresh alone does not advance the control-state revision;
+// effective dirty-value re-sanitization does. An unchanged assignment retains
+// the published bytes. Person/script origin is retained separately because
+// length validation applies only after a person edit. These verbs observe the current tree: transitions
+// between input value modes that happen entirely between observations need
+// a state-aware mutation entrance in the browser binding (DOM D5).
+int64_t os64_page_node_value(os64_page_state_t *state, const os64_html_node_t *node,
+                             const char **value, size_t *len);
+int64_t os64_page_node_checked(os64_page_state_t *state, const os64_html_node_t *node,
+                               bool *on);
+int64_t os64_page_node_selected_index(os64_page_state_t *state,
+                                      const os64_html_node_t *node, int32_t *index);
 
 // ── The door ────────────────────────────────────────────────────────────
 

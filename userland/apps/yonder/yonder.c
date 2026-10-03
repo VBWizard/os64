@@ -440,7 +440,7 @@ static bool page_from_text(Page *p)
     os64_html_parser_feed(parser, p->way.text, p->way.textlen);
     p->plain = os64_html_parser_finish(parser);
     if (p->plain != NULL)
-        p->plain_model = os64_page_build(p->plain, p->way.url, NULL);
+        p->plain_model = os64_page_build(p->plain, p->way.url, NULL, NULL);
     return p->plain != NULL && p->plain_model != NULL;
 }
 
@@ -1180,7 +1180,7 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
     os64_snprintf(fresh.way.url, sizeof(fresh.way.url), "file://%s", path);
     fresh.way.doc = parse_file(bytes, len);
     os64_free(bytes);
-    fresh.way.model = fresh.way.doc != NULL ? os64_page_build(fresh.way.doc, fresh.way.url, NULL)
+    fresh.way.model = fresh.way.doc != NULL ? os64_page_build(fresh.way.doc, fresh.way.url, NULL, NULL)
                                             : NULL;
     if (fresh.way.model == NULL) {
         page_clear(&fresh);

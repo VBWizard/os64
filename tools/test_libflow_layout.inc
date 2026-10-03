@@ -12,7 +12,7 @@
 static char *layout_dump_of(const char *html, int32_t width)
 {
     os64_html_document_t *doc = parse(html);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     flow_tree_t *tree = flow_layout(doc, page, width, &kEnv);
     char *text = NULL;
     if (tree != NULL) {

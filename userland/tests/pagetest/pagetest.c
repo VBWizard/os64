@@ -20,7 +20,7 @@ static os64_page_t *build(const char *html, os64_html_document_t **doc)
     require(os64_html_parser_feed(parser,html,os64_strlen(html)) == 0,"parse feed");
     *doc=os64_html_parser_finish(parser);
     require(*doc != NULL && !(*doc)->refusal,"parse finish");
-    os64_page_t *page=os64_page_build(*doc,"https://host/page",NULL);
+    os64_page_t *page=os64_page_build(*doc,"https://host/page",NULL, NULL);
     require(page != NULL && !os64_page_incomplete(page),"complete page model");
     return page;
 }
@@ -99,7 +99,7 @@ static void navigation(void)
     page=build("<form><input name=q value=abcdef><button>Go</button>",&doc);
     os64_page_free(page);
     os64_page_options_t opt=os64_page_options_default();opt.max_body=1;
-    page=os64_page_build(doc,"https://host/page",&opt);
+    page=os64_page_build(doc,"https://host/page",&opt, NULL);
     require(page && os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL,1,0,0},&req)==OS64_PAGE_NAVIGATE,"GET independent of body limit");
     require(req.body==NULL && os64_streq(req.url,"https://host/page?q=abcdef"),"GET query bytes");
     os64_page_request_free(&req);os64_page_free(page);os64_html_document_free(doc);
@@ -118,7 +118,7 @@ static void reference_edges(void)
     os64_page_free(page);os64_html_document_free(doc);
     page=build("<p id=target>Target</p><a href='data:text/plain,MiXeD#target'>Go</a>",&doc);
     os64_page_free(page);
-    page=os64_page_build(doc,"DATA:text/plain,MiXeD",NULL);
+    page=os64_page_build(doc,"DATA:text/plain,MiXeD",NULL, NULL);
     require(page && os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_LINK,0,0,0},&req)==OS64_PAGE_FRAGMENT &&
         req.anchor!=NULL,"opaque scheme same-document fragment");
     os64_page_request_free(&req);os64_page_free(page);os64_html_document_free(doc);
@@ -139,10 +139,66 @@ static void network_targets(void)
     }
 }
 
+static void rebuild(void)
+{
+    os64_html_document_t *doc;
+    os64_page_t *old = build("<form action=/before><input name=q value=initial><button>Go</button></form>", &doc);
+    os64_html_node_t *input = (os64_html_node_t *)os64_page_control(old, 0)->node;
+    os64_html_node_t *form = (os64_html_node_t *)os64_page_form(old, 0)->node;
+    require(os64_page_set_text(old, 0, "retained", 8) == 0, "edit before rebuild");
+    require(os64_html_remove(doc, input) == OS64_HTML_OK, "detach control");
+    os64_page_t *without = os64_page_rebuild(old);
+    require(without != NULL && os64_page_ncontrols(without) == 1, "rebuild detached control");
+    os64_page_free(old);
+    require(os64_html_insert(doc, form, input, form->first_child) == OS64_HTML_OK, "reinsert control");
+    os64_page_t *current = os64_page_rebuild(without);
+    require(current != NULL, "rebuild reinserted control");
+    int32_t index = os64_page_control_for(current, input);
+    require(index >= 0 && os64_streq(os64_page_control(current, index)->value, "retained"), "state survives detach and prior model free");
+    os64_page_free(without);
+    require(os64_html_set_attr(doc, form, "action", "/after", 6) == OS64_HTML_OK, "change form destination");
+    os64_page_request_t request;
+    require(os64_page_activate(current, (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 1, 0, 0}, &request) == OS64_PAGE_REFUSED &&
+            request.reason == OS64_PAGE_REASON_STALE && request.url == NULL && request.body == NULL, "stale destination refusal");
+    os64_page_request_free(&request);
+    require(os64_page_set_text(current, index, "wrong", 5) == -OS64_PAGE_REASON_STALE, "stale person edit refusal");
+    os64_page_t *fresh = os64_page_rebuild(current);
+    require(fresh != NULL, "rebuild changed destination");
+    require(os64_page_activate(fresh, (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 1, 0, 0}, &request) == OS64_PAGE_NAVIGATE &&
+            os64_streq(request.url, "https://host/after?q=retained"), "fresh destination and retained value");
+    os64_page_request_free(&request);
+    os64_page_free(fresh);
+    os64_page_free(current);
+
+    os64_page_state_t *state = os64_page_state_create(doc, 0);
+    require(state != NULL, "explicit control state");
+    require(os64_page_state_create(doc, 1) == NULL, "control state cap includes header");
+    int64_t status;
+    os64_html_node_t *detached = os64_html_create_element(doc, OS64_HTML_NS_HTML, "input", &status);
+    require(detached != NULL && status == OS64_HTML_OK && os64_html_owns_node(doc, detached), "owned never-inserted input");
+    uint64_t html_version = os64_html_version(doc);
+    uint64_t state_version = os64_page_state_version(state);
+    require(os64_page_node_set_value(state, detached, "scripted", 8) == 0 &&
+            os64_html_version(doc) == html_version && os64_page_state_version(state) != state_version, "detached dirty value and state revision");
+    require(os64_html_set_attr(doc, detached, "disabled", "", 0) == OS64_HTML_OK &&
+            os64_page_node_set_value(state, detached, "allowed", 7) == 0, "script assignment to disabled control");
+    require(os64_html_insert(doc, form, detached, NULL) == OS64_HTML_OK, "insert scripted control");
+    current = os64_page_build(doc, "https://host/page", NULL, state);
+    require(current != NULL && !os64_page_incomplete(current), "model borrows explicit state");
+    index = os64_page_control_for(current, detached);
+    require(index >= 0 && os64_streq(os64_page_control(current, index)->value, "allowed") &&
+            os64_page_set_text(current, index, "person", 6) == -OS64_PAGE_REASON_DISABLED, "script state survives insertion and person refusal");
+    os64_page_free(current);
+    os64_page_state_free(state);
+    os64_html_document_free(doc);
+    os64_printf("pagetest: D3 detach/rebuild, stale destinations and detached script state passed\n");
+    os64_serial_log("pagetest: PASS D3 rebuild and script state");
+}
+
 int main(void)
 {
     require(os64_heap_verify()==0,"heap before");
-    numeric();state();navigation();reference_edges();network_targets();
+    numeric();state();navigation();reference_edges();network_targets();rebuild();
     require(os64_heap_verify()==0,"heap after");
     os64_printf("pagetest: numeric conversion, range grids, control state and submission passed\n");
     os64_serial_log("pagetest: PASS numeric conversion, range grids, control state and submission");

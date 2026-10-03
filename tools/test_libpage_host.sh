@@ -22,7 +22,7 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/libpage/include -I userland/libhtml/include -I userland/libos64/include \
    -I abi/include -I tools -I userland/libpage/upstream/ryu \
    tools/test_libpage_host.c userland/apps/wend/render.c \
-   userland/libpage/core.c userland/libpage/resolve.c userland/libpage/value.c \
+   userland/libpage/core.c userland/libpage/state.c userland/libpage/resolve.c userland/libpage/value.c \
    userland/libpage/number.c userland/libpage/range.c userland/libpage/upstream/ryu/ryu/d2s.c \
    userland/libpage/submit.c userland/libpage/encode.c userland/libpage/refresh.c userland/libpage/activate.c \
    userland/libhtml/core.c userland/libhtml/encoding.c userland/libhtml/tokenizer.c \
@@ -32,3 +32,19 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
 
 if [ "$#" -eq 0 ]; then set -- --sweep; fi
 "$work/libpage_driver" "$@"
+
+# A live model borrows explicit state, so freeing that state must stop with
+# the PAGE badge rather than leave the model pointing at freed storage.
+if "$work/libpage_driver" --rebuild-live-state-free > "$work/fatal.log" 2>&1; then
+    cat "$work/fatal.log" >&2
+    echo "libpage: live-state free returned instead of ending the program" >&2
+    exit 1
+else
+    fatal_status=$?
+fi
+if [ "$fatal_status" -ne 3 ] || ! grep -q 'libpage host fatal exit: 0x50414745' "$work/fatal.log"; then
+    cat "$work/fatal.log" >&2
+    echo "libpage: live-state free missed the PAGE fatal exit" >&2
+    exit 1
+fi
+echo "libpage: live-state free stopped with PAGE badge"

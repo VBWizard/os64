@@ -662,7 +662,7 @@ static void multipart_case(void)
                        "<input name=a value=1><input type=file name=up>"
                        "<input type=submit></form>";
     os64_html_document_t *doc = parse(html, "utf-8");
-    os64_page_t *page = doc != NULL ? os64_page_build(doc, kPage, NULL) : NULL;
+    os64_page_t *page = doc != NULL ? os64_page_build(doc, kPage, NULL, NULL) : NULL;
     if (page == NULL) {
         fail("E: multipart", "no page");
         os64_html_document_free(doc);
@@ -1314,7 +1314,7 @@ static void pathological(void)
     // that has ever produced a finding at once.
     checks++;
     os64_html_document_t *doc = parse(kPathological, "utf-8");
-    os64_page_t *page = doc != NULL ? os64_page_build(doc, kPage, NULL) : NULL;
+    os64_page_t *page = doc != NULL ? os64_page_build(doc, kPage, NULL, NULL) : NULL;
     if (page == NULL) {
         fail("pathological", "no page");
         os64_html_document_free(doc);
@@ -1381,7 +1381,7 @@ static void exercise(void)
             parse(which == 0 ? kPathological : kSweepPages[which - 1], "utf-8");
         if (doc == NULL)
             continue;
-        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
         if (page != NULL) {
             for (int32_t i = 0; i < os64_page_ncontrols(page); i++) {
                 os64_page_set_text(page, i, "typed \xce\xa9", 8);

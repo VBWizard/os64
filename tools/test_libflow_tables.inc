@@ -252,7 +252,7 @@ static FLayout *layout_raw(const char *html, int32_t width, os64_html_document_t
                            os64_page_t **page, FStyles **styles, FBoxes **boxes)
 {
     *doc = parse(html);
-    *page = os64_page_build(*doc, kPage, NULL);
+    *page = os64_page_build(*doc, kPage, NULL, NULL);
     *styles = f_style_build(*doc, *page, &kEnv);
     *boxes = f_boxes_build(*doc, *page, *styles, &kEnv);
     return f_layout(*boxes, *doc, *page, &kEnv, width);

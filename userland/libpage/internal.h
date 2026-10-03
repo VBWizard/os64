@@ -15,6 +15,7 @@ typedef struct PBlock PBlock;
 
 typedef struct {
     PBlock *blocks;
+    os64_page_state_t *budget;
 } PArena;
 
 void *p_arena_alloc(PArena *arena, size_t size);
@@ -30,24 +31,64 @@ typedef struct {
 } PInitial;
 
 
-// ── A PERSON'S EDIT, KEYED BY THE NODE IT BELONGS TO ────────────────────
-//
-// Never by an index, so a model rebuilt over a changed tree can re-key what
-// survives (LIBPAGE.md ruling 2). This table is the only STORAGE of an
-// edit; a control's `value`, `checked` and an option's `selected` are made
-// to point at it, so a face still reads the live answer in one place.
-//
-// A record may reserve storage without carrying a change. Its text, on and
-// chosen sentinels determine dirty state; record presence does not.
-
-typedef struct {
-    const os64_html_node_t *node;   // THE KEY
-    char *text;                     // TEXT: NUL-terminated; NULL = untouched
+// Dirty control properties and getter caches belong to node identities.
+// An option carries its own selectedness record; reordering it does not
+// change which property was edited. Model pins retain snapshot tree bytes;
+// state publication retains replaceable value bytes until views are updated.
+typedef struct PNodeState PNodeState;
+struct PNodeState {
+    const os64_html_node_t *node;
+    char *text;
     size_t text_len;
-    int8_t on;                      // CHECKBOX / RADIO: -1 untouched, 0, 1
-    uint8_t *chosen;                // SELECT, per option: 2 untouched, 0, 1
-    int32_t nchosen;
-} PEdit;
+    uint64_t text_version;
+    char *cache;
+    size_t cache_len;
+    uint64_t cache_version, cache_state_version;
+    char *retired_text, *retired_cache;
+    int8_t on, selected;
+    bool selection_set, text_user;
+    bool on_dirty, on_attr, selected_dirty, selected_attr;
+    PNodeState *next;
+};
+
+struct os64_page_state {
+    os64_html_document_t *doc;
+    size_t max_bytes, bytes;
+    uint64_t version;
+    PNodeState **table;
+    size_t cap, count;
+    PNodeState *records;
+    os64_page_t *models;
+    bool private_owner;
+};
+
+// A reservation owns a replacement lookup table and new, untouched records
+// until commit; abandoning it cannot change a live property's dirty flags.
+typedef struct PValueStage PValueStage;
+typedef struct {
+    os64_page_state_t *state;
+    PValueStage *values;
+    PNodeState **table;
+    size_t cap, count;
+    PNodeState *records;
+} PReserve;
+
+void *p_state_alloc(os64_page_state_t *state, size_t size);
+void p_state_dealloc(os64_page_state_t *state, void *ptr);
+PNodeState *p_state_find(const os64_page_state_t *state, const os64_html_node_t *node);
+PNodeState *p_state_for_control(const os64_page_t *page, int32_t control);
+bool p_reserve_node(PReserve *reserve, const os64_html_node_t *node);
+void p_reserve_commit(PReserve *reserve);
+void p_reserve_abort(PReserve *reserve);
+void p_state_publish(os64_page_state_t *state);
+void p_state_changed(os64_page_state_t *state);
+bool p_value_is_attribute(os64_page_element_t element, os64_page_input_t input);
+int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node,
+                          const char *utf8, size_t len, bool user);
+bool p_state_normalize(os64_page_t *page);
+int64_t p_state_choose(os64_page_t *page, int32_t control, int32_t option, bool on);
+void p_state_reset(os64_page_t *page, int32_t form);
+bool p_stale(const os64_page_t *page);
 
 // Node to index, and string to index. Open addressing over a power-of-two
 // table: the model is walked once and asked many times, and a face asks per
@@ -71,7 +112,11 @@ struct os64_page {
     const os64_html_document_t *doc;
     os64_page_options_t opt;
     PArena arena;
-    bool incomplete;
+    bool incomplete, initial_ready;
+    uint64_t version;
+    os64_html_pin_t pin;
+    os64_page_state_t *state;
+    os64_page_t *state_next;
 
     // Where the page came from, and what references resolve against. Two
     // addresses, two jobs: the first decides a downgrade, the second
@@ -96,10 +141,8 @@ struct os64_page {
     int32_t nsheets, sheetcap;
 
     PInitial *initial;             // per control, captured after group normalization
-    PEdit *edits;
-    int32_t nedits, editcap;
 
-    PPtrMap link_map, form_map, control_map, edit_map, image_map, background_map;
+    PPtrMap link_map, form_map, control_map, image_map, background_map;
     // A fragment matches an `id` FIRST and an old-style `<a name>` second,
     // whatever tree order says, so the two cannot share one table.
     PStrMap id_map, aname_map;
@@ -168,13 +211,8 @@ bool p_nonnegative(const char *text, uint64_t *value);
 // Whether the select display size is one, using HTML integer parsing.
 bool p_select_one_line(const os64_page_control_t *control);
 // Make a control's `value`, `checked` and its options' `selected` agree with
-// the edit table, which is where a person's changes are actually kept.
+// shared node state, which owns the live control properties.
 void p_publish(os64_page_t *page, int32_t control);
-// The edit record for a control, made if it is not there yet. NULL on no
-// memory. `p_edit_find` never makes one.
-PEdit *p_edit_for(os64_page_t *page, int32_t control);
-PEdit *p_edit_find(const os64_page_t *page, int32_t control);
-
 // ── A. The base and reference resolution ────────────────────────────────
 
 // Where the page came from, canonicalised. False on no memory.

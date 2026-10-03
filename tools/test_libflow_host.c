@@ -233,7 +233,7 @@ static os64_html_document_t *parse(const char *html)
 static char *style_dump_of(const char *html)
 {
     os64_html_document_t *doc = parse(html);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     FStyles *styles = f_style_build(doc, page, &kEnv);
     char *text = NULL;
     if (styles != NULL) {
@@ -263,7 +263,7 @@ static void sheeted_open(Sheeted *p, const char *html, double width, double heig
 {
     memset(p, 0, sizeof(*p));
     p->doc = parse(html);
-    p->page = os64_page_build(p->doc, kPage, NULL);
+    p->page = os64_page_build(p->doc, kPage, NULL, NULL);
     garb_sheet_in_t in[16];
     for (int32_t i = 0; i < os64_page_nsheets(p->page) && p->n < 16; i++) {
         const os64_page_sheet_t *sh = os64_page_sheet(p->page, i);
@@ -457,7 +457,7 @@ static void allocation_sweep(void)
         return;
     }
     os64_html_document_t *doc = parse(html);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     char *whole = style_dump_of(html);
     size_t base_live = live;
     allocations = 0;
@@ -501,7 +501,7 @@ static void cascade_sweep(void)
         " p { font-family: 'Courier New', monospace; color: inherit } .x { width: calc(50% + 1em) }"
         "</style><p>a<p class=x>b<span style='font-family: Georgia'>c</span>";
     os64_html_document_t *doc = parse(kHtml);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     const os64_page_sheet_t *sh = os64_page_sheet(page, 0);
     garb_parsed_t sheet;
     garb_parse_style_element(sh->node, &sheet);
@@ -579,7 +579,7 @@ static os64_html_document_t *nested(const char *open, const char *close, int n, 
 static int nested_whole(const char *open, const char *close, int n, size_t max_depth)
 {
     os64_html_document_t *doc = nested(open, close, n, max_depth);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     flow_tree_t *t = flow_layout(doc, page, 800, &kEnv);
     int whole = t == NULL ? -1 : !flow_incomplete(t);
     flow_free(t);
@@ -646,7 +646,7 @@ static void decoration_colour_cases(void)
 {
     os64_html_document_t *doc =
         parse("<!doctype html><u><font color=red><s>x</s></font></u>");
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     FStyles *styles = f_style_build(doc, page, &kEnv);
     FBoxes *boxes = f_boxes_build(doc, page, styles, &kEnv);
     FLayout *lay = f_layout(boxes, doc, page, &kEnv, 400);
@@ -753,7 +753,7 @@ static void cost_cases(void)
     s_cost_case = "a descendant or sibling question walks";
     alarm(60);
     os64_html_document_t *doc = parse(html);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     FStyles *styles = f_style_build(doc, page, &roomy);
     FBoxes *boxes = styles != NULL ? f_boxes_build(doc, page, styles, &roomy) : NULL;
     alarm(0);
@@ -782,7 +782,7 @@ static void cost_cases(void)
     s_cost_case = "a page that multiplies its boxes met no budget";
     alarm(60);
     doc = parse(html);
-    page = os64_page_build(doc, kPage, NULL);
+    page = os64_page_build(doc, kPage, NULL, NULL);
     styles = f_style_build(doc, page, &tight);
     boxes = styles != NULL ? f_boxes_build(doc, page, styles, &tight) : NULL;
     FLayout *lay = boxes != NULL ? f_layout(boxes, doc, page, &tight, 800) : NULL;
@@ -819,7 +819,7 @@ static void cost_cases(void)
     s_cost_case = "a chain of declared columns met no budget";
     alarm(60);
     doc = parse(html);
-    page = os64_page_build(doc, kPage, NULL);
+    page = os64_page_build(doc, kPage, NULL, NULL);
     styles = f_style_build(doc, page, &eight);
     boxes = styles != NULL ? f_boxes_build(doc, page, styles, &eight) : NULL;
     lay = boxes != NULL ? f_layout(boxes, doc, page, &eight, 800) : NULL;
@@ -864,7 +864,7 @@ static void limit_cases(void)
         };
         for (int i = 0; i < F_ARRAY(pages); i++) {
             os64_html_document_t *doc = parse(pages[i]);
-            os64_page_t *page = os64_page_build(doc, kPage, NULL);
+            os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
             flow_tree_t *t = flow_layout(doc, page, 800, &kEnv);
             expect("a skewed picture's shape is held, not overflowed",
                    t != NULL && !flow_incomplete(t) && flow_height(t) > 0 && flow_width(t) > 0,
@@ -900,7 +900,7 @@ static void limit_cases(void)
         const char *html = "<!doctype html><p>one two three four five six seven";
         os64_html_parser_feed(p, html, strlen(html));
         os64_html_document_t *doc = os64_html_parser_finish(p);
-        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
         flow_tree_t *t = flow_layout(doc, page, 400, &kEnv);
         expect("a page the parser refused partway is incomplete",
                doc != NULL && doc->refusal != 0 && t != NULL && flow_incomplete(t), NULL);
@@ -915,7 +915,7 @@ static void limit_cases(void)
         os64_html_document_t *doc = parse("<!doctype html><table width=1000000%><tr><td>"
                                           "<table width=1000000%><tr><td>"
                                           "<table width=1000000%><tr><td>x</table></table></table>");
-        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
         flow_tree_t *t = flow_layout(doc, page, 800, &kEnv);
         expect("nested percentages are held, not overflowed",
                t != NULL && !flow_incomplete(t) && flow_width(t) == INT32_MAX, NULL);
@@ -955,7 +955,7 @@ static void limit_cases(void)
     // on a thread with a small stack; the parser and libpage do not.
     {
         os64_html_document_t *doc = nested("<slot>", "</slot>", 20000, 40000);
-        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
         Deep d = {doc, page, -1};
         pthread_attr_t attr;
         pthread_attr_init(&attr);
@@ -999,7 +999,7 @@ static void limit_cases(void)
     for (int i = 0; i < 2200; i++)
         at += (size_t)snprintf(html + at, cap - at, "<img src=known.png height=1000000><br>");
     os64_html_document_t *doc = parse(html);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     flow_tree_t *t = flow_layout(doc, page, 200, &kEnv);
     expect("a page past INT32_MAX is held to it",
            t != NULL && !flow_incomplete(t) && flow_height(t) == INT32_MAX, NULL);
@@ -1025,7 +1025,7 @@ static void limit_cases(void)
     memset(html + at, 'M', n);
     html[at + n] = '\0';
     doc = parse(html);
-    page = os64_page_build(doc, kPage, NULL);
+    page = os64_page_build(doc, kPage, NULL, NULL);
     t = flow_layout(doc, page, 800, &kEnv);
     expect("a word wider than the engine's coordinates is still laid out",
            t != NULL && !flow_incomplete(t) && flow_width(t) > 1000000, NULL);
@@ -1065,7 +1065,7 @@ static void hostile_corpus(void)
         if (html == NULL)
             continue;
         os64_html_document_t *doc = parse(html);
-        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
         static const int32_t widths[] = {800, 0};
         for (int k = 0; k < F_ARRAY(widths); k++) {
             flow_tree_t *t = flow_layout(doc, page, widths[k], &env);
@@ -1165,7 +1165,7 @@ static void table_fuzz(size_t pages)
         size_t at = (size_t)snprintf(html, 65536, "%s", tpick(2) ? "<!doctype html>" : "");
         tfuzz_table(html, 65536, &at, 0);
         os64_html_document_t *doc = parse(html);
-        os64_page_t *page = os64_page_build(doc, kPage, NULL);
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
         static const int32_t widths[] = {800, 0};
         for (int k = 0; k < F_ARRAY(widths); k++) {
             flow_tree_t *t = flow_layout(doc, page, widths[k], &env);
@@ -1340,7 +1340,7 @@ static void layout_sweep(void)
         "<!doctype html><h1>T</h1><p>one <b>two</b> three<br>four <img src=known.png>"
         "<ul><li>a<li>b</ul><pre>x\ty</pre><font face=arial><p>in</p>out</font>";
     os64_html_document_t *doc = parse(html);
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     size_t base_live = live;
     allocations = 0;
     flow_tree_t *probe = flow_layout(doc, page, 300, &kEnv);

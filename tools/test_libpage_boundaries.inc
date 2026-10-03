@@ -14,7 +14,7 @@ static void boundary_number(os64_page_t *page)
 static void boundary_failures(const char *html, int index)
 {
     os64_html_document_t *doc=parse(html,"utf-8");
-    os64_page_t *page=os64_page_build(doc,kPage,NULL);
+    os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
     os64_page_what_t what={OS64_PAGE_ACTIVATE_CONTROL,index,7,9};
     os64_page_request_t req;
     size_t before=allocations;
@@ -51,7 +51,7 @@ static void boundary_network_targets(void)
                     snprintf(html,sizeof(html),"<form method=%s %s><input name=q value=abc><button>Go</button>",method,route==3?"action=''":"");
                 os64_html_document_t *doc=parse(html,"utf-8");
                 os64_page_options_t opt=os64_page_options_default();opt.max_body=1;
-                os64_page_t *page=os64_page_build(doc,route>=2?targets[i]:kPage,&opt);
+                os64_page_t *page=os64_page_build(doc,route>=2?targets[i]:kPage,&opt, NULL);
                 os64_page_request_t req={0};
                 state_expect("network target model",page!=NULL);
                 os64_page_verdict_t verdict=os64_page_activate(page,(os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL,1,0,0},&req);
@@ -126,7 +126,7 @@ static void boundary_cases(void)
     os64_html_document_t *doc=parse("<form method=post><input name=q value=1><button>Go</button></form>","utf-8");
     for (size_t cap=2;cap<=4;cap++) {
         os64_page_options_t opt=os64_page_options_default();opt.max_body=cap;
-        os64_page_t *page=os64_page_build(doc,kPage,&opt);
+        os64_page_t *page=os64_page_build(doc,kPage,&opt, NULL);
         os64_page_request_t req;os64_page_what_t what={OS64_PAGE_ACTIVATE_CONTROL,1,0,0};
         os64_page_verdict_t result=os64_page_activate(page,what,&req);
         state_expect("boundary: exact body ceiling",cap<3 ? result==OS64_PAGE_REFUSED &&

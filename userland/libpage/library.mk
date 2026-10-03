@@ -3,7 +3,7 @@
 # real DT_NEEDED edges on libhtml (the tree it reads) and libos64 (the URL
 # grammar and the Unicode table `dir=auto` needs); neither of those knows a
 # form exists. Browsers and the focused guest test acquire this edge.
-LIBPAGE_SRCS := libpage/core.c libpage/resolve.c libpage/value.c libpage/submit.c \
+LIBPAGE_SRCS := libpage/core.c libpage/state.c libpage/resolve.c libpage/value.c libpage/submit.c \
                 libpage/encode.c libpage/refresh.c libpage/activate.c libpage/number.c libpage/range.c \
                 libpage/upstream/ryu/ryu/d2s.c
 LIBPAGE_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBPAGE_SRCS))

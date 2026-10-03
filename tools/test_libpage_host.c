@@ -34,11 +34,11 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len)
 static size_t allocations, fail_at, live;
 static bool fail_single;
 
-// libhtml ends the program when a pinned document is freed. A harness that
-// reached this has found that, so it fails.
+// Library lifetime faults end the program. The badge distinguishes the
+// intentional fatal probe from an unrelated exit in the ordinary suite.
 void os64_exit(int32_t code)
 {
-    (void)code;
+    fprintf(stderr, "libpage host fatal exit: 0x%08x\n", (unsigned)code);
     exit(3);
 }
 void *os64_malloc(size_t size)
@@ -359,7 +359,7 @@ static void run(PCase c)
         fail(c.name, "the markup would not parse");
         return;
     }
-    os64_page_t *page = os64_page_build(doc, c.document != NULL ? c.document : kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, c.document != NULL ? c.document : kPage, NULL, NULL);
     if (page == NULL) {
         fail(c.name, "no page");
         os64_html_document_free(doc);
@@ -424,7 +424,7 @@ static void model(const char *step_ids, const char *name, const char *html,
         fail(name, "the markup would not parse");
         return;
     }
-    os64_page_t *page = os64_page_build(doc, kPage, NULL);
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     if (page == NULL) {
         fail(name, "no page");
         os64_html_document_free(doc);
@@ -437,6 +437,7 @@ static void model(const char *step_ids, const char *name, const char *html,
 
 #include "test_libpage_cases.inc"
 #include "test_libpage_state.inc"
+#include "test_libpage_rebuild.inc"
 #include "test_libpage_number.inc"
 #include "test_libpage_boundaries.inc"
 #include "test_libpage_navigation.inc"
@@ -444,8 +445,13 @@ static void model(const char *step_ids, const char *name, const char *html,
 
 int main(int argc, char **argv)
 {
+    if (argc > 1 && strcmp(argv[1], "--rebuild-live-state-free") == 0) {
+        rebuild_live_state_free();
+        return 1;
+    }
     bool sweep = argc > 1 && strcmp(argv[1], "--sweep") == 0;
     bool numeric_boundary = argc > 1 && strcmp(argv[1], "--numeric-boundary") == 0;
+    bool rebuild_only = argc > 1 && strcmp(argv[1], "--rebuild") == 0;
     if (numeric_boundary) {
         // Focused range regressions; the default suite also checks the
         // independent decimal oracle and conversion boundaries.
@@ -457,9 +463,12 @@ int main(int argc, char **argv)
                    "<input type=range min=0.1 max=0.9 step=0.2 value=0.4>", 0, "0.5");
         value_case("H10", "numeric boundary: disparate decimal scales",
                    "<input type=range min=1e-20 max=1 step=any>", 0, "0.5");
+    } else if (rebuild_only) {
+        rebuild_contract();
     } else {
         cases();
         state_cases();
+        rebuild_contract();
         number_cases();
         boundary_cases();
         navigation_cases();

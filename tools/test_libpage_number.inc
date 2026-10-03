@@ -20,7 +20,7 @@ static void number_cases(void)
         char label[96];
         snprintf(label,sizeof(label),"range decimal oracle %zu",i);
         os64_html_document_t *doc=parse(range_reference[i].html,"utf-8");
-        os64_page_t *page=os64_page_build(doc,kPage,NULL);
+        os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
         const os64_page_control_t *c=os64_page_control(page,0);
         char *end=NULL;
         double actual=strtod(c->value,&end), want=strtod(range_reference[i].value,NULL);
