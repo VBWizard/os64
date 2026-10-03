@@ -2170,8 +2170,16 @@ static void read_exact(void *p, size_t n)
         exit(2);
     }
 }
+#ifndef HTML_TOKENIZER_ONLY
+#include "test_html_fragment.inc"
+#endif
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--fragments")) {
+        fragment_checks();
+        printf("html fragments: %zu run, %zu failed\n", checks_run, checks_failed);
+        return checks_failed ? 1 : 0;
+    }
     bool safety = argc > 1 && strcmp(argv[1], "--safety") == 0;
     bool fuzz = argc > 1 && strcmp(argv[1], "--fuzz") == 0;
     bool abandon = argc > 1 && strcmp(argv[1], "--abandon") == 0;
@@ -2180,6 +2188,7 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc > 1 && strcmp(argv[1], "--checks") == 0) {
+        fragment_checks();
         encoding_exports();
         form_owners();
         integration_end_tags();
@@ -2206,13 +2215,29 @@ int main(int argc, char **argv)
         data[hdr[2]] = 0;
         read_exact(last, hdr[3]);
         last[hdr[3]] = 0;
+        unsigned kind = hdr[0] & ~SCRIPTING;
+        if (kind == 3) {
+            if (fuzz) {
+                uint64_t budget = 100 + (random_next(&fuzz_seed) >> 16) % 20000;
+                fragment_safety(data, hdr[2], last, hdr[0] & SCRIPTING, budget, false);
+                fuzz_cases++;
+            } else if (safety) {
+                fragment_safety(data, hdr[2], last, hdr[0] & SCRIPTING,
+                                4096 + 256 * (uint64_t)hdr[2], true);
+            } else {
+                fragment_record(data, hdr[2], last, hdr[0] & SCRIPTING);
+            }
+            free(last);
+            free(data);
+            continue;
+        }
         if (fuzz) {
             os64_html_options_t opt = os64_html_options_default();
-            opt.charset = random_next(&fuzz_seed) & 1 ? "utf-8" : NULL;
-            opt.max_work = 100 + random_next(&fuzz_seed) % 20000;
-            opt.max_depth = 1 + random_next(&fuzz_seed) % 100;
-            opt.max_arena_bytes = 16384 + random_next(&fuzz_seed) % 131072;
-            opt.scripting = random_next(&fuzz_seed) & 1;
+            opt.charset = (random_next(&fuzz_seed) >> 16) & 1 ? "utf-8" : NULL;
+            opt.max_work = 100 + (random_next(&fuzz_seed) >> 16) % 20000;
+            opt.max_depth = 1 + (random_next(&fuzz_seed) >> 16) % 100;
+            opt.max_arena_bytes = 16384 + (random_next(&fuzz_seed) >> 16) % 131072;
+            opt.scripting = (random_next(&fuzz_seed) >> 16) & 1;
             bounded_case(data, hdr[2], &opt, INT64_MAX, NULL);
             /* And once more with a random script at each stop. */
             if (opt.scripting) {
@@ -2252,7 +2277,6 @@ int main(int argc, char **argv)
         struct timespec begin, finish;
         clock_gettime(CLOCK_MONOTONIC, &begin);
         os64_html_options_t options = os64_html_options_default();
-        unsigned kind = hdr[0] & ~SCRIPTING;
         options.charset = kind == 1 ? "utf-8" : hdr[3] ? last : NULL;
         options.scripting = hdr[0] & SCRIPTING;
         os64_html_parser_t *p = os64_html_parser_new(&options);
@@ -2310,6 +2334,11 @@ int main(int argc, char **argv)
             json_string_n(dump, len);
             putchar(',');
             free(dump);
+            char *serialized = serialization_check(doc->document, true, options.scripting);
+            fputs("\"serialized\":", stdout);
+            json_string(serialized);
+            putchar(',');
+            free(serialized);
         }
         double elapsed = finish.tv_sec - begin.tv_sec + (finish.tv_nsec - begin.tv_nsec) / 1e9;
         printf("\"seconds\":%.9f,\"work\":%llu,\"arena\":%zu,\"nodes\":%zu,\"stops\":%zu,", elapsed,
@@ -2336,6 +2365,9 @@ int main(int argc, char **argv)
             return 3;
         }
     }
+    if (safety)
+        printf("Fragments: cases=%zu allocation-failures=%zu work-cuts=%zu\n",
+               fragment_cases, fragment_failures, fragment_work_cuts);
     if (fuzz)
         printf("Fuzz: cases=%zu chunkings=4 budget-seed=0x64f022 scripted-walks=%zu\n", fuzz_cases,
                fuzz_walks);

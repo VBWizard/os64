@@ -14,7 +14,9 @@ def main():
     ap.add_argument('--driver', required=True)
     ap.add_argument('--seconds', type=float, default=30)
     args = ap.parse_args()
-    source = [c['input'].encode('utf-8', 'surrogatepass') for c in cases()]
+    fixtures = list(cases())
+    source = [c['input'].encode('utf-8', 'surrogatepass') for c in fixtures]
+    contexts = sorted({c['fragment'] for c in fixtures if c.get('fragment') is not None})
     seed = 0x64f022
     rng = random.Random(seed)
     start = time.monotonic()
@@ -35,7 +37,10 @@ def main():
             elif data:
                 at = rng.randrange(len(data))
                 data = data[:at] + data[at:at + rng.randrange(1, 32)] * rng.randrange(1, 100) + data[at:]
-            wire += struct.pack('<4I', 1, 0, len(data), 0) + data
+            fragment = rng.randrange(2) == 0
+            context = rng.choice(contexts).encode() if fragment else b''
+            kind = (3 if fragment else 1) | (0x100 if rng.randrange(2) else 0)
+            wire += struct.pack('<4I', kind, 0, len(data), len(context)) + data + context
         try:
             result = subprocess.run([args.driver, '--fuzz'], input=wire, stdout=subprocess.PIPE,
                                     check=True, timeout=20)

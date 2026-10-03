@@ -50,13 +50,14 @@ THAT STOPS.
 
 Nodes and attributes are read-only views. A document is changed
 through the verbs at the foot of `html.h` (create, insert, replace, remove,
-attributes, text, clone), which keep every rule a reader relies on; the design
+attributes, text, clone, fragment parsing), which keep every rule a reader relies on; the design
 is [DOM.md](../../docs/design/pending/DOM.md). Elements made by formatting
 reconstruction share one list of attribute records, so a verb copies an
 element's list before it first changes it. A document owns the
 allocation ledger; scratch buffers are charged to the same budget and released
 on finish. (Input held while a parse is stopped is the heap's: `max_bytes`
-bounds it.) Stable node/string storage uses geometric arena chunks. A parser
+bounds it.) Document-parser node/string storage uses geometric arena chunks.
+Fragment results use individually reclaimable ledger blocks, described below. A parser
 needs serialized calls, and so do a document's verbs; distinct documents
 share two counters (document marks and pin numbers), advanced atomically, and
 nothing else. A verb refuses a node of another document; `os64_html_clone`
@@ -73,8 +74,81 @@ keeps once a verb has moved a node under it.
 `encoding.c` selects/decodes the byte stream and preprocesses newlines.
 `tokenizer.c` implements token states and character references. `tree.c`
 implements insertion modes, formatting reconstruction/adoption, templates,
-foreign integration, and foster parenting. Reprocessing is iterative; bounded
+foreign integration, and foster parenting. `fragment.c` stages contextual parses
+and copies their reachable result into document-owned ledger blocks.
+`serialize.c` writes HTML without allocating or using recursion.
+Reprocessing is iterative; bounded
 mode delegation follows the standard's calls to another insertion mode.
+
+Fragment parsing and serialization:
+
+```c
+int64_t status;
+os64_html_node_t *fragment = os64_html_parse_fragment(doc, context,
+    markup, markup_length, scripting, &status);
+if (fragment)
+    status = os64_html_insert(doc, context, fragment, NULL);
+size_t length = os64_html_serialize(context, true, scripting, NULL, 0);
+/* Allocate length + 1, then serialize into that buffer. */
+```
+
+`context` must be an element owned by `doc`; it may be detached. Parsing uses
+its namespace, attributes, insertion mode and nearest ancestor form, and the
+source document's quirks mode. Those context nodes are read-only during the
+parse. Scripts never stop or run; `scripting` selects `noscript` behavior.
+The input is UTF-8 without encoding sniffing, BOM stripping or meta charset
+interpretation. Invalid UTF-8 becomes U+FFFD. NUL follows tokenizer/tree
+rules: ordinary HTML text drops it, while raw text, RCDATA, attributes,
+comments and foreign text replace it.
+
+Select contexts retain D2a's insertion rules and the pinned reference corpus:
+`<div>x<option>a<option>b` in a select context drops the div wrapper. Current
+customizable-select parsing preserves that wrapper; adopting those rules also
+changes document parsing and is separate compatibility work. The boundary is
+recorded in [DEBTS.md](../../DEBTS.md) and
+[DOM.md's D2b account](../../docs/design/pending/DOM.md#d2b-as-built).
+
+The work limit is saturating `4096 + 256 * input_length`, covering parser
+steps, context ancestry, copying and form-owner remapping. The fixed allowance
+covers empty-input setup; the per-byte allowance gives ordinary markup room
+for parser repair and copying while bounding adversarial walks. The private
+`h_parse_fragment` entry point accepts an exact work limit and reports work
+for failure-sweep tests. Depth follows the document's existing tree limit
+from the detached fragment root; inserting the result checks the destination
+depth again.
+
+A private parser ledger and a separate result ledger share the document's
+remaining arena budget. Peak storage includes both, including parser metadata
+and copy scratch; a near-cap parse can refuse even when its final tree alone
+would fit. Failure frees both ledgers and preserves document accounting,
+version, parse diagnostics, existing form associations, landmarks and pins.
+Success publishes detached owned storage and its allocation statistics;
+insertion is the operation that changes the tree version.
+
+Returned nodes pack their names and original attributes into tagged ledger
+blocks. Text buffers and later private attribute records have separate blocks.
+Clone and attribute COW copy inline attributes and names rather than borrow
+another node's packed payload. Temporary scaffolding and unreachable parser
+payloads are freed before return. D6 must reclaim packed node blocks and
+owned text/private attributes after its holds and document pins allow it;
+inline attributes are not separate allocations. Collection itself is outside
+these APIs, so detached results remain owned until document teardown.
+
+Serialization takes `children_only` for innerHTML and clears it for outerHTML.
+Document and fragment nodes have no wrapper. It follows current WHATWG HTML
+serialization: HTML void elements omit children and end tags, templates use
+their contents, and only HTML raw-text parents suppress text escaping.
+Attribute values escape `&`, NBSP, `<`, `>` and double quotes; ordinary text
+escapes the first four. Names preserve namespace-qualified attribute spelling
+and source order remains stable. The current standard escapes angle brackets
+in attribute values as well as text.
+
+The serializer allocates nothing and traverses iteratively, including template
+hosts. It returns the full byte length excluding NUL, saturating at `SIZE_MAX`,
+and writes at most `cap - 1` bytes plus NUL when a non-NULL buffer has nonzero
+capacity. A zero capacity writes nothing. Truncation is a byte prefix and may
+split a UTF-8 character; the complete output is UTF-8. Calls on a document
+must be serialized with mutations of that document.
 
 The parser implementation is project code. Entity, SVG-adjustment, and quirks
 tables are generated from the imported WHATWG data under
@@ -87,8 +161,7 @@ fetch dates, transport charset, and hashes are in `tools/html_corpus/SOURCES.jso
 Validation:
 
 ```sh
-# Omit the ASAN override when LeakSanitizer is available outside ptrace.
-ASAN_OPTIONS=detect_leaks=0 tools/test_html_host.sh
+tools/test_html_host.sh
 tools/test_html_dom_host.sh        # the verbs
 make -j4
 # Inside os64:

@@ -366,6 +366,8 @@ void h_encoding_start(os64_html_parser_t *p)
 }
 void h_late_meta(os64_html_parser_t *p, HNode *n)
 {
+    if (p->fragment_context)
+        return;
     if (p->offset < 1024 || p->d->pub.charset_late_meta)
         return;
     const HAttr *a = os64_html_attr(n, "charset");

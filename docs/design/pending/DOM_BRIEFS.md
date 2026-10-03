@@ -9,7 +9,7 @@ goes in DOM.md and its brief here is struck.
 
 | Slice | Builder | Reviewer | After |
 |---|---|---|---|
-| D2b fragments and serialisation | Opus | Fable, then an outside round (Codex) | nothing: D2a is merged |
+| D2b fragments and serialisation | Quinn and two scoped subagents | Fable, then an outside round (Codex); Chris schedules reviews | D2a is merged; publication stacked on D3 at Chris's request |
 | D3 — **Built; review pending** | Quinn and two scoped subagents | Fable | [D3 as built](DOM.md#d3-as-built) |
 | D6 reclaiming unheld detached subtrees | Opus | Fable | D2b (its churn driver) |
 | D5 the binding library and J3's fixture | Quinn | Fable | D2b and D3; D4 is not needed |
@@ -115,129 +115,16 @@ as-built section records it. A question about web-platform semantics is
 answered from the standard and Chrome's behaviour and told to Chris; a
 question about what os64 wants is asked of Chris with a lean.
 
-## D2b — fragments and serialisation
+## D2b — built; review pending
 
-**What it is.** The two verbs DOM.md § The verbs lists and D1 left out:
-
-```c
-os64_html_node_t *os64_html_parse_fragment(os64_html_document_t *doc,
-                                           const os64_html_node_t *context,
-                                           const char *utf8, size_t len,
-                                           bool scripting, int64_t *status);
-size_t os64_html_serialize(const os64_html_node_t *node, bool children_only,
-                           bool scripting, char *out, size_t cap);
-```
-
-(The shapes are a starting point; the builder owns the final spelling.)
-The first is the HTML Standard's "parsing HTML fragments" algorithm with a
-context element, which is what `innerHTML` assignment needs: the result is
-a detached FRAGMENT node owned by `doc`, its children the parsed nodes,
-ready for `os64_html_insert` to move into the tree. The second is the
-standard's "serialising HTML fragments": `children_only` set is
-`innerHTML`'s getter, clear is `outerHTML`'s. It writes at most `cap`
-bytes, always NUL-terminates when `cap` is nonzero, and answers the length
-the whole output needs, the `snprintf` shape, so a caller sizes a buffer
-by calling it twice.
-
-**Read.** DOM.md § The verbs, § The parser with scripting on (the last two
-paragraphs), and § D2a, as built. LIBHTML.md § Out, by name (the fragment
-bullet is what this slice removes). The standard: HTML § 13.4 "Parsing HTML
-fragments" and § 13.3 "Serialising HTML fragments", read against the
-WHATWG living standard, not a snapshot. `tree.c`'s `reset_mode` (the
-standard's "reset the insertion mode appropriately" has a fragment branch
-that reads the context element) and `tokenizer.c`'s initial state.
-
-**Rules already settled, so they are not reopened:**
-
-- **A fragment parse never stops.** A script inserted through `innerHTML`
-  never runs, so the parser has no one to wait for: a `script` element is
-  built like any other and `OS64_HTML_SCRIPT` is never answered. The
-  `scripting` argument exists for `noscript`, whose parse differs by it,
-  and the binding passes the page's mode.
-- **One string, parsed whole.** `innerHTML` is a string, so there is no
-  streaming form, no encoding sniff, no byte-order mark and no `<meta
-  charset>` (it parses as an ordinary element). The input is UTF-8 and is
-  decoded by the parser's own UTF-8 decoder, so an invalid sequence and a
-  NUL become U+FFFD as they do in a document.
-- **The nodes belong to `doc`.** Every verb refuses another document's
-  node, so the fragment's nodes are made in `doc`'s arena and charged to
-  its budget, and `context` must be `doc`'s (`OS64_HTML_BAD_ARGUMENT`
-  otherwise). The standard's algorithm builds under a fresh `html` root in
-  a fresh document; here the root is a detached element of `doc` that the
-  parse uses as its root and never links under the document (the document
-  keeps one element under it, and that promise is the verbs'). The nodes
-  of that scaffolding stay charged until the document is freed, as any
-  node does; D6 is where unheld detached nodes come back.
-- **A detached result does not move the version.** Creating detached
-  nodes is invisible to a reader of the tree, and the verbs that create
-  (`create_element`, `clone`) leave the version alone today. The insert
-  that follows moves it.
-- **A refusal changes nothing a reader can see** and answers by name
-  (`OS64_HTML_NO_MEMORY`, `ARENA_EXHAUSTED`, `TOO_DEEP`; the parser's own
-  refusals for a fragment that spends its work); `doc->refusal` stays what
-  the document's parse said. Depth is the document's limit (twice
-  `max_depth`, counted from the fragment's own root; the insert that
-  follows counts it again from the real tree).
-- **Serialisation follows the standard's escaping table**, which differs
-  by where the text sits: text inside `style`, `script`, `xmp`, `iframe`,
-  `noembed`, `noframes` and `plaintext` is written raw; inside `noscript`
-  it is raw when `scripting` is set and escaped otherwise, which is why
-  the serialiser takes the flag too; everywhere else `&`, U+00A0, `<` and
-  `>` are escaped. Attribute values escape `&`, U+00A0 and `"`. Void
-  elements have no end tag; a template's contents are serialised, not its
-  (empty) children; foreign attributes keep their qualified spelling,
-  which the attribute records already carry.
-
-**The builder decides, and records why:** the work budget a fragment
-parse runs under (the document keeps a depth limit and an arena budget
-but no work budget of its own; a fragment's input is bounded by its
-caller, and the budget should be proportional to it rather than a second
-hundred-million constant); whether the parser struct is reused with a
-different root or a smaller fragment parser is extracted; and whether
-`serialize` answers a status at all (a cycle cannot reach it, since the
-verbs refuse one, so a plain length may be enough).
-
-**The oracle for parsing is already in the tree.** The 192 reference cases
-with a `#document-fragment` line (across `adoption01`, `foreign-fragment`,
-`math`, `svg`, `template`, `tests4`, `tests6`, `tests7`,
-`tests_innerHTML_1`, `webkit02`) name a context element and expect a
-tree. The context is spelled `div`, `svg path`, `math ms`, `template` and
-so on: a bare name is an HTML element, a prefixed one is a foreign
-element in that namespace, created with no attributes. Un-skipping them:
-remove `fragment-parsing` from `tools/html_reference.py`'s skip reasons,
-regenerate `tools/html5lib-tests/INVENTORY.json` and `SKIPS.tsv` by
-running that script (the harness refuses a stale manifest), teach
-`tools/test_html_driver.c`'s batch protocol a fragment kind that carries
-the context, and print the fragment's children at depth zero in the
-reference dump. Every case runs with scripting off and on where the
-fixture allows (`scripting_modes`), whole; then every allocation failed in
-turn and the work running out at every step, as `safety_case` does for
-documents. The fuzz pass gains a fragment arm: a mutated reference input
-parsed as a fragment under a random context from the list above, with
-the invariant checks of the D2a walks.
-
-**Serialisation has no upstream oracle in the fixtures**, so its proof is
-by hand, one case per rule above, plus the `snprintf` contract (`cap`
-zero, one short, exact, ample), a serialise of every reference-case
-document and fragment under ASan (the output is not compared, only that
-it is produced within the answered length and is valid UTF-8), and a
-round trip where the standard promises one: a fragment serialised and
-parsed again under the same context gives the same tree, over the
-fragment cases where it holds (the standard notes it does not hold
-everywhere, and the as-built section names the cases excluded and why).
-Headless Chrome's `--dump-dom` is its serialiser's output and makes a
-fine spot check for a handful of documents; the memory of how to run it
-from WSL is Fable's, so ask.
-
-**Docs and surface.** `html.h` gains a contract block for the two verbs
-under CHANGING A DOCUMENT; LIBHTML.md's "Out, by name" loses the fragment
-bullet and gains a dated section, as D2a's did; `userland/libhtml/README.md`
-lists the verbs; DOM.md's D2b row and as-built section; `/tests/htmltest`
-gains a fragment-and-serialise function (an `innerHTML`-shaped
-replacement of a node's children, then the children read back as text).
-Mutants: at least one per escaping rule, one per context kind that
-changes the insertion mode, the stop that must not happen, and the
-version that must not move.
+The brief is retired in favour of [DOM.md § D2b, as built](DOM.md#d2b-as-built)
+and the public contract in `userland/libhtml/include/html/html.h`.
+Implementation is in [PR #212](https://github.com/VBWizard/os64/pull/212),
+`codex/dom-d2b`, stacked on D3 at Chris's request; D3 is not an
+architectural dependency. D6 consumes the packed-payload
+ownership seam. The as-built section records the corrected escaping/NUL
+rules, the historical select compatibility boundary and the full proof.
+Chris schedules Fable's and the outside review after publication.
 
 ## D3 — built; review pending
 
@@ -249,13 +136,14 @@ attribute-transition handoff, and D6 adds holds for state and model keys.
 
 ## D6 — reclaiming detached subtrees nothing holds
 
-**Storage contract to settle before building.** Reusing node bodies while
-retaining each fragment's parsed names and attributes cannot meet the flat
-arena requirement below. D2b and D6 must account for reclaimable fragment
-payloads and the scaffold/result containers, as well as node reuse, without
-weakening the hour-long churn proof. D3's persistent state also retains node
-keys, including option keys and default-value caches: those records must
-hold their nodes until released when D6 introduces reclamation.
+**Storage contract.** D2b packs returned node bodies, names and original
+attributes into individually owned ledger blocks and gives text its own
+blocks; parser scaffolding is discarded. D6 must reclaim those payloads,
+later private attribute records and empty result containers as well as
+reuse permanent-chunk nodes, without weakening the hour-long churn proof.
+D3's persistent state retains node keys, including option keys and
+default-value caches: those records need holds and paired releases when
+D6 introduces reclamation.
 
 **What it is.** DOM.md § Wrappers, the paragraph that begins "So the
 reclamation JAVASCRIPT.md booked is not a someday item", and the DEBTS.md
@@ -286,13 +174,18 @@ collector deciding) is booked and is not this slice.
   reclaimed: a snapshot built before the detach may still point at those
   nodes, so they are freed when no live pin is below the stamp, the same
   rule the ledger already applies to strings. With no pins out, at once.
-- **What reclaiming frees.** Nodes live in the permanent chunks and are
-  one size (the public struct plus the private word), so a reclaimed node
-  goes on a free list that `node_new` and `h_node` draw from before the
-  chunk; a verb-made text buffer and an element's private attribute
-  records are ledger blocks and are freed or retired as `set_text` and
-  `set_attr` do today; a parser-era string in a permanent chunk stays
-  where it is and stays charged, as DOM.md says. `node_count` and the
+- **What reclaiming frees.** Document-parser and creation-verb nodes live
+  in permanent chunks and have one size (the public struct plus the
+  private word), so a reclaimed node goes on a free list that `node_new`
+  and `h_node` draw from before the chunk. D2b's returned nodes are packed
+  ledger blocks: the node, its name and its original attributes share one
+  individually freeable allocation. Their text buffers and any later
+  private attribute records have their own ledger blocks. The reclaim
+  walk distinguishes these storage kinds and frees or retires each owned
+  allocation once; inline attributes are not freed separately. A string
+  from the document parser's permanent chunks stays charged. D2b's
+  temporary scaffolding is discarded during parsing, so repeated fragment
+  replacement retains no permanent payload chunks. `node_count` and the
   arena figures move accordingly, which is what the proof measures.
 - **Form-owner records.** A control inside the reclaimed subtree with a
   record, or a form inside it that a record elsewhere names, must leave

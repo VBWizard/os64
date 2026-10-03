@@ -634,7 +634,7 @@ static void attrs_discard(HDoc *d, HAttr *list)
 }
 /* A list of blocks equal to `from`. With `alias` a copy points at the
  * original's strings, which is right exactly when those lie in permanent
- * chunks and so outlive every record. */
+ * chunks and so outlive every record. Inline fragment payloads are copied. */
 static bool attrs_copy(HDoc *d, const HAttr *from, bool alias, HAttr **out, int64_t *why)
 {
     HAttr *head = NULL, **tail = &head;
@@ -663,7 +663,7 @@ static int64_t attrs_own(HDoc *d, HNode *e)
         return OS64_HTML_OK;
     int64_t why = OS64_HTML_OK;
     HAttr *own = NULL;
-    if (!attrs_copy(d, e->attrs, true, &own, &why))
+    if (!attrs_copy(d, e->attrs, !(*h_word(e) & H_ATTRS_INLINE), &own, &why))
         return why;
     e->attrs = own;
     *h_word(e) |= H_ATTRS_PRIVATE;
@@ -676,11 +676,11 @@ static HAttr **attr_slot(HNode *e, const char *name)
         slot = &(*slot)->next;
     return slot;
 }
-/* A list that is its element's own cannot be shared: a verb replaces its
- * records one at a time and retires each, under whoever else pointed at it. */
+/* Private records are replaced and retired independently; inline records
+ * expire with their node. Clones copy either kind instead of sharing it. */
 bool d_attrs_inherit(HDoc *d, const HNode *from, HNode *to, int64_t *why)
 {
-    if (!(*h_word(from) & H_ATTRS_PRIVATE)) {
+    if (!(*h_word(from) & (H_ATTRS_PRIVATE | H_ATTRS_INLINE))) {
         to->attrs = from->attrs;
         return true;
     }
@@ -798,9 +798,8 @@ int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8
 
 /* ── Clone ───────────────────────────────────────────────────────────── */
 
-/* A name or a doctype's identifier for the copy. One of this document's is
- * shared, since those are never replaced; one of another document's is
- * copied, since that document may be freed first. */
+/* Names in permanent document chunks may be shared. Packed fragment names
+ * and foreign names are copied so reclaiming their source cannot dangle a clone. */
 static bool string_for(HDoc *d, bool foreign, const char *from, const char **out, int64_t *why)
 {
     *out = from;
@@ -834,13 +833,14 @@ static HNode *clone_one(HDoc *d, const HNode *from, bool foreign, int64_t *why)
         return NULL;
     n->ns = from->ns;
     n->tag = from->tag;
-    if (!string_for(d, foreign, from->name, &n->name, why) ||
-        !string_for(d, foreign, from->public_id, &n->public_id, why) ||
-        !string_for(d, foreign, from->system_id, &n->system_id, why))
+    bool copy_strings = foreign || (from->kind == ELEMENT && (*h_word(from) & H_ATTRS_INLINE));
+    if (!string_for(d, copy_strings, from->name, &n->name, why) ||
+        !string_for(d, copy_strings, from->public_id, &n->public_id, why) ||
+        !string_for(d, copy_strings, from->system_id, &n->system_id, why))
         return NULL;
     if (from->kind == ELEMENT) {
-        /* The parser's shared list can be shared once more, inside the
-         * document whose chunks hold it. */
+        /* Permanent parser lists can be shared inside their document;
+         * private and inline lists need a copy. */
         if (foreign) {
             if (!attrs_copy(d, from->attrs, false, &n->attrs, why))
                 return NULL;

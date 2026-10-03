@@ -66,6 +66,7 @@ static inline size_t *h_word(const HNode *n)
 {
     return (size_t *)(n + 1);
 }
+#define H_ATTRS_INLINE ((size_t)2) /* ELEMENT: attributes lie in its reclaimable node block */
 #define H_ATTRS_PRIVATE ((size_t)1)   /* ELEMENT: its attribute records are its own blocks */
 
 /* How deep a node may be, the document at 0 and a template's contents
@@ -212,6 +213,7 @@ struct os64_html_parser {
     HMode *templates;
     size_t templates_n, templates_cap;
     HNode *form, *head;
+    const HNode *fragment_context; /* borrowed read-only for this isolated parse */
     bool started, eof_sent, previous_cr;
     unsigned char prescan[1024];
     size_t prescan_len;
@@ -252,6 +254,12 @@ void h_free(HDoc *d, void *ptr);
  * the parse ended, is left alone. */
 void *d_permanent(HDoc *d, size_t size, int64_t *why);
 void *d_alloc(HDoc *d, size_t size, int64_t *why);
+void *d_node_alloc(HDoc *d, size_t size, int64_t *why);
+void d_transfer_blocks(HDoc *to, HDoc *from);
+HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
+                       const char *utf8, size_t len, bool scripting,
+                       uint64_t max_work, uint64_t *work, int64_t *status);
+void h_fragment_start(os64_html_parser_t *p);
 /* Give up a ledger block something may have borrowed: freed at once when no
  * pinned snapshot is older than the change that replaced it, else kept
  * until the last such pin lets go. Call it after bumping `version`. */
@@ -281,8 +289,8 @@ HNode *d_root(HNode *n, uint64_t *steps);
 void d_parted(HDoc *d, HNode *moved, HNode *old_root, uint64_t *steps);
 /* Seat the document's own `html` element if the document has no element. */
 void d_seat_html(HDoc *d);
-/* `to` takes the attribute list of `from`, which a parser's clone shares
- * unless a verb has made that list `from`'s own. */
+/* `to` shares permanent parser attributes; private records and attributes
+ * inline in a reclaimable fragment node are copied. */
 bool d_attrs_inherit(HDoc *d, const HNode *from, HNode *to, int64_t *why);
 /* One more attribute on an element that has none of that name. */
 int64_t d_attr_add(HDoc *d, HNode *e, const HAttr *a);
@@ -304,6 +312,12 @@ bool h_alpha(uint32_t cp);
 uint32_t h_lower(uint32_t cp);
 bool h_nodes_push(os64_html_parser_t *p, HNodes *list, HNode *n);
 HNode *h_current(os64_html_parser_t *p);
+/* Keep the ordinary document dispatch to one current-node call. */
+static inline HNode *h_adjusted_current(os64_html_parser_t *p)
+{
+    return p->fragment_context && p->stack.n == 1 ? (HNode *)p->fragment_context
+                                                : h_current(p);
+}
 HNode *h_node(os64_html_parser_t *p, os64_html_node_kind_t kind);
 void h_detach(HNode *n);
 void h_attach(HNode *parent, HNode *before, HNode *n);

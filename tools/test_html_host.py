@@ -30,14 +30,16 @@ def main():
             if c['suite']=='tokenizer':
                 data=b''.join(struct.pack('<I',ord(ch)) for ch in c['input']);last=c['lastStartTag'].encode();kind=0;state=STATES[c['state']]
             else:
-                data=c['input'].encode('utf-8');last=b'';kind=1|(SCRIPTING if scripting else 0);state=0
+                data=c['input'].encode('utf-8');last=(c.get('fragment') or '').encode();kind=(3 if c.get('fragment') is not None else 1)|(SCRIPTING if scripting else 0);state=0
             batch.write(struct.pack('<4I',kind,state,len(data),len(last))+data+last)
         batch.seek(0)
         subprocess.run([args.driver],stdin=batch,stdout=output,check=True,timeout=120)
-        output.seek(0);failures=[]
+        output.seek(0);failures=[];roundtrips=[]
         for (c,scripting),line in zip(runs,output,strict=True):
             result=json.loads(line.decode('utf-8','surrogatepass'))
             if c['suite']=='tree':
+                if c.get('fragment') is not None:
+                    roundtrips.append({'id':identity(c),'scripting':scripting,'context':c['fragment'],'exclusion':result['roundtrip_exclusion']})
                 if result['tree']!=c['expected'] or result['refusal']:
                     failures.append({'id':identity(c),'scripting':scripting,'input':c['input'],'expected':c['expected'],'actual':result['tree'],'refusal':result['refusal']})
                 continue
@@ -50,6 +52,10 @@ def main():
             expected_errors=[e['code'] for e in c['errors']]
             if tokens!=c['expected'] or result['refusal'] or result['errors']!=expected_errors[:16] or result['parse_errors']!=len(expected_errors):
                 failures.append({'id':identity(c),'input':c['input'],'state':c['state'],'expected':c['expected'],'actual':tokens,'refusal':result['refusal'],'expected_errors':expected_errors,'actual_errors':result['errors']})
+        if roundtrips:
+            path=Path(args.driver).parent/'fragment-roundtrips.json'
+            path.write_text(json.dumps(roundtrips,indent=2)+'\n')
+            print(f"Fragment roundtrips: checked={sum(r['exclusion'] is None for r in roundtrips)} excluded={sum(r['exclusion'] is not None for r in roundtrips)} details={path}")
         if failures:
             failure_path=Path(args.driver).parent/'failures.json'
             failure_path.write_text(json.dumps(failures,indent=2,ensure_ascii=True)+'\n')
@@ -60,7 +66,9 @@ def main():
     with tempfile.TemporaryFile() as batch:
         for c,scripting in runs:
             data=c['input'].encode('utf-8','surrogatepass')
-            batch.write(struct.pack('<4I',1|(SCRIPTING if scripting else 0),0,len(data),0)+data)
+            context=(c.get('fragment') or '').encode()
+            kind=(3 if c.get('fragment') is not None else 1)|(SCRIPTING if scripting else 0)
+            batch.write(struct.pack('<4I',kind,0,len(data),len(context))+data+context)
         batch.seek(0)
         subprocess.run([args.driver,'--safety'],stdin=batch,check=True,timeout=300)
     return False

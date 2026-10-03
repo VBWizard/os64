@@ -328,9 +328,6 @@ the page).
   individually as `xml-output-coercion`. They test optional conversion to an
   XML infoset, including changes to text and comments that libhtml preserves.
   HTML tokenizer cases remain mandatory.
-- **Fragment parsing.** Cases with a `#document-fragment` line drive the
-  standard's fragment algorithm (`innerHTML`), which exists for scripts.
-  Skipped by name; there is no fragment entry point.
 - **The "change the encoding" restart** — the deviation above, tested.
 - **`document.write`.** Booked in DOM.md as a slice of its own.
 - **`<isindex>` rewriting.** Removed from the standard.
@@ -644,11 +641,11 @@ boundary; and 1,000,000 work units for repeated foreign attribute lookup. A
 400,007-byte long-foreign-name case must finish successfully. The entire
 adversarial batch, including three chunkings, has a 20-second deadline.
 
-Run `ASAN_OPTIONS=detect_leaks=0 tools/test_html_host.sh` in ptrace environments
-where LeakSanitizer cannot run. AddressSanitizer and UndefinedBehaviorSanitizer
-remain enabled, and the harness independently requires zero live allocations
-following every parse/failure/cancellation. Outside that environment the command
-can omit the ASAN override. `HTML_FUZZ_SECONDS` changes the mutation budget.
+Keep LeakSanitizer enabled when running `tools/test_html_host.sh`. If the
+sandbox prevents its process inspection, run the same checks with the required
+environment permission. The harness also requires zero live allocations after
+every parse, failure and cancellation; that counter and the sanitizers provide
+separate evidence. `HTML_FUZZ_SECONDS` changes the mutation budget.
 
 `make -j4` builds the kernel, shared library, consumers, disk image, and ISO with
 the repository's strict warnings. `readelf -d userland/bin/libhtml.so` shows only
@@ -664,3 +661,51 @@ The kernel and libos64 required no source changes. Boot configuration and disk
 edits were confined to `/tmp/os64-libhtml-qemu/`; the tracked boot configuration
 was not changed. The private ext2 partition passed `e2fsck -fn` after shutdown.
 `git diff --check` and `tools/stale_refs.sh` also pass.
+
+### Fragment parsing and serialization (D2b, 2026-10-03)
+
+`os64_html_parse_fragment(doc, context, utf8, len, scripting, status)`
+parses a complete UTF-8 string under an owned element and returns a
+detached, document-owned fragment. Scripts are inert; the scripting
+flag supplies the `noscript` policy. A private parser ledger and staged
+result ledger make refusal transactional, including arena accounting,
+parse diagnostics, version, landmarks and existing node associations.
+Their simultaneous storage counts against the remaining arena. Work is
+bounded by saturating `4096 + 256 * len`; insertion checks destination
+depth separately. Temporary scaffolding is discarded and returned
+payloads have an ownership boundary for D6 reclamation.
+
+`os64_html_serialize(node, children_only, scripting, out, cap)` writes
+inner or outer markup without allocating or recursing. It returns full
+length excluding NUL and writes a capped byte prefix plus NUL when space
+exists. Complete output is UTF-8; truncation may split a character.
+Templates, void elements, raw-text parents and namespace-qualified names
+have explicit rules in the header. Current attribute escaping includes
+angle brackets; the earlier brief was wrong about that. Its blanket NUL
+replacement claim was also wrong: ordinary HTML text drops NUL, while
+raw text, RCDATA, attributes, comments and foreign text replace it.
+
+The exact historical reference suite now runs all 192 fragment fixtures
+in both scripting modes. The final sanitizer proof has 1,218 checks,
+10,525 reference runs, 5,270 fragment allocation refusals, 21,504 work
+cuts and 134,912 mutations in 30 seconds. Four XML-output-coercion cases
+remain skipped. The document safety proof retains 91,621 allocation
+failures and 662,498 prefix/chunk checks. All 29 targeted rule mutants
+compile and are caught. Round trips pass for 188 fragment fixtures
+(376 mode runs), with four raw-text/plaintext exclusions explicitly
+recorded in `tools/test_html_fragment_roundtrips.json`.
+
+The pinned corpus does not cover current customizable-select parsing:
+the historical select mode drops a div wrapper that current Chrome
+preserves. Updating both document and fragment rules and their reference
+expectations is tracked in DEBTS.md. The independent spot comparisons
+match six document serializations and seven of eight context innerHTML
+examples, with that select difference named rather than skipped silently.
+
+The strict build and the DOM, page, wend, way, way-fetch, garb, flow and
+Yonder host suites pass. The private QEMU `/tests/htmltest` passes with
+badge `0x48640000` and real-heap checks; the extracted guest library is
+byte-identical to the built library. No kernel or libos64 source changed.
+The detailed contract, proof receipts, measured document cost, compatibility
+boundary and D5/D6 handoff are in
+[DOM.md § D2b, as built](docs/design/pending/DOM.md#d2b-as-built).

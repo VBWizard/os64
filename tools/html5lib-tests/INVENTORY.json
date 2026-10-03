@@ -72,10 +72,8 @@
     "total": 4
   },
   "tree/adoption01.dat": {
-    "run": 17,
-    "skip": {
-      "fragment-parsing": 1
-    },
+    "run": 18,
+    "skip": {},
     "total": 18
   },
   "tree/adoption02.dat": {
@@ -114,10 +112,8 @@
     "total": 26
   },
   "tree/foreign-fragment.dat": {
-    "run": 0,
-    "skip": {
-      "fragment-parsing": 66
-    },
+    "run": 66,
+    "skip": {},
     "total": 66
   },
   "tree/html5test-com.dat": {
@@ -141,10 +137,8 @@
     "total": 3
   },
   "tree/math.dat": {
-    "run": 0,
-    "skip": {
-      "fragment-parsing": 8
-    },
+    "run": 8,
+    "skip": {},
     "total": 8
   },
   "tree/menuitem-element.dat": {
@@ -198,10 +192,8 @@
     "total": 3
   },
   "tree/svg.dat": {
-    "run": 0,
-    "skip": {
-      "fragment-parsing": 8
-    },
+    "run": 8,
+    "skip": {},
     "total": 8
   },
   "tree/tables01.dat": {
@@ -210,10 +202,8 @@
     "total": 19
   },
   "tree/template.dat": {
-    "run": 111,
-    "skip": {
-      "fragment-parsing": 1
-    },
+    "run": 112,
+    "skip": {},
     "total": 112
   },
   "tree/tests1.dat": {
@@ -312,10 +302,8 @@
     "total": 24
   },
   "tree/tests4.dat": {
-    "run": 0,
-    "skip": {
-      "fragment-parsing": 9
-    },
+    "run": 9,
+    "skip": {},
     "total": 9
   },
   "tree/tests5.dat": {
@@ -324,17 +312,13 @@
     "total": 17
   },
   "tree/tests6.dat": {
-    "run": 39,
-    "skip": {
-      "fragment-parsing": 13
-    },
+    "run": 52,
+    "skip": {},
     "total": 52
   },
   "tree/tests7.dat": {
-    "run": 33,
-    "skip": {
-      "fragment-parsing": 1
-    },
+    "run": 34,
+    "skip": {},
     "total": 34
   },
   "tree/tests8.dat": {
@@ -348,10 +332,8 @@
     "total": 27
   },
   "tree/tests_innerHTML_1.dat": {
-    "run": 0,
-    "skip": {
-      "fragment-parsing": 81
-    },
+    "run": 81,
+    "skip": {},
     "total": 81
   },
   "tree/tricky01.dat": {
@@ -365,10 +347,8 @@
     "total": 52
   },
   "tree/webkit02.dat": {
-    "run": 31,
-    "skip": {
-      "fragment-parsing": 4
-    },
+    "run": 35,
+    "skip": {},
     "total": 35
   }
 }

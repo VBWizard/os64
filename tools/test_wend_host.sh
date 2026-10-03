@@ -31,6 +31,7 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    userland/libpage/activate.c \
    userland/libhtml/core.c userland/libhtml/encoding.c \
    userland/libhtml/tokenizer.c userland/libhtml/tree.c userland/libhtml/dom.c \
+   userland/libhtml/fragment.c userland/libhtml/serialize.c \
    userland/libos64/str.c userland/libos64/bidi.c userland/libos64/url.c userland/libos64/fmt.c \
    -o "$work/wend_driver"
 
