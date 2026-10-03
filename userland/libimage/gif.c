@@ -291,18 +291,46 @@ static bool expand(const uint8_t *data, const gif_frame_t *f, uint32_t stride,
         if (used > count - written)
             return false;
         written += used;
+        // Non-interlaced staging follows the encoded order even across rows;
+        // it needs no palette lookup, canvas address or row bookkeeping.
+        if (indices && !f->interlaced) {
+            uint8_t *dest = indices + written - used;
+            while (used != 0) {
+                unsigned index = dict->stack[--used];
+                if (index >= f->colors)
+                    return false;
+                *dest++ = (uint8_t)index;
+            }
+        }
+        // Interlaced staging and first-picture output need row addresses.
+        // Split strings at row ends, including interlace pass boundaries.
         while (used != 0) {
-            unsigned index = dict->stack[--used];
-            if (index >= f->colors)
-                return false;
-            uint32_t color = f->palette[index];
-            if ((int)index == f->transparent)
-                color &= 0x00ffffffu;
-            if (indices)
-                indices[(size_t)y * f->width + x] = (uint8_t)index;
-            else
-                pixels[(size_t)(f->top + y) * stride + f->left + x] = color;
-            if (++x == f->width) {
+            unsigned span = f->width - x;
+            if (span > used)
+                span = used;
+            unsigned stop = used - span;
+            if (indices) {
+                uint8_t *row = indices + (size_t)y * f->width + x;
+                while (used != stop) {
+                    unsigned index = dict->stack[--used];
+                    if (index >= f->colors)
+                        return false;
+                    *row++ = (uint8_t)index;
+                }
+            } else {
+                uint32_t *row = pixels + (size_t)(f->top + y) * stride + f->left + x;
+                while (used != stop) {
+                    unsigned index = dict->stack[--used];
+                    if (index >= f->colors)
+                        return false;
+                    uint32_t color = f->palette[index];
+                    if ((int)index == f->transparent)
+                        color &= 0x00ffffffu;
+                    *row++ = color;
+                }
+            }
+            x += span;
+            if (x == f->width) {
                 x = 0;
                 if (!f->interlaced) {
                     y++;

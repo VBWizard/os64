@@ -15,8 +15,8 @@ spec=importlib.util.spec_from_file_location('gif_fixture',ROOT/'tools/test_gif_h
 base=importlib.util.module_from_spec(spec);spec.loader.exec_module(base)
 
 
-def frame(w,h,values,left=0,top=0,disposal=1,delay=50,transparent=0,local=False,interlace=False):
-    encoded=base.gif(w,h,values=values,local=local,interlace=interlace,
+def frame(w,h,values,left=0,top=0,disposal=1,delay=50,transparent=0,local=False,interlace=False,codes=None):
+    encoded=base.gif(w,h,values=values,codes=codes,local=local,interlace=interlace,
                      offset=(left,top),screen=(left+w,top+h))
     raster=encoded[(13 if local else 25):-1]
     gce=b'!\xf9\x04'+bytes([(disposal<<2)|(transparent is not None)])
@@ -48,7 +48,8 @@ def reference(data,path):
 
 def guest_vectors(work, destination):
     lines=['// Generated from tools/test_gif_sequence_host.py; composed frames cross-checked with Pillow.']
-    for i,name in enumerate(['disposal-2-loop-1','restore-chain','trailing-gce-comment']):
+    for i,name in enumerate(['disposal-2-loop-1','restore-chain','trailing-gce-comment',
+                             'phrase-rows-iFalse-t0','phrase-rows-iTrue-t0']):
         for ext,label in [('gif','data'),('seq','expected')]:
             data=(work/(name+'.'+ext)).read_bytes()
             lines.append(f'static const uint8_t sequence_{label}_{i}[] = {{')
@@ -58,11 +59,11 @@ def guest_vectors(work, destination):
     destination.write_text('\n'.join(lines)+'\n')
 
 
-def run(work, real):
+def run(work, real, optimization='2'):
     sources=['userland/libimage/image.c','userland/libimage/gif.c','tools/test_gif_sequence_host.c']
     includes=['userland/libimage/include','userland/libos64/include','userland/libpng/include',
               'userland/libjpeg/include','abi/include']
-    subprocess.run(['cc','-std=c11','-O1','-g','-Wall','-Wextra','-Werror',
+    subprocess.run(['cc','-std=c11','-O'+optimization,'-g','-Wall','-Wextra','-Werror',
                     '-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie',
                     *['-I'+str(ROOT/p) for p in includes],*[str(ROOT/p) for p in sources],
                     '-o',str(work/'test')],check=True)
@@ -87,6 +88,15 @@ def run(work, real):
     restore=[frame(5,4,[1]*20),frame(3,2,[2]*6,1,1,disposal=3),
              frame(1,3,[3]*3,2,0,disposal=3),frame(1,1,[2],0,3)]
     check('restore-chain',animation(5,4,restore,0))
+    # The same referenced strings exercise row/pass crossings in staging,
+    # transparency over an earlier canvas, and restore-to-previous afterward.
+    for interlace in (False,True):
+        for transparent in (None,0):
+            rows=[frame(5,9,[3]*45,transparent=None),
+                  frame(3,7,[],1,1,disposal=3,transparent=transparent,
+                        local=True,interlace=interlace,codes=[4,0,1,6,8,7,9,10,11,5]),
+                  frame(1,1,[2],4,8)]
+            check(f'phrase-rows-i{interlace}-t{transparent}',animation(5,9,rows,1))
     check('transparent-loop-reset',animation(5,4,[frame(1,1,[1]),frame(1,1,[2],4,3)],0))
     check('singleton',animation(1,1,[frame(1,1,[2],disposal=3,delay=0)],0))
     local=[frame(3,3,[1]*9),frame(2,2,[2]*4,1,1,local=True)]
@@ -121,11 +131,12 @@ def run(work, real):
 
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--output',type=Path);p.add_argument('--real',type=Path,action='append',default=[]);p.add_argument('--guest-vectors',type=Path)
+    p.add_argument('--optimization',choices=('0','1','2'),default='2')
     args=p.parse_args()
     if args.output:
-        args.output.mkdir(parents=True,exist_ok=True);run(args.output.resolve(),args.real)
+        args.output.mkdir(parents=True,exist_ok=True);run(args.output.resolve(),args.real,args.optimization)
         if args.guest_vectors: guest_vectors(args.output.resolve(),args.guest_vectors)
     else:
         with tempfile.TemporaryDirectory(prefix='gif-sequence-') as d:
-            run(Path(d),args.real)
+            run(Path(d),args.real,args.optimization)
             if args.guest_vectors: guest_vectors(Path(d),args.guest_vectors)
