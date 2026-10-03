@@ -332,7 +332,7 @@ os64_html_node_t *os64_html_parse_fragment(os64_html_document_t *doc,
  * Allocation-free. Returns total bytes excluding NUL (saturates at SIZE_MAX),
  * writes a byte prefix of at most cap-1 and NUL when out != NULL and cap > 0.
  * cap == 0 writes nothing; truncation may split UTF-8. NULL node is empty.
- * Serialize calls with mutations of the node's document. */
+ * Do not run this concurrently with a mutation of the node's document. */
 size_t os64_html_serialize(const os64_html_node_t *node, bool children_only,
                            bool scripting, char *out, size_t cap);
 
