@@ -59,7 +59,9 @@ int main(void)
         !check(gif_data_1, sizeof gif_data_1, gif_pixels_1) ||
         !check(gif_data_2, sizeof gif_data_2, gif_pixels_2) ||
         !check(gif_data_3, sizeof gif_data_3, gif_pixels_3) ||
-        !check(gif_data_4, sizeof gif_data_4, gif_pixels_4))
+        !check(gif_data_4, sizeof gif_data_4, gif_pixels_4) ||
+        !check(gif_data_5, sizeof gif_data_5, gif_pixels_5) ||
+        !check(gif_data_6, sizeof gif_data_6, gif_pixels_6))
         return 1;
     for (size_t n = 6; n < sizeof gif_data_0; n++) {
         os64_image_t image;
@@ -91,6 +93,8 @@ int main(void)
     if (!check_sequence(sequence_data_0,sizeof sequence_data_0,sequence_expected_0) ||
         !check_sequence(sequence_data_1,sizeof sequence_data_1,sequence_expected_1) ||
         !check_sequence(sequence_data_2,sizeof sequence_data_2,sequence_expected_2) ||
+        !check_sequence(sequence_data_3,sizeof sequence_data_3,sequence_expected_3) ||
+        !check_sequence(sequence_data_4,sizeof sequence_data_4,sequence_expected_4) ||
         os64_heap_verify()) return 5;
     os64_printf("PASS GIF first-frame decode, animation canvases, disposal, loops, rewind, file loading and heap cleanup\n");
     return 0;

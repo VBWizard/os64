@@ -73,10 +73,13 @@ signature is malformed; shorter prefixes follow the dispatcher's
 Run `python3 tools/test_gif_host.py` for the ASan/UBSan corpus. It includes
 hand-built code streams and independently Pillow-encoded pictures, palettes
 of 1 through 8 bits, interlace at short-height boundaries, offsets,
-transparency, sub-block splits, dictionary growth through 12 bits, deferred
+transparency, referenced strings crossing rows and interlace passes,
+sub-block splits, dictionary growth through 12 bits, deferred
 clear, KwKwK, extensions, malformed input, and resource caps. For valid files
 it checks every truncated prefix, forced failure of each allocation, and
 400 deterministic mutations. Live allocation tracking checks cleanup.
+The default uses `-O2`, matching the GIF object's production optimization;
+`--optimization 0` checks the unoptimized path with the same fixtures.
 
 Pillow supplies exact first-frame reference pixels. For offset images, the
 harness explicitly clears only the margins outside that raster to match our
@@ -90,12 +93,15 @@ missing EOI alongside BMP/PPM, drawing and JPEG integration.
 
 `/tests/giftest` checks exact pixels through the real shared library, local
 and global palettes, transparency, interlace, offset canvases, KwKwK,
-truncation, file loading, and heap integrity. Its checked-in vectors are
+referenced strings crossing rows/passes, truncation, file loading, and heap
+integrity. Its checked-in vectors are
 selected from the host corpus; no host decoder is needed in the guest. Regenerate
 them with `python3 tools/test_gif_host.py --guest-vectors userland/tests/giftest/vectors.h`.
 
 Build and runtime results are recorded in
 [docs/gif-evidence/README.md](docs/gif-evidence/README.md).
+The optimized decoder measurements and regression results are in
+[the performance evidence](docs/gif-performance-evidence/README.md).
 
 ## Integration and follow-up
 

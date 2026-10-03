@@ -46,6 +46,14 @@ raster is reported when reached. Expansion first writes palette indices into
 a staging buffer; the canvas and saved rectangle change only after successful
 expansion. Playback and rewind allocate no memory.
 
+Non-interlaced staging writes each expanded string as consecutive indices,
+without palette lookups or row bookkeeping. Interlaced staging splits strings
+at row boundaries to place them in display order. Palette mapping and
+transparency are applied during composition, after the raster succeeds.
+The shared-library build optimizes `gif.c` at `-O2`; the other image arms keep
+their existing flags. No decoded-frame cache is retained, so the working
+storage remains independent of the sum of decoded frames.
+
 Interactive GIFs (the Graphic Control user-input bit), Plain Text rendering,
 and palettes inherited from earlier files are unsupported by the sequence
 API. A caller that only wants a first picture can still use the original API,
@@ -106,6 +114,9 @@ under ASan/UBSan. Small valid GIFs are truncated at each byte; files over
 100,000 bytes use 16,381-byte prefix steps. Each valid GIF also receives 128
 single-bit mutations followed by up to eight advances. Resource refusals
 assert zero decoder allocations, and playback asserts no allocation attempts.
+The default tests use `-O2`; `--optimization 0` selects the same corpus without
+optimization. Referenced strings crossing rows and interlace passes are
+checked with transparency, frame offsets and restore-to-previous disposal.
 
 `--real PATH` includes an external animation in the full-frame reference
 comparison. The supplied Hayabusa2 file matches all 416 composed frames over
@@ -120,3 +131,5 @@ and JPEG/image/drawing regressions continue to exercise the first-picture API.
 
 Recorded host, build and QEMU results are in
 [the animation evidence](docs/gif-animation-evidence/README.md).
+Decoder timing, corpus hashes and optimized-build validation are recorded in
+[the performance evidence](docs/gif-performance-evidence/README.md).

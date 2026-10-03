@@ -109,6 +109,15 @@ def fixtures(work):
     # KwKwK builds strings 0, 00, 000. Literal streams fill the dictionary
     # through every width transition and continue after its 4096-entry limit.
     save('kwkwk', gif(6, 1, codes=[4, 0, 6, 7, 5], chunk=1))
+    # References produce strings of lengths 1,1,2,3,2,4,3,5. They cross
+    # three-pixel rows and interlace passes; Pillow supplies the pixel oracle.
+    row_codes = [4, 0, 1, 6, 8, 7, 9, 10, 11, 5]
+    for interlace in (False, True):
+        for trans in (None, 1):
+            save(f'phrase-rows-i{interlace}-t{trans}',
+                 gif(3, 7, codes=row_codes, local=True, interlace=interlace,
+                     transparent=trans, offset=(2, 1), screen=(8, 10), chunk=1),
+                 rectangle=(2, 1, 3, 7))
     values = [i % 4 for i in range(12000)]
     save('deferred-clear', gif(120, 100, codes=[4, *values, 5]))
     save('clear-full-table', gif(120, 100, codes=[4, *values[:6000], 4, *values[6000:], 5]))
@@ -186,7 +195,7 @@ def fixtures(work):
 
 def guest_vectors(work, destination):
     names = ['d2-iFalse-lFalse-tNone', 'd2-iTrue-lTrue-t0', 'offset-1', 'kwkwk',
-             'trailing-gce-comment']
+             'trailing-gce-comment', 'phrase-rows-iFalse-t1', 'phrase-rows-iTrue-t1']
     lines = ['// Generated from tools/test_gif_host.py fixtures; expected pixels checked with Pillow.']
     for i, name in enumerate(names):
         for extension, kind in [('gif', 'data'), ('ref', 'pixels')]:
@@ -198,11 +207,11 @@ def guest_vectors(work, destination):
     destination.write_text('\n'.join(lines) + '\n')
 
 
-def run(work, vectors=None):
+def run(work, vectors=None, optimization='2'):
     sources = ['userland/libimage/image.c', 'userland/libimage/gif.c', 'tools/test_gif_host.c']
     includes = ['userland/libimage/include', 'userland/libos64/include', 'userland/libpng/include',
                 'userland/libjpeg/include', 'abi/include']
-    subprocess.run(['cc', '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+    subprocess.run(['cc', '-std=c11', '-O'+optimization, '-g', '-Wall', '-Wextra', '-Werror',
                     '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-pie', '-no-pie',
                     *['-I'+str(ROOT/p) for p in includes], *[str(ROOT/p) for p in sources],
                     '-o', str(work/'test')], check=True)
@@ -222,10 +231,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path)
     parser.add_argument('--guest-vectors', type=Path)
+    parser.add_argument('--optimization', choices=('0', '1', '2'), default='2')
     args = parser.parse_args()
     if args.output:
         args.output.mkdir(parents=True, exist_ok=True)
-        run(args.output.resolve(), args.guest_vectors)
+        run(args.output.resolve(), args.guest_vectors, args.optimization)
     else:
         with tempfile.TemporaryDirectory(prefix='gif-host-') as directory:
-            run(Path(directory), args.guest_vectors)
+            run(Path(directory), args.guest_vectors, args.optimization)

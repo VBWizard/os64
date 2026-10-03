@@ -1,6 +1,10 @@
 LIBIMAGE_SO := $(BIN)/libimage.so
 LIBIMAGE_BASE := $(patsubst libimage.so=%,%,$(filter libimage.so=%,$(LIB_BASE_PAIRS)))
 LIBIMAGE_OBJ := $(OBJ)/pic/libimage/image.c.o $(OBJ)/pic/libimage/gif.c.o
+# Expansion and composition run for each displayed GIF frame. Their host
+# reference corpus also exercises the -O2 build; other image arms retain
+# their own build flags.
+$(OBJ)/pic/libimage/gif.c.o: private LIBOS64_CFLAGS += -O2
 $(OBJ)/pic/libimage/%.c.o: libimage/%.c libimage/shared.mk
 	@mkdir -p $(dir $@)
 	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@

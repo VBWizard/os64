@@ -1,0 +1,850 @@
+{
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "cpu": 10,
+  "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "baseline_ref": "ae0a23d5f5af659c6d82a63e07fd831d1f96200b",
+  "decoder_sha256": {
+    "baseline-O0": "443c6eb42e21fcd5442102269d9c8053b476d372b86da2ad449a076ba9c44003",
+    "baseline-O2": "443c6eb42e21fcd5442102269d9c8053b476d372b86da2ad449a076ba9c44003",
+    "current-O2": "e7007746a9992a656df3a1872a932a618bbbcaf679dbd7d36657075b17fd31a5"
+  },
+  "seconds_per_sample": 0.4,
+  "repeats": 3,
+  "files": [
+    {
+      "file": "00-roach.gif",
+      "sha256": "235026a36ba3208d55dd87f481f3374939e119a42f09293a6ee03e4401f6c50a",
+      "width": 128,
+      "height": 123,
+      "frames": 46,
+      "owned_bytes": 205014,
+      "samples_us": {
+        "baseline-O0": [
+          93.12932,
+          92.116728,
+          91.450536
+        ],
+        "baseline-O2": [
+          39.985651,
+          40.077264,
+          39.859059
+        ],
+        "current-O2": [
+          32.663306,
+          32.45066,
+          32.673804
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 92.116728,
+        "baseline-O2": 39.985651,
+        "current-O2": 32.663306
+      },
+      "url": "https://danlegt.com/static/gifs/roach.gif",
+      "encoded_bytes": 60142
+    },
+    {
+      "file": "01-tvstatic.gif",
+      "sha256": "696e12cdb8be0d022653fd691329d6b5be59981b527163265a23e47cb981534b",
+      "width": 128,
+      "height": 128,
+      "frames": 5,
+      "owned_bytes": 119621,
+      "samples_us": {
+        "baseline-O0": [
+          186.187178,
+          186.631204,
+          186.649954
+        ],
+        "baseline-O2": [
+          74.282358,
+          74.150818,
+          74.568508
+        ],
+        "current-O2": [
+          60.156716,
+          60.629597,
+          60.939588
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 186.631204,
+        "baseline-O2": 74.282358,
+        "current-O2": 60.629597
+      },
+      "url": "https://danlegt.com/static/gifs/tvstatic.gif",
+      "encoded_bytes": 15829
+    },
+    {
+      "file": "02-yabba.gif",
+      "sha256": "34e6f8becce3337491bc9eb186a76c2169b16f5604e85bf8952ea7461b11941a",
+      "width": 19,
+      "height": 33,
+      "frames": 8,
+      "owned_bytes": 29169,
+      "samples_us": {
+        "baseline-O0": [
+          8.402768,
+          8.361309,
+          8.40563
+        ],
+        "baseline-O2": [
+          3.03884,
+          3.005625,
+          2.931558
+        ],
+        "current-O2": [
+          2.335037,
+          2.326665,
+          2.306856
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 8.402768,
+        "baseline-O2": 3.005625,
+        "current-O2": 2.326665
+      },
+      "url": "https://danlegt.com/static/gifs/yabba.gif",
+      "encoded_bytes": 922
+    },
+    {
+      "file": "03-coolpenguin.gif",
+      "sha256": "f876fb688692d47717a8da2a9037d5d1e21afe4de13e896a8d768f63910533ed",
+      "width": 101,
+      "height": 80,
+      "frames": 30,
+      "owned_bytes": 132636,
+      "samples_us": {
+        "baseline-O0": [
+          99.954883,
+          99.789258,
+          99.698193
+        ],
+        "baseline-O2": [
+          43.417578,
+          43.258765,
+          43.146854
+        ],
+        "current-O2": [
+          39.748111,
+          39.816624,
+          39.630845
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 99.789258,
+        "baseline-O2": 43.258765,
+        "current-O2": 39.748111
+      },
+      "url": "https://danlegt.com/static/gifs/coolpenguin.gif",
+      "encoded_bytes": 43444
+    },
+    {
+      "file": "04-retronaut.gif",
+      "sha256": "b07f2703ac6d867260714ce8288ce4fa274586e525b54a6cc3eec0ba385488e5",
+      "width": 113,
+      "height": 103,
+      "frames": 6,
+      "owned_bytes": 151417,
+      "samples_us": {
+        "baseline-O0": [
+          158.132266,
+          157.118281,
+          158.392109
+        ],
+        "baseline-O2": [
+          67.371293,
+          68.154467,
+          68.208916
+        ],
+        "current-O2": [
+          55.990081,
+          55.700247,
+          55.891253
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 158.132266,
+        "baseline-O2": 68.154467,
+        "current-O2": 55.891253
+      },
+      "url": "https://danlegt.com/static/gifs/retronaut.gif",
+      "encoded_bytes": 23714
+    },
+    {
+      "file": "05-bekind2.gif",
+      "sha256": "5231d0b7f38817e2c351c7f98fa9af535a0f467bf39e7604977f8b68c62573e8",
+      "width": 150,
+      "height": 20,
+      "frames": 2,
+      "owned_bytes": 34473,
+      "samples_us": {
+        "baseline-O0": [
+          33.134301,
+          33.048618,
+          32.985526
+        ],
+        "baseline-O2": [
+          11.235935,
+          11.279808,
+          11.18707
+        ],
+        "current-O2": [
+          8.523429,
+          8.49524,
+          8.456643
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 33.048618,
+        "baseline-O2": 11.235935,
+        "current-O2": 8.49524
+      },
+      "url": "https://danlegt.com/static/gifs/bekind2.gif",
+      "encoded_bytes": 841
+    },
+    {
+      "file": "06-bestviewed.gif",
+      "sha256": "c045d1601e92b298900920001c787f5dabd0f5be60acace46fe8f4765018d28f",
+      "width": 88,
+      "height": 31,
+      "frames": 4,
+      "owned_bytes": 54763,
+      "samples_us": {
+        "baseline-O0": [
+          49.181531,
+          49.272522,
+          49.164465
+        ],
+        "baseline-O2": [
+          20.045343,
+          19.88751,
+          20.098252
+        ],
+        "current-O2": [
+          16.254647,
+          16.256141,
+          16.301375
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 49.181531,
+        "baseline-O2": 20.045343,
+        "current-O2": 16.256141
+      },
+      "url": "https://danlegt.com/static/gifs/bestviewed.gif",
+      "encoded_bytes": 9419
+    },
+    {
+      "file": "10-desp-anim.gif",
+      "sha256": "06126654ee82e9902b46697ab3e87ca6d516db8a54d286d7f3b1f45ba006c4c4",
+      "width": 88,
+      "height": 31,
+      "frames": 9,
+      "owned_bytes": 50809,
+      "samples_us": {
+        "baseline-O0": [
+          42.209833,
+          42.586318,
+          42.583024
+        ],
+        "baseline-O2": [
+          17.388299,
+          17.325911,
+          17.254421
+        ],
+        "current-O2": [
+          14.413018,
+          14.500166,
+          14.388847
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 42.583024,
+        "baseline-O2": 17.325911,
+        "current-O2": 14.413018
+      },
+      "url": "https://danlegt.com/static/buttons/desp-anim.gif",
+      "encoded_bytes": 10977
+    },
+    {
+      "file": "11-penguins.gif",
+      "sha256": "aab1dffcd5285658a95f546746995fefbd230f4f341ae4f1942adf731871dd1e",
+      "width": 88,
+      "height": 31,
+      "frames": 18,
+      "owned_bytes": 60371,
+      "samples_us": {
+        "baseline-O0": [
+          31.633176,
+          32.075765,
+          32.334214
+        ],
+        "baseline-O2": [
+          11.169679,
+          11.25369,
+          11.359808
+        ],
+        "current-O2": [
+          8.9081,
+          8.935806,
+          9.003004
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 32.075765,
+        "baseline-O2": 11.25369,
+        "current-O2": 8.935806
+      },
+      "url": "https://danlegt.com/static/buttons/penguins.gif",
+      "encoded_bytes": 10819
+    },
+    {
+      "file": "13-phonechump.gif",
+      "sha256": "b18a77be396b65114749afb244eaaf2e4741e3347f139a8d9aebf0f0f107d817",
+      "width": 88,
+      "height": 31,
+      "frames": 2,
+      "owned_bytes": 34797,
+      "samples_us": {
+        "baseline-O0": [
+          38.231536,
+          38.1367,
+          38.130526
+        ],
+        "baseline-O2": [
+          12.777382,
+          12.800651,
+          12.744928
+        ],
+        "current-O2": [
+          9.911837,
+          9.964759,
+          10.024296
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 38.1367,
+        "baseline-O2": 12.777382,
+        "current-O2": 9.964759
+      },
+      "url": "https://danlegt.com/static/buttons/phonechump.gif",
+      "encoded_bytes": 2525
+    },
+    {
+      "file": "14-speech.gif",
+      "sha256": "9b2d46de326e05e8822b22b927de656da086a60c0f57fc5398dfdcc6c3c830d7",
+      "width": 88,
+      "height": 31,
+      "frames": 24,
+      "owned_bytes": 66864,
+      "samples_us": {
+        "baseline-O0": [
+          12.92355,
+          13.149521,
+          12.968471
+        ],
+        "baseline-O2": [
+          5.135639,
+          5.140399,
+          5.097683
+        ],
+        "current-O2": [
+          4.249361,
+          4.242173,
+          4.238442
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 12.968471,
+        "baseline-O2": 5.135639,
+        "current-O2": 4.242173
+      },
+      "url": "https://danlegt.com/static/buttons/speech.gif",
+      "encoded_bytes": 10832
+    },
+    {
+      "file": "17-40717.gif",
+      "sha256": "41970932891ad2cb8703c7c219e7daea3caa3d75f9997152aaed404a2dd81a2d",
+      "width": 88,
+      "height": 31,
+      "frames": 25,
+      "owned_bytes": 63085,
+      "samples_us": {
+        "baseline-O0": [
+          6.320696,
+          6.334467,
+          6.334876
+        ],
+        "baseline-O2": [
+          2.293906,
+          2.307238,
+          2.347645
+        ],
+        "current-O2": [
+          1.888093,
+          1.901668,
+          1.883718
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 6.334467,
+        "baseline-O2": 2.307238,
+        "current-O2": 1.888093
+      },
+      "url": "https://danlegt.com/static/buttons/40717.gif",
+      "encoded_bytes": 5973
+    },
+    {
+      "file": "18-vim.vialle.love.anim.gif",
+      "sha256": "458117cff225cf6b8ac396377566932da0e379bf7f62ff18585483858afba8a1",
+      "width": 88,
+      "height": 31,
+      "frames": 6,
+      "owned_bytes": 37960,
+      "samples_us": {
+        "baseline-O0": [
+          11.119265,
+          11.044023,
+          11.115462
+        ],
+        "baseline-O2": [
+          3.692041,
+          3.654428,
+          3.673776
+        ],
+        "current-O2": [
+          2.83095,
+          2.825906,
+          2.836112
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 11.115462,
+        "baseline-O2": 3.673776,
+        "current-O2": 2.83095
+      },
+      "url": "https://danlegt.com/static/buttons/vim.vialle.love.anim.gif",
+      "encoded_bytes": 1368
+    },
+    {
+      "file": "22-discord2.gif",
+      "sha256": "e7dde568d4b560ab2e2957e3bf832bebf843a8b959bd301386cfc010a1b36b86",
+      "width": 88,
+      "height": 31,
+      "frames": 4,
+      "owned_bytes": 35642,
+      "samples_us": {
+        "baseline-O0": [
+          30.193487,
+          30.051758,
+          30.102066
+        ],
+        "baseline-O2": [
+          9.767065,
+          9.713611,
+          9.995587
+        ],
+        "current-O2": [
+          7.508899,
+          7.510943,
+          7.437669
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 30.102066,
+        "baseline-O2": 9.767065,
+        "current-O2": 7.508899
+      },
+      "url": "https://danlegt.com/static/buttons/discord2.gif",
+      "encoded_bytes": 1210
+    },
+    {
+      "file": "23-email-icon.gif",
+      "sha256": "7778750e8af0c970730a6cb135201428cacbc66b99ec4d76ed80c11675fe94b7",
+      "width": 88,
+      "height": 31,
+      "frames": 8,
+      "owned_bytes": 43813,
+      "samples_us": {
+        "baseline-O0": [
+          28.940444,
+          28.450497,
+          28.812629
+        ],
+        "baseline-O2": [
+          10.98955,
+          10.940592,
+          10.892577
+        ],
+        "current-O2": [
+          8.962632,
+          8.958847,
+          9.006054
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 28.812629,
+        "baseline-O2": 10.940592,
+        "current-O2": 8.962632
+      },
+      "url": "https://danlegt.com/static/buttons/email-icon.gif",
+      "encoded_bytes": 5061
+    },
+    {
+      "file": "25-cat_eat_chips.gif",
+      "sha256": "13b5088aa671a31545d75918a4162ae17826c769fa78f63faafc528581f89601",
+      "width": 99,
+      "height": 56,
+      "frames": 34,
+      "owned_bytes": 220642,
+      "samples_us": {
+        "baseline-O0": [
+          84.082155,
+          83.69375,
+          83.873479
+        ],
+        "baseline-O2": [
+          35.594496,
+          35.4755,
+          35.51875
+        ],
+        "current-O2": [
+          30.102224,
+          29.67388,
+          29.238705
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 83.873479,
+        "baseline-O2": 35.51875,
+        "current-O2": 29.67388
+      },
+      "url": "https://danlegt.com/static/stamps/cat_eat_chips.gif",
+      "encoded_bytes": 139730
+    },
+    {
+      "file": "26-i_heart_stamps.gif",
+      "sha256": "1fd5916a822ef8c8fa5c82f9ccf2d90b8b34990d4b5cf8a900ba8c200c21364d",
+      "width": 99,
+      "height": 56,
+      "frames": 66,
+      "owned_bytes": 143424,
+      "samples_us": {
+        "baseline-O0": [
+          22.189007,
+          21.694251,
+          21.706611
+        ],
+        "baseline-O2": [
+          10.230875,
+          10.087692,
+          9.888944
+        ],
+        "current-O2": [
+          7.582865,
+          7.530296,
+          7.4132
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 21.706611,
+        "baseline-O2": 10.087692,
+        "current-O2": 7.530296
+      },
+      "url": "https://danlegt.com/static/stamps/i_heart_stamps.gif",
+      "encoded_bytes": 27952
+    },
+    {
+      "file": "27-peterst.gif",
+      "sha256": "b825bbd7f86cf20d98578af5fca7a0d57db119ad0eca76eb4174dc7f6c5b34ba",
+      "width": 100,
+      "height": 57,
+      "frames": 23,
+      "owned_bytes": 130525,
+      "samples_us": {
+        "baseline-O0": [
+          109.279418,
+          107.591615,
+          107.852452
+        ],
+        "baseline-O2": [
+          51.428407,
+          51.711002,
+          51.727421
+        ],
+        "current-O2": [
+          40.877821,
+          40.739407,
+          40.899919
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 107.852452,
+        "baseline-O2": 51.711002,
+        "current-O2": 40.877821
+      },
+      "url": "https://danlegt.com/static/stamps/peterst.gif",
+      "encoded_bytes": 60713
+    },
+    {
+      "file": "28-thebread.gif",
+      "sha256": "2f69f71177400b8858d0b2d4d732467f5b22b66351f5f76b151224d0a915e67b",
+      "width": 99,
+      "height": 55,
+      "frames": 13,
+      "owned_bytes": 112079,
+      "samples_us": {
+        "baseline-O0": [
+          73.693932,
+          73.308612,
+          73.600055
+        ],
+        "baseline-O2": [
+          31.519102,
+          31.274227,
+          30.973755
+        ],
+        "current-O2": [
+          26.228737,
+          26.050449,
+          25.819352
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 73.600055,
+        "baseline-O2": 31.274227,
+        "current-O2": 26.050449
+      },
+      "url": "https://danlegt.com/static/stamps/thebread.gif",
+      "encoded_bytes": 32562
+    },
+    {
+      "file": "29-corrupt.gif",
+      "sha256": "702327e64c133f73d5b95248ade99ecbd6ec08568526b326fd0ce859673856ae",
+      "width": 99,
+      "height": 56,
+      "frames": 4,
+      "owned_bytes": 66813,
+      "samples_us": {
+        "baseline-O0": [
+          103.668624,
+          104.344557,
+          103.725958
+        ],
+        "baseline-O2": [
+          42.156167,
+          42.085781,
+          42.297392
+        ],
+        "current-O2": [
+          33.822597,
+          33.924471,
+          34.161574
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 103.725958,
+        "baseline-O2": 42.156167,
+        "current-O2": 33.924471
+      },
+      "url": "https://danlegt.com/static/stamps/corrupt.gif",
+      "encoded_bytes": 18301
+    },
+    {
+      "file": "30-fatfree.gif",
+      "sha256": "bee46e3059ffeda0fe255d759fe0b6f098e128392bc491368d9523ee60b3b222",
+      "width": 88,
+      "height": 31,
+      "frames": 30,
+      "owned_bytes": 93932,
+      "samples_us": {
+        "baseline-O0": [
+          32.875529,
+          32.715267,
+          33.727243
+        ],
+        "baseline-O2": [
+          15.476253,
+          15.57308,
+          15.987839
+        ],
+        "current-O2": [
+          12.494861,
+          12.514797,
+          12.937332
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 32.875529,
+        "baseline-O2": 15.57308,
+        "current-O2": 12.514797
+      },
+      "url": "https://danlegt.com/static/buttons/fatfree.gif",
+      "encoded_bytes": 31420
+    },
+    {
+      "file": "31-shareware.gif",
+      "sha256": "6e6795980e1387e082faf6aedc207dcf0d004295a6861908c114da041c335cc5",
+      "width": 88,
+      "height": 31,
+      "frames": 7,
+      "owned_bytes": 38670,
+      "samples_us": {
+        "baseline-O0": [
+          7.08885,
+          6.977053,
+          7.029356
+        ],
+        "baseline-O2": [
+          2.227967,
+          2.232881,
+          2.229372
+        ],
+        "current-O2": [
+          1.765405,
+          1.76892,
+          1.770196
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 7.029356,
+        "baseline-O2": 2.229372,
+        "current-O2": 1.76892
+      },
+      "url": "https://danlegt.com/static/buttons/shareware.gif",
+      "encoded_bytes": 998
+    },
+    {
+      "file": "32-sparkle-sparkles.gif",
+      "sha256": "a9a079b96654bf3116d0db3570445b4ff0ac823b8b8d7e1871bfd2f8985db953",
+      "width": 96,
+      "height": 96,
+      "frames": 2,
+      "owned_bytes": 66046,
+      "samples_us": {
+        "baseline-O0": [
+          68.388298,
+          66.214974,
+          66.223389
+        ],
+        "baseline-O2": [
+          25.616368,
+          24.893849,
+          25.307743
+        ],
+        "current-O2": [
+          21.241448,
+          20.719511,
+          20.804237
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 66.223389,
+        "baseline-O2": 25.307743,
+        "current-O2": 20.804237
+      },
+      "url": "https://danlegt.com/static/gifs/particles/sparkle-sparkles.gif",
+      "encoded_bytes": 1334
+    },
+    {
+      "file": "33-feuer-fire.gif",
+      "sha256": "a49ddff3d6eacbbb086b3952f4e6d9d7e5eca7603515206f168bad6c988dd742",
+      "width": 200,
+      "height": 200,
+      "frames": 10,
+      "owned_bytes": 244412,
+      "samples_us": {
+        "baseline-O0": [
+          342.657969,
+          338.794687,
+          340.712188
+        ],
+        "baseline-O2": [
+          129.858688,
+          130.064406,
+          131.942057
+        ],
+        "current-O2": [
+          104.896875,
+          104.667812,
+          105.518828
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 340.712188,
+        "baseline-O2": 130.064406,
+        "current-O2": 104.896875
+      },
+      "url": "https://danlegt.com/static/gifs/particles/feuer-fire.gif",
+      "encoded_bytes": 19740
+    },
+    {
+      "file": "34-chataddict.gif",
+      "sha256": "baddc1a16e31d64de42c4d6d45fe35df791f56048655faf5958f9de741777042",
+      "width": 150,
+      "height": 30,
+      "frames": 3,
+      "owned_bytes": 44541,
+      "samples_us": {
+        "baseline-O0": [
+          49.032434,
+          49.001599,
+          49.607713
+        ],
+        "baseline-O2": [
+          17.791468,
+          17.881826,
+          17.691495
+        ],
+        "current-O2": [
+          14.043137,
+          13.960048,
+          13.78474
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 49.032434,
+        "baseline-O2": 17.791468,
+        "current-O2": 13.960048
+      },
+      "url": "https://danlegt.com/static/gifs/chataddict.gif",
+      "encoded_bytes": 2329
+    },
+    {
+      "file": "35-anime-anime-girl-dance.gif",
+      "sha256": "c189cdda94fa26769ced4fdcecc470fe86fb64b9b2b434c8671569c23d99a724",
+      "width": 300,
+      "height": 300,
+      "frames": 141,
+      "owned_bytes": 2525359,
+      "samples_us": {
+        "baseline-O0": [
+          604.407422,
+          601.780729,
+          601.422396
+        ],
+        "baseline-O2": [
+          256.958053,
+          257.599159,
+          254.186959
+        ],
+        "current-O2": [
+          221.367656,
+          220.331875,
+          217.740312
+        ]
+      },
+      "median_us": {
+        "baseline-O0": 601.780729,
+        "baseline-O2": 256.958053,
+        "current-O2": 220.331875
+      },
+      "url": "https://danlegt.com/static/gifs/banner_stuff/anime-anime-girl-dance.gif",
+      "encoded_bytes": 1916519
+    }
+  ],
+  "date": "2026-10-02 America/New_York",
+  "cpu_model": "AMD Ryzen 9 3900X 12-Core Processor",
+  "scope": "Host sequence decoding and composition only; no drawing, repainting, scheduling or P5 profiling"
+}
