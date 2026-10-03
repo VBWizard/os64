@@ -259,7 +259,9 @@ static void layer(Buf *b, const flow_env_t *env, const flow_layer_t *l)
     }
     for (int32_t i = 0; i < g->nstops; i++) {
         puts_(b, i == 0 ? ":" : ",");
-        if (!g->stops[i].hint)
+        if (g->stops[i].current)
+            puts_(b, "currentColor");
+        else if (!g->stops[i].hint)
             color(b, env, g->stops[i].colour);
         puts_(b, "@");
         length(b, g->stops[i].at);
