@@ -2020,6 +2020,42 @@ static void mark_part(os64_gui_rect_t r)
     os64_ui_mark_dirty(&g.ui, &part);
 }
 
+typedef struct {
+    int32_t k;
+    bool mark;
+    os64_gui_rect_t view;       // page coordinates
+    bool seen;
+    const flow_box_t *owner;    // the canvas's: asked apart from the walk
+} SheetPictureSeen;
+
+// One box of the view's walk: does a sheet put picture `k` behind it?
+static void sheet_picture_seen(void *ctx, const flow_box_t *b)
+{
+    SheetPictureSeen *look = ctx;
+    if (b == look->owner || b->style->background_image == NULL || (look->seen && !look->mark) ||
+        css_picture(&g.page, b->style) != look->k)
+        return;
+    os64_gui_rect_t meet;
+    if (!os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
+        return;
+    look->seen = true;
+    if (look->mark)
+        mark_part(meet);
+}
+
+static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area, int32_t ox,
+                           int32_t oy, os64_gui_rect_t clip);
+
+// The picture behind a box, as glass_backdrop draws it — a sheet's
+// outranking a `background` attribute's — or -1.
+static int32_t box_picture(const Page *p, const flow_box_t *b)
+{
+    if (b->style->background_image != NULL)
+        return css_picture(p, b->style);
+    int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
+    return i >= 0 && p->bg_of != NULL ? p->bg_of[i] : -1;
+}
+
 // Whether any box showing picture `k` meets the view — one scrolled away is
 // not advanced, since decoding a frame nobody sees is only cost — and, when
 // `mark`, each such box's part of the glass marked for repainting.
@@ -2042,23 +2078,35 @@ static bool picture_on_screen(int32_t k, bool mark)
             return true;
         mark_part(meet);
     }
-    // Behind a box: the body's picture is the canvas's, behind the whole
-    // view; any other is behind its own box.
+    // The canvas's picture is behind the whole view wherever its owner's
+    // box has gone — a body only 50px tall still paints the page — so its
+    // owner is found by the painter's own rule, apart from any walk of what
+    // the view shows (Quinn, #206).
+    const yonder_verbs_t asking = {.backdrop = glass_backdrop};
+    const flow_box_t *owner = yonder_canvas_owner(p->tree, &asking);
+    if (owner != NULL && box_picture(p, owner) == k) {
+        seen = true;
+        if (!mark)
+            return true;
+        mark_part(view);
+    }
+    // Behind any other box: a `background` attribute's picture, and then a
+    // sheet's behind any box the view shows (the walk visits only those).
     for (int32_t i = 0; p->bg_of != NULL && i < os64_page_nbackgrounds(model); i++) {
         if (p->bg_of[i] != k)
             continue;
-        const os64_html_node_t *node = os64_page_background(model, i)->node;
-        const flow_box_t *b = flow_box_for(p->tree, node);
-        bool canvas = node->tag == OS64_HTML_TAG_BODY;
-        if (b == NULL ||
-            (!canvas && !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet)))
+        const flow_box_t *b = flow_box_for(p->tree, os64_page_background(model, i)->node);
+        if (b == NULL || b == owner ||
+            !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet))
             continue;
         seen = true;
         if (!mark)
             return true;
-        mark_part(canvas ? view : meet);
+        mark_part(meet);
     }
-    return seen;
+    SheetPictureSeen look = {k, mark, view, false, owner};
+    flow_visit(p->tree, view, scroll_now(), sheet_picture_seen, &look);
+    return seen || look.seen;
 }
 
 // Hands the ticker the earliest of three deadlines: the next frame among

@@ -336,9 +336,11 @@ A ridge is a groove turned over.
 `border-radius` shorthand with its slash (Backgrounds 3 § 5.1). libflow
 carries `flow_style_t.radius` and resolves it on a box with
 `flow_box_radii`: a percentage of the border box, and every radius
-scaled down together where two that meet along a side would overlap
-(§ 5.5). yonder draws a box with any radius row by row in 1/256 px — each
-row's span through the corner ellipses at its middle, whole pixels in
+scaled down by one factor where the radii along a side would together be
+longer than it — the radii as written, none capped first, so a corner
+keeps its shape (§ 5.5; Quinn, #203). yonder draws a box with any radius row by row in 1/256 px — each
+row's span through the corner ellipses at its middle (worked as a
+fraction, so no product passes 64 bits at any size libflow takes), whole pixels in
 runs, the pixel at each end laid over at the share it is covered — so a
 curve is smooth across. Its border is the ring between the border box's
 shape and the padding box's, each inner radius its outer one less the
@@ -356,7 +358,9 @@ the first is on top; its inset ones over its background and under its
 borders. A shadow is its shape — the border box moved and grown by its
 spread, or for an inset one the padding box moved and shrunk — as a
 coverage mask, blurred by three box blurs (near enough CSS's Gaussian,
-standard deviation half the blur), cut to where it may fall (outside the
+standard deviation half the blur) over the view and the three blurs'
+reach around it, so a part repainted alone is shaded as the whole (Quinn,
+#203), cut to where it may fall (outside the
 border box, or inside the padding box), and handed to yonder's new `mask`
 verb. An outer square shadow with no blur takes a fast path: its shape
 less the border box, as rectangles. A text's shadow is its run again, in
@@ -365,12 +369,18 @@ the shadow's colour at its offset, under it.
 ### Proof
 
 libgarb's declaration corpus gains eleven corner and twelve shadow cases.
-`radius_cases`: a percentage, the overlap scale, a slash, a zero corner.
+`radius_cases`: a percentage, the overlap scale, a slash, a zero corner,
+and the radii scaled as written (Firefox's 50 x 50 and 45 x 45).
+`sweep_shadows`: every allocation of a shadow read failed alone, each
+answer whole or marked incomplete.
 yonder, each worked by hand: the four border styles on a top side; a
 4px square with 2px corners to the pixel; an unblurred square shadow as
 two rectangles; a text shadow under its text. A blurred shadow is checked
 by what a blur must do — its mask the blur's reach past the shape, half
-on at the box's edge, nothing on the box, an inset one only inside. In
+on at the box's edge, nothing on the box, an inset one only inside — and a
+repaint split in two shading every pixel as one whole repaint does, for
+blurs of 8, 20 and 40 and an inset of 20; a box 31,000,000 px across
+paints its corner under UBSan. In
 the guest, a fixture of every style, four kinds of corners, four kinds of
 shadow and two text shadows drew as headless Chrome draws it, but for
 round dots (yonder's are square) and ridge's exact tones, which CSS

@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- pile 3, S1: scrolling boxes. Wheel over each box: the tall panel, then the list (its heading sticks to the list's top), then the page; the link scrolls the list to TARGET; the overflow: hidden box does not scroll by wheel. -->
+<html><head><title>scroll boxes</title>
+<style>
+body { margin: 8px; font-family: sans-serif; background: #223 }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 150px); gap: 10px }
+.panel { border: 6px ridge orange; padding: 8px; overflow-y: auto; background: #000; color: #fff; text-align: center }
+.icons { display: flex; flex-flow: wrap; gap: 4px; justify-content: center }
+.icon { width: 88px; height: 31px; background: #48c; color: #fff; font-size: 12px }
+.icon:nth-child(3n) { background: #c84 }
+.icon:nth-child(3n+1) { background: #4a4 }
+.list { height: 120px; overflow: auto; background: #eee; color: #000; text-align: left }
+.list h3 { position: sticky; top: 0; margin: 0; background: #fc0 }
+.hidden { overflow: hidden; height: 60px; background: #ddd; color: #000 }
+.tall { height: 900px; color: #fff }
+</style></head>
+<body>
+<div class=grid>
+  <div class=panel style="grid-row: span 2">
+    <h2 style="margin:0">Tune In</h2>
+    <p>Twelve icons in a box too skinny for them.</p>
+    <div class=icons>
+      <div class=icon>one</div><div class=icon>two</div><div class=icon>three</div>
+      <div class=icon>four</div><div class=icon>five</div><div class=icon>six</div>
+      <div class=icon>seven</div><div class=icon>eight</div><div class=icon>nine</div>
+      <div class=icon>ten</div><div class=icon>eleven</div><div class=icon>twelve</div>
+    </div>
+    <p><a href="#target">to the target</a> (in the list)</p>
+    <input name=q value="field in a box">
+  </div>
+  <div class=list>
+    <h3>Sticky heading</h3>
+    <p>line 1</p><p>line 2</p><p>line 3</p><p>line 4</p><p>line 5</p>
+    <p id=target style="background:#f88">TARGET</p>
+    <p>line 7</p><p>line 8</p><p>line 9</p><p>the end</p>
+  </div>
+  <div class=hidden>overflow hidden: a person cannot scroll this, the rest of it is cut. one two three four five six seven eight nine ten eleven twelve thirteen</div>
+</div>
+<p class=tall>The page goes on below, so the page scrolls too.</p>
+</body></html>

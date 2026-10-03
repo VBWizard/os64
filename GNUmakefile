@@ -231,8 +231,11 @@ FONT_PRODUCT       := $(addprefix $(FONT_FIXTURE_DIR)/,DejaVuSerif.ttf DejaVuSer
 # sheets and its showcase page (garb.html), side by side in /tests/pages, so
 # /tests/flowdump, /tests/garbdump and yonder have something to read on a
 # machine with no network. Where each page came from is in
-# tools/html_corpus/SOURCES.json, which ships beside them.
-PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css tools/garb_corpus/*.html)
+# tools/html_corpus/SOURCES.json, which ships beside them. tools/pages holds
+# pages written here to show a feature beside Chrome (each says what to look
+# for), with the pictures they name.
+PAGE_FIXTURES := $(wildcard tools/html_corpus/*.html tools/garb_corpus/*.css tools/garb_corpus/*.html \
+                            tools/pages/*.html tools/pages/*.gif)
 
 # The same fixtures for the wire, staged alone: os64serve serves a directory
 # whole, and tools/html_corpus also holds the host harness's expected dumps,
@@ -246,6 +249,8 @@ PAGES_RETIRED = $(filter-out $(PAGES_STAGED),$(wildcard $(PAGES_STAGE)/*))
 $(PAGES_STAGE)/%: tools/html_corpus/%
 	@mkdir -p $(PAGES_STAGE) && cp $< $@
 $(PAGES_STAGE)/%: tools/garb_corpus/%
+	@mkdir -p $(PAGES_STAGE) && cp $< $@
+$(PAGES_STAGE)/%: tools/pages/%
 	@mkdir -p $(PAGES_STAGE) && cp $< $@
 .PHONY: stage-pages
 stage-pages: $(PAGES_STAGED)

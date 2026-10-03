@@ -474,6 +474,10 @@ static bool shadow_list(Sets *s, VCur *c, bool box, garb_val_t *out)
             int32_t cap2 = cap != 0 ? cap * 2 : 8;
             garb_val_t *grown = os64_realloc(list, (size_t)cap2 * sizeof(*grown));
             if (grown == NULL) {
+                // Not the arena's, so said here: a list cut short by memory
+                // is an incomplete read, never an invalid declaration
+                // (Quinn, #203).
+                s->a.short_of_memory = true;
                 ok = false;
                 break;
             }

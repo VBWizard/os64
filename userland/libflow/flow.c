@@ -1080,11 +1080,14 @@ flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll)
 
 void flow_box_radii(const flow_box_t *box, int32_t radii[4][2])
 {
+    // Each radius as written, never capped on its own: a cap would change
+    // the corner's shape before the common reduction below, which must
+    // scale the radii a page wrote (§ 5.5's overlapping-curves rule).
     int64_t r[4][2], size[2] = {box != NULL ? box->rect.w : 0, box != NULL ? box->rect.h : 0};
     for (int c = 0; c < 4; c++)
         for (int k = 0; k < 2; k++) {
             int64_t v = box != NULL ? round_px(f_len(box->style->radius[c][k], size[k] * 64)) : 0;
-            r[c][k] = v < 0 ? 0 : v > size[k] ? size[k] : v;
+            r[c][k] = v < 0 ? 0 : v;
         }
     // Along each side, the two radii that meet it: top (TL, TR across),
     // right (TR, BR down), bottom (BR, BL across), left (BL, TL down). The
@@ -1094,11 +1097,19 @@ void flow_box_radii(const flow_box_t *box, int32_t radii[4][2])
     for (int s = 0; s < 4; s++) {
         int axis = kSide[s][2];
         int64_t sum = r[kSide[s][0]][axis] + r[kSide[s][1]][axis];
-        if (sum > 0 && size[axis] * den < sum * num) {
+        // f_len holds a length to LEN_MAX, so a radius is at most ~2^31
+        // pixels, a side's sum 2^32 and a side 2^31: each product is under
+        // 2^63, and unsigned 64 bits hold it — no 128-bit arithmetic, whose
+        // division is a libgcc helper the freestanding link has not got.
+        if (sum > 0 && (uint64_t)size[axis] * (uint64_t)den < (uint64_t)sum * (uint64_t)num) {
             num = size[axis];
             den = sum;
         }
     }
+    // Scaled, a radius is no longer than its side, so it fits an int32_t
+    // as the box does — and one written longer than its side, with no other
+    // along it, is scaled to the side (a 100px corner of a 50px box is 50).
+    // r * num is under 2^62.
     for (int c = 0; c < 4; c++)
         for (int k = 0; k < 2; k++)
             radii[c][k] = (int32_t)(r[c][k] * num / den);

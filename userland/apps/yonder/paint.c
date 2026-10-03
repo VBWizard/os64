@@ -252,14 +252,19 @@ typedef struct {
 } Round;
 
 // How far in from its side a corner's ellipse is, `dy` from where it
-// starts curving.
+// starts curving: rx * (1 - sqrt(1 - (dy/ry)^2)), worked with dy/ry as a
+// fraction of FRAC, so that no product passes 64 bits whatever size a box
+// has (a radius in 1/256 px reaches 2^40; squaring it would not fit).
+#define FRAC ((int64_t)65536)
+
 static int64_t corner_in(int64_t rx, int64_t ry, int64_t dy)
 {
     if (rx <= 0 || ry <= 0 || dy <= 0)
         return 0;
     if (dy >= ry)
         return rx;
-    return rx - rx * isqrt64(ry * ry - dy * dy) / ry;
+    int64_t t = dy * FRAC / ry;                         // < FRAC
+    return rx - rx * isqrt64(FRAC * FRAC - t * t) / FRAC;
 }
 
 // Row `yc` (its middle, 1/256 px) of the shape: [*x0, *x1); false when it
@@ -526,7 +531,10 @@ static Round round_moved(const Round *s, int64_t dx, int64_t dy, int64_t by)
 static void shadow(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
                    const flow_shadow_t *sh, bool square)
 {
-    int64_t blur = sh->blur, reach = blur + 1;
+    // How far a pixel's shade reads: three box blurs of radius blur/2 each
+    // (mask_blur), and a pixel. A mask cut any closer to the view would
+    // shade a pixel by where the dirty part happened to end (Quinn, #203).
+    int64_t blur = sh->blur, reach = 3 * (blur / 2) + 1;
     Round shape = sh->inset ? round_moved(inner, (int64_t)sh->x * SUB, (int64_t)sh->y * SUB,
                                           -(int64_t)sh->spread * SUB)
                             : round_moved(outer, (int64_t)sh->x * SUB, (int64_t)sh->y * SUB,
@@ -847,6 +855,13 @@ static const flow_box_t *canvas_owner(const Painter *p, const flow_box_t *root)
             c->node->tag == OS64_HTML_TAG_BODY)
             return has_background(p, c) ? c : NULL;
     return NULL;
+}
+
+const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verbs_t *verbs)
+{
+    Painter p = {.v = verbs};
+    const flow_box_t *root = flow_root(tree);
+    return root != NULL ? canvas_owner(&p, root) : NULL;
 }
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,

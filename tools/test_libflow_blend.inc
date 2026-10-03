@@ -118,6 +118,11 @@ static void radius_cases(void)
         {"border-radius:40px", 25, 25},             // 80 down a 50 side: 5/8 of 40
         {"border-radius:10px / 20px", 10, 20},      // fits: as written
         {"border-top-left-radius:0 30px", 0, 30},   // kept; a face draws it square
+        // Scaled from the radii as written, never capped first (Quinn,
+        // #203; Firefox): one 100px corner of a 50px-high box is 50 x 50,
+        // not 100 x 50; 100px and 10px corners stay circular at 50/110.
+        {"border-top-left-radius:100px", 50, 50},
+        {"border-radius:100px 10px", 45, 45},
     };
     for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
         char html[256];
