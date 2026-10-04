@@ -155,9 +155,12 @@ static void parsing(void)
     CHECK(!strcmp(moved.roles[0].face[0], c.roles[0].face[0]));
     char small[5] = "keep";
     CHECK(os64_font_config_encode(&c, small, sizeof(small)) < 0 && !strcmp(small,"keep"));
-    char maximal[8192]; memset(maximal, ' ', sizeof(maximal)); maximal[0] = '#';
-    CHECK(os64_font_config_decode(maximal, 8191, "/cfg/fonts.conf", &c, &e) == 0);
-    CHECK(os64_font_config_decode(maximal, 8192, "/cfg/fonts.conf", &c, &e) == OS64_FONT_CONFIG_LIMIT);
+    static char maximal[OS64_FONT_CONFIG_BYTES_MAX + 1];
+    memset(maximal, ' ', sizeof(maximal)); maximal[0] = '#';
+    CHECK(os64_font_config_decode(maximal, OS64_FONT_CONFIG_BYTES_MAX, "/cfg/fonts.conf",
+                                  &c, &e) == 0);
+    CHECK(os64_font_config_decode(maximal, OS64_FONT_CONFIG_BYTES_MAX + 1, "/cfg/fonts.conf",
+                                  &c, &e) == OS64_FONT_CONFIG_LIMIT);
     saved = c; deny = calls + 1;
     CHECK(decode(choices, &c, &e) == OS64_FONT_CONFIG_NO_MEMORY);
     deny = 0; CHECK(!memcmp(&c, &saved, sizeof(c)) && live == 0);
@@ -470,9 +473,27 @@ static void web_setting(void)
         if (!fired)
             break;
     }
+    /* And the other way: whatever stops the Web face's set — its face, or
+     * memory any role of the set needed — is the Web setting's. */
+    size_t web_failures = 0;
+    for (size_t pos = 1; pos < 2000; ++pos) {
+        deny = calls + pos;
+        os64_font_config_status_t st = os64_font_config_web_prepare(text, &c, 16, &set, &e);
+        bool fired = calls >= deny;
+        deny = 0;
+        if (st) {
+            ++web_failures;
+            CHECK(e.web && e.role == OS64_FONT_ROLE_COUNT && set == NULL);
+        }
+        os64_font_set_release(set);
+        set = NULL;
+        if (!fired)
+            break;
+    }
+    CHECK(web_failures > 0);
     CHECK(!os64_text_destroy(text));
 
-    /* A whole config past 4096 bytes encoded, inside the 8191 a config may
+    /* A whole config past 4096 bytes encoded, inside the limit a config may
      * be, is a config like any other to the readers that encode it to check
      * it — discovery among them. */
     os64_font_config_defaults(&c);
@@ -492,6 +513,43 @@ static void web_setting(void)
     CHECK(os64_font_config_discover(text, &c, &catalog) == OS64_FONT_CONFIG_OK && catalog);
     os64_font_catalog_release(catalog);
     CHECK(!os64_text_destroy(text));
+
+    /* WHAT DECODE ACCEPTS, ENCODE WRITES. A file naming every face and no
+     * size grows when encode spells the sizes out; across path lengths, one
+     * that is accepted encodes, and one that fits the limit as written but
+     * not as encoded is refused when it is read. */
+    static const char *const role_keys[] = {"ui", "terminal", "document", "web"};
+    static const char *const fam_keys[] = {"serif", "sans", "mono"};
+    static const char *const fam_slots[] = {"", ".bold", ".italic", ".bolditalic",
+                                            ".fallback.1", ".fallback.2"};
+    static char file[OS64_FONT_CONFIG_BYTES_MAX * 2], encoded_back[OS64_FONT_CONFIG_BYTES_MAX + 1];
+    bool refused_under_limit = false;
+    for (int width = 200; width < (int)OS64_FONT_PATH_CAP - 8; ++width) {
+        size_t used = 0;
+        for (size_t r = 0; r < 4; ++r) {
+            used += (size_t)snprintf(file + used, sizeof(file) - used, "%s.face = /r%zu0-%0*d\n",
+                                     role_keys[r], r, width, 0);
+            for (size_t s = 1; s < 3; ++s)
+                used += (size_t)snprintf(file + used, sizeof(file) - used,
+                                         "%s.fallback.%zu = /r%zu%zu-%0*d\n",
+                                         role_keys[r], s, r, s, width, 0);
+        }
+        for (size_t f = 0; f < 3; ++f)
+            for (size_t k = 0; k < 6; ++k)
+                used += (size_t)snprintf(file + used, sizeof(file) - used,
+                                         "family.%s%s = /f%zu%zu-%0*d\n",
+                                         fam_keys[f], fam_slots[k], f, k, width, 0);
+        os64_font_config_t read_back;
+        os64_font_config_status_t st =
+            os64_font_config_decode(file, used, "/cfg/fonts.conf", &read_back, &e);
+        if (st == OS64_FONT_CONFIG_OK)
+            CHECK(os64_font_config_encode(&read_back, encoded_back, sizeof(encoded_back)) > 0);
+        else
+            CHECK(st == OS64_FONT_CONFIG_LIMIT);
+        if (st == OS64_FONT_CONFIG_LIMIT && used <= OS64_FONT_CONFIG_BYTES_MAX)
+            refused_under_limit = true;
+    }
+    CHECK(refused_under_limit);            /* the case was really reached */
 }
 
 int main(int argc, char **argv)

@@ -5,6 +5,9 @@
 #include "os64/font_provider.h"
 
 #define OS64_FONT_PATH_CAP 256u
+/* The most a fonts.conf may hold — as read, and as encode writes it: a file
+ * whose canonical form (every size spelled out, every path resolved) would
+ * not fit is refused when it is read, so nothing read can fail to encode. */
 #define OS64_FONT_CONFIG_BYTES_MAX 8191u
 #define OS64_FONT_SOURCE_BYTES_MAX (64u * 1024u * 1024u)
 

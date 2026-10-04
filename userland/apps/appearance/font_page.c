@@ -78,7 +78,9 @@ static bool same_web(const os64_font_config_t *a, const os64_font_config_t *b)
  * changes whole, or a refusal keeps the whole previous preview. A Web
  * face that will not open refuses only a candidate that CHANGES it — the
  * shipped default is absent without the fonts lot, and that must not stop
- * a person choosing the other roles; its band is then drawn in Interface. */
+ * a person choosing the other roles. An unchanged one that will not open
+ * again keeps the face already lent for that same setting, if there is one;
+ * its band is drawn in Interface only when it never opened at all. */
 static bool show_candidate(const os64_font_config_t *candidate)
 {
     os64_font_set_t *set = NULL, *web = NULL;
@@ -87,8 +89,9 @@ static bool show_candidate(const os64_font_config_t *candidate)
     if (os64_font_config_prepare(text, candidate, &set, &error)) {
         failure("Preview kept", &error); return false;
     }
-    if (os64_font_config_web_prepare(text, candidate, candidate->roles[OS64_FONT_CONFIG_WEB].size,
-                                     &web, &error) && !same_web(candidate, &draft)) {
+    bool web_opened = !os64_font_config_web_prepare(text, candidate,
+        candidate->roles[OS64_FONT_CONFIG_WEB].size, &web, &error);
+    if (!web_opened && !same_web(candidate, &draft)) {
         os64_font_set_release(set);
         failure("Preview kept", &error); return false;
     }
@@ -96,7 +99,7 @@ static bool show_candidate(const os64_font_config_t *candidate)
     os64_ui_font_consumer(preview, &consumer);
     os64_font_status_t status = os64_font_adopt(set, &consumer, 1, NULL);
     os64_font_set_release(set);
-    if (!status) status = os64_ui_font_app(preview, web, OS64_FONT_ROLE_UI);
+    if (!status && web_opened) status = os64_ui_font_app(preview, web, OS64_FONT_ROLE_UI);
     os64_font_set_release(web);
     if (status) { report("Preview cannot fit this font; previous choice kept"); return false; }
     return true;

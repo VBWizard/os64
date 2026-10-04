@@ -98,6 +98,43 @@ static bool resolve_path(const char *base, const char *value, char *out)
     return true;
 }
 
+// Where the next canonical line goes, and the room it has: nowhere once the
+// text is full or when there is no text, so the line is only counted.
+static char *canonical_at(char *text, size_t cap, size_t used)
+{
+    return text && used < cap ? text + used : NULL;
+}
+static size_t canonical_room(char *text, size_t cap, size_t used)
+{
+    return text && used < cap ? cap - used : 0;
+}
+static size_t counted(int32_t n) { return n > 0 ? (size_t)n : 0; }
+
+// The config as encode writes it: every role's face and size, then whatever
+// else is set. Returns its length; it was written whole only when that is
+// below `cap`, and a NULL `text` only measures.
+static size_t canonical(const os64_font_config_t *c, char *text, size_t cap)
+{
+    size_t used = 0;
+    for (size_t r = 0; r < OS64_FONT_CONFIG_ROLES; ++r) {
+        used += counted(os64_snprintf(canonical_at(text, cap, used),
+            canonical_room(text, cap, used), "%s.face = %s\n%s.size = %u\n",
+            role_names[r], c->roles[r].face[0], role_names[r], c->roles[r].size));
+        for (size_t s = 1; s < 3; ++s)
+            if (c->roles[r].face[s][0])
+                used += counted(os64_snprintf(canonical_at(text, cap, used),
+                    canonical_room(text, cap, used), "%s.fallback.%u = %s\n",
+                    role_names[r], (unsigned)s, c->roles[r].face[s]));
+    }
+    for (size_t f = 0; f < OS64_FONT_FAMILY_COUNT; ++f)
+        for (size_t s = 0; s < OS64_FONT_FAMILY_STYLES + OS64_FONT_CONFIG_FALLBACK_MAX; ++s)
+            if (c->families[f].face[s][0])
+                used += counted(os64_snprintf(canonical_at(text, cap, used),
+                    canonical_room(text, cap, used), "family.%s%s = %s\n",
+                    family_names[f], family_suffix[s], c->families[f].face[s]));
+    return used;
+}
+
 static os64_font_config_status_t validate(os64_font_config_t *c,
     os64_font_config_error_t *e)
 {
@@ -132,6 +169,12 @@ static os64_font_config_status_t validate(os64_font_config_t *c,
             os64_strcopy(family->face[s], OS64_FONT_PATH_CAP, path);
         }
     }
+    // WHAT IS ACCEPTED CAN BE WRITTEN. The canonical form spells out every
+    // size and resolves every path, so it can outgrow the file it came from;
+    // one that would not fit is refused here, rather than accepted and then
+    // refused by encode — which discovery, install and Save all go through.
+    if (canonical(c, NULL, 0) > OS64_FONT_CONFIG_BYTES_MAX)
+        return problem(e, OS64_FONT_CONFIG_LIMIT, 0, NO_ROLE, 0);
     return OS64_FONT_CONFIG_OK;
 }
 
@@ -342,7 +385,9 @@ done:
 }
 
 /* The Web setting, opened through the role door as the UI role of a set whose
- * other roles are builtin and cost nothing to prepare. */
+ * other roles are builtin. The set exists only to carry the Web face, so
+ * whatever stops it — the face, or memory any of its roles needed — is the
+ * Web setting's failure, and is said with its line. */
 os64_font_config_status_t os64_font_config_web_prepare(os64_text_context_t *context,
     const os64_font_config_t *config, uint32_t pixel_height, os64_font_set_t **out,
     os64_font_config_error_t *e)
@@ -354,16 +399,19 @@ os64_font_config_status_t os64_font_config_web_prepare(os64_text_context_t *cont
     os64_strcopy(c.path, OS64_FONT_PATH_CAP, config->path);
     os64_font_config_role_t *web = &c.roles[OS64_FONT_ROLE_UI];
     *web = config->roles[OS64_FONT_CONFIG_WEB];
-    problem(e, OS64_FONT_CONFIG_OK, 0, NO_ROLE, 0);
-    os64_font_config_status_t status = context && out ? validate(&c, e)
-        : problem(e, OS64_FONT_CONFIG_SYNTAX, 0, NO_ROLE, 0);
+    if (!context || !out) return problem(e, OS64_FONT_CONFIG_SYNTAX, 0, NO_ROLE, 0);
+    os64_font_config_status_t status = validate(&c, e);
     if (!status) {
         if (!os64_streq(web->face[0], "builtin"))
             web->size = pixel_height < 1 ? 1 : pixel_height > OS64_FONT_PIXEL_MAX
                 ? OS64_FONT_PIXEL_MAX : pixel_height;
         status = prepare_valid(context, &c, out, e);
     }
-    if (status && e && e->role == OS64_FONT_ROLE_UI) {
+    if (status && e) {
+        if (e->role != OS64_FONT_ROLE_UI) {      // no face of its own to name
+            e->line = web->source_line[0];
+            e->source = 0;
+        }
         e->role = OS64_FONT_ROLE_COUNT;
         e->web = true;
     }
@@ -447,29 +495,10 @@ int64_t os64_font_config_encode(const os64_font_config_t *config, char *out, siz
     if (!config || !out || !cap) return -1;
     os64_font_config_t c = *config;
     if (validate(&c, NULL)) return -1;
+    // validate() refuses a config whose canonical form would not fit here.
     char text[OS64_FONT_CONFIG_BYTES_MAX + 1];
-    size_t used = 0;
-    for (size_t r = 0; r < OS64_FONT_CONFIG_ROLES; ++r) {
-        int n = os64_snprintf(text + used, sizeof(text) - used, "%s.face = %s\n%s.size = %u\n",
-                             role_names[r], c.roles[r].face[0], role_names[r], c.roles[r].size);
-        if (n < 0 || (size_t)n >= sizeof(text) - used) return -1;
-        used += (size_t)n;
-        for (size_t s = 1; s < 3; ++s) if (c.roles[r].face[s][0]) {
-            n = os64_snprintf(text + used, sizeof(text) - used, "%s.fallback.%u = %s\n",
-                             role_names[r], (unsigned)s, c.roles[r].face[s]);
-            if (n < 0 || (size_t)n >= sizeof(text) - used) return -1;
-            used += (size_t)n;
-        }
-    }
-    for (size_t f = 0; f < OS64_FONT_FAMILY_COUNT; ++f)
-        for (size_t s = 0; s < OS64_FONT_FAMILY_STYLES + OS64_FONT_CONFIG_FALLBACK_MAX; ++s) {
-            if (!c.families[f].face[s][0]) continue;
-            int n = os64_snprintf(text + used, sizeof(text) - used, "family.%s%s = %s\n",
-                family_names[f], family_suffix[s], c.families[f].face[s]);
-            if (n < 0 || (size_t)n >= sizeof(text) - used) return -1;
-            used += (size_t)n;
-        }
-    if (used >= cap) return -1;
+    size_t used = canonical(&c, text, sizeof(text));
+    if (used >= sizeof(text) || used >= cap) return -1;
     os64_memcpy(out, text, used + 1);
     return (int64_t)used;
 }

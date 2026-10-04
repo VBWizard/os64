@@ -3213,11 +3213,13 @@ static os64_font_set_t *s_controls_set;
 static uint32_t s_controls_px;
 static bool s_controls_refused;
 
-// Lends the controls the Web face for `zoom`. False when that size is the
-// face they wear already; true, with the face it replaced and that face's
-// size in *was and *was_px (yonder's reference, now the caller's), when it
-// changed. A size whose face could not be lent is not one they wear, so the
-// next layout asks again: a refusal for want of memory passes.
+// Lends the controls the Web face for `zoom`. False when the face they wear
+// does not change — that size's face is lent already, or it could not be
+// opened and they are in the Interface font already; true, with the face it
+// replaced and that face's size in *was and *was_px (yonder's reference, now
+// the caller's), when it changed. A size whose face could not be lent is not
+// one they wear, so the next layout asks again: a refusal for want of memory
+// passes.
 static bool controls_face_at(uint32_t zoom, os64_font_set_t **was, uint32_t *was_px)
 {
     uint32_t px = (uint32_t)(((uint64_t)(uint32_t)s_env.viewport_font_px * 13 * zoom + 8000) /
@@ -3238,13 +3240,17 @@ static bool controls_face_at(uint32_t zoom, os64_font_set_t **was, uint32_t *was
         st = OS64_FONT_CONFIG_LIMIT;
     }
     if (set == NULL) {
-        (void)os64_ui_font_app(&g.ui, NULL, OS64_FONT_ROLE_UI);
         if (!s_controls_refused)
             os64_printf("yonder: the Web face (%s) could not be used (%s); form controls are "
                         "drawn in the Interface font\n",
                         s_fonts_conf.roles[OS64_FONT_CONFIG_WEB].face[0],
                         os64_font_config_status_name(st));
         s_controls_refused = true;
+        // Already in the Interface font: a lend would only throw away what
+        // the controls have laid out in it.
+        if (s_controls_set == NULL)
+            return false;
+        (void)os64_ui_font_app(&g.ui, NULL, OS64_FONT_ROLE_UI);
     }
     *was = s_controls_set;
     *was_px = s_controls_px;
