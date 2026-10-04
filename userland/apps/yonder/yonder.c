@@ -2106,8 +2106,8 @@ static void sheet_picture_seen(void *ctx, const flow_box_t *b)
 }
 
 static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
-                           const os64_gui_rect_t *area, int32_t ox, int32_t oy,
-                           os64_gui_rect_t clip);
+                           const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
+                           int32_t oy, os64_gui_rect_t clip);
 
 // A `background` attribute's picture behind a box, or -1.
 static int32_t attribute_picture(const Page *p, const flow_box_t *b)
@@ -2848,10 +2848,11 @@ static void glass_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseli
 // A picture behind a box: the box's sheets, or else libpage's list, say
 // whether there is one, and one that has arrived is tiled across `area`
 // over what is under it — sheet layer `layer`'s at the size, position and
-// repeat it says, or (`layer` -1) an attribute's unscaled from (ox, oy).
+// repeat it says, in the origin box the painter names, or (`layer` -1) an
+// attribute's unscaled from (ox, oy).
 static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
-                           const os64_gui_rect_t *area, int32_t ox, int32_t oy,
-                           os64_gui_rect_t clip)
+                           const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
+                           int32_t oy, os64_gui_rect_t clip)
 {
     const Glass *gl = ctx;
     const Page *p = &g.page;
@@ -2875,12 +2876,10 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
         return true;
     uint32_t w, h;
     const uint32_t *px = picture_pixels(&p->pics[k], &w, &h);
-    // A sheet's picture is sized and placed in its origin box; an
-    // attribute's is tiled from (ox, oy) at its own size.
+    // A sheet's picture is sized and placed in the origin box the painter
+    // names; an attribute's is tiled from (ox, oy) at its own size.
     yonder_tile_t tile = {{ox, oy, (int32_t)w, (int32_t)h}, true, true};
-    if (layer >= 0 &&
-        !yonder_background_tile(&l, yonder_box_edge(b, flow_box_doc_rect(b, scroll_now()), l.origin),
-                                w, h, &tile))
+    if (layer >= 0 && !yonder_background_tile(&l, origin, w, h, &tile))
         return true;
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
     os64_gui_rect_t cut = on_glass(gl, clip);

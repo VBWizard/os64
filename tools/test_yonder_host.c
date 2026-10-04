@@ -299,8 +299,8 @@ static void rec_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
 // a sheet's layer names one; the recording says which layer (-1 the
 // attribute's), where it would be tiled, and from where.
 static bool rec_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
-                         const os64_gui_rect_t *area, int32_t ox, int32_t oy,
-                         os64_gui_rect_t clip)
+                         const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
+                         int32_t oy, os64_gui_rect_t clip)
 {
     (void)clip;
     Rec *rec = ctx;
@@ -310,11 +310,11 @@ static bool rec_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
     if (!sheet && (b->node == NULL || os64_page_background_for(rec->page, b->node) < 0))
         return false;
     if (area != NULL && layer < 0)
-        out(&rec->out, "backdrop %d %d %d %d from %d %d\n", area->x, area->y, area->w, area->h, ox,
-            oy);
+        out(&rec->out, "backdrop %d %d %d %d from %d %d origin %d %d %d %d\n", area->x, area->y,
+            area->w, area->h, ox, oy, origin.x, origin.y, origin.w, origin.h);
     else if (area != NULL)
-        out(&rec->out, "backdrop %d %d %d %d layer %d\n", area->x, area->y, area->w, area->h,
-            (int)layer);
+        out(&rec->out, "backdrop %d %d %d %d layer %d origin %d %d %d %d\n", area->x, area->y,
+            area->w, area->h, (int)layer, origin.x, origin.y, origin.w, origin.h);
     return true;
 }
 

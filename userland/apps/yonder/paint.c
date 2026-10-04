@@ -1006,7 +1006,8 @@ static void layers(const Painter *p, const flow_box_t *b, const Round *outer)
                 gradient(p, l.gradient, &tile, cut, &shape, outer != NULL, s->color);
         } else if (l.image != NULL || (!sheet && i == 0)) {
             os64_gui_rect_t area = on_page(p, cut);
-            (void)p->v->backdrop(p->v->ctx, b, sheet ? i : -1, &area, area.x, area.y,
+            os64_gui_rect_t origin = on_page(p, yonder_box_edge(b, b->rect, l.origin));
+            (void)p->v->backdrop(p->v->ctx, b, sheet ? i : -1, &area, origin, area.x, area.y,
                                  on_page(p, p->view));
         }
     }
@@ -1283,7 +1284,7 @@ static void group_close(void *ctx, const flow_box_t *box)
 static bool has_background(const Painter *p, const flow_box_t *b)
 {
     return b->style->has_background || flow_background_has_image(b->style) ||
-           p->v->backdrop(p->v->ctx, b, -1, NULL, 0, 0, p->view);
+           p->v->backdrop(p->v->ctx, b, -1, NULL, (os64_gui_rect_t){0}, 0, 0, p->view);
 }
 
 // The root's background, or else the body's, is the canvas's.
@@ -1320,20 +1321,23 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
     if (flow_alpha(canvas) != 255)
         fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, paper);
     fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, canvas);
-    // The canvas's layers, from the bottom up, across the whole view: a
-    // picture placed as its owner's box places it (an attribute's from the
-    // page's own corner), so it scrolls with the page; a gradient with the
-    // root's box for its origin box, so a page shorter than the view
-    // repeats it, as the browsers do.
+    // The canvas's layers, from the bottom up, across the whole view, each
+    // placed in the ROOT's origin box, whichever element they came from
+    // (Backgrounds 3 § 2.11.2: the body's background is drawn as if the
+    // root had it), so they scroll with the page and a page shorter than
+    // the view repeats them, as the browsers do; an attribute's picture is
+    // tiled from the page's own corner.
     bool sheet = owner != NULL && flow_background_has_image(owner->style);
     for (int32_t i = owner != NULL ? flow_background_layers(owner->style) - 1 : -1; i >= 0; i--) {
         flow_layer_t l = flow_background_layer(owner->style, i);
+        os64_gui_rect_t origin = yonder_box_edge(root, root->rect, l.origin);
         yonder_tile_t tile;
         if (l.gradient != NULL) {
-            if (yonder_background_tile(&l, root->rect, 0, 0, &tile))
+            if (yonder_background_tile(&l, origin, 0, 0, &tile))
                 gradient(&p, l.gradient, &tile, viewport, NULL, false, owner->style->color);
         } else if (l.image != NULL || (!sheet && i == 0)) {
-            (void)verbs->backdrop(verbs->ctx, owner, sheet ? i : -1, &viewport, 0, 0, viewport);
+            (void)verbs->backdrop(verbs->ctx, owner, sheet ? i : -1, &viewport, origin, 0, 0,
+                                  viewport);
         }
     }
     if (root != NULL) {
