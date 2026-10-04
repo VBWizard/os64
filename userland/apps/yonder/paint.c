@@ -1212,7 +1212,12 @@ static void paint_box(void *ctx, const flow_box_t *b)
         // last, which the public tree does not say; its background colour is
         // right on every piece. Its gradient is tiled on each piece — the
         // browsers lay the pieces end to end and draw one gradient along
-        // them, which needs the same knowledge (PILE3.md § Booked).
+        // them, which needs the same knowledge (PILE3.md § Booked). A piece
+        // is its content area, with no padding or border laid out round it,
+        // so its origin and clip boxes are all the piece; a clip to the
+        // text draws nothing here either, as on every box.
+        if (b->style->background_clip == FLOW_EDGE_TEXT)
+            return;
         if (b->style->has_background)
             fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, b->style->background);
         if (b->style->background_gradient != NULL) {
