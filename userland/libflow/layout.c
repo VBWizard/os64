@@ -3106,7 +3106,8 @@ static int64_t repeat_size(const flow_track_t *t, int64_t avail)
 
 // How many times a template's auto-repeat fills `avail` (-1: once), held
 // so that the whole list stays within the bound; 1 without one too.
-static int32_t repeats(const flow_tracks_t *t, int64_t avail, int64_t gap)
+// `one_px` is one CSS pixel in the tree's units, at the zoom.
+static int32_t repeats(const flow_tracks_t *t, int64_t avail, int64_t gap, int64_t one_px)
 {
     if (t->repeat_n == 0 || avail < 0)
         return 1;
@@ -3114,10 +3115,10 @@ static int32_t repeats(const flow_tracks_t *t, int64_t avail, int64_t gap)
     int32_t nothers = t->n - t->repeat_n;
     for (int32_t i = 0; i < t->n; i++) {
         bool in = i >= t->repeat_at && i < t->repeat_at + t->repeat_n;
-        // Counted at 1px at least (§ 7.2.3.2), or a track of nothing
+        // Counted at 1 CSS px at least (§ 7.2.3.2), or a track of nothing
         // would repeat without end; its size is not changed.
         int64_t size = repeat_size(&t->tracks[i], avail);
-        *(in ? &rep : &others) += in ? max64(size, FLOW_UNITS_PER_PX) : size;
+        *(in ? &rep : &others) += in ? max64(size, one_px) : size;
     }
     int64_t per = rep + gap * t->repeat_n;
     int64_t room = avail - others - gap * (nothers - 1);
@@ -3429,7 +3430,7 @@ static bool grid_plan(L *l, FBox *b, int64_t cw, int64_t ch, GPlan *p)
     if (ch < 0 && s->max_height.kind == FLOW_LENGTH_PX)
         fill[1] = content_of(s, s->max_height, 0, vframe(b, max64(0, cw)));
     for (int ax = 0; ax < 2; ax++) {
-        reps[ax] = repeats(tmpl[ax], fill[ax], p->gap[ax]);
+        reps[ax] = repeats(tmpl[ax], fill[ax], p->gap[ax], f_css_units(l->env, 1));
         ntmpl[ax] = template_count(tmpl[ax], reps[ax]);
         nexp[ax] = max64(ntmpl[ax], ax == 0 ? s->grid_area_cols : s->grid_area_rows);
     }
