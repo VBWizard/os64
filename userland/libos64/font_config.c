@@ -392,6 +392,7 @@ os64_font_config_status_t os64_font_config_web_prepare(os64_text_context_t *cont
     const os64_font_config_t *config, uint32_t pixel_height, os64_font_set_t **out,
     os64_font_config_error_t *e)
 {
+    problem(e, OS64_FONT_CONFIG_OK, 0, NO_ROLE, 0);
     if (out) *out = NULL;
     if (!config) return problem(e, OS64_FONT_CONFIG_SYNTAX, 0, NO_ROLE, 0);
     os64_font_config_t c;

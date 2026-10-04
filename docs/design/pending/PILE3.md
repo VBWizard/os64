@@ -699,19 +699,22 @@ starts and does not follow it.
 **libui gains the application's face.** `os64_ui_font_app(ui, set, role)`
 lends a window a face beside the role set the settings choose;
 `os64_ui_widget_app_face(ui, w, true)` puts a widget in it, and the role
-`OS64_UI_FONT_APP` measures in it. A widget whose class draws in the
-Interface role honours the flag (labels, buttons, checkboxes, fields,
-lists); one that has not asked is untouched, so yonder's toolbar keeps the
-Interface font while its page's controls change. An adoption — a new
-Interface or Document font — leaves the lent face alone, and a new lend
-drops the runs laid out in the old one, so it is cheap enough to follow a
-zoom. Nothing lent, the application's role is the Interface role.
+`OS64_UI_FONT_APP` measures in it. A widget that asks draws in it instead
+of its class's role, a textview's Document role included; one that has not
+asked is untouched, so yonder's toolbar keeps the Interface font while its
+page's controls change. An adoption — a new Interface or Document font —
+leaves the lent face alone. A new lend lets the widgets wearing it go of
+the runs laid out in the old face, keeps what their next paint reuses (a
+list's row slots), and has them measure a scroll again in the new one — so
+it is cheap enough to follow a zoom, and allocates nothing. Nothing lent, the application's role is the Interface role.
 
 **yonder** reads `web.size` as the page's `medium`, and lends its window the
 Web face at the size a browser gives a control — 13/16 of `medium` (Chrome's
 small-control, 13 px at 16) — times the zoom, again at every zoom change.
 A select's box is measured in that face, and handed to libflow in CSS
-pixels, since libflow scales a replaced box by the zoom itself. A Web face
+pixels, since libflow scales a replaced box by the zoom itself. Its frame,
+row padding and label inset are the listbox's own, which libui draws in
+device pixels, so they stay that size at any zoom (BROWSER_DEBTS.md). A Web face
 that will not open leaves the controls in the Interface font, and yonder
 says so once on its terminal.
 
@@ -728,13 +731,17 @@ re-derived at the lend, a new lend dropping only those widgets' runs, an
 adoption leaving it, a widget leaving it, nothing lent being the Interface
 role, and the window owing nothing at release. `test_font_config_host`'s Web
 setting: the default, a round trip through encode and decode, refusals that
-name the Web line (and not a role), the face opened at three sizes and
-clamped at 96, a builtin face at 16 whatever is asked, a broken face refused
-by the Web door and not by the role door. `test_appearance_session_host`:
+name the Web line (and not a role) — every refused allocation of the Web
+door's set among them — the face opened at sizes past both ends of the
+configurable 8..96 and clamped only outside the engine's 1..1280, a builtin
+face at 16 whatever is asked, a broken face refused by the Web door and not
+by the role door. `test_ui_text_host --real`'s "application face changed":
+a field, a view and a list re-lent a smaller face end scrolled as fresh ones
+would be, the list keeping its slots. `test_appearance_session_host`:
 the Web setting survives the session. In the guest:
 `/tests/pages/pile3-controls.html` with the controls in DejaVu Sans at 13 px
-beside a bitmap toolbar; at 200% the controls' text and the select's box
-exactly doubled, and back at 100% as before; the Workshop's Web button
+beside a bitmap toolbar; at 200% the controls' text doubled and the
+select's box grew with its rows, and back at 100% as before; the Workshop's Web button
 previewing DejaVu Sans Mono Bold, Save writing `web.face` and `web.size`
 beside unchanged roles, and yonder started afterwards drawing the controls
 in it; `web.size = 20` giving a 20 px paragraph and 16 px controls.

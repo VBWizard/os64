@@ -555,9 +555,9 @@ size_t os64_ui_font_live_bytes(const os64_ui_t *ui);
 // choose, for widgets that draw something other than the application's own
 // interface: a browser's form controls belong to the page, drawn in the
 // Web face at the page's zoom, while its toolbar wears the Interface font.
-// A widget asks for it with os64_ui_widget_app_face — a class that draws in
-// the Interface role honours it; a textview keeps the Document role — and
-// every other widget is untouched. The adoption that replaces the window's
+// A widget asks for it with os64_ui_widget_app_face — it then draws in this
+// face instead of its class's role, the Document role of a textview
+// included — and every other widget is untouched. The adoption that replaces the window's
 // set leaves this face alone — it is not the settings' to change.
 //
 // os64_ui_font_app lends `role` of `set` (prepared on THIS window's

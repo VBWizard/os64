@@ -452,6 +452,13 @@ static void web_setting(void)
     CHECK(!decode("ui.size = 16\nweb.face = fonts/bad", &c, &e));
     CHECK(os64_font_config_web_prepare(text, &c, 16, &set, &e) == OS64_FONT_CONFIG_FACE);
     CHECK(!set && e.web && e.line == 2 && e.role == OS64_FONT_ROLE_COUNT);
+    /* The same error, reused for a Web face that opens, says nothing failed. */
+    os64_font_config_t opens = c;
+    snprintf(opens.roles[OS64_FONT_CONFIG_WEB].face[0], OS64_FONT_PATH_CAP, "%s", "builtin");
+    opens.roles[OS64_FONT_CONFIG_WEB].size = 16;
+    CHECK(!os64_font_config_web_prepare(text, &opens, 16, &set, &e) && set != NULL);
+    CHECK(e.status == OS64_FONT_CONFIG_OK && !e.web && e.line == 0);
+    os64_font_set_release(set); set = NULL;
     /* The role door does not open it, so a broken Web face cannot cost the
      * desktop its fonts. */
     CHECK(!os64_font_config_prepare(text, &c, &set, &e));
