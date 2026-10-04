@@ -17,6 +17,7 @@ include = out / 'include/os64'
 include.mkdir(parents=True, exist_ok=True)
 (include / 'syscall.h').write_text('''#include <stdint.h>
 #include "os64/syscall_numbers.h"
+uint64_t os64_syscall1(uint64_t,uint64_t);
 uint64_t os64_syscall2(uint64_t,uint64_t,uint64_t);
 uint64_t os64_syscall3(uint64_t,uint64_t,uint64_t,uint64_t);
 uint64_t os64_syscall6(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
