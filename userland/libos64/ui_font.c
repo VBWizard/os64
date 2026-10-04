@@ -1,6 +1,6 @@
-// The window's font binding: one F2 text context and one immutable role set,
-// so widget measurement and painting go through measured runs instead of a
-// fixed 8x16 cell.
+// The window's font binding: one F2 text context and one immutable role set
+// (and, beside it, the face an application may lend), so widget measurement
+// and painting go through measured runs instead of a fixed 8x16 cell.
 //
 // WHY PER-WINDOW AND NOT PER-PROCESS: a window is the unit that adopts a font
 // (FONT_PROVIDER.md's coherent adoption group), and the appearance workshop
@@ -67,6 +67,13 @@ typedef struct ui_font_binding
 	// the new metrics before a single live bound moves.
 	const ui_font_faces_t *staging;
 
+	// The application's face (os64_ui_font_app): its own reference on the
+	// set it was lent from, and that role resolved. Adoption never stages
+	// or swaps it — the settings do not choose it.
+	os64_font_set_t       *app_set;
+	os64_font_role_view_t  app_view;
+	os64_font_pos_t        app_tab;
+
 } ui_font_binding_t;
 
 // The engine allocates through libos64's heap, wrapped only to keep a
@@ -129,6 +136,43 @@ static ui_font_binding_t *binding_ensure(os64_ui_t *ui)
 // caller must carry that: a set whose roles or whose tab stop could not be
 // resolved is not a set this window can wear, and pretending otherwise
 // substitutes measurements from a face nobody chose.
+static os64_font_status_t view_resolve(ui_font_binding_t *b, os64_font_set_t *set,
+                                       os64_font_role_t role, os64_font_role_view_t *v,
+                                       os64_font_pos_t *tab_interval)
+{
+	os64_font_status_t status = os64_font_set_view(set, role, v);
+	if (status != OS64_FONT_OK)
+		return status;
+
+	// Eight columns of the primary's space: the editor's 1970s tab stop,
+	// said in the only unit a proportional face has. Measured, because no
+	// metric in the view carries it.
+	os64_text_layout_t layout = {
+		.encoding = OS64_TEXT_UTF8_WESTERN_V1,
+		.fonts = v->fonts, .font_count = v->font_count,
+		.tab_origin = 0, .tab_interval = 8 * OS64_FONT_UNIT,
+	};
+	os64_text_run_t *run = (os64_text_run_t *)0;
+	os64_text_run_view_t rv;
+	status = os64_text_layout(b->text, (const uint8_t *)" ", 1, &layout, &run);
+	if (status != OS64_FONT_OK)
+		return status;            // could not measure: say so, do not guess
+	status = os64_text_run_view(run, &rv);
+	os64_font_pos_t advance = status == OS64_FONT_OK ? rv.advance_x : 0;
+	os64_text_run_release(run);
+	if (status != OS64_FONT_OK)
+		return status;
+
+	// A ZERO-WIDTH SPACE IS A MEASUREMENT, NOT AN ERROR, and it is the one
+	// answer that cannot be a tab stop — F2 requires a positive interval,
+	// and eight of nothing is nothing. A face like that gets the builtin
+	// cell's eight columns as a declared policy. It is the same number the
+	// old code reached for when a LAYOUT failed, which is exactly why the
+	// two had to stop sharing an exit.
+	*tab_interval = advance > 0 ? 8 * advance : 8 * OS64_FONT_GLYPH_W * OS64_FONT_UNIT;
+	return OS64_FONT_OK;
+}
+
 static os64_font_status_t faces_resolve(ui_font_binding_t *b, os64_font_set_t *set,
                                         ui_font_faces_t *faces)
 {
@@ -136,39 +180,11 @@ static os64_font_status_t faces_resolve(ui_font_binding_t *b, os64_font_set_t *s
 	if (!set)
 		return OS64_FONT_OK;
 	for (int role = 0; role < OS64_FONT_ROLE_COUNT; ++role) {
-		os64_font_role_view_t *v = &faces->view[role];
-		os64_font_status_t status =
-			os64_font_set_view(set, (os64_font_role_t)role, v);
+		os64_font_status_t status = view_resolve(b, set, (os64_font_role_t)role,
+		                                         &faces->view[role],
+		                                         &faces->tab_interval[role]);
 		if (status != OS64_FONT_OK)
 			return status;
-
-		// Eight columns of the primary's space: the editor's 1970s tab stop,
-		// said in the only unit a proportional face has. Measured, because
-		// no metric in the view carries it.
-		os64_text_layout_t layout = {
-			.encoding = OS64_TEXT_UTF8_WESTERN_V1,
-			.fonts = v->fonts, .font_count = v->font_count,
-			.tab_origin = 0, .tab_interval = 8 * OS64_FONT_UNIT,
-		};
-		os64_text_run_t *run = (os64_text_run_t *)0;
-		os64_text_run_view_t rv;
-		status = os64_text_layout(b->text, (const uint8_t *)" ", 1, &layout, &run);
-		if (status != OS64_FONT_OK)
-			return status;            // could not measure: say so, do not guess
-		status = os64_text_run_view(run, &rv);
-		os64_font_pos_t advance = status == OS64_FONT_OK ? rv.advance_x : 0;
-		os64_text_run_release(run);
-		if (status != OS64_FONT_OK)
-			return status;
-
-		// A ZERO-WIDTH SPACE IS A MEASUREMENT, NOT AN ERROR, and it is the
-		// one answer that cannot be a tab stop — F2 requires a positive
-		// interval, and eight of nothing is nothing. A face like that gets
-		// the builtin cell's eight columns as a declared policy. It is the
-		// same number the old code reached for when a LAYOUT failed, which
-		// is exactly why the two had to stop sharing an exit.
-		faces->tab_interval[role] = advance > 0 ? 8 * advance
-		                                        : 8 * OS64_FONT_GLYPH_W * OS64_FONT_UNIT;
 	}
 	return OS64_FONT_OK;
 }
@@ -234,10 +250,28 @@ static const ui_font_faces_t *binding_faces_current(os64_ui_t *ui)
 	return b->set ? &b->faces : (const ui_font_faces_t *)0;
 }
 
-// The view a role draws with, or NULL when this window has no usable set and
-// the caller should take the bitmap path.
-static const os64_font_role_view_t *role_view(os64_ui_t *ui, os64_font_role_t role)
+// The application's face, when one is lent. It answers whether or not an
+// adoption is staging: the candidate set is the settings', and this is not.
+static const ui_font_binding_t *app_lent(os64_ui_t *ui, os64_font_role_t role)
 {
+	const ui_font_binding_t *b = ui && role == OS64_UI_FONT_APP ? binding_of(ui)
+	                                                           : (ui_font_binding_t *)0;
+	return b && b->app_set ? b : (const ui_font_binding_t *)0;
+}
+
+// The view a role draws with and its tab stop, or NULL when this window has
+// no usable set and the caller should take the bitmap path. The
+// application's role with nothing lent is the Interface role.
+static const os64_font_role_view_t *role_view(os64_ui_t *ui, os64_font_role_t role,
+                                              os64_font_pos_t *tab_interval)
+{
+	const ui_font_binding_t *lent = app_lent(ui, role);
+	if (lent) {
+		*tab_interval = lent->app_tab;
+		return &lent->app_view;
+	}
+	if (role == OS64_UI_FONT_APP)
+		role = OS64_FONT_ROLE_UI;
 	// An unattached widget has no window and therefore no binding; it draws
 	// through the bitmap painter rather than refusing to draw at all.
 	if (!ui || (unsigned)role >= OS64_FONT_ROLE_COUNT)
@@ -249,6 +283,7 @@ static const os64_font_role_view_t *role_view(os64_ui_t *ui, os64_font_role_t ro
 	if (!faces)
 		return (const os64_font_role_view_t *)0;
 	const os64_font_role_view_t *v = &faces->view[role];
+	*tab_interval = faces->tab_interval[role];
 	return v->font_count ? v : (const os64_font_role_view_t *)0;
 }
 
@@ -262,14 +297,15 @@ static os64_font_status_t role_layout(os64_ui_t *ui, os64_font_role_t role,
                                       os64_text_run_t **out)
 {
 	*out = (os64_text_run_t *)0;
-	const os64_font_role_view_t *v = role_view(ui, role);
+	os64_font_pos_t tab_interval = 0;
+	const os64_font_role_view_t *v = role_view(ui, role, &tab_interval);
 	if (!v)
 		return OS64_FONT_OK;           // unbound: the bitmap cell is the answer
 	ui_font_binding_t *b = binding_of(ui);
 	os64_text_layout_t layout = {
 		.encoding = OS64_TEXT_UTF8_WESTERN_V1,
 		.fonts = v->fonts, .font_count = v->font_count,
-		.tab_origin = 0, .tab_interval = binding_faces(b)->tab_interval[role],
+		.tab_origin = 0, .tab_interval = tab_interval,
 	};
 	os64_font_status_t status =
 		os64_text_layout(b->text, (const uint8_t *)s, len, &layout, out);
@@ -316,10 +352,14 @@ os64_font_status_t os64_ui_text_measure(os64_ui_t *ui, os64_font_role_t role,
 bool os64_ui_font_metrics(os64_ui_t *ui, os64_font_role_t role,
                           os64_ui_font_metrics_t *out)
 {
+	const ui_font_binding_t *lent = app_lent(ui, role);
+	if (role == OS64_UI_FONT_APP)
+		role = OS64_FONT_ROLE_UI;
 	const ui_font_faces_t *faces =
-		(unsigned)role < OS64_FONT_ROLE_COUNT ? binding_faces_current(ui)
-		                                      : (const ui_font_faces_t *)0;
+		!lent && (unsigned)role < OS64_FONT_ROLE_COUNT ? binding_faces_current(ui)
+		                                               : (const ui_font_faces_t *)0;
 	const os64_font_role_view_t *v =
+		lent ? &lent->app_view :
 		faces && faces->view[role].font_count ? &faces->view[role]
 		                                      : (const os64_font_role_view_t *)0;
 	if (!v) {
@@ -556,6 +596,74 @@ os64_font_status_t os64_ui_font_bind(os64_ui_t *ui, os64_font_set_t *set)
 	if (ui->root)
 		os64_ui_mark_dirty(ui, ui->root);
 	return OS64_FONT_OK;
+}
+
+// Everything one widget retains: the runs the generic slots hold and, first,
+// whatever only its class can see — a listbox keeps one run per visible row
+// in its own array. A run kept anywhere at all holds the text context BUSY.
+static void drop_widget_runs(os64_ui_widget_t *w)
+{
+	if (w->cls && w->cls->destroy)
+		w->cls->destroy(w);
+	os64_text_run_release((os64_text_run_t *)w->run);
+	os64_text_run_release((os64_text_run_t *)w->run_staged);
+	w->run = w->run_staged = (void *)0;
+}
+
+static void drop_app_runs(os64_ui_widget_t *w)
+{
+	for (; w; w = w->next_sibling) {
+		if (w->app_face)
+			drop_widget_runs(w);
+		drop_app_runs(w->first_child);
+	}
+}
+
+os64_font_status_t os64_ui_font_app(os64_ui_t *ui, os64_font_set_t *set,
+                                    os64_font_role_t role)
+{
+	if (!ui || (set && (unsigned)role >= OS64_FONT_ROLE_COUNT))
+		return OS64_FONT_BAD_ARGUMENT;
+	ui_font_binding_t *b = binding_ensure(ui);
+	if (!b)
+		return OS64_FONT_NO_MEMORY;
+	if (!b->text)
+		return b->status;
+	os64_font_role_view_t view;
+	os64_font_pos_t tab = 0;
+	os64_memset(&view, 0, sizeof(view));
+	if (set) {
+		os64_font_status_t status = set_belongs_here(b, set);
+		if (status == OS64_FONT_OK)
+			status = view_resolve(b, set, role, &view, &tab);
+		if (status == OS64_FONT_OK)
+			status = os64_font_set_retain(set);
+		if (status != OS64_FONT_OK)
+			return status;
+	}
+	// The runs go BEFORE the set that made them, and are laid out again in
+	// the new face by the next paint.
+	drop_app_runs(ui->root);
+	os64_font_set_release(b->app_set);
+	b->app_set = set;
+	b->app_view = view;
+	b->app_tab = tab;
+	os64_ui_font_restamp(ui);
+	if (ui->root)
+		os64_ui_mark_dirty(ui, ui->root);
+	return OS64_FONT_OK;
+}
+
+void os64_ui_widget_app_face(os64_ui_t *ui, os64_ui_widget_t *w, bool app)
+{
+	if (!w || w->app_face == app)
+		return;
+	drop_widget_runs(w);
+	w->app_face = app;
+	if (w->cls && w->cls->metrics && ui)
+		w->cls->metrics(w, ui);
+	if (ui)
+		os64_ui_mark_dirty(ui, w);
 }
 
 os64_font_status_t os64_ui_font_planner(os64_ui_t *ui,
@@ -921,7 +1029,7 @@ os64_font_status_t os64_ui_stage_caption(os64_ui_widget_t *w, os64_ui_t *ui)
 		return OS64_FONT_OK;
 	void *run = (void *)0;
 	os64_font_status_t status =
-		os64_ui_run_layout(ui, OS64_FONT_ROLE_UI, w->text, len, &run);
+		os64_ui_run_layout(ui, ui_role(w, OS64_FONT_ROLE_UI), w->text, len, &run);
 	if (status != OS64_FONT_OK)
 		return status;
 	os64_ui_run_release(w->run_staged);
@@ -1146,14 +1254,7 @@ static void release_tree_runs(os64_ui_widget_t *w)
 {
 	if (!w)
 		return;
-	// Storage only the class can see goes first: a listbox keeps one run per
-	// visible row in its own array, and a run kept anywhere at all holds the
-	// text context BUSY for good.
-	if (w->cls && w->cls->destroy)
-		w->cls->destroy(w);
-	os64_text_run_release((os64_text_run_t *)w->run);
-	os64_text_run_release((os64_text_run_t *)w->run_staged);
-	w->run = w->run_staged = (void *)0;
+	drop_widget_runs(w);
 	w->bounds_staged_valid = false;
 	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
 		release_tree_runs(c);
@@ -1171,6 +1272,9 @@ os64_font_status_t os64_ui_font_release(os64_ui_t *ui)
 	os64_font_set_release(b->set);
 	b->set = (os64_font_set_t *)0;
 	os64_memset(&b->faces, 0, sizeof(b->faces));
+	os64_font_set_release(b->app_set);
+	b->app_set = (os64_font_set_t *)0;
+	os64_memset(&b->app_view, 0, sizeof(b->app_view));
 
 	// THE BINDING IS THE CONTEXT'S ALLOCATOR. A context that refuses to die
 	// is still holding somebody's set or run, and those call back through

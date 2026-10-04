@@ -9,7 +9,11 @@ static os64_font_config_t draft, baseline, previous;
 static bool loaded, have_undo;
 static unsigned role;
 static os64_font_catalog_t *catalog;
-static os64_ui_widget_t heading, roles[3], selected, size_label, refresh_button;
+/* Four buttons: the three roles, and the Web setting after them (its index
+ * is OS64_FONT_CONFIG_WEB) — the face a browser's form controls wear, and
+ * the size of a page's default text. */
+#define CHOICES OS64_FONT_CONFIG_ROLES
+static os64_ui_widget_t heading, roles[CHOICES], selected, size_label, refresh_button;
 static os64_ui_widget_t install_label, install_button, specimen;
 static os64_ui_listbox_t fonts;
 static os64_ui_scrollbar_t scroll;
@@ -17,15 +21,21 @@ static os64_ui_slider_t size_slider;
 static os64_ui_textfield_t install_field;
 static char install_path[256], size_text[32], selected_text[256], message[256];
 static char labels[OS64_FONT_DISCOVERY_MAX][256];
-static void *sample_runs[3], *sample_staged[3];
-static const char *const samples[] = {
+static void *sample_runs[CHOICES], *sample_staged[CHOICES];
+static const char *const samples[CHOICES] = {
     "The quick brown fox - 0123456789", "+--- Terminal 0123456789 ---+",
-    "Caf\xc3\xa9, na\xc3\xafve, r\xc3\xa9sum\xc3\xa9 - Aa Bb Gg"
+    "Caf\xc3\xa9, na\xc3\xafve, r\xc3\xa9sum\xc3\xa9 - Aa Bb Gg",
+    "Web: [ Search ] [x] Remember me - 0123456789"
 };
+
+/* The specimen's band for a choice draws in its role, or — for the Web
+ * setting — in the face lent to the preview window. */
+static os64_font_role_t sample_role(size_t r)
+{ return r == OS64_FONT_CONFIG_WEB ? OS64_UI_FONT_APP : (os64_font_role_t)r; }
 
 static bool same_choices(const os64_font_config_t *a, const os64_font_config_t *b)
 {
-    for (size_t r = 0; r < 3; ++r) {
+    for (size_t r = 0; r < CHOICES; ++r) {
         if (a->roles[r].size != b->roles[r].size) return false;
         for (size_t s = 0; s < 3; ++s)
             if (!os64_streq(a->roles[r].face[s], b->roles[r].face[s])) return false;
@@ -52,17 +62,40 @@ static void failure(const char *action, const os64_font_config_error_t *error)
     report(message);
 }
 
+static bool same_web(const os64_font_config_t *a, const os64_font_config_t *b)
+{
+    const os64_font_config_role_t *x = &a->roles[OS64_FONT_CONFIG_WEB];
+    const os64_font_config_role_t *y = &b->roles[OS64_FONT_CONFIG_WEB];
+    for (size_t s = 0; s < 3; ++s)
+        if (!os64_streq(x->face[s], y->face[s])) return false;
+    return x->size == y->size;
+}
+
+/* The roles are adopted by the preview window; the Web face, which no role
+ * set carries, is opened beside them and lent to it. Both open before
+ * either is shown, so a refusal keeps the whole previous preview. A Web
+ * face that will not open refuses only a candidate that CHANGES it — the
+ * shipped default is absent without the fonts lot, and that must not stop
+ * a person choosing the other roles; its band is then drawn in Interface. */
 static bool show_candidate(const os64_font_config_t *candidate)
 {
-    os64_font_set_t *set = NULL;
+    os64_font_set_t *set = NULL, *web = NULL;
     os64_font_config_error_t error;
-    if (os64_font_config_prepare(os64_ui_font_context(preview), candidate, &set, &error)) {
+    os64_text_context_t *text = os64_ui_font_context(preview);
+    if (os64_font_config_prepare(text, candidate, &set, &error)) {
+        failure("Preview kept", &error); return false;
+    }
+    if (os64_font_config_web_prepare(text, candidate, candidate->roles[OS64_FONT_CONFIG_WEB].size,
+                                     &web, &error) && !same_web(candidate, &draft)) {
+        os64_font_set_release(set);
         failure("Preview kept", &error); return false;
     }
     os64_font_consumer_t consumer;
     os64_ui_font_consumer(preview, &consumer);
     os64_font_status_t status = os64_font_adopt(set, &consumer, 1, NULL);
     os64_font_set_release(set);
+    if (!status) status = os64_ui_font_app(preview, web, OS64_FONT_ROLE_UI);
+    os64_font_set_release(web);
     if (status) { report("Preview cannot fit this font; previous choice kept"); return false; }
     return true;
 }
@@ -85,9 +118,9 @@ static void controls(void)
     os64_ui_set_enabled(editor, &size_slider.w, !os64_streq(draft.roles[role].face[0], "builtin"));
     os64_snprintf(size_text, sizeof(size_text), "%u pixels", draft.roles[role].size);
     os64_strcopy(selected_text, sizeof(selected_text), draft.roles[role].face[0]);
-    static const char *const names[] = {"Interface", "Terminal", "Document"};
-    static const char *const active[] = {"Interface *", "Terminal *", "Document *"};
-    for (size_t r = 0; r < 3; ++r) roles[r].text = role == r ? active[r] : names[r];
+    static const char *const names[CHOICES] = {"Interface", "Terminal", "Document", "Web"};
+    static const char *const active[CHOICES] = {"Interface *", "Terminal *", "Document *", "Web *"};
+    for (size_t r = 0; r < CHOICES; ++r) roles[r].text = role == r ? active[r] : names[r];
     os64_ui_scrollbar_set(editor, &scroll, catalog ? (int64_t)catalog->count : 0,
                           os64_ui_listbox_rows(&fonts, &editor->theme), (int64_t)fonts.top);
     os64_ui_mark_dirty(editor, editor->root);
@@ -160,8 +193,9 @@ static void refresh_click(os64_ui_widget_t *w, void *user) { (void)w; (void)user
 static void scrolled(os64_ui_scrollbar_t *bar, void *user)
 { (void)user; os64_ui_listbox_scroll_to(editor, &fonts, (size_t)bar->pos); }
 
-/* Installation validates the staged bytes and the complete role set before
- * a no-replace publish. The provider decides format from contents. */
+/* Installation validates the staged bytes and the complete role set — or,
+ * for the Web button, the Web face — before a no-replace publish. The
+ * provider decides format from contents. */
 static void use_file(os64_ui_widget_t *w, void *user)
 {
     (void)w; (void)user;
@@ -196,19 +230,21 @@ static void file_submit(os64_ui_textfield_t *field, void *user)
 static void specimen_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *theme)
 {
     os64_draw_fill_rect(&ctx->surf, w->bounds, theme->text_bg);
-    int32_t band = w->bounds.h / 3;
-    for (size_t r = 0; r < 3; ++r) {
+    int32_t band = w->bounds.h / CHOICES;
+    for (size_t r = 0; r < CHOICES; ++r) {
         os64_gui_rect_t clip = {w->bounds.x + 12, w->bounds.y + (int32_t)r * band + 8,
                                w->bounds.w - 24, band - 16};
-        os64_ui_draw_text(preview, &sample_runs[r], (os64_font_role_t)r, &ctx->surf, clip,
+        os64_ui_draw_text(preview, &sample_runs[r], sample_role(r), &ctx->surf, clip,
                           clip.x, clip.y, samples[r], os64_strlen(samples[r]), theme->text_fg, theme->text_bg);
     }
 }
+/* An adoption stages every band: the Web band too, in the lent face, which
+ * an adoption does not change. */
 static os64_font_status_t specimen_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
 {
     (void)w;
-    for (size_t r = 0; r < 3; ++r) {
-        os64_font_status_t status = os64_ui_run_layout(ui, (os64_font_role_t)r,
+    for (size_t r = 0; r < CHOICES; ++r) {
+        os64_font_status_t status = os64_ui_run_layout(ui, sample_role(r),
             samples[r], os64_strlen(samples[r]), &sample_staged[r]);
         if (status) return status;
     }
@@ -217,7 +253,7 @@ static os64_font_status_t specimen_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
 static void specimen_commit(os64_ui_widget_t *w)
 {
     (void)w;
-    for (size_t r = 0; r < 3; ++r) {
+    for (size_t r = 0; r < CHOICES; ++r) {
         os64_ui_run_release(sample_runs[r]); sample_runs[r] = sample_staged[r];
         sample_staged[r] = NULL;
     }
@@ -225,14 +261,14 @@ static void specimen_commit(os64_ui_widget_t *w)
 static void specimen_discard(os64_ui_widget_t *w)
 {
     (void)w;
-    for (size_t r = 0; r < 3; ++r) {
+    for (size_t r = 0; r < CHOICES; ++r) {
         os64_ui_run_release(sample_staged[r]); sample_staged[r] = NULL;
     }
 }
 static void specimen_destroy(os64_ui_widget_t *w)
 {
     specimen_discard(w);
-    for (size_t r = 0; r < 3; ++r) {
+    for (size_t r = 0; r < CHOICES; ++r) {
         os64_ui_run_release(sample_runs[r]); sample_runs[r] = NULL;
     }
 }
@@ -248,7 +284,7 @@ void font_page_init(os64_ui_t *ui, os64_ui_t *sample, os64_ui_widget_t *page,
 {
     editor = ui; preview = sample; report = status;
     os64_ui_label(&heading, "FONTS FOR YOUR WORK"); add(page, &heading);
-    for (size_t r = 0; r < 3; ++r) {
+    for (size_t r = 0; r < CHOICES; ++r) {
         os64_ui_button(&roles[r], "", select_role, (void *)(uintptr_t)r); add(page, &roles[r]);
     }
     os64_ui_listbox(&fonts, 0, font_label, select_font, NULL); add(page, &fonts.w);
@@ -262,7 +298,9 @@ void font_page_init(os64_ui_t *ui, os64_ui_t *sample, os64_ui_widget_t *page,
     add(page, &install_field.w);
     os64_ui_button(&install_button, "Install font", use_file, NULL); add(page, &install_button);
     os64_ui_button(&refresh_button, "Refresh fonts", refresh_click, NULL); add(page, &refresh_button);
-    specimen = (os64_ui_widget_t){.cls = &specimen_class, .hidden = true};
+    // In the application's face, so a new Web face drops what the specimen
+    // laid out in the old one; its bands still choose their own roles.
+    specimen = (os64_ui_widget_t){.cls = &specimen_class, .hidden = true, .app_face = true};
     add(preview->root, &specimen);
 }
 static bool layout_staged;
@@ -278,7 +316,8 @@ void font_page_layout(bool visible, os64_gui_rect_t area, int row, bool staged)
     int bh=row+12>32?row+12:32, fh=row+8>30?row+8:30;
     int x=area.x+16, y=area.y+16, width=area.w-32;
     place(&heading,x,y,width,row); y+=row+12;
-    for(size_t r=0;r<3;++r) place(&roles[r],x+(int)r*(width+8)/3,y,(width-16)/3,bh);
+    for(size_t r=0;r<CHOICES;++r)
+        place(&roles[r],x+(int)r*(width+8)/CHOICES,y,(width+8)/CHOICES-8,bh);
     y+=bh+12;
     int lower=12+row+12+(row>24?row:24)+12+row+10+fh+12+bh+16;
     int list_h=area.y+area.h-y-lower;
@@ -304,7 +343,10 @@ void font_page_apply(void)
     uint64_t generation;
     os64_font_config_error_t error = {0};
     int result = os64_font_settings_apply(os64_ui_font_context(preview), &draft, &generation, &error);
-    if (!result) report("Fonts published to session; apps may retain a refused change");
+    // A browser reads the Web setting when it starts; it does not follow it.
+    if (!result && !same_web(&draft, &baseline))
+        report("Fonts published; Save, then the Web face reaches yonder when it next starts");
+    else if (!result) report("Fonts published to session; apps may retain a refused change");
     else if (result == OS64_UI_APPLY_CONFLICT) report("Changed elsewhere; Apply again to retry");
     else if (error.status) failure("Apply kept current fonts", &error);
     else report("Cannot publish fonts; previous session kept");

@@ -16,7 +16,7 @@ static int row_height(const os64_ui_listbox_t *list, const os64_ui_theme_t *them
 
 static void list_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 {
-    ((os64_ui_listbox_t *)w)->row_h = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
+    ((os64_ui_listbox_t *)w)->row_h = os64_ui_font_row_height(ui, ui_role(w, OS64_FONT_ROLE_UI));
 }
 
 // ── staging the visible rows ────────────────────────────────────────────────
@@ -50,7 +50,7 @@ static os64_font_status_t list_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
     // shows fewer rows and a taller box shows more, and a row the first
     // paint discovers it can show has nothing prepared for it — which is a
     // layout allocation in the one place that is not allowed to fail.
-    int32_t pitch = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI) + 8;
+    int32_t pitch = os64_ui_font_row_height(ui, ui_role(w, OS64_FONT_ROLE_UI)) + 8;
     int32_t height = os64_ui_widget_planned_bounds(w).h;
     int32_t fits = pitch > 0 ? (height - 4) / pitch : 0;
     size_t visible = fits > 0 ? (size_t)fits : 0;
@@ -71,7 +71,7 @@ static os64_font_status_t list_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
         size_t len = 0;
         const char *label = row_text(list, list->top + i, &len);
         os64_font_status_t status =
-            os64_ui_run_layout(ui, OS64_FONT_ROLE_UI, label, len, &runs[i]);
+            os64_ui_run_layout(ui, ui_role(w, OS64_FONT_ROLE_UI), label, len, &runs[i]);
         if (status != OS64_FONT_OK) {
             for (size_t j = 0; j < i; ++j)
                 os64_ui_run_release(runs[j]);
@@ -167,7 +167,7 @@ static void list_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         // The staged run for this slot when it still says what the row
         // says; the draw re-lays-out anything that has changed since.
         void **slot = (size_t)row < list->row_run_count ? &list->row_runs[row] : NULL;
-        os64_ui_draw_text(os64_ui_of(w), slot, OS64_FONT_ROLE_UI, &ctx->surf, rect,
+        os64_ui_draw_text(os64_ui_of(w), slot, ui_role(w, OS64_FONT_ROLE_UI), &ctx->surf, rect,
                           rect.x + inset, rect.y + 4, label, label_len, fg, bg);
     }
 }

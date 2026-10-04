@@ -19,8 +19,16 @@ typedef struct {
     char face[OS64_FONT_FAMILY_STYLES + OS64_FONT_CONFIG_FALLBACK_MAX][OS64_FONT_PATH_CAP];
     size_t source_line[OS64_FONT_FAMILY_STYLES + OS64_FONT_CONFIG_FALLBACK_MAX];
 } os64_font_config_family_t;
+/* THE WEB SETTING rides after the roles, in their shape: `web.face` is the
+ * face a browser draws a page's form controls in, and `web.size` is the
+ * page's default font size (CSS's `medium`). It is not a role — no window's
+ * set carries it, so a program that never shows a page never loads it; a
+ * browser opens it itself, at the size its page and zoom ask for
+ * (os64_font_config_web_prepare). Unset, it is the shipped DejaVu Sans at 16. */
+#define OS64_FONT_CONFIG_WEB ((size_t)OS64_FONT_ROLE_COUNT)
+#define OS64_FONT_CONFIG_ROLES (OS64_FONT_ROLE_COUNT + 1)
 typedef struct {
-    os64_font_config_role_t roles[OS64_FONT_ROLE_COUNT];
+    os64_font_config_role_t roles[OS64_FONT_CONFIG_ROLES];
     os64_font_config_family_t families[OS64_FONT_FAMILY_COUNT];
     char path[OS64_FONT_PATH_CAP]; /* selected config; empty for no file */
 } os64_font_config_t;
@@ -42,6 +50,7 @@ typedef struct {
     os64_font_status_t font_status;
     size_t line, source;
     os64_font_role_t role; /* ROLE_COUNT when not specific to one role */
+    bool web;              /* the Web setting's; role is then ROLE_COUNT */
 } os64_font_config_error_t;
 
 void os64_font_config_defaults(os64_font_config_t *);
@@ -53,10 +62,18 @@ os64_font_config_status_t os64_font_config_decode(const char *, size_t,
  * A selected file that cannot be read is an error. Out is unchanged on error. */
 os64_font_config_status_t os64_font_config_read(os64_font_config_t *out,
     os64_font_config_error_t *);
-/* Validate a programmatically edited config and prepare all roles. No active
+/* Validate a programmatically edited config and prepare all roles; the Web
+ * setting is validated, not opened (it is in no role set). No active
  * set or consumer changes. On failure *out is NULL; success owns a new set. */
 os64_font_config_status_t os64_font_config_prepare(os64_text_context_t *,
     const os64_font_config_t *, os64_font_set_t **out, os64_font_config_error_t *);
+/* Open the Web setting's face (and its fallbacks) at `pixel_height`, clamped
+ * to 8..96, as the UI role of a new set whose other roles are builtin — the
+ * shape os64_ui_font_app lends. A builtin Web face is opened at 16, the only
+ * size it has. Errors name the Web setting's line with `web` set. */
+os64_font_config_status_t os64_font_config_web_prepare(os64_text_context_t *,
+    const os64_font_config_t *, uint32_t pixel_height, os64_font_set_t **out,
+    os64_font_config_error_t *);
 /* Resolve family inheritance and prepare an immutable source snapshot. Reads
  * every selected member before publishing a cache, so an unreadable style
  * refuses the candidate even if the page has not requested that style yet.
@@ -85,7 +102,7 @@ typedef struct {
     os64_font_catalog_entry_t entries[OS64_FONT_DISCOVERY_MAX];
     size_t count;
     bool limited, directory_unavailable;
-    os64_font_catalog_alias_t aliases[OS64_FONT_ROLE_COUNT * 3];
+    os64_font_catalog_alias_t aliases[OS64_FONT_CONFIG_ROLES * 3];
     size_t alias_count;
 } os64_font_catalog_t;
 /* Includes builtin, selected files, /home/fonts, /etc/fonts, the installation
@@ -103,7 +120,8 @@ os64_font_config_status_t os64_font_config_discover(os64_text_context_t *,
 void os64_font_catalog_release(os64_font_catalog_t *);
 /* Find a representative or a configured alias; -1 if absent. */
 int os64_font_catalog_find(const os64_font_catalog_t *, const char *path);
-/* Copy the role's primary into fonts/ at the top of the config ladder. The
+/* Copy the role's primary — or the Web setting's, with OS64_FONT_CONFIG_WEB
+ * as the role — into fonts/ at the top of the config ladder. The
  * staged file and complete candidate are validated before no-replace publish.
  * Existing installed names are refused. Success returns the installed path;
  * it neither publishes session choices nor saves fonts.conf. */

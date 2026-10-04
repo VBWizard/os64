@@ -825,6 +825,103 @@ static void button_paints_from_its_run(const char *dir)
     current = "";
 }
 
+/* The application's face: lent beside the settings' set, worn only by the
+ * widgets that ask for it, followed when it changes, kept across an
+ * adoption, and let go of with the window. */
+static const char *app_face_row(size_t index, void *user)
+{ (void)user; return index < 3 ? "row" : ""; }
+
+static void app_face_beside_the_settings(const char *dir)
+{
+    current = "application face";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui.theme = (os64_ui_theme_t){ .pad = 6, .button_h = 20, .gap = 4 };
+    os64_ui_widget_t root, chrome, page;
+    os64_ui_listbox_t list;
+    os64_ui_panel(&root);
+    os64_ui_button(&chrome, "WWWW", NULL, NULL);
+    os64_ui_button(&page, "WWWW", NULL, NULL);
+    os64_ui_listbox(&list, 3, app_face_row, NULL, NULL);
+    chrome.bounds = page.bounds = (os64_gui_rect_t){0, 0, 300, 60};
+    list.w.bounds = (os64_gui_rect_t){0, 0, 300, 200};
+    os64_ui_add_child(&root, &chrome);
+    os64_ui_add_child(&root, &page);
+    os64_ui_add_child(&root, &list.w);
+    os64_ui_set_root(&ui, &root);
+    os64_ui_widget_app_face(&ui, &page, true);
+    os64_ui_widget_app_face(&ui, &list.w, true);
+
+    /* Nothing lent: the application's role is the Interface role. */
+    int32_t ui_w = measured(&ui, "WWWW", 4), app_w = 0;
+    CHECK(os64_ui_text_measure(&ui, OS64_UI_FONT_APP, "WWWW", 4, &app_w) == OS64_FONT_OK);
+    CHECK(app_w == ui_w);
+    CHECK(page.natural_h == chrome.natural_h);
+
+    os64_text_context_t *text = os64_ui_font_context(&ui);
+    os64_font_set_t *big = outline_set(text, dir, "DejaVuSans.ttf", 32);
+    os64_font_set_t *small = outline_set(text, dir, "DejaVuSans.ttf", 12);
+    CHECK(big && small);
+    if (!big || !small) { current = ""; return; }
+    CHECK(os64_ui_font_app(&ui, big, OS64_FONT_ROLE_COUNT) == OS64_FONT_BAD_ARGUMENT);
+    CHECK(os64_ui_font_app(&ui, big, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    os64_font_set_release(big);           /* the window holds its own reference */
+
+    int32_t big_row = os64_ui_font_row_height(&ui, OS64_UI_FONT_APP);
+    CHECK(big_row > os64_ui_font_row_height(&ui, OS64_FONT_ROLE_UI));
+    CHECK(os64_ui_text_measure(&ui, OS64_UI_FONT_APP, "WWWW", 4, &app_w) == OS64_FONT_OK);
+    CHECK(app_w > ui_w);
+    CHECK(measured(&ui, "WWWW", 4) == ui_w);           /* the chrome is untouched */
+    CHECK(page.natural_h > chrome.natural_h);           /* re-derived at the lend */
+    CHECK(list.row_h == big_row);
+
+    /* Paint both buttons so each retains a run, then change the lent face:
+     * only the page's run goes, and the next paint lays it out again. */
+    canvas_t c;
+    canvas_init(&c, 0xff000000);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.surf = c.s;
+    chrome.cls->paint(&chrome, &ctx, &ui.theme);
+    page.cls->paint(&page, &ctx, &ui.theme);
+    list.w.cls->paint(&list.w, &ctx, &ui.theme);
+    void *chrome_run = chrome.run;
+    CHECK(chrome_run != NULL && page.run != NULL);
+    CHECK(os64_ui_font_app(&ui, small, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    CHECK(page.run == NULL && chrome.run == chrome_run);
+    CHECK(os64_ui_font_row_height(&ui, OS64_UI_FONT_APP) < big_row);
+    CHECK(list.row_h == os64_ui_font_row_height(&ui, OS64_UI_FONT_APP));
+    page.cls->paint(&page, &ctx, &ui.theme);
+    CHECK(page.run != NULL);
+
+    /* An adoption replaces the settings' set and leaves the lent face. */
+    int32_t small_row = os64_ui_font_row_height(&ui, OS64_UI_FONT_APP);
+    os64_font_set_t *settings = outline_set(text, dir, "DejaVuSans.ttf", 24);
+    CHECK(settings != NULL);
+    if (settings) {
+        os64_font_consumer_t consumer;
+        os64_ui_font_consumer(&ui, &consumer);
+        CHECK(os64_font_adopt(settings, &consumer, 1, NULL) == OS64_FONT_OK);
+        os64_font_set_release(settings);
+        CHECK(os64_ui_font_row_height(&ui, OS64_UI_FONT_APP) == small_row);
+        CHECK(os64_ui_font_row_height(&ui, OS64_FONT_ROLE_UI) != small_row);
+    }
+
+    /* A widget leaving the face drops what it laid out in it. */
+    page.cls->paint(&page, &ctx, &ui.theme);
+    os64_ui_widget_app_face(&ui, &page, false);
+    CHECK(page.run == NULL && !page.app_face);
+    CHECK(page.natural_h == chrome.natural_h);
+
+    /* Lending nothing lets the set go; the window then owes nothing. */
+    CHECK(os64_ui_font_app(&ui, NULL, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    CHECK(list.row_h == os64_ui_font_row_height(&ui, OS64_FONT_ROLE_UI));
+    os64_font_set_release(small);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    CHECK(os64_ui_font_live_bytes(&ui) == 0);
+    current = "";
+}
+
 /* R2c + R5 — a list that the adoption makes TALLER must have runs prepared
  * for the rows it will be able to show, not the rows it can show now; and
  * whatever it retains must be released when the window's fonts go. */
@@ -2870,6 +2967,7 @@ int main(int argc, char **argv)
     tab_interval_failure_travels(dir);
     button_paints_from_its_run(dir);
     list_stages_its_candidate_rows(dir);
+    app_face_beside_the_settings(dir);
     changed_caption_is_not_placed_from_nothing(dir);
     staged_children_follow_their_staged_parent(dir);
     textview_geometry_and_painting(dir);

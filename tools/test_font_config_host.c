@@ -112,7 +112,8 @@ static os64_font_config_status_t decode(const char *s, os64_font_config_t *c,
 static const char choices[] =
     "# role choices\nUI.face = fonts/sans\nui.size = 18\n"
     "terminal.face = fonts/mono\nterminal.size = 20\n"
-    "document.face = fonts/sans\ndocument.size = 24\n";
+    "document.face = fonts/sans\ndocument.size = 24\n"
+    "web.face = fonts/sans\nweb.size = 20\n";
 
 static void parsing(void)
 {
@@ -371,6 +372,70 @@ static void loading(void)
     printf("Preparation allocation-denial cases: %zu\n", failures);
 }
 
+/* The Web setting: a role's shape after the roles, defaulting to the shipped
+ * sans, saved and read back, refused by its own line, and opened only on
+ * request, at the size asked. */
+static void web_setting(void)
+{
+    os64_font_config_t c, moved;
+    os64_font_config_error_t e;
+    CHECK(!decode("", &c, &e));
+    CHECK(!strcmp(c.roles[OS64_FONT_CONFIG_WEB].face[0], "/etc/fonts/DejaVuSans.ttf"));
+    CHECK(c.roles[OS64_FONT_CONFIG_WEB].size == 16);
+    CHECK(!decode(choices, &c, &e));
+    CHECK(!strcmp(c.roles[OS64_FONT_CONFIG_WEB].face[0], "/cfg/fonts/sans"));
+    CHECK(c.roles[OS64_FONT_CONFIG_WEB].size == 20 && c.roles[OS64_FONT_CONFIG_WEB].size_line == 9);
+    char encoded[4096];
+    int64_t n = os64_font_config_encode(&c, encoded, sizeof(encoded)); CHECK(n > 0);
+    CHECK(strstr(encoded, "web.face = /cfg/fonts/sans\nweb.size = 20\n") != NULL);
+    CHECK(!os64_font_config_decode(encoded, (size_t)n, "/home/fonts.conf", &moved, &e));
+    CHECK(!strcmp(moved.roles[OS64_FONT_CONFIG_WEB].face[0], "/cfg/fonts/sans"));
+    CHECK(moved.roles[OS64_FONT_CONFIG_WEB].size == 20);
+
+    /* A refusal names the Web setting, never a role. */
+    CHECK(decode("ui.size = 18\nweb.size = 7", &c, &e) == OS64_FONT_CONFIG_SIZE);
+    CHECK(e.web && e.role == OS64_FONT_ROLE_COUNT && e.line == 2);
+    CHECK(decode("web.face = ../sans", &c, &e) == OS64_FONT_CONFIG_PATH && e.web);
+    CHECK(decode("web.face = builtin\nweb.size = 20", &c, &e) == OS64_FONT_CONFIG_SIZE && e.web);
+    CHECK(decode("ui.size = 7", &c, &e) == OS64_FONT_CONFIG_SIZE && !e.web);
+
+    os64_text_options_t options = {.memory={NULL,allocate,release}};
+    os64_text_context_t *text = NULL;
+    CHECK(!os64_font_context_create(&options, &text));
+    CHECK(!decode(choices, &c, &e));
+    os64_font_set_t *set = NULL;
+    os64_font_role_view_t view;
+    int32_t rows[3];
+    const uint32_t sizes[3] = {12, 30, 200};
+    for (int i = 0; i < 3; ++i) {
+        CHECK(!os64_font_config_web_prepare(text, &c, sizes[i], &set, &e));
+        CHECK(set && !os64_font_set_view(set, OS64_FONT_ROLE_UI, &view));
+        CHECK(!strcmp(view.primary.family, "DejaVu Sans"));
+        rows[i] = view.row_height_px;
+        CHECK(!os64_font_set_view(set, OS64_FONT_ROLE_DOCUMENT, &view));
+        CHECK(view.row_height_px == 16);        /* the other roles are builtin */
+        os64_font_set_release(set); set = NULL;
+    }
+    CHECK(rows[0] < rows[1] && rows[1] < rows[2]);
+    CHECK(!os64_font_config_web_prepare(text, &c, 96, &set, &e));
+    CHECK(!os64_font_set_view(set, OS64_FONT_ROLE_UI, &view) && view.row_height_px == rows[2]);
+    os64_font_set_release(set); set = NULL;
+    /* A builtin Web face has one size, whatever is asked. */
+    CHECK(!decode("web.face = builtin", &c, &e));
+    CHECK(!os64_font_config_web_prepare(text, &c, 40, &set, &e));
+    CHECK(!os64_font_set_view(set, OS64_FONT_ROLE_UI, &view) && view.row_height_px == 16);
+    os64_font_set_release(set); set = NULL;
+    /* A face that will not open is the Web setting's line. */
+    CHECK(!decode("ui.size = 16\nweb.face = fonts/bad", &c, &e));
+    CHECK(os64_font_config_web_prepare(text, &c, 16, &set, &e) == OS64_FONT_CONFIG_FACE);
+    CHECK(!set && e.web && e.line == 2 && e.role == OS64_FONT_ROLE_COUNT);
+    /* The role door does not open it, so a broken Web face cannot cost the
+     * desktop its fonts. */
+    CHECK(!os64_font_config_prepare(text, &c, &set, &e));
+    os64_font_set_release(set);
+    CHECK(!os64_text_destroy(text));
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -384,7 +449,7 @@ int main(int argc, char **argv)
     files[7].data = malloc(files[1].length + 1); CHECK(files[7].data);
     memcpy(files[7].data, files[1].data, files[1].length);
     files[7].data[files[1].length] = 0; ++files[7].length;
-    parsing(); families(argv[1]); loading();
+    parsing(); families(argv[1]); web_setting(); loading();
     free(files[6].data); free(files[7].data);
     free(files[1].data); free(files[2].data);
     printf("font_config: %zu checks, 0 failures; no live allocations\n", checks);

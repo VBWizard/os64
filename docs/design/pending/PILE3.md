@@ -658,7 +658,82 @@ blank on the way back.
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | A zoom per site | one zoom for the window (Chris, 10/3) | a person who wants one site bigger than the rest |
-| Form controls at the zoom | their boxes grow with the page, but the widgets draw in the theme's Interface font at its size | the Web font role (the Appearance Workshop's Fonts tab), the next slice |
+| Form controls at the zoom | — | done in § The Web face, below |
 | A picture shrunk to less than half | four pixels are mixed, so a picture shrunk far shimmers where the browsers filter its whole area | a page whose thumbnails shimmer |
 | Zoom's cost | more device pixels to paint, and smoothing costs more than copying | the deferred painting work |
 | Heavy pages at a high zoom | on the P5 (Chris, 10/3) news.google.com breaks up from 250%, and news.yahoo.com goes wrong at 200% but recovers once zoomed back; the cause is not measured — the page's narrow-viewport sheets at a CSS width of 331 px and under, or a budget the layout still meets, are the suspects. A reading zoom of 200% or less is what yonder is for (Chris) | a page a person needs past 200%, or one that breaks at 200% or less |
+
+## The Web face (slice S6)
+
+A page's form controls drew in the desktop's Interface font, at its size,
+whatever the zoom — the debt § Zoom booked. Chris chose the cure (10/3): a
+**Web** button in the Appearance Workshop's Fonts tab, so the choice is the
+system's and any later browser shares it — and then its shape: the
+desktop's applications keep the Interface font for their own controls, and a
+control decides its font from a property the browser sets.
+
+### How it is built
+
+**`fonts.conf` gains the Web setting**: `web.face` (and `web.fallback.1`,
+`.2`) is the face a browser draws a page's form controls in, and `web.size`
+is the page's default font size, CSS's `medium` — what Chrome calls "Font
+size". Unset, it is the shipped DejaVu Sans at 16. It is the shape of a role
+and rides after the three in the config (`OS64_FONT_CONFIG_WEB`), but it is
+**not a role**: no window's role set carries it, so a program that never
+shows a page never loads it. A browser opens it itself,
+`os64_font_config_web_prepare(context, config, px)`, at the size it needs.
+The session carries it with the roles, so a Workshop draft read back keeps
+it, and Save writes it; Apply publishes it, but yonder reads it when it
+starts and does not follow it.
+
+**libui gains the application's face.** `os64_ui_font_app(ui, set, role)`
+lends a window a face beside the role set the settings choose;
+`os64_ui_widget_app_face(ui, w, true)` puts a widget in it, and the role
+`OS64_UI_FONT_APP` measures in it. A widget whose class draws in the
+Interface role honours the flag (labels, buttons, checkboxes, fields,
+lists); one that has not asked is untouched, so yonder's toolbar keeps the
+Interface font while its page's controls change. An adoption — a new
+Interface or Document font — leaves the lent face alone, and a new lend
+drops the runs laid out in the old one, so it is cheap enough to follow a
+zoom. Nothing lent, the application's role is the Interface role.
+
+**yonder** reads `web.size` as the page's `medium`, and lends its window the
+Web face at the size a browser gives a control — 13/16 of `medium` (Chrome's
+small-control, 13 px at 16) — times the zoom, again at every zoom change.
+A select's box is measured in that face, and handed to libflow in CSS
+pixels, since libflow scales a replaced box by the zoom itself. A Web face
+that will not open leaves the controls in the Interface font, and yonder
+says so once on its terminal.
+
+**The Workshop** has a fourth button, Web, and a fourth specimen line drawn
+in the Web face lent to the preview window. A Web face that will not open
+refuses only a candidate that changes it: the shipped default is absent
+without the fonts lot, and that must not stop anyone choosing the roles.
+
+### Proof
+
+Host: `test_ui_text_host --real`'s "application face" — a lent face worn by
+the widgets that asked and no other, a list's rows and a button's height
+re-derived at the lend, a new lend dropping only those widgets' runs, an
+adoption leaving it, a widget leaving it, nothing lent being the Interface
+role, and the window owing nothing at release. `test_font_config_host`'s Web
+setting: the default, a round trip through encode and decode, refusals that
+name the Web line (and not a role), the face opened at three sizes and
+clamped at 96, a builtin face at 16 whatever is asked, a broken face refused
+by the Web door and not by the role door. `test_appearance_session_host`:
+the Web setting survives the session. In the guest:
+`/tests/pages/pile3-controls.html` with the controls in DejaVu Sans at 13 px
+beside a bitmap toolbar; at 200% the controls' text and the select's box
+exactly doubled, and back at 100% as before; the Workshop's Web button
+previewing DejaVu Sans Mono Bold, Save writing `web.face` and `web.size`
+beside unchanged roles, and yonder started afterwards drawing the controls
+in it; `web.size = 20` giving a 20 px paragraph and 16 px controls.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| yonder following a Web change live | it reads `fonts.conf` when it starts, as it reads the families | a person who changes the Web face with a page open and expects it to follow |
+| A page's own `font` on a control | controls wear the Web face at the small-control size, whatever the page's CSS says | a page whose styled inputs look wrong |
+| A checkbox at the zoom | its box grows, but the tick is the theme's size | a page of checkboxes at 150% or more |
+| Textviews in the application's face | no browser control is one (a `<textarea>` is a field) | a `<textarea>` drawn as a textview |

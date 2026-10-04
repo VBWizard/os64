@@ -7,7 +7,8 @@
 #include "os64/io.h"
 #include "font_config_internal.h"
 
-static const char *const role_names[] = { "ui", "terminal", "document" };
+static const char *const role_names[OS64_FONT_CONFIG_ROLES] = { "ui", "terminal", "document", "web" };
+_Static_assert(OS64_FONT_ROLE_COUNT == 3, "a new role needs a name here, before web");
 static const char *const family_names[] = { "serif", "sans", "mono" };
 static const char *const family_suffix[] = { "", ".bold", ".italic", ".bolditalic",
                                             ".fallback.1", ".fallback.2" };
@@ -20,11 +21,15 @@ static const char *const family_defaults[OS64_FONT_FAMILY_COUNT][OS64_FONT_FAMIL
      "/etc/fonts/DejaVuSansMono-Oblique.ttf", "/etc/fonts/DejaVuSansMono-BoldOblique.ttf"}
 };
 
+/* `role` is an index into a config's roles — the Web setting included — or
+ * NO_ROLE for a problem that belongs to none of them. */
+#define NO_ROLE SIZE_MAX
 static os64_font_config_status_t problem(os64_font_config_error_t *e,
     os64_font_config_status_t status, size_t line, size_t role, size_t source)
 {
     if (e) *e = (os64_font_config_error_t){status, OS64_FONT_OK, line, source,
-                                         (os64_font_role_t)role};
+        role < OS64_FONT_ROLE_COUNT ? (os64_font_role_t)role : OS64_FONT_ROLE_COUNT,
+        role == OS64_FONT_CONFIG_WEB};
     return status;
 }
 
@@ -36,6 +41,9 @@ void os64_font_config_defaults(os64_font_config_t *c)
         os64_strcopy(c->roles[r].face[0], OS64_FONT_PATH_CAP, "builtin");
         c->roles[r].size = 16;
     }
+    os64_strcopy(c->roles[OS64_FONT_CONFIG_WEB].face[0], OS64_FONT_PATH_CAP,
+                 "/etc/fonts/DejaVuSans.ttf");
+    c->roles[OS64_FONT_CONFIG_WEB].size = 16;
 }
 
 static size_t path_length(const char *s)
@@ -92,7 +100,7 @@ static bool resolve_path(const char *base, const char *value, char *out)
 static os64_font_config_status_t validate(os64_font_config_t *c,
     os64_font_config_error_t *e)
 {
-    for (size_t r = 0; r < OS64_FONT_ROLE_COUNT; ++r) {
+    for (size_t r = 0; r < OS64_FONT_CONFIG_ROLES; ++r) {
         os64_font_config_role_t *role = &c->roles[r];
         for (size_t s = 0; s < 3; ++s)
             if (path_length(role->face[s]) == OS64_FONT_PATH_CAP)
@@ -119,7 +127,7 @@ static os64_font_config_status_t validate(os64_font_config_t *c,
             char path[OS64_FONT_PATH_CAP];
             if (!resolve_path(NULL, family->face[s], path))
                 return problem(e, OS64_FONT_CONFIG_PATH, family->source_line[s],
-                               OS64_FONT_ROLE_COUNT, s);
+                               NO_ROLE, s);
             os64_strcopy(family->face[s], OS64_FONT_PATH_CAP, path);
         }
     }
@@ -138,7 +146,7 @@ static bool setting(const char *key, const char *value, void *user)
 {
     decode_t *d = user;
     d->delivered = true;
-    for (size_t r = 0; key && r < OS64_FONT_ROLE_COUNT; ++r) {
+    for (size_t r = 0; key && r < OS64_FONT_CONFIG_ROLES; ++r) {
         const char *const suffix[] = {"face", "fallback.1", "fallback.2", "size"};
         for (size_t s = 0; s < 4; ++s) {
             char name[32];
@@ -173,27 +181,27 @@ static bool setting(const char *key, const char *value, void *user)
             os64_font_config_family_t *family = &d->config->families[f];
             if (!resolve_path(d->config->path, value, family->face[s]))
                 d->status = problem(d->error, OS64_FONT_CONFIG_PATH, d->line,
-                                    OS64_FONT_ROLE_COUNT, s);
+                                    NO_ROLE, s);
             else family->source_line[s] = d->line;
             return false;
         }
     }
     d->status = problem(d->error, OS64_FONT_CONFIG_SYNTAX, d->line,
-                        OS64_FONT_ROLE_COUNT, 0);
+                        NO_ROLE, 0);
     return false;
 }
 
 os64_font_config_status_t os64_font_config_decode(const char *text, size_t len,
     const char *path, os64_font_config_t *out, os64_font_config_error_t *e)
 {
-    problem(e, OS64_FONT_CONFIG_OK, 0, OS64_FONT_ROLE_COUNT, 0);
-    if (!text || !out) return problem(e, OS64_FONT_CONFIG_SYNTAX, 0, OS64_FONT_ROLE_COUNT, 0);
+    problem(e, OS64_FONT_CONFIG_OK, 0, NO_ROLE, 0);
+    if (!text || !out) return problem(e, OS64_FONT_CONFIG_SYNTAX, 0, NO_ROLE, 0);
     if (len > OS64_FONT_CONFIG_BYTES_MAX)
-        return problem(e, OS64_FONT_CONFIG_LIMIT, 0, OS64_FONT_ROLE_COUNT, 0);
+        return problem(e, OS64_FONT_CONFIG_LIMIT, 0, NO_ROLE, 0);
     os64_font_config_t c;
     os64_font_config_defaults(&c);
     if (!path || path[0] != '/' || !resolve_path(NULL, path, c.path))
-        return problem(e, OS64_FONT_CONFIG_PATH, 0, OS64_FONT_ROLE_COUNT, 0);
+        return problem(e, OS64_FONT_CONFIG_PATH, 0, NO_ROLE, 0);
     decode_t d = { .config = &c, .error = e };
     size_t start = 0;
     while (start < len) {
@@ -206,12 +214,12 @@ os64_font_config_status_t os64_font_config_decode(const char *text, size_t len,
         int64_t parsed = os64_conf_parse(text + start, end - start, setting, &d);
         if (parsed < 0)
             return problem(e, parsed == OS64_CONF_NO_MEMORY ? OS64_FONT_CONFIG_NO_MEMORY :
-                           OS64_FONT_CONFIG_SYNTAX, d.line, OS64_FONT_ROLE_COUNT, 0);
+                           OS64_FONT_CONFIG_SYNTAX, d.line, NO_ROLE, 0);
         if (d.status) return d.status;
         /* conf's callback omits empty keys as well as blank lines. An '='
          * without a key is malformed input, not an absent font choice. */
         if (!d.delivered && first < end && text[first] != '#')
-            return problem(e, OS64_FONT_CONFIG_SYNTAX, d.line, OS64_FONT_ROLE_COUNT, 0);
+            return problem(e, OS64_FONT_CONFIG_SYNTAX, d.line, NO_ROLE, 0);
         start = end + (end < len);
     }
     os64_font_config_status_t status = validate(&c, e);
@@ -244,8 +252,8 @@ os64_font_config_status_t font_source_read(const char *path, size_t *remaining,
 os64_font_config_status_t os64_font_config_read(os64_font_config_t *out,
     os64_font_config_error_t *e)
 {
-    problem(e, OS64_FONT_CONFIG_OK, 0, OS64_FONT_ROLE_COUNT, 0);
-    if (!out) return problem(e, OS64_FONT_CONFIG_SYNTAX, 0, OS64_FONT_ROLE_COUNT, 0);
+    problem(e, OS64_FONT_CONFIG_OK, 0, NO_ROLE, 0);
+    if (!out) return problem(e, OS64_FONT_CONFIG_SYNTAX, 0, NO_ROLE, 0);
     char path[OS64_FONT_PATH_CAP];
     if (os64_conf_find("fonts.conf", path, sizeof(path)) < 0) {
         os64_font_config_defaults(out);
@@ -254,7 +262,7 @@ os64_font_config_status_t os64_font_config_read(os64_font_config_t *out,
     uint8_t *bytes = NULL;
     size_t len = 0;
     os64_slurp_status_t s = os64_slurp(path, OS64_FONT_CONFIG_BYTES_MAX, &bytes, &len);
-    if (s) return problem(e, read_error(s), 0, OS64_FONT_ROLE_COUNT, 0);
+    if (s) return problem(e, read_error(s), 0, NO_ROLE, 0);
     os64_font_config_status_t status = os64_font_config_decode((const char *)bytes, len, path, out, e);
     os64_free(bytes);
     return status;
@@ -263,10 +271,10 @@ os64_font_config_status_t os64_font_config_read(os64_font_config_t *out,
 os64_font_config_status_t os64_font_config_prepare(os64_text_context_t *context,
     const os64_font_config_t *config, os64_font_set_t **out, os64_font_config_error_t *e)
 {
-    problem(e, OS64_FONT_CONFIG_OK, 0, OS64_FONT_ROLE_COUNT, 0);
+    problem(e, OS64_FONT_CONFIG_OK, 0, NO_ROLE, 0);
     if (out) *out = NULL;
     if (!config || !context || !out)
-        return problem(e, OS64_FONT_CONFIG_SYNTAX, 0, OS64_FONT_ROLE_COUNT, 0);
+        return problem(e, OS64_FONT_CONFIG_SYNTAX, 0, NO_ROLE, 0);
     os64_font_config_t c = *config;
     os64_font_config_status_t status = validate(&c, e);
     if (status) return status;
@@ -314,6 +322,29 @@ done:
     return status;
 }
 
+/* The Web setting, opened through the role door as the UI role of a set whose
+ * other roles are builtin and cost nothing to prepare. */
+os64_font_config_status_t os64_font_config_web_prepare(os64_text_context_t *context,
+    const os64_font_config_t *config, uint32_t pixel_height, os64_font_set_t **out,
+    os64_font_config_error_t *e)
+{
+    if (out) *out = NULL;
+    if (!config) return problem(e, OS64_FONT_CONFIG_SYNTAX, 0, NO_ROLE, 0);
+    os64_font_config_t c;
+    os64_font_config_defaults(&c);
+    os64_strcopy(c.path, OS64_FONT_PATH_CAP, config->path);
+    os64_font_config_role_t *web = &c.roles[OS64_FONT_ROLE_UI];
+    *web = config->roles[OS64_FONT_CONFIG_WEB];
+    web->size = pixel_height < 8 ? 8 : pixel_height > 96 ? 96 : pixel_height;
+    if (os64_streq(web->face[0], "builtin")) web->size = 16;
+    os64_font_config_status_t status = os64_font_config_prepare(context, &c, out, e);
+    if (status && e && e->role == OS64_FONT_ROLE_UI) {
+        e->role = OS64_FONT_ROLE_COUNT;
+        e->web = true;
+    }
+    return status;
+}
+
 /* Resolve the source slot as well as its path so inherited failures still
  * name the line that selected the unreadable file. */
 static const char *family_path(const os64_font_config_family_t *family,
@@ -334,10 +365,10 @@ os64_font_config_status_t os64_font_config_family_prepare(os64_text_context_t *c
     const os64_font_config_t *config, os64_font_family_cache_t **out,
     os64_font_config_error_t *e)
 {
-    problem(e, OS64_FONT_CONFIG_OK, 0, OS64_FONT_ROLE_COUNT, 0);
+    problem(e, OS64_FONT_CONFIG_OK, 0, NO_ROLE, 0);
     if (out) *out = NULL;
     if (!context || !config || !out)
-        return problem(e, OS64_FONT_CONFIG_SYNTAX, 0, OS64_FONT_ROLE_COUNT, 0);
+        return problem(e, OS64_FONT_CONFIG_SYNTAX, 0, NO_ROLE, 0);
     os64_font_config_t c = *config;
     os64_font_config_status_t status = validate(&c, e);
     if (status) return status;
@@ -363,7 +394,7 @@ os64_font_config_status_t os64_font_config_family_prepare(os64_text_context_t *c
             if (i == count) {
                 status = font_source_read(path, &remaining, &files[i].bytes, &files[i].length);
                 if (status) {
-                    problem(e, status, c.families[f].source_line[origin], OS64_FONT_ROLE_COUNT, origin);
+                    problem(e, status, c.families[f].source_line[origin], NO_ROLE, origin);
                     goto done;
                 }
                 files[i].path = path; ++count;
@@ -378,7 +409,7 @@ os64_font_config_status_t os64_font_config_family_prepare(os64_text_context_t *c
         size_t origin = family < OS64_FONT_FAMILY_COUNT && source < SOURCES ? origins[family][source] : 0;
         size_t line = family < OS64_FONT_FAMILY_COUNT && source < SOURCES ?
                       c.families[family].source_line[origin] : 0;
-        status = problem(e, OS64_FONT_CONFIG_FACE, line, OS64_FONT_ROLE_COUNT, origin);
+        status = problem(e, OS64_FONT_CONFIG_FACE, line, NO_ROLE, origin);
         if (e) e->font_status = prepared;
     }
 done:
@@ -393,7 +424,7 @@ int64_t os64_font_config_encode(const os64_font_config_t *config, char *out, siz
     if (validate(&c, NULL)) return -1;
     char text[OS64_FONT_CONFIG_BYTES_MAX + 1];
     size_t used = 0;
-    for (size_t r = 0; r < OS64_FONT_ROLE_COUNT; ++r) {
+    for (size_t r = 0; r < OS64_FONT_CONFIG_ROLES; ++r) {
         int n = os64_snprintf(text + used, sizeof(text) - used, "%s.face = %s\n%s.size = %u\n",
                              role_names[r], c.roles[r].face[0], role_names[r], c.roles[r].size);
         if (n < 0 || (size_t)n >= sizeof(text) - used) return -1;
