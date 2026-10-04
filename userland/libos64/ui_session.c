@@ -298,7 +298,7 @@ static int64_t role_settings_encode(const os64_font_config_t *config, char *out,
 
 static int64_t font_component(const os64_font_config_t *config, char *out, size_t cap)
 {
-    char settings[4096];
+    char settings[OS64_FONT_CONFIG_BYTES_MAX + 1];
     int64_t n = role_settings_encode(config, settings, sizeof(settings));
     if (n < 0) return -1;
     size_t used = 0, start = 0;
@@ -369,7 +369,7 @@ static bool saved_fonts_valid(const char *text, size_t length, void *user)
 
 int os64_font_settings_save(const os64_font_config_t *config, os64_font_config_error_t *error)
 {
-    char encoded[4096], target[OS64_FONT_PATH_CAP];
+    char encoded[OS64_FONT_CONFIG_BYTES_MAX + 1], target[OS64_FONT_PATH_CAP];
     int64_t n = role_settings_encode(config, encoded, sizeof(encoded));
     if (n < 0) return OS64_UI_APPLY_INVALID;
     if (os64_conf_target("fonts.conf", target, sizeof(target)) < 0) return OS64_UI_APPLY_IO;

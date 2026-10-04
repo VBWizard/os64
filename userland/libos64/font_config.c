@@ -309,8 +309,12 @@ os64_font_config_status_t os64_font_config_prepare(os64_text_context_t *context,
     os64_font_problem_t where;
     os64_font_status_t prepared = os64_font_set_prepare_checked(context, specs, out, &where);
     if (prepared) {
-        size_t r = where.role, source = 0, line = 0;
-        if (r < OS64_FONT_ROLE_COUNT) {
+        // The provider's "no one role" (ROLE_COUNT) is the Web setting's
+        // index here, so it is said as NO_ROLE: this door never opens the
+        // Web face, and a failure it did not cause must not be laid on it.
+        size_t r = where.role < OS64_FONT_ROLE_COUNT ? (size_t)where.role : NO_ROLE;
+        size_t source = 0, line = 0;
+        if (r != NO_ROLE) {
             source = where.source_index < 3 ? indices[r][where.source_index] : 0;
             line = c.roles[r].source_line[source];
         }

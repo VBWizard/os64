@@ -433,6 +433,44 @@ static void web_setting(void)
      * desktop its fonts. */
     CHECK(!os64_font_config_prepare(text, &c, &set, &e));
     os64_font_set_release(set);
+    set = NULL;
+    /* Nor is a failure the role door meets laid on the Web setting: the
+     * provider's "no one role" is not the Web index. Every allocation of a
+     * preparation refused in turn; whatever fails, `web` stays false. */
+    CHECK(!decode(choices, &c, &e));
+    for (size_t pos = 1; pos < 2000; ++pos) {
+        deny = calls + pos;
+        os64_font_config_status_t st = os64_font_config_prepare(text, &c, &set, &e);
+        bool fired = calls >= deny;
+        deny = 0;
+        if (st)
+            CHECK(!e.web && set == NULL);
+        os64_font_set_release(set);
+        set = NULL;
+        if (!fired)
+            break;
+    }
+    CHECK(!os64_text_destroy(text));
+
+    /* A whole config past 4096 bytes encoded, inside the 8191 a config may
+     * be, is a config like any other to the readers that encode it to check
+     * it — discovery among them. */
+    os64_font_config_defaults(&c);
+    snprintf(c.path, OS64_FONT_PATH_CAP, "%s", "/cfg/fonts.conf");
+    for (size_t f = 0; f < OS64_FONT_FAMILY_COUNT; ++f)
+        for (size_t k = 0; k < OS64_FONT_FAMILY_STYLES + OS64_FONT_CONFIG_FALLBACK_MAX; ++k) {
+            char path[OS64_FONT_PATH_CAP];
+            snprintf(path, sizeof(path), "/cfg/fonts/%zu%zu-%0220d.ttf", f, k, 0);
+            snprintf(c.families[f].face[k], OS64_FONT_PATH_CAP, "%s", path);
+        }
+    char big[OS64_FONT_CONFIG_BYTES_MAX + 1];
+    int64_t bytes = os64_font_config_encode(&c, big, sizeof(big));
+    CHECK(bytes > 4096 && bytes <= OS64_FONT_CONFIG_BYTES_MAX);
+    os64_text_options_t opts = {.memory={NULL,allocate,release}};
+    CHECK(!os64_font_context_create(&opts, &text));
+    os64_font_catalog_t *catalog = NULL;
+    CHECK(os64_font_config_discover(text, &c, &catalog) == OS64_FONT_CONFIG_OK && catalog);
+    os64_font_catalog_release(catalog);
     CHECK(!os64_text_destroy(text));
 }
 

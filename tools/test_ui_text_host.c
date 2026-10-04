@@ -913,6 +913,39 @@ static void app_face_beside_the_settings(const char *dir)
     CHECK(page.run == NULL && !page.app_face);
     CHECK(page.natural_h == chrome.natural_h);
 
+    /* A lend allocates nothing, so a caller may make it after another
+     * change and need no way back; the face's tab stop is measured at its
+     * first layout instead, which then works as any does. */
+    unsigned long before = allocations;
+    CHECK(os64_ui_font_app(&ui, small, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    CHECK(allocations == before);
+    int32_t tabbed = 0;
+    CHECK(os64_ui_text_measure(&ui, OS64_UI_FONT_APP, "a\tb", 3, &tabbed) == OS64_FONT_OK &&
+          tabbed > 0);
+
+    /* A window holding a lent face may not move to another engine: the
+     * face's fonts are this context's. */
+    // A window whose ONLY font is the lent face — no role set bound, no
+    // text drawn yet — is the case the guard must see.
+    // It borrowed its context (A, the owner's), so nothing else marks it.
+    os64_ui_t lone, owner, spare;
+    memset(&lone, 0, sizeof(lone));
+    memset(&owner, 0, sizeof(owner));
+    memset(&spare, 0, sizeof(spare));
+    os64_text_context_t *mine = os64_ui_font_context(&owner);
+    os64_text_context_t *other = os64_ui_font_context(&spare);
+    CHECK(mine != NULL && os64_ui_font_borrow_context(&lone, mine) == OS64_FONT_OK);
+    os64_font_set_t *only = mine ? outline_set(mine, dir, "DejaVuSans.ttf", 20) : NULL;
+    CHECK(only != NULL && other != NULL);
+    if (only != NULL) {
+        CHECK(os64_ui_font_app(&lone, only, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+        os64_font_set_release(only);
+        CHECK(os64_ui_font_borrow_context(&lone, other) == OS64_FONT_BUSY);
+    }
+    CHECK(os64_ui_font_release(&lone) == OS64_FONT_OK);
+    CHECK(os64_ui_font_release(&owner) == OS64_FONT_OK);
+    CHECK(os64_ui_font_release(&spare) == OS64_FONT_OK);
+
     /* Lending nothing lets the set go; the window then owes nothing. */
     CHECK(os64_ui_font_app(&ui, NULL, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
     CHECK(list.row_h == os64_ui_font_row_height(&ui, OS64_FONT_ROLE_UI));

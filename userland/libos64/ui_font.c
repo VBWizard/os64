@@ -72,7 +72,7 @@ typedef struct ui_font_binding
 	// or swaps it — the settings do not choose it.
 	os64_font_set_t       *app_set;
 	os64_font_role_view_t  app_view;
-	os64_font_pos_t        app_tab;
+	os64_font_pos_t        app_tab;    // 0 until the face first lays text out
 
 } ui_font_binding_t;
 
@@ -136,14 +136,9 @@ static ui_font_binding_t *binding_ensure(os64_ui_t *ui)
 // caller must carry that: a set whose roles or whose tab stop could not be
 // resolved is not a set this window can wear, and pretending otherwise
 // substitutes measurements from a face nobody chose.
-static os64_font_status_t view_resolve(ui_font_binding_t *b, os64_font_set_t *set,
-                                       os64_font_role_t role, os64_font_role_view_t *v,
-                                       os64_font_pos_t *tab_interval)
+static os64_font_status_t measure_tab(ui_font_binding_t *b, const os64_font_role_view_t *v,
+                                      os64_font_pos_t *tab_interval)
 {
-	os64_font_status_t status = os64_font_set_view(set, role, v);
-	if (status != OS64_FONT_OK)
-		return status;
-
 	// Eight columns of the primary's space: the editor's 1970s tab stop,
 	// said in the only unit a proportional face has. Measured, because no
 	// metric in the view carries it.
@@ -154,7 +149,8 @@ static os64_font_status_t view_resolve(ui_font_binding_t *b, os64_font_set_t *se
 	};
 	os64_text_run_t *run = (os64_text_run_t *)0;
 	os64_text_run_view_t rv;
-	status = os64_text_layout(b->text, (const uint8_t *)" ", 1, &layout, &run);
+	os64_font_status_t status =
+		os64_text_layout(b->text, (const uint8_t *)" ", 1, &layout, &run);
 	if (status != OS64_FONT_OK)
 		return status;            // could not measure: say so, do not guess
 	status = os64_text_run_view(run, &rv);
@@ -171,6 +167,14 @@ static os64_font_status_t view_resolve(ui_font_binding_t *b, os64_font_set_t *se
 	// two had to stop sharing an exit.
 	*tab_interval = advance > 0 ? 8 * advance : 8 * OS64_FONT_GLYPH_W * OS64_FONT_UNIT;
 	return OS64_FONT_OK;
+}
+
+static os64_font_status_t view_resolve(ui_font_binding_t *b, os64_font_set_t *set,
+                                       os64_font_role_t role, os64_font_role_view_t *v,
+                                       os64_font_pos_t *tab_interval)
+{
+	os64_font_status_t status = os64_font_set_view(set, role, v);
+	return status != OS64_FONT_OK ? status : measure_tab(b, v, tab_interval);
 }
 
 static os64_font_status_t faces_resolve(ui_font_binding_t *b, os64_font_set_t *set,
@@ -302,6 +306,16 @@ static os64_font_status_t role_layout(os64_ui_t *ui, os64_font_role_t role,
 	if (!v)
 		return OS64_FONT_OK;           // unbound: the bitmap cell is the answer
 	ui_font_binding_t *b = binding_of(ui);
+	// A lent face's tab stop is measured the first time it lays text out,
+	// so that the lend itself allocates nothing (os64_ui_font_app).
+	if (v == &b->app_view && b->app_tab == 0) {
+		os64_font_status_t status = measure_tab(b, v, &b->app_tab);
+		if (status != OS64_FONT_OK) {
+			b->status = status;
+			return status;
+		}
+		tab_interval = b->app_tab;
+	}
 	os64_text_layout_t layout = {
 		.encoding = OS64_TEXT_UTF8_WESTERN_V1,
 		.fonts = v->fonts, .font_count = v->font_count,
@@ -512,9 +526,11 @@ os64_font_status_t os64_ui_font_borrow_context(os64_ui_t *ui,
 	if (b->text == text)
 		return OS64_FONT_OK;
 	// Moving a window between engines would strand whatever it is already
-	// holding — its set, its widgets' runs — in a context nobody will
-	// destroy. A window picks its engine before it has anything in it.
-	if (b->set || b->tried)
+	// holding — its set, the face an application lent it, its widgets'
+	// runs — in a context nobody will destroy, and lay text out against
+	// fonts from another one. A window picks its engine before it has
+	// anything in it.
+	if (b->set || b->app_set || b->tried)
 		return OS64_FONT_BUSY;
 	if (b->text && b->owns_text) {
 		os64_font_status_t status = os64_text_destroy(b->text);
@@ -629,13 +645,16 @@ os64_font_status_t os64_ui_font_app(os64_ui_t *ui, os64_font_set_t *set,
 		return OS64_FONT_NO_MEMORY;
 	if (!b->text)
 		return b->status;
+	// NOTHING HERE ALLOCATES, so a caller can lend after another change
+	// that succeeded and not need a way back: the set's view is borrowed,
+	// and its tab stop is measured when the face first lays text out
+	// (role_layout), where a failure is reported as any layout's is.
 	os64_font_role_view_t view;
-	os64_font_pos_t tab = 0;
 	os64_memset(&view, 0, sizeof(view));
 	if (set) {
 		os64_font_status_t status = set_belongs_here(b, set);
 		if (status == OS64_FONT_OK)
-			status = view_resolve(b, set, role, &view, &tab);
+			status = os64_font_set_view(set, role, &view);
 		if (status == OS64_FONT_OK)
 			status = os64_font_set_retain(set);
 		if (status != OS64_FONT_OK)
@@ -647,7 +666,7 @@ os64_font_status_t os64_ui_font_app(os64_ui_t *ui, os64_font_set_t *set,
 	os64_font_set_release(b->app_set);
 	b->app_set = set;
 	b->app_view = view;
-	b->app_tab = tab;
+	b->app_tab = 0;                         // measured at the first layout
 	os64_ui_font_restamp(ui);
 	if (ui->root)
 		os64_ui_mark_dirty(ui, ui->root);

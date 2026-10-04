@@ -556,8 +556,11 @@ size_t os64_ui_font_live_bytes(const os64_ui_t *ui);
 // in the lent face with OS64_UI_FONT_APP as the role. Every
 // run an app-face widget holds is dropped and its geometry re-derived, so
 // the next paint lays its text out in the new face — which is why a lend
-// is cheap enough to follow a zoom. On failure the window keeps the face
-// it had. os64_ui_font_release lets go of it with everything else.
+// is cheap enough to follow a zoom. A lend ALLOCATES NOTHING: it fails only
+// for a set from another context (or a reference count at its limit), and
+// then the window keeps the face it had — so a lend after another change
+// that succeeded needs no way back. os64_ui_font_release lets go of it with
+// everything else.
 #define OS64_UI_FONT_APP ((os64_font_role_t)OS64_FONT_ROLE_COUNT)
 os64_font_status_t os64_ui_font_app(os64_ui_t *ui, os64_font_set_t *set,
                                     os64_font_role_t role);

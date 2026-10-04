@@ -16,7 +16,7 @@ static os64_font_config_status_t install(os64_text_context_t *context,
         .role = web ? OS64_FONT_ROLE_COUNT : role, .web = web};
     if (!context || !config || !out || (size_t)role >= OS64_FONT_CONFIG_ROLES)
         return OS64_FONT_CONFIG_PATH;
-    char valid[4096];
+    char valid[OS64_FONT_CONFIG_BYTES_MAX + 1];   // a whole config, as encode writes it
     if (os64_font_config_encode(config, valid, sizeof(valid)) < 0) return OS64_FONT_CONFIG_PATH;
     const char *source = config->roles[role].face[0];
     if (source[0] != '/') return OS64_FONT_CONFIG_PATH;

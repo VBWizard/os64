@@ -73,7 +73,9 @@ static bool same_web(const os64_font_config_t *a, const os64_font_config_t *b)
 
 /* The roles are adopted by the preview window; the Web face, which no role
  * set carries, is opened beside them and lent to it. Both open before
- * either is shown, so a refusal keeps the whole previous preview. A Web
+ * either is shown, and the lend comes last because it cannot fail once the
+ * adoption has (it allocates nothing, os64_ui_font_app) — so the preview
+ * changes whole, or a refusal keeps the whole previous preview. A Web
  * face that will not open refuses only a candidate that CHANGES it — the
  * shipped default is absent without the fonts lot, and that must not stop
  * a person choosing the other roles; its band is then drawn in Interface. */
