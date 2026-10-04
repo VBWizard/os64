@@ -16,6 +16,7 @@ typedef struct {
     // The agent to send, read on the window's thread when the job was
     // made: Settings may change the session's while the job runs.
     const char *agent;
+    bool scripting;                // parser mode captured with this request
     int64_t window;                 // rung when there is mail
     uint32_t mail_bell;
     char url[OS64_FETCH_URL_MAX];

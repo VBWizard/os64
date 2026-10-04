@@ -12,6 +12,11 @@ document; release models, then state, then the document. State does not take
 a document pin. Passing NULL state creates private shared state that survives
 until its last model is freed, including models returned by rebuild.
 
+`os64_page_retain` acquires another owner-thread reference, released by
+`os64_page_free`. A flow layout holds one, so a replaced model remains alive
+until its old geometry is released. `os64_page_shared_state` borrows the
+model's explicit or private shared state; it does not transfer ownership.
+
 State is keyed by node, including detached or never-inserted controls, and
 options have independent node keys. Its default ceiling is 16 MiB, including
 allocation headers and script-operation scratch. Builds keep default records

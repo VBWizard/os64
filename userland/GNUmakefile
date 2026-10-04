@@ -477,7 +477,7 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
                        $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
 APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest flowdump yonder garbdump),$(LIBHTML_SO)) \
-                       $(if $(filter $(1),domtest),$(LIBDOM_SO) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO)) \
+                       $(if $(filter $(1),domtest yonder),$(LIBDOM_SO) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO)) \
                        $(if $(filter $(1),$(LIBFLOW_PROGRAMS)),$(LIBFLOW_SO)) \
                        $(if $(filter $(1),$(LIBWAY_PROGRAMS)),$(LIBWAY_SO)) \
                        $(if $(filter $(1),$(LIBGARB_PROGRAMS)),$(LIBGARB_SO)) \

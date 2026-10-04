@@ -84,9 +84,13 @@ window. The harness renders the corpus and diffs box coordinates.
   the tree and the model, and it writes boxes.
 - The tree is read-only and document-owned (libhtml); the model is
   libpage's; libflow points at both and copies no text it can point at.
-  Text runs are the one thing it OWNS: the engine's runs are immutable and
-  retained, so the box tree holds the run handles and releases them when
-  it is freed.
+  A layout retains its model and pins document strings until `flow_free`.
+  The caller keeps the document, cascade, fonts and text context alive; the
+  box tree releases its immutable text runs against that context.
+  `flow_model` returns the retained model whose indices its boxes carry.
+  A mutable face resolves those indices to nodes before consulting a newer
+  model. `flow_env_t.scripting` hides the raw `noscript` fallback in documents
+  parsed with scripting enabled; script-free faces leave it zero.
 
 ## What goes in
 

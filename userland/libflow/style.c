@@ -598,8 +598,10 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         s->display = FLOW_DISPLAY_NONE;
         return;
     }
-    // `noscript` is shown: this browser runs no script, so the
-    // `@media (scripting)` rule that hides it does not apply.
+    if (is(n, OS64_HTML_TAG_NOSCRIPT) && c->env->scripting) {
+        s->display = FLOW_DISPLAY_NONE;
+        return;
+    }
 
     switch (n->tag) {
     // §15.3.2 The page, §15.3.3 Flow content.
@@ -3061,6 +3063,10 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         }
         if (!author(c, n, &sp, &ua, parent))
             return NULL;
+        // The scripting-mode noscript rule has user-agent importance;
+        // author display declarations must not reveal its raw fallback text.
+        if (is(n, OS64_HTML_TAG_NOSCRIPT) && c->env->scripting)
+            sp.s.display = FLOW_DISPLAY_NONE;
     }
     finish(c, &sp, parent, up != NULL && up->lays_out_items);
     out->style = sp.s;

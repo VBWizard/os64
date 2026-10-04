@@ -543,6 +543,43 @@ static void field_too_long(void)
     free(w.bytes);
 }
 
+// The finished-document loader must resume script stops before reading the
+// next wire chunk. Neither parser mode grants execution in libway.
+static void scripted_document_load(void)
+{
+    for (int enabled = 0; enabled < 2; enabled++) {
+        fresh();
+        char *reply = malloc(24000);
+        char *body = reply + 512;
+        const char *first = "<!doctype html><noscript><input id=fallback></noscript>"
+                            "<script>var first=1;</script><p>";
+        size_t length = strlen(first);
+        memcpy(body, first, length);
+        memset(body + length, 'x', 18000);
+        length += 18000;
+        const char *last = "</p><script>var second=2;</script><a href=/tail id=tail>tail</a>";
+        memcpy(body + length, last, strlen(last) + 1);
+        length += strlen(last);
+        int header = snprintf(reply, 512, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+                              "Content-Length: %zu\r\n\r\n", length);
+        memmove(reply + header, body, length + 1);
+        script("script.test", reply);
+        way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t leg = way_leg(&session);
+        expect("load scripting: leg defaults off", !leg.scripting, NULL);
+        leg.scripting = enabled != 0;
+        way_page_t page = {0};
+        os64_fetch_status_t why;
+        bool loaded = way_load(&leg, "http://script.test/page", NULL, &page, &why);
+        expect("load scripting: entire multi-chunk document arrives", loaded && page.model &&
+               os64_page_nlinks(page.model) == 1 && why == OS64_FETCH_OK, NULL);
+        expect("load scripting: noscript follows captured parser mode", loaded &&
+               os64_page_ncontrols(page.model) == (enabled ? 0 : 1), NULL);
+        way_page_clear(&page);
+        free(reply);
+    }
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -552,6 +589,7 @@ int main(void)
     snprintf(s_dir, sizeof(s_dir), "%s/cache", root);
     s_cache = way_cache_open(s_dir, 1 << 24);
     s_jar = way_jar_new();
+    scripted_document_load();
     options_left_alone();
     validator_identity();
     restrictive_304();

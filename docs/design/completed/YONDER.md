@@ -55,7 +55,7 @@ person moves around them.
 
 The title bar's Settings action opens yonder's Settings window — the
 shared modeless dialog (`os64/ui_settings.h`), Apply, Save as default and
-Close — with three settings in it: the zoom (below); whether pictures and style sheets are
+Close — with four settings: default zoom; whether pictures and style sheets are
 kept on disk and in how much room (CACHE.md is that one's record: a box,
 a size, a button that empties the cache, and what it holds on the status
 line), and **who yonder says it is**, the
@@ -63,6 +63,16 @@ User-Agent every fetch sends, pages, sheets and pictures alike. Sites
 answer by it (theoldnet serves a browser it does not know as a 1996 one),
 and comparing yonder with another browser means asking as that browser
 asks.
+
+The fourth setting is **Run page scripts**, off by default. Apply changes this
+window; Save as default also writes `scripts = on` or `off` to `yonder.conf`.
+Only `on` enables scripting at startup. Changing the mode cancels queued
+scripts and in-flight navigation, destroys the current runtime, and reloads
+the shown page with the chosen `noscript` parsing policy. A POST reply keeps
+the existing resend confirmation. The status line begins **SCRIPTS ON** while
+the setting is enabled. This is D5b's finished-document inline-script fixture;
+[DOM.md § D5b, as built](../pending/DOM.md#d5b-as-built) records its scope and
+the remaining gates before recommending scripts for ordinary browsing.
 
 - **The presets** (`agent.c`) are yonder's own, Chrome and Firefox on
   Windows, Safari on an iPhone (a lighter page from many sites), Netscape
@@ -537,8 +547,12 @@ change to libpage at once (`os64_page_set_checked`,
 text field's contents are written to libpage (`os64_page_set_text`) before
 anything is sent — the model is what a submission reads. Until then the
 FIELD holds the newer value, so a tick or a choice rewrites only ticks and
-lists from the model; the text fields are rewritten only when the model is
-the truth, as the page arrives and at a reset.
+lists from the model. Text buffers flush before a script task as well as
+activation. Widgets are keyed by native node and retain their addresses,
+focus, caret and selection across unrelated rebuilds. A native value change
+updates the editor; an unchanged projected value preserves intermediate
+edits, including an incomplete numeric value. State-only script changes
+refresh widgets independently of the HTML version.
 
 **Sending.** A button that submits activates its control
 (`OS64_PAGE_ACTIVATE_CONTROL`); Enter in a text field is the standard's
@@ -572,8 +586,9 @@ a reply fetch its address, as wend does (booked).
 `text/*`, and the application types that are text in all but name — JSON
 and `+json` (what an API, and httpbin, answers a form with), JavaScript,
 XML and `+xml`. JSON with no charset is read as UTF-8, its RFC's rule. This
-is what arrives as the PAGE: yonder fetches no script a page names, so a
-page's scripts never reach the glass.
+is what arrives as the PAGE. Named external scripts are not fetched by the
+D5b fixture; enabled inline classic scripts run against a finished HTML
+document on the window thread, one per turn.
 
 **Evidence, as run.** The guest, against a local server that echoes what
 it is sent: a page of every kind of control drawn as widgets at their

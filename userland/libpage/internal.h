@@ -120,6 +120,7 @@ typedef struct {
 } PStrMap;
 
 struct os64_page {
+    size_t references;
     const os64_html_document_t *doc;
     os64_page_options_t opt;
     PArena arena;

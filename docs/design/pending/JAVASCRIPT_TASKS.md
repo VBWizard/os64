@@ -20,7 +20,7 @@ implemented slice in an open PR. Pending rows record work still needed by this
 plan, without assigning a new contributor or claiming work has started. "Partial"
 records completed evidence while named acceptance work remains.
 "Implemented; review pending" records a validated packet that still needs
-independent review.
+independent review. "In progress" records an authorized slice being implemented.
 
 | Work | Status on 2026-10-03 | Evidence and remaining work |
 | --- | --- | --- |
@@ -35,12 +35,12 @@ independent review.
 | D0 DOM design | **Merged** | Reviewed [DOM.md](DOM.md), delivered with [PR #190](https://github.com/VBWizard/os64/pull/190). Design completion is separate from browser scripting implementation. |
 | D1 libhtml mutation core | **Merged** | [PR #190](https://github.com/VBWizard/os64/pull/190), merge `5c7d62ce`. Mutation/lifetime verbs and maintained tests; `parse_fragment` belongs to D2b. |
 | D2a scripting-enabled parsing | **Merged** | [PR #199](https://github.com/VBWizard/os64/pull/199), merge `8016dd43`: stop/resume, the end of the input, abandon, and a tree read and changed between calls; evidence in DOM.md § D2a, as built. |
-| D2b fragment parsing | **In review** | [PR #212](https://github.com/VBWizard/os64/pull/212), `codex/dom-d2b`, stacked on D3 by request: transactional contextual parsing and allocation-free serialization. All 192 fragment fixtures and failure/mutation proof pass; evidence, compatibility boundary and D6 storage handoff in DOM.md § D2b, as built. Chris schedules the reviews. |
-| D3 page rebuild/control state | **In review** | [PR #211](https://github.com/VBWizard/os64/pull/211), `codex/dom-d3`: shared node state, pinned models, STALE gates, script property APIs and transactional rebuilds. Evidence and D5/D6 handoffs in DOM.md § D3, as built; Fable reviews before merge. |
+| D2b fragment parsing | **Merged** | [PR #212](https://github.com/VBWizard/os64/pull/212), merge `dca2fe46`: transactional contextual parsing and allocation-free serialization. All 192 fragment fixtures and failure/mutation proof pass; evidence, compatibility boundary and D6 storage handoff in DOM.md § D2b, as built. |
+| D3 page rebuild/control state | **Merged** | [PR #211](https://github.com/VBWizard/os64/pull/211), merge `3f5fa28a`: shared node state, pinned models, STALE gates, script property APIs and transactional rebuilds. Evidence and D5/D6 handoffs in DOM.md § D3, as built. |
 | D4 parser stream handoff | **Pending** | Yonder parser-thread handoff and responsive streaming; no script execution in this slice. |
-| D5 DOM binding/first page fixture | **Partial; D5a review pending** | [D5a PR #214](https://github.com/VBWizard/os64/pull/214) supplies libdom and state-aware mutation/clone transactions, stacked on D2b; evidence in DOM.md § D5a, as built. D5b's visible Yonder fixture, redraw and navigation acceptance remain pending; D4 is not a prerequisite. |
+| D5 DOM binding/first page fixture | **D5a merged; D5b implemented, awaiting review** | [D5a PR #214](https://github.com/VBWizard/os64/pull/214), merge `72b2e710`, supplies libdom and state-aware mutation/clone transactions; evidence in DOM.md § D5a, as built. DOM.md § D5b, as built records the default-off settings switch and host/guest mutation, widget and queued-navigation proof; D4 is not a prerequisite. |
 | D6 detached-subtree reclamation | **Pending** | Reclaim unheld detached trees and prove bounded long-running churn. |
-| D7 browser event loop | **Pending** | Tasks/checkpoints, timers/events, script order and J4 evidence. |
+| D7 browser event loop | **Pending** | Tasks/checkpoints, timers/events, script order and J4 evidence. Resolve the execution-time default/range and consider a script-timeout Settings control; D5b's one-second fixture deadline does not settle ordinary-browsing policy (DOM.md). |
 
 The DOM slice definitions and detailed acceptance cases belong to
 [DOM.md](DOM.md); this table tracks their place in the overall campaign.
@@ -53,15 +53,14 @@ belong to [JAVASCRIPT.md](JAVASCRIPT.md#delivery-and-validation):
 | J0 reviewed foundation | **Complete** | Pinned QuickJS source/profile, maths selection, dependency inventory and reviewed runtime contract are delivered. |
 | J1 library and runner on os64 | **Complete** | Merged M1/R1/R2/C1, strict target build/link, expected shared dependencies, script execution and exception output in QEMU. Chris's P5 prime-count pipeline adds a hardware smoke test. J1 does not require standard-image installation. |
 | J2 lifecycle and failure acceptance | **Complete; merged** | [PR #200](https://github.com/VBWizard/os64/pull/200), merge `6fda4b79`: existing lifecycle/failure/cancellation/Promise/fatal and upstream evidence is supplemented by 105 guest measurement checks passing on one and eight CPUs. Twelve recursion/native-frame cases retain sampled headroom and permit reuse; two competing runtimes preserve XMM/x87/control state across yield/sleep with a deliberate-disturbance negative control. Six workloads fit the retained 64 MiB/256 KiB/4 MiB/60 s profile, now published by `os64_js_default_limits()` and shared by the runner. Both final boots also pass V1's 375 checks, CLI/default/768 KiB-cap cases and the fatal status; host runner suites pass 196/38 checks. |
-| J3 first scripted Yonder fixture | **Pending** | D0/D1/D2a are merged; D3/D2b/D5a are built with review pending. D5b's visible mutation/rebuild/reference/form/navigation acceptance remains. |
+| J3 first scripted Yonder fixture | **Implemented; awaiting review** | D0/D1/D2a/D2b/D3/D5a are merged. D5b passes the visible mutation/rebuild/reference/form/navigation fixture and default-off Apply/Save switch; see DOM.md § D5b, as built. |
 | J4 browser execution and events | **Pending** | Browser script order, parser mode, timers/events, origins/cookies and their acceptance fixtures remain. D6 reclamation and D7's event loop are separate deliverables. |
 
 Next steps:
 
-1. Review the stacked D3, D2b and D5a packets. Fable reviews the DOM slices;
-   Chris schedules those rounds. J2 has merged, closing the standalone milestone.
-2. D5b supplies the first scripted Yonder fixture without waiting for D4.
-   D4 and D7 remain Fable's work; D6 is available while Opus finishes Yonder
+1. Review D5b/J3: finished-document inline scripts and the default-off settings
+   switch. D3, D2b and D5a have merged; J2 has closed the standalone milestone.
+2. D4 and D7 remain Fable's work; D6 is available while Opus finishes Yonder
    pile 3. Reclamation, browser function-call/checkpoint and audited runtime
    teardown retain their own acceptance before ordinary browsing runs scripts.
 

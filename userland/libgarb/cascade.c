@@ -97,6 +97,8 @@ typedef struct {
 } Slot;
 
 struct garb_cascade {
+    const os64_html_document_t *doc;
+    os64_html_pin_t pin;
     garb_parsed_t self;         // the cascade's own arena, in a parse's shape
     garb_env_t env;
     os64_html_quirks_t quirks;
@@ -977,6 +979,12 @@ garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
         os64_free(c);
         return NULL;
     }
+    c->doc = doc;
+    c->pin = os64_html_pin(doc);
+    if (c->pin == 0) {
+        garb_cascade_free(c);
+        return NULL;
+    }
     c->env = env;
     c->quirks = doc->quirks;
     c->universal = -1;
@@ -1095,6 +1103,8 @@ void garb_cascade_free(garb_cascade_t *c)
         garb_free(&c->attrs[i]);
     os64_free(c->slots);
     os64_arena_destroy(c->self.arena);
+    if (c->pin != 0)
+        os64_html_unpin(c->doc, c->pin);
     os64_free(c);
 }
 
