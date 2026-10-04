@@ -42,6 +42,10 @@ typedef struct {
     // (page coordinates, already cut to the viewport) at its own `alpha`,
     // `rect.w` a row, alpha 0 leaving the pixel as it is.
     void (*mask)(void *ctx, os64_gui_rect_t rect, const uint8_t *alpha, uint32_t colour);
+    // A picture the painter made — a GRADIENT's pixels: `rect` (page
+    // coordinates, already cut to the viewport) of 0xAARRGGBB, straight
+    // alpha, `rect.w` a row, each laid over what is there.
+    void (*pixels)(void *ctx, os64_gui_rect_t rect, const uint32_t *argb);
 } yonder_verbs_t;
 
 // Whose background is the CANVAS's (CSS 2.1 § 14.2): the root's when it has

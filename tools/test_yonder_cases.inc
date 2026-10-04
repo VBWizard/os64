@@ -293,6 +293,141 @@ static void paint_cases(void)
                     "text \"Hi\" 9 32 #ff0000\n"
                     "text \"Hi\" 8 30 #101010\n");
 
+    // Gradients, each pixel worked by hand from its middle (PILE3.md §
+    // Gradients). To the right across 4px: t = 1/8, 3/8, 5/8, 7/8 of black
+    // to white.
+    paint_page_case("a linear gradient, pixel by pixel",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: linear-gradient(to right, #000000, #ffffff) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff202020 ff606060 ff9f9f9f ffdfdfdf\n");
+    // Hard stops, repeated: red for 1px, blue for 1px, again.
+    paint_page_case("a repeating gradient with hard stops",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: repeating-linear-gradient(to right, #ff0000 0 1px,"
+                    " #0000ff 1px 2px) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ffff0000 ff0000ff ffff0000 ff0000ff\n");
+    // A circle to its closest side, 2px, in a 4px square: the inner four
+    // pixels sqrt(0.5)/2 out (red a5, blue 5a), the middles of the edges
+    // sqrt(2.5)/2 (35, ca), the corners past the end — the last stop's.
+    paint_page_case("a radial gradient, pixel by pixel",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 4px;"
+                    " background: radial-gradient(circle closest-side, #ff0000, #0000ff) }"
+                    "</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 4 ff0000ff ff3500ca ff3500ca ff0000ff"
+                    " ff3500ca ffa5005a ffa5005a ff3500ca ff3500ca ffa5005a ffa5005a ff3500ca"
+                    " ff0000ff ff3500ca ff3500ca ff0000ff\n");
+    // The body's gradient is the canvas's, its tile the root's box: a page
+    // 4px tall repeats it every 4px down the whole view, as the browsers
+    // do — the first pixel 1/8 down it, the last 7/8.
+    paint_page_case("a body's gradient is the canvas's, tiled by the root",
+                    "<!doctype html><style>html { height: 4px } body { margin: 0;"
+                    " background: linear-gradient(#ff0000, #0000ff) }</style>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 200 100 ffdf0020 ff2000df\n");
+
+    // A colour stop left out is spread between the COLOUR stops round it,
+    // not from a hint (§ 3.5.3): white sits at 50%, so black to white is
+    // bent by the hint at 10% (a fifth of its stretch: f^(ln 0.5 / ln 0.2))
+    // and white to black is straight.
+    paint_page_case("a hint does not move the stops left out",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: linear-gradient(to right, #000000, 10%, #ffffff,"
+                    " #000000 100%) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff8c8c8c ffe1e1e1 ffbfbfbf ff404040\n");
+    // A repeating gradient with nothing to repeat over is one colour: the
+    // average of its stops spread from 0 to 1 — red and blue halved.
+    paint_page_case("a repeating gradient of no length is its average",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: repeating-linear-gradient(to right, #ff0000 0,"
+                    " #0000ff 0) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff800080 ff800080 ff800080 ff800080\n");
+    // An ellipse of no width is a gradient across x mirrored about the
+    // centre (§ 3.2.3): 1.5px and 0.5px from it, of 2px to blue.
+    paint_page_case("an ellipse of no width still paints",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: radial-gradient(0 10px, #ff0000, #0000ff 2px) }</style>"
+                    "<div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff4000bf ffbf0040 ffbf0040 ff4000bf\n");
+    // A calc() radius that works out negative is 0 where it is used (Values
+    // 4 § 10.12), as Chrome computes it: an ellipse 0 wide is the mirrored
+    // gradient above, pixel for pixel.
+    paint_page_case("a negative calc() radius is 0",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: radial-gradient(calc(1px - 2px) 10px, #ff0000, #0000ff 2px) }"
+                    "</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff4000bf ffbf0040 ffbf0040 ff4000bf\n");
+    // A repeat shorter than a pixel is its average (§ 3.6), each pair of
+    // stops weighted by its share of the length: red to white is a tenth
+    // of it, white to blue nine tenths (both exact in libflow's 1/64 px),
+    // so (r, g, b) = (.55, .5, .95).
+    paint_page_case("a repeat shorter than a pixel is its weighted average",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: repeating-linear-gradient(to right, #ff0000 0, #ffffff .0625px,"
+                    " #0000ff .625px) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff8c80f2 ff8c80f2 ff8c80f2 ff8c80f2\n");
+    // A repeating ellipse of no height is the same weighted average.
+    paint_page_case("a repeating ellipse of no height is its weighted average",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: repeating-radial-gradient(10px 0, #ff0000 0, #ffffff 1px,"
+                    " #0000ff 10px) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff8c80f2 ff8c80f2 ff8c80f2 ff8c80f2\n");
+    // One of no height is the last stop's colour everywhere.
+    paint_page_case("an ellipse of no height is its last colour",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: radial-gradient(10px 0, #ff0000, #0000ff) }</style>"
+                    "<div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff0000ff ff0000ff ff0000ff ff0000ff\n");
+    // currentColor is the colour of the box it is drawn for: a gradient
+    // taken by `inherit`, and an inherited text shadow, are the child's.
+    paint_page_case("an inherited gradient's currentColor is the child's",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px;"
+                    " color: #00ff00; background-image: linear-gradient(currentColor,"
+                    " currentColor) } p { margin: 0; height: 1px; color: #0000ff;"
+                    " background-image: inherit }</style><div><p></p></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff00ff00 ff00ff00 ff00ff00 ff00ff00\n"
+                    "pixels 0 0 4 1 ff0000ff ff0000ff ff0000ff ff0000ff\n");
+    paint_page_case("an inherited text shadow's currentColor is the child's",
+                    "<!doctype html><style>div { color: #ff0000;"
+                    " text-shadow: 1px 2px currentColor } p { color: #0000ff }</style>"
+                    "<div><p>Hi", 100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "text \"Hi\" 9 32 #0000ff\n"
+                    "text \"Hi\" 8 30 #0000ff\n");
+
+    // An inline element's gradient is painted on its piece of the line,
+    // the piece its tile: one solid-colour gradient covers the piece
+    // exactly, under the text.
+    paint_page_case("an inline gradient paints its piece",
+                    "<!doctype html><style>body { margin: 0 } span {"
+                    " background: linear-gradient(#ff0000, #ff0000) }</style><span>Hi</span>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "pixels 0 2 12 16 ffff0000 ffff0000\n"
+                    "text \"Hi\" 0 14 #101010\n");
+
     // Groups nest, each laid over what was under it when it opened, and a
     // group none of which shows opens empty: the far one at 520, cut to a
     // view that ends at 100, has no height.

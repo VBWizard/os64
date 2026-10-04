@@ -2705,6 +2705,18 @@ static void glass_mask(void *ctx, os64_gui_rect_t r, const uint8_t *alpha, uint3
     os64_free(row);
 }
 
+// A gradient's pixels, blended where they meet what is being painted.
+static void glass_pixels(void *ctx, os64_gui_rect_t r, const uint32_t *argb)
+{
+    const Glass *gl = ctx;
+    os64_gui_rect_t at = on_glass(gl, r);
+    if (at.w <= 0 || at.h <= 0)
+        return;
+    int32_t sx = at.x - (r.x + gl->dx), sy = at.y - (r.y + gl->dy);
+    os64_draw_blend(gl->surf, at.x, at.y, argb + (size_t)sy * (size_t)r.w + (size_t)sx,
+                    (uint32_t)at.w, (uint32_t)at.h, (uint32_t)r.w);
+}
+
 static void glass_group_open(void *ctx, os64_gui_rect_t bounds)
 {
     const Glass *gl = ctx;
@@ -2965,7 +2977,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     }
     yonder_verbs_t v = {&gl,           glass_fill,       glass_text,       glass_image,
                         glass_control, glass_backdrop,   glass_group_open, glass_group_close,
-                        glass_mask};
+                        glass_mask,    glass_pixels};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, &v);
     box_bars(&gl, view);

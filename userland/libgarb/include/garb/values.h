@@ -84,7 +84,17 @@ typedef enum {
     GARB_V_URL,             // `text`, as written: resolved against the SHEET by whoever fetches
     GARB_V_STRING,          // `text`: a family name, a list marker
     GARB_V_CALC,            // `calc`: a length-percentage (or number) to work out at compute time
-    GARB_V_IMAGE,           // an image this library does not draw yet (a gradient): `text` is its function
+    // An image named by its function (`text`). A linear or radial gradient
+    // carries itself in `items` (comma): items[0] its geometry, then its
+    // stops. Linear: a NUMBER, the angle in degrees in [0, 360) (taken round
+    // the turn in its own unit, so no unit overflows it), or a KEYWORD, "to top",
+    // "to top right" and the rest. Radial: a KEYWORD "circle" or "ellipse"
+    // whose items are its size — an extent KEYWORD, or a length-percentage
+    // and a second one or "auto" — and its centre, x then y. A stop: a COLOR
+    // whose items are its one position, or none (a stop written with two is
+    // two stops); a hint: a length-percentage alone. Others (conic,
+    // image-set) carry nothing.
+    GARB_V_IMAGE,
     // A grid track list (Grid 2 § 7.2): its tracks in `items` — each a
     // LENGTH (in GARB_U_FR for a flexible one), a PERCENTAGE, a CALC, a
     // KEYWORD (auto, min-content, max-content) or a FUNCTION. Its line

@@ -281,6 +281,41 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, "/");
         length(b, s->background_position[1]);
     }
+    // A gradient: its kind, its geometry, then each stop as colour@position
+    // (a hint as @position alone).
+    const flow_gradient_t *g = s->background_gradient;
+    if (g != NULL) {
+        static const char *const kExtent[] = {"farthest-corner", "closest-side", "farthest-side",
+                                              "closest-corner", "size"};
+        putf(b, " gradient=%s%s:", g->repeating ? "repeating-" : "",
+             g->kind == FLOW_GRADIENT_LINEAR ? "linear" : "radial");
+        if (g->kind == FLOW_GRADIENT_LINEAR && (g->to_x != 0 || g->to_y != 0)) {
+            putf(b, "to %d %d", (int)g->to_x, (int)g->to_y);
+        } else if (g->kind == FLOW_GRADIENT_LINEAR) {
+            putf(b, "%d", (int)g->angle);
+        } else {
+            putf(b, "%s %s ", g->circle ? "circle" : "ellipse", kExtent[g->extent]);
+            if (g->extent == FLOW_EXTENT_SIZE) {
+                length(b, g->radii[0]);
+                puts_(b, "/");
+                length(b, g->radii[1]);
+                puts_(b, " ");
+            }
+            puts_(b, "at ");
+            length(b, g->centre[0]);
+            puts_(b, "/");
+            length(b, g->centre[1]);
+        }
+        for (int32_t i = 0; i < g->nstops; i++) {
+            puts_(b, i == 0 ? ":" : ",");
+            if (g->stops[i].current)
+                puts_(b, "currentColor");
+            else if (!g->stops[i].hint)
+                color(b, env, g->stops[i].colour);
+            puts_(b, "@");
+            length(b, g->stops[i].at);
+        }
+    }
     bool margins = false, paddings = false, borders = false;
     for (int i = 0; i < 4; i++) {
         margins |= !is_zero(s->margin[i]);

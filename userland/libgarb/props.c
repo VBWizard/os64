@@ -999,9 +999,30 @@ static bool linear_prelude(const Group *g)
     return angle(&c) && vc_done(&c);
 }
 
-// [<ending-shape> || <size>]? [at <position>]?, one of them at least. The
-// size's finer rules (a circle takes one length and no percentage) are not
-// checked: what they refuse is rare, and nothing draws it yet.
+static bool lp_val(Sets *s, VCur *c, garb_val_t *out);
+
+// Whether a calc() tree has a percentage in it anywhere: its type is then
+// a length-percentage, never a plain length.
+static bool calc_percent(const garb_calc_t *c)
+{
+    if (c == NULL)
+        return false;
+    if (c->op == GARB_CALC_LEAF)
+        return c->leaf.kind == GARB_V_PERCENTAGE;
+    for (int32_t k = 0; k < c->nargs; k++)
+        if (calc_percent(c->args[k]))
+            return true;
+    return false;
+}
+
+// [<ending-shape> || <size>]? [at <position>]?, one of them at least. A
+// size written as lengths is one length for a circle — never a percentage,
+// written or inside a calc() — and two length-percentages for an ellipse
+// (Images 3 § 3.2.1): anything else is drawn as SOME gradient, so it has
+// to be refused here or the declaration it is in would not fall back. A
+// negative LITERAL is refused too; a calc() that works out negative is not
+// — Values 4 § 10.12 range-checks a calculation where it is used, so the
+// painter takes it as 0, as Chrome computes it.
 static bool radial_prelude(Sets *s, const Group *g)
 {
     VCur c = {g->v, g->n, 0};
@@ -1009,17 +1030,30 @@ static bool radial_prelude(Sets *s, const Group *g)
     static const char *const kExtent[] = {"closest-side", "farthest-side", "closest-corner",
                                           "farthest-corner", NULL};
     static const char *const kAt[] = {"at", NULL};
-    bool shape = false, size = false, any = false;
+    const char *shape = NULL;
+    bool size = false, any = false, percent = false;
+    int lengths = 0;
     for (int k = 0; k < 2; k++) {
-        if (!shape && vc_keyword(&c, kShape) != NULL) {
-            shape = any = true;
+        garb_val_t r;
+        if (shape == NULL && (shape = vc_keyword(&c, kShape)) != NULL) {
+            any = true;
         } else if (!size && vc_keyword(&c, kExtent) != NULL) {
             size = any = true;
-        } else if (!size && length_percentage(s, &c)) {
-            (void)length_percentage(s, &c);     // an ellipse's second radius
+        } else if (!size && lp_val(s, &c, &r)) {
+            for (lengths = 1; ; lengths++) {
+                if (r.kind != GARB_V_CALC && r.number < 0)
+                    return false;
+                percent |= r.kind == GARB_V_PERCENTAGE ||
+                           (r.kind == GARB_V_CALC && calc_percent(r.calc));
+                if (lengths == 2 || !lp_val(s, &c, &r))
+                    break;
+            }
             size = any = true;
         }
     }
+    bool circle = shape != NULL ? os64_streq(shape, "circle") : lengths == 1;
+    if ((lengths == 1 && (percent || !circle)) || (lengths == 2 && circle))
+        return false;
     if (vc_keyword(&c, kAt) != NULL) {
         Sets strict = *s;
         strict.quirks = false;
@@ -1053,20 +1087,211 @@ static bool gradient_ok(Sets *s, const garb_value_t *f, bool radial)
     return stops(s, g, n);
 }
 
-// An <image>: a url, or a gradient the grammar above admits, or one this
-// library takes by name (vc_image).
+// ── A gradient kept (values.h's GARB_V_IMAGE) ──
+
+// One length-percentage, read.
+static bool lp_val(Sets *s, VCur *c, garb_val_t *out)
+{
+    return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, out);
+}
+
+static garb_val_t number_val(double n)
+{
+    garb_val_t v;
+    os64_memset(&v, 0, sizeof(v));
+    v.kind = GARB_V_NUMBER;
+    v.number = n;
+    return v;
+}
+
+// The stops of groups [0, n), each a COLOR with its position or a hint,
+// appended to `out` from `*k`; a stop written with two positions is two.
+// The grammar is already checked.
+static bool gradient_stops(Sets *s, const Group *g, int32_t n, garb_val_t *out, int32_t *k)
+{
+    for (int32_t i = 0; i < n; i++) {
+        VCur c = {g[i].v, g[i].n, 0};
+        garb_val_t colour, pos;
+        if (!vc_color(&c, &colour)) {
+            if (!lp_val(s, &c, &out[*k]))
+                return false;
+            (*k)++;
+            continue;
+        }
+        int positions = 0;
+        while (!vc_done(&c) && lp_val(s, &c, &pos)) {
+            out[*k] = colour;
+            out[*k].items = keep(s, &pos, 1);
+            out[*k].nitems = 1;
+            if (out[*k].items == NULL)
+                return false;
+            (*k)++;
+            positions++;
+        }
+        if (positions == 0)
+            out[(*k)++] = colour;
+    }
+    return true;
+}
+
+// `v` taken into [0, whole), exactly, for every finite `v`: each step
+// subtracts the largest whole * 2^k not above what is left, and a
+// subtraction of two doubles within a factor of two of each other is exact
+// (Sterbenz), so this is fmod's answer without libmath. NaN and infinity
+// have no remainder and are 0.
+static double round_the_turn(double v, double whole)
+{
+    if (!(v - v == 0))
+        return 0;
+    double m = v < 0 ? -v : v;
+    while (m >= whole) {
+        double s = whole;
+        while (s <= m / 2)
+            s *= 2;
+        m -= s;
+    }
+    double r = v < 0 && m > 0 ? whole - m : m;
+    return r < whole ? r : 0;               // -1e-20 rounds to a whole turn
+}
+
+// The angle a linear gradient's prelude names, in degrees in [0, 360), or
+// its `to`.
+static garb_val_t linear_geometry(const Group *g, bool have)
+{
+    static const char *const kTo[] = {"to", NULL};
+    static const char *const kX[] = {"left", "right", NULL};
+    static const char *const kY[] = {"top", "bottom", NULL};
+    static const char *const kNames[3][3] = {
+        {"to top left", "to top", "to top right"},
+        {"to left", NULL, "to right"},
+        {"to bottom left", "to bottom", "to bottom right"},
+    };
+    if (!have)
+        return number_val(180);             // the initial direction: to bottom
+    VCur c = {g->v, g->n, 0};
+    if (vc_keyword(&c, kTo) != NULL) {
+        int x = 1, y = 1;
+        for (int k = 0; k < 2 && !vc_done(&c); k++) {
+            const char *w = vc_keyword(&c, kX);
+            if (w != NULL)
+                x = os64_streq(w, "left") ? 0 : 2;
+            else if ((w = vc_keyword(&c, kY)) != NULL)
+                y = os64_streq(w, "top") ? 0 : 2;
+        }
+        return kw(kNames[y][x]);
+    }
+    const garb_value_t *t = vc_peek(&c);
+    double n = t->number;
+    if (t->kind == GARB_DIMENSION) {
+        // Taken round its own unit's turn FIRST: `1e307rad` in degrees is
+        // past a double, and a direction is the remainder, not the size.
+        bool grad = ieq(t->unit, t->unit_len, "grad"), rad = ieq(t->unit, t->unit_len, "rad");
+        bool turn = ieq(t->unit, t->unit_len, "turn");
+        double whole = grad ? 400 : rad ? 6.283185307179586 : turn ? 1 : 360;
+        n = round_the_turn(n, whole) * (360 / whole);
+    }
+    return number_val(n);
+}
+
+// A radial gradient's prelude, or its initial one: an ellipse to the
+// farthest corner, at the centre. A shape left out is a circle when one
+// length is its size, else an ellipse (Images 3 § 3.2).
+static bool radial_geometry(Sets *s, const Group *g, bool have, garb_val_t *out)
+{
+    static const char *const kShape[] = {"circle", "ellipse", NULL};
+    static const char *const kExtent[] = {"closest-side", "farthest-side", "closest-corner",
+                                          "farthest-corner", NULL};
+    static const char *const kAt[] = {"at", NULL};
+    garb_val_t parts[4];
+    parts[0] = kw("farthest-corner");
+    parts[1] = kw("auto");
+    garb_val_t half;
+    os64_memset(&half, 0, sizeof(half));
+    half.kind = GARB_V_PERCENTAGE;
+    half.number = 50;
+    parts[2] = parts[3] = half;
+    const char *shape = NULL;
+    int lengths = 0;
+    if (have) {
+        VCur c = {g->v, g->n, 0};
+        for (int k = 0; k < 2 && !vc_done(&c); k++) {
+            const char *w;
+            garb_val_t a, b;
+            if (shape == NULL && (w = vc_keyword(&c, kShape)) != NULL) {
+                shape = w;
+            } else if ((w = vc_keyword(&c, kExtent)) != NULL) {
+                parts[0] = kw(w);
+            } else if (lp_val(s, &c, &a)) {
+                parts[0] = a;
+                lengths = 1;
+                if (lp_val(s, &c, &b)) {
+                    parts[1] = b;
+                    lengths = 2;
+                }
+            }
+        }
+        if (vc_keyword(&c, kAt) != NULL) {
+            Sets strict = *s;
+            strict.quirks = false;
+            bool ok = position(&strict, &c, &parts[2], &parts[3]);
+            s->a.short_of_memory |= strict.a.short_of_memory;
+            if (!ok)
+                return false;
+        }
+    }
+    *out = kw(shape != NULL ? shape : lengths == 1 ? "circle" : "ellipse");
+    out->items = keep(s, parts, 4);
+    out->nitems = 4;
+    return out->items != NULL;
+}
+
+// The gradient `f` (its grammar checked) as values.h describes it, into
+// `out`, which vc_image has made its IMAGE.
+static bool gradient_value(Sets *s, const garb_value_t *f, bool radial, garb_val_t *out)
+{
+    Group g[64];
+    int32_t n = 0, from = 0;
+    for (int32_t i = 0; i <= f->nchildren; i++)
+        if (i == f->nchildren || f->children[i].kind == GARB_COMMA) {
+            g[n++] = (Group){f->children + from, i - from};
+            from = i + 1;
+        }
+    // The prelude by gradient_ok's own test, which asks it first: a unitless
+    // 0 is an angle there, though it would read as a hint too.
+    bool prelude = n > 0 && (radial ? radial_prelude(s, &g[0]) : linear_prelude(&g[0]));
+    garb_val_t items[1 + 2 * 64];
+    int32_t k = 1;
+    if (radial) {
+        if (!radial_geometry(s, &g[0], prelude, &items[0]))
+            return false;
+    } else {
+        items[0] = linear_geometry(&g[0], prelude);
+    }
+    if (!gradient_stops(s, g + prelude, n - prelude, items, &k))
+        return false;
+    out->items = keep(s, items, k);
+    out->nitems = k;
+    out->comma = true;
+    return out->items != NULL;
+}
+
+// An <image>: a url, or a gradient the grammar above admits, kept whole,
+// or one this library takes by name (vc_image).
 static bool bg_image(Sets *s, VCur *c, garb_val_t *out)
 {
     const garb_value_t *t = vc_peek(c);
+    bool linear = false, radial = false;
     if (t != NULL && t->kind == GARB_FUNCTION) {
-        bool linear = ieq(t->text, t->len, "linear-gradient") ||
-                      ieq(t->text, t->len, "repeating-linear-gradient");
-        bool radial = ieq(t->text, t->len, "radial-gradient") ||
-                      ieq(t->text, t->len, "repeating-radial-gradient");
+        linear = ieq(t->text, t->len, "linear-gradient") ||
+                 ieq(t->text, t->len, "repeating-linear-gradient");
+        radial = ieq(t->text, t->len, "radial-gradient") ||
+                 ieq(t->text, t->len, "repeating-radial-gradient");
         if ((linear || radial) && !gradient_ok(s, t, radial))
             return false;
     }
-    return vc_image(c, out);
+    if (!vc_image(c, out))
+        return false;
+    return !(linear || radial) || gradient_value(s, t, radial, out);
 }
 
 static bool repeat(VCur *c, garb_val_t *out)
@@ -2418,6 +2643,13 @@ static void calc(Out *o, const garb_calc_t *c, At at)
 
 static void val(Out *o, const garb_val_t *v)
 {
+    // An image is written by its function's name alone, whatever a gradient
+    // carries of itself.
+    if (v->kind == GARB_V_IMAGE) {
+        put_n(o, v->text, v->len);
+        put(o, "(...)");
+        return;
+    }
     if (v->kind == GARB_V_FUNCTION && os64_streq(v->keyword, "span")) {
         put(o, "span ");            // a keyword and its argument, not a call
         val(o, &v->items[0]);

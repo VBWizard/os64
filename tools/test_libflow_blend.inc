@@ -144,3 +144,100 @@ static void radius_cases(void)
         sheeted_close(&q);
     }
 }
+
+// Gradients (PILE3.md § Gradients): what libgarb kept, read into flow's.
+// The initial direction is down, 180 degrees; `to top right` is a corner,
+// whose angle the box's shape decides; 0.25turn is 90 degrees. A stop
+// written with two positions is two stops; a hint has no colour; a stop
+// with none is auto. A radial's initial is an ellipse to the farthest
+// corner at the centre; a circle given one length keeps it for both
+// radii. currentColor in a stop is the element's colour.
+static void gradient_style_cases(void)
+{
+    cascade_case("gradients: what a page wrote, read", 400,
+        "<!doctype html><style>"
+        ".a{background-image:linear-gradient(red,blue)}"
+        ".b{background-image:linear-gradient(to top right,red 10%,30%,blue 2px 4px)}"
+        ".c{background-image:repeating-radial-gradient(circle 20px at 10px 50%,red,blue)}"
+        ".d{color:green;background-image:linear-gradient(0.25turn,red,currentColor)}"
+        ".e{background:radial-gradient(red,blue)}"
+        "</style><div class=a></div><div class=b></div><div class=c></div>"
+        "<div class=d></div><div class=e></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=linear:180000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:to 1 -1:#ff0000@10%,@30%,#0000ff@2,#0000ff@4\n"
+        "    div block gradient=repeating-radial:circle size 20/20 at 10/50%:"
+        "#ff0000@auto,#0000ff@auto\n"
+        "    div block color=#008000 gradient=linear:90000:#ff0000@auto,currentColor@auto\n"
+        "    div block gradient=radial:ellipse farthest-corner at 50%/50%:"
+        "#ff0000@auto,#0000ff@auto\n");
+    // An angle is taken round the circle before it is scaled: 1e20 degrees
+    // is fmod's 280, not whatever an overflowed integer makes of it.
+    cascade_case("gradients: an angle of any size", 400,
+        "<!doctype html><style>"
+        ".a{background-image:linear-gradient(1e20deg,red,blue)}"
+        ".b{background-image:linear-gradient(-90deg,red,blue)}"
+        ".c{background-image:linear-gradient(720.5deg,red,blue)}"
+        "</style><div class=a></div><div class=b></div><div class=c></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=linear:280000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:270000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:500:#ff0000@auto,#0000ff@auto\n");
+    // Past 1e300 too, to the top of a double's range. The remainders are
+    // fmod's of the double libgarb reads, which is within a few units in
+    // the last place of the text (tokenize.c, BROWSER_DEBTS.md):
+    // 1.0000000000000002e301 reads as 1.0000000000000008e301 (48 degrees),
+    // 1e308 as 1.0000000000000006e308 (320).
+    cascade_case("gradients: every finite angle", 400,
+        "<!doctype html><style>"
+        ".d{background-image:linear-gradient(1.0000000000000002e301deg,red,blue)}"
+        ".e{background-image:linear-gradient(-1.0000000000000002e301deg,red,blue)}"
+        ".f{background-image:linear-gradient(1e308deg,red,blue)}"
+        "</style><div class=d></div><div class=e></div><div class=f></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=linear:48000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:312000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:320000:#ff0000@auto,#0000ff@auto\n");
+    // Every unit is taken round its own turn before it becomes degrees, so
+    // none overflows on the way: 1e307rad (libgarb reads 1.0000000000000005e307)
+    // is fmod's remainder by the double nearest 2 pi, as degrees.
+    cascade_case("gradients: an angle in any unit", 400,
+        "<!doctype html><style>"
+        ".g{background-image:linear-gradient(1e307rad,red,blue)}"
+        ".h{background-image:linear-gradient(-1e307rad,red,blue)}"
+        ".i{background-image:linear-gradient(2.5turn,red,blue)}"
+        ".j{background-image:linear-gradient(-0.25turn,red,blue)}"
+        ".k{background-image:linear-gradient(500grad,red,blue)}"
+        "</style><div class=g></div><div class=h></div><div class=i></div>"
+        "<div class=j></div><div class=k></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=linear:167463:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:192537:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:180000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:270000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:90000:#ff0000@auto,#0000ff@auto\n");
+    // currentColor is the colour of the element that USES it (CSS Color 4
+    // § 4.4): a background or border colour taken by `inherit` is the
+    // child's colour, and one written before `color` in the same rule is
+    // the colour the rule ends with.
+    cascade_case("currentColor resolves where it is used", 400,
+        "<!doctype html><style>"
+        ".p{color:#008000;background-color:currentColor;border:1px solid}"
+        ".c{color:#0000ff;background-color:inherit;border:1px solid;border-color:inherit}"
+        ".d{background-color:currentColor;color:#ff0000}"
+        "</style><div class=p><div class=c></div></div><div class=d></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block color=#008000 bg=#008000 border=1:solid:#008000 holds-block\n"
+        "      div block color=#0000ff bg=#0000ff border=1:solid:#0000ff\n"
+        "    div block color=#ff0000 bg=#ff0000\n");
+}

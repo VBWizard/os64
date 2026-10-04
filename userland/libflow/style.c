@@ -298,6 +298,7 @@ static void background(Spec *sp, uint32_t rgb)
 {
     sp->s.has_background = true;
     sp->s.background = rgb;
+    sp->s.current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
 }
 
 // ── The initial style, and inheritance ──────────────────────────────────
@@ -1711,11 +1712,14 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_BACKGROUND_COLOR:
         d->has_background = s->has_background;
         d->background = s->background;
+        d->current_colours = (uint8_t)((d->current_colours & ~FLOW_CURRENT_BACKGROUND) |
+                                       (s->current_colours & FLOW_CURRENT_BACKGROUND));
         break;
     case GARB_BACKGROUND_IMAGE:
         d->background_image = s->background_image;
         d->background_image_len = s->background_image_len;
         d->background_sheet = s->background_sheet;
+        d->background_gradient = s->background_gradient;
         break;
     case GARB_BACKGROUND_REPEAT: d->background_repeat = s->background_repeat; break;
     case GARB_BACKGROUND_POSITION_X: d->background_position[0] = s->background_position[0]; break;
@@ -1893,7 +1897,9 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
         out->padding[i] = len_of(parent->padding[i]);
         out->inset[i] = len_of(parent->inset[i]);
         out->border_px[i] = parent->border_width[i];
-        out->border_color_set[i] = true;
+        // currentColor stays currentColor: finish resolves it against the
+        // child's own colour.
+        out->border_color_set[i] = !(parent->current_colours & FLOW_CURRENT_BORDER(i));
         out->radius[i][0] = len_of(parent->radius[i][0]);
         out->radius[i][1] = len_of(parent->radius[i][1]);
     }
@@ -2110,10 +2116,110 @@ static GridRead author_line(Author *a, const garb_val_t *v, flow_grid_line_t *ou
 }
 
 // One winner that is not a CSS-wide keyword.
+// A length-percentage as flow's, at the element's font size; `unset` for
+// what will not read.
+static flow_length_t author_lp(const Author *a, const garb_val_t *v, flow_length_t unset)
+{
+    Len l;
+    return author_len(a, v, false, &l) ? resolve(l, a->font, unset) : unset;
+}
+
+// An angle in degrees as thousandths in [0, 360000). libgarb hands it
+// already taken round the turn (values.h: in [0, 360), reduced in its own
+// unit so no unit overflows it); a value outside that would overflow the
+// narrowing, and is 0 rather than a guess.
+static int32_t angle_thousandths(double deg)
+{
+    if (!(deg >= 0 && deg < 360))
+        return 0;
+    int64_t t = (int64_t)(deg * 1000 + 0.5);
+    return (int32_t)(t >= 360000 ? t - 360000 : t);
+}
+
+// libgarb's gradient (values.h's GARB_V_IMAGE: its geometry, then its
+// stops) as flow's, in the style's arena; a currentColor stop is marked
+// `current`, for the box it is drawn on to resolve. False only when memory
+// runs out.
+static bool author_gradient(const Author *a, const flow_style_t *s, const garb_val_t *v,
+                            const flow_gradient_t **out)
+{
+    static const flow_length_t kUnwritten = {FLOW_LENGTH_AUTO, 0, 0};
+    static const flow_length_t kHalf = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    flow_gradient_t *g = f_arena_alloc(&a->c->out->arena, sizeof(*g));
+    flow_gradient_stop_t *stops =
+        f_arena_alloc(&a->c->out->arena, (size_t)v->nitems * sizeof(*stops));
+    if (g == NULL || stops == NULL)
+        return false;
+    os64_memset(g, 0, sizeof(*g));
+    const char *name = v->text;             // one of libgarb's own names
+    g->repeating = name != NULL && (os64_streq(name, "repeating-linear-gradient") ||
+                                    os64_streq(name, "repeating-radial-gradient"));
+    const garb_val_t *geo = &v->items[0];
+    if (geo->kind == GARB_V_NUMBER) {
+        g->kind = FLOW_GRADIENT_LINEAR;
+        g->angle = angle_thousandths(geo->number);
+    } else if (geo->kind == GARB_V_KEYWORD && geo->nitems == 0) {
+        // "to top right" and the rest, libgarb's eight names: the side or
+        // corner each points toward.
+        static const struct { const char *name; int8_t x, y; } kTo[] = {
+            {"to top", 0, -1},          {"to right", 1, 0},         {"to bottom", 0, 1},
+            {"to left", -1, 0},         {"to top left", -1, -1},    {"to top right", 1, -1},
+            {"to bottom left", -1, 1},  {"to bottom right", 1, 1},
+        };
+        g->kind = FLOW_GRADIENT_LINEAR;
+        for (size_t k = 0; k < F_ARRAY(kTo); k++)
+            if (word(geo, kTo[k].name)) {
+                g->to_x = kTo[k].x;
+                g->to_y = kTo[k].y;
+            }
+    } else {
+        g->kind = FLOW_GRADIENT_RADIAL;
+        g->circle = word(geo, "circle");
+        g->extent = FLOW_EXTENT_FARTHEST_CORNER;
+        g->radii[0] = g->radii[1] = kUnwritten;
+        g->centre[0] = g->centre[1] = kHalf;
+        if (geo->nitems == 4) {
+            static const char *const kExtents[] = {"farthest-corner", "closest-side",
+                                                   "farthest-side", "closest-corner"};
+            int32_t e = pick(&geo->items[0], kExtents, F_ARRAY(kExtents));
+            if (e >= 0) {
+                g->extent = (flow_extent_t)e;
+            } else {
+                g->extent = FLOW_EXTENT_SIZE;
+                g->radii[0] = author_lp(a, &geo->items[0], kUnwritten);
+                g->radii[1] = word(&geo->items[1], "auto") ? g->radii[0]
+                                                            : author_lp(a, &geo->items[1], kUnwritten);
+            }
+            g->centre[0] = author_lp(a, &geo->items[2], kHalf);
+            g->centre[1] = author_lp(a, &geo->items[3], kHalf);
+        }
+    }
+    int32_t n = 0;
+    for (int32_t i = 1; i < v->nitems; i++) {
+        const garb_val_t *st = &v->items[i];
+        flow_gradient_stop_t *o = &stops[n++];
+        o->at = kUnwritten;
+        if (st->kind != GARB_V_COLOR) {
+            o->hint = true;
+            o->at = author_lp(a, st, kUnwritten);
+            continue;
+        }
+        o->current = st->color.current;
+        o->colour = st->color.current ? s->color : colour_of(st->color);
+        if (st->nitems > 0)
+            o->at = author_lp(a, &st->items[0], kUnwritten);
+    }
+    g->stops = stops;
+    g->nstops = n;
+    *out = g;
+    return true;
+}
+
 // `none`, or libgarb's shadows (G_SHADOW): each `inset` first when it is
 // there, four lengths and a colour. Lengths in pixels, at the element's
-// own font size, which is known by now; currentColor is the element's
-// colour, known by now too. False only when memory runs out.
+// own font size, which is known by now; a currentColor shadow is marked
+// `current`, for the box it is drawn for to resolve. False only when
+// memory runs out.
 static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v, bool box)
 {
     const flow_shadow_t **list = box ? &s->box_shadows : &s->text_shadows;
@@ -2145,8 +2251,8 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
         if (sh->blur < 0)
             sh->blur = 0;
         const garb_val_t *c = k < one->nitems ? &one->items[k] : NULL;
-        sh->colour = c == NULL || c->kind != GARB_V_COLOR || c->color.current ? s->color
-                                                                               : colour_of(c->color);
+        sh->current = c == NULL || c->kind != GARB_V_COLOR || c->color.current;
+        sh->colour = sh->current ? s->color : colour_of(c->color);
     }
     *list = out;
     *count = v->nitems;
@@ -2170,24 +2276,29 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     case GARB_BACKGROUND_COLOR:
         if (v->kind != GARB_V_COLOR)
             break;
+        // currentColor is resolved in finish, which knows the final colour.
         if (v->color.current) {
-            s->has_background = flow_alpha(s->color) > 0;
-            s->background = s->color;
+            s->current_colours |= FLOW_CURRENT_BACKGROUND;
         } else {
+            s->current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
             s->has_background = v->color.a > 0;
             s->background = colour_of(v->color);
         }
         break;
     case GARB_BACKGROUND_IMAGE:
-        // A gradient is an image libflow cannot draw yet: no picture
-        // (GARB.md § Booked).
+        // A url() to fetch, or a gradient libgarb kept (values.h); a conic
+        // gradient or an image-set is no picture yet (PILE3.md § Booked).
         s->background_image = NULL;
         s->background_image_len = 0;
         s->background_sheet = -1;
+        s->background_gradient = NULL;
         if (v->kind == GARB_V_URL && v->len > 0) {
             s->background_image = v->text;
             s->background_image_len = (uint32_t)v->len;
             s->background_sheet = a->sheet;
+        } else if (v->kind == GARB_V_IMAGE && v->nitems > 0 &&
+                   !author_gradient(a, s, v, &s->background_gradient)) {
+            return false;
         }
         break;
     case GARB_BACKGROUND_REPEAT: {
@@ -2698,6 +2809,13 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
         s->border_width[i] = drawn ? sp->border_px[i] : 0;
         if (!sp->border_color_set[i])
             s->border_color[i] = s->color;
+        s->current_colours = (uint8_t)(sp->border_color_set[i]
+                                           ? s->current_colours & ~FLOW_CURRENT_BORDER(i)
+                                           : s->current_colours | FLOW_CURRENT_BORDER(i));
+    }
+    if (s->current_colours & FLOW_CURRENT_BACKGROUND) {
+        s->has_background = flow_alpha(s->color) > 0;
+        s->background = s->color;
     }
     s->width = resolve(sp->width, s->font_size, automatic);
     s->height = resolve(sp->height, s->font_size, automatic);
