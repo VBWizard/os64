@@ -496,6 +496,15 @@ static garb_env_t css_view(int32_t w, int32_t h, uint32_t zoom)
 // False on no memory, the page on screen untouched — unless a first try
 // stopped partway, when the old tree is let go to make room for a second
 // (below), and with no memory even for that the page has no tree.
+// `n` CSS pixels as device pixels at `zoom` (thousandths; 0 is 1000),
+// rounded, never below 1 for a picture that has a size, held to INT32_MAX.
+static uint32_t zoomed_px(uint32_t n, uint32_t zoom)
+{
+    uint64_t z = zoom != 0 ? zoom : 1000;
+    uint64_t r = ((uint64_t)n * z + 500) / 1000;
+    return (uint32_t)(r > INT32_MAX ? INT32_MAX : r < 1 && n > 0 ? 1 : r);
+}
+
 // A position in device pixels, laid out at zoom `from`, at zoom `to`
 // (thousandths), held to an int32_t.
 static int32_t scale_zoom(int32_t v, uint32_t to, uint32_t from)
@@ -1706,6 +1715,21 @@ static bool same_origin(const char *a, const char *b)
            ua.port == ub.port;
 }
 
+// Whether the first paint waits for a sheet: its media holds on this glass
+// as it is now, at its size and zoom — an import's own media list as well
+// as its importer's. An import's supports() is the cascade's to judge and
+// is not asked here, so one that fails is waited for all the same; rare,
+// and never wrong about what applies.
+static bool sheet_holds(const Page *p, const Sheet *sh)
+{
+    garb_env_t view = css_view(g.view.bounds.w, g.view.bounds.h, g.zoom);
+    if (sh->importer >= 0) {
+        const garb_import_t *im = &p->sheets[sh->importer].imports[sh->import_index];
+        return p->sheets[sh->importer].holds && garb_media_matches(im->media, im->nmedia, view);
+    }
+    return sh->media == NULL || garb_media_text_matches(sh->media, view);
+}
+
 // A new entry, NULL when the page has as many as it may.
 static Sheet *sheet_new(Page *p, const char *media, int32_t importer, int32_t import_index)
 {
@@ -1717,19 +1741,30 @@ static Sheet *sheet_new(Page *p, const char *media, int32_t importer, int32_t im
     sh->media = media;
     sh->importer = importer;
     sh->import_index = import_index;
-    // Whether the first paint waits for it: its media holds on this glass
-    // now — an import's own media list as well as its importer's. An
-    // import's supports() is the cascade's to judge and is not asked here,
-    // so one that fails is waited for all the same; rare, and never wrong
-    // about what applies.
-    garb_env_t view = css_view(g.view.bounds.w, g.view.bounds.h, g.zoom);
-    if (importer >= 0) {
-        const garb_import_t *im = &p->sheets[importer].imports[import_index];
-        sh->holds = p->sheets[importer].holds && garb_media_matches(im->media, im->nmedia, view);
-    } else {
-        sh->holds = media == NULL || garb_media_text_matches(media, view);
-    }
+    sh->holds = sheet_holds(p, sh);
     return sh;
+}
+
+static void coming_show(void);
+
+// The glass changed size or zoom while a page waits for its sheets: which
+// of them the first paint waits for is judged again against the glass it
+// will be shown on, so a sheet that applies now is waited for and one that
+// no longer does is not. An import follows its importer, which comes
+// before it in the table. Nothing left to wait for shows the page.
+static void coming_rejudge(void)
+{
+    if (!g.coming.active)
+        return;
+    Page *p = &g.coming.page;
+    p->sheets_waiting = 0;
+    for (int32_t i = 0; i < p->nsheets; i++) {
+        p->sheets[i].holds = sheet_holds(p, &p->sheets[i]);
+        if (p->sheets[i].waiting && p->sheets[i].holds)
+            p->sheets_waiting++;
+    }
+    if (p->sheets_waiting == 0)
+        coming_show();
 }
 
 // Sends a sheet's address to a worker. One that cannot be fetched stays
@@ -2911,10 +2946,15 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
         return true;
     uint32_t w, h;
     const uint32_t *px = picture_pixels(&p->pics[k], &w, &h);
+    // A picture's own size is in CSS pixels, so at the page's zoom it is
+    // that many device pixels times the zoom, as every CSS length is: an
+    // `auto` size and an attribute's tile are its size zoomed, and the
+    // tiler scales the picture to it.
+    uint32_t zw = zoomed_px(w, p->laid_zoom), zh = zoomed_px(h, p->laid_zoom);
     // A sheet's picture is sized and placed in the origin box the painter
     // names; an attribute's is tiled from (ox, oy) at its own size.
-    yonder_tile_t tile = {{ox, oy, (int32_t)w, (int32_t)h}, true, true};
-    if (layer >= 0 && !yonder_background_tile(&l, origin, w, h, &tile))
+    yonder_tile_t tile = {{ox, oy, (int32_t)zw, (int32_t)zh}, true, true};
+    if (layer >= 0 && !yonder_background_tile(&l, origin, zw, zh, &tile))
         return true;
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
     os64_gui_rect_t cut = on_glass(gl, clip);
@@ -3207,6 +3247,7 @@ static void zoom_to(uint32_t zoom)
     g.zoom = zoom;
     g.relayout_due = true;
     controls_face();
+    coming_rejudge();
 }
 
 // The next step in (`in`) or out from the zoom in force; one between steps
@@ -3528,6 +3569,7 @@ static void on_resize(os64_ui_t *ui)
     (void)ui;
     layout();
     g.relayout_due = true;
+    coming_rejudge();
     clamp_scroll();
     sync_bars();
     forms_place();

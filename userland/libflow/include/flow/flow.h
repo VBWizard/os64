@@ -30,8 +30,11 @@
 
 // ── Units ───────────────────────────────────────────────────────────────
 //
-// A length is CSS pixels in 26.6 fixed point — the text engine's own unit,
-// so a font size and a margin computed from it never cross a conversion.
+// A length is DEVICE pixels in 26.6 fixed point — CSS pixels times the
+// page's zoom (flow_env_t.zoom), the same thing at 100% — and the text
+// engine's own unit, so a font size and a margin computed from it never
+// cross a conversion. Every length in the tree, and every box coordinate,
+// is in it.
 // Layout keeps 26.6 until a box coordinate is written, and rounds there
 // once (LAYOUT.md § Rounding).
 typedef int32_t flow_unit_t;
@@ -763,7 +766,9 @@ struct flow_box {
 
 typedef struct flow_tree flow_tree_t;
 
-// Styles, boxes and lays out the page at `width` CSS pixels. NULL when
+// Styles, boxes and lays out the page at `width` DEVICE pixels — the
+// window's, whatever the zoom; libflow zooms the CSS lengths, not the width
+// (flow_env_t.zoom). NULL when
 // memory runs out outside the budget, or when there is no document, no
 // environment, no text context or font resolver, the width is negative,
 // or the cascade was judged at another viewport height than
