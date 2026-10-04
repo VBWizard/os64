@@ -2132,29 +2132,15 @@ static flow_length_t author_lp(const Author *a, const garb_val_t *v, flow_length
     return author_len(a, v, false, &l) ? resolve(l, a->font, unset) : unset;
 }
 
-// An angle in degrees as thousandths in [0, 360000). It is taken into
-// [0, 360) BEFORE it is scaled and narrowed, or `1e20deg` overflows the
-// integer and points anywhere. Exactly: each step subtracts the largest
-// 360 * 2^k not above it, and a subtraction of two doubles within a factor
-// of two of each other is exact (Sterbenz), so this is fmod's answer
-// without libmath, for EVERY finite angle. Each step at least halves what
-// is left and `s` never passes it, so even the largest double takes at
-// most 1024 steps of 1024 doublings. Only NaN and infinity, which have no
-// remainder, take the initial direction.
+// An angle in degrees as thousandths in [0, 360000). libgarb hands it
+// already taken round the turn (values.h: in [0, 360), reduced in its own
+// unit so no unit overflows it); a value outside that would overflow the
+// narrowing, and is 0 rather than a guess.
 static int32_t angle_thousandths(double deg)
 {
-    if (!(deg - deg == 0))
-        return 0;                           // NaN or infinite
-    double m = deg < 0 ? -deg : deg;
-    while (m >= 360) {
-        double s = 360;
-        while (s <= m / 2)
-            s *= 2;
-        m -= s;
-    }
-    if (deg < 0 && m > 0)
-        m = 360 - m;
-    int64_t t = (int64_t)(m * 1000 + 0.5);
+    if (!(deg >= 0 && deg < 360))
+        return 0;
+    int64_t t = (int64_t)(deg * 1000 + 0.5);
     return (int32_t)(t >= 360000 ? t - 360000 : t);
 }
 
