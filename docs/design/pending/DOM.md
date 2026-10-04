@@ -1461,8 +1461,8 @@ An empty window waits for its next page. The status line begins **SCRIPTS ON**
 while enabled. The document's captured mode also reaches `flow_env_t.scripting`,
 so raw `noscript` fallback text is hidden when enabled, even under author
 `display` declarations, including `!important`; ordinary fallback markup is
-parsed and drawn when disabled. The agent list scrolls within one
-fewer nominal row so the added switch fits the existing settings window.
+parsed and drawn when disabled. The Settings dialog is sized for the agent
+list, cache, zoom and script-switch rows.
 
 **Owners and snapshots.** The runtime is created lazily before the first
 runnable script. Its native queue holds nodes, not JavaScript values. Page
@@ -1478,8 +1478,13 @@ alive until their borrowers are released.
 
 **Publication.** HTML version and page-state revision are observed separately.
 A failed model rebuild preserves the old drawing and its native STALE action
-gate. Once a new model exists, a failed cascade/layout leaves older geometry
-and its retained model alive. Links and controls resolve through native nodes
+gate. Once a new model exists, a failed initial cascade/layout leaves older
+geometry and its retained model alive. An incomplete attempt may instead
+release that old tree and cascade to reclaim font capacity, then retry once;
+the staged rebuild passes its shown Page to the same retry as an ordinary
+relayout. If this retry is refused, the view has no geometry, its controls
+hide, and the DOM version stays owed for the next external event. Links and
+controls resolve through native nodes
 before consulting current meaning; detached old links do nothing. Resize and
 sheet completion cannot publish layout while a DOM rebuild is owed. Failures
 retry on another external event before running the next script, without a
@@ -1489,12 +1494,14 @@ parses, including imports and duplicate links, transfer ownership after their
 old cascade is released; text mutations therefore preserve loaded CSS without
 refetching it. A parse has one staged borrower; abort leaves its old owner intact.
 Stylesheet metadata retains the loader's omission-on-allocation-refusal policy.
-Page scroll offsets are retained and clamped; box scroll positions remain node
-keyed. Node-based page scroll anchoring across DOM changes is not added.
+At the same zoom, page scroll offsets are retained and clamped; a deferred zoom
+scales and anchors them with the rebuilt geometry. Box scroll positions remain
+node keyed.
 
 **Controls and pictures.** Widgets are individually allocated and node keyed.
-Surviving controls preserve widget identity, focus, caret, selection and typed
-buffers across index changes and even a partial layout omitting their boxes.
+Surviving controls preserve widget identity, caret, selection and typed buffers
+across index changes and even a partial layout omitting their boxes. Focus
+persists while the widget remains reachable; hiding it also reconciles focus.
 Before a script or activation, changed editor buffers flush to shared state.
 Password comparisons and copies use explicit lengths, including deletion to
 empty. A successful Reset refreshes that form's editors even when the native
@@ -1525,7 +1532,7 @@ stdout; alert reports on the status line.
 
 **Evidence.** `tools/test_yonder_scripts_host.sh` exercises the actual Yonder
 queue, publication and widget code with real libui editing and native libraries,
-a target-profile engine, ASan/UBSan and normal LSan. It passes **2024/0** checks:
+a target-profile engine, ASan/UBSan and normal LSan. It passes **2053/0** checks:
 one task per turn, wrapper identity, a real key edit and caret/selection/focus,
 control reorder/kind/hidden transitions, state-only refresh, invalid numeric
 input, password deletion through script reads and form requests, reset of
@@ -1536,7 +1543,10 @@ with case/ASCII-whitespace handling, legacy language fallback/type precedence,
 and language changes between queue construction and execution,
 job/source/schedule caps, URL ownership and setting persistence alongside zoom.
 A pending DOM rebuild preserves its old controls face until it can publish
-zoomed geometry, CSS media queries and scroll anchoring together. A 160-cut
+zoomed geometry, CSS media queries and scroll anchoring together. A three-face
+backend and the real family cache reproduce old geometry exhausting the new
+zoom's faces, then verify a whole retry. A refused retry releases its staging,
+hides stale controls and recovers before running the queued script. A 160-cut
 native sweep reaches 18 model refusals and 21 layout refusals, with 121 completed
 rebuilds; a separate 64-cut stylesheet sweep covers duplicate parses/imports,
 rollback and retry. The ledger is empty after teardown. Worker services and

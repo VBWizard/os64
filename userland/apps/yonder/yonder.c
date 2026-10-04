@@ -533,13 +533,15 @@ static int32_t scale_zoom(int32_t v, uint32_t to, uint32_t from)
 }
 
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
+static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim);
 
-// Publish a completed layout beside the old one. An incomplete retry may
-// release an old tree to reclaim font capacity; an owed DOM rebuild refuses
-// before layout work so stale meaning/sheets cannot publish new geometry.
-static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom)
+// Publish a layout beside the old one. `reclaim` owns geometry whose faces
+// an incomplete attempt may release before retrying; it may be this Page
+// or the shown Page beside a staged DOM rebuild. An owed rebuild refuses
+// before layout work on its old Page so stale meaning cannot get new geometry.
+static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
-    if (p->tree != NULL && p->rendered_version != os64_html_version(page_doc(p)))
+    if (p->rendered_version != 0 && p->rendered_version != os64_html_version(page_doc(p)))
         return false;
     garb_cascade_t *cascade = p->cascade;
     int32_t entry[SHEETS_MAX] = {0};
@@ -571,10 +573,14 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom)
     // zoom, most of all) can stop partway for want of the room the old tree
     // holds. Then both go, and the page is laid out once more in the whole
     // budget.
-    if (fresh != NULL && flow_incomplete(fresh) && p->tree != NULL) {
+    if (fresh != NULL && flow_incomplete(fresh) && reclaim != NULL && reclaim->tree != NULL) {
         flow_free(fresh);
-        flow_free(p->tree);
-        p->tree = NULL;
+        flow_free(reclaim->tree);
+        reclaim->tree = NULL;
+        if (reclaim != p) {
+            garb_cascade_free(reclaim->cascade);
+            reclaim->cascade = NULL;
+        }
         fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
     }
     s_env.cascade = NULL;
@@ -2804,11 +2810,10 @@ refused:
 // toolbar; and hidden when the pointer cannot reach the control at its
 // centre (flow_box_covered; POSITION.md, ruling 9): a field under a fixed
 // header, a hidden dialog's field, one `visibility: hidden`. Whatever of
-// its frame the page draws, the painter draws.
+// its frame the page draws, the painter draws. Without a layout there is
+// no box to place a control at, so the widgets stay hidden.
 static void forms_place(void)
 {
-    if (g.page.tree == NULL)
-        return;
     const os64_gui_rect_t v = g.view.bounds;
     for (int32_t i = 0; i < g.nfw; i++) {
         FormWidget *fw = g.fw[i];
@@ -2898,6 +2903,7 @@ static bool script_rebuild(void)
             sx = scale_zoom(sx, g.zoom, p->laid_zoom);
         }
         Page next = *p;
+        next.rendered_version = version; // the staged layout's target DOM version
         next.reuse_sheets = p;
         next.tree = NULL;
         next.cascade = NULL;
@@ -2906,13 +2912,19 @@ static bool script_rebuild(void)
         next.sheets_changed = true;
         next.serial = ++g.pages_made;
         sheets_start(&next);
-        if (!lay_out_page(&next, g.view.bounds.w > 0 ? g.view.bounds.w : 1,
-                           g.view.bounds.h > 0 ? g.view.bounds.h : 1)) {
+        // The shown Page holds the old faces; an incomplete staged layout
+        // can reclaim its tree and cascade before retrying in that room.
+        if (!lay_out_page_reclaim(&next, g.view.bounds.w > 0 ? g.view.bounds.w : 1,
+                                 g.view.bounds.h > 0 ? g.view.bounds.h : 1, p)) {
             sheets_leave(&next);
+            flow_free(next.tree);
             garb_cascade_free(next.cascade);
             sheets_free(&next);
-            status_rest("Out of memory laying out the changed page; this is the last layout that fit.");
+            status_rest(p->tree != NULL
+                ? "Out of memory laying out the changed page; this is the last layout that fit."
+                : "Out of memory laying out the changed page.");
             forms_build();
+            os64_ui_mark_dirty(&g.ui, &g.view);
             return false;
         }
         sheets_leave(p);
@@ -2967,7 +2979,10 @@ static bool script_rebuild(void)
 
 static bool script_turn(void)
 {
-    if (g.page.tree == NULL)
+    // A font-capacity retry may have released the old tree. Keep retrying
+    // its owed DOM version before allowing another queued script to run.
+    if (g.page.tree == NULL && (page_doc(&g.page) == NULL ||
+        g.page.rendered_version == os64_html_version(page_doc(&g.page))))
         return false;
     // A failed native rebuild is retried before another script can run.
     if (!script_rebuild())
@@ -3576,21 +3591,21 @@ static bool controls_face_at(uint32_t zoom, os64_font_set_t **was, uint32_t *was
 
 // Lays a page out at the zoom in force, its controls' face with it: the face
 // for the zoom is lent first, because the layout measures the controls in it
-// (select_size), and lent back as it was when the layout fails — the page on
-// screen stays at its zoom, its controls in the face they wore. The lend
+// (select_size), and lent back as it was when the layout fails. Geometry
+// kept on screen stays at its zoom, its controls in the face they wore. The lend
 // allocates nothing, so the way back cannot fail; but a lend lets go of the
 // controls' runs, so they are laid out again at their next paint, which
 // under the same shortage can draw them empty (BROWSER_DEBTS.md).
-static bool lay_out_page(Page *p, int32_t width, int32_t height)
+static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim)
 {
-    // A pending script rebuild owns the next layout; leave its old
-    // geometry and the controls' lent face together until it succeeds.
-    if (p->tree != NULL && p->rendered_version != os64_html_version(page_doc(p)))
+    // An owed DOM version goes through the staged rebuild, including
+    // after a failed retry reclaimed its old geometry.
+    if (p->rendered_version != 0 && p->rendered_version != os64_html_version(page_doc(p)))
         return false;
     os64_font_set_t *was = NULL;
     uint32_t was_px = 0;
     bool changed = controls_face_at(g.zoom, &was, &was_px);
-    bool laid = page_lay_out(p, width, height, g.zoom);
+    bool laid = page_lay_out(p, width, height, g.zoom, reclaim);
     if (changed && !laid) {
         (void)os64_ui_font_app(&g.ui, was, OS64_FONT_ROLE_UI);
         os64_font_set_release(s_controls_set);
@@ -3600,6 +3615,11 @@ static bool lay_out_page(Page *p, int32_t width, int32_t height)
         os64_font_set_release(was);
     }
     return laid;
+}
+
+static bool lay_out_page(Page *p, int32_t width, int32_t height)
+{
+    return lay_out_page_reclaim(p, width, height, p);
 }
 
 // The zoom in force from now on; the page follows once the events queued

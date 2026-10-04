@@ -88,12 +88,56 @@ void way_cache_set_cap(way_cache_t *cache, uint64_t cap) { (void)cap; check(cach
 static os64_text_context_t *probe_text;
 static os64_text_font_t *probe_font;
 static bool probe_borrow_font;
+static os64_font_family_cache_t *probe_family;
+static os64_font_engine_t *budget_engine;
+static unsigned budget_refusals, budget_partial_layouts, budget_retry_refusals;
+static bool budget_active, budget_refuse_retry;
+static os64_font_status_t budget_engine_create(const os64_font_engine_options_t *options,
+    os64_font_engine_t **out) {
+    os64_font_status_t status=flow_test_backend()->engine_create(options,out);
+    if(status==OS64_FONT_OK) budget_engine=*out;
+    return status;
+}
+static os64_font_status_t budget_face_open(os64_font_engine_t *engine,
+    const uint8_t *bytes, size_t length, const os64_font_face_options_t *options,
+    os64_font_face_t **out) {
+    os64_font_engine_stats_t stats;
+    os64_font_status_t status=flow_test_backend()->engine_stats(engine,&stats);
+    if(status!=OS64_FONT_OK) return status;
+    if(stats.live_faces>=3) {
+        *out=NULL;budget_refusals++;
+        return OS64_FONT_LIMIT;
+    }
+    return flow_test_backend()->face_open(engine,bytes,length,options,out);
+}
+flow_tree_t *__real_flow_layout(const os64_html_document_t *,const os64_page_t *,int32_t,
+    const flow_env_t *);
+flow_tree_t *__wrap_flow_layout(const os64_html_document_t *doc,const os64_page_t *model,
+    int32_t width,const flow_env_t *env) {
+    // A refusal after reclaiming the old geometry exercises the retry's
+    // teardown and recovery, rather than the usual preserve-old-tree path.
+    if(budget_active && budget_refuse_retry && g.page.tree==NULL) {
+        budget_refuse_retry=false;budget_retry_refusals++;
+        return NULL;
+    }
+    flow_tree_t *tree=__real_flow_layout(doc,model,width,env);
+    if(budget_active && flow_incomplete(tree)) budget_partial_layouts++;
+    return tree;
+}
 static void *probe_alloc(void *ctx, size_t n) { (void)ctx; return os64_malloc(n); }
 static void probe_free(void *ctx, void *p, size_t n) { (void)ctx; (void)n; os64_free(p); }
 static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *family,
     bool bold, bool italic, uint32_t px, os64_text_font_t *const **fonts, size_t *n,
     os64_font_face_info_t *info) {
     (void)ctx; (void)family; (void)bold; (void)italic; (void)px;
+    if(probe_family!=NULL) {
+        os64_font_family_list_t list={.generic=OS64_FONT_FAMILY_SERIF};
+        os64_font_role_view_t view;
+        os64_font_status_t status=os64_font_family_open(probe_family,&list,bold,italic,px,&view);
+        if(status!=OS64_FONT_OK) return status;
+        *fonts=view.fonts;*n=view.font_count;*info=view.primary;
+        return OS64_FONT_OK;
+    }
     *fonts = &probe_font; *n=1; memset(info,0,sizeof(*info));
     info->ascent=12*64; info->descent=4*64; info->line_height=20*64;
     return OS64_FONT_OK;
@@ -117,7 +161,7 @@ static void probe_page(const char *html, bool scripts) {
     check(g.page.way.model!=NULL,"fixture model builds");
     s_env.text=probe_text; s_env.fonts=probe_fonts; s_env.replaced_size=replaced_size;
     sheets_start(&g.page);
-    check(page_lay_out(&g.page,800,600,g.zoom),"fixture layout builds");
+    check(page_lay_out(&g.page,800,600,g.zoom,&g.page),"fixture layout builds");
     g.page.model_version=g.page.rendered_version=os64_html_version(g.page.way.doc);
     g.page.state_version=os64_page_state_version(os64_page_shared_state(g.page.way.model));
     forms_build();
@@ -266,6 +310,73 @@ static void scripted_zoom(void) {
     os64_font_set_release(s_controls_set);s_controls_set=NULL;s_controls_px=0;
     memset(&s_fonts_conf,0,sizeof(s_fonts_conf));
     probe_borrow_font=false;
+}
+static void scripted_face_budget(void) {
+    os64_text_context_t *saved_text=probe_text;
+    os64_text_font_t *saved_font=probe_font;
+    for(unsigned refused=0;refused<2;refused++) {
+        os64_font_backend_t backend=*flow_test_backend();
+        backend.engine_create=budget_engine_create;backend.face_open=budget_face_open;
+        os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
+            .backend=&backend,.memory_cap=8*1024*1024};
+        check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"face-budget text context");
+        check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"face-budget bitmap font");
+        const uint8_t face='S';
+        os64_font_family_spec_t specs[OS64_FONT_FAMILY_COUNT]={0};
+        for(size_t f=0;f<OS64_FONT_FAMILY_COUNT;f++)
+            for(size_t s=0;s<OS64_FONT_FAMILY_STYLES;s++)
+                specs[f].styles[s]=(os64_font_source_t){OS64_FONT_SOURCE_OUTLINE,&face,1};
+        check(os64_font_family_cache_create(probe_text,specs,&probe_family,NULL,NULL)==OS64_FONT_OK,
+            "face-budget uses real family cache");
+        probe_borrow_font=true;
+        os64_font_config_defaults(&s_fonts_conf);
+        strcpy(s_fonts_conf.roles[OS64_FONT_CONFIG_WEB].face[0],"builtin");
+        probe_page("<style>#one{font-size:16px}#two{font-size:20px}#three{font-size:24px}</style>"
+            "<p id=one>one<input id=field value=kept></p><p id=two>two</p><p id=three>three</p>"
+            "<script>document.getElementById('one').setAttribute('class','changed');</script>"
+            "<script>document.getElementById('three').textContent='last';</script>",true);
+        os64_font_engine_stats_t stats;
+        check(flow_test_backend()->engine_stats(budget_engine,&stats)==OS64_FONT_OK &&
+            stats.live_faces==3 && !flow_incomplete(g.page.tree),
+            "old whole layout pins three sizes, filling face budget");
+        FormWidget *field=probe_field("field");
+        os64_js_outcome_t out;
+        check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK,
+            "script mutation owes a layout before zoom");
+        zoom_to(2000);
+        budget_refusals=budget_partial_layouts=budget_retry_refusals=0;
+        budget_active=true;budget_refuse_retry=refused!=0;
+        bool rebuilt=script_rebuild();
+        if(refused) {
+            check(!rebuilt && budget_retry_refusals==1 && g.page.tree==NULL && g.page.cascade==NULL,
+                "refused reclaimed layout drops obsolete tree and cascade");
+            check(g.page.rendered_version!=os64_html_version(g.page.way.doc) &&
+                yonder_scripts_pending(g.page.scripts) && field->w->hidden,
+                "refused retry keeps rebuild owed, queue pending and stale controls hidden");
+            check(!lay_out_page(&g.page,800,600) && g.page.tree==NULL,
+                "ordinary relayout cannot bypass owed DOM rebuild after reclaim");
+            script_turn();
+            check(probe_text_is("three","last") && !yonder_scripts_pending(g.page.scripts),
+                "next UI turn recovers a tree before executing the queued script");
+        } else {
+            check(rebuilt,"staged font-budget rebuild succeeds");
+        }
+        check(budget_refusals>0 && budget_partial_layouts==1,
+            "new zoom first exhausts faces retained by old geometry");
+        check(g.page.tree && !flow_incomplete(g.page.tree) && g.page.laid_zoom==2000 &&
+            g.page.rendered_version==os64_html_version(g.page.way.doc),
+            "reclaim retry publishes whole current DOM at new zoom");
+        check(probe_field("field")==field && os64_streq(field->text,"kept"),
+            "face-budget retry preserves form widget and value");
+        budget_active=budget_refuse_retry=false;
+        probe_drop();
+        os64_font_set_release(s_controls_set);s_controls_set=NULL;s_controls_px=0;
+        os64_font_family_cache_destroy(probe_family);probe_family=NULL;
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"face-budget text and runs released");
+    }
+    probe_text=saved_text;probe_font=saved_font;probe_borrow_font=false;
+    memset(&s_fonts_conf,0,sizeof(s_fonts_conf));
 }
 static void property_only(void) {
     probe_page("<input id=field value=before><input id=tick type=checkbox>"
@@ -579,7 +690,7 @@ static void stylesheet_reuse(void) {
             check(garb_parse_sheet_text(text,strlen(text),&sheet->parsed)==GARB_OK,"linked sheet fixture parses");
             sheet_ready(&g.page,i);
         }
-        check(g.page.nsheets==4 && page_lay_out(&g.page,800,600,g.zoom),"duplicate links and imports lay out");
+        check(g.page.nsheets==4 && page_lay_out(&g.page,800,600,g.zoom,&g.page),"duplicate links and imports lay out");
         const void *arenas[4];
         for(int i=0; i<4; i++) arenas[i]=g.page.sheets[i].parsed.arena;
         check(os64_html_set_text(g.page.way.doc,probe_id("heading")->first_child,"new",3)==OS64_HTML_OK,
@@ -670,6 +781,7 @@ int main(void)
     script_types();
     identity_and_edit();
     scripted_zoom();
+    scripted_face_budget();
     property_only();
     script_lifecycle();
     native_refusals();
