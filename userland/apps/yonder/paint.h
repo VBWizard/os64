@@ -31,10 +31,13 @@ typedef struct {
     // sheet layer `layer`'s picture — or, at -1, the `background`
     // attribute's — is tiled across `area` (the layer's clip box, or the
     // view for the canvas's): a layer's as its size and position place it
-    // (yonder_background_tile), an attribute's from (ox, oy); drawn if it
-    // has arrived, nothing yet if not.
+    // in `origin` (yonder_background_tile), an attribute's from (ox, oy);
+    // drawn if it has arrived, nothing yet if not. `origin` is the
+    // painter's answer to which box: the layer's origin box of the box, or
+    // for the canvas the ROOT's, whichever element the picture came from
+    // (Backgrounds 3 § 2.11.2).
     bool (*backdrop)(void *ctx, const flow_box_t *box, int32_t layer, const os64_gui_rect_t *area,
-                     int32_t ox, int32_t oy, os64_gui_rect_t clip);
+                     os64_gui_rect_t origin, int32_t ox, int32_t oy, os64_gui_rect_t clip);
     // A GROUP (flow_visit_groups): everything painted between an open and
     // its close is laid over what was under it at `alpha` of 255 (CSS
     // Color 4 § 3.2). `bounds` holds all of it, cut to the viewport — empty
